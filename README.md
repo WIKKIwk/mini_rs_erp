@@ -7,9 +7,9 @@ Rust server state. This repo is intentionally separated from
 `accord_mobile_server_rs` so new mini ERP work does not go back to the old RS
 server repository.
 
-The current snapshot still contains the old ERPNext-facing adapters. They are
-kept as migration/reference code and will be removed or isolated as the mini ERP
-domain model and PostgreSQL storage become the service's own source of truth.
+The old ERPNext-facing adapters have been removed from the runtime and source
+tree. New work should add mini ERP domain storage and service ports directly in
+this repository.
 
 ## Why it matters
 
@@ -26,56 +26,20 @@ cargo test --locked
 cargo run --release
 ```
 
-Configure real `.env` values before production use. At minimum set `ERP_URL`,
-`ERP_API_KEY`, `ERP_API_SECRET`, and the store paths. Enable
-`ERP_DIRECT_READ_ENABLED=1` only when ERPNext database access is configured.
+Configure real `.env` values before production use. At minimum set
+`MINI_ERP_DATABASE_URL` and the persistent store paths.
 
 ## Current Snapshot Notes
 
-The 2026-05-20 production branch adds two major runtime capabilities on top of
-the stable Rust mobile backend.
+The current snapshot is the mini ERP fork of the stable Rust mobile backend.
+ERPNext REST adapters and direct MariaDB read models have been removed. Mini ERP
+production state is being moved into PostgreSQL behind domain ports.
 
-### SQLite catalog read cache
+### PostgreSQL foundation
 
-Catalog-style reads can now be served from a local SQLite cache synchronized
-from ERPNext MariaDB. ERPNext/MariaDB remains the source of truth, and ERPNext
-REST remains the write/submit path for mutations.
-
-Cached read scopes:
-
-- items and item groups;
-- suppliers and customers;
-- supplier item mappings;
-- customer item mappings;
-- profile phone/avatar lookup for supplier and customer roles.
-
-Covered mobile/admin read paths include:
-
-- admin item pages, item group picker/tree, supplier/customer directories, and
-  assigned item lists;
-- Werka supplier/customer directories and supplier/customer item pickers;
-- GScale catalog item lookup.
-
-Operational documents are intentionally not cached in this phase. Purchase
-receipts, delivery notes, stock entries, history, status, archive, and barcode
-lookup continue to use the existing direct DB/ERPNext paths.
-
-The cache supports full sync, delta sync for changed rows, delete reconciliation,
-and a same-count edge case where one row is deleted while another is inserted
-inside the same sync interval. Real ERP tests cover add, update, delete, and
-direct DB vs SQLite comparison across all cached read scopes.
-
-Enable with:
-
-```env
-ERP_CATALOG_CACHE_ENABLED=1
-ERP_CATALOG_CACHE_FALLBACK_DIRECT_DB=1
-ERP_CATALOG_CACHE_PATH=data/catalog_cache.sqlite
-ERP_CATALOG_CACHE_SYNC_INTERVAL_SECONDS=1
-```
-
-Production rollout should keep `ERP_CATALOG_CACHE_FALLBACK_DIRECT_DB=1` enabled
-until the cache has been observed under real traffic.
+`MINI_ERP_DATABASE_URL` enables the mini ERP PostgreSQL stores. The foundation
+migration currently covers engine event/idempotency tables plus migrated
+production map, apparatus group, calculate-order, and mini order persistence.
 
 ### Role capability packages
 
@@ -144,8 +108,7 @@ Important benchmark notes:
   JSON session store in the measured login benchmarks.
 - SQL pushdown is used where it preserves the exact mobile result shape and
   reduces Rust-side row aggregation.
-- Mutation endpoints still write through ERPNext REST; direct DB access remains
-  read-only.
+- Mini ERP production state is moving behind PostgreSQL-backed domain ports.
 
 Full benchmark notes:
 
@@ -157,14 +120,13 @@ Full benchmark notes:
 - [docs/benchmarks/2026-05-15-healthz-tuning.md](docs/benchmarks/2026-05-15-healthz-tuning.md)
 - [docs/benchmarks/2026-05-15-hyper-http1-tuning.md](docs/benchmarks/2026-05-15-hyper-http1-tuning.md)
 
-For the current handoff state, restored ERPNext setup, hard constraints, and
-next work, see [AI_HANDOFF_PERFORMANCE.md](AI_HANDOFF_PERFORMANCE.md).
+For historical performance notes and migration context, see
+[AI_HANDOFF_PERFORMANCE.md](AI_HANDOFF_PERFORMANCE.md).
 
-`accord_mobile_server_rs` is an independent Rust service for the Accord mobile
-backend. It is a standalone Axum/Tokio application that speaks directly to the
-mobile clients, ERPNext, the ERPNext MariaDB database when direct reads are
-enabled, Firebase Cloud Messaging, Gemini Vision, and LMDB-backed local state
-stores.
+`mini_rs_erp` is an independent Rust service for the Accord mobile backend and
+mini ERP core. It is a standalone Axum/Tokio application that speaks directly to
+mobile clients, PostgreSQL, Firebase Cloud Messaging, Gemini Vision, and
+LMDB-backed local state stores.
 
 This repository is not a wrapper around the Go service, does not shell out to
 the Go binary, and does not require the Go project at runtime. The compatibility
@@ -189,8 +151,8 @@ The service exists to provide the mobile API for the operational flow around:
 
 The implementation is organized as a layered service rather than a monolithic
 handler file. HTTP handlers are thin adapters; domain services contain business
-rules; ERPNext REST, direct MariaDB reads, local state stores, push, and AI are plugged
-in through explicit ports.
+rules; PostgreSQL stores, local state stores, push, and AI are plugged in through
+explicit ports.
 
 ## System Architecture
 
@@ -202,8 +164,7 @@ flowchart TB
     Core[Core domain services<br/>auth, sessions, profile, push,<br/>customer, werka, admin]
     Ports[Domain ports<br/>read, write, lookup, state,<br/>credentials, push sender]
 
-    ERPNext[ERPNext REST API<br/>Supplier, Customer, Item,<br/>Purchase Receipt, Delivery Note,<br/>Comment, File]
-    MariaDB[ERPNext MariaDB direct reads<br/>fast read models and search]
+    Postgres[Mini ERP PostgreSQL<br/>production maps, apparatus groups,<br/>calculate orders, mini orders, engine events]
     LocalState[Local state stores<br/>LMDB sessions/profile prefs/push tokens/admin state]
     FCM[Firebase Cloud Messaging<br/>HTTP v1]
     Gemini[Gemini Vision<br/>Werka AI search]
@@ -213,8 +174,7 @@ flowchart TB
     HTTP --> Handlers
     Handlers --> Core
     Core --> Ports
-    Ports --> ERPNext
-    Ports --> MariaDB
+    Ports --> Postgres
     Ports --> LocalState
     Ports --> FCM
     Ports --> Gemini
@@ -230,20 +190,19 @@ sequenceDiagram
     participant Handler as HTTP handler
     participant Domain as Core service
     participant Store as Session/local store
-    participant DB as Direct DB reader
-    participant ERP as ERPNext REST
+    participant DB as Mini ERP PostgreSQL
     participant Push as FCM sender
 
     App->>Router: HTTP request /v1/mobile/*
     Router->>Handler: Route dispatch
     Handler->>Store: Bearer token lookup when auth is required
     Handler->>Domain: Validated method/query/body
-    alt read-heavy flow
-        Domain->>DB: Direct read lookup if enabled
-        DB-->>Domain: Projected mobile model
-    else write/mutation flow
-        Domain->>ERP: ERPNext REST mutation/readback
-        ERP-->>Domain: ERPNext document state
+    alt persisted domain flow
+        Domain->>DB: Domain store read/write
+        DB-->>Domain: Mini ERP state
+    else local runtime flow
+        Domain->>Store: Local state read/write
+        Store-->>Domain: Local state
     end
     opt push event
         Domain->>Push: Best-effort role/ref push
@@ -257,11 +216,11 @@ sequenceDiagram
 
 ### Standalone service boundary
 
-The service owns its runtime process, HTTP router, domain state, ERPNext
-clients, database readers, and push sender. The Go implementation is not loaded,
-embedded, proxied, or required. During migration, Go-compatible behavior is used
-as a contract reference so the mobile client can switch services without a
-protocol change.
+The service owns its runtime process, HTTP router, domain state, mini ERP
+PostgreSQL stores, local stores, and push sender. The Go implementation is not
+loaded, embedded, proxied, or required. During migration, Go-compatible behavior
+is used as a contract reference so the mobile client can switch services without
+a protocol change.
 
 ### Contract compatibility
 
@@ -289,8 +248,7 @@ The implementation avoids concentrating the system in a single large file:
 
 - `src/http` contains routing, handlers, PDF generation, and route tests.
 - `src/core` contains domain models, service logic, ports, and focused tests.
-- `src/erpnext` contains ERPNext REST adapters.
-- `src/erpdb` contains direct MariaDB read models.
+- `src/db` contains mini ERP PostgreSQL and local SQLite-backed persistence.
 - `src/store` contains local JSON and LMDB-backed state stores.
 - `src/fcm.rs` contains Firebase Cloud Messaging HTTP v1 delivery.
 - `src/ai` contains Gemini Vision integration for Werka image search.
@@ -335,38 +293,15 @@ The entrypoint is `src/main.rs`:
   receipts, notification details/comments, supplier reads, and issue creation;
 - `SessionManager` for persistent bearer sessions.
 
-### ERPNext REST adapters
+### Mini ERP persistence
 
-`src/erpnext` implements document-level ERPNext access through `reqwest`:
-
-- supplier/customer lookup and detail;
-- item lookup and item supplier/customer relationships;
-- purchase receipt create/read/confirm/response/comment behavior;
-- delivery note customer issue and customer response behavior;
-- supplier avatar upload and file download;
-- admin supplier/customer/item writes;
-- notification read/comment writes.
-
-The REST client uses API key/secret credentials and a configurable timeout.
-
-### Direct DB read adapters
-
-`src/erpdb` implements optimized read paths for ERPNext MariaDB when
-`ERP_DIRECT_READ_ENABLED=1` is set. Direct reads are used for read-heavy mobile
-models and lookup/search flows while mutations continue through ERPNext REST.
-
-This boundary is intentional:
-
-- reads may use MariaDB projections for speed and deterministic mobile shapes;
-- writes continue through ERPNext REST so permissions, validations, document
-  hooks, nested-set updates, and side effects remain owned by ERPNext.
-
-Direct DB configuration can be loaded from Frappe `site_config.json` and then
-overridden by explicit environment variables.
+`src/db` owns mini ERP persistence. PostgreSQL is used for production mini ERP
+state when `MINI_ERP_DATABASE_URL` is configured. Local SQLite/LMDB stores remain
+as bounded local stores for migrated mobile state and development fallback.
 
 ### Admin item group tree management
 
-Admin item group workflows use ERPNext `Item Group` as the source of truth.
+Admin item group workflows are moving to mini ERP owned data stores.
 The mobile API supports:
 
 - item group search for parent pickers;
@@ -374,10 +309,9 @@ The mobile API supports:
 - moving an existing group under a new parent;
 - bulk moving items into an item group.
 
-ERPNext represents item groups as a nested set. The service preserves that
-model by writing through ERPNext REST and by keeping the `is_group` invariant
-valid for mobile-created trees. When a child group is created under a parent,
-the parent is promoted to a group if needed. When a legacy or manually-created
+The service keeps the `is_group` invariant valid for mobile-created trees. When
+a child group is created under a parent, the parent is promoted to a group if
+needed. When a legacy or manually-created
 node already has children but is still marked as a leaf, the move flow promotes
 it before asking ERPNext to save the new parent.
 
@@ -580,8 +514,8 @@ failure responses.
 | `MOBILE_API_ADMIN_SUPPLIER_LMDB_PATH` | `data/mobile_admin_suppliers.lmdb` | LMDB environment directory when the LMDB admin state backend is enabled. |
 | `MOBILE_API_ADMIN_SUPPLIER_LMDB_MAP_SIZE_MB` | `64` | LMDB map size for admin supplier/customer state storage. |
 | `MOBILE_API_SESSION_TTL_HOURS` | `720` | Bearer session TTL in hours. |
-| `ERP_TIMEOUT_SECONDS` | `15` | ERPNext, AI, and HTTP client timeout baseline. |
-| `ERP_DEFAULT_TARGET_WAREHOUSE` | empty | Default warehouse used in ERPNext item/receipt flows. |
+| `ERP_TIMEOUT_SECONDS` | `15` | AI and HTTP client timeout baseline. |
+| `ERP_DEFAULT_TARGET_WAREHOUSE` | empty | Legacy admin setting name for default warehouse during migration. |
 | `ERP_DEFAULT_UOM` | `Kg` | Admin default unit of measure. |
 | `MOBILE_DEV_SUPPLIER_PREFIX` | `10` | Supplier code prefix. |
 | `MOBILE_DEV_WERKA_PREFIX` | `20` | Werka code prefix. |
@@ -591,25 +525,6 @@ failure responses.
 Admin identity defaults are initialized in configuration and can be updated at
 runtime through admin settings. Admin settings persist selected values back to
 `.env` through `DotEnvPersister`.
-
-### Direct DB settings
-
-| Variable | Description |
-| --- | --- |
-| `ERP_DIRECT_READ_ENABLED` | Set to `1` to enable direct MariaDB read models. |
-| `ERP_DIRECT_SITE_CONFIG_PATH` | Path to Frappe `site_config.json`; required when direct reads are enabled. |
-| `ERP_DIRECT_DB_HOST` | Optional host override. |
-| `ERP_DIRECT_DB_PORT` | Optional port override. |
-| `ERP_DIRECT_DB_USER` | Optional DB user override. |
-| `ERP_DIRECT_DB_PASSWORD` | Optional DB password override. |
-| `ERP_DIRECT_DB_NAME` | Optional DB name override. |
-| `ERP_DIRECT_DB_MAX_CONNECTIONS` | Optional pool max override. Default is auto-calculated from CPU/RAM. |
-| `ERP_DIRECT_DB_MIN_CONNECTIONS` | Optional pool min override. Default is derived from max. |
-| `ERP_DIRECT_DB_ACQUIRE_TIMEOUT_MS` | Optional pool acquire timeout override. Default `500`. |
-| `ERP_DIRECT_DB_IDLE_TIMEOUT_SECONDS` | Optional idle connection timeout override. Default `60`. |
-
-The site config must describe a MariaDB site. The default DB host is
-`127.0.0.1`, the default port is `3306`, and the default DB user is the DB name.
 
 ### Push settings
 
@@ -641,9 +556,7 @@ RUST_LOG=info,accord_mobile_server_rs=debug cargo run
 MOBILE_API_ADDR=:8081
 MOBILE_API_LOCAL_STORE_ALLOW_JSON_FALLBACK=0
 
-ERP_URL=https://erp.example.com
-ERP_API_KEY=example-key
-ERP_API_SECRET=example-secret
+MINI_ERP_DATABASE_URL=postgres://mini_rs_erp:secret@127.0.0.1:5432/mini_rs_erp
 ERP_DEFAULT_TARGET_WAREHOUSE=Stores - CH
 ERP_DEFAULT_UOM=Kg
 ERP_TIMEOUT_SECONDS=15
@@ -670,13 +583,6 @@ MOBILE_DEV_SUPPLIER_PREFIX=10
 MOBILE_DEV_WERKA_PREFIX=20
 MOBILE_DEV_WERKA_CODE=20ABCDEF1234
 MOBILE_DEV_WERKA_NAME=Werka
-
-ERP_DIRECT_READ_ENABLED=1
-ERP_DIRECT_SITE_CONFIG_PATH=/path/to/frappe/sites/site.local/site_config.json
-ERP_DIRECT_DB_MAX_CONNECTIONS=
-ERP_DIRECT_DB_MIN_CONNECTIONS=
-ERP_DIRECT_DB_ACQUIRE_TIMEOUT_MS=500
-ERP_DIRECT_DB_IDLE_TIMEOUT_SECONDS=60
 
 FCM_SERVICE_ACCOUNT_PATH=/path/to/firebase-adminsdk.json
 GEMINI_API_KEY=
@@ -750,8 +656,7 @@ The test suite covers:
 - response shape and serialization behavior;
 - supplier, Werka, customer, profile, notifications, stock-entry, admin, push,
   and FCM flows;
-- direct DB mapper and query behavior;
-- ERPNext REST adapter mapping behavior where unit-testable;
+- mini ERP PostgreSQL migration and store behavior;
 - local JSON store compatibility;
 - archive PDF generation contract.
 
@@ -765,30 +670,13 @@ Sessions expire according to `MOBILE_API_SESSION_TTL_HOURS`.
 
 ### Admin settings persistence
 
-Admin settings update runtime ERP/Auth configuration and persist selected
-settings into `.env`. When a direct DB credential port is available, ERP API
-credentials can be read from and written to ERPNext/Frappe credential storage
-instead of relying only on environment variables.
-
-### ERPNext mutations
-
-Write operations are routed through ERPNext REST adapters. This preserves
-document lifecycle semantics for:
-
-- Purchase Receipt;
-- Delivery Note;
-- Supplier;
-- Customer;
-- Item;
-- Comment;
-- File upload/download.
-
-Direct DB is deliberately used only for read models and lookups.
+Admin settings update runtime auth/admin configuration and persist selected
+settings into `.env`.
 
 ### Push behavior
 
 Push is role/ref targeted and best effort in business handlers. Failed push
-delivery is logged and does not roll back successful ERPNext mutations.
+delivery is logged and does not roll back successful domain actions.
 
 FCM stale-token behavior removes tokens on:
 
@@ -811,8 +699,7 @@ src/
     push/             Push token store service and sender port.
     session/          Persistent session manager.
     werka/            Werka dashboard, archive, confirm, issue, notification flows.
-  erpdb/              Direct MariaDB read models.
-  erpnext/            ERPNext REST adapters.
+  db/                 Mini ERP PostgreSQL and local SQLite persistence.
   http/               Axum router, handlers, route tests, PDF generator.
   store/              JSON and LMDB-backed local state stores.
   fcm.rs              Firebase Cloud Messaging HTTP v1 sender.
@@ -821,10 +708,7 @@ src/
 
 ## Operational Notes
 
-- Configure ERPNext credentials before enabling routes that mutate or read ERP
-  documents through REST.
-- Enable direct DB reads only when the service can access the ERPNext MariaDB
-  host and the correct `site_config.json`.
+- Configure `MINI_ERP_DATABASE_URL` before enabling production mini ERP flows.
 - Keep LMDB store directories on persistent storage in production.
 - Keep JSON store paths only when legacy migration or emergency rollback is
   required.
@@ -862,5 +746,5 @@ Recommended smoke-test order:
 - Preserve the mobile contract before refactoring internals.
 - Prefer explicit ports over hidden global dependencies.
 - Do not make push delivery a hard dependency for successful business writes.
-- Do not use direct DB for mutations.
+- Keep domain mutations behind explicit mini ERP service/store ports.
 - Keep local state stores inspectable and compatible with the mobile runtime.
