@@ -10,8 +10,8 @@ use crate::core::auth::models::{Principal, PrincipalRole};
 
 #[tokio::test]
 async fn supplier_refresh_updates_phone_and_absolute_avatar_url() {
-    let service = ProfileService::new("http://erp.test".to_string())
-        .with_erp_lookup(Arc::new(FakeProfileLookup));
+    let service = ProfileService::new("http://files.test".to_string())
+        .with_profile_lookup(Arc::new(FakeProfileLookup));
 
     let principal = service
         .refresh(Principal {
@@ -25,13 +25,13 @@ async fn supplier_refresh_updates_phone_and_absolute_avatar_url() {
         .await;
 
     assert_eq!(principal.phone, "+998901234567");
-    assert_eq!(principal.avatar_url, "http://erp.test/files/supplier.png");
+    assert_eq!(principal.avatar_url, "http://files.test/files/supplier.png");
 }
 
 #[tokio::test]
 async fn customer_refresh_updates_phone() {
-    let service = ProfileService::new("http://erp.test".to_string())
-        .with_erp_lookup(Arc::new(FakeProfileLookup));
+    let service = ProfileService::new("http://files.test".to_string())
+        .with_profile_lookup(Arc::new(FakeProfileLookup));
 
     let principal = service
         .refresh(Principal {
@@ -49,8 +49,8 @@ async fn customer_refresh_updates_phone() {
 
 #[tokio::test]
 async fn supplier_avatar_download_uses_refreshed_avatar_url() {
-    let service = ProfileService::new("http://erp.test".to_string())
-        .with_erp_lookup(Arc::new(FakeProfileLookup));
+    let service = ProfileService::new("http://files.test".to_string())
+        .with_profile_lookup(Arc::new(FakeProfileLookup));
 
     let file = service
         .download_avatar(Principal {
@@ -93,7 +93,7 @@ impl ProfileLookup for FakeProfileLookup {
     }
 
     async fn download_file(&self, file_url: &str) -> Result<DownloadedFile, ProfilePortError> {
-        assert_eq!(file_url, "http://erp.test/files/supplier.png");
+        assert_eq!(file_url, "http://files.test/files/supplier.png");
         Ok(DownloadedFile {
             content_type: "image/png".to_string(),
             body: b"png".to_vec(),

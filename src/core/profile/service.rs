@@ -8,23 +8,23 @@ use crate::core::profile::ports::{
 
 #[derive(Clone)]
 pub struct ProfileService {
-    erp_base_url: String,
+    file_base_url: String,
     lookup: Option<Arc<dyn ProfileLookup>>,
     read_lookup: Option<Arc<dyn ProfileLookup>>,
     store: Option<Arc<dyn ProfileStorePort>>,
 }
 
 impl ProfileService {
-    pub fn new(erp_base_url: String) -> Self {
+    pub fn new(file_base_url: String) -> Self {
         Self {
-            erp_base_url: erp_base_url.trim().trim_end_matches('/').to_string(),
+            file_base_url: file_base_url.trim().trim_end_matches('/').to_string(),
             lookup: None,
             read_lookup: None,
             store: None,
         }
     }
 
-    pub fn with_erp_lookup(mut self, lookup: Arc<dyn ProfileLookup>) -> Self {
+    pub fn with_profile_lookup(mut self, lookup: Arc<dyn ProfileLookup>) -> Self {
         self.lookup = Some(lookup);
         self
     }
@@ -50,7 +50,7 @@ impl ProfileService {
                     principal.phone = profile.phone;
                     if !profile.image.trim().is_empty() {
                         principal.avatar_url =
-                            absolute_file_url(&self.erp_base_url, &profile.image);
+                            absolute_file_url(&self.file_base_url, &profile.image);
                     }
                 }
             }
@@ -96,7 +96,7 @@ impl ProfileService {
         let file_url = lookup
             .upload_supplier_image(&principal.ref_, filename, content_type, content)
             .await?;
-        principal.avatar_url = absolute_file_url(&self.erp_base_url, &file_url);
+        principal.avatar_url = absolute_file_url(&self.file_base_url, &file_url);
 
         if let Some(store) = &self.store {
             let key = profile_key(&principal);

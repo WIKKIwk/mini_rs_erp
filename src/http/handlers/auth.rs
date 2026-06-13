@@ -215,7 +215,7 @@ mod tests {
                 legal_name: "Supplier".to_string(),
                 ref_: "SUP-001".to_string(),
                 phone: "+998901234567".to_string(),
-                avatar_url: "http://erp.test/files/avatar.png".to_string(),
+                avatar_url: "http://files.test/files/avatar.png".to_string(),
             },
             "abc token",
         );
@@ -239,11 +239,11 @@ mod tests {
                 legal_name: "Customer".to_string(),
                 ref_: "CUST-001".to_string(),
                 phone: "+998901234567".to_string(),
-                avatar_url: "http://erp.test/files/avatar.png".to_string(),
+                avatar_url: "http://files.test/files/avatar.png".to_string(),
             },
             "token",
         );
 
-        assert_eq!(principal.avatar_url, "http://erp.test/files/avatar.png");
+        assert_eq!(principal.avatar_url, "http://files.test/files/avatar.png");
     }
 }

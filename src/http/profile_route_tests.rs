@@ -159,8 +159,8 @@ async fn profile_avatar_requires_multipart_like_go() {
 #[tokio::test]
 async fn profile_avatar_upload_returns_proxied_supplier_avatar_like_go() {
     let mut state = test_state();
-    state.profiles =
-        ProfileService::new("http://erp.test".to_string()).with_erp_lookup(Arc::new(FakeLookup));
+    state.profiles = ProfileService::new("http://files.test".to_string())
+        .with_profile_lookup(Arc::new(FakeLookup));
     let token = supplier_session(&state).await;
     let boundary = "BOUNDARY";
     let body = concat!(
@@ -245,8 +245,8 @@ async fn avatar_view_forbids_non_supplier() {
 #[tokio::test]
 async fn avatar_view_accepts_token_query_with_any_method_like_go() {
     let mut state = test_state();
-    state.profiles =
-        ProfileService::new("http://erp.test".to_string()).with_erp_lookup(Arc::new(FakeLookup));
+    state.profiles = ProfileService::new("http://files.test".to_string())
+        .with_profile_lookup(Arc::new(FakeLookup));
     let token = state
         .sessions
         .create(Principal {
@@ -255,7 +255,7 @@ async fn avatar_view_accepts_token_query_with_any_method_like_go() {
             legal_name: "Supplier".to_string(),
             ref_: "SUP-001".to_string(),
             phone: "+998901234567".to_string(),
-            avatar_url: "http://erp.test/files/uploaded.png".to_string(),
+            avatar_url: "http://files.test/files/uploaded.png".to_string(),
         })
         .await
         .expect("session");
