@@ -19,7 +19,7 @@ use crate::core::gscale::models::{
     ScaleDriverPrintResponse,
 };
 use crate::core::gscale::ports::{
-    EpcSource, GscalePortError, MaterialReceiptErpPort, ScaleDriverPort,
+    EpcSource, GscalePortError, MaterialReceiptStorePort, ScaleDriverPort,
 };
 use crate::core::session::manager::SessionManager;
 use crate::core::werka::models::SupplierItem;
@@ -64,7 +64,7 @@ async fn material_receipt_print_uses_parallel_driver_first_flow() {
     let events = Arc::new(Mutex::new(Vec::new()));
     let mut state = test_state();
     state.gscale = GscaleService::new()
-        .with_erp(Arc::new(FakeErp {
+        .with_receipt_store(Arc::new(FakeReceiptStore {
             events: events.clone(),
         }))
         .with_driver(Arc::new(FakeDriver {
@@ -208,7 +208,7 @@ async fn rps_batch_print_uses_active_rs_batch_and_transaction_flow() {
     let events = Arc::new(Mutex::new(Vec::new()));
     let mut state = test_state();
     state.gscale = GscaleService::new()
-        .with_erp(Arc::new(FakeErp {
+        .with_receipt_store(Arc::new(FakeReceiptStore {
             events: events.clone(),
         }))
         .with_driver(Arc::new(FakeDriver {
@@ -264,11 +264,11 @@ async fn rps_batch_print_uses_active_rs_batch_and_transaction_flow() {
 }
 
 #[tokio::test]
-async fn rps_batch_print_returns_after_driver_without_waiting_for_erp_submit() {
+async fn rps_batch_print_returns_after_driver_without_waiting_for_receipt_submit() {
     let events = Arc::new(Mutex::new(Vec::new()));
     let mut state = test_state();
     state.gscale = GscaleService::new()
-        .with_erp(Arc::new(SlowErp {
+        .with_receipt_store(Arc::new(SlowReceiptStore {
             events: events.clone(),
             delay: Duration::from_millis(800),
         }))
@@ -332,11 +332,11 @@ async fn rps_batch_print_returns_after_driver_without_waiting_for_erp_submit() {
 }
 
 #[tokio::test]
-async fn rps_batch_print_returns_printed_before_late_erp_failure() {
+async fn rps_batch_print_returns_printed_before_late_receipt_store_failure() {
     let events = Arc::new(Mutex::new(Vec::new()));
     let mut state = test_state();
     state.gscale = GscaleService::new()
-        .with_erp(Arc::new(FailingSubmitErp {
+        .with_receipt_store(Arc::new(FailingSubmitStore {
             events: events.clone(),
         }))
         .with_driver(Arc::new(FakeDriver {
@@ -420,7 +420,7 @@ async fn live_rps_batch_print_routes_through_rs_to_driver_when_env_is_set() {
     let events = Arc::new(Mutex::new(Vec::new()));
     let mut state = test_state();
     state.gscale = GscaleService::new()
-        .with_erp(Arc::new(FakeErp {
+        .with_receipt_store(Arc::new(FakeReceiptStore {
             events: events.clone(),
         }))
         .with_driver(Arc::new(RpsDriverClient::new(
@@ -578,7 +578,7 @@ async fn json_body(response: axum::response::Response) -> serde_json::Value {
     serde_json::from_slice(&bytes).expect("json")
 }
 
-struct FakeErp {
+struct FakeReceiptStore {
     events: Arc<Mutex<Vec<String>>>,
 }
 
@@ -679,7 +679,7 @@ impl AdminReadPort for FakeAdminCatalogReadPort {
 }
 
 #[async_trait]
-impl MaterialReceiptErpPort for FakeErp {
+impl MaterialReceiptStorePort for FakeReceiptStore {
     async fn create_material_receipt_draft(
         &self,
         input: CreateMaterialReceiptDraftInput,
@@ -709,12 +709,12 @@ impl MaterialReceiptErpPort for FakeErp {
     }
 }
 
-struct FailingSubmitErp {
+struct FailingSubmitStore {
     events: Arc<Mutex<Vec<String>>>,
 }
 
 #[async_trait]
-impl MaterialReceiptErpPort for FailingSubmitErp {
+impl MaterialReceiptStorePort for FailingSubmitStore {
     async fn create_material_receipt_draft(
         &self,
         input: CreateMaterialReceiptDraftInput,
@@ -735,7 +735,7 @@ impl MaterialReceiptErpPort for FailingSubmitErp {
 
     async fn submit_stock_entry_draft(&self, name: &str) -> Result<(), GscalePortError> {
         self.events.lock().unwrap().push(format!("submit:{name}"));
-        Err(GscalePortError::ErpWrite(
+        Err(GscalePortError::StoreWrite(
             "NegativeStockError: insufficient stock".to_string(),
         ))
     }
@@ -746,13 +746,13 @@ impl MaterialReceiptErpPort for FailingSubmitErp {
     }
 }
 
-struct SlowErp {
+struct SlowReceiptStore {
     events: Arc<Mutex<Vec<String>>>,
     delay: Duration,
 }
 
 #[async_trait]
-impl MaterialReceiptErpPort for SlowErp {
+impl MaterialReceiptStorePort for SlowReceiptStore {
     async fn create_material_receipt_draft(
         &self,
         input: CreateMaterialReceiptDraftInput,

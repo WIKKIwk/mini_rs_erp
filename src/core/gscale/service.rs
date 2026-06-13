@@ -7,14 +7,14 @@ use super::models::{
     CreateMaterialReceiptDraftInput, MaterialReceiptPrintRequest, MaterialReceiptPrintResponse,
     ScaleDriverPrintRequest, ScaleDriverPrintResponse,
 };
-use super::ports::{EpcSource, MaterialReceiptErpPort, ScaleDriverPort};
+use super::ports::{EpcSource, MaterialReceiptStorePort, ScaleDriverPort};
 
 const MIN_BATCH_QTY_KG: f64 = 0.100;
 pub type LateMaterialReceiptErrorHandler = Arc<dyn Fn(String) + Send + Sync>;
 
 #[derive(Clone)]
 pub struct GscaleService {
-    erp: Option<Arc<dyn MaterialReceiptErpPort>>,
+    receipt_store: Option<Arc<dyn MaterialReceiptStorePort>>,
     driver: Option<Arc<dyn ScaleDriverPort>>,
     epc: Arc<dyn EpcSource>,
 }
@@ -22,7 +22,7 @@ pub struct GscaleService {
 impl Default for GscaleService {
     fn default() -> Self {
         Self {
-            erp: None,
+            receipt_store: None,
             driver: None,
             epc: Arc::new(GscaleEpcGenerator::new()),
         }
@@ -34,14 +34,14 @@ impl GscaleService {
         Self::default()
     }
 
-    pub fn with_erp(mut self, erp: Arc<dyn MaterialReceiptErpPort>) -> Self {
-        self.erp = Some(erp);
+    pub fn with_receipt_store(mut self, receipt_store: Arc<dyn MaterialReceiptStorePort>) -> Self {
+        self.receipt_store = Some(receipt_store);
         self
     }
 
     #[cfg(test)]
-    pub fn erp_configured_for_test(&self) -> bool {
-        self.erp.is_some()
+    pub fn receipt_store_configured_for_test(&self) -> bool {
+        self.receipt_store.is_some()
     }
 
     pub fn with_driver(mut self, driver: Arc<dyn ScaleDriverPort>) -> Self {
@@ -68,8 +68,10 @@ impl GscaleService {
         request: MaterialReceiptPrintRequest,
         late_error: Option<LateMaterialReceiptErrorHandler>,
     ) -> Result<MaterialReceiptPrintResponse, GscaleServiceError> {
-        let erp = self.erp.as_ref().ok_or_else(|| {
-            GscaleServiceError::NotConfigured("material receipt erp is not configured".to_string())
+        let receipt_store = self.receipt_store.as_ref().ok_or_else(|| {
+            GscaleServiceError::NotConfigured(
+                "material receipt store is not configured".to_string(),
+            )
         })?;
         let driver = self.driver.as_ref().ok_or_else(|| {
             GscaleServiceError::NotConfigured("scale driver is not configured".to_string())
@@ -78,7 +80,7 @@ impl GscaleService {
         let epc = self.next_epc()?;
         let (print_result_tx, print_result_rx) = oneshot::channel();
         tokio::spawn(record_parallel_material_receipt(
-            erp.clone(),
+            receipt_store.clone(),
             job.clone(),
             epc.clone(),
             print_result_rx,
@@ -134,15 +136,16 @@ impl GscaleService {
 }
 
 async fn record_parallel_material_receipt(
-    erp: Arc<dyn MaterialReceiptErpPort>,
+    receipt_store: Arc<dyn MaterialReceiptStorePort>,
     job: NormalizedMaterialReceiptJob,
     epc: String,
     print_result_rx: oneshot::Receiver<bool>,
     late_error: Option<LateMaterialReceiptErrorHandler>,
 ) {
-    if let Err(error) = record_parallel_material_receipt_inner(erp, job, epc, print_result_rx).await
+    if let Err(error) =
+        record_parallel_material_receipt_inner(receipt_store, job, epc, print_result_rx).await
     {
-        tracing::warn!(%error, "RPS batch ERP record failed after driver print");
+        tracing::warn!(%error, "RPS batch material receipt record failed after driver print");
         if let Some(handler) = late_error {
             handler(error.to_string());
         }
@@ -150,26 +153,28 @@ async fn record_parallel_material_receipt(
 }
 
 async fn record_parallel_material_receipt_inner(
-    erp: Arc<dyn MaterialReceiptErpPort>,
+    receipt_store: Arc<dyn MaterialReceiptStorePort>,
     job: NormalizedMaterialReceiptJob,
     epc: String,
     print_result_rx: oneshot::Receiver<bool>,
 ) -> Result<(), GscaleServiceError> {
-    let draft = create_material_receipt_draft(erp.as_ref(), &job, epc).await?;
+    let draft = create_material_receipt_draft(receipt_store.as_ref(), &job, epc).await?;
     let print_ok = print_result_rx.await.unwrap_or(false);
     if !print_ok {
-        erp.delete_stock_entry_draft(&draft.name)
+        receipt_store
+            .delete_stock_entry_draft(&draft.name)
             .await
-            .map_err(|error| GscaleServiceError::ErpWrite(error.message()))?;
+            .map_err(|error| GscaleServiceError::StoreWrite(error.message()))?;
         return Ok(());
     }
-    erp.submit_stock_entry_draft(&draft.name)
+    receipt_store
+        .submit_stock_entry_draft(&draft.name)
         .await
-        .map_err(|error| GscaleServiceError::SubmitFailed(clean_erp_error(&error.message())))
+        .map_err(|error| GscaleServiceError::SubmitFailed(clean_store_error(&error.message())))
 }
 
 async fn create_material_receipt_draft(
-    erp: &dyn MaterialReceiptErpPort,
+    receipt_store: &dyn MaterialReceiptStorePort,
     job: &NormalizedMaterialReceiptJob,
     epc: String,
 ) -> Result<super::models::MaterialReceiptDraft, GscaleServiceError> {
@@ -179,9 +184,10 @@ async fn create_material_receipt_draft(
         qty: job.net_qty,
         barcode: epc,
     };
-    erp.create_material_receipt_draft(input)
+    receipt_store
+        .create_material_receipt_draft(input)
         .await
-        .map_err(|error| GscaleServiceError::ErpWrite(error.message()))
+        .map_err(|error| GscaleServiceError::StoreWrite(error.message()))
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -278,8 +284,8 @@ pub enum GscaleServiceError {
     NotConfigured(String),
     #[error("epc generation failed")]
     EpcGenerationFailed,
-    #[error("erp write failed: {0}")]
-    ErpWrite(String),
+    #[error("store write failed: {0}")]
+    StoreWrite(String),
     #[error("print failed: {detail}")]
     PrintFailed {
         detail: String,
@@ -295,7 +301,7 @@ impl GscaleServiceError {
             Self::InvalidInput(_) => "invalid_input",
             Self::NotConfigured(_) => "gscale_not_configured",
             Self::EpcGenerationFailed => "epc_generation_failed",
-            Self::ErpWrite(_) => "erp_write_failed",
+            Self::StoreWrite(_) => "store_write_failed",
             Self::PrintFailed { .. } => "print_failed",
             Self::SubmitFailed(_) => "submit_failed",
         }
@@ -316,10 +322,10 @@ fn print_error_detail(print: &ScaleDriverPrintResponse) -> String {
     "print failed".to_string()
 }
 
-fn clean_erp_error(message: &str) -> String {
+fn clean_store_error(message: &str) -> String {
     message
         .trim()
-        .strip_prefix("erp write failed: ")
+        .strip_prefix("store write failed: ")
         .unwrap_or_else(|| message.trim())
         .to_string()
 }

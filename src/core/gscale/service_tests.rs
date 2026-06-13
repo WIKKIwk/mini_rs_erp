@@ -26,9 +26,11 @@ fn request() -> MaterialReceiptPrintRequest {
 }
 
 #[tokio::test]
-async fn rejects_small_gross_and_net_qty_before_erp() {
+async fn rejects_small_gross_and_net_qty_before_receipt_store() {
     let service = GscaleService::new()
-        .with_erp(Arc::new(FakeErp::new(Arc::new(Mutex::new(Vec::new())))))
+        .with_receipt_store(Arc::new(FakeReceiptStore::new(Arc::new(Mutex::new(
+            Vec::new(),
+        )))))
         .with_driver(Arc::new(FakeDriver::done(Arc::new(Mutex::new(Vec::new())))));
     let mut gross = request();
     gross.gross_qty = 0.099;
@@ -60,7 +62,7 @@ async fn driver_first_starts_draft_before_slow_driver_finishes_and_submits_after
     let events = Arc::new(Mutex::new(Vec::new()));
     let print_gate = Arc::new(Notify::new());
     let service = GscaleService::new()
-        .with_erp(Arc::new(FakeErp::new(events.clone())))
+        .with_receipt_store(Arc::new(FakeReceiptStore::new(events.clone())))
         .with_driver(Arc::new(GatedDriver {
             events: events.clone(),
             print_gate: print_gate.clone(),
@@ -100,19 +102,19 @@ async fn driver_first_starts_draft_before_slow_driver_finishes_and_submits_after
         .unwrap();
     assert!(
         create_pos < print_done_pos,
-        "ERP draft must start while printer request is still in flight: {events:?}"
+        "receipt draft must start while printer request is still in flight: {events:?}"
     );
     assert!(
         print_done_pos < submit_pos,
-        "ERP submit must wait for printer success: {events:?}"
+        "receipt submit must wait for printer success: {events:?}"
     );
 }
 
 #[tokio::test]
-async fn forwards_print_count_to_driver_without_creating_extra_erp_drafts() {
+async fn forwards_print_count_to_driver_without_creating_extra_receipt_drafts() {
     let events = Arc::new(Mutex::new(Vec::new()));
     let service = GscaleService::new()
-        .with_erp(Arc::new(FakeErp::new(events.clone())))
+        .with_receipt_store(Arc::new(FakeReceiptStore::new(events.clone())))
         .with_driver(Arc::new(FakeDriver::done(events.clone())))
         .with_epc_source(Arc::new(QueueEpc::new(["EPC-DUP"])));
     let mut request = request();
@@ -167,13 +169,13 @@ impl EpcSource for QueueEpc {
     }
 }
 
-struct FakeErp {
+struct FakeReceiptStore {
     events: Arc<Mutex<Vec<String>>>,
     duplicate_failures: usize,
     submit_error: Option<String>,
 }
 
-impl FakeErp {
+impl FakeReceiptStore {
     fn new(events: Arc<Mutex<Vec<String>>>) -> Self {
         Self {
             events,
@@ -184,7 +186,7 @@ impl FakeErp {
 }
 
 #[async_trait]
-impl MaterialReceiptErpPort for FakeErp {
+impl MaterialReceiptStorePort for FakeReceiptStore {
     async fn create_material_receipt_draft(
         &self,
         input: CreateMaterialReceiptDraftInput,
@@ -196,7 +198,7 @@ impl MaterialReceiptErpPort for FakeErp {
         if self.duplicate_failures > 0
             && self.events.lock().unwrap().len() <= self.duplicate_failures
         {
-            return Err(GscalePortError::ErpWrite(
+            return Err(GscalePortError::StoreWrite(
                 "barcode duplicate entry".to_string(),
             ));
         }
@@ -213,7 +215,7 @@ impl MaterialReceiptErpPort for FakeErp {
     async fn submit_stock_entry_draft(&self, name: &str) -> Result<(), GscalePortError> {
         self.events.lock().unwrap().push(format!("submit:{name}"));
         if let Some(error) = &self.submit_error {
-            return Err(GscalePortError::ErpWrite(error.clone()));
+            return Err(GscalePortError::StoreWrite(error.clone()));
         }
         Ok(())
     }

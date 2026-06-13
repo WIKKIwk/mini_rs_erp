@@ -6,7 +6,7 @@ use super::models::{
 };
 
 #[async_trait]
-pub trait MaterialReceiptErpPort: Send + Sync {
+pub trait MaterialReceiptStorePort: Send + Sync {
     async fn create_material_receipt_draft(
         &self,
         input: CreateMaterialReceiptDraftInput,
@@ -35,8 +35,8 @@ pub enum GscalePortError {
     InvalidInput(String),
     #[error("not configured: {0}")]
     NotConfigured(String),
-    #[error("erp write failed: {0}")]
-    ErpWrite(String),
+    #[error("store write failed: {0}")]
+    StoreWrite(String),
     #[error("driver request failed: {0}")]
     Driver(String),
 }

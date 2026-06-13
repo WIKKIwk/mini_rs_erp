@@ -89,7 +89,7 @@ fn gscale_error(error: GscaleServiceError) -> (StatusCode, Json<GscaleErrorRespo
         GscaleServiceError::InvalidInput(_) => StatusCode::BAD_REQUEST,
         GscaleServiceError::NotConfigured(_) => StatusCode::SERVICE_UNAVAILABLE,
         GscaleServiceError::EpcGenerationFailed => StatusCode::INTERNAL_SERVER_ERROR,
-        GscaleServiceError::ErpWrite(_)
+        GscaleServiceError::StoreWrite(_)
         | GscaleServiceError::PrintFailed { .. }
         | GscaleServiceError::SubmitFailed(_) => StatusCode::FAILED_DEPENDENCY,
     };

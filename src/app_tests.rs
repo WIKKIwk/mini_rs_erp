@@ -198,7 +198,7 @@ async fn app_state_uses_postgres_production_maps_when_database_url_is_configured
 }
 
 #[tokio::test]
-async fn app_state_skips_legacy_erp_clients_when_mini_database_url_is_configured() {
+async fn app_state_skips_legacy_remote_clients_when_mini_database_url_is_configured() {
     let _guard = MINI_ENGINE_ENV_LOCK.lock().expect("env lock");
     unsafe {
         std::env::set_var(
@@ -212,7 +212,7 @@ async fn app_state_skips_legacy_erp_clients_when_mini_database_url_is_configured
         ..test_app_config()
     });
 
-    assert!(!state.gscale.erp_configured_for_test());
+    assert!(!state.gscale.receipt_store_configured_for_test());
     assert!(!state.rezka.erp_configured_for_test());
 
     unsafe {
@@ -222,7 +222,7 @@ async fn app_state_skips_legacy_erp_clients_when_mini_database_url_is_configured
 }
 
 #[tokio::test]
-async fn app_state_never_attaches_legacy_erp_clients() {
+async fn app_state_never_attaches_legacy_remote_clients() {
     let _guard = MINI_ENGINE_ENV_LOCK.lock().expect("env lock");
     unsafe {
         std::env::remove_var("MINI_ERP_DATABASE_URL");
@@ -232,7 +232,7 @@ async fn app_state_never_attaches_legacy_erp_clients() {
         ..test_app_config()
     });
 
-    assert!(!state.gscale.erp_configured_for_test());
+    assert!(!state.gscale.receipt_store_configured_for_test());
     assert!(!state.rezka.erp_configured_for_test());
 }
 

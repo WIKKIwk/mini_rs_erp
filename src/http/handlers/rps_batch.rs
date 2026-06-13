@@ -100,7 +100,7 @@ pub async fn print(
                 .record_late_error(&batch_principal, detail)
                 .await
             {
-                tracing::warn!(%error, "failed to record late RPS ERP error");
+                tracing::warn!(%error, "failed to record late RPS material receipt error");
             }
         });
     });
@@ -155,7 +155,7 @@ fn gscale_error(error: GscaleServiceError) -> (StatusCode, Json<RpsBatchErrorRes
         GscaleServiceError::InvalidInput(_) => StatusCode::BAD_REQUEST,
         GscaleServiceError::NotConfigured(_) => StatusCode::SERVICE_UNAVAILABLE,
         GscaleServiceError::EpcGenerationFailed => StatusCode::INTERNAL_SERVER_ERROR,
-        GscaleServiceError::ErpWrite(_)
+        GscaleServiceError::StoreWrite(_)
         | GscaleServiceError::PrintFailed { .. }
         | GscaleServiceError::SubmitFailed(_) => StatusCode::FAILED_DEPENDENCY,
     };
