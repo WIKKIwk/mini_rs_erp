@@ -8,6 +8,7 @@ use super::app_local_store::{LocalStoreBackend, derive_lmdb_path, local_store_ba
 use super::catalog_cache_sync_interval;
 use crate::config::AppConfig;
 use crate::core::apparatus_groups::ApparatusGroupUpsert;
+use crate::core::calculate_orders::{CalculateOrderError, CalculateOrderTemplate};
 use crate::core::production_map::{
     MemoryProductionMapStore, ProductionMapDefinition, ProductionMapEdge, ProductionMapNode,
     ProductionMapNodeKind, ProductionMapService,
@@ -164,6 +165,31 @@ async fn app_state_routes_apparatus_groups_to_postgres_when_database_url_is_conf
 }
 
 #[tokio::test]
+async fn app_state_uses_postgres_calculate_orders_when_database_url_is_configured() {
+    let _guard = MINI_ENGINE_ENV_LOCK.lock().expect("env lock");
+    unsafe {
+        std::env::set_var(
+            "MINI_ERP_DATABASE_URL",
+            "postgres://wikki@127.0.0.1:1/mini_rs_erp_unavailable",
+        );
+        std::env::set_var("MINI_ERP_PG_ACQUIRE_TIMEOUT_MS", "50");
+    }
+
+    let state = super::AppState::new(test_app_config());
+    let result = state
+        .calculate_orders
+        .upsert("admin:admin", calculate_order_template("Z-1001"))
+        .await;
+
+    assert!(matches!(result, Err(CalculateOrderError::StoreFailed)));
+
+    unsafe {
+        std::env::remove_var("MINI_ERP_DATABASE_URL");
+        std::env::remove_var("MINI_ERP_PG_ACQUIRE_TIMEOUT_MS");
+    }
+}
+
+#[tokio::test]
 async fn erp_work_order_sync_once_upserts_maps_into_local_cache() {
     let service = ProductionMapService::new(Arc::new(MemoryProductionMapStore::new()));
     let source: Arc<dyn ProductionOrderErpSource> = Arc::new(FakeProductionOrderSource {
@@ -182,6 +208,40 @@ async fn erp_work_order_sync_once_upserts_maps_into_local_cache() {
         .expect("saved map");
     assert_eq!(saved.map.id, "zakaz-333");
     assert_eq!(saved.map.order_number, "333");
+}
+
+fn calculate_order_template(code: &str) -> CalculateOrderTemplate {
+    CalculateOrderTemplate {
+        id: String::new(),
+        code: code.to_string(),
+        name: "CPP 600".to_string(),
+        saved_at: String::new(),
+        order_number: code.to_string(),
+        customer_ref: "CUST-001".to_string(),
+        customer: "Mijoz".to_string(),
+        item_code: "ITEM-001".to_string(),
+        product: "cpp / 20 mikron / 600".to_string(),
+        status: String::new(),
+        material_display: String::new(),
+        color: String::new(),
+        image_id: String::new(),
+        image_name: String::new(),
+        image_mime: String::new(),
+        image_size_bytes: 0,
+        image_url: String::new(),
+        width_mm: 530.0,
+        waste_percent: 3.0,
+        roll_count: Some(7.0),
+        first_layer_material: "pet".to_string(),
+        first_layer_micron: "12".to_string(),
+        second_layer_material: "pe oq".to_string(),
+        second_layer_micron: "30".to_string(),
+        third_layer_material: String::new(),
+        third_layer_micron: String::new(),
+        note: String::new(),
+        kg: 0.0,
+        source_map_id: String::new(),
+    }
 }
 
 #[derive(Debug)]

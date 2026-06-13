@@ -54,8 +54,7 @@ CREATE TABLE IF NOT EXISTS mini_quick_order_templates (
     CONSTRAINT mini_quick_order_templates_code_not_blank CHECK (btrim(code) <> ''),
     CONSTRAINT mini_quick_order_templates_name_not_blank CHECK (btrim(name) <> ''),
     CONSTRAINT mini_quick_order_templates_product_not_blank CHECK (btrim(product_name) <> ''),
-    CONSTRAINT mini_quick_order_templates_owner_code_unique UNIQUE (owner_key, code),
-    CONSTRAINT mini_quick_order_templates_owner_key_unique UNIQUE (owner_key, quick_key)
+    CONSTRAINT mini_quick_order_templates_owner_code_unique UNIQUE (owner_key, code)
 );
 
 CREATE TABLE IF NOT EXISTS mini_production_maps (
@@ -171,6 +170,9 @@ CREATE TABLE IF NOT EXISTS mini_idempotency_keys (
 
 CREATE INDEX IF NOT EXISTS idx_mini_orders_customer_ref ON mini_orders(customer_ref);
 CREATE INDEX IF NOT EXISTS idx_mini_orders_status ON mini_orders(status);
+CREATE INDEX IF NOT EXISTS idx_mini_quick_order_templates_owner_saved ON mini_quick_order_templates(owner_key, saved_at DESC);
+CREATE INDEX IF NOT EXISTS idx_mini_quick_order_templates_owner_quick_key ON mini_quick_order_templates(owner_key, quick_key);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_mini_quick_order_templates_owner_lower_code ON mini_quick_order_templates (owner_key, lower(code));
 CREATE INDEX IF NOT EXISTS idx_mini_production_maps_order_id ON mini_production_maps(order_id);
 CREATE UNIQUE INDEX IF NOT EXISTS idx_mini_apparatus_groups_lower_name ON mini_apparatus_groups (lower(name));
 CREATE INDEX IF NOT EXISTS idx_mini_queue_states_order_id ON mini_queue_states(order_id);

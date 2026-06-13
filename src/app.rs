@@ -21,6 +21,7 @@ use crate::core::session::manager::SessionManager;
 use crate::core::werka::service::WerkaService;
 use crate::db::postgres::PostgresConfig;
 use crate::db::postgres_apparatus_group::PostgresApparatusGroupStore;
+use crate::db::postgres_calculate_order::PostgresCalculateOrderStore;
 use crate::db::postgres_engine::PostgresEngineStore;
 use crate::erpdb::catalog_cache::reader::CatalogCacheReader;
 use crate::erpdb::catalog_cache::store::CatalogCacheStore;
@@ -82,7 +83,7 @@ impl AppState {
         let production_maps =
             ProductionMapService::new(Arc::new(ProductionMapStore::new(product_map_store_path())));
         let apparatus_groups = build_apparatus_groups_service();
-        let calculate_orders = Arc::new(CalculateOrderStore::new(calculate_order_store_path()));
+        let calculate_orders = build_calculate_order_store();
         let order_sheets = discover_order_sheet_sink();
         let mut production_orders: Arc<dyn ProductionOrderErpSink> =
             Arc::new(NoopProductionOrderErpSink);
@@ -350,6 +351,27 @@ fn build_sqlite_apparatus_groups_service() -> ApparatusGroupService {
     ApparatusGroupService::new(Arc::new(ApparatusGroupStore::new(
         apparatus_group_store_path(),
     )))
+}
+
+fn build_calculate_order_store() -> Arc<dyn CalculateOrderStorePort> {
+    let config = match PostgresConfig::from_env() {
+        Ok(config) => config,
+        Err(_) => return build_sqlite_calculate_order_store(),
+    };
+    match config.pool_options().connect_lazy(&config.database_url) {
+        Ok(pool) => {
+            tracing::info!("mini ERP postgres calculate order store configured");
+            Arc::new(PostgresCalculateOrderStore::new(pool))
+        }
+        Err(error) => {
+            tracing::warn!(%error, "mini ERP postgres calculate order store disabled");
+            build_sqlite_calculate_order_store()
+        }
+    }
+}
+
+fn build_sqlite_calculate_order_store() -> Arc<dyn CalculateOrderStorePort> {
+    Arc::new(CalculateOrderStore::new(calculate_order_store_path()))
 }
 
 async fn run_order_sheets_sync_loop(

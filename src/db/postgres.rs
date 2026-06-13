@@ -181,6 +181,15 @@ mod tests {
         );
     }
 
+    #[test]
+    fn postgres_foundation_migration_keeps_quick_template_codes_unique() {
+        let migration = foundation_migration_sql().to_lowercase();
+
+        assert!(migration.contains("idx_mini_quick_order_templates_owner_lower_code"));
+        assert!(migration.contains("idx_mini_quick_order_templates_owner_quick_key"));
+        assert!(!migration.contains("owner_key_unique unique"));
+    }
+
     #[tokio::test]
     #[ignore = "requires local PostgreSQL and creates/drops mini_rs_erp_test"]
     async fn postgres_live_foundation_migration_applies_to_clean_database() {
