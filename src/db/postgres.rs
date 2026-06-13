@@ -1,6 +1,7 @@
 use std::time::Duration;
 
 use sqlx::postgres::PgPoolOptions;
+use sqlx::{PgPool, Postgres};
 
 const DEFAULT_MIN_CONNECTIONS: u32 = 2;
 const DEFAULT_MAX_CONNECTIONS: u32 = 16;
@@ -71,12 +72,28 @@ pub fn foundation_migration_sql() -> &'static str {
     include_str!("../../migrations/postgres/0001_mini_erp_foundation.sql")
 }
 
+#[allow(dead_code)]
+pub async fn apply_foundation_migration(pool: &PgPool) -> Result<(), sqlx::Error> {
+    for statement in split_sql_statements(foundation_migration_sql()) {
+        sqlx::query::<Postgres>(&statement).execute(pool).await?;
+    }
+    Ok(())
+}
+
 fn env_u32(get_env: &impl Fn(&str) -> Option<String>, key: &str) -> Option<u32> {
     get_env(key).and_then(|raw| raw.trim().parse::<u32>().ok())
 }
 
 fn env_u64(get_env: &impl Fn(&str) -> Option<String>, key: &str) -> Option<u64> {
     get_env(key).and_then(|raw| raw.trim().parse::<u64>().ok())
+}
+
+fn split_sql_statements(sql: &str) -> Vec<String> {
+    sql.split(';')
+        .map(str::trim)
+        .filter(|statement| !statement.is_empty())
+        .map(ToString::to_string)
+        .collect()
 }
 
 #[cfg(test)]
@@ -139,5 +156,97 @@ mod tests {
                 "migration must not contain ERPNext term {forbidden}"
             );
         }
+    }
+
+    #[test]
+    fn postgres_migration_runner_splits_foundation_sql() {
+        let statements = split_sql_statements(foundation_migration_sql());
+
+        assert!(statements.len() > 12);
+        assert!(
+            statements
+                .iter()
+                .any(|statement| statement.starts_with("CREATE TABLE IF NOT EXISTS mini_orders"))
+        );
+        assert!(statements.iter().all(|statement| !statement.contains(';')));
+    }
+
+    #[tokio::test]
+    #[ignore = "requires local PostgreSQL and creates/drops mini_rs_erp_test"]
+    async fn postgres_live_foundation_migration_applies_to_clean_database() {
+        let admin_url = std::env::var("MINI_ERP_TEST_ADMIN_DATABASE_URL")
+            .unwrap_or_else(|_| "postgres://wikki@127.0.0.1:5432/postgres".to_string());
+        let db_name = std::env::var("MINI_ERP_TEST_DATABASE_NAME")
+            .unwrap_or_else(|_| "mini_rs_erp_test".to_string());
+        assert!(
+            db_name.starts_with("mini_rs_erp_test"),
+            "test database name must start with mini_rs_erp_test"
+        );
+
+        let admin_pool = sqlx::PgPool::connect(&admin_url).await.expect("admin db");
+        sqlx::query(&format!(r#"DROP DATABASE IF EXISTS "{db_name}" WITH (FORCE)"#))
+            .execute(&admin_pool)
+            .await
+            .expect("drop test db");
+        sqlx::query(&format!(r#"CREATE DATABASE "{db_name}""#))
+            .execute(&admin_pool)
+            .await
+            .expect("create test db");
+        admin_pool.close().await;
+
+        let test_url = format!("postgres://wikki@127.0.0.1:5432/{db_name}");
+        let pool = sqlx::PgPool::connect(&test_url).await.expect("test db");
+        apply_foundation_migration(&pool)
+            .await
+            .expect("apply foundation migration");
+
+        let table_count: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*)
+             FROM information_schema.tables
+             WHERE table_schema = 'public'
+               AND table_name IN (
+                 'mini_orders',
+                 'mini_order_products',
+                 'mini_quick_order_templates',
+                 'mini_production_maps',
+                 'mini_production_map_nodes',
+                 'mini_production_map_edges',
+                 'mini_apparatus',
+                 'mini_apparatus_groups',
+                 'mini_queue_sequences',
+                 'mini_queue_states',
+                 'mini_engine_events',
+                 'mini_idempotency_keys'
+               )",
+        )
+        .fetch_one(&pool)
+        .await
+        .expect("count tables");
+        assert_eq!(table_count, 12);
+
+        sqlx::query(
+            "INSERT INTO mini_idempotency_keys (key, domain, action, entity_id)
+             VALUES ('test-key-1', 'production_maps', 'batch_move', 'zakaz-1')",
+        )
+        .execute(&pool)
+        .await
+        .expect("insert idempotency key");
+
+        let duplicate = sqlx::query(
+            "INSERT INTO mini_idempotency_keys (key, domain, action)
+             VALUES ('test-key-1', 'production_maps', 'batch_move')",
+        )
+        .execute(&pool)
+        .await;
+        assert!(duplicate.is_err(), "idempotency key must be unique");
+
+        pool.close().await;
+
+        let admin_pool = sqlx::PgPool::connect(&admin_url).await.expect("admin db cleanup");
+        sqlx::query(&format!(r#"DROP DATABASE IF EXISTS "{db_name}" WITH (FORCE)"#))
+            .execute(&admin_pool)
+            .await
+            .expect("cleanup test db");
+        admin_pool.close().await;
     }
 }
