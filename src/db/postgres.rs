@@ -171,6 +171,16 @@ mod tests {
         assert!(statements.iter().all(|statement| !statement.contains(';')));
     }
 
+    #[test]
+    fn postgres_foundation_migration_indexes_apparatus_groups_case_insensitively() {
+        let migration = foundation_migration_sql().to_lowercase();
+
+        assert!(
+            migration.contains("idx_mini_apparatus_groups_lower_name")
+                && migration.contains("lower(name)")
+        );
+    }
+
     #[tokio::test]
     #[ignore = "requires local PostgreSQL and creates/drops mini_rs_erp_test"]
     async fn postgres_live_foundation_migration_applies_to_clean_database() {
@@ -184,10 +194,12 @@ mod tests {
         );
 
         let admin_pool = sqlx::PgPool::connect(&admin_url).await.expect("admin db");
-        sqlx::query(&format!(r#"DROP DATABASE IF EXISTS "{db_name}" WITH (FORCE)"#))
-            .execute(&admin_pool)
-            .await
-            .expect("drop test db");
+        sqlx::query(&format!(
+            r#"DROP DATABASE IF EXISTS "{db_name}" WITH (FORCE)"#
+        ))
+        .execute(&admin_pool)
+        .await
+        .expect("drop test db");
         sqlx::query(&format!(r#"CREATE DATABASE "{db_name}""#))
             .execute(&admin_pool)
             .await
@@ -242,11 +254,15 @@ mod tests {
 
         pool.close().await;
 
-        let admin_pool = sqlx::PgPool::connect(&admin_url).await.expect("admin db cleanup");
-        sqlx::query(&format!(r#"DROP DATABASE IF EXISTS "{db_name}" WITH (FORCE)"#))
-            .execute(&admin_pool)
+        let admin_pool = sqlx::PgPool::connect(&admin_url)
             .await
-            .expect("cleanup test db");
+            .expect("admin db cleanup");
+        sqlx::query(&format!(
+            r#"DROP DATABASE IF EXISTS "{db_name}" WITH (FORCE)"#
+        ))
+        .execute(&admin_pool)
+        .await
+        .expect("cleanup test db");
         admin_pool.close().await;
     }
 }

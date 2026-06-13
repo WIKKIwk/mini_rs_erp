@@ -20,6 +20,7 @@ use crate::core::rps_batch::{RpsBatchLmdbStore, RpsBatchService};
 use crate::core::session::manager::SessionManager;
 use crate::core::werka::service::WerkaService;
 use crate::db::postgres::PostgresConfig;
+use crate::db::postgres_apparatus_group::PostgresApparatusGroupStore;
 use crate::db::postgres_engine::PostgresEngineStore;
 use crate::erpdb::catalog_cache::reader::CatalogCacheReader;
 use crate::erpdb::catalog_cache::store::CatalogCacheStore;
@@ -80,9 +81,7 @@ impl AppState {
         let profile_store = build_profile_store(&config);
         let production_maps =
             ProductionMapService::new(Arc::new(ProductionMapStore::new(product_map_store_path())));
-        let apparatus_groups = ApparatusGroupService::new(Arc::new(ApparatusGroupStore::new(
-            apparatus_group_store_path(),
-        )));
+        let apparatus_groups = build_apparatus_groups_service();
         let calculate_orders = Arc::new(CalculateOrderStore::new(calculate_order_store_path()));
         let order_sheets = discover_order_sheet_sink();
         let mut production_orders: Arc<dyn ProductionOrderErpSink> =
@@ -328,6 +327,29 @@ fn build_mini_engine_store() -> Option<PostgresEngineStore> {
             None
         }
     }
+}
+
+fn build_apparatus_groups_service() -> ApparatusGroupService {
+    let config = match PostgresConfig::from_env() {
+        Ok(config) => config,
+        Err(_) => return build_sqlite_apparatus_groups_service(),
+    };
+    match config.pool_options().connect_lazy(&config.database_url) {
+        Ok(pool) => {
+            tracing::info!("mini ERP postgres apparatus group store configured");
+            ApparatusGroupService::new(Arc::new(PostgresApparatusGroupStore::new(pool)))
+        }
+        Err(error) => {
+            tracing::warn!(%error, "mini ERP postgres apparatus group store disabled");
+            build_sqlite_apparatus_groups_service()
+        }
+    }
+}
+
+fn build_sqlite_apparatus_groups_service() -> ApparatusGroupService {
+    ApparatusGroupService::new(Arc::new(ApparatusGroupStore::new(
+        apparatus_group_store_path(),
+    )))
 }
 
 async fn run_order_sheets_sync_loop(

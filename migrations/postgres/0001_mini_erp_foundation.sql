@@ -172,5 +172,6 @@ CREATE TABLE IF NOT EXISTS mini_idempotency_keys (
 CREATE INDEX IF NOT EXISTS idx_mini_orders_customer_ref ON mini_orders(customer_ref);
 CREATE INDEX IF NOT EXISTS idx_mini_orders_status ON mini_orders(status);
 CREATE INDEX IF NOT EXISTS idx_mini_production_maps_order_id ON mini_production_maps(order_id);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_mini_apparatus_groups_lower_name ON mini_apparatus_groups (lower(name));
 CREATE INDEX IF NOT EXISTS idx_mini_queue_states_order_id ON mini_queue_states(order_id);
 CREATE INDEX IF NOT EXISTS idx_mini_engine_events_entity ON mini_engine_events(domain, entity_id, created_at DESC);
