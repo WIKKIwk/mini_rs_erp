@@ -1,0 +1,296 @@
+use std::collections::VecDeque;
+use std::sync::{Arc, Mutex};
+use std::time::Duration;
+
+use async_trait::async_trait;
+use tokio::sync::Notify;
+
+use super::*;
+use crate::core::gscale::models::{MaterialReceiptDraft, ScaleDriverPrintResponse};
+use crate::core::gscale::ports::GscalePortError;
+
+fn request() -> MaterialReceiptPrintRequest {
+    MaterialReceiptPrintRequest {
+        driver_url: "http://127.0.0.1:39117".to_string(),
+        item_code: " ITEM-1 ".to_string(),
+        item_name: " Green Tea ".to_string(),
+        warehouse: " Stores - A ".to_string(),
+        printer: "zebra".to_string(),
+        print_mode: "rfid".to_string(),
+        gross_qty: 2.5,
+        unit: String::new(),
+        tare_enabled: true,
+        tare_kg: 0.78,
+        print_count: 1,
+    }
+}
+
+#[tokio::test]
+async fn rejects_small_gross_and_net_qty_before_erp() {
+    let service = GscaleService::new()
+        .with_erp(Arc::new(FakeErp::new(Arc::new(Mutex::new(Vec::new())))))
+        .with_driver(Arc::new(FakeDriver::done(Arc::new(Mutex::new(Vec::new())))));
+    let mut gross = request();
+    gross.gross_qty = 0.099;
+    let mut net = request();
+    net.gross_qty = 0.5;
+    net.tare_kg = 0.45;
+
+    let gross_error = service
+        .print_material_receipt_driver_first(gross)
+        .await
+        .unwrap_err();
+    let net_error = service
+        .print_material_receipt_driver_first(net)
+        .await
+        .unwrap_err();
+
+    assert_eq!(
+        gross_error.to_string(),
+        "invalid input: QTY juda kichik: 0.099 kg | min 0.100 kg"
+    );
+    assert_eq!(
+        net_error.to_string(),
+        "invalid input: NETTO juda kichik: brutto 0.500 kg - babina 0.450 kg = 0.050 kg | min 0.100 kg"
+    );
+}
+
+#[tokio::test]
+async fn driver_first_starts_draft_before_slow_driver_finishes_and_submits_after_print_success() {
+    let events = Arc::new(Mutex::new(Vec::new()));
+    let print_gate = Arc::new(Notify::new());
+    let service = GscaleService::new()
+        .with_erp(Arc::new(FakeErp::new(events.clone())))
+        .with_driver(Arc::new(GatedDriver {
+            events: events.clone(),
+            print_gate: print_gate.clone(),
+        }))
+        .with_epc_source(Arc::new(QueueEpc::new(["EPC-1"])));
+
+    let print_task =
+        tokio::spawn(async move { service.print_material_receipt_driver_first(request()).await });
+
+    wait_for_event(&events, "create:EPC-1:1.720").await;
+    assert!(
+        !events
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|event| event == "submit:MAT-STE-001"),
+        "draft must not submit before printer success"
+    );
+
+    print_gate.notify_one();
+    let response = print_task.await.unwrap().unwrap();
+    assert_eq!(response.status, "printed");
+
+    wait_for_event(&events, "submit:MAT-STE-001").await;
+    let events = events.lock().unwrap().clone();
+    let create_pos = events
+        .iter()
+        .position(|event| event == "create:EPC-1:1.720")
+        .unwrap();
+    let print_done_pos = events
+        .iter()
+        .position(|event| event == "print:done:EPC-1")
+        .unwrap();
+    let submit_pos = events
+        .iter()
+        .position(|event| event == "submit:MAT-STE-001")
+        .unwrap();
+    assert!(
+        create_pos < print_done_pos,
+        "ERP draft must start while printer request is still in flight: {events:?}"
+    );
+    assert!(
+        print_done_pos < submit_pos,
+        "ERP submit must wait for printer success: {events:?}"
+    );
+}
+
+#[tokio::test]
+async fn forwards_print_count_to_driver_without_creating_extra_erp_drafts() {
+    let events = Arc::new(Mutex::new(Vec::new()));
+    let service = GscaleService::new()
+        .with_erp(Arc::new(FakeErp::new(events.clone())))
+        .with_driver(Arc::new(FakeDriver::done(events.clone())))
+        .with_epc_source(Arc::new(QueueEpc::new(["EPC-DUP"])));
+    let mut request = request();
+    request.print_count = 5;
+
+    let response = service
+        .print_material_receipt_driver_first(request)
+        .await
+        .unwrap();
+
+    assert_eq!(response.status, "printed");
+    assert_eq!(response.print_count, 5);
+    wait_for_event(&events, "submit:MAT-STE-001").await;
+    assert_eq!(
+        events.lock().unwrap().as_slice(),
+        [
+            "print:EPC-DUP:5",
+            "create:EPC-DUP:1.720",
+            "submit:MAT-STE-001"
+        ]
+    );
+}
+
+async fn wait_for_event(events: &Arc<Mutex<Vec<String>>>, needle: &str) {
+    for _ in 0..50 {
+        if events.lock().unwrap().iter().any(|event| event == needle) {
+            return;
+        }
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    panic!(
+        "timed out waiting for {needle}; events={:?}",
+        events.lock().unwrap()
+    );
+}
+
+struct QueueEpc {
+    values: Mutex<VecDeque<String>>,
+}
+
+impl QueueEpc {
+    fn new(values: impl IntoIterator<Item = impl Into<String>>) -> Self {
+        Self {
+            values: Mutex::new(values.into_iter().map(Into::into).collect()),
+        }
+    }
+}
+
+impl EpcSource for QueueEpc {
+    fn next_epc(&self) -> String {
+        self.values.lock().unwrap().pop_front().unwrap_or_default()
+    }
+}
+
+struct FakeErp {
+    events: Arc<Mutex<Vec<String>>>,
+    duplicate_failures: usize,
+    submit_error: Option<String>,
+}
+
+impl FakeErp {
+    fn new(events: Arc<Mutex<Vec<String>>>) -> Self {
+        Self {
+            events,
+            duplicate_failures: 0,
+            submit_error: None,
+        }
+    }
+}
+
+#[async_trait]
+impl MaterialReceiptErpPort for FakeErp {
+    async fn create_material_receipt_draft(
+        &self,
+        input: CreateMaterialReceiptDraftInput,
+    ) -> Result<MaterialReceiptDraft, GscalePortError> {
+        self.events
+            .lock()
+            .unwrap()
+            .push(format!("create:{}:{:.3}", input.barcode, input.qty));
+        if self.duplicate_failures > 0
+            && self.events.lock().unwrap().len() <= self.duplicate_failures
+        {
+            return Err(GscalePortError::ErpWrite(
+                "barcode duplicate entry".to_string(),
+            ));
+        }
+        Ok(MaterialReceiptDraft {
+            name: "MAT-STE-001".to_string(),
+            item_code: input.item_code,
+            warehouse: input.warehouse,
+            qty: input.qty,
+            uom: "Kg".to_string(),
+            barcode: input.barcode,
+        })
+    }
+
+    async fn submit_stock_entry_draft(&self, name: &str) -> Result<(), GscalePortError> {
+        self.events.lock().unwrap().push(format!("submit:{name}"));
+        if let Some(error) = &self.submit_error {
+            return Err(GscalePortError::ErpWrite(error.clone()));
+        }
+        Ok(())
+    }
+
+    async fn delete_stock_entry_draft(&self, name: &str) -> Result<(), GscalePortError> {
+        self.events.lock().unwrap().push(format!("delete:{name}"));
+        Ok(())
+    }
+}
+
+struct FakeDriver {
+    events: Arc<Mutex<Vec<String>>>,
+    status: &'static str,
+    ok: bool,
+}
+
+impl FakeDriver {
+    fn done(events: Arc<Mutex<Vec<String>>>) -> Self {
+        Self {
+            events,
+            status: "done",
+            ok: true,
+        }
+    }
+}
+
+#[async_trait]
+impl ScaleDriverPort for FakeDriver {
+    async fn print_material_receipt(
+        &self,
+        request: ScaleDriverPrintRequest,
+    ) -> Result<ScaleDriverPrintResponse, GscalePortError> {
+        self.events
+            .lock()
+            .unwrap()
+            .push(format!("print:{}:{}", request.epc, request.print_count));
+        Ok(ScaleDriverPrintResponse {
+            ok: self.ok,
+            status: self.status.to_string(),
+            epc: request.epc,
+            printer: request.printer,
+            mode: request.print_mode,
+            printer_status: self.status.to_string(),
+            detail: "printer rejected".to_string(),
+            ..ScaleDriverPrintResponse::default()
+        })
+    }
+}
+
+struct GatedDriver {
+    events: Arc<Mutex<Vec<String>>>,
+    print_gate: Arc<Notify>,
+}
+
+#[async_trait]
+impl ScaleDriverPort for GatedDriver {
+    async fn print_material_receipt(
+        &self,
+        request: ScaleDriverPrintRequest,
+    ) -> Result<ScaleDriverPrintResponse, GscalePortError> {
+        self.events
+            .lock()
+            .unwrap()
+            .push(format!("print:start:{}", request.epc));
+        self.print_gate.notified().await;
+        self.events
+            .lock()
+            .unwrap()
+            .push(format!("print:done:{}", request.epc));
+        Ok(ScaleDriverPrintResponse {
+            ok: true,
+            status: "done".to_string(),
+            epc: request.epc,
+            printer: request.printer,
+            mode: request.print_mode,
+            printer_status: "OK".to_string(),
+            ..ScaleDriverPrintResponse::default()
+        })
+    }
+}

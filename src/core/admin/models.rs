@@ -1,0 +1,201 @@
+use serde::{Deserialize, Serialize};
+use time::OffsetDateTime;
+
+use crate::core::werka::models::{CustomerDirectoryEntry, DispatchRecord, SupplierItem};
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AdminSettings {
+    pub erp_url: String,
+    pub erp_api_key: String,
+    pub erp_api_secret: String,
+    pub default_target_warehouse: String,
+    pub default_uom: String,
+    pub werka_phone: String,
+    pub werka_name: String,
+    pub werka_code: String,
+    pub werka_code_locked: bool,
+    pub werka_code_retry_after_sec: i64,
+    pub admin_phone: String,
+    pub admin_name: String,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AdminWarehouse {
+    pub warehouse: String,
+    pub company: String,
+    pub is_group: bool,
+    pub parent_warehouse: String,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AdminCreateSupplierRequest {
+    pub name: String,
+    pub phone: String,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AdminCreateCustomerRequest {
+    pub name: String,
+    pub phone: String,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AdminSupplier {
+    #[serde(rename = "ref")]
+    pub ref_: String,
+    pub name: String,
+    pub phone: String,
+    pub code: String,
+    pub blocked: bool,
+    pub removed: bool,
+    pub assigned_item_codes: Vec<String>,
+    pub assigned_item_count: usize,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AdminSupplierSummary {
+    pub total_suppliers: usize,
+    pub active_suppliers: usize,
+    pub blocked_suppliers: usize,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct AdminSuppliersPage {
+    pub summary: AdminSupplierSummary,
+    pub suppliers: Vec<AdminSupplier>,
+    pub customers: Vec<CustomerDirectoryEntry>,
+    pub settings: AdminSettings,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct AdminSupplierDetail {
+    #[serde(rename = "ref")]
+    pub ref_: String,
+    pub name: String,
+    pub phone: String,
+    pub code: String,
+    pub blocked: bool,
+    pub removed: bool,
+    pub code_locked: bool,
+    pub code_retry_after_sec: i64,
+    pub assigned_items: Vec<SupplierItem>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct AdminCustomerDetail {
+    #[serde(rename = "ref")]
+    pub ref_: String,
+    pub name: String,
+    pub phone: String,
+    pub code: String,
+    pub code_locked: bool,
+    pub code_retry_after_sec: i64,
+    pub assigned_items: Vec<SupplierItem>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AdminPhoneUpdateRequest {
+    pub phone: String,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AdminSupplierStatusUpdateRequest {
+    pub blocked: bool,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AdminSupplierItemsUpdateRequest {
+    pub item_codes: Vec<String>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AdminSupplierItemMutationRequest {
+    pub item_code: String,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AdminCreateItemRequest {
+    pub code: String,
+    pub name: String,
+    pub uom: String,
+    pub item_group: String,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AdminCreateItemGroupRequest {
+    pub name: String,
+    pub parent: String,
+    pub is_group: bool,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AdminMoveItemGroupRequest {
+    pub name: String,
+    pub parent: String,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AdminItemGroup {
+    pub name: String,
+    pub item_group_name: String,
+    pub parent_item_group: String,
+    pub is_group: bool,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AdminBulkMoveItemsRequest {
+    pub item_codes: Vec<String>,
+    pub item_group: String,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AdminItemGroupBulkMoveResult {
+    pub item_group: String,
+    pub requested_count: usize,
+    pub updated_count: usize,
+    pub failed_count: usize,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub updated_item_codes: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub failed_item_codes: Vec<String>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct AdminDirectoryEntry {
+    pub ref_: String,
+    pub name: String,
+    pub phone: String,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct AdminState {
+    pub custom_code: String,
+    pub blocked: bool,
+    pub removed: bool,
+    pub assigned_item_codes: Vec<String>,
+    pub cooldown_until: Option<OffsetDateTime>,
+    pub regen_window_started_at: Option<OffsetDateTime>,
+    pub regen_window_count: i32,
+    pub pending_persist_code: String,
+    pub pending_persist_at: Option<OffsetDateTime>,
+    pub assignments_configured: bool,
+}
+
+impl AdminState {
+    pub fn code_locked(&self, now: OffsetDateTime) -> bool {
+        self.cooldown_until.is_some_and(|until| now < until)
+    }
+
+    pub fn retry_after_seconds(&self, now: OffsetDateTime) -> i64 {
+        let Some(until) = self.cooldown_until else {
+            return 0;
+        };
+        if now >= until {
+            return 0;
+        }
+        let seconds = (until - now).whole_seconds();
+        seconds.max(1)
+    }
+}
+
+pub type AdminActivity = Vec<DispatchRecord>;
