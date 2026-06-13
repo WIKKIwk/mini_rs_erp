@@ -2,8 +2,10 @@ mod ai;
 mod app;
 mod config;
 mod core;
+mod db;
 mod erpdb;
 mod erpnext;
+mod engine;
 mod error;
 mod fcm;
 #[cfg(test)]
