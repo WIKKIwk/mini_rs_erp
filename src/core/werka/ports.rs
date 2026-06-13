@@ -145,7 +145,7 @@ pub trait SupplierItemLookup: Send + Sync {
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
-pub struct ErpItem {
+pub struct CatalogItem {
     pub code: String,
     pub name: String,
     pub uom: String,
@@ -262,7 +262,10 @@ pub struct DeliveryNoteNotificationDraft {
 
 #[async_trait]
 pub trait WerkaCustomerIssueWriter: Send + Sync {
-    async fn get_items_by_codes(&self, codes: &[String]) -> Result<Vec<ErpItem>, WerkaPortError>;
+    async fn get_items_by_codes(
+        &self,
+        codes: &[String],
+    ) -> Result<Vec<CatalogItem>, WerkaPortError>;
     async fn resolve_warehouse(&self) -> Result<String, WerkaPortError>;
     async fn resolve_company(&self) -> Result<String, WerkaPortError>;
     async fn customer_issue_source_exists_by_scan(

@@ -14,7 +14,7 @@ use crate::core::push::ports::{PushSendError, PushSenderPort};
 use crate::core::push::service::PushService;
 use crate::core::session::manager::SessionManager;
 use crate::core::werka::ports::{
-    CreateDeliveryNoteInput, DeliveryNoteStateUpdate, ErpItem, WerkaCustomerIssueWriter,
+    CatalogItem, CreateDeliveryNoteInput, DeliveryNoteStateUpdate, WerkaCustomerIssueWriter,
     WerkaPortError,
 };
 use crate::core::werka::service::WerkaService;
@@ -413,9 +413,12 @@ impl FakeIssueWriter {
 
 #[async_trait]
 impl WerkaCustomerIssueWriter for FakeIssueWriter {
-    async fn get_items_by_codes(&self, codes: &[String]) -> Result<Vec<ErpItem>, WerkaPortError> {
+    async fn get_items_by_codes(
+        &self,
+        codes: &[String],
+    ) -> Result<Vec<CatalogItem>, WerkaPortError> {
         assert_eq!(codes.len(), 1);
-        Ok(vec![ErpItem {
+        Ok(vec![CatalogItem {
             code: codes[0].clone(),
             name: format!("{} name", codes[0]),
             uom: "Kg".to_string(),

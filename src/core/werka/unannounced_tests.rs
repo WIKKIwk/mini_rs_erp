@@ -11,7 +11,7 @@ use crate::core::werka::ports::{
 use crate::core::werka::service::WerkaService;
 
 #[tokio::test]
-async fn unannounced_create_uses_admin_assigned_items_on_erp_permission_error_like_go() {
+async fn unannounced_create_uses_admin_assigned_items_on_permission_error_like_go() {
     let service = WerkaService::new()
         .with_unannounced_writer(Arc::new(FakeUnannouncedWriter {
             validation_error: Some(WerkaPortError::WriteFailed(
@@ -49,7 +49,7 @@ async fn unannounced_create_prefers_direct_supplier_item_lookup_like_go_reader()
         }))
         .with_unannounced_writer(Arc::new(FakeUnannouncedWriter {
             validation_error: Some(WerkaPortError::WriteFailed(
-                "erp validation should not be needed".to_string(),
+                "catalog validation should not be needed".to_string(),
             )),
         }));
 

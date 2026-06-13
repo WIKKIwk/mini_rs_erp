@@ -11,7 +11,7 @@ use super::service::WerkaService;
 use crate::core::werka::models::SupplierItem;
 
 #[tokio::test]
-async fn supplier_summary_counts_erp_receipt_statuses_like_go_fallback() {
+async fn supplier_summary_counts_receipt_statuses_like_go_fallback() {
     let service = WerkaService::new().with_supplier_purchase_receipt_lookup(std::sync::Arc::new(
         FakeSupplierReceipts {
             calls: Mutex::new(Vec::new()),
