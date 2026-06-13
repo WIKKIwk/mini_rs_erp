@@ -307,7 +307,6 @@ fn test_app_config() -> AppConfig {
         session_store_path: temp_file_path("sessions.json"),
         profile_store_path: temp_file_path("profiles.json"),
         push_token_store_path: temp_file_path("push.json"),
-        admin_supplier_store_path: temp_file_path("admin.json"),
         session_ttl_seconds: Some(3600),
         supplier_prefix: "10".to_string(),
         werka_prefix: "20".to_string(),

@@ -157,6 +157,7 @@ impl GscaleErrorResponse {
 fn admin_read_error(error: AdminPortError) -> (StatusCode, Json<GscaleErrorResponse>) {
     let status = match error {
         AdminPortError::NotFound => StatusCode::NOT_FOUND,
+        #[cfg(test)]
         AdminPortError::PermissionDenied => StatusCode::FORBIDDEN,
         _ => StatusCode::INTERNAL_SERVER_ERROR,
     };

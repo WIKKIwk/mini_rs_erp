@@ -23,6 +23,7 @@ impl RezkaService {
         Self::default()
     }
 
+    #[cfg(test)]
     pub fn with_repack_store(mut self, repack_store: Arc<dyn RezkaRepackStorePort>) -> Self {
         self.repack_store = Some(repack_store);
         self

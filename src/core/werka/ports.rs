@@ -2,10 +2,10 @@ use async_trait::async_trait;
 use time::Date;
 
 use crate::core::werka::models::{
-    CustomerDirectoryEntry, CustomerItemOption, DispatchRecord, NotificationDetail,
-    StockEntryBarcodeEntry, SupplierDirectoryEntry, SupplierHomeSummary, SupplierItem,
-    SupplierStatusBreakdownEntry, WerkaAiSearchSuggestion, WerkaArchiveResponse,
-    WerkaCustomerIssueRecord, WerkaHomeData, WerkaHomeSummary, WerkaStatusBreakdownEntry,
+    CustomerDirectoryEntry, CustomerItemOption, DispatchRecord, StockEntryBarcodeEntry,
+    SupplierDirectoryEntry, SupplierHomeSummary, SupplierItem, SupplierStatusBreakdownEntry,
+    WerkaAiSearchSuggestion, WerkaArchiveResponse, WerkaCustomerIssueRecord, WerkaHomeData,
+    WerkaHomeSummary, WerkaStatusBreakdownEntry,
 };
 
 #[async_trait]
@@ -170,13 +170,6 @@ pub struct DeliveryNoteStateUpdate {
     pub customer_reason: String,
     pub delivery_actor: String,
     pub ui_status: String,
-}
-
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
-pub struct DeliveryNoteDraft {
-    pub name: String,
-    pub remarks: String,
-    pub accord_source_key: String,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -463,19 +456,6 @@ pub trait NotificationDetailWriter: Send + Sync {
             "delivery note comment writer unavailable".to_string(),
         ))
     }
-}
-
-#[async_trait]
-pub trait NotificationDetailLookup: Send + Sync {
-    async fn notification_detail_by_receipt_id(
-        &self,
-        receipt_id: &str,
-    ) -> Result<NotificationDetail, WerkaPortError>;
-}
-
-#[async_trait]
-pub trait CustomerIssueSourceLookup: Send + Sync {
-    async fn customer_issue_source_exists(&self, marker: &str) -> Result<bool, WerkaPortError>;
 }
 
 #[derive(Debug, thiserror::Error)]

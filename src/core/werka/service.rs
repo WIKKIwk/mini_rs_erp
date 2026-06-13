@@ -8,11 +8,11 @@ use crate::core::werka::models::{
     WerkaCustomerIssueCreateInput, WerkaCustomerIssueRecord, WerkaCustomerIssueSource,
 };
 use crate::core::werka::ports::{
-    CreateDeliveryNoteInput, CreatePurchaseReceiptInput, CustomerIssueSourceLookup,
-    DeliveryNoteStateUpdate, NotificationDetailLookup, NotificationDetailWriter,
-    SupplierItemLookup, SupplierPurchaseReceiptLookup, SupplierReadLookup,
-    SupplierUnannouncedWriter, WerkaAiSearch, WerkaConfirmWriter, WerkaCustomerIssueWriter,
-    WerkaHomeLookup, WerkaPortError, WerkaSupplierAdminStateLookup, WerkaUnannouncedWriter,
+    CreateDeliveryNoteInput, CreatePurchaseReceiptInput, DeliveryNoteStateUpdate,
+    NotificationDetailWriter, SupplierItemLookup, SupplierPurchaseReceiptLookup,
+    SupplierReadLookup, SupplierUnannouncedWriter, WerkaAiSearch, WerkaConfirmWriter,
+    WerkaCustomerIssueWriter, WerkaHomeLookup, WerkaPortError, WerkaSupplierAdminStateLookup,
+    WerkaUnannouncedWriter,
 };
 use crate::core::werka::unannounced::{
     format_notification_comment, purchase_receipt_to_dispatch_record, supplier_admin_state,
@@ -28,13 +28,11 @@ const CUSTOMER_ISSUE_SOURCE_MARKER_PREFIX: &str = "accord_customer_issue_source:
 pub struct WerkaService {
     pub(crate) lookup: Option<Arc<dyn WerkaHomeLookup>>,
     customer_issue_writer: Option<Arc<dyn WerkaCustomerIssueWriter>>,
-    customer_issue_source_lookup: Option<Arc<dyn CustomerIssueSourceLookup>>,
     pub(crate) unannounced_writer: Option<Arc<dyn WerkaUnannouncedWriter>>,
     pub(crate) supplier_unannounced_writer: Option<Arc<dyn SupplierUnannouncedWriter>>,
     pub(crate) confirm_writer: Option<Arc<dyn WerkaConfirmWriter>>,
     pub(crate) ai_search: Option<Arc<dyn WerkaAiSearch>>,
     pub(crate) notification_detail_writer: Option<Arc<dyn NotificationDetailWriter>>,
-    pub(crate) notification_detail_lookup: Option<Arc<dyn NotificationDetailLookup>>,
     pub(crate) supplier_admin_state_lookup: Option<Arc<dyn WerkaSupplierAdminStateLookup>>,
     pub(crate) supplier_read_lookup: Option<Arc<dyn SupplierReadLookup>>,
     pub(crate) supplier_purchase_receipt_lookup: Option<Arc<dyn SupplierPurchaseReceiptLookup>>,
@@ -46,33 +44,25 @@ impl WerkaService {
         Self::default()
     }
 
-    #[allow(dead_code)]
+    #[cfg(test)]
     pub fn with_lookup(mut self, lookup: Arc<dyn WerkaHomeLookup>) -> Self {
         self.lookup = Some(lookup);
         self
     }
 
-    #[allow(dead_code)]
+    #[cfg(test)]
     pub fn with_customer_issue_writer(mut self, writer: Arc<dyn WerkaCustomerIssueWriter>) -> Self {
         self.customer_issue_writer = Some(writer);
         self
     }
 
-    #[allow(dead_code)]
-    pub fn with_customer_issue_source_lookup(
-        mut self,
-        lookup: Arc<dyn CustomerIssueSourceLookup>,
-    ) -> Self {
-        self.customer_issue_source_lookup = Some(lookup);
-        self
-    }
-
-    #[allow(dead_code)]
+    #[cfg(test)]
     pub fn with_unannounced_writer(mut self, writer: Arc<dyn WerkaUnannouncedWriter>) -> Self {
         self.unannounced_writer = Some(writer);
         self
     }
 
+    #[cfg(test)]
     pub fn with_supplier_unannounced_writer(
         mut self,
         writer: Arc<dyn SupplierUnannouncedWriter>,
@@ -81,6 +71,7 @@ impl WerkaService {
         self
     }
 
+    #[cfg(test)]
     pub fn with_confirm_writer(mut self, writer: Arc<dyn WerkaConfirmWriter>) -> Self {
         self.confirm_writer = Some(writer);
         self
@@ -91,6 +82,7 @@ impl WerkaService {
         self
     }
 
+    #[cfg(test)]
     pub fn with_notification_detail_writer(
         mut self,
         writer: Arc<dyn NotificationDetailWriter>,
@@ -99,14 +91,7 @@ impl WerkaService {
         self
     }
 
-    pub fn with_notification_detail_lookup(
-        mut self,
-        lookup: Arc<dyn NotificationDetailLookup>,
-    ) -> Self {
-        self.notification_detail_lookup = Some(lookup);
-        self
-    }
-
+    #[cfg(test)]
     pub fn with_supplier_admin_state_lookup(
         mut self,
         lookup: Arc<dyn WerkaSupplierAdminStateLookup>,
@@ -115,11 +100,13 @@ impl WerkaService {
         self
     }
 
+    #[cfg(test)]
     pub fn with_supplier_read_lookup(mut self, lookup: Arc<dyn SupplierReadLookup>) -> Self {
         self.supplier_read_lookup = Some(lookup);
         self
     }
 
+    #[cfg(test)]
     pub fn with_supplier_purchase_receipt_lookup(
         mut self,
         lookup: Arc<dyn SupplierPurchaseReceiptLookup>,
@@ -128,6 +115,7 @@ impl WerkaService {
         self
     }
 
+    #[cfg(test)]
     pub fn with_supplier_item_lookup(mut self, lookup: Arc<dyn SupplierItemLookup>) -> Self {
         self.supplier_item_lookup = Some(lookup);
         self
@@ -147,13 +135,9 @@ impl WerkaService {
         let marker = customer_issue_source_marker(&source);
 
         if !marker.is_empty() {
-            let duplicate = if let Some(lookup) = &self.customer_issue_source_lookup {
-                lookup.customer_issue_source_exists(&marker).await?
-            } else {
-                writer
-                    .customer_issue_source_exists_by_scan(&customer_ref, &marker)
-                    .await?
-            };
+            let duplicate = writer
+                .customer_issue_source_exists_by_scan(&customer_ref, &marker)
+                .await?;
             if duplicate {
                 return Err(WerkaPortError::DuplicateCustomerIssueSource);
             }

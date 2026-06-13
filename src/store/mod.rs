@@ -1,6 +1,3 @@
-pub mod admin_state_store;
-#[cfg(test)]
-mod admin_state_store_tests;
 pub mod apparatus_group_store;
 pub mod calculate_order_store;
 pub mod json_file;

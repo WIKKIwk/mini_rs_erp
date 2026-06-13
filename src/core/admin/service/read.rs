@@ -63,6 +63,7 @@ impl AdminService {
         let read = self.read_port()?;
         let assigned_items = match read.assigned_supplier_items(&entry.ref_, 200).await {
             Ok(items) => items,
+            #[cfg(test)]
             Err(AdminPortError::PermissionDenied) => {
                 if state.assigned_item_codes.is_empty() {
                     Vec::new()
@@ -92,15 +93,17 @@ impl AdminService {
         ref_: &str,
         limit: usize,
     ) -> Result<Vec<SupplierItem>, AdminPortError> {
-        let (entry, state) = self.supplier_entry_state(ref_, false).await?;
+        let (entry, _state) = self.supplier_entry_state(ref_, false).await?;
         let read = self.read_port()?;
         match read.assigned_supplier_items(&entry.ref_, limit).await {
             Ok(items) => Ok(items),
-            Err(AdminPortError::PermissionDenied) if state.assigned_item_codes.is_empty() => {
+            #[cfg(test)]
+            Err(AdminPortError::PermissionDenied) if _state.assigned_item_codes.is_empty() => {
                 Ok(Vec::new())
             }
+            #[cfg(test)]
             Err(AdminPortError::PermissionDenied) => {
-                read.items_by_codes(&state.assigned_item_codes).await
+                read.items_by_codes(&_state.assigned_item_codes).await
             }
             Err(err) => Err(err),
         }

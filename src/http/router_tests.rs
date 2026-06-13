@@ -25,7 +25,6 @@ fn test_state() -> AppState {
         session_store_path: "data/mobile_sessions.json".into(),
         profile_store_path: "data/mobile_profile_prefs.json".into(),
         push_token_store_path: "data/mobile_push_tokens.json".into(),
-        admin_supplier_store_path: "data/mobile_admin_suppliers.json".into(),
         session_ttl_seconds: Some(30 * 24 * 60 * 60),
         supplier_prefix: "10".to_string(),
         werka_prefix: "20".to_string(),

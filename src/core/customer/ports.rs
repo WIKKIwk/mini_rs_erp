@@ -64,9 +64,14 @@ pub trait CustomerDeliveryPort: Send + Sync {
 }
 
 #[derive(Debug, thiserror::Error)]
-pub enum CustomerPortError {
-    #[error("{0}")]
-    Failed(String),
+#[error("{0}")]
+pub struct CustomerPortError(String);
+
+impl CustomerPortError {
+    #[cfg(test)]
+    pub fn failed(message: impl Into<String>) -> Self {
+        Self(message.into())
+    }
 }
 
 #[derive(Debug, thiserror::Error)]

@@ -106,10 +106,7 @@ async fn stock_entry_lookup_maps_not_found_and_unavailable_like_go() {
         .await
         .expect("response");
     assert_eq!(unavailable.status(), StatusCode::SERVICE_UNAVAILABLE);
-    assert_eq!(
-        json_body(unavailable).await["error"],
-        "direct db lookup unavailable"
-    );
+    assert_eq!(json_body(unavailable).await["error"], "lookup unavailable");
 }
 
 fn test_state(lookup: Option<Arc<dyn WerkaHomeLookup>>) -> AppState {
@@ -120,7 +117,6 @@ fn test_state(lookup: Option<Arc<dyn WerkaHomeLookup>>) -> AppState {
         session_store_path: "data/mobile_sessions.json".into(),
         profile_store_path: "data/mobile_profile_prefs.json".into(),
         push_token_store_path: "data/mobile_push_tokens.json".into(),
-        admin_supplier_store_path: "data/mobile_admin_suppliers.json".into(),
         session_ttl_seconds: Some(30 * 24 * 60 * 60),
         supplier_prefix: "10".to_string(),
         werka_prefix: "20".to_string(),

@@ -10,7 +10,6 @@ use crate::core::profile::ports::{
 pub struct ProfileService {
     file_base_url: String,
     lookup: Option<Arc<dyn ProfileLookup>>,
-    read_lookup: Option<Arc<dyn ProfileLookup>>,
     store: Option<Arc<dyn ProfileStorePort>>,
 }
 
@@ -19,18 +18,13 @@ impl ProfileService {
         Self {
             file_base_url: file_base_url.trim().trim_end_matches('/').to_string(),
             lookup: None,
-            read_lookup: None,
             store: None,
         }
     }
 
+    #[cfg(test)]
     pub fn with_profile_lookup(mut self, lookup: Arc<dyn ProfileLookup>) -> Self {
         self.lookup = Some(lookup);
-        self
-    }
-
-    pub fn with_read_lookup(mut self, lookup: Arc<dyn ProfileLookup>) -> Self {
-        self.read_lookup = Some(lookup);
         self
     }
 
@@ -40,7 +34,7 @@ impl ProfileService {
     }
 
     pub async fn refresh(&self, mut principal: Principal) -> Principal {
-        let Some(lookup) = self.read_lookup.as_ref().or(self.lookup.as_ref()) else {
+        let Some(lookup) = self.lookup.as_ref() else {
             return principal;
         };
 

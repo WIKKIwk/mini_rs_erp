@@ -35,6 +35,7 @@ pub enum GscalePortError {
     InvalidInput(String),
     #[error("not configured: {0}")]
     NotConfigured(String),
+    #[cfg(test)]
     #[error("store write failed: {0}")]
     StoreWrite(String),
     #[error("driver request failed: {0}")]

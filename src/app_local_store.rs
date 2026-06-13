@@ -1,6 +1,4 @@
 use super::*;
-use crate::store::admin_state_store::AdminSupplierStateBackend;
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum LocalStoreBackend {
     Lmdb,
@@ -185,50 +183,6 @@ pub(super) fn push_token_lmdb_path(config: &AppConfig) -> std::path::PathBuf {
         "MOBILE_API_PUSH_TOKEN_LMDB_PATH",
         &config.push_token_store_path,
         "data/mobile_push_tokens.lmdb",
-    )
-}
-
-pub(super) fn build_admin_supplier_state_store(config: &AppConfig) -> AdminSupplierStateBackend {
-    match local_store_backend("MOBILE_API_ADMIN_SUPPLIER_STORE_BACKEND") {
-        LocalStoreBackend::Lmdb => {
-            let lmdb_path = admin_supplier_lmdb_path(config);
-            match AdminSupplierStateBackend::lmdb(
-                lmdb_path.clone(),
-                local_lmdb_map_size_bytes("MOBILE_API_ADMIN_SUPPLIER_LMDB_MAP_SIZE_MB"),
-                Some(config.admin_supplier_store_path.clone()),
-            ) {
-                Ok(store) => {
-                    tracing::info!(
-                        path = %lmdb_path.display(),
-                        legacy_json_path = %config.admin_supplier_store_path.display(),
-                        "LMDB admin supplier state store enabled"
-                    );
-                    store
-                }
-                Err(error) => {
-                    if allow_json_fallback() {
-                        tracing::warn!(
-                            %error,
-                            "LMDB admin supplier state store unavailable; falling back to JSON admin supplier state store"
-                        );
-                        AdminSupplierStateBackend::json(config.admin_supplier_store_path.clone())
-                    } else {
-                        panic!("LMDB admin supplier state store unavailable: {error}");
-                    }
-                }
-            }
-        }
-        LocalStoreBackend::Json => {
-            AdminSupplierStateBackend::json(config.admin_supplier_store_path.clone())
-        }
-    }
-}
-
-pub(super) fn admin_supplier_lmdb_path(config: &AppConfig) -> std::path::PathBuf {
-    lmdb_path(
-        "MOBILE_API_ADMIN_SUPPLIER_LMDB_PATH",
-        &config.admin_supplier_store_path,
-        "data/mobile_admin_suppliers.lmdb",
     )
 }
 

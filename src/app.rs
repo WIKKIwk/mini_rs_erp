@@ -66,12 +66,12 @@ pub struct AppState {
 
 impl AppState {
     pub fn new(config: AppConfig) -> Self {
-        let mut auth = AuthService::new(&config);
+        let auth = AuthService::new(&config);
         let mut admin =
             AdminService::new(&config).with_env_persister(Arc::new(DotEnvPersister::new(".env")));
         admin = admin.with_role_store(Arc::new(RoleDefinitionStore::new(role_store_path())));
         admin = admin.with_auth_config_sink(Arc::new(auth.clone()));
-        let mut customer = CustomerService::new();
+        let customer = CustomerService::new();
         let profile_store = build_profile_store(&config);
         let production_maps = build_production_map_service();
         let apparatus_groups = build_apparatus_groups_service();
@@ -89,7 +89,7 @@ impl AppState {
         }
         let calculate_order_image_dir = Arc::new(calculate_order_image_dir());
         let push_token_store = build_push_token_store(&config);
-        let mut profiles = ProfileService::new(String::new()).with_store(profile_store);
+        let profiles = ProfileService::new(String::new()).with_store(profile_store);
         let push = PushService::new(push_token_store.clone())
             .with_sender(discover_push_sender(push_token_store));
         let rps_batch = RpsBatchService::new(Arc::new(build_rps_batch_store()));
@@ -97,8 +97,8 @@ impl AppState {
             config.http_timeout,
             std::env::var("RP_SCALE_DRIVER_URL").unwrap_or_default(),
         ));
-        let mut gscale = GscaleService::new().with_driver(scale_driver.clone());
-        let mut rezka = RezkaService::new()
+        let gscale = GscaleService::new().with_driver(scale_driver.clone());
+        let rezka = RezkaService::new()
             .with_driver(scale_driver)
             .with_epc_source(Arc::new(crate::core::gscale::epc::GscaleEpcGenerator::new()));
         let mut werka = WerkaService::new();

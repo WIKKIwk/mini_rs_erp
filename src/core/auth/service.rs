@@ -60,6 +60,7 @@ impl AuthService {
         }
     }
 
+    #[cfg(test)]
     pub fn with_supplier_dependencies(
         mut self,
         supplier_lookup: Arc<dyn SupplierLookup>,
@@ -70,6 +71,7 @@ impl AuthService {
         self
     }
 
+    #[cfg(test)]
     pub fn with_customer_dependencies(
         mut self,
         customer_lookup: Arc<dyn CustomerLookup>,

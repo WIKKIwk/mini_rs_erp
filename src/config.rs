@@ -14,7 +14,6 @@ pub struct AppConfig {
     pub session_store_path: PathBuf,
     pub profile_store_path: PathBuf,
     pub push_token_store_path: PathBuf,
-    pub admin_supplier_store_path: PathBuf,
     pub session_ttl_seconds: Option<u64>,
     pub supplier_prefix: String,
     pub werka_prefix: String,
@@ -45,9 +44,6 @@ impl AppConfig {
             .and_then(|raw| raw.trim().parse::<u64>().ok())
             .filter(|seconds| *seconds > 0)
             .unwrap_or(15);
-        let admin_supplier_path = std::env::var("MOBILE_API_ADMIN_SUPPLIER_STORE_PATH")
-            .unwrap_or_else(|_| "data/mobile_admin_suppliers.json".to_string());
-
         Ok(Self {
             bind_addr: parse_bind_addr(&addr)?,
             default_target_warehouse: env_or("MINI_ERP_DEFAULT_TARGET_WAREHOUSE", ""),
@@ -55,7 +51,6 @@ impl AppConfig {
             session_store_path: PathBuf::from(session_path),
             profile_store_path: PathBuf::from(profile_path),
             push_token_store_path: PathBuf::from(push_token_path),
-            admin_supplier_store_path: PathBuf::from(admin_supplier_path),
             session_ttl_seconds: Some(Duration::from_secs(ttl_hours * 60 * 60).as_secs()),
             supplier_prefix: env_or("MOBILE_DEV_SUPPLIER_PREFIX", "10"),
             werka_prefix: env_or("MOBILE_DEV_WERKA_PREFIX", "20"),

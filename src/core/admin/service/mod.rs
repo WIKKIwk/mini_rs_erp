@@ -84,16 +84,19 @@ impl AdminService {
         }
     }
 
+    #[cfg(test)]
     pub fn with_read_port(mut self, read_port: Arc<dyn AdminReadPort>) -> Self {
         self.read_port = Some(read_port);
         self
     }
 
+    #[cfg(test)]
     pub fn with_write_port(mut self, write_port: Arc<dyn AdminWritePort>) -> Self {
         self.write_port = Some(write_port);
         self
     }
 
+    #[cfg(test)]
     pub fn with_state_port(mut self, state_port: Arc<dyn AdminStatePort>) -> Self {
         self.state_port = Some(state_port);
         self

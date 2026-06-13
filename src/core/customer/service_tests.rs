@@ -155,7 +155,7 @@ impl CustomerDeliveryPort for FakeDeliveryPort {
             .iter()
             .find(|note| note.name == name)
             .cloned()
-            .ok_or_else(|| CustomerPortError::Failed("not found".to_string()))
+            .ok_or_else(|| CustomerPortError::failed("not found".to_string()))
     }
 
     async fn create_and_submit_delivery_note_return(

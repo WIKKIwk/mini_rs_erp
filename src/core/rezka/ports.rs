@@ -15,12 +15,8 @@ pub trait RezkaRepackStorePort: Send + Sync {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
-pub enum RezkaPortError {
-    #[error("invalid input: {0}")]
-    InvalidInput(String),
-    #[error("store write failed: {0}")]
-    StoreWrite(String),
-}
+#[error("{0}")]
+pub struct RezkaPortError(String);
 
 impl RezkaPortError {
     pub fn message(&self) -> String {

@@ -32,6 +32,7 @@ impl CustomerService {
         }
     }
 
+    #[cfg(test)]
     pub fn with_delivery_port(mut self, delivery_port: Arc<dyn CustomerDeliveryPort>) -> Self {
         self.delivery_port = Some(delivery_port);
         self
