@@ -10,7 +10,7 @@ use crate::error::AppError;
 pub struct AppConfig {
     pub bind_addr: SocketAddr,
     pub default_target_warehouse: String,
-    pub erp_timeout: Duration,
+    pub http_timeout: Duration,
     pub session_store_path: PathBuf,
     pub profile_store_path: PathBuf,
     pub push_token_store_path: PathBuf,
@@ -40,7 +40,7 @@ impl AppConfig {
             .ok()
             .and_then(|raw| raw.trim().parse::<u64>().ok())
             .unwrap_or(24 * 30);
-        let erp_timeout_seconds = std::env::var("ERP_TIMEOUT_SECONDS")
+        let http_timeout_seconds = std::env::var("MINI_ERP_HTTP_TIMEOUT_SECONDS")
             .ok()
             .and_then(|raw| raw.trim().parse::<u64>().ok())
             .filter(|seconds| *seconds > 0)
@@ -50,8 +50,8 @@ impl AppConfig {
 
         Ok(Self {
             bind_addr: parse_bind_addr(&addr)?,
-            default_target_warehouse: env_or("ERP_DEFAULT_TARGET_WAREHOUSE", ""),
-            erp_timeout: Duration::from_secs(erp_timeout_seconds),
+            default_target_warehouse: env_or("MINI_ERP_DEFAULT_TARGET_WAREHOUSE", ""),
+            http_timeout: Duration::from_secs(http_timeout_seconds),
             session_store_path: PathBuf::from(session_path),
             profile_store_path: PathBuf::from(profile_path),
             push_token_store_path: PathBuf::from(push_token_path),

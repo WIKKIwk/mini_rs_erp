@@ -24,7 +24,7 @@ fn test_state() -> AppState {
     let mut state = AppState::new(AppConfig {
         bind_addr: "127.0.0.1:8081".parse().expect("addr"),
         default_target_warehouse: String::new(),
-        erp_timeout: std::time::Duration::from_secs(15),
+        http_timeout: std::time::Duration::from_secs(15),
         session_store_path: "data/mobile_sessions.json".into(),
         profile_store_path: "data/mobile_profile_prefs.json".into(),
         push_token_store_path: "data/mobile_push_tokens.json".into(),

@@ -62,7 +62,7 @@ impl AdminService {
         Self {
             config: Arc::new(RwLock::new(AdminConfig {
                 default_target_warehouse: config.default_target_warehouse.clone(),
-                default_uom: std::env::var("ERP_DEFAULT_UOM")
+                default_uom: std::env::var("MINI_ERP_DEFAULT_UOM")
                     .ok()
                     .map(|value| value.trim().to_string())
                     .filter(|value| !value.is_empty())
@@ -151,10 +151,10 @@ impl AdminService {
         if let Some(persister) = &self.env_persister {
             persister.upsert(BTreeMap::from([
                 (
-                    "ERP_DEFAULT_TARGET_WAREHOUSE",
+                    "MINI_ERP_DEFAULT_TARGET_WAREHOUSE",
                     config.default_target_warehouse.clone(),
                 ),
-                ("ERP_DEFAULT_UOM", config.default_uom.clone()),
+                ("MINI_ERP_DEFAULT_UOM", config.default_uom.clone()),
                 ("WERKA_PHONE", config.werka_phone.clone()),
                 ("WERKA_NAME", config.werka_name.clone()),
                 ("MOBILE_DEV_WERKA_CODE", config.werka_code.clone()),

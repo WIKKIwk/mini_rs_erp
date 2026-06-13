@@ -153,7 +153,7 @@ mod tests {
         for forbidden in ["tabWork Order", "tabBOM", "tabStock Entry", "doctype"] {
             assert!(
                 !migration.to_lowercase().contains(&forbidden.to_lowercase()),
-                "migration must not contain ERPNext term {forbidden}"
+                "migration must not contain legacy term {forbidden}"
             );
         }
     }

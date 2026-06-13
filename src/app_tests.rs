@@ -303,7 +303,7 @@ fn test_app_config() -> AppConfig {
     AppConfig {
         bind_addr: "127.0.0.1:0".parse().expect("addr"),
         default_target_warehouse: String::new(),
-        erp_timeout: std::time::Duration::from_secs(1),
+        http_timeout: std::time::Duration::from_secs(1),
         session_store_path: temp_file_path("sessions.json"),
         profile_store_path: temp_file_path("profiles.json"),
         push_token_store_path: temp_file_path("push.json"),

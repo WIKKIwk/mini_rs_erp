@@ -7,14 +7,14 @@ Rust server state. This repo is intentionally separated from
 `accord_mobile_server_rs` so new mini ERP work does not go back to the old RS
 server repository.
 
-The old ERPNext-facing adapters have been removed from the runtime and source
-tree. New work should add mini ERP domain storage and service ports directly in
-this repository.
+The old legacy adapters have been removed from the runtime and source tree. New
+work should add mini ERP domain storage and service ports directly in this
+repository.
 
 ## Why it matters
 
 The goal is a clean RS-owned ERP core built around Accord production logic, not
-ERPNext doctypes. New work should target the mini ERP domain and its own
+legacy doctypes. New work should target the mini ERP domain and its own
 production database.
 
 ## Quick Start
@@ -130,9 +130,9 @@ LMDB-backed local state stores.
 
 This repository is not a wrapper around the Go service, does not shell out to
 the Go binary, and does not require the Go project at runtime. The compatibility
-target is the mobile HTTP contract and the ERPNext side effects expected by the
-existing Accord mobile application. In other words, the mobile app should be
-able to talk to this Rust service without observing an API or behavior change.
+target is the mobile HTTP contract expected by the existing Accord mobile
+application. In other words, the mobile app should be able to talk to this Rust
+service without observing an API or behavior change.
 
 ## Purpose
 
@@ -313,7 +313,7 @@ The service keeps the `is_group` invariant valid for mobile-created trees. When
 a child group is created under a parent, the parent is promoted to a group if
 needed. When a legacy or manually-created
 node already has children but is still marked as a leaf, the move flow promotes
-it before asking ERPNext to save the new parent.
+it before saving the new parent.
 
 ### Local state
 
@@ -502,9 +502,9 @@ Configuration is read from the environment after `.env` is loaded.
 | `MOBILE_API_ADMIN_SUPPLIER_LMDB_PATH` | `data/mobile_admin_suppliers.lmdb` | LMDB environment directory when the LMDB admin state backend is enabled. |
 | `MOBILE_API_ADMIN_SUPPLIER_LMDB_MAP_SIZE_MB` | `64` | LMDB map size for admin supplier/customer state storage. |
 | `MOBILE_API_SESSION_TTL_HOURS` | `720` | Bearer session TTL in hours. |
-| `ERP_TIMEOUT_SECONDS` | `15` | AI and HTTP client timeout baseline. |
-| `ERP_DEFAULT_TARGET_WAREHOUSE` | empty | Legacy admin setting name for default warehouse during migration. |
-| `ERP_DEFAULT_UOM` | `Kg` | Admin default unit of measure. |
+| `MINI_ERP_HTTP_TIMEOUT_SECONDS` | `15` | AI and HTTP client timeout baseline. |
+| `MINI_ERP_DEFAULT_TARGET_WAREHOUSE` | empty | Legacy admin setting name for default warehouse during migration. |
+| `MINI_ERP_DEFAULT_UOM` | `Kg` | Admin default unit of measure. |
 | `MOBILE_DEV_SUPPLIER_PREFIX` | `10` | Supplier code prefix. |
 | `MOBILE_DEV_WERKA_PREFIX` | `20` | Werka code prefix. |
 | `MOBILE_DEV_WERKA_CODE` | empty | Werka login code. |
@@ -545,9 +545,9 @@ MOBILE_API_ADDR=:8081
 MOBILE_API_LOCAL_STORE_ALLOW_JSON_FALLBACK=0
 
 MINI_ERP_DATABASE_URL=postgres://mini_rs_erp:secret@127.0.0.1:5432/mini_rs_erp
-ERP_DEFAULT_TARGET_WAREHOUSE=Stores - CH
-ERP_DEFAULT_UOM=Kg
-ERP_TIMEOUT_SECONDS=15
+MINI_ERP_DEFAULT_TARGET_WAREHOUSE=Stores - CH
+MINI_ERP_DEFAULT_UOM=Kg
+MINI_ERP_HTTP_TIMEOUT_SECONDS=15
 
 MOBILE_API_SESSION_STORE_PATH=data/mobile_sessions.json
 MOBILE_API_SESSION_STORE_BACKEND=lmdb
@@ -709,11 +709,9 @@ src/
 ## Compatibility Status
 
 The current implementation registers the full mobile route surface and has
-focused route/domain tests for the mobile API contract. Production-like ERPNext
-benchmarking and smoke testing have been performed for the main read/write hot
-paths. Before switching a new live ERPNext company to this service, repeat the
-smoke test against that company's data and verify both HTTP responses and
-ERPNext document side effects.
+focused route/domain tests for the mobile API contract. Before switching a new
+live company to this service, repeat the smoke test against that company's data
+and verify HTTP responses plus mini ERP persistence side effects.
 
 Recommended smoke-test order:
 

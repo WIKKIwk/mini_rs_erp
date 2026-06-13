@@ -94,7 +94,7 @@ impl AppState {
             .with_sender(discover_push_sender(push_token_store));
         let rps_batch = RpsBatchService::new(Arc::new(build_rps_batch_store()));
         let scale_driver = Arc::new(RpsDriverClient::new(
-            config.erp_timeout,
+            config.http_timeout,
             std::env::var("RP_SCALE_DRIVER_URL").unwrap_or_default(),
         ));
         let mut gscale = GscaleService::new().with_driver(scale_driver.clone());
@@ -143,7 +143,7 @@ impl AppState {
             werka = werka.with_ai_search(Arc::new(WerkaAiSearchService::new(
                 &ai_key,
                 &std::env::var("GEMINI_VISION_MODEL").unwrap_or_default(),
-                config.erp_timeout,
+                config.http_timeout,
             )));
         }
 

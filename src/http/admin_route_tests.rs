@@ -2257,7 +2257,7 @@ async fn admin_customer_list_passes_query_to_read_port() {
 }
 
 #[tokio::test]
-async fn admin_warehouses_returns_real_erpnext_warehouse_names() {
+async fn admin_warehouses_returns_real_warehouse_names() {
     let state = test_state();
     let token = session(&state, PrincipalRole::Admin).await;
 
@@ -2351,7 +2351,7 @@ async fn admin_item_group_tree_returns_parent_shape() {
 }
 
 #[tokio::test]
-async fn admin_item_group_create_returns_erpnext_shape() {
+async fn admin_item_group_create_returns_item_group_shape() {
     let state = test_state();
     let token = session(&state, PrincipalRole::Admin).await;
 
@@ -2388,7 +2388,7 @@ async fn admin_item_group_create_returns_erpnext_shape() {
 }
 
 #[tokio::test]
-async fn admin_item_group_parent_move_returns_erpnext_shape() {
+async fn admin_item_group_parent_move_returns_item_group_shape() {
     let state = test_state();
     let token = session(&state, PrincipalRole::Admin).await;
 
@@ -2829,7 +2829,7 @@ fn test_state() -> AppState {
     let mut state = AppState::new(AppConfig {
         bind_addr: "127.0.0.1:8081".parse().expect("addr"),
         default_target_warehouse: "Stores - CH".to_string(),
-        erp_timeout: std::time::Duration::from_secs(15),
+        http_timeout: std::time::Duration::from_secs(15),
         session_store_path: "data/mobile_sessions.json".into(),
         profile_store_path: "data/mobile_profile_prefs.json".into(),
         push_token_store_path: "data/mobile_push_tokens.json".into(),
