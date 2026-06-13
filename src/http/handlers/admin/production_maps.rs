@@ -182,7 +182,7 @@ fn spawn_order_integrations(
             tracing::warn!(?error, map_id = %map.id, "google sheets order append failed");
         }
         if let Err(error) = state.production_orders.save_order(&map, &template).await {
-            tracing::warn!(?error, map_id = %map.id, "erp work order append failed");
+            tracing::warn!(?error, map_id = %map.id, "mini order save failed");
         }
     });
 }

@@ -10,6 +10,7 @@ use crate::core::auth::service::AuthService;
 use crate::core::calculate_orders::CalculateOrderStorePort;
 use crate::core::customer::service::CustomerService;
 use crate::core::gscale::GscaleService;
+use crate::core::mini_orders::{MiniOrderSink, NoopMiniOrderSink};
 use crate::core::production_map::ProductionMapService;
 use crate::core::profile::ports::ProfileStorePort;
 use crate::core::profile::service::ProfileService;
@@ -23,15 +24,13 @@ use crate::db::postgres::PostgresConfig;
 use crate::db::postgres_apparatus_group::PostgresApparatusGroupStore;
 use crate::db::postgres_calculate_order::PostgresCalculateOrderStore;
 use crate::db::postgres_engine::PostgresEngineStore;
+use crate::db::postgres_mini_order::PostgresMiniOrderSink;
 use crate::db::postgres_production_map::PostgresProductionMapStore;
 use crate::erpdb::catalog_cache::reader::CatalogCacheReader;
 use crate::erpdb::catalog_cache::store::CatalogCacheStore;
 use crate::erpdb::catalog_cache::sync::{sync_catalog_delta_once, sync_catalog_once};
 use crate::erpdb::reader::DirectDbReader;
 use crate::erpnext::client::ErpnextClient;
-use crate::erpnext::production_order::{
-    NoopProductionOrderErpSink, ProductionOrderErpSink, ProductionOrderErpSource,
-};
 use crate::fcm::discover_push_sender;
 use crate::google_sheets::{OrderSheetSink, discover_order_sheet_sink};
 use crate::rps::RpsDriverClient;
@@ -60,7 +59,7 @@ pub struct AppState {
     pub apparatus_groups: ApparatusGroupService,
     pub calculate_orders: Arc<dyn CalculateOrderStorePort>,
     pub order_sheets: Arc<dyn OrderSheetSink>,
-    pub production_orders: Arc<dyn ProductionOrderErpSink>,
+    pub production_orders: Arc<dyn MiniOrderSink>,
     pub calculate_order_image_dir: Arc<std::path::PathBuf>,
     pub push: PushService,
     pub gscale: GscaleService,
@@ -85,9 +84,7 @@ impl AppState {
         let apparatus_groups = build_apparatus_groups_service();
         let calculate_orders = build_calculate_order_store();
         let order_sheets = discover_order_sheet_sink();
-        let mut production_orders: Arc<dyn ProductionOrderErpSink> =
-            Arc::new(NoopProductionOrderErpSink);
-        let mut production_order_source: Option<Arc<dyn ProductionOrderErpSource>> = None;
+        let production_orders = build_mini_order_sink();
         let mini_engine = build_mini_engine_store();
         if order_sheets.enabled() {
             tokio::spawn(run_order_sheets_sync_loop(
@@ -191,8 +188,6 @@ impl AppState {
                 .with_confirm_writer(client.clone())
                 .with_notification_detail_writer(client.clone())
                 .with_supplier_admin_state_lookup(state_store);
-            production_orders = client.clone();
-            production_order_source = Some(client.clone());
             erp_client = Some(client);
         }
         match config.direct_db_config() {
@@ -207,7 +202,6 @@ impl AppState {
                 if let Some(client) = &erp_client {
                     client.set_credential_provider(direct_reader.clone());
                 }
-                production_order_source = Some(direct_reader.clone());
                 let catalog_reader = if config.catalog_cache_enabled {
                     match CatalogCacheStore::open(&config.catalog_cache_path) {
                         Ok(store) => {
@@ -280,16 +274,6 @@ impl AppState {
                 tracing::warn!(%error, "direct DB read disabled");
             }
         }
-        if erp_work_order_sync_enabled()
-            && let Some(production_order_source) = production_order_source
-        {
-            tokio::spawn(run_erp_work_order_sync_loop(
-                production_maps.clone(),
-                production_order_source,
-                erp_work_order_sync_interval(),
-            ));
-        }
-
         Self {
             config: Arc::new(config),
             admin,
@@ -326,6 +310,23 @@ fn build_mini_engine_store() -> Option<PostgresEngineStore> {
         Err(error) => {
             tracing::warn!(%error, "mini ERP postgres engine store disabled");
             None
+        }
+    }
+}
+
+fn build_mini_order_sink() -> Arc<dyn MiniOrderSink> {
+    let config = match PostgresConfig::from_env() {
+        Ok(config) => config,
+        Err(_) => return Arc::new(NoopMiniOrderSink),
+    };
+    match config.pool_options().connect_lazy(&config.database_url) {
+        Ok(pool) => {
+            tracing::info!("mini ERP postgres order sink configured");
+            Arc::new(PostgresMiniOrderSink::new(pool))
+        }
+        Err(error) => {
+            tracing::warn!(%error, "mini ERP postgres order sink disabled");
+            Arc::new(NoopMiniOrderSink)
         }
     }
 }
@@ -450,62 +451,6 @@ fn order_sheets_sync_interval() -> Duration {
         .ok()
         .and_then(|raw| raw.trim().parse::<u64>().ok())
         .unwrap_or(60 * 60);
-    Duration::from_secs(seconds)
-}
-
-async fn run_erp_work_order_sync_loop(
-    production_maps: ProductionMapService,
-    production_order_source: Arc<dyn ProductionOrderErpSource>,
-    interval: Duration,
-) {
-    loop {
-        match sync_erp_work_orders_once(production_maps.clone(), production_order_source.clone())
-            .await
-        {
-            Ok(synced) => {
-                tracing::info!(synced, "erpnext work order cache sync completed");
-            }
-            Err(error) => {
-                tracing::warn!(%error, "erpnext work order cache sync failed");
-            }
-        }
-        if interval.is_zero() {
-            break;
-        }
-        sleep(interval).await;
-    }
-}
-
-async fn sync_erp_work_orders_once(
-    production_maps: ProductionMapService,
-    production_order_source: Arc<dyn ProductionOrderErpSource>,
-) -> Result<usize, String> {
-    let maps = production_order_source
-        .maps()
-        .await
-        .map_err(|error| error.to_string())?;
-    let count = maps.len();
-    if count == 0 {
-        return Ok(0);
-    }
-    production_maps
-        .upsert_maps_batch(maps)
-        .await
-        .map_err(|error| error.to_string())?;
-    Ok(count)
-}
-
-fn erp_work_order_sync_enabled() -> bool {
-    std::env::var("ERP_WORK_ORDER_SYNC_ENABLED")
-        .map(|raw| raw.trim() != "0")
-        .unwrap_or(true)
-}
-
-fn erp_work_order_sync_interval() -> Duration {
-    let seconds = std::env::var("ERP_WORK_ORDER_SYNC_INTERVAL_SECONDS")
-        .ok()
-        .and_then(|raw| raw.trim().parse::<u64>().ok())
-        .unwrap_or(60);
     Duration::from_secs(seconds)
 }
 

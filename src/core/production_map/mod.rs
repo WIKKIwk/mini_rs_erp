@@ -562,6 +562,7 @@ impl ProductionMapService {
         Ok(ProductionMapSaved { map, program })
     }
 
+    #[allow(dead_code)]
     pub async fn upsert_maps_batch(
         &self,
         maps: Vec<ProductionMapDefinition>,

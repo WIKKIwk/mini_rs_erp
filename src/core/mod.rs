@@ -8,6 +8,7 @@ pub mod formula;
 #[cfg(test)]
 mod formula_tests;
 pub mod gscale;
+pub mod mini_orders;
 pub mod production_map;
 pub mod profile;
 pub mod push;

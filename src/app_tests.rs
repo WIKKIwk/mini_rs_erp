@@ -1,8 +1,5 @@
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
 use std::sync::Mutex;
-
-use async_trait::async_trait;
 
 use super::app_local_store::{LocalStoreBackend, derive_lmdb_path, local_store_backend_from};
 use super::catalog_cache_sync_interval;
@@ -10,11 +7,10 @@ use crate::config::AppConfig;
 use crate::core::apparatus_groups::ApparatusGroupUpsert;
 use crate::core::calculate_orders::{CalculateOrderError, CalculateOrderTemplate};
 use crate::core::production_map::{
-    MemoryProductionMapStore, ProductionMapDefinition, ProductionMapEdge, ProductionMapError,
-    ProductionMapNode, ProductionMapNodeKind, ProductionMapService,
+    ProductionMapDefinition, ProductionMapEdge, ProductionMapError, ProductionMapNode,
+    ProductionMapNodeKind,
 };
 use crate::db::postgres::apply_foundation_migration;
-use crate::erpnext::production_order::{ProductionOrderErpError, ProductionOrderErpSource};
 
 static MINI_ENGINE_ENV_LOCK: Mutex<()> = Mutex::new(());
 
@@ -214,27 +210,6 @@ async fn app_state_uses_postgres_production_maps_when_database_url_is_configured
     }
 }
 
-#[tokio::test]
-async fn erp_work_order_sync_once_upserts_maps_into_local_cache() {
-    let service = ProductionMapService::new(Arc::new(MemoryProductionMapStore::new()));
-    let source: Arc<dyn ProductionOrderErpSource> = Arc::new(FakeProductionOrderSource {
-        maps: vec![test_production_map("zakaz-333", "333")],
-    });
-
-    let synced = super::sync_erp_work_orders_once(service.clone(), source)
-        .await
-        .expect("sync");
-
-    assert_eq!(synced, 1);
-    let saved = service
-        .map("zakaz-333")
-        .await
-        .expect("map read")
-        .expect("saved map");
-    assert_eq!(saved.map.id, "zakaz-333");
-    assert_eq!(saved.map.order_number, "333");
-}
-
 fn calculate_order_template(code: &str) -> CalculateOrderTemplate {
     CalculateOrderTemplate {
         id: String::new(),
@@ -266,18 +241,6 @@ fn calculate_order_template(code: &str) -> CalculateOrderTemplate {
         note: String::new(),
         kg: 0.0,
         source_map_id: String::new(),
-    }
-}
-
-#[derive(Debug)]
-struct FakeProductionOrderSource {
-    maps: Vec<ProductionMapDefinition>,
-}
-
-#[async_trait]
-impl ProductionOrderErpSource for FakeProductionOrderSource {
-    async fn maps(&self) -> Result<Vec<ProductionMapDefinition>, ProductionOrderErpError> {
-        Ok(self.maps.clone())
     }
 }
 

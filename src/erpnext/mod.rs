@@ -3,7 +3,6 @@ pub mod client;
 pub mod customers;
 pub mod delivery_note;
 pub mod notification;
-pub mod production_order;
 pub mod purchase_receipt;
 pub mod stock_entry;
 pub mod supplier_items;

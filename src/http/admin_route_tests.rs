@@ -23,14 +23,12 @@ use crate::core::authz::{MemoryRoleDefinitionStore, RoleDefinition, RoleDefiniti
 use crate::core::calculate_orders::{
     CalculateOrderError, CalculateOrderStorePort, CalculateOrderTemplate,
 };
+use crate::core::mini_orders::{MiniOrderError, MiniOrderSink, NoopMiniOrderSink};
 use crate::core::production_map::{MemoryProductionMapStore, ProductionMapService};
 use crate::core::session::manager::SessionManager;
 use crate::core::werka::models::{DispatchRecord, SupplierItem};
 use crate::core::werka::ports::{WerkaHomeLookup, WerkaPortError};
 use crate::core::werka::service::WerkaService;
-use crate::erpnext::production_order::{
-    NoopProductionOrderErpSink, ProductionOrderErpError, ProductionOrderErpSink,
-};
 
 #[tokio::test]
 async fn admin_settings_requires_admin_like_go() {
@@ -461,7 +459,7 @@ async fn production_map_save_with_order_saves_map_and_template() {
 }
 
 #[tokio::test]
-async fn production_map_save_with_order_records_erp_work_order_without_blocking_response() {
+async fn production_map_save_with_order_records_mini_order_without_blocking_response() {
     let sink = Arc::new(FakeProductionOrderSink::fail_after(Duration::from_millis(
         200,
     )));
@@ -474,9 +472,9 @@ async fn production_map_save_with_order_records_erp_work_order_without_blocking_
         r#"{{
             "map":{map_json},
             "template":{{
-                "name":"erp mahsulot",
-                "product":"erp mahsulot",
-                "item_code":"ITEM-ERP",
+                "name":"mini mahsulot",
+                "product":"mini mahsulot",
+                "item_code":"ITEM-MINI",
                 "width_mm":650,
                 "waste_percent":5,
                 "roll_count":7,
@@ -499,7 +497,7 @@ async fn production_map_save_with_order_records_erp_work_order_without_blocking_
         )),
     )
     .await
-    .expect("response must not wait for erp write")
+    .expect("response must not wait for mini order write")
     .expect("save with order");
 
     assert_eq!(response.status(), StatusCode::OK);
@@ -1295,20 +1293,18 @@ impl FakeProductionOrderSink {
 }
 
 #[async_trait]
-impl ProductionOrderErpSink for FakeProductionOrderSink {
+impl MiniOrderSink for FakeProductionOrderSink {
     async fn save_order(
         &self,
         _map: &crate::core::production_map::ProductionMapDefinition,
         _template: &CalculateOrderTemplate,
-    ) -> Result<(), ProductionOrderErpError> {
+    ) -> Result<(), MiniOrderError> {
         self.calls.fetch_add(1, Ordering::SeqCst);
         if let Some(delay) = self.delay {
             tokio::time::sleep(delay).await;
         }
         if self.fail {
-            Err(ProductionOrderErpError::WriteFailed(
-                "forced failure".to_string(),
-            ))
+            Err(MiniOrderError::StoreFailed)
         } else {
             Ok(())
         }
@@ -2887,7 +2883,7 @@ fn test_state() -> AppState {
         .with_state_port(Arc::new(FakeAdminStatePort::new()));
     state.production_maps = ProductionMapService::new(Arc::new(MemoryProductionMapStore::new()));
     state.apparatus_groups = ApparatusGroupService::new(Arc::new(MemoryApparatusGroupStore::new()));
-    state.production_orders = Arc::new(NoopProductionOrderErpSink);
+    state.production_orders = Arc::new(NoopMiniOrderSink);
     state
 }
 
