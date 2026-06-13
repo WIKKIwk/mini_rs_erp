@@ -3,8 +3,6 @@ mod app;
 mod config;
 mod core;
 pub(crate) mod db;
-mod erpdb;
-mod erpnext;
 pub(crate) mod engine;
 mod error;
 mod fcm;

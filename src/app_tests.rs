@@ -2,7 +2,6 @@ use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
 use super::app_local_store::{LocalStoreBackend, derive_lmdb_path, local_store_backend_from};
-use super::catalog_cache_sync_interval;
 use crate::config::AppConfig;
 use crate::core::apparatus_groups::ApparatusGroupUpsert;
 use crate::core::calculate_orders::{CalculateOrderError, CalculateOrderTemplate};
@@ -53,18 +52,6 @@ fn lmdb_path_defaults_next_to_legacy_json_path() {
     assert_eq!(
         derive_lmdb_path(Path::new(""), "fallback.lmdb"),
         PathBuf::from("fallback.lmdb")
-    );
-}
-
-#[test]
-fn catalog_cache_sync_interval_defaults_to_one_second() {
-    unsafe {
-        std::env::remove_var("ERP_CATALOG_CACHE_SYNC_INTERVAL_MS");
-    }
-
-    assert_eq!(
-        catalog_cache_sync_interval(),
-        std::time::Duration::from_secs(1)
     );
 }
 
@@ -235,6 +222,24 @@ async fn app_state_skips_legacy_erp_clients_when_mini_database_url_is_configured
         std::env::remove_var("MINI_ERP_DATABASE_URL");
         std::env::remove_var("MINI_ERP_PG_ACQUIRE_TIMEOUT_MS");
     }
+}
+
+#[tokio::test]
+async fn app_state_never_attaches_legacy_erp_clients() {
+    let _guard = MINI_ENGINE_ENV_LOCK.lock().expect("env lock");
+    unsafe {
+        std::env::remove_var("MINI_ERP_DATABASE_URL");
+    }
+
+    let state = super::AppState::new(AppConfig {
+        erp_url: "https://legacy-erp.test".to_string(),
+        erp_api_key: "key".to_string(),
+        erp_api_secret: "secret".to_string(),
+        ..test_app_config()
+    });
+
+    assert!(!state.gscale.erp_configured_for_test());
+    assert!(!state.rezka.erp_configured_for_test());
 }
 
 fn calculate_order_template(code: &str) -> CalculateOrderTemplate {
