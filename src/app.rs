@@ -89,7 +89,7 @@ impl AppState {
         }
         let calculate_order_image_dir = Arc::new(calculate_order_image_dir());
         let push_token_store = build_push_token_store(&config);
-        let mut profiles = ProfileService::new(config.erp_url.clone()).with_store(profile_store);
+        let mut profiles = ProfileService::new(String::new()).with_store(profile_store);
         let push = PushService::new(push_token_store.clone())
             .with_sender(discover_push_sender(push_token_store));
         let rps_batch = RpsBatchService::new(Arc::new(build_rps_batch_store()));

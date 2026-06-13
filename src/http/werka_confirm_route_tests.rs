@@ -140,9 +140,6 @@ async fn werka_confirm_sends_supplier_push_like_go() {
 fn test_state() -> AppState {
     let mut state = AppState::new(AppConfig {
         bind_addr: "127.0.0.1:8081".parse().expect("addr"),
-        erp_url: String::new(),
-        erp_api_key: String::new(),
-        erp_api_secret: String::new(),
         default_target_warehouse: String::new(),
         erp_timeout: std::time::Duration::from_secs(15),
         session_store_path: "data/mobile_sessions.json".into(),

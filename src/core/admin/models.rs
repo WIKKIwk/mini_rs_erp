@@ -5,9 +5,6 @@ use crate::core::werka::models::{CustomerDirectoryEntry, DispatchRecord, Supplie
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AdminSettings {
-    pub erp_url: String,
-    pub erp_api_key: String,
-    pub erp_api_secret: String,
     pub default_target_warehouse: String,
     pub default_uom: String,
     pub werka_phone: String,

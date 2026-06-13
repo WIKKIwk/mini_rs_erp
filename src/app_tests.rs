@@ -209,9 +209,6 @@ async fn app_state_skips_legacy_erp_clients_when_mini_database_url_is_configured
     }
 
     let state = super::AppState::new(AppConfig {
-        erp_url: "https://legacy-erp.test".to_string(),
-        erp_api_key: "key".to_string(),
-        erp_api_secret: "secret".to_string(),
         ..test_app_config()
     });
 
@@ -232,9 +229,6 @@ async fn app_state_never_attaches_legacy_erp_clients() {
     }
 
     let state = super::AppState::new(AppConfig {
-        erp_url: "https://legacy-erp.test".to_string(),
-        erp_api_key: "key".to_string(),
-        erp_api_secret: "secret".to_string(),
         ..test_app_config()
     });
 
@@ -308,9 +302,6 @@ fn test_production_map(id: &str, order_number: &str) -> ProductionMapDefinition 
 fn test_app_config() -> AppConfig {
     AppConfig {
         bind_addr: "127.0.0.1:0".parse().expect("addr"),
-        erp_url: String::new(),
-        erp_api_key: String::new(),
-        erp_api_secret: String::new(),
         default_target_warehouse: String::new(),
         erp_timeout: std::time::Duration::from_secs(1),
         session_store_path: temp_file_path("sessions.json"),

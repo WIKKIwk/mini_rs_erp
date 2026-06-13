@@ -9,9 +9,6 @@ use crate::error::AppError;
 #[derive(Debug, Clone)]
 pub struct AppConfig {
     pub bind_addr: SocketAddr,
-    pub erp_url: String,
-    pub erp_api_key: String,
-    pub erp_api_secret: String,
     pub default_target_warehouse: String,
     pub erp_timeout: Duration,
     pub session_store_path: PathBuf,
@@ -53,9 +50,6 @@ impl AppConfig {
 
         Ok(Self {
             bind_addr: parse_bind_addr(&addr)?,
-            erp_url: env_or("ERP_URL", ""),
-            erp_api_key: env_or("ERP_API_KEY", ""),
-            erp_api_secret: env_or("ERP_API_SECRET", ""),
             default_target_warehouse: env_or("ERP_DEFAULT_TARGET_WAREHOUSE", ""),
             erp_timeout: Duration::from_secs(erp_timeout_seconds),
             session_store_path: PathBuf::from(session_path),

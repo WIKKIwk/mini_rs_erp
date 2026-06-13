@@ -13,9 +13,7 @@ use super::router::build_router;
 use crate::app::AppState;
 use crate::config::AppConfig;
 use crate::core::admin::models::{AdminDirectoryEntry, AdminItemGroup, AdminState};
-use crate::core::admin::ports::{
-    AdminCredentialPort, AdminPortError, AdminReadPort, AdminStatePort, AdminWritePort,
-};
+use crate::core::admin::ports::{AdminPortError, AdminReadPort, AdminStatePort, AdminWritePort};
 use crate::core::admin::service::AdminService;
 use crate::core::apparatus_groups::{ApparatusGroupService, MemoryApparatusGroupStore};
 use crate::core::auth::models::{Principal, PrincipalRole};
@@ -1697,7 +1695,6 @@ async fn admin_settings_returns_config_shape_like_go() {
 
     assert_eq!(response.status(), StatusCode::OK);
     let value = json_body(response).await;
-    assert_eq!(value["erp_url"], "https://erp.test");
     assert_eq!(value["default_uom"], "Kg");
     assert_eq!(value["werka_name"], "Werka");
     assert_eq!(value["admin_name"], "Admin");
@@ -2026,16 +2023,14 @@ async fn admin_suppliers_summary_failure_uses_go_error_text() {
 }
 
 #[tokio::test]
-async fn admin_settings_put_uses_direct_credentials_and_default_uom_like_go() {
+async fn admin_settings_put_updates_default_uom_like_go() {
     let mut state = test_state();
     let erp = Arc::new(FakeAdminReadPort);
-    let credentials = Arc::new(FakeAdminCredentialPort::new("db-key", "db-secret"));
     state.admin = AdminService::new(&state.config)
         .with_read_port(erp.clone())
         .with_write_port(erp)
         .with_state_port(Arc::new(FakeAdminStatePort::new()))
-        .with_auth_config_sink(Arc::new(state.auth.clone()))
-        .with_credential_port(credentials.clone());
+        .with_auth_config_sink(Arc::new(state.auth.clone()));
     let token = session(&state, PrincipalRole::Admin).await;
 
     let response = build_router(state)
@@ -2044,9 +2039,6 @@ async fn admin_settings_put_uses_direct_credentials_and_default_uom_like_go() {
             "/v1/mobile/admin/settings",
             &token,
             r#"{
-                "erp_url":"https://new-erp.test",
-                "erp_api_key":"",
-                "erp_api_secret":"",
                 "default_target_warehouse":"Stores - NEW",
                 "default_uom":"",
                 "werka_phone":"+998881111111",
@@ -2063,15 +2055,8 @@ async fn admin_settings_put_uses_direct_credentials_and_default_uom_like_go() {
 
     assert_eq!(response.status(), StatusCode::OK);
     let value = json_body(response).await;
-    assert_eq!(value["erp_url"], "https://new-erp.test");
-    assert_eq!(value["erp_api_key"], "db-key");
-    assert_eq!(value["erp_api_secret"], "db-secret");
     assert_eq!(value["default_target_warehouse"], "Stores - NEW");
     assert_eq!(value["default_uom"], "Kg");
-    assert_eq!(
-        credentials.values().await,
-        ("db-key".to_string(), "db-secret".to_string())
-    );
 }
 
 #[tokio::test]
@@ -2625,9 +2610,6 @@ async fn admin_settings_put_updates_auth_runtime_like_go() {
             "/v1/mobile/admin/settings",
             &token,
             r#"{
-                "erp_url":"https://erp.test",
-                "erp_api_key":"key",
-                "erp_api_secret":"secret",
                 "default_target_warehouse":"Stores - CH",
                 "default_uom":"Kg",
                 "werka_phone":"+998881111111",
@@ -2846,9 +2828,6 @@ async fn admin_item_create_and_werka_regenerate_like_go() {
 fn test_state() -> AppState {
     let mut state = AppState::new(AppConfig {
         bind_addr: "127.0.0.1:8081".parse().expect("addr"),
-        erp_url: "https://erp.test".to_string(),
-        erp_api_key: "key".to_string(),
-        erp_api_secret: "secret".to_string(),
         default_target_warehouse: "Stores - CH".to_string(),
         erp_timeout: std::time::Duration::from_secs(15),
         session_store_path: "data/mobile_sessions.json".into(),
@@ -3877,39 +3856,6 @@ impl AdminStatePort for LockedCustomerStatePort {
     }
 
     async fn put_state(&self, _ref_: &str, _state: AdminState) -> Result<(), AdminPortError> {
-        Ok(())
-    }
-}
-
-struct FakeAdminCredentialPort {
-    values: Mutex<(String, String)>,
-}
-
-impl FakeAdminCredentialPort {
-    fn new(api_key: &str, api_secret: &str) -> Self {
-        Self {
-            values: Mutex::new((api_key.to_string(), api_secret.to_string())),
-        }
-    }
-
-    async fn values(&self) -> (String, String) {
-        self.values.lock().await.clone()
-    }
-}
-
-#[async_trait]
-impl AdminCredentialPort for FakeAdminCredentialPort {
-    async fn admin_api_auth(&self, _username: &str) -> Result<(String, String), AdminPortError> {
-        Ok(self.values.lock().await.clone())
-    }
-
-    async fn update_admin_api_auth(
-        &self,
-        _username: &str,
-        api_key: &str,
-        api_secret: &str,
-    ) -> Result<(), AdminPortError> {
-        *self.values.lock().await = (api_key.to_string(), api_secret.to_string());
         Ok(())
     }
 }

@@ -478,18 +478,6 @@ them under the same paths expected by the mobile app.
 
 Configuration is read from the environment after `.env` is loaded.
 
-### Required for ERPNext-backed runtime
-
-| Variable | Description |
-| --- | --- |
-| `ERP_URL` | ERPNext base URL. |
-| `ERP_API_KEY` | ERPNext API key. |
-| `ERP_API_SECRET` | ERPNext API secret. |
-
-When any of these are missing, ERPNext-backed read/write ports are not wired.
-The service can still start, but ERP-dependent routes return their configured
-failure responses.
-
 ### Core service settings
 
 | Variable | Default | Description |

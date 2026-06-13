@@ -141,29 +141,8 @@ pub trait AdminStatePort: Send + Sync {
 }
 
 #[async_trait]
-pub trait AdminCredentialPort: Send + Sync {
-    async fn admin_api_auth(&self, username: &str) -> Result<(String, String), AdminPortError>;
-
-    async fn update_admin_api_auth(
-        &self,
-        username: &str,
-        api_key: &str,
-        api_secret: &str,
-    ) -> Result<(), AdminPortError>;
-}
-
 pub trait AdminEnvPersister: Send + Sync {
     fn upsert(&self, values: BTreeMap<&'static str, String>) -> Result<(), AdminPortError>;
-}
-
-pub trait AdminErpConfigSink: Send + Sync {
-    fn set_erp_config(
-        &self,
-        base_url: &str,
-        api_key: &str,
-        api_secret: &str,
-        default_warehouse: &str,
-    );
 }
 
 pub trait AdminAuthConfigSink: AuthConfigSink {}
