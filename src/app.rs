@@ -19,6 +19,8 @@ use crate::core::rezka::RezkaService;
 use crate::core::rps_batch::{RpsBatchLmdbStore, RpsBatchService};
 use crate::core::session::manager::SessionManager;
 use crate::core::werka::service::WerkaService;
+use crate::db::postgres::PostgresConfig;
+use crate::db::postgres_engine::PostgresEngineStore;
 use crate::erpdb::catalog_cache::reader::CatalogCacheReader;
 use crate::erpdb::catalog_cache::store::CatalogCacheStore;
 use crate::erpdb::catalog_cache::sync::{sync_catalog_delta_once, sync_catalog_once};
@@ -63,6 +65,8 @@ pub struct AppState {
     pub rps_batch: RpsBatchService,
     pub werka: WerkaService,
     pub sessions: SessionManager,
+    #[allow(dead_code)]
+    pub mini_engine: Option<PostgresEngineStore>,
 }
 
 impl AppState {
@@ -84,6 +88,7 @@ impl AppState {
         let mut production_orders: Arc<dyn ProductionOrderErpSink> =
             Arc::new(NoopProductionOrderErpSink);
         let mut production_order_source: Option<Arc<dyn ProductionOrderErpSource>> = None;
+        let mini_engine = build_mini_engine_store();
         if order_sheets.enabled() {
             tokio::spawn(run_order_sheets_sync_loop(
                 production_maps.clone(),
@@ -303,6 +308,24 @@ impl AppState {
             rps_batch,
             werka,
             sessions,
+            mini_engine,
+        }
+    }
+}
+
+fn build_mini_engine_store() -> Option<PostgresEngineStore> {
+    let config = match PostgresConfig::from_env() {
+        Ok(config) => config,
+        Err(_) => return None,
+    };
+    match config.pool_options().connect_lazy(&config.database_url) {
+        Ok(pool) => {
+            tracing::info!("mini ERP postgres engine store configured");
+            Some(PostgresEngineStore::new(pool))
+        }
+        Err(error) => {
+            tracing::warn!(%error, "mini ERP postgres engine store disabled");
+            None
         }
     }
 }
