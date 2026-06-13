@@ -209,6 +209,21 @@ pub(super) fn role_store_path() -> std::path::PathBuf {
         .unwrap_or_else(|_| std::path::PathBuf::from("data/mobile_roles.json"))
 }
 
+pub(super) fn admin_store_path() -> std::path::PathBuf {
+    std::env::var("MOBILE_API_ADMIN_STORE_PATH")
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|_| {
+            #[cfg(test)]
+            {
+                test_sqlite_path("mobile_admin_store").with_extension("json")
+            }
+            #[cfg(not(test))]
+            {
+                std::path::PathBuf::from("data/mobile_admin_store.json")
+            }
+        })
+}
+
 pub(super) fn rps_batch_lmdb_path() -> std::path::PathBuf {
     lmdb_path(
         "MOBILE_API_RPS_BATCH_LMDB_PATH",

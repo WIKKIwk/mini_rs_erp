@@ -28,6 +28,7 @@ use crate::db::postgres_production_map::PostgresProductionMapStore;
 use crate::fcm::discover_push_sender;
 use crate::google_sheets::{OrderSheetSink, discover_order_sheet_sink};
 use crate::rps::RpsDriverClient;
+use crate::store::admin_store::JsonAdminStore;
 use crate::store::apparatus_group_store::ApparatusGroupStore;
 use crate::store::calculate_order_store::CalculateOrderStore;
 use crate::store::production_map_store::ProductionMapStore;
@@ -66,9 +67,16 @@ pub struct AppState {
 
 impl AppState {
     pub fn new(config: AppConfig) -> Self {
-        let auth = AuthService::new(&config);
+        let admin_store = Arc::new(JsonAdminStore::new(admin_store_path()));
+        let auth = AuthService::new(&config)
+            .with_supplier_dependencies(admin_store.clone(), admin_store.clone())
+            .with_customer_dependencies(admin_store.clone(), admin_store.clone());
         let mut admin =
             AdminService::new(&config).with_env_persister(Arc::new(DotEnvPersister::new(".env")));
+        admin = admin
+            .with_read_port(admin_store.clone())
+            .with_write_port(admin_store.clone())
+            .with_state_port(admin_store.clone());
         admin = admin.with_role_store(Arc::new(RoleDefinitionStore::new(role_store_path())));
         admin = admin.with_auth_config_sink(Arc::new(auth.clone()));
         let customer = CustomerService::new();

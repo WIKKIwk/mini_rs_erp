@@ -1,3 +1,4 @@
+pub mod admin_store;
 pub mod apparatus_group_store;
 pub mod calculate_order_store;
 pub mod json_file;
