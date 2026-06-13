@@ -8,14 +8,14 @@ use crate::core::rezka::models::{
     CreateRezkaRepackDraftInput, RezkaRepackDraft, RezkaSourceEntry, RezkaSplitOutputRequest,
     RezkaSplitRequest,
 };
-use crate::core::rezka::ports::{RezkaErpPort, RezkaPortError};
+use crate::core::rezka::ports::{RezkaPortError, RezkaRepackStorePort};
 use crate::core::rezka::service::RezkaService;
 
 #[tokio::test]
 async fn split_creates_repack_prints_each_output_and_submits() {
     let events = Arc::new(Mutex::new(Vec::new()));
     let service = RezkaService::new()
-        .with_erp(Arc::new(FakeRezkaErp {
+        .with_repack_store(Arc::new(FakeRezkaRepackStore {
             events: events.clone(),
         }))
         .with_driver(Arc::new(FakeDriver {
@@ -81,7 +81,7 @@ async fn split_creates_repack_prints_each_output_and_submits() {
 async fn split_keeps_scrap_in_repack_without_printing_qr() {
     let events = Arc::new(Mutex::new(Vec::new()));
     let service = RezkaService::new()
-        .with_erp(Arc::new(FakeRezkaErp {
+        .with_repack_store(Arc::new(FakeRezkaRepackStore {
             events: events.clone(),
         }))
         .with_driver(Arc::new(FakeDriver {
@@ -140,7 +140,7 @@ async fn split_keeps_scrap_in_repack_without_printing_qr() {
 async fn split_does_not_print_brak_warehouse_even_when_client_requests_qr() {
     let events = Arc::new(Mutex::new(Vec::new()));
     let service = RezkaService::new()
-        .with_erp(Arc::new(FakeRezkaErp {
+        .with_repack_store(Arc::new(FakeRezkaRepackStore {
             events: events.clone(),
         }))
         .with_driver(Arc::new(FakeDriver {
@@ -199,7 +199,7 @@ async fn split_does_not_print_brak_warehouse_even_when_client_requests_qr() {
 #[tokio::test]
 async fn split_rejects_output_total_that_does_not_match_source_qty() {
     let service = RezkaService::new()
-        .with_erp(Arc::new(FakeRezkaErp {
+        .with_repack_store(Arc::new(FakeRezkaRepackStore {
             events: Arc::new(Mutex::new(Vec::new())),
         }))
         .with_driver(Arc::new(FakeDriver {
@@ -249,12 +249,12 @@ fn source() -> RezkaSourceEntry {
     }
 }
 
-struct FakeRezkaErp {
+struct FakeRezkaRepackStore {
     events: Arc<Mutex<Vec<String>>>,
 }
 
 #[async_trait]
-impl RezkaErpPort for FakeRezkaErp {
+impl RezkaRepackStorePort for FakeRezkaRepackStore {
     async fn create_rezka_repack_draft(
         &self,
         input: CreateRezkaRepackDraftInput,

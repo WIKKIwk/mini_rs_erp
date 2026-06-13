@@ -7,13 +7,13 @@ use super::models::{
     CreateRezkaRepackDraftInput, RezkaOutputLabel, RezkaSourceEntry, RezkaSplitRequest,
     RezkaSplitResponse,
 };
-use super::ports::{RezkaErpPort, RezkaPortError};
+use super::ports::{RezkaPortError, RezkaRepackStorePort};
 
 const QTY_TOLERANCE: f64 = 0.0001;
 
 #[derive(Clone, Default)]
 pub struct RezkaService {
-    erp: Option<Arc<dyn RezkaErpPort>>,
+    repack_store: Option<Arc<dyn RezkaRepackStorePort>>,
     driver: Option<Arc<dyn ScaleDriverPort>>,
     epc: Option<Arc<dyn EpcSource>>,
 }
@@ -23,14 +23,14 @@ impl RezkaService {
         Self::default()
     }
 
-    pub fn with_erp(mut self, erp: Arc<dyn RezkaErpPort>) -> Self {
-        self.erp = Some(erp);
+    pub fn with_repack_store(mut self, repack_store: Arc<dyn RezkaRepackStorePort>) -> Self {
+        self.repack_store = Some(repack_store);
         self
     }
 
     #[cfg(test)]
-    pub fn erp_configured_for_test(&self) -> bool {
-        self.erp.is_some()
+    pub fn repack_store_configured_for_test(&self) -> bool {
+        self.repack_store.is_some()
     }
 
     pub fn with_driver(mut self, driver: Arc<dyn ScaleDriverPort>) -> Self {
@@ -48,8 +48,8 @@ impl RezkaService {
         source: RezkaSourceEntry,
         request: RezkaSplitRequest,
     ) -> Result<RezkaSplitResponse, RezkaServiceError> {
-        let erp = self.erp.as_ref().ok_or_else(|| {
-            RezkaServiceError::NotConfigured("rezka erp is not configured".into())
+        let repack_store = self.repack_store.as_ref().ok_or_else(|| {
+            RezkaServiceError::NotConfigured("rezka repack store is not configured".into())
         })?;
         let driver = self.driver.as_ref().ok_or_else(|| {
             RezkaServiceError::NotConfigured("scale driver is not configured".into())
@@ -65,14 +65,14 @@ impl RezkaService {
             printable_outputs = ?rezka_output_log(&job.printable_outputs),
             "rezka split normalized"
         );
-        let draft = erp
+        let draft = repack_store
             .create_rezka_repack_draft(CreateRezkaRepackDraftInput {
                 source: job.source.clone(),
                 reason: job.reason.clone(),
                 outputs: job.outputs.clone(),
             })
             .await
-            .map_err(|error| RezkaServiceError::ErpWrite(error.message()))?;
+            .map_err(|error| RezkaServiceError::StoreWrite(error.message()))?;
 
         for output in &job.printable_outputs {
             tracing::info!(
@@ -113,7 +113,7 @@ impl RezkaService {
                         detail = %print_error_detail(&print),
                         "rezka split print failed"
                     );
-                    let _ = erp.delete_rezka_repack_draft(&draft.name).await;
+                    let _ = repack_store.delete_rezka_repack_draft(&draft.name).await;
                     return Err(RezkaServiceError::PrintFailed(print_error_detail(&print)));
                 }
                 Err(error) => {
@@ -125,15 +125,18 @@ impl RezkaService {
                         error = %error.message(),
                         "rezka split print request error"
                     );
-                    let _ = erp.delete_rezka_repack_draft(&draft.name).await;
+                    let _ = repack_store.delete_rezka_repack_draft(&draft.name).await;
                     return Err(RezkaServiceError::PrintFailed(error.message()));
                 }
             }
         }
 
-        erp.submit_rezka_repack_draft(&draft.name)
+        repack_store
+            .submit_rezka_repack_draft(&draft.name)
             .await
-            .map_err(|error| RezkaServiceError::SubmitFailed(clean_erp_error(&error.message())))?;
+            .map_err(|error| {
+                RezkaServiceError::SubmitFailed(clean_store_error(&error.message()))
+            })?;
 
         Ok(RezkaSplitResponse {
             ok: true,
@@ -294,8 +297,8 @@ pub enum RezkaServiceError {
     NotConfigured(String),
     #[error("epc generation failed")]
     EpcGenerationFailed,
-    #[error("erp write failed: {0}")]
-    ErpWrite(String),
+    #[error("store write failed: {0}")]
+    StoreWrite(String),
     #[error("print failed: {0}")]
     PrintFailed(String),
     #[error("submit failed: {0}")]
@@ -308,7 +311,7 @@ impl RezkaServiceError {
             Self::InvalidInput(_) => "invalid_input",
             Self::NotConfigured(_) => "rezka_not_configured",
             Self::EpcGenerationFailed => "epc_generation_failed",
-            Self::ErpWrite(_) => "erp_write_failed",
+            Self::StoreWrite(_) => "store_write_failed",
             Self::PrintFailed(_) => "print_failed",
             Self::SubmitFailed(_) => "submit_failed",
         }
@@ -354,10 +357,10 @@ fn rezka_output_log(outputs: &[RezkaOutputLabel]) -> Vec<String> {
         .collect()
 }
 
-fn clean_erp_error(message: &str) -> String {
+fn clean_store_error(message: &str) -> String {
     message
         .trim()
-        .strip_prefix("erp write failed: ")
+        .strip_prefix("store write failed: ")
         .unwrap_or_else(|| message.trim())
         .to_string()
 }
@@ -373,7 +376,7 @@ fn blank_default(value: &str, fallback: &str) -> String {
 
 impl From<RezkaPortError> for RezkaServiceError {
     fn from(value: RezkaPortError) -> Self {
-        Self::ErpWrite(value.message())
+        Self::StoreWrite(value.message())
     }
 }
 

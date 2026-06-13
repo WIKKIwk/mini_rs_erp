@@ -14,7 +14,7 @@ use crate::core::gscale::models::{ScaleDriverPrintRequest, ScaleDriverPrintRespo
 use crate::core::gscale::ports::{EpcSource, GscalePortError, ScaleDriverPort};
 use crate::core::rezka::RezkaService;
 use crate::core::rezka::models::{CreateRezkaRepackDraftInput, RezkaRepackDraft};
-use crate::core::rezka::ports::{RezkaErpPort, RezkaPortError};
+use crate::core::rezka::ports::{RezkaPortError, RezkaRepackStorePort};
 use crate::core::session::manager::SessionManager;
 use crate::core::werka::models::StockEntryBarcodeEntry;
 use crate::core::werka::ports::{WerkaHomeLookup, WerkaPortError};
@@ -48,7 +48,7 @@ async fn rezka_split_creates_repack_and_prints_output_qrs() {
     let events = Arc::new(Mutex::new(Vec::new()));
     let mut state = test_state(Arc::new(FakeLookup));
     state.rezka = RezkaService::new()
-        .with_erp(Arc::new(FakeRezkaErp {
+        .with_repack_store(Arc::new(FakeRezkaRepackStore {
             events: events.clone(),
         }))
         .with_driver(Arc::new(FakeDriver {
@@ -222,12 +222,12 @@ impl WerkaHomeLookup for FakeLookup {
     }
 }
 
-struct FakeRezkaErp {
+struct FakeRezkaRepackStore {
     events: Arc<Mutex<Vec<String>>>,
 }
 
 #[async_trait]
-impl RezkaErpPort for FakeRezkaErp {
+impl RezkaRepackStorePort for FakeRezkaRepackStore {
     async fn create_rezka_repack_draft(
         &self,
         input: CreateRezkaRepackDraftInput,

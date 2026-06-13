@@ -213,7 +213,7 @@ async fn app_state_skips_legacy_remote_clients_when_mini_database_url_is_configu
     });
 
     assert!(!state.gscale.receipt_store_configured_for_test());
-    assert!(!state.rezka.erp_configured_for_test());
+    assert!(!state.rezka.repack_store_configured_for_test());
 
     unsafe {
         std::env::remove_var("MINI_ERP_DATABASE_URL");
@@ -233,7 +233,7 @@ async fn app_state_never_attaches_legacy_remote_clients() {
     });
 
     assert!(!state.gscale.receipt_store_configured_for_test());
-    assert!(!state.rezka.erp_configured_for_test());
+    assert!(!state.rezka.repack_store_configured_for_test());
 }
 
 fn calculate_order_template(code: &str) -> CalculateOrderTemplate {

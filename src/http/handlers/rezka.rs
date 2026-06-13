@@ -149,7 +149,7 @@ fn rezka_error(error: RezkaServiceError) -> (StatusCode, Json<RezkaErrorResponse
         RezkaServiceError::InvalidInput(_) => StatusCode::BAD_REQUEST,
         RezkaServiceError::NotConfigured(_) => StatusCode::SERVICE_UNAVAILABLE,
         RezkaServiceError::EpcGenerationFailed => StatusCode::INTERNAL_SERVER_ERROR,
-        RezkaServiceError::ErpWrite(_)
+        RezkaServiceError::StoreWrite(_)
         | RezkaServiceError::PrintFailed(_)
         | RezkaServiceError::SubmitFailed(_) => StatusCode::FAILED_DEPENDENCY,
     };

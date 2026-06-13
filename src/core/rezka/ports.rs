@@ -3,7 +3,7 @@ use async_trait::async_trait;
 use super::models::{CreateRezkaRepackDraftInput, RezkaRepackDraft};
 
 #[async_trait]
-pub trait RezkaErpPort: Send + Sync {
+pub trait RezkaRepackStorePort: Send + Sync {
     async fn create_rezka_repack_draft(
         &self,
         input: CreateRezkaRepackDraftInput,
@@ -18,8 +18,8 @@ pub trait RezkaErpPort: Send + Sync {
 pub enum RezkaPortError {
     #[error("invalid input: {0}")]
     InvalidInput(String),
-    #[error("erp write failed: {0}")]
-    ErpWrite(String),
+    #[error("store write failed: {0}")]
+    StoreWrite(String),
 }
 
 impl RezkaPortError {
