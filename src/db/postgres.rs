@@ -190,6 +190,14 @@ mod tests {
         assert!(!migration.contains("owner_key_unique unique"));
     }
 
+    #[test]
+    fn postgres_foundation_migration_leaves_production_order_number_to_store_logic() {
+        let migration = foundation_migration_sql().to_lowercase();
+
+        assert!(migration.contains("idx_mini_production_maps_order_number"));
+        assert!(!migration.contains("mini_production_maps_order_number_unique"));
+    }
+
     #[tokio::test]
     #[ignore = "requires local PostgreSQL and creates/drops mini_rs_erp_test"]
     async fn postgres_live_foundation_migration_applies_to_clean_database() {

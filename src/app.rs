@@ -23,6 +23,7 @@ use crate::db::postgres::PostgresConfig;
 use crate::db::postgres_apparatus_group::PostgresApparatusGroupStore;
 use crate::db::postgres_calculate_order::PostgresCalculateOrderStore;
 use crate::db::postgres_engine::PostgresEngineStore;
+use crate::db::postgres_production_map::PostgresProductionMapStore;
 use crate::erpdb::catalog_cache::reader::CatalogCacheReader;
 use crate::erpdb::catalog_cache::store::CatalogCacheStore;
 use crate::erpdb::catalog_cache::sync::{sync_catalog_delta_once, sync_catalog_once};
@@ -80,8 +81,7 @@ impl AppState {
         admin = admin.with_auth_config_sink(Arc::new(auth.clone()));
         let mut customer = CustomerService::new();
         let profile_store = build_profile_store(&config);
-        let production_maps =
-            ProductionMapService::new(Arc::new(ProductionMapStore::new(product_map_store_path())));
+        let production_maps = build_production_map_service();
         let apparatus_groups = build_apparatus_groups_service();
         let calculate_orders = build_calculate_order_store();
         let order_sheets = discover_order_sheet_sink();
@@ -328,6 +328,27 @@ fn build_mini_engine_store() -> Option<PostgresEngineStore> {
             None
         }
     }
+}
+
+fn build_production_map_service() -> ProductionMapService {
+    let config = match PostgresConfig::from_env() {
+        Ok(config) => config,
+        Err(_) => return build_sqlite_production_map_service(),
+    };
+    match config.pool_options().connect_lazy(&config.database_url) {
+        Ok(pool) => {
+            tracing::info!("mini ERP postgres production map store configured");
+            ProductionMapService::new(Arc::new(PostgresProductionMapStore::new(pool)))
+        }
+        Err(error) => {
+            tracing::warn!(%error, "mini ERP postgres production map store disabled");
+            build_sqlite_production_map_service()
+        }
+    }
+}
+
+fn build_sqlite_production_map_service() -> ProductionMapService {
+    ProductionMapService::new(Arc::new(ProductionMapStore::new(product_map_store_path())))
 }
 
 fn build_apparatus_groups_service() -> ApparatusGroupService {

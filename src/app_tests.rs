@@ -10,8 +10,8 @@ use crate::config::AppConfig;
 use crate::core::apparatus_groups::ApparatusGroupUpsert;
 use crate::core::calculate_orders::{CalculateOrderError, CalculateOrderTemplate};
 use crate::core::production_map::{
-    MemoryProductionMapStore, ProductionMapDefinition, ProductionMapEdge, ProductionMapNode,
-    ProductionMapNodeKind, ProductionMapService,
+    MemoryProductionMapStore, ProductionMapDefinition, ProductionMapEdge, ProductionMapError,
+    ProductionMapNode, ProductionMapNodeKind, ProductionMapService,
 };
 use crate::db::postgres::apply_foundation_migration;
 use crate::erpnext::production_order::{ProductionOrderErpError, ProductionOrderErpSource};
@@ -182,6 +182,31 @@ async fn app_state_uses_postgres_calculate_orders_when_database_url_is_configure
         .await;
 
     assert!(matches!(result, Err(CalculateOrderError::StoreFailed)));
+
+    unsafe {
+        std::env::remove_var("MINI_ERP_DATABASE_URL");
+        std::env::remove_var("MINI_ERP_PG_ACQUIRE_TIMEOUT_MS");
+    }
+}
+
+#[tokio::test]
+async fn app_state_uses_postgres_production_maps_when_database_url_is_configured() {
+    let _guard = MINI_ENGINE_ENV_LOCK.lock().expect("env lock");
+    unsafe {
+        std::env::set_var(
+            "MINI_ERP_DATABASE_URL",
+            "postgres://wikki@127.0.0.1:1/mini_rs_erp_unavailable",
+        );
+        std::env::set_var("MINI_ERP_PG_ACQUIRE_TIMEOUT_MS", "50");
+    }
+
+    let state = super::AppState::new(test_app_config());
+    let result = state
+        .production_maps
+        .upsert_map(test_production_map("zakaz-404", "404"))
+        .await;
+
+    assert_eq!(result, Err(ProductionMapError::StoreFailed));
 
     unsafe {
         std::env::remove_var("MINI_ERP_DATABASE_URL");

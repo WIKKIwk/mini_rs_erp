@@ -72,8 +72,7 @@ CREATE TABLE IF NOT EXISTS mini_production_maps (
     CONSTRAINT mini_production_maps_product_code_not_blank CHECK (btrim(product_code) <> ''),
     CONSTRAINT mini_production_maps_title_not_blank CHECK (btrim(title) <> ''),
     CONSTRAINT mini_production_maps_width_positive CHECK (width_mm IS NULL OR width_mm > 0),
-    CONSTRAINT mini_production_maps_roll_count_positive CHECK (roll_count IS NULL OR roll_count > 0),
-    CONSTRAINT mini_production_maps_order_number_unique UNIQUE (order_number)
+    CONSTRAINT mini_production_maps_roll_count_positive CHECK (roll_count IS NULL OR roll_count > 0)
 );
 
 CREATE TABLE IF NOT EXISTS mini_production_map_nodes (
@@ -174,6 +173,7 @@ CREATE INDEX IF NOT EXISTS idx_mini_quick_order_templates_owner_saved ON mini_qu
 CREATE INDEX IF NOT EXISTS idx_mini_quick_order_templates_owner_quick_key ON mini_quick_order_templates(owner_key, quick_key);
 CREATE UNIQUE INDEX IF NOT EXISTS idx_mini_quick_order_templates_owner_lower_code ON mini_quick_order_templates (owner_key, lower(code));
 CREATE INDEX IF NOT EXISTS idx_mini_production_maps_order_id ON mini_production_maps(order_id);
+CREATE INDEX IF NOT EXISTS idx_mini_production_maps_order_number ON mini_production_maps(order_number) WHERE btrim(order_number) <> '';
 CREATE UNIQUE INDEX IF NOT EXISTS idx_mini_apparatus_groups_lower_name ON mini_apparatus_groups (lower(name));
 CREATE INDEX IF NOT EXISTS idx_mini_queue_states_order_id ON mini_queue_states(order_id);
 CREATE INDEX IF NOT EXISTS idx_mini_engine_events_entity ON mini_engine_events(domain, entity_id, created_at DESC);
