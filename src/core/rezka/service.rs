@@ -28,6 +28,11 @@ impl RezkaService {
         self
     }
 
+    #[cfg(test)]
+    pub fn erp_configured_for_test(&self) -> bool {
+        self.erp.is_some()
+    }
+
     pub fn with_driver(mut self, driver: Arc<dyn ScaleDriverPort>) -> Self {
         self.driver = Some(driver);
         self

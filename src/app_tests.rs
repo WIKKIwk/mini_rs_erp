@@ -210,6 +210,33 @@ async fn app_state_uses_postgres_production_maps_when_database_url_is_configured
     }
 }
 
+#[tokio::test]
+async fn app_state_skips_legacy_erp_clients_when_mini_database_url_is_configured() {
+    let _guard = MINI_ENGINE_ENV_LOCK.lock().expect("env lock");
+    unsafe {
+        std::env::set_var(
+            "MINI_ERP_DATABASE_URL",
+            "postgres://wikki@127.0.0.1:1/mini_rs_erp_unavailable",
+        );
+        std::env::set_var("MINI_ERP_PG_ACQUIRE_TIMEOUT_MS", "50");
+    }
+
+    let state = super::AppState::new(AppConfig {
+        erp_url: "https://legacy-erp.test".to_string(),
+        erp_api_key: "key".to_string(),
+        erp_api_secret: "secret".to_string(),
+        ..test_app_config()
+    });
+
+    assert!(!state.gscale.erp_configured_for_test());
+    assert!(!state.rezka.erp_configured_for_test());
+
+    unsafe {
+        std::env::remove_var("MINI_ERP_DATABASE_URL");
+        std::env::remove_var("MINI_ERP_PG_ACQUIRE_TIMEOUT_MS");
+    }
+}
+
 fn calculate_order_template(code: &str) -> CalculateOrderTemplate {
     CalculateOrderTemplate {
         id: String::new(),

@@ -154,9 +154,10 @@ impl AppState {
             )));
         }
 
+        let mini_erp_enabled = PostgresConfig::from_env().is_ok();
         let mut erp_client = None;
         let mut admin_state_store = None;
-        if config.erp_configured() {
+        if !mini_erp_enabled && config.erp_configured() {
             let state_store = Arc::new(build_admin_supplier_state_store(&config));
             admin_state_store = Some(state_store.clone());
             let client = Arc::new(
@@ -190,88 +191,99 @@ impl AppState {
                 .with_supplier_admin_state_lookup(state_store);
             erp_client = Some(client);
         }
-        match config.direct_db_config() {
-            Ok(Some(db_config)) => {
-                tracing::info!(
-                    host = %db_config.host,
-                    port = db_config.port,
-                    database = %db_config.name,
-                    "direct DB read enabled for Werka home"
-                );
-                let direct_reader = Arc::new(DirectDbReader::new(db_config.clone()));
-                if let Some(client) = &erp_client {
-                    client.set_credential_provider(direct_reader.clone());
-                }
-                let catalog_reader = if config.catalog_cache_enabled {
-                    match CatalogCacheStore::open(&config.catalog_cache_path) {
-                        Ok(store) => {
-                            let store = Arc::new(store);
-                            let sync_store = store.clone();
-                            let sync_reader = (*direct_reader).clone();
-                            let sync_interval = catalog_cache_sync_interval();
-                            tokio::spawn(async move {
-                                run_catalog_cache_sync_loop(sync_reader, sync_store, sync_interval)
+        if !mini_erp_enabled {
+            match config.direct_db_config() {
+                Ok(Some(db_config)) => {
+                    tracing::info!(
+                        host = %db_config.host,
+                        port = db_config.port,
+                        database = %db_config.name,
+                        "direct DB read enabled for Werka home"
+                    );
+                    let direct_reader = Arc::new(DirectDbReader::new(db_config.clone()));
+                    if let Some(client) = &erp_client {
+                        client.set_credential_provider(direct_reader.clone());
+                    }
+                    let catalog_reader = if config.catalog_cache_enabled {
+                        match CatalogCacheStore::open(&config.catalog_cache_path) {
+                            Ok(store) => {
+                                let store = Arc::new(store);
+                                let sync_store = store.clone();
+                                let sync_reader = (*direct_reader).clone();
+                                let sync_interval = catalog_cache_sync_interval();
+                                tokio::spawn(async move {
+                                    run_catalog_cache_sync_loop(
+                                        sync_reader,
+                                        sync_store,
+                                        sync_interval,
+                                    )
                                     .await;
-                            });
-                            Some(Arc::new(
-                                CatalogCacheReader::new(store, db_config.default_warehouse.clone())
+                                });
+                                Some(Arc::new(
+                                    CatalogCacheReader::new(
+                                        store,
+                                        db_config.default_warehouse.clone(),
+                                    )
                                     .with_fallback(direct_reader.clone()),
-                            ))
-                        }
-                        Err(error) => {
-                            if config.catalog_cache_fallback_direct_db {
-                                tracing::warn!(
-                                    %error,
-                                    path = %config.catalog_cache_path.display(),
-                                    "catalog cache unavailable; using direct DB reads"
-                                );
-                                None
-                            } else {
-                                panic!("catalog cache unavailable: {error}");
+                                ))
+                            }
+                            Err(error) => {
+                                if config.catalog_cache_fallback_direct_db {
+                                    tracing::warn!(
+                                        %error,
+                                        path = %config.catalog_cache_path.display(),
+                                        "catalog cache unavailable; using direct DB reads"
+                                    );
+                                    None
+                                } else {
+                                    panic!("catalog cache unavailable: {error}");
+                                }
                             }
                         }
-                    }
-                } else {
-                    None
-                };
+                    } else {
+                        None
+                    };
 
-                if let Some(catalog_reader) = catalog_reader {
-                    admin = admin
-                        .with_read_port(catalog_reader.clone())
-                        .with_credential_port(direct_reader.clone());
-                    werka = werka
-                        .with_lookup(catalog_reader.clone())
-                        .with_customer_issue_source_lookup(direct_reader.clone())
-                        .with_notification_detail_lookup(direct_reader.clone())
-                        .with_supplier_read_lookup(direct_reader.clone());
-                    profiles = profiles.with_read_lookup(catalog_reader.clone());
-                    if let Some(state_store) = admin_state_store.clone() {
-                        let lookup = Arc::new(AdminReadAuthLookup::new(catalog_reader));
-                        auth = auth.with_supplier_dependencies(lookup.clone(), state_store.clone());
-                        auth = auth.with_customer_dependencies(lookup, state_store);
-                        tracing::info!("auth login lookup uses catalog/direct DB reads");
-                    }
-                } else {
-                    admin = admin
-                        .with_read_port(direct_reader.clone())
-                        .with_credential_port(direct_reader.clone());
-                    werka = werka
-                        .with_lookup(direct_reader.clone())
-                        .with_customer_issue_source_lookup(direct_reader.clone())
-                        .with_notification_detail_lookup(direct_reader.clone())
-                        .with_supplier_read_lookup(direct_reader.clone());
-                    profiles = profiles.with_read_lookup(direct_reader.clone());
-                    if let Some(state_store) = admin_state_store.clone() {
-                        let lookup = Arc::new(AdminReadAuthLookup::new(direct_reader.clone()));
-                        auth = auth.with_supplier_dependencies(lookup.clone(), state_store.clone());
-                        auth = auth.with_customer_dependencies(lookup, state_store);
-                        tracing::info!("auth login lookup uses direct DB reads");
+                    if let Some(catalog_reader) = catalog_reader {
+                        admin = admin
+                            .with_read_port(catalog_reader.clone())
+                            .with_credential_port(direct_reader.clone());
+                        werka = werka
+                            .with_lookup(catalog_reader.clone())
+                            .with_customer_issue_source_lookup(direct_reader.clone())
+                            .with_notification_detail_lookup(direct_reader.clone())
+                            .with_supplier_read_lookup(direct_reader.clone());
+                        profiles = profiles.with_read_lookup(catalog_reader.clone());
+                        if let Some(state_store) = admin_state_store.clone() {
+                            let lookup = Arc::new(AdminReadAuthLookup::new(catalog_reader));
+                            auth = auth
+                                .with_supplier_dependencies(lookup.clone(), state_store.clone());
+                            auth = auth.with_customer_dependencies(lookup, state_store);
+                            tracing::info!("auth login lookup uses catalog/direct DB reads");
+                        }
+                    } else {
+                        admin = admin
+                            .with_read_port(direct_reader.clone())
+                            .with_credential_port(direct_reader.clone());
+                        werka = werka
+                            .with_lookup(direct_reader.clone())
+                            .with_customer_issue_source_lookup(direct_reader.clone())
+                            .with_notification_detail_lookup(direct_reader.clone())
+                            .with_supplier_read_lookup(direct_reader.clone());
+                        profiles = profiles.with_read_lookup(direct_reader.clone());
+                        if let Some(state_store) = admin_state_store.clone() {
+                            let lookup = Arc::new(AdminReadAuthLookup::new(direct_reader.clone()));
+                            auth = auth
+                                .with_supplier_dependencies(lookup.clone(), state_store.clone());
+                            auth = auth.with_customer_dependencies(lookup, state_store);
+                            tracing::info!("auth login lookup uses direct DB reads");
+                        }
                     }
                 }
-            }
-            Ok(None) => {}
-            Err(error) => {
-                tracing::warn!(%error, "direct DB read disabled");
+                Ok(None) => {}
+                Err(error) => {
+                    tracing::warn!(%error, "direct DB read disabled");
+                }
             }
         }
         Self {
