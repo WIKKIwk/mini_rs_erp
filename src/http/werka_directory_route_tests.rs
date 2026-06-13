@@ -39,16 +39,6 @@ fn test_state() -> AppState {
         admin_phone: "+998880000000".to_string(),
         admin_name: "Admin".to_string(),
         admin_code: "19621978".to_string(),
-        direct_read_enabled: false,
-        direct_site_config_path: String::new(),
-        direct_db_host: String::new(),
-        direct_db_port: None,
-        direct_db_user: String::new(),
-        direct_db_password: String::new(),
-        direct_db_name: String::new(),
-        catalog_cache_enabled: false,
-        catalog_cache_fallback_direct_db: true,
-        catalog_cache_path: std::path::PathBuf::from("data/catalog_cache.sqlite"),
     });
     state.sessions = SessionManager::memory(Some(30 * 24 * 60 * 60));
     state
