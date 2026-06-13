@@ -41,8 +41,8 @@ pub async fn lookup(
         .await
     {
         Ok(Some(lookup)) => Ok(Json(lookup)),
-        Ok(None) | Err(WerkaPortError::DirectDbLookupUnavailable) => {
-            Err(service_unavailable("direct db lookup unavailable"))
+        Ok(None) | Err(WerkaPortError::LookupUnavailable) => {
+            Err(service_unavailable("lookup unavailable"))
         }
         Err(WerkaPortError::InvalidInput) => Err(bad_request("barcode is required")),
         Err(WerkaPortError::NotFound) => Err(not_found("stock entry not found")),

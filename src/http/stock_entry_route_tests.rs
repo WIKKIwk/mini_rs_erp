@@ -60,7 +60,7 @@ async fn stock_entry_lookup_requires_barcode_like_go() {
 }
 
 #[tokio::test]
-async fn stock_entry_lookup_returns_direct_db_payload_like_go() {
+async fn stock_entry_lookup_returns_payload_like_go() {
     let state = test_state(Some(Arc::new(FakeStockLookup::found())));
     let token = session(&state).await;
     let response = build_router(state)

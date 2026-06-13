@@ -91,7 +91,7 @@ pub trait WerkaHomeLookup: Send + Sync {
         _barcode: &str,
         _limit: usize,
     ) -> Result<Vec<StockEntryBarcodeEntry>, WerkaPortError> {
-        Err(WerkaPortError::DirectDbLookupUnavailable)
+        Err(WerkaPortError::LookupUnavailable)
     }
 }
 #[async_trait]
@@ -486,8 +486,8 @@ pub enum WerkaPortError {
     InvalidInput,
     #[error("not found")]
     NotFound,
-    #[error("direct db lookup unavailable")]
-    DirectDbLookupUnavailable,
+    #[error("lookup unavailable")]
+    LookupUnavailable,
     #[error("insufficient stock")]
     InsufficientStock,
     #[error("duplicate customer issue source")]

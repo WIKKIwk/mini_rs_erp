@@ -120,9 +120,7 @@ impl WerkaUnannouncedWriter for FakeUnannouncedWriter {
                 WerkaPortError::LookupFailed => WerkaPortError::LookupFailed,
                 WerkaPortError::InvalidInput => WerkaPortError::InvalidInput,
                 WerkaPortError::NotFound => WerkaPortError::NotFound,
-                WerkaPortError::DirectDbLookupUnavailable => {
-                    WerkaPortError::DirectDbLookupUnavailable
-                }
+                WerkaPortError::LookupUnavailable => WerkaPortError::LookupUnavailable,
                 WerkaPortError::InsufficientStock => WerkaPortError::InsufficientStock,
                 WerkaPortError::DuplicateCustomerIssueSource => {
                     WerkaPortError::DuplicateCustomerIssueSource

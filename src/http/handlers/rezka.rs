@@ -95,12 +95,7 @@ async fn source_by_barcode(
         .stock_entry_lookup_by_barcode(barcode, 20)
         .await
         .map_err(lookup_error)?
-        .ok_or_else(|| {
-            service_unavailable(
-                "direct_db_lookup_unavailable",
-                "direct db lookup unavailable",
-            )
-        })?;
+        .ok_or_else(|| service_unavailable("lookup_unavailable", "lookup unavailable"))?;
     let Some(entry) = lookup
         .entries
         .into_iter()
@@ -145,10 +140,7 @@ fn source_entry_from_stock_entry(entry: StockEntryBarcodeEntry) -> Option<RezkaS
 fn lookup_error(error: WerkaPortError) -> (StatusCode, Json<RezkaErrorResponse>) {
     match error {
         WerkaPortError::InvalidInput => bad_request("barcode_required", "barcode is required"),
-        _ => service_unavailable(
-            "direct_db_lookup_unavailable",
-            "direct db lookup unavailable",
-        ),
+        _ => service_unavailable("lookup_unavailable", "lookup unavailable"),
     }
 }
 

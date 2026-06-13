@@ -32,8 +32,8 @@ Configure real `.env` values before production use. At minimum set
 ## Current Snapshot Notes
 
 The current snapshot is the mini ERP fork of the stable Rust mobile backend.
-ERPNext REST adapters and direct MariaDB read models have been removed. Mini ERP
-production state is being moved into PostgreSQL behind domain ports.
+Legacy ERP adapters have been removed. Mini ERP production state is being moved
+into PostgreSQL behind domain ports.
 
 ### PostgreSQL foundation
 
