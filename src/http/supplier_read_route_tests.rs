@@ -188,7 +188,7 @@ async fn supplier_status_breakdown_forbids_non_supplier_like_go() {
 }
 
 #[tokio::test]
-async fn supplier_status_breakdown_fails_without_erp_provider_like_go() {
+async fn supplier_status_breakdown_fails_without_receipt_provider_like_go() {
     let state = test_state();
     let token = supplier_session(&state).await;
 
@@ -252,7 +252,7 @@ async fn supplier_status_details_forbids_non_supplier_like_go() {
 }
 
 #[tokio::test]
-async fn supplier_status_details_fails_without_erp_provider_like_go() {
+async fn supplier_status_details_fails_without_receipt_provider_like_go() {
     let state = test_state();
     let token = supplier_session(&state).await;
 

@@ -138,7 +138,7 @@ async fn supplier_login_respects_custom_code_and_blocked_state() {
 }
 
 #[tokio::test]
-async fn supplier_login_accepts_local_erp_phone() {
+async fn supplier_login_accepts_local_phone() {
     let suppliers = Arc::new(FakeSupplierLookup {
         suppliers: vec![SupplierRecord {
             id: "SUP-LOCAL".to_string(),
@@ -198,7 +198,7 @@ async fn customer_login_requires_custom_code() {
 }
 
 #[tokio::test]
-async fn customer_login_accepts_local_erp_phone() {
+async fn customer_login_accepts_local_phone() {
     let customers = Arc::new(FakeCustomerLookup {
         customers: vec![CustomerRecord {
             id: "CUST-LOCAL".to_string(),

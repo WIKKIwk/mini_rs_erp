@@ -465,7 +465,8 @@ async fn production_map_save_with_order_records_mini_order_without_blocking_resp
     state.production_orders = sink.clone();
     let token = session(&state, PrincipalRole::Admin).await;
 
-    let map_json = pechat_order_map_json("zakaz-7799", "ERP zakaz", "7799", "8 ta rangli pechat");
+    let map_json =
+        pechat_order_map_json("zakaz-7799", "Catalog zakaz", "7799", "8 ta rangli pechat");
     let body = format!(
         r#"{{
             "map":{map_json},
@@ -1982,10 +1983,10 @@ async fn login_returns_effective_capabilities_for_assigned_custom_role() {
 #[tokio::test]
 async fn admin_settings_ignores_state_read_failure_like_go() {
     let mut state = test_state();
-    let erp = Arc::new(FakeAdminReadPort);
+    let admin_port = Arc::new(FakeAdminReadPort);
     state.admin = AdminService::new(&state.config)
-        .with_read_port(erp.clone())
-        .with_write_port(erp)
+        .with_read_port(admin_port.clone())
+        .with_write_port(admin_port)
         .with_state_port(Arc::new(FailingAdminStatePort));
     let token = session(&state, PrincipalRole::Admin).await;
 
@@ -2003,10 +2004,10 @@ async fn admin_settings_ignores_state_read_failure_like_go() {
 #[tokio::test]
 async fn admin_suppliers_summary_failure_uses_go_error_text() {
     let mut state = test_state();
-    let erp = Arc::new(FakeAdminReadPort);
+    let admin_port = Arc::new(FakeAdminReadPort);
     state.admin = AdminService::new(&state.config)
-        .with_read_port(erp.clone())
-        .with_write_port(erp)
+        .with_read_port(admin_port.clone())
+        .with_write_port(admin_port)
         .with_state_port(Arc::new(FailingAdminStatePort));
     let token = session(&state, PrincipalRole::Admin).await;
 
@@ -2025,10 +2026,10 @@ async fn admin_suppliers_summary_failure_uses_go_error_text() {
 #[tokio::test]
 async fn admin_settings_put_updates_default_uom_like_go() {
     let mut state = test_state();
-    let erp = Arc::new(FakeAdminReadPort);
+    let admin_port = Arc::new(FakeAdminReadPort);
     state.admin = AdminService::new(&state.config)
-        .with_read_port(erp.clone())
-        .with_write_port(erp)
+        .with_read_port(admin_port.clone())
+        .with_write_port(admin_port)
         .with_state_port(Arc::new(FakeAdminStatePort::new()))
         .with_auth_config_sink(Arc::new(state.auth.clone()));
     let token = session(&state, PrincipalRole::Admin).await;
@@ -2442,9 +2443,9 @@ async fn admin_item_group_parent_move_returns_item_group_shape() {
 #[tokio::test]
 async fn admin_customer_detail_errors_are_500_like_go() {
     let mut state = test_state();
-    let erp = Arc::new(CustomerItemsFailReadPort);
+    let failing_read_port = Arc::new(CustomerItemsFailReadPort);
     state.admin = AdminService::new(&state.config)
-        .with_read_port(erp)
+        .with_read_port(failing_read_port)
         .with_write_port(Arc::new(FakeAdminReadPort))
         .with_state_port(Arc::new(FakeAdminStatePort::new()));
     let token = session(&state, PrincipalRole::Admin).await;
@@ -2465,10 +2466,10 @@ async fn admin_customer_detail_errors_are_500_like_go() {
 #[tokio::test]
 async fn admin_customer_code_regenerate_cooldown_is_500_like_go() {
     let mut state = test_state();
-    let erp = Arc::new(FakeAdminReadPort);
+    let admin_port = Arc::new(FakeAdminReadPort);
     state.admin = AdminService::new(&state.config)
-        .with_read_port(erp.clone())
-        .with_write_port(erp)
+        .with_read_port(admin_port.clone())
+        .with_write_port(admin_port)
         .with_state_port(Arc::new(LockedCustomerStatePort));
     let token = session(&state, PrincipalRole::Admin).await;
 
@@ -2845,10 +2846,10 @@ fn test_state() -> AppState {
         admin_code: "19621978".to_string(),
     });
     state.sessions = SessionManager::memory(Some(30 * 24 * 60 * 60));
-    let erp = Arc::new(FakeAdminReadPort);
+    let admin_port = Arc::new(FakeAdminReadPort);
     state.admin = AdminService::new(&state.config)
-        .with_read_port(erp.clone())
-        .with_write_port(erp)
+        .with_read_port(admin_port.clone())
+        .with_write_port(admin_port)
         .with_state_port(Arc::new(FakeAdminStatePort::new()));
     state.production_maps = ProductionMapService::new(Arc::new(MemoryProductionMapStore::new()));
     state.apparatus_groups = ApparatusGroupService::new(Arc::new(MemoryApparatusGroupStore::new()));
