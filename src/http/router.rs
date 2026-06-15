@@ -166,14 +166,6 @@ pub fn build_router(state: AppState) -> Router {
             any(admin::production_map_sequence),
         )
         .route(
-            "/v1/mobile/admin/production-maps/daily-sequence",
-            any(admin::production_map_daily_sequence),
-        )
-        .route(
-            "/v1/mobile/admin/production-maps/daily-apparatus-sequence",
-            any(admin::production_map_daily_apparatus_sequence),
-        )
-        .route(
             "/v1/mobile/admin/production-maps/live",
             any(admin::production_map_live),
         )

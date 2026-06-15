@@ -181,8 +181,6 @@ pub struct ProductionMapRunResult {
 pub enum ProductionMapError {
     #[error("map id is required")]
     MissingId,
-    #[error("work date is invalid")]
-    InvalidWorkDate,
     #[error("product code is required")]
     MissingProductCode,
     #[error("map title is required")]
@@ -254,23 +252,6 @@ pub trait ProductionMapStorePort: Send + Sync {
         apparatus: &str,
         order_ids: Vec<String>,
     ) -> Result<(), ProductionMapError>;
-    async fn daily_work_sequences(
-        &self,
-    ) -> Result<BTreeMap<String, Vec<String>>, ProductionMapError>;
-    async fn put_daily_work_sequence(
-        &self,
-        work_date: &str,
-        order_ids: Vec<String>,
-    ) -> Result<(), ProductionMapError>;
-    async fn daily_apparatus_sequences(
-        &self,
-    ) -> Result<BTreeMap<String, BTreeMap<String, Vec<String>>>, ProductionMapError>;
-    async fn put_daily_apparatus_sequence(
-        &self,
-        work_date: &str,
-        apparatus: &str,
-        order_ids: Vec<String>,
-    ) -> Result<(), ProductionMapError>;
     async fn apparatus_queue_states(
         &self,
     ) -> Result<BTreeMap<String, BTreeMap<String, String>>, ProductionMapError>;
@@ -285,8 +266,6 @@ pub trait ProductionMapStorePort: Send + Sync {
 pub struct MemoryProductionMapStore {
     maps: RwLock<BTreeMap<String, ProductionMapDefinition>>,
     sequences: RwLock<BTreeMap<String, Vec<String>>>,
-    daily_sequences: RwLock<BTreeMap<String, Vec<String>>>,
-    daily_apparatus_sequences: RwLock<BTreeMap<String, BTreeMap<String, Vec<String>>>>,
     queue_states: RwLock<BTreeMap<String, BTreeMap<String, String>>>,
 }
 
@@ -296,8 +275,6 @@ impl MemoryProductionMapStore {
         Self {
             maps: RwLock::new(BTreeMap::new()),
             sequences: RwLock::new(BTreeMap::new()),
-            daily_sequences: RwLock::new(BTreeMap::new()),
-            daily_apparatus_sequences: RwLock::new(BTreeMap::new()),
             queue_states: RwLock::new(BTreeMap::new()),
         }
     }
@@ -380,51 +357,6 @@ impl ProductionMapStorePort for MemoryProductionMapStore {
         Ok(())
     }
 
-    async fn daily_work_sequences(
-        &self,
-    ) -> Result<BTreeMap<String, Vec<String>>, ProductionMapError> {
-        Ok(self.daily_sequences.read().await.clone())
-    }
-
-    async fn put_daily_work_sequence(
-        &self,
-        work_date: &str,
-        order_ids: Vec<String>,
-    ) -> Result<(), ProductionMapError> {
-        let mut sequences = self.daily_sequences.write().await;
-        if order_ids.is_empty() {
-            sequences.remove(work_date.trim());
-        } else {
-            sequences.insert(work_date.trim().to_string(), order_ids);
-        }
-        Ok(())
-    }
-
-    async fn daily_apparatus_sequences(
-        &self,
-    ) -> Result<BTreeMap<String, BTreeMap<String, Vec<String>>>, ProductionMapError> {
-        Ok(self.daily_apparatus_sequences.read().await.clone())
-    }
-
-    async fn put_daily_apparatus_sequence(
-        &self,
-        work_date: &str,
-        apparatus: &str,
-        order_ids: Vec<String>,
-    ) -> Result<(), ProductionMapError> {
-        let mut sequences = self.daily_apparatus_sequences.write().await;
-        let date_sequences = sequences.entry(work_date.trim().to_string()).or_default();
-        if order_ids.is_empty() {
-            date_sequences.remove(apparatus.trim());
-            if date_sequences.is_empty() {
-                sequences.remove(work_date.trim());
-            }
-        } else {
-            date_sequences.insert(apparatus.trim().to_string(), order_ids);
-        }
-        Ok(())
-    }
-
     async fn apparatus_queue_states(
         &self,
     ) -> Result<BTreeMap<String, BTreeMap<String, String>>, ProductionMapError> {
@@ -450,8 +382,6 @@ const LIVE_NOTIFY_CAPACITY: usize = 256;
 pub struct ProductionMapLiveSnapshot {
     pub maps: Vec<ProductionMapSaved>,
     pub sequences: BTreeMap<String, Vec<String>>,
-    pub daily_sequences: BTreeMap<String, Vec<String>>,
-    pub daily_apparatus_sequences: BTreeMap<String, BTreeMap<String, Vec<String>>>,
     pub queue_states: BTreeMap<String, BTreeMap<String, String>>,
 }
 
@@ -479,8 +409,6 @@ impl ProductionMapService {
         Ok(ProductionMapLiveSnapshot {
             maps: self.maps().await?,
             sequences: self.apparatus_sequences().await?,
-            daily_sequences: self.daily_work_sequences().await?,
-            daily_apparatus_sequences: self.daily_apparatus_sequences().await?,
             queue_states: self.apparatus_queue_states().await?,
         })
     }
@@ -548,65 +476,6 @@ impl ProductionMapService {
             .collect();
         self.store
             .put_apparatus_sequence(apparatus, order_ids)
-            .await?;
-        self.notify_live();
-        Ok(())
-    }
-
-    pub async fn daily_work_sequences(
-        &self,
-    ) -> Result<BTreeMap<String, Vec<String>>, ProductionMapError> {
-        self.store.daily_work_sequences().await
-    }
-
-    pub async fn set_daily_work_sequence(
-        &self,
-        work_date: &str,
-        order_ids: Vec<String>,
-    ) -> Result<(), ProductionMapError> {
-        let work_date = work_date.trim();
-        if !is_valid_work_date_key(work_date) {
-            return Err(ProductionMapError::InvalidWorkDate);
-        }
-        let order_ids = order_ids
-            .into_iter()
-            .map(|id| id.trim().to_string())
-            .filter(|id| !id.is_empty())
-            .collect();
-        self.store
-            .put_daily_work_sequence(work_date, order_ids)
-            .await?;
-        self.notify_live();
-        Ok(())
-    }
-
-    pub async fn daily_apparatus_sequences(
-        &self,
-    ) -> Result<BTreeMap<String, BTreeMap<String, Vec<String>>>, ProductionMapError> {
-        self.store.daily_apparatus_sequences().await
-    }
-
-    pub async fn set_daily_apparatus_sequence(
-        &self,
-        work_date: &str,
-        apparatus: &str,
-        order_ids: Vec<String>,
-    ) -> Result<(), ProductionMapError> {
-        let work_date = work_date.trim();
-        let apparatus = apparatus.trim();
-        if !is_valid_work_date_key(work_date) {
-            return Err(ProductionMapError::InvalidWorkDate);
-        }
-        if apparatus.is_empty() {
-            return Err(ProductionMapError::MissingId);
-        }
-        let order_ids = order_ids
-            .into_iter()
-            .map(|id| id.trim().to_string())
-            .filter(|id| !id.is_empty())
-            .collect();
-        self.store
-            .put_daily_apparatus_sequence(work_date, apparatus, order_ids)
             .await?;
         self.notify_live();
         Ok(())
@@ -972,17 +841,6 @@ fn reassign_alternative_apparatus_assignment(
         }
     }
     changed
-}
-
-fn is_valid_work_date_key(value: &str) -> bool {
-    let bytes = value.as_bytes();
-    bytes.len() == 10
-        && bytes[4] == b'-'
-        && bytes[7] == b'-'
-        && bytes
-            .iter()
-            .enumerate()
-            .all(|(index, byte)| index == 4 || index == 7 || byte.is_ascii_digit())
 }
 
 pub fn compile_map(
