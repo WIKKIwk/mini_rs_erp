@@ -120,6 +120,54 @@ impl ProductionMapStorePort for PostgresProductionMapStore {
         Ok(())
     }
 
+    async fn daily_work_sequences(
+        &self,
+    ) -> Result<BTreeMap<String, Vec<String>>, ProductionMapError> {
+        let rows = sqlx::query_as::<_, (String, serde_json::Value)>(
+            "SELECT work_date, order_ids
+             FROM mini_daily_work_sequences
+             ORDER BY work_date ASC",
+        )
+        .fetch_all(&self.pool)
+        .await
+        .map_err(|_| ProductionMapError::StoreFailed)?;
+
+        rows.into_iter()
+            .map(|(work_date, payload)| {
+                let order_ids = serde_json::from_value::<Vec<String>>(payload)
+                    .map_err(|_| ProductionMapError::StoreFailed)?;
+                Ok((work_date, order_ids))
+            })
+            .collect()
+    }
+
+    async fn put_daily_work_sequence(
+        &self,
+        work_date: &str,
+        order_ids: Vec<String>,
+    ) -> Result<(), ProductionMapError> {
+        let order_ids = order_ids
+            .into_iter()
+            .map(|id| id.trim().to_string())
+            .filter(|id| !id.is_empty())
+            .collect::<Vec<_>>();
+        let payload =
+            serde_json::to_value(order_ids).map_err(|_| ProductionMapError::StoreFailed)?;
+        sqlx::query(
+            "INSERT INTO mini_daily_work_sequences (work_date, order_ids, updated_at)
+             VALUES ($1, $2, now())
+             ON CONFLICT (work_date) DO UPDATE SET
+               order_ids = excluded.order_ids,
+               updated_at = excluded.updated_at",
+        )
+        .bind(work_date.trim())
+        .bind(payload)
+        .execute(&self.pool)
+        .await
+        .map_err(|_| ProductionMapError::StoreFailed)?;
+        Ok(())
+    }
+
     async fn apparatus_queue_states(
         &self,
     ) -> Result<BTreeMap<String, BTreeMap<String, String>>, ProductionMapError> {

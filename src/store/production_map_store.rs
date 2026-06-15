@@ -161,6 +161,52 @@ impl ProductionMapStorePort for ProductionMapStore {
         Ok(())
     }
 
+    async fn daily_work_sequences(
+        &self,
+    ) -> Result<BTreeMap<String, Vec<String>>, ProductionMapError> {
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|_| ProductionMapError::StoreFailed)?;
+        let mut stmt = conn
+            .prepare("SELECT work_date, order_ids_json FROM daily_work_sequences")
+            .map_err(|_| ProductionMapError::StoreFailed)?;
+        let rows = stmt
+            .query_map([], |row| {
+                let work_date: String = row.get(0)?;
+                let payload: String = row.get(1)?;
+                let order_ids = serde_json::from_str::<Vec<String>>(&payload)
+                    .map_err(|error| rusqlite::Error::ToSqlConversionFailure(error.into()))?;
+                Ok((work_date, order_ids))
+            })
+            .map_err(|_| ProductionMapError::StoreFailed)?;
+        rows.collect::<Result<BTreeMap<_, _>, _>>()
+            .map_err(|_| ProductionMapError::StoreFailed)
+    }
+
+    async fn put_daily_work_sequence(
+        &self,
+        work_date: &str,
+        order_ids: Vec<String>,
+    ) -> Result<(), ProductionMapError> {
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|_| ProductionMapError::StoreFailed)?;
+        let payload =
+            serde_json::to_string(&order_ids).map_err(|_| ProductionMapError::StoreFailed)?;
+        conn.execute(
+            "INSERT INTO daily_work_sequences (work_date, order_ids_json, saved_at)
+             VALUES (?1, ?2, ?3)
+             ON CONFLICT(work_date) DO UPDATE SET
+                order_ids_json = excluded.order_ids_json,
+                saved_at = excluded.saved_at",
+            params![work_date.trim(), payload, unix_micros().to_string()],
+        )
+        .map_err(|_| ProductionMapError::StoreFailed)?;
+        Ok(())
+    }
+
     async fn apparatus_queue_states(
         &self,
     ) -> Result<BTreeMap<String, BTreeMap<String, String>>, ProductionMapError> {
@@ -334,6 +380,11 @@ fn migrate(conn: &Connection) -> rusqlite::Result<()> {
             ON production_maps(product_code);
         CREATE TABLE IF NOT EXISTS apparatus_sequences (
             apparatus TEXT PRIMARY KEY,
+            order_ids_json TEXT NOT NULL,
+            saved_at TEXT NOT NULL
+        );
+        CREATE TABLE IF NOT EXISTS daily_work_sequences (
+            work_date TEXT PRIMARY KEY,
             order_ids_json TEXT NOT NULL,
             saved_at TEXT NOT NULL
         );

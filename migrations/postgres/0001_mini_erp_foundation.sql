@@ -157,6 +157,15 @@ CREATE TABLE IF NOT EXISTS mini_queue_sequences (
     CONSTRAINT mini_queue_sequences_apparatus_not_blank CHECK (btrim(apparatus) <> '')
 );
 
+CREATE TABLE IF NOT EXISTS mini_daily_work_sequences (
+    work_date TEXT PRIMARY KEY,
+    order_ids JSONB NOT NULL,
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    CONSTRAINT mini_daily_work_sequences_date_format CHECK (
+        work_date ~ '^[0-9]{4}-[0-9]{2}-[0-9]{2}$'
+    )
+);
+
 CREATE TABLE IF NOT EXISTS mini_queue_states (
     apparatus TEXT NOT NULL,
     order_id TEXT NOT NULL,

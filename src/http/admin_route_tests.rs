@@ -639,6 +639,41 @@ async fn production_map_sequence_round_trips_on_server() {
 }
 
 #[tokio::test]
+async fn production_map_daily_sequence_round_trips_on_server() {
+    let state = test_state();
+    let token = session(&state, PrincipalRole::Admin).await;
+
+    let put = build_router(state.clone())
+        .oneshot(request_with_body(
+            "PUT",
+            "/v1/mobile/admin/production-maps/daily-sequence",
+            &token,
+            r#"{
+                "work_date":"2026-06-15",
+                "order_ids":["zakaz-1111","zakaz-2222"," "]
+            }"#,
+        ))
+        .await
+        .expect("put daily sequence");
+    assert_eq!(put.status(), StatusCode::OK);
+
+    let get = build_router(state)
+        .oneshot(request(
+            "GET",
+            "/v1/mobile/admin/production-maps/daily-sequence",
+            &token,
+        ))
+        .await
+        .expect("get daily sequence");
+    assert_eq!(get.status(), StatusCode::OK);
+    let body = json_body(get).await;
+    assert_eq!(
+        body["sequences"]["2026-06-15"],
+        serde_json::json!(["zakaz-1111", "zakaz-2222"])
+    );
+}
+
+#[tokio::test]
 async fn production_map_save_with_order_rejects_invalid_template_before_saving_map() {
     let state = test_state();
     let token = session(&state, PrincipalRole::Admin).await;
