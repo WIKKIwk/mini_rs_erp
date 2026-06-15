@@ -27,6 +27,7 @@ use crate::core::session::manager::SessionManager;
 use crate::core::werka::models::{DispatchRecord, SupplierItem};
 use crate::core::werka::ports::{WerkaHomeLookup, WerkaPortError};
 use crate::core::werka::service::WerkaService;
+use crate::core::workers::{MemoryWorkerStore, WorkerService};
 
 #[tokio::test]
 async fn admin_settings_requires_admin_like_go() {
@@ -48,6 +49,7 @@ async fn admin_method_checks_happen_after_auth_like_go() {
     let cases = [
         ("PATCH", "/v1/mobile/admin/settings"),
         ("POST", "/v1/mobile/admin/roles"),
+        ("PATCH", "/v1/mobile/admin/workers"),
         ("POST", "/v1/mobile/admin/production-maps"),
         ("POST", "/v1/mobile/admin/role-assignments"),
         ("PATCH", "/v1/mobile/admin/suppliers"),
@@ -111,6 +113,48 @@ async fn admin_method_checks_happen_after_auth_like_go() {
             "method not allowed"
         );
     }
+}
+
+#[tokio::test]
+async fn admin_workers_are_separate_from_users_and_persist_level() {
+    let state = test_state();
+    let token = session(&state, PrincipalRole::Admin).await;
+
+    let created = build_router(state.clone())
+        .oneshot(request_with_body(
+            "POST",
+            "/v1/mobile/admin/workers",
+            &token,
+            r#"{"name":"Ali ishchi","level":"Brigader"}"#,
+        ))
+        .await
+        .expect("response");
+    assert_eq!(created.status(), StatusCode::OK);
+    let created_json = json_body(created).await;
+    assert_eq!(created_json["name"], "Ali ishchi");
+    assert_eq!(created_json["level"], "Brigader");
+    let worker_id = created_json["id"].as_str().expect("id");
+
+    let updated = build_router(state.clone())
+        .oneshot(request_with_body(
+            "PUT",
+            "/v1/mobile/admin/workers",
+            &token,
+            &format!(r#"{{"id":"{worker_id}","name":"","level":"2 - darajali"}}"#),
+        ))
+        .await
+        .expect("response");
+    assert_eq!(updated.status(), StatusCode::OK);
+    assert_eq!(json_body(updated).await["level"], "2 - darajali");
+
+    let listed = build_router(state)
+        .oneshot(request("GET", "/v1/mobile/admin/workers", &token))
+        .await
+        .expect("response");
+    assert_eq!(listed.status(), StatusCode::OK);
+    let workers = json_body(listed).await;
+    assert_eq!(workers.as_array().expect("workers").len(), 1);
+    assert_eq!(workers[0]["name"], "Ali ishchi");
 }
 
 #[tokio::test]
@@ -2935,6 +2979,7 @@ fn test_state() -> AppState {
         .with_state_port(Arc::new(FakeAdminStatePort::new()));
     state.production_maps = ProductionMapService::new(Arc::new(MemoryProductionMapStore::new()));
     state.apparatus_groups = ApparatusGroupService::new(Arc::new(MemoryApparatusGroupStore::new()));
+    state.workers = WorkerService::new(Arc::new(MemoryWorkerStore::new()));
     state.production_orders = Arc::new(NoopMiniOrderSink);
     state
 }

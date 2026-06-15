@@ -4,6 +4,7 @@ pub mod postgres_calculate_order;
 pub mod postgres_engine;
 pub mod postgres_mini_order;
 pub mod postgres_production_map;
+pub mod postgres_worker;
 
 #[cfg(test)]
 mod postgres_apparatus_group_tests {

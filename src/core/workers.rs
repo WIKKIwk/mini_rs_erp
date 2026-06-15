@@ -1,0 +1,196 @@
+use std::sync::Arc;
+
+use async_trait::async_trait;
+use serde::{Deserialize, Serialize};
+use tokio::sync::RwLock;
+
+pub const WORKER_LEVELS: [&str; 5] = [
+    "Brigader",
+    "Master",
+    "1 - darajali",
+    "2 - darajali",
+    "3 - darajali",
+];
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Worker {
+    pub id: String,
+    pub name: String,
+    pub level: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct WorkerUpsert {
+    #[serde(default)]
+    pub id: String,
+    pub name: String,
+    pub level: String,
+}
+
+#[derive(Debug, thiserror::Error)]
+pub enum WorkerError {
+    #[error("worker name is required")]
+    MissingName,
+    #[error("worker id is required")]
+    MissingId,
+    #[error("worker level is invalid")]
+    InvalidLevel,
+    #[error("worker not found")]
+    NotFound,
+    #[error("worker store failed")]
+    StoreFailed,
+}
+
+#[async_trait]
+pub trait WorkerStorePort: Send + Sync {
+    async fn workers(&self, query: &str, limit: usize) -> Result<Vec<Worker>, WorkerError>;
+    async fn upsert_worker(&self, worker: Worker) -> Result<Worker, WorkerError>;
+    async fn update_worker_level(&self, id: &str, level: &str) -> Result<Worker, WorkerError>;
+}
+
+#[derive(Clone)]
+pub struct WorkerService {
+    store: Arc<dyn WorkerStorePort>,
+}
+
+impl WorkerService {
+    pub fn new(store: Arc<dyn WorkerStorePort>) -> Self {
+        Self { store }
+    }
+
+    pub fn unavailable() -> Self {
+        Self::new(Arc::new(UnavailableWorkerStore))
+    }
+
+    pub async fn workers(&self, query: &str, limit: usize) -> Result<Vec<Worker>, WorkerError> {
+        self.store.workers(query, limit.clamp(1, 500)).await
+    }
+
+    pub async fn upsert_worker(&self, input: WorkerUpsert) -> Result<Worker, WorkerError> {
+        let name = input.name.trim();
+        if name.is_empty() {
+            return Err(WorkerError::MissingName);
+        }
+        let level = normalize_level(&input.level)?;
+        let id = if input.id.trim().is_empty() {
+            new_worker_id()
+        } else {
+            input.id.trim().to_string()
+        };
+        self.store
+            .upsert_worker(Worker {
+                id,
+                name: name.to_string(),
+                level,
+            })
+            .await
+    }
+
+    pub async fn update_worker_level(&self, input: WorkerUpsert) -> Result<Worker, WorkerError> {
+        let id = input.id.trim();
+        if id.is_empty() {
+            return Err(WorkerError::MissingId);
+        }
+        let level = normalize_level(&input.level)?;
+        self.store.update_worker_level(id, &level).await
+    }
+}
+
+pub fn normalize_level(value: &str) -> Result<String, WorkerError> {
+    let trimmed = value.trim();
+    WORKER_LEVELS
+        .iter()
+        .find(|level| level.eq_ignore_ascii_case(trimmed))
+        .map(|level| (*level).to_string())
+        .ok_or(WorkerError::InvalidLevel)
+}
+
+fn new_worker_id() -> String {
+    let bytes: [u8; 12] = rand::random();
+    format!("worker_{}", data_encoding::HEXLOWER.encode(&bytes))
+}
+
+struct UnavailableWorkerStore;
+
+#[async_trait]
+impl WorkerStorePort for UnavailableWorkerStore {
+    async fn workers(&self, _query: &str, _limit: usize) -> Result<Vec<Worker>, WorkerError> {
+        Err(WorkerError::StoreFailed)
+    }
+
+    async fn upsert_worker(&self, _worker: Worker) -> Result<Worker, WorkerError> {
+        Err(WorkerError::StoreFailed)
+    }
+
+    async fn update_worker_level(&self, _id: &str, _level: &str) -> Result<Worker, WorkerError> {
+        Err(WorkerError::StoreFailed)
+    }
+}
+
+#[derive(Default)]
+pub struct MemoryWorkerStore {
+    workers: RwLock<Vec<Worker>>,
+}
+
+impl MemoryWorkerStore {
+    pub fn new() -> Self {
+        Self::default()
+    }
+}
+
+#[async_trait]
+impl WorkerStorePort for MemoryWorkerStore {
+    async fn workers(&self, query: &str, limit: usize) -> Result<Vec<Worker>, WorkerError> {
+        let needle = query.trim().to_lowercase();
+        let mut workers = self.workers.read().await.clone();
+        workers.sort_by_key(|worker| worker.name.to_lowercase());
+        Ok(workers
+            .into_iter()
+            .filter(|worker| {
+                needle.is_empty()
+                    || worker.name.to_lowercase().contains(&needle)
+                    || worker.level.to_lowercase().contains(&needle)
+            })
+            .take(limit)
+            .collect())
+    }
+
+    async fn upsert_worker(&self, worker: Worker) -> Result<Worker, WorkerError> {
+        let mut workers = self.workers.write().await;
+        let key = worker.name.to_lowercase();
+        if let Some(existing) = workers
+            .iter_mut()
+            .find(|item| item.id == worker.id || item.name.to_lowercase() == key)
+        {
+            existing.name = worker.name;
+            existing.level = worker.level;
+            return Ok(existing.clone());
+        }
+        workers.push(worker.clone());
+        Ok(worker)
+    }
+
+    async fn update_worker_level(&self, id: &str, level: &str) -> Result<Worker, WorkerError> {
+        let mut workers = self.workers.write().await;
+        let Some(worker) = workers.iter_mut().find(|item| item.id == id.trim()) else {
+            return Err(WorkerError::NotFound);
+        };
+        worker.level = level.to_string();
+        Ok(worker.clone())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn worker_level_allows_only_configured_levels() {
+        assert_eq!(normalize_level("brigader").unwrap(), "Brigader");
+        assert_eq!(normalize_level("Master").unwrap(), "Master");
+        assert!(matches!(
+            normalize_level("operator"),
+            Err(WorkerError::InvalidLevel)
+        ));
+    }
+}

@@ -139,6 +139,7 @@ pub fn build_router(state: AppState) -> Router {
         )
         .route("/v1/mobile/admin/capabilities", any(admin::capabilities))
         .route("/v1/mobile/admin/roles", any(admin::roles))
+        .route("/v1/mobile/admin/workers", any(admin::workers))
         .route(
             "/v1/mobile/admin/production-maps",
             any(admin::production_maps),

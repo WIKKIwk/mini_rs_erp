@@ -3,6 +3,7 @@ mod production_maps;
 mod supplier_mutations;
 mod suppliers;
 mod system;
+mod workers;
 
 pub use customers::{
     activity, customer_code_regenerate, customer_detail, customer_item_add, customer_item_remove,
@@ -26,6 +27,7 @@ pub use system::{
     roles, warehouses, werka_code_regenerate,
 };
 use system::{authorize_any_capability, authorize_capability, require_capability};
+pub use workers::workers;
 
 use axum::Json;
 use axum::body::Bytes;

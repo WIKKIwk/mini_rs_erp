@@ -136,6 +136,20 @@ CREATE TABLE IF NOT EXISTS mini_apparatus (
     CONSTRAINT mini_apparatus_name_unique UNIQUE (name)
 );
 
+CREATE TABLE IF NOT EXISTS mini_workers (
+    id TEXT PRIMARY KEY,
+    name TEXT NOT NULL,
+    level TEXT NOT NULL,
+    payload_json JSONB NOT NULL DEFAULT '{}'::jsonb,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    CONSTRAINT mini_workers_name_not_blank CHECK (btrim(name) <> ''),
+    CONSTRAINT mini_workers_level_allowed CHECK (
+        level IN ('Brigader', 'Master', '1 - darajali', '2 - darajali', '3 - darajali')
+    ),
+    CONSTRAINT mini_workers_name_unique UNIQUE (name)
+);
+
 CREATE TABLE IF NOT EXISTS mini_queue_sequences (
     apparatus TEXT PRIMARY KEY,
     order_ids JSONB NOT NULL,
@@ -196,6 +210,8 @@ CREATE INDEX IF NOT EXISTS idx_mini_production_map_edges_from ON mini_production
 CREATE INDEX IF NOT EXISTS idx_mini_production_map_edges_to ON mini_production_map_edges(to_node_id);
 CREATE UNIQUE INDEX IF NOT EXISTS idx_mini_apparatus_groups_lower_name ON mini_apparatus_groups (lower(name));
 CREATE UNIQUE INDEX IF NOT EXISTS idx_mini_apparatus_lower_name ON mini_apparatus (lower(name));
+CREATE UNIQUE INDEX IF NOT EXISTS idx_mini_workers_lower_name ON mini_workers (lower(name));
+CREATE INDEX IF NOT EXISTS idx_mini_workers_level ON mini_workers(level);
 CREATE INDEX IF NOT EXISTS idx_mini_queue_states_order_id ON mini_queue_states(order_id);
 CREATE INDEX IF NOT EXISTS idx_mini_engine_events_entity ON mini_engine_events(domain, entity_id, created_at DESC);
 
