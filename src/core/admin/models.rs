@@ -116,6 +116,8 @@ pub struct AdminCreateItemRequest {
     pub name: String,
     pub uom: String,
     pub item_group: String,
+    #[serde(default)]
+    pub customer_ref: String,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]

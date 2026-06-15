@@ -2794,6 +2794,21 @@ async fn admin_item_create_and_werka_regenerate_like_go() {
     let state = test_state();
     let token = session(&state, PrincipalRole::Admin).await;
 
+    let missing_customer = build_router(state.clone())
+        .oneshot(request_with_body(
+            "POST",
+            "/v1/mobile/admin/items",
+            &token,
+            r#"{"code":"ITEM-FINISHED","name":"Finished Item","uom":"Kg","item_group":"tayyor mahsulot"}"#,
+        ))
+        .await
+        .expect("response");
+    assert_eq!(missing_customer.status(), StatusCode::BAD_REQUEST);
+    assert_eq!(
+        json_body(missing_customer).await["error"],
+        "customer_ref is required for tayyor mahsulot"
+    );
+
     let item = build_router(state.clone())
         .oneshot(request_with_body(
             "POST",
@@ -2807,6 +2822,20 @@ async fn admin_item_create_and_werka_regenerate_like_go() {
     let value = json_body(item).await;
     assert_eq!(value["code"], "ITEM-NEW");
     assert_eq!(value["item_group"], "Products");
+
+    let finished_item = build_router(state.clone())
+        .oneshot(request_with_body(
+            "POST",
+            "/v1/mobile/admin/items",
+            &token,
+            r#"{"code":"ITEM-FINISHED","name":"Finished Item","uom":"Kg","item_group":"tayyor mahsulot","customer_ref":"CUST-001"}"#,
+        ))
+        .await
+        .expect("response");
+    assert_eq!(finished_item.status(), StatusCode::OK);
+    let value = json_body(finished_item).await;
+    assert_eq!(value["code"], "ITEM-FINISHED");
+    assert_eq!(value["item_group"], "tayyor mahsulot");
 
     let settings = build_router(state)
         .oneshot(request(

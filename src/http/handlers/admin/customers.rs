@@ -120,12 +120,22 @@ pub async fn items(
         Method::POST => {
             require_capability(&state, &principal, Capability::CatalogItemCreate).await?;
             let input: AdminCreateItemRequest = parse_json(&body)?;
-            state
+            match state
                 .admin
-                .create_item(&input.code, &input.name, &input.uom, &input.item_group)
+                .create_item(
+                    &input.code,
+                    &input.name,
+                    &input.uom,
+                    &input.item_group,
+                    &input.customer_ref,
+                )
                 .await
-                .map(json_response)
-                .map_err(|_| server_error("admin item create failed"))
+            {
+                Ok(item) => Ok(json_response(item)),
+                Err(AdminPortError::InvalidInput(error)) => Err(bad_request(error)),
+                Err(AdminPortError::NotFound) => Err(not_found("customer not found")),
+                Err(_) => Err(server_error("admin item create failed")),
+            }
         }
         _ => Err(method_not_allowed()),
     }
