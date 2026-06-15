@@ -2,7 +2,7 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
 use async_trait::async_trait;
-use rusqlite::{Connection, params};
+use rusqlite::{Connection, OptionalExtension, params};
 
 use crate::core::apparatus_groups::{ApparatusGroup, ApparatusGroupError, ApparatusGroupStorePort};
 
@@ -80,6 +80,64 @@ impl ApparatusGroupStorePort for ApparatusGroupStore {
         .map_err(|_| ApparatusGroupError::StoreFailed)?;
         Ok(())
     }
+
+    async fn apparatus(
+        &self,
+        query: &str,
+        limit: usize,
+    ) -> Result<Vec<String>, ApparatusGroupError> {
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|_| ApparatusGroupError::StoreFailed)?;
+        let needle = query.trim().to_lowercase();
+        let pattern = format!("%{needle}%");
+        let mut stmt = conn
+            .prepare(
+                "SELECT name
+                 FROM apparatus
+                 WHERE (?1 = '' OR lower_name LIKE ?2)
+                 ORDER BY lower_name ASC
+                 LIMIT ?3",
+            )
+            .map_err(|_| ApparatusGroupError::StoreFailed)?;
+        let rows = stmt
+            .query_map(params![needle, pattern, limit.max(1) as i64], |row| {
+                row.get::<_, String>(0)
+            })
+            .map_err(|_| ApparatusGroupError::StoreFailed)?;
+        rows.collect::<Result<Vec<_>, _>>()
+            .map_err(|_| ApparatusGroupError::StoreFailed)
+    }
+
+    async fn put_apparatus(&self, name: &str) -> Result<String, ApparatusGroupError> {
+        let name = name.trim();
+        if name.is_empty() {
+            return Err(ApparatusGroupError::MissingApparatus);
+        }
+        let lower_name = name.to_lowercase();
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|_| ApparatusGroupError::StoreFailed)?;
+        conn.execute(
+            "INSERT INTO apparatus (lower_name, name, saved_at)
+             VALUES (?1, ?2, strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+             ON CONFLICT(lower_name) DO UPDATE SET
+               name = excluded.name,
+               saved_at = excluded.saved_at",
+            params![lower_name, name],
+        )
+        .map_err(|_| ApparatusGroupError::StoreFailed)?;
+        conn.query_row(
+            "SELECT name FROM apparatus WHERE lower_name = ?1",
+            params![name.to_lowercase()],
+            |row| row.get(0),
+        )
+        .optional()
+        .map_err(|_| ApparatusGroupError::StoreFailed)?
+        .ok_or(ApparatusGroupError::StoreFailed)
+    }
 }
 
 fn configure_connection(conn: &Connection) -> rusqlite::Result<()> {
@@ -97,7 +155,14 @@ fn migrate(conn: &Connection) -> rusqlite::Result<()> {
             saved_at TEXT NOT NULL
         );
         CREATE INDEX IF NOT EXISTS idx_apparatus_groups_name
-            ON apparatus_groups(lower_name);",
+            ON apparatus_groups(lower_name);
+        CREATE TABLE IF NOT EXISTS apparatus (
+            lower_name TEXT PRIMARY KEY,
+            name TEXT NOT NULL,
+            saved_at TEXT NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_apparatus_name
+            ON apparatus(lower_name);",
     )
 }
 
@@ -138,5 +203,15 @@ mod tests {
         let groups = reloaded.groups().await.expect("load apparatus groups");
 
         assert_eq!(groups, vec![saved]);
+
+        let created = reloaded
+            .put_apparatus(" Bobst 1 ")
+            .await
+            .expect("save apparatus");
+        assert_eq!(created, "Bobst 1");
+        assert_eq!(
+            reloaded.apparatus("bob", 20).await.expect("list apparatus"),
+            vec!["Bobst 1".to_string()]
+        );
     }
 }

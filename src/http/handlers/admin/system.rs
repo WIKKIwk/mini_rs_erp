@@ -39,6 +39,31 @@ pub async fn apparatus_groups(
     }
 }
 
+pub async fn apparatus_create(
+    State(state): State<AppState>,
+    method: Method,
+    headers: HeaderMap,
+    body: Bytes,
+) -> Result<Response, AdminError> {
+    let principal = authorize_any_capability(
+        &state,
+        &headers,
+        &[Capability::AdminAccess, Capability::ProductionMapManage],
+    )
+    .await?;
+    if method != Method::POST {
+        return Err(method_not_allowed());
+    }
+    require_capability(&state, &principal, Capability::ProductionMapManage).await?;
+    let input: ApparatusUpsert = parse_json(&body)?;
+    let name = state
+        .apparatus_groups
+        .upsert_apparatus(input)
+        .await
+        .map_err(apparatus_group_error)?;
+    Ok(json_response(apparatus_warehouse(name)))
+}
+
 fn apparatus_group_error(error: ApparatusGroupError) -> AdminError {
     match error {
         ApparatusGroupError::MissingName => bad_request("group name is required"),
@@ -90,7 +115,7 @@ pub async fn warehouses(
         return Err(method_not_allowed());
     }
     let limit = optional_search_limit(query.limit.as_deref(), 30, 500);
-    state
+    let mut warehouses = state
         .admin
         .warehouses(
             query.q.as_deref().unwrap_or(""),
@@ -98,8 +123,49 @@ pub async fn warehouses(
             limit,
         )
         .await
-        .map(json_response)
-        .map_err(|_| server_error("admin warehouses fetch failed"))
+        .map_err(|_| server_error("admin warehouses fetch failed"))?;
+    if is_apparat_parent(query.parent.as_deref().unwrap_or("")) {
+        let remaining = limit.saturating_sub(warehouses.len()).max(1);
+        let mut seen = warehouses
+            .iter()
+            .map(|item| item.warehouse.to_lowercase())
+            .collect::<std::collections::BTreeSet<_>>();
+        for name in state
+            .apparatus_groups
+            .apparatus(query.q.as_deref().unwrap_or(""), remaining)
+            .await
+            .map_err(apparatus_group_error)?
+        {
+            if seen.insert(name.to_lowercase()) {
+                warehouses.push(apparatus_warehouse(name));
+            }
+            if warehouses.len() >= limit {
+                break;
+            }
+        }
+        warehouses.sort_by(|left, right| {
+            left.warehouse
+                .to_lowercase()
+                .cmp(&right.warehouse.to_lowercase())
+        });
+    }
+    Ok(json_response(warehouses))
+}
+
+fn is_apparat_parent(parent: &str) -> bool {
+    matches!(
+        parent.trim().to_lowercase().as_str(),
+        "aparat" | "aparat - a" | "apparat" | "apparat - a"
+    )
+}
+
+fn apparatus_warehouse(name: String) -> crate::core::admin::models::AdminWarehouse {
+    crate::core::admin::models::AdminWarehouse {
+        warehouse: name,
+        company: String::new(),
+        is_group: false,
+        parent_warehouse: "aparat - A".to_string(),
+    }
 }
 
 pub async fn werka_code_regenerate(

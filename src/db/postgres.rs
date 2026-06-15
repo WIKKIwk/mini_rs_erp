@@ -173,13 +173,14 @@ mod tests {
     }
 
     #[test]
-    fn postgres_foundation_migration_indexes_apparatus_groups_case_insensitively() {
+    fn postgres_foundation_migration_indexes_apparatus_case_insensitively() {
         let migration = foundation_migration_sql().to_lowercase();
 
         assert!(
             migration.contains("idx_mini_apparatus_groups_lower_name")
                 && migration.contains("lower(name)")
         );
+        assert!(migration.contains("idx_mini_apparatus_lower_name"));
     }
 
     #[test]

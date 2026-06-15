@@ -22,8 +22,8 @@ pub use suppliers::{
     supplier_summary, suppliers,
 };
 pub use system::{
-    apparatus_groups, capabilities, items_bulk_move_group, role_assignments, roles, warehouses,
-    werka_code_regenerate,
+    apparatus_create, apparatus_groups, capabilities, items_bulk_move_group, role_assignments,
+    roles, warehouses, werka_code_regenerate,
 };
 use system::{authorize_any_capability, authorize_capability, require_capability};
 
@@ -45,7 +45,7 @@ use crate::core::admin::models::{
     AdminSuppliersPage,
 };
 use crate::core::admin::ports::AdminPortError;
-use crate::core::apparatus_groups::{ApparatusGroupError, ApparatusGroupUpsert};
+use crate::core::apparatus_groups::{ApparatusGroupError, ApparatusGroupUpsert, ApparatusUpsert};
 use crate::core::auth::models::Principal;
 use crate::core::authz::{
     Capability, RoleAssignmentUpsert, RoleDefinitionUpsert, capability_catalog_entries,

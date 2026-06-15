@@ -191,5 +191,6 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_mini_quick_order_templates_owner_lower_cod
 CREATE INDEX IF NOT EXISTS idx_mini_production_maps_order_id ON mini_production_maps(order_id);
 CREATE INDEX IF NOT EXISTS idx_mini_production_maps_order_number ON mini_production_maps(order_number) WHERE btrim(order_number) <> '';
 CREATE UNIQUE INDEX IF NOT EXISTS idx_mini_apparatus_groups_lower_name ON mini_apparatus_groups (lower(name));
+CREATE UNIQUE INDEX IF NOT EXISTS idx_mini_apparatus_lower_name ON mini_apparatus (lower(name));
 CREATE INDEX IF NOT EXISTS idx_mini_queue_states_order_id ON mini_queue_states(order_id);
 CREATE INDEX IF NOT EXISTS idx_mini_engine_events_entity ON mini_engine_events(domain, entity_id, created_at DESC);

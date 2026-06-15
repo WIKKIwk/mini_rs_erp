@@ -63,6 +63,18 @@ mod postgres_apparatus_group_tests {
         let reloaded = service.groups().await.expect("load groups");
         assert_eq!(reloaded, vec![saved]);
 
+        let created = service
+            .upsert_apparatus(crate::core::apparatus_groups::ApparatusUpsert {
+                warehouse: " Bobst 1 ".to_string(),
+            })
+            .await
+            .expect("save apparatus");
+        assert_eq!(created, "Bobst 1");
+        assert_eq!(
+            service.apparatus("bob", 20).await.expect("list apparatus"),
+            vec!["Bobst 1".to_string()]
+        );
+
         pool.close().await;
         let admin_pool = sqlx::PgPool::connect(&admin_url)
             .await

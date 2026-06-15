@@ -2349,6 +2349,44 @@ async fn admin_apparatus_groups_round_trip_on_server() {
 }
 
 #[tokio::test]
+async fn admin_can_create_apparatus_and_list_it_as_apparat_warehouse() {
+    let state = test_state();
+    let token = session(&state, PrincipalRole::Admin).await;
+
+    let created = build_router(state.clone())
+        .oneshot(request_with_body(
+            "POST",
+            "/v1/mobile/admin/apparatus",
+            &token,
+            r#"{"warehouse":" Bobst 1 "}"#,
+        ))
+        .await
+        .expect("create apparatus");
+    assert_eq!(created.status(), StatusCode::OK);
+    let created_body = json_body(created).await;
+    assert_eq!(created_body["warehouse"], "Bobst 1");
+    assert_eq!(created_body["parent_warehouse"], "aparat - A");
+
+    let listed = build_router(state)
+        .oneshot(request(
+            "GET",
+            "/v1/mobile/admin/warehouses?parent=aparat%20-%20A&limit=50",
+            &token,
+        ))
+        .await
+        .expect("list apparatus");
+    assert_eq!(listed.status(), StatusCode::OK);
+    let listed_body = json_body(listed).await;
+    assert!(
+        listed_body
+            .as_array()
+            .expect("array")
+            .iter()
+            .any(|item| item["warehouse"] == "Bobst 1")
+    );
+}
+
+#[tokio::test]
 async fn admin_item_group_tree_returns_parent_shape() {
     let state = test_state();
     let token = session(&state, PrincipalRole::Admin).await;

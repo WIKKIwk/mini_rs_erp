@@ -21,6 +21,12 @@ pub struct ApparatusGroupUpsert {
     pub apparatus: Vec<String>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ApparatusUpsert {
+    #[serde(default, alias = "name")]
+    pub warehouse: String,
+}
+
 #[derive(Debug, Error, Clone, PartialEq, Eq)]
 pub enum ApparatusGroupError {
     #[error("group name is required")]
@@ -35,6 +41,12 @@ pub enum ApparatusGroupError {
 pub trait ApparatusGroupStorePort: Send + Sync {
     async fn groups(&self) -> Result<Vec<ApparatusGroup>, ApparatusGroupError>;
     async fn put_group(&self, group: ApparatusGroup) -> Result<(), ApparatusGroupError>;
+    async fn apparatus(
+        &self,
+        query: &str,
+        limit: usize,
+    ) -> Result<Vec<String>, ApparatusGroupError>;
+    async fn put_apparatus(&self, name: &str) -> Result<String, ApparatusGroupError>;
 }
 
 #[derive(Clone)]
@@ -58,6 +70,25 @@ impl ApparatusGroupService {
         let group = normalize_group(input)?;
         self.store.put_group(group.clone()).await?;
         Ok(group)
+    }
+
+    pub async fn apparatus(
+        &self,
+        query: &str,
+        limit: usize,
+    ) -> Result<Vec<String>, ApparatusGroupError> {
+        self.store.apparatus(query, limit).await
+    }
+
+    pub async fn upsert_apparatus(
+        &self,
+        input: ApparatusUpsert,
+    ) -> Result<String, ApparatusGroupError> {
+        let name = input.warehouse.trim().to_string();
+        if name.is_empty() {
+            return Err(ApparatusGroupError::MissingApparatus);
+        }
+        self.store.put_apparatus(&name).await
     }
 }
 
@@ -84,6 +115,7 @@ fn normalize_group(input: ApparatusGroupUpsert) -> Result<ApparatusGroup, Appara
 #[cfg(test)]
 pub struct MemoryApparatusGroupStore {
     groups: RwLock<Vec<ApparatusGroup>>,
+    apparatus: RwLock<Vec<String>>,
 }
 
 #[cfg(test)]
@@ -113,5 +145,45 @@ impl ApparatusGroupStorePort for MemoryApparatusGroupStore {
         }
         groups.sort_by(|left, right| left.name.to_lowercase().cmp(&right.name.to_lowercase()));
         Ok(())
+    }
+
+    async fn apparatus(
+        &self,
+        query: &str,
+        limit: usize,
+    ) -> Result<Vec<String>, ApparatusGroupError> {
+        let needle = query.trim().to_lowercase();
+        let result = self
+            .apparatus
+            .read()
+            .await
+            .iter()
+            .filter_map(|item| {
+                let name = item.trim();
+                if name.is_empty() || (!needle.is_empty() && !name.to_lowercase().contains(&needle))
+                {
+                    return None;
+                }
+                Some(name.to_string())
+            })
+            .take(limit)
+            .collect();
+        Ok(result)
+    }
+
+    async fn put_apparatus(&self, name: &str) -> Result<String, ApparatusGroupError> {
+        let name = name.trim().to_string();
+        if name.is_empty() {
+            return Err(ApparatusGroupError::MissingApparatus);
+        }
+        let mut apparatus = self.apparatus.write().await;
+        if !apparatus
+            .iter()
+            .any(|item| item.to_lowercase() == name.to_lowercase())
+        {
+            apparatus.push(name.clone());
+            apparatus.sort_by_key(|item| item.to_lowercase());
+        }
+        Ok(name)
     }
 }
