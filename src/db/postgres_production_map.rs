@@ -146,11 +146,20 @@ impl ProductionMapStorePort for PostgresProductionMapStore {
         work_date: &str,
         order_ids: Vec<String>,
     ) -> Result<(), ProductionMapError> {
+        let work_date = work_date.trim();
         let order_ids = order_ids
             .into_iter()
             .map(|id| id.trim().to_string())
             .filter(|id| !id.is_empty())
             .collect::<Vec<_>>();
+        if order_ids.is_empty() {
+            sqlx::query("DELETE FROM mini_daily_work_sequences WHERE work_date = $1")
+                .bind(work_date)
+                .execute(&self.pool)
+                .await
+                .map_err(|_| ProductionMapError::StoreFailed)?;
+            return Ok(());
+        }
         let payload =
             serde_json::to_value(order_ids).map_err(|_| ProductionMapError::StoreFailed)?;
         sqlx::query(
@@ -160,7 +169,7 @@ impl ProductionMapStorePort for PostgresProductionMapStore {
                order_ids = excluded.order_ids,
                updated_at = excluded.updated_at",
         )
-        .bind(work_date.trim())
+        .bind(work_date)
         .bind(payload)
         .execute(&self.pool)
         .await

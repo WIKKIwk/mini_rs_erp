@@ -380,10 +380,12 @@ impl ProductionMapStorePort for MemoryProductionMapStore {
         work_date: &str,
         order_ids: Vec<String>,
     ) -> Result<(), ProductionMapError> {
-        self.daily_sequences
-            .write()
-            .await
-            .insert(work_date.trim().to_string(), order_ids);
+        let mut sequences = self.daily_sequences.write().await;
+        if order_ids.is_empty() {
+            sequences.remove(work_date.trim());
+        } else {
+            sequences.insert(work_date.trim().to_string(), order_ids);
+        }
         Ok(())
     }
 

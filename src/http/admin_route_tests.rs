@@ -657,7 +657,7 @@ async fn production_map_daily_sequence_round_trips_on_server() {
         .expect("put daily sequence");
     assert_eq!(put.status(), StatusCode::OK);
 
-    let get = build_router(state)
+    let get = build_router(state.clone())
         .oneshot(request(
             "GET",
             "/v1/mobile/admin/production-maps/daily-sequence",
@@ -671,6 +671,29 @@ async fn production_map_daily_sequence_round_trips_on_server() {
         body["sequences"]["2026-06-15"],
         serde_json::json!(["zakaz-1111", "zakaz-2222"])
     );
+
+    let clear = build_router(state.clone())
+        .oneshot(request_with_body(
+            "PUT",
+            "/v1/mobile/admin/production-maps/daily-sequence",
+            &token,
+            r#"{"work_date":"2026-06-15","order_ids":[]}"#,
+        ))
+        .await
+        .expect("clear daily sequence");
+    assert_eq!(clear.status(), StatusCode::OK);
+
+    let cleared = build_router(state)
+        .oneshot(request(
+            "GET",
+            "/v1/mobile/admin/production-maps/daily-sequence",
+            &token,
+        ))
+        .await
+        .expect("get cleared daily sequence");
+    assert_eq!(cleared.status(), StatusCode::OK);
+    let cleared_body = json_body(cleared).await;
+    assert!(cleared_body["sequences"]["2026-06-15"].is_null());
 }
 
 #[tokio::test]

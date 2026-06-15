@@ -193,6 +193,19 @@ impl ProductionMapStorePort for ProductionMapStore {
             .conn
             .lock()
             .map_err(|_| ProductionMapError::StoreFailed)?;
+        let order_ids = order_ids
+            .into_iter()
+            .map(|id| id.trim().to_string())
+            .filter(|id| !id.is_empty())
+            .collect::<Vec<_>>();
+        if order_ids.is_empty() {
+            conn.execute(
+                "DELETE FROM daily_work_sequences WHERE work_date = ?1",
+                params![work_date.trim()],
+            )
+            .map_err(|_| ProductionMapError::StoreFailed)?;
+            return Ok(());
+        }
         let payload =
             serde_json::to_string(&order_ids).map_err(|_| ProductionMapError::StoreFailed)?;
         conn.execute(
