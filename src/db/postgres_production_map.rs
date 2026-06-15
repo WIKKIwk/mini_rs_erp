@@ -220,7 +220,77 @@ async fn put_map_inner_tx(
     .execute(&mut **tx)
     .await
     .map_err(|_| ProductionMapError::StoreFailed)?;
+    mirror_map_graph_tx(tx, map).await?;
     Ok(())
+}
+
+async fn mirror_map_graph_tx(
+    tx: &mut Transaction<'_, Postgres>,
+    map: &ProductionMapDefinition,
+) -> Result<(), ProductionMapError> {
+    let map_id = map.id.trim();
+    sqlx::query("DELETE FROM mini_production_map_edges WHERE map_id = $1")
+        .bind(map_id)
+        .execute(&mut **tx)
+        .await
+        .map_err(|_| ProductionMapError::StoreFailed)?;
+    sqlx::query("DELETE FROM mini_production_map_nodes WHERE map_id = $1")
+        .bind(map_id)
+        .execute(&mut **tx)
+        .await
+        .map_err(|_| ProductionMapError::StoreFailed)?;
+
+    for node in &map.nodes {
+        let payload = serde_json::to_value(node).map_err(|_| ProductionMapError::StoreFailed)?;
+        sqlx::query(
+            "INSERT INTO mini_production_map_nodes
+                (map_id, node_id, kind, title, payload_json)
+             VALUES ($1, $2, $3, $4, $5)",
+        )
+        .bind(map_id)
+        .bind(node.id.trim())
+        .bind(node_kind(&node.kind))
+        .bind(node.title.trim())
+        .bind(payload)
+        .execute(&mut **tx)
+        .await
+        .map_err(|_| ProductionMapError::StoreFailed)?;
+    }
+
+    for (index, edge) in map.edges.iter().enumerate() {
+        let payload = serde_json::to_value(edge).map_err(|_| ProductionMapError::StoreFailed)?;
+        sqlx::query(
+            "INSERT INTO mini_production_map_edges
+                (map_id, edge_index, from_node_id, to_node_id, branch, payload_json)
+             VALUES ($1, $2, $3, $4, $5, $6)",
+        )
+        .bind(map_id)
+        .bind(index as i32)
+        .bind(edge.from.trim())
+        .bind(edge.to.trim())
+        .bind(edge.branch.trim())
+        .bind(payload)
+        .execute(&mut **tx)
+        .await
+        .map_err(|_| ProductionMapError::StoreFailed)?;
+    }
+    Ok(())
+}
+
+fn node_kind(kind: &crate::core::production_map::ProductionMapNodeKind) -> &'static str {
+    match kind {
+        crate::core::production_map::ProductionMapNodeKind::Start => "start",
+        crate::core::production_map::ProductionMapNodeKind::Location => "location",
+        crate::core::production_map::ProductionMapNodeKind::Material => "material",
+        crate::core::production_map::ProductionMapNodeKind::Apparatus => "apparatus",
+        crate::core::production_map::ProductionMapNodeKind::KkProduct => "kk_product",
+        crate::core::production_map::ProductionMapNodeKind::Formula => "formula",
+        crate::core::production_map::ProductionMapNodeKind::Condition => "condition",
+        crate::core::production_map::ProductionMapNodeKind::Task => "task",
+        crate::core::production_map::ProductionMapNodeKind::Wait => "wait",
+        crate::core::production_map::ProductionMapNodeKind::Output => "output",
+        crate::core::production_map::ProductionMapNodeKind::End => "end",
+    }
 }
 
 async fn reject_order_number_immutable(

@@ -281,6 +281,49 @@ mod postgres_production_map_tests {
             .expect("save map");
         assert_eq!(saved.map.id, "zakaz-1001");
         assert_eq!(saved.map.order_number, "1001");
+        let node_rows: Vec<(String, String, String)> = sqlx::query_as(
+            "SELECT node_id, kind, title
+             FROM mini_production_map_nodes
+             WHERE map_id = $1
+             ORDER BY node_id",
+        )
+        .bind("zakaz-1001")
+        .fetch_all(&pool)
+        .await
+        .expect("read mirrored nodes");
+        assert_eq!(
+            node_rows,
+            vec![
+                (
+                    "apparatus".to_string(),
+                    "apparatus".to_string(),
+                    "7 ta rangli pechat".to_string(),
+                ),
+                ("end".to_string(), "end".to_string(), "End".to_string()),
+                (
+                    "start".to_string(),
+                    "start".to_string(),
+                    "Start".to_string()
+                ),
+            ]
+        );
+        let edge_rows: Vec<(i32, String, String)> = sqlx::query_as(
+            "SELECT edge_index, from_node_id, to_node_id
+             FROM mini_production_map_edges
+             WHERE map_id = $1
+             ORDER BY edge_index",
+        )
+        .bind("zakaz-1001")
+        .fetch_all(&pool)
+        .await
+        .expect("read mirrored edges");
+        assert_eq!(
+            edge_rows,
+            vec![
+                (0, "start".to_string(), "apparatus".to_string()),
+                (1, "apparatus".to_string(), "end".to_string()),
+            ]
+        );
 
         let duplicate = service
             .upsert_map(test_map("zakaz-1002", "1001", "OTHER"))

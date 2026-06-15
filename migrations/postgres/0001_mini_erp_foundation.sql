@@ -190,7 +190,46 @@ CREATE INDEX IF NOT EXISTS idx_mini_quick_order_templates_owner_quick_key ON min
 CREATE UNIQUE INDEX IF NOT EXISTS idx_mini_quick_order_templates_owner_lower_code ON mini_quick_order_templates (owner_key, lower(code));
 CREATE INDEX IF NOT EXISTS idx_mini_production_maps_order_id ON mini_production_maps(order_id);
 CREATE INDEX IF NOT EXISTS idx_mini_production_maps_order_number ON mini_production_maps(order_number) WHERE btrim(order_number) <> '';
+CREATE INDEX IF NOT EXISTS idx_mini_production_map_nodes_kind_title ON mini_production_map_nodes(kind, lower(title));
+CREATE INDEX IF NOT EXISTS idx_mini_production_map_nodes_title ON mini_production_map_nodes(lower(title));
+CREATE INDEX IF NOT EXISTS idx_mini_production_map_edges_from ON mini_production_map_edges(from_node_id);
+CREATE INDEX IF NOT EXISTS idx_mini_production_map_edges_to ON mini_production_map_edges(to_node_id);
 CREATE UNIQUE INDEX IF NOT EXISTS idx_mini_apparatus_groups_lower_name ON mini_apparatus_groups (lower(name));
 CREATE UNIQUE INDEX IF NOT EXISTS idx_mini_apparatus_lower_name ON mini_apparatus (lower(name));
 CREATE INDEX IF NOT EXISTS idx_mini_queue_states_order_id ON mini_queue_states(order_id);
 CREATE INDEX IF NOT EXISTS idx_mini_engine_events_entity ON mini_engine_events(domain, entity_id, created_at DESC);
+
+INSERT INTO mini_production_map_nodes (map_id, node_id, kind, title, payload_json)
+SELECT
+    maps.id,
+    btrim(node.payload ->> 'id'),
+    btrim(node.payload ->> 'kind'),
+    COALESCE(btrim(node.payload ->> 'title'), ''),
+    node.payload
+FROM mini_production_maps maps
+CROSS JOIN LATERAL jsonb_array_elements(COALESCE(maps.map_json -> 'nodes', '[]'::jsonb)) AS node(payload)
+WHERE btrim(COALESCE(node.payload ->> 'id', '')) <> ''
+  AND btrim(COALESCE(node.payload ->> 'kind', '')) <> ''
+ON CONFLICT (map_id, node_id) DO UPDATE SET
+    kind = excluded.kind,
+    title = excluded.title,
+    payload_json = excluded.payload_json;
+
+INSERT INTO mini_production_map_edges (map_id, edge_index, from_node_id, to_node_id, branch, payload_json)
+SELECT
+    maps.id,
+    (edge.ordinality - 1)::integer,
+    btrim(edge.payload ->> 'from'),
+    btrim(edge.payload ->> 'to'),
+    COALESCE(btrim(edge.payload ->> 'branch'), ''),
+    edge.payload
+FROM mini_production_maps maps
+CROSS JOIN LATERAL jsonb_array_elements(COALESCE(maps.map_json -> 'edges', '[]'::jsonb))
+    WITH ORDINALITY AS edge(payload, ordinality)
+WHERE btrim(COALESCE(edge.payload ->> 'from', '')) <> ''
+  AND btrim(COALESCE(edge.payload ->> 'to', '')) <> ''
+ON CONFLICT (map_id, edge_index) DO UPDATE SET
+    from_node_id = excluded.from_node_id,
+    to_node_id = excluded.to_node_id,
+    branch = excluded.branch,
+    payload_json = excluded.payload_json;
