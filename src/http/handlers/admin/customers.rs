@@ -228,7 +228,8 @@ pub async fn activity(
             .await
             .map(Json)
             .map_err(|_| server_error("admin activity failed")),
-        Ok(None) | Err(_) => Err(server_error("admin activity failed")),
+        Ok(None) => Ok(Json(Vec::new())),
+        Err(_) => Err(server_error("admin activity failed")),
     }
 }
 

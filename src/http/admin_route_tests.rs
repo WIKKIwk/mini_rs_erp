@@ -2662,7 +2662,7 @@ async fn admin_supplier_items_invalid_item_is_500_like_go() {
 }
 
 #[tokio::test]
-async fn admin_activity_fails_without_history_provider_like_go() {
+async fn admin_activity_returns_empty_without_history_provider() {
     let state = test_state();
     let token = session(&state, PrincipalRole::Admin).await;
 
@@ -2671,8 +2671,15 @@ async fn admin_activity_fails_without_history_provider_like_go() {
         .await
         .expect("response");
 
-    assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
-    assert_eq!(json_body(response).await["error"], "admin activity failed");
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(
+        json_body(response)
+            .await
+            .as_array()
+            .expect("activity")
+            .len(),
+        0
+    );
 }
 
 #[tokio::test]
