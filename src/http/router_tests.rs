@@ -196,6 +196,47 @@ async fn healthz_accepts_any_method_like_go() {
 }
 
 #[tokio::test]
+async fn browser_preview_cors_headers_are_registered() {
+    let app = build_router(test_state());
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/healthz")
+                .header(header::ORIGIN, "http://127.0.0.1:61896")
+                .body(Body::empty())
+                .expect("request"),
+        )
+        .await
+        .expect("response");
+
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(
+        response.headers().get(header::ACCESS_CONTROL_ALLOW_ORIGIN),
+        Some(&"*".parse().expect("header value"))
+    );
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("OPTIONS")
+                .uri("/healthz")
+                .header(header::ORIGIN, "http://127.0.0.1:61896")
+                .header(header::ACCESS_CONTROL_REQUEST_METHOD, "GET")
+                .body(Body::empty())
+                .expect("request"),
+        )
+        .await
+        .expect("response");
+
+    assert_eq!(response.status(), StatusCode::NO_CONTENT);
+    assert_eq!(
+        response.headers().get(header::ACCESS_CONTROL_ALLOW_ORIGIN),
+        Some(&"*".parse().expect("header value"))
+    );
+}
+
+#[tokio::test]
 async fn auth_login_rejects_non_post_with_json_like_go() {
     let app = build_router(test_state());
     let response = app

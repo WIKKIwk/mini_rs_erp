@@ -1,6 +1,7 @@
 use axum::Router;
 use axum::body::Body;
-use axum::http::{Response, StatusCode, header};
+use axum::http::{HeaderMap, HeaderValue, Method, Request, Response, StatusCode, header};
+use axum::middleware::{self, Next};
 use axum::routing::any;
 use tower_http::trace::TraceLayer;
 
@@ -269,7 +270,9 @@ pub fn build_router(state: AppState) -> Router {
         .layer(TraceLayer::new_for_http())
         .with_state(state);
 
-    health_routes.merge(api_routes)
+    health_routes
+        .merge(api_routes)
+        .layer(middleware::from_fn(cors_headers))
 }
 
 const HEALTHZ_BODY: &str = r#"{"ok":true}"#;
@@ -280,4 +283,36 @@ async fn healthz() -> Response<Body> {
         .header(header::CONTENT_TYPE, "application/json")
         .body(Body::from(HEALTHZ_BODY))
         .expect("static health response is valid")
+}
+
+async fn cors_headers(req: Request<Body>, next: Next) -> Response<Body> {
+    if req.method() == Method::OPTIONS {
+        let mut response = Response::new(Body::empty());
+        *response.status_mut() = StatusCode::NO_CONTENT;
+        insert_cors_headers(response.headers_mut());
+        return response;
+    }
+
+    let mut response = next.run(req).await;
+    insert_cors_headers(response.headers_mut());
+    response
+}
+
+fn insert_cors_headers(headers: &mut HeaderMap) {
+    headers.insert(
+        header::ACCESS_CONTROL_ALLOW_ORIGIN,
+        HeaderValue::from_static("*"),
+    );
+    headers.insert(
+        header::ACCESS_CONTROL_ALLOW_METHODS,
+        HeaderValue::from_static("GET,POST,PUT,PATCH,DELETE,OPTIONS"),
+    );
+    headers.insert(
+        header::ACCESS_CONTROL_ALLOW_HEADERS,
+        HeaderValue::from_static("authorization,content-type"),
+    );
+    headers.insert(
+        header::ACCESS_CONTROL_MAX_AGE,
+        HeaderValue::from_static("86400"),
+    );
 }
