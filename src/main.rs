@@ -15,6 +15,7 @@ mod store;
 
 use crate::app::AppState;
 use crate::config::AppConfig;
+use crate::db::postgres::connect_and_migrate_required;
 use axum::Router;
 use hyper::server::conn::http1;
 use hyper_util::rt::TokioIo;
@@ -39,6 +40,10 @@ async fn main() -> Result<(), error::AppError> {
 
     let config = AppConfig::from_env()?;
     let bind_addr = config.bind_addr;
+    let postgres_pool = connect_and_migrate_required()
+        .await
+        .map_err(|error| error::AppError::Storage(error.to_string()))?;
+    postgres_pool.close().await;
     let state = AppState::new(config);
     let app = http::router::build_router(state);
 

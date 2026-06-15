@@ -67,6 +67,30 @@ pub enum PostgresConfigError {
     MissingDatabaseUrl,
 }
 
+#[derive(Debug, thiserror::Error)]
+pub enum PostgresBootstrapError {
+    #[error("MINI_ERP_DATABASE_URL is required")]
+    MissingDatabaseUrl,
+    #[error("postgres connection failed: {0}")]
+    Connect(#[source] sqlx::Error),
+    #[error("postgres migration failed: {0}")]
+    Migrate(#[source] sqlx::Error),
+}
+
+pub async fn connect_and_migrate_required() -> Result<PgPool, PostgresBootstrapError> {
+    let config =
+        PostgresConfig::from_env().map_err(|_| PostgresBootstrapError::MissingDatabaseUrl)?;
+    let pool = config
+        .pool_options()
+        .connect(&config.database_url)
+        .await
+        .map_err(PostgresBootstrapError::Connect)?;
+    apply_foundation_migration(&pool)
+        .await
+        .map_err(PostgresBootstrapError::Migrate)?;
+    Ok(pool)
+}
+
 #[allow(dead_code)]
 pub fn foundation_migration_sql() -> &'static str {
     include_str!("../../migrations/postgres/0001_mini_erp_foundation.sql")
@@ -124,6 +148,25 @@ mod tests {
             .expect_err("blank url rejected");
 
         assert_eq!(error, PostgresConfigError::MissingDatabaseUrl);
+    }
+
+    #[tokio::test]
+    async fn postgres_bootstrap_requires_database_url() {
+        let previous = std::env::var("MINI_ERP_DATABASE_URL").ok();
+        unsafe {
+            std::env::remove_var("MINI_ERP_DATABASE_URL");
+        }
+
+        let error = connect_and_migrate_required()
+            .await
+            .expect_err("missing database url must fail");
+
+        assert!(matches!(error, PostgresBootstrapError::MissingDatabaseUrl));
+        unsafe {
+            if let Some(value) = previous {
+                std::env::set_var("MINI_ERP_DATABASE_URL", value);
+            }
+        }
     }
 
     #[test]
