@@ -40,5 +40,9 @@ heed = "0.22.1"
 rusqlite = { version = "0.32", features = ["bundled", "collation"] }
 
 [dev-dependencies]
+proptest = "1.11.0"
 tempfile = "3"
 tower = { version = "0.5", features = ["util"] }
+
+[lints.rust]
+unexpected_cfgs = { level = "warn", check-cfg = ['cfg(kani)'] }

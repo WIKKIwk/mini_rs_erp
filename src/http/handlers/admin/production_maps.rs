@@ -71,7 +71,7 @@ pub async fn production_maps(
 }
 
 #[derive(Default, serde::Deserialize)]
-pub(crate) struct ProductionMapsQuery {
+pub struct ProductionMapsQuery {
     #[serde(default)]
     id: String,
 }

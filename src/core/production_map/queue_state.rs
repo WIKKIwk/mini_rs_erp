@@ -39,6 +39,28 @@ pub enum ApparatusQueueAction {
     Complete,
 }
 
+pub fn next_queue_state(
+    current: ApparatusQueueOrderState,
+    action: ApparatusQueueAction,
+) -> Result<ApparatusQueueOrderState, ProductionMapError> {
+    match action {
+        ApparatusQueueAction::Start => {
+            if current == ApparatusQueueOrderState::Pending {
+                Ok(ApparatusQueueOrderState::InProgress)
+            } else {
+                Err(ProductionMapError::QueueActionNotAllowed)
+            }
+        }
+        ApparatusQueueAction::Complete => {
+            if current == ApparatusQueueOrderState::InProgress {
+                Ok(ApparatusQueueOrderState::Completed)
+            } else {
+                Err(ProductionMapError::QueueActionNotAllowed)
+            }
+        }
+    }
+}
+
 pub fn apparatus_matches_assigned(apparatus: &str, assigned: &[String]) -> bool {
     let apparatus = apparatus.trim();
     if apparatus.is_empty() {
@@ -184,20 +206,7 @@ pub fn apply_queue_action(
         .get(order_id)
         .copied()
         .unwrap_or(ApparatusQueueOrderState::Pending);
-    match action {
-        ApparatusQueueAction::Start => {
-            if current != ApparatusQueueOrderState::Pending {
-                return Err(ProductionMapError::QueueActionNotAllowed);
-            }
-            states.insert(order_id.to_string(), ApparatusQueueOrderState::InProgress);
-        }
-        ApparatusQueueAction::Complete => {
-            if current != ApparatusQueueOrderState::InProgress {
-                return Err(ProductionMapError::QueueActionNotAllowed);
-            }
-            states.insert(order_id.to_string(), ApparatusQueueOrderState::Completed);
-        }
-    }
+    states.insert(order_id.to_string(), next_queue_state(current, action)?);
     Ok(())
 }
 
@@ -214,26 +223,14 @@ pub fn apply_unordered_queue_action(
         .get(order_id)
         .copied()
         .unwrap_or(ApparatusQueueOrderState::Pending);
-    match action {
-        ApparatusQueueAction::Start => {
-            if current != ApparatusQueueOrderState::Pending {
-                return Err(ProductionMapError::QueueActionNotAllowed);
-            }
-            states.insert(order_id.to_string(), ApparatusQueueOrderState::InProgress);
-        }
-        ApparatusQueueAction::Complete => {
-            if current != ApparatusQueueOrderState::InProgress {
-                return Err(ProductionMapError::QueueActionNotAllowed);
-            }
-            states.insert(order_id.to_string(), ApparatusQueueOrderState::Completed);
-        }
-    }
+    states.insert(order_id.to_string(), next_queue_state(current, action)?);
     Ok(())
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use proptest::prelude::*;
 
     #[test]
     fn first_actionable_skips_completed_orders() {
@@ -312,5 +309,61 @@ mod tests {
     fn apparatus_titles_match_warehouse_instance_suffixes() {
         assert!(apparatus_titles_match("Laminatsiya - A", "Laminatsiya"));
         assert!(apparatus_titles_match("Paket aparat - A", "Paket aparat"));
+    }
+
+    proptest! {
+        #[test]
+        fn effective_sequence_only_contains_visible_unique_ids(
+            stored in proptest::collection::vec("[a-z]{1,8}", 0..24),
+            visible_set in proptest::collection::btree_set("[a-z]{1,8}", 0..24),
+        ) {
+            let visible = visible_set.into_iter().collect::<Vec<_>>();
+            let result = effective_apparatus_sequence(&stored, &visible);
+            let visible_set = visible
+                .iter()
+                .map(|id| id.trim().to_string())
+                .filter(|id| !id.is_empty())
+                .collect::<BTreeSet<_>>();
+            let result_set = result.iter().cloned().collect::<BTreeSet<_>>();
+            prop_assert_eq!(result.len(), result_set.len());
+            prop_assert!(result.iter().all(|id| visible_set.contains(id)));
+            prop_assert!(visible_set.iter().all(|id| result_set.contains(id)));
+        }
+    }
+}
+
+#[cfg(kani)]
+mod kani_proofs {
+    use super::*;
+
+    fn symbolic_state(selector: u8) -> ApparatusQueueOrderState {
+        let state = match selector % 3 {
+            0 => ApparatusQueueOrderState::Pending,
+            1 => ApparatusQueueOrderState::InProgress,
+            _ => ApparatusQueueOrderState::Completed,
+        };
+        state
+    }
+
+    #[kani::proof]
+    fn queue_state_transition_matches_policy() {
+        let current = symbolic_state(kani::any::<u8>());
+        let action = if kani::any::<bool>() {
+            ApparatusQueueAction::Start
+        } else {
+            ApparatusQueueAction::Complete
+        };
+        let next = next_queue_state(current, action);
+        match (current, action) {
+            (ApparatusQueueOrderState::Pending, ApparatusQueueAction::Start) => {
+                assert_eq!(next, Ok(ApparatusQueueOrderState::InProgress));
+            }
+            (ApparatusQueueOrderState::InProgress, ApparatusQueueAction::Complete) => {
+                assert_eq!(next, Ok(ApparatusQueueOrderState::Completed));
+            }
+            _ => {
+                assert_eq!(next, Err(ProductionMapError::QueueActionNotAllowed));
+            }
+        }
     }
 }

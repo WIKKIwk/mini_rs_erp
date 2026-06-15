@@ -1,25 +1,11 @@
-mod ai;
-mod app;
-mod config;
-mod core;
-pub(crate) mod db;
-pub(crate) mod engine;
-mod error;
-mod fcm;
-#[cfg(test)]
-mod fcm_tests;
-mod google_sheets;
-mod http;
-mod rps;
-mod store;
-
-use crate::app::AppState;
-use crate::config::AppConfig;
-use crate::db::postgres::connect_and_migrate_required;
 use axum::Router;
 use hyper::server::conn::http1;
 use hyper_util::rt::TokioIo;
 use hyper_util::service::TowerToHyperService;
+use mini_rs_erp::app::AppState;
+use mini_rs_erp::config::AppConfig;
+use mini_rs_erp::db::postgres::connect_and_migrate_required;
+use mini_rs_erp::{error, http};
 use socket2::{Domain, Protocol, Socket, Type};
 use std::net::SocketAddr;
 use std::num::NonZeroUsize;
