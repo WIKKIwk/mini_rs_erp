@@ -4,7 +4,8 @@ use async_trait::async_trait;
 use sqlx::PgPool;
 
 use crate::core::calculate_orders::{
-    CalculateOrderError, CalculateOrderStorePort, CalculateOrderTemplate, validate_template,
+    CalculateOrderError, CalculateOrderImage, CalculateOrderStorePort, CalculateOrderTemplate,
+    validate_template,
 };
 
 #[derive(Clone)]
@@ -111,6 +112,62 @@ impl CalculateOrderStorePort for PostgresCalculateOrderStore {
 
         Ok(())
     }
+
+    async fn save_image(
+        &self,
+        owner_key: &str,
+        image: CalculateOrderImage,
+    ) -> Result<CalculateOrderImage, CalculateOrderError> {
+        let saved = stamp_image(image)?;
+        sqlx::query(
+            "INSERT INTO mini_quick_order_images
+                (owner_key, image_id, image_name, image_mime, image_size_bytes, body, created_at)
+             VALUES ($1, $2, $3, $4, $5, $6, now())
+             ON CONFLICT (owner_key, image_id) DO UPDATE SET
+                image_name = excluded.image_name,
+                image_mime = excluded.image_mime,
+                image_size_bytes = excluded.image_size_bytes,
+                body = excluded.body",
+        )
+        .bind(owner_key.trim())
+        .bind(&saved.image_id)
+        .bind(&saved.image_name)
+        .bind(&saved.image_mime)
+        .bind(saved.image_size_bytes as i64)
+        .bind(&saved.body)
+        .execute(&self.pool)
+        .await
+        .map_err(|_| CalculateOrderError::StoreFailed)?;
+
+        Ok(saved)
+    }
+
+    async fn get_image(
+        &self,
+        owner_key: &str,
+        image_id: &str,
+    ) -> Result<Option<CalculateOrderImage>, CalculateOrderError> {
+        let row = sqlx::query_as::<_, (String, String, String, i64, Vec<u8>)>(
+            "SELECT image_id, image_name, image_mime, image_size_bytes, body
+             FROM mini_quick_order_images
+             WHERE owner_key = $1 AND image_id = $2",
+        )
+        .bind(owner_key.trim())
+        .bind(image_id.trim())
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(|_| CalculateOrderError::StoreFailed)?;
+
+        Ok(row.map(
+            |(image_id, image_name, image_mime, image_size_bytes, body)| CalculateOrderImage {
+                image_id,
+                image_name,
+                image_mime,
+                image_size_bytes: image_size_bytes.max(0) as u64,
+                body,
+            },
+        ))
+    }
 }
 
 async fn existing_id_by_code(
@@ -177,6 +234,23 @@ fn stamp_template(
     template.source_map_id = template.source_map_id.trim().to_string();
     template.saved_at = unix_micros().to_string();
     template
+}
+
+fn stamp_image(mut image: CalculateOrderImage) -> Result<CalculateOrderImage, CalculateOrderError> {
+    image.image_id = image.image_id.trim().to_string();
+    image.image_name = image.image_name.trim().to_string();
+    image.image_mime = image.image_mime.trim().to_string();
+    image.image_size_bytes = image.body.len() as u64;
+    if image.image_id.is_empty() {
+        return Err(CalculateOrderError::InvalidInput("id kerak".to_string()));
+    }
+    if image.image_name.is_empty() {
+        image.image_name = "rang.jpg".to_string();
+    }
+    if image.image_mime.is_empty() {
+        image.image_mime = "image/jpeg".to_string();
+    }
+    Ok(image)
 }
 
 fn dedupe_templates(templates: Vec<CalculateOrderTemplate>) -> Vec<CalculateOrderTemplate> {

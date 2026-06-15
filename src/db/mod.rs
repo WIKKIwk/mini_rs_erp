@@ -79,7 +79,9 @@ mod postgres_apparatus_group_tests {
 
 #[cfg(test)]
 mod postgres_calculate_order_tests {
-    use crate::core::calculate_orders::{CalculateOrderStorePort, CalculateOrderTemplate};
+    use crate::core::calculate_orders::{
+        CalculateOrderImage, CalculateOrderStorePort, CalculateOrderTemplate,
+    };
     use crate::db::postgres::apply_foundation_migration;
     use crate::db::postgres_calculate_order::PostgresCalculateOrderStore;
 
@@ -146,6 +148,33 @@ mod postgres_calculate_order_tests {
             .expect("delete updated");
         let rows = store.list("admin:admin").await.expect("list after delete");
         assert_eq!(rows, vec![first]);
+
+        let saved_image = store
+            .save_image(
+                "admin:admin",
+                CalculateOrderImage {
+                    image_id: "img-1".to_string(),
+                    image_name: "rang.jpg".to_string(),
+                    image_mime: "image/jpeg".to_string(),
+                    image_size_bytes: 0,
+                    body: b"fake-jpeg".to_vec(),
+                },
+            )
+            .await
+            .expect("save image");
+        let loaded_image = store
+            .get_image("admin:admin", "img-1")
+            .await
+            .expect("get image")
+            .expect("image exists");
+        assert_eq!(loaded_image, saved_image);
+        assert!(
+            store
+                .get_image("werka:werka", "img-1")
+                .await
+                .expect("other owner")
+                .is_none()
+        );
 
         pool.close().await;
         let admin_pool = sqlx::PgPool::connect(&admin_url)

@@ -57,6 +57,22 @@ CREATE TABLE IF NOT EXISTS mini_quick_order_templates (
     CONSTRAINT mini_quick_order_templates_owner_code_unique UNIQUE (owner_key, code)
 );
 
+CREATE TABLE IF NOT EXISTS mini_quick_order_images (
+    owner_key TEXT NOT NULL,
+    image_id TEXT NOT NULL,
+    image_name TEXT NOT NULL,
+    image_mime TEXT NOT NULL,
+    image_size_bytes BIGINT NOT NULL,
+    body BYTEA NOT NULL,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    PRIMARY KEY (owner_key, image_id),
+    CONSTRAINT mini_quick_order_images_owner_not_blank CHECK (btrim(owner_key) <> ''),
+    CONSTRAINT mini_quick_order_images_id_not_blank CHECK (btrim(image_id) <> ''),
+    CONSTRAINT mini_quick_order_images_name_not_blank CHECK (btrim(image_name) <> ''),
+    CONSTRAINT mini_quick_order_images_mime_not_blank CHECK (btrim(image_mime) <> ''),
+    CONSTRAINT mini_quick_order_images_size_non_negative CHECK (image_size_bytes >= 0)
+);
+
 CREATE TABLE IF NOT EXISTS mini_production_maps (
     id TEXT PRIMARY KEY,
     order_id TEXT REFERENCES mini_orders(id) ON DELETE SET NULL,

@@ -7,7 +7,9 @@ use serde::Serialize;
 use crate::app::AppState;
 use crate::core::auth::models::{Principal, PrincipalRole};
 use crate::core::authz::Capability;
-use crate::core::calculate_orders::{CalculateOrderError, CalculateOrderTemplate, owner_key};
+use crate::core::calculate_orders::{
+    CalculateOrderError, CalculateOrderImage, CalculateOrderTemplate, owner_key,
+};
 use crate::core::formula::{CalculateRequest, calculate};
 use crate::http::handlers::auth::bearer_token;
 
@@ -131,25 +133,38 @@ pub async fn calculate_order_image_upload_route(
         .ok_or_else(|| bad_request("invalid_input", "rasm formati noto'g'ri"))?;
     let key = principal_owner_key(&principal);
     let image_id = new_image_id();
-    let owner_dir = state.calculate_order_image_dir.join(safe_path_part(&key));
-    std::fs::create_dir_all(&owner_dir)
-        .map_err(|_| store_error(CalculateOrderError::StoreFailed))?;
-    let path = owner_dir.join(format!("{image_id}.{extension}"));
-    std::fs::write(&path, &body).map_err(|_| store_error(CalculateOrderError::StoreFailed))?;
     let file_name = headers
         .get("x-file-name")
         .and_then(|value| value.to_str().ok())
         .map(clean_file_name)
         .filter(|value| !value.is_empty())
         .unwrap_or_else(|| format!("rang.{extension}"));
+    let image = state
+        .calculate_orders
+        .save_image(
+            &key,
+            CalculateOrderImage {
+                image_id,
+                image_name: file_name,
+                image_mime: mime,
+                image_size_bytes: body.len() as u64,
+                body: body.to_vec(),
+            },
+        )
+        .await
+        .map_err(calculate_order_error)?;
+    let image_url = format!(
+        "/v1/mobile/calculate/orders/image/view?id={}",
+        image.image_id
+    );
     Ok(Json(serde_json::json!({
         "ok": true,
         "image": {
-            "image_id": image_id,
-            "image_name": file_name,
-            "image_mime": mime,
-            "image_size_bytes": body.len() as u64,
-            "image_url": format!("/v1/mobile/calculate/orders/image/view?id={image_id}")
+            "image_id": &image.image_id,
+            "image_name": &image.image_name,
+            "image_mime": &image.image_mime,
+            "image_size_bytes": image.image_size_bytes,
+            "image_url": image_url
         }
     })))
 }
@@ -168,29 +183,23 @@ pub async fn calculate_order_image_view_route(
         .filter(|value| safe_image_id(value))
         .ok_or_else(|| bad_request("invalid_input", "id kerak"))?;
     let key = principal_owner_key(&principal);
-    let owner_dir = state.calculate_order_image_dir.join(safe_path_part(&key));
-    for (extension, mime) in [
-        ("jpg", "image/jpeg"),
-        ("jpeg", "image/jpeg"),
-        ("png", "image/png"),
-        ("webp", "image/webp"),
-    ] {
-        let path = owner_dir.join(format!("{image_id}.{extension}"));
-        if path.exists() {
-            let bytes =
-                std::fs::read(path).map_err(|_| store_error(CalculateOrderError::StoreFailed))?;
-            return Response::builder()
-                .status(StatusCode::OK)
-                .header(header::CONTENT_TYPE, mime)
-                .header(header::CACHE_CONTROL, "private, max-age=86400")
-                .body(Body::from(bytes))
-                .map_err(|_| store_error(CalculateOrderError::StoreFailed));
-        }
-    }
-    Err((
-        StatusCode::NOT_FOUND,
-        Json(CalculateErrorResponse::new("not_found", "rasm topilmadi")),
-    ))
+    let image = state
+        .calculate_orders
+        .get_image(&key, &image_id)
+        .await
+        .map_err(store_error)?
+        .ok_or_else(|| {
+            (
+                StatusCode::NOT_FOUND,
+                Json(CalculateErrorResponse::new("not_found", "rasm topilmadi")),
+            )
+        })?;
+    Response::builder()
+        .status(StatusCode::OK)
+        .header(header::CONTENT_TYPE, image.image_mime)
+        .header(header::CACHE_CONTROL, "private, max-age=86400")
+        .body(Body::from(image.body))
+        .map_err(|_| store_error(CalculateOrderError::StoreFailed))
 }
 
 async fn authenticated_principal(
@@ -238,19 +247,6 @@ fn image_extension(mime: &str) -> Option<&'static str> {
         "image/webp" => Some("webp"),
         _ => None,
     }
-}
-
-fn safe_path_part(value: &str) -> String {
-    value
-        .chars()
-        .map(|ch| {
-            if ch.is_ascii_alphanumeric() || matches!(ch, '-' | '_') {
-                ch
-            } else {
-                '_'
-            }
-        })
-        .collect()
 }
 
 fn clean_file_name(value: &str) -> String {

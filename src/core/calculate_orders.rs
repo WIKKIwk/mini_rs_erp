@@ -64,6 +64,15 @@ pub struct CalculateOrderTemplate {
     pub source_map_id: String,
 }
 
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct CalculateOrderImage {
+    pub image_id: String,
+    pub image_name: String,
+    pub image_mime: String,
+    pub image_size_bytes: u64,
+    pub body: Vec<u8>,
+}
+
 #[derive(Debug, Error)]
 pub enum CalculateOrderError {
     #[error("invalid input: {0}")]
@@ -87,6 +96,16 @@ pub trait CalculateOrderStorePort: Send + Sync {
         template: CalculateOrderTemplate,
     ) -> Result<CalculateOrderTemplate, CalculateOrderError>;
     async fn delete(&self, owner_key: &str, id: &str) -> Result<(), CalculateOrderError>;
+    async fn save_image(
+        &self,
+        owner_key: &str,
+        image: CalculateOrderImage,
+    ) -> Result<CalculateOrderImage, CalculateOrderError>;
+    async fn get_image(
+        &self,
+        owner_key: &str,
+        image_id: &str,
+    ) -> Result<Option<CalculateOrderImage>, CalculateOrderError>;
 }
 
 pub fn validate_template(template: &CalculateOrderTemplate) -> Result<(), CalculateOrderError> {

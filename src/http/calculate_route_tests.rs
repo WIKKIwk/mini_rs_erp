@@ -1,5 +1,6 @@
 use axum::body::{Body, to_bytes};
 use axum::http::{Request, StatusCode, header};
+use std::sync::Arc;
 use tower::ServiceExt;
 
 use super::router::build_router;
@@ -7,6 +8,7 @@ use crate::app::AppState;
 use crate::config::AppConfig;
 use crate::core::auth::models::{Principal, PrincipalRole};
 use crate::core::session::manager::SessionManager;
+use crate::store::calculate_order_store::CalculateOrderStore;
 
 #[tokio::test]
 async fn calculate_endpoint_returns_formula_result() {
@@ -144,7 +146,9 @@ async fn calculate_orders_round_trip_on_server_without_kg() {
 
 #[tokio::test]
 async fn calculate_order_image_upload_and_view_are_owner_scoped() {
-    let state = test_state();
+    let image_dir = tempfile::tempdir().expect("image dir");
+    let mut state = test_state();
+    state.calculate_order_image_dir = Arc::new(image_dir.path().join("images"));
     let token = session(&state, PrincipalRole::Admin).await;
 
     let upload = build_router(state.clone())
@@ -164,6 +168,8 @@ async fn calculate_order_image_upload_and_view_are_owner_scoped() {
     assert_eq!(upload_body["image"]["image_mime"], "image/jpeg");
     assert_eq!(upload_body["image"]["image_size_bytes"], 9);
     let image_url = upload_body["image"]["image_url"].as_str().expect("url");
+
+    std::fs::remove_dir_all(image_dir.path()).expect("remove image dir");
 
     let view = build_router(state)
         .oneshot(
@@ -225,7 +231,16 @@ fn test_state() -> AppState {
         admin_code: "19621978".to_string(),
     });
     state.sessions = SessionManager::memory(Some(30 * 24 * 60 * 60));
+    state.calculate_orders = Arc::new(CalculateOrderStore::new(test_calculate_order_store_path()));
     state
+}
+
+fn test_calculate_order_store_path() -> std::path::PathBuf {
+    let id = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|duration| duration.as_nanos())
+        .unwrap_or_default();
+    std::env::temp_dir().join(format!("mini-rs-erp-calculate-route-{id}.sqlite"))
 }
 
 async fn session(state: &AppState, role: PrincipalRole) -> String {

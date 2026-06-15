@@ -134,6 +134,7 @@ mod tests {
             "mini_orders",
             "mini_order_products",
             "mini_quick_order_templates",
+            "mini_quick_order_images",
             "mini_production_maps",
             "mini_production_map_nodes",
             "mini_production_map_edges",
@@ -237,6 +238,7 @@ mod tests {
                  'mini_orders',
                  'mini_order_products',
                  'mini_quick_order_templates',
+                 'mini_quick_order_images',
                  'mini_production_maps',
                  'mini_production_map_nodes',
                  'mini_production_map_edges',
@@ -251,7 +253,7 @@ mod tests {
         .fetch_one(&pool)
         .await
         .expect("count tables");
-        assert_eq!(table_count, 12);
+        assert_eq!(table_count, 13);
 
         sqlx::query(
             "INSERT INTO mini_idempotency_keys (key, domain, action, entity_id)

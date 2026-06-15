@@ -7,7 +7,8 @@ use async_trait::async_trait;
 use rusqlite::{Connection, OptionalExtension, params};
 
 use crate::core::calculate_orders::{
-    CalculateOrderError, CalculateOrderStorePort, CalculateOrderTemplate, validate_template,
+    CalculateOrderError, CalculateOrderImage, CalculateOrderStorePort, CalculateOrderTemplate,
+    validate_template,
 };
 
 #[derive(Clone)]
@@ -153,6 +154,68 @@ impl CalculateOrderStorePort for CalculateOrderStore {
         .map_err(|_| CalculateOrderError::StoreFailed)?;
         Ok(())
     }
+
+    async fn save_image(
+        &self,
+        owner_key: &str,
+        image: CalculateOrderImage,
+    ) -> Result<CalculateOrderImage, CalculateOrderError> {
+        let saved = stamp_image(image)?;
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|_| CalculateOrderError::StoreFailed)?;
+        conn.execute(
+            "INSERT INTO calculate_order_images
+                (owner_key, image_id, image_name, image_mime, image_size_bytes, body, created_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
+             ON CONFLICT(owner_key, image_id) DO UPDATE SET
+                image_name = excluded.image_name,
+                image_mime = excluded.image_mime,
+                image_size_bytes = excluded.image_size_bytes,
+                body = excluded.body",
+            params![
+                owner_key.trim(),
+                &saved.image_id,
+                &saved.image_name,
+                &saved.image_mime,
+                saved.image_size_bytes as i64,
+                &saved.body,
+                unix_micros().to_string()
+            ],
+        )
+        .map_err(|_| CalculateOrderError::StoreFailed)?;
+        Ok(saved)
+    }
+
+    async fn get_image(
+        &self,
+        owner_key: &str,
+        image_id: &str,
+    ) -> Result<Option<CalculateOrderImage>, CalculateOrderError> {
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|_| CalculateOrderError::StoreFailed)?;
+        conn.query_row(
+            "SELECT image_id, image_name, image_mime, image_size_bytes, body
+             FROM calculate_order_images
+             WHERE owner_key = ?1 AND image_id = ?2",
+            params![owner_key.trim(), image_id.trim()],
+            |row| {
+                let size: i64 = row.get(3)?;
+                Ok(CalculateOrderImage {
+                    image_id: row.get(0)?,
+                    image_name: row.get(1)?,
+                    image_mime: row.get(2)?,
+                    image_size_bytes: size.max(0) as u64,
+                    body: row.get(4)?,
+                })
+            },
+        )
+        .optional()
+        .map_err(|_| CalculateOrderError::StoreFailed)
+    }
 }
 
 fn existing_id_by_code(
@@ -207,6 +270,23 @@ fn stamp_template(
     template
 }
 
+fn stamp_image(mut image: CalculateOrderImage) -> Result<CalculateOrderImage, CalculateOrderError> {
+    image.image_id = image.image_id.trim().to_string();
+    image.image_name = image.image_name.trim().to_string();
+    image.image_mime = image.image_mime.trim().to_string();
+    image.image_size_bytes = image.body.len() as u64;
+    if image.image_id.is_empty() {
+        return Err(CalculateOrderError::InvalidInput("id kerak".to_string()));
+    }
+    if image.image_name.is_empty() {
+        image.image_name = "rang.jpg".to_string();
+    }
+    if image.image_mime.is_empty() {
+        image.image_mime = "image/jpeg".to_string();
+    }
+    Ok(image)
+}
+
 fn configure_connection(conn: &Connection) -> rusqlite::Result<()> {
     conn.busy_timeout(Duration::from_secs(5))?;
     conn.pragma_update(None, "journal_mode", "WAL")?;
@@ -230,7 +310,17 @@ fn migrate(conn: &Connection) -> rusqlite::Result<()> {
         CREATE INDEX IF NOT EXISTS idx_calculate_order_templates_owner_saved
             ON calculate_order_templates(owner_key, saved_at DESC);
         CREATE INDEX IF NOT EXISTS idx_calculate_order_templates_owner_name
-            ON calculate_order_templates(owner_key, lower_name);",
+            ON calculate_order_templates(owner_key, lower_name);
+        CREATE TABLE IF NOT EXISTS calculate_order_images (
+            owner_key TEXT NOT NULL,
+            image_id TEXT NOT NULL,
+            image_name TEXT NOT NULL,
+            image_mime TEXT NOT NULL,
+            image_size_bytes INTEGER NOT NULL,
+            body BLOB NOT NULL,
+            created_at TEXT NOT NULL,
+            PRIMARY KEY(owner_key, image_id)
+        );",
     )?;
     ensure_code_columns(conn)?;
     rebuild_with_code_unique(conn)
@@ -608,6 +698,48 @@ mod tests {
         assert_eq!(updated.id, second.id);
         assert_eq!(updated.width_mm, 640.0);
         assert_eq!(store.list("admin:admin").await.expect("list").len(), 2);
+    }
+
+    #[tokio::test]
+    async fn calculate_order_sqlite_store_round_trips_images() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("orders.sqlite");
+        let store = CalculateOrderStore::new(path.clone());
+
+        let saved = store
+            .save_image(
+                "admin:admin",
+                CalculateOrderImage {
+                    image_id: "img-1".to_string(),
+                    image_name: " rang.jpg ".to_string(),
+                    image_mime: " image/jpeg ".to_string(),
+                    image_size_bytes: 0,
+                    body: b"fake-jpeg".to_vec(),
+                },
+            )
+            .await
+            .expect("save image");
+
+        assert_eq!(saved.image_name, "rang.jpg");
+        assert_eq!(saved.image_mime, "image/jpeg");
+        assert_eq!(saved.image_size_bytes, 9);
+
+        drop(store);
+        let reloaded = CalculateOrderStore::new(path);
+        let image = reloaded
+            .get_image("admin:admin", "img-1")
+            .await
+            .expect("get image")
+            .expect("image exists");
+
+        assert_eq!(image, saved);
+        assert!(
+            reloaded
+                .get_image("werka:werka", "img-1")
+                .await
+                .expect("get other owner")
+                .is_none()
+        );
     }
 
     #[tokio::test]

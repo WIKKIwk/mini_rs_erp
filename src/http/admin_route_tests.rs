@@ -19,7 +19,7 @@ use crate::core::apparatus_groups::{ApparatusGroupService, MemoryApparatusGroupS
 use crate::core::auth::models::{Principal, PrincipalRole};
 use crate::core::authz::{MemoryRoleDefinitionStore, RoleDefinition, RoleDefinitionStorePort};
 use crate::core::calculate_orders::{
-    CalculateOrderError, CalculateOrderStorePort, CalculateOrderTemplate,
+    CalculateOrderError, CalculateOrderImage, CalculateOrderStorePort, CalculateOrderTemplate,
 };
 use crate::core::mini_orders::{MiniOrderError, MiniOrderSink, NoopMiniOrderSink};
 use crate::core::production_map::{MemoryProductionMapStore, ProductionMapService};
@@ -1271,6 +1271,22 @@ impl CalculateOrderStorePort for FailCalculateUpsertStore {
 
     async fn delete(&self, _owner_key: &str, _id: &str) -> Result<(), CalculateOrderError> {
         Ok(())
+    }
+
+    async fn save_image(
+        &self,
+        _owner_key: &str,
+        _image: CalculateOrderImage,
+    ) -> Result<CalculateOrderImage, CalculateOrderError> {
+        Err(CalculateOrderError::StoreFailed)
+    }
+
+    async fn get_image(
+        &self,
+        _owner_key: &str,
+        _image_id: &str,
+    ) -> Result<Option<CalculateOrderImage>, CalculateOrderError> {
+        Err(CalculateOrderError::StoreFailed)
     }
 }
 
