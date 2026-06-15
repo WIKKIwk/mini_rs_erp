@@ -17,7 +17,9 @@ use crate::core::admin::ports::{AdminPortError, AdminReadPort, AdminStatePort, A
 use crate::core::admin::service::AdminService;
 use crate::core::apparatus_groups::{ApparatusGroupService, MemoryApparatusGroupStore};
 use crate::core::auth::models::{Principal, PrincipalRole};
-use crate::core::authz::{MemoryRoleDefinitionStore, RoleDefinition, RoleDefinitionStorePort};
+use crate::core::authz::{
+    MemoryRoleDefinitionStore, RoleAssignment, RoleDefinition, RoleDefinitionStorePort,
+};
 use crate::core::calculate_orders::{
     CalculateOrderError, CalculateOrderImage, CalculateOrderStorePort, CalculateOrderTemplate,
 };
@@ -29,6 +31,52 @@ use crate::core::werka::ports::{WerkaHomeLookup, WerkaPortError};
 use crate::core::werka::service::WerkaService;
 use crate::core::worker_groups::{MemoryWorkerGroupStore, WorkerGroupService};
 use crate::core::workers::{MemoryWorkerStore, WorkerService};
+
+#[tokio::test]
+async fn admin_user_list_returns_merged_paged_users_with_role_labels() {
+    let mut state = test_state();
+    let role_store = Arc::new(MemoryRoleDefinitionStore::new());
+    role_store
+        .put_role_definition(RoleDefinition {
+            id: "item_creator".to_string(),
+            label: "Item yaratuvchi".to_string(),
+            base_role: Some(PrincipalRole::Customer),
+            capability_codes: vec!["catalog.item.create".to_string()],
+            system: false,
+        })
+        .await
+        .expect("role");
+    role_store
+        .put_role_assignment(RoleAssignment {
+            principal_role: PrincipalRole::Customer,
+            principal_ref: "CUST-001".to_string(),
+            role_id: "item_creator".to_string(),
+            assigned_apparatus: Vec::new(),
+        })
+        .await
+        .expect("assignment");
+    state.admin = state.admin.with_role_store(role_store);
+    let token = session(&state, PrincipalRole::Admin).await;
+
+    let response = build_router(state)
+        .oneshot(request(
+            "GET",
+            "/v1/mobile/admin/users/list?q=customer&limit=2&offset=0",
+            &token,
+        ))
+        .await
+        .expect("response");
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let value = json_body(response).await;
+    assert_eq!(value["items"].as_array().expect("items").len(), 1);
+    assert_eq!(value["items"][0]["id"], "customer:CUST-001");
+    assert_eq!(value["items"][0]["source"], "customer");
+    assert_eq!(value["items"][0]["entity_ref"], "CUST-001");
+    assert_eq!(value["items"][0]["name"], "Customer One");
+    assert_eq!(value["items"][0]["role_label"], "Item yaratuvchi");
+    assert_eq!(value["has_more"], false);
+}
 
 #[tokio::test]
 async fn admin_settings_requires_admin_like_go() {
@@ -54,6 +102,7 @@ async fn admin_method_checks_happen_after_auth_like_go() {
         ("POST", "/v1/mobile/admin/production-maps"),
         ("POST", "/v1/mobile/admin/role-assignments"),
         ("PATCH", "/v1/mobile/admin/suppliers"),
+        ("POST", "/v1/mobile/admin/users/list"),
         ("POST", "/v1/mobile/admin/suppliers/list"),
         ("POST", "/v1/mobile/admin/suppliers/summary"),
         ("POST", "/v1/mobile/admin/suppliers/detail"),

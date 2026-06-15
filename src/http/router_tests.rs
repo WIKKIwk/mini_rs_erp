@@ -133,6 +133,7 @@ async fn go_mobile_route_inventory_is_registered() {
         "/v1/mobile/admin/production-maps",
         "/v1/mobile/admin/role-assignments",
         "/v1/mobile/admin/suppliers",
+        "/v1/mobile/admin/users/list",
         "/v1/mobile/admin/suppliers/list",
         "/v1/mobile/admin/customers",
         "/v1/mobile/admin/customers/list",

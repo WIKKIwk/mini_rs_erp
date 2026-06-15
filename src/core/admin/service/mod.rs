@@ -14,6 +14,7 @@ use crate::config::AppConfig;
 use crate::core::admin::models::{
     AdminActivity, AdminCustomerDetail, AdminDirectoryEntry, AdminItemGroupBulkMoveResult,
     AdminSettings, AdminState, AdminSupplier, AdminSupplierDetail, AdminSupplierSummary,
+    AdminUserListEntry, AdminUserListPage,
 };
 use crate::core::admin::ports::{
     AdminAuthConfigSink, AdminEnvPersister, AdminPortError, AdminReadPort, AdminStatePort,

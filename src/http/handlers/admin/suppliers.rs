@@ -121,6 +121,38 @@ pub async fn supplier_list(
         .map_err(|_| server_error("suppliers page failed"))
 }
 
+pub async fn user_list(
+    State(state): State<AppState>,
+    method: Method,
+    headers: HeaderMap,
+    Query(query): Query<PageQuery>,
+) -> Result<Json<AdminUserListPage>, AdminError> {
+    let principal = authorize_any_capability(
+        &state,
+        &headers,
+        &[
+            Capability::SupplierDirectoryRead,
+            Capability::CustomerDirectoryRead,
+        ],
+    )
+    .await?;
+    if method != Method::GET {
+        return Err(method_not_allowed());
+    }
+    require_capability(&state, &principal, Capability::SupplierDirectoryRead).await?;
+    require_capability(&state, &principal, Capability::CustomerDirectoryRead).await?;
+    state
+        .admin
+        .user_list_page(
+            query.q.as_deref().unwrap_or_default(),
+            optional_search_limit(query.limit.as_deref(), 20, 50),
+            optional_offset(query.offset.as_deref()),
+        )
+        .await
+        .map(Json)
+        .map_err(|_| server_error("admin users page failed"))
+}
+
 pub async fn supplier_summary(
     State(state): State<AppState>,
     method: Method,

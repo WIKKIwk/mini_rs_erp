@@ -1,6 +1,7 @@
 use serde::{Deserialize, Serialize};
 use time::OffsetDateTime;
 
+use crate::core::auth::models::PrincipalRole;
 use crate::core::werka::models::{CustomerDirectoryEntry, DispatchRecord, SupplierItem};
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -62,6 +63,26 @@ pub struct AdminSuppliersPage {
     pub suppliers: Vec<AdminSupplier>,
     pub customers: Vec<CustomerDirectoryEntry>,
     pub settings: AdminSettings,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AdminUserListEntry {
+    pub id: String,
+    pub source: String,
+    #[serde(rename = "entity_ref")]
+    pub entity_ref: String,
+    pub principal_role: PrincipalRole,
+    pub name: String,
+    pub phone: String,
+    pub role_label: String,
+    pub blocked: bool,
+    pub status: String,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AdminUserListPage {
+    pub items: Vec<AdminUserListEntry>,
+    pub has_more: bool,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]

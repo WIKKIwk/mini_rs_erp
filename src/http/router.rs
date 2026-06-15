@@ -182,6 +182,7 @@ pub fn build_router(state: AppState) -> Router {
             any(admin::role_assignments),
         )
         .route("/v1/mobile/admin/suppliers", any(admin::suppliers))
+        .route("/v1/mobile/admin/users/list", any(admin::user_list))
         .route("/v1/mobile/admin/suppliers/list", any(admin::supplier_list))
         .route(
             "/v1/mobile/admin/suppliers/summary",
