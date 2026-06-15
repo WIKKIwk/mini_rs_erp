@@ -44,6 +44,7 @@ pub enum WorkerError {
 #[async_trait]
 pub trait WorkerStorePort: Send + Sync {
     async fn workers(&self, query: &str, limit: usize) -> Result<Vec<Worker>, WorkerError>;
+    async fn workers_by_ids(&self, ids: &[String]) -> Result<Vec<Worker>, WorkerError>;
     async fn upsert_worker(&self, worker: Worker) -> Result<Worker, WorkerError>;
     async fn update_worker_level(&self, id: &str, level: &str) -> Result<Worker, WorkerError>;
 }
@@ -64,6 +65,10 @@ impl WorkerService {
 
     pub async fn workers(&self, query: &str, limit: usize) -> Result<Vec<Worker>, WorkerError> {
         self.store.workers(query, limit.clamp(1, 500)).await
+    }
+
+    pub async fn workers_by_ids(&self, ids: &[String]) -> Result<Vec<Worker>, WorkerError> {
+        self.store.workers_by_ids(ids).await
     }
 
     pub async fn upsert_worker(&self, input: WorkerUpsert) -> Result<Worker, WorkerError> {
@@ -118,6 +123,10 @@ impl WorkerStorePort for UnavailableWorkerStore {
         Err(WorkerError::StoreFailed)
     }
 
+    async fn workers_by_ids(&self, _ids: &[String]) -> Result<Vec<Worker>, WorkerError> {
+        Err(WorkerError::StoreFailed)
+    }
+
     async fn upsert_worker(&self, _worker: Worker) -> Result<Worker, WorkerError> {
         Err(WorkerError::StoreFailed)
     }
@@ -152,6 +161,19 @@ impl WorkerStorePort for MemoryWorkerStore {
                     || worker.level.to_lowercase().contains(&needle)
             })
             .take(limit)
+            .collect())
+    }
+
+    async fn workers_by_ids(&self, ids: &[String]) -> Result<Vec<Worker>, WorkerError> {
+        let requested = ids
+            .iter()
+            .map(|id| id.trim().to_string())
+            .filter(|id| !id.is_empty())
+            .collect::<Vec<_>>();
+        let workers = self.workers.read().await;
+        Ok(requested
+            .into_iter()
+            .filter_map(|id| workers.iter().find(|worker| worker.id == id).cloned())
             .collect())
     }
 

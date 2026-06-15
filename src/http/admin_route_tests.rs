@@ -27,6 +27,7 @@ use crate::core::session::manager::SessionManager;
 use crate::core::werka::models::{DispatchRecord, SupplierItem};
 use crate::core::werka::ports::{WerkaHomeLookup, WerkaPortError};
 use crate::core::werka::service::WerkaService;
+use crate::core::worker_groups::{MemoryWorkerGroupStore, WorkerGroupService};
 use crate::core::workers::{MemoryWorkerStore, WorkerService};
 
 #[tokio::test]
@@ -155,6 +156,115 @@ async fn admin_workers_are_separate_from_users_and_persist_level() {
     let workers = json_body(listed).await;
     assert_eq!(workers.as_array().expect("workers").len(), 1);
     assert_eq!(workers[0]["name"], "Ali ishchi");
+}
+
+#[tokio::test]
+async fn admin_worker_groups_assign_apparatus_groups_to_day_and_night_shifts() {
+    let state = test_state();
+    let token = session(&state, PrincipalRole::Admin).await;
+
+    let first = build_router(state.clone())
+        .oneshot(request_with_body(
+            "POST",
+            "/v1/mobile/admin/workers",
+            &token,
+            r#"{"name":"Jalol ishchi","level":"Brigader"}"#,
+        ))
+        .await
+        .expect("create first worker");
+    let first_id = json_body(first).await["id"]
+        .as_str()
+        .expect("first worker id")
+        .to_string();
+
+    let second = build_router(state.clone())
+        .oneshot(request_with_body(
+            "POST",
+            "/v1/mobile/admin/workers",
+            &token,
+            r#"{"name":"Vali ishchi","level":"Master"}"#,
+        ))
+        .await
+        .expect("create second worker");
+    let second_id = json_body(second).await["id"]
+        .as_str()
+        .expect("second worker id")
+        .to_string();
+
+    let saved = build_router(state.clone())
+        .oneshot(request_with_body(
+            "PUT",
+            "/v1/mobile/admin/worker-groups",
+            &token,
+            &format!(
+                r#"{{
+                    "apparatus":"Laminatsiya 1",
+                    "group_code":"A",
+                    "shift":"day",
+                    "worker_ids":["{first_id}","{second_id}"]
+                }}"#
+            ),
+        ))
+        .await
+        .expect("save worker group");
+    assert_eq!(saved.status(), StatusCode::OK);
+    let saved_body = json_body(saved).await;
+    assert_eq!(saved_body["apparatus"], "Laminatsiya 1");
+    assert_eq!(saved_body["group_code"], "A");
+    assert_eq!(saved_body["shift"], "day");
+    assert_eq!(saved_body["workers"].as_array().expect("workers").len(), 2);
+
+    let swapped = build_router(state.clone())
+        .oneshot(request_with_body(
+            "PUT",
+            "/v1/mobile/admin/worker-groups",
+            &token,
+            &format!(
+                r#"{{
+                    "apparatus":"Laminatsiya 1",
+                    "group_code":"B",
+                    "shift":"day",
+                    "worker_ids":["{second_id}"]
+                }}"#
+            ),
+        ))
+        .await
+        .expect("swap worker group shift");
+    assert_eq!(swapped.status(), StatusCode::OK);
+
+    let listed = build_router(state.clone())
+        .oneshot(request(
+            "GET",
+            "/v1/mobile/admin/worker-groups?apparatus=Laminatsiya%201",
+            &token,
+        ))
+        .await
+        .expect("list worker groups");
+    assert_eq!(listed.status(), StatusCode::OK);
+    let listed_body = json_body(listed).await;
+    let groups = listed_body.as_array().expect("groups");
+    assert_eq!(groups.len(), 2);
+    assert_eq!(groups[0]["group_code"], "A");
+    assert_eq!(groups[0]["shift"], "night");
+    assert_eq!(groups[1]["group_code"], "B");
+    assert_eq!(groups[1]["shift"], "day");
+
+    let invalid = build_router(state)
+        .oneshot(request_with_body(
+            "PUT",
+            "/v1/mobile/admin/worker-groups",
+            &token,
+            r#"{
+                "apparatus":"Laminatsiya 1",
+                "group_code":"A",
+                "shift":"night",
+                "worker_ids":["missing-worker"]
+            }"#,
+        ))
+        .await
+        .expect("invalid worker group");
+    assert_eq!(invalid.status(), StatusCode::BAD_REQUEST);
+    assert_eq!(json_body(invalid).await["error"], "worker not found");
 }
 
 #[tokio::test]
@@ -3108,6 +3218,7 @@ fn test_state() -> AppState {
     state.production_maps = ProductionMapService::new(Arc::new(MemoryProductionMapStore::new()));
     state.apparatus_groups = ApparatusGroupService::new(Arc::new(MemoryApparatusGroupStore::new()));
     state.workers = WorkerService::new(Arc::new(MemoryWorkerStore::new()));
+    state.worker_groups = WorkerGroupService::new(Arc::new(MemoryWorkerGroupStore::new()));
     state.production_orders = Arc::new(NoopMiniOrderSink);
     state
 }

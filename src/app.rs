@@ -19,6 +19,7 @@ use crate::core::rezka::RezkaService;
 use crate::core::rps_batch::{RpsBatchLmdbStore, RpsBatchService};
 use crate::core::session::manager::SessionManager;
 use crate::core::werka::service::WerkaService;
+use crate::core::worker_groups::WorkerGroupService;
 use crate::core::workers::WorkerService;
 use crate::db::postgres::PostgresConfig;
 use crate::db::postgres_apparatus_group::PostgresApparatusGroupStore;
@@ -27,6 +28,7 @@ use crate::db::postgres_engine::PostgresEngineStore;
 use crate::db::postgres_mini_order::PostgresMiniOrderSink;
 use crate::db::postgres_production_map::PostgresProductionMapStore;
 use crate::db::postgres_worker::PostgresWorkerStore;
+use crate::db::postgres_worker_group::PostgresWorkerGroupStore;
 use crate::fcm::discover_push_sender;
 use crate::google_sheets::{OrderSheetSink, discover_order_sheet_sink};
 use crate::rps::RpsDriverClient;
@@ -63,6 +65,7 @@ pub struct AppState {
     pub rps_batch: RpsBatchService,
     pub werka: WerkaService,
     pub workers: WorkerService,
+    pub worker_groups: WorkerGroupService,
     pub sessions: SessionManager,
     #[allow(dead_code)]
     pub mini_engine: Option<PostgresEngineStore>,
@@ -114,6 +117,7 @@ impl AppState {
             .with_epc_source(Arc::new(crate::core::gscale::epc::GscaleEpcGenerator::new()));
         let mut werka = WerkaService::new();
         let workers = build_worker_service();
+        let worker_groups = build_worker_group_service();
         let sessions = match local_store_backend("MOBILE_API_SESSION_STORE_BACKEND") {
             LocalStoreBackend::Lmdb => {
                 let lmdb_path = session_lmdb_path(&config);
@@ -177,8 +181,26 @@ impl AppState {
             rps_batch,
             werka,
             workers,
+            worker_groups,
             sessions,
             mini_engine,
+        }
+    }
+}
+
+fn build_worker_group_service() -> WorkerGroupService {
+    let config = match PostgresConfig::from_env() {
+        Ok(config) => config,
+        Err(_) => return WorkerGroupService::unavailable(),
+    };
+    match config.pool_options().connect_lazy(&config.database_url) {
+        Ok(pool) => {
+            tracing::info!("mini ERP postgres worker group store configured");
+            WorkerGroupService::new(Arc::new(PostgresWorkerGroupStore::new(pool)))
+        }
+        Err(error) => {
+            tracing::warn!(%error, "mini ERP postgres worker group store disabled");
+            WorkerGroupService::unavailable()
         }
     }
 }

@@ -16,4 +16,5 @@ pub mod rezka;
 pub mod rps_batch;
 pub mod session;
 pub mod werka;
+pub mod worker_groups;
 pub mod workers;

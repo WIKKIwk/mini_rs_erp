@@ -150,6 +150,21 @@ CREATE TABLE IF NOT EXISTS mini_workers (
     CONSTRAINT mini_workers_name_unique UNIQUE (name)
 );
 
+CREATE TABLE IF NOT EXISTS mini_worker_groups (
+    apparatus TEXT NOT NULL,
+    group_code TEXT NOT NULL,
+    shift TEXT NOT NULL,
+    worker_ids JSONB NOT NULL DEFAULT '[]'::jsonb,
+    payload_json JSONB NOT NULL DEFAULT '{}'::jsonb,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    PRIMARY KEY (apparatus, group_code),
+    CONSTRAINT mini_worker_groups_apparatus_not_blank CHECK (btrim(apparatus) <> ''),
+    CONSTRAINT mini_worker_groups_group_code_allowed CHECK (group_code IN ('A', 'B')),
+    CONSTRAINT mini_worker_groups_shift_allowed CHECK (shift IN ('day', 'night')),
+    CONSTRAINT mini_worker_groups_worker_ids_array CHECK (jsonb_typeof(worker_ids) = 'array')
+);
+
 CREATE TABLE IF NOT EXISTS mini_queue_sequences (
     apparatus TEXT PRIMARY KEY,
     order_ids JSONB NOT NULL,
@@ -233,6 +248,8 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_mini_apparatus_groups_lower_name ON mini_a
 CREATE UNIQUE INDEX IF NOT EXISTS idx_mini_apparatus_lower_name ON mini_apparatus (lower(name));
 CREATE UNIQUE INDEX IF NOT EXISTS idx_mini_workers_lower_name ON mini_workers (lower(name));
 CREATE INDEX IF NOT EXISTS idx_mini_workers_level ON mini_workers(level);
+CREATE INDEX IF NOT EXISTS idx_mini_worker_groups_apparatus ON mini_worker_groups (lower(apparatus));
+CREATE INDEX IF NOT EXISTS idx_mini_worker_groups_shift ON mini_worker_groups (shift);
 CREATE INDEX IF NOT EXISTS idx_mini_queue_states_order_id ON mini_queue_states(order_id);
 CREATE INDEX IF NOT EXISTS idx_mini_engine_events_entity ON mini_engine_events(domain, entity_id, created_at DESC);
 

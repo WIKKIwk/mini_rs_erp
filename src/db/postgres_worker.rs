@@ -39,6 +39,32 @@ impl WorkerStorePort for PostgresWorkerStore {
             .collect())
     }
 
+    async fn workers_by_ids(&self, ids: &[String]) -> Result<Vec<Worker>, WorkerError> {
+        let ids = ids
+            .iter()
+            .map(|id| id.trim().to_string())
+            .filter(|id| !id.is_empty())
+            .collect::<Vec<_>>();
+        if ids.is_empty() {
+            return Ok(Vec::new());
+        }
+        let rows = sqlx::query_as::<_, (String, String, String)>(
+            "SELECT id, name, level
+             FROM mini_workers
+             WHERE id = ANY($1)
+             ORDER BY array_position($1, id)",
+        )
+        .bind(&ids)
+        .fetch_all(&self.pool)
+        .await
+        .map_err(|_| WorkerError::StoreFailed)?;
+
+        Ok(rows
+            .into_iter()
+            .map(|(id, name, level)| Worker { id, name, level })
+            .collect())
+    }
+
     async fn upsert_worker(&self, worker: Worker) -> Result<Worker, WorkerError> {
         let payload = serde_json::to_value(&worker).map_err(|_| WorkerError::StoreFailed)?;
         let (id, name, level) = sqlx::query_as::<_, (String, String, String)>(

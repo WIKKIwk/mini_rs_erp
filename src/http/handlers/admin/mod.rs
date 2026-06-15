@@ -27,7 +27,7 @@ pub use system::{
     roles, warehouses, werka_code_regenerate,
 };
 use system::{authorize_any_capability, authorize_capability, require_capability};
-pub use workers::workers;
+pub use workers::{worker_groups, workers};
 
 use axum::Json;
 use axum::body::Bytes;

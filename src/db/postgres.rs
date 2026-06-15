@@ -184,6 +184,7 @@ mod tests {
             "mini_apparatus",
             "mini_apparatus_groups",
             "mini_workers",
+            "mini_worker_groups",
             "mini_queue_sequences",
             "mini_daily_work_sequences",
             "mini_daily_apparatus_sequences",
@@ -292,6 +293,7 @@ mod tests {
                  'mini_apparatus',
                  'mini_apparatus_groups',
                  'mini_workers',
+                 'mini_worker_groups',
                  'mini_queue_sequences',
                  'mini_daily_work_sequences',
                  'mini_daily_apparatus_sequences',
@@ -303,7 +305,7 @@ mod tests {
         .fetch_one(&pool)
         .await
         .expect("count tables");
-        assert_eq!(table_count, 14);
+        assert_eq!(table_count, 15);
 
         sqlx::query(
             "INSERT INTO mini_idempotency_keys (key, domain, action, entity_id)
