@@ -1,4 +1,5 @@
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
@@ -233,6 +234,66 @@ pub enum ProductionMapError {
     ApparatusNotAssigned,
     #[error("laminatsiya is not allowed when rubber size is above 1050")]
     LaminatsiyaRubberTooLarge,
+    #[error("apparatus queue policy is locked")]
+    ApparatusQueuePolicyLocked,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ApparatusQueuePolicy {
+    StrictSequence,
+    FreePick,
+}
+
+impl ApparatusQueuePolicy {
+    pub fn parse(value: &str) -> Option<Self> {
+        match value.trim().to_ascii_lowercase().as_str() {
+            "strict_sequence" => Some(Self::StrictSequence),
+            "free_pick" => Some(Self::FreePick),
+            _ => None,
+        }
+    }
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::StrictSequence => "strict_sequence",
+            Self::FreePick => "free_pick",
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ApparatusQueuePolicyRecord {
+    pub apparatus: String,
+    pub policy: ApparatusQueuePolicy,
+    #[serde(default)]
+    pub locked: bool,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub reason: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct QueueActionActor {
+    pub role: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub ref_: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub display_name: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ApparatusQueueActionEvent {
+    pub event_id: String,
+    pub apparatus: String,
+    pub order_id: String,
+    pub action: queue_state::ApparatusQueueAction,
+    pub from_state: queue_state::ApparatusQueueOrderState,
+    pub to_state: queue_state::ApparatusQueueOrderState,
+    pub policy: ApparatusQueuePolicy,
+    pub actor: QueueActionActor,
+    #[serde(default)]
+    pub assigned_apparatus: Vec<String>,
+    pub payload_json: serde_json::Value,
 }
 
 #[async_trait]
@@ -260,6 +321,30 @@ pub trait ProductionMapStorePort: Send + Sync {
         apparatus: &str,
         states: BTreeMap<String, String>,
     ) -> Result<(), ProductionMapError>;
+    async fn apparatus_queue_policies(
+        &self,
+    ) -> Result<BTreeMap<String, ApparatusQueuePolicy>, ProductionMapError>;
+    async fn put_apparatus_queue_policy(
+        &self,
+        apparatus: &str,
+        policy: ApparatusQueuePolicy,
+        actor: &QueueActionActor,
+    ) -> Result<(), ProductionMapError>;
+    async fn put_apparatus_queue_states_with_event(
+        &self,
+        apparatus: &str,
+        states: BTreeMap<String, String>,
+        event: ApparatusQueueActionEvent,
+    ) -> Result<(), ProductionMapError> {
+        self.put_apparatus_queue_states(apparatus, states).await?;
+        self.append_apparatus_queue_action_event(event).await
+    }
+    async fn append_apparatus_queue_action_event(
+        &self,
+        _event: ApparatusQueueActionEvent,
+    ) -> Result<(), ProductionMapError> {
+        Ok(())
+    }
 }
 
 #[cfg(test)]
@@ -267,6 +352,7 @@ pub struct MemoryProductionMapStore {
     maps: RwLock<BTreeMap<String, ProductionMapDefinition>>,
     sequences: RwLock<BTreeMap<String, Vec<String>>>,
     queue_states: RwLock<BTreeMap<String, BTreeMap<String, String>>>,
+    queue_policies: RwLock<BTreeMap<String, ApparatusQueuePolicy>>,
 }
 
 #[cfg(test)]
@@ -276,6 +362,7 @@ impl MemoryProductionMapStore {
             maps: RwLock::new(BTreeMap::new()),
             sequences: RwLock::new(BTreeMap::new()),
             queue_states: RwLock::new(BTreeMap::new()),
+            queue_policies: RwLock::new(BTreeMap::new()),
         }
     }
 }
@@ -374,6 +461,25 @@ impl ProductionMapStorePort for MemoryProductionMapStore {
             .insert(apparatus.trim().to_string(), states);
         Ok(())
     }
+
+    async fn apparatus_queue_policies(
+        &self,
+    ) -> Result<BTreeMap<String, ApparatusQueuePolicy>, ProductionMapError> {
+        Ok(self.queue_policies.read().await.clone())
+    }
+
+    async fn put_apparatus_queue_policy(
+        &self,
+        apparatus: &str,
+        policy: ApparatusQueuePolicy,
+        _actor: &QueueActionActor,
+    ) -> Result<(), ProductionMapError> {
+        self.queue_policies
+            .write()
+            .await
+            .insert(apparatus.trim().to_string(), policy);
+        Ok(())
+    }
 }
 
 const LIVE_NOTIFY_CAPACITY: usize = 256;
@@ -383,6 +489,7 @@ pub struct ProductionMapLiveSnapshot {
     pub maps: Vec<ProductionMapSaved>,
     pub sequences: BTreeMap<String, Vec<String>>,
     pub queue_states: BTreeMap<String, BTreeMap<String, String>>,
+    pub queue_policies: Vec<ApparatusQueuePolicyRecord>,
 }
 
 #[derive(Clone)]
@@ -410,6 +517,7 @@ impl ProductionMapService {
             maps: self.maps().await?,
             sequences: self.apparatus_sequences().await?,
             queue_states: self.apparatus_queue_states().await?,
+            queue_policies: self.apparatus_queue_policy_records().await?,
         })
     }
 
@@ -487,15 +595,53 @@ impl ProductionMapService {
         self.store.apparatus_queue_states().await
     }
 
+    pub async fn apparatus_queue_policy_records(
+        &self,
+    ) -> Result<Vec<ApparatusQueuePolicyRecord>, ProductionMapError> {
+        Ok(self
+            .store
+            .apparatus_queue_policies()
+            .await?
+            .into_iter()
+            .map(|(apparatus, policy)| effective_apparatus_queue_policy_record(&apparatus, policy))
+            .collect())
+    }
+
+    pub async fn set_apparatus_queue_policy(
+        &self,
+        apparatus: &str,
+        policy: ApparatusQueuePolicy,
+        actor: &QueueActionActor,
+    ) -> Result<ApparatusQueuePolicyRecord, ProductionMapError> {
+        let apparatus = apparatus.trim();
+        if apparatus.is_empty() {
+            return Err(ProductionMapError::MissingId);
+        }
+        let record = effective_apparatus_queue_policy_record(apparatus, policy);
+        if record.locked && record.policy != policy {
+            return Err(ProductionMapError::ApparatusQueuePolicyLocked);
+        }
+        self.store
+            .put_apparatus_queue_policy(apparatus, record.policy, actor)
+            .await?;
+        self.notify_live();
+        Ok(record)
+    }
+
     pub async fn apply_apparatus_queue_action(
         &self,
         apparatus: &str,
         order_id: &str,
         action: queue_state::ApparatusQueueAction,
         assigned_apparatus: &[String],
+        actor: QueueActionActor,
     ) -> Result<BTreeMap<String, String>, ProductionMapError> {
         let apparatus = apparatus.trim();
+        let order_id = order_id.trim();
         if apparatus.is_empty() {
+            return Err(ProductionMapError::MissingId);
+        }
+        if order_id.is_empty() {
             return Err(ProductionMapError::MissingId);
         }
         if !queue_state::apparatus_matches_assigned(apparatus, assigned_apparatus) {
@@ -503,6 +649,7 @@ impl ProductionMapService {
         }
         let sequences = self.store.apparatus_sequences().await?;
         let all_states = self.store.apparatus_queue_states().await?;
+        let policies = self.store.apparatus_queue_policies().await?;
         let known_keys = sequences
             .keys()
             .chain(all_states.keys())
@@ -512,14 +659,29 @@ impl ProductionMapService {
             .map(|key| key.to_string())
             .collect::<Vec<_>>();
         let storage_key = queue_state::resolve_apparatus_storage_key(apparatus, &known_keys);
+        let policy = effective_apparatus_queue_policy(
+            apparatus,
+            policies
+                .get(&storage_key)
+                .copied()
+                .or_else(|| policies.get(apparatus).copied())
+                .or_else(|| {
+                    policies.iter().find_map(|(key, policy)| {
+                        queue_state::apparatus_titles_match(key, apparatus).then_some(*policy)
+                    })
+                }),
+        );
         let stored_sequence = sequences.get(&storage_key).cloned().unwrap_or_default();
         let all_maps = self.store.maps().await?;
         let visible_order_ids = visible_order_ids_for_apparatus(&all_maps, apparatus);
         let sequence =
             queue_state::effective_apparatus_sequence(&stored_sequence, &visible_order_ids);
+        if !sequence.iter().any(|id| id.trim() == order_id) {
+            return Err(ProductionMapError::QueueActionNotAllowed);
+        }
         let order_map = all_maps
             .iter()
-            .find(|map| map.id.trim() == order_id.trim())
+            .find(|map| map.id.trim() == order_id)
             .ok_or(ProductionMapError::MapNotFound)?;
         if matches!(action, queue_state::ApparatusQueueAction::Start)
             && !chain::order_ready_for_station(
@@ -539,13 +701,52 @@ impl ProductionMapService {
                 parsed.insert(id, state);
             }
         }
-        queue_state::apply_queue_action(&sequence, &mut parsed, order_id, action)?;
+        let from_state = parsed
+            .get(order_id)
+            .copied()
+            .unwrap_or(queue_state::ApparatusQueueOrderState::Pending);
+        match policy {
+            ApparatusQueuePolicy::StrictSequence => {
+                queue_state::apply_queue_action(&sequence, &mut parsed, order_id, action)?;
+            }
+            ApparatusQueuePolicy::FreePick => {
+                queue_state::apply_unordered_queue_action(&mut parsed, order_id, action)?;
+            }
+        }
+        let to_state = parsed
+            .get(order_id)
+            .copied()
+            .ok_or(ProductionMapError::QueueActionNotAllowed)?;
         let saved = parsed
             .into_iter()
             .map(|(id, state)| (id, state.as_str().to_string()))
             .collect::<BTreeMap<_, _>>();
+        let event = ApparatusQueueActionEvent {
+            event_id: queue_action_event_id(&storage_key, order_id, action),
+            apparatus: storage_key.clone(),
+            order_id: order_id.to_string(),
+            action,
+            from_state,
+            to_state,
+            policy,
+            actor,
+            assigned_apparatus: assigned_apparatus
+                .iter()
+                .map(|item| item.trim().to_string())
+                .filter(|item| !item.is_empty())
+                .collect(),
+            payload_json: serde_json::json!({
+                "requested_apparatus": apparatus,
+                "storage_key": storage_key,
+                "sequence": sequence,
+                "visible_order_ids": visible_order_ids,
+                "from_state": from_state.as_str(),
+                "to_state": to_state.as_str(),
+                "policy": policy.as_str(),
+            }),
+        };
         self.store
-            .put_apparatus_queue_states(&storage_key, saved.clone())
+            .put_apparatus_queue_states_with_event(&storage_key, saved.clone(), event)
             .await?;
         self.notify_live();
         Ok(saved)
@@ -1049,6 +1250,58 @@ fn laminatsiya_rubber_too_large(map: &ProductionMapDefinition) -> bool {
 
 fn is_laminatsiya_title(title: &str) -> bool {
     title.trim().to_lowercase().contains("laminatsiya")
+}
+
+fn effective_apparatus_queue_policy(
+    apparatus: &str,
+    stored: Option<ApparatusQueuePolicy>,
+) -> ApparatusQueuePolicy {
+    if pechat::pechat_color_count(apparatus).is_some() {
+        ApparatusQueuePolicy::StrictSequence
+    } else {
+        stored.unwrap_or(ApparatusQueuePolicy::StrictSequence)
+    }
+}
+
+fn effective_apparatus_queue_policy_record(
+    apparatus: &str,
+    stored: ApparatusQueuePolicy,
+) -> ApparatusQueuePolicyRecord {
+    let locked = pechat::pechat_color_count(apparatus).is_some();
+    ApparatusQueuePolicyRecord {
+        apparatus: apparatus.trim().to_string(),
+        policy: if locked {
+            ApparatusQueuePolicy::StrictSequence
+        } else {
+            stored
+        },
+        locked,
+        reason: if locked {
+            "pechat_always_strict".to_string()
+        } else {
+            String::new()
+        },
+    }
+}
+
+fn queue_action_event_id(
+    apparatus: &str,
+    order_id: &str,
+    action: queue_state::ApparatusQueueAction,
+) -> String {
+    let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|value| value.as_nanos())
+        .unwrap_or_default();
+    format!(
+        "production-map-queue:{nanos}:{}:{}:{}",
+        apparatus.trim(),
+        order_id.trim(),
+        match action {
+            queue_state::ApparatusQueueAction::Start => "start",
+            queue_state::ApparatusQueueAction::Complete => "complete",
+        }
+    )
 }
 
 fn validate_formula_target(target: &str) -> Result<(), ProductionMapError> {
@@ -1845,6 +2098,77 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn free_pick_policy_allows_ready_order_outside_sequence_head() {
+        let store = std::sync::Arc::new(MemoryProductionMapStore::new());
+        let service = ProductionMapService::new(store);
+        let actor = QueueActionActor {
+            role: "admin".to_string(),
+            ref_: "admin".to_string(),
+            display_name: "Admin".to_string(),
+        };
+        let first = apparatus_stage_map("zakaz-1", "Rezka apparat");
+        let second = apparatus_stage_map("zakaz-2", "Rezka apparat");
+        service.upsert_map(first).await.expect("first map");
+        service.upsert_map(second).await.expect("second map");
+        service
+            .set_apparatus_sequence(
+                "Rezka apparat",
+                vec!["zakaz-1".to_string(), "zakaz-2".to_string()],
+            )
+            .await
+            .expect("sequence");
+
+        let strict_result = service
+            .apply_apparatus_queue_action(
+                "Rezka apparat",
+                "zakaz-2",
+                queue_state::ApparatusQueueAction::Start,
+                &["Rezka apparat".to_string()],
+                actor.clone(),
+            )
+            .await;
+        assert_eq!(
+            strict_result,
+            Err(ProductionMapError::QueueActionNotAllowed)
+        );
+
+        service
+            .set_apparatus_queue_policy("Rezka apparat", ApparatusQueuePolicy::FreePick, &actor)
+            .await
+            .expect("free pick policy");
+        let states = service
+            .apply_apparatus_queue_action(
+                "Rezka apparat",
+                "zakaz-2",
+                queue_state::ApparatusQueueAction::Start,
+                &["Rezka apparat".to_string()],
+                actor,
+            )
+            .await
+            .expect("start second");
+        assert_eq!(states.get("zakaz-2"), Some(&"in_progress".to_string()));
+    }
+
+    #[tokio::test]
+    async fn pechat_queue_policy_is_always_locked_strict() {
+        let service =
+            ProductionMapService::new(std::sync::Arc::new(MemoryProductionMapStore::new()));
+        let actor = QueueActionActor {
+            role: "admin".to_string(),
+            ref_: "admin".to_string(),
+            display_name: "Admin".to_string(),
+        };
+        let result = service
+            .set_apparatus_queue_policy(
+                "7 ta rangli pechat",
+                ApparatusQueuePolicy::FreePick,
+                &actor,
+            )
+            .await;
+        assert_eq!(result, Err(ProductionMapError::ApparatusQueuePolicyLocked));
+    }
+
+    #[tokio::test]
     async fn upsert_maps_batch_keeps_queue_state_and_sequence_cache() {
         let store = std::sync::Arc::new(MemoryProductionMapStore::new());
         let service = ProductionMapService::new(store);
@@ -1989,6 +2313,80 @@ mod tests {
                 },
                 ProductionMapEdge {
                     from: "task".to_string(),
+                    to: "end".to_string(),
+                    branch: String::new(),
+                },
+            ],
+        }
+    }
+
+    fn apparatus_stage_map(id: &str, apparatus: &str) -> ProductionMapDefinition {
+        ProductionMapDefinition {
+            id: id.to_string(),
+            product_code: format!("{id}-product"),
+            title: id.to_string(),
+            code: String::new(),
+            order_number: String::new(),
+            roll_count: None,
+            width_mm: None,
+            nodes: vec![
+                ProductionMapNode {
+                    id: "start".to_string(),
+                    kind: ProductionMapNodeKind::Start,
+                    title: "Start".to_string(),
+                    formula: None,
+                    role_code: String::new(),
+                    item_code: String::new(),
+                    qty_formula: String::new(),
+                    from_location: String::new(),
+                    to_location: String::new(),
+                    alternative_group_id: String::new(),
+                    alternative_group_label: String::new(),
+                    alternative_assigned_title: String::new(),
+                    x: 0.0,
+                    y: 0.0,
+                },
+                ProductionMapNode {
+                    id: "apparatus".to_string(),
+                    kind: ProductionMapNodeKind::Apparatus,
+                    title: apparatus.to_string(),
+                    formula: None,
+                    role_code: String::new(),
+                    item_code: String::new(),
+                    qty_formula: String::new(),
+                    from_location: String::new(),
+                    to_location: String::new(),
+                    alternative_group_id: String::new(),
+                    alternative_group_label: String::new(),
+                    alternative_assigned_title: String::new(),
+                    x: 0.0,
+                    y: 132.0,
+                },
+                ProductionMapNode {
+                    id: "end".to_string(),
+                    kind: ProductionMapNodeKind::End,
+                    title: "End".to_string(),
+                    formula: None,
+                    role_code: String::new(),
+                    item_code: String::new(),
+                    qty_formula: String::new(),
+                    from_location: String::new(),
+                    to_location: String::new(),
+                    alternative_group_id: String::new(),
+                    alternative_group_label: String::new(),
+                    alternative_assigned_title: String::new(),
+                    x: 0.0,
+                    y: 264.0,
+                },
+            ],
+            edges: vec![
+                ProductionMapEdge {
+                    from: "start".to_string(),
+                    to: "apparatus".to_string(),
+                    branch: String::new(),
+                },
+                ProductionMapEdge {
+                    from: "apparatus".to_string(),
                     to: "end".to_string(),
                     branch: String::new(),
                 },

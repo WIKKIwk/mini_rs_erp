@@ -166,6 +166,10 @@ pub fn build_router(state: AppState) -> Router {
             any(admin::production_map_sequence),
         )
         .route(
+            "/v1/mobile/admin/production-maps/queue-policies",
+            any(admin::production_map_queue_policies),
+        )
+        .route(
             "/v1/mobile/admin/production-maps/live",
             any(admin::production_map_live),
         )

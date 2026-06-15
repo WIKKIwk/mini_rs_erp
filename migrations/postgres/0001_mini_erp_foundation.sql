@@ -183,6 +183,44 @@ CREATE TABLE IF NOT EXISTS mini_queue_states (
     CONSTRAINT mini_queue_states_state_allowed CHECK (state IN ('pending', 'in_progress', 'completed'))
 );
 
+CREATE TABLE IF NOT EXISTS mini_apparatus_queue_policies (
+    apparatus TEXT PRIMARY KEY,
+    policy TEXT NOT NULL,
+    actor_role TEXT NOT NULL DEFAULT '',
+    actor_ref TEXT NOT NULL DEFAULT '',
+    actor_display_name TEXT NOT NULL DEFAULT '',
+    payload_json JSONB NOT NULL DEFAULT '{}'::jsonb,
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    CONSTRAINT mini_apparatus_queue_policies_apparatus_not_blank CHECK (btrim(apparatus) <> ''),
+    CONSTRAINT mini_apparatus_queue_policies_policy_allowed CHECK (policy IN ('strict_sequence', 'free_pick'))
+);
+
+CREATE TABLE IF NOT EXISTS mini_queue_action_events (
+    id BIGSERIAL PRIMARY KEY,
+    event_id TEXT NOT NULL,
+    apparatus TEXT NOT NULL,
+    order_id TEXT NOT NULL,
+    action TEXT NOT NULL,
+    from_state TEXT NOT NULL,
+    to_state TEXT NOT NULL,
+    policy TEXT NOT NULL,
+    actor_role TEXT NOT NULL DEFAULT '',
+    actor_ref TEXT NOT NULL DEFAULT '',
+    actor_display_name TEXT NOT NULL DEFAULT '',
+    assigned_apparatus JSONB NOT NULL DEFAULT '[]'::jsonb,
+    payload_json JSONB NOT NULL DEFAULT '{}'::jsonb,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    CONSTRAINT mini_queue_action_events_event_id_not_blank CHECK (btrim(event_id) <> ''),
+    CONSTRAINT mini_queue_action_events_apparatus_not_blank CHECK (btrim(apparatus) <> ''),
+    CONSTRAINT mini_queue_action_events_order_id_not_blank CHECK (btrim(order_id) <> ''),
+    CONSTRAINT mini_queue_action_events_action_allowed CHECK (action IN ('start', 'complete')),
+    CONSTRAINT mini_queue_action_events_from_state_allowed CHECK (from_state IN ('pending', 'in_progress', 'completed')),
+    CONSTRAINT mini_queue_action_events_to_state_allowed CHECK (to_state IN ('pending', 'in_progress', 'completed')),
+    CONSTRAINT mini_queue_action_events_policy_allowed CHECK (policy IN ('strict_sequence', 'free_pick')),
+    CONSTRAINT mini_queue_action_events_assigned_array CHECK (jsonb_typeof(assigned_apparatus) = 'array'),
+    CONSTRAINT mini_queue_action_events_event_id_unique UNIQUE (event_id)
+);
+
 CREATE TABLE IF NOT EXISTS mini_engine_events (
     id BIGSERIAL PRIMARY KEY,
     event_id TEXT NOT NULL,
@@ -230,6 +268,9 @@ CREATE INDEX IF NOT EXISTS idx_mini_workers_level ON mini_workers(level);
 CREATE INDEX IF NOT EXISTS idx_mini_worker_groups_apparatus ON mini_worker_groups (lower(apparatus));
 CREATE INDEX IF NOT EXISTS idx_mini_worker_groups_shift ON mini_worker_groups (shift);
 CREATE INDEX IF NOT EXISTS idx_mini_queue_states_order_id ON mini_queue_states(order_id);
+CREATE INDEX IF NOT EXISTS idx_mini_queue_action_events_apparatus_created ON mini_queue_action_events(apparatus, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_mini_queue_action_events_order_created ON mini_queue_action_events(order_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_mini_queue_action_events_actor_created ON mini_queue_action_events(actor_role, actor_ref, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_mini_engine_events_entity ON mini_engine_events(domain, entity_id, created_at DESC);
 
 INSERT INTO mini_production_map_nodes (map_id, node_id, kind, title, payload_json)

@@ -347,6 +347,11 @@ mod postgres_production_map_tests {
                 "zakaz-1001",
                 crate::core::production_map::queue_state::ApparatusQueueAction::Complete,
                 &["7 ta rangli pechat".to_string()],
+                crate::core::production_map::QueueActionActor {
+                    role: "admin".to_string(),
+                    ref_: "test".to_string(),
+                    display_name: "Test Admin".to_string(),
+                },
             )
             .await
             .expect_err("cannot complete before state exists through service");

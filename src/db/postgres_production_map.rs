@@ -4,7 +4,8 @@ use async_trait::async_trait;
 use sqlx::{PgPool, Postgres, Transaction};
 
 use crate::core::production_map::{
-    ProductionMapDefinition, ProductionMapError, ProductionMapStorePort,
+    ApparatusQueueActionEvent, ApparatusQueuePolicy, ProductionMapDefinition, ProductionMapError,
+    ProductionMapStorePort, QueueActionActor,
 };
 
 #[derive(Clone)]
@@ -153,27 +154,159 @@ impl ProductionMapStorePort for PostgresProductionMapStore {
             .begin()
             .await
             .map_err(|_| ProductionMapError::StoreFailed)?;
-        sqlx::query("DELETE FROM mini_queue_states WHERE apparatus = $1")
-            .bind(apparatus)
-            .execute(&mut *tx)
-            .await
-            .map_err(|_| ProductionMapError::StoreFailed)?;
-        for (order_id, state) in states {
-            sqlx::query(
-                "INSERT INTO mini_queue_states (apparatus, order_id, state, updated_at)
-                 VALUES ($1, $2, $3, now())",
-            )
-            .bind(apparatus)
-            .bind(order_id.trim())
-            .bind(state.trim())
-            .execute(&mut *tx)
-            .await
-            .map_err(|_| ProductionMapError::StoreFailed)?;
-        }
+        put_queue_states_tx(&mut tx, apparatus, states).await?;
         tx.commit()
             .await
             .map_err(|_| ProductionMapError::StoreFailed)
     }
+
+    async fn apparatus_queue_policies(
+        &self,
+    ) -> Result<BTreeMap<String, ApparatusQueuePolicy>, ProductionMapError> {
+        let rows = sqlx::query_as::<_, (String, String)>(
+            "SELECT apparatus, policy
+             FROM mini_apparatus_queue_policies
+             ORDER BY apparatus ASC",
+        )
+        .fetch_all(&self.pool)
+        .await
+        .map_err(|_| ProductionMapError::StoreFailed)?;
+
+        rows.into_iter()
+            .map(|(apparatus, policy)| {
+                let policy =
+                    ApparatusQueuePolicy::parse(&policy).ok_or(ProductionMapError::StoreFailed)?;
+                Ok((apparatus, policy))
+            })
+            .collect()
+    }
+
+    async fn put_apparatus_queue_policy(
+        &self,
+        apparatus: &str,
+        policy: ApparatusQueuePolicy,
+        actor: &QueueActionActor,
+    ) -> Result<(), ProductionMapError> {
+        let payload = serde_json::json!({
+            "actor": actor,
+            "policy": policy.as_str(),
+        });
+        sqlx::query(
+            "INSERT INTO mini_apparatus_queue_policies
+                (apparatus, policy, actor_role, actor_ref, actor_display_name, payload_json, updated_at)
+             VALUES ($1, $2, $3, $4, $5, $6, now())
+             ON CONFLICT (apparatus) DO UPDATE SET
+               policy = excluded.policy,
+               actor_role = excluded.actor_role,
+               actor_ref = excluded.actor_ref,
+               actor_display_name = excluded.actor_display_name,
+               payload_json = excluded.payload_json,
+               updated_at = excluded.updated_at",
+        )
+        .bind(apparatus.trim())
+        .bind(policy.as_str())
+        .bind(actor.role.trim())
+        .bind(actor.ref_.trim())
+        .bind(actor.display_name.trim())
+        .bind(payload)
+        .execute(&self.pool)
+        .await
+        .map_err(|_| ProductionMapError::StoreFailed)?;
+        Ok(())
+    }
+
+    async fn put_apparatus_queue_states_with_event(
+        &self,
+        apparatus: &str,
+        states: BTreeMap<String, String>,
+        event: ApparatusQueueActionEvent,
+    ) -> Result<(), ProductionMapError> {
+        let apparatus = apparatus.trim();
+        let mut tx = self
+            .pool
+            .begin()
+            .await
+            .map_err(|_| ProductionMapError::StoreFailed)?;
+        put_queue_states_tx(&mut tx, apparatus, states).await?;
+        insert_queue_action_event_tx(&mut tx, &event).await?;
+        tx.commit()
+            .await
+            .map_err(|_| ProductionMapError::StoreFailed)
+    }
+
+    async fn append_apparatus_queue_action_event(
+        &self,
+        event: ApparatusQueueActionEvent,
+    ) -> Result<(), ProductionMapError> {
+        let mut tx = self
+            .pool
+            .begin()
+            .await
+            .map_err(|_| ProductionMapError::StoreFailed)?;
+        insert_queue_action_event_tx(&mut tx, &event).await?;
+        tx.commit()
+            .await
+            .map_err(|_| ProductionMapError::StoreFailed)
+    }
+}
+
+async fn put_queue_states_tx(
+    tx: &mut Transaction<'_, Postgres>,
+    apparatus: &str,
+    states: BTreeMap<String, String>,
+) -> Result<(), ProductionMapError> {
+    sqlx::query("DELETE FROM mini_queue_states WHERE apparatus = $1")
+        .bind(apparatus)
+        .execute(&mut **tx)
+        .await
+        .map_err(|_| ProductionMapError::StoreFailed)?;
+    for (order_id, state) in states {
+        sqlx::query(
+            "INSERT INTO mini_queue_states (apparatus, order_id, state, updated_at)
+             VALUES ($1, $2, $3, now())",
+        )
+        .bind(apparatus)
+        .bind(order_id.trim())
+        .bind(state.trim())
+        .execute(&mut **tx)
+        .await
+        .map_err(|_| ProductionMapError::StoreFailed)?;
+    }
+    Ok(())
+}
+
+async fn insert_queue_action_event_tx(
+    tx: &mut Transaction<'_, Postgres>,
+    event: &ApparatusQueueActionEvent,
+) -> Result<(), ProductionMapError> {
+    sqlx::query(
+        "INSERT INTO mini_queue_action_events
+            (event_id, apparatus, order_id, action, from_state, to_state, policy,
+             actor_role, actor_ref, actor_display_name, assigned_apparatus, payload_json, created_at)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, now())",
+    )
+    .bind(event.event_id.trim())
+    .bind(event.apparatus.trim())
+    .bind(event.order_id.trim())
+    .bind(match event.action {
+        crate::core::production_map::queue_state::ApparatusQueueAction::Start => "start",
+        crate::core::production_map::queue_state::ApparatusQueueAction::Complete => "complete",
+    })
+    .bind(event.from_state.as_str())
+    .bind(event.to_state.as_str())
+    .bind(event.policy.as_str())
+    .bind(event.actor.role.trim())
+    .bind(event.actor.ref_.trim())
+    .bind(event.actor.display_name.trim())
+    .bind(
+        serde_json::to_value(&event.assigned_apparatus)
+            .map_err(|_| ProductionMapError::StoreFailed)?,
+    )
+    .bind(&event.payload_json)
+    .execute(&mut **tx)
+    .await
+    .map_err(|_| ProductionMapError::StoreFailed)?;
+    Ok(())
 }
 
 async fn put_map_inner(

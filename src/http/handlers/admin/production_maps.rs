@@ -4,8 +4,9 @@ use crate::core::calculate_orders::{
     CalculateOrderError, CalculateOrderTemplate, owner_key, validate_template,
 };
 use crate::core::production_map::{
-    ProductionMapBatchMoveRequest, ProductionMapDefinition, ProductionMapError,
-    ProductionMapMoveRequest, ProductionMapRunRequest, queue_state,
+    ApparatusQueuePolicy, ProductionMapBatchMoveRequest, ProductionMapDefinition,
+    ProductionMapError, ProductionMapMoveRequest, ProductionMapRunRequest, QueueActionActor,
+    queue_state,
 };
 use crate::google_sheets::is_sheet_order_map;
 use async_stream::stream;
@@ -225,10 +226,16 @@ pub async fn production_map_sequence(
                 .apparatus_queue_states()
                 .await
                 .map_err(production_map_error)?;
+            let queue_policies = state
+                .production_maps
+                .apparatus_queue_policy_records()
+                .await
+                .map_err(production_map_error)?;
             Ok(json_response(serde_json::json!({
                 "ok": true,
                 "sequences": sequences,
                 "queue_states": queue_states,
+                "queue_policies": queue_policies,
             })))
         }
         Method::PUT => {
@@ -248,6 +255,72 @@ pub async fn production_map_sequence(
                 .await
                 .map_err(production_map_error)?;
             Ok(json_response(serde_json::json!({"ok": true})))
+        }
+        _ => Err(method_not_allowed()),
+    }
+}
+
+#[derive(serde::Deserialize)]
+struct ApparatusQueuePolicyPutRequest {
+    #[serde(default)]
+    apparatus: String,
+    policy: ApparatusQueuePolicy,
+}
+
+/// Apparatus queue policy controls whether a worker must follow the saved
+/// sequence or can pick any ready order. Pechat stays strict in the service.
+pub async fn production_map_queue_policies(
+    State(state): State<AppState>,
+    method: Method,
+    headers: HeaderMap,
+    body: Bytes,
+) -> Result<Response, AdminError> {
+    let principal = authorize_any_capability(
+        &state,
+        &headers,
+        &[
+            Capability::AdminAccess,
+            Capability::ProductionMapManage,
+            Capability::ApparatusQueueRead,
+        ],
+    )
+    .await?;
+    match method {
+        Method::GET => {
+            let policies = state
+                .production_maps
+                .apparatus_queue_policy_records()
+                .await
+                .map_err(production_map_error)?;
+            Ok(json_response(serde_json::json!({
+                "ok": true,
+                "policies": policies,
+            })))
+        }
+        Method::PUT => {
+            authorize_any_capability(
+                &state,
+                &headers,
+                &[Capability::AdminAccess, Capability::ProductionMapManage],
+            )
+            .await?;
+            let input: ApparatusQueuePolicyPutRequest = parse_json(&body)?;
+            if input.apparatus.trim().is_empty() {
+                return Err(bad_request("apparatus is required"));
+            }
+            let record = state
+                .production_maps
+                .set_apparatus_queue_policy(
+                    &input.apparatus,
+                    input.policy,
+                    &queue_action_actor(&principal),
+                )
+                .await
+                .map_err(production_map_error)?;
+            Ok(json_response(serde_json::json!({
+                "ok": true,
+                "policy": record,
+            })))
         }
         _ => Err(method_not_allowed()),
     }
@@ -295,6 +368,7 @@ pub async fn production_map_queue_action(
             &input.order_id,
             input.action,
             &assigned_apparatus,
+            queue_action_actor(&principal),
         )
         .await
         .map_err(production_map_error)?;
@@ -340,6 +414,7 @@ fn production_map_live_sse(state: AppState) -> Sse<impl Stream<Item = Result<Eve
                         "maps": snapshot.maps,
                         "sequences": snapshot.sequences,
                         "queue_states": snapshot.queue_states,
+                        "queue_policies": snapshot.queue_policies,
                     });
                     if let Ok(json) = serde_json::to_string(&payload) {
                         if json != last_payload {
@@ -440,20 +515,33 @@ fn production_map_error(error: ProductionMapError) -> AdminError {
         ProductionMapError::LaminatsiyaRubberTooLarge => {
             bad_request("laminatsiya_rubber_too_large")
         }
+        ProductionMapError::ApparatusQueuePolicyLocked => bad_request("queue_policy_locked"),
         ProductionMapError::MapNotFound => not_found("map_not_found"),
         ProductionMapError::StoreFailed => server_error("store failed"),
         other => bad_request(other.to_string()),
     }
 }
 
-fn principal_owner_key(principal: &Principal) -> String {
-    let role = match principal.role {
+fn queue_action_actor(principal: &Principal) -> QueueActionActor {
+    QueueActionActor {
+        role: principal_role_code(&principal.role).to_string(),
+        ref_: principal.ref_.trim().to_string(),
+        display_name: principal.display_name.trim().to_string(),
+    }
+}
+
+fn principal_role_code(role: &PrincipalRole) -> &'static str {
+    match role {
         PrincipalRole::Supplier => "supplier",
         PrincipalRole::Werka => "werka",
         PrincipalRole::Customer => "customer",
         PrincipalRole::Aparatchi => "aparatchi",
         PrincipalRole::Admin => "admin",
-    };
+    }
+}
+
+fn principal_owner_key(principal: &Principal) -> String {
+    let role = principal_role_code(&principal.role);
     owner_key(role, &principal.ref_)
 }
 

@@ -32,7 +32,7 @@ impl ApparatusQueueOrderState {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ApparatusQueueAction {
     Start,
@@ -201,6 +201,36 @@ pub fn apply_queue_action(
     Ok(())
 }
 
+pub fn apply_unordered_queue_action(
+    states: &mut BTreeMap<String, ApparatusQueueOrderState>,
+    order_id: &str,
+    action: ApparatusQueueAction,
+) -> Result<(), ProductionMapError> {
+    let order_id = order_id.trim();
+    if order_id.is_empty() {
+        return Err(ProductionMapError::MissingId);
+    }
+    let current = states
+        .get(order_id)
+        .copied()
+        .unwrap_or(ApparatusQueueOrderState::Pending);
+    match action {
+        ApparatusQueueAction::Start => {
+            if current != ApparatusQueueOrderState::Pending {
+                return Err(ProductionMapError::QueueActionNotAllowed);
+            }
+            states.insert(order_id.to_string(), ApparatusQueueOrderState::InProgress);
+        }
+        ApparatusQueueAction::Complete => {
+            if current != ApparatusQueueOrderState::InProgress {
+                return Err(ProductionMapError::QueueActionNotAllowed);
+            }
+            states.insert(order_id.to_string(), ApparatusQueueOrderState::Completed);
+        }
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -251,6 +281,19 @@ mod tests {
         assert_eq!(states.get("a"), Some(&ApparatusQueueOrderState::Completed));
         apply_queue_action(&sequence, &mut states, "b", ApparatusQueueAction::Start)
             .expect("start second");
+    }
+
+    #[test]
+    fn unordered_action_allows_any_pending_order() {
+        let mut states = BTreeMap::new();
+        apply_unordered_queue_action(&mut states, "b", ApparatusQueueAction::Start)
+            .expect("free pick can start later order");
+        assert_eq!(states.get("b"), Some(&ApparatusQueueOrderState::InProgress));
+        apply_unordered_queue_action(&mut states, "b", ApparatusQueueAction::Complete)
+            .expect("free pick completes started order");
+        assert_eq!(states.get("b"), Some(&ApparatusQueueOrderState::Completed));
+        apply_unordered_queue_action(&mut states, "b", ApparatusQueueAction::Start)
+            .expect_err("completed order cannot restart");
     }
 
     #[test]

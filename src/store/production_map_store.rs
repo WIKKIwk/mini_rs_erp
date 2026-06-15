@@ -7,7 +7,8 @@ use async_trait::async_trait;
 use rusqlite::{Connection, OptionalExtension, params};
 
 use crate::core::production_map::{
-    ProductionMapDefinition, ProductionMapError, ProductionMapStorePort,
+    ApparatusQueueActionEvent, ApparatusQueuePolicy, ProductionMapDefinition, ProductionMapError,
+    ProductionMapStorePort, QueueActionActor,
 };
 
 #[derive(Clone)]
@@ -221,6 +222,120 @@ impl ProductionMapStorePort for ProductionMapStore {
         }
         Ok(())
     }
+
+    async fn apparatus_queue_policies(
+        &self,
+    ) -> Result<BTreeMap<String, ApparatusQueuePolicy>, ProductionMapError> {
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|_| ProductionMapError::StoreFailed)?;
+        let mut stmt = conn
+            .prepare("SELECT apparatus, policy FROM apparatus_queue_policies")
+            .map_err(|_| ProductionMapError::StoreFailed)?;
+        let rows = stmt
+            .query_map([], |row| {
+                Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+            })
+            .map_err(|_| ProductionMapError::StoreFailed)?;
+        let mut result = BTreeMap::new();
+        for row in rows {
+            let (apparatus, policy) = row.map_err(|_| ProductionMapError::StoreFailed)?;
+            let policy =
+                ApparatusQueuePolicy::parse(&policy).ok_or(ProductionMapError::StoreFailed)?;
+            result.insert(apparatus, policy);
+        }
+        Ok(result)
+    }
+
+    async fn put_apparatus_queue_policy(
+        &self,
+        apparatus: &str,
+        policy: ApparatusQueuePolicy,
+        actor: &QueueActionActor,
+    ) -> Result<(), ProductionMapError> {
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|_| ProductionMapError::StoreFailed)?;
+        let payload = serde_json::json!({
+            "actor": actor,
+            "policy": policy.as_str(),
+        });
+        conn.execute(
+            "INSERT INTO apparatus_queue_policies
+                (apparatus, policy, actor_role, actor_ref, actor_display_name, payload_json, saved_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
+             ON CONFLICT(apparatus) DO UPDATE SET
+                policy = excluded.policy,
+                actor_role = excluded.actor_role,
+                actor_ref = excluded.actor_ref,
+                actor_display_name = excluded.actor_display_name,
+                payload_json = excluded.payload_json,
+                saved_at = excluded.saved_at",
+            params![
+                apparatus.trim(),
+                policy.as_str(),
+                actor.role.trim(),
+                actor.ref_.trim(),
+                actor.display_name.trim(),
+                payload.to_string(),
+                unix_micros().to_string(),
+            ],
+        )
+        .map_err(|_| ProductionMapError::StoreFailed)?;
+        Ok(())
+    }
+
+    async fn put_apparatus_queue_states_with_event(
+        &self,
+        apparatus: &str,
+        states: BTreeMap<String, String>,
+        event: ApparatusQueueActionEvent,
+    ) -> Result<(), ProductionMapError> {
+        self.put_apparatus_queue_states(apparatus, states).await?;
+        self.append_apparatus_queue_action_event(event).await
+    }
+
+    async fn append_apparatus_queue_action_event(
+        &self,
+        event: ApparatusQueueActionEvent,
+    ) -> Result<(), ProductionMapError> {
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|_| ProductionMapError::StoreFailed)?;
+        conn.execute(
+            "INSERT INTO apparatus_queue_action_events
+                (event_id, apparatus, order_id, action, from_state, to_state, policy,
+                 actor_role, actor_ref, actor_display_name, assigned_apparatus_json,
+                 payload_json, saved_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)",
+            params![
+                event.event_id.trim(),
+                event.apparatus.trim(),
+                event.order_id.trim(),
+                match event.action {
+                    crate::core::production_map::queue_state::ApparatusQueueAction::Start =>
+                        "start",
+                    crate::core::production_map::queue_state::ApparatusQueueAction::Complete =>
+                        "complete",
+                },
+                event.from_state.as_str(),
+                event.to_state.as_str(),
+                event.policy.as_str(),
+                event.actor.role.trim(),
+                event.actor.ref_.trim(),
+                event.actor.display_name.trim(),
+                serde_json::to_string(&event.assigned_apparatus)
+                    .map_err(|_| ProductionMapError::StoreFailed)?,
+                event.payload_json.to_string(),
+                unix_micros().to_string(),
+            ],
+        )
+        .map_err(|_| ProductionMapError::StoreFailed)?;
+        Ok(())
+    }
 }
 
 fn put_map_inner(
@@ -343,6 +458,30 @@ fn migrate(conn: &Connection) -> rusqlite::Result<()> {
             state TEXT NOT NULL,
             saved_at TEXT NOT NULL,
             PRIMARY KEY (apparatus, order_id)
+        );
+        CREATE TABLE IF NOT EXISTS apparatus_queue_policies (
+            apparatus TEXT PRIMARY KEY,
+            policy TEXT NOT NULL,
+            actor_role TEXT NOT NULL DEFAULT '',
+            actor_ref TEXT NOT NULL DEFAULT '',
+            actor_display_name TEXT NOT NULL DEFAULT '',
+            payload_json TEXT NOT NULL DEFAULT '{}',
+            saved_at TEXT NOT NULL
+        );
+        CREATE TABLE IF NOT EXISTS apparatus_queue_action_events (
+            event_id TEXT PRIMARY KEY,
+            apparatus TEXT NOT NULL,
+            order_id TEXT NOT NULL,
+            action TEXT NOT NULL,
+            from_state TEXT NOT NULL,
+            to_state TEXT NOT NULL,
+            policy TEXT NOT NULL,
+            actor_role TEXT NOT NULL DEFAULT '',
+            actor_ref TEXT NOT NULL DEFAULT '',
+            actor_display_name TEXT NOT NULL DEFAULT '',
+            assigned_apparatus_json TEXT NOT NULL DEFAULT '[]',
+            payload_json TEXT NOT NULL DEFAULT '{}',
+            saved_at TEXT NOT NULL
         );",
     )
 }
