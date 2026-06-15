@@ -220,6 +220,82 @@ impl ProductionMapStorePort for ProductionMapStore {
         Ok(())
     }
 
+    async fn daily_apparatus_sequences(
+        &self,
+    ) -> Result<BTreeMap<String, BTreeMap<String, Vec<String>>>, ProductionMapError> {
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|_| ProductionMapError::StoreFailed)?;
+        let mut stmt = conn
+            .prepare("SELECT work_date, apparatus, order_ids_json FROM daily_apparatus_sequences")
+            .map_err(|_| ProductionMapError::StoreFailed)?;
+        let rows = stmt
+            .query_map([], |row| {
+                let work_date: String = row.get(0)?;
+                let apparatus: String = row.get(1)?;
+                let payload: String = row.get(2)?;
+                let order_ids = serde_json::from_str::<Vec<String>>(&payload)
+                    .map_err(|error| rusqlite::Error::ToSqlConversionFailure(error.into()))?;
+                Ok((work_date, apparatus, order_ids))
+            })
+            .map_err(|_| ProductionMapError::StoreFailed)?;
+        let mut grouped = BTreeMap::<String, BTreeMap<String, Vec<String>>>::new();
+        for row in rows {
+            let (work_date, apparatus, order_ids) =
+                row.map_err(|_| ProductionMapError::StoreFailed)?;
+            grouped
+                .entry(work_date)
+                .or_default()
+                .insert(apparatus, order_ids);
+        }
+        Ok(grouped)
+    }
+
+    async fn put_daily_apparatus_sequence(
+        &self,
+        work_date: &str,
+        apparatus: &str,
+        order_ids: Vec<String>,
+    ) -> Result<(), ProductionMapError> {
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|_| ProductionMapError::StoreFailed)?;
+        let order_ids = order_ids
+            .into_iter()
+            .map(|id| id.trim().to_string())
+            .filter(|id| !id.is_empty())
+            .collect::<Vec<_>>();
+        if order_ids.is_empty() {
+            conn.execute(
+                "DELETE FROM daily_apparatus_sequences
+                 WHERE work_date = ?1 AND apparatus = ?2",
+                params![work_date.trim(), apparatus.trim()],
+            )
+            .map_err(|_| ProductionMapError::StoreFailed)?;
+            return Ok(());
+        }
+        let payload =
+            serde_json::to_string(&order_ids).map_err(|_| ProductionMapError::StoreFailed)?;
+        conn.execute(
+            "INSERT INTO daily_apparatus_sequences
+                (work_date, apparatus, order_ids_json, saved_at)
+             VALUES (?1, ?2, ?3, ?4)
+             ON CONFLICT(work_date, apparatus) DO UPDATE SET
+                order_ids_json = excluded.order_ids_json,
+                saved_at = excluded.saved_at",
+            params![
+                work_date.trim(),
+                apparatus.trim(),
+                payload,
+                unix_micros().to_string()
+            ],
+        )
+        .map_err(|_| ProductionMapError::StoreFailed)?;
+        Ok(())
+    }
+
     async fn apparatus_queue_states(
         &self,
     ) -> Result<BTreeMap<String, BTreeMap<String, String>>, ProductionMapError> {
@@ -400,6 +476,13 @@ fn migrate(conn: &Connection) -> rusqlite::Result<()> {
             work_date TEXT PRIMARY KEY,
             order_ids_json TEXT NOT NULL,
             saved_at TEXT NOT NULL
+        );
+        CREATE TABLE IF NOT EXISTS daily_apparatus_sequences (
+            work_date TEXT NOT NULL,
+            apparatus TEXT NOT NULL,
+            order_ids_json TEXT NOT NULL,
+            saved_at TEXT NOT NULL,
+            PRIMARY KEY (work_date, apparatus)
         );
         CREATE TABLE IF NOT EXISTS apparatus_queue_states (
             apparatus TEXT NOT NULL,

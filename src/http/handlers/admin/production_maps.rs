@@ -203,6 +203,16 @@ struct DailyWorkSequencePutRequest {
     order_ids: Vec<String>,
 }
 
+#[derive(serde::Deserialize)]
+struct DailyApparatusSequencePutRequest {
+    #[serde(default)]
+    work_date: String,
+    #[serde(default)]
+    apparatus: String,
+    #[serde(default)]
+    order_ids: Vec<String>,
+}
+
 /// Apparatus order sequences are stored server-side so every device (admin
 /// and worker) sees the same queue order.
 pub async fn production_map_sequence(
@@ -310,6 +320,53 @@ pub async fn production_map_daily_sequence(
     }
 }
 
+pub async fn production_map_daily_apparatus_sequence(
+    State(state): State<AppState>,
+    method: Method,
+    headers: HeaderMap,
+    body: Bytes,
+) -> Result<Response, AdminError> {
+    authorize_any_capability(
+        &state,
+        &headers,
+        &[
+            Capability::AdminAccess,
+            Capability::ProductionMapManage,
+            Capability::ApparatusQueueRead,
+        ],
+    )
+    .await?;
+    match method {
+        Method::GET => {
+            let sequences = state
+                .production_maps
+                .daily_apparatus_sequences()
+                .await
+                .map_err(production_map_error)?;
+            Ok(json_response(serde_json::json!({
+                "ok": true,
+                "sequences": sequences,
+            })))
+        }
+        Method::PUT => {
+            authorize_any_capability(
+                &state,
+                &headers,
+                &[Capability::AdminAccess, Capability::ProductionMapManage],
+            )
+            .await?;
+            let input: DailyApparatusSequencePutRequest = parse_json(&body)?;
+            state
+                .production_maps
+                .set_daily_apparatus_sequence(&input.work_date, &input.apparatus, input.order_ids)
+                .await
+                .map_err(production_map_error)?;
+            Ok(json_response(serde_json::json!({"ok": true})))
+        }
+        _ => Err(method_not_allowed()),
+    }
+}
+
 #[derive(serde::Deserialize)]
 struct ApparatusQueueActionRequest {
     #[serde(default)]
@@ -397,6 +454,7 @@ fn production_map_live_sse(state: AppState) -> Sse<impl Stream<Item = Result<Eve
                         "maps": snapshot.maps,
                         "sequences": snapshot.sequences,
                         "daily_sequences": snapshot.daily_sequences,
+                        "daily_apparatus_sequences": snapshot.daily_apparatus_sequences,
                         "queue_states": snapshot.queue_states,
                     });
                     if let Ok(json) = serde_json::to_string(&payload) {

@@ -697,6 +697,69 @@ async fn production_map_daily_sequence_round_trips_on_server() {
 }
 
 #[tokio::test]
+async fn production_map_daily_apparatus_sequence_round_trips_on_server() {
+    let state = test_state();
+    let token = session(&state, PrincipalRole::Admin).await;
+
+    let put = build_router(state.clone())
+        .oneshot(request_with_body(
+            "PUT",
+            "/v1/mobile/admin/production-maps/daily-apparatus-sequence",
+            &token,
+            r#"{
+                "work_date":"2026-06-15",
+                "apparatus":"8 ta rangli pechat",
+                "order_ids":["zakaz-1111","zakaz-2222"," "]
+            }"#,
+        ))
+        .await
+        .expect("put daily apparatus sequence");
+    assert_eq!(put.status(), StatusCode::OK);
+
+    let get = build_router(state.clone())
+        .oneshot(request(
+            "GET",
+            "/v1/mobile/admin/production-maps/daily-apparatus-sequence",
+            &token,
+        ))
+        .await
+        .expect("get daily apparatus sequence");
+    assert_eq!(get.status(), StatusCode::OK);
+    let body = json_body(get).await;
+    assert_eq!(
+        body["sequences"]["2026-06-15"]["8 ta rangli pechat"],
+        serde_json::json!(["zakaz-1111", "zakaz-2222"])
+    );
+
+    let clear = build_router(state.clone())
+        .oneshot(request_with_body(
+            "PUT",
+            "/v1/mobile/admin/production-maps/daily-apparatus-sequence",
+            &token,
+            r#"{
+                "work_date":"2026-06-15",
+                "apparatus":"8 ta rangli pechat",
+                "order_ids":[]
+            }"#,
+        ))
+        .await
+        .expect("clear daily apparatus sequence");
+    assert_eq!(clear.status(), StatusCode::OK);
+
+    let cleared = build_router(state)
+        .oneshot(request(
+            "GET",
+            "/v1/mobile/admin/production-maps/daily-apparatus-sequence",
+            &token,
+        ))
+        .await
+        .expect("get cleared daily apparatus sequence");
+    assert_eq!(cleared.status(), StatusCode::OK);
+    let cleared_body = json_body(cleared).await;
+    assert!(cleared_body["sequences"]["2026-06-15"].is_null());
+}
+
+#[tokio::test]
 async fn production_map_save_with_order_rejects_invalid_template_before_saving_map() {
     let state = test_state();
     let token = session(&state, PrincipalRole::Admin).await;

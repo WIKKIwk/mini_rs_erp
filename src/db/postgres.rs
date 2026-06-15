@@ -186,6 +186,7 @@ mod tests {
             "mini_workers",
             "mini_queue_sequences",
             "mini_daily_work_sequences",
+            "mini_daily_apparatus_sequences",
             "mini_queue_states",
             "mini_engine_events",
             "mini_idempotency_keys",
@@ -293,6 +294,7 @@ mod tests {
                  'mini_workers',
                  'mini_queue_sequences',
                  'mini_daily_work_sequences',
+                 'mini_daily_apparatus_sequences',
                  'mini_queue_states',
                  'mini_engine_events',
                  'mini_idempotency_keys'
