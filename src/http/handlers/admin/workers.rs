@@ -112,12 +112,25 @@ pub async fn worker_groups(
         Method::PUT => {
             let input: WorkerGroupUpsert = parse_json(&body)?;
             validate_worker_ids(&state, &input.worker_ids).await?;
+            let previous_groups = state
+                .worker_groups
+                .worker_groups(None)
+                .await
+                .map_err(worker_group_error)?;
             let saved = state
                 .worker_groups
                 .upsert_group(input)
                 .await
                 .map_err(worker_group_error)?;
-            sync_worker_group_apparatchi_assignments(&state, &saved).await?;
+            let affected_worker_ids = previous_groups
+                .iter()
+                .filter(|group| group.group_code == saved.group_code)
+                .flat_map(|group| group.worker_ids.iter())
+                .chain(saved.worker_ids.iter())
+                .map(|id| id.trim().to_string())
+                .filter(|id| !id.is_empty())
+                .collect::<BTreeSet<_>>();
+            sync_worker_group_apparatchi_assignments(&state, &affected_worker_ids).await?;
             let mut responses = enrich_worker_groups(&state, vec![saved]).await?;
             Ok(json_response(responses.pop().ok_or_else(|| {
                 server_error("worker group store failed")
@@ -129,24 +142,55 @@ pub async fn worker_groups(
 
 async fn sync_worker_group_apparatchi_assignments(
     state: &AppState,
-    group: &WorkerGroupRecord,
+    affected_worker_ids: &BTreeSet<String>,
 ) -> Result<(), AdminError> {
-    let apparatus = group.apparatus.trim();
-    if apparatus.is_empty() {
+    if affected_worker_ids.is_empty() {
         return Ok(());
     }
 
-    for worker_id in group.worker_ids.iter().map(|id| id.trim()) {
-        if worker_id.is_empty() {
+    let groups = state
+        .worker_groups
+        .worker_groups(None)
+        .await
+        .map_err(worker_group_error)?;
+    let mut apparatus_by_worker = BTreeMap::<String, BTreeSet<String>>::new();
+    for group in groups {
+        let apparatus = group.apparatus.trim();
+        if apparatus.is_empty() {
+            continue;
+        }
+        for worker_id in group.worker_ids.iter().map(|id| id.trim()) {
+            if worker_id.is_empty() {
+                continue;
+            }
+            apparatus_by_worker
+                .entry(worker_id.to_string())
+                .or_default()
+                .insert(apparatus.to_string());
+        }
+    }
+
+    for worker_id in affected_worker_ids {
+        let assigned_apparatus = apparatus_by_worker
+            .remove(worker_id)
+            .unwrap_or_default()
+            .into_iter()
+            .collect::<Vec<_>>();
+        if assigned_apparatus.is_empty() {
+            state
+                .admin
+                .delete_role_assignment(&PrincipalRole::Aparatchi, worker_id)
+                .await
+                .map_err(|_| server_error("admin role assignment delete failed"))?;
             continue;
         }
         state
             .admin
             .upsert_role_assignment(RoleAssignmentUpsert {
                 principal_role: PrincipalRole::Aparatchi,
-                principal_ref: worker_id.to_string(),
+                principal_ref: worker_id.clone(),
                 role_id: "aparatchi".to_string(),
-                assigned_apparatus: vec![apparatus.to_string()],
+                assigned_apparatus,
             })
             .await
             .map_err(|_| server_error("admin role assignment save failed"))?;

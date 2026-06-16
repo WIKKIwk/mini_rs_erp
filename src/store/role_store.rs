@@ -71,6 +71,17 @@ impl RoleDefinitionStorePort for RoleDefinitionStore {
         );
         save(&self.path, &state).await
     }
+
+    async fn delete_role_assignment(
+        &self,
+        role: &crate::core::auth::models::PrincipalRole,
+        ref_: &str,
+    ) -> Result<(), RoleStoreError> {
+        let mut state = self.state.lock().await;
+        load_if_needed(&self.path, &mut state).await?;
+        state.assignments.remove(&role_assignment_key(role, ref_));
+        save(&self.path, &state).await
+    }
 }
 
 async fn load_if_needed(

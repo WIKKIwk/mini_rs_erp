@@ -65,6 +65,17 @@ impl AdminService {
         Ok(assignment)
     }
 
+    pub async fn delete_role_assignment(
+        &self,
+        role: &PrincipalRole,
+        ref_: &str,
+    ) -> Result<(), AdminPortError> {
+        self.role_store
+            .delete_role_assignment(role, ref_)
+            .await
+            .map_err(|_| AdminPortError::LookupFailed)
+    }
+
     pub async fn principal_has_capability(
         &self,
         principal: &Principal,

@@ -308,6 +308,45 @@ async fn admin_worker_groups_save_custom_codes_schedule_and_reject_duplicate_wor
         );
     }
 
+    let saved = build_router(state.clone())
+        .oneshot(request_with_body(
+            "PUT",
+            "/v1/mobile/admin/worker-groups",
+            &token,
+            &format!(
+                r#"{{
+                    "apparatus":"Laminatsiya 1",
+                    "group_code":"b guruh",
+                    "shift":"kechki",
+                    "start_time":"08:30",
+                    "end_time":"20:30",
+                    "work_days_per_week":6,
+                    "start_day":"monday",
+                    "accounting_enabled":true,
+                    "worker_ids":["{first_id}"]
+                }}"#
+            ),
+        ))
+        .await
+        .expect("save worker group without second worker");
+    assert_eq!(saved.status(), StatusCode::OK);
+
+    let assignments = build_router(state.clone())
+        .oneshot(request("GET", "/v1/mobile/admin/role-assignments", &token))
+        .await
+        .expect("role assignments after worker removal");
+    assert_eq!(assignments.status(), StatusCode::OK);
+    let assignment_body = json_body(assignments).await;
+    let assignments = assignment_body.as_array().expect("assignments");
+    assert!(assignments.iter().any(|assignment| {
+        assignment["principal_role"] == "aparatchi"
+            && assignment["principal_ref"] == first_id
+            && assignment["assigned_apparatus"] == serde_json::json!(["Laminatsiya 1"])
+    }));
+    assert!(!assignments.iter().any(|assignment| {
+        assignment["principal_role"] == "aparatchi" && assignment["principal_ref"] == second_id
+    }));
+
     let duplicate = build_router(state.clone())
         .oneshot(request_with_body(
             "PUT",
@@ -318,7 +357,7 @@ async fn admin_worker_groups_save_custom_codes_schedule_and_reject_duplicate_wor
                     "apparatus":"Laminatsiya 1",
                     "group_code":"ba",
                     "shift":"kunduz",
-                    "worker_ids":["{second_id}"]
+                    "worker_ids":["{first_id}"]
                 }}"#
             ),
         ))

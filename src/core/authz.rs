@@ -138,6 +138,11 @@ pub trait RoleDefinitionStorePort: Send + Sync {
     async fn put_role_definition(&self, role: RoleDefinition) -> Result<(), RoleStoreError>;
     async fn role_assignments(&self) -> Result<Vec<RoleAssignment>, RoleStoreError>;
     async fn put_role_assignment(&self, assignment: RoleAssignment) -> Result<(), RoleStoreError>;
+    async fn delete_role_assignment(
+        &self,
+        role: &PrincipalRole,
+        ref_: &str,
+    ) -> Result<(), RoleStoreError>;
 }
 
 pub struct MemoryRoleDefinitionStore {
@@ -180,6 +185,18 @@ impl RoleDefinitionStorePort for MemoryRoleDefinitionStore {
             role_assignment_key(&assignment.principal_role, &assignment.principal_ref),
             assignment,
         );
+        Ok(())
+    }
+
+    async fn delete_role_assignment(
+        &self,
+        role: &PrincipalRole,
+        ref_: &str,
+    ) -> Result<(), RoleStoreError> {
+        self.assignments
+            .write()
+            .await
+            .remove(&role_assignment_key(role, ref_));
         Ok(())
     }
 }
