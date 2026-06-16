@@ -1,5 +1,6 @@
 use super::*;
 
+use crate::core::auth::models::PrincipalRole;
 use crate::core::worker_groups::{WorkerGroupError, WorkerGroupRecord, WorkerGroupUpsert};
 use crate::core::workers::Worker;
 use crate::core::workers::{WorkerError, WorkerUpsert};
@@ -15,6 +16,11 @@ struct WorkerGroupResponse {
     apparatus: String,
     group_code: String,
     shift: String,
+    start_time: String,
+    end_time: String,
+    work_days_per_week: i32,
+    start_day: String,
+    accounting_enabled: bool,
     worker_ids: Vec<String>,
     workers: Vec<Worker>,
 }
@@ -102,6 +108,7 @@ pub async fn worker_groups(
                 .upsert_group(input)
                 .await
                 .map_err(worker_group_error)?;
+            sync_worker_group_apparatchi_assignments(&state, &saved).await?;
             let mut responses = enrich_worker_groups(&state, vec![saved]).await?;
             Ok(json_response(responses.pop().ok_or_else(|| {
                 server_error("worker group store failed")
@@ -109,6 +116,33 @@ pub async fn worker_groups(
         }
         _ => Err(method_not_allowed()),
     }
+}
+
+async fn sync_worker_group_apparatchi_assignments(
+    state: &AppState,
+    group: &WorkerGroupRecord,
+) -> Result<(), AdminError> {
+    let apparatus = group.apparatus.trim();
+    if apparatus.is_empty() {
+        return Ok(());
+    }
+
+    for worker_id in group.worker_ids.iter().map(|id| id.trim()) {
+        if worker_id.is_empty() {
+            continue;
+        }
+        state
+            .admin
+            .upsert_role_assignment(RoleAssignmentUpsert {
+                principal_role: PrincipalRole::Aparatchi,
+                principal_ref: worker_id.to_string(),
+                role_id: "aparatchi".to_string(),
+                assigned_apparatus: vec![apparatus.to_string()],
+            })
+            .await
+            .map_err(|_| server_error("admin role assignment save failed"))?;
+    }
+    Ok(())
 }
 
 async fn validate_worker_ids(state: &AppState, ids: &[String]) -> Result<(), AdminError> {
@@ -170,6 +204,11 @@ async fn enrich_worker_groups(
                 apparatus: group.apparatus,
                 group_code: group.group_code,
                 shift: group.shift,
+                start_time: group.start_time,
+                end_time: group.end_time,
+                work_days_per_week: group.work_days_per_week,
+                start_day: group.start_day,
+                accounting_enabled: group.accounting_enabled,
                 worker_ids: group.worker_ids,
                 workers: group_workers,
             }
@@ -182,6 +221,7 @@ fn worker_group_error(error: WorkerGroupError) -> AdminError {
         WorkerGroupError::MissingApparatus => bad_request("apparatus is required"),
         WorkerGroupError::InvalidGroup => bad_request("worker group is invalid"),
         WorkerGroupError::InvalidShift => bad_request("worker shift is invalid"),
+        WorkerGroupError::InvalidSchedule => bad_request("worker schedule is invalid"),
         WorkerGroupError::DuplicateWorker => {
             bad_request("worker is duplicated in apparatus groups")
         }

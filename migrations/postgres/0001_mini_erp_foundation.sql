@@ -154,16 +154,33 @@ CREATE TABLE IF NOT EXISTS mini_worker_groups (
     apparatus TEXT NOT NULL,
     group_code TEXT NOT NULL,
     shift TEXT NOT NULL,
+    start_time TEXT NOT NULL DEFAULT '08:00',
+    end_time TEXT NOT NULL DEFAULT '20:00',
+    work_days_per_week INTEGER NOT NULL DEFAULT 6,
+    start_day TEXT NOT NULL DEFAULT 'monday',
+    accounting_enabled BOOLEAN NOT NULL DEFAULT false,
     worker_ids JSONB NOT NULL DEFAULT '[]'::jsonb,
     payload_json JSONB NOT NULL DEFAULT '{}'::jsonb,
     created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
     PRIMARY KEY (apparatus, group_code),
     CONSTRAINT mini_worker_groups_apparatus_not_blank CHECK (btrim(apparatus) <> ''),
-    CONSTRAINT mini_worker_groups_group_code_allowed CHECK (group_code IN ('A', 'B')),
-    CONSTRAINT mini_worker_groups_shift_allowed CHECK (shift IN ('day', 'night')),
+    CONSTRAINT mini_worker_groups_group_code_not_blank CHECK (btrim(group_code) <> ''),
+    CONSTRAINT mini_worker_groups_shift_not_blank CHECK (btrim(shift) <> ''),
+    CONSTRAINT mini_worker_groups_start_time_not_blank CHECK (btrim(start_time) <> ''),
+    CONSTRAINT mini_worker_groups_end_time_not_blank CHECK (btrim(end_time) <> ''),
+    CONSTRAINT mini_worker_groups_work_days_range CHECK (work_days_per_week BETWEEN 1 AND 7),
+    CONSTRAINT mini_worker_groups_start_day_not_blank CHECK (btrim(start_day) <> ''),
     CONSTRAINT mini_worker_groups_worker_ids_array CHECK (jsonb_typeof(worker_ids) = 'array')
 );
+
+ALTER TABLE mini_worker_groups DROP CONSTRAINT IF EXISTS mini_worker_groups_group_code_allowed;
+ALTER TABLE mini_worker_groups DROP CONSTRAINT IF EXISTS mini_worker_groups_shift_allowed;
+ALTER TABLE mini_worker_groups ADD COLUMN IF NOT EXISTS start_time TEXT NOT NULL DEFAULT '08:00';
+ALTER TABLE mini_worker_groups ADD COLUMN IF NOT EXISTS end_time TEXT NOT NULL DEFAULT '20:00';
+ALTER TABLE mini_worker_groups ADD COLUMN IF NOT EXISTS work_days_per_week INTEGER NOT NULL DEFAULT 6;
+ALTER TABLE mini_worker_groups ADD COLUMN IF NOT EXISTS start_day TEXT NOT NULL DEFAULT 'monday';
+ALTER TABLE mini_worker_groups ADD COLUMN IF NOT EXISTS accounting_enabled BOOLEAN NOT NULL DEFAULT false;
 
 CREATE TABLE IF NOT EXISTS mini_queue_sequences (
     apparatus TEXT PRIMARY KEY,

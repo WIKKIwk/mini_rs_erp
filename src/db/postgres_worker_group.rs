@@ -21,8 +21,22 @@ impl WorkerGroupStorePort for PostgresWorkerGroupStore {
         apparatus: Option<&str>,
     ) -> Result<Vec<WorkerGroupRecord>, WorkerGroupError> {
         let apparatus = apparatus.unwrap_or("").trim().to_lowercase();
-        let rows = sqlx::query_as::<_, (String, String, String, serde_json::Value)>(
-            "SELECT apparatus, group_code, shift, worker_ids
+        let rows = sqlx::query_as::<
+            _,
+            (
+                String,
+                String,
+                String,
+                String,
+                String,
+                i32,
+                String,
+                bool,
+                serde_json::Value,
+            ),
+        >(
+            "SELECT apparatus, group_code, shift, start_time, end_time, work_days_per_week,
+                    start_day, accounting_enabled, worker_ids
              FROM mini_worker_groups
              WHERE ($1 = '' OR lower(apparatus) = $1)
              ORDER BY lower(apparatus) ASC, group_code ASC",
@@ -33,16 +47,33 @@ impl WorkerGroupStorePort for PostgresWorkerGroupStore {
         .map_err(|_| WorkerGroupError::StoreFailed)?;
 
         rows.into_iter()
-            .map(|(apparatus, group_code, shift, worker_ids)| {
-                let worker_ids = serde_json::from_value::<Vec<String>>(worker_ids)
-                    .map_err(|_| WorkerGroupError::StoreFailed)?;
-                Ok(WorkerGroupRecord {
+            .map(
+                |(
                     apparatus,
                     group_code,
                     shift,
+                    start_time,
+                    end_time,
+                    work_days_per_week,
+                    start_day,
+                    accounting_enabled,
                     worker_ids,
-                })
-            })
+                )| {
+                    let worker_ids = serde_json::from_value::<Vec<String>>(worker_ids)
+                        .map_err(|_| WorkerGroupError::StoreFailed)?;
+                    Ok(WorkerGroupRecord {
+                        apparatus,
+                        group_code,
+                        shift,
+                        start_time,
+                        end_time,
+                        work_days_per_week,
+                        start_day,
+                        accounting_enabled,
+                        worker_ids,
+                    })
+                },
+            )
             .collect()
     }
 
@@ -68,12 +99,18 @@ impl WorkerGroupStorePort for PostgresWorkerGroupStore {
             let payload = serde_json::to_value(group).map_err(|_| WorkerGroupError::StoreFailed)?;
             sqlx::query(
                 "INSERT INTO mini_worker_groups
-                    (apparatus, group_code, shift, worker_ids, payload_json)
-                 VALUES ($1, $2, $3, $4, $5)",
+                    (apparatus, group_code, shift, start_time, end_time,
+                     work_days_per_week, start_day, accounting_enabled, worker_ids, payload_json)
+                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)",
             )
             .bind(&group.apparatus)
             .bind(&group.group_code)
             .bind(&group.shift)
+            .bind(&group.start_time)
+            .bind(&group.end_time)
+            .bind(group.work_days_per_week)
+            .bind(&group.start_day)
+            .bind(group.accounting_enabled)
             .bind(worker_ids)
             .bind(payload)
             .execute(&mut *tx)

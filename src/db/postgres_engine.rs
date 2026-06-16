@@ -109,10 +109,12 @@ mod tests {
             .unwrap_or_else(|_| "postgres://wikki@127.0.0.1:5432/postgres".to_string());
         let db_name = "mini_rs_erp_test_engine";
         let admin_pool = sqlx::PgPool::connect(&admin_url).await.expect("admin db");
-        sqlx::query(&format!(r#"DROP DATABASE IF EXISTS "{db_name}" WITH (FORCE)"#))
-            .execute(&admin_pool)
-            .await
-            .expect("drop test db");
+        sqlx::query(&format!(
+            r#"DROP DATABASE IF EXISTS "{db_name}" WITH (FORCE)"#
+        ))
+        .execute(&admin_pool)
+        .await
+        .expect("drop test db");
         sqlx::query(&format!(r#"CREATE DATABASE "{db_name}""#))
             .execute(&admin_pool)
             .await
@@ -126,26 +128,15 @@ mod tests {
             .expect("apply migration");
         let store = PostgresEngineStore::new(pool.clone());
 
-        let context = EngineCommandContext::new("admin:admin", "move-zakaz-1001")
-            .expect("context");
+        let context = EngineCommandContext::new("admin:admin", "move-zakaz-1001").expect("context");
         let first = store
-            .reserve_idempotency_key(
-                &context,
-                "production_maps",
-                "batch_move",
-                "zakaz-1001",
-            )
+            .reserve_idempotency_key(&context, "production_maps", "batch_move", "zakaz-1001")
             .await
             .expect("reserve first");
         assert_eq!(first, IdempotencyReservation::Reserved);
 
         let duplicate = store
-            .reserve_idempotency_key(
-                &context,
-                "production_maps",
-                "batch_move",
-                "zakaz-1001",
-            )
+            .reserve_idempotency_key(&context, "production_maps", "batch_move", "zakaz-1001")
             .await
             .expect("reserve duplicate");
         assert_eq!(duplicate, IdempotencyReservation::AlreadyReserved);
@@ -166,21 +157,24 @@ mod tests {
             .await
             .expect("complete key");
 
-        let completed: Option<serde_json::Value> = sqlx::query_scalar(
-            "SELECT response_json FROM mini_idempotency_keys WHERE key = $1",
-        )
-        .bind(&context.idempotency_key)
-        .fetch_one(&pool)
-        .await
-        .expect("read response");
+        let completed: Option<serde_json::Value> =
+            sqlx::query_scalar("SELECT response_json FROM mini_idempotency_keys WHERE key = $1")
+                .bind(&context.idempotency_key)
+                .fetch_one(&pool)
+                .await
+                .expect("read response");
         assert_eq!(completed, Some(serde_json::json!({"ok":true})));
 
         pool.close().await;
-        let admin_pool = sqlx::PgPool::connect(&admin_url).await.expect("admin cleanup");
-        sqlx::query(&format!(r#"DROP DATABASE IF EXISTS "{db_name}" WITH (FORCE)"#))
-            .execute(&admin_pool)
+        let admin_pool = sqlx::PgPool::connect(&admin_url)
             .await
-            .expect("cleanup test db");
+            .expect("admin cleanup");
+        sqlx::query(&format!(
+            r#"DROP DATABASE IF EXISTS "{db_name}" WITH (FORCE)"#
+        ))
+        .execute(&admin_pool)
+        .await
+        .expect("cleanup test db");
         admin_pool.close().await;
     }
 }

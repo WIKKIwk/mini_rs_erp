@@ -208,7 +208,7 @@ async fn admin_workers_are_separate_from_users_and_persist_level() {
 }
 
 #[tokio::test]
-async fn admin_worker_groups_assign_apparatus_groups_to_day_and_night_shifts() {
+async fn admin_worker_groups_save_custom_codes_schedule_and_reject_duplicate_worker() {
     let state = test_state();
     let token = session(&state, PrincipalRole::Admin).await;
 
@@ -248,8 +248,13 @@ async fn admin_worker_groups_assign_apparatus_groups_to_day_and_night_shifts() {
             &format!(
                 r#"{{
                     "apparatus":"Laminatsiya 1",
-                    "group_code":"A",
-                    "shift":"day",
+                    "group_code":"b guruh",
+                    "shift":"kechki",
+                    "start_time":"08:30",
+                    "end_time":"20:30",
+                    "work_days_per_week":6,
+                    "start_day":"monday",
+                    "accounting_enabled":true,
                     "worker_ids":["{first_id}","{second_id}"]
                 }}"#
             ),
@@ -259,11 +264,38 @@ async fn admin_worker_groups_assign_apparatus_groups_to_day_and_night_shifts() {
     assert_eq!(saved.status(), StatusCode::OK);
     let saved_body = json_body(saved).await;
     assert_eq!(saved_body["apparatus"], "Laminatsiya 1");
-    assert_eq!(saved_body["group_code"], "A");
-    assert_eq!(saved_body["shift"], "day");
+    assert_eq!(saved_body["group_code"], "B GURUH");
+    assert_eq!(saved_body["shift"], "kechki");
+    assert_eq!(saved_body["start_time"], "08:30");
+    assert_eq!(saved_body["end_time"], "20:30");
+    assert_eq!(saved_body["work_days_per_week"], 6);
+    assert_eq!(saved_body["start_day"], "monday");
+    assert_eq!(saved_body["accounting_enabled"], true);
     assert_eq!(saved_body["workers"].as_array().expect("workers").len(), 2);
 
-    let swapped = build_router(state.clone())
+    let assignments = build_router(state.clone())
+        .oneshot(request("GET", "/v1/mobile/admin/role-assignments", &token))
+        .await
+        .expect("role assignments");
+    assert_eq!(assignments.status(), StatusCode::OK);
+    let assignment_body = json_body(assignments).await;
+    let assignments = assignment_body.as_array().expect("assignments");
+    for worker_id in [&first_id, &second_id] {
+        let assignment = assignments
+            .iter()
+            .find(|assignment| {
+                assignment["principal_role"] == "aparatchi"
+                    && assignment["principal_ref"] == worker_id.as_str()
+            })
+            .expect("worker aparatchi assignment");
+        assert_eq!(assignment["role_id"], "aparatchi");
+        assert_eq!(
+            assignment["assigned_apparatus"],
+            serde_json::json!(["Laminatsiya 1"])
+        );
+    }
+
+    let duplicate = build_router(state.clone())
         .oneshot(request_with_body(
             "PUT",
             "/v1/mobile/admin/worker-groups",
@@ -271,15 +303,37 @@ async fn admin_worker_groups_assign_apparatus_groups_to_day_and_night_shifts() {
             &format!(
                 r#"{{
                     "apparatus":"Laminatsiya 1",
-                    "group_code":"B",
-                    "shift":"day",
+                    "group_code":"ba",
+                    "shift":"kunduz",
                     "worker_ids":["{second_id}"]
                 }}"#
             ),
         ))
         .await
-        .expect("swap worker group shift");
-    assert_eq!(swapped.status(), StatusCode::OK);
+        .expect("duplicate worker group");
+    assert_eq!(duplicate.status(), StatusCode::BAD_REQUEST);
+    assert_eq!(
+        json_body(duplicate).await["error"],
+        "worker is duplicated in apparatus groups"
+    );
+
+    let second_group = build_router(state.clone())
+        .oneshot(request_with_body(
+            "PUT",
+            "/v1/mobile/admin/worker-groups",
+            &token,
+            &format!(
+                r#"{{
+                    "apparatus":"Laminatsiya 1",
+                    "group_code":"dd",
+                    "shift":"tungi",
+                    "worker_ids":["{first_id}"]
+                }}"#
+            ),
+        ))
+        .await
+        .expect("save second worker group");
+    assert_eq!(second_group.status(), StatusCode::BAD_REQUEST);
 
     let listed = build_router(state.clone())
         .oneshot(request(
@@ -292,11 +346,9 @@ async fn admin_worker_groups_assign_apparatus_groups_to_day_and_night_shifts() {
     assert_eq!(listed.status(), StatusCode::OK);
     let listed_body = json_body(listed).await;
     let groups = listed_body.as_array().expect("groups");
-    assert_eq!(groups.len(), 2);
-    assert_eq!(groups[0]["group_code"], "A");
-    assert_eq!(groups[0]["shift"], "night");
-    assert_eq!(groups[1]["group_code"], "B");
-    assert_eq!(groups[1]["shift"], "day");
+    assert_eq!(groups.len(), 1);
+    assert_eq!(groups[0]["group_code"], "B GURUH");
+    assert_eq!(groups[0]["shift"], "kechki");
 
     let invalid = build_router(state)
         .oneshot(request_with_body(
@@ -305,7 +357,7 @@ async fn admin_worker_groups_assign_apparatus_groups_to_day_and_night_shifts() {
             &token,
             r#"{
                 "apparatus":"Laminatsiya 1",
-                "group_code":"A",
+                "group_code":"zz",
                 "shift":"night",
                 "worker_ids":["missing-worker"]
             }"#,

@@ -87,8 +87,7 @@ mod tests {
 
     #[test]
     fn engine_context_trims_actor_and_idempotency_key() {
-        let context = EngineCommandContext::new(" admin:admin ", " move-123 ")
-            .expect("context");
+        let context = EngineCommandContext::new(" admin:admin ", " move-123 ").expect("context");
 
         assert_eq!(context.actor_key, "admin:admin");
         assert_eq!(context.idempotency_key, "move-123");
@@ -96,8 +95,7 @@ mod tests {
 
     #[test]
     fn engine_event_records_domain_and_action() {
-        let context = EngineCommandContext::new("admin:admin", "order-open-1")
-            .expect("context");
+        let context = EngineCommandContext::new("admin:admin", "order-open-1").expect("context");
         let event = EngineEventDraft::new(
             &context,
             "production_maps",
@@ -117,8 +115,7 @@ mod tests {
 
     #[test]
     fn engine_event_rejects_blank_domain_or_action() {
-        let context = EngineCommandContext::new("admin:admin", "event-1")
-            .expect("context");
+        let context = EngineCommandContext::new("admin:admin", "event-1").expect("context");
 
         assert_eq!(
             EngineEventDraft::new(
