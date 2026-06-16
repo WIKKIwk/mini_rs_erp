@@ -17,6 +17,13 @@ pub struct CustomerRecord {
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct WorkerRecord {
+    pub id: String,
+    pub name: String,
+    pub phone: String,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct AdminAccessState {
     pub custom_code: String,
     pub blocked: bool,
@@ -39,6 +46,15 @@ pub trait CustomerLookup: Send + Sync {
         query: &str,
         limit: usize,
     ) -> Result<Vec<CustomerRecord>, AuthPortError>;
+}
+
+#[async_trait]
+pub trait WorkerLookup: Send + Sync {
+    async fn search_workers(
+        &self,
+        query: &str,
+        limit: usize,
+    ) -> Result<Vec<WorkerRecord>, AuthPortError>;
 }
 
 #[async_trait]

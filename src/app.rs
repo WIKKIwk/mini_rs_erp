@@ -74,9 +74,11 @@ pub struct AppState {
 impl AppState {
     pub fn new(config: AppConfig) -> Self {
         let admin_store = Arc::new(JsonAdminStore::new(admin_store_path()));
+        let workers = build_worker_service();
         let auth = AuthService::new(&config)
             .with_supplier_dependencies(admin_store.clone(), admin_store.clone())
-            .with_customer_dependencies(admin_store.clone(), admin_store.clone());
+            .with_customer_dependencies(admin_store.clone(), admin_store.clone())
+            .with_worker_dependencies(Arc::new(workers.clone()), admin_store.clone());
         let mut admin =
             AdminService::new(&config).with_env_persister(Arc::new(DotEnvPersister::new(".env")));
         admin = admin
@@ -116,7 +118,6 @@ impl AppState {
             .with_driver(scale_driver)
             .with_epc_source(Arc::new(crate::core::gscale::epc::GscaleEpcGenerator::new()));
         let mut werka = WerkaService::new();
-        let workers = build_worker_service();
         let worker_groups = build_worker_group_service();
         let sessions = match local_store_backend("MOBILE_API_SESSION_STORE_BACKEND") {
             LocalStoreBackend::Lmdb => {

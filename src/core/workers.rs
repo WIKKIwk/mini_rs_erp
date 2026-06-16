@@ -4,6 +4,8 @@ use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 use tokio::sync::RwLock;
 
+use crate::core::auth::ports::{AuthPortError, WorkerLookup, WorkerRecord};
+
 pub const WORKER_LEVELS: [&str; 5] = [
     "Brigader",
     "Master",
@@ -114,6 +116,29 @@ impl WorkerService {
             return Err(WorkerError::MissingId);
         }
         self.store.update_worker_phone(id, input.phone.trim()).await
+    }
+}
+
+#[async_trait]
+impl WorkerLookup for WorkerService {
+    async fn search_workers(
+        &self,
+        query: &str,
+        limit: usize,
+    ) -> Result<Vec<WorkerRecord>, AuthPortError> {
+        self.workers(query, limit)
+            .await
+            .map(|workers| {
+                workers
+                    .into_iter()
+                    .map(|worker| WorkerRecord {
+                        id: worker.id,
+                        name: worker.name,
+                        phone: worker.phone,
+                    })
+                    .collect()
+            })
+            .map_err(|_| AuthPortError::LookupFailed)
     }
 }
 

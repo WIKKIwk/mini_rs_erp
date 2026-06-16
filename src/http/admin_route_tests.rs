@@ -17,6 +17,10 @@ use crate::core::admin::ports::{AdminPortError, AdminReadPort, AdminStatePort, A
 use crate::core::admin::service::AdminService;
 use crate::core::apparatus_groups::{ApparatusGroupService, MemoryApparatusGroupStore};
 use crate::core::auth::models::{Principal, PrincipalRole};
+use crate::core::auth::ports::{
+    AdminAccessState, AdminAccessStateLookup, AuthPortError, CustomerLookup, CustomerRecord,
+    SupplierLookup, SupplierRecord,
+};
 use crate::core::authz::{
     MemoryRoleDefinitionStore, RoleAssignment, RoleDefinition, RoleDefinitionStorePort,
 };
@@ -418,6 +422,64 @@ async fn admin_worker_groups_save_custom_codes_schedule_and_reject_duplicate_wor
         .expect("invalid worker group");
     assert_eq!(invalid.status(), StatusCode::BAD_REQUEST);
     assert_eq!(json_body(invalid).await["error"], "worker not found");
+}
+
+#[tokio::test]
+async fn worker_login_receives_group_assigned_apparatus() {
+    let state = test_state();
+    let token = session(&state, PrincipalRole::Admin).await;
+
+    let worker = build_router(state.clone())
+        .oneshot(request_with_body(
+            "POST",
+            "/v1/mobile/admin/workers",
+            &token,
+            r#"{"id":"worker_001","name":"Ali worker","phone":"+998901112233","level":"Master"}"#,
+        ))
+        .await
+        .expect("create worker");
+    assert_eq!(worker.status(), StatusCode::OK);
+
+    let saved = build_router(state.clone())
+        .oneshot(request_with_body(
+            "PUT",
+            "/v1/mobile/admin/worker-groups",
+            &token,
+            r#"{
+                "apparatus":"Laminatsiya 1",
+                "group_code":"A",
+                "shift":"kunduz",
+                "worker_ids":["worker_001"]
+            }"#,
+        ))
+        .await
+        .expect("save worker group");
+    assert_eq!(saved.status(), StatusCode::OK);
+
+    let response = build_router(state)
+        .oneshot(request_with_body(
+            "POST",
+            "/v1/mobile/auth/login",
+            "",
+            r#"{"phone":"+998901112233","code":"401234567890"}"#,
+        ))
+        .await
+        .expect("worker login");
+    assert_eq!(response.status(), StatusCode::OK);
+    let value = json_body(response).await;
+    assert_eq!(value["profile"]["role"], "aparatchi");
+    assert_eq!(value["profile"]["ref"], "worker_001");
+    assert_eq!(
+        value["assigned_apparatus"],
+        serde_json::json!(["Laminatsiya 1"])
+    );
+    assert!(
+        value["capabilities"]
+            .as_array()
+            .expect("capabilities")
+            .iter()
+            .any(|capability| capability == "apparatus.queue.manage")
+    );
 }
 
 #[tokio::test]
@@ -3261,13 +3323,18 @@ fn test_state() -> AppState {
     });
     state.sessions = SessionManager::memory(Some(30 * 24 * 60 * 60));
     let admin_port = Arc::new(FakeAdminReadPort);
+    let admin_state_port = Arc::new(FakeAdminStatePort::new());
     state.admin = AdminService::new(&state.config)
         .with_read_port(admin_port.clone())
-        .with_write_port(admin_port)
-        .with_state_port(Arc::new(FakeAdminStatePort::new()));
+        .with_write_port(admin_port.clone())
+        .with_state_port(admin_state_port.clone());
     state.production_maps = ProductionMapService::new(Arc::new(MemoryProductionMapStore::new()));
     state.apparatus_groups = ApparatusGroupService::new(Arc::new(MemoryApparatusGroupStore::new()));
     state.workers = WorkerService::new(Arc::new(MemoryWorkerStore::new()));
+    state.auth = crate::core::auth::service::AuthService::new(&state.config)
+        .with_customer_dependencies(admin_port.clone(), admin_state_port.clone())
+        .with_supplier_dependencies(admin_port, admin_state_port.clone())
+        .with_worker_dependencies(Arc::new(state.workers.clone()), admin_state_port);
     state.worker_groups = WorkerGroupService::new(Arc::new(MemoryWorkerGroupStore::new()));
     state.production_orders = Arc::new(NoopMiniOrderSink);
     state
@@ -3600,6 +3667,64 @@ impl AdminReadPort for FakeAdminReadPort {
         _limit: usize,
     ) -> Result<Vec<SupplierItem>, AdminPortError> {
         Ok(vec![item("ITEM-001")])
+    }
+}
+
+#[async_trait]
+impl SupplierLookup for FakeAdminReadPort {
+    async fn search_suppliers(
+        &self,
+        query: &str,
+        limit: usize,
+    ) -> Result<Vec<SupplierRecord>, AuthPortError> {
+        let suppliers = self
+            .suppliers_page("", limit.max(1), 0)
+            .await
+            .map_err(|_| AuthPortError::LookupFailed)?;
+        let query = query.trim().to_lowercase();
+        Ok(suppliers
+            .into_iter()
+            .filter(|entry| {
+                query.is_empty()
+                    || entry.ref_.to_lowercase().contains(&query)
+                    || entry.name.to_lowercase().contains(&query)
+                    || entry.phone.to_lowercase().contains(&query)
+            })
+            .map(|entry| SupplierRecord {
+                id: entry.ref_,
+                name: entry.name,
+                phone: entry.phone,
+            })
+            .collect())
+    }
+}
+
+#[async_trait]
+impl CustomerLookup for FakeAdminReadPort {
+    async fn search_customers(
+        &self,
+        query: &str,
+        limit: usize,
+    ) -> Result<Vec<CustomerRecord>, AuthPortError> {
+        let customers = self
+            .customers_page("", limit.max(1), 0)
+            .await
+            .map_err(|_| AuthPortError::LookupFailed)?;
+        let query = query.trim().to_lowercase();
+        Ok(customers
+            .into_iter()
+            .filter(|entry| {
+                query.is_empty()
+                    || entry.ref_.to_lowercase().contains(&query)
+                    || entry.name.to_lowercase().contains(&query)
+                    || entry.phone.to_lowercase().contains(&query)
+            })
+            .map(|entry| CustomerRecord {
+                id: entry.ref_,
+                name: entry.name,
+                phone: entry.phone,
+            })
+            .collect())
     }
 }
 
@@ -4227,6 +4352,13 @@ impl FakeAdminStatePort {
                         ..AdminState::default()
                     },
                 ),
+                (
+                    "worker_001".to_string(),
+                    AdminState {
+                        custom_code: "401234567890".to_string(),
+                        ..AdminState::default()
+                    },
+                ),
             ])),
         }
     }
@@ -4241,6 +4373,28 @@ impl AdminStatePort for FakeAdminStatePort {
     async fn put_state(&self, ref_: &str, state: AdminState) -> Result<(), AdminPortError> {
         self.states.lock().await.insert(ref_.to_string(), state);
         Ok(())
+    }
+}
+
+#[async_trait]
+impl AdminAccessStateLookup for FakeAdminStatePort {
+    async fn list_states(&self) -> Result<BTreeMap<String, AdminAccessState>, AuthPortError> {
+        Ok(self
+            .states
+            .lock()
+            .await
+            .iter()
+            .map(|(key, state)| {
+                (
+                    key.clone(),
+                    AdminAccessState {
+                        custom_code: state.custom_code.clone(),
+                        blocked: state.blocked,
+                        removed: state.removed,
+                    },
+                )
+            })
+            .collect())
     }
 }
 

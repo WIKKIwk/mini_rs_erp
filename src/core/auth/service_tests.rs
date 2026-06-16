@@ -6,7 +6,7 @@ use async_trait::async_trait;
 use super::models::PrincipalRole;
 use super::ports::{
     AdminAccessState, AdminAccessStateLookup, AuthPortError, CustomerLookup, CustomerRecord,
-    SupplierLookup, SupplierRecord,
+    SupplierLookup, SupplierRecord, WorkerLookup, WorkerRecord,
 };
 use super::service::{AuthService, normalize_phone};
 use crate::config::AppConfig;
@@ -257,6 +257,37 @@ async fn aparatchi_login_uses_forty_prefix() {
 }
 
 #[tokio::test]
+async fn aparatchi_login_accepts_worker_phone_and_code() {
+    let workers = Arc::new(FakeWorkerLookup {
+        workers: vec![WorkerRecord {
+            id: "worker_001".to_string(),
+            name: "Ali worker".to_string(),
+            phone: "+998901112233".to_string(),
+        }],
+    });
+    let states = Arc::new(FakeStateLookup {
+        states: BTreeMap::from([(
+            "worker_001".to_string(),
+            AdminAccessState {
+                custom_code: "401234567890".to_string(),
+                blocked: false,
+                removed: false,
+            },
+        )]),
+    });
+    let auth = AuthService::new(&config()).with_worker_dependencies(workers, states);
+
+    let principal = auth
+        .login("+998901112233", "401234567890")
+        .await
+        .expect("worker aparatchi login");
+
+    assert_eq!(principal.role, PrincipalRole::Aparatchi);
+    assert_eq!(principal.ref_, "worker_001");
+    assert_eq!(principal.display_name, "Ali worker");
+}
+
+#[tokio::test]
 async fn customer_login_merges_local_phone_when_normalized_search_returns_other_matches() {
     let customers = Arc::new(FakeCustomerLookup {
         customers: vec![
@@ -348,11 +379,35 @@ impl CustomerLookup for FakeCustomerLookup {
     }
 }
 
+struct FakeWorkerLookup {
+    workers: Vec<WorkerRecord>,
+}
+
+#[async_trait]
+impl WorkerLookup for FakeWorkerLookup {
+    async fn search_workers(
+        &self,
+        query: &str,
+        _limit: usize,
+    ) -> Result<Vec<WorkerRecord>, AuthPortError> {
+        Ok(self
+            .workers
+            .iter()
+            .filter(|record| worker_matches_query(record, query))
+            .cloned()
+            .collect())
+    }
+}
+
 fn supplier_matches_query(record: &SupplierRecord, query: &str) -> bool {
     query_matches_fields(query, [&record.id, &record.name, &record.phone])
 }
 
 fn customer_matches_query(record: &CustomerRecord, query: &str) -> bool {
+    query_matches_fields(query, [&record.id, &record.name, &record.phone])
+}
+
+fn worker_matches_query(record: &WorkerRecord, query: &str) -> bool {
     query_matches_fields(query, [&record.id, &record.name, &record.phone])
 }
 

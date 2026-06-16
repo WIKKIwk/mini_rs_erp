@@ -6,7 +6,7 @@ use crate::core::auth::access_codes::{SupplierAccessInput, supplier_access_code}
 use crate::core::auth::models::{Principal, PrincipalRole};
 use crate::core::auth::ports::{
     AdminAccessState, AdminAccessStateLookup, AuthConfigSink, CustomerLookup, CustomerRecord,
-    SupplierLookup, SupplierRecord,
+    SupplierLookup, SupplierRecord, WorkerLookup, WorkerRecord,
 };
 
 #[derive(Clone)]
@@ -17,6 +17,7 @@ pub struct AuthService {
     admin_code: String,
     supplier_lookup: Option<Arc<dyn SupplierLookup>>,
     customer_lookup: Option<Arc<dyn CustomerLookup>>,
+    worker_lookup: Option<Arc<dyn WorkerLookup>>,
     admin_state_lookup: Option<Arc<dyn AdminAccessStateLookup>>,
 }
 
@@ -56,6 +57,7 @@ impl AuthService {
             admin_code: config.admin_code.trim().to_string(),
             supplier_lookup: None,
             customer_lookup: None,
+            worker_lookup: None,
             admin_state_lookup: None,
         }
     }
@@ -66,6 +68,16 @@ impl AuthService {
         admin_state_lookup: Arc<dyn AdminAccessStateLookup>,
     ) -> Self {
         self.supplier_lookup = Some(supplier_lookup);
+        self.admin_state_lookup = Some(admin_state_lookup);
+        self
+    }
+
+    pub fn with_worker_dependencies(
+        mut self,
+        worker_lookup: Arc<dyn WorkerLookup>,
+        admin_state_lookup: Arc<dyn AdminAccessStateLookup>,
+    ) -> Self {
+        self.worker_lookup = Some(worker_lookup);
         self.admin_state_lookup = Some(admin_state_lookup);
         self
     }
@@ -185,8 +197,62 @@ impl AuthService {
         normalized_phone: &str,
         code: &str,
     ) -> Result<Principal, AuthError> {
-        self.login_customer_party(normalized_phone, code, PrincipalRole::Aparatchi)
+        match self.login_worker_aparatchi(normalized_phone, code).await {
+            Ok(principal) => Ok(principal),
+            Err(AuthError::InvalidCredentials) => {
+                self.login_customer_party(normalized_phone, code, PrincipalRole::Aparatchi)
+                    .await
+            }
+            Err(error) => Err(error),
+        }
+    }
+
+    async fn login_worker_aparatchi(
+        &self,
+        normalized_phone: &str,
+        code: &str,
+    ) -> Result<Principal, AuthError> {
+        let worker_lookup = self
+            .worker_lookup
+            .as_ref()
+            .ok_or(AuthError::InvalidCredentials)?;
+        let admin_state_lookup = self
+            .admin_state_lookup
+            .as_ref()
+            .ok_or(AuthError::InvalidCredentials)?;
+
+        let workers = self
+            .search_workers_for_login(worker_lookup.as_ref(), normalized_phone)
+            .await?;
+        let states = admin_state_lookup
+            .list_states()
             .await
+            .map_err(|_| AuthError::Internal)?;
+
+        for worker in workers {
+            let state = states.get(worker.id.trim()).cloned().unwrap_or_default();
+            if state.removed || state.blocked {
+                continue;
+            }
+            let code_value = state.custom_code.trim();
+            if code_value.is_empty() {
+                continue;
+            }
+            if code.trim() == code_value
+                && phone_matches_normalized(&worker.phone, normalized_phone)
+            {
+                return Ok(Principal {
+                    role: PrincipalRole::Aparatchi,
+                    display_name: worker.name.clone(),
+                    legal_name: worker.name,
+                    ref_: worker.id,
+                    phone: worker.phone,
+                    avatar_url: String::new(),
+                });
+            }
+        }
+
+        Err(AuthError::InvalidCredentials)
     }
 
     async fn login_customer_party(
@@ -259,6 +325,31 @@ impl AuthService {
                 .map_err(|_| AuthError::Internal)?;
         }
         Ok(customers)
+    }
+
+    async fn search_workers_for_login(
+        &self,
+        worker_lookup: &dyn WorkerLookup,
+        normalized_phone: &str,
+    ) -> Result<Vec<WorkerRecord>, AuthError> {
+        let mut workers = worker_lookup
+            .search_workers(normalized_phone, 50)
+            .await
+            .map_err(|_| AuthError::Internal)?;
+        if let Some(local_phone) = local_phone_query(normalized_phone) {
+            let local_matches = worker_lookup
+                .search_workers(&local_phone, 50)
+                .await
+                .map_err(|_| AuthError::Internal)?;
+            merge_worker_records(&mut workers, local_matches);
+        }
+        if workers.is_empty() {
+            workers = worker_lookup
+                .search_workers("", 500)
+                .await
+                .map_err(|_| AuthError::Internal)?;
+        }
+        Ok(workers)
     }
 
     fn login_werka(
@@ -392,6 +483,18 @@ fn merge_customer_records(customers: &mut Vec<CustomerRecord>, extra: Vec<Custom
             continue;
         }
         customers.push(record);
+    }
+}
+
+fn merge_worker_records(workers: &mut Vec<WorkerRecord>, extra: Vec<WorkerRecord>) {
+    for record in extra {
+        if workers
+            .iter()
+            .any(|existing| existing.id.trim() == record.id.trim())
+        {
+            continue;
+        }
+        workers.push(record);
     }
 }
 
