@@ -143,6 +143,20 @@ pub(super) fn calculate_order_image_dir() -> std::path::PathBuf {
 }
 
 pub(super) fn build_push_token_store(config: &AppConfig) -> Arc<dyn PushTokenStorePort> {
+    if let Ok(pg_config) = PostgresConfig::from_env() {
+        match pg_config
+            .pool_options()
+            .connect_lazy(&pg_config.database_url)
+        {
+            Ok(pool) => {
+                tracing::info!("mini ERP postgres push token store configured");
+                return Arc::new(PostgresPushTokenStore::new(pool));
+            }
+            Err(error) => {
+                tracing::warn!(%error, "mini ERP postgres push token store disabled");
+            }
+        }
+    }
     match local_store_backend("MOBILE_API_PUSH_TOKEN_STORE_BACKEND") {
         LocalStoreBackend::Lmdb => {
             let lmdb_path = push_token_lmdb_path(config);
@@ -186,7 +200,21 @@ pub(super) fn push_token_lmdb_path(config: &AppConfig) -> std::path::PathBuf {
     )
 }
 
-pub(super) fn build_rps_batch_store() -> RpsBatchLmdbStore {
+pub(super) fn build_rps_batch_store() -> Arc<dyn RpsBatchStorePort> {
+    if let Ok(pg_config) = PostgresConfig::from_env() {
+        match pg_config
+            .pool_options()
+            .connect_lazy(&pg_config.database_url)
+        {
+            Ok(pool) => {
+                tracing::info!("mini ERP postgres RPS batch store configured");
+                return Arc::new(PostgresRpsBatchStore::new(pool));
+            }
+            Err(error) => {
+                tracing::warn!(%error, "mini ERP postgres RPS batch store disabled");
+            }
+        }
+    }
     let lmdb_path = rps_batch_lmdb_path();
     match RpsBatchLmdbStore::open(
         lmdb_path.clone(),
@@ -197,7 +225,7 @@ pub(super) fn build_rps_batch_store() -> RpsBatchLmdbStore {
                 path = %lmdb_path.display(),
                 "LMDB RPS batch store enabled"
             );
-            store
+            Arc::new(store)
         }
         Err(error) => panic!("LMDB RPS batch store unavailable: {error}"),
     }

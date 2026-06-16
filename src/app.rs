@@ -16,6 +16,7 @@ use crate::core::profile::service::ProfileService;
 use crate::core::push::ports::PushTokenStorePort;
 use crate::core::push::service::PushService;
 use crate::core::rezka::RezkaService;
+use crate::core::rps_batch::ports::RpsBatchStorePort;
 use crate::core::rps_batch::{RpsBatchLmdbStore, RpsBatchService};
 use crate::core::session::manager::SessionManager;
 use crate::core::werka::service::WerkaService;
@@ -27,6 +28,8 @@ use crate::db::postgres_calculate_order::PostgresCalculateOrderStore;
 use crate::db::postgres_engine::PostgresEngineStore;
 use crate::db::postgres_mini_order::PostgresMiniOrderSink;
 use crate::db::postgres_production_map::PostgresProductionMapStore;
+use crate::db::postgres_push_token::PostgresPushTokenStore;
+use crate::db::postgres_rps_batch::PostgresRpsBatchStore;
 use crate::db::postgres_worker::PostgresWorkerStore;
 use crate::db::postgres_worker_group::PostgresWorkerGroupStore;
 use crate::fcm::discover_push_sender;
@@ -108,7 +111,7 @@ impl AppState {
         let profiles = ProfileService::new(String::new()).with_store(profile_store);
         let push = PushService::new(push_token_store.clone())
             .with_sender(discover_push_sender(push_token_store));
-        let rps_batch = RpsBatchService::new(Arc::new(build_rps_batch_store()));
+        let rps_batch = RpsBatchService::new(build_rps_batch_store());
         let scale_driver = Arc::new(RpsDriverClient::new(
             config.http_timeout,
             std::env::var("RP_SCALE_DRIVER_URL").unwrap_or_default(),

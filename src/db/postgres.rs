@@ -178,6 +178,7 @@ mod tests {
             "mini_order_products",
             "mini_quick_order_templates",
             "mini_quick_order_images",
+            "mini_push_tokens",
             "mini_production_maps",
             "mini_production_map_nodes",
             "mini_production_map_edges",
@@ -187,6 +188,7 @@ mod tests {
             "mini_worker_groups",
             "mini_queue_sequences",
             "mini_queue_states",
+            "mini_rps_batches",
             "mini_engine_events",
             "mini_idempotency_keys",
         ] {

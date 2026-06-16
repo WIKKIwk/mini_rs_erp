@@ -4,11 +4,14 @@ use std::sync::Mutex;
 use super::app_local_store::{LocalStoreBackend, derive_lmdb_path, local_store_backend_from};
 use crate::config::AppConfig;
 use crate::core::apparatus_groups::ApparatusGroupUpsert;
+use crate::core::auth::models::{Principal, PrincipalRole};
 use crate::core::calculate_orders::{CalculateOrderError, CalculateOrderTemplate};
 use crate::core::production_map::{
     ProductionMapDefinition, ProductionMapEdge, ProductionMapError, ProductionMapNode,
     ProductionMapNodeKind,
 };
+use crate::core::push::ports::PushServiceError;
+use crate::core::rps_batch::{RpsBatchServiceError, RpsBatchStartRequest};
 use crate::db::postgres::apply_foundation_migration;
 
 static MINI_ENGINE_ENV_LOCK: Mutex<()> = Mutex::new(());
@@ -198,6 +201,64 @@ async fn app_state_uses_postgres_production_maps_when_database_url_is_configured
 }
 
 #[tokio::test]
+async fn app_state_uses_postgres_push_tokens_when_database_url_is_configured() {
+    let _guard = MINI_ENGINE_ENV_LOCK.lock().expect("env lock");
+    unsafe {
+        std::env::set_var(
+            "MINI_ERP_DATABASE_URL",
+            "postgres://wikki@127.0.0.1:1/mini_rs_erp_unavailable",
+        );
+        std::env::set_var("MINI_ERP_PG_ACQUIRE_TIMEOUT_MS", "50");
+    }
+
+    let state = super::AppState::new(test_app_config());
+    let result = state
+        .push
+        .register(&test_principal(), "token-1", "ios")
+        .await;
+
+    assert!(matches!(result, Err(PushServiceError::StoreFailed)));
+
+    unsafe {
+        std::env::remove_var("MINI_ERP_DATABASE_URL");
+        std::env::remove_var("MINI_ERP_PG_ACQUIRE_TIMEOUT_MS");
+    }
+}
+
+#[tokio::test]
+async fn app_state_uses_postgres_rps_batch_when_database_url_is_configured() {
+    let _guard = MINI_ENGINE_ENV_LOCK.lock().expect("env lock");
+    unsafe {
+        std::env::set_var(
+            "MINI_ERP_DATABASE_URL",
+            "postgres://wikki@127.0.0.1:1/mini_rs_erp_unavailable",
+        );
+        std::env::set_var("MINI_ERP_PG_ACQUIRE_TIMEOUT_MS", "50");
+    }
+
+    let state = super::AppState::new(test_app_config());
+    let result = state
+        .rps_batch
+        .start(
+            &test_principal(),
+            RpsBatchStartRequest {
+                item_code: "INK-001".to_string(),
+                item_name: "Ink".to_string(),
+                warehouse: "Stores - A".to_string(),
+                ..RpsBatchStartRequest::default()
+            },
+        )
+        .await;
+
+    assert!(matches!(result, Err(RpsBatchServiceError::StoreFailed)));
+
+    unsafe {
+        std::env::remove_var("MINI_ERP_DATABASE_URL");
+        std::env::remove_var("MINI_ERP_PG_ACQUIRE_TIMEOUT_MS");
+    }
+}
+
+#[tokio::test]
 async fn app_state_skips_legacy_remote_clients_when_mini_database_url_is_configured() {
     let _guard = MINI_ENGINE_ENV_LOCK.lock().expect("env lock");
     unsafe {
@@ -347,6 +408,17 @@ fn test_app_config() -> AppConfig {
         admin_phone: "+998880000000".to_string(),
         admin_name: "Admin".to_string(),
         admin_code: "19621978".to_string(),
+    }
+}
+
+fn test_principal() -> Principal {
+    Principal {
+        role: PrincipalRole::Werka,
+        display_name: "Werka".to_string(),
+        legal_name: "Werka".to_string(),
+        ref_: "werka".to_string(),
+        phone: "+99888862440".to_string(),
+        avatar_url: String::new(),
     }
 }
 

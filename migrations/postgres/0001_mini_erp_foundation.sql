@@ -73,6 +73,15 @@ CREATE TABLE IF NOT EXISTS mini_quick_order_images (
     CONSTRAINT mini_quick_order_images_size_non_negative CHECK (image_size_bytes >= 0)
 );
 
+CREATE TABLE IF NOT EXISTS mini_push_tokens (
+    token TEXT PRIMARY KEY,
+    owner_key TEXT NOT NULL,
+    platform TEXT NOT NULL DEFAULT '',
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    CONSTRAINT mini_push_tokens_token_not_blank CHECK (btrim(token) <> ''),
+    CONSTRAINT mini_push_tokens_owner_not_blank CHECK (btrim(owner_key) <> '')
+);
+
 CREATE TABLE IF NOT EXISTS mini_production_maps (
     id TEXT PRIMARY KEY,
     order_id TEXT REFERENCES mini_orders(id) ON DELETE SET NULL,
@@ -267,6 +276,22 @@ CREATE TABLE IF NOT EXISTS mini_raw_material_assignments (
     CONSTRAINT mini_raw_material_assignments_order_apparatus_unique UNIQUE (order_id, apparatus)
 );
 
+CREATE TABLE IF NOT EXISTS mini_rps_batches (
+    owner_key TEXT PRIMARY KEY,
+    batch_id TEXT NOT NULL,
+    active BOOLEAN NOT NULL DEFAULT false,
+    owner_role TEXT NOT NULL,
+    owner_ref TEXT NOT NULL,
+    item_code TEXT NOT NULL DEFAULT '',
+    warehouse TEXT NOT NULL DEFAULT '',
+    payload_json JSONB NOT NULL DEFAULT '{}'::jsonb,
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    CONSTRAINT mini_rps_batches_owner_not_blank CHECK (btrim(owner_key) <> ''),
+    CONSTRAINT mini_rps_batches_batch_not_blank CHECK (btrim(batch_id) <> ''),
+    CONSTRAINT mini_rps_batches_owner_role_not_blank CHECK (btrim(owner_role) <> ''),
+    CONSTRAINT mini_rps_batches_owner_ref_not_blank CHECK (btrim(owner_ref) <> '')
+);
+
 CREATE TABLE IF NOT EXISTS mini_engine_events (
     id BIGSERIAL PRIMARY KEY,
     event_id TEXT NOT NULL,
@@ -301,6 +326,8 @@ CREATE INDEX IF NOT EXISTS idx_mini_orders_status ON mini_orders(status);
 CREATE INDEX IF NOT EXISTS idx_mini_quick_order_templates_owner_saved ON mini_quick_order_templates(owner_key, saved_at DESC);
 CREATE INDEX IF NOT EXISTS idx_mini_quick_order_templates_owner_quick_key ON mini_quick_order_templates(owner_key, quick_key);
 CREATE UNIQUE INDEX IF NOT EXISTS idx_mini_quick_order_templates_owner_lower_code ON mini_quick_order_templates (owner_key, lower(code));
+CREATE INDEX IF NOT EXISTS idx_mini_push_tokens_owner ON mini_push_tokens(owner_key);
+CREATE INDEX IF NOT EXISTS idx_mini_push_tokens_updated ON mini_push_tokens(updated_at DESC);
 CREATE INDEX IF NOT EXISTS idx_mini_production_maps_order_id ON mini_production_maps(order_id);
 CREATE INDEX IF NOT EXISTS idx_mini_production_maps_order_number ON mini_production_maps(order_number) WHERE btrim(order_number) <> '';
 CREATE INDEX IF NOT EXISTS idx_mini_production_map_nodes_kind_title ON mini_production_map_nodes(kind, lower(title));
@@ -320,6 +347,7 @@ CREATE INDEX IF NOT EXISTS idx_mini_queue_action_events_actor_created ON mini_qu
 CREATE INDEX IF NOT EXISTS idx_mini_raw_material_assignments_order ON mini_raw_material_assignments(order_id);
 CREATE INDEX IF NOT EXISTS idx_mini_raw_material_assignments_apparatus ON mini_raw_material_assignments(lower(apparatus));
 CREATE INDEX IF NOT EXISTS idx_mini_raw_material_assignments_item_group ON mini_raw_material_assignments(lower(item_group));
+CREATE INDEX IF NOT EXISTS idx_mini_rps_batches_active ON mini_rps_batches(active) WHERE active;
 CREATE INDEX IF NOT EXISTS idx_mini_engine_events_entity ON mini_engine_events(domain, entity_id, created_at DESC);
 
 INSERT INTO mini_production_map_nodes (map_id, node_id, kind, title, payload_json)
