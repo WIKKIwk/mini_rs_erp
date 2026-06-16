@@ -22,9 +22,11 @@ pub struct ApparatusMaterialRuleUpsert {
 pub struct RawMaterialAssignmentInput {
     pub order_id: String,
     pub barcode: String,
+    #[serde(default)]
     pub item_code: String,
     #[serde(default)]
     pub item_name: String,
+    #[serde(default)]
     pub item_group: String,
 }
 

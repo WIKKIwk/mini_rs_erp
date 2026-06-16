@@ -284,6 +284,13 @@ impl AdminService {
             .await
     }
 
+    pub async fn items_by_codes(
+        &self,
+        item_codes: &[String],
+    ) -> Result<Vec<SupplierItem>, AdminPortError> {
+        self.read_port()?.items_by_codes(item_codes).await
+    }
+
     pub async fn item_groups(
         &self,
         query: &str,

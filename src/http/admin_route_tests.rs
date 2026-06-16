@@ -30,7 +30,7 @@ use crate::core::calculate_orders::{
 use crate::core::mini_orders::{MiniOrderError, MiniOrderSink, NoopMiniOrderSink};
 use crate::core::production_map::{MemoryProductionMapStore, ProductionMapService};
 use crate::core::session::manager::SessionManager;
-use crate::core::werka::models::{DispatchRecord, SupplierItem};
+use crate::core::werka::models::{DispatchRecord, StockEntryBarcodeEntry, SupplierItem};
 use crate::core::werka::ports::{WerkaHomeLookup, WerkaPortError};
 use crate::core::werka::service::WerkaService;
 use crate::core::worker_groups::{MemoryWorkerGroupStore, WorkerGroupService};
@@ -676,7 +676,8 @@ async fn production_map_nodes_preserve_alternative_group_metadata() {
 
 #[tokio::test]
 async fn raw_material_routes_assign_and_require_scan_for_queue_start() {
-    let state = test_state();
+    let mut state = test_state();
+    state.werka = WerkaService::new().with_lookup(Arc::new(RawMaterialLookup));
     state
         .admin
         .upsert_role_assignment(crate::core::authz::RoleAssignmentUpsert {
@@ -730,17 +731,18 @@ async fn raw_material_routes_assign_and_require_scan_for_queue_start() {
             &token,
             r#"{
                 "order_id":"zakaz-raw-route",
-                "barcode":"30AA",
-                "item_code":"INK-BLACK",
-                "item_name":"Black ink",
-                "item_group":"Kraska"
+                "barcode":"30AA"
             }"#,
         ))
         .await
         .expect("assign");
-    assert_eq!(assigned.status(), StatusCode::OK);
+    let assigned_status = assigned.status();
     let assigned_body = json_body(assigned).await;
+    assert_eq!(assigned_status, StatusCode::OK, "{assigned_body:?}");
     assert_eq!(assigned_body["apparatus"], "7 ta rangli pechat - A");
+    assert_eq!(assigned_body["item_code"], "INK-BLACK");
+    assert_eq!(assigned_body["item_name"], "Black ink");
+    assert_eq!(assigned_body["item_group"], "Kraska");
 
     let missing_scan = router
         .clone()
@@ -4146,6 +4148,40 @@ impl WerkaHomeLookup for ActivityLookup {
     }
 }
 
+struct RawMaterialLookup;
+
+#[async_trait]
+impl WerkaHomeLookup for RawMaterialLookup {
+    async fn stock_entries_by_barcode(
+        &self,
+        barcode: &str,
+        _limit: usize,
+    ) -> Result<Vec<StockEntryBarcodeEntry>, WerkaPortError> {
+        assert_eq!(barcode, "30AA");
+        Ok(vec![StockEntryBarcodeEntry {
+            stock_entry_name: "MAT-STE-1".to_string(),
+            stock_entry_type: "Material Receipt".to_string(),
+            doc_status: 1,
+            status: "Submitted".to_string(),
+            company: "Company".to_string(),
+            posting_date: "2026-06-16".to_string(),
+            posting_time: "12:00:00".to_string(),
+            creation: "2026-06-16 12:00:00".to_string(),
+            modified: "2026-06-16 12:00:00".to_string(),
+            remarks: String::new(),
+            line_index: 1,
+            item_code: "INK-BLACK".to_string(),
+            item_name: "Black ink".to_string(),
+            qty: 12.0,
+            uom: "Kg".to_string(),
+            stock_uom: "Kg".to_string(),
+            barcode: barcode.to_string(),
+            source_warehouse: "Stores - CH".to_string(),
+            target_warehouse: "Stores - CH".to_string(),
+        }])
+    }
+}
+
 #[async_trait]
 impl AdminWritePort for FakeAdminReadPort {
     async fn create_supplier(
@@ -4612,9 +4648,17 @@ fn entry(ref_: &str, name: &str, phone: &str) -> AdminDirectoryEntry {
 fn item(code: &str) -> SupplierItem {
     SupplierItem {
         code: code.to_string(),
-        name: "Rice".to_string(),
+        name: if code == "INK-BLACK" {
+            "Black ink".to_string()
+        } else {
+            "Rice".to_string()
+        },
         uom: "Kg".to_string(),
         warehouse: "Stores - CH".to_string(),
-        item_group: "Products".to_string(),
+        item_group: if code == "INK-BLACK" {
+            "Kraska".to_string()
+        } else {
+            "Products".to_string()
+        },
     }
 }

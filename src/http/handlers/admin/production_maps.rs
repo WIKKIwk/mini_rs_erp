@@ -452,6 +452,7 @@ pub async fn raw_material_assignments(
         Method::POST => {
             require_capability(&state, &principal, Capability::RawMaterialAssign).await?;
             let input: RawMaterialAssignmentInput = parse_json(&body)?;
+            let input = fill_raw_material_assignment_input(&state, input).await?;
             state
                 .production_maps
                 .assign_raw_material_to_order(input, &queue_action_actor(&principal))
@@ -461,6 +462,63 @@ pub async fn raw_material_assignments(
         }
         _ => Err(method_not_allowed()),
     }
+}
+
+async fn fill_raw_material_assignment_input(
+    state: &AppState,
+    mut input: RawMaterialAssignmentInput,
+) -> Result<RawMaterialAssignmentInput, AdminError> {
+    if !input.item_code.trim().is_empty() && !input.item_group.trim().is_empty() {
+        return Ok(input);
+    }
+    let barcode = input.barcode.trim();
+    if barcode.is_empty() {
+        return Err(production_map_error(
+            ProductionMapError::RawMaterialInvalidInput,
+        ));
+    }
+    let lookup = state
+        .werka
+        .stock_entry_lookup_by_barcode(barcode, 1)
+        .await
+        .map_err(|_| production_map_error(ProductionMapError::RawMaterialInvalidInput))?
+        .ok_or_else(|| production_map_error(ProductionMapError::RawMaterialInvalidInput))?;
+    let Some(entry) = lookup.entries.into_iter().next() else {
+        return Err(production_map_error(
+            ProductionMapError::RawMaterialInvalidInput,
+        ));
+    };
+    let item_code = entry.item_code.trim().to_string();
+    if item_code.is_empty() {
+        return Err(production_map_error(
+            ProductionMapError::RawMaterialInvalidInput,
+        ));
+    }
+    let items = state
+        .admin
+        .items_by_codes(std::slice::from_ref(&item_code))
+        .await
+        .map_err(|_| production_map_error(ProductionMapError::RawMaterialInvalidInput))?;
+    let Some(item) = items
+        .into_iter()
+        .find(|item| item.code.trim().eq_ignore_ascii_case(&item_code))
+    else {
+        return Err(production_map_error(
+            ProductionMapError::RawMaterialInvalidInput,
+        ));
+    };
+    input.item_code = item_code;
+    input.item_name = if input.item_name.trim().is_empty() {
+        if entry.item_name.trim().is_empty() {
+            item.name.trim().to_string()
+        } else {
+            entry.item_name.trim().to_string()
+        }
+    } else {
+        input.item_name.trim().to_string()
+    };
+    input.item_group = item.item_group.trim().to_string();
+    Ok(input)
 }
 
 /// Pushes production-map queue snapshots over SSE so operators see changes
