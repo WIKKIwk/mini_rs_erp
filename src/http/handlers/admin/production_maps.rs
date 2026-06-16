@@ -4,9 +4,9 @@ use crate::core::calculate_orders::{
     CalculateOrderError, CalculateOrderTemplate, owner_key, validate_template,
 };
 use crate::core::production_map::{
-    ApparatusQueuePolicy, ProductionMapBatchMoveRequest, ProductionMapDefinition,
-    ProductionMapError, ProductionMapMoveRequest, ProductionMapRunRequest, QueueActionActor,
-    queue_state,
+    ApparatusMaterialRuleUpsert, ApparatusQueuePolicy, ProductionMapBatchMoveRequest,
+    ProductionMapDefinition, ProductionMapError, ProductionMapMoveRequest, ProductionMapRunRequest,
+    QueueActionActor, RawMaterialAssignmentInput, queue_state,
 };
 use crate::google_sheets::is_sheet_order_map;
 use async_stream::stream;
@@ -332,6 +332,8 @@ struct ApparatusQueueActionRequest {
     apparatus: String,
     #[serde(default)]
     order_id: String,
+    #[serde(default)]
+    material_barcode: String,
     action: queue_state::ApparatusQueueAction,
 }
 
@@ -363,12 +365,13 @@ pub async fn production_map_queue_action(
     let assigned_apparatus = state.admin.principal_assigned_apparatus(&principal).await;
     let states = state
         .production_maps
-        .apply_apparatus_queue_action(
+        .apply_apparatus_queue_action_with_material_scan(
             &input.apparatus,
             &input.order_id,
             input.action,
             &assigned_apparatus,
             queue_action_actor(&principal),
+            &input.material_barcode,
         )
         .await
         .map_err(production_map_error)?;
@@ -376,6 +379,88 @@ pub async fn production_map_queue_action(
         "ok": true,
         "states": states,
     })))
+}
+
+/// Configures which raw-material item groups are allowed for each apparatus.
+pub async fn raw_material_rules(
+    State(state): State<AppState>,
+    method: Method,
+    headers: HeaderMap,
+    body: Bytes,
+) -> Result<Response, AdminError> {
+    let principal = authorize_any_capability(
+        &state,
+        &headers,
+        &[
+            Capability::AdminAccess,
+            Capability::ProductionMapManage,
+            Capability::RawMaterialRuleManage,
+        ],
+    )
+    .await?;
+    match method {
+        Method::GET => {
+            require_capability(&state, &principal, Capability::RawMaterialRuleManage).await?;
+            state
+                .production_maps
+                .apparatus_material_rules()
+                .await
+                .map(json_response)
+                .map_err(production_map_error)
+        }
+        Method::PUT => {
+            require_capability(&state, &principal, Capability::RawMaterialRuleManage).await?;
+            let input: ApparatusMaterialRuleUpsert = parse_json(&body)?;
+            state
+                .production_maps
+                .set_apparatus_material_rule(input)
+                .await
+                .map(json_response)
+                .map_err(production_map_error)
+        }
+        _ => Err(method_not_allowed()),
+    }
+}
+
+/// Assigns a printed raw-material QR to the order apparatus selected by rules.
+pub async fn raw_material_assignments(
+    State(state): State<AppState>,
+    method: Method,
+    headers: HeaderMap,
+    body: Bytes,
+) -> Result<Response, AdminError> {
+    let principal = authorize_any_capability(
+        &state,
+        &headers,
+        &[
+            Capability::AdminAccess,
+            Capability::ProductionMapManage,
+            Capability::RawMaterialAssign,
+        ],
+    )
+    .await?;
+    match method {
+        Method::GET => {
+            require_capability(&state, &principal, Capability::RawMaterialAssign).await?;
+            state
+                .production_maps
+                .raw_material_assignments()
+                .await
+                .map(json_response)
+                .map_err(production_map_error)
+        }
+        Method::POST => {
+            require_capability(&state, &principal, Capability::RawMaterialAssign).await?;
+            let input: RawMaterialAssignmentInput = parse_json(&body)?;
+            state
+                .production_maps
+                .assign_raw_material_to_order(input, &queue_action_actor(&principal))
+                .await
+                .map(json_response)
+                .map_err(production_map_error)
+        }
+        _ => Err(method_not_allowed()),
+    }
 }
 
 /// Pushes production-map queue snapshots over SSE so operators see changes
@@ -516,6 +601,18 @@ fn production_map_error(error: ProductionMapError) -> AdminError {
             bad_request("laminatsiya_rubber_too_large")
         }
         ProductionMapError::ApparatusQueuePolicyLocked => bad_request("queue_policy_locked"),
+        ProductionMapError::RawMaterialInvalidInput => bad_request("raw_material_invalid_input"),
+        ProductionMapError::RawMaterialGroupNotAllowed => {
+            bad_request("raw_material_group_not_allowed")
+        }
+        ProductionMapError::RawMaterialGroupAmbiguous => {
+            bad_request("raw_material_group_ambiguous")
+        }
+        ProductionMapError::RawMaterialAlreadyAssigned => {
+            bad_request("raw_material_already_assigned")
+        }
+        ProductionMapError::RawMaterialScanRequired => bad_request("raw_material_scan_required"),
+        ProductionMapError::RawMaterialMismatch => bad_request("raw_material_mismatch"),
         ProductionMapError::MapNotFound => not_found("map_not_found"),
         ProductionMapError::StoreFailed => server_error("store failed"),
         other => bad_request(other.to_string()),

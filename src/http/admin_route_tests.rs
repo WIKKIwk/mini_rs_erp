@@ -675,6 +675,115 @@ async fn production_map_nodes_preserve_alternative_group_metadata() {
 }
 
 #[tokio::test]
+async fn raw_material_routes_assign_and_require_scan_for_queue_start() {
+    let state = test_state();
+    state
+        .admin
+        .upsert_role_assignment(crate::core::authz::RoleAssignmentUpsert {
+            principal_role: PrincipalRole::Aparatchi,
+            principal_ref: "worker-raw-route".to_string(),
+            role_id: "aparatchi".to_string(),
+            assigned_apparatus: vec!["7 ta rangli pechat - A".to_string()],
+        })
+        .await
+        .expect("aparatchi assignment");
+    let token = session(&state, PrincipalRole::Admin).await;
+    let worker_token = session_for(&state, PrincipalRole::Aparatchi, "worker-raw-route").await;
+    let router = build_router(state);
+
+    let map = router
+        .clone()
+        .oneshot(request_with_body(
+            "PUT",
+            "/v1/mobile/admin/production-maps",
+            &token,
+            &pechat_order_map_json(
+                "zakaz-raw-route",
+                "Raw route",
+                "8811",
+                "7 ta rangli pechat - A",
+            ),
+        ))
+        .await
+        .expect("map save");
+    assert_eq!(map.status(), StatusCode::OK);
+
+    let rule = router
+        .clone()
+        .oneshot(request_with_body(
+            "PUT",
+            "/v1/mobile/admin/raw-material-rules",
+            &token,
+            r#"{"apparatus":"7 ta rangli pechat - A","item_groups":["Kraska"]}"#,
+        ))
+        .await
+        .expect("rule save");
+    assert_eq!(rule.status(), StatusCode::OK);
+    let rule_body = json_body(rule).await;
+    assert_eq!(rule_body["apparatus"], "7 ta rangli pechat - A");
+
+    let assigned = router
+        .clone()
+        .oneshot(request_with_body(
+            "POST",
+            "/v1/mobile/admin/raw-material-assignments",
+            &token,
+            r#"{
+                "order_id":"zakaz-raw-route",
+                "barcode":"30AA",
+                "item_code":"INK-BLACK",
+                "item_name":"Black ink",
+                "item_group":"Kraska"
+            }"#,
+        ))
+        .await
+        .expect("assign");
+    assert_eq!(assigned.status(), StatusCode::OK);
+    let assigned_body = json_body(assigned).await;
+    assert_eq!(assigned_body["apparatus"], "7 ta rangli pechat - A");
+
+    let missing_scan = router
+        .clone()
+        .oneshot(request_with_body(
+            "POST",
+            "/v1/mobile/admin/production-maps/queue-action",
+            &worker_token,
+            r#"{
+                "apparatus":"7 ta rangli pechat - A",
+                "order_id":"zakaz-raw-route",
+                "action":"start"
+            }"#,
+        ))
+        .await
+        .expect("queue action");
+    assert_eq!(missing_scan.status(), StatusCode::BAD_REQUEST);
+    assert_eq!(
+        json_body(missing_scan).await["error"],
+        "raw_material_scan_required"
+    );
+
+    let started = router
+        .oneshot(request_with_body(
+            "POST",
+            "/v1/mobile/admin/production-maps/queue-action",
+            &worker_token,
+            r#"{
+                "apparatus":"7 ta rangli pechat - A",
+                "order_id":"zakaz-raw-route",
+                "action":"start",
+                "material_barcode":"30AA"
+            }"#,
+        ))
+        .await
+        .expect("queue action with scan");
+    assert_eq!(started.status(), StatusCode::OK);
+    assert_eq!(
+        json_body(started).await["states"]["zakaz-raw-route"],
+        "in_progress"
+    );
+}
+
+#[tokio::test]
 async fn production_map_duplicate_order_number_returns_structured_error() {
     let state = test_state();
     let token = session(&state, PrincipalRole::Admin).await;

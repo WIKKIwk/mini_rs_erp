@@ -183,6 +183,14 @@ pub fn build_router(state: AppState) -> Router {
             any(admin::production_map_queue_action),
         )
         .route(
+            "/v1/mobile/admin/raw-material-rules",
+            any(admin::raw_material_rules),
+        )
+        .route(
+            "/v1/mobile/admin/raw-material-assignments",
+            any(admin::raw_material_assignments),
+        )
+        .route(
             "/v1/mobile/admin/role-assignments",
             any(admin::role_assignments),
         )

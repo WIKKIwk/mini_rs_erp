@@ -9,8 +9,14 @@ use tokio::sync::RwLock;
 use tokio::sync::broadcast;
 
 pub mod chain;
+pub mod materials;
 pub mod pechat;
 pub mod queue_state;
+
+pub use materials::{
+    ApparatusMaterialRule, ApparatusMaterialRuleUpsert, RawMaterialAssignment,
+    RawMaterialAssignmentInput,
+};
 
 const MAX_LAMINATSIYA_RUBBER_SIZE_MM: i64 = 1050;
 
@@ -236,6 +242,18 @@ pub enum ProductionMapError {
     LaminatsiyaRubberTooLarge,
     #[error("apparatus queue policy is locked")]
     ApparatusQueuePolicyLocked,
+    #[error("raw material input is invalid")]
+    RawMaterialInvalidInput,
+    #[error("raw material group is not allowed for this order")]
+    RawMaterialGroupNotAllowed,
+    #[error("raw material group matches multiple apparatus")]
+    RawMaterialGroupAmbiguous,
+    #[error("raw material is already assigned")]
+    RawMaterialAlreadyAssigned,
+    #[error("raw material scan is required")]
+    RawMaterialScanRequired,
+    #[error("raw material scan does not match assigned material")]
+    RawMaterialMismatch,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -345,6 +363,20 @@ pub trait ProductionMapStorePort: Send + Sync {
     ) -> Result<(), ProductionMapError> {
         Ok(())
     }
+    async fn apparatus_material_rules(
+        &self,
+    ) -> Result<Vec<ApparatusMaterialRule>, ProductionMapError>;
+    async fn put_apparatus_material_rule(
+        &self,
+        rule: ApparatusMaterialRule,
+    ) -> Result<(), ProductionMapError>;
+    async fn raw_material_assignments(
+        &self,
+    ) -> Result<Vec<RawMaterialAssignment>, ProductionMapError>;
+    async fn put_raw_material_assignment(
+        &self,
+        assignment: RawMaterialAssignment,
+    ) -> Result<(), ProductionMapError>;
 }
 
 #[cfg(test)]
@@ -353,6 +385,8 @@ pub struct MemoryProductionMapStore {
     sequences: RwLock<BTreeMap<String, Vec<String>>>,
     queue_states: RwLock<BTreeMap<String, BTreeMap<String, String>>>,
     queue_policies: RwLock<BTreeMap<String, ApparatusQueuePolicy>>,
+    material_rules: RwLock<BTreeMap<String, ApparatusMaterialRule>>,
+    material_assignments: RwLock<BTreeMap<String, RawMaterialAssignment>>,
 }
 
 #[cfg(test)]
@@ -363,6 +397,8 @@ impl MemoryProductionMapStore {
             sequences: RwLock::new(BTreeMap::new()),
             queue_states: RwLock::new(BTreeMap::new()),
             queue_policies: RwLock::new(BTreeMap::new()),
+            material_rules: RwLock::new(BTreeMap::new()),
+            material_assignments: RwLock::new(BTreeMap::new()),
         }
     }
 }
@@ -478,6 +514,46 @@ impl ProductionMapStorePort for MemoryProductionMapStore {
             .write()
             .await
             .insert(apparatus.trim().to_string(), policy);
+        Ok(())
+    }
+
+    async fn apparatus_material_rules(
+        &self,
+    ) -> Result<Vec<ApparatusMaterialRule>, ProductionMapError> {
+        Ok(self.material_rules.read().await.values().cloned().collect())
+    }
+
+    async fn put_apparatus_material_rule(
+        &self,
+        rule: ApparatusMaterialRule,
+    ) -> Result<(), ProductionMapError> {
+        self.material_rules
+            .write()
+            .await
+            .insert(rule.apparatus.to_lowercase(), rule);
+        Ok(())
+    }
+
+    async fn raw_material_assignments(
+        &self,
+    ) -> Result<Vec<RawMaterialAssignment>, ProductionMapError> {
+        Ok(self
+            .material_assignments
+            .read()
+            .await
+            .values()
+            .cloned()
+            .collect())
+    }
+
+    async fn put_raw_material_assignment(
+        &self,
+        assignment: RawMaterialAssignment,
+    ) -> Result<(), ProductionMapError> {
+        self.material_assignments
+            .write()
+            .await
+            .insert(assignment.barcode.to_uppercase(), assignment);
         Ok(())
     }
 }
@@ -2166,6 +2242,94 @@ mod tests {
             )
             .await;
         assert_eq!(result, Err(ProductionMapError::ApparatusQueuePolicyLocked));
+    }
+
+    #[tokio::test]
+    async fn raw_material_assignment_requires_exact_scan_before_start() {
+        let service =
+            ProductionMapService::new(std::sync::Arc::new(MemoryProductionMapStore::new()));
+        let actor = QueueActionActor {
+            role: "aparatchi".to_string(),
+            ref_: "worker-1".to_string(),
+            display_name: "Worker 1".to_string(),
+        };
+        service
+            .upsert_map(apparatus_stage_map("zakaz-raw-1", "7 ta rangli pechat - A"))
+            .await
+            .expect("map");
+        service
+            .set_apparatus_material_rule(ApparatusMaterialRuleUpsert {
+                apparatus: "7 ta rangli pechat - A".to_string(),
+                item_groups: vec!["Kraska".to_string()],
+            })
+            .await
+            .expect("material rule");
+        let assigned = service
+            .assign_raw_material_to_order(
+                RawMaterialAssignmentInput {
+                    order_id: "zakaz-raw-1".to_string(),
+                    barcode: "30AA".to_string(),
+                    item_code: "INK-BLACK".to_string(),
+                    item_name: "Black ink".to_string(),
+                    item_group: "Kraska".to_string(),
+                },
+                &actor,
+            )
+            .await
+            .expect("assign material");
+        assert_eq!(assigned.apparatus, "7 ta rangli pechat - A");
+
+        let not_assigned = service
+            .apply_apparatus_queue_action_with_material_scan(
+                "7 ta rangli pechat - A",
+                "zakaz-raw-1",
+                queue_state::ApparatusQueueAction::Start,
+                &["Rezka apparat".to_string()],
+                actor.clone(),
+                "",
+            )
+            .await;
+        assert_eq!(not_assigned, Err(ProductionMapError::ApparatusNotAssigned));
+
+        let missing_scan = service
+            .apply_apparatus_queue_action_with_material_scan(
+                "7 ta rangli pechat - A",
+                "zakaz-raw-1",
+                queue_state::ApparatusQueueAction::Start,
+                &["7 ta rangli pechat - A".to_string()],
+                actor.clone(),
+                "",
+            )
+            .await;
+        assert_eq!(
+            missing_scan,
+            Err(ProductionMapError::RawMaterialScanRequired)
+        );
+
+        let wrong_scan = service
+            .apply_apparatus_queue_action_with_material_scan(
+                "7 ta rangli pechat - A",
+                "zakaz-raw-1",
+                queue_state::ApparatusQueueAction::Start,
+                &["7 ta rangli pechat - A".to_string()],
+                actor.clone(),
+                "30BB",
+            )
+            .await;
+        assert_eq!(wrong_scan, Err(ProductionMapError::RawMaterialMismatch));
+
+        let states = service
+            .apply_apparatus_queue_action_with_material_scan(
+                "7 ta rangli pechat - A",
+                "zakaz-raw-1",
+                queue_state::ApparatusQueueAction::Start,
+                &["7 ta rangli pechat - A".to_string()],
+                actor,
+                "30AA",
+            )
+            .await
+            .expect("start with exact material");
+        assert_eq!(states.get("zakaz-raw-1"), Some(&"in_progress".to_string()));
     }
 
     #[tokio::test]

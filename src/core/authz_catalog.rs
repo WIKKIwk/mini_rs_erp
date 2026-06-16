@@ -200,4 +200,16 @@ pub(super) const CAPABILITY_CATALOG: &[CapabilityDefinition] = &[
         label: "Rezka split manage",
         default_roles: ADMIN_ONLY,
     },
+    CapabilityDefinition {
+        capability: Capability::RawMaterialRuleManage,
+        code: "raw_material.rule.manage",
+        label: "Raw material rule manage",
+        default_roles: ADMIN_ONLY,
+    },
+    CapabilityDefinition {
+        capability: Capability::RawMaterialAssign,
+        code: "raw_material.assign",
+        label: "Raw material assign",
+        default_roles: ADMIN_WERKA,
+    },
 ];

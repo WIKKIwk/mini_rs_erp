@@ -242,6 +242,31 @@ CREATE TABLE IF NOT EXISTS mini_queue_action_events (
     CONSTRAINT mini_queue_action_events_event_id_unique UNIQUE (event_id)
 );
 
+CREATE TABLE IF NOT EXISTS mini_apparatus_material_rules (
+    apparatus TEXT PRIMARY KEY,
+    item_groups JSONB NOT NULL DEFAULT '[]'::jsonb,
+    payload_json JSONB NOT NULL DEFAULT '{}'::jsonb,
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    CONSTRAINT mini_apparatus_material_rules_apparatus_not_blank CHECK (btrim(apparatus) <> ''),
+    CONSTRAINT mini_apparatus_material_rules_groups_array CHECK (jsonb_typeof(item_groups) = 'array')
+);
+
+CREATE TABLE IF NOT EXISTS mini_raw_material_assignments (
+    barcode TEXT PRIMARY KEY,
+    order_id TEXT NOT NULL,
+    apparatus TEXT NOT NULL,
+    item_code TEXT NOT NULL,
+    item_group TEXT NOT NULL,
+    payload_json JSONB NOT NULL DEFAULT '{}'::jsonb,
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    CONSTRAINT mini_raw_material_assignments_barcode_not_blank CHECK (btrim(barcode) <> ''),
+    CONSTRAINT mini_raw_material_assignments_order_not_blank CHECK (btrim(order_id) <> ''),
+    CONSTRAINT mini_raw_material_assignments_apparatus_not_blank CHECK (btrim(apparatus) <> ''),
+    CONSTRAINT mini_raw_material_assignments_item_code_not_blank CHECK (btrim(item_code) <> ''),
+    CONSTRAINT mini_raw_material_assignments_item_group_not_blank CHECK (btrim(item_group) <> ''),
+    CONSTRAINT mini_raw_material_assignments_order_apparatus_unique UNIQUE (order_id, apparatus)
+);
+
 CREATE TABLE IF NOT EXISTS mini_engine_events (
     id BIGSERIAL PRIMARY KEY,
     event_id TEXT NOT NULL,
@@ -292,6 +317,9 @@ CREATE INDEX IF NOT EXISTS idx_mini_queue_states_order_id ON mini_queue_states(o
 CREATE INDEX IF NOT EXISTS idx_mini_queue_action_events_apparatus_created ON mini_queue_action_events(apparatus, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_mini_queue_action_events_order_created ON mini_queue_action_events(order_id, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_mini_queue_action_events_actor_created ON mini_queue_action_events(actor_role, actor_ref, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_mini_raw_material_assignments_order ON mini_raw_material_assignments(order_id);
+CREATE INDEX IF NOT EXISTS idx_mini_raw_material_assignments_apparatus ON mini_raw_material_assignments(lower(apparatus));
+CREATE INDEX IF NOT EXISTS idx_mini_raw_material_assignments_item_group ON mini_raw_material_assignments(lower(item_group));
 CREATE INDEX IF NOT EXISTS idx_mini_engine_events_entity ON mini_engine_events(domain, entity_id, created_at DESC);
 
 INSERT INTO mini_production_map_nodes (map_id, node_id, kind, title, payload_json)

@@ -44,6 +44,8 @@ pub enum Capability {
     GscalePrint,
     RpsBatchManage,
     RezkaSplitManage,
+    RawMaterialRuleManage,
+    RawMaterialAssign,
 }
 
 #[derive(Debug, Clone, Copy, Eq, PartialEq)]
