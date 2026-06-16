@@ -139,6 +139,7 @@ CREATE TABLE IF NOT EXISTS mini_apparatus (
 CREATE TABLE IF NOT EXISTS mini_workers (
     id TEXT PRIMARY KEY,
     name TEXT NOT NULL,
+    phone TEXT NOT NULL DEFAULT '',
     level TEXT NOT NULL,
     payload_json JSONB NOT NULL DEFAULT '{}'::jsonb,
     created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
@@ -149,6 +150,9 @@ CREATE TABLE IF NOT EXISTS mini_workers (
     ),
     CONSTRAINT mini_workers_name_unique UNIQUE (name)
 );
+
+ALTER TABLE mini_workers
+    ADD COLUMN IF NOT EXISTS phone TEXT NOT NULL DEFAULT '';
 
 CREATE TABLE IF NOT EXISTS mini_worker_groups (
     apparatus TEXT NOT NULL,

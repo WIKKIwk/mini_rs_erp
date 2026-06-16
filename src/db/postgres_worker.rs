@@ -19,10 +19,10 @@ impl WorkerStorePort for PostgresWorkerStore {
     async fn workers(&self, query: &str, limit: usize) -> Result<Vec<Worker>, WorkerError> {
         let needle = query.trim().to_lowercase();
         let pattern = format!("%{needle}%");
-        let rows = sqlx::query_as::<_, (String, String, String)>(
-            "SELECT id, name, level
+        let rows = sqlx::query_as::<_, (String, String, String, String)>(
+            "SELECT id, name, COALESCE(phone, ''), level
              FROM mini_workers
-             WHERE ($1 = '' OR lower(name) LIKE $2 OR lower(level) LIKE $2)
+             WHERE ($1 = '' OR lower(name) LIKE $2 OR lower(phone) LIKE $2 OR lower(level) LIKE $2)
              ORDER BY lower(name) ASC
              LIMIT $3",
         )
@@ -35,7 +35,12 @@ impl WorkerStorePort for PostgresWorkerStore {
 
         Ok(rows
             .into_iter()
-            .map(|(id, name, level)| Worker { id, name, level })
+            .map(|(id, name, phone, level)| Worker {
+                id,
+                name,
+                phone,
+                level,
+            })
             .collect())
     }
 
@@ -48,8 +53,8 @@ impl WorkerStorePort for PostgresWorkerStore {
         if ids.is_empty() {
             return Ok(Vec::new());
         }
-        let rows = sqlx::query_as::<_, (String, String, String)>(
-            "SELECT id, name, level
+        let rows = sqlx::query_as::<_, (String, String, String, String)>(
+            "SELECT id, name, COALESCE(phone, ''), level
              FROM mini_workers
              WHERE id = ANY($1)
              ORDER BY array_position($1, id)",
@@ -61,41 +66,53 @@ impl WorkerStorePort for PostgresWorkerStore {
 
         Ok(rows
             .into_iter()
-            .map(|(id, name, level)| Worker { id, name, level })
+            .map(|(id, name, phone, level)| Worker {
+                id,
+                name,
+                phone,
+                level,
+            })
             .collect())
     }
 
     async fn upsert_worker(&self, worker: Worker) -> Result<Worker, WorkerError> {
         let payload = serde_json::to_value(&worker).map_err(|_| WorkerError::StoreFailed)?;
-        let (id, name, level) = sqlx::query_as::<_, (String, String, String)>(
-            "INSERT INTO mini_workers (id, name, level, payload_json)
-             VALUES ($1, $2, $3, $4)
+        let (id, name, phone, level) = sqlx::query_as::<_, (String, String, String, String)>(
+            "INSERT INTO mini_workers (id, name, phone, level, payload_json)
+             VALUES ($1, $2, $3, $4, $5)
              ON CONFLICT ((lower(name))) DO UPDATE SET
                name = excluded.name,
+               phone = excluded.phone,
                level = excluded.level,
                payload_json = excluded.payload_json,
                updated_at = now()
-             RETURNING id, name, level",
+             RETURNING id, name, COALESCE(phone, ''), level",
         )
         .bind(worker.id)
         .bind(worker.name)
+        .bind(worker.phone)
         .bind(worker.level)
         .bind(payload)
         .fetch_one(&self.pool)
         .await
         .map_err(|_| WorkerError::StoreFailed)?;
 
-        Ok(Worker { id, name, level })
+        Ok(Worker {
+            id,
+            name,
+            phone,
+            level,
+        })
     }
 
     async fn update_worker_level(&self, id: &str, level: &str) -> Result<Worker, WorkerError> {
-        let row = sqlx::query_as::<_, (String, String, String)>(
+        let row = sqlx::query_as::<_, (String, String, String, String)>(
             "UPDATE mini_workers
              SET level = $2,
                  payload_json = jsonb_set(payload_json, '{level}', to_jsonb($2::text), true),
                  updated_at = now()
              WHERE id = $1
-             RETURNING id, name, level",
+             RETURNING id, name, COALESCE(phone, ''), level",
         )
         .bind(id.trim())
         .bind(level.trim())
@@ -103,9 +120,40 @@ impl WorkerStorePort for PostgresWorkerStore {
         .await
         .map_err(|_| WorkerError::StoreFailed)?;
 
-        let Some((id, name, level)) = row else {
+        let Some((id, name, phone, level)) = row else {
             return Err(WorkerError::NotFound);
         };
-        Ok(Worker { id, name, level })
+        Ok(Worker {
+            id,
+            name,
+            phone,
+            level,
+        })
+    }
+
+    async fn update_worker_phone(&self, id: &str, phone: &str) -> Result<Worker, WorkerError> {
+        let row = sqlx::query_as::<_, (String, String, String, String)>(
+            "UPDATE mini_workers
+             SET phone = $2,
+                 payload_json = jsonb_set(payload_json, '{phone}', to_jsonb($2::text), true),
+                 updated_at = now()
+             WHERE id = $1
+             RETURNING id, name, COALESCE(phone, ''), level",
+        )
+        .bind(id.trim())
+        .bind(phone.trim())
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(|_| WorkerError::StoreFailed)?;
+
+        let Some((id, name, phone, level)) = row else {
+            return Err(WorkerError::NotFound);
+        };
+        Ok(Worker {
+            id,
+            name,
+            phone,
+            level,
+        })
     }
 }

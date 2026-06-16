@@ -16,6 +16,8 @@ pub const WORKER_LEVELS: [&str; 5] = [
 pub struct Worker {
     pub id: String,
     pub name: String,
+    #[serde(default)]
+    pub phone: String,
     pub level: String,
 }
 
@@ -23,7 +25,11 @@ pub struct Worker {
 pub struct WorkerUpsert {
     #[serde(default)]
     pub id: String,
+    #[serde(default)]
     pub name: String,
+    #[serde(default)]
+    pub phone: String,
+    #[serde(default)]
     pub level: String,
 }
 
@@ -47,6 +53,7 @@ pub trait WorkerStorePort: Send + Sync {
     async fn workers_by_ids(&self, ids: &[String]) -> Result<Vec<Worker>, WorkerError>;
     async fn upsert_worker(&self, worker: Worker) -> Result<Worker, WorkerError>;
     async fn update_worker_level(&self, id: &str, level: &str) -> Result<Worker, WorkerError>;
+    async fn update_worker_phone(&self, id: &str, phone: &str) -> Result<Worker, WorkerError>;
 }
 
 #[derive(Clone)]
@@ -86,6 +93,7 @@ impl WorkerService {
             .upsert_worker(Worker {
                 id,
                 name: name.to_string(),
+                phone: input.phone.trim().to_string(),
                 level,
             })
             .await
@@ -98,6 +106,14 @@ impl WorkerService {
         }
         let level = normalize_level(&input.level)?;
         self.store.update_worker_level(id, &level).await
+    }
+
+    pub async fn update_worker_phone(&self, input: WorkerUpsert) -> Result<Worker, WorkerError> {
+        let id = input.id.trim();
+        if id.is_empty() {
+            return Err(WorkerError::MissingId);
+        }
+        self.store.update_worker_phone(id, input.phone.trim()).await
     }
 }
 
@@ -132,6 +148,10 @@ impl WorkerStorePort for UnavailableWorkerStore {
     }
 
     async fn update_worker_level(&self, _id: &str, _level: &str) -> Result<Worker, WorkerError> {
+        Err(WorkerError::StoreFailed)
+    }
+
+    async fn update_worker_phone(&self, _id: &str, _phone: &str) -> Result<Worker, WorkerError> {
         Err(WorkerError::StoreFailed)
     }
 }
@@ -185,6 +205,7 @@ impl WorkerStorePort for MemoryWorkerStore {
             .find(|item| item.id == worker.id || item.name.to_lowercase() == key)
         {
             existing.name = worker.name;
+            existing.phone = worker.phone;
             existing.level = worker.level;
             return Ok(existing.clone());
         }
@@ -198,6 +219,15 @@ impl WorkerStorePort for MemoryWorkerStore {
             return Err(WorkerError::NotFound);
         };
         worker.level = level.to_string();
+        Ok(worker.clone())
+    }
+
+    async fn update_worker_phone(&self, id: &str, phone: &str) -> Result<Worker, WorkerError> {
+        let mut workers = self.workers.write().await;
+        let Some(worker) = workers.iter_mut().find(|item| item.id == id.trim()) else {
+            return Err(WorkerError::NotFound);
+        };
+        worker.phone = phone.trim().to_string();
         Ok(worker.clone())
     }
 }
