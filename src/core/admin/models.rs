@@ -112,6 +112,17 @@ pub struct AdminCustomerDetail {
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AdminWorkerDetail {
+    pub id: String,
+    pub name: String,
+    pub phone: String,
+    pub level: String,
+    pub code: String,
+    pub code_locked: bool,
+    pub code_retry_after_sec: i64,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AdminPhoneUpdateRequest {
     pub phone: String,
 }

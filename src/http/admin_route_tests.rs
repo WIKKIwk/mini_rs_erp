@@ -483,6 +483,67 @@ async fn worker_login_receives_group_assigned_apparatus() {
 }
 
 #[tokio::test]
+async fn admin_worker_detail_regenerates_login_code_like_customer() {
+    let state = test_state();
+    let token = session(&state, PrincipalRole::Admin).await;
+
+    let worker = build_router(state.clone())
+        .oneshot(request_with_body(
+            "POST",
+            "/v1/mobile/admin/workers",
+            &token,
+            r#"{"id":"worker_code_1","name":"Code worker","phone":"+998901112244","level":"Master"}"#,
+        ))
+        .await
+        .expect("create worker");
+    assert_eq!(worker.status(), StatusCode::OK);
+
+    let detail = build_router(state.clone())
+        .oneshot(request(
+            "GET",
+            "/v1/mobile/admin/workers/detail?id=worker_code_1",
+            &token,
+        ))
+        .await
+        .expect("worker detail");
+    assert_eq!(detail.status(), StatusCode::OK);
+    let detail_body = json_body(detail).await;
+    assert_eq!(detail_body["id"], "worker_code_1");
+    assert_eq!(detail_body["name"], "Code worker");
+    assert_eq!(detail_body["phone"], "+998901112244");
+    assert_eq!(detail_body["code"], "");
+
+    let regenerated = build_router(state.clone())
+        .oneshot(request(
+            "POST",
+            "/v1/mobile/admin/workers/code/regenerate?id=worker_code_1",
+            &token,
+        ))
+        .await
+        .expect("worker code regenerate");
+    assert_eq!(regenerated.status(), StatusCode::OK);
+    let regenerated_body = json_body(regenerated).await;
+    let code = regenerated_body["code"]
+        .as_str()
+        .expect("generated worker code");
+    assert!(code.starts_with("40"), "{code}");
+
+    let login = build_router(state)
+        .oneshot(request_with_body(
+            "POST",
+            "/v1/mobile/auth/login",
+            "",
+            &format!(r#"{{"phone":"+998901112244","code":"{code}"}}"#),
+        ))
+        .await
+        .expect("worker login");
+    assert_eq!(login.status(), StatusCode::OK);
+    let login_body = json_body(login).await;
+    assert_eq!(login_body["profile"]["role"], "aparatchi");
+    assert_eq!(login_body["profile"]["ref"], "worker_code_1");
+}
+
+#[tokio::test]
 async fn admin_production_maps_save_compiles_program() {
     let state = test_state();
     let token = session(&state, PrincipalRole::Admin).await;

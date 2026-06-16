@@ -240,6 +240,22 @@ impl AdminService {
         self.customer_detail(&entry.ref_).await
     }
 
+    pub async fn regenerate_worker_code(
+        &self,
+        worker: Worker,
+    ) -> Result<AdminWorkerDetail, AdminPortError> {
+        let mut existing = self.existing_state_codes().await?;
+        let mut state = self.state_for(&worker.id).await?;
+        if state.removed {
+            return Err(AdminPortError::NotFound);
+        }
+        let now = OffsetDateTime::now_utc();
+        state = bump_code_regen_state(state, now)?;
+        state.custom_code = random_code("40", &mut existing);
+        self.put_state(&worker.id, state).await?;
+        self.worker_detail(worker).await
+    }
+
     async fn customer_access_code_prefix(&self, ref_: &str) -> Result<String, AdminPortError> {
         let assignments = self.role_assignments().await?;
         let ref_ = ref_.trim();

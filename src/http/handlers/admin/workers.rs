@@ -11,6 +11,11 @@ pub struct WorkerGroupQuery {
     apparatus: Option<String>,
 }
 
+#[derive(Debug, Deserialize)]
+pub struct WorkerIdQuery {
+    id: Option<String>,
+}
+
 #[derive(Debug, Serialize)]
 struct WorkerGroupResponse {
     apparatus: String,
@@ -85,6 +90,60 @@ fn worker_error(error: WorkerError) -> AdminError {
         WorkerError::NotFound => not_found("worker not found"),
         WorkerError::StoreFailed => server_error("worker store failed"),
     }
+}
+
+pub async fn worker_detail(
+    State(state): State<AppState>,
+    method: Method,
+    headers: HeaderMap,
+    Query(query): Query<WorkerIdQuery>,
+) -> Result<Response, AdminError> {
+    authorize_capability(&state, &headers, Capability::AdminAccess).await?;
+    if method != Method::GET {
+        return Err(method_not_allowed());
+    }
+    let worker = required_worker(&state, query.id.as_deref()).await?;
+    state
+        .admin
+        .worker_detail(worker)
+        .await
+        .map(json_response)
+        .map_err(|_| server_error("worker detail failed"))
+}
+
+pub async fn worker_code_regenerate(
+    State(state): State<AppState>,
+    method: Method,
+    headers: HeaderMap,
+    Query(query): Query<WorkerIdQuery>,
+) -> Result<Response, AdminError> {
+    authorize_capability(&state, &headers, Capability::AdminAccess).await?;
+    if method != Method::POST {
+        return Err(method_not_allowed());
+    }
+    let worker = required_worker(&state, query.id.as_deref()).await?;
+    state
+        .admin
+        .regenerate_worker_code(worker)
+        .await
+        .map(json_response)
+        .map_err(|_| server_error("worker code regenerate failed"))
+}
+
+async fn required_worker(state: &AppState, id: Option<&str>) -> Result<Worker, AdminError> {
+    let id = id.unwrap_or("").trim();
+    if id.is_empty() {
+        return Err(bad_request("worker id is required"));
+    }
+    let ids = vec![id.to_string()];
+    state
+        .workers
+        .workers_by_ids(&ids)
+        .await
+        .map_err(worker_error)?
+        .into_iter()
+        .next()
+        .ok_or_else(|| not_found("worker not found"))
 }
 
 pub async fn worker_groups(

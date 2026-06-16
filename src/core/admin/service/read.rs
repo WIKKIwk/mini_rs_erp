@@ -255,6 +255,23 @@ impl AdminService {
         })
     }
 
+    pub async fn worker_detail(&self, worker: Worker) -> Result<AdminWorkerDetail, AdminPortError> {
+        let state = self.state_for(&worker.id).await?;
+        if state.removed {
+            return Err(AdminPortError::NotFound);
+        }
+        let now = OffsetDateTime::now_utc();
+        Ok(AdminWorkerDetail {
+            id: worker.id,
+            name: worker.name,
+            phone: worker.phone,
+            level: worker.level,
+            code: state.custom_code.trim().to_string(),
+            code_locked: state.code_locked(now),
+            code_retry_after_sec: state.retry_after_seconds(now),
+        })
+    }
+
     pub async fn items_page_by_group(
         &self,
         group: &str,
