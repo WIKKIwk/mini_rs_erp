@@ -8,12 +8,16 @@ use super::{ProductionMapError, ProductionMapService, QueueActionActor, chain};
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ApparatusMaterialRule {
     pub apparatus: String,
+    #[serde(default)]
+    pub requires_material: bool,
     pub item_groups: Vec<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ApparatusMaterialRuleUpsert {
     pub apparatus: String,
+    #[serde(default)]
+    pub requires_material: bool,
     #[serde(default)]
     pub item_groups: Vec<String>,
 }
@@ -177,6 +181,9 @@ impl ProductionMapService {
             })
             .collect::<Vec<_>>();
         if assignments.is_empty() {
+            if self.apparatus_requires_material(apparatus).await? {
+                return Err(ProductionMapError::RawMaterialAssignmentNotFound);
+            }
             return Ok(());
         }
         let scanned = normalized_barcodes(material_barcode);
@@ -191,6 +198,21 @@ impl ProductionMapService {
             return Err(ProductionMapError::RawMaterialMismatch);
         }
         Ok(())
+    }
+
+    async fn apparatus_requires_material(
+        &self,
+        apparatus: &str,
+    ) -> Result<bool, ProductionMapError> {
+        Ok(self
+            .store
+            .apparatus_material_rules()
+            .await?
+            .iter()
+            .any(|rule| {
+                rule.requires_material
+                    && queue_state::apparatus_titles_match(&rule.apparatus, apparatus)
+            }))
     }
 }
 
@@ -214,6 +236,7 @@ fn normalize_rule(
     }
     Ok(ApparatusMaterialRule {
         apparatus,
+        requires_material: input.requires_material,
         item_groups,
     })
 }

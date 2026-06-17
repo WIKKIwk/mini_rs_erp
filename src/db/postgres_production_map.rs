@@ -324,15 +324,17 @@ impl ProductionMapStorePort for PostgresProductionMapStore {
         let payload = serde_json::to_value(&rule).map_err(|_| ProductionMapError::StoreFailed)?;
         sqlx::query(
             "INSERT INTO mini_apparatus_material_rules
-                (apparatus, item_groups, payload_json, updated_at)
-             VALUES ($1, $2, $3, now())
+                (apparatus, item_groups, requires_material, payload_json, updated_at)
+             VALUES ($1, $2, $3, $4, now())
              ON CONFLICT (apparatus) DO UPDATE SET
                item_groups = excluded.item_groups,
+               requires_material = excluded.requires_material,
                payload_json = excluded.payload_json,
                updated_at = excluded.updated_at",
         )
         .bind(rule.apparatus.trim())
         .bind(item_groups)
+        .bind(rule.requires_material)
         .bind(payload)
         .execute(&self.pool)
         .await

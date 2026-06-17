@@ -818,6 +818,9 @@ fn production_map_error(error: ProductionMapError) -> AdminError {
         ProductionMapError::RawMaterialAlreadyAssigned => {
             bad_request("raw_material_already_assigned")
         }
+        ProductionMapError::RawMaterialAssignmentNotFound => {
+            bad_request("raw_material_assignment_not_found")
+        }
         ProductionMapError::RawMaterialScanRequired => bad_request("raw_material_scan_required"),
         ProductionMapError::RawMaterialMismatch => bad_request("raw_material_mismatch"),
         ProductionMapError::MapNotFound => not_found("map_not_found"),

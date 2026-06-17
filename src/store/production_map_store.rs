@@ -589,6 +589,7 @@ fn migrate(conn: &Connection) -> rusqlite::Result<()> {
         CREATE TABLE IF NOT EXISTS apparatus_material_rules (
             apparatus TEXT PRIMARY KEY,
             item_groups_json TEXT NOT NULL,
+            requires_material INTEGER NOT NULL DEFAULT 0,
             payload_json TEXT NOT NULL DEFAULT '{}',
             saved_at TEXT NOT NULL
         );

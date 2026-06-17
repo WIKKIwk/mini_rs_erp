@@ -250,6 +250,8 @@ pub enum ProductionMapError {
     RawMaterialGroupAmbiguous,
     #[error("raw material is already assigned")]
     RawMaterialAlreadyAssigned,
+    #[error("raw material assignment is required")]
+    RawMaterialAssignmentNotFound,
     #[error("raw material scan is required")]
     RawMaterialScanRequired,
     #[error("raw material scan does not match assigned material")]
@@ -2329,10 +2331,25 @@ mod tests {
         service
             .set_apparatus_material_rule(ApparatusMaterialRuleUpsert {
                 apparatus: "7 ta rangli pechat - A".to_string(),
+                requires_material: true,
                 item_groups: vec!["Kraska".to_string()],
             })
             .await
             .expect("material rule");
+        let missing_assignment = service
+            .apply_apparatus_queue_action_with_material_scan(
+                "7 ta rangli pechat - A",
+                "zakaz-raw-1",
+                queue_state::ApparatusQueueAction::Start,
+                &["7 ta rangli pechat - A".to_string()],
+                actor.clone(),
+                "",
+            )
+            .await;
+        assert_eq!(
+            missing_assignment,
+            Err(ProductionMapError::RawMaterialAssignmentNotFound)
+        );
         let assigned = service
             .assign_raw_material_to_order(
                 RawMaterialAssignmentInput {

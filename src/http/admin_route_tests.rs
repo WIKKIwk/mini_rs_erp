@@ -722,13 +722,34 @@ async fn raw_material_routes_assign_and_require_scan_for_queue_start() {
             "PUT",
             "/v1/mobile/admin/raw-material-rules",
             &token,
-            r#"{"apparatus":"7 ta rangli pechat - A","item_groups":["Kraska"]}"#,
+            r#"{"apparatus":"7 ta rangli pechat - A","requires_material":true,"item_groups":["Kraska"]}"#,
         ))
         .await
         .expect("rule save");
     assert_eq!(rule.status(), StatusCode::OK);
     let rule_body = json_body(rule).await;
     assert_eq!(rule_body["apparatus"], "7 ta rangli pechat - A");
+    assert_eq!(rule_body["requires_material"], true);
+
+    let missing_assignment = router
+        .clone()
+        .oneshot(request_with_body(
+            "POST",
+            "/v1/mobile/admin/production-maps/queue-action",
+            &worker_token,
+            r#"{
+                "apparatus":"7 ta rangli pechat - A",
+                "order_id":"zakaz-raw-route",
+                "action":"start"
+            }"#,
+        ))
+        .await
+        .expect("queue action without assignment");
+    assert_eq!(missing_assignment.status(), StatusCode::BAD_REQUEST);
+    assert_eq!(
+        json_body(missing_assignment).await["error"],
+        "raw_material_assignment_not_found"
+    );
 
     let assigned = router
         .clone()

@@ -279,11 +279,15 @@ CREATE TABLE IF NOT EXISTS mini_queue_action_events (
 CREATE TABLE IF NOT EXISTS mini_apparatus_material_rules (
     apparatus TEXT PRIMARY KEY,
     item_groups JSONB NOT NULL DEFAULT '[]'::jsonb,
+    requires_material BOOLEAN NOT NULL DEFAULT false,
     payload_json JSONB NOT NULL DEFAULT '{}'::jsonb,
     updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
     CONSTRAINT mini_apparatus_material_rules_apparatus_not_blank CHECK (btrim(apparatus) <> ''),
     CONSTRAINT mini_apparatus_material_rules_groups_array CHECK (jsonb_typeof(item_groups) = 'array')
 );
+
+ALTER TABLE mini_apparatus_material_rules
+    ADD COLUMN IF NOT EXISTS requires_material BOOLEAN NOT NULL DEFAULT false;
 
 CREATE TABLE IF NOT EXISTS mini_raw_material_assignments (
     barcode TEXT PRIMARY KEY,
