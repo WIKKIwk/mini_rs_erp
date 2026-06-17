@@ -71,6 +71,19 @@ async fn app_state_leaves_mini_engine_disabled_without_database_url() {
 }
 
 #[tokio::test]
+async fn app_state_does_not_fallback_production_maps_to_sqlite_without_database_url() {
+    let _guard = MINI_ENGINE_ENV_LOCK.lock().expect("env lock");
+    unsafe {
+        std::env::remove_var("MINI_ERP_DATABASE_URL");
+    }
+
+    let state = super::AppState::new(test_app_config());
+    let result = state.production_maps.maps().await;
+
+    assert_eq!(result, Err(ProductionMapError::StoreFailed));
+}
+
+#[tokio::test]
 async fn app_state_builds_lazy_mini_engine_when_database_url_is_configured() {
     let _guard = MINI_ENGINE_ENV_LOCK.lock().expect("env lock");
     unsafe {

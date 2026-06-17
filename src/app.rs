@@ -1,3 +1,4 @@
+use std::collections::BTreeMap;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -12,7 +13,11 @@ use crate::core::calculate_orders::CalculateOrderStorePort;
 use crate::core::customer::service::CustomerService;
 use crate::core::gscale::GscaleService;
 use crate::core::mini_orders::{MiniOrderSink, NoopMiniOrderSink};
-use crate::core::production_map::ProductionMapService;
+use crate::core::production_map::{
+    ApparatusMaterialRule, ApparatusQueueActionEvent, ApparatusQueuePolicy,
+    ProductionMapDefinition, ProductionMapError, ProductionMapService, ProductionMapStorePort,
+    QueueActionActor, RawMaterialAssignment,
+};
 use crate::core::profile::ports::ProfileStorePort;
 use crate::core::profile::service::ProfileService;
 use crate::core::push::ports::PushTokenStorePort;
@@ -46,7 +51,6 @@ use crate::rps::RpsDriverClient;
 use crate::store::admin_store::JsonAdminStore;
 use crate::store::apparatus_group_store::ApparatusGroupStore;
 use crate::store::calculate_order_store::CalculateOrderStore;
-use crate::store::production_map_store::ProductionMapStore;
 use crate::store::profile_store::{LmdbProfileStore, ProfileStore};
 use crate::store::push_token_store::{LmdbPushTokenStore, PushTokenStore};
 use crate::store::role_store::RoleDefinitionStore;
@@ -566,7 +570,10 @@ fn build_mini_order_sink() -> Arc<dyn MiniOrderSink> {
 fn build_production_map_service() -> ProductionMapService {
     let config = match PostgresConfig::from_env() {
         Ok(config) => config,
-        Err(_) => return build_sqlite_production_map_service(),
+        Err(error) => {
+            tracing::warn!(?error, "mini ERP postgres production map store unavailable");
+            return ProductionMapService::new(Arc::new(UnavailableProductionMapStore));
+        }
     };
     match config.pool_options().connect_lazy(&config.database_url) {
         Ok(pool) => {
@@ -574,14 +581,110 @@ fn build_production_map_service() -> ProductionMapService {
             ProductionMapService::new(Arc::new(PostgresProductionMapStore::new(pool)))
         }
         Err(error) => {
-            tracing::warn!(%error, "mini ERP postgres production map store disabled");
-            build_sqlite_production_map_service()
+            tracing::warn!(%error, "mini ERP postgres production map store unavailable");
+            ProductionMapService::new(Arc::new(UnavailableProductionMapStore))
         }
     }
 }
 
-fn build_sqlite_production_map_service() -> ProductionMapService {
-    ProductionMapService::new(Arc::new(ProductionMapStore::new(product_map_store_path())))
+struct UnavailableProductionMapStore;
+
+#[async_trait]
+impl ProductionMapStorePort for UnavailableProductionMapStore {
+    async fn maps(&self) -> Result<Vec<ProductionMapDefinition>, ProductionMapError> {
+        Err(ProductionMapError::StoreFailed)
+    }
+
+    async fn put_map(&self, _map: ProductionMapDefinition) -> Result<(), ProductionMapError> {
+        Err(ProductionMapError::StoreFailed)
+    }
+
+    async fn put_maps_batch(
+        &self,
+        _maps: &[ProductionMapDefinition],
+    ) -> Result<(), ProductionMapError> {
+        Err(ProductionMapError::StoreFailed)
+    }
+
+    async fn delete_map(&self, _map_id: &str) -> Result<(), ProductionMapError> {
+        Err(ProductionMapError::StoreFailed)
+    }
+
+    async fn apparatus_sequences(
+        &self,
+    ) -> Result<BTreeMap<String, Vec<String>>, ProductionMapError> {
+        Err(ProductionMapError::StoreFailed)
+    }
+
+    async fn put_apparatus_sequence(
+        &self,
+        _apparatus: &str,
+        _order_ids: Vec<String>,
+    ) -> Result<(), ProductionMapError> {
+        Err(ProductionMapError::StoreFailed)
+    }
+
+    async fn apparatus_queue_states(
+        &self,
+    ) -> Result<BTreeMap<String, BTreeMap<String, String>>, ProductionMapError> {
+        Err(ProductionMapError::StoreFailed)
+    }
+
+    async fn put_apparatus_queue_states(
+        &self,
+        _apparatus: &str,
+        _states: BTreeMap<String, String>,
+    ) -> Result<(), ProductionMapError> {
+        Err(ProductionMapError::StoreFailed)
+    }
+
+    async fn apparatus_queue_policies(
+        &self,
+    ) -> Result<BTreeMap<String, ApparatusQueuePolicy>, ProductionMapError> {
+        Err(ProductionMapError::StoreFailed)
+    }
+
+    async fn put_apparatus_queue_policy(
+        &self,
+        _apparatus: &str,
+        _policy: ApparatusQueuePolicy,
+        _actor: &QueueActionActor,
+    ) -> Result<(), ProductionMapError> {
+        Err(ProductionMapError::StoreFailed)
+    }
+
+    async fn append_apparatus_queue_action_event(
+        &self,
+        _event: ApparatusQueueActionEvent,
+    ) -> Result<(), ProductionMapError> {
+        Err(ProductionMapError::StoreFailed)
+    }
+
+    async fn apparatus_material_rules(
+        &self,
+    ) -> Result<Vec<ApparatusMaterialRule>, ProductionMapError> {
+        Err(ProductionMapError::StoreFailed)
+    }
+
+    async fn put_apparatus_material_rule(
+        &self,
+        _rule: ApparatusMaterialRule,
+    ) -> Result<(), ProductionMapError> {
+        Err(ProductionMapError::StoreFailed)
+    }
+
+    async fn raw_material_assignments(
+        &self,
+    ) -> Result<Vec<RawMaterialAssignment>, ProductionMapError> {
+        Err(ProductionMapError::StoreFailed)
+    }
+
+    async fn put_raw_material_assignment(
+        &self,
+        _assignment: RawMaterialAssignment,
+    ) -> Result<(), ProductionMapError> {
+        Err(ProductionMapError::StoreFailed)
+    }
 }
 
 fn build_apparatus_groups_service() -> ApparatusGroupService {

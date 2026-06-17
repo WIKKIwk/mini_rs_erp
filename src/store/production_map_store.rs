@@ -341,103 +341,27 @@ impl ProductionMapStorePort for ProductionMapStore {
     async fn apparatus_material_rules(
         &self,
     ) -> Result<Vec<ApparatusMaterialRule>, ProductionMapError> {
-        let conn = self
-            .conn
-            .lock()
-            .map_err(|_| ProductionMapError::StoreFailed)?;
-        let mut stmt = conn
-            .prepare("SELECT payload_json FROM apparatus_material_rules ORDER BY lower(apparatus)")
-            .map_err(|_| ProductionMapError::StoreFailed)?;
-        let rows = stmt
-            .query_map([], |row| {
-                let payload: String = row.get(0)?;
-                let rule = serde_json::from_str::<ApparatusMaterialRule>(&payload)
-                    .map_err(|error| rusqlite::Error::ToSqlConversionFailure(error.into()))?;
-                Ok(rule)
-            })
-            .map_err(|_| ProductionMapError::StoreFailed)?;
-        rows.collect::<Result<Vec<_>, _>>()
-            .map_err(|_| ProductionMapError::StoreFailed)
+        Err(ProductionMapError::StoreFailed)
     }
 
     async fn put_apparatus_material_rule(
         &self,
-        rule: ApparatusMaterialRule,
+        _rule: ApparatusMaterialRule,
     ) -> Result<(), ProductionMapError> {
-        let conn = self
-            .conn
-            .lock()
-            .map_err(|_| ProductionMapError::StoreFailed)?;
-        let item_groups = serde_json::to_string(&rule.item_groups)
-            .map_err(|_| ProductionMapError::StoreFailed)?;
-        let payload = serde_json::to_string(&rule).map_err(|_| ProductionMapError::StoreFailed)?;
-        conn.execute(
-            "INSERT INTO apparatus_material_rules
-                (apparatus, item_groups_json, payload_json, saved_at)
-             VALUES (?1, ?2, ?3, ?4)
-             ON CONFLICT(apparatus) DO UPDATE SET
-                item_groups_json = excluded.item_groups_json,
-                payload_json = excluded.payload_json,
-                saved_at = excluded.saved_at",
-            params![
-                rule.apparatus.trim(),
-                item_groups,
-                payload,
-                unix_micros().to_string(),
-            ],
-        )
-        .map_err(|_| ProductionMapError::StoreFailed)?;
-        Ok(())
+        Err(ProductionMapError::StoreFailed)
     }
 
     async fn raw_material_assignments(
         &self,
     ) -> Result<Vec<RawMaterialAssignment>, ProductionMapError> {
-        let conn = self
-            .conn
-            .lock()
-            .map_err(|_| ProductionMapError::StoreFailed)?;
-        let mut stmt = conn
-            .prepare("SELECT payload_json FROM raw_material_assignments ORDER BY saved_at DESC")
-            .map_err(|_| ProductionMapError::StoreFailed)?;
-        let rows = stmt
-            .query_map([], |row| {
-                let payload: String = row.get(0)?;
-                let assignment = serde_json::from_str::<RawMaterialAssignment>(&payload)
-                    .map_err(|error| rusqlite::Error::ToSqlConversionFailure(error.into()))?;
-                Ok(assignment)
-            })
-            .map_err(|_| ProductionMapError::StoreFailed)?;
-        rows.collect::<Result<Vec<_>, _>>()
-            .map_err(|_| ProductionMapError::StoreFailed)
+        Err(ProductionMapError::StoreFailed)
     }
 
     async fn put_raw_material_assignment(
         &self,
-        assignment: RawMaterialAssignment,
+        _assignment: RawMaterialAssignment,
     ) -> Result<(), ProductionMapError> {
-        let conn = self
-            .conn
-            .lock()
-            .map_err(|_| ProductionMapError::StoreFailed)?;
-        let payload =
-            serde_json::to_string(&assignment).map_err(|_| ProductionMapError::StoreFailed)?;
-        conn.execute(
-            "INSERT INTO raw_material_assignments
-                (barcode, order_id, apparatus, item_code, item_group, payload_json, saved_at)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
-            params![
-                assignment.barcode.trim(),
-                assignment.order_id.trim(),
-                assignment.apparatus.trim(),
-                assignment.item_code.trim(),
-                assignment.item_group.trim(),
-                payload,
-                unix_micros().to_string(),
-            ],
-        )
-        .map_err(|_| ProductionMapError::StoreFailed)?;
-        Ok(())
+        Err(ProductionMapError::StoreFailed)
     }
 }
 
@@ -583,22 +507,6 @@ fn migrate(conn: &Connection) -> rusqlite::Result<()> {
             actor_ref TEXT NOT NULL DEFAULT '',
             actor_display_name TEXT NOT NULL DEFAULT '',
             assigned_apparatus_json TEXT NOT NULL DEFAULT '[]',
-            payload_json TEXT NOT NULL DEFAULT '{}',
-            saved_at TEXT NOT NULL
-        );
-        CREATE TABLE IF NOT EXISTS apparatus_material_rules (
-            apparatus TEXT PRIMARY KEY,
-            item_groups_json TEXT NOT NULL,
-            requires_material INTEGER NOT NULL DEFAULT 0,
-            payload_json TEXT NOT NULL DEFAULT '{}',
-            saved_at TEXT NOT NULL
-        );
-        CREATE TABLE IF NOT EXISTS raw_material_assignments (
-            barcode TEXT PRIMARY KEY,
-            order_id TEXT NOT NULL,
-            apparatus TEXT NOT NULL,
-            item_code TEXT NOT NULL,
-            item_group TEXT NOT NULL,
             payload_json TEXT NOT NULL DEFAULT '{}',
             saved_at TEXT NOT NULL
         );",

@@ -90,12 +90,6 @@ pub(super) fn profile_lmdb_path(config: &AppConfig) -> std::path::PathBuf {
     )
 }
 
-pub(super) fn product_map_store_path() -> std::path::PathBuf {
-    std::env::var("MOBILE_API_PRODUCTION_MAP_STORE_PATH")
-        .map(std::path::PathBuf::from)
-        .unwrap_or_else(|_| std::path::PathBuf::from("data/mobile_production_maps.sqlite"))
-}
-
 pub(super) fn apparatus_group_store_path() -> std::path::PathBuf {
     std::env::var("MOBILE_API_APPARATUS_GROUP_STORE_PATH")
         .map(std::path::PathBuf::from)
