@@ -1,4 +1,5 @@
 pub mod postgres;
+pub mod postgres_admin_catalog;
 pub mod postgres_apparatus_group;
 pub mod postgres_calculate_order;
 pub mod postgres_engine;

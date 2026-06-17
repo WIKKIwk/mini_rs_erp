@@ -477,18 +477,13 @@ async fn fill_raw_material_assignment_input(
             ProductionMapError::RawMaterialInvalidInput,
         ));
     }
-    let lookup = state
-        .werka
-        .stock_entry_lookup_by_barcode(barcode, 1)
+    let receipt = state
+        .gscale
+        .material_receipt_by_barcode(barcode)
         .await
         .map_err(|_| production_map_error(ProductionMapError::RawMaterialInvalidInput))?
         .ok_or_else(|| production_map_error(ProductionMapError::RawMaterialInvalidInput))?;
-    let Some(entry) = lookup.entries.into_iter().next() else {
-        return Err(production_map_error(
-            ProductionMapError::RawMaterialInvalidInput,
-        ));
-    };
-    let item_code = entry.item_code.trim().to_string();
+    let item_code = receipt.item_code.trim().to_string();
     if item_code.is_empty() {
         return Err(production_map_error(
             ProductionMapError::RawMaterialInvalidInput,
@@ -509,11 +504,7 @@ async fn fill_raw_material_assignment_input(
     };
     input.item_code = item_code;
     input.item_name = if input.item_name.trim().is_empty() {
-        if entry.item_name.trim().is_empty() {
-            item.name.trim().to_string()
-        } else {
-            entry.item_name.trim().to_string()
-        }
+        item.name.trim().to_string()
     } else {
         input.item_name.trim().to_string()
     };

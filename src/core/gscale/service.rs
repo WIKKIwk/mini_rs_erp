@@ -4,8 +4,8 @@ use tokio::sync::oneshot;
 
 use super::epc::GscaleEpcGenerator;
 use super::models::{
-    CreateMaterialReceiptDraftInput, MaterialReceiptPrintRequest, MaterialReceiptPrintResponse,
-    ScaleDriverPrintRequest, ScaleDriverPrintResponse,
+    CreateMaterialReceiptDraftInput, MaterialReceiptDraft, MaterialReceiptPrintRequest,
+    MaterialReceiptPrintResponse, ScaleDriverPrintRequest, ScaleDriverPrintResponse,
 };
 use super::ports::{EpcSource, MaterialReceiptStorePort, ScaleDriverPort};
 
@@ -47,6 +47,27 @@ impl GscaleService {
     pub fn with_driver(mut self, driver: Arc<dyn ScaleDriverPort>) -> Self {
         self.driver = Some(driver);
         self
+    }
+
+    pub async fn material_receipt_by_barcode(
+        &self,
+        barcode: &str,
+    ) -> Result<Option<MaterialReceiptDraft>, GscaleServiceError> {
+        let receipt_store = self.receipt_store.as_ref().ok_or_else(|| {
+            GscaleServiceError::NotConfigured(
+                "material receipt store is not configured".to_string(),
+            )
+        })?;
+        let barcode = barcode.trim();
+        if barcode.is_empty() {
+            return Err(GscaleServiceError::InvalidInput(
+                "barcode is required".to_string(),
+            ));
+        }
+        receipt_store
+            .material_receipt_by_barcode(barcode)
+            .await
+            .map_err(|error| GscaleServiceError::StoreWrite(error.message()))
     }
 
     #[cfg(test)]

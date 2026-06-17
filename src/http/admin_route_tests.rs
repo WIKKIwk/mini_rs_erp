@@ -27,11 +27,14 @@ use crate::core::authz::{
 use crate::core::calculate_orders::{
     CalculateOrderError, CalculateOrderImage, CalculateOrderStorePort, CalculateOrderTemplate,
 };
+use crate::core::gscale::GscaleService;
+use crate::core::gscale::models::{CreateMaterialReceiptDraftInput, MaterialReceiptDraft};
+use crate::core::gscale::ports::{GscalePortError, MaterialReceiptStorePort};
 use crate::core::mini_orders::{MiniOrderError, MiniOrderSink, NoopMiniOrderSink};
 use crate::core::production_map::{MemoryProductionMapStore, ProductionMapService};
 use crate::core::session::manager::SessionManager;
 use crate::core::warehouses::{MemoryWarehouseStore, WarehouseService};
-use crate::core::werka::models::{DispatchRecord, StockEntryBarcodeEntry, SupplierItem};
+use crate::core::werka::models::{DispatchRecord, SupplierItem};
 use crate::core::werka::ports::{WerkaHomeLookup, WerkaPortError};
 use crate::core::werka::service::WerkaService;
 use crate::core::worker_groups::{MemoryWorkerGroupStore, WorkerGroupService};
@@ -678,7 +681,7 @@ async fn production_map_nodes_preserve_alternative_group_metadata() {
 #[tokio::test]
 async fn raw_material_routes_assign_and_require_scan_for_queue_start() {
     let mut state = test_state();
-    state.werka = WerkaService::new().with_lookup(Arc::new(RawMaterialLookup));
+    state.gscale = GscaleService::new().with_receipt_store(Arc::new(RawMaterialReceiptLookup));
     state
         .admin
         .upsert_role_assignment(crate::core::authz::RoleAssignmentUpsert {
@@ -4206,37 +4209,38 @@ impl WerkaHomeLookup for ActivityLookup {
     }
 }
 
-struct RawMaterialLookup;
+struct RawMaterialReceiptLookup;
 
 #[async_trait]
-impl WerkaHomeLookup for RawMaterialLookup {
-    async fn stock_entries_by_barcode(
+impl MaterialReceiptStorePort for RawMaterialReceiptLookup {
+    async fn create_material_receipt_draft(
+        &self,
+        _input: CreateMaterialReceiptDraftInput,
+    ) -> Result<MaterialReceiptDraft, GscalePortError> {
+        Err(GscalePortError::StoreWrite("not used".to_string()))
+    }
+
+    async fn submit_stock_entry_draft(&self, _name: &str) -> Result<(), GscalePortError> {
+        Ok(())
+    }
+
+    async fn delete_stock_entry_draft(&self, _name: &str) -> Result<(), GscalePortError> {
+        Ok(())
+    }
+
+    async fn material_receipt_by_barcode(
         &self,
         barcode: &str,
-        _limit: usize,
-    ) -> Result<Vec<StockEntryBarcodeEntry>, WerkaPortError> {
+    ) -> Result<Option<MaterialReceiptDraft>, GscalePortError> {
         assert_eq!(barcode, "30AA");
-        Ok(vec![StockEntryBarcodeEntry {
-            stock_entry_name: "MAT-STE-1".to_string(),
-            stock_entry_type: "Material Receipt".to_string(),
-            doc_status: 1,
-            status: "Submitted".to_string(),
-            company: "Company".to_string(),
-            posting_date: "2026-06-16".to_string(),
-            posting_time: "12:00:00".to_string(),
-            creation: "2026-06-16 12:00:00".to_string(),
-            modified: "2026-06-16 12:00:00".to_string(),
-            remarks: String::new(),
-            line_index: 1,
+        Ok(Some(MaterialReceiptDraft {
+            name: "GSR-30AA".to_string(),
             item_code: "INK-BLACK".to_string(),
-            item_name: "Black ink".to_string(),
+            warehouse: "Kalidor".to_string(),
             qty: 12.0,
             uom: "Kg".to_string(),
-            stock_uom: "Kg".to_string(),
             barcode: barcode.to_string(),
-            source_warehouse: "Stores - CH".to_string(),
-            target_warehouse: "Stores - CH".to_string(),
-        }])
+        }))
     }
 }
 

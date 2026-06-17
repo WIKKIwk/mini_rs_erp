@@ -12,6 +12,13 @@ pub trait MaterialReceiptStorePort: Send + Sync {
         input: CreateMaterialReceiptDraftInput,
     ) -> Result<MaterialReceiptDraft, GscalePortError>;
 
+    async fn material_receipt_by_barcode(
+        &self,
+        _barcode: &str,
+    ) -> Result<Option<MaterialReceiptDraft>, GscalePortError> {
+        Ok(None)
+    }
+
     async fn submit_stock_entry_draft(&self, name: &str) -> Result<(), GscalePortError>;
 
     async fn delete_stock_entry_draft(&self, name: &str) -> Result<(), GscalePortError>;

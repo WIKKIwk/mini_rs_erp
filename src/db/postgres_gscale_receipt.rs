@@ -84,6 +84,30 @@ impl MaterialReceiptStorePort for PostgresGscaleReceiptStore {
         Ok(())
     }
 
+    async fn material_receipt_by_barcode(
+        &self,
+        barcode: &str,
+    ) -> Result<Option<MaterialReceiptDraft>, GscalePortError> {
+        let barcode = barcode.trim();
+        if barcode.is_empty() {
+            return Err(GscalePortError::InvalidInput(
+                "barcode is required".to_string(),
+            ));
+        }
+        sqlx::query_as::<_, MaterialReceiptRow>(
+            "SELECT name, item_code, warehouse, qty, uom, barcode
+             FROM mini_gscale_receipts
+             WHERE lower(barcode) = lower($1)
+             ORDER BY updated_at DESC
+             LIMIT 1",
+        )
+        .bind(barcode)
+        .fetch_optional(&self.pool)
+        .await
+        .map(|row| row.map(row_to_draft))
+        .map_err(|error| GscalePortError::StoreWrite(error.to_string()))
+    }
+
     async fn delete_stock_entry_draft(&self, name: &str) -> Result<(), GscalePortError> {
         sqlx::query("DELETE FROM mini_gscale_receipts WHERE name = $1 AND status = 'draft'")
             .bind(name.trim())

@@ -82,6 +82,31 @@ CREATE TABLE IF NOT EXISTS mini_push_tokens (
     CONSTRAINT mini_push_tokens_owner_not_blank CHECK (btrim(owner_key) <> '')
 );
 
+CREATE TABLE IF NOT EXISTS mini_item_groups (
+    name TEXT PRIMARY KEY,
+    parent_item_group TEXT NOT NULL DEFAULT '',
+    is_group BOOLEAN NOT NULL DEFAULT true,
+    payload_json JSONB NOT NULL DEFAULT '{}'::jsonb,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    CONSTRAINT mini_item_groups_name_not_blank CHECK (btrim(name) <> '')
+);
+
+CREATE TABLE IF NOT EXISTS mini_items (
+    code TEXT PRIMARY KEY,
+    name TEXT NOT NULL,
+    uom TEXT NOT NULL DEFAULT 'Kg',
+    warehouse TEXT NOT NULL DEFAULT '',
+    item_group TEXT NOT NULL,
+    payload_json JSONB NOT NULL DEFAULT '{}'::jsonb,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    CONSTRAINT mini_items_code_not_blank CHECK (btrim(code) <> ''),
+    CONSTRAINT mini_items_name_not_blank CHECK (btrim(name) <> ''),
+    CONSTRAINT mini_items_uom_not_blank CHECK (btrim(uom) <> ''),
+    CONSTRAINT mini_items_group_not_blank CHECK (btrim(item_group) <> '')
+);
+
 CREATE TABLE IF NOT EXISTS mini_production_maps (
     id TEXT PRIMARY KEY,
     order_id TEXT REFERENCES mini_orders(id) ON DELETE SET NULL,
@@ -361,6 +386,11 @@ CREATE INDEX IF NOT EXISTS idx_mini_quick_order_templates_owner_quick_key ON min
 CREATE UNIQUE INDEX IF NOT EXISTS idx_mini_quick_order_templates_owner_lower_code ON mini_quick_order_templates (owner_key, lower(code));
 CREATE INDEX IF NOT EXISTS idx_mini_push_tokens_owner ON mini_push_tokens(owner_key);
 CREATE INDEX IF NOT EXISTS idx_mini_push_tokens_updated ON mini_push_tokens(updated_at DESC);
+CREATE INDEX IF NOT EXISTS idx_mini_items_lower_code ON mini_items(lower(code));
+CREATE INDEX IF NOT EXISTS idx_mini_items_lower_name ON mini_items(lower(name));
+CREATE INDEX IF NOT EXISTS idx_mini_items_lower_group ON mini_items(lower(item_group));
+CREATE INDEX IF NOT EXISTS idx_mini_item_groups_lower_name ON mini_item_groups(lower(name));
+CREATE INDEX IF NOT EXISTS idx_mini_item_groups_parent ON mini_item_groups(lower(parent_item_group));
 CREATE INDEX IF NOT EXISTS idx_mini_production_maps_order_id ON mini_production_maps(order_id);
 CREATE INDEX IF NOT EXISTS idx_mini_production_maps_order_number ON mini_production_maps(order_number) WHERE btrim(order_number) <> '';
 CREATE INDEX IF NOT EXISTS idx_mini_production_map_nodes_kind_title ON mini_production_map_nodes(kind, lower(title));
