@@ -5,18 +5,21 @@ use tokio::sync::oneshot;
 use super::epc::GscaleEpcGenerator;
 use super::models::{
     CreateMaterialReceiptDraftInput, MaterialReceiptDraft, MaterialReceiptPrintRequest,
-    MaterialReceiptPrintResponse, ScaleDriverPrintRequest, ScaleDriverPrintResponse,
+    MaterialReceiptPrintResponse, RawMaterialStockEntry, ScaleDriverPrintRequest,
+    ScaleDriverPrintResponse,
 };
 use super::ports::{EpcSource, MaterialReceiptStorePort, ScaleDriverPort};
 
 const MIN_BATCH_QTY_KG: f64 = 0.100;
 pub type LateMaterialReceiptErrorHandler = Arc<dyn Fn(String) + Send + Sync>;
+pub type WarehouseEventHandler = Arc<dyn Fn(String, String) + Send + Sync>;
 
 #[derive(Clone)]
 pub struct GscaleService {
     receipt_store: Option<Arc<dyn MaterialReceiptStorePort>>,
     driver: Option<Arc<dyn ScaleDriverPort>>,
     epc: Arc<dyn EpcSource>,
+    warehouse_event_handler: Option<WarehouseEventHandler>,
 }
 
 impl Default for GscaleService {
@@ -25,6 +28,7 @@ impl Default for GscaleService {
             receipt_store: None,
             driver: None,
             epc: Arc::new(GscaleEpcGenerator::new()),
+            warehouse_event_handler: None,
         }
     }
 }
@@ -49,6 +53,11 @@ impl GscaleService {
         self
     }
 
+    pub fn with_warehouse_event_handler(mut self, handler: WarehouseEventHandler) -> Self {
+        self.warehouse_event_handler = Some(handler);
+        self
+    }
+
     pub async fn material_receipt_by_barcode(
         &self,
         barcode: &str,
@@ -66,6 +75,43 @@ impl GscaleService {
         }
         receipt_store
             .material_receipt_by_barcode(barcode)
+            .await
+            .map_err(|error| GscaleServiceError::StoreWrite(error.message()))
+    }
+
+    pub async fn raw_material_stock_by_barcode(
+        &self,
+        barcode: &str,
+    ) -> Result<Option<RawMaterialStockEntry>, GscaleServiceError> {
+        let receipt_store = self.receipt_store.as_ref().ok_or_else(|| {
+            GscaleServiceError::NotConfigured(
+                "material receipt store is not configured".to_string(),
+            )
+        })?;
+        let barcode = barcode.trim();
+        if barcode.is_empty() {
+            return Err(GscaleServiceError::InvalidInput(
+                "barcode is required".to_string(),
+            ));
+        }
+        receipt_store
+            .raw_material_stock_by_barcode(barcode)
+            .await
+            .map_err(|error| GscaleServiceError::StoreWrite(error.message()))
+    }
+
+    pub async fn raw_material_stock(
+        &self,
+        warehouse: &str,
+        limit: usize,
+    ) -> Result<Vec<RawMaterialStockEntry>, GscaleServiceError> {
+        let receipt_store = self.receipt_store.as_ref().ok_or_else(|| {
+            GscaleServiceError::NotConfigured(
+                "material receipt store is not configured".to_string(),
+            )
+        })?;
+        receipt_store
+            .raw_material_stock(warehouse.trim(), limit)
             .await
             .map_err(|error| GscaleServiceError::StoreWrite(error.message()))
     }
@@ -106,6 +152,7 @@ impl GscaleService {
             epc.clone(),
             print_result_rx,
             late_error,
+            self.warehouse_event_handler.clone(),
         ));
         let print = driver
             .print_material_receipt(job.driver_request(&epc))
@@ -162,9 +209,16 @@ async fn record_parallel_material_receipt(
     epc: String,
     print_result_rx: oneshot::Receiver<bool>,
     late_error: Option<LateMaterialReceiptErrorHandler>,
+    warehouse_event_handler: Option<WarehouseEventHandler>,
 ) {
-    if let Err(error) =
-        record_parallel_material_receipt_inner(receipt_store, job, epc, print_result_rx).await
+    if let Err(error) = record_parallel_material_receipt_inner(
+        receipt_store,
+        job,
+        epc,
+        print_result_rx,
+        warehouse_event_handler,
+    )
+    .await
     {
         tracing::warn!(%error, "RPS batch material receipt record failed after driver print");
         if let Some(handler) = late_error {
@@ -178,6 +232,7 @@ async fn record_parallel_material_receipt_inner(
     job: NormalizedMaterialReceiptJob,
     epc: String,
     print_result_rx: oneshot::Receiver<bool>,
+    warehouse_event_handler: Option<WarehouseEventHandler>,
 ) -> Result<(), GscaleServiceError> {
     let draft = create_material_receipt_draft(receipt_store.as_ref(), &job, epc).await?;
     let print_ok = print_result_rx.await.unwrap_or(false);
@@ -191,7 +246,11 @@ async fn record_parallel_material_receipt_inner(
     receipt_store
         .submit_stock_entry_draft(&draft.name)
         .await
-        .map_err(|error| GscaleServiceError::SubmitFailed(clean_store_error(&error.message())))
+        .map_err(|error| GscaleServiceError::SubmitFailed(clean_store_error(&error.message())))?;
+    if let Some(handler) = warehouse_event_handler {
+        handler(job.warehouse, "raw_material_stock".to_string());
+    }
+    Ok(())
 }
 
 async fn create_material_receipt_draft(

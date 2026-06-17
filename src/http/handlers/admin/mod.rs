@@ -3,6 +3,7 @@ mod production_maps;
 mod supplier_mutations;
 mod suppliers;
 mod system;
+mod warehouse_live;
 mod workers;
 
 pub use customers::{
@@ -14,6 +15,7 @@ pub use production_maps::{
     production_map_move_batch, production_map_queue_action, production_map_queue_policies,
     production_map_run, production_map_save_with_order, production_map_sequence, production_maps,
     raw_material_assignment_lookup, raw_material_assignments, raw_material_rules,
+    raw_material_stock,
 };
 pub use supplier_mutations::{
     supplier_code_regenerate, supplier_item_add, supplier_item_remove, supplier_items,
@@ -25,9 +27,10 @@ pub use suppliers::{
 };
 pub use system::{
     apparatus_create, apparatus_groups, capabilities, items_bulk_move_group, role_assignments,
-    roles, warehouses, werka_code_regenerate,
+    roles, warehouse_assignments, warehouse_summaries, warehouses, werka_code_regenerate,
 };
 use system::{authorize_any_capability, authorize_capability, require_capability};
+pub use warehouse_live::warehouse_live;
 pub use workers::{worker_code_regenerate, worker_detail, worker_groups, workers};
 
 use axum::Json;
@@ -53,7 +56,7 @@ use crate::core::auth::models::Principal;
 use crate::core::authz::{
     Capability, RoleAssignmentUpsert, RoleDefinitionUpsert, capability_catalog_entries,
 };
-use crate::core::warehouses::{WarehouseError, WarehouseUpsert};
+use crate::core::warehouses::{WarehouseAssignmentUpsert, WarehouseError, WarehouseUpsert};
 use crate::core::werka::models::{CustomerDirectoryEntry, DispatchRecord, SupplierItem};
 use crate::http::handlers::auth::bearer_token;
 
@@ -227,6 +230,7 @@ pub struct RefItemQuery {
 #[derive(Debug, Deserialize)]
 pub struct ItemQuery {
     pub q: Option<String>,
+    pub warehouse: Option<String>,
     pub parent: Option<String>,
     pub group: Option<String>,
     pub limit: Option<String>,

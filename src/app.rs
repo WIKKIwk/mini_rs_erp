@@ -21,6 +21,7 @@ use crate::core::rezka::RezkaService;
 use crate::core::rps_batch::ports::RpsBatchStorePort;
 use crate::core::rps_batch::{RpsBatchLmdbStore, RpsBatchService};
 use crate::core::session::manager::SessionManager;
+use crate::core::warehouse_events::WarehouseEventHub;
 use crate::core::warehouses::WarehouseService;
 use crate::core::werka::models::SupplierItem;
 use crate::core::werka::service::WerkaService;
@@ -79,6 +80,7 @@ pub struct AppState {
     pub workers: WorkerService,
     pub worker_groups: WorkerGroupService,
     pub sessions: SessionManager,
+    pub warehouse_events: WarehouseEventHub,
     #[allow(dead_code)]
     pub mini_engine: Option<PostgresEngineStore>,
 }
@@ -126,7 +128,8 @@ impl AppState {
             config.http_timeout,
             std::env::var("RP_SCALE_DRIVER_URL").unwrap_or_default(),
         ));
-        let gscale = build_gscale_service(scale_driver.clone());
+        let warehouse_events = WarehouseEventHub::new();
+        let gscale = build_gscale_service(scale_driver.clone(), warehouse_events.clone());
         let rezka = RezkaService::new()
             .with_driver(scale_driver)
             .with_epc_source(Arc::new(crate::core::gscale::epc::GscaleEpcGenerator::new()));
@@ -199,6 +202,7 @@ impl AppState {
             workers,
             worker_groups,
             sessions,
+            warehouse_events,
             mini_engine,
         }
     }
@@ -442,8 +446,16 @@ impl AdminWritePort for AdminCatalogOverlay {
     }
 }
 
-fn build_gscale_service(scale_driver: Arc<RpsDriverClient>) -> GscaleService {
-    let service = GscaleService::new().with_driver(scale_driver);
+fn build_gscale_service(
+    scale_driver: Arc<RpsDriverClient>,
+    warehouse_events: WarehouseEventHub,
+) -> GscaleService {
+    let events = warehouse_events.clone();
+    let service = GscaleService::new()
+        .with_driver(scale_driver)
+        .with_warehouse_event_handler(Arc::new(move |warehouse, reason| {
+            events.notify_updated(&warehouse, &reason);
+        }));
     let config = match PostgresConfig::from_env() {
         Ok(config) => config,
         Err(_) => return service,

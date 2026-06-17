@@ -1,8 +1,8 @@
 use async_trait::async_trait;
 
 use super::models::{
-    CreateMaterialReceiptDraftInput, MaterialReceiptDraft, ScaleDriverPrintRequest,
-    ScaleDriverPrintResponse,
+    CreateMaterialReceiptDraftInput, MaterialReceiptDraft, RawMaterialStockEntry,
+    ScaleDriverPrintRequest, ScaleDriverPrintResponse,
 };
 
 #[async_trait]
@@ -17,6 +17,21 @@ pub trait MaterialReceiptStorePort: Send + Sync {
         _barcode: &str,
     ) -> Result<Option<MaterialReceiptDraft>, GscalePortError> {
         Ok(None)
+    }
+
+    async fn raw_material_stock_by_barcode(
+        &self,
+        _barcode: &str,
+    ) -> Result<Option<RawMaterialStockEntry>, GscalePortError> {
+        Ok(None)
+    }
+
+    async fn raw_material_stock(
+        &self,
+        _warehouse: &str,
+        _limit: usize,
+    ) -> Result<Vec<RawMaterialStockEntry>, GscalePortError> {
+        Ok(Vec::new())
     }
 
     async fn submit_stock_entry_draft(&self, name: &str) -> Result<(), GscalePortError>;

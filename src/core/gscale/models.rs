@@ -55,6 +55,20 @@ pub struct MaterialReceiptDraft {
     pub barcode: String,
 }
 
+#[derive(Debug, Clone, Default, PartialEq, Serialize)]
+pub struct RawMaterialStockEntry {
+    pub id: String,
+    pub warehouse: String,
+    pub item_code: String,
+    pub item_name: String,
+    pub barcode: String,
+    pub qty: f64,
+    pub uom: String,
+    pub status: String,
+    pub reserved_order_id: String,
+    pub source_receipt_id: String,
+}
+
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct CreateMaterialReceiptDraftInput {
     pub item_code: String,

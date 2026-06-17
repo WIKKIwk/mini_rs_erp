@@ -313,6 +313,19 @@ CREATE TABLE IF NOT EXISTS mini_warehouses (
     CONSTRAINT mini_warehouses_name_unique UNIQUE (name)
 );
 
+CREATE TABLE IF NOT EXISTS mini_warehouse_assignments (
+    warehouse TEXT NOT NULL,
+    principal_role TEXT NOT NULL,
+    principal_ref TEXT NOT NULL,
+    display_name TEXT NOT NULL DEFAULT '',
+    payload_json JSONB NOT NULL DEFAULT '{}'::jsonb,
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    PRIMARY KEY (warehouse, principal_role, principal_ref),
+    CONSTRAINT mini_warehouse_assignments_warehouse_not_blank CHECK (btrim(warehouse) <> ''),
+    CONSTRAINT mini_warehouse_assignments_role_not_blank CHECK (btrim(principal_role) <> ''),
+    CONSTRAINT mini_warehouse_assignments_ref_not_blank CHECK (btrim(principal_ref) <> '')
+);
+
 CREATE TABLE IF NOT EXISTS mini_gscale_receipts (
     name TEXT PRIMARY KEY,
     status TEXT NOT NULL DEFAULT 'draft',
@@ -332,6 +345,73 @@ CREATE TABLE IF NOT EXISTS mini_gscale_receipts (
     CONSTRAINT mini_gscale_receipts_qty_positive CHECK (qty > 0),
     CONSTRAINT mini_gscale_receipts_status_allowed CHECK (status IN ('draft', 'submitted')),
     CONSTRAINT mini_gscale_receipts_barcode_unique UNIQUE (barcode)
+);
+
+CREATE TABLE IF NOT EXISTS mini_raw_material_stock (
+    id TEXT PRIMARY KEY,
+    warehouse TEXT NOT NULL,
+    item_code TEXT NOT NULL,
+    item_name TEXT NOT NULL DEFAULT '',
+    barcode TEXT NOT NULL,
+    qty DOUBLE PRECISION NOT NULL,
+    uom TEXT NOT NULL DEFAULT 'kg',
+    status TEXT NOT NULL DEFAULT 'available',
+    reserved_order_id TEXT NOT NULL DEFAULT '',
+    source_receipt_id TEXT NOT NULL DEFAULT '',
+    payload_json JSONB NOT NULL DEFAULT '{}'::jsonb,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    CONSTRAINT mini_raw_material_stock_warehouse_not_blank CHECK (btrim(warehouse) <> ''),
+    CONSTRAINT mini_raw_material_stock_item_code_not_blank CHECK (btrim(item_code) <> ''),
+    CONSTRAINT mini_raw_material_stock_barcode_not_blank CHECK (btrim(barcode) <> ''),
+    CONSTRAINT mini_raw_material_stock_qty_positive CHECK (qty > 0),
+    CONSTRAINT mini_raw_material_stock_status_allowed CHECK (status IN ('available', 'reserved', 'consumed')),
+    CONSTRAINT mini_raw_material_stock_barcode_unique UNIQUE (barcode)
+);
+
+INSERT INTO mini_raw_material_stock (
+    id, warehouse, item_code, item_name, barcode, qty, uom, status,
+    source_receipt_id, payload_json, created_at, updated_at
+)
+SELECT
+    'raw:' || lower(barcode),
+    warehouse,
+    item_code,
+    item_code,
+    barcode,
+    qty,
+    uom,
+    'available',
+    name,
+    jsonb_build_object(
+        'source_receipt_id', name,
+        'source', 'mini_gscale_receipts_backfill'
+    ),
+    created_at,
+    updated_at
+FROM mini_gscale_receipts
+WHERE status = 'submitted'
+  AND btrim(warehouse) <> ''
+  AND btrim(item_code) <> ''
+  AND btrim(barcode) <> ''
+ON CONFLICT (barcode) DO NOTHING;
+
+CREATE TABLE IF NOT EXISTS mini_finished_goods_stock (
+    id TEXT PRIMARY KEY,
+    warehouse TEXT NOT NULL,
+    order_id TEXT NOT NULL DEFAULT '',
+    item_code TEXT NOT NULL,
+    item_name TEXT NOT NULL DEFAULT '',
+    qty DOUBLE PRECISION NOT NULL,
+    uom TEXT NOT NULL DEFAULT 'dona',
+    status TEXT NOT NULL DEFAULT 'available',
+    payload_json JSONB NOT NULL DEFAULT '{}'::jsonb,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    CONSTRAINT mini_finished_goods_stock_warehouse_not_blank CHECK (btrim(warehouse) <> ''),
+    CONSTRAINT mini_finished_goods_stock_item_code_not_blank CHECK (btrim(item_code) <> ''),
+    CONSTRAINT mini_finished_goods_stock_qty_positive CHECK (qty > 0),
+    CONSTRAINT mini_finished_goods_stock_status_allowed CHECK (status IN ('available', 'dispatched'))
 );
 
 CREATE TABLE IF NOT EXISTS mini_rps_batches (

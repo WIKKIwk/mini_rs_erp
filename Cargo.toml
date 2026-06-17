@@ -8,7 +8,7 @@ repository = "https://github.com/WIKKIwk/mini_rs_erp"
 readme = "README.md"
 
 [dependencies]
-axum = "0.8"
+axum = { version = "0.8", features = ["ws"] }
 async-stream = "0.3"
 futures-core = "0.3"
 async-trait = "0.1"

@@ -118,12 +118,15 @@ pub async fn warehouses(
     if method == Method::POST {
         require_capability(&state, &principal, Capability::ProductionMapManage).await?;
         let input: WarehouseUpsert = parse_json(&body)?;
-        return state
+        let saved = state
             .warehouses
             .upsert_warehouse(input)
             .await
-            .map(json_response)
-            .map_err(warehouse_error);
+            .map_err(warehouse_error)?;
+        state
+            .warehouse_events
+            .notify_updated(&saved.warehouse, "warehouse");
+        return Ok(json_response(saved));
     }
     let limit = optional_search_limit(query.limit.as_deref(), 30, 500);
     let mut warehouses = state
@@ -174,9 +177,83 @@ pub async fn warehouses(
     Ok(json_response(warehouses))
 }
 
+pub async fn warehouse_summaries(
+    State(state): State<AppState>,
+    method: Method,
+    headers: HeaderMap,
+    Query(query): Query<ItemQuery>,
+) -> Result<Response, AdminError> {
+    let principal = authorize_any_capability(
+        &state,
+        &headers,
+        &[
+            Capability::AdminAccess,
+            Capability::ProductionMapManage,
+            Capability::CatalogItemRead,
+            Capability::ApparatusQueueRead,
+        ],
+    )
+    .await?;
+    require_capability(&state, &principal, Capability::CatalogItemRead).await?;
+    if method != Method::GET {
+        return Err(method_not_allowed());
+    }
+    let limit = optional_search_limit(query.limit.as_deref(), 30, 500);
+    state
+        .warehouses
+        .warehouse_summaries(query.q.as_deref().unwrap_or(""), limit)
+        .await
+        .map(json_response)
+        .map_err(warehouse_error)
+}
+
+pub async fn warehouse_assignments(
+    State(state): State<AppState>,
+    method: Method,
+    headers: HeaderMap,
+    Query(query): Query<ItemQuery>,
+    body: Bytes,
+) -> Result<Response, AdminError> {
+    let principal = authorize_any_capability(
+        &state,
+        &headers,
+        &[Capability::AdminAccess, Capability::CatalogItemRead],
+    )
+    .await?;
+    if !matches!(method, Method::GET | Method::POST) {
+        return Err(method_not_allowed());
+    }
+    match method {
+        Method::GET => {
+            require_capability(&state, &principal, Capability::CatalogItemRead).await?;
+            state
+                .warehouses
+                .warehouse_assignments(query.warehouse.as_deref().unwrap_or(""))
+                .await
+                .map(json_response)
+                .map_err(warehouse_error)
+        }
+        Method::POST => {
+            require_capability(&state, &principal, Capability::AdminAccess).await?;
+            let input: WarehouseAssignmentUpsert = parse_json(&body)?;
+            let saved = state
+                .warehouses
+                .assign_warehouse(input)
+                .await
+                .map_err(warehouse_error)?;
+            state
+                .warehouse_events
+                .notify_updated(&saved.warehouse, "warehouse_assignment");
+            Ok(json_response(saved))
+        }
+        _ => Err(method_not_allowed()),
+    }
+}
+
 fn warehouse_error(error: WarehouseError) -> AdminError {
     match error {
         WarehouseError::MissingWarehouse => bad_request("warehouse is required"),
+        WarehouseError::MissingPrincipalRef => bad_request("principal ref is required"),
         WarehouseError::StoreFailed => server_error("warehouse store failed"),
     }
 }

@@ -111,6 +111,46 @@ async fn driver_first_starts_draft_before_slow_driver_finishes_and_submits_after
 }
 
 #[tokio::test]
+async fn notifies_warehouse_after_successful_material_receipt_submit() {
+    let events = Arc::new(Mutex::new(Vec::new()));
+    let notifications = Arc::new(Mutex::new(Vec::new()));
+    let notifications_for_handler = notifications.clone();
+    let service = GscaleService::new()
+        .with_receipt_store(Arc::new(FakeReceiptStore::new(events.clone())))
+        .with_driver(Arc::new(FakeDriver::done(events.clone())))
+        .with_epc_source(Arc::new(QueueEpc::new(["EPC-LIVE"])))
+        .with_warehouse_event_handler(Arc::new(move |warehouse, reason| {
+            notifications_for_handler
+                .lock()
+                .unwrap()
+                .push(format!("{warehouse}:{reason}"));
+        }));
+
+    let response = service
+        .print_material_receipt_driver_first(request())
+        .await
+        .unwrap();
+
+    assert_eq!(response.status, "printed");
+    wait_for_event(&events, "submit:MAT-STE-001").await;
+    for _ in 0..50 {
+        if notifications
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|event| event == "Stores - A:raw_material_stock")
+        {
+            return;
+        }
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    panic!(
+        "timed out waiting for warehouse event; events={:?}",
+        notifications.lock().unwrap()
+    );
+}
+
+#[tokio::test]
 async fn forwards_print_count_to_driver_without_creating_extra_receipt_drafts() {
     let events = Arc::new(Mutex::new(Vec::new()));
     let service = GscaleService::new()

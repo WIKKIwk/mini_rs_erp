@@ -15,6 +15,7 @@ pub mod push;
 pub mod rezka;
 pub mod rps_batch;
 pub mod session;
+pub mod warehouse_events;
 pub mod warehouses;
 pub mod werka;
 pub mod worker_groups;

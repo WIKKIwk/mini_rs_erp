@@ -2,7 +2,7 @@ use axum::Router;
 use axum::body::Body;
 use axum::http::{HeaderMap, HeaderValue, Method, Request, Response, StatusCode, header};
 use axum::middleware::{self, Next};
-use axum::routing::any;
+use axum::routing::{any, get};
 use tower_http::trace::TraceLayer;
 
 use crate::app::AppState;
@@ -199,6 +199,10 @@ pub fn build_router(state: AppState) -> Router {
             any(admin::raw_material_assignments),
         )
         .route(
+            "/v1/mobile/admin/raw-material-stock",
+            any(admin::raw_material_stock),
+        )
+        .route(
             "/v1/mobile/admin/role-assignments",
             any(admin::role_assignments),
         )
@@ -282,6 +286,18 @@ pub fn build_router(state: AppState) -> Router {
         .route("/v1/mobile/admin/items", any(admin::items))
         .route("/v1/mobile/admin/apparatus", any(admin::apparatus_create))
         .route("/v1/mobile/admin/warehouses", any(admin::warehouses))
+        .route(
+            "/v1/mobile/admin/warehouses/live",
+            get(admin::warehouse_live),
+        )
+        .route(
+            "/v1/mobile/admin/warehouses/summary",
+            any(admin::warehouse_summaries),
+        )
+        .route(
+            "/v1/mobile/admin/warehouses/assignments",
+            any(admin::warehouse_assignments),
+        )
         .route(
             "/v1/mobile/admin/items/bulk-move-group",
             any(admin::items_bulk_move_group),

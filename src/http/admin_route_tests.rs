@@ -28,7 +28,9 @@ use crate::core::calculate_orders::{
     CalculateOrderError, CalculateOrderImage, CalculateOrderStorePort, CalculateOrderTemplate,
 };
 use crate::core::gscale::GscaleService;
-use crate::core::gscale::models::{CreateMaterialReceiptDraftInput, MaterialReceiptDraft};
+use crate::core::gscale::models::{
+    CreateMaterialReceiptDraftInput, MaterialReceiptDraft, RawMaterialStockEntry,
+};
 use crate::core::gscale::ports::{GscalePortError, MaterialReceiptStorePort};
 use crate::core::mini_orders::{MiniOrderError, MiniOrderSink, NoopMiniOrderSink};
 use crate::core::production_map::{MemoryProductionMapStore, ProductionMapService};
@@ -681,7 +683,7 @@ async fn production_map_nodes_preserve_alternative_group_metadata() {
 #[tokio::test]
 async fn raw_material_routes_assign_and_require_scan_for_queue_start() {
     let mut state = test_state();
-    state.gscale = GscaleService::new().with_receipt_store(Arc::new(RawMaterialReceiptLookup));
+    state.gscale = GscaleService::new().with_receipt_store(Arc::new(RawMaterialStockLookup));
     state
         .admin
         .upsert_role_assignment(crate::core::authz::RoleAssignmentUpsert {
@@ -694,6 +696,7 @@ async fn raw_material_routes_assign_and_require_scan_for_queue_start() {
         .expect("aparatchi assignment");
     let token = session(&state, PrincipalRole::Admin).await;
     let worker_token = session_for(&state, PrincipalRole::Aparatchi, "worker-raw-route").await;
+    let mut warehouse_events = state.warehouse_events.subscribe();
     let router = build_router(state);
 
     let map = router
@@ -747,6 +750,10 @@ async fn raw_material_routes_assign_and_require_scan_for_queue_start() {
     assert_eq!(assigned_body["item_code"], "INK-BLACK");
     assert_eq!(assigned_body["item_name"], "Black ink");
     assert_eq!(assigned_body["item_group"], "Kraska");
+    let warehouse_event = warehouse_events.recv().await.expect("warehouse event");
+    assert_eq!(warehouse_event.event, "warehouse.updated");
+    assert_eq!(warehouse_event.warehouse, "Kalidor");
+    assert_eq!(warehouse_event.reason, "raw_material_assignment");
 
     let lookup = router
         .clone()
@@ -807,6 +814,30 @@ async fn raw_material_routes_assign_and_require_scan_for_queue_start() {
         json_body(started).await["states"]["zakaz-raw-route"],
         "in_progress"
     );
+}
+
+#[tokio::test]
+async fn admin_raw_material_stock_lists_new_stock_model() {
+    let mut state = test_state();
+    state.gscale = GscaleService::new().with_receipt_store(Arc::new(RawMaterialStockLookup));
+    let token = session(&state, PrincipalRole::Admin).await;
+
+    let response = build_router(state)
+        .oneshot(request(
+            "GET",
+            "/v1/mobile/admin/raw-material-stock?warehouse=Kalidor",
+            &token,
+        ))
+        .await
+        .expect("raw stock list");
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = json_body(response).await;
+    assert_eq!(body[0]["warehouse"], "Kalidor");
+    assert_eq!(body[0]["item_code"], "INK-BLACK");
+    assert_eq!(body[0]["barcode"], "30AA");
+    assert_eq!(body[0]["qty"], 12.0);
+    assert_eq!(body[0]["status"], "available");
 }
 
 #[tokio::test]
@@ -3136,6 +3167,85 @@ async fn admin_can_create_general_warehouse_and_list_it_for_gscale() {
 }
 
 #[tokio::test]
+async fn admin_can_assign_warehouse_to_user_and_list_assignments() {
+    let state = test_state();
+    let token = session(&state, PrincipalRole::Admin).await;
+
+    let created = build_router(state.clone())
+        .oneshot(request_with_body(
+            "POST",
+            "/v1/mobile/admin/warehouses/assignments",
+            &token,
+            r#"{"warehouse":" Ombor ","principal_role":"supplier","principal_ref":"SUP-001","display_name":"Supplier One"}"#,
+        ))
+        .await
+        .expect("assign warehouse");
+    assert_eq!(created.status(), StatusCode::OK);
+    let created_body = json_body(created).await;
+    assert_eq!(created_body["warehouse"], "Ombor");
+    assert_eq!(created_body["principal_role"], "supplier");
+    assert_eq!(created_body["principal_ref"], "SUP-001");
+    assert_eq!(created_body["display_name"], "Supplier One");
+
+    let listed = build_router(state)
+        .oneshot(request(
+            "GET",
+            "/v1/mobile/admin/warehouses/assignments?warehouse=ombor",
+            &token,
+        ))
+        .await
+        .expect("list assignments");
+    assert_eq!(listed.status(), StatusCode::OK);
+    let listed_body = json_body(listed).await;
+    assert_eq!(listed_body[0]["warehouse"], "Ombor");
+    assert_eq!(listed_body[0]["principal_ref"], "SUP-001");
+}
+
+#[tokio::test]
+async fn admin_warehouse_summary_returns_lightweight_counts() {
+    let state = test_state();
+    let token = session(&state, PrincipalRole::Admin).await;
+
+    let created = build_router(state.clone())
+        .oneshot(request_with_body(
+            "POST",
+            "/v1/mobile/admin/warehouses",
+            &token,
+            r#"{"warehouse":" Ombor "}"#,
+        ))
+        .await
+        .expect("create warehouse");
+    assert_eq!(created.status(), StatusCode::OK);
+
+    let assigned = build_router(state.clone())
+        .oneshot(request_with_body(
+            "POST",
+            "/v1/mobile/admin/warehouses/assignments",
+            &token,
+            r#"{"warehouse":" Ombor ","principal_role":"supplier","principal_ref":"SUP-001","display_name":"Supplier One"}"#,
+        ))
+        .await
+        .expect("assign warehouse");
+    assert_eq!(assigned.status(), StatusCode::OK);
+
+    let listed = build_router(state)
+        .oneshot(request(
+            "GET",
+            "/v1/mobile/admin/warehouses/summary?q=ombor&limit=50",
+            &token,
+        ))
+        .await
+        .expect("summary");
+    assert_eq!(listed.status(), StatusCode::OK);
+    let body = json_body(listed).await;
+    assert_eq!(body[0]["warehouse"], "Ombor");
+    assert_eq!(body[0]["product_count"], 0);
+    assert_eq!(body[0]["reserved_count"], 0);
+    assert_eq!(body[0]["assignment_count"], 1);
+    assert_eq!(body[0]["assigned_display_names"][0], "Supplier One");
+}
+
+#[tokio::test]
 async fn admin_item_group_tree_returns_parent_shape() {
     let state = test_state();
     let token = session(&state, PrincipalRole::Admin).await;
@@ -4339,10 +4449,10 @@ impl WerkaHomeLookup for ActivityLookup {
     }
 }
 
-struct RawMaterialReceiptLookup;
+struct RawMaterialStockLookup;
 
 #[async_trait]
-impl MaterialReceiptStorePort for RawMaterialReceiptLookup {
+impl MaterialReceiptStorePort for RawMaterialStockLookup {
     async fn create_material_receipt_draft(
         &self,
         _input: CreateMaterialReceiptDraftInput,
@@ -4358,19 +4468,43 @@ impl MaterialReceiptStorePort for RawMaterialReceiptLookup {
         Ok(())
     }
 
-    async fn material_receipt_by_barcode(
+    async fn raw_material_stock_by_barcode(
         &self,
         barcode: &str,
-    ) -> Result<Option<MaterialReceiptDraft>, GscalePortError> {
+    ) -> Result<Option<RawMaterialStockEntry>, GscalePortError> {
         assert_eq!(barcode, "30AA");
-        Ok(Some(MaterialReceiptDraft {
-            name: "GSR-30AA".to_string(),
+        Ok(Some(RawMaterialStockEntry {
+            id: "raw:30AA".to_string(),
             item_code: "INK-BLACK".to_string(),
+            item_name: "Black ink".to_string(),
             warehouse: "Kalidor".to_string(),
             qty: 12.0,
             uom: "Kg".to_string(),
             barcode: barcode.to_string(),
+            status: "available".to_string(),
+            reserved_order_id: String::new(),
+            source_receipt_id: "GSR-30AA".to_string(),
         }))
+    }
+
+    async fn raw_material_stock(
+        &self,
+        warehouse: &str,
+        _limit: usize,
+    ) -> Result<Vec<RawMaterialStockEntry>, GscalePortError> {
+        assert_eq!(warehouse, "Kalidor");
+        Ok(vec![RawMaterialStockEntry {
+            id: "raw:30AA".to_string(),
+            item_code: "INK-BLACK".to_string(),
+            item_name: "Black ink".to_string(),
+            warehouse: "Kalidor".to_string(),
+            qty: 12.0,
+            uom: "Kg".to_string(),
+            barcode: "30AA".to_string(),
+            status: "available".to_string(),
+            reserved_order_id: String::new(),
+            source_receipt_id: "GSR-30AA".to_string(),
+        }])
     }
 }
 

@@ -1,7 +1,9 @@
 use async_trait::async_trait;
 use sqlx::PgPool;
 
-use crate::core::gscale::models::{CreateMaterialReceiptDraftInput, MaterialReceiptDraft};
+use crate::core::gscale::models::{
+    CreateMaterialReceiptDraftInput, MaterialReceiptDraft, RawMaterialStockEntry,
+};
 use crate::core::gscale::ports::{GscalePortError, MaterialReceiptStorePort};
 
 #[derive(Clone)]
@@ -66,21 +68,22 @@ impl MaterialReceiptStorePort for PostgresGscaleReceiptStore {
     }
 
     async fn submit_stock_entry_draft(&self, name: &str) -> Result<(), GscalePortError> {
-        let affected = sqlx::query(
+        let row = sqlx::query_as::<_, MaterialReceiptRow>(
             "UPDATE mini_gscale_receipts
              SET status = 'submitted', submitted_at = now(), updated_at = now()
-             WHERE name = $1 AND status = 'draft'",
+             WHERE name = $1 AND status = 'draft'
+             RETURNING name, item_code, warehouse, qty, uom, barcode",
         )
         .bind(name.trim())
-        .execute(&self.pool)
+        .fetch_optional(&self.pool)
         .await
-        .map_err(|error| GscalePortError::StoreWrite(error.to_string()))?
-        .rows_affected();
-        if affected == 0 {
+        .map_err(|error| GscalePortError::StoreWrite(error.to_string()))?;
+        let Some(row) = row else {
             return Err(GscalePortError::StoreWrite(
                 "material receipt draft not found".to_string(),
             ));
-        }
+        };
+        upsert_raw_material_stock(&self.pool, &row).await?;
         Ok(())
     }
 
@@ -108,6 +111,53 @@ impl MaterialReceiptStorePort for PostgresGscaleReceiptStore {
         .map_err(|error| GscalePortError::StoreWrite(error.to_string()))
     }
 
+    async fn raw_material_stock_by_barcode(
+        &self,
+        barcode: &str,
+    ) -> Result<Option<RawMaterialStockEntry>, GscalePortError> {
+        let barcode = barcode.trim();
+        if barcode.is_empty() {
+            return Err(GscalePortError::InvalidInput(
+                "barcode is required".to_string(),
+            ));
+        }
+        sqlx::query_as::<_, RawMaterialStockRow>(
+            "SELECT id, warehouse, item_code, item_name, barcode, qty, uom,
+                    status, reserved_order_id, source_receipt_id
+             FROM mini_raw_material_stock
+             WHERE lower(barcode) = lower($1)
+             ORDER BY updated_at DESC
+             LIMIT 1",
+        )
+        .bind(barcode)
+        .fetch_optional(&self.pool)
+        .await
+        .map(|row| row.map(row_to_stock))
+        .map_err(|error| GscalePortError::StoreWrite(error.to_string()))
+    }
+
+    async fn raw_material_stock(
+        &self,
+        warehouse: &str,
+        limit: usize,
+    ) -> Result<Vec<RawMaterialStockEntry>, GscalePortError> {
+        let warehouse = warehouse.trim().to_lowercase();
+        sqlx::query_as::<_, RawMaterialStockRow>(
+            "SELECT id, warehouse, item_code, item_name, barcode, qty, uom,
+                    status, reserved_order_id, source_receipt_id
+             FROM mini_raw_material_stock
+             WHERE $1 = '' OR lower(warehouse) = $1
+             ORDER BY lower(warehouse), lower(item_code), updated_at DESC
+             LIMIT $2",
+        )
+        .bind(warehouse)
+        .bind(limit.clamp(1, 500) as i64)
+        .fetch_all(&self.pool)
+        .await
+        .map(|rows| rows.into_iter().map(row_to_stock).collect())
+        .map_err(|error| GscalePortError::StoreWrite(error.to_string()))
+    }
+
     async fn delete_stock_entry_draft(&self, name: &str) -> Result<(), GscalePortError> {
         sqlx::query("DELETE FROM mini_gscale_receipts WHERE name = $1 AND status = 'draft'")
             .bind(name.trim())
@@ -128,6 +178,60 @@ struct MaterialReceiptRow {
     barcode: String,
 }
 
+#[derive(sqlx::FromRow)]
+struct RawMaterialStockRow {
+    id: String,
+    warehouse: String,
+    item_code: String,
+    item_name: String,
+    barcode: String,
+    qty: f64,
+    uom: String,
+    status: String,
+    reserved_order_id: String,
+    source_receipt_id: String,
+}
+
+async fn upsert_raw_material_stock(
+    pool: &PgPool,
+    row: &MaterialReceiptRow,
+) -> Result<(), GscalePortError> {
+    sqlx::query(
+        "INSERT INTO mini_raw_material_stock (
+             id, warehouse, item_code, item_name, barcode, qty, uom, status,
+             source_receipt_id, payload_json
+         )
+         VALUES ($1, $2, $3, $4, $5, $6, $7, 'available', $8, $9)
+         ON CONFLICT (barcode) DO UPDATE SET
+           warehouse = excluded.warehouse,
+           item_code = excluded.item_code,
+           item_name = excluded.item_name,
+           qty = excluded.qty,
+           uom = excluded.uom,
+           status = excluded.status,
+           reserved_order_id = '',
+           source_receipt_id = excluded.source_receipt_id,
+           payload_json = excluded.payload_json,
+           updated_at = now()",
+    )
+    .bind(raw_stock_id(&row.barcode))
+    .bind(row.warehouse.trim())
+    .bind(row.item_code.trim())
+    .bind(row.item_code.trim())
+    .bind(row.barcode.trim())
+    .bind(row.qty)
+    .bind(row.uom.trim())
+    .bind(row.name.trim())
+    .bind(serde_json::json!({
+        "source_receipt_id": row.name.trim(),
+        "source": "mini_gscale_receipts_submit"
+    }))
+    .execute(pool)
+    .await
+    .map_err(|error| GscalePortError::StoreWrite(error.to_string()))?;
+    Ok(())
+}
+
 fn row_to_draft(row: MaterialReceiptRow) -> MaterialReceiptDraft {
     MaterialReceiptDraft {
         name: row.name,
@@ -139,6 +243,25 @@ fn row_to_draft(row: MaterialReceiptRow) -> MaterialReceiptDraft {
     }
 }
 
+fn row_to_stock(row: RawMaterialStockRow) -> RawMaterialStockEntry {
+    RawMaterialStockEntry {
+        id: row.id,
+        warehouse: row.warehouse,
+        item_code: row.item_code,
+        item_name: row.item_name,
+        barcode: row.barcode,
+        qty: row.qty,
+        uom: row.uom,
+        status: row.status,
+        reserved_order_id: row.reserved_order_id,
+        source_receipt_id: row.source_receipt_id,
+    }
+}
+
 fn receipt_name(barcode: &str) -> String {
     format!("GSR-{}", barcode.trim().to_ascii_uppercase())
+}
+
+fn raw_stock_id(barcode: &str) -> String {
+    format!("raw:{}", barcode.trim().to_ascii_lowercase())
 }

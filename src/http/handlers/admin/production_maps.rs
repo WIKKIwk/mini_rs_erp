@@ -3,7 +3,7 @@ use crate::core::auth::models::PrincipalRole;
 use crate::core::calculate_orders::{
     CalculateOrderError, CalculateOrderTemplate, owner_key, validate_template,
 };
-use crate::core::gscale::models::MaterialReceiptDraft;
+use crate::core::gscale::models::RawMaterialStockEntry;
 use crate::core::production_map::{
     ApparatusMaterialRuleUpsert, ApparatusQueuePolicy, ProductionMapBatchMoveRequest,
     ProductionMapDefinition, ProductionMapError, ProductionMapMoveRequest, ProductionMapRunRequest,
@@ -454,16 +454,48 @@ pub async fn raw_material_assignments(
         Method::POST => {
             require_capability(&state, &principal, Capability::RawMaterialAssign).await?;
             let input: RawMaterialAssignmentInput = parse_json(&body)?;
-            let input = fill_raw_material_assignment_input(&state, input).await?;
-            state
+            let (input, warehouse) = fill_raw_material_assignment_input(&state, input).await?;
+            let assigned = state
                 .production_maps
                 .assign_raw_material_to_order(input, &queue_action_actor(&principal))
                 .await
-                .map(json_response)
-                .map_err(production_map_error)
+                .map_err(production_map_error)?;
+            state
+                .warehouse_events
+                .notify_updated(&warehouse, "raw_material_assignment");
+            Ok(json_response(assigned))
         }
         _ => Err(method_not_allowed()),
     }
+}
+
+pub async fn raw_material_stock(
+    State(state): State<AppState>,
+    Query(query): Query<ItemQuery>,
+    method: Method,
+    headers: HeaderMap,
+) -> Result<Response, AdminError> {
+    let principal = authorize_any_capability(
+        &state,
+        &headers,
+        &[
+            Capability::AdminAccess,
+            Capability::CatalogItemRead,
+            Capability::RawMaterialAssign,
+        ],
+    )
+    .await?;
+    require_capability(&state, &principal, Capability::CatalogItemRead).await?;
+    if method != Method::GET {
+        return Err(method_not_allowed());
+    }
+    let limit = optional_search_limit(query.limit.as_deref(), 200, 500);
+    state
+        .gscale
+        .raw_material_stock(query.warehouse.as_deref().unwrap_or(""), limit)
+        .await
+        .map(json_response)
+        .map_err(|_| server_error("raw material stock fetch failed"))
 }
 
 pub async fn raw_material_assignment_lookup(
@@ -510,18 +542,24 @@ struct RawMaterialLookupResponse {
 async fn fill_raw_material_assignment_input(
     state: &AppState,
     mut input: RawMaterialAssignmentInput,
-) -> Result<RawMaterialAssignmentInput, AdminError> {
-    if !input.item_code.trim().is_empty() && !input.item_group.trim().is_empty() {
-        return Ok(input);
-    }
+) -> Result<(RawMaterialAssignmentInput, String), AdminError> {
     let barcode = input.barcode.trim();
     if barcode.is_empty() {
         return Err(production_map_error(
             ProductionMapError::RawMaterialInvalidInput,
         ));
     }
-    let (receipt, item) = resolve_raw_material_receipt_item(state, barcode).await?;
-    let item_code = receipt.item_code.trim().to_string();
+    if !input.item_code.trim().is_empty() && !input.item_group.trim().is_empty() {
+        let stock = state
+            .gscale
+            .raw_material_stock_by_barcode(barcode)
+            .await
+            .map_err(|_| production_map_error(ProductionMapError::RawMaterialInvalidInput))?
+            .ok_or_else(|| production_map_error(ProductionMapError::RawMaterialInvalidInput))?;
+        return Ok((input, stock.warehouse.trim().to_string()));
+    }
+    let (stock, item) = resolve_raw_material_stock_item(state, barcode).await?;
+    let item_code = stock.item_code.trim().to_string();
     if item_code.is_empty() {
         return Err(production_map_error(
             ProductionMapError::RawMaterialInvalidInput,
@@ -534,42 +572,42 @@ async fn fill_raw_material_assignment_input(
         input.item_name.trim().to_string()
     };
     input.item_group = item.item_group.trim().to_string();
-    Ok(input)
+    Ok((input, stock.warehouse.trim().to_string()))
 }
 
 async fn lookup_raw_material_detail(
     state: &AppState,
     barcode: &str,
 ) -> Result<RawMaterialLookupResponse, AdminError> {
-    let (receipt, item) = resolve_raw_material_receipt_item(state, barcode).await?;
+    let (stock, item) = resolve_raw_material_stock_item(state, barcode).await?;
     Ok(RawMaterialLookupResponse {
-        barcode: receipt.barcode.trim().to_string(),
-        warehouse: receipt.warehouse.trim().to_string(),
-        item_code: receipt.item_code.trim().to_string(),
+        barcode: stock.barcode.trim().to_string(),
+        warehouse: stock.warehouse.trim().to_string(),
+        item_code: stock.item_code.trim().to_string(),
         item_name: item.name.trim().to_string(),
         item_group: item.item_group.trim().to_string(),
-        qty: receipt.qty,
-        uom: receipt.uom.trim().to_string(),
+        qty: stock.qty,
+        uom: stock.uom.trim().to_string(),
     })
 }
 
-async fn resolve_raw_material_receipt_item(
+async fn resolve_raw_material_stock_item(
     state: &AppState,
     barcode: &str,
-) -> Result<(MaterialReceiptDraft, SupplierItem), AdminError> {
+) -> Result<(RawMaterialStockEntry, SupplierItem), AdminError> {
     let barcode = barcode.trim();
     if barcode.is_empty() {
         return Err(production_map_error(
             ProductionMapError::RawMaterialInvalidInput,
         ));
     }
-    let receipt = state
+    let stock = state
         .gscale
-        .material_receipt_by_barcode(barcode)
+        .raw_material_stock_by_barcode(barcode)
         .await
         .map_err(|_| production_map_error(ProductionMapError::RawMaterialInvalidInput))?
         .ok_or_else(|| production_map_error(ProductionMapError::RawMaterialInvalidInput))?;
-    let item_code = receipt.item_code.trim().to_string();
+    let item_code = stock.item_code.trim().to_string();
     if item_code.is_empty() {
         return Err(production_map_error(
             ProductionMapError::RawMaterialInvalidInput,
@@ -588,7 +626,7 @@ async fn resolve_raw_material_receipt_item(
             ProductionMapError::RawMaterialInvalidInput,
         ));
     };
-    Ok((receipt, item))
+    Ok((stock, item))
 }
 
 /// Pushes production-map queue snapshots over SSE so operators see changes
