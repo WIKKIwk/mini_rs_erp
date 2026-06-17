@@ -30,6 +30,7 @@ use crate::core::calculate_orders::{
 use crate::core::mini_orders::{MiniOrderError, MiniOrderSink, NoopMiniOrderSink};
 use crate::core::production_map::{MemoryProductionMapStore, ProductionMapService};
 use crate::core::session::manager::SessionManager;
+use crate::core::warehouses::{MemoryWarehouseStore, WarehouseService};
 use crate::core::werka::models::{DispatchRecord, StockEntryBarcodeEntry, SupplierItem};
 use crate::core::werka::ports::{WerkaHomeLookup, WerkaPortError};
 use crate::core::werka::service::WerkaService;
@@ -2946,6 +2947,62 @@ async fn admin_can_create_apparatus_and_list_it_as_apparat_warehouse() {
 }
 
 #[tokio::test]
+async fn admin_can_create_general_warehouse_and_list_it_for_gscale() {
+    let state = test_state();
+    let token = session(&state, PrincipalRole::Admin).await;
+
+    let created = build_router(state.clone())
+        .oneshot(request_with_body(
+            "POST",
+            "/v1/mobile/admin/warehouses",
+            &token,
+            r#"{"warehouse":" Kalidor "}"#,
+        ))
+        .await
+        .expect("create warehouse");
+    assert_eq!(created.status(), StatusCode::OK);
+    let created_body = json_body(created).await;
+    assert_eq!(created_body["warehouse"], "Kalidor");
+    assert_eq!(created_body["parent_warehouse"], "");
+
+    let listed = build_router(state.clone())
+        .oneshot(request(
+            "GET",
+            "/v1/mobile/admin/warehouses?q=kal&limit=50",
+            &token,
+        ))
+        .await
+        .expect("list warehouse");
+    assert_eq!(listed.status(), StatusCode::OK);
+    let listed_body = json_body(listed).await;
+    assert!(
+        listed_body
+            .as_array()
+            .expect("array")
+            .iter()
+            .any(|item| item["warehouse"] == "Kalidor")
+    );
+
+    let apparatus = build_router(state)
+        .oneshot(request(
+            "GET",
+            "/v1/mobile/admin/warehouses?parent=aparat%20-%20A&limit=50",
+            &token,
+        ))
+        .await
+        .expect("list apparatus");
+    assert_eq!(apparatus.status(), StatusCode::OK);
+    let apparatus_body = json_body(apparatus).await;
+    assert!(
+        !apparatus_body
+            .as_array()
+            .expect("array")
+            .iter()
+            .any(|item| item["warehouse"] == "Kalidor")
+    );
+}
+
+#[tokio::test]
 async fn admin_item_group_tree_returns_parent_shape() {
     let state = test_state();
     let token = session(&state, PrincipalRole::Admin).await;
@@ -3502,6 +3559,7 @@ fn test_state() -> AppState {
         .with_state_port(admin_state_port.clone());
     state.production_maps = ProductionMapService::new(Arc::new(MemoryProductionMapStore::new()));
     state.apparatus_groups = ApparatusGroupService::new(Arc::new(MemoryApparatusGroupStore::new()));
+    state.warehouses = WarehouseService::new(Arc::new(MemoryWarehouseStore::new()));
     state.workers = WorkerService::new(Arc::new(MemoryWorkerStore::new()));
     state.auth = crate::core::auth::service::AuthService::new(&state.config)
         .with_customer_dependencies(admin_port.clone(), admin_state_port.clone())

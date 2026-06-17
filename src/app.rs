@@ -19,6 +19,7 @@ use crate::core::rezka::RezkaService;
 use crate::core::rps_batch::ports::RpsBatchStorePort;
 use crate::core::rps_batch::{RpsBatchLmdbStore, RpsBatchService};
 use crate::core::session::manager::SessionManager;
+use crate::core::warehouses::WarehouseService;
 use crate::core::werka::service::WerkaService;
 use crate::core::worker_groups::WorkerGroupService;
 use crate::core::workers::WorkerService;
@@ -30,6 +31,7 @@ use crate::db::postgres_mini_order::PostgresMiniOrderSink;
 use crate::db::postgres_production_map::PostgresProductionMapStore;
 use crate::db::postgres_push_token::PostgresPushTokenStore;
 use crate::db::postgres_rps_batch::PostgresRpsBatchStore;
+use crate::db::postgres_warehouse::PostgresWarehouseStore;
 use crate::db::postgres_worker::PostgresWorkerStore;
 use crate::db::postgres_worker_group::PostgresWorkerGroupStore;
 use crate::fcm::discover_push_sender;
@@ -67,6 +69,7 @@ pub struct AppState {
     pub rezka: RezkaService,
     pub rps_batch: RpsBatchService,
     pub werka: WerkaService,
+    pub warehouses: WarehouseService,
     pub workers: WorkerService,
     pub worker_groups: WorkerGroupService,
     pub sessions: SessionManager,
@@ -121,6 +124,7 @@ impl AppState {
             .with_driver(scale_driver)
             .with_epc_source(Arc::new(crate::core::gscale::epc::GscaleEpcGenerator::new()));
         let mut werka = WerkaService::new();
+        let warehouses = build_warehouse_service();
         let worker_groups = build_worker_group_service();
         let sessions = match local_store_backend("MOBILE_API_SESSION_STORE_BACKEND") {
             LocalStoreBackend::Lmdb => {
@@ -184,10 +188,34 @@ impl AppState {
             rezka,
             rps_batch,
             werka,
+            warehouses,
             workers,
             worker_groups,
             sessions,
             mini_engine,
+        }
+    }
+}
+
+fn build_warehouse_service() -> WarehouseService {
+    let config = match PostgresConfig::from_env() {
+        Ok(config) => config,
+        Err(_) => {
+            return WarehouseService::new(Arc::new(
+                crate::core::warehouses::MemoryWarehouseStore::new(),
+            ));
+        }
+    };
+    match config.pool_options().connect_lazy(&config.database_url) {
+        Ok(pool) => {
+            tracing::info!("mini ERP postgres warehouse store configured");
+            WarehouseService::new(Arc::new(PostgresWarehouseStore::new(pool)))
+        }
+        Err(error) => {
+            tracing::warn!(%error, "mini ERP postgres warehouse store disabled");
+            WarehouseService::new(Arc::new(
+                crate::core::warehouses::MemoryWarehouseStore::new(),
+            ))
         }
     }
 }

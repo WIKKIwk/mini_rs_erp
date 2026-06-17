@@ -99,8 +99,9 @@ pub async fn warehouses(
     method: Method,
     headers: HeaderMap,
     Query(query): Query<ItemQuery>,
+    body: Bytes,
 ) -> Result<Response, AdminError> {
-    authorize_any_capability(
+    let principal = authorize_any_capability(
         &state,
         &headers,
         &[
@@ -111,8 +112,18 @@ pub async fn warehouses(
         ],
     )
     .await?;
-    if method != Method::GET {
+    if !matches!(method, Method::GET | Method::POST) {
         return Err(method_not_allowed());
+    }
+    if method == Method::POST {
+        require_capability(&state, &principal, Capability::ProductionMapManage).await?;
+        let input: WarehouseUpsert = parse_json(&body)?;
+        return state
+            .warehouses
+            .upsert_warehouse(input)
+            .await
+            .map(json_response)
+            .map_err(warehouse_error);
     }
     let limit = optional_search_limit(query.limit.as_deref(), 30, 500);
     let mut warehouses = state
@@ -124,6 +135,17 @@ pub async fn warehouses(
         )
         .await
         .map_err(|_| server_error("admin warehouses fetch failed"))?;
+    let mini_warehouses = state
+        .warehouses
+        .warehouses(
+            query.q.as_deref().unwrap_or(""),
+            query.parent.as_deref().unwrap_or(""),
+            limit,
+        )
+        .await
+        .map_err(warehouse_error)?;
+    warehouses =
+        crate::core::warehouses::merge_admin_warehouses(warehouses, mini_warehouses, limit);
     if is_apparat_parent(query.parent.as_deref().unwrap_or("")) {
         let remaining = limit.saturating_sub(warehouses.len()).max(1);
         let mut seen = warehouses
@@ -150,6 +172,13 @@ pub async fn warehouses(
         });
     }
     Ok(json_response(warehouses))
+}
+
+fn warehouse_error(error: WarehouseError) -> AdminError {
+    match error {
+        WarehouseError::MissingWarehouse => bad_request("warehouse is required"),
+        WarehouseError::StoreFailed => server_error("warehouse store failed"),
+    }
 }
 
 fn is_apparat_parent(parent: &str) -> bool {

@@ -53,6 +53,7 @@ use crate::core::auth::models::Principal;
 use crate::core::authz::{
     Capability, RoleAssignmentUpsert, RoleDefinitionUpsert, capability_catalog_entries,
 };
+use crate::core::warehouses::{WarehouseError, WarehouseUpsert};
 use crate::core::werka::models::{CustomerDirectoryEntry, DispatchRecord, SupplierItem};
 use crate::http::handlers::auth::bearer_token;
 

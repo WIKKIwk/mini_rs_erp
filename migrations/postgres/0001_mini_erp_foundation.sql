@@ -276,6 +276,18 @@ CREATE TABLE IF NOT EXISTS mini_raw_material_assignments (
     CONSTRAINT mini_raw_material_assignments_order_apparatus_unique UNIQUE (order_id, apparatus)
 );
 
+CREATE TABLE IF NOT EXISTS mini_warehouses (
+    id TEXT PRIMARY KEY,
+    name TEXT NOT NULL,
+    company TEXT NOT NULL DEFAULT '',
+    is_group BOOLEAN NOT NULL DEFAULT false,
+    parent_warehouse TEXT NOT NULL DEFAULT '',
+    payload_json JSONB NOT NULL DEFAULT '{}'::jsonb,
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    CONSTRAINT mini_warehouses_name_not_blank CHECK (btrim(name) <> ''),
+    CONSTRAINT mini_warehouses_name_unique UNIQUE (name)
+);
+
 CREATE TABLE IF NOT EXISTS mini_rps_batches (
     owner_key TEXT PRIMARY KEY,
     batch_id TEXT NOT NULL,
@@ -337,6 +349,7 @@ CREATE INDEX IF NOT EXISTS idx_mini_production_map_edges_to ON mini_production_m
 CREATE UNIQUE INDEX IF NOT EXISTS idx_mini_apparatus_groups_lower_name ON mini_apparatus_groups (lower(name));
 CREATE UNIQUE INDEX IF NOT EXISTS idx_mini_apparatus_lower_name ON mini_apparatus (lower(name));
 CREATE UNIQUE INDEX IF NOT EXISTS idx_mini_workers_lower_name ON mini_workers (lower(name));
+CREATE UNIQUE INDEX IF NOT EXISTS idx_mini_warehouses_lower_name ON mini_warehouses (lower(name));
 CREATE INDEX IF NOT EXISTS idx_mini_workers_level ON mini_workers(level);
 CREATE INDEX IF NOT EXISTS idx_mini_worker_groups_apparatus ON mini_worker_groups (lower(apparatus));
 CREATE INDEX IF NOT EXISTS idx_mini_worker_groups_shift ON mini_worker_groups (shift);
