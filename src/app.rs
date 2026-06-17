@@ -27,6 +27,7 @@ use crate::db::postgres::PostgresConfig;
 use crate::db::postgres_apparatus_group::PostgresApparatusGroupStore;
 use crate::db::postgres_calculate_order::PostgresCalculateOrderStore;
 use crate::db::postgres_engine::PostgresEngineStore;
+use crate::db::postgres_gscale_receipt::PostgresGscaleReceiptStore;
 use crate::db::postgres_mini_order::PostgresMiniOrderSink;
 use crate::db::postgres_production_map::PostgresProductionMapStore;
 use crate::db::postgres_push_token::PostgresPushTokenStore;
@@ -119,7 +120,7 @@ impl AppState {
             config.http_timeout,
             std::env::var("RP_SCALE_DRIVER_URL").unwrap_or_default(),
         ));
-        let gscale = GscaleService::new().with_driver(scale_driver.clone());
+        let gscale = build_gscale_service(scale_driver.clone());
         let rezka = RezkaService::new()
             .with_driver(scale_driver)
             .with_epc_source(Arc::new(crate::core::gscale::epc::GscaleEpcGenerator::new()));
@@ -193,6 +194,24 @@ impl AppState {
             worker_groups,
             sessions,
             mini_engine,
+        }
+    }
+}
+
+fn build_gscale_service(scale_driver: Arc<RpsDriverClient>) -> GscaleService {
+    let service = GscaleService::new().with_driver(scale_driver);
+    let config = match PostgresConfig::from_env() {
+        Ok(config) => config,
+        Err(_) => return service,
+    };
+    match config.pool_options().connect_lazy(&config.database_url) {
+        Ok(pool) => {
+            tracing::info!("mini ERP postgres GScale receipt store configured");
+            service.with_receipt_store(Arc::new(PostgresGscaleReceiptStore::new(pool)))
+        }
+        Err(error) => {
+            tracing::warn!(%error, "mini ERP postgres GScale receipt store disabled");
+            service
         }
     }
 }

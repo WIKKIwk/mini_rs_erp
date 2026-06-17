@@ -2,6 +2,7 @@ pub mod postgres;
 pub mod postgres_apparatus_group;
 pub mod postgres_calculate_order;
 pub mod postgres_engine;
+pub mod postgres_gscale_receipt;
 pub mod postgres_mini_order;
 pub mod postgres_production_map;
 pub mod postgres_push_token;

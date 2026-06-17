@@ -288,6 +288,27 @@ CREATE TABLE IF NOT EXISTS mini_warehouses (
     CONSTRAINT mini_warehouses_name_unique UNIQUE (name)
 );
 
+CREATE TABLE IF NOT EXISTS mini_gscale_receipts (
+    name TEXT PRIMARY KEY,
+    status TEXT NOT NULL DEFAULT 'draft',
+    item_code TEXT NOT NULL,
+    warehouse TEXT NOT NULL,
+    qty DOUBLE PRECISION NOT NULL,
+    uom TEXT NOT NULL DEFAULT 'kg',
+    barcode TEXT NOT NULL,
+    payload_json JSONB NOT NULL DEFAULT '{}'::jsonb,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    submitted_at TIMESTAMPTZ,
+    CONSTRAINT mini_gscale_receipts_name_not_blank CHECK (btrim(name) <> ''),
+    CONSTRAINT mini_gscale_receipts_item_code_not_blank CHECK (btrim(item_code) <> ''),
+    CONSTRAINT mini_gscale_receipts_warehouse_not_blank CHECK (btrim(warehouse) <> ''),
+    CONSTRAINT mini_gscale_receipts_barcode_not_blank CHECK (btrim(barcode) <> ''),
+    CONSTRAINT mini_gscale_receipts_qty_positive CHECK (qty > 0),
+    CONSTRAINT mini_gscale_receipts_status_allowed CHECK (status IN ('draft', 'submitted')),
+    CONSTRAINT mini_gscale_receipts_barcode_unique UNIQUE (barcode)
+);
+
 CREATE TABLE IF NOT EXISTS mini_rps_batches (
     owner_key TEXT PRIMARY KEY,
     batch_id TEXT NOT NULL,
@@ -350,6 +371,8 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_mini_apparatus_groups_lower_name ON mini_a
 CREATE UNIQUE INDEX IF NOT EXISTS idx_mini_apparatus_lower_name ON mini_apparatus (lower(name));
 CREATE UNIQUE INDEX IF NOT EXISTS idx_mini_workers_lower_name ON mini_workers (lower(name));
 CREATE UNIQUE INDEX IF NOT EXISTS idx_mini_warehouses_lower_name ON mini_warehouses (lower(name));
+CREATE INDEX IF NOT EXISTS idx_mini_gscale_receipts_status_updated ON mini_gscale_receipts (status, updated_at DESC);
+CREATE INDEX IF NOT EXISTS idx_mini_gscale_receipts_item_updated ON mini_gscale_receipts (lower(item_code), updated_at DESC);
 CREATE INDEX IF NOT EXISTS idx_mini_workers_level ON mini_workers(level);
 CREATE INDEX IF NOT EXISTS idx_mini_worker_groups_apparatus ON mini_worker_groups (lower(apparatus));
 CREATE INDEX IF NOT EXISTS idx_mini_worker_groups_shift ON mini_worker_groups (shift);

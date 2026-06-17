@@ -34,7 +34,6 @@ impl GscaleService {
         Self::default()
     }
 
-    #[cfg(test)]
     pub fn with_receipt_store(mut self, receipt_store: Arc<dyn MaterialReceiptStorePort>) -> Self {
         self.receipt_store = Some(receipt_store);
         self
