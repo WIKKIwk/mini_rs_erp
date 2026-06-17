@@ -2279,6 +2279,27 @@ mod tests {
             .expect("assign material");
         assert_eq!(assigned.apparatus, "7 ta rangli pechat - A");
 
+        service
+            .upsert_map(apparatus_stage_map("zakaz-raw-2", "7 ta rangli pechat - A"))
+            .await
+            .expect("second map");
+        let duplicate = service
+            .assign_raw_material_to_order(
+                RawMaterialAssignmentInput {
+                    order_id: "zakaz-raw-2".to_string(),
+                    barcode: "30AA".to_string(),
+                    item_code: "INK-BLACK".to_string(),
+                    item_name: "Black ink".to_string(),
+                    item_group: "Kraska".to_string(),
+                },
+                &actor,
+            )
+            .await;
+        assert_eq!(
+            duplicate,
+            Err(ProductionMapError::RawMaterialAlreadyAssigned)
+        );
+
         let not_assigned = service
             .apply_apparatus_queue_action_with_material_scan(
                 "7 ta rangli pechat - A",
