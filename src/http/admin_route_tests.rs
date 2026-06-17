@@ -755,6 +755,29 @@ async fn raw_material_routes_assign_and_require_scan_for_queue_start() {
     assert_eq!(warehouse_event.warehouse, "Kalidor");
     assert_eq!(warehouse_event.reason, "raw_material_assignment");
 
+    let second_assigned = router
+        .clone()
+        .oneshot(request_with_body(
+            "POST",
+            "/v1/mobile/admin/raw-material-assignments",
+            &token,
+            r#"{
+                "order_id":"zakaz-raw-route",
+                "barcode":"30CC"
+            }"#,
+        ))
+        .await
+        .expect("assign second");
+    let second_status = second_assigned.status();
+    let second_body = json_body(second_assigned).await;
+    assert_eq!(second_status, StatusCode::OK, "{second_body:?}");
+    assert_eq!(second_body["apparatus"], "7 ta rangli pechat - A");
+    assert_eq!(second_body["item_code"], "INK-WHITE");
+    let _second_warehouse_event = warehouse_events
+        .recv()
+        .await
+        .expect("second warehouse event");
+
     let lookup = router
         .clone()
         .oneshot(request(
@@ -795,6 +818,27 @@ async fn raw_material_routes_assign_and_require_scan_for_queue_start() {
         "raw_material_scan_required"
     );
 
+    let partial_scan = router
+        .clone()
+        .oneshot(request_with_body(
+            "POST",
+            "/v1/mobile/admin/production-maps/queue-action",
+            &worker_token,
+            r#"{
+                "apparatus":"7 ta rangli pechat - A",
+                "order_id":"zakaz-raw-route",
+                "action":"start",
+                "material_barcodes":["30AA"]
+            }"#,
+        ))
+        .await
+        .expect("queue action with partial scan");
+    assert_eq!(partial_scan.status(), StatusCode::BAD_REQUEST);
+    assert_eq!(
+        json_body(partial_scan).await["error"],
+        "raw_material_mismatch"
+    );
+
     let started = router
         .oneshot(request_with_body(
             "POST",
@@ -804,7 +848,7 @@ async fn raw_material_routes_assign_and_require_scan_for_queue_start() {
                 "apparatus":"7 ta rangli pechat - A",
                 "order_id":"zakaz-raw-route",
                 "action":"start",
-                "material_barcode":"30AA"
+                "material_barcodes":["30AA","30CC"]
             }"#,
         ))
         .await
@@ -4472,18 +4516,22 @@ impl MaterialReceiptStorePort for RawMaterialStockLookup {
         &self,
         barcode: &str,
     ) -> Result<Option<RawMaterialStockEntry>, GscalePortError> {
-        assert_eq!(barcode, "30AA");
+        let (item_code, item_name) = match barcode {
+            "30AA" => ("INK-BLACK", "Black ink"),
+            "30CC" => ("INK-WHITE", "White ink"),
+            other => panic!("unexpected barcode {other}"),
+        };
         Ok(Some(RawMaterialStockEntry {
-            id: "raw:30AA".to_string(),
-            item_code: "INK-BLACK".to_string(),
-            item_name: "Black ink".to_string(),
+            id: format!("raw:{barcode}"),
+            item_code: item_code.to_string(),
+            item_name: item_name.to_string(),
             warehouse: "Kalidor".to_string(),
             qty: 12.0,
             uom: "Kg".to_string(),
             barcode: barcode.to_string(),
             status: "available".to_string(),
             reserved_order_id: String::new(),
-            source_receipt_id: "GSR-30AA".to_string(),
+            source_receipt_id: format!("GSR-{barcode}"),
         }))
     }
 
@@ -4493,18 +4541,32 @@ impl MaterialReceiptStorePort for RawMaterialStockLookup {
         _limit: usize,
     ) -> Result<Vec<RawMaterialStockEntry>, GscalePortError> {
         assert_eq!(warehouse, "Kalidor");
-        Ok(vec![RawMaterialStockEntry {
-            id: "raw:30AA".to_string(),
-            item_code: "INK-BLACK".to_string(),
-            item_name: "Black ink".to_string(),
-            warehouse: "Kalidor".to_string(),
-            qty: 12.0,
-            uom: "Kg".to_string(),
-            barcode: "30AA".to_string(),
-            status: "available".to_string(),
-            reserved_order_id: String::new(),
-            source_receipt_id: "GSR-30AA".to_string(),
-        }])
+        Ok(vec![
+            RawMaterialStockEntry {
+                id: "raw:30AA".to_string(),
+                item_code: "INK-BLACK".to_string(),
+                item_name: "Black ink".to_string(),
+                warehouse: "Kalidor".to_string(),
+                qty: 12.0,
+                uom: "Kg".to_string(),
+                barcode: "30AA".to_string(),
+                status: "available".to_string(),
+                reserved_order_id: String::new(),
+                source_receipt_id: "GSR-30AA".to_string(),
+            },
+            RawMaterialStockEntry {
+                id: "raw:30CC".to_string(),
+                item_code: "INK-WHITE".to_string(),
+                item_name: "White ink".to_string(),
+                warehouse: "Kalidor".to_string(),
+                qty: 8.0,
+                uom: "Kg".to_string(),
+                barcode: "30CC".to_string(),
+                status: "available".to_string(),
+                reserved_order_id: String::new(),
+                source_receipt_id: "GSR-30CC".to_string(),
+            },
+        ])
     }
 }
 
@@ -4974,14 +5036,14 @@ fn entry(ref_: &str, name: &str, phone: &str) -> AdminDirectoryEntry {
 fn item(code: &str) -> SupplierItem {
     SupplierItem {
         code: code.to_string(),
-        name: if code == "INK-BLACK" {
-            "Black ink".to_string()
-        } else {
-            "Rice".to_string()
+        name: match code {
+            "INK-BLACK" => "Black ink".to_string(),
+            "INK-WHITE" => "White ink".to_string(),
+            _ => "Rice".to_string(),
         },
         uom: "Kg".to_string(),
         warehouse: "Stores - CH".to_string(),
-        item_group: if code == "INK-BLACK" {
+        item_group: if code == "INK-BLACK" || code == "INK-WHITE" {
             "Kraska".to_string()
         } else {
             "Products".to_string()

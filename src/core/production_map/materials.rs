@@ -96,11 +96,6 @@ impl ProductionMapService {
                 }
                 return Err(ProductionMapError::RawMaterialAlreadyAssigned);
             }
-            if existing.order_id.trim() == order_id
-                && queue_state::apparatus_titles_match(&existing.apparatus, &apparatus)
-            {
-                return Err(ProductionMapError::RawMaterialAlreadyAssigned);
-            }
         }
         let assignment = RawMaterialAssignment {
             order_id,
@@ -171,23 +166,28 @@ impl ProductionMapService {
         if !matches!(action, queue_state::ApparatusQueueAction::Start) {
             return Ok(());
         }
-        let assignment = self
+        let assignments = self
             .store
             .raw_material_assignments()
             .await?
             .into_iter()
-            .find(|assignment| {
+            .filter(|assignment| {
                 assignment.order_id.trim() == order_id.trim()
                     && queue_state::apparatus_titles_match(&assignment.apparatus, apparatus)
-            });
-        let Some(assignment) = assignment else {
+            })
+            .collect::<Vec<_>>();
+        if assignments.is_empty() {
             return Ok(());
-        };
-        let scanned = normalize_barcode(material_barcode);
+        }
+        let scanned = normalized_barcodes(material_barcode);
         if scanned.is_empty() {
             return Err(ProductionMapError::RawMaterialScanRequired);
         }
-        if !same_barcode(&assignment.barcode, &scanned) {
+        let assigned = assignments
+            .iter()
+            .map(|assignment| normalize_barcode(&assignment.barcode))
+            .collect::<BTreeSet<_>>();
+        if scanned != assigned {
             return Err(ProductionMapError::RawMaterialMismatch);
         }
         Ok(())
@@ -228,6 +228,14 @@ fn rule_matches(rule: &ApparatusMaterialRule, apparatus: &str, item_group: &str)
 
 fn normalize_barcode(value: &str) -> String {
     value.trim().to_ascii_uppercase()
+}
+
+fn normalized_barcodes(value: &str) -> BTreeSet<String> {
+    value
+        .split(',')
+        .map(normalize_barcode)
+        .filter(|item| !item.is_empty())
+        .collect()
 }
 
 fn same_barcode(left: &str, right: &str) -> bool {

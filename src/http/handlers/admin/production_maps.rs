@@ -336,6 +336,8 @@ struct ApparatusQueueActionRequest {
     order_id: String,
     #[serde(default)]
     material_barcode: String,
+    #[serde(default)]
+    material_barcodes: Vec<String>,
     action: queue_state::ApparatusQueueAction,
 }
 
@@ -365,6 +367,11 @@ pub async fn production_map_queue_action(
         return Err(bad_request("apparatus and order_id are required"));
     }
     let assigned_apparatus = state.admin.principal_assigned_apparatus(&principal).await;
+    let material_barcode = if input.material_barcodes.is_empty() {
+        input.material_barcode
+    } else {
+        input.material_barcodes.join(",")
+    };
     let states = state
         .production_maps
         .apply_apparatus_queue_action_with_material_scan(
@@ -373,7 +380,7 @@ pub async fn production_map_queue_action(
             input.action,
             &assigned_apparatus,
             queue_action_actor(&principal),
-            &input.material_barcode,
+            &material_barcode,
         )
         .await
         .map_err(production_map_error)?;
@@ -438,19 +445,17 @@ pub async fn raw_material_assignments(
             Capability::AdminAccess,
             Capability::ProductionMapManage,
             Capability::RawMaterialAssign,
+            Capability::ApparatusQueueManage,
         ],
     )
     .await?;
     match method {
-        Method::GET => {
-            require_capability(&state, &principal, Capability::RawMaterialAssign).await?;
-            state
-                .production_maps
-                .raw_material_assignments()
-                .await
-                .map(json_response)
-                .map_err(production_map_error)
-        }
+        Method::GET => state
+            .production_maps
+            .raw_material_assignments()
+            .await
+            .map(json_response)
+            .map_err(production_map_error),
         Method::POST => {
             require_capability(&state, &principal, Capability::RawMaterialAssign).await?;
             let input: RawMaterialAssignmentInput = parse_json(&body)?;

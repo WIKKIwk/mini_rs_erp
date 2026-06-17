@@ -2347,6 +2347,20 @@ mod tests {
             .await
             .expect("assign material");
         assert_eq!(assigned.apparatus, "7 ta rangli pechat - A");
+        let second_assigned = service
+            .assign_raw_material_to_order(
+                RawMaterialAssignmentInput {
+                    order_id: "zakaz-raw-1".to_string(),
+                    barcode: "30CC".to_string(),
+                    item_code: "INK-WHITE".to_string(),
+                    item_name: "White ink".to_string(),
+                    item_group: "Kraska".to_string(),
+                },
+                &actor,
+            )
+            .await
+            .expect("assign second material");
+        assert_eq!(second_assigned.apparatus, "7 ta rangli pechat - A");
 
         service
             .upsert_map(apparatus_stage_map("zakaz-raw-2", "7 ta rangli pechat - A"))
@@ -2408,6 +2422,18 @@ mod tests {
             .await;
         assert_eq!(wrong_scan, Err(ProductionMapError::RawMaterialMismatch));
 
+        let partial_scan = service
+            .apply_apparatus_queue_action_with_material_scan(
+                "7 ta rangli pechat - A",
+                "zakaz-raw-1",
+                queue_state::ApparatusQueueAction::Start,
+                &["7 ta rangli pechat - A".to_string()],
+                actor.clone(),
+                "30AA",
+            )
+            .await;
+        assert_eq!(partial_scan, Err(ProductionMapError::RawMaterialMismatch));
+
         let states = service
             .apply_apparatus_queue_action_with_material_scan(
                 "7 ta rangli pechat - A",
@@ -2415,7 +2441,7 @@ mod tests {
                 queue_state::ApparatusQueueAction::Start,
                 &["7 ta rangli pechat - A".to_string()],
                 actor,
-                "30AA",
+                "30AA,30CC",
             )
             .await
             .expect("start with exact material");

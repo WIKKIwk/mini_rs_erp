@@ -297,9 +297,11 @@ CREATE TABLE IF NOT EXISTS mini_raw_material_assignments (
     CONSTRAINT mini_raw_material_assignments_order_not_blank CHECK (btrim(order_id) <> ''),
     CONSTRAINT mini_raw_material_assignments_apparatus_not_blank CHECK (btrim(apparatus) <> ''),
     CONSTRAINT mini_raw_material_assignments_item_code_not_blank CHECK (btrim(item_code) <> ''),
-    CONSTRAINT mini_raw_material_assignments_item_group_not_blank CHECK (btrim(item_group) <> ''),
-    CONSTRAINT mini_raw_material_assignments_order_apparatus_unique UNIQUE (order_id, apparatus)
+    CONSTRAINT mini_raw_material_assignments_item_group_not_blank CHECK (btrim(item_group) <> '')
 );
+
+ALTER TABLE mini_raw_material_assignments
+    DROP CONSTRAINT IF EXISTS mini_raw_material_assignments_order_apparatus_unique;
 
 CREATE TABLE IF NOT EXISTS mini_warehouses (
     id TEXT PRIMARY KEY,

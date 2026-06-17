@@ -599,8 +599,7 @@ fn migrate(conn: &Connection) -> rusqlite::Result<()> {
             item_code TEXT NOT NULL,
             item_group TEXT NOT NULL,
             payload_json TEXT NOT NULL DEFAULT '{}',
-            saved_at TEXT NOT NULL,
-            UNIQUE(order_id, apparatus)
+            saved_at TEXT NOT NULL
         );",
     )
 }
