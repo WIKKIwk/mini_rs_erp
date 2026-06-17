@@ -1,3 +1,4 @@
+use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
@@ -21,6 +22,9 @@ use crate::core::gscale::models::{
 use crate::core::gscale::ports::{
     EpcSource, GscalePortError, MaterialReceiptStorePort, ScaleDriverPort,
 };
+use crate::core::rps_batch::RpsBatchService;
+use crate::core::rps_batch::models::RpsBatchSession;
+use crate::core::rps_batch::ports::{RpsBatchStoreError, RpsBatchStorePort};
 use crate::core::session::manager::SessionManager;
 use crate::core::werka::models::SupplierItem;
 use crate::rps::RpsDriverClient;
@@ -522,6 +526,40 @@ async fn rps_batch_start_requires_item_and_warehouse() {
     assert_eq!(body["error"], "invalid_input");
 }
 
+#[tokio::test]
+async fn rps_batch_start_requires_driver_url() {
+    let state = test_state();
+    let token = session(&state, PrincipalRole::Werka).await;
+    let response = build_router(state)
+        .oneshot(request(
+            "POST",
+            "/v1/mobile/rps/batch/start",
+            &token,
+            r#"{
+                "item_code":"ITEM-1",
+                "item_name":"Green Tea",
+                "warehouse":"Stores - A",
+                "printer":"godex",
+                "print_mode":"label"
+            }"#,
+        ))
+        .await
+        .expect("response");
+    let status = response.status();
+    let body = json_body(response).await;
+
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+    assert_eq!(body["ok"], false);
+    assert_eq!(body["error"], "invalid_input");
+    assert!(
+        body["detail"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("driver_url_required"),
+        "{body}"
+    );
+}
+
 fn test_state() -> AppState {
     let mut state = AppState::new(AppConfig {
         bind_addr: "127.0.0.1:8081".parse().expect("addr"),
@@ -541,6 +579,7 @@ fn test_state() -> AppState {
         admin_code: "19621978".to_string(),
     });
     state.sessions = SessionManager::memory(Some(30 * 24 * 60 * 60));
+    state.rps_batch = RpsBatchService::new(Arc::new(MemoryRpsBatchStore::default()));
     state
 }
 
@@ -579,6 +618,26 @@ async fn json_body(response: axum::response::Response) -> serde_json::Value {
 
 struct FakeReceiptStore {
     events: Arc<Mutex<Vec<String>>>,
+}
+
+#[derive(Default)]
+struct MemoryRpsBatchStore {
+    batches: Mutex<BTreeMap<String, RpsBatchSession>>,
+}
+
+#[async_trait]
+impl RpsBatchStorePort for MemoryRpsBatchStore {
+    async fn get(&self, owner_key: &str) -> Result<Option<RpsBatchSession>, RpsBatchStoreError> {
+        Ok(self.batches.lock().unwrap().get(owner_key.trim()).cloned())
+    }
+
+    async fn put(&self, batch: RpsBatchSession) -> Result<(), RpsBatchStoreError> {
+        self.batches
+            .lock()
+            .unwrap()
+            .insert(batch.owner_key.trim().to_string(), batch);
+        Ok(())
+    }
 }
 
 struct FakeAdminCatalogReadPort;

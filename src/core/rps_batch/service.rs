@@ -127,6 +127,12 @@ fn normalize_start(
             "item_code_and_warehouse_required".to_string(),
         ));
     }
+    let driver_url = request.driver_url.trim().trim_end_matches('/').to_string();
+    if driver_url.is_empty() {
+        return Err(RpsBatchServiceError::InvalidInput(
+            "driver_url_required".to_string(),
+        ));
+    }
 
     Ok(RpsBatchSession {
         id: batch_id(&request.client_batch_id, &owner.key),
@@ -134,7 +140,7 @@ fn normalize_start(
         owner_key: owner.key,
         owner_role: owner.role,
         owner_ref: owner.ref_,
-        driver_url: request.driver_url.trim().trim_end_matches('/').to_string(),
+        driver_url,
         item_name: fallback(&request.item_name, &item_code),
         item_code,
         warehouse,

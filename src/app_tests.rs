@@ -242,6 +242,7 @@ async fn app_state_uses_postgres_rps_batch_when_database_url_is_configured() {
         .start(
             &test_principal(),
             RpsBatchStartRequest {
+                driver_url: "http://127.0.0.1:39117".to_string(),
                 item_code: "INK-001".to_string(),
                 item_name: "Ink".to_string(),
                 warehouse: "Stores - A".to_string(),
