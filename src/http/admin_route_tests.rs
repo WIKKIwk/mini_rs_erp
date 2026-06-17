@@ -810,6 +810,116 @@ async fn raw_material_routes_assign_and_require_scan_for_queue_start() {
 }
 
 #[tokio::test]
+async fn worker_completed_orders_are_actor_scoped_and_latest_first() {
+    let state = test_state();
+    for worker_ref in ["worker-complete-1", "worker-complete-2"] {
+        state
+            .admin
+            .upsert_role_assignment(crate::core::authz::RoleAssignmentUpsert {
+                principal_role: PrincipalRole::Aparatchi,
+                principal_ref: worker_ref.to_string(),
+                role_id: "aparatchi".to_string(),
+                assigned_apparatus: vec!["7 ta rangli pechat".to_string()],
+            })
+            .await
+            .expect("aparatchi assignment");
+    }
+    let admin_token = session(&state, PrincipalRole::Admin).await;
+    let worker_one = session_for(&state, PrincipalRole::Aparatchi, "worker-complete-1").await;
+    let worker_two = session_for(&state, PrincipalRole::Aparatchi, "worker-complete-2").await;
+    let router = build_router(state);
+
+    for (id, number) in [
+        ("zakaz-complete-1", "9101"),
+        ("zakaz-complete-2", "9102"),
+        ("zakaz-complete-3", "9103"),
+    ] {
+        let response = router
+            .clone()
+            .oneshot(request_with_body(
+                "PUT",
+                "/v1/mobile/admin/production-maps",
+                &admin_token,
+                &pechat_order_map_json(id, "Completed route", number, "7 ta rangli pechat"),
+            ))
+            .await
+            .expect("save map");
+        assert_eq!(response.status(), StatusCode::OK);
+    }
+
+    let sequence = router
+        .clone()
+        .oneshot(request_with_body(
+            "PUT",
+            "/v1/mobile/admin/production-maps/sequence",
+            &admin_token,
+            r#"{
+                "apparatus":"7 ta rangli pechat",
+                "order_ids":["zakaz-complete-1","zakaz-complete-2","zakaz-complete-3"]
+            }"#,
+        ))
+        .await
+        .expect("save sequence");
+    assert_eq!(sequence.status(), StatusCode::OK);
+
+    for (token, order_id) in [
+        (&worker_one, "zakaz-complete-1"),
+        (&worker_one, "zakaz-complete-2"),
+        (&worker_two, "zakaz-complete-3"),
+    ] {
+        for action in ["start", "complete"] {
+            let response = router
+                .clone()
+                .oneshot(request_with_body(
+                    "POST",
+                    "/v1/mobile/admin/production-maps/queue-action",
+                    token,
+                    &format!(
+                        r#"{{"apparatus":"7 ta rangli pechat","order_id":"{order_id}","action":"{action}"}}"#
+                    ),
+                ))
+                .await
+                .expect("queue action");
+            assert_eq!(response.status(), StatusCode::OK);
+        }
+    }
+
+    let first_worker_completed = router
+        .clone()
+        .oneshot(request(
+            "GET",
+            "/v1/mobile/admin/production-maps/completed-orders",
+            &worker_one,
+        ))
+        .await
+        .expect("completed orders");
+    assert_eq!(first_worker_completed.status(), StatusCode::OK);
+    let body = json_body(first_worker_completed).await;
+    let items = body["completed_orders"]
+        .as_array()
+        .expect("completed_orders");
+    assert_eq!(items.len(), 2);
+    assert_eq!(items[0]["order_id"], "zakaz-complete-2");
+    assert_eq!(items[1]["order_id"], "zakaz-complete-1");
+
+    let second_worker_completed = router
+        .oneshot(request(
+            "GET",
+            "/v1/mobile/admin/production-maps/completed-orders",
+            &worker_two,
+        ))
+        .await
+        .expect("completed orders");
+    assert_eq!(second_worker_completed.status(), StatusCode::OK);
+    let body = json_body(second_worker_completed).await;
+    let items = body["completed_orders"]
+        .as_array()
+        .expect("completed_orders");
+    assert_eq!(items.len(), 1);
+    assert_eq!(items[0]["order_id"], "zakaz-complete-3");
+}
+
+#[tokio::test]
 async fn production_map_duplicate_order_number_returns_structured_error() {
     let state = test_state();
     let token = session(&state, PrincipalRole::Admin).await;

@@ -601,7 +601,7 @@ pub async fn production_map_live(
     if method != Method::GET {
         return Err(method_not_allowed());
     }
-    authorize_any_capability(
+    let principal = authorize_any_capability(
         &state,
         &headers,
         &[
@@ -611,23 +611,30 @@ pub async fn production_map_live(
         ],
     )
     .await?;
-    Ok(production_map_live_sse(state).into_response())
+    Ok(production_map_live_sse(state, queue_action_actor(&principal).ref_).into_response())
 }
 
-fn production_map_live_sse(state: AppState) -> Sse<impl Stream<Item = Result<Event, Infallible>>> {
+fn production_map_live_sse(
+    state: AppState,
+    actor_ref: String,
+) -> Sse<impl Stream<Item = Result<Event, Infallible>>> {
     let service = state.production_maps.clone();
     let mut rx = service.subscribe_live();
     let event_stream = stream! {
         let mut last_payload = String::new();
         loop {
-            match service.live_snapshot().await {
-                Ok(snapshot) => {
+            match (
+                service.live_snapshot().await,
+                service.completed_queue_orders_for_actor(&actor_ref, 200).await,
+            ) {
+                (Ok(snapshot), Ok(completed_orders)) => {
                     let payload = serde_json::json!({
                         "ok": true,
                         "maps": snapshot.maps,
                         "sequences": snapshot.sequences,
                         "queue_states": snapshot.queue_states,
                         "queue_policies": snapshot.queue_policies,
+                        "completed_orders": completed_orders,
                     });
                     if let Ok(json) = serde_json::to_string(&payload) {
                         if json != last_payload {
@@ -636,7 +643,7 @@ fn production_map_live_sse(state: AppState) -> Sse<impl Stream<Item = Result<Eve
                         }
                     }
                 }
-                Err(error) => {
+                (Err(error), _) | (_, Err(error)) => {
                     yield Ok(Event::default().event("error").data(error.to_string()));
                 }
             }
@@ -653,6 +660,35 @@ fn production_map_live_sse(state: AppState) -> Sse<impl Stream<Item = Result<Eve
             .interval(Duration::from_secs(15))
             .text("ping"),
     )
+}
+
+pub async fn production_map_completed_orders(
+    State(state): State<AppState>,
+    method: Method,
+    headers: HeaderMap,
+) -> Result<Response, AdminError> {
+    if method != Method::GET {
+        return Err(method_not_allowed());
+    }
+    let principal = authorize_any_capability(
+        &state,
+        &headers,
+        &[
+            Capability::AdminAccess,
+            Capability::ProductionMapManage,
+            Capability::ApparatusQueueRead,
+        ],
+    )
+    .await?;
+    let completed_orders = state
+        .production_maps
+        .completed_queue_orders_for_actor(&queue_action_actor(&principal).ref_, 200)
+        .await
+        .map_err(production_map_error)?;
+    Ok(json_response(serde_json::json!({
+        "ok": true,
+        "completed_orders": completed_orders,
+    })))
 }
 
 fn calculate_order_error(error: CalculateOrderError) -> AdminError {

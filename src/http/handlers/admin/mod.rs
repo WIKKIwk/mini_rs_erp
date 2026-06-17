@@ -10,9 +10,9 @@ pub use customers::{
     customer_list, customer_phone, customer_remove, customers, item_group_tree, item_groups, items,
 };
 pub use production_maps::{
-    production_map_live, production_map_move, production_map_move_batch,
-    production_map_queue_action, production_map_queue_policies, production_map_run,
-    production_map_save_with_order, production_map_sequence, production_maps,
+    production_map_completed_orders, production_map_live, production_map_move,
+    production_map_move_batch, production_map_queue_action, production_map_queue_policies,
+    production_map_run, production_map_save_with_order, production_map_sequence, production_maps,
     raw_material_assignment_lookup, raw_material_assignments, raw_material_rules,
 };
 pub use supplier_mutations::{

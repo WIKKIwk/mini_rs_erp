@@ -314,6 +314,13 @@ pub struct ApparatusQueueActionEvent {
     pub payload_json: serde_json::Value,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CompletedQueueOrder {
+    pub apparatus: String,
+    pub order_id: String,
+    pub completed_at_unix: i64,
+}
+
 #[async_trait]
 pub trait ProductionMapStorePort: Send + Sync {
     async fn maps(&self) -> Result<Vec<ProductionMapDefinition>, ProductionMapError>;
@@ -363,6 +370,13 @@ pub trait ProductionMapStorePort: Send + Sync {
     ) -> Result<(), ProductionMapError> {
         Ok(())
     }
+    async fn completed_queue_orders_for_actor(
+        &self,
+        _actor_ref: &str,
+        _limit: usize,
+    ) -> Result<Vec<CompletedQueueOrder>, ProductionMapError> {
+        Ok(Vec::new())
+    }
     async fn apparatus_material_rules(
         &self,
     ) -> Result<Vec<ApparatusMaterialRule>, ProductionMapError>;
@@ -385,6 +399,7 @@ pub struct MemoryProductionMapStore {
     sequences: RwLock<BTreeMap<String, Vec<String>>>,
     queue_states: RwLock<BTreeMap<String, BTreeMap<String, String>>>,
     queue_policies: RwLock<BTreeMap<String, ApparatusQueuePolicy>>,
+    queue_events: RwLock<Vec<ApparatusQueueActionEvent>>,
     material_rules: RwLock<BTreeMap<String, ApparatusMaterialRule>>,
     material_assignments: RwLock<BTreeMap<String, RawMaterialAssignment>>,
 }
@@ -397,6 +412,7 @@ impl MemoryProductionMapStore {
             sequences: RwLock::new(BTreeMap::new()),
             queue_states: RwLock::new(BTreeMap::new()),
             queue_policies: RwLock::new(BTreeMap::new()),
+            queue_events: RwLock::new(Vec::new()),
             material_rules: RwLock::new(BTreeMap::new()),
             material_assignments: RwLock::new(BTreeMap::new()),
         }
@@ -515,6 +531,49 @@ impl ProductionMapStorePort for MemoryProductionMapStore {
             .await
             .insert(apparatus.trim().to_string(), policy);
         Ok(())
+    }
+
+    async fn append_apparatus_queue_action_event(
+        &self,
+        event: ApparatusQueueActionEvent,
+    ) -> Result<(), ProductionMapError> {
+        self.queue_events.write().await.push(event);
+        Ok(())
+    }
+
+    async fn completed_queue_orders_for_actor(
+        &self,
+        actor_ref: &str,
+        limit: usize,
+    ) -> Result<Vec<CompletedQueueOrder>, ProductionMapError> {
+        let actor_ref = actor_ref.trim();
+        if actor_ref.is_empty() || limit == 0 {
+            return Ok(Vec::new());
+        }
+        let events = self.queue_events.read().await;
+        let mut seen = BTreeSet::new();
+        let mut completed = Vec::new();
+        for (index, event) in events.iter().enumerate().rev() {
+            if event.actor.ref_.trim() != actor_ref
+                || event.action != queue_state::ApparatusQueueAction::Complete
+                || event.to_state != queue_state::ApparatusQueueOrderState::Completed
+            {
+                continue;
+            }
+            let order_id = event.order_id.trim();
+            if order_id.is_empty() || !seen.insert(order_id.to_string()) {
+                continue;
+            }
+            completed.push(CompletedQueueOrder {
+                apparatus: event.apparatus.trim().to_string(),
+                order_id: order_id.to_string(),
+                completed_at_unix: index as i64 + 1,
+            });
+            if completed.len() >= limit {
+                break;
+            }
+        }
+        Ok(completed)
     }
 
     async fn apparatus_material_rules(
@@ -669,6 +728,16 @@ impl ProductionMapService {
         &self,
     ) -> Result<BTreeMap<String, BTreeMap<String, String>>, ProductionMapError> {
         self.store.apparatus_queue_states().await
+    }
+
+    pub async fn completed_queue_orders_for_actor(
+        &self,
+        actor_ref: &str,
+        limit: usize,
+    ) -> Result<Vec<CompletedQueueOrder>, ProductionMapError> {
+        self.store
+            .completed_queue_orders_for_actor(actor_ref, limit)
+            .await
     }
 
     pub async fn apparatus_queue_policy_records(

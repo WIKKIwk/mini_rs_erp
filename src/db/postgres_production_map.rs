@@ -4,7 +4,7 @@ use async_trait::async_trait;
 use sqlx::{PgPool, Postgres, Transaction};
 
 use crate::core::production_map::{
-    ApparatusMaterialRule, ApparatusQueueActionEvent, ApparatusQueuePolicy,
+    ApparatusMaterialRule, ApparatusQueueActionEvent, ApparatusQueuePolicy, CompletedQueueOrder,
     ProductionMapDefinition, ProductionMapError, ProductionMapStorePort, QueueActionActor,
     RawMaterialAssignment,
 };
@@ -248,6 +248,51 @@ impl ProductionMapStorePort for PostgresProductionMapStore {
         tx.commit()
             .await
             .map_err(|_| ProductionMapError::StoreFailed)
+    }
+
+    async fn completed_queue_orders_for_actor(
+        &self,
+        actor_ref: &str,
+        limit: usize,
+    ) -> Result<Vec<CompletedQueueOrder>, ProductionMapError> {
+        let actor_ref = actor_ref.trim();
+        if actor_ref.is_empty() || limit == 0 {
+            return Ok(Vec::new());
+        }
+        let limit = i64::try_from(limit.min(500)).unwrap_or(500);
+        let rows = sqlx::query_as::<_, (String, String, i64)>(
+            "SELECT order_id, apparatus, completed_at_unix
+             FROM (
+                SELECT DISTINCT ON (order_id)
+                    order_id,
+                    apparatus,
+                    created_at,
+                    EXTRACT(EPOCH FROM created_at)::bigint AS completed_at_unix
+                FROM mini_queue_action_events
+                WHERE actor_ref = $1
+                  AND action = 'complete'
+                  AND to_state = 'completed'
+                ORDER BY order_id, created_at DESC
+             ) latest
+             ORDER BY created_at DESC
+             LIMIT $2",
+        )
+        .bind(actor_ref)
+        .bind(limit)
+        .fetch_all(&self.pool)
+        .await
+        .map_err(|_| ProductionMapError::StoreFailed)?;
+
+        Ok(rows
+            .into_iter()
+            .map(
+                |(order_id, apparatus, completed_at_unix)| CompletedQueueOrder {
+                    apparatus,
+                    order_id,
+                    completed_at_unix,
+                },
+            )
+            .collect())
     }
 
     async fn apparatus_material_rules(
