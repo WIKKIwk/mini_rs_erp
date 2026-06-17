@@ -3,11 +3,13 @@ use crate::core::auth::models::PrincipalRole;
 use crate::core::calculate_orders::{
     CalculateOrderError, CalculateOrderTemplate, owner_key, validate_template,
 };
+use crate::core::gscale::models::MaterialReceiptDraft;
 use crate::core::production_map::{
     ApparatusMaterialRuleUpsert, ApparatusQueuePolicy, ProductionMapBatchMoveRequest,
     ProductionMapDefinition, ProductionMapError, ProductionMapMoveRequest, ProductionMapRunRequest,
     QueueActionActor, RawMaterialAssignmentInput, queue_state,
 };
+use crate::core::werka::models::SupplierItem;
 use crate::google_sheets::is_sheet_order_map;
 use async_stream::stream;
 use axum::response::sse::{Event, KeepAlive, Sse};
@@ -464,6 +466,47 @@ pub async fn raw_material_assignments(
     }
 }
 
+pub async fn raw_material_assignment_lookup(
+    State(state): State<AppState>,
+    Query(query): Query<RawMaterialAssignmentLookupQuery>,
+    method: Method,
+    headers: HeaderMap,
+) -> Result<Response, AdminError> {
+    let principal = authorize_any_capability(
+        &state,
+        &headers,
+        &[
+            Capability::AdminAccess,
+            Capability::ProductionMapManage,
+            Capability::RawMaterialAssign,
+        ],
+    )
+    .await?;
+    require_capability(&state, &principal, Capability::RawMaterialAssign).await?;
+    if method != Method::GET {
+        return Err(method_not_allowed());
+    }
+    let detail = lookup_raw_material_detail(&state, &query.barcode).await?;
+    Ok(json_response(detail))
+}
+
+#[derive(Default, serde::Deserialize)]
+pub struct RawMaterialAssignmentLookupQuery {
+    #[serde(default)]
+    barcode: String,
+}
+
+#[derive(serde::Serialize)]
+struct RawMaterialLookupResponse {
+    barcode: String,
+    warehouse: String,
+    item_code: String,
+    item_name: String,
+    item_group: String,
+    qty: f64,
+    uom: String,
+}
+
 async fn fill_raw_material_assignment_input(
     state: &AppState,
     mut input: RawMaterialAssignmentInput,
@@ -472,6 +515,49 @@ async fn fill_raw_material_assignment_input(
         return Ok(input);
     }
     let barcode = input.barcode.trim();
+    if barcode.is_empty() {
+        return Err(production_map_error(
+            ProductionMapError::RawMaterialInvalidInput,
+        ));
+    }
+    let (receipt, item) = resolve_raw_material_receipt_item(state, barcode).await?;
+    let item_code = receipt.item_code.trim().to_string();
+    if item_code.is_empty() {
+        return Err(production_map_error(
+            ProductionMapError::RawMaterialInvalidInput,
+        ));
+    }
+    input.item_code = item_code;
+    input.item_name = if input.item_name.trim().is_empty() {
+        item.name.trim().to_string()
+    } else {
+        input.item_name.trim().to_string()
+    };
+    input.item_group = item.item_group.trim().to_string();
+    Ok(input)
+}
+
+async fn lookup_raw_material_detail(
+    state: &AppState,
+    barcode: &str,
+) -> Result<RawMaterialLookupResponse, AdminError> {
+    let (receipt, item) = resolve_raw_material_receipt_item(state, barcode).await?;
+    Ok(RawMaterialLookupResponse {
+        barcode: receipt.barcode.trim().to_string(),
+        warehouse: receipt.warehouse.trim().to_string(),
+        item_code: receipt.item_code.trim().to_string(),
+        item_name: item.name.trim().to_string(),
+        item_group: item.item_group.trim().to_string(),
+        qty: receipt.qty,
+        uom: receipt.uom.trim().to_string(),
+    })
+}
+
+async fn resolve_raw_material_receipt_item(
+    state: &AppState,
+    barcode: &str,
+) -> Result<(MaterialReceiptDraft, SupplierItem), AdminError> {
+    let barcode = barcode.trim();
     if barcode.is_empty() {
         return Err(production_map_error(
             ProductionMapError::RawMaterialInvalidInput,
@@ -502,14 +588,7 @@ async fn fill_raw_material_assignment_input(
             ProductionMapError::RawMaterialInvalidInput,
         ));
     };
-    input.item_code = item_code;
-    input.item_name = if input.item_name.trim().is_empty() {
-        item.name.trim().to_string()
-    } else {
-        input.item_name.trim().to_string()
-    };
-    input.item_group = item.item_group.trim().to_string();
-    Ok(input)
+    Ok((receipt, item))
 }
 
 /// Pushes production-map queue snapshots over SSE so operators see changes

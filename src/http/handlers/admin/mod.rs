@@ -13,7 +13,7 @@ pub use production_maps::{
     production_map_live, production_map_move, production_map_move_batch,
     production_map_queue_action, production_map_queue_policies, production_map_run,
     production_map_save_with_order, production_map_sequence, production_maps,
-    raw_material_assignments, raw_material_rules,
+    raw_material_assignment_lookup, raw_material_assignments, raw_material_rules,
 };
 pub use supplier_mutations::{
     supplier_code_regenerate, supplier_item_add, supplier_item_remove, supplier_items,

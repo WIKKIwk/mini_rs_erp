@@ -187,6 +187,10 @@ pub fn build_router(state: AppState) -> Router {
             any(admin::raw_material_rules),
         )
         .route(
+            "/v1/mobile/admin/raw-material-assignments/lookup",
+            any(admin::raw_material_assignment_lookup),
+        )
+        .route(
             "/v1/mobile/admin/raw-material-assignments",
             any(admin::raw_material_assignments),
         )

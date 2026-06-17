@@ -748,6 +748,26 @@ async fn raw_material_routes_assign_and_require_scan_for_queue_start() {
     assert_eq!(assigned_body["item_name"], "Black ink");
     assert_eq!(assigned_body["item_group"], "Kraska");
 
+    let lookup = router
+        .clone()
+        .oneshot(request(
+            "GET",
+            "/v1/mobile/admin/raw-material-assignments/lookup?barcode=30AA",
+            &token,
+        ))
+        .await
+        .expect("raw material lookup");
+    let lookup_status = lookup.status();
+    let lookup_body = json_body(lookup).await;
+    assert_eq!(lookup_status, StatusCode::OK, "{lookup_body:?}");
+    assert_eq!(lookup_body["barcode"], "30AA");
+    assert_eq!(lookup_body["warehouse"], "Kalidor");
+    assert_eq!(lookup_body["item_code"], "INK-BLACK");
+    assert_eq!(lookup_body["item_name"], "Black ink");
+    assert_eq!(lookup_body["item_group"], "Kraska");
+    assert_eq!(lookup_body["qty"], 12.0);
+    assert_eq!(lookup_body["uom"], "Kg");
+
     let missing_scan = router
         .clone()
         .oneshot(request_with_body(
