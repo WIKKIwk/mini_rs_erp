@@ -173,15 +173,28 @@ pub fn first_actionable_order_id(
         if id.is_empty() {
             continue;
         }
+        if states
+            .get(id)
+            .copied()
+            .unwrap_or(ApparatusQueueOrderState::Pending)
+            == ApparatusQueueOrderState::InProgress
+        {
+            return Some(id.to_string());
+        }
+    }
+    for id in sequence {
+        let id = id.trim();
+        if id.is_empty() {
+            continue;
+        }
         match states
             .get(id)
             .copied()
             .unwrap_or(ApparatusQueueOrderState::Pending)
         {
             ApparatusQueueOrderState::Completed => continue,
-            ApparatusQueueOrderState::Pending | ApparatusQueueOrderState::InProgress => {
-                return Some(id.to_string());
-            }
+            ApparatusQueueOrderState::InProgress => continue,
+            ApparatusQueueOrderState::Pending => return Some(id.to_string()),
         }
     }
     None
@@ -219,6 +232,13 @@ pub fn apply_unordered_queue_action(
     if order_id.is_empty() {
         return Err(ProductionMapError::MissingId);
     }
+    if matches!(action, ApparatusQueueAction::Start)
+        && states.iter().any(|(id, state)| {
+            id.trim() != order_id && *state == ApparatusQueueOrderState::InProgress
+        })
+    {
+        return Err(ProductionMapError::QueueActionNotAllowed);
+    }
     let current = states
         .get(order_id)
         .copied()
@@ -241,6 +261,16 @@ mod tests {
             Some("b")
         );
         states.insert("b".to_string(), ApparatusQueueOrderState::InProgress);
+        assert_eq!(
+            first_actionable_order_id(&sequence, &states).as_deref(),
+            Some("b")
+        );
+    }
+
+    #[test]
+    fn first_actionable_prioritizes_in_progress_order() {
+        let sequence = vec!["a".to_string(), "b".to_string()];
+        let states = BTreeMap::from([("b".to_string(), ApparatusQueueOrderState::InProgress)]);
         assert_eq!(
             first_actionable_order_id(&sequence, &states).as_deref(),
             Some("b")
@@ -291,6 +321,16 @@ mod tests {
         assert_eq!(states.get("b"), Some(&ApparatusQueueOrderState::Completed));
         apply_unordered_queue_action(&mut states, "b", ApparatusQueueAction::Start)
             .expect_err("completed order cannot restart");
+    }
+
+    #[test]
+    fn unordered_action_blocks_second_start_while_order_in_progress() {
+        let mut states = BTreeMap::new();
+        apply_unordered_queue_action(&mut states, "a", ApparatusQueueAction::Start)
+            .expect("start first order");
+        let result = apply_unordered_queue_action(&mut states, "b", ApparatusQueueAction::Start);
+        assert_eq!(result, Err(ProductionMapError::QueueActionNotAllowed));
+        assert_eq!(states.get("b"), None);
     }
 
     #[test]
