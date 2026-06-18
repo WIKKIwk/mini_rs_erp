@@ -64,7 +64,11 @@ pub struct ProgressLabelPrintRequest {
     #[serde(default)]
     pub gross_qty: f64,
     #[serde(default)]
+    pub progress_qty: f64,
+    #[serde(default)]
     pub unit: String,
+    #[serde(default)]
+    pub progress_unit: String,
     #[serde(default)]
     pub print_count: u32,
 }
@@ -78,7 +82,9 @@ pub struct ProgressLabelPrintResponse {
     pub item_name: String,
     pub executor_name: String,
     pub qty: f64,
+    pub gross_qty: f64,
     pub unit: String,
+    pub progress_unit: String,
     pub printer: String,
     pub print_mode: String,
     pub printer_status: String,
@@ -129,7 +135,9 @@ pub struct ScaleDriverPrintRequest {
     pub printer: String,
     pub print_mode: String,
     pub gross_qty: f64,
+    pub qty: Option<f64>,
     pub unit: String,
+    pub progress_unit: String,
     pub tare_enabled: bool,
     pub tare_kg: f64,
     pub print_count: u32,

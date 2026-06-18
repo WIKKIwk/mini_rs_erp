@@ -191,8 +191,10 @@ impl GscaleService {
             item_code: job.item_code,
             item_name: job.item_name,
             executor_name: job.executor_name,
-            qty: job.gross_qty,
+            qty: job.progress_qty,
+            gross_qty: job.gross_qty,
             unit: job.unit,
+            progress_unit: job.progress_unit,
             printer: print.printer,
             print_mode: print.mode,
             printer_status: print.printer_status,
@@ -350,7 +352,9 @@ struct NormalizedProgressLabelJob {
     printer: String,
     print_mode: String,
     gross_qty: f64,
+    progress_qty: f64,
     unit: String,
+    progress_unit: String,
     print_count: u32,
 }
 
@@ -367,6 +371,16 @@ impl NormalizedProgressLabelJob {
         let gross_qty = request.gross_qty;
         if !gross_qty.is_finite() || gross_qty <= 0.0 {
             return Err(GscaleServiceError::InvalidInput(
+                "progress_gross_qty_required".to_string(),
+            ));
+        }
+        let progress_qty = if request.progress_qty > 0.0 {
+            request.progress_qty
+        } else {
+            request.gross_qty
+        };
+        if !progress_qty.is_finite() || progress_qty <= 0.0 {
+            return Err(GscaleServiceError::InvalidInput(
                 "progress_qty_required".to_string(),
             ));
         }
@@ -379,7 +393,9 @@ impl NormalizedProgressLabelJob {
             printer: request.printer.trim().to_ascii_lowercase(),
             print_mode: request.print_mode.trim().to_ascii_lowercase(),
             gross_qty,
+            progress_qty,
             unit: blank_default(&request.unit, "kg"),
+            progress_unit: blank_default(&request.progress_unit, "m"),
             print_count: normalize_print_count(request.print_count),
         })
     }
@@ -396,7 +412,9 @@ impl NormalizedProgressLabelJob {
             printer: self.printer.clone(),
             print_mode: self.print_mode.clone(),
             gross_qty: self.gross_qty,
+            qty: Some(self.progress_qty),
             unit: self.unit.clone(),
+            progress_unit: self.progress_unit.clone(),
             tare_enabled: false,
             tare_kg: 0.0,
             print_count: self.print_count,
@@ -480,7 +498,9 @@ impl NormalizedMaterialReceiptJob {
             printer: self.printer.clone(),
             print_mode: self.print_mode.clone(),
             gross_qty: self.gross_qty,
+            qty: None,
             unit: self.unit.clone(),
+            progress_unit: String::new(),
             tare_enabled: self.tare_enabled,
             tare_kg: self.tare_kg,
             print_count: self.print_count,

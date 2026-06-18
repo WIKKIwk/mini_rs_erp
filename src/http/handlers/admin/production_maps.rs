@@ -344,6 +344,8 @@ struct ApparatusQueueActionRequest {
     #[serde(default)]
     qty: Option<f64>,
     #[serde(default)]
+    gross_qty: Option<f64>,
+    #[serde(default)]
     uom: String,
     #[serde(default)]
     unit: String,
@@ -468,8 +470,14 @@ pub async fn production_map_queue_action(
                     executor_name: batch.executor_name.clone(),
                     printer: input.printer,
                     print_mode: input.print_mode,
-                    gross_qty: batch.produced_qty,
-                    unit: batch.uom.clone(),
+                    gross_qty: input.gross_qty.unwrap_or(batch.produced_qty),
+                    progress_qty: batch.produced_qty,
+                    unit: "kg".to_string(),
+                    progress_unit: if batch.uom.trim().is_empty() {
+                        "m".to_string()
+                    } else {
+                        batch.uom.clone()
+                    },
                     print_count: input.print_count,
                 })
                 .await

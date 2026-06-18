@@ -1111,7 +1111,8 @@ async fn queue_pause_prints_progress_qr_and_resume_uses_lookup() {
                 "order_id":"zakaz-progress-route",
                 "action":"pause",
                 "produced_qty":15.5,
-                "uom":"kg",
+                "gross_qty":17,
+                "uom":"m",
                 "printer":"zebra",
                 "print_mode":"rfid"
             }"#,
@@ -1133,6 +1134,8 @@ async fn queue_pause_prints_progress_qr_and_resume_uses_lookup() {
     assert_eq!(printed[0].epc, qr_payload);
     assert!(printed[0].item_name.contains("pauza"));
     assert_eq!(printed[0].executor_name, "Admin");
+    assert_eq!(printed[0].gross_qty, 17.0);
+    assert_eq!(printed[0].unit, "kg");
     drop(printed);
 
     let lookup = router

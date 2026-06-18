@@ -114,7 +114,11 @@ struct RpsPrintRequest {
     printer: String,
     print_mode: String,
     gross_qty: f64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    qty: Option<f64>,
     unit: String,
+    #[serde(skip_serializing_if = "String::is_empty")]
+    progress_unit: String,
     tare_enabled: bool,
     tare_kg: f64,
     print_count: u32,
@@ -132,7 +136,9 @@ impl From<ScaleDriverPrintRequest> for RpsPrintRequest {
             printer: request.printer,
             print_mode: request.print_mode,
             gross_qty: request.gross_qty,
+            qty: request.qty,
             unit: request.unit,
+            progress_unit: request.progress_unit,
             tare_enabled: request.tare_enabled,
             tare_kg: request.tare_kg,
             print_count: request.print_count,
