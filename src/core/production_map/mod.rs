@@ -335,6 +335,33 @@ pub struct CompletedQueueOrder {
     pub completed_at_unix: i64,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ProductionOrderLogEntry {
+    pub event_id: String,
+    pub apparatus: String,
+    pub order_id: String,
+    pub action: queue_state::ApparatusQueueAction,
+    pub from_state: queue_state::ApparatusQueueOrderState,
+    pub to_state: queue_state::ApparatusQueueOrderState,
+    pub actor_role: String,
+    pub actor_ref: String,
+    pub actor_display_name: String,
+    pub created_at_unix: i64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct FullyCompletedProductionOrder {
+    pub order_id: String,
+    pub order_number: String,
+    pub title: String,
+    pub product_code: String,
+    pub completed_at_unix: i64,
+    pub closed_by_role: String,
+    pub closed_by_ref: String,
+    pub closed_by_display_name: String,
+    pub logs: Vec<ProductionOrderLogEntry>,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum OrderRunStatus {
@@ -516,6 +543,12 @@ pub trait ProductionMapStorePort: Send + Sync {
         _limit: usize,
     ) -> Result<Vec<CompletedQueueOrder>, ProductionMapError> {
         Ok(Vec::new())
+    }
+    async fn queue_action_logs_for_orders(
+        &self,
+        _order_ids: &[String],
+    ) -> Result<BTreeMap<String, Vec<ProductionOrderLogEntry>>, ProductionMapError> {
+        Ok(BTreeMap::new())
     }
     async fn active_order_run_session(
         &self,
@@ -787,6 +820,43 @@ impl ProductionMapStorePort for MemoryProductionMapStore {
         Ok(completed)
     }
 
+    async fn queue_action_logs_for_orders(
+        &self,
+        order_ids: &[String],
+    ) -> Result<BTreeMap<String, Vec<ProductionOrderLogEntry>>, ProductionMapError> {
+        let order_ids = order_ids
+            .iter()
+            .map(|order_id| order_id.trim().to_string())
+            .filter(|order_id| !order_id.is_empty())
+            .collect::<BTreeSet<_>>();
+        if order_ids.is_empty() {
+            return Ok(BTreeMap::new());
+        }
+        let events = self.queue_events.read().await;
+        let mut by_order: BTreeMap<String, Vec<ProductionOrderLogEntry>> = BTreeMap::new();
+        for (index, event) in events.iter().enumerate() {
+            if !order_ids.contains(event.order_id.trim()) {
+                continue;
+            }
+            by_order
+                .entry(event.order_id.trim().to_string())
+                .or_default()
+                .push(ProductionOrderLogEntry {
+                    event_id: event.event_id.trim().to_string(),
+                    apparatus: event.apparatus.trim().to_string(),
+                    order_id: event.order_id.trim().to_string(),
+                    action: event.action,
+                    from_state: event.from_state,
+                    to_state: event.to_state,
+                    actor_role: event.actor.role.trim().to_string(),
+                    actor_ref: event.actor.ref_.trim().to_string(),
+                    actor_display_name: event.actor.display_name.trim().to_string(),
+                    created_at_unix: index as i64 + 1,
+                });
+        }
+        Ok(by_order)
+    }
+
     async fn active_order_run_session(
         &self,
         apparatus: &str,
@@ -1007,6 +1077,68 @@ impl ProductionMapService {
             }
         }
         Ok(saved)
+    }
+
+    pub async fn fully_completed_orders(
+        &self,
+        limit: usize,
+    ) -> Result<Vec<FullyCompletedProductionOrder>, ProductionMapError> {
+        let maps = self.store.maps().await?;
+        let queue_states = self.store.apparatus_queue_states().await?;
+        let mut candidates = Vec::new();
+        for map in maps {
+            let order_id = map.id.trim();
+            if order_id.is_empty() || !order_id.starts_with("zakaz-") {
+                continue;
+            }
+            let required_apparatus = required_apparatus_for_closed_order(&map);
+            if required_apparatus.is_empty() {
+                continue;
+            }
+            if !required_apparatus
+                .iter()
+                .all(|apparatus| order_completed_on_apparatus(&queue_states, order_id, apparatus))
+            {
+                continue;
+            }
+            candidates.push((map, required_apparatus));
+        }
+        if candidates.is_empty() {
+            return Ok(Vec::new());
+        }
+        let order_ids = candidates
+            .iter()
+            .map(|(map, _)| map.id.trim().to_string())
+            .collect::<Vec<_>>();
+        let logs_by_order = self.store.queue_action_logs_for_orders(&order_ids).await?;
+        let mut closed = Vec::new();
+        for (map, required_apparatus) in candidates {
+            let order_id = map.id.trim().to_string();
+            let logs = logs_by_order.get(&order_id).cloned().unwrap_or_default();
+            let Some(closed_event) = latest_required_complete_event(&logs, &required_apparatus)
+            else {
+                continue;
+            };
+            closed.push(FullyCompletedProductionOrder {
+                order_id,
+                order_number: map.order_number.trim().to_string(),
+                title: map.title.trim().to_string(),
+                product_code: map.product_code.trim().to_string(),
+                completed_at_unix: closed_event.created_at_unix,
+                closed_by_role: closed_event.actor_role.clone(),
+                closed_by_ref: closed_event.actor_ref.clone(),
+                closed_by_display_name: closed_event.actor_display_name.clone(),
+                logs,
+            });
+        }
+        closed.sort_by(|left, right| {
+            right
+                .completed_at_unix
+                .cmp(&left.completed_at_unix)
+                .then_with(|| left.order_id.cmp(&right.order_id))
+        });
+        closed.truncate(limit.clamp(1, 500));
+        Ok(closed)
     }
 
     pub async fn map(
@@ -2049,6 +2181,57 @@ fn laminatsiya_rubber_too_large(map: &ProductionMapDefinition) -> bool {
 
 fn is_laminatsiya_title(title: &str) -> bool {
     title.trim().to_lowercase().contains("laminatsiya")
+}
+
+fn required_apparatus_for_closed_order(map: &ProductionMapDefinition) -> Vec<String> {
+    let mut seen = BTreeSet::new();
+    let mut apparatus = Vec::new();
+    for node in &map.nodes {
+        if node.kind != ProductionMapNodeKind::Apparatus {
+            continue;
+        }
+        let title = if node.alternative_assigned_title.trim().is_empty() {
+            node.title.trim()
+        } else {
+            node.alternative_assigned_title.trim()
+        };
+        if title.is_empty() || !seen.insert(title.to_ascii_lowercase()) {
+            continue;
+        }
+        apparatus.push(title.to_string());
+    }
+    apparatus
+}
+
+fn order_completed_on_apparatus(
+    queue_states: &BTreeMap<String, BTreeMap<String, String>>,
+    order_id: &str,
+    apparatus: &str,
+) -> bool {
+    queue_states.iter().any(|(state_apparatus, states)| {
+        queue_state::apparatus_titles_match(state_apparatus, apparatus)
+            && matches!(
+                states
+                    .get(order_id.trim())
+                    .map(|value| value.trim().to_ascii_lowercase()),
+                Some(state) if state == "completed"
+            )
+    })
+}
+
+fn latest_required_complete_event<'a>(
+    logs: &'a [ProductionOrderLogEntry],
+    required_apparatus: &[String],
+) -> Option<&'a ProductionOrderLogEntry> {
+    logs.iter()
+        .filter(|entry| {
+            entry.action == queue_state::ApparatusQueueAction::Complete
+                && entry.to_state == queue_state::ApparatusQueueOrderState::Completed
+                && required_apparatus.iter().any(|apparatus| {
+                    queue_state::apparatus_titles_match(&entry.apparatus, apparatus)
+                })
+        })
+        .max_by_key(|entry| entry.created_at_unix)
 }
 
 fn effective_apparatus_queue_policy(

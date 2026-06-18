@@ -989,6 +989,35 @@ pub async fn production_map_completed_orders(
     })))
 }
 
+pub async fn production_map_closed_orders(
+    State(state): State<AppState>,
+    method: Method,
+    headers: HeaderMap,
+) -> Result<Response, AdminError> {
+    if method != Method::GET {
+        return Err(method_not_allowed());
+    }
+    authorize_any_capability(
+        &state,
+        &headers,
+        &[
+            Capability::AdminAccess,
+            Capability::ProductionMapManage,
+            Capability::ApparatusQueueRead,
+        ],
+    )
+    .await?;
+    let closed_orders = state
+        .production_maps
+        .fully_completed_orders(200)
+        .await
+        .map_err(production_map_error)?;
+    Ok(json_response(serde_json::json!({
+        "ok": true,
+        "closed_orders": closed_orders,
+    })))
+}
+
 fn calculate_order_error(error: CalculateOrderError) -> AdminError {
     match error {
         CalculateOrderError::InvalidInput(detail) => bad_request(detail),

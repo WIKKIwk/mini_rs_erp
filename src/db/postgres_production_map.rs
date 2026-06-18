@@ -7,7 +7,7 @@ use crate::core::production_map::{
     ApparatusMaterialRule, ApparatusQueueActionEvent, ApparatusQueuePolicy, CompletedQueueOrder,
     OrderProgressBatch, OrderProgressBatchStatus, OrderProgressEvent, OrderRunSession,
     OrderRunStatus, ProductionMapDefinition, ProductionMapError, ProductionMapStorePort,
-    QueueActionActor, RawMaterialAssignment,
+    ProductionOrderLogEntry, QueueActionActor, RawMaterialAssignment, queue_state,
 };
 
 #[derive(Clone)]
@@ -294,6 +294,38 @@ impl ProductionMapStorePort for PostgresProductionMapStore {
                 },
             )
             .collect())
+    }
+
+    async fn queue_action_logs_for_orders(
+        &self,
+        order_ids: &[String],
+    ) -> Result<BTreeMap<String, Vec<ProductionOrderLogEntry>>, ProductionMapError> {
+        let order_ids = order_ids
+            .iter()
+            .map(|order_id| order_id.trim().to_string())
+            .filter(|order_id| !order_id.is_empty())
+            .collect::<Vec<_>>();
+        if order_ids.is_empty() {
+            return Ok(BTreeMap::new());
+        }
+        let rows = sqlx::query_as::<_, QueueActionLogRow>(
+            "SELECT event_id, apparatus, order_id, action, from_state, to_state,
+                    actor_role, actor_ref, actor_display_name,
+                    EXTRACT(EPOCH FROM created_at)::bigint AS created_at_unix
+             FROM mini_queue_action_events
+             WHERE order_id = ANY($1)
+             ORDER BY created_at ASC, id ASC",
+        )
+        .bind(&order_ids)
+        .fetch_all(&self.pool)
+        .await
+        .map_err(|_| ProductionMapError::StoreFailed)?;
+        let mut logs: BTreeMap<String, Vec<ProductionOrderLogEntry>> = BTreeMap::new();
+        for row in rows {
+            let entry = queue_action_log_from_row(row)?;
+            logs.entry(entry.order_id.clone()).or_default().push(entry);
+        }
+        Ok(logs)
     }
 
     async fn active_order_run_session(
@@ -787,6 +819,39 @@ struct ProgressBatchRow {
     worker_ref: String,
     worker_display_name: String,
     payload_json: serde_json::Value,
+}
+
+#[derive(sqlx::FromRow)]
+struct QueueActionLogRow {
+    event_id: String,
+    apparatus: String,
+    order_id: String,
+    action: String,
+    from_state: String,
+    to_state: String,
+    actor_role: String,
+    actor_ref: String,
+    actor_display_name: String,
+    created_at_unix: i64,
+}
+
+fn queue_action_log_from_row(
+    row: QueueActionLogRow,
+) -> Result<ProductionOrderLogEntry, ProductionMapError> {
+    Ok(ProductionOrderLogEntry {
+        event_id: row.event_id,
+        apparatus: row.apparatus,
+        order_id: row.order_id,
+        action: queue_action_from_str(&row.action).ok_or(ProductionMapError::StoreFailed)?,
+        from_state: queue_state::ApparatusQueueOrderState::parse(&row.from_state)
+            .ok_or(ProductionMapError::StoreFailed)?,
+        to_state: queue_state::ApparatusQueueOrderState::parse(&row.to_state)
+            .ok_or(ProductionMapError::StoreFailed)?,
+        actor_role: row.actor_role,
+        actor_ref: row.actor_ref,
+        actor_display_name: row.actor_display_name,
+        created_at_unix: row.created_at_unix,
+    })
 }
 
 fn progress_session_from_row(

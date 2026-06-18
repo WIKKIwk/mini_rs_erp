@@ -1212,6 +1212,130 @@ async fn worker_completed_orders_are_actor_scoped_and_latest_first() {
 }
 
 #[tokio::test]
+async fn closed_orders_return_only_fully_completed_maps_with_action_logs() {
+    let print_requests = Arc::new(Mutex::new(Vec::<ScaleDriverPrintRequest>::new()));
+    let mut state = test_state();
+    state.gscale = GscaleService::new().with_driver(Arc::new(FakeProgressDriver {
+        requests: print_requests,
+        fail: false,
+    }));
+    for (worker_ref, apparatus) in [
+        ("worker-closed-pechat", "7 ta rangli pechat"),
+        ("worker-closed-lamin", "Laminatsiya 1"),
+    ] {
+        state
+            .admin
+            .upsert_role_assignment(crate::core::authz::RoleAssignmentUpsert {
+                principal_role: PrincipalRole::Aparatchi,
+                principal_ref: worker_ref.to_string(),
+                role_id: "aparatchi".to_string(),
+                assigned_apparatus: vec![apparatus.to_string()],
+            })
+            .await
+            .expect("aparatchi assignment");
+    }
+    let admin_token = session(&state, PrincipalRole::Admin).await;
+    let pechat_worker = session_for(&state, PrincipalRole::Aparatchi, "worker-closed-pechat").await;
+    let lamin_worker = session_for(&state, PrincipalRole::Aparatchi, "worker-closed-lamin").await;
+    let router = build_router(state);
+
+    let saved = router
+        .clone()
+        .oneshot(request_with_body(
+            "PUT",
+            "/v1/mobile/admin/production-maps",
+            &admin_token,
+            &two_apparatus_order_map_json(
+                "zakaz-closed-route",
+                "Closed route",
+                "9401",
+                "7 ta rangli pechat",
+                "Laminatsiya 1",
+            ),
+        ))
+        .await
+        .expect("save map");
+    assert_eq!(saved.status(), StatusCode::OK);
+
+    for action in ["start", "pause", "resume", "complete"] {
+        let response = router
+            .clone()
+            .oneshot(request_with_body(
+                "POST",
+                "/v1/mobile/admin/production-maps/queue-action",
+                &pechat_worker,
+                &format!(
+                    r#"{{"apparatus":"7 ta rangli pechat","order_id":"zakaz-closed-route","action":"{action}","produced_qty":1,"gross_qty":1,"uom":"kg","printer":"zebra","print_mode":"rfid"}}"#
+                ),
+            ))
+            .await
+            .expect("pechat action");
+        assert_eq!(response.status(), StatusCode::OK);
+    }
+
+    let before_lamin = router
+        .clone()
+        .oneshot(request(
+            "GET",
+            "/v1/mobile/admin/production-maps/closed-orders",
+            &admin_token,
+        ))
+        .await
+        .expect("closed orders before lamin");
+    assert_eq!(before_lamin.status(), StatusCode::OK);
+    assert_eq!(
+        json_body(before_lamin).await["closed_orders"]
+            .as_array()
+            .expect("closed_orders")
+            .len(),
+        0
+    );
+
+    for action in ["start", "complete"] {
+        let response = router
+            .clone()
+            .oneshot(request_with_body(
+                "POST",
+                "/v1/mobile/admin/production-maps/queue-action",
+                &lamin_worker,
+                &format!(
+                    r#"{{"apparatus":"Laminatsiya 1","order_id":"zakaz-closed-route","action":"{action}","produced_qty":1,"gross_qty":1,"uom":"kg","printer":"zebra","print_mode":"rfid"}}"#
+                ),
+            ))
+            .await
+            .expect("lamin action");
+        assert_eq!(response.status(), StatusCode::OK);
+    }
+
+    let closed = router
+        .oneshot(request(
+            "GET",
+            "/v1/mobile/admin/production-maps/closed-orders",
+            &admin_token,
+        ))
+        .await
+        .expect("closed orders");
+    let closed_status = closed.status();
+    let body = json_body(closed).await;
+    assert_eq!(closed_status, StatusCode::OK, "{body:?}");
+    let orders = body["closed_orders"].as_array().expect("closed_orders");
+    assert_eq!(orders.len(), 1);
+    assert_eq!(orders[0]["order_id"], "zakaz-closed-route");
+    assert_eq!(orders[0]["order_number"], "9401");
+    assert_eq!(orders[0]["closed_by_ref"], "worker-closed-lamin");
+    assert_eq!(orders[0]["closed_by_display_name"], "Admin");
+    let logs = orders[0]["logs"].as_array().expect("logs");
+    assert_eq!(logs.len(), 6);
+    assert_eq!(logs[0]["action"], "start");
+    assert_eq!(logs[0]["actor_ref"], "worker-closed-pechat");
+    assert_eq!(logs[3]["action"], "complete");
+    assert_eq!(logs[3]["apparatus"], "7 ta rangli pechat");
+    assert_eq!(logs[5]["action"], "complete");
+    assert_eq!(logs[5]["apparatus"], "Laminatsiya 1");
+    assert_eq!(logs[5]["actor_ref"], "worker-closed-lamin");
+}
+
+#[tokio::test]
 async fn queue_pause_prints_progress_qr_and_resume_uses_lookup() {
     let print_requests = Arc::new(Mutex::new(Vec::<ScaleDriverPrintRequest>::new()));
     let mut state = test_state();
@@ -2538,6 +2662,34 @@ fn test_state_with_failing_calculate() -> AppState {
 
 fn pechat_order_map_json(id: &str, title: &str, order_number: &str, apparatus: &str) -> String {
     pechat_order_map_json_with_dims(id, title, order_number, apparatus, 7.0, 1250.0)
+}
+
+fn two_apparatus_order_map_json(
+    id: &str,
+    title: &str,
+    order_number: &str,
+    first_apparatus: &str,
+    second_apparatus: &str,
+) -> String {
+    format!(
+        r#"{{
+            "id":"{id}",
+            "product_code":"PECHAT-{order_number}",
+            "title":"{title}",
+            "order_number":"{order_number}",
+            "nodes":[
+                {{"id":"start","kind":"start","title":"Start"}},
+                {{"id":"first","kind":"apparatus","title":"{first_apparatus}"}},
+                {{"id":"second","kind":"apparatus","title":"{second_apparatus}"}},
+                {{"id":"end","kind":"end","title":"End"}}
+            ],
+            "edges":[
+                {{"from":"start","to":"first"}},
+                {{"from":"first","to":"second"}},
+                {{"from":"second","to":"end"}}
+            ]
+        }}"#
+    )
 }
 
 fn pechat_order_map_json_with_dims(
