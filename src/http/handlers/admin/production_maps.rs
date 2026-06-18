@@ -418,9 +418,10 @@ pub async fn production_map_queue_action(
             input.qr_payload
         },
     };
-    let result = state
+    let _queue_action_guard = state.production_maps.queue_action_guard().await;
+    let prepared = state
         .production_maps
-        .apply_apparatus_queue_action_with_material_scan_and_progress(
+        .prepare_apparatus_queue_action_with_material_scan_and_progress(
             &input.apparatus,
             &input.order_id,
             input.action,
@@ -432,7 +433,7 @@ pub async fn production_map_queue_action(
         .await
         .map_err(production_map_error)?;
     let mut print = serde_json::Value::Null;
-    if let Some(batch) = &result.progress_batch {
+    if let Some(batch) = prepared.progress_batch() {
         if matches!(
             input.action,
             queue_state::ApparatusQueueAction::Pause | queue_state::ApparatusQueueAction::Complete
@@ -456,6 +457,11 @@ pub async fn production_map_queue_action(
             print = serde_json::to_value(response).unwrap_or(serde_json::Value::Null);
         }
     }
+    let result = state
+        .production_maps
+        .commit_prepared_queue_action(prepared)
+        .await
+        .map_err(production_map_error)?;
     Ok(json_response(serde_json::json!({
         "ok": true,
         "states": result.states,

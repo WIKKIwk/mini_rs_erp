@@ -908,7 +908,12 @@ async fn admin_raw_material_stock_lists_new_stock_model() {
 
 #[tokio::test]
 async fn worker_completed_orders_are_actor_scoped_and_latest_first() {
-    let state = test_state();
+    let print_requests = Arc::new(Mutex::new(Vec::<ScaleDriverPrintRequest>::new()));
+    let mut state = test_state();
+    state.gscale = GscaleService::new().with_driver(Arc::new(FakeProgressDriver {
+        requests: print_requests,
+        fail: false,
+    }));
     for worker_ref in ["worker-complete-1", "worker-complete-2"] {
         state
             .admin
@@ -972,7 +977,7 @@ async fn worker_completed_orders_are_actor_scoped_and_latest_first() {
                     "/v1/mobile/admin/production-maps/queue-action",
                     token,
                     &format!(
-                        r#"{{"apparatus":"7 ta rangli pechat","order_id":"{order_id}","action":"{action}"}}"#
+                        r#"{{"apparatus":"7 ta rangli pechat","order_id":"{order_id}","action":"{action}","produced_qty":1,"uom":"kg"}}"#
                     ),
                 ))
                 .await
@@ -1022,6 +1027,7 @@ async fn queue_pause_prints_progress_qr_and_resume_uses_lookup() {
     let mut state = test_state();
     state.gscale = GscaleService::new().with_driver(Arc::new(FakeProgressDriver {
         requests: print_requests.clone(),
+        fail: false,
     }));
     state
         .admin
@@ -1124,14 +1130,11 @@ async fn queue_pause_prints_progress_qr_and_resume_uses_lookup() {
             "POST",
             "/v1/mobile/admin/production-maps/queue-action",
             &worker_token,
-            &format!(
-                r#"{{
-                    "apparatus":"7 ta rangli pechat",
-                    "order_id":"zakaz-progress-route",
-                    "action":"resume",
-                    "qr_payload":"{qr_payload}"
-                }}"#
-            ),
+            r#"{
+                "apparatus":"7 ta rangli pechat",
+                "order_id":"zakaz-progress-route",
+                "action":"resume"
+            }"#,
         ))
         .await
         .expect("resume");
@@ -1140,7 +1143,98 @@ async fn queue_pause_prints_progress_qr_and_resume_uses_lookup() {
         resumed_body["states"]["zakaz-progress-route"],
         "in_progress"
     );
-    assert_eq!(resumed_body["progress_batch"]["status"], "resumed");
+    assert!(resumed_body["progress_batch"].is_null());
+}
+
+#[tokio::test]
+async fn queue_pause_print_failure_keeps_order_in_progress() {
+    let print_requests = Arc::new(Mutex::new(Vec::<ScaleDriverPrintRequest>::new()));
+    let mut state = test_state();
+    state.gscale = GscaleService::new().with_driver(Arc::new(FakeProgressDriver {
+        requests: print_requests.clone(),
+        fail: true,
+    }));
+    state
+        .admin
+        .upsert_role_assignment(crate::core::authz::RoleAssignmentUpsert {
+            principal_role: PrincipalRole::Aparatchi,
+            principal_ref: "worker-print-fail".to_string(),
+            role_id: "aparatchi".to_string(),
+            assigned_apparatus: vec!["7 ta rangli pechat".to_string()],
+        })
+        .await
+        .expect("assignment");
+    let admin_token = session(&state, PrincipalRole::Admin).await;
+    let worker_token = session_for(&state, PrincipalRole::Aparatchi, "worker-print-fail").await;
+    let router = build_router(state);
+
+    let saved = router
+        .clone()
+        .oneshot(request_with_body(
+            "PUT",
+            "/v1/mobile/admin/production-maps",
+            &admin_token,
+            &pechat_order_map_json(
+                "zakaz-print-fail",
+                "Print fail order",
+                "9302",
+                "7 ta rangli pechat",
+            ),
+        ))
+        .await
+        .expect("save map");
+    assert_eq!(saved.status(), StatusCode::OK);
+
+    let started = router
+        .clone()
+        .oneshot(request_with_body(
+            "POST",
+            "/v1/mobile/admin/production-maps/queue-action",
+            &worker_token,
+            r#"{
+                "apparatus":"7 ta rangli pechat",
+                "order_id":"zakaz-print-fail",
+                "action":"start"
+            }"#,
+        ))
+        .await
+        .expect("start");
+    assert_eq!(started.status(), StatusCode::OK);
+
+    let pause_failed = router
+        .clone()
+        .oneshot(request_with_body(
+            "POST",
+            "/v1/mobile/admin/production-maps/queue-action",
+            &worker_token,
+            r#"{
+                "apparatus":"7 ta rangli pechat",
+                "order_id":"zakaz-print-fail",
+                "action":"pause",
+                "produced_qty":9.5,
+                "uom":"kg",
+                "printer":"zebra",
+                "print_mode":"rfid"
+            }"#,
+        ))
+        .await
+        .expect("pause");
+    assert_eq!(pause_failed.status(), StatusCode::FAILED_DEPENDENCY);
+
+    let sequence = router
+        .oneshot(request(
+            "GET",
+            "/v1/mobile/admin/production-maps/sequence",
+            &admin_token,
+        ))
+        .await
+        .expect("sequence");
+    let body = json_body(sequence).await;
+    assert_eq!(
+        body["queue_states"]["7 ta rangli pechat"]["zakaz-print-fail"],
+        "in_progress"
+    );
+    assert_eq!(print_requests.lock().await.len(), 1);
 }
 
 #[tokio::test]
@@ -4721,6 +4815,7 @@ impl MaterialReceiptStorePort for RawMaterialStockLookup {
 
 struct FakeProgressDriver {
     requests: Arc<Mutex<Vec<ScaleDriverPrintRequest>>>,
+    fail: bool,
 }
 
 #[async_trait]
@@ -4730,6 +4825,9 @@ impl ScaleDriverPort for FakeProgressDriver {
         request: ScaleDriverPrintRequest,
     ) -> Result<ScaleDriverPrintResponse, GscalePortError> {
         self.requests.lock().await.push(request.clone());
+        if self.fail {
+            return Err(GscalePortError::Driver("printer offline".to_string()));
+        }
         Ok(ScaleDriverPrintResponse {
             ok: true,
             status: "done".to_string(),

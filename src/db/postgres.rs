@@ -253,6 +253,14 @@ mod tests {
         assert!(!migration.contains("mini_production_maps_order_number_unique"));
     }
 
+    #[test]
+    fn postgres_foundation_migration_guards_one_open_order_run_session() {
+        let migration = foundation_migration_sql().to_lowercase();
+
+        assert!(migration.contains("idx_mini_order_run_sessions_one_open"));
+        assert!(migration.contains("where status in ('active', 'paused')"));
+    }
+
     #[tokio::test]
     #[ignore = "requires local PostgreSQL and creates/drops mini_rs_erp_test"]
     async fn postgres_live_foundation_migration_applies_to_clean_database() {

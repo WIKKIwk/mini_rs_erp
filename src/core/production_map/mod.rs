@@ -6,7 +6,7 @@ use serde::{Deserialize, Serialize};
 use thiserror::Error;
 #[cfg(test)]
 use tokio::sync::RwLock;
-use tokio::sync::broadcast;
+use tokio::sync::{Mutex, OwnedMutexGuard, broadcast};
 
 pub mod chain;
 pub mod materials;
@@ -929,6 +929,7 @@ pub struct ProductionMapLiveSnapshot {
 pub struct ProductionMapService {
     store: std::sync::Arc<dyn ProductionMapStorePort>,
     live_notify: broadcast::Sender<()>,
+    queue_action_lock: std::sync::Arc<Mutex<()>>,
 }
 
 struct QueueProgressRecords {
@@ -937,10 +938,33 @@ struct QueueProgressRecords {
     progress_batch: Option<OrderProgressBatch>,
 }
 
+pub struct PreparedApparatusQueueAction {
+    apparatus: String,
+    states: BTreeMap<String, String>,
+    event: ApparatusQueueActionEvent,
+    session: Option<OrderRunSession>,
+    progress_event: Option<OrderProgressEvent>,
+    progress_batch: Option<OrderProgressBatch>,
+}
+
+impl PreparedApparatusQueueAction {
+    pub fn progress_batch(&self) -> Option<&OrderProgressBatch> {
+        self.progress_batch.as_ref()
+    }
+}
+
 impl ProductionMapService {
     pub fn new(store: std::sync::Arc<dyn ProductionMapStorePort>) -> Self {
         let (live_notify, _) = broadcast::channel(LIVE_NOTIFY_CAPACITY);
-        Self { store, live_notify }
+        Self {
+            store,
+            live_notify,
+            queue_action_lock: std::sync::Arc::new(Mutex::new(())),
+        }
+    }
+
+    pub(crate) async fn queue_action_guard(&self) -> OwnedMutexGuard<()> {
+        self.queue_action_lock.clone().lock_owned().await
     }
 
     pub fn subscribe_live(&self) -> broadcast::Receiver<()> {
@@ -1107,6 +1131,29 @@ impl ProductionMapService {
         actor: QueueActionActor,
         progress: QueueProgressInput,
     ) -> Result<ApparatusQueueActionResult, ProductionMapError> {
+        let _guard = self.queue_action_guard().await;
+        let prepared = self
+            .prepare_apparatus_queue_action_with_progress(
+                apparatus,
+                order_id,
+                action,
+                assigned_apparatus,
+                actor,
+                progress,
+            )
+            .await?;
+        self.commit_prepared_queue_action(prepared).await
+    }
+
+    pub(crate) async fn prepare_apparatus_queue_action_with_progress(
+        &self,
+        apparatus: &str,
+        order_id: &str,
+        action: queue_state::ApparatusQueueAction,
+        assigned_apparatus: &[String],
+        actor: QueueActionActor,
+        progress: QueueProgressInput,
+    ) -> Result<PreparedApparatusQueueAction, ProductionMapError> {
         let apparatus = apparatus.trim();
         let order_id = order_id.trim();
         if apparatus.is_empty() {
@@ -1219,22 +1266,36 @@ impl ProductionMapService {
         let progress = self
             .build_progress_records(&storage_key, order_id, order_map, action, &actor, progress)
             .await?;
+        Ok(PreparedApparatusQueueAction {
+            apparatus: storage_key,
+            states: saved,
+            event,
+            session: progress.session,
+            progress_event: progress.progress_event,
+            progress_batch: progress.progress_batch,
+        })
+    }
+
+    pub(crate) async fn commit_prepared_queue_action(
+        &self,
+        prepared: PreparedApparatusQueueAction,
+    ) -> Result<ApparatusQueueActionResult, ProductionMapError> {
         self.store
             .put_apparatus_queue_states_with_event_and_progress(
-                &storage_key,
-                saved.clone(),
-                event,
-                progress.session.clone(),
-                progress.progress_event.clone(),
-                progress.progress_batch.clone(),
+                &prepared.apparatus,
+                prepared.states.clone(),
+                prepared.event,
+                prepared.session.clone(),
+                prepared.progress_event.clone(),
+                prepared.progress_batch.clone(),
             )
             .await?;
         self.notify_live();
         Ok(ApparatusQueueActionResult {
-            states: saved,
-            session: progress.session,
-            progress_event: progress.progress_event,
-            progress_batch: progress.progress_batch,
+            states: prepared.states,
+            session: prepared.session,
+            progress_event: prepared.progress_event,
+            progress_batch: prepared.progress_batch,
         })
     }
 
@@ -1386,6 +1447,48 @@ impl ProductionMapService {
                 })
             }
             queue_state::ApparatusQueueAction::Resume => {
+                if progress.progress_batch_id.trim().is_empty()
+                    && progress.qr_payload.trim().is_empty()
+                {
+                    let session = self
+                        .store
+                        .active_order_run_session(apparatus, order_id)
+                        .await?
+                        .unwrap_or_else(|| {
+                            legacy_order_run_session(apparatus, order_id, actor, now)
+                        });
+                    let session = OrderRunSession {
+                        status: OrderRunStatus::Active,
+                        worker_role: actor.role.trim().to_string(),
+                        worker_ref: actor.ref_.trim().to_string(),
+                        worker_display_name: actor.display_name.trim().to_string(),
+                        updated_at_unix: now,
+                        payload_json: serde_json::json!({
+                            "resumed_without_progress_qr": true,
+                        }),
+                        ..session
+                    };
+                    let event = OrderProgressEvent {
+                        event_id: progress_event_id(&session.session_id, order_id, action, now),
+                        session_id: session.session_id.clone(),
+                        batch_id: String::new(),
+                        apparatus: apparatus.to_string(),
+                        order_id: order_id.to_string(),
+                        action,
+                        produced_qty: 0.0,
+                        uom: String::new(),
+                        worker_role: actor.role.trim().to_string(),
+                        worker_ref: actor.ref_.trim().to_string(),
+                        worker_display_name: actor.display_name.trim().to_string(),
+                        qr_payload: String::new(),
+                        payload_json: serde_json::json!({"event": "resume"}),
+                    };
+                    return Ok(QueueProgressRecords {
+                        session: Some(session),
+                        progress_event: Some(event),
+                        progress_batch: None,
+                    });
+                }
                 let mut batch = self
                     .progress_batch_for_qr(&progress.progress_batch_id, &progress.qr_payload)
                     .await?;

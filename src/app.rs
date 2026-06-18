@@ -130,7 +130,7 @@ impl AppState {
         let rps_batch = RpsBatchService::new(build_rps_batch_store());
         let scale_driver = Arc::new(RpsDriverClient::new(
             config.http_timeout,
-            std::env::var("RP_SCALE_DRIVER_URL").unwrap_or_default(),
+            default_scale_driver_url(),
         ));
         let warehouse_events = WarehouseEventHub::new();
         let gscale = build_gscale_service(scale_driver.clone(), warehouse_events.clone());
@@ -210,6 +210,14 @@ impl AppState {
             mini_engine,
         }
     }
+}
+
+fn default_scale_driver_url() -> String {
+    std::env::var("RP_SCALE_DRIVER_URL")
+        .ok()
+        .map(|value| value.trim().trim_end_matches('/').to_string())
+        .filter(|value| !value.is_empty())
+        .unwrap_or_else(|| "http://gscale.local:39117".to_string())
 }
 
 fn build_admin_catalog_ports(

@@ -587,6 +587,9 @@ CREATE INDEX IF NOT EXISTS idx_mini_queue_action_events_order_created ON mini_qu
 CREATE INDEX IF NOT EXISTS idx_mini_queue_action_events_actor_created ON mini_queue_action_events(actor_role, actor_ref, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_mini_order_run_sessions_order_status ON mini_order_run_sessions(order_id, status, updated_at DESC);
 CREATE INDEX IF NOT EXISTS idx_mini_order_run_sessions_apparatus_order ON mini_order_run_sessions(lower(apparatus), order_id, updated_at DESC);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_mini_order_run_sessions_one_open
+    ON mini_order_run_sessions(lower(apparatus), order_id)
+    WHERE status IN ('active', 'paused');
 CREATE INDEX IF NOT EXISTS idx_mini_order_progress_events_order_created ON mini_order_progress_events(order_id, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_mini_progress_batches_order_created ON mini_progress_batches(order_id, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_mini_progress_batches_qr ON mini_progress_batches(lower(qr_payload));
