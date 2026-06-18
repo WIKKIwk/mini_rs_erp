@@ -66,6 +66,10 @@ pub struct ProductionMapNode {
     pub alternative_group_label: String,
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub alternative_assigned_title: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rezka_kadr_count: Option<i64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rezka_label_length: Option<f64>,
     #[serde(default)]
     pub x: f64,
     #[serde(default)]
@@ -3011,6 +3015,12 @@ fn compile_node(
             node.alternative_assigned_title.clone(),
         );
     }
+    if let Some(value) = node.rezka_kadr_count {
+        args.insert("rezka_kadr_count".to_string(), value.to_string());
+    }
+    if let Some(value) = node.rezka_label_length {
+        args.insert("rezka_label_length".to_string(), value.to_string());
+    }
     let op_code = match node.kind {
         ProductionMapNodeKind::Start => "start",
         ProductionMapNodeKind::Location => "warehouse_location",
@@ -3085,6 +3095,8 @@ mod tests {
                 alternative_group_id: String::new(),
                 alternative_group_label: String::new(),
                 alternative_assigned_title: String::new(),
+                rezka_kadr_count: None,
+                rezka_label_length: None,
                 x: 0.0,
                 y: 0.0,
             },
@@ -3637,6 +3649,8 @@ mod tests {
                     alternative_group_id: String::new(),
                     alternative_group_label: String::new(),
                     alternative_assigned_title: String::new(),
+                    rezka_kadr_count: None,
+                    rezka_label_length: None,
                     x: 0.0,
                     y: 0.0,
                 },
@@ -3656,6 +3670,8 @@ mod tests {
                     alternative_group_id: String::new(),
                     alternative_group_label: String::new(),
                     alternative_assigned_title: String::new(),
+                    rezka_kadr_count: None,
+                    rezka_label_length: None,
                     x: 0.0,
                     y: 0.0,
                 },
@@ -3672,6 +3688,8 @@ mod tests {
                     alternative_group_id: String::new(),
                     alternative_group_label: String::new(),
                     alternative_assigned_title: String::new(),
+                    rezka_kadr_count: None,
+                    rezka_label_length: None,
                     x: 0.0,
                     y: 0.0,
                 },
@@ -3688,6 +3706,8 @@ mod tests {
                     alternative_group_id: String::new(),
                     alternative_group_label: String::new(),
                     alternative_assigned_title: String::new(),
+                    rezka_kadr_count: None,
+                    rezka_label_length: None,
                     x: 0.0,
                     y: 0.0,
                 },
@@ -3737,6 +3757,8 @@ mod tests {
                     alternative_group_id: String::new(),
                     alternative_group_label: String::new(),
                     alternative_assigned_title: String::new(),
+                    rezka_kadr_count: None,
+                    rezka_label_length: None,
                     x: 0.0,
                     y: 0.0,
                 },
@@ -3753,6 +3775,8 @@ mod tests {
                     alternative_group_id: String::new(),
                     alternative_group_label: String::new(),
                     alternative_assigned_title: String::new(),
+                    rezka_kadr_count: None,
+                    rezka_label_length: None,
                     x: 0.0,
                     y: 132.0,
                 },
@@ -3769,6 +3793,8 @@ mod tests {
                     alternative_group_id: String::new(),
                     alternative_group_label: String::new(),
                     alternative_assigned_title: String::new(),
+                    rezka_kadr_count: None,
+                    rezka_label_length: None,
                     x: 0.0,
                     y: 264.0,
                 },
@@ -3813,6 +3839,8 @@ mod tests {
                     alternative_group_id: String::new(),
                     alternative_group_label: String::new(),
                     alternative_assigned_title: String::new(),
+                    rezka_kadr_count: None,
+                    rezka_label_length: None,
                     x: 0.0,
                     y: 0.0,
                 },
@@ -3832,6 +3860,8 @@ mod tests {
                     alternative_group_id: String::new(),
                     alternative_group_label: String::new(),
                     alternative_assigned_title: String::new(),
+                    rezka_kadr_count: None,
+                    rezka_label_length: None,
                     x: 0.0,
                     y: 0.0,
                 },
@@ -3848,6 +3878,8 @@ mod tests {
                     alternative_group_id: String::new(),
                     alternative_group_label: String::new(),
                     alternative_assigned_title: String::new(),
+                    rezka_kadr_count: None,
+                    rezka_label_length: None,
                     x: 0.0,
                     y: 0.0,
                 },
@@ -3864,6 +3896,8 @@ mod tests {
                     alternative_group_id: String::new(),
                     alternative_group_label: String::new(),
                     alternative_assigned_title: String::new(),
+                    rezka_kadr_count: None,
+                    rezka_label_length: None,
                     x: 0.0,
                     y: 0.0,
                 },
@@ -3880,6 +3914,8 @@ mod tests {
                     alternative_group_id: String::new(),
                     alternative_group_label: String::new(),
                     alternative_assigned_title: String::new(),
+                    rezka_kadr_count: None,
+                    rezka_label_length: None,
                     x: 0.0,
                     y: 0.0,
                 },

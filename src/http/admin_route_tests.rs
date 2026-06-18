@@ -682,6 +682,63 @@ async fn production_map_nodes_preserve_alternative_group_metadata() {
 }
 
 #[tokio::test]
+async fn production_map_nodes_preserve_rezka_setup_metadata() {
+    let state = test_state();
+    let token = session(&state, PrincipalRole::Admin).await;
+
+    let response = build_router(state.clone())
+        .oneshot(request_with_body(
+            "PUT",
+            "/v1/mobile/admin/production-maps",
+            &token,
+            r#"{
+                "id":"zakaz-rezka-meta",
+                "product_code":"REZKA-001",
+                "title":"Rezka setup order",
+                "nodes":[
+                    {"id":"start","kind":"start","title":"Start"},
+                    {
+                        "id":"rezka",
+                        "kind":"apparatus",
+                        "title":"Rezka",
+                        "rezka_kadr_count":4,
+                        "rezka_label_length":125.5
+                    },
+                    {"id":"end","kind":"end","title":"End"}
+                ],
+                "edges":[
+                    {"from":"start","to":"rezka"},
+                    {"from":"rezka","to":"end"}
+                ]
+            }"#,
+        ))
+        .await
+        .expect("response");
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let value = json_body(response).await;
+    assert_eq!(value["map"]["nodes"][1]["rezka_kadr_count"], 4);
+    assert_eq!(value["map"]["nodes"][1]["rezka_label_length"], 125.5);
+    assert_eq!(
+        value["program"]["operations"][1]["args"]["rezka_kadr_count"],
+        "4"
+    );
+    assert_eq!(
+        value["program"]["operations"][1]["args"]["rezka_label_length"],
+        "125.5"
+    );
+
+    let list = build_router(state)
+        .oneshot(request("GET", "/v1/mobile/admin/production-maps", &token))
+        .await
+        .expect("response");
+    assert_eq!(list.status(), StatusCode::OK);
+    let listed = json_body(list).await;
+    assert_eq!(listed[0]["map"]["nodes"][1]["rezka_kadr_count"], 4);
+    assert_eq!(listed[0]["map"]["nodes"][1]["rezka_label_length"], 125.5);
+}
+
+#[tokio::test]
 async fn raw_material_routes_assign_and_require_scan_for_queue_start() {
     let material_store = Arc::new(RawMaterialStockLookup::default());
     let print_requests = Arc::new(Mutex::new(Vec::<ScaleDriverPrintRequest>::new()));

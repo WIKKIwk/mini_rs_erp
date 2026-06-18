@@ -165,6 +165,8 @@ mod tests {
             alternative_group_id: String::new(),
             alternative_group_label: String::new(),
             alternative_assigned_title: String::new(),
+            rezka_kadr_count: None,
+            rezka_label_length: None,
             x: 0.0,
             y: 0.0,
         }
