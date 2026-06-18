@@ -99,7 +99,7 @@ impl ProductionMapService {
                 if existing.order_id.trim() == order_id
                     && queue_state::apparatus_titles_match(&existing.apparatus, &apparatus)
                 {
-                    return Ok(existing);
+                    return Err(ProductionMapError::RawMaterialAlreadyAssignedToOrder);
                 }
                 return Err(ProductionMapError::RawMaterialAlreadyAssigned);
             }

@@ -778,6 +778,25 @@ async fn raw_material_routes_assign_and_require_scan_for_queue_start() {
     assert_eq!(warehouse_event.warehouse, "Kalidor");
     assert_eq!(warehouse_event.reason, "raw_material_assignment");
 
+    let duplicate_same_order = router
+        .clone()
+        .oneshot(request_with_body(
+            "POST",
+            "/v1/mobile/admin/raw-material-assignments",
+            &token,
+            r#"{
+                "order_id":"zakaz-raw-route",
+                "barcode":"30AA"
+            }"#,
+        ))
+        .await
+        .expect("assign same material again");
+    assert_eq!(duplicate_same_order.status(), StatusCode::BAD_REQUEST);
+    assert_eq!(
+        json_body(duplicate_same_order).await["error"],
+        "raw_material_already_assigned_to_order"
+    );
+
     let second_assigned = router
         .clone()
         .oneshot(request_with_body(

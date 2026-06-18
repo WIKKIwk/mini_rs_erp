@@ -254,6 +254,8 @@ pub enum ProductionMapError {
     RawMaterialGroupAmbiguous,
     #[error("raw material is already assigned")]
     RawMaterialAlreadyAssigned,
+    #[error("raw material is already assigned to this order")]
+    RawMaterialAlreadyAssignedToOrder,
     #[error("raw material assignment is required")]
     RawMaterialAssignmentNotFound,
     #[error("raw material scan is required")]
