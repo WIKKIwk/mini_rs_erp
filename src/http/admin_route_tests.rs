@@ -683,9 +683,15 @@ async fn production_map_nodes_preserve_alternative_group_metadata() {
 
 #[tokio::test]
 async fn raw_material_routes_assign_and_require_scan_for_queue_start() {
+    let material_store = Arc::new(RawMaterialStockLookup::default());
+    let print_requests = Arc::new(Mutex::new(Vec::<ScaleDriverPrintRequest>::new()));
     let mut state = test_state();
-    state.gscale =
-        GscaleService::new().with_receipt_store(Arc::new(RawMaterialStockLookup::default()));
+    state.gscale = GscaleService::new()
+        .with_receipt_store(material_store.clone())
+        .with_driver(Arc::new(FakeProgressDriver {
+            requests: print_requests,
+            fail: false,
+        }));
     state
         .admin
         .upsert_role_assignment(crate::core::authz::RoleAssignmentUpsert {
@@ -903,6 +909,7 @@ async fn raw_material_routes_assign_and_require_scan_for_queue_start() {
     );
 
     let assignments_after_start = router
+        .clone()
         .oneshot(request(
             "GET",
             "/v1/mobile/admin/raw-material-assignments",
@@ -922,6 +929,146 @@ async fn raw_material_routes_assign_and_require_scan_for_queue_start() {
     assert!(started_materials.iter().all(|item| {
         item["stock_status"] == "in_use" && item["reserved_order_id"] == "zakaz-raw-route"
     }));
+
+    let completed = router
+        .clone()
+        .oneshot(request_with_body(
+            "POST",
+            "/v1/mobile/admin/production-maps/queue-action",
+            &worker_token,
+            r#"{
+                "apparatus":"7 ta rangli pechat - A",
+                "order_id":"zakaz-raw-route",
+                "action":"complete",
+                "produced_qty":3,
+                "gross_qty":3,
+                "uom":"kg",
+                "printer":"zebra",
+                "print_mode":"rfid"
+            }"#,
+        ))
+        .await
+        .expect("complete after raw material scan");
+    let completed_status = completed.status();
+    let completed_body = json_body(completed).await;
+    assert_eq!(completed_status, StatusCode::OK, "{completed_body:?}");
+    assert_eq!(completed_body["states"]["zakaz-raw-route"], "completed");
+
+    let assignments_after_complete = router
+        .oneshot(request(
+            "GET",
+            "/v1/mobile/admin/raw-material-assignments",
+            &token,
+        ))
+        .await
+        .expect("assignments after complete");
+    assert_eq!(assignments_after_complete.status(), StatusCode::OK);
+    let completed_assignments_body = json_body(assignments_after_complete).await;
+    let completed_materials = completed_assignments_body
+        .as_array()
+        .expect("assignments array")
+        .iter()
+        .filter(|item| item["order_id"] == "zakaz-raw-route")
+        .collect::<Vec<_>>();
+    assert_eq!(completed_materials.len(), 2);
+    assert!(completed_materials.iter().all(|item| {
+        item["stock_status"] == "consumed" && item["reserved_order_id"] == "zakaz-raw-route"
+    }));
+}
+
+#[tokio::test]
+async fn queue_start_rejects_raw_material_stock_reserved_for_other_order() {
+    let material_store = Arc::new(RawMaterialStockLookup::default());
+    let mut state = test_state();
+    state.gscale = GscaleService::new().with_receipt_store(material_store.clone());
+    state
+        .admin
+        .upsert_role_assignment(crate::core::authz::RoleAssignmentUpsert {
+            principal_role: PrincipalRole::Aparatchi,
+            principal_ref: "worker-raw-reserved".to_string(),
+            role_id: "aparatchi".to_string(),
+            assigned_apparatus: vec!["7 ta rangli pechat - A".to_string()],
+        })
+        .await
+        .expect("aparatchi assignment");
+    let token = session(&state, PrincipalRole::Admin).await;
+    let worker_token = session_for(&state, PrincipalRole::Aparatchi, "worker-raw-reserved").await;
+    let router = build_router(state);
+
+    let map = router
+        .clone()
+        .oneshot(request_with_body(
+            "PUT",
+            "/v1/mobile/admin/production-maps",
+            &token,
+            &pechat_order_map_json(
+                "zakaz-raw-reserved",
+                "Raw reserved",
+                "8812",
+                "7 ta rangli pechat - A",
+            ),
+        ))
+        .await
+        .expect("map save");
+    assert_eq!(map.status(), StatusCode::OK);
+
+    let rule = router
+        .clone()
+        .oneshot(request_with_body(
+            "PUT",
+            "/v1/mobile/admin/raw-material-rules",
+            &token,
+            r#"{"apparatus":"7 ta rangli pechat - A","requires_material":true,"item_groups":["Kraska"]}"#,
+        ))
+        .await
+        .expect("rule save");
+    assert_eq!(rule.status(), StatusCode::OK);
+
+    let assigned = router
+        .clone()
+        .oneshot(request_with_body(
+            "POST",
+            "/v1/mobile/admin/raw-material-assignments",
+            &token,
+            r#"{
+                "order_id":"zakaz-raw-reserved",
+                "barcode":"30AA"
+            }"#,
+        ))
+        .await
+        .expect("assign");
+    assert_eq!(assigned.status(), StatusCode::OK);
+    material_store
+        .set_stock_status("30AA", "in_use", "zakaz-other")
+        .await;
+
+    let start = router
+        .clone()
+        .oneshot(request_with_body(
+            "POST",
+            "/v1/mobile/admin/production-maps/queue-action",
+            &worker_token,
+            r#"{
+                "apparatus":"7 ta rangli pechat - A",
+                "order_id":"zakaz-raw-reserved",
+                "action":"start",
+                "material_barcodes":["30AA"]
+            }"#,
+        ))
+        .await
+        .expect("queue action with reserved stock");
+    let start_status = start.status();
+    let start_body = json_body(start).await;
+    assert_eq!(start_status, StatusCode::BAD_REQUEST, "{start_body:?}");
+    assert_eq!(start_body["error"], "raw_material_stock_unavailable");
+
+    let stock = material_store
+        .raw_material_stock_by_barcode("30AA")
+        .await
+        .expect("stock lookup")
+        .expect("stock");
+    assert_eq!(stock.status, "in_use");
+    assert_eq!(stock.reserved_order_id, "zakaz-other");
 }
 
 #[tokio::test]
@@ -1193,7 +1340,7 @@ async fn queue_pause_prints_progress_qr_and_resume_uses_lookup() {
 }
 
 #[tokio::test]
-async fn queue_pause_print_failure_keeps_order_in_progress() {
+async fn queue_pause_print_failure_keeps_committed_pause_log() {
     let print_requests = Arc::new(Mutex::new(Vec::<ScaleDriverPrintRequest>::new()));
     let mut state = test_state();
     state.gscale = GscaleService::new().with_driver(Arc::new(FakeProgressDriver {
@@ -1278,7 +1425,7 @@ async fn queue_pause_print_failure_keeps_order_in_progress() {
     let body = json_body(sequence).await;
     assert_eq!(
         body["queue_states"]["7 ta rangli pechat"]["zakaz-print-fail"],
-        "in_progress"
+        "paused"
     );
     assert_eq!(print_requests.lock().await.len(), 1);
 }
@@ -4804,6 +4951,17 @@ impl Default for RawMaterialStockLookup {
     }
 }
 
+impl RawMaterialStockLookup {
+    async fn set_stock_status(&self, barcode: &str, status: &str, order_id: &str) {
+        let mut stock = self.stock.lock().await;
+        let item = stock
+            .get_mut(&barcode.trim().to_ascii_uppercase())
+            .expect("stock item");
+        item.status = status.trim().to_string();
+        item.reserved_order_id = order_id.trim().to_string();
+    }
+}
+
 fn raw_material_stock_entry(
     barcode: &str,
     item_code: &str,
@@ -4874,8 +5032,40 @@ impl MaterialReceiptStorePort for RawMaterialStockLookup {
             let Some(item) = stock.get_mut(&key) else {
                 return Err(GscalePortError::StoreWrite(format!("missing stock {key}")));
             };
+            if item.status != "available"
+                && !(item.status == "in_use" && item.reserved_order_id == order_id.trim())
+            {
+                return Err(GscalePortError::InvalidInput(
+                    "raw_material_stock_unavailable".to_string(),
+                ));
+            }
             item.status = "in_use".to_string();
             item.reserved_order_id = order_id.trim().to_string();
+            updated.push(item.clone());
+        }
+        Ok(updated)
+    }
+
+    async fn mark_raw_material_stock_consumed(
+        &self,
+        barcodes: &[String],
+        order_id: &str,
+    ) -> Result<Vec<RawMaterialStockEntry>, GscalePortError> {
+        let mut stock = self.stock.lock().await;
+        let mut updated = Vec::new();
+        for barcode in barcodes {
+            let key = barcode.trim().to_ascii_uppercase();
+            let Some(item) = stock.get_mut(&key) else {
+                return Err(GscalePortError::StoreWrite(format!("missing stock {key}")));
+            };
+            if item.reserved_order_id != order_id.trim()
+                || (item.status != "in_use" && item.status != "consumed")
+            {
+                return Err(GscalePortError::InvalidInput(
+                    "raw_material_stock_unavailable".to_string(),
+                ));
+            }
+            item.status = "consumed".to_string();
             updated.push(item.clone());
         }
         Ok(updated)

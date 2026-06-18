@@ -8,7 +8,7 @@ use super::models::{
     MaterialReceiptPrintResponse, ProgressLabelPrintRequest, ProgressLabelPrintResponse,
     RawMaterialStockEntry, ScaleDriverPrintRequest, ScaleDriverPrintResponse,
 };
-use super::ports::{EpcSource, MaterialReceiptStorePort, ScaleDriverPort};
+use super::ports::{EpcSource, GscalePortError, MaterialReceiptStorePort, ScaleDriverPort};
 
 const MIN_BATCH_QTY_KG: f64 = 0.100;
 pub type LateMaterialReceiptErrorHandler = Arc<dyn Fn(String) + Send + Sync>;
@@ -143,7 +143,37 @@ impl GscaleService {
         receipt_store
             .mark_raw_material_stock_in_use(&barcodes, order_id)
             .await
-            .map_err(|error| GscaleServiceError::StoreWrite(error.message()))
+            .map_err(map_receipt_store_error)
+    }
+
+    pub async fn mark_raw_material_stock_consumed(
+        &self,
+        barcodes: &[String],
+        order_id: &str,
+    ) -> Result<Vec<RawMaterialStockEntry>, GscaleServiceError> {
+        let barcodes = barcodes
+            .iter()
+            .map(|barcode| barcode.trim().to_string())
+            .filter(|barcode| !barcode.is_empty())
+            .collect::<Vec<_>>();
+        if barcodes.is_empty() {
+            return Ok(Vec::new());
+        }
+        let receipt_store = self.receipt_store.as_ref().ok_or_else(|| {
+            GscaleServiceError::NotConfigured(
+                "material receipt store is not configured".to_string(),
+            )
+        })?;
+        let order_id = order_id.trim();
+        if order_id.is_empty() {
+            return Err(GscaleServiceError::InvalidInput(
+                "order_id is required".to_string(),
+            ));
+        }
+        receipt_store
+            .mark_raw_material_stock_consumed(&barcodes, order_id)
+            .await
+            .map_err(map_receipt_store_error)
     }
 
     #[cfg(test)]
@@ -541,6 +571,15 @@ impl GscaleServiceError {
             Self::PrintFailed { .. } => "print_failed",
             Self::SubmitFailed(_) => "submit_failed",
         }
+    }
+}
+
+fn map_receipt_store_error(error: GscalePortError) -> GscaleServiceError {
+    match error {
+        GscalePortError::InvalidInput(detail) => GscaleServiceError::InvalidInput(detail),
+        GscalePortError::NotConfigured(detail) => GscaleServiceError::NotConfigured(detail),
+        GscalePortError::StoreWrite(detail) => GscaleServiceError::StoreWrite(detail),
+        GscalePortError::Driver(detail) => GscaleServiceError::StoreWrite(detail),
     }
 }
 

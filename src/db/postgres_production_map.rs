@@ -505,10 +505,11 @@ impl ProductionMapStorePort for PostgresProductionMapStore {
     ) -> Result<(), ProductionMapError> {
         let payload =
             serde_json::to_value(&assignment).map_err(|_| ProductionMapError::StoreFailed)?;
-        sqlx::query(
+        let result = sqlx::query(
             "INSERT INTO mini_raw_material_assignments
                 (barcode, order_id, apparatus, item_code, item_group, payload_json, updated_at)
-             VALUES ($1, $2, $3, $4, $5, $6, now())",
+             VALUES ($1, $2, $3, $4, $5, $6, now())
+             ON CONFLICT (barcode) DO NOTHING",
         )
         .bind(assignment.barcode.trim())
         .bind(assignment.order_id.trim())
@@ -519,6 +520,9 @@ impl ProductionMapStorePort for PostgresProductionMapStore {
         .execute(&self.pool)
         .await
         .map_err(|_| ProductionMapError::StoreFailed)?;
+        if result.rows_affected() == 0 {
+            return Err(ProductionMapError::RawMaterialAlreadyAssigned);
+        }
         Ok(())
     }
 }

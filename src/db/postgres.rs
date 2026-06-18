@@ -321,7 +321,7 @@ mod tests {
         .fetch_one(&pool)
         .await
         .expect("count tables");
-        assert_eq!(table_count, 17);
+        assert_eq!(table_count, 19);
 
         sqlx::query(
             "INSERT INTO mini_idempotency_keys (key, domain, action, entity_id)

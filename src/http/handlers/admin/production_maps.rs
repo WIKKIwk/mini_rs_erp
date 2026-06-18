@@ -436,64 +436,84 @@ pub async fn production_map_queue_action(
         )
         .await
         .map_err(production_map_error)?;
-    let in_use_stock = if matches!(input.action, queue_state::ApparatusQueueAction::Start) {
+    let mut warehouse_stock_updates = Vec::new();
+    if matches!(input.action, queue_state::ApparatusQueueAction::Start) {
         let material_stock_barcodes = material_barcode
             .split(',')
             .map(|barcode| barcode.trim().to_string())
             .filter(|barcode| !barcode.is_empty())
             .collect::<Vec<_>>();
-        if material_stock_barcodes.is_empty() {
-            Vec::new()
-        } else {
-            state
-                .gscale
-                .mark_raw_material_stock_in_use(&material_stock_barcodes, &input.order_id)
-                .await
-                .map_err(|_| server_error("raw material stock status update failed"))?
+        if !material_stock_barcodes.is_empty() {
+            warehouse_stock_updates.extend(
+                state
+                    .gscale
+                    .mark_raw_material_stock_in_use(&material_stock_barcodes, &input.order_id)
+                    .await
+                    .map_err(raw_material_stock_status_error)?,
+            );
         }
-    } else {
-        Vec::new()
-    };
-    let mut print = serde_json::Value::Null;
-    if let Some(batch) = prepared.progress_batch() {
+    }
+    let completed_material_barcodes =
+        if matches!(input.action, queue_state::ApparatusQueueAction::Complete) {
+            raw_material_barcodes_for_order_apparatus(&state, &input.order_id, &input.apparatus)
+                .await?
+        } else {
+            Vec::new()
+        };
+    let print_request = prepared.progress_batch().and_then(|batch| {
         if matches!(
             input.action,
             queue_state::ApparatusQueueAction::Pause | queue_state::ApparatusQueueAction::Complete
         ) {
-            let response = state
-                .gscale
-                .print_progress_label(ProgressLabelPrintRequest {
-                    driver_url: input.driver_url,
-                    qr_payload: batch.qr_payload.clone(),
-                    item_code: batch.label_item_code.clone(),
-                    item_name: batch.label_item_name.clone(),
-                    executor_name: batch.executor_name.clone(),
-                    printer: input.printer,
-                    print_mode: input.print_mode,
-                    gross_qty: input.gross_qty.unwrap_or(batch.produced_qty),
-                    progress_qty: batch.produced_qty,
-                    unit: "kg".to_string(),
-                    progress_unit: if batch.uom.trim().is_empty() {
-                        "m".to_string()
-                    } else {
-                        batch.uom.clone()
-                    },
-                    print_count: input.print_count,
-                })
-                .await
-                .map_err(gscale_progress_error)?;
-            print = serde_json::to_value(response).unwrap_or(serde_json::Value::Null);
+            Some(ProgressLabelPrintRequest {
+                driver_url: input.driver_url.clone(),
+                qr_payload: batch.qr_payload.clone(),
+                item_code: batch.label_item_code.clone(),
+                item_name: batch.label_item_name.clone(),
+                executor_name: batch.executor_name.clone(),
+                printer: input.printer.clone(),
+                print_mode: input.print_mode.clone(),
+                gross_qty: input.gross_qty.unwrap_or(batch.produced_qty),
+                progress_qty: batch.produced_qty,
+                unit: "kg".to_string(),
+                progress_unit: if batch.uom.trim().is_empty() {
+                    "m".to_string()
+                } else {
+                    batch.uom.clone()
+                },
+                print_count: input.print_count,
+            })
+        } else {
+            None
         }
-    }
+    });
     let result = state
         .production_maps
         .commit_prepared_queue_action(prepared)
         .await
         .map_err(production_map_error)?;
-    for stock in in_use_stock {
+    if !completed_material_barcodes.is_empty() {
+        warehouse_stock_updates.extend(
+            state
+                .gscale
+                .mark_raw_material_stock_consumed(&completed_material_barcodes, &input.order_id)
+                .await
+                .map_err(raw_material_stock_status_error)?,
+        );
+    }
+    for stock in warehouse_stock_updates {
         state
             .warehouse_events
             .notify_updated(&stock.warehouse, "raw_material_stock");
+    }
+    let mut print = serde_json::Value::Null;
+    if let Some(request) = print_request {
+        let response = state
+            .gscale
+            .print_progress_label(request)
+            .await
+            .map_err(gscale_progress_error)?;
+        print = serde_json::to_value(response).unwrap_or(serde_json::Value::Null);
     }
     Ok(json_response(serde_json::json!({
         "ok": true,
@@ -679,6 +699,34 @@ async fn raw_material_assignment_response(
         );
     }
     value
+}
+
+async fn raw_material_barcodes_for_order_apparatus(
+    state: &AppState,
+    order_id: &str,
+    apparatus: &str,
+) -> Result<Vec<String>, AdminError> {
+    let assignments = state
+        .production_maps
+        .raw_material_assignments()
+        .await
+        .map_err(production_map_error)?;
+    Ok(assignments
+        .into_iter()
+        .filter(|assignment| {
+            assignment.order_id.trim() == order_id.trim()
+                && queue_state::apparatus_titles_match(&assignment.apparatus, apparatus)
+        })
+        .map(|assignment| assignment.barcode.trim().to_string())
+        .filter(|barcode| !barcode.is_empty())
+        .collect())
+}
+
+fn raw_material_stock_status_error(error: crate::core::gscale::GscaleServiceError) -> AdminError {
+    match error {
+        crate::core::gscale::GscaleServiceError::InvalidInput(detail) => bad_request(detail),
+        _ => server_error("raw material stock status update failed"),
+    }
 }
 
 pub async fn raw_material_stock(

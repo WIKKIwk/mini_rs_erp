@@ -1,3 +1,5 @@
+use std::collections::BTreeSet;
+
 use async_trait::async_trait;
 use sqlx::PgPool;
 
@@ -163,11 +165,7 @@ impl MaterialReceiptStorePort for PostgresGscaleReceiptStore {
         barcodes: &[String],
         order_id: &str,
     ) -> Result<Vec<RawMaterialStockEntry>, GscalePortError> {
-        let barcodes = barcodes
-            .iter()
-            .map(|barcode| barcode.trim().to_ascii_lowercase())
-            .filter(|barcode| !barcode.is_empty())
-            .collect::<Vec<_>>();
+        let barcodes = normalized_unique_barcodes(barcodes);
         let order_id = order_id.trim();
         if barcodes.is_empty() {
             return Ok(Vec::new());
@@ -184,6 +182,7 @@ impl MaterialReceiptStorePort for PostgresGscaleReceiptStore {
                  payload_json = jsonb_set(payload_json, '{in_use_order_id}', to_jsonb($2::text), true),
                  updated_at = now()
              WHERE lower(barcode) = ANY($1)
+               AND (status = 'available' OR (status = 'in_use' AND reserved_order_id = $2))
              RETURNING id, warehouse, item_code, item_name, barcode, qty, uom,
                        status, reserved_order_id, source_receipt_id",
         )
@@ -193,8 +192,47 @@ impl MaterialReceiptStorePort for PostgresGscaleReceiptStore {
         .await
         .map_err(|error| GscalePortError::StoreWrite(error.to_string()))?;
         if rows.len() != barcodes.len() {
-            return Err(GscalePortError::StoreWrite(
-                "raw material stock not found".to_string(),
+            return Err(GscalePortError::InvalidInput(
+                "raw_material_stock_unavailable".to_string(),
+            ));
+        }
+        Ok(rows.into_iter().map(row_to_stock).collect())
+    }
+
+    async fn mark_raw_material_stock_consumed(
+        &self,
+        barcodes: &[String],
+        order_id: &str,
+    ) -> Result<Vec<RawMaterialStockEntry>, GscalePortError> {
+        let barcodes = normalized_unique_barcodes(barcodes);
+        let order_id = order_id.trim();
+        if barcodes.is_empty() {
+            return Ok(Vec::new());
+        }
+        if order_id.is_empty() {
+            return Err(GscalePortError::InvalidInput(
+                "order_id is required".to_string(),
+            ));
+        }
+        let rows = sqlx::query_as::<_, RawMaterialStockRow>(
+            "UPDATE mini_raw_material_stock
+             SET status = 'consumed',
+                 payload_json = jsonb_set(payload_json, '{consumed_order_id}', to_jsonb($2::text), true),
+                 updated_at = now()
+             WHERE lower(barcode) = ANY($1)
+               AND reserved_order_id = $2
+               AND status IN ('in_use', 'consumed')
+             RETURNING id, warehouse, item_code, item_name, barcode, qty, uom,
+                       status, reserved_order_id, source_receipt_id",
+        )
+        .bind(&barcodes)
+        .bind(order_id)
+        .fetch_all(&self.pool)
+        .await
+        .map_err(|error| GscalePortError::StoreWrite(error.to_string()))?;
+        if rows.len() != barcodes.len() {
+            return Err(GscalePortError::InvalidInput(
+                "raw_material_stock_unavailable".to_string(),
             ));
         }
         Ok(rows.into_iter().map(row_to_stock).collect())
@@ -298,6 +336,16 @@ fn row_to_stock(row: RawMaterialStockRow) -> RawMaterialStockEntry {
         reserved_order_id: row.reserved_order_id,
         source_receipt_id: row.source_receipt_id,
     }
+}
+
+fn normalized_unique_barcodes(barcodes: &[String]) -> Vec<String> {
+    barcodes
+        .iter()
+        .map(|barcode| barcode.trim().to_ascii_lowercase())
+        .filter(|barcode| !barcode.is_empty())
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .collect()
 }
 
 fn receipt_name(barcode: &str) -> String {
