@@ -158,6 +158,48 @@ impl MaterialReceiptStorePort for PostgresGscaleReceiptStore {
         .map_err(|error| GscalePortError::StoreWrite(error.to_string()))
     }
 
+    async fn mark_raw_material_stock_in_use(
+        &self,
+        barcodes: &[String],
+        order_id: &str,
+    ) -> Result<Vec<RawMaterialStockEntry>, GscalePortError> {
+        let barcodes = barcodes
+            .iter()
+            .map(|barcode| barcode.trim().to_ascii_lowercase())
+            .filter(|barcode| !barcode.is_empty())
+            .collect::<Vec<_>>();
+        let order_id = order_id.trim();
+        if barcodes.is_empty() {
+            return Ok(Vec::new());
+        }
+        if order_id.is_empty() {
+            return Err(GscalePortError::InvalidInput(
+                "order_id is required".to_string(),
+            ));
+        }
+        let rows = sqlx::query_as::<_, RawMaterialStockRow>(
+            "UPDATE mini_raw_material_stock
+             SET status = 'in_use',
+                 reserved_order_id = $2,
+                 payload_json = jsonb_set(payload_json, '{in_use_order_id}', to_jsonb($2::text), true),
+                 updated_at = now()
+             WHERE lower(barcode) = ANY($1)
+             RETURNING id, warehouse, item_code, item_name, barcode, qty, uom,
+                       status, reserved_order_id, source_receipt_id",
+        )
+        .bind(&barcodes)
+        .bind(order_id)
+        .fetch_all(&self.pool)
+        .await
+        .map_err(|error| GscalePortError::StoreWrite(error.to_string()))?;
+        if rows.len() != barcodes.len() {
+            return Err(GscalePortError::StoreWrite(
+                "raw material stock not found".to_string(),
+            ));
+        }
+        Ok(rows.into_iter().map(row_to_stock).collect())
+    }
+
     async fn delete_stock_entry_draft(&self, name: &str) -> Result<(), GscalePortError> {
         sqlx::query("DELETE FROM mini_gscale_receipts WHERE name = $1 AND status = 'draft'")
             .bind(name.trim())

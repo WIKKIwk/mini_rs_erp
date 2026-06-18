@@ -34,6 +34,14 @@ pub trait MaterialReceiptStorePort: Send + Sync {
         Ok(Vec::new())
     }
 
+    async fn mark_raw_material_stock_in_use(
+        &self,
+        _barcodes: &[String],
+        _order_id: &str,
+    ) -> Result<Vec<RawMaterialStockEntry>, GscalePortError> {
+        Ok(Vec::new())
+    }
+
     async fn submit_stock_entry_draft(&self, name: &str) -> Result<(), GscalePortError>;
 
     async fn delete_stock_entry_draft(&self, name: &str) -> Result<(), GscalePortError>;

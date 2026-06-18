@@ -7,7 +7,8 @@ use crate::core::gscale::models::{ProgressLabelPrintRequest, RawMaterialStockEnt
 use crate::core::production_map::{
     ApparatusMaterialRuleUpsert, ApparatusQueuePolicy, ProductionMapBatchMoveRequest,
     ProductionMapDefinition, ProductionMapError, ProductionMapMoveRequest, ProductionMapRunRequest,
-    QueueActionActor, QueueProgressInput, RawMaterialAssignmentInput, queue_state,
+    QueueActionActor, QueueProgressInput, RawMaterialAssignment, RawMaterialAssignmentInput,
+    queue_state,
 };
 use crate::core::werka::models::SupplierItem;
 use crate::google_sheets::is_sheet_order_map;
@@ -399,23 +400,24 @@ pub async fn production_map_queue_action(
         return Err(bad_request("apparatus and order_id are required"));
     }
     let assigned_apparatus = state.admin.principal_assigned_apparatus(&principal).await;
-    let material_barcode = if input.material_barcodes.is_empty() {
-        input.material_barcode
+    let material_barcodes = input.material_barcodes.clone();
+    let material_barcode = if material_barcodes.is_empty() {
+        input.material_barcode.clone()
     } else {
-        input.material_barcodes.join(",")
+        material_barcodes.join(",")
     };
     let progress = QueueProgressInput {
         produced_qty: input.produced_qty.or(input.qty),
         uom: if input.uom.trim().is_empty() {
-            input.unit
+            input.unit.clone()
         } else {
-            input.uom
+            input.uom.clone()
         },
-        progress_batch_id: input.progress_batch_id,
+        progress_batch_id: input.progress_batch_id.clone(),
         qr_payload: if input.qr_payload.trim().is_empty() {
-            input.progress_qr
+            input.progress_qr.clone()
         } else {
-            input.qr_payload
+            input.qr_payload.clone()
         },
     };
     let _queue_action_guard = state.production_maps.queue_action_guard().await;
@@ -432,6 +434,24 @@ pub async fn production_map_queue_action(
         )
         .await
         .map_err(production_map_error)?;
+    let in_use_stock = if matches!(input.action, queue_state::ApparatusQueueAction::Start) {
+        let material_stock_barcodes = material_barcode
+            .split(',')
+            .map(|barcode| barcode.trim().to_string())
+            .filter(|barcode| !barcode.is_empty())
+            .collect::<Vec<_>>();
+        if material_stock_barcodes.is_empty() {
+            Vec::new()
+        } else {
+            state
+                .gscale
+                .mark_raw_material_stock_in_use(&material_stock_barcodes, &input.order_id)
+                .await
+                .map_err(|_| server_error("raw material stock status update failed"))?
+        }
+    } else {
+        Vec::new()
+    };
     let mut print = serde_json::Value::Null;
     if let Some(batch) = prepared.progress_batch() {
         if matches!(
@@ -462,6 +482,11 @@ pub async fn production_map_queue_action(
         .commit_prepared_queue_action(prepared)
         .await
         .map_err(production_map_error)?;
+    for stock in in_use_stock {
+        state
+            .warehouse_events
+            .notify_updated(&stock.warehouse, "raw_material_stock");
+    }
     Ok(json_response(serde_json::json!({
         "ok": true,
         "states": result.states,
@@ -569,12 +594,16 @@ pub async fn raw_material_assignments(
     )
     .await?;
     match method {
-        Method::GET => state
-            .production_maps
-            .raw_material_assignments()
-            .await
-            .map(json_response)
-            .map_err(production_map_error),
+        Method::GET => {
+            let assignments = state
+                .production_maps
+                .raw_material_assignments()
+                .await
+                .map_err(production_map_error)?;
+            Ok(json_response(
+                raw_material_assignment_responses(&state, assignments).await,
+            ))
+        }
         Method::POST => {
             require_capability(&state, &principal, Capability::RawMaterialAssign).await?;
             let input: RawMaterialAssignmentInput = parse_json(&body)?;
@@ -587,10 +616,61 @@ pub async fn raw_material_assignments(
             state
                 .warehouse_events
                 .notify_updated(&warehouse, "raw_material_assignment");
-            Ok(json_response(assigned))
+            Ok(json_response(
+                raw_material_assignment_response(&state, assigned).await,
+            ))
         }
         _ => Err(method_not_allowed()),
     }
+}
+
+async fn raw_material_assignment_responses(
+    state: &AppState,
+    assignments: Vec<RawMaterialAssignment>,
+) -> Vec<serde_json::Value> {
+    let mut response = Vec::with_capacity(assignments.len());
+    for assignment in assignments {
+        response.push(raw_material_assignment_response(state, assignment).await);
+    }
+    response
+}
+
+async fn raw_material_assignment_response(
+    state: &AppState,
+    assignment: RawMaterialAssignment,
+) -> serde_json::Value {
+    let stock = state
+        .gscale
+        .raw_material_stock_by_barcode(&assignment.barcode)
+        .await
+        .ok()
+        .flatten();
+    let mut value = serde_json::to_value(&assignment).unwrap_or_else(|_| serde_json::json!({}));
+    if let Some(object) = value.as_object_mut() {
+        object.insert(
+            "stock_status".to_string(),
+            serde_json::Value::String(
+                stock
+                    .as_ref()
+                    .map(|entry| entry.status.clone())
+                    .unwrap_or_default(),
+            ),
+        );
+        object.insert(
+            "reserved_order_id".to_string(),
+            serde_json::Value::String(
+                stock
+                    .as_ref()
+                    .map(|entry| entry.reserved_order_id.clone())
+                    .unwrap_or_default(),
+            ),
+        );
+        object.insert(
+            "stock_warehouse".to_string(),
+            serde_json::Value::String(stock.map(|entry| entry.warehouse).unwrap_or_default()),
+        );
+    }
+    value
 }
 
 pub async fn raw_material_stock(

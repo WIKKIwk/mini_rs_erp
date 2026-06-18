@@ -116,6 +116,36 @@ impl GscaleService {
             .map_err(|error| GscaleServiceError::StoreWrite(error.message()))
     }
 
+    pub async fn mark_raw_material_stock_in_use(
+        &self,
+        barcodes: &[String],
+        order_id: &str,
+    ) -> Result<Vec<RawMaterialStockEntry>, GscaleServiceError> {
+        let barcodes = barcodes
+            .iter()
+            .map(|barcode| barcode.trim().to_string())
+            .filter(|barcode| !barcode.is_empty())
+            .collect::<Vec<_>>();
+        if barcodes.is_empty() {
+            return Ok(Vec::new());
+        }
+        let receipt_store = self.receipt_store.as_ref().ok_or_else(|| {
+            GscaleServiceError::NotConfigured(
+                "material receipt store is not configured".to_string(),
+            )
+        })?;
+        let order_id = order_id.trim();
+        if order_id.is_empty() {
+            return Err(GscaleServiceError::InvalidInput(
+                "order_id is required".to_string(),
+            ));
+        }
+        receipt_store
+            .mark_raw_material_stock_in_use(&barcodes, order_id)
+            .await
+            .map_err(|error| GscaleServiceError::StoreWrite(error.message()))
+    }
+
     #[cfg(test)]
     pub fn with_epc_source(mut self, epc: Arc<dyn EpcSource>) -> Self {
         self.epc = epc;

@@ -684,7 +684,8 @@ async fn production_map_nodes_preserve_alternative_group_metadata() {
 #[tokio::test]
 async fn raw_material_routes_assign_and_require_scan_for_queue_start() {
     let mut state = test_state();
-    state.gscale = GscaleService::new().with_receipt_store(Arc::new(RawMaterialStockLookup));
+    state.gscale =
+        GscaleService::new().with_receipt_store(Arc::new(RawMaterialStockLookup::default()));
     state
         .admin
         .upsert_role_assignment(crate::core::authz::RoleAssignmentUpsert {
@@ -862,6 +863,7 @@ async fn raw_material_routes_assign_and_require_scan_for_queue_start() {
     );
 
     let started = router
+        .clone()
         .oneshot(request_with_body(
             "POST",
             "/v1/mobile/admin/production-maps/queue-action",
@@ -880,12 +882,34 @@ async fn raw_material_routes_assign_and_require_scan_for_queue_start() {
         json_body(started).await["states"]["zakaz-raw-route"],
         "in_progress"
     );
+
+    let assignments_after_start = router
+        .oneshot(request(
+            "GET",
+            "/v1/mobile/admin/raw-material-assignments",
+            &token,
+        ))
+        .await
+        .expect("assignments after start");
+    assert_eq!(assignments_after_start.status(), StatusCode::OK);
+    let assignments_body = json_body(assignments_after_start).await;
+    let started_materials = assignments_body
+        .as_array()
+        .expect("assignments array")
+        .iter()
+        .filter(|item| item["order_id"] == "zakaz-raw-route")
+        .collect::<Vec<_>>();
+    assert_eq!(started_materials.len(), 2);
+    assert!(started_materials.iter().all(|item| {
+        item["stock_status"] == "in_use" && item["reserved_order_id"] == "zakaz-raw-route"
+    }));
 }
 
 #[tokio::test]
 async fn admin_raw_material_stock_lists_new_stock_model() {
     let mut state = test_state();
-    state.gscale = GscaleService::new().with_receipt_store(Arc::new(RawMaterialStockLookup));
+    state.gscale =
+        GscaleService::new().with_receipt_store(Arc::new(RawMaterialStockLookup::default()));
     let token = session(&state, PrincipalRole::Admin).await;
 
     let response = build_router(state)
@@ -4736,7 +4760,47 @@ impl WerkaHomeLookup for ActivityLookup {
     }
 }
 
-struct RawMaterialStockLookup;
+#[derive(Clone)]
+struct RawMaterialStockLookup {
+    stock: Arc<Mutex<BTreeMap<String, RawMaterialStockEntry>>>,
+}
+
+impl Default for RawMaterialStockLookup {
+    fn default() -> Self {
+        Self {
+            stock: Arc::new(Mutex::new(BTreeMap::from([
+                (
+                    "30AA".to_string(),
+                    raw_material_stock_entry("30AA", "INK-BLACK", "Black ink", 12.0),
+                ),
+                (
+                    "30CC".to_string(),
+                    raw_material_stock_entry("30CC", "INK-WHITE", "White ink", 8.0),
+                ),
+            ]))),
+        }
+    }
+}
+
+fn raw_material_stock_entry(
+    barcode: &str,
+    item_code: &str,
+    item_name: &str,
+    qty: f64,
+) -> RawMaterialStockEntry {
+    RawMaterialStockEntry {
+        id: format!("raw:{barcode}"),
+        item_code: item_code.to_string(),
+        item_name: item_name.to_string(),
+        warehouse: "Kalidor".to_string(),
+        qty,
+        uom: "Kg".to_string(),
+        barcode: barcode.to_string(),
+        status: "available".to_string(),
+        reserved_order_id: String::new(),
+        source_receipt_id: format!("GSR-{barcode}"),
+    }
+}
 
 #[async_trait]
 impl MaterialReceiptStorePort for RawMaterialStockLookup {
@@ -4759,23 +4823,12 @@ impl MaterialReceiptStorePort for RawMaterialStockLookup {
         &self,
         barcode: &str,
     ) -> Result<Option<RawMaterialStockEntry>, GscalePortError> {
-        let (item_code, item_name) = match barcode {
-            "30AA" => ("INK-BLACK", "Black ink"),
-            "30CC" => ("INK-WHITE", "White ink"),
-            other => panic!("unexpected barcode {other}"),
-        };
-        Ok(Some(RawMaterialStockEntry {
-            id: format!("raw:{barcode}"),
-            item_code: item_code.to_string(),
-            item_name: item_name.to_string(),
-            warehouse: "Kalidor".to_string(),
-            qty: 12.0,
-            uom: "Kg".to_string(),
-            barcode: barcode.to_string(),
-            status: "available".to_string(),
-            reserved_order_id: String::new(),
-            source_receipt_id: format!("GSR-{barcode}"),
-        }))
+        Ok(self
+            .stock
+            .lock()
+            .await
+            .get(&barcode.trim().to_ascii_uppercase())
+            .cloned())
     }
 
     async fn raw_material_stock(
@@ -4784,32 +4837,26 @@ impl MaterialReceiptStorePort for RawMaterialStockLookup {
         _limit: usize,
     ) -> Result<Vec<RawMaterialStockEntry>, GscalePortError> {
         assert_eq!(warehouse, "Kalidor");
-        Ok(vec![
-            RawMaterialStockEntry {
-                id: "raw:30AA".to_string(),
-                item_code: "INK-BLACK".to_string(),
-                item_name: "Black ink".to_string(),
-                warehouse: "Kalidor".to_string(),
-                qty: 12.0,
-                uom: "Kg".to_string(),
-                barcode: "30AA".to_string(),
-                status: "available".to_string(),
-                reserved_order_id: String::new(),
-                source_receipt_id: "GSR-30AA".to_string(),
-            },
-            RawMaterialStockEntry {
-                id: "raw:30CC".to_string(),
-                item_code: "INK-WHITE".to_string(),
-                item_name: "White ink".to_string(),
-                warehouse: "Kalidor".to_string(),
-                qty: 8.0,
-                uom: "Kg".to_string(),
-                barcode: "30CC".to_string(),
-                status: "available".to_string(),
-                reserved_order_id: String::new(),
-                source_receipt_id: "GSR-30CC".to_string(),
-            },
-        ])
+        Ok(self.stock.lock().await.values().cloned().collect())
+    }
+
+    async fn mark_raw_material_stock_in_use(
+        &self,
+        barcodes: &[String],
+        order_id: &str,
+    ) -> Result<Vec<RawMaterialStockEntry>, GscalePortError> {
+        let mut stock = self.stock.lock().await;
+        let mut updated = Vec::new();
+        for barcode in barcodes {
+            let key = barcode.trim().to_ascii_uppercase();
+            let Some(item) = stock.get_mut(&key) else {
+                return Err(GscalePortError::StoreWrite(format!("missing stock {key}")));
+            };
+            item.status = "in_use".to_string();
+            item.reserved_order_id = order_id.trim().to_string();
+            updated.push(item.clone());
+        }
+        Ok(updated)
     }
 }
 

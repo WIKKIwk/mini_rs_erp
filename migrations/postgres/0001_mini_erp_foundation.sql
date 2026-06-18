@@ -460,9 +460,13 @@ CREATE TABLE IF NOT EXISTS mini_raw_material_stock (
     CONSTRAINT mini_raw_material_stock_item_code_not_blank CHECK (btrim(item_code) <> ''),
     CONSTRAINT mini_raw_material_stock_barcode_not_blank CHECK (btrim(barcode) <> ''),
     CONSTRAINT mini_raw_material_stock_qty_positive CHECK (qty > 0),
-    CONSTRAINT mini_raw_material_stock_status_allowed CHECK (status IN ('available', 'reserved', 'consumed')),
+    CONSTRAINT mini_raw_material_stock_status_allowed CHECK (status IN ('available', 'reserved', 'in_use', 'consumed')),
     CONSTRAINT mini_raw_material_stock_barcode_unique UNIQUE (barcode)
 );
+
+ALTER TABLE mini_raw_material_stock DROP CONSTRAINT IF EXISTS mini_raw_material_stock_status_allowed;
+ALTER TABLE mini_raw_material_stock
+    ADD CONSTRAINT mini_raw_material_stock_status_allowed CHECK (status IN ('available', 'reserved', 'in_use', 'consumed'));
 
 INSERT INTO mini_raw_material_stock (
     id, warehouse, item_code, item_name, barcode, qty, uom, status,
