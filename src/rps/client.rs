@@ -109,6 +109,8 @@ struct RpsPrintRequest {
     warehouse: String,
     #[serde(skip_serializing_if = "String::is_empty")]
     executor_name: String,
+    #[serde(skip_serializing_if = "String::is_empty")]
+    label_kind: String,
     printer: String,
     print_mode: String,
     gross_qty: f64,
@@ -126,6 +128,7 @@ impl From<ScaleDriverPrintRequest> for RpsPrintRequest {
             item_name: request.item_name,
             warehouse: request.warehouse,
             executor_name: request.executor_name,
+            label_kind: request.label_kind,
             printer: request.printer,
             print_mode: request.print_mode,
             gross_qty: request.gross_qty,

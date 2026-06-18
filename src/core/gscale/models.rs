@@ -125,6 +125,7 @@ pub struct ScaleDriverPrintRequest {
     pub item_name: String,
     pub warehouse: String,
     pub executor_name: String,
+    pub label_kind: String,
     pub printer: String,
     pub print_mode: String,
     pub gross_qty: f64,

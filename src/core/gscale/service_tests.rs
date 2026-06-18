@@ -202,7 +202,7 @@ async fn progress_label_prints_without_receipt_store() {
     assert_eq!(response.executor_name, "Ali");
     assert_eq!(
         events.lock().unwrap().as_slice(),
-        ["print:GSP:PROGRESS-1:1"]
+        ["print:progress:GSP:PROGRESS-1:Ali:1"]
     );
 }
 
@@ -316,10 +316,15 @@ impl ScaleDriverPort for FakeDriver {
         &self,
         request: ScaleDriverPrintRequest,
     ) -> Result<ScaleDriverPrintResponse, GscalePortError> {
-        self.events
-            .lock()
-            .unwrap()
-            .push(format!("print:{}:{}", request.epc, request.print_count));
+        let event = if request.label_kind.trim().is_empty() {
+            format!("print:{}:{}", request.epc, request.print_count)
+        } else {
+            format!(
+                "print:{}:{}:{}:{}",
+                request.label_kind, request.epc, request.executor_name, request.print_count
+            )
+        };
+        self.events.lock().unwrap().push(event);
         Ok(ScaleDriverPrintResponse {
             ok: self.ok,
             status: self.status.to_string(),
