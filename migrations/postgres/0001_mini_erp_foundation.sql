@@ -235,8 +235,12 @@ CREATE TABLE IF NOT EXISTS mini_queue_states (
     PRIMARY KEY (apparatus, order_id),
     CONSTRAINT mini_queue_states_apparatus_not_blank CHECK (btrim(apparatus) <> ''),
     CONSTRAINT mini_queue_states_order_id_not_blank CHECK (btrim(order_id) <> ''),
-    CONSTRAINT mini_queue_states_state_allowed CHECK (state IN ('pending', 'in_progress', 'completed'))
+    CONSTRAINT mini_queue_states_state_allowed CHECK (state IN ('pending', 'in_progress', 'paused', 'completed'))
 );
+
+ALTER TABLE mini_queue_states DROP CONSTRAINT IF EXISTS mini_queue_states_state_allowed;
+ALTER TABLE mini_queue_states
+    ADD CONSTRAINT mini_queue_states_state_allowed CHECK (state IN ('pending', 'in_progress', 'paused', 'completed'));
 
 CREATE TABLE IF NOT EXISTS mini_apparatus_queue_policies (
     apparatus TEXT PRIMARY KEY,
@@ -268,12 +272,97 @@ CREATE TABLE IF NOT EXISTS mini_queue_action_events (
     CONSTRAINT mini_queue_action_events_event_id_not_blank CHECK (btrim(event_id) <> ''),
     CONSTRAINT mini_queue_action_events_apparatus_not_blank CHECK (btrim(apparatus) <> ''),
     CONSTRAINT mini_queue_action_events_order_id_not_blank CHECK (btrim(order_id) <> ''),
-    CONSTRAINT mini_queue_action_events_action_allowed CHECK (action IN ('start', 'complete')),
-    CONSTRAINT mini_queue_action_events_from_state_allowed CHECK (from_state IN ('pending', 'in_progress', 'completed')),
-    CONSTRAINT mini_queue_action_events_to_state_allowed CHECK (to_state IN ('pending', 'in_progress', 'completed')),
+    CONSTRAINT mini_queue_action_events_action_allowed CHECK (action IN ('start', 'pause', 'resume', 'complete')),
+    CONSTRAINT mini_queue_action_events_from_state_allowed CHECK (from_state IN ('pending', 'in_progress', 'paused', 'completed')),
+    CONSTRAINT mini_queue_action_events_to_state_allowed CHECK (to_state IN ('pending', 'in_progress', 'paused', 'completed')),
     CONSTRAINT mini_queue_action_events_policy_allowed CHECK (policy IN ('strict_sequence', 'free_pick')),
     CONSTRAINT mini_queue_action_events_assigned_array CHECK (jsonb_typeof(assigned_apparatus) = 'array'),
     CONSTRAINT mini_queue_action_events_event_id_unique UNIQUE (event_id)
+);
+
+ALTER TABLE mini_queue_action_events DROP CONSTRAINT IF EXISTS mini_queue_action_events_action_allowed;
+ALTER TABLE mini_queue_action_events DROP CONSTRAINT IF EXISTS mini_queue_action_events_from_state_allowed;
+ALTER TABLE mini_queue_action_events DROP CONSTRAINT IF EXISTS mini_queue_action_events_to_state_allowed;
+ALTER TABLE mini_queue_action_events
+    ADD CONSTRAINT mini_queue_action_events_action_allowed CHECK (action IN ('start', 'pause', 'resume', 'complete'));
+ALTER TABLE mini_queue_action_events
+    ADD CONSTRAINT mini_queue_action_events_from_state_allowed CHECK (from_state IN ('pending', 'in_progress', 'paused', 'completed'));
+ALTER TABLE mini_queue_action_events
+    ADD CONSTRAINT mini_queue_action_events_to_state_allowed CHECK (to_state IN ('pending', 'in_progress', 'paused', 'completed'));
+
+CREATE TABLE IF NOT EXISTS mini_order_run_sessions (
+    session_id TEXT PRIMARY KEY,
+    apparatus TEXT NOT NULL,
+    order_id TEXT NOT NULL,
+    status TEXT NOT NULL,
+    worker_role TEXT NOT NULL DEFAULT '',
+    worker_ref TEXT NOT NULL DEFAULT '',
+    worker_display_name TEXT NOT NULL DEFAULT '',
+    started_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    payload_json JSONB NOT NULL DEFAULT '{}'::jsonb,
+    CONSTRAINT mini_order_run_sessions_session_id_not_blank CHECK (btrim(session_id) <> ''),
+    CONSTRAINT mini_order_run_sessions_apparatus_not_blank CHECK (btrim(apparatus) <> ''),
+    CONSTRAINT mini_order_run_sessions_order_id_not_blank CHECK (btrim(order_id) <> ''),
+    CONSTRAINT mini_order_run_sessions_status_allowed CHECK (status IN ('active', 'paused', 'completed'))
+);
+
+CREATE TABLE IF NOT EXISTS mini_order_progress_events (
+    id BIGSERIAL PRIMARY KEY,
+    event_id TEXT NOT NULL,
+    session_id TEXT NOT NULL,
+    batch_id TEXT NOT NULL DEFAULT '',
+    apparatus TEXT NOT NULL,
+    order_id TEXT NOT NULL,
+    action TEXT NOT NULL,
+    produced_qty NUMERIC NOT NULL DEFAULT 0,
+    uom TEXT NOT NULL DEFAULT '',
+    worker_role TEXT NOT NULL DEFAULT '',
+    worker_ref TEXT NOT NULL DEFAULT '',
+    worker_display_name TEXT NOT NULL DEFAULT '',
+    qr_payload TEXT NOT NULL DEFAULT '',
+    payload_json JSONB NOT NULL DEFAULT '{}'::jsonb,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    CONSTRAINT mini_order_progress_events_event_id_not_blank CHECK (btrim(event_id) <> ''),
+    CONSTRAINT mini_order_progress_events_session_id_not_blank CHECK (btrim(session_id) <> ''),
+    CONSTRAINT mini_order_progress_events_apparatus_not_blank CHECK (btrim(apparatus) <> ''),
+    CONSTRAINT mini_order_progress_events_order_id_not_blank CHECK (btrim(order_id) <> ''),
+    CONSTRAINT mini_order_progress_events_action_allowed CHECK (action IN ('start', 'pause', 'resume', 'complete')),
+    CONSTRAINT mini_order_progress_events_qty_non_negative CHECK (produced_qty >= 0),
+    CONSTRAINT mini_order_progress_events_event_id_unique UNIQUE (event_id)
+);
+
+CREATE TABLE IF NOT EXISTS mini_progress_batches (
+    batch_id TEXT PRIMARY KEY,
+    session_id TEXT NOT NULL,
+    apparatus TEXT NOT NULL,
+    order_id TEXT NOT NULL,
+    action TEXT NOT NULL,
+    status TEXT NOT NULL,
+    produced_qty NUMERIC NOT NULL,
+    uom TEXT NOT NULL,
+    qr_payload TEXT NOT NULL,
+    label_item_code TEXT NOT NULL,
+    label_item_name TEXT NOT NULL,
+    executor_name TEXT NOT NULL DEFAULT '',
+    worker_role TEXT NOT NULL DEFAULT '',
+    worker_ref TEXT NOT NULL DEFAULT '',
+    worker_display_name TEXT NOT NULL DEFAULT '',
+    payload_json JSONB NOT NULL DEFAULT '{}'::jsonb,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    CONSTRAINT mini_progress_batches_batch_id_not_blank CHECK (btrim(batch_id) <> ''),
+    CONSTRAINT mini_progress_batches_session_id_not_blank CHECK (btrim(session_id) <> ''),
+    CONSTRAINT mini_progress_batches_apparatus_not_blank CHECK (btrim(apparatus) <> ''),
+    CONSTRAINT mini_progress_batches_order_id_not_blank CHECK (btrim(order_id) <> ''),
+    CONSTRAINT mini_progress_batches_action_allowed CHECK (action IN ('pause', 'complete')),
+    CONSTRAINT mini_progress_batches_status_allowed CHECK (status IN ('paused', 'completed', 'resumed')),
+    CONSTRAINT mini_progress_batches_qty_positive CHECK (produced_qty > 0),
+    CONSTRAINT mini_progress_batches_uom_not_blank CHECK (btrim(uom) <> ''),
+    CONSTRAINT mini_progress_batches_qr_payload_not_blank CHECK (btrim(qr_payload) <> ''),
+    CONSTRAINT mini_progress_batches_label_item_code_not_blank CHECK (btrim(label_item_code) <> ''),
+    CONSTRAINT mini_progress_batches_label_item_name_not_blank CHECK (btrim(label_item_name) <> ''),
+    CONSTRAINT mini_progress_batches_qr_payload_unique UNIQUE (qr_payload)
 );
 
 CREATE TABLE IF NOT EXISTS mini_apparatus_material_rules (
@@ -496,6 +585,11 @@ CREATE INDEX IF NOT EXISTS idx_mini_queue_states_order_id ON mini_queue_states(o
 CREATE INDEX IF NOT EXISTS idx_mini_queue_action_events_apparatus_created ON mini_queue_action_events(apparatus, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_mini_queue_action_events_order_created ON mini_queue_action_events(order_id, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_mini_queue_action_events_actor_created ON mini_queue_action_events(actor_role, actor_ref, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_mini_order_run_sessions_order_status ON mini_order_run_sessions(order_id, status, updated_at DESC);
+CREATE INDEX IF NOT EXISTS idx_mini_order_run_sessions_apparatus_order ON mini_order_run_sessions(lower(apparatus), order_id, updated_at DESC);
+CREATE INDEX IF NOT EXISTS idx_mini_order_progress_events_order_created ON mini_order_progress_events(order_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_mini_progress_batches_order_created ON mini_progress_batches(order_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_mini_progress_batches_qr ON mini_progress_batches(lower(qr_payload));
 CREATE INDEX IF NOT EXISTS idx_mini_raw_material_assignments_order ON mini_raw_material_assignments(order_id);
 CREATE INDEX IF NOT EXISTS idx_mini_raw_material_assignments_apparatus ON mini_raw_material_assignments(lower(apparatus));
 CREATE INDEX IF NOT EXISTS idx_mini_raw_material_assignments_item_group ON mini_raw_material_assignments(lower(item_group));

@@ -409,6 +409,8 @@ mod postgres_production_map_tests {
             order_number: order_number.to_string(),
             roll_count: Some(7.0),
             width_mm: Some(650.0),
+            order_kg: None,
+            base_length: None,
             nodes: vec![
                 test_node("start", ProductionMapNodeKind::Start, "Start", 0.0),
                 test_node(
@@ -527,6 +529,8 @@ mod postgres_mini_order_tests {
             order_number: "9001".to_string(),
             roll_count: Some(7.0),
             width_mm: Some(650.0),
+            order_kg: None,
+            base_length: None,
             nodes: vec![
                 test_node("start", ProductionMapNodeKind::Start, "Start", 0.0),
                 test_node("end", ProductionMapNodeKind::End, "End", 120.0),

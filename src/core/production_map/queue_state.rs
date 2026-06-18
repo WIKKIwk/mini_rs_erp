@@ -10,6 +10,7 @@ use super::pechat;
 pub enum ApparatusQueueOrderState {
     Pending,
     InProgress,
+    Paused,
     Completed,
 }
 
@@ -18,6 +19,7 @@ impl ApparatusQueueOrderState {
         match value.trim().to_ascii_lowercase().as_str() {
             "pending" => Some(Self::Pending),
             "in_progress" => Some(Self::InProgress),
+            "paused" => Some(Self::Paused),
             "completed" => Some(Self::Completed),
             _ => None,
         }
@@ -27,8 +29,13 @@ impl ApparatusQueueOrderState {
         match self {
             Self::Pending => "pending",
             Self::InProgress => "in_progress",
+            Self::Paused => "paused",
             Self::Completed => "completed",
         }
+    }
+
+    pub fn is_active(self) -> bool {
+        matches!(self, Self::InProgress | Self::Paused)
     }
 }
 
@@ -36,6 +43,8 @@ impl ApparatusQueueOrderState {
 #[serde(rename_all = "snake_case")]
 pub enum ApparatusQueueAction {
     Start,
+    Pause,
+    Resume,
     Complete,
 }
 
@@ -54,6 +63,20 @@ pub fn next_queue_state(
         ApparatusQueueAction::Complete => {
             if current == ApparatusQueueOrderState::InProgress {
                 Ok(ApparatusQueueOrderState::Completed)
+            } else {
+                Err(ProductionMapError::QueueActionNotAllowed)
+            }
+        }
+        ApparatusQueueAction::Pause => {
+            if current == ApparatusQueueOrderState::InProgress {
+                Ok(ApparatusQueueOrderState::Paused)
+            } else {
+                Err(ProductionMapError::QueueActionNotAllowed)
+            }
+        }
+        ApparatusQueueAction::Resume => {
+            if current == ApparatusQueueOrderState::Paused {
+                Ok(ApparatusQueueOrderState::InProgress)
             } else {
                 Err(ProductionMapError::QueueActionNotAllowed)
             }
@@ -177,7 +200,7 @@ pub fn first_actionable_order_id(
             .get(id)
             .copied()
             .unwrap_or(ApparatusQueueOrderState::Pending)
-            == ApparatusQueueOrderState::InProgress
+            .is_active()
         {
             return Some(id.to_string());
         }
@@ -194,6 +217,7 @@ pub fn first_actionable_order_id(
         {
             ApparatusQueueOrderState::Completed => continue,
             ApparatusQueueOrderState::InProgress => continue,
+            ApparatusQueueOrderState::Paused => continue,
             ApparatusQueueOrderState::Pending => return Some(id.to_string()),
         }
     }
@@ -233,9 +257,9 @@ pub fn apply_unordered_queue_action(
         return Err(ProductionMapError::MissingId);
     }
     if matches!(action, ApparatusQueueAction::Start)
-        && states.iter().any(|(id, state)| {
-            id.trim() != order_id && *state == ApparatusQueueOrderState::InProgress
-        })
+        && states
+            .iter()
+            .any(|(id, state)| id.trim() != order_id && state.is_active())
     {
         return Err(ProductionMapError::QueueActionNotAllowed);
     }
@@ -308,6 +332,28 @@ mod tests {
         assert_eq!(states.get("a"), Some(&ApparatusQueueOrderState::Completed));
         apply_queue_action(&sequence, &mut states, "b", ApparatusQueueAction::Start)
             .expect("start second");
+    }
+
+    #[test]
+    fn progress_actions_pause_resume_and_complete_active_order() {
+        let sequence = vec!["a".to_string()];
+        let mut states = BTreeMap::new();
+
+        apply_queue_action(&sequence, &mut states, "a", ApparatusQueueAction::Start)
+            .expect("start");
+        assert_eq!(states.get("a"), Some(&ApparatusQueueOrderState::InProgress));
+
+        apply_queue_action(&sequence, &mut states, "a", ApparatusQueueAction::Pause)
+            .expect("pause");
+        assert_eq!(states.get("a"), Some(&ApparatusQueueOrderState::Paused));
+
+        apply_queue_action(&sequence, &mut states, "a", ApparatusQueueAction::Resume)
+            .expect("resume");
+        assert_eq!(states.get("a"), Some(&ApparatusQueueOrderState::InProgress));
+
+        apply_queue_action(&sequence, &mut states, "a", ApparatusQueueAction::Complete)
+            .expect("complete");
+        assert_eq!(states.get("a"), Some(&ApparatusQueueOrderState::Completed));
     }
 
     #[test]

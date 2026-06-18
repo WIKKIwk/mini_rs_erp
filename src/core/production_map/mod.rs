@@ -33,6 +33,10 @@ pub struct ProductionMapDefinition {
     pub roll_count: Option<f64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub width_mm: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub order_kg: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub base_length: Option<f64>,
     #[serde(default)]
     pub nodes: Vec<ProductionMapNode>,
     #[serde(default)]
@@ -256,6 +260,12 @@ pub enum ProductionMapError {
     RawMaterialScanRequired,
     #[error("raw material scan does not match assigned material")]
     RawMaterialMismatch,
+    #[error("progress input is invalid")]
+    ProgressInputInvalid,
+    #[error("progress batch not found")]
+    ProgressBatchNotFound,
+    #[error("progress batch cannot resume")]
+    ProgressBatchNotResumable,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -323,6 +333,132 @@ pub struct CompletedQueueOrder {
     pub completed_at_unix: i64,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum OrderRunStatus {
+    Active,
+    Paused,
+    Completed,
+}
+
+impl OrderRunStatus {
+    pub fn parse(value: &str) -> Option<Self> {
+        match value.trim().to_ascii_lowercase().as_str() {
+            "active" => Some(Self::Active),
+            "paused" => Some(Self::Paused),
+            "completed" => Some(Self::Completed),
+            _ => None,
+        }
+    }
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Active => "active",
+            Self::Paused => "paused",
+            Self::Completed => "completed",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum OrderProgressBatchStatus {
+    Paused,
+    Completed,
+    Resumed,
+}
+
+impl OrderProgressBatchStatus {
+    pub fn parse(value: &str) -> Option<Self> {
+        match value.trim().to_ascii_lowercase().as_str() {
+            "paused" => Some(Self::Paused),
+            "completed" => Some(Self::Completed),
+            "resumed" => Some(Self::Resumed),
+            _ => None,
+        }
+    }
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Paused => "paused",
+            Self::Completed => "completed",
+            Self::Resumed => "resumed",
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct OrderRunSession {
+    pub session_id: String,
+    pub apparatus: String,
+    pub order_id: String,
+    pub status: OrderRunStatus,
+    pub worker_role: String,
+    pub worker_ref: String,
+    pub worker_display_name: String,
+    pub started_at_unix: i64,
+    pub updated_at_unix: i64,
+    pub payload_json: serde_json::Value,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct OrderProgressEvent {
+    pub event_id: String,
+    pub session_id: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub batch_id: String,
+    pub apparatus: String,
+    pub order_id: String,
+    pub action: queue_state::ApparatusQueueAction,
+    pub produced_qty: f64,
+    pub uom: String,
+    pub worker_role: String,
+    pub worker_ref: String,
+    pub worker_display_name: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub qr_payload: String,
+    pub payload_json: serde_json::Value,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct OrderProgressBatch {
+    pub batch_id: String,
+    pub session_id: String,
+    pub apparatus: String,
+    pub order_id: String,
+    pub action: queue_state::ApparatusQueueAction,
+    pub status: OrderProgressBatchStatus,
+    pub produced_qty: f64,
+    pub uom: String,
+    pub qr_payload: String,
+    pub label_item_code: String,
+    pub label_item_name: String,
+    pub executor_name: String,
+    pub worker_role: String,
+    pub worker_ref: String,
+    pub worker_display_name: String,
+    pub payload_json: serde_json::Value,
+}
+
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct QueueProgressInput {
+    pub produced_qty: Option<f64>,
+    pub uom: String,
+    pub progress_batch_id: String,
+    pub qr_payload: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct ApparatusQueueActionResult {
+    pub states: BTreeMap<String, String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub session: Option<OrderRunSession>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub progress_event: Option<OrderProgressEvent>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub progress_batch: Option<OrderProgressBatch>,
+}
+
 #[async_trait]
 pub trait ProductionMapStorePort: Send + Sync {
     async fn maps(&self) -> Result<Vec<ProductionMapDefinition>, ProductionMapError>;
@@ -379,6 +515,71 @@ pub trait ProductionMapStorePort: Send + Sync {
     ) -> Result<Vec<CompletedQueueOrder>, ProductionMapError> {
         Ok(Vec::new())
     }
+    async fn active_order_run_session(
+        &self,
+        _apparatus: &str,
+        _order_id: &str,
+    ) -> Result<Option<OrderRunSession>, ProductionMapError> {
+        Ok(None)
+    }
+    async fn order_run_session(
+        &self,
+        _session_id: &str,
+    ) -> Result<Option<OrderRunSession>, ProductionMapError> {
+        Ok(None)
+    }
+    async fn progress_batch(
+        &self,
+        _batch_id: &str,
+    ) -> Result<Option<OrderProgressBatch>, ProductionMapError> {
+        Ok(None)
+    }
+    async fn progress_batch_by_qr(
+        &self,
+        _qr_payload: &str,
+    ) -> Result<Option<OrderProgressBatch>, ProductionMapError> {
+        Ok(None)
+    }
+    async fn put_order_run_session(
+        &self,
+        _session: OrderRunSession,
+    ) -> Result<(), ProductionMapError> {
+        Ok(())
+    }
+    async fn put_order_progress_event(
+        &self,
+        _event: OrderProgressEvent,
+    ) -> Result<(), ProductionMapError> {
+        Ok(())
+    }
+    async fn put_order_progress_batch(
+        &self,
+        _batch: OrderProgressBatch,
+    ) -> Result<(), ProductionMapError> {
+        Ok(())
+    }
+    async fn put_apparatus_queue_states_with_event_and_progress(
+        &self,
+        apparatus: &str,
+        states: BTreeMap<String, String>,
+        event: ApparatusQueueActionEvent,
+        session: Option<OrderRunSession>,
+        progress_event: Option<OrderProgressEvent>,
+        progress_batch: Option<OrderProgressBatch>,
+    ) -> Result<(), ProductionMapError> {
+        self.put_apparatus_queue_states_with_event(apparatus, states, event)
+            .await?;
+        if let Some(session) = session {
+            self.put_order_run_session(session).await?;
+        }
+        if let Some(event) = progress_event {
+            self.put_order_progress_event(event).await?;
+        }
+        if let Some(batch) = progress_batch {
+            self.put_order_progress_batch(batch).await?;
+        }
+        Ok(())
+    }
     async fn apparatus_material_rules(
         &self,
     ) -> Result<Vec<ApparatusMaterialRule>, ProductionMapError>;
@@ -402,6 +603,9 @@ pub struct MemoryProductionMapStore {
     queue_states: RwLock<BTreeMap<String, BTreeMap<String, String>>>,
     queue_policies: RwLock<BTreeMap<String, ApparatusQueuePolicy>>,
     queue_events: RwLock<Vec<ApparatusQueueActionEvent>>,
+    order_run_sessions: RwLock<BTreeMap<String, OrderRunSession>>,
+    order_progress_events: RwLock<Vec<OrderProgressEvent>>,
+    order_progress_batches: RwLock<BTreeMap<String, OrderProgressBatch>>,
     material_rules: RwLock<BTreeMap<String, ApparatusMaterialRule>>,
     material_assignments: RwLock<BTreeMap<String, RawMaterialAssignment>>,
 }
@@ -415,6 +619,9 @@ impl MemoryProductionMapStore {
             queue_states: RwLock::new(BTreeMap::new()),
             queue_policies: RwLock::new(BTreeMap::new()),
             queue_events: RwLock::new(Vec::new()),
+            order_run_sessions: RwLock::new(BTreeMap::new()),
+            order_progress_events: RwLock::new(Vec::new()),
+            order_progress_batches: RwLock::new(BTreeMap::new()),
             material_rules: RwLock::new(BTreeMap::new()),
             material_assignments: RwLock::new(BTreeMap::new()),
         }
@@ -578,6 +785,95 @@ impl ProductionMapStorePort for MemoryProductionMapStore {
         Ok(completed)
     }
 
+    async fn active_order_run_session(
+        &self,
+        apparatus: &str,
+        order_id: &str,
+    ) -> Result<Option<OrderRunSession>, ProductionMapError> {
+        Ok(self
+            .order_run_sessions
+            .read()
+            .await
+            .values()
+            .find(|session| {
+                queue_state::apparatus_titles_match(&session.apparatus, apparatus)
+                    && session.order_id.trim() == order_id.trim()
+                    && matches!(
+                        session.status,
+                        OrderRunStatus::Active | OrderRunStatus::Paused
+                    )
+            })
+            .cloned())
+    }
+
+    async fn order_run_session(
+        &self,
+        session_id: &str,
+    ) -> Result<Option<OrderRunSession>, ProductionMapError> {
+        Ok(self
+            .order_run_sessions
+            .read()
+            .await
+            .get(session_id.trim())
+            .cloned())
+    }
+
+    async fn progress_batch(
+        &self,
+        batch_id: &str,
+    ) -> Result<Option<OrderProgressBatch>, ProductionMapError> {
+        Ok(self
+            .order_progress_batches
+            .read()
+            .await
+            .get(batch_id.trim())
+            .cloned())
+    }
+
+    async fn progress_batch_by_qr(
+        &self,
+        qr_payload: &str,
+    ) -> Result<Option<OrderProgressBatch>, ProductionMapError> {
+        let qr_payload = qr_payload.trim();
+        Ok(self
+            .order_progress_batches
+            .read()
+            .await
+            .values()
+            .find(|batch| batch.qr_payload.trim().eq_ignore_ascii_case(qr_payload))
+            .cloned())
+    }
+
+    async fn put_order_run_session(
+        &self,
+        session: OrderRunSession,
+    ) -> Result<(), ProductionMapError> {
+        self.order_run_sessions
+            .write()
+            .await
+            .insert(session.session_id.trim().to_string(), session);
+        Ok(())
+    }
+
+    async fn put_order_progress_event(
+        &self,
+        event: OrderProgressEvent,
+    ) -> Result<(), ProductionMapError> {
+        self.order_progress_events.write().await.push(event);
+        Ok(())
+    }
+
+    async fn put_order_progress_batch(
+        &self,
+        batch: OrderProgressBatch,
+    ) -> Result<(), ProductionMapError> {
+        self.order_progress_batches
+            .write()
+            .await
+            .insert(batch.batch_id.trim().to_string(), batch);
+        Ok(())
+    }
+
     async fn apparatus_material_rules(
         &self,
     ) -> Result<Vec<ApparatusMaterialRule>, ProductionMapError> {
@@ -633,6 +929,12 @@ pub struct ProductionMapLiveSnapshot {
 pub struct ProductionMapService {
     store: std::sync::Arc<dyn ProductionMapStorePort>,
     live_notify: broadcast::Sender<()>,
+}
+
+struct QueueProgressRecords {
+    session: Option<OrderRunSession>,
+    progress_event: Option<OrderProgressEvent>,
+    progress_batch: Option<OrderProgressBatch>,
 }
 
 impl ProductionMapService {
@@ -783,6 +1085,28 @@ impl ProductionMapService {
         assigned_apparatus: &[String],
         actor: QueueActionActor,
     ) -> Result<BTreeMap<String, String>, ProductionMapError> {
+        Ok(self
+            .apply_apparatus_queue_action_with_progress(
+                apparatus,
+                order_id,
+                action,
+                assigned_apparatus,
+                actor,
+                QueueProgressInput::default(),
+            )
+            .await?
+            .states)
+    }
+
+    pub async fn apply_apparatus_queue_action_with_progress(
+        &self,
+        apparatus: &str,
+        order_id: &str,
+        action: queue_state::ApparatusQueueAction,
+        assigned_apparatus: &[String],
+        actor: QueueActionActor,
+        progress: QueueProgressInput,
+    ) -> Result<ApparatusQueueActionResult, ProductionMapError> {
         let apparatus = apparatus.trim();
         let order_id = order_id.trim();
         if apparatus.is_empty() {
@@ -876,7 +1200,7 @@ impl ProductionMapService {
             from_state,
             to_state,
             policy,
-            actor,
+            actor: actor.clone(),
             assigned_apparatus: assigned_apparatus
                 .iter()
                 .map(|item| item.trim().to_string())
@@ -892,11 +1216,234 @@ impl ProductionMapService {
                 "policy": policy.as_str(),
             }),
         };
+        let progress = self
+            .build_progress_records(&storage_key, order_id, order_map, action, &actor, progress)
+            .await?;
         self.store
-            .put_apparatus_queue_states_with_event(&storage_key, saved.clone(), event)
+            .put_apparatus_queue_states_with_event_and_progress(
+                &storage_key,
+                saved.clone(),
+                event,
+                progress.session.clone(),
+                progress.progress_event.clone(),
+                progress.progress_batch.clone(),
+            )
             .await?;
         self.notify_live();
-        Ok(saved)
+        Ok(ApparatusQueueActionResult {
+            states: saved,
+            session: progress.session,
+            progress_event: progress.progress_event,
+            progress_batch: progress.progress_batch,
+        })
+    }
+
+    pub async fn progress_batch_for_qr(
+        &self,
+        progress_batch_id: &str,
+        qr_payload: &str,
+    ) -> Result<OrderProgressBatch, ProductionMapError> {
+        let batch = if !progress_batch_id.trim().is_empty() {
+            self.store.progress_batch(progress_batch_id).await?
+        } else if !qr_payload.trim().is_empty() {
+            self.store.progress_batch_by_qr(qr_payload).await?
+        } else {
+            return Err(ProductionMapError::ProgressInputInvalid);
+        };
+        batch.ok_or(ProductionMapError::ProgressBatchNotFound)
+    }
+
+    async fn build_progress_records(
+        &self,
+        apparatus: &str,
+        order_id: &str,
+        order_map: &ProductionMapDefinition,
+        action: queue_state::ApparatusQueueAction,
+        actor: &QueueActionActor,
+        progress: QueueProgressInput,
+    ) -> Result<QueueProgressRecords, ProductionMapError> {
+        let now = unix_seconds();
+        match action {
+            queue_state::ApparatusQueueAction::Start => {
+                let session = OrderRunSession {
+                    session_id: progress_session_id(apparatus, order_id, actor, now),
+                    apparatus: apparatus.to_string(),
+                    order_id: order_id.to_string(),
+                    status: OrderRunStatus::Active,
+                    worker_role: actor.role.trim().to_string(),
+                    worker_ref: actor.ref_.trim().to_string(),
+                    worker_display_name: actor.display_name.trim().to_string(),
+                    started_at_unix: now,
+                    updated_at_unix: now,
+                    payload_json: serde_json::json!({
+                        "started_by": actor,
+                    }),
+                };
+                let event = OrderProgressEvent {
+                    event_id: progress_event_id(&session.session_id, order_id, action, now),
+                    session_id: session.session_id.clone(),
+                    batch_id: String::new(),
+                    apparatus: apparatus.to_string(),
+                    order_id: order_id.to_string(),
+                    action,
+                    produced_qty: 0.0,
+                    uom: String::new(),
+                    worker_role: actor.role.trim().to_string(),
+                    worker_ref: actor.ref_.trim().to_string(),
+                    worker_display_name: actor.display_name.trim().to_string(),
+                    qr_payload: String::new(),
+                    payload_json: serde_json::json!({"event": "start"}),
+                };
+                Ok(QueueProgressRecords {
+                    session: Some(session),
+                    progress_event: Some(event),
+                    progress_batch: None,
+                })
+            }
+            queue_state::ApparatusQueueAction::Pause
+            | queue_state::ApparatusQueueAction::Complete => {
+                let produced_qty = valid_progress_qty(progress.produced_qty)?;
+                let uom = non_empty_or(&progress.uom, "kg");
+                let session = self
+                    .store
+                    .active_order_run_session(apparatus, order_id)
+                    .await?
+                    .unwrap_or_else(|| legacy_order_run_session(apparatus, order_id, actor, now));
+                let status = match action {
+                    queue_state::ApparatusQueueAction::Pause => OrderRunStatus::Paused,
+                    queue_state::ApparatusQueueAction::Complete => OrderRunStatus::Completed,
+                    _ => OrderRunStatus::Active,
+                };
+                let session = OrderRunSession {
+                    status,
+                    worker_role: actor.role.trim().to_string(),
+                    worker_ref: actor.ref_.trim().to_string(),
+                    worker_display_name: actor.display_name.trim().to_string(),
+                    updated_at_unix: now,
+                    payload_json: serde_json::json!({
+                        "last_action": queue_action_str(action),
+                        "last_qty": produced_qty,
+                        "last_uom": uom,
+                    }),
+                    ..session
+                };
+                let batch_id = non_empty_or(
+                    &progress.progress_batch_id,
+                    &progress_batch_id(apparatus, order_id, action, now),
+                );
+                let qr_payload =
+                    non_empty_or(&progress.qr_payload, &progress_qr_payload(&batch_id));
+                let label_item_name = progress_label_item_name(order_map, apparatus, action);
+                let batch = OrderProgressBatch {
+                    batch_id: batch_id.clone(),
+                    session_id: session.session_id.clone(),
+                    apparatus: apparatus.to_string(),
+                    order_id: order_id.to_string(),
+                    action,
+                    status: match action {
+                        queue_state::ApparatusQueueAction::Pause => {
+                            OrderProgressBatchStatus::Paused
+                        }
+                        queue_state::ApparatusQueueAction::Complete => {
+                            OrderProgressBatchStatus::Completed
+                        }
+                        _ => return Err(ProductionMapError::ProgressInputInvalid),
+                    },
+                    produced_qty,
+                    uom: uom.clone(),
+                    qr_payload: qr_payload.clone(),
+                    label_item_code: order_id.to_string(),
+                    label_item_name,
+                    executor_name: actor_display_name(actor),
+                    worker_role: actor.role.trim().to_string(),
+                    worker_ref: actor.ref_.trim().to_string(),
+                    worker_display_name: actor.display_name.trim().to_string(),
+                    payload_json: serde_json::json!({
+                        "order_title": order_map.title.trim(),
+                        "apparatus": apparatus,
+                        "action": queue_action_str(action),
+                    }),
+                };
+                let event = OrderProgressEvent {
+                    event_id: progress_event_id(&session.session_id, order_id, action, now),
+                    session_id: session.session_id.clone(),
+                    batch_id,
+                    apparatus: apparatus.to_string(),
+                    order_id: order_id.to_string(),
+                    action,
+                    produced_qty,
+                    uom,
+                    worker_role: actor.role.trim().to_string(),
+                    worker_ref: actor.ref_.trim().to_string(),
+                    worker_display_name: actor.display_name.trim().to_string(),
+                    qr_payload,
+                    payload_json: serde_json::json!({"event": queue_action_str(action)}),
+                };
+                Ok(QueueProgressRecords {
+                    session: Some(session),
+                    progress_event: Some(event),
+                    progress_batch: Some(batch),
+                })
+            }
+            queue_state::ApparatusQueueAction::Resume => {
+                let mut batch = self
+                    .progress_batch_for_qr(&progress.progress_batch_id, &progress.qr_payload)
+                    .await?;
+                if batch.status != OrderProgressBatchStatus::Paused
+                    || batch.action != queue_state::ApparatusQueueAction::Pause
+                {
+                    return Err(ProductionMapError::ProgressBatchNotResumable);
+                }
+                if batch.order_id.trim() != order_id
+                    || !queue_state::apparatus_titles_match(&batch.apparatus, apparatus)
+                {
+                    return Err(ProductionMapError::ProgressBatchNotResumable);
+                }
+                batch.status = OrderProgressBatchStatus::Resumed;
+                batch.payload_json = serde_json::json!({
+                    "resumed_by": actor,
+                    "resumed_at_unix": now,
+                });
+                let session = self
+                    .store
+                    .order_run_session(&batch.session_id)
+                    .await?
+                    .or_else(|| Some(legacy_order_run_session(apparatus, order_id, actor, now)))
+                    .map(|session| OrderRunSession {
+                        status: OrderRunStatus::Active,
+                        worker_role: actor.role.trim().to_string(),
+                        worker_ref: actor.ref_.trim().to_string(),
+                        worker_display_name: actor.display_name.trim().to_string(),
+                        updated_at_unix: now,
+                        payload_json: serde_json::json!({
+                            "resumed_batch_id": batch.batch_id,
+                            "resumed_qr_payload": batch.qr_payload,
+                        }),
+                        ..session
+                    })
+                    .ok_or(ProductionMapError::ProgressBatchNotFound)?;
+                let event = OrderProgressEvent {
+                    event_id: progress_event_id(&session.session_id, order_id, action, now),
+                    session_id: session.session_id.clone(),
+                    batch_id: batch.batch_id.clone(),
+                    apparatus: apparatus.to_string(),
+                    order_id: order_id.to_string(),
+                    action,
+                    produced_qty: 0.0,
+                    uom: String::new(),
+                    worker_role: actor.role.trim().to_string(),
+                    worker_ref: actor.ref_.trim().to_string(),
+                    worker_display_name: actor.display_name.trim().to_string(),
+                    qr_payload: batch.qr_payload.clone(),
+                    payload_json: serde_json::json!({"event": "resume"}),
+                };
+                Ok(QueueProgressRecords {
+                    session: Some(session),
+                    progress_event: Some(event),
+                    progress_batch: Some(batch),
+                })
+            }
+        }
     }
 
     pub async fn upsert_map(
@@ -1444,11 +1991,160 @@ fn queue_action_event_id(
         "production-map-queue:{nanos}:{}:{}:{}",
         apparatus.trim(),
         order_id.trim(),
-        match action {
-            queue_state::ApparatusQueueAction::Start => "start",
-            queue_state::ApparatusQueueAction::Complete => "complete",
-        }
+        queue_action_str(action)
     )
+}
+
+fn queue_action_str(action: queue_state::ApparatusQueueAction) -> &'static str {
+    match action {
+        queue_state::ApparatusQueueAction::Start => "start",
+        queue_state::ApparatusQueueAction::Pause => "pause",
+        queue_state::ApparatusQueueAction::Resume => "resume",
+        queue_state::ApparatusQueueAction::Complete => "complete",
+    }
+}
+
+fn unix_seconds() -> i64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|value| value.as_secs() as i64)
+        .unwrap_or_default()
+}
+
+fn unix_nanos() -> u128 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|value| value.as_nanos())
+        .unwrap_or_default()
+}
+
+fn progress_session_id(
+    apparatus: &str,
+    order_id: &str,
+    actor: &QueueActionActor,
+    _now: i64,
+) -> String {
+    let stamp = unix_nanos();
+    format!(
+        "order-run:{stamp}:{}:{}:{}",
+        sanitize_id(apparatus),
+        sanitize_id(order_id),
+        sanitize_id(&actor.ref_)
+    )
+}
+
+fn progress_event_id(
+    session_id: &str,
+    order_id: &str,
+    action: queue_state::ApparatusQueueAction,
+    _now: i64,
+) -> String {
+    let stamp = unix_nanos();
+    format!(
+        "order-progress:{stamp}:{}:{}:{}",
+        sanitize_id(session_id),
+        sanitize_id(order_id),
+        queue_action_str(action)
+    )
+}
+
+fn progress_batch_id(
+    apparatus: &str,
+    order_id: &str,
+    action: queue_state::ApparatusQueueAction,
+    _now: i64,
+) -> String {
+    let stamp = unix_nanos();
+    format!(
+        "progress-batch:{stamp}:{}:{}:{}",
+        sanitize_id(apparatus),
+        sanitize_id(order_id),
+        queue_action_str(action)
+    )
+}
+
+fn progress_qr_payload(batch_id: &str) -> String {
+    format!("GSP:{}", batch_id.trim()).to_ascii_uppercase()
+}
+
+fn valid_progress_qty(value: Option<f64>) -> Result<f64, ProductionMapError> {
+    let value = value.ok_or(ProductionMapError::ProgressInputInvalid)?;
+    if value.is_finite() && value > 0.0 {
+        Ok(value)
+    } else {
+        Err(ProductionMapError::ProgressInputInvalid)
+    }
+}
+
+fn non_empty_or(value: &str, fallback: &str) -> String {
+    let value = value.trim();
+    if value.is_empty() {
+        fallback.trim().to_string()
+    } else {
+        value.to_string()
+    }
+}
+
+fn progress_label_item_name(
+    order_map: &ProductionMapDefinition,
+    apparatus: &str,
+    action: queue_state::ApparatusQueueAction,
+) -> String {
+    let order_title = non_empty_or(&order_map.title, &order_map.product_code);
+    let state_label = match action {
+        queue_state::ApparatusQueueAction::Pause => "pauza",
+        queue_state::ApparatusQueueAction::Complete => "tugatildi",
+        _ => queue_action_str(action),
+    };
+    format!(
+        "{order_title} yarim tayyor, {} holatda, {state_label}",
+        apparatus.trim()
+    )
+}
+
+fn actor_display_name(actor: &QueueActionActor) -> String {
+    non_empty_or(&actor.display_name, &actor.ref_)
+}
+
+fn legacy_order_run_session(
+    apparatus: &str,
+    order_id: &str,
+    actor: &QueueActionActor,
+    now: i64,
+) -> OrderRunSession {
+    OrderRunSession {
+        session_id: progress_session_id(apparatus, order_id, actor, now),
+        apparatus: apparatus.trim().to_string(),
+        order_id: order_id.trim().to_string(),
+        status: OrderRunStatus::Active,
+        worker_role: actor.role.trim().to_string(),
+        worker_ref: actor.ref_.trim().to_string(),
+        worker_display_name: actor.display_name.trim().to_string(),
+        started_at_unix: now,
+        updated_at_unix: now,
+        payload_json: serde_json::json!({"legacy_session": true}),
+    }
+}
+
+fn sanitize_id(value: &str) -> String {
+    let sanitized = value
+        .trim()
+        .chars()
+        .map(|ch| {
+            if ch.is_ascii_alphanumeric() {
+                ch.to_ascii_lowercase()
+            } else {
+                '-'
+            }
+        })
+        .collect::<String>()
+        .trim_matches('-')
+        .to_string();
+    if sanitized.is_empty() {
+        "blank".to_string()
+    } else {
+        sanitized
+    }
 }
 
 fn validate_formula_target(target: &str) -> Result<(), ProductionMapError> {
@@ -2466,6 +3162,97 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn progress_pause_creates_qr_batch_and_resume_reopens_order() {
+        let service =
+            ProductionMapService::new(std::sync::Arc::new(MemoryProductionMapStore::new()));
+        let actor = QueueActionActor {
+            role: "aparatchi".to_string(),
+            ref_: "worker-progress-1".to_string(),
+            display_name: "Worker Progress".to_string(),
+        };
+        service
+            .upsert_map(apparatus_stage_map(
+                "zakaz-progress-1",
+                "7 ta rangli pechat",
+            ))
+            .await
+            .expect("map");
+
+        let started = service
+            .apply_apparatus_queue_action_with_progress(
+                "7 ta rangli pechat",
+                "zakaz-progress-1",
+                queue_state::ApparatusQueueAction::Start,
+                &["7 ta rangli pechat".to_string()],
+                actor.clone(),
+                QueueProgressInput::default(),
+            )
+            .await
+            .expect("start");
+        assert_eq!(
+            started.states.get("zakaz-progress-1"),
+            Some(&"in_progress".to_string())
+        );
+        assert!(started.session.is_some());
+        assert!(started.progress_batch.is_none());
+
+        let paused = service
+            .apply_apparatus_queue_action_with_progress(
+                "7 ta rangli pechat",
+                "zakaz-progress-1",
+                queue_state::ApparatusQueueAction::Pause,
+                &["7 ta rangli pechat".to_string()],
+                actor.clone(),
+                QueueProgressInput {
+                    produced_qty: Some(42.5),
+                    uom: "kg".to_string(),
+                    ..QueueProgressInput::default()
+                },
+            )
+            .await
+            .expect("pause");
+        assert_eq!(
+            paused.states.get("zakaz-progress-1"),
+            Some(&"paused".to_string())
+        );
+        let batch = paused.progress_batch.expect("pause batch");
+        assert_eq!(batch.status, OrderProgressBatchStatus::Paused);
+        assert_eq!(batch.produced_qty, 42.5);
+        assert!(batch.qr_payload.starts_with("GSP:"));
+        assert!(batch.label_item_name.contains("pauza"));
+        assert_eq!(batch.executor_name, "Worker Progress");
+
+        let lookup = service
+            .progress_batch_for_qr("", &batch.qr_payload)
+            .await
+            .expect("lookup");
+        assert_eq!(lookup.batch_id, batch.batch_id);
+
+        let resumed = service
+            .apply_apparatus_queue_action_with_progress(
+                "7 ta rangli pechat",
+                "zakaz-progress-1",
+                queue_state::ApparatusQueueAction::Resume,
+                &["7 ta rangli pechat".to_string()],
+                actor,
+                QueueProgressInput {
+                    qr_payload: batch.qr_payload.clone(),
+                    ..QueueProgressInput::default()
+                },
+            )
+            .await
+            .expect("resume");
+        assert_eq!(
+            resumed.states.get("zakaz-progress-1"),
+            Some(&"in_progress".to_string())
+        );
+        assert_eq!(
+            resumed.progress_batch.expect("resumed batch").status,
+            OrderProgressBatchStatus::Resumed
+        );
+    }
+
+    #[tokio::test]
     async fn upsert_maps_batch_keeps_queue_state_and_sequence_cache() {
         let store = std::sync::Arc::new(MemoryProductionMapStore::new());
         let service = ProductionMapService::new(store);
@@ -2528,6 +3315,8 @@ mod tests {
             order_number: String::new(),
             roll_count: None,
             width_mm: None,
+            order_kg: None,
+            base_length: None,
             nodes: vec![
                 ProductionMapNode {
                     id: "start".to_string(),
@@ -2626,6 +3415,8 @@ mod tests {
             order_number: String::new(),
             roll_count: None,
             width_mm: None,
+            order_kg: None,
+            base_length: None,
             nodes: vec![
                 ProductionMapNode {
                     id: "start".to_string(),
@@ -2700,6 +3491,8 @@ mod tests {
             order_number: String::new(),
             roll_count: None,
             width_mm: None,
+            order_kg: None,
+            base_length: None,
             nodes: vec![
                 ProductionMapNode {
                     id: "start".to_string(),

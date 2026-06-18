@@ -279,6 +279,7 @@ impl NormalizedRezkaSplit {
             item_code: output.item_code.clone(),
             item_name: output.item_name.clone(),
             warehouse: output.warehouse.clone(),
+            executor_name: String::new(),
             printer: self.printer.clone(),
             print_mode: self.print_mode.clone(),
             gross_qty: output.qty,

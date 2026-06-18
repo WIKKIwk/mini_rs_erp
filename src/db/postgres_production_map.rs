@@ -5,8 +5,9 @@ use sqlx::{PgPool, Postgres, Transaction};
 
 use crate::core::production_map::{
     ApparatusMaterialRule, ApparatusQueueActionEvent, ApparatusQueuePolicy, CompletedQueueOrder,
-    ProductionMapDefinition, ProductionMapError, ProductionMapStorePort, QueueActionActor,
-    RawMaterialAssignment,
+    OrderProgressBatch, OrderProgressBatchStatus, OrderProgressEvent, OrderRunSession,
+    OrderRunStatus, ProductionMapDefinition, ProductionMapError, ProductionMapStorePort,
+    QueueActionActor, RawMaterialAssignment,
 };
 
 #[derive(Clone)]
@@ -295,6 +296,142 @@ impl ProductionMapStorePort for PostgresProductionMapStore {
             .collect())
     }
 
+    async fn active_order_run_session(
+        &self,
+        apparatus: &str,
+        order_id: &str,
+    ) -> Result<Option<OrderRunSession>, ProductionMapError> {
+        let row = sqlx::query_as::<_, ProgressSessionRow>(
+            "SELECT session_id, apparatus, order_id, status,
+                    worker_role, worker_ref, worker_display_name,
+                    EXTRACT(EPOCH FROM started_at)::bigint AS started_at_unix,
+                    EXTRACT(EPOCH FROM updated_at)::bigint AS updated_at_unix,
+                    payload_json
+             FROM mini_order_run_sessions
+             WHERE order_id = $1
+               AND lower(apparatus) = lower($2)
+               AND status IN ('active', 'paused')
+             ORDER BY updated_at DESC
+             LIMIT 1",
+        )
+        .bind(order_id.trim())
+        .bind(apparatus.trim())
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(|_| ProductionMapError::StoreFailed)?;
+        row.map(progress_session_from_row).transpose()
+    }
+
+    async fn order_run_session(
+        &self,
+        session_id: &str,
+    ) -> Result<Option<OrderRunSession>, ProductionMapError> {
+        let row = sqlx::query_as::<_, ProgressSessionRow>(
+            "SELECT session_id, apparatus, order_id, status,
+                    worker_role, worker_ref, worker_display_name,
+                    EXTRACT(EPOCH FROM started_at)::bigint AS started_at_unix,
+                    EXTRACT(EPOCH FROM updated_at)::bigint AS updated_at_unix,
+                    payload_json
+             FROM mini_order_run_sessions
+             WHERE session_id = $1",
+        )
+        .bind(session_id.trim())
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(|_| ProductionMapError::StoreFailed)?;
+        row.map(progress_session_from_row).transpose()
+    }
+
+    async fn progress_batch(
+        &self,
+        batch_id: &str,
+    ) -> Result<Option<OrderProgressBatch>, ProductionMapError> {
+        let row = sqlx::query_as::<_, ProgressBatchRow>(
+            "SELECT batch_id, session_id, apparatus, order_id, action, status,
+                    produced_qty::float8 AS produced_qty, uom, qr_payload,
+                    label_item_code, label_item_name, executor_name,
+                    worker_role, worker_ref, worker_display_name, payload_json
+             FROM mini_progress_batches
+             WHERE batch_id = $1",
+        )
+        .bind(batch_id.trim())
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(|_| ProductionMapError::StoreFailed)?;
+        row.map(progress_batch_from_row).transpose()
+    }
+
+    async fn progress_batch_by_qr(
+        &self,
+        qr_payload: &str,
+    ) -> Result<Option<OrderProgressBatch>, ProductionMapError> {
+        let row = sqlx::query_as::<_, ProgressBatchRow>(
+            "SELECT batch_id, session_id, apparatus, order_id, action, status,
+                    produced_qty::float8 AS produced_qty, uom, qr_payload,
+                    label_item_code, label_item_name, executor_name,
+                    worker_role, worker_ref, worker_display_name, payload_json
+             FROM mini_progress_batches
+             WHERE lower(qr_payload) = lower($1)",
+        )
+        .bind(qr_payload.trim())
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(|_| ProductionMapError::StoreFailed)?;
+        row.map(progress_batch_from_row).transpose()
+    }
+
+    async fn put_order_run_session(
+        &self,
+        session: OrderRunSession,
+    ) -> Result<(), ProductionMapError> {
+        put_order_run_session(&self.pool, &session).await
+    }
+
+    async fn put_order_progress_event(
+        &self,
+        event: OrderProgressEvent,
+    ) -> Result<(), ProductionMapError> {
+        put_order_progress_event(&self.pool, &event).await
+    }
+
+    async fn put_order_progress_batch(
+        &self,
+        batch: OrderProgressBatch,
+    ) -> Result<(), ProductionMapError> {
+        put_order_progress_batch(&self.pool, &batch).await
+    }
+
+    async fn put_apparatus_queue_states_with_event_and_progress(
+        &self,
+        apparatus: &str,
+        states: BTreeMap<String, String>,
+        event: ApparatusQueueActionEvent,
+        session: Option<OrderRunSession>,
+        progress_event: Option<OrderProgressEvent>,
+        progress_batch: Option<OrderProgressBatch>,
+    ) -> Result<(), ProductionMapError> {
+        let apparatus = apparatus.trim();
+        let mut tx = self
+            .pool
+            .begin()
+            .await
+            .map_err(|_| ProductionMapError::StoreFailed)?;
+        put_queue_states_tx(&mut tx, apparatus, states).await?;
+        insert_queue_action_event_tx(&mut tx, &event).await?;
+        if let Some(session) = session {
+            put_order_run_session_tx(&mut tx, &session).await?;
+        }
+        if let Some(event) = progress_event {
+            put_order_progress_event_tx(&mut tx, &event).await?;
+        }
+        if let Some(batch) = progress_batch {
+            put_order_progress_batch_tx(&mut tx, &batch).await?;
+        }
+        tx.commit()
+            .await
+            .map_err(|_| ProductionMapError::StoreFailed)
+    }
+
     async fn apparatus_material_rules(
         &self,
     ) -> Result<Vec<ApparatusMaterialRule>, ProductionMapError> {
@@ -426,6 +563,8 @@ async fn insert_queue_action_event_tx(
     .bind(event.order_id.trim())
     .bind(match event.action {
         crate::core::production_map::queue_state::ApparatusQueueAction::Start => "start",
+        crate::core::production_map::queue_state::ApparatusQueueAction::Pause => "pause",
+        crate::core::production_map::queue_state::ApparatusQueueAction::Resume => "resume",
         crate::core::production_map::queue_state::ApparatusQueueAction::Complete => "complete",
     })
     .bind(event.from_state.as_str())
@@ -443,6 +582,273 @@ async fn insert_queue_action_event_tx(
     .await
     .map_err(|_| ProductionMapError::StoreFailed)?;
     Ok(())
+}
+
+async fn put_order_run_session(
+    pool: &PgPool,
+    session: &OrderRunSession,
+) -> Result<(), ProductionMapError> {
+    let mut tx = pool
+        .begin()
+        .await
+        .map_err(|_| ProductionMapError::StoreFailed)?;
+    put_order_run_session_tx(&mut tx, session).await?;
+    tx.commit()
+        .await
+        .map_err(|_| ProductionMapError::StoreFailed)
+}
+
+async fn put_order_run_session_tx(
+    tx: &mut Transaction<'_, Postgres>,
+    session: &OrderRunSession,
+) -> Result<(), ProductionMapError> {
+    sqlx::query(
+        "INSERT INTO mini_order_run_sessions (
+            session_id, apparatus, order_id, status,
+            worker_role, worker_ref, worker_display_name,
+            started_at, updated_at, payload_json
+         )
+         VALUES ($1, $2, $3, $4, $5, $6, $7, to_timestamp($8), to_timestamp($9), $10)
+         ON CONFLICT (session_id) DO UPDATE SET
+            status = excluded.status,
+            worker_role = excluded.worker_role,
+            worker_ref = excluded.worker_ref,
+            worker_display_name = excluded.worker_display_name,
+            updated_at = excluded.updated_at,
+            payload_json = excluded.payload_json",
+    )
+    .bind(session.session_id.trim())
+    .bind(session.apparatus.trim())
+    .bind(session.order_id.trim())
+    .bind(session.status.as_str())
+    .bind(session.worker_role.trim())
+    .bind(session.worker_ref.trim())
+    .bind(session.worker_display_name.trim())
+    .bind(session.started_at_unix as f64)
+    .bind(session.updated_at_unix as f64)
+    .bind(&session.payload_json)
+    .execute(&mut **tx)
+    .await
+    .map_err(|_| ProductionMapError::StoreFailed)?;
+    Ok(())
+}
+
+async fn put_order_progress_event(
+    pool: &PgPool,
+    event: &OrderProgressEvent,
+) -> Result<(), ProductionMapError> {
+    let mut tx = pool
+        .begin()
+        .await
+        .map_err(|_| ProductionMapError::StoreFailed)?;
+    put_order_progress_event_tx(&mut tx, event).await?;
+    tx.commit()
+        .await
+        .map_err(|_| ProductionMapError::StoreFailed)
+}
+
+async fn put_order_progress_event_tx(
+    tx: &mut Transaction<'_, Postgres>,
+    event: &OrderProgressEvent,
+) -> Result<(), ProductionMapError> {
+    sqlx::query(
+        "INSERT INTO mini_order_progress_events (
+            event_id, session_id, batch_id, apparatus, order_id, action,
+            produced_qty, uom, worker_role, worker_ref, worker_display_name,
+            qr_payload, payload_json, created_at
+         )
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, now())
+         ON CONFLICT (event_id) DO UPDATE SET
+            session_id = excluded.session_id,
+            batch_id = excluded.batch_id,
+            action = excluded.action,
+            produced_qty = excluded.produced_qty,
+            uom = excluded.uom,
+            worker_role = excluded.worker_role,
+            worker_ref = excluded.worker_ref,
+            worker_display_name = excluded.worker_display_name,
+            qr_payload = excluded.qr_payload,
+            payload_json = excluded.payload_json",
+    )
+    .bind(event.event_id.trim())
+    .bind(event.session_id.trim())
+    .bind(event.batch_id.trim())
+    .bind(event.apparatus.trim())
+    .bind(event.order_id.trim())
+    .bind(queue_action_as_str(event.action))
+    .bind(event.produced_qty)
+    .bind(event.uom.trim())
+    .bind(event.worker_role.trim())
+    .bind(event.worker_ref.trim())
+    .bind(event.worker_display_name.trim())
+    .bind(event.qr_payload.trim())
+    .bind(&event.payload_json)
+    .execute(&mut **tx)
+    .await
+    .map_err(|_| ProductionMapError::StoreFailed)?;
+    Ok(())
+}
+
+async fn put_order_progress_batch(
+    pool: &PgPool,
+    batch: &OrderProgressBatch,
+) -> Result<(), ProductionMapError> {
+    let mut tx = pool
+        .begin()
+        .await
+        .map_err(|_| ProductionMapError::StoreFailed)?;
+    put_order_progress_batch_tx(&mut tx, batch).await?;
+    tx.commit()
+        .await
+        .map_err(|_| ProductionMapError::StoreFailed)
+}
+
+async fn put_order_progress_batch_tx(
+    tx: &mut Transaction<'_, Postgres>,
+    batch: &OrderProgressBatch,
+) -> Result<(), ProductionMapError> {
+    sqlx::query(
+        "INSERT INTO mini_progress_batches (
+            batch_id, session_id, apparatus, order_id, action, status,
+            produced_qty, uom, qr_payload, label_item_code, label_item_name,
+            executor_name, worker_role, worker_ref, worker_display_name,
+            payload_json, created_at, updated_at
+         )
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, now(), now())
+         ON CONFLICT (batch_id) DO UPDATE SET
+            status = excluded.status,
+            produced_qty = excluded.produced_qty,
+            uom = excluded.uom,
+            qr_payload = excluded.qr_payload,
+            label_item_code = excluded.label_item_code,
+            label_item_name = excluded.label_item_name,
+            executor_name = excluded.executor_name,
+            worker_role = excluded.worker_role,
+            worker_ref = excluded.worker_ref,
+            worker_display_name = excluded.worker_display_name,
+            payload_json = excluded.payload_json,
+            updated_at = now()",
+    )
+    .bind(batch.batch_id.trim())
+    .bind(batch.session_id.trim())
+    .bind(batch.apparatus.trim())
+    .bind(batch.order_id.trim())
+    .bind(queue_action_as_str(batch.action))
+    .bind(batch.status.as_str())
+    .bind(batch.produced_qty)
+    .bind(batch.uom.trim())
+    .bind(batch.qr_payload.trim())
+    .bind(batch.label_item_code.trim())
+    .bind(batch.label_item_name.trim())
+    .bind(batch.executor_name.trim())
+    .bind(batch.worker_role.trim())
+    .bind(batch.worker_ref.trim())
+    .bind(batch.worker_display_name.trim())
+    .bind(&batch.payload_json)
+    .execute(&mut **tx)
+    .await
+    .map_err(|_| ProductionMapError::StoreFailed)?;
+    Ok(())
+}
+
+#[derive(sqlx::FromRow)]
+struct ProgressSessionRow {
+    session_id: String,
+    apparatus: String,
+    order_id: String,
+    status: String,
+    worker_role: String,
+    worker_ref: String,
+    worker_display_name: String,
+    started_at_unix: i64,
+    updated_at_unix: i64,
+    payload_json: serde_json::Value,
+}
+
+#[derive(sqlx::FromRow)]
+struct ProgressBatchRow {
+    batch_id: String,
+    session_id: String,
+    apparatus: String,
+    order_id: String,
+    action: String,
+    status: String,
+    produced_qty: f64,
+    uom: String,
+    qr_payload: String,
+    label_item_code: String,
+    label_item_name: String,
+    executor_name: String,
+    worker_role: String,
+    worker_ref: String,
+    worker_display_name: String,
+    payload_json: serde_json::Value,
+}
+
+fn progress_session_from_row(
+    row: ProgressSessionRow,
+) -> Result<OrderRunSession, ProductionMapError> {
+    Ok(OrderRunSession {
+        session_id: row.session_id,
+        apparatus: row.apparatus,
+        order_id: row.order_id,
+        status: OrderRunStatus::parse(&row.status).ok_or(ProductionMapError::StoreFailed)?,
+        worker_role: row.worker_role,
+        worker_ref: row.worker_ref,
+        worker_display_name: row.worker_display_name,
+        started_at_unix: row.started_at_unix,
+        updated_at_unix: row.updated_at_unix,
+        payload_json: row.payload_json,
+    })
+}
+
+fn progress_batch_from_row(
+    row: ProgressBatchRow,
+) -> Result<OrderProgressBatch, ProductionMapError> {
+    Ok(OrderProgressBatch {
+        batch_id: row.batch_id,
+        session_id: row.session_id,
+        apparatus: row.apparatus,
+        order_id: row.order_id,
+        action: queue_action_from_str(&row.action).ok_or(ProductionMapError::StoreFailed)?,
+        status: OrderProgressBatchStatus::parse(&row.status)
+            .ok_or(ProductionMapError::StoreFailed)?,
+        produced_qty: row.produced_qty,
+        uom: row.uom,
+        qr_payload: row.qr_payload,
+        label_item_code: row.label_item_code,
+        label_item_name: row.label_item_name,
+        executor_name: row.executor_name,
+        worker_role: row.worker_role,
+        worker_ref: row.worker_ref,
+        worker_display_name: row.worker_display_name,
+        payload_json: row.payload_json,
+    })
+}
+
+fn queue_action_from_str(
+    value: &str,
+) -> Option<crate::core::production_map::queue_state::ApparatusQueueAction> {
+    match value.trim().to_ascii_lowercase().as_str() {
+        "start" => Some(crate::core::production_map::queue_state::ApparatusQueueAction::Start),
+        "pause" => Some(crate::core::production_map::queue_state::ApparatusQueueAction::Pause),
+        "resume" => Some(crate::core::production_map::queue_state::ApparatusQueueAction::Resume),
+        "complete" => {
+            Some(crate::core::production_map::queue_state::ApparatusQueueAction::Complete)
+        }
+        _ => None,
+    }
+}
+
+fn queue_action_as_str(
+    action: crate::core::production_map::queue_state::ApparatusQueueAction,
+) -> &'static str {
+    match action {
+        crate::core::production_map::queue_state::ApparatusQueueAction::Start => "start",
+        crate::core::production_map::queue_state::ApparatusQueueAction::Pause => "pause",
+        crate::core::production_map::queue_state::ApparatusQueueAction::Resume => "resume",
+        crate::core::production_map::queue_state::ApparatusQueueAction::Complete => "complete",
+    }
 }
 
 async fn put_map_inner(

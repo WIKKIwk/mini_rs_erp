@@ -319,6 +319,10 @@ impl ProductionMapStorePort for ProductionMapStore {
                 match event.action {
                     crate::core::production_map::queue_state::ApparatusQueueAction::Start =>
                         "start",
+                    crate::core::production_map::queue_state::ApparatusQueueAction::Pause =>
+                        "pause",
+                    crate::core::production_map::queue_state::ApparatusQueueAction::Resume =>
+                        "resume",
                     crate::core::production_map::queue_state::ApparatusQueueAction::Complete =>
                         "complete",
                 },
@@ -542,6 +546,8 @@ mod tests {
                 order_number: "1234".to_string(),
                 roll_count: Some(7.0),
                 width_mm: Some(650.0),
+                order_kg: None,
+                base_length: None,
                 nodes: vec![
                     ProductionMapNode {
                         id: "start".to_string(),
@@ -635,6 +641,8 @@ mod tests {
                 order_number: "1234".to_string(),
                 roll_count: None,
                 width_mm: None,
+                order_kg: None,
+                base_length: None,
                 nodes: maps[0].map.nodes.clone(),
                 edges: maps[0].map.edges.clone(),
             })

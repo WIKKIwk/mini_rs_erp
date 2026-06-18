@@ -45,6 +45,46 @@ pub struct MaterialReceiptPrintResponse {
     pub print_count: u32,
 }
 
+#[derive(Debug, Clone, Default, PartialEq, Deserialize)]
+pub struct ProgressLabelPrintRequest {
+    #[serde(default)]
+    pub driver_url: String,
+    #[serde(default)]
+    pub qr_payload: String,
+    #[serde(default)]
+    pub item_code: String,
+    #[serde(default)]
+    pub item_name: String,
+    #[serde(default)]
+    pub executor_name: String,
+    #[serde(default)]
+    pub printer: String,
+    #[serde(default)]
+    pub print_mode: String,
+    #[serde(default)]
+    pub gross_qty: f64,
+    #[serde(default)]
+    pub unit: String,
+    #[serde(default)]
+    pub print_count: u32,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Serialize)]
+pub struct ProgressLabelPrintResponse {
+    pub ok: bool,
+    pub status: String,
+    pub qr_payload: String,
+    pub item_code: String,
+    pub item_name: String,
+    pub executor_name: String,
+    pub qty: f64,
+    pub unit: String,
+    pub printer: String,
+    pub print_mode: String,
+    pub printer_status: String,
+    pub print_count: u32,
+}
+
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct MaterialReceiptDraft {
     pub name: String,
@@ -84,6 +124,7 @@ pub struct ScaleDriverPrintRequest {
     pub item_code: String,
     pub item_name: String,
     pub warehouse: String,
+    pub executor_name: String,
     pub printer: String,
     pub print_mode: String,
     pub gross_qty: f64,

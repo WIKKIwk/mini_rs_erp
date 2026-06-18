@@ -3,7 +3,10 @@ use std::collections::BTreeSet;
 use serde::{Deserialize, Serialize};
 
 use super::queue_state;
-use super::{ProductionMapError, ProductionMapService, QueueActionActor, chain};
+use super::{
+    ApparatusQueueActionResult, ProductionMapError, ProductionMapService, QueueActionActor,
+    QueueProgressInput, chain,
+};
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ApparatusMaterialRule {
@@ -136,6 +139,32 @@ impl ProductionMapService {
             .await?;
         self.apply_apparatus_queue_action(apparatus, order_id, action, assigned_apparatus, actor)
             .await
+    }
+
+    pub async fn apply_apparatus_queue_action_with_material_scan_and_progress(
+        &self,
+        apparatus: &str,
+        order_id: &str,
+        action: queue_state::ApparatusQueueAction,
+        assigned_apparatus: &[String],
+        actor: QueueActionActor,
+        material_barcode: &str,
+        progress: QueueProgressInput,
+    ) -> Result<ApparatusQueueActionResult, ProductionMapError> {
+        if !queue_state::apparatus_matches_assigned(apparatus, assigned_apparatus) {
+            return Err(ProductionMapError::ApparatusNotAssigned);
+        }
+        self.validate_material_scan(apparatus, order_id, action, material_barcode)
+            .await?;
+        self.apply_apparatus_queue_action_with_progress(
+            apparatus,
+            order_id,
+            action,
+            assigned_apparatus,
+            actor,
+            progress,
+        )
+        .await
     }
 
     async fn resolve_material_apparatus(

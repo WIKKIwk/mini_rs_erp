@@ -179,6 +179,8 @@ mod tests {
             order_number: "100".to_string(),
             roll_count: None,
             width_mm: None,
+            order_kg: None,
+            base_length: None,
             nodes: vec![
                 node("start", ProductionMapNodeKind::Start, "Start"),
                 node("order", ProductionMapNodeKind::Task, "Hotlunch mahsulot"),

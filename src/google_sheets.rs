@@ -854,6 +854,8 @@ mod tests {
             order_number: "7775".to_string(),
             roll_count: Some(8.0),
             width_mm: Some(735.0),
+            order_kg: None,
+            base_length: None,
             nodes: vec![ProductionMapNode {
                 id: "apparatus".to_string(),
                 kind: ProductionMapNodeKind::Apparatus,
@@ -914,6 +916,8 @@ mod tests {
             order_number: "1123".to_string(),
             roll_count: None,
             width_mm: Some(1190.0),
+            order_kg: None,
+            base_length: None,
             nodes: Vec::new(),
             edges: Vec::new(),
         };
@@ -963,6 +967,8 @@ mod tests {
             order_number: order_number.to_string(),
             roll_count: Some(7.0),
             width_mm: Some(650.0),
+            order_kg: None,
+            base_length: None,
             nodes: vec![ProductionMapNode {
                 id: "apparatus".to_string(),
                 kind: ProductionMapNodeKind::Apparatus,

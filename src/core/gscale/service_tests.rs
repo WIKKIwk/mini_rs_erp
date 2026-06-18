@@ -178,6 +178,34 @@ async fn forwards_print_count_to_driver_without_creating_extra_receipt_drafts() 
     );
 }
 
+#[tokio::test]
+async fn progress_label_prints_without_receipt_store() {
+    let events = Arc::new(Mutex::new(Vec::new()));
+    let service = GscaleService::new().with_driver(Arc::new(FakeDriver::done(events.clone())));
+
+    let response = service
+        .print_progress_label(ProgressLabelPrintRequest {
+            qr_payload: "GSP:PROGRESS-1".to_string(),
+            item_code: "zakaz-1202".to_string(),
+            item_name: "Vesta yarim tayyor, 7 ta rangli pechat holatda, pauza".to_string(),
+            executor_name: "Ali".to_string(),
+            gross_qty: 12.5,
+            unit: "kg".to_string(),
+            print_count: 1,
+            ..ProgressLabelPrintRequest::default()
+        })
+        .await
+        .unwrap();
+
+    assert_eq!(response.status, "printed");
+    assert_eq!(response.qr_payload, "GSP:PROGRESS-1");
+    assert_eq!(response.executor_name, "Ali");
+    assert_eq!(
+        events.lock().unwrap().as_slice(),
+        ["print:GSP:PROGRESS-1:1"]
+    );
+}
+
 async fn wait_for_event(events: &Arc<Mutex<Vec<String>>>, needle: &str) {
     for _ in 0..50 {
         if events.lock().unwrap().iter().any(|event| event == needle) {

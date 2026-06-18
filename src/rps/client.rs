@@ -107,6 +107,8 @@ struct RpsPrintRequest {
     item_code: String,
     item_name: String,
     warehouse: String,
+    #[serde(skip_serializing_if = "String::is_empty")]
+    executor_name: String,
     printer: String,
     print_mode: String,
     gross_qty: f64,
@@ -123,6 +125,7 @@ impl From<ScaleDriverPrintRequest> for RpsPrintRequest {
             item_code: request.item_code,
             item_name: request.item_name,
             warehouse: request.warehouse,
+            executor_name: request.executor_name,
             printer: request.printer,
             print_mode: request.print_mode,
             gross_qty: request.gross_qty,

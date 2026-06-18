@@ -5,8 +5,8 @@ use tokio::sync::oneshot;
 use super::epc::GscaleEpcGenerator;
 use super::models::{
     CreateMaterialReceiptDraftInput, MaterialReceiptDraft, MaterialReceiptPrintRequest,
-    MaterialReceiptPrintResponse, RawMaterialStockEntry, ScaleDriverPrintRequest,
-    ScaleDriverPrintResponse,
+    MaterialReceiptPrintResponse, ProgressLabelPrintRequest, ProgressLabelPrintResponse,
+    RawMaterialStockEntry, ScaleDriverPrintRequest, ScaleDriverPrintResponse,
 };
 use super::ports::{EpcSource, MaterialReceiptStorePort, ScaleDriverPort};
 
@@ -128,6 +128,46 @@ impl GscaleService {
     ) -> Result<MaterialReceiptPrintResponse, GscaleServiceError> {
         self.print_material_receipt_driver_first_with_late_error(request, None)
             .await
+    }
+
+    pub async fn print_progress_label(
+        &self,
+        request: ProgressLabelPrintRequest,
+    ) -> Result<ProgressLabelPrintResponse, GscaleServiceError> {
+        let driver = self.driver.as_ref().ok_or_else(|| {
+            GscaleServiceError::NotConfigured("scale driver is not configured".to_string())
+        })?;
+        let job = NormalizedProgressLabelJob::from_request(request)?;
+        let print = driver.print_material_receipt(job.driver_request()).await;
+        let print = match print {
+            Ok(print) if print_done(&print) => print,
+            Ok(print) => {
+                return Err(GscaleServiceError::PrintFailed {
+                    detail: print_error_detail(&print),
+                    delete_error: None,
+                });
+            }
+            Err(error) => {
+                return Err(GscaleServiceError::PrintFailed {
+                    detail: error.message(),
+                    delete_error: None,
+                });
+            }
+        };
+        Ok(ProgressLabelPrintResponse {
+            ok: true,
+            status: "printed".to_string(),
+            qr_payload: job.qr_payload,
+            item_code: job.item_code,
+            item_name: job.item_name,
+            executor_name: job.executor_name,
+            qty: job.gross_qty,
+            unit: job.unit,
+            printer: print.printer,
+            print_mode: print.mode,
+            printer_status: print.printer_status,
+            print_count: job.print_count,
+        })
     }
 
     pub async fn print_material_receipt_driver_first_with_late_error(
@@ -271,6 +311,69 @@ async fn create_material_receipt_draft(
 }
 
 #[derive(Debug, Clone, PartialEq)]
+struct NormalizedProgressLabelJob {
+    driver_url: String,
+    qr_payload: String,
+    item_code: String,
+    item_name: String,
+    executor_name: String,
+    printer: String,
+    print_mode: String,
+    gross_qty: f64,
+    unit: String,
+    print_count: u32,
+}
+
+impl NormalizedProgressLabelJob {
+    fn from_request(request: ProgressLabelPrintRequest) -> Result<Self, GscaleServiceError> {
+        let qr_payload = request.qr_payload.trim().to_string();
+        let item_code = request.item_code.trim().to_string();
+        let item_name = request.item_name.trim().to_string();
+        if qr_payload.is_empty() || item_code.is_empty() || item_name.is_empty() {
+            return Err(GscaleServiceError::InvalidInput(
+                "qr_payload_item_code_and_item_name_required".to_string(),
+            ));
+        }
+        let gross_qty = request.gross_qty;
+        if !gross_qty.is_finite() || gross_qty <= 0.0 {
+            return Err(GscaleServiceError::InvalidInput(
+                "progress_qty_required".to_string(),
+            ));
+        }
+        Ok(Self {
+            driver_url: request.driver_url.trim().to_string(),
+            qr_payload,
+            item_code,
+            item_name,
+            executor_name: request.executor_name.trim().to_string(),
+            printer: request.printer.trim().to_ascii_lowercase(),
+            print_mode: request.print_mode.trim().to_ascii_lowercase(),
+            gross_qty,
+            unit: blank_default(&request.unit, "kg"),
+            print_count: normalize_print_count(request.print_count),
+        })
+    }
+
+    fn driver_request(&self) -> ScaleDriverPrintRequest {
+        ScaleDriverPrintRequest {
+            driver_url: self.driver_url.clone(),
+            epc: self.qr_payload.clone(),
+            item_code: self.item_code.clone(),
+            item_name: self.item_name.clone(),
+            warehouse: format!("Ijrochi: {}", self.executor_name.trim()),
+            executor_name: self.executor_name.clone(),
+            printer: self.printer.clone(),
+            print_mode: self.print_mode.clone(),
+            gross_qty: self.gross_qty,
+            unit: self.unit.clone(),
+            tare_enabled: false,
+            tare_kg: 0.0,
+            print_count: self.print_count,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq)]
 struct NormalizedMaterialReceiptJob {
     driver_url: String,
     item_code: String,
@@ -341,6 +444,7 @@ impl NormalizedMaterialReceiptJob {
             item_code: self.item_code.clone(),
             item_name: self.item_name.clone(),
             warehouse: self.warehouse.clone(),
+            executor_name: String::new(),
             printer: self.printer.clone(),
             print_mode: self.print_mode.clone(),
             gross_qty: self.gross_qty,

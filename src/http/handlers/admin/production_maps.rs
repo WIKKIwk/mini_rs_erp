@@ -3,11 +3,11 @@ use crate::core::auth::models::PrincipalRole;
 use crate::core::calculate_orders::{
     CalculateOrderError, CalculateOrderTemplate, owner_key, validate_template,
 };
-use crate::core::gscale::models::RawMaterialStockEntry;
+use crate::core::gscale::models::{ProgressLabelPrintRequest, RawMaterialStockEntry};
 use crate::core::production_map::{
     ApparatusMaterialRuleUpsert, ApparatusQueuePolicy, ProductionMapBatchMoveRequest,
     ProductionMapDefinition, ProductionMapError, ProductionMapMoveRequest, ProductionMapRunRequest,
-    QueueActionActor, RawMaterialAssignmentInput, queue_state,
+    QueueActionActor, QueueProgressInput, RawMaterialAssignmentInput, queue_state,
 };
 use crate::core::werka::models::SupplierItem;
 use crate::google_sheets::is_sheet_order_map;
@@ -338,7 +338,39 @@ struct ApparatusQueueActionRequest {
     material_barcode: String,
     #[serde(default)]
     material_barcodes: Vec<String>,
+    #[serde(default)]
+    produced_qty: Option<f64>,
+    #[serde(default)]
+    qty: Option<f64>,
+    #[serde(default)]
+    uom: String,
+    #[serde(default)]
+    unit: String,
+    #[serde(default)]
+    progress_batch_id: String,
+    #[serde(default)]
+    progress_qr: String,
+    #[serde(default)]
+    qr_payload: String,
+    #[serde(default)]
+    driver_url: String,
+    #[serde(default)]
+    printer: String,
+    #[serde(default)]
+    print_mode: String,
+    #[serde(default)]
+    print_count: u32,
     action: queue_state::ApparatusQueueAction,
+}
+
+#[derive(serde::Deserialize)]
+struct ProgressQrLookupRequest {
+    #[serde(default)]
+    progress_batch_id: String,
+    #[serde(default)]
+    qr_payload: String,
+    #[serde(default)]
+    progress_qr: String,
 }
 
 /// Starts or completes the current actionable order on the operator's assigned
@@ -372,21 +404,102 @@ pub async fn production_map_queue_action(
     } else {
         input.material_barcodes.join(",")
     };
-    let states = state
+    let progress = QueueProgressInput {
+        produced_qty: input.produced_qty.or(input.qty),
+        uom: if input.uom.trim().is_empty() {
+            input.unit
+        } else {
+            input.uom
+        },
+        progress_batch_id: input.progress_batch_id,
+        qr_payload: if input.qr_payload.trim().is_empty() {
+            input.progress_qr
+        } else {
+            input.qr_payload
+        },
+    };
+    let result = state
         .production_maps
-        .apply_apparatus_queue_action_with_material_scan(
+        .apply_apparatus_queue_action_with_material_scan_and_progress(
             &input.apparatus,
             &input.order_id,
             input.action,
             &assigned_apparatus,
             queue_action_actor(&principal),
             &material_barcode,
+            progress,
         )
+        .await
+        .map_err(production_map_error)?;
+    let mut print = serde_json::Value::Null;
+    if let Some(batch) = &result.progress_batch {
+        if matches!(
+            input.action,
+            queue_state::ApparatusQueueAction::Pause | queue_state::ApparatusQueueAction::Complete
+        ) {
+            let response = state
+                .gscale
+                .print_progress_label(ProgressLabelPrintRequest {
+                    driver_url: input.driver_url,
+                    qr_payload: batch.qr_payload.clone(),
+                    item_code: batch.label_item_code.clone(),
+                    item_name: batch.label_item_name.clone(),
+                    executor_name: batch.executor_name.clone(),
+                    printer: input.printer,
+                    print_mode: input.print_mode,
+                    gross_qty: batch.produced_qty,
+                    unit: batch.uom.clone(),
+                    print_count: input.print_count,
+                })
+                .await
+                .map_err(gscale_progress_error)?;
+            print = serde_json::to_value(response).unwrap_or(serde_json::Value::Null);
+        }
+    }
+    Ok(json_response(serde_json::json!({
+        "ok": true,
+        "states": result.states,
+        "session": result.session,
+        "progress_event": result.progress_event,
+        "progress_batch": result.progress_batch,
+        "print": print,
+    })))
+}
+
+pub async fn production_map_progress_qr_lookup(
+    State(state): State<AppState>,
+    method: Method,
+    headers: HeaderMap,
+    body: Bytes,
+) -> Result<Response, AdminError> {
+    authorize_any_capability(
+        &state,
+        &headers,
+        &[
+            Capability::AdminAccess,
+            Capability::ProductionMapManage,
+            Capability::ApparatusQueueManage,
+        ],
+    )
+    .await?;
+    if method != Method::POST {
+        return Err(method_not_allowed());
+    }
+    let input: ProgressQrLookupRequest = parse_json(&body)?;
+    let qr_payload = if input.qr_payload.trim().is_empty() {
+        input.progress_qr
+    } else {
+        input.qr_payload
+    };
+    let batch = state
+        .production_maps
+        .progress_batch_for_qr(&input.progress_batch_id, &qr_payload)
         .await
         .map_err(production_map_error)?;
     Ok(json_response(serde_json::json!({
         "ok": true,
-        "states": states,
+        "can_resume": batch.status == crate::core::production_map::OrderProgressBatchStatus::Paused,
+        "batch": batch,
     })))
 }
 
@@ -823,10 +936,50 @@ fn production_map_error(error: ProductionMapError) -> AdminError {
         }
         ProductionMapError::RawMaterialScanRequired => bad_request("raw_material_scan_required"),
         ProductionMapError::RawMaterialMismatch => bad_request("raw_material_mismatch"),
+        ProductionMapError::ProgressInputInvalid => bad_request("progress_input_invalid"),
+        ProductionMapError::ProgressBatchNotFound => not_found("progress_batch_not_found"),
+        ProductionMapError::ProgressBatchNotResumable => {
+            bad_request("progress_batch_not_resumable")
+        }
         ProductionMapError::MapNotFound => not_found("map_not_found"),
         ProductionMapError::StoreFailed => server_error("store failed"),
         other => bad_request(other.to_string()),
     }
+}
+
+fn gscale_progress_error(error: crate::core::gscale::GscaleServiceError) -> AdminError {
+    match error {
+        crate::core::gscale::GscaleServiceError::InvalidInput(detail) => bad_request(detail),
+        crate::core::gscale::GscaleServiceError::NotConfigured(_) => {
+            service_unavailable("scale_driver_not_configured")
+        }
+        crate::core::gscale::GscaleServiceError::PrintFailed { detail, .. } => {
+            failed_dependency(detail)
+        }
+        crate::core::gscale::GscaleServiceError::EpcGenerationFailed
+        | crate::core::gscale::GscaleServiceError::StoreWrite(_)
+        | crate::core::gscale::GscaleServiceError::SubmitFailed(_) => {
+            failed_dependency(error.to_string())
+        }
+    }
+}
+
+fn service_unavailable(error: impl Into<String>) -> AdminError {
+    (
+        StatusCode::SERVICE_UNAVAILABLE,
+        Json(AdminErrorResponse {
+            error: error.into(),
+        }),
+    )
+}
+
+fn failed_dependency(error: impl Into<String>) -> AdminError {
+    (
+        StatusCode::FAILED_DEPENDENCY,
+        Json(AdminErrorResponse {
+            error: error.into(),
+        }),
+    )
 }
 
 fn queue_action_actor(principal: &Principal) -> QueueActionActor {

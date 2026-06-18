@@ -187,6 +187,10 @@ pub fn build_router(state: AppState) -> Router {
             any(admin::production_map_queue_action),
         )
         .route(
+            "/v1/mobile/admin/production-maps/progress-qr/lookup",
+            any(admin::production_map_progress_qr_lookup),
+        )
+        .route(
             "/v1/mobile/admin/raw-material-rules",
             any(admin::raw_material_rules),
         )
