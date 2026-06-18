@@ -7,7 +7,7 @@ use serde::{Deserialize, Serialize};
 use crate::app::AppState;
 use crate::core::auth::models::Principal;
 use crate::core::authz::Capability;
-use crate::core::qolip::{QolipError, QolipLocationUpsert};
+use crate::core::qolip::{QolipBlock, QolipError, QolipLocationUpsert};
 use crate::http::handlers::auth::bearer_token;
 
 pub async fn blocks(
@@ -64,19 +64,24 @@ pub async fn locations(
     ensure_qolip_access(&state, &principal).await?;
     match method {
         Method::GET => {
-            let locations = state
-                .qolip
-                .locations(query.block.as_deref().unwrap_or(""))
-                .await
-                .map_err(qolip_error)?;
+            let block = query.block.as_deref().unwrap_or("").trim();
+            let block = match accessible_qolip_block(&state, &principal, block).await? {
+                Some(block) => block.name,
+                None => block.to_string(),
+            };
+            let locations = state.qolip.locations(&block).await.map_err(qolip_error)?;
             Ok(Json(serde_json::json!({
                 "ok": true,
                 "locations": locations,
             })))
         }
         Method::POST => {
-            let input: QolipLocationUpsert =
+            let mut input: QolipLocationUpsert =
                 serde_json::from_slice(&body).map_err(|_| bad_request("invalid_json"))?;
+            if let Some(block) = accessible_qolip_block(&state, &principal, &input.block).await? {
+                input.block = block.name;
+                input.warehouse = block.warehouse;
+            }
             let saved = state
                 .qolip
                 .upsert_location(input, &principal)
@@ -89,6 +94,34 @@ pub async fn locations(
         }
         _ => Err(method_not_allowed()),
     }
+}
+
+async fn accessible_qolip_block(
+    state: &AppState,
+    principal: &Principal,
+    block: &str,
+) -> Result<Option<QolipBlock>, (StatusCode, Json<QolipErrorResponse>)> {
+    let block = block.trim();
+    if block.is_empty() {
+        return Ok(None);
+    }
+    if state
+        .admin
+        .principal_has_capability(principal, Capability::AdminAccess)
+        .await
+    {
+        return Ok(None);
+    }
+    let assigned = state
+        .qolip
+        .assigned_blocks(principal)
+        .await
+        .map_err(qolip_error)?;
+    assigned
+        .into_iter()
+        .find(|item| item.name.trim().eq_ignore_ascii_case(block))
+        .ok_or_else(forbidden)
+        .map(Some)
 }
 
 #[derive(Debug, Deserialize)]
