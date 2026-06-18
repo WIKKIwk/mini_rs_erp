@@ -7,6 +7,7 @@ pub mod notifications;
 pub mod profile;
 pub mod push;
 pub mod push_notify;
+pub mod qolip;
 pub mod rezka;
 pub mod rps_batch;
 pub mod stock_entry;

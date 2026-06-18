@@ -235,6 +235,7 @@ fn principal_owner_key(principal: &Principal) -> String {
         PrincipalRole::Werka => "werka",
         PrincipalRole::Customer => "customer",
         PrincipalRole::Aparatchi => "aparatchi",
+        PrincipalRole::Qolipchi => "qolipchi",
         PrincipalRole::Admin => "admin",
     };
     owner_key(role, &principal.ref_)

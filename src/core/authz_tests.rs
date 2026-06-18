@@ -46,6 +46,22 @@ fn aparatchi_system_role_assigns_to_aparatchi_principal() {
 }
 
 #[test]
+fn qolipchi_system_role_has_qolip_capability() {
+    let roles = system_role_definitions();
+    let role = roles
+        .iter()
+        .find(|role| role.id == "qolipchi")
+        .expect("qolipchi role");
+
+    assert_eq!(role.base_role, Some(PrincipalRole::Qolipchi));
+    assert!(
+        role.capability_codes
+            .iter()
+            .any(|code| code == "qolip.manage")
+    );
+}
+
+#[test]
 fn core_system_role_rejects_wrong_principal_role() {
     let error = normalize_role_assignment(
         RoleAssignmentUpsert {

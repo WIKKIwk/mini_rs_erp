@@ -1170,6 +1170,7 @@ fn principal_role_code(role: &PrincipalRole) -> &'static str {
         PrincipalRole::Werka => "werka",
         PrincipalRole::Customer => "customer",
         PrincipalRole::Aparatchi => "aparatchi",
+        PrincipalRole::Qolipchi => "qolipchi",
         PrincipalRole::Admin => "admin",
     }
 }

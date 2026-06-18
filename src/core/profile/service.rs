@@ -53,7 +53,7 @@ impl ProfileService {
                     principal.phone = profile.phone;
                 }
             }
-            PrincipalRole::Werka | PrincipalRole::Admin => {}
+            PrincipalRole::Werka | PrincipalRole::Qolipchi | PrincipalRole::Admin => {}
         }
 
         self.merge_prefs(principal).await
@@ -170,6 +170,7 @@ fn role_key(role: &PrincipalRole) -> &'static str {
         PrincipalRole::Werka => "werka",
         PrincipalRole::Customer => "customer",
         PrincipalRole::Aparatchi => "aparatchi",
+        PrincipalRole::Qolipchi => "qolipchi",
         PrincipalRole::Admin => "admin",
     }
 }

@@ -22,6 +22,7 @@ use crate::core::profile::ports::ProfileStorePort;
 use crate::core::profile::service::ProfileService;
 use crate::core::push::ports::PushTokenStorePort;
 use crate::core::push::service::PushService;
+use crate::core::qolip::QolipService;
 use crate::core::rezka::RezkaService;
 use crate::core::rps_batch::ports::RpsBatchStorePort;
 use crate::core::rps_batch::{RpsBatchLmdbStore, RpsBatchService};
@@ -41,6 +42,7 @@ use crate::db::postgres_gscale_receipt::PostgresGscaleReceiptStore;
 use crate::db::postgres_mini_order::PostgresMiniOrderSink;
 use crate::db::postgres_production_map::PostgresProductionMapStore;
 use crate::db::postgres_push_token::PostgresPushTokenStore;
+use crate::db::postgres_qolip::PostgresQolipStore;
 use crate::db::postgres_rps_batch::PostgresRpsBatchStore;
 use crate::db::postgres_warehouse::PostgresWarehouseStore;
 use crate::db::postgres_worker::PostgresWorkerStore;
@@ -77,6 +79,7 @@ pub struct AppState {
     pub calculate_order_image_dir: Arc<std::path::PathBuf>,
     pub push: PushService,
     pub gscale: GscaleService,
+    pub qolip: QolipService,
     pub rezka: RezkaService,
     pub rps_batch: RpsBatchService,
     pub werka: WerkaService,
@@ -134,6 +137,7 @@ impl AppState {
         ));
         let warehouse_events = WarehouseEventHub::new();
         let gscale = build_gscale_service(scale_driver.clone(), warehouse_events.clone());
+        let qolip = build_qolip_service();
         let rezka = RezkaService::new()
             .with_driver(scale_driver)
             .with_epc_source(Arc::new(crate::core::gscale::epc::GscaleEpcGenerator::new()));
@@ -199,6 +203,7 @@ impl AppState {
             calculate_order_image_dir,
             push,
             gscale,
+            qolip,
             rezka,
             rps_batch,
             werka,
@@ -503,6 +508,23 @@ fn build_warehouse_service() -> WarehouseService {
             WarehouseService::new(Arc::new(
                 crate::core::warehouses::MemoryWarehouseStore::new(),
             ))
+        }
+    }
+}
+
+fn build_qolip_service() -> QolipService {
+    let config = match PostgresConfig::from_env() {
+        Ok(config) => config,
+        Err(_) => return QolipService::new(Arc::new(crate::core::qolip::MemoryQolipStore::new())),
+    };
+    match config.pool_options().connect_lazy(&config.database_url) {
+        Ok(pool) => {
+            tracing::info!("mini ERP postgres qolip store configured");
+            QolipService::new(Arc::new(PostgresQolipStore::new(pool)))
+        }
+        Err(error) => {
+            tracing::warn!(%error, "mini ERP postgres qolip store disabled");
+            QolipService::new(Arc::new(crate::core::qolip::MemoryQolipStore::new()))
         }
     }
 }

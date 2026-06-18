@@ -99,6 +99,7 @@ fn role_label(role: &PrincipalRole) -> &'static str {
         PrincipalRole::Werka => "Werka",
         PrincipalRole::Customer => "Customer",
         PrincipalRole::Aparatchi => "Aparatchi",
+        PrincipalRole::Qolipchi => "Qolipchi",
         PrincipalRole::Admin => "Admin",
     }
 }

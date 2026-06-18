@@ -421,6 +421,33 @@ CREATE TABLE IF NOT EXISTS mini_warehouse_assignments (
     CONSTRAINT mini_warehouse_assignments_ref_not_blank CHECK (btrim(principal_ref) <> '')
 );
 
+CREATE TABLE IF NOT EXISTS mini_qolip_locations (
+    id TEXT PRIMARY KEY,
+    block TEXT NOT NULL,
+    warehouse TEXT NOT NULL DEFAULT '',
+    item_code TEXT NOT NULL,
+    item_name TEXT NOT NULL,
+    qolip_code TEXT NOT NULL,
+    size INTEGER NOT NULL,
+    quantity INTEGER NOT NULL,
+    row_letter TEXT NOT NULL DEFAULT '',
+    column_number INTEGER,
+    location_label TEXT NOT NULL DEFAULT '',
+    created_by_role TEXT NOT NULL DEFAULT '',
+    created_by_ref TEXT NOT NULL DEFAULT '',
+    created_by_name TEXT NOT NULL DEFAULT '',
+    payload_json JSONB NOT NULL DEFAULT '{}'::jsonb,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    CONSTRAINT mini_qolip_locations_block_not_blank CHECK (btrim(block) <> ''),
+    CONSTRAINT mini_qolip_locations_item_code_not_blank CHECK (btrim(item_code) <> ''),
+    CONSTRAINT mini_qolip_locations_item_name_not_blank CHECK (btrim(item_name) <> ''),
+    CONSTRAINT mini_qolip_locations_qolip_code_not_blank CHECK (btrim(qolip_code) <> ''),
+    CONSTRAINT mini_qolip_locations_size_positive CHECK (size > 0),
+    CONSTRAINT mini_qolip_locations_quantity_positive CHECK (quantity > 0),
+    CONSTRAINT mini_qolip_locations_column_range CHECK (column_number IS NULL OR column_number BETWEEN 1 AND 9)
+);
+
 CREATE TABLE IF NOT EXISTS mini_gscale_receipts (
     name TEXT PRIMARY KEY,
     status TEXT NOT NULL DEFAULT 'draft',
@@ -580,6 +607,8 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_mini_apparatus_groups_lower_name ON mini_a
 CREATE UNIQUE INDEX IF NOT EXISTS idx_mini_apparatus_lower_name ON mini_apparatus (lower(name));
 CREATE UNIQUE INDEX IF NOT EXISTS idx_mini_workers_lower_name ON mini_workers (lower(name));
 CREATE UNIQUE INDEX IF NOT EXISTS idx_mini_warehouses_lower_name ON mini_warehouses (lower(name));
+CREATE INDEX IF NOT EXISTS idx_mini_qolip_locations_block ON mini_qolip_locations (lower(block), row_letter, column_number);
+CREATE INDEX IF NOT EXISTS idx_mini_qolip_locations_item ON mini_qolip_locations (lower(item_code), lower(item_name));
 CREATE INDEX IF NOT EXISTS idx_mini_gscale_receipts_status_updated ON mini_gscale_receipts (status, updated_at DESC);
 CREATE INDEX IF NOT EXISTS idx_mini_gscale_receipts_item_updated ON mini_gscale_receipts (lower(item_code), updated_at DESC);
 CREATE INDEX IF NOT EXISTS idx_mini_workers_level ON mini_workers(level);

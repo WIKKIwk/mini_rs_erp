@@ -44,6 +44,7 @@ pub enum Capability {
     GscalePrint,
     RpsBatchManage,
     RezkaSplitManage,
+    QolipManage,
     RawMaterialRuleManage,
     RawMaterialAssign,
 }
@@ -231,6 +232,7 @@ pub fn system_role_definitions() -> Vec<RoleDefinition> {
         (PrincipalRole::Werka, "werka", "Werka"),
         (PrincipalRole::Supplier, "supplier", "Supplier"),
         (PrincipalRole::Customer, "customer", "Customer"),
+        (PrincipalRole::Qolipchi, "qolipchi", "Qolipchi"),
     ]
     .into_iter()
     .map(|(role, id, label)| RoleDefinition {
@@ -372,14 +374,22 @@ fn role_key(role: &PrincipalRole) -> &'static str {
         PrincipalRole::Werka => "werka",
         PrincipalRole::Customer => "customer",
         PrincipalRole::Aparatchi => "aparatchi",
+        PrincipalRole::Qolipchi => "qolipchi",
         PrincipalRole::Admin => "admin",
     }
 }
 
 fn system_role_ids() -> BTreeSet<&'static str> {
-    ["admin", "werka", "supplier", "customer", "aparatchi"]
-        .into_iter()
-        .collect()
+    [
+        "admin",
+        "werka",
+        "supplier",
+        "customer",
+        "aparatchi",
+        "qolipchi",
+    ]
+    .into_iter()
+    .collect()
 }
 
 fn normalize_assigned_apparatus(values: Vec<String>) -> Vec<String> {

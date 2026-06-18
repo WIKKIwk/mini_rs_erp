@@ -322,6 +322,7 @@ fn role_as_str(role: &PrincipalRole) -> &'static str {
         PrincipalRole::Werka => "werka",
         PrincipalRole::Customer => "customer",
         PrincipalRole::Aparatchi => "aparatchi",
+        PrincipalRole::Qolipchi => "qolipchi",
         PrincipalRole::Admin => "admin",
     }
 }
@@ -332,6 +333,7 @@ fn role_from_str(raw: &str) -> Result<PrincipalRole, WarehouseError> {
         "werka" => Ok(PrincipalRole::Werka),
         "customer" => Ok(PrincipalRole::Customer),
         "aparatchi" => Ok(PrincipalRole::Aparatchi),
+        "qolipchi" => Ok(PrincipalRole::Qolipchi),
         "admin" => Ok(PrincipalRole::Admin),
         _ => Err(WarehouseError::StoreFailed),
     }

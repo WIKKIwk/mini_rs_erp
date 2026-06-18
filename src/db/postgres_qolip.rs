@@ -1,0 +1,234 @@
+use async_trait::async_trait;
+use sqlx::PgPool;
+
+use crate::core::auth::models::Principal;
+use crate::core::qolip::{
+    QolipBlock, QolipError, QolipLocation, QolipProduct, QolipStorePort, role_code,
+};
+
+#[derive(Clone)]
+pub struct PostgresQolipStore {
+    pool: PgPool,
+}
+
+impl PostgresQolipStore {
+    pub fn new(pool: PgPool) -> Self {
+        Self { pool }
+    }
+}
+
+#[async_trait]
+impl QolipStorePort for PostgresQolipStore {
+    async fn assigned_blocks(&self, principal: &Principal) -> Result<Vec<QolipBlock>, QolipError> {
+        let rows = sqlx::query_as::<_, QolipBlockRow>(
+            r#"
+            WITH assigned AS (
+                SELECT warehouse
+                FROM mini_warehouse_assignments
+                WHERE principal_ref = $1
+                  AND lower(principal_role) = lower($2)
+            ),
+            child_blocks AS (
+                SELECT child.name AS block, assigned.warehouse AS warehouse
+                FROM assigned
+                JOIN mini_warehouses child
+                  ON lower(child.parent_warehouse) = lower(assigned.warehouse)
+            ),
+            direct_blocks AS (
+                SELECT assigned.warehouse AS block, assigned.warehouse AS warehouse
+                FROM assigned
+                WHERE NOT EXISTS (
+                    SELECT 1
+                    FROM mini_warehouses child
+                    WHERE lower(child.parent_warehouse) = lower(assigned.warehouse)
+                )
+            )
+            SELECT block, warehouse FROM child_blocks
+            UNION
+            SELECT block, warehouse FROM direct_blocks
+            ORDER BY lower(block)
+            "#,
+        )
+        .bind(principal.ref_.trim())
+        .bind(role_code(&principal.role))
+        .fetch_all(&self.pool)
+        .await
+        .map_err(|_| QolipError::StoreFailed)?;
+
+        Ok(rows
+            .into_iter()
+            .map(|row| QolipBlock {
+                name: row.block,
+                warehouse: row.warehouse,
+            })
+            .collect())
+    }
+
+    async fn products(&self, query: &str, limit: usize) -> Result<Vec<QolipProduct>, QolipError> {
+        let query = query.trim().to_lowercase();
+        let pattern = format!("%{query}%");
+        let rows = sqlx::query_as::<_, QolipProductRow>(
+            r#"
+            WITH RECURSIVE group_path(group_name, node_name, parent_name) AS (
+                SELECT lower(name), lower(name), lower(parent_item_group)
+                FROM mini_item_groups
+                UNION ALL
+                SELECT group_path.group_name, lower(parent.name), lower(parent.parent_item_group)
+                FROM group_path
+                JOIN mini_item_groups parent ON lower(parent.name) = group_path.parent_name
+                WHERE group_path.parent_name <> ''
+            ),
+            group_kind AS (
+                SELECT
+                    group_name,
+                    bool_or(node_name LIKE '%tayyor%' AND node_name LIKE '%mahsulot%') AS is_finished
+                FROM group_path
+                GROUP BY group_name
+            )
+            SELECT items.code, items.name, items.item_group
+            FROM mini_items items
+            LEFT JOIN group_kind ON lower(items.item_group) = group_kind.group_name
+            WHERE COALESCE(group_kind.is_finished, false)
+              AND (
+                $1 = ''
+                OR lower(items.code) LIKE $2
+                OR lower(items.name) LIKE $2
+              )
+            ORDER BY lower(items.name), lower(items.code)
+            LIMIT $3
+            "#,
+        )
+        .bind(query)
+        .bind(pattern)
+        .bind(limit.max(1) as i64)
+        .fetch_all(&self.pool)
+        .await
+        .map_err(|_| QolipError::StoreFailed)?;
+
+        Ok(rows
+            .into_iter()
+            .map(|row| QolipProduct {
+                code: row.code,
+                name: row.name,
+                item_group: row.item_group,
+            })
+            .collect())
+    }
+
+    async fn locations(&self, block: &str) -> Result<Vec<QolipLocation>, QolipError> {
+        let rows = sqlx::query_as::<_, QolipLocationRow>(
+            "SELECT id, block, warehouse, item_code, item_name, qolip_code,
+                    size, quantity, row_letter, column_number, location_label,
+                    created_by_role, created_by_ref, created_by_name
+             FROM mini_qolip_locations
+             WHERE lower(block) = lower($1)
+             ORDER BY lower(row_letter), column_number NULLS LAST, lower(item_name), lower(qolip_code)",
+        )
+        .bind(block.trim())
+        .fetch_all(&self.pool)
+        .await
+        .map_err(|_| QolipError::StoreFailed)?;
+
+        Ok(rows.into_iter().map(row_to_location).collect())
+    }
+
+    async fn put_location(&self, location: QolipLocation) -> Result<QolipLocation, QolipError> {
+        let row = sqlx::query_as::<_, QolipLocationRow>(
+            "INSERT INTO mini_qolip_locations (
+                 id, block, warehouse, item_code, item_name, qolip_code,
+                 size, quantity, row_letter, column_number, location_label,
+                 created_by_role, created_by_ref, created_by_name, payload_json
+             )
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
+             ON CONFLICT (id) DO UPDATE SET
+                 block = excluded.block,
+                 warehouse = excluded.warehouse,
+                 item_code = excluded.item_code,
+                 item_name = excluded.item_name,
+                 qolip_code = excluded.qolip_code,
+                 size = excluded.size,
+                 quantity = excluded.quantity,
+                 row_letter = excluded.row_letter,
+                 column_number = excluded.column_number,
+                 location_label = excluded.location_label,
+                 created_by_role = excluded.created_by_role,
+                 created_by_ref = excluded.created_by_ref,
+                 created_by_name = excluded.created_by_name,
+                 payload_json = excluded.payload_json,
+                 updated_at = now()
+             RETURNING id, block, warehouse, item_code, item_name, qolip_code,
+                 size, quantity, row_letter, column_number, location_label,
+                 created_by_role, created_by_ref, created_by_name",
+        )
+        .bind(location.id.trim())
+        .bind(location.block.trim())
+        .bind(location.warehouse.trim())
+        .bind(location.item_code.trim())
+        .bind(location.item_name.trim())
+        .bind(location.qolip_code.trim())
+        .bind(location.size)
+        .bind(location.quantity)
+        .bind(location.row_letter.trim())
+        .bind(location.column_number)
+        .bind(location.location_label.trim())
+        .bind(location.created_by_role.trim())
+        .bind(location.created_by_ref.trim())
+        .bind(location.created_by_name.trim())
+        .bind(serde_json::to_value(&location).map_err(|_| QolipError::StoreFailed)?)
+        .fetch_one(&self.pool)
+        .await
+        .map_err(|_| QolipError::StoreFailed)?;
+
+        Ok(row_to_location(row))
+    }
+}
+
+#[derive(sqlx::FromRow)]
+struct QolipBlockRow {
+    block: String,
+    warehouse: String,
+}
+
+#[derive(sqlx::FromRow)]
+struct QolipProductRow {
+    code: String,
+    name: String,
+    item_group: String,
+}
+
+#[derive(sqlx::FromRow)]
+struct QolipLocationRow {
+    id: String,
+    block: String,
+    warehouse: String,
+    item_code: String,
+    item_name: String,
+    qolip_code: String,
+    size: i32,
+    quantity: i32,
+    row_letter: String,
+    column_number: Option<i32>,
+    location_label: String,
+    created_by_role: String,
+    created_by_ref: String,
+    created_by_name: String,
+}
+
+fn row_to_location(row: QolipLocationRow) -> QolipLocation {
+    QolipLocation {
+        id: row.id,
+        block: row.block,
+        warehouse: row.warehouse,
+        item_code: row.item_code,
+        item_name: row.item_name,
+        qolip_code: row.qolip_code,
+        size: row.size,
+        quantity: row.quantity,
+        row_letter: row.row_letter,
+        column_number: row.column_number,
+        location_label: row.location_label,
+        created_by_role: row.created_by_role,
+        created_by_ref: row.created_by_ref,
+        created_by_name: row.created_by_name,
+    }
+}

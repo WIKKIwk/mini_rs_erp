@@ -9,6 +9,7 @@ pub enum PrincipalRole {
     Werka,
     Customer,
     Aparatchi,
+    Qolipchi,
     Admin,
 }
 

@@ -191,6 +191,7 @@ mod tests {
             "mini_queue_sequences",
             "mini_queue_states",
             "mini_warehouses",
+            "mini_qolip_locations",
             "mini_gscale_receipts",
             "mini_raw_material_stock",
             "mini_finished_goods_stock",
@@ -310,6 +311,7 @@ mod tests {
                  'mini_apparatus_groups',
                  'mini_workers',
                  'mini_worker_groups',
+                 'mini_qolip_locations',
                  'mini_queue_sequences',
                  'mini_queue_states',
                  'mini_apparatus_queue_policies',
@@ -321,7 +323,7 @@ mod tests {
         .fetch_one(&pool)
         .await
         .expect("count tables");
-        assert_eq!(table_count, 19);
+        assert_eq!(table_count, 20);
 
         sqlx::query(
             "INSERT INTO mini_idempotency_keys (key, domain, action, entity_id)

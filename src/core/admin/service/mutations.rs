@@ -251,9 +251,24 @@ impl AdminService {
         }
         let now = OffsetDateTime::now_utc();
         state = bump_code_regen_state(state, now)?;
-        state.custom_code = random_code("40", &mut existing);
+        let prefix = self.worker_access_code_prefix(&worker.id).await?;
+        state.custom_code = random_code(&prefix, &mut existing);
         self.put_state(&worker.id, state).await?;
         self.worker_detail(worker).await
+    }
+
+    async fn worker_access_code_prefix(&self, ref_: &str) -> Result<String, AdminPortError> {
+        let assignments = self.role_assignments().await?;
+        let ref_ = ref_.trim();
+        if assignments.iter().any(|assignment| {
+            assignment.principal_ref.trim() == ref_
+                && (assignment.role_id == "qolipchi"
+                    || assignment.principal_role == PrincipalRole::Qolipchi)
+        }) {
+            Ok("50".to_string())
+        } else {
+            Ok("40".to_string())
+        }
     }
 
     async fn customer_access_code_prefix(&self, ref_: &str) -> Result<String, AdminPortError> {

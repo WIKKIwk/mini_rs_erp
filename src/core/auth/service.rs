@@ -117,6 +117,7 @@ impl AuthService {
             PrincipalRole::Werka => self.login_werka(normalized_phone, code, &identity),
             PrincipalRole::Customer => self.login_customer(&normalized_phone, code).await,
             PrincipalRole::Aparatchi => self.login_aparatchi(&normalized_phone, code).await,
+            PrincipalRole::Qolipchi => self.login_qolipchi(&normalized_phone, code).await,
             PrincipalRole::Admin => Err(AuthError::InvalidRole),
         }
     }
@@ -197,7 +198,10 @@ impl AuthService {
         normalized_phone: &str,
         code: &str,
     ) -> Result<Principal, AuthError> {
-        match self.login_worker_aparatchi(normalized_phone, code).await {
+        match self
+            .login_worker_by_role(normalized_phone, code, PrincipalRole::Aparatchi)
+            .await
+        {
             Ok(principal) => Ok(principal),
             Err(AuthError::InvalidCredentials) => {
                 self.login_customer_party(normalized_phone, code, PrincipalRole::Aparatchi)
@@ -207,10 +211,20 @@ impl AuthService {
         }
     }
 
-    async fn login_worker_aparatchi(
+    async fn login_qolipchi(
         &self,
         normalized_phone: &str,
         code: &str,
+    ) -> Result<Principal, AuthError> {
+        self.login_worker_by_role(normalized_phone, code, PrincipalRole::Qolipchi)
+            .await
+    }
+
+    async fn login_worker_by_role(
+        &self,
+        normalized_phone: &str,
+        code: &str,
+        role: PrincipalRole,
     ) -> Result<Principal, AuthError> {
         let worker_lookup = self
             .worker_lookup
@@ -242,7 +256,7 @@ impl AuthService {
                 && phone_matches_normalized(&worker.phone, normalized_phone)
             {
                 return Ok(Principal {
-                    role: PrincipalRole::Aparatchi,
+                    role,
                     display_name: worker.name.clone(),
                     legal_name: worker.name,
                     ref_: worker.id,
@@ -385,6 +399,8 @@ impl AuthService {
             Ok(PrincipalRole::Werka)
         } else if trimmed.starts_with("40") {
             Ok(PrincipalRole::Aparatchi)
+        } else if trimmed.starts_with("50") {
+            Ok(PrincipalRole::Qolipchi)
         } else if trimmed.starts_with("30") {
             Ok(PrincipalRole::Customer)
         } else {

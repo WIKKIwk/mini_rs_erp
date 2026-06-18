@@ -4,6 +4,7 @@ const ADMIN_ONLY: &[PrincipalRole] = &[PrincipalRole::Admin];
 const WERKA_ONLY: &[PrincipalRole] = &[PrincipalRole::Werka];
 const SUPPLIER_ONLY: &[PrincipalRole] = &[PrincipalRole::Supplier];
 const CUSTOMER_ONLY: &[PrincipalRole] = &[PrincipalRole::Customer];
+const QOLIPCHI_ONLY: &[PrincipalRole] = &[PrincipalRole::Qolipchi];
 const SUPPLIER_WERKA: &[PrincipalRole] = &[PrincipalRole::Supplier, PrincipalRole::Werka];
 const ADMIN_WERKA: &[PrincipalRole] = &[PrincipalRole::Admin, PrincipalRole::Werka];
 
@@ -199,6 +200,12 @@ pub(super) const CAPABILITY_CATALOG: &[CapabilityDefinition] = &[
         code: "rezka.split.manage",
         label: "Rezka split manage",
         default_roles: ADMIN_ONLY,
+    },
+    CapabilityDefinition {
+        capability: Capability::QolipManage,
+        code: "qolip.manage",
+        label: "Qolip ombor manage",
+        default_roles: QOLIPCHI_ONLY,
     },
     CapabilityDefinition {
         capability: Capability::RawMaterialRuleManage,
