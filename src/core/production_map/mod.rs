@@ -2167,7 +2167,23 @@ fn progress_batch_id(
 }
 
 fn progress_qr_payload(batch_id: &str) -> String {
-    format!("GSP:{}", batch_id.trim()).to_ascii_uppercase()
+    let stamp = batch_id
+        .split(':')
+        .nth(1)
+        .and_then(|value| value.parse::<u128>().ok())
+        .unwrap_or_else(unix_nanos);
+    let stamp = (stamp & u128::from(u64::MAX)) as u64;
+    let hash = progress_qr_hash(batch_id);
+    format!("4001{stamp:016X}{hash:04X}")
+}
+
+fn progress_qr_hash(value: &str) -> u16 {
+    let mut hash = 0xcbf2_9ce4_8422_2325_u64;
+    for byte in value.trim().as_bytes() {
+        hash ^= u64::from(*byte);
+        hash = hash.wrapping_mul(0x0000_0100_0000_01b3);
+    }
+    (hash & 0xffff) as u16
 }
 
 fn valid_progress_qty(value: Option<f64>) -> Result<f64, ProductionMapError> {
@@ -3321,7 +3337,9 @@ mod tests {
         let batch = paused.progress_batch.expect("pause batch");
         assert_eq!(batch.status, OrderProgressBatchStatus::Paused);
         assert_eq!(batch.produced_qty, 42.5);
-        assert!(batch.qr_payload.starts_with("GSP:"));
+        assert_eq!(batch.qr_payload.len(), 24);
+        assert!(batch.qr_payload.starts_with("4001"));
+        assert!(batch.qr_payload.chars().all(|ch| ch.is_ascii_hexdigit()));
         assert!(batch.label_item_name.contains("pauza"));
         assert_eq!(batch.executor_name, "Worker Progress");
 
