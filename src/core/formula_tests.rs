@@ -56,6 +56,22 @@ fn calculates_rubber_size_from_width() {
 }
 
 #[test]
+fn calculates_min_mold_size_without_edge_allowance() {
+    let result = calculate(CalculateRequest {
+        kg: Some(300.0),
+        frame_product_size_mm: Some(250.0),
+        frame_count: Some(3.0),
+        first_layer: LayerInput::new("pet", "12"),
+        second_layer: LayerInput::new("pe oq", "30"),
+        ..CalculateRequest::default()
+    })
+    .expect("calculate");
+
+    assert_eq!(result.width_mm, 765.0);
+    assert_eq!(result.min_mold_size_mm, 800.0);
+}
+
+#[test]
 fn calculates_alternative_material_variants() {
     let result = calculate(CalculateRequest {
         kg: Some(300.0),

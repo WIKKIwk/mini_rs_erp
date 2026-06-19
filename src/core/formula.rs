@@ -74,6 +74,7 @@ pub struct CalculateResponse {
     pub frame_count: f64,
     pub edge_allowance_mm: f64,
     pub width_mm: f64,
+    pub min_mold_size_mm: f64,
     pub rubber_size_mm: u32,
     pub waste_percent: f64,
     pub roll_count: Option<f64>,
@@ -131,6 +132,7 @@ pub fn calculate(mut request: CalculateRequest) -> Result<CalculateResponse, Str
         frame_count,
         edge_allowance_mm,
         width_mm,
+        min_mold_size_mm: min_mold_size_mm(frame_product_size_mm, frame_count),
         rubber_size_mm: rubber_size(width_mm),
         waste_percent,
         roll_count: request.roll_count,
@@ -578,6 +580,7 @@ fn require_number(value: Option<f64>, name: &str) -> Result<f64, String> {
 }
 
 pub const DEFAULT_EDGE_ALLOWANCE_MM: f64 = 15.0;
+pub const MIN_MOLD_EXTRA_MM: f64 = 50.0;
 
 pub fn derive_width_mm(
     frame_product_size_mm: Option<f64>,
@@ -606,6 +609,10 @@ fn width_mm_from_request(request: &CalculateRequest) -> Result<f64, String> {
         request.frame_count,
         request.edge_allowance_mm,
     )
+}
+
+fn min_mold_size_mm(frame_product_size_mm: f64, frame_count: f64) -> f64 {
+    frame_product_size_mm * frame_count + MIN_MOLD_EXTRA_MM
 }
 
 fn is_empty_material(material: &str) -> bool {
