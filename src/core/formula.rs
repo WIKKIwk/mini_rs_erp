@@ -19,7 +19,11 @@ pub struct CalculateRequest {
     #[serde(default)]
     pub kg: Option<f64>,
     #[serde(default)]
-    pub width_mm: Option<f64>,
+    pub frame_product_size_mm: Option<f64>,
+    #[serde(default)]
+    pub frame_count: Option<f64>,
+    #[serde(default = "default_edge_allowance_option")]
+    pub edge_allowance_mm: Option<f64>,
     #[serde(default)]
     pub waste_percent: Option<f64>,
     #[serde(default)]
@@ -66,6 +70,9 @@ pub struct CalculateResponse {
     pub material_display: Option<String>,
     pub color: Option<String>,
     pub kg: f64,
+    pub frame_product_size_mm: f64,
+    pub frame_count: f64,
+    pub edge_allowance_mm: f64,
     pub width_mm: f64,
     pub rubber_size_mm: u32,
     pub waste_percent: f64,
@@ -89,12 +96,19 @@ pub struct CalcResult {
 pub fn calculate(mut request: CalculateRequest) -> Result<CalculateResponse, String> {
     hydrate_layers_from_material_display(&mut request);
     let kg = require_number(request.kg, "KG")?;
-    let width_mm = require_number(request.width_mm, "RAZMER")?;
+    let frame_product_size_mm =
+        require_number(request.frame_product_size_mm, "Kadrdagi mahsulot o'lchami")?;
+    let frame_count = require_number(request.frame_count, "Kadr soni")?;
+    let edge_allowance_mm = request
+        .edge_allowance_mm
+        .unwrap_or(DEFAULT_EDGE_ALLOWANCE_MM);
+    let width_mm = derive_width_mm(
+        Some(frame_product_size_mm),
+        Some(frame_count),
+        Some(edge_allowance_mm),
+    )?;
     if kg <= 0.0 {
         return Err("KG noto'g'ri".to_string());
-    }
-    if width_mm <= 0.0 {
-        return Err("RAZMER noto'g'ri".to_string());
     }
     let waste_percent = request.waste_percent.unwrap_or(5.0);
     if waste_percent < 0.0 {
@@ -113,6 +127,9 @@ pub fn calculate(mut request: CalculateRequest) -> Result<CalculateResponse, Str
         material_display: clean_option(request.material_display),
         color: clean_option(request.color),
         kg,
+        frame_product_size_mm,
+        frame_count,
+        edge_allowance_mm,
         width_mm,
         rubber_size_mm: rubber_size(width_mm),
         waste_percent,
@@ -164,7 +181,7 @@ fn calculate_variants(request: &CalculateRequest) -> Result<Vec<CalcResult>, Str
 
 fn calculate_single(request: &CalculateRequest) -> Result<CalcResult, String> {
     let kg = require_number(request.kg, "KG")?;
-    let width_mm = require_number(request.width_mm, "RAZMER")?;
+    let width_mm = width_mm_from_request(request)?;
     let q1 = require_text(&request.first_layer.material, "1-qavat")?;
     let m1 = require_text(&request.first_layer.micron, "1-mikron")?;
     let q2 = request.second_layer.material.clone();
@@ -560,6 +577,37 @@ fn require_number(value: Option<f64>, name: &str) -> Result<f64, String> {
     value.ok_or_else(|| format!("{name} to'ldirilmagan"))
 }
 
+pub const DEFAULT_EDGE_ALLOWANCE_MM: f64 = 15.0;
+
+pub fn derive_width_mm(
+    frame_product_size_mm: Option<f64>,
+    frame_count: Option<f64>,
+    edge_allowance_mm: Option<f64>,
+) -> Result<f64, String> {
+    let frame_product_size_mm =
+        require_number(frame_product_size_mm, "Kadrdagi mahsulot o'lchami")?;
+    let frame_count = require_number(frame_count, "Kadr soni")?;
+    let edge_allowance_mm = edge_allowance_mm.unwrap_or(DEFAULT_EDGE_ALLOWANCE_MM);
+    if !frame_product_size_mm.is_finite() || frame_product_size_mm <= 0.0 {
+        return Err("Kadrdagi mahsulot o'lchami noto'g'ri".to_string());
+    }
+    if !frame_count.is_finite() || frame_count <= 0.0 {
+        return Err("Kadr soni noto'g'ri".to_string());
+    }
+    if !edge_allowance_mm.is_finite() || edge_allowance_mm < 0.0 {
+        return Err("Qo'shimcha razmer noto'g'ri".to_string());
+    }
+    Ok(frame_product_size_mm * frame_count + edge_allowance_mm)
+}
+
+fn width_mm_from_request(request: &CalculateRequest) -> Result<f64, String> {
+    derive_width_mm(
+        request.frame_product_size_mm,
+        request.frame_count,
+        request.edge_allowance_mm,
+    )
+}
+
 fn is_empty_material(material: &str) -> bool {
     let n = normalize(material);
     n.is_empty() || n.chars().all(|ch| ch == '-') || matches!(n.as_str(), "yoq" | "yuq")
@@ -619,6 +667,10 @@ fn clean_option(value: Option<String>) -> Option<String> {
     value
         .map(|value| value.trim().to_string())
         .filter(|value| !value.is_empty())
+}
+
+fn default_edge_allowance_option() -> Option<f64> {
+    Some(DEFAULT_EDGE_ALLOWANCE_MM)
 }
 
 fn rubber_size(width_mm: f64) -> u32 {

@@ -7,6 +7,7 @@ use crate::core::calculate_orders::{
     CalculateOrderError, CalculateOrderImage, CalculateOrderStorePort, CalculateOrderTemplate,
     validate_template,
 };
+use crate::core::formula::{DEFAULT_EDGE_ALLOWANCE_MM, derive_width_mm};
 
 #[derive(Clone)]
 pub struct PostgresCalculateOrderStore {
@@ -224,6 +225,17 @@ fn stamp_template(
     template.image_name = template.image_name.trim().to_string();
     template.image_mime = template.image_mime.trim().to_string();
     template.image_url = template.image_url.trim().to_string();
+    template.edge_allowance_mm = if template.edge_allowance_mm.is_finite() {
+        template.edge_allowance_mm
+    } else {
+        DEFAULT_EDGE_ALLOWANCE_MM
+    };
+    template.width_mm = derive_width_mm(
+        Some(template.frame_product_size_mm),
+        Some(template.frame_count),
+        Some(template.edge_allowance_mm),
+    )
+    .unwrap_or_default();
     template.first_layer_material = template.first_layer_material.trim().to_string();
     template.first_layer_micron = template.first_layer_micron.trim().to_string();
     template.second_layer_material = template.second_layer_material.trim().to_string();
@@ -286,7 +298,9 @@ fn quick_template_key(template: &CalculateOrderTemplate) -> String {
         normalize_key(&template.status),
         normalize_key(&template.material_display),
         normalize_key(&template.color),
-        number_key(template.width_mm),
+        number_key(template.frame_product_size_mm),
+        number_key(template.frame_count),
+        number_key(template.edge_allowance_mm),
         number_key(template.waste_percent),
         option_number_key(template.roll_count),
         normalize_key(&template.first_layer_material),

@@ -2,6 +2,8 @@ use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
+use crate::core::formula::{DEFAULT_EDGE_ALLOWANCE_MM, derive_width_mm};
+
 #[derive(Debug, Clone, Default, Deserialize, Serialize, PartialEq)]
 pub struct CalculateOrderTemplate {
     #[serde(default)]
@@ -38,6 +40,12 @@ pub struct CalculateOrderTemplate {
     pub image_size_bytes: u64,
     #[serde(default)]
     pub image_url: String,
+    #[serde(default)]
+    pub frame_product_size_mm: f64,
+    #[serde(default)]
+    pub frame_count: f64,
+    #[serde(default = "default_edge_allowance")]
+    pub edge_allowance_mm: f64,
     #[serde(default)]
     pub width_mm: f64,
     #[serde(default = "default_waste_percent")]
@@ -119,7 +127,28 @@ pub fn validate_template(template: &CalculateOrderTemplate) -> Result<(), Calcul
             "mahsulot kerak".to_string(),
         ));
     }
-    if template.width_mm <= 0.0 {
+    if template.frame_product_size_mm <= 0.0 {
+        return Err(CalculateOrderError::InvalidInput(
+            "kadrdagi mahsulot o'lchami noto'g'ri".to_string(),
+        ));
+    }
+    if template.frame_count <= 0.0 {
+        return Err(CalculateOrderError::InvalidInput(
+            "kadr soni noto'g'ri".to_string(),
+        ));
+    }
+    if template.edge_allowance_mm < 0.0 {
+        return Err(CalculateOrderError::InvalidInput(
+            "qo'shimcha razmer noto'g'ri".to_string(),
+        ));
+    }
+    if derive_width_mm(
+        Some(template.frame_product_size_mm),
+        Some(template.frame_count),
+        Some(template.edge_allowance_mm),
+    )
+    .is_err()
+    {
         return Err(CalculateOrderError::InvalidInput(
             "razmer noto'g'ri".to_string(),
         ));
@@ -152,6 +181,10 @@ pub fn owner_key(role: &str, ref_: &str) -> String {
 
 fn default_waste_percent() -> f64 {
     5.0
+}
+
+fn default_edge_allowance() -> f64 {
+    DEFAULT_EDGE_ALLOWANCE_MM
 }
 
 fn is_zero_f64(value: &f64) -> bool {

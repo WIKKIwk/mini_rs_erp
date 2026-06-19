@@ -23,7 +23,8 @@ async fn calculate_endpoint_returns_formula_result() {
             r#"{
                 "product":"cpp / 20 mikron / 600",
                 "kg":300,
-                "width_mm":530,
+                "frame_product_size_mm":515,
+                "frame_count":1,
                 "first_layer":{"material":"pet","micron":"12"},
                 "second_layer":{"material":"pe oq","micron":"30"}
             }"#,
@@ -50,7 +51,7 @@ async fn calculate_endpoint_rejects_supplier() {
             "POST",
             "/v1/mobile/calculate",
             &token,
-            r#"{"kg":300,"width_mm":530}"#,
+            r#"{"kg":300,"frame_product_size_mm":515,"frame_count":1}"#,
         ))
         .await
         .expect("response");
@@ -85,7 +86,8 @@ async fn calculate_orders_round_trip_on_server_without_kg() {
                 "image_size_bytes":3,
                 "image_url":"/v1/mobile/calculate/orders/image/view?id=img-test",
                 "kg":999,
-                "width_mm":530,
+                "frame_product_size_mm":515,
+                "frame_count":1,
                 "waste_percent":3,
                 "roll_count":7,
                 "first_layer_material":"pet",

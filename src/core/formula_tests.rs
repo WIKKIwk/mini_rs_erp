@@ -4,7 +4,8 @@ use crate::core::formula::{CalculateRequest, LayerInput, calculate};
 fn calculates_formula_with_waste_and_rounding() {
     let result = calculate(CalculateRequest {
         kg: Some(300.0),
-        width_mm: Some(530.0),
+        frame_product_size_mm: Some(515.0),
+        frame_count: Some(1.0),
         first_layer: LayerInput::new("pet", "12"),
         second_layer: LayerInput::new("pe oq", "30"),
         ..CalculateRequest::default()
@@ -21,7 +22,8 @@ fn calculates_formula_with_waste_and_rounding() {
 fn calculates_with_custom_waste_percent() {
     let result = calculate(CalculateRequest {
         kg: Some(300.0),
-        width_mm: Some(530.0),
+        frame_product_size_mm: Some(515.0),
+        frame_count: Some(1.0),
         waste_percent: Some(10.0),
         first_layer: LayerInput::new("pet", "12"),
         second_layer: LayerInput::new("pe oq", "30"),
@@ -41,7 +43,8 @@ fn calculates_rubber_size_from_width() {
     for (width_mm, rubber_size_mm) in cases {
         let result = calculate(CalculateRequest {
             kg: Some(300.0),
-            width_mm: Some(width_mm),
+            frame_product_size_mm: Some(width_mm - 15.0),
+            frame_count: Some(1.0),
             first_layer: LayerInput::new("pet", "12"),
             second_layer: LayerInput::new("pe oq", "30"),
             ..CalculateRequest::default()
@@ -56,7 +59,8 @@ fn calculates_rubber_size_from_width() {
 fn calculates_alternative_material_variants() {
     let result = calculate(CalculateRequest {
         kg: Some(300.0),
-        width_mm: Some(530.0),
+        frame_product_size_mm: Some(515.0),
+        frame_count: Some(1.0),
         first_layer: LayerInput::new("pet", "12"),
         second_layer: LayerInput::new("pe oq yoki mcp", "30"),
         ..CalculateRequest::default()
@@ -75,7 +79,8 @@ fn calculates_alternative_material_variants() {
 fn parses_material_display_when_layers_are_empty() {
     let result = calculate(CalculateRequest {
         kg: Some(3000.0),
-        width_mm: Some(635.0),
+        frame_product_size_mm: Some(620.0),
+        frame_count: Some(1.0),
         material_display: Some("pet 12 + oppm/pe pr 20/30".to_string()),
         ..CalculateRequest::default()
     })

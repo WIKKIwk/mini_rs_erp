@@ -149,7 +149,7 @@ mod postgres_calculate_order_tests {
             .upsert(
                 "admin:admin",
                 CalculateOrderTemplate {
-                    width_mm: 640.0,
+                    frame_product_size_mm: 625.0,
                     ..second.clone()
                 },
             )
@@ -228,6 +228,9 @@ mod postgres_calculate_order_tests {
             image_mime: String::new(),
             image_size_bytes: 0,
             image_url: String::new(),
+            frame_product_size_mm: width_mm - 15.0,
+            frame_count: 1.0,
+            edge_allowance_mm: 15.0,
             width_mm,
             waste_percent: 5.0,
             roll_count: Some(7.0),
@@ -586,6 +589,9 @@ mod postgres_mini_order_tests {
             image_mime: String::new(),
             image_size_bytes: 0,
             image_url: String::new(),
+            frame_product_size_mm: 635.0,
+            frame_count: 1.0,
+            edge_allowance_mm: 15.0,
             width_mm: 650.0,
             waste_percent: 5.0,
             roll_count: Some(7.0),
