@@ -5,10 +5,10 @@ use crate::core::calculate_orders::{
 };
 use crate::core::gscale::models::{ProgressLabelPrintRequest, RawMaterialStockEntry};
 use crate::core::production_map::{
-    ApparatusMaterialRuleUpsert, ApparatusQueuePolicy, ProductionMapBatchMoveRequest,
-    ProductionMapDefinition, ProductionMapError, ProductionMapMoveRequest, ProductionMapRunRequest,
-    QueueActionActor, QueueProgressInput, RawMaterialAssignment, RawMaterialAssignmentInput,
-    queue_state,
+    ApparatusMaterialRuleUpsert, ApparatusQueuePolicy, CompletionRequestDecision,
+    ProductionMapBatchMoveRequest, ProductionMapDefinition, ProductionMapError,
+    ProductionMapMoveRequest, ProductionMapRunRequest, QueueActionActor, QueueProgressInput,
+    RawMaterialAssignment, RawMaterialAssignmentInput, queue_state,
 };
 use crate::core::werka::models::SupplierItem;
 use crate::google_sheets::is_sheet_order_map;
@@ -376,6 +376,14 @@ struct ProgressQrLookupRequest {
     qr_payload: String,
     #[serde(default)]
     progress_qr: String,
+}
+
+#[derive(serde::Deserialize)]
+struct CompletionRequestDecisionRequest {
+    #[serde(default)]
+    event_id: String,
+    #[serde(default)]
+    decision: String,
 }
 
 /// Starts or completes the current actionable order on the operator's assigned
@@ -965,8 +973,11 @@ fn production_map_live_sse(
             } else {
                 Ok(Vec::new())
             };
-            match (snapshot, completed_orders, completion_requests) {
-                (Ok(snapshot), Ok(completed_orders), Ok(completion_requests)) => {
+            let completion_request_decisions = service
+                .completion_request_decisions_for_actor(&actor_ref, 200)
+                .await;
+            match (snapshot, completed_orders, completion_requests, completion_request_decisions) {
+                (Ok(snapshot), Ok(completed_orders), Ok(completion_requests), Ok(completion_request_decisions)) => {
                     let payload = serde_json::json!({
                         "ok": true,
                         "maps": snapshot.maps,
@@ -975,6 +986,7 @@ fn production_map_live_sse(
                         "queue_policies": snapshot.queue_policies,
                         "completed_orders": completed_orders,
                         "completion_requests": completion_requests,
+                        "completion_request_decisions": completion_request_decisions,
                     });
                     if let Ok(json) = serde_json::to_string(&payload) {
                         if json != last_payload {
@@ -983,7 +995,10 @@ fn production_map_live_sse(
                         }
                     }
                 }
-                (Err(error), _, _) | (_, Err(error), _) | (_, _, Err(error)) => {
+                (Err(error), _, _, _)
+                | (_, Err(error), _, _)
+                | (_, _, Err(error), _)
+                | (_, _, _, Err(error)) => {
                     yield Ok(Event::default().event("error").data(error.to_string()));
                 }
             }
@@ -1053,6 +1068,66 @@ pub async fn production_map_completion_requests(
     Ok(json_response(serde_json::json!({
         "ok": true,
         "completion_requests": completion_requests,
+    })))
+}
+
+pub async fn production_map_completion_request_decision(
+    State(state): State<AppState>,
+    method: Method,
+    headers: HeaderMap,
+    body: Bytes,
+) -> Result<Response, AdminError> {
+    if method != Method::POST {
+        return Err(method_not_allowed());
+    }
+    let principal = authorize_any_capability(
+        &state,
+        &headers,
+        &[Capability::AdminAccess, Capability::ProductionMapManage],
+    )
+    .await?;
+    let input: CompletionRequestDecisionRequest = parse_json(&body)?;
+    let decision = CompletionRequestDecision::parse(&input.decision)
+        .ok_or_else(|| bad_request("decision is required"))?;
+    let result = state
+        .production_maps
+        .decide_completion_request(&input.event_id, decision, queue_action_actor(&principal))
+        .await
+        .map_err(production_map_error)?;
+    Ok(json_response(serde_json::json!({
+        "ok": true,
+        "states": result.states,
+        "decision": result.decision,
+    })))
+}
+
+pub async fn production_map_completion_request_decisions(
+    State(state): State<AppState>,
+    method: Method,
+    headers: HeaderMap,
+) -> Result<Response, AdminError> {
+    if method != Method::GET {
+        return Err(method_not_allowed());
+    }
+    let principal = authorize_any_capability(
+        &state,
+        &headers,
+        &[
+            Capability::AdminAccess,
+            Capability::ProductionMapManage,
+            Capability::ApparatusQueueRead,
+            Capability::ApparatusQueueManage,
+        ],
+    )
+    .await?;
+    let decisions = state
+        .production_maps
+        .completion_request_decisions_for_actor(&queue_action_actor(&principal).ref_, 200)
+        .await
+        .map_err(production_map_error)?;
+    Ok(json_response(serde_json::json!({
+        "ok": true,
+        "completion_request_decisions": decisions,
     })))
 }
 

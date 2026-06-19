@@ -354,6 +354,51 @@ pub struct CompletionRequestNotification {
     pub created_at_unix: i64,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CompletionRequestDecision {
+    Approved,
+    Rejected,
+}
+
+impl CompletionRequestDecision {
+    pub fn parse(value: &str) -> Option<Self> {
+        match value.trim().to_ascii_lowercase().as_str() {
+            "approve" | "approved" => Some(Self::Approved),
+            "reject" | "rejected" => Some(Self::Rejected),
+            _ => None,
+        }
+    }
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Approved => "approved",
+            Self::Rejected => "rejected",
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CompletionRequestDecisionNotification {
+    pub event_id: String,
+    pub request_event_id: String,
+    pub decision: String,
+    pub apparatus: String,
+    pub order_id: String,
+    pub order_number: String,
+    pub order_title: String,
+    pub product_code: String,
+    pub worker_role: String,
+    pub worker_ref: String,
+    pub worker_display_name: String,
+    pub decided_by_role: String,
+    pub decided_by_ref: String,
+    pub decided_by_display_name: String,
+    pub description: String,
+    pub message: String,
+    pub created_at_unix: i64,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ProductionOrderLogEntry {
     pub event_id: String,
@@ -366,6 +411,10 @@ pub struct ProductionOrderLogEntry {
     pub actor_ref: String,
     pub actor_display_name: String,
     pub created_at_unix: i64,
+    #[serde(default)]
+    pub completed_with_issue: bool,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub issue_note: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -513,6 +562,20 @@ pub struct CompletionRequestResult {
     pub completion_request: CompletionRequestNotification,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct CompletionRequestDecisionResult {
+    pub states: BTreeMap<String, String>,
+    pub decision: CompletionRequestDecisionNotification,
+}
+
+#[derive(Debug, Clone)]
+pub struct CompletionRequestStateResolution {
+    pub apparatus: String,
+    pub states: BTreeMap<String, String>,
+    pub event: ApparatusQueueActionEvent,
+    pub session: Option<OrderRunSession>,
+}
+
 #[async_trait]
 pub trait ProductionMapStorePort: Send + Sync {
     async fn maps(&self) -> Result<Vec<ProductionMapDefinition>, ProductionMapError>;
@@ -574,6 +637,29 @@ pub trait ProductionMapStorePort: Send + Sync {
         _limit: usize,
     ) -> Result<Vec<CompletionRequestNotification>, ProductionMapError> {
         Ok(Vec::new())
+    }
+    async fn completion_request_by_event_id(
+        &self,
+        _event_id: &str,
+    ) -> Result<Option<CompletionRequestNotification>, ProductionMapError> {
+        Ok(None)
+    }
+    async fn completion_request_decisions_for_actor(
+        &self,
+        _actor_ref: &str,
+        _limit: usize,
+    ) -> Result<Vec<CompletionRequestDecisionNotification>, ProductionMapError> {
+        Ok(Vec::new())
+    }
+    async fn resolve_completion_request_decision(
+        &self,
+        _request_event_id: &str,
+        _decision: CompletionRequestDecision,
+        _actor: &QueueActionActor,
+        _notification: &CompletionRequestDecisionNotification,
+        _state_resolution: Option<CompletionRequestStateResolution>,
+    ) -> Result<(), ProductionMapError> {
+        Ok(())
     }
     async fn queue_action_logs_for_orders(
         &self,
@@ -873,6 +959,106 @@ impl ProductionMapStorePort for MemoryProductionMapStore {
         Ok(requests)
     }
 
+    async fn completion_request_by_event_id(
+        &self,
+        event_id: &str,
+    ) -> Result<Option<CompletionRequestNotification>, ProductionMapError> {
+        let event_id = event_id.trim();
+        if event_id.is_empty() {
+            return Ok(None);
+        }
+        let events = self.queue_events.read().await;
+        Ok(events.iter().enumerate().find_map(|(index, event)| {
+            if event.event_id.trim() != event_id {
+                return None;
+            }
+            completion_request_notification_from_event(event, index as i64 + 1)
+        }))
+    }
+
+    async fn completion_request_decisions_for_actor(
+        &self,
+        actor_ref: &str,
+        limit: usize,
+    ) -> Result<Vec<CompletionRequestDecisionNotification>, ProductionMapError> {
+        let actor_ref = actor_ref.trim();
+        if actor_ref.is_empty() || limit == 0 {
+            return Ok(Vec::new());
+        }
+        let events = self.queue_events.read().await;
+        let mut decisions = Vec::new();
+        for (index, event) in events.iter().enumerate().rev() {
+            let Some(decision) =
+                completion_request_decision_notification_from_event(event, index as i64 + 1)
+            else {
+                continue;
+            };
+            if decision.worker_ref.trim() != actor_ref {
+                continue;
+            }
+            decisions.push(decision);
+            if decisions.len() >= limit {
+                break;
+            }
+        }
+        Ok(decisions)
+    }
+
+    async fn resolve_completion_request_decision(
+        &self,
+        request_event_id: &str,
+        decision: CompletionRequestDecision,
+        actor: &QueueActionActor,
+        notification: &CompletionRequestDecisionNotification,
+        state_resolution: Option<CompletionRequestStateResolution>,
+    ) -> Result<(), ProductionMapError> {
+        let request_event_id = request_event_id.trim();
+        if request_event_id.is_empty() {
+            return Err(ProductionMapError::MissingId);
+        }
+        if let Some(resolution) = state_resolution {
+            self.queue_states
+                .write()
+                .await
+                .insert(resolution.apparatus.trim().to_string(), resolution.states);
+            self.queue_events.write().await.push(resolution.event);
+            if let Some(session) = resolution.session {
+                self.order_run_sessions
+                    .write()
+                    .await
+                    .insert(session.session_id.clone(), session);
+            }
+        }
+        let mut events = self.queue_events.write().await;
+        let Some(event) = events
+            .iter_mut()
+            .find(|event| event.event_id.trim() == request_event_id)
+        else {
+            return Err(ProductionMapError::QueueActionNotAllowed);
+        };
+        if event
+            .payload_json
+            .get("completion_request")
+            .and_then(|value| value.as_bool())
+            != Some(true)
+        {
+            return Err(ProductionMapError::QueueActionNotAllowed);
+        }
+        event.payload_json["completion_request_status"] =
+            serde_json::Value::String(decision.as_str().to_string());
+        event.payload_json["decision_event_id"] =
+            serde_json::Value::String(notification.event_id.clone());
+        event.payload_json["decision_message"] =
+            serde_json::Value::String(notification.message.clone());
+        event.payload_json["decided_by_role"] = serde_json::Value::String(actor.role.clone());
+        event.payload_json["decided_by_ref"] = serde_json::Value::String(actor.ref_.clone());
+        event.payload_json["decided_by_display_name"] =
+            serde_json::Value::String(actor_display_name(actor));
+        event.payload_json["decision_at_unix"] =
+            serde_json::Value::Number(serde_json::Number::from(notification.created_at_unix));
+        Ok(())
+    }
+
     async fn queue_action_logs_for_orders(
         &self,
         order_ids: &[String],
@@ -905,6 +1091,12 @@ impl ProductionMapStorePort for MemoryProductionMapStore {
                     actor_ref: event.actor.ref_.trim().to_string(),
                     actor_display_name: event.actor.display_name.trim().to_string(),
                     created_at_unix: index as i64 + 1,
+                    completed_with_issue: event
+                        .payload_json
+                        .get("completed_with_issue")
+                        .and_then(|value| value.as_bool())
+                        == Some(true),
+                    issue_note: json_string_field(&event.payload_json, "issue_note"),
                 });
         }
         Ok(by_order)
@@ -1262,6 +1454,16 @@ impl ProductionMapService {
         self.store.completion_requests(limit).await
     }
 
+    pub async fn completion_request_decisions_for_actor(
+        &self,
+        actor_ref: &str,
+        limit: usize,
+    ) -> Result<Vec<CompletionRequestDecisionNotification>, ProductionMapError> {
+        self.store
+            .completion_request_decisions_for_actor(actor_ref, limit)
+            .await
+    }
+
     pub async fn apparatus_queue_policy_records(
         &self,
     ) -> Result<Vec<ApparatusQueuePolicyRecord>, ProductionMapError> {
@@ -1587,6 +1789,121 @@ impl ProductionMapService {
         Ok(CompletionRequestResult {
             states,
             completion_request: request,
+        })
+    }
+
+    pub async fn decide_completion_request(
+        &self,
+        request_event_id: &str,
+        decision: CompletionRequestDecision,
+        actor: QueueActionActor,
+    ) -> Result<CompletionRequestDecisionResult, ProductionMapError> {
+        let request_event_id = request_event_id.trim();
+        if request_event_id.is_empty() {
+            return Err(ProductionMapError::MissingId);
+        }
+        let _guard = self.queue_action_guard().await;
+        let request = self
+            .store
+            .completion_request_by_event_id(request_event_id)
+            .await?
+            .ok_or(ProductionMapError::QueueActionNotAllowed)?;
+        let all_states = self.store.apparatus_queue_states().await?;
+        let mut states = all_states
+            .get(&request.apparatus)
+            .cloned()
+            .unwrap_or_default();
+        let from_state = states
+            .get(&request.order_id)
+            .and_then(|value| queue_state::ApparatusQueueOrderState::parse(value))
+            .unwrap_or(queue_state::ApparatusQueueOrderState::Pending);
+        if from_state != queue_state::ApparatusQueueOrderState::InProgress {
+            return Err(ProductionMapError::QueueActionNotAllowed);
+        }
+        let now = unix_seconds();
+        let message = match decision {
+            CompletionRequestDecision::Approved => "Muammo bilan yopildi",
+            CompletionRequestDecision::Rejected => "Sizni so'rovingiz rad etildi",
+        };
+        let notification = CompletionRequestDecisionNotification {
+            event_id: completion_request_decision_event_id(request_event_id, decision),
+            request_event_id: request_event_id.to_string(),
+            decision: decision.as_str().to_string(),
+            apparatus: request.apparatus.clone(),
+            order_id: request.order_id.clone(),
+            order_number: request.order_number.clone(),
+            order_title: request.order_title.clone(),
+            product_code: request.product_code.clone(),
+            worker_role: request.worker_role.clone(),
+            worker_ref: request.worker_ref.clone(),
+            worker_display_name: request.worker_display_name.clone(),
+            decided_by_role: actor.role.trim().to_string(),
+            decided_by_ref: actor.ref_.trim().to_string(),
+            decided_by_display_name: actor_display_name(&actor),
+            description: request.description.clone(),
+            message: message.to_string(),
+            created_at_unix: now,
+        };
+        let state_resolution = if decision == CompletionRequestDecision::Approved {
+            states.insert(
+                request.order_id.clone(),
+                queue_state::ApparatusQueueOrderState::Completed
+                    .as_str()
+                    .to_string(),
+            );
+            let session = self
+                .store
+                .active_order_run_session(&request.apparatus, &request.order_id)
+                .await?
+                .map(|mut session| {
+                    session.status = OrderRunStatus::Completed;
+                    session.updated_at_unix = now;
+                    session.payload_json["completed_with_issue"] = serde_json::Value::Bool(true);
+                    session.payload_json["issue_note"] =
+                        serde_json::Value::String(message.to_string());
+                    session
+                });
+            Some(CompletionRequestStateResolution {
+                apparatus: request.apparatus.clone(),
+                states: states.clone(),
+                event: ApparatusQueueActionEvent {
+                    event_id: notification.event_id.clone(),
+                    apparatus: request.apparatus.clone(),
+                    order_id: request.order_id.clone(),
+                    action: queue_state::ApparatusQueueAction::Complete,
+                    from_state,
+                    to_state: queue_state::ApparatusQueueOrderState::Completed,
+                    policy: ApparatusQueuePolicy::StrictSequence,
+                    actor: actor.clone(),
+                    assigned_apparatus: vec![request.apparatus.clone()],
+                    payload_json: serde_json::json!({
+                        "completion_request_decision": "approved",
+                        "completion_request_event_id": request_event_id,
+                        "completed_with_issue": true,
+                        "issue_note": message,
+                        "description": request.description,
+                        "worker_ref": request.worker_ref,
+                        "worker_display_name": request.worker_display_name,
+                    }),
+                },
+                session,
+            })
+        } else {
+            None
+        };
+        self.store
+            .resolve_completion_request_decision(
+                request_event_id,
+                decision,
+                &actor,
+                &notification,
+                state_resolution,
+            )
+            .await?;
+        self.notify_live();
+        Ok(CompletionRequestDecisionResult {
+            states,
+            decision: notification,
         })
     }
 
@@ -2428,6 +2745,10 @@ fn completion_request_notification_from_event(
     if description.is_empty() {
         return None;
     }
+    let status = json_string_field(&event.payload_json, "completion_request_status");
+    if !status.is_empty() && status != "pending" {
+        return None;
+    }
     Some(CompletionRequestNotification {
         event_id: event.event_id.trim().to_string(),
         apparatus: event.apparatus.trim().to_string(),
@@ -2440,6 +2761,46 @@ fn completion_request_notification_from_event(
         worker_display_name: actor_display_name(&event.actor),
         description: description.to_string(),
         created_at_unix,
+    })
+}
+
+#[cfg(test)]
+fn completion_request_decision_notification_from_event(
+    event: &ApparatusQueueActionEvent,
+    created_at_unix: i64,
+) -> Option<CompletionRequestDecisionNotification> {
+    if event.action != queue_state::ApparatusQueueAction::Complete
+        || event.payload_json.get("completion_request")?.as_bool() != Some(true)
+    {
+        return None;
+    }
+    let decision = json_string_field(&event.payload_json, "completion_request_status");
+    if decision != "approved" && decision != "rejected" {
+        return None;
+    }
+    let decision_at_unix = event
+        .payload_json
+        .get("decision_at_unix")
+        .and_then(|value| value.as_i64())
+        .unwrap_or(created_at_unix);
+    Some(CompletionRequestDecisionNotification {
+        event_id: json_string_field(&event.payload_json, "decision_event_id"),
+        request_event_id: event.event_id.trim().to_string(),
+        decision,
+        apparatus: event.apparatus.trim().to_string(),
+        order_id: event.order_id.trim().to_string(),
+        order_number: json_string_field(&event.payload_json, "order_number"),
+        order_title: json_string_field(&event.payload_json, "order_title"),
+        product_code: json_string_field(&event.payload_json, "product_code"),
+        worker_role: event.actor.role.trim().to_string(),
+        worker_ref: event.actor.ref_.trim().to_string(),
+        worker_display_name: actor_display_name(&event.actor),
+        decided_by_role: json_string_field(&event.payload_json, "decided_by_role"),
+        decided_by_ref: json_string_field(&event.payload_json, "decided_by_ref"),
+        decided_by_display_name: json_string_field(&event.payload_json, "decided_by_display_name"),
+        description: json_string_field(&event.payload_json, "description"),
+        message: json_string_field(&event.payload_json, "decision_message"),
+        created_at_unix: decision_at_unix,
     })
 }
 
@@ -2498,6 +2859,21 @@ fn queue_action_event_id(
         apparatus.trim(),
         order_id.trim(),
         queue_action_str(action)
+    )
+}
+
+fn completion_request_decision_event_id(
+    request_event_id: &str,
+    decision: CompletionRequestDecision,
+) -> String {
+    let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|value| value.as_nanos())
+        .unwrap_or_default();
+    format!(
+        "production-map-completion-request:{nanos}:{}:{}",
+        request_event_id.trim(),
+        decision.as_str()
     )
 }
 

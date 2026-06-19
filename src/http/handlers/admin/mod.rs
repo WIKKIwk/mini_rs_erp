@@ -12,6 +12,7 @@ pub use customers::{
 };
 pub use production_maps::{
     production_map_closed_orders, production_map_completed_orders,
+    production_map_completion_request_decision, production_map_completion_request_decisions,
     production_map_completion_requests, production_map_live, production_map_move,
     production_map_move_batch, production_map_progress_qr_lookup, production_map_queue_action,
     production_map_queue_policies, production_map_run, production_map_save_with_order,

@@ -190,6 +190,14 @@ pub fn build_router(state: AppState) -> Router {
             any(admin::production_map_completion_requests),
         )
         .route(
+            "/v1/mobile/admin/production-maps/completion-requests/decision",
+            any(admin::production_map_completion_request_decision),
+        )
+        .route(
+            "/v1/mobile/admin/production-maps/completion-request-decisions",
+            any(admin::production_map_completion_request_decisions),
+        )
+        .route(
             "/v1/mobile/admin/production-maps/closed-orders",
             any(admin::production_map_closed_orders),
         )
