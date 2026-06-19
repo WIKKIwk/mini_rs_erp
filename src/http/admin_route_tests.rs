@@ -1629,7 +1629,9 @@ async fn queue_complete_without_output_creates_admin_completion_request() {
 
 #[tokio::test]
 async fn admin_approves_zero_output_completion_request_and_closes_order_with_issue_history() {
-    let state = test_state();
+    let material_store = Arc::new(RawMaterialStockLookup::default());
+    let mut state = test_state();
+    state.gscale = GscaleService::new().with_receipt_store(material_store);
     state
         .admin
         .upsert_role_assignment(crate::core::authz::RoleAssignmentUpsert {
@@ -1666,6 +1668,33 @@ async fn admin_approves_zero_output_completion_request_and_closes_order_with_iss
             .expect("save map");
         assert_eq!(saved.status(), StatusCode::OK);
     }
+    let rule = router
+        .clone()
+        .oneshot(request_with_body(
+            "PUT",
+            "/v1/mobile/admin/raw-material-rules",
+            &admin_token,
+            r#"{"apparatus":"7 ta rangli pechat","requires_material":false,"item_groups":["Kraska"]}"#,
+        ))
+        .await
+        .expect("rule save");
+    assert_eq!(rule.status(), StatusCode::OK);
+    let assigned = router
+        .clone()
+        .oneshot(request_with_body(
+            "POST",
+            "/v1/mobile/admin/raw-material-assignments",
+            &admin_token,
+            r#"{
+                "order_id":"zakaz-approve-zero",
+                "barcode":"30AA"
+            }"#,
+        ))
+        .await
+        .expect("assign raw material");
+    let assigned_status = assigned.status();
+    let assigned_body = json_body(assigned).await;
+    assert_eq!(assigned_status, StatusCode::OK, "{assigned_body:?}");
     let sequenced = router
         .clone()
         .oneshot(request_with_body(
@@ -1690,7 +1719,8 @@ async fn admin_approves_zero_output_completion_request_and_closes_order_with_iss
             r#"{
                 "apparatus":"7 ta rangli pechat",
                 "order_id":"zakaz-approve-zero",
-                "action":"start"
+                "action":"start",
+                "material_barcodes":["30AA"]
             }"#,
         ))
         .await
@@ -1734,6 +1764,26 @@ async fn admin_approves_zero_output_completion_request_and_closes_order_with_iss
     assert_eq!(approved_body["states"]["zakaz-approve-zero"], "completed");
     assert_eq!(approved_body["decision"]["decision"], "approved");
     assert_eq!(approved_body["decision"]["message"], "Muammo bilan yopildi");
+
+    let assignments_after_approve = router
+        .clone()
+        .oneshot(request(
+            "GET",
+            "/v1/mobile/admin/raw-material-assignments",
+            &admin_token,
+        ))
+        .await
+        .expect("assignments after approve");
+    assert_eq!(assignments_after_approve.status(), StatusCode::OK);
+    let assignments_body = json_body(assignments_after_approve).await;
+    let approved_material = assignments_body
+        .as_array()
+        .expect("assignments array")
+        .iter()
+        .find(|item| item["order_id"] == "zakaz-approve-zero")
+        .expect("approved order material");
+    assert_eq!(approved_material["stock_status"], "consumed");
+    assert_eq!(approved_material["reserved_order_id"], "zakaz-approve-zero");
 
     let requests_after = router
         .clone()

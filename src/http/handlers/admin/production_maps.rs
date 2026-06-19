@@ -1094,6 +1094,26 @@ pub async fn production_map_completion_request_decision(
         .decide_completion_request(&input.event_id, decision, queue_action_actor(&principal))
         .await
         .map_err(production_map_error)?;
+    if result.decision.decision == CompletionRequestDecision::Approved.as_str() {
+        let material_barcodes = raw_material_barcodes_for_order_apparatus(
+            &state,
+            &result.decision.order_id,
+            &result.decision.apparatus,
+        )
+        .await?;
+        if !material_barcodes.is_empty() {
+            for stock in state
+                .gscale
+                .mark_raw_material_stock_consumed(&material_barcodes, &result.decision.order_id)
+                .await
+                .map_err(raw_material_stock_status_error)?
+            {
+                state
+                    .warehouse_events
+                    .notify_updated(&stock.warehouse, "raw_material_stock");
+            }
+        }
+    }
     Ok(json_response(serde_json::json!({
         "ok": true,
         "states": result.states,
