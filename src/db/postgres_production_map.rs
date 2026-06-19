@@ -1,16 +1,50 @@
 use std::collections::BTreeMap;
 
 use async_trait::async_trait;
-use sqlx::{PgPool, Postgres, Transaction};
+use sqlx::PgPool;
 
 use crate::core::production_map::{
     ApparatusMaterialRule, ApparatusQueueActionEvent, ApparatusQueuePolicy, CompletedQueueOrder,
     CompletionRequestDecision, CompletionRequestDecisionNotification,
     CompletionRequestNotification, CompletionRequestStateResolution, OrderProgressBatch,
-    OrderProgressBatchStatus, OrderProgressEvent, OrderRunSession, OrderRunStatus,
-    ProductionMapDefinition, ProductionMapError, ProductionMapStorePort, ProductionOrderLogEntry,
-    QueueActionActor, RawMaterialAssignment, queue_state,
+    OrderProgressEvent, OrderRunSession, ProductionMapDefinition, ProductionMapError,
+    ProductionMapStorePort, ProductionOrderLogEntry, QueueActionActor, RawMaterialAssignment,
 };
+
+mod catalog_helpers;
+mod completion_helpers;
+mod map_helpers;
+mod material_helpers;
+mod order_query_helpers;
+mod progress_helpers;
+mod queue_helpers;
+
+use self::catalog_helpers::{
+    delete_map_by_id, load_apparatus_queue_policies, load_apparatus_queue_states,
+    load_apparatus_sequences, load_maps, save_apparatus_queue_policy, save_apparatus_sequence,
+};
+use self::completion_helpers::{
+    load_completion_request_by_event_id, load_completion_request_decisions_for_actor,
+    load_completion_requests, resolve_completion_request_decision as resolve_completion_request,
+};
+use self::map_helpers::{
+    put_map_inner, put_map_inner_tx, reject_duplicate_order_number,
+    reject_duplicate_order_number_tx, reject_order_number_immutable,
+    reject_order_number_immutable_tx,
+};
+use self::material_helpers::{
+    load_apparatus_material_rules, load_raw_material_assignments, save_apparatus_material_rule,
+    save_raw_material_assignment,
+};
+use self::order_query_helpers::{
+    load_active_order_run_session, load_completed_queue_orders_for_actor, load_order_run_session,
+    load_progress_batch, load_progress_batch_by_qr, load_queue_action_logs_for_orders,
+};
+use self::progress_helpers::{
+    put_order_progress_batch, put_order_progress_batch_tx, put_order_progress_event,
+    put_order_progress_event_tx, put_order_run_session, put_order_run_session_tx,
+};
+use self::queue_helpers::{insert_queue_action_event_tx, put_queue_states_tx};
 
 #[derive(Clone)]
 pub struct PostgresProductionMapStore {
@@ -26,21 +60,7 @@ impl PostgresProductionMapStore {
 #[async_trait]
 impl ProductionMapStorePort for PostgresProductionMapStore {
     async fn maps(&self) -> Result<Vec<ProductionMapDefinition>, ProductionMapError> {
-        let rows = sqlx::query_scalar::<_, serde_json::Value>(
-            "SELECT map_json
-             FROM mini_production_maps
-             ORDER BY updated_at DESC",
-        )
-        .fetch_all(&self.pool)
-        .await
-        .map_err(|_| ProductionMapError::StoreFailed)?;
-
-        rows.into_iter()
-            .map(|payload| {
-                serde_json::from_value::<ProductionMapDefinition>(payload)
-                    .map_err(|_| ProductionMapError::StoreFailed)
-            })
-            .collect()
+        load_maps(&self.pool).await
     }
 
     async fn put_map(&self, map: ProductionMapDefinition) -> Result<(), ProductionMapError> {
@@ -69,33 +89,13 @@ impl ProductionMapStorePort for PostgresProductionMapStore {
     }
 
     async fn delete_map(&self, map_id: &str) -> Result<(), ProductionMapError> {
-        sqlx::query("DELETE FROM mini_production_maps WHERE id = $1")
-            .bind(map_id.trim())
-            .execute(&self.pool)
-            .await
-            .map_err(|_| ProductionMapError::StoreFailed)?;
-        Ok(())
+        delete_map_by_id(&self.pool, map_id).await
     }
 
     async fn apparatus_sequences(
         &self,
     ) -> Result<BTreeMap<String, Vec<String>>, ProductionMapError> {
-        let rows = sqlx::query_as::<_, (String, serde_json::Value)>(
-            "SELECT apparatus, order_ids
-             FROM mini_queue_sequences
-             ORDER BY apparatus ASC",
-        )
-        .fetch_all(&self.pool)
-        .await
-        .map_err(|_| ProductionMapError::StoreFailed)?;
-
-        rows.into_iter()
-            .map(|(apparatus, payload)| {
-                let order_ids = serde_json::from_value::<Vec<String>>(payload)
-                    .map_err(|_| ProductionMapError::StoreFailed)?;
-                Ok((apparatus, order_ids))
-            })
-            .collect()
+        load_apparatus_sequences(&self.pool).await
     }
 
     async fn put_apparatus_sequence(
@@ -103,48 +103,13 @@ impl ProductionMapStorePort for PostgresProductionMapStore {
         apparatus: &str,
         order_ids: Vec<String>,
     ) -> Result<(), ProductionMapError> {
-        let order_ids = order_ids
-            .into_iter()
-            .map(|id| id.trim().to_string())
-            .filter(|id| !id.is_empty())
-            .collect::<Vec<_>>();
-        let payload =
-            serde_json::to_value(order_ids).map_err(|_| ProductionMapError::StoreFailed)?;
-        sqlx::query(
-            "INSERT INTO mini_queue_sequences (apparatus, order_ids, updated_at)
-             VALUES ($1, $2, now())
-             ON CONFLICT (apparatus) DO UPDATE SET
-               order_ids = excluded.order_ids,
-               updated_at = excluded.updated_at",
-        )
-        .bind(apparatus.trim())
-        .bind(payload)
-        .execute(&self.pool)
-        .await
-        .map_err(|_| ProductionMapError::StoreFailed)?;
-        Ok(())
+        save_apparatus_sequence(&self.pool, apparatus, order_ids).await
     }
 
     async fn apparatus_queue_states(
         &self,
     ) -> Result<BTreeMap<String, BTreeMap<String, String>>, ProductionMapError> {
-        let rows = sqlx::query_as::<_, (String, String, String)>(
-            "SELECT apparatus, order_id, state
-             FROM mini_queue_states
-             ORDER BY apparatus ASC, order_id ASC",
-        )
-        .fetch_all(&self.pool)
-        .await
-        .map_err(|_| ProductionMapError::StoreFailed)?;
-
-        let mut grouped = BTreeMap::<String, BTreeMap<String, String>>::new();
-        for (apparatus, order_id, state) in rows {
-            grouped
-                .entry(apparatus)
-                .or_default()
-                .insert(order_id, state);
-        }
-        Ok(grouped)
+        load_apparatus_queue_states(&self.pool).await
     }
 
     async fn put_apparatus_queue_states(
@@ -167,22 +132,7 @@ impl ProductionMapStorePort for PostgresProductionMapStore {
     async fn apparatus_queue_policies(
         &self,
     ) -> Result<BTreeMap<String, ApparatusQueuePolicy>, ProductionMapError> {
-        let rows = sqlx::query_as::<_, (String, String)>(
-            "SELECT apparatus, policy
-             FROM mini_apparatus_queue_policies
-             ORDER BY apparatus ASC",
-        )
-        .fetch_all(&self.pool)
-        .await
-        .map_err(|_| ProductionMapError::StoreFailed)?;
-
-        rows.into_iter()
-            .map(|(apparatus, policy)| {
-                let policy =
-                    ApparatusQueuePolicy::parse(&policy).ok_or(ProductionMapError::StoreFailed)?;
-                Ok((apparatus, policy))
-            })
-            .collect()
+        load_apparatus_queue_policies(&self.pool).await
     }
 
     async fn put_apparatus_queue_policy(
@@ -191,32 +141,7 @@ impl ProductionMapStorePort for PostgresProductionMapStore {
         policy: ApparatusQueuePolicy,
         actor: &QueueActionActor,
     ) -> Result<(), ProductionMapError> {
-        let payload = serde_json::json!({
-            "actor": actor,
-            "policy": policy.as_str(),
-        });
-        sqlx::query(
-            "INSERT INTO mini_apparatus_queue_policies
-                (apparatus, policy, actor_role, actor_ref, actor_display_name, payload_json, updated_at)
-             VALUES ($1, $2, $3, $4, $5, $6, now())
-             ON CONFLICT (apparatus) DO UPDATE SET
-               policy = excluded.policy,
-               actor_role = excluded.actor_role,
-               actor_ref = excluded.actor_ref,
-               actor_display_name = excluded.actor_display_name,
-               payload_json = excluded.payload_json,
-               updated_at = excluded.updated_at",
-        )
-        .bind(apparatus.trim())
-        .bind(policy.as_str())
-        .bind(actor.role.trim())
-        .bind(actor.ref_.trim())
-        .bind(actor.display_name.trim())
-        .bind(payload)
-        .execute(&self.pool)
-        .await
-        .map_err(|_| ProductionMapError::StoreFailed)?;
-        Ok(())
+        save_apparatus_queue_policy(&self.pool, apparatus, policy, actor).await
     }
 
     async fn put_apparatus_queue_states_with_event(
@@ -258,144 +183,21 @@ impl ProductionMapStorePort for PostgresProductionMapStore {
         actor_ref: &str,
         limit: usize,
     ) -> Result<Vec<CompletedQueueOrder>, ProductionMapError> {
-        let actor_ref = actor_ref.trim();
-        if actor_ref.is_empty() || limit == 0 {
-            return Ok(Vec::new());
-        }
-        let limit = i64::try_from(limit.min(500)).unwrap_or(500);
-        let rows = sqlx::query_as::<_, (String, String, i64)>(
-            "SELECT order_id, apparatus, completed_at_unix
-             FROM (
-                SELECT DISTINCT ON (order_id)
-                    order_id,
-                    apparatus,
-                    created_at,
-                    EXTRACT(EPOCH FROM created_at)::bigint AS completed_at_unix
-                FROM mini_queue_action_events
-                WHERE actor_ref = $1
-                  AND action = 'complete'
-                  AND to_state = 'completed'
-                ORDER BY order_id, created_at DESC
-             ) latest
-             ORDER BY created_at DESC
-             LIMIT $2",
-        )
-        .bind(actor_ref)
-        .bind(limit)
-        .fetch_all(&self.pool)
-        .await
-        .map_err(|_| ProductionMapError::StoreFailed)?;
-
-        Ok(rows
-            .into_iter()
-            .map(
-                |(order_id, apparatus, completed_at_unix)| CompletedQueueOrder {
-                    apparatus,
-                    order_id,
-                    completed_at_unix,
-                },
-            )
-            .collect())
+        load_completed_queue_orders_for_actor(&self.pool, actor_ref, limit).await
     }
 
     async fn completion_requests(
         &self,
         limit: usize,
     ) -> Result<Vec<CompletionRequestNotification>, ProductionMapError> {
-        if limit == 0 {
-            return Ok(Vec::new());
-        }
-        let limit = i64::try_from(limit.min(500)).unwrap_or(500);
-        let rows = sqlx::query_as::<_, CompletionRequestRow>(
-            "SELECT event_id,
-                    apparatus,
-                    order_id,
-                    COALESCE(payload_json->>'order_number', '') AS order_number,
-                    COALESCE(payload_json->>'order_title', '') AS order_title,
-                    COALESCE(payload_json->>'product_code', '') AS product_code,
-                    actor_role AS worker_role,
-                    actor_ref AS worker_ref,
-                    actor_display_name AS worker_display_name,
-                    COALESCE(payload_json->>'description', '') AS description,
-                    EXTRACT(EPOCH FROM created_at)::bigint AS created_at_unix
-             FROM mini_queue_action_events
-             WHERE action = 'complete'
-               AND payload_json->>'completion_request' = 'true'
-               AND COALESCE(payload_json->>'completion_request_status', 'pending') = 'pending'
-             ORDER BY created_at DESC, id DESC
-             LIMIT $1",
-        )
-        .bind(limit)
-        .fetch_all(&self.pool)
-        .await
-        .map_err(|_| ProductionMapError::StoreFailed)?;
-
-        Ok(rows
-            .into_iter()
-            .filter(|row| !row.description.trim().is_empty())
-            .map(|row| CompletionRequestNotification {
-                event_id: row.event_id,
-                apparatus: row.apparatus,
-                order_id: row.order_id,
-                order_number: row.order_number,
-                order_title: row.order_title,
-                product_code: row.product_code,
-                worker_role: row.worker_role,
-                worker_ref: row.worker_ref,
-                worker_display_name: row.worker_display_name,
-                description: row.description,
-                created_at_unix: row.created_at_unix,
-            })
-            .collect())
+        load_completion_requests(&self.pool, limit).await
     }
 
     async fn completion_request_by_event_id(
         &self,
         event_id: &str,
     ) -> Result<Option<CompletionRequestNotification>, ProductionMapError> {
-        let event_id = event_id.trim();
-        if event_id.is_empty() {
-            return Ok(None);
-        }
-        let row = sqlx::query_as::<_, CompletionRequestRow>(
-            "SELECT event_id,
-                    apparatus,
-                    order_id,
-                    COALESCE(payload_json->>'order_number', '') AS order_number,
-                    COALESCE(payload_json->>'order_title', '') AS order_title,
-                    COALESCE(payload_json->>'product_code', '') AS product_code,
-                    actor_role AS worker_role,
-                    actor_ref AS worker_ref,
-                    actor_display_name AS worker_display_name,
-                    COALESCE(payload_json->>'description', '') AS description,
-                    EXTRACT(EPOCH FROM created_at)::bigint AS created_at_unix
-             FROM mini_queue_action_events
-             WHERE event_id = $1
-               AND action = 'complete'
-               AND payload_json->>'completion_request' = 'true'
-               AND COALESCE(payload_json->>'completion_request_status', 'pending') = 'pending'
-             LIMIT 1",
-        )
-        .bind(event_id)
-        .fetch_optional(&self.pool)
-        .await
-        .map_err(|_| ProductionMapError::StoreFailed)?;
-
-        Ok(row
-            .filter(|row| !row.description.trim().is_empty())
-            .map(|row| CompletionRequestNotification {
-                event_id: row.event_id,
-                apparatus: row.apparatus,
-                order_id: row.order_id,
-                order_number: row.order_number,
-                order_title: row.order_title,
-                product_code: row.product_code,
-                worker_role: row.worker_role,
-                worker_ref: row.worker_ref,
-                worker_display_name: row.worker_display_name,
-                description: row.description,
-                created_at_unix: row.created_at_unix,
-            }))
+        load_completion_request_by_event_id(&self.pool, event_id).await
     }
 
     async fn completion_request_decisions_for_actor(
@@ -403,66 +205,7 @@ impl ProductionMapStorePort for PostgresProductionMapStore {
         actor_ref: &str,
         limit: usize,
     ) -> Result<Vec<CompletionRequestDecisionNotification>, ProductionMapError> {
-        let actor_ref = actor_ref.trim();
-        if actor_ref.is_empty() || limit == 0 {
-            return Ok(Vec::new());
-        }
-        let limit = i64::try_from(limit.min(500)).unwrap_or(500);
-        let rows = sqlx::query_as::<_, CompletionRequestDecisionRow>(
-            "SELECT
-                    COALESCE(payload_json->>'decision_event_id', '') AS event_id,
-                    event_id AS request_event_id,
-                    COALESCE(payload_json->>'completion_request_status', '') AS decision,
-                    apparatus,
-                    order_id,
-                    COALESCE(payload_json->>'order_number', '') AS order_number,
-                    COALESCE(payload_json->>'order_title', '') AS order_title,
-                    COALESCE(payload_json->>'product_code', '') AS product_code,
-                    actor_role AS worker_role,
-                    actor_ref AS worker_ref,
-                    actor_display_name AS worker_display_name,
-                    COALESCE(payload_json->>'decided_by_role', '') AS decided_by_role,
-                    COALESCE(payload_json->>'decided_by_ref', '') AS decided_by_ref,
-                    COALESCE(payload_json->>'decided_by_display_name', '') AS decided_by_display_name,
-                    COALESCE(payload_json->>'description', '') AS description,
-                    COALESCE(payload_json->>'decision_message', '') AS message,
-                    COALESCE((payload_json->>'decision_at_unix')::bigint, EXTRACT(EPOCH FROM created_at)::bigint) AS created_at_unix
-             FROM mini_queue_action_events
-             WHERE action = 'complete'
-               AND payload_json->>'completion_request' = 'true'
-               AND payload_json->>'completion_request_status' IN ('approved', 'rejected')
-               AND actor_ref = $1
-             ORDER BY created_at_unix DESC, id DESC
-             LIMIT $2",
-        )
-        .bind(actor_ref)
-        .bind(limit)
-        .fetch_all(&self.pool)
-        .await
-        .map_err(|_| ProductionMapError::StoreFailed)?;
-
-        Ok(rows
-            .into_iter()
-            .map(|row| CompletionRequestDecisionNotification {
-                event_id: row.event_id,
-                request_event_id: row.request_event_id,
-                decision: row.decision,
-                apparatus: row.apparatus,
-                order_id: row.order_id,
-                order_number: row.order_number,
-                order_title: row.order_title,
-                product_code: row.product_code,
-                worker_role: row.worker_role,
-                worker_ref: row.worker_ref,
-                worker_display_name: row.worker_display_name,
-                decided_by_role: row.decided_by_role,
-                decided_by_ref: row.decided_by_ref,
-                decided_by_display_name: row.decided_by_display_name,
-                description: row.description,
-                message: row.message,
-                created_at_unix: row.created_at_unix,
-            })
-            .collect())
+        load_completion_request_decisions_for_actor(&self.pool, actor_ref, limit).await
     }
 
     async fn resolve_completion_request_decision(
@@ -473,82 +216,22 @@ impl ProductionMapStorePort for PostgresProductionMapStore {
         notification: &CompletionRequestDecisionNotification,
         state_resolution: Option<CompletionRequestStateResolution>,
     ) -> Result<(), ProductionMapError> {
-        let request_event_id = request_event_id.trim();
-        if request_event_id.is_empty() {
-            return Err(ProductionMapError::MissingId);
-        }
-        let mut tx = self
-            .pool
-            .begin()
-            .await
-            .map_err(|_| ProductionMapError::StoreFailed)?;
-        if let Some(resolution) = state_resolution {
-            put_queue_states_tx(&mut tx, &resolution.apparatus, resolution.states).await?;
-            insert_queue_action_event_tx(&mut tx, &resolution.event).await?;
-            if let Some(session) = resolution.session {
-                put_order_run_session_tx(&mut tx, &session).await?;
-            }
-        }
-        let result = sqlx::query(
-            "UPDATE mini_queue_action_events
-             SET payload_json = payload_json || $2::jsonb
-             WHERE event_id = $1
-               AND payload_json->>'completion_request' = 'true'
-               AND COALESCE(payload_json->>'completion_request_status', 'pending') = 'pending'",
+        resolve_completion_request(
+            &self.pool,
+            request_event_id,
+            decision,
+            actor,
+            notification,
+            state_resolution,
         )
-        .bind(request_event_id)
-        .bind(serde_json::json!({
-            "completion_request_status": decision.as_str(),
-            "decision_event_id": notification.event_id,
-            "decision_message": notification.message,
-            "decided_by_role": actor.role.trim(),
-            "decided_by_ref": actor.ref_.trim(),
-            "decided_by_display_name": notification.decided_by_display_name,
-            "decision_at_unix": notification.created_at_unix,
-        }))
-        .execute(&mut *tx)
         .await
-        .map_err(|_| ProductionMapError::StoreFailed)?;
-        if result.rows_affected() != 1 {
-            return Err(ProductionMapError::QueueActionNotAllowed);
-        }
-        tx.commit()
-            .await
-            .map_err(|_| ProductionMapError::StoreFailed)
     }
 
     async fn queue_action_logs_for_orders(
         &self,
         order_ids: &[String],
     ) -> Result<BTreeMap<String, Vec<ProductionOrderLogEntry>>, ProductionMapError> {
-        let order_ids = order_ids
-            .iter()
-            .map(|order_id| order_id.trim().to_string())
-            .filter(|order_id| !order_id.is_empty())
-            .collect::<Vec<_>>();
-        if order_ids.is_empty() {
-            return Ok(BTreeMap::new());
-        }
-        let rows = sqlx::query_as::<_, QueueActionLogRow>(
-            "SELECT event_id, apparatus, order_id, action, from_state, to_state,
-                    actor_role, actor_ref, actor_display_name,
-                    EXTRACT(EPOCH FROM created_at)::bigint AS created_at_unix,
-                    COALESCE((payload_json->>'completed_with_issue')::boolean, false) AS completed_with_issue,
-                    COALESCE(payload_json->>'issue_note', '') AS issue_note
-             FROM mini_queue_action_events
-             WHERE order_id = ANY($1)
-             ORDER BY created_at ASC, id ASC",
-        )
-        .bind(&order_ids)
-        .fetch_all(&self.pool)
-        .await
-        .map_err(|_| ProductionMapError::StoreFailed)?;
-        let mut logs: BTreeMap<String, Vec<ProductionOrderLogEntry>> = BTreeMap::new();
-        for row in rows {
-            let entry = queue_action_log_from_row(row)?;
-            logs.entry(entry.order_id.clone()).or_default().push(entry);
-        }
-        Ok(logs)
+        load_queue_action_logs_for_orders(&self.pool, order_ids).await
     }
 
     async fn active_order_run_session(
@@ -556,83 +239,28 @@ impl ProductionMapStorePort for PostgresProductionMapStore {
         apparatus: &str,
         order_id: &str,
     ) -> Result<Option<OrderRunSession>, ProductionMapError> {
-        let row = sqlx::query_as::<_, ProgressSessionRow>(
-            "SELECT session_id, apparatus, order_id, status,
-                    worker_role, worker_ref, worker_display_name,
-                    EXTRACT(EPOCH FROM started_at)::bigint AS started_at_unix,
-                    EXTRACT(EPOCH FROM updated_at)::bigint AS updated_at_unix,
-                    payload_json
-             FROM mini_order_run_sessions
-             WHERE order_id = $1
-               AND lower(apparatus) = lower($2)
-               AND status IN ('active', 'paused')
-             ORDER BY updated_at DESC
-             LIMIT 1",
-        )
-        .bind(order_id.trim())
-        .bind(apparatus.trim())
-        .fetch_optional(&self.pool)
-        .await
-        .map_err(|_| ProductionMapError::StoreFailed)?;
-        row.map(progress_session_from_row).transpose()
+        load_active_order_run_session(&self.pool, apparatus, order_id).await
     }
 
     async fn order_run_session(
         &self,
         session_id: &str,
     ) -> Result<Option<OrderRunSession>, ProductionMapError> {
-        let row = sqlx::query_as::<_, ProgressSessionRow>(
-            "SELECT session_id, apparatus, order_id, status,
-                    worker_role, worker_ref, worker_display_name,
-                    EXTRACT(EPOCH FROM started_at)::bigint AS started_at_unix,
-                    EXTRACT(EPOCH FROM updated_at)::bigint AS updated_at_unix,
-                    payload_json
-             FROM mini_order_run_sessions
-             WHERE session_id = $1",
-        )
-        .bind(session_id.trim())
-        .fetch_optional(&self.pool)
-        .await
-        .map_err(|_| ProductionMapError::StoreFailed)?;
-        row.map(progress_session_from_row).transpose()
+        load_order_run_session(&self.pool, session_id).await
     }
 
     async fn progress_batch(
         &self,
         batch_id: &str,
     ) -> Result<Option<OrderProgressBatch>, ProductionMapError> {
-        let row = sqlx::query_as::<_, ProgressBatchRow>(
-            "SELECT batch_id, session_id, apparatus, order_id, action, status,
-                    produced_qty::float8 AS produced_qty, uom, qr_payload,
-                    label_item_code, label_item_name, executor_name,
-                    worker_role, worker_ref, worker_display_name, payload_json
-             FROM mini_progress_batches
-             WHERE batch_id = $1",
-        )
-        .bind(batch_id.trim())
-        .fetch_optional(&self.pool)
-        .await
-        .map_err(|_| ProductionMapError::StoreFailed)?;
-        row.map(progress_batch_from_row).transpose()
+        load_progress_batch(&self.pool, batch_id).await
     }
 
     async fn progress_batch_by_qr(
         &self,
         qr_payload: &str,
     ) -> Result<Option<OrderProgressBatch>, ProductionMapError> {
-        let row = sqlx::query_as::<_, ProgressBatchRow>(
-            "SELECT batch_id, session_id, apparatus, order_id, action, status,
-                    produced_qty::float8 AS produced_qty, uom, qr_payload,
-                    label_item_code, label_item_name, executor_name,
-                    worker_role, worker_ref, worker_display_name, payload_json
-             FROM mini_progress_batches
-             WHERE lower(qr_payload) = lower($1)",
-        )
-        .bind(qr_payload.trim())
-        .fetch_optional(&self.pool)
-        .await
-        .map_err(|_| ProductionMapError::StoreFailed)?;
-        row.map(progress_batch_from_row).transpose()
+        load_progress_batch_by_qr(&self.pool, qr_payload).await
     }
 
     async fn put_order_run_session(
@@ -690,707 +318,26 @@ impl ProductionMapStorePort for PostgresProductionMapStore {
     async fn apparatus_material_rules(
         &self,
     ) -> Result<Vec<ApparatusMaterialRule>, ProductionMapError> {
-        let rows = sqlx::query_scalar::<_, serde_json::Value>(
-            "SELECT payload_json
-             FROM mini_apparatus_material_rules
-             ORDER BY lower(apparatus) ASC",
-        )
-        .fetch_all(&self.pool)
-        .await
-        .map_err(|_| ProductionMapError::StoreFailed)?;
-
-        rows.into_iter()
-            .map(|payload| {
-                serde_json::from_value::<ApparatusMaterialRule>(payload)
-                    .map_err(|_| ProductionMapError::StoreFailed)
-            })
-            .collect()
+        load_apparatus_material_rules(&self.pool).await
     }
 
     async fn put_apparatus_material_rule(
         &self,
         rule: ApparatusMaterialRule,
     ) -> Result<(), ProductionMapError> {
-        let item_groups =
-            serde_json::to_value(&rule.item_groups).map_err(|_| ProductionMapError::StoreFailed)?;
-        let payload = serde_json::to_value(&rule).map_err(|_| ProductionMapError::StoreFailed)?;
-        sqlx::query(
-            "INSERT INTO mini_apparatus_material_rules
-                (apparatus, item_groups, requires_material, payload_json, updated_at)
-             VALUES ($1, $2, $3, $4, now())
-             ON CONFLICT (apparatus) DO UPDATE SET
-               item_groups = excluded.item_groups,
-               requires_material = excluded.requires_material,
-               payload_json = excluded.payload_json,
-               updated_at = excluded.updated_at",
-        )
-        .bind(rule.apparatus.trim())
-        .bind(item_groups)
-        .bind(rule.requires_material)
-        .bind(payload)
-        .execute(&self.pool)
-        .await
-        .map_err(|_| ProductionMapError::StoreFailed)?;
-        Ok(())
+        save_apparatus_material_rule(&self.pool, rule).await
     }
 
     async fn raw_material_assignments(
         &self,
     ) -> Result<Vec<RawMaterialAssignment>, ProductionMapError> {
-        let rows = sqlx::query_scalar::<_, serde_json::Value>(
-            "SELECT payload_json
-             FROM mini_raw_material_assignments
-             ORDER BY updated_at DESC",
-        )
-        .fetch_all(&self.pool)
-        .await
-        .map_err(|_| ProductionMapError::StoreFailed)?;
-
-        rows.into_iter()
-            .map(|payload| {
-                serde_json::from_value::<RawMaterialAssignment>(payload)
-                    .map_err(|_| ProductionMapError::StoreFailed)
-            })
-            .collect()
+        load_raw_material_assignments(&self.pool).await
     }
 
     async fn put_raw_material_assignment(
         &self,
         assignment: RawMaterialAssignment,
     ) -> Result<(), ProductionMapError> {
-        let payload =
-            serde_json::to_value(&assignment).map_err(|_| ProductionMapError::StoreFailed)?;
-        let result = sqlx::query(
-            "INSERT INTO mini_raw_material_assignments
-                (barcode, order_id, apparatus, item_code, item_group, payload_json, updated_at)
-             VALUES ($1, $2, $3, $4, $5, $6, now())
-             ON CONFLICT (barcode) DO NOTHING",
-        )
-        .bind(assignment.barcode.trim())
-        .bind(assignment.order_id.trim())
-        .bind(assignment.apparatus.trim())
-        .bind(assignment.item_code.trim())
-        .bind(assignment.item_group.trim())
-        .bind(payload)
-        .execute(&self.pool)
-        .await
-        .map_err(|_| ProductionMapError::StoreFailed)?;
-        if result.rows_affected() == 0 {
-            return Err(ProductionMapError::RawMaterialAlreadyAssigned);
-        }
-        Ok(())
+        save_raw_material_assignment(&self.pool, assignment).await
     }
-}
-
-async fn put_queue_states_tx(
-    tx: &mut Transaction<'_, Postgres>,
-    apparatus: &str,
-    states: BTreeMap<String, String>,
-) -> Result<(), ProductionMapError> {
-    sqlx::query("DELETE FROM mini_queue_states WHERE apparatus = $1")
-        .bind(apparatus)
-        .execute(&mut **tx)
-        .await
-        .map_err(|_| ProductionMapError::StoreFailed)?;
-    for (order_id, state) in states {
-        sqlx::query(
-            "INSERT INTO mini_queue_states (apparatus, order_id, state, updated_at)
-             VALUES ($1, $2, $3, now())",
-        )
-        .bind(apparatus)
-        .bind(order_id.trim())
-        .bind(state.trim())
-        .execute(&mut **tx)
-        .await
-        .map_err(|_| ProductionMapError::StoreFailed)?;
-    }
-    Ok(())
-}
-
-async fn insert_queue_action_event_tx(
-    tx: &mut Transaction<'_, Postgres>,
-    event: &ApparatusQueueActionEvent,
-) -> Result<(), ProductionMapError> {
-    sqlx::query(
-        "INSERT INTO mini_queue_action_events
-            (event_id, apparatus, order_id, action, from_state, to_state, policy,
-             actor_role, actor_ref, actor_display_name, assigned_apparatus, payload_json, created_at)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, now())",
-    )
-    .bind(event.event_id.trim())
-    .bind(event.apparatus.trim())
-    .bind(event.order_id.trim())
-    .bind(match event.action {
-        crate::core::production_map::queue_state::ApparatusQueueAction::Start => "start",
-        crate::core::production_map::queue_state::ApparatusQueueAction::Pause => "pause",
-        crate::core::production_map::queue_state::ApparatusQueueAction::Resume => "resume",
-        crate::core::production_map::queue_state::ApparatusQueueAction::Complete => "complete",
-    })
-    .bind(event.from_state.as_str())
-    .bind(event.to_state.as_str())
-    .bind(event.policy.as_str())
-    .bind(event.actor.role.trim())
-    .bind(event.actor.ref_.trim())
-    .bind(event.actor.display_name.trim())
-    .bind(
-        serde_json::to_value(&event.assigned_apparatus)
-            .map_err(|_| ProductionMapError::StoreFailed)?,
-    )
-    .bind(&event.payload_json)
-    .execute(&mut **tx)
-    .await
-    .map_err(|_| ProductionMapError::StoreFailed)?;
-    Ok(())
-}
-
-async fn put_order_run_session(
-    pool: &PgPool,
-    session: &OrderRunSession,
-) -> Result<(), ProductionMapError> {
-    let mut tx = pool
-        .begin()
-        .await
-        .map_err(|_| ProductionMapError::StoreFailed)?;
-    put_order_run_session_tx(&mut tx, session).await?;
-    tx.commit()
-        .await
-        .map_err(|_| ProductionMapError::StoreFailed)
-}
-
-async fn put_order_run_session_tx(
-    tx: &mut Transaction<'_, Postgres>,
-    session: &OrderRunSession,
-) -> Result<(), ProductionMapError> {
-    sqlx::query(
-        "INSERT INTO mini_order_run_sessions (
-            session_id, apparatus, order_id, status,
-            worker_role, worker_ref, worker_display_name,
-            started_at, updated_at, payload_json
-         )
-         VALUES ($1, $2, $3, $4, $5, $6, $7, to_timestamp($8), to_timestamp($9), $10)
-         ON CONFLICT (session_id) DO UPDATE SET
-            status = excluded.status,
-            worker_role = excluded.worker_role,
-            worker_ref = excluded.worker_ref,
-            worker_display_name = excluded.worker_display_name,
-            updated_at = excluded.updated_at,
-            payload_json = excluded.payload_json",
-    )
-    .bind(session.session_id.trim())
-    .bind(session.apparatus.trim())
-    .bind(session.order_id.trim())
-    .bind(session.status.as_str())
-    .bind(session.worker_role.trim())
-    .bind(session.worker_ref.trim())
-    .bind(session.worker_display_name.trim())
-    .bind(session.started_at_unix as f64)
-    .bind(session.updated_at_unix as f64)
-    .bind(&session.payload_json)
-    .execute(&mut **tx)
-    .await
-    .map_err(|_| ProductionMapError::StoreFailed)?;
-    Ok(())
-}
-
-async fn put_order_progress_event(
-    pool: &PgPool,
-    event: &OrderProgressEvent,
-) -> Result<(), ProductionMapError> {
-    let mut tx = pool
-        .begin()
-        .await
-        .map_err(|_| ProductionMapError::StoreFailed)?;
-    put_order_progress_event_tx(&mut tx, event).await?;
-    tx.commit()
-        .await
-        .map_err(|_| ProductionMapError::StoreFailed)
-}
-
-async fn put_order_progress_event_tx(
-    tx: &mut Transaction<'_, Postgres>,
-    event: &OrderProgressEvent,
-) -> Result<(), ProductionMapError> {
-    sqlx::query(
-        "INSERT INTO mini_order_progress_events (
-            event_id, session_id, batch_id, apparatus, order_id, action,
-            produced_qty, uom, worker_role, worker_ref, worker_display_name,
-            qr_payload, payload_json, created_at
-         )
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, now())
-         ON CONFLICT (event_id) DO UPDATE SET
-            session_id = excluded.session_id,
-            batch_id = excluded.batch_id,
-            action = excluded.action,
-            produced_qty = excluded.produced_qty,
-            uom = excluded.uom,
-            worker_role = excluded.worker_role,
-            worker_ref = excluded.worker_ref,
-            worker_display_name = excluded.worker_display_name,
-            qr_payload = excluded.qr_payload,
-            payload_json = excluded.payload_json",
-    )
-    .bind(event.event_id.trim())
-    .bind(event.session_id.trim())
-    .bind(event.batch_id.trim())
-    .bind(event.apparatus.trim())
-    .bind(event.order_id.trim())
-    .bind(queue_action_as_str(event.action))
-    .bind(event.produced_qty)
-    .bind(event.uom.trim())
-    .bind(event.worker_role.trim())
-    .bind(event.worker_ref.trim())
-    .bind(event.worker_display_name.trim())
-    .bind(event.qr_payload.trim())
-    .bind(&event.payload_json)
-    .execute(&mut **tx)
-    .await
-    .map_err(|_| ProductionMapError::StoreFailed)?;
-    Ok(())
-}
-
-async fn put_order_progress_batch(
-    pool: &PgPool,
-    batch: &OrderProgressBatch,
-) -> Result<(), ProductionMapError> {
-    let mut tx = pool
-        .begin()
-        .await
-        .map_err(|_| ProductionMapError::StoreFailed)?;
-    put_order_progress_batch_tx(&mut tx, batch).await?;
-    tx.commit()
-        .await
-        .map_err(|_| ProductionMapError::StoreFailed)
-}
-
-async fn put_order_progress_batch_tx(
-    tx: &mut Transaction<'_, Postgres>,
-    batch: &OrderProgressBatch,
-) -> Result<(), ProductionMapError> {
-    sqlx::query(
-        "INSERT INTO mini_progress_batches (
-            batch_id, session_id, apparatus, order_id, action, status,
-            produced_qty, uom, qr_payload, label_item_code, label_item_name,
-            executor_name, worker_role, worker_ref, worker_display_name,
-            payload_json, created_at, updated_at
-         )
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, now(), now())
-         ON CONFLICT (batch_id) DO UPDATE SET
-            status = excluded.status,
-            produced_qty = excluded.produced_qty,
-            uom = excluded.uom,
-            qr_payload = excluded.qr_payload,
-            label_item_code = excluded.label_item_code,
-            label_item_name = excluded.label_item_name,
-            executor_name = excluded.executor_name,
-            worker_role = excluded.worker_role,
-            worker_ref = excluded.worker_ref,
-            worker_display_name = excluded.worker_display_name,
-            payload_json = excluded.payload_json,
-            updated_at = now()",
-    )
-    .bind(batch.batch_id.trim())
-    .bind(batch.session_id.trim())
-    .bind(batch.apparatus.trim())
-    .bind(batch.order_id.trim())
-    .bind(queue_action_as_str(batch.action))
-    .bind(batch.status.as_str())
-    .bind(batch.produced_qty)
-    .bind(batch.uom.trim())
-    .bind(batch.qr_payload.trim())
-    .bind(batch.label_item_code.trim())
-    .bind(batch.label_item_name.trim())
-    .bind(batch.executor_name.trim())
-    .bind(batch.worker_role.trim())
-    .bind(batch.worker_ref.trim())
-    .bind(batch.worker_display_name.trim())
-    .bind(&batch.payload_json)
-    .execute(&mut **tx)
-    .await
-    .map_err(|_| ProductionMapError::StoreFailed)?;
-    Ok(())
-}
-
-#[derive(sqlx::FromRow)]
-struct ProgressSessionRow {
-    session_id: String,
-    apparatus: String,
-    order_id: String,
-    status: String,
-    worker_role: String,
-    worker_ref: String,
-    worker_display_name: String,
-    started_at_unix: i64,
-    updated_at_unix: i64,
-    payload_json: serde_json::Value,
-}
-
-#[derive(sqlx::FromRow)]
-struct ProgressBatchRow {
-    batch_id: String,
-    session_id: String,
-    apparatus: String,
-    order_id: String,
-    action: String,
-    status: String,
-    produced_qty: f64,
-    uom: String,
-    qr_payload: String,
-    label_item_code: String,
-    label_item_name: String,
-    executor_name: String,
-    worker_role: String,
-    worker_ref: String,
-    worker_display_name: String,
-    payload_json: serde_json::Value,
-}
-
-#[derive(sqlx::FromRow)]
-struct CompletionRequestRow {
-    event_id: String,
-    apparatus: String,
-    order_id: String,
-    order_number: String,
-    order_title: String,
-    product_code: String,
-    worker_role: String,
-    worker_ref: String,
-    worker_display_name: String,
-    description: String,
-    created_at_unix: i64,
-}
-
-#[derive(sqlx::FromRow)]
-struct CompletionRequestDecisionRow {
-    event_id: String,
-    request_event_id: String,
-    decision: String,
-    apparatus: String,
-    order_id: String,
-    order_number: String,
-    order_title: String,
-    product_code: String,
-    worker_role: String,
-    worker_ref: String,
-    worker_display_name: String,
-    decided_by_role: String,
-    decided_by_ref: String,
-    decided_by_display_name: String,
-    description: String,
-    message: String,
-    created_at_unix: i64,
-}
-
-#[derive(sqlx::FromRow)]
-struct QueueActionLogRow {
-    event_id: String,
-    apparatus: String,
-    order_id: String,
-    action: String,
-    from_state: String,
-    to_state: String,
-    actor_role: String,
-    actor_ref: String,
-    actor_display_name: String,
-    created_at_unix: i64,
-    completed_with_issue: bool,
-    issue_note: String,
-}
-
-fn queue_action_log_from_row(
-    row: QueueActionLogRow,
-) -> Result<ProductionOrderLogEntry, ProductionMapError> {
-    Ok(ProductionOrderLogEntry {
-        event_id: row.event_id,
-        apparatus: row.apparatus,
-        order_id: row.order_id,
-        action: queue_action_from_str(&row.action).ok_or(ProductionMapError::StoreFailed)?,
-        from_state: queue_state::ApparatusQueueOrderState::parse(&row.from_state)
-            .ok_or(ProductionMapError::StoreFailed)?,
-        to_state: queue_state::ApparatusQueueOrderState::parse(&row.to_state)
-            .ok_or(ProductionMapError::StoreFailed)?,
-        actor_role: row.actor_role,
-        actor_ref: row.actor_ref,
-        actor_display_name: row.actor_display_name,
-        created_at_unix: row.created_at_unix,
-        completed_with_issue: row.completed_with_issue,
-        issue_note: row.issue_note,
-    })
-}
-
-fn progress_session_from_row(
-    row: ProgressSessionRow,
-) -> Result<OrderRunSession, ProductionMapError> {
-    Ok(OrderRunSession {
-        session_id: row.session_id,
-        apparatus: row.apparatus,
-        order_id: row.order_id,
-        status: OrderRunStatus::parse(&row.status).ok_or(ProductionMapError::StoreFailed)?,
-        worker_role: row.worker_role,
-        worker_ref: row.worker_ref,
-        worker_display_name: row.worker_display_name,
-        started_at_unix: row.started_at_unix,
-        updated_at_unix: row.updated_at_unix,
-        payload_json: row.payload_json,
-    })
-}
-
-fn progress_batch_from_row(
-    row: ProgressBatchRow,
-) -> Result<OrderProgressBatch, ProductionMapError> {
-    Ok(OrderProgressBatch {
-        batch_id: row.batch_id,
-        session_id: row.session_id,
-        apparatus: row.apparatus,
-        order_id: row.order_id,
-        action: queue_action_from_str(&row.action).ok_or(ProductionMapError::StoreFailed)?,
-        status: OrderProgressBatchStatus::parse(&row.status)
-            .ok_or(ProductionMapError::StoreFailed)?,
-        produced_qty: row.produced_qty,
-        uom: row.uom,
-        qr_payload: row.qr_payload,
-        label_item_code: row.label_item_code,
-        label_item_name: row.label_item_name,
-        executor_name: row.executor_name,
-        worker_role: row.worker_role,
-        worker_ref: row.worker_ref,
-        worker_display_name: row.worker_display_name,
-        payload_json: row.payload_json,
-    })
-}
-
-fn queue_action_from_str(
-    value: &str,
-) -> Option<crate::core::production_map::queue_state::ApparatusQueueAction> {
-    match value.trim().to_ascii_lowercase().as_str() {
-        "start" => Some(crate::core::production_map::queue_state::ApparatusQueueAction::Start),
-        "pause" => Some(crate::core::production_map::queue_state::ApparatusQueueAction::Pause),
-        "resume" => Some(crate::core::production_map::queue_state::ApparatusQueueAction::Resume),
-        "complete" => {
-            Some(crate::core::production_map::queue_state::ApparatusQueueAction::Complete)
-        }
-        _ => None,
-    }
-}
-
-fn queue_action_as_str(
-    action: crate::core::production_map::queue_state::ApparatusQueueAction,
-) -> &'static str {
-    match action {
-        crate::core::production_map::queue_state::ApparatusQueueAction::Start => "start",
-        crate::core::production_map::queue_state::ApparatusQueueAction::Pause => "pause",
-        crate::core::production_map::queue_state::ApparatusQueueAction::Resume => "resume",
-        crate::core::production_map::queue_state::ApparatusQueueAction::Complete => "complete",
-    }
-}
-
-async fn put_map_inner(
-    pool: &PgPool,
-    map: &ProductionMapDefinition,
-) -> Result<(), ProductionMapError> {
-    let mut tx = pool
-        .begin()
-        .await
-        .map_err(|_| ProductionMapError::StoreFailed)?;
-    put_map_inner_tx(&mut tx, map).await?;
-    tx.commit()
-        .await
-        .map_err(|_| ProductionMapError::StoreFailed)
-}
-
-async fn put_map_inner_tx(
-    tx: &mut Transaction<'_, Postgres>,
-    map: &ProductionMapDefinition,
-) -> Result<(), ProductionMapError> {
-    let payload = serde_json::to_value(map).map_err(|_| ProductionMapError::StoreFailed)?;
-    sqlx::query(
-        "INSERT INTO mini_production_maps
-            (id, product_code, title, code, order_number, roll_count, width_mm, map_json, updated_at)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, now())
-         ON CONFLICT (id) DO UPDATE SET
-            product_code = excluded.product_code,
-            title = excluded.title,
-            code = excluded.code,
-            order_number = excluded.order_number,
-            roll_count = excluded.roll_count,
-            width_mm = excluded.width_mm,
-            map_json = excluded.map_json,
-            updated_at = excluded.updated_at",
-    )
-    .bind(map.id.trim())
-    .bind(map.product_code.trim())
-    .bind(map.title.trim())
-    .bind(map.code.trim())
-    .bind(map.order_number.trim())
-    .bind(map.roll_count)
-    .bind(map.width_mm)
-    .bind(payload)
-    .execute(&mut **tx)
-    .await
-    .map_err(|_| ProductionMapError::StoreFailed)?;
-    mirror_map_graph_tx(tx, map).await?;
-    Ok(())
-}
-
-async fn mirror_map_graph_tx(
-    tx: &mut Transaction<'_, Postgres>,
-    map: &ProductionMapDefinition,
-) -> Result<(), ProductionMapError> {
-    let map_id = map.id.trim();
-    sqlx::query("DELETE FROM mini_production_map_edges WHERE map_id = $1")
-        .bind(map_id)
-        .execute(&mut **tx)
-        .await
-        .map_err(|_| ProductionMapError::StoreFailed)?;
-    sqlx::query("DELETE FROM mini_production_map_nodes WHERE map_id = $1")
-        .bind(map_id)
-        .execute(&mut **tx)
-        .await
-        .map_err(|_| ProductionMapError::StoreFailed)?;
-
-    for node in &map.nodes {
-        let payload = serde_json::to_value(node).map_err(|_| ProductionMapError::StoreFailed)?;
-        sqlx::query(
-            "INSERT INTO mini_production_map_nodes
-                (map_id, node_id, kind, title, payload_json)
-             VALUES ($1, $2, $3, $4, $5)",
-        )
-        .bind(map_id)
-        .bind(node.id.trim())
-        .bind(node_kind(&node.kind))
-        .bind(node.title.trim())
-        .bind(payload)
-        .execute(&mut **tx)
-        .await
-        .map_err(|_| ProductionMapError::StoreFailed)?;
-    }
-
-    for (index, edge) in map.edges.iter().enumerate() {
-        let payload = serde_json::to_value(edge).map_err(|_| ProductionMapError::StoreFailed)?;
-        sqlx::query(
-            "INSERT INTO mini_production_map_edges
-                (map_id, edge_index, from_node_id, to_node_id, branch, payload_json)
-             VALUES ($1, $2, $3, $4, $5, $6)",
-        )
-        .bind(map_id)
-        .bind(index as i32)
-        .bind(edge.from.trim())
-        .bind(edge.to.trim())
-        .bind(edge.branch.trim())
-        .bind(payload)
-        .execute(&mut **tx)
-        .await
-        .map_err(|_| ProductionMapError::StoreFailed)?;
-    }
-    Ok(())
-}
-
-fn node_kind(kind: &crate::core::production_map::ProductionMapNodeKind) -> &'static str {
-    match kind {
-        crate::core::production_map::ProductionMapNodeKind::Start => "start",
-        crate::core::production_map::ProductionMapNodeKind::Location => "location",
-        crate::core::production_map::ProductionMapNodeKind::Material => "material",
-        crate::core::production_map::ProductionMapNodeKind::Apparatus => "apparatus",
-        crate::core::production_map::ProductionMapNodeKind::KkProduct => "kk_product",
-        crate::core::production_map::ProductionMapNodeKind::Formula => "formula",
-        crate::core::production_map::ProductionMapNodeKind::Condition => "condition",
-        crate::core::production_map::ProductionMapNodeKind::Task => "task",
-        crate::core::production_map::ProductionMapNodeKind::Wait => "wait",
-        crate::core::production_map::ProductionMapNodeKind::Output => "output",
-        crate::core::production_map::ProductionMapNodeKind::End => "end",
-    }
-}
-
-async fn reject_order_number_immutable(
-    pool: &PgPool,
-    map: &ProductionMapDefinition,
-) -> Result<(), ProductionMapError> {
-    let mut tx = pool
-        .begin()
-        .await
-        .map_err(|_| ProductionMapError::StoreFailed)?;
-    let result = reject_order_number_immutable_tx(&mut tx, map).await;
-    tx.commit()
-        .await
-        .map_err(|_| ProductionMapError::StoreFailed)?;
-    result
-}
-
-async fn reject_order_number_immutable_tx(
-    tx: &mut Transaction<'_, Postgres>,
-    map: &ProductionMapDefinition,
-) -> Result<(), ProductionMapError> {
-    let id = map.id.trim();
-    if !id.starts_with("zakaz-") {
-        return Ok(());
-    }
-    let order_number = map.order_number.trim();
-    if order_number.is_empty() {
-        return Ok(());
-    }
-    let existing = sqlx::query_scalar::<_, serde_json::Value>(
-        "SELECT map_json FROM mini_production_maps WHERE id = $1",
-    )
-    .bind(id)
-    .fetch_optional(&mut **tx)
-    .await
-    .map_err(|_| ProductionMapError::StoreFailed)?;
-    let Some(payload) = existing else {
-        return Ok(());
-    };
-    let existing_map = serde_json::from_value::<ProductionMapDefinition>(payload)
-        .map_err(|_| ProductionMapError::StoreFailed)?;
-    let existing_number = existing_map.order_number.trim();
-    if !existing_number.is_empty() && existing_number != order_number {
-        return Err(ProductionMapError::OrderNumberImmutable);
-    }
-    Ok(())
-}
-
-async fn reject_duplicate_order_number(
-    pool: &PgPool,
-    map: &ProductionMapDefinition,
-) -> Result<(), ProductionMapError> {
-    let mut tx = pool
-        .begin()
-        .await
-        .map_err(|_| ProductionMapError::StoreFailed)?;
-    let result = reject_duplicate_order_number_tx(&mut tx, map).await;
-    tx.commit()
-        .await
-        .map_err(|_| ProductionMapError::StoreFailed)?;
-    result
-}
-
-async fn reject_duplicate_order_number_tx(
-    tx: &mut Transaction<'_, Postgres>,
-    map: &ProductionMapDefinition,
-) -> Result<(), ProductionMapError> {
-    let order_number = map.order_number.trim();
-    if order_number.is_empty() {
-        return Ok(());
-    }
-    let rows = sqlx::query_scalar::<_, serde_json::Value>(
-        "SELECT map_json
-         FROM mini_production_maps
-         WHERE order_number = $1",
-    )
-    .bind(order_number)
-    .fetch_all(&mut **tx)
-    .await
-    .map_err(|_| ProductionMapError::StoreFailed)?;
-
-    for payload in rows {
-        let existing = serde_json::from_value::<ProductionMapDefinition>(payload)
-            .map_err(|_| ProductionMapError::StoreFailed)?;
-        if existing.order_number.trim() == order_number && !is_same_zakaz(&existing, map) {
-            return Err(ProductionMapError::DuplicateOrderNumber);
-        }
-    }
-    Ok(())
-}
-
-fn is_same_zakaz(existing: &ProductionMapDefinition, next: &ProductionMapDefinition) -> bool {
-    existing.id.trim() == next.id.trim()
-        && existing.title.trim() == next.title.trim()
-        && existing.product_code.trim() == next.product_code.trim()
 }

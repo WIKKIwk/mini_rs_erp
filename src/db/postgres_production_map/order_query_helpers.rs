@@ -1,0 +1,176 @@
+use std::collections::BTreeMap;
+
+use sqlx::PgPool;
+
+use crate::core::production_map::{
+    CompletedQueueOrder, OrderProgressBatch, OrderRunSession, ProductionMapError,
+    ProductionOrderLogEntry,
+};
+
+use super::progress_helpers::{
+    ProgressBatchRow, ProgressSessionRow, QueueActionLogRow, progress_batch_from_row,
+    progress_session_from_row, queue_action_log_from_row,
+};
+
+pub(super) async fn load_completed_queue_orders_for_actor(
+    pool: &PgPool,
+    actor_ref: &str,
+    limit: usize,
+) -> Result<Vec<CompletedQueueOrder>, ProductionMapError> {
+    let actor_ref = actor_ref.trim();
+    if actor_ref.is_empty() || limit == 0 {
+        return Ok(Vec::new());
+    }
+    let limit = i64::try_from(limit.min(500)).unwrap_or(500);
+    let rows = sqlx::query_as::<_, (String, String, i64)>(
+        "SELECT order_id, apparatus, completed_at_unix
+         FROM (
+            SELECT DISTINCT ON (order_id)
+                order_id,
+                apparatus,
+                created_at,
+                EXTRACT(EPOCH FROM created_at)::bigint AS completed_at_unix
+            FROM mini_queue_action_events
+            WHERE actor_ref = $1
+              AND action = 'complete'
+              AND to_state = 'completed'
+            ORDER BY order_id, created_at DESC
+         ) latest
+         ORDER BY created_at DESC
+         LIMIT $2",
+    )
+    .bind(actor_ref)
+    .bind(limit)
+    .fetch_all(pool)
+    .await
+    .map_err(|_| ProductionMapError::StoreFailed)?;
+
+    Ok(rows
+        .into_iter()
+        .map(
+            |(order_id, apparatus, completed_at_unix)| CompletedQueueOrder {
+                apparatus,
+                order_id,
+                completed_at_unix,
+            },
+        )
+        .collect())
+}
+
+pub(super) async fn load_queue_action_logs_for_orders(
+    pool: &PgPool,
+    order_ids: &[String],
+) -> Result<BTreeMap<String, Vec<ProductionOrderLogEntry>>, ProductionMapError> {
+    let order_ids = order_ids
+        .iter()
+        .map(|order_id| order_id.trim().to_string())
+        .filter(|order_id| !order_id.is_empty())
+        .collect::<Vec<_>>();
+    if order_ids.is_empty() {
+        return Ok(BTreeMap::new());
+    }
+    let rows = sqlx::query_as::<_, QueueActionLogRow>(
+        "SELECT event_id, apparatus, order_id, action, from_state, to_state,
+                actor_role, actor_ref, actor_display_name,
+                EXTRACT(EPOCH FROM created_at)::bigint AS created_at_unix,
+                COALESCE((payload_json->>'completed_with_issue')::boolean, false) AS completed_with_issue,
+                COALESCE(payload_json->>'issue_note', '') AS issue_note
+         FROM mini_queue_action_events
+         WHERE order_id = ANY($1)
+         ORDER BY created_at ASC, id ASC",
+    )
+    .bind(&order_ids)
+    .fetch_all(pool)
+    .await
+    .map_err(|_| ProductionMapError::StoreFailed)?;
+    let mut logs: BTreeMap<String, Vec<ProductionOrderLogEntry>> = BTreeMap::new();
+    for row in rows {
+        let entry = queue_action_log_from_row(row)?;
+        logs.entry(entry.order_id.clone()).or_default().push(entry);
+    }
+    Ok(logs)
+}
+
+pub(super) async fn load_active_order_run_session(
+    pool: &PgPool,
+    apparatus: &str,
+    order_id: &str,
+) -> Result<Option<OrderRunSession>, ProductionMapError> {
+    let row = sqlx::query_as::<_, ProgressSessionRow>(
+        "SELECT session_id, apparatus, order_id, status,
+                worker_role, worker_ref, worker_display_name,
+                EXTRACT(EPOCH FROM started_at)::bigint AS started_at_unix,
+                EXTRACT(EPOCH FROM updated_at)::bigint AS updated_at_unix,
+                payload_json
+         FROM mini_order_run_sessions
+         WHERE order_id = $1
+           AND lower(apparatus) = lower($2)
+           AND status IN ('active', 'paused')
+         ORDER BY updated_at DESC
+         LIMIT 1",
+    )
+    .bind(order_id.trim())
+    .bind(apparatus.trim())
+    .fetch_optional(pool)
+    .await
+    .map_err(|_| ProductionMapError::StoreFailed)?;
+    row.map(progress_session_from_row).transpose()
+}
+
+pub(super) async fn load_order_run_session(
+    pool: &PgPool,
+    session_id: &str,
+) -> Result<Option<OrderRunSession>, ProductionMapError> {
+    let row = sqlx::query_as::<_, ProgressSessionRow>(
+        "SELECT session_id, apparatus, order_id, status,
+                worker_role, worker_ref, worker_display_name,
+                EXTRACT(EPOCH FROM started_at)::bigint AS started_at_unix,
+                EXTRACT(EPOCH FROM updated_at)::bigint AS updated_at_unix,
+                payload_json
+         FROM mini_order_run_sessions
+         WHERE session_id = $1",
+    )
+    .bind(session_id.trim())
+    .fetch_optional(pool)
+    .await
+    .map_err(|_| ProductionMapError::StoreFailed)?;
+    row.map(progress_session_from_row).transpose()
+}
+
+pub(super) async fn load_progress_batch(
+    pool: &PgPool,
+    batch_id: &str,
+) -> Result<Option<OrderProgressBatch>, ProductionMapError> {
+    let row = sqlx::query_as::<_, ProgressBatchRow>(
+        "SELECT batch_id, session_id, apparatus, order_id, action, status,
+                produced_qty::float8 AS produced_qty, uom, qr_payload,
+                label_item_code, label_item_name, executor_name,
+                worker_role, worker_ref, worker_display_name, payload_json
+         FROM mini_progress_batches
+         WHERE batch_id = $1",
+    )
+    .bind(batch_id.trim())
+    .fetch_optional(pool)
+    .await
+    .map_err(|_| ProductionMapError::StoreFailed)?;
+    row.map(progress_batch_from_row).transpose()
+}
+
+pub(super) async fn load_progress_batch_by_qr(
+    pool: &PgPool,
+    qr_payload: &str,
+) -> Result<Option<OrderProgressBatch>, ProductionMapError> {
+    let row = sqlx::query_as::<_, ProgressBatchRow>(
+        "SELECT batch_id, session_id, apparatus, order_id, action, status,
+                produced_qty::float8 AS produced_qty, uom, qr_payload,
+                label_item_code, label_item_name, executor_name,
+                worker_role, worker_ref, worker_display_name, payload_json
+         FROM mini_progress_batches
+         WHERE lower(qr_payload) = lower($1)",
+    )
+    .bind(qr_payload.trim())
+    .fetch_optional(pool)
+    .await
+    .map_err(|_| ProductionMapError::StoreFailed)?;
+    row.map(progress_batch_from_row).transpose()
+}
