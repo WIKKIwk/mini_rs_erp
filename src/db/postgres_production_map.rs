@@ -5,9 +5,10 @@ use sqlx::{PgPool, Postgres, Transaction};
 
 use crate::core::production_map::{
     ApparatusMaterialRule, ApparatusQueueActionEvent, ApparatusQueuePolicy, CompletedQueueOrder,
-    OrderProgressBatch, OrderProgressBatchStatus, OrderProgressEvent, OrderRunSession,
-    OrderRunStatus, ProductionMapDefinition, ProductionMapError, ProductionMapStorePort,
-    ProductionOrderLogEntry, QueueActionActor, RawMaterialAssignment, queue_state,
+    CompletionRequestNotification, OrderProgressBatch, OrderProgressBatchStatus,
+    OrderProgressEvent, OrderRunSession, OrderRunStatus, ProductionMapDefinition,
+    ProductionMapError, ProductionMapStorePort, ProductionOrderLogEntry, QueueActionActor,
+    RawMaterialAssignment, queue_state,
 };
 
 #[derive(Clone)]
@@ -293,6 +294,56 @@ impl ProductionMapStorePort for PostgresProductionMapStore {
                     completed_at_unix,
                 },
             )
+            .collect())
+    }
+
+    async fn completion_requests(
+        &self,
+        limit: usize,
+    ) -> Result<Vec<CompletionRequestNotification>, ProductionMapError> {
+        if limit == 0 {
+            return Ok(Vec::new());
+        }
+        let limit = i64::try_from(limit.min(500)).unwrap_or(500);
+        let rows = sqlx::query_as::<_, CompletionRequestRow>(
+            "SELECT event_id,
+                    apparatus,
+                    order_id,
+                    COALESCE(payload_json->>'order_number', '') AS order_number,
+                    COALESCE(payload_json->>'order_title', '') AS order_title,
+                    COALESCE(payload_json->>'product_code', '') AS product_code,
+                    actor_role AS worker_role,
+                    actor_ref AS worker_ref,
+                    actor_display_name AS worker_display_name,
+                    COALESCE(payload_json->>'description', '') AS description,
+                    EXTRACT(EPOCH FROM created_at)::bigint AS created_at_unix
+             FROM mini_queue_action_events
+             WHERE action = 'complete'
+               AND payload_json->>'completion_request' = 'true'
+             ORDER BY created_at DESC, id DESC
+             LIMIT $1",
+        )
+        .bind(limit)
+        .fetch_all(&self.pool)
+        .await
+        .map_err(|_| ProductionMapError::StoreFailed)?;
+
+        Ok(rows
+            .into_iter()
+            .filter(|row| !row.description.trim().is_empty())
+            .map(|row| CompletionRequestNotification {
+                event_id: row.event_id,
+                apparatus: row.apparatus,
+                order_id: row.order_id,
+                order_number: row.order_number,
+                order_title: row.order_title,
+                product_code: row.product_code,
+                worker_role: row.worker_role,
+                worker_ref: row.worker_ref,
+                worker_display_name: row.worker_display_name,
+                description: row.description,
+                created_at_unix: row.created_at_unix,
+            })
             .collect())
     }
 
@@ -819,6 +870,21 @@ struct ProgressBatchRow {
     worker_ref: String,
     worker_display_name: String,
     payload_json: serde_json::Value,
+}
+
+#[derive(sqlx::FromRow)]
+struct CompletionRequestRow {
+    event_id: String,
+    apparatus: String,
+    order_id: String,
+    order_number: String,
+    order_title: String,
+    product_code: String,
+    worker_role: String,
+    worker_ref: String,
+    worker_display_name: String,
+    description: String,
+    created_at_unix: i64,
 }
 
 #[derive(sqlx::FromRow)]

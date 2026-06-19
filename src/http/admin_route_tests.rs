@@ -1521,6 +1521,113 @@ async fn queue_pause_prints_progress_qr_and_resume_uses_lookup() {
 }
 
 #[tokio::test]
+async fn queue_complete_without_output_creates_admin_completion_request() {
+    let state = test_state();
+    state
+        .admin
+        .upsert_role_assignment(crate::core::authz::RoleAssignmentUpsert {
+            principal_role: PrincipalRole::Aparatchi,
+            principal_ref: "worker-zero-complete".to_string(),
+            role_id: "aparatchi".to_string(),
+            assigned_apparatus: vec!["7 ta rangli pechat".to_string()],
+        })
+        .await
+        .expect("assignment");
+    let admin_token = session(&state, PrincipalRole::Admin).await;
+    let worker_token = session_for(&state, PrincipalRole::Aparatchi, "worker-zero-complete").await;
+    let router = build_router(state);
+
+    let saved = router
+        .clone()
+        .oneshot(request_with_body(
+            "PUT",
+            "/v1/mobile/admin/production-maps",
+            &admin_token,
+            &pechat_order_map_json(
+                "zakaz-zero-complete",
+                "Zero complete order",
+                "9311",
+                "7 ta rangli pechat",
+            ),
+        ))
+        .await
+        .expect("save map");
+    assert_eq!(saved.status(), StatusCode::OK);
+
+    let started = router
+        .clone()
+        .oneshot(request_with_body(
+            "POST",
+            "/v1/mobile/admin/production-maps/queue-action",
+            &worker_token,
+            r#"{
+                "apparatus":"7 ta rangli pechat",
+                "order_id":"zakaz-zero-complete",
+                "action":"start"
+            }"#,
+        ))
+        .await
+        .expect("start");
+    assert_eq!(started.status(), StatusCode::OK);
+
+    let requested = router
+        .clone()
+        .oneshot(request_with_body(
+            "POST",
+            "/v1/mobile/admin/production-maps/queue-action",
+            &worker_token,
+            r#"{
+                "apparatus":"7 ta rangli pechat",
+                "order_id":"zakaz-zero-complete",
+                "action":"complete",
+                "completion_request_note":"Metraj va kg yo'q, brigader tekshirsin"
+            }"#,
+        ))
+        .await
+        .expect("complete request");
+    let requested_status = requested.status();
+    let requested_body = json_body(requested).await;
+    assert_eq!(requested_status, StatusCode::OK, "{requested_body:?}");
+    assert_eq!(
+        requested_body["states"]["zakaz-zero-complete"],
+        "in_progress"
+    );
+    assert!(requested_body["progress_batch"].is_null());
+    assert_eq!(
+        requested_body["completion_request"]["description"],
+        "Metraj va kg yo'q, brigader tekshirsin"
+    );
+    assert_eq!(
+        requested_body["completion_request"]["worker_ref"],
+        "worker-zero-complete"
+    );
+
+    let listed = router
+        .oneshot(request(
+            "GET",
+            "/v1/mobile/admin/production-maps/completion-requests",
+            &admin_token,
+        ))
+        .await
+        .expect("list completion requests");
+    let listed_status = listed.status();
+    let listed_body = json_body(listed).await;
+    assert_eq!(listed_status, StatusCode::OK, "{listed_body:?}");
+    assert_eq!(
+        listed_body["completion_requests"].as_array().unwrap().len(),
+        1
+    );
+    assert_eq!(
+        listed_body["completion_requests"][0]["order_id"],
+        "zakaz-zero-complete"
+    );
+    assert_eq!(
+        listed_body["completion_requests"][0]["description"],
+        "Metraj va kg yo'q, brigader tekshirsin"
+    );
+}
+
+#[tokio::test]
 async fn queue_pause_print_failure_keeps_committed_pause_log() {
     let print_requests = Arc::new(Mutex::new(Vec::<ScaleDriverPrintRequest>::new()));
     let mut state = test_state();

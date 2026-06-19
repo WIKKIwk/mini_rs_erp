@@ -340,6 +340,21 @@ pub struct CompletedQueueOrder {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CompletionRequestNotification {
+    pub event_id: String,
+    pub apparatus: String,
+    pub order_id: String,
+    pub order_number: String,
+    pub order_title: String,
+    pub product_code: String,
+    pub worker_role: String,
+    pub worker_ref: String,
+    pub worker_display_name: String,
+    pub description: String,
+    pub created_at_unix: i64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ProductionOrderLogEntry {
     pub event_id: String,
     pub apparatus: String,
@@ -492,6 +507,12 @@ pub struct ApparatusQueueActionResult {
     pub progress_batch: Option<OrderProgressBatch>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct CompletionRequestResult {
+    pub states: BTreeMap<String, String>,
+    pub completion_request: CompletionRequestNotification,
+}
+
 #[async_trait]
 pub trait ProductionMapStorePort: Send + Sync {
     async fn maps(&self) -> Result<Vec<ProductionMapDefinition>, ProductionMapError>;
@@ -546,6 +567,12 @@ pub trait ProductionMapStorePort: Send + Sync {
         _actor_ref: &str,
         _limit: usize,
     ) -> Result<Vec<CompletedQueueOrder>, ProductionMapError> {
+        Ok(Vec::new())
+    }
+    async fn completion_requests(
+        &self,
+        _limit: usize,
+    ) -> Result<Vec<CompletionRequestNotification>, ProductionMapError> {
         Ok(Vec::new())
     }
     async fn queue_action_logs_for_orders(
@@ -822,6 +849,28 @@ impl ProductionMapStorePort for MemoryProductionMapStore {
             }
         }
         Ok(completed)
+    }
+
+    async fn completion_requests(
+        &self,
+        limit: usize,
+    ) -> Result<Vec<CompletionRequestNotification>, ProductionMapError> {
+        if limit == 0 {
+            return Ok(Vec::new());
+        }
+        let events = self.queue_events.read().await;
+        let mut requests = Vec::new();
+        for (index, event) in events.iter().enumerate().rev() {
+            let Some(request) = completion_request_notification_from_event(event, index as i64 + 1)
+            else {
+                continue;
+            };
+            requests.push(request);
+            if requests.len() >= limit {
+                break;
+            }
+        }
+        Ok(requests)
     }
 
     async fn queue_action_logs_for_orders(
@@ -1206,6 +1255,13 @@ impl ProductionMapService {
             .await
     }
 
+    pub async fn completion_requests(
+        &self,
+        limit: usize,
+    ) -> Result<Vec<CompletionRequestNotification>, ProductionMapError> {
+        self.store.completion_requests(limit).await
+    }
+
     pub async fn apparatus_queue_policy_records(
         &self,
     ) -> Result<Vec<ApparatusQueuePolicyRecord>, ProductionMapError> {
@@ -1411,6 +1467,126 @@ impl ProductionMapService {
             session: progress.session,
             progress_event: progress.progress_event,
             progress_batch: progress.progress_batch,
+        })
+    }
+
+    pub async fn request_completion_without_output(
+        &self,
+        apparatus: &str,
+        order_id: &str,
+        assigned_apparatus: &[String],
+        actor: QueueActionActor,
+        description: &str,
+    ) -> Result<CompletionRequestResult, ProductionMapError> {
+        let apparatus = apparatus.trim();
+        let order_id = order_id.trim();
+        let description = description.trim();
+        if apparatus.is_empty() || order_id.is_empty() || description.is_empty() {
+            return Err(ProductionMapError::ProgressInputInvalid);
+        }
+        if !queue_state::apparatus_matches_assigned(apparatus, assigned_apparatus) {
+            return Err(ProductionMapError::ApparatusNotAssigned);
+        }
+
+        let sequences = self.store.apparatus_sequences().await?;
+        let all_states = self.store.apparatus_queue_states().await?;
+        let policies = self.store.apparatus_queue_policies().await?;
+        let known_keys = sequences
+            .keys()
+            .chain(all_states.keys())
+            .map(|key| key.as_str())
+            .collect::<BTreeSet<_>>()
+            .into_iter()
+            .map(|key| key.to_string())
+            .collect::<Vec<_>>();
+        let storage_key = queue_state::resolve_apparatus_storage_key(apparatus, &known_keys);
+        let policy = effective_apparatus_queue_policy(
+            apparatus,
+            policies
+                .get(&storage_key)
+                .copied()
+                .or_else(|| policies.get(apparatus).copied())
+                .or_else(|| {
+                    policies.iter().find_map(|(key, policy)| {
+                        queue_state::apparatus_titles_match(key, apparatus).then_some(*policy)
+                    })
+                }),
+        );
+        let stored_sequence = sequences.get(&storage_key).cloned().unwrap_or_default();
+        let all_maps = self.store.maps().await?;
+        let visible_order_ids = visible_order_ids_for_apparatus(&all_maps, apparatus);
+        let sequence =
+            queue_state::effective_apparatus_sequence(&stored_sequence, &visible_order_ids);
+        if !sequence.iter().any(|id| id.trim() == order_id) {
+            return Err(ProductionMapError::QueueActionNotAllowed);
+        }
+        let order_map = all_maps
+            .iter()
+            .find(|map| map.id.trim() == order_id)
+            .ok_or(ProductionMapError::MapNotFound)?;
+        let states = all_states.get(&storage_key).cloned().unwrap_or_default();
+        let from_state = states
+            .get(order_id)
+            .and_then(|value| queue_state::ApparatusQueueOrderState::parse(value))
+            .unwrap_or(queue_state::ApparatusQueueOrderState::Pending);
+        if from_state != queue_state::ApparatusQueueOrderState::InProgress {
+            return Err(ProductionMapError::QueueActionNotAllowed);
+        }
+
+        let now = unix_seconds();
+        let event_id = queue_action_event_id(
+            &storage_key,
+            order_id,
+            queue_state::ApparatusQueueAction::Complete,
+        );
+        let request = CompletionRequestNotification {
+            event_id: event_id.clone(),
+            apparatus: storage_key.clone(),
+            order_id: order_id.to_string(),
+            order_number: order_map.order_number.trim().to_string(),
+            order_title: order_map.title.trim().to_string(),
+            product_code: order_map.product_code.trim().to_string(),
+            worker_role: actor.role.trim().to_string(),
+            worker_ref: actor.ref_.trim().to_string(),
+            worker_display_name: actor_display_name(&actor),
+            description: description.to_string(),
+            created_at_unix: now,
+        };
+        let event = ApparatusQueueActionEvent {
+            event_id,
+            apparatus: storage_key.clone(),
+            order_id: order_id.to_string(),
+            action: queue_state::ApparatusQueueAction::Complete,
+            from_state,
+            to_state: from_state,
+            policy,
+            actor: actor.clone(),
+            assigned_apparatus: assigned_apparatus
+                .iter()
+                .map(|item| item.trim().to_string())
+                .filter(|item| !item.is_empty())
+                .collect(),
+            payload_json: serde_json::json!({
+                "completion_request": true,
+                "description": description,
+                "requested_apparatus": apparatus,
+                "storage_key": storage_key,
+                "order_number": request.order_number.clone(),
+                "order_title": request.order_title.clone(),
+                "product_code": request.product_code.clone(),
+                "worker_role": request.worker_role.clone(),
+                "worker_ref": request.worker_ref.clone(),
+                "worker_display_name": request.worker_display_name.clone(),
+                "created_at_unix": now,
+            }),
+        };
+        self.store
+            .append_apparatus_queue_action_event(event)
+            .await?;
+        self.notify_live();
+        Ok(CompletionRequestResult {
+            states,
+            completion_request: request,
         })
     }
 
@@ -2236,6 +2412,44 @@ fn latest_required_complete_event<'a>(
                 })
         })
         .max_by_key(|entry| entry.created_at_unix)
+}
+
+#[cfg(test)]
+fn completion_request_notification_from_event(
+    event: &ApparatusQueueActionEvent,
+    created_at_unix: i64,
+) -> Option<CompletionRequestNotification> {
+    if event.action != queue_state::ApparatusQueueAction::Complete
+        || event.payload_json.get("completion_request")?.as_bool() != Some(true)
+    {
+        return None;
+    }
+    let description = event.payload_json.get("description")?.as_str()?.trim();
+    if description.is_empty() {
+        return None;
+    }
+    Some(CompletionRequestNotification {
+        event_id: event.event_id.trim().to_string(),
+        apparatus: event.apparatus.trim().to_string(),
+        order_id: event.order_id.trim().to_string(),
+        order_number: json_string_field(&event.payload_json, "order_number"),
+        order_title: json_string_field(&event.payload_json, "order_title"),
+        product_code: json_string_field(&event.payload_json, "product_code"),
+        worker_role: event.actor.role.trim().to_string(),
+        worker_ref: event.actor.ref_.trim().to_string(),
+        worker_display_name: actor_display_name(&event.actor),
+        description: description.to_string(),
+        created_at_unix,
+    })
+}
+
+#[cfg(test)]
+fn json_string_field(payload: &serde_json::Value, key: &str) -> String {
+    payload
+        .get(key)
+        .and_then(|value| value.as_str())
+        .map(|value| value.trim().to_string())
+        .unwrap_or_default()
 }
 
 fn effective_apparatus_queue_policy(

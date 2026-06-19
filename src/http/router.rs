@@ -186,6 +186,10 @@ pub fn build_router(state: AppState) -> Router {
             any(admin::production_map_completed_orders),
         )
         .route(
+            "/v1/mobile/admin/production-maps/completion-requests",
+            any(admin::production_map_completion_requests),
+        )
+        .route(
             "/v1/mobile/admin/production-maps/closed-orders",
             any(admin::production_map_closed_orders),
         )

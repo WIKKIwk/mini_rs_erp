@@ -363,6 +363,8 @@ struct ApparatusQueueActionRequest {
     print_mode: String,
     #[serde(default)]
     print_count: u32,
+    #[serde(default)]
+    completion_request_note: String,
     action: queue_state::ApparatusQueueAction,
 }
 
@@ -423,6 +425,32 @@ pub async fn production_map_queue_action(
         },
     };
     let _queue_action_guard = state.production_maps.queue_action_guard().await;
+    if matches!(input.action, queue_state::ApparatusQueueAction::Complete)
+        && progress.produced_qty.is_none()
+        && input.gross_qty.is_none()
+        && !input.completion_request_note.trim().is_empty()
+    {
+        let result = state
+            .production_maps
+            .request_completion_without_output(
+                &input.apparatus,
+                &input.order_id,
+                &assigned_apparatus,
+                queue_action_actor(&principal),
+                &input.completion_request_note,
+            )
+            .await
+            .map_err(production_map_error)?;
+        return Ok(json_response(serde_json::json!({
+            "ok": true,
+            "states": result.states,
+            "session": null,
+            "progress_event": null,
+            "progress_batch": null,
+            "print": null,
+            "completion_request": result.completion_request,
+        })));
+    }
     let prepared = state
         .production_maps
         .prepare_apparatus_queue_action_with_material_scan_and_progress(
@@ -909,23 +937,36 @@ pub async fn production_map_live(
         ],
     )
     .await?;
-    Ok(production_map_live_sse(state, queue_action_actor(&principal).ref_).into_response())
+    let include_completion_requests = matches!(principal.role, PrincipalRole::Admin);
+    Ok(production_map_live_sse(
+        state,
+        queue_action_actor(&principal).ref_,
+        include_completion_requests,
+    )
+    .into_response())
 }
 
 fn production_map_live_sse(
     state: AppState,
     actor_ref: String,
+    include_completion_requests: bool,
 ) -> Sse<impl Stream<Item = Result<Event, Infallible>>> {
     let service = state.production_maps.clone();
     let mut rx = service.subscribe_live();
     let event_stream = stream! {
         let mut last_payload = String::new();
         loop {
-            match (
-                service.live_snapshot().await,
-                service.completed_queue_orders_for_actor(&actor_ref, 200).await,
-            ) {
-                (Ok(snapshot), Ok(completed_orders)) => {
+            let snapshot = service.live_snapshot().await;
+            let completed_orders = service
+                .completed_queue_orders_for_actor(&actor_ref, 200)
+                .await;
+            let completion_requests = if include_completion_requests {
+                service.completion_requests(200).await
+            } else {
+                Ok(Vec::new())
+            };
+            match (snapshot, completed_orders, completion_requests) {
+                (Ok(snapshot), Ok(completed_orders), Ok(completion_requests)) => {
                     let payload = serde_json::json!({
                         "ok": true,
                         "maps": snapshot.maps,
@@ -933,6 +974,7 @@ fn production_map_live_sse(
                         "queue_states": snapshot.queue_states,
                         "queue_policies": snapshot.queue_policies,
                         "completed_orders": completed_orders,
+                        "completion_requests": completion_requests,
                     });
                     if let Ok(json) = serde_json::to_string(&payload) {
                         if json != last_payload {
@@ -941,7 +983,7 @@ fn production_map_live_sse(
                         }
                     }
                 }
-                (Err(error), _) | (_, Err(error)) => {
+                (Err(error), _, _) | (_, Err(error), _) | (_, _, Err(error)) => {
                     yield Ok(Event::default().event("error").data(error.to_string()));
                 }
             }
@@ -986,6 +1028,31 @@ pub async fn production_map_completed_orders(
     Ok(json_response(serde_json::json!({
         "ok": true,
         "completed_orders": completed_orders,
+    })))
+}
+
+pub async fn production_map_completion_requests(
+    State(state): State<AppState>,
+    method: Method,
+    headers: HeaderMap,
+) -> Result<Response, AdminError> {
+    if method != Method::GET {
+        return Err(method_not_allowed());
+    }
+    authorize_any_capability(
+        &state,
+        &headers,
+        &[Capability::AdminAccess, Capability::ProductionMapManage],
+    )
+    .await?;
+    let completion_requests = state
+        .production_maps
+        .completion_requests(200)
+        .await
+        .map_err(production_map_error)?;
+    Ok(json_response(serde_json::json!({
+        "ok": true,
+        "completion_requests": completion_requests,
     })))
 }
 
