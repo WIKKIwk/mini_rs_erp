@@ -31,6 +31,32 @@ pub struct QolipLocation {
     pub created_by_name: String,
 }
 
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct QolipCellQr {
+    pub id: String,
+    pub block: String,
+    pub warehouse: String,
+    pub row_letter: String,
+    pub column_number: i32,
+    pub location_label: String,
+    pub qr_payload: String,
+    pub created_by_role: String,
+    pub created_by_ref: String,
+    pub created_by_name: String,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize)]
+pub struct QolipCellQrInput {
+    #[serde(default)]
+    pub block: String,
+    #[serde(default)]
+    pub warehouse: String,
+    #[serde(default)]
+    pub row_letter: String,
+    #[serde(default)]
+    pub column_number: Option<i32>,
+}
+
 #[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize)]
 pub struct QolipLocationUpsert {
     #[serde(default)]

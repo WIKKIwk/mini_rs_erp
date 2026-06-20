@@ -7,7 +7,8 @@ use serde::{Deserialize, Serialize};
 use crate::app::AppState;
 use crate::core::auth::models::Principal;
 use crate::core::authz::Capability;
-use crate::core::qolip::{QolipBlock, QolipError, QolipLocationUpsert};
+use crate::core::gscale::{GscaleServiceError, ProgressLabelPrintRequest};
+use crate::core::qolip::{QolipBlock, QolipCellQrInput, QolipError, QolipLocationUpsert};
 use crate::core::warehouses::WarehouseUpsert;
 use crate::http::handlers::auth::bearer_token;
 
@@ -136,6 +137,59 @@ pub async fn locations(
     }
 }
 
+pub async fn cell_qr_print(
+    State(state): State<AppState>,
+    method: Method,
+    headers: HeaderMap,
+    body: Bytes,
+) -> Result<Json<serde_json::Value>, (StatusCode, Json<QolipErrorResponse>)> {
+    if method != Method::POST {
+        return Err(method_not_allowed());
+    }
+    let principal = authenticated_principal(&state, &headers).await?;
+    ensure_qolip_access(&state, &principal).await?;
+    let input: QolipCellQrPrintRequest =
+        serde_json::from_slice(&body).map_err(|_| bad_request("invalid_json"))?;
+    let mut cell_input = QolipCellQrInput {
+        block: input.block.clone(),
+        warehouse: input.warehouse.clone(),
+        row_letter: input.row_letter.clone(),
+        column_number: input.column_number,
+    };
+    if let Some(block) = accessible_qolip_block(&state, &principal, &input.block).await? {
+        cell_input.block = block.name;
+        cell_input.warehouse = block.warehouse;
+    }
+    let cell_qr = state
+        .qolip
+        .cell_qr(cell_input, &principal)
+        .await
+        .map_err(qolip_error)?;
+    let print = state
+        .gscale
+        .print_progress_label(ProgressLabelPrintRequest {
+            driver_url: input.driver_url,
+            qr_payload: cell_qr.qr_payload.clone(),
+            item_code: cell_qr.qr_payload.clone(),
+            item_name: format!("Qolip yachayka {}", cell_qr.location_label),
+            executor_name: principal.display_name.trim().to_string(),
+            printer: input.printer,
+            print_mode: input.print_mode,
+            gross_qty: 1.0,
+            progress_qty: 1.0,
+            unit: "dona".to_string(),
+            progress_unit: "dona".to_string(),
+            print_count: input.print_count,
+        })
+        .await
+        .map_err(gscale_print_error)?;
+    Ok(Json(serde_json::json!({
+        "ok": true,
+        "cell_qr": cell_qr,
+        "print": print,
+    })))
+}
+
 async fn accessible_qolip_block(
     state: &AppState,
     principal: &Principal,
@@ -216,6 +270,26 @@ pub struct QolipBlockUpsert {
     block: String,
 }
 
+#[derive(Debug, Deserialize)]
+pub struct QolipCellQrPrintRequest {
+    #[serde(default)]
+    block: String,
+    #[serde(default)]
+    warehouse: String,
+    #[serde(default)]
+    row_letter: String,
+    #[serde(default)]
+    column_number: Option<i32>,
+    #[serde(default)]
+    driver_url: String,
+    #[serde(default)]
+    printer: String,
+    #[serde(default)]
+    print_mode: String,
+    #[serde(default)]
+    print_count: u32,
+}
+
 async fn authenticated_principal(
     state: &AppState,
     headers: &HeaderMap,
@@ -256,6 +330,18 @@ fn qolip_error(error: QolipError) -> (StatusCode, Json<QolipErrorResponse>) {
         QolipError::InvalidQuantity => bad_request("quantity_required"),
         QolipError::InvalidLocation => bad_request("location_invalid"),
     }
+}
+
+fn gscale_print_error(error: GscaleServiceError) -> (StatusCode, Json<QolipErrorResponse>) {
+    let status = match error {
+        GscaleServiceError::InvalidInput(_) => StatusCode::BAD_REQUEST,
+        GscaleServiceError::NotConfigured(_) => StatusCode::SERVICE_UNAVAILABLE,
+        GscaleServiceError::PrintFailed { .. } => StatusCode::FAILED_DEPENDENCY,
+        GscaleServiceError::EpcGenerationFailed
+        | GscaleServiceError::StoreWrite(_)
+        | GscaleServiceError::SubmitFailed(_) => StatusCode::FAILED_DEPENDENCY,
+    };
+    (status, Json(QolipErrorResponse::new(error.code())))
 }
 
 fn unauthorized() -> (StatusCode, Json<QolipErrorResponse>) {

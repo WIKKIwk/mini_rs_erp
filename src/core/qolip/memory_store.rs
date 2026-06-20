@@ -1,9 +1,10 @@
 use async_trait::async_trait;
+use std::collections::BTreeMap;
 use tokio::sync::RwLock;
 
 use crate::core::auth::models::Principal;
 
-use super::models::{QolipBlock, QolipError, QolipLocation, QolipProduct};
+use super::models::{QolipBlock, QolipCellQr, QolipError, QolipLocation, QolipProduct};
 use super::ports::QolipStorePort;
 
 #[derive(Default)]
@@ -11,6 +12,7 @@ pub struct MemoryQolipStore {
     blocks: RwLock<Vec<QolipBlock>>,
     products: RwLock<Vec<QolipProduct>>,
     locations: RwLock<Vec<QolipLocation>>,
+    cell_qrs: RwLock<BTreeMap<String, QolipCellQr>>,
 }
 
 impl MemoryQolipStore {
@@ -92,5 +94,14 @@ impl QolipStorePort for MemoryQolipStore {
                 .then_with(|| left.item_name.cmp(&right.item_name))
         });
         Ok(location)
+    }
+
+    async fn get_or_create_cell_qr(&self, cell: QolipCellQr) -> Result<QolipCellQr, QolipError> {
+        let mut cell_qrs = self.cell_qrs.write().await;
+        if let Some(existing) = cell_qrs.get(&cell.id) {
+            return Ok(existing.clone());
+        }
+        cell_qrs.insert(cell.id.clone(), cell.clone());
+        Ok(cell)
     }
 }

@@ -3,7 +3,7 @@ use sqlx::PgPool;
 
 use crate::core::auth::models::Principal;
 use crate::core::qolip::{
-    QolipBlock, QolipError, QolipLocation, QolipProduct, QolipStorePort, role_code,
+    QolipBlock, QolipCellQr, QolipError, QolipLocation, QolipProduct, QolipStorePort, role_code,
 };
 
 #[derive(Clone)]
@@ -191,6 +191,41 @@ impl QolipStorePort for PostgresQolipStore {
 
         Ok(row_to_location(row))
     }
+
+    async fn get_or_create_cell_qr(&self, cell: QolipCellQr) -> Result<QolipCellQr, QolipError> {
+        let row = sqlx::query_as::<_, QolipCellQrRow>(
+            "INSERT INTO mini_qolip_cell_qrs (
+                 id, block, warehouse, row_letter, column_number, location_label,
+                 qr_payload, created_by_role, created_by_ref, created_by_name, payload_json
+             )
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+             ON CONFLICT (id) DO UPDATE SET
+                 block = excluded.block,
+                 warehouse = excluded.warehouse,
+                 row_letter = excluded.row_letter,
+                 column_number = excluded.column_number,
+                 location_label = excluded.location_label,
+                 updated_at = now()
+             RETURNING id, block, warehouse, row_letter, column_number, location_label,
+                 qr_payload, created_by_role, created_by_ref, created_by_name",
+        )
+        .bind(cell.id.trim())
+        .bind(cell.block.trim())
+        .bind(cell.warehouse.trim())
+        .bind(cell.row_letter.trim())
+        .bind(cell.column_number)
+        .bind(cell.location_label.trim())
+        .bind(cell.qr_payload.trim())
+        .bind(cell.created_by_role.trim())
+        .bind(cell.created_by_ref.trim())
+        .bind(cell.created_by_name.trim())
+        .bind(serde_json::to_value(&cell).map_err(|_| QolipError::StoreFailed)?)
+        .fetch_one(&self.pool)
+        .await
+        .map_err(|_| QolipError::StoreFailed)?;
+
+        Ok(row_to_cell_qr(row))
+    }
 }
 
 #[derive(sqlx::FromRow)]
@@ -224,6 +259,20 @@ struct QolipLocationRow {
     created_by_name: String,
 }
 
+#[derive(sqlx::FromRow)]
+struct QolipCellQrRow {
+    id: String,
+    block: String,
+    warehouse: String,
+    row_letter: String,
+    column_number: i32,
+    location_label: String,
+    qr_payload: String,
+    created_by_role: String,
+    created_by_ref: String,
+    created_by_name: String,
+}
+
 fn row_to_location(row: QolipLocationRow) -> QolipLocation {
     QolipLocation {
         id: row.id,
@@ -237,6 +286,21 @@ fn row_to_location(row: QolipLocationRow) -> QolipLocation {
         row_letter: row.row_letter,
         column_number: row.column_number,
         location_label: row.location_label,
+        created_by_role: row.created_by_role,
+        created_by_ref: row.created_by_ref,
+        created_by_name: row.created_by_name,
+    }
+}
+
+fn row_to_cell_qr(row: QolipCellQrRow) -> QolipCellQr {
+    QolipCellQr {
+        id: row.id,
+        block: row.block,
+        warehouse: row.warehouse,
+        row_letter: row.row_letter,
+        column_number: row.column_number,
+        location_label: row.location_label,
+        qr_payload: row.qr_payload,
         created_by_role: row.created_by_role,
         created_by_ref: row.created_by_ref,
         created_by_name: row.created_by_name,

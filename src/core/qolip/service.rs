@@ -2,8 +2,11 @@ use std::sync::Arc;
 
 use crate::core::auth::models::Principal;
 
-use super::models::{QolipBlock, QolipError, QolipLocation, QolipLocationUpsert, QolipProduct};
-use super::normalize::normalize_location;
+use super::models::{
+    QolipBlock, QolipCellQr, QolipCellQrInput, QolipError, QolipLocation, QolipLocationUpsert,
+    QolipProduct,
+};
+use super::normalize::{normalize_cell_qr, normalize_location};
 use super::ports::QolipStorePort;
 
 #[derive(Clone)]
@@ -53,5 +56,14 @@ impl QolipService {
     ) -> Result<QolipLocation, QolipError> {
         let normalized = normalize_location(input, principal)?;
         self.store.put_location(normalized).await
+    }
+
+    pub async fn cell_qr(
+        &self,
+        input: QolipCellQrInput,
+        principal: &Principal,
+    ) -> Result<QolipCellQr, QolipError> {
+        let normalized = normalize_cell_qr(input, principal)?;
+        self.store.get_or_create_cell_qr(normalized).await
     }
 }

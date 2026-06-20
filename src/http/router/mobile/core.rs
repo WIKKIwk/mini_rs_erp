@@ -45,6 +45,7 @@ pub(super) fn routes() -> Router<AppState> {
         .route("/v1/mobile/qolip/blocks", any(qolip::blocks))
         .route("/v1/mobile/qolip/products", any(qolip::products))
         .route("/v1/mobile/qolip/locations", any(qolip::locations))
+        .route("/v1/mobile/qolip/cell-qr/print", any(qolip::cell_qr_print))
         .route("/v1/mobile/rezka/source", any(rezka::source))
         .route("/v1/mobile/rezka/split", any(rezka::split))
         .route("/v1/mobile/stock-entry/lookup", any(stock_entry::lookup))

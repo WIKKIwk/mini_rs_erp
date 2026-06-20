@@ -1,6 +1,37 @@
 use crate::core::auth::models::{Principal, PrincipalRole};
 
-use super::models::{QolipError, QolipLocation, QolipLocationUpsert};
+use super::models::{
+    QolipCellQr, QolipCellQrInput, QolipError, QolipLocation, QolipLocationUpsert,
+};
+
+pub(super) fn normalize_cell_qr(
+    input: QolipCellQrInput,
+    principal: &Principal,
+) -> Result<QolipCellQr, QolipError> {
+    let block = input.block.trim().to_string();
+    if block.is_empty() {
+        return Err(QolipError::MissingBlock);
+    }
+    let row_letter = normalize_row_letter(&input.row_letter)?.ok_or(QolipError::InvalidLocation)?;
+    let column_number = normalize_column_number(input.column_number, Some(&row_letter))?
+        .ok_or(QolipError::InvalidLocation)?;
+    let warehouse = input.warehouse.trim().to_string();
+    let location_label = format!("{row_letter}{column_number}");
+    let id = qolip_cell_id(&warehouse, &block, &row_letter, column_number);
+    let qr_payload = qolip_cell_qr_payload(&id);
+    Ok(QolipCellQr {
+        id,
+        block,
+        warehouse,
+        row_letter,
+        column_number,
+        location_label,
+        qr_payload,
+        created_by_role: role_code(&principal.role).to_string(),
+        created_by_ref: principal.ref_.trim().to_string(),
+        created_by_name: principal.display_name.trim().to_string(),
+    })
+}
 
 pub(super) fn normalize_location(
     input: QolipLocationUpsert,
@@ -116,6 +147,31 @@ fn qolip_location_id(
         compact_key(row_letter),
         column_number.unwrap_or_default()
     )
+}
+
+fn qolip_cell_id(warehouse: &str, block: &str, row_letter: &str, column_number: i32) -> String {
+    format!(
+        "qolip-cell:{}:{}:{}:{}",
+        compact_key(warehouse),
+        compact_key(block),
+        compact_key(row_letter),
+        column_number
+    )
+}
+
+fn qolip_cell_qr_payload(cell_id: &str) -> String {
+    let hash = fnv1a64(cell_id);
+    let checksum = (hash & 0xffff) as u16;
+    format!("4002{hash:016X}{checksum:04X}")
+}
+
+fn fnv1a64(value: &str) -> u64 {
+    let mut hash = 0xcbf2_9ce4_8422_2325_u64;
+    for byte in value.trim().as_bytes() {
+        hash ^= u64::from(*byte);
+        hash = hash.wrapping_mul(0x0000_0100_0000_01b3);
+    }
+    hash
 }
 
 fn compact_key(value: &str) -> String {

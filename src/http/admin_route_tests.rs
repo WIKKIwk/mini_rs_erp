@@ -55,6 +55,7 @@ mod item_groups;
 mod production_map_basic;
 mod production_map_save_order;
 mod production_map_validation;
+mod qolip_cell_qr;
 mod qolipchi_workers;
 mod queue_history;
 mod queue_progress;

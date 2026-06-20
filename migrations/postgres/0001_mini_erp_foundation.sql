@@ -490,6 +490,29 @@ CREATE TABLE IF NOT EXISTS mini_qolip_locations (
     CONSTRAINT mini_qolip_locations_column_range CHECK (column_number IS NULL OR column_number BETWEEN 1 AND 9)
 );
 
+CREATE TABLE IF NOT EXISTS mini_qolip_cell_qrs (
+    id TEXT PRIMARY KEY,
+    block TEXT NOT NULL,
+    warehouse TEXT NOT NULL DEFAULT '',
+    row_letter TEXT NOT NULL,
+    column_number INTEGER NOT NULL,
+    location_label TEXT NOT NULL,
+    qr_payload TEXT NOT NULL,
+    created_by_role TEXT NOT NULL DEFAULT '',
+    created_by_ref TEXT NOT NULL DEFAULT '',
+    created_by_name TEXT NOT NULL DEFAULT '',
+    payload_json JSONB NOT NULL DEFAULT '{}'::jsonb,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    CONSTRAINT mini_qolip_cell_qrs_block_not_blank CHECK (btrim(block) <> ''),
+    CONSTRAINT mini_qolip_cell_qrs_row_not_blank CHECK (btrim(row_letter) <> ''),
+    CONSTRAINT mini_qolip_cell_qrs_column_range CHECK (column_number BETWEEN 1 AND 9),
+    CONSTRAINT mini_qolip_cell_qrs_label_not_blank CHECK (btrim(location_label) <> ''),
+    CONSTRAINT mini_qolip_cell_qrs_qr_not_blank CHECK (btrim(qr_payload) <> ''),
+    CONSTRAINT mini_qolip_cell_qrs_cell_unique UNIQUE (warehouse, block, row_letter, column_number),
+    CONSTRAINT mini_qolip_cell_qrs_qr_unique UNIQUE (qr_payload)
+);
+
 CREATE TABLE IF NOT EXISTS mini_gscale_receipts (
     name TEXT PRIMARY KEY,
     status TEXT NOT NULL DEFAULT 'draft',
@@ -689,6 +712,7 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_mini_workers_lower_name ON mini_workers (l
 CREATE UNIQUE INDEX IF NOT EXISTS idx_mini_warehouses_lower_name ON mini_warehouses (lower(name));
 CREATE INDEX IF NOT EXISTS idx_mini_qolip_locations_block ON mini_qolip_locations (lower(block), row_letter, column_number);
 CREATE INDEX IF NOT EXISTS idx_mini_qolip_locations_item ON mini_qolip_locations (lower(item_code), lower(item_name));
+CREATE INDEX IF NOT EXISTS idx_mini_qolip_cell_qrs_cell ON mini_qolip_cell_qrs (lower(block), row_letter, column_number);
 CREATE INDEX IF NOT EXISTS idx_mini_gscale_receipts_status_updated ON mini_gscale_receipts (status, updated_at DESC);
 CREATE INDEX IF NOT EXISTS idx_mini_gscale_receipts_item_updated ON mini_gscale_receipts (lower(item_code), updated_at DESC);
 CREATE INDEX IF NOT EXISTS idx_mini_workers_level ON mini_workers(level);
