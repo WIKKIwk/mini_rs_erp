@@ -1,17 +1,19 @@
+mod auth;
+mod payload;
+mod token_cleanup;
+
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 
 use async_trait::async_trait;
-use jsonwebtoken::{Algorithm, EncodingKey, Header, encode};
-use serde::{Deserialize, Serialize};
-use tokio::sync::Mutex;
 
 use crate::core::push::ports::{NoopPushSender, PushSendError, PushSenderPort, PushTokenStorePort};
 
-const FCM_SCOPE: &str = "https://www.googleapis.com/auth/firebase.messaging";
-const DEFAULT_TOKEN_URI: &str = "https://oauth2.googleapis.com/token";
+use self::auth::{ServiceAccount, ServiceAccountTokenProvider};
+use self::payload::FcmPayload;
+use self::token_cleanup::{should_drop_push_token, truncate_token};
 
 pub fn discover_push_sender(store: Arc<dyn PushTokenStorePort>) -> Arc<dyn PushSenderPort> {
     let Some(path) = discover_service_account_path() else {
@@ -140,23 +142,7 @@ impl PushSenderPort for FcmPushSender {
         let mut sent_any = false;
         let mut last_error = None;
         for token in tokens {
-            let payload = FcmPayload {
-                message: FcmMessage {
-                    token: token.token.clone(),
-                    notification: FcmNotification {
-                        title: title.to_string(),
-                        body: body.to_string(),
-                    },
-                    data: data.clone(),
-                    android: FcmAndroid {
-                        priority: "HIGH",
-                        notification: FcmAndroidNotification {
-                            channel_id: "accord_updates",
-                            sound: "default",
-                        },
-                    },
-                },
-            };
+            let payload = FcmPayload::new(&token.token, title, body, data.clone());
             let response = self
                 .http_client
                 .post(&self.endpoint)
@@ -223,187 +209,5 @@ impl PushSenderPort for FcmPushSender {
         } else {
             Err(last_error.unwrap_or(PushSendError::SendFailed))
         }
-    }
-}
-
-#[derive(Debug, Clone, Deserialize)]
-struct ServiceAccount {
-    project_id: String,
-    client_email: String,
-    private_key: String,
-    #[serde(default)]
-    token_uri: String,
-}
-
-#[derive(Debug)]
-struct ServiceAccountTokenProvider {
-    account: ServiceAccount,
-    cache: Mutex<Option<CachedAccessToken>>,
-}
-
-impl ServiceAccountTokenProvider {
-    fn new(account: ServiceAccount) -> Self {
-        Self {
-            account,
-            cache: Mutex::new(None),
-        }
-    }
-
-    async fn access_token(&self, client: &reqwest::Client) -> Result<String, PushSendError> {
-        let mut cache = self.cache.lock().await;
-        let now = time::OffsetDateTime::now_utc().unix_timestamp();
-        if let Some(cached) = cache.as_ref()
-            && cached.expires_at > now + 60
-        {
-            return Ok(cached.access_token.clone());
-        }
-
-        let token_uri = self.token_uri();
-        let assertion = self.signed_assertion(now, &token_uri)?;
-        let form = format!(
-            "grant_type=urn%3Aietf%3Aparams%3Aoauth%3Agrant-type%3Ajwt-bearer&assertion={}",
-            urlencoding::encode(&assertion)
-        );
-        let response = client
-            .post(&token_uri)
-            .header(
-                reqwest::header::CONTENT_TYPE,
-                "application/x-www-form-urlencoded",
-            )
-            .body(form)
-            .send()
-            .await
-            .map_err(|_| PushSendError::SendFailed)?;
-        if !response.status().is_success() {
-            return Err(PushSendError::SendFailed);
-        }
-        let token: OAuthTokenResponse = response
-            .json()
-            .await
-            .map_err(|_| PushSendError::SendFailed)?;
-        let expires_at = now + token.expires_in.unwrap_or(3600);
-        *cache = Some(CachedAccessToken {
-            access_token: token.access_token.clone(),
-            expires_at,
-        });
-        Ok(token.access_token)
-    }
-
-    fn token_uri(&self) -> String {
-        let value = self.account.token_uri.trim();
-        if value.is_empty() {
-            DEFAULT_TOKEN_URI.to_string()
-        } else {
-            value.to_string()
-        }
-    }
-
-    fn signed_assertion(&self, now: i64, token_uri: &str) -> Result<String, PushSendError> {
-        let claims = JwtClaims {
-            iss: self.account.client_email.trim(),
-            scope: FCM_SCOPE,
-            aud: token_uri,
-            iat: now,
-            exp: now + 3600,
-        };
-        let key = EncodingKey::from_rsa_pem(self.account.private_key.as_bytes())
-            .map_err(|_| PushSendError::SendFailed)?;
-        encode(&Header::new(Algorithm::RS256), &claims, &key).map_err(|_| PushSendError::SendFailed)
-    }
-}
-
-#[derive(Debug, Clone)]
-struct CachedAccessToken {
-    access_token: String,
-    expires_at: i64,
-}
-
-#[derive(Debug, Deserialize)]
-struct OAuthTokenResponse {
-    access_token: String,
-    expires_in: Option<i64>,
-}
-
-#[derive(Serialize)]
-struct JwtClaims<'a> {
-    iss: &'a str,
-    scope: &'a str,
-    aud: &'a str,
-    iat: i64,
-    exp: i64,
-}
-
-#[derive(Serialize)]
-struct FcmPayload {
-    message: FcmMessage,
-}
-
-#[derive(Serialize)]
-struct FcmMessage {
-    token: String,
-    notification: FcmNotification,
-    data: HashMap<String, String>,
-    android: FcmAndroid,
-}
-
-#[derive(Serialize)]
-struct FcmNotification {
-    title: String,
-    body: String,
-}
-
-#[derive(Serialize)]
-struct FcmAndroid {
-    priority: &'static str,
-    notification: FcmAndroidNotification,
-}
-
-#[derive(Serialize)]
-struct FcmAndroidNotification {
-    channel_id: &'static str,
-    sound: &'static str,
-}
-
-fn should_drop_push_token(status_code: u16, body: &str) -> bool {
-    if status_code != 404 && status_code != 400 {
-        return false;
-    }
-    let lower = body.to_lowercase();
-    lower.contains("unregistered")
-        || lower.contains("requested entity was not found")
-        || lower.contains("registration token is not a valid fcm registration token")
-}
-
-fn truncate_token(token: &str) -> String {
-    let trimmed = token.trim();
-    if trimmed.len() <= 12 {
-        return trimmed.to_string();
-    }
-    format!("{}...{}", &trimmed[..6], &trimmed[trimmed.len() - 6..])
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn stale_token_detection_matches_go() {
-        assert!(should_drop_push_token(
-            404,
-            "Requested entity was not found."
-        ));
-        assert!(should_drop_push_token(400, "UNREGISTERED"));
-        assert!(should_drop_push_token(
-            400,
-            "registration token is not a valid FCM registration token"
-        ));
-        assert!(!should_drop_push_token(500, "UNREGISTERED"));
-        assert!(!should_drop_push_token(400, "quota exceeded"));
-    }
-
-    #[test]
-    fn token_truncation_matches_go_shape() {
-        assert_eq!(truncate_token("short"), "short");
-        assert_eq!(truncate_token("abcdef1234567890"), "abcdef...567890");
     }
 }
