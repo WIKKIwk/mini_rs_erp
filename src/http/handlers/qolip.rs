@@ -90,7 +90,7 @@ pub async fn products(
         .products(
             query.q.as_deref().unwrap_or(""),
             query.limit.unwrap_or(50),
-            query.with_qolip.unwrap_or(false),
+            query.with_qolip.unwrap_or(false) || query.with_qolip_only.unwrap_or(false),
         )
         .await
         .map_err(qolip_error)?;
@@ -298,6 +298,7 @@ pub struct QolipSearchQuery {
     block: Option<String>,
     limit: Option<usize>,
     with_qolip: Option<bool>,
+    with_qolip_only: Option<bool>,
 }
 
 #[derive(Debug, Deserialize)]
