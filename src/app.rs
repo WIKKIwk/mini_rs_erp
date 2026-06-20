@@ -1,5 +1,4 @@
 use std::sync::Arc;
-use std::time::Duration;
 
 use crate::ai::werka_search::WerkaAiSearchService;
 use crate::config::{AppConfig, DotEnvPersister};
@@ -9,55 +8,38 @@ use crate::core::auth::service::AuthService;
 use crate::core::calculate_orders::CalculateOrderStorePort;
 use crate::core::customer::service::CustomerService;
 use crate::core::gscale::GscaleService;
-use crate::core::mini_orders::{MiniOrderSink, NoopMiniOrderSink};
+use crate::core::mini_orders::MiniOrderSink;
 use crate::core::production_map::ProductionMapService;
-use crate::core::profile::ports::ProfileStorePort;
 use crate::core::profile::service::ProfileService;
-use crate::core::push::ports::PushTokenStorePort;
 use crate::core::push::service::PushService;
 use crate::core::qolip::QolipService;
 use crate::core::rezka::RezkaService;
-use crate::core::rps_batch::ports::RpsBatchStorePort;
-use crate::core::rps_batch::{RpsBatchLmdbStore, RpsBatchService};
+use crate::core::rps_batch::RpsBatchService;
 use crate::core::session::manager::SessionManager;
 use crate::core::warehouse_events::WarehouseEventHub;
 use crate::core::warehouses::WarehouseService;
 use crate::core::werka::service::WerkaService;
 use crate::core::worker_groups::WorkerGroupService;
 use crate::core::workers::WorkerService;
-use crate::db::postgres::PostgresConfig;
-use crate::db::postgres_apparatus_group::PostgresApparatusGroupStore;
-use crate::db::postgres_calculate_order::PostgresCalculateOrderStore;
 use crate::db::postgres_engine::PostgresEngineStore;
-use crate::db::postgres_gscale_receipt::PostgresGscaleReceiptStore;
-use crate::db::postgres_mini_order::PostgresMiniOrderSink;
-use crate::db::postgres_production_map::PostgresProductionMapStore;
-use crate::db::postgres_push_token::PostgresPushTokenStore;
-use crate::db::postgres_qolip::PostgresQolipStore;
-use crate::db::postgres_rps_batch::PostgresRpsBatchStore;
-use crate::db::postgres_warehouse::PostgresWarehouseStore;
-use crate::db::postgres_worker::PostgresWorkerStore;
-use crate::db::postgres_worker_group::PostgresWorkerGroupStore;
 use crate::fcm::discover_push_sender;
 use crate::google_sheets::{OrderSheetSink, discover_order_sheet_sink};
 use crate::rps::RpsDriverClient;
 use crate::store::admin_store::JsonAdminStore;
-use crate::store::apparatus_group_store::ApparatusGroupStore;
-use crate::store::calculate_order_store::CalculateOrderStore;
-use crate::store::profile_store::{LmdbProfileStore, ProfileStore};
-use crate::store::push_token_store::{LmdbPushTokenStore, PushTokenStore};
 use crate::store::role_store::RoleDefinitionStore;
-use tokio::time::sleep;
 
 #[path = "app_local_store.rs"]
 mod app_local_store;
 use app_local_store::*;
 
 mod admin_catalog_overlay;
+mod builders;
+mod order_sheets;
 mod unavailable_production_map_store;
 
 use self::admin_catalog_overlay::build_admin_catalog_ports;
-use self::unavailable_production_map_store::UnavailableProductionMapStore;
+use self::builders::*;
+use self::order_sheets::*;
 
 #[derive(Clone)]
 pub struct AppState {
@@ -211,270 +193,6 @@ impl AppState {
             mini_engine,
         }
     }
-}
-
-fn default_scale_driver_url() -> String {
-    std::env::var("RP_SCALE_DRIVER_URL")
-        .ok()
-        .map(|value| value.trim().trim_end_matches('/').to_string())
-        .filter(|value| !value.is_empty())
-        .unwrap_or_else(|| "http://gscale.local:39117".to_string())
-}
-
-fn build_gscale_service(
-    scale_driver: Arc<RpsDriverClient>,
-    warehouse_events: WarehouseEventHub,
-) -> GscaleService {
-    let events = warehouse_events.clone();
-    let service = GscaleService::new()
-        .with_driver(scale_driver)
-        .with_warehouse_event_handler(Arc::new(move |warehouse, reason| {
-            events.notify_updated(&warehouse, &reason);
-        }));
-    let config = match PostgresConfig::from_env() {
-        Ok(config) => config,
-        Err(_) => return service,
-    };
-    match config.pool_options().connect_lazy(&config.database_url) {
-        Ok(pool) => {
-            tracing::info!("mini ERP postgres GScale receipt store configured");
-            service.with_receipt_store(Arc::new(PostgresGscaleReceiptStore::new(pool)))
-        }
-        Err(error) => {
-            tracing::warn!(%error, "mini ERP postgres GScale receipt store disabled");
-            service
-        }
-    }
-}
-
-fn build_warehouse_service() -> WarehouseService {
-    let config = match PostgresConfig::from_env() {
-        Ok(config) => config,
-        Err(_) => {
-            return WarehouseService::new(Arc::new(
-                crate::core::warehouses::MemoryWarehouseStore::new(),
-            ));
-        }
-    };
-    match config.pool_options().connect_lazy(&config.database_url) {
-        Ok(pool) => {
-            tracing::info!("mini ERP postgres warehouse store configured");
-            WarehouseService::new(Arc::new(PostgresWarehouseStore::new(pool)))
-        }
-        Err(error) => {
-            tracing::warn!(%error, "mini ERP postgres warehouse store disabled");
-            WarehouseService::new(Arc::new(
-                crate::core::warehouses::MemoryWarehouseStore::new(),
-            ))
-        }
-    }
-}
-
-fn build_qolip_service() -> QolipService {
-    let config = match PostgresConfig::from_env() {
-        Ok(config) => config,
-        Err(_) => return QolipService::new(Arc::new(crate::core::qolip::MemoryQolipStore::new())),
-    };
-    match config.pool_options().connect_lazy(&config.database_url) {
-        Ok(pool) => {
-            tracing::info!("mini ERP postgres qolip store configured");
-            QolipService::new(Arc::new(PostgresQolipStore::new(pool)))
-        }
-        Err(error) => {
-            tracing::warn!(%error, "mini ERP postgres qolip store disabled");
-            QolipService::new(Arc::new(crate::core::qolip::MemoryQolipStore::new()))
-        }
-    }
-}
-
-fn build_worker_group_service() -> WorkerGroupService {
-    let config = match PostgresConfig::from_env() {
-        Ok(config) => config,
-        Err(_) => return WorkerGroupService::unavailable(),
-    };
-    match config.pool_options().connect_lazy(&config.database_url) {
-        Ok(pool) => {
-            tracing::info!("mini ERP postgres worker group store configured");
-            WorkerGroupService::new(Arc::new(PostgresWorkerGroupStore::new(pool)))
-        }
-        Err(error) => {
-            tracing::warn!(%error, "mini ERP postgres worker group store disabled");
-            WorkerGroupService::unavailable()
-        }
-    }
-}
-
-fn build_worker_service() -> WorkerService {
-    let config = match PostgresConfig::from_env() {
-        Ok(config) => config,
-        Err(_) => return WorkerService::unavailable(),
-    };
-    match config.pool_options().connect_lazy(&config.database_url) {
-        Ok(pool) => {
-            tracing::info!("mini ERP postgres worker store configured");
-            WorkerService::new(Arc::new(PostgresWorkerStore::new(pool)))
-        }
-        Err(error) => {
-            tracing::warn!(%error, "mini ERP postgres worker store disabled");
-            WorkerService::unavailable()
-        }
-    }
-}
-
-fn build_mini_engine_store() -> Option<PostgresEngineStore> {
-    let config = match PostgresConfig::from_env() {
-        Ok(config) => config,
-        Err(_) => return None,
-    };
-    match config.pool_options().connect_lazy(&config.database_url) {
-        Ok(pool) => {
-            tracing::info!("mini ERP postgres engine store configured");
-            Some(PostgresEngineStore::new(pool))
-        }
-        Err(error) => {
-            tracing::warn!(%error, "mini ERP postgres engine store disabled");
-            None
-        }
-    }
-}
-
-fn build_mini_order_sink() -> Arc<dyn MiniOrderSink> {
-    let config = match PostgresConfig::from_env() {
-        Ok(config) => config,
-        Err(_) => return Arc::new(NoopMiniOrderSink),
-    };
-    match config.pool_options().connect_lazy(&config.database_url) {
-        Ok(pool) => {
-            tracing::info!("mini ERP postgres order sink configured");
-            Arc::new(PostgresMiniOrderSink::new(pool))
-        }
-        Err(error) => {
-            tracing::warn!(%error, "mini ERP postgres order sink disabled");
-            Arc::new(NoopMiniOrderSink)
-        }
-    }
-}
-
-fn build_production_map_service() -> ProductionMapService {
-    let config = match PostgresConfig::from_env() {
-        Ok(config) => config,
-        Err(error) => {
-            tracing::warn!(?error, "mini ERP postgres production map store unavailable");
-            return ProductionMapService::new(Arc::new(UnavailableProductionMapStore));
-        }
-    };
-    match config.pool_options().connect_lazy(&config.database_url) {
-        Ok(pool) => {
-            tracing::info!("mini ERP postgres production map store configured");
-            ProductionMapService::new(Arc::new(PostgresProductionMapStore::new(pool)))
-        }
-        Err(error) => {
-            tracing::warn!(%error, "mini ERP postgres production map store unavailable");
-            ProductionMapService::new(Arc::new(UnavailableProductionMapStore))
-        }
-    }
-}
-
-fn build_apparatus_groups_service() -> ApparatusGroupService {
-    let config = match PostgresConfig::from_env() {
-        Ok(config) => config,
-        Err(_) => return build_sqlite_apparatus_groups_service(),
-    };
-    match config.pool_options().connect_lazy(&config.database_url) {
-        Ok(pool) => {
-            tracing::info!("mini ERP postgres apparatus group store configured");
-            ApparatusGroupService::new(Arc::new(PostgresApparatusGroupStore::new(pool)))
-        }
-        Err(error) => {
-            tracing::warn!(%error, "mini ERP postgres apparatus group store disabled");
-            build_sqlite_apparatus_groups_service()
-        }
-    }
-}
-
-fn build_sqlite_apparatus_groups_service() -> ApparatusGroupService {
-    ApparatusGroupService::new(Arc::new(ApparatusGroupStore::new(
-        apparatus_group_store_path(),
-    )))
-}
-
-fn build_calculate_order_store() -> Arc<dyn CalculateOrderStorePort> {
-    let config = match PostgresConfig::from_env() {
-        Ok(config) => config,
-        Err(_) => return build_sqlite_calculate_order_store(),
-    };
-    match config.pool_options().connect_lazy(&config.database_url) {
-        Ok(pool) => {
-            tracing::info!("mini ERP postgres calculate order store configured");
-            Arc::new(PostgresCalculateOrderStore::new(pool))
-        }
-        Err(error) => {
-            tracing::warn!(%error, "mini ERP postgres calculate order store disabled");
-            build_sqlite_calculate_order_store()
-        }
-    }
-}
-
-fn build_sqlite_calculate_order_store() -> Arc<dyn CalculateOrderStorePort> {
-    Arc::new(CalculateOrderStore::new(calculate_order_store_path()))
-}
-
-async fn run_order_sheets_sync_loop(
-    production_maps: ProductionMapService,
-    calculate_orders: Arc<dyn CalculateOrderStorePort>,
-    order_sheets: Arc<dyn OrderSheetSink>,
-    interval: Duration,
-) {
-    loop {
-        match sync_order_sheets_once(
-            production_maps.clone(),
-            calculate_orders.clone(),
-            order_sheets.clone(),
-        )
-        .await
-        {
-            Ok(appended) => {
-                tracing::info!(appended, "google sheets order sync completed");
-            }
-            Err(error) => {
-                tracing::warn!(%error, "google sheets order sync failed");
-            }
-        }
-        if interval.is_zero() {
-            break;
-        }
-        sleep(interval).await;
-    }
-}
-
-async fn sync_order_sheets_once(
-    production_maps: ProductionMapService,
-    calculate_orders: Arc<dyn CalculateOrderStorePort>,
-    order_sheets: Arc<dyn OrderSheetSink>,
-) -> Result<usize, String> {
-    let maps = production_maps
-        .maps()
-        .await
-        .map_err(|error| error.to_string())?
-        .into_iter()
-        .map(|saved| saved.map)
-        .collect::<Vec<_>>();
-    let templates = calculate_orders
-        .list_all()
-        .await
-        .map_err(|error| error.to_string())?;
-    order_sheets
-        .sync_orders(&maps, &templates)
-        .await
-        .map_err(|error| error.to_string())
-}
-
-fn order_sheets_sync_interval() -> Duration {
-    let seconds = std::env::var("GOOGLE_SHEETS_ORDER_SYNC_INTERVAL_SECONDS")
-        .ok()
-        .and_then(|raw| raw.trim().parse::<u64>().ok())
-        .unwrap_or(60 * 60);
-    Duration::from_secs(seconds)
 }
 
 #[cfg(test)]
