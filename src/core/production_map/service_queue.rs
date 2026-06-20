@@ -240,7 +240,7 @@ impl ProductionMapService {
             .into_iter()
             .map(|(id, state)| (id, state.as_str().to_string()))
             .collect::<BTreeMap<_, _>>();
-        let event = ApparatusQueueActionEvent {
+        let mut event = ApparatusQueueActionEvent {
             event_id: queue_action_event_id(&storage_key, order_id, action),
             apparatus: storage_key.clone(),
             order_id: order_id.to_string(),
@@ -267,6 +267,30 @@ impl ProductionMapService {
         let progress = self
             .build_progress_records(&storage_key, order_id, order_map, action, &actor, progress)
             .await?;
+        if let Some(batch) = progress.progress_batch.as_ref() {
+            if action == queue_state::ApparatusQueueAction::Complete
+                && batch.lamination_print_leftover_rolls.is_some()
+                && batch.lamination_film_leftover_rolls.is_some()
+            {
+                let print_leftover = batch.lamination_print_leftover_rolls.unwrap_or_default();
+                let film_leftover = batch.lamination_film_leftover_rolls.unwrap_or_default();
+                let total_waste = batch.total_waste.unwrap_or_default();
+                let finished_kg = batch.finished_goods_kg.unwrap_or_default();
+                let finished_meter = batch.finished_goods_meter.unwrap_or_default();
+                event.payload_json["notice_kind"] =
+                    serde_json::Value::String("laminatsiya_double_leftover".to_string());
+                event.payload_json["decision_required"] = serde_json::Value::Bool(false);
+                event.payload_json["order_number"] =
+                    serde_json::Value::String(order_map.order_number.trim().to_string());
+                event.payload_json["order_title"] =
+                    serde_json::Value::String(order_map.title.trim().to_string());
+                event.payload_json["product_code"] =
+                    serde_json::Value::String(order_map.product_code.trim().to_string());
+                event.payload_json["description"] = serde_json::Value::String(format!(
+                    "Laminatsiya tugatishda ikkala qavat qoldig'i yozildi. Bosmadan ortgan rulon: {print_leftover}. Plyonkadan ortgan rulon: {film_leftover}. Jami atxot: {total_waste}. Tayyor mahsulot: {finished_kg} kg, {finished_meter} m."
+                ));
+            }
+        }
         Ok(PreparedApparatusQueueAction {
             apparatus: storage_key,
             states: saved,

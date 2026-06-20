@@ -84,6 +84,8 @@ pub enum ProductionMapError {
     ProgressInputInvalid,
     #[error("bosma completion metrics are required")]
     BosmaCompletionMetricsRequired,
+    #[error("laminatsiya completion metrics are required")]
+    LaminatsiyaCompletionMetricsRequired,
     #[error("progress batch not found")]
     ProgressBatchNotFound,
     #[error("progress batch cannot resume")]

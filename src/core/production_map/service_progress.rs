@@ -63,6 +63,8 @@ impl ProductionMapService {
                     worker_display_name: actor.display_name.trim().to_string(),
                     qr_payload: String::new(),
                     return_ink_kg: None,
+                    lamination_print_leftover_rolls: None,
+                    lamination_film_leftover_rolls: None,
                     total_waste: None,
                     finished_goods_kg: None,
                     finished_goods_meter: None,
@@ -82,6 +84,14 @@ impl ProductionMapService {
                 } else {
                     None
                 };
+                let lamination_print_leftover_rolls =
+                    if action == queue_state::ApparatusQueueAction::Complete {
+                        valid_optional_progress_qty(progress.lamination_print_leftover_rolls)?
+                    } else {
+                        None
+                    };
+                let lamination_film_leftover_rolls =
+                    valid_optional_progress_qty(progress.lamination_film_leftover_rolls)?;
                 let total_waste = valid_optional_progress_qty(progress.total_waste)?;
                 let finished_goods_kg = valid_optional_progress_qty(progress.finished_goods_kg)?;
                 let finished_goods_meter =
@@ -96,6 +106,18 @@ impl ProductionMapService {
                     )
                 {
                     return Err(ProductionMapError::BosmaCompletionMetricsRequired);
+                }
+                if action == queue_state::ApparatusQueueAction::Complete
+                    && super::apparatus::is_laminatsiya_title(apparatus)
+                    && !laminatsiya_completion_metrics_are_complete(
+                        lamination_print_leftover_rolls,
+                        lamination_film_leftover_rolls,
+                        total_waste,
+                        finished_goods_kg,
+                        finished_goods_meter,
+                    )
+                {
+                    return Err(ProductionMapError::LaminatsiyaCompletionMetricsRequired);
                 }
                 let produced_qty =
                     valid_progress_qty(progress.produced_qty.or(finished_goods_meter))?;
@@ -126,6 +148,8 @@ impl ProductionMapService {
                         "last_qty": produced_qty,
                         "last_uom": uom,
                         "return_ink_kg": return_ink_kg,
+                        "lamination_print_leftover_rolls": lamination_print_leftover_rolls,
+                        "lamination_film_leftover_rolls": lamination_film_leftover_rolls,
                         "total_waste": total_waste,
                         "finished_goods_kg": finished_goods_kg,
                         "finished_goods_meter": finished_goods_meter,
@@ -165,6 +189,8 @@ impl ProductionMapService {
                     worker_ref: actor.ref_.trim().to_string(),
                     worker_display_name: actor.display_name.trim().to_string(),
                     return_ink_kg,
+                    lamination_print_leftover_rolls,
+                    lamination_film_leftover_rolls,
                     total_waste,
                     finished_goods_kg,
                     finished_goods_meter,
@@ -174,6 +200,8 @@ impl ProductionMapService {
                         "apparatus": apparatus,
                         "action": queue_action_str(action),
                         "return_ink_kg": return_ink_kg,
+                        "lamination_print_leftover_rolls": lamination_print_leftover_rolls,
+                        "lamination_film_leftover_rolls": lamination_film_leftover_rolls,
                         "total_waste": total_waste,
                         "finished_goods_kg": finished_goods_kg,
                         "finished_goods_meter": finished_goods_meter,
@@ -194,6 +222,8 @@ impl ProductionMapService {
                     worker_display_name: actor.display_name.trim().to_string(),
                     qr_payload,
                     return_ink_kg,
+                    lamination_print_leftover_rolls,
+                    lamination_film_leftover_rolls,
                     total_waste,
                     finished_goods_kg,
                     finished_goods_meter,
@@ -201,6 +231,8 @@ impl ProductionMapService {
                     payload_json: serde_json::json!({
                         "event": queue_action_str(action),
                         "return_ink_kg": return_ink_kg,
+                        "lamination_print_leftover_rolls": lamination_print_leftover_rolls,
+                        "lamination_film_leftover_rolls": lamination_film_leftover_rolls,
                         "total_waste": total_waste,
                         "finished_goods_kg": finished_goods_kg,
                         "finished_goods_meter": finished_goods_meter,
@@ -249,6 +281,8 @@ impl ProductionMapService {
                         worker_display_name: actor.display_name.trim().to_string(),
                         qr_payload: String::new(),
                         return_ink_kg: None,
+                        lamination_print_leftover_rolls: None,
+                        lamination_film_leftover_rolls: None,
                         total_waste: None,
                         finished_goods_kg: None,
                         finished_goods_meter: None,
@@ -311,6 +345,8 @@ impl ProductionMapService {
                     worker_display_name: actor.display_name.trim().to_string(),
                     qr_payload: batch.qr_payload.clone(),
                     return_ink_kg: None,
+                    lamination_print_leftover_rolls: None,
+                    lamination_film_leftover_rolls: None,
                     total_waste: None,
                     finished_goods_kg: None,
                     finished_goods_meter: None,
@@ -342,6 +378,19 @@ fn bosma_completion_metrics_are_complete(
     finished_goods_meter: Option<f64>,
 ) -> bool {
     return_ink_kg.is_some()
+        && total_waste.is_some()
+        && finished_goods_kg.is_some()
+        && finished_goods_meter.is_some()
+}
+
+fn laminatsiya_completion_metrics_are_complete(
+    lamination_print_leftover_rolls: Option<f64>,
+    lamination_film_leftover_rolls: Option<f64>,
+    total_waste: Option<f64>,
+    finished_goods_kg: Option<f64>,
+    finished_goods_meter: Option<f64>,
+) -> bool {
+    (lamination_print_leftover_rolls.is_some() || lamination_film_leftover_rolls.is_some())
         && total_waste.is_some()
         && finished_goods_kg.is_some()
         && finished_goods_meter.is_some()

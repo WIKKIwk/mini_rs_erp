@@ -19,7 +19,15 @@ pub struct CompletionRequestNotification {
     pub worker_ref: String,
     pub worker_display_name: String,
     pub description: String,
+    #[serde(default)]
+    pub notice_kind: String,
+    #[serde(default = "default_decision_required")]
+    pub decision_required: bool,
     pub created_at_unix: i64,
+}
+
+fn default_decision_required() -> bool {
+    true
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]

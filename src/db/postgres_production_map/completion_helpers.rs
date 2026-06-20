@@ -21,6 +21,8 @@ struct CompletionRequestRow {
     worker_ref: String,
     worker_display_name: String,
     description: String,
+    notice_kind: String,
+    decision_required: bool,
     created_at_unix: i64,
 }
 
@@ -64,11 +66,18 @@ pub(super) async fn load_completion_requests(
                 actor_ref AS worker_ref,
                 actor_display_name AS worker_display_name,
                 COALESCE(payload_json->>'description', '') AS description,
+                COALESCE(payload_json->>'notice_kind', 'completion_request') AS notice_kind,
+                COALESCE((payload_json->>'decision_required')::boolean, true) AS decision_required,
                 EXTRACT(EPOCH FROM created_at)::bigint AS created_at_unix
          FROM mini_queue_action_events
          WHERE action = 'complete'
-           AND payload_json->>'completion_request' = 'true'
-           AND COALESCE(payload_json->>'completion_request_status', 'pending') = 'pending'
+           AND (
+                (
+                    payload_json->>'completion_request' = 'true'
+                    AND COALESCE(payload_json->>'completion_request_status', 'pending') = 'pending'
+                )
+                OR payload_json->>'notice_kind' = 'laminatsiya_double_leftover'
+           )
          ORDER BY created_at DESC, id DESC
          LIMIT $1",
     )
@@ -103,6 +112,8 @@ pub(super) async fn load_completion_request_by_event_id(
                 actor_ref AS worker_ref,
                 actor_display_name AS worker_display_name,
                 COALESCE(payload_json->>'description', '') AS description,
+                COALESCE(payload_json->>'notice_kind', 'completion_request') AS notice_kind,
+                true AS decision_required,
                 EXTRACT(EPOCH FROM created_at)::bigint AS created_at_unix
          FROM mini_queue_action_events
          WHERE event_id = $1
@@ -251,6 +262,8 @@ fn completion_request_from_row(row: CompletionRequestRow) -> CompletionRequestNo
         worker_ref: row.worker_ref,
         worker_display_name: row.worker_display_name,
         description: row.description,
+        notice_kind: row.notice_kind,
+        decision_required: row.decision_required,
         created_at_unix: row.created_at_unix,
     }
 }

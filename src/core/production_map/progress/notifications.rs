@@ -32,6 +32,38 @@ pub(in crate::core::production_map) fn completion_request_notification_from_even
         worker_ref: event.actor.ref_.trim().to_string(),
         worker_display_name: actor_display_name(&event.actor),
         description: description.to_string(),
+        notice_kind: "completion_request".to_string(),
+        decision_required: true,
+        created_at_unix,
+    })
+}
+
+pub(in crate::core::production_map) fn laminatsiya_metric_notice_from_event(
+    event: &ApparatusQueueActionEvent,
+    created_at_unix: i64,
+) -> Option<CompletionRequestNotification> {
+    if event.action != queue_state::ApparatusQueueAction::Complete
+        || json_string_field(&event.payload_json, "notice_kind") != "laminatsiya_double_leftover"
+    {
+        return None;
+    }
+    let description = event.payload_json.get("description")?.as_str()?.trim();
+    if description.is_empty() {
+        return None;
+    }
+    Some(CompletionRequestNotification {
+        event_id: event.event_id.trim().to_string(),
+        apparatus: event.apparatus.trim().to_string(),
+        order_id: event.order_id.trim().to_string(),
+        order_number: json_string_field(&event.payload_json, "order_number"),
+        order_title: json_string_field(&event.payload_json, "order_title"),
+        product_code: json_string_field(&event.payload_json, "product_code"),
+        worker_role: event.actor.role.trim().to_string(),
+        worker_ref: event.actor.ref_.trim().to_string(),
+        worker_display_name: actor_display_name(&event.actor),
+        description: description.to_string(),
+        notice_kind: "laminatsiya_double_leftover".to_string(),
+        decision_required: false,
         created_at_unix,
     })
 }

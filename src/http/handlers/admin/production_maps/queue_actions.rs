@@ -19,6 +19,10 @@ struct ApparatusQueueActionRequest {
     #[serde(default)]
     return_ink_kg: Option<f64>,
     #[serde(default)]
+    lamination_print_leftover_rolls: Option<f64>,
+    #[serde(default)]
+    lamination_film_leftover_rolls: Option<f64>,
+    #[serde(default)]
     total_waste: Option<f64>,
     #[serde(default)]
     finished_goods_kg: Option<f64>,
@@ -99,6 +103,8 @@ pub async fn production_map_queue_action(
             input.qr_payload.clone()
         },
         return_ink_kg: input.return_ink_kg,
+        lamination_print_leftover_rolls: input.lamination_print_leftover_rolls,
+        lamination_film_leftover_rolls: input.lamination_film_leftover_rolls,
         total_waste: input.total_waste,
         finished_goods_kg: input.finished_goods_kg,
         finished_goods_meter: input.finished_goods_meter,
@@ -109,8 +115,14 @@ pub async fn production_map_queue_action(
         && input.total_waste.is_some()
         && input.finished_goods_kg.is_some()
         && input.finished_goods_meter.is_some();
+    let has_complete_laminatsiya_metrics = (input.lamination_print_leftover_rolls.is_some()
+        || input.lamination_film_leftover_rolls.is_some())
+        && input.total_waste.is_some()
+        && input.finished_goods_kg.is_some()
+        && input.finished_goods_meter.is_some();
     if matches!(input.action, queue_state::ApparatusQueueAction::Complete)
         && !has_complete_bosma_metrics
+        && !has_complete_laminatsiya_metrics
         && input.gross_qty.is_none()
         && !completion_request_note.trim().is_empty()
     {

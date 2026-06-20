@@ -89,6 +89,10 @@ pub struct OrderProgressEvent {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub return_ink_kg: Option<f64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub lamination_print_leftover_rolls: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub lamination_film_leftover_rolls: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub total_waste: Option<f64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub finished_goods_kg: Option<f64>,
@@ -119,6 +123,10 @@ pub struct OrderProgressBatch {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub return_ink_kg: Option<f64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub lamination_print_leftover_rolls: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub lamination_film_leftover_rolls: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub total_waste: Option<f64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub finished_goods_kg: Option<f64>,
@@ -136,6 +144,8 @@ pub struct QueueProgressInput {
     pub progress_batch_id: String,
     pub qr_payload: String,
     pub return_ink_kg: Option<f64>,
+    pub lamination_print_leftover_rolls: Option<f64>,
+    pub lamination_film_leftover_rolls: Option<f64>,
     pub total_waste: Option<f64>,
     pub finished_goods_kg: Option<f64>,
     pub finished_goods_meter: Option<f64>,

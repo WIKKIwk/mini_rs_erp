@@ -89,6 +89,8 @@ impl ProductionMapService {
             worker_ref: actor.ref_.trim().to_string(),
             worker_display_name: actor_display_name(&actor),
             description: description.to_string(),
+            notice_kind: "completion_request".to_string(),
+            decision_required: true,
             created_at_unix: now,
         };
         let event = ApparatusQueueActionEvent {

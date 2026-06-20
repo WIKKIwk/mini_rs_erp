@@ -322,6 +322,8 @@ CREATE TABLE IF NOT EXISTS mini_order_progress_events (
     worker_display_name TEXT NOT NULL DEFAULT '',
     qr_payload TEXT NOT NULL DEFAULT '',
     return_ink_kg NUMERIC,
+    lamination_print_leftover_rolls NUMERIC,
+    lamination_film_leftover_rolls NUMERIC,
     total_waste NUMERIC,
     finished_goods_kg NUMERIC,
     finished_goods_meter NUMERIC,
@@ -354,6 +356,8 @@ CREATE TABLE IF NOT EXISTS mini_progress_batches (
     worker_ref TEXT NOT NULL DEFAULT '',
     worker_display_name TEXT NOT NULL DEFAULT '',
     return_ink_kg NUMERIC,
+    lamination_print_leftover_rolls NUMERIC,
+    lamination_film_leftover_rolls NUMERIC,
     total_waste NUMERIC,
     finished_goods_kg NUMERIC,
     finished_goods_meter NUMERIC,
@@ -376,12 +380,16 @@ CREATE TABLE IF NOT EXISTS mini_progress_batches (
 );
 
 ALTER TABLE mini_order_progress_events ADD COLUMN IF NOT EXISTS return_ink_kg NUMERIC;
+ALTER TABLE mini_order_progress_events ADD COLUMN IF NOT EXISTS lamination_print_leftover_rolls NUMERIC;
+ALTER TABLE mini_order_progress_events ADD COLUMN IF NOT EXISTS lamination_film_leftover_rolls NUMERIC;
 ALTER TABLE mini_order_progress_events ADD COLUMN IF NOT EXISTS total_waste NUMERIC;
 ALTER TABLE mini_order_progress_events ADD COLUMN IF NOT EXISTS finished_goods_kg NUMERIC;
 ALTER TABLE mini_order_progress_events ADD COLUMN IF NOT EXISTS finished_goods_meter NUMERIC;
 ALTER TABLE mini_order_progress_events ADD COLUMN IF NOT EXISTS description TEXT NOT NULL DEFAULT '';
 
 ALTER TABLE mini_progress_batches ADD COLUMN IF NOT EXISTS return_ink_kg NUMERIC;
+ALTER TABLE mini_progress_batches ADD COLUMN IF NOT EXISTS lamination_print_leftover_rolls NUMERIC;
+ALTER TABLE mini_progress_batches ADD COLUMN IF NOT EXISTS lamination_film_leftover_rolls NUMERIC;
 ALTER TABLE mini_progress_batches ADD COLUMN IF NOT EXISTS total_waste NUMERIC;
 ALTER TABLE mini_progress_batches ADD COLUMN IF NOT EXISTS finished_goods_kg NUMERIC;
 ALTER TABLE mini_progress_batches ADD COLUMN IF NOT EXISTS finished_goods_meter NUMERIC;

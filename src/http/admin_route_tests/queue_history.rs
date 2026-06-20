@@ -196,15 +196,18 @@ async fn closed_orders_return_only_fully_completed_maps_with_action_logs() {
     );
 
     for action in ["start", "complete"] {
+        let body = if action == "complete" {
+            r#"{"apparatus":"Laminatsiya 1","order_id":"zakaz-closed-route","action":"complete","lamination_film_leftover_rolls":1,"total_waste":1,"finished_goods_kg":1,"finished_goods_meter":1,"produced_qty":1,"gross_qty":1,"uom":"kg","printer":"zebra","print_mode":"rfid"}"#.to_string()
+        } else {
+            r#"{"apparatus":"Laminatsiya 1","order_id":"zakaz-closed-route","action":"start","produced_qty":1,"gross_qty":1,"uom":"kg","printer":"zebra","print_mode":"rfid"}"#.to_string()
+        };
         let response = router
             .clone()
             .oneshot(request_with_body(
                 "POST",
                 "/v1/mobile/admin/production-maps/queue-action",
                 &lamin_worker,
-                &format!(
-                    r#"{{"apparatus":"Laminatsiya 1","order_id":"zakaz-closed-route","action":"{action}","produced_qty":1,"gross_qty":1,"uom":"kg","printer":"zebra","print_mode":"rfid"}}"#
-                ),
+                &body,
             ))
             .await
             .expect("lamin action");

@@ -268,6 +268,8 @@ mod tests {
 
         for column in [
             "return_ink_kg",
+            "lamination_print_leftover_rolls",
+            "lamination_film_leftover_rolls",
             "total_waste",
             "finished_goods_kg",
             "finished_goods_meter",

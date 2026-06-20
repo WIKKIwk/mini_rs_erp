@@ -63,6 +63,9 @@ pub(super) fn production_map_error(error: ProductionMapError) -> AdminError {
         ProductionMapError::BosmaCompletionMetricsRequired => {
             bad_request("bosma_completion_metrics_required")
         }
+        ProductionMapError::LaminatsiyaCompletionMetricsRequired => {
+            bad_request("laminatsiya_completion_metrics_required")
+        }
         ProductionMapError::ProgressBatchNotFound => not_found("progress_batch_not_found"),
         ProductionMapError::ProgressBatchNotResumable => {
             bad_request("progress_batch_not_resumable")

@@ -21,6 +21,7 @@ pub(super) use labels::{
 pub(super) use notifications::{
     completion_request_decision_notification_from_event,
     completion_request_notification_from_event, json_string_field,
+    laminatsiya_metric_notice_from_event,
 };
 pub(super) use policy::{
     effective_apparatus_queue_policy, effective_apparatus_queue_policy_record,
