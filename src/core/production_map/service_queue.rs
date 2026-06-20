@@ -287,7 +287,7 @@ impl ProductionMapService {
                 event.payload_json["product_code"] =
                     serde_json::Value::String(order_map.product_code.trim().to_string());
                 event.payload_json["description"] = serde_json::Value::String(format!(
-                    "Laminatsiya tugatishda ikkala qavat qoldig'i yozildi. Bosmadan ortgan rulon: {print_leftover}. Plyonkadan ortgan rulon: {film_leftover}. Jami atxot: {total_waste}. Tayyor mahsulot: {finished_kg} kg, {finished_meter} m."
+                    "Laminatsiya tugatishda ikkala qavat qoldig'i yozildi. Bosmadan ortgan rulon: {print_leftover}. Plyonkadan ortgan rulon: {film_leftover}. Jami chiqindi: {total_waste} kg. Tayyor mahsulot: {finished_kg} kg, {finished_meter} m."
                 ));
             }
         }

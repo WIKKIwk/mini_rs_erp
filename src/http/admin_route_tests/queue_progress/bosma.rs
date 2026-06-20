@@ -106,6 +106,10 @@ async fn bosma_complete_requires_or_persists_completion_metrics() {
     assert_eq!(completed_body["progress_batch"]["uom"], "m");
     assert_eq!(completed_body["progress_batch"]["return_ink_kg"], 1.25);
     assert_eq!(completed_body["progress_batch"]["total_waste"], 2.5);
+    assert_eq!(
+        completed_body["progress_batch"]["payload_json"]["total_waste_uom"],
+        "kg"
+    );
     assert_eq!(completed_body["progress_batch"]["finished_goods_kg"], 18.75);
     assert_eq!(
         completed_body["progress_batch"]["finished_goods_meter"],
@@ -114,6 +118,10 @@ async fn bosma_complete_requires_or_persists_completion_metrics() {
     assert_eq!(
         completed_body["progress_event"]["finished_goods_meter"],
         125.5
+    );
+    assert_eq!(
+        completed_body["progress_event"]["payload_json"]["total_waste_uom"],
+        "kg"
     );
     let printed = print_requests.lock().await;
     assert_eq!(printed.len(), 1);
