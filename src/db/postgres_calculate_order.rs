@@ -5,7 +5,7 @@ use sqlx::PgPool;
 
 use crate::core::calculate_orders::{
     CalculateOrderError, CalculateOrderImage, CalculateOrderStorePort, CalculateOrderTemplate,
-    validate_template,
+    hydrate_template_dimensions, validate_template,
 };
 use crate::core::formula::{DEFAULT_EDGE_ALLOWANCE_MM, derive_width_mm};
 
@@ -197,6 +197,7 @@ fn json_rows_to_templates(
         .into_iter()
         .map(|payload| {
             serde_json::from_value::<CalculateOrderTemplate>(payload)
+                .map(hydrate_template_dimensions)
                 .map_err(|_| CalculateOrderError::StoreFailed)
         })
         .collect::<Result<Vec<_>, _>>()?;

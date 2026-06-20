@@ -247,6 +247,16 @@ mod tests {
     }
 
     #[test]
+    fn postgres_foundation_migration_backfills_quick_template_frame_fields() {
+        let migration = foundation_migration_sql().to_lowercase();
+
+        assert!(migration.contains("quick_template_dimensions"));
+        assert!(migration.contains("frame_product_size_mm"));
+        assert!(migration.contains("frame_count"));
+        assert!(migration.contains("jsonb_set"));
+    }
+
+    #[test]
     fn postgres_foundation_migration_leaves_production_order_number_to_store_logic() {
         let migration = foundation_migration_sql().to_lowercase();
 

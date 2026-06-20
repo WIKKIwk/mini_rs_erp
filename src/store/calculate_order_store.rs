@@ -6,7 +6,7 @@ use rusqlite::{Connection, OptionalExtension, params};
 
 use crate::core::calculate_orders::{
     CalculateOrderError, CalculateOrderImage, CalculateOrderStorePort, CalculateOrderTemplate,
-    validate_template,
+    hydrate_template_dimensions, validate_template,
 };
 
 mod migration;
@@ -72,7 +72,7 @@ impl CalculateOrderStorePort for CalculateOrderStore {
                 let payload: String = row.get(0)?;
                 let template = serde_json::from_str::<CalculateOrderTemplate>(&payload)
                     .map_err(|error| rusqlite::Error::ToSqlConversionFailure(error.into()))?;
-                Ok(template)
+                Ok(hydrate_template_dimensions(template))
             })
             .map_err(|_| CalculateOrderError::StoreFailed)?;
         rows.collect::<Result<Vec<_>, _>>()
@@ -97,7 +97,7 @@ impl CalculateOrderStorePort for CalculateOrderStore {
                 let payload: String = row.get(0)?;
                 let template = serde_json::from_str::<CalculateOrderTemplate>(&payload)
                     .map_err(|error| rusqlite::Error::ToSqlConversionFailure(error.into()))?;
-                Ok(template)
+                Ok(hydrate_template_dimensions(template))
             })
             .map_err(|_| CalculateOrderError::StoreFailed)?;
         rows.collect::<Result<Vec<_>, _>>()

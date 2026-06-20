@@ -309,3 +309,62 @@ async fn calculate_order_sqlite_store_dedupes_legacy_same_code_rows() {
         .expect("row count");
     assert_eq!(row_count, 1);
 }
+
+#[tokio::test]
+async fn calculate_order_sqlite_store_hydrates_legacy_width_only_payload() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let path = dir.path().join("orders.sqlite");
+    let conn = Connection::open(&path).expect("open sqlite");
+    conn.execute_batch(
+        "CREATE TABLE calculate_order_templates (
+            id TEXT PRIMARY KEY,
+            owner_key TEXT NOT NULL,
+            code TEXT NOT NULL,
+            lower_code TEXT NOT NULL,
+            name TEXT NOT NULL,
+            lower_name TEXT NOT NULL,
+            saved_at TEXT NOT NULL,
+            payload_json TEXT NOT NULL
+        );",
+    )
+    .expect("legacy schema");
+    let payload = serde_json::json!({
+        "id": "legacy-width-only",
+        "code": "Z-LEGACY",
+        "name": "Legacy width",
+        "saved_at": "100",
+        "product": "Legacy width",
+        "width_mm": 765.0,
+        "edge_allowance_mm": 15.0,
+        "waste_percent": 5.0,
+        "first_layer_material": "pet",
+        "first_layer_micron": "12",
+        "second_layer_material": "pe oq",
+        "second_layer_micron": "30"
+    });
+    conn.execute(
+        "INSERT INTO calculate_order_templates
+            (id, owner_key, code, lower_code, name, lower_name, saved_at, payload_json)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+        params![
+            "legacy-width-only",
+            "admin:admin",
+            "Z-LEGACY",
+            "z-legacy",
+            "Legacy width",
+            "legacy width",
+            "100",
+            payload.to_string(),
+        ],
+    )
+    .expect("insert legacy");
+    drop(conn);
+
+    let store = CalculateOrderStore::new(path);
+    let rows = store.list("admin:admin").await.expect("list");
+
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0].frame_product_size_mm, 750.0);
+    assert_eq!(rows[0].frame_count, 1.0);
+    assert_eq!(rows[0].width_mm, 765.0);
+}

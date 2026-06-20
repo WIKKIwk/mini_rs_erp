@@ -632,6 +632,44 @@ CREATE INDEX IF NOT EXISTS idx_mini_orders_status ON mini_orders(status);
 CREATE INDEX IF NOT EXISTS idx_mini_quick_order_templates_owner_saved ON mini_quick_order_templates(owner_key, saved_at DESC);
 CREATE INDEX IF NOT EXISTS idx_mini_quick_order_templates_owner_quick_key ON mini_quick_order_templates(owner_key, quick_key);
 CREATE UNIQUE INDEX IF NOT EXISTS idx_mini_quick_order_templates_owner_lower_code ON mini_quick_order_templates (owner_key, lower(code));
+
+WITH quick_template_dimensions AS (
+    SELECT
+        id,
+        (payload_json ->> 'width_mm')::numeric AS width_mm,
+        CASE
+            WHEN payload_json ->> 'edge_allowance_mm' ~ '^-?[0-9]+(\.[0-9]+)?$'
+                THEN (payload_json ->> 'edge_allowance_mm')::numeric
+            ELSE 15
+        END AS edge_allowance_mm,
+        CASE
+            WHEN payload_json ->> 'frame_product_size_mm' ~ '^-?[0-9]+(\.[0-9]+)?$'
+                THEN (payload_json ->> 'frame_product_size_mm')::numeric
+            ELSE 0
+        END AS frame_product_size_mm,
+        CASE
+            WHEN payload_json ->> 'frame_count' ~ '^-?[0-9]+(\.[0-9]+)?$'
+                THEN (payload_json ->> 'frame_count')::numeric
+            ELSE 0
+        END AS frame_count
+    FROM mini_quick_order_templates
+    WHERE payload_json ->> 'width_mm' ~ '^-?[0-9]+(\.[0-9]+)?$'
+)
+UPDATE mini_quick_order_templates templates
+SET payload_json = jsonb_set(
+        jsonb_set(templates.payload_json, '{frame_count}', '1'::jsonb, true),
+        '{frame_product_size_mm}',
+        to_jsonb(quick_template_dimensions.width_mm - quick_template_dimensions.edge_allowance_mm),
+        true
+    )
+FROM quick_template_dimensions
+WHERE templates.id = quick_template_dimensions.id
+  AND quick_template_dimensions.width_mm > quick_template_dimensions.edge_allowance_mm
+  AND (
+      quick_template_dimensions.frame_product_size_mm <= 0
+      OR quick_template_dimensions.frame_count <= 0
+  );
+
 CREATE INDEX IF NOT EXISTS idx_mini_push_tokens_owner ON mini_push_tokens(owner_key);
 CREATE INDEX IF NOT EXISTS idx_mini_push_tokens_updated ON mini_push_tokens(updated_at DESC);
 CREATE INDEX IF NOT EXISTS idx_mini_items_lower_code ON mini_items(lower(code));

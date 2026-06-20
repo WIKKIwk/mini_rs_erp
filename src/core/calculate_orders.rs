@@ -175,6 +175,40 @@ pub fn validate_template(template: &CalculateOrderTemplate) -> Result<(), Calcul
     Ok(())
 }
 
+pub fn hydrate_template_dimensions(mut template: CalculateOrderTemplate) -> CalculateOrderTemplate {
+    if !template.edge_allowance_mm.is_finite() || template.edge_allowance_mm < 0.0 {
+        template.edge_allowance_mm = DEFAULT_EDGE_ALLOWANCE_MM;
+    }
+    let frame_size_valid =
+        template.frame_product_size_mm.is_finite() && template.frame_product_size_mm > 0.0;
+    let frame_count_valid = template.frame_count.is_finite() && template.frame_count > 0.0;
+    let width_valid =
+        template.width_mm.is_finite() && template.width_mm > template.edge_allowance_mm;
+    if !frame_size_valid && width_valid && frame_count_valid {
+        template.frame_product_size_mm =
+            (template.width_mm - template.edge_allowance_mm) / template.frame_count;
+    } else if frame_size_valid && width_valid && !frame_count_valid {
+        template.frame_count =
+            (template.width_mm - template.edge_allowance_mm) / template.frame_product_size_mm;
+    } else if (!frame_size_valid || !frame_count_valid) && width_valid {
+        template.frame_product_size_mm = template.width_mm - template.edge_allowance_mm;
+        template.frame_count = 1.0;
+    }
+    if template.frame_product_size_mm.is_finite()
+        && template.frame_product_size_mm > 0.0
+        && template.frame_count.is_finite()
+        && template.frame_count > 0.0
+    {
+        template.width_mm = derive_width_mm(
+            Some(template.frame_product_size_mm),
+            Some(template.frame_count),
+            Some(template.edge_allowance_mm),
+        )
+        .unwrap_or(template.width_mm);
+    }
+    template
+}
+
 pub fn owner_key(role: &str, ref_: &str) -> String {
     format!("{}:{}", role.trim(), ref_.trim())
 }
