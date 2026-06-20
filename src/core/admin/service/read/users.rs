@@ -23,49 +23,6 @@ impl AdminService {
         let mut entries = Vec::new();
         let mut seen_ids = BTreeSet::new();
 
-        for assignment in assignments.iter().filter(|assignment| {
-            assignment.principal_role == PrincipalRole::Qolipchi
-                && assignment.role_id.trim() == "qolipchi"
-        }) {
-            let customer_ref = assignment.principal_ref.trim();
-            if customer_ref.is_empty() {
-                continue;
-            }
-            let customers = read.customers_page(customer_ref, 10, 0).await?;
-            let Some(customer) = customers
-                .into_iter()
-                .find(|customer| customer.ref_.trim() == customer_ref)
-            else {
-                continue;
-            };
-            let state = states
-                .get(customer.ref_.trim())
-                .cloned()
-                .unwrap_or_default();
-            if state.removed {
-                continue;
-            }
-            let entry = customer_directory_entry(customer);
-            let role_label = role_labels
-                .get(&role_assignment_key(&PrincipalRole::Qolipchi, &entry.ref_))
-                .cloned()
-                .unwrap_or_else(|| "Qolipchi".to_string());
-            let entry = AdminUserListEntry {
-                id: format!("qolipchi:{}", entry.ref_),
-                source: "qolipchi".to_string(),
-                entity_ref: entry.ref_,
-                principal_role: PrincipalRole::Qolipchi,
-                name: entry.name,
-                phone: entry.phone,
-                role_label,
-                blocked: false,
-                status: "active".to_string(),
-            };
-            if user_list_matches(&entry, &normalized_query) && seen_ids.insert(entry.id.clone()) {
-                entries.push(entry);
-            }
-        }
-
         if let Some(entry) = werka_user_list_entry(&settings, &role_labels) {
             if user_list_matches(&entry, &normalized_query) && seen_ids.insert(entry.id.clone()) {
                 entries.push(entry);
@@ -109,15 +66,14 @@ impl AdminService {
                 continue;
             }
             let entry = customer_directory_entry(customer);
-            let principal_role = customer_user_principal_role(&assignments, &entry.ref_);
+            let principal_role = PrincipalRole::Customer;
             let role_label = role_labels
                 .get(&role_assignment_key(&principal_role, &entry.ref_))
                 .cloned()
-                .unwrap_or_else(|| user_list_default_role_label(&principal_role).to_string());
-            let source = user_list_source(&principal_role);
+                .unwrap_or_else(|| "Customer".to_string());
             let entry = AdminUserListEntry {
-                id: format!("{}:{}", source, entry.ref_),
-                source: source.to_string(),
+                id: format!("customer:{}", entry.ref_),
+                source: "customer".to_string(),
                 entity_ref: entry.ref_,
                 principal_role,
                 name: entry.name,
@@ -204,33 +160,6 @@ fn werka_user_list_entry(
         blocked: false,
         status: "active".to_string(),
     })
-}
-
-fn customer_user_principal_role(assignments: &[RoleAssignment], ref_: &str) -> PrincipalRole {
-    let ref_ = ref_.trim();
-    if assignments.iter().any(|assignment| {
-        assignment.principal_ref.trim() == ref_
-            && assignment.principal_role == PrincipalRole::Qolipchi
-            && assignment.role_id.trim() == "qolipchi"
-    }) {
-        PrincipalRole::Qolipchi
-    } else {
-        PrincipalRole::Customer
-    }
-}
-
-fn user_list_source(role: &PrincipalRole) -> &'static str {
-    match role {
-        PrincipalRole::Qolipchi => "qolipchi",
-        _ => "customer",
-    }
-}
-
-fn user_list_default_role_label(role: &PrincipalRole) -> &'static str {
-    match role {
-        PrincipalRole::Qolipchi => "Qolipchi",
-        _ => "Customer",
-    }
 }
 
 fn normalize_search(value: &str) -> String {

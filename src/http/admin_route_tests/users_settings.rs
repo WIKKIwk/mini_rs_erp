@@ -47,7 +47,7 @@ async fn admin_user_list_returns_merged_paged_users_with_role_labels() {
 }
 
 #[tokio::test]
-async fn admin_user_list_marks_qolipchi_role_users_as_qolipchi() {
+async fn admin_user_list_does_not_treat_customers_as_qolipchi() {
     let mut state = test_state();
     let role_store = Arc::new(MemoryRoleDefinitionStore::new());
     role_store
@@ -76,13 +76,7 @@ async fn admin_user_list_marks_qolipchi_role_users_as_qolipchi() {
 
     assert_eq!(response.status(), StatusCode::OK);
     let value = json_body(response).await;
-    assert_eq!(value["items"].as_array().expect("items").len(), 1);
-    assert_eq!(value["items"][0]["id"], "qolipchi:CUST-001");
-    assert_eq!(value["items"][0]["source"], "qolipchi");
-    assert_eq!(value["items"][0]["entity_ref"], "CUST-001");
-    assert_eq!(value["items"][0]["name"], "Jumaniyoz");
-    assert_eq!(value["items"][0]["principal_role"], "qolipchi");
-    assert_eq!(value["items"][0]["role_label"], "Qolipchi");
+    assert_eq!(value["items"].as_array().expect("items").len(), 0);
 }
 
 #[tokio::test]
