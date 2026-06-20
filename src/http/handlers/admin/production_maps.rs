@@ -11,7 +11,6 @@ use crate::core::production_map::{
     RawMaterialAssignment, RawMaterialAssignmentDeleteInput, RawMaterialAssignmentInput,
     queue_state,
 };
-use crate::core::werka::models::SupplierItem;
 use crate::google_sheets::is_sheet_order_map;
 use async_stream::stream;
 use axum::response::sse::{Event, KeepAlive, Sse};
@@ -23,6 +22,7 @@ mod completion;
 mod helpers;
 mod move_run;
 mod queue_actions;
+mod raw_material_details;
 mod raw_materials;
 
 pub use self::completion::{

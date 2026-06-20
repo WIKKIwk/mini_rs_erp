@@ -1,5 +1,7 @@
 pub mod ai;
 pub mod app;
+#[cfg(test)]
+mod architecture_checks;
 pub mod config;
 pub mod core;
 pub mod db;
