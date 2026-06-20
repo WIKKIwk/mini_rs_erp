@@ -65,15 +65,17 @@ impl AdminService {
                 continue;
             }
             let entry = customer_directory_entry(customer);
+            let principal_role = customer_user_principal_role(&assignments, &entry.ref_);
             let role_label = role_labels
-                .get(&role_assignment_key(&PrincipalRole::Customer, &entry.ref_))
+                .get(&role_assignment_key(&principal_role, &entry.ref_))
                 .cloned()
-                .unwrap_or_else(|| "Customer".to_string());
+                .unwrap_or_else(|| user_list_default_role_label(&principal_role).to_string());
+            let source = user_list_source(&principal_role);
             let entry = AdminUserListEntry {
-                id: format!("customer:{}", entry.ref_),
-                source: "customer".to_string(),
+                id: format!("{}:{}", source, entry.ref_),
+                source: source.to_string(),
                 entity_ref: entry.ref_,
-                principal_role: PrincipalRole::Customer,
+                principal_role,
                 name: entry.name,
                 phone: entry.phone,
                 role_label,
@@ -158,6 +160,33 @@ fn werka_user_list_entry(
         blocked: false,
         status: "active".to_string(),
     })
+}
+
+fn customer_user_principal_role(assignments: &[RoleAssignment], ref_: &str) -> PrincipalRole {
+    let ref_ = ref_.trim();
+    if assignments.iter().any(|assignment| {
+        assignment.principal_ref.trim() == ref_
+            && assignment.principal_role == PrincipalRole::Qolipchi
+            && assignment.role_id.trim() == "qolipchi"
+    }) {
+        PrincipalRole::Qolipchi
+    } else {
+        PrincipalRole::Customer
+    }
+}
+
+fn user_list_source(role: &PrincipalRole) -> &'static str {
+    match role {
+        PrincipalRole::Qolipchi => "qolipchi",
+        _ => "customer",
+    }
+}
+
+fn user_list_default_role_label(role: &PrincipalRole) -> &'static str {
+    match role {
+        PrincipalRole::Qolipchi => "Qolipchi",
+        _ => "Customer",
+    }
 }
 
 fn normalize_search(value: &str) -> String {
