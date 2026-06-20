@@ -31,6 +31,20 @@ impl MemoryQolipStore {
 
 #[async_trait]
 impl QolipStorePort for MemoryQolipStore {
+    async fn assigned_warehouses(&self, _principal: &Principal) -> Result<Vec<String>, QolipError> {
+        let mut warehouses = self
+            .blocks
+            .read()
+            .await
+            .iter()
+            .map(|block| block.warehouse.trim().to_string())
+            .filter(|warehouse| !warehouse.is_empty())
+            .collect::<Vec<_>>();
+        warehouses.sort_by_key(|warehouse| warehouse.to_lowercase());
+        warehouses.dedup_by(|left, right| left.eq_ignore_ascii_case(right));
+        Ok(warehouses)
+    }
+
     async fn assigned_blocks(&self, _principal: &Principal) -> Result<Vec<QolipBlock>, QolipError> {
         Ok(self.blocks.read().await.clone())
     }

@@ -19,6 +19,26 @@ impl PostgresQolipStore {
 
 #[async_trait]
 impl QolipStorePort for PostgresQolipStore {
+    async fn assigned_warehouses(&self, principal: &Principal) -> Result<Vec<String>, QolipError> {
+        let rows = sqlx::query_scalar::<_, String>(
+            r#"
+            SELECT warehouse
+            FROM mini_warehouse_assignments
+            WHERE principal_ref = $1
+              AND lower(principal_role) = lower($2)
+              AND btrim(warehouse) <> ''
+            ORDER BY lower(warehouse)
+            "#,
+        )
+        .bind(principal.ref_.trim())
+        .bind(role_code(&principal.role))
+        .fetch_all(&self.pool)
+        .await
+        .map_err(|_| QolipError::StoreFailed)?;
+
+        Ok(rows)
+    }
+
     async fn assigned_blocks(&self, principal: &Principal) -> Result<Vec<QolipBlock>, QolipError> {
         let rows = sqlx::query_as::<_, QolipBlockRow>(
             r#"
@@ -33,22 +53,9 @@ impl QolipStorePort for PostgresQolipStore {
                 FROM assigned
                 JOIN mini_warehouses child
                   ON lower(child.parent_warehouse) = lower(assigned.warehouse)
-            ),
-            direct_blocks AS (
-                SELECT assigned.warehouse AS block, assigned.warehouse AS warehouse
-                FROM assigned
-                WHERE NOT EXISTS (
-                    SELECT 1
-                    FROM mini_warehouses child
-                    WHERE lower(child.parent_warehouse) = lower(assigned.warehouse)
-                )
             )
             SELECT block, warehouse
-            FROM (
-                SELECT block, warehouse FROM child_blocks
-                UNION
-                SELECT block, warehouse FROM direct_blocks
-            ) blocks
+            FROM child_blocks
             ORDER BY lower(block)
             "#,
         )

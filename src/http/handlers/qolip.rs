@@ -8,27 +8,67 @@ use crate::app::AppState;
 use crate::core::auth::models::Principal;
 use crate::core::authz::Capability;
 use crate::core::qolip::{QolipBlock, QolipError, QolipLocationUpsert};
+use crate::core::warehouses::WarehouseUpsert;
 use crate::http::handlers::auth::bearer_token;
 
 pub async fn blocks(
     State(state): State<AppState>,
     method: Method,
     headers: HeaderMap,
+    body: Bytes,
 ) -> Result<Json<serde_json::Value>, (StatusCode, Json<QolipErrorResponse>)> {
     if method != Method::GET {
-        return Err(method_not_allowed());
+        if method != Method::POST {
+            return Err(method_not_allowed());
+        }
     }
     let principal = authenticated_principal(&state, &headers).await?;
     ensure_qolip_access(&state, &principal).await?;
-    let blocks = state
-        .qolip
-        .assigned_blocks(&principal)
-        .await
-        .map_err(qolip_error)?;
-    Ok(Json(serde_json::json!({
-        "ok": true,
-        "blocks": blocks,
-    })))
+    match method {
+        Method::GET => {
+            let blocks = state
+                .qolip
+                .assigned_blocks(&principal)
+                .await
+                .map_err(qolip_error)?;
+            let warehouses = assigned_qolip_warehouses(&state, &principal)
+                .await
+                .map_err(qolip_error)?;
+            Ok(Json(serde_json::json!({
+                "ok": true,
+                "warehouses": warehouses,
+                "blocks": blocks,
+            })))
+        }
+        Method::POST => {
+            let input: QolipBlockUpsert =
+                serde_json::from_slice(&body).map_err(|_| bad_request("invalid_json"))?;
+            let block = input.block.trim();
+            if block.is_empty() {
+                return Err(bad_request("block_required"));
+            }
+            let parent = accessible_qolip_warehouse(&state, &principal, &input.warehouse).await?;
+            let saved = state
+                .warehouses
+                .upsert_warehouse(WarehouseUpsert {
+                    warehouse: block.to_string(),
+                    company: String::new(),
+                    is_group: false,
+                    parent_warehouse: parent.clone(),
+                })
+                .await
+                .map_err(|_| qolip_error(QolipError::StoreFailed))?;
+            let block = QolipBlock {
+                name: saved.warehouse,
+                warehouse: saved.parent_warehouse,
+            };
+            Ok(Json(serde_json::json!({
+                "ok": true,
+                "block": block,
+            })))
+        }
+        _ => Err(method_not_allowed()),
+    }
 }
 
 pub async fn products(
@@ -124,11 +164,56 @@ async fn accessible_qolip_block(
         .map(Some)
 }
 
+async fn accessible_qolip_warehouse(
+    state: &AppState,
+    principal: &Principal,
+    warehouse: &str,
+) -> Result<String, (StatusCode, Json<QolipErrorResponse>)> {
+    let warehouse = warehouse.trim();
+    if state
+        .admin
+        .principal_has_capability(principal, Capability::AdminAccess)
+        .await
+    {
+        if warehouse.is_empty() {
+            return Err(bad_request("warehouse_required"));
+        }
+        return Ok(warehouse.to_string());
+    }
+    let assigned = state
+        .qolip
+        .assigned_warehouses(principal)
+        .await
+        .map_err(qolip_error)?;
+    if warehouse.is_empty() && assigned.len() == 1 {
+        return Ok(assigned[0].clone());
+    }
+    assigned
+        .into_iter()
+        .find(|item| item.trim().eq_ignore_ascii_case(warehouse))
+        .ok_or_else(forbidden)
+}
+
+async fn assigned_qolip_warehouses(
+    state: &AppState,
+    principal: &Principal,
+) -> Result<Vec<String>, QolipError> {
+    state.qolip.assigned_warehouses(principal).await
+}
+
 #[derive(Debug, Deserialize)]
 pub struct QolipSearchQuery {
     q: Option<String>,
     block: Option<String>,
     limit: Option<usize>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct QolipBlockUpsert {
+    #[serde(default)]
+    warehouse: String,
+    #[serde(default)]
+    block: String,
 }
 
 async fn authenticated_principal(

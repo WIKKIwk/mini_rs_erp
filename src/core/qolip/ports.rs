@@ -6,6 +6,7 @@ use super::models::{QolipBlock, QolipError, QolipLocation, QolipProduct};
 
 #[async_trait]
 pub trait QolipStorePort: Send + Sync {
+    async fn assigned_warehouses(&self, principal: &Principal) -> Result<Vec<String>, QolipError>;
     async fn assigned_blocks(&self, principal: &Principal) -> Result<Vec<QolipBlock>, QolipError>;
     async fn products(&self, query: &str, limit: usize) -> Result<Vec<QolipProduct>, QolipError>;
     async fn locations(&self, block: &str) -> Result<Vec<QolipLocation>, QolipError>;

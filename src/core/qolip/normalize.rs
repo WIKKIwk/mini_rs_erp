@@ -10,15 +10,18 @@ pub(super) fn normalize_location(
     if block.is_empty() {
         return Err(QolipError::MissingBlock);
     }
-    let item_code = input.item_code.trim().to_string();
-    let item_name = input.item_name.trim().to_string();
-    if item_code.is_empty() || item_name.is_empty() {
-        return Err(QolipError::MissingItem);
-    }
     let qolip_code = input.qolip_code.trim().to_string();
     if qolip_code.is_empty() {
         return Err(QolipError::MissingQolipCode);
     }
+    let item_code = match input.item_code.trim() {
+        "" => qolip_code.clone(),
+        value => value.to_string(),
+    };
+    let item_name = match input.item_name.trim() {
+        "" => qolip_code.clone(),
+        value => value.to_string(),
+    };
     if input.size <= 0 {
         return Err(QolipError::InvalidSize);
     }

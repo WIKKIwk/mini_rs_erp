@@ -23,6 +23,13 @@ impl QolipService {
         self.store.assigned_blocks(principal).await
     }
 
+    pub async fn assigned_warehouses(
+        &self,
+        principal: &Principal,
+    ) -> Result<Vec<String>, QolipError> {
+        self.store.assigned_warehouses(principal).await
+    }
+
     pub async fn products(
         &self,
         query: &str,
