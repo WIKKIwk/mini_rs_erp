@@ -324,6 +324,9 @@ CREATE TABLE IF NOT EXISTS mini_order_progress_events (
     return_ink_kg NUMERIC,
     lamination_print_leftover_rolls NUMERIC,
     lamination_film_leftover_rolls NUMERIC,
+    rezka_bosma_waste NUMERIC,
+    rezka_lamination_waste NUMERIC,
+    rezka_edge_waste NUMERIC,
     total_waste NUMERIC,
     finished_goods_kg NUMERIC,
     finished_goods_meter NUMERIC,
@@ -358,6 +361,9 @@ CREATE TABLE IF NOT EXISTS mini_progress_batches (
     return_ink_kg NUMERIC,
     lamination_print_leftover_rolls NUMERIC,
     lamination_film_leftover_rolls NUMERIC,
+    rezka_bosma_waste NUMERIC,
+    rezka_lamination_waste NUMERIC,
+    rezka_edge_waste NUMERIC,
     total_waste NUMERIC,
     finished_goods_kg NUMERIC,
     finished_goods_meter NUMERIC,
@@ -382,6 +388,9 @@ CREATE TABLE IF NOT EXISTS mini_progress_batches (
 ALTER TABLE mini_order_progress_events ADD COLUMN IF NOT EXISTS return_ink_kg NUMERIC;
 ALTER TABLE mini_order_progress_events ADD COLUMN IF NOT EXISTS lamination_print_leftover_rolls NUMERIC;
 ALTER TABLE mini_order_progress_events ADD COLUMN IF NOT EXISTS lamination_film_leftover_rolls NUMERIC;
+ALTER TABLE mini_order_progress_events ADD COLUMN IF NOT EXISTS rezka_bosma_waste NUMERIC;
+ALTER TABLE mini_order_progress_events ADD COLUMN IF NOT EXISTS rezka_lamination_waste NUMERIC;
+ALTER TABLE mini_order_progress_events ADD COLUMN IF NOT EXISTS rezka_edge_waste NUMERIC;
 ALTER TABLE mini_order_progress_events ADD COLUMN IF NOT EXISTS total_waste NUMERIC;
 ALTER TABLE mini_order_progress_events ADD COLUMN IF NOT EXISTS finished_goods_kg NUMERIC;
 ALTER TABLE mini_order_progress_events ADD COLUMN IF NOT EXISTS finished_goods_meter NUMERIC;
@@ -390,6 +399,9 @@ ALTER TABLE mini_order_progress_events ADD COLUMN IF NOT EXISTS description TEXT
 ALTER TABLE mini_progress_batches ADD COLUMN IF NOT EXISTS return_ink_kg NUMERIC;
 ALTER TABLE mini_progress_batches ADD COLUMN IF NOT EXISTS lamination_print_leftover_rolls NUMERIC;
 ALTER TABLE mini_progress_batches ADD COLUMN IF NOT EXISTS lamination_film_leftover_rolls NUMERIC;
+ALTER TABLE mini_progress_batches ADD COLUMN IF NOT EXISTS rezka_bosma_waste NUMERIC;
+ALTER TABLE mini_progress_batches ADD COLUMN IF NOT EXISTS rezka_lamination_waste NUMERIC;
+ALTER TABLE mini_progress_batches ADD COLUMN IF NOT EXISTS rezka_edge_waste NUMERIC;
 ALTER TABLE mini_progress_batches ADD COLUMN IF NOT EXISTS total_waste NUMERIC;
 ALTER TABLE mini_progress_batches ADD COLUMN IF NOT EXISTS finished_goods_kg NUMERIC;
 ALTER TABLE mini_progress_batches ADD COLUMN IF NOT EXISTS finished_goods_meter NUMERIC;

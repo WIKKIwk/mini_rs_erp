@@ -86,6 +86,8 @@ pub enum ProductionMapError {
     BosmaCompletionMetricsRequired,
     #[error("laminatsiya completion metrics are required")]
     LaminatsiyaCompletionMetricsRequired,
+    #[error("rezka progress metrics are required")]
+    RezkaProgressMetricsRequired,
     #[error("progress batch not found")]
     ProgressBatchNotFound,
     #[error("progress batch cannot resume")]

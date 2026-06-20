@@ -23,6 +23,12 @@ struct ApparatusQueueActionRequest {
     #[serde(default)]
     lamination_film_leftover_rolls: Option<f64>,
     #[serde(default)]
+    rezka_bosma_waste: Option<f64>,
+    #[serde(default)]
+    rezka_lamination_waste: Option<f64>,
+    #[serde(default)]
+    rezka_edge_waste: Option<f64>,
+    #[serde(default)]
     total_waste: Option<f64>,
     #[serde(default)]
     finished_goods_kg: Option<f64>,
@@ -105,6 +111,9 @@ pub async fn production_map_queue_action(
         return_ink_kg: input.return_ink_kg,
         lamination_print_leftover_rolls: input.lamination_print_leftover_rolls,
         lamination_film_leftover_rolls: input.lamination_film_leftover_rolls,
+        rezka_bosma_waste: input.rezka_bosma_waste,
+        rezka_lamination_waste: input.rezka_lamination_waste,
+        rezka_edge_waste: input.rezka_edge_waste,
         total_waste: input.total_waste,
         finished_goods_kg: input.finished_goods_kg,
         finished_goods_meter: input.finished_goods_meter,
@@ -120,9 +129,13 @@ pub async fn production_map_queue_action(
         && input.total_waste.is_some()
         && input.finished_goods_kg.is_some()
         && input.finished_goods_meter.is_some();
+    let has_rezka_progress_metrics = input.rezka_bosma_waste.is_some()
+        && input.rezka_lamination_waste.is_some()
+        && input.rezka_edge_waste.is_some();
     if matches!(input.action, queue_state::ApparatusQueueAction::Complete)
         && !has_complete_bosma_metrics
         && !has_complete_laminatsiya_metrics
+        && !has_rezka_progress_metrics
         && input.gross_qty.is_none()
         && !completion_request_note.trim().is_empty()
     {

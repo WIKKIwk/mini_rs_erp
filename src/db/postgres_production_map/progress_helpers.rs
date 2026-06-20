@@ -79,10 +79,12 @@ pub(super) async fn put_order_progress_event_tx(
             event_id, session_id, batch_id, apparatus, order_id, action,
             produced_qty, uom, worker_role, worker_ref, worker_display_name,
             qr_payload, return_ink_kg, lamination_print_leftover_rolls,
-            lamination_film_leftover_rolls, total_waste, finished_goods_kg,
-            finished_goods_meter, description, payload_json, created_at
+            lamination_film_leftover_rolls, rezka_bosma_waste,
+            rezka_lamination_waste, rezka_edge_waste, total_waste,
+            finished_goods_kg, finished_goods_meter, description,
+            payload_json, created_at
          )
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, now())
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, now())
          ON CONFLICT (event_id) DO UPDATE SET
             session_id = excluded.session_id,
             batch_id = excluded.batch_id,
@@ -96,6 +98,9 @@ pub(super) async fn put_order_progress_event_tx(
             return_ink_kg = excluded.return_ink_kg,
             lamination_print_leftover_rolls = excluded.lamination_print_leftover_rolls,
             lamination_film_leftover_rolls = excluded.lamination_film_leftover_rolls,
+            rezka_bosma_waste = excluded.rezka_bosma_waste,
+            rezka_lamination_waste = excluded.rezka_lamination_waste,
+            rezka_edge_waste = excluded.rezka_edge_waste,
             total_waste = excluded.total_waste,
             finished_goods_kg = excluded.finished_goods_kg,
             finished_goods_meter = excluded.finished_goods_meter,
@@ -117,6 +122,9 @@ pub(super) async fn put_order_progress_event_tx(
     .bind(event.return_ink_kg)
     .bind(event.lamination_print_leftover_rolls)
     .bind(event.lamination_film_leftover_rolls)
+    .bind(event.rezka_bosma_waste)
+    .bind(event.rezka_lamination_waste)
+    .bind(event.rezka_edge_waste)
     .bind(event.total_waste)
     .bind(event.finished_goods_kg)
     .bind(event.finished_goods_meter)
@@ -152,10 +160,12 @@ pub(super) async fn put_order_progress_batch_tx(
             produced_qty, uom, qr_payload, label_item_code, label_item_name,
             executor_name, worker_role, worker_ref, worker_display_name,
             return_ink_kg, lamination_print_leftover_rolls,
-            lamination_film_leftover_rolls, total_waste, finished_goods_kg,
-            finished_goods_meter, description, payload_json, created_at, updated_at
+            lamination_film_leftover_rolls, rezka_bosma_waste,
+            rezka_lamination_waste, rezka_edge_waste, total_waste,
+            finished_goods_kg, finished_goods_meter, description,
+            payload_json, created_at, updated_at
          )
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, now(), now())
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, now(), now())
          ON CONFLICT (batch_id) DO UPDATE SET
             status = excluded.status,
             produced_qty = excluded.produced_qty,
@@ -170,6 +180,9 @@ pub(super) async fn put_order_progress_batch_tx(
             return_ink_kg = excluded.return_ink_kg,
             lamination_print_leftover_rolls = excluded.lamination_print_leftover_rolls,
             lamination_film_leftover_rolls = excluded.lamination_film_leftover_rolls,
+            rezka_bosma_waste = excluded.rezka_bosma_waste,
+            rezka_lamination_waste = excluded.rezka_lamination_waste,
+            rezka_edge_waste = excluded.rezka_edge_waste,
             total_waste = excluded.total_waste,
             finished_goods_kg = excluded.finished_goods_kg,
             finished_goods_meter = excluded.finished_goods_meter,
@@ -195,6 +208,9 @@ pub(super) async fn put_order_progress_batch_tx(
     .bind(batch.return_ink_kg)
     .bind(batch.lamination_print_leftover_rolls)
     .bind(batch.lamination_film_leftover_rolls)
+    .bind(batch.rezka_bosma_waste)
+    .bind(batch.rezka_lamination_waste)
+    .bind(batch.rezka_edge_waste)
     .bind(batch.total_waste)
     .bind(batch.finished_goods_kg)
     .bind(batch.finished_goods_meter)
@@ -240,6 +256,9 @@ pub(super) struct ProgressBatchRow {
     pub(super) return_ink_kg: Option<f64>,
     pub(super) lamination_print_leftover_rolls: Option<f64>,
     pub(super) lamination_film_leftover_rolls: Option<f64>,
+    pub(super) rezka_bosma_waste: Option<f64>,
+    pub(super) rezka_lamination_waste: Option<f64>,
+    pub(super) rezka_edge_waste: Option<f64>,
     pub(super) total_waste: Option<f64>,
     pub(super) finished_goods_kg: Option<f64>,
     pub(super) finished_goods_meter: Option<f64>,
@@ -324,6 +343,9 @@ pub(super) fn progress_batch_from_row(
         return_ink_kg: row.return_ink_kg,
         lamination_print_leftover_rolls: row.lamination_print_leftover_rolls,
         lamination_film_leftover_rolls: row.lamination_film_leftover_rolls,
+        rezka_bosma_waste: row.rezka_bosma_waste,
+        rezka_lamination_waste: row.rezka_lamination_waste,
+        rezka_edge_waste: row.rezka_edge_waste,
         total_waste: row.total_waste,
         finished_goods_kg: row.finished_goods_kg,
         finished_goods_meter: row.finished_goods_meter,

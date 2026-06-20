@@ -65,6 +65,9 @@ impl ProductionMapService {
                     return_ink_kg: None,
                     lamination_print_leftover_rolls: None,
                     lamination_film_leftover_rolls: None,
+                    rezka_bosma_waste: None,
+                    rezka_lamination_waste: None,
+                    rezka_edge_waste: None,
                     total_waste: None,
                     finished_goods_kg: None,
                     finished_goods_meter: None,
@@ -92,6 +95,10 @@ impl ProductionMapService {
                     };
                 let lamination_film_leftover_rolls =
                     valid_optional_progress_qty(progress.lamination_film_leftover_rolls)?;
+                let rezka_bosma_waste = valid_optional_progress_qty(progress.rezka_bosma_waste)?;
+                let rezka_lamination_waste =
+                    valid_optional_progress_qty(progress.rezka_lamination_waste)?;
+                let rezka_edge_waste = valid_optional_progress_qty(progress.rezka_edge_waste)?;
                 let total_waste = valid_optional_progress_qty(progress.total_waste)?;
                 let finished_goods_kg = valid_optional_progress_qty(progress.finished_goods_kg)?;
                 let finished_goods_meter =
@@ -118,6 +125,15 @@ impl ProductionMapService {
                     )
                 {
                     return Err(ProductionMapError::LaminatsiyaCompletionMetricsRequired);
+                }
+                if super::apparatus::is_rezka_title(apparatus)
+                    && !rezka_progress_metrics_are_complete(
+                        rezka_bosma_waste,
+                        rezka_lamination_waste,
+                        rezka_edge_waste,
+                    )
+                {
+                    return Err(ProductionMapError::RezkaProgressMetricsRequired);
                 }
                 let produced_qty =
                     valid_progress_qty(progress.produced_qty.or(finished_goods_meter))?;
@@ -150,6 +166,9 @@ impl ProductionMapService {
                         "return_ink_kg": return_ink_kg,
                         "lamination_print_leftover_rolls": lamination_print_leftover_rolls,
                         "lamination_film_leftover_rolls": lamination_film_leftover_rolls,
+                        "rezka_bosma_waste": rezka_bosma_waste,
+                        "rezka_lamination_waste": rezka_lamination_waste,
+                        "rezka_edge_waste": rezka_edge_waste,
                         "total_waste": total_waste,
                         "finished_goods_kg": finished_goods_kg,
                         "finished_goods_meter": finished_goods_meter,
@@ -191,6 +210,9 @@ impl ProductionMapService {
                     return_ink_kg,
                     lamination_print_leftover_rolls,
                     lamination_film_leftover_rolls,
+                    rezka_bosma_waste,
+                    rezka_lamination_waste,
+                    rezka_edge_waste,
                     total_waste,
                     finished_goods_kg,
                     finished_goods_meter,
@@ -202,6 +224,9 @@ impl ProductionMapService {
                         "return_ink_kg": return_ink_kg,
                         "lamination_print_leftover_rolls": lamination_print_leftover_rolls,
                         "lamination_film_leftover_rolls": lamination_film_leftover_rolls,
+                        "rezka_bosma_waste": rezka_bosma_waste,
+                        "rezka_lamination_waste": rezka_lamination_waste,
+                        "rezka_edge_waste": rezka_edge_waste,
                         "total_waste": total_waste,
                         "finished_goods_kg": finished_goods_kg,
                         "finished_goods_meter": finished_goods_meter,
@@ -224,6 +249,9 @@ impl ProductionMapService {
                     return_ink_kg,
                     lamination_print_leftover_rolls,
                     lamination_film_leftover_rolls,
+                    rezka_bosma_waste,
+                    rezka_lamination_waste,
+                    rezka_edge_waste,
                     total_waste,
                     finished_goods_kg,
                     finished_goods_meter,
@@ -233,6 +261,9 @@ impl ProductionMapService {
                         "return_ink_kg": return_ink_kg,
                         "lamination_print_leftover_rolls": lamination_print_leftover_rolls,
                         "lamination_film_leftover_rolls": lamination_film_leftover_rolls,
+                        "rezka_bosma_waste": rezka_bosma_waste,
+                        "rezka_lamination_waste": rezka_lamination_waste,
+                        "rezka_edge_waste": rezka_edge_waste,
                         "total_waste": total_waste,
                         "finished_goods_kg": finished_goods_kg,
                         "finished_goods_meter": finished_goods_meter,
@@ -283,6 +314,9 @@ impl ProductionMapService {
                         return_ink_kg: None,
                         lamination_print_leftover_rolls: None,
                         lamination_film_leftover_rolls: None,
+                        rezka_bosma_waste: None,
+                        rezka_lamination_waste: None,
+                        rezka_edge_waste: None,
                         total_waste: None,
                         finished_goods_kg: None,
                         finished_goods_meter: None,
@@ -347,6 +381,9 @@ impl ProductionMapService {
                     return_ink_kg: None,
                     lamination_print_leftover_rolls: None,
                     lamination_film_leftover_rolls: None,
+                    rezka_bosma_waste: None,
+                    rezka_lamination_waste: None,
+                    rezka_edge_waste: None,
                     total_waste: None,
                     finished_goods_kg: None,
                     finished_goods_meter: None,
@@ -394,4 +431,12 @@ fn laminatsiya_completion_metrics_are_complete(
         && total_waste.is_some()
         && finished_goods_kg.is_some()
         && finished_goods_meter.is_some()
+}
+
+fn rezka_progress_metrics_are_complete(
+    rezka_bosma_waste: Option<f64>,
+    rezka_lamination_waste: Option<f64>,
+    rezka_edge_waste: Option<f64>,
+) -> bool {
+    rezka_bosma_waste.is_some() && rezka_lamination_waste.is_some() && rezka_edge_waste.is_some()
 }

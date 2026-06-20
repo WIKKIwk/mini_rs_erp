@@ -66,6 +66,10 @@ pub(super) fn is_laminatsiya_title(title: &str) -> bool {
     title.trim().to_lowercase().contains("laminatsiya")
 }
 
+pub(super) fn is_rezka_title(title: &str) -> bool {
+    title.trim().to_lowercase().contains("rezka")
+}
+
 fn alternative_assigned_group_contains_target(
     map: &ProductionMapDefinition,
     from: &str,
