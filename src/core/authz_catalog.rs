@@ -1,4 +1,5 @@
 use super::*;
+use crate::core::auth::models::PrincipalRole;
 
 const ADMIN_ONLY: &[PrincipalRole] = &[PrincipalRole::Admin];
 const WERKA_ONLY: &[PrincipalRole] = &[PrincipalRole::Werka];
