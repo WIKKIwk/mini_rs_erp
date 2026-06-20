@@ -74,6 +74,10 @@ pub enum ProductionMapError {
     RawMaterialScanRequired,
     #[error("raw material scan does not match assigned material")]
     RawMaterialMismatch,
+    #[error("raw material roll size is missing")]
+    RawMaterialRollSizeMissing,
+    #[error("raw material roll size does not match order width")]
+    RawMaterialRollSizeMismatch,
     #[error("progress input is invalid")]
     ProgressInputInvalid,
     #[error("progress batch not found")]

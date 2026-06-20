@@ -353,14 +353,17 @@ fn item(code: &str) -> SupplierItem {
         name: match code {
             "INK-BLACK" => "Black ink".to_string(),
             "INK-WHITE" => "White ink".to_string(),
+            "ROLL-980" => "CPP 980/35".to_string(),
+            "ROLL-1000" => "CPP 1000/35".to_string(),
+            "ROLL-1020" => "CPP 1020/35".to_string(),
             _ => "Rice".to_string(),
         },
         uom: "Kg".to_string(),
         warehouse: "Stores - CH".to_string(),
-        item_group: if code == "INK-BLACK" || code == "INK-WHITE" {
-            "Kraska".to_string()
-        } else {
-            "Products".to_string()
+        item_group: match code {
+            "INK-BLACK" | "INK-WHITE" => "Kraska".to_string(),
+            "ROLL-980" | "ROLL-1000" | "ROLL-1020" => "Rulon eni".to_string(),
+            _ => "Products".to_string(),
         },
     }
 }

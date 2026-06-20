@@ -269,6 +269,18 @@ impl AdminReadPort for FakeAdminReadPort {
                 parent_item_group: "Xomashyo".to_string(),
                 is_group: true,
             },
+            AdminItemGroup {
+                name: "Rulon".to_string(),
+                item_group_name: "Rulon".to_string(),
+                parent_item_group: "Xomashyo".to_string(),
+                is_group: true,
+            },
+            AdminItemGroup {
+                name: "Rulon eni".to_string(),
+                item_group_name: "Rulon eni".to_string(),
+                parent_item_group: "Rulon".to_string(),
+                is_group: false,
+            },
         ])
     }
 

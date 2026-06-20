@@ -135,6 +135,7 @@ async fn raw_material_assignment_requires_exact_scan_before_start() {
                 item_code: "INK-BLACK".to_string(),
                 item_name: "Black ink".to_string(),
                 item_group: "Kraska".to_string(),
+                item_group_path: Vec::new(),
             },
             &actor,
         )
@@ -149,6 +150,7 @@ async fn raw_material_assignment_requires_exact_scan_before_start() {
                 item_code: "INK-WHITE".to_string(),
                 item_name: "White ink".to_string(),
                 item_group: "Kraska".to_string(),
+                item_group_path: Vec::new(),
             },
             &actor,
         )
@@ -168,6 +170,7 @@ async fn raw_material_assignment_requires_exact_scan_before_start() {
                 item_code: "INK-BLACK".to_string(),
                 item_name: "Black ink".to_string(),
                 item_group: "Kraska".to_string(),
+                item_group_path: Vec::new(),
             },
             &actor,
         )

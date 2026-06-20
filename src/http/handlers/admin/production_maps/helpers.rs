@@ -50,6 +50,12 @@ pub(super) fn production_map_error(error: ProductionMapError) -> AdminError {
         }
         ProductionMapError::RawMaterialScanRequired => bad_request("raw_material_scan_required"),
         ProductionMapError::RawMaterialMismatch => bad_request("raw_material_mismatch"),
+        ProductionMapError::RawMaterialRollSizeMissing => {
+            bad_request("raw_material_roll_size_missing")
+        }
+        ProductionMapError::RawMaterialRollSizeMismatch => {
+            bad_request("raw_material_roll_size_mismatch")
+        }
         ProductionMapError::ProgressInputInvalid => bad_request("progress_input_invalid"),
         ProductionMapError::ProgressBatchNotFound => not_found("progress_batch_not_found"),
         ProductionMapError::ProgressBatchNotResumable => {

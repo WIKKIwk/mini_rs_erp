@@ -35,6 +35,8 @@ pub struct RawMaterialAssignmentInput {
     pub item_name: String,
     #[serde(default)]
     pub item_group: String,
+    #[serde(default)]
+    pub item_group_path: Vec<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -83,6 +85,7 @@ impl ProductionMapService {
         let barcode = normalize_barcode(&input.barcode);
         let item_code = input.item_code.trim().to_string();
         let item_group = input.item_group.trim().to_string();
+        let item_group_path = normalize_group_path(&item_group, input.item_group_path);
         if order_id.is_empty()
             || barcode.is_empty()
             || item_code.is_empty()
@@ -93,7 +96,9 @@ impl ProductionMapService {
         let Some(map) = self.raw_map(&order_id).await? else {
             return Err(ProductionMapError::MapNotFound);
         };
-        let apparatus = self.resolve_material_apparatus(&map, &item_group).await?;
+        let apparatus = self
+            .resolve_material_apparatus(&map, &item_group_path)
+            .await?;
         for existing in self.store.raw_material_assignments().await? {
             if same_barcode(&existing.barcode, &barcode) {
                 if existing.order_id.trim() == order_id
@@ -195,14 +200,14 @@ impl ProductionMapService {
     async fn resolve_material_apparatus(
         &self,
         map: &super::ProductionMapDefinition,
-        item_group: &str,
+        item_group_path: &[String],
     ) -> Result<String, ProductionMapError> {
         let rules = self.store.apparatus_material_rules().await?;
         let mut matches = BTreeSet::new();
         for stage in chain::linear_work_stages(map) {
             if rules
                 .iter()
-                .any(|rule| rule_matches(rule, &stage.station_title, item_group))
+                .any(|rule| rule_matches(rule, &stage.station_title, item_group_path))
             {
                 matches.insert(stage.station_title);
             }
@@ -295,12 +300,23 @@ fn normalize_rule(
     })
 }
 
-fn rule_matches(rule: &ApparatusMaterialRule, apparatus: &str, item_group: &str) -> bool {
+fn rule_matches(rule: &ApparatusMaterialRule, apparatus: &str, item_group_path: &[String]) -> bool {
     queue_state::apparatus_titles_match(&rule.apparatus, apparatus)
-        && rule
-            .item_groups
-            .iter()
-            .any(|group| group.trim().eq_ignore_ascii_case(item_group.trim()))
+        && rule.item_groups.iter().any(|group| {
+            item_group_path
+                .iter()
+                .any(|candidate| group.trim().eq_ignore_ascii_case(candidate.trim()))
+        })
+}
+
+fn normalize_group_path(item_group: &str, item_group_path: Vec<String>) -> Vec<String> {
+    let mut seen = BTreeSet::new();
+    std::iter::once(item_group.to_string())
+        .chain(item_group_path)
+        .map(|group| group.trim().to_string())
+        .filter(|group| !group.is_empty())
+        .filter(|group| seen.insert(group.to_lowercase()))
+        .collect()
 }
 
 fn normalize_barcode(value: &str) -> String {

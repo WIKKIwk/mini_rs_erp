@@ -23,6 +23,19 @@ impl Default for RawMaterialStockLookup {
 }
 
 impl RawMaterialStockLookup {
+    pub(crate) async fn insert_stock(
+        &self,
+        barcode: &str,
+        item_code: &str,
+        item_name: &str,
+        qty: f64,
+    ) {
+        self.stock.lock().await.insert(
+            barcode.trim().to_ascii_uppercase(),
+            raw_material_stock_entry(barcode, item_code, item_name, qty),
+        );
+    }
+
     pub(crate) async fn set_stock_status(&self, barcode: &str, status: &str, order_id: &str) {
         let mut stock = self.stock.lock().await;
         let item = stock
