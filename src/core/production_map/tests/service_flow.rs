@@ -424,6 +424,89 @@ async fn downstream_start_requires_previous_stage_progress_qr() {
 }
 
 #[tokio::test]
+async fn downstream_start_accepts_previous_stage_qr_after_resume() {
+    let service = ProductionMapService::new(std::sync::Arc::new(MemoryProductionMapStore::new()));
+    let actor = QueueActionActor {
+        role: "aparatchi".to_string(),
+        ref_: "worker-downstream-resume".to_string(),
+        display_name: "Worker Downstream Resume".to_string(),
+    };
+    let order_id = "zakaz-downstream-resume";
+    let first = "Bosma aparat";
+    let second = "Laminatsiya mashinasi";
+    service
+        .upsert_map(two_stage_map(order_id, first, second))
+        .await
+        .expect("map");
+
+    service
+        .apply_apparatus_queue_action_with_progress(
+            first,
+            order_id,
+            queue_state::ApparatusQueueAction::Start,
+            &[first.to_string()],
+            actor.clone(),
+            QueueProgressInput::default(),
+        )
+        .await
+        .expect("first start");
+    let paused = service
+        .apply_apparatus_queue_action_with_progress(
+            first,
+            order_id,
+            queue_state::ApparatusQueueAction::Pause,
+            &[first.to_string()],
+            actor.clone(),
+            QueueProgressInput {
+                produced_qty: Some(12.0),
+                uom: "kg".to_string(),
+                ..QueueProgressInput::default()
+            },
+        )
+        .await
+        .expect("first pause");
+    let qr_payload = paused
+        .progress_batch
+        .as_ref()
+        .expect("pause batch")
+        .qr_payload
+        .clone();
+    service
+        .apply_apparatus_queue_action_with_progress(
+            first,
+            order_id,
+            queue_state::ApparatusQueueAction::Resume,
+            &[first.to_string()],
+            actor.clone(),
+            QueueProgressInput {
+                qr_payload: qr_payload.clone(),
+                ..QueueProgressInput::default()
+            },
+        )
+        .await
+        .expect("first resume");
+
+    let second_started = service
+        .apply_apparatus_queue_action_with_progress(
+            second,
+            order_id,
+            queue_state::ApparatusQueueAction::Start,
+            &[second.to_string()],
+            actor,
+            QueueProgressInput {
+                qr_payload,
+                ..QueueProgressInput::default()
+            },
+        )
+        .await
+        .expect("second start with resumed previous qr");
+    assert_eq!(
+        second_started.states.get(order_id),
+        Some(&"in_progress".to_string())
+    );
+}
+
+#[tokio::test]
 async fn upsert_maps_batch_keeps_queue_state_and_sequence_cache() {
     let store = std::sync::Arc::new(MemoryProductionMapStore::new());
     let service = ProductionMapService::new(store);

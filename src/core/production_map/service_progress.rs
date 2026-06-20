@@ -49,7 +49,9 @@ impl ProductionMapService {
             )
             || !matches!(
                 batch.status,
-                OrderProgressBatchStatus::Paused | OrderProgressBatchStatus::Completed
+                OrderProgressBatchStatus::Paused
+                    | OrderProgressBatchStatus::Completed
+                    | OrderProgressBatchStatus::Resumed
             )
         {
             return Err(ProductionMapError::ProgressBatchNotAccepted);
