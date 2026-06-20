@@ -3,7 +3,8 @@ use sqlx::PgPool;
 
 use crate::core::auth::models::Principal;
 use crate::core::qolip::{
-    QolipBlock, QolipCellQr, QolipError, QolipLocation, QolipProduct, QolipStorePort, role_code,
+    QolipBlock, QolipCellQr, QolipError, QolipLocation, QolipProduct, QolipProductSpec,
+    QolipStorePort, role_code,
 };
 
 #[derive(Clone)]
@@ -74,7 +75,12 @@ impl QolipStorePort for PostgresQolipStore {
             .collect())
     }
 
-    async fn products(&self, query: &str, limit: usize) -> Result<Vec<QolipProduct>, QolipError> {
+    async fn products(
+        &self,
+        query: &str,
+        limit: usize,
+        with_qolip_only: bool,
+    ) -> Result<Vec<QolipProduct>, QolipError> {
         let query = query.trim().to_lowercase();
         let pattern = format!("%{query}%");
         let rows = sqlx::query_as::<_, QolipProductRow>(
@@ -95,14 +101,24 @@ impl QolipStorePort for PostgresQolipStore {
                 FROM group_path
                 GROUP BY group_name
             )
-            SELECT items.code, items.name, items.item_group
+            SELECT
+                items.code,
+                items.name,
+                items.item_group,
+                COALESCE(spec.qolip_code, '') AS qolip_code,
+                COALESCE(spec.size, 0) AS size,
+                spec.item_code IS NOT NULL AS has_qolip_spec
             FROM mini_items items
             LEFT JOIN group_kind ON lower(items.item_group) = group_kind.group_name
+            LEFT JOIN mini_qolip_product_specs spec
+              ON lower(spec.item_code) = lower(items.code)
             WHERE COALESCE(group_kind.is_finished, false)
+              AND (NOT $4 OR spec.item_code IS NOT NULL)
               AND (
                 $1 = ''
                 OR lower(items.code) LIKE $2
                 OR lower(items.name) LIKE $2
+                OR lower(COALESCE(spec.qolip_code, '')) LIKE $2
               )
             ORDER BY lower(items.name), lower(items.code)
             LIMIT $3
@@ -111,6 +127,7 @@ impl QolipStorePort for PostgresQolipStore {
         .bind(query)
         .bind(pattern)
         .bind(limit.max(1) as i64)
+        .bind(with_qolip_only)
         .fetch_all(&self.pool)
         .await
         .map_err(|_| QolipError::StoreFailed)?;
@@ -121,8 +138,65 @@ impl QolipStorePort for PostgresQolipStore {
                 code: row.code,
                 name: row.name,
                 item_group: row.item_group,
+                qolip_code: row.qolip_code,
+                size: row.size,
+                has_qolip_spec: row.has_qolip_spec,
             })
             .collect())
+    }
+
+    async fn product_spec(&self, item_code: &str) -> Result<Option<QolipProductSpec>, QolipError> {
+        let row = sqlx::query_as::<_, QolipProductSpecRow>(
+            "SELECT item_code, item_name, item_group, qolip_code, size,
+                    created_by_role, created_by_ref, created_by_name
+             FROM mini_qolip_product_specs
+             WHERE lower(item_code) = lower($1)",
+        )
+        .bind(item_code.trim())
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(|_| QolipError::StoreFailed)?;
+
+        Ok(row.map(row_to_product_spec))
+    }
+
+    async fn put_product_spec(
+        &self,
+        spec: QolipProductSpec,
+    ) -> Result<QolipProductSpec, QolipError> {
+        let row = sqlx::query_as::<_, QolipProductSpecRow>(
+            "INSERT INTO mini_qolip_product_specs (
+                 item_code, item_name, item_group, qolip_code, size,
+                 created_by_role, created_by_ref, created_by_name, payload_json
+             )
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+             ON CONFLICT (item_code) DO UPDATE SET
+                 item_name = excluded.item_name,
+                 item_group = excluded.item_group,
+                 qolip_code = excluded.qolip_code,
+                 size = excluded.size,
+                 created_by_role = excluded.created_by_role,
+                 created_by_ref = excluded.created_by_ref,
+                 created_by_name = excluded.created_by_name,
+                 payload_json = excluded.payload_json,
+                 updated_at = now()
+             RETURNING item_code, item_name, item_group, qolip_code, size,
+                 created_by_role, created_by_ref, created_by_name",
+        )
+        .bind(spec.item_code.trim())
+        .bind(spec.item_name.trim())
+        .bind(spec.item_group.trim())
+        .bind(spec.qolip_code.trim())
+        .bind(spec.size)
+        .bind(spec.created_by_role.trim())
+        .bind(spec.created_by_ref.trim())
+        .bind(spec.created_by_name.trim())
+        .bind(serde_json::to_value(&spec).map_err(|_| QolipError::StoreFailed)?)
+        .fetch_one(&self.pool)
+        .await
+        .map_err(|_| QolipError::StoreFailed)?;
+
+        Ok(row_to_product_spec(row))
     }
 
     async fn locations(&self, block: &str) -> Result<Vec<QolipLocation>, QolipError> {
@@ -239,6 +313,21 @@ struct QolipProductRow {
     code: String,
     name: String,
     item_group: String,
+    qolip_code: String,
+    size: i32,
+    has_qolip_spec: bool,
+}
+
+#[derive(sqlx::FromRow)]
+struct QolipProductSpecRow {
+    item_code: String,
+    item_name: String,
+    item_group: String,
+    qolip_code: String,
+    size: i32,
+    created_by_role: String,
+    created_by_ref: String,
+    created_by_name: String,
 }
 
 #[derive(sqlx::FromRow)]
@@ -286,6 +375,19 @@ fn row_to_location(row: QolipLocationRow) -> QolipLocation {
         row_letter: row.row_letter,
         column_number: row.column_number,
         location_label: row.location_label,
+        created_by_role: row.created_by_role,
+        created_by_ref: row.created_by_ref,
+        created_by_name: row.created_by_name,
+    }
+}
+
+fn row_to_product_spec(row: QolipProductSpecRow) -> QolipProductSpec {
+    QolipProductSpec {
+        item_code: row.item_code,
+        item_name: row.item_name,
+        item_group: row.item_group,
+        qolip_code: row.qolip_code,
+        size: row.size,
         created_by_role: row.created_by_role,
         created_by_ref: row.created_by_ref,
         created_by_name: row.created_by_name,

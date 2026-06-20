@@ -2,6 +2,7 @@ use crate::core::auth::models::{Principal, PrincipalRole};
 
 use super::models::{
     QolipCellQr, QolipCellQrInput, QolipError, QolipLocation, QolipLocationUpsert,
+    QolipProductSpec, QolipProductSpecUpsert,
 };
 
 pub(super) fn normalize_cell_qr(
@@ -88,6 +89,34 @@ pub(super) fn normalize_location(
         column_number,
         location_label,
         created_by_role: role,
+        created_by_ref: principal.ref_.trim().to_string(),
+        created_by_name: principal.display_name.trim().to_string(),
+    })
+}
+
+pub(super) fn normalize_product_spec(
+    input: QolipProductSpecUpsert,
+    principal: &Principal,
+) -> Result<QolipProductSpec, QolipError> {
+    let item_code = input.item_code.trim().to_string();
+    let item_name = input.item_name.trim().to_string();
+    let qolip_code = input.qolip_code.trim().to_string();
+    if item_code.is_empty() || item_name.is_empty() {
+        return Err(QolipError::MissingItem);
+    }
+    if qolip_code.is_empty() {
+        return Err(QolipError::MissingQolipCode);
+    }
+    if input.size <= 0 {
+        return Err(QolipError::InvalidSize);
+    }
+    Ok(QolipProductSpec {
+        item_code,
+        item_name,
+        item_group: input.item_group.trim().to_string(),
+        qolip_code,
+        size: input.size,
+        created_by_role: role_code(&principal.role).to_string(),
         created_by_ref: principal.ref_.trim().to_string(),
         created_by_name: principal.display_name.trim().to_string(),
     })

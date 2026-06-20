@@ -7,7 +7,7 @@ mod service;
 pub use memory_store::MemoryQolipStore;
 pub use models::{
     QolipBlock, QolipCellQr, QolipCellQrInput, QolipError, QolipLocation, QolipLocationUpsert,
-    QolipProduct,
+    QolipProduct, QolipProductSpec, QolipProductSpecUpsert,
 };
 pub use normalize::role_code;
 pub use ports::QolipStorePort;

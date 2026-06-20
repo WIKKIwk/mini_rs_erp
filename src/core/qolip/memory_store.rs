@@ -4,13 +4,16 @@ use tokio::sync::RwLock;
 
 use crate::core::auth::models::Principal;
 
-use super::models::{QolipBlock, QolipCellQr, QolipError, QolipLocation, QolipProduct};
+use super::models::{
+    QolipBlock, QolipCellQr, QolipError, QolipLocation, QolipProduct, QolipProductSpec,
+};
 use super::ports::QolipStorePort;
 
 #[derive(Default)]
 pub struct MemoryQolipStore {
     blocks: RwLock<Vec<QolipBlock>>,
     products: RwLock<Vec<QolipProduct>>,
+    product_specs: RwLock<BTreeMap<String, QolipProductSpec>>,
     locations: RwLock<Vec<QolipLocation>>,
     cell_qrs: RwLock<BTreeMap<String, QolipCellQr>>,
 }
@@ -51,21 +54,58 @@ impl QolipStorePort for MemoryQolipStore {
         Ok(self.blocks.read().await.clone())
     }
 
-    async fn products(&self, query: &str, limit: usize) -> Result<Vec<QolipProduct>, QolipError> {
+    async fn products(
+        &self,
+        query: &str,
+        limit: usize,
+        with_qolip_only: bool,
+    ) -> Result<Vec<QolipProduct>, QolipError> {
         let query = query.trim().to_lowercase();
-        Ok(self
-            .products
-            .read()
-            .await
+        let specs = self.product_specs.read().await;
+        let products = self.products.read().await;
+        Ok(products
             .iter()
-            .filter(|product| {
-                query.is_empty()
+            .filter_map(|product| {
+                let spec = specs.get(&product.code.trim().to_lowercase());
+                if with_qolip_only && spec.is_none() {
+                    return None;
+                }
+                let matches = query.is_empty()
                     || product.name.to_lowercase().contains(&query)
-                    || product.code.to_lowercase().contains(&query)
+                    || product.code.to_lowercase().contains(&query);
+                if !matches {
+                    return None;
+                }
+                let mut product = product.clone();
+                if let Some(spec) = spec {
+                    product.qolip_code = spec.qolip_code.clone();
+                    product.size = spec.size;
+                    product.has_qolip_spec = true;
+                }
+                Some(product)
             })
             .take(limit.max(1))
-            .cloned()
             .collect())
+    }
+
+    async fn product_spec(&self, item_code: &str) -> Result<Option<QolipProductSpec>, QolipError> {
+        Ok(self
+            .product_specs
+            .read()
+            .await
+            .get(&item_code.trim().to_lowercase())
+            .cloned())
+    }
+
+    async fn put_product_spec(
+        &self,
+        spec: QolipProductSpec,
+    ) -> Result<QolipProductSpec, QolipError> {
+        self.product_specs
+            .write()
+            .await
+            .insert(spec.item_code.trim().to_lowercase(), spec.clone());
+        Ok(spec)
     }
 
     async fn locations(&self, block: &str) -> Result<Vec<QolipLocation>, QolipError> {

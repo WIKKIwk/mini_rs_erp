@@ -8,7 +8,9 @@ use crate::app::AppState;
 use crate::core::auth::models::Principal;
 use crate::core::authz::Capability;
 use crate::core::gscale::{GscaleServiceError, ProgressLabelPrintRequest};
-use crate::core::qolip::{QolipBlock, QolipCellQrInput, QolipError, QolipLocationUpsert};
+use crate::core::qolip::{
+    QolipBlock, QolipCellQrInput, QolipError, QolipLocationUpsert, QolipProductSpecUpsert,
+};
 use crate::core::warehouses::WarehouseUpsert;
 use crate::http::handlers::auth::bearer_token;
 
@@ -85,12 +87,47 @@ pub async fn products(
     ensure_qolip_access(&state, &principal).await?;
     let products = state
         .qolip
-        .products(query.q.as_deref().unwrap_or(""), query.limit.unwrap_or(50))
+        .products(
+            query.q.as_deref().unwrap_or(""),
+            query.limit.unwrap_or(50),
+            query.with_qolip.unwrap_or(false),
+        )
         .await
         .map_err(qolip_error)?;
     Ok(Json(serde_json::json!({
         "ok": true,
         "products": products,
+    })))
+}
+
+pub async fn product_specs(
+    State(state): State<AppState>,
+    method: Method,
+    headers: HeaderMap,
+    body: Bytes,
+) -> Result<Json<serde_json::Value>, (StatusCode, Json<QolipErrorResponse>)> {
+    if method != Method::POST {
+        return Err(method_not_allowed());
+    }
+    let principal = authenticated_principal(&state, &headers).await?;
+    ensure_qolip_access(&state, &principal).await?;
+    let input: QolipProductSpecUpsert =
+        serde_json::from_slice(&body).map_err(|_| bad_request("invalid_json"))?;
+    let spec = state
+        .qolip
+        .upsert_product_spec(input, &principal)
+        .await
+        .map_err(qolip_error)?;
+    Ok(Json(serde_json::json!({
+        "ok": true,
+        "product": {
+            "code": spec.item_code,
+            "name": spec.item_name,
+            "item_group": spec.item_group,
+            "qolip_code": spec.qolip_code,
+            "size": spec.size,
+            "has_qolip_spec": true,
+        },
     })))
 }
 
@@ -260,6 +297,7 @@ pub struct QolipSearchQuery {
     q: Option<String>,
     block: Option<String>,
     limit: Option<usize>,
+    with_qolip: Option<bool>,
 }
 
 #[derive(Debug, Deserialize)]

@@ -11,6 +11,35 @@ pub struct QolipProduct {
     pub code: String,
     pub name: String,
     pub item_group: String,
+    pub qolip_code: String,
+    pub size: i32,
+    pub has_qolip_spec: bool,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct QolipProductSpec {
+    pub item_code: String,
+    pub item_name: String,
+    pub item_group: String,
+    pub qolip_code: String,
+    pub size: i32,
+    pub created_by_role: String,
+    pub created_by_ref: String,
+    pub created_by_name: String,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize)]
+pub struct QolipProductSpecUpsert {
+    #[serde(default)]
+    pub item_code: String,
+    #[serde(default)]
+    pub item_name: String,
+    #[serde(default)]
+    pub item_group: String,
+    #[serde(default)]
+    pub qolip_code: String,
+    #[serde(default)]
+    pub size: i32,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -67,6 +96,8 @@ pub struct QolipLocationUpsert {
     pub item_code: String,
     #[serde(default)]
     pub item_name: String,
+    #[serde(default)]
+    pub item_group: String,
     #[serde(default)]
     pub qolip_code: String,
     #[serde(default)]
