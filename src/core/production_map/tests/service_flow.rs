@@ -592,6 +592,115 @@ async fn downstream_start_with_previous_qr_can_skip_pending_sequence_head() {
 }
 
 #[tokio::test]
+async fn downstream_start_rejects_mismatched_progress_batch_id_and_qr() {
+    let service = ProductionMapService::new(std::sync::Arc::new(MemoryProductionMapStore::new()));
+    let actor = QueueActionActor {
+        role: "aparatchi".to_string(),
+        ref_: "worker-downstream-mismatch".to_string(),
+        display_name: "Worker Downstream Mismatch".to_string(),
+    };
+    let first = "Bosma aparat";
+    let second = "Laminatsiya mashinasi";
+    let first_order = "zakaz-downstream-match";
+    let second_order = "zakaz-downstream-other";
+    service
+        .upsert_map(two_stage_map(first_order, first, second))
+        .await
+        .expect("first map");
+    service
+        .upsert_map(two_stage_map(second_order, first, second))
+        .await
+        .expect("second map");
+
+    let first_batch = pause_first_stage_batch(&service, first_order, first, &actor, 11.0)
+        .await
+        .expect("first batch");
+    service
+        .apply_apparatus_queue_action_with_progress(
+            first,
+            first_order,
+            queue_state::ApparatusQueueAction::Resume,
+            &[first.to_string()],
+            actor.clone(),
+            QueueProgressInput {
+                qr_payload: first_batch.qr_payload.clone(),
+                ..QueueProgressInput::default()
+            },
+        )
+        .await
+        .expect("first resume");
+    service
+        .apply_apparatus_queue_action_with_progress(
+            first,
+            first_order,
+            queue_state::ApparatusQueueAction::Complete,
+            &[first.to_string()],
+            actor.clone(),
+            QueueProgressInput {
+                produced_qty: Some(11.0),
+                uom: "kg".to_string(),
+                ..QueueProgressInput::default()
+            },
+        )
+        .await
+        .expect("first complete");
+    let second_batch = pause_first_stage_batch(&service, second_order, first, &actor, 12.0)
+        .await
+        .expect("second batch");
+
+    let rejected = service
+        .apply_apparatus_queue_action_with_progress(
+            second,
+            first_order,
+            queue_state::ApparatusQueueAction::Start,
+            &[second.to_string()],
+            actor,
+            QueueProgressInput {
+                progress_batch_id: first_batch.batch_id,
+                qr_payload: second_batch.qr_payload,
+                ..QueueProgressInput::default()
+            },
+        )
+        .await;
+    assert_eq!(rejected, Err(ProductionMapError::ProgressBatchNotFound));
+}
+
+#[tokio::test]
+async fn downstream_start_requires_qr_payload_not_only_progress_batch_id() {
+    let service = ProductionMapService::new(std::sync::Arc::new(MemoryProductionMapStore::new()));
+    let actor = QueueActionActor {
+        role: "aparatchi".to_string(),
+        ref_: "worker-downstream-id-only".to_string(),
+        display_name: "Worker Downstream Id Only".to_string(),
+    };
+    let first = "Bosma aparat";
+    let second = "Laminatsiya mashinasi";
+    let order_id = "zakaz-downstream-id-only";
+    service
+        .upsert_map(two_stage_map(order_id, first, second))
+        .await
+        .expect("map");
+    let batch = pause_first_stage_batch(&service, order_id, first, &actor, 8.0)
+        .await
+        .expect("batch");
+
+    let rejected = service
+        .apply_apparatus_queue_action_with_progress(
+            second,
+            order_id,
+            queue_state::ApparatusQueueAction::Start,
+            &[second.to_string()],
+            actor,
+            QueueProgressInput {
+                progress_batch_id: batch.batch_id,
+                ..QueueProgressInput::default()
+            },
+        )
+        .await;
+    assert_eq!(rejected, Err(ProductionMapError::ProgressQrRequired));
+}
+
+#[tokio::test]
 async fn upsert_maps_batch_keeps_queue_state_and_sequence_cache() {
     let store = std::sync::Arc::new(MemoryProductionMapStore::new());
     let service = ProductionMapService::new(store);
@@ -643,6 +752,42 @@ async fn upsert_maps_batch_keeps_queue_state_and_sequence_cache() {
             .and_then(|states| states.get("zakaz-111")),
         Some(&"completed".to_string())
     );
+}
+
+async fn pause_first_stage_batch(
+    service: &ProductionMapService,
+    order_id: &str,
+    first: &str,
+    actor: &QueueActionActor,
+    qty: f64,
+) -> Result<OrderProgressBatch, ProductionMapError> {
+    service
+        .apply_apparatus_queue_action_with_progress(
+            first,
+            order_id,
+            queue_state::ApparatusQueueAction::Start,
+            &[first.to_string()],
+            actor.clone(),
+            QueueProgressInput::default(),
+        )
+        .await?;
+    let paused = service
+        .apply_apparatus_queue_action_with_progress(
+            first,
+            order_id,
+            queue_state::ApparatusQueueAction::Pause,
+            &[first.to_string()],
+            actor.clone(),
+            QueueProgressInput {
+                produced_qty: Some(qty),
+                uom: "kg".to_string(),
+                ..QueueProgressInput::default()
+            },
+        )
+        .await?;
+    paused
+        .progress_batch
+        .ok_or(ProductionMapError::ProgressBatchNotFound)
 }
 
 fn two_stage_map(id: &str, first: &str, second: &str) -> ProductionMapDefinition {

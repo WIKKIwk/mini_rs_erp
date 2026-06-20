@@ -13,9 +13,21 @@ impl ProductionMapService {
         progress_batch_id: &str,
         qr_payload: &str,
     ) -> Result<OrderProgressBatch, ProductionMapError> {
-        let batch = if !progress_batch_id.trim().is_empty() {
-            self.store.progress_batch(progress_batch_id).await?
-        } else if !qr_payload.trim().is_empty() {
+        let progress_batch_id = progress_batch_id.trim();
+        let qr_payload = qr_payload.trim();
+        let batch = if !progress_batch_id.is_empty() {
+            let batch = self.store.progress_batch(progress_batch_id).await?;
+            if let Some(batch) = batch {
+                if !qr_payload.is_empty()
+                    && !batch.qr_payload.trim().eq_ignore_ascii_case(qr_payload)
+                {
+                    return Err(ProductionMapError::ProgressBatchNotFound);
+                }
+                Some(batch)
+            } else {
+                None
+            }
+        } else if !qr_payload.is_empty() {
             self.store.progress_batch_by_qr(qr_payload).await?
         } else {
             return Err(ProductionMapError::ProgressInputInvalid);
@@ -34,7 +46,7 @@ impl ProductionMapService {
         else {
             return Ok(None);
         };
-        if progress.progress_batch_id.trim().is_empty() && progress.qr_payload.trim().is_empty() {
+        if progress.qr_payload.trim().is_empty() {
             return Err(ProductionMapError::ProgressQrRequired);
         }
         let batch = self
