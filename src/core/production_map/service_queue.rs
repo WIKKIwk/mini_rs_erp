@@ -235,6 +235,13 @@ impl ProductionMapService {
             .iter()
             .find(|map| map.id.trim() == order_id)
             .ok_or(ProductionMapError::MapNotFound)?;
+        let previous_progress_ready = if action == queue_state::ApparatusQueueAction::Start {
+            self.previous_stage_start_progress_batch(order_id, order_map, apparatus, &progress)
+                .await?
+                .is_some()
+        } else {
+            false
+        };
         let states = all_states.get(&storage_key).cloned().unwrap_or_default();
         let mut parsed = BTreeMap::new();
         for (id, value) in states {
@@ -247,8 +254,11 @@ impl ProductionMapService {
             .copied()
             .unwrap_or(queue_state::ApparatusQueueOrderState::Pending);
         match policy {
-            ApparatusQueuePolicy::StrictSequence => {
+            ApparatusQueuePolicy::StrictSequence if !previous_progress_ready => {
                 queue_state::apply_queue_action(&sequence, &mut parsed, order_id, action)?;
+            }
+            ApparatusQueuePolicy::StrictSequence => {
+                queue_state::apply_unordered_queue_action(&mut parsed, order_id, action)?;
             }
             ApparatusQueuePolicy::FreePick => {
                 queue_state::apply_unordered_queue_action(&mut parsed, order_id, action)?;

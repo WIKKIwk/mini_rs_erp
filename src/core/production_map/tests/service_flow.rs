@@ -507,6 +507,91 @@ async fn downstream_start_accepts_previous_stage_qr_after_resume() {
 }
 
 #[tokio::test]
+async fn downstream_start_with_previous_qr_can_skip_pending_sequence_head() {
+    let service = ProductionMapService::new(std::sync::Arc::new(MemoryProductionMapStore::new()));
+    let actor = QueueActionActor {
+        role: "aparatchi".to_string(),
+        ref_: "worker-downstream-free".to_string(),
+        display_name: "Worker Downstream Free".to_string(),
+    };
+    let first = "Bosma aparat";
+    let second = "Laminatsiya mashinasi";
+    let waiting_order = "zakaz-downstream-waiting";
+    let ready_order = "zakaz-downstream-ready";
+    service
+        .upsert_map(two_stage_map(waiting_order, first, second))
+        .await
+        .expect("waiting map");
+    service
+        .upsert_map(two_stage_map(ready_order, first, second))
+        .await
+        .expect("ready map");
+    service
+        .set_apparatus_sequence(
+            second,
+            vec![waiting_order.to_string(), ready_order.to_string()],
+        )
+        .await
+        .expect("second sequence");
+
+    service
+        .apply_apparatus_queue_action_with_progress(
+            first,
+            ready_order,
+            queue_state::ApparatusQueueAction::Start,
+            &[first.to_string()],
+            actor.clone(),
+            QueueProgressInput::default(),
+        )
+        .await
+        .expect("first start ready order");
+    let paused = service
+        .apply_apparatus_queue_action_with_progress(
+            first,
+            ready_order,
+            queue_state::ApparatusQueueAction::Pause,
+            &[first.to_string()],
+            actor.clone(),
+            QueueProgressInput {
+                produced_qty: Some(9.0),
+                uom: "kg".to_string(),
+                ..QueueProgressInput::default()
+            },
+        )
+        .await
+        .expect("first pause ready order");
+    let qr_payload = paused
+        .progress_batch
+        .as_ref()
+        .expect("pause batch")
+        .qr_payload
+        .clone();
+
+    let second_started = service
+        .apply_apparatus_queue_action_with_progress(
+            second,
+            ready_order,
+            queue_state::ApparatusQueueAction::Start,
+            &[second.to_string()],
+            actor,
+            QueueProgressInput {
+                qr_payload,
+                ..QueueProgressInput::default()
+            },
+        )
+        .await
+        .expect("second start skips waiting order with previous qr");
+    assert_eq!(
+        second_started.states.get(ready_order),
+        Some(&"in_progress".to_string())
+    );
+    assert_ne!(
+        second_started.states.get(waiting_order),
+        Some(&"in_progress".to_string())
+    );
+}
+
+#[tokio::test]
 async fn upsert_maps_batch_keeps_queue_state_and_sequence_cache() {
     let store = std::sync::Arc::new(MemoryProductionMapStore::new());
     let service = ProductionMapService::new(store);

@@ -23,7 +23,7 @@ impl ProductionMapService {
         batch.ok_or(ProductionMapError::ProgressBatchNotFound)
     }
 
-    async fn previous_stage_start_progress_batch(
+    pub(in crate::core::production_map) async fn previous_stage_start_progress_batch(
         &self,
         order_id: &str,
         order_map: &ProductionMapDefinition,
