@@ -1,7 +1,7 @@
 use super::super::helpers::*;
 use super::super::*;
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 impl AdminService {
     pub async fn user_list_page(
@@ -21,9 +21,53 @@ impl AdminService {
         let customers = read.customers_page(query, fetch_limit, 0).await?;
         let normalized_query = normalize_search(query);
         let mut entries = Vec::new();
+        let mut seen_ids = BTreeSet::new();
+
+        for assignment in assignments.iter().filter(|assignment| {
+            assignment.principal_role == PrincipalRole::Qolipchi
+                && assignment.role_id.trim() == "qolipchi"
+        }) {
+            let customer_ref = assignment.principal_ref.trim();
+            if customer_ref.is_empty() {
+                continue;
+            }
+            let customers = read.customers_page(customer_ref, 10, 0).await?;
+            let Some(customer) = customers
+                .into_iter()
+                .find(|customer| customer.ref_.trim() == customer_ref)
+            else {
+                continue;
+            };
+            let state = states
+                .get(customer.ref_.trim())
+                .cloned()
+                .unwrap_or_default();
+            if state.removed {
+                continue;
+            }
+            let entry = customer_directory_entry(customer);
+            let role_label = role_labels
+                .get(&role_assignment_key(&PrincipalRole::Qolipchi, &entry.ref_))
+                .cloned()
+                .unwrap_or_else(|| "Qolipchi".to_string());
+            let entry = AdminUserListEntry {
+                id: format!("qolipchi:{}", entry.ref_),
+                source: "qolipchi".to_string(),
+                entity_ref: entry.ref_,
+                principal_role: PrincipalRole::Qolipchi,
+                name: entry.name,
+                phone: entry.phone,
+                role_label,
+                blocked: false,
+                status: "active".to_string(),
+            };
+            if user_list_matches(&entry, &normalized_query) && seen_ids.insert(entry.id.clone()) {
+                entries.push(entry);
+            }
+        }
 
         if let Some(entry) = werka_user_list_entry(&settings, &role_labels) {
-            if user_list_matches(&entry, &normalized_query) {
+            if user_list_matches(&entry, &normalized_query) && seen_ids.insert(entry.id.clone()) {
                 entries.push(entry);
             }
         }
@@ -51,7 +95,7 @@ impl AdminService {
                     "active".to_string()
                 },
             };
-            if user_list_matches(&entry, &normalized_query) {
+            if user_list_matches(&entry, &normalized_query) && seen_ids.insert(entry.id.clone()) {
                 entries.push(entry);
             }
         }
@@ -82,7 +126,7 @@ impl AdminService {
                 blocked: false,
                 status: "active".to_string(),
             };
-            if user_list_matches(&entry, &normalized_query) {
+            if user_list_matches(&entry, &normalized_query) && seen_ids.insert(entry.id.clone()) {
                 entries.push(entry);
             }
         }

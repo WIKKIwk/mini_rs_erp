@@ -59,7 +59,10 @@ async fn admin_user_list_marks_qolipchi_role_users_as_qolipchi() {
         })
         .await
         .expect("assignment");
-    state.admin = state.admin.with_role_store(role_store);
+    state.admin = state
+        .admin
+        .with_role_store(role_store)
+        .with_read_port(Arc::new(QolipchiCustomerLookupReadPort));
     let token = session(&state, PrincipalRole::Admin).await;
 
     let response = build_router(state)
@@ -77,6 +80,7 @@ async fn admin_user_list_marks_qolipchi_role_users_as_qolipchi() {
     assert_eq!(value["items"][0]["id"], "qolipchi:CUST-001");
     assert_eq!(value["items"][0]["source"], "qolipchi");
     assert_eq!(value["items"][0]["entity_ref"], "CUST-001");
+    assert_eq!(value["items"][0]["name"], "Jumaniyoz");
     assert_eq!(value["items"][0]["principal_role"], "qolipchi");
     assert_eq!(value["items"][0]["role_label"], "Qolipchi");
 }
