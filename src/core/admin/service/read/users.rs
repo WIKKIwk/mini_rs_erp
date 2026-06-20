@@ -1,0 +1,174 @@
+use super::super::helpers::*;
+use super::super::*;
+
+use std::collections::BTreeMap;
+
+impl AdminService {
+    pub async fn user_list_page(
+        &self,
+        query: &str,
+        limit: usize,
+        offset: usize,
+    ) -> Result<AdminUserListPage, AdminPortError> {
+        let fetch_limit = offset.saturating_add(limit).saturating_add(1);
+        let settings = self.settings().await?;
+        let roles = self.role_definitions().await?;
+        let assignments = self.role_assignments().await?;
+        let role_labels = role_label_lookup(&roles, &assignments);
+        let states = self.states().await?;
+        let read = self.read_port()?;
+        let suppliers = read.suppliers_page(query, fetch_limit, 0).await?;
+        let customers = read.customers_page(query, fetch_limit, 0).await?;
+        let normalized_query = normalize_search(query);
+        let mut entries = Vec::new();
+
+        if let Some(entry) = werka_user_list_entry(&settings, &role_labels) {
+            if user_list_matches(&entry, &normalized_query) {
+                entries.push(entry);
+            }
+        }
+
+        for supplier in self.admin_suppliers_from_entries(suppliers, &states)? {
+            let role_label = role_labels
+                .get(&role_assignment_key(
+                    &PrincipalRole::Supplier,
+                    &supplier.ref_,
+                ))
+                .cloned()
+                .unwrap_or_else(|| "Supplier".to_string());
+            let entry = AdminUserListEntry {
+                id: format!("supplier:{}", supplier.ref_),
+                source: "supplier".to_string(),
+                entity_ref: supplier.ref_,
+                principal_role: PrincipalRole::Supplier,
+                name: supplier.name,
+                phone: supplier.phone,
+                role_label,
+                blocked: supplier.blocked,
+                status: if supplier.blocked {
+                    "blocked".to_string()
+                } else {
+                    "active".to_string()
+                },
+            };
+            if user_list_matches(&entry, &normalized_query) {
+                entries.push(entry);
+            }
+        }
+
+        for customer in customers {
+            let state = states
+                .get(customer.ref_.trim())
+                .cloned()
+                .unwrap_or_default();
+            if state.removed {
+                continue;
+            }
+            let entry = customer_directory_entry(customer);
+            let role_label = role_labels
+                .get(&role_assignment_key(&PrincipalRole::Customer, &entry.ref_))
+                .cloned()
+                .unwrap_or_else(|| "Customer".to_string());
+            let entry = AdminUserListEntry {
+                id: format!("customer:{}", entry.ref_),
+                source: "customer".to_string(),
+                entity_ref: entry.ref_,
+                principal_role: PrincipalRole::Customer,
+                name: entry.name,
+                phone: entry.phone,
+                role_label,
+                blocked: false,
+                status: "active".to_string(),
+            };
+            if user_list_matches(&entry, &normalized_query) {
+                entries.push(entry);
+            }
+        }
+
+        let has_more = entries.len() > offset.saturating_add(limit);
+        let items = entries.into_iter().skip(offset).take(limit).collect();
+        Ok(AdminUserListPage { items, has_more })
+    }
+
+    pub async fn worker_detail(&self, worker: Worker) -> Result<AdminWorkerDetail, AdminPortError> {
+        let state = self.state_for(&worker.id).await?;
+        if state.removed {
+            return Err(AdminPortError::NotFound);
+        }
+        let now = OffsetDateTime::now_utc();
+        Ok(AdminWorkerDetail {
+            id: worker.id,
+            name: worker.name,
+            phone: worker.phone,
+            level: worker.level,
+            code: state.custom_code.trim().to_string(),
+            code_locked: state.code_locked(now),
+            code_retry_after_sec: state.retry_after_seconds(now),
+        })
+    }
+
+    pub async fn activity(&self, items: AdminActivity) -> Result<AdminActivity, AdminPortError> {
+        Ok(items.into_iter().take(30).collect())
+    }
+}
+
+fn role_label_lookup(
+    roles: &[RoleDefinition],
+    assignments: &[RoleAssignment],
+) -> BTreeMap<String, String> {
+    let labels = roles
+        .iter()
+        .map(|role| (role.id.as_str(), role.label.trim()))
+        .collect::<BTreeMap<_, _>>();
+    assignments
+        .iter()
+        .filter_map(|assignment| {
+            labels.get(assignment.role_id.as_str()).map(|label| {
+                (
+                    role_assignment_key(&assignment.principal_role, &assignment.principal_ref),
+                    (*label).to_string(),
+                )
+            })
+        })
+        .collect()
+}
+
+fn werka_user_list_entry(
+    settings: &AdminSettings,
+    role_labels: &BTreeMap<String, String>,
+) -> Option<AdminUserListEntry> {
+    if settings.werka_name.trim().is_empty() && settings.werka_phone.trim().is_empty() {
+        return None;
+    }
+    Some(AdminUserListEntry {
+        id: "werka:werka".to_string(),
+        source: "werka".to_string(),
+        entity_ref: "werka".to_string(),
+        principal_role: PrincipalRole::Werka,
+        name: if settings.werka_name.trim().is_empty() {
+            "Werka".to_string()
+        } else {
+            settings.werka_name.trim().to_string()
+        },
+        phone: settings.werka_phone.trim().to_string(),
+        role_label: role_labels
+            .get(&role_assignment_key(&PrincipalRole::Werka, "werka"))
+            .cloned()
+            .unwrap_or_else(|| "Werka".to_string()),
+        blocked: false,
+        status: "active".to_string(),
+    })
+}
+
+fn normalize_search(value: &str) -> String {
+    value.trim().to_lowercase()
+}
+
+fn user_list_matches(entry: &AdminUserListEntry, query: &str) -> bool {
+    query.is_empty()
+        || entry.name.to_lowercase().contains(query)
+        || entry.phone.to_lowercase().contains(query)
+        || entry.entity_ref.to_lowercase().contains(query)
+        || entry.role_label.to_lowercase().contains(query)
+        || entry.source.to_lowercase().contains(query)
+}
