@@ -373,3 +373,103 @@ async fn admin_worker_detail_regenerates_login_code_like_customer() {
     assert_eq!(login_body["profile"]["role"], "aparatchi");
     assert_eq!(login_body["profile"]["ref"], "worker_code_1");
 }
+
+#[tokio::test]
+async fn admin_worker_profile_detail_returns_assignments_and_activity() {
+    let state = test_state();
+    let admin_token = session(&state, PrincipalRole::Admin).await;
+
+    let created = build_router(state.clone())
+        .oneshot(request_with_body(
+            "POST",
+            "/v1/mobile/admin/workers",
+            &admin_token,
+            r#"{"id":"worker_profile_1","name":"Profile worker","phone":"+998901112255","level":"Master"}"#,
+        ))
+        .await
+        .expect("create worker");
+    assert_eq!(created.status(), StatusCode::OK);
+
+    let group = build_router(state.clone())
+        .oneshot(request_with_body(
+            "PUT",
+            "/v1/mobile/admin/worker-groups",
+            &admin_token,
+            r#"{
+                "apparatus":"7 ta rangli pechat",
+                "group_code":"A",
+                "shift":"kunduz",
+                "worker_ids":["worker_profile_1"]
+            }"#,
+        ))
+        .await
+        .expect("save group");
+    assert_eq!(group.status(), StatusCode::OK);
+
+    let map = build_router(state.clone())
+        .oneshot(request_with_body(
+            "PUT",
+            "/v1/mobile/admin/production-maps",
+            &admin_token,
+            &pechat_order_map_json(
+                "zakaz-worker-profile",
+                "Profile order",
+                "9911",
+                "7 ta rangli pechat",
+            ),
+        ))
+        .await
+        .expect("save map");
+    assert_eq!(map.status(), StatusCode::OK);
+
+    let sequence = build_router(state.clone())
+        .oneshot(request_with_body(
+            "PUT",
+            "/v1/mobile/admin/production-maps/sequence",
+            &admin_token,
+            r#"{
+                "apparatus":"7 ta rangli pechat",
+                "order_ids":["zakaz-worker-profile"]
+            }"#,
+        ))
+        .await
+        .expect("save sequence");
+    assert_eq!(sequence.status(), StatusCode::OK);
+
+    let worker_token = session_for(&state, PrincipalRole::Aparatchi, "worker_profile_1").await;
+    let started = build_router(state.clone())
+        .oneshot(request_with_body(
+            "POST",
+            "/v1/mobile/admin/production-maps/queue-action",
+            &worker_token,
+            r#"{
+                "apparatus":"7 ta rangli pechat",
+                "order_id":"zakaz-worker-profile",
+                "action":"start"
+            }"#,
+        ))
+        .await
+        .expect("start queue");
+    assert_eq!(started.status(), StatusCode::OK);
+
+    let detail = build_router(state)
+        .oneshot(request(
+            "GET",
+            "/v1/mobile/admin/workers/profile-detail?id=worker_profile_1",
+            &admin_token,
+        ))
+        .await
+        .expect("worker profile detail");
+    assert_eq!(detail.status(), StatusCode::OK);
+    let body = json_body(detail).await;
+    assert_eq!(body["worker"]["id"], "worker_profile_1");
+    assert_eq!(
+        body["assigned_groups"][0]["apparatus"],
+        "7 ta rangli pechat"
+    );
+    assert_eq!(
+        body["active_sessions"][0]["order_id"],
+        "zakaz-worker-profile"
+    );
+    assert_eq!(body["recent_logs"][0]["actor_ref"], "worker_profile_1");
+}

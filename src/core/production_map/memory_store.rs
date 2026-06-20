@@ -177,12 +177,31 @@ impl ProductionMapStorePort for MemoryProductionMapStore {
         queue::queue_action_logs_for_orders(self, order_ids).await
     }
 
+    async fn queue_action_logs_for_worker(
+        &self,
+        worker_refs: &[String],
+        worker_display_name: &str,
+        limit: usize,
+    ) -> Result<Vec<ProductionOrderLogEntry>, ProductionMapError> {
+        queue::queue_action_logs_for_worker(self, worker_refs, worker_display_name, limit).await
+    }
+
     async fn active_order_run_session(
         &self,
         apparatus: &str,
         order_id: &str,
     ) -> Result<Option<OrderRunSession>, ProductionMapError> {
         runs::active_order_run_session(self, apparatus, order_id).await
+    }
+
+    async fn active_order_run_sessions_for_worker(
+        &self,
+        worker_refs: &[String],
+        worker_display_name: &str,
+        limit: usize,
+    ) -> Result<Vec<OrderRunSession>, ProductionMapError> {
+        runs::active_order_run_sessions_for_worker(self, worker_refs, worker_display_name, limit)
+            .await
     }
 
     async fn order_run_session(
@@ -204,6 +223,15 @@ impl ProductionMapStorePort for MemoryProductionMapStore {
         qr_payload: &str,
     ) -> Result<Option<OrderProgressBatch>, ProductionMapError> {
         runs::progress_batch_by_qr(self, qr_payload).await
+    }
+
+    async fn progress_batches_for_worker(
+        &self,
+        worker_refs: &[String],
+        worker_display_name: &str,
+        limit: usize,
+    ) -> Result<Vec<OrderProgressBatch>, ProductionMapError> {
+        runs::progress_batches_for_worker(self, worker_refs, worker_display_name, limit).await
     }
 
     async fn put_order_run_session(

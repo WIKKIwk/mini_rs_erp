@@ -256,3 +256,56 @@ pub(super) async fn queue_action_logs_for_orders(
     }
     Ok(by_order)
 }
+
+pub(super) async fn queue_action_logs_for_worker(
+    store: &MemoryProductionMapStore,
+    worker_refs: &[String],
+    worker_display_name: &str,
+    limit: usize,
+) -> Result<Vec<ProductionOrderLogEntry>, ProductionMapError> {
+    let worker_refs = worker_refs
+        .iter()
+        .map(|item| item.trim().to_string())
+        .filter(|item| !item.is_empty())
+        .collect::<BTreeSet<_>>();
+    let worker_display_name = worker_display_name.trim().to_ascii_lowercase();
+    if worker_refs.is_empty() && worker_display_name.is_empty() || limit == 0 {
+        return Ok(Vec::new());
+    }
+    let events = store.queue_events.read().await;
+    let mut logs = Vec::new();
+    for (index, event) in events.iter().enumerate().rev() {
+        let matches_ref = worker_refs.contains(event.actor.ref_.trim());
+        let matches_name = !worker_display_name.is_empty()
+            && event
+                .actor
+                .display_name
+                .trim()
+                .eq_ignore_ascii_case(&worker_display_name);
+        if !matches_ref && !matches_name {
+            continue;
+        }
+        logs.push(ProductionOrderLogEntry {
+            event_id: event.event_id.trim().to_string(),
+            apparatus: event.apparatus.trim().to_string(),
+            order_id: event.order_id.trim().to_string(),
+            action: event.action,
+            from_state: event.from_state,
+            to_state: event.to_state,
+            actor_role: event.actor.role.trim().to_string(),
+            actor_ref: event.actor.ref_.trim().to_string(),
+            actor_display_name: actor_display_name(&event.actor),
+            created_at_unix: index as i64 + 1,
+            completed_with_issue: event
+                .payload_json
+                .get("completed_with_issue")
+                .and_then(|value| value.as_bool())
+                .unwrap_or(false),
+            issue_note: json_string_field(&event.payload_json, "issue_note"),
+        });
+        if logs.len() >= limit.min(500) {
+            break;
+        }
+    }
+    Ok(logs)
+}

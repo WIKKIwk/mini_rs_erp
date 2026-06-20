@@ -33,7 +33,9 @@ pub use system::{
 };
 use system::{authorize_any_capability, authorize_capability, require_capability};
 pub use warehouse_live::warehouse_live;
-pub use workers::{worker_code_regenerate, worker_detail, worker_groups, workers};
+pub use workers::{
+    worker_code_regenerate, worker_detail, worker_groups, worker_profile_detail, workers,
+};
 
 use axum::Json;
 use axum::body::Bytes;

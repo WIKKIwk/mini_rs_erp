@@ -37,8 +37,10 @@ use self::material_helpers::{
     save_apparatus_material_rule, save_raw_material_assignment,
 };
 use self::order_query_helpers::{
-    load_active_order_run_session, load_completed_queue_orders_for_actor, load_order_run_session,
-    load_progress_batch, load_progress_batch_by_qr, load_queue_action_logs_for_orders,
+    load_active_order_run_session, load_active_order_run_sessions_for_worker,
+    load_completed_queue_orders_for_actor, load_order_run_session, load_progress_batch,
+    load_progress_batch_by_qr, load_progress_batches_for_worker, load_queue_action_logs_for_orders,
+    load_queue_action_logs_for_worker,
 };
 use self::progress_helpers::{
     put_order_progress_batch, put_order_progress_batch_tx, put_order_progress_event,
@@ -234,12 +236,36 @@ impl ProductionMapStorePort for PostgresProductionMapStore {
         load_queue_action_logs_for_orders(&self.pool, order_ids).await
     }
 
+    async fn queue_action_logs_for_worker(
+        &self,
+        worker_refs: &[String],
+        worker_display_name: &str,
+        limit: usize,
+    ) -> Result<Vec<ProductionOrderLogEntry>, ProductionMapError> {
+        load_queue_action_logs_for_worker(&self.pool, worker_refs, worker_display_name, limit).await
+    }
+
     async fn active_order_run_session(
         &self,
         apparatus: &str,
         order_id: &str,
     ) -> Result<Option<OrderRunSession>, ProductionMapError> {
         load_active_order_run_session(&self.pool, apparatus, order_id).await
+    }
+
+    async fn active_order_run_sessions_for_worker(
+        &self,
+        worker_refs: &[String],
+        worker_display_name: &str,
+        limit: usize,
+    ) -> Result<Vec<OrderRunSession>, ProductionMapError> {
+        load_active_order_run_sessions_for_worker(
+            &self.pool,
+            worker_refs,
+            worker_display_name,
+            limit,
+        )
+        .await
     }
 
     async fn order_run_session(
@@ -261,6 +287,15 @@ impl ProductionMapStorePort for PostgresProductionMapStore {
         qr_payload: &str,
     ) -> Result<Option<OrderProgressBatch>, ProductionMapError> {
         load_progress_batch_by_qr(&self.pool, qr_payload).await
+    }
+
+    async fn progress_batches_for_worker(
+        &self,
+        worker_refs: &[String],
+        worker_display_name: &str,
+        limit: usize,
+    ) -> Result<Vec<OrderProgressBatch>, ProductionMapError> {
+        load_progress_batches_for_worker(&self.pool, worker_refs, worker_display_name, limit).await
     }
 
     async fn put_order_run_session(

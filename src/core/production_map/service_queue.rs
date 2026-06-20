@@ -52,6 +52,39 @@ impl ProductionMapService {
             .await
     }
 
+    pub async fn active_order_run_sessions_for_worker(
+        &self,
+        worker_refs: &[String],
+        worker_display_name: &str,
+        limit: usize,
+    ) -> Result<Vec<OrderRunSession>, ProductionMapError> {
+        self.store
+            .active_order_run_sessions_for_worker(worker_refs, worker_display_name, limit)
+            .await
+    }
+
+    pub async fn progress_batches_for_worker(
+        &self,
+        worker_refs: &[String],
+        worker_display_name: &str,
+        limit: usize,
+    ) -> Result<Vec<OrderProgressBatch>, ProductionMapError> {
+        self.store
+            .progress_batches_for_worker(worker_refs, worker_display_name, limit)
+            .await
+    }
+
+    pub async fn queue_action_logs_for_worker(
+        &self,
+        worker_refs: &[String],
+        worker_display_name: &str,
+        limit: usize,
+    ) -> Result<Vec<ProductionOrderLogEntry>, ProductionMapError> {
+        self.store
+            .queue_action_logs_for_worker(worker_refs, worker_display_name, limit)
+            .await
+    }
+
     pub async fn completion_requests(
         &self,
         limit: usize,

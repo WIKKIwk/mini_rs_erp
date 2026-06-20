@@ -91,6 +91,39 @@ pub(super) async fn load_queue_action_logs_for_orders(
     Ok(logs)
 }
 
+pub(super) async fn load_queue_action_logs_for_worker(
+    pool: &PgPool,
+    worker_refs: &[String],
+    worker_display_name: &str,
+    limit: usize,
+) -> Result<Vec<ProductionOrderLogEntry>, ProductionMapError> {
+    let worker_refs = normalized_refs(worker_refs);
+    let worker_display_name = worker_display_name.trim();
+    if worker_refs.is_empty() && worker_display_name.is_empty() || limit == 0 {
+        return Ok(Vec::new());
+    }
+    let limit = i64::try_from(limit.min(500)).unwrap_or(500);
+    let rows = sqlx::query_as::<_, QueueActionLogRow>(
+        "SELECT event_id, apparatus, order_id, action, from_state, to_state,
+                actor_role, actor_ref, actor_display_name,
+                EXTRACT(EPOCH FROM created_at)::bigint AS created_at_unix,
+                COALESCE((payload_json->>'completed_with_issue')::boolean, false) AS completed_with_issue,
+                COALESCE(payload_json->>'issue_note', '') AS issue_note
+         FROM mini_queue_action_events
+         WHERE actor_ref = ANY($1)
+            OR lower(actor_display_name) = lower($2)
+         ORDER BY created_at DESC, id DESC
+         LIMIT $3",
+    )
+    .bind(&worker_refs)
+    .bind(worker_display_name)
+    .bind(limit)
+    .fetch_all(pool)
+    .await
+    .map_err(|_| ProductionMapError::StoreFailed)?;
+    rows.into_iter().map(queue_action_log_from_row).collect()
+}
+
 pub(super) async fn load_active_order_run_session(
     pool: &PgPool,
     apparatus: &str,
@@ -115,6 +148,39 @@ pub(super) async fn load_active_order_run_session(
     .await
     .map_err(|_| ProductionMapError::StoreFailed)?;
     row.map(progress_session_from_row).transpose()
+}
+
+pub(super) async fn load_active_order_run_sessions_for_worker(
+    pool: &PgPool,
+    worker_refs: &[String],
+    worker_display_name: &str,
+    limit: usize,
+) -> Result<Vec<OrderRunSession>, ProductionMapError> {
+    let worker_refs = normalized_refs(worker_refs);
+    let worker_display_name = worker_display_name.trim();
+    if worker_refs.is_empty() && worker_display_name.is_empty() || limit == 0 {
+        return Ok(Vec::new());
+    }
+    let limit = i64::try_from(limit.min(500)).unwrap_or(500);
+    let rows = sqlx::query_as::<_, ProgressSessionRow>(
+        "SELECT session_id, apparatus, order_id, status,
+                worker_role, worker_ref, worker_display_name,
+                EXTRACT(EPOCH FROM started_at)::bigint AS started_at_unix,
+                EXTRACT(EPOCH FROM updated_at)::bigint AS updated_at_unix,
+                payload_json
+         FROM mini_order_run_sessions
+         WHERE status IN ('active', 'paused')
+           AND (worker_ref = ANY($1) OR lower(worker_display_name) = lower($2))
+         ORDER BY updated_at DESC, session_id DESC
+         LIMIT $3",
+    )
+    .bind(&worker_refs)
+    .bind(worker_display_name)
+    .bind(limit)
+    .fetch_all(pool)
+    .await
+    .map_err(|_| ProductionMapError::StoreFailed)?;
+    rows.into_iter().map(progress_session_from_row).collect()
 }
 
 pub(super) async fn load_order_run_session(
@@ -167,6 +233,49 @@ pub(super) async fn load_progress_batch(
     row.map(progress_batch_from_row).transpose()
 }
 
+pub(super) async fn load_progress_batches_for_worker(
+    pool: &PgPool,
+    worker_refs: &[String],
+    worker_display_name: &str,
+    limit: usize,
+) -> Result<Vec<OrderProgressBatch>, ProductionMapError> {
+    let worker_refs = normalized_refs(worker_refs);
+    let worker_display_name = worker_display_name.trim();
+    if worker_refs.is_empty() && worker_display_name.is_empty() || limit == 0 {
+        return Ok(Vec::new());
+    }
+    let limit = i64::try_from(limit.min(500)).unwrap_or(500);
+    let rows = sqlx::query_as::<_, ProgressBatchRow>(
+        "SELECT batch_id, session_id, apparatus, order_id, action, status,
+                produced_qty::float8 AS produced_qty, uom, qr_payload,
+                label_item_code, label_item_name, executor_name,
+                worker_role, worker_ref, worker_display_name,
+                return_ink_kg::float8 AS return_ink_kg,
+                lamination_print_leftover_rolls::float8 AS lamination_print_leftover_rolls,
+                lamination_film_leftover_rolls::float8 AS lamination_film_leftover_rolls,
+                rezka_bosma_waste::float8 AS rezka_bosma_waste,
+                rezka_lamination_waste::float8 AS rezka_lamination_waste,
+                rezka_edge_waste::float8 AS rezka_edge_waste,
+                total_waste::float8 AS total_waste,
+                finished_goods_kg::float8 AS finished_goods_kg,
+                finished_goods_meter::float8 AS finished_goods_meter,
+                description,
+                payload_json
+         FROM mini_progress_batches
+         WHERE worker_ref = ANY($1)
+            OR lower(worker_display_name) = lower($2)
+         ORDER BY updated_at DESC, created_at DESC, batch_id DESC
+         LIMIT $3",
+    )
+    .bind(&worker_refs)
+    .bind(worker_display_name)
+    .bind(limit)
+    .fetch_all(pool)
+    .await
+    .map_err(|_| ProductionMapError::StoreFailed)?;
+    rows.into_iter().map(progress_batch_from_row).collect()
+}
+
 pub(super) async fn load_progress_batch_by_qr(
     pool: &PgPool,
     qr_payload: &str,
@@ -195,4 +304,12 @@ pub(super) async fn load_progress_batch_by_qr(
     .await
     .map_err(|_| ProductionMapError::StoreFailed)?;
     row.map(progress_batch_from_row).transpose()
+}
+
+fn normalized_refs(worker_refs: &[String]) -> Vec<String> {
+    worker_refs
+        .iter()
+        .map(|item| item.trim().to_string())
+        .filter(|item| !item.is_empty())
+        .collect()
 }

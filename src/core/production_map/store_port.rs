@@ -96,12 +96,28 @@ pub trait ProductionMapStorePort: Send + Sync {
     ) -> Result<BTreeMap<String, Vec<ProductionOrderLogEntry>>, ProductionMapError> {
         Ok(BTreeMap::new())
     }
+    async fn queue_action_logs_for_worker(
+        &self,
+        _worker_refs: &[String],
+        _worker_display_name: &str,
+        _limit: usize,
+    ) -> Result<Vec<ProductionOrderLogEntry>, ProductionMapError> {
+        Ok(Vec::new())
+    }
     async fn active_order_run_session(
         &self,
         _apparatus: &str,
         _order_id: &str,
     ) -> Result<Option<OrderRunSession>, ProductionMapError> {
         Ok(None)
+    }
+    async fn active_order_run_sessions_for_worker(
+        &self,
+        _worker_refs: &[String],
+        _worker_display_name: &str,
+        _limit: usize,
+    ) -> Result<Vec<OrderRunSession>, ProductionMapError> {
+        Ok(Vec::new())
     }
     async fn order_run_session(
         &self,
@@ -120,6 +136,14 @@ pub trait ProductionMapStorePort: Send + Sync {
         _qr_payload: &str,
     ) -> Result<Option<OrderProgressBatch>, ProductionMapError> {
         Ok(None)
+    }
+    async fn progress_batches_for_worker(
+        &self,
+        _worker_refs: &[String],
+        _worker_display_name: &str,
+        _limit: usize,
+    ) -> Result<Vec<OrderProgressBatch>, ProductionMapError> {
+        Ok(Vec::new())
     }
     async fn put_order_run_session(
         &self,

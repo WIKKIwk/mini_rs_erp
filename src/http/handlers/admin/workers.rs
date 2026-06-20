@@ -1,6 +1,8 @@
 use super::*;
 
+use crate::core::admin::models::AdminWorkerDetail;
 use crate::core::auth::models::PrincipalRole;
+use crate::core::production_map::{OrderProgressBatch, OrderRunSession, ProductionOrderLogEntry};
 use crate::core::worker_groups::{WorkerGroupError, WorkerGroupRecord, WorkerGroupUpsert};
 use crate::core::workers::Worker;
 use crate::core::workers::{WorkerError, WorkerUpsert};
@@ -28,6 +30,15 @@ struct WorkerGroupResponse {
     accounting_enabled: bool,
     worker_ids: Vec<String>,
     workers: Vec<Worker>,
+}
+
+#[derive(Debug, Serialize)]
+struct WorkerProfileDetailResponse {
+    worker: AdminWorkerDetail,
+    assigned_groups: Vec<WorkerGroupResponse>,
+    active_sessions: Vec<OrderRunSession>,
+    recent_batches: Vec<OrderProgressBatch>,
+    recent_logs: Vec<ProductionOrderLogEntry>,
 }
 
 pub async fn workers(
@@ -92,6 +103,61 @@ fn worker_error(error: WorkerError) -> AdminError {
     }
 }
 
+pub async fn worker_profile_detail(
+    State(state): State<AppState>,
+    method: Method,
+    headers: HeaderMap,
+    Query(query): Query<WorkerIdQuery>,
+) -> Result<Response, AdminError> {
+    authorize_capability(&state, &headers, Capability::AdminAccess).await?;
+    if method != Method::GET {
+        return Err(method_not_allowed());
+    }
+    let worker = required_worker(&state, query.id.as_deref()).await?;
+    let detail = state
+        .admin
+        .worker_detail(worker.clone())
+        .await
+        .map_err(|_| server_error("worker detail failed"))?;
+    let assigned_groups = state
+        .worker_groups
+        .worker_groups(None)
+        .await
+        .map_err(worker_group_error)?
+        .into_iter()
+        .filter(|group| {
+            group
+                .worker_ids
+                .iter()
+                .any(|id| id.trim() == worker.id.trim())
+        })
+        .collect::<Vec<_>>();
+    let assigned_groups = enrich_worker_groups(&state, assigned_groups).await?;
+    let refs = worker_activity_refs(&worker);
+    let active_sessions = state
+        .production_maps
+        .active_order_run_sessions_for_worker(&refs, &worker.name, 50)
+        .await
+        .map_err(|_| server_error("worker activity failed"))?;
+    let recent_batches = state
+        .production_maps
+        .progress_batches_for_worker(&refs, &worker.name, 50)
+        .await
+        .map_err(|_| server_error("worker activity failed"))?;
+    let recent_logs = state
+        .production_maps
+        .queue_action_logs_for_worker(&refs, &worker.name, 100)
+        .await
+        .map_err(|_| server_error("worker activity failed"))?;
+    Ok(json_response(WorkerProfileDetailResponse {
+        worker: detail,
+        assigned_groups,
+        active_sessions,
+        recent_batches,
+        recent_logs,
+    }))
+}
+
 pub async fn worker_detail(
     State(state): State<AppState>,
     method: Method,
@@ -128,6 +194,14 @@ pub async fn worker_code_regenerate(
         .await
         .map(json_response)
         .map_err(|_| server_error("worker code regenerate failed"))
+}
+
+fn worker_activity_refs(worker: &Worker) -> Vec<String> {
+    [worker.id.trim(), worker.phone.trim()]
+        .into_iter()
+        .filter(|item| !item.is_empty())
+        .map(ToString::to_string)
+        .collect()
 }
 
 async fn required_worker(state: &AppState, id: Option<&str>) -> Result<Worker, AdminError> {
