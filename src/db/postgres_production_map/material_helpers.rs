@@ -96,3 +96,26 @@ pub(super) async fn save_raw_material_assignment(
     }
     Ok(())
 }
+
+pub(super) async fn delete_raw_material_assignment(
+    pool: &PgPool,
+    order_id: &str,
+    barcode: &str,
+) -> Result<Option<RawMaterialAssignment>, ProductionMapError> {
+    let row = sqlx::query_scalar::<_, serde_json::Value>(
+        "DELETE FROM mini_raw_material_assignments
+         WHERE order_id = $1
+           AND lower(barcode) = lower($2)
+         RETURNING payload_json",
+    )
+    .bind(order_id.trim())
+    .bind(barcode.trim())
+    .fetch_optional(pool)
+    .await
+    .map_err(|_| ProductionMapError::StoreFailed)?;
+    row.map(|payload| {
+        serde_json::from_value::<RawMaterialAssignment>(payload)
+            .map_err(|_| ProductionMapError::StoreFailed)
+    })
+    .transpose()
+}

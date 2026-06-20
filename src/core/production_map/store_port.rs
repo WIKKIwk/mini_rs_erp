@@ -175,4 +175,9 @@ pub trait ProductionMapStorePort: Send + Sync {
         &self,
         assignment: RawMaterialAssignment,
     ) -> Result<(), ProductionMapError>;
+    async fn delete_raw_material_assignment(
+        &self,
+        order_id: &str,
+        barcode: &str,
+    ) -> Result<Option<RawMaterialAssignment>, ProductionMapError>;
 }

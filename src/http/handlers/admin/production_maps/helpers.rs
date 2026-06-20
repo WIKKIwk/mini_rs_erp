@@ -48,6 +48,9 @@ pub(super) fn production_map_error(error: ProductionMapError) -> AdminError {
         ProductionMapError::RawMaterialAssignmentNotFound => {
             bad_request("raw_material_assignment_not_found")
         }
+        ProductionMapError::RawMaterialAssignmentLocked => {
+            bad_request("raw_material_assignment_locked")
+        }
         ProductionMapError::RawMaterialScanRequired => bad_request("raw_material_scan_required"),
         ProductionMapError::RawMaterialMismatch => bad_request("raw_material_mismatch"),
         ProductionMapError::RawMaterialRollSizeMissing => {

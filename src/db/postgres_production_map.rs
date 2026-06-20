@@ -33,8 +33,8 @@ use self::map_helpers::{
     reject_order_number_immutable_tx,
 };
 use self::material_helpers::{
-    load_apparatus_material_rules, load_raw_material_assignments, save_apparatus_material_rule,
-    save_raw_material_assignment,
+    delete_raw_material_assignment, load_apparatus_material_rules, load_raw_material_assignments,
+    save_apparatus_material_rule, save_raw_material_assignment,
 };
 use self::order_query_helpers::{
     load_active_order_run_session, load_completed_queue_orders_for_actor, load_order_run_session,
@@ -339,5 +339,13 @@ impl ProductionMapStorePort for PostgresProductionMapStore {
         assignment: RawMaterialAssignment,
     ) -> Result<(), ProductionMapError> {
         save_raw_material_assignment(&self.pool, assignment).await
+    }
+
+    async fn delete_raw_material_assignment(
+        &self,
+        order_id: &str,
+        barcode: &str,
+    ) -> Result<Option<RawMaterialAssignment>, ProductionMapError> {
+        delete_raw_material_assignment(&self.pool, order_id, barcode).await
     }
 }

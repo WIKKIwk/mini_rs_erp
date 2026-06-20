@@ -106,4 +106,12 @@ impl ProductionMapStorePort for UnavailableProductionMapStore {
     ) -> Result<(), ProductionMapError> {
         Err(ProductionMapError::StoreFailed)
     }
+
+    async fn delete_raw_material_assignment(
+        &self,
+        _order_id: &str,
+        _barcode: &str,
+    ) -> Result<Option<RawMaterialAssignment>, ProductionMapError> {
+        Err(ProductionMapError::StoreFailed)
+    }
 }

@@ -20,7 +20,7 @@ mod types;
 pub use compiler::{compile_map, run_map_with_variables};
 pub use materials::{
     ApparatusMaterialRule, ApparatusMaterialRuleUpsert, RawMaterialAssignment,
-    RawMaterialAssignmentInput,
+    RawMaterialAssignmentDeleteInput, RawMaterialAssignmentInput,
 };
 #[cfg(test)]
 pub use memory_store::MemoryProductionMapStore;

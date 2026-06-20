@@ -23,3 +23,10 @@ pub(super) async fn put_raw_material_assignment(
 ) -> Result<(), ProductionMapError> {
     Err(ProductionMapError::StoreFailed)
 }
+
+pub(super) async fn delete_raw_material_assignment(
+    _order_id: &str,
+    _barcode: &str,
+) -> Result<Option<RawMaterialAssignment>, ProductionMapError> {
+    Err(ProductionMapError::StoreFailed)
+}

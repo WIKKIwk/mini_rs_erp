@@ -39,6 +39,12 @@ pub struct RawMaterialAssignmentInput {
     pub item_group_path: Vec<String>,
 }
 
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RawMaterialAssignmentDeleteInput {
+    pub order_id: String,
+    pub barcode: String,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct RawMaterialAssignment {
     pub order_id: String,
@@ -74,6 +80,24 @@ impl ProductionMapService {
         &self,
     ) -> Result<Vec<RawMaterialAssignment>, ProductionMapError> {
         self.store.raw_material_assignments().await
+    }
+
+    pub async fn unlink_raw_material_assignment(
+        &self,
+        input: RawMaterialAssignmentDeleteInput,
+    ) -> Result<RawMaterialAssignment, ProductionMapError> {
+        let order_id = input.order_id.trim().to_string();
+        let barcode = normalize_barcode(&input.barcode);
+        if order_id.is_empty() || barcode.is_empty() {
+            return Err(ProductionMapError::RawMaterialInvalidInput);
+        }
+        let removed = self
+            .store
+            .delete_raw_material_assignment(&order_id, &barcode)
+            .await?
+            .ok_or(ProductionMapError::RawMaterialAssignmentNotFound)?;
+        self.notify_live();
+        Ok(removed)
     }
 
     pub async fn assign_raw_material_to_order(

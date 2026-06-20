@@ -47,3 +47,19 @@ pub(super) async fn put_raw_material_assignment(
         .insert(assignment.barcode.to_uppercase(), assignment);
     Ok(())
 }
+
+pub(super) async fn delete_raw_material_assignment(
+    store: &MemoryProductionMapStore,
+    order_id: &str,
+    barcode: &str,
+) -> Result<Option<RawMaterialAssignment>, ProductionMapError> {
+    let key = barcode.trim().to_ascii_uppercase();
+    let mut assignments = store.material_assignments.write().await;
+    let Some(existing) = assignments.get(&key) else {
+        return Ok(None);
+    };
+    if existing.order_id.trim() != order_id.trim() {
+        return Ok(None);
+    }
+    Ok(assignments.remove(&key))
+}

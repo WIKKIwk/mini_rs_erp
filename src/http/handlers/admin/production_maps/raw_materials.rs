@@ -87,8 +87,111 @@ pub async fn raw_material_assignments(
                 raw_material_assignment_response(&state, assigned).await,
             ))
         }
+        Method::DELETE => {
+            require_capability(&state, &principal, Capability::RawMaterialAssign).await?;
+            let input: RawMaterialAssignmentDeleteInput = parse_json(&body)?;
+            let existing = find_raw_material_assignment(&state, &input.order_id, &input.barcode)
+                .await?
+                .ok_or_else(|| {
+                    production_map_error(ProductionMapError::RawMaterialAssignmentNotFound)
+                })?;
+            let stock = raw_material_unlink_stock_guard(&state, &existing.barcode).await?;
+            let removed = state
+                .production_maps
+                .unlink_raw_material_assignment(input)
+                .await
+                .map_err(production_map_error)?;
+            record_raw_material_unlink_event(&state, &principal, &removed).await;
+            if let Some(stock) = stock {
+                state
+                    .warehouse_events
+                    .notify_updated(&stock.warehouse, "raw_material_assignment_unlink");
+            }
+            Ok(json_response(serde_json::json!({
+                "ok": true,
+                "assignment": raw_material_assignment_response(&state, removed).await,
+            })))
+        }
         _ => Err(method_not_allowed()),
     }
+}
+
+async fn find_raw_material_assignment(
+    state: &AppState,
+    order_id: &str,
+    barcode: &str,
+) -> Result<Option<RawMaterialAssignment>, AdminError> {
+    let order_id = order_id.trim();
+    let barcode = barcode.trim();
+    if order_id.is_empty() || barcode.is_empty() {
+        return Err(production_map_error(
+            ProductionMapError::RawMaterialInvalidInput,
+        ));
+    }
+    let normalized = barcode.to_ascii_uppercase();
+    Ok(state
+        .production_maps
+        .raw_material_assignments()
+        .await
+        .map_err(production_map_error)?
+        .into_iter()
+        .find(|assignment| {
+            assignment.order_id.trim() == order_id
+                && assignment.barcode.trim().to_ascii_uppercase() == normalized
+        }))
+}
+
+async fn raw_material_unlink_stock_guard(
+    state: &AppState,
+    barcode: &str,
+) -> Result<Option<RawMaterialStockEntry>, AdminError> {
+    let stock = state
+        .gscale
+        .raw_material_stock_by_barcode(barcode)
+        .await
+        .map_err(|_| server_error("raw material stock fetch failed"))?;
+    if let Some(stock) = stock.as_ref() {
+        let status = stock.status.trim();
+        if !status.is_empty() && !status.eq_ignore_ascii_case("available") {
+            return Err(production_map_error(
+                ProductionMapError::RawMaterialAssignmentLocked,
+            ));
+        }
+    }
+    Ok(stock)
+}
+
+async fn record_raw_material_unlink_event(
+    state: &AppState,
+    principal: &Principal,
+    assignment: &RawMaterialAssignment,
+) {
+    let Some(engine) = state.mini_engine.as_ref() else {
+        return;
+    };
+    let actor = queue_action_actor(principal);
+    let actor_key = format!("{}:{}", actor.role.trim(), actor.ref_.trim());
+    let event = crate::engine::EngineEventDraft {
+        domain: "raw_material_assignment".to_string(),
+        action: "unlinked".to_string(),
+        entity_id: assignment.order_id.trim().to_string(),
+        actor_key,
+        idempotency_key: String::new(),
+        payload_json: serde_json::json!({
+            "order_id": assignment.order_id,
+            "apparatus": assignment.apparatus,
+            "barcode": assignment.barcode,
+            "item_code": assignment.item_code,
+            "item_name": assignment.item_name,
+            "item_group": assignment.item_group,
+            "assigned_by_role": assignment.assigned_by_role,
+            "assigned_by_ref": assignment.assigned_by_ref,
+            "unlinked_by_role": actor.role,
+            "unlinked_by_ref": actor.ref_,
+            "unlinked_by_display_name": actor.display_name,
+        }),
+    };
+    let _ = engine.record_event(&event).await;
 }
 
 async fn raw_material_assignment_responses(

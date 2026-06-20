@@ -70,6 +70,8 @@ pub enum ProductionMapError {
     RawMaterialAlreadyAssignedToOrder,
     #[error("raw material assignment is required")]
     RawMaterialAssignmentNotFound,
+    #[error("raw material assignment cannot be unlinked after stock is used")]
+    RawMaterialAssignmentLocked,
     #[error("raw material scan is required")]
     RawMaterialScanRequired,
     #[error("raw material scan does not match assigned material")]

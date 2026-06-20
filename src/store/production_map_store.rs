@@ -156,6 +156,14 @@ impl ProductionMapStorePort for ProductionMapStore {
     ) -> Result<(), ProductionMapError> {
         unsupported_materials::put_raw_material_assignment(assignment).await
     }
+
+    async fn delete_raw_material_assignment(
+        &self,
+        order_id: &str,
+        barcode: &str,
+    ) -> Result<Option<RawMaterialAssignment>, ProductionMapError> {
+        unsupported_materials::delete_raw_material_assignment(order_id, barcode).await
+    }
 }
 
 fn unix_micros() -> u128 {

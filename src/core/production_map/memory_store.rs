@@ -252,4 +252,12 @@ impl ProductionMapStorePort for MemoryProductionMapStore {
     ) -> Result<(), ProductionMapError> {
         materials::put_raw_material_assignment(self, assignment).await
     }
+
+    async fn delete_raw_material_assignment(
+        &self,
+        order_id: &str,
+        barcode: &str,
+    ) -> Result<Option<RawMaterialAssignment>, ProductionMapError> {
+        materials::delete_raw_material_assignment(self, order_id, barcode).await
+    }
 }
