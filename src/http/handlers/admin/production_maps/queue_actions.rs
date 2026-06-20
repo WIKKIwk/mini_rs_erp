@@ -17,6 +17,14 @@ struct ApparatusQueueActionRequest {
     #[serde(default)]
     gross_qty: Option<f64>,
     #[serde(default)]
+    return_ink_kg: Option<f64>,
+    #[serde(default)]
+    total_waste: Option<f64>,
+    #[serde(default)]
+    finished_goods_kg: Option<f64>,
+    #[serde(default)]
+    finished_goods_meter: Option<f64>,
+    #[serde(default)]
     uom: String,
     #[serde(default)]
     unit: String,
@@ -36,6 +44,8 @@ struct ApparatusQueueActionRequest {
     print_count: u32,
     #[serde(default)]
     completion_request_note: String,
+    #[serde(default)]
+    description: String,
     action: queue_state::ApparatusQueueAction,
 }
 
@@ -69,8 +79,14 @@ pub async fn production_map_queue_action(
     } else {
         material_barcodes.join(",")
     };
+    let produced_qty = input.produced_qty.or(input.qty);
+    let completion_request_note = if input.completion_request_note.trim().is_empty() {
+        input.description.clone()
+    } else {
+        input.completion_request_note.clone()
+    };
     let progress = QueueProgressInput {
-        produced_qty: input.produced_qty.or(input.qty),
+        produced_qty,
         uom: if input.uom.trim().is_empty() {
             input.unit.clone()
         } else {
@@ -82,12 +98,21 @@ pub async fn production_map_queue_action(
         } else {
             input.qr_payload.clone()
         },
+        return_ink_kg: input.return_ink_kg,
+        total_waste: input.total_waste,
+        finished_goods_kg: input.finished_goods_kg,
+        finished_goods_meter: input.finished_goods_meter,
+        description: completion_request_note.clone(),
     };
     let _queue_action_guard = state.production_maps.queue_action_guard().await;
+    let has_complete_bosma_metrics = input.return_ink_kg.is_some()
+        && input.total_waste.is_some()
+        && input.finished_goods_kg.is_some()
+        && input.finished_goods_meter.is_some();
     if matches!(input.action, queue_state::ApparatusQueueAction::Complete)
-        && progress.produced_qty.is_none()
+        && !has_complete_bosma_metrics
         && input.gross_qty.is_none()
-        && !input.completion_request_note.trim().is_empty()
+        && !completion_request_note.trim().is_empty()
     {
         let result = state
             .production_maps
@@ -96,7 +121,7 @@ pub async fn production_map_queue_action(
                 &input.order_id,
                 &assigned_apparatus,
                 queue_action_actor(&principal),
-                &input.completion_request_note,
+                &completion_request_note,
             )
             .await
             .map_err(production_map_error)?;
@@ -160,7 +185,10 @@ pub async fn production_map_queue_action(
                 executor_name: batch.executor_name.clone(),
                 printer: input.printer.clone(),
                 print_mode: input.print_mode.clone(),
-                gross_qty: input.gross_qty.unwrap_or(batch.produced_qty),
+                gross_qty: input
+                    .gross_qty
+                    .or(input.finished_goods_kg)
+                    .unwrap_or(batch.produced_qty),
                 progress_qty: batch.produced_qty,
                 unit: "kg".to_string(),
                 progress_unit: if batch.uom.trim().is_empty() {

@@ -82,6 +82,8 @@ pub enum ProductionMapError {
     RawMaterialRollSizeMismatch,
     #[error("progress input is invalid")]
     ProgressInputInvalid,
+    #[error("bosma completion metrics are required")]
+    BosmaCompletionMetricsRequired,
     #[error("progress batch not found")]
     ProgressBatchNotFound,
     #[error("progress batch cannot resume")]

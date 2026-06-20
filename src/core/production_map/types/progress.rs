@@ -86,6 +86,16 @@ pub struct OrderProgressEvent {
     pub worker_display_name: String,
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub qr_payload: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub return_ink_kg: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub total_waste: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub finished_goods_kg: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub finished_goods_meter: Option<f64>,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub description: String,
     pub payload_json: serde_json::Value,
 }
 
@@ -106,6 +116,16 @@ pub struct OrderProgressBatch {
     pub worker_role: String,
     pub worker_ref: String,
     pub worker_display_name: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub return_ink_kg: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub total_waste: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub finished_goods_kg: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub finished_goods_meter: Option<f64>,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub description: String,
     pub payload_json: serde_json::Value,
 }
 
@@ -115,4 +135,9 @@ pub struct QueueProgressInput {
     pub uom: String,
     pub progress_batch_id: String,
     pub qr_payload: String,
+    pub return_ink_kg: Option<f64>,
+    pub total_waste: Option<f64>,
+    pub finished_goods_kg: Option<f64>,
+    pub finished_goods_meter: Option<f64>,
+    pub description: String,
 }

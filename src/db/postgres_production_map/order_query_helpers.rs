@@ -145,7 +145,13 @@ pub(super) async fn load_progress_batch(
         "SELECT batch_id, session_id, apparatus, order_id, action, status,
                 produced_qty::float8 AS produced_qty, uom, qr_payload,
                 label_item_code, label_item_name, executor_name,
-                worker_role, worker_ref, worker_display_name, payload_json
+                worker_role, worker_ref, worker_display_name,
+                return_ink_kg::float8 AS return_ink_kg,
+                total_waste::float8 AS total_waste,
+                finished_goods_kg::float8 AS finished_goods_kg,
+                finished_goods_meter::float8 AS finished_goods_meter,
+                description,
+                payload_json
          FROM mini_progress_batches
          WHERE batch_id = $1",
     )
@@ -164,7 +170,13 @@ pub(super) async fn load_progress_batch_by_qr(
         "SELECT batch_id, session_id, apparatus, order_id, action, status,
                 produced_qty::float8 AS produced_qty, uom, qr_payload,
                 label_item_code, label_item_name, executor_name,
-                worker_role, worker_ref, worker_display_name, payload_json
+                worker_role, worker_ref, worker_display_name,
+                return_ink_kg::float8 AS return_ink_kg,
+                total_waste::float8 AS total_waste,
+                finished_goods_kg::float8 AS finished_goods_kg,
+                finished_goods_meter::float8 AS finished_goods_meter,
+                description,
+                payload_json
          FROM mini_progress_batches
          WHERE lower(qr_payload) = lower($1)",
     )

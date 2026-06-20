@@ -78,9 +78,10 @@ pub(super) async fn put_order_progress_event_tx(
         "INSERT INTO mini_order_progress_events (
             event_id, session_id, batch_id, apparatus, order_id, action,
             produced_qty, uom, worker_role, worker_ref, worker_display_name,
-            qr_payload, payload_json, created_at
+            qr_payload, return_ink_kg, total_waste, finished_goods_kg,
+            finished_goods_meter, description, payload_json, created_at
          )
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, now())
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, now())
          ON CONFLICT (event_id) DO UPDATE SET
             session_id = excluded.session_id,
             batch_id = excluded.batch_id,
@@ -91,6 +92,11 @@ pub(super) async fn put_order_progress_event_tx(
             worker_ref = excluded.worker_ref,
             worker_display_name = excluded.worker_display_name,
             qr_payload = excluded.qr_payload,
+            return_ink_kg = excluded.return_ink_kg,
+            total_waste = excluded.total_waste,
+            finished_goods_kg = excluded.finished_goods_kg,
+            finished_goods_meter = excluded.finished_goods_meter,
+            description = excluded.description,
             payload_json = excluded.payload_json",
     )
     .bind(event.event_id.trim())
@@ -105,6 +111,11 @@ pub(super) async fn put_order_progress_event_tx(
     .bind(event.worker_ref.trim())
     .bind(event.worker_display_name.trim())
     .bind(event.qr_payload.trim())
+    .bind(event.return_ink_kg)
+    .bind(event.total_waste)
+    .bind(event.finished_goods_kg)
+    .bind(event.finished_goods_meter)
+    .bind(event.description.trim())
     .bind(&event.payload_json)
     .execute(&mut **tx)
     .await
@@ -135,9 +146,10 @@ pub(super) async fn put_order_progress_batch_tx(
             batch_id, session_id, apparatus, order_id, action, status,
             produced_qty, uom, qr_payload, label_item_code, label_item_name,
             executor_name, worker_role, worker_ref, worker_display_name,
-            payload_json, created_at, updated_at
+            return_ink_kg, total_waste, finished_goods_kg,
+            finished_goods_meter, description, payload_json, created_at, updated_at
          )
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, now(), now())
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, now(), now())
          ON CONFLICT (batch_id) DO UPDATE SET
             status = excluded.status,
             produced_qty = excluded.produced_qty,
@@ -149,6 +161,11 @@ pub(super) async fn put_order_progress_batch_tx(
             worker_role = excluded.worker_role,
             worker_ref = excluded.worker_ref,
             worker_display_name = excluded.worker_display_name,
+            return_ink_kg = excluded.return_ink_kg,
+            total_waste = excluded.total_waste,
+            finished_goods_kg = excluded.finished_goods_kg,
+            finished_goods_meter = excluded.finished_goods_meter,
+            description = excluded.description,
             payload_json = excluded.payload_json,
             updated_at = now()",
     )
@@ -167,6 +184,11 @@ pub(super) async fn put_order_progress_batch_tx(
     .bind(batch.worker_role.trim())
     .bind(batch.worker_ref.trim())
     .bind(batch.worker_display_name.trim())
+    .bind(batch.return_ink_kg)
+    .bind(batch.total_waste)
+    .bind(batch.finished_goods_kg)
+    .bind(batch.finished_goods_meter)
+    .bind(batch.description.trim())
     .bind(&batch.payload_json)
     .execute(&mut **tx)
     .await
@@ -205,6 +227,11 @@ pub(super) struct ProgressBatchRow {
     pub(super) worker_role: String,
     pub(super) worker_ref: String,
     pub(super) worker_display_name: String,
+    pub(super) return_ink_kg: Option<f64>,
+    pub(super) total_waste: Option<f64>,
+    pub(super) finished_goods_kg: Option<f64>,
+    pub(super) finished_goods_meter: Option<f64>,
+    pub(super) description: String,
     pub(super) payload_json: serde_json::Value,
 }
 
@@ -282,6 +309,11 @@ pub(super) fn progress_batch_from_row(
         worker_role: row.worker_role,
         worker_ref: row.worker_ref,
         worker_display_name: row.worker_display_name,
+        return_ink_kg: row.return_ink_kg,
+        total_waste: row.total_waste,
+        finished_goods_kg: row.finished_goods_kg,
+        finished_goods_meter: row.finished_goods_meter,
+        description: row.description,
         payload_json: row.payload_json,
     })
 }

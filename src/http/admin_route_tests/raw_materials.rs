@@ -261,6 +261,10 @@ async fn raw_material_routes_assign_and_require_scan_for_queue_start() {
                 "action":"complete",
                 "produced_qty":3,
                 "gross_qty":3,
+                "return_ink_kg":1,
+                "total_waste":1,
+                "finished_goods_kg":3,
+                "finished_goods_meter":3,
                 "uom":"kg",
                 "printer":"zebra",
                 "print_mode":"rfid"

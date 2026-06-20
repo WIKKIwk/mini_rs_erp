@@ -60,6 +60,9 @@ pub(super) fn production_map_error(error: ProductionMapError) -> AdminError {
             bad_request("raw_material_roll_size_mismatch")
         }
         ProductionMapError::ProgressInputInvalid => bad_request("progress_input_invalid"),
+        ProductionMapError::BosmaCompletionMetricsRequired => {
+            bad_request("bosma_completion_metrics_required")
+        }
         ProductionMapError::ProgressBatchNotFound => not_found("progress_batch_not_found"),
         ProductionMapError::ProgressBatchNotResumable => {
             bad_request("progress_batch_not_resumable")

@@ -71,7 +71,7 @@ async fn worker_completed_orders_are_actor_scoped_and_latest_first() {
                     "/v1/mobile/admin/production-maps/queue-action",
                     token,
                     &format!(
-                        r#"{{"apparatus":"7 ta rangli pechat","order_id":"{order_id}","action":"{action}","produced_qty":1,"uom":"kg"}}"#
+                        r#"{{"apparatus":"7 ta rangli pechat","order_id":"{order_id}","action":"{action}","produced_qty":1,"uom":"kg","return_ink_kg":1,"total_waste":1,"finished_goods_kg":1,"finished_goods_meter":1}}"#
                     ),
                 ))
                 .await
@@ -169,7 +169,7 @@ async fn closed_orders_return_only_fully_completed_maps_with_action_logs() {
                 "/v1/mobile/admin/production-maps/queue-action",
                 &pechat_worker,
                 &format!(
-                    r#"{{"apparatus":"7 ta rangli pechat","order_id":"zakaz-closed-route","action":"{action}","produced_qty":1,"gross_qty":1,"uom":"kg","printer":"zebra","print_mode":"rfid"}}"#
+                    r#"{{"apparatus":"7 ta rangli pechat","order_id":"zakaz-closed-route","action":"{action}","produced_qty":1,"gross_qty":1,"uom":"kg","return_ink_kg":1,"total_waste":1,"finished_goods_kg":1,"finished_goods_meter":1,"printer":"zebra","print_mode":"rfid"}}"#
                 ),
             ))
             .await

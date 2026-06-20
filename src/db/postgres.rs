@@ -262,6 +262,24 @@ mod tests {
         assert!(migration.contains("where status in ('active', 'paused')"));
     }
 
+    #[test]
+    fn postgres_foundation_migration_persists_bosma_progress_metrics() {
+        let migration = foundation_migration_sql().to_lowercase();
+
+        for column in [
+            "return_ink_kg",
+            "total_waste",
+            "finished_goods_kg",
+            "finished_goods_meter",
+            "description",
+        ] {
+            assert!(
+                migration.contains(column),
+                "missing progress metric column {column}"
+            );
+        }
+    }
+
     #[tokio::test]
     #[ignore = "requires local PostgreSQL and creates/drops mini_rs_erp_test"]
     async fn postgres_live_foundation_migration_applies_to_clean_database() {

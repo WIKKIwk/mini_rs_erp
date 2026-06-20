@@ -62,6 +62,11 @@ impl ProductionMapService {
                     worker_ref: actor.ref_.trim().to_string(),
                     worker_display_name: actor.display_name.trim().to_string(),
                     qr_payload: String::new(),
+                    return_ink_kg: None,
+                    total_waste: None,
+                    finished_goods_kg: None,
+                    finished_goods_meter: None,
+                    description: String::new(),
                     payload_json: serde_json::json!({"event": "start"}),
                 };
                 Ok(QueueProgressRecords {
@@ -72,8 +77,34 @@ impl ProductionMapService {
             }
             queue_state::ApparatusQueueAction::Pause
             | queue_state::ApparatusQueueAction::Complete => {
-                let produced_qty = valid_progress_qty(progress.produced_qty)?;
-                let uom = non_empty_or(&progress.uom, "kg");
+                let return_ink_kg = if action == queue_state::ApparatusQueueAction::Complete {
+                    valid_optional_progress_qty(progress.return_ink_kg)?
+                } else {
+                    None
+                };
+                let total_waste = valid_optional_progress_qty(progress.total_waste)?;
+                let finished_goods_kg = valid_optional_progress_qty(progress.finished_goods_kg)?;
+                let finished_goods_meter =
+                    valid_optional_progress_qty(progress.finished_goods_meter)?;
+                if action == queue_state::ApparatusQueueAction::Complete
+                    && pechat::pechat_color_count(apparatus).is_some()
+                    && !bosma_completion_metrics_are_complete(
+                        return_ink_kg,
+                        total_waste,
+                        finished_goods_kg,
+                        finished_goods_meter,
+                    )
+                {
+                    return Err(ProductionMapError::BosmaCompletionMetricsRequired);
+                }
+                let produced_qty =
+                    valid_progress_qty(progress.produced_qty.or(finished_goods_meter))?;
+                let uom = if progress.produced_qty.is_none() && finished_goods_meter.is_some() {
+                    non_empty_or(&progress.uom, "m")
+                } else {
+                    non_empty_or(&progress.uom, "kg")
+                };
+                let description = progress.description.trim().to_string();
                 let session = self
                     .store
                     .active_order_run_session(apparatus, order_id)
@@ -94,6 +125,11 @@ impl ProductionMapService {
                         "last_action": queue_action_str(action),
                         "last_qty": produced_qty,
                         "last_uom": uom,
+                        "return_ink_kg": return_ink_kg,
+                        "total_waste": total_waste,
+                        "finished_goods_kg": finished_goods_kg,
+                        "finished_goods_meter": finished_goods_meter,
+                        "description": description,
                     }),
                     ..session
                 };
@@ -128,10 +164,20 @@ impl ProductionMapService {
                     worker_role: actor.role.trim().to_string(),
                     worker_ref: actor.ref_.trim().to_string(),
                     worker_display_name: actor.display_name.trim().to_string(),
+                    return_ink_kg,
+                    total_waste,
+                    finished_goods_kg,
+                    finished_goods_meter,
+                    description: description.clone(),
                     payload_json: serde_json::json!({
                         "order_title": order_map.title.trim(),
                         "apparatus": apparatus,
                         "action": queue_action_str(action),
+                        "return_ink_kg": return_ink_kg,
+                        "total_waste": total_waste,
+                        "finished_goods_kg": finished_goods_kg,
+                        "finished_goods_meter": finished_goods_meter,
+                        "description": description.clone(),
                     }),
                 };
                 let event = OrderProgressEvent {
@@ -147,7 +193,19 @@ impl ProductionMapService {
                     worker_ref: actor.ref_.trim().to_string(),
                     worker_display_name: actor.display_name.trim().to_string(),
                     qr_payload,
-                    payload_json: serde_json::json!({"event": queue_action_str(action)}),
+                    return_ink_kg,
+                    total_waste,
+                    finished_goods_kg,
+                    finished_goods_meter,
+                    description: description.clone(),
+                    payload_json: serde_json::json!({
+                        "event": queue_action_str(action),
+                        "return_ink_kg": return_ink_kg,
+                        "total_waste": total_waste,
+                        "finished_goods_kg": finished_goods_kg,
+                        "finished_goods_meter": finished_goods_meter,
+                        "description": description,
+                    }),
                 };
                 Ok(QueueProgressRecords {
                     session: Some(session),
@@ -190,6 +248,11 @@ impl ProductionMapService {
                         worker_ref: actor.ref_.trim().to_string(),
                         worker_display_name: actor.display_name.trim().to_string(),
                         qr_payload: String::new(),
+                        return_ink_kg: None,
+                        total_waste: None,
+                        finished_goods_kg: None,
+                        finished_goods_meter: None,
+                        description: String::new(),
                         payload_json: serde_json::json!({"event": "resume"}),
                     };
                     return Ok(QueueProgressRecords {
@@ -247,6 +310,11 @@ impl ProductionMapService {
                     worker_ref: actor.ref_.trim().to_string(),
                     worker_display_name: actor.display_name.trim().to_string(),
                     qr_payload: batch.qr_payload.clone(),
+                    return_ink_kg: None,
+                    total_waste: None,
+                    finished_goods_kg: None,
+                    finished_goods_meter: None,
+                    description: String::new(),
                     payload_json: serde_json::json!({"event": "resume"}),
                 };
                 Ok(QueueProgressRecords {
@@ -257,4 +325,24 @@ impl ProductionMapService {
             }
         }
     }
+}
+
+fn valid_optional_progress_qty(value: Option<f64>) -> Result<Option<f64>, ProductionMapError> {
+    match value {
+        Some(value) if value.is_finite() && value > 0.0 => Ok(Some(value)),
+        Some(_) => Err(ProductionMapError::ProgressInputInvalid),
+        None => Ok(None),
+    }
+}
+
+fn bosma_completion_metrics_are_complete(
+    return_ink_kg: Option<f64>,
+    total_waste: Option<f64>,
+    finished_goods_kg: Option<f64>,
+    finished_goods_meter: Option<f64>,
+) -> bool {
+    return_ink_kg.is_some()
+        && total_waste.is_some()
+        && finished_goods_kg.is_some()
+        && finished_goods_meter.is_some()
 }

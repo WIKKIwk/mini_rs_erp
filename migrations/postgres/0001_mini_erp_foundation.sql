@@ -321,6 +321,11 @@ CREATE TABLE IF NOT EXISTS mini_order_progress_events (
     worker_ref TEXT NOT NULL DEFAULT '',
     worker_display_name TEXT NOT NULL DEFAULT '',
     qr_payload TEXT NOT NULL DEFAULT '',
+    return_ink_kg NUMERIC,
+    total_waste NUMERIC,
+    finished_goods_kg NUMERIC,
+    finished_goods_meter NUMERIC,
+    description TEXT NOT NULL DEFAULT '',
     payload_json JSONB NOT NULL DEFAULT '{}'::jsonb,
     created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
     CONSTRAINT mini_order_progress_events_event_id_not_blank CHECK (btrim(event_id) <> ''),
@@ -348,6 +353,11 @@ CREATE TABLE IF NOT EXISTS mini_progress_batches (
     worker_role TEXT NOT NULL DEFAULT '',
     worker_ref TEXT NOT NULL DEFAULT '',
     worker_display_name TEXT NOT NULL DEFAULT '',
+    return_ink_kg NUMERIC,
+    total_waste NUMERIC,
+    finished_goods_kg NUMERIC,
+    finished_goods_meter NUMERIC,
+    description TEXT NOT NULL DEFAULT '',
     payload_json JSONB NOT NULL DEFAULT '{}'::jsonb,
     created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
@@ -364,6 +374,18 @@ CREATE TABLE IF NOT EXISTS mini_progress_batches (
     CONSTRAINT mini_progress_batches_label_item_name_not_blank CHECK (btrim(label_item_name) <> ''),
     CONSTRAINT mini_progress_batches_qr_payload_unique UNIQUE (qr_payload)
 );
+
+ALTER TABLE mini_order_progress_events ADD COLUMN IF NOT EXISTS return_ink_kg NUMERIC;
+ALTER TABLE mini_order_progress_events ADD COLUMN IF NOT EXISTS total_waste NUMERIC;
+ALTER TABLE mini_order_progress_events ADD COLUMN IF NOT EXISTS finished_goods_kg NUMERIC;
+ALTER TABLE mini_order_progress_events ADD COLUMN IF NOT EXISTS finished_goods_meter NUMERIC;
+ALTER TABLE mini_order_progress_events ADD COLUMN IF NOT EXISTS description TEXT NOT NULL DEFAULT '';
+
+ALTER TABLE mini_progress_batches ADD COLUMN IF NOT EXISTS return_ink_kg NUMERIC;
+ALTER TABLE mini_progress_batches ADD COLUMN IF NOT EXISTS total_waste NUMERIC;
+ALTER TABLE mini_progress_batches ADD COLUMN IF NOT EXISTS finished_goods_kg NUMERIC;
+ALTER TABLE mini_progress_batches ADD COLUMN IF NOT EXISTS finished_goods_meter NUMERIC;
+ALTER TABLE mini_progress_batches ADD COLUMN IF NOT EXISTS description TEXT NOT NULL DEFAULT '';
 
 CREATE TABLE IF NOT EXISTS mini_apparatus_material_rules (
     apparatus TEXT PRIMARY KEY,
