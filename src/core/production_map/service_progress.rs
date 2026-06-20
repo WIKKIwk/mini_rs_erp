@@ -23,6 +23,40 @@ impl ProductionMapService {
         batch.ok_or(ProductionMapError::ProgressBatchNotFound)
     }
 
+    async fn previous_stage_start_progress_batch(
+        &self,
+        order_id: &str,
+        order_map: &ProductionMapDefinition,
+        apparatus: &str,
+        progress: &QueueProgressInput,
+    ) -> Result<Option<OrderProgressBatch>, ProductionMapError> {
+        let Some(previous_apparatus) = chain::previous_work_stage_station(order_map, apparatus)
+        else {
+            return Ok(None);
+        };
+        if progress.progress_batch_id.trim().is_empty() && progress.qr_payload.trim().is_empty() {
+            return Err(ProductionMapError::ProgressQrRequired);
+        }
+        let batch = self
+            .progress_batch_for_qr(&progress.progress_batch_id, &progress.qr_payload)
+            .await?;
+        if batch.order_id.trim() != order_id
+            || !queue_state::apparatus_titles_match(&batch.apparatus, &previous_apparatus)
+            || !matches!(
+                batch.action,
+                queue_state::ApparatusQueueAction::Pause
+                    | queue_state::ApparatusQueueAction::Complete
+            )
+            || !matches!(
+                batch.status,
+                OrderProgressBatchStatus::Paused | OrderProgressBatchStatus::Completed
+            )
+        {
+            return Err(ProductionMapError::ProgressBatchNotAccepted);
+        }
+        Ok(Some(batch))
+    }
+
     pub(super) async fn build_progress_records(
         &self,
         apparatus: &str,
@@ -35,6 +69,9 @@ impl ProductionMapService {
         let now = unix_seconds();
         match action {
             queue_state::ApparatusQueueAction::Start => {
+                let input_progress_batch = self
+                    .previous_stage_start_progress_batch(order_id, order_map, apparatus, &progress)
+                    .await?;
                 let session = OrderRunSession {
                     session_id: progress_session_id(apparatus, order_id, actor, now),
                     apparatus: apparatus.to_string(),
@@ -47,6 +84,18 @@ impl ProductionMapService {
                     updated_at_unix: now,
                     payload_json: serde_json::json!({
                         "started_by": actor,
+                        "input_progress_batch_id": input_progress_batch
+                            .as_ref()
+                            .map(|batch| batch.batch_id.as_str())
+                            .unwrap_or_default(),
+                        "input_progress_qr_payload": input_progress_batch
+                            .as_ref()
+                            .map(|batch| batch.qr_payload.as_str())
+                            .unwrap_or_default(),
+                        "input_progress_apparatus": input_progress_batch
+                            .as_ref()
+                            .map(|batch| batch.apparatus.as_str())
+                            .unwrap_or_default(),
                     }),
                 };
                 let event = OrderProgressEvent {
@@ -72,7 +121,21 @@ impl ProductionMapService {
                     finished_goods_kg: None,
                     finished_goods_meter: None,
                     description: String::new(),
-                    payload_json: serde_json::json!({"event": "start"}),
+                    payload_json: serde_json::json!({
+                        "event": "start",
+                        "input_progress_batch_id": input_progress_batch
+                            .as_ref()
+                            .map(|batch| batch.batch_id.as_str())
+                            .unwrap_or_default(),
+                        "input_progress_qr_payload": input_progress_batch
+                            .as_ref()
+                            .map(|batch| batch.qr_payload.as_str())
+                            .unwrap_or_default(),
+                        "input_progress_apparatus": input_progress_batch
+                            .as_ref()
+                            .map(|batch| batch.apparatus.as_str())
+                            .unwrap_or_default(),
+                    }),
                 };
                 Ok(QueueProgressRecords {
                     session: Some(session),

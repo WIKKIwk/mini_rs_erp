@@ -82,6 +82,8 @@ pub enum ProductionMapError {
     RawMaterialRollSizeMismatch,
     #[error("progress input is invalid")]
     ProgressInputInvalid,
+    #[error("previous stage progress qr is required")]
+    ProgressQrRequired,
     #[error("bosma completion metrics are required")]
     BosmaCompletionMetricsRequired,
     #[error("laminatsiya completion metrics are required")]
@@ -90,6 +92,8 @@ pub enum ProductionMapError {
     RezkaProgressMetricsRequired,
     #[error("progress batch not found")]
     ProgressBatchNotFound,
+    #[error("progress batch does not match previous stage")]
+    ProgressBatchNotAccepted,
     #[error("progress batch cannot resume")]
     ProgressBatchNotResumable,
 }

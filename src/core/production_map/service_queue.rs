@@ -235,17 +235,6 @@ impl ProductionMapService {
             .iter()
             .find(|map| map.id.trim() == order_id)
             .ok_or(ProductionMapError::MapNotFound)?;
-        if matches!(action, queue_state::ApparatusQueueAction::Start)
-            && !chain::order_ready_for_station(
-                order_map,
-                order_id,
-                apparatus,
-                &all_states,
-                &known_keys,
-            )
-        {
-            return Err(ProductionMapError::PreviousStageNotCompleted);
-        }
         let states = all_states.get(&storage_key).cloned().unwrap_or_default();
         let mut parsed = BTreeMap::new();
         for (id, value) in states {

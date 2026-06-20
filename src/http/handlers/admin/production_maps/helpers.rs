@@ -60,6 +60,7 @@ pub(super) fn production_map_error(error: ProductionMapError) -> AdminError {
             bad_request("raw_material_roll_size_mismatch")
         }
         ProductionMapError::ProgressInputInvalid => bad_request("progress_input_invalid"),
+        ProductionMapError::ProgressQrRequired => bad_request("progress_qr_required"),
         ProductionMapError::BosmaCompletionMetricsRequired => {
             bad_request("bosma_completion_metrics_required")
         }
@@ -70,6 +71,7 @@ pub(super) fn production_map_error(error: ProductionMapError) -> AdminError {
             bad_request("rezka_progress_metrics_required")
         }
         ProductionMapError::ProgressBatchNotFound => not_found("progress_batch_not_found"),
+        ProductionMapError::ProgressBatchNotAccepted => bad_request("progress_batch_not_accepted"),
         ProductionMapError::ProgressBatchNotResumable => {
             bad_request("progress_batch_not_resumable")
         }

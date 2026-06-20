@@ -338,6 +338,92 @@ async fn progress_pause_creates_qr_batch_and_resume_reopens_order() {
 }
 
 #[tokio::test]
+async fn downstream_start_requires_previous_stage_progress_qr() {
+    let service = ProductionMapService::new(std::sync::Arc::new(MemoryProductionMapStore::new()));
+    let actor = QueueActionActor {
+        role: "aparatchi".to_string(),
+        ref_: "worker-downstream-1".to_string(),
+        display_name: "Worker Downstream".to_string(),
+    };
+    let order_id = "zakaz-downstream-1";
+    let first = "Bosma aparat";
+    let second = "Laminatsiya mashinasi";
+    service
+        .upsert_map(two_stage_map(order_id, first, second))
+        .await
+        .expect("map");
+
+    service
+        .apply_apparatus_queue_action_with_progress(
+            first,
+            order_id,
+            queue_state::ApparatusQueueAction::Start,
+            &[first.to_string()],
+            actor.clone(),
+            QueueProgressInput::default(),
+        )
+        .await
+        .expect("first start");
+
+    let second_without_qr = service
+        .apply_apparatus_queue_action_with_progress(
+            second,
+            order_id,
+            queue_state::ApparatusQueueAction::Start,
+            &[second.to_string()],
+            actor.clone(),
+            QueueProgressInput::default(),
+        )
+        .await;
+    assert_eq!(
+        second_without_qr,
+        Err(ProductionMapError::ProgressQrRequired)
+    );
+
+    let paused = service
+        .apply_apparatus_queue_action_with_progress(
+            first,
+            order_id,
+            queue_state::ApparatusQueueAction::Pause,
+            &[first.to_string()],
+            actor.clone(),
+            QueueProgressInput {
+                produced_qty: Some(18.0),
+                uom: "kg".to_string(),
+                ..QueueProgressInput::default()
+            },
+        )
+        .await
+        .expect("first pause");
+    let previous_batch = paused.progress_batch.expect("previous batch");
+
+    let second_started = service
+        .apply_apparatus_queue_action_with_progress(
+            second,
+            order_id,
+            queue_state::ApparatusQueueAction::Start,
+            &[second.to_string()],
+            actor,
+            QueueProgressInput {
+                qr_payload: previous_batch.qr_payload.clone(),
+                ..QueueProgressInput::default()
+            },
+        )
+        .await
+        .expect("second start with previous qr");
+    assert_eq!(
+        second_started.states.get(order_id),
+        Some(&"in_progress".to_string())
+    );
+    let event = second_started.progress_event.expect("start event");
+    assert_eq!(
+        event.payload_json["input_progress_batch_id"],
+        previous_batch.batch_id
+    );
+    assert_eq!(event.payload_json["input_progress_apparatus"], first);
+}
+
+#[tokio::test]
 async fn upsert_maps_batch_keeps_queue_state_and_sequence_cache() {
     let store = std::sync::Arc::new(MemoryProductionMapStore::new());
     let service = ProductionMapService::new(store);
@@ -389,4 +475,50 @@ async fn upsert_maps_batch_keeps_queue_state_and_sequence_cache() {
             .and_then(|states| states.get("zakaz-111")),
         Some(&"completed".to_string())
     );
+}
+
+fn two_stage_map(id: &str, first: &str, second: &str) -> ProductionMapDefinition {
+    let mut map = apparatus_stage_map(id, first);
+    map.nodes.insert(
+        2,
+        ProductionMapNode {
+            id: "second".to_string(),
+            kind: ProductionMapNodeKind::Apparatus,
+            title: second.to_string(),
+            formula: None,
+            role_code: String::new(),
+            item_code: String::new(),
+            qty_formula: String::new(),
+            from_location: String::new(),
+            to_location: String::new(),
+            alternative_group_id: String::new(),
+            alternative_group_label: String::new(),
+            alternative_assigned_title: String::new(),
+            rezka_kadr_count: None,
+            rezka_label_length: None,
+            x: 0.0,
+            y: 264.0,
+        },
+    );
+    if let Some(end) = map.nodes.iter_mut().find(|node| node.id == "end") {
+        end.y = 396.0;
+    }
+    map.edges = vec![
+        ProductionMapEdge {
+            from: "start".to_string(),
+            to: "apparatus".to_string(),
+            branch: String::new(),
+        },
+        ProductionMapEdge {
+            from: "apparatus".to_string(),
+            to: "second".to_string(),
+            branch: String::new(),
+        },
+        ProductionMapEdge {
+            from: "second".to_string(),
+            to: "end".to_string(),
+            branch: String::new(),
+        },
+    ];
+    map
 }
