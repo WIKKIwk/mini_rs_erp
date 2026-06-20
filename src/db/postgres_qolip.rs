@@ -43,9 +43,12 @@ impl QolipStorePort for PostgresQolipStore {
                     WHERE lower(child.parent_warehouse) = lower(assigned.warehouse)
                 )
             )
-            SELECT block, warehouse FROM child_blocks
-            UNION
-            SELECT block, warehouse FROM direct_blocks
+            SELECT block, warehouse
+            FROM (
+                SELECT block, warehouse FROM child_blocks
+                UNION
+                SELECT block, warehouse FROM direct_blocks
+            ) blocks
             ORDER BY lower(block)
             "#,
         )
