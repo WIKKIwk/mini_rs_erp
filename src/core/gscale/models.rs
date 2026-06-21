@@ -70,6 +70,8 @@ pub struct ProgressLabelPrintRequest {
     #[serde(default)]
     pub progress_unit: String,
     #[serde(default)]
+    pub label_kind: String,
+    #[serde(default)]
     pub print_count: u32,
 }
 

@@ -221,6 +221,7 @@ pub async fn production_map_queue_action(
                 } else {
                     batch.uom.clone()
                 },
+                label_kind: String::new(),
                 print_count: input.print_count,
             })
         } else {

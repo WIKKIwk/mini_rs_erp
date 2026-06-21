@@ -16,6 +16,7 @@ pub(super) struct NormalizedProgressLabelJob {
     pub(super) progress_qty: f64,
     pub(super) unit: String,
     pub(super) progress_unit: String,
+    pub(super) label_kind: String,
     pub(super) print_count: u32,
 }
 
@@ -59,6 +60,7 @@ impl NormalizedProgressLabelJob {
             progress_qty,
             unit: blank_default(&request.unit, "kg"),
             progress_unit: blank_default(&request.progress_unit, "m"),
+            label_kind: normalize_label_kind(&request.label_kind),
             print_count: normalize_print_count(request.print_count),
         })
     }
@@ -71,7 +73,7 @@ impl NormalizedProgressLabelJob {
             item_name: self.item_name.clone(),
             warehouse: format!("Ijrochi: {}", self.executor_name.trim()),
             executor_name: self.executor_name.clone(),
-            label_kind: "progress".to_string(),
+            label_kind: self.label_kind.clone(),
             printer: self.printer.clone(),
             print_mode: self.print_mode.clone(),
             gross_qty: self.gross_qty,
@@ -175,6 +177,15 @@ impl NormalizedMaterialReceiptJob {
 
 fn normalize_print_count(value: u32) -> u32 {
     if value == 0 { 1 } else { value }
+}
+
+fn normalize_label_kind(value: &str) -> String {
+    let value = value.trim().to_ascii_lowercase();
+    if value.is_empty() {
+        "progress".to_string()
+    } else {
+        value
+    }
 }
 
 fn blank_default(value: &str, fallback: &str) -> String {

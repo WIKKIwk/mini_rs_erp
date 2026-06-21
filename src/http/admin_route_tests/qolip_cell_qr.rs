@@ -54,6 +54,6 @@ async fn qolip_cell_qr_print_reuses_same_payload_for_same_cell() {
     assert_eq!(printed.len(), 2);
     assert_eq!(printed[0].epc, first_qr);
     assert_eq!(printed[1].epc, first_qr);
-    assert_eq!(printed[0].label_kind, "progress");
-    assert_eq!(printed[0].item_name, "Qolip yachayka B7");
+    assert_eq!(printed[0].label_kind, "qr_center");
+    assert_eq!(printed[0].item_name, "B7");
 }
