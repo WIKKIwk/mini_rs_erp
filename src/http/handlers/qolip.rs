@@ -9,7 +9,8 @@ use crate::core::auth::models::Principal;
 use crate::core::authz::Capability;
 use crate::core::gscale::{GscaleServiceError, ProgressLabelPrintRequest};
 use crate::core::qolip::{
-    QolipBlock, QolipCellQrInput, QolipError, QolipLocationUpsert, QolipProductSpecUpsert,
+    QolipBlock, QolipCellQrInput, QolipCheckoutCreate, QolipCheckoutReturn, QolipError,
+    QolipLocationMove, QolipLocationUpsert, QolipProductSpecUpsert,
 };
 use crate::core::warehouses::WarehouseUpsert;
 use crate::http::handlers::auth::bearer_token;
@@ -29,12 +30,18 @@ pub async fn blocks(
     ensure_qolip_access(&state, &principal).await?;
     match method {
         Method::GET => {
+            let is_admin = state
+                .admin
+                .principal_has_capability(&principal, Capability::AdminAccess)
+                .await;
             let blocks = state
                 .qolip
-                .assigned_blocks(&principal)
+                .blocks_for_principal(&principal, is_admin)
                 .await
                 .map_err(qolip_error)?;
-            let warehouses = assigned_qolip_warehouses(&state, &principal)
+            let warehouses = state
+                .qolip
+                .warehouses_for_principal(&principal, is_admin)
                 .await
                 .map_err(qolip_error)?;
             Ok(Json(serde_json::json!({
@@ -142,10 +149,20 @@ pub async fn locations(
     ensure_qolip_access(&state, &principal).await?;
     match method {
         Method::GET => {
-            let block = query.block.as_deref().unwrap_or("").trim();
-            let block = match accessible_qolip_block(&state, &principal, block).await? {
+            let mut block_query = query.block.as_deref().unwrap_or("").trim().to_string();
+            if block_query.is_empty() {
+                let assigned = state
+                    .qolip
+                    .assigned_blocks(&principal)
+                    .await
+                    .map_err(qolip_error)?;
+                if assigned.len() == 1 {
+                    block_query = assigned[0].name.clone();
+                }
+            }
+            let block = match accessible_qolip_block(&state, &principal, &block_query).await? {
                 Some(block) => block.name,
-                None => block.to_string(),
+                None => block_query,
             };
             let locations = state.qolip.locations(&block).await.map_err(qolip_error)?;
             Ok(Json(serde_json::json!({
@@ -172,6 +189,219 @@ pub async fn locations(
         }
         _ => Err(method_not_allowed()),
     }
+}
+
+pub async fn workers(
+    State(state): State<AppState>,
+    method: Method,
+    headers: HeaderMap,
+    Query(query): Query<QolipSearchQuery>,
+) -> Result<Json<serde_json::Value>, (StatusCode, Json<QolipErrorResponse>)> {
+    if method != Method::GET {
+        return Err(method_not_allowed());
+    }
+    let principal = authenticated_principal(&state, &headers).await?;
+    ensure_qolip_access(&state, &principal).await?;
+    let workers = state
+        .workers
+        .workers(query.q.as_deref().unwrap_or(""), query.limit.unwrap_or(100))
+        .await
+        .map_err(|_| qolip_error(QolipError::StoreFailed))?;
+    Ok(Json(serde_json::json!({
+        "ok": true,
+        "workers": workers,
+    })))
+}
+
+pub async fn checkouts(
+    State(state): State<AppState>,
+    method: Method,
+    headers: HeaderMap,
+    Query(query): Query<QolipCheckoutsQuery>,
+    body: Bytes,
+) -> Result<Json<serde_json::Value>, (StatusCode, Json<QolipErrorResponse>)> {
+    let principal = authenticated_principal(&state, &headers).await?;
+    ensure_qolip_access(&state, &principal).await?;
+    match method {
+        Method::GET => {
+            if let Some(block) = query
+                .block
+                .as_deref()
+                .filter(|value| !value.trim().is_empty())
+            {
+                let _ = accessible_qolip_block(&state, &principal, block).await?;
+            }
+            let is_admin = state
+                .admin
+                .principal_has_capability(&principal, Capability::AdminAccess)
+                .await;
+            let checkouts = state
+                .qolip
+                .checkouts(
+                    &principal,
+                    is_admin,
+                    query
+                        .block
+                        .as_deref()
+                        .filter(|value| !value.trim().is_empty()),
+                    query.status.as_deref().unwrap_or("open"),
+                    query.limit.unwrap_or(50),
+                )
+                .await
+                .map_err(qolip_error)?;
+            Ok(Json(serde_json::json!({
+                "ok": true,
+                "checkouts": checkouts,
+            })))
+        }
+        Method::POST => {
+            let input: QolipCheckoutCreate =
+                serde_json::from_slice(&body).map_err(|_| bad_request("invalid_json"))?;
+            let location = state
+                .qolip
+                .location_by_id(&input.location_id)
+                .await
+                .map_err(qolip_error)?
+                .ok_or_else(|| bad_request("location_not_found"))?;
+            let _ = accessible_qolip_block(&state, &principal, &location.block).await?;
+            let worker_id = input.worker_id.trim();
+            if worker_id.is_empty() {
+                return Err(bad_request("worker_required"));
+            }
+            let workers = state
+                .workers
+                .workers_by_ids(&[worker_id.to_string()])
+                .await
+                .map_err(|_| qolip_error(QolipError::StoreFailed))?;
+            let Some(worker) = workers.into_iter().next() else {
+                return Err(bad_request("worker_not_found"));
+            };
+            let checkout = state
+                .qolip
+                .issue_checkout_from_location(
+                    location,
+                    input.quantity,
+                    &worker.id,
+                    &worker.name,
+                    &principal,
+                )
+                .await
+                .map_err(qolip_error)?;
+            Ok(Json(serde_json::json!({
+                "ok": true,
+                "checkout": checkout,
+            })))
+        }
+        _ => Err(method_not_allowed()),
+    }
+}
+
+pub async fn checkout_return(
+    State(state): State<AppState>,
+    method: Method,
+    headers: HeaderMap,
+    body: Bytes,
+) -> Result<Json<serde_json::Value>, (StatusCode, Json<QolipErrorResponse>)> {
+    if method != Method::POST {
+        return Err(method_not_allowed());
+    }
+    let principal = authenticated_principal(&state, &headers).await?;
+    ensure_qolip_access(&state, &principal).await?;
+    let input: QolipCheckoutReturn =
+        serde_json::from_slice(&body).map_err(|_| bad_request("invalid_json"))?;
+    let checkout_id = input.checkout_id.trim();
+    if checkout_id.is_empty() {
+        return Err(bad_request("checkout_required"));
+    }
+    let checkout = state
+        .qolip
+        .checkout_by_id(checkout_id)
+        .await
+        .map_err(qolip_error)?
+        .ok_or_else(|| bad_request("checkout_not_found"))?;
+    let _ = accessible_qolip_block(&state, &principal, &checkout.block).await?;
+    let returned = state
+        .qolip
+        .return_checkout(input)
+        .await
+        .map_err(qolip_error)?;
+    Ok(Json(serde_json::json!({
+        "ok": true,
+        "checkout": returned,
+    })))
+}
+
+pub async fn location_move(
+    State(state): State<AppState>,
+    method: Method,
+    headers: HeaderMap,
+    body: Bytes,
+) -> Result<Json<serde_json::Value>, (StatusCode, Json<QolipErrorResponse>)> {
+    if method != Method::POST {
+        return Err(method_not_allowed());
+    }
+    let principal = authenticated_principal(&state, &headers).await?;
+    ensure_qolip_access(&state, &principal).await?;
+    let input: QolipLocationMove =
+        serde_json::from_slice(&body).map_err(|_| bad_request("invalid_json"))?;
+    let location = state
+        .qolip
+        .location_by_id(&input.location_id)
+        .await
+        .map_err(qolip_error)?
+        .ok_or_else(|| bad_request("location_not_found"))?;
+    let _ = accessible_qolip_block(&state, &principal, &location.block).await?;
+    let saved = state
+        .qolip
+        .move_location(input, &principal)
+        .await
+        .map_err(qolip_error)?;
+    Ok(Json(serde_json::json!({
+        "ok": true,
+        "location": saved,
+    })))
+}
+
+pub async fn cell_qr(
+    State(state): State<AppState>,
+    method: Method,
+    headers: HeaderMap,
+    Query(query): Query<QolipCellQrLookupQuery>,
+) -> Result<Json<serde_json::Value>, (StatusCode, Json<QolipErrorResponse>)> {
+    if method != Method::GET {
+        return Err(method_not_allowed());
+    }
+    let principal = authenticated_principal(&state, &headers).await?;
+    ensure_qolip_access(&state, &principal).await?;
+    let qr = query.qr.as_deref().unwrap_or("").trim();
+    if qr.is_empty() {
+        return Err(bad_request("qr_required"));
+    }
+    let is_admin = state
+        .admin
+        .principal_has_capability(&principal, Capability::AdminAccess)
+        .await;
+    if !is_admin
+        && state
+            .qolip
+            .assigned_blocks(&principal)
+            .await
+            .map_err(qolip_error)?
+            .is_empty()
+    {
+        return Err(forbidden());
+    }
+    let cell_qr = state
+        .qolip
+        .resolve_cell_qr(qr, &principal)
+        .await
+        .map_err(qolip_error)?
+        .ok_or_else(|| bad_request("cell_qr_not_found"))?;
+    let _ = accessible_qolip_block(&state, &principal, &cell_qr.block).await?;
+    Ok(Json(serde_json::json!({
+        "ok": true,
+        "cell_qr": cell_qr,
+    })))
 }
 
 pub async fn cell_qr_print(
@@ -311,6 +541,22 @@ pub struct QolipBlockUpsert {
 }
 
 #[derive(Debug, Deserialize)]
+pub struct QolipCheckoutsQuery {
+    #[serde(default)]
+    block: Option<String>,
+    #[serde(default)]
+    status: Option<String>,
+    #[serde(default)]
+    limit: Option<usize>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct QolipCellQrLookupQuery {
+    #[serde(default)]
+    qr: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
 pub struct QolipCellQrPrintRequest {
     #[serde(default)]
     block: String,
@@ -369,6 +615,20 @@ fn qolip_error(error: QolipError) -> (StatusCode, Json<QolipErrorResponse>) {
         QolipError::InvalidSize => bad_request("size_required"),
         QolipError::InvalidQuantity => bad_request("quantity_required"),
         QolipError::InvalidLocation => bad_request("location_invalid"),
+        QolipError::LocationNotFound => bad_request("location_not_found"),
+        QolipError::MissingWorker => bad_request("worker_required"),
+        QolipError::WorkerNotFound => bad_request("worker_not_found"),
+        QolipError::InsufficientStock => (
+            StatusCode::CONFLICT,
+            Json(QolipErrorResponse::new("insufficient_stock")),
+        ),
+        QolipError::CheckoutNotFound => bad_request("checkout_not_found"),
+        QolipError::CheckoutNotReturnable => bad_request("checkout_not_returnable"),
+        QolipError::CellQrNotFound => bad_request("cell_qr_not_found"),
+        QolipError::LocationIdentityMismatch => (
+            StatusCode::CONFLICT,
+            Json(QolipErrorResponse::new("location_identity_mismatch")),
+        ),
     }
 }
 

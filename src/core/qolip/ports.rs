@@ -3,13 +3,15 @@ use async_trait::async_trait;
 use crate::core::auth::models::Principal;
 
 use super::models::{
-    QolipBlock, QolipCellQr, QolipError, QolipLocation, QolipProduct, QolipProductSpec,
+    QolipBlock, QolipCellQr, QolipCheckout, QolipError, QolipLocation, QolipProduct,
+    QolipProductSpec,
 };
 
 #[async_trait]
 pub trait QolipStorePort: Send + Sync {
     async fn assigned_warehouses(&self, principal: &Principal) -> Result<Vec<String>, QolipError>;
     async fn assigned_blocks(&self, principal: &Principal) -> Result<Vec<QolipBlock>, QolipError>;
+    async fn all_blocks(&self) -> Result<Vec<QolipBlock>, QolipError>;
     async fn products(
         &self,
         query: &str,
@@ -22,6 +24,31 @@ pub trait QolipStorePort: Send + Sync {
         spec: QolipProductSpec,
     ) -> Result<QolipProductSpec, QolipError>;
     async fn locations(&self, block: &str) -> Result<Vec<QolipLocation>, QolipError>;
+    async fn location_by_id(&self, location_id: &str) -> Result<Option<QolipLocation>, QolipError>;
     async fn put_location(&self, location: QolipLocation) -> Result<QolipLocation, QolipError>;
     async fn get_or_create_cell_qr(&self, cell: QolipCellQr) -> Result<QolipCellQr, QolipError>;
+    async fn issue_checkout(&self, checkout: QolipCheckout) -> Result<QolipCheckout, QolipError>;
+    async fn checkouts(
+        &self,
+        block: Option<&str>,
+        allowed_blocks: Option<&[String]>,
+        status: &str,
+        limit: usize,
+    ) -> Result<Vec<QolipCheckout>, QolipError>;
+    async fn checkout_by_id(&self, checkout_id: &str) -> Result<Option<QolipCheckout>, QolipError>;
+    async fn return_checkout(
+        &self,
+        checkout_id: &str,
+        row_letter: &str,
+        column_number: Option<i32>,
+    ) -> Result<QolipCheckout, QolipError>;
+    async fn move_location(
+        &self,
+        location_id: &str,
+        row_letter: &str,
+        column_number: i32,
+        quantity: i32,
+    ) -> Result<QolipLocation, QolipError>;
+    async fn cell_qr_by_payload(&self, qr_payload: &str)
+    -> Result<Option<QolipCellQr>, QolipError>;
 }

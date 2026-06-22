@@ -22,6 +22,14 @@ pub struct DownloadedFile {
 pub struct ProfilePrefs {
     pub nickname: String,
     pub avatar_url: String,
+    #[serde(default)]
+    pub avatar_object_key: String,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct StoredProfileAvatar {
+    pub object_key: String,
+    pub public_url: String,
 }
 
 #[async_trait]
@@ -51,6 +59,23 @@ pub trait ProfileLookup: Send + Sync {
 pub trait ProfileStorePort: Send + Sync {
     async fn get(&self, key: &str) -> Result<ProfilePrefs, ProfileStoreError>;
     async fn put(&self, key: &str, prefs: ProfilePrefs) -> Result<(), ProfileStoreError>;
+}
+
+#[async_trait]
+pub trait ProfileAvatarStorage: Send + Sync {
+    async fn put_profile_avatar(
+        &self,
+        role: &str,
+        principal_ref: &str,
+        filename: &str,
+        content_type: &str,
+        content: Vec<u8>,
+    ) -> Result<StoredProfileAvatar, ProfilePortError>;
+
+    async fn get_profile_avatar(
+        &self,
+        object_key: &str,
+    ) -> Result<DownloadedFile, ProfilePortError>;
 }
 
 #[derive(Debug, thiserror::Error)]

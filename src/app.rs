@@ -26,6 +26,8 @@ use crate::fcm::discover_push_sender;
 use crate::google_sheets::{OrderSheetSink, discover_order_sheet_sink};
 use crate::rps::RpsDriverClient;
 use crate::store::admin_store::JsonAdminStore;
+use crate::store::profile_avatar_local::LocalProfileAvatarStorage;
+use crate::store::profile_avatar_r2::R2ProfileAvatarStorage;
 use crate::store::role_store::RoleDefinitionStore;
 
 #[path = "app_local_store.rs"]
@@ -105,7 +107,13 @@ impl AppState {
         }
         let calculate_order_image_dir = Arc::new(calculate_order_image_dir());
         let push_token_store = build_push_token_store(&config);
-        let profiles = ProfileService::new(String::new()).with_store(profile_store);
+        let mut profiles = ProfileService::new(String::new()).with_store(profile_store);
+        if let Some(avatar_storage) = R2ProfileAvatarStorage::from_env(config.http_timeout) {
+            profiles = profiles.with_avatar_storage(Arc::new(avatar_storage));
+        } else {
+            profiles =
+                profiles.with_avatar_storage(Arc::new(LocalProfileAvatarStorage::from_env()));
+        }
         let push = PushService::new(push_token_store.clone())
             .with_sender(discover_push_sender(push_token_store));
         let rps_batch = RpsBatchService::new(build_rps_batch_store());

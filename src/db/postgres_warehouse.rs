@@ -189,6 +189,18 @@ impl WarehouseStorePort for PostgresWarehouseStore {
                 FROM mini_raw_material_stock
                 GROUP BY warehouse
             ),
+            qolip_counts AS (
+                SELECT warehouse, COALESCE(sum(quantity), 0)::bigint AS qolip_count
+                FROM mini_qolip_locations
+                WHERE btrim(warehouse) <> ''
+                GROUP BY warehouse
+            ),
+            qolip_checkout_counts AS (
+                SELECT warehouse, COALESCE(sum(quantity), 0)::bigint AS checkout_count
+                FROM mini_qolip_checkouts
+                WHERE lower(status) = 'open' AND btrim(warehouse) <> ''
+                GROUP BY warehouse
+            ),
             reservation_counts AS (
                 SELECT
                     COALESCE(NULLIF(btrim(stock.warehouse), ''), NULLIF(btrim(item_map.warehouse), '')) AS warehouse,
@@ -218,19 +230,32 @@ impl WarehouseStorePort for PostgresWarehouseStore {
                 UNION
                 SELECT warehouse FROM raw_counts
                 UNION
+                SELECT warehouse FROM qolip_counts
+                UNION
+                SELECT warehouse FROM qolip_checkout_counts
+                UNION
                 SELECT warehouse FROM reservation_counts WHERE btrim(COALESCE(warehouse, '')) <> ''
                 UNION
                 SELECT warehouse FROM assignment_counts
             )
             SELECT
                 warehouse_names.warehouse,
-                (COALESCE(item_counts.item_count, 0) + COALESCE(raw_counts.raw_count, 0))::bigint AS product_count,
-                COALESCE(reservation_counts.reserved_count, 0)::bigint AS reserved_count,
+                (
+                    COALESCE(item_counts.item_count, 0)
+                    + COALESCE(raw_counts.raw_count, 0)
+                    + COALESCE(qolip_counts.qolip_count, 0)
+                )::bigint AS product_count,
+                (
+                    COALESCE(reservation_counts.reserved_count, 0)
+                    + COALESCE(qolip_checkout_counts.checkout_count, 0)
+                )::bigint AS reserved_count,
                 COALESCE(assignment_counts.assignment_count, 0)::bigint AS assignment_count,
                 COALESCE(assignment_counts.assigned_display_names, '') AS assigned_display_names
             FROM warehouse_names
             LEFT JOIN item_counts ON lower(item_counts.warehouse) = lower(warehouse_names.warehouse)
             LEFT JOIN raw_counts ON lower(raw_counts.warehouse) = lower(warehouse_names.warehouse)
+            LEFT JOIN qolip_counts ON lower(qolip_counts.warehouse) = lower(warehouse_names.warehouse)
+            LEFT JOIN qolip_checkout_counts ON lower(qolip_checkout_counts.warehouse) = lower(warehouse_names.warehouse)
             LEFT JOIN reservation_counts ON lower(reservation_counts.warehouse) = lower(warehouse_names.warehouse)
             LEFT JOIN assignment_counts ON lower(assignment_counts.warehouse) = lower(warehouse_names.warehouse)
             WHERE ($1 = '' OR lower(warehouse_names.warehouse) LIKE $2)

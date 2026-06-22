@@ -108,6 +108,8 @@ impl<'a> BytesDecode<'a> for ProfilePrefsCodec {
 struct StoredProfilePrefs {
     nickname: String,
     avatar_url: String,
+    #[serde(default)]
+    avatar_object_key: String,
 }
 
 impl StoredProfilePrefs {
@@ -115,6 +117,7 @@ impl StoredProfilePrefs {
         Self {
             nickname: prefs.nickname.clone(),
             avatar_url: prefs.avatar_url.clone(),
+            avatar_object_key: prefs.avatar_object_key.clone(),
         }
     }
 
@@ -122,6 +125,7 @@ impl StoredProfilePrefs {
         ProfilePrefs {
             nickname: self.nickname,
             avatar_url: self.avatar_url,
+            avatar_object_key: self.avatar_object_key,
         }
     }
 }
@@ -223,6 +227,7 @@ mod tests {
                 ProfilePrefs {
                     nickname: "Ali".into(),
                     avatar_url: "https://example.test/avatar.png".into(),
+                    avatar_object_key: String::new(),
                 },
             )
             .await

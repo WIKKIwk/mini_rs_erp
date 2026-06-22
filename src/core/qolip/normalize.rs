@@ -1,8 +1,8 @@
 use crate::core::auth::models::{Principal, PrincipalRole};
 
 use super::models::{
-    QolipCellQr, QolipCellQrInput, QolipError, QolipLocation, QolipLocationUpsert,
-    QolipProductSpec, QolipProductSpecUpsert,
+    QolipBlock, QolipCellQr, QolipCellQrInput, QolipCheckout, QolipError, QolipLocation,
+    QolipLocationUpsert, QolipProductSpec, QolipProductSpecUpsert,
 };
 
 pub(super) fn normalize_cell_qr(
@@ -178,6 +178,153 @@ fn qolip_location_id(
     )
 }
 
+pub(super) fn normalize_checkout(
+    location: QolipLocation,
+    quantity: i32,
+    worker_id: &str,
+    worker_name: &str,
+    principal: &Principal,
+) -> Result<QolipCheckout, QolipError> {
+    if quantity <= 0 {
+        return Err(QolipError::InvalidQuantity);
+    }
+    if quantity > location.quantity {
+        return Err(QolipError::InsufficientStock);
+    }
+    let worker_id = worker_id.trim();
+    let worker_name = worker_name.trim();
+    if worker_id.is_empty() {
+        return Err(QolipError::MissingWorker);
+    }
+    if worker_name.is_empty() {
+        return Err(QolipError::MissingWorker);
+    }
+    Ok(QolipCheckout {
+        id: new_checkout_id(),
+        location_id: location.id,
+        block: location.block,
+        warehouse: location.warehouse,
+        item_code: location.item_code,
+        item_name: location.item_name,
+        qolip_code: location.qolip_code,
+        size: location.size,
+        quantity,
+        row_letter: location.row_letter,
+        column_number: location.column_number,
+        location_label: location.location_label,
+        issued_to_ref: worker_id.to_string(),
+        issued_to_name: worker_name.to_string(),
+        status: "open".to_string(),
+        issued_by_role: role_code(&principal.role).to_string(),
+        issued_by_ref: principal.ref_.trim().to_string(),
+        issued_by_name: principal.display_name.trim().to_string(),
+        issued_at: String::new(),
+    })
+}
+
+pub(crate) fn location_from_checkout(checkout: &QolipCheckout) -> QolipLocation {
+    QolipLocation {
+        id: qolip_location_id(
+            &checkout.block,
+            &checkout.item_code,
+            &checkout.qolip_code,
+            checkout.size,
+            &checkout.row_letter,
+            checkout.column_number,
+        ),
+        block: checkout.block.clone(),
+        warehouse: checkout.warehouse.clone(),
+        item_code: checkout.item_code.clone(),
+        item_name: checkout.item_name.clone(),
+        qolip_code: checkout.qolip_code.clone(),
+        size: checkout.size,
+        quantity: checkout.quantity,
+        row_letter: checkout.row_letter.clone(),
+        column_number: checkout.column_number,
+        location_label: checkout.location_label.clone(),
+        created_by_role: checkout.issued_by_role.clone(),
+        created_by_ref: checkout.issued_by_ref.clone(),
+        created_by_name: checkout.issued_by_name.clone(),
+    }
+}
+
+pub(crate) fn location_from_checkout_target(
+    checkout: &QolipCheckout,
+    row_letter: &str,
+    column_number: Option<i32>,
+) -> Result<QolipLocation, QolipError> {
+    let row_letter = row_letter.trim();
+    if row_letter.is_empty() && column_number.is_none() {
+        return Ok(location_from_checkout(checkout));
+    }
+    let row_letter = normalize_row_letter(row_letter)?.ok_or(QolipError::InvalidLocation)?;
+    let column_number = normalize_column_number(column_number, Some(&row_letter))?
+        .ok_or(QolipError::InvalidLocation)?;
+    let mut location = location_from_checkout(checkout);
+    location.row_letter = row_letter;
+    location.column_number = Some(column_number);
+    location.location_label = format!("{}{}", location.row_letter, column_number);
+    location.id = qolip_location_id(
+        &location.block,
+        &location.item_code,
+        &location.qolip_code,
+        location.size,
+        &location.row_letter,
+        location.column_number,
+    );
+    Ok(location)
+}
+
+pub(crate) fn normalize_move_target(
+    source: &QolipLocation,
+    row_letter: &str,
+    column_number: i32,
+    quantity: i32,
+) -> Result<QolipLocation, QolipError> {
+    if quantity <= 0 {
+        return Err(QolipError::InvalidQuantity);
+    }
+    if quantity > source.quantity {
+        return Err(QolipError::InsufficientStock);
+    }
+    let row_letter = normalize_row_letter(row_letter)?.ok_or(QolipError::InvalidLocation)?;
+    let column_number = normalize_column_number(Some(column_number), Some(&row_letter))?
+        .ok_or(QolipError::InvalidLocation)?;
+    let location_label = format!("{row_letter}{column_number}");
+    let target_id = qolip_location_id(
+        &source.block,
+        &source.item_code,
+        &source.qolip_code,
+        source.size,
+        &row_letter,
+        Some(column_number),
+    );
+    if target_id == source.id {
+        return Err(QolipError::InvalidLocation);
+    }
+    Ok(QolipLocation {
+        id: target_id,
+        block: source.block.clone(),
+        warehouse: source.warehouse.clone(),
+        item_code: source.item_code.clone(),
+        item_name: source.item_name.clone(),
+        qolip_code: source.qolip_code.clone(),
+        size: source.size,
+        quantity,
+        row_letter,
+        column_number: Some(column_number),
+        location_label,
+        created_by_role: source.created_by_role.clone(),
+        created_by_ref: source.created_by_ref.clone(),
+        created_by_name: source.created_by_name.clone(),
+    })
+}
+
+fn new_checkout_id() -> String {
+    let bytes: [u8; 12] = rand::random();
+    format!("qolip-checkout-{}", data_encoding::HEXLOWER.encode(&bytes))
+}
+
 fn qolip_cell_id(warehouse: &str, block: &str, row_letter: &str, column_number: i32) -> String {
     format!(
         "qolip-cell:{}:{}:{}:{}",
@@ -192,6 +339,64 @@ fn qolip_cell_qr_payload(cell_id: &str) -> String {
     let hash = fnv1a64(cell_id);
     let checksum = (hash & 0xffff) as u16;
     format!("4002{hash:016X}{checksum:04X}")
+}
+
+pub(crate) fn location_identity_matches(
+    existing: &QolipLocation,
+    incoming: &QolipLocation,
+) -> bool {
+    existing
+        .block
+        .trim()
+        .eq_ignore_ascii_case(incoming.block.trim())
+        && existing
+            .warehouse
+            .trim()
+            .eq_ignore_ascii_case(incoming.warehouse.trim())
+        && existing
+            .item_code
+            .trim()
+            .eq_ignore_ascii_case(incoming.item_code.trim())
+        && existing
+            .qolip_code
+            .trim()
+            .eq_ignore_ascii_case(incoming.qolip_code.trim())
+        && existing.size == incoming.size
+        && existing
+            .row_letter
+            .trim()
+            .eq_ignore_ascii_case(incoming.row_letter.trim())
+        && existing.column_number == incoming.column_number
+}
+
+pub(crate) fn resolve_cell_qr_from_payload(
+    payload: &str,
+    blocks: &[QolipBlock],
+    principal: &Principal,
+) -> Option<QolipCellQr> {
+    let payload = payload.trim();
+    if payload.is_empty() {
+        return None;
+    }
+    for block in blocks {
+        for row in 'A'..='Z' {
+            for column in 1..=9 {
+                let input = QolipCellQrInput {
+                    block: block.name.clone(),
+                    warehouse: block.warehouse.clone(),
+                    row_letter: row.to_string(),
+                    column_number: Some(column),
+                };
+                let Ok(cell) = normalize_cell_qr(input, principal) else {
+                    continue;
+                };
+                if cell.qr_payload.eq_ignore_ascii_case(payload) {
+                    return Some(cell);
+                }
+            }
+        }
+    }
+    None
 }
 
 fn fnv1a64(value: &str) -> u64 {
@@ -220,8 +425,8 @@ fn compact_key(value: &str) -> String {
 mod tests {
     use crate::core::auth::models::{Principal, PrincipalRole};
 
-    use super::super::models::{QolipError, QolipLocationUpsert};
-    use super::normalize_location;
+    use super::super::models::{QolipBlock, QolipError, QolipLocationUpsert};
+    use super::{normalize_location, resolve_cell_qr_from_payload};
 
     fn principal() -> Principal {
         Principal {
@@ -259,5 +464,33 @@ mod tests {
             normalize_location(invalid, &principal()),
             Err(QolipError::InvalidLocation)
         );
+    }
+
+    #[test]
+    fn resolve_cell_qr_from_payload_matches_deterministic_qr() {
+        use super::super::models::QolipCellQrInput;
+        use super::normalize_cell_qr;
+
+        let blocks = vec![QolipBlock {
+            name: "A".to_string(),
+            warehouse: "Qolip ombor".to_string(),
+        }];
+        let cell = resolve_cell_qr_from_payload("INVALID", &blocks, &principal());
+        assert!(cell.is_none());
+
+        let seed = normalize_cell_qr(
+            QolipCellQrInput {
+                block: "A".to_string(),
+                warehouse: "Qolip ombor".to_string(),
+                row_letter: "B".to_string(),
+                column_number: Some(3),
+            },
+            &principal(),
+        )
+        .expect("cell");
+        let resolved = resolve_cell_qr_from_payload(&seed.qr_payload, &blocks, &principal())
+            .expect("resolved");
+        assert_eq!(resolved.location_label, "B3");
+        assert_eq!(resolved.block, "A");
     }
 }

@@ -1,12 +1,13 @@
 mod memory_store;
 mod models;
-mod normalize;
+pub(crate) mod normalize;
 mod ports;
 mod service;
 
 pub use memory_store::MemoryQolipStore;
 pub use models::{
-    QolipBlock, QolipCellQr, QolipCellQrInput, QolipError, QolipLocation, QolipLocationUpsert,
+    QolipBlock, QolipCellQr, QolipCellQrInput, QolipCheckout, QolipCheckoutCreate,
+    QolipCheckoutReturn, QolipError, QolipLocation, QolipLocationMove, QolipLocationUpsert,
     QolipProduct, QolipProductSpec, QolipProductSpecUpsert,
 };
 pub use normalize::role_code;
