@@ -4,6 +4,8 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use axum::body::{Body, to_bytes};
 use axum::http::{Request, StatusCode, header};
+use image::codecs::png::PngEncoder;
+use image::{ColorType, GenericImageView, ImageEncoder, Rgba, RgbaImage};
 use tower::ServiceExt;
 
 use super::router::build_router;
@@ -11,10 +13,12 @@ use crate::app::AppState;
 use crate::config::AppConfig;
 use crate::core::auth::models::{Principal, PrincipalRole};
 use crate::core::profile::ports::{
-    CustomerProfileRecord, DownloadedFile, ProfileLookup, ProfilePortError, SupplierProfileRecord,
+    CustomerProfileRecord, DownloadedFile, ProfileAvatarStorage, ProfileLookup, ProfilePortError,
+    ProfilePrefs, ProfileStoreError, ProfileStorePort, StoredProfileAvatar, SupplierProfileRecord,
 };
 use crate::core::profile::service::ProfileService;
 use crate::core::session::manager::SessionManager;
+use crate::store::profile_avatar_local::LocalProfileAvatarStorage;
 
 fn test_state() -> AppState {
     let mut state = AppState::new(AppConfig {
@@ -36,6 +40,77 @@ fn test_state() -> AppState {
     });
     state.sessions = SessionManager::memory(Some(30 * 24 * 60 * 60));
     state
+}
+
+#[tokio::test]
+async fn profile_avatar_upload_persists_worker_avatar_without_r2() {
+    let mut state = test_state();
+    state.profiles = ProfileService::new(String::new())
+        .with_store(Arc::new(FakeProfileStore::default()))
+        .with_avatar_storage(Arc::new(LocalProfileAvatarStorage::new(
+            unique_profile_avatar_store_dir(),
+        )));
+    let token = state
+        .sessions
+        .create(Principal {
+            role: PrincipalRole::Werka,
+            display_name: "Werka".to_string(),
+            legal_name: "Werka".to_string(),
+            ref_: "werka_1".to_string(),
+            phone: "+998901234567".to_string(),
+            avatar_url: String::new(),
+        })
+        .await
+        .expect("session");
+    let boundary = "BOUNDARY";
+
+    let app = build_router(state);
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v1/mobile/profile/avatar")
+                .header(header::AUTHORIZATION, format!("Bearer {token}"))
+                .header(header::HOST, "mobile.test")
+                .header(
+                    header::CONTENT_TYPE,
+                    format!("multipart/form-data; boundary={boundary}"),
+                )
+                .body(Body::from(multipart_avatar_body(boundary)))
+                .expect("request"),
+        )
+        .await
+        .expect("response");
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let value = json_body(response).await;
+    assert!(
+        value["avatar_url"]
+            .as_str()
+            .unwrap_or_default()
+            .starts_with("https://mobile.test/v1/mobile/profile/avatar/view?token=")
+    );
+
+    let view = app
+        .oneshot(
+            Request::builder()
+                .uri(format!("/v1/mobile/profile/avatar/view?token={token}"))
+                .body(Body::empty())
+                .expect("request"),
+        )
+        .await
+        .expect("response");
+    assert_eq!(view.status(), StatusCode::OK);
+    assert_eq!(
+        view.headers()
+            .get(header::CONTENT_TYPE)
+            .and_then(|value| value.to_str().ok()),
+        Some("image/jpeg")
+    );
+    let bytes = to_bytes(view.into_body(), usize::MAX).await.expect("body");
+    let decoded = image::load_from_memory(&bytes).expect("canonical avatar");
+    assert_eq!(decoded.dimensions(), (1000, 500));
 }
 
 #[tokio::test]
@@ -162,14 +237,7 @@ async fn profile_avatar_upload_returns_proxied_supplier_avatar_like_go() {
         .with_profile_lookup(Arc::new(FakeLookup));
     let token = supplier_session(&state).await;
     let boundary = "BOUNDARY";
-    let body = concat!(
-        "--BOUNDARY\r\n",
-        "Content-Disposition: form-data; name=\"avatar\"; filename=\"avatar.png\"\r\n",
-        "Content-Type: image/png\r\n",
-        "\r\n",
-        "pngdata\r\n",
-        "--BOUNDARY--\r\n"
-    );
+    let body = multipart_avatar_body(boundary);
 
     let response = build_router(state)
         .oneshot(
@@ -191,7 +259,51 @@ async fn profile_avatar_upload_returns_proxied_supplier_avatar_like_go() {
     assert_eq!(response.status(), StatusCode::OK);
     assert_eq!(
         json_body(response).await["avatar_url"],
-        format!("http://mobile.test/v1/mobile/profile/avatar/view?token={token}")
+        format!("https://mobile.test/v1/mobile/profile/avatar/view?token={token}")
+    );
+}
+
+#[tokio::test]
+async fn profile_avatar_upload_returns_worker_storage_avatar() {
+    let mut state = test_state();
+    state.profiles = ProfileService::new(String::new())
+        .with_store(Arc::new(FakeProfileStore::default()))
+        .with_avatar_storage(Arc::new(FakeAvatarStorage));
+    let token = state
+        .sessions
+        .create(Principal {
+            role: PrincipalRole::Werka,
+            display_name: "Werka".to_string(),
+            legal_name: "Werka".to_string(),
+            ref_: "werka_1".to_string(),
+            phone: "+998901234567".to_string(),
+            avatar_url: String::new(),
+        })
+        .await
+        .expect("session");
+    let boundary = "BOUNDARY";
+    let body = multipart_avatar_body(boundary);
+
+    let response = build_router(state)
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v1/mobile/profile/avatar")
+                .header(header::AUTHORIZATION, format!("Bearer {token}"))
+                .header(
+                    header::CONTENT_TYPE,
+                    format!("multipart/form-data; boundary={boundary}"),
+                )
+                .body(Body::from(body))
+                .expect("request"),
+        )
+        .await
+        .expect("response");
+
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(
+        json_body(response).await["avatar_url"],
+        "https://cdn.test/profile_avatars/werka/werka_1/avatar.jpg"
     );
 }
 
@@ -212,7 +324,7 @@ async fn avatar_view_requires_auth() {
 }
 
 #[tokio::test]
-async fn avatar_view_forbids_non_supplier() {
+async fn avatar_view_returns_not_found_without_uploaded_avatar() {
     let state = test_state();
     let token = state
         .sessions
@@ -238,7 +350,7 @@ async fn avatar_view_forbids_non_supplier() {
         .await
         .expect("response");
 
-    assert_eq!(response.status(), StatusCode::FORBIDDEN);
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
 }
 
 #[tokio::test]
@@ -317,6 +429,38 @@ fn unique_profile_store_path() -> PathBuf {
     ))
 }
 
+fn unique_profile_avatar_store_dir() -> PathBuf {
+    std::env::temp_dir().join(format!(
+        "accord-profile-avatars-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("time")
+            .as_nanos()
+    ))
+}
+
+fn multipart_avatar_body(boundary: &str) -> Vec<u8> {
+    let mut body = Vec::new();
+    body.extend_from_slice(format!("--{boundary}\r\n").as_bytes());
+    body.extend_from_slice(
+        b"Content-Disposition: form-data; name=\"avatar\"; filename=\"avatar.png\"\r\n",
+    );
+    body.extend_from_slice(b"Content-Type: image/png\r\n\r\n");
+    body.extend_from_slice(&test_png(1600, 800));
+    body.extend_from_slice(format!("\r\n--{boundary}--\r\n").as_bytes());
+    body
+}
+
+fn test_png(width: u32, height: u32) -> Vec<u8> {
+    let image = RgbaImage::from_pixel(width, height, Rgba([120, 80, 40, 255]));
+    let mut bytes = Vec::new();
+    PngEncoder::new(&mut bytes)
+        .write_image(image.as_raw(), width, height, ColorType::Rgba8.into())
+        .expect("encode png");
+    bytes
+}
+
 struct FakeLookup;
 
 #[async_trait]
@@ -355,9 +499,71 @@ impl ProfileLookup for FakeLookup {
         content: Vec<u8>,
     ) -> Result<String, ProfilePortError> {
         assert_eq!(supplier_id, "SUP-001");
-        assert_eq!(filename, "avatar.png");
-        assert_eq!(content_type, "image/png");
-        assert_eq!(content, b"pngdata".to_vec());
+        assert_eq!(filename, "avatar.jpg");
+        assert_eq!(content_type, "image/jpeg");
+        let decoded = image::load_from_memory(&content).expect("canonical avatar");
+        assert_eq!(decoded.dimensions(), (1000, 500));
         Ok("/files/uploaded.png".to_string())
+    }
+}
+
+#[derive(Default)]
+struct FakeProfileStore {
+    prefs: std::sync::Mutex<std::collections::HashMap<String, ProfilePrefs>>,
+}
+
+#[async_trait]
+impl ProfileStorePort for FakeProfileStore {
+    async fn get(&self, key: &str) -> Result<ProfilePrefs, ProfileStoreError> {
+        Ok(self
+            .prefs
+            .lock()
+            .expect("prefs")
+            .get(key)
+            .cloned()
+            .unwrap_or_default())
+    }
+
+    async fn put(&self, key: &str, prefs: ProfilePrefs) -> Result<(), ProfileStoreError> {
+        self.prefs
+            .lock()
+            .expect("prefs")
+            .insert(key.to_string(), prefs);
+        Ok(())
+    }
+}
+
+struct FakeAvatarStorage;
+
+#[async_trait]
+impl ProfileAvatarStorage for FakeAvatarStorage {
+    async fn put_profile_avatar(
+        &self,
+        role: &str,
+        principal_ref: &str,
+        filename: &str,
+        content_type: &str,
+        content: Vec<u8>,
+    ) -> Result<StoredProfileAvatar, ProfilePortError> {
+        assert_eq!(role, "werka");
+        assert_eq!(principal_ref, "werka_1");
+        assert_eq!(filename, "avatar.jpg");
+        assert_eq!(content_type, "image/jpeg");
+        let decoded = image::load_from_memory(&content).expect("canonical avatar");
+        assert_eq!(decoded.dimensions(), (1000, 500));
+        Ok(StoredProfileAvatar {
+            object_key: "profile_avatars/werka/werka_1/avatar.jpg".to_string(),
+            public_url: "https://cdn.test/profile_avatars/werka/werka_1/avatar.jpg".to_string(),
+        })
+    }
+
+    async fn get_profile_avatar(
+        &self,
+        _object_key: &str,
+    ) -> Result<DownloadedFile, ProfilePortError> {
+        Ok(DownloadedFile {
+            content_type: "image/png".to_string(),
+            body: b"pngdata".to_vec(),
+        })
     }
 }

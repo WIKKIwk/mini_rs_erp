@@ -28,7 +28,29 @@ impl ProductionMapService {
             .into_iter()
             .map(|id| id.trim().to_string())
             .filter(|id| !id.is_empty())
-            .collect();
+            .collect::<Vec<_>>();
+        let sequences = self.store.apparatus_sequences().await?;
+        let all_states = self.store.apparatus_queue_states().await?;
+        let known_keys = sequences
+            .keys()
+            .chain(all_states.keys())
+            .map(|key| key.as_str())
+            .collect::<BTreeSet<_>>()
+            .into_iter()
+            .map(|key| key.to_string())
+            .collect::<Vec<_>>();
+        let storage_key = queue_state::resolve_apparatus_storage_key(apparatus, &known_keys);
+        let current_sequence = sequences
+            .get(&storage_key)
+            .or_else(|| sequences.get(apparatus))
+            .cloned()
+            .unwrap_or_default();
+        let states = all_states
+            .get(&storage_key)
+            .or_else(|| all_states.get(apparatus))
+            .cloned()
+            .unwrap_or_default();
+        validate_active_sequence_barrier(&current_sequence, &order_ids, &states)?;
         self.store
             .put_apparatus_sequence(apparatus, order_ids)
             .await?;
@@ -355,4 +377,41 @@ impl ProductionMapService {
             progress_batch: prepared.progress_batch,
         })
     }
+}
+
+fn validate_active_sequence_barrier(
+    current_sequence: &[String],
+    next_sequence: &[String],
+    states: &BTreeMap<String, String>,
+) -> Result<(), ProductionMapError> {
+    for (order_id, state) in states {
+        let Some(parsed) = queue_state::ApparatusQueueOrderState::parse(state) else {
+            continue;
+        };
+        if !parsed.is_active() {
+            continue;
+        }
+        let order_id = order_id.trim();
+        let Some(next_index) = next_sequence.iter().position(|id| id.trim() == order_id) else {
+            return Err(ProductionMapError::QueueActionNotAllowed);
+        };
+        let current_index = current_sequence
+            .iter()
+            .position(|id| id.trim() == order_id)
+            .unwrap_or(0);
+        if next_index > current_index {
+            return Err(ProductionMapError::QueueActionNotAllowed);
+        }
+        let allowed_before = current_sequence
+            .iter()
+            .take(current_index)
+            .map(|id| id.trim())
+            .collect::<BTreeSet<_>>();
+        for id in next_sequence.iter().take(next_index) {
+            if !allowed_before.contains(id.trim()) {
+                return Err(ProductionMapError::QueueActionNotAllowed);
+            }
+        }
+    }
+    Ok(())
 }

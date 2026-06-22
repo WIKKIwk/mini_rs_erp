@@ -86,6 +86,61 @@ pub struct QolipCellQrInput {
     pub column_number: Option<i32>,
 }
 
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct QolipCheckout {
+    pub id: String,
+    pub location_id: String,
+    pub block: String,
+    pub warehouse: String,
+    pub item_code: String,
+    pub item_name: String,
+    pub qolip_code: String,
+    pub size: i32,
+    pub quantity: i32,
+    pub row_letter: String,
+    pub column_number: Option<i32>,
+    pub location_label: String,
+    pub issued_to_ref: String,
+    pub issued_to_name: String,
+    pub status: String,
+    pub issued_by_role: String,
+    pub issued_by_ref: String,
+    pub issued_by_name: String,
+    pub issued_at: String,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize)]
+pub struct QolipCheckoutCreate {
+    #[serde(default)]
+    pub location_id: String,
+    #[serde(default)]
+    pub quantity: i32,
+    #[serde(default)]
+    pub worker_id: String,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize)]
+pub struct QolipCheckoutReturn {
+    #[serde(default)]
+    pub checkout_id: String,
+    #[serde(default)]
+    pub row_letter: String,
+    #[serde(default)]
+    pub column_number: Option<i32>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize)]
+pub struct QolipLocationMove {
+    #[serde(default)]
+    pub location_id: String,
+    #[serde(default)]
+    pub quantity: i32,
+    #[serde(default)]
+    pub row_letter: String,
+    #[serde(default)]
+    pub column_number: Option<i32>,
+}
+
 #[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize)]
 pub struct QolipLocationUpsert {
     #[serde(default)]
@@ -124,6 +179,22 @@ pub enum QolipError {
     InvalidQuantity,
     #[error("location is invalid")]
     InvalidLocation,
+    #[error("location not found")]
+    LocationNotFound,
+    #[error("worker is required")]
+    MissingWorker,
+    #[error("worker not found")]
+    WorkerNotFound,
+    #[error("insufficient stock")]
+    InsufficientStock,
+    #[error("checkout not found")]
+    CheckoutNotFound,
+    #[error("checkout not returnable")]
+    CheckoutNotReturnable,
+    #[error("cell qr not found")]
+    CellQrNotFound,
+    #[error("location identity mismatch")]
+    LocationIdentityMismatch,
     #[error("qolip store failed")]
     StoreFailed,
 }

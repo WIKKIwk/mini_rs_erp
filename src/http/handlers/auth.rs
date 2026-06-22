@@ -8,6 +8,7 @@ use serde::de::DeserializeOwned;
 use crate::app::AppState;
 use crate::core::auth::models::{LoginRequest, LoginResponse, Principal, PrincipalRole};
 use crate::core::auth::service::AuthError;
+use crate::core::authz::Capability;
 
 pub async fn login(
     State(state): State<AppState>,
@@ -25,6 +26,14 @@ pub async fn login(
         .await
         .map_err(login_error)?;
     principal = state.profiles.refresh(principal).await;
+    if principal.role == PrincipalRole::Qolipchi
+        && !state
+            .admin
+            .principal_has_capability(&principal, Capability::QolipManage)
+            .await
+    {
+        return Err(login_error(AuthError::InvalidCredentials));
+    }
     let token = state
         .sessions
         .create(principal.clone())
@@ -104,10 +113,7 @@ pub(crate) fn with_avatar_proxy(
     mut principal: Principal,
     token: &str,
 ) -> Principal {
-    if principal.role != PrincipalRole::Supplier
-        || principal.ref_.trim().is_empty()
-        || principal.avatar_url.trim().is_empty()
-    {
+    if principal.ref_.trim().is_empty() || principal.avatar_url.trim().is_empty() {
         return principal;
     }
 
@@ -130,13 +136,66 @@ pub(crate) fn with_avatar_proxy(
 }
 
 fn request_scheme(headers: &HeaderMap) -> &str {
-    headers
+    if headers
         .get("x-forwarded-proto")
         .and_then(|value| value.to_str().ok())
         .map(str::trim)
         .filter(|value| value.eq_ignore_ascii_case("https"))
-        .map(|_| "https")
-        .unwrap_or("http")
+        .is_some()
+    {
+        return "https";
+    }
+
+    if headers
+        .get("cf-visitor")
+        .and_then(|value| value.to_str().ok())
+        .map(|value| value.to_ascii_lowercase().contains("\"scheme\":\"https\""))
+        .unwrap_or(false)
+    {
+        return "https";
+    }
+
+    let host = headers
+        .get(axum::http::header::HOST)
+        .and_then(|value| value.to_str().ok())
+        .map(str::trim)
+        .unwrap_or_default();
+    if is_public_host(host) {
+        return "https";
+    }
+
+    "http"
+}
+
+fn is_public_host(host: &str) -> bool {
+    let host = host.trim().trim_matches(['[', ']']).to_ascii_lowercase();
+    if host.is_empty()
+        || host == "localhost"
+        || host.starts_with("localhost:")
+        || host.starts_with("127.")
+        || host.starts_with("10.")
+        || host.starts_with("192.168.")
+        || host.starts_with("172.16.")
+        || host.starts_with("172.17.")
+        || host.starts_with("172.18.")
+        || host.starts_with("172.19.")
+        || host.starts_with("172.20.")
+        || host.starts_with("172.21.")
+        || host.starts_with("172.22.")
+        || host.starts_with("172.23.")
+        || host.starts_with("172.24.")
+        || host.starts_with("172.25.")
+        || host.starts_with("172.26.")
+        || host.starts_with("172.27.")
+        || host.starts_with("172.28.")
+        || host.starts_with("172.29.")
+        || host.starts_with("172.30.")
+        || host.starts_with("172.31.")
+    {
+        return false;
+    }
+
+    !host.parse::<std::net::IpAddr>().is_ok()
 }
 
 fn unauthorized() -> (StatusCode, Json<ErrorResponse>) {
@@ -222,28 +281,31 @@ mod tests {
 
         assert_eq!(
             principal.avatar_url,
-            "http://mobile.test/v1/mobile/profile/avatar/view?token=abc%20token"
+            "https://mobile.test/v1/mobile/profile/avatar/view?token=abc%20token"
         );
     }
 
     #[test]
-    fn customer_avatar_is_not_proxied() {
+    fn local_avatar_uses_http_proxy_url() {
         let mut headers = HeaderMap::new();
-        headers.insert("host", HeaderValue::from_static("mobile.test"));
+        headers.insert("host", HeaderValue::from_static("127.0.0.1:18081"));
 
         let principal = with_avatar_proxy(
             &headers,
             Principal {
-                role: PrincipalRole::Customer,
-                display_name: "Customer".to_string(),
-                legal_name: "Customer".to_string(),
-                ref_: "CUST-001".to_string(),
+                role: PrincipalRole::Admin,
+                display_name: "Admin".to_string(),
+                legal_name: "Admin".to_string(),
+                ref_: "admin".to_string(),
                 phone: "+998901234567".to_string(),
-                avatar_url: "http://files.test/files/avatar.png".to_string(),
+                avatar_url: "local://profile_avatars/admin/admin/avatar.jpg".to_string(),
             },
             "token",
         );
 
-        assert_eq!(principal.avatar_url, "http://files.test/files/avatar.png");
+        assert_eq!(
+            principal.avatar_url,
+            "http://127.0.0.1:18081/v1/mobile/profile/avatar/view?token=token"
+        );
     }
 }

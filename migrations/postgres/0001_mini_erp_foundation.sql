@@ -531,6 +531,41 @@ CREATE TABLE IF NOT EXISTS mini_qolip_cell_qrs (
     CONSTRAINT mini_qolip_cell_qrs_qr_unique UNIQUE (qr_payload)
 );
 
+CREATE TABLE IF NOT EXISTS mini_qolip_checkouts (
+    id TEXT PRIMARY KEY,
+    location_id TEXT NOT NULL,
+    block TEXT NOT NULL,
+    warehouse TEXT NOT NULL DEFAULT '',
+    item_code TEXT NOT NULL,
+    item_name TEXT NOT NULL,
+    qolip_code TEXT NOT NULL,
+    size INTEGER NOT NULL,
+    quantity INTEGER NOT NULL,
+    row_letter TEXT NOT NULL DEFAULT '',
+    column_number INTEGER,
+    location_label TEXT NOT NULL DEFAULT '',
+    issued_to_ref TEXT NOT NULL,
+    issued_to_name TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'open',
+    issued_by_role TEXT NOT NULL DEFAULT '',
+    issued_by_ref TEXT NOT NULL DEFAULT '',
+    issued_by_name TEXT NOT NULL DEFAULT '',
+    payload_json JSONB NOT NULL DEFAULT '{}'::jsonb,
+    issued_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    CONSTRAINT mini_qolip_checkouts_location_not_blank CHECK (btrim(location_id) <> ''),
+    CONSTRAINT mini_qolip_checkouts_block_not_blank CHECK (btrim(block) <> ''),
+    CONSTRAINT mini_qolip_checkouts_item_code_not_blank CHECK (btrim(item_code) <> ''),
+    CONSTRAINT mini_qolip_checkouts_item_name_not_blank CHECK (btrim(item_name) <> ''),
+    CONSTRAINT mini_qolip_checkouts_qolip_code_not_blank CHECK (btrim(qolip_code) <> ''),
+    CONSTRAINT mini_qolip_checkouts_size_positive CHECK (size > 0),
+    CONSTRAINT mini_qolip_checkouts_quantity_positive CHECK (quantity > 0),
+    CONSTRAINT mini_qolip_checkouts_issued_to_ref_not_blank CHECK (btrim(issued_to_ref) <> ''),
+    CONSTRAINT mini_qolip_checkouts_issued_to_name_not_blank CHECK (btrim(issued_to_name) <> ''),
+    CONSTRAINT mini_qolip_checkouts_status_allowed CHECK (status IN ('open', 'returned', 'cancelled'))
+);
+
 CREATE TABLE IF NOT EXISTS mini_gscale_receipts (
     name TEXT PRIMARY KEY,
     status TEXT NOT NULL DEFAULT 'draft',
@@ -732,6 +767,9 @@ CREATE INDEX IF NOT EXISTS idx_mini_qolip_locations_block ON mini_qolip_location
 CREATE INDEX IF NOT EXISTS idx_mini_qolip_locations_item ON mini_qolip_locations (lower(item_code), lower(item_name));
 CREATE INDEX IF NOT EXISTS idx_mini_qolip_cell_qrs_cell ON mini_qolip_cell_qrs (lower(block), row_letter, column_number);
 CREATE INDEX IF NOT EXISTS idx_mini_qolip_product_specs_item ON mini_qolip_product_specs (lower(item_code), lower(item_name), lower(qolip_code));
+CREATE INDEX IF NOT EXISTS idx_mini_qolip_checkouts_status_issued ON mini_qolip_checkouts (status, issued_at DESC);
+CREATE INDEX IF NOT EXISTS idx_mini_qolip_checkouts_block ON mini_qolip_checkouts (lower(block), issued_at DESC);
+CREATE INDEX IF NOT EXISTS idx_mini_qolip_checkouts_worker ON mini_qolip_checkouts (lower(issued_to_ref), status, issued_at DESC);
 CREATE INDEX IF NOT EXISTS idx_mini_gscale_receipts_status_updated ON mini_gscale_receipts (status, updated_at DESC);
 CREATE INDEX IF NOT EXISTS idx_mini_gscale_receipts_item_updated ON mini_gscale_receipts (lower(item_code), updated_at DESC);
 CREATE INDEX IF NOT EXISTS idx_mini_workers_level ON mini_workers(level);

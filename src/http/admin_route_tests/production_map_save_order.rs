@@ -216,6 +216,88 @@ async fn production_map_sequence_round_trips_on_server() {
 }
 
 #[tokio::test]
+async fn production_map_sequence_blocks_reorder_before_active_order() {
+    let state = test_state();
+    state
+        .admin
+        .upsert_role_assignment(crate::core::authz::RoleAssignmentUpsert {
+            principal_role: PrincipalRole::Aparatchi,
+            principal_ref: "worker-sequence-active".to_string(),
+            role_id: "aparatchi".to_string(),
+            assigned_apparatus: vec!["7 ta rangli pechat".to_string()],
+        })
+        .await
+        .expect("assignment");
+    let token = session(&state, PrincipalRole::Admin).await;
+    let worker_token =
+        session_for(&state, PrincipalRole::Aparatchi, "worker-sequence-active").await;
+    let router = build_router(state.clone());
+
+    for (id, order_number) in [("zakaz-active-a", "9101"), ("zakaz-active-b", "9102")] {
+        let saved = router
+            .clone()
+            .oneshot(request_with_body(
+                "PUT",
+                "/v1/mobile/admin/production-maps",
+                &token,
+                &pechat_order_map_json(id, id, order_number, "7 ta rangli pechat"),
+            ))
+            .await
+            .expect("save map");
+        assert_eq!(saved.status(), StatusCode::OK);
+    }
+
+    let sequence = router
+        .clone()
+        .oneshot(request_with_body(
+            "PUT",
+            "/v1/mobile/admin/production-maps/sequence",
+            &token,
+            r#"{
+                "apparatus":"7 ta rangli pechat",
+                "order_ids":["zakaz-active-a","zakaz-active-b"]
+            }"#,
+        ))
+        .await
+        .expect("save sequence");
+    assert_eq!(sequence.status(), StatusCode::OK);
+
+    let started = router
+        .clone()
+        .oneshot(request_with_body(
+            "POST",
+            "/v1/mobile/admin/production-maps/queue-action",
+            &worker_token,
+            r#"{
+                "apparatus":"7 ta rangli pechat",
+                "order_id":"zakaz-active-a",
+                "action":"start"
+            }"#,
+        ))
+        .await
+        .expect("start order");
+    assert_eq!(started.status(), StatusCode::OK);
+
+    let blocked = router
+        .oneshot(request_with_body(
+            "PUT",
+            "/v1/mobile/admin/production-maps/sequence",
+            &token,
+            r#"{
+                "apparatus":"7 ta rangli pechat",
+                "order_ids":["zakaz-active-b","zakaz-active-a"]
+            }"#,
+        ))
+        .await
+        .expect("blocked sequence");
+    assert_eq!(blocked.status(), StatusCode::BAD_REQUEST);
+    assert_eq!(
+        json_body(blocked).await["error"],
+        "queue_action_not_allowed"
+    );
+}
+
+#[tokio::test]
 async fn production_map_calendar_routes_are_removed() {
     let state = test_state();
     let token = session(&state, PrincipalRole::Admin).await;

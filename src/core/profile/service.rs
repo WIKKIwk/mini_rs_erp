@@ -1,9 +1,10 @@
 use std::sync::Arc;
 
 use crate::core::auth::models::{Principal, PrincipalRole};
+use crate::core::profile::avatar_image::prepare_profile_avatar;
 use crate::core::profile::ports::{
-    DownloadedFile, ProfileLookup, ProfilePortError, ProfilePrefs, ProfileStoreError,
-    ProfileStorePort,
+    DownloadedFile, ProfileAvatarStorage, ProfileLookup, ProfilePortError, ProfilePrefs,
+    ProfileStoreError, ProfileStorePort,
 };
 
 #[derive(Clone)]
@@ -11,6 +12,7 @@ pub struct ProfileService {
     file_base_url: String,
     lookup: Option<Arc<dyn ProfileLookup>>,
     store: Option<Arc<dyn ProfileStorePort>>,
+    avatar_storage: Option<Arc<dyn ProfileAvatarStorage>>,
 }
 
 impl ProfileService {
@@ -19,6 +21,7 @@ impl ProfileService {
             file_base_url: file_base_url.trim().trim_end_matches('/').to_string(),
             lookup: None,
             store: None,
+            avatar_storage: None,
         }
     }
 
@@ -33,9 +36,14 @@ impl ProfileService {
         self
     }
 
+    pub fn with_avatar_storage(mut self, storage: Arc<dyn ProfileAvatarStorage>) -> Self {
+        self.avatar_storage = Some(storage);
+        self
+    }
+
     pub async fn refresh(&self, mut principal: Principal) -> Principal {
         let Some(lookup) = self.lookup.as_ref() else {
-            return principal;
+            return self.merge_prefs(principal).await;
         };
 
         match principal.role {
@@ -78,17 +86,52 @@ impl ProfileService {
         &self,
         mut principal: Principal,
         filename: &str,
-        content_type: &str,
+        _content_type: &str,
         content: Vec<u8>,
     ) -> Result<Principal, ProfilePortError> {
-        if principal.role != PrincipalRole::Supplier {
+        if self.avatar_storage.is_none() && principal.role != PrincipalRole::Supplier {
             return Ok(principal);
         }
+        let prepared = prepare_profile_avatar(filename, content)?;
+        if let Some(storage) = &self.avatar_storage {
+            let avatar = storage
+                .put_profile_avatar(
+                    role_key(&principal.role),
+                    &principal.ref_,
+                    &prepared.filename,
+                    &prepared.content_type,
+                    prepared.body,
+                )
+                .await?;
+            principal.avatar_url = avatar.public_url;
+
+            if let Some(store) = &self.store {
+                let key = profile_key(&principal);
+                let mut prefs = store
+                    .get(&key)
+                    .await
+                    .map_err(|_| ProfilePortError::LookupFailed)?;
+                prefs.avatar_url = principal.avatar_url.clone();
+                prefs.avatar_object_key = avatar.object_key;
+                store
+                    .put(&key, prefs)
+                    .await
+                    .map_err(|_| ProfilePortError::LookupFailed)?;
+            }
+
+            return Ok(self.merge_prefs(principal).await);
+        }
+
         let Some(lookup) = &self.lookup else {
             return Err(ProfilePortError::LookupFailed);
         };
         let file_url = lookup
-            .upload_supplier_image(&principal.ref_, filename, content_type, content)
+            .upload_supplier_image(
+                &principal.ref_,
+                &prepared.filename,
+                &prepared.content_type,
+                prepared.body,
+            )
             .await?;
         principal.avatar_url = absolute_file_url(&self.file_base_url, &file_url);
 
@@ -112,6 +155,17 @@ impl ProfileService {
         &self,
         principal: Principal,
     ) -> Result<Option<DownloadedFile>, ProfilePortError> {
+        if let Some(storage) = &self.avatar_storage
+            && let Some(store) = &self.store
+            && let Ok(prefs) = store.get(&profile_key(&principal)).await
+            && !prefs.avatar_object_key.trim().is_empty()
+        {
+            return storage
+                .get_profile_avatar(prefs.avatar_object_key.trim())
+                .await
+                .map(Some);
+        }
+
         if principal.role != PrincipalRole::Supplier {
             return Ok(None);
         }
@@ -156,6 +210,8 @@ fn merge_profile_prefs(mut principal: Principal, prefs: ProfilePrefs) -> Princip
     }
     if !prefs.avatar_url.trim().is_empty() {
         principal.avatar_url = prefs.avatar_url.trim().to_string();
+    } else if !prefs.avatar_object_key.trim().is_empty() {
+        principal.avatar_url = format!("local://{}", prefs.avatar_object_key.trim());
     }
     principal
 }
