@@ -29,6 +29,50 @@ cargo run --release
 Configure real `.env` values before production use. At minimum set
 `MINI_ERP_DATABASE_URL` and the persistent store paths.
 
+## Domain Bootstrap
+
+Use the bundled runtime helper when a mini ERP instance must come up behind a
+Cloudflare-managed hostname:
+
+```bash
+make up-domain DOMAIN=mini-rs-erp-dev.wspace.sbs
+```
+
+The helper builds the release binary, starts `mini_rs_erp`, creates or reuses a
+named Cloudflare Tunnel, routes only the requested hostname, and waits for:
+
+```bash
+https://mini-rs-erp-dev.wspace.sbs/healthz
+```
+
+For production, require an explicit PostgreSQL URL before startup:
+
+```bash
+MINI_ERP_DATABASE_URL=postgres://mini_rs_erp:secret@db.internal:5432/mini_rs_erp \
+REQUIRE_DATABASE_URL=1 \
+make up-domain DOMAIN=mini-rs-erp.example.com
+```
+
+Useful knobs:
+
+| Variable | Default | Description |
+| --- | --- | --- |
+| `DOMAIN` | required | Public hostname to publish. |
+| `PORT` | `18081` | Local mini ERP port. |
+| `CORE_URL` | `http://127.0.0.1:$PORT` | Local service URL exposed through the tunnel. |
+| `MOBILE_API_ADDR` | `127.0.0.1:$PORT` | Bind address passed to the service. |
+| `TUNNEL_NAME` | hostname-derived | Cloudflare Tunnel name. |
+| `REQUIRE_DATABASE_URL` | `0` | Set to `1` for production enforcement. |
+| `BUILD_RELEASE` | `1` | Build the release binary before starting. |
+| `ROUTE_DNS` | `1` | Route the hostname to the tunnel. |
+| `STATE_ROOT` | `garbage/domain` | Runtime state, logs, pid files, and tunnel config. |
+
+Stop only the local processes started for a hostname:
+
+```bash
+make stop-domain DOMAIN=mini-rs-erp-dev.wspace.sbs
+```
+
 ## Current Snapshot Notes
 
 The current snapshot is the mini ERP fork of the stable Rust mobile backend.
