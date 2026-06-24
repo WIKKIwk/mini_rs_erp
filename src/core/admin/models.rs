@@ -18,6 +18,48 @@ pub struct AdminSettings {
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AdminServerMonitorResponse {
+    pub server: AdminServerMonitorServer,
+    pub database: AdminServerMonitorDatabase,
+    pub backups: AdminServerMonitorBackups,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AdminServerMonitorServer {
+    pub bind_addr: String,
+    pub started_at_unix: i64,
+    pub uptime_seconds: i64,
+    pub status: String,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AdminServerMonitorDatabase {
+    pub configured: bool,
+    pub reachable: bool,
+    pub status: String,
+    pub ping_ms: i64,
+    pub error: String,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AdminServerMonitorBackups {
+    pub directory: String,
+    pub exists: bool,
+    pub file_count: usize,
+    pub latest: Option<AdminServerMonitorBackupFile>,
+    pub error: String,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AdminServerMonitorBackupFile {
+    pub name: String,
+    pub path: String,
+    pub size_bytes: u64,
+    pub modified_at_unix: i64,
+    pub age_seconds: i64,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AdminWarehouse {
     pub warehouse: String,
     pub company: String,

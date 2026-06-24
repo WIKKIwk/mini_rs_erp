@@ -1,5 +1,6 @@
 use super::raw_material_details::{fill_raw_material_assignment_input, lookup_raw_material_detail};
 use super::*;
+use std::collections::BTreeMap;
 
 pub async fn raw_material_rules(
     State(state): State<AppState>,
@@ -277,7 +278,7 @@ pub async fn raw_material_assignment_lookup(
     method: Method,
     headers: HeaderMap,
 ) -> Result<Response, AdminError> {
-    let principal = authorize_any_capability(
+    authorize_any_capability(
         &state,
         &headers,
         &[
@@ -287,16 +288,79 @@ pub async fn raw_material_assignment_lookup(
         ],
     )
     .await?;
-    require_capability(&state, &principal, Capability::RawMaterialAssign).await?;
     if method != Method::GET {
         return Err(method_not_allowed());
     }
     let detail = lookup_raw_material_detail(&state, &query.barcode).await?;
-    Ok(json_response(detail))
+    let mut value = serde_json::to_value(detail).unwrap_or_else(|_| serde_json::json!({}));
+    let normalized = query.barcode.trim().to_ascii_uppercase();
+    let assignment = state
+        .production_maps
+        .raw_material_assignments()
+        .await
+        .map_err(production_map_error)?
+        .into_iter()
+        .find(|assignment| assignment.barcode.trim().to_ascii_uppercase() == normalized);
+    if let Some(object) = value.as_object_mut() {
+        if let Some(assignment) = assignment {
+            let order_id = assignment.order_id.trim().to_string();
+            object.insert(
+                "assignment".to_string(),
+                raw_material_assignment_response(&state, assignment.clone()).await,
+            );
+            if let Some(order) = state
+                .production_maps
+                .raw_map(&order_id)
+                .await
+                .map_err(production_map_error)?
+            {
+                object.insert("order".to_string(), serde_json::json!(order));
+            }
+            let queue_states = state
+                .production_maps
+                .apparatus_queue_states()
+                .await
+                .map_err(production_map_error)?;
+            object.insert(
+                "queue_states".to_string(),
+                serde_json::json!(queue_states_for_order(queue_states, &order_id)),
+            );
+            let logs_by_order = state
+                .production_maps
+                .queue_action_logs_for_order(&order_id)
+                .await
+                .map_err(production_map_error)?;
+            object.insert("logs".to_string(), serde_json::json!(logs_by_order));
+        } else {
+            object.insert("assignment".to_string(), serde_json::Value::Null);
+            object.insert("order".to_string(), serde_json::Value::Null);
+            object.insert("queue_states".to_string(), serde_json::json!({}));
+            object.insert("logs".to_string(), serde_json::json!([]));
+        }
+    }
+    Ok(json_response(value))
 }
 
 #[derive(Default, serde::Deserialize)]
 pub struct RawMaterialAssignmentLookupQuery {
     #[serde(default)]
     barcode: String,
+}
+
+fn queue_states_for_order(
+    queue_states: BTreeMap<String, BTreeMap<String, String>>,
+    order_id: &str,
+) -> BTreeMap<String, BTreeMap<String, String>> {
+    let order_id = order_id.trim();
+    queue_states
+        .into_iter()
+        .filter_map(|(apparatus, states)| {
+            states.get(order_id).map(|state| {
+                (
+                    apparatus,
+                    BTreeMap::from([(order_id.to_string(), state.clone())]),
+                )
+            })
+        })
+        .collect()
 }

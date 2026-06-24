@@ -972,6 +972,123 @@ async fn upsert_maps_batch_keeps_queue_state_and_sequence_cache() {
     );
 }
 
+#[tokio::test]
+async fn progress_qr_report_uses_child_batch_as_current_even_when_scanned_batch_sorts_first() {
+    let store = std::sync::Arc::new(MemoryProductionMapStore::new());
+    let service = ProductionMapService::new(store.clone());
+    let order_id = "zakaz-qr-lineage";
+    service
+        .upsert_map(two_stage_map(order_id, "Pechat", "Qadoqlash"))
+        .await
+        .expect("map");
+
+    let scanned = test_progress_batch(
+        "progress-batch:999:Pechat:zakaz-qr-lineage:pause",
+        order_id,
+        "Pechat",
+        "QR-OLD",
+        OrderProgressBatchWipStatus::Processed,
+        "",
+    );
+    let current = test_progress_batch(
+        "progress-batch:100:Qadoqlash:zakaz-qr-lineage:complete",
+        order_id,
+        "Qadoqlash",
+        "QR-NEW",
+        OrderProgressBatchWipStatus::Waiting,
+        &scanned.batch_id,
+    );
+    store
+        .put_order_progress_batch(scanned.clone())
+        .await
+        .expect("scanned batch");
+    store
+        .put_order_progress_batch(current)
+        .await
+        .expect("current batch");
+
+    let report = service
+        .progress_qr_report("", &scanned.qr_payload)
+        .await
+        .expect("report");
+
+    assert_eq!(
+        report
+            .current_batch
+            .as_ref()
+            .map(|batch| batch.qr_payload.as_str()),
+        Some("QR-NEW")
+    );
+    assert!(report.is_stale);
+    assert_eq!(report.stale_reason, "processed_by_next_stage");
+}
+
+#[tokio::test]
+async fn progress_qr_report_keeps_lineage_when_order_has_more_than_500_batches() {
+    let store = std::sync::Arc::new(MemoryProductionMapStore::new());
+    let service = ProductionMapService::new(store.clone());
+    let order_id = "zakaz-qr-long-lineage";
+    service
+        .upsert_map(two_stage_map(order_id, "Pechat", "Qadoqlash"))
+        .await
+        .expect("map");
+
+    let scanned = test_progress_batch(
+        "progress-batch:999:Pechat:zakaz-qr-long-lineage:pause",
+        order_id,
+        "Pechat",
+        "QR-LONG-OLD",
+        OrderProgressBatchWipStatus::Processed,
+        "",
+    );
+    let current = test_progress_batch(
+        "progress-batch:001:Qadoqlash:zakaz-qr-long-lineage:complete",
+        order_id,
+        "Qadoqlash",
+        "QR-LONG-NEW",
+        OrderProgressBatchWipStatus::Waiting,
+        &scanned.batch_id,
+    );
+    store
+        .put_order_progress_batch(scanned.clone())
+        .await
+        .expect("scanned batch");
+    store
+        .put_order_progress_batch(current)
+        .await
+        .expect("current batch");
+    for index in 0..501 {
+        store
+            .put_order_progress_batch(test_progress_batch(
+                &format!(
+                    "progress-batch:{:03}:Pechat:zakaz-qr-long-lineage:filler",
+                    index + 100
+                ),
+                order_id,
+                "Pechat",
+                &format!("QR-LONG-FILLER-{index}"),
+                OrderProgressBatchWipStatus::Waiting,
+                "",
+            ))
+            .await
+            .expect("filler batch");
+    }
+
+    let report = service
+        .progress_qr_report("", &scanned.qr_payload)
+        .await
+        .expect("report");
+
+    assert_eq!(
+        report
+            .current_batch
+            .as_ref()
+            .map(|batch| batch.qr_payload.as_str()),
+        Some("QR-LONG-NEW")
+    );
+    assert!(report.progress_batches.len() > 500);
+}
+
 async fn pause_first_stage_batch(
     service: &ProductionMapService,
     order_id: &str,
@@ -1006,6 +1123,54 @@ async fn pause_first_stage_batch(
     paused
         .progress_batch
         .ok_or(ProductionMapError::ProgressBatchNotFound)
+}
+
+fn test_progress_batch(
+    batch_id: &str,
+    order_id: &str,
+    apparatus: &str,
+    qr_payload: &str,
+    wip_status: OrderProgressBatchWipStatus,
+    parent_batch_id: &str,
+) -> OrderProgressBatch {
+    OrderProgressBatch {
+        batch_id: batch_id.to_string(),
+        session_id: format!("session-{batch_id}"),
+        apparatus: apparatus.to_string(),
+        order_id: order_id.to_string(),
+        action: queue_state::ApparatusQueueAction::Complete,
+        status: OrderProgressBatchStatus::Completed,
+        produced_qty: 1.0,
+        uom: "kg".to_string(),
+        qr_payload: qr_payload.to_string(),
+        label_item_code: order_id.to_string(),
+        label_item_name: order_id.to_string(),
+        executor_name: "Worker".to_string(),
+        worker_role: "aparatchi".to_string(),
+        worker_ref: "worker".to_string(),
+        worker_display_name: "Worker".to_string(),
+        wip_status,
+        current_apparatus: apparatus.to_string(),
+        current_apparatus_key: queue_state::apparatus_search_key(apparatus),
+        current_location: apparatus.to_string(),
+        next_apparatus: String::new(),
+        parent_batch_id: parent_batch_id.to_string(),
+        used_by_session_id: String::new(),
+        used_by_apparatus: String::new(),
+        processed_by_session_id: String::new(),
+        processed_by_apparatus: String::new(),
+        return_ink_kg: None,
+        lamination_print_leftover_rolls: None,
+        lamination_film_leftover_rolls: None,
+        rezka_bosma_waste: None,
+        rezka_lamination_waste: None,
+        rezka_edge_waste: None,
+        total_waste: None,
+        finished_goods_kg: None,
+        finished_goods_meter: None,
+        description: String::new(),
+        payload_json: serde_json::json!({}),
+    }
 }
 
 fn two_stage_map(id: &str, first: &str, second: &str) -> ProductionMapDefinition {

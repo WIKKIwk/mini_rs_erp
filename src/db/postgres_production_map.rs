@@ -38,9 +38,11 @@ use self::material_helpers::{
 };
 use self::order_query_helpers::{
     load_active_order_run_session, load_active_order_run_sessions_for_worker,
-    load_completed_queue_orders_for_actor, load_order_run_session, load_progress_batch,
-    load_progress_batch_by_qr, load_progress_batches_for_worker, load_queue_action_logs_for_orders,
-    load_queue_action_logs_for_worker, load_wip_progress_batches,
+    load_completed_queue_orders_for_actor, load_order_run_session,
+    load_order_run_sessions_for_order, load_progress_batch, load_progress_batch_by_qr,
+    load_progress_batches_for_order, load_progress_batches_for_worker,
+    load_queue_action_logs_for_orders, load_queue_action_logs_for_worker,
+    load_wip_progress_batches,
 };
 use self::progress_helpers::{
     put_order_progress_batch, put_order_progress_batch_tx, put_order_progress_event,
@@ -275,6 +277,13 @@ impl ProductionMapStorePort for PostgresProductionMapStore {
         load_order_run_session(&self.pool, session_id).await
     }
 
+    async fn order_run_sessions_for_order(
+        &self,
+        order_id: &str,
+    ) -> Result<Vec<OrderRunSession>, ProductionMapError> {
+        load_order_run_sessions_for_order(&self.pool, order_id).await
+    }
+
     async fn progress_batch(
         &self,
         batch_id: &str,
@@ -296,6 +305,13 @@ impl ProductionMapStorePort for PostgresProductionMapStore {
         limit: usize,
     ) -> Result<Vec<OrderProgressBatch>, ProductionMapError> {
         load_progress_batches_for_worker(&self.pool, worker_refs, worker_display_name, limit).await
+    }
+
+    async fn progress_batches_for_order(
+        &self,
+        order_id: &str,
+    ) -> Result<Vec<OrderProgressBatch>, ProductionMapError> {
+        load_progress_batches_for_order(&self.pool, order_id).await
     }
 
     async fn wip_progress_batches(

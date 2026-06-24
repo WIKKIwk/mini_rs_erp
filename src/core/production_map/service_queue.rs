@@ -74,6 +74,21 @@ impl ProductionMapService {
             .await
     }
 
+    pub async fn queue_action_logs_for_order(
+        &self,
+        order_id: &str,
+    ) -> Result<Vec<ProductionOrderLogEntry>, ProductionMapError> {
+        let order_id = order_id.trim().to_string();
+        if order_id.is_empty() {
+            return Ok(Vec::new());
+        }
+        let logs_by_order = self
+            .store
+            .queue_action_logs_for_orders(std::slice::from_ref(&order_id))
+            .await?;
+        Ok(logs_by_order.get(&order_id).cloned().unwrap_or_default())
+    }
+
     pub async fn active_order_run_sessions_for_worker(
         &self,
         worker_refs: &[String],
@@ -94,6 +109,71 @@ impl ProductionMapService {
         self.store
             .progress_batches_for_worker(worker_refs, worker_display_name, limit)
             .await
+    }
+
+    pub async fn progress_qr_report(
+        &self,
+        progress_batch_id: &str,
+        qr_payload: &str,
+    ) -> Result<ProductionQrReport, ProductionMapError> {
+        let scanned_batch = self
+            .progress_batch_for_qr(progress_batch_id, qr_payload)
+            .await?;
+        let order_id = scanned_batch.order_id.trim().to_string();
+        let order = self.raw_map(&order_id).await?;
+        let mut progress_batches = self.store.progress_batches_for_order(&order_id).await?;
+        if progress_batches.is_empty() {
+            progress_batches.push(scanned_batch.clone());
+        }
+        let current_batch = current_progress_batch_for_report(&scanned_batch, &progress_batches);
+        let is_stale = scanned_batch.wip_status == OrderProgressBatchWipStatus::Processed
+            || current_batch
+                .as_ref()
+                .is_some_and(|batch| batch.batch_id.trim() != scanned_batch.batch_id.trim());
+        let stale_reason = if !is_stale {
+            String::new()
+        } else if scanned_batch.wip_status == OrderProgressBatchWipStatus::Processed {
+            "processed_by_next_stage".to_string()
+        } else {
+            "superseded_by_new_qr".to_string()
+        };
+        let queue_states =
+            queue_states_for_order(self.store.apparatus_queue_states().await?, &order_id);
+        let logs_by_order = self
+            .store
+            .queue_action_logs_for_orders(std::slice::from_ref(&order_id))
+            .await?;
+        let logs = logs_by_order.get(&order_id).cloned().unwrap_or_default();
+        let opened_by = logs.first().map(|entry| ProductionQrOpenedBy {
+            actor_role: entry.actor_role.clone(),
+            actor_ref: entry.actor_ref.clone(),
+            actor_display_name: entry.actor_display_name.clone(),
+            opened_at_unix: entry.created_at_unix,
+        });
+        let run_sessions = self.store.order_run_sessions_for_order(&order_id).await?;
+        let active_sessions = run_sessions
+            .iter()
+            .filter(|session| {
+                matches!(
+                    session.status,
+                    OrderRunStatus::Active | OrderRunStatus::Paused
+                )
+            })
+            .cloned()
+            .collect();
+        Ok(ProductionQrReport {
+            scanned_batch,
+            current_batch,
+            is_stale,
+            stale_reason,
+            order,
+            queue_states,
+            logs,
+            progress_batches,
+            run_sessions,
+            active_sessions,
+            opened_by,
+        })
     }
 
     pub async fn wip_progress_batches(
@@ -431,6 +511,59 @@ impl ProductionMapService {
             progress_batch: prepared.progress_batch,
         })
     }
+}
+
+fn current_progress_batch_for_report(
+    scanned_batch: &OrderProgressBatch,
+    progress_batches: &[OrderProgressBatch],
+) -> Option<OrderProgressBatch> {
+    let mut current = scanned_batch.clone();
+    let mut seen = BTreeSet::from([current.batch_id.trim().to_string()]);
+    loop {
+        let next = progress_batches
+            .iter()
+            .filter(|batch| batch.parent_batch_id.trim() == current.batch_id.trim())
+            .max_by(|left, right| {
+                progress_batch_order_key(left).cmp(&progress_batch_order_key(right))
+            })
+            .cloned();
+        let Some(next) = next else {
+            break;
+        };
+        if !seen.insert(next.batch_id.trim().to_string()) {
+            break;
+        }
+        current = next;
+    }
+    Some(current)
+}
+
+fn progress_batch_order_key(batch: &OrderProgressBatch) -> (u128, String) {
+    let stamp = batch
+        .batch_id
+        .split(':')
+        .nth(1)
+        .and_then(|value| value.parse::<u128>().ok())
+        .unwrap_or_default();
+    (stamp, batch.batch_id.trim().to_string())
+}
+
+fn queue_states_for_order(
+    queue_states: BTreeMap<String, BTreeMap<String, String>>,
+    order_id: &str,
+) -> BTreeMap<String, BTreeMap<String, String>> {
+    let order_id = order_id.trim();
+    queue_states
+        .into_iter()
+        .filter_map(|(apparatus, states)| {
+            states.get(order_id).map(|state| {
+                (
+                    apparatus,
+                    BTreeMap::from([(order_id.to_string(), state.clone())]),
+                )
+            })
+        })
+        .collect()
 }
 
 fn validate_active_sequence_barrier(

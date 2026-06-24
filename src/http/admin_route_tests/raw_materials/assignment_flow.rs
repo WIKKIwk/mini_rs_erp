@@ -69,7 +69,10 @@ async fn raw_material_routes_assign_and_require_scan_for_queue_start() {
     assert_eq!(rule_body["apparatus"], "7 ta rangli pechat - A");
     assert_eq!(rule_body["requires_material"], true);
     assert_eq!(rule_body["requirement_groups"][0]["name"], "Yopishtiruvchi");
-    assert_eq!(rule_body["requirement_groups"][0]["item_groups"][0], "Kraska");
+    assert_eq!(
+        rule_body["requirement_groups"][0]["item_groups"][0],
+        "Kraska"
+    );
 
     let missing_assignment = router
         .clone()
@@ -177,6 +180,16 @@ async fn raw_material_routes_assign_and_require_scan_for_queue_start() {
     assert_eq!(lookup_body["item_group"], "Kraska");
     assert_eq!(lookup_body["qty"], 12.0);
     assert_eq!(lookup_body["uom"], "Kg");
+    assert_eq!(lookup_body["status"], "available");
+    assert_eq!(lookup_body["source_receipt_id"], "GSR-30AA");
+    assert_eq!(lookup_body["assignment"]["order_id"], "zakaz-raw-route");
+    assert_eq!(
+        lookup_body["assignment"]["apparatus"],
+        "7 ta rangli pechat - A"
+    );
+    assert_eq!(lookup_body["order"]["id"], "zakaz-raw-route");
+    assert!(lookup_body["queue_states"].is_object());
+    assert!(lookup_body["logs"].is_array());
 
     let missing_scan = router
         .clone()

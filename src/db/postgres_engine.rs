@@ -78,6 +78,14 @@ impl PostgresEngineStore {
         .await?;
         Ok(())
     }
+
+    #[allow(dead_code)]
+    pub async fn ping(&self) -> Result<(), sqlx::Error> {
+        sqlx::query("SELECT 1")
+            .execute(&self.pool)
+            .await
+            .map(|_| ())
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

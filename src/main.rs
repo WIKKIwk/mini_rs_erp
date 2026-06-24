@@ -94,7 +94,7 @@ async fn serve_listener(
             let mut builder = http1::Builder::new();
             builder.keep_alive(true);
 
-            if let Err(error) = builder.serve_connection(io, service).await {
+            if let Err(error) = builder.serve_connection(io, service).with_upgrades().await {
                 tracing::trace!(%error, %peer_addr, worker, "connection failed");
             }
         });

@@ -1,4 +1,5 @@
 use std::sync::Arc;
+use std::time::Instant;
 
 use crate::ai::werka_search::WerkaAiSearchService;
 use crate::config::{AppConfig, DotEnvPersister};
@@ -70,6 +71,8 @@ pub struct AppState {
     pub warehouse_events: WarehouseEventHub,
     #[allow(dead_code)]
     pub mini_engine: Option<PostgresEngineStore>,
+    pub started_at: Instant,
+    pub started_at_unix: i64,
 }
 
 impl AppState {
@@ -199,6 +202,8 @@ impl AppState {
             sessions,
             warehouse_events,
             mini_engine,
+            started_at: Instant::now(),
+            started_at_unix: time::OffsetDateTime::now_utc().unix_timestamp(),
         }
     }
 }

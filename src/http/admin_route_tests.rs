@@ -64,6 +64,7 @@ mod queue_progress;
 mod raw_materials;
 mod run_capabilities;
 mod suppliers_customers;
+mod system_monitor;
 mod users_settings;
 mod warehouses_groups;
 mod workers;
