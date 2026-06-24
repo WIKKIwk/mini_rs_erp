@@ -635,7 +635,7 @@ async fn downstream_start_marks_previous_stage_batch_in_use() {
 }
 
 #[tokio::test]
-async fn wip_listing_backfills_missing_next_apparatus_from_map() {
+async fn wip_listing_backfills_missing_current_and_next_apparatus_from_map() {
     let store = std::sync::Arc::new(MemoryProductionMapStore::new());
     let service = ProductionMapService::new(store.clone());
     let actor = QueueActionActor {
@@ -653,7 +653,13 @@ async fn wip_listing_backfills_missing_next_apparatus_from_map() {
     let mut batch = pause_first_stage_batch(&service, order_id, first, &actor, 21.0)
         .await
         .expect("first batch");
+    batch.current_apparatus.clear();
+    batch.current_apparatus_key.clear();
+    batch.current_location.clear();
     batch.next_apparatus.clear();
+    batch.payload_json["current_apparatus"] = serde_json::json!("");
+    batch.payload_json["current_apparatus_key"] = serde_json::json!("");
+    batch.payload_json["current_location"] = serde_json::json!("");
     batch.payload_json["next_apparatus"] = serde_json::json!("");
     store
         .put_order_progress_batch(batch)
@@ -666,7 +672,13 @@ async fn wip_listing_backfills_missing_next_apparatus_from_map() {
         .expect("wip batches");
 
     assert_eq!(batches.len(), 1);
+    assert_eq!(batches[0].current_apparatus, first);
+    assert_eq!(
+        batches[0].current_apparatus_key,
+        queue_state::apparatus_search_key(first)
+    );
     assert_eq!(batches[0].next_apparatus, second);
+    assert_eq!(batches[0].payload_json["current_apparatus"], first);
     assert_eq!(batches[0].payload_json["next_apparatus"], second);
 }
 
