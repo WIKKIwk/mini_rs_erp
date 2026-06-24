@@ -134,6 +134,39 @@ pub(super) async fn progress_batches_for_worker(
     Ok(batches)
 }
 
+pub(super) async fn wip_progress_batches(
+    store: &MemoryProductionMapStore,
+    apparatus: &str,
+    status: Option<OrderProgressBatchWipStatus>,
+    order_id: &str,
+    limit: usize,
+) -> Result<Vec<OrderProgressBatch>, ProductionMapError> {
+    if limit == 0 {
+        return Ok(Vec::new());
+    }
+    let apparatus = apparatus.trim();
+    let order_id = order_id.trim();
+    let mut batches = store
+        .order_progress_batches
+        .read()
+        .await
+        .values()
+        .filter(|batch| {
+            (apparatus.is_empty()
+                || queue_state::apparatus_titles_match(&batch.current_apparatus, apparatus))
+                && (order_id.is_empty() || batch.order_id.trim() == order_id)
+                && status.map_or(
+                    batch.wip_status != OrderProgressBatchWipStatus::Processed,
+                    |value| batch.wip_status == value,
+                )
+        })
+        .cloned()
+        .collect::<Vec<_>>();
+    batches.sort_by(|left, right| right.batch_id.cmp(&left.batch_id));
+    batches.truncate(limit.min(500));
+    Ok(batches)
+}
+
 pub(super) async fn put_order_run_session(
     store: &MemoryProductionMapStore,
     session: OrderRunSession,
