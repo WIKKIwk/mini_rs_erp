@@ -85,6 +85,10 @@ pub(super) fn routes() -> Router<AppState> {
             any(admin::production_map_progress_qr_lookup),
         )
         .route(
+            "/v1/mobile/admin/production-maps/wip-batches",
+            any(admin::production_map_wip_batches),
+        )
+        .route(
             "/v1/mobile/admin/raw-material-rules",
             any(admin::raw_material_rules),
         )

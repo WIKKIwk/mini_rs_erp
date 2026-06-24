@@ -6,10 +6,10 @@ use crate::core::calculate_orders::{
 use crate::core::gscale::models::{ProgressLabelPrintRequest, RawMaterialStockEntry};
 use crate::core::production_map::{
     ApparatusMaterialRuleUpsert, ApparatusQueuePolicy, CompletionRequestDecision,
-    ProductionMapBatchMoveRequest, ProductionMapDefinition, ProductionMapError,
-    ProductionMapMoveRequest, ProductionMapRunRequest, QueueActionActor, QueueProgressInput,
-    RawMaterialAssignment, RawMaterialAssignmentDeleteInput, RawMaterialAssignmentInput,
-    queue_state,
+    OrderProgressBatchWipStatus, ProductionMapBatchMoveRequest, ProductionMapDefinition,
+    ProductionMapError, ProductionMapMoveRequest, ProductionMapRunRequest, QueueActionActor,
+    QueueProgressInput, RawMaterialAssignment, RawMaterialAssignmentDeleteInput,
+    RawMaterialAssignmentInput, queue_state,
 };
 use crate::google_sheets::is_sheet_order_map;
 use async_stream::stream;
@@ -24,6 +24,7 @@ mod move_run;
 mod queue_actions;
 mod raw_material_details;
 mod raw_materials;
+mod wip;
 
 pub use self::completion::{
     production_map_closed_orders, production_map_completed_orders,
@@ -37,6 +38,7 @@ pub use self::raw_materials::{
     raw_material_assignment_lookup, raw_material_assignments, raw_material_rules,
     raw_material_stock,
 };
+pub use self::wip::production_map_wip_batches;
 
 pub async fn production_maps(
     State(state): State<AppState>,

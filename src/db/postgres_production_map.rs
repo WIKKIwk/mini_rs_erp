@@ -40,7 +40,7 @@ use self::order_query_helpers::{
     load_active_order_run_session, load_active_order_run_sessions_for_worker,
     load_completed_queue_orders_for_actor, load_order_run_session, load_progress_batch,
     load_progress_batch_by_qr, load_progress_batches_for_worker, load_queue_action_logs_for_orders,
-    load_queue_action_logs_for_worker,
+    load_queue_action_logs_for_worker, load_wip_progress_batches,
 };
 use self::progress_helpers::{
     put_order_progress_batch, put_order_progress_batch_tx, put_order_progress_event,
@@ -296,6 +296,16 @@ impl ProductionMapStorePort for PostgresProductionMapStore {
         limit: usize,
     ) -> Result<Vec<OrderProgressBatch>, ProductionMapError> {
         load_progress_batches_for_worker(&self.pool, worker_refs, worker_display_name, limit).await
+    }
+
+    async fn wip_progress_batches(
+        &self,
+        apparatus: &str,
+        status: Option<crate::core::production_map::OrderProgressBatchWipStatus>,
+        order_id: &str,
+        limit: usize,
+    ) -> Result<Vec<OrderProgressBatch>, ProductionMapError> {
+        load_wip_progress_batches(&self.pool, apparatus, status, order_id, limit).await
     }
 
     async fn put_order_run_session(

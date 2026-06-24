@@ -96,6 +96,18 @@ impl ProductionMapService {
             .await
     }
 
+    pub async fn wip_progress_batches(
+        &self,
+        apparatus: &str,
+        status: Option<OrderProgressBatchWipStatus>,
+        order_id: &str,
+        limit: usize,
+    ) -> Result<Vec<OrderProgressBatch>, ProductionMapError> {
+        self.store
+            .wip_progress_batches(apparatus, status, order_id, limit)
+            .await
+    }
+
     pub async fn queue_action_logs_for_worker(
         &self,
         worker_refs: &[String],

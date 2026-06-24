@@ -145,6 +145,15 @@ pub trait ProductionMapStorePort: Send + Sync {
     ) -> Result<Vec<OrderProgressBatch>, ProductionMapError> {
         Ok(Vec::new())
     }
+    async fn wip_progress_batches(
+        &self,
+        _apparatus: &str,
+        _status: Option<OrderProgressBatchWipStatus>,
+        _order_id: &str,
+        _limit: usize,
+    ) -> Result<Vec<OrderProgressBatch>, ProductionMapError> {
+        Ok(Vec::new())
+    }
     async fn put_order_run_session(
         &self,
         _session: OrderRunSession,
