@@ -4,7 +4,7 @@ use sqlx::PgPool;
 
 use crate::core::production_map::{
     CompletedQueueOrder, OrderProgressBatch, OrderProgressBatchWipStatus, OrderRunSession,
-    ProductionMapError, ProductionOrderLogEntry,
+    ProductionMapError, ProductionOrderLogEntry, queue_state,
 };
 
 use super::progress_helpers::{
@@ -328,43 +328,68 @@ pub(super) async fn load_wip_progress_batches(
     if limit == 0 {
         return Ok(Vec::new());
     }
+    let apparatus = apparatus.trim();
     let status = status.map(|value| value.as_str()).unwrap_or_default();
-    let limit = i64::try_from(limit.min(500)).unwrap_or(500);
-    let rows = sqlx::query_as::<_, ProgressBatchRow>(
-        "SELECT batch_id, session_id, apparatus, order_id, action, status,
-                produced_qty::float8 AS produced_qty, uom, qr_payload,
-                label_item_code, label_item_name, executor_name,
-                worker_role, worker_ref, worker_display_name,
-                wip_status, current_apparatus, current_location,
-                next_apparatus, parent_batch_id, used_by_session_id,
-                used_by_apparatus, processed_by_session_id,
-                processed_by_apparatus,
-                return_ink_kg::float8 AS return_ink_kg,
-                lamination_print_leftover_rolls::float8 AS lamination_print_leftover_rolls,
-                lamination_film_leftover_rolls::float8 AS lamination_film_leftover_rolls,
-                rezka_bosma_waste::float8 AS rezka_bosma_waste,
-                rezka_lamination_waste::float8 AS rezka_lamination_waste,
-                rezka_edge_waste::float8 AS rezka_edge_waste,
-                total_waste::float8 AS total_waste,
-                finished_goods_kg::float8 AS finished_goods_kg,
-                finished_goods_meter::float8 AS finished_goods_meter,
-                description,
-                payload_json
-         FROM mini_progress_batches
-         WHERE ($1 = '' OR lower(current_apparatus) = lower($1))
-           AND ($2 = '' OR order_id = $2)
-           AND (($3 = '' AND wip_status <> 'processed') OR ($3 <> '' AND wip_status = $3))
-         ORDER BY updated_at DESC, created_at DESC, batch_id DESC
-         LIMIT $4",
-    )
-    .bind(apparatus.trim())
-    .bind(order_id.trim())
-    .bind(status)
-    .bind(limit)
-    .fetch_all(pool)
-    .await
-    .map_err(|_| ProductionMapError::StoreFailed)?;
-    rows.into_iter().map(progress_batch_from_row).collect()
+    let limit = limit.min(500);
+    let page_size = if apparatus.is_empty() {
+        i64::try_from(limit).unwrap_or(500)
+    } else {
+        5000
+    };
+    let mut offset = 0_i64;
+    let mut batches = Vec::new();
+    while batches.len() < limit {
+        let rows = sqlx::query_as::<_, ProgressBatchRow>(
+            "SELECT batch_id, session_id, apparatus, order_id, action, status,
+                    produced_qty::float8 AS produced_qty, uom, qr_payload,
+                    label_item_code, label_item_name, executor_name,
+                    worker_role, worker_ref, worker_display_name,
+                    wip_status, current_apparatus, current_location,
+                    next_apparatus, parent_batch_id, used_by_session_id,
+                    used_by_apparatus, processed_by_session_id,
+                    processed_by_apparatus,
+                    return_ink_kg::float8 AS return_ink_kg,
+                    lamination_print_leftover_rolls::float8 AS lamination_print_leftover_rolls,
+                    lamination_film_leftover_rolls::float8 AS lamination_film_leftover_rolls,
+                    rezka_bosma_waste::float8 AS rezka_bosma_waste,
+                    rezka_lamination_waste::float8 AS rezka_lamination_waste,
+                    rezka_edge_waste::float8 AS rezka_edge_waste,
+                    total_waste::float8 AS total_waste,
+                    finished_goods_kg::float8 AS finished_goods_kg,
+                    finished_goods_meter::float8 AS finished_goods_meter,
+                    description,
+                    payload_json
+             FROM mini_progress_batches
+             WHERE ($1 = '' OR order_id = $1)
+               AND (($2 = '' AND wip_status <> 'processed') OR ($2 <> '' AND wip_status = $2))
+             ORDER BY updated_at DESC, created_at DESC, batch_id DESC
+             LIMIT $3 OFFSET $4",
+        )
+        .bind(order_id.trim())
+        .bind(status)
+        .bind(page_size)
+        .bind(offset)
+        .fetch_all(pool)
+        .await
+        .map_err(|_| ProductionMapError::StoreFailed)?;
+        let row_count = rows.len();
+        for row in rows {
+            let batch = progress_batch_from_row(row)?;
+            if apparatus.is_empty()
+                || queue_state::apparatus_titles_match(&batch.current_apparatus, apparatus)
+            {
+                batches.push(batch);
+                if batches.len() == limit {
+                    break;
+                }
+            }
+        }
+        if row_count < page_size as usize {
+            break;
+        }
+        offset += page_size;
+    }
+    Ok(batches)
 }
 
 fn normalized_refs(worker_refs: &[String]) -> Vec<String> {
