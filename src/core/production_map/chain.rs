@@ -1,4 +1,4 @@
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, VecDeque};
 
 use super::queue_state::{self, ApparatusQueueOrderState};
 use super::{ProductionMapDefinition, ProductionMapEdge, ProductionMapNode, ProductionMapNodeKind};
@@ -38,7 +38,7 @@ pub fn linear_work_stages(map: &ProductionMapDefinition) -> Vec<ChainStage> {
             break;
         }
         if is_work_stage(node, seen_apparatus) {
-            let title = node.title.trim();
+            let title = station_title(node);
             if !title.is_empty() {
                 if node.kind == ProductionMapNodeKind::Apparatus {
                     seen_apparatus = true;
@@ -84,13 +84,30 @@ pub fn previous_work_stage_station(map: &ProductionMapDefinition, station: &str)
 }
 
 pub fn next_work_stage_station(map: &ProductionMapDefinition, station: &str) -> Option<String> {
-    let stages = linear_work_stages(map);
-    let index = stages
+    let node_by_id: BTreeMap<&str, &ProductionMapNode> = map
+        .nodes
         .iter()
-        .position(|stage| queue_state::apparatus_titles_match(&stage.station_title, station))?;
-    stages
-        .get(index + 1)
-        .map(|stage| stage.station_title.clone())
+        .map(|node| (node.id.as_str(), node))
+        .collect();
+    let mut outgoing = BTreeMap::<&str, Vec<&ProductionMapEdge>>::new();
+    for edge in &map.edges {
+        outgoing.entry(edge.from.as_str()).or_default().push(edge);
+    }
+    let mut found = Vec::<String>::new();
+    let mut seen_titles = BTreeSet::<String>::new();
+    for node in &map.nodes {
+        if !is_station_node(node) || !station_matches(node, station) {
+            continue;
+        }
+        collect_next_station_titles(
+            node.id.as_str(),
+            &node_by_id,
+            &outgoing,
+            &mut found,
+            &mut seen_titles,
+        );
+    }
+    found.into_iter().next()
 }
 
 pub fn order_ready_for_station(
@@ -146,6 +163,64 @@ fn is_work_stage(node: &ProductionMapNode, seen_apparatus: bool) -> bool {
     }
 }
 
+fn is_station_node(node: &ProductionMapNode) -> bool {
+    matches!(
+        node.kind,
+        ProductionMapNodeKind::Apparatus | ProductionMapNodeKind::Task
+    )
+}
+
+fn station_title(node: &ProductionMapNode) -> &str {
+    if node.kind == ProductionMapNodeKind::Apparatus
+        && !node.alternative_assigned_title.trim().is_empty()
+    {
+        node.alternative_assigned_title.trim()
+    } else {
+        node.title.trim()
+    }
+}
+
+fn station_matches(node: &ProductionMapNode, station: &str) -> bool {
+    queue_state::apparatus_titles_match(node.title.trim(), station)
+        || (!node.alternative_assigned_title.trim().is_empty()
+            && queue_state::apparatus_titles_match(node.alternative_assigned_title.trim(), station))
+}
+
+fn collect_next_station_titles(
+    start_id: &str,
+    node_by_id: &BTreeMap<&str, &ProductionMapNode>,
+    outgoing: &BTreeMap<&str, Vec<&ProductionMapEdge>>,
+    found: &mut Vec<String>,
+    seen_titles: &mut BTreeSet<String>,
+) {
+    let mut queue = VecDeque::<&str>::new();
+    let mut visited = BTreeSet::<String>::new();
+    if let Some(edges) = outgoing.get(start_id) {
+        queue.extend(edges.iter().map(|edge| edge.to.as_str()));
+    }
+    while let Some(node_id) = queue.pop_front() {
+        if !visited.insert(node_id.to_string()) {
+            continue;
+        }
+        let Some(node) = node_by_id.get(node_id) else {
+            continue;
+        };
+        if node.kind == ProductionMapNodeKind::End {
+            continue;
+        }
+        if is_station_node(node) {
+            let title = station_title(node);
+            if !title.is_empty() && seen_titles.insert(title.to_ascii_lowercase()) {
+                found.push(title.to_string());
+            }
+            continue;
+        }
+        if let Some(edges) = outgoing.get(node_id) {
+            queue.extend(edges.iter().map(|edge| edge.to.as_str()));
+        }
+    }
+}
+
 fn normalize_branch(branch: &str) -> String {
     match branch.trim().to_ascii_lowercase().as_str() {
         "ha" | "yes" | "true" | "1" => "true".to_string(),
@@ -179,6 +254,18 @@ mod tests {
             rezka_label_length: None,
             x: 0.0,
             y: 0.0,
+        }
+    }
+
+    fn assigned_node(
+        id: &str,
+        kind: ProductionMapNodeKind,
+        title: &str,
+        assigned_title: &str,
+    ) -> ProductionMapNode {
+        ProductionMapNode {
+            alternative_assigned_title: assigned_title.to_string(),
+            ..node(id, kind, title)
         }
     }
 
@@ -256,6 +343,86 @@ mod tests {
                 .map(|stage| stage.station_title.as_str())
                 .collect::<Vec<_>>(),
             vec!["9 ta rangli pechat - A", "Laminatsiya", "Rezka aparat - A"]
+        );
+    }
+
+    #[test]
+    fn next_work_stage_uses_assigned_titles_across_branch_alternatives() {
+        let mut map = hotlunch_map();
+        map.nodes = vec![
+            node("start", ProductionMapNodeKind::Start, "Start"),
+            node("order", ProductionMapNodeKind::Task, "Paynet"),
+            assigned_node(
+                "pechat_7",
+                ProductionMapNodeKind::Apparatus,
+                "7 ta rangli pechat",
+                "8 ta rangli pechat",
+            ),
+            assigned_node(
+                "pechat_8",
+                ProductionMapNodeKind::Apparatus,
+                "8 ta rangli pechat",
+                "8 ta rangli pechat",
+            ),
+            assigned_node(
+                "lamin_1",
+                ProductionMapNodeKind::Apparatus,
+                "Laminatsiya 1",
+                "Laminatsiya 1",
+            ),
+            assigned_node(
+                "lamin_2",
+                ProductionMapNodeKind::Apparatus,
+                "Laminatsiya 2",
+                "Laminatsiya 1",
+            ),
+            node("end", ProductionMapNodeKind::End, "End"),
+        ];
+        map.edges = vec![
+            ProductionMapEdge {
+                from: "start".to_string(),
+                to: "order".to_string(),
+                branch: String::new(),
+            },
+            ProductionMapEdge {
+                from: "order".to_string(),
+                to: "pechat_7".to_string(),
+                branch: String::new(),
+            },
+            ProductionMapEdge {
+                from: "order".to_string(),
+                to: "pechat_8".to_string(),
+                branch: String::new(),
+            },
+            ProductionMapEdge {
+                from: "pechat_7".to_string(),
+                to: "lamin_1".to_string(),
+                branch: String::new(),
+            },
+            ProductionMapEdge {
+                from: "pechat_7".to_string(),
+                to: "lamin_2".to_string(),
+                branch: String::new(),
+            },
+            ProductionMapEdge {
+                from: "lamin_1".to_string(),
+                to: "end".to_string(),
+                branch: String::new(),
+            },
+            ProductionMapEdge {
+                from: "lamin_2".to_string(),
+                to: "end".to_string(),
+                branch: String::new(),
+            },
+        ];
+
+        assert_eq!(
+            next_work_stage_station(&map, "7 ta rangli pechat"),
+            Some("Laminatsiya 1".to_string())
+        );
+        assert_eq!(
+            next_work_stage_station(&map, "8 ta rangli pechat"),
+            Some("Laminatsiya 1".to_string())
         );
     }
 
