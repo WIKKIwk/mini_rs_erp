@@ -56,6 +56,33 @@ impl OrderProgressBatchStatus {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum OrderProgressBatchWipStatus {
+    Waiting,
+    InUse,
+    Processed,
+}
+
+impl OrderProgressBatchWipStatus {
+    pub fn parse(value: &str) -> Option<Self> {
+        match value.trim().to_ascii_lowercase().as_str() {
+            "waiting" => Some(Self::Waiting),
+            "in_use" => Some(Self::InUse),
+            "processed" => Some(Self::Processed),
+            _ => None,
+        }
+    }
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Waiting => "waiting",
+            Self::InUse => "in_use",
+            Self::Processed => "processed",
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct OrderRunSession {
     pub session_id: String,
@@ -126,6 +153,23 @@ pub struct OrderProgressBatch {
     pub worker_role: String,
     pub worker_ref: String,
     pub worker_display_name: String,
+    pub wip_status: OrderProgressBatchWipStatus,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub current_apparatus: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub current_location: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub next_apparatus: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub parent_batch_id: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub used_by_session_id: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub used_by_apparatus: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub processed_by_session_id: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub processed_by_apparatus: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub return_ink_kg: Option<f64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]

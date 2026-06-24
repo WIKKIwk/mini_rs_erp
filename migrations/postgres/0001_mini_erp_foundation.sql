@@ -358,6 +358,15 @@ CREATE TABLE IF NOT EXISTS mini_progress_batches (
     worker_role TEXT NOT NULL DEFAULT '',
     worker_ref TEXT NOT NULL DEFAULT '',
     worker_display_name TEXT NOT NULL DEFAULT '',
+    wip_status TEXT NOT NULL DEFAULT 'waiting',
+    current_apparatus TEXT NOT NULL DEFAULT '',
+    current_location TEXT NOT NULL DEFAULT '',
+    next_apparatus TEXT NOT NULL DEFAULT '',
+    parent_batch_id TEXT NOT NULL DEFAULT '',
+    used_by_session_id TEXT NOT NULL DEFAULT '',
+    used_by_apparatus TEXT NOT NULL DEFAULT '',
+    processed_by_session_id TEXT NOT NULL DEFAULT '',
+    processed_by_apparatus TEXT NOT NULL DEFAULT '',
     return_ink_kg NUMERIC,
     lamination_print_leftover_rolls NUMERIC,
     lamination_film_leftover_rolls NUMERIC,
@@ -377,6 +386,7 @@ CREATE TABLE IF NOT EXISTS mini_progress_batches (
     CONSTRAINT mini_progress_batches_order_id_not_blank CHECK (btrim(order_id) <> ''),
     CONSTRAINT mini_progress_batches_action_allowed CHECK (action IN ('pause', 'complete')),
     CONSTRAINT mini_progress_batches_status_allowed CHECK (status IN ('paused', 'completed', 'resumed')),
+    CONSTRAINT mini_progress_batches_wip_status_allowed CHECK (wip_status IN ('waiting', 'in_use', 'processed')),
     CONSTRAINT mini_progress_batches_qty_positive CHECK (produced_qty > 0),
     CONSTRAINT mini_progress_batches_uom_not_blank CHECK (btrim(uom) <> ''),
     CONSTRAINT mini_progress_batches_qr_payload_not_blank CHECK (btrim(qr_payload) <> ''),
@@ -406,6 +416,17 @@ ALTER TABLE mini_progress_batches ADD COLUMN IF NOT EXISTS total_waste NUMERIC;
 ALTER TABLE mini_progress_batches ADD COLUMN IF NOT EXISTS finished_goods_kg NUMERIC;
 ALTER TABLE mini_progress_batches ADD COLUMN IF NOT EXISTS finished_goods_meter NUMERIC;
 ALTER TABLE mini_progress_batches ADD COLUMN IF NOT EXISTS description TEXT NOT NULL DEFAULT '';
+ALTER TABLE mini_progress_batches ADD COLUMN IF NOT EXISTS wip_status TEXT NOT NULL DEFAULT 'waiting';
+ALTER TABLE mini_progress_batches ADD COLUMN IF NOT EXISTS current_apparatus TEXT NOT NULL DEFAULT '';
+ALTER TABLE mini_progress_batches ADD COLUMN IF NOT EXISTS current_location TEXT NOT NULL DEFAULT '';
+ALTER TABLE mini_progress_batches ADD COLUMN IF NOT EXISTS next_apparatus TEXT NOT NULL DEFAULT '';
+ALTER TABLE mini_progress_batches ADD COLUMN IF NOT EXISTS parent_batch_id TEXT NOT NULL DEFAULT '';
+ALTER TABLE mini_progress_batches ADD COLUMN IF NOT EXISTS used_by_session_id TEXT NOT NULL DEFAULT '';
+ALTER TABLE mini_progress_batches ADD COLUMN IF NOT EXISTS used_by_apparatus TEXT NOT NULL DEFAULT '';
+ALTER TABLE mini_progress_batches ADD COLUMN IF NOT EXISTS processed_by_session_id TEXT NOT NULL DEFAULT '';
+ALTER TABLE mini_progress_batches ADD COLUMN IF NOT EXISTS processed_by_apparatus TEXT NOT NULL DEFAULT '';
+ALTER TABLE mini_progress_batches DROP CONSTRAINT IF EXISTS mini_progress_batches_wip_status_allowed;
+ALTER TABLE mini_progress_batches ADD CONSTRAINT mini_progress_batches_wip_status_allowed CHECK (wip_status IN ('waiting', 'in_use', 'processed'));
 
 CREATE TABLE IF NOT EXISTS mini_apparatus_material_rules (
     apparatus TEXT PRIMARY KEY,
@@ -787,6 +808,8 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_mini_order_run_sessions_one_open
 CREATE INDEX IF NOT EXISTS idx_mini_order_progress_events_order_created ON mini_order_progress_events(order_id, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_mini_progress_batches_order_created ON mini_progress_batches(order_id, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_mini_progress_batches_qr ON mini_progress_batches(lower(qr_payload));
+CREATE INDEX IF NOT EXISTS idx_mini_progress_batches_wip_status_apparatus
+    ON mini_progress_batches(wip_status, lower(current_apparatus), updated_at DESC);
 CREATE INDEX IF NOT EXISTS idx_mini_raw_material_assignments_order ON mini_raw_material_assignments(order_id);
 CREATE INDEX IF NOT EXISTS idx_mini_raw_material_assignments_apparatus ON mini_raw_material_assignments(lower(apparatus));
 CREATE INDEX IF NOT EXISTS idx_mini_raw_material_assignments_item_group ON mini_raw_material_assignments(lower(item_group));

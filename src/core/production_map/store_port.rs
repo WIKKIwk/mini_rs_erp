@@ -171,6 +171,7 @@ pub trait ProductionMapStorePort: Send + Sync {
         session: Option<OrderRunSession>,
         progress_event: Option<OrderProgressEvent>,
         progress_batch: Option<OrderProgressBatch>,
+        progress_batch_updates: Vec<OrderProgressBatch>,
     ) -> Result<(), ProductionMapError> {
         self.put_apparatus_queue_states_with_event(apparatus, states, event)
             .await?;
@@ -181,6 +182,9 @@ pub trait ProductionMapStorePort: Send + Sync {
             self.put_order_progress_event(event).await?;
         }
         if let Some(batch) = progress_batch {
+            self.put_order_progress_batch(batch).await?;
+        }
+        for batch in progress_batch_updates {
             self.put_order_progress_batch(batch).await?;
         }
         Ok(())

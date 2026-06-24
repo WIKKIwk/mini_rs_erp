@@ -83,6 +83,16 @@ pub fn previous_work_stage_station(map: &ProductionMapDefinition, station: &str)
     }
 }
 
+pub fn next_work_stage_station(map: &ProductionMapDefinition, station: &str) -> Option<String> {
+    let stages = linear_work_stages(map);
+    let index = stages
+        .iter()
+        .position(|stage| queue_state::apparatus_titles_match(&stage.station_title, station))?;
+    stages
+        .get(index + 1)
+        .map(|stage| stage.station_title.clone())
+}
+
 pub fn order_ready_for_station(
     map: &ProductionMapDefinition,
     order_id: &str,

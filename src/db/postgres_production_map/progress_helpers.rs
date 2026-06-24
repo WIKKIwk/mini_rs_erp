@@ -1,8 +1,8 @@
 use sqlx::{PgPool, Postgres, Transaction};
 
 use crate::core::production_map::{
-    OrderProgressBatch, OrderProgressBatchStatus, OrderProgressEvent, OrderRunSession,
-    OrderRunStatus, ProductionMapError, ProductionOrderLogEntry, queue_state,
+    OrderProgressBatch, OrderProgressBatchStatus, OrderProgressBatchWipStatus, OrderProgressEvent,
+    OrderRunSession, OrderRunStatus, ProductionMapError, ProductionOrderLogEntry, queue_state,
 };
 
 use super::queue_helpers::{queue_action_as_str, queue_action_from_str};
@@ -159,13 +159,16 @@ pub(super) async fn put_order_progress_batch_tx(
             batch_id, session_id, apparatus, order_id, action, status,
             produced_qty, uom, qr_payload, label_item_code, label_item_name,
             executor_name, worker_role, worker_ref, worker_display_name,
+            wip_status, current_apparatus, current_location, next_apparatus,
+            parent_batch_id, used_by_session_id, used_by_apparatus,
+            processed_by_session_id, processed_by_apparatus,
             return_ink_kg, lamination_print_leftover_rolls,
             lamination_film_leftover_rolls, rezka_bosma_waste,
             rezka_lamination_waste, rezka_edge_waste, total_waste,
             finished_goods_kg, finished_goods_meter, description,
             payload_json, created_at, updated_at
          )
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, now(), now())
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, $27, $28, $29, $30, $31, $32, $33, $34, $35, now(), now())
          ON CONFLICT (batch_id) DO UPDATE SET
             status = excluded.status,
             produced_qty = excluded.produced_qty,
@@ -177,6 +180,15 @@ pub(super) async fn put_order_progress_batch_tx(
             worker_role = excluded.worker_role,
             worker_ref = excluded.worker_ref,
             worker_display_name = excluded.worker_display_name,
+            wip_status = excluded.wip_status,
+            current_apparatus = excluded.current_apparatus,
+            current_location = excluded.current_location,
+            next_apparatus = excluded.next_apparatus,
+            parent_batch_id = excluded.parent_batch_id,
+            used_by_session_id = excluded.used_by_session_id,
+            used_by_apparatus = excluded.used_by_apparatus,
+            processed_by_session_id = excluded.processed_by_session_id,
+            processed_by_apparatus = excluded.processed_by_apparatus,
             return_ink_kg = excluded.return_ink_kg,
             lamination_print_leftover_rolls = excluded.lamination_print_leftover_rolls,
             lamination_film_leftover_rolls = excluded.lamination_film_leftover_rolls,
@@ -205,6 +217,15 @@ pub(super) async fn put_order_progress_batch_tx(
     .bind(batch.worker_role.trim())
     .bind(batch.worker_ref.trim())
     .bind(batch.worker_display_name.trim())
+    .bind(batch.wip_status.as_str())
+    .bind(batch.current_apparatus.trim())
+    .bind(batch.current_location.trim())
+    .bind(batch.next_apparatus.trim())
+    .bind(batch.parent_batch_id.trim())
+    .bind(batch.used_by_session_id.trim())
+    .bind(batch.used_by_apparatus.trim())
+    .bind(batch.processed_by_session_id.trim())
+    .bind(batch.processed_by_apparatus.trim())
     .bind(batch.return_ink_kg)
     .bind(batch.lamination_print_leftover_rolls)
     .bind(batch.lamination_film_leftover_rolls)
@@ -253,6 +274,15 @@ pub(super) struct ProgressBatchRow {
     pub(super) worker_role: String,
     pub(super) worker_ref: String,
     pub(super) worker_display_name: String,
+    pub(super) wip_status: String,
+    pub(super) current_apparatus: String,
+    pub(super) current_location: String,
+    pub(super) next_apparatus: String,
+    pub(super) parent_batch_id: String,
+    pub(super) used_by_session_id: String,
+    pub(super) used_by_apparatus: String,
+    pub(super) processed_by_session_id: String,
+    pub(super) processed_by_apparatus: String,
     pub(super) return_ink_kg: Option<f64>,
     pub(super) lamination_print_leftover_rolls: Option<f64>,
     pub(super) lamination_film_leftover_rolls: Option<f64>,
@@ -340,6 +370,16 @@ pub(super) fn progress_batch_from_row(
         worker_role: row.worker_role,
         worker_ref: row.worker_ref,
         worker_display_name: row.worker_display_name,
+        wip_status: OrderProgressBatchWipStatus::parse(&row.wip_status)
+            .ok_or(ProductionMapError::StoreFailed)?,
+        current_apparatus: row.current_apparatus,
+        current_location: row.current_location,
+        next_apparatus: row.next_apparatus,
+        parent_batch_id: row.parent_batch_id,
+        used_by_session_id: row.used_by_session_id,
+        used_by_apparatus: row.used_by_apparatus,
+        processed_by_session_id: row.processed_by_session_id,
+        processed_by_apparatus: row.processed_by_apparatus,
         return_ink_kg: row.return_ink_kg,
         lamination_print_leftover_rolls: row.lamination_print_leftover_rolls,
         lamination_film_leftover_rolls: row.lamination_film_leftover_rolls,

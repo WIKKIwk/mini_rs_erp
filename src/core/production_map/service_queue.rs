@@ -352,6 +352,7 @@ impl ProductionMapService {
             session: progress.session,
             progress_event: progress.progress_event,
             progress_batch: progress.progress_batch,
+            progress_batch_updates: progress.progress_batch_updates,
         })
     }
 
@@ -367,6 +368,7 @@ impl ProductionMapService {
                 prepared.session.clone(),
                 prepared.progress_event.clone(),
                 prepared.progress_batch.clone(),
+                prepared.progress_batch_updates.clone(),
             )
             .await?;
         self.notify_live();
