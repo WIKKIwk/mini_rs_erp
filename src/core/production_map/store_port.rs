@@ -125,6 +125,12 @@ pub trait ProductionMapStorePort: Send + Sync {
     ) -> Result<Option<OrderRunSession>, ProductionMapError> {
         Ok(None)
     }
+    async fn order_run_sessions_for_order(
+        &self,
+        _order_id: &str,
+    ) -> Result<Vec<OrderRunSession>, ProductionMapError> {
+        Ok(Vec::new())
+    }
     async fn progress_batch(
         &self,
         _batch_id: &str,
@@ -142,6 +148,12 @@ pub trait ProductionMapStorePort: Send + Sync {
         _worker_refs: &[String],
         _worker_display_name: &str,
         _limit: usize,
+    ) -> Result<Vec<OrderProgressBatch>, ProductionMapError> {
+        Ok(Vec::new())
+    }
+    async fn progress_batches_for_order(
+        &self,
+        _order_id: &str,
     ) -> Result<Vec<OrderProgressBatch>, ProductionMapError> {
         Ok(Vec::new())
     }

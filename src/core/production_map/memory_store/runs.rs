@@ -73,6 +73,30 @@ pub(super) async fn order_run_session(
         .cloned())
 }
 
+pub(super) async fn order_run_sessions_for_order(
+    store: &MemoryProductionMapStore,
+    order_id: &str,
+) -> Result<Vec<OrderRunSession>, ProductionMapError> {
+    let order_id = order_id.trim();
+    if order_id.is_empty() {
+        return Ok(Vec::new());
+    }
+    let mut sessions = store
+        .order_run_sessions
+        .read()
+        .await
+        .values()
+        .filter(|session| session.order_id.trim() == order_id)
+        .cloned()
+        .collect::<Vec<_>>();
+    sessions.sort_by(|left, right| {
+        left.started_at_unix
+            .cmp(&right.started_at_unix)
+            .then_with(|| left.session_id.cmp(&right.session_id))
+    });
+    Ok(sessions)
+}
+
 pub(super) async fn progress_batch(
     store: &MemoryProductionMapStore,
     batch_id: &str,
@@ -131,6 +155,26 @@ pub(super) async fn progress_batches_for_worker(
         .collect::<Vec<_>>();
     batches.sort_by(|left, right| right.batch_id.cmp(&left.batch_id));
     batches.truncate(limit.min(500));
+    Ok(batches)
+}
+
+pub(super) async fn progress_batches_for_order(
+    store: &MemoryProductionMapStore,
+    order_id: &str,
+) -> Result<Vec<OrderProgressBatch>, ProductionMapError> {
+    let order_id = order_id.trim();
+    if order_id.is_empty() {
+        return Ok(Vec::new());
+    }
+    let mut batches = store
+        .order_progress_batches
+        .read()
+        .await
+        .values()
+        .filter(|batch| batch.order_id.trim() == order_id)
+        .cloned()
+        .collect::<Vec<_>>();
+    batches.sort_by(|left, right| right.batch_id.cmp(&left.batch_id));
     Ok(batches)
 }
 

@@ -85,6 +85,10 @@ pub(super) fn routes() -> Router<AppState> {
             any(admin::production_map_progress_qr_lookup),
         )
         .route(
+            "/v1/mobile/admin/production-maps/progress-qr/report",
+            any(admin::production_map_progress_qr_report),
+        )
+        .route(
             "/v1/mobile/admin/production-maps/wip-batches",
             any(admin::production_map_wip_batches),
         )
@@ -210,6 +214,14 @@ pub(super) fn routes() -> Router<AppState> {
         )
         .route("/v1/mobile/admin/item-groups", any(admin::item_groups))
         .route("/v1/mobile/admin/activity", any(admin::activity))
+        .route(
+            "/v1/mobile/admin/system/monitor",
+            get(admin::system_monitor),
+        )
+        .route(
+            "/v1/mobile/admin/system/monitor/live",
+            get(admin::system_monitor_live),
+        )
         .route(
             "/v1/mobile/admin/werka/code/regenerate",
             any(admin::werka_code_regenerate),

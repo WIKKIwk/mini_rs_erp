@@ -13,6 +13,9 @@ pub(super) struct RawMaterialLookupResponse {
     item_group: String,
     qty: f64,
     uom: String,
+    status: String,
+    reserved_order_id: String,
+    source_receipt_id: String,
 }
 
 pub(super) async fn fill_raw_material_assignment_input(
@@ -162,6 +165,9 @@ pub(super) async fn lookup_raw_material_detail(
         item_group: item.item_group.trim().to_string(),
         qty: stock.qty,
         uom: stock.uom.trim().to_string(),
+        status: stock.status.trim().to_string(),
+        reserved_order_id: stock.reserved_order_id.trim().to_string(),
+        source_receipt_id: stock.source_receipt_id.trim().to_string(),
     })
 }
 

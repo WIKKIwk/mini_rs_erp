@@ -312,3 +312,45 @@ pub async fn production_map_progress_qr_lookup(
         "batch": batch,
     })))
 }
+
+pub async fn production_map_progress_qr_report(
+    State(state): State<AppState>,
+    method: Method,
+    headers: HeaderMap,
+    body: Bytes,
+) -> Result<Response, AdminError> {
+    authorize_any_capability(
+        &state,
+        &headers,
+        &[Capability::AdminAccess, Capability::ProductionMapManage],
+    )
+    .await?;
+    if method != Method::POST {
+        return Err(method_not_allowed());
+    }
+    let input: ProgressQrLookupRequest = parse_json(&body)?;
+    let qr_payload = if input.qr_payload.trim().is_empty() {
+        input.progress_qr
+    } else {
+        input.qr_payload
+    };
+    let report = state
+        .production_maps
+        .progress_qr_report(&input.progress_batch_id, &qr_payload)
+        .await
+        .map_err(production_map_error)?;
+    Ok(json_response(serde_json::json!({
+        "ok": true,
+        "scanned_batch": report.scanned_batch,
+        "current_batch": report.current_batch,
+        "is_stale": report.is_stale,
+        "stale_reason": report.stale_reason,
+        "order": report.order,
+        "queue_states": report.queue_states,
+        "logs": report.logs,
+        "progress_batches": report.progress_batches,
+        "run_sessions": report.run_sessions,
+        "active_sessions": report.active_sessions,
+        "opened_by": report.opened_by,
+    })))
+}

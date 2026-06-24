@@ -58,6 +58,34 @@ require_cmd() {
 	fi
 }
 
+spawn_detached() {
+	local pid_file="$1"
+	local log_file="$2"
+	local cwd="$3"
+	shift 3
+	python3 - "$pid_file" "$log_file" "$cwd" "$@" <<'PY'
+import os
+import subprocess
+import sys
+
+pid_file, log_file, cwd = sys.argv[1:4]
+cmd = sys.argv[4:]
+
+with open(log_file, "ab", buffering=0) as log, open(os.devnull, "rb") as devnull:
+    proc = subprocess.Popen(
+        cmd,
+        cwd=cwd,
+        stdin=devnull,
+        stdout=log,
+        stderr=log,
+        start_new_session=True,
+    )
+
+with open(pid_file, "w", encoding="utf-8") as fh:
+    fh.write(str(proc.pid))
+PY
+}
+
 has_database_url() {
 	if [ -n "${MINI_ERP_DATABASE_URL:-}" ]; then
 		return 0
@@ -125,11 +153,8 @@ ensure_backend() {
 	fi
 
 	rm -f "$APP_LOG"
-	(
-		cd "$REPO_ROOT"
-		setsid env MOBILE_API_ADDR="$MOBILE_API_ADDR" RUST_LOG="$RUST_LOG" "$binary" >"$APP_LOG" 2>&1 < /dev/null &
-		echo $! >"$APP_PID"
-	)
+	export MOBILE_API_ADDR RUST_LOG
+	spawn_detached "$APP_PID" "$APP_LOG" "$REPO_ROOT" "$binary"
 
 	if ! wait_for_health "$CORE_URL" "mini_rs_erp"; then
 		echo "mini_rs_erp failed to start; see $APP_LOG" >&2
@@ -184,8 +209,7 @@ ingress:
 EOF
 
 	rm -f "$TUNNEL_LOG"
-	setsid cloudflared tunnel --config "$TUNNEL_CONFIG" run "$TUNNEL_NAME" >"$TUNNEL_LOG" 2>&1 < /dev/null &
-	echo $! >"$TUNNEL_PID"
+	spawn_detached "$TUNNEL_PID" "$TUNNEL_LOG" "$REPO_ROOT" cloudflared tunnel --config "$TUNNEL_CONFIG" run "$TUNNEL_NAME"
 
 	if ! wait_for_health "https://$PUBLIC_HOSTNAME" "public endpoint"; then
 		echo "cloudflared tunnel failed; see $TUNNEL_LOG" >&2

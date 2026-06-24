@@ -33,7 +33,10 @@ pub use self::completion::{
 };
 use self::helpers::*;
 pub use self::move_run::{production_map_move, production_map_move_batch, production_map_run};
-pub use self::queue_actions::{production_map_progress_qr_lookup, production_map_queue_action};
+pub use self::queue_actions::{
+    production_map_progress_qr_lookup, production_map_progress_qr_report,
+    production_map_queue_action,
+};
 pub use self::raw_materials::{
     raw_material_assignment_lookup, raw_material_assignments, raw_material_rules,
     raw_material_stock,

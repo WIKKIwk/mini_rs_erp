@@ -1,6 +1,9 @@
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
 
 use crate::core::production_map::queue_state;
+
+use super::{ProductionMapDefinition, ProductionOrderLogEntry};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -193,6 +196,32 @@ pub struct OrderProgressBatch {
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub description: String,
     pub payload_json: serde_json::Value,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ProductionQrOpenedBy {
+    pub actor_role: String,
+    pub actor_ref: String,
+    pub actor_display_name: String,
+    pub opened_at_unix: i64,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ProductionQrReport {
+    pub scanned_batch: OrderProgressBatch,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub current_batch: Option<OrderProgressBatch>,
+    pub is_stale: bool,
+    pub stale_reason: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub order: Option<ProductionMapDefinition>,
+    pub queue_states: BTreeMap<String, BTreeMap<String, String>>,
+    pub logs: Vec<ProductionOrderLogEntry>,
+    pub progress_batches: Vec<OrderProgressBatch>,
+    pub run_sessions: Vec<OrderRunSession>,
+    pub active_sessions: Vec<OrderRunSession>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub opened_by: Option<ProductionQrOpenedBy>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq)]
