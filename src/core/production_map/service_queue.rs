@@ -103,9 +103,37 @@ impl ProductionMapService {
         order_id: &str,
         limit: usize,
     ) -> Result<Vec<OrderProgressBatch>, ProductionMapError> {
-        self.store
+        let mut batches = self
+            .store
             .wip_progress_batches(apparatus, status, order_id, limit)
-            .await
+            .await?;
+        if batches
+            .iter()
+            .any(|batch| batch.next_apparatus.trim().is_empty())
+        {
+            let maps_by_id = self
+                .store
+                .maps()
+                .await?
+                .into_iter()
+                .map(|map| (map.id.trim().to_string(), map))
+                .collect::<BTreeMap<_, _>>();
+            for batch in &mut batches {
+                if !batch.next_apparatus.trim().is_empty() {
+                    continue;
+                }
+                if let Some(map) = maps_by_id.get(batch.order_id.trim()) {
+                    if let Some(next) =
+                        chain::next_work_stage_station(map, &batch.current_apparatus)
+                    {
+                        batch.next_apparatus = next;
+                        batch.payload_json["next_apparatus"] =
+                            serde_json::json!(batch.next_apparatus);
+                    }
+                }
+            }
+        }
+        Ok(batches)
     }
 
     pub async fn queue_action_logs_for_worker(

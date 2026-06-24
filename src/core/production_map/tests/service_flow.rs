@@ -635,6 +635,42 @@ async fn downstream_start_marks_previous_stage_batch_in_use() {
 }
 
 #[tokio::test]
+async fn wip_listing_backfills_missing_next_apparatus_from_map() {
+    let store = std::sync::Arc::new(MemoryProductionMapStore::new());
+    let service = ProductionMapService::new(store.clone());
+    let actor = QueueActionActor {
+        role: "aparatchi".to_string(),
+        ref_: "worker-wip-next".to_string(),
+        display_name: "Worker WIP Next".to_string(),
+    };
+    let first = "7 ta rangli pechat";
+    let second = "Laminatsiya 1";
+    let order_id = "zakaz-wip-next";
+    service
+        .upsert_map(two_stage_map(order_id, first, second))
+        .await
+        .expect("map");
+    let mut batch = pause_first_stage_batch(&service, order_id, first, &actor, 21.0)
+        .await
+        .expect("first batch");
+    batch.next_apparatus.clear();
+    batch.payload_json["next_apparatus"] = serde_json::json!("");
+    store
+        .put_order_progress_batch(batch)
+        .await
+        .expect("legacy batch update");
+
+    let batches = service
+        .wip_progress_batches("", Some(OrderProgressBatchWipStatus::Waiting), order_id, 10)
+        .await
+        .expect("wip batches");
+
+    assert_eq!(batches.len(), 1);
+    assert_eq!(batches[0].next_apparatus, second);
+    assert_eq!(batches[0].payload_json["next_apparatus"], second);
+}
+
+#[tokio::test]
 async fn downstream_output_processes_input_batch_and_links_new_wip_batch() {
     let service = ProductionMapService::new(std::sync::Arc::new(MemoryProductionMapStore::new()));
     let actor = QueueActionActor {
