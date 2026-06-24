@@ -107,10 +107,9 @@ impl ProductionMapService {
             .store
             .wip_progress_batches(apparatus, status, order_id, limit)
             .await?;
-        if batches
-            .iter()
-            .any(|batch| batch.next_apparatus.trim().is_empty())
-        {
+        if batches.iter().any(|batch| {
+            batch.current_apparatus.trim().is_empty() || batch.next_apparatus.trim().is_empty()
+        }) {
             let maps_by_id = self
                 .store
                 .maps()
@@ -119,10 +118,23 @@ impl ProductionMapService {
                 .map(|map| (map.id.trim().to_string(), map))
                 .collect::<BTreeMap<_, _>>();
             for batch in &mut batches {
-                if !batch.next_apparatus.trim().is_empty() {
-                    continue;
+                if batch.current_apparatus.trim().is_empty() {
+                    batch.current_apparatus = batch.apparatus.trim().to_string();
+                    batch.current_apparatus_key =
+                        queue_state::apparatus_search_key(&batch.current_apparatus);
+                    if batch.current_location.trim().is_empty() {
+                        batch.current_location = batch.current_apparatus.clone();
+                    }
+                    batch.payload_json["current_apparatus"] =
+                        serde_json::json!(batch.current_apparatus);
+                    batch.payload_json["current_apparatus_key"] =
+                        serde_json::json!(batch.current_apparatus_key);
+                    batch.payload_json["current_location"] =
+                        serde_json::json!(batch.current_location);
                 }
-                if let Some(map) = maps_by_id.get(batch.order_id.trim()) {
+                if batch.next_apparatus.trim().is_empty()
+                    && let Some(map) = maps_by_id.get(batch.order_id.trim())
+                {
                     if let Some(next) =
                         chain::next_work_stage_station(map, &batch.current_apparatus)
                     {
