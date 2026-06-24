@@ -304,6 +304,18 @@ mod tests {
         assert!(migration.contains("wip_status, current_apparatus_key, updated_at desc"));
     }
 
+    #[test]
+    fn postgres_foundation_migration_persists_material_requirement_groups() {
+        let migration = foundation_migration_sql().to_lowercase();
+
+        assert!(migration.contains("mini_apparatus_material_rules"));
+        assert!(migration.contains("requirement_groups jsonb not null default '[]'::jsonb"));
+        assert!(
+            migration.contains("mini_apparatus_material_rules_requirement_groups_array"),
+            "missing requirement_groups array constraint"
+        );
+    }
+
     #[tokio::test]
     #[ignore = "requires local PostgreSQL and creates/drops mini_rs_erp_test"]
     async fn postgres_live_foundation_migration_applies_to_clean_database() {

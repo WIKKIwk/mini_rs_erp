@@ -49,7 +49,18 @@ async fn raw_material_routes_assign_and_require_scan_for_queue_start() {
             "PUT",
             "/v1/mobile/admin/raw-material-rules",
             &token,
-            r#"{"apparatus":"7 ta rangli pechat - A","requires_material":true,"item_groups":["Kraska"]}"#,
+            r#"{
+                "apparatus":"7 ta rangli pechat - A",
+                "requires_material":true,
+                "item_groups":["Kraska","Kley"],
+                "requirement_groups":[
+                    {
+                        "name":"Yopishtiruvchi",
+                        "item_groups":["Kraska","Kley"],
+                        "min_required_count":1
+                    }
+                ]
+            }"#,
         ))
         .await
         .expect("rule save");
@@ -57,6 +68,8 @@ async fn raw_material_routes_assign_and_require_scan_for_queue_start() {
     let rule_body = json_body(rule).await;
     assert_eq!(rule_body["apparatus"], "7 ta rangli pechat - A");
     assert_eq!(rule_body["requires_material"], true);
+    assert_eq!(rule_body["requirement_groups"][0]["name"], "Yopishtiruvchi");
+    assert_eq!(rule_body["requirement_groups"][0]["item_groups"][0], "Kraska");
 
     let missing_assignment = router
         .clone()
