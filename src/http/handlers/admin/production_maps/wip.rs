@@ -18,7 +18,7 @@ pub async fn production_map_wip_batches(
     method: Method,
     headers: HeaderMap,
 ) -> Result<Response, AdminError> {
-    authorize_any_capability(
+    let principal = authorize_any_capability(
         &state,
         &headers,
         &[
@@ -30,6 +30,22 @@ pub async fn production_map_wip_batches(
     .await?;
     if method != Method::GET {
         return Err(method_not_allowed());
+    }
+    let can_view_all = state
+        .admin
+        .principal_has_capability(&principal, Capability::AdminAccess)
+        .await
+        || state
+            .admin
+            .principal_has_capability(&principal, Capability::ProductionMapManage)
+            .await;
+    if !can_view_all {
+        let assigned_apparatus = state.admin.principal_assigned_apparatus(&principal).await;
+        if query.apparatus.trim().is_empty()
+            || !queue_state::apparatus_matches_assigned(&query.apparatus, &assigned_apparatus)
+        {
+            return Err(forbidden());
+        }
     }
     let status = if query.status.trim().is_empty() {
         None
