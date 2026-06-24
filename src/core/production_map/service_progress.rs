@@ -151,10 +151,15 @@ impl ProductionMapService {
                             .unwrap_or_default(),
                     }),
                 };
+                let progress_batch_updates = input_progress_batch
+                    .map(|batch| wip_batch_in_use(batch, apparatus, &session.session_id, now))
+                    .into_iter()
+                    .collect();
                 Ok(QueueProgressRecords {
                     session: Some(session),
                     progress_event: Some(event),
                     progress_batch: None,
+                    progress_batch_updates,
                 })
             }
             queue_state::ApparatusQueueAction::Pause
@@ -225,6 +230,12 @@ impl ProductionMapService {
                     .active_order_run_session(apparatus, order_id)
                     .await?
                     .unwrap_or_else(|| legacy_order_run_session(apparatus, order_id, actor, now));
+                let input_progress_batch_id =
+                    json_string_field(&session.payload_json, "input_progress_batch_id");
+                let input_progress_qr_payload =
+                    json_string_field(&session.payload_json, "input_progress_qr_payload");
+                let input_progress_apparatus =
+                    json_string_field(&session.payload_json, "input_progress_apparatus");
                 let status = match action {
                     queue_state::ApparatusQueueAction::Pause => OrderRunStatus::Paused,
                     queue_state::ApparatusQueueAction::Complete => OrderRunStatus::Completed,
@@ -251,6 +262,9 @@ impl ProductionMapService {
                         "finished_goods_kg": finished_goods_kg,
                         "finished_goods_meter": finished_goods_meter,
                         "description": description,
+                        "input_progress_batch_id": input_progress_batch_id,
+                        "input_progress_qr_payload": input_progress_qr_payload,
+                        "input_progress_apparatus": input_progress_apparatus,
                     }),
                     ..session
                 };
@@ -261,7 +275,7 @@ impl ProductionMapService {
                 let qr_payload =
                     non_empty_or(&progress.qr_payload, &progress_qr_payload(&batch_id));
                 let label_item_name = progress_label_item_name(order_map, apparatus, action);
-                let batch = OrderProgressBatch {
+                let mut batch = OrderProgressBatch {
                     batch_id: batch_id.clone(),
                     session_id: session.session_id.clone(),
                     apparatus: apparatus.to_string(),
@@ -285,6 +299,16 @@ impl ProductionMapService {
                     worker_role: actor.role.trim().to_string(),
                     worker_ref: actor.ref_.trim().to_string(),
                     worker_display_name: actor.display_name.trim().to_string(),
+                    wip_status: OrderProgressBatchWipStatus::Waiting,
+                    current_apparatus: apparatus.to_string(),
+                    current_location: wip_waiting_location(apparatus),
+                    next_apparatus: chain::next_work_stage_station(order_map, apparatus)
+                        .unwrap_or_default(),
+                    parent_batch_id: input_progress_batch_id.clone(),
+                    used_by_session_id: String::new(),
+                    used_by_apparatus: String::new(),
+                    processed_by_session_id: String::new(),
+                    processed_by_apparatus: String::new(),
                     return_ink_kg,
                     lamination_print_leftover_rolls,
                     lamination_film_leftover_rolls,
@@ -312,6 +336,20 @@ impl ProductionMapService {
                         "description": description.clone(),
                     }),
                 };
+                sync_wip_payload_fields(&mut batch);
+                let mut progress_batch_updates = Vec::new();
+                if !input_progress_batch_id.trim().is_empty() {
+                    if let Some(input_batch) =
+                        self.store.progress_batch(&input_progress_batch_id).await?
+                    {
+                        progress_batch_updates.push(wip_batch_processed(
+                            input_batch,
+                            apparatus,
+                            &session.session_id,
+                            now,
+                        ));
+                    }
+                }
                 let event = OrderProgressEvent {
                     event_id: progress_event_id(&session.session_id, order_id, action, now),
                     session_id: session.session_id.clone(),
@@ -354,6 +392,7 @@ impl ProductionMapService {
                     session: Some(session),
                     progress_event: Some(event),
                     progress_batch: Some(batch),
+                    progress_batch_updates,
                 })
             }
             queue_state::ApparatusQueueAction::Resume => {
@@ -407,6 +446,7 @@ impl ProductionMapService {
                         session: Some(session),
                         progress_event: Some(event),
                         progress_batch: None,
+                        progress_batch_updates: Vec::new(),
                     });
                 }
                 let mut batch = self
@@ -423,10 +463,13 @@ impl ProductionMapService {
                     return Err(ProductionMapError::ProgressBatchNotResumable);
                 }
                 batch.status = OrderProgressBatchStatus::Resumed;
+                let batch_session_id = batch.session_id.clone();
+                batch = wip_batch_in_use(batch, apparatus, &batch_session_id, now);
                 batch.payload_json = serde_json::json!({
                     "resumed_by": actor,
                     "resumed_at_unix": now,
                 });
+                sync_wip_payload_fields(&mut batch);
                 let session = self
                     .store
                     .order_run_session(&batch.session_id)
@@ -474,10 +517,79 @@ impl ProductionMapService {
                     session: Some(session),
                     progress_event: Some(event),
                     progress_batch: Some(batch),
+                    progress_batch_updates: Vec::new(),
                 })
             }
         }
     }
+}
+
+fn wip_batch_in_use(
+    mut batch: OrderProgressBatch,
+    apparatus: &str,
+    session_id: &str,
+    now: i64,
+) -> OrderProgressBatch {
+    batch.wip_status = OrderProgressBatchWipStatus::InUse;
+    batch.current_apparatus = apparatus.trim().to_string();
+    batch.current_location = apparatus.trim().to_string();
+    batch.used_by_session_id = session_id.trim().to_string();
+    batch.used_by_apparatus = apparatus.trim().to_string();
+    batch.payload_json["wip_in_use_at_unix"] = serde_json::json!(now);
+    sync_wip_payload_fields(&mut batch);
+    batch
+}
+
+fn wip_batch_processed(
+    mut batch: OrderProgressBatch,
+    apparatus: &str,
+    session_id: &str,
+    now: i64,
+) -> OrderProgressBatch {
+    batch.wip_status = OrderProgressBatchWipStatus::Processed;
+    batch.current_apparatus = apparatus.trim().to_string();
+    batch.current_location = apparatus.trim().to_string();
+    batch.processed_by_session_id = session_id.trim().to_string();
+    batch.processed_by_apparatus = apparatus.trim().to_string();
+    batch.payload_json["wip_processed_at_unix"] = serde_json::json!(now);
+    sync_wip_payload_fields(&mut batch);
+    batch
+}
+
+fn sync_wip_payload_fields(batch: &mut OrderProgressBatch) {
+    if !batch.payload_json.is_object() {
+        batch.payload_json = serde_json::json!({});
+    }
+    batch.payload_json["wip_status"] = serde_json::json!(batch.wip_status.as_str());
+    batch.payload_json["current_apparatus"] = serde_json::json!(batch.current_apparatus);
+    batch.payload_json["current_location"] = serde_json::json!(batch.current_location);
+    batch.payload_json["next_apparatus"] = serde_json::json!(batch.next_apparatus);
+    batch.payload_json["parent_batch_id"] = serde_json::json!(batch.parent_batch_id);
+    batch.payload_json["used_by_session_id"] = serde_json::json!(batch.used_by_session_id);
+    batch.payload_json["used_by_apparatus"] = serde_json::json!(batch.used_by_apparatus);
+    batch.payload_json["used_by_order_id"] = serde_json::json!(batch.order_id);
+    batch.payload_json["processed_by_session_id"] =
+        serde_json::json!(batch.processed_by_session_id);
+    batch.payload_json["processed_by_apparatus"] = serde_json::json!(batch.processed_by_apparatus);
+    batch.payload_json["from_apparatus"] = serde_json::json!(batch.apparatus);
+}
+
+fn wip_waiting_location(apparatus: &str) -> String {
+    let apparatus = apparatus.trim();
+    if apparatus.is_empty() {
+        String::new()
+    } else {
+        format!("{apparatus} chiqim")
+    }
+}
+
+fn json_string_field(payload: &serde_json::Value, key: &str) -> String {
+    payload
+        .get(key)
+        .and_then(|value| value.as_str())
+        .unwrap_or_default()
+        .trim()
+        .to_string()
 }
 
 fn valid_optional_progress_qty(value: Option<f64>) -> Result<Option<f64>, ProductionMapError> {

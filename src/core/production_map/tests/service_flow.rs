@@ -592,6 +592,115 @@ async fn downstream_start_with_previous_qr_can_skip_pending_sequence_head() {
 }
 
 #[tokio::test]
+async fn downstream_start_marks_previous_stage_batch_in_use() {
+    let service = ProductionMapService::new(std::sync::Arc::new(MemoryProductionMapStore::new()));
+    let actor = QueueActionActor {
+        role: "aparatchi".to_string(),
+        ref_: "worker-wip-in-use".to_string(),
+        display_name: "Worker WIP In Use".to_string(),
+    };
+    let first = "Bosma aparat";
+    let second = "Laminatsiya mashinasi";
+    let order_id = "zakaz-wip-in-use";
+    service
+        .upsert_map(two_stage_map(order_id, first, second))
+        .await
+        .expect("map");
+    let first_batch = pause_first_stage_batch(&service, order_id, first, &actor, 21.0)
+        .await
+        .expect("first batch");
+
+    service
+        .apply_apparatus_queue_action_with_progress(
+            second,
+            order_id,
+            queue_state::ApparatusQueueAction::Start,
+            &[second.to_string()],
+            actor,
+            QueueProgressInput {
+                qr_payload: first_batch.qr_payload.clone(),
+                ..QueueProgressInput::default()
+            },
+        )
+        .await
+        .expect("second start");
+
+    let updated = service
+        .progress_batch_for_qr("", &first_batch.qr_payload)
+        .await
+        .expect("updated first batch");
+    assert_eq!(updated.payload_json["wip_status"], "in_use");
+    assert_eq!(updated.payload_json["current_apparatus"], second);
+    assert_eq!(updated.payload_json["used_by_order_id"], order_id);
+}
+
+#[tokio::test]
+async fn downstream_output_processes_input_batch_and_links_new_wip_batch() {
+    let service = ProductionMapService::new(std::sync::Arc::new(MemoryProductionMapStore::new()));
+    let actor = QueueActionActor {
+        role: "aparatchi".to_string(),
+        ref_: "worker-wip-processed".to_string(),
+        display_name: "Worker WIP Processed".to_string(),
+    };
+    let first = "Bosma aparat";
+    let second = "Laminatsiya mashinasi";
+    let order_id = "zakaz-wip-processed";
+    service
+        .upsert_map(two_stage_map(order_id, first, second))
+        .await
+        .expect("map");
+    let first_batch = pause_first_stage_batch(&service, order_id, first, &actor, 21.0)
+        .await
+        .expect("first batch");
+    service
+        .apply_apparatus_queue_action_with_progress(
+            second,
+            order_id,
+            queue_state::ApparatusQueueAction::Start,
+            &[second.to_string()],
+            actor.clone(),
+            QueueProgressInput {
+                qr_payload: first_batch.qr_payload.clone(),
+                ..QueueProgressInput::default()
+            },
+        )
+        .await
+        .expect("second start");
+
+    let completed = service
+        .apply_apparatus_queue_action_with_progress(
+            second,
+            order_id,
+            queue_state::ApparatusQueueAction::Complete,
+            &[second.to_string()],
+            actor,
+            QueueProgressInput {
+                produced_qty: Some(18.0),
+                uom: "kg".to_string(),
+                lamination_film_leftover_rolls: Some(1.0),
+                total_waste: Some(0.5),
+                finished_goods_kg: Some(18.0),
+                finished_goods_meter: Some(120.0),
+                ..QueueProgressInput::default()
+            },
+        )
+        .await
+        .expect("second complete");
+
+    let input = service
+        .progress_batch_for_qr("", &first_batch.qr_payload)
+        .await
+        .expect("processed first batch");
+    assert_eq!(input.payload_json["wip_status"], "processed");
+    assert_eq!(input.payload_json["processed_by_apparatus"], second);
+
+    let output = completed.progress_batch.expect("second output batch");
+    assert_eq!(output.payload_json["wip_status"], "waiting");
+    assert_eq!(output.payload_json["parent_batch_id"], first_batch.batch_id);
+    assert_eq!(output.payload_json["from_apparatus"], second);
+}
+
+#[tokio::test]
 async fn downstream_start_rejects_mismatched_progress_batch_id_and_qr() {
     let service = ProductionMapService::new(std::sync::Arc::new(MemoryProductionMapStore::new()));
     let actor = QueueActionActor {

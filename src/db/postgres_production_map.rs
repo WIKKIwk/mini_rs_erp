@@ -327,6 +327,7 @@ impl ProductionMapStorePort for PostgresProductionMapStore {
         session: Option<OrderRunSession>,
         progress_event: Option<OrderProgressEvent>,
         progress_batch: Option<OrderProgressBatch>,
+        progress_batch_updates: Vec<OrderProgressBatch>,
     ) -> Result<(), ProductionMapError> {
         let apparatus = apparatus.trim();
         let mut tx = self
@@ -343,6 +344,9 @@ impl ProductionMapStorePort for PostgresProductionMapStore {
             put_order_progress_event_tx(&mut tx, &event).await?;
         }
         if let Some(batch) = progress_batch {
+            put_order_progress_batch_tx(&mut tx, &batch).await?;
+        }
+        for batch in progress_batch_updates {
             put_order_progress_batch_tx(&mut tx, &batch).await?;
         }
         tx.commit()

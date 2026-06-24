@@ -26,6 +26,7 @@ pub(super) struct QueueProgressRecords {
     pub(super) session: Option<OrderRunSession>,
     pub(super) progress_event: Option<OrderProgressEvent>,
     pub(super) progress_batch: Option<OrderProgressBatch>,
+    pub(super) progress_batch_updates: Vec<OrderProgressBatch>,
 }
 
 pub struct PreparedApparatusQueueAction {
@@ -35,6 +36,7 @@ pub struct PreparedApparatusQueueAction {
     pub(super) session: Option<OrderRunSession>,
     pub(super) progress_event: Option<OrderProgressEvent>,
     pub(super) progress_batch: Option<OrderProgressBatch>,
+    pub(super) progress_batch_updates: Vec<OrderProgressBatch>,
 }
 
 impl PreparedApparatusQueueAction {
