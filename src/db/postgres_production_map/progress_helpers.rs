@@ -159,7 +159,7 @@ pub(super) async fn put_order_progress_batch_tx(
             batch_id, session_id, apparatus, order_id, action, status,
             produced_qty, uom, qr_payload, label_item_code, label_item_name,
             executor_name, worker_role, worker_ref, worker_display_name,
-            wip_status, current_apparatus, current_location, next_apparatus,
+            wip_status, current_apparatus, current_apparatus_key, current_location, next_apparatus,
             parent_batch_id, used_by_session_id, used_by_apparatus,
             processed_by_session_id, processed_by_apparatus,
             return_ink_kg, lamination_print_leftover_rolls,
@@ -168,7 +168,7 @@ pub(super) async fn put_order_progress_batch_tx(
             finished_goods_kg, finished_goods_meter, description,
             payload_json, created_at, updated_at
          )
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, $27, $28, $29, $30, $31, $32, $33, $34, $35, now(), now())
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, $27, $28, $29, $30, $31, $32, $33, $34, $35, $36, now(), now())
          ON CONFLICT (batch_id) DO UPDATE SET
             status = excluded.status,
             produced_qty = excluded.produced_qty,
@@ -182,6 +182,7 @@ pub(super) async fn put_order_progress_batch_tx(
             worker_display_name = excluded.worker_display_name,
             wip_status = excluded.wip_status,
             current_apparatus = excluded.current_apparatus,
+            current_apparatus_key = excluded.current_apparatus_key,
             current_location = excluded.current_location,
             next_apparatus = excluded.next_apparatus,
             parent_batch_id = excluded.parent_batch_id,
@@ -219,6 +220,7 @@ pub(super) async fn put_order_progress_batch_tx(
     .bind(batch.worker_display_name.trim())
     .bind(batch.wip_status.as_str())
     .bind(batch.current_apparatus.trim())
+    .bind(non_empty_current_apparatus_key(batch))
     .bind(batch.current_location.trim())
     .bind(batch.next_apparatus.trim())
     .bind(batch.parent_batch_id.trim())
@@ -241,6 +243,15 @@ pub(super) async fn put_order_progress_batch_tx(
     .await
     .map_err(|_| ProductionMapError::StoreFailed)?;
     Ok(())
+}
+
+fn non_empty_current_apparatus_key(batch: &OrderProgressBatch) -> String {
+    let key = batch.current_apparatus_key.trim();
+    if key.is_empty() {
+        queue_state::apparatus_search_key(&batch.current_apparatus)
+    } else {
+        key.to_string()
+    }
 }
 
 #[derive(sqlx::FromRow)]
@@ -276,6 +287,7 @@ pub(super) struct ProgressBatchRow {
     pub(super) worker_display_name: String,
     pub(super) wip_status: String,
     pub(super) current_apparatus: String,
+    pub(super) current_apparatus_key: String,
     pub(super) current_location: String,
     pub(super) next_apparatus: String,
     pub(super) parent_batch_id: String,
@@ -353,6 +365,11 @@ pub(super) fn progress_session_from_row(
 pub(super) fn progress_batch_from_row(
     row: ProgressBatchRow,
 ) -> Result<OrderProgressBatch, ProductionMapError> {
+    let current_apparatus_key = if row.current_apparatus_key.trim().is_empty() {
+        queue_state::apparatus_search_key(&row.current_apparatus)
+    } else {
+        row.current_apparatus_key
+    };
     Ok(OrderProgressBatch {
         batch_id: row.batch_id,
         session_id: row.session_id,
@@ -373,6 +390,7 @@ pub(super) fn progress_batch_from_row(
         wip_status: OrderProgressBatchWipStatus::parse(&row.wip_status)
             .ok_or(ProductionMapError::StoreFailed)?,
         current_apparatus: row.current_apparatus,
+        current_apparatus_key,
         current_location: row.current_location,
         next_apparatus: row.next_apparatus,
         parent_batch_id: row.parent_batch_id,

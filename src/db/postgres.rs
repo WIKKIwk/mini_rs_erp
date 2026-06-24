@@ -295,6 +295,15 @@ mod tests {
         }
     }
 
+    #[test]
+    fn postgres_foundation_migration_indexes_wip_apparatus_key() {
+        let migration = foundation_migration_sql().to_lowercase();
+
+        assert!(migration.contains("current_apparatus_key"));
+        assert!(migration.contains("idx_mini_progress_batches_wip_status_apparatus_key"));
+        assert!(migration.contains("wip_status, current_apparatus_key, updated_at desc"));
+    }
+
     #[tokio::test]
     #[ignore = "requires local PostgreSQL and creates/drops mini_rs_erp_test"]
     async fn postgres_live_foundation_migration_applies_to_clean_database() {

@@ -145,6 +145,7 @@ pub(super) async fn wip_progress_batches(
         return Ok(Vec::new());
     }
     let apparatus = apparatus.trim();
+    let apparatus_key = queue_state::apparatus_search_key(apparatus);
     let order_id = order_id.trim();
     let mut batches = store
         .order_progress_batches
@@ -153,6 +154,8 @@ pub(super) async fn wip_progress_batches(
         .values()
         .filter(|batch| {
             (apparatus.is_empty()
+                || (!apparatus_key.is_empty()
+                    && batch.current_apparatus_key.trim() == apparatus_key)
                 || queue_state::apparatus_titles_match(&batch.current_apparatus, apparatus))
                 && (order_id.is_empty() || batch.order_id.trim() == order_id)
                 && status.map_or(

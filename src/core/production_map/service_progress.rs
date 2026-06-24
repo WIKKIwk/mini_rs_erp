@@ -301,6 +301,7 @@ impl ProductionMapService {
                     worker_display_name: actor.display_name.trim().to_string(),
                     wip_status: OrderProgressBatchWipStatus::Waiting,
                     current_apparatus: apparatus.to_string(),
+                    current_apparatus_key: queue_state::apparatus_search_key(apparatus),
                     current_location: wip_waiting_location(apparatus),
                     next_apparatus: chain::next_work_stage_station(order_map, apparatus)
                         .unwrap_or_default(),
@@ -532,6 +533,7 @@ fn wip_batch_in_use(
 ) -> OrderProgressBatch {
     batch.wip_status = OrderProgressBatchWipStatus::InUse;
     batch.current_apparatus = apparatus.trim().to_string();
+    batch.current_apparatus_key = queue_state::apparatus_search_key(apparatus);
     batch.current_location = apparatus.trim().to_string();
     batch.used_by_session_id = session_id.trim().to_string();
     batch.used_by_apparatus = apparatus.trim().to_string();
@@ -548,6 +550,7 @@ fn wip_batch_processed(
 ) -> OrderProgressBatch {
     batch.wip_status = OrderProgressBatchWipStatus::Processed;
     batch.current_apparatus = apparatus.trim().to_string();
+    batch.current_apparatus_key = queue_state::apparatus_search_key(apparatus);
     batch.current_location = apparatus.trim().to_string();
     batch.processed_by_session_id = session_id.trim().to_string();
     batch.processed_by_apparatus = apparatus.trim().to_string();
@@ -560,8 +563,12 @@ fn sync_wip_payload_fields(batch: &mut OrderProgressBatch) {
     if !batch.payload_json.is_object() {
         batch.payload_json = serde_json::json!({});
     }
+    if batch.current_apparatus_key.trim().is_empty() {
+        batch.current_apparatus_key = queue_state::apparatus_search_key(&batch.current_apparatus);
+    }
     batch.payload_json["wip_status"] = serde_json::json!(batch.wip_status.as_str());
     batch.payload_json["current_apparatus"] = serde_json::json!(batch.current_apparatus);
+    batch.payload_json["current_apparatus_key"] = serde_json::json!(batch.current_apparatus_key);
     batch.payload_json["current_location"] = serde_json::json!(batch.current_location);
     batch.payload_json["next_apparatus"] = serde_json::json!(batch.next_apparatus);
     batch.payload_json["parent_batch_id"] = serde_json::json!(batch.parent_batch_id);

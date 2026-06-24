@@ -123,6 +123,17 @@ fn apparatus_titles_match_warehouse_instance_suffixes() {
     assert!(apparatus_titles_match("Paket aparat - A", "Paket aparat"));
 }
 
+#[test]
+fn apparatus_search_key_normalizes_instance_suffixes_and_pechat_aliases() {
+    assert_eq!(apparatus_search_key("Laminatsiya - A"), "laminatsiya");
+    assert_eq!(
+        apparatus_search_key("  Paket   aparat - DEMO  "),
+        "paket aparat"
+    );
+    assert_eq!(apparatus_search_key("7 ta rangli pechat - A"), "pechat:7");
+    assert_eq!(apparatus_search_key("7 rangli val"), "pechat:7");
+}
+
 proptest! {
     #[test]
     fn effective_sequence_only_contains_visible_unique_ids(

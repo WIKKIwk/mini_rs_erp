@@ -157,6 +157,8 @@ pub struct OrderProgressBatch {
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub current_apparatus: String,
     #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub current_apparatus_key: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
     pub current_location: String,
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub next_apparatus: String,
