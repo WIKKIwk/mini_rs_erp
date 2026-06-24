@@ -30,19 +30,23 @@ pub(super) async fn save_apparatus_material_rule(
 ) -> Result<(), ProductionMapError> {
     let item_groups =
         serde_json::to_value(&rule.item_groups).map_err(|_| ProductionMapError::StoreFailed)?;
+    let requirement_groups = serde_json::to_value(&rule.requirement_groups)
+        .map_err(|_| ProductionMapError::StoreFailed)?;
     let payload = serde_json::to_value(&rule).map_err(|_| ProductionMapError::StoreFailed)?;
     sqlx::query(
         "INSERT INTO mini_apparatus_material_rules
-            (apparatus, item_groups, requires_material, payload_json, updated_at)
-         VALUES ($1, $2, $3, $4, now())
+            (apparatus, item_groups, requirement_groups, requires_material, payload_json, updated_at)
+         VALUES ($1, $2, $3, $4, $5, now())
          ON CONFLICT (apparatus) DO UPDATE SET
            item_groups = excluded.item_groups,
+           requirement_groups = excluded.requirement_groups,
            requires_material = excluded.requires_material,
            payload_json = excluded.payload_json,
            updated_at = excluded.updated_at",
     )
     .bind(rule.apparatus.trim())
     .bind(item_groups)
+    .bind(requirement_groups)
     .bind(rule.requires_material)
     .bind(payload)
     .execute(pool)

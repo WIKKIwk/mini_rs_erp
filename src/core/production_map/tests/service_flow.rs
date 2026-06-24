@@ -110,6 +110,7 @@ async fn raw_material_assignment_requires_exact_scan_before_start() {
             apparatus: "7 ta rangli pechat - A".to_string(),
             requires_material: true,
             item_groups: vec!["Kraska".to_string()],
+            requirement_groups: Vec::new(),
         })
         .await
         .expect("material rule");
@@ -243,6 +244,66 @@ async fn raw_material_assignment_requires_exact_scan_before_start() {
         .await
         .expect("start with exact material");
     assert_eq!(states.get("zakaz-raw-1"), Some(&"in_progress".to_string()));
+}
+
+#[tokio::test]
+async fn raw_material_requirement_group_accepts_alternative_item_group() {
+    let service = ProductionMapService::new(std::sync::Arc::new(MemoryProductionMapStore::new()));
+    let actor = QueueActionActor {
+        role: "aparatchi".to_string(),
+        ref_: "worker-alternative-material".to_string(),
+        display_name: "Worker Alternative Material".to_string(),
+    };
+    service
+        .upsert_map(apparatus_stage_map("zakaz-raw-alt", "Laminatsiya 1"))
+        .await
+        .expect("map");
+    let rule = service
+        .set_apparatus_material_rule(ApparatusMaterialRuleUpsert {
+            apparatus: "Laminatsiya 1".to_string(),
+            requires_material: true,
+            item_groups: vec!["Kley".to_string(), "Kraska".to_string()],
+            requirement_groups: vec![ApparatusMaterialRequirementGroup {
+                name: "Yopishtiruvchi".to_string(),
+                item_groups: vec!["Kley".to_string(), "Kraska".to_string()],
+                min_required_count: 1,
+            }],
+        })
+        .await
+        .expect("material rule");
+    assert_eq!(rule.requirement_groups.len(), 1);
+
+    let assigned = service
+        .assign_raw_material_to_order(
+            RawMaterialAssignmentInput {
+                order_id: "zakaz-raw-alt".to_string(),
+                barcode: "30ALT".to_string(),
+                item_code: "INK-ALT".to_string(),
+                item_name: "Alternative kraska".to_string(),
+                item_group: "Kraska".to_string(),
+                item_group_path: Vec::new(),
+            },
+            &actor,
+        )
+        .await
+        .expect("assign alternative material");
+    assert_eq!(assigned.apparatus, "Laminatsiya 1");
+
+    let states = service
+        .apply_apparatus_queue_action_with_material_scan(
+            "Laminatsiya 1",
+            "zakaz-raw-alt",
+            queue_state::ApparatusQueueAction::Start,
+            &["Laminatsiya 1".to_string()],
+            actor,
+            "30ALT",
+        )
+        .await
+        .expect("start with alternative material");
+    assert_eq!(
+        states.get("zakaz-raw-alt"),
+        Some(&"in_progress".to_string())
+    );
 }
 
 #[tokio::test]

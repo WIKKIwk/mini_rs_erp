@@ -9,11 +9,23 @@ use super::{
 };
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ApparatusMaterialRequirementGroup {
+    pub name: String,
+    #[serde(default)]
+    pub item_groups: Vec<String>,
+    #[serde(default = "default_min_required_count")]
+    pub min_required_count: usize,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ApparatusMaterialRule {
     pub apparatus: String,
     #[serde(default)]
     pub requires_material: bool,
+    #[serde(default)]
     pub item_groups: Vec<String>,
+    #[serde(default)]
+    pub requirement_groups: Vec<ApparatusMaterialRequirementGroup>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -23,6 +35,8 @@ pub struct ApparatusMaterialRuleUpsert {
     pub requires_material: bool,
     #[serde(default)]
     pub item_groups: Vec<String>,
+    #[serde(default)]
+    pub requirement_groups: Vec<ApparatusMaterialRequirementGroup>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -269,6 +283,11 @@ impl ProductionMapService {
             }
             return Ok(());
         }
+        if let Some(rule) = self.material_rule_for_apparatus(apparatus).await? {
+            if rule.requires_material && !material_requirements_met(&rule, &assignments) {
+                return Err(ProductionMapError::RawMaterialAssignmentNotFound);
+            }
+        }
         let scanned = normalized_barcodes(material_barcode);
         if scanned.is_empty() {
             return Err(ProductionMapError::RawMaterialScanRequired);
@@ -288,14 +307,21 @@ impl ProductionMapService {
         apparatus: &str,
     ) -> Result<bool, ProductionMapError> {
         Ok(self
+            .material_rule_for_apparatus(apparatus)
+            .await?
+            .is_some_and(|rule| rule.requires_material))
+    }
+
+    async fn material_rule_for_apparatus(
+        &self,
+        apparatus: &str,
+    ) -> Result<Option<ApparatusMaterialRule>, ProductionMapError> {
+        Ok(self
             .store
             .apparatus_material_rules()
             .await?
-            .iter()
-            .any(|rule| {
-                rule.requires_material
-                    && queue_state::apparatus_titles_match(&rule.apparatus, apparatus)
-            }))
+            .into_iter()
+            .find(|rule| queue_state::apparatus_titles_match(&rule.apparatus, apparatus)))
     }
 }
 
@@ -306,14 +332,8 @@ fn normalize_rule(
     if apparatus.is_empty() {
         return Err(ProductionMapError::RawMaterialInvalidInput);
     }
-    let mut seen = BTreeSet::new();
-    let item_groups = input
-        .item_groups
-        .into_iter()
-        .map(|item| item.trim().to_string())
-        .filter(|item| !item.is_empty())
-        .filter(|item| seen.insert(item.to_lowercase()))
-        .collect::<Vec<_>>();
+    let item_groups = normalize_group_names(input.item_groups);
+    let requirement_groups = normalize_requirement_groups(input.requirement_groups);
     if item_groups.is_empty() {
         return Err(ProductionMapError::RawMaterialInvalidInput);
     }
@@ -321,16 +341,90 @@ fn normalize_rule(
         apparatus,
         requires_material: input.requires_material,
         item_groups,
+        requirement_groups,
     })
 }
 
 fn rule_matches(rule: &ApparatusMaterialRule, apparatus: &str, item_group_path: &[String]) -> bool {
     queue_state::apparatus_titles_match(&rule.apparatus, apparatus)
-        && rule.item_groups.iter().any(|group| {
-            item_group_path
+        && (item_groups_match(&rule.item_groups, item_group_path)
+            || rule
+                .requirement_groups
                 .iter()
-                .any(|candidate| group.trim().eq_ignore_ascii_case(candidate.trim()))
+                .any(|group| item_groups_match(&group.item_groups, item_group_path)))
+}
+
+fn material_requirements_met(
+    rule: &ApparatusMaterialRule,
+    assignments: &[RawMaterialAssignment],
+) -> bool {
+    effective_requirement_groups(rule).into_iter().all(|group| {
+        let required_count = group.min_required_count.max(1);
+        let matched_count = assignments
+            .iter()
+            .filter(|assignment| {
+                group
+                    .item_groups
+                    .iter()
+                    .any(|item_group| item_group.eq_ignore_ascii_case(assignment.item_group.trim()))
+            })
+            .count();
+        matched_count >= required_count
+    })
+}
+
+fn effective_requirement_groups(
+    rule: &ApparatusMaterialRule,
+) -> Vec<ApparatusMaterialRequirementGroup> {
+    if !rule.requirement_groups.is_empty() {
+        return rule.requirement_groups.clone();
+    }
+    vec![ApparatusMaterialRequirementGroup {
+        name: String::new(),
+        item_groups: rule.item_groups.clone(),
+        min_required_count: 1,
+    }]
+}
+
+fn item_groups_match(groups: &[String], item_group_path: &[String]) -> bool {
+    groups.iter().any(|group| {
+        item_group_path
+            .iter()
+            .any(|candidate| group.trim().eq_ignore_ascii_case(candidate.trim()))
+    })
+}
+
+fn normalize_requirement_groups(
+    groups: Vec<ApparatusMaterialRequirementGroup>,
+) -> Vec<ApparatusMaterialRequirementGroup> {
+    groups
+        .into_iter()
+        .filter_map(|group| {
+            let item_groups = normalize_group_names(group.item_groups);
+            if item_groups.is_empty() {
+                return None;
+            }
+            Some(ApparatusMaterialRequirementGroup {
+                name: group.name.trim().to_string(),
+                item_groups,
+                min_required_count: group.min_required_count.max(1),
+            })
         })
+        .collect()
+}
+
+fn normalize_group_names(groups: Vec<String>) -> Vec<String> {
+    let mut seen = BTreeSet::new();
+    groups
+        .into_iter()
+        .map(|item| item.trim().to_string())
+        .filter(|item| !item.is_empty())
+        .filter(|item| seen.insert(item.to_lowercase()))
+        .collect()
+}
+
+fn default_min_required_count() -> usize {
+    1
 }
 
 fn normalize_group_path(item_group: &str, item_group_path: Vec<String>) -> Vec<String> {
