@@ -27,6 +27,21 @@ pub fn apparatus_titles_match(left: &str, right: &str) -> bool {
     warehouse_base_title(left).eq_ignore_ascii_case(warehouse_base_title(right))
 }
 
+pub fn apparatus_search_key(title: &str) -> String {
+    let title = title.trim();
+    if title.is_empty() {
+        return String::new();
+    }
+    if let Some(color_count) = pechat::pechat_color_count(title) {
+        return format!("pechat:{color_count}");
+    }
+    warehouse_base_title(title)
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+        .to_lowercase()
+}
+
 /// Strips trailing instance suffixes such as ` - A` from warehouse titles.
 pub fn warehouse_base_title(title: &str) -> &str {
     let title = title.trim();

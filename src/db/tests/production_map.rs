@@ -253,7 +253,7 @@ async fn postgres_wip_batches_scan_past_first_page_for_matching_apparatus() {
             batch_id, session_id, apparatus, order_id, action, status,
             produced_qty, uom, qr_payload, label_item_code, label_item_name,
             executor_name, worker_role, worker_ref, worker_display_name,
-            wip_status, current_apparatus, current_location, payload_json,
+            wip_status, current_apparatus, current_apparatus_key, current_location, payload_json,
             created_at, updated_at
          )
          SELECT 'noise-batch-' || item,
@@ -273,6 +273,7 @@ async fn postgres_wip_batches_scan_past_first_page_for_matching_apparatus() {
                 'Worker Noise',
                 'waiting',
                 'Paket aparat',
+                'paket aparat',
                 'Paket aparat',
                 '{}'::jsonb,
                 now(),
@@ -384,6 +385,7 @@ fn wip_batch(current_apparatus: &str) -> OrderProgressBatch {
         worker_display_name: "Worker WIP".to_string(),
         wip_status: OrderProgressBatchWipStatus::Waiting,
         current_apparatus: current_apparatus.to_string(),
+        current_apparatus_key: queue_state::apparatus_search_key(current_apparatus),
         current_location: current_apparatus.to_string(),
         next_apparatus: String::new(),
         parent_batch_id: String::new(),

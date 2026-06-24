@@ -360,6 +360,7 @@ CREATE TABLE IF NOT EXISTS mini_progress_batches (
     worker_display_name TEXT NOT NULL DEFAULT '',
     wip_status TEXT NOT NULL DEFAULT 'waiting',
     current_apparatus TEXT NOT NULL DEFAULT '',
+    current_apparatus_key TEXT NOT NULL DEFAULT '',
     current_location TEXT NOT NULL DEFAULT '',
     next_apparatus TEXT NOT NULL DEFAULT '',
     parent_batch_id TEXT NOT NULL DEFAULT '',
@@ -418,6 +419,7 @@ ALTER TABLE mini_progress_batches ADD COLUMN IF NOT EXISTS finished_goods_meter 
 ALTER TABLE mini_progress_batches ADD COLUMN IF NOT EXISTS description TEXT NOT NULL DEFAULT '';
 ALTER TABLE mini_progress_batches ADD COLUMN IF NOT EXISTS wip_status TEXT NOT NULL DEFAULT 'waiting';
 ALTER TABLE mini_progress_batches ADD COLUMN IF NOT EXISTS current_apparatus TEXT NOT NULL DEFAULT '';
+ALTER TABLE mini_progress_batches ADD COLUMN IF NOT EXISTS current_apparatus_key TEXT NOT NULL DEFAULT '';
 ALTER TABLE mini_progress_batches ADD COLUMN IF NOT EXISTS current_location TEXT NOT NULL DEFAULT '';
 ALTER TABLE mini_progress_batches ADD COLUMN IF NOT EXISTS next_apparatus TEXT NOT NULL DEFAULT '';
 ALTER TABLE mini_progress_batches ADD COLUMN IF NOT EXISTS parent_batch_id TEXT NOT NULL DEFAULT '';
@@ -427,6 +429,15 @@ ALTER TABLE mini_progress_batches ADD COLUMN IF NOT EXISTS processed_by_session_
 ALTER TABLE mini_progress_batches ADD COLUMN IF NOT EXISTS processed_by_apparatus TEXT NOT NULL DEFAULT '';
 ALTER TABLE mini_progress_batches DROP CONSTRAINT IF EXISTS mini_progress_batches_wip_status_allowed;
 ALTER TABLE mini_progress_batches ADD CONSTRAINT mini_progress_batches_wip_status_allowed CHECK (wip_status IN ('waiting', 'in_use', 'processed'));
+UPDATE mini_progress_batches
+SET current_apparatus_key = CASE
+    WHEN btrim(current_apparatus) = '' THEN ''
+    WHEN current_apparatus ~* '(^|[^[:alnum:]])7[[:space:]]*(ta[[:space:]]*)?rangli' THEN 'pechat:7'
+    WHEN current_apparatus ~* '(^|[^[:alnum:]])8[[:space:]]*(ta[[:space:]]*)?rangli' THEN 'pechat:8'
+    WHEN current_apparatus ~* '(^|[^[:alnum:]])9[[:space:]]*(ta[[:space:]]*)?rangli' THEN 'pechat:9'
+    ELSE lower(regexp_replace(btrim(regexp_replace(current_apparatus, '[[:space:]]+', ' ', 'g')), '[[:space:]]+-[[:space:]]+[[:alnum:]_-]{1,16}$', ''))
+END
+WHERE btrim(current_apparatus_key) = '';
 
 CREATE TABLE IF NOT EXISTS mini_apparatus_material_rules (
     apparatus TEXT PRIMARY KEY,
@@ -810,6 +821,8 @@ CREATE INDEX IF NOT EXISTS idx_mini_progress_batches_order_created ON mini_progr
 CREATE INDEX IF NOT EXISTS idx_mini_progress_batches_qr ON mini_progress_batches(lower(qr_payload));
 CREATE INDEX IF NOT EXISTS idx_mini_progress_batches_wip_status_apparatus
     ON mini_progress_batches(wip_status, lower(current_apparatus), updated_at DESC);
+CREATE INDEX IF NOT EXISTS idx_mini_progress_batches_wip_status_apparatus_key
+    ON mini_progress_batches(wip_status, current_apparatus_key, updated_at DESC);
 CREATE INDEX IF NOT EXISTS idx_mini_raw_material_assignments_order ON mini_raw_material_assignments(order_id);
 CREATE INDEX IF NOT EXISTS idx_mini_raw_material_assignments_apparatus ON mini_raw_material_assignments(lower(apparatus));
 CREATE INDEX IF NOT EXISTS idx_mini_raw_material_assignments_item_group ON mini_raw_material_assignments(lower(item_group));
