@@ -516,13 +516,6 @@ async fn accessible_qolip_warehouse(
         .ok_or_else(forbidden)
 }
 
-async fn assigned_qolip_warehouses(
-    state: &AppState,
-    principal: &Principal,
-) -> Result<Vec<String>, QolipError> {
-    state.qolip.assigned_warehouses(principal).await
-}
-
 #[derive(Debug, Deserialize)]
 pub struct QolipSearchQuery {
     q: Option<String>,

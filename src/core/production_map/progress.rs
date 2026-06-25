@@ -1,6 +1,7 @@
 mod closed_orders;
 mod ids;
 mod labels;
+#[cfg(test)]
 mod notifications;
 mod policy;
 
