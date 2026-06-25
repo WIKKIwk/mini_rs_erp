@@ -8,7 +8,12 @@ use std::fs;
 use std::path::PathBuf;
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 use time::OffsetDateTime;
-use tokio::time::Duration;
+use tokio::time::{Duration, timeout};
+
+const DATABASE_PING_TIMEOUT: Duration = Duration::from_secs(2);
+const LIVE_SNAPSHOT_INTERVAL: Duration = Duration::from_secs(2);
+const LIVE_SEND_TIMEOUT: Duration = Duration::from_secs(5);
+const LIVE_HEARTBEAT_INTERVAL: Duration = Duration::from_secs(25);
 
 pub async fn system_monitor(
     State(state): State<AppState>,
@@ -49,22 +54,12 @@ async fn system_monitor_report(state: &AppState) -> AdminServerMonitorResponse {
     let database = match &state.mini_engine {
         Some(engine) => {
             let started = Instant::now();
-            match engine.ping().await {
-                Ok(()) => AdminServerMonitorDatabase {
-                    configured: true,
-                    reachable: true,
-                    status: "online".to_string(),
-                    ping_ms: elapsed_ping_ms(started),
-                    error: String::new(),
-                },
-                Err(error) => AdminServerMonitorDatabase {
-                    configured: true,
-                    reachable: false,
-                    status: "offline".to_string(),
-                    ping_ms: elapsed_ping_ms(started),
-                    error: error.to_string(),
-                },
-            }
+            let outcome = match timeout(DATABASE_PING_TIMEOUT, engine.ping()).await {
+                Ok(Ok(())) => DatabasePingOutcome::Online,
+                Ok(Err(error)) => DatabasePingOutcome::Error(error.to_string()),
+                Err(_) => DatabasePingOutcome::Timeout,
+            };
+            database_monitor_from_ping_outcome(started, outcome)
         }
         None => AdminServerMonitorDatabase {
             configured: false,
@@ -97,27 +92,120 @@ async fn authenticated_principal_for_live(
 }
 
 async fn system_monitor_live_socket(state: AppState, mut socket: WebSocket) {
-    let mut interval = tokio::time::interval(Duration::from_secs(2));
+    ensure_system_monitor_hub_started(&state);
+    let mut snapshots = state.system_monitor_hub.subscribe();
+    let mut heartbeat = tokio::time::interval(LIVE_HEARTBEAT_INTERVAL);
+
+    let initial_report = { snapshots.borrow().clone() };
+    if let Some(report) = initial_report {
+        if !send_system_monitor_snapshot(&mut socket, report).await {
+            return;
+        }
+    }
+
     loop {
-        interval.tick().await;
-        let report = system_monitor_report(&state).await;
-        let payload = serde_json::json!({
-            "ok": true,
-            "server": report.server,
-            "database": report.database,
-            "backups": report.backups,
-        });
-        match serde_json::to_string(&payload) {
-            Ok(json) => {
-                if let Err(error) = socket.send(Message::Text(json.into())).await {
-                    tracing::warn!(%error, "system monitor live snapshot send failed");
+        tokio::select! {
+            changed = snapshots.changed() => {
+                if changed.is_err() {
+                    break;
+                }
+                let report = { snapshots.borrow().clone() };
+                if let Some(report) = report {
+                    if !send_system_monitor_snapshot(&mut socket, report).await {
+                        break;
+                    }
+                }
+            }
+            _ = heartbeat.tick() => {
+                if !send_system_monitor_message(&mut socket, Message::Ping(Vec::new().into())).await {
                     break;
                 }
             }
-            Err(error) => {
-                tracing::warn!(%error, "system monitor live snapshot serialization failed");
-            }
         }
+    }
+}
+
+fn ensure_system_monitor_hub_started(state: &AppState) {
+    if !state.system_monitor_hub.mark_started() {
+        return;
+    }
+
+    let state = state.clone();
+    let hub = state.system_monitor_hub.clone();
+    tokio::spawn(async move {
+        let mut interval = tokio::time::interval(LIVE_SNAPSHOT_INTERVAL);
+        loop {
+            interval.tick().await;
+            hub.publish(system_monitor_report(&state).await);
+        }
+    });
+}
+
+async fn send_system_monitor_snapshot(
+    socket: &mut WebSocket,
+    report: AdminServerMonitorResponse,
+) -> bool {
+    let payload = serde_json::json!({
+        "ok": true,
+        "server": report.server,
+        "database": report.database,
+        "backups": report.backups,
+    });
+    match serde_json::to_string(&payload) {
+        Ok(json) => send_system_monitor_message(socket, Message::Text(json.into())).await,
+        Err(error) => {
+            tracing::warn!(%error, "system monitor live snapshot serialization failed");
+            true
+        }
+    }
+}
+
+async fn send_system_monitor_message(socket: &mut WebSocket, message: Message) -> bool {
+    match timeout(LIVE_SEND_TIMEOUT, socket.send(message)).await {
+        Ok(Ok(())) => true,
+        Ok(Err(error)) => {
+            tracing::warn!(%error, "system monitor live message send failed");
+            false
+        }
+        Err(_) => {
+            tracing::warn!("system monitor live message send timed out");
+            false
+        }
+    }
+}
+
+enum DatabasePingOutcome {
+    Online,
+    Error(String),
+    Timeout,
+}
+
+fn database_monitor_from_ping_outcome(
+    started: Instant,
+    outcome: DatabasePingOutcome,
+) -> AdminServerMonitorDatabase {
+    match outcome {
+        DatabasePingOutcome::Online => AdminServerMonitorDatabase {
+            configured: true,
+            reachable: true,
+            status: "online".to_string(),
+            ping_ms: elapsed_ping_ms(started),
+            error: String::new(),
+        },
+        DatabasePingOutcome::Error(error) => AdminServerMonitorDatabase {
+            configured: true,
+            reachable: false,
+            status: "offline".to_string(),
+            ping_ms: elapsed_ping_ms(started),
+            error,
+        },
+        DatabasePingOutcome::Timeout => AdminServerMonitorDatabase {
+            configured: true,
+            reachable: false,
+            status: "offline".to_string(),
+            ping_ms: elapsed_ping_ms(started),
+            error: "database ping timed out".to_string(),
+        },
     }
 }
 
@@ -215,6 +303,7 @@ fn system_time_to_unix(time: SystemTime) -> i64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::core::admin::monitor_hub::SystemMonitorHub;
 
     #[test]
     fn elapsed_ping_ms_never_reports_unknown_zero_for_successful_ping() {
@@ -231,5 +320,48 @@ mod tests {
         let selected = first_existing_backup_directory([missing, parent_backup.clone()]);
 
         assert_eq!(selected, parent_backup);
+    }
+
+    #[test]
+    fn database_monitor_reports_timeout_as_offline() {
+        let database =
+            database_monitor_from_ping_outcome(Instant::now(), DatabasePingOutcome::Timeout);
+
+        assert!(database.configured);
+        assert!(!database.reachable);
+        assert_eq!(database.status, "offline");
+        assert_eq!(database.error, "database ping timed out");
+    }
+
+    #[tokio::test]
+    async fn system_monitor_hub_fans_out_latest_snapshot_to_all_subscribers() {
+        let hub = SystemMonitorHub::new();
+        assert!(hub.mark_started());
+        assert!(!hub.mark_started());
+
+        let mut first = hub.subscribe();
+        let mut second = hub.subscribe();
+        let snapshot = AdminServerMonitorResponse {
+            server: AdminServerMonitorServer {
+                status: "running".to_string(),
+                ..Default::default()
+            },
+            database: AdminServerMonitorDatabase {
+                reachable: true,
+                status: "online".to_string(),
+                ..Default::default()
+            },
+            backups: AdminServerMonitorBackups {
+                exists: true,
+                ..Default::default()
+            },
+        };
+
+        hub.publish(snapshot.clone());
+
+        first.changed().await.expect("first subscriber update");
+        second.changed().await.expect("second subscriber update");
+        assert_eq!(first.borrow().as_ref(), Some(&snapshot));
+        assert_eq!(second.borrow().as_ref(), Some(&snapshot));
     }
 }

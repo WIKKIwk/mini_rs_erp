@@ -3,6 +3,7 @@ use std::time::Instant;
 
 use crate::ai::werka_search::WerkaAiSearchService;
 use crate::config::{AppConfig, DotEnvPersister};
+use crate::core::admin::monitor_hub::SystemMonitorHub;
 use crate::core::admin::service::AdminService;
 use crate::core::apparatus_groups::ApparatusGroupService;
 use crate::core::auth::service::AuthService;
@@ -69,6 +70,7 @@ pub struct AppState {
     pub worker_groups: WorkerGroupService,
     pub sessions: SessionManager,
     pub warehouse_events: WarehouseEventHub,
+    pub system_monitor_hub: SystemMonitorHub,
     #[allow(dead_code)]
     pub mini_engine: Option<PostgresEngineStore>,
     pub started_at: Instant,
@@ -125,6 +127,7 @@ impl AppState {
             default_scale_driver_url(),
         ));
         let warehouse_events = WarehouseEventHub::new();
+        let system_monitor_hub = SystemMonitorHub::new();
         let gscale = build_gscale_service(scale_driver.clone(), warehouse_events.clone());
         let qolip = build_qolip_service();
         let rezka = RezkaService::new()
@@ -201,6 +204,7 @@ impl AppState {
             worker_groups,
             sessions,
             warehouse_events,
+            system_monitor_hub,
             mini_engine,
             started_at: Instant::now(),
             started_at_unix: time::OffsetDateTime::now_utc().unix_timestamp(),
