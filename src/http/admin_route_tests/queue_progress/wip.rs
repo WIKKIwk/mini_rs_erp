@@ -98,6 +98,29 @@ async fn wip_batches_endpoint_lists_waiting_and_in_use_batches() {
         waiting_body["batches"][0]["current_apparatus"],
         "7 ta rangli pechat"
     );
+    assert_eq!(
+        waiting_body["batches"][0]["current_location"],
+        "7 ta rangli pechat chiqim"
+    );
+
+    let waiting_by_location = router
+        .clone()
+        .oneshot(request(
+            "GET",
+            "/v1/mobile/admin/production-maps/wip-batches?current_location=7%20ta%20rangli%20pechat%20chiqim&status=waiting",
+            &admin_token,
+        ))
+        .await
+        .expect("waiting wip by location");
+    let waiting_by_location_body = json_body(waiting_by_location).await;
+    assert_eq!(
+        waiting_by_location_body["batches"][0]["qr_payload"],
+        qr_payload
+    );
+    assert_eq!(
+        waiting_by_location_body["batches"][0]["current_location"],
+        "7 ta rangli pechat chiqim"
+    );
 
     let second_started = router
         .clone()

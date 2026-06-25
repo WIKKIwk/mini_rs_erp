@@ -5,6 +5,8 @@ pub struct WipBatchesQuery {
     #[serde(default)]
     apparatus: String,
     #[serde(default)]
+    current_location: String,
+    #[serde(default)]
     status: String,
     #[serde(default)]
     order_id: String,
@@ -59,6 +61,7 @@ pub async fn production_map_wip_batches(
         .production_maps
         .wip_progress_batches(
             &query.apparatus,
+            &query.current_location,
             status,
             &query.order_id,
             positive_int(query.limit.as_deref(), 100),

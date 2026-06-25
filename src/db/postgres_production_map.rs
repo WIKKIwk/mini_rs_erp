@@ -317,11 +317,20 @@ impl ProductionMapStorePort for PostgresProductionMapStore {
     async fn wip_progress_batches(
         &self,
         apparatus: &str,
+        current_location: &str,
         status: Option<crate::core::production_map::OrderProgressBatchWipStatus>,
         order_id: &str,
         limit: usize,
     ) -> Result<Vec<OrderProgressBatch>, ProductionMapError> {
-        load_wip_progress_batches(&self.pool, apparatus, status, order_id, limit).await
+        load_wip_progress_batches(
+            &self.pool,
+            apparatus,
+            current_location,
+            status,
+            order_id,
+            limit,
+        )
+        .await
     }
 
     async fn put_order_run_session(

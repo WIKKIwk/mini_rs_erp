@@ -188,6 +188,7 @@ async fn postgres_wip_batches_match_apparatus_instance_suffixes() {
     let batches = service
         .wip_progress_batches(
             "Laminatsiya",
+            "",
             Some(OrderProgressBatchWipStatus::Waiting),
             "",
             100,
@@ -287,6 +288,7 @@ async fn postgres_wip_batches_scan_past_first_page_for_matching_apparatus() {
     let batches = service
         .wip_progress_batches(
             "Laminatsiya",
+            "",
             Some(OrderProgressBatchWipStatus::Waiting),
             "",
             100,

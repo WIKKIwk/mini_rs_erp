@@ -181,6 +181,7 @@ pub(super) async fn progress_batches_for_order(
 pub(super) async fn wip_progress_batches(
     store: &MemoryProductionMapStore,
     apparatus: &str,
+    current_location: &str,
     status: Option<OrderProgressBatchWipStatus>,
     order_id: &str,
     limit: usize,
@@ -190,6 +191,7 @@ pub(super) async fn wip_progress_batches(
     }
     let apparatus = apparatus.trim();
     let apparatus_key = queue_state::apparatus_search_key(apparatus);
+    let current_location = current_location.trim();
     let order_id = order_id.trim();
     let mut batches = store
         .order_progress_batches
@@ -201,6 +203,8 @@ pub(super) async fn wip_progress_batches(
                 || (!apparatus_key.is_empty()
                     && batch.current_apparatus_key.trim() == apparatus_key)
                 || queue_state::apparatus_titles_match(&batch.current_apparatus, apparatus))
+                && (current_location.is_empty()
+                    || batch.current_location.trim() == current_location)
                 && (order_id.is_empty() || batch.order_id.trim() == order_id)
                 && status.map_or(
                     batch.wip_status != OrderProgressBatchWipStatus::Processed,
