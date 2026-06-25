@@ -1,5 +1,6 @@
 use async_trait::async_trait;
 
+#[cfg(test)]
 use super::normalize::sort_groups;
 use super::{WorkerGroupError, WorkerGroupRecord, WorkerGroupStorePort};
 
