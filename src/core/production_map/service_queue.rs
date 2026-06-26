@@ -621,12 +621,18 @@ impl ProductionMapService {
         for batch in progress_batch_updates {
             batches.insert(batch.batch_id.trim().to_string(), batch.clone());
         }
-        Ok(batches.values().any(|batch| {
-            batch.order_id.trim() == order_id.trim()
-                && queue_state::apparatus_titles_match(&batch.apparatus, &previous_apparatus)
-                && queue_state::apparatus_titles_match(&batch.next_apparatus, apparatus)
-                && batch.wip_status != OrderProgressBatchWipStatus::Processed
-        }))
+        Ok(batches
+            .values()
+            .filter(|batch| {
+                batch.order_id.trim() == order_id.trim()
+                    && queue_state::apparatus_titles_match(&batch.apparatus, &previous_apparatus)
+                    && queue_state::apparatus_titles_match(&batch.next_apparatus, apparatus)
+            })
+            .any(|batch| {
+                batch.wip_status == OrderProgressBatchWipStatus::Waiting
+                    || (batch.wip_status == OrderProgressBatchWipStatus::InUse
+                        && queue_state::apparatus_titles_match(&batch.used_by_apparatus, apparatus))
+            }))
     }
 
     pub(crate) async fn commit_prepared_queue_action(
