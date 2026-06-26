@@ -816,6 +816,177 @@ async fn downstream_output_processes_input_batch_and_links_new_wip_batch() {
 }
 
 #[tokio::test]
+async fn downstream_complete_keeps_order_open_until_all_input_wips_processed() {
+    let service = ProductionMapService::new(std::sync::Arc::new(MemoryProductionMapStore::new()));
+    let actor = QueueActionActor {
+        role: "aparatchi".to_string(),
+        ref_: "worker-wip-partial-complete".to_string(),
+        display_name: "Worker WIP Partial Complete".to_string(),
+    };
+    let first = "Bosma aparat";
+    let second = "Laminatsiya mashinasi";
+    let order_id = "zakaz-wip-partial-complete";
+    service
+        .upsert_map(two_stage_map(order_id, first, second))
+        .await
+        .expect("map");
+
+    service
+        .apply_apparatus_queue_action_with_progress(
+            first,
+            order_id,
+            queue_state::ApparatusQueueAction::Start,
+            &[first.to_string()],
+            actor.clone(),
+            QueueProgressInput::default(),
+        )
+        .await
+        .expect("first start");
+    let first_pause = service
+        .apply_apparatus_queue_action_with_progress(
+            first,
+            order_id,
+            queue_state::ApparatusQueueAction::Pause,
+            &[first.to_string()],
+            actor.clone(),
+            QueueProgressInput {
+                produced_qty: Some(11.0),
+                uom: "kg".to_string(),
+                ..QueueProgressInput::default()
+            },
+        )
+        .await
+        .expect("first pause")
+        .progress_batch
+        .expect("first pause batch");
+    service
+        .apply_apparatus_queue_action_with_progress(
+            first,
+            order_id,
+            queue_state::ApparatusQueueAction::Resume,
+            &[first.to_string()],
+            actor.clone(),
+            QueueProgressInput {
+                qr_payload: first_pause.qr_payload.clone(),
+                ..QueueProgressInput::default()
+            },
+        )
+        .await
+        .expect("first resume");
+    let second_pause = service
+        .apply_apparatus_queue_action_with_progress(
+            first,
+            order_id,
+            queue_state::ApparatusQueueAction::Pause,
+            &[first.to_string()],
+            actor.clone(),
+            QueueProgressInput {
+                produced_qty: Some(12.0),
+                uom: "kg".to_string(),
+                ..QueueProgressInput::default()
+            },
+        )
+        .await
+        .expect("second pause")
+        .progress_batch
+        .expect("second pause batch");
+
+    service
+        .apply_apparatus_queue_action_with_progress(
+            second,
+            order_id,
+            queue_state::ApparatusQueueAction::Start,
+            &[second.to_string()],
+            actor.clone(),
+            QueueProgressInput {
+                qr_payload: first_pause.qr_payload.clone(),
+                ..QueueProgressInput::default()
+            },
+        )
+        .await
+        .expect("second start first wip");
+    let partial_complete = service
+        .apply_apparatus_queue_action_with_progress(
+            second,
+            order_id,
+            queue_state::ApparatusQueueAction::Complete,
+            &[second.to_string()],
+            actor.clone(),
+            QueueProgressInput {
+                produced_qty: Some(11.0),
+                uom: "kg".to_string(),
+                lamination_film_leftover_rolls: Some(1.0),
+                total_waste: Some(0.5),
+                finished_goods_kg: Some(11.0),
+                finished_goods_meter: Some(110.0),
+                ..QueueProgressInput::default()
+            },
+        )
+        .await
+        .expect("second complete first wip");
+
+    assert_eq!(
+        partial_complete.states.get(order_id),
+        Some(&"pending".to_string())
+    );
+    assert_eq!(
+        service
+            .progress_batch_for_qr("", &first_pause.qr_payload)
+            .await
+            .expect("first wip processed")
+            .wip_status,
+        OrderProgressBatchWipStatus::Processed
+    );
+    assert_eq!(
+        service
+            .progress_batch_for_qr("", &second_pause.qr_payload)
+            .await
+            .expect("second wip still waiting")
+            .wip_status,
+        OrderProgressBatchWipStatus::Waiting
+    );
+
+    service
+        .apply_apparatus_queue_action_with_progress(
+            second,
+            order_id,
+            queue_state::ApparatusQueueAction::Start,
+            &[second.to_string()],
+            actor.clone(),
+            QueueProgressInput {
+                qr_payload: second_pause.qr_payload.clone(),
+                ..QueueProgressInput::default()
+            },
+        )
+        .await
+        .expect("second start final wip");
+    let final_complete = service
+        .apply_apparatus_queue_action_with_progress(
+            second,
+            order_id,
+            queue_state::ApparatusQueueAction::Complete,
+            &[second.to_string()],
+            actor,
+            QueueProgressInput {
+                produced_qty: Some(12.0),
+                uom: "kg".to_string(),
+                lamination_film_leftover_rolls: Some(1.0),
+                total_waste: Some(0.5),
+                finished_goods_kg: Some(12.0),
+                finished_goods_meter: Some(120.0),
+                ..QueueProgressInput::default()
+            },
+        )
+        .await
+        .expect("second complete final wip");
+
+    assert_eq!(
+        final_complete.states.get(order_id),
+        Some(&"completed".to_string())
+    );
+}
+
+#[tokio::test]
 async fn downstream_start_rejects_mismatched_progress_batch_id_and_qr() {
     let service = ProductionMapService::new(std::sync::Arc::new(MemoryProductionMapStore::new()));
     let actor = QueueActionActor {

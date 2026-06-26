@@ -513,11 +513,11 @@ impl ProductionMapService {
                 queue_state::apply_unordered_queue_action(&mut parsed, order_id, action)?;
             }
         }
-        let to_state = parsed
+        let mut to_state = parsed
             .get(order_id)
             .copied()
             .ok_or(ProductionMapError::QueueActionNotAllowed)?;
-        let saved = parsed
+        let mut saved = parsed
             .into_iter()
             .map(|(id, state)| (id, state.as_str().to_string()))
             .collect::<BTreeMap<_, _>>();
@@ -548,6 +548,23 @@ impl ProductionMapService {
         let progress = self
             .build_progress_records(&storage_key, order_id, order_map, action, &actor, progress)
             .await?;
+        if action == queue_state::ApparatusQueueAction::Complete
+            && to_state == queue_state::ApparatusQueueOrderState::Completed
+            && self
+                .has_unprocessed_previous_wips(
+                    order_id,
+                    order_map,
+                    &storage_key,
+                    &progress.progress_batch_updates,
+                )
+                .await?
+        {
+            to_state = queue_state::ApparatusQueueOrderState::Pending;
+            saved.insert(order_id.to_string(), to_state.as_str().to_string());
+            event.to_state = to_state;
+            event.payload_json["to_state"] = serde_json::json!(to_state.as_str());
+            event.payload_json["batch_complete_order_state"] = serde_json::json!("pending");
+        }
         if let Some(batch) = progress.progress_batch.as_ref() {
             if action == queue_state::ApparatusQueueAction::Complete
                 && batch.lamination_print_leftover_rolls.is_some()
@@ -581,6 +598,35 @@ impl ProductionMapService {
             progress_batch: progress.progress_batch,
             progress_batch_updates: progress.progress_batch_updates,
         })
+    }
+
+    async fn has_unprocessed_previous_wips(
+        &self,
+        order_id: &str,
+        order_map: &ProductionMapDefinition,
+        apparatus: &str,
+        progress_batch_updates: &[OrderProgressBatch],
+    ) -> Result<bool, ProductionMapError> {
+        let Some(previous_apparatus) = chain::previous_work_stage_station(order_map, apparatus)
+        else {
+            return Ok(false);
+        };
+        let mut batches = self
+            .store
+            .progress_batches_for_order(order_id)
+            .await?
+            .into_iter()
+            .map(|batch| (batch.batch_id.trim().to_string(), batch))
+            .collect::<BTreeMap<_, _>>();
+        for batch in progress_batch_updates {
+            batches.insert(batch.batch_id.trim().to_string(), batch.clone());
+        }
+        Ok(batches.values().any(|batch| {
+            batch.order_id.trim() == order_id.trim()
+                && queue_state::apparatus_titles_match(&batch.apparatus, &previous_apparatus)
+                && queue_state::apparatus_titles_match(&batch.next_apparatus, apparatus)
+                && batch.wip_status != OrderProgressBatchWipStatus::Processed
+        }))
     }
 
     pub(crate) async fn commit_prepared_queue_action(
