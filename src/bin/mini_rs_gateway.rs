@@ -105,10 +105,11 @@ fn main() {
         _ => proxy.add_tcp(&bind_addr),
     }
 
-    let mut metrics = Service::prometheus_http_service();
-    metrics.add_tcp("127.0.0.1:19091");
-
     server.add_service(proxy);
-    server.add_service(metrics);
+    if let Some(metrics_addr) = config.metrics_addr {
+        let mut metrics = Service::prometheus_http_service();
+        metrics.add_tcp(&metrics_addr.to_string());
+        server.add_service(metrics);
+    }
     server.run_forever();
 }

@@ -18,6 +18,10 @@ fn gateway_config_uses_defaults() {
     assert_eq!(config.upstream_timeout, Duration::from_millis(30000));
     assert!(config.tls_cert_path.is_none());
     assert!(config.tls_key_path.is_none());
+    assert_eq!(
+        config.metrics_addr,
+        Some("127.0.0.1:19091".parse::<SocketAddr>().unwrap())
+    );
 }
 
 #[test]
@@ -34,6 +38,7 @@ fn gateway_config_reads_env_pairs() {
         ("MINI_RS_GATEWAY_UPSTREAM_TIMEOUT_MS", "45000"),
         ("MINI_RS_GATEWAY_TLS_CERT_PATH", "/etc/ssl/cert.pem"),
         ("MINI_RS_GATEWAY_TLS_KEY_PATH", "/etc/ssl/key.pem"),
+        ("MINI_RS_GATEWAY_METRICS_ADDR", "127.0.0.1:19092"),
     ])
     .unwrap();
 
@@ -48,10 +53,20 @@ fn gateway_config_reads_env_pairs() {
     assert_eq!(config.upstream_timeout, Duration::from_millis(45000));
     assert_eq!(config.tls_cert_path.as_deref(), Some("/etc/ssl/cert.pem"));
     assert_eq!(config.tls_key_path.as_deref(), Some("/etc/ssl/key.pem"));
+    assert_eq!(
+        config.metrics_addr,
+        Some("127.0.0.1:19092".parse::<SocketAddr>().unwrap())
+    );
 }
 
 #[test]
 fn gateway_config_rejects_invalid_bind_addr() {
     let error = GatewayConfig::from_pairs([("MINI_RS_GATEWAY_ADDR", "bad addr")]).unwrap_err();
     assert!(error.contains("MINI_RS_GATEWAY_ADDR"));
+}
+
+#[test]
+fn gateway_config_allows_disabling_metrics() {
+    let config = GatewayConfig::from_pairs([("MINI_RS_GATEWAY_METRICS_ADDR", "")]).unwrap();
+    assert!(config.metrics_addr.is_none());
 }
