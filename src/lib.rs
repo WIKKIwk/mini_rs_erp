@@ -10,6 +10,9 @@ pub mod error;
 pub mod fcm;
 #[cfg(test)]
 mod fcm_tests;
+pub mod gateway_config;
+#[cfg(test)]
+mod gateway_config_tests;
 pub mod google_sheets;
 pub mod http;
 pub mod rps;
