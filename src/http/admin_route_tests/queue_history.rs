@@ -161,6 +161,7 @@ async fn closed_orders_return_only_fully_completed_maps_with_action_logs() {
         .expect("save map");
     assert_eq!(saved.status(), StatusCode::OK);
 
+    let mut pechat_pause_qr = String::new();
     let mut pechat_output_qr = String::new();
     for action in ["start", "pause", "resume", "complete"] {
         let response = router
@@ -176,7 +177,13 @@ async fn closed_orders_return_only_fully_completed_maps_with_action_logs() {
             .await
             .expect("pechat action");
         let status = response.status();
-        if action == "complete" {
+        if action == "pause" {
+            let body = json_body(response).await;
+            pechat_pause_qr = body["progress_batch"]["qr_payload"]
+                .as_str()
+                .expect("pechat pause qr")
+                .to_string();
+        } else if action == "complete" {
             let body = json_body(response).await;
             pechat_output_qr = body["progress_batch"]["qr_payload"]
                 .as_str()
@@ -204,25 +211,27 @@ async fn closed_orders_return_only_fully_completed_maps_with_action_logs() {
         0
     );
 
-    for action in ["start", "complete"] {
-        let body = if action == "complete" {
-            r#"{"apparatus":"Laminatsiya 1","order_id":"zakaz-closed-route","action":"complete","lamination_film_leftover_rolls":1,"total_waste":1,"finished_goods_kg":1,"finished_goods_meter":1,"produced_qty":1,"gross_qty":1,"uom":"kg","printer":"zebra","print_mode":"rfid"}"#.to_string()
-        } else {
-            format!(
-                r#"{{"apparatus":"Laminatsiya 1","order_id":"zakaz-closed-route","action":"start","produced_qty":1,"gross_qty":1,"uom":"kg","printer":"zebra","print_mode":"rfid","qr_payload":"{pechat_output_qr}"}}"#
-            )
-        };
-        let response = router
-            .clone()
-            .oneshot(request_with_body(
-                "POST",
-                "/v1/mobile/admin/production-maps/queue-action",
-                &lamin_worker,
-                &body,
-            ))
-            .await
-            .expect("lamin action");
-        assert_eq!(response.status(), StatusCode::OK);
+    for qr in [pechat_pause_qr.as_str(), pechat_output_qr.as_str()] {
+        for action in ["start", "complete"] {
+            let body = if action == "complete" {
+                r#"{"apparatus":"Laminatsiya 1","order_id":"zakaz-closed-route","action":"complete","lamination_film_leftover_rolls":1,"total_waste":1,"finished_goods_kg":1,"finished_goods_meter":1,"produced_qty":1,"gross_qty":1,"uom":"kg","printer":"zebra","print_mode":"rfid"}"#.to_string()
+            } else {
+                format!(
+                    r#"{{"apparatus":"Laminatsiya 1","order_id":"zakaz-closed-route","action":"start","produced_qty":1,"gross_qty":1,"uom":"kg","printer":"zebra","print_mode":"rfid","qr_payload":"{qr}"}}"#
+                )
+            };
+            let response = router
+                .clone()
+                .oneshot(request_with_body(
+                    "POST",
+                    "/v1/mobile/admin/production-maps/queue-action",
+                    &lamin_worker,
+                    &body,
+                ))
+                .await
+                .expect("lamin action");
+            assert_eq!(response.status(), StatusCode::OK);
+        }
     }
 
     let closed = router
@@ -243,12 +252,12 @@ async fn closed_orders_return_only_fully_completed_maps_with_action_logs() {
     assert_eq!(orders[0]["closed_by_ref"], "worker-closed-lamin");
     assert_eq!(orders[0]["closed_by_display_name"], "Admin");
     let logs = orders[0]["logs"].as_array().expect("logs");
-    assert_eq!(logs.len(), 6);
+    assert_eq!(logs.len(), 8);
     assert_eq!(logs[0]["action"], "start");
     assert_eq!(logs[0]["actor_ref"], "worker-closed-pechat");
     assert_eq!(logs[3]["action"], "complete");
     assert_eq!(logs[3]["apparatus"], "7 ta rangli pechat");
-    assert_eq!(logs[5]["action"], "complete");
-    assert_eq!(logs[5]["apparatus"], "Laminatsiya 1");
-    assert_eq!(logs[5]["actor_ref"], "worker-closed-lamin");
+    assert_eq!(logs[7]["action"], "complete");
+    assert_eq!(logs[7]["apparatus"], "Laminatsiya 1");
+    assert_eq!(logs[7]["actor_ref"], "worker-closed-lamin");
 }
