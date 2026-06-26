@@ -1,8 +1,9 @@
 use sqlx::{PgPool, Postgres, Transaction};
 
 use crate::core::production_map::{
-    OrderProgressBatch, OrderProgressBatchStatus, OrderProgressBatchWipStatus, OrderProgressEvent,
-    OrderRunSession, OrderRunStatus, ProductionMapError, ProductionOrderLogEntry, queue_state,
+    FinishedGoodsStockEntry, OrderProgressBatch, OrderProgressBatchStatus,
+    OrderProgressBatchWipStatus, OrderProgressEvent, OrderRunSession, OrderRunStatus,
+    ProductionMapError, ProductionOrderLogEntry, queue_state,
 };
 
 use super::queue_helpers::{queue_action_as_str, queue_action_from_str};
@@ -260,6 +261,53 @@ pub(super) async fn put_order_progress_batch_tx(
             action = ?batch.action,
             qr_payload = %batch.qr_payload,
             "failed to store order progress batch"
+        );
+        ProductionMapError::StoreFailed
+    })?;
+    Ok(())
+}
+
+pub(super) async fn receive_finished_goods_batch_tx(
+    tx: &mut Transaction<'_, Postgres>,
+    batch: &OrderProgressBatch,
+    stock: &FinishedGoodsStockEntry,
+) -> Result<(), ProductionMapError> {
+    put_order_progress_batch_tx(tx, batch).await?;
+    sqlx::query(
+        "INSERT INTO mini_finished_goods_stock (
+             id, warehouse, order_id, item_code, item_name, qty, uom, status, payload_json
+         )
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+         ON CONFLICT (id) DO UPDATE SET
+           warehouse = excluded.warehouse,
+           order_id = excluded.order_id,
+           item_code = excluded.item_code,
+           item_name = excluded.item_name,
+           qty = excluded.qty,
+           uom = excluded.uom,
+           status = excluded.status,
+           payload_json = excluded.payload_json,
+           updated_at = now()",
+    )
+    .bind(stock.id.trim())
+    .bind(stock.warehouse.trim())
+    .bind(stock.order_id.trim())
+    .bind(stock.item_code.trim())
+    .bind(stock.item_name.trim())
+    .bind(stock.qty)
+    .bind(stock.uom.trim())
+    .bind(stock.status.trim())
+    .bind(&stock.payload_json)
+    .execute(&mut **tx)
+    .await
+    .map_err(|error| {
+        tracing::error!(
+            error = %error,
+            stock_id = %stock.id,
+            batch_id = %stock.source_progress_batch_id,
+            order_id = %stock.order_id,
+            warehouse = %stock.warehouse,
+            "failed to store finished goods receipt"
         );
         ProductionMapError::StoreFailed
     })?;

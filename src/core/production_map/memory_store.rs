@@ -20,6 +20,7 @@ pub struct MemoryProductionMapStore {
     order_run_sessions: RwLock<BTreeMap<String, OrderRunSession>>,
     order_progress_events: RwLock<Vec<OrderProgressEvent>>,
     order_progress_batches: RwLock<BTreeMap<String, OrderProgressBatch>>,
+    finished_goods_stock: RwLock<BTreeMap<String, FinishedGoodsStockEntry>>,
     material_rules: RwLock<BTreeMap<String, ApparatusMaterialRule>>,
     material_assignments: RwLock<BTreeMap<String, RawMaterialAssignment>>,
 }
@@ -36,6 +37,7 @@ impl MemoryProductionMapStore {
             order_run_sessions: RwLock::new(BTreeMap::new()),
             order_progress_events: RwLock::new(Vec::new()),
             order_progress_batches: RwLock::new(BTreeMap::new()),
+            finished_goods_stock: RwLock::new(BTreeMap::new()),
             material_rules: RwLock::new(BTreeMap::new()),
             material_assignments: RwLock::new(BTreeMap::new()),
         }
@@ -278,6 +280,14 @@ impl ProductionMapStorePort for MemoryProductionMapStore {
         batch: OrderProgressBatch,
     ) -> Result<(), ProductionMapError> {
         runs::put_order_progress_batch(self, batch).await
+    }
+
+    async fn receive_finished_goods_batch(
+        &self,
+        batch: OrderProgressBatch,
+        stock: FinishedGoodsStockEntry,
+    ) -> Result<(), ProductionMapError> {
+        runs::receive_finished_goods_batch(self, batch, stock).await
     }
 
     async fn apparatus_material_rules(
