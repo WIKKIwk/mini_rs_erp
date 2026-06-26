@@ -1,0 +1,24 @@
+[Unit]
+Description=Mini RS ERP Pingora gateway
+After=network-online.target mini-rs-erp.service
+Wants=network-online.target
+Requires=mini-rs-erp.service
+
+[Service]
+Type=simple
+User=wikki
+Group=wikki
+WorkingDirectory=/home/wikki/mini_rs_erp_deploy/current
+EnvironmentFile=/home/wikki/mini_rs_erp_deploy/.env
+ExecStart=/home/wikki/mini_rs_erp_deploy/current/mini_rs_gateway
+Restart=always
+RestartSec=3
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=full
+ProtectHome=false
+ReadWritePaths=/home/wikki/mini_rs_erp_deploy
+LimitNOFILE=1048576
+
+[Install]
+WantedBy=multi-user.target
