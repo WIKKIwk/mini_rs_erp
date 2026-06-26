@@ -15,6 +15,25 @@ impl ProductionMapService {
         self.store.apparatus_sequences().await
     }
 
+    pub async fn effective_apparatus_sequences(
+        &self,
+    ) -> Result<BTreeMap<String, Vec<String>>, ProductionMapError> {
+        let maps = self.store.maps().await?;
+        let sequences = self.store.apparatus_sequences().await?;
+        Ok(sequences
+            .into_iter()
+            .map(|(apparatus, stored_sequence)| {
+                let visible_order_ids = visible_order_ids_for_apparatus(&maps, &apparatus);
+                let sequence = if visible_order_ids.is_empty() {
+                    stored_sequence
+                } else {
+                    queue_state::effective_apparatus_sequence(&stored_sequence, &visible_order_ids)
+                };
+                (apparatus, sequence)
+            })
+            .collect())
+    }
+
     pub async fn set_apparatus_sequence(
         &self,
         apparatus: &str,

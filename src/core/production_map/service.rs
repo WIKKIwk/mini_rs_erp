@@ -70,7 +70,7 @@ impl ProductionMapService {
     pub async fn live_snapshot(&self) -> Result<ProductionMapLiveSnapshot, ProductionMapError> {
         Ok(ProductionMapLiveSnapshot {
             maps: self.maps().await?,
-            sequences: self.apparatus_sequences().await?,
+            sequences: self.effective_apparatus_sequences().await?,
             queue_states: self.apparatus_queue_states().await?,
             queue_policies: self.apparatus_queue_policy_records().await?,
         })
