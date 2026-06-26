@@ -1,36 +1,11 @@
 use crate::core::admin::models::AdminItemGroup;
-use crate::core::admin::ports::{AdminPortError, AdminReadPort};
+use crate::core::admin::ports::AdminPortError;
 use crate::core::werka::models::SupplierItem;
 use crate::db::postgres_admin_catalog::PostgresAdminCatalogStore;
 
 use super::rows::blank_default;
 
 impl PostgresAdminCatalogStore {
-    pub async fn seed_from_read_port(
-        &self,
-        source: &(dyn AdminReadPort + Send + Sync),
-    ) -> Result<(), AdminPortError> {
-        for group in source.item_group_tree().await? {
-            self.upsert_item_group(&group).await?;
-        }
-
-        let mut offset = 0usize;
-        loop {
-            let items = source.items_page("", 500, offset).await?;
-            if items.is_empty() {
-                break;
-            }
-            for item in &items {
-                self.upsert_item(item).await?;
-            }
-            offset += items.len();
-            if items.len() < 500 {
-                break;
-            }
-        }
-        Ok(())
-    }
-
     pub(super) async fn upsert_item(
         &self,
         item: &SupplierItem,

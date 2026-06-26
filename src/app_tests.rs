@@ -312,7 +312,7 @@ async fn app_state_never_attaches_legacy_remote_clients() {
 }
 
 #[tokio::test]
-async fn app_state_admin_catalog_reads_do_not_fail_without_external_backend() {
+async fn app_state_admin_catalog_fails_closed_without_postgres() {
     let _guard = MINI_ENGINE_ENV_LOCK.lock().expect("env lock");
     unsafe {
         std::env::remove_var("MINI_ERP_DATABASE_URL");
@@ -320,26 +320,16 @@ async fn app_state_admin_catalog_reads_do_not_fail_without_external_backend() {
 
     let state = super::AppState::new(test_app_config());
 
-    state
-        .admin
-        .supplier_summary(300)
-        .await
-        .expect("supplier summary should load from local mini ERP store");
-    state
-        .admin
-        .customers_page("", 20, 0)
-        .await
-        .expect("customers should load from local mini ERP store");
-    state
-        .admin
-        .items_page_by_group("", "", 20, 0)
-        .await
-        .expect("items should load from local mini ERP store");
-    state
-        .admin
-        .item_groups("", 20)
-        .await
-        .expect("item groups should load from local mini ERP store");
+    assert!(state.admin.supplier_summary(300).await.is_err());
+    assert!(state.admin.customers_page("", 20, 0).await.is_err());
+    assert!(
+        state
+            .admin
+            .items_page_by_group("", "", 20, 0)
+            .await
+            .is_err()
+    );
+    assert!(state.admin.item_groups("", 20).await.is_err());
 }
 
 fn calculate_order_template(code: &str) -> CalculateOrderTemplate {
