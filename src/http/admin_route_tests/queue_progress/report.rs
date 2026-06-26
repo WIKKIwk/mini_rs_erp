@@ -224,3 +224,183 @@ async fn progress_qr_report_marks_processed_qr_as_stale_and_returns_order_flow()
     );
     assert_eq!(report_body["opened_by"]["actor_ref"], "worker-qr-report");
 }
+
+#[tokio::test]
+async fn progress_qr_history_lists_own_batches_and_reprints_existing_qr() {
+    let print_requests = Arc::new(Mutex::new(Vec::<ScaleDriverPrintRequest>::new()));
+    let mut state = test_state();
+    state.gscale = GscaleService::new().with_driver(Arc::new(FakeProgressDriver {
+        requests: print_requests.clone(),
+        fail: false,
+    }));
+    for (worker_ref, apparatus) in [
+        ("worker-qr-history-a", "7 ta rangli pechat"),
+        ("worker-qr-history-b", "8 ta rangli pechat"),
+    ] {
+        state
+            .admin
+            .upsert_role_assignment(crate::core::authz::RoleAssignmentUpsert {
+                principal_role: PrincipalRole::Aparatchi,
+                principal_ref: worker_ref.to_string(),
+                role_id: "aparatchi".to_string(),
+                assigned_apparatus: vec![apparatus.to_string()],
+            })
+            .await
+            .expect("assignment");
+    }
+    let admin_token = session(&state, PrincipalRole::Admin).await;
+    let worker_a_token = session_for(&state, PrincipalRole::Aparatchi, "worker-qr-history-a").await;
+    let worker_b_token = session_for(&state, PrincipalRole::Aparatchi, "worker-qr-history-b").await;
+    let router = build_router(state);
+
+    let mut other_qr = String::new();
+    for (order_id, order_number, apparatus, token) in [
+        (
+            "zakaz-qr-history-a",
+            "9503",
+            "7 ta rangli pechat",
+            &worker_a_token,
+        ),
+        (
+            "zakaz-qr-history-b",
+            "9504",
+            "8 ta rangli pechat",
+            &worker_b_token,
+        ),
+    ] {
+        let saved = router
+            .clone()
+            .oneshot(request_with_body(
+                "PUT",
+                "/v1/mobile/admin/production-maps",
+                &admin_token,
+                &pechat_order_map_json(
+                    order_id,
+                    &format!("QR history {order_number}"),
+                    order_number,
+                    apparatus,
+                ),
+            ))
+            .await
+            .expect("save map");
+        assert_eq!(saved.status(), StatusCode::OK);
+
+        let started = router
+            .clone()
+            .oneshot(request_with_body(
+                "POST",
+                "/v1/mobile/admin/production-maps/queue-action",
+                token,
+                &format!(
+                    r#"{{
+                        "apparatus":"{apparatus}",
+                        "order_id":"{order_id}",
+                        "action":"start"
+                    }}"#
+                ),
+            ))
+            .await
+            .expect("start");
+        assert_eq!(started.status(), StatusCode::OK);
+
+        let paused = router
+            .clone()
+            .oneshot(request_with_body(
+                "POST",
+                "/v1/mobile/admin/production-maps/queue-action",
+                token,
+                &format!(
+                    r#"{{
+                        "apparatus":"{apparatus}",
+                        "order_id":"{order_id}",
+                        "action":"pause",
+                        "produced_qty":12,
+                        "uom":"kg",
+                        "printer":"zebra",
+                        "print_mode":"rfid"
+                    }}"#
+                ),
+            ))
+            .await
+            .expect("pause");
+        let paused_status = paused.status();
+        let paused_body = json_body(paused).await;
+        assert_eq!(paused_status, StatusCode::OK, "{paused_body:?}");
+        if order_id == "zakaz-qr-history-b" {
+            other_qr = paused_body["progress_batch"]["qr_payload"]
+                .as_str()
+                .expect("other qr")
+                .to_string();
+        }
+    }
+
+    let history = router
+        .clone()
+        .oneshot(request(
+            "GET",
+            "/v1/mobile/admin/production-maps/progress-qr/history",
+            &worker_a_token,
+        ))
+        .await
+        .expect("history");
+    let history_status = history.status();
+    let history_body = json_body(history).await;
+    assert_eq!(history_status, StatusCode::OK, "{history_body:?}");
+    let batches = history_body["batches"].as_array().expect("batches");
+    assert_eq!(batches.len(), 1);
+    assert_eq!(batches[0]["order_id"], "zakaz-qr-history-a");
+    let own_qr = batches[0]["qr_payload"].as_str().expect("own qr");
+
+    let forbidden = router
+        .clone()
+        .oneshot(request_with_body(
+            "POST",
+            "/v1/mobile/admin/production-maps/progress-qr/reprint",
+            &worker_a_token,
+            r#"{
+                "qr_payload":"missing-worker-b-qr"
+            }"#,
+        ))
+        .await
+        .expect("forbidden reprint missing");
+    assert_eq!(forbidden.status(), StatusCode::NOT_FOUND);
+
+    let forbidden_other = router
+        .clone()
+        .oneshot(request_with_body(
+            "POST",
+            "/v1/mobile/admin/production-maps/progress-qr/reprint",
+            &worker_a_token,
+            &format!(r#"{{"qr_payload":"{other_qr}"}}"#),
+        ))
+        .await
+        .expect("forbidden reprint other worker");
+    assert_eq!(forbidden_other.status(), StatusCode::FORBIDDEN);
+
+    let reprinted = router
+        .clone()
+        .oneshot(request_with_body(
+            "POST",
+            "/v1/mobile/admin/production-maps/progress-qr/reprint",
+            &worker_a_token,
+            &format!(
+                r#"{{
+                    "qr_payload":"{own_qr}",
+                    "printer":"zebra",
+                    "print_mode":"rfid",
+                    "print_count":1
+                }}"#
+            ),
+        ))
+        .await
+        .expect("reprint own");
+    let reprinted_status = reprinted.status();
+    let reprinted_body = json_body(reprinted).await;
+    assert_eq!(reprinted_status, StatusCode::OK, "{reprinted_body:?}");
+    assert_eq!(reprinted_body["ok"], true);
+    assert_eq!(reprinted_body["batch"]["qr_payload"], own_qr);
+    assert_eq!(reprinted_body["print"]["status"], "printed");
+    let printed = print_requests.lock().await;
+    assert_eq!(printed.len(), 3);
+    assert_eq!(printed[2].epc, own_qr);
+}
