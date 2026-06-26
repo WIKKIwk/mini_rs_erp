@@ -216,6 +216,57 @@ async fn production_map_sequence_round_trips_on_server() {
 }
 
 #[tokio::test]
+async fn production_map_sequence_get_reconciles_stale_order_ids() {
+    let state = test_state();
+    let token = session(&state, PrincipalRole::Admin).await;
+    let router = build_router(state.clone());
+
+    for (id, order_number) in [("zakaz-2222", "2222"), ("zakaz-1111", "1111")] {
+        let saved = router
+            .clone()
+            .oneshot(request_with_body(
+                "PUT",
+                "/v1/mobile/admin/production-maps",
+                &token,
+                &pechat_order_map_json(id, "ABCD Family", order_number, "7 ta rangli pechat"),
+            ))
+            .await
+            .expect("save current map");
+        assert_eq!(saved.status(), StatusCode::OK);
+    }
+
+    let stale_sequence = router
+        .clone()
+        .oneshot(request_with_body(
+            "PUT",
+            "/v1/mobile/admin/production-maps/sequence",
+            &token,
+            r#"{
+                "apparatus":"7 ta rangli pechat",
+                "order_ids":["e2e-zakaz-old"]
+            }"#,
+        ))
+        .await
+        .expect("save stale sequence");
+    assert_eq!(stale_sequence.status(), StatusCode::OK);
+
+    let get = router
+        .oneshot(request(
+            "GET",
+            "/v1/mobile/admin/production-maps/sequence",
+            &token,
+        ))
+        .await
+        .expect("get sequence");
+    assert_eq!(get.status(), StatusCode::OK);
+    let body = json_body(get).await;
+    assert_eq!(
+        body["sequences"]["7 ta rangli pechat"],
+        serde_json::json!(["zakaz-1111", "zakaz-2222"])
+    );
+}
+
+#[tokio::test]
 async fn production_map_sequence_blocks_reorder_before_active_order() {
     let state = test_state();
     state

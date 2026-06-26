@@ -242,7 +242,7 @@ pub async fn production_map_sequence(
         Method::GET => {
             let sequences = state
                 .production_maps
-                .apparatus_sequences()
+                .effective_apparatus_sequences()
                 .await
                 .map_err(production_map_error)?;
             let queue_states = state
