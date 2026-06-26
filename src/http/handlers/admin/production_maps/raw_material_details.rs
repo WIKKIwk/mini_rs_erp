@@ -81,8 +81,12 @@ async fn validate_rulon_size_for_pechat_order(
     let roll_width = roll_width_mm(stock, item)
         .ok_or_else(|| production_map_error(ProductionMapError::RawMaterialRollSizeMissing))?;
     if roll_width + f64::EPSILON < order_width || roll_width > order_width + 20.0 + f64::EPSILON {
-        return Err(production_map_error(
-            ProductionMapError::RawMaterialRollSizeMismatch,
+        return Err((
+            StatusCode::BAD_REQUEST,
+            Json(AdminErrorResponse::roll_size_mismatch(
+                order_width,
+                roll_width,
+            )),
         ));
     }
     Ok(())

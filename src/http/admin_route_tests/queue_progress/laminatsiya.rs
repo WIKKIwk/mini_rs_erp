@@ -133,6 +133,102 @@ async fn laminatsiya_complete_requires_or_persists_completion_metrics() {
 }
 
 #[tokio::test]
+async fn laminatsiya_complete_keeps_state_successful_when_progress_print_fails() {
+    let print_requests = Arc::new(Mutex::new(Vec::<ScaleDriverPrintRequest>::new()));
+    let mut state = test_state();
+    state.gscale = GscaleService::new().with_driver(Arc::new(FakeProgressDriver {
+        requests: print_requests.clone(),
+        fail: true,
+    }));
+    state
+        .admin
+        .upsert_role_assignment(crate::core::authz::RoleAssignmentUpsert {
+            principal_role: PrincipalRole::Aparatchi,
+            principal_ref: "worker-laminatsiya-print-fail".to_string(),
+            role_id: "aparatchi".to_string(),
+            assigned_apparatus: vec!["Laminatsiya 1".to_string()],
+        })
+        .await
+        .expect("assignment");
+    let admin_token = session(&state, PrincipalRole::Admin).await;
+    let worker_token = session_for(
+        &state,
+        PrincipalRole::Aparatchi,
+        "worker-laminatsiya-print-fail",
+    )
+    .await;
+    let router = build_router(state);
+
+    let saved = router
+        .clone()
+        .oneshot(request_with_body(
+            "PUT",
+            "/v1/mobile/admin/production-maps",
+            &admin_token,
+            &pechat_order_map_json_with_dims(
+                "zakaz-laminatsiya-print-fail",
+                "Laminatsiya print fail",
+                "9328",
+                "Laminatsiya 1",
+                2.0,
+                950.0,
+            ),
+        ))
+        .await
+        .expect("save map");
+    assert_eq!(saved.status(), StatusCode::OK);
+
+    let started = router
+        .clone()
+        .oneshot(request_with_body(
+            "POST",
+            "/v1/mobile/admin/production-maps/queue-action",
+            &worker_token,
+            r#"{
+                "apparatus":"Laminatsiya 1",
+                "order_id":"zakaz-laminatsiya-print-fail",
+                "action":"start"
+            }"#,
+        ))
+        .await
+        .expect("start");
+    assert_eq!(started.status(), StatusCode::OK);
+
+    let completed = router
+        .clone()
+        .oneshot(request_with_body(
+            "POST",
+            "/v1/mobile/admin/production-maps/queue-action",
+            &worker_token,
+            r#"{
+                "apparatus":"Laminatsiya 1",
+                "order_id":"zakaz-laminatsiya-print-fail",
+                "action":"complete",
+                "lamination_film_leftover_rolls":1,
+                "total_waste":1,
+                "finished_goods_kg":9,
+                "finished_goods_meter":90,
+                "printer":"zebra",
+                "print_mode":"rfid"
+            }"#,
+        ))
+        .await
+        .expect("complete");
+    let completed_status = completed.status();
+    let completed_body = json_body(completed).await;
+    assert_eq!(completed_status, StatusCode::OK, "{completed_body:?}");
+    assert_eq!(
+        completed_body["states"]["zakaz-laminatsiya-print-fail"],
+        "completed"
+    );
+    assert_eq!(completed_body["progress_batch"]["status"], "completed");
+    assert_eq!(completed_body["print"]["ok"], false);
+    assert_eq!(completed_body["print"]["status"], "failed");
+    assert_eq!(completed_body["print"]["error"], "printer offline");
+    assert_eq!(print_requests.lock().await.len(), 1);
+}
+
+#[tokio::test]
 async fn laminatsiya_pause_does_not_persist_print_leftover_metric() {
     let print_requests = Arc::new(Mutex::new(Vec::<ScaleDriverPrintRequest>::new()));
     let mut state = test_state();
