@@ -5,7 +5,7 @@ use super::*;
 use super::apparatus::visible_order_ids_for_apparatus;
 use super::progress::{
     effective_apparatus_queue_policy, effective_apparatus_queue_policy_record,
-    queue_action_event_id,
+    queue_action_event_id, unix_seconds,
 };
 
 impl ProductionMapService {
@@ -174,6 +174,81 @@ impl ProductionMapService {
             active_sessions,
             opened_by,
         })
+    }
+
+    pub async fn receive_finished_goods(
+        &self,
+        progress_batch_id: &str,
+        qr_payload: &str,
+        warehouse: &str,
+        actor: QueueActionActor,
+    ) -> Result<FinishedGoodsReceipt, ProductionMapError> {
+        let warehouse = warehouse.trim();
+        if warehouse.is_empty() {
+            return Err(ProductionMapError::ProgressInputInvalid);
+        }
+        let _guard = self.queue_action_guard().await;
+        let mut batch = self
+            .progress_batch_for_qr(progress_batch_id, qr_payload)
+            .await?;
+        if batch.action != queue_state::ApparatusQueueAction::Complete
+            || batch.status != OrderProgressBatchStatus::Completed
+            || batch.wip_status != OrderProgressBatchWipStatus::Waiting
+            || !batch.next_apparatus.trim().is_empty()
+        {
+            return Err(ProductionMapError::ProgressBatchNotAccepted);
+        }
+        let now = unix_seconds();
+        let (qty, uom) = finished_goods_qty_uom(&batch)?;
+        let stock = FinishedGoodsStockEntry {
+            id: format!("finished:{}", batch.batch_id.trim()),
+            warehouse: warehouse.to_string(),
+            order_id: batch.order_id.trim().to_string(),
+            item_code: batch.label_item_code.trim().to_string(),
+            item_name: batch.label_item_name.trim().to_string(),
+            qty,
+            uom,
+            status: "available".to_string(),
+            barcode: batch.qr_payload.trim().to_string(),
+            source_progress_batch_id: batch.batch_id.trim().to_string(),
+            accepted_by_role: actor.role.trim().to_string(),
+            accepted_by_ref: actor.ref_.trim().to_string(),
+            accepted_by_display_name: actor.display_name.trim().to_string(),
+            accepted_at_unix: now,
+            payload_json: serde_json::json!({
+                "source": "production_finished_goods_receipt",
+                "progress_batch_id": batch.batch_id.trim(),
+                "qr_payload": batch.qr_payload.trim(),
+                "warehouse": warehouse,
+                "order_id": batch.order_id.trim(),
+                "accepted_by_role": actor.role.trim(),
+                "accepted_by_ref": actor.ref_.trim(),
+                "accepted_by_display_name": actor.display_name.trim(),
+                "accepted_at_unix": now,
+            }),
+        };
+        batch.wip_status = OrderProgressBatchWipStatus::Processed;
+        batch.current_location = warehouse.to_string();
+        batch.processed_by_session_id = stock.id.clone();
+        batch.processed_by_apparatus = format!("warehouse:{warehouse}");
+        batch.payload_json["received_warehouse"] = serde_json::json!(warehouse);
+        batch.payload_json["received_by_role"] = serde_json::json!(actor.role.trim());
+        batch.payload_json["received_by_ref"] = serde_json::json!(actor.ref_.trim());
+        batch.payload_json["received_by_display_name"] =
+            serde_json::json!(actor.display_name.trim());
+        batch.payload_json["received_at_unix"] = serde_json::json!(now);
+        batch.payload_json["finished_goods_stock_id"] = serde_json::json!(stock.id);
+        batch.payload_json["wip_status"] = serde_json::json!(batch.wip_status.as_str());
+        batch.payload_json["current_location"] = serde_json::json!(batch.current_location);
+        batch.payload_json["processed_by_session_id"] =
+            serde_json::json!(batch.processed_by_session_id);
+        batch.payload_json["processed_by_apparatus"] =
+            serde_json::json!(batch.processed_by_apparatus);
+        self.store
+            .receive_finished_goods_batch(batch.clone(), stock.clone())
+            .await?;
+        self.notify_live();
+        Ok(FinishedGoodsReceipt { batch, stock })
     }
 
     pub async fn wip_progress_batches(
@@ -537,6 +612,23 @@ fn current_progress_batch_for_report(
         current = next;
     }
     Some(current)
+}
+
+fn finished_goods_qty_uom(batch: &OrderProgressBatch) -> Result<(f64, String), ProductionMapError> {
+    if let Some(qty) = batch.finished_goods_kg
+        && qty > 0.0
+    {
+        return Ok((qty, "kg".to_string()));
+    }
+    if let Some(qty) = batch.finished_goods_meter
+        && qty > 0.0
+    {
+        return Ok((qty, "m".to_string()));
+    }
+    if batch.produced_qty > 0.0 && !batch.uom.trim().is_empty() {
+        return Ok((batch.produced_qty, batch.uom.trim().to_string()));
+    }
+    Err(ProductionMapError::ProgressInputInvalid)
 }
 
 fn progress_batch_order_key(batch: &OrderProgressBatch) -> (u128, String) {

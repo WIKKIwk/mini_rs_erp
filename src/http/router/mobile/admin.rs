@@ -101,6 +101,10 @@ pub(super) fn routes() -> Router<AppState> {
             any(admin::production_map_wip_batches),
         )
         .route(
+            "/v1/mobile/admin/production-maps/finished-goods/receive",
+            any(admin::production_map_finished_goods_receive),
+        )
+        .route(
             "/v1/mobile/admin/raw-material-rules",
             any(admin::raw_material_rules),
         )

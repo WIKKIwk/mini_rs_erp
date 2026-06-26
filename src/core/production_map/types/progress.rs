@@ -224,6 +224,31 @@ pub struct ProductionQrReport {
     pub opened_by: Option<ProductionQrOpenedBy>,
 }
 
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct FinishedGoodsStockEntry {
+    pub id: String,
+    pub warehouse: String,
+    pub order_id: String,
+    pub item_code: String,
+    pub item_name: String,
+    pub qty: f64,
+    pub uom: String,
+    pub status: String,
+    pub barcode: String,
+    pub source_progress_batch_id: String,
+    pub accepted_by_role: String,
+    pub accepted_by_ref: String,
+    pub accepted_by_display_name: String,
+    pub accepted_at_unix: i64,
+    pub payload_json: serde_json::Value,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct FinishedGoodsReceipt {
+    pub batch: OrderProgressBatch,
+    pub stock: FinishedGoodsStockEntry,
+}
+
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct QueueProgressInput {
     pub produced_qty: Option<f64>,

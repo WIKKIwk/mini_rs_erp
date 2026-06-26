@@ -37,7 +37,7 @@ pub use self::raw_materials::{
     raw_material_assignment_lookup, raw_material_assignments, raw_material_rules,
     raw_material_stock,
 };
-pub use self::wip::production_map_wip_batches;
+pub use self::wip::{production_map_finished_goods_receive, production_map_wip_batches};
 
 pub async fn production_maps(
     State(state): State<AppState>,

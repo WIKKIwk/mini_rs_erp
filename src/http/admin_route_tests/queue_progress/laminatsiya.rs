@@ -133,6 +133,162 @@ async fn laminatsiya_complete_requires_or_persists_completion_metrics() {
 }
 
 #[tokio::test]
+async fn finished_goods_requires_warehouse_receipt_before_stock() {
+    let print_requests = Arc::new(Mutex::new(Vec::<ScaleDriverPrintRequest>::new()));
+    let mut state = test_state();
+    state.gscale = GscaleService::new().with_driver(Arc::new(FakeProgressDriver {
+        requests: print_requests,
+        fail: false,
+    }));
+    state
+        .admin
+        .upsert_role_assignment(crate::core::authz::RoleAssignmentUpsert {
+            principal_role: PrincipalRole::Aparatchi,
+            principal_ref: "worker-fg-receipt".to_string(),
+            role_id: "aparatchi".to_string(),
+            assigned_apparatus: vec!["Laminatsiya 1".to_string()],
+        })
+        .await
+        .expect("assignment");
+    let admin_token = session(&state, PrincipalRole::Admin).await;
+    let worker_token = session_for(&state, PrincipalRole::Aparatchi, "worker-fg-receipt").await;
+    let warehouse_token = session_for(&state, PrincipalRole::Werka, "warehouse-keeper-1").await;
+    let router = build_router(state);
+
+    let saved = router
+        .clone()
+        .oneshot(request_with_body(
+            "PUT",
+            "/v1/mobile/admin/production-maps",
+            &admin_token,
+            &pechat_order_map_json_with_dims(
+                "zakaz-fg-receipt",
+                "Finished goods receipt order",
+                "9407",
+                "Laminatsiya 1",
+                2.0,
+                950.0,
+            ),
+        ))
+        .await
+        .expect("save map");
+    assert_eq!(saved.status(), StatusCode::OK);
+
+    let started = router
+        .clone()
+        .oneshot(request_with_body(
+            "POST",
+            "/v1/mobile/admin/production-maps/queue-action",
+            &worker_token,
+            r#"{
+                "apparatus":"Laminatsiya 1",
+                "order_id":"zakaz-fg-receipt",
+                "action":"start"
+            }"#,
+        ))
+        .await
+        .expect("start");
+    assert_eq!(started.status(), StatusCode::OK);
+
+    let completed = router
+        .clone()
+        .oneshot(request_with_body(
+            "POST",
+            "/v1/mobile/admin/production-maps/queue-action",
+            &worker_token,
+            r#"{
+                "apparatus":"Laminatsiya 1",
+                "order_id":"zakaz-fg-receipt",
+                "action":"complete",
+                "lamination_film_leftover_rolls":1.25,
+                "total_waste":2,
+                "finished_goods_kg":24,
+                "finished_goods_meter":180,
+                "printer":"zebra",
+                "print_mode":"rfid"
+            }"#,
+        ))
+        .await
+        .expect("complete");
+    let completed_body = json_body(completed).await;
+    let qr_payload = completed_body["progress_batch"]["qr_payload"]
+        .as_str()
+        .expect("progress qr");
+    assert_eq!(
+        completed_body["progress_batch"]["wip_status"], "waiting",
+        "final output must wait for warehouse receipt"
+    );
+
+    let waiting = router
+        .clone()
+        .oneshot(request(
+            "GET",
+            "/v1/mobile/admin/production-maps/wip-batches?status=waiting&order_id=zakaz-fg-receipt",
+            &admin_token,
+        ))
+        .await
+        .expect("waiting wip");
+    let waiting_body = json_body(waiting).await;
+    assert_eq!(
+        waiting_body["batches"].as_array().expect("waiting").len(),
+        1
+    );
+
+    let received = router
+        .clone()
+        .oneshot(request_with_body(
+            "POST",
+            "/v1/mobile/admin/production-maps/finished-goods/receive",
+            &warehouse_token,
+            &format!(
+                r#"{{
+                    "qr_payload":"{qr_payload}",
+                    "warehouse":"Tayyor mahsulot ombori"
+                }}"#
+            ),
+        ))
+        .await
+        .expect("receive finished goods");
+    let received_status = received.status();
+    let received_body = json_body(received).await;
+    assert_eq!(received_status, StatusCode::OK, "{received_body:?}");
+    assert_eq!(
+        received_body["stock"]["warehouse"],
+        "Tayyor mahsulot ombori"
+    );
+    assert_eq!(received_body["stock"]["order_id"], "zakaz-fg-receipt");
+    assert_eq!(received_body["stock"]["qty"], 24.0);
+    assert_eq!(received_body["stock"]["uom"], "kg");
+    assert_eq!(
+        received_body["stock"]["accepted_by_ref"],
+        "warehouse-keeper-1"
+    );
+    assert_eq!(received_body["batch"]["wip_status"], "processed");
+    assert_eq!(
+        received_body["batch"]["payload_json"]["received_warehouse"],
+        "Tayyor mahsulot ombori"
+    );
+
+    let waiting_after = router
+        .clone()
+        .oneshot(request(
+            "GET",
+            "/v1/mobile/admin/production-maps/wip-batches?status=waiting&order_id=zakaz-fg-receipt",
+            &admin_token,
+        ))
+        .await
+        .expect("waiting wip after receipt");
+    let waiting_after_body = json_body(waiting_after).await;
+    assert_eq!(
+        waiting_after_body["batches"]
+            .as_array()
+            .expect("waiting after")
+            .len(),
+        0
+    );
+}
+
+#[tokio::test]
 async fn laminatsiya_complete_keeps_state_successful_when_progress_print_fails() {
     let print_requests = Arc::new(Mutex::new(Vec::<ScaleDriverPrintRequest>::new()));
     let mut state = test_state();

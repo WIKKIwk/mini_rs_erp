@@ -249,3 +249,21 @@ pub(super) async fn put_order_progress_batch(
         .insert(batch.batch_id.trim().to_string(), batch);
     Ok(())
 }
+
+pub(super) async fn receive_finished_goods_batch(
+    store: &MemoryProductionMapStore,
+    batch: OrderProgressBatch,
+    stock: FinishedGoodsStockEntry,
+) -> Result<(), ProductionMapError> {
+    store
+        .order_progress_batches
+        .write()
+        .await
+        .insert(batch.batch_id.trim().to_string(), batch);
+    store
+        .finished_goods_stock
+        .write()
+        .await
+        .insert(stock.id.trim().to_string(), stock);
+    Ok(())
+}

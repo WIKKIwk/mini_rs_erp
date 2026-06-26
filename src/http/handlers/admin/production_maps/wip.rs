@@ -72,3 +72,60 @@ pub async fn production_map_wip_batches(
         "batches": batches,
     })))
 }
+
+#[derive(Default, serde::Deserialize)]
+struct FinishedGoodsReceiveRequest {
+    #[serde(default)]
+    progress_batch_id: String,
+    #[serde(default)]
+    progress_qr: String,
+    #[serde(default)]
+    qr_payload: String,
+    #[serde(default)]
+    warehouse: String,
+}
+
+pub async fn production_map_finished_goods_receive(
+    State(state): State<AppState>,
+    method: Method,
+    headers: HeaderMap,
+    body: Bytes,
+) -> Result<Response, AdminError> {
+    let principal = authorize_any_capability(
+        &state,
+        &headers,
+        &[
+            Capability::AdminAccess,
+            Capability::ProductionMapManage,
+            Capability::GscalePrint,
+        ],
+    )
+    .await?;
+    if method != Method::POST {
+        return Err(method_not_allowed());
+    }
+    let input: FinishedGoodsReceiveRequest = parse_json(&body)?;
+    let qr_payload = if input.qr_payload.trim().is_empty() {
+        input.progress_qr.clone()
+    } else {
+        input.qr_payload.clone()
+    };
+    let receipt = state
+        .production_maps
+        .receive_finished_goods(
+            &input.progress_batch_id,
+            &qr_payload,
+            &input.warehouse,
+            queue_action_actor(&principal),
+        )
+        .await
+        .map_err(production_map_error)?;
+    state
+        .warehouse_events
+        .notify_updated(&receipt.stock.warehouse, "finished_goods_stock");
+    Ok(json_response(serde_json::json!({
+        "ok": true,
+        "batch": receipt.batch,
+        "stock": receipt.stock,
+    })))
+}

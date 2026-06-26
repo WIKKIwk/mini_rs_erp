@@ -185,6 +185,13 @@ pub trait ProductionMapStorePort: Send + Sync {
     ) -> Result<(), ProductionMapError> {
         Ok(())
     }
+    async fn receive_finished_goods_batch(
+        &self,
+        batch: OrderProgressBatch,
+        _stock: FinishedGoodsStockEntry,
+    ) -> Result<(), ProductionMapError> {
+        self.put_order_progress_batch(batch).await
+    }
     async fn put_apparatus_queue_states_with_event_and_progress(
         &self,
         apparatus: &str,

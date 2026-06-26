@@ -6,9 +6,10 @@ use sqlx::PgPool;
 use crate::core::production_map::{
     ApparatusMaterialRule, ApparatusQueueActionEvent, ApparatusQueuePolicy, CompletedQueueOrder,
     CompletionRequestDecision, CompletionRequestDecisionNotification,
-    CompletionRequestNotification, CompletionRequestStateResolution, OrderProgressBatch,
-    OrderProgressEvent, OrderRunSession, ProductionMapDefinition, ProductionMapError,
-    ProductionMapStorePort, ProductionOrderLogEntry, QueueActionActor, RawMaterialAssignment,
+    CompletionRequestNotification, CompletionRequestStateResolution, FinishedGoodsStockEntry,
+    OrderProgressBatch, OrderProgressEvent, OrderRunSession, ProductionMapDefinition,
+    ProductionMapError, ProductionMapStorePort, ProductionOrderLogEntry, QueueActionActor,
+    RawMaterialAssignment,
 };
 
 mod catalog_helpers;
@@ -47,6 +48,7 @@ use self::order_query_helpers::{
 use self::progress_helpers::{
     put_order_progress_batch, put_order_progress_batch_tx, put_order_progress_event,
     put_order_progress_event_tx, put_order_run_session, put_order_run_session_tx,
+    receive_finished_goods_batch_tx,
 };
 use self::queue_helpers::{insert_queue_action_event_tx, put_queue_states_tx};
 
@@ -352,6 +354,22 @@ impl ProductionMapStorePort for PostgresProductionMapStore {
         batch: OrderProgressBatch,
     ) -> Result<(), ProductionMapError> {
         put_order_progress_batch(&self.pool, &batch).await
+    }
+
+    async fn receive_finished_goods_batch(
+        &self,
+        batch: OrderProgressBatch,
+        stock: FinishedGoodsStockEntry,
+    ) -> Result<(), ProductionMapError> {
+        let mut tx = self
+            .pool
+            .begin()
+            .await
+            .map_err(|_| ProductionMapError::StoreFailed)?;
+        receive_finished_goods_batch_tx(&mut tx, &batch, &stock).await?;
+        tx.commit()
+            .await
+            .map_err(|_| ProductionMapError::StoreFailed)
     }
 
     async fn put_apparatus_queue_states_with_event_and_progress(
