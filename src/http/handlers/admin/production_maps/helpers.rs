@@ -81,41 +81,6 @@ pub(super) fn production_map_error(error: ProductionMapError) -> AdminError {
     }
 }
 
-pub(super) fn gscale_progress_error(error: crate::core::gscale::GscaleServiceError) -> AdminError {
-    match error {
-        crate::core::gscale::GscaleServiceError::InvalidInput(detail) => bad_request(detail),
-        crate::core::gscale::GscaleServiceError::NotConfigured(_) => {
-            service_unavailable("scale_driver_not_configured")
-        }
-        crate::core::gscale::GscaleServiceError::PrintFailed { detail, .. } => {
-            failed_dependency(detail)
-        }
-        crate::core::gscale::GscaleServiceError::EpcGenerationFailed
-        | crate::core::gscale::GscaleServiceError::StoreWrite(_)
-        | crate::core::gscale::GscaleServiceError::SubmitFailed(_) => {
-            failed_dependency(error.to_string())
-        }
-    }
-}
-
-fn service_unavailable(error: impl Into<String>) -> AdminError {
-    (
-        StatusCode::SERVICE_UNAVAILABLE,
-        Json(AdminErrorResponse {
-            error: error.into(),
-        }),
-    )
-}
-
-fn failed_dependency(error: impl Into<String>) -> AdminError {
-    (
-        StatusCode::FAILED_DEPENDENCY,
-        Json(AdminErrorResponse {
-            error: error.into(),
-        }),
-    )
-}
-
 pub(super) fn queue_action_actor(principal: &Principal) -> QueueActionActor {
     QueueActionActor {
         role: principal_role_code(&principal.role).to_string(),

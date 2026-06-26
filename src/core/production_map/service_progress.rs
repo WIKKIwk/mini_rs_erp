@@ -268,12 +268,33 @@ impl ProductionMapService {
                     }),
                     ..session
                 };
+                let output_batch_id_input = if action == queue_state::ApparatusQueueAction::Complete
+                    && !input_progress_batch_id.trim().is_empty()
+                    && progress
+                        .progress_batch_id
+                        .trim()
+                        .eq_ignore_ascii_case(input_progress_batch_id.trim())
+                {
+                    ""
+                } else {
+                    progress.progress_batch_id.trim()
+                };
                 let batch_id = non_empty_or(
-                    &progress.progress_batch_id,
+                    output_batch_id_input,
                     &progress_batch_id(apparatus, order_id, action, now),
                 );
-                let qr_payload =
-                    non_empty_or(&progress.qr_payload, &progress_qr_payload(&batch_id));
+                let output_qr_input = if action == queue_state::ApparatusQueueAction::Complete
+                    && !input_progress_qr_payload.trim().is_empty()
+                    && progress
+                        .qr_payload
+                        .trim()
+                        .eq_ignore_ascii_case(input_progress_qr_payload.trim())
+                {
+                    ""
+                } else {
+                    progress.qr_payload.trim()
+                };
+                let qr_payload = non_empty_or(output_qr_input, &progress_qr_payload(&batch_id));
                 let label_item_name = progress_label_item_name(order_map, apparatus, action);
                 let mut batch = OrderProgressBatch {
                     batch_id: batch_id.clone(),

@@ -249,12 +249,21 @@ pub async fn production_map_queue_action(
     }
     let mut print = serde_json::Value::Null;
     if let Some(request) = print_request {
-        let response = state
-            .gscale
-            .print_progress_label(request)
-            .await
-            .map_err(gscale_progress_error)?;
-        print = serde_json::to_value(response).unwrap_or(serde_json::Value::Null);
+        match state.gscale.print_progress_label(request).await {
+            Ok(response) => {
+                print = serde_json::to_value(response).unwrap_or(serde_json::Value::Null);
+            }
+            Err(error) => {
+                tracing::warn!(
+                    error = %error,
+                    apparatus = %input.apparatus,
+                    order_id = %input.order_id,
+                    action = ?input.action,
+                    "progress label print failed after queue action commit"
+                );
+                print = progress_print_failure_json(error);
+            }
+        }
     }
     Ok(json_response(serde_json::json!({
         "ok": true,
@@ -264,6 +273,35 @@ pub async fn production_map_queue_action(
         "progress_batch": result.progress_batch,
         "print": print,
     })))
+}
+
+fn progress_print_failure_json(
+    error: crate::core::gscale::GscaleServiceError,
+) -> serde_json::Value {
+    let (code, detail) = match error {
+        crate::core::gscale::GscaleServiceError::PrintFailed { detail, .. } => {
+            ("print_failed", clean_progress_print_error(&detail))
+        }
+        crate::core::gscale::GscaleServiceError::NotConfigured(_) => (
+            "scale_driver_not_configured",
+            "scale_driver_not_configured".to_string(),
+        ),
+        other => (other.code(), other.to_string()),
+    };
+    serde_json::json!({
+        "ok": false,
+        "status": "failed",
+        "code": code,
+        "error": detail,
+    })
+}
+
+fn clean_progress_print_error(detail: &str) -> String {
+    detail
+        .trim()
+        .strip_prefix("driver request failed: ")
+        .unwrap_or_else(|| detail.trim())
+        .to_string()
 }
 
 #[derive(serde::Deserialize)]

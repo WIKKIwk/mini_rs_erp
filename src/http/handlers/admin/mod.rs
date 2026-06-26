@@ -162,48 +162,51 @@ fn method_not_allowed() -> AdminError {
 fn bad_request(error: impl Into<String>) -> AdminError {
     (
         StatusCode::BAD_REQUEST,
-        Json(AdminErrorResponse {
-            error: error.into(),
-        }),
+        Json(AdminErrorResponse::new(error)),
     )
 }
 
 fn server_error(error: impl Into<String>) -> AdminError {
     (
         StatusCode::INTERNAL_SERVER_ERROR,
-        Json(AdminErrorResponse {
-            error: error.into(),
-        }),
+        Json(AdminErrorResponse::new(error)),
     )
 }
 
 fn not_found(error: impl Into<String>) -> AdminError {
-    (
-        StatusCode::NOT_FOUND,
-        Json(AdminErrorResponse {
-            error: error.into(),
-        }),
-    )
+    (StatusCode::NOT_FOUND, Json(AdminErrorResponse::new(error)))
 }
 
 fn too_many_requests(error: impl Into<String>) -> AdminError {
     (
         StatusCode::TOO_MANY_REQUESTS,
-        Json(AdminErrorResponse {
-            error: error.into(),
-        }),
+        Json(AdminErrorResponse::new(error)),
     )
 }
 
 #[derive(Serialize)]
 pub struct AdminErrorResponse {
     pub error: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub order_width_mm: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub roll_width_mm: Option<f64>,
 }
 
 impl AdminErrorResponse {
-    fn new(error: &'static str) -> Self {
+    fn new(error: impl Into<String>) -> Self {
         Self {
-            error: error.to_string(),
+            error: error.into(),
+            order_width_mm: None,
+            roll_width_mm: None,
+        }
+    }
+
+    fn roll_size_mismatch(order_width_mm: f64, roll_width_mm: f64) -> Self {
+        Self {
+            error: "raw_material_roll_size_mismatch".to_string(),
+            order_width_mm: Some(order_width_mm),
+            roll_width_mm: Some(roll_width_mm),
         }
     }
 }

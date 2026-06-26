@@ -179,10 +179,10 @@ async fn raw_material_assignment_checks_rulon_size_for_pechat_orders() {
         .await
         .expect("assign undersized rulon");
     assert_eq!(undersized.status(), StatusCode::BAD_REQUEST);
-    assert_eq!(
-        json_body(undersized).await["error"],
-        "raw_material_roll_size_mismatch"
-    );
+    let undersized_body = json_body(undersized).await;
+    assert_eq!(undersized_body["error"], "raw_material_roll_size_mismatch");
+    assert_eq!(undersized_body["order_width_mm"], 985.0);
+    assert_eq!(undersized_body["roll_width_mm"], 980.0);
 
     let oversized = router
         .clone()
@@ -198,10 +198,10 @@ async fn raw_material_assignment_checks_rulon_size_for_pechat_orders() {
         .await
         .expect("assign oversized rulon");
     assert_eq!(oversized.status(), StatusCode::BAD_REQUEST);
-    assert_eq!(
-        json_body(oversized).await["error"],
-        "raw_material_roll_size_mismatch"
-    );
+    let oversized_body = json_body(oversized).await;
+    assert_eq!(oversized_body["error"], "raw_material_roll_size_mismatch");
+    assert_eq!(oversized_body["order_width_mm"], 985.0);
+    assert_eq!(oversized_body["roll_width_mm"], 1020.0);
 }
 
 #[tokio::test]

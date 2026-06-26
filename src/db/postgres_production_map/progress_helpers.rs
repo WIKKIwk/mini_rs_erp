@@ -132,7 +132,17 @@ pub(super) async fn put_order_progress_event_tx(
     .bind(&event.payload_json)
     .execute(&mut **tx)
     .await
-    .map_err(|_| ProductionMapError::StoreFailed)?;
+    .map_err(|error| {
+        tracing::error!(
+            error = %error,
+            event_id = %event.event_id,
+            order_id = %event.order_id,
+            apparatus = %event.apparatus,
+            action = ?event.action,
+            "failed to store order progress event"
+        );
+        ProductionMapError::StoreFailed
+    })?;
     Ok(())
 }
 
@@ -241,7 +251,18 @@ pub(super) async fn put_order_progress_batch_tx(
     .bind(&batch.payload_json)
     .execute(&mut **tx)
     .await
-    .map_err(|_| ProductionMapError::StoreFailed)?;
+    .map_err(|error| {
+        tracing::error!(
+            error = %error,
+            batch_id = %batch.batch_id,
+            order_id = %batch.order_id,
+            apparatus = %batch.apparatus,
+            action = ?batch.action,
+            qr_payload = %batch.qr_payload,
+            "failed to store order progress batch"
+        );
+        ProductionMapError::StoreFailed
+    })?;
     Ok(())
 }
 

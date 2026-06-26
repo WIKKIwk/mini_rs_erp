@@ -163,6 +163,141 @@ async fn wip_batches_endpoint_lists_waiting_and_in_use_batches() {
 }
 
 #[tokio::test]
+async fn complete_after_wip_start_does_not_reuse_input_qr_as_output_qr() {
+    let print_requests = Arc::new(Mutex::new(Vec::<ScaleDriverPrintRequest>::new()));
+    let mut state = test_state();
+    state.gscale = GscaleService::new().with_driver(Arc::new(FakeProgressDriver {
+        requests: print_requests,
+        fail: false,
+    }));
+    state
+        .admin
+        .upsert_role_assignment(crate::core::authz::RoleAssignmentUpsert {
+            principal_role: PrincipalRole::Aparatchi,
+            principal_ref: "worker-wip-complete-qr".to_string(),
+            role_id: "aparatchi".to_string(),
+            assigned_apparatus: vec![
+                "7 ta rangli pechat".to_string(),
+                "Laminatsiya 1".to_string(),
+            ],
+        })
+        .await
+        .expect("assignment");
+    let admin_token = session(&state, PrincipalRole::Admin).await;
+    let worker_token =
+        session_for(&state, PrincipalRole::Aparatchi, "worker-wip-complete-qr").await;
+    let router = build_router(state);
+
+    let saved = router
+        .clone()
+        .oneshot(request_with_body(
+            "PUT",
+            "/v1/mobile/admin/production-maps",
+            &admin_token,
+            &two_apparatus_order_map_json(
+                "zakaz-wip-complete-qr",
+                "WIP complete QR",
+                "9405",
+                "7 ta rangli pechat",
+                "Laminatsiya 1",
+            ),
+        ))
+        .await
+        .expect("save map");
+    assert_eq!(saved.status(), StatusCode::OK);
+
+    let started = router
+        .clone()
+        .oneshot(request_with_body(
+            "POST",
+            "/v1/mobile/admin/production-maps/queue-action",
+            &worker_token,
+            r#"{
+                "apparatus":"7 ta rangli pechat",
+                "order_id":"zakaz-wip-complete-qr",
+                "action":"start"
+            }"#,
+        ))
+        .await
+        .expect("start first");
+    assert_eq!(started.status(), StatusCode::OK);
+
+    let paused = router
+        .clone()
+        .oneshot(request_with_body(
+            "POST",
+            "/v1/mobile/admin/production-maps/queue-action",
+            &worker_token,
+            r#"{
+                "apparatus":"7 ta rangli pechat",
+                "order_id":"zakaz-wip-complete-qr",
+                "action":"pause",
+                "produced_qty":100,
+                "uom":"kg"
+            }"#,
+        ))
+        .await
+        .expect("pause first");
+    assert_eq!(paused.status(), StatusCode::OK);
+    let paused_body = json_body(paused).await;
+    let input_qr = paused_body["progress_batch"]["qr_payload"]
+        .as_str()
+        .expect("qr payload")
+        .to_string();
+
+    let second_started = router
+        .clone()
+        .oneshot(request_with_body(
+            "POST",
+            "/v1/mobile/admin/production-maps/queue-action",
+            &worker_token,
+            &format!(
+                r#"{{
+                    "apparatus":"Laminatsiya 1",
+                    "order_id":"zakaz-wip-complete-qr",
+                    "action":"start",
+                    "qr_payload":"{input_qr}"
+                }}"#
+            ),
+        ))
+        .await
+        .expect("start second");
+    assert_eq!(second_started.status(), StatusCode::OK);
+
+    let completed = router
+        .clone()
+        .oneshot(request_with_body(
+            "POST",
+            "/v1/mobile/admin/production-maps/queue-action",
+            &worker_token,
+            &format!(
+                r#"{{
+                    "apparatus":"Laminatsiya 1",
+                    "order_id":"zakaz-wip-complete-qr",
+                    "action":"complete",
+                    "qr_payload":"{input_qr}",
+                    "lamination_film_leftover_rolls":1,
+                    "total_waste":1,
+                    "finished_goods_kg":9,
+                    "finished_goods_meter":90,
+                    "printer":"zebra",
+                    "print_mode":"rfid"
+                }}"#
+            ),
+        ))
+        .await
+        .expect("complete second");
+    let completed_status = completed.status();
+    let completed_body = json_body(completed).await;
+    assert_eq!(completed_status, StatusCode::OK, "{completed_body:?}");
+    assert_eq!(
+        completed_body["states"]["zakaz-wip-complete-qr"],
+        "completed"
+    );
+    assert_ne!(completed_body["progress_batch"]["qr_payload"], input_qr);
+}
+
+#[tokio::test]
 async fn wip_batches_endpoint_forbids_worker_unassigned_or_unscoped_listing() {
     let print_requests = Arc::new(Mutex::new(Vec::<ScaleDriverPrintRequest>::new()));
     let mut state = test_state();

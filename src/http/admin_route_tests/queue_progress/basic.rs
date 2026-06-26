@@ -127,3 +127,92 @@ async fn queue_pause_prints_progress_qr_and_resume_uses_lookup() {
     );
     assert!(resumed_body["progress_batch"].is_null());
 }
+
+#[tokio::test]
+async fn queue_pause_keeps_state_successful_when_progress_print_fails() {
+    let print_requests = Arc::new(Mutex::new(Vec::<ScaleDriverPrintRequest>::new()));
+    let mut state = test_state();
+    state.gscale = GscaleService::new().with_driver(Arc::new(FakeProgressDriver {
+        requests: print_requests.clone(),
+        fail: true,
+    }));
+    state
+        .admin
+        .upsert_role_assignment(crate::core::authz::RoleAssignmentUpsert {
+            principal_role: PrincipalRole::Aparatchi,
+            principal_ref: "worker-progress-print-fail".to_string(),
+            role_id: "aparatchi".to_string(),
+            assigned_apparatus: vec!["7 ta rangli pechat".to_string()],
+        })
+        .await
+        .expect("assignment");
+    let admin_token = session(&state, PrincipalRole::Admin).await;
+    let worker_token = session_for(
+        &state,
+        PrincipalRole::Aparatchi,
+        "worker-progress-print-fail",
+    )
+    .await;
+    let router = build_router(state);
+
+    let saved = router
+        .clone()
+        .oneshot(request_with_body(
+            "PUT",
+            "/v1/mobile/admin/production-maps",
+            &admin_token,
+            &pechat_order_map_json(
+                "zakaz-progress-print-fail",
+                "Progress print fail",
+                "9305",
+                "7 ta rangli pechat",
+            ),
+        ))
+        .await
+        .expect("save map");
+    assert_eq!(saved.status(), StatusCode::OK);
+
+    let started = router
+        .clone()
+        .oneshot(request_with_body(
+            "POST",
+            "/v1/mobile/admin/production-maps/queue-action",
+            &worker_token,
+            r#"{
+                "apparatus":"7 ta rangli pechat",
+                "order_id":"zakaz-progress-print-fail",
+                "action":"start"
+            }"#,
+        ))
+        .await
+        .expect("start");
+    assert_eq!(started.status(), StatusCode::OK);
+
+    let paused = router
+        .clone()
+        .oneshot(request_with_body(
+            "POST",
+            "/v1/mobile/admin/production-maps/queue-action",
+            &worker_token,
+            r#"{
+                "apparatus":"7 ta rangli pechat",
+                "order_id":"zakaz-progress-print-fail",
+                "action":"pause",
+                "produced_qty":12,
+                "uom":"kg",
+                "printer":"zebra",
+                "print_mode":"rfid"
+            }"#,
+        ))
+        .await
+        .expect("pause");
+    let paused_status = paused.status();
+    let paused_body = json_body(paused).await;
+    assert_eq!(paused_status, StatusCode::OK, "{paused_body:?}");
+    assert_eq!(paused_body["states"]["zakaz-progress-print-fail"], "paused");
+    assert_eq!(paused_body["progress_batch"]["status"], "paused");
+    assert_eq!(paused_body["print"]["ok"], false);
+    assert_eq!(paused_body["print"]["status"], "failed");
+    assert_eq!(paused_body["print"]["error"], "printer offline");
+    assert_eq!(print_requests.lock().await.len(), 1);
+}

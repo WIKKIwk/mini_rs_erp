@@ -204,7 +204,11 @@ async fn queue_pause_print_failure_keeps_committed_pause_log() {
         ))
         .await
         .expect("pause");
-    assert_eq!(pause_failed.status(), StatusCode::FAILED_DEPENDENCY);
+    let pause_status = pause_failed.status();
+    let pause_body = json_body(pause_failed).await;
+    assert_eq!(pause_status, StatusCode::OK, "{pause_body:?}");
+    assert_eq!(pause_body["print"]["ok"], false);
+    assert_eq!(pause_body["print"]["status"], "failed");
 
     let sequence = router
         .oneshot(request(
