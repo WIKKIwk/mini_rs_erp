@@ -10,18 +10,23 @@ use crate::db::postgres_admin_catalog::PostgresAdminCatalogStore;
 use crate::store::admin_store::JsonAdminStore;
 
 pub(super) fn build_admin_catalog_ports(
-    fallback: Arc<JsonAdminStore>,
+    admin_store: Arc<JsonAdminStore>,
 ) -> (Arc<dyn AdminReadPort>, Arc<dyn AdminWritePort>) {
     let config = match PostgresConfig::from_env() {
         Ok(config) => config,
-        Err(_) => return (fallback.clone(), fallback),
+        Err(error) => {
+            tracing::warn!(?error, "mini ERP postgres item catalog store disabled");
+            return unavailable_admin_catalog_ports();
+        }
     };
     match config.pool_options().connect_lazy(&config.database_url) {
         Ok(pool) => {
-            tracing::info!("mini ERP postgres item catalog store configured");
+            tracing::info!("mini ERP postgres item catalog store configured without JSON seed");
             let catalog = Arc::new(PostgresAdminCatalogStore::new(pool));
-            spawn_admin_catalog_seed(catalog.clone(), fallback.clone());
-            let overlay = Arc::new(AdminCatalogOverlay { fallback, catalog });
+            let overlay = Arc::new(AdminCatalogOverlay {
+                admin_store,
+                catalog,
+            });
             (
                 overlay.clone() as Arc<dyn AdminReadPort>,
                 overlay as Arc<dyn AdminWritePort>,
@@ -29,26 +34,25 @@ pub(super) fn build_admin_catalog_ports(
         }
         Err(error) => {
             tracing::warn!(%error, "mini ERP postgres item catalog store disabled");
-            (fallback.clone(), fallback)
+            unavailable_admin_catalog_ports()
         }
     }
 }
 
-fn spawn_admin_catalog_seed(
-    catalog: Arc<PostgresAdminCatalogStore>,
-    fallback: Arc<JsonAdminStore>,
-) {
-    tokio::spawn(async move {
-        if let Err(error) = catalog.seed_from_read_port(fallback.as_ref()).await {
-            tracing::warn!(%error, "mini ERP postgres item catalog seed failed");
-        }
-    });
+fn unavailable_admin_catalog_ports() -> (Arc<dyn AdminReadPort>, Arc<dyn AdminWritePort>) {
+    let store = Arc::new(AdminCatalogUnavailable);
+    (
+        store.clone() as Arc<dyn AdminReadPort>,
+        store as Arc<dyn AdminWritePort>,
+    )
 }
 
 struct AdminCatalogOverlay {
-    fallback: Arc<JsonAdminStore>,
+    admin_store: Arc<JsonAdminStore>,
     catalog: Arc<PostgresAdminCatalogStore>,
 }
+
+struct AdminCatalogUnavailable;
 
 #[async_trait]
 impl AdminReadPort for AdminCatalogOverlay {
@@ -58,11 +62,11 @@ impl AdminReadPort for AdminCatalogOverlay {
         limit: usize,
         offset: usize,
     ) -> Result<Vec<AdminDirectoryEntry>, AdminPortError> {
-        self.fallback.suppliers_page(query, limit, offset).await
+        self.admin_store.suppliers_page(query, limit, offset).await
     }
 
     async fn supplier_by_ref(&self, ref_: &str) -> Result<AdminDirectoryEntry, AdminPortError> {
-        self.fallback.supplier_by_ref(ref_).await
+        self.admin_store.supplier_by_ref(ref_).await
     }
 
     async fn customers_page(
@@ -71,11 +75,11 @@ impl AdminReadPort for AdminCatalogOverlay {
         limit: usize,
         offset: usize,
     ) -> Result<Vec<AdminDirectoryEntry>, AdminPortError> {
-        self.fallback.customers_page(query, limit, offset).await
+        self.admin_store.customers_page(query, limit, offset).await
     }
 
     async fn customer_by_ref(&self, ref_: &str) -> Result<AdminDirectoryEntry, AdminPortError> {
-        self.fallback.customer_by_ref(ref_).await
+        self.admin_store.customer_by_ref(ref_).await
     }
 
     async fn items_page(
@@ -116,11 +120,7 @@ impl AdminReadPort for AdminCatalogOverlay {
         parent: &str,
         limit: usize,
     ) -> Result<Vec<AdminWarehouse>, AdminPortError> {
-        if parent.trim().is_empty() {
-            self.catalog.warehouses(query, parent, limit).await
-        } else {
-            self.fallback.warehouses(query, parent, limit).await
-        }
+        self.catalog.warehouses(query, parent, limit).await
     }
 
     async fn item_group_tree(&self) -> Result<Vec<AdminItemGroup>, AdminPortError> {
@@ -132,7 +132,7 @@ impl AdminReadPort for AdminCatalogOverlay {
         supplier_ref: &str,
         limit: usize,
     ) -> Result<Vec<SupplierItem>, AdminPortError> {
-        self.fallback
+        self.admin_store
             .assigned_supplier_items(supplier_ref, limit)
             .await
     }
@@ -143,7 +143,7 @@ impl AdminReadPort for AdminCatalogOverlay {
         query: &str,
         limit: usize,
     ) -> Result<Vec<SupplierItem>, AdminPortError> {
-        self.fallback
+        self.admin_store
             .customer_items(customer_ref, query, limit)
             .await
     }
@@ -156,11 +156,11 @@ impl AdminWritePort for AdminCatalogOverlay {
         name: &str,
         phone: &str,
     ) -> Result<AdminDirectoryEntry, AdminPortError> {
-        self.fallback.create_supplier(name, phone).await
+        self.admin_store.create_supplier(name, phone).await
     }
 
     async fn update_supplier_phone(&self, ref_: &str, phone: &str) -> Result<(), AdminPortError> {
-        self.fallback.update_supplier_phone(ref_, phone).await
+        self.admin_store.update_supplier_phone(ref_, phone).await
     }
 
     async fn assign_supplier_item(
@@ -168,7 +168,7 @@ impl AdminWritePort for AdminCatalogOverlay {
         ref_: &str,
         item_code: &str,
     ) -> Result<(), AdminPortError> {
-        self.fallback.assign_supplier_item(ref_, item_code).await
+        self.admin_store.assign_supplier_item(ref_, item_code).await
     }
 
     async fn unassign_supplier_item(
@@ -176,7 +176,9 @@ impl AdminWritePort for AdminCatalogOverlay {
         ref_: &str,
         item_code: &str,
     ) -> Result<(), AdminPortError> {
-        self.fallback.unassign_supplier_item(ref_, item_code).await
+        self.admin_store
+            .unassign_supplier_item(ref_, item_code)
+            .await
     }
 
     async fn create_customer(
@@ -184,15 +186,15 @@ impl AdminWritePort for AdminCatalogOverlay {
         name: &str,
         phone: &str,
     ) -> Result<AdminDirectoryEntry, AdminPortError> {
-        self.fallback.create_customer(name, phone).await
+        self.admin_store.create_customer(name, phone).await
     }
 
     async fn update_customer_phone(&self, ref_: &str, phone: &str) -> Result<(), AdminPortError> {
-        self.fallback.update_customer_phone(ref_, phone).await
+        self.admin_store.update_customer_phone(ref_, phone).await
     }
 
     async fn update_customer_code(&self, ref_: &str, code: &str) -> Result<(), AdminPortError> {
-        self.fallback.update_customer_code(ref_, code).await
+        self.admin_store.update_customer_code(ref_, code).await
     }
 
     async fn assign_customer_item(
@@ -200,7 +202,7 @@ impl AdminWritePort for AdminCatalogOverlay {
         ref_: &str,
         item_code: &str,
     ) -> Result<(), AdminPortError> {
-        self.fallback.assign_customer_item(ref_, item_code).await
+        self.admin_store.assign_customer_item(ref_, item_code).await
     }
 
     async fn unassign_customer_item(
@@ -208,7 +210,9 @@ impl AdminWritePort for AdminCatalogOverlay {
         ref_: &str,
         item_code: &str,
     ) -> Result<(), AdminPortError> {
-        self.fallback.unassign_customer_item(ref_, item_code).await
+        self.admin_store
+            .unassign_customer_item(ref_, item_code)
+            .await
     }
 
     async fn create_item(
@@ -244,5 +248,196 @@ impl AdminWritePort for AdminCatalogOverlay {
         item_group: &str,
     ) -> Result<(), AdminPortError> {
         self.catalog.update_item_group(item_code, item_group).await
+    }
+}
+
+#[async_trait]
+impl AdminReadPort for AdminCatalogUnavailable {
+    async fn suppliers_page(
+        &self,
+        _query: &str,
+        _limit: usize,
+        _offset: usize,
+    ) -> Result<Vec<AdminDirectoryEntry>, AdminPortError> {
+        Err(AdminPortError::LookupFailed)
+    }
+
+    async fn supplier_by_ref(&self, _ref_: &str) -> Result<AdminDirectoryEntry, AdminPortError> {
+        Err(AdminPortError::LookupFailed)
+    }
+
+    async fn customers_page(
+        &self,
+        _query: &str,
+        _limit: usize,
+        _offset: usize,
+    ) -> Result<Vec<AdminDirectoryEntry>, AdminPortError> {
+        Err(AdminPortError::LookupFailed)
+    }
+
+    async fn customer_by_ref(&self, _ref_: &str) -> Result<AdminDirectoryEntry, AdminPortError> {
+        Err(AdminPortError::LookupFailed)
+    }
+
+    async fn items_page(
+        &self,
+        _query: &str,
+        _limit: usize,
+        _offset: usize,
+    ) -> Result<Vec<SupplierItem>, AdminPortError> {
+        Err(AdminPortError::LookupFailed)
+    }
+
+    async fn items_page_by_group(
+        &self,
+        _group: &str,
+        _query: &str,
+        _limit: usize,
+        _offset: usize,
+    ) -> Result<Vec<SupplierItem>, AdminPortError> {
+        Err(AdminPortError::LookupFailed)
+    }
+
+    async fn items_by_codes(
+        &self,
+        _item_codes: &[String],
+    ) -> Result<Vec<SupplierItem>, AdminPortError> {
+        Err(AdminPortError::LookupFailed)
+    }
+
+    async fn item_groups(
+        &self,
+        _query: &str,
+        _limit: usize,
+    ) -> Result<Vec<String>, AdminPortError> {
+        Err(AdminPortError::LookupFailed)
+    }
+
+    async fn warehouses(
+        &self,
+        _query: &str,
+        _parent: &str,
+        _limit: usize,
+    ) -> Result<Vec<AdminWarehouse>, AdminPortError> {
+        Err(AdminPortError::LookupFailed)
+    }
+
+    async fn item_group_tree(&self) -> Result<Vec<AdminItemGroup>, AdminPortError> {
+        Err(AdminPortError::LookupFailed)
+    }
+
+    async fn assigned_supplier_items(
+        &self,
+        _supplier_ref: &str,
+        _limit: usize,
+    ) -> Result<Vec<SupplierItem>, AdminPortError> {
+        Err(AdminPortError::LookupFailed)
+    }
+
+    async fn customer_items(
+        &self,
+        _customer_ref: &str,
+        _query: &str,
+        _limit: usize,
+    ) -> Result<Vec<SupplierItem>, AdminPortError> {
+        Err(AdminPortError::LookupFailed)
+    }
+}
+
+#[async_trait]
+impl AdminWritePort for AdminCatalogUnavailable {
+    async fn create_supplier(
+        &self,
+        _name: &str,
+        _phone: &str,
+    ) -> Result<AdminDirectoryEntry, AdminPortError> {
+        Err(AdminPortError::LookupFailed)
+    }
+
+    async fn update_supplier_phone(&self, _ref_: &str, _phone: &str) -> Result<(), AdminPortError> {
+        Err(AdminPortError::LookupFailed)
+    }
+
+    async fn assign_supplier_item(
+        &self,
+        _ref_: &str,
+        _item_code: &str,
+    ) -> Result<(), AdminPortError> {
+        Err(AdminPortError::LookupFailed)
+    }
+
+    async fn unassign_supplier_item(
+        &self,
+        _ref_: &str,
+        _item_code: &str,
+    ) -> Result<(), AdminPortError> {
+        Err(AdminPortError::LookupFailed)
+    }
+
+    async fn create_customer(
+        &self,
+        _name: &str,
+        _phone: &str,
+    ) -> Result<AdminDirectoryEntry, AdminPortError> {
+        Err(AdminPortError::LookupFailed)
+    }
+
+    async fn update_customer_phone(&self, _ref_: &str, _phone: &str) -> Result<(), AdminPortError> {
+        Err(AdminPortError::LookupFailed)
+    }
+
+    async fn update_customer_code(&self, _ref_: &str, _code: &str) -> Result<(), AdminPortError> {
+        Err(AdminPortError::LookupFailed)
+    }
+
+    async fn assign_customer_item(
+        &self,
+        _ref_: &str,
+        _item_code: &str,
+    ) -> Result<(), AdminPortError> {
+        Err(AdminPortError::LookupFailed)
+    }
+
+    async fn unassign_customer_item(
+        &self,
+        _ref_: &str,
+        _item_code: &str,
+    ) -> Result<(), AdminPortError> {
+        Err(AdminPortError::LookupFailed)
+    }
+
+    async fn create_item(
+        &self,
+        _code: &str,
+        _name: &str,
+        _uom: &str,
+        _item_group: &str,
+    ) -> Result<SupplierItem, AdminPortError> {
+        Err(AdminPortError::LookupFailed)
+    }
+
+    async fn create_item_group(
+        &self,
+        _name: &str,
+        _parent: &str,
+        _is_group: bool,
+    ) -> Result<AdminItemGroup, AdminPortError> {
+        Err(AdminPortError::LookupFailed)
+    }
+
+    async fn move_item_group_parent(
+        &self,
+        _name: &str,
+        _parent: &str,
+    ) -> Result<AdminItemGroup, AdminPortError> {
+        Err(AdminPortError::LookupFailed)
+    }
+
+    async fn update_item_group(
+        &self,
+        _item_code: &str,
+        _item_group: &str,
+    ) -> Result<(), AdminPortError> {
+        Err(AdminPortError::LookupFailed)
     }
 }
