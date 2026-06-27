@@ -32,7 +32,9 @@ impl ProductionMapService {
         } else {
             return Err(ProductionMapError::ProgressInputInvalid);
         };
-        batch.ok_or(ProductionMapError::ProgressBatchNotFound)
+        let mut batch = batch.ok_or(ProductionMapError::ProgressBatchNotFound)?;
+        batch.refresh_status_detail();
+        Ok(batch)
     }
 
     pub(in crate::core::production_map) async fn previous_stage_start_progress_batch(
@@ -321,6 +323,7 @@ impl ProductionMapService {
                     worker_ref: actor.ref_.trim().to_string(),
                     worker_display_name: actor.display_name.trim().to_string(),
                     wip_status: OrderProgressBatchWipStatus::Waiting,
+                    status_detail: OrderProgressBatchStatusDetail::default(),
                     current_apparatus: apparatus.to_string(),
                     current_apparatus_key: queue_state::apparatus_search_key(apparatus),
                     current_location: wip_waiting_location(apparatus),
@@ -584,9 +587,11 @@ fn sync_wip_payload_fields(batch: &mut OrderProgressBatch) {
     if !batch.payload_json.is_object() {
         batch.payload_json = serde_json::json!({});
     }
+    batch.refresh_status_detail();
     if batch.current_apparatus_key.trim().is_empty() {
         batch.current_apparatus_key = queue_state::apparatus_search_key(&batch.current_apparatus);
     }
+    batch.payload_json["status_detail"] = serde_json::json!(batch.status_detail);
     batch.payload_json["wip_status"] = serde_json::json!(batch.wip_status.as_str());
     batch.payload_json["current_apparatus"] = serde_json::json!(batch.current_apparatus);
     batch.payload_json["current_apparatus_key"] = serde_json::json!(batch.current_apparatus_key);
