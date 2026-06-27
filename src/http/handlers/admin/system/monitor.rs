@@ -292,12 +292,24 @@ fn collect_backup_files(
         if !metadata.is_file() {
             continue;
         }
+        if !is_backup_data_file(&path) {
+            continue;
+        }
         *file_count += 1;
         let Ok(modified) = metadata.modified() else {
             continue;
         };
         files.push((modified, path, metadata.len()));
     }
+}
+
+fn is_backup_data_file(path: &std::path::Path) -> bool {
+    let name = path
+        .file_name()
+        .and_then(|value| value.to_str())
+        .unwrap_or_default()
+        .to_ascii_lowercase();
+    name.ends_with(".dump") || name.ends_with(".sql") || name.ends_with(".sql.gz")
 }
 
 fn backup_file_snapshot(
