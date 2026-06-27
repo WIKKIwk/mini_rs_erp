@@ -142,10 +142,16 @@ impl ProductionMapService {
             queue_states_for_order(self.store.apparatus_queue_states().await?, order_id);
         let progress_batches = self.store.progress_batches_for_order(order_id).await?;
         let run_sessions = self.store.order_run_sessions_for_order(order_id).await?;
+        let logs_by_order = self
+            .store
+            .queue_action_logs_for_orders(&[order_id.to_string()])
+            .await?;
+        let logs = logs_by_order.get(order_id).cloned().unwrap_or_default();
         Ok(ProductionOrderStatusDetail::from_order_flow(
             &progress_batches,
             &run_sessions,
             &queue_states,
+            &logs,
         ))
     }
 
@@ -223,6 +229,7 @@ impl ProductionMapService {
             &progress_batches,
             &run_sessions,
             &queue_states,
+            &logs,
         );
         Ok(ProductionQrReport {
             scanned_batch,

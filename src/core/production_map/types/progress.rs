@@ -122,6 +122,10 @@ pub struct ProductionOrderStatusDetail {
     pub active_session_count: usize,
     #[serde(default)]
     pub paused_session_count: usize,
+    #[serde(default)]
+    pub completed_queue_count: usize,
+    #[serde(default)]
+    pub completed_with_issue_count: usize,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -291,6 +295,7 @@ impl ProductionOrderStatusDetail {
         progress_batches: &[OrderProgressBatch],
         run_sessions: &[OrderRunSession],
         queue_states: &BTreeMap<String, BTreeMap<String, String>>,
+        logs: &[ProductionOrderLogEntry],
     ) -> Self {
         let mut detail = Self::default();
         for session in run_sessions {
@@ -327,6 +332,15 @@ impl ProductionOrderStatusDetail {
             .values()
             .flat_map(|states| states.values())
             .any(|state| state == "in_progress");
+        detail.completed_queue_count = queue_states
+            .values()
+            .flat_map(|states| states.values())
+            .filter(|state| state.as_str() == "completed")
+            .count();
+        detail.completed_with_issue_count = logs
+            .iter()
+            .filter(|entry| entry.completed_with_issue)
+            .count();
         let all_wips_are_final_pending = detail.finished_pending_acceptance_count > 0
             && detail.waiting_wip_count == detail.finished_pending_acceptance_count
             && detail.in_use_wip_count == 0
@@ -351,6 +365,10 @@ impl ProductionOrderStatusDetail {
             || detail.consumed_by_next_stage_count > 0
         {
             "partially_completed"
+        } else if detail.completed_with_issue_count > 0 {
+            "completed_with_issue"
+        } else if detail.completed_queue_count > 0 {
+            "completed"
         } else if detail.paused_session_count > 0 {
             "paused"
         } else if detail.waiting_next_stage_count > 0 {
@@ -364,7 +382,9 @@ impl ProductionOrderStatusDetail {
         detail.work_status = match order_status {
             "in_progress" => "in_progress",
             "paused" => "paused",
-            "accepted" | "finished_pending_acceptance" => "completed",
+            "accepted" | "finished_pending_acceptance" | "completed" | "completed_with_issue" => {
+                "completed"
+            }
             "partially_completed" => "partially_completed",
             "waiting_next_stage" | "ready" => "waiting",
             _ => "not_started",
@@ -373,6 +393,8 @@ impl ProductionOrderStatusDetail {
         detail.flow_status = match order_status {
             "accepted" => "accepted_to_stock",
             "finished_pending_acceptance" => "finished_pending_acceptance",
+            "completed_with_issue" => "completed_with_issue",
+            "completed" => "completed",
             "partially_completed" => "partially_completed",
             "in_progress" => "in_progress",
             "paused" => "paused",

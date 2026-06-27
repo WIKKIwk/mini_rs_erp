@@ -244,6 +244,10 @@ async fn admin_approves_zero_output_completion_request_and_closes_order_with_iss
     assert_eq!(approved_body["states"]["zakaz-approve-zero"], "completed");
     assert_eq!(approved_body["decision"]["decision"], "approved");
     assert_eq!(approved_body["decision"]["message"], "Muammo bilan yopildi");
+    assert_eq!(
+        approved_body["order_status"]["order_status"],
+        "completed_with_issue"
+    );
 
     let assignments_after_approve = router
         .clone()
@@ -302,6 +306,27 @@ async fn admin_approves_zero_output_completion_request_and_closes_order_with_iss
         .find(|log| log["completed_with_issue"] == true)
         .expect("issue log");
     assert_eq!(issue_log["issue_note"], "Muammo bilan yopildi");
+
+    let sequence_after_approve = router
+        .clone()
+        .oneshot(request(
+            "GET",
+            "/v1/mobile/admin/production-maps/sequence",
+            &admin_token,
+        ))
+        .await
+        .expect("sequence after approve");
+    let sequence_after_approve_status = sequence_after_approve.status();
+    let sequence_after_approve_body = json_body(sequence_after_approve).await;
+    assert_eq!(
+        sequence_after_approve_status,
+        StatusCode::OK,
+        "{sequence_after_approve_body:?}"
+    );
+    assert_eq!(
+        sequence_after_approve_body["order_statuses"]["zakaz-approve-zero"]["order_status"],
+        "completed_with_issue"
+    );
 
     let next_started = router
         .oneshot(request_with_body(
