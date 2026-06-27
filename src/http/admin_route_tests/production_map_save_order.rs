@@ -264,6 +264,14 @@ async fn production_map_sequence_get_reconciles_stale_order_ids() {
         body["sequences"]["7 ta rangli pechat"],
         serde_json::json!(["zakaz-1111", "zakaz-2222"])
     );
+    assert_eq!(
+        body["order_statuses"]["zakaz-1111"]["order_status"],
+        "not_started"
+    );
+    assert_eq!(
+        body["order_statuses"]["zakaz-2222"]["order_status"],
+        "not_started"
+    );
 }
 
 #[tokio::test]

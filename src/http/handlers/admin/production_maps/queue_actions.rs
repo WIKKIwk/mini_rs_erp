@@ -268,6 +268,7 @@ pub async fn production_map_queue_action(
     Ok(json_response(serde_json::json!({
         "ok": true,
         "states": result.states,
+        "order_status": result.order_status,
         "session": result.session,
         "progress_event": result.progress_event,
         "progress_batch": result.progress_batch,
@@ -384,6 +385,7 @@ pub async fn production_map_progress_qr_report(
         "is_stale": report.is_stale,
         "stale_reason": report.stale_reason,
         "order": report.order,
+        "order_status": report.order_status,
         "queue_states": report.queue_states,
         "logs": report.logs,
         "progress_batches": report.progress_batches,

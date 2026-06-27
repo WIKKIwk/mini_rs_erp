@@ -95,6 +95,35 @@ pub struct OrderProgressBatchStatusDetail {
     pub stock_status: String,
 }
 
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ProductionOrderStatusDetail {
+    pub order_status: String,
+    pub work_status: String,
+    pub flow_status: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub stock_status: String,
+    #[serde(default)]
+    pub total_wip_count: usize,
+    #[serde(default)]
+    pub waiting_wip_count: usize,
+    #[serde(default)]
+    pub in_use_wip_count: usize,
+    #[serde(default)]
+    pub processed_wip_count: usize,
+    #[serde(default)]
+    pub waiting_next_stage_count: usize,
+    #[serde(default)]
+    pub consumed_by_next_stage_count: usize,
+    #[serde(default)]
+    pub finished_pending_acceptance_count: usize,
+    #[serde(default)]
+    pub accepted_wip_count: usize,
+    #[serde(default)]
+    pub active_session_count: usize,
+    #[serde(default)]
+    pub paused_session_count: usize,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct OrderRunSession {
     pub session_id: String,
@@ -257,6 +286,111 @@ impl OrderProgressBatchStatusDetail {
     }
 }
 
+impl ProductionOrderStatusDetail {
+    pub fn from_order_flow(
+        progress_batches: &[OrderProgressBatch],
+        run_sessions: &[OrderRunSession],
+        queue_states: &BTreeMap<String, BTreeMap<String, String>>,
+    ) -> Self {
+        let mut detail = Self::default();
+        for session in run_sessions {
+            match session.status {
+                OrderRunStatus::Active => detail.active_session_count += 1,
+                OrderRunStatus::Paused => detail.paused_session_count += 1,
+                OrderRunStatus::Completed => {}
+            }
+        }
+        for batch in progress_batches {
+            let mut batch = batch.clone();
+            batch.refresh_status_detail();
+            detail.total_wip_count += 1;
+            match batch.wip_status {
+                OrderProgressBatchWipStatus::Waiting => detail.waiting_wip_count += 1,
+                OrderProgressBatchWipStatus::InUse => detail.in_use_wip_count += 1,
+                OrderProgressBatchWipStatus::Processed => detail.processed_wip_count += 1,
+            }
+            match batch.status_detail.flow_status.as_str() {
+                "waiting_next_stage" => detail.waiting_next_stage_count += 1,
+                "in_progress" => {}
+                "consumed_by_next_stage" => detail.consumed_by_next_stage_count += 1,
+                "finished_pending_acceptance" => detail.finished_pending_acceptance_count += 1,
+                "accepted_to_stock" => detail.accepted_wip_count += 1,
+                _ => {}
+            }
+        }
+
+        let has_pending_queue = queue_states
+            .values()
+            .flat_map(|states| states.values())
+            .any(|state| state == "pending");
+        let has_in_progress_queue = queue_states
+            .values()
+            .flat_map(|states| states.values())
+            .any(|state| state == "in_progress");
+        let all_wips_are_final_pending = detail.finished_pending_acceptance_count > 0
+            && detail.waiting_wip_count == detail.finished_pending_acceptance_count
+            && detail.in_use_wip_count == 0
+            && detail.waiting_next_stage_count == 0;
+        let all_final_wips_are_accepted = detail.accepted_wip_count > 0
+            && detail.waiting_wip_count == 0
+            && detail.in_use_wip_count == 0
+            && detail.waiting_next_stage_count == 0
+            && detail.finished_pending_acceptance_count == 0;
+
+        let order_status = if detail.active_session_count > 0
+            || detail.in_use_wip_count > 0
+            || has_in_progress_queue
+        {
+            "in_progress"
+        } else if all_final_wips_are_accepted {
+            "accepted"
+        } else if all_wips_are_final_pending {
+            "finished_pending_acceptance"
+        } else if detail.processed_wip_count > 0
+            || detail.finished_pending_acceptance_count > 0
+            || detail.consumed_by_next_stage_count > 0
+        {
+            "partially_completed"
+        } else if detail.paused_session_count > 0 {
+            "paused"
+        } else if detail.waiting_next_stage_count > 0 {
+            "waiting_next_stage"
+        } else if detail.waiting_wip_count > 0 || has_pending_queue {
+            "ready"
+        } else {
+            "not_started"
+        };
+        detail.order_status = order_status.to_string();
+        detail.work_status = match order_status {
+            "in_progress" => "in_progress",
+            "paused" => "paused",
+            "accepted" | "finished_pending_acceptance" => "completed",
+            "partially_completed" => "partially_completed",
+            "waiting_next_stage" | "ready" => "waiting",
+            _ => "not_started",
+        }
+        .to_string();
+        detail.flow_status = match order_status {
+            "accepted" => "accepted_to_stock",
+            "finished_pending_acceptance" => "finished_pending_acceptance",
+            "partially_completed" => "partially_completed",
+            "in_progress" => "in_progress",
+            "paused" => "paused",
+            "waiting_next_stage" => "waiting_next_stage",
+            "ready" => "ready",
+            _ => "not_started",
+        }
+        .to_string();
+        detail.stock_status = match order_status {
+            "accepted" => "accepted",
+            "finished_pending_acceptance" => "pending_acceptance",
+            _ => "",
+        }
+        .to_string();
+        detail
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ProductionQrOpenedBy {
     pub actor_role: String,
@@ -274,6 +408,7 @@ pub struct ProductionQrReport {
     pub stale_reason: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub order: Option<ProductionMapDefinition>,
+    pub order_status: ProductionOrderStatusDetail,
     pub queue_states: BTreeMap<String, BTreeMap<String, String>>,
     pub logs: Vec<ProductionOrderLogEntry>,
     pub progress_batches: Vec<OrderProgressBatch>,
@@ -306,6 +441,7 @@ pub struct FinishedGoodsStockEntry {
 pub struct FinishedGoodsReceipt {
     pub batch: OrderProgressBatch,
     pub stock: FinishedGoodsStockEntry,
+    pub order_status: ProductionOrderStatusDetail,
 }
 
 #[derive(Debug, Clone, Default, PartialEq)]

@@ -255,11 +255,17 @@ pub async fn production_map_sequence(
                 .apparatus_queue_policy_records()
                 .await
                 .map_err(production_map_error)?;
+            let order_statuses = state
+                .production_maps
+                .order_status_details()
+                .await
+                .map_err(production_map_error)?;
             Ok(json_response(serde_json::json!({
                 "ok": true,
                 "sequences": sequences,
                 "queue_states": queue_states,
                 "queue_policies": queue_policies,
+                "order_statuses": order_statuses,
             })))
         }
         Method::PUT => {

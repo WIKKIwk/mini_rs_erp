@@ -72,7 +72,7 @@ async fn free_pick_policy_allows_ready_order_outside_sequence_head() {
             "zakaz-2",
             queue_state::ApparatusQueueAction::Start,
             &["Rezka apparat".to_string()],
-            actor,
+            actor.clone(),
         )
         .await
         .expect("start second");
@@ -238,7 +238,7 @@ async fn raw_material_assignment_requires_exact_scan_before_start() {
             "zakaz-raw-1",
             queue_state::ApparatusQueueAction::Start,
             &["7 ta rangli pechat - A".to_string()],
-            actor,
+            actor.clone(),
             "30AA,30CC",
         )
         .await
@@ -464,7 +464,7 @@ async fn downstream_start_requires_previous_stage_progress_qr() {
             order_id,
             queue_state::ApparatusQueueAction::Start,
             &[second.to_string()],
-            actor,
+            actor.clone(),
             QueueProgressInput {
                 qr_payload: previous_batch.qr_payload.clone(),
                 ..QueueProgressInput::default()
@@ -933,11 +933,24 @@ async fn downstream_complete_keeps_order_open_until_all_input_wips_processed() {
         )
         .await
         .expect("second complete first wip");
+    let first_final_output = partial_complete
+        .progress_batch
+        .clone()
+        .expect("first final output batch");
 
     assert_eq!(
         partial_complete.states.get(order_id),
         Some(&"pending".to_string())
     );
+    let partial_order_status = service
+        .order_status_detail(order_id)
+        .await
+        .expect("partial order status");
+    assert_eq!(partial_order_status.order_status, "partially_completed");
+    assert_eq!(partial_order_status.waiting_wip_count, 2);
+    assert_eq!(partial_order_status.waiting_next_stage_count, 1);
+    assert_eq!(partial_order_status.finished_pending_acceptance_count, 1);
+    assert_eq!(partial_order_status.processed_wip_count, 1);
     assert_eq!(
         service
             .progress_batch_for_qr("", &first_pause.qr_payload)
@@ -976,7 +989,7 @@ async fn downstream_complete_keeps_order_open_until_all_input_wips_processed() {
             order_id,
             queue_state::ApparatusQueueAction::Complete,
             &[second.to_string()],
-            actor,
+            actor.clone(),
             QueueProgressInput {
                 produced_qty: Some(12.0),
                 uom: "kg".to_string(),
@@ -994,6 +1007,15 @@ async fn downstream_complete_keeps_order_open_until_all_input_wips_processed() {
         final_complete.states.get(order_id),
         Some(&"completed".to_string())
     );
+    let final_order_status = service
+        .order_status_detail(order_id)
+        .await
+        .expect("final order status");
+    assert_eq!(
+        final_order_status.order_status,
+        "finished_pending_acceptance"
+    );
+    assert_eq!(final_order_status.finished_pending_acceptance_count, 2);
     let final_output = final_complete
         .progress_batch
         .expect("final output batch has status detail");
@@ -1006,6 +1028,27 @@ async fn downstream_complete_keeps_order_open_until_all_input_wips_processed() {
         final_output.status_detail.stock_status,
         "pending_acceptance"
     );
+
+    service
+        .receive_finished_goods(
+            &first_final_output.batch_id,
+            &first_final_output.qr_payload,
+            "Tayyor mahsulot ombori",
+            actor.clone(),
+        )
+        .await
+        .expect("receive first final output");
+    let received = service
+        .receive_finished_goods(
+            &final_output.batch_id,
+            &final_output.qr_payload,
+            "Tayyor mahsulot ombori",
+            actor,
+        )
+        .await
+        .expect("receive second final output");
+    assert_eq!(received.order_status.order_status, "accepted");
+    assert_eq!(received.order_status.accepted_wip_count, 2);
 }
 
 #[tokio::test]

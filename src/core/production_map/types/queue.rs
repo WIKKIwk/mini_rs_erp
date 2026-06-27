@@ -4,7 +4,9 @@ use serde::{Deserialize, Serialize};
 
 use crate::core::production_map::queue_state;
 
-use super::progress::{OrderProgressBatch, OrderProgressEvent, OrderRunSession};
+use super::progress::{
+    OrderProgressBatch, OrderProgressEvent, OrderRunSession, ProductionOrderStatusDetail,
+};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -74,6 +76,7 @@ pub struct CompletedQueueOrder {
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct ApparatusQueueActionResult {
     pub states: BTreeMap<String, String>,
+    pub order_status: ProductionOrderStatusDetail,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub session: Option<OrderRunSession>,
     #[serde(skip_serializing_if = "Option::is_none")]

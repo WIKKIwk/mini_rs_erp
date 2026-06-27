@@ -130,6 +130,42 @@ impl ProductionMapService {
             .await
     }
 
+    pub async fn order_status_detail(
+        &self,
+        order_id: &str,
+    ) -> Result<ProductionOrderStatusDetail, ProductionMapError> {
+        let order_id = order_id.trim();
+        if order_id.is_empty() {
+            return Err(ProductionMapError::MissingId);
+        }
+        let queue_states =
+            queue_states_for_order(self.store.apparatus_queue_states().await?, order_id);
+        let progress_batches = self.store.progress_batches_for_order(order_id).await?;
+        let run_sessions = self.store.order_run_sessions_for_order(order_id).await?;
+        Ok(ProductionOrderStatusDetail::from_order_flow(
+            &progress_batches,
+            &run_sessions,
+            &queue_states,
+        ))
+    }
+
+    pub async fn order_status_details(
+        &self,
+    ) -> Result<BTreeMap<String, ProductionOrderStatusDetail>, ProductionMapError> {
+        let mut statuses = BTreeMap::new();
+        for saved in self.maps().await? {
+            let order_id = saved.map.id.trim();
+            if order_id.is_empty() {
+                continue;
+            }
+            statuses.insert(
+                order_id.to_string(),
+                self.order_status_detail(order_id).await?,
+            );
+        }
+        Ok(statuses)
+    }
+
     pub async fn progress_qr_report(
         &self,
         progress_batch_id: &str,
@@ -141,6 +177,9 @@ impl ProductionMapService {
         let order_id = scanned_batch.order_id.trim().to_string();
         let order = self.raw_map(&order_id).await?;
         let mut progress_batches = self.store.progress_batches_for_order(&order_id).await?;
+        for batch in &mut progress_batches {
+            batch.refresh_status_detail();
+        }
         if progress_batches.is_empty() {
             progress_batches.push(scanned_batch.clone());
         }
@@ -180,12 +219,18 @@ impl ProductionMapService {
             })
             .cloned()
             .collect();
+        let order_status = ProductionOrderStatusDetail::from_order_flow(
+            &progress_batches,
+            &run_sessions,
+            &queue_states,
+        );
         Ok(ProductionQrReport {
             scanned_batch,
             current_batch,
             is_stale,
             stale_reason,
             order,
+            order_status,
             queue_states,
             logs,
             progress_batches,
@@ -268,8 +313,13 @@ impl ProductionMapService {
         self.store
             .receive_finished_goods_batch(batch.clone(), stock.clone())
             .await?;
+        let order_status = self.order_status_detail(&stock.order_id).await?;
         self.notify_live();
-        Ok(FinishedGoodsReceipt { batch, stock })
+        Ok(FinishedGoodsReceipt {
+            batch,
+            stock,
+            order_status,
+        })
     }
 
     pub async fn wip_progress_batches(
@@ -654,6 +704,7 @@ impl ProductionMapService {
         &self,
         prepared: PreparedApparatusQueueAction,
     ) -> Result<ApparatusQueueActionResult, ProductionMapError> {
+        let order_id = prepared.event.order_id.clone();
         self.store
             .put_apparatus_queue_states_with_event_and_progress(
                 &prepared.apparatus,
@@ -665,9 +716,11 @@ impl ProductionMapService {
                 prepared.progress_batch_updates.clone(),
             )
             .await?;
+        let order_status = self.order_status_detail(&order_id).await?;
         self.notify_live();
         Ok(ApparatusQueueActionResult {
             states: prepared.states,
+            order_status,
             session: prepared.session,
             progress_event: prepared.progress_event,
             progress_batch: prepared.progress_batch,
