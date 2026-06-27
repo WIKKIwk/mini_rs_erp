@@ -322,6 +322,7 @@ impl ProductionMapStorePort for PostgresProductionMapStore {
         next_apparatus: &str,
         current_location: &str,
         status: Option<crate::core::production_map::OrderProgressBatchWipStatus>,
+        include_processed: bool,
         order_id: &str,
         limit: usize,
     ) -> Result<Vec<OrderProgressBatch>, ProductionMapError> {
@@ -331,6 +332,7 @@ impl ProductionMapStorePort for PostgresProductionMapStore {
             next_apparatus,
             current_location,
             status,
+            include_processed,
             order_id,
             limit,
         )

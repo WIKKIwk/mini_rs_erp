@@ -388,6 +388,7 @@ pub(super) async fn load_wip_progress_batches(
     next_apparatus: &str,
     current_location: &str,
     status: Option<OrderProgressBatchWipStatus>,
+    include_processed: bool,
     order_id: &str,
     limit: usize,
 ) -> Result<Vec<OrderProgressBatch>, ProductionMapError> {
@@ -396,6 +397,11 @@ pub(super) async fn load_wip_progress_batches(
     }
     let apparatus = apparatus.trim();
     let apparatus_key = queue_state::apparatus_search_key(apparatus);
+    let query_apparatus_key = if include_processed && !next_apparatus.trim().is_empty() {
+        ""
+    } else {
+        apparatus_key.as_str()
+    };
     let next_apparatus_key = queue_state::apparatus_search_key(next_apparatus);
     let current_location = current_location.trim();
     let status = status.map(|value| value.as_str()).unwrap_or_default();
@@ -423,22 +429,34 @@ pub(super) async fn load_wip_progress_batches(
          FROM mini_progress_batches
          WHERE ($1 = '' OR current_apparatus_key = $1)
            AND ($2 = '' OR order_id = $2)
-           AND (($3 = '' AND wip_status <> 'processed') OR ($3 <> '' AND wip_status = $3))
+           AND ($7 OR (($3 = '' AND wip_status <> 'processed') OR ($3 <> '' AND wip_status = $3)))
            AND ($4 = '' OR current_location = $4)
            AND ($5 = '' OR lower(regexp_replace(trim(next_apparatus), '\\s+-\\s+[A-Za-z0-9_-]{1,16}$', '')) = $5)
          ORDER BY updated_at DESC, created_at DESC, batch_id DESC
          LIMIT $6",
     )
-    .bind(apparatus_key)
+    .bind(query_apparatus_key)
     .bind(order_id.trim())
     .bind(status)
     .bind(current_location)
     .bind(next_apparatus_key)
     .bind(limit)
+    .bind(include_processed)
     .fetch_all(pool)
     .await
     .map_err(|_| ProductionMapError::StoreFailed)?;
-    rows.into_iter().map(progress_batch_from_row).collect()
+    let batches = rows
+        .into_iter()
+        .map(progress_batch_from_row)
+        .collect::<Result<Vec<_>, _>>()?;
+    Ok(batches
+        .into_iter()
+        .filter(|batch| {
+            apparatus.is_empty()
+                || queue_state::apparatus_titles_match(&batch.current_apparatus, apparatus)
+                || queue_state::apparatus_titles_match(&batch.apparatus, apparatus)
+        })
+        .collect())
 }
 
 fn normalized_refs(worker_refs: &[String]) -> Vec<String> {

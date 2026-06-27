@@ -163,6 +163,7 @@ pub trait ProductionMapStorePort: Send + Sync {
         _next_apparatus: &str,
         _current_location: &str,
         _status: Option<OrderProgressBatchWipStatus>,
+        _include_processed: bool,
         _order_id: &str,
         _limit: usize,
     ) -> Result<Vec<OrderProgressBatch>, ProductionMapError> {

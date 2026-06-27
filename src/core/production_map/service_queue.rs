@@ -276,6 +276,7 @@ impl ProductionMapService {
         next_apparatus: &str,
         current_location: &str,
         status: Option<OrderProgressBatchWipStatus>,
+        include_processed: bool,
         order_id: &str,
         limit: usize,
     ) -> Result<Vec<OrderProgressBatch>, ProductionMapError> {
@@ -286,6 +287,7 @@ impl ProductionMapService {
                 next_apparatus,
                 current_location,
                 status,
+                include_processed,
                 order_id,
                 limit,
             )

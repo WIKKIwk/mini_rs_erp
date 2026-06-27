@@ -191,6 +191,7 @@ async fn postgres_wip_batches_match_apparatus_instance_suffixes() {
             "",
             "",
             Some(OrderProgressBatchWipStatus::Waiting),
+            false,
             "",
             100,
         )
@@ -292,6 +293,7 @@ async fn postgres_wip_batches_scan_past_first_page_for_matching_apparatus() {
             "",
             "",
             Some(OrderProgressBatchWipStatus::Waiting),
+            false,
             "",
             100,
         )

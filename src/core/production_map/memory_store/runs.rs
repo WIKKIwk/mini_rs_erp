@@ -184,6 +184,7 @@ pub(super) async fn wip_progress_batches(
     next_apparatus: &str,
     current_location: &str,
     status: Option<OrderProgressBatchWipStatus>,
+    include_processed: bool,
     order_id: &str,
     limit: usize,
 ) -> Result<Vec<OrderProgressBatch>, ProductionMapError> {
@@ -204,16 +205,18 @@ pub(super) async fn wip_progress_batches(
             (apparatus.is_empty()
                 || (!apparatus_key.is_empty()
                     && batch.current_apparatus_key.trim() == apparatus_key)
-                || queue_state::apparatus_titles_match(&batch.current_apparatus, apparatus))
+                || queue_state::apparatus_titles_match(&batch.current_apparatus, apparatus)
+                || queue_state::apparatus_titles_match(&batch.apparatus, apparatus))
                 && (current_location.is_empty()
                     || batch.current_location.trim() == current_location)
                 && (next_apparatus.is_empty()
                     || queue_state::apparatus_titles_match(&batch.next_apparatus, next_apparatus))
                 && (order_id.is_empty() || batch.order_id.trim() == order_id)
-                && status.map_or(
-                    batch.wip_status != OrderProgressBatchWipStatus::Processed,
-                    |value| batch.wip_status == value,
-                )
+                && (include_processed
+                    || status.map_or(
+                        batch.wip_status != OrderProgressBatchWipStatus::Processed,
+                        |value| batch.wip_status == value,
+                    ))
         })
         .cloned()
         .collect::<Vec<_>>();

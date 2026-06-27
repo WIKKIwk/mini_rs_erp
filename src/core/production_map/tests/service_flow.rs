@@ -733,6 +733,7 @@ async fn wip_listing_backfills_missing_current_and_next_apparatus_from_map() {
             "",
             "",
             Some(OrderProgressBatchWipStatus::Waiting),
+            false,
             order_id,
             10,
         )
