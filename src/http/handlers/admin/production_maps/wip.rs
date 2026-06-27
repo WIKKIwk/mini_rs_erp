@@ -53,7 +53,8 @@ pub async fn production_map_wip_batches(
             return Err(forbidden());
         }
     }
-    let status = if query.status.trim().is_empty() {
+    let include_processed = query.status.trim().eq_ignore_ascii_case("all");
+    let status = if query.status.trim().is_empty() || include_processed {
         None
     } else {
         Some(
@@ -68,6 +69,7 @@ pub async fn production_map_wip_batches(
             &query.next_apparatus,
             &query.current_location,
             status,
+            include_processed,
             &query.order_id,
             positive_int(query.limit.as_deref(), 100),
         )

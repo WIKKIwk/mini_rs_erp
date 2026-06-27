@@ -142,6 +142,7 @@ async fn wip_batches_endpoint_lists_waiting_and_in_use_batches() {
     assert_eq!(second_started.status(), StatusCode::OK);
 
     let in_use = router
+        .clone()
         .oneshot(request(
             "GET",
             "/v1/mobile/admin/production-maps/wip-batches?apparatus=Laminatsiya%20mashinasi&status=in_use",
@@ -160,6 +161,18 @@ async fn wip_batches_endpoint_lists_waiting_and_in_use_batches() {
         in_use_body["batches"][0]["used_by_apparatus"],
         "Laminatsiya mashinasi"
     );
+
+    let all_for_next = router
+        .oneshot(request(
+            "GET",
+            "/v1/mobile/admin/production-maps/wip-batches?apparatus=7%20ta%20rangli%20pechat&next_apparatus=Laminatsiya%20mashinasi&status=all",
+            &worker_token,
+        ))
+        .await
+        .expect("all wip for next apparatus");
+    let all_for_next_body = json_body(all_for_next).await;
+    assert_eq!(all_for_next_body["batches"][0]["qr_payload"], qr_payload);
+    assert_eq!(all_for_next_body["batches"][0]["wip_status"], "in_use");
 }
 
 #[tokio::test]
