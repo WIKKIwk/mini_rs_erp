@@ -160,6 +160,7 @@ pub trait ProductionMapStorePort: Send + Sync {
     async fn wip_progress_batches(
         &self,
         _apparatus: &str,
+        _next_apparatus: &str,
         _current_location: &str,
         _status: Option<OrderProgressBatchWipStatus>,
         _order_id: &str,

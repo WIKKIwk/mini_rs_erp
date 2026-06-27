@@ -273,6 +273,7 @@ impl ProductionMapService {
     pub async fn wip_progress_batches(
         &self,
         apparatus: &str,
+        next_apparatus: &str,
         current_location: &str,
         status: Option<OrderProgressBatchWipStatus>,
         order_id: &str,
@@ -280,7 +281,14 @@ impl ProductionMapService {
     ) -> Result<Vec<OrderProgressBatch>, ProductionMapError> {
         let mut batches = self
             .store
-            .wip_progress_batches(apparatus, current_location, status, order_id, limit)
+            .wip_progress_batches(
+                apparatus,
+                next_apparatus,
+                current_location,
+                status,
+                order_id,
+                limit,
+            )
             .await?;
         if batches.iter().any(|batch| {
             batch.current_apparatus.trim().is_empty() || batch.next_apparatus.trim().is_empty()

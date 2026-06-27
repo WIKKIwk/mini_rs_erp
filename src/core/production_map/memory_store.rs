@@ -253,12 +253,22 @@ impl ProductionMapStorePort for MemoryProductionMapStore {
     async fn wip_progress_batches(
         &self,
         apparatus: &str,
+        next_apparatus: &str,
         current_location: &str,
         status: Option<OrderProgressBatchWipStatus>,
         order_id: &str,
         limit: usize,
     ) -> Result<Vec<OrderProgressBatch>, ProductionMapError> {
-        runs::wip_progress_batches(self, apparatus, current_location, status, order_id, limit).await
+        runs::wip_progress_batches(
+            self,
+            apparatus,
+            next_apparatus,
+            current_location,
+            status,
+            order_id,
+            limit,
+        )
+        .await
     }
 
     async fn put_order_run_session(

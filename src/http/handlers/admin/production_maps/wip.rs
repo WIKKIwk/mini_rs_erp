@@ -5,6 +5,8 @@ pub struct WipBatchesQuery {
     #[serde(default)]
     apparatus: String,
     #[serde(default)]
+    next_apparatus: String,
+    #[serde(default)]
     current_location: String,
     #[serde(default)]
     status: String,
@@ -43,9 +45,11 @@ pub async fn production_map_wip_batches(
             .await;
     if !can_view_all {
         let assigned_apparatus = state.admin.principal_assigned_apparatus(&principal).await;
-        if query.apparatus.trim().is_empty()
-            || !queue_state::apparatus_matches_assigned(&query.apparatus, &assigned_apparatus)
-        {
+        let scoped_to_current =
+            queue_state::apparatus_matches_assigned(&query.apparatus, &assigned_apparatus);
+        let scoped_to_next =
+            queue_state::apparatus_matches_assigned(&query.next_apparatus, &assigned_apparatus);
+        if !scoped_to_current && !scoped_to_next {
             return Err(forbidden());
         }
     }
@@ -61,6 +65,7 @@ pub async fn production_map_wip_batches(
         .production_maps
         .wip_progress_batches(
             &query.apparatus,
+            &query.next_apparatus,
             &query.current_location,
             status,
             &query.order_id,

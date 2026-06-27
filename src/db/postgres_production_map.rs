@@ -319,6 +319,7 @@ impl ProductionMapStorePort for PostgresProductionMapStore {
     async fn wip_progress_batches(
         &self,
         apparatus: &str,
+        next_apparatus: &str,
         current_location: &str,
         status: Option<crate::core::production_map::OrderProgressBatchWipStatus>,
         order_id: &str,
@@ -327,6 +328,7 @@ impl ProductionMapStorePort for PostgresProductionMapStore {
         load_wip_progress_batches(
             &self.pool,
             apparatus,
+            next_apparatus,
             current_location,
             status,
             order_id,
