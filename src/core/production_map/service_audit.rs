@@ -47,13 +47,6 @@ impl ProductionMapService {
             batches_by_id.insert(batch.batch_id.trim().to_string(), batch);
         }
 
-        for order_id in &order_ids {
-            let batches = self.store.progress_batches_for_order(order_id).await?;
-            for batch in batches {
-                batches_by_id.insert(batch.batch_id.trim().to_string(), batch);
-            }
-        }
-
         for batch in batches_by_id.values() {
             audit_progress_batch(&known_orders, batch, &mut violations);
             let qr = batch.qr_payload.trim();
