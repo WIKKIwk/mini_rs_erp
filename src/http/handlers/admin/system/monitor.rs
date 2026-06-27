@@ -108,6 +108,23 @@ async fn system_monitor_live_socket(state: AppState, mut socket: WebSocket) {
 
     loop {
         tokio::select! {
+            inbound = socket.recv() => {
+                match inbound {
+                    Some(Ok(Message::Text(text))) => {
+                        if let Some(pong) = system_monitor_pong_text(&text) {
+                            if !send_system_monitor_message(&mut socket, Message::Text(pong.into())).await {
+                                break;
+                            }
+                        }
+                    }
+                    Some(Ok(Message::Close(_))) | None => break,
+                    Some(Ok(_)) => {}
+                    Some(Err(error)) => {
+                        tracing::warn!(%error, "system monitor live message receive failed");
+                        break;
+                    }
+                }
+            }
             changed = snapshots.changed() => {
                 if changed.is_err() {
                     break;
@@ -126,6 +143,20 @@ async fn system_monitor_live_socket(state: AppState, mut socket: WebSocket) {
             }
         }
     }
+}
+
+fn system_monitor_pong_text(text: &str) -> Option<String> {
+    let value = serde_json::from_str::<serde_json::Value>(text).ok()?;
+    if value.get("type").and_then(|item| item.as_str()) != Some("ping") {
+        return None;
+    }
+    let payload = serde_json::json!({
+        "type": "pong",
+        "id": value.get("id").cloned().unwrap_or(serde_json::Value::Null),
+        "sent_at_ms": value.get("sent_at_ms").cloned().unwrap_or(serde_json::Value::Null),
+        "server_at_ms": system_time_to_unix_ms(SystemTime::now()),
+    });
+    serde_json::to_string(&payload).ok()
 }
 
 fn ensure_system_monitor_hub_started(state: &AppState) {
@@ -444,6 +475,12 @@ fn system_time_to_unix(time: SystemTime) -> i64 {
         .unwrap_or(0)
 }
 
+fn system_time_to_unix_ms(time: SystemTime) -> i64 {
+    time.duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_millis().min(i64::MAX as u128) as i64)
+        .unwrap_or(0)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -475,6 +512,18 @@ mod tests {
         assert!(!database.reachable);
         assert_eq!(database.status, "offline");
         assert_eq!(database.error, "database ping timed out");
+    }
+
+    #[test]
+    fn system_monitor_ping_text_returns_app_level_pong() {
+        let pong =
+            system_monitor_pong_text(r#"{"type":"ping","id":7,"sent_at_ms":12345}"#).expect("pong");
+        let payload: serde_json::Value = serde_json::from_str(&pong).expect("pong json");
+
+        assert_eq!(payload["type"], "pong");
+        assert_eq!(payload["id"], 7);
+        assert_eq!(payload["sent_at_ms"], 12345);
+        assert!(payload["server_at_ms"].as_i64().unwrap_or(0) > 0);
     }
 
     #[tokio::test]
