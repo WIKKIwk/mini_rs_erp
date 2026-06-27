@@ -66,6 +66,11 @@ pub struct AdminServerMonitorRuntime {
     pub memory_percent: i64,
     pub memory_used_mb: i64,
     pub memory_total_mb: i64,
+    pub disk_path: String,
+    pub disk_percent: i64,
+    pub disk_used_mb: i64,
+    pub disk_total_mb: i64,
+    pub disk_available_mb: i64,
     pub load_average: f64,
     pub sample_seconds: i64,
 }

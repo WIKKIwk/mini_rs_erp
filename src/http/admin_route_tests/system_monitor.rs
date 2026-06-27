@@ -35,6 +35,7 @@ async fn admin_system_monitor_reports_server_and_backup_state() {
     let backup_file = backup_dir.path().join("mini_rs_erp_20260624_180448.dump");
     std::fs::write(&backup_file, b"backup-bytes").expect("write backup");
     let _guard = EnvVarGuard::set("MINI_ERP_BACKUP_DIR", backup_dir.path());
+    let _disk_guard = EnvVarGuard::set("MINI_ERP_DISK_MONITOR_PATH", backup_dir.path());
     let state = test_state();
     let token = session(&state, PrincipalRole::Admin).await;
     let router = build_router(state);
@@ -79,4 +80,12 @@ async fn admin_system_monitor_reports_server_and_backup_state() {
     assert!(body["runtime"]["memory_total_mb"].as_i64().unwrap_or(-1) >= 0);
     assert!(body["runtime"]["load_average"].as_f64().unwrap_or(-1.0) >= 0.0);
     assert!(body["runtime"]["sample_seconds"].as_i64().unwrap_or(-1) >= 0);
+    assert_eq!(
+        body["runtime"]["disk_path"].as_str().unwrap_or(""),
+        backup_dir.path().display().to_string()
+    );
+    assert!(body["runtime"]["disk_percent"].as_i64().unwrap_or(-1) >= 0);
+    assert!(body["runtime"]["disk_used_mb"].as_i64().unwrap_or(-1) >= 0);
+    assert!(body["runtime"]["disk_total_mb"].as_i64().unwrap_or(-1) >= 0);
+    assert!(body["runtime"]["disk_available_mb"].as_i64().unwrap_or(-1) >= 0);
 }
