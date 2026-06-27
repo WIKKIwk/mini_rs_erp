@@ -210,6 +210,14 @@ async fn progress_qr_report_marks_processed_qr_as_stale_and_returns_order_flow()
         report_body["current_batch"]["status_detail"]["stock_status"],
         "pending_acceptance"
     );
+    assert_eq!(
+        report_body["order_status"]["order_status"],
+        "finished_pending_acceptance"
+    );
+    assert_eq!(
+        report_body["order_status"]["finished_pending_acceptance_count"],
+        1
+    );
     assert_eq!(report_body["is_stale"], true);
     assert_eq!(report_body["stale_reason"], "processed_by_next_stage");
     assert_eq!(report_body["order"]["id"], "zakaz-qr-report");

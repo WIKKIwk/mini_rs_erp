@@ -134,5 +134,6 @@ pub async fn production_map_finished_goods_receive(
         "ok": true,
         "batch": receipt.batch,
         "stock": receipt.stock,
+        "order_status": receipt.order_status,
     })))
 }

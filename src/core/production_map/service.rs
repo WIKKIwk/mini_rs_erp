@@ -13,6 +13,7 @@ pub struct ProductionMapLiveSnapshot {
     pub sequences: BTreeMap<String, Vec<String>>,
     pub queue_states: BTreeMap<String, BTreeMap<String, String>>,
     pub queue_policies: Vec<ApparatusQueuePolicyRecord>,
+    pub order_statuses: BTreeMap<String, ProductionOrderStatusDetail>,
 }
 
 #[derive(Clone)]
@@ -73,6 +74,7 @@ impl ProductionMapService {
             sequences: self.effective_apparatus_sequences().await?,
             queue_states: self.apparatus_queue_states().await?,
             queue_policies: self.apparatus_queue_policy_records().await?,
+            order_statuses: self.order_status_details().await?,
         })
     }
 }
