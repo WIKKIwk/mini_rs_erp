@@ -66,6 +66,14 @@ async fn admin_system_monitor_reports_server_and_backup_state() {
             .to_str()
             .unwrap_or("")
     );
+    assert_eq!(
+        body["backups"]["files"][0]["name"].as_str().unwrap_or(""),
+        backup_file
+            .file_name()
+            .expect("backup file name")
+            .to_str()
+            .unwrap_or("")
+    );
     assert!(
         body["backups"]["latest"]["age_seconds"]
             .as_i64()
