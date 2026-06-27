@@ -48,6 +48,7 @@ pub struct AdminServerMonitorBackups {
     pub exists: bool,
     pub file_count: usize,
     pub latest: Option<AdminServerMonitorBackupFile>,
+    pub files: Vec<AdminServerMonitorBackupFile>,
     pub error: String,
 }
 

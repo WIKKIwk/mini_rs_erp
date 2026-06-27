@@ -262,7 +262,7 @@ fn scan_backup_directory(now: OffsetDateTime) -> AdminServerMonitorBackups {
             return snapshot;
         }
     };
-    let mut latest: Option<(SystemTime, PathBuf, u64)> = None;
+    let mut files: Vec<(SystemTime, PathBuf, u64)> = Vec::new();
     for entry in entries.flatten() {
         let Ok(metadata) = entry.metadata() else {
             continue;
@@ -274,29 +274,36 @@ fn scan_backup_directory(now: OffsetDateTime) -> AdminServerMonitorBackups {
         let Ok(modified) = metadata.modified() else {
             continue;
         };
-        match &latest {
-            Some((current_modified, _, _)) if modified <= *current_modified => {}
-            _ => {
-                latest = Some((modified, entry.path(), metadata.len()));
-            }
-        }
+        files.push((modified, entry.path(), metadata.len()));
     }
-    snapshot.latest = latest.map(|(modified, path, size_bytes)| {
-        let modified_at_unix = system_time_to_unix(modified);
-        let age_seconds = now.unix_timestamp().saturating_sub(modified_at_unix).max(0);
-        AdminServerMonitorBackupFile {
-            name: path
-                .file_name()
-                .and_then(|value| value.to_str())
-                .unwrap_or_default()
-                .to_string(),
-            path: path.display().to_string(),
-            size_bytes,
-            modified_at_unix,
-            age_seconds,
-        }
-    });
+    files.sort_by(|left, right| right.0.cmp(&left.0));
+    snapshot.files = files
+        .into_iter()
+        .map(|(modified, path, size_bytes)| backup_file_snapshot(now, modified, path, size_bytes))
+        .collect();
+    snapshot.latest = snapshot.files.first().cloned();
     snapshot
+}
+
+fn backup_file_snapshot(
+    now: OffsetDateTime,
+    modified: SystemTime,
+    path: PathBuf,
+    size_bytes: u64,
+) -> AdminServerMonitorBackupFile {
+    let modified_at_unix = system_time_to_unix(modified);
+    let age_seconds = now.unix_timestamp().saturating_sub(modified_at_unix).max(0);
+    AdminServerMonitorBackupFile {
+        name: path
+            .file_name()
+            .and_then(|value| value.to_str())
+            .unwrap_or_default()
+            .to_string(),
+        path: path.display().to_string(),
+        size_bytes,
+        modified_at_unix,
+        age_seconds,
+    }
 }
 
 fn runtime_snapshot() -> AdminServerMonitorRuntime {
