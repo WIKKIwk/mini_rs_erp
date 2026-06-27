@@ -17,11 +17,12 @@ pub struct AdminSettings {
     pub admin_name: String,
 }
 
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct AdminServerMonitorResponse {
     pub server: AdminServerMonitorServer,
     pub database: AdminServerMonitorDatabase,
     pub backups: AdminServerMonitorBackups,
+    pub runtime: AdminServerMonitorRuntime,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -57,6 +58,16 @@ pub struct AdminServerMonitorBackupFile {
     pub size_bytes: u64,
     pub modified_at_unix: i64,
     pub age_seconds: i64,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct AdminServerMonitorRuntime {
+    pub cpu_percent: i64,
+    pub memory_percent: i64,
+    pub memory_used_mb: i64,
+    pub memory_total_mb: i64,
+    pub load_average: f64,
+    pub sample_seconds: i64,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]

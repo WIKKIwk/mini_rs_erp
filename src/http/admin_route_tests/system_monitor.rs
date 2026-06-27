@@ -73,4 +73,10 @@ async fn admin_system_monitor_reports_server_and_backup_state() {
     );
 
     assert!(body["database"]["status"].as_str().unwrap_or("").len() > 0);
+    assert!(body["runtime"]["cpu_percent"].as_i64().unwrap_or(-1) >= 0);
+    assert!(body["runtime"]["memory_percent"].as_i64().unwrap_or(-1) >= 0);
+    assert!(body["runtime"]["memory_used_mb"].as_i64().unwrap_or(-1) >= 0);
+    assert!(body["runtime"]["memory_total_mb"].as_i64().unwrap_or(-1) >= 0);
+    assert!(body["runtime"]["load_average"].as_f64().unwrap_or(-1.0) >= 0.0);
+    assert!(body["runtime"]["sample_seconds"].as_i64().unwrap_or(-1) >= 0);
 }

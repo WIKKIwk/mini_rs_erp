@@ -1,7 +1,7 @@
 use super::*;
 use crate::core::admin::models::{
     AdminServerMonitorBackupFile, AdminServerMonitorBackups, AdminServerMonitorDatabase,
-    AdminServerMonitorResponse, AdminServerMonitorServer,
+    AdminServerMonitorResponse, AdminServerMonitorRuntime, AdminServerMonitorServer,
 };
 use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
 use std::fs;
@@ -70,10 +70,12 @@ async fn system_monitor_report(state: &AppState) -> AdminServerMonitorResponse {
         },
     };
     let backups = scan_backup_directory(now);
+    let runtime = runtime_snapshot();
     AdminServerMonitorResponse {
         server,
         database,
         backups,
+        runtime,
     }
 }
 
@@ -150,6 +152,7 @@ async fn send_system_monitor_snapshot(
         "server": report.server,
         "database": report.database,
         "backups": report.backups,
+        "runtime": report.runtime,
     });
     match serde_json::to_string(&payload) {
         Ok(json) => send_system_monitor_message(socket, Message::Text(json.into())).await,
@@ -264,6 +267,67 @@ fn scan_backup_directory(now: OffsetDateTime) -> AdminServerMonitorBackups {
     snapshot
 }
 
+fn runtime_snapshot() -> AdminServerMonitorRuntime {
+    let (memory_used_mb, memory_total_mb, memory_percent) = memory_snapshot();
+    let load_average = load_average_snapshot();
+    let cpu_percent = cpu_pressure_percent(load_average);
+    AdminServerMonitorRuntime {
+        cpu_percent,
+        memory_percent,
+        memory_used_mb,
+        memory_total_mb,
+        load_average,
+        sample_seconds: LIVE_SNAPSHOT_INTERVAL.as_secs().min(i64::MAX as u64) as i64,
+    }
+}
+
+fn memory_snapshot() -> (i64, i64, i64) {
+    let Ok(meminfo) = fs::read_to_string("/proc/meminfo") else {
+        return (0, 0, 0);
+    };
+    let total_kb = meminfo_value_kb(&meminfo, "MemTotal").unwrap_or(0);
+    let available_kb = meminfo_value_kb(&meminfo, "MemAvailable").unwrap_or(0);
+    if total_kb <= 0 {
+        return (0, 0, 0);
+    }
+    let used_kb = total_kb.saturating_sub(available_kb);
+    let used_mb = used_kb / 1024;
+    let total_mb = total_kb / 1024;
+    let percent = ((used_kb as f64 / total_kb as f64) * 100.0)
+        .round()
+        .clamp(0.0, 100.0) as i64;
+    (used_mb, total_mb, percent)
+}
+
+fn meminfo_value_kb(meminfo: &str, key: &str) -> Option<i64> {
+    meminfo.lines().find_map(|line| {
+        let (name, rest) = line.split_once(':')?;
+        if name != key {
+            return None;
+        }
+        rest.split_whitespace().next()?.parse::<i64>().ok()
+    })
+}
+
+fn load_average_snapshot() -> f64 {
+    fs::read_to_string("/proc/loadavg")
+        .ok()
+        .and_then(|value| value.split_whitespace().next()?.parse::<f64>().ok())
+        .filter(|value| value.is_finite() && *value >= 0.0)
+        .unwrap_or(0.0)
+}
+
+fn cpu_pressure_percent(load_average: f64) -> i64 {
+    if load_average <= 0.0 {
+        return 0;
+    }
+    let cores = std::thread::available_parallelism()
+        .map(|value| value.get())
+        .unwrap_or(1)
+        .max(1) as f64;
+    ((load_average / cores) * 100.0).round().clamp(0.0, 100.0) as i64
+}
+
 fn backup_directory() -> PathBuf {
     if let Some(path) = std::env::var("MINI_ERP_BACKUP_DIR")
         .ok()
@@ -355,6 +419,7 @@ mod tests {
                 exists: true,
                 ..Default::default()
             },
+            runtime: AdminServerMonitorRuntime::default(),
         };
 
         hub.publish(snapshot.clone());
