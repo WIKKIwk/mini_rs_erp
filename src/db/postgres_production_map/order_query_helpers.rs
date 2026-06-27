@@ -385,6 +385,7 @@ pub(super) async fn load_progress_batch_by_qr(
 pub(super) async fn load_wip_progress_batches(
     pool: &PgPool,
     apparatus: &str,
+    next_apparatus: &str,
     current_location: &str,
     status: Option<OrderProgressBatchWipStatus>,
     order_id: &str,
@@ -395,6 +396,7 @@ pub(super) async fn load_wip_progress_batches(
     }
     let apparatus = apparatus.trim();
     let apparatus_key = queue_state::apparatus_search_key(apparatus);
+    let next_apparatus_key = queue_state::apparatus_search_key(next_apparatus);
     let current_location = current_location.trim();
     let status = status.map(|value| value.as_str()).unwrap_or_default();
     let limit = i64::try_from(limit.min(500)).unwrap_or(500);
@@ -423,13 +425,15 @@ pub(super) async fn load_wip_progress_batches(
            AND ($2 = '' OR order_id = $2)
            AND (($3 = '' AND wip_status <> 'processed') OR ($3 <> '' AND wip_status = $3))
            AND ($4 = '' OR current_location = $4)
+           AND ($5 = '' OR lower(regexp_replace(trim(next_apparatus), '\\s+-\\s+[A-Za-z0-9_-]{1,16}$', '')) = $5)
          ORDER BY updated_at DESC, created_at DESC, batch_id DESC
-         LIMIT $5",
+         LIMIT $6",
     )
     .bind(apparatus_key)
     .bind(order_id.trim())
     .bind(status)
     .bind(current_location)
+    .bind(next_apparatus_key)
     .bind(limit)
     .fetch_all(pool)
     .await

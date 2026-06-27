@@ -163,6 +163,112 @@ async fn wip_batches_endpoint_lists_waiting_and_in_use_batches() {
 }
 
 #[tokio::test]
+async fn wip_batches_endpoint_lists_batches_for_assigned_next_apparatus() {
+    let print_requests = Arc::new(Mutex::new(Vec::<ScaleDriverPrintRequest>::new()));
+    let mut state = test_state();
+    state.gscale = GscaleService::new().with_driver(Arc::new(FakeProgressDriver {
+        requests: print_requests,
+        fail: false,
+    }));
+    state
+        .admin
+        .upsert_role_assignment(crate::core::authz::RoleAssignmentUpsert {
+            principal_role: PrincipalRole::Aparatchi,
+            principal_ref: "worker-wip-next".to_string(),
+            role_id: "aparatchi".to_string(),
+            assigned_apparatus: vec!["Laminatsiya 1".to_string()],
+        })
+        .await
+        .expect("assignment");
+    state
+        .admin
+        .upsert_role_assignment(crate::core::authz::RoleAssignmentUpsert {
+            principal_role: PrincipalRole::Aparatchi,
+            principal_ref: "worker-wip-first".to_string(),
+            role_id: "aparatchi".to_string(),
+            assigned_apparatus: vec!["7 ta rangli pechat".to_string()],
+        })
+        .await
+        .expect("first assignment");
+    let admin_token = session(&state, PrincipalRole::Admin).await;
+    let lamin_token = session_for(&state, PrincipalRole::Aparatchi, "worker-wip-next").await;
+    let first_token = session_for(&state, PrincipalRole::Aparatchi, "worker-wip-first").await;
+    let router = build_router(state);
+
+    let saved = router
+        .clone()
+        .oneshot(request_with_body(
+            "PUT",
+            "/v1/mobile/admin/production-maps",
+            &admin_token,
+            &two_apparatus_order_map_json(
+                "zakaz-wip-next",
+                "WIP next order",
+                "9406",
+                "7 ta rangli pechat",
+                "Laminatsiya 1",
+            ),
+        ))
+        .await
+        .expect("save map");
+    assert_eq!(saved.status(), StatusCode::OK);
+
+    let started = router
+        .clone()
+        .oneshot(request_with_body(
+            "POST",
+            "/v1/mobile/admin/production-maps/queue-action",
+            &first_token,
+            r#"{
+                "apparatus":"7 ta rangli pechat",
+                "order_id":"zakaz-wip-next",
+                "action":"start"
+            }"#,
+        ))
+        .await
+        .expect("start first");
+    assert_eq!(started.status(), StatusCode::OK);
+
+    let paused = router
+        .clone()
+        .oneshot(request_with_body(
+            "POST",
+            "/v1/mobile/admin/production-maps/queue-action",
+            &first_token,
+            r#"{
+                "apparatus":"7 ta rangli pechat",
+                "order_id":"zakaz-wip-next",
+                "action":"pause",
+                "produced_qty":100,
+                "uom":"kg"
+            }"#,
+        ))
+        .await
+        .expect("pause first");
+    assert_eq!(paused.status(), StatusCode::OK);
+    let paused_body = json_body(paused).await;
+    let qr_payload = paused_body["progress_batch"]["qr_payload"]
+        .as_str()
+        .expect("qr payload")
+        .to_string();
+
+    let listed = router
+        .clone()
+        .oneshot(request(
+            "GET",
+            "/v1/mobile/admin/production-maps/wip-batches?apparatus=7%20ta%20rangli%20pechat&next_apparatus=Laminatsiya%201&order_id=zakaz-wip-next&status=waiting",
+            &lamin_token,
+        ))
+        .await
+        .expect("list next apparatus wip");
+    let listed_status = listed.status();
+    let listed_body = json_body(listed).await;
+    assert_eq!(listed_status, StatusCode::OK, "{listed_body:?}");
+    assert_eq!(listed_body["batches"][0]["qr_payload"], qr_payload);
+    assert_eq!(listed_body["batches"][0]["next_apparatus"], "Laminatsiya 1");
+}
+
+#[tokio::test]
 async fn complete_after_wip_start_does_not_reuse_input_qr_as_output_qr() {
     let print_requests = Arc::new(Mutex::new(Vec::<ScaleDriverPrintRequest>::new()));
     let mut state = test_state();
