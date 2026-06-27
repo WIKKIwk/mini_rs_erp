@@ -263,19 +263,7 @@ fn scan_backup_directory(now: OffsetDateTime) -> AdminServerMonitorBackups {
         }
     };
     let mut files: Vec<(SystemTime, PathBuf, u64)> = Vec::new();
-    for entry in entries.flatten() {
-        let Ok(metadata) = entry.metadata() else {
-            continue;
-        };
-        if !metadata.is_file() {
-            continue;
-        }
-        snapshot.file_count += 1;
-        let Ok(modified) = metadata.modified() else {
-            continue;
-        };
-        files.push((modified, entry.path(), metadata.len()));
-    }
+    collect_backup_files(entries, &mut snapshot.file_count, &mut files);
     files.sort_by(|left, right| right.0.cmp(&left.0));
     snapshot.files = files
         .into_iter()
@@ -283,6 +271,33 @@ fn scan_backup_directory(now: OffsetDateTime) -> AdminServerMonitorBackups {
         .collect();
     snapshot.latest = snapshot.files.first().cloned();
     snapshot
+}
+
+fn collect_backup_files(
+    entries: fs::ReadDir,
+    file_count: &mut usize,
+    files: &mut Vec<(SystemTime, PathBuf, u64)>,
+) {
+    for entry in entries.flatten() {
+        let path = entry.path();
+        let Ok(metadata) = entry.metadata() else {
+            continue;
+        };
+        if metadata.is_dir() {
+            if let Ok(child_entries) = fs::read_dir(path) {
+                collect_backup_files(child_entries, file_count, files);
+            }
+            continue;
+        }
+        if !metadata.is_file() {
+            continue;
+        }
+        *file_count += 1;
+        let Ok(modified) = metadata.modified() else {
+            continue;
+        };
+        files.push((modified, path, metadata.len()));
+    }
 }
 
 fn backup_file_snapshot(
