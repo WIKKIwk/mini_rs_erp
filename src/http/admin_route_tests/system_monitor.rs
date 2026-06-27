@@ -36,6 +36,8 @@ async fn admin_system_monitor_reports_server_and_backup_state() {
     std::fs::create_dir_all(&nested_dir).expect("nested backup dir");
     let backup_file = nested_dir.join("mini_rs_erp_20260624_180448.dump");
     std::fs::write(&backup_file, b"backup-bytes").expect("write backup");
+    std::fs::write(nested_dir.join(".env.deploy"), b"not-db-backup").expect("write env backup");
+    std::fs::write(nested_dir.join("mini_rs_erp"), b"not-db-backup").expect("write binary backup");
     let _guard = EnvVarGuard::set("MINI_ERP_BACKUP_DIR", backup_dir.path());
     let _disk_guard = EnvVarGuard::set("MINI_ERP_DISK_MONITOR_PATH", backup_dir.path());
     let state = test_state();
