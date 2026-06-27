@@ -33,16 +33,6 @@ impl ProductionMapService {
             }
         }
 
-        let mut order_ids = known_orders.clone();
-        for states in queue_states.values() {
-            order_ids.extend(
-                states
-                    .keys()
-                    .map(|id| id.trim().to_string())
-                    .filter(|id| !id.is_empty()),
-            );
-        }
-
         for batch in self.store.progress_batches_for_audit().await? {
             batches_by_id.insert(batch.batch_id.trim().to_string(), batch);
         }
