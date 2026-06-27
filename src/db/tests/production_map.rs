@@ -2,9 +2,10 @@ use std::collections::BTreeMap;
 use std::sync::Arc;
 
 use crate::core::production_map::{
-    OrderProgressBatch, OrderProgressBatchStatus, OrderProgressBatchWipStatus,
-    ProductionMapDefinition, ProductionMapEdge, ProductionMapError, ProductionMapNode,
-    ProductionMapNodeKind, ProductionMapService, ProductionMapStorePort, queue_state,
+    OrderProgressBatch, OrderProgressBatchStatus, OrderProgressBatchStatusDetail,
+    OrderProgressBatchWipStatus, ProductionMapDefinition, ProductionMapEdge, ProductionMapError,
+    ProductionMapNode, ProductionMapNodeKind, ProductionMapService, ProductionMapStorePort,
+    queue_state,
 };
 use crate::db::postgres::apply_foundation_migration;
 use crate::db::postgres_production_map::PostgresProductionMapStore;
@@ -390,6 +391,7 @@ fn wip_batch(current_apparatus: &str) -> OrderProgressBatch {
         worker_ref: "worker-wip-suffix".to_string(),
         worker_display_name: "Worker WIP".to_string(),
         wip_status: OrderProgressBatchWipStatus::Waiting,
+        status_detail: OrderProgressBatchStatusDetail::default(),
         current_apparatus: current_apparatus.to_string(),
         current_apparatus_key: queue_state::apparatus_search_key(current_apparatus),
         current_location: current_apparatus.to_string(),

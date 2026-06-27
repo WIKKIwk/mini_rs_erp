@@ -2,8 +2,8 @@ use sqlx::{PgPool, Postgres, Transaction};
 
 use crate::core::production_map::{
     FinishedGoodsStockEntry, OrderProgressBatch, OrderProgressBatchStatus,
-    OrderProgressBatchWipStatus, OrderProgressEvent, OrderRunSession, OrderRunStatus,
-    ProductionMapError, ProductionOrderLogEntry, queue_state,
+    OrderProgressBatchStatusDetail, OrderProgressBatchWipStatus, OrderProgressEvent,
+    OrderRunSession, OrderRunStatus, ProductionMapError, ProductionOrderLogEntry, queue_state,
 };
 
 use super::queue_helpers::{queue_action_as_str, queue_action_from_str};
@@ -439,7 +439,7 @@ pub(super) fn progress_batch_from_row(
     } else {
         row.current_apparatus_key
     };
-    Ok(OrderProgressBatch {
+    let mut batch = OrderProgressBatch {
         batch_id: row.batch_id,
         session_id: row.session_id,
         apparatus: row.apparatus,
@@ -458,6 +458,7 @@ pub(super) fn progress_batch_from_row(
         worker_display_name: row.worker_display_name,
         wip_status: OrderProgressBatchWipStatus::parse(&row.wip_status)
             .ok_or(ProductionMapError::StoreFailed)?,
+        status_detail: OrderProgressBatchStatusDetail::default(),
         current_apparatus: row.current_apparatus,
         current_apparatus_key,
         current_location: row.current_location,
@@ -478,5 +479,7 @@ pub(super) fn progress_batch_from_row(
         finished_goods_meter: row.finished_goods_meter,
         description: row.description,
         payload_json: row.payload_json,
-    })
+    };
+    batch.refresh_status_detail();
+    Ok(batch)
 }

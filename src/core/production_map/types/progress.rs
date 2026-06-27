@@ -86,6 +86,15 @@ impl OrderProgressBatchWipStatus {
     }
 }
 
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct OrderProgressBatchStatusDetail {
+    pub work_status: String,
+    pub wip_status: String,
+    pub flow_status: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub stock_status: String,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct OrderRunSession {
     pub session_id: String,
@@ -157,6 +166,8 @@ pub struct OrderProgressBatch {
     pub worker_ref: String,
     pub worker_display_name: String,
     pub wip_status: OrderProgressBatchWipStatus,
+    #[serde(default)]
+    pub status_detail: OrderProgressBatchStatusDetail,
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub current_apparatus: String,
     #[serde(default, skip_serializing_if = "String::is_empty")]
@@ -196,6 +207,54 @@ pub struct OrderProgressBatch {
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub description: String,
     pub payload_json: serde_json::Value,
+}
+
+impl OrderProgressBatch {
+    pub fn refresh_status_detail(&mut self) {
+        self.status_detail = OrderProgressBatchStatusDetail::from_batch(self);
+    }
+}
+
+impl OrderProgressBatchStatusDetail {
+    pub fn from_batch(batch: &OrderProgressBatch) -> Self {
+        let work_status = match batch.status {
+            OrderProgressBatchStatus::Paused => "paused",
+            OrderProgressBatchStatus::Resumed => "in_progress",
+            OrderProgressBatchStatus::Completed => "completed",
+        }
+        .to_string();
+        let wip_status = batch.wip_status.as_str().to_string();
+        let processed_by = batch.processed_by_apparatus.trim();
+        let is_final_output = batch.action == queue_state::ApparatusQueueAction::Complete
+            && batch.status == OrderProgressBatchStatus::Completed
+            && batch.next_apparatus.trim().is_empty();
+        let flow_status = match batch.wip_status {
+            OrderProgressBatchWipStatus::Waiting if is_final_output => {
+                "finished_pending_acceptance"
+            }
+            OrderProgressBatchWipStatus::Waiting => "waiting_next_stage",
+            OrderProgressBatchWipStatus::InUse => "in_progress",
+            OrderProgressBatchWipStatus::Processed
+                if processed_by.to_ascii_lowercase().starts_with("warehouse:") =>
+            {
+                "accepted_to_stock"
+            }
+            OrderProgressBatchWipStatus::Processed => "consumed_by_next_stage",
+        }
+        .to_string();
+        let stock_status = match flow_status.as_str() {
+            "finished_pending_acceptance" => "pending_acceptance",
+            "accepted_to_stock" => "accepted",
+            _ => "",
+        }
+        .to_string();
+        Self {
+            work_status,
+            wip_status,
+            flow_status,
+            stock_status,
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

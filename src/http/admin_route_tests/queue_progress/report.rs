@@ -191,8 +191,24 @@ async fn progress_qr_report_marks_processed_qr_as_stale_and_returns_order_flow()
     assert_eq!(report_body["scanned_batch"]["qr_payload"], old_qr_payload);
     assert_eq!(report_body["scanned_batch"]["wip_status"], "processed");
     assert_eq!(
+        report_body["scanned_batch"]["status_detail"]["flow_status"],
+        "consumed_by_next_stage"
+    );
+    assert_eq!(
         report_body["current_batch"]["qr_payload"],
         latest_qr_payload
+    );
+    assert_eq!(
+        report_body["current_batch"]["status_detail"]["work_status"],
+        "completed"
+    );
+    assert_eq!(
+        report_body["current_batch"]["status_detail"]["flow_status"],
+        "finished_pending_acceptance"
+    );
+    assert_eq!(
+        report_body["current_batch"]["status_detail"]["stock_status"],
+        "pending_acceptance"
     );
     assert_eq!(report_body["is_stale"], true);
     assert_eq!(report_body["stale_reason"], "processed_by_next_stage");

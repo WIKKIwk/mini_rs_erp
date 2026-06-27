@@ -810,11 +810,18 @@ async fn downstream_output_processes_input_batch_and_links_new_wip_batch() {
         .expect("processed first batch");
     assert_eq!(input.payload_json["wip_status"], "processed");
     assert_eq!(input.payload_json["processed_by_apparatus"], second);
+    assert_eq!(input.status_detail.flow_status, "consumed_by_next_stage");
 
     let output = completed.progress_batch.expect("second output batch");
     assert_eq!(output.payload_json["wip_status"], "waiting");
     assert_eq!(output.payload_json["parent_batch_id"], first_batch.batch_id);
     assert_eq!(output.payload_json["from_apparatus"], second);
+    assert_eq!(output.status_detail.work_status, "completed");
+    assert_eq!(
+        output.status_detail.flow_status,
+        "finished_pending_acceptance"
+    );
+    assert_eq!(output.status_detail.stock_status, "pending_acceptance");
 }
 
 #[tokio::test]
@@ -944,8 +951,9 @@ async fn downstream_complete_keeps_order_open_until_all_input_wips_processed() {
             .progress_batch_for_qr("", &second_pause.qr_payload)
             .await
             .expect("second wip still waiting")
-            .wip_status,
-        OrderProgressBatchWipStatus::Waiting
+            .status_detail
+            .flow_status,
+        "waiting_next_stage"
     );
 
     service
@@ -985,6 +993,18 @@ async fn downstream_complete_keeps_order_open_until_all_input_wips_processed() {
     assert_eq!(
         final_complete.states.get(order_id),
         Some(&"completed".to_string())
+    );
+    let final_output = final_complete
+        .progress_batch
+        .expect("final output batch has status detail");
+    assert_eq!(final_output.status_detail.work_status, "completed");
+    assert_eq!(
+        final_output.status_detail.flow_status,
+        "finished_pending_acceptance"
+    );
+    assert_eq!(
+        final_output.status_detail.stock_status,
+        "pending_acceptance"
     );
 }
 
@@ -1329,6 +1349,7 @@ fn test_progress_batch(
         worker_ref: "worker".to_string(),
         worker_display_name: "Worker".to_string(),
         wip_status,
+        status_detail: OrderProgressBatchStatusDetail::default(),
         current_apparatus: apparatus.to_string(),
         current_apparatus_key: queue_state::apparatus_search_key(apparatus),
         current_location: apparatus.to_string(),

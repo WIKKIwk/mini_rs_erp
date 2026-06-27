@@ -218,6 +218,14 @@ async fn finished_goods_requires_warehouse_receipt_before_stock() {
         completed_body["progress_batch"]["wip_status"], "waiting",
         "final output must wait for warehouse receipt"
     );
+    assert_eq!(
+        completed_body["progress_batch"]["status_detail"]["flow_status"],
+        "finished_pending_acceptance"
+    );
+    assert_eq!(
+        completed_body["progress_batch"]["status_detail"]["stock_status"],
+        "pending_acceptance"
+    );
 
     let waiting = router
         .clone()
@@ -264,6 +272,14 @@ async fn finished_goods_requires_warehouse_receipt_before_stock() {
         "warehouse-keeper-1"
     );
     assert_eq!(received_body["batch"]["wip_status"], "processed");
+    assert_eq!(
+        received_body["batch"]["status_detail"]["flow_status"],
+        "accepted_to_stock"
+    );
+    assert_eq!(
+        received_body["batch"]["status_detail"]["stock_status"],
+        "accepted"
+    );
     assert_eq!(
         received_body["batch"]["payload_json"]["received_warehouse"],
         "Tayyor mahsulot ombori"

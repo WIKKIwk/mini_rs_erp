@@ -257,6 +257,8 @@ impl ProductionMapService {
             serde_json::json!(actor.display_name.trim());
         batch.payload_json["received_at_unix"] = serde_json::json!(now);
         batch.payload_json["finished_goods_stock_id"] = serde_json::json!(stock.id);
+        batch.refresh_status_detail();
+        batch.payload_json["status_detail"] = serde_json::json!(batch.status_detail);
         batch.payload_json["wip_status"] = serde_json::json!(batch.wip_status.as_str());
         batch.payload_json["current_location"] = serde_json::json!(batch.current_location);
         batch.payload_json["processed_by_session_id"] =
@@ -329,6 +331,9 @@ impl ProductionMapService {
                     }
                 }
             }
+        }
+        for batch in &mut batches {
+            batch.refresh_status_detail();
         }
         Ok(batches)
     }
