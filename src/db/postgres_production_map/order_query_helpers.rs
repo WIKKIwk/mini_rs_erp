@@ -348,6 +348,38 @@ pub(super) async fn load_progress_batches_for_order(
     rows.into_iter().map(progress_batch_from_row).collect()
 }
 
+pub(super) async fn load_progress_batches_for_audit(
+    pool: &PgPool,
+) -> Result<Vec<OrderProgressBatch>, ProductionMapError> {
+    let rows = sqlx::query_as::<_, ProgressBatchRow>(
+        "SELECT batch_id, session_id, apparatus, order_id, action, status,
+                produced_qty::float8 AS produced_qty, uom, qr_payload,
+                label_item_code, label_item_name, executor_name,
+                worker_role, worker_ref, worker_display_name,
+                wip_status, current_apparatus, current_apparatus_key, current_location,
+                next_apparatus, parent_batch_id, used_by_session_id,
+                used_by_apparatus, processed_by_session_id,
+                processed_by_apparatus,
+                return_ink_kg::float8 AS return_ink_kg,
+                lamination_print_leftover_rolls::float8 AS lamination_print_leftover_rolls,
+                lamination_film_leftover_rolls::float8 AS lamination_film_leftover_rolls,
+                rezka_bosma_waste::float8 AS rezka_bosma_waste,
+                rezka_lamination_waste::float8 AS rezka_lamination_waste,
+                rezka_edge_waste::float8 AS rezka_edge_waste,
+                total_waste::float8 AS total_waste,
+                finished_goods_kg::float8 AS finished_goods_kg,
+                finished_goods_meter::float8 AS finished_goods_meter,
+                description,
+                payload_json
+         FROM mini_progress_batches
+         ORDER BY updated_at DESC, created_at DESC, batch_id DESC",
+    )
+    .fetch_all(pool)
+    .await
+    .map_err(|_| ProductionMapError::StoreFailed)?;
+    rows.into_iter().map(progress_batch_from_row).collect()
+}
+
 pub(super) async fn load_progress_batch_by_qr(
     pool: &PgPool,
     qr_payload: &str,

@@ -157,6 +157,12 @@ pub trait ProductionMapStorePort: Send + Sync {
     ) -> Result<Vec<OrderProgressBatch>, ProductionMapError> {
         Ok(Vec::new())
     }
+    async fn progress_batches_for_audit(
+        &self,
+    ) -> Result<Vec<OrderProgressBatch>, ProductionMapError> {
+        self.wip_progress_batches("", "", "", None, true, "", 10_000)
+            .await
+    }
     async fn wip_progress_batches(
         &self,
         _apparatus: &str,

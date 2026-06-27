@@ -250,6 +250,18 @@ impl ProductionMapStorePort for MemoryProductionMapStore {
         runs::progress_batches_for_order(self, order_id).await
     }
 
+    async fn progress_batches_for_audit(
+        &self,
+    ) -> Result<Vec<OrderProgressBatch>, ProductionMapError> {
+        Ok(self
+            .order_progress_batches
+            .read()
+            .await
+            .values()
+            .cloned()
+            .collect())
+    }
+
     async fn wip_progress_batches(
         &self,
         apparatus: &str,

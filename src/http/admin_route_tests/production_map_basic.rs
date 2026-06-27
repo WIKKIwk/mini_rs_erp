@@ -1,6 +1,27 @@
 use super::*;
 
 #[tokio::test]
+async fn production_map_audit_route_returns_report() {
+    let state = test_state();
+    let token = session(&state, PrincipalRole::Admin).await;
+
+    let response = build_router(state)
+        .oneshot(request(
+            "GET",
+            "/v1/mobile/admin/production-maps/audit",
+            &token,
+        ))
+        .await
+        .expect("response");
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let value = json_body(response).await;
+    assert_eq!(value["ok"], true);
+    assert_eq!(value["checked_order_count"], 0);
+    assert_eq!(value["violations"].as_array().expect("violations").len(), 0);
+}
+
+#[tokio::test]
 async fn admin_production_maps_save_compiles_program() {
     let state = test_state();
     let token = session(&state, PrincipalRole::Admin).await;
