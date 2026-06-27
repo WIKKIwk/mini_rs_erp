@@ -325,10 +325,16 @@ pub async fn production_map_completion_request_decision(
             }
         }
     }
+    let order_status = state
+        .production_maps
+        .order_status_detail(&result.decision.order_id)
+        .await
+        .map_err(production_map_error)?;
     Ok(json_response(serde_json::json!({
         "ok": true,
         "states": result.states,
         "decision": result.decision,
+        "order_status": order_status,
     })))
 }
 
