@@ -32,7 +32,9 @@ impl Drop for EnvVarGuard {
 #[tokio::test]
 async fn admin_system_monitor_reports_server_and_backup_state() {
     let backup_dir = tempfile::tempdir().expect("backup dir");
-    let backup_file = backup_dir.path().join("mini_rs_erp_20260624_180448.dump");
+    let nested_dir = backup_dir.path().join("20260624_180448");
+    std::fs::create_dir_all(&nested_dir).expect("nested backup dir");
+    let backup_file = nested_dir.join("mini_rs_erp_20260624_180448.dump");
     std::fs::write(&backup_file, b"backup-bytes").expect("write backup");
     let _guard = EnvVarGuard::set("MINI_ERP_BACKUP_DIR", backup_dir.path());
     let _disk_guard = EnvVarGuard::set("MINI_ERP_DISK_MONITOR_PATH", backup_dir.path());
