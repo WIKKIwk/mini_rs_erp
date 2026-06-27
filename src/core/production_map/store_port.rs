@@ -131,6 +131,11 @@ pub trait ProductionMapStorePort: Send + Sync {
     ) -> Result<Vec<OrderRunSession>, ProductionMapError> {
         Ok(Vec::new())
     }
+    async fn order_run_sessions_for_audit(
+        &self,
+    ) -> Result<Vec<OrderRunSession>, ProductionMapError> {
+        Ok(Vec::new())
+    }
     async fn progress_batch(
         &self,
         _batch_id: &str,

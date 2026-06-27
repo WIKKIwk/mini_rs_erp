@@ -228,6 +228,24 @@ pub(super) async fn load_order_run_sessions_for_order(
     rows.into_iter().map(progress_session_from_row).collect()
 }
 
+pub(super) async fn load_order_run_sessions_for_audit(
+    pool: &PgPool,
+) -> Result<Vec<OrderRunSession>, ProductionMapError> {
+    let rows = sqlx::query_as::<_, ProgressSessionRow>(
+        "SELECT session_id, apparatus, order_id, status,
+                worker_role, worker_ref, worker_display_name,
+                EXTRACT(EPOCH FROM started_at)::bigint AS started_at_unix,
+                EXTRACT(EPOCH FROM updated_at)::bigint AS updated_at_unix,
+                payload_json
+         FROM mini_order_run_sessions
+         ORDER BY started_at ASC, session_id ASC",
+    )
+    .fetch_all(pool)
+    .await
+    .map_err(|_| ProductionMapError::StoreFailed)?;
+    rows.into_iter().map(progress_session_from_row).collect()
+}
+
 pub(super) async fn load_progress_batch(
     pool: &PgPool,
     batch_id: &str,

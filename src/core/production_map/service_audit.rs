@@ -62,30 +62,27 @@ impl ProductionMapService {
             }
         }
 
-        for order_id in &order_ids {
-            let sessions = self.store.order_run_sessions_for_order(order_id).await?;
-            checked_session_count += sessions.len();
-            for session in sessions {
-                if !known_orders.contains(session.order_id.trim()) {
-                    violations.push(ProductionWorkflowAuditViolation::new(
-                        "unknown_order_run_session",
-                        &session.order_id,
-                        &session.session_id,
-                        "run session references an order that is not present in production maps",
-                    ));
-                }
-                if matches!(
-                    session.status,
-                    OrderRunStatus::Active | OrderRunStatus::Paused
-                ) {
-                    active_sessions
-                        .entry((
-                            session.apparatus.trim().to_ascii_lowercase(),
-                            session.order_id.trim().to_string(),
-                        ))
-                        .or_default()
-                        .push(session.session_id.trim().to_string());
-                }
+        for session in self.store.order_run_sessions_for_audit().await? {
+            checked_session_count += 1;
+            if !known_orders.contains(session.order_id.trim()) {
+                violations.push(ProductionWorkflowAuditViolation::new(
+                    "unknown_order_run_session",
+                    &session.order_id,
+                    &session.session_id,
+                    "run session references an order that is not present in production maps",
+                ));
+            }
+            if matches!(
+                session.status,
+                OrderRunStatus::Active | OrderRunStatus::Paused
+            ) {
+                active_sessions
+                    .entry((
+                        session.apparatus.trim().to_ascii_lowercase(),
+                        session.order_id.trim().to_string(),
+                    ))
+                    .or_default()
+                    .push(session.session_id.trim().to_string());
             }
         }
 
