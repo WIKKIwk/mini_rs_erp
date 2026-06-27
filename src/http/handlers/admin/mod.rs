@@ -11,7 +11,7 @@ pub use customers::{
     customer_list, customer_phone, customer_remove, customers, item_group_tree, item_groups, items,
 };
 pub use production_maps::{
-    production_map_closed_orders, production_map_completed_orders,
+    production_map_audit, production_map_closed_orders, production_map_completed_orders,
     production_map_completion_request_decision, production_map_completion_request_decisions,
     production_map_completion_requests, production_map_finished_goods_receive, production_map_live,
     production_map_move, production_map_move_batch, production_map_progress_qr_history,

@@ -33,6 +33,10 @@ pub(super) fn routes() -> Router<AppState> {
             any(admin::production_map_run),
         )
         .route(
+            "/v1/mobile/admin/production-maps/audit",
+            get(admin::production_map_audit),
+        )
+        .route(
             "/v1/mobile/admin/production-maps/with-order",
             any(admin::production_map_save_with_order),
         )

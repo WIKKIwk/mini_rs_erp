@@ -39,6 +39,28 @@ pub use self::raw_materials::{
 };
 pub use self::wip::{production_map_finished_goods_receive, production_map_wip_batches};
 
+pub async fn production_map_audit(
+    State(state): State<AppState>,
+    method: Method,
+    headers: HeaderMap,
+) -> Result<Response, AdminError> {
+    authorize_any_capability(
+        &state,
+        &headers,
+        &[Capability::AdminAccess, Capability::ProductionMapManage],
+    )
+    .await?;
+    if method != Method::GET {
+        return Err(method_not_allowed());
+    }
+    let report = state
+        .production_maps
+        .audit_production_workflow()
+        .await
+        .map_err(production_map_error)?;
+    Ok(json_response(report))
+}
+
 pub async fn production_maps(
     State(state): State<AppState>,
     Query(query): Query<ProductionMapsQuery>,

@@ -10,6 +10,7 @@ pub mod pechat;
 mod progress;
 pub mod queue_state;
 mod service;
+mod service_audit;
 mod service_completion;
 mod service_maps;
 mod service_progress;
