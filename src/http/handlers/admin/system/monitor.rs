@@ -6,6 +6,7 @@ use crate::core::admin::models::{
 use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
 use std::fs;
 use std::path::PathBuf;
+use std::process::Command;
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 use time::OffsetDateTime;
 use tokio::time::{Duration, timeout};
@@ -269,6 +270,7 @@ fn scan_backup_directory(now: OffsetDateTime) -> AdminServerMonitorBackups {
 
 fn runtime_snapshot() -> AdminServerMonitorRuntime {
     let (memory_used_mb, memory_total_mb, memory_percent) = memory_snapshot();
+    let disk = disk_snapshot();
     let load_average = load_average_snapshot();
     let cpu_percent = cpu_pressure_percent(load_average);
     AdminServerMonitorRuntime {
@@ -276,9 +278,22 @@ fn runtime_snapshot() -> AdminServerMonitorRuntime {
         memory_percent,
         memory_used_mb,
         memory_total_mb,
+        disk_path: disk.path,
+        disk_percent: disk.percent,
+        disk_used_mb: disk.used_mb,
+        disk_total_mb: disk.total_mb,
+        disk_available_mb: disk.available_mb,
         load_average,
         sample_seconds: LIVE_SNAPSHOT_INTERVAL.as_secs().min(i64::MAX as u64) as i64,
     }
+}
+
+struct DiskSnapshot {
+    path: String,
+    percent: i64,
+    used_mb: i64,
+    total_mb: i64,
+    available_mb: i64,
 }
 
 fn memory_snapshot() -> (i64, i64, i64) {
@@ -326,6 +341,71 @@ fn cpu_pressure_percent(load_average: f64) -> i64 {
         .unwrap_or(1)
         .max(1) as f64;
     ((load_average / cores) * 100.0).round().clamp(0.0, 100.0) as i64
+}
+
+fn disk_snapshot() -> DiskSnapshot {
+    let path = disk_monitor_path();
+    let display_path = path.display().to_string();
+    let Ok(output) = Command::new("df").arg("-Pk").arg(&path).output() else {
+        return empty_disk_snapshot(display_path);
+    };
+    if !output.status.success() {
+        return empty_disk_snapshot(display_path);
+    }
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let Some(line) = stdout.lines().nth(1) else {
+        return empty_disk_snapshot(display_path);
+    };
+    parse_df_line(&display_path, line).unwrap_or_else(|| empty_disk_snapshot(display_path))
+}
+
+fn disk_monitor_path() -> PathBuf {
+    std::env::var("MINI_ERP_DISK_MONITOR_PATH")
+        .ok()
+        .map(PathBuf::from)
+        .filter(|path| !path.as_os_str().is_empty())
+        .or_else(|| std::env::current_dir().ok())
+        .unwrap_or_else(|| PathBuf::from("."))
+}
+
+fn parse_df_line(path: &str, line: &str) -> Option<DiskSnapshot> {
+    let fields = line.split_whitespace().collect::<Vec<_>>();
+    if fields.len() < 5 {
+        return None;
+    }
+    let total_kb = fields.get(1)?.parse::<i64>().ok()?.max(0);
+    let used_kb = fields.get(2)?.parse::<i64>().ok()?.max(0);
+    let available_kb = fields.get(3)?.parse::<i64>().ok()?.max(0);
+    let percent = fields
+        .get(4)?
+        .trim_end_matches('%')
+        .parse::<i64>()
+        .ok()
+        .unwrap_or_else(|| {
+            if total_kb <= 0 {
+                0
+            } else {
+                ((used_kb as f64 / total_kb as f64) * 100.0).round() as i64
+            }
+        })
+        .clamp(0, 100);
+    Some(DiskSnapshot {
+        path: path.to_string(),
+        percent,
+        used_mb: used_kb / 1024,
+        total_mb: total_kb / 1024,
+        available_mb: available_kb / 1024,
+    })
+}
+
+fn empty_disk_snapshot(path: String) -> DiskSnapshot {
+    DiskSnapshot {
+        path,
+        percent: 0,
+        used_mb: 0,
+        total_mb: 0,
+        available_mb: 0,
+    }
 }
 
 fn backup_directory() -> PathBuf {
