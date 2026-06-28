@@ -54,6 +54,28 @@ struct AdminCatalogOverlay {
 
 struct AdminCatalogUnavailable;
 
+impl AdminCatalogOverlay {
+    async fn sync_item_to_admin_store(&self, item: &SupplierItem) -> Result<(), AdminPortError> {
+        self.admin_store
+            .create_item(&item.code, &item.name, &item.uom, &item.item_group)
+            .await?;
+        Ok(())
+    }
+
+    async fn ensure_assignment_item(&self, item_code: &str) -> Result<(), AdminPortError> {
+        let item_code = item_code.trim();
+        let items = self
+            .catalog
+            .items_by_codes(&[item_code.to_string()])
+            .await?;
+        let item = items
+            .iter()
+            .find(|item| item.code.trim().eq_ignore_ascii_case(item_code))
+            .ok_or(AdminPortError::NotFound)?;
+        self.sync_item_to_admin_store(item).await
+    }
+}
+
 #[async_trait]
 impl AdminReadPort for AdminCatalogOverlay {
     async fn suppliers_page(
@@ -168,6 +190,7 @@ impl AdminWritePort for AdminCatalogOverlay {
         ref_: &str,
         item_code: &str,
     ) -> Result<(), AdminPortError> {
+        self.ensure_assignment_item(item_code).await?;
         self.admin_store.assign_supplier_item(ref_, item_code).await
     }
 
@@ -202,6 +225,7 @@ impl AdminWritePort for AdminCatalogOverlay {
         ref_: &str,
         item_code: &str,
     ) -> Result<(), AdminPortError> {
+        self.ensure_assignment_item(item_code).await?;
         self.admin_store.assign_customer_item(ref_, item_code).await
     }
 
@@ -222,7 +246,12 @@ impl AdminWritePort for AdminCatalogOverlay {
         uom: &str,
         item_group: &str,
     ) -> Result<SupplierItem, AdminPortError> {
-        self.catalog.create_item(code, name, uom, item_group).await
+        let item = self
+            .catalog
+            .create_item(code, name, uom, item_group)
+            .await?;
+        self.sync_item_to_admin_store(&item).await?;
+        Ok(item)
     }
 
     async fn create_item_group(
@@ -231,7 +260,14 @@ impl AdminWritePort for AdminCatalogOverlay {
         parent: &str,
         is_group: bool,
     ) -> Result<AdminItemGroup, AdminPortError> {
-        self.catalog.create_item_group(name, parent, is_group).await
+        let group = self
+            .catalog
+            .create_item_group(name, parent, is_group)
+            .await?;
+        self.admin_store
+            .create_item_group(&group.name, &group.parent_item_group, group.is_group)
+            .await?;
+        Ok(group)
     }
 
     async fn move_item_group_parent(
