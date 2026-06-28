@@ -3,6 +3,8 @@ mod models;
 pub(crate) mod normalize;
 mod ports;
 mod service;
+#[cfg(test)]
+mod service_tests;
 
 pub use memory_store::MemoryQolipStore;
 pub use models::{

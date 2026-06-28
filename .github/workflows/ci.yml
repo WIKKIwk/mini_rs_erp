@@ -34,7 +34,7 @@ jobs:
 
       - name: Enforce production file size
         run: |
-          oversized="$(find src -type f -name '*.rs' ! -path '*/tests/*' ! -path 'src/bin/*_bench.rs' ! -name '*test*' -exec wc -l {} + | awk '$2 != "total" && $1 > 500 { print $1 " " $2 }')"
+          oversized="$(find src -type f -name '*.rs' ! -path '*/tests/*' ! -path '*_tests/*' ! -path 'src/bin/*_bench.rs' ! -name '*test*' -exec wc -l {} + | awk '$2 != "total" && $1 > 500 { print $1 " " $2 }')"
           if [ -n "$oversized" ]; then
             printf 'Production Rust files over 500 lines:\n%s\n' "$oversized"
             exit 1
