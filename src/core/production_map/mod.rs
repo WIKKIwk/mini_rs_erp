@@ -3,7 +3,9 @@ pub mod chain;
 mod compiler;
 mod errors;
 mod formula;
+mod formula_parser;
 pub mod materials;
+mod materials_support;
 #[cfg(test)]
 mod memory_store;
 pub mod pechat;
@@ -14,7 +16,9 @@ mod service_audit;
 mod service_completion;
 mod service_maps;
 mod service_progress;
+mod service_progress_support;
 mod service_queue;
+mod service_queue_support;
 mod store_port;
 mod types;
 

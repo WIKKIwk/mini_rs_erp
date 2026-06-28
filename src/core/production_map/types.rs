@@ -2,6 +2,7 @@ mod audit;
 mod completion;
 mod definition;
 mod progress;
+mod progress_status;
 mod queue;
 
 pub use super::errors::ProductionMapError;
