@@ -26,11 +26,10 @@ impl NormalizedRezkaSplit {
                 "source_is_invalid".to_string(),
             ));
         }
-        if request
+        if !request
             .source_barcode
             .trim()
             .eq_ignore_ascii_case(&source.barcode)
-            == false
         {
             return Err(RezkaServiceError::InvalidInput(
                 "source_barcode_mismatch".to_string(),

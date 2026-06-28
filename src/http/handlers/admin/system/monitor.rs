@@ -100,10 +100,10 @@ async fn system_monitor_live_socket(state: AppState, mut socket: WebSocket) {
     let mut heartbeat = tokio::time::interval(LIVE_HEARTBEAT_INTERVAL);
 
     let initial_report = { snapshots.borrow().clone() };
-    if let Some(report) = initial_report {
-        if !send_system_monitor_snapshot(&mut socket, report).await {
-            return;
-        }
+    if let Some(report) = initial_report
+        && !send_system_monitor_snapshot(&mut socket, report).await
+    {
+        return;
     }
 
     loop {
@@ -111,10 +111,9 @@ async fn system_monitor_live_socket(state: AppState, mut socket: WebSocket) {
             inbound = socket.recv() => {
                 match inbound {
                     Some(Ok(Message::Text(text))) => {
-                        if let Some(pong) = system_monitor_pong_text(&text) {
-                            if !send_system_monitor_message(&mut socket, Message::Text(pong.into())).await {
-                                break;
-                            }
+                        if let Some(pong) = system_monitor_pong_text(&text)
+                            && !send_system_monitor_message(&mut socket, Message::Text(pong.into())).await {
+                            break;
                         }
                     }
                     Some(Ok(Message::Close(_))) | None => break,
@@ -130,10 +129,9 @@ async fn system_monitor_live_socket(state: AppState, mut socket: WebSocket) {
                     break;
                 }
                 let report = { snapshots.borrow().clone() };
-                if let Some(report) = report {
-                    if !send_system_monitor_snapshot(&mut socket, report).await {
-                        break;
-                    }
+                if let Some(report) = report
+                    && !send_system_monitor_snapshot(&mut socket, report).await {
+                    break;
                 }
             }
             _ = heartbeat.tick() => {
@@ -264,7 +262,7 @@ fn scan_backup_directory(now: OffsetDateTime) -> AdminServerMonitorBackups {
     };
     let mut files: Vec<(SystemTime, PathBuf, u64)> = Vec::new();
     collect_backup_files(entries, &mut snapshot.file_count, &mut files);
-    files.sort_by(|left, right| right.0.cmp(&left.0));
+    files.sort_by_key(|file| std::cmp::Reverse(file.0));
     snapshot.files = files
         .into_iter()
         .map(|(modified, path, size_bytes)| backup_file_snapshot(now, modified, path, size_bytes))

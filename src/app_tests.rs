@@ -1,5 +1,4 @@
 use std::path::{Path, PathBuf};
-use std::sync::Mutex;
 
 use super::app_local_store::{LocalStoreBackend, derive_lmdb_path, local_store_backend_from};
 use crate::config::AppConfig;
@@ -14,7 +13,7 @@ use crate::core::push::ports::PushServiceError;
 use crate::core::rps_batch::{RpsBatchServiceError, RpsBatchStartRequest};
 use crate::db::postgres::apply_foundation_migration;
 
-static MINI_ENGINE_ENV_LOCK: Mutex<()> = Mutex::new(());
+static MINI_ENGINE_ENV_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 
 #[test]
 fn local_store_backend_defaults_to_lmdb_for_production() {
@@ -60,7 +59,7 @@ fn lmdb_path_defaults_next_to_legacy_json_path() {
 
 #[tokio::test]
 async fn app_state_leaves_mini_engine_disabled_without_database_url() {
-    let _guard = MINI_ENGINE_ENV_LOCK.lock().expect("env lock");
+    let _guard = MINI_ENGINE_ENV_LOCK.lock().await;
     unsafe {
         std::env::remove_var("MINI_ERP_DATABASE_URL");
     }
@@ -72,7 +71,7 @@ async fn app_state_leaves_mini_engine_disabled_without_database_url() {
 
 #[tokio::test]
 async fn app_state_does_not_fallback_production_maps_to_sqlite_without_database_url() {
-    let _guard = MINI_ENGINE_ENV_LOCK.lock().expect("env lock");
+    let _guard = MINI_ENGINE_ENV_LOCK.lock().await;
     unsafe {
         std::env::remove_var("MINI_ERP_DATABASE_URL");
     }
@@ -85,7 +84,7 @@ async fn app_state_does_not_fallback_production_maps_to_sqlite_without_database_
 
 #[tokio::test]
 async fn app_state_builds_lazy_mini_engine_when_database_url_is_configured() {
-    let _guard = MINI_ENGINE_ENV_LOCK.lock().expect("env lock");
+    let _guard = MINI_ENGINE_ENV_LOCK.lock().await;
     unsafe {
         std::env::set_var(
             "MINI_ERP_DATABASE_URL",
@@ -105,7 +104,7 @@ async fn app_state_builds_lazy_mini_engine_when_database_url_is_configured() {
 #[tokio::test]
 #[ignore = "requires local PostgreSQL and creates/drops mini_rs_erp_test_app_apparatus_groups"]
 async fn app_state_routes_apparatus_groups_to_postgres_when_database_url_is_configured() {
-    let _guard = MINI_ENGINE_ENV_LOCK.lock().expect("env lock");
+    let _guard = MINI_ENGINE_ENV_LOCK.lock().await;
     let admin_url = std::env::var("MINI_ERP_TEST_ADMIN_DATABASE_URL")
         .unwrap_or_else(|_| "postgres://wikki@127.0.0.1:5432/postgres".to_string());
     let db_name = "mini_rs_erp_test_app_apparatus_groups";
@@ -165,7 +164,7 @@ async fn app_state_routes_apparatus_groups_to_postgres_when_database_url_is_conf
 
 #[tokio::test]
 async fn app_state_uses_postgres_calculate_orders_when_database_url_is_configured() {
-    let _guard = MINI_ENGINE_ENV_LOCK.lock().expect("env lock");
+    let _guard = MINI_ENGINE_ENV_LOCK.lock().await;
     unsafe {
         std::env::set_var(
             "MINI_ERP_DATABASE_URL",
@@ -190,7 +189,7 @@ async fn app_state_uses_postgres_calculate_orders_when_database_url_is_configure
 
 #[tokio::test]
 async fn app_state_uses_postgres_production_maps_when_database_url_is_configured() {
-    let _guard = MINI_ENGINE_ENV_LOCK.lock().expect("env lock");
+    let _guard = MINI_ENGINE_ENV_LOCK.lock().await;
     unsafe {
         std::env::set_var(
             "MINI_ERP_DATABASE_URL",
@@ -215,7 +214,7 @@ async fn app_state_uses_postgres_production_maps_when_database_url_is_configured
 
 #[tokio::test]
 async fn app_state_uses_postgres_push_tokens_when_database_url_is_configured() {
-    let _guard = MINI_ENGINE_ENV_LOCK.lock().expect("env lock");
+    let _guard = MINI_ENGINE_ENV_LOCK.lock().await;
     unsafe {
         std::env::set_var(
             "MINI_ERP_DATABASE_URL",
@@ -240,7 +239,7 @@ async fn app_state_uses_postgres_push_tokens_when_database_url_is_configured() {
 
 #[tokio::test]
 async fn app_state_uses_postgres_rps_batch_when_database_url_is_configured() {
-    let _guard = MINI_ENGINE_ENV_LOCK.lock().expect("env lock");
+    let _guard = MINI_ENGINE_ENV_LOCK.lock().await;
     unsafe {
         std::env::set_var(
             "MINI_ERP_DATABASE_URL",
@@ -274,7 +273,7 @@ async fn app_state_uses_postgres_rps_batch_when_database_url_is_configured() {
 
 #[tokio::test]
 async fn app_state_routes_gscale_receipts_to_postgres_when_database_url_is_configured() {
-    let _guard = MINI_ENGINE_ENV_LOCK.lock().expect("env lock");
+    let _guard = MINI_ENGINE_ENV_LOCK.lock().await;
     unsafe {
         std::env::set_var(
             "MINI_ERP_DATABASE_URL",
@@ -298,7 +297,7 @@ async fn app_state_routes_gscale_receipts_to_postgres_when_database_url_is_confi
 
 #[tokio::test]
 async fn app_state_never_attaches_legacy_remote_clients() {
-    let _guard = MINI_ENGINE_ENV_LOCK.lock().expect("env lock");
+    let _guard = MINI_ENGINE_ENV_LOCK.lock().await;
     unsafe {
         std::env::remove_var("MINI_ERP_DATABASE_URL");
     }
@@ -313,7 +312,7 @@ async fn app_state_never_attaches_legacy_remote_clients() {
 
 #[tokio::test]
 async fn app_state_admin_catalog_fails_closed_without_postgres() {
-    let _guard = MINI_ENGINE_ENV_LOCK.lock().expect("env lock");
+    let _guard = MINI_ENGINE_ENV_LOCK.lock().await;
     unsafe {
         std::env::remove_var("MINI_ERP_DATABASE_URL");
     }

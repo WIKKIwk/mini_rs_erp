@@ -59,7 +59,7 @@ async fn split_creates_repack_prints_each_output_and_submits() {
         .await
         .expect("split");
 
-    assert_eq!(response.ok, true);
+    assert!(response.ok);
     assert_eq!(response.stock_entry_name, "MAT-STE-REPACK-1");
     assert_eq!(response.outputs.len(), 2);
     assert_eq!(response.outputs[0].epc, "EPC-400");
