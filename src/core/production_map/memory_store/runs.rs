@@ -1,5 +1,7 @@
 use super::*;
 
+use std::collections::BTreeSet;
+
 use super::super::queue_state;
 
 pub(super) async fn active_order_run_session(
@@ -29,11 +31,7 @@ pub(super) async fn active_order_run_sessions_for_worker(
     worker_display_name: &str,
     limit: usize,
 ) -> Result<Vec<OrderRunSession>, ProductionMapError> {
-    let refs = worker_refs
-        .iter()
-        .map(|item| item.trim().to_string())
-        .filter(|item| !item.is_empty())
-        .collect::<std::collections::BTreeSet<_>>();
+    let refs = normalized_worker_refs(worker_refs);
     let worker_display_name = worker_display_name.trim().to_ascii_lowercase();
     if refs.is_empty() && worker_display_name.is_empty() || limit == 0 {
         return Ok(Vec::new());
@@ -47,12 +45,12 @@ pub(super) async fn active_order_run_sessions_for_worker(
             matches!(
                 session.status,
                 OrderRunStatus::Active | OrderRunStatus::Paused
-            ) && (refs.contains(session.worker_ref.trim())
-                || (!worker_display_name.is_empty()
-                    && session
-                        .worker_display_name
-                        .trim()
-                        .eq_ignore_ascii_case(&worker_display_name)))
+            ) && worker_matches(
+                session.worker_ref.trim(),
+                session.worker_display_name.trim(),
+                &refs,
+                &worker_display_name,
+            )
         })
         .cloned()
         .collect::<Vec<_>>();
@@ -129,11 +127,7 @@ pub(super) async fn progress_batches_for_worker(
     worker_display_name: &str,
     limit: usize,
 ) -> Result<Vec<OrderProgressBatch>, ProductionMapError> {
-    let refs = worker_refs
-        .iter()
-        .map(|item| item.trim().to_string())
-        .filter(|item| !item.is_empty())
-        .collect::<std::collections::BTreeSet<_>>();
+    let refs = normalized_worker_refs(worker_refs);
     let worker_display_name = worker_display_name.trim().to_ascii_lowercase();
     if refs.is_empty() && worker_display_name.is_empty() || limit == 0 {
         return Ok(Vec::new());
@@ -144,12 +138,12 @@ pub(super) async fn progress_batches_for_worker(
         .await
         .values()
         .filter(|batch| {
-            refs.contains(batch.worker_ref.trim())
-                || (!worker_display_name.is_empty()
-                    && batch
-                        .worker_display_name
-                        .trim()
-                        .eq_ignore_ascii_case(&worker_display_name))
+            worker_matches(
+                batch.worker_ref.trim(),
+                batch.worker_display_name.trim(),
+                &refs,
+                &worker_display_name,
+            )
         })
         .cloned()
         .collect::<Vec<_>>();
@@ -235,6 +229,25 @@ pub(super) async fn put_order_run_session(
         .await
         .insert(session.session_id.trim().to_string(), session);
     Ok(())
+}
+
+fn normalized_worker_refs(worker_refs: &[String]) -> BTreeSet<String> {
+    worker_refs
+        .iter()
+        .map(|item| item.trim().to_string())
+        .filter(|item| !item.is_empty())
+        .collect()
+}
+
+fn worker_matches(
+    worker_ref: &str,
+    worker_display_name: &str,
+    refs: &BTreeSet<String>,
+    expected_display_name: &str,
+) -> bool {
+    refs.contains(worker_ref)
+        || (!expected_display_name.is_empty()
+            && worker_display_name.eq_ignore_ascii_case(expected_display_name))
 }
 
 pub(super) async fn put_order_progress_event(
