@@ -3,10 +3,8 @@ use std::collections::{BTreeMap, BTreeSet};
 use super::*;
 
 use super::apparatus::visible_order_ids_for_apparatus;
-use super::progress::{
-    effective_apparatus_queue_policy, effective_apparatus_queue_policy_record,
-    queue_action_event_id, unix_seconds,
-};
+use super::progress::{effective_apparatus_queue_policy_record, unix_seconds};
+use super::service_queue_support::*;
 
 impl ProductionMapService {
     pub async fn apparatus_sequences(
@@ -271,52 +269,8 @@ impl ProductionMapService {
         }
         let now = unix_seconds();
         let (qty, uom) = finished_goods_qty_uom(&batch)?;
-        let stock = FinishedGoodsStockEntry {
-            id: format!("finished:{}", batch.batch_id.trim()),
-            warehouse: warehouse.to_string(),
-            order_id: batch.order_id.trim().to_string(),
-            item_code: batch.label_item_code.trim().to_string(),
-            item_name: batch.label_item_name.trim().to_string(),
-            qty,
-            uom,
-            status: "available".to_string(),
-            barcode: batch.qr_payload.trim().to_string(),
-            source_progress_batch_id: batch.batch_id.trim().to_string(),
-            accepted_by_role: actor.role.trim().to_string(),
-            accepted_by_ref: actor.ref_.trim().to_string(),
-            accepted_by_display_name: actor.display_name.trim().to_string(),
-            accepted_at_unix: now,
-            payload_json: serde_json::json!({
-                "source": "production_finished_goods_receipt",
-                "progress_batch_id": batch.batch_id.trim(),
-                "qr_payload": batch.qr_payload.trim(),
-                "warehouse": warehouse,
-                "order_id": batch.order_id.trim(),
-                "accepted_by_role": actor.role.trim(),
-                "accepted_by_ref": actor.ref_.trim(),
-                "accepted_by_display_name": actor.display_name.trim(),
-                "accepted_at_unix": now,
-            }),
-        };
-        batch.wip_status = OrderProgressBatchWipStatus::Processed;
-        batch.current_location = warehouse.to_string();
-        batch.processed_by_session_id = stock.id.clone();
-        batch.processed_by_apparatus = format!("warehouse:{warehouse}");
-        batch.payload_json["received_warehouse"] = serde_json::json!(warehouse);
-        batch.payload_json["received_by_role"] = serde_json::json!(actor.role.trim());
-        batch.payload_json["received_by_ref"] = serde_json::json!(actor.ref_.trim());
-        batch.payload_json["received_by_display_name"] =
-            serde_json::json!(actor.display_name.trim());
-        batch.payload_json["received_at_unix"] = serde_json::json!(now);
-        batch.payload_json["finished_goods_stock_id"] = serde_json::json!(stock.id);
-        batch.refresh_status_detail();
-        batch.payload_json["status_detail"] = serde_json::json!(batch.status_detail);
-        batch.payload_json["wip_status"] = serde_json::json!(batch.wip_status.as_str());
-        batch.payload_json["current_location"] = serde_json::json!(batch.current_location);
-        batch.payload_json["processed_by_session_id"] =
-            serde_json::json!(batch.processed_by_session_id);
-        batch.payload_json["processed_by_apparatus"] =
-            serde_json::json!(batch.processed_by_apparatus);
+        let stock = finished_goods_stock_entry(&batch, warehouse, &actor, qty, uom, now);
+        mark_finished_goods_batch_received(&mut batch, &stock, warehouse, &actor, now);
         self.store
             .receive_finished_goods_batch(batch.clone(), stock.clone())
             .await?;
@@ -351,9 +305,7 @@ impl ProductionMapService {
                 limit,
             )
             .await?;
-        if batches.iter().any(|batch| {
-            batch.current_apparatus.trim().is_empty() || batch.next_apparatus.trim().is_empty()
-        }) {
+        if batches.iter().any(progress_batch_needs_location_repair) {
             let maps_by_id = self
                 .store
                 .maps()
@@ -361,33 +313,7 @@ impl ProductionMapService {
                 .into_iter()
                 .map(|map| (map.id.trim().to_string(), map))
                 .collect::<BTreeMap<_, _>>();
-            for batch in &mut batches {
-                if batch.current_apparatus.trim().is_empty() {
-                    batch.current_apparatus = batch.apparatus.trim().to_string();
-                    batch.current_apparatus_key =
-                        queue_state::apparatus_search_key(&batch.current_apparatus);
-                    if batch.current_location.trim().is_empty() {
-                        batch.current_location = batch.current_apparatus.clone();
-                    }
-                    batch.payload_json["current_apparatus"] =
-                        serde_json::json!(batch.current_apparatus);
-                    batch.payload_json["current_apparatus_key"] =
-                        serde_json::json!(batch.current_apparatus_key);
-                    batch.payload_json["current_location"] =
-                        serde_json::json!(batch.current_location);
-                }
-                if batch.next_apparatus.trim().is_empty()
-                    && let Some(map) = maps_by_id.get(batch.order_id.trim())
-                {
-                    if let Some(next) =
-                        chain::next_work_stage_station(map, &batch.current_apparatus)
-                    {
-                        batch.next_apparatus = next;
-                        batch.payload_json["next_apparatus"] =
-                            serde_json::json!(batch.next_apparatus);
-                    }
-                }
-            }
+            repair_wip_progress_batch_locations(&mut batches, &maps_by_id);
         }
         for batch in &mut batches {
             batch.refresh_status_detail();
@@ -511,39 +437,13 @@ impl ProductionMapService {
     ) -> Result<PreparedApparatusQueueAction, ProductionMapError> {
         let apparatus = apparatus.trim();
         let order_id = order_id.trim();
-        if apparatus.is_empty() {
-            return Err(ProductionMapError::MissingId);
-        }
-        if order_id.is_empty() {
-            return Err(ProductionMapError::MissingId);
-        }
-        if !queue_state::apparatus_matches_assigned(apparatus, assigned_apparatus) {
-            return Err(ProductionMapError::ApparatusNotAssigned);
-        }
+        validate_queue_action_request(apparatus, order_id, assigned_apparatus)?;
         let sequences = self.store.apparatus_sequences().await?;
         let all_states = self.store.apparatus_queue_states().await?;
         let policies = self.store.apparatus_queue_policies().await?;
-        let known_keys = sequences
-            .keys()
-            .chain(all_states.keys())
-            .map(|key| key.as_str())
-            .collect::<BTreeSet<_>>()
-            .into_iter()
-            .map(|key| key.to_string())
-            .collect::<Vec<_>>();
+        let known_keys = known_apparatus_storage_keys(&sequences, &all_states);
         let storage_key = queue_state::resolve_apparatus_storage_key(apparatus, &known_keys);
-        let policy = effective_apparatus_queue_policy(
-            apparatus,
-            policies
-                .get(&storage_key)
-                .copied()
-                .or_else(|| policies.get(apparatus).copied())
-                .or_else(|| {
-                    policies.iter().find_map(|(key, policy)| {
-                        queue_state::apparatus_titles_match(key, apparatus).then_some(*policy)
-                    })
-                }),
-        );
+        let policy = queue_policy_for_apparatus(apparatus, &storage_key, &policies);
         let stored_sequence = sequences.get(&storage_key).cloned().unwrap_or_default();
         let all_maps = self.store.maps().await?;
         let visible_order_ids = visible_order_ids_for_apparatus(&all_maps, apparatus);
@@ -556,67 +456,41 @@ impl ProductionMapService {
             .iter()
             .find(|map| map.id.trim() == order_id)
             .ok_or(ProductionMapError::MapNotFound)?;
-        let previous_progress_ready = if action == queue_state::ApparatusQueueAction::Start {
-            self.previous_stage_start_progress_batch(order_id, order_map, apparatus, &progress)
-                .await?
-                .is_some()
-        } else {
-            false
-        };
+        let previous_progress_ready = self
+            .previous_progress_ready_for_action(action, order_id, order_map, apparatus, &progress)
+            .await?;
         let states = all_states.get(&storage_key).cloned().unwrap_or_default();
-        let mut parsed = BTreeMap::new();
-        for (id, value) in states {
-            if let Some(state) = queue_state::ApparatusQueueOrderState::parse(&value) {
-                parsed.insert(id, state);
-            }
-        }
+        let mut parsed = parsed_queue_states(states);
         let from_state = parsed
             .get(order_id)
             .copied()
             .unwrap_or(queue_state::ApparatusQueueOrderState::Pending);
-        match policy {
-            ApparatusQueuePolicy::StrictSequence if !previous_progress_ready => {
-                queue_state::apply_queue_action(&sequence, &mut parsed, order_id, action)?;
-            }
-            ApparatusQueuePolicy::StrictSequence => {
-                queue_state::apply_unordered_queue_action(&mut parsed, order_id, action)?;
-            }
-            ApparatusQueuePolicy::FreePick => {
-                queue_state::apply_unordered_queue_action(&mut parsed, order_id, action)?;
-            }
-        }
-        let mut to_state = parsed
+        apply_queue_policy(
+            policy,
+            previous_progress_ready,
+            &sequence,
+            &mut parsed,
+            order_id,
+            action,
+        )?;
+        let to_state = parsed
             .get(order_id)
             .copied()
             .ok_or(ProductionMapError::QueueActionNotAllowed)?;
-        let mut saved = parsed
-            .into_iter()
-            .map(|(id, state)| (id, state.as_str().to_string()))
-            .collect::<BTreeMap<_, _>>();
-        let mut event = ApparatusQueueActionEvent {
-            event_id: queue_action_event_id(&storage_key, order_id, action),
-            apparatus: storage_key.clone(),
-            order_id: order_id.to_string(),
+        let mut saved = serialized_queue_states(parsed);
+        let mut event = queue_action_event(
+            apparatus,
+            &storage_key,
+            order_id,
             action,
             from_state,
             to_state,
             policy,
-            actor: actor.clone(),
-            assigned_apparatus: assigned_apparatus
-                .iter()
-                .map(|item| item.trim().to_string())
-                .filter(|item| !item.is_empty())
-                .collect(),
-            payload_json: serde_json::json!({
-                "requested_apparatus": apparatus,
-                "storage_key": storage_key,
-                "sequence": sequence,
-                "visible_order_ids": visible_order_ids,
-                "from_state": from_state.as_str(),
-                "to_state": to_state.as_str(),
-                "policy": policy.as_str(),
-            }),
-        };
+            &actor,
+            assigned_apparatus,
+            &sequence,
+            &visible_order_ids,
+        );
         let progress = self
             .build_progress_records(&storage_key, order_id, order_map, action, &actor, progress)
             .await?;
@@ -631,36 +505,14 @@ impl ProductionMapService {
                 )
                 .await?
         {
-            to_state = queue_state::ApparatusQueueOrderState::Pending;
-            saved.insert(order_id.to_string(), to_state.as_str().to_string());
-            event.to_state = to_state;
-            event.payload_json["to_state"] = serde_json::json!(to_state.as_str());
-            event.payload_json["batch_complete_order_state"] = serde_json::json!("pending");
+            downgrade_completed_state_to_pending(order_id, &mut saved, &mut event);
         }
-        if let Some(batch) = progress.progress_batch.as_ref() {
-            if action == queue_state::ApparatusQueueAction::Complete
-                && batch.lamination_print_leftover_rolls.is_some()
-                && batch.lamination_film_leftover_rolls.is_some()
-            {
-                let print_leftover = batch.lamination_print_leftover_rolls.unwrap_or_default();
-                let film_leftover = batch.lamination_film_leftover_rolls.unwrap_or_default();
-                let total_waste = batch.total_waste.unwrap_or_default();
-                let finished_kg = batch.finished_goods_kg.unwrap_or_default();
-                let finished_meter = batch.finished_goods_meter.unwrap_or_default();
-                event.payload_json["notice_kind"] =
-                    serde_json::Value::String("laminatsiya_double_leftover".to_string());
-                event.payload_json["decision_required"] = serde_json::Value::Bool(false);
-                event.payload_json["order_number"] =
-                    serde_json::Value::String(order_map.order_number.trim().to_string());
-                event.payload_json["order_title"] =
-                    serde_json::Value::String(order_map.title.trim().to_string());
-                event.payload_json["product_code"] =
-                    serde_json::Value::String(order_map.product_code.trim().to_string());
-                event.payload_json["description"] = serde_json::Value::String(format!(
-                    "Laminatsiya tugatishda ikkala qavat qoldig'i yozildi. Bosmadan ortgan rulon: {print_leftover}. Plyonkadan ortgan rulon: {film_leftover}. Jami chiqindi: {total_waste} kg. Tayyor mahsulot: {finished_kg} kg, {finished_meter} m."
-                ));
-            }
-        }
+        append_laminatsiya_double_leftover_notice(
+            action,
+            progress.progress_batch.as_ref(),
+            order_map,
+            &mut event,
+        );
         Ok(PreparedApparatusQueueAction {
             apparatus: storage_key,
             states: saved,
@@ -670,6 +522,23 @@ impl ProductionMapService {
             progress_batch: progress.progress_batch,
             progress_batch_updates: progress.progress_batch_updates,
         })
+    }
+
+    async fn previous_progress_ready_for_action(
+        &self,
+        action: queue_state::ApparatusQueueAction,
+        order_id: &str,
+        order_map: &ProductionMapDefinition,
+        apparatus: &str,
+        progress: &QueueProgressInput,
+    ) -> Result<bool, ProductionMapError> {
+        if action != queue_state::ApparatusQueueAction::Start {
+            return Ok(false);
+        }
+        Ok(self
+            .previous_stage_start_progress_batch(order_id, order_map, apparatus, progress)
+            .await?
+            .is_some())
     }
 
     async fn has_unprocessed_previous_wips(
@@ -733,111 +602,4 @@ impl ProductionMapService {
             progress_batch: prepared.progress_batch,
         })
     }
-}
-
-fn current_progress_batch_for_report(
-    scanned_batch: &OrderProgressBatch,
-    progress_batches: &[OrderProgressBatch],
-) -> Option<OrderProgressBatch> {
-    let mut current = scanned_batch.clone();
-    let mut seen = BTreeSet::from([current.batch_id.trim().to_string()]);
-    loop {
-        let next = progress_batches
-            .iter()
-            .filter(|batch| batch.parent_batch_id.trim() == current.batch_id.trim())
-            .max_by(|left, right| {
-                progress_batch_order_key(left).cmp(&progress_batch_order_key(right))
-            })
-            .cloned();
-        let Some(next) = next else {
-            break;
-        };
-        if !seen.insert(next.batch_id.trim().to_string()) {
-            break;
-        }
-        current = next;
-    }
-    Some(current)
-}
-
-fn finished_goods_qty_uom(batch: &OrderProgressBatch) -> Result<(f64, String), ProductionMapError> {
-    if let Some(qty) = batch.finished_goods_kg
-        && qty > 0.0
-    {
-        return Ok((qty, "kg".to_string()));
-    }
-    if let Some(qty) = batch.finished_goods_meter
-        && qty > 0.0
-    {
-        return Ok((qty, "m".to_string()));
-    }
-    if batch.produced_qty > 0.0 && !batch.uom.trim().is_empty() {
-        return Ok((batch.produced_qty, batch.uom.trim().to_string()));
-    }
-    Err(ProductionMapError::ProgressInputInvalid)
-}
-
-fn progress_batch_order_key(batch: &OrderProgressBatch) -> (u128, String) {
-    let stamp = batch
-        .batch_id
-        .split(':')
-        .nth(1)
-        .and_then(|value| value.parse::<u128>().ok())
-        .unwrap_or_default();
-    (stamp, batch.batch_id.trim().to_string())
-}
-
-fn queue_states_for_order(
-    queue_states: BTreeMap<String, BTreeMap<String, String>>,
-    order_id: &str,
-) -> BTreeMap<String, BTreeMap<String, String>> {
-    let order_id = order_id.trim();
-    queue_states
-        .into_iter()
-        .filter_map(|(apparatus, states)| {
-            states.get(order_id).map(|state| {
-                (
-                    apparatus,
-                    BTreeMap::from([(order_id.to_string(), state.clone())]),
-                )
-            })
-        })
-        .collect()
-}
-
-fn validate_active_sequence_barrier(
-    current_sequence: &[String],
-    next_sequence: &[String],
-    states: &BTreeMap<String, String>,
-) -> Result<(), ProductionMapError> {
-    for (order_id, state) in states {
-        let Some(parsed) = queue_state::ApparatusQueueOrderState::parse(state) else {
-            continue;
-        };
-        if !parsed.is_active() {
-            continue;
-        }
-        let order_id = order_id.trim();
-        let Some(next_index) = next_sequence.iter().position(|id| id.trim() == order_id) else {
-            return Err(ProductionMapError::QueueActionNotAllowed);
-        };
-        let current_index = current_sequence
-            .iter()
-            .position(|id| id.trim() == order_id)
-            .unwrap_or(0);
-        if next_index > current_index {
-            return Err(ProductionMapError::QueueActionNotAllowed);
-        }
-        let allowed_before = current_sequence
-            .iter()
-            .take(current_index)
-            .map(|id| id.trim())
-            .collect::<BTreeSet<_>>();
-        for id in next_sequence.iter().take(next_index) {
-            if !allowed_before.contains(id.trim()) {
-                return Err(ProductionMapError::QueueActionNotAllowed);
-            }
-        }
-    }
-    Ok(())
 }

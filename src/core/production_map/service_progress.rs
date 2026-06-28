@@ -1,11 +1,8 @@
 use super::*;
 
-use super::progress::{
-    actor_display_name, legacy_order_run_session, non_empty_or, progress_batch_id,
-    progress_event_id, progress_label_item_name, progress_qr_payload, progress_session_id,
-    queue_action_str, unix_seconds, valid_progress_qty,
-};
+use super::progress::{legacy_order_run_session, progress_session_id, unix_seconds};
 use super::service::QueueProgressRecords;
+use super::service_progress_support::*;
 
 impl ProductionMapService {
     pub async fn progress_batch_for_qr(
@@ -98,61 +95,19 @@ impl ProductionMapService {
                     worker_display_name: actor.display_name.trim().to_string(),
                     started_at_unix: now,
                     updated_at_unix: now,
-                    payload_json: serde_json::json!({
-                        "started_by": actor,
-                        "input_progress_batch_id": input_progress_batch
-                            .as_ref()
-                            .map(|batch| batch.batch_id.as_str())
-                            .unwrap_or_default(),
-                        "input_progress_qr_payload": input_progress_batch
-                            .as_ref()
-                            .map(|batch| batch.qr_payload.as_str())
-                            .unwrap_or_default(),
-                        "input_progress_apparatus": input_progress_batch
-                            .as_ref()
-                            .map(|batch| batch.apparatus.as_str())
-                            .unwrap_or_default(),
-                    }),
+                    payload_json: start_session_payload(actor, input_progress_batch.as_ref()),
                 };
-                let event = OrderProgressEvent {
-                    event_id: progress_event_id(&session.session_id, order_id, action, now),
-                    session_id: session.session_id.clone(),
-                    batch_id: String::new(),
-                    apparatus: apparatus.to_string(),
-                    order_id: order_id.to_string(),
+                let event = zero_quantity_event(
+                    &session,
+                    apparatus,
+                    order_id,
                     action,
-                    produced_qty: 0.0,
-                    uom: String::new(),
-                    worker_role: actor.role.trim().to_string(),
-                    worker_ref: actor.ref_.trim().to_string(),
-                    worker_display_name: actor.display_name.trim().to_string(),
-                    qr_payload: String::new(),
-                    return_ink_kg: None,
-                    lamination_print_leftover_rolls: None,
-                    lamination_film_leftover_rolls: None,
-                    rezka_bosma_waste: None,
-                    rezka_lamination_waste: None,
-                    rezka_edge_waste: None,
-                    total_waste: None,
-                    finished_goods_kg: None,
-                    finished_goods_meter: None,
-                    description: String::new(),
-                    payload_json: serde_json::json!({
-                        "event": "start",
-                        "input_progress_batch_id": input_progress_batch
-                            .as_ref()
-                            .map(|batch| batch.batch_id.as_str())
-                            .unwrap_or_default(),
-                        "input_progress_qr_payload": input_progress_batch
-                            .as_ref()
-                            .map(|batch| batch.qr_payload.as_str())
-                            .unwrap_or_default(),
-                        "input_progress_apparatus": input_progress_batch
-                            .as_ref()
-                            .map(|batch| batch.apparatus.as_str())
-                            .unwrap_or_default(),
-                    }),
-                };
+                    actor,
+                    String::new(),
+                    String::new(),
+                    start_event_payload(input_progress_batch.as_ref()),
+                    now,
+                );
                 let progress_batch_updates = input_progress_batch
                     .map(|batch| wip_batch_in_use(batch, apparatus, &session.session_id, now))
                     .into_iter()
@@ -166,206 +121,56 @@ impl ProductionMapService {
             }
             queue_state::ApparatusQueueAction::Pause
             | queue_state::ApparatusQueueAction::Complete => {
-                let return_ink_kg = if action == queue_state::ApparatusQueueAction::Complete {
-                    valid_optional_progress_qty(progress.return_ink_kg)?
-                } else {
-                    None
-                };
-                let lamination_print_leftover_rolls =
-                    if action == queue_state::ApparatusQueueAction::Complete {
-                        valid_optional_progress_qty(progress.lamination_print_leftover_rolls)?
-                    } else {
-                        None
-                    };
-                let lamination_film_leftover_rolls =
-                    valid_optional_progress_qty(progress.lamination_film_leftover_rolls)?;
-                let rezka_bosma_waste = valid_optional_progress_qty(progress.rezka_bosma_waste)?;
-                let rezka_lamination_waste =
-                    valid_optional_progress_qty(progress.rezka_lamination_waste)?;
-                let rezka_edge_waste = valid_optional_progress_qty(progress.rezka_edge_waste)?;
-                let total_waste = valid_optional_progress_qty(progress.total_waste)?;
-                let finished_goods_kg = valid_optional_progress_qty(progress.finished_goods_kg)?;
-                let finished_goods_meter =
-                    valid_optional_progress_qty(progress.finished_goods_meter)?;
-                if action == queue_state::ApparatusQueueAction::Complete
-                    && pechat::pechat_color_count(apparatus).is_some()
-                    && !bosma_completion_metrics_are_complete(
-                        return_ink_kg,
-                        total_waste,
-                        finished_goods_kg,
-                        finished_goods_meter,
-                    )
-                {
-                    return Err(ProductionMapError::BosmaCompletionMetricsRequired);
-                }
-                if action == queue_state::ApparatusQueueAction::Complete
-                    && super::apparatus::is_laminatsiya_title(apparatus)
-                    && !laminatsiya_completion_metrics_are_complete(
-                        lamination_print_leftover_rolls,
-                        lamination_film_leftover_rolls,
-                        total_waste,
-                        finished_goods_kg,
-                        finished_goods_meter,
-                    )
-                {
-                    return Err(ProductionMapError::LaminatsiyaCompletionMetricsRequired);
-                }
-                if super::apparatus::is_rezka_title(apparatus)
-                    && !rezka_progress_metrics_are_complete(
-                        rezka_bosma_waste,
-                        rezka_lamination_waste,
-                        rezka_edge_waste,
-                    )
-                {
-                    return Err(ProductionMapError::RezkaProgressMetricsRequired);
-                }
-                let produced_qty =
-                    valid_progress_qty(progress.produced_qty.or(finished_goods_meter))?;
-                let uom = if progress.produced_qty.is_none() && finished_goods_meter.is_some() {
-                    non_empty_or(&progress.uom, "m")
-                } else {
-                    non_empty_or(&progress.uom, "kg")
-                };
+                let metrics = validated_progress_metrics(apparatus, action, &progress)?;
+                let quantity = progress_quantity(&progress, metrics)?;
                 let description = progress.description.trim().to_string();
                 let session = self
                     .store
                     .active_order_run_session(apparatus, order_id)
                     .await?
                     .unwrap_or_else(|| legacy_order_run_session(apparatus, order_id, actor, now));
-                let input_progress_batch_id =
-                    json_string_field(&session.payload_json, "input_progress_batch_id");
-                let input_progress_qr_payload =
-                    json_string_field(&session.payload_json, "input_progress_qr_payload");
-                let input_progress_apparatus =
-                    json_string_field(&session.payload_json, "input_progress_apparatus");
-                let status = match action {
-                    queue_state::ApparatusQueueAction::Pause => OrderRunStatus::Paused,
-                    queue_state::ApparatusQueueAction::Complete => OrderRunStatus::Completed,
-                    _ => OrderRunStatus::Active,
-                };
+                let input_progress = session_progress_links(&session);
                 let session = OrderRunSession {
-                    status,
+                    status: run_status_for_progress_action(action),
                     worker_role: actor.role.trim().to_string(),
                     worker_ref: actor.ref_.trim().to_string(),
                     worker_display_name: actor.display_name.trim().to_string(),
                     updated_at_unix: now,
-                    payload_json: serde_json::json!({
-                        "last_action": queue_action_str(action),
-                        "last_qty": produced_qty,
-                        "last_uom": uom,
-                        "return_ink_kg": return_ink_kg,
-                        "lamination_print_leftover_rolls": lamination_print_leftover_rolls,
-                        "lamination_film_leftover_rolls": lamination_film_leftover_rolls,
-                        "rezka_bosma_waste": rezka_bosma_waste,
-                        "rezka_lamination_waste": rezka_lamination_waste,
-                        "rezka_edge_waste": rezka_edge_waste,
-                        "total_waste": total_waste,
-                        "total_waste_uom": "kg",
-                        "finished_goods_kg": finished_goods_kg,
-                        "finished_goods_meter": finished_goods_meter,
-                        "description": description,
-                        "input_progress_batch_id": input_progress_batch_id,
-                        "input_progress_qr_payload": input_progress_qr_payload,
-                        "input_progress_apparatus": input_progress_apparatus,
-                    }),
+                    payload_json: progress_session_payload(
+                        action,
+                        quantity.produced_qty,
+                        &quantity.uom,
+                        metrics,
+                        &description,
+                        &input_progress,
+                    ),
                     ..session
                 };
-                let output_batch_id_input = if action == queue_state::ApparatusQueueAction::Complete
-                    && !input_progress_batch_id.trim().is_empty()
-                    && progress
-                        .progress_batch_id
-                        .trim()
-                        .eq_ignore_ascii_case(input_progress_batch_id.trim())
-                {
-                    ""
-                } else {
-                    progress.progress_batch_id.trim()
-                };
-                let batch_id = non_empty_or(
-                    output_batch_id_input,
-                    &progress_batch_id(apparatus, order_id, action, now),
-                );
-                let output_qr_input = if action == queue_state::ApparatusQueueAction::Complete
-                    && !input_progress_qr_payload.trim().is_empty()
-                    && progress
-                        .qr_payload
-                        .trim()
-                        .eq_ignore_ascii_case(input_progress_qr_payload.trim())
-                {
-                    ""
-                } else {
-                    progress.qr_payload.trim()
-                };
-                let qr_payload = non_empty_or(output_qr_input, &progress_qr_payload(&batch_id));
-                let label_item_name = progress_label_item_name(order_map, apparatus, action);
-                let mut batch = OrderProgressBatch {
-                    batch_id: batch_id.clone(),
-                    session_id: session.session_id.clone(),
-                    apparatus: apparatus.to_string(),
-                    order_id: order_id.to_string(),
+                let output_identity = progress_output_identity(
+                    apparatus,
+                    order_id,
                     action,
-                    status: match action {
-                        queue_state::ApparatusQueueAction::Pause => {
-                            OrderProgressBatchStatus::Paused
-                        }
-                        queue_state::ApparatusQueueAction::Complete => {
-                            OrderProgressBatchStatus::Completed
-                        }
-                        _ => return Err(ProductionMapError::ProgressInputInvalid),
-                    },
-                    produced_qty,
-                    uom: uom.clone(),
-                    qr_payload: qr_payload.clone(),
-                    label_item_code: order_id.to_string(),
-                    label_item_name,
-                    executor_name: actor_display_name(actor),
-                    worker_role: actor.role.trim().to_string(),
-                    worker_ref: actor.ref_.trim().to_string(),
-                    worker_display_name: actor.display_name.trim().to_string(),
-                    wip_status: OrderProgressBatchWipStatus::Waiting,
-                    status_detail: OrderProgressBatchStatusDetail::default(),
-                    current_apparatus: apparatus.to_string(),
-                    current_apparatus_key: queue_state::apparatus_search_key(apparatus),
-                    current_location: wip_waiting_location(apparatus),
-                    next_apparatus: chain::next_work_stage_station(order_map, apparatus)
-                        .unwrap_or_default(),
-                    parent_batch_id: input_progress_batch_id.clone(),
-                    used_by_session_id: String::new(),
-                    used_by_apparatus: String::new(),
-                    processed_by_session_id: String::new(),
-                    processed_by_apparatus: String::new(),
-                    return_ink_kg,
-                    lamination_print_leftover_rolls,
-                    lamination_film_leftover_rolls,
-                    rezka_bosma_waste,
-                    rezka_lamination_waste,
-                    rezka_edge_waste,
-                    total_waste,
-                    finished_goods_kg,
-                    finished_goods_meter,
-                    description: description.clone(),
-                    payload_json: serde_json::json!({
-                        "order_title": order_map.title.trim(),
-                        "apparatus": apparatus,
-                        "action": queue_action_str(action),
-                        "return_ink_kg": return_ink_kg,
-                        "lamination_print_leftover_rolls": lamination_print_leftover_rolls,
-                        "lamination_film_leftover_rolls": lamination_film_leftover_rolls,
-                        "rezka_bosma_waste": rezka_bosma_waste,
-                        "rezka_lamination_waste": rezka_lamination_waste,
-                        "rezka_edge_waste": rezka_edge_waste,
-                        "total_waste": total_waste,
-                        "total_waste_uom": "kg",
-                        "finished_goods_kg": finished_goods_kg,
-                        "finished_goods_meter": finished_goods_meter,
-                        "description": description.clone(),
-                    }),
-                };
-                sync_wip_payload_fields(&mut batch);
+                    now,
+                    &progress,
+                    &input_progress,
+                );
+                let batch = progress_batch_record(
+                    order_map,
+                    apparatus,
+                    order_id,
+                    action,
+                    actor,
+                    &session,
+                    &quantity,
+                    &output_identity,
+                    &input_progress,
+                    metrics,
+                    &description,
+                )?;
                 let mut progress_batch_updates = Vec::new();
-                if !input_progress_batch_id.trim().is_empty() {
+                if !input_progress.batch_id.trim().is_empty() {
                     if let Some(input_batch) =
-                        self.store.progress_batch(&input_progress_batch_id).await?
+                        self.store.progress_batch(&input_progress.batch_id).await?
                     {
                         progress_batch_updates.push(wip_batch_processed(
                             input_batch,
@@ -375,44 +180,18 @@ impl ProductionMapService {
                         ));
                     }
                 }
-                let event = OrderProgressEvent {
-                    event_id: progress_event_id(&session.session_id, order_id, action, now),
-                    session_id: session.session_id.clone(),
-                    batch_id,
-                    apparatus: apparatus.to_string(),
-                    order_id: order_id.to_string(),
+                let event = progress_event_record(
+                    apparatus,
+                    order_id,
                     action,
-                    produced_qty,
-                    uom,
-                    worker_role: actor.role.trim().to_string(),
-                    worker_ref: actor.ref_.trim().to_string(),
-                    worker_display_name: actor.display_name.trim().to_string(),
-                    qr_payload,
-                    return_ink_kg,
-                    lamination_print_leftover_rolls,
-                    lamination_film_leftover_rolls,
-                    rezka_bosma_waste,
-                    rezka_lamination_waste,
-                    rezka_edge_waste,
-                    total_waste,
-                    finished_goods_kg,
-                    finished_goods_meter,
-                    description: description.clone(),
-                    payload_json: serde_json::json!({
-                        "event": queue_action_str(action),
-                        "return_ink_kg": return_ink_kg,
-                        "lamination_print_leftover_rolls": lamination_print_leftover_rolls,
-                        "lamination_film_leftover_rolls": lamination_film_leftover_rolls,
-                        "rezka_bosma_waste": rezka_bosma_waste,
-                        "rezka_lamination_waste": rezka_lamination_waste,
-                        "rezka_edge_waste": rezka_edge_waste,
-                        "total_waste": total_waste,
-                        "total_waste_uom": "kg",
-                        "finished_goods_kg": finished_goods_kg,
-                        "finished_goods_meter": finished_goods_meter,
-                        "description": description,
-                    }),
-                };
+                    actor,
+                    &session,
+                    quantity,
+                    output_identity,
+                    metrics,
+                    &description,
+                    now,
+                );
                 Ok(QueueProgressRecords {
                     session: Some(session),
                     progress_event: Some(event),
@@ -437,36 +216,20 @@ impl ProductionMapService {
                         worker_ref: actor.ref_.trim().to_string(),
                         worker_display_name: actor.display_name.trim().to_string(),
                         updated_at_unix: now,
-                        payload_json: serde_json::json!({
-                            "resumed_without_progress_qr": true,
-                        }),
+                        payload_json: resume_without_progress_payload(),
                         ..session
                     };
-                    let event = OrderProgressEvent {
-                        event_id: progress_event_id(&session.session_id, order_id, action, now),
-                        session_id: session.session_id.clone(),
-                        batch_id: String::new(),
-                        apparatus: apparatus.to_string(),
-                        order_id: order_id.to_string(),
+                    let event = zero_quantity_event(
+                        &session,
+                        apparatus,
+                        order_id,
                         action,
-                        produced_qty: 0.0,
-                        uom: String::new(),
-                        worker_role: actor.role.trim().to_string(),
-                        worker_ref: actor.ref_.trim().to_string(),
-                        worker_display_name: actor.display_name.trim().to_string(),
-                        qr_payload: String::new(),
-                        return_ink_kg: None,
-                        lamination_print_leftover_rolls: None,
-                        lamination_film_leftover_rolls: None,
-                        rezka_bosma_waste: None,
-                        rezka_lamination_waste: None,
-                        rezka_edge_waste: None,
-                        total_waste: None,
-                        finished_goods_kg: None,
-                        finished_goods_meter: None,
-                        description: String::new(),
-                        payload_json: serde_json::json!({"event": "resume"}),
-                    };
+                        actor,
+                        String::new(),
+                        String::new(),
+                        resume_event_payload(),
+                        now,
+                    );
                     return Ok(QueueProgressRecords {
                         session: Some(session),
                         progress_event: Some(event),
@@ -490,10 +253,7 @@ impl ProductionMapService {
                 batch.status = OrderProgressBatchStatus::Resumed;
                 let batch_session_id = batch.session_id.clone();
                 batch = wip_batch_in_use(batch, apparatus, &batch_session_id, now);
-                batch.payload_json = serde_json::json!({
-                    "resumed_by": actor,
-                    "resumed_at_unix": now,
-                });
+                batch.payload_json = resumed_batch_payload(actor, now);
                 sync_wip_payload_fields(&mut batch);
                 let session = self
                     .store
@@ -506,38 +266,21 @@ impl ProductionMapService {
                         worker_ref: actor.ref_.trim().to_string(),
                         worker_display_name: actor.display_name.trim().to_string(),
                         updated_at_unix: now,
-                        payload_json: serde_json::json!({
-                            "resumed_batch_id": batch.batch_id,
-                            "resumed_qr_payload": batch.qr_payload,
-                        }),
+                        payload_json: resumed_session_payload(&batch),
                         ..session
                     })
                     .ok_or(ProductionMapError::ProgressBatchNotFound)?;
-                let event = OrderProgressEvent {
-                    event_id: progress_event_id(&session.session_id, order_id, action, now),
-                    session_id: session.session_id.clone(),
-                    batch_id: batch.batch_id.clone(),
-                    apparatus: apparatus.to_string(),
-                    order_id: order_id.to_string(),
+                let event = zero_quantity_event(
+                    &session,
+                    apparatus,
+                    order_id,
                     action,
-                    produced_qty: 0.0,
-                    uom: String::new(),
-                    worker_role: actor.role.trim().to_string(),
-                    worker_ref: actor.ref_.trim().to_string(),
-                    worker_display_name: actor.display_name.trim().to_string(),
-                    qr_payload: batch.qr_payload.clone(),
-                    return_ink_kg: None,
-                    lamination_print_leftover_rolls: None,
-                    lamination_film_leftover_rolls: None,
-                    rezka_bosma_waste: None,
-                    rezka_lamination_waste: None,
-                    rezka_edge_waste: None,
-                    total_waste: None,
-                    finished_goods_kg: None,
-                    finished_goods_meter: None,
-                    description: String::new(),
-                    payload_json: serde_json::json!({"event": "resume"}),
-                };
+                    actor,
+                    batch.batch_id.clone(),
+                    batch.qr_payload.clone(),
+                    resume_event_payload(),
+                    now,
+                );
                 Ok(QueueProgressRecords {
                     session: Some(session),
                     progress_event: Some(event),
@@ -547,121 +290,4 @@ impl ProductionMapService {
             }
         }
     }
-}
-
-fn wip_batch_in_use(
-    mut batch: OrderProgressBatch,
-    apparatus: &str,
-    session_id: &str,
-    now: i64,
-) -> OrderProgressBatch {
-    batch.wip_status = OrderProgressBatchWipStatus::InUse;
-    batch.current_apparatus = apparatus.trim().to_string();
-    batch.current_apparatus_key = queue_state::apparatus_search_key(apparatus);
-    batch.current_location = apparatus.trim().to_string();
-    batch.used_by_session_id = session_id.trim().to_string();
-    batch.used_by_apparatus = apparatus.trim().to_string();
-    batch.payload_json["wip_in_use_at_unix"] = serde_json::json!(now);
-    sync_wip_payload_fields(&mut batch);
-    batch
-}
-
-fn wip_batch_processed(
-    mut batch: OrderProgressBatch,
-    apparatus: &str,
-    session_id: &str,
-    now: i64,
-) -> OrderProgressBatch {
-    batch.wip_status = OrderProgressBatchWipStatus::Processed;
-    batch.current_apparatus = apparatus.trim().to_string();
-    batch.current_apparatus_key = queue_state::apparatus_search_key(apparatus);
-    batch.current_location = apparatus.trim().to_string();
-    batch.processed_by_session_id = session_id.trim().to_string();
-    batch.processed_by_apparatus = apparatus.trim().to_string();
-    batch.payload_json["wip_processed_at_unix"] = serde_json::json!(now);
-    sync_wip_payload_fields(&mut batch);
-    batch
-}
-
-fn sync_wip_payload_fields(batch: &mut OrderProgressBatch) {
-    if !batch.payload_json.is_object() {
-        batch.payload_json = serde_json::json!({});
-    }
-    batch.refresh_status_detail();
-    if batch.current_apparatus_key.trim().is_empty() {
-        batch.current_apparatus_key = queue_state::apparatus_search_key(&batch.current_apparatus);
-    }
-    batch.payload_json["status_detail"] = serde_json::json!(batch.status_detail);
-    batch.payload_json["wip_status"] = serde_json::json!(batch.wip_status.as_str());
-    batch.payload_json["current_apparatus"] = serde_json::json!(batch.current_apparatus);
-    batch.payload_json["current_apparatus_key"] = serde_json::json!(batch.current_apparatus_key);
-    batch.payload_json["current_location"] = serde_json::json!(batch.current_location);
-    batch.payload_json["next_apparatus"] = serde_json::json!(batch.next_apparatus);
-    batch.payload_json["parent_batch_id"] = serde_json::json!(batch.parent_batch_id);
-    batch.payload_json["used_by_session_id"] = serde_json::json!(batch.used_by_session_id);
-    batch.payload_json["used_by_apparatus"] = serde_json::json!(batch.used_by_apparatus);
-    batch.payload_json["used_by_order_id"] = serde_json::json!(batch.order_id);
-    batch.payload_json["processed_by_session_id"] =
-        serde_json::json!(batch.processed_by_session_id);
-    batch.payload_json["processed_by_apparatus"] = serde_json::json!(batch.processed_by_apparatus);
-    batch.payload_json["from_apparatus"] = serde_json::json!(batch.apparatus);
-}
-
-fn wip_waiting_location(apparatus: &str) -> String {
-    let apparatus = apparatus.trim();
-    if apparatus.is_empty() {
-        String::new()
-    } else {
-        format!("{apparatus} chiqim")
-    }
-}
-
-fn json_string_field(payload: &serde_json::Value, key: &str) -> String {
-    payload
-        .get(key)
-        .and_then(|value| value.as_str())
-        .unwrap_or_default()
-        .trim()
-        .to_string()
-}
-
-fn valid_optional_progress_qty(value: Option<f64>) -> Result<Option<f64>, ProductionMapError> {
-    match value {
-        Some(value) if value.is_finite() && value > 0.0 => Ok(Some(value)),
-        Some(_) => Err(ProductionMapError::ProgressInputInvalid),
-        None => Ok(None),
-    }
-}
-
-fn bosma_completion_metrics_are_complete(
-    return_ink_kg: Option<f64>,
-    total_waste: Option<f64>,
-    finished_goods_kg: Option<f64>,
-    finished_goods_meter: Option<f64>,
-) -> bool {
-    return_ink_kg.is_some()
-        && total_waste.is_some()
-        && finished_goods_kg.is_some()
-        && finished_goods_meter.is_some()
-}
-
-fn laminatsiya_completion_metrics_are_complete(
-    lamination_print_leftover_rolls: Option<f64>,
-    lamination_film_leftover_rolls: Option<f64>,
-    total_waste: Option<f64>,
-    finished_goods_kg: Option<f64>,
-    finished_goods_meter: Option<f64>,
-) -> bool {
-    (lamination_print_leftover_rolls.is_some() || lamination_film_leftover_rolls.is_some())
-        && total_waste.is_some()
-        && finished_goods_kg.is_some()
-        && finished_goods_meter.is_some()
-}
-
-fn rezka_progress_metrics_are_complete(
-    rezka_bosma_waste: Option<f64>,
-    rezka_lamination_waste: Option<f64>,
-    rezka_edge_waste: Option<f64>,
-) -> bool {
-    rezka_bosma_waste.is_some() && rezka_lamination_waste.is_some() && rezka_edge_waste.is_some()
 }

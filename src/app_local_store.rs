@@ -1,15 +1,16 @@
 use std::sync::Arc;
 
+use super::postgres_pool::postgres_pool;
 use crate::config::AppConfig;
 use crate::core::profile::ports::ProfileStorePort;
 use crate::core::push::ports::PushTokenStorePort;
 use crate::core::rps_batch::RpsBatchLmdbStore;
 use crate::core::rps_batch::ports::RpsBatchStorePort;
-use crate::db::postgres::PostgresConfig;
 use crate::db::postgres_push_token::PostgresPushTokenStore;
 use crate::db::postgres_rps_batch::PostgresRpsBatchStore;
 use crate::store::profile_store::{LmdbProfileStore, ProfileStore};
 use crate::store::push_token_store::{LmdbPushTokenStore, PushTokenStore};
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum LocalStoreBackend {
     Lmdb,
@@ -148,19 +149,9 @@ pub(super) fn calculate_order_image_dir() -> std::path::PathBuf {
 }
 
 pub(super) fn build_push_token_store(config: &AppConfig) -> Arc<dyn PushTokenStorePort> {
-    if let Ok(pg_config) = PostgresConfig::from_env() {
-        match pg_config
-            .pool_options()
-            .connect_lazy(&pg_config.database_url)
-        {
-            Ok(pool) => {
-                tracing::info!("mini ERP postgres push token store configured");
-                return Arc::new(PostgresPushTokenStore::new(pool));
-            }
-            Err(error) => {
-                tracing::warn!(%error, "mini ERP postgres push token store disabled");
-            }
-        }
+    if let Some(pool) = postgres_pool("push token") {
+        tracing::info!("mini ERP postgres push token store configured");
+        return Arc::new(PostgresPushTokenStore::new(pool));
     }
     match local_store_backend("MOBILE_API_PUSH_TOKEN_STORE_BACKEND") {
         LocalStoreBackend::Lmdb => {
@@ -206,19 +197,9 @@ pub(super) fn push_token_lmdb_path(config: &AppConfig) -> std::path::PathBuf {
 }
 
 pub(super) fn build_rps_batch_store() -> Arc<dyn RpsBatchStorePort> {
-    if let Ok(pg_config) = PostgresConfig::from_env() {
-        match pg_config
-            .pool_options()
-            .connect_lazy(&pg_config.database_url)
-        {
-            Ok(pool) => {
-                tracing::info!("mini ERP postgres RPS batch store configured");
-                return Arc::new(PostgresRpsBatchStore::new(pool));
-            }
-            Err(error) => {
-                tracing::warn!(%error, "mini ERP postgres RPS batch store disabled");
-            }
-        }
+    if let Some(pool) = postgres_pool("RPS batch") {
+        tracing::info!("mini ERP postgres RPS batch store configured");
+        return Arc::new(PostgresRpsBatchStore::new(pool));
     }
     let lmdb_path = rps_batch_lmdb_path();
     match RpsBatchLmdbStore::open(

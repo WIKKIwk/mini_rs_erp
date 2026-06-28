@@ -26,20 +26,10 @@ async fn main() -> Result<(), error::AppError> {
 
     let config = AppConfig::from_env()?;
     let bind_addr = config.bind_addr;
-    if std::env::var("MINI_ERP_DATABASE_URL")
-        .ok()
-        .map(|value| !value.trim().is_empty())
-        .unwrap_or(false)
-    {
-        let postgres_pool = connect_and_migrate_required()
-            .await
-            .map_err(|error| error::AppError::Storage(error.to_string()))?;
-        postgres_pool.close().await;
-    } else {
-        tracing::warn!(
-            "MINI_ERP_DATABASE_URL is not set; starting mini rs erp without postgres bootstrap"
-        );
-    }
+    let postgres_pool = connect_and_migrate_required()
+        .await
+        .map_err(|error| error::AppError::Storage(error.to_string()))?;
+    postgres_pool.close().await;
     let state = AppState::new(config);
     let app = http::router::build_router(state);
 
