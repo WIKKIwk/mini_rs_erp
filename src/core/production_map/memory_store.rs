@@ -2,54 +2,15 @@ mod maps;
 mod materials;
 mod queue;
 mod runs;
+mod state;
 
 use super::*;
 
 use std::collections::BTreeMap;
 
 use async_trait::async_trait;
-use tokio::sync::RwLock;
 
-#[cfg(test)]
-pub struct MemoryProductionMapStore {
-    maps: RwLock<BTreeMap<String, ProductionMapDefinition>>,
-    sequences: RwLock<BTreeMap<String, Vec<String>>>,
-    queue_states: RwLock<BTreeMap<String, BTreeMap<String, String>>>,
-    queue_policies: RwLock<BTreeMap<String, ApparatusQueuePolicy>>,
-    queue_events: RwLock<Vec<ApparatusQueueActionEvent>>,
-    order_run_sessions: RwLock<BTreeMap<String, OrderRunSession>>,
-    order_progress_events: RwLock<Vec<OrderProgressEvent>>,
-    order_progress_batches: RwLock<BTreeMap<String, OrderProgressBatch>>,
-    finished_goods_stock: RwLock<BTreeMap<String, FinishedGoodsStockEntry>>,
-    material_rules: RwLock<BTreeMap<String, ApparatusMaterialRule>>,
-    material_assignments: RwLock<BTreeMap<String, RawMaterialAssignment>>,
-}
-
-#[cfg(test)]
-impl MemoryProductionMapStore {
-    pub fn new() -> Self {
-        Self {
-            maps: RwLock::new(BTreeMap::new()),
-            sequences: RwLock::new(BTreeMap::new()),
-            queue_states: RwLock::new(BTreeMap::new()),
-            queue_policies: RwLock::new(BTreeMap::new()),
-            queue_events: RwLock::new(Vec::new()),
-            order_run_sessions: RwLock::new(BTreeMap::new()),
-            order_progress_events: RwLock::new(Vec::new()),
-            order_progress_batches: RwLock::new(BTreeMap::new()),
-            finished_goods_stock: RwLock::new(BTreeMap::new()),
-            material_rules: RwLock::new(BTreeMap::new()),
-            material_assignments: RwLock::new(BTreeMap::new()),
-        }
-    }
-}
-
-#[cfg(test)]
-impl Default for MemoryProductionMapStore {
-    fn default() -> Self {
-        Self::new()
-    }
-}
+pub use state::MemoryProductionMapStore;
 
 #[async_trait]
 #[cfg(test)]
