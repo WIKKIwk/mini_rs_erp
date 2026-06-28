@@ -86,6 +86,39 @@ impl OrderProgressBatchWipStatus {
     }
 }
 
+#[derive(Debug, Clone, PartialEq)]
+pub struct WipProgressBatchQuery {
+    pub apparatus: String,
+    pub next_apparatus: String,
+    pub current_location: String,
+    pub status: Option<OrderProgressBatchWipStatus>,
+    pub include_processed: bool,
+    pub order_id: String,
+    pub limit: usize,
+}
+
+impl WipProgressBatchQuery {
+    pub fn new(
+        apparatus: &str,
+        next_apparatus: &str,
+        current_location: &str,
+        status: Option<OrderProgressBatchWipStatus>,
+        include_processed: bool,
+        order_id: &str,
+        limit: usize,
+    ) -> Self {
+        Self {
+            apparatus: apparatus.trim().to_string(),
+            next_apparatus: next_apparatus.trim().to_string(),
+            current_location: current_location.trim().to_string(),
+            status,
+            include_processed,
+            order_id: order_id.trim().to_string(),
+            limit,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct OrderProgressBatchStatusDetail {
     pub work_status: String,

@@ -5,7 +5,7 @@ use crate::core::production_map::{
     OrderProgressBatch, OrderProgressBatchStatus, OrderProgressBatchStatusDetail,
     OrderProgressBatchWipStatus, ProductionMapDefinition, ProductionMapEdge, ProductionMapError,
     ProductionMapNode, ProductionMapNodeKind, ProductionMapService, ProductionMapStorePort,
-    queue_state,
+    WipProgressBatchQuery, queue_state,
 };
 use crate::db::postgres::apply_foundation_migration;
 use crate::db::postgres_production_map::PostgresProductionMapStore;
@@ -187,7 +187,7 @@ async fn postgres_wip_batches_match_apparatus_instance_suffixes() {
         .expect("put wip batch");
 
     let batches = service
-        .wip_progress_batches(
+        .wip_progress_batches(WipProgressBatchQuery::new(
             "Laminatsiya",
             "",
             "",
@@ -195,7 +195,7 @@ async fn postgres_wip_batches_match_apparatus_instance_suffixes() {
             false,
             "",
             100,
-        )
+        ))
         .await
         .expect("wip batches");
 
@@ -289,7 +289,7 @@ async fn postgres_wip_batches_scan_past_first_page_for_matching_apparatus() {
     .expect("insert noise batches");
 
     let batches = service
-        .wip_progress_batches(
+        .wip_progress_batches(WipProgressBatchQuery::new(
             "Laminatsiya",
             "",
             "",
@@ -297,7 +297,7 @@ async fn postgres_wip_batches_scan_past_first_page_for_matching_apparatus() {
             false,
             "",
             100,
-        )
+        ))
         .await
         .expect("wip batches");
 

@@ -728,7 +728,7 @@ async fn wip_listing_backfills_missing_current_and_next_apparatus_from_map() {
         .expect("legacy batch update");
 
     let batches = service
-        .wip_progress_batches(
+        .wip_progress_batches(WipProgressBatchQuery::new(
             "",
             "",
             "",
@@ -736,7 +736,7 @@ async fn wip_listing_backfills_missing_current_and_next_apparatus_from_map() {
             false,
             order_id,
             10,
-        )
+        ))
         .await
         .expect("wip batches");
 

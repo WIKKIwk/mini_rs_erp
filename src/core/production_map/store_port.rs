@@ -12,6 +12,17 @@ pub type ApparatusQueueStateMap = BTreeMap<String, QueueStateMap>;
 pub type ApparatusQueuePolicyMap = BTreeMap<String, ApparatusQueuePolicy>;
 pub type OrderLogMap = BTreeMap<String, Vec<ProductionOrderLogEntry>>;
 
+#[derive(Debug, Clone)]
+pub struct QueueActionProgressWrite {
+    pub apparatus: String,
+    pub states: QueueStateMap,
+    pub event: ApparatusQueueActionEvent,
+    pub session: Option<OrderRunSession>,
+    pub progress_event: Option<OrderProgressEvent>,
+    pub progress_batch: Option<OrderProgressBatch>,
+    pub progress_batch_updates: Vec<OrderProgressBatch>,
+}
+
 #[async_trait]
 pub trait ProductionMapStorePort: Send + Sync {
     // Maps and apparatus sequence persistence.
@@ -158,18 +169,14 @@ pub trait ProductionMapStorePort: Send + Sync {
         Ok(Vec::new())
     }
     async fn progress_batches_for_audit(&self) -> StoreResult<Vec<OrderProgressBatch>> {
-        self.wip_progress_batches("", "", "", None, true, "", 10_000)
-            .await
+        self.wip_progress_batches(WipProgressBatchQuery::new(
+            "", "", "", None, true, "", 10_000,
+        ))
+        .await
     }
     async fn wip_progress_batches(
         &self,
-        _apparatus: &str,
-        _next_apparatus: &str,
-        _current_location: &str,
-        _status: Option<OrderProgressBatchWipStatus>,
-        _include_processed: bool,
-        _order_id: &str,
-        _limit: usize,
+        _query: WipProgressBatchQuery,
     ) -> StoreResult<Vec<OrderProgressBatch>> {
         Ok(Vec::new())
     }
@@ -191,26 +198,20 @@ pub trait ProductionMapStorePort: Send + Sync {
     }
     async fn put_apparatus_queue_states_with_event_and_progress(
         &self,
-        apparatus: &str,
-        states: QueueStateMap,
-        event: ApparatusQueueActionEvent,
-        session: Option<OrderRunSession>,
-        progress_event: Option<OrderProgressEvent>,
-        progress_batch: Option<OrderProgressBatch>,
-        progress_batch_updates: Vec<OrderProgressBatch>,
+        write: QueueActionProgressWrite,
     ) -> StoreResult<()> {
-        self.put_apparatus_queue_states_with_event(apparatus, states, event)
+        self.put_apparatus_queue_states_with_event(&write.apparatus, write.states, write.event)
             .await?;
-        if let Some(session) = session {
+        if let Some(session) = write.session {
             self.put_order_run_session(session).await?;
         }
-        if let Some(event) = progress_event {
+        if let Some(event) = write.progress_event {
             self.put_order_progress_event(event).await?;
         }
-        if let Some(batch) = progress_batch {
+        if let Some(batch) = write.progress_batch {
             self.put_order_progress_batch(batch).await?;
         }
-        for batch in progress_batch_updates {
+        for batch in write.progress_batch_updates {
             self.put_order_progress_batch(batch).await?;
         }
         Ok(())

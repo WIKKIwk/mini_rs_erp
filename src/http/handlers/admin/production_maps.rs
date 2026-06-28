@@ -9,7 +9,7 @@ use crate::core::production_map::{
     OrderProgressBatchWipStatus, ProductionMapBatchMoveRequest, ProductionMapDefinition,
     ProductionMapError, ProductionMapMoveRequest, ProductionMapRunRequest, QueueActionActor,
     QueueProgressInput, RawMaterialAssignment, RawMaterialAssignmentDeleteInput,
-    RawMaterialAssignmentInput, queue_state,
+    RawMaterialAssignmentInput, WipProgressBatchQuery, queue_state,
 };
 use crate::google_sheets::is_sheet_order_map;
 

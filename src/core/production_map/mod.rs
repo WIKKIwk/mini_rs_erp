@@ -30,7 +30,7 @@ pub use materials::{
 #[cfg(test)]
 pub use memory_store::MemoryProductionMapStore;
 pub use service::{PreparedApparatusQueueAction, ProductionMapLiveSnapshot, ProductionMapService};
-pub use store_port::ProductionMapStorePort;
+pub use store_port::{ProductionMapStorePort, QueueActionProgressWrite};
 pub use types::*;
 
 #[cfg(test)]

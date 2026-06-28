@@ -3,8 +3,8 @@ use std::collections::BTreeMap;
 use sqlx::PgPool;
 
 use crate::core::production_map::{
-    CompletedQueueOrder, OrderProgressBatch, OrderProgressBatchWipStatus, OrderRunSession,
-    ProductionMapError, ProductionOrderLogEntry, queue_state,
+    CompletedQueueOrder, OrderProgressBatch, OrderRunSession, ProductionMapError,
+    ProductionOrderLogEntry, WipProgressBatchQuery, queue_state,
 };
 
 use super::progress_helpers::{
@@ -434,14 +434,17 @@ pub(super) async fn load_progress_batch_by_qr(
 
 pub(super) async fn load_wip_progress_batches(
     pool: &PgPool,
-    apparatus: &str,
-    next_apparatus: &str,
-    current_location: &str,
-    status: Option<OrderProgressBatchWipStatus>,
-    include_processed: bool,
-    order_id: &str,
-    limit: usize,
+    query: WipProgressBatchQuery,
 ) -> Result<Vec<OrderProgressBatch>, ProductionMapError> {
+    let WipProgressBatchQuery {
+        apparatus,
+        next_apparatus,
+        current_location,
+        status,
+        include_processed,
+        order_id,
+        limit,
+    } = query;
     if limit == 0 {
         return Ok(Vec::new());
     }
@@ -452,7 +455,7 @@ pub(super) async fn load_wip_progress_batches(
     } else {
         apparatus_key.as_str()
     };
-    let next_apparatus_key = queue_state::apparatus_search_key(next_apparatus);
+    let next_apparatus_key = queue_state::apparatus_search_key(&next_apparatus);
     let current_location = current_location.trim();
     let status = status.map(|value| value.as_str()).unwrap_or_default();
     let limit = i64::try_from(limit.min(500)).unwrap_or(500);

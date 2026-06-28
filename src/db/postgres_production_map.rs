@@ -9,7 +9,7 @@ use crate::core::production_map::{
     CompletionRequestNotification, CompletionRequestStateResolution, FinishedGoodsStockEntry,
     OrderProgressBatch, OrderProgressEvent, OrderRunSession, ProductionMapDefinition,
     ProductionMapError, ProductionMapStorePort, ProductionOrderLogEntry, QueueActionActor,
-    RawMaterialAssignment,
+    QueueActionProgressWrite, RawMaterialAssignment, WipProgressBatchQuery,
 };
 
 mod catalog_helpers;
@@ -330,25 +330,9 @@ impl ProductionMapStorePort for PostgresProductionMapStore {
 
     async fn wip_progress_batches(
         &self,
-        apparatus: &str,
-        next_apparatus: &str,
-        current_location: &str,
-        status: Option<crate::core::production_map::OrderProgressBatchWipStatus>,
-        include_processed: bool,
-        order_id: &str,
-        limit: usize,
+        query: WipProgressBatchQuery,
     ) -> Result<Vec<OrderProgressBatch>, ProductionMapError> {
-        load_wip_progress_batches(
-            &self.pool,
-            apparatus,
-            next_apparatus,
-            current_location,
-            status,
-            include_processed,
-            order_id,
-            limit,
-        )
-        .await
+        load_wip_progress_batches(&self.pool, query).await
     }
 
     async fn put_order_run_session(
@@ -390,32 +374,26 @@ impl ProductionMapStorePort for PostgresProductionMapStore {
 
     async fn put_apparatus_queue_states_with_event_and_progress(
         &self,
-        apparatus: &str,
-        states: BTreeMap<String, String>,
-        event: ApparatusQueueActionEvent,
-        session: Option<OrderRunSession>,
-        progress_event: Option<OrderProgressEvent>,
-        progress_batch: Option<OrderProgressBatch>,
-        progress_batch_updates: Vec<OrderProgressBatch>,
+        write: QueueActionProgressWrite,
     ) -> Result<(), ProductionMapError> {
-        let apparatus = apparatus.trim();
+        let apparatus = write.apparatus.trim();
         let mut tx = self
             .pool
             .begin()
             .await
             .map_err(|_| ProductionMapError::StoreFailed)?;
-        put_queue_states_tx(&mut tx, apparatus, states).await?;
-        insert_queue_action_event_tx(&mut tx, &event).await?;
-        if let Some(session) = session {
+        put_queue_states_tx(&mut tx, apparatus, write.states).await?;
+        insert_queue_action_event_tx(&mut tx, &write.event).await?;
+        if let Some(session) = write.session {
             put_order_run_session_tx(&mut tx, &session).await?;
         }
-        if let Some(event) = progress_event {
+        if let Some(event) = write.progress_event {
             put_order_progress_event_tx(&mut tx, &event).await?;
         }
-        if let Some(batch) = progress_batch {
+        if let Some(batch) = write.progress_batch {
             put_order_progress_batch_tx(&mut tx, &batch).await?;
         }
-        for batch in progress_batch_updates {
+        for batch in write.progress_batch_updates {
             put_order_progress_batch_tx(&mut tx, &batch).await?;
         }
         tx.commit()
