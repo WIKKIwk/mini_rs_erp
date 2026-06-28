@@ -6,9 +6,9 @@ use crate::core::calculate_orders::{
 use crate::core::gscale::models::{ProgressLabelPrintRequest, RawMaterialStockEntry};
 use crate::core::production_map::{
     ApparatusMaterialRuleUpsert, ApparatusQueuePolicy, CompletionRequestDecision,
-    OrderProgressBatchWipStatus, ProductionMapBatchMoveRequest, ProductionMapDefinition,
-    ProductionMapError, ProductionMapMoveRequest, ProductionMapRunRequest, QueueActionActor,
-    QueueProgressInput, RawMaterialAssignment, RawMaterialAssignmentDeleteInput,
+    MaterialScanProgressAction, OrderProgressBatchWipStatus, ProductionMapBatchMoveRequest,
+    ProductionMapDefinition, ProductionMapError, ProductionMapMoveRequest, ProductionMapRunRequest,
+    QueueActionActor, QueueProgressInput, RawMaterialAssignment, RawMaterialAssignmentDeleteInput,
     RawMaterialAssignmentInput, WipProgressBatchQuery, queue_state,
 };
 use crate::google_sheets::is_sheet_order_map;

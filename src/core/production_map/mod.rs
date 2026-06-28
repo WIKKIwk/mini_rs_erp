@@ -25,7 +25,8 @@ mod types;
 pub use compiler::{compile_map, run_map_with_variables};
 pub use materials::{
     ApparatusMaterialRequirementGroup, ApparatusMaterialRule, ApparatusMaterialRuleUpsert,
-    RawMaterialAssignment, RawMaterialAssignmentDeleteInput, RawMaterialAssignmentInput,
+    MaterialScanProgressAction, RawMaterialAssignment, RawMaterialAssignmentDeleteInput,
+    RawMaterialAssignmentInput,
 };
 #[cfg(test)]
 pub use memory_store::MemoryProductionMapStore;

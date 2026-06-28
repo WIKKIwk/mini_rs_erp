@@ -74,6 +74,16 @@ pub struct RawMaterialAssignment {
     pub assigned_at: String,
 }
 
+pub struct MaterialScanProgressAction<'a> {
+    pub apparatus: &'a str,
+    pub order_id: &'a str,
+    pub action: queue_state::ApparatusQueueAction,
+    pub assigned_apparatus: &'a [String],
+    pub actor: QueueActionActor,
+    pub material_barcode: &'a str,
+    pub progress: QueueProgressInput,
+}
+
 impl ProductionMapService {
     pub async fn apparatus_material_rules(
         &self,
@@ -187,39 +197,28 @@ impl ProductionMapService {
 
     pub async fn apply_apparatus_queue_action_with_material_scan_and_progress(
         &self,
-        apparatus: &str,
-        order_id: &str,
-        action: queue_state::ApparatusQueueAction,
-        assigned_apparatus: &[String],
-        actor: QueueActionActor,
-        material_barcode: &str,
-        progress: QueueProgressInput,
+        request: MaterialScanProgressAction<'_>,
     ) -> Result<ApparatusQueueActionResult, ProductionMapError> {
         let _guard = self.queue_action_guard().await;
         let prepared = self
-            .prepare_apparatus_queue_action_with_material_scan_and_progress(
-                apparatus,
-                order_id,
-                action,
-                assigned_apparatus,
-                actor,
-                material_barcode,
-                progress,
-            )
+            .prepare_apparatus_queue_action_with_material_scan_and_progress(request)
             .await?;
         self.commit_prepared_queue_action(prepared).await
     }
 
     pub(crate) async fn prepare_apparatus_queue_action_with_material_scan_and_progress(
         &self,
-        apparatus: &str,
-        order_id: &str,
-        action: queue_state::ApparatusQueueAction,
-        assigned_apparatus: &[String],
-        actor: QueueActionActor,
-        material_barcode: &str,
-        progress: QueueProgressInput,
+        request: MaterialScanProgressAction<'_>,
     ) -> Result<PreparedApparatusQueueAction, ProductionMapError> {
+        let MaterialScanProgressAction {
+            apparatus,
+            order_id,
+            action,
+            assigned_apparatus,
+            actor,
+            material_barcode,
+            progress,
+        } = request;
         if !queue_state::apparatus_matches_assigned(apparatus, assigned_apparatus) {
             return Err(ProductionMapError::ApparatusNotAssigned);
         }
