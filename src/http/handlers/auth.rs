@@ -195,7 +195,7 @@ fn is_public_host(host: &str) -> bool {
         return false;
     }
 
-    !host.parse::<std::net::IpAddr>().is_ok()
+    host.parse::<std::net::IpAddr>().is_err()
 }
 
 fn unauthorized() -> (StatusCode, Json<ErrorResponse>) {

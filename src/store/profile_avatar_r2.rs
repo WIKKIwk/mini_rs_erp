@@ -34,12 +34,11 @@ impl R2ProfileAvatarStorage {
                 .trim()
                 .trim_end_matches('/')
                 .to_string(),
-            region: config
-                .region
-                .trim()
-                .is_empty()
-                .then(|| "auto".to_string())
-                .unwrap_or_else(|| config.region.trim().to_string()),
+            region: if config.region.trim().is_empty() {
+                "auto".to_string()
+            } else {
+                config.region.trim().to_string()
+            },
             client: config.client,
         }
     }

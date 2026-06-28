@@ -21,10 +21,8 @@ pub async fn blocks(
     headers: HeaderMap,
     body: Bytes,
 ) -> Result<Json<serde_json::Value>, (StatusCode, Json<QolipErrorResponse>)> {
-    if method != Method::GET {
-        if method != Method::POST {
-            return Err(method_not_allowed());
-        }
+    if method != Method::GET && method != Method::POST {
+        return Err(method_not_allowed());
     }
     let principal = authenticated_principal(&state, &headers).await?;
     ensure_qolip_access(&state, &principal).await?;

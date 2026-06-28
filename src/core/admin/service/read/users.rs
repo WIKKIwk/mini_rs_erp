@@ -23,10 +23,11 @@ impl AdminService {
         let mut entries = Vec::new();
         let mut seen_ids = BTreeSet::new();
 
-        if let Some(entry) = werka_user_list_entry(&settings, &role_labels) {
-            if user_list_matches(&entry, &normalized_query) && seen_ids.insert(entry.id.clone()) {
-                entries.push(entry);
-            }
+        if let Some(entry) = werka_user_list_entry(&settings, &role_labels)
+            && user_list_matches(&entry, &normalized_query)
+            && seen_ids.insert(entry.id.clone())
+        {
+            entries.push(entry);
         }
 
         for supplier in self.admin_suppliers_from_entries(suppliers, &states)? {

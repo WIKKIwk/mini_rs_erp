@@ -99,10 +99,10 @@ pub fn pechat_can_handle_order(
     roll_count: Option<f64>,
     width_mm: Option<f64>,
 ) -> bool {
-    if let Some(roll) = roll_count {
-        if roll > f64::from(apparatus_color_count) {
-            return false;
-        }
+    if let Some(roll) = roll_count
+        && roll > f64::from(apparatus_color_count)
+    {
+        return false;
     }
     let Some(width) = width_mm.filter(|value| *value > 0.0) else {
         return true;
@@ -142,10 +142,10 @@ pub fn pechat_can_move_order(
     width_mm: Option<f64>,
     source_apparatus_color_count: Option<u8>,
 ) -> bool {
-    if let Some(recommended) = recommended_pechat_color_count(roll_count, width_mm) {
-        if apparatus_color_count < recommended {
-            return false;
-        }
+    if let Some(recommended) = recommended_pechat_color_count(roll_count, width_mm)
+        && apparatus_color_count < recommended
+    {
+        return false;
     }
     let moving_down = source_apparatus_color_count
         .map(|source| apparatus_color_count < source)

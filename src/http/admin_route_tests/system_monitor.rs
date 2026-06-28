@@ -85,7 +85,7 @@ async fn admin_system_monitor_reports_server_and_backup_state() {
             >= 0
     );
 
-    assert!(body["database"]["status"].as_str().unwrap_or("").len() > 0);
+    assert!(!body["database"]["status"].as_str().unwrap_or("").is_empty());
     assert!(body["runtime"]["cpu_percent"].as_i64().unwrap_or(-1) >= 0);
     assert!(body["runtime"]["memory_percent"].as_i64().unwrap_or(-1) >= 0);
     assert!(body["runtime"]["memory_used_mb"].as_i64().unwrap_or(-1) >= 0);

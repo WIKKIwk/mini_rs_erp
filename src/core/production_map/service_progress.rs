@@ -168,17 +168,16 @@ impl ProductionMapService {
                     &description,
                 )?;
                 let mut progress_batch_updates = Vec::new();
-                if !input_progress.batch_id.trim().is_empty() {
-                    if let Some(input_batch) =
+                if !input_progress.batch_id.trim().is_empty()
+                    && let Some(input_batch) =
                         self.store.progress_batch(&input_progress.batch_id).await?
-                    {
-                        progress_batch_updates.push(wip_batch_processed(
-                            input_batch,
-                            apparatus,
-                            &session.session_id,
-                            now,
-                        ));
-                    }
+                {
+                    progress_batch_updates.push(wip_batch_processed(
+                        input_batch,
+                        apparatus,
+                        &session.session_id,
+                        now,
+                    ));
                 }
                 let event = progress_event_record(
                     apparatus,

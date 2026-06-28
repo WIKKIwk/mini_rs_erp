@@ -54,7 +54,7 @@ pub(super) async fn active_order_run_sessions_for_worker(
         })
         .cloned()
         .collect::<Vec<_>>();
-    sessions.sort_by(|left, right| right.updated_at_unix.cmp(&left.updated_at_unix));
+    sessions.sort_by_key(|session| std::cmp::Reverse(session.updated_at_unix));
     sessions.truncate(limit.min(500));
     Ok(sessions)
 }

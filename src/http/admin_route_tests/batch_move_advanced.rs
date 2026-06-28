@@ -67,9 +67,8 @@ async fn production_map_batch_move_keeps_laminatsiya_alternatives_in_group() {
         .as_array()
         .expect("nodes")
         .iter()
-        .filter_map(|node| {
-            (node["kind"] == "apparatus").then(|| node["alternative_assigned_title"].as_str())
-        })
+        .filter(|node| node["kind"] == "apparatus")
+        .map(|node| node["alternative_assigned_title"].as_str())
         .flatten()
         .collect();
     assert_eq!(
@@ -102,9 +101,8 @@ async fn production_map_batch_move_keeps_laminatsiya_alternatives_in_group() {
         .as_array()
         .expect("nodes")
         .iter()
-        .filter_map(|node| {
-            (node["kind"] == "apparatus").then(|| node["alternative_assigned_title"].as_str())
-        })
+        .filter(|node| node["kind"] == "apparatus")
+        .map(|node| node["alternative_assigned_title"].as_str())
         .flatten()
         .collect();
     assert_eq!(

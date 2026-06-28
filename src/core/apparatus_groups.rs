@@ -143,7 +143,7 @@ impl ApparatusGroupStorePort for MemoryApparatusGroupStore {
         } else {
             groups.push(group);
         }
-        groups.sort_by(|left, right| left.name.to_lowercase().cmp(&right.name.to_lowercase()));
+        groups.sort_by_key(|group| group.name.to_lowercase());
         Ok(())
     }
 

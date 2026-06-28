@@ -284,10 +284,11 @@ impl ProductionMapService {
             }
             return Ok(());
         }
-        if let Some(rule) = self.material_rule_for_apparatus(apparatus).await? {
-            if rule.requires_material && !material_requirements_met(&rule, &assignments) {
-                return Err(ProductionMapError::RawMaterialAssignmentNotFound);
-            }
+        if let Some(rule) = self.material_rule_for_apparatus(apparatus).await?
+            && rule.requires_material
+            && !material_requirements_met(&rule, &assignments)
+        {
+            return Err(ProductionMapError::RawMaterialAssignmentNotFound);
         }
         let scanned = normalized_barcodes(material_barcode);
         if scanned.is_empty() {
