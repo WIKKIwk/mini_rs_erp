@@ -285,26 +285,9 @@ impl ProductionMapService {
 
     pub async fn wip_progress_batches(
         &self,
-        apparatus: &str,
-        next_apparatus: &str,
-        current_location: &str,
-        status: Option<OrderProgressBatchWipStatus>,
-        include_processed: bool,
-        order_id: &str,
-        limit: usize,
+        query: WipProgressBatchQuery,
     ) -> Result<Vec<OrderProgressBatch>, ProductionMapError> {
-        let mut batches = self
-            .store
-            .wip_progress_batches(
-                apparatus,
-                next_apparatus,
-                current_location,
-                status,
-                include_processed,
-                order_id,
-                limit,
-            )
-            .await?;
+        let mut batches = self.store.wip_progress_batches(query).await?;
         if batches.iter().any(progress_batch_needs_location_repair) {
             let maps_by_id = self
                 .store
@@ -582,15 +565,15 @@ impl ProductionMapService {
     ) -> Result<ApparatusQueueActionResult, ProductionMapError> {
         let order_id = prepared.event.order_id.clone();
         self.store
-            .put_apparatus_queue_states_with_event_and_progress(
-                &prepared.apparatus,
-                prepared.states.clone(),
-                prepared.event,
-                prepared.session.clone(),
-                prepared.progress_event.clone(),
-                prepared.progress_batch.clone(),
-                prepared.progress_batch_updates.clone(),
-            )
+            .put_apparatus_queue_states_with_event_and_progress(QueueActionProgressWrite {
+                apparatus: prepared.apparatus.clone(),
+                states: prepared.states.clone(),
+                event: prepared.event,
+                session: prepared.session.clone(),
+                progress_event: prepared.progress_event.clone(),
+                progress_batch: prepared.progress_batch.clone(),
+                progress_batch_updates: prepared.progress_batch_updates.clone(),
+            })
             .await?;
         let order_status = self.order_status_detail(&order_id).await?;
         self.notify_live();

@@ -64,7 +64,7 @@ pub async fn production_map_wip_batches(
     };
     let batches = state
         .production_maps
-        .wip_progress_batches(
+        .wip_progress_batches(WipProgressBatchQuery::new(
             &query.apparatus,
             &query.next_apparatus,
             &query.current_location,
@@ -72,7 +72,7 @@ pub async fn production_map_wip_batches(
             include_processed,
             &query.order_id,
             positive_int(query.limit.as_deref(), 100),
-        )
+        ))
         .await
         .map_err(production_map_error)?;
     Ok(json_response(serde_json::json!({

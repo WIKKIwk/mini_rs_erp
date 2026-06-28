@@ -174,14 +174,17 @@ pub(super) async fn progress_batches_for_order(
 
 pub(super) async fn wip_progress_batches(
     store: &MemoryProductionMapStore,
-    apparatus: &str,
-    next_apparatus: &str,
-    current_location: &str,
-    status: Option<OrderProgressBatchWipStatus>,
-    include_processed: bool,
-    order_id: &str,
-    limit: usize,
+    query: WipProgressBatchQuery,
 ) -> Result<Vec<OrderProgressBatch>, ProductionMapError> {
+    let WipProgressBatchQuery {
+        apparatus,
+        next_apparatus,
+        current_location,
+        status,
+        include_processed,
+        order_id,
+        limit,
+    } = query;
     if limit == 0 {
         return Ok(Vec::new());
     }
