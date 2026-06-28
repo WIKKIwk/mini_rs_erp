@@ -163,13 +163,15 @@ pub async fn production_map_queue_action(
     let prepared = state
         .production_maps
         .prepare_apparatus_queue_action_with_material_scan_and_progress(
-            &input.apparatus,
-            &input.order_id,
-            input.action,
-            &assigned_apparatus,
-            queue_action_actor(&principal),
-            &material_barcode,
-            progress,
+            MaterialScanProgressAction {
+                apparatus: &input.apparatus,
+                order_id: &input.order_id,
+                action: input.action,
+                assigned_apparatus: &assigned_apparatus,
+                actor: queue_action_actor(&principal),
+                material_barcode: &material_barcode,
+                progress,
+            },
         )
         .await
         .map_err(production_map_error)?;

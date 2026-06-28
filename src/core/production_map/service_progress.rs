@@ -97,16 +97,19 @@ impl ProductionMapService {
                     updated_at_unix: now,
                     payload_json: start_session_payload(actor, input_progress_batch.as_ref()),
                 };
-                let event = zero_quantity_event(
-                    &session,
+                let context = ProgressRecordContext {
+                    session: &session,
                     apparatus,
                     order_id,
                     action,
                     actor,
+                    now,
+                };
+                let event = zero_quantity_event(
+                    context,
                     String::new(),
                     String::new(),
                     start_event_payload(input_progress_batch.as_ref()),
-                    now,
                 );
                 let progress_batch_updates = input_progress_batch
                     .map(|batch| wip_batch_in_use(batch, apparatus, &session.session_id, now))
@@ -154,19 +157,23 @@ impl ProductionMapService {
                     &progress,
                     &input_progress,
                 );
-                let batch = progress_batch_record(
-                    order_map,
+                let context = ProgressRecordContext {
+                    session: &session,
                     apparatus,
                     order_id,
                     action,
                     actor,
-                    &session,
-                    &quantity,
-                    &output_identity,
-                    &input_progress,
+                    now,
+                };
+                let batch = progress_batch_record(ProgressBatchRecordInput {
+                    order_map,
+                    context,
+                    quantity: &quantity,
+                    output_identity: &output_identity,
+                    input_progress: &input_progress,
                     metrics,
-                    &description,
-                )?;
+                    description: &description,
+                })?;
                 let mut progress_batch_updates = Vec::new();
                 if !input_progress.batch_id.trim().is_empty()
                     && let Some(input_batch) =
@@ -179,18 +186,13 @@ impl ProductionMapService {
                         now,
                     ));
                 }
-                let event = progress_event_record(
-                    apparatus,
-                    order_id,
-                    action,
-                    actor,
-                    &session,
+                let event = progress_event_record(ProgressEventRecordInput {
+                    context,
                     quantity,
                     output_identity,
                     metrics,
-                    &description,
-                    now,
-                );
+                    description: &description,
+                });
                 Ok(QueueProgressRecords {
                     session: Some(session),
                     progress_event: Some(event),
@@ -218,16 +220,19 @@ impl ProductionMapService {
                         payload_json: resume_without_progress_payload(),
                         ..session
                     };
-                    let event = zero_quantity_event(
-                        &session,
+                    let context = ProgressRecordContext {
+                        session: &session,
                         apparatus,
                         order_id,
                         action,
                         actor,
+                        now,
+                    };
+                    let event = zero_quantity_event(
+                        context,
                         String::new(),
                         String::new(),
                         resume_event_payload(),
-                        now,
                     );
                     return Ok(QueueProgressRecords {
                         session: Some(session),
@@ -269,16 +274,19 @@ impl ProductionMapService {
                         ..session
                     })
                     .ok_or(ProductionMapError::ProgressBatchNotFound)?;
-                let event = zero_quantity_event(
-                    &session,
+                let context = ProgressRecordContext {
+                    session: &session,
                     apparatus,
                     order_id,
                     action,
                     actor,
+                    now,
+                };
+                let event = zero_quantity_event(
+                    context,
                     batch.batch_id.clone(),
                     batch.qr_payload.clone(),
                     resume_event_payload(),
-                    now,
                 );
                 Ok(QueueProgressRecords {
                     session: Some(session),

@@ -117,37 +117,39 @@ pub(super) fn serialized_queue_states(
         .collect()
 }
 
-pub(super) fn queue_action_event(
-    requested_apparatus: &str,
-    storage_key: &str,
-    order_id: &str,
-    action: queue_state::ApparatusQueueAction,
-    from_state: queue_state::ApparatusQueueOrderState,
-    to_state: queue_state::ApparatusQueueOrderState,
-    policy: ApparatusQueuePolicy,
-    actor: &QueueActionActor,
-    assigned_apparatus: &[String],
-    sequence: &[String],
-    visible_order_ids: &[String],
-) -> ApparatusQueueActionEvent {
+pub(super) struct QueueActionEventInput<'a> {
+    pub(super) requested_apparatus: &'a str,
+    pub(super) storage_key: &'a str,
+    pub(super) order_id: &'a str,
+    pub(super) action: queue_state::ApparatusQueueAction,
+    pub(super) from_state: queue_state::ApparatusQueueOrderState,
+    pub(super) to_state: queue_state::ApparatusQueueOrderState,
+    pub(super) policy: ApparatusQueuePolicy,
+    pub(super) actor: &'a QueueActionActor,
+    pub(super) assigned_apparatus: &'a [String],
+    pub(super) sequence: &'a [String],
+    pub(super) visible_order_ids: &'a [String],
+}
+
+pub(super) fn queue_action_event(input: QueueActionEventInput<'_>) -> ApparatusQueueActionEvent {
     ApparatusQueueActionEvent {
-        event_id: queue_action_event_id(storage_key, order_id, action),
-        apparatus: storage_key.to_string(),
-        order_id: order_id.to_string(),
-        action,
-        from_state,
-        to_state,
-        policy,
-        actor: actor.clone(),
-        assigned_apparatus: sanitized_assigned_apparatus(assigned_apparatus),
+        event_id: queue_action_event_id(input.storage_key, input.order_id, input.action),
+        apparatus: input.storage_key.to_string(),
+        order_id: input.order_id.to_string(),
+        action: input.action,
+        from_state: input.from_state,
+        to_state: input.to_state,
+        policy: input.policy,
+        actor: input.actor.clone(),
+        assigned_apparatus: sanitized_assigned_apparatus(input.assigned_apparatus),
         payload_json: queue_action_event_payload(
-            requested_apparatus,
-            storage_key,
-            sequence,
-            visible_order_ids,
-            from_state,
-            to_state,
-            policy,
+            input.requested_apparatus,
+            input.storage_key,
+            input.sequence,
+            input.visible_order_ids,
+            input.from_state,
+            input.to_state,
+            input.policy,
         ),
     }
 }

@@ -461,19 +461,19 @@ impl ProductionMapService {
             .copied()
             .ok_or(ProductionMapError::QueueActionNotAllowed)?;
         let mut saved = serialized_queue_states(parsed);
-        let mut event = queue_action_event(
-            apparatus,
-            &storage_key,
+        let mut event = queue_action_event(QueueActionEventInput {
+            requested_apparatus: apparatus,
+            storage_key: &storage_key,
             order_id,
             action,
             from_state,
             to_state,
             policy,
-            &actor,
+            actor: &actor,
             assigned_apparatus,
-            &sequence,
-            &visible_order_ids,
-        );
+            sequence: &sequence,
+            visible_order_ids: &visible_order_ids,
+        });
         let progress = self
             .build_progress_records(&storage_key, order_id, order_map, action, &actor, progress)
             .await?;
