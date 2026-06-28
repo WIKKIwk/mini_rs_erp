@@ -19,6 +19,7 @@ mod material_helpers;
 mod order_query_helpers;
 mod progress_helpers;
 mod queue_helpers;
+mod wip_query_helpers;
 
 use self::catalog_helpers::{
     delete_map_by_id, load_apparatus_queue_policies, load_apparatus_queue_states,
@@ -43,7 +44,7 @@ use self::order_query_helpers::{
     load_order_run_sessions_for_audit, load_order_run_sessions_for_order, load_progress_batch,
     load_progress_batch_by_qr, load_progress_batches_for_audit, load_progress_batches_for_order,
     load_progress_batches_for_worker, load_queue_action_logs_for_orders,
-    load_queue_action_logs_for_worker, load_wip_progress_batches,
+    load_queue_action_logs_for_worker,
 };
 use self::progress_helpers::{
     put_order_progress_batch, put_order_progress_batch_tx, put_order_progress_event,
@@ -51,6 +52,7 @@ use self::progress_helpers::{
     receive_finished_goods_batch_tx,
 };
 use self::queue_helpers::{insert_queue_action_event_tx, put_queue_states_tx};
+use self::wip_query_helpers::load_wip_progress_batches;
 
 #[derive(Clone)]
 pub struct PostgresProductionMapStore {

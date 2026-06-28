@@ -1,7 +1,8 @@
+use self::backup::scan_backup_directory;
 use super::*;
 use crate::core::admin::models::{
-    AdminServerMonitorBackupFile, AdminServerMonitorBackups, AdminServerMonitorDatabase,
-    AdminServerMonitorResponse, AdminServerMonitorRuntime, AdminServerMonitorServer,
+    AdminServerMonitorDatabase, AdminServerMonitorResponse, AdminServerMonitorRuntime,
+    AdminServerMonitorServer,
 };
 use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
 use std::fs;
@@ -10,6 +11,10 @@ use std::process::Command;
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 use time::OffsetDateTime;
 use tokio::time::{Duration, timeout};
+
+mod backup;
+#[cfg(test)]
+mod tests;
 
 const DATABASE_PING_TIMEOUT: Duration = Duration::from_secs(2);
 const LIVE_SNAPSHOT_INTERVAL: Duration = Duration::from_secs(2);
@@ -242,95 +247,6 @@ fn database_monitor_from_ping_outcome(
     }
 }
 
-fn scan_backup_directory(now: OffsetDateTime) -> AdminServerMonitorBackups {
-    let directory = backup_directory();
-    let mut snapshot = AdminServerMonitorBackups {
-        directory: directory.display().to_string(),
-        exists: directory.is_dir(),
-        ..Default::default()
-    };
-    if !snapshot.exists {
-        snapshot.error = "backup directory not found".to_string();
-        return snapshot;
-    }
-    let entries = match fs::read_dir(&directory) {
-        Ok(entries) => entries,
-        Err(error) => {
-            snapshot.error = error.to_string();
-            return snapshot;
-        }
-    };
-    let mut files: Vec<(SystemTime, PathBuf, u64)> = Vec::new();
-    collect_backup_files(entries, &mut snapshot.file_count, &mut files);
-    files.sort_by_key(|file| std::cmp::Reverse(file.0));
-    snapshot.files = files
-        .into_iter()
-        .map(|(modified, path, size_bytes)| backup_file_snapshot(now, modified, path, size_bytes))
-        .collect();
-    snapshot.latest = snapshot.files.first().cloned();
-    snapshot
-}
-
-fn collect_backup_files(
-    entries: fs::ReadDir,
-    file_count: &mut usize,
-    files: &mut Vec<(SystemTime, PathBuf, u64)>,
-) {
-    for entry in entries.flatten() {
-        let path = entry.path();
-        let Ok(metadata) = entry.metadata() else {
-            continue;
-        };
-        if metadata.is_dir() {
-            if let Ok(child_entries) = fs::read_dir(path) {
-                collect_backup_files(child_entries, file_count, files);
-            }
-            continue;
-        }
-        if !metadata.is_file() {
-            continue;
-        }
-        if !is_backup_data_file(&path) {
-            continue;
-        }
-        *file_count += 1;
-        let Ok(modified) = metadata.modified() else {
-            continue;
-        };
-        files.push((modified, path, metadata.len()));
-    }
-}
-
-fn is_backup_data_file(path: &std::path::Path) -> bool {
-    let name = path
-        .file_name()
-        .and_then(|value| value.to_str())
-        .unwrap_or_default()
-        .to_ascii_lowercase();
-    name.ends_with(".dump") || name.ends_with(".sql") || name.ends_with(".sql.gz")
-}
-
-fn backup_file_snapshot(
-    now: OffsetDateTime,
-    modified: SystemTime,
-    path: PathBuf,
-    size_bytes: u64,
-) -> AdminServerMonitorBackupFile {
-    let modified_at_unix = system_time_to_unix(modified);
-    let age_seconds = now.unix_timestamp().saturating_sub(modified_at_unix).max(0);
-    AdminServerMonitorBackupFile {
-        name: path
-            .file_name()
-            .and_then(|value| value.to_str())
-            .unwrap_or_default()
-            .to_string(),
-        path: path.display().to_string(),
-        size_bytes,
-        modified_at_unix,
-        age_seconds,
-    }
-}
-
 fn runtime_snapshot() -> AdminServerMonitorRuntime {
     let (memory_used_mb, memory_total_mb, memory_percent) = memory_snapshot();
     let disk = disk_snapshot();
@@ -471,123 +387,13 @@ fn empty_disk_snapshot(path: String) -> DiskSnapshot {
     }
 }
 
-fn backup_directory() -> PathBuf {
-    if let Some(path) = std::env::var("MINI_ERP_BACKUP_DIR")
-        .ok()
-        .map(PathBuf::from)
-        .filter(|path| !path.as_os_str().is_empty())
-    {
-        return path;
-    }
-    first_existing_backup_directory([
-        PathBuf::from("backups/mini_rs_erp_db"),
-        PathBuf::from("../backups/mini_rs_erp_db"),
-    ])
-}
-
-fn first_existing_backup_directory<const N: usize>(candidates: [PathBuf; N]) -> PathBuf {
-    let fallback = candidates
-        .first()
-        .cloned()
-        .unwrap_or_else(|| PathBuf::from("backups/mini_rs_erp_db"));
-    candidates
-        .into_iter()
-        .find(|candidate| candidate.is_dir())
-        .unwrap_or(fallback)
-}
-
 fn elapsed_ping_ms(started: Instant) -> i64 {
     let elapsed = started.elapsed().as_millis().min(i64::MAX as u128) as i64;
     elapsed.max(1)
-}
-
-fn system_time_to_unix(time: SystemTime) -> i64 {
-    time.duration_since(UNIX_EPOCH)
-        .map(|duration| duration.as_secs().min(i64::MAX as u64) as i64)
-        .unwrap_or(0)
 }
 
 fn system_time_to_unix_ms(time: SystemTime) -> i64 {
     time.duration_since(UNIX_EPOCH)
         .map(|duration| duration.as_millis().min(i64::MAX as u128) as i64)
         .unwrap_or(0)
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::core::admin::monitor_hub::SystemMonitorHub;
-
-    #[test]
-    fn elapsed_ping_ms_never_reports_unknown_zero_for_successful_ping() {
-        assert!(elapsed_ping_ms(Instant::now()) >= 1);
-    }
-
-    #[test]
-    fn first_existing_backup_directory_uses_existing_parent_backup_path() {
-        let root = tempfile::tempdir().expect("backup root");
-        let missing = root.path().join("mini_rs_erp/backups/mini_rs_erp_db");
-        let parent_backup = root.path().join("backups/mini_rs_erp_db");
-        fs::create_dir_all(&parent_backup).expect("parent backup dir");
-
-        let selected = first_existing_backup_directory([missing, parent_backup.clone()]);
-
-        assert_eq!(selected, parent_backup);
-    }
-
-    #[test]
-    fn database_monitor_reports_timeout_as_offline() {
-        let database =
-            database_monitor_from_ping_outcome(Instant::now(), DatabasePingOutcome::Timeout);
-
-        assert!(database.configured);
-        assert!(!database.reachable);
-        assert_eq!(database.status, "offline");
-        assert_eq!(database.error, "database ping timed out");
-    }
-
-    #[test]
-    fn system_monitor_ping_text_returns_app_level_pong() {
-        let pong =
-            system_monitor_pong_text(r#"{"type":"ping","id":7,"sent_at_ms":12345}"#).expect("pong");
-        let payload: serde_json::Value = serde_json::from_str(&pong).expect("pong json");
-
-        assert_eq!(payload["type"], "pong");
-        assert_eq!(payload["id"], 7);
-        assert_eq!(payload["sent_at_ms"], 12345);
-        assert!(payload["server_at_ms"].as_i64().unwrap_or(0) > 0);
-    }
-
-    #[tokio::test]
-    async fn system_monitor_hub_fans_out_latest_snapshot_to_all_subscribers() {
-        let hub = SystemMonitorHub::new();
-        assert!(hub.mark_started());
-        assert!(!hub.mark_started());
-
-        let mut first = hub.subscribe();
-        let mut second = hub.subscribe();
-        let snapshot = AdminServerMonitorResponse {
-            server: AdminServerMonitorServer {
-                status: "running".to_string(),
-                ..Default::default()
-            },
-            database: AdminServerMonitorDatabase {
-                reachable: true,
-                status: "online".to_string(),
-                ..Default::default()
-            },
-            backups: AdminServerMonitorBackups {
-                exists: true,
-                ..Default::default()
-            },
-            runtime: AdminServerMonitorRuntime::default(),
-        };
-
-        hub.publish(snapshot.clone());
-
-        first.changed().await.expect("first subscriber update");
-        second.changed().await.expect("second subscriber update");
-        assert_eq!(first.borrow().as_ref(), Some(&snapshot));
-        assert_eq!(second.borrow().as_ref(), Some(&snapshot));
-    }
 }

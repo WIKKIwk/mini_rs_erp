@@ -2,6 +2,7 @@ use super::*;
 
 use super::progress::{legacy_order_run_session, progress_session_id, unix_seconds};
 use super::service::QueueProgressRecords;
+use super::service_progress_metrics::validated_progress_metrics;
 use super::service_progress_support::*;
 
 impl ProductionMapService {
