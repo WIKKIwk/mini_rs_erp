@@ -142,6 +142,143 @@ make stop-domain DOMAIN=mini-rs-erp-dev.wspace.sbs
 
 ## Main Workflows
 
+### Working Principles
+
+Mini ERP is built around a few strict principles:
+
+- The map defines the planned production route.
+- The queue controls what an operator is allowed to do next.
+- Progress actions create immutable operational evidence: sessions, events, WIP
+  batches, QR payloads, and audit logs.
+- Physical stock movement must be backed by identity checks, QR scans, or
+  explicit operator action.
+- External integrations such as printing and push notifications support the
+  workflow, but they should not hide the ERP state transition.
+
+At runtime, most write flows follow this shape:
+
+```mermaid
+sequenceDiagram
+    participant Operator as Mobile Operator
+    participant Handler as HTTP Handler
+    participant Service as Domain Service
+    participant Store as PostgreSQL Store
+    participant Print as Print/Push Side Effects
+
+    Operator->>Handler: Action request
+    Handler->>Service: Authenticated input
+    Service->>Store: Load current state
+    Service->>Service: Validate role, queue state, QR, material, and quantity
+    Service->>Store: Persist state transition
+    Service->>Print: Optional label, QR, push, or live notification
+    Service-->>Handler: Updated ERP state
+    Handler-->>Operator: JSON response
+```
+
+The important rule is that PostgreSQL is the source of truth for ERP state.
+Handlers should not calculate business outcomes by themselves; they should call
+domain services, and services should persist through explicit store ports.
+
+### Calculation System
+
+Production calculation starts from a `ProductionMapDefinition`. A map is a graph
+of nodes and edges. Nodes may represent start/end markers, tasks, formula
+calculations, condition branches, or location markers.
+
+The calculation flow is:
+
+1. `compile_map` validates the graph, rejects invalid formulas, rejects cycles,
+   and produces an ordered `ProductionMapProgram`.
+2. `run_map_with_variables` starts with `order_qty` and optional runtime
+   variables.
+3. Formula nodes write calculated variables, for example `cpp_kg = order_qty *
+   1.08`.
+4. Condition nodes decide which branch can continue. If a required variable is
+   missing, the run can stop at that condition and wait for runtime input.
+5. Task nodes calculate their own quantity through `qty_formula`; if it is
+   empty, the task inherits `order_qty`.
+6. Non-positive or non-finite quantities are rejected.
+
+```mermaid
+flowchart LR
+    Map["ProductionMapDefinition"]
+    Validate["Validate graph<br/>nodes, edges, formulas"]
+    Program["ProductionMapProgram"]
+    Variables["Variables<br/>order_qty + calculated values"]
+    Tasks["Task drafts<br/>apparatus + qty"]
+
+    Map --> Validate
+    Validate --> Program
+    Program --> Variables
+    Variables --> Tasks
+```
+
+The formula system intentionally supports a narrow, auditable expression model:
+
+- arithmetic formulas are evaluated against named numeric variables;
+- condition formulas can compare values with operators such as `>`, `>=`, `<`,
+  `<=`, `==`, and `!=`;
+- formula targets must be valid identifiers;
+- location references are validated separately;
+- invalid expressions fail before the map is accepted.
+
+#### Quantity and Waste Metrics
+
+Runtime progress does not blindly trust client input. Progress quantities and
+completion metrics are validated by production stage:
+
+- progress quantity must be finite and positive;
+- Bosma completion requires return ink, total waste, finished goods kg, and
+  finished goods meter;
+- Laminatsiya completion requires leftover roll information, total waste,
+  finished goods kg, and finished goods meter;
+- Rezka progress requires bosma waste, lamination waste, and edge waste;
+- final finished-goods receiving uses the completed progress batch quantity and
+  stores a stock entry for the receiving warehouse.
+
+This keeps operational metrics tied to the actual queue action that produced
+them.
+
+#### Raw Material Validation
+
+Some apparatus stages require material scans before start. The rule system is:
+
+- admin defines apparatus material requirements;
+- raw materials are assigned to an order by barcode;
+- start actions can require an exact scan set;
+- alternative material groups can satisfy a requirement when configured;
+- duplicate or mismatched scans are rejected.
+
+The purpose is to prevent an operator from starting a production stage with the
+wrong input material.
+
+#### Queue and WIP Flow
+
+Production queue flow is stateful:
+
+```mermaid
+stateDiagram-v2
+    [*] --> Pending
+    Pending --> InProgress: start
+    InProgress --> Paused: pause + output QR
+    Paused --> InProgress: resume
+    InProgress --> Completed: complete + metrics
+    Completed --> FinishedGoods: final stage receive
+```
+
+For multi-stage production, WIP QR links output from one stage to input for the
+next stage:
+
+- pause/complete can create a progress batch with QR payload;
+- downstream start must scan the previous stage QR when required;
+- scanned WIP can move from `waiting` to `in_use` to `processed`;
+- an order is not fully closed while required previous WIPs are still waiting
+  for downstream processing;
+- QR reports can identify stale or superseded batches.
+
+This lets the system track not only that an order moved forward, but which
+physical intermediate output moved to the next apparatus.
+
 ### Production Map
 
 Production maps define the operation graph for an order. The queue layer turns
