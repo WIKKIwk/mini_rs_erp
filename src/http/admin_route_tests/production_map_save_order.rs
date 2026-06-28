@@ -125,6 +125,78 @@ async fn production_map_save_with_order_records_mini_order_without_blocking_resp
 }
 
 #[tokio::test]
+async fn production_map_save_with_order_recalculates_map_fields_from_template() {
+    let state = test_state();
+    let token = session(&state, PrincipalRole::Admin).await;
+
+    let mut map: serde_json::Value = serde_json::from_str(&pechat_order_map_json(
+        "zakaz-7801",
+        "Calculated zakaz",
+        "7801",
+        "8 ta rangli pechat",
+    ))
+    .expect("map json");
+    map["width_mm"] = serde_json::json!(9999.0);
+    map["order_kg"] = serde_json::json!(1.0);
+    map["base_length"] = serde_json::json!(1.0);
+    let body = serde_json::json!({
+        "map": map,
+        "template": {
+            "name": "calculated mahsulot",
+            "product": "calculated mahsulot",
+            "item_code": "ITEM-CALC",
+            "frame_product_size_mm": 635.0,
+            "frame_count": 1.0,
+            "waste_percent": 5.0,
+            "roll_count": 7.0,
+            "first_layer_material": "pet",
+            "first_layer_micron": "12",
+            "second_layer_material": "pe oq",
+            "second_layer_micron": "30",
+            "kg": 500.0
+        }
+    });
+
+    let response = build_router(state.clone())
+        .oneshot(request_with_body(
+            "PUT",
+            "/v1/mobile/admin/production-maps/with-order",
+            &token,
+            &body.to_string(),
+        ))
+        .await
+        .expect("save with order");
+    assert_eq!(response.status(), StatusCode::OK);
+    let value = json_body(response).await;
+    let saved_map = &value["saved"]["map"];
+    assert_eq!(saved_map["width_mm"], serde_json::json!(650.0));
+    assert_eq!(saved_map["order_kg"], serde_json::json!(500.0));
+    assert_ne!(saved_map["base_length"], serde_json::json!(1.0));
+    assert!(
+        saved_map["base_length"]
+            .as_f64()
+            .is_some_and(|value| value > 0.0)
+    );
+
+    let fetched = build_router(state)
+        .oneshot(request(
+            "GET",
+            "/v1/mobile/admin/production-maps?id=zakaz-7801",
+            &token,
+        ))
+        .await
+        .expect("fetch map by id");
+    assert_eq!(fetched.status(), StatusCode::OK);
+    let fetched_value = json_body(fetched).await;
+    assert_eq!(fetched_value["map"]["width_mm"], serde_json::json!(650.0));
+    assert_eq!(fetched_value["map"]["order_kg"], serde_json::json!(500.0));
+    assert_eq!(
+        fetched_value["map"]["base_length"],
+        saved_map["base_length"]
+    );
+}
+
+#[tokio::test]
 async fn production_map_save_with_order_does_not_store_cloned_order_as_quick_template() {
     let state = test_state();
     let token = session(&state, PrincipalRole::Admin).await;

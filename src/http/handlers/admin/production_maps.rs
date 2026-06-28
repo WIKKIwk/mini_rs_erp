@@ -3,6 +3,7 @@ use crate::core::auth::models::{Principal, PrincipalRole};
 use crate::core::calculate_orders::{
     CalculateOrderError, CalculateOrderTemplate, owner_key, validate_template,
 };
+use crate::core::formula::{CalculateRequest, LayerInput, calculate};
 use crate::core::gscale::models::{ProgressLabelPrintRequest, RawMaterialStockEntry};
 use crate::core::production_map::{
     ApparatusMaterialRuleUpsert, ApparatusQueuePolicy, CompletionRequestDecision,
@@ -147,9 +148,12 @@ pub async fn production_map_save_with_order(
     if method != Method::PUT {
         return Err(method_not_allowed());
     }
-    let input: ProductionMapSaveWithOrderRequest = parse_json(&body)?;
+    let mut input: ProductionMapSaveWithOrderRequest = parse_json(&body)?;
     if let Some(template) = &input.template {
         validate_template(template).map_err(calculate_order_error)?;
+        if template.kg > 0.0 {
+            apply_authoritative_calculation(&mut input.map, template)?;
+        }
     }
     let opens_quick_template_as_order = input
         .template
@@ -218,6 +222,76 @@ fn is_quick_template_order_clone(
 ) -> bool {
     let source_map_id = template.source_map_id.trim();
     !source_map_id.is_empty() && source_map_id != map.id.trim() && is_sheet_order_map(map)
+}
+
+fn apply_authoritative_calculation(
+    map: &mut ProductionMapDefinition,
+    template: &CalculateOrderTemplate,
+) -> Result<(), AdminError> {
+    let response = calculate(CalculateRequest {
+        order_number: if template.order_number.trim().is_empty() {
+            None
+        } else {
+            Some(template.order_number.trim().to_string())
+        },
+        customer: if template.customer.trim().is_empty() {
+            None
+        } else {
+            Some(template.customer.trim().to_string())
+        },
+        product: Some(template.product.trim().to_string()),
+        status: if template.status.trim().is_empty() {
+            None
+        } else {
+            Some(template.status.trim().to_string())
+        },
+        material_display: if template.material_display.trim().is_empty() {
+            None
+        } else {
+            Some(template.material_display.trim().to_string())
+        },
+        color: if template.color.trim().is_empty() {
+            None
+        } else {
+            Some(template.color.trim().to_string())
+        },
+        kg: Some(template.kg),
+        frame_product_size_mm: Some(template.frame_product_size_mm),
+        frame_count: Some(template.frame_count),
+        edge_allowance_mm: Some(template.edge_allowance_mm),
+        waste_percent: Some(template.waste_percent),
+        roll_count: template.roll_count,
+        first_layer: LayerInput::new(
+            template.first_layer_material.trim(),
+            template.first_layer_micron.trim(),
+        ),
+        second_layer: LayerInput::new(
+            template.second_layer_material.trim(),
+            template.second_layer_micron.trim(),
+        ),
+        third_layer: LayerInput::new(
+            template.third_layer_material.trim(),
+            template.third_layer_micron.trim(),
+        ),
+        note: if template.note.trim().is_empty() {
+            None
+        } else {
+            Some(template.note.trim().to_string())
+        },
+        ..CalculateRequest::default()
+    })
+    .map_err(|error| bad_request(&error))?;
+
+    let base_length = response
+        .results
+        .first()
+        .map(|result| result.base_length)
+        .ok_or_else(|| bad_request("calculate result is empty"))?;
+    map.width_mm = Some(response.width_mm);
+    map.order_kg = Some(response.kg);
+    map.base_length = Some(base_length);
+    map.roll_count = response.roll_count;
+    Ok(())
 }
 
 fn spawn_order_integrations(
