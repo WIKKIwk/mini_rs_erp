@@ -56,7 +56,7 @@ fn calculates_rubber_size_from_width() {
 }
 
 #[test]
-fn calculates_min_mold_size_without_edge_allowance() {
+fn calculates_min_mold_size_at_least_50mm_above_rubber_size() {
     let result = calculate(CalculateRequest {
         kg: Some(300.0),
         frame_product_size_mm: Some(250.0),
@@ -68,7 +68,8 @@ fn calculates_min_mold_size_without_edge_allowance() {
     .expect("calculate");
 
     assert_eq!(result.width_mm, 765.0);
-    assert_eq!(result.min_mold_size_mm, 800.0);
+    assert_eq!(result.rubber_size_mm, 800);
+    assert_eq!(result.min_mold_size_mm, 850.0);
 }
 
 #[test]

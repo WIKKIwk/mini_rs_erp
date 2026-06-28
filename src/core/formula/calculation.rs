@@ -30,6 +30,7 @@ pub fn calculate(mut request: CalculateRequest) -> Result<CalculateResponse, Str
     let results = calculate_variants(&request)?;
     let layers = visible_layers(&request);
 
+    let rubber_size_mm = rubber_size(width_mm);
     Ok(CalculateResponse {
         ok: true,
         order_number: clean_option(request.order_number),
@@ -44,8 +45,8 @@ pub fn calculate(mut request: CalculateRequest) -> Result<CalculateResponse, Str
         frame_count,
         edge_allowance_mm,
         width_mm,
-        min_mold_size_mm: min_mold_size_mm(frame_product_size_mm, frame_count),
-        rubber_size_mm: rubber_size(width_mm),
+        min_mold_size_mm: min_mold_size_mm(frame_product_size_mm, frame_count, rubber_size_mm),
+        rubber_size_mm,
         waste_percent,
         roll_count: request.roll_count,
         layers,
@@ -206,8 +207,9 @@ fn width_mm_from_request(request: &CalculateRequest) -> Result<f64, String> {
     )
 }
 
-fn min_mold_size_mm(frame_product_size_mm: f64, frame_count: f64) -> f64 {
-    frame_product_size_mm * frame_count + MIN_MOLD_EXTRA_MM
+fn min_mold_size_mm(frame_product_size_mm: f64, frame_count: f64, rubber_size_mm: u32) -> f64 {
+    (frame_product_size_mm * frame_count + MIN_MOLD_EXTRA_MM)
+        .max(f64::from(rubber_size_mm) + MIN_MOLD_EXTRA_MM)
 }
 
 fn is_empty_material(material: &str) -> bool {
