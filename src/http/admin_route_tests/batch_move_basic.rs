@@ -168,14 +168,12 @@ async fn production_map_batch_move_reassigns_alternative_apparatus_assignment() 
     let apparatus_titles: Vec<&str> = nodes
         .iter()
         .filter(|node| node["kind"] == "apparatus")
-        .map(|node| node["title"].as_str())
-        .flatten()
+        .filter_map(|node| node["title"].as_str())
         .collect();
     let assigned_titles: Vec<&str> = nodes
         .iter()
         .filter(|node| node["kind"] == "apparatus")
-        .map(|node| node["alternative_assigned_title"].as_str())
-        .flatten()
+        .filter_map(|node| node["alternative_assigned_title"].as_str())
         .collect();
     assert_eq!(
         apparatus_titles,
@@ -259,14 +257,12 @@ async fn production_map_batch_move_preserves_alternative_node_titles_when_target
     let apparatus_titles: Vec<&str> = nodes
         .iter()
         .filter(|node| node["kind"] == "apparatus")
-        .map(|node| node["title"].as_str())
-        .flatten()
+        .filter_map(|node| node["title"].as_str())
         .collect();
     let assigned_titles: Vec<&str> = nodes
         .iter()
         .filter(|node| node["kind"] == "apparatus")
-        .map(|node| node["alternative_assigned_title"].as_str())
-        .flatten()
+        .filter_map(|node| node["alternative_assigned_title"].as_str())
         .collect();
     assert_eq!(
         apparatus_titles,
