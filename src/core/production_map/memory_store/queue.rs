@@ -235,24 +235,11 @@ pub(super) async fn queue_action_logs_for_orders(
         by_order
             .entry(event.order_id.trim().to_string())
             .or_default()
-            .push(ProductionOrderLogEntry {
-                event_id: event.event_id.trim().to_string(),
-                apparatus: event.apparatus.trim().to_string(),
-                order_id: event.order_id.trim().to_string(),
-                action: event.action,
-                from_state: event.from_state,
-                to_state: event.to_state,
-                actor_role: event.actor.role.trim().to_string(),
-                actor_ref: event.actor.ref_.trim().to_string(),
-                actor_display_name: event.actor.display_name.trim().to_string(),
-                created_at_unix: index as i64 + 1,
-                completed_with_issue: event
-                    .payload_json
-                    .get("completed_with_issue")
-                    .and_then(|value| value.as_bool())
-                    == Some(true),
-                issue_note: json_string_field(&event.payload_json, "issue_note"),
-            });
+            .push(production_order_log_entry(
+                event,
+                index,
+                event.actor.display_name.trim().to_string(),
+            ));
     }
     Ok(by_order)
 }
@@ -285,27 +272,39 @@ pub(super) async fn queue_action_logs_for_worker(
         if !matches_ref && !matches_name {
             continue;
         }
-        logs.push(ProductionOrderLogEntry {
-            event_id: event.event_id.trim().to_string(),
-            apparatus: event.apparatus.trim().to_string(),
-            order_id: event.order_id.trim().to_string(),
-            action: event.action,
-            from_state: event.from_state,
-            to_state: event.to_state,
-            actor_role: event.actor.role.trim().to_string(),
-            actor_ref: event.actor.ref_.trim().to_string(),
-            actor_display_name: actor_display_name(&event.actor),
-            created_at_unix: index as i64 + 1,
-            completed_with_issue: event
-                .payload_json
-                .get("completed_with_issue")
-                .and_then(|value| value.as_bool())
-                .unwrap_or(false),
-            issue_note: json_string_field(&event.payload_json, "issue_note"),
-        });
+        logs.push(production_order_log_entry(
+            event,
+            index,
+            actor_display_name(&event.actor),
+        ));
         if logs.len() >= limit.min(500) {
             break;
         }
     }
     Ok(logs)
+}
+
+fn production_order_log_entry(
+    event: &ApparatusQueueActionEvent,
+    index: usize,
+    actor_display_name: String,
+) -> ProductionOrderLogEntry {
+    ProductionOrderLogEntry {
+        event_id: event.event_id.trim().to_string(),
+        apparatus: event.apparatus.trim().to_string(),
+        order_id: event.order_id.trim().to_string(),
+        action: event.action,
+        from_state: event.from_state,
+        to_state: event.to_state,
+        actor_role: event.actor.role.trim().to_string(),
+        actor_ref: event.actor.ref_.trim().to_string(),
+        actor_display_name,
+        created_at_unix: index as i64 + 1,
+        completed_with_issue: event
+            .payload_json
+            .get("completed_with_issue")
+            .and_then(|value| value.as_bool())
+            .unwrap_or(false),
+        issue_note: json_string_field(&event.payload_json, "issue_note"),
+    }
 }
