@@ -78,12 +78,14 @@ pub async fn customer_detail(
         return Err(method_not_allowed());
     }
     let ref_ = required_ref(query.ref_.as_deref())?;
-    state
+    let mut detail = state
         .admin
         .customer_detail(ref_)
         .await
-        .map(Json)
-        .map_err(|_| server_error("customer detail failed"))
+        .map_err(|_| server_error("customer detail failed"))?;
+    detail.avatar_url =
+        with_admin_profile_avatar_proxy(&headers, detail.avatar_url, "customer", ref_);
+    Ok(Json(detail))
 }
 
 pub async fn items(

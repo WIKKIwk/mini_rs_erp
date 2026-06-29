@@ -26,8 +26,8 @@ pub use supplier_mutations::{
     supplier_phone, supplier_remove, supplier_restore, supplier_status,
 };
 pub use suppliers::{
-    assigned_supplier_items, inactive_suppliers, settings, supplier_detail, supplier_list,
-    supplier_summary, suppliers, user_list,
+    admin_profile_avatar_view, assigned_supplier_items, inactive_suppliers, settings,
+    supplier_detail, supplier_list, supplier_summary, suppliers, user_list,
 };
 pub use system::{
     apparatus_create, apparatus_groups, capabilities, items_bulk_move_group, role_assignments,
@@ -43,7 +43,7 @@ pub use workers::{
 use axum::Json;
 use axum::body::Bytes;
 use axum::extract::{Query, State};
-use axum::http::{HeaderMap, Method, StatusCode};
+use axum::http::{HeaderMap, HeaderValue, Method, StatusCode, header};
 use axum::response::{IntoResponse, Response};
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
@@ -97,6 +97,50 @@ fn parse_json<T: DeserializeOwned>(body: &[u8]) -> Result<T, AdminError> {
 
 fn json_response<T: Serialize>(value: T) -> Response {
     Json(value).into_response()
+}
+
+fn with_admin_profile_avatar_proxy(
+    headers: &HeaderMap,
+    avatar_url: String,
+    role_key: &str,
+    ref_: &str,
+) -> String {
+    if !avatar_url.trim().starts_with("local://") {
+        return avatar_url;
+    }
+    let Some(token) = bearer_token(headers) else {
+        return avatar_url;
+    };
+    let Some(host) = headers
+        .get(header::HOST)
+        .and_then(|value| value.to_str().ok())
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    else {
+        return avatar_url;
+    };
+    format!(
+        "{}://{}/v1/mobile/admin/profile/avatar/view?role={}&ref={}&token={}",
+        admin_request_scheme(headers),
+        host,
+        urlencoding::encode(role_key.trim()),
+        urlencoding::encode(ref_.trim()),
+        urlencoding::encode(token.trim()),
+    )
+}
+
+fn admin_request_scheme(headers: &HeaderMap) -> &str {
+    if headers
+        .get("x-forwarded-proto")
+        .and_then(|value| value.to_str().ok())
+        .map(str::trim)
+        .filter(|value| value.eq_ignore_ascii_case("https"))
+        .is_some()
+    {
+        "https"
+    } else {
+        "http"
+    }
 }
 
 fn optional_search_limit(value: Option<&str>, default: usize, max: usize) -> usize {
@@ -235,6 +279,14 @@ pub struct RefItemQuery {
     #[serde(rename = "ref")]
     pub ref_: Option<String>,
     pub item_code: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct AdminProfileAvatarQuery {
+    pub role: Option<String>,
+    #[serde(rename = "ref")]
+    pub ref_: Option<String>,
+    pub token: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]

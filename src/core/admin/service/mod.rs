@@ -29,6 +29,7 @@ use crate::core::authz::{
     has_capability, normalize_custom_role, normalize_role_assignment, role_assignment_key,
     system_role_definitions,
 };
+use crate::core::profile::ports::ProfileStorePort;
 use crate::core::werka::models::{CustomerDirectoryEntry, SupplierItem};
 use crate::core::workers::Worker;
 
@@ -44,6 +45,7 @@ pub struct AdminService {
     env_persister: Option<Arc<dyn AdminEnvPersister>>,
     auth_config_sink: Option<Arc<dyn AdminAuthConfigSink>>,
     role_store: Arc<dyn RoleDefinitionStorePort>,
+    profile_store: Option<Arc<dyn ProfileStorePort>>,
 }
 
 #[derive(Debug, Clone)]
@@ -83,6 +85,7 @@ impl AdminService {
             env_persister: None,
             auth_config_sink: None,
             role_store: Arc::new(MemoryRoleDefinitionStore::new()),
+            profile_store: None,
         }
     }
 
@@ -111,6 +114,27 @@ impl AdminService {
         self
     }
 
+    pub fn with_profile_store(mut self, profile_store: Arc<dyn ProfileStorePort>) -> Self {
+        self.profile_store = Some(profile_store);
+        self
+    }
+
+    async fn profile_avatar_url(&self, role_key: &str, ref_: &str) -> String {
+        let Some(store) = &self.profile_store else {
+            return String::new();
+        };
+        let Ok(prefs) = store.get(&format!("{}:{}", role_key, ref_.trim())).await else {
+            return String::new();
+        };
+        if !prefs.avatar_url.trim().is_empty() {
+            prefs.avatar_url.trim().to_string()
+        } else if !prefs.avatar_object_key.trim().is_empty() {
+            format!("local://{}", prefs.avatar_object_key.trim())
+        } else {
+            String::new()
+        }
+    }
+
     pub async fn settings(&self) -> Result<AdminSettings, AdminPortError> {
         let config = self.config.read().await;
         let state = self.state_for("werka").await.unwrap_or_default();
@@ -120,6 +144,7 @@ impl AdminService {
             default_uom: config.default_uom.clone(),
             werka_phone: config.werka_phone.clone(),
             werka_name: config.werka_name.clone(),
+            werka_avatar_url: self.profile_avatar_url("werka", "werka").await,
             werka_code: config.werka_code.clone(),
             werka_code_locked: state.code_locked(now),
             werka_code_retry_after_sec: state.retry_after_seconds(now),

@@ -84,9 +84,14 @@ impl AppState {
         let admin_store = Arc::new(JsonAdminStore::new(admin_store_path()));
         let workers = build_worker_service();
         let auth = build_auth_service(&config, admin_store.clone(), workers.clone());
-        let admin = build_admin_service(&config, admin_store.clone(), auth.clone());
-        let customer = CustomerService::new();
         let profile_store = build_profile_store(&config);
+        let admin = build_admin_service(
+            &config,
+            admin_store.clone(),
+            auth.clone(),
+            profile_store.clone(),
+        );
+        let customer = CustomerService::new();
         let production_maps = build_production_map_service();
         let apparatus_groups = build_apparatus_groups_service();
         let calculate_orders = build_calculate_order_store();
@@ -161,6 +166,7 @@ fn build_admin_service(
     config: &AppConfig,
     admin_store: Arc<JsonAdminStore>,
     auth: AuthService,
+    profile_store: Arc<dyn ProfileStorePort>,
 ) -> AdminService {
     let mut admin =
         AdminService::new(config).with_env_persister(Arc::new(DotEnvPersister::new(".env")));
@@ -170,7 +176,9 @@ fn build_admin_service(
         .with_write_port(admin_write_port)
         .with_state_port(admin_store);
     admin = admin.with_role_store(Arc::new(RoleDefinitionStore::new(role_store_path())));
-    admin.with_auth_config_sink(Arc::new(auth))
+    admin
+        .with_auth_config_sink(Arc::new(auth))
+        .with_profile_store(profile_store)
 }
 
 fn build_scale_driver(config: &AppConfig) -> Arc<RpsDriverClient> {
