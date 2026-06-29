@@ -137,10 +137,44 @@ fn admin_request_scheme(headers: &HeaderMap) -> &str {
         .filter(|value| value.eq_ignore_ascii_case("https"))
         .is_some()
     {
-        "https"
-    } else {
-        "http"
+        return "https";
     }
+
+    if headers
+        .get("cf-visitor")
+        .and_then(|value| value.to_str().ok())
+        .map(|value| value.to_ascii_lowercase().contains("\"scheme\":\"https\""))
+        .unwrap_or(false)
+    {
+        return "https";
+    }
+
+    let host = headers
+        .get(header::HOST)
+        .and_then(|value| value.to_str().ok())
+        .map(str::trim)
+        .unwrap_or_default();
+    if is_public_admin_host(host) {
+        return "https";
+    }
+
+    "http"
+}
+
+fn is_public_admin_host(host: &str) -> bool {
+    let host = host.trim().trim_matches(['[', ']']).to_ascii_lowercase();
+    if host.is_empty()
+        || host == "localhost"
+        || host.starts_with("localhost:")
+        || host.starts_with("127.")
+        || host.starts_with("10.")
+        || host.starts_with("192.168.")
+        || (172..=31).any(|octet| host.starts_with(&format!("172.{octet}.")))
+    {
+        return false;
+    }
+
+    host.parse::<std::net::IpAddr>().is_err()
 }
 
 fn optional_search_limit(value: Option<&str>, default: usize, max: usize) -> usize {
