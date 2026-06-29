@@ -1,5 +1,9 @@
 /target/
+target-docker-amd64/
 /.env
 
 /data/
 /garbage/
+backups/
+logs/
+CLOUDFLARE.txt
