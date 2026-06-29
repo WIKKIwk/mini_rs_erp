@@ -71,11 +71,13 @@ impl AdminService {
             Err(err) => return Err(err),
         };
         let code = self.supplier_code(&entry, &state)?;
+        let avatar_url = self.profile_avatar_url("supplier", &entry.ref_).await;
         let now = OffsetDateTime::now_utc();
         Ok(AdminSupplierDetail {
             ref_: entry.ref_,
             name: entry.name,
             phone: entry.phone,
+            avatar_url,
             code,
             blocked: state.blocked,
             removed: state.removed,

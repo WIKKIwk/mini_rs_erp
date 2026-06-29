@@ -98,11 +98,13 @@ impl AdminService {
         if state.removed {
             return Err(AdminPortError::NotFound);
         }
+        let avatar_url = self.profile_avatar_url("worker", &worker.id).await;
         let now = OffsetDateTime::now_utc();
         Ok(AdminWorkerDetail {
             id: worker.id,
             name: worker.name,
             phone: worker.phone,
+            avatar_url,
             level: worker.level,
             code: state.custom_code.trim().to_string(),
             code_locked: state.code_locked(now),

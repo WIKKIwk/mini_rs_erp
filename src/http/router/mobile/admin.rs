@@ -130,6 +130,10 @@ pub(super) fn routes() -> Router<AppState> {
         )
         .route("/v1/mobile/admin/suppliers", any(admin::suppliers))
         .route("/v1/mobile/admin/users/list", any(admin::user_list))
+        .route(
+            "/v1/mobile/admin/profile/avatar/view",
+            get(admin::admin_profile_avatar_view),
+        )
         .route("/v1/mobile/admin/suppliers/list", any(admin::supplier_list))
         .route(
             "/v1/mobile/admin/suppliers/summary",

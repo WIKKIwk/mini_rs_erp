@@ -50,11 +50,13 @@ impl AdminService {
             return Err(AdminPortError::NotFound);
         }
         let assigned_items = read.customer_items(&entry.ref_, "", 200).await?;
+        let avatar_url = self.profile_avatar_url("customer", &entry.ref_).await;
         let now = OffsetDateTime::now_utc();
         Ok(AdminCustomerDetail {
             ref_: entry.ref_,
             name: entry.name,
             phone: entry.phone,
+            avatar_url,
             code: state.custom_code.trim().to_string(),
             code_locked: state.code_locked(now),
             code_retry_after_sec: state.retry_after_seconds(now),

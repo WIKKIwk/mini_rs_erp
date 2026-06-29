@@ -114,11 +114,13 @@ pub async fn worker_profile_detail(
         return Err(method_not_allowed());
     }
     let worker = required_worker(&state, query.id.as_deref()).await?;
-    let detail = state
+    let mut detail = state
         .admin
         .worker_detail(worker.clone())
         .await
         .map_err(|_| server_error("worker detail failed"))?;
+    detail.avatar_url =
+        with_admin_profile_avatar_proxy(&headers, detail.avatar_url, "worker", &detail.id);
     let assigned_groups = state
         .worker_groups
         .worker_groups(None)
@@ -169,12 +171,14 @@ pub async fn worker_detail(
         return Err(method_not_allowed());
     }
     let worker = required_worker(&state, query.id.as_deref()).await?;
-    state
+    let mut detail = state
         .admin
         .worker_detail(worker)
         .await
-        .map(json_response)
-        .map_err(|_| server_error("worker detail failed"))
+        .map_err(|_| server_error("worker detail failed"))?;
+    detail.avatar_url =
+        with_admin_profile_avatar_proxy(&headers, detail.avatar_url, "worker", &detail.id);
+    Ok(json_response(detail))
 }
 
 pub async fn worker_code_regenerate(

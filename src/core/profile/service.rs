@@ -182,6 +182,30 @@ impl ProfileService {
         lookup.download_file(&current.avatar_url).await.map(Some)
     }
 
+    pub async fn download_avatar_for_profile(
+        &self,
+        role_key: &str,
+        principal_ref: &str,
+    ) -> Result<Option<DownloadedFile>, ProfilePortError> {
+        let Some(storage) = &self.avatar_storage else {
+            return Ok(None);
+        };
+        let Some(store) = &self.store else {
+            return Ok(None);
+        };
+        let key = format!("{}:{}", role_key.trim(), principal_ref.trim());
+        let Ok(prefs) = store.get(&key).await else {
+            return Ok(None);
+        };
+        if prefs.avatar_object_key.trim().is_empty() {
+            return Ok(None);
+        }
+        storage
+            .get_profile_avatar(prefs.avatar_object_key.trim())
+            .await
+            .map(Some)
+    }
+
     async fn merge_prefs(&self, mut principal: Principal) -> Principal {
         if let Some(store) = &self.store
             && let Ok(prefs) = store.get(&profile_key(&principal)).await
