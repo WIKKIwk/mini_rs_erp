@@ -80,11 +80,17 @@ pub async fn suppliers(
                 .await
                 .map_err(|_| server_error("suppliers fetch failed"))?;
             let customers = state.admin.customers(500).await.unwrap_or_default();
-            let settings = state
+            let mut settings = state
                 .admin
                 .settings()
                 .await
                 .map_err(|_| server_error("suppliers fetch failed"))?;
+            settings.werka_avatar_url = with_admin_profile_avatar_proxy(
+                &headers,
+                settings.werka_avatar_url,
+                "werka",
+                "werka",
+            );
             Ok(json_response(AdminSuppliersPage {
                 summary,
                 suppliers,

@@ -10,6 +10,7 @@ pub struct AdminSettings {
     pub default_uom: String,
     pub werka_phone: String,
     pub werka_name: String,
+    #[serde(default)]
     pub werka_avatar_url: String,
     pub werka_code: String,
     pub werka_code_locked: bool,
