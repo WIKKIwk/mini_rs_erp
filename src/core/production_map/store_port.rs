@@ -12,6 +12,46 @@ pub type ApparatusQueueStateMap = BTreeMap<String, QueueStateMap>;
 pub type ApparatusQueuePolicyMap = BTreeMap<String, ApparatusQueuePolicy>;
 pub type OrderLogMap = BTreeMap<String, Vec<ProductionOrderLogEntry>>;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RawMaterialStockTransitionKind {
+    InUse,
+    Consumed,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RawMaterialStockTransition {
+    pub kind: RawMaterialStockTransitionKind,
+    pub barcodes: Vec<String>,
+    pub order_id: String,
+}
+
+impl RawMaterialStockTransition {
+    pub fn new(
+        kind: RawMaterialStockTransitionKind,
+        barcodes: Vec<String>,
+        order_id: &str,
+    ) -> Self {
+        Self {
+            kind,
+            barcodes: barcodes
+                .into_iter()
+                .map(|barcode| barcode.trim().to_string())
+                .filter(|barcode| !barcode.is_empty())
+                .collect(),
+            order_id: order_id.trim().to_string(),
+        }
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.barcodes.is_empty() || self.order_id.is_empty()
+    }
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct QueueActionProgressWriteResult {
+    pub raw_material_stock_warehouses: Vec<String>,
+}
+
 #[derive(Debug, Clone)]
 pub struct QueueActionProgressWrite {
     pub apparatus: String,
@@ -21,6 +61,7 @@ pub struct QueueActionProgressWrite {
     pub progress_event: Option<OrderProgressEvent>,
     pub progress_batch: Option<OrderProgressBatch>,
     pub progress_batch_updates: Vec<OrderProgressBatch>,
+    pub raw_material_stock_transitions: Vec<RawMaterialStockTransition>,
 }
 
 #[async_trait]
@@ -99,8 +140,8 @@ pub trait ProductionMapStorePort: Send + Sync {
         _actor: &QueueActionActor,
         _notification: &CompletionRequestDecisionNotification,
         _state_resolution: Option<CompletionRequestStateResolution>,
-    ) -> StoreResult<()> {
-        Ok(())
+    ) -> StoreResult<QueueActionProgressWriteResult> {
+        Ok(QueueActionProgressWriteResult::default())
     }
     async fn queue_action_logs_for_orders(
         &self,
@@ -199,7 +240,7 @@ pub trait ProductionMapStorePort: Send + Sync {
     async fn put_apparatus_queue_states_with_event_and_progress(
         &self,
         write: QueueActionProgressWrite,
-    ) -> StoreResult<()> {
+    ) -> StoreResult<QueueActionProgressWriteResult> {
         self.put_apparatus_queue_states_with_event(&write.apparatus, write.states, write.event)
             .await?;
         if let Some(session) = write.session {
@@ -214,7 +255,7 @@ pub trait ProductionMapStorePort: Send + Sync {
         for batch in write.progress_batch_updates {
             self.put_order_progress_batch(batch).await?;
         }
-        Ok(())
+        Ok(QueueActionProgressWriteResult::default())
     }
 
     // Raw material rule and assignment persistence.

@@ -7,6 +7,7 @@ mod state;
 use super::*;
 
 use std::collections::BTreeMap;
+use std::sync::atomic::Ordering;
 
 use async_trait::async_trait;
 
@@ -121,7 +122,7 @@ impl ProductionMapStorePort for MemoryProductionMapStore {
         actor: &QueueActionActor,
         notification: &CompletionRequestDecisionNotification,
         state_resolution: Option<CompletionRequestStateResolution>,
-    ) -> Result<(), ProductionMapError> {
+    ) -> Result<QueueActionProgressWriteResult, ProductionMapError> {
         queue::resolve_completion_request_decision(
             self,
             request_event_id,
@@ -261,6 +262,33 @@ impl ProductionMapStorePort for MemoryProductionMapStore {
         batch: OrderProgressBatch,
     ) -> Result<(), ProductionMapError> {
         runs::put_order_progress_batch(self, batch).await
+    }
+
+    async fn put_apparatus_queue_states_with_event_and_progress(
+        &self,
+        write: QueueActionProgressWrite,
+    ) -> Result<QueueActionProgressWriteResult, ProductionMapError> {
+        if self
+            .fail_next_queue_progress_commit
+            .swap(false, Ordering::SeqCst)
+        {
+            return Err(ProductionMapError::StoreFailed);
+        }
+        self.put_apparatus_queue_states_with_event(&write.apparatus, write.states, write.event)
+            .await?;
+        if let Some(session) = write.session {
+            self.put_order_run_session(session).await?;
+        }
+        if let Some(event) = write.progress_event {
+            self.put_order_progress_event(event).await?;
+        }
+        if let Some(batch) = write.progress_batch {
+            self.put_order_progress_batch(batch).await?;
+        }
+        for batch in write.progress_batch_updates {
+            self.put_order_progress_batch(batch).await?;
+        }
+        Ok(QueueActionProgressWriteResult::default())
     }
 
     async fn receive_finished_goods_batch(

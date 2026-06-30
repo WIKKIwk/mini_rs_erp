@@ -175,7 +175,7 @@ pub async fn production_map_queue_action(
         )
         .await
         .map_err(production_map_error)?;
-    let mut warehouse_stock_updates = Vec::new();
+    let mut raw_material_stock_transitions = Vec::new();
     if matches!(input.action, queue_state::ApparatusQueueAction::Start) {
         let material_stock_barcodes = material_barcode
             .split(',')
@@ -183,13 +183,11 @@ pub async fn production_map_queue_action(
             .filter(|barcode| !barcode.is_empty())
             .collect::<Vec<_>>();
         if !material_stock_barcodes.is_empty() {
-            warehouse_stock_updates.extend(
-                state
-                    .gscale
-                    .mark_raw_material_stock_in_use(&material_stock_barcodes, &input.order_id)
-                    .await
-                    .map_err(raw_material_stock_status_error)?,
-            );
+            raw_material_stock_transitions.push(RawMaterialStockTransition::new(
+                RawMaterialStockTransitionKind::InUse,
+                material_stock_barcodes,
+                &input.order_id,
+            ));
         }
     }
     let completed_material_barcodes =
@@ -199,6 +197,13 @@ pub async fn production_map_queue_action(
         } else {
             Vec::new()
         };
+    if !completed_material_barcodes.is_empty() {
+        raw_material_stock_transitions.push(RawMaterialStockTransition::new(
+            RawMaterialStockTransitionKind::Consumed,
+            completed_material_barcodes,
+            &input.order_id,
+        ));
+    }
     let print_request = prepared.progress_batch().and_then(|batch| {
         if matches!(
             input.action,
@@ -232,22 +237,45 @@ pub async fn production_map_queue_action(
     });
     let result = state
         .production_maps
-        .commit_prepared_queue_action(prepared)
+        .commit_prepared_queue_action_with_raw_material_stock(
+            prepared,
+            raw_material_stock_transitions.clone(),
+        )
         .await
         .map_err(production_map_error)?;
-    if !completed_material_barcodes.is_empty() {
-        warehouse_stock_updates.extend(
-            state
-                .gscale
-                .mark_raw_material_stock_consumed(&completed_material_barcodes, &input.order_id)
-                .await
-                .map_err(raw_material_stock_status_error)?,
-        );
+    let mut warehouse_stock_update_warehouses = result.raw_material_stock_warehouses.clone();
+    if !raw_material_stock_transitions.is_empty() && warehouse_stock_update_warehouses.is_empty() {
+        for transition in &raw_material_stock_transitions {
+            let updates = match transition.kind {
+                RawMaterialStockTransitionKind::InUse => {
+                    state
+                        .gscale
+                        .mark_raw_material_stock_in_use(&transition.barcodes, &transition.order_id)
+                        .await
+                }
+                RawMaterialStockTransitionKind::Consumed => {
+                    state
+                        .gscale
+                        .mark_raw_material_stock_consumed(
+                            &transition.barcodes,
+                            &transition.order_id,
+                        )
+                        .await
+                }
+            }
+            .map_err(raw_material_stock_status_error)?;
+            warehouse_stock_update_warehouses.extend(
+                updates
+                    .into_iter()
+                    .map(|stock| stock.warehouse)
+                    .filter(|warehouse| !warehouse.trim().is_empty()),
+            );
+        }
     }
-    for stock in warehouse_stock_updates {
+    for warehouse in warehouse_stock_update_warehouses {
         state
             .warehouse_events
-            .notify_updated(&stock.warehouse, "raw_material_stock");
+            .notify_updated(&warehouse, "raw_material_stock");
     }
     let mut print = serde_json::Value::Null;
     if let Some(request) = print_request {

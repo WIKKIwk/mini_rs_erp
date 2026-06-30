@@ -3,7 +3,7 @@ use sqlx::PgPool;
 use crate::core::production_map::{
     CompletionRequestDecision, CompletionRequestDecisionNotification,
     CompletionRequestNotification, CompletionRequestStateResolution, ProductionMapError,
-    QueueActionActor,
+    QueueActionActor, QueueActionProgressWriteResult,
 };
 
 use super::progress_helpers::put_order_run_session_tx;
@@ -206,7 +206,7 @@ pub(super) async fn resolve_completion_request_decision(
     actor: &QueueActionActor,
     notification: &CompletionRequestDecisionNotification,
     state_resolution: Option<CompletionRequestStateResolution>,
-) -> Result<(), ProductionMapError> {
+) -> Result<QueueActionProgressWriteResult, ProductionMapError> {
     let request_event_id = request_event_id.trim();
     if request_event_id.is_empty() {
         return Err(ProductionMapError::MissingId);
@@ -215,12 +215,19 @@ pub(super) async fn resolve_completion_request_decision(
         .begin()
         .await
         .map_err(|_| ProductionMapError::StoreFailed)?;
+    let mut raw_material_stock_warehouses = Vec::new();
     if let Some(resolution) = state_resolution {
         put_queue_states_tx(&mut tx, &resolution.apparatus, resolution.states).await?;
         insert_queue_action_event_tx(&mut tx, &resolution.event).await?;
         if let Some(session) = resolution.session {
             put_order_run_session_tx(&mut tx, &session).await?;
         }
+        raw_material_stock_warehouses =
+            super::raw_material_stock_helpers::apply_raw_material_stock_transitions_tx(
+                &mut tx,
+                &resolution.raw_material_stock_transitions,
+            )
+            .await?;
     }
     let result = sqlx::query(
         "UPDATE mini_queue_action_events
@@ -247,7 +254,10 @@ pub(super) async fn resolve_completion_request_decision(
     }
     tx.commit()
         .await
-        .map_err(|_| ProductionMapError::StoreFailed)
+        .map_err(|_| ProductionMapError::StoreFailed)?;
+    Ok(QueueActionProgressWriteResult {
+        raw_material_stock_warehouses,
+    })
 }
 
 fn completion_request_from_row(row: CompletionRequestRow) -> CompletionRequestNotification {

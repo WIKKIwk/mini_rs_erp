@@ -164,7 +164,7 @@ pub(super) async fn resolve_completion_request_decision(
     actor: &QueueActionActor,
     notification: &CompletionRequestDecisionNotification,
     state_resolution: Option<CompletionRequestStateResolution>,
-) -> Result<(), ProductionMapError> {
+) -> Result<QueueActionProgressWriteResult, ProductionMapError> {
     let request_event_id = request_event_id.trim();
     if request_event_id.is_empty() {
         return Err(ProductionMapError::MissingId);
@@ -211,7 +211,7 @@ pub(super) async fn resolve_completion_request_decision(
         serde_json::Value::String(actor_display_name(actor));
     event.payload_json["decision_at_unix"] =
         serde_json::Value::Number(serde_json::Number::from(notification.created_at_unix));
-    Ok(())
+    Ok(QueueActionProgressWriteResult::default())
 }
 
 pub(super) async fn queue_action_logs_for_orders(

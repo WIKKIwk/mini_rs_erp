@@ -4,6 +4,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::core::production_map::queue_state;
 
+use super::super::store_port::RawMaterialStockTransition;
 use super::progress::OrderRunSession;
 use super::queue::ApparatusQueueActionEvent;
 
@@ -116,6 +117,8 @@ pub struct CompletionRequestResult {
 pub struct CompletionRequestDecisionResult {
     pub states: BTreeMap<String, String>,
     pub decision: CompletionRequestDecisionNotification,
+    #[serde(skip)]
+    pub raw_material_stock_warehouses: Vec<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -124,4 +127,5 @@ pub struct CompletionRequestStateResolution {
     pub states: BTreeMap<String, String>,
     pub event: ApparatusQueueActionEvent,
     pub session: Option<OrderRunSession>,
+    pub raw_material_stock_transitions: Vec<RawMaterialStockTransition>,
 }

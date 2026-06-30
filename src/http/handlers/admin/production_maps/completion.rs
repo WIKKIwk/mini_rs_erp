@@ -306,22 +306,30 @@ pub async fn production_map_completion_request_decision(
         .await
         .map_err(production_map_error)?;
     if result.decision.decision == CompletionRequestDecision::Approved.as_str() {
-        let material_barcodes = raw_material_barcodes_for_order_apparatus(
-            &state,
-            &result.decision.order_id,
-            &result.decision.apparatus,
-        )
-        .await?;
-        if !material_barcodes.is_empty() {
-            for stock in state
-                .gscale
-                .mark_raw_material_stock_consumed(&material_barcodes, &result.decision.order_id)
-                .await
-                .map_err(raw_material_stock_status_error)?
-            {
+        if result.raw_material_stock_warehouses.is_empty() {
+            let material_barcodes = raw_material_barcodes_for_order_apparatus(
+                &state,
+                &result.decision.order_id,
+                &result.decision.apparatus,
+            )
+            .await?;
+            if !material_barcodes.is_empty() {
+                for stock in state
+                    .gscale
+                    .mark_raw_material_stock_consumed(&material_barcodes, &result.decision.order_id)
+                    .await
+                    .map_err(raw_material_stock_status_error)?
+                {
+                    state
+                        .warehouse_events
+                        .notify_updated(&stock.warehouse, "raw_material_stock");
+                }
+            }
+        } else {
+            for warehouse in &result.raw_material_stock_warehouses {
                 state
                     .warehouse_events
-                    .notify_updated(&stock.warehouse, "raw_material_stock");
+                    .notify_updated(warehouse, "raw_material_stock");
             }
         }
     }
