@@ -247,6 +247,18 @@ mod tests {
     }
 
     #[test]
+    fn postgres_foundation_migration_keeps_qolip_codes_unique_not_item_codes() {
+        let migration = foundation_migration_sql().to_lowercase();
+
+        assert!(migration.contains(
+            "alter table mini_qolip_product_specs drop constraint if exists mini_qolip_product_specs_pkey"
+        ));
+        assert!(migration.contains("idx_mini_qolip_product_specs_qolip_code_unique"));
+        assert!(migration.contains("lower(qolip_code)"));
+        assert!(!migration.contains("item_code text primary key"));
+    }
+
+    #[test]
     fn postgres_foundation_migration_backfills_quick_template_frame_fields() {
         let migration = foundation_migration_sql().to_lowercase();
 

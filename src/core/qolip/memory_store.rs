@@ -73,29 +73,44 @@ impl QolipStorePort for MemoryQolipStore {
         let query = query.trim().to_lowercase();
         let specs = self.product_specs.read().await;
         let products = self.products.read().await;
-        Ok(products
-            .iter()
-            .filter_map(|product| {
-                let spec = specs.get(&product.code.trim().to_lowercase());
-                if with_qolip_only && spec.is_none() {
-                    return None;
-                }
+        let mut items = Vec::new();
+        for product in products.iter() {
+            let product_specs = specs
+                .values()
+                .filter(|spec| {
+                    spec.item_code
+                        .trim()
+                        .eq_ignore_ascii_case(product.code.trim())
+                })
+                .collect::<Vec<_>>();
+            if with_qolip_only && product_specs.is_empty() {
+                continue;
+            }
+            if product_specs.is_empty() {
                 let matches = query.is_empty()
                     || product.name.to_lowercase().contains(&query)
                     || product.code.to_lowercase().contains(&query);
-                if !matches {
-                    return None;
+                if matches {
+                    items.push(product.clone());
                 }
-                let mut product = product.clone();
-                if let Some(spec) = spec {
-                    product.qolip_code = spec.qolip_code.clone();
-                    product.size = spec.size;
-                    product.has_qolip_spec = true;
+                continue;
+            }
+            for spec in product_specs {
+                let matches = query.is_empty()
+                    || product.name.to_lowercase().contains(&query)
+                    || product.code.to_lowercase().contains(&query)
+                    || spec.qolip_code.to_lowercase().contains(&query);
+                if matches {
+                    let mut item = product.clone();
+                    item.qolip_code = spec.qolip_code.clone();
+                    item.size = spec.size;
+                    item.has_qolip_spec = true;
+                    items.push(item);
                 }
-                Some(product)
-            })
-            .take(limit.max(1))
-            .collect())
+            }
+        }
+        items.truncate(limit.max(1));
+        Ok(items)
     }
 
     async fn product_spec(&self, item_code: &str) -> Result<Option<QolipProductSpec>, QolipError> {
@@ -103,7 +118,22 @@ impl QolipStorePort for MemoryQolipStore {
             .product_specs
             .read()
             .await
-            .get(&item_code.trim().to_lowercase())
+            .values()
+            .find(|spec| spec.item_code.trim().eq_ignore_ascii_case(item_code.trim()))
+            .cloned())
+    }
+
+    async fn product_spec_by_qolip_code(
+        &self,
+        qolip_code: &str,
+    ) -> Result<Option<QolipProductSpec>, QolipError> {
+        let qolip_code = qolip_code.trim();
+        Ok(self
+            .product_specs
+            .read()
+            .await
+            .values()
+            .find(|spec| spec.qolip_code.trim().eq_ignore_ascii_case(qolip_code))
             .cloned())
     }
 
@@ -114,7 +144,7 @@ impl QolipStorePort for MemoryQolipStore {
         self.product_specs
             .write()
             .await
-            .insert(spec.item_code.trim().to_lowercase(), spec.clone());
+            .insert(spec.qolip_code.trim().to_lowercase(), spec.clone());
         Ok(spec)
     }
 
@@ -132,22 +162,12 @@ impl QolipStorePort for MemoryQolipStore {
 
     async fn put_location(&self, location: QolipLocation) -> Result<QolipLocation, QolipError> {
         let mut locations = self.locations.write().await;
-        if let Some(index) = locations.iter().position(|item| item.id == location.id) {
-            let existing = &locations[index];
-            if !location_identity_matches(existing, &location) {
-                return Err(QolipError::LocationIdentityMismatch);
-            }
-            let mut merged = location.clone();
-            merged.quantity += existing.quantity;
-            locations[index] = merged.clone();
-            locations.sort_by(|left, right| {
-                left.row_letter
-                    .cmp(&right.row_letter)
-                    .then_with(|| left.column_number.cmp(&right.column_number))
-                    .then_with(|| left.item_name.cmp(&right.item_name))
-            });
-            return Ok(merged);
-        }
+        locations.retain(|item| {
+            !item
+                .qolip_code
+                .trim()
+                .eq_ignore_ascii_case(location.qolip_code.trim())
+        });
         locations.push(location.clone());
         locations.sort_by(|left, right| {
             left.row_letter
@@ -354,6 +374,30 @@ impl QolipStorePort for MemoryQolipStore {
 mod tests {
     use super::*;
 
+    fn product(code: &str, name: &str) -> QolipProduct {
+        QolipProduct {
+            code: code.to_string(),
+            name: name.to_string(),
+            item_group: "Tayyor mahsulot".to_string(),
+            qolip_code: String::new(),
+            size: 0,
+            has_qolip_spec: false,
+        }
+    }
+
+    fn product_spec(item_code: &str, qolip_code: &str) -> QolipProductSpec {
+        QolipProductSpec {
+            item_code: item_code.to_string(),
+            item_name: "Kross qolip".to_string(),
+            item_group: "Tayyor mahsulot".to_string(),
+            qolip_code: qolip_code.to_string(),
+            size: 42,
+            created_by_role: "qolipchi".to_string(),
+            created_by_ref: "qolipchi-1".to_string(),
+            created_by_name: "Qolipchi".to_string(),
+        }
+    }
+
     fn location(id: &str, item_code: &str, quantity: i32) -> QolipLocation {
         QolipLocation {
             id: id.to_string(),
@@ -398,6 +442,32 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn products_returns_multiple_qolip_codes_for_same_container_item() {
+        let store = MemoryQolipStore::default();
+        store
+            .seed_products(vec![product("ITEM-001", "Kross qolip")])
+            .await;
+        store
+            .put_product_spec(product_spec("ITEM-001", "QOLIP-0001"))
+            .await
+            .expect("first spec");
+        store
+            .put_product_spec(product_spec("ITEM-001", "QOLIP-0002"))
+            .await
+            .expect("second spec");
+
+        let products = store.products("Kross", 20, true).await.expect("products");
+
+        assert_eq!(
+            products
+                .iter()
+                .map(|product| product.qolip_code.as_str())
+                .collect::<Vec<_>>(),
+            vec!["QOLIP-0001", "QOLIP-0002"]
+        );
+    }
+
+    #[tokio::test]
     async fn issue_checkout_rejects_location_identity_mismatch() {
         let store = MemoryQolipStore::default();
         store
@@ -411,6 +481,29 @@ mod tests {
             .await;
 
         assert!(matches!(result, Err(QolipError::LocationIdentityMismatch)));
+    }
+
+    #[tokio::test]
+    async fn put_location_moves_existing_qolip_code_to_new_cell() {
+        let store = MemoryQolipStore::default();
+        store
+            .locations
+            .write()
+            .await
+            .push(location("qolip:a:item_a:q_1:40:c:2", "ITEM-A", 1));
+        let mut next = location("qolip:a:item_a:q_1:40:d:3", "ITEM-A", 1);
+        next.row_letter = "D".to_string();
+        next.column_number = Some(3);
+        next.location_label = "D3".to_string();
+
+        let saved = store.put_location(next).await.expect("saved location");
+
+        assert_eq!(saved.location_label, "D3");
+        assert_eq!(saved.quantity, 1);
+        let locations = store.locations("A").await.expect("locations");
+        assert_eq!(locations.len(), 1);
+        assert_eq!(locations[0].location_label, "D3");
+        assert_eq!(locations[0].qolip_code, "Q-1");
     }
 
     #[tokio::test]

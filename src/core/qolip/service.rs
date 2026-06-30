@@ -100,7 +100,7 @@ impl QolipService {
         with_qolip_only: bool,
     ) -> Result<Vec<QolipProduct>, QolipError> {
         self.store
-            .products(query, limit.clamp(1, 100), with_qolip_only)
+            .products(query, limit.clamp(1, 20_000), with_qolip_only)
             .await
     }
 
@@ -111,6 +111,17 @@ impl QolipService {
     ) -> Result<QolipProductSpec, QolipError> {
         let normalized = normalize_product_spec(input, principal)?;
         self.store.put_product_spec(normalized).await
+    }
+
+    pub async fn product_spec_by_qolip_code(
+        &self,
+        qolip_code: &str,
+    ) -> Result<Option<QolipProductSpec>, QolipError> {
+        let qolip_code = qolip_code.trim();
+        if qolip_code.is_empty() {
+            return Err(QolipError::MissingQolipCode);
+        }
+        self.store.product_spec_by_qolip_code(qolip_code).await
     }
 
     pub async fn locations(&self, block: &str) -> Result<Vec<QolipLocation>, QolipError> {

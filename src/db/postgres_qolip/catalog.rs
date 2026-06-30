@@ -167,9 +167,29 @@ pub(super) async fn load_product_spec(
         "SELECT item_code, item_name, item_group, qolip_code, size,
                 created_by_role, created_by_ref, created_by_name
          FROM mini_qolip_product_specs
-         WHERE lower(item_code) = lower($1)",
+         WHERE lower(item_code) = lower($1)
+         ORDER BY updated_at DESC, created_at DESC
+         LIMIT 1",
     )
     .bind(item_code.trim())
+    .fetch_optional(pool)
+    .await
+    .map_err(|_| QolipError::StoreFailed)?;
+
+    Ok(row.map(row_to_product_spec))
+}
+
+pub(super) async fn load_product_spec_by_qolip_code(
+    pool: &PgPool,
+    qolip_code: &str,
+) -> Result<Option<QolipProductSpec>, QolipError> {
+    let row = sqlx::query_as::<_, QolipProductSpecRow>(
+        "SELECT item_code, item_name, item_group, qolip_code, size,
+                created_by_role, created_by_ref, created_by_name
+         FROM mini_qolip_product_specs
+         WHERE lower(qolip_code) = lower($1)",
+    )
+    .bind(qolip_code.trim())
     .fetch_optional(pool)
     .await
     .map_err(|_| QolipError::StoreFailed)?;
@@ -187,10 +207,10 @@ pub(super) async fn save_product_spec(
              created_by_role, created_by_ref, created_by_name, payload_json
          )
          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
-         ON CONFLICT (item_code) DO UPDATE SET
+         ON CONFLICT (lower(qolip_code)) DO UPDATE SET
              item_name = excluded.item_name,
              item_group = excluded.item_group,
-             qolip_code = excluded.qolip_code,
+             item_code = excluded.item_code,
              size = excluded.size,
              created_by_role = excluded.created_by_role,
              created_by_ref = excluded.created_by_ref,

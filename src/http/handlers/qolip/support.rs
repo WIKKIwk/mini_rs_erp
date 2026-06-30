@@ -120,6 +120,20 @@ pub struct QolipCellQrPrintRequest {
     pub(super) print_count: u32,
 }
 
+#[derive(Debug, Deserialize)]
+pub struct QolipCodeQrPrintRequest {
+    #[serde(default)]
+    pub(super) qolip_code: String,
+    #[serde(default)]
+    pub(super) driver_url: String,
+    #[serde(default)]
+    pub(super) printer: String,
+    #[serde(default)]
+    pub(super) print_mode: String,
+    #[serde(default)]
+    pub(super) print_count: u32,
+}
+
 pub(super) async fn authenticated_principal(
     state: &AppState,
     headers: &HeaderMap,
