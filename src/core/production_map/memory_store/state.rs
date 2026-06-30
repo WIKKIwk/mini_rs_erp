@@ -1,5 +1,7 @@
 use std::collections::BTreeMap;
 
+use std::sync::atomic::AtomicBool;
+
 use tokio::sync::RwLock;
 
 use super::super::*;
@@ -17,6 +19,7 @@ pub struct MemoryProductionMapStore {
     pub(super) finished_goods_stock: RwLock<BTreeMap<String, FinishedGoodsStockEntry>>,
     pub(super) material_rules: RwLock<BTreeMap<String, ApparatusMaterialRule>>,
     pub(super) material_assignments: RwLock<BTreeMap<String, RawMaterialAssignment>>,
+    pub(super) fail_next_queue_progress_commit: AtomicBool,
 }
 
 #[cfg(test)]
@@ -34,7 +37,13 @@ impl MemoryProductionMapStore {
             finished_goods_stock: RwLock::new(BTreeMap::new()),
             material_rules: RwLock::new(BTreeMap::new()),
             material_assignments: RwLock::new(BTreeMap::new()),
+            fail_next_queue_progress_commit: AtomicBool::new(false),
         }
+    }
+
+    pub fn fail_next_queue_progress_commit(&self) {
+        self.fail_next_queue_progress_commit
+            .store(true, std::sync::atomic::Ordering::SeqCst);
     }
 }
 

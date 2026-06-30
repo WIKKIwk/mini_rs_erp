@@ -9,7 +9,8 @@ use crate::core::production_map::{
     CompletionRequestNotification, CompletionRequestStateResolution, FinishedGoodsStockEntry,
     OrderProgressBatch, OrderProgressEvent, OrderRunSession, ProductionMapDefinition,
     ProductionMapError, ProductionMapStorePort, ProductionOrderLogEntry, QueueActionActor,
-    QueueActionProgressWrite, RawMaterialAssignment, WipProgressBatchQuery,
+    QueueActionProgressWrite, QueueActionProgressWriteResult, RawMaterialAssignment,
+    WipProgressBatchQuery,
 };
 
 mod catalog_helpers;
@@ -19,6 +20,7 @@ mod material_helpers;
 mod order_query_helpers;
 mod progress_helpers;
 mod queue_helpers;
+mod raw_material_stock_helpers;
 mod wip_query_helpers;
 
 use self::catalog_helpers::{
@@ -52,6 +54,7 @@ use self::progress_helpers::{
     receive_finished_goods_batch_tx,
 };
 use self::queue_helpers::{insert_queue_action_event_tx, put_queue_states_tx};
+use self::raw_material_stock_helpers::apply_raw_material_stock_transitions_tx;
 use self::wip_query_helpers::load_wip_progress_batches;
 
 #[derive(Clone)]
@@ -223,7 +226,7 @@ impl ProductionMapStorePort for PostgresProductionMapStore {
         actor: &QueueActionActor,
         notification: &CompletionRequestDecisionNotification,
         state_resolution: Option<CompletionRequestStateResolution>,
-    ) -> Result<(), ProductionMapError> {
+    ) -> Result<QueueActionProgressWriteResult, ProductionMapError> {
         resolve_completion_request(
             &self.pool,
             request_event_id,
@@ -377,7 +380,7 @@ impl ProductionMapStorePort for PostgresProductionMapStore {
     async fn put_apparatus_queue_states_with_event_and_progress(
         &self,
         write: QueueActionProgressWrite,
-    ) -> Result<(), ProductionMapError> {
+    ) -> Result<QueueActionProgressWriteResult, ProductionMapError> {
         let apparatus = write.apparatus.trim();
         let mut tx = self
             .pool
@@ -398,9 +401,15 @@ impl ProductionMapStorePort for PostgresProductionMapStore {
         for batch in write.progress_batch_updates {
             put_order_progress_batch_tx(&mut tx, &batch).await?;
         }
+        let raw_material_stock_warehouses =
+            apply_raw_material_stock_transitions_tx(&mut tx, &write.raw_material_stock_transitions)
+                .await?;
         tx.commit()
             .await
-            .map_err(|_| ProductionMapError::StoreFailed)
+            .map_err(|_| ProductionMapError::StoreFailed)?;
+        Ok(QueueActionProgressWriteResult {
+            raw_material_stock_warehouses,
+        })
     }
 
     async fn apparatus_material_rules(

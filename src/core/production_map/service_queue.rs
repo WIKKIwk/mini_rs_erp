@@ -429,8 +429,18 @@ impl ProductionMapService {
         &self,
         prepared: PreparedApparatusQueueAction,
     ) -> Result<ApparatusQueueActionResult, ProductionMapError> {
+        self.commit_prepared_queue_action_with_raw_material_stock(prepared, Vec::new())
+            .await
+    }
+
+    pub(crate) async fn commit_prepared_queue_action_with_raw_material_stock(
+        &self,
+        prepared: PreparedApparatusQueueAction,
+        raw_material_stock_transitions: Vec<RawMaterialStockTransition>,
+    ) -> Result<ApparatusQueueActionResult, ProductionMapError> {
         let order_id = prepared.event.order_id.clone();
-        self.store
+        let write_result = self
+            .store
             .put_apparatus_queue_states_with_event_and_progress(QueueActionProgressWrite {
                 apparatus: prepared.apparatus.clone(),
                 states: prepared.states.clone(),
@@ -439,6 +449,7 @@ impl ProductionMapService {
                 progress_event: prepared.progress_event.clone(),
                 progress_batch: prepared.progress_batch.clone(),
                 progress_batch_updates: prepared.progress_batch_updates.clone(),
+                raw_material_stock_transitions,
             })
             .await?;
         let order_status = self.order_status_detail(&order_id).await?;
@@ -449,6 +460,7 @@ impl ProductionMapService {
             session: prepared.session,
             progress_event: prepared.progress_event,
             progress_batch: prepared.progress_batch,
+            raw_material_stock_warehouses: write_result.raw_material_stock_warehouses,
         })
     }
 }

@@ -96,6 +96,97 @@ async fn queue_start_rejects_raw_material_stock_reserved_for_other_order() {
 }
 
 #[tokio::test]
+async fn queue_start_commit_failure_does_not_reserve_raw_material_stock() {
+    let material_store = Arc::new(RawMaterialStockLookup::default());
+    let production_store = Arc::new(MemoryProductionMapStore::new());
+    let mut state = test_state();
+    state.production_maps = ProductionMapService::new(production_store.clone());
+    state.gscale = GscaleService::new().with_receipt_store(material_store.clone());
+    state
+        .admin
+        .upsert_role_assignment(crate::core::authz::RoleAssignmentUpsert {
+            principal_role: PrincipalRole::Aparatchi,
+            principal_ref: "worker-raw-rollback".to_string(),
+            role_id: "aparatchi".to_string(),
+            assigned_apparatus: vec!["7 ta rangli pechat - A".to_string()],
+        })
+        .await
+        .expect("aparatchi assignment");
+    let token = session(&state, PrincipalRole::Admin).await;
+    let worker_token = session_for(&state, PrincipalRole::Aparatchi, "worker-raw-rollback").await;
+    let router = build_router(state);
+
+    let map = router
+        .clone()
+        .oneshot(request_with_body(
+            "PUT",
+            "/v1/mobile/admin/production-maps",
+            &token,
+            &pechat_order_map_json(
+                "zakaz-raw-rollback",
+                "Raw rollback",
+                "8813",
+                "7 ta rangli pechat - A",
+            ),
+        ))
+        .await
+        .expect("map save");
+    assert_eq!(map.status(), StatusCode::OK);
+
+    let rule = router
+        .clone()
+        .oneshot(request_with_body(
+            "PUT",
+            "/v1/mobile/admin/raw-material-rules",
+            &token,
+            r#"{"apparatus":"7 ta rangli pechat - A","requires_material":true,"item_groups":["Kraska"]}"#,
+        ))
+        .await
+        .expect("rule save");
+    assert_eq!(rule.status(), StatusCode::OK);
+
+    let assigned = router
+        .clone()
+        .oneshot(request_with_body(
+            "POST",
+            "/v1/mobile/admin/raw-material-assignments",
+            &token,
+            r#"{
+                "order_id":"zakaz-raw-rollback",
+                "barcode":"30AA"
+            }"#,
+        ))
+        .await
+        .expect("assign");
+    assert_eq!(assigned.status(), StatusCode::OK);
+
+    production_store.fail_next_queue_progress_commit();
+    let start = router
+        .oneshot(request_with_body(
+            "POST",
+            "/v1/mobile/admin/production-maps/queue-action",
+            &worker_token,
+            r#"{
+                "apparatus":"7 ta rangli pechat - A",
+                "order_id":"zakaz-raw-rollback",
+                "action":"start",
+                "material_barcodes":["30AA"]
+            }"#,
+        ))
+        .await
+        .expect("queue action with failing commit");
+    assert_eq!(start.status(), StatusCode::INTERNAL_SERVER_ERROR);
+
+    let stock = material_store
+        .raw_material_stock_by_barcode("30AA")
+        .await
+        .expect("stock lookup")
+        .expect("stock");
+    assert_eq!(stock.status, "available");
+    assert_eq!(stock.reserved_order_id, "");
+}
+
+#[tokio::test]
 async fn raw_material_assignment_checks_rulon_size_for_pechat_orders() {
     let material_store = Arc::new(RawMaterialStockLookup::default());
     material_store

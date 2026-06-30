@@ -164,6 +164,34 @@ impl ProductionMapService {
             CompletionRequestDecision::Approved => "Muammo bilan yopildi",
             CompletionRequestDecision::Rejected => "Sizni so'rovingiz rad etildi",
         };
+        let raw_material_stock_transitions = if decision == CompletionRequestDecision::Approved {
+            let material_barcodes = self
+                .store
+                .raw_material_assignments()
+                .await?
+                .into_iter()
+                .filter(|assignment| {
+                    assignment.order_id.trim() == request.order_id.trim()
+                        && queue_state::apparatus_titles_match(
+                            &assignment.apparatus,
+                            &request.apparatus,
+                        )
+                })
+                .map(|assignment| assignment.barcode.trim().to_string())
+                .filter(|barcode| !barcode.is_empty())
+                .collect::<Vec<_>>();
+            if material_barcodes.is_empty() {
+                Vec::new()
+            } else {
+                vec![RawMaterialStockTransition::new(
+                    RawMaterialStockTransitionKind::Consumed,
+                    material_barcodes,
+                    &request.order_id,
+                )]
+            }
+        } else {
+            Vec::new()
+        };
         let notification = CompletionRequestDecisionNotification {
             event_id: completion_request_decision_event_id(request_event_id, decision),
             request_event_id: request_event_id.to_string(),
@@ -226,11 +254,13 @@ impl ProductionMapService {
                     }),
                 },
                 session,
+                raw_material_stock_transitions,
             })
         } else {
             None
         };
-        self.store
+        let write_result = self
+            .store
             .resolve_completion_request_decision(
                 request_event_id,
                 decision,
@@ -243,6 +273,7 @@ impl ProductionMapService {
         Ok(CompletionRequestDecisionResult {
             states,
             decision: notification,
+            raw_material_stock_warehouses: write_result.raw_material_stock_warehouses,
         })
     }
 }
