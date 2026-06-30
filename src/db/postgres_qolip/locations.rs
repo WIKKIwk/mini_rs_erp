@@ -31,95 +31,68 @@ pub(super) async fn save_location(
 ) -> Result<QolipLocation, QolipError> {
     let mut tx = pool.begin().await.map_err(|_| QolipError::StoreFailed)?;
 
-    let existing_row = sqlx::query_as::<_, QolipLocationRow>(
-        "SELECT id, block, warehouse, item_code, item_name, qolip_code,
-                size, quantity, row_letter, column_number, location_label,
-                created_by_role, created_by_ref, created_by_name
-         FROM mini_qolip_locations
-         WHERE id = $1
-         FOR UPDATE",
+    sqlx::query("SELECT pg_advisory_xact_lock(hashtext(lower($1))::bigint)")
+        .bind(location.qolip_code.trim())
+        .execute(&mut *tx)
+        .await
+        .map_err(|_| QolipError::StoreFailed)?;
+
+    sqlx::query(
+        "DELETE FROM mini_qolip_locations
+         WHERE lower(qolip_code) = lower($1)
+           AND id <> $2",
     )
+    .bind(location.qolip_code.trim())
     .bind(location.id.trim())
-    .fetch_optional(&mut *tx)
+    .execute(&mut *tx)
     .await
     .map_err(|_| QolipError::StoreFailed)?;
 
-    let row = if let Some(existing_row) = existing_row {
-        let existing = row_to_location(existing_row);
-        if !location_identity_matches(&existing, &location) {
-            return Err(QolipError::LocationIdentityMismatch);
-        }
-        sqlx::query_as::<_, QolipLocationRow>(
-            "UPDATE mini_qolip_locations
-             SET block = $2,
-                 warehouse = $3,
-                 item_code = $4,
-                 item_name = $5,
-                 qolip_code = $6,
-                 size = $7,
-                 quantity = quantity + $8,
-                 row_letter = $9,
-                 column_number = $10,
-                 location_label = $11,
-                 created_by_role = $12,
-                 created_by_ref = $13,
-                 created_by_name = $14,
-                 payload_json = $15,
-                 updated_at = now()
-             WHERE id = $1
-             RETURNING id, block, warehouse, item_code, item_name, qolip_code,
-                 size, quantity, row_letter, column_number, location_label,
-                 created_by_role, created_by_ref, created_by_name",
-        )
-        .bind(location.id.trim())
-        .bind(location.block.trim())
-        .bind(location.warehouse.trim())
-        .bind(location.item_code.trim())
-        .bind(location.item_name.trim())
-        .bind(location.qolip_code.trim())
-        .bind(location.size)
-        .bind(location.quantity)
-        .bind(location.row_letter.trim())
-        .bind(location.column_number)
-        .bind(location.location_label.trim())
-        .bind(location.created_by_role.trim())
-        .bind(location.created_by_ref.trim())
-        .bind(location.created_by_name.trim())
-        .bind(serde_json::to_value(&location).map_err(|_| QolipError::StoreFailed)?)
-        .fetch_one(&mut *tx)
-        .await
-        .map_err(|_| QolipError::StoreFailed)?
-    } else {
-        sqlx::query_as::<_, QolipLocationRow>(
-            "INSERT INTO mini_qolip_locations (
-                 id, block, warehouse, item_code, item_name, qolip_code,
-                 size, quantity, row_letter, column_number, location_label,
-                 created_by_role, created_by_ref, created_by_name, payload_json
-             )
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
-             RETURNING id, block, warehouse, item_code, item_name, qolip_code,
-                 size, quantity, row_letter, column_number, location_label,
-                 created_by_role, created_by_ref, created_by_name",
-        )
-        .bind(location.id.trim())
-        .bind(location.block.trim())
-        .bind(location.warehouse.trim())
-        .bind(location.item_code.trim())
-        .bind(location.item_name.trim())
-        .bind(location.qolip_code.trim())
-        .bind(location.size)
-        .bind(location.quantity)
-        .bind(location.row_letter.trim())
-        .bind(location.column_number)
-        .bind(location.location_label.trim())
-        .bind(location.created_by_role.trim())
-        .bind(location.created_by_ref.trim())
-        .bind(location.created_by_name.trim())
-        .bind(serde_json::to_value(&location).map_err(|_| QolipError::StoreFailed)?)
-        .fetch_one(&mut *tx)
-        .await
-        .map_err(|_| QolipError::StoreFailed)?
-    };
+    let row = sqlx::query_as::<_, QolipLocationRow>(
+        "INSERT INTO mini_qolip_locations (
+             id, block, warehouse, item_code, item_name, qolip_code,
+             size, quantity, row_letter, column_number, location_label,
+             created_by_role, created_by_ref, created_by_name, payload_json
+         )
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
+         ON CONFLICT (id) DO UPDATE SET
+             block = excluded.block,
+             warehouse = excluded.warehouse,
+             item_code = excluded.item_code,
+             item_name = excluded.item_name,
+             qolip_code = excluded.qolip_code,
+             size = excluded.size,
+             quantity = excluded.quantity,
+             row_letter = excluded.row_letter,
+             column_number = excluded.column_number,
+             location_label = excluded.location_label,
+             created_by_role = excluded.created_by_role,
+             created_by_ref = excluded.created_by_ref,
+             created_by_name = excluded.created_by_name,
+             payload_json = excluded.payload_json,
+             updated_at = now()
+         RETURNING id, block, warehouse, item_code, item_name, qolip_code,
+             size, quantity, row_letter, column_number, location_label,
+             created_by_role, created_by_ref, created_by_name",
+    )
+    .bind(location.id.trim())
+    .bind(location.block.trim())
+    .bind(location.warehouse.trim())
+    .bind(location.item_code.trim())
+    .bind(location.item_name.trim())
+    .bind(location.qolip_code.trim())
+    .bind(location.size)
+    .bind(location.quantity)
+    .bind(location.row_letter.trim())
+    .bind(location.column_number)
+    .bind(location.location_label.trim())
+    .bind(location.created_by_role.trim())
+    .bind(location.created_by_ref.trim())
+    .bind(location.created_by_name.trim())
+    .bind(serde_json::to_value(&location).map_err(|_| QolipError::StoreFailed)?)
+    .fetch_one(&mut *tx)
+    .await
+    .map_err(|_| QolipError::StoreFailed)?;
 
     tx.commit().await.map_err(|_| QolipError::StoreFailed)?;
     Ok(row_to_location(row))

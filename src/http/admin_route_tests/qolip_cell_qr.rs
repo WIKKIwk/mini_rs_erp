@@ -83,6 +83,60 @@ async fn qolip_cell_qr_lookup_forbidden_block_does_not_create_qr_row() {
     assert_eq!(store.created_count().await, 0);
 }
 
+#[tokio::test]
+async fn qolip_code_qr_print_uses_code_as_stable_payload() {
+    let print_requests = Arc::new(Mutex::new(Vec::<ScaleDriverPrintRequest>::new()));
+    let mut state = test_state();
+    state.gscale = GscaleService::new().with_driver(Arc::new(FakeProgressDriver {
+        requests: print_requests.clone(),
+        fail: false,
+    }));
+    let token = session(&state, PrincipalRole::Admin).await;
+
+    let save = build_router(state.clone())
+        .oneshot(request_with_body(
+            "POST",
+            "/v1/mobile/qolip/product-specs",
+            &token,
+            r#"{
+                "item_code":"ITEM-001",
+                "item_name":"Kross qolip",
+                "item_group":"Qolip",
+                "qolip_code":"QOLIP-0007",
+                "size":42
+            }"#,
+        ))
+        .await
+        .expect("save product spec");
+    assert_eq!(save.status(), StatusCode::OK);
+
+    let print = build_router(state)
+        .oneshot(request_with_body(
+            "POST",
+            "/v1/mobile/qolip/code-qr/print",
+            &token,
+            r#"{
+                "qolip_code":"QOLIP-0007",
+                "driver_url":"http://127.0.0.1:39117",
+                "printer":"zebra",
+                "print_mode":"rfid"
+            }"#,
+        ))
+        .await
+        .expect("print qolip code qr");
+    assert_eq!(print.status(), StatusCode::OK);
+    let body = json_body(print).await;
+    assert_eq!(body["qolip_qr"]["qolip_code"], "QOLIP-0007");
+    assert_eq!(body["qolip_qr"]["qr_payload"], "QOLIP-0007");
+
+    let printed = print_requests.lock().await;
+    assert_eq!(printed.len(), 1);
+    assert_eq!(printed[0].epc, "QOLIP-0007");
+    assert_eq!(printed[0].item_code, "QOLIP-0007");
+    assert_eq!(printed[0].item_name, "Kross qolip • 42");
+    assert_eq!(printed[0].label_kind, "qr_center");
+}
+
 struct ForbiddenQolipStore {
     created: Mutex<Vec<QolipCellQr>>,
 }

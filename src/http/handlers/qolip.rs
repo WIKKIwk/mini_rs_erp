@@ -17,7 +17,7 @@ mod support;
 use self::support::*;
 pub use self::support::{
     QolipBlockUpsert, QolipCellQrLookupQuery, QolipCellQrPrintRequest, QolipCheckoutsQuery,
-    QolipErrorResponse, QolipSearchQuery,
+    QolipCodeQrPrintRequest, QolipErrorResponse, QolipSearchQuery,
 };
 
 pub async fn blocks(
@@ -457,6 +457,63 @@ pub async fn cell_qr_print(
     Ok(Json(serde_json::json!({
         "ok": true,
         "cell_qr": cell_qr,
+        "print": print,
+    })))
+}
+
+pub async fn code_qr_print(
+    State(state): State<AppState>,
+    method: Method,
+    headers: HeaderMap,
+    body: Bytes,
+) -> Result<Json<serde_json::Value>, (StatusCode, Json<QolipErrorResponse>)> {
+    if method != Method::POST {
+        return Err(method_not_allowed());
+    }
+    let principal = authenticated_principal(&state, &headers).await?;
+    ensure_qolip_access(&state, &principal).await?;
+    let input: QolipCodeQrPrintRequest =
+        serde_json::from_slice(&body).map_err(|_| bad_request("invalid_json"))?;
+    let qolip_code = input.qolip_code.trim();
+    if qolip_code.is_empty() {
+        return Err(bad_request("qolip_code_required"));
+    }
+    let spec = state
+        .qolip
+        .product_spec_by_qolip_code(qolip_code)
+        .await
+        .map_err(qolip_error)?
+        .ok_or_else(|| bad_request("qolip_code_not_found"))?;
+    let label = format!("{} • {}", spec.item_name.trim(), spec.size);
+    let print = state
+        .gscale
+        .print_progress_label(ProgressLabelPrintRequest {
+            driver_url: input.driver_url,
+            qr_payload: spec.qolip_code.clone(),
+            item_code: spec.qolip_code.clone(),
+            item_name: label,
+            executor_name: principal.display_name.trim().to_string(),
+            printer: input.printer,
+            print_mode: input.print_mode,
+            label_kind: "qr_center".to_string(),
+            gross_qty: 1.0,
+            progress_qty: 1.0,
+            unit: "dona".to_string(),
+            progress_unit: "dona".to_string(),
+            print_count: input.print_count,
+        })
+        .await
+        .map_err(gscale_print_error)?;
+    Ok(Json(serde_json::json!({
+        "ok": true,
+        "qolip_qr": {
+            "qolip_code": spec.qolip_code,
+            "qr_payload": spec.qolip_code,
+            "item_code": spec.item_code,
+            "item_name": spec.item_name,
+            "item_group": spec.item_group,
+            "size": spec.size,
+        },
         "print": print,
     })))
 }

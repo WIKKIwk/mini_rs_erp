@@ -528,7 +528,7 @@ CREATE TABLE IF NOT EXISTS mini_qolip_locations (
 );
 
 CREATE TABLE IF NOT EXISTS mini_qolip_product_specs (
-    item_code TEXT PRIMARY KEY,
+    item_code TEXT NOT NULL,
     item_name TEXT NOT NULL,
     item_group TEXT NOT NULL DEFAULT '',
     qolip_code TEXT NOT NULL,
@@ -544,6 +544,8 @@ CREATE TABLE IF NOT EXISTS mini_qolip_product_specs (
     CONSTRAINT mini_qolip_product_specs_qolip_code_not_blank CHECK (btrim(qolip_code) <> ''),
     CONSTRAINT mini_qolip_product_specs_size_positive CHECK (size > 0)
 );
+
+ALTER TABLE mini_qolip_product_specs DROP CONSTRAINT IF EXISTS mini_qolip_product_specs_pkey;
 
 CREATE TABLE IF NOT EXISTS mini_qolip_cell_qrs (
     id TEXT PRIMARY KEY,
@@ -804,6 +806,7 @@ CREATE INDEX IF NOT EXISTS idx_mini_qolip_locations_block ON mini_qolip_location
 CREATE INDEX IF NOT EXISTS idx_mini_qolip_locations_item ON mini_qolip_locations (lower(item_code), lower(item_name));
 CREATE INDEX IF NOT EXISTS idx_mini_qolip_cell_qrs_cell ON mini_qolip_cell_qrs (lower(block), row_letter, column_number);
 CREATE INDEX IF NOT EXISTS idx_mini_qolip_product_specs_item ON mini_qolip_product_specs (lower(item_code), lower(item_name), lower(qolip_code));
+CREATE UNIQUE INDEX IF NOT EXISTS idx_mini_qolip_product_specs_qolip_code_unique ON mini_qolip_product_specs (lower(qolip_code));
 CREATE INDEX IF NOT EXISTS idx_mini_qolip_checkouts_status_issued ON mini_qolip_checkouts (status, issued_at DESC);
 CREATE INDEX IF NOT EXISTS idx_mini_qolip_checkouts_block ON mini_qolip_checkouts (lower(block), issued_at DESC);
 CREATE INDEX IF NOT EXISTS idx_mini_qolip_checkouts_worker ON mini_qolip_checkouts (lower(issued_to_ref), status, issued_at DESC);

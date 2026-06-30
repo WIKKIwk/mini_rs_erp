@@ -19,6 +19,13 @@ pub trait QolipStorePort: Send + Sync {
         with_qolip_only: bool,
     ) -> Result<Vec<QolipProduct>, QolipError>;
     async fn product_spec(&self, item_code: &str) -> Result<Option<QolipProductSpec>, QolipError>;
+    async fn product_spec_by_qolip_code(
+        &self,
+        qolip_code: &str,
+    ) -> Result<Option<QolipProductSpec>, QolipError> {
+        let _ = qolip_code;
+        Ok(None)
+    }
     async fn put_product_spec(
         &self,
         spec: QolipProductSpec,

@@ -15,7 +15,7 @@ mod rows;
 
 use self::catalog::{
     load_all_blocks, load_assigned_blocks, load_assigned_warehouses, load_product_spec,
-    load_products, save_product_spec,
+    load_product_spec_by_qolip_code, load_products, save_product_spec,
 };
 use self::cell_qr::{load_cell_qr_by_payload, save_cell_qr};
 use self::checkouts::{
@@ -59,6 +59,13 @@ impl QolipStorePort for PostgresQolipStore {
 
     async fn product_spec(&self, item_code: &str) -> Result<Option<QolipProductSpec>, QolipError> {
         load_product_spec(&self.pool, item_code).await
+    }
+
+    async fn product_spec_by_qolip_code(
+        &self,
+        qolip_code: &str,
+    ) -> Result<Option<QolipProductSpec>, QolipError> {
+        load_product_spec_by_qolip_code(&self.pool, qolip_code).await
     }
 
     async fn put_product_spec(
