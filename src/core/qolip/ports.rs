@@ -32,6 +32,13 @@ pub trait QolipStorePort: Send + Sync {
     ) -> Result<QolipProductSpec, QolipError>;
     async fn locations(&self, block: &str) -> Result<Vec<QolipLocation>, QolipError>;
     async fn location_by_id(&self, location_id: &str) -> Result<Option<QolipLocation>, QolipError>;
+    async fn location_by_qolip_code(
+        &self,
+        qolip_code: &str,
+    ) -> Result<Option<QolipLocation>, QolipError> {
+        let _ = qolip_code;
+        Ok(None)
+    }
     async fn put_location(&self, location: QolipLocation) -> Result<QolipLocation, QolipError>;
     async fn get_or_create_cell_qr(&self, cell: QolipCellQr) -> Result<QolipCellQr, QolipError>;
     async fn issue_checkout(&self, checkout: QolipCheckout) -> Result<QolipCheckout, QolipError>;

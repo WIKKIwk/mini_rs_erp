@@ -6,11 +6,13 @@ use serde::Serialize;
 
 const IROH_TICKET_ENV: &str = "IROH_ENDPOINT_TICKET";
 const IROH_TICKET_FILE_ENV: &str = "IROH_TICKET_FILE";
+const IROH_SUPPORTS_CONNECTION_REUSE_ENV: &str = "IROH_SUPPORTS_CONNECTION_REUSE";
 
 #[derive(Debug, Serialize)]
 pub struct IrohTicketResponse {
     pub ticket: String,
     pub source: &'static str,
+    pub supports_connection_reuse: bool,
 }
 
 #[derive(Debug, Serialize)]
@@ -21,7 +23,11 @@ pub struct IrohTicketErrorResponse {
 pub async fn ticket()
 -> Result<Json<IrohTicketResponse>, (StatusCode, Json<IrohTicketErrorResponse>)> {
     match load_ticket().await {
-        Some((ticket, source)) => Ok(Json(IrohTicketResponse { ticket, source })),
+        Some((ticket, source)) => Ok(Json(IrohTicketResponse {
+            ticket,
+            source,
+            supports_connection_reuse: supports_connection_reuse(),
+        })),
         None => Err((
             StatusCode::SERVICE_UNAVAILABLE,
             Json(IrohTicketErrorResponse {
@@ -29,6 +35,18 @@ pub async fn ticket()
             }),
         )),
     }
+}
+
+fn supports_connection_reuse() -> bool {
+    std::env::var(IROH_SUPPORTS_CONNECTION_REUSE_ENV)
+        .ok()
+        .map(|value| is_truthy(&value))
+        .unwrap_or(false)
+}
+
+fn is_truthy(value: &str) -> bool {
+    let value = value.trim().to_ascii_lowercase();
+    matches!(value.as_str(), "1" | "true" | "yes" | "on")
 }
 
 async fn load_ticket() -> Option<(String, &'static str)> {
@@ -59,7 +77,7 @@ fn clean_ticket(raw: &str) -> Option<String> {
 
 #[cfg(test)]
 mod tests {
-    use super::clean_ticket;
+    use super::{clean_ticket, is_truthy};
 
     #[test]
     fn clean_ticket_rejects_blank_values() {
@@ -69,5 +87,15 @@ mod tests {
     #[test]
     fn clean_ticket_trims_non_blank_values() {
         assert_eq!(clean_ticket("  abc-123\n").as_deref(), Some("abc-123"));
+    }
+
+    #[test]
+    fn connection_reuse_capability_parses_truthy_values() {
+        assert!(is_truthy("1"));
+        assert!(is_truthy("true"));
+        assert!(is_truthy(" yes "));
+        assert!(is_truthy("on"));
+        assert!(!is_truthy(""));
+        assert!(!is_truthy("false"));
     }
 }

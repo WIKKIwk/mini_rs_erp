@@ -170,6 +170,8 @@ pub(super) fn qolip_error(error: QolipError) -> (StatusCode, Json<QolipErrorResp
         QolipError::MissingBlock => bad_request("block_required"),
         QolipError::MissingItem => bad_request("item_required"),
         QolipError::MissingQolipCode => bad_request("qolip_code_required"),
+        QolipError::QolipCodeNotFound => bad_request("qolip_code_not_found"),
+        QolipError::QolipCodeMismatch => bad_request("qolip_code_mismatch"),
         QolipError::InvalidSize => bad_request("size_required"),
         QolipError::InvalidQuantity => bad_request("quantity_required"),
         QolipError::InvalidLocation => bad_request("location_invalid"),

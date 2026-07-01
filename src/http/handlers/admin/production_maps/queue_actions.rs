@@ -11,6 +11,8 @@ struct ApparatusQueueActionRequest {
     #[serde(default)]
     material_barcodes: Vec<String>,
     #[serde(default)]
+    qolip_code: String,
+    #[serde(default)]
     produced_qty: Option<f64>,
     #[serde(default)]
     qty: Option<f64>,
@@ -175,6 +177,9 @@ pub async fn production_map_queue_action(
         )
         .await
         .map_err(production_map_error)?;
+    if matches!(input.action, queue_state::ApparatusQueueAction::Start) {
+        checkout_qolip_for_pechat_start(&state, &principal, &input).await?;
+    }
     let mut raw_material_stock_transitions = Vec::new();
     if matches!(input.action, queue_state::ApparatusQueueAction::Start) {
         let material_stock_barcodes = material_barcode
@@ -304,6 +309,68 @@ pub async fn production_map_queue_action(
         "progress_batch": result.progress_batch,
         "print": print,
     })))
+}
+
+async fn checkout_qolip_for_pechat_start(
+    state: &AppState,
+    principal: &Principal,
+    input: &ApparatusQueueActionRequest,
+) -> Result<(), AdminError> {
+    if !apparatus_requires_qolip_scan(&input.apparatus) {
+        return Ok(());
+    }
+    let Some(map) = state
+        .production_maps
+        .raw_map(&input.order_id)
+        .await
+        .map_err(production_map_error)?
+    else {
+        return Err(production_map_error(ProductionMapError::MapNotFound));
+    };
+    let qolip_code = input.qolip_code.trim();
+    if qolip_code.is_empty() {
+        if state
+            .qolip
+            .order_product_requires_qolip(&map.product_code, &map.title)
+            .await
+            .map_err(qolip_queue_error)?
+        {
+            return Err(bad_request("qolip_scan_required"));
+        }
+        return Ok(());
+    }
+    state
+        .qolip
+        .checkout_qolip_code_for_order_start(
+            qolip_code,
+            &map.product_code,
+            &map.title,
+            &principal.ref_,
+            &principal.display_name,
+            principal,
+        )
+        .await
+        .map_err(qolip_queue_error)?;
+    Ok(())
+}
+
+fn apparatus_requires_qolip_scan(apparatus: &str) -> bool {
+    apparatus.trim().to_lowercase().contains("pechat")
+}
+
+fn qolip_queue_error(error: crate::core::qolip::QolipError) -> AdminError {
+    match error {
+        crate::core::qolip::QolipError::MissingQolipCode => bad_request("qolip_scan_required"),
+        crate::core::qolip::QolipError::QolipCodeNotFound => bad_request("qolip_code_not_found"),
+        crate::core::qolip::QolipError::QolipCodeMismatch => bad_request("qolip_code_mismatch"),
+        crate::core::qolip::QolipError::LocationNotFound => bad_request("qolip_location_not_found"),
+        crate::core::qolip::QolipError::InsufficientStock => bad_request("insufficient_stock"),
+        crate::core::qolip::QolipError::LocationIdentityMismatch => {
+            bad_request("location_identity_mismatch")
+        }
+        crate::core::qolip::QolipError::StoreFailed => server_error("qolip store failed"),
+        other => bad_request(other.to_string()),
+    }
 }
 
 pub(super) fn progress_print_failure_json(

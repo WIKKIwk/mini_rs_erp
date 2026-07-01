@@ -111,6 +111,159 @@ async fn qolip_checkout_decrements_location_and_rejects_overdraw() {
 }
 
 #[tokio::test]
+async fn pechat_queue_start_requires_matching_qolip_code_scan() {
+    let state = test_state();
+    state
+        .admin
+        .upsert_role_assignment(crate::core::authz::RoleAssignmentUpsert {
+            principal_role: PrincipalRole::Aparatchi,
+            principal_ref: "pechat-worker-qolip".to_string(),
+            role_id: "aparatchi".to_string(),
+            assigned_apparatus: vec!["7 ta rangli pechat - A".to_string()],
+        })
+        .await
+        .expect("aparatchi assignment");
+    let token = session(&state, PrincipalRole::Admin).await;
+    let worker_token = session_for(&state, PrincipalRole::Aparatchi, "pechat-worker-qolip").await;
+    let router = build_router(state.clone());
+
+    let map = router
+        .clone()
+        .oneshot(request_with_body(
+            "PUT",
+            "/v1/mobile/admin/production-maps",
+            &token,
+            &production_order_map_json_with_product(
+                "zakaz-qolip-scan",
+                "Test qolip order",
+                "ITEM-QOLIP",
+                "9901",
+                "7 ta rangli pechat - A",
+                7.0,
+                1250.0,
+            ),
+        ))
+        .await
+        .expect("map save");
+    assert_eq!(map.status(), StatusCode::OK);
+
+    let spec = router
+        .clone()
+        .oneshot(request_with_body(
+            "POST",
+            "/v1/mobile/qolip/product-specs",
+            &token,
+            r#"{
+                "item_code":"ITEM-QOLIP",
+                "item_name":"Test qolip order",
+                "item_group":"Tayyor mahsulot",
+                "qolip_code":"QOLIP-SCAN-1",
+                "size":42
+            }"#,
+        ))
+        .await
+        .expect("spec save");
+    assert_eq!(spec.status(), StatusCode::OK);
+
+    let location = router
+        .clone()
+        .oneshot(request_with_body(
+            "POST",
+            "/v1/mobile/qolip/locations",
+            &token,
+            r#"{
+                "block":"A",
+                "warehouse":"Qolip ombor",
+                "item_code":"ITEM-QOLIP",
+                "item_name":"Test qolip order",
+                "qolip_code":"QOLIP-SCAN-1",
+                "size":42,
+                "quantity":1,
+                "row_letter":"B",
+                "column_number":2
+            }"#,
+        ))
+        .await
+        .expect("location save");
+    assert_eq!(location.status(), StatusCode::OK);
+
+    let missing_scan = router
+        .clone()
+        .oneshot(request_with_body(
+            "POST",
+            "/v1/mobile/admin/production-maps/queue-action",
+            &worker_token,
+            r#"{
+                "apparatus":"7 ta rangli pechat - A",
+                "order_id":"zakaz-qolip-scan",
+                "action":"start"
+            }"#,
+        ))
+        .await
+        .expect("queue action without qolip");
+    assert_eq!(missing_scan.status(), StatusCode::BAD_REQUEST);
+    assert_eq!(
+        json_body(missing_scan).await["error"],
+        "qolip_scan_required"
+    );
+
+    let wrong_scan = router
+        .clone()
+        .oneshot(request_with_body(
+            "POST",
+            "/v1/mobile/admin/production-maps/queue-action",
+            &worker_token,
+            r#"{
+                "apparatus":"7 ta rangli pechat - A",
+                "order_id":"zakaz-qolip-scan",
+                "action":"start",
+                "qolip_code":"QOLIP-WRONG"
+            }"#,
+        ))
+        .await
+        .expect("queue action with wrong qolip");
+    assert_eq!(wrong_scan.status(), StatusCode::BAD_REQUEST);
+    assert_eq!(json_body(wrong_scan).await["error"], "qolip_code_not_found");
+
+    let started = router
+        .clone()
+        .oneshot(request_with_body(
+            "POST",
+            "/v1/mobile/admin/production-maps/queue-action",
+            &worker_token,
+            r#"{
+                "apparatus":"7 ta rangli pechat - A",
+                "order_id":"zakaz-qolip-scan",
+                "action":"start",
+                "qolip_code":"QOLIP-SCAN-1"
+            }"#,
+        ))
+        .await
+        .expect("queue action with qolip");
+    assert_eq!(started.status(), StatusCode::OK);
+    let started_body = json_body(started).await;
+    assert_eq!(
+        started_body["states"]["zakaz-qolip-scan"],
+        serde_json::json!("in_progress")
+    );
+
+    let checkouts = router
+        .oneshot(request("GET", "/v1/mobile/qolip/checkouts", &token))
+        .await
+        .expect("qolip checkouts");
+    assert_eq!(checkouts.status(), StatusCode::OK);
+    let checkouts_body = json_body(checkouts).await;
+    let checkout = checkouts_body["checkouts"]
+        .as_array()
+        .expect("checkouts")
+        .iter()
+        .find(|entry| entry["qolip_code"] == "QOLIP-SCAN-1")
+        .expect("qolip checkout");
+    assert_eq!(checkout["issued_to_ref"], "pechat-worker-qolip");
+    assert_eq!(checkout["quantity"], 1);
+}
+
+#[tokio::test]
 async fn qolip_locations_without_assignment_are_forbidden() {
     let state = test_state();
     let token = session_for(&state, PrincipalRole::Qolipchi, "qolipchi-no-block").await;
