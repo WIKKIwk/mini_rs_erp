@@ -3,6 +3,7 @@ pub mod auth;
 pub mod calculate;
 pub mod customer;
 pub mod gscale;
+pub mod iroh_discovery;
 pub mod notifications;
 pub mod profile;
 pub mod push;
