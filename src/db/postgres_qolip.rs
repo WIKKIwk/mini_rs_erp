@@ -21,7 +21,10 @@ use self::cell_qr::{load_cell_qr_by_payload, save_cell_qr};
 use self::checkouts::{
     load_checkout_by_id, load_checkouts, return_checkout_to_location, save_checkout,
 };
-use self::locations::{load_location_by_id, load_locations, move_location_to_cell, save_location};
+use self::locations::{
+    load_location_by_id, load_location_by_qolip_code, load_locations, move_location_to_cell,
+    save_location,
+};
 
 #[derive(Clone)]
 pub struct PostgresQolipStore {
@@ -89,6 +92,13 @@ impl QolipStorePort for PostgresQolipStore {
 
     async fn location_by_id(&self, location_id: &str) -> Result<Option<QolipLocation>, QolipError> {
         load_location_by_id(&self.pool, location_id).await
+    }
+
+    async fn location_by_qolip_code(
+        &self,
+        qolip_code: &str,
+    ) -> Result<Option<QolipLocation>, QolipError> {
+        load_location_by_qolip_code(&self.pool, qolip_code).await
     }
 
     async fn issue_checkout(&self, checkout: QolipCheckout) -> Result<QolipCheckout, QolipError> {

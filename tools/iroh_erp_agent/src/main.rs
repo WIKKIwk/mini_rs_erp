@@ -29,20 +29,14 @@ impl ProtocolHandler for HttpBridge {
         let target = self.target.clone();
 
         async move {
-            let (mut send, mut recv) = connection.accept_bi().await?;
-            let request = recv
-                .read_to_end(MAX_HTTP_BYTES)
-                .await
-                .map_err(io::Error::other)?;
-            let mut upstream = tokio::net::TcpStream::connect(&target).await?;
-
-            upstream.write_all(&request).await?;
-
-            let mut response = Vec::new();
-            upstream.read_to_end(&mut response).await?;
-
-            send.write_all(&response).await?;
-            send.finish()?;
+            while let Ok((send, recv)) = connection.accept_bi().await {
+                let target = target.clone();
+                tokio::spawn(async move {
+                    if let Err(error) = bridge_http_stream(target, send, recv).await {
+                        eprintln!("iroh http stream failed: {error}");
+                    }
+                });
+            }
             connection.closed().await;
 
             Ok::<(), io::Error>(())
@@ -50,6 +44,114 @@ impl ProtocolHandler for HttpBridge {
         .await
         .map_err(AcceptError::from_err)
     }
+}
+
+async fn bridge_http_stream(
+    target: String,
+    mut send: iroh::endpoint::SendStream,
+    mut recv: iroh::endpoint::RecvStream,
+) -> io::Result<()> {
+    let mut upstream = tokio::net::TcpStream::connect(&target).await?;
+    let mut request = read_http_request_head(&mut recv).await?;
+
+    if !is_websocket_upgrade(&request) {
+        let mut rest = recv
+            .read_to_end(MAX_HTTP_BYTES.saturating_sub(request.len()))
+            .await
+            .map_err(io::Error::other)?;
+        request.append(&mut rest);
+        upstream.write_all(&request).await?;
+
+        let mut response = Vec::new();
+        upstream.read_to_end(&mut response).await?;
+
+        send.write_all(&response).await?;
+        send.finish()?;
+        return Ok(());
+    }
+
+    upstream.write_all(&request).await?;
+    tunnel_websocket(upstream, send, recv).await
+}
+
+async fn read_http_request_head(recv: &mut iroh::endpoint::RecvStream) -> io::Result<Vec<u8>> {
+    let mut request = Vec::new();
+    let mut buffer = [0_u8; 1024];
+    loop {
+        if request.len() >= MAX_HTTP_BYTES {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "HTTP request exceeds size limit",
+            ));
+        }
+
+        let Some(bytes_read) = recv.read(&mut buffer).await? else {
+            break;
+        };
+        if bytes_read == 0 {
+            break;
+        }
+        request.extend_from_slice(&buffer[..bytes_read]);
+        if find_http_header_end(&request).is_some() {
+            break;
+        }
+    }
+    Ok(request)
+}
+
+async fn tunnel_websocket(
+    upstream: tokio::net::TcpStream,
+    mut send: iroh::endpoint::SendStream,
+    mut recv: iroh::endpoint::RecvStream,
+) -> io::Result<()> {
+    let (mut upstream_read, mut upstream_write) = upstream.into_split();
+
+    tokio::select! {
+        result = async {
+            tokio::io::copy(&mut recv, &mut upstream_write).await?;
+            upstream_write.shutdown().await
+        } => result,
+        result = async {
+            tokio::io::copy(&mut upstream_read, &mut send).await?;
+            send.finish()?;
+            Ok(())
+        } => result,
+    }
+}
+
+fn is_websocket_upgrade(request: &[u8]) -> bool {
+    let Some(header_end) = find_http_header_end(request) else {
+        return false;
+    };
+    let Ok(headers) = std::str::from_utf8(&request[..header_end]) else {
+        return false;
+    };
+    let mut has_connection_upgrade = false;
+    let mut has_websocket_upgrade = false;
+
+    for line in headers.lines().skip(1) {
+        let Some((name, value)) = line.split_once(':') else {
+            continue;
+        };
+        let name = name.trim().to_ascii_lowercase();
+        let value = value.trim().to_ascii_lowercase();
+        if name == "connection" {
+            has_connection_upgrade = value
+                .split(',')
+                .any(|part| part.trim().eq_ignore_ascii_case("upgrade"));
+        } else if name == "upgrade" {
+            has_websocket_upgrade = value == "websocket";
+        }
+    }
+
+    has_connection_upgrade && has_websocket_upgrade
+}
+
+fn find_http_header_end(bytes: &[u8]) -> Option<usize> {
+    bytes
+        .windows(4)
+        .position(|window| window == b"\r\n\r\n")
+        .map(|index| index + 4)
 }
 
 #[tokio::main]
@@ -204,7 +306,7 @@ fn print_usage() {
 
 #[cfg(test)]
 mod tests {
-    use super::parse_status_code;
+    use super::{is_websocket_upgrade, parse_status_code};
 
     #[test]
     fn parses_http_status_code() {
@@ -217,5 +319,19 @@ mod tests {
     fn rejects_invalid_http_response() {
         assert_eq!(parse_status_code(b"{\"ok\":true}"), None);
         assert_eq!(parse_status_code(b"HTTP/1.1 nope OK\r\n\r\n"), None);
+    }
+
+    #[test]
+    fn detects_websocket_upgrade_request() {
+        let request = b"GET /v1/mobile/admin/system/monitor/live HTTP/1.1\r\nHost: mini-rs-erp\r\nConnection: keep-alive, Upgrade\r\nUpgrade: websocket\r\n\r\n";
+
+        assert!(is_websocket_upgrade(request));
+    }
+
+    #[test]
+    fn keeps_plain_http_request_in_close_mode() {
+        let request = b"GET /healthz HTTP/1.1\r\nHost: mini-rs-erp\r\nConnection: close\r\n\r\n";
+
+        assert!(!is_websocket_upgrade(request));
     }
 }

@@ -198,6 +198,20 @@ impl QolipStorePort for MemoryQolipStore {
             .cloned())
     }
 
+    async fn location_by_qolip_code(
+        &self,
+        qolip_code: &str,
+    ) -> Result<Option<QolipLocation>, QolipError> {
+        let qolip_code = qolip_code.trim();
+        Ok(self
+            .locations
+            .read()
+            .await
+            .iter()
+            .find(|location| location.qolip_code.trim().eq_ignore_ascii_case(qolip_code))
+            .cloned())
+    }
+
     async fn issue_checkout(&self, checkout: QolipCheckout) -> Result<QolipCheckout, QolipError> {
         let mut locations = self.locations.write().await;
         let Some(index) = locations

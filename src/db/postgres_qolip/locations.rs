@@ -117,6 +117,27 @@ pub(super) async fn load_location_by_id(
     Ok(row.map(row_to_location))
 }
 
+pub(super) async fn load_location_by_qolip_code(
+    pool: &PgPool,
+    qolip_code: &str,
+) -> Result<Option<QolipLocation>, QolipError> {
+    let row = sqlx::query_as::<_, QolipLocationRow>(
+        "SELECT id, block, warehouse, item_code, item_name, qolip_code,
+                size, quantity, row_letter, column_number, location_label,
+                created_by_role, created_by_ref, created_by_name
+         FROM mini_qolip_locations
+         WHERE lower(qolip_code) = lower($1)
+         ORDER BY updated_at DESC, created_at DESC
+         LIMIT 1",
+    )
+    .bind(qolip_code.trim())
+    .fetch_optional(pool)
+    .await
+    .map_err(|_| QolipError::StoreFailed)?;
+
+    Ok(row.map(row_to_location))
+}
+
 pub(super) async fn move_location_to_cell(
     pool: &PgPool,
     location_id: &str,

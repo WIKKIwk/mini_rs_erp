@@ -173,6 +173,10 @@ pub enum QolipError {
     MissingItem,
     #[error("qolip code is required")]
     MissingQolipCode,
+    #[error("qolip code not found")]
+    QolipCodeNotFound,
+    #[error("qolip code does not match item")]
+    QolipCodeMismatch,
     #[error("size is required")]
     InvalidSize,
     #[error("quantity is required")]
