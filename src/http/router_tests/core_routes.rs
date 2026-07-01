@@ -45,6 +45,7 @@ async fn go_mobile_route_inventory_is_registered() {
         "/v1/mobile/auth/login",
         "/v1/mobile/auth/logout",
         "/v1/mobile/me",
+        "/v1/mobile/iroh-ticket",
         "/v1/mobile/profile",
         "/v1/mobile/profile/avatar",
         "/v1/mobile/profile/avatar/view",
