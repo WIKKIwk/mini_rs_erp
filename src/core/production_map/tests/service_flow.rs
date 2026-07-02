@@ -485,7 +485,7 @@ async fn downstream_start_requires_previous_stage_progress_qr() {
 }
 
 #[tokio::test]
-async fn downstream_start_accepts_previous_stage_qr_after_resume() {
+async fn downstream_start_rejects_previous_stage_qr_after_resume() {
     let service = ProductionMapService::new(std::sync::Arc::new(MemoryProductionMapStore::new()));
     let actor = QueueActionActor {
         role: "aparatchi".to_string(),
@@ -559,11 +559,10 @@ async fn downstream_start_accepts_previous_stage_qr_after_resume() {
                 ..QueueProgressInput::default()
             },
         )
-        .await
-        .expect("second start with resumed previous qr");
+        .await;
     assert_eq!(
-        second_started.states.get(order_id),
-        Some(&"in_progress".to_string())
+        second_started,
+        Err(ProductionMapError::ProgressBatchNotAccepted)
     );
 }
 
@@ -826,7 +825,8 @@ async fn downstream_output_processes_input_batch_and_links_new_wip_batch() {
 
 #[tokio::test]
 async fn downstream_complete_keeps_order_open_until_all_input_wips_processed() {
-    let service = ProductionMapService::new(std::sync::Arc::new(MemoryProductionMapStore::new()));
+    let store = std::sync::Arc::new(MemoryProductionMapStore::new());
+    let service = ProductionMapService::new(store.clone());
     let actor = QueueActionActor {
         role: "aparatchi".to_string(),
         ref_: "worker-wip-partial-complete".to_string(),
@@ -840,65 +840,24 @@ async fn downstream_complete_keeps_order_open_until_all_input_wips_processed() {
         .await
         .expect("map");
 
-    service
-        .apply_apparatus_queue_action_with_progress(
-            first,
-            order_id,
-            queue_state::ApparatusQueueAction::Start,
-            &[first.to_string()],
-            actor.clone(),
-            QueueProgressInput::default(),
-        )
+    let first_pause = pause_first_stage_batch(&service, order_id, first, &actor, 11.0)
         .await
-        .expect("first start");
-    let first_pause = service
-        .apply_apparatus_queue_action_with_progress(
-            first,
-            order_id,
-            queue_state::ApparatusQueueAction::Pause,
-            &[first.to_string()],
-            actor.clone(),
-            QueueProgressInput {
-                produced_qty: Some(11.0),
-                uom: "kg".to_string(),
-                ..QueueProgressInput::default()
-            },
-        )
-        .await
-        .expect("first pause")
-        .progress_batch
         .expect("first pause batch");
-    service
-        .apply_apparatus_queue_action_with_progress(
-            first,
-            order_id,
-            queue_state::ApparatusQueueAction::Resume,
-            &[first.to_string()],
-            actor.clone(),
-            QueueProgressInput {
-                qr_payload: first_pause.qr_payload.clone(),
-                ..QueueProgressInput::default()
-            },
-        )
+    let mut second_pause = test_progress_batch(
+        "progress-batch-second-wip",
+        order_id,
+        first,
+        "QR-SECOND-WIP",
+        OrderProgressBatchWipStatus::Waiting,
+        "",
+    );
+    second_pause.produced_qty = 12.0;
+    second_pause.next_apparatus = second.to_string();
+    second_pause.refresh_status_detail();
+    store
+        .put_order_progress_batch(second_pause.clone())
         .await
-        .expect("first resume");
-    let second_pause = service
-        .apply_apparatus_queue_action_with_progress(
-            first,
-            order_id,
-            queue_state::ApparatusQueueAction::Pause,
-            &[first.to_string()],
-            actor.clone(),
-            QueueProgressInput {
-                produced_qty: Some(12.0),
-                uom: "kg".to_string(),
-                ..QueueProgressInput::default()
-            },
-        )
-        .await
-        .expect("second pause")
-        .progress_batch
-        .expect("second pause batch");
+        .expect("second waiting wip");
 
     service
         .apply_apparatus_queue_action_with_progress(
@@ -958,6 +917,23 @@ async fn downstream_complete_keeps_order_open_until_all_input_wips_processed() {
             .expect("first wip processed")
             .wip_status,
         OrderProgressBatchWipStatus::Processed
+    );
+    let reused_processed = service
+        .apply_apparatus_queue_action_with_progress(
+            second,
+            order_id,
+            queue_state::ApparatusQueueAction::Start,
+            &[second.to_string()],
+            actor.clone(),
+            QueueProgressInput {
+                qr_payload: first_pause.qr_payload.clone(),
+                ..QueueProgressInput::default()
+            },
+        )
+        .await;
+    assert_eq!(
+        reused_processed,
+        Err(ProductionMapError::ProgressBatchNotAccepted)
     );
     assert_eq!(
         service

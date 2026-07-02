@@ -65,6 +65,7 @@ impl ProductionMapService {
                     | OrderProgressBatchStatus::Completed
                     | OrderProgressBatchStatus::Resumed
             )
+            || batch.wip_status != OrderProgressBatchWipStatus::Waiting
         {
             return Err(ProductionMapError::ProgressBatchNotAccepted);
         }

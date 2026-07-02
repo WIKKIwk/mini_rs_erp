@@ -56,10 +56,14 @@ async fn admin_apparatus_groups_round_trip_on_server() {
         .expect("response");
     assert_eq!(saved.status(), StatusCode::OK);
     let saved_body = json_body(saved).await;
-    assert_eq!(saved_body["name"], "pechat");
+    assert_eq!(saved_body["name"], "Bosma aparat");
     assert_eq!(
         saved_body["apparatus"],
-        serde_json::json!(["7 ta rangli pechat", "8 ta rangli pechat"])
+        serde_json::json!([
+            "7 ta rangli bosma aparat",
+            "8 ta rangli bosma aparat",
+            "9 ta rangli bosma aparat"
+        ])
     );
 
     let listed = build_router(state)
@@ -68,10 +72,49 @@ async fn admin_apparatus_groups_round_trip_on_server() {
         .expect("response");
     assert_eq!(listed.status(), StatusCode::OK);
     let listed_body = json_body(listed).await;
-    assert_eq!(listed_body[0]["name"], "pechat");
+    assert_eq!(listed_body[0]["name"], "Bosma aparat");
     assert_eq!(
         listed_body[0]["apparatus"],
-        serde_json::json!(["7 ta rangli pechat", "8 ta rangli pechat"])
+        serde_json::json!([
+            "7 ta rangli bosma aparat",
+            "8 ta rangli bosma aparat",
+            "9 ta rangli bosma aparat"
+        ])
+    );
+}
+
+#[tokio::test]
+async fn admin_apparatus_group_keeps_laminatsiya_apparatus_manual() {
+    let state = test_state();
+    let token = session(&state, PrincipalRole::Admin).await;
+
+    let saved = build_router(state.clone())
+        .oneshot(request_with_body(
+            "PUT",
+            "/v1/mobile/admin/apparatus-groups",
+            &token,
+            r#"{"name":" laminatsiya apparatlar ","apparatus":[" Laminatsiya 1 ","Laminatsiya kley"]}"#,
+        ))
+        .await
+        .expect("response");
+    assert_eq!(saved.status(), StatusCode::OK);
+    let saved_body = json_body(saved).await;
+    assert_eq!(saved_body["name"], "Laminatsiya");
+    assert_eq!(
+        saved_body["apparatus"],
+        serde_json::json!(["Laminatsiya 1", "Laminatsiya kley"])
+    );
+
+    let listed = build_router(state)
+        .oneshot(request("GET", "/v1/mobile/admin/apparatus-groups", &token))
+        .await
+        .expect("response");
+    assert_eq!(listed.status(), StatusCode::OK);
+    let listed_body = json_body(listed).await;
+    assert_eq!(listed_body[0]["name"], "Laminatsiya");
+    assert_eq!(
+        listed_body[0]["apparatus"],
+        serde_json::json!(["Laminatsiya 1", "Laminatsiya kley"])
     );
 }
 

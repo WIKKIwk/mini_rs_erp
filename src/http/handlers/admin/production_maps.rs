@@ -167,6 +167,11 @@ pub async fn production_map_save_with_order(
         .raw_map(&map_id)
         .await
         .map_err(production_map_error)?;
+    if opens_quick_template_as_order && previous.is_some() {
+        return Err(production_map_error(
+            ProductionMapError::DuplicateOrderNumber,
+        ));
+    }
     let saved_map = state
         .production_maps
         .upsert_map(input.map)
@@ -179,7 +184,7 @@ pub async fn production_map_save_with_order(
                 integration_template = Some(template);
                 None
             } else {
-                template.source_map_id = saved_map.map.id.trim().to_string();
+                template.source_map_id = template_source_map_id_for_save(&saved_map.map, &template);
                 match state
                     .calculate_orders
                     .upsert(&owner_key, template)
@@ -223,6 +228,18 @@ fn is_quick_template_order_clone(
 ) -> bool {
     let source_map_id = template.source_map_id.trim();
     !source_map_id.is_empty() && source_map_id != map.id.trim() && is_sheet_order_map(map)
+}
+
+fn template_source_map_id_for_save(
+    map: &ProductionMapDefinition,
+    template: &CalculateOrderTemplate,
+) -> String {
+    let source_map_id = template.source_map_id.trim();
+    if source_map_id.is_empty() && !is_sheet_order_map(map) {
+        map.id.trim().to_string()
+    } else {
+        source_map_id.to_string()
+    }
 }
 
 fn apply_authoritative_calculation(

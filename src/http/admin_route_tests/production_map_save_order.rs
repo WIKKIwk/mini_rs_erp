@@ -37,7 +37,10 @@ async fn production_map_save_with_order_saves_map_and_template() {
     assert_eq!(value["ok"], true);
     assert_eq!(value["saved"]["map"]["id"], "zakaz-7777");
     assert_eq!(value["template"]["name"], "atomic mahsulot");
-    assert_eq!(value["template"]["source_map_id"], "zakaz-7777");
+    assert_eq!(
+        value["template"]["source_map_id"].as_str().unwrap_or(""),
+        ""
+    );
     let template_id = value["template"]["id"]
         .as_str()
         .expect("template id")
@@ -250,6 +253,65 @@ async fn production_map_save_with_order_does_not_store_cloned_order_as_quick_tem
     let list_value = json_body(list_response).await;
     let rows = list_value["templates"].as_array().expect("templates array");
     assert!(rows.iter().all(|row| row["code"] != "5555"));
+}
+
+#[tokio::test]
+async fn production_map_save_with_order_rejects_duplicate_cloned_order_code() {
+    let state = test_state();
+    let token = session(&state, PrincipalRole::Admin).await;
+
+    let first_map_json =
+        pechat_order_map_json("zakaz-5555", "Dolce order", "5555", "8 ta rangli pechat");
+    let first_body = format!(
+        r#"{{
+            "map":{first_map_json},
+            "template":{{
+                "id":"",
+                "code":"5555",
+                "order_number":"5555",
+                "name":"dolce cake",
+                "product":"dolce cake",
+                "item_code":"DOLCE-001",
+                "source_map_id":"quick-dolce-map",
+                "frame_product_size_mm":715,
+                "frame_count":1,
+                "waste_percent":5,
+                "roll_count":7,
+                "first_layer_material":"pet",
+                "first_layer_micron":"12",
+                "second_layer_material":"pe oq",
+                "second_layer_micron":"50",
+                "kg":500
+            }}
+        }}"#
+    );
+
+    let first = build_router(state.clone())
+        .oneshot(request_with_body(
+            "PUT",
+            "/v1/mobile/admin/production-maps/with-order",
+            &token,
+            &first_body,
+        ))
+        .await
+        .expect("first order save");
+    assert_eq!(first.status(), StatusCode::OK);
+
+    let duplicate = build_router(state)
+        .oneshot(request_with_body(
+            "PUT",
+            "/v1/mobile/admin/production-maps/with-order",
+            &token,
+            &first_body,
+        ))
+        .await
+        .expect("duplicate order save");
+
+    assert_eq!(duplicate.status(), StatusCode::BAD_REQUEST);
+    assert_eq!(
+        json_body(duplicate).await["error"],
+        "duplicate_order_number"
+    );
 }
 
 #[tokio::test]

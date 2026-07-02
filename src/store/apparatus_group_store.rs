@@ -190,12 +190,13 @@ mod tests {
             })
             .await
             .expect("save apparatus group");
-        assert_eq!(saved.name, "pechat");
+        assert_eq!(saved.name, "Bosma aparat");
         assert_eq!(
             saved.apparatus,
             vec![
-                "7 ta rangli pechat".to_string(),
-                "8 ta rangli pechat".to_string(),
+                "7 ta rangli bosma aparat".to_string(),
+                "8 ta rangli bosma aparat".to_string(),
+                "9 ta rangli bosma aparat".to_string(),
             ]
         );
 

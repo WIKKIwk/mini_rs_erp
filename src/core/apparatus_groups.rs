@@ -7,6 +7,12 @@ use thiserror::Error;
 #[cfg(test)]
 use tokio::sync::RwLock;
 
+use crate::core::production_map::pechat;
+
+const DEFAULT_BOSMA_GROUP_NAME: &str = "Bosma aparat";
+const DEFAULT_LAMINATSIYA_GROUP_NAME: &str = "Laminatsiya";
+const DEFAULT_REZKA_GROUP_NAME: &str = "Rezka";
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ApparatusGroup {
     pub name: String,
@@ -60,7 +66,7 @@ impl ApparatusGroupService {
     }
 
     pub async fn groups(&self) -> Result<Vec<ApparatusGroup>, ApparatusGroupError> {
-        self.store.groups().await
+        self.store.groups().await.map(normalize_groups)
     }
 
     pub async fn upsert_group(
@@ -108,7 +114,105 @@ fn normalize_group(input: ApparatusGroupUpsert) -> Result<ApparatusGroup, Appara
     if apparatus.is_empty() {
         return Err(ApparatusGroupError::MissingApparatus);
     }
-    Ok(ApparatusGroup { name, apparatus })
+    Ok(canonical_group(ApparatusGroup { name, apparatus }))
+}
+
+fn normalize_groups(groups: Vec<ApparatusGroup>) -> Vec<ApparatusGroup> {
+    let mut normalized = Vec::<ApparatusGroup>::new();
+    for group in groups.into_iter().map(canonical_group) {
+        if let Some(index) = normalized
+            .iter()
+            .position(|item| item.name.eq_ignore_ascii_case(&group.name))
+        {
+            normalized[index] = merge_groups(normalized[index].clone(), group);
+        } else {
+            normalized.push(group);
+        }
+    }
+    normalized
+}
+
+fn canonical_group(group: ApparatusGroup) -> ApparatusGroup {
+    if group_is_bosma(&group) {
+        return ApparatusGroup {
+            name: DEFAULT_BOSMA_GROUP_NAME.to_string(),
+            apparatus: default_bosma_apparatus(),
+        };
+    }
+    if group_is_laminatsiya(&group) {
+        return ApparatusGroup {
+            name: DEFAULT_LAMINATSIYA_GROUP_NAME.to_string(),
+            apparatus: group.apparatus,
+        };
+    }
+    if group_is_rezka(&group) {
+        return ApparatusGroup {
+            name: DEFAULT_REZKA_GROUP_NAME.to_string(),
+            apparatus: group.apparatus,
+        };
+    }
+    group
+}
+
+fn merge_groups(left: ApparatusGroup, right: ApparatusGroup) -> ApparatusGroup {
+    if left.name == DEFAULT_BOSMA_GROUP_NAME {
+        return ApparatusGroup {
+            name: DEFAULT_BOSMA_GROUP_NAME.to_string(),
+            apparatus: default_bosma_apparatus(),
+        };
+    }
+    let mut seen = BTreeSet::new();
+    let apparatus = left
+        .apparatus
+        .into_iter()
+        .chain(right.apparatus)
+        .map(|item| item.trim().to_string())
+        .filter(|item| !item.is_empty())
+        .filter(|item| seen.insert(item.to_lowercase()))
+        .collect();
+    ApparatusGroup {
+        name: left.name,
+        apparatus,
+    }
+}
+
+fn default_bosma_apparatus() -> Vec<String> {
+    [7_u8, 8, 9]
+        .into_iter()
+        .map(|count| format!("{count} ta rangli bosma aparat"))
+        .collect()
+}
+
+fn group_is_bosma(group: &ApparatusGroup) -> bool {
+    pechat::pechat_color_count(&group.name).is_some()
+        || group.apparatus.iter().any(|item| {
+            pechat::pechat_color_count(item).is_some()
+                || item.trim().eq_ignore_ascii_case(DEFAULT_BOSMA_GROUP_NAME)
+        })
+        || group
+            .name
+            .trim()
+            .eq_ignore_ascii_case(DEFAULT_BOSMA_GROUP_NAME)
+}
+
+fn group_is_laminatsiya(group: &ApparatusGroup) -> bool {
+    text_contains_word(&group.name, "laminatsiya")
+        || group
+            .apparatus
+            .iter()
+            .any(|item| text_contains_word(item, "laminatsiya"))
+}
+
+fn group_is_rezka(group: &ApparatusGroup) -> bool {
+    text_contains_word(&group.name, "rezka")
+        || group
+            .apparatus
+            .iter()
+            .any(|item| text_contains_word(item, "rezka"))
+}
+
+fn text_contains_word(value: &str, needle: &str) -> bool {
+    value.trim().to_lowercase().contains(needle)
 }
 
 #[derive(Default)]

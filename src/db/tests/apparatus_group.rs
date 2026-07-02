@@ -42,12 +42,13 @@ async fn postgres_apparatus_group_store_round_trips_groups() {
         })
         .await
         .expect("save group");
-    assert_eq!(saved.name, "pechat");
+    assert_eq!(saved.name, "Bosma aparat");
     assert_eq!(
         saved.apparatus,
         vec![
-            "7 ta rangli pechat".to_string(),
-            "8 ta rangli pechat".to_string(),
+            "7 ta rangli bosma aparat".to_string(),
+            "8 ta rangli bosma aparat".to_string(),
+            "9 ta rangli bosma aparat".to_string(),
         ]
     );
 
