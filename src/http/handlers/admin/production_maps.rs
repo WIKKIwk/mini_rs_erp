@@ -162,37 +162,83 @@ pub async fn production_map_save_with_order(
         .is_some_and(|template| is_quick_template_order_clone(&input.map, template));
     let owner_key = principal_owner_key(&principal);
     let map_id = input.map.id.trim().to_string();
+    let template_map = input
+        .template
+        .as_ref()
+        .and_then(|template| template_map_copy_for_save(&input.map, template));
+    let template_map_id = template_map.as_ref().map(|map| map.id.trim().to_string());
     let previous = state
         .production_maps
         .raw_map(&map_id)
         .await
         .map_err(production_map_error)?;
+    let previous_template_map = match &template_map_id {
+        Some(template_map_id) => state
+            .production_maps
+            .raw_map(template_map_id)
+            .await
+            .map_err(production_map_error)?,
+        None => None,
+    };
     if opens_quick_template_as_order && previous.is_some() {
         return Err(production_map_error(
             ProductionMapError::DuplicateOrderNumber,
         ));
     }
-    let saved_map = state
-        .production_maps
-        .upsert_map(input.map)
-        .await
-        .map_err(production_map_error)?;
+    let saved_map = if let Some(template_map) = template_map {
+        state
+            .production_maps
+            .upsert_maps_batch(vec![input.map, template_map])
+            .await
+            .map_err(production_map_error)?
+            .into_iter()
+            .next()
+            .ok_or_else(|| production_map_error(ProductionMapError::StoreFailed))?
+    } else {
+        state
+            .production_maps
+            .upsert_map(input.map)
+            .await
+            .map_err(production_map_error)?
+    };
     let mut integration_template = None;
     let saved_template = match input.template {
         Some(mut template) => {
             if opens_quick_template_as_order {
-                integration_template = Some(template);
+                integration_template =
+                    Some(order_template_snapshot_for_map(&saved_map.map, &template));
                 None
             } else {
-                template.source_map_id = template_source_map_id_for_save(&saved_map.map, &template);
+                template.source_map_id = match template_map_id.as_deref() {
+                    Some(template_map_id) => template_map_id.to_string(),
+                    None => template_source_map_id_for_save(&saved_map.map, &template),
+                };
                 match state
                     .calculate_orders
                     .upsert(&owner_key, template)
                     .await
                     .map_err(calculate_order_error)
                 {
-                    Ok(saved_template) => Some(saved_template),
+                    Ok(saved_template) => {
+                        integration_template = Some(order_template_snapshot_for_map(
+                            &saved_map.map,
+                            &saved_template,
+                        ));
+                        Some(saved_template)
+                    }
                     Err(error) => {
+                        if let Some(template_map_id) = template_map_id.as_deref() {
+                            if let Err(rollback_error) = state
+                                .production_maps
+                                .restore_map(previous_template_map.as_ref(), template_map_id)
+                                .await
+                            {
+                                tracing::error!(
+                                    ?rollback_error,
+                                    "with-order template map rollback failed"
+                                );
+                            }
+                        }
                         if let Err(rollback_error) = state
                             .production_maps
                             .restore_map(previous.as_ref(), &map_id)
@@ -209,9 +255,10 @@ pub async fn production_map_save_with_order(
     };
     if previous.is_none()
         && is_sheet_order_map(&saved_map.map)
-        && let Some(template) = saved_template
-            .clone()
-            .or_else(|| integration_template.as_ref().cloned())
+        && let Some(template) = integration_template
+            .as_ref()
+            .cloned()
+            .or_else(|| saved_template.clone())
     {
         spawn_order_integrations(state.clone(), saved_map.map.clone(), template);
     }
@@ -220,6 +267,45 @@ pub async fn production_map_save_with_order(
         "saved": saved_map,
         "template": saved_template,
     })))
+}
+
+fn template_map_copy_for_save(
+    map: &ProductionMapDefinition,
+    template: &CalculateOrderTemplate,
+) -> Option<ProductionMapDefinition> {
+    if !template.source_map_id.trim().is_empty() || !is_sheet_order_map(map) {
+        return None;
+    }
+    let map_id = map.id.trim();
+    if map_id.is_empty() {
+        return None;
+    }
+    let mut template_map = map.clone();
+    template_map.id = format!("template-{map_id}");
+    template_map.code.clear();
+    template_map.order_number.clear();
+    template_map.order_kg = None;
+    template_map.base_length = None;
+    Some(template_map)
+}
+
+fn order_template_snapshot_for_map(
+    map: &ProductionMapDefinition,
+    template: &CalculateOrderTemplate,
+) -> CalculateOrderTemplate {
+    let mut snapshot = template.clone();
+    let order_number = map.order_number.trim();
+    let code = map.code.trim();
+    if !order_number.is_empty() {
+        snapshot.order_number = order_number.to_string();
+    }
+    if !code.is_empty() {
+        snapshot.code = code.to_string();
+    } else if !order_number.is_empty() {
+        snapshot.code = order_number.to_string();
+    }
+    snapshot.source_map_id = map.id.trim().to_string();
+    snapshot
 }
 
 fn is_quick_template_order_clone(

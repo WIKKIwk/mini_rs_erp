@@ -39,7 +39,7 @@ async fn production_map_save_with_order_saves_map_and_template() {
     assert_eq!(value["template"]["name"], "atomic mahsulot");
     assert_eq!(
         value["template"]["source_map_id"].as_str().unwrap_or(""),
-        ""
+        "template-zakaz-7777"
     );
     let template_id = value["template"]["id"]
         .as_str()
@@ -64,6 +64,25 @@ async fn production_map_save_with_order_saves_map_and_template() {
     assert_eq!(fetched.status(), StatusCode::OK);
     let fetched_value = json_body(fetched).await;
     assert_eq!(fetched_value["map"]["id"], "zakaz-7777");
+    assert_eq!(fetched_value["map"]["order_number"], "7777");
+
+    let fetched_template_map = build_router(state.clone())
+        .oneshot(request(
+            "GET",
+            "/v1/mobile/admin/production-maps?id=template-zakaz-7777",
+            &token,
+        ))
+        .await
+        .expect("fetch template map by id");
+    assert_eq!(fetched_template_map.status(), StatusCode::OK);
+    let fetched_template_value = json_body(fetched_template_map).await;
+    assert_eq!(fetched_template_value["map"]["id"], "template-zakaz-7777");
+    assert_eq!(
+        fetched_template_value["map"]["order_number"]
+            .as_str()
+            .unwrap_or(""),
+        ""
+    );
 
     let cleanup_body = format!(r#"{{"id":"{template_id}"}}"#);
     let cleanup = build_router(state)
