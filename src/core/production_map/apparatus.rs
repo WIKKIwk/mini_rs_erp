@@ -1,4 +1,4 @@
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
 use super::types::{ProductionMapDefinition, ProductionMapNodeKind};
 use super::{chain, pechat, queue_state};
@@ -15,6 +15,43 @@ pub(super) fn visible_order_ids_for_apparatus(
         .map(|map| map.id.trim().to_string())
         .filter(|id| !id.is_empty())
         .collect()
+}
+
+pub(super) fn visible_order_ids_by_apparatus(
+    maps: &[ProductionMapDefinition],
+) -> BTreeMap<String, Vec<String>> {
+    let mut visible = BTreeMap::<String, Vec<String>>::new();
+    for map in maps {
+        let order_id = map.id.trim();
+        if !is_visible_queue_order(map) {
+            continue;
+        }
+        let mut seen_titles = BTreeSet::<String>::new();
+        for stage in chain::linear_work_stages(map) {
+            let title = stage.station_title.trim();
+            if title.is_empty()
+                || flexo_order_blocked_for_color_pechat(map, title)
+                || !seen_titles.insert(title.to_ascii_lowercase())
+            {
+                continue;
+            }
+            visible
+                .entry(title.to_string())
+                .or_default()
+                .push(order_id.to_string());
+        }
+    }
+    visible
+}
+
+fn is_visible_queue_order(map: &ProductionMapDefinition) -> bool {
+    let order_id = map.id.trim();
+    if order_id.is_empty() || order_id.starts_with("template-") {
+        return false;
+    }
+    !map.code.trim().is_empty()
+        || !map.order_number.trim().is_empty()
+        || order_id.starts_with("zakaz-")
 }
 
 pub(super) fn move_allowed(map: &ProductionMapDefinition, from: &str, to: &str) -> bool {

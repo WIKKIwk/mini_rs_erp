@@ -446,6 +446,11 @@ pub async fn production_map_sequence(
                 .effective_apparatus_sequences()
                 .await
                 .map_err(production_map_error)?;
+            let visible_order_ids = state
+                .production_maps
+                .visible_order_ids_by_apparatus()
+                .await
+                .map_err(production_map_error)?;
             let queue_states = state
                 .production_maps
                 .apparatus_queue_states()
@@ -464,6 +469,7 @@ pub async fn production_map_sequence(
             Ok(json_response(serde_json::json!({
                 "ok": true,
                 "sequences": sequences,
+                "visible_order_ids": visible_order_ids,
                 "queue_states": queue_states,
                 "queue_policies": queue_policies,
                 "order_statuses": order_statuses,

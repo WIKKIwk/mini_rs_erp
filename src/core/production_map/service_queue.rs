@@ -2,7 +2,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use super::*;
 
-use super::apparatus::visible_order_ids_for_apparatus;
+use super::apparatus::{visible_order_ids_by_apparatus, visible_order_ids_for_apparatus};
 use super::progress::effective_apparatus_queue_policy_record;
 use super::service_queue_support::*;
 
@@ -30,6 +30,13 @@ impl ProductionMapService {
                 (apparatus, sequence)
             })
             .collect())
+    }
+
+    pub async fn visible_order_ids_by_apparatus(
+        &self,
+    ) -> Result<BTreeMap<String, Vec<String>>, ProductionMapError> {
+        let maps = self.store.maps().await?;
+        Ok(visible_order_ids_by_apparatus(&maps))
     }
 
     pub async fn set_apparatus_sequence(

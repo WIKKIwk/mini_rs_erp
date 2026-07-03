@@ -176,6 +176,7 @@ async fn send_production_map_live_snapshot(
                 "ok": true,
                 "maps": snapshot.maps,
                 "sequences": snapshot.sequences,
+                "visible_order_ids": snapshot.visible_order_ids,
                 "queue_states": snapshot.queue_states,
                 "queue_policies": snapshot.queue_policies,
                 "completed_orders": completed_orders,

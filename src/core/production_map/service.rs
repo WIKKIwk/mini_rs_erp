@@ -11,6 +11,7 @@ const LIVE_NOTIFY_CAPACITY: usize = 256;
 pub struct ProductionMapLiveSnapshot {
     pub maps: Vec<ProductionMapSaved>,
     pub sequences: BTreeMap<String, Vec<String>>,
+    pub visible_order_ids: BTreeMap<String, Vec<String>>,
     pub queue_states: BTreeMap<String, BTreeMap<String, String>>,
     pub queue_policies: Vec<ApparatusQueuePolicyRecord>,
     pub order_statuses: BTreeMap<String, ProductionOrderStatusDetail>,
@@ -72,6 +73,7 @@ impl ProductionMapService {
         Ok(ProductionMapLiveSnapshot {
             maps: self.maps().await?,
             sequences: self.effective_apparatus_sequences().await?,
+            visible_order_ids: self.visible_order_ids_by_apparatus().await?,
             queue_states: self.apparatus_queue_states().await?,
             queue_policies: self.apparatus_queue_policy_records().await?,
             order_statuses: self.order_status_details().await?,
