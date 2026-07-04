@@ -73,6 +73,12 @@ impl AdminService {
             assignment.role_id == "aparatchi" && assignment.principal_ref.trim() == ref_
         }) {
             Ok("40".to_string())
+        } else if assignments.iter().any(|assignment| {
+            assignment.principal_ref.trim() == ref_
+                && (assignment.role_id == "material_taminotchi"
+                    || assignment.principal_role == PrincipalRole::MaterialTaminotchi)
+        }) {
+            Ok("60".to_string())
         } else {
             Ok("30".to_string())
         }

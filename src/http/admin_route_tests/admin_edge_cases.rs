@@ -50,6 +50,37 @@ async fn admin_customer_code_regenerate_cooldown_is_500_like_go() {
 }
 
 #[tokio::test]
+async fn admin_customer_code_regenerate_uses_material_prefix() {
+    let state = test_state();
+    state
+        .admin
+        .upsert_role_assignment(crate::core::authz::RoleAssignmentUpsert {
+            principal_role: PrincipalRole::MaterialTaminotchi,
+            principal_ref: "CUST-001".to_string(),
+            role_id: "material_taminotchi".to_string(),
+            assigned_apparatus: Vec::new(),
+            assigned_item_groups: vec!["Kraska".to_string()],
+        })
+        .await
+        .expect("material assignment");
+    let token = session(&state, PrincipalRole::Admin).await;
+
+    let response = build_router(state)
+        .oneshot(request(
+            "POST",
+            "/v1/mobile/admin/customers/code/regenerate?ref=CUST-001",
+            &token,
+        ))
+        .await
+        .expect("response");
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let value = json_body(response).await;
+    let code = value["code"].as_str().expect("code");
+    assert!(code.starts_with("60"), "code should use 60 prefix: {code}");
+}
+
+#[tokio::test]
 async fn admin_supplier_phone_not_found_is_404_like_go() {
     let mut state = test_state();
     state.admin = AdminService::new(&state.config)

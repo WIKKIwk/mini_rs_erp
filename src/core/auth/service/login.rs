@@ -32,6 +32,7 @@ impl AuthService {
             PrincipalRole::Qolipchi => self.login_qolipchi(&normalized_phone, code).await,
             PrincipalRole::MaterialTaminotchi => {
                 self.login_material_taminotchi(normalized_phone, code, &identity)
+                    .await
             }
             PrincipalRole::Admin => Err(AuthError::InvalidRole),
         }
@@ -61,7 +62,7 @@ impl AuthService {
         Err(AuthError::InvalidCredentials)
     }
 
-    fn login_material_taminotchi(
+    async fn login_material_taminotchi(
         &self,
         normalized_phone: String,
         code: &str,
@@ -84,7 +85,8 @@ impl AuthService {
             });
         }
 
-        Err(AuthError::InvalidCredentials)
+        self.login_customer_party(&normalized_phone, code, PrincipalRole::MaterialTaminotchi)
+            .await
     }
 
     fn infer_role(&self, code: &str) -> Result<PrincipalRole, AuthError> {

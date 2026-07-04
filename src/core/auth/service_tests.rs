@@ -95,6 +95,37 @@ async fn material_taminotchi_login_uses_sixty_prefix_and_configured_identity() {
 }
 
 #[tokio::test]
+async fn material_taminotchi_login_accepts_customer_custom_code() {
+    let customers = Arc::new(FakeCustomerLookup {
+        customers: vec![CustomerRecord {
+            id: "CUST-MATERIAL".to_string(),
+            name: "Materialchi".to_string(),
+            phone: "+998901006060".to_string(),
+        }],
+    });
+    let states = Arc::new(FakeStateLookup {
+        states: BTreeMap::from([(
+            "CUST-MATERIAL".to_string(),
+            AdminAccessState {
+                custom_code: "601122334455".to_string(),
+                blocked: false,
+                removed: false,
+            },
+        )]),
+    });
+    let auth = AuthService::new(&config()).with_customer_dependencies(customers, states);
+
+    let principal = auth
+        .login("+998901006060", "601122334455")
+        .await
+        .expect("material taminotchi customer login");
+
+    assert_eq!(principal.role, PrincipalRole::MaterialTaminotchi);
+    assert_eq!(principal.ref_, "CUST-MATERIAL");
+    assert_eq!(principal.display_name, "Materialchi");
+}
+
+#[tokio::test]
 async fn supplier_login_uses_deterministic_code() {
     let suppliers = Arc::new(FakeSupplierLookup {
         suppliers: vec![SupplierRecord {
