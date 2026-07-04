@@ -16,6 +16,7 @@ async fn worker_completed_orders_are_actor_scoped_and_latest_first() {
                 principal_ref: worker_ref.to_string(),
                 role_id: "aparatchi".to_string(),
                 assigned_apparatus: vec!["7 ta rangli pechat".to_string()],
+                assigned_item_groups: Vec::new(),
             })
             .await
             .expect("aparatchi assignment");
@@ -134,6 +135,7 @@ async fn closed_orders_return_only_fully_completed_maps_with_action_logs() {
                 principal_ref: worker_ref.to_string(),
                 role_id: "aparatchi".to_string(),
                 assigned_apparatus: vec![apparatus.to_string()],
+                assigned_item_groups: Vec::new(),
             })
             .await
             .expect("aparatchi assignment");

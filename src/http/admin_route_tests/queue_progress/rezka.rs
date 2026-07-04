@@ -15,6 +15,7 @@ async fn rezka_complete_requires_or_persists_progress_metrics() {
             principal_ref: "worker-rezka-complete".to_string(),
             role_id: "aparatchi".to_string(),
             assigned_apparatus: vec!["Rezka".to_string()],
+            assigned_item_groups: Vec::new(),
         })
         .await
         .expect("assignment");
@@ -134,6 +135,7 @@ async fn rezka_pause_requires_and_persists_progress_metrics() {
             principal_ref: "worker-rezka-pause".to_string(),
             role_id: "aparatchi".to_string(),
             assigned_apparatus: vec!["Rezka".to_string()],
+            assigned_item_groups: Vec::new(),
         })
         .await
         .expect("assignment");

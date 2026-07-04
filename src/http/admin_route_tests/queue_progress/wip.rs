@@ -18,6 +18,7 @@ async fn wip_batches_endpoint_lists_waiting_and_in_use_batches() {
                 "7 ta rangli pechat".to_string(),
                 "Laminatsiya mashinasi".to_string(),
             ],
+            assigned_item_groups: Vec::new(),
         })
         .await
         .expect("assignment");
@@ -190,6 +191,7 @@ async fn wip_batches_endpoint_lists_batches_for_assigned_next_apparatus() {
             principal_ref: "worker-wip-next".to_string(),
             role_id: "aparatchi".to_string(),
             assigned_apparatus: vec!["Laminatsiya 1".to_string()],
+            assigned_item_groups: Vec::new(),
         })
         .await
         .expect("assignment");
@@ -200,6 +202,7 @@ async fn wip_batches_endpoint_lists_batches_for_assigned_next_apparatus() {
             principal_ref: "worker-wip-first".to_string(),
             role_id: "aparatchi".to_string(),
             assigned_apparatus: vec!["7 ta rangli pechat".to_string()],
+            assigned_item_groups: Vec::new(),
         })
         .await
         .expect("first assignment");
@@ -299,6 +302,7 @@ async fn complete_after_wip_start_does_not_reuse_input_qr_as_output_qr() {
                 "7 ta rangli pechat".to_string(),
                 "Laminatsiya 1".to_string(),
             ],
+            assigned_item_groups: Vec::new(),
         })
         .await
         .expect("assignment");
@@ -431,6 +435,7 @@ async fn wip_batches_endpoint_forbids_worker_unassigned_or_unscoped_listing() {
             principal_ref: "worker-wip-scope".to_string(),
             role_id: "aparatchi".to_string(),
             assigned_apparatus: vec!["7 ta rangli pechat".to_string()],
+            assigned_item_groups: Vec::new(),
         })
         .await
         .expect("assignment");

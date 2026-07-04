@@ -20,6 +20,7 @@ pub(super) struct RawMaterialLookupResponse {
 
 pub(super) async fn fill_raw_material_assignment_input(
     state: &AppState,
+    principal: &Principal,
     mut input: RawMaterialAssignmentInput,
 ) -> Result<(RawMaterialAssignmentInput, String), AdminError> {
     let barcode = input.barcode.trim();
@@ -52,7 +53,30 @@ pub(super) async fn fill_raw_material_assignment_input(
     input.item_name = item.name.trim().to_string();
     input.item_group = item.item_group.trim().to_string();
     input.item_group_path = item_group_path;
+    require_material_item_group_scope(state, principal, &input.item_group).await?;
     Ok((input, stock.warehouse.trim().to_string()))
+}
+
+async fn require_material_item_group_scope(
+    state: &AppState,
+    principal: &Principal,
+    item_group: &str,
+) -> Result<(), AdminError> {
+    if principal.role != PrincipalRole::MaterialTaminotchi {
+        return Ok(());
+    }
+    let item_group = item_group.trim();
+    let assigned_groups = state.admin.principal_assigned_item_groups(principal).await;
+    if !item_group.is_empty()
+        && assigned_groups
+            .iter()
+            .any(|group| group.trim().eq_ignore_ascii_case(item_group))
+    {
+        return Ok(());
+    }
+    Err(bad_request(
+        "item group is not assigned to material taminotchi",
+    ))
 }
 
 async fn validate_rulon_size_for_pechat_order(
@@ -158,9 +182,11 @@ fn roll_width_from_text(value: &str) -> Option<f64> {
 
 pub(super) async fn lookup_raw_material_detail(
     state: &AppState,
+    principal: &Principal,
     barcode: &str,
 ) -> Result<RawMaterialLookupResponse, AdminError> {
     let (stock, item) = resolve_raw_material_stock_item(state, barcode).await?;
+    require_material_item_group_scope(state, principal, &item.item_group).await?;
     Ok(RawMaterialLookupResponse {
         barcode: stock.barcode.trim().to_string(),
         warehouse: stock.warehouse.trim().to_string(),

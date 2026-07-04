@@ -107,6 +107,13 @@ impl AdminService {
         }
     }
 
+    pub async fn principal_assigned_item_groups(&self, principal: &Principal) -> Vec<String> {
+        match self.principal_assignment(principal).await {
+            Ok(Some(assignment)) => assignment.assigned_item_groups,
+            _ => Vec::new(),
+        }
+    }
+
     async fn principal_assigned_role(
         &self,
         principal: &Principal,

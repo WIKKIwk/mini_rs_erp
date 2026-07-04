@@ -15,6 +15,7 @@ async fn laminatsiya_complete_with_both_leftovers_creates_admin_notice() {
             principal_ref: "worker-laminatsiya-notice".to_string(),
             role_id: "aparatchi".to_string(),
             assigned_apparatus: vec!["Laminatsiya 1".to_string()],
+            assigned_item_groups: Vec::new(),
         })
         .await
         .expect("assignment");

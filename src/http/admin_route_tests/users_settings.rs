@@ -20,6 +20,7 @@ async fn admin_user_list_returns_merged_paged_users_with_role_labels() {
             principal_ref: "CUST-001".to_string(),
             role_id: "item_creator".to_string(),
             assigned_apparatus: Vec::new(),
+            assigned_item_groups: Vec::new(),
         })
         .await
         .expect("assignment");
@@ -56,6 +57,7 @@ async fn admin_user_list_does_not_treat_customers_as_qolipchi() {
             principal_ref: "CUST-001".to_string(),
             role_id: "qolipchi".to_string(),
             assigned_apparatus: Vec::new(),
+            assigned_item_groups: Vec::new(),
         })
         .await
         .expect("assignment");

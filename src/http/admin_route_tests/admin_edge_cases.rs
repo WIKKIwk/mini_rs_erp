@@ -421,3 +421,51 @@ async fn admin_item_create_and_werka_regenerate_like_go() {
             .starts_with("20")
     );
 }
+
+#[tokio::test]
+async fn material_taminotchi_item_create_is_limited_to_assigned_item_groups() {
+    let state = test_state();
+    state
+        .admin
+        .upsert_role_assignment(crate::core::authz::RoleAssignmentUpsert {
+            principal_role: PrincipalRole::MaterialTaminotchi,
+            principal_ref: "material-create".to_string(),
+            role_id: "material_taminotchi".to_string(),
+            assigned_apparatus: Vec::new(),
+            assigned_item_groups: vec!["Kraska".to_string()],
+        })
+        .await
+        .expect("material scope");
+    let token = session_for(&state, PrincipalRole::MaterialTaminotchi, "material-create").await;
+    let router = build_router(state);
+
+    let blocked = router
+        .clone()
+        .oneshot(request_with_body(
+            "POST",
+            "/v1/mobile/admin/items",
+            &token,
+            r#"{"code":"GLUE-NEW","name":"Glue","uom":"Kg","item_group":"Kley"}"#,
+        ))
+        .await
+        .expect("blocked response");
+    assert_eq!(blocked.status(), StatusCode::BAD_REQUEST);
+    assert_eq!(
+        json_body(blocked).await["error"],
+        "item group is not assigned to material taminotchi"
+    );
+
+    let allowed = router
+        .oneshot(request_with_body(
+            "POST",
+            "/v1/mobile/admin/items",
+            &token,
+            r#"{"code":"INK-NEW","name":"Ink","uom":"Kg","item_group":"Kraska"}"#,
+        ))
+        .await
+        .expect("allowed response");
+    let allowed_status = allowed.status();
+    let allowed_body = json_body(allowed).await;
+    assert_eq!(allowed_status, StatusCode::OK, "{allowed_body}");
+    assert_eq!(allowed_body["item_group"], "Kraska");
+}

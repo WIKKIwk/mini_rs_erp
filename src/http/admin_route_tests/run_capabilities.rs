@@ -236,6 +236,72 @@ async fn apparatus_queue_read_capability_can_only_read_production_maps() {
 }
 
 #[tokio::test]
+async fn material_taminotchi_can_read_production_maps_for_assignment_only() {
+    let state = test_state();
+    let admin_token = session(&state, PrincipalRole::Admin).await;
+
+    let response = build_router(state.clone())
+        .oneshot(request_with_body(
+            "PUT",
+            "/v1/mobile/admin/production-maps",
+            &admin_token,
+            r#"{
+                "id":"material-assignment-test",
+                "product_code":"HOTLUNCH",
+                "title":"Material assignment test",
+                "nodes":[
+                    {"id":"start","kind":"start","title":"Start"},
+                    {"id":"end","kind":"end","title":"End"}
+                ],
+                "edges":[{"from":"start","to":"end"}]
+            }"#,
+        ))
+        .await
+        .expect("save map");
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let material_token = session_for(
+        &state,
+        PrincipalRole::MaterialTaminotchi,
+        "material_taminotchi",
+    )
+    .await;
+    let response = build_router(state.clone())
+        .oneshot(request(
+            "GET",
+            "/v1/mobile/admin/production-maps",
+            &material_token,
+        ))
+        .await
+        .expect("read response");
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(
+        json_body(response).await[0]["map"]["id"],
+        "material-assignment-test"
+    );
+
+    let response = build_router(state)
+        .oneshot(request_with_body(
+            "PUT",
+            "/v1/mobile/admin/production-maps",
+            &material_token,
+            r#"{
+                "id":"material-assignment-test-2",
+                "product_code":"HOTLUNCH",
+                "title":"Material assignment test 2",
+                "nodes":[
+                    {"id":"start","kind":"start","title":"Start"},
+                    {"id":"end","kind":"end","title":"End"}
+                ],
+                "edges":[{"from":"start","to":"end"}]
+            }"#,
+        ))
+        .await
+        .expect("write response");
+    assert_eq!(response.status(), StatusCode::FORBIDDEN);
+}
+
+#[tokio::test]
 async fn admin_access_capability_can_save_production_maps() {
     let state = test_state();
     let admin_token = session(&state, PrincipalRole::Admin).await;

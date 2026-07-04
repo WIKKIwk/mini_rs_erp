@@ -18,6 +18,7 @@ async fn raw_material_routes_assign_and_require_scan_for_queue_start() {
             principal_ref: "worker-raw-route".to_string(),
             role_id: "aparatchi".to_string(),
             assigned_apparatus: vec!["7 ta rangli pechat - A".to_string()],
+            assigned_item_groups: Vec::new(),
         })
         .await
         .expect("aparatchi assignment");
@@ -323,4 +324,96 @@ async fn raw_material_routes_assign_and_require_scan_for_queue_start() {
     assert!(completed_materials.iter().all(|item| {
         item["stock_status"] == "consumed" && item["reserved_order_id"] == "zakaz-raw-route"
     }));
+}
+
+#[tokio::test]
+async fn material_taminotchi_raw_material_assignment_rejects_unassigned_item_group() {
+    let material_store = Arc::new(RawMaterialStockLookup::default());
+    let mut state = test_state();
+    state.gscale = GscaleService::new().with_receipt_store(material_store);
+    state
+        .admin
+        .upsert_role_assignment(crate::core::authz::RoleAssignmentUpsert {
+            principal_role: PrincipalRole::MaterialTaminotchi,
+            principal_ref: "material-raw-route".to_string(),
+            role_id: "material_taminotchi".to_string(),
+            assigned_apparatus: Vec::new(),
+            assigned_item_groups: vec!["Kley".to_string()],
+        })
+        .await
+        .expect("material scope");
+    let admin_token = session(&state, PrincipalRole::Admin).await;
+    let material_token = session_for(
+        &state,
+        PrincipalRole::MaterialTaminotchi,
+        "material-raw-route",
+    )
+    .await;
+    let router = build_router(state);
+
+    let map = router
+        .clone()
+        .oneshot(request_with_body(
+            "PUT",
+            "/v1/mobile/admin/production-maps",
+            &admin_token,
+            &pechat_order_map_json(
+                "zakaz-material-scope",
+                "Raw material scope",
+                "8812",
+                "7 ta rangli pechat - A",
+            ),
+        ))
+        .await
+        .expect("map save");
+    assert_eq!(map.status(), StatusCode::OK);
+
+    let rule = router
+        .clone()
+        .oneshot(request_with_body(
+            "PUT",
+            "/v1/mobile/admin/raw-material-rules",
+            &admin_token,
+            r#"{
+                "apparatus":"7 ta rangli pechat - A",
+                "requires_material":true,
+                "item_groups":["Kraska"]
+            }"#,
+        ))
+        .await
+        .expect("rule save");
+    assert_eq!(rule.status(), StatusCode::OK);
+
+    let lookup = router
+        .clone()
+        .oneshot(request(
+            "GET",
+            "/v1/mobile/admin/raw-material-assignments/lookup?barcode=30AA",
+            &material_token,
+        ))
+        .await
+        .expect("lookup");
+    assert_eq!(lookup.status(), StatusCode::BAD_REQUEST);
+    assert_eq!(
+        json_body(lookup).await["error"],
+        "item group is not assigned to material taminotchi"
+    );
+
+    let assigned = router
+        .oneshot(request_with_body(
+            "POST",
+            "/v1/mobile/admin/raw-material-assignments",
+            &material_token,
+            r#"{
+                "order_id":"zakaz-material-scope",
+                "barcode":"30AA"
+            }"#,
+        ))
+        .await
+        .expect("assign");
+    assert_eq!(assigned.status(), StatusCode::BAD_REQUEST);
+    assert_eq!(
+        json_body(assigned).await["error"],
+        "item group is not assigned to material taminotchi"
+    );
 }

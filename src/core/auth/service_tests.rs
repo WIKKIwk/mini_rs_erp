@@ -25,6 +25,9 @@ fn config() -> AppConfig {
         werka_code: "20ABCDEF1234".to_string(),
         werka_name: "Werka".to_string(),
         werka_phone: "+998888862440".to_string(),
+        material_taminotchi_code: "60ABCDEF1234".to_string(),
+        material_taminotchi_name: "Material taminotchisi".to_string(),
+        material_taminotchi_phone: "+998901006060".to_string(),
         admin_phone: "+998880000000".to_string(),
         admin_name: "Admin".to_string(),
         admin_code: "19621978".to_string(),
@@ -67,6 +70,28 @@ async fn werka_login_requires_configured_phone() {
         .expect("werka login with local phone");
     assert_eq!(local_phone_principal.role, PrincipalRole::Werka);
     assert!(auth.login("+998880000000", "20ABCDEF1234").await.is_err());
+}
+
+#[tokio::test]
+async fn material_taminotchi_login_uses_sixty_prefix_and_configured_identity() {
+    let auth = AuthService::new(&config());
+    let principal = auth
+        .login("+998901006060", "60ABCDEF1234")
+        .await
+        .expect("material taminotchi login");
+
+    assert_eq!(principal.role, PrincipalRole::MaterialTaminotchi);
+    assert_eq!(principal.ref_, "material_taminotchi");
+    assert_eq!(principal.display_name, "Material taminotchisi");
+    let local_phone_principal = auth
+        .login("901006060", "60ABCDEF1234")
+        .await
+        .expect("material taminotchi login with local phone");
+    assert_eq!(
+        local_phone_principal.role,
+        PrincipalRole::MaterialTaminotchi
+    );
+    assert!(auth.login("+998901006060", "50ABCDEF1234").await.is_err());
 }
 
 #[tokio::test]

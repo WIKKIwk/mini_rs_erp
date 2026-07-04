@@ -81,11 +81,19 @@ pub fn normalize_role_assignment(
     {
         return Err(RoleAssignmentError::RoleBaseMismatch);
     }
+    let assigned_item_groups = normalize_assigned_item_groups(input.assigned_item_groups);
+    if input.principal_role == PrincipalRole::MaterialTaminotchi
+        && role.id == "material_taminotchi"
+        && assigned_item_groups.is_empty()
+    {
+        return Err(RoleAssignmentError::MissingAssignedItemGroups);
+    }
     Ok(RoleAssignment {
         principal_role: input.principal_role,
         principal_ref,
         role_id,
         assigned_apparatus: normalize_assigned_apparatus(input.assigned_apparatus),
+        assigned_item_groups,
     })
 }
 
@@ -100,6 +108,7 @@ fn role_key(role: &PrincipalRole) -> &'static str {
         PrincipalRole::Customer => "customer",
         PrincipalRole::Aparatchi => "aparatchi",
         PrincipalRole::Qolipchi => "qolipchi",
+        PrincipalRole::MaterialTaminotchi => "material_taminotchi",
         PrincipalRole::Admin => "admin",
     }
 }
@@ -118,6 +127,16 @@ fn system_role_ids() -> BTreeSet<&'static str> {
 }
 
 fn normalize_assigned_apparatus(values: Vec<String>) -> Vec<String> {
+    values
+        .into_iter()
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .collect()
+}
+
+fn normalize_assigned_item_groups(values: Vec<String>) -> Vec<String> {
     values
         .into_iter()
         .map(|value| value.trim().to_string())

@@ -15,6 +15,7 @@ async fn bosma_complete_requires_or_persists_completion_metrics() {
             principal_ref: "worker-bosma-complete".to_string(),
             role_id: "aparatchi".to_string(),
             assigned_apparatus: vec!["7 ta rangli bosma".to_string()],
+            assigned_item_groups: Vec::new(),
         })
         .await
         .expect("assignment");
@@ -146,6 +147,7 @@ async fn bosma_pause_does_not_persist_return_ink_metric() {
             principal_ref: "worker-bosma-pause".to_string(),
             role_id: "aparatchi".to_string(),
             assigned_apparatus: vec!["8 ta rangli bosma".to_string()],
+            assigned_item_groups: Vec::new(),
         })
         .await
         .expect("assignment");

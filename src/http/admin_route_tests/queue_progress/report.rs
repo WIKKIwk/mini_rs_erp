@@ -19,6 +19,7 @@ async fn progress_qr_report_marks_processed_qr_as_stale_and_returns_order_flow()
                 "Qadoqlash stol".to_string(),
                 "Yordamchi aparat".to_string(),
             ],
+            assigned_item_groups: Vec::new(),
         })
         .await
         .expect("assignment");
@@ -268,6 +269,7 @@ async fn progress_qr_history_lists_own_batches_and_reprints_existing_qr() {
                 principal_ref: worker_ref.to_string(),
                 role_id: "aparatchi".to_string(),
                 assigned_apparatus: vec![apparatus.to_string()],
+                assigned_item_groups: Vec::new(),
             })
             .await
             .expect("assignment");

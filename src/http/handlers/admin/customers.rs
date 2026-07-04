@@ -122,6 +122,7 @@ pub async fn items(
         Method::POST => {
             require_capability(&state, &principal, Capability::CatalogItemCreate).await?;
             let input: AdminCreateItemRequest = parse_json(&body)?;
+            require_material_item_group_scope(&state, &principal, &input.item_group).await?;
             match state
                 .admin
                 .create_item(
@@ -141,6 +142,28 @@ pub async fn items(
         }
         _ => Err(method_not_allowed()),
     }
+}
+
+async fn require_material_item_group_scope(
+    state: &AppState,
+    principal: &Principal,
+    item_group: &str,
+) -> Result<(), AdminError> {
+    if principal.role != PrincipalRole::MaterialTaminotchi {
+        return Ok(());
+    }
+    let item_group = item_group.trim();
+    let assigned_groups = state.admin.principal_assigned_item_groups(principal).await;
+    if !item_group.is_empty()
+        && assigned_groups
+            .iter()
+            .any(|group| group.trim().eq_ignore_ascii_case(item_group))
+    {
+        return Ok(());
+    }
+    Err(bad_request(
+        "item group is not assigned to material taminotchi",
+    ))
 }
 
 pub async fn item_groups(

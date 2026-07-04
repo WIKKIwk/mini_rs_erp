@@ -10,6 +10,7 @@ async fn queue_complete_without_output_creates_admin_completion_request() {
             principal_ref: "worker-zero-complete".to_string(),
             role_id: "aparatchi".to_string(),
             assigned_apparatus: vec!["7 ta rangli pechat".to_string()],
+            assigned_item_groups: Vec::new(),
         })
         .await
         .expect("assignment");
@@ -119,6 +120,7 @@ async fn admin_approves_zero_output_completion_request_and_closes_order_with_iss
             principal_ref: "worker-approve-complete".to_string(),
             role_id: "aparatchi".to_string(),
             assigned_apparatus: vec!["7 ta rangli pechat".to_string()],
+            assigned_item_groups: Vec::new(),
         })
         .await
         .expect("assignment");

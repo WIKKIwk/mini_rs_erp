@@ -74,7 +74,8 @@ pub async fn raw_material_assignments(
         Method::POST => {
             require_capability(&state, &principal, Capability::RawMaterialAssign).await?;
             let input: RawMaterialAssignmentInput = parse_json(&body)?;
-            let (input, warehouse) = fill_raw_material_assignment_input(&state, input).await?;
+            let (input, warehouse) =
+                fill_raw_material_assignment_input(&state, &principal, input).await?;
             let assigned = state
                 .production_maps
                 .assign_raw_material_to_order(input, &queue_action_actor(&principal))
@@ -278,7 +279,7 @@ pub async fn raw_material_assignment_lookup(
     method: Method,
     headers: HeaderMap,
 ) -> Result<Response, AdminError> {
-    authorize_any_capability(
+    let principal = authorize_any_capability(
         &state,
         &headers,
         &[
@@ -291,7 +292,7 @@ pub async fn raw_material_assignment_lookup(
     if method != Method::GET {
         return Err(method_not_allowed());
     }
-    let detail = lookup_raw_material_detail(&state, &query.barcode).await?;
+    let detail = lookup_raw_material_detail(&state, &principal, &query.barcode).await?;
     let mut value = serde_json::to_value(detail).unwrap_or_else(|_| serde_json::json!({}));
     let normalized = query.barcode.trim().to_ascii_uppercase();
     let assignment = state

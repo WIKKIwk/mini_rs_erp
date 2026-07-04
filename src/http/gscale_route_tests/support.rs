@@ -38,6 +38,9 @@ pub(super) fn test_state() -> AppState {
         werka_code: "20ABCDEF1234".to_string(),
         werka_name: "Werka".to_string(),
         werka_phone: "+99888862440".to_string(),
+        material_taminotchi_code: String::new(),
+        material_taminotchi_name: "Material taminotchisi".to_string(),
+        material_taminotchi_phone: String::new(),
         admin_phone: "+998880000000".to_string(),
         admin_name: "Admin".to_string(),
         admin_code: "19621978".to_string(),
@@ -136,11 +139,11 @@ impl AdminReadPort for FakeAdminCatalogReadPort {
 
     async fn items_page(
         &self,
-        _query: &str,
-        _limit: usize,
-        _offset: usize,
+        query: &str,
+        limit: usize,
+        offset: usize,
     ) -> Result<Vec<SupplierItem>, AdminPortError> {
-        Ok(Vec::new())
+        Ok(filter_fake_catalog_items("", query, limit, offset))
     }
 
     async fn items_page_by_group(
@@ -150,17 +153,7 @@ impl AdminReadPort for FakeAdminCatalogReadPort {
         limit: usize,
         offset: usize,
     ) -> Result<Vec<SupplierItem>, AdminPortError> {
-        assert_eq!(group, "Products");
-        assert_eq!(query, "film");
-        assert_eq!(limit, 20);
-        assert_eq!(offset, 0);
-        Ok(vec![SupplierItem {
-            code: "GSCALE-ITEM-001".to_string(),
-            name: "GScale Film".to_string(),
-            uom: "Kg".to_string(),
-            warehouse: "Stores - A".to_string(),
-            item_group: "Products".to_string(),
-        }])
+        Ok(filter_fake_catalog_items(group, query, limit, offset))
     }
 
     async fn items_by_codes(
@@ -198,6 +191,56 @@ impl AdminReadPort for FakeAdminCatalogReadPort {
     ) -> Result<Vec<SupplierItem>, AdminPortError> {
         Ok(Vec::new())
     }
+}
+
+fn filter_fake_catalog_items(
+    group: &str,
+    query: &str,
+    limit: usize,
+    offset: usize,
+) -> Vec<SupplierItem> {
+    let group = group.trim().to_lowercase();
+    let query = query.trim().to_lowercase();
+    fake_catalog_items()
+        .into_iter()
+        .filter(|item| {
+            group.is_empty() || item.item_group.trim().eq_ignore_ascii_case(group.as_str())
+        })
+        .filter(|item| {
+            query.is_empty()
+                || item.code.to_lowercase().contains(&query)
+                || item.name.to_lowercase().contains(&query)
+                || item.item_group.to_lowercase().contains(&query)
+        })
+        .skip(offset)
+        .take(limit)
+        .collect()
+}
+
+fn fake_catalog_items() -> Vec<SupplierItem> {
+    vec![
+        SupplierItem {
+            code: "GSCALE-ITEM-001".to_string(),
+            name: "GScale Film".to_string(),
+            uom: "Kg".to_string(),
+            warehouse: "Stores - A".to_string(),
+            item_group: "Products".to_string(),
+        },
+        SupplierItem {
+            code: "INK-BLACK".to_string(),
+            name: "Black ink".to_string(),
+            uom: "Kg".to_string(),
+            warehouse: "Stores - A".to_string(),
+            item_group: "Kraska".to_string(),
+        },
+        SupplierItem {
+            code: "GLUE-001".to_string(),
+            name: "Kley".to_string(),
+            uom: "Kg".to_string(),
+            warehouse: "Stores - A".to_string(),
+            item_group: "Kley".to_string(),
+        },
+    ]
 }
 
 #[async_trait]

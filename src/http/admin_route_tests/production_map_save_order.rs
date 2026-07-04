@@ -437,6 +437,7 @@ async fn production_map_sequence_blocks_reorder_before_active_order() {
             principal_ref: "worker-sequence-active".to_string(),
             role_id: "aparatchi".to_string(),
             assigned_apparatus: vec!["7 ta rangli pechat".to_string()],
+            assigned_item_groups: Vec::new(),
         })
         .await
         .expect("assignment");

@@ -7,7 +7,13 @@ const SUPPLIER_ONLY: &[PrincipalRole] = &[PrincipalRole::Supplier];
 const CUSTOMER_ONLY: &[PrincipalRole] = &[PrincipalRole::Customer];
 const QOLIPCHI_ONLY: &[PrincipalRole] = &[PrincipalRole::Qolipchi];
 const SUPPLIER_WERKA: &[PrincipalRole] = &[PrincipalRole::Supplier, PrincipalRole::Werka];
-const ADMIN_WERKA: &[PrincipalRole] = &[PrincipalRole::Admin, PrincipalRole::Werka];
+const ADMIN_MATERIAL_TAMINOTCHI: &[PrincipalRole] =
+    &[PrincipalRole::Admin, PrincipalRole::MaterialTaminotchi];
+const ADMIN_WERKA_MATERIAL_TAMINOTCHI: &[PrincipalRole] = &[
+    PrincipalRole::Admin,
+    PrincipalRole::Werka,
+    PrincipalRole::MaterialTaminotchi,
+];
 
 pub(super) const CAPABILITY_CATALOG: &[CapabilityDefinition] = &[
     CapabilityDefinition {
@@ -80,7 +86,7 @@ pub(super) const CAPABILITY_CATALOG: &[CapabilityDefinition] = &[
         capability: Capability::CatalogItemCreate,
         code: "catalog.item.create",
         label: "Catalog item create",
-        default_roles: ADMIN_ONLY,
+        default_roles: ADMIN_MATERIAL_TAMINOTCHI,
     },
     CapabilityDefinition {
         capability: Capability::CatalogItemGroupRead,
@@ -182,19 +188,19 @@ pub(super) const CAPABILITY_CATALOG: &[CapabilityDefinition] = &[
         capability: Capability::GscaleCatalogRead,
         code: "gscale.catalog.read",
         label: "GScale catalog read",
-        default_roles: ADMIN_WERKA,
+        default_roles: ADMIN_WERKA_MATERIAL_TAMINOTCHI,
     },
     CapabilityDefinition {
         capability: Capability::GscalePrint,
         code: "gscale.print",
         label: "GScale print",
-        default_roles: ADMIN_WERKA,
+        default_roles: ADMIN_WERKA_MATERIAL_TAMINOTCHI,
     },
     CapabilityDefinition {
         capability: Capability::RpsBatchManage,
         code: "rps.batch.manage",
         label: "RPS batch manage",
-        default_roles: ADMIN_WERKA,
+        default_roles: ADMIN_WERKA_MATERIAL_TAMINOTCHI,
     },
     CapabilityDefinition {
         capability: Capability::RezkaSplitManage,
@@ -218,6 +224,6 @@ pub(super) const CAPABILITY_CATALOG: &[CapabilityDefinition] = &[
         capability: Capability::RawMaterialAssign,
         code: "raw_material.assign",
         label: "Raw material assign",
-        default_roles: ADMIN_WERKA,
+        default_roles: ADMIN_WERKA_MATERIAL_TAMINOTCHI,
     },
 ];

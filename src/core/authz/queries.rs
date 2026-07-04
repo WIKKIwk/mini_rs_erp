@@ -32,6 +32,11 @@ pub fn system_role_definitions() -> Vec<RoleDefinition> {
         (PrincipalRole::Supplier, "supplier", "Supplier"),
         (PrincipalRole::Customer, "customer", "Customer"),
         (PrincipalRole::Qolipchi, "qolipchi", "Qolipchi"),
+        (
+            PrincipalRole::MaterialTaminotchi,
+            "material_taminotchi",
+            "Material taminotchisi",
+        ),
     ]
     .into_iter()
     .map(|(role, id, label)| RoleDefinition {

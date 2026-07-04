@@ -30,6 +30,9 @@ impl AuthService {
             PrincipalRole::Customer => self.login_customer(&normalized_phone, code).await,
             PrincipalRole::Aparatchi => self.login_aparatchi(&normalized_phone, code).await,
             PrincipalRole::Qolipchi => self.login_qolipchi(&normalized_phone, code).await,
+            PrincipalRole::MaterialTaminotchi => {
+                self.login_material_taminotchi(normalized_phone, code, &identity)
+            }
             PrincipalRole::Admin => Err(AuthError::InvalidRole),
         }
     }
@@ -58,6 +61,32 @@ impl AuthService {
         Err(AuthError::InvalidCredentials)
     }
 
+    fn login_material_taminotchi(
+        &self,
+        normalized_phone: String,
+        code: &str,
+        identity: &AuthIdentity,
+    ) -> Result<Principal, AuthError> {
+        if !identity.material_taminotchi_phone.is_empty()
+            && identity
+                .material_taminotchi_phone
+                .eq_ignore_ascii_case(&normalized_phone)
+            && !code.is_empty()
+            && code == identity.material_taminotchi_code
+        {
+            return Ok(Principal {
+                role: PrincipalRole::MaterialTaminotchi,
+                display_name: identity.material_taminotchi_name.clone(),
+                legal_name: identity.material_taminotchi_name.clone(),
+                ref_: "material_taminotchi".to_string(),
+                phone: normalized_phone,
+                avatar_url: String::new(),
+            });
+        }
+
+        Err(AuthError::InvalidCredentials)
+    }
+
     fn infer_role(&self, code: &str) -> Result<PrincipalRole, AuthError> {
         let trimmed = code.trim();
 
@@ -69,6 +98,8 @@ impl AuthService {
             Ok(PrincipalRole::Aparatchi)
         } else if trimmed.starts_with("50") {
             Ok(PrincipalRole::Qolipchi)
+        } else if trimmed.starts_with("60") {
+            Ok(PrincipalRole::MaterialTaminotchi)
         } else if trimmed.starts_with("30") {
             Ok(PrincipalRole::Customer)
         } else {

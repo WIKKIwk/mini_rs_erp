@@ -119,6 +119,7 @@ async fn raw_material_assignment_unlink_rejects_started_stock() {
             principal_ref: "worker-raw-unlink-locked".to_string(),
             role_id: "aparatchi".to_string(),
             assigned_apparatus: vec!["7 ta rangli pechat - A".to_string()],
+            assigned_item_groups: Vec::new(),
         })
         .await
         .expect("aparatchi assignment");

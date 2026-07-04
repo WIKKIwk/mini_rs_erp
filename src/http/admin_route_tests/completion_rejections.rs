@@ -10,6 +10,7 @@ async fn admin_rejects_zero_output_completion_request_and_notifies_worker() {
             principal_ref: "worker-reject-complete".to_string(),
             role_id: "aparatchi".to_string(),
             assigned_apparatus: vec!["7 ta rangli pechat".to_string()],
+            assigned_item_groups: Vec::new(),
         })
         .await
         .expect("assignment");
@@ -146,6 +147,7 @@ async fn queue_pause_print_failure_keeps_committed_pause_log() {
             principal_ref: "worker-print-fail".to_string(),
             role_id: "aparatchi".to_string(),
             assigned_apparatus: vec!["7 ta rangli pechat".to_string()],
+            assigned_item_groups: Vec::new(),
         })
         .await
         .expect("assignment");

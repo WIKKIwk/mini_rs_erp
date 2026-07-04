@@ -12,6 +12,7 @@ async fn queue_start_rejects_raw_material_stock_reserved_for_other_order() {
             principal_ref: "worker-raw-reserved".to_string(),
             role_id: "aparatchi".to_string(),
             assigned_apparatus: vec!["7 ta rangli pechat - A".to_string()],
+            assigned_item_groups: Vec::new(),
         })
         .await
         .expect("aparatchi assignment");
@@ -109,6 +110,7 @@ async fn queue_start_commit_failure_does_not_reserve_raw_material_stock() {
             principal_ref: "worker-raw-rollback".to_string(),
             role_id: "aparatchi".to_string(),
             assigned_apparatus: vec!["7 ta rangli pechat - A".to_string()],
+            assigned_item_groups: Vec::new(),
         })
         .await
         .expect("aparatchi assignment");

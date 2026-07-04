@@ -33,6 +33,9 @@ pub(super) struct AuthIdentity {
     werka_phone: String,
     werka_code: String,
     werka_name: String,
+    material_taminotchi_phone: String,
+    material_taminotchi_code: String,
+    material_taminotchi_name: String,
     admin_phone: String,
     admin_name: String,
 }
@@ -57,6 +60,15 @@ impl AuthService {
                     .unwrap_or_else(|_| config.werka_phone.trim().to_string()),
                 werka_code: config.werka_code.trim().to_string(),
                 werka_name: blank_default(&config.werka_name, "Werka"),
+                material_taminotchi_phone: normalize_config_phone(
+                    &config.material_taminotchi_phone,
+                )
+                .unwrap_or_else(|_| config.material_taminotchi_phone.trim().to_string()),
+                material_taminotchi_code: config.material_taminotchi_code.trim().to_string(),
+                material_taminotchi_name: blank_default(
+                    &config.material_taminotchi_name,
+                    "Material taminotchisi",
+                ),
                 admin_phone: normalize_config_phone(&config.admin_phone)
                     .unwrap_or_else(|_| config.admin_phone.trim().to_string()),
                 admin_name: blank_default(&config.admin_name, "Admin"),

@@ -120,6 +120,7 @@ async fn pechat_queue_start_requires_matching_qolip_code_scan() {
             principal_ref: "pechat-worker-qolip".to_string(),
             role_id: "aparatchi".to_string(),
             assigned_apparatus: vec!["7 ta rangli pechat - A".to_string()],
+            assigned_item_groups: Vec::new(),
         })
         .await
         .expect("aparatchi assignment");
@@ -288,6 +289,7 @@ async fn qolip_checkout_uses_authorized_location_snapshot() {
             principal_ref: "qolipchi-a".to_string(),
             role_id: "qolipchi".to_string(),
             assigned_apparatus: Vec::new(),
+            assigned_item_groups: Vec::new(),
         })
         .await
         .expect("put role assignment");

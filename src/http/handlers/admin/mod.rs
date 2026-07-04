@@ -59,7 +59,7 @@ use crate::core::admin::models::{
 };
 use crate::core::admin::ports::AdminPortError;
 use crate::core::apparatus_groups::{ApparatusGroupError, ApparatusGroupUpsert, ApparatusUpsert};
-use crate::core::auth::models::Principal;
+use crate::core::auth::models::{Principal, PrincipalRole};
 use crate::core::authz::{
     Capability, RoleAssignmentUpsert, RoleDefinitionUpsert, capability_catalog_entries,
 };

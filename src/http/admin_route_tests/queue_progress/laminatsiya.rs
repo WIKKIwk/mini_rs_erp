@@ -15,6 +15,7 @@ async fn laminatsiya_complete_requires_or_persists_completion_metrics() {
             principal_ref: "worker-laminatsiya-complete".to_string(),
             role_id: "aparatchi".to_string(),
             assigned_apparatus: vec!["Laminatsiya 1".to_string()],
+            assigned_item_groups: Vec::new(),
         })
         .await
         .expect("assignment");
@@ -147,6 +148,7 @@ async fn finished_goods_requires_warehouse_receipt_before_stock() {
             principal_ref: "worker-fg-receipt".to_string(),
             role_id: "aparatchi".to_string(),
             assigned_apparatus: vec!["Laminatsiya 1".to_string()],
+            assigned_item_groups: Vec::new(),
         })
         .await
         .expect("assignment");
@@ -329,6 +331,7 @@ async fn laminatsiya_complete_keeps_state_successful_when_progress_print_fails()
             principal_ref: "worker-laminatsiya-print-fail".to_string(),
             role_id: "aparatchi".to_string(),
             assigned_apparatus: vec!["Laminatsiya 1".to_string()],
+            assigned_item_groups: Vec::new(),
         })
         .await
         .expect("assignment");
@@ -425,6 +428,7 @@ async fn laminatsiya_pause_does_not_persist_print_leftover_metric() {
             principal_ref: "worker-laminatsiya-pause".to_string(),
             role_id: "aparatchi".to_string(),
             assigned_apparatus: vec!["Laminatsiya 2".to_string()],
+            assigned_item_groups: Vec::new(),
         })
         .await
         .expect("assignment");

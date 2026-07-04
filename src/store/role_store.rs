@@ -190,6 +190,7 @@ mod tests {
                 principal_ref: "werka".to_string(),
                 role_id: "catalog_only".to_string(),
                 assigned_apparatus: vec!["Godex aparat - DEMO".to_string()],
+                assigned_item_groups: Vec::new(),
             })
             .await
             .expect("put assignment");

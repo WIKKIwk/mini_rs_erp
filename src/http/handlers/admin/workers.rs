@@ -328,6 +328,7 @@ async fn sync_worker_group_apparatchi_assignments(
                 principal_ref: worker_id.clone(),
                 role_id: "aparatchi".to_string(),
                 assigned_apparatus,
+                assigned_item_groups: Vec::new(),
             })
             .await
             .map_err(|_| server_error("admin role assignment save failed"))?;

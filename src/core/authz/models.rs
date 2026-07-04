@@ -82,6 +82,8 @@ pub struct RoleAssignment {
     pub role_id: String,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub assigned_apparatus: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub assigned_item_groups: Vec<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
@@ -91,6 +93,8 @@ pub struct RoleAssignmentUpsert {
     pub role_id: String,
     #[serde(default)]
     pub assigned_apparatus: Vec<String>,
+    #[serde(default)]
+    pub assigned_item_groups: Vec<String>,
 }
 
 #[derive(Debug, thiserror::Error, PartialEq, Eq)]
@@ -119,6 +123,8 @@ pub enum RoleAssignmentError {
     UnknownRole(String),
     #[error("role base does not match principal role")]
     RoleBaseMismatch,
+    #[error("material taminotchi needs at least one item group")]
+    MissingAssignedItemGroups,
 }
 
 #[derive(Debug, thiserror::Error)]

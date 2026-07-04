@@ -6,9 +6,10 @@ use serde::{Deserialize, Serialize};
 
 use crate::app::AppState;
 use crate::core::admin::ports::AdminPortError;
-use crate::core::auth::models::Principal;
+use crate::core::auth::models::{Principal, PrincipalRole};
 use crate::core::authz::Capability;
 use crate::core::gscale::{GscaleServiceError, MaterialReceiptPrintRequest};
+use crate::core::werka::models::SupplierItem;
 use crate::http::handlers::auth::{ErrorResponse, bearer_token};
 
 pub async fn items(
@@ -32,19 +33,56 @@ pub async fn items(
     if !can_read_gscale && !can_manage_rezka {
         return Err(forbidden());
     }
-    let items = state
-        .admin
-        .items_page_by_group(
-            query.group.as_deref().unwrap_or(""),
-            query.q.as_deref().unwrap_or(""),
-            positive_int(query.limit.as_deref(), 80).min(200),
-            optional_offset(query.offset.as_deref()),
-        )
+    let items = gscale_items_for_principal(&state, &principal, &query)
         .await
         .map_err(admin_read_error)?;
     Ok(Json(
         serde_json::to_value(items).unwrap_or_else(|_| serde_json::json!([])),
     ))
+}
+
+async fn gscale_items_for_principal(
+    state: &AppState,
+    principal: &Principal,
+    query: &GscaleItemsQuery,
+) -> Result<Vec<SupplierItem>, AdminPortError> {
+    let group = query.group.as_deref().unwrap_or("");
+    let search = query.q.as_deref().unwrap_or("");
+    let limit = positive_int(query.limit.as_deref(), 80).min(200);
+    let offset = optional_offset(query.offset.as_deref());
+    if principal.role != PrincipalRole::MaterialTaminotchi {
+        return state
+            .admin
+            .items_page_by_group(group, search, limit, offset)
+            .await;
+    }
+    let assigned_groups = state.admin.principal_assigned_item_groups(principal).await;
+    if assigned_groups.is_empty() {
+        return Ok(Vec::new());
+    }
+    let requested_group = group.trim();
+    if !requested_group.is_empty() {
+        if !assigned_groups
+            .iter()
+            .any(|group| group.trim().eq_ignore_ascii_case(requested_group))
+        {
+            return Ok(Vec::new());
+        }
+        return state
+            .admin
+            .items_page_by_group(requested_group, search, limit, offset)
+            .await;
+    }
+
+    let mut scoped_items = Vec::new();
+    for assigned_group in assigned_groups {
+        let group_items = state
+            .admin
+            .items_page_by_group(&assigned_group, search, limit, 0)
+            .await?;
+        scoped_items.extend(group_items);
+    }
+    Ok(scoped_items.into_iter().skip(offset).take(limit).collect())
 }
 
 pub async fn material_receipt_print(

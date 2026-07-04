@@ -15,6 +15,7 @@ async fn queue_pause_prints_progress_qr_and_resume_uses_lookup() {
             principal_ref: "worker-progress-route".to_string(),
             role_id: "aparatchi".to_string(),
             assigned_apparatus: vec!["7 ta rangli pechat".to_string()],
+            assigned_item_groups: Vec::new(),
         })
         .await
         .expect("assignment");
@@ -143,6 +144,7 @@ async fn queue_pause_keeps_state_successful_when_progress_print_fails() {
             principal_ref: "worker-progress-print-fail".to_string(),
             role_id: "aparatchi".to_string(),
             assigned_apparatus: vec!["7 ta rangli pechat".to_string()],
+            assigned_item_groups: Vec::new(),
         })
         .await
         .expect("assignment");
