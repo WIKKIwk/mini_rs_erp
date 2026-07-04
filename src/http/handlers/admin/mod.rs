@@ -300,6 +300,7 @@ pub struct PageQuery {
     pub q: Option<String>,
     pub limit: Option<String>,
     pub offset: Option<String>,
+    pub role: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]

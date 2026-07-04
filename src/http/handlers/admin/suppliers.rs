@@ -159,6 +159,7 @@ pub async fn user_list(
             query.q.as_deref().unwrap_or_default(),
             optional_search_limit(query.limit.as_deref(), 20, 50),
             optional_offset(query.offset.as_deref()),
+            query.role.as_deref(),
         )
         .await
         .map(Json)

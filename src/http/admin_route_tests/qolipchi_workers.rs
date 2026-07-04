@@ -125,3 +125,74 @@ async fn qolipchi_login_rejects_worker_without_role_assignment() {
         .expect("qolipchi login");
     assert_eq!(login.status(), StatusCode::UNAUTHORIZED);
 }
+
+#[tokio::test]
+async fn admin_workers_filters_worker_and_qolipchi_roles_on_backend() {
+    let state = test_state();
+    let token = session(&state, PrincipalRole::Admin).await;
+
+    let worker = build_router(state.clone())
+        .oneshot(request_with_body(
+            "POST",
+            "/v1/mobile/admin/workers",
+            &token,
+            r#"{"id":"plain_worker","name":"Plain worker","phone":"+998901110001","level":"Master"}"#,
+        ))
+        .await
+        .expect("create worker");
+    assert_eq!(worker.status(), StatusCode::OK);
+
+    let qolipchi = build_router(state.clone())
+        .oneshot(request_with_body(
+            "POST",
+            "/v1/mobile/admin/workers",
+            &token,
+            r#"{"id":"qolipchi_worker","name":"Qolipchi worker","phone":"+998901110002","level":"Master"}"#,
+        ))
+        .await
+        .expect("create qolipchi worker");
+    assert_eq!(qolipchi.status(), StatusCode::OK);
+
+    let assignment = build_router(state.clone())
+        .oneshot(request_with_body(
+            "PUT",
+            "/v1/mobile/admin/role-assignments",
+            &token,
+            r#"{
+                "principal_role":"qolipchi",
+                "principal_ref":"qolipchi_worker",
+                "role_id":"qolipchi"
+            }"#,
+        ))
+        .await
+        .expect("assign qolipchi role");
+    assert_eq!(assignment.status(), StatusCode::OK);
+
+    let worker_response = build_router(state.clone())
+        .oneshot(request(
+            "GET",
+            "/v1/mobile/admin/workers?role=worker",
+            &token,
+        ))
+        .await
+        .expect("worker list");
+    assert_eq!(worker_response.status(), StatusCode::OK);
+    let workers = json_body(worker_response).await;
+    let workers = workers.as_array().expect("workers");
+    assert!(workers.iter().any(|item| item["id"] == "plain_worker"));
+    assert!(workers.iter().all(|item| item["id"] != "qolipchi_worker"));
+
+    let qolipchi_response = build_router(state)
+        .oneshot(request(
+            "GET",
+            "/v1/mobile/admin/workers?role=qolipchi",
+            &token,
+        ))
+        .await
+        .expect("qolipchi list");
+    assert_eq!(qolipchi_response.status(), StatusCode::OK);
+    let qolipchilar = json_body(qolipchi_response).await;
+    let qolipchilar = qolipchilar.as_array().expect("qolipchilar");
+    assert_eq!(qolipchilar.len(), 1);
+    assert_eq!(qolipchilar[0]["id"], "qolipchi_worker");
+}

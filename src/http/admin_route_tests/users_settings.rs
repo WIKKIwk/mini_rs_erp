@@ -82,6 +82,60 @@ async fn admin_user_list_does_not_treat_customers_as_qolipchi() {
 }
 
 #[tokio::test]
+async fn admin_user_list_filters_material_taminotchi_on_backend() {
+    let mut state = test_state();
+    let role_store = Arc::new(MemoryRoleDefinitionStore::new());
+    role_store
+        .put_role_assignment(RoleAssignment {
+            principal_role: PrincipalRole::MaterialTaminotchi,
+            principal_ref: "CUST-001".to_string(),
+            role_id: "material_taminotchi".to_string(),
+            assigned_apparatus: Vec::new(),
+            assigned_item_groups: vec!["rulon".to_string()],
+        })
+        .await
+        .expect("assignment");
+    state.admin = state.admin.with_role_store(role_store);
+    let token = session(&state, PrincipalRole::Admin).await;
+
+    let material_response = build_router(state.clone())
+        .oneshot(request(
+            "GET",
+            "/v1/mobile/admin/users/list?role=material_taminotchi&limit=10&offset=0",
+            &token,
+        ))
+        .await
+        .expect("material response");
+    assert_eq!(material_response.status(), StatusCode::OK);
+    let material = json_body(material_response).await;
+    assert_eq!(material["items"].as_array().expect("items").len(), 1);
+    assert_eq!(material["items"][0]["entity_ref"], "CUST-001");
+    assert_eq!(
+        material["items"][0]["principal_role"],
+        "material_taminotchi"
+    );
+    assert_eq!(material["items"][0]["role_label"], "Material taminotchisi");
+
+    let customer_response = build_router(state)
+        .oneshot(request(
+            "GET",
+            "/v1/mobile/admin/users/list?role=customer&limit=10&offset=0",
+            &token,
+        ))
+        .await
+        .expect("customer response");
+    assert_eq!(customer_response.status(), StatusCode::OK);
+    let customer = json_body(customer_response).await;
+    assert!(
+        customer["items"]
+            .as_array()
+            .expect("items")
+            .iter()
+            .all(|item| item["entity_ref"] != "CUST-001")
+    );
+}
+
+#[tokio::test]
 async fn admin_settings_requires_admin_like_go() {
     let state = test_state();
     let token = session(&state, PrincipalRole::Supplier).await;

@@ -53,15 +53,37 @@ pub async fn workers(
         return Err(method_not_allowed());
     }
     match method {
-        Method::GET => state
-            .workers
-            .workers(
-                query.q.as_deref().unwrap_or(""),
-                optional_search_limit(query.limit.as_deref(), 50, 500),
-            )
-            .await
-            .map(json_response)
-            .map_err(worker_error),
+        Method::GET => {
+            let mut workers = state
+                .workers
+                .workers(
+                    query.q.as_deref().unwrap_or(""),
+                    optional_search_limit(query.limit.as_deref(), 50, 500),
+                )
+                .await
+                .map_err(worker_error)?;
+            match normalize_worker_role_filter(query.role.as_deref()) {
+                Some(WorkerRoleFilter::Worker) => {
+                    let assignments = state
+                        .admin
+                        .role_assignments()
+                        .await
+                        .map_err(|_| server_error("role assignments failed"))?;
+                    workers.retain(|worker| !worker_is_qolipchi(worker, &assignments));
+                }
+                Some(WorkerRoleFilter::Qolipchi) => {
+                    let assignments = state
+                        .admin
+                        .role_assignments()
+                        .await
+                        .map_err(|_| server_error("role assignments failed"))?;
+                    workers.retain(|worker| worker_is_qolipchi(worker, &assignments));
+                }
+                Some(WorkerRoleFilter::Unknown) => workers.clear(),
+                None => {}
+            }
+            Ok(json_response(workers))
+        }
         Method::POST => {
             let input: WorkerUpsert = parse_json(&body)?;
             state
@@ -91,6 +113,35 @@ pub async fn workers(
         }
         _ => Err(method_not_allowed()),
     }
+}
+
+enum WorkerRoleFilter {
+    Worker,
+    Qolipchi,
+    Unknown,
+}
+
+fn normalize_worker_role_filter(value: Option<&str>) -> Option<WorkerRoleFilter> {
+    match value
+        .unwrap_or_default()
+        .trim()
+        .to_ascii_lowercase()
+        .as_str()
+    {
+        "" => None,
+        "worker" | "ishchi" | "aparatchi" | "apparatchi" => Some(WorkerRoleFilter::Worker),
+        "qolipchi" => Some(WorkerRoleFilter::Qolipchi),
+        _ => Some(WorkerRoleFilter::Unknown),
+    }
+}
+
+fn worker_is_qolipchi(worker: &Worker, assignments: &[crate::core::authz::RoleAssignment]) -> bool {
+    let worker_id = worker.id.trim();
+    assignments.iter().any(|assignment| {
+        assignment.principal_ref.trim() == worker_id
+            && (assignment.principal_role == PrincipalRole::Qolipchi
+                || assignment.role_id == "qolipchi")
+    })
 }
 
 fn worker_error(error: WorkerError) -> AdminError {
