@@ -36,6 +36,14 @@ fn assigned_node(
     }
 }
 
+fn alternative_node(id: &str, title: &str, group_id: &str) -> ProductionMapNode {
+    ProductionMapNode {
+        alternative_group_id: group_id.to_string(),
+        alternative_group_label: group_id.to_string(),
+        ..node(id, ProductionMapNodeKind::Apparatus, title)
+    }
+}
+
 fn hotlunch_map() -> ProductionMapDefinition {
     ProductionMapDefinition {
         id: "zakaz-hot".to_string(),
@@ -111,6 +119,112 @@ fn linear_work_stages_follows_production_chain() {
             .collect::<Vec<_>>(),
         vec!["9 ta rangli pechat - A", "Laminatsiya", "Rezka aparat - A"]
     );
+}
+
+#[test]
+fn unassigned_bosma_alternative_group_is_not_a_work_stage() {
+    let mut map = hotlunch_map();
+    map.nodes = vec![
+        node("start", ProductionMapNodeKind::Start, "Start"),
+        node("order", ProductionMapNodeKind::Task, "Zakaz"),
+        alternative_node("pechat_7", "7 ta rangli bosma aparat", "alt_bosma"),
+        alternative_node("pechat_8", "8 ta rangli bosma aparat", "alt_bosma"),
+        node("end", ProductionMapNodeKind::End, "End"),
+    ];
+    map.edges = vec![
+        ProductionMapEdge {
+            from: "start".to_string(),
+            to: "order".to_string(),
+            branch: String::new(),
+        },
+        ProductionMapEdge {
+            from: "order".to_string(),
+            to: "pechat_7".to_string(),
+            branch: String::new(),
+        },
+        ProductionMapEdge {
+            from: "order".to_string(),
+            to: "pechat_8".to_string(),
+            branch: String::new(),
+        },
+        ProductionMapEdge {
+            from: "pechat_7".to_string(),
+            to: "end".to_string(),
+            branch: String::new(),
+        },
+        ProductionMapEdge {
+            from: "pechat_8".to_string(),
+            to: "end".to_string(),
+            branch: String::new(),
+        },
+    ];
+
+    assert!(linear_work_stages(&map).is_empty());
+    assert!(!map_has_work_stage_for_station(
+        &map,
+        "7 ta rangli bosma aparat"
+    ));
+    assert!(!map_has_work_stage_for_station(
+        &map,
+        "8 ta rangli bosma aparat"
+    ));
+    assert_eq!(
+        next_work_stage_station(&map, "7 ta rangli bosma aparat"),
+        None
+    );
+}
+
+#[test]
+fn unassigned_laminatsiya_alternative_group_stops_after_previous_stage() {
+    let mut map = hotlunch_map();
+    map.nodes = vec![
+        node("start", ProductionMapNodeKind::Start, "Start"),
+        node(
+            "pechat",
+            ProductionMapNodeKind::Apparatus,
+            "7 ta rangli bosma aparat",
+        ),
+        alternative_node("lamin_1", "Laminatsiya 1", "alt_laminatsiya"),
+        alternative_node("lamin_2", "Laminatsiya 2", "alt_laminatsiya"),
+        node("end", ProductionMapNodeKind::End, "End"),
+    ];
+    map.edges = vec![
+        ProductionMapEdge {
+            from: "start".to_string(),
+            to: "pechat".to_string(),
+            branch: String::new(),
+        },
+        ProductionMapEdge {
+            from: "pechat".to_string(),
+            to: "lamin_1".to_string(),
+            branch: String::new(),
+        },
+        ProductionMapEdge {
+            from: "pechat".to_string(),
+            to: "lamin_2".to_string(),
+            branch: String::new(),
+        },
+        ProductionMapEdge {
+            from: "lamin_1".to_string(),
+            to: "end".to_string(),
+            branch: String::new(),
+        },
+        ProductionMapEdge {
+            from: "lamin_2".to_string(),
+            to: "end".to_string(),
+            branch: String::new(),
+        },
+    ];
+
+    assert_eq!(
+        linear_work_stages(&map)
+            .iter()
+            .map(|stage| stage.station_title.as_str())
+            .collect::<Vec<_>>(),
+        vec!["7 ta rangli bosma aparat"]
+    );
+    assert!(!map_has_work_stage_for_station(&map, "Laminatsiya 1"));
+    assert_eq!(previous_work_stage_station(&map, "Laminatsiya 1"), None);
 }
 
 #[test]

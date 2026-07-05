@@ -36,8 +36,66 @@ async fn admin_warehouses_filters_by_parent() {
 
     assert_eq!(response.status(), StatusCode::OK);
     let body = json_body(response).await;
-    assert_eq!(body[0]["warehouse"], "Godex aparat - CH");
-    assert_eq!(body[0]["parent_warehouse"], "aparat - A");
+    assert!(body.as_array().expect("array").iter().any(|item| {
+        item["warehouse"] == "Godex aparat - CH" && item["parent_warehouse"] == "aparat - A"
+    }));
+}
+
+#[tokio::test]
+async fn admin_apparatus_defaults_are_available_on_empty_store() {
+    let state = test_state();
+    let token = session(&state, PrincipalRole::Admin).await;
+
+    let groups = build_router(state.clone())
+        .oneshot(request("GET", "/v1/mobile/admin/apparatus-groups", &token))
+        .await
+        .expect("groups response");
+    assert_eq!(groups.status(), StatusCode::OK);
+    let group_body = json_body(groups).await;
+    assert_eq!(group_body[0]["name"], "Bosma aparat");
+    assert_eq!(
+        group_body[0]["apparatus"],
+        serde_json::json!([
+            "7 ta rangli bosma aparat",
+            "8 ta rangli bosma aparat",
+            "9 ta rangli bosma aparat"
+        ])
+    );
+    assert_eq!(group_body[1]["name"], "Laminatsiya");
+    assert_eq!(
+        group_body[1]["apparatus"],
+        serde_json::json!(["Laminatsiya 1", "Laminatsiya 2"])
+    );
+    assert_eq!(group_body[2]["name"], "Rezka");
+    assert_eq!(group_body[2]["apparatus"], serde_json::json!(["Rezka"]));
+
+    let apparatus = build_router(state)
+        .oneshot(request(
+            "GET",
+            "/v1/mobile/admin/warehouses?parent=aparat%20-%20A&limit=50",
+            &token,
+        ))
+        .await
+        .expect("apparatus response");
+    assert_eq!(apparatus.status(), StatusCode::OK);
+    let apparatus_body = json_body(apparatus).await;
+    for expected in [
+        "7 ta rangli bosma aparat",
+        "8 ta rangli bosma aparat",
+        "9 ta rangli bosma aparat",
+        "Laminatsiya 1",
+        "Laminatsiya 2",
+        "Rezka",
+    ] {
+        assert!(
+            apparatus_body
+                .as_array()
+                .expect("array")
+                .iter()
+                .any(|item| item["warehouse"] == expected),
+            "missing default apparatus {expected}"
+        );
+    }
 }
 
 #[tokio::test]

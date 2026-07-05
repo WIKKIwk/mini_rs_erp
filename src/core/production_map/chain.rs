@@ -37,6 +37,9 @@ pub fn linear_work_stages(map: &ProductionMapDefinition) -> Vec<ChainStage> {
         if node.kind == ProductionMapNodeKind::End {
             break;
         }
+        if is_unassigned_alternative_apparatus(node) {
+            break;
+        }
         if is_work_stage(node, seen_apparatus) {
             let title = station_title(node);
             if !title.is_empty() {
@@ -181,9 +184,18 @@ fn station_title(node: &ProductionMapNode) -> &str {
 }
 
 fn station_matches(node: &ProductionMapNode, station: &str) -> bool {
+    if is_unassigned_alternative_apparatus(node) {
+        return false;
+    }
     queue_state::apparatus_titles_match(node.title.trim(), station)
         || (!node.alternative_assigned_title.trim().is_empty()
             && queue_state::apparatus_titles_match(node.alternative_assigned_title.trim(), station))
+}
+
+fn is_unassigned_alternative_apparatus(node: &ProductionMapNode) -> bool {
+    node.kind == ProductionMapNodeKind::Apparatus
+        && !node.alternative_group_id.trim().is_empty()
+        && node.alternative_assigned_title.trim().is_empty()
 }
 
 fn collect_next_station_titles(
@@ -206,6 +218,9 @@ fn collect_next_station_titles(
             continue;
         };
         if node.kind == ProductionMapNodeKind::End {
+            continue;
+        }
+        if is_unassigned_alternative_apparatus(node) {
             continue;
         }
         if is_station_node(node) {

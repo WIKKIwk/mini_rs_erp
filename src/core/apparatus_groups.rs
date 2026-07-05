@@ -66,7 +66,11 @@ impl ApparatusGroupService {
     }
 
     pub async fn groups(&self) -> Result<Vec<ApparatusGroup>, ApparatusGroupError> {
-        self.store.groups().await.map(normalize_groups)
+        let groups = self.store.groups().await?;
+        if groups.is_empty() {
+            return Ok(default_apparatus_groups());
+        }
+        Ok(normalize_groups(groups))
     }
 
     pub async fn upsert_group(
@@ -83,7 +87,29 @@ impl ApparatusGroupService {
         query: &str,
         limit: usize,
     ) -> Result<Vec<String>, ApparatusGroupError> {
-        self.store.apparatus(query, limit).await
+        let limit = limit.max(1);
+        let needle = query.trim().to_lowercase();
+        let mut seen = BTreeSet::new();
+        let mut result = default_apparatus()
+            .into_iter()
+            .filter(|item| needle.is_empty() || item.to_lowercase().contains(&needle))
+            .filter(|item| seen.insert(item.to_lowercase()))
+            .take(limit)
+            .collect::<Vec<_>>();
+        if result.len() >= limit {
+            return Ok(result);
+        }
+        for item in self.store.apparatus(query, limit).await? {
+            let name = item.trim().to_string();
+            if name.is_empty() || !seen.insert(name.to_lowercase()) {
+                continue;
+            }
+            result.push(name);
+            if result.len() >= limit {
+                break;
+            }
+        }
+        Ok(result)
     }
 
     pub async fn upsert_apparatus(
@@ -180,6 +206,38 @@ fn default_bosma_apparatus() -> Vec<String> {
     [7_u8, 8, 9]
         .into_iter()
         .map(|count| format!("{count} ta rangli bosma aparat"))
+        .collect()
+}
+
+fn default_laminatsiya_apparatus() -> Vec<String> {
+    vec!["Laminatsiya 1".to_string(), "Laminatsiya 2".to_string()]
+}
+
+fn default_rezka_apparatus() -> Vec<String> {
+    vec![DEFAULT_REZKA_GROUP_NAME.to_string()]
+}
+
+fn default_apparatus_groups() -> Vec<ApparatusGroup> {
+    vec![
+        ApparatusGroup {
+            name: DEFAULT_BOSMA_GROUP_NAME.to_string(),
+            apparatus: default_bosma_apparatus(),
+        },
+        ApparatusGroup {
+            name: DEFAULT_LAMINATSIYA_GROUP_NAME.to_string(),
+            apparatus: default_laminatsiya_apparatus(),
+        },
+        ApparatusGroup {
+            name: DEFAULT_REZKA_GROUP_NAME.to_string(),
+            apparatus: default_rezka_apparatus(),
+        },
+    ]
+}
+
+fn default_apparatus() -> Vec<String> {
+    default_apparatus_groups()
+        .into_iter()
+        .flat_map(|group| group.apparatus)
         .collect()
 }
 
