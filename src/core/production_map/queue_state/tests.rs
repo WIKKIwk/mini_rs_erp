@@ -124,6 +124,18 @@ fn apparatus_titles_match_warehouse_instance_suffixes() {
 }
 
 #[test]
+fn next_stage_title_matches_numbered_alternative_apparatus() {
+    assert!(next_stage_title_matches_apparatus(
+        "Laminatsiya",
+        "Laminatsiya 2"
+    ));
+    assert!(!next_stage_title_matches_apparatus(
+        "Laminatsiya",
+        "Laminatsiya maxsus"
+    ));
+}
+
+#[test]
 fn apparatus_search_key_normalizes_instance_suffixes_and_pechat_aliases() {
     assert_eq!(apparatus_search_key("Laminatsiya - A"), "laminatsiya");
     assert_eq!(

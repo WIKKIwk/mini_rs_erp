@@ -99,6 +99,14 @@ pub struct AdminCreateCustomerRequest {
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AdminCreateMaterialTaminotchiRequest {
+    pub name: String,
+    pub phone: String,
+    #[serde(default)]
+    pub assigned_item_groups: Vec<String>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AdminSupplier {
     #[serde(rename = "ref")]
     pub ref_: String,

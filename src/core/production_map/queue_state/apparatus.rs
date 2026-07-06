@@ -27,6 +27,15 @@ pub fn apparatus_titles_match(left: &str, right: &str) -> bool {
     warehouse_base_title(left).eq_ignore_ascii_case(warehouse_base_title(right))
 }
 
+pub fn next_stage_title_matches_apparatus(next_stage: &str, apparatus: &str) -> bool {
+    if apparatus_titles_match(next_stage, apparatus) {
+        return true;
+    }
+    let next_stage_key = normalized_warehouse_key(next_stage);
+    let apparatus_key = normalized_warehouse_key(apparatus);
+    stage_label_matches_numbered_apparatus(&next_stage_key, &apparatus_key)
+}
+
 pub fn apparatus_search_key(title: &str) -> String {
     let title = title.trim();
     if title.is_empty() {
@@ -40,6 +49,25 @@ pub fn apparatus_search_key(title: &str) -> String {
         .collect::<Vec<_>>()
         .join(" ")
         .to_lowercase()
+}
+
+fn normalized_warehouse_key(title: &str) -> String {
+    warehouse_base_title(title)
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+        .to_lowercase()
+}
+
+fn stage_label_matches_numbered_apparatus(stage_key: &str, apparatus_key: &str) -> bool {
+    if stage_key.is_empty() || apparatus_key.is_empty() || apparatus_key == stage_key {
+        return false;
+    }
+    let Some(suffix) = apparatus_key.strip_prefix(stage_key) else {
+        return false;
+    };
+    let suffix = suffix.trim();
+    !suffix.is_empty() && suffix.chars().all(|ch| ch.is_ascii_digit())
 }
 
 /// Strips trailing instance suffixes such as ` - A` from warehouse titles.

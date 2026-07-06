@@ -82,13 +82,13 @@ async fn admin_user_list_does_not_treat_customers_as_qolipchi() {
 }
 
 #[tokio::test]
-async fn admin_user_list_filters_material_taminotchi_on_backend() {
+async fn admin_user_list_filters_material_taminotchi_from_material_directory() {
     let mut state = test_state();
     let role_store = Arc::new(MemoryRoleDefinitionStore::new());
     role_store
         .put_role_assignment(RoleAssignment {
             principal_role: PrincipalRole::MaterialTaminotchi,
-            principal_ref: "CUST-001".to_string(),
+            principal_ref: "MAT-NEW".to_string(),
             role_id: "material_taminotchi".to_string(),
             assigned_apparatus: Vec::new(),
             assigned_item_groups: vec!["rulon".to_string()],
@@ -109,7 +109,9 @@ async fn admin_user_list_filters_material_taminotchi_on_backend() {
     assert_eq!(material_response.status(), StatusCode::OK);
     let material = json_body(material_response).await;
     assert_eq!(material["items"].as_array().expect("items").len(), 1);
-    assert_eq!(material["items"][0]["entity_ref"], "CUST-001");
+    assert_eq!(material["items"][0]["id"], "material_taminotchi:MAT-NEW");
+    assert_eq!(material["items"][0]["source"], "material_taminotchi");
+    assert_eq!(material["items"][0]["entity_ref"], "MAT-NEW");
     assert_eq!(
         material["items"][0]["principal_role"],
         "material_taminotchi"
@@ -131,8 +133,65 @@ async fn admin_user_list_filters_material_taminotchi_on_backend() {
             .as_array()
             .expect("items")
             .iter()
-            .all(|item| item["entity_ref"] != "CUST-001")
+            .any(|item| item["entity_ref"] == "CUST-001")
     );
+}
+
+#[tokio::test]
+async fn admin_material_taminotchi_detail_returns_material_profile() {
+    let state = test_state();
+    let token = session(&state, PrincipalRole::Admin).await;
+
+    let response = build_router(state)
+        .oneshot(request(
+            "GET",
+            "/v1/mobile/admin/material-taminotchilar/detail?ref=MAT-NEW",
+            &token,
+        ))
+        .await
+        .expect("response");
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let value = json_body(response).await;
+    assert_eq!(value["ref"], "MAT-NEW");
+    assert_eq!(value["name"], "Materialchi");
+    assert_eq!(value["phone"], "+998110000070");
+    assert_eq!(value["assigned_items"].as_array().expect("items").len(), 0);
+}
+
+#[tokio::test]
+async fn admin_material_taminotchi_phone_and_code_management_use_material_routes() {
+    let state = test_state();
+    let token = session(&state, PrincipalRole::Admin).await;
+
+    let phone_response = build_router(state.clone())
+        .oneshot(request_with_body(
+            "PUT",
+            "/v1/mobile/admin/material-taminotchilar/phone?ref=MAT-NEW",
+            &token,
+            r#"{"phone":"+998901234567"}"#,
+        ))
+        .await
+        .expect("phone response");
+
+    assert_eq!(phone_response.status(), StatusCode::OK);
+    let phone_value = json_body(phone_response).await;
+    assert_eq!(phone_value["ref"], "MAT-NEW");
+    assert_eq!(phone_value["phone"], "+998901234567");
+
+    let code_response = build_router(state)
+        .oneshot(request(
+            "POST",
+            "/v1/mobile/admin/material-taminotchilar/code/regenerate?ref=MAT-NEW",
+            &token,
+        ))
+        .await
+        .expect("code response");
+
+    assert_eq!(code_response.status(), StatusCode::OK);
+    let code_value = json_body(code_response).await;
+    let code = code_value["code"].as_str().expect("code");
+    assert!(code.starts_with("70"), "code should use 70 prefix: {code}");
 }
 
 #[tokio::test]
@@ -174,6 +233,12 @@ async fn admin_method_checks_happen_after_auth_like_go() {
         ("GET", "/v1/mobile/admin/suppliers/remove"),
         ("GET", "/v1/mobile/admin/suppliers/restore"),
         ("PATCH", "/v1/mobile/admin/customers"),
+        ("POST", "/v1/mobile/admin/material-taminotchilar/detail"),
+        ("POST", "/v1/mobile/admin/material-taminotchilar/phone"),
+        (
+            "GET",
+            "/v1/mobile/admin/material-taminotchilar/code/regenerate",
+        ),
         ("POST", "/v1/mobile/admin/customers/list"),
         ("POST", "/v1/mobile/admin/customers/detail"),
         ("POST", "/v1/mobile/admin/customers/phone"),

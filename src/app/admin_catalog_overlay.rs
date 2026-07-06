@@ -104,6 +104,24 @@ impl AdminReadPort for AdminCatalogOverlay {
         self.admin_store.customer_by_ref(ref_).await
     }
 
+    async fn material_taminotchilar_page(
+        &self,
+        query: &str,
+        limit: usize,
+        offset: usize,
+    ) -> Result<Vec<AdminDirectoryEntry>, AdminPortError> {
+        self.admin_store
+            .material_taminotchilar_page(query, limit, offset)
+            .await
+    }
+
+    async fn material_taminotchi_by_ref(
+        &self,
+        ref_: &str,
+    ) -> Result<AdminDirectoryEntry, AdminPortError> {
+        self.admin_store.material_taminotchi_by_ref(ref_).await
+    }
+
     async fn items_page(
         &self,
         query: &str,
@@ -218,6 +236,36 @@ impl AdminWritePort for AdminCatalogOverlay {
 
     async fn update_customer_code(&self, ref_: &str, code: &str) -> Result<(), AdminPortError> {
         self.admin_store.update_customer_code(ref_, code).await
+    }
+
+    async fn create_material_taminotchi(
+        &self,
+        name: &str,
+        phone: &str,
+    ) -> Result<AdminDirectoryEntry, AdminPortError> {
+        self.admin_store
+            .create_material_taminotchi(name, phone)
+            .await
+    }
+
+    async fn update_material_taminotchi_phone(
+        &self,
+        ref_: &str,
+        phone: &str,
+    ) -> Result<(), AdminPortError> {
+        self.admin_store
+            .update_material_taminotchi_phone(ref_, phone)
+            .await
+    }
+
+    async fn update_material_taminotchi_code(
+        &self,
+        ref_: &str,
+        code: &str,
+    ) -> Result<(), AdminPortError> {
+        self.admin_store
+            .update_material_taminotchi_code(ref_, code)
+            .await
     }
 
     async fn assign_customer_item(

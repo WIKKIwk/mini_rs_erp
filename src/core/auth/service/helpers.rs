@@ -1,5 +1,7 @@
 use crate::core::auth::access_codes::{SupplierAccessInput, supplier_access_code};
-use crate::core::auth::ports::{AdminAccessState, CustomerRecord, SupplierRecord, WorkerRecord};
+use crate::core::auth::ports::{
+    AdminAccessState, CustomerRecord, MaterialTaminotchiRecord, SupplierRecord, WorkerRecord,
+};
 
 use super::AuthError;
 
@@ -72,6 +74,21 @@ pub(super) fn merge_customer_records(
             continue;
         }
         customers.push(record);
+    }
+}
+
+pub(super) fn merge_material_taminotchi_records(
+    materials: &mut Vec<MaterialTaminotchiRecord>,
+    extra: Vec<MaterialTaminotchiRecord>,
+) {
+    for record in extra {
+        if materials
+            .iter()
+            .any(|existing| existing.id.trim() == record.id.trim())
+        {
+            continue;
+        }
+        materials.push(record);
     }
 }
 

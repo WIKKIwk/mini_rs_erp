@@ -19,7 +19,7 @@ use crate::core::apparatus_groups::{ApparatusGroupService, MemoryApparatusGroupS
 use crate::core::auth::models::{Principal, PrincipalRole};
 use crate::core::auth::ports::{
     AdminAccessState, AdminAccessStateLookup, AuthPortError, CustomerLookup, CustomerRecord,
-    SupplierLookup, SupplierRecord,
+    MaterialTaminotchiLookup, MaterialTaminotchiRecord, SupplierLookup, SupplierRecord,
 };
 use crate::core::authz::{
     MemoryRoleDefinitionStore, RoleAssignment, RoleDefinition, RoleDefinitionStorePort,
@@ -292,7 +292,8 @@ fn test_state() -> AppState {
     state.workers = WorkerService::new(Arc::new(MemoryWorkerStore::new()));
     state.auth = crate::core::auth::service::AuthService::new(&state.config)
         .with_customer_dependencies(admin_port.clone(), admin_state_port.clone())
-        .with_supplier_dependencies(admin_port, admin_state_port.clone())
+        .with_supplier_dependencies(admin_port.clone(), admin_state_port.clone())
+        .with_material_taminotchi_dependencies(admin_port, admin_state_port.clone())
         .with_worker_dependencies(Arc::new(state.workers.clone()), admin_state_port);
     state.worker_groups = WorkerGroupService::new(Arc::new(MemoryWorkerGroupStore::new()));
     state.production_orders = Arc::new(NoopMiniOrderSink);

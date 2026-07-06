@@ -39,6 +39,13 @@ pub struct PreparedApparatusQueueAction {
     pub(super) progress_event: Option<OrderProgressEvent>,
     pub(super) progress_batch: Option<OrderProgressBatch>,
     pub(super) progress_batch_updates: Vec<OrderProgressBatch>,
+    pub(super) claimed_alternative_map: Option<ClaimedAlternativeMapUpdate>,
+}
+
+#[derive(Clone)]
+pub(super) struct ClaimedAlternativeMapUpdate {
+    pub(super) previous: ProductionMapDefinition,
+    pub(super) updated: ProductionMapDefinition,
 }
 
 impl PreparedApparatusQueueAction {

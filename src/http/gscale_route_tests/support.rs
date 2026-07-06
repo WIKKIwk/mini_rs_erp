@@ -172,7 +172,26 @@ impl AdminReadPort for FakeAdminCatalogReadPort {
     }
 
     async fn item_group_tree(&self) -> Result<Vec<AdminItemGroup>, AdminPortError> {
-        Ok(Vec::new())
+        Ok(vec![
+            AdminItemGroup {
+                name: "Xomashyo".to_string(),
+                item_group_name: "Xomashyo".to_string(),
+                parent_item_group: "All Item Groups".to_string(),
+                is_group: true,
+            },
+            AdminItemGroup {
+                name: "Rulon".to_string(),
+                item_group_name: "Rulon".to_string(),
+                parent_item_group: "Xomashyo".to_string(),
+                is_group: true,
+            },
+            AdminItemGroup {
+                name: "Rulon eni".to_string(),
+                item_group_name: "Rulon eni".to_string(),
+                parent_item_group: "Rulon".to_string(),
+                is_group: false,
+            },
+        ])
     }
 
     async fn assigned_supplier_items(
@@ -239,6 +258,13 @@ fn fake_catalog_items() -> Vec<SupplierItem> {
             uom: "Kg".to_string(),
             warehouse: "Stores - A".to_string(),
             item_group: "Kley".to_string(),
+        },
+        SupplierItem {
+            code: "ROLL-1000".to_string(),
+            name: "CPP 1000/35".to_string(),
+            uom: "Kg".to_string(),
+            warehouse: "Stores - A".to_string(),
+            item_group: "Rulon eni".to_string(),
         },
     ]
 }

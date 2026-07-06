@@ -29,6 +29,7 @@ pub fn linear_work_stages(map: &ProductionMapDefinition) -> Vec<ChainStage> {
     };
     let mut stages = Vec::new();
     let mut visited = BTreeSet::new();
+    let mut seen_stage_titles = BTreeSet::<String>::new();
     let mut seen_apparatus = false;
     while visited.insert(current_id.to_string()) {
         let Some(node) = node_by_id.get(current_id) else {
@@ -37,19 +38,17 @@ pub fn linear_work_stages(map: &ProductionMapDefinition) -> Vec<ChainStage> {
         if node.kind == ProductionMapNodeKind::End {
             break;
         }
-        if is_unassigned_alternative_apparatus(node) {
-            break;
-        }
         if is_work_stage(node, seen_apparatus) {
-            let title = station_title(node);
-            if !title.is_empty() {
+            for (node_id, title) in stage_titles_for_node(map, node) {
                 if node.kind == ProductionMapNodeKind::Apparatus {
                     seen_apparatus = true;
                 }
-                stages.push(ChainStage {
-                    node_id: node.id.clone(),
-                    station_title: title.to_string(),
-                });
+                if !title.is_empty() && seen_stage_titles.insert(title.to_ascii_lowercase()) {
+                    stages.push(ChainStage {
+                        node_id,
+                        station_title: title,
+                    });
+                }
             }
         } else if node.kind == ProductionMapNodeKind::Apparatus {
             seen_apparatus = true;
@@ -75,15 +74,35 @@ pub fn linear_work_stages(map: &ProductionMapDefinition) -> Vec<ChainStage> {
 }
 
 pub fn previous_work_stage_station(map: &ProductionMapDefinition, station: &str) -> Option<String> {
-    let stages = linear_work_stages(map);
-    let index = stages
+    let work_stage_node_ids = linear_work_stages(map)
+        .into_iter()
+        .map(|stage| stage.node_id)
+        .collect::<BTreeSet<_>>();
+    let node_by_id: BTreeMap<&str, &ProductionMapNode> = map
+        .nodes
         .iter()
-        .position(|stage| queue_state::apparatus_titles_match(&stage.station_title, station))?;
-    if index == 0 {
-        None
-    } else {
-        Some(stages[index - 1].station_title.clone())
+        .map(|node| (node.id.as_str(), node))
+        .collect();
+    let mut incoming = BTreeMap::<&str, Vec<&ProductionMapEdge>>::new();
+    for edge in &map.edges {
+        incoming.entry(edge.to.as_str()).or_default().push(edge);
     }
+    let mut found = Vec::<String>::new();
+    let mut seen_titles = BTreeSet::<String>::new();
+    for node in &map.nodes {
+        if !is_station_node(node) || !station_matches(node, station) {
+            continue;
+        }
+        collect_previous_station_titles(
+            node.id.as_str(),
+            &node_by_id,
+            &incoming,
+            &work_stage_node_ids,
+            &mut found,
+            &mut seen_titles,
+        );
+    }
+    found.into_iter().next()
 }
 
 pub fn next_work_stage_station(map: &ProductionMapDefinition, station: &str) -> Option<String> {
@@ -184,18 +203,97 @@ fn station_title(node: &ProductionMapNode) -> &str {
 }
 
 fn station_matches(node: &ProductionMapNode, station: &str) -> bool {
-    if is_unassigned_alternative_apparatus(node) {
-        return false;
+    let assigned = node.alternative_assigned_title.trim();
+    if !assigned.is_empty() {
+        return queue_state::apparatus_titles_match(assigned, station);
+    }
+    if node.kind == ProductionMapNodeKind::Apparatus && !node.alternative_group_id.trim().is_empty()
+    {
+        return queue_state::apparatus_titles_match(node.title.trim(), station);
     }
     queue_state::apparatus_titles_match(node.title.trim(), station)
-        || (!node.alternative_assigned_title.trim().is_empty()
-            && queue_state::apparatus_titles_match(node.alternative_assigned_title.trim(), station))
 }
 
 fn is_unassigned_alternative_apparatus(node: &ProductionMapNode) -> bool {
     node.kind == ProductionMapNodeKind::Apparatus
         && !node.alternative_group_id.trim().is_empty()
         && node.alternative_assigned_title.trim().is_empty()
+}
+
+fn stage_titles_for_node(
+    map: &ProductionMapDefinition,
+    node: &ProductionMapNode,
+) -> Vec<(String, String)> {
+    if !is_unassigned_alternative_apparatus(node) {
+        let title = station_title(node).trim();
+        return if title.is_empty() {
+            Vec::new()
+        } else {
+            vec![(node.id.clone(), title.to_string())]
+        };
+    }
+    let group_id = node.alternative_group_id.trim();
+    map.nodes
+        .iter()
+        .filter(|candidate| {
+            candidate.kind == ProductionMapNodeKind::Apparatus
+                && candidate.alternative_group_id.trim() == group_id
+                && candidate.alternative_assigned_title.trim().is_empty()
+        })
+        .filter_map(|candidate| {
+            let title = candidate.title.trim();
+            (!title.is_empty()).then(|| (candidate.id.clone(), title.to_string()))
+        })
+        .collect()
+}
+
+fn unassigned_alternative_stage_title(node: &ProductionMapNode) -> &str {
+    let label = node.alternative_group_label.trim();
+    if label.is_empty() {
+        node.title.trim()
+    } else {
+        label
+    }
+}
+
+fn collect_previous_station_titles(
+    start_id: &str,
+    node_by_id: &BTreeMap<&str, &ProductionMapNode>,
+    incoming: &BTreeMap<&str, Vec<&ProductionMapEdge>>,
+    work_stage_node_ids: &BTreeSet<String>,
+    found: &mut Vec<String>,
+    seen_titles: &mut BTreeSet<String>,
+) {
+    let mut queue = VecDeque::<&str>::new();
+    let mut visited = BTreeSet::<String>::new();
+    if let Some(edges) = incoming.get(start_id) {
+        queue.extend(edges.iter().map(|edge| edge.from.as_str()));
+    }
+    while let Some(node_id) = queue.pop_front() {
+        if !visited.insert(node_id.to_string()) {
+            continue;
+        }
+        let Some(node) = node_by_id.get(node_id) else {
+            continue;
+        };
+        if node.kind == ProductionMapNodeKind::Start {
+            continue;
+        }
+        if is_station_node(node) && work_stage_node_ids.contains(node.id.as_str()) {
+            let title = if is_unassigned_alternative_apparatus(node) {
+                unassigned_alternative_stage_title(node)
+            } else {
+                station_title(node)
+            };
+            if !title.is_empty() && seen_titles.insert(title.to_ascii_lowercase()) {
+                found.push(title.to_string());
+            }
+            continue;
+        }
+        if let Some(edges) = incoming.get(node_id) {
+            queue.extend(edges.iter().map(|edge| edge.from.as_str()));
+        }
+    }
 }
 
 fn collect_next_station_titles(
@@ -221,6 +319,10 @@ fn collect_next_station_titles(
             continue;
         }
         if is_unassigned_alternative_apparatus(node) {
+            let title = unassigned_alternative_stage_title(node);
+            if !title.is_empty() && seen_titles.insert(title.to_ascii_lowercase()) {
+                found.push(title.to_string());
+            }
             continue;
         }
         if is_station_node(node) {

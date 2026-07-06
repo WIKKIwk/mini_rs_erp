@@ -9,6 +9,8 @@ mod workers;
 pub use customers::{
     activity, customer_code_regenerate, customer_detail, customer_item_add, customer_item_remove,
     customer_list, customer_phone, customer_remove, customers, item_group_tree, item_groups, items,
+    material_taminotchi_code_regenerate, material_taminotchi_detail, material_taminotchi_phone,
+    material_taminotchilar,
 };
 pub use production_maps::{
     production_map_audit, production_map_closed_orders, production_map_completed_orders,
@@ -51,11 +53,11 @@ use serde::{Deserialize, Serialize};
 use crate::app::AppState;
 use crate::core::admin::models::{
     AdminBulkMoveItemsRequest, AdminCreateCustomerRequest, AdminCreateItemGroupRequest,
-    AdminCreateItemRequest, AdminCreateSupplierRequest, AdminCustomerDetail,
-    AdminItemGroupBulkMoveResult, AdminMoveItemGroupRequest, AdminPhoneUpdateRequest,
-    AdminSettings, AdminSupplier, AdminSupplierDetail, AdminSupplierItemMutationRequest,
-    AdminSupplierItemsUpdateRequest, AdminSupplierStatusUpdateRequest, AdminSupplierSummary,
-    AdminSuppliersPage, AdminUserListPage,
+    AdminCreateItemRequest, AdminCreateMaterialTaminotchiRequest, AdminCreateSupplierRequest,
+    AdminCustomerDetail, AdminItemGroupBulkMoveResult, AdminMoveItemGroupRequest,
+    AdminPhoneUpdateRequest, AdminSettings, AdminSupplier, AdminSupplierDetail,
+    AdminSupplierItemMutationRequest, AdminSupplierItemsUpdateRequest,
+    AdminSupplierStatusUpdateRequest, AdminSupplierSummary, AdminSuppliersPage, AdminUserListPage,
 };
 use crate::core::admin::ports::AdminPortError;
 use crate::core::apparatus_groups::{ApparatusGroupError, ApparatusGroupUpsert, ApparatusUpsert};

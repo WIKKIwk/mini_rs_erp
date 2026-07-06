@@ -2,8 +2,12 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use super::*;
 
-use super::apparatus::{visible_order_ids_by_apparatus, visible_order_ids_for_apparatus};
+use super::apparatus::{
+    claim_unassigned_alternative_apparatus_assignment, visible_order_ids_by_apparatus,
+    visible_order_ids_for_apparatus,
+};
 use super::progress::effective_apparatus_queue_policy_record;
+use super::service::ClaimedAlternativeMapUpdate;
 use super::service_queue_support::*;
 
 impl ProductionMapService {
@@ -312,6 +316,20 @@ impl ProductionMapService {
             .iter()
             .find(|map| map.id.trim() == order_id)
             .ok_or(ProductionMapError::MapNotFound)?;
+        let mut effective_order_map = order_map.clone();
+        let claimed_alternative_map = if action == queue_state::ApparatusQueueAction::Start
+            && claim_unassigned_alternative_apparatus_assignment(
+                &mut effective_order_map,
+                apparatus,
+            ) {
+            Some(ClaimedAlternativeMapUpdate {
+                previous: order_map.clone(),
+                updated: effective_order_map.clone(),
+            })
+        } else {
+            None
+        };
+        let order_map = &effective_order_map;
         let previous_progress_ready = self
             .previous_progress_ready_for_action(action, order_id, order_map, apparatus, &progress)
             .await?;
@@ -377,6 +395,7 @@ impl ProductionMapService {
             progress_event: progress.progress_event,
             progress_batch: progress.progress_batch,
             progress_batch_updates: progress.progress_batch_updates,
+            claimed_alternative_map,
         })
     }
 
@@ -423,7 +442,10 @@ impl ProductionMapService {
             .filter(|batch| {
                 batch.order_id.trim() == order_id.trim()
                     && queue_state::apparatus_titles_match(&batch.apparatus, &previous_apparatus)
-                    && queue_state::apparatus_titles_match(&batch.next_apparatus, apparatus)
+                    && queue_state::next_stage_title_matches_apparatus(
+                        &batch.next_apparatus,
+                        apparatus,
+                    )
             })
             .any(|batch| {
                 batch.wip_status == OrderProgressBatchWipStatus::Waiting
@@ -446,6 +468,10 @@ impl ProductionMapService {
         raw_material_stock_transitions: Vec<RawMaterialStockTransition>,
     ) -> Result<ApparatusQueueActionResult, ProductionMapError> {
         let order_id = prepared.event.order_id.clone();
+        let claimed_alternative_map = prepared.claimed_alternative_map.clone();
+        if let Some(update) = &claimed_alternative_map {
+            self.store.put_map(update.updated.clone()).await?;
+        }
         let write_result = self
             .store
             .put_apparatus_queue_states_with_event_and_progress(QueueActionProgressWrite {
@@ -458,7 +484,16 @@ impl ProductionMapService {
                 progress_batch_updates: prepared.progress_batch_updates.clone(),
                 raw_material_stock_transitions,
             })
-            .await?;
+            .await;
+        let write_result = match write_result {
+            Ok(result) => result,
+            Err(error) => {
+                if let Some(update) = claimed_alternative_map {
+                    let _ = self.store.put_map(update.previous).await;
+                }
+                return Err(error);
+            }
+        };
         let order_status = self.order_status_detail(&order_id).await?;
         self.notify_live();
         Ok(ApparatusQueueActionResult {

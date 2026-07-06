@@ -157,6 +157,72 @@ async fn admin_roles_hide_legacy_custom_roles_that_conflict_with_system_roles() 
 }
 
 #[tokio::test]
+async fn admin_rejects_material_system_role_on_customer_directory_ref() {
+    let state = test_state();
+    let admin_token = session(&state, PrincipalRole::Admin).await;
+
+    let response = build_router(state)
+        .oneshot(request_with_body(
+            "PUT",
+            "/v1/mobile/admin/role-assignments",
+            &admin_token,
+            r#"{
+                "principal_role":"material_taminotchi",
+                "principal_ref":"CUST-001",
+                "role_id":"material_taminotchi",
+                "assigned_item_groups":["Kraska"]
+            }"#,
+        ))
+        .await
+        .expect("assignment response");
+
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+}
+
+#[tokio::test]
+async fn admin_creates_material_taminotchi_with_seventy_prefix_code() {
+    let state = test_state();
+    let admin_token = session(&state, PrincipalRole::Admin).await;
+
+    let response = build_router(state.clone())
+        .oneshot(request_with_body(
+            "POST",
+            "/v1/mobile/admin/material-taminotchilar",
+            &admin_token,
+            r#"{
+                "name":"Materialchi",
+                "phone":"110000070",
+                "assigned_item_groups":["Kraska"]
+            }"#,
+        ))
+        .await
+        .expect("create response");
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let material = json_body(response).await;
+    assert!(material["ref"].as_str().expect("ref").starts_with("MAT-"));
+    assert!(material["code"].as_str().expect("code").starts_with("70"));
+
+    let login = build_router(state)
+        .oneshot(request_with_body(
+            "POST",
+            "/v1/mobile/auth/login",
+            "",
+            &format!(
+                r#"{{"phone":"110000070","code":"{}"}}"#,
+                material["code"].as_str().expect("code")
+            ),
+        ))
+        .await
+        .expect("login response");
+
+    assert_eq!(login.status(), StatusCode::OK);
+    let login = json_body(login).await;
+    assert_eq!(login["profile"]["role"], "material_taminotchi");
+    assert_eq!(login["assigned_item_groups"], serde_json::json!(["Kraska"]));
+}
+
+#[tokio::test]
 async fn admin_role_assignment_limits_runtime_capabilities() {
     let state = test_state();
     let admin_token = session(&state, PrincipalRole::Admin).await;

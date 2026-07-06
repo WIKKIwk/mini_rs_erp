@@ -11,7 +11,7 @@ mod tests;
 pub use actions::{apply_queue_action, apply_unordered_queue_action};
 pub use apparatus::{
     apparatus_matches_assigned, apparatus_search_key, apparatus_titles_match,
-    resolve_apparatus_storage_key, warehouse_base_title,
+    next_stage_title_matches_apparatus, resolve_apparatus_storage_key, warehouse_base_title,
 };
 pub use sequence::{effective_apparatus_sequence, first_actionable_order_id};
 pub use state::{ApparatusQueueAction, ApparatusQueueOrderState, next_queue_state};

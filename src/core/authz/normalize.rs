@@ -121,6 +121,7 @@ fn system_role_ids() -> BTreeSet<&'static str> {
         "customer",
         "aparatchi",
         "qolipchi",
+        "material_taminotchi",
     ]
     .into_iter()
     .collect()

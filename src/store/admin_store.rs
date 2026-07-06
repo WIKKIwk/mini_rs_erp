@@ -9,7 +9,7 @@ use crate::core::admin::models::{AdminDirectoryEntry, AdminItemGroup, AdminState
 use crate::core::admin::ports::{AdminPortError, AdminReadPort, AdminStatePort, AdminWritePort};
 use crate::core::auth::ports::{
     AdminAccessState, AdminAccessStateLookup, AuthPortError, CustomerLookup, CustomerRecord,
-    SupplierLookup, SupplierRecord,
+    MaterialTaminotchiLookup, MaterialTaminotchiRecord, SupplierLookup, SupplierRecord,
 };
 use crate::core::werka::models::SupplierItem;
 
@@ -29,10 +29,14 @@ struct StoredAdminData {
     next_supplier_id: u64,
     #[serde(default = "one")]
     next_customer_id: u64,
+    #[serde(default = "one")]
+    next_material_taminotchi_id: u64,
     #[serde(default)]
     suppliers: BTreeMap<String, AdminDirectoryEntryData>,
     #[serde(default)]
     customers: BTreeMap<String, AdminDirectoryEntryData>,
+    #[serde(default)]
+    material_taminotchilar: BTreeMap<String, AdminDirectoryEntryData>,
     #[serde(default)]
     items: BTreeMap<String, StoredSupplierItem>,
     #[serde(default = "default_item_groups")]
@@ -113,8 +117,10 @@ impl Default for StoredAdminData {
         Self {
             next_supplier_id: 1,
             next_customer_id: 1,
+            next_material_taminotchi_id: 1,
             suppliers: BTreeMap::new(),
             customers: BTreeMap::new(),
+            material_taminotchilar: BTreeMap::new(),
             items: BTreeMap::new(),
             item_groups: default_item_groups(),
             supplier_items: BTreeMap::new(),
@@ -192,6 +198,16 @@ impl From<&AdminDirectoryEntryData> for SupplierRecord {
 }
 
 impl From<&AdminDirectoryEntryData> for CustomerRecord {
+    fn from(value: &AdminDirectoryEntryData) -> Self {
+        Self {
+            id: value.ref_.clone(),
+            name: value.name.clone(),
+            phone: value.phone.clone(),
+        }
+    }
+}
+
+impl From<&AdminDirectoryEntryData> for MaterialTaminotchiRecord {
     fn from(value: &AdminDirectoryEntryData) -> Self {
         Self {
             id: value.ref_.clone(),

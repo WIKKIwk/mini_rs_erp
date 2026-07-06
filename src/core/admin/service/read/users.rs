@@ -87,18 +87,12 @@ impl AdminService {
         }
 
         if role_filter.is_none() || role_filter == Some("material_taminotchi") {
-            for assignment in assignments.iter().filter(|assignment| {
-                assignment.principal_role == PrincipalRole::MaterialTaminotchi
-                    || assignment.role_id == "material_taminotchi"
-            }) {
-                let customer = match read.customer_by_ref(&assignment.principal_ref).await {
-                    Ok(customer) => customer,
-                    Err(_) => continue,
-                };
-                let entry = customer_directory_entry(customer);
-                let Some(entry) = customer_user_list_entry(
-                    entry,
-                    PrincipalRole::MaterialTaminotchi,
+            let materials = read
+                .material_taminotchilar_page(query, scan_limit(limit, offset), 0)
+                .await?;
+            for material in materials {
+                let Some(entry) = material_taminotchi_user_list_entry(
+                    customer_directory_entry(material),
                     &role_labels,
                     &states,
                 ) else {
@@ -200,6 +194,39 @@ fn customer_user_list_entry(
         role_label,
         blocked: false,
         status: "active".to_string(),
+    })
+}
+
+fn material_taminotchi_user_list_entry(
+    entry: CustomerDirectoryEntry,
+    role_labels: &BTreeMap<String, String>,
+    states: &BTreeMap<String, AdminState>,
+) -> Option<AdminUserListEntry> {
+    let state = states.get(entry.ref_.trim()).cloned().unwrap_or_default();
+    if state.removed {
+        return None;
+    }
+    let role_label = role_labels
+        .get(&role_assignment_key(
+            &PrincipalRole::MaterialTaminotchi,
+            &entry.ref_,
+        ))
+        .cloned()
+        .unwrap_or_else(|| "Material taminotchisi".to_string());
+    Some(AdminUserListEntry {
+        id: format!("material_taminotchi:{}", entry.ref_),
+        source: "material_taminotchi".to_string(),
+        entity_ref: entry.ref_,
+        principal_role: PrincipalRole::MaterialTaminotchi,
+        name: entry.name,
+        phone: entry.phone,
+        role_label,
+        blocked: state.blocked,
+        status: if state.blocked {
+            "blocked".to_string()
+        } else {
+            "active".to_string()
+        },
     })
 }
 

@@ -207,7 +207,10 @@ pub(super) async fn wip_progress_batches(
                 && (current_location.is_empty()
                     || batch.current_location.trim() == current_location)
                 && (next_apparatus.is_empty()
-                    || queue_state::apparatus_titles_match(&batch.next_apparatus, next_apparatus))
+                    || queue_state::next_stage_title_matches_apparatus(
+                        &batch.next_apparatus,
+                        next_apparatus,
+                    ))
                 && (order_id.is_empty() || batch.order_id.trim() == order_id)
                 && (include_processed
                     || status.map_or(

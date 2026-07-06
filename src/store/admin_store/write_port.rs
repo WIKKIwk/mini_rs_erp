@@ -92,6 +92,48 @@ impl AdminWritePort for JsonAdminStore {
         self.persist(&data).await
     }
 
+    async fn create_material_taminotchi(
+        &self,
+        name: &str,
+        phone: &str,
+    ) -> Result<AdminDirectoryEntry, AdminPortError> {
+        let mut data = self.data.lock().await;
+        let ref_ = next_ref("MAT", data.next_material_taminotchi_id);
+        data.next_material_taminotchi_id += 1;
+        let entry = AdminDirectoryEntryData::new(&ref_, name, phone);
+        data.material_taminotchilar
+            .insert(ref_.clone(), entry.clone());
+        self.persist(&data).await?;
+        Ok(AdminDirectoryEntry::from(&entry))
+    }
+
+    async fn update_material_taminotchi_phone(
+        &self,
+        ref_: &str,
+        phone: &str,
+    ) -> Result<(), AdminPortError> {
+        let mut data = self.data.lock().await;
+        let entry = data
+            .material_taminotchilar
+            .get_mut(ref_.trim())
+            .ok_or(AdminPortError::NotFound)?;
+        entry.phone = phone.trim().to_string();
+        self.persist(&data).await
+    }
+
+    async fn update_material_taminotchi_code(
+        &self,
+        ref_: &str,
+        code: &str,
+    ) -> Result<(), AdminPortError> {
+        let mut data = self.data.lock().await;
+        data.states
+            .entry(ref_.trim().to_string())
+            .or_default()
+            .custom_code = code.trim().to_string();
+        self.persist(&data).await
+    }
+
     async fn assign_customer_item(
         &self,
         ref_: &str,

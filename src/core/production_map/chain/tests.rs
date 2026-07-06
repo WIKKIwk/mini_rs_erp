@@ -37,9 +37,18 @@ fn assigned_node(
 }
 
 fn alternative_node(id: &str, title: &str, group_id: &str) -> ProductionMapNode {
+    alternative_node_with_label(id, title, group_id, group_id)
+}
+
+fn alternative_node_with_label(
+    id: &str,
+    title: &str,
+    group_id: &str,
+    group_label: &str,
+) -> ProductionMapNode {
     ProductionMapNode {
         alternative_group_id: group_id.to_string(),
-        alternative_group_label: group_id.to_string(),
+        alternative_group_label: group_label.to_string(),
         ..node(id, ProductionMapNodeKind::Apparatus, title)
     }
 }
@@ -122,7 +131,7 @@ fn linear_work_stages_follows_production_chain() {
 }
 
 #[test]
-fn unassigned_bosma_alternative_group_is_not_a_work_stage() {
+fn unassigned_bosma_alternative_group_exposes_each_candidate_as_work_stage() {
     let mut map = hotlunch_map();
     map.nodes = vec![
         node("start", ProductionMapNodeKind::Start, "Start"),
@@ -159,12 +168,18 @@ fn unassigned_bosma_alternative_group_is_not_a_work_stage() {
         },
     ];
 
-    assert!(linear_work_stages(&map).is_empty());
-    assert!(!map_has_work_stage_for_station(
+    assert_eq!(
+        linear_work_stages(&map)
+            .iter()
+            .map(|stage| stage.station_title.as_str())
+            .collect::<Vec<_>>(),
+        vec!["7 ta rangli bosma aparat", "8 ta rangli bosma aparat"]
+    );
+    assert!(map_has_work_stage_for_station(
         &map,
         "7 ta rangli bosma aparat"
     ));
-    assert!(!map_has_work_stage_for_station(
+    assert!(map_has_work_stage_for_station(
         &map,
         "8 ta rangli bosma aparat"
     ));
@@ -175,7 +190,7 @@ fn unassigned_bosma_alternative_group_is_not_a_work_stage() {
 }
 
 #[test]
-fn unassigned_laminatsiya_alternative_group_stops_after_previous_stage() {
+fn unassigned_laminatsiya_alternative_group_exposes_candidates_after_previous_stage() {
     let mut map = hotlunch_map();
     map.nodes = vec![
         node("start", ProductionMapNodeKind::Start, "Start"),
@@ -184,8 +199,8 @@ fn unassigned_laminatsiya_alternative_group_stops_after_previous_stage() {
             ProductionMapNodeKind::Apparatus,
             "7 ta rangli bosma aparat",
         ),
-        alternative_node("lamin_1", "Laminatsiya 1", "alt_laminatsiya"),
-        alternative_node("lamin_2", "Laminatsiya 2", "alt_laminatsiya"),
+        alternative_node_with_label("lamin_1", "Laminatsiya 1", "alt_laminatsiya", "Laminatsiya"),
+        alternative_node_with_label("lamin_2", "Laminatsiya 2", "alt_laminatsiya", "Laminatsiya"),
         node("end", ProductionMapNodeKind::End, "End"),
     ];
     map.edges = vec![
@@ -221,10 +236,22 @@ fn unassigned_laminatsiya_alternative_group_stops_after_previous_stage() {
             .iter()
             .map(|stage| stage.station_title.as_str())
             .collect::<Vec<_>>(),
-        vec!["7 ta rangli bosma aparat"]
+        vec!["7 ta rangli bosma aparat", "Laminatsiya 1", "Laminatsiya 2"]
     );
-    assert!(!map_has_work_stage_for_station(&map, "Laminatsiya 1"));
-    assert_eq!(previous_work_stage_station(&map, "Laminatsiya 1"), None);
+    assert!(map_has_work_stage_for_station(&map, "Laminatsiya 1"));
+    assert!(map_has_work_stage_for_station(&map, "Laminatsiya 2"));
+    assert_eq!(
+        previous_work_stage_station(&map, "Laminatsiya 1"),
+        Some("7 ta rangli bosma aparat".to_string())
+    );
+    assert_eq!(
+        previous_work_stage_station(&map, "Laminatsiya 2"),
+        Some("7 ta rangli bosma aparat".to_string())
+    );
+    assert_eq!(
+        next_work_stage_station(&map, "7 ta rangli bosma aparat"),
+        Some("Laminatsiya".to_string())
+    );
 }
 
 #[test]
@@ -297,10 +324,7 @@ fn next_work_stage_uses_assigned_titles_across_branch_alternatives() {
         },
     ];
 
-    assert_eq!(
-        next_work_stage_station(&map, "7 ta rangli pechat"),
-        Some("Laminatsiya 1".to_string())
-    );
+    assert_eq!(next_work_stage_station(&map, "7 ta rangli pechat"), None);
     assert_eq!(
         next_work_stage_station(&map, "8 ta rangli pechat"),
         Some("Laminatsiya 1".to_string())

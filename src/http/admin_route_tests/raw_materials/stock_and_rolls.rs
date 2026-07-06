@@ -298,6 +298,85 @@ async fn raw_material_assignment_checks_rulon_size_for_pechat_orders() {
 }
 
 #[tokio::test]
+async fn material_taminotchi_raw_material_assignment_allows_child_group_from_assigned_parent() {
+    let material_store = Arc::new(RawMaterialStockLookup::default());
+    material_store
+        .insert_stock("30R1000", "ROLL-1000", "CPP 1000/35", 44.0)
+        .await;
+    let mut state = test_state();
+    state.gscale = GscaleService::new().with_receipt_store(material_store);
+    state
+        .admin
+        .upsert_role_assignment(crate::core::authz::RoleAssignmentUpsert {
+            principal_role: PrincipalRole::MaterialTaminotchi,
+            principal_ref: "material-rulon-parent".to_string(),
+            role_id: "material_taminotchi".to_string(),
+            assigned_apparatus: Vec::new(),
+            assigned_item_groups: vec!["Rulon".to_string()],
+        })
+        .await
+        .expect("material scope");
+    let admin_token = session(&state, PrincipalRole::Admin).await;
+    let material_token = session_for(
+        &state,
+        PrincipalRole::MaterialTaminotchi,
+        "material-rulon-parent",
+    )
+    .await;
+    let router = build_router(state);
+
+    let map = router
+        .clone()
+        .oneshot(request_with_body(
+            "PUT",
+            "/v1/mobile/admin/production-maps",
+            &admin_token,
+            &pechat_order_map_json_with_dims(
+                "zakaz-rulon-parent-scope",
+                "Rulon parent scope",
+                "8821",
+                "7 ta rangli pechat - A",
+                7.0,
+                985.0,
+            ),
+        ))
+        .await
+        .expect("map save");
+    assert_eq!(map.status(), StatusCode::OK);
+
+    let rule = router
+        .clone()
+        .oneshot(request_with_body(
+            "PUT",
+            "/v1/mobile/admin/raw-material-rules",
+            &admin_token,
+            r#"{"apparatus":"7 ta rangli pechat - A","requires_material":true,"item_groups":["Rulon"]}"#,
+        ))
+        .await
+        .expect("rule save");
+    assert_eq!(rule.status(), StatusCode::OK);
+
+    let assigned = router
+        .oneshot(request_with_body(
+            "POST",
+            "/v1/mobile/admin/raw-material-assignments",
+            &material_token,
+            r#"{
+                "order_id":"zakaz-rulon-parent-scope",
+                "barcode":"30R1000"
+            }"#,
+        ))
+        .await
+        .expect("assign child group material");
+    let status = assigned.status();
+    let body = json_body(assigned).await;
+
+    assert_eq!(status, StatusCode::OK, "{body:?}");
+    assert_eq!(body["item_code"], "ROLL-1000");
+    assert_eq!(body["item_group"], "Rulon eni");
+}
+
+#[tokio::test]
 async fn admin_raw_material_stock_lists_new_stock_model() {
     let mut state = test_state();
     state.gscale =

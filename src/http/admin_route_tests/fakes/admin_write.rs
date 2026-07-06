@@ -47,6 +47,30 @@ impl AdminWritePort for FakeAdminReadPort {
         Ok(())
     }
 
+    async fn create_material_taminotchi(
+        &self,
+        name: &str,
+        phone: &str,
+    ) -> Result<AdminDirectoryEntry, AdminPortError> {
+        Ok(entry("MAT-NEW", name, phone))
+    }
+
+    async fn update_material_taminotchi_phone(
+        &self,
+        _ref_: &str,
+        _phone: &str,
+    ) -> Result<(), AdminPortError> {
+        Ok(())
+    }
+
+    async fn update_material_taminotchi_code(
+        &self,
+        _ref_: &str,
+        _code: &str,
+    ) -> Result<(), AdminPortError> {
+        Ok(())
+    }
+
     async fn assign_customer_item(
         &self,
         _ref_: &str,

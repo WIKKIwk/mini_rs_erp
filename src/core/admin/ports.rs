@@ -26,6 +26,22 @@ pub trait AdminReadPort: Send + Sync {
 
     async fn customer_by_ref(&self, ref_: &str) -> Result<AdminDirectoryEntry, AdminPortError>;
 
+    async fn material_taminotchilar_page(
+        &self,
+        _query: &str,
+        _limit: usize,
+        _offset: usize,
+    ) -> Result<Vec<AdminDirectoryEntry>, AdminPortError> {
+        Err(AdminPortError::LookupFailed)
+    }
+
+    async fn material_taminotchi_by_ref(
+        &self,
+        _ref_: &str,
+    ) -> Result<AdminDirectoryEntry, AdminPortError> {
+        Err(AdminPortError::LookupFailed)
+    }
+
     async fn items_page(
         &self,
         query: &str,
@@ -177,6 +193,30 @@ pub trait AdminWritePort: Send + Sync {
     async fn update_customer_phone(&self, ref_: &str, phone: &str) -> Result<(), AdminPortError>;
 
     async fn update_customer_code(&self, ref_: &str, code: &str) -> Result<(), AdminPortError>;
+
+    async fn create_material_taminotchi(
+        &self,
+        _name: &str,
+        _phone: &str,
+    ) -> Result<AdminDirectoryEntry, AdminPortError> {
+        Err(AdminPortError::LookupFailed)
+    }
+
+    async fn update_material_taminotchi_phone(
+        &self,
+        _ref_: &str,
+        _phone: &str,
+    ) -> Result<(), AdminPortError> {
+        Err(AdminPortError::LookupFailed)
+    }
+
+    async fn update_material_taminotchi_code(
+        &self,
+        _ref_: &str,
+        _code: &str,
+    ) -> Result<(), AdminPortError> {
+        Err(AdminPortError::LookupFailed)
+    }
 
     async fn assign_customer_item(&self, ref_: &str, item_code: &str)
     -> Result<(), AdminPortError>;

@@ -58,7 +58,11 @@ pub(super) async fn load_wip_progress_batches(
            AND ($2 = '' OR order_id = $2)
            AND ($7 OR (($3 = '' AND wip_status <> 'processed') OR ($3 <> '' AND wip_status = $3)))
            AND ($4 = '' OR current_location = $4)
-           AND ($5 = '' OR lower(regexp_replace(trim(next_apparatus), '\\s+-\\s+[A-Za-z0-9_-]{1,16}$', '')) = $5)
+           AND (
+             $5 = ''
+             OR lower(regexp_replace(trim(next_apparatus), '\\s+-\\s+[A-Za-z0-9_-]{1,16}$', '')) = $5
+             OR $5 LIKE lower(regexp_replace(trim(next_apparatus), '\\s+-\\s+[A-Za-z0-9_-]{1,16}$', '')) || ' %'
+           )
          ORDER BY updated_at DESC, created_at DESC, batch_id DESC
          LIMIT $6",
     )
@@ -79,9 +83,14 @@ pub(super) async fn load_wip_progress_batches(
     Ok(batches
         .into_iter()
         .filter(|batch| {
-            apparatus.is_empty()
+            (apparatus.is_empty()
                 || queue_state::apparatus_titles_match(&batch.current_apparatus, apparatus)
-                || queue_state::apparatus_titles_match(&batch.apparatus, apparatus)
+                || queue_state::apparatus_titles_match(&batch.apparatus, apparatus))
+                && (next_apparatus.trim().is_empty()
+                    || queue_state::next_stage_title_matches_apparatus(
+                        &batch.next_apparatus,
+                        &next_apparatus,
+                    ))
         })
         .collect())
 }

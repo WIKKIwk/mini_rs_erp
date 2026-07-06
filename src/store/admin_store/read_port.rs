@@ -58,6 +58,35 @@ impl AdminReadPort for JsonAdminStore {
             .ok_or(AdminPortError::NotFound)
     }
 
+    async fn material_taminotchilar_page(
+        &self,
+        query: &str,
+        limit: usize,
+        offset: usize,
+    ) -> Result<Vec<AdminDirectoryEntry>, AdminPortError> {
+        let data = self.data.lock().await;
+        Ok(paginate(
+            data.material_taminotchilar
+                .values()
+                .filter(|entry| entry_matches(entry, query))
+                .map(AdminDirectoryEntry::from)
+                .collect(),
+            limit,
+            offset,
+        ))
+    }
+
+    async fn material_taminotchi_by_ref(
+        &self,
+        ref_: &str,
+    ) -> Result<AdminDirectoryEntry, AdminPortError> {
+        let data = self.data.lock().await;
+        data.material_taminotchilar
+            .get(ref_.trim())
+            .map(AdminDirectoryEntry::from)
+            .ok_or(AdminPortError::NotFound)
+    }
+
     async fn items_page(
         &self,
         query: &str,

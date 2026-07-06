@@ -85,8 +85,21 @@ impl AuthService {
             });
         }
 
-        self.login_customer_party(&normalized_phone, code, PrincipalRole::MaterialTaminotchi)
+        match self
+            .login_material_taminotchi_party(&normalized_phone, code)
             .await
+        {
+            Ok(principal) => Ok(principal),
+            Err(AuthError::InvalidCredentials) if code.trim().starts_with("60") => {
+                self.login_customer_party(
+                    &normalized_phone,
+                    code,
+                    PrincipalRole::MaterialTaminotchi,
+                )
+                .await
+            }
+            Err(error) => Err(error),
+        }
     }
 
     fn infer_role(&self, code: &str) -> Result<PrincipalRole, AuthError> {
@@ -100,7 +113,7 @@ impl AuthService {
             Ok(PrincipalRole::Aparatchi)
         } else if trimmed.starts_with("50") {
             Ok(PrincipalRole::Qolipchi)
-        } else if trimmed.starts_with("60") {
+        } else if trimmed.starts_with("70") || trimmed.starts_with("60") {
             Ok(PrincipalRole::MaterialTaminotchi)
         } else if trimmed.starts_with("30") {
             Ok(PrincipalRole::Customer)

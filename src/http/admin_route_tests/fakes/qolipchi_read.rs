@@ -35,6 +35,24 @@ impl AdminReadPort for QolipchiCustomerLookupReadPort {
         FakeAdminReadPort.customer_by_ref(ref_).await
     }
 
+    async fn material_taminotchilar_page(
+        &self,
+        query: &str,
+        limit: usize,
+        offset: usize,
+    ) -> Result<Vec<AdminDirectoryEntry>, AdminPortError> {
+        FakeAdminReadPort
+            .material_taminotchilar_page(query, limit, offset)
+            .await
+    }
+
+    async fn material_taminotchi_by_ref(
+        &self,
+        ref_: &str,
+    ) -> Result<AdminDirectoryEntry, AdminPortError> {
+        FakeAdminReadPort.material_taminotchi_by_ref(ref_).await
+    }
+
     async fn items_page(
         &self,
         query: &str,

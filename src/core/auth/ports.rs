@@ -17,6 +17,13 @@ pub struct CustomerRecord {
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct MaterialTaminotchiRecord {
+    pub id: String,
+    pub name: String,
+    pub phone: String,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct WorkerRecord {
     pub id: String,
     pub name: String,
@@ -46,6 +53,15 @@ pub trait CustomerLookup: Send + Sync {
         query: &str,
         limit: usize,
     ) -> Result<Vec<CustomerRecord>, AuthPortError>;
+}
+
+#[async_trait]
+pub trait MaterialTaminotchiLookup: Send + Sync {
+    async fn search_material_taminotchilar(
+        &self,
+        query: &str,
+        limit: usize,
+    ) -> Result<Vec<MaterialTaminotchiRecord>, AuthPortError>;
 }
 
 #[async_trait]

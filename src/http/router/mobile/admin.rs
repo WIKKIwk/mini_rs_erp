@@ -184,6 +184,22 @@ pub(super) fn routes() -> Router<AppState> {
             any(admin::supplier_restore),
         )
         .route("/v1/mobile/admin/customers", any(admin::customers))
+        .route(
+            "/v1/mobile/admin/material-taminotchilar",
+            any(admin::material_taminotchilar),
+        )
+        .route(
+            "/v1/mobile/admin/material-taminotchilar/detail",
+            any(admin::material_taminotchi_detail),
+        )
+        .route(
+            "/v1/mobile/admin/material-taminotchilar/phone",
+            any(admin::material_taminotchi_phone),
+        )
+        .route(
+            "/v1/mobile/admin/material-taminotchilar/code/regenerate",
+            any(admin::material_taminotchi_code_regenerate),
+        )
         .route("/v1/mobile/admin/customers/list", any(admin::customer_list))
         .route(
             "/v1/mobile/admin/customers/detail",

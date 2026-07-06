@@ -1,6 +1,7 @@
 mod customer_login;
 mod helpers;
 mod login;
+mod material_taminotchi_login;
 mod runtime;
 mod supplier_login;
 mod worker_login;
@@ -10,7 +11,7 @@ use std::sync::RwLock;
 
 use crate::config::AppConfig;
 use crate::core::auth::ports::{
-    AdminAccessStateLookup, CustomerLookup, SupplierLookup, WorkerLookup,
+    AdminAccessStateLookup, CustomerLookup, MaterialTaminotchiLookup, SupplierLookup, WorkerLookup,
 };
 
 pub use self::helpers::normalize_phone;
@@ -24,6 +25,7 @@ pub struct AuthService {
     admin_code: String,
     supplier_lookup: Option<Arc<dyn SupplierLookup>>,
     customer_lookup: Option<Arc<dyn CustomerLookup>>,
+    material_taminotchi_lookup: Option<Arc<dyn MaterialTaminotchiLookup>>,
     worker_lookup: Option<Arc<dyn WorkerLookup>>,
     admin_state_lookup: Option<Arc<dyn AdminAccessStateLookup>>,
 }
@@ -76,6 +78,7 @@ impl AuthService {
             admin_code: config.admin_code.trim().to_string(),
             supplier_lookup: None,
             customer_lookup: None,
+            material_taminotchi_lookup: None,
             worker_lookup: None,
             admin_state_lookup: None,
         }
@@ -107,6 +110,16 @@ impl AuthService {
         admin_state_lookup: Arc<dyn AdminAccessStateLookup>,
     ) -> Self {
         self.customer_lookup = Some(customer_lookup);
+        self.admin_state_lookup = Some(admin_state_lookup);
+        self
+    }
+
+    pub fn with_material_taminotchi_dependencies(
+        mut self,
+        material_taminotchi_lookup: Arc<dyn MaterialTaminotchiLookup>,
+        admin_state_lookup: Arc<dyn AdminAccessStateLookup>,
+    ) -> Self {
+        self.material_taminotchi_lookup = Some(material_taminotchi_lookup);
         self.admin_state_lookup = Some(admin_state_lookup);
         self
     }

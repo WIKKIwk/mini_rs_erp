@@ -751,6 +751,130 @@ async fn wip_listing_backfills_missing_current_and_next_apparatus_from_map() {
 }
 
 #[tokio::test]
+async fn unassigned_alternative_stage_is_claimed_by_first_started_candidate() {
+    let service = ProductionMapService::new(std::sync::Arc::new(MemoryProductionMapStore::new()));
+    let actor = QueueActionActor {
+        role: "aparatchi".to_string(),
+        ref_: "worker-alt-claim".to_string(),
+        display_name: "Worker Alt Claim".to_string(),
+    };
+    let first = "7 ta rangli bosma aparat";
+    let second = "Laminatsiya 1";
+    let third = "Laminatsiya 2";
+    let order_id = "zakaz-alt-claim";
+    service
+        .upsert_map(unassigned_alternative_next_stage_map(
+            order_id, first, second, third,
+        ))
+        .await
+        .expect("map");
+    let visible = service
+        .visible_order_ids_by_apparatus()
+        .await
+        .expect("visible orders");
+    assert_eq!(visible.get(second), Some(&vec![order_id.to_string()]));
+    assert_eq!(visible.get(third), Some(&vec![order_id.to_string()]));
+
+    let first_batch = pause_first_stage_batch(&service, order_id, first, &actor, 21.0)
+        .await
+        .expect("first batch");
+    assert_eq!(first_batch.next_apparatus, "Laminatsiya");
+    let third_wips = service
+        .wip_progress_batches(WipProgressBatchQuery::new(
+            first,
+            third,
+            "",
+            Some(OrderProgressBatchWipStatus::Waiting),
+            false,
+            order_id,
+            10,
+        ))
+        .await
+        .expect("third wips");
+    assert_eq!(third_wips.len(), 1);
+    assert_eq!(third_wips[0].batch_id, first_batch.batch_id);
+
+    service
+        .apply_apparatus_queue_action_with_progress(
+            third,
+            order_id,
+            queue_state::ApparatusQueueAction::Start,
+            &[third.to_string()],
+            actor.clone(),
+            QueueProgressInput {
+                qr_payload: first_batch.qr_payload.clone(),
+                ..QueueProgressInput::default()
+            },
+        )
+        .await
+        .expect("third start");
+
+    let saved = service
+        .map(order_id)
+        .await
+        .expect("saved map")
+        .expect("map exists");
+    let assigned = saved
+        .map
+        .nodes
+        .iter()
+        .filter(|node| node.alternative_group_id == "alt_laminatsiya")
+        .map(|node| node.alternative_assigned_title.as_str())
+        .collect::<Vec<_>>();
+    assert_eq!(assigned, vec![third, third]);
+    let visible = service
+        .visible_order_ids_by_apparatus()
+        .await
+        .expect("visible after claim");
+    assert_ne!(visible.get(second), Some(&vec![order_id.to_string()]));
+    assert_eq!(visible.get(third), Some(&vec![order_id.to_string()]));
+}
+
+#[tokio::test]
+async fn assigned_alternative_stage_rejects_unselected_candidate_even_with_stale_sequence() {
+    let service = ProductionMapService::new(std::sync::Arc::new(MemoryProductionMapStore::new()));
+    let actor = QueueActionActor {
+        role: "aparatchi".to_string(),
+        ref_: "worker-alt-assigned".to_string(),
+        display_name: "Worker Alt Assigned".to_string(),
+    };
+    let first = "7 ta rangli bosma aparat";
+    let selected = "Laminatsiya 1";
+    let unselected = "Laminatsiya 2";
+    let order_id = "zakaz-alt-assigned";
+    let mut map = unassigned_alternative_next_stage_map(order_id, first, selected, unselected);
+    for node in &mut map.nodes {
+        if node.alternative_group_id == "alt_laminatsiya" {
+            node.alternative_assigned_title = selected.to_string();
+        }
+    }
+    service.upsert_map(map).await.expect("map");
+    service
+        .set_apparatus_sequence(unselected, vec![order_id.to_string()])
+        .await
+        .expect("stale sequence");
+    let first_batch = pause_first_stage_batch(&service, order_id, first, &actor, 21.0)
+        .await
+        .expect("first batch");
+
+    let result = service
+        .apply_apparatus_queue_action_with_progress(
+            unselected,
+            order_id,
+            queue_state::ApparatusQueueAction::Start,
+            &[unselected.to_string()],
+            actor,
+            QueueProgressInput {
+                qr_payload: first_batch.qr_payload,
+                ..QueueProgressInput::default()
+            },
+        )
+        .await;
+
+    assert_eq!(result, Err(ProductionMapError::QueueActionNotAllowed));
+}
+
+#[tokio::test]
 async fn downstream_output_processes_input_batch_and_links_new_wip_batch() {
     let service = ProductionMapService::new(std::sync::Arc::new(MemoryProductionMapStore::new()));
     let actor = QueueActionActor {
@@ -1431,6 +1555,88 @@ fn two_stage_map(id: &str, first: &str, second: &str) -> ProductionMapDefinition
         },
         ProductionMapEdge {
             from: "second".to_string(),
+            to: "end".to_string(),
+            branch: String::new(),
+        },
+    ];
+    map
+}
+
+fn unassigned_alternative_next_stage_map(
+    id: &str,
+    first: &str,
+    second: &str,
+    third: &str,
+) -> ProductionMapDefinition {
+    let mut map = apparatus_stage_map(id, first);
+    map.nodes.insert(
+        2,
+        ProductionMapNode {
+            id: "second".to_string(),
+            kind: ProductionMapNodeKind::Apparatus,
+            title: second.to_string(),
+            formula: None,
+            role_code: String::new(),
+            item_code: String::new(),
+            qty_formula: String::new(),
+            from_location: String::new(),
+            to_location: String::new(),
+            alternative_group_id: "alt_laminatsiya".to_string(),
+            alternative_group_label: "Laminatsiya".to_string(),
+            alternative_assigned_title: String::new(),
+            rezka_kadr_count: None,
+            rezka_label_length: None,
+            x: 0.0,
+            y: 264.0,
+        },
+    );
+    map.nodes.insert(
+        3,
+        ProductionMapNode {
+            id: "third".to_string(),
+            kind: ProductionMapNodeKind::Apparatus,
+            title: third.to_string(),
+            formula: None,
+            role_code: String::new(),
+            item_code: String::new(),
+            qty_formula: String::new(),
+            from_location: String::new(),
+            to_location: String::new(),
+            alternative_group_id: "alt_laminatsiya".to_string(),
+            alternative_group_label: "Laminatsiya".to_string(),
+            alternative_assigned_title: String::new(),
+            rezka_kadr_count: None,
+            rezka_label_length: None,
+            x: 180.0,
+            y: 264.0,
+        },
+    );
+    if let Some(end) = map.nodes.iter_mut().find(|node| node.id == "end") {
+        end.y = 396.0;
+    }
+    map.edges = vec![
+        ProductionMapEdge {
+            from: "start".to_string(),
+            to: "apparatus".to_string(),
+            branch: String::new(),
+        },
+        ProductionMapEdge {
+            from: "apparatus".to_string(),
+            to: "second".to_string(),
+            branch: String::new(),
+        },
+        ProductionMapEdge {
+            from: "apparatus".to_string(),
+            to: "third".to_string(),
+            branch: String::new(),
+        },
+        ProductionMapEdge {
+            from: "second".to_string(),
+            to: "end".to_string(),
+            branch: String::new(),
+        },
+        ProductionMapEdge {
+            from: "third".to_string(),
             to: "end".to_string(),
             branch: String::new(),
         },

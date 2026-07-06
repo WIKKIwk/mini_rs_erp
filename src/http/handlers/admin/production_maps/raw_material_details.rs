@@ -66,7 +66,11 @@ async fn require_material_item_group_scope(
         return Ok(());
     }
     let item_group = item_group.trim();
-    let assigned_groups = state.admin.principal_assigned_item_groups(principal).await;
+    let assigned_groups = state
+        .admin
+        .principal_assigned_item_group_scope(principal)
+        .await
+        .map_err(|_| server_error("item group scope fetch failed"))?;
     if !item_group.is_empty()
         && assigned_groups
             .iter()

@@ -226,3 +226,52 @@ async fn material_taminotchi_gscale_items_are_limited_to_assigned_item_groups() 
     assert_eq!(items[0]["code"], "INK-BLACK");
     assert_eq!(items[0]["item_group"], "Kraska");
 }
+
+#[tokio::test]
+async fn material_taminotchi_gscale_items_include_child_groups_from_assigned_parent() {
+    let mut state = test_state();
+    state.admin =
+        AdminService::new(&state.config).with_read_port(Arc::new(FakeAdminCatalogReadPort));
+    state
+        .admin
+        .upsert_role_assignment(RoleAssignmentUpsert {
+            principal_role: PrincipalRole::MaterialTaminotchi,
+            principal_ref: "material-rulon-scope".to_string(),
+            role_id: "material_taminotchi".to_string(),
+            assigned_apparatus: Vec::new(),
+            assigned_item_groups: vec!["Rulon".to_string()],
+        })
+        .await
+        .expect("material scope");
+    let material_token = state
+        .sessions
+        .create(Principal {
+            role: PrincipalRole::MaterialTaminotchi,
+            display_name: "Materialchi".to_string(),
+            legal_name: "Materialchi".to_string(),
+            ref_: "material-rulon-scope".to_string(),
+            phone: "+998901006060".to_string(),
+            avatar_url: String::new(),
+        })
+        .await
+        .expect("session");
+    let router = build_router(state);
+
+    let response = router
+        .oneshot(request(
+            "GET",
+            "/v1/mobile/gscale/items?limit=20",
+            &material_token,
+            "",
+        ))
+        .await
+        .expect("response");
+    let status = response.status();
+    let body = json_body(response).await;
+
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let items = body.as_array().expect("items");
+    assert_eq!(items.len(), 1, "{body}");
+    assert_eq!(items[0]["code"], "ROLL-1000");
+    assert_eq!(items[0]["item_group"], "Rulon eni");
+}

@@ -37,6 +37,24 @@ impl AdminReadPort for QueryCaptureReadPort {
         FakeAdminReadPort.customer_by_ref(ref_).await
     }
 
+    async fn material_taminotchilar_page(
+        &self,
+        query: &str,
+        limit: usize,
+        offset: usize,
+    ) -> Result<Vec<AdminDirectoryEntry>, AdminPortError> {
+        FakeAdminReadPort
+            .material_taminotchilar_page(query, limit, offset)
+            .await
+    }
+
+    async fn material_taminotchi_by_ref(
+        &self,
+        ref_: &str,
+    ) -> Result<AdminDirectoryEntry, AdminPortError> {
+        FakeAdminReadPort.material_taminotchi_by_ref(ref_).await
+    }
+
     async fn items_page(
         &self,
         query: &str,
@@ -111,6 +129,24 @@ impl AdminReadPort for LocalPhoneDuplicateReadPort {
         FakeAdminReadPort.customer_by_ref(ref_).await
     }
 
+    async fn material_taminotchilar_page(
+        &self,
+        query: &str,
+        limit: usize,
+        offset: usize,
+    ) -> Result<Vec<AdminDirectoryEntry>, AdminPortError> {
+        FakeAdminReadPort
+            .material_taminotchilar_page(query, limit, offset)
+            .await
+    }
+
+    async fn material_taminotchi_by_ref(
+        &self,
+        ref_: &str,
+    ) -> Result<AdminDirectoryEntry, AdminPortError> {
+        FakeAdminReadPort.material_taminotchi_by_ref(ref_).await
+    }
+
     async fn items_page(
         &self,
         query: &str,
@@ -183,6 +219,35 @@ impl AdminReadPort for FakeAdminReadPort {
 
     async fn customer_by_ref(&self, ref_: &str) -> Result<AdminDirectoryEntry, AdminPortError> {
         Ok(entry(ref_, "Customer One", "+998904444444"))
+    }
+
+    async fn material_taminotchilar_page(
+        &self,
+        query: &str,
+        _limit: usize,
+        _offset: usize,
+    ) -> Result<Vec<AdminDirectoryEntry>, AdminPortError> {
+        let entries = vec![entry("MAT-NEW", "Materialchi", "+998110000070")];
+        let query = query.trim();
+        Ok(entries
+            .into_iter()
+            .filter(|entry| {
+                query.is_empty()
+                    || entry.ref_.contains(query)
+                    || entry.name.to_lowercase().contains(&query.to_lowercase())
+            })
+            .collect())
+    }
+
+    async fn material_taminotchi_by_ref(
+        &self,
+        ref_: &str,
+    ) -> Result<AdminDirectoryEntry, AdminPortError> {
+        if ref_.trim() == "MAT-NEW" {
+            Ok(entry("MAT-NEW", "Materialchi", "+998110000070"))
+        } else {
+            Err(AdminPortError::NotFound)
+        }
     }
 
     async fn items_page(
@@ -352,6 +417,34 @@ impl CustomerLookup for FakeAdminReadPort {
                     || entry.phone.to_lowercase().contains(&query)
             })
             .map(|entry| CustomerRecord {
+                id: entry.ref_,
+                name: entry.name,
+                phone: entry.phone,
+            })
+            .collect())
+    }
+}
+
+#[async_trait]
+impl MaterialTaminotchiLookup for FakeAdminReadPort {
+    async fn search_material_taminotchilar(
+        &self,
+        query: &str,
+        limit: usize,
+    ) -> Result<Vec<MaterialTaminotchiRecord>, AuthPortError> {
+        let materials = self
+            .material_taminotchilar_page("", limit.max(1), 0)
+            .await
+            .map_err(|_| AuthPortError::LookupFailed)?;
+        Ok(materials
+            .into_iter()
+            .filter(|record| {
+                query.trim().is_empty()
+                    || record.ref_.contains(query.trim())
+                    || record.name.contains(query.trim())
+                    || record.phone.contains(query.trim())
+            })
+            .map(|entry| MaterialTaminotchiRecord {
                 id: entry.ref_,
                 name: entry.name,
                 phone: entry.phone,

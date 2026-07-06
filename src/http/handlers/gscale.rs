@@ -56,26 +56,36 @@ async fn gscale_items_for_principal(
             .items_page_by_group(group, search, limit, offset)
             .await;
     }
-    let assigned_groups = state.admin.principal_assigned_item_groups(principal).await;
-    if assigned_groups.is_empty() {
+    let scoped_groups = state
+        .admin
+        .principal_assigned_item_group_scope(principal)
+        .await?;
+    if scoped_groups.is_empty() {
         return Ok(Vec::new());
     }
     let requested_group = group.trim();
-    if !requested_group.is_empty() {
-        if !assigned_groups
-            .iter()
-            .any(|group| group.trim().eq_ignore_ascii_case(requested_group))
-        {
-            return Ok(Vec::new());
-        }
-        return state
+    let groups = if requested_group.is_empty() {
+        scoped_groups
+    } else {
+        let requested_scope = state
             .admin
-            .items_page_by_group(requested_group, search, limit, offset)
-            .await;
+            .item_group_scope(vec![requested_group.to_string()])
+            .await?;
+        scoped_groups
+            .into_iter()
+            .filter(|group| {
+                requested_scope
+                    .iter()
+                    .any(|requested| requested.trim().eq_ignore_ascii_case(group.trim()))
+            })
+            .collect()
+    };
+    if groups.is_empty() {
+        return Ok(Vec::new());
     }
 
     let mut scoped_items = Vec::new();
-    for assigned_group in assigned_groups {
+    for assigned_group in groups {
         let group_items = state
             .admin
             .items_page_by_group(&assigned_group, search, limit, 0)

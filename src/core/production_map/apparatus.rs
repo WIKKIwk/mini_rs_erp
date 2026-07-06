@@ -183,3 +183,44 @@ pub(super) fn reassign_alternative_apparatus_assignment(
     }
     changed
 }
+
+pub(super) fn claim_unassigned_alternative_apparatus_assignment(
+    map: &mut ProductionMapDefinition,
+    apparatus: &str,
+) -> bool {
+    let apparatus = apparatus.trim();
+    if apparatus.is_empty() {
+        return false;
+    }
+    let candidate_groups: BTreeSet<String> = map
+        .nodes
+        .iter()
+        .filter(|node| {
+            node.kind == ProductionMapNodeKind::Apparatus
+                && !node.alternative_group_id.trim().is_empty()
+                && node.alternative_assigned_title.trim().is_empty()
+                && queue_state::apparatus_titles_match(&node.title, apparatus)
+        })
+        .map(|node| node.alternative_group_id.trim().to_string())
+        .filter(|group_id| {
+            map.nodes.iter().all(|node| {
+                node.kind != ProductionMapNodeKind::Apparatus
+                    || node.alternative_group_id.trim() != group_id
+                    || node.alternative_assigned_title.trim().is_empty()
+            })
+        })
+        .collect();
+    if candidate_groups.is_empty() {
+        return false;
+    }
+    let mut changed = false;
+    for node in &mut map.nodes {
+        if node.kind == ProductionMapNodeKind::Apparatus
+            && candidate_groups.contains(node.alternative_group_id.trim())
+        {
+            node.alternative_assigned_title = apparatus.to_string();
+            changed = true;
+        }
+    }
+    changed
+}

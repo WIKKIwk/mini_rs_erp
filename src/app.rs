@@ -159,6 +159,7 @@ fn build_auth_service(
     AuthService::new(config)
         .with_supplier_dependencies(admin_store.clone(), admin_store.clone())
         .with_customer_dependencies(admin_store.clone(), admin_store.clone())
+        .with_material_taminotchi_dependencies(admin_store.clone(), admin_store.clone())
         .with_worker_dependencies(Arc::new(workers), admin_store)
 }
 

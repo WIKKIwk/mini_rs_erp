@@ -1,4 +1,7 @@
+use std::collections::{BTreeSet, VecDeque};
+
 use super::*;
+use crate::core::admin::service::helpers::dedupe_strings;
 
 impl AdminService {
     pub fn with_role_store(mut self, role_store: Arc<dyn RoleDefinitionStorePort>) -> Self {
@@ -58,6 +61,8 @@ impl AdminService {
         let roles = self.all_role_definitions().await?;
         let assignment = normalize_role_assignment(input, &roles)
             .map_err(|error| AdminPortError::InvalidInput(error.to_string()))?;
+        self.ensure_system_role_assignment_uses_native_principal(&assignment)
+            .await?;
         self.role_store
             .put_role_assignment(assignment.clone())
             .await
@@ -114,6 +119,28 @@ impl AdminService {
         }
     }
 
+    pub async fn principal_assigned_item_group_scope(
+        &self,
+        principal: &Principal,
+    ) -> Result<Vec<String>, AdminPortError> {
+        let Some(assignment) = self.principal_assignment(principal).await? else {
+            return Ok(Vec::new());
+        };
+        self.item_group_scope(assignment.assigned_item_groups).await
+    }
+
+    pub async fn item_group_scope(
+        &self,
+        groups: Vec<String>,
+    ) -> Result<Vec<String>, AdminPortError> {
+        let groups = dedupe_strings(groups);
+        if groups.is_empty() {
+            return Ok(Vec::new());
+        }
+        let tree = self.item_group_tree().await?;
+        Ok(expand_item_groups_with_descendants(groups, &tree))
+    }
+
     async fn principal_assigned_role(
         &self,
         principal: &Principal,
@@ -148,5 +175,72 @@ impl AdminService {
             }));
         }
         Ok(None)
+    }
+
+    async fn ensure_system_role_assignment_uses_native_principal(
+        &self,
+        assignment: &RoleAssignment,
+    ) -> Result<(), AdminPortError> {
+        if assignment.role_id != "material_taminotchi"
+            || assignment.principal_role != PrincipalRole::MaterialTaminotchi
+        {
+            return Ok(());
+        }
+        let ref_key = assignment.principal_ref.trim().to_ascii_uppercase();
+        if ref_key.starts_with("CUST") || ref_key.starts_with("CUS-") || ref_key.starts_with("SUP")
+        {
+            return Err(AdminPortError::InvalidInput(
+                "material_taminotchi role cannot be assigned to another system directory ref"
+                    .to_string(),
+            ));
+        }
+        Ok(())
+    }
+}
+
+fn expand_item_groups_with_descendants(
+    groups: Vec<String>,
+    tree: &[crate::core::admin::models::AdminItemGroup],
+) -> Vec<String> {
+    let mut scope = Vec::new();
+    let mut seen = BTreeSet::new();
+    let mut queue = VecDeque::new();
+    for group in groups {
+        push_item_group_scope(&group, &mut scope, &mut seen, &mut queue);
+    }
+    while let Some(parent) = queue.pop_front() {
+        for group in tree {
+            if !group
+                .parent_item_group
+                .trim()
+                .eq_ignore_ascii_case(parent.trim())
+            {
+                continue;
+            }
+            let name = group.item_group_name.trim();
+            let name = if name.is_empty() {
+                group.name.trim()
+            } else {
+                name
+            };
+            push_item_group_scope(name, &mut scope, &mut seen, &mut queue);
+        }
+    }
+    scope
+}
+
+fn push_item_group_scope(
+    group: &str,
+    scope: &mut Vec<String>,
+    seen: &mut BTreeSet<String>,
+    queue: &mut VecDeque<String>,
+) {
+    let group = group.trim();
+    if group.is_empty() {
+        return;
+    }
+    if seen.insert(group.to_ascii_lowercase()) {
+        scope.push(group.to_string());
+        queue.push_back(group.to_string());
     }
 }

@@ -62,6 +62,26 @@ impl CustomerLookup for JsonAdminStore {
 }
 
 #[async_trait]
+impl MaterialTaminotchiLookup for JsonAdminStore {
+    async fn search_material_taminotchilar(
+        &self,
+        query: &str,
+        limit: usize,
+    ) -> Result<Vec<MaterialTaminotchiRecord>, AuthPortError> {
+        let data = self.data.lock().await;
+        Ok(paginate(
+            data.material_taminotchilar
+                .values()
+                .filter(|entry| entry_matches(entry, query))
+                .map(MaterialTaminotchiRecord::from)
+                .collect(),
+            limit,
+            0,
+        ))
+    }
+}
+
+#[async_trait]
 impl AdminAccessStateLookup for JsonAdminStore {
     async fn list_states(&self) -> Result<BTreeMap<String, AdminAccessState>, AuthPortError> {
         let data = self.data.lock().await;
