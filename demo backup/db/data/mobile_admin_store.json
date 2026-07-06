@@ -1,0 +1,38 @@
+{
+  "next_supplier_id": 1,
+  "next_customer_id": 1,
+  "next_material_taminotchi_id": 2,
+  "suppliers": {},
+  "customers": {},
+  "material_taminotchilar": {
+    "MAT-001": {
+      "ref": "MAT-001",
+      "name": "onasini ami",
+      "phone": "+998998887766"
+    }
+  },
+  "items": {},
+  "item_groups": {
+    "All Item Groups": {
+      "name": "All Item Groups",
+      "parent_item_group": "",
+      "is_group": true
+    }
+  },
+  "supplier_items": {},
+  "customer_items": {},
+  "states": {
+    "MAT-001": {
+      "custom_code": "704473478206",
+      "blocked": false,
+      "removed": false,
+      "assigned_item_codes": [],
+      "cooldown_until_unix": null,
+      "regen_window_started_at_unix": null,
+      "regen_window_count": 0,
+      "pending_persist_code": "",
+      "pending_persist_at_unix": null,
+      "assignments_configured": false
+    }
+  }
+}

@@ -1,0 +1,13 @@
+{
+  "roles": {},
+  "assignments": {
+    "material_taminotchi:MAT-001": {
+      "principal_role": "material_taminotchi",
+      "principal_ref": "MAT-001",
+      "role_id": "material_taminotchi",
+      "assigned_item_groups": [
+        "rulon"
+      ]
+    }
+  }
+}
