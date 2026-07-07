@@ -80,6 +80,12 @@ impl AdminService {
                 "item group cannot be its own parent".to_string(),
             ));
         }
+        let groups = self.item_group_tree().await?;
+        if item_group_parent_move_would_cycle(name, parent, &groups) {
+            return Err(AdminPortError::InvalidInput(
+                "item group parent cycle detected".to_string(),
+            ));
+        }
         self.write_port()?
             .move_item_group_parent(name, parent)
             .await
@@ -129,4 +135,30 @@ impl AdminService {
 
 fn is_finished_goods_group(item_group: &str) -> bool {
     item_group.trim().eq_ignore_ascii_case("tayyor mahsulot")
+}
+
+fn item_group_parent_move_would_cycle(
+    name: &str,
+    parent: &str,
+    groups: &[AdminItemGroup],
+) -> bool {
+    let name = name.trim();
+    let mut current = parent.trim();
+    let mut seen = std::collections::BTreeSet::new();
+    while !current.is_empty() && seen.insert(current.to_ascii_lowercase()) {
+        if current.eq_ignore_ascii_case(name) {
+            return true;
+        }
+        let Some(group) = groups.iter().find(|group| {
+            group
+                .item_group_name
+                .trim()
+                .eq_ignore_ascii_case(current)
+                || group.name.trim().eq_ignore_ascii_case(current)
+        }) else {
+            return false;
+        };
+        current = group.parent_item_group.trim();
+    }
+    false
 }

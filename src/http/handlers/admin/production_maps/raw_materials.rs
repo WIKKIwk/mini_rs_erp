@@ -250,7 +250,7 @@ pub async fn raw_material_stock(
     method: Method,
     headers: HeaderMap,
 ) -> Result<Response, AdminError> {
-    let principal = authorize_any_capability(
+    authorize_any_capability(
         &state,
         &headers,
         &[
@@ -260,7 +260,6 @@ pub async fn raw_material_stock(
         ],
     )
     .await?;
-    require_capability(&state, &principal, Capability::CatalogItemRead).await?;
     if method != Method::GET {
         return Err(method_not_allowed());
     }

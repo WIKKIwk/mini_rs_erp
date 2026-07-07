@@ -400,3 +400,37 @@ async fn admin_raw_material_stock_lists_new_stock_model() {
     assert_eq!(body[0]["qty"], 12.0);
     assert_eq!(body[0]["status"], "available");
 }
+
+#[tokio::test]
+async fn material_taminotchi_can_list_raw_material_stock_for_assignment() {
+    let mut state = test_state();
+    state.gscale =
+        GscaleService::new().with_receipt_store(Arc::new(RawMaterialStockLookup::default()));
+    state
+        .admin
+        .upsert_role_assignment(crate::core::authz::RoleAssignmentUpsert {
+            principal_role: PrincipalRole::MaterialTaminotchi,
+            principal_ref: "material-stock".to_string(),
+            role_id: "material_taminotchi".to_string(),
+            assigned_apparatus: Vec::new(),
+            assigned_item_groups: vec!["Kraska".to_string()],
+        })
+        .await
+        .expect("material stock role");
+    let token = session_for(&state, PrincipalRole::MaterialTaminotchi, "material-stock").await;
+
+    let response = build_router(state)
+        .oneshot(request(
+            "GET",
+            "/v1/mobile/admin/raw-material-stock?warehouse=Kalidor",
+            &token,
+        ))
+        .await
+        .expect("material raw stock list");
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = json_body(response).await;
+    assert_eq!(body[0]["warehouse"], "Kalidor");
+    assert_eq!(body[0]["item_code"], "INK-BLACK");
+    assert_eq!(body[0]["barcode"], "30AA");
+}

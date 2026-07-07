@@ -113,11 +113,93 @@ fn env_u64(get_env: &impl Fn(&str) -> Option<String>, key: &str) -> Option<u64> 
 }
 
 fn split_sql_statements(sql: &str) -> Vec<String> {
-    sql.split(';')
-        .map(str::trim)
-        .filter(|statement| !statement.is_empty())
-        .map(ToString::to_string)
-        .collect()
+    let mut statements = Vec::new();
+    let mut start = 0;
+    let mut index = 0;
+    let mut in_single_quote = false;
+    let mut dollar_quote: Option<String> = None;
+
+    while index < sql.len() {
+        if let Some(tag) = dollar_quote.as_deref() {
+            if sql[index..].starts_with(tag) {
+                index += tag.len();
+                dollar_quote = None;
+                continue;
+            }
+            index += next_char_len(sql, index);
+            continue;
+        }
+
+        let ch = sql[index..].chars().next().expect("char");
+        if in_single_quote {
+            if ch == '\'' {
+                let next = index + ch.len_utf8();
+                if sql[next..].starts_with('\'') {
+                    index = next + 1;
+                    continue;
+                }
+                in_single_quote = false;
+            }
+            index += ch.len_utf8();
+            continue;
+        }
+
+        if ch == '\'' {
+            in_single_quote = true;
+            index += ch.len_utf8();
+            continue;
+        }
+
+        if ch == '$'
+            && let Some(tag) = dollar_quote_tag(&sql[index..])
+        {
+            index += tag.len();
+            dollar_quote = Some(tag);
+            continue;
+        }
+
+        if ch == ';' {
+            let statement = sql[start..index].trim();
+            if !statement.is_empty() {
+                statements.push(statement.to_string());
+            }
+            start = index + ch.len_utf8();
+        }
+        index += ch.len_utf8();
+    }
+
+    let statement = sql[start..].trim();
+    if !statement.is_empty() {
+        statements.push(statement.to_string());
+    }
+    statements
+}
+
+fn next_char_len(sql: &str, index: usize) -> usize {
+    sql[index..]
+        .chars()
+        .next()
+        .map(char::len_utf8)
+        .unwrap_or(1)
+}
+
+fn dollar_quote_tag(input: &str) -> Option<String> {
+    let bytes = input.as_bytes();
+    if bytes.first() != Some(&b'$') {
+        return None;
+    }
+    let mut index = 1;
+    while index < bytes.len() {
+        let byte = bytes[index];
+        if byte == b'$' {
+            return Some(input[..=index].to_string());
+        }
+        if !byte.is_ascii_alphanumeric() && byte != b'_' {
+            return None;
+        }
+        index += 1;
+    }
+    None
 }
 
 #[cfg(test)]
@@ -223,7 +305,18 @@ mod tests {
                 .iter()
                 .any(|statement| statement.starts_with("CREATE TABLE IF NOT EXISTS mini_orders"))
         );
-        assert!(statements.iter().all(|statement| !statement.contains(';')));
+        assert!(statements.iter().all(|statement| !statement.ends_with(';')));
+    }
+
+    #[test]
+    fn postgres_migration_runner_keeps_dollar_quoted_functions_together() {
+        let statements = split_sql_statements(
+            "SELECT 1;\nCREATE FUNCTION demo() RETURNS void LANGUAGE plpgsql AS $$\nBEGIN\n  PERFORM 1;\nEND;\n$$;\nSELECT 2;",
+        );
+
+        assert_eq!(statements.len(), 3);
+        assert!(statements[1].contains("PERFORM 1;"));
+        assert!(statements[1].contains("END;"));
     }
 
     #[test]

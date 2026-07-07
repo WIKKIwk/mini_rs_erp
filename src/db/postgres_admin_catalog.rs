@@ -188,7 +188,7 @@ impl AdminReadPort for PostgresAdminCatalogStore {
 
     async fn item_group_tree(&self) -> Result<Vec<AdminItemGroup>, AdminPortError> {
         sqlx::query_as::<_, ItemGroupRow>(
-            "SELECT name, parent_item_group, is_group
+            "SELECT name, COALESCE(parent_item_group, '') AS parent_item_group, is_group
              FROM mini_item_groups
              ORDER BY lower(name)",
         )

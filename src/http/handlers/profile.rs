@@ -4,6 +4,7 @@ use axum::extract::{Query, State};
 use axum::http::{HeaderMap, HeaderValue, Method, StatusCode, header};
 use axum::response::{IntoResponse, Response};
 use serde::Deserialize;
+use serde_json::{Value, json};
 
 use crate::app::AppState;
 use crate::core::auth::models::Principal;
@@ -21,7 +22,7 @@ pub async fn profile(
     headers: HeaderMap,
     method: Method,
     body: Bytes,
-) -> Result<Json<Principal>, (StatusCode, Json<ErrorResponse>)> {
+) -> Result<Json<Value>, (StatusCode, Json<ErrorResponse>)> {
     let token = bearer_token(&headers).ok_or_else(unauthorized)?;
     let principal = state
         .sessions
@@ -33,7 +34,7 @@ pub async fn profile(
         Method::GET => {
             let current = state.profiles.refresh(principal).await;
             state.sessions.update(&token, current.clone()).await;
-            Ok(Json(with_avatar_proxy(&headers, current, &token)))
+            Ok(Json(profile_payload(&state, &headers, current, &token).await))
         }
         Method::PUT => {
             let request: ProfileUpdateRequest = serde_json::from_slice(&body).map_err(|_| {
@@ -57,7 +58,7 @@ pub async fn profile(
                     )
                 })?;
             state.sessions.update(&token, current.clone()).await;
-            Ok(Json(with_avatar_proxy(&headers, current, &token)))
+            Ok(Json(profile_payload(&state, &headers, current, &token).await))
         }
         _ => Err((
             StatusCode::METHOD_NOT_ALLOWED,
@@ -73,7 +74,7 @@ pub async fn avatar_upload(
     headers: HeaderMap,
     method: Method,
     body: Bytes,
-) -> Result<Json<Principal>, (StatusCode, Json<ErrorResponse>)> {
+) -> Result<Json<Value>, (StatusCode, Json<ErrorResponse>)> {
     if method != Method::POST {
         return Err((
             StatusCode::METHOD_NOT_ALLOWED,
@@ -136,7 +137,34 @@ pub async fn avatar_upload(
             )
         })?;
     state.sessions.update(&token, current.clone()).await;
-    Ok(Json(with_avatar_proxy(&headers, current, &token)))
+    Ok(Json(profile_payload(&state, &headers, current, &token).await))
+}
+
+async fn profile_payload(
+    state: &AppState,
+    headers: &HeaderMap,
+    principal: Principal,
+    token: &str,
+) -> Value {
+    let capabilities = state.admin.principal_capability_codes(&principal).await;
+    let assigned_apparatus = state.admin.principal_assigned_apparatus(&principal).await;
+    let assigned_item_groups = state
+        .admin
+        .principal_assigned_item_groups(&principal)
+        .await;
+    let mut value =
+        serde_json::to_value(with_avatar_proxy(headers, principal, token)).unwrap_or_else(
+            |_| json!({}),
+        );
+    if let Value::Object(object) = &mut value {
+        object.insert("capabilities".to_string(), json!(capabilities));
+        object.insert("assigned_apparatus".to_string(), json!(assigned_apparatus));
+        object.insert(
+            "assigned_item_groups".to_string(),
+            json!(assigned_item_groups),
+        );
+    }
+    value
 }
 
 pub async fn avatar_view(

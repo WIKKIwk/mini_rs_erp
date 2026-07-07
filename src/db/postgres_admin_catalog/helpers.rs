@@ -71,6 +71,11 @@ impl PostgresAdminCatalogStore {
             ));
         }
         let parent = group.parent_item_group.trim();
+        let parent_group = if name == "All Item Groups" || parent.is_empty() {
+            None
+        } else {
+            Some(parent)
+        };
         let payload = serde_json::to_value(group).map_err(|_| AdminPortError::LookupFailed)?;
         sqlx::query(
             "INSERT INTO mini_item_groups
@@ -83,7 +88,7 @@ impl PostgresAdminCatalogStore {
                updated_at = excluded.updated_at",
         )
         .bind(name)
-        .bind(parent)
+        .bind(parent_group)
         .bind(group.is_group)
         .bind(payload)
         .execute(&self.pool)
@@ -93,7 +98,7 @@ impl PostgresAdminCatalogStore {
         Ok(AdminItemGroup {
             name: name.to_string(),
             item_group_name: name.to_string(),
-            parent_item_group: parent.to_string(),
+            parent_item_group: parent_group.unwrap_or("").to_string(),
             is_group: group.is_group,
         })
     }
@@ -101,6 +106,24 @@ impl PostgresAdminCatalogStore {
     pub(super) async fn ensure_item_group(&self, name: &str) -> Result<(), AdminPortError> {
         let name = name.trim();
         if name.is_empty() {
+            return Ok(());
+        }
+        sqlx::query(
+            "INSERT INTO mini_item_groups
+                (name, parent_item_group, is_group, payload_json, updated_at)
+             VALUES ('All Item Groups', NULL, true, $1, now())
+             ON CONFLICT (name) DO NOTHING",
+        )
+        .bind(serde_json::json!({
+            "name": "All Item Groups",
+            "item_group_name": "All Item Groups",
+            "parent_item_group": null,
+            "is_group": true
+        }))
+        .execute(&self.pool)
+        .await
+        .map_err(|_| AdminPortError::LookupFailed)?;
+        if name == "All Item Groups" {
             return Ok(());
         }
         sqlx::query(

@@ -84,12 +84,19 @@ CREATE TABLE IF NOT EXISTS mini_push_tokens (
 
 CREATE TABLE IF NOT EXISTS mini_item_groups (
     name TEXT PRIMARY KEY,
-    parent_item_group TEXT NOT NULL DEFAULT '',
+    parent_item_group TEXT REFERENCES mini_item_groups(name) ON UPDATE CASCADE ON DELETE RESTRICT,
     is_group BOOLEAN NOT NULL DEFAULT true,
     payload_json JSONB NOT NULL DEFAULT '{}'::jsonb,
     created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-    CONSTRAINT mini_item_groups_name_not_blank CHECK (btrim(name) <> '')
+    CONSTRAINT mini_item_groups_name_not_blank CHECK (btrim(name) <> ''),
+    CONSTRAINT mini_item_groups_parent_not_blank CHECK (
+        parent_item_group IS NULL OR btrim(parent_item_group) <> ''
+    ),
+    CONSTRAINT mini_item_groups_root_parent CHECK (
+        (btrim(name) = 'All Item Groups' AND parent_item_group IS NULL)
+        OR (btrim(name) <> 'All Item Groups' AND parent_item_group IS NOT NULL)
+    )
 );
 
 CREATE TABLE IF NOT EXISTS mini_items (
@@ -97,7 +104,7 @@ CREATE TABLE IF NOT EXISTS mini_items (
     name TEXT NOT NULL,
     uom TEXT NOT NULL DEFAULT 'Kg',
     warehouse TEXT NOT NULL DEFAULT '',
-    item_group TEXT NOT NULL,
+    item_group TEXT NOT NULL REFERENCES mini_item_groups(name) ON UPDATE CASCADE ON DELETE RESTRICT,
     payload_json JSONB NOT NULL DEFAULT '{}'::jsonb,
     created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
@@ -792,6 +799,129 @@ CREATE INDEX IF NOT EXISTS idx_mini_items_lower_name ON mini_items(lower(name));
 CREATE INDEX IF NOT EXISTS idx_mini_items_lower_group ON mini_items(lower(item_group));
 CREATE INDEX IF NOT EXISTS idx_mini_item_groups_lower_name ON mini_item_groups(lower(name));
 CREATE INDEX IF NOT EXISTS idx_mini_item_groups_parent ON mini_item_groups(lower(parent_item_group));
+ALTER TABLE mini_items DROP CONSTRAINT IF EXISTS mini_items_item_group_fkey;
+DROP TRIGGER IF EXISTS mini_item_groups_reject_cycle_trg ON mini_item_groups;
+DROP FUNCTION IF EXISTS mini_item_groups_reject_cycle();
+ALTER TABLE mini_item_groups DROP CONSTRAINT IF EXISTS mini_item_groups_parent_item_group_fkey;
+ALTER TABLE mini_item_groups DROP CONSTRAINT IF EXISTS mini_item_groups_parent_not_blank;
+ALTER TABLE mini_item_groups DROP CONSTRAINT IF EXISTS mini_item_groups_root_parent;
+ALTER TABLE mini_item_groups ALTER COLUMN parent_item_group DROP NOT NULL;
+ALTER TABLE mini_item_groups ALTER COLUMN parent_item_group DROP DEFAULT;
+UPDATE mini_item_groups
+SET parent_item_group = NULL,
+    payload_json = jsonb_set(payload_json, '{parent_item_group}', 'null'::jsonb, true),
+    updated_at = now()
+WHERE btrim(COALESCE(parent_item_group, '')) = '';
+INSERT INTO mini_item_groups (name, parent_item_group, is_group, payload_json, updated_at)
+VALUES (
+    'All Item Groups',
+    NULL,
+    true,
+    '{"name":"All Item Groups","item_group_name":"All Item Groups","parent_item_group":null,"is_group":true}'::jsonb,
+    now()
+)
+ON CONFLICT (name) DO NOTHING;
+INSERT INTO mini_item_groups (name, parent_item_group, is_group, payload_json, updated_at)
+SELECT DISTINCT
+    source.parent_item_group,
+    'All Item Groups',
+    true,
+    jsonb_build_object(
+        'name', source.parent_item_group,
+        'item_group_name', source.parent_item_group,
+        'parent_item_group', 'All Item Groups',
+        'is_group', true
+    ),
+    now()
+FROM (
+    SELECT btrim(parent_item_group) AS parent_item_group
+    FROM mini_item_groups
+    WHERE btrim(COALESCE(parent_item_group, '')) <> ''
+) source
+WHERE NOT EXISTS (
+    SELECT 1
+    FROM mini_item_groups existing
+    WHERE existing.name = source.parent_item_group
+);
+INSERT INTO mini_item_groups (name, parent_item_group, is_group, payload_json, updated_at)
+SELECT DISTINCT
+    source.item_group,
+    'All Item Groups',
+    true,
+    jsonb_build_object(
+        'name', source.item_group,
+        'item_group_name', source.item_group,
+        'parent_item_group', 'All Item Groups',
+        'is_group', true
+    ),
+    now()
+FROM (
+    SELECT btrim(item_group) AS item_group
+    FROM mini_items
+    WHERE btrim(item_group) <> ''
+) source
+WHERE NOT EXISTS (
+    SELECT 1
+    FROM mini_item_groups existing
+    WHERE existing.name = source.item_group
+);
+ALTER TABLE mini_item_groups
+    ADD CONSTRAINT mini_item_groups_parent_not_blank CHECK (
+        parent_item_group IS NULL OR btrim(parent_item_group) <> ''
+    );
+ALTER TABLE mini_item_groups
+    ADD CONSTRAINT mini_item_groups_root_parent CHECK (
+        (btrim(name) = 'All Item Groups' AND parent_item_group IS NULL)
+        OR (btrim(name) <> 'All Item Groups' AND parent_item_group IS NOT NULL)
+    );
+ALTER TABLE mini_item_groups
+    ADD CONSTRAINT mini_item_groups_parent_item_group_fkey
+    FOREIGN KEY (parent_item_group)
+    REFERENCES mini_item_groups(name)
+    ON UPDATE CASCADE
+    ON DELETE RESTRICT;
+CREATE OR REPLACE FUNCTION mini_item_groups_reject_cycle()
+RETURNS trigger
+LANGUAGE plpgsql
+AS $$
+DECLARE
+    has_cycle BOOLEAN;
+BEGIN
+    IF NEW.parent_item_group IS NULL THEN
+        RETURN NEW;
+    END IF;
+
+    WITH RECURSIVE ancestors(name, parent_item_group) AS (
+        SELECT name, parent_item_group
+        FROM mini_item_groups
+        WHERE name = NEW.parent_item_group
+        UNION ALL
+        SELECT parent.name, parent.parent_item_group
+        FROM mini_item_groups parent
+        JOIN ancestors current ON parent.name = current.parent_item_group
+    )
+    SELECT EXISTS (
+        SELECT 1 FROM ancestors WHERE name = NEW.name
+    ) INTO has_cycle;
+
+    IF has_cycle THEN
+        RAISE EXCEPTION 'item group parent cycle detected: %', NEW.name
+            USING ERRCODE = '23514';
+    END IF;
+
+    RETURN NEW;
+END;
+$$;
+CREATE TRIGGER mini_item_groups_reject_cycle_trg
+BEFORE INSERT OR UPDATE OF name, parent_item_group ON mini_item_groups
+FOR EACH ROW
+EXECUTE FUNCTION mini_item_groups_reject_cycle();
+ALTER TABLE mini_items
+    ADD CONSTRAINT mini_items_item_group_fkey
+    FOREIGN KEY (item_group)
+    REFERENCES mini_item_groups(name)
+    ON UPDATE CASCADE
+    ON DELETE RESTRICT;
 CREATE INDEX IF NOT EXISTS idx_mini_production_maps_order_id ON mini_production_maps(order_id);
 CREATE INDEX IF NOT EXISTS idx_mini_production_maps_order_number ON mini_production_maps(order_number) WHERE btrim(order_number) <> '';
 CREATE INDEX IF NOT EXISTS idx_mini_production_map_nodes_kind_title ON mini_production_map_nodes(kind, lower(title));

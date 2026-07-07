@@ -12,6 +12,7 @@ use super::router::build_router;
 use crate::app::AppState;
 use crate::config::AppConfig;
 use crate::core::auth::models::{Principal, PrincipalRole};
+use crate::core::authz::RoleAssignmentUpsert;
 use crate::core::profile::ports::{
     CustomerProfileRecord, DownloadedFile, ProfileAvatarStorage, ProfileLookup, ProfilePortError,
     ProfilePrefs, ProfileStoreError, ProfileStorePort, StoredProfileAvatar, SupplierProfileRecord,
@@ -168,6 +169,67 @@ async fn profile_put_updates_nickname_and_session_like_go() {
         .await
         .expect("response");
     assert_eq!(json_body(me).await["display_name"], "Alias");
+}
+
+#[tokio::test]
+async fn profile_get_returns_material_scope_and_capabilities() {
+    let state = test_state();
+    state
+        .admin
+        .upsert_role_assignment(RoleAssignmentUpsert {
+            principal_role: PrincipalRole::MaterialTaminotchi,
+            principal_ref: "material_taminotchi".to_string(),
+            role_id: "material_taminotchi".to_string(),
+            assigned_apparatus: Vec::new(),
+            assigned_item_groups: vec!["Kraska".to_string(), "Kley".to_string()],
+        })
+        .await
+        .expect("material role assignment");
+    let token = state
+        .sessions
+        .create(Principal {
+            role: PrincipalRole::MaterialTaminotchi,
+            display_name: "Material taminotchisi".to_string(),
+            legal_name: "Material taminotchisi".to_string(),
+            ref_: "material_taminotchi".to_string(),
+            phone: "+998901112233".to_string(),
+            avatar_url: String::new(),
+        })
+        .await
+        .expect("session");
+
+    let response = build_router(state)
+        .oneshot(
+            Request::builder()
+                .uri("/v1/mobile/profile")
+                .header(header::AUTHORIZATION, format!("Bearer {token}"))
+                .body(Body::empty())
+                .expect("request"),
+        )
+        .await
+        .expect("response");
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let value = json_body(response).await;
+    assert_eq!(value["role"], "material_taminotchi");
+    assert_eq!(
+        value["assigned_item_groups"],
+        serde_json::json!(["Kley", "Kraska"])
+    );
+    assert!(
+        value["capabilities"]
+            .as_array()
+            .expect("capabilities")
+            .iter()
+            .any(|capability| capability == "gscale.print")
+    );
+    assert!(
+        value["capabilities"]
+            .as_array()
+            .expect("capabilities")
+            .iter()
+            .any(|capability| capability == "raw_material.assign")
+    );
 }
 
 #[tokio::test]

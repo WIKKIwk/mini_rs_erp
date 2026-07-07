@@ -92,7 +92,7 @@ async fn admin_item_group_parent_move_returns_item_group_shape() {
         "root item group cannot be moved"
     );
 
-    let invalid_cycle = build_router(state)
+    let invalid_cycle = build_router(state.clone())
         .oneshot(request_with_body(
             "PUT",
             "/v1/mobile/admin/item-groups",
@@ -105,5 +105,20 @@ async fn admin_item_group_parent_move_returns_item_group_shape() {
     assert_eq!(
         json_body(invalid_cycle).await["error"],
         "item group cannot be its own parent"
+    );
+
+    let indirect_cycle = build_router(state)
+        .oneshot(request_with_body(
+            "PUT",
+            "/v1/mobile/admin/item-groups",
+            &token,
+            r#"{"name":"Xomashyo","parent":"plyonka"}"#,
+        ))
+        .await
+        .expect("response");
+    assert_eq!(indirect_cycle.status(), StatusCode::BAD_REQUEST);
+    assert_eq!(
+        json_body(indirect_cycle).await["error"],
+        "item group parent cycle detected"
     );
 }
