@@ -102,6 +102,13 @@ async fn material_taminotchi_can_print_material_receipt() {
         .with_driver(Arc::new(FakeDriver {
             events: events.clone(),
         }));
+    assign_warehouse_to_principal(
+        &state,
+        PrincipalRole::MaterialTaminotchi,
+        "admin",
+        "Stores - A",
+    )
+    .await;
     let token = session(&state, PrincipalRole::MaterialTaminotchi).await;
 
     let response = build_router(state)
@@ -135,10 +142,56 @@ async fn material_taminotchi_can_print_material_receipt() {
 }
 
 #[tokio::test]
+async fn material_taminotchi_receipt_print_rejects_unassigned_warehouse() {
+    let events = Arc::new(Mutex::new(Vec::new()));
+    let mut state = test_state();
+    state.gscale = GscaleService::new()
+        .with_receipt_store(Arc::new(FakeReceiptStore {
+            events: events.clone(),
+        }))
+        .with_driver(Arc::new(FakeDriver { events }));
+    let token = session(&state, PrincipalRole::MaterialTaminotchi).await;
+
+    let response = build_router(state)
+        .oneshot(request(
+            "POST",
+            "/v1/mobile/gscale/material-receipt/print",
+            &token,
+            r#"{
+                "driver_url":"http://127.0.0.1:39117",
+                "item_code":"ITEM-1",
+                "item_name":"Green Tea",
+                "warehouse":"Stores - A",
+                "printer":"zebra",
+                "print_mode":"rfid",
+                "gross_qty":2.5
+            }"#,
+        ))
+        .await
+        .expect("response");
+    let status = response.status();
+    let body = json_body(response).await;
+
+    assert_eq!(status, StatusCode::FORBIDDEN, "{body}");
+    assert_eq!(body["error"], "warehouse_not_assigned");
+}
+
+#[tokio::test]
 async fn gscale_items_use_admin_catalog_without_customer_scope() {
     let mut state = test_state();
     state.admin =
         AdminService::new(&state.config).with_read_port(Arc::new(FakeAdminCatalogReadPort));
+    state
+        .admin
+        .upsert_role_assignment(RoleAssignmentUpsert {
+            principal_role: PrincipalRole::MaterialTaminotchi,
+            principal_ref: "admin".to_string(),
+            role_id: "material_taminotchi".to_string(),
+            assigned_apparatus: Vec::new(),
+            assigned_item_groups: vec!["Products".to_string()],
+        })
+        .await
+        .expect("material catalog scope");
     let admin_token = session(&state, PrincipalRole::Admin).await;
     let werka_token = session(&state, PrincipalRole::Werka).await;
     let material_token = session(&state, PrincipalRole::MaterialTaminotchi).await;

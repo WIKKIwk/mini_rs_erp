@@ -387,6 +387,73 @@ async fn rps_batch_start_requires_item_and_warehouse() {
 }
 
 #[tokio::test]
+async fn material_taminotchi_rps_batch_start_rejects_unassigned_warehouse() {
+    let state = test_state();
+    let token = session(&state, PrincipalRole::MaterialTaminotchi).await;
+
+    let response = build_router(state)
+        .oneshot(request(
+            "POST",
+            "/v1/mobile/rps/batch/start",
+            &token,
+            r#"{
+                "client_batch_id":"material-unassigned",
+                "driver_url":"http://127.0.0.1:39117",
+                "item_code":"ITEM-1",
+                "item_name":"Green Tea",
+                "warehouse":"Stores - A",
+                "printer":"godex",
+                "print_mode":"label"
+            }"#,
+        ))
+        .await
+        .expect("response");
+    let status = response.status();
+    let body = json_body(response).await;
+
+    assert_eq!(status, StatusCode::FORBIDDEN, "{body}");
+    assert_eq!(body["ok"], false);
+    assert_eq!(body["error"], "warehouse_not_assigned");
+}
+
+#[tokio::test]
+async fn material_taminotchi_rps_batch_start_allows_assigned_warehouse() {
+    let state = test_state();
+    assign_warehouse_to_principal(
+        &state,
+        PrincipalRole::MaterialTaminotchi,
+        "admin",
+        "Stores - A",
+    )
+    .await;
+    let token = session(&state, PrincipalRole::MaterialTaminotchi).await;
+
+    let response = build_router(state)
+        .oneshot(request(
+            "POST",
+            "/v1/mobile/rps/batch/start",
+            &token,
+            r#"{
+                "client_batch_id":"material-assigned",
+                "driver_url":"http://127.0.0.1:39117",
+                "item_code":"ITEM-1",
+                "item_name":"Green Tea",
+                "warehouse":"Stores - A",
+                "printer":"godex",
+                "print_mode":"label"
+            }"#,
+        ))
+        .await
+        .expect("response");
+    let status = response.status();
+    let body = json_body(response).await;
+
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body["ok"], true);
+    assert_eq!(body["batch"]["warehouse"], "Stores - A");
+}
+
+#[tokio::test]
 async fn rps_batch_start_requires_driver_url() {
     let state = test_state();
     let token = session(&state, PrincipalRole::Werka).await;

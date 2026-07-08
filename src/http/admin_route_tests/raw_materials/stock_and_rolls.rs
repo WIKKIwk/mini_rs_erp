@@ -316,6 +316,13 @@ async fn material_taminotchi_raw_material_assignment_allows_child_group_from_ass
         })
         .await
         .expect("material scope");
+    assign_warehouse_to_principal(
+        &state,
+        PrincipalRole::MaterialTaminotchi,
+        "material-rulon-parent",
+        "Kalidor",
+    )
+    .await;
     let admin_token = session(&state, PrincipalRole::Admin).await;
     let material_token = session_for(
         &state,
@@ -417,6 +424,13 @@ async fn material_taminotchi_can_list_raw_material_stock_for_assignment() {
         })
         .await
         .expect("material stock role");
+    assign_warehouse_to_principal(
+        &state,
+        PrincipalRole::MaterialTaminotchi,
+        "material-stock",
+        "Kalidor",
+    )
+    .await;
     let token = session_for(&state, PrincipalRole::MaterialTaminotchi, "material-stock").await;
 
     let response = build_router(state)
@@ -433,4 +447,41 @@ async fn material_taminotchi_can_list_raw_material_stock_for_assignment() {
     assert_eq!(body[0]["warehouse"], "Kalidor");
     assert_eq!(body[0]["item_code"], "INK-BLACK");
     assert_eq!(body[0]["barcode"], "30AA");
+}
+
+#[tokio::test]
+async fn material_taminotchi_raw_material_stock_hides_unassigned_warehouse() {
+    let mut state = test_state();
+    state.gscale =
+        GscaleService::new().with_receipt_store(Arc::new(RawMaterialStockLookup::default()));
+    state
+        .admin
+        .upsert_role_assignment(crate::core::authz::RoleAssignmentUpsert {
+            principal_role: PrincipalRole::MaterialTaminotchi,
+            principal_ref: "material-stock-no-warehouse".to_string(),
+            role_id: "material_taminotchi".to_string(),
+            assigned_apparatus: Vec::new(),
+            assigned_item_groups: vec!["Kraska".to_string()],
+        })
+        .await
+        .expect("material stock role");
+    let token = session_for(
+        &state,
+        PrincipalRole::MaterialTaminotchi,
+        "material-stock-no-warehouse",
+    )
+    .await;
+
+    let response = build_router(state)
+        .oneshot(request(
+            "GET",
+            "/v1/mobile/admin/raw-material-stock?warehouse=Kalidor",
+            &token,
+        ))
+        .await
+        .expect("material raw stock list");
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = json_body(response).await;
+    assert!(body.as_array().expect("array").is_empty(), "{body}");
 }

@@ -22,6 +22,9 @@ use crate::core::rps_batch::RpsBatchService;
 use crate::core::rps_batch::models::RpsBatchSession;
 use crate::core::rps_batch::ports::{RpsBatchStoreError, RpsBatchStorePort};
 use crate::core::session::manager::SessionManager;
+use crate::core::warehouses::{
+    MemoryWarehouseStore, WarehouseAssignmentUpsert, WarehouseService, WarehouseUpsert,
+};
 use crate::core::werka::models::SupplierItem;
 
 pub(super) fn test_state() -> AppState {
@@ -46,6 +49,7 @@ pub(super) fn test_state() -> AppState {
         admin_code: "19621978".to_string(),
     });
     state.sessions = SessionManager::memory(Some(30 * 24 * 60 * 60));
+    state.warehouses = WarehouseService::new(Arc::new(MemoryWarehouseStore::new()));
     state.rps_batch = RpsBatchService::new(Arc::new(MemoryRpsBatchStore::default()));
     state
 }
@@ -63,6 +67,34 @@ pub(super) async fn session(state: &AppState, role: PrincipalRole) -> String {
         })
         .await
         .expect("session")
+}
+
+pub(super) async fn assign_warehouse_to_principal(
+    state: &AppState,
+    role: PrincipalRole,
+    ref_: &str,
+    warehouse: &str,
+) {
+    state
+        .warehouses
+        .upsert_warehouse(WarehouseUpsert {
+            warehouse: warehouse.to_string(),
+            company: "Company".to_string(),
+            is_group: false,
+            parent_warehouse: String::new(),
+        })
+        .await
+        .expect("warehouse");
+    state
+        .warehouses
+        .assign_warehouse(WarehouseAssignmentUpsert {
+            warehouse: warehouse.to_string(),
+            principal_role: role,
+            principal_ref: ref_.to_string(),
+            display_name: "Materialchi".to_string(),
+        })
+        .await
+        .expect("warehouse assignment");
 }
 
 pub(super) fn request(method: &str, uri: &str, token: &str, body: &str) -> Request<Body> {

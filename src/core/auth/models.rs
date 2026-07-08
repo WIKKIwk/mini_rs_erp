@@ -44,6 +44,8 @@ pub struct LoginResponse {
     pub assigned_apparatus: Vec<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub assigned_item_groups: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub assigned_warehouses: Vec<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub werka_home: Option<WerkaHomeData>,
 }
@@ -74,6 +76,7 @@ mod tests {
             capabilities: Vec::new(),
             assigned_apparatus: Vec::new(),
             assigned_item_groups: Vec::new(),
+            assigned_warehouses: Vec::new(),
             werka_home: None,
         };
 
@@ -90,6 +93,7 @@ mod tests {
             capabilities: vec!["werka.access".to_string()],
             assigned_apparatus: Vec::new(),
             assigned_item_groups: Vec::new(),
+            assigned_warehouses: Vec::new(),
             werka_home: Some(WerkaHomeData {
                 summary: WerkaHomeSummary {
                     pending_count: 2,
@@ -123,11 +127,29 @@ mod tests {
             capabilities: Vec::new(),
             assigned_apparatus: Vec::new(),
             assigned_item_groups: vec!["Kraska".to_string(), "Kley".to_string()],
+            assigned_warehouses: Vec::new(),
             werka_home: None,
         };
 
         let value = serde_json::to_value(response).expect("serialize login response");
 
         assert_eq!(value["assigned_item_groups"], json!(["Kraska", "Kley"]));
+    }
+
+    #[test]
+    fn login_response_serializes_assigned_warehouses() {
+        let response = LoginResponse {
+            token: "token".to_string(),
+            profile: werka_profile(),
+            capabilities: Vec::new(),
+            assigned_apparatus: Vec::new(),
+            assigned_item_groups: Vec::new(),
+            assigned_warehouses: vec!["Xomashyo".to_string()],
+            werka_home: None,
+        };
+
+        let value = serde_json::to_value(response).expect("serialize login response");
+
+        assert_eq!(value["assigned_warehouses"], json!(["Xomashyo"]));
     }
 }

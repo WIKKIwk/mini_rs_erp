@@ -36,7 +36,9 @@ use crate::core::gscale::ports::{GscalePortError, MaterialReceiptStorePort, Scal
 use crate::core::mini_orders::{MiniOrderError, MiniOrderSink, NoopMiniOrderSink};
 use crate::core::production_map::{MemoryProductionMapStore, ProductionMapService};
 use crate::core::session::manager::SessionManager;
-use crate::core::warehouses::{MemoryWarehouseStore, WarehouseService};
+use crate::core::warehouses::{
+    MemoryWarehouseStore, WarehouseAssignmentUpsert, WarehouseService, WarehouseUpsert,
+};
 use crate::core::werka::models::{DispatchRecord, SupplierItem};
 use crate::core::werka::ports::{WerkaHomeLookup, WerkaPortError};
 use crate::core::werka::service::WerkaService;
@@ -325,6 +327,34 @@ async fn session_for(state: &AppState, role: PrincipalRole, ref_: &str) -> Strin
         })
         .await
         .expect("session")
+}
+
+async fn assign_warehouse_to_principal(
+    state: &AppState,
+    role: PrincipalRole,
+    ref_: &str,
+    warehouse: &str,
+) {
+    state
+        .warehouses
+        .upsert_warehouse(WarehouseUpsert {
+            warehouse: warehouse.to_string(),
+            company: "Company".to_string(),
+            is_group: false,
+            parent_warehouse: String::new(),
+        })
+        .await
+        .expect("warehouse");
+    state
+        .warehouses
+        .assign_warehouse(WarehouseAssignmentUpsert {
+            warehouse: warehouse.to_string(),
+            principal_role: role,
+            principal_ref: ref_.to_string(),
+            display_name: "Materialchi".to_string(),
+        })
+        .await
+        .expect("warehouse assignment");
 }
 
 fn request(method: &str, uri: &str, token: &str) -> Request<Body> {

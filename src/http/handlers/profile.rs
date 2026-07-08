@@ -152,6 +152,11 @@ async fn profile_payload(
         .admin
         .principal_assigned_item_groups(&principal)
         .await;
+    let assigned_warehouses = state
+        .warehouses
+        .assigned_warehouse_names(&principal)
+        .await
+        .unwrap_or_default();
     let mut value =
         serde_json::to_value(with_avatar_proxy(headers, principal, token)).unwrap_or_else(
             |_| json!({}),
@@ -163,6 +168,7 @@ async fn profile_payload(
             "assigned_item_groups".to_string(),
             json!(assigned_item_groups),
         );
+        object.insert("assigned_warehouses".to_string(), json!(assigned_warehouses));
     }
     value
 }

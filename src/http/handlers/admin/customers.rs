@@ -1,5 +1,8 @@
 use super::*;
 
+mod material_scope;
+use material_scope::{material_scoped_items, scoped_item_group_tree};
+
 pub async fn customers(
     State(state): State<AppState>,
     method: Method,
@@ -209,7 +212,11 @@ pub async fn items(
     let principal = authorize_any_capability(
         &state,
         &headers,
-        &[Capability::CatalogItemRead, Capability::CatalogItemCreate],
+        &[
+            Capability::CatalogItemRead,
+            Capability::CatalogItemCreate,
+            Capability::GscaleCatalogRead,
+        ],
     )
     .await?;
     if !matches!(method, Method::GET | Method::POST) {
@@ -217,18 +224,25 @@ pub async fn items(
     }
     match method {
         Method::GET => {
-            require_capability(&state, &principal, Capability::CatalogItemRead).await?;
-            state
-                .admin
-                .items_page_by_group(
-                    query.group.as_deref().unwrap_or(""),
-                    query.q.as_deref().unwrap_or(""),
-                    positive_int(query.limit.as_deref(), 50),
-                    optional_offset(query.offset.as_deref()),
-                )
-                .await
-                .map(json_response)
-                .map_err(|_| server_error("admin items failed"))
+            if principal.role == PrincipalRole::MaterialTaminotchi {
+                require_capability(&state, &principal, Capability::GscaleCatalogRead).await?;
+                material_scoped_items(&state, &principal, &query)
+                    .await
+                    .map(json_response)
+            } else {
+                require_capability(&state, &principal, Capability::CatalogItemRead).await?;
+                state
+                    .admin
+                    .items_page_by_group(
+                        query.group.as_deref().unwrap_or(""),
+                        query.q.as_deref().unwrap_or(""),
+                        positive_int(query.limit.as_deref(), 50),
+                        optional_offset(query.offset.as_deref()),
+                    )
+                    .await
+                    .map(json_response)
+                    .map_err(|_| server_error("admin items failed"))
+            }
         }
         Method::POST => {
             require_capability(&state, &principal, Capability::CatalogItemCreate).await?;
@@ -340,16 +354,26 @@ pub async fn item_group_tree(
     method: Method,
     headers: HeaderMap,
 ) -> Result<Response, AdminError> {
-    authorize_capability(&state, &headers, Capability::CatalogItemGroupRead).await?;
+    let principal = authorize_any_capability(
+        &state,
+        &headers,
+        &[Capability::CatalogItemGroupRead, Capability::GscaleCatalogRead],
+    )
+    .await?;
     if method != Method::GET {
         return Err(method_not_allowed());
     }
-    state
+    let groups = state
         .admin
         .item_group_tree()
         .await
-        .map(json_response)
-        .map_err(|_| server_error("admin item group tree failed"))
+        .map_err(|_| server_error("admin item group tree failed"))?;
+    if principal.role == PrincipalRole::MaterialTaminotchi {
+        return Ok(json_response(
+            scoped_item_group_tree(&state, &principal, groups).await?,
+        ));
+    }
+    Ok(json_response(groups))
 }
 
 pub async fn activity(

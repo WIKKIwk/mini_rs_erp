@@ -62,11 +62,16 @@ pub async fn raw_material_assignments(
     .await?;
     match method {
         Method::GET => {
-            let assignments = state
+            let mut assignments = state
                 .production_maps
                 .raw_material_assignments()
                 .await
                 .map_err(production_map_error)?;
+            if principal.role == PrincipalRole::MaterialTaminotchi {
+                assignments =
+                    material_scoped_raw_material_assignments(&state, &principal, assignments)
+                        .await?;
+            }
             Ok(json_response(
                 raw_material_assignment_responses(&state, assignments).await,
             ))
@@ -250,7 +255,7 @@ pub async fn raw_material_stock(
     method: Method,
     headers: HeaderMap,
 ) -> Result<Response, AdminError> {
-    authorize_any_capability(
+    let principal = authorize_any_capability(
         &state,
         &headers,
         &[
@@ -264,12 +269,103 @@ pub async fn raw_material_stock(
         return Err(method_not_allowed());
     }
     let limit = optional_search_limit(query.limit.as_deref(), 200, 500);
+    let warehouse = query.warehouse.as_deref().unwrap_or("");
+    if principal.role == PrincipalRole::MaterialTaminotchi {
+        return material_scoped_raw_material_stock(&state, &principal, warehouse, limit)
+            .await
+            .map(json_response);
+    }
     state
         .gscale
-        .raw_material_stock(query.warehouse.as_deref().unwrap_or(""), limit)
+        .raw_material_stock(warehouse, limit)
         .await
         .map(json_response)
         .map_err(|_| server_error("raw material stock fetch failed"))
+}
+
+async fn material_scoped_raw_material_stock(
+    state: &AppState,
+    principal: &Principal,
+    warehouse: &str,
+    limit: usize,
+) -> Result<Vec<RawMaterialStockEntry>, AdminError> {
+    let assigned = material_warehouse_scope(state, principal).await?;
+    if assigned.is_empty() {
+        return Ok(Vec::new());
+    }
+    let requested = warehouse.trim();
+    if !requested.is_empty() {
+        if !warehouse_in_scope(&assigned, requested) {
+            return Ok(Vec::new());
+        }
+        return state
+            .gscale
+            .raw_material_stock(requested, limit)
+            .await
+            .map_err(|_| server_error("raw material stock fetch failed"));
+    }
+    let mut out = Vec::new();
+    for warehouse in assigned {
+        let remaining = limit.saturating_sub(out.len());
+        if remaining == 0 {
+            break;
+        }
+        let mut stock = state
+            .gscale
+            .raw_material_stock(warehouse.trim(), remaining)
+            .await
+            .map_err(|_| server_error("raw material stock fetch failed"))?;
+        out.append(&mut stock);
+    }
+    Ok(out)
+}
+
+async fn material_scoped_raw_material_assignments(
+    state: &AppState,
+    principal: &Principal,
+    assignments: Vec<RawMaterialAssignment>,
+) -> Result<Vec<RawMaterialAssignment>, AdminError> {
+    let assigned = material_warehouse_scope(state, principal).await?;
+    if assigned.is_empty() {
+        return Ok(Vec::new());
+    }
+    let mut out = Vec::new();
+    for assignment in assignments {
+        let stock = state
+            .gscale
+            .raw_material_stock_by_barcode(&assignment.barcode)
+            .await
+            .map_err(|_| server_error("raw material stock fetch failed"))?;
+        if stock
+            .as_ref()
+            .map(|entry| warehouse_in_scope(&assigned, &entry.warehouse))
+            .unwrap_or(false)
+        {
+            out.push(assignment);
+        }
+    }
+    Ok(out)
+}
+
+async fn material_warehouse_scope(
+    state: &AppState,
+    principal: &Principal,
+) -> Result<Vec<String>, AdminError> {
+    Ok(state
+        .warehouses
+        .assigned_warehouse_names(principal)
+        .await
+        .map_err(warehouse_error)?
+        .into_iter()
+        .map(|warehouse| warehouse.trim().to_string())
+        .filter(|warehouse| !warehouse.trim().is_empty())
+        .collect())
+}
+
+fn warehouse_in_scope(assigned: &[String], warehouse: &str) -> bool {
+    assigned
+        .iter()
+        .any(|assigned| assigned.trim().eq_ignore_ascii_case(warehouse.trim()))
 }
 
 pub async fn raw_material_assignment_lookup(

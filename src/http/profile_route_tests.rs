@@ -19,6 +19,7 @@ use crate::core::profile::ports::{
 };
 use crate::core::profile::service::ProfileService;
 use crate::core::session::manager::SessionManager;
+use crate::core::warehouses::{WarehouseAssignmentUpsert, WarehouseUpsert};
 use crate::store::profile_avatar_local::LocalProfileAvatarStorage;
 
 fn test_state() -> AppState {
@@ -185,6 +186,26 @@ async fn profile_get_returns_material_scope_and_capabilities() {
         })
         .await
         .expect("material role assignment");
+    state
+        .warehouses
+        .upsert_warehouse(WarehouseUpsert {
+            warehouse: "Kalidor".to_string(),
+            company: "Company".to_string(),
+            is_group: false,
+            parent_warehouse: String::new(),
+        })
+        .await
+        .expect("warehouse");
+    state
+        .warehouses
+        .assign_warehouse(WarehouseAssignmentUpsert {
+            warehouse: "Kalidor".to_string(),
+            principal_role: PrincipalRole::MaterialTaminotchi,
+            principal_ref: "material_taminotchi".to_string(),
+            display_name: "Material taminotchisi".to_string(),
+        })
+        .await
+        .expect("warehouse assignment");
     let token = state
         .sessions
         .create(Principal {
@@ -215,6 +236,10 @@ async fn profile_get_returns_material_scope_and_capabilities() {
     assert_eq!(
         value["assigned_item_groups"],
         serde_json::json!(["Kley", "Kraska"])
+    );
+    assert_eq!(
+        value["assigned_warehouses"],
+        serde_json::json!(["Kalidor"])
     );
     assert!(
         value["capabilities"]

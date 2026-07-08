@@ -54,6 +54,7 @@ pub(super) async fn fill_raw_material_assignment_input(
     input.item_group = item.item_group.trim().to_string();
     input.item_group_path = item_group_path;
     require_material_item_group_scope(state, principal, &input.item_group).await?;
+    require_material_warehouse_scope(state, principal, &stock.warehouse).await?;
     Ok((input, stock.warehouse.trim().to_string()))
 }
 
@@ -80,6 +81,36 @@ async fn require_material_item_group_scope(
     }
     Err(bad_request(
         "item group is not assigned to material taminotchi",
+    ))
+}
+
+async fn require_material_warehouse_scope(
+    state: &AppState,
+    principal: &Principal,
+    warehouse: &str,
+) -> Result<(), AdminError> {
+    if principal.role != PrincipalRole::MaterialTaminotchi {
+        return Ok(());
+    }
+    let warehouse = warehouse.trim();
+    if warehouse.is_empty() {
+        return Err(bad_request(
+            "warehouse is not assigned to material taminotchi",
+        ));
+    }
+    let assigned = state
+        .warehouses
+        .assigned_warehouse_names(principal)
+        .await
+        .map_err(warehouse_error)?;
+    if assigned
+        .iter()
+        .any(|assigned| assigned.trim().eq_ignore_ascii_case(warehouse))
+    {
+        return Ok(());
+    }
+    Err(bad_request(
+        "warehouse is not assigned to material taminotchi",
     ))
 }
 

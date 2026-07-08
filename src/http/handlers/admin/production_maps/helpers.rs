@@ -84,6 +84,14 @@ pub(super) fn production_map_error(error: ProductionMapError) -> AdminError {
     }
 }
 
+pub(super) fn warehouse_error(error: WarehouseError) -> AdminError {
+    match error {
+        WarehouseError::MissingWarehouse => bad_request("warehouse is required"),
+        WarehouseError::MissingPrincipalRef => bad_request("principal ref is required"),
+        WarehouseError::StoreFailed => server_error("warehouse store failed"),
+    }
+}
+
 pub(super) fn queue_action_actor(principal: &Principal) -> QueueActionActor {
     QueueActionActor {
         role: principal_role_code(&principal.role).to_string(),

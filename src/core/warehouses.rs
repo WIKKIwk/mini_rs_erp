@@ -7,7 +7,7 @@ use thiserror::Error;
 use tokio::sync::RwLock;
 
 use crate::core::admin::models::AdminWarehouse;
-use crate::core::auth::models::PrincipalRole;
+use crate::core::auth::models::{Principal, PrincipalRole};
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct WarehouseUpsert {
@@ -120,6 +120,35 @@ impl WarehouseService {
         warehouse: &str,
     ) -> Result<Vec<WarehouseAssignment>, WarehouseError> {
         self.store.warehouse_assignments(warehouse).await
+    }
+
+    pub async fn warehouse_assignments_for_principal(
+        &self,
+        principal: &Principal,
+    ) -> Result<Vec<WarehouseAssignment>, WarehouseError> {
+        Ok(self
+            .store
+            .warehouse_assignments("")
+            .await?
+            .into_iter()
+            .filter(|assignment| assignment_matches_principal(assignment, principal))
+            .collect())
+    }
+
+    pub async fn assigned_warehouse_names(
+        &self,
+        principal: &Principal,
+    ) -> Result<Vec<String>, WarehouseError> {
+        let mut seen = BTreeSet::new();
+        let mut out = Vec::new();
+        for assignment in self.warehouse_assignments_for_principal(principal).await? {
+            let warehouse = assignment.warehouse.trim();
+            if warehouse.is_empty() || !seen.insert(warehouse.to_lowercase()) {
+                continue;
+            }
+            out.push(warehouse.to_string());
+        }
+        Ok(out)
     }
 
     pub async fn warehouse_summaries(
@@ -347,4 +376,12 @@ fn assignment_key(assignment: &WarehouseAssignment) -> String {
         assignment.principal_role,
         assignment.principal_ref.trim().to_lowercase()
     )
+}
+
+fn assignment_matches_principal(assignment: &WarehouseAssignment, principal: &Principal) -> bool {
+    assignment.principal_role == principal.role
+        && assignment
+            .principal_ref
+            .trim()
+            .eq_ignore_ascii_case(principal.ref_.trim())
 }

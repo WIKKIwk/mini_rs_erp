@@ -7,7 +7,7 @@ use axum::http::{HeaderMap, Method, StatusCode};
 use serde::Serialize;
 
 use crate::app::AppState;
-use crate::core::auth::models::Principal;
+use crate::core::auth::models::{Principal, PrincipalRole};
 use crate::core::authz::Capability;
 use crate::core::gscale::GscaleServiceError;
 use crate::core::rps_batch::{RpsBatchPrintRequest, RpsBatchServiceError, RpsBatchStartRequest};
@@ -25,6 +25,7 @@ pub async fn start(
     let principal = authenticated_principal(&state, &headers).await?;
     let request: RpsBatchStartRequest =
         serde_json::from_slice(&body).map_err(|_| bad_request("invalid_json", "invalid json"))?;
+    require_material_warehouse_access(&state, &principal, &request.warehouse).await?;
     let response = state
         .rps_batch
         .start(&principal, request)
@@ -111,6 +112,42 @@ pub async fn print(
         .map_err(gscale_error)?;
     Ok(Json(
         serde_json::to_value(response).unwrap_or_else(|_| serde_json::json!({"ok": false})),
+    ))
+}
+
+async fn require_material_warehouse_access(
+    state: &AppState,
+    principal: &Principal,
+    warehouse: &str,
+) -> Result<(), (StatusCode, Json<RpsBatchErrorResponse>)> {
+    if principal.role != PrincipalRole::MaterialTaminotchi {
+        return Ok(());
+    }
+    let assigned = state
+        .warehouses
+        .assigned_warehouse_names(principal)
+        .await
+        .map_err(|_| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(RpsBatchErrorResponse::new(
+                    "warehouse_scope_failed",
+                    "warehouse scope failed",
+                )),
+            )
+        })?;
+    if assigned
+        .iter()
+        .any(|assigned| assigned.trim().eq_ignore_ascii_case(warehouse.trim()))
+    {
+        return Ok(());
+    }
+    Err((
+        StatusCode::FORBIDDEN,
+        Json(RpsBatchErrorResponse::new(
+            "warehouse_not_assigned",
+            "warehouse is not assigned to material taminotchi",
+        )),
     ))
 }
 

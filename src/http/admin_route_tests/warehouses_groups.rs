@@ -348,3 +348,128 @@ async fn admin_warehouse_summary_returns_lightweight_counts() {
     assert_eq!(body[0]["assignment_count"], 1);
     assert_eq!(body[0]["assigned_display_names"][0], "Supplier One");
 }
+
+#[tokio::test]
+async fn material_taminotchi_warehouses_are_limited_to_assigned_warehouses() {
+    let state = test_state();
+    assign_warehouse_to_principal(
+        &state,
+        PrincipalRole::MaterialTaminotchi,
+        "material-warehouse-scope",
+        "Kalidor",
+    )
+    .await;
+    state
+        .warehouses
+        .upsert_warehouse(WarehouseUpsert {
+            warehouse: "Boshqa ombor".to_string(),
+            company: "Company".to_string(),
+            is_group: false,
+            parent_warehouse: String::new(),
+        })
+        .await
+        .expect("other warehouse");
+    let token = session_for(
+        &state,
+        PrincipalRole::MaterialTaminotchi,
+        "material-warehouse-scope",
+    )
+    .await;
+
+    let response = build_router(state)
+        .oneshot(request(
+            "GET",
+            "/v1/mobile/admin/warehouses?limit=50",
+            &token,
+        ))
+        .await
+        .expect("warehouses response");
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = json_body(response).await;
+    let warehouses = body.as_array().expect("warehouse array");
+    assert_eq!(warehouses.len(), 1, "{body}");
+    assert_eq!(warehouses[0]["warehouse"], "Kalidor");
+}
+
+#[tokio::test]
+async fn material_taminotchi_warehouse_summary_uses_assigned_warehouses_only() {
+    let state = test_state();
+    assign_warehouse_to_principal(
+        &state,
+        PrincipalRole::MaterialTaminotchi,
+        "material-summary-scope",
+        "Kalidor",
+    )
+    .await;
+    assign_warehouse_to_principal(
+        &state,
+        PrincipalRole::Supplier,
+        "SUP-001",
+        "Boshqa ombor",
+    )
+    .await;
+    let token = session_for(
+        &state,
+        PrincipalRole::MaterialTaminotchi,
+        "material-summary-scope",
+    )
+    .await;
+
+    let response = build_router(state)
+        .oneshot(request(
+            "GET",
+            "/v1/mobile/admin/warehouses/summary?limit=50",
+            &token,
+        ))
+        .await
+        .expect("summary response");
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = json_body(response).await;
+    let summaries = body.as_array().expect("summary array");
+    assert_eq!(summaries.len(), 1, "{body}");
+    assert_eq!(summaries[0]["warehouse"], "Kalidor");
+    assert_eq!(summaries[0]["assignment_count"], 1);
+}
+
+#[tokio::test]
+async fn material_taminotchi_sees_only_own_warehouse_assignments() {
+    let state = test_state();
+    assign_warehouse_to_principal(
+        &state,
+        PrincipalRole::MaterialTaminotchi,
+        "material-own-warehouse",
+        "Kalidor",
+    )
+    .await;
+    assign_warehouse_to_principal(
+        &state,
+        PrincipalRole::MaterialTaminotchi,
+        "other-material",
+        "Boshqa ombor",
+    )
+    .await;
+    let token = session_for(
+        &state,
+        PrincipalRole::MaterialTaminotchi,
+        "material-own-warehouse",
+    )
+    .await;
+
+    let response = build_router(state)
+        .oneshot(request(
+            "GET",
+            "/v1/mobile/admin/warehouses/assignments",
+            &token,
+        ))
+        .await
+        .expect("assignments response");
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = json_body(response).await;
+    let assignments = body.as_array().expect("assignments array");
+    assert_eq!(assignments.len(), 1, "{body}");
+    assert_eq!(assignments[0]["warehouse"], "Kalidor");
+    assert_eq!(assignments[0]["principal_ref"], "material-own-warehouse");
+}

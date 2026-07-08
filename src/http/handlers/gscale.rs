@@ -114,6 +114,7 @@ pub async fn material_receipt_print(
     }
     let request: MaterialReceiptPrintRequest =
         serde_json::from_slice(&body).map_err(|_| bad_request("invalid_json", "invalid json"))?;
+    require_material_warehouse_access(&state, &principal, &request.warehouse).await?;
     let response = state
         .gscale
         .print_material_receipt_driver_first(request)
@@ -121,6 +122,42 @@ pub async fn material_receipt_print(
         .map_err(gscale_error)?;
     Ok(Json(
         serde_json::to_value(response).unwrap_or_else(|_| serde_json::json!({"ok": false})),
+    ))
+}
+
+async fn require_material_warehouse_access(
+    state: &AppState,
+    principal: &Principal,
+    warehouse: &str,
+) -> Result<(), (StatusCode, Json<GscaleErrorResponse>)> {
+    if principal.role != PrincipalRole::MaterialTaminotchi {
+        return Ok(());
+    }
+    let assigned = state
+        .warehouses
+        .assigned_warehouse_names(principal)
+        .await
+        .map_err(|_| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(GscaleErrorResponse::new(
+                    "warehouse_scope_failed",
+                    "warehouse scope failed",
+                )),
+            )
+        })?;
+    if assigned
+        .iter()
+        .any(|assigned| assigned.trim().eq_ignore_ascii_case(warehouse.trim()))
+    {
+        return Ok(());
+    }
+    Err((
+        StatusCode::FORBIDDEN,
+        Json(GscaleErrorResponse::new(
+            "warehouse_not_assigned",
+            "warehouse is not assigned to material taminotchi",
+        )),
     ))
 }
 

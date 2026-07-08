@@ -202,6 +202,13 @@ async fn admin_creates_material_taminotchi_with_seventy_prefix_code() {
     let material = json_body(response).await;
     assert!(material["ref"].as_str().expect("ref").starts_with("MAT-"));
     assert!(material["code"].as_str().expect("code").starts_with("70"));
+    assign_warehouse_to_principal(
+        &state,
+        PrincipalRole::MaterialTaminotchi,
+        material["ref"].as_str().expect("ref"),
+        "Kalidor",
+    )
+    .await;
 
     let login = build_router(state)
         .oneshot(request_with_body(
@@ -220,6 +227,7 @@ async fn admin_creates_material_taminotchi_with_seventy_prefix_code() {
     let login = json_body(login).await;
     assert_eq!(login["profile"]["role"], "material_taminotchi");
     assert_eq!(login["assigned_item_groups"], serde_json::json!(["Kraska"]));
+    assert_eq!(login["assigned_warehouses"], serde_json::json!(["Kalidor"]));
 }
 
 #[tokio::test]
