@@ -402,8 +402,13 @@ impl ProductionMapStorePort for PostgresProductionMapStore {
             put_order_progress_batch_tx(&mut tx, &batch).await?;
         }
         let raw_material_stock_warehouses =
-            apply_raw_material_stock_transitions_tx(&mut tx, &write.raw_material_stock_transitions)
-                .await?;
+            apply_raw_material_stock_transitions_tx(
+                &mut tx,
+                &write.raw_material_stock_transitions,
+                &write.event.actor,
+                &write.event.apparatus,
+            )
+            .await?;
         tx.commit()
             .await
             .map_err(|_| ProductionMapError::StoreFailed)?;

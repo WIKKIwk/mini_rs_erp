@@ -22,6 +22,9 @@ fn request() -> MaterialReceiptPrintRequest {
         tare_enabled: true,
         tare_kg: 0.78,
         print_count: 1,
+        actor_role: String::new(),
+        actor_ref: String::new(),
+        actor_display_name: String::new(),
     }
 }
 

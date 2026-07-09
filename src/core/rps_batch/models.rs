@@ -107,6 +107,9 @@ impl RpsBatchSession {
             tare_enabled: self.tare_enabled,
             tare_kg: self.tare_kg,
             print_count: request.print_count,
+            actor_role: String::new(),
+            actor_ref: String::new(),
+            actor_display_name: String::new(),
         }
     }
 }

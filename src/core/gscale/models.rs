@@ -24,6 +24,12 @@ pub struct MaterialReceiptPrintRequest {
     pub tare_kg: f64,
     #[serde(default)]
     pub print_count: u32,
+    #[serde(default)]
+    pub actor_role: String,
+    #[serde(default)]
+    pub actor_ref: String,
+    #[serde(default)]
+    pub actor_display_name: String,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize)]
@@ -120,9 +126,13 @@ pub struct RawMaterialStockEntry {
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct CreateMaterialReceiptDraftInput {
     pub item_code: String,
+    pub item_name: String,
     pub warehouse: String,
     pub qty: f64,
     pub barcode: String,
+    pub actor_role: String,
+    pub actor_ref: String,
+    pub actor_display_name: String,
 }
 
 #[derive(Debug, Clone, Default, PartialEq)]

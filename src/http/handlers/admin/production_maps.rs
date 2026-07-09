@@ -38,7 +38,7 @@ pub use self::progress_qr::{
 pub use self::queue_actions::production_map_queue_action;
 pub use self::raw_materials::{
     raw_material_assignment_lookup, raw_material_assignments, raw_material_rules,
-    raw_material_stock,
+    raw_material_history, raw_material_stock,
 };
 pub use self::wip::{production_map_finished_goods_receive, production_map_wip_batches};
 

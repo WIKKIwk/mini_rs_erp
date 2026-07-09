@@ -112,9 +112,12 @@ pub async fn material_receipt_print(
     {
         return Err(forbidden());
     }
-    let request: MaterialReceiptPrintRequest =
+    let mut request: MaterialReceiptPrintRequest =
         serde_json::from_slice(&body).map_err(|_| bad_request("invalid_json", "invalid json"))?;
     require_material_warehouse_access(&state, &principal, &request.warehouse).await?;
+    request.actor_role = principal_role_code(&principal.role).to_string();
+    request.actor_ref = principal.ref_.trim().to_string();
+    request.actor_display_name = principal.display_name.trim().to_string();
     let response = state
         .gscale
         .print_material_receipt_driver_first(request)
@@ -220,6 +223,18 @@ fn method_not_allowed() -> (StatusCode, Json<GscaleErrorResponse>) {
             "method not allowed",
         )),
     )
+}
+
+fn principal_role_code(role: &PrincipalRole) -> &'static str {
+    match role {
+        PrincipalRole::Supplier => "supplier",
+        PrincipalRole::Werka => "werka",
+        PrincipalRole::Customer => "customer",
+        PrincipalRole::Aparatchi => "aparatchi",
+        PrincipalRole::Qolipchi => "qolipchi",
+        PrincipalRole::MaterialTaminotchi => "material_taminotchi",
+        PrincipalRole::Admin => "admin",
+    }
 }
 
 #[derive(Debug, Serialize)]

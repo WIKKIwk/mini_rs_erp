@@ -65,9 +65,13 @@ async fn create_material_receipt_draft(
 ) -> Result<MaterialReceiptDraft, GscaleServiceError> {
     let input = CreateMaterialReceiptDraftInput {
         item_code: job.item_code.clone(),
+        item_name: job.item_name.clone(),
         warehouse: job.warehouse.clone(),
         qty: job.net_qty,
         barcode: epc,
+        actor_role: job.actor_role.clone(),
+        actor_ref: job.actor_ref.clone(),
+        actor_display_name: job.actor_display_name.clone(),
     };
     receipt_store
         .create_material_receipt_draft(input)

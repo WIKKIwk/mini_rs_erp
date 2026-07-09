@@ -8,6 +8,7 @@ pub mod postgres_mini_order;
 pub mod postgres_production_map;
 pub mod postgres_push_token;
 pub mod postgres_qolip;
+pub mod postgres_raw_material_events;
 pub mod postgres_rps_batch;
 pub mod postgres_warehouse;
 pub mod postgres_worker;

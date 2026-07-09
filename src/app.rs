@@ -25,6 +25,7 @@ use crate::core::werka::service::WerkaService;
 use crate::core::worker_groups::WorkerGroupService;
 use crate::core::workers::WorkerService;
 use crate::db::postgres_engine::PostgresEngineStore;
+use crate::db::postgres_raw_material_events::PostgresRawMaterialEventStore;
 use crate::fcm::discover_push_sender;
 use crate::google_sheets::{OrderSheetSink, discover_order_sheet_sink};
 use crate::rps::RpsDriverClient;
@@ -72,6 +73,7 @@ pub struct AppState {
     pub worker_groups: WorkerGroupService,
     pub sessions: SessionManager,
     pub warehouse_events: WarehouseEventHub,
+    pub raw_material_events: Option<PostgresRawMaterialEventStore>,
     pub system_monitor_hub: SystemMonitorHub,
     #[allow(dead_code)]
     pub mini_engine: Option<PostgresEngineStore>,
@@ -98,6 +100,7 @@ impl AppState {
         let order_sheets = discover_order_sheet_sink();
         let production_orders = build_mini_order_sink();
         let mini_engine = build_mini_engine_store();
+        let raw_material_events = build_raw_material_event_store();
         spawn_order_sheets_sync_loop_if_enabled(
             production_maps.clone(),
             calculate_orders.clone(),
@@ -143,6 +146,7 @@ impl AppState {
             worker_groups,
             sessions,
             warehouse_events,
+            raw_material_events,
             system_monitor_hub,
             mini_engine,
             started_at: Instant::now(),

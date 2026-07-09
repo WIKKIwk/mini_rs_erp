@@ -1,5 +1,8 @@
 use super::raw_material_details::{fill_raw_material_assignment_input, lookup_raw_material_detail};
 use super::*;
+use crate::db::postgres_raw_material_events::{
+    RawMaterialEventDraft, RawMaterialEventQuery, RawMaterialEventScope,
+};
 use std::collections::BTreeMap;
 
 pub async fn raw_material_rules(
@@ -108,6 +111,8 @@ pub async fn raw_material_assignments(
                 .await
                 .map_err(production_map_error)?;
             record_raw_material_unlink_event(&state, &principal, &removed).await;
+            record_raw_material_unassignment_event(&state, &principal, &removed, stock.as_ref())
+                .await;
             if let Some(stock) = stock {
                 state
                     .warehouse_events
@@ -119,6 +124,72 @@ pub async fn raw_material_assignments(
             })))
         }
         _ => Err(method_not_allowed()),
+    }
+}
+
+async fn record_raw_material_unassignment_event(
+    state: &AppState,
+    principal: &Principal,
+    assignment: &RawMaterialAssignment,
+    stock: Option<&RawMaterialStockEntry>,
+) {
+    let Some(store) = state.raw_material_events.as_ref() else {
+        return;
+    };
+    let Some(stock) = stock else {
+        return;
+    };
+    let actor = queue_action_actor(principal);
+    let draft = RawMaterialEventDraft {
+        idempotency_key: format!(
+            "order_unreserved:{}:{}:{}",
+            assignment.barcode.trim().to_ascii_uppercase(),
+            assignment.order_id.trim(),
+            actor.ref_.trim()
+        ),
+        event_type: "order_unreserved".to_string(),
+        warehouse: stock.warehouse.trim().to_string(),
+        barcode: assignment.barcode.trim().to_string(),
+        item_code: assignment.item_code.trim().to_string(),
+        item_name: assignment.item_name.trim().to_string(),
+        qty_delta: 0.0,
+        uom: stock.uom.trim().to_string(),
+        stock_status_before: Some(stock.status.trim().to_string()),
+        stock_status_after: Some(stock.status.trim().to_string()),
+        order_id: Some(assignment.order_id.trim().to_string()),
+        apparatus: Some(assignment.apparatus.trim().to_string()),
+        actor_role: actor.role.trim().to_string(),
+        actor_ref: actor.ref_.trim().to_string(),
+        actor_display_name: actor.display_name.trim().to_string(),
+        owner_role: if assignment.assigned_by_role.trim() == "material_taminotchi" {
+            "material_taminotchi".to_string()
+        } else {
+            String::new()
+        },
+        owner_ref: if assignment.assigned_by_role.trim() == "material_taminotchi" {
+            assignment.assigned_by_ref.trim().to_string()
+        } else {
+            String::new()
+        },
+        owner_display_name: if assignment.assigned_by_role.trim() == "material_taminotchi" {
+            assignment.assigned_by_display_name.trim().to_string()
+        } else {
+            String::new()
+        },
+        source_type: "order_assignment".to_string(),
+        source_id: assignment.order_id.trim().to_string(),
+        source_line_ref: Some(assignment.barcode.trim().to_string()),
+        correlation_id: None,
+        payload_json: serde_json::json!({
+            "order_id": assignment.order_id.trim(),
+            "apparatus": assignment.apparatus.trim(),
+            "barcode": assignment.barcode.trim(),
+            "item_group": assignment.item_group.trim(),
+            "source_receipt_id": stock.source_receipt_id.trim(),
+        }),
+    };
+    if let Err(error) = store.record_event(draft).await {
+        tracing::warn!(%error, "raw material unassignment event record failed");
     }
 }
 
@@ -281,6 +352,71 @@ pub async fn raw_material_stock(
         .await
         .map(json_response)
         .map_err(|_| server_error("raw material stock fetch failed"))
+}
+
+pub async fn raw_material_history(
+    State(state): State<AppState>,
+    Query(query): Query<RawMaterialHistoryQuery>,
+    method: Method,
+    headers: HeaderMap,
+) -> Result<Response, AdminError> {
+    let principal = authorize_any_capability(
+        &state,
+        &headers,
+        &[
+            Capability::AdminAccess,
+            Capability::CatalogItemRead,
+            Capability::RawMaterialAssign,
+        ],
+    )
+    .await?;
+    if method != Method::GET {
+        return Err(method_not_allowed());
+    }
+    let Some(store) = state.raw_material_events.as_ref() else {
+        return Ok(json_response(Vec::<serde_json::Value>::new()));
+    };
+    let limit = optional_search_limit(query.limit.as_deref(), 50, 200);
+    let scope = if principal.role == PrincipalRole::MaterialTaminotchi {
+        RawMaterialEventScope {
+            enabled: true,
+            warehouses: material_warehouse_scope(&state, &principal).await?,
+        }
+    } else {
+        RawMaterialEventScope::default()
+    };
+    let owner_filtered = principal.role == PrincipalRole::MaterialTaminotchi;
+    let events = store
+        .events(
+            scope,
+            RawMaterialEventQuery {
+                warehouse: query.warehouse.unwrap_or_default(),
+                event_type: query.event_type.unwrap_or_default(),
+                actor_role: String::new(),
+                actor_ref: String::new(),
+                owner_role: if owner_filtered {
+                    "material_taminotchi".to_string()
+                } else {
+                    String::new()
+                },
+                owner_ref: if owner_filtered {
+                    principal.ref_.trim().to_string()
+                } else {
+                    String::new()
+                },
+                limit,
+            },
+        )
+        .await
+        .map_err(|_| server_error("raw material history fetch failed"))?;
+    Ok(json_response(events))
+}
+
+#[derive(Debug, serde::Deserialize)]
+pub struct RawMaterialHistoryQuery {
+    pub warehouse: Option<String>,
+    pub event_type: Option<String>,
+    pub limit: Option<String>,
 }
 
 async fn material_scoped_raw_material_stock(

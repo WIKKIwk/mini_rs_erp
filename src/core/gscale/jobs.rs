@@ -101,6 +101,9 @@ pub(super) struct NormalizedMaterialReceiptJob {
     pub(super) tare_enabled: bool,
     pub(super) tare_kg: f64,
     pub(super) print_count: u32,
+    pub(super) actor_role: String,
+    pub(super) actor_ref: String,
+    pub(super) actor_display_name: String,
 }
 
 impl NormalizedMaterialReceiptJob {
@@ -150,6 +153,9 @@ impl NormalizedMaterialReceiptJob {
             tare_enabled: tare_kg > 0.0,
             tare_kg,
             print_count: normalize_print_count(request.print_count),
+            actor_role: request.actor_role.trim().to_string(),
+            actor_ref: request.actor_ref.trim().to_string(),
+            actor_display_name: request.actor_display_name.trim().to_string(),
         })
     }
 

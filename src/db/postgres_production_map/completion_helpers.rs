@@ -226,6 +226,8 @@ pub(super) async fn resolve_completion_request_decision(
             super::raw_material_stock_helpers::apply_raw_material_stock_transitions_tx(
                 &mut tx,
                 &resolution.raw_material_stock_transitions,
+                actor,
+                &resolution.apparatus,
             )
             .await?;
     }

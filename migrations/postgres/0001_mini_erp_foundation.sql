@@ -686,6 +686,227 @@ WHERE status = 'submitted'
   AND btrim(barcode) <> ''
 ON CONFLICT (barcode) DO NOTHING;
 
+CREATE TABLE IF NOT EXISTS mini_raw_material_events (
+    id BIGSERIAL PRIMARY KEY,
+    event_id TEXT NOT NULL,
+    idempotency_key TEXT NOT NULL,
+    event_type TEXT NOT NULL,
+    warehouse TEXT NOT NULL,
+    warehouse_key TEXT GENERATED ALWAYS AS (lower(warehouse)) STORED,
+    barcode TEXT NOT NULL,
+    barcode_key TEXT GENERATED ALWAYS AS (lower(barcode)) STORED,
+    item_code TEXT NOT NULL,
+    item_name TEXT NOT NULL DEFAULT '',
+    qty_delta NUMERIC(18,3) NOT NULL DEFAULT 0,
+    uom TEXT NOT NULL DEFAULT 'kg',
+    stock_status_before TEXT,
+    stock_status_after TEXT,
+    order_id TEXT,
+    apparatus TEXT,
+    actor_role TEXT NOT NULL,
+    actor_ref TEXT NOT NULL,
+    actor_display_name TEXT NOT NULL DEFAULT '',
+    owner_role TEXT NOT NULL DEFAULT '',
+    owner_ref TEXT NOT NULL DEFAULT '',
+    owner_display_name TEXT NOT NULL DEFAULT '',
+    source_type TEXT NOT NULL,
+    source_id TEXT NOT NULL,
+    source_line_ref TEXT,
+    correlation_id TEXT,
+    payload_json JSONB NOT NULL DEFAULT '{}'::jsonb,
+    occurred_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    recorded_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    CONSTRAINT mini_rme_event_id_unique UNIQUE (event_id),
+    CONSTRAINT mini_rme_idempotency_unique UNIQUE (idempotency_key),
+    CONSTRAINT mini_rme_event_type_allowed CHECK (
+        event_type IN (
+            'receipt_posted',
+            'order_reserved',
+            'order_unreserved',
+            'usage_started',
+            'consumption_posted',
+            'adjustment_increase',
+            'adjustment_decrease',
+            'transfer_in',
+            'transfer_out'
+        )
+    ),
+    CONSTRAINT mini_rme_source_type_allowed CHECK (
+        source_type IN (
+            'gscale_receipt',
+            'order_assignment',
+            'consumption',
+            'manual_adjustment',
+            'warehouse_transfer',
+            'system'
+        )
+    ),
+    CONSTRAINT mini_rme_status_before_allowed CHECK (
+        stock_status_before IS NULL OR
+        stock_status_before IN ('available', 'reserved', 'in_use', 'consumed')
+    ),
+    CONSTRAINT mini_rme_status_after_allowed CHECK (
+        stock_status_after IS NULL OR
+        stock_status_after IN ('available', 'reserved', 'in_use', 'consumed')
+    ),
+    CONSTRAINT mini_rme_qty_sign_allowed CHECK (
+        CASE
+            WHEN event_type IN ('receipt_posted', 'adjustment_increase', 'transfer_in')
+                THEN qty_delta > 0
+            WHEN event_type IN ('consumption_posted', 'adjustment_decrease', 'transfer_out')
+                THEN qty_delta < 0
+            WHEN event_type IN ('order_reserved', 'order_unreserved', 'usage_started')
+                THEN qty_delta = 0
+            ELSE FALSE
+        END
+    ),
+    CONSTRAINT mini_rme_order_required CHECK (
+        CASE
+            WHEN event_type IN ('order_reserved', 'order_unreserved', 'usage_started', 'consumption_posted')
+                THEN order_id IS NOT NULL AND btrim(order_id) <> ''
+            ELSE TRUE
+        END
+    ),
+    CONSTRAINT mini_rme_core_text_not_blank CHECK (
+        btrim(event_id) <> '' AND
+        btrim(idempotency_key) <> '' AND
+        btrim(warehouse) <> '' AND
+        btrim(barcode) <> '' AND
+        btrim(item_code) <> '' AND
+        btrim(uom) <> '' AND
+        btrim(actor_role) <> '' AND
+        btrim(actor_ref) <> '' AND
+        btrim(source_type) <> '' AND
+        btrim(source_id) <> ''
+    )
+);
+
+CREATE OR REPLACE FUNCTION mini_raw_material_events_block_mutation()
+RETURNS trigger
+LANGUAGE plpgsql
+AS $$
+BEGIN
+    RAISE EXCEPTION 'mini_raw_material_events is append-only';
+END;
+$$;
+
+DO $$
+BEGIN
+    IF NOT EXISTS (
+        SELECT 1
+        FROM pg_trigger
+        WHERE tgname = 'mini_rme_no_update_delete_trg'
+    ) THEN
+        CREATE TRIGGER mini_rme_no_update_delete_trg
+        BEFORE UPDATE OR DELETE ON mini_raw_material_events
+        FOR EACH ROW
+        EXECUTE FUNCTION mini_raw_material_events_block_mutation();
+    END IF;
+END;
+$$;
+
+INSERT INTO mini_raw_material_events (
+    event_id, idempotency_key, event_type, warehouse, barcode, item_code, item_name,
+    qty_delta, uom, stock_status_after, actor_role, actor_ref, actor_display_name,
+    owner_role, owner_ref, owner_display_name,
+    source_type, source_id, payload_json, occurred_at, recorded_at
+)
+SELECT
+    'rme_backfill_receipt_' || md5(name),
+    'receipt_posted:' || name,
+    'receipt_posted',
+    warehouse,
+    barcode,
+    item_code,
+    COALESCE(NULLIF(btrim(payload_json->>'item_name'), ''), item_code),
+    qty::numeric(18,3),
+    uom,
+    'available',
+    COALESCE(NULLIF(btrim(payload_json->>'actor_role'), ''), 'system'),
+    COALESCE(NULLIF(btrim(payload_json->>'actor_ref'), ''), 'system'),
+    COALESCE(NULLIF(btrim(payload_json->>'actor_display_name'), ''), ''),
+    CASE
+        WHEN COALESCE(NULLIF(btrim(payload_json->>'actor_role'), ''), '') = 'material_taminotchi'
+            THEN 'material_taminotchi'
+        ELSE ''
+    END,
+    CASE
+        WHEN COALESCE(NULLIF(btrim(payload_json->>'actor_role'), ''), '') = 'material_taminotchi'
+            THEN COALESCE(NULLIF(btrim(payload_json->>'actor_ref'), ''), '')
+        ELSE ''
+    END,
+    CASE
+        WHEN COALESCE(NULLIF(btrim(payload_json->>'actor_role'), ''), '') = 'material_taminotchi'
+            THEN COALESCE(NULLIF(btrim(payload_json->>'actor_display_name'), ''), '')
+        ELSE ''
+    END,
+    'gscale_receipt',
+    name,
+    payload_json || jsonb_build_object('backfilled', true),
+    COALESCE(submitted_at, updated_at, created_at, now()),
+    now()
+FROM mini_gscale_receipts
+WHERE status = 'submitted'
+  AND btrim(warehouse) <> ''
+  AND btrim(item_code) <> ''
+  AND btrim(barcode) <> ''
+ON CONFLICT (idempotency_key) DO NOTHING;
+
+INSERT INTO mini_raw_material_events (
+    event_id, idempotency_key, event_type, warehouse, barcode, item_code, item_name,
+    qty_delta, uom, stock_status_before, stock_status_after, order_id, apparatus,
+    actor_role, actor_ref, actor_display_name,
+    owner_role, owner_ref, owner_display_name,
+    source_type, source_id,
+    source_line_ref, payload_json, occurred_at, recorded_at
+)
+SELECT
+    'rme_backfill_assignment_' || md5(assignments.barcode || ':' || assignments.order_id),
+    'order_reserved:' || assignments.barcode || ':' || assignments.order_id || ':' || assignments.apparatus,
+    'order_reserved',
+    stock.warehouse,
+    assignments.barcode,
+    assignments.item_code,
+    COALESCE(NULLIF(btrim(assignments.payload_json->>'item_name'), ''), stock.item_name, assignments.item_code),
+    0::numeric(18,3),
+    COALESCE(NULLIF(btrim(stock.uom), ''), 'kg'),
+    NULLIF(btrim(stock.status), ''),
+    NULLIF(btrim(stock.status), ''),
+    assignments.order_id,
+    assignments.apparatus,
+    COALESCE(NULLIF(btrim(assignments.payload_json->>'assigned_by_role'), ''), 'system'),
+    COALESCE(NULLIF(btrim(assignments.payload_json->>'assigned_by_ref'), ''), 'system'),
+    COALESCE(NULLIF(btrim(assignments.payload_json->>'assigned_by_display_name'), ''), ''),
+    CASE
+        WHEN COALESCE(NULLIF(btrim(assignments.payload_json->>'assigned_by_role'), ''), '') = 'material_taminotchi'
+            THEN 'material_taminotchi'
+        ELSE ''
+    END,
+    CASE
+        WHEN COALESCE(NULLIF(btrim(assignments.payload_json->>'assigned_by_role'), ''), '') = 'material_taminotchi'
+            THEN COALESCE(NULLIF(btrim(assignments.payload_json->>'assigned_by_ref'), ''), '')
+        ELSE ''
+    END,
+    CASE
+        WHEN COALESCE(NULLIF(btrim(assignments.payload_json->>'assigned_by_role'), ''), '') = 'material_taminotchi'
+            THEN COALESCE(NULLIF(btrim(assignments.payload_json->>'assigned_by_display_name'), ''), '')
+        ELSE ''
+    END,
+    'order_assignment',
+    assignments.order_id,
+    assignments.barcode,
+    assignments.payload_json || jsonb_build_object('backfilled', true),
+    COALESCE(NULLIF(btrim(assignments.payload_json->>'assigned_at'), '')::timestamptz, assignments.updated_at, now()),
+    now()
+FROM mini_raw_material_assignments assignments
+JOIN mini_raw_material_stock stock
+  ON lower(stock.barcode) = lower(assignments.barcode)
+WHERE btrim(stock.warehouse) <> ''
+  AND btrim(assignments.barcode) <> ''
+  AND btrim(assignments.order_id) <> ''
+  AND btrim(assignments.item_code) <> ''
+ON CONFLICT (idempotency_key) DO NOTHING;
+
 CREATE TABLE IF NOT EXISTS mini_finished_goods_stock (
     id TEXT PRIMARY KEY,
     warehouse TEXT NOT NULL,
@@ -964,6 +1185,13 @@ CREATE INDEX IF NOT EXISTS idx_mini_progress_batches_wip_status_apparatus_key
 CREATE INDEX IF NOT EXISTS idx_mini_raw_material_assignments_order ON mini_raw_material_assignments(order_id);
 CREATE INDEX IF NOT EXISTS idx_mini_raw_material_assignments_apparatus ON mini_raw_material_assignments(lower(apparatus));
 CREATE INDEX IF NOT EXISTS idx_mini_raw_material_assignments_item_group ON mini_raw_material_assignments(lower(item_group));
+CREATE INDEX IF NOT EXISTS idx_mini_rme_warehouse_time ON mini_raw_material_events (warehouse_key, occurred_at DESC, id DESC);
+CREATE INDEX IF NOT EXISTS idx_mini_rme_actor_time ON mini_raw_material_events (actor_role, actor_ref, occurred_at DESC, id DESC);
+CREATE INDEX IF NOT EXISTS idx_mini_rme_owner_time ON mini_raw_material_events (owner_role, owner_ref, occurred_at DESC, id DESC);
+CREATE INDEX IF NOT EXISTS idx_mini_rme_barcode_time ON mini_raw_material_events (barcode_key, occurred_at DESC, id DESC);
+CREATE INDEX IF NOT EXISTS idx_mini_rme_order_time ON mini_raw_material_events (order_id, occurred_at DESC, id DESC);
+CREATE INDEX IF NOT EXISTS idx_mini_rme_type_time ON mini_raw_material_events (event_type, occurred_at DESC, id DESC);
+CREATE INDEX IF NOT EXISTS idx_mini_rme_source_time ON mini_raw_material_events (source_type, source_id, occurred_at DESC, id DESC);
 CREATE INDEX IF NOT EXISTS idx_mini_rps_batches_active ON mini_rps_batches(active) WHERE active;
 CREATE INDEX IF NOT EXISTS idx_mini_engine_events_entity ON mini_engine_events(domain, entity_id, created_at DESC);
 

@@ -276,6 +276,7 @@ mod tests {
             "mini_qolip_locations",
             "mini_gscale_receipts",
             "mini_raw_material_stock",
+            "mini_raw_material_events",
             "mini_finished_goods_stock",
             "mini_rps_batches",
             "mini_engine_events",

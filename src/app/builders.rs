@@ -8,6 +8,7 @@ use crate::db::postgres_gscale_receipt::PostgresGscaleReceiptStore;
 use crate::db::postgres_mini_order::PostgresMiniOrderSink;
 use crate::db::postgres_production_map::PostgresProductionMapStore;
 use crate::db::postgres_qolip::PostgresQolipStore;
+use crate::db::postgres_raw_material_events::PostgresRawMaterialEventStore;
 use crate::db::postgres_warehouse::PostgresWarehouseStore;
 use crate::db::postgres_worker::PostgresWorkerStore;
 use crate::db::postgres_worker_group::PostgresWorkerGroupStore;
@@ -56,6 +57,16 @@ pub(super) fn build_warehouse_service() -> WarehouseService {
         None => WarehouseService::new(Arc::new(
             crate::core::warehouses::MemoryWarehouseStore::new(),
         )),
+    }
+}
+
+pub(super) fn build_raw_material_event_store() -> Option<PostgresRawMaterialEventStore> {
+    match postgres_pool("raw material events") {
+        Some(pool) => {
+            tracing::info!("mini ERP postgres raw material event store configured");
+            Some(PostgresRawMaterialEventStore::new(pool))
+        }
+        None => None,
     }
 }
 
