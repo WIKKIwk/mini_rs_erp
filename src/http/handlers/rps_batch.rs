@@ -86,11 +86,14 @@ pub async fn print(
     let principal = authenticated_principal(&state, &headers).await?;
     let request: RpsBatchPrintRequest =
         serde_json::from_slice(&body).map_err(|_| bad_request("invalid_json", "invalid json"))?;
-    let material_request = state
+    let mut material_request = state
         .rps_batch
         .material_receipt_request(&principal, request)
         .await
         .map_err(batch_error)?;
+    material_request.actor_role = principal_role_code(&principal.role).to_string();
+    material_request.actor_ref = principal.ref_.trim().to_string();
+    material_request.actor_display_name = principal.display_name.trim().to_string();
     let batch_service = state.rps_batch.clone();
     let batch_principal = principal.clone();
     let late_error = Arc::new(move |detail: String| {
@@ -238,6 +241,18 @@ fn method_not_allowed() -> (StatusCode, Json<RpsBatchErrorResponse>) {
             "method not allowed",
         )),
     )
+}
+
+fn principal_role_code(role: &PrincipalRole) -> &'static str {
+    match role {
+        PrincipalRole::Supplier => "supplier",
+        PrincipalRole::Werka => "werka",
+        PrincipalRole::Customer => "customer",
+        PrincipalRole::Aparatchi => "aparatchi",
+        PrincipalRole::Qolipchi => "qolipchi",
+        PrincipalRole::MaterialTaminotchi => "material_taminotchi",
+        PrincipalRole::Admin => "admin",
+    }
 }
 
 #[derive(Debug, Serialize)]

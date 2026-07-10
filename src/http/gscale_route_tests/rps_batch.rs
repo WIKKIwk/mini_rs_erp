@@ -70,10 +70,12 @@ async fn rps_batch_start_state_stop_is_persisted_by_rs() {
 #[tokio::test]
 async fn rps_batch_print_uses_active_rs_batch_and_transaction_flow() {
     let events = Arc::new(Mutex::new(Vec::new()));
+    let receipt_actors = Arc::new(Mutex::new(Vec::new()));
     let mut state = test_state();
     state.gscale = GscaleService::new()
         .with_receipt_store(Arc::new(FakeReceiptStore {
             events: events.clone(),
+            receipt_actors: receipt_actors.clone(),
         }))
         .with_driver(Arc::new(FakeDriver {
             events: events.clone(),
@@ -124,6 +126,10 @@ async fn rps_batch_print_uses_active_rs_batch_and_transaction_flow() {
     assert_eq!(
         events.lock().unwrap().as_slice(),
         ["print", "create:1.720", "submit:MAT-STE-ROUTE"]
+    );
+    assert_eq!(
+        receipt_actors.lock().unwrap().as_slice(),
+        ["werka:admin:Admin"]
     );
 }
 
@@ -286,6 +292,7 @@ async fn live_rps_batch_print_routes_through_rs_to_driver_when_env_is_set() {
     state.gscale = GscaleService::new()
         .with_receipt_store(Arc::new(FakeReceiptStore {
             events: events.clone(),
+            receipt_actors: Arc::new(Mutex::new(Vec::new())),
         }))
         .with_driver(Arc::new(RpsDriverClient::new(
             Duration::from_secs(15),

@@ -117,6 +117,7 @@ pub(super) async fn json_body(response: axum::response::Response) -> serde_json:
 
 pub(super) struct FakeReceiptStore {
     pub(super) events: Arc<Mutex<Vec<String>>>,
+    pub(super) receipt_actors: Arc<Mutex<Vec<String>>>,
 }
 
 #[derive(Default)]
@@ -307,6 +308,10 @@ impl MaterialReceiptStorePort for FakeReceiptStore {
         &self,
         input: CreateMaterialReceiptDraftInput,
     ) -> Result<MaterialReceiptDraft, GscalePortError> {
+        self.receipt_actors.lock().unwrap().push(format!(
+            "{}:{}:{}",
+            input.actor_role, input.actor_ref, input.actor_display_name
+        ));
         self.events
             .lock()
             .unwrap()

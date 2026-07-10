@@ -53,6 +53,7 @@ async fn material_receipt_print_uses_parallel_driver_first_flow() {
     state.gscale = GscaleService::new()
         .with_receipt_store(Arc::new(FakeReceiptStore {
             events: events.clone(),
+            receipt_actors: Arc::new(Mutex::new(Vec::new())),
         }))
         .with_driver(Arc::new(FakeDriver {
             events: events.clone(),
@@ -98,6 +99,7 @@ async fn material_taminotchi_can_print_material_receipt() {
     state.gscale = GscaleService::new()
         .with_receipt_store(Arc::new(FakeReceiptStore {
             events: events.clone(),
+            receipt_actors: Arc::new(Mutex::new(Vec::new())),
         }))
         .with_driver(Arc::new(FakeDriver {
             events: events.clone(),
@@ -148,6 +150,7 @@ async fn material_taminotchi_receipt_print_rejects_unassigned_warehouse() {
     state.gscale = GscaleService::new()
         .with_receipt_store(Arc::new(FakeReceiptStore {
             events: events.clone(),
+            receipt_actors: Arc::new(Mutex::new(Vec::new())),
         }))
         .with_driver(Arc::new(FakeDriver { events }));
     let token = session(&state, PrincipalRole::MaterialTaminotchi).await;
