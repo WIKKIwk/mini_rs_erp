@@ -269,6 +269,8 @@ fn too_many_requests(error: impl Into<String>) -> AdminError {
 pub struct AdminErrorResponse {
     pub error: String,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub apparatus_options: Option<Vec<String>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub order_width_mm: Option<f64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub roll_width_mm: Option<f64>,
@@ -278,6 +280,7 @@ impl AdminErrorResponse {
     fn new(error: impl Into<String>) -> Self {
         Self {
             error: error.into(),
+            apparatus_options: None,
             order_width_mm: None,
             roll_width_mm: None,
         }
@@ -286,6 +289,7 @@ impl AdminErrorResponse {
     fn roll_size_mismatch(order_width_mm: f64, roll_width_mm: f64) -> Self {
         Self {
             error: "raw_material_roll_size_mismatch".to_string(),
+            apparatus_options: None,
             order_width_mm: Some(order_width_mm),
             roll_width_mm: Some(roll_width_mm),
         }

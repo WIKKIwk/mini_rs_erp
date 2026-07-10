@@ -137,6 +137,7 @@ async fn raw_material_assignment_requires_exact_scan_before_start() {
                 item_name: "Black ink".to_string(),
                 item_group: "Kraska".to_string(),
                 item_group_path: Vec::new(),
+                apparatus: String::new(),
             },
             &actor,
         )
@@ -152,6 +153,7 @@ async fn raw_material_assignment_requires_exact_scan_before_start() {
                 item_name: "White ink".to_string(),
                 item_group: "Kraska".to_string(),
                 item_group_path: Vec::new(),
+                apparatus: String::new(),
             },
             &actor,
         )
@@ -172,6 +174,7 @@ async fn raw_material_assignment_requires_exact_scan_before_start() {
                 item_name: "Black ink".to_string(),
                 item_group: "Kraska".to_string(),
                 item_group_path: Vec::new(),
+                apparatus: String::new(),
             },
             &actor,
         )
@@ -247,6 +250,90 @@ async fn raw_material_assignment_requires_exact_scan_before_start() {
 }
 
 #[tokio::test]
+async fn raw_material_assignment_returns_choices_and_accepts_selected_apparatus() {
+    let store = std::sync::Arc::new(MemoryProductionMapStore::new());
+    let service = ProductionMapService::new(store);
+    let actor = QueueActionActor {
+        role: "admin".to_string(),
+        ref_: "admin".to_string(),
+        display_name: "Admin".to_string(),
+    };
+    let mut map = apparatus_stage_map("zakaz-raw-choice", "Pechat A");
+    let mut second_apparatus = map.nodes[1].clone();
+    second_apparatus.id = "apparatus-2".to_string();
+    second_apparatus.title = "Laminatsiya 1".to_string();
+    map.nodes.insert(2, second_apparatus);
+    map.edges = vec![
+        ProductionMapEdge {
+            from: "start".to_string(),
+            to: "apparatus".to_string(),
+            branch: String::new(),
+        },
+        ProductionMapEdge {
+            from: "apparatus".to_string(),
+            to: "apparatus-2".to_string(),
+            branch: String::new(),
+        },
+        ProductionMapEdge {
+            from: "apparatus-2".to_string(),
+            to: "end".to_string(),
+            branch: String::new(),
+        },
+    ];
+    service.upsert_map(map).await.expect("map");
+    for apparatus in ["Pechat A", "Laminatsiya 1"] {
+        service
+            .set_apparatus_material_rule(ApparatusMaterialRuleUpsert {
+                apparatus: apparatus.to_string(),
+                requires_material: true,
+                item_groups: vec!["Kraska".to_string()],
+                requirement_groups: Vec::new(),
+            })
+            .await
+            .expect("material rule");
+    }
+
+    let ambiguous = service
+        .assign_raw_material_to_order(
+            RawMaterialAssignmentInput {
+                order_id: "zakaz-raw-choice".to_string(),
+                barcode: "30CHOICE".to_string(),
+                item_code: "INK-CHOICE".to_string(),
+                item_name: "Choice ink".to_string(),
+                item_group: "Kraska".to_string(),
+                item_group_path: Vec::new(),
+                apparatus: String::new(),
+            },
+            &actor,
+        )
+        .await;
+    assert_eq!(
+        ambiguous,
+        Err(ProductionMapError::RawMaterialGroupAmbiguous(vec![
+            "Laminatsiya 1".to_string(),
+            "Pechat A".to_string(),
+        ]))
+    );
+
+    let assigned = service
+        .assign_raw_material_to_order(
+            RawMaterialAssignmentInput {
+                order_id: "zakaz-raw-choice".to_string(),
+                barcode: "30CHOICE".to_string(),
+                item_code: "INK-CHOICE".to_string(),
+                item_name: "Choice ink".to_string(),
+                item_group: "Kraska".to_string(),
+                item_group_path: Vec::new(),
+                apparatus: "Laminatsiya 1".to_string(),
+            },
+            &actor,
+        )
+        .await
+        .expect("assign selected apparatus");
+    assert_eq!(assigned.apparatus, "Laminatsiya 1");
+}
+
+#[tokio::test]
 async fn raw_material_requirement_group_accepts_alternative_item_group() {
     let service = ProductionMapService::new(std::sync::Arc::new(MemoryProductionMapStore::new()));
     let actor = QueueActionActor {
@@ -282,6 +369,7 @@ async fn raw_material_requirement_group_accepts_alternative_item_group() {
                 item_name: "Alternative kraska".to_string(),
                 item_group: "Kraska".to_string(),
                 item_group_path: Vec::new(),
+                apparatus: String::new(),
             },
             &actor,
         )

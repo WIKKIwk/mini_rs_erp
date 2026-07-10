@@ -52,6 +52,8 @@ pub struct RawMaterialAssignmentInput {
     pub item_group: String,
     #[serde(default)]
     pub item_group_path: Vec<String>,
+    #[serde(default)]
+    pub apparatus: String,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -145,9 +147,29 @@ impl ProductionMapService {
         let Some(map) = self.raw_map(&order_id).await? else {
             return Err(ProductionMapError::MapNotFound);
         };
-        let apparatus = self
-            .resolve_material_apparatus(&map, &item_group_path)
+        let apparatus_options = self
+            .resolve_material_apparatus_options(&map, &item_group_path)
             .await?;
+        let requested_apparatus = input.apparatus.trim();
+        let apparatus = if requested_apparatus.is_empty() {
+            match apparatus_options.len() {
+                0 => return Err(ProductionMapError::RawMaterialGroupNotAllowed),
+                1 => apparatus_options[0].clone(),
+                _ => {
+                    return Err(ProductionMapError::RawMaterialGroupAmbiguous(
+                        apparatus_options,
+                    ));
+                }
+            }
+        } else {
+            apparatus_options
+                .iter()
+                .find(|candidate| {
+                    queue_state::apparatus_titles_match(candidate, requested_apparatus)
+                })
+                .cloned()
+                .ok_or(ProductionMapError::RawMaterialGroupNotAllowed)?
+        };
         for existing in self.store.raw_material_assignments().await? {
             if same_barcode(&existing.barcode, &barcode) {
                 if existing.order_id.trim() == order_id
@@ -235,11 +257,11 @@ impl ProductionMapService {
         .await
     }
 
-    async fn resolve_material_apparatus(
+    async fn resolve_material_apparatus_options(
         &self,
         map: &super::ProductionMapDefinition,
         item_group_path: &[String],
-    ) -> Result<String, ProductionMapError> {
+    ) -> Result<Vec<String>, ProductionMapError> {
         let rules = self.store.apparatus_material_rules().await?;
         let mut matches = BTreeSet::new();
         for stage in chain::linear_work_stages(map) {
@@ -250,11 +272,7 @@ impl ProductionMapService {
                 matches.insert(stage.station_title);
             }
         }
-        match matches.len() {
-            0 => Err(ProductionMapError::RawMaterialGroupNotAllowed),
-            1 => Ok(matches.into_iter().next().unwrap_or_default()),
-            _ => Err(ProductionMapError::RawMaterialGroupAmbiguous),
-        }
+        Ok(matches.into_iter().collect())
     }
 
     async fn validate_material_scan(

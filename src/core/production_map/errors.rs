@@ -63,7 +63,7 @@ pub enum ProductionMapError {
     #[error("raw material group is not allowed for this order")]
     RawMaterialGroupNotAllowed,
     #[error("raw material group matches multiple apparatus")]
-    RawMaterialGroupAmbiguous,
+    RawMaterialGroupAmbiguous(Vec<String>),
     #[error("raw material is already assigned")]
     RawMaterialAlreadyAssigned,
     #[error("raw material is already assigned to this order")]

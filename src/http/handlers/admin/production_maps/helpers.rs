@@ -36,8 +36,8 @@ pub(super) fn production_map_error(error: ProductionMapError) -> AdminError {
         ProductionMapError::RawMaterialGroupNotAllowed => {
             bad_request("raw_material_group_not_allowed")
         }
-        ProductionMapError::RawMaterialGroupAmbiguous => {
-            bad_request("raw_material_group_ambiguous")
+        ProductionMapError::RawMaterialGroupAmbiguous(apparatuses) => {
+            ambiguous_raw_material_apparatuses(apparatuses)
         }
         ProductionMapError::RawMaterialAlreadyAssigned => {
             bad_request("raw_material_already_assigned")
@@ -82,6 +82,18 @@ pub(super) fn production_map_error(error: ProductionMapError) -> AdminError {
         ProductionMapError::StoreFailed => server_error("store failed"),
         other => bad_request(other.to_string()),
     }
+}
+
+fn ambiguous_raw_material_apparatuses(apparatuses: Vec<String>) -> AdminError {
+    (
+        StatusCode::BAD_REQUEST,
+        Json(AdminErrorResponse {
+            error: "raw_material_group_ambiguous".to_string(),
+            apparatus_options: Some(apparatuses),
+            order_width_mm: None,
+            roll_width_mm: None,
+        }),
+    )
 }
 
 pub(super) fn warehouse_error(error: WarehouseError) -> AdminError {
