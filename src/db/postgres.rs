@@ -262,6 +262,8 @@ mod tests {
             "mini_quick_order_images",
             "mini_push_tokens",
             "mini_items",
+            "mini_customers",
+            "mini_customer_items",
             "mini_item_groups",
             "mini_production_maps",
             "mini_production_map_nodes",

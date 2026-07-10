@@ -114,6 +114,28 @@ CREATE TABLE IF NOT EXISTS mini_items (
     CONSTRAINT mini_items_group_not_blank CHECK (btrim(item_group) <> '')
 );
 
+CREATE SEQUENCE IF NOT EXISTS mini_customer_ref_seq;
+
+CREATE TABLE IF NOT EXISTS mini_customers (
+    ref TEXT PRIMARY KEY,
+    name TEXT NOT NULL,
+    phone TEXT NOT NULL DEFAULT '',
+    payload_json JSONB NOT NULL DEFAULT '{}'::jsonb,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    CONSTRAINT mini_customers_ref_not_blank CHECK (btrim(ref) <> ''),
+    CONSTRAINT mini_customers_name_not_blank CHECK (btrim(name) <> '')
+);
+
+CREATE TABLE IF NOT EXISTS mini_customer_items (
+    customer_ref TEXT NOT NULL REFERENCES mini_customers(ref) ON DELETE CASCADE,
+    item_code TEXT NOT NULL REFERENCES mini_items(code) ON DELETE CASCADE,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    PRIMARY KEY (customer_ref, item_code),
+    CONSTRAINT mini_customer_items_customer_not_blank CHECK (btrim(customer_ref) <> ''),
+    CONSTRAINT mini_customer_items_item_not_blank CHECK (btrim(item_code) <> '')
+);
+
 CREATE TABLE IF NOT EXISTS mini_production_maps (
     id TEXT PRIMARY KEY,
     order_id TEXT REFERENCES mini_orders(id) ON DELETE SET NULL,

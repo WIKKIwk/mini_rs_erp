@@ -3,6 +3,7 @@ use std::sync::Arc;
 use crate::core::mini_orders::{MiniOrderSink, NoopMiniOrderSink};
 use crate::db::postgres_apparatus_group::PostgresApparatusGroupStore;
 use crate::db::postgres_calculate_order::PostgresCalculateOrderStore;
+use crate::db::postgres_customer::PostgresCustomerStore;
 use crate::db::postgres_engine::PostgresEngineStore;
 use crate::db::postgres_gscale_receipt::PostgresGscaleReceiptStore;
 use crate::db::postgres_mini_order::PostgresMiniOrderSink;
@@ -98,6 +99,10 @@ pub(super) fn build_worker_service() -> WorkerService {
         }
         None => WorkerService::unavailable(),
     }
+}
+
+pub(super) fn build_customer_store() -> Option<Arc<PostgresCustomerStore>> {
+    postgres_pool("customer directory").map(|pool| Arc::new(PostgresCustomerStore::new(pool)))
 }
 
 pub(super) fn build_mini_engine_store() -> Option<PostgresEngineStore> {

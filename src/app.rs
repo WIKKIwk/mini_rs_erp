@@ -7,6 +7,7 @@ use crate::core::admin::monitor_hub::SystemMonitorHub;
 use crate::core::admin::service::AdminService;
 use crate::core::apparatus_groups::ApparatusGroupService;
 use crate::core::auth::service::AuthService;
+use crate::core::auth::ports::CustomerLookup;
 use crate::core::calculate_orders::CalculateOrderStorePort;
 use crate::core::customer::service::CustomerService;
 use crate::core::gscale::GscaleService;
@@ -26,6 +27,7 @@ use crate::core::worker_groups::WorkerGroupService;
 use crate::core::workers::WorkerService;
 use crate::db::postgres_engine::PostgresEngineStore;
 use crate::db::postgres_raw_material_events::PostgresRawMaterialEventStore;
+use crate::db::postgres_customer::PostgresCustomerStore;
 use crate::fcm::discover_push_sender;
 use crate::google_sheets::{OrderSheetSink, discover_order_sheet_sink};
 use crate::rps::RpsDriverClient;
@@ -84,14 +86,21 @@ pub struct AppState {
 impl AppState {
     pub fn new(config: AppConfig) -> Self {
         let admin_store = Arc::new(JsonAdminStore::new(admin_store_path()));
+        let customer_store = build_customer_store();
         let workers = build_worker_service();
-        let auth = build_auth_service(&config, admin_store.clone(), workers.clone());
+        let auth = build_auth_service(
+            &config,
+            admin_store.clone(),
+            workers.clone(),
+            customer_store.clone(),
+        );
         let profile_store = build_profile_store(&config);
         let admin = build_admin_service(
             &config,
             admin_store.clone(),
             auth.clone(),
             profile_store.clone(),
+            customer_store,
         );
         let customer = CustomerService::new();
         let production_maps = build_production_map_service();
@@ -159,10 +168,14 @@ fn build_auth_service(
     config: &AppConfig,
     admin_store: Arc<JsonAdminStore>,
     workers: WorkerService,
+    customer_store: Option<Arc<PostgresCustomerStore>>,
 ) -> AuthService {
+    let customer_lookup: Arc<dyn CustomerLookup> = customer_store
+        .map(|store| store as Arc<dyn CustomerLookup>)
+        .unwrap_or_else(|| admin_store.clone());
     AuthService::new(config)
         .with_supplier_dependencies(admin_store.clone(), admin_store.clone())
-        .with_customer_dependencies(admin_store.clone(), admin_store.clone())
+        .with_customer_dependencies(customer_lookup, admin_store.clone())
         .with_material_taminotchi_dependencies(admin_store.clone(), admin_store.clone())
         .with_worker_dependencies(Arc::new(workers), admin_store)
 }
@@ -172,10 +185,12 @@ fn build_admin_service(
     admin_store: Arc<JsonAdminStore>,
     auth: AuthService,
     profile_store: Arc<dyn ProfileStorePort>,
+    customer_store: Option<Arc<PostgresCustomerStore>>,
 ) -> AdminService {
     let mut admin =
         AdminService::new(config).with_env_persister(Arc::new(DotEnvPersister::new(".env")));
-    let (admin_read_port, admin_write_port) = build_admin_catalog_ports(admin_store.clone());
+    let (admin_read_port, admin_write_port) =
+        build_admin_catalog_ports(admin_store.clone(), customer_store);
     admin = admin
         .with_read_port(admin_read_port)
         .with_write_port(admin_write_port)

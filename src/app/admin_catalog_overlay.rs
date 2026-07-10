@@ -7,10 +7,12 @@ use crate::core::admin::ports::{AdminPortError, AdminReadPort, AdminWritePort};
 use crate::core::werka::models::SupplierItem;
 use crate::db::postgres::PostgresConfig;
 use crate::db::postgres_admin_catalog::PostgresAdminCatalogStore;
+use crate::db::postgres_customer::PostgresCustomerStore;
 use crate::store::admin_store::JsonAdminStore;
 
 pub(super) fn build_admin_catalog_ports(
     admin_store: Arc<JsonAdminStore>,
+    customer_store: Option<Arc<PostgresCustomerStore>>,
 ) -> (Arc<dyn AdminReadPort>, Arc<dyn AdminWritePort>) {
     let config = match PostgresConfig::from_env() {
         Ok(config) => config,
@@ -26,6 +28,7 @@ pub(super) fn build_admin_catalog_ports(
             let overlay = Arc::new(AdminCatalogOverlay {
                 admin_store,
                 catalog,
+                customer_store,
             });
             (
                 overlay.clone() as Arc<dyn AdminReadPort>,
@@ -50,6 +53,7 @@ fn unavailable_admin_catalog_ports() -> (Arc<dyn AdminReadPort>, Arc<dyn AdminWr
 struct AdminCatalogOverlay {
     admin_store: Arc<JsonAdminStore>,
     catalog: Arc<PostgresAdminCatalogStore>,
+    customer_store: Option<Arc<PostgresCustomerStore>>,
 }
 
 struct AdminCatalogUnavailable;
@@ -97,11 +101,17 @@ impl AdminReadPort for AdminCatalogOverlay {
         limit: usize,
         offset: usize,
     ) -> Result<Vec<AdminDirectoryEntry>, AdminPortError> {
-        self.admin_store.customers_page(query, limit, offset).await
+        match &self.customer_store {
+            Some(store) => store.customers_page(query, limit, offset).await,
+            None => self.admin_store.customers_page(query, limit, offset).await,
+        }
     }
 
     async fn customer_by_ref(&self, ref_: &str) -> Result<AdminDirectoryEntry, AdminPortError> {
-        self.admin_store.customer_by_ref(ref_).await
+        match &self.customer_store {
+            Some(store) => store.customer_by_ref(ref_).await,
+            None => self.admin_store.customer_by_ref(ref_).await,
+        }
     }
 
     async fn material_taminotchilar_page(
@@ -183,9 +193,13 @@ impl AdminReadPort for AdminCatalogOverlay {
         query: &str,
         limit: usize,
     ) -> Result<Vec<SupplierItem>, AdminPortError> {
-        self.admin_store
-            .customer_items(customer_ref, query, limit)
-            .await
+        match &self.customer_store {
+            Some(store) => store.customer_items(customer_ref, query, limit).await,
+            None => self
+                .admin_store
+                .customer_items(customer_ref, query, limit)
+                .await,
+        }
     }
 }
 
@@ -227,11 +241,17 @@ impl AdminWritePort for AdminCatalogOverlay {
         name: &str,
         phone: &str,
     ) -> Result<AdminDirectoryEntry, AdminPortError> {
-        self.admin_store.create_customer(name, phone).await
+        match &self.customer_store {
+            Some(store) => store.create_customer(name, phone).await,
+            None => self.admin_store.create_customer(name, phone).await,
+        }
     }
 
     async fn update_customer_phone(&self, ref_: &str, phone: &str) -> Result<(), AdminPortError> {
-        self.admin_store.update_customer_phone(ref_, phone).await
+        match &self.customer_store {
+            Some(store) => store.update_customer_phone(ref_, phone).await,
+            None => self.admin_store.update_customer_phone(ref_, phone).await,
+        }
     }
 
     async fn update_customer_code(&self, ref_: &str, code: &str) -> Result<(), AdminPortError> {
@@ -274,7 +294,10 @@ impl AdminWritePort for AdminCatalogOverlay {
         item_code: &str,
     ) -> Result<(), AdminPortError> {
         self.ensure_assignment_item(item_code).await?;
-        self.admin_store.assign_customer_item(ref_, item_code).await
+        match &self.customer_store {
+            Some(store) => store.assign_customer_item(ref_, item_code).await,
+            None => self.admin_store.assign_customer_item(ref_, item_code).await,
+        }
     }
 
     async fn unassign_customer_item(
@@ -282,9 +305,13 @@ impl AdminWritePort for AdminCatalogOverlay {
         ref_: &str,
         item_code: &str,
     ) -> Result<(), AdminPortError> {
-        self.admin_store
-            .unassign_customer_item(ref_, item_code)
-            .await
+        match &self.customer_store {
+            Some(store) => store.unassign_customer_item(ref_, item_code).await,
+            None => self
+                .admin_store
+                .unassign_customer_item(ref_, item_code)
+                .await,
+        }
     }
 
     async fn create_item(
