@@ -9,7 +9,7 @@ const DEFAULT_MAX_CONNECTIONS: u32 = 16;
 const DEFAULT_ACQUIRE_TIMEOUT_MS: u64 = 500;
 const MIGRATION_LOCK_KEY: i64 = 6_514_811_918_052_026_001;
 
-const POSTGRES_MIGRATIONS: [(&str, &str); 3] = [
+const POSTGRES_MIGRATIONS: [(&str, &str); 4] = [
     (
         "0001_mini_erp_foundation",
         include_str!("../../migrations/postgres/0001_mini_erp_foundation.sql"),
@@ -21,6 +21,10 @@ const POSTGRES_MIGRATIONS: [(&str, &str); 3] = [
     (
         "0003_erp_data_integrity",
         include_str!("../../migrations/postgres/0003_erp_data_integrity.sql"),
+    ),
+    (
+        "0004_system_users",
+        include_str!("../../migrations/postgres/0004_system_users.sql"),
     ),
 ];
 

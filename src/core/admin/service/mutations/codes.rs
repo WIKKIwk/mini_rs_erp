@@ -46,24 +46,25 @@ impl AdminService {
         }
         let now = OffsetDateTime::now_utc();
         state = bump_code_regen_state(state, now)?;
-        let prefix = self.worker_access_code_prefix(&worker.id).await?;
-        state.custom_code = random_code(&prefix, &mut existing);
+        state.custom_code = random_code("40", &mut existing);
         self.put_state(&worker.id, state).await?;
         self.worker_detail(worker).await
     }
 
-    async fn worker_access_code_prefix(&self, ref_: &str) -> Result<String, AdminPortError> {
-        let assignments = self.role_assignments().await?;
-        let ref_ = ref_.trim();
-        if assignments.iter().any(|assignment| {
-            assignment.principal_ref.trim() == ref_
-                && (assignment.role_id == "qolipchi"
-                    || assignment.principal_role == PrincipalRole::Qolipchi)
-        }) {
-            Ok("50".to_string())
-        } else {
-            Ok("40".to_string())
+    pub async fn regenerate_system_user_code(
+        &self,
+        user: SystemUser,
+    ) -> Result<AdminSystemUserDetail, AdminPortError> {
+        let mut existing = self.existing_state_codes().await?;
+        let mut state = self.state_for(&user.id).await?;
+        if state.removed || user.role != PrincipalRole::Qolipchi {
+            return Err(AdminPortError::NotFound);
         }
+        let now = OffsetDateTime::now_utc();
+        state = bump_code_regen_state(state, now)?;
+        state.custom_code = random_code("50", &mut existing);
+        self.put_state(&user.id, state).await?;
+        self.system_user_detail(user).await
     }
 
     async fn customer_access_code_prefix(&self, ref_: &str) -> Result<String, AdminPortError> {

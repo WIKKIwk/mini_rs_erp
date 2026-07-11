@@ -2,6 +2,8 @@ use std::collections::BTreeMap;
 
 use async_trait::async_trait;
 
+use crate::core::auth::models::PrincipalRole;
+
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct SupplierRecord {
     pub id: String,
@@ -28,6 +30,14 @@ pub struct WorkerRecord {
     pub id: String,
     pub name: String,
     pub phone: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SystemUserRecord {
+    pub id: String,
+    pub name: String,
+    pub phone: String,
+    pub role: PrincipalRole,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -71,6 +81,16 @@ pub trait WorkerLookup: Send + Sync {
         query: &str,
         limit: usize,
     ) -> Result<Vec<WorkerRecord>, AuthPortError>;
+}
+
+#[async_trait]
+pub trait SystemUserLookup: Send + Sync {
+    async fn search_system_users(
+        &self,
+        role: PrincipalRole,
+        query: &str,
+        limit: usize,
+    ) -> Result<Vec<SystemUserRecord>, AuthPortError>;
 }
 
 #[async_trait]

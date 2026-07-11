@@ -161,6 +161,13 @@ pub async fn locations(
                     .map_err(qolip_error)?;
                 if assigned.len() == 1 {
                     block_query = assigned[0].name.clone();
+                } else if assigned.is_empty()
+                    && !state
+                        .admin
+                        .principal_has_capability(&principal, Capability::AdminAccess)
+                        .await
+                {
+                    return Err(forbidden());
                 }
             }
             let block = match accessible_qolip_block(&state, &principal, &block_query).await? {

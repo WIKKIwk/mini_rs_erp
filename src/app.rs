@@ -20,6 +20,7 @@ use crate::core::qolip::QolipService;
 use crate::core::rezka::RezkaService;
 use crate::core::rps_batch::RpsBatchService;
 use crate::core::session::manager::SessionManager;
+use crate::core::system_users::SystemUserService;
 use crate::core::warehouse_events::WarehouseEventHub;
 use crate::core::warehouses::WarehouseService;
 use crate::core::werka::service::WerkaService;
@@ -72,6 +73,7 @@ pub struct AppState {
     pub werka: WerkaService,
     pub warehouses: WarehouseService,
     pub workers: WorkerService,
+    pub system_users: SystemUserService,
     pub worker_groups: WorkerGroupService,
     pub sessions: SessionManager,
     pub warehouse_events: WarehouseEventHub,
@@ -88,10 +90,12 @@ impl AppState {
         let admin_store = Arc::new(JsonAdminStore::new(admin_store_path()));
         let customer_store = build_customer_store();
         let workers = build_worker_service();
+        let system_users = build_system_user_service();
         let auth = build_auth_service(
             &config,
             admin_store.clone(),
             workers.clone(),
+            system_users.clone(),
             customer_store.clone(),
         );
         let profile_store = build_profile_store(&config);
@@ -157,6 +161,7 @@ impl AppState {
             werka,
             warehouses,
             workers,
+            system_users,
             worker_groups,
             sessions,
             warehouse_events,
@@ -173,6 +178,7 @@ fn build_auth_service(
     config: &AppConfig,
     admin_store: Arc<JsonAdminStore>,
     workers: WorkerService,
+    system_users: SystemUserService,
     customer_store: Option<Arc<PostgresCustomerStore>>,
 ) -> AuthService {
     let customer_lookup: Arc<dyn CustomerLookup> = customer_store
@@ -182,7 +188,8 @@ fn build_auth_service(
         .with_supplier_dependencies(admin_store.clone(), admin_store.clone())
         .with_customer_dependencies(customer_lookup, admin_store.clone())
         .with_material_taminotchi_dependencies(admin_store.clone(), admin_store.clone())
-        .with_worker_dependencies(Arc::new(workers), admin_store)
+        .with_worker_dependencies(Arc::new(workers), admin_store.clone())
+        .with_system_user_dependencies(Arc::new(system_users), admin_store)
 }
 
 fn build_admin_service(

@@ -90,7 +90,6 @@ impl AdminService {
             Ok(Some(role)) => capability_code(capability)
                 .map(|code| role.capability_codes.iter().any(|item| item == code))
                 .unwrap_or(false),
-            Ok(None) if principal.role == PrincipalRole::Qolipchi => false,
             Ok(None) => has_capability(principal, capability),
             Err(_) => false,
         }
@@ -99,7 +98,6 @@ impl AdminService {
     pub async fn principal_capability_codes(&self, principal: &Principal) -> Vec<String> {
         match self.principal_assigned_role(principal).await {
             Ok(Some(role)) => role.capability_codes,
-            Ok(None) if principal.role == PrincipalRole::Qolipchi => Vec::new(),
             Ok(None) => capability_codes_for_role(principal.role.clone()),
             Err(_) => Vec::new(),
         }

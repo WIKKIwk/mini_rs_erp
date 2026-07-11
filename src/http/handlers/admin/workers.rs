@@ -1,7 +1,6 @@
 use super::*;
 
 use crate::core::admin::models::AdminWorkerDetail;
-use crate::core::auth::models::PrincipalRole;
 use crate::core::production_map::{OrderProgressBatch, OrderRunSession, ProductionOrderLogEntry};
 use crate::core::worker_groups::{WorkerGroupError, WorkerGroupRecord, WorkerGroupUpsert};
 use crate::core::workers::Worker;
@@ -63,22 +62,8 @@ pub async fn workers(
                 .await
                 .map_err(worker_error)?;
             match normalize_worker_role_filter(query.role.as_deref()) {
-                Some(WorkerRoleFilter::Worker) => {
-                    let assignments = state
-                        .admin
-                        .role_assignments()
-                        .await
-                        .map_err(|_| server_error("role assignments failed"))?;
-                    workers.retain(|worker| !worker_is_qolipchi(worker, &assignments));
-                }
-                Some(WorkerRoleFilter::Qolipchi) => {
-                    let assignments = state
-                        .admin
-                        .role_assignments()
-                        .await
-                        .map_err(|_| server_error("role assignments failed"))?;
-                    workers.retain(|worker| worker_is_qolipchi(worker, &assignments));
-                }
+                Some(WorkerRoleFilter::Worker) => {}
+                Some(WorkerRoleFilter::Qolipchi) => workers.clear(),
                 Some(WorkerRoleFilter::Unknown) => workers.clear(),
                 None => {}
             }
@@ -133,15 +118,6 @@ fn normalize_worker_role_filter(value: Option<&str>) -> Option<WorkerRoleFilter>
         "qolipchi" => Some(WorkerRoleFilter::Qolipchi),
         _ => Some(WorkerRoleFilter::Unknown),
     }
-}
-
-fn worker_is_qolipchi(worker: &Worker, assignments: &[crate::core::authz::RoleAssignment]) -> bool {
-    let worker_id = worker.id.trim();
-    assignments.iter().any(|assignment| {
-        assignment.principal_ref.trim() == worker_id
-            && (assignment.principal_role == PrincipalRole::Qolipchi
-                || assignment.role_id == "qolipchi")
-    })
 }
 
 fn worker_error(error: WorkerError) -> AdminError {

@@ -13,6 +13,7 @@ use crate::db::postgres_raw_material_events::PostgresRawMaterialEventStore;
 use crate::db::postgres_warehouse::PostgresWarehouseStore;
 use crate::db::postgres_worker::PostgresWorkerStore;
 use crate::db::postgres_worker_group::PostgresWorkerGroupStore;
+use crate::db::postgres_system_user::PostgresSystemUserStore;
 use crate::rps::RpsDriverClient;
 use crate::store::apparatus_group_store::ApparatusGroupStore;
 use crate::store::calculate_order_store::CalculateOrderStore;
@@ -98,6 +99,16 @@ pub(super) fn build_worker_service() -> WorkerService {
             WorkerService::new(Arc::new(PostgresWorkerStore::new(pool)))
         }
         None => WorkerService::unavailable(),
+    }
+}
+
+pub(super) fn build_system_user_service() -> SystemUserService {
+    match postgres_pool("system user") {
+        Some(pool) => {
+            tracing::info!("mini ERP postgres system user store configured");
+            SystemUserService::new(Arc::new(PostgresSystemUserStore::new(pool)))
+        }
+        None => SystemUserService::unavailable(),
     }
 }
 

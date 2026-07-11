@@ -129,6 +129,29 @@ impl AdminService {
         })
     }
 
+    pub async fn system_user_detail(
+        &self,
+        user: SystemUser,
+    ) -> Result<AdminSystemUserDetail, AdminPortError> {
+        let state = self.state_for(&user.id).await?;
+        if state.removed {
+            return Err(AdminPortError::NotFound);
+        }
+        let avatar_url = self.profile_avatar_url("qolipchi", &user.id).await;
+        let now = OffsetDateTime::now_utc();
+        Ok(AdminSystemUserDetail {
+            id: user.id,
+            role: user.role,
+            name: user.name,
+            phone: user.phone,
+            avatar_url,
+            code: state.custom_code.trim().to_string(),
+            blocked: state.blocked,
+            code_locked: state.code_locked(now),
+            code_retry_after_sec: state.retry_after_seconds(now),
+        })
+    }
+
     pub async fn activity(&self, items: AdminActivity) -> Result<AdminActivity, AdminPortError> {
         Ok(items.into_iter().take(30).collect())
     }

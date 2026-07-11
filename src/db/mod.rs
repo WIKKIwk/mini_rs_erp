@@ -11,6 +11,7 @@ pub mod postgres_push_token;
 pub mod postgres_qolip;
 pub mod postgres_raw_material_events;
 pub mod postgres_rps_batch;
+pub mod postgres_system_user;
 pub mod postgres_warehouse;
 pub mod postgres_worker;
 pub mod postgres_worker_group;

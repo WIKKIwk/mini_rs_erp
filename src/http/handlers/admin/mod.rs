@@ -3,6 +3,7 @@ mod production_maps;
 mod supplier_mutations;
 mod suppliers;
 mod system;
+mod system_users;
 mod warehouse_live;
 mod workers;
 
@@ -36,6 +37,7 @@ pub use system::{
     roles, system_monitor, system_monitor_live, warehouse_assignments, warehouse_summaries,
     warehouses, werka_code_regenerate,
 };
+pub use system_users::{system_user_code_regenerate, system_user_detail, system_users};
 use system::{authorize_any_capability, authorize_capability, require_capability};
 pub use warehouse_live::warehouse_live;
 pub use workers::{

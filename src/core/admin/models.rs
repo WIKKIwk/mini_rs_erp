@@ -194,6 +194,19 @@ pub struct AdminWorkerDetail {
     pub code_retry_after_sec: i64,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AdminSystemUserDetail {
+    pub id: String,
+    pub role: PrincipalRole,
+    pub name: String,
+    pub phone: String,
+    pub avatar_url: String,
+    pub code: String,
+    pub blocked: bool,
+    pub code_locked: bool,
+    pub code_retry_after_sec: i64,
+}
+
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AdminPhoneUpdateRequest {
     pub phone: String,

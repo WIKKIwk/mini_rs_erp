@@ -11,7 +11,8 @@ use std::sync::RwLock;
 
 use crate::config::AppConfig;
 use crate::core::auth::ports::{
-    AdminAccessStateLookup, CustomerLookup, MaterialTaminotchiLookup, SupplierLookup, WorkerLookup,
+    AdminAccessStateLookup, CustomerLookup, MaterialTaminotchiLookup, SupplierLookup,
+    SystemUserLookup, WorkerLookup,
 };
 
 pub use self::helpers::normalize_phone;
@@ -27,6 +28,7 @@ pub struct AuthService {
     customer_lookup: Option<Arc<dyn CustomerLookup>>,
     material_taminotchi_lookup: Option<Arc<dyn MaterialTaminotchiLookup>>,
     worker_lookup: Option<Arc<dyn WorkerLookup>>,
+    system_user_lookup: Option<Arc<dyn SystemUserLookup>>,
     admin_state_lookup: Option<Arc<dyn AdminAccessStateLookup>>,
 }
 
@@ -80,6 +82,7 @@ impl AuthService {
             customer_lookup: None,
             material_taminotchi_lookup: None,
             worker_lookup: None,
+            system_user_lookup: None,
             admin_state_lookup: None,
         }
     }
@@ -100,6 +103,16 @@ impl AuthService {
         admin_state_lookup: Arc<dyn AdminAccessStateLookup>,
     ) -> Self {
         self.worker_lookup = Some(worker_lookup);
+        self.admin_state_lookup = Some(admin_state_lookup);
+        self
+    }
+
+    pub fn with_system_user_dependencies(
+        mut self,
+        system_user_lookup: Arc<dyn SystemUserLookup>,
+        admin_state_lookup: Arc<dyn AdminAccessStateLookup>,
+    ) -> Self {
+        self.system_user_lookup = Some(system_user_lookup);
         self.admin_state_lookup = Some(admin_state_lookup);
         self
     }

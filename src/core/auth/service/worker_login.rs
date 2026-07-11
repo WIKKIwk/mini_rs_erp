@@ -1,5 +1,5 @@
 use crate::core::auth::models::{Principal, PrincipalRole};
-use crate::core::auth::ports::{WorkerLookup, WorkerRecord};
+use crate::core::auth::ports::{SystemUserLookup, SystemUserRecord, WorkerLookup, WorkerRecord};
 
 use super::helpers::{local_phone_query, merge_worker_records, phone_matches_normalized};
 use super::{AuthError, AuthService};
@@ -28,8 +28,42 @@ impl AuthService {
         normalized_phone: &str,
         code: &str,
     ) -> Result<Principal, AuthError> {
-        self.login_worker_by_role(normalized_phone, code, PrincipalRole::Qolipchi)
+        let lookup = self
+            .system_user_lookup
+            .as_ref()
+            .ok_or(AuthError::InvalidCredentials)?;
+        let states = self
+            .admin_state_lookup
+            .as_ref()
+            .ok_or(AuthError::InvalidCredentials)?
+            .list_states()
             .await
+            .map_err(|_| AuthError::Internal)?;
+        let users = self
+            .search_system_users_for_login(lookup.as_ref(), normalized_phone)
+            .await?;
+
+        for user in users {
+            let state = states.get(user.id.trim()).cloned().unwrap_or_default();
+            if state.removed || state.blocked || user.role != PrincipalRole::Qolipchi {
+                continue;
+            }
+            if !state.custom_code.trim().is_empty()
+                && code.trim() == state.custom_code.trim()
+                && phone_matches_normalized(&user.phone, normalized_phone)
+            {
+                return Ok(Principal {
+                    role: PrincipalRole::Qolipchi,
+                    display_name: user.name.clone(),
+                    legal_name: user.name,
+                    ref_: user.id,
+                    phone: user.phone,
+                    avatar_url: String::new(),
+                });
+            }
+        }
+
+        Err(AuthError::InvalidCredentials)
     }
 
     async fn login_worker_by_role(
@@ -104,5 +138,34 @@ impl AuthService {
                 .map_err(|_| AuthError::Internal)?;
         }
         Ok(workers)
+    }
+
+    async fn search_system_users_for_login(
+        &self,
+        lookup: &dyn SystemUserLookup,
+        normalized_phone: &str,
+    ) -> Result<Vec<SystemUserRecord>, AuthError> {
+        let mut users = lookup
+            .search_system_users(PrincipalRole::Qolipchi, normalized_phone, 50)
+            .await
+            .map_err(|_| AuthError::Internal)?;
+        if let Some(local_phone) = local_phone_query(normalized_phone) {
+            let local_matches = lookup
+                .search_system_users(PrincipalRole::Qolipchi, &local_phone, 50)
+                .await
+                .map_err(|_| AuthError::Internal)?;
+            for user in local_matches {
+                if !users.iter().any(|existing| existing.id == user.id) {
+                    users.push(user);
+                }
+            }
+        }
+        if users.is_empty() {
+            users = lookup
+                .search_system_users(PrincipalRole::Qolipchi, "", 500)
+                .await
+                .map_err(|_| AuthError::Internal)?;
+        }
+        Ok(users)
     }
 }

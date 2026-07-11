@@ -36,6 +36,7 @@ use crate::core::gscale::ports::{GscalePortError, MaterialReceiptStorePort, Scal
 use crate::core::mini_orders::{MiniOrderError, MiniOrderSink, NoopMiniOrderSink};
 use crate::core::production_map::{MemoryProductionMapStore, ProductionMapService};
 use crate::core::session::manager::SessionManager;
+use crate::core::system_users::{MemorySystemUserStore, SystemUserService};
 use crate::core::warehouses::{
     MemoryWarehouseStore, WarehouseAssignmentUpsert, WarehouseService, WarehouseUpsert,
 };
@@ -292,11 +293,17 @@ fn test_state() -> AppState {
     state.apparatus_groups = ApparatusGroupService::new(Arc::new(MemoryApparatusGroupStore::new()));
     state.warehouses = WarehouseService::new(Arc::new(MemoryWarehouseStore::new()));
     state.workers = WorkerService::new(Arc::new(MemoryWorkerStore::new()));
+    state.system_users =
+        SystemUserService::new(Arc::new(MemorySystemUserStore::new()));
     state.auth = crate::core::auth::service::AuthService::new(&state.config)
         .with_customer_dependencies(admin_port.clone(), admin_state_port.clone())
         .with_supplier_dependencies(admin_port.clone(), admin_state_port.clone())
         .with_material_taminotchi_dependencies(admin_port, admin_state_port.clone())
-        .with_worker_dependencies(Arc::new(state.workers.clone()), admin_state_port);
+        .with_worker_dependencies(Arc::new(state.workers.clone()), admin_state_port.clone())
+        .with_system_user_dependencies(
+            Arc::new(state.system_users.clone()),
+            admin_state_port,
+        );
     state.worker_groups = WorkerGroupService::new(Arc::new(MemoryWorkerGroupStore::new()));
     state.production_orders = Arc::new(NoopMiniOrderSink);
     state

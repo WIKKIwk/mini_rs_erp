@@ -153,6 +153,13 @@ pub async fn user_list(
     }
     require_capability(&state, &principal, Capability::SupplierDirectoryRead).await?;
     require_capability(&state, &principal, Capability::CustomerDirectoryRead).await?;
+    if query.role.as_deref().map(str::trim).map(str::to_ascii_lowercase).as_deref()
+        == Some("qolipchi")
+    {
+        return system_users::system_user_list_page(&state, &query)
+            .await
+            .map(Json);
+    }
     state
         .admin
         .user_list_page(
