@@ -36,6 +36,7 @@ async fn queue_start_rejects_raw_material_stock_reserved_for_other_order() {
         .await
         .expect("map save");
     assert_eq!(map.status(), StatusCode::OK);
+    provision_test_qolip(&router, &token, "zakaz-raw-reserved").await;
 
     let rule = router
         .clone()
@@ -73,12 +74,12 @@ async fn queue_start_rejects_raw_material_stock_reserved_for_other_order() {
             "POST",
             "/v1/mobile/admin/production-maps/queue-action",
             &worker_token,
-            r#"{
+            &with_test_qolip(r#"{
                 "apparatus":"7 ta rangli pechat - A",
                 "order_id":"zakaz-raw-reserved",
                 "action":"start",
                 "material_barcodes":["30AA"]
-            }"#,
+            }"#, "zakaz-raw-reserved"),
         ))
         .await
         .expect("queue action with reserved stock");
@@ -134,6 +135,7 @@ async fn queue_start_commit_failure_does_not_reserve_raw_material_stock() {
         .await
         .expect("map save");
     assert_eq!(map.status(), StatusCode::OK);
+    provision_test_qolip(&router, &token, "zakaz-raw-rollback").await;
 
     let rule = router
         .clone()
@@ -168,12 +170,12 @@ async fn queue_start_commit_failure_does_not_reserve_raw_material_stock() {
             "POST",
             "/v1/mobile/admin/production-maps/queue-action",
             &worker_token,
-            r#"{
+            &with_test_qolip(r#"{
                 "apparatus":"7 ta rangli pechat - A",
                 "order_id":"zakaz-raw-rollback",
                 "action":"start",
                 "material_barcodes":["30AA"]
-            }"#,
+            }"#, "zakaz-raw-rollback"),
         ))
         .await
         .expect("queue action with failing commit");

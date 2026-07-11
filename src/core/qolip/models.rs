@@ -94,6 +94,8 @@ pub struct QolipCheckout {
     pub warehouse: String,
     pub item_code: String,
     pub item_name: String,
+    #[serde(default)]
+    pub item_group: String,
     pub qolip_code: String,
     pub size: i32,
     pub quantity: i32,
@@ -171,6 +173,8 @@ pub enum QolipError {
     MissingBlock,
     #[error("item is required")]
     MissingItem,
+    #[error("item group is required")]
+    MissingItemGroup,
     #[error("qolip code is required")]
     MissingQolipCode,
     #[error("qolip code not found")]

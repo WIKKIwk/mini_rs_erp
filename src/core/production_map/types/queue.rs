@@ -85,4 +85,6 @@ pub struct ApparatusQueueActionResult {
     pub progress_batch: Option<OrderProgressBatch>,
     #[serde(skip)]
     pub raw_material_stock_warehouses: Vec<String>,
+    #[serde(skip)]
+    pub qolip_checkout_committed: bool,
 }

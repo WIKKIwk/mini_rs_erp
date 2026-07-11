@@ -34,6 +34,7 @@ async fn queue_complete_without_output_creates_admin_completion_request() {
         .await
         .expect("save map");
     assert_eq!(saved.status(), StatusCode::OK);
+    provision_test_qolip(&router, &admin_token, "zakaz-zero-complete").await;
 
     let started = router
         .clone()
@@ -41,11 +42,11 @@ async fn queue_complete_without_output_creates_admin_completion_request() {
             "POST",
             "/v1/mobile/admin/production-maps/queue-action",
             &worker_token,
-            r#"{
+            &with_test_qolip(r#"{
                 "apparatus":"7 ta rangli pechat",
                 "order_id":"zakaz-zero-complete",
                 "action":"start"
-            }"#,
+            }"#, "zakaz-zero-complete"),
         ))
         .await
         .expect("start");
@@ -143,6 +144,7 @@ async fn queue_complete_with_zero_metric_requires_reason_and_creates_admin_reque
         .await
         .expect("save map");
     assert_eq!(saved.status(), StatusCode::OK);
+    provision_test_qolip(&router, &admin_token, "zakaz-zero-metric").await;
 
     let started = router
         .clone()
@@ -150,11 +152,11 @@ async fn queue_complete_with_zero_metric_requires_reason_and_creates_admin_reque
             "POST",
             "/v1/mobile/admin/production-maps/queue-action",
             &worker_token,
-            r#"{
+            &with_test_qolip(r#"{
                 "apparatus":"7 ta rangli pechat",
                 "order_id":"zakaz-zero-metric",
                 "action":"start"
-            }"#,
+            }"#, "zakaz-zero-metric"),
         ))
         .await
         .expect("start");
@@ -317,6 +319,8 @@ async fn admin_approves_zero_output_completion_request_and_closes_order_with_iss
         .await
         .expect("sequence");
     assert_eq!(sequenced.status(), StatusCode::OK);
+    provision_test_qolip(&router, &admin_token, "zakaz-approve-zero").await;
+    provision_test_qolip(&router, &admin_token, "zakaz-approve-next").await;
 
     let started = router
         .clone()
@@ -324,12 +328,12 @@ async fn admin_approves_zero_output_completion_request_and_closes_order_with_iss
             "POST",
             "/v1/mobile/admin/production-maps/queue-action",
             &worker_token,
-            r#"{
+            &with_test_qolip(r#"{
                 "apparatus":"7 ta rangli pechat",
                 "order_id":"zakaz-approve-zero",
                 "action":"start",
                 "material_barcodes":["30AA"]
-            }"#,
+            }"#, "zakaz-approve-zero"),
         ))
         .await
         .expect("start");
@@ -461,11 +465,11 @@ async fn admin_approves_zero_output_completion_request_and_closes_order_with_iss
             "POST",
             "/v1/mobile/admin/production-maps/queue-action",
             &worker_token,
-            r#"{
+            &with_test_qolip(r#"{
                 "apparatus":"7 ta rangli pechat",
                 "order_id":"zakaz-approve-next",
                 "action":"start"
-            }"#,
+            }"#, "zakaz-approve-next"),
         ))
         .await
         .expect("start next");

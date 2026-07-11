@@ -460,6 +460,8 @@ async fn production_map_sequence_blocks_reorder_before_active_order() {
         assert_eq!(saved.status(), StatusCode::OK);
     }
 
+    provision_test_qolip(&router, &token, "zakaz-active-a").await;
+
     let sequence = router
         .clone()
         .oneshot(request_with_body(
@@ -481,11 +483,11 @@ async fn production_map_sequence_blocks_reorder_before_active_order() {
             "POST",
             "/v1/mobile/admin/production-maps/queue-action",
             &worker_token,
-            r#"{
+            &with_test_qolip(r#"{
                 "apparatus":"7 ta rangli pechat",
                 "order_id":"zakaz-active-a",
                 "action":"start"
-            }"#,
+            }"#, "zakaz-active-a"),
         ))
         .await
         .expect("start order");

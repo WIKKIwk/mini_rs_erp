@@ -458,7 +458,7 @@ impl ProductionMapService {
         &self,
         prepared: PreparedApparatusQueueAction,
     ) -> Result<ApparatusQueueActionResult, ProductionMapError> {
-        self.commit_prepared_queue_action_with_raw_material_stock(prepared, Vec::new())
+        self.commit_prepared_queue_action_with_raw_material_stock(prepared, Vec::new(), None)
             .await
     }
 
@@ -466,6 +466,7 @@ impl ProductionMapService {
         &self,
         prepared: PreparedApparatusQueueAction,
         raw_material_stock_transitions: Vec<RawMaterialStockTransition>,
+        qolip_checkout: Option<crate::core::qolip::QolipCheckout>,
     ) -> Result<ApparatusQueueActionResult, ProductionMapError> {
         let order_id = prepared.event.order_id.clone();
         let claimed_alternative_map = prepared.claimed_alternative_map.clone();
@@ -483,6 +484,7 @@ impl ProductionMapService {
                 progress_batch: prepared.progress_batch.clone(),
                 progress_batch_updates: prepared.progress_batch_updates.clone(),
                 raw_material_stock_transitions,
+                qolip_checkout,
             })
             .await;
         let write_result = match write_result {
@@ -503,6 +505,7 @@ impl ProductionMapService {
             progress_event: prepared.progress_event,
             progress_batch: prepared.progress_batch,
             raw_material_stock_warehouses: write_result.raw_material_stock_warehouses,
+            qolip_checkout_committed: write_result.qolip_checkout_committed,
         })
     }
 }

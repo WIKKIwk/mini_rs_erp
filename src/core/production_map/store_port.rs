@@ -2,6 +2,8 @@ use std::collections::BTreeMap;
 
 use async_trait::async_trait;
 
+use crate::core::qolip::QolipCheckout;
+
 use super::materials::{ApparatusMaterialRule, RawMaterialAssignment};
 use super::types::*;
 
@@ -50,6 +52,7 @@ impl RawMaterialStockTransition {
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct QueueActionProgressWriteResult {
     pub raw_material_stock_warehouses: Vec<String>,
+    pub qolip_checkout_committed: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -62,6 +65,7 @@ pub struct QueueActionProgressWrite {
     pub progress_batch: Option<OrderProgressBatch>,
     pub progress_batch_updates: Vec<OrderProgressBatch>,
     pub raw_material_stock_transitions: Vec<RawMaterialStockTransition>,
+    pub qolip_checkout: Option<QolipCheckout>,
 }
 
 #[async_trait]

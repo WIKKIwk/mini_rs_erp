@@ -44,17 +44,19 @@ async fn wip_batches_endpoint_lists_waiting_and_in_use_batches() {
         .expect("save map");
     assert_eq!(saved.status(), StatusCode::OK);
 
+    provision_test_qolip(&router, &admin_token, "zakaz-wip-route").await;
+
     let started = router
         .clone()
         .oneshot(request_with_body(
             "POST",
             "/v1/mobile/admin/production-maps/queue-action",
             &worker_token,
-            r#"{
+            &with_test_qolip(r#"{
                 "apparatus":"7 ta rangli pechat",
                 "order_id":"zakaz-wip-route",
                 "action":"start"
-            }"#,
+            }"#, "zakaz-wip-route"),
         ))
         .await
         .expect("start first");
@@ -229,17 +231,19 @@ async fn wip_batches_endpoint_lists_batches_for_assigned_next_apparatus() {
         .expect("save map");
     assert_eq!(saved.status(), StatusCode::OK);
 
+    provision_test_qolip(&router, &admin_token, "zakaz-wip-next").await;
+
     let started = router
         .clone()
         .oneshot(request_with_body(
             "POST",
             "/v1/mobile/admin/production-maps/queue-action",
             &first_token,
-            r#"{
+            &with_test_qolip(r#"{
                 "apparatus":"7 ta rangli pechat",
                 "order_id":"zakaz-wip-next",
                 "action":"start"
-            }"#,
+            }"#, "zakaz-wip-next"),
         ))
         .await
         .expect("start first");
@@ -329,17 +333,19 @@ async fn complete_after_wip_start_does_not_reuse_input_qr_as_output_qr() {
         .expect("save map");
     assert_eq!(saved.status(), StatusCode::OK);
 
+    provision_test_qolip(&router, &admin_token, "zakaz-wip-complete-qr").await;
+
     let started = router
         .clone()
         .oneshot(request_with_body(
             "POST",
             "/v1/mobile/admin/production-maps/queue-action",
             &worker_token,
-            r#"{
+            &with_test_qolip(r#"{
                 "apparatus":"7 ta rangli pechat",
                 "order_id":"zakaz-wip-complete-qr",
                 "action":"start"
-            }"#,
+            }"#, "zakaz-wip-complete-qr"),
         ))
         .await
         .expect("start first");
@@ -461,17 +467,19 @@ async fn wip_batches_endpoint_forbids_worker_unassigned_or_unscoped_listing() {
         .expect("save map");
     assert_eq!(saved.status(), StatusCode::OK);
 
+    provision_test_qolip(&router, &admin_token, "zakaz-wip-scope").await;
+
     let started = router
         .clone()
         .oneshot(request_with_body(
             "POST",
             "/v1/mobile/admin/production-maps/queue-action",
             &worker_token,
-            r#"{
+            &with_test_qolip(r#"{
                 "apparatus":"7 ta rangli pechat",
                 "order_id":"zakaz-wip-scope",
                 "action":"start"
-            }"#,
+            }"#, "zakaz-wip-scope"),
         ))
         .await
         .expect("start first");

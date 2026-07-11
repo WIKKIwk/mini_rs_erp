@@ -422,7 +422,11 @@ async fn admin_worker_profile_detail_returns_assignments_and_activity() {
         .expect("save map");
     assert_eq!(map.status(), StatusCode::OK);
 
-    let sequence = build_router(state.clone())
+    let router = build_router(state.clone());
+    provision_test_qolip(&router, &admin_token, "zakaz-worker-profile").await;
+
+    let sequence = router
+        .clone()
         .oneshot(request_with_body(
             "PUT",
             "/v1/mobile/admin/production-maps/sequence",
@@ -437,16 +441,16 @@ async fn admin_worker_profile_detail_returns_assignments_and_activity() {
     assert_eq!(sequence.status(), StatusCode::OK);
 
     let worker_token = session_for(&state, PrincipalRole::Aparatchi, "worker_profile_1").await;
-    let started = build_router(state.clone())
+    let started = router
         .oneshot(request_with_body(
             "POST",
             "/v1/mobile/admin/production-maps/queue-action",
             &worker_token,
-            r#"{
+            &with_test_qolip(r#"{
                 "apparatus":"7 ta rangli pechat",
                 "order_id":"zakaz-worker-profile",
                 "action":"start"
-            }"#,
+            }"#, "zakaz-worker-profile"),
         ))
         .await
         .expect("start queue");

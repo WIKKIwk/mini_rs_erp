@@ -42,6 +42,7 @@ async fn worker_completed_orders_are_actor_scoped_and_latest_first() {
             .await
             .expect("save map");
         assert_eq!(response.status(), StatusCode::OK);
+        provision_test_qolip(&router, &admin_token, id).await;
     }
 
     let sequence = router
@@ -65,15 +66,21 @@ async fn worker_completed_orders_are_actor_scoped_and_latest_first() {
         (&worker_two, "zakaz-complete-3"),
     ] {
         for action in ["start", "complete"] {
+            let body = format!(
+                r#"{{"apparatus":"7 ta rangli pechat","order_id":"{order_id}","action":"{action}","produced_qty":1,"uom":"kg","return_ink_kg":1,"total_waste":1,"finished_goods_kg":1,"finished_goods_meter":1}}"#
+            );
+            let body = if action == "start" {
+                with_test_qolip(&body, order_id)
+            } else {
+                body
+            };
             let response = router
                 .clone()
                 .oneshot(request_with_body(
                     "POST",
                     "/v1/mobile/admin/production-maps/queue-action",
                     token,
-                    &format!(
-                        r#"{{"apparatus":"7 ta rangli pechat","order_id":"{order_id}","action":"{action}","produced_qty":1,"uom":"kg","return_ink_kg":1,"total_waste":1,"finished_goods_kg":1,"finished_goods_meter":1}}"#
-                    ),
+                    &body,
                 ))
                 .await
                 .expect("queue action");
@@ -162,19 +169,26 @@ async fn closed_orders_return_only_fully_completed_maps_with_action_logs() {
         .await
         .expect("save map");
     assert_eq!(saved.status(), StatusCode::OK);
+    provision_test_qolip(&router, &admin_token, "zakaz-closed-route").await;
 
     let mut pechat_pause_qr = String::new();
     let mut pechat_output_qr = String::new();
     for action in ["start", "pause", "resume", "complete"] {
+        let body = format!(
+            r#"{{"apparatus":"7 ta rangli pechat","order_id":"zakaz-closed-route","action":"{action}","produced_qty":1,"gross_qty":1,"uom":"kg","return_ink_kg":1,"total_waste":1,"finished_goods_kg":1,"finished_goods_meter":1,"printer":"zebra","print_mode":"rfid"}}"#
+        );
+        let body = if action == "start" {
+            with_test_qolip(&body, "zakaz-closed-route")
+        } else {
+            body
+        };
         let response = router
             .clone()
             .oneshot(request_with_body(
                 "POST",
                 "/v1/mobile/admin/production-maps/queue-action",
                 &pechat_worker,
-                &format!(
-                    r#"{{"apparatus":"7 ta rangli pechat","order_id":"zakaz-closed-route","action":"{action}","produced_qty":1,"gross_qty":1,"uom":"kg","return_ink_kg":1,"total_waste":1,"finished_goods_kg":1,"finished_goods_meter":1,"printer":"zebra","print_mode":"rfid"}}"#
-                ),
+                &body,
             ))
             .await
             .expect("pechat action");

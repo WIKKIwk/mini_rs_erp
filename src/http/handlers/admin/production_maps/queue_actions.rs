@@ -1,4 +1,5 @@
 use super::*;
+use crate::core::production_map::pechat;
 
 #[derive(serde::Deserialize)]
 struct ApparatusQueueActionRequest {
@@ -186,9 +187,11 @@ pub async fn production_map_queue_action(
         )
         .await
         .map_err(production_map_error)?;
-    if matches!(input.action, queue_state::ApparatusQueueAction::Start) {
-        checkout_qolip_for_pechat_start(&state, &principal, &input).await?;
-    }
+    let qolip_checkout = if matches!(input.action, queue_state::ApparatusQueueAction::Start) {
+        prepare_qolip_for_bosma_start(&state, &principal, &input).await?
+    } else {
+        None
+    };
     let mut raw_material_stock_transitions = Vec::new();
     if matches!(input.action, queue_state::ApparatusQueueAction::Start) {
         let material_stock_barcodes = material_barcode
@@ -249,14 +252,25 @@ pub async fn production_map_queue_action(
             None
         }
     });
+    let fallback_qolip_checkout = qolip_checkout.clone();
     let result = state
         .production_maps
         .commit_prepared_queue_action_with_raw_material_stock(
             prepared,
             raw_material_stock_transitions.clone(),
+            qolip_checkout,
         )
         .await
         .map_err(production_map_error)?;
+    if !result.qolip_checkout_committed
+        && let Some(checkout) = fallback_qolip_checkout
+    {
+        state
+            .qolip
+            .issue_prepared_checkout(checkout)
+            .await
+            .map_err(qolip_queue_error)?;
+    }
     let mut warehouse_stock_update_warehouses = result.raw_material_stock_warehouses.clone();
     if !raw_material_stock_transitions.is_empty() && warehouse_stock_update_warehouses.is_empty() {
         for transition in &raw_material_stock_transitions {
@@ -352,13 +366,13 @@ fn zero_completion_metric_codes(input: &ApparatusQueueActionRequest) -> Vec<Stri
     .collect()
 }
 
-async fn checkout_qolip_for_pechat_start(
+async fn prepare_qolip_for_bosma_start(
     state: &AppState,
     principal: &Principal,
     input: &ApparatusQueueActionRequest,
-) -> Result<(), AdminError> {
+) -> Result<Option<crate::core::qolip::QolipCheckout>, AdminError> {
     if !apparatus_requires_qolip_scan(&input.apparatus) {
-        return Ok(());
+        return Ok(None);
     }
     let Some(map) = state
         .production_maps
@@ -370,19 +384,11 @@ async fn checkout_qolip_for_pechat_start(
     };
     let qolip_code = input.qolip_code.trim();
     if qolip_code.is_empty() {
-        if state
-            .qolip
-            .order_product_requires_qolip(&map.product_code, &map.title)
-            .await
-            .map_err(qolip_queue_error)?
-        {
-            return Err(bad_request("qolip_scan_required"));
-        }
-        return Ok(());
+        return Err(bad_request("qolip_scan_required"));
     }
-    state
+    let checkout = state
         .qolip
-        .checkout_qolip_code_for_order_start(
+        .prepare_qolip_code_for_order_start(
             qolip_code,
             &map.product_code,
             &map.title,
@@ -392,11 +398,11 @@ async fn checkout_qolip_for_pechat_start(
         )
         .await
         .map_err(qolip_queue_error)?;
-    Ok(())
+    Ok(Some(checkout))
 }
 
 fn apparatus_requires_qolip_scan(apparatus: &str) -> bool {
-    apparatus.trim().to_lowercase().contains("pechat")
+    pechat::pechat_color_count(apparatus).is_some()
 }
 
 fn qolip_queue_error(error: crate::core::qolip::QolipError) -> AdminError {
@@ -441,4 +447,19 @@ pub(super) fn clean_progress_print_error(detail: &str) -> String {
         .strip_prefix("driver request failed: ")
         .unwrap_or_else(|| detail.trim())
         .to_string()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::apparatus_requires_qolip_scan;
+
+    #[test]
+    fn qolip_scan_is_required_only_for_seven_eight_and_nine_color_bosma_family() {
+        assert!(apparatus_requires_qolip_scan("7 ta rangli pechat - A"));
+        assert!(apparatus_requires_qolip_scan("8 ta rangli bosma aparat"));
+        assert!(apparatus_requires_qolip_scan("9 rangli val"));
+        assert!(!apparatus_requires_qolip_scan("Laminatsiya"));
+        assert!(!apparatus_requires_qolip_scan("Rezka aparat"));
+        assert!(!apparatus_requires_qolip_scan("Pechat"));
+    }
 }

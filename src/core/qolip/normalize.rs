@@ -104,6 +104,7 @@ pub(super) fn normalize_product_spec(
     if item_code.is_empty() || item_name.is_empty() {
         return Err(QolipError::MissingItem);
     }
+    if input.item_group.trim().is_empty() { return Err(QolipError::MissingItemGroup); }
     if qolip_code.is_empty() {
         return Err(QolipError::MissingQolipCode);
     }
@@ -207,6 +208,7 @@ pub(super) fn normalize_checkout(
         warehouse: location.warehouse,
         item_code: location.item_code,
         item_name: location.item_name,
+        item_group: String::new(),
         qolip_code: location.qolip_code,
         size: location.size,
         quantity,

@@ -54,6 +54,12 @@ pub(super) fn production_map_error(error: ProductionMapError) -> AdminError {
         ProductionMapError::RawMaterialStockUnavailable => {
             bad_request("raw_material_stock_unavailable")
         }
+        ProductionMapError::QolipLocationNotFound => bad_request("qolip_location_not_found"),
+        ProductionMapError::QolipCodeMismatch => bad_request("qolip_code_mismatch"),
+        ProductionMapError::QolipInsufficientStock => bad_request("insufficient_stock"),
+        ProductionMapError::QolipLocationIdentityMismatch => {
+            bad_request("location_identity_mismatch")
+        }
         ProductionMapError::RawMaterialScanRequired => bad_request("raw_material_scan_required"),
         ProductionMapError::RawMaterialMismatch => bad_request("raw_material_mismatch"),
         ProductionMapError::RawMaterialRollSizeMissing => {

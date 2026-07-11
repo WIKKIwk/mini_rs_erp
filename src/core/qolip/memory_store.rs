@@ -141,6 +141,27 @@ impl QolipStorePort for MemoryQolipStore {
         &self,
         spec: QolipProductSpec,
     ) -> Result<QolipProductSpec, QolipError> {
+        let mut products = self.products.write().await;
+        if let Some(product) = products.iter_mut().find(|product| {
+            product
+                .code
+                .trim()
+                .eq_ignore_ascii_case(spec.item_code.trim())
+        }) {
+            product.qolip_code = spec.qolip_code.clone();
+            product.size = spec.size;
+            product.has_qolip_spec = true;
+        } else {
+            products.push(QolipProduct {
+                code: spec.item_code.clone(),
+                name: spec.item_name.clone(),
+                item_group: spec.item_group.clone(),
+                qolip_code: spec.qolip_code.clone(),
+                size: spec.size,
+                has_qolip_spec: true,
+            });
+        }
+        drop(products);
         self.product_specs
             .write()
             .await
@@ -439,6 +460,7 @@ mod tests {
             warehouse: "Qolip ombor".to_string(),
             item_code: item_code.to_string(),
             item_name: item_code.to_string(),
+            item_group: String::new(),
             qolip_code: "Q-1".to_string(),
             size: 40,
             quantity: 2,

@@ -40,17 +40,19 @@ async fn queue_pause_prints_progress_qr_and_resume_uses_lookup() {
         .expect("save map");
     assert_eq!(saved.status(), StatusCode::OK);
 
+    provision_test_qolip(&router, &admin_token, "zakaz-progress-route").await;
+
     let started = router
         .clone()
         .oneshot(request_with_body(
             "POST",
             "/v1/mobile/admin/production-maps/queue-action",
             &worker_token,
-            r#"{
+            &with_test_qolip(r#"{
                 "apparatus":"7 ta rangli pechat",
                 "order_id":"zakaz-progress-route",
                 "action":"start"
-            }"#,
+            }"#, "zakaz-progress-route"),
         ))
         .await
         .expect("start");
@@ -174,17 +176,19 @@ async fn queue_pause_keeps_state_successful_when_progress_print_fails() {
         .expect("save map");
     assert_eq!(saved.status(), StatusCode::OK);
 
+    provision_test_qolip(&router, &admin_token, "zakaz-progress-print-fail").await;
+
     let started = router
         .clone()
         .oneshot(request_with_body(
             "POST",
             "/v1/mobile/admin/production-maps/queue-action",
             &worker_token,
-            r#"{
+            &with_test_qolip(r#"{
                 "apparatus":"7 ta rangli pechat",
                 "order_id":"zakaz-progress-print-fail",
                 "action":"start"
-            }"#,
+            }"#, "zakaz-progress-print-fail"),
         ))
         .await
         .expect("start");

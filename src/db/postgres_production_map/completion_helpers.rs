@@ -262,6 +262,7 @@ pub(super) async fn resolve_completion_request_decision(
         .map_err(|_| ProductionMapError::StoreFailed)?;
     Ok(QueueActionProgressWriteResult {
         raw_material_stock_warehouses,
+        qolip_checkout_committed: false,
     })
 }
 

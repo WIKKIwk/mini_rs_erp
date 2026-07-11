@@ -4,8 +4,9 @@ use crate::core::auth::models::{Principal, PrincipalRole};
 
 use super::models::{
     QolipBlock, QolipCellQr, QolipCheckout, QolipError, QolipLocation, QolipProduct,
-    QolipProductSpec,
+    QolipLocationUpsert, QolipProductSpec, QolipProductSpecUpsert,
 };
+use super::memory_store::MemoryQolipStore;
 use super::ports::QolipStorePort;
 use super::service::QolipService;
 
@@ -43,6 +44,138 @@ async fn checkouts_without_block_return_full_open_debt_ledger() {
     );
 }
 
+#[tokio::test]
+async fn order_start_rejects_qolip_from_another_finished_product_group() {
+    let store = std::sync::Arc::new(MemoryQolipStore::new());
+    store
+        .seed_products(vec![QolipProduct {
+            code: "ITEM-ORDER".to_string(),
+            name: "Order product".to_string(),
+            item_group: "Tayyor mahsulot A".to_string(),
+            qolip_code: String::new(),
+            size: 0,
+            has_qolip_spec: false,
+        }])
+        .await;
+    let service = QolipService::new(store);
+    service
+        .upsert_product_spec(
+            QolipProductSpecUpsert {
+                item_code: "ITEM-ORDER".to_string(),
+                item_name: "Order product".to_string(),
+                item_group: "Tayyor mahsulot B".to_string(),
+                qolip_code: "QOLIP-WRONG-GROUP".to_string(),
+                size: 42,
+            },
+            &principal(),
+        )
+        .await
+        .expect("save mismatched spec");
+    service
+        .upsert_location(
+            QolipLocationUpsert {
+                block: "A".to_string(),
+                warehouse: "Qolip ombor".to_string(),
+                item_code: "ITEM-ORDER".to_string(),
+                item_name: "Order product".to_string(),
+                item_group: "Tayyor mahsulot B".to_string(),
+                qolip_code: "QOLIP-WRONG-GROUP".to_string(),
+                size: 42,
+                quantity: 1,
+                row_letter: "A".to_string(),
+                column_number: Some(1),
+            },
+            &principal(),
+        )
+        .await
+        .expect("save location");
+
+    let error = service
+        .prepare_qolip_code_for_order_start(
+            "QOLIP-WRONG-GROUP",
+            "ITEM-ORDER",
+            "Order product",
+            "worker-1",
+            "Worker",
+            &principal(),
+        )
+        .await
+        .expect_err("wrong product group must be rejected");
+
+    assert_eq!(error, QolipError::QolipCodeMismatch);
+}
+
+#[tokio::test]
+async fn order_start_rejects_another_products_qolip_from_same_group() {
+    let store = std::sync::Arc::new(MemoryQolipStore::new());
+    store
+        .seed_products(vec![
+            QolipProduct {
+                code: "ITEM-ORDER".to_string(),
+                name: "Order product".to_string(),
+                item_group: "Tayyor mahsulot".to_string(),
+                qolip_code: String::new(),
+                size: 0,
+                has_qolip_spec: false,
+            },
+            QolipProduct {
+                code: "ITEM-OTHER".to_string(),
+                name: "Other product".to_string(),
+                item_group: "Tayyor mahsulot".to_string(),
+                qolip_code: String::new(),
+                size: 0,
+                has_qolip_spec: false,
+            },
+        ])
+        .await;
+    let service = QolipService::new(store);
+    service
+        .upsert_product_spec(
+            QolipProductSpecUpsert {
+                item_code: "ITEM-OTHER".to_string(),
+                item_name: "Other product".to_string(),
+                item_group: "Tayyor mahsulot".to_string(),
+                qolip_code: "QOLIP-OTHER".to_string(),
+                size: 42,
+            },
+            &principal(),
+        )
+        .await
+        .expect("save other product spec");
+    service
+        .upsert_location(
+            QolipLocationUpsert {
+                block: "A".to_string(),
+                warehouse: "Qolip ombor".to_string(),
+                item_code: "ITEM-OTHER".to_string(),
+                item_name: "Other product".to_string(),
+                item_group: "Tayyor mahsulot".to_string(),
+                qolip_code: "QOLIP-OTHER".to_string(),
+                size: 42,
+                quantity: 1,
+                row_letter: "A".to_string(),
+                column_number: Some(2),
+            },
+            &principal(),
+        )
+        .await
+        .expect("save other product location");
+
+    let error = service
+        .prepare_qolip_code_for_order_start(
+            "QOLIP-OTHER",
+            "ITEM-ORDER",
+            "Order product",
+            "worker-1",
+            "Worker",
+            &principal(),
+        )
+        .await
+        .expect_err("another product's qolip must be rejected");
+
+    assert_eq!(error, QolipError::QolipCodeMismatch);
+}
+
 fn principal() -> Principal {
     Principal {
         role: PrincipalRole::Qolipchi,
@@ -62,6 +195,7 @@ fn checkout(id: &str, block: &str) -> QolipCheckout {
         warehouse: "Qolip ombor".to_string(),
         item_code: format!("ITEM-{id}"),
         item_name: format!("Qolip {id}"),
+        item_group: String::new(),
         qolip_code: format!("Q-{id}"),
         size: 42,
         quantity: 1,

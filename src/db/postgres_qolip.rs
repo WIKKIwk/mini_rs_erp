@@ -21,6 +21,7 @@ use self::cell_qr::{load_cell_qr_by_payload, save_cell_qr};
 use self::checkouts::{
     load_checkout_by_id, load_checkouts, return_checkout_to_location, save_checkout,
 };
+pub(crate) use self::checkouts::save_checkout_tx;
 use self::locations::{
     load_location_by_id, load_location_by_qolip_code, load_locations, move_location_to_cell,
     save_location,

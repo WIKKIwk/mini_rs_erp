@@ -40,17 +40,19 @@ async fn bosma_complete_requires_or_persists_completion_metrics() {
         .expect("save map");
     assert_eq!(saved.status(), StatusCode::OK);
 
+    provision_test_qolip(&router, &admin_token, "zakaz-bosma-complete").await;
+
     let started = router
         .clone()
         .oneshot(request_with_body(
             "POST",
             "/v1/mobile/admin/production-maps/queue-action",
             &worker_token,
-            r#"{
+            &with_test_qolip(r#"{
                 "apparatus":"7 ta rangli bosma",
                 "order_id":"zakaz-bosma-complete",
                 "action":"start"
-            }"#,
+            }"#, "zakaz-bosma-complete"),
         ))
         .await
         .expect("start");
@@ -172,17 +174,19 @@ async fn bosma_pause_does_not_persist_return_ink_metric() {
         .expect("save map");
     assert_eq!(saved.status(), StatusCode::OK);
 
+    provision_test_qolip(&router, &admin_token, "zakaz-bosma-pause").await;
+
     let started = router
         .clone()
         .oneshot(request_with_body(
             "POST",
             "/v1/mobile/admin/production-maps/queue-action",
             &worker_token,
-            r#"{
+            &with_test_qolip(r#"{
                 "apparatus":"8 ta rangli bosma",
                 "order_id":"zakaz-bosma-pause",
                 "action":"start"
-            }"#,
+            }"#, "zakaz-bosma-pause"),
         ))
         .await
         .expect("start");

@@ -111,6 +111,67 @@ async fn qolip_checkout_decrements_location_and_rejects_overdraw() {
 }
 
 #[tokio::test]
+async fn bosma_queue_start_requires_qolip_scan_even_without_product_spec() {
+    let state = test_state();
+    state
+        .admin
+        .upsert_role_assignment(crate::core::authz::RoleAssignmentUpsert {
+            principal_role: PrincipalRole::Aparatchi,
+            principal_ref: "bosma-worker-qolip-required".to_string(),
+            role_id: "aparatchi".to_string(),
+            assigned_apparatus: vec!["8 ta rangli bosma aparat".to_string()],
+            assigned_item_groups: Vec::new(),
+        })
+        .await
+        .expect("aparatchi assignment");
+    let admin_token = session(&state, PrincipalRole::Admin).await;
+    let worker_token = session_for(
+        &state,
+        PrincipalRole::Aparatchi,
+        "bosma-worker-qolip-required",
+    )
+    .await;
+    let router = build_router(state);
+
+    let saved = router
+        .clone()
+        .oneshot(request_with_body(
+            "PUT",
+            "/v1/mobile/admin/production-maps",
+            &admin_token,
+            &production_order_map_json_with_product(
+                "zakaz-qolip-required",
+                "Qolip required order",
+                "ITEM-QOLIP-REQUIRED",
+                "9900",
+                "8 ta rangli bosma aparat",
+                8.0,
+                900.0,
+            ),
+        ))
+        .await
+        .expect("map save");
+    assert_eq!(saved.status(), StatusCode::OK);
+
+    let response = router
+        .oneshot(request_with_body(
+            "POST",
+            "/v1/mobile/admin/production-maps/queue-action",
+            &worker_token,
+            r#"{
+                "apparatus":"8 ta rangli bosma aparat",
+                "order_id":"zakaz-qolip-required",
+                "action":"start"
+            }"#,
+        ))
+        .await
+        .expect("queue start without qolip");
+
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    assert_eq!(json_body(response).await["error"], "qolip_scan_required");
+}
+
+#[tokio::test]
 async fn pechat_queue_start_requires_matching_qolip_code_scan() {
     let state = test_state();
     state
@@ -262,6 +323,129 @@ async fn pechat_queue_start_requires_matching_qolip_code_scan() {
         .expect("qolip checkout");
     assert_eq!(checkout["issued_to_ref"], "pechat-worker-qolip");
     assert_eq!(checkout["quantity"], 1);
+}
+
+#[tokio::test]
+async fn failed_queue_commit_does_not_checkout_qolip() {
+    let production_store = Arc::new(MemoryProductionMapStore::new());
+    let mut state = test_state();
+    state.production_maps = ProductionMapService::new(production_store.clone());
+    state
+        .admin
+        .upsert_role_assignment(crate::core::authz::RoleAssignmentUpsert {
+            principal_role: PrincipalRole::Aparatchi,
+            principal_ref: "pechat-worker-atomic".to_string(),
+            role_id: "aparatchi".to_string(),
+            assigned_apparatus: vec!["9 ta rangli pechat - A".to_string()],
+            assigned_item_groups: Vec::new(),
+        })
+        .await
+        .expect("aparatchi assignment");
+    let admin_token = session(&state, PrincipalRole::Admin).await;
+    let worker_token =
+        session_for(&state, PrincipalRole::Aparatchi, "pechat-worker-atomic").await;
+    let router = build_router(state);
+
+    let saved = router
+        .clone()
+        .oneshot(request_with_body(
+            "PUT",
+            "/v1/mobile/admin/production-maps",
+            &admin_token,
+            &production_order_map_json_with_product(
+                "zakaz-qolip-atomic",
+                "Atomic qolip order",
+                "ITEM-QOLIP-ATOMIC",
+                "9902",
+                "9 ta rangli pechat - A",
+                9.0,
+                1250.0,
+            ),
+        ))
+        .await
+        .expect("map save");
+    assert_eq!(saved.status(), StatusCode::OK);
+
+    let spec = router
+        .clone()
+        .oneshot(request_with_body(
+            "POST",
+            "/v1/mobile/qolip/product-specs",
+            &admin_token,
+            r#"{
+                "item_code":"ITEM-QOLIP-ATOMIC",
+                "item_name":"Atomic qolip order",
+                "item_group":"Tayyor mahsulot",
+                "qolip_code":"QOLIP-ATOMIC-1",
+                "size":42
+            }"#,
+        ))
+        .await
+        .expect("spec save");
+    assert_eq!(spec.status(), StatusCode::OK);
+
+    let location = router
+        .clone()
+        .oneshot(request_with_body(
+            "POST",
+            "/v1/mobile/qolip/locations",
+            &admin_token,
+            r#"{
+                "block":"A",
+                "warehouse":"Qolip ombor",
+                "item_code":"ITEM-QOLIP-ATOMIC",
+                "item_name":"Atomic qolip order",
+                "qolip_code":"QOLIP-ATOMIC-1",
+                "size":42,
+                "quantity":1,
+                "row_letter":"B",
+                "column_number":4
+            }"#,
+        ))
+        .await
+        .expect("location save");
+    assert_eq!(location.status(), StatusCode::OK);
+
+    production_store.fail_next_queue_progress_commit();
+    let failed = router
+        .clone()
+        .oneshot(request_with_body(
+            "POST",
+            "/v1/mobile/admin/production-maps/queue-action",
+            &worker_token,
+            r#"{
+                "apparatus":"9 ta rangli pechat - A",
+                "order_id":"zakaz-qolip-atomic",
+                "action":"start",
+                "qolip_code":"QOLIP-ATOMIC-1"
+            }"#,
+        ))
+        .await
+        .expect("failed queue start");
+    assert_eq!(failed.status(), StatusCode::INTERNAL_SERVER_ERROR);
+
+    let locations = router
+        .clone()
+        .oneshot(request(
+            "GET",
+            "/v1/mobile/qolip/locations?block=A",
+            &admin_token,
+        ))
+        .await
+        .expect("locations after rollback");
+    let locations_body = json_body(locations).await;
+    assert_eq!(locations_body["locations"][0]["quantity"], 1);
+
+    let checkouts = router
+        .oneshot(request(
+            "GET",
+            "/v1/mobile/qolip/checkouts",
+            &admin_token,
+        ))
+        .await
+        .expect("checkouts after rollback");
+    let checkouts_body = json_body(checkouts).await;
+    assert!(checkouts_body["checkouts"].as_array().unwrap().is_empty());
 }
 
 #[tokio::test]

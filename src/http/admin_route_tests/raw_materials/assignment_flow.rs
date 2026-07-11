@@ -43,6 +43,7 @@ async fn raw_material_routes_assign_and_require_scan_for_queue_start() {
         .await
         .expect("map save");
     assert_eq!(map.status(), StatusCode::OK);
+    provision_test_qolip(&router, &token, "zakaz-raw-route").await;
 
     let rule = router
         .clone()
@@ -81,11 +82,11 @@ async fn raw_material_routes_assign_and_require_scan_for_queue_start() {
             "POST",
             "/v1/mobile/admin/production-maps/queue-action",
             &worker_token,
-            r#"{
+            &with_test_qolip(r#"{
                 "apparatus":"7 ta rangli pechat - A",
                 "order_id":"zakaz-raw-route",
                 "action":"start"
-            }"#,
+            }"#, "zakaz-raw-route"),
         ))
         .await
         .expect("queue action without assignment");
@@ -198,11 +199,11 @@ async fn raw_material_routes_assign_and_require_scan_for_queue_start() {
             "POST",
             "/v1/mobile/admin/production-maps/queue-action",
             &worker_token,
-            r#"{
+            &with_test_qolip(r#"{
                 "apparatus":"7 ta rangli pechat - A",
                 "order_id":"zakaz-raw-route",
                 "action":"start"
-            }"#,
+            }"#, "zakaz-raw-route"),
         ))
         .await
         .expect("queue action");
@@ -218,12 +219,12 @@ async fn raw_material_routes_assign_and_require_scan_for_queue_start() {
             "POST",
             "/v1/mobile/admin/production-maps/queue-action",
             &worker_token,
-            r#"{
+            &with_test_qolip(r#"{
                 "apparatus":"7 ta rangli pechat - A",
                 "order_id":"zakaz-raw-route",
                 "action":"start",
                 "material_barcodes":["30AA"]
-            }"#,
+            }"#, "zakaz-raw-route"),
         ))
         .await
         .expect("queue action with partial scan");
@@ -239,12 +240,12 @@ async fn raw_material_routes_assign_and_require_scan_for_queue_start() {
             "POST",
             "/v1/mobile/admin/production-maps/queue-action",
             &worker_token,
-            r#"{
+            &with_test_qolip(r#"{
                 "apparatus":"7 ta rangli pechat - A",
                 "order_id":"zakaz-raw-route",
                 "action":"start",
                 "material_barcodes":["30AA","30CC"]
-            }"#,
+            }"#, "zakaz-raw-route"),
         ))
         .await
         .expect("queue action with scan");

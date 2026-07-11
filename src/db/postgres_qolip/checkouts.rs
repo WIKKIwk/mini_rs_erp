@@ -1,4 +1,4 @@
-use sqlx::PgPool;
+use sqlx::{PgPool, Postgres, Transaction};
 
 use crate::core::qolip::normalize::{
     location_from_checkout, location_from_checkout_target, location_identity_matches,
@@ -12,6 +12,59 @@ pub(super) async fn save_checkout(
     checkout: QolipCheckout,
 ) -> Result<QolipCheckout, QolipError> {
     let mut tx = pool.begin().await.map_err(|_| QolipError::StoreFailed)?;
+    let saved = save_checkout_tx(&mut tx, &checkout).await?;
+    tx.commit().await.map_err(|_| QolipError::StoreFailed)?;
+    Ok(saved)
+}
+
+pub(crate) async fn save_checkout_tx(
+    tx: &mut Transaction<'_, Postgres>,
+    checkout: &QolipCheckout,
+) -> Result<QolipCheckout, QolipError> {
+    if !checkout.item_group.trim().is_empty() {
+        let product_group = sqlx::query_scalar::<_, String>(
+            "SELECT item_group
+             FROM mini_items
+             WHERE lower(code) = lower($1)
+             FOR SHARE",
+        )
+        .bind(checkout.item_code.trim())
+        .fetch_optional(&mut **tx)
+        .await
+        .map_err(|_| QolipError::StoreFailed)?
+        .ok_or(QolipError::QolipCodeMismatch)?;
+        if !product_group
+            .trim()
+            .eq_ignore_ascii_case(checkout.item_group.trim())
+        {
+            return Err(QolipError::QolipCodeMismatch);
+        }
+        let spec = sqlx::query_as::<_, (String, String, String, String, i32)>(
+            "SELECT item_code, item_name, item_group, qolip_code, size
+             FROM mini_qolip_product_specs
+             WHERE lower(qolip_code) = lower($1)
+             FOR SHARE",
+        )
+        .bind(checkout.qolip_code.trim())
+        .fetch_optional(&mut **tx)
+        .await
+        .map_err(|_| QolipError::StoreFailed)?;
+        let Some((item_code, item_name, item_group, qolip_code, size)) = spec else {
+            return Err(QolipError::QolipCodeNotFound);
+        };
+        if !item_code.trim().eq_ignore_ascii_case(checkout.item_code.trim())
+            || !item_name.trim().eq_ignore_ascii_case(checkout.item_name.trim())
+            || !item_group
+                .trim()
+                .eq_ignore_ascii_case(checkout.item_group.trim())
+            || !qolip_code
+                .trim()
+                .eq_ignore_ascii_case(checkout.qolip_code.trim())
+            || size != checkout.size
+        {
+            return Err(QolipError::QolipCodeMismatch);
+        }
+    }
 
     let current_row = sqlx::query_as::<_, QolipLocationRow>(
         "SELECT id, block, warehouse, item_code, item_name, qolip_code,
@@ -22,7 +75,7 @@ pub(super) async fn save_checkout(
          FOR UPDATE",
     )
     .bind(checkout.location_id.trim())
-    .fetch_optional(&mut *tx)
+    .fetch_optional(&mut **tx)
     .await
     .map_err(|_| QolipError::StoreFailed)?;
 
@@ -48,13 +101,13 @@ pub(super) async fn save_checkout(
         )
         .bind(checkout.location_id.trim())
         .bind(remaining)
-        .execute(&mut *tx)
+        .execute(&mut **tx)
         .await
         .map_err(|_| QolipError::StoreFailed)?;
     } else {
         sqlx::query("DELETE FROM mini_qolip_locations WHERE id = $1")
             .bind(checkout.location_id.trim())
-            .execute(&mut *tx)
+            .execute(&mut **tx)
             .await
             .map_err(|_| QolipError::StoreFailed)?;
     }
@@ -92,11 +145,10 @@ pub(super) async fn save_checkout(
     .bind(checkout.issued_by_ref.trim())
     .bind(checkout.issued_by_name.trim())
     .bind(serde_json::to_value(&checkout).map_err(|_| QolipError::StoreFailed)?)
-    .fetch_one(&mut *tx)
+    .fetch_one(&mut **tx)
     .await
     .map_err(|_| QolipError::StoreFailed)?;
 
-    tx.commit().await.map_err(|_| QolipError::StoreFailed)?;
     Ok(row_to_checkout(row))
 }
 

@@ -12,6 +12,7 @@ use crate::core::production_map::{
     QueueActionProgressWrite, QueueActionProgressWriteResult, RawMaterialAssignment,
     WipProgressBatchQuery,
 };
+use crate::core::qolip::QolipError;
 
 mod catalog_helpers;
 mod completion_helpers;
@@ -401,6 +402,14 @@ impl ProductionMapStorePort for PostgresProductionMapStore {
         for batch in write.progress_batch_updates {
             put_order_progress_batch_tx(&mut tx, &batch).await?;
         }
+        let qolip_checkout_committed = if let Some(checkout) = &write.qolip_checkout {
+            super::postgres_qolip::save_checkout_tx(&mut tx, checkout)
+                .await
+                .map_err(production_map_qolip_checkout_error)?;
+            true
+        } else {
+            false
+        };
         let raw_material_stock_warehouses =
             apply_raw_material_stock_transitions_tx(
                 &mut tx,
@@ -414,6 +423,7 @@ impl ProductionMapStorePort for PostgresProductionMapStore {
             .map_err(|_| ProductionMapError::StoreFailed)?;
         Ok(QueueActionProgressWriteResult {
             raw_material_stock_warehouses,
+            qolip_checkout_committed,
         })
     }
 
@@ -449,5 +459,19 @@ impl ProductionMapStorePort for PostgresProductionMapStore {
         barcode: &str,
     ) -> Result<Option<RawMaterialAssignment>, ProductionMapError> {
         delete_raw_material_assignment(&self.pool, order_id, barcode).await
+    }
+}
+
+fn production_map_qolip_checkout_error(error: QolipError) -> ProductionMapError {
+    match error {
+        QolipError::LocationNotFound => ProductionMapError::QolipLocationNotFound,
+        QolipError::QolipCodeNotFound | QolipError::QolipCodeMismatch => {
+            ProductionMapError::QolipCodeMismatch
+        }
+        QolipError::InsufficientStock => ProductionMapError::QolipInsufficientStock,
+        QolipError::LocationIdentityMismatch => {
+            ProductionMapError::QolipLocationIdentityMismatch
+        }
+        _ => ProductionMapError::StoreFailed,
     }
 }

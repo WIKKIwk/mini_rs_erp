@@ -35,6 +35,7 @@ async fn admin_rejects_zero_output_completion_request_and_notifies_worker() {
         .await
         .expect("save map");
     assert_eq!(saved.status(), StatusCode::OK);
+    provision_test_qolip(&router, &admin_token, "zakaz-reject-zero").await;
 
     let started = router
         .clone()
@@ -42,11 +43,11 @@ async fn admin_rejects_zero_output_completion_request_and_notifies_worker() {
             "POST",
             "/v1/mobile/admin/production-maps/queue-action",
             &worker_token,
-            r#"{
+            &with_test_qolip(r#"{
                 "apparatus":"7 ta rangli pechat",
                 "order_id":"zakaz-reject-zero",
                 "action":"start"
-            }"#,
+            }"#, "zakaz-reject-zero"),
         ))
         .await
         .expect("start");
@@ -171,6 +172,7 @@ async fn queue_pause_print_failure_keeps_committed_pause_log() {
         .await
         .expect("save map");
     assert_eq!(saved.status(), StatusCode::OK);
+    provision_test_qolip(&router, &admin_token, "zakaz-print-fail").await;
 
     let started = router
         .clone()
@@ -178,11 +180,11 @@ async fn queue_pause_print_failure_keeps_committed_pause_log() {
             "POST",
             "/v1/mobile/admin/production-maps/queue-action",
             &worker_token,
-            r#"{
+            &with_test_qolip(r#"{
                 "apparatus":"7 ta rangli pechat",
                 "order_id":"zakaz-print-fail",
                 "action":"start"
-            }"#,
+            }"#, "zakaz-print-fail"),
         ))
         .await
         .expect("start");

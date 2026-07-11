@@ -310,6 +310,18 @@ async fn progress_qr_history_lists_own_batches_and_reprints_existing_qr() {
             .await
             .expect("save map");
         assert_eq!(saved.status(), StatusCode::OK);
+        provision_test_qolip(&router, &admin_token, order_id).await;
+
+        let start_body = with_test_qolip(
+            &format!(
+                r#"{{
+                    "apparatus":"{apparatus}",
+                    "order_id":"{order_id}",
+                    "action":"start"
+                }}"#
+            ),
+            order_id,
+        );
 
         let started = router
             .clone()
@@ -317,13 +329,7 @@ async fn progress_qr_history_lists_own_batches_and_reprints_existing_qr() {
                 "POST",
                 "/v1/mobile/admin/production-maps/queue-action",
                 token,
-                &format!(
-                    r#"{{
-                        "apparatus":"{apparatus}",
-                        "order_id":"{order_id}",
-                        "action":"start"
-                    }}"#
-                ),
+                &start_body,
             ))
             .await
             .expect("start");

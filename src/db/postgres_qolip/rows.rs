@@ -123,6 +123,7 @@ pub(super) fn row_to_checkout(row: QolipCheckoutRow) -> QolipCheckout {
         warehouse: row.warehouse,
         item_code: row.item_code,
         item_name: row.item_name,
+        item_group: String::new(),
         qolip_code: row.qolip_code,
         size: row.size,
         quantity: row.quantity,

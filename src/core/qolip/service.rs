@@ -164,6 +164,28 @@ impl QolipService {
         worker_name: &str,
         principal: &Principal,
     ) -> Result<QolipCheckout, QolipError> {
+        let checkout = self
+            .prepare_qolip_code_for_order_start(
+                qolip_code,
+                expected_item_code,
+                expected_item_name,
+                worker_id,
+                worker_name,
+                principal,
+            )
+            .await?;
+        self.issue_prepared_checkout(checkout).await
+    }
+
+    pub async fn prepare_qolip_code_for_order_start(
+        &self,
+        qolip_code: &str,
+        expected_item_code: &str,
+        expected_item_name: &str,
+        worker_id: &str,
+        worker_name: &str,
+        principal: &Principal,
+    ) -> Result<QolipCheckout, QolipError> {
         let qolip_code = qolip_code.trim();
         if qolip_code.is_empty() {
             return Err(QolipError::MissingQolipCode);
@@ -173,7 +195,11 @@ impl QolipService {
             .product_spec_by_qolip_code(qolip_code)
             .await?
             .ok_or(QolipError::QolipCodeNotFound)?;
-        if !qolip_spec_matches_order(&spec, expected_item_code, expected_item_name) {
+        let expected_product = self
+            .order_product(expected_item_code, expected_item_name)
+            .await?
+            .ok_or(QolipError::QolipCodeMismatch)?;
+        if !qolip_spec_matches_order(&spec, &expected_product) {
             return Err(QolipError::QolipCodeMismatch);
         }
         let location = self
@@ -181,8 +207,42 @@ impl QolipService {
             .location_by_qolip_code(qolip_code)
             .await?
             .ok_or(QolipError::LocationNotFound)?;
-        self.issue_checkout_from_location(location, 1, worker_id, worker_name, principal)
-            .await
+        if !qolip_location_matches_spec(&location, &spec) {
+            return Err(QolipError::QolipCodeMismatch);
+        }
+        let mut checkout = normalize_checkout(location, 1, worker_id, worker_name, principal)?;
+        checkout.item_group = spec.item_group;
+        Ok(checkout)
+    }
+
+    pub async fn issue_prepared_checkout(
+        &self,
+        checkout: QolipCheckout,
+    ) -> Result<QolipCheckout, QolipError> {
+        self.store.issue_checkout(checkout).await
+    }
+
+    async fn order_product(
+        &self,
+        item_code: &str,
+        item_name: &str,
+    ) -> Result<Option<QolipProduct>, QolipError> {
+        let item_code = item_code.trim();
+        let item_name = item_name.trim();
+        let query = if item_code.is_empty() {
+            item_name
+        } else {
+            item_code
+        };
+        let products = self.store.products(query, 100, false).await?;
+        if !item_code.is_empty() {
+            return Ok(products
+                .into_iter()
+                .find(|product| product.code.trim().eq_ignore_ascii_case(item_code)));
+        }
+        Ok(products.into_iter().find(|product| {
+            !item_name.is_empty() && product.name.trim().eq_ignore_ascii_case(item_name)
+        }))
     }
 
     pub async fn locations(&self, block: &str) -> Result<Vec<QolipLocation>, QolipError> {
@@ -371,24 +431,36 @@ impl QolipService {
     }
 }
 
-fn qolip_spec_matches_order(
-    spec: &QolipProductSpec,
-    expected_item_code: &str,
-    expected_item_name: &str,
-) -> bool {
-    let expected_item_code = expected_item_code.trim();
-    if !expected_item_code.is_empty()
-        && spec
+fn qolip_spec_matches_order(spec: &QolipProductSpec, expected: &QolipProduct) -> bool {
+    let expected_group = expected.item_group.trim();
+    if expected_group.is_empty()
+        || !spec
+            .item_group
+            .trim()
+            .eq_ignore_ascii_case(expected_group)
+    {
+        return false;
+    }
+    let expected_code = expected.code.trim();
+    if !expected_code.is_empty() {
+        return spec.item_code.trim().eq_ignore_ascii_case(expected_code);
+    }
+    let expected_name = expected.name.trim();
+    !expected_name.is_empty() && spec.item_name.trim().eq_ignore_ascii_case(expected_name)
+}
+
+fn qolip_location_matches_spec(location: &QolipLocation, spec: &QolipProductSpec) -> bool {
+    location
+        .qolip_code
+        .trim()
+        .eq_ignore_ascii_case(spec.qolip_code.trim())
+        && location
             .item_code
             .trim()
-            .eq_ignore_ascii_case(expected_item_code)
-    {
-        return true;
-    }
-    let expected_item_name = expected_item_name.trim();
-    !expected_item_name.is_empty()
-        && spec
+            .eq_ignore_ascii_case(spec.item_code.trim())
+        && location
             .item_name
             .trim()
-            .eq_ignore_ascii_case(expected_item_name)
+            .eq_ignore_ascii_case(spec.item_name.trim())
+        && location.size == spec.size
 }

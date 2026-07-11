@@ -378,6 +378,75 @@ async fn json_body(response: axum::response::Response) -> serde_json::Value {
     serde_json::from_slice(&bytes).expect("json")
 }
 
+async fn provision_test_qolip(router: &axum::Router, token: &str, order_id: &str) {
+    let map_response = router
+        .clone()
+        .oneshot(request(
+            "GET",
+            &format!("/v1/mobile/admin/production-maps?id={order_id}"),
+            token,
+        ))
+        .await
+        .expect("load map for test qolip");
+    assert_eq!(map_response.status(), StatusCode::OK);
+    let map_body = json_body(map_response).await;
+    let item_code = map_body["map"]["product_code"]
+        .as_str()
+        .expect("map product code");
+    let item_name = map_body["map"]["title"].as_str().expect("map title");
+    let qolip_code = test_qolip_code(order_id);
+
+    let spec = router
+        .clone()
+        .oneshot(request_with_body(
+            "POST",
+            "/v1/mobile/qolip/product-specs",
+            token,
+            &serde_json::json!({
+                "item_code": item_code,
+                "item_name": item_name,
+                "item_group": "Tayyor mahsulot Test",
+                "qolip_code": qolip_code,
+                "size": 42,
+            })
+            .to_string(),
+        ))
+        .await
+        .expect("save test qolip spec");
+    assert_eq!(spec.status(), StatusCode::OK);
+
+    let location = router
+        .clone()
+        .oneshot(request_with_body(
+            "POST",
+            "/v1/mobile/qolip/locations",
+            token,
+            &serde_json::json!({
+                "block": "TEST",
+                "warehouse": "Qolip ombor",
+                "item_code": item_code,
+                "item_name": item_name,
+                "qolip_code": test_qolip_code(order_id),
+                "size": 42,
+                "quantity": 100,
+            })
+            .to_string(),
+        ))
+        .await
+        .expect("save test qolip location");
+    assert_eq!(location.status(), StatusCode::OK);
+}
+
+fn test_qolip_code(order_id: &str) -> String {
+    format!("TEST-QOLIP-{order_id}")
+}
+
+fn with_test_qolip(body: &str, order_id: &str) -> String {
+    let mut payload: serde_json::Value = serde_json::from_str(body).expect("queue action json");
+    payload["qolip_code"] = serde_json::Value::String(test_qolip_code(order_id));
+    payload.to_string()
+}
+
 fn entry(ref_: &str, name: &str, phone: &str) -> AdminDirectoryEntry {
     AdminDirectoryEntry {
         ref_: ref_.to_string(),

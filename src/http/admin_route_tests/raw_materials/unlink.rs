@@ -25,7 +25,6 @@ async fn raw_material_assignment_can_be_unlinked_before_start() {
         .await
         .expect("map save");
     assert_eq!(map.status(), StatusCode::OK);
-
     let rule = router
         .clone()
         .oneshot(request_with_body(
@@ -144,6 +143,7 @@ async fn raw_material_assignment_unlink_rejects_started_stock() {
         .await
         .expect("map save");
     assert_eq!(map.status(), StatusCode::OK);
+    provision_test_qolip(&router, &token, "zakaz-raw-unlink-locked").await;
 
     let rule = router
         .clone()
@@ -175,12 +175,12 @@ async fn raw_material_assignment_unlink_rejects_started_stock() {
             "POST",
             "/v1/mobile/admin/production-maps/queue-action",
             &worker_token,
-            r#"{
+            &with_test_qolip(r#"{
                 "apparatus":"7 ta rangli pechat - A",
                 "order_id":"zakaz-raw-unlink-locked",
                 "action":"start",
                 "material_barcodes":["30AA"]
-            }"#,
+            }"#, "zakaz-raw-unlink-locked"),
         ))
         .await
         .expect("start with material");
