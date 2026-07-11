@@ -9,7 +9,7 @@ const DEFAULT_MAX_CONNECTIONS: u32 = 16;
 const DEFAULT_ACQUIRE_TIMEOUT_MS: u64 = 500;
 const MIGRATION_LOCK_KEY: i64 = 6_514_811_918_052_026_001;
 
-const POSTGRES_MIGRATIONS: [(&str, &str); 2] = [
+const POSTGRES_MIGRATIONS: [(&str, &str); 3] = [
     (
         "0001_mini_erp_foundation",
         include_str!("../../migrations/postgres/0001_mini_erp_foundation.sql"),
@@ -17,6 +17,10 @@ const POSTGRES_MIGRATIONS: [(&str, &str); 2] = [
     (
         "0002_order_integrity",
         include_str!("../../migrations/postgres/0002_order_integrity.sql"),
+    ),
+    (
+        "0003_erp_data_integrity",
+        include_str!("../../migrations/postgres/0003_erp_data_integrity.sql"),
     ),
 ];
 
@@ -420,6 +424,19 @@ mod tests {
         assert!(migration.contains("idx_mini_customer_items_item_code"));
         assert!(migration.contains("set order_id = orders.id"));
         assert!(migration.contains("maps.id = orders.id"));
+    }
+
+    #[test]
+    fn postgres_erp_integrity_migration_uses_exact_quantities_and_constraints() {
+        let migration = POSTGRES_MIGRATIONS[2].1.to_lowercase();
+
+        assert!(migration.contains("numeric(24, 9)"));
+        assert!(migration.contains("mini_production_maps_width_positive"));
+        assert!(migration.contains("mini_gscale_receipts_qty_positive"));
+        assert!(migration.contains("mini_raw_material_events_qty_finite"));
+        assert!(migration.contains("idx_mini_customers_phone_key_unique"));
+        assert!(migration.contains("mini_raw_material_assignments_order_fkey"));
+        assert!(migration.contains("product_form"));
     }
 
     #[test]

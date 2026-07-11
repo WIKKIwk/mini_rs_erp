@@ -155,7 +155,8 @@ async fn raw_material_stock_for_assignment_tx(
     barcode: &str,
 ) -> Result<AssignmentStockRow, ProductionMapError> {
     sqlx::query_as::<_, AssignmentStockRow>(
-        "SELECT warehouse, item_code, item_name, barcode, qty, uom, status, source_receipt_id
+        "SELECT warehouse, item_code, item_name, barcode,
+                qty::float8 AS qty, uom, status, source_receipt_id
          FROM mini_raw_material_stock
          WHERE lower(barcode) = lower($1)
          FOR UPDATE",

@@ -107,7 +107,7 @@ impl PostgresCustomerStore {
         .bind(phone.trim())
         .execute(&mut *transaction)
         .await
-        .map_err(|_| AdminPortError::LookupFailed)?;
+        .map_err(map_customer_write_error)?;
         transaction
             .commit()
             .await
@@ -133,7 +133,7 @@ impl PostgresCustomerStore {
         .bind(phone.trim())
         .execute(&self.pool)
         .await
-        .map_err(|_| AdminPortError::LookupFailed)?
+        .map_err(map_customer_write_error)?
         .rows_affected();
         if affected == 0 {
             return Err(AdminPortError::NotFound);
@@ -204,6 +204,18 @@ impl PostgresCustomerStore {
         .await
         .map_err(|_| AdminPortError::LookupFailed)?;
         Ok(())
+    }
+}
+
+fn map_customer_write_error(error: sqlx::Error) -> AdminPortError {
+    if error
+        .as_database_error()
+        .and_then(|error| error.constraint())
+        == Some("idx_mini_customers_phone_key_unique")
+    {
+        AdminPortError::InvalidInput("phone already exists".to_string())
+    } else {
+        AdminPortError::LookupFailed
     }
 }
 

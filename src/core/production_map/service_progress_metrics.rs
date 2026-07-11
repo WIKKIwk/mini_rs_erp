@@ -1,4 +1,5 @@
 use super::*;
+use crate::core::quantity::positive_erp_quantity;
 
 #[derive(Clone, Copy)]
 pub(super) struct ProgressMetrics {
@@ -87,8 +88,9 @@ fn validate_progress_metrics(
 
 fn valid_optional_progress_qty(value: Option<f64>) -> Result<Option<f64>, ProductionMapError> {
     match value {
-        Some(value) if value.is_finite() && value > 0.0 => Ok(Some(value)),
-        Some(_) => Err(ProductionMapError::ProgressInputInvalid),
+        Some(value) => positive_erp_quantity(value)
+            .map(Some)
+            .ok_or(ProductionMapError::ProgressInputInvalid),
         None => Ok(None),
     }
 }

@@ -39,7 +39,9 @@ async fn postgres_mini_order_sink_saves_order_and_product_rows() {
     sqlx::query(
         "INSERT INTO mini_production_maps
             (id, product_code, title, code, order_number, roll_count, width_mm, map_json)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8)",
+         VALUES ($1, $2, $3, $4, $5,
+                 ($6::double precision)::numeric(24,9),
+                 ($7::double precision)::numeric(24,9), $8)",
     )
     .bind(&map.id)
     .bind(&map.product_code)
@@ -78,10 +80,29 @@ async fn postgres_mini_order_sink_saves_order_and_product_rows() {
         .fetch_one(&pool)
         .await
         .expect("count applied migrations");
+    let (order_status, product_form, kg, width_mm, roll_count): (
+        String,
+        String,
+        String,
+        String,
+        String,
+    ) = sqlx::query_as(
+        "SELECT status, product_form, kg::text, width_mm::text, roll_count::text
+         FROM mini_orders WHERE id = $1",
+    )
+    .bind(&map.id)
+    .fetch_one(&pool)
+    .await
+    .expect("read order semantics and quantities");
     assert_eq!(order_count, 1);
     assert_eq!(product_count, 1);
     assert_eq!(linked_order_id.as_deref(), Some("zakaz-9001"));
-    assert_eq!(migration_count, 2);
+    assert_eq!(migration_count, 3);
+    assert_eq!(order_status, "draft");
+    assert_eq!(product_form, "rulon");
+    assert_eq!(kg, "500.123456789");
+    assert_eq!(width_mm, "650.000030000");
+    assert_eq!(roll_count, "7.000000123");
 
     pool.close().await;
     let admin_pool = sqlx::PgPool::connect(&admin_url)
@@ -103,8 +124,8 @@ fn test_map() -> ProductionMapDefinition {
         title: "Mini order map".to_string(),
         code: "9001".to_string(),
         order_number: "9001".to_string(),
-        roll_count: Some(7.0),
-        width_mm: Some(650.0),
+        roll_count: Some(7.000000123),
+        width_mm: Some(650.00003),
         order_kg: None,
         base_length: None,
         nodes: vec![
@@ -151,7 +172,7 @@ fn test_template() -> CalculateOrderTemplate {
         customer: "Mijoz".to_string(),
         item_code: "ITEM-9001".to_string(),
         product: "Mini mahsulot".to_string(),
-        status: String::new(),
+        status: "rulon".to_string(),
         material_display: "PET / PE".to_string(),
         color: "oq".to_string(),
         image_id: String::new(),
@@ -162,9 +183,9 @@ fn test_template() -> CalculateOrderTemplate {
         frame_product_size_mm: 635.0,
         frame_count: 1.0,
         edge_allowance_mm: 15.0,
-        width_mm: 650.0,
+        width_mm: 650.00003,
         waste_percent: 5.0,
-        roll_count: Some(7.0),
+        roll_count: Some(7.000000123),
         first_layer_material: "pet".to_string(),
         first_layer_micron: "12".to_string(),
         second_layer_material: "pe oq".to_string(),
@@ -172,7 +193,7 @@ fn test_template() -> CalculateOrderTemplate {
         third_layer_material: String::new(),
         third_layer_micron: String::new(),
         note: "test".to_string(),
-        kg: 500.0,
+        kg: 500.123456789,
         source_map_id: "zakaz-9001".to_string(),
     }
 }

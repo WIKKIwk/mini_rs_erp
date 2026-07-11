@@ -202,7 +202,7 @@ pub async fn insert_raw_material_event_tx(
              source_line_ref, correlation_id, payload_json
          )
          VALUES (
-             $1, $2, $3, $4, $5, $6, $7, ($8::double precision)::numeric(18,3), $9,
+             $1, $2, $3, $4, $5, $6, $7, ($8::double precision)::numeric(24,9), $9,
              $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24
          )
          ON CONFLICT (idempotency_key) DO NOTHING

@@ -43,6 +43,8 @@ pub enum WorkerError {
     MissingId,
     #[error("worker level is invalid")]
     InvalidLevel,
+    #[error("worker phone already exists")]
+    DuplicatePhone,
     #[error("worker not found")]
     NotFound,
     #[error("worker store failed")]

@@ -85,7 +85,8 @@ async fn mark_raw_material_stock_in_use_tx(
              updated_at = now()
          WHERE lower(barcode) = ANY($1)
            AND (status = 'available' OR (status = 'in_use' AND reserved_order_id = $2))
-         RETURNING id, warehouse, item_code, item_name, barcode, qty, uom,
+         RETURNING id, warehouse, item_code, item_name, barcode,
+                   qty::float8 AS qty, uom,
                    status, reserved_order_id, source_receipt_id",
     )
     .bind(barcodes)
@@ -107,7 +108,8 @@ async fn mark_raw_material_stock_consumed_tx(
          WHERE lower(barcode) = ANY($1)
            AND reserved_order_id = $2
            AND status IN ('in_use', 'consumed')
-         RETURNING id, warehouse, item_code, item_name, barcode, qty, uom,
+         RETURNING id, warehouse, item_code, item_name, barcode,
+                   qty::float8 AS qty, uom,
                    status, reserved_order_id, source_receipt_id",
     )
     .bind(barcodes)
@@ -141,7 +143,8 @@ async fn raw_material_stock_rows_for_update_tx(
     barcodes: &[String],
 ) -> Result<BTreeMap<String, RawMaterialStockTransitionRow>, ProductionMapError> {
     let rows = sqlx::query_as::<_, RawMaterialStockTransitionRow>(
-        "SELECT id, warehouse, item_code, item_name, barcode, qty, uom,
+        "SELECT id, warehouse, item_code, item_name, barcode,
+                qty::float8 AS qty, uom,
                 status, reserved_order_id, source_receipt_id
          FROM mini_raw_material_stock
          WHERE lower(barcode) = ANY($1)

@@ -2,6 +2,7 @@ use super::{GscaleServiceError, MIN_BATCH_QTY_KG};
 use crate::core::gscale::models::{
     MaterialReceiptPrintRequest, ProgressLabelPrintRequest, ScaleDriverPrintRequest,
 };
+use crate::core::quantity::positive_erp_quantity;
 
 #[derive(Debug, Clone, PartialEq)]
 pub(super) struct NormalizedProgressLabelJob {
@@ -32,22 +33,15 @@ impl NormalizedProgressLabelJob {
                 "qr_payload_item_code_and_item_name_required".to_string(),
             ));
         }
-        let gross_qty = request.gross_qty;
-        if !gross_qty.is_finite() || gross_qty <= 0.0 {
-            return Err(GscaleServiceError::InvalidInput(
-                "progress_gross_qty_required".to_string(),
-            ));
-        }
+        let gross_qty = positive_erp_quantity(request.gross_qty).ok_or_else(|| {
+            GscaleServiceError::InvalidInput("progress_gross_qty_required".to_string())
+        })?;
         let progress_qty = if request.progress_qty > 0.0 {
-            request.progress_qty
+            positive_erp_quantity(request.progress_qty)
         } else {
-            request.gross_qty
-        };
-        if !progress_qty.is_finite() || progress_qty <= 0.0 {
-            return Err(GscaleServiceError::InvalidInput(
-                "progress_qty_required".to_string(),
-            ));
+            Some(gross_qty)
         }
+        .ok_or_else(|| GscaleServiceError::InvalidInput("progress_qty_required".to_string()))?;
         Ok(Self {
             driver_url: request.driver_url.trim().to_string(),
             qr_payload,
@@ -117,20 +111,27 @@ impl NormalizedMaterialReceiptJob {
                 "item_code_and_warehouse_required".to_string(),
             ));
         }
-        let gross_qty = request.gross_qty;
-        if !gross_qty.is_finite() || gross_qty < MIN_BATCH_QTY_KG {
+        let gross_qty = positive_erp_quantity(request.gross_qty).ok_or_else(|| {
+            GscaleServiceError::InvalidInput(format!(
+                "QTY juda kichik: {:.3} kg | min {MIN_BATCH_QTY_KG:.3} kg",
+                request.gross_qty
+            ))
+        })?;
+        if gross_qty < MIN_BATCH_QTY_KG {
             return Err(GscaleServiceError::InvalidInput(format!(
                 "QTY juda kichik: {gross_qty:.3} kg | min {MIN_BATCH_QTY_KG:.3} kg"
             )));
         }
         let tare_enabled = request.tare_enabled || request.tare_kg > 0.0;
         let tare_kg = if tare_enabled && request.tare_kg > 0.0 {
-            request.tare_kg
+            positive_erp_quantity(request.tare_kg).ok_or_else(|| {
+                GscaleServiceError::InvalidInput("tare_kg_invalid".to_string())
+            })?
         } else {
             0.0
         };
         let net_qty = if tare_kg > 0.0 {
-            (gross_qty - tare_kg).max(0.0)
+            positive_erp_quantity(gross_qty - tare_kg).unwrap_or(0.0)
         } else {
             gross_qty
         };

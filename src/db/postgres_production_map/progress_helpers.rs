@@ -85,7 +85,19 @@ pub(super) async fn put_order_progress_event_tx(
             finished_goods_kg, finished_goods_meter, description,
             payload_json, created_at
          )
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, now())
+         VALUES ($1, $2, $3, $4, $5, $6,
+                 ($7::double precision)::numeric(24,9),
+                 $8, $9, $10, $11, $12,
+                 ($13::double precision)::numeric(24,9),
+                 ($14::double precision)::numeric(24,9),
+                 ($15::double precision)::numeric(24,9),
+                 ($16::double precision)::numeric(24,9),
+                 ($17::double precision)::numeric(24,9),
+                 ($18::double precision)::numeric(24,9),
+                 ($19::double precision)::numeric(24,9),
+                 ($20::double precision)::numeric(24,9),
+                 ($21::double precision)::numeric(24,9),
+                 $22, $23, now())
          ON CONFLICT (event_id) DO UPDATE SET
             session_id = excluded.session_id,
             batch_id = excluded.batch_id,
@@ -179,7 +191,20 @@ pub(super) async fn put_order_progress_batch_tx(
             finished_goods_kg, finished_goods_meter, description,
             payload_json, created_at, updated_at
          )
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, $27, $28, $29, $30, $31, $32, $33, $34, $35, $36, now(), now())
+         VALUES ($1, $2, $3, $4, $5, $6,
+                 ($7::double precision)::numeric(24,9),
+                 $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18,
+                 $19, $20, $21, $22, $23, $24, $25,
+                 ($26::double precision)::numeric(24,9),
+                 ($27::double precision)::numeric(24,9),
+                 ($28::double precision)::numeric(24,9),
+                 ($29::double precision)::numeric(24,9),
+                 ($30::double precision)::numeric(24,9),
+                 ($31::double precision)::numeric(24,9),
+                 ($32::double precision)::numeric(24,9),
+                 ($33::double precision)::numeric(24,9),
+                 ($34::double precision)::numeric(24,9),
+                 $35, $36, now(), now())
          ON CONFLICT (batch_id) DO UPDATE SET
             status = excluded.status,
             produced_qty = excluded.produced_qty,
@@ -277,7 +302,8 @@ pub(super) async fn receive_finished_goods_batch_tx(
         "INSERT INTO mini_finished_goods_stock (
              id, warehouse, order_id, item_code, item_name, qty, uom, status, payload_json
          )
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+         VALUES ($1, $2, $3, $4, $5,
+                 ($6::double precision)::numeric(24,9), $7, $8, $9)
          ON CONFLICT (id) DO UPDATE SET
            warehouse = excluded.warehouse,
            order_id = excluded.order_id,

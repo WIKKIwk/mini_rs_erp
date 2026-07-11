@@ -3,16 +3,13 @@ use super::super::types::{
     OrderRunSession, OrderRunStatus, ProductionMapDefinition, ProductionMapError, QueueActionActor,
 };
 use super::ids::{progress_session_id, queue_action_str};
+use crate::core::quantity::positive_erp_quantity;
 
 pub(in crate::core::production_map) fn valid_progress_qty(
     value: Option<f64>,
 ) -> Result<f64, ProductionMapError> {
     let value = value.ok_or(ProductionMapError::ProgressInputInvalid)?;
-    if value.is_finite() && value > 0.0 {
-        Ok(value)
-    } else {
-        Err(ProductionMapError::ProgressInputInvalid)
-    }
+    positive_erp_quantity(value).ok_or(ProductionMapError::ProgressInputInvalid)
 }
 
 pub(in crate::core::production_map) fn non_empty_or(value: &str, fallback: &str) -> String {

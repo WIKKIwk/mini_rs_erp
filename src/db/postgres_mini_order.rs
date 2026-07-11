@@ -4,6 +4,7 @@ use sqlx::PgPool;
 use crate::core::calculate_orders::CalculateOrderTemplate;
 use crate::core::mini_orders::{MiniOrderError, MiniOrderSink};
 use crate::core::production_map::ProductionMapDefinition;
+use crate::core::quantity::positive_erp_quantity;
 
 #[derive(Clone)]
 pub struct PostgresMiniOrderSink {
@@ -30,16 +31,13 @@ impl MiniOrderSink for PostgresMiniOrderSink {
         let order_id = order_id(map);
         let order_code = first_non_empty([&template.code, &map.code, &map.order_number, &map.id]);
         let product_name = first_non_empty([&template.product, &template.name, &map.title]);
-        let kg = if template.kg.is_finite() && template.kg > 0.0 {
-            template.kg
-        } else {
-            0.0
-        };
-        let width_mm = positive_f64(template.width_mm).or(map.width_mm);
+        let kg = positive_erp_quantity(template.kg).unwrap_or(0.0);
+        let width_mm = positive_erp_quantity(template.width_mm)
+            .or_else(|| map.width_mm.and_then(positive_erp_quantity));
         let roll_count = template
             .roll_count
             .or(map.roll_count)
-            .filter(|value| *value > 0.0);
+            .and_then(positive_erp_quantity);
 
         let mut tx = self
             .pool
@@ -49,8 +47,11 @@ impl MiniOrderSink for PostgresMiniOrderSink {
         sqlx::query(
             "INSERT INTO mini_orders
                 (id, code, order_number, customer_ref, customer_name, product_code,
-                 product_name, status, kg, width_mm, roll_count, updated_at)
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, now())
+                 product_name, product_form, status, kg, width_mm, roll_count, updated_at)
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 'draft',
+                     ($9::double precision)::numeric(24,9),
+                     ($10::double precision)::numeric(24,9),
+                     ($11::double precision)::numeric(24,9), now())
              ON CONFLICT (id) DO UPDATE SET
                 code = excluded.code,
                 order_number = excluded.order_number,
@@ -58,7 +59,7 @@ impl MiniOrderSink for PostgresMiniOrderSink {
                 customer_name = excluded.customer_name,
                 product_code = excluded.product_code,
                 product_name = excluded.product_name,
-                status = excluded.status,
+                product_form = excluded.product_form,
                 kg = excluded.kg,
                 width_mm = excluded.width_mm,
                 roll_count = excluded.roll_count,
@@ -66,13 +67,13 @@ impl MiniOrderSink for PostgresMiniOrderSink {
              WHERE (mini_orders.code, mini_orders.order_number,
                     mini_orders.customer_ref, mini_orders.customer_name,
                     mini_orders.product_code, mini_orders.product_name,
-                    mini_orders.status, mini_orders.kg,
+                    mini_orders.product_form, mini_orders.kg,
                     mini_orders.width_mm, mini_orders.roll_count)
                    IS DISTINCT FROM
                    (excluded.code, excluded.order_number,
                     excluded.customer_ref, excluded.customer_name,
                     excluded.product_code, excluded.product_name,
-                    excluded.status, excluded.kg,
+                    excluded.product_form, excluded.kg,
                     excluded.width_mm, excluded.roll_count)",
         )
         .bind(&order_id)
@@ -175,10 +176,6 @@ fn order_id(map: &ProductionMapDefinition) -> String {
     } else {
         id.to_string()
     }
-}
-
-fn positive_f64(value: f64) -> Option<f64> {
-    (value.is_finite() && value > 0.0).then_some(value)
 }
 
 fn first_non_empty<const N: usize>(values: [&str; N]) -> &str {

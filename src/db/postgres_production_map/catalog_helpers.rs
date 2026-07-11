@@ -30,12 +30,42 @@ pub(super) async fn delete_map_by_id(
     pool: &PgPool,
     map_id: &str,
 ) -> Result<(), ProductionMapError> {
-    sqlx::query("DELETE FROM mini_production_maps WHERE id = $1")
-        .bind(map_id.trim())
-        .execute(pool)
+    let map_id = map_id.trim();
+    let mut tx = pool
+        .begin()
         .await
         .map_err(|_| ProductionMapError::StoreFailed)?;
-    Ok(())
+    sqlx::query("DELETE FROM mini_queue_states WHERE order_id = $1")
+        .bind(map_id)
+        .execute(&mut *tx)
+        .await
+        .map_err(|_| ProductionMapError::StoreFailed)?;
+    sqlx::query(
+        "UPDATE mini_queue_sequences
+         SET order_ids = COALESCE(
+                 (
+                     SELECT jsonb_agg(entry.value ORDER BY entry.ordinality)
+                     FROM jsonb_array_elements(mini_queue_sequences.order_ids)
+                          WITH ORDINALITY AS entry(value, ordinality)
+                     WHERE entry.value <> to_jsonb($1::text)
+                 ),
+                 '[]'::jsonb
+             ),
+             updated_at = now()
+         WHERE order_ids @> jsonb_build_array($1::text)",
+    )
+    .bind(map_id)
+    .execute(&mut *tx)
+    .await
+    .map_err(|_| ProductionMapError::StoreFailed)?;
+    sqlx::query("DELETE FROM mini_production_maps WHERE id = $1")
+        .bind(map_id)
+        .execute(&mut *tx)
+        .await
+        .map_err(|_| ProductionMapError::StoreFailed)?;
+    tx.commit()
+        .await
+        .map_err(|_| ProductionMapError::StoreFailed)
 }
 
 pub(super) async fn load_apparatus_sequences(

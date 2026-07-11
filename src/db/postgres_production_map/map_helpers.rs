@@ -3,6 +3,7 @@ use sqlx::{PgPool, Postgres, Transaction};
 use crate::core::production_map::{
     ProductionMapDefinition, ProductionMapError, ProductionMapNodeKind,
 };
+use crate::core::quantity::positive_erp_quantity;
 
 pub(super) async fn put_map_inner(
     pool: &PgPool,
@@ -22,11 +23,17 @@ pub(super) async fn put_map_inner_tx(
     tx: &mut Transaction<'_, Postgres>,
     map: &ProductionMapDefinition,
 ) -> Result<(), ProductionMapError> {
-    let payload = serde_json::to_value(map).map_err(|_| ProductionMapError::StoreFailed)?;
+    let mut stored_map = map.clone();
+    stored_map.roll_count = map.roll_count.and_then(positive_erp_quantity);
+    stored_map.width_mm = map.width_mm.and_then(positive_erp_quantity);
+    let payload =
+        serde_json::to_value(&stored_map).map_err(|_| ProductionMapError::StoreFailed)?;
     sqlx::query(
         "INSERT INTO mini_production_maps
             (id, product_code, title, code, order_number, roll_count, width_mm, map_json, updated_at)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, now())
+         VALUES ($1, $2, $3, $4, $5,
+                 ($6::double precision)::numeric(24,9),
+                 ($7::double precision)::numeric(24,9), $8, now())
          ON CONFLICT (id) DO UPDATE SET
             product_code = excluded.product_code,
             title = excluded.title,
@@ -42,8 +49,8 @@ pub(super) async fn put_map_inner_tx(
     .bind(map.title.trim())
     .bind(map.code.trim())
     .bind(map.order_number.trim())
-    .bind(map.roll_count)
-    .bind(map.width_mm)
+    .bind(stored_map.roll_count)
+    .bind(stored_map.width_mm)
     .bind(payload)
     .execute(&mut **tx)
     .await

@@ -136,11 +136,55 @@ async fn postgres_production_map_store_persists_maps_sequences_and_queue_states(
         Some(&"in_progress".to_string())
     );
 
+    sqlx::query(
+        "INSERT INTO mini_order_run_sessions
+            (session_id, apparatus, order_id, status)
+         VALUES ($1, $2, $3, 'active')",
+    )
+    .bind("session-delete-protection")
+    .bind("7 ta rangli pechat")
+    .bind("zakaz-1001")
+    .execute(&pool)
+    .await
+    .expect("insert protected run session");
+    service
+        .restore_map(None, "zakaz-1001")
+        .await
+        .expect_err("run session must protect production map deletion");
+    assert!(service.map("zakaz-1001").await.expect("map").is_some());
+    let preserved_queue_state_count: i64 =
+        sqlx::query_scalar("SELECT COUNT(*) FROM mini_queue_states WHERE order_id = $1")
+            .bind("zakaz-1001")
+            .fetch_one(&pool)
+            .await
+            .expect("count preserved queue states");
+    assert_eq!(preserved_queue_state_count, 1);
+    sqlx::query("DELETE FROM mini_order_run_sessions WHERE session_id = $1")
+        .bind("session-delete-protection")
+        .execute(&pool)
+        .await
+        .expect("remove protected run session");
+
     service
         .restore_map(None, "zakaz-1001")
         .await
         .expect("delete map");
     assert!(service.maps().await.expect("maps").is_empty());
+    let queue_state_count: i64 =
+        sqlx::query_scalar("SELECT COUNT(*) FROM mini_queue_states WHERE order_id = $1")
+            .bind("zakaz-1001")
+            .fetch_one(&pool)
+            .await
+            .expect("count deleted queue states");
+    let sequence_order_ids: serde_json::Value = sqlx::query_scalar(
+        "SELECT order_ids FROM mini_queue_sequences WHERE apparatus = $1",
+    )
+    .bind("7 ta rangli pechat")
+    .fetch_one(&pool)
+    .await
+    .expect("read cleaned sequence");
+    assert_eq!(queue_state_count, 0);
+    assert_eq!(sequence_order_ids, serde_json::json!([]));
 
     pool.close().await;
     let admin_pool = sqlx::PgPool::connect(&admin_url)

@@ -651,6 +651,22 @@ State ownership rules:
 - local LMDB state is limited to runtime identity/session support, not core ERP
   production state.
 
+### Data precision and integrity
+
+- persisted ERP measurements use exact PostgreSQL `NUMERIC(24,9)`, not binary
+  floating-point columns; for example, `13.00003` is stored as
+  `13.000030000` without being rounded to three decimal places;
+- HTTP/domain quantities remain backward-compatible numbers, but are validated
+  as finite and normalized to nine fractional digits before persistence;
+- display formatting may hide trailing zeroes, but must never round and write a
+  formatted value back over the stored quantity;
+- order lifecycle (`draft`, `ready`, `in_progress`, `completed`, `cancelled`)
+  is separate from the product form such as `rulon`;
+- normalized non-empty customer and worker phone numbers are unique in
+  PostgreSQL, including concurrent writes;
+- operational rows use foreign keys, while immutable event ledgers retain text
+  references so historical records survive master-data lifecycle changes.
+
 ## Failure and Error Contract
 
 Handlers preserve a predictable mobile contract:

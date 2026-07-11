@@ -7,6 +7,7 @@ use crate::core::gscale::models::{
     CreateMaterialReceiptDraftInput, MaterialReceiptDraft, RawMaterialStockEntry,
 };
 use crate::core::gscale::ports::{GscalePortError, MaterialReceiptStorePort};
+use crate::core::quantity::positive_erp_quantity;
 use crate::db::postgres_raw_material_events::{
     RawMaterialEventDraft, insert_raw_material_event_tx,
 };
@@ -31,17 +32,23 @@ impl MaterialReceiptStorePort for PostgresGscaleReceiptStore {
         let item_code = input.item_code.trim();
         let warehouse = input.warehouse.trim();
         let barcode = input.barcode.trim();
-        if item_code.is_empty() || warehouse.is_empty() || barcode.is_empty() || input.qty <= 0.0 {
+        if item_code.is_empty() || warehouse.is_empty() || barcode.is_empty() {
             return Err(GscalePortError::InvalidInput(
                 "item_code_warehouse_barcode_and_qty_required".to_string(),
             ));
         }
+        let qty = positive_erp_quantity(input.qty).ok_or_else(|| {
+            GscalePortError::InvalidInput(
+                "item_code_warehouse_barcode_and_qty_required".to_string(),
+            )
+        })?;
         let name = receipt_name(barcode);
         sqlx::query_as::<_, MaterialReceiptRow>(
             "INSERT INTO mini_gscale_receipts (
                  name, status, item_code, warehouse, qty, uom, barcode, payload_json
              )
-             VALUES ($1, 'draft', $2, $3, $4, 'kg', $5, $6)
+             VALUES ($1, 'draft', $2, $3,
+                     ($4::double precision)::numeric(24,9), 'kg', $5, $6)
              ON CONFLICT (barcode) DO UPDATE SET
                name = excluded.name,
                status = 'draft',
@@ -52,18 +59,19 @@ impl MaterialReceiptStorePort for PostgresGscaleReceiptStore {
                payload_json = excluded.payload_json,
                updated_at = now(),
                submitted_at = NULL
-             RETURNING name, item_code, warehouse, qty, uom, barcode, payload_json",
+             RETURNING name, item_code, warehouse, qty::float8 AS qty,
+                       uom, barcode, payload_json",
         )
         .bind(name)
         .bind(item_code)
         .bind(warehouse)
-        .bind(input.qty)
+        .bind(qty)
         .bind(barcode)
         .bind(serde_json::json!({
             "item_code": item_code,
             "item_name": input.item_name.trim(),
             "warehouse": warehouse,
-            "qty": input.qty,
+            "qty": qty,
             "uom": "kg",
             "barcode": barcode,
             "actor_role": input.actor_role.trim(),
@@ -86,7 +94,8 @@ impl MaterialReceiptStorePort for PostgresGscaleReceiptStore {
             "UPDATE mini_gscale_receipts
              SET status = 'submitted', submitted_at = now(), updated_at = now()
              WHERE name = $1 AND status = 'draft'
-             RETURNING name, item_code, warehouse, qty, uom, barcode, payload_json",
+             RETURNING name, item_code, warehouse, qty::float8 AS qty,
+                       uom, barcode, payload_json",
         )
         .bind(name.trim())
         .fetch_optional(&mut *tx)
@@ -119,7 +128,8 @@ impl MaterialReceiptStorePort for PostgresGscaleReceiptStore {
             ));
         }
         sqlx::query_as::<_, MaterialReceiptRow>(
-            "SELECT name, item_code, warehouse, qty, uom, barcode, payload_json
+            "SELECT name, item_code, warehouse, qty::float8 AS qty,
+                    uom, barcode, payload_json
              FROM mini_gscale_receipts
              WHERE lower(barcode) = lower($1)
              ORDER BY updated_at DESC
@@ -143,7 +153,8 @@ impl MaterialReceiptStorePort for PostgresGscaleReceiptStore {
             ));
         }
         sqlx::query_as::<_, RawMaterialStockRow>(
-            "SELECT id, warehouse, item_code, item_name, barcode, qty, uom,
+            "SELECT id, warehouse, item_code, item_name, barcode,
+                    qty::float8 AS qty, uom,
                     status, reserved_order_id, source_receipt_id
              FROM mini_raw_material_stock
              WHERE lower(barcode) = lower($1)
@@ -164,7 +175,8 @@ impl MaterialReceiptStorePort for PostgresGscaleReceiptStore {
     ) -> Result<Vec<RawMaterialStockEntry>, GscalePortError> {
         let warehouse = warehouse.trim().to_lowercase();
         sqlx::query_as::<_, RawMaterialStockRow>(
-            "SELECT id, warehouse, item_code, item_name, barcode, qty, uom,
+            "SELECT id, warehouse, item_code, item_name, barcode,
+                    qty::float8 AS qty, uom,
                     status, reserved_order_id, source_receipt_id
              FROM mini_raw_material_stock
              WHERE $1 = '' OR lower(warehouse) = $1
@@ -208,7 +220,8 @@ impl MaterialReceiptStorePort for PostgresGscaleReceiptStore {
                  updated_at = now()
              WHERE lower(barcode) = ANY($1)
                AND (status = 'available' OR (status = 'in_use' AND reserved_order_id = $2))
-             RETURNING id, warehouse, item_code, item_name, barcode, qty, uom,
+             RETURNING id, warehouse, item_code, item_name, barcode,
+                       qty::float8 AS qty, uom,
                        status, reserved_order_id, source_receipt_id",
         )
         .bind(&barcodes)
@@ -274,7 +287,8 @@ impl MaterialReceiptStorePort for PostgresGscaleReceiptStore {
              WHERE lower(barcode) = ANY($1)
                AND reserved_order_id = $2
                AND status IN ('in_use', 'consumed')
-             RETURNING id, warehouse, item_code, item_name, barcode, qty, uom,
+             RETURNING id, warehouse, item_code, item_name, barcode,
+                       qty::float8 AS qty, uom,
                        status, reserved_order_id, source_receipt_id",
         )
         .bind(&barcodes)
@@ -371,7 +385,8 @@ async fn upsert_raw_material_stock_tx(
              id, warehouse, item_code, item_name, barcode, qty, uom, status,
              source_receipt_id, payload_json
          )
-         VALUES ($1, $2, $3, $4, $5, $6, $7, 'available', $8, $9)
+         VALUES ($1, $2, $3, $4, $5,
+                 ($6::double precision)::numeric(24,9), $7, 'available', $8, $9)
          ON CONFLICT (barcode) DO UPDATE SET
            warehouse = excluded.warehouse,
            item_code = excluded.item_code,
@@ -481,7 +496,8 @@ async fn raw_material_stock_rows_for_update_tx(
     barcodes: &[String],
 ) -> Result<BTreeMap<String, RawMaterialStockRow>, GscalePortError> {
     let rows = sqlx::query_as::<_, RawMaterialStockRow>(
-        "SELECT id, warehouse, item_code, item_name, barcode, qty, uom,
+        "SELECT id, warehouse, item_code, item_name, barcode,
+                qty::float8 AS qty, uom,
                 status, reserved_order_id, source_receipt_id
          FROM mini_raw_material_stock
          WHERE lower(barcode) = ANY($1)

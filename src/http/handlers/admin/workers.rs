@@ -149,6 +149,7 @@ fn worker_error(error: WorkerError) -> AdminError {
         WorkerError::MissingName => bad_request("worker name is required"),
         WorkerError::MissingId => bad_request("worker id is required"),
         WorkerError::InvalidLevel => bad_request("worker level is invalid"),
+        WorkerError::DuplicatePhone => bad_request("worker phone already exists"),
         WorkerError::NotFound => not_found("worker not found"),
         WorkerError::StoreFailed => server_error("worker store failed"),
     }

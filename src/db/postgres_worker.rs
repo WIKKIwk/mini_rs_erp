@@ -95,7 +95,7 @@ impl WorkerStorePort for PostgresWorkerStore {
         .bind(payload)
         .fetch_one(&self.pool)
         .await
-        .map_err(|_| WorkerError::StoreFailed)?;
+        .map_err(map_worker_write_error)?;
 
         Ok(Worker {
             id,
@@ -144,7 +144,7 @@ impl WorkerStorePort for PostgresWorkerStore {
         .bind(phone.trim())
         .fetch_optional(&self.pool)
         .await
-        .map_err(|_| WorkerError::StoreFailed)?;
+        .map_err(map_worker_write_error)?;
 
         let Some((id, name, phone, level)) = row else {
             return Err(WorkerError::NotFound);
@@ -155,5 +155,17 @@ impl WorkerStorePort for PostgresWorkerStore {
             phone,
             level,
         })
+    }
+}
+
+fn map_worker_write_error(error: sqlx::Error) -> WorkerError {
+    if error
+        .as_database_error()
+        .and_then(|error| error.constraint())
+        == Some("idx_mini_workers_phone_key_unique")
+    {
+        WorkerError::DuplicatePhone
+    } else {
+        WorkerError::StoreFailed
     }
 }
