@@ -401,11 +401,11 @@ async fn prepare_qolip_for_bosma_start(
     Ok(Some(checkout))
 }
 
-fn apparatus_requires_qolip_scan(apparatus: &str) -> bool {
+pub(super) fn apparatus_requires_qolip_scan(apparatus: &str) -> bool {
     pechat::pechat_color_count(apparatus).is_some()
 }
 
-fn qolip_queue_error(error: crate::core::qolip::QolipError) -> AdminError {
+pub(super) fn qolip_queue_error(error: crate::core::qolip::QolipError) -> AdminError {
     match error {
         crate::core::qolip::QolipError::MissingQolipCode => bad_request("qolip_scan_required"),
         crate::core::qolip::QolipError::QolipCodeNotFound => bad_request("qolip_code_not_found"),

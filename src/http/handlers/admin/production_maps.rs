@@ -19,6 +19,7 @@ mod completion;
 mod helpers;
 mod move_run;
 mod progress_qr;
+mod qolip_validation;
 mod queue_actions;
 mod raw_material_details;
 mod raw_materials;
@@ -35,6 +36,7 @@ pub use self::progress_qr::{
     production_map_progress_qr_history, production_map_progress_qr_lookup,
     production_map_progress_qr_report, production_map_progress_qr_reprint,
 };
+pub use self::qolip_validation::production_map_qolip_validate;
 pub use self::queue_actions::production_map_queue_action;
 pub use self::raw_materials::{
     raw_material_assignment_lookup, raw_material_assignments, raw_material_rules,

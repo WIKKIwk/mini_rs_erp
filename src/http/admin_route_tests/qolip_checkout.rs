@@ -249,6 +249,56 @@ async fn pechat_queue_start_requires_matching_qolip_code_scan() {
         .expect("location save");
     assert_eq!(location.status(), StatusCode::OK);
 
+    let validation = router
+        .clone()
+        .oneshot(request_with_body(
+            "POST",
+            "/v1/mobile/admin/production-maps/qolip-validate",
+            &worker_token,
+            r#"{
+                "apparatus":"7 ta rangli pechat - A",
+                "order_id":"zakaz-qolip-scan",
+                "qolip_code":"QOLIP-SCAN-1"
+            }"#,
+        ))
+        .await
+        .expect("validate matching qolip");
+    assert_eq!(validation.status(), StatusCode::OK);
+    let validation_body = json_body(validation).await;
+    assert_eq!(validation_body["qolip"]["qolip_code"], "QOLIP-SCAN-1");
+
+    let checkouts_before_start = router
+        .clone()
+        .oneshot(request("GET", "/v1/mobile/qolip/checkouts", &token))
+        .await
+        .expect("checkouts after validation");
+    assert!(
+        json_body(checkouts_before_start).await["checkouts"]
+            .as_array()
+            .expect("checkouts")
+            .is_empty()
+    );
+
+    let invalid_validation = router
+        .clone()
+        .oneshot(request_with_body(
+            "POST",
+            "/v1/mobile/admin/production-maps/qolip-validate",
+            &worker_token,
+            r#"{
+                "apparatus":"7 ta rangli pechat - A",
+                "order_id":"zakaz-qolip-scan",
+                "qolip_code":"QOLIP-WRONG"
+            }"#,
+        ))
+        .await
+        .expect("reject unknown qolip");
+    assert_eq!(invalid_validation.status(), StatusCode::BAD_REQUEST);
+    assert_eq!(
+        json_body(invalid_validation).await["error"],
+        "qolip_code_not_found"
+    );
+
     let missing_scan = router
         .clone()
         .oneshot(request_with_body(

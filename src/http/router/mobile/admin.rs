@@ -94,6 +94,10 @@ pub(super) fn routes() -> Router<AppState> {
             any(admin::production_map_queue_action),
         )
         .route(
+            "/v1/mobile/admin/production-maps/qolip-validate",
+            any(admin::production_map_qolip_validate),
+        )
+        .route(
             "/v1/mobile/admin/production-maps/progress-qr/lookup",
             any(admin::production_map_progress_qr_lookup),
         )
