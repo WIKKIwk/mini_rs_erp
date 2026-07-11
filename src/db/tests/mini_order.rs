@@ -30,11 +30,35 @@ async fn postgres_mini_order_sink_saves_order_and_product_rows() {
     apply_foundation_migration(&pool)
         .await
         .expect("apply migration");
+    apply_foundation_migration(&pool)
+        .await
+        .expect("migration is idempotent");
     let sink = PostgresMiniOrderSink::new(pool.clone());
+    let map = test_map();
+    let map_json = serde_json::to_value(&map).expect("serialize map");
+    sqlx::query(
+        "INSERT INTO mini_production_maps
+            (id, product_code, title, code, order_number, roll_count, width_mm, map_json)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8)",
+    )
+    .bind(&map.id)
+    .bind(&map.product_code)
+    .bind(&map.title)
+    .bind(&map.code)
+    .bind(&map.order_number)
+    .bind(map.roll_count)
+    .bind(map.width_mm)
+    .bind(map_json)
+    .execute(&pool)
+    .await
+    .expect("insert production map");
 
-    sink.save_order(&test_map(), &test_template())
+    sink.save_order(&map, &test_template())
         .await
         .expect("save mini order");
+    sink.save_order(&map, &test_template())
+        .await
+        .expect("save mini order idempotently");
 
     let order_count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM mini_orders")
         .fetch_one(&pool)
@@ -44,8 +68,20 @@ async fn postgres_mini_order_sink_saves_order_and_product_rows() {
         .fetch_one(&pool)
         .await
         .expect("count products");
+    let linked_order_id: Option<String> =
+        sqlx::query_scalar("SELECT order_id FROM mini_production_maps WHERE id = $1")
+            .bind(&map.id)
+            .fetch_one(&pool)
+            .await
+            .expect("read production map order link");
+    let migration_count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM mini_schema_migrations")
+        .fetch_one(&pool)
+        .await
+        .expect("count applied migrations");
     assert_eq!(order_count, 1);
     assert_eq!(product_count, 1);
+    assert_eq!(linked_order_id.as_deref(), Some("zakaz-9001"));
+    assert_eq!(migration_count, 2);
 
     pool.close().await;
     let admin_pool = sqlx::PgPool::connect(&admin_url)

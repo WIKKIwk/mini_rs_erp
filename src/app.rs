@@ -108,6 +108,11 @@ impl AppState {
         let calculate_orders = build_calculate_order_store();
         let order_sheets = discover_order_sheet_sink();
         let production_orders = build_mini_order_sink();
+        spawn_mini_orders_sync_loop_if_enabled(
+            production_maps.clone(),
+            calculate_orders.clone(),
+            production_orders.clone(),
+        );
         let mini_engine = build_mini_engine_store();
         let raw_material_events = build_raw_material_event_store();
         spawn_order_sheets_sync_loop_if_enabled(
@@ -289,6 +294,21 @@ fn spawn_order_sheets_sync_loop_if_enabled(
             calculate_orders,
             order_sheets,
             order_sheets_sync_interval(),
+        ));
+    }
+}
+
+fn spawn_mini_orders_sync_loop_if_enabled(
+    production_maps: ProductionMapService,
+    calculate_orders: Arc<dyn CalculateOrderStorePort>,
+    production_orders: Arc<dyn MiniOrderSink>,
+) {
+    if production_orders.enabled() {
+        tokio::spawn(run_mini_orders_sync_loop(
+            production_maps,
+            calculate_orders,
+            production_orders,
+            mini_orders_sync_interval(),
         ));
     }
 }

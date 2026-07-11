@@ -740,6 +740,27 @@ Recovery expectations:
   from the repository;
 - after restore, run the smoke test checklist before letting operators resume.
 
+Create a PostgreSQL backup before every schema or production deployment change:
+
+```bash
+MINI_ERP_DATABASE_URL='postgres://mini_rs_erp:secret@127.0.0.1:5432/mini_rs_erp' \
+MINI_ERP_ADMIN_DATABASE_URL='postgres://postgres:secret@127.0.0.1:5432/postgres' \
+make db-backup
+```
+
+The command writes both custom and plain SQL dumps outside the repository,
+validates the custom archive, and records SHA-256 checksums. It never removes
+older backups. Test a custom dump with `pg_restore` into a separate database
+before relying on it for recovery.
+
+Apply versioned PostgreSQL migrations separately from service startup when a
+controlled deployment requires it:
+
+```bash
+MINI_ERP_DATABASE_URL='postgres://mini_rs_erp:secret@127.0.0.1:5432/mini_rs_erp' \
+make db-migrate
+```
+
 ## Configuration
 
 Common runtime variables:
@@ -748,6 +769,7 @@ Common runtime variables:
 | --- | --- | --- |
 | `MOBILE_API_ADDR` | `:8081` | Bind address. `:8081` is normalized to `0.0.0.0:8081`. |
 | `MINI_ERP_DATABASE_URL` | empty | PostgreSQL URL for mini ERP state. Required for production ERP workflows. |
+| `MINI_ORDER_SYNC_INTERVAL_SECONDS` | `30` | Retry interval for reconciling production maps into PostgreSQL order rows. |
 | `MINI_ERP_HTTP_TIMEOUT_SECONDS` | `15` | HTTP client timeout baseline. |
 | `MINI_ERP_DEFAULT_TARGET_WAREHOUSE` | empty | Default target warehouse setting. |
 | `MINI_ERP_DEFAULT_UOM` | `Kg` | Default unit of measure. |

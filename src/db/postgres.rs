@@ -1,11 +1,24 @@
 use std::time::Duration;
 
+use sha2::{Digest, Sha256};
 use sqlx::postgres::PgPoolOptions;
-use sqlx::{PgPool, Postgres};
+use sqlx::{PgPool, Postgres, Transaction};
 
 const DEFAULT_MIN_CONNECTIONS: u32 = 2;
 const DEFAULT_MAX_CONNECTIONS: u32 = 16;
 const DEFAULT_ACQUIRE_TIMEOUT_MS: u64 = 500;
+const MIGRATION_LOCK_KEY: i64 = 6_514_811_918_052_026_001;
+
+const POSTGRES_MIGRATIONS: [(&str, &str); 2] = [
+    (
+        "0001_mini_erp_foundation",
+        include_str!("../../migrations/postgres/0001_mini_erp_foundation.sql"),
+    ),
+    (
+        "0002_order_integrity",
+        include_str!("../../migrations/postgres/0002_order_integrity.sql"),
+    ),
+];
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PostgresConfig {
@@ -93,15 +106,79 @@ pub async fn connect_and_migrate_required() -> Result<PgPool, PostgresBootstrapE
 
 #[allow(dead_code)]
 pub fn foundation_migration_sql() -> &'static str {
-    include_str!("../../migrations/postgres/0001_mini_erp_foundation.sql")
+    POSTGRES_MIGRATIONS[0].1
 }
 
 #[allow(dead_code)]
 pub async fn apply_foundation_migration(pool: &PgPool) -> Result<(), sqlx::Error> {
-    for statement in split_sql_statements(foundation_migration_sql()) {
-        sqlx::query::<Postgres>(&statement).execute(pool).await?;
+    let mut tx = pool.begin().await?;
+    sqlx::query("SELECT pg_advisory_xact_lock($1)")
+        .bind(MIGRATION_LOCK_KEY)
+        .execute(&mut *tx)
+        .await?;
+    ensure_migration_history(&mut tx).await?;
+    for (version, sql) in POSTGRES_MIGRATIONS {
+        apply_migration(&mut tx, version, sql).await?;
     }
+    tx.commit().await
+}
+
+async fn ensure_migration_history(
+    tx: &mut Transaction<'_, Postgres>,
+) -> Result<(), sqlx::Error> {
+    sqlx::query(
+        "CREATE TABLE IF NOT EXISTS mini_schema_migrations (
+             version TEXT PRIMARY KEY,
+             checksum TEXT NOT NULL,
+             applied_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+             CONSTRAINT mini_schema_migrations_version_not_blank
+                 CHECK (btrim(version) <> ''),
+             CONSTRAINT mini_schema_migrations_checksum_not_blank
+                 CHECK (btrim(checksum) <> '')
+         )",
+    )
+    .execute(&mut **tx)
+    .await?;
     Ok(())
+}
+
+async fn apply_migration(
+    tx: &mut Transaction<'_, Postgres>,
+    version: &str,
+    sql: &str,
+) -> Result<(), sqlx::Error> {
+    let checksum = migration_checksum(sql);
+    let applied_checksum = sqlx::query_scalar::<_, String>(
+        "SELECT checksum FROM mini_schema_migrations WHERE version = $1",
+    )
+    .bind(version)
+    .fetch_optional(&mut **tx)
+    .await?;
+    if let Some(applied_checksum) = applied_checksum {
+        if applied_checksum != checksum {
+            return Err(sqlx::Error::Protocol(format!(
+                "postgres migration checksum mismatch: {version}"
+            )));
+        }
+        return Ok(());
+    }
+    for statement in split_sql_statements(sql) {
+        sqlx::query::<Postgres>(&statement)
+            .execute(&mut **tx)
+            .await?;
+    }
+    sqlx::query(
+        "INSERT INTO mini_schema_migrations (version, checksum) VALUES ($1, $2)",
+    )
+    .bind(version)
+    .bind(checksum)
+    .execute(&mut **tx)
+    .await?;
+    Ok(())
+}
+
+fn migration_checksum(sql: &str) -> String {
+    format!("{:x}", Sha256::digest(sql.as_bytes()))
 }
 
 fn env_u32(get_env: &impl Fn(&str) -> Option<String>, key: &str) -> Option<u32> {
@@ -320,6 +397,29 @@ mod tests {
         assert_eq!(statements.len(), 3);
         assert!(statements[1].contains("PERFORM 1;"));
         assert!(statements[1].contains("END;"));
+    }
+
+    #[test]
+    fn postgres_migrations_are_versioned_and_checksummed() {
+        let versions = POSTGRES_MIGRATIONS
+            .iter()
+            .map(|(version, _)| *version)
+            .collect::<std::collections::BTreeSet<_>>();
+
+        assert_eq!(versions.len(), POSTGRES_MIGRATIONS.len());
+        assert!(POSTGRES_MIGRATIONS.iter().all(|(version, sql)| {
+            !version.trim().is_empty() && migration_checksum(sql).len() == 64
+        }));
+    }
+
+    #[test]
+    fn postgres_order_integrity_migration_links_orders_and_indexes_foreign_keys() {
+        let migration = POSTGRES_MIGRATIONS[1].1.to_lowercase();
+
+        assert!(migration.contains("idx_mini_order_products_order_id"));
+        assert!(migration.contains("idx_mini_customer_items_item_code"));
+        assert!(migration.contains("set order_id = orders.id"));
+        assert!(migration.contains("maps.id = orders.id"));
     }
 
     #[test]
