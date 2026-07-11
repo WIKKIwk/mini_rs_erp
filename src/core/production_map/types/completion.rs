@@ -21,6 +21,8 @@ pub struct CompletionRequestNotification {
     pub worker_display_name: String,
     pub description: String,
     #[serde(default)]
+    pub zero_metric_codes: Vec<String>,
+    #[serde(default)]
     pub notice_kind: String,
     #[serde(default = "default_decision_required")]
     pub decision_required: bool,

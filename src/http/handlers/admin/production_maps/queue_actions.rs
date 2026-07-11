@@ -134,21 +134,30 @@ pub async fn production_map_queue_action(
     let has_rezka_progress_metrics = input.rezka_bosma_waste.is_some()
         && input.rezka_lamination_waste.is_some()
         && input.rezka_edge_waste.is_some();
+    let zero_metric_codes = zero_completion_metric_codes(&input);
     if matches!(input.action, queue_state::ApparatusQueueAction::Complete)
-        && !has_complete_bosma_metrics
+        && !zero_metric_codes.is_empty()
+        && completion_request_note.trim().is_empty()
+    {
+        return Err(bad_request("zero_metric_explanation_required"));
+    }
+    let missing_output_with_explanation = !has_complete_bosma_metrics
         && !has_complete_laminatsiya_metrics
         && !has_rezka_progress_metrics
         && input.gross_qty.is_none()
-        && !completion_request_note.trim().is_empty()
+        && !completion_request_note.trim().is_empty();
+    if matches!(input.action, queue_state::ApparatusQueueAction::Complete)
+        && (!zero_metric_codes.is_empty() || missing_output_with_explanation)
     {
         let result = state
             .production_maps
-            .request_completion_without_output(
+            .request_completion_with_issue(
                 &input.apparatus,
                 &input.order_id,
                 &assigned_apparatus,
                 queue_action_actor(&principal),
                 &completion_request_note,
+                zero_metric_codes,
             )
             .await
             .map_err(production_map_error)?;
@@ -309,6 +318,38 @@ pub async fn production_map_queue_action(
         "progress_batch": result.progress_batch,
         "print": print,
     })))
+}
+
+fn zero_completion_metric_codes(input: &ApparatusQueueActionRequest) -> Vec<String> {
+    if !matches!(input.action, queue_state::ApparatusQueueAction::Complete) {
+        return Vec::new();
+    }
+    [
+        ("produced_qty", input.produced_qty.or(input.qty)),
+        ("gross_qty", input.gross_qty),
+        ("return_ink_kg", input.return_ink_kg),
+        (
+            "lamination_print_leftover_rolls",
+            input.lamination_print_leftover_rolls,
+        ),
+        (
+            "lamination_film_leftover_rolls",
+            input.lamination_film_leftover_rolls,
+        ),
+        ("rezka_bosma_waste", input.rezka_bosma_waste),
+        ("rezka_lamination_waste", input.rezka_lamination_waste),
+        ("rezka_edge_waste", input.rezka_edge_waste),
+        ("total_waste", input.total_waste),
+        ("finished_goods_kg", input.finished_goods_kg),
+        ("finished_goods_meter", input.finished_goods_meter),
+    ]
+    .into_iter()
+    .filter_map(|(code, value)| {
+        value
+            .is_some_and(|value| value == 0.0)
+            .then_some(code.to_string())
+    })
+    .collect()
 }
 
 async fn checkout_qolip_for_pechat_start(

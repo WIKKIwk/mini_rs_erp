@@ -21,6 +21,7 @@ pub(in crate::core::production_map) fn completion_request_notification_from_even
     if !status.is_empty() && status != "pending" {
         return None;
     }
+    let notice_kind = json_string_field(&event.payload_json, "notice_kind");
     Some(CompletionRequestNotification {
         event_id: event.event_id.trim().to_string(),
         apparatus: event.apparatus.trim().to_string(),
@@ -32,7 +33,12 @@ pub(in crate::core::production_map) fn completion_request_notification_from_even
         worker_ref: event.actor.ref_.trim().to_string(),
         worker_display_name: actor_display_name(&event.actor),
         description: description.to_string(),
-        notice_kind: "completion_request".to_string(),
+        zero_metric_codes: json_string_array(&event.payload_json, "zero_metric_codes"),
+        notice_kind: if notice_kind.is_empty() {
+            "completion_request".to_string()
+        } else {
+            notice_kind
+        },
         decision_required: true,
         created_at_unix,
     })
@@ -62,10 +68,24 @@ pub(in crate::core::production_map) fn laminatsiya_metric_notice_from_event(
         worker_ref: event.actor.ref_.trim().to_string(),
         worker_display_name: actor_display_name(&event.actor),
         description: description.to_string(),
+        zero_metric_codes: Vec::new(),
         notice_kind: "laminatsiya_double_leftover".to_string(),
         decision_required: false,
         created_at_unix,
     })
+}
+
+fn json_string_array(payload: &serde_json::Value, key: &str) -> Vec<String> {
+    payload
+        .get(key)
+        .and_then(serde_json::Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(|value| value.as_str())
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToOwned::to_owned)
+        .collect()
 }
 
 pub(in crate::core::production_map) fn completion_request_decision_notification_from_event(

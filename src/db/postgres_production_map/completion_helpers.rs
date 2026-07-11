@@ -21,6 +21,7 @@ struct CompletionRequestRow {
     worker_ref: String,
     worker_display_name: String,
     description: String,
+    zero_metric_codes: serde_json::Value,
     notice_kind: String,
     decision_required: bool,
     created_at_unix: i64,
@@ -66,6 +67,7 @@ pub(super) async fn load_completion_requests(
                 actor_ref AS worker_ref,
                 actor_display_name AS worker_display_name,
                 COALESCE(payload_json->>'description', '') AS description,
+                COALESCE(payload_json->'zero_metric_codes', '[]'::jsonb) AS zero_metric_codes,
                 COALESCE(payload_json->>'notice_kind', 'completion_request') AS notice_kind,
                 COALESCE((payload_json->>'decision_required')::boolean, true) AS decision_required,
                 EXTRACT(EPOCH FROM created_at)::bigint AS created_at_unix
@@ -112,6 +114,7 @@ pub(super) async fn load_completion_request_by_event_id(
                 actor_ref AS worker_ref,
                 actor_display_name AS worker_display_name,
                 COALESCE(payload_json->>'description', '') AS description,
+                COALESCE(payload_json->'zero_metric_codes', '[]'::jsonb) AS zero_metric_codes,
                 COALESCE(payload_json->>'notice_kind', 'completion_request') AS notice_kind,
                 true AS decision_required,
                 EXTRACT(EPOCH FROM created_at)::bigint AS created_at_unix
@@ -274,8 +277,21 @@ fn completion_request_from_row(row: CompletionRequestRow) -> CompletionRequestNo
         worker_ref: row.worker_ref,
         worker_display_name: row.worker_display_name,
         description: row.description,
+        zero_metric_codes: json_string_array(row.zero_metric_codes),
         notice_kind: row.notice_kind,
         decision_required: row.decision_required,
         created_at_unix: row.created_at_unix,
     }
+}
+
+fn json_string_array(value: serde_json::Value) -> Vec<String> {
+    value
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(serde_json::Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToOwned::to_owned)
+        .collect()
 }

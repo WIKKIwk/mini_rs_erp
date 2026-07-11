@@ -9,13 +9,14 @@ use super::progress::{
 };
 
 impl ProductionMapService {
-    pub async fn request_completion_without_output(
+    pub async fn request_completion_with_issue(
         &self,
         apparatus: &str,
         order_id: &str,
         assigned_apparatus: &[String],
         actor: QueueActionActor,
         description: &str,
+        zero_metric_codes: Vec<String>,
     ) -> Result<CompletionRequestResult, ProductionMapError> {
         let apparatus = apparatus.trim();
         let order_id = order_id.trim();
@@ -71,6 +72,18 @@ impl ProductionMapService {
         if from_state != queue_state::ApparatusQueueOrderState::InProgress {
             return Err(ProductionMapError::QueueActionNotAllowed);
         }
+        let zero_metric_codes = zero_metric_codes
+            .into_iter()
+            .map(|code| code.trim().to_string())
+            .filter(|code| !code.is_empty())
+            .collect::<BTreeSet<_>>()
+            .into_iter()
+            .collect::<Vec<_>>();
+        let notice_kind = if zero_metric_codes.is_empty() {
+            "completion_request"
+        } else {
+            "zero_metric_completion_request"
+        };
 
         let now = unix_seconds();
         let event_id = queue_action_event_id(
@@ -89,7 +102,8 @@ impl ProductionMapService {
             worker_ref: actor.ref_.trim().to_string(),
             worker_display_name: actor_display_name(&actor),
             description: description.to_string(),
-            notice_kind: "completion_request".to_string(),
+            zero_metric_codes: zero_metric_codes.clone(),
+            notice_kind: notice_kind.to_string(),
             decision_required: true,
             created_at_unix: now,
         };
@@ -110,6 +124,8 @@ impl ProductionMapService {
             payload_json: serde_json::json!({
                 "completion_request": true,
                 "description": description,
+                "zero_metric_codes": zero_metric_codes,
+                "notice_kind": notice_kind,
                 "requested_apparatus": apparatus,
                 "storage_key": storage_key,
                 "order_number": request.order_number.clone(),

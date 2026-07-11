@@ -109,6 +109,132 @@ async fn queue_complete_without_output_creates_admin_completion_request() {
 }
 
 #[tokio::test]
+async fn queue_complete_with_zero_metric_requires_reason_and_creates_admin_request() {
+    let state = test_state();
+    state
+        .admin
+        .upsert_role_assignment(crate::core::authz::RoleAssignmentUpsert {
+            principal_role: PrincipalRole::Aparatchi,
+            principal_ref: "worker-zero-metric".to_string(),
+            role_id: "aparatchi".to_string(),
+            assigned_apparatus: vec!["7 ta rangli pechat".to_string()],
+            assigned_item_groups: Vec::new(),
+        })
+        .await
+        .expect("assignment");
+    let admin_token = session(&state, PrincipalRole::Admin).await;
+    let worker_token =
+        session_for(&state, PrincipalRole::Aparatchi, "worker-zero-metric").await;
+    let router = build_router(state);
+
+    let saved = router
+        .clone()
+        .oneshot(request_with_body(
+            "PUT",
+            "/v1/mobile/admin/production-maps",
+            &admin_token,
+            &pechat_order_map_json(
+                "zakaz-zero-metric",
+                "Zero metric order",
+                "9312",
+                "7 ta rangli pechat",
+            ),
+        ))
+        .await
+        .expect("save map");
+    assert_eq!(saved.status(), StatusCode::OK);
+
+    let started = router
+        .clone()
+        .oneshot(request_with_body(
+            "POST",
+            "/v1/mobile/admin/production-maps/queue-action",
+            &worker_token,
+            r#"{
+                "apparatus":"7 ta rangli pechat",
+                "order_id":"zakaz-zero-metric",
+                "action":"start"
+            }"#,
+        ))
+        .await
+        .expect("start");
+    assert_eq!(started.status(), StatusCode::OK);
+
+    let missing_reason = router
+        .clone()
+        .oneshot(request_with_body(
+            "POST",
+            "/v1/mobile/admin/production-maps/queue-action",
+            &worker_token,
+            r#"{
+                "apparatus":"7 ta rangli pechat",
+                "order_id":"zakaz-zero-metric",
+                "action":"complete",
+                "return_ink_kg":0,
+                "total_waste":1,
+                "finished_goods_kg":1,
+                "finished_goods_meter":1
+            }"#,
+        ))
+        .await
+        .expect("complete without reason");
+    let missing_reason_status = missing_reason.status();
+    let missing_reason_body = json_body(missing_reason).await;
+    assert_eq!(missing_reason_status, StatusCode::BAD_REQUEST);
+    assert_eq!(
+        missing_reason_body["error"],
+        "zero_metric_explanation_required"
+    );
+
+    let requested = router
+        .clone()
+        .oneshot(request_with_body(
+            "POST",
+            "/v1/mobile/admin/production-maps/queue-action",
+            &worker_token,
+            r#"{
+                "apparatus":"7 ta rangli pechat",
+                "order_id":"zakaz-zero-metric",
+                "action":"complete",
+                "return_ink_kg":0,
+                "total_waste":1,
+                "finished_goods_kg":1,
+                "finished_goods_meter":1,
+                "completion_request_note":"Kraska qaytimi nol chiqdi, brigader tekshirsin"
+            }"#,
+        ))
+        .await
+        .expect("complete request");
+    let requested_status = requested.status();
+    let requested_body = json_body(requested).await;
+    assert_eq!(requested_status, StatusCode::OK, "{requested_body:?}");
+    assert_eq!(
+        requested_body["states"]["zakaz-zero-metric"],
+        "in_progress"
+    );
+    assert_eq!(
+        requested_body["completion_request"]["zero_metric_codes"],
+        serde_json::json!(["return_ink_kg"])
+    );
+
+    let listed = router
+        .oneshot(request(
+            "GET",
+            "/v1/mobile/admin/production-maps/completion-requests",
+            &admin_token,
+        ))
+        .await
+        .expect("list completion requests");
+    let listed_status = listed.status();
+    let listed_body = json_body(listed).await;
+    assert_eq!(listed_status, StatusCode::OK, "{listed_body:?}");
+    assert_eq!(
+        listed_body["completion_requests"][0]["zero_metric_codes"],
+        serde_json::json!(["return_ink_kg"])
+    );
+}
+
+#[tokio::test]
 async fn admin_approves_zero_output_completion_request_and_closes_order_with_issue_history() {
     let material_store = Arc::new(RawMaterialStockLookup::default());
     let mut state = test_state();
