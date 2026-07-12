@@ -1,6 +1,7 @@
 pub mod admin;
 pub mod auth;
 pub mod calculate;
+pub mod chat;
 pub mod customer;
 pub mod gscale;
 pub mod iroh_discovery;

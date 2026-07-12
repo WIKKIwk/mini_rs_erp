@@ -140,6 +140,17 @@ impl AdminService {
         }
     }
 
+    pub async fn profile_avatar_url_for_principal(
+        &self,
+        role: &PrincipalRole,
+        ref_: &str,
+    ) -> String {
+        let Some(identity) = ProfileIdentity::from_principal(role, ref_) else {
+            return String::new();
+        };
+        self.profile_avatar_url(identity.role_key(), ref_).await
+    }
+
     pub async fn settings(&self) -> Result<AdminSettings, AdminPortError> {
         let config = self.config.read().await;
         let state = self.state_for("werka").await.unwrap_or_default();

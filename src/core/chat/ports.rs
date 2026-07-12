@@ -1,0 +1,70 @@
+use async_trait::async_trait;
+
+use super::{
+    ChatConversation, ChatMessagePage, ChatOutboxEvent, ChatPrincipal, ChatPrincipalInput,
+    ChatSendResult,
+};
+use crate::core::auth::models::Principal;
+
+#[derive(Debug, thiserror::Error, Clone, Copy, PartialEq, Eq)]
+pub enum ChatError {
+    #[error("chat is unavailable")]
+    Unavailable,
+    #[error("chat input is invalid")]
+    InvalidInput,
+    #[error("chat principal or conversation was not found")]
+    NotFound,
+    #[error("chat access is forbidden")]
+    Forbidden,
+    #[error("chat store failed")]
+    StoreFailed,
+}
+
+#[async_trait]
+pub trait ChatStorePort: Send + Sync {
+    async fn ensure_principal(
+        &self,
+        principal: ChatPrincipalInput,
+    ) -> Result<ChatPrincipal, ChatError>;
+
+    async fn create_or_get_dm(
+        &self,
+        actor: &ChatPrincipal,
+        target: &ChatPrincipal,
+    ) -> Result<ChatConversation, ChatError>;
+
+    async fn conversations(
+        &self,
+        principal: &Principal,
+        limit: usize,
+        offset: usize,
+    ) -> Result<Vec<ChatConversation>, ChatError>;
+
+    async fn messages(
+        &self,
+        principal: &Principal,
+        conversation_id: &str,
+        before_sequence: Option<i64>,
+        limit: usize,
+    ) -> Result<ChatMessagePage, ChatError>;
+
+    async fn send_message(
+        &self,
+        principal: &Principal,
+        conversation_id: &str,
+        client_message_id: &str,
+        body: &str,
+    ) -> Result<ChatSendResult, ChatError>;
+
+    async fn mark_read(
+        &self,
+        principal: &Principal,
+        conversation_id: &str,
+        sequence: i64,
+        device_id: &str,
+    ) -> Result<(), ChatError>;
+
+    async fn claim_outbox(&self, limit: usize) -> Result<Vec<ChatOutboxEvent>, ChatError>;
+
+    async fn mark_outbox_published(&self, event_id: &str) -> Result<(), ChatError>;
+}

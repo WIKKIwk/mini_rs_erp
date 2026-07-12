@@ -3,6 +3,7 @@ use std::sync::Arc;
 use crate::core::mini_orders::{MiniOrderSink, NoopMiniOrderSink};
 use crate::db::postgres_apparatus_group::PostgresApparatusGroupStore;
 use crate::db::postgres_calculate_order::PostgresCalculateOrderStore;
+use crate::db::postgres_chat::PostgresChatStore;
 use crate::db::postgres_customer::PostgresCustomerStore;
 use crate::db::postgres_engine::PostgresEngineStore;
 use crate::db::postgres_gscale_receipt::PostgresGscaleReceiptStore;
@@ -169,6 +170,16 @@ pub(super) fn build_calculate_order_store() -> Arc<dyn CalculateOrderStorePort> 
             Arc::new(PostgresCalculateOrderStore::new(pool))
         }
         None => build_sqlite_calculate_order_store(),
+    }
+}
+
+pub(super) fn build_chat_service() -> ChatService {
+    match postgres_pool("chat") {
+        Some(pool) => {
+            tracing::info!("mini ERP postgres chat store configured");
+            ChatService::new(Arc::new(PostgresChatStore::new(pool)))
+        }
+        None => ChatService::unavailable(),
     }
 }
 

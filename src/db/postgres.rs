@@ -9,7 +9,7 @@ const DEFAULT_MAX_CONNECTIONS: u32 = 16;
 const DEFAULT_ACQUIRE_TIMEOUT_MS: u64 = 500;
 const MIGRATION_LOCK_KEY: i64 = 6_514_811_918_052_026_001;
 
-const POSTGRES_MIGRATIONS: [(&str, &str); 4] = [
+const POSTGRES_MIGRATIONS: [(&str, &str); 5] = [
     (
         "0001_mini_erp_foundation",
         include_str!("../../migrations/postgres/0001_mini_erp_foundation.sql"),
@@ -25,6 +25,10 @@ const POSTGRES_MIGRATIONS: [(&str, &str); 4] = [
     (
         "0004_system_users",
         include_str!("../../migrations/postgres/0004_system_users.sql"),
+    ),
+    (
+        "0005_chat",
+        include_str!("../../migrations/postgres/0005_chat.sql"),
     ),
 ];
 
@@ -418,6 +422,29 @@ mod tests {
         assert!(POSTGRES_MIGRATIONS.iter().all(|(version, sql)| {
             !version.trim().is_empty() && migration_checksum(sql).len() == 64
         }));
+    }
+
+    #[test]
+    fn postgres_chat_migration_defines_durable_message_flow() {
+        let migration = POSTGRES_MIGRATIONS[4].1.to_lowercase();
+
+        for table in [
+            "mini_chat_principals",
+            "mini_chat_conversations",
+            "mini_chat_conversation_members",
+            "mini_chat_messages",
+            "mini_chat_device_cursors",
+            "mini_chat_outbox_events",
+        ] {
+            assert!(
+                migration.contains(&format!("create table if not exists {table}")),
+                "missing chat table {table}"
+            );
+        }
+        assert!(migration.contains("mini_chat_messages_client_id_unique"));
+        assert!(migration.contains("last_read_sequence"));
+        assert!(migration.contains("published_at is null"));
+        assert!(!migration.contains("partition by"));
     }
 
     #[test]

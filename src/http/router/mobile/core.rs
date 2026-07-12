@@ -3,8 +3,8 @@ use axum::routing::any;
 
 use crate::app::AppState;
 use crate::http::handlers::{
-    auth, calculate, customer, gscale, iroh_discovery, notifications, profile, push, qolip, rezka,
-    rps_batch, stock_entry, supplier, werka,
+    auth, calculate, chat, customer, gscale, iroh_discovery, notifications, profile, push, qolip,
+    rezka, rps_batch, stock_entry, supplier, werka,
 };
 
 pub(super) fn routes() -> Router<AppState> {
@@ -34,6 +34,19 @@ pub(super) fn routes() -> Router<AppState> {
         .route("/v1/mobile/profile/avatar", any(profile::avatar_upload))
         .route("/v1/mobile/profile/avatar/view", any(profile::avatar_view))
         .route("/v1/mobile/push/token", any(push::token))
+        .route("/v1/mobile/chat/directory", any(chat::directory))
+        .route("/v1/mobile/chat/conversations", any(chat::conversations))
+        .route("/v1/mobile/chat/conversations/dm", any(chat::create_dm))
+        .route(
+            "/v1/mobile/chat/conversations/{conversation_id}/messages",
+            any(chat::conversation_messages),
+        )
+        .route(
+            "/v1/mobile/chat/conversations/{conversation_id}/read",
+            any(chat::mark_read),
+        )
+        .route("/v1/mobile/chat/socket-ticket", any(chat::socket_ticket))
+        .route("/v1/mobile/chat/live", any(chat::live))
         .route("/v1/mobile/gscale/items", any(gscale::items))
         .route(
             "/v1/mobile/gscale/material-receipt/print",

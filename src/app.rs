@@ -9,6 +9,7 @@ use crate::core::apparatus_groups::ApparatusGroupService;
 use crate::core::auth::service::AuthService;
 use crate::core::auth::ports::CustomerLookup;
 use crate::core::calculate_orders::CalculateOrderStorePort;
+use crate::core::chat::ChatService;
 use crate::core::customer::service::CustomerService;
 use crate::core::gscale::GscaleService;
 use crate::core::mini_orders::MiniOrderSink;
@@ -62,6 +63,7 @@ pub struct AppState {
     pub production_maps: ProductionMapService,
     pub apparatus_groups: ApparatusGroupService,
     pub calculate_orders: Arc<dyn CalculateOrderStorePort>,
+    pub chat: ChatService,
     pub order_sheets: Arc<dyn OrderSheetSink>,
     pub production_orders: Arc<dyn MiniOrderSink>,
     pub calculate_order_image_dir: Arc<std::path::PathBuf>,
@@ -129,6 +131,8 @@ impl AppState {
         let profiles = build_profile_service(&config, profile_store);
         let push = PushService::new(push_token_store.clone())
             .with_sender(discover_push_sender(push_token_store));
+        let chat = build_chat_service();
+        chat.start_delivery_worker(push.clone());
         let rps_batch = RpsBatchService::new(build_rps_batch_store());
         let scale_driver = build_scale_driver(&config);
         let warehouse_events = WarehouseEventHub::new();
@@ -150,6 +154,7 @@ impl AppState {
             production_maps,
             apparatus_groups,
             calculate_orders,
+            chat,
             order_sheets,
             production_orders,
             calculate_order_image_dir,
