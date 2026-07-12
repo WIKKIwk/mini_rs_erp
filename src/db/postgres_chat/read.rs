@@ -49,6 +49,7 @@ LEFT JOIN mini_chat_messages lm
 LEFT JOIN mini_chat_principals sender ON sender.principal_id = lm.sender_principal_id
 WHERE current_principal.principal_role = $1
   AND current_principal.principal_ref = $2
+  AND c.last_message_sequence > 0
 "#;
 
 pub(super) async fn conversations(
@@ -67,6 +68,16 @@ pub(super) async fn conversations(
         .await
         .map_err(|_| ChatError::StoreFailed)?;
     rows.into_iter().map(ConversationRow::into_model).collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::CONVERSATION_SELECT;
+
+    #[test]
+    fn conversation_list_excludes_threads_without_messages() {
+        assert!(CONVERSATION_SELECT.contains("c.last_message_sequence > 0"));
+    }
 }
 
 pub(super) async fn messages(
