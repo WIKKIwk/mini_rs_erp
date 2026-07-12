@@ -1,4 +1,5 @@
 mod avatar_image;
+pub mod identity;
 pub mod ports;
 pub mod service;
 #[cfg(test)]

@@ -29,6 +29,7 @@ use crate::core::authz::{
     has_capability, normalize_custom_role, normalize_role_assignment, role_assignment_key,
     system_role_definitions,
 };
+use crate::core::profile::identity::{ProfileIdentity, load_profile_prefs};
 use crate::core::profile::ports::ProfileStorePort;
 use crate::core::werka::models::{CustomerDirectoryEntry, SupplierItem};
 use crate::core::workers::Worker;
@@ -124,7 +125,10 @@ impl AdminService {
         let Some(store) = &self.profile_store else {
             return String::new();
         };
-        let Ok(prefs) = store.get(&format!("{}:{}", role_key, ref_.trim())).await else {
+        let Some(identity) = ProfileIdentity::new(role_key, ref_) else {
+            return String::new();
+        };
+        let Ok(prefs) = load_profile_prefs(store.as_ref(), &identity).await else {
             return String::new();
         };
         if !prefs.avatar_url.trim().is_empty() {

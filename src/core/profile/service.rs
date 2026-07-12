@@ -2,6 +2,7 @@ use std::sync::Arc;
 
 use crate::core::auth::models::{Principal, PrincipalRole};
 use crate::core::profile::avatar_image::prepare_profile_avatar;
+use crate::core::profile::identity::{ProfileIdentity, load_profile_prefs};
 use crate::core::profile::ports::{
     DownloadedFile, ProfileAvatarStorage, ProfileLookup, ProfilePortError, ProfilePrefs,
     ProfileStoreError, ProfileStorePort,
@@ -99,7 +100,9 @@ impl ProfileService {
         if let Some(storage) = &self.avatar_storage {
             let avatar = storage
                 .put_profile_avatar(
-                    role_key(&principal.role),
+                    ProfileIdentity::from_principal(&principal.role, &principal.ref_)
+                        .ok_or(ProfilePortError::LookupFailed)?
+                        .role_key(),
                     &principal.ref_,
                     &prepared.filename,
                     &prepared.content_type,
@@ -196,8 +199,10 @@ impl ProfileService {
         let Some(store) = &self.store else {
             return Ok(None);
         };
-        let key = format!("{}:{}", role_key.trim(), principal_ref.trim());
-        let Ok(prefs) = store.get(&key).await else {
+        let Some(identity) = ProfileIdentity::new(role_key, principal_ref) else {
+            return Ok(None);
+        };
+        let Ok(prefs) = load_profile_prefs(store.as_ref(), &identity).await else {
             return Ok(None);
         };
         if prefs.avatar_object_key.trim().is_empty() {
@@ -211,7 +216,9 @@ impl ProfileService {
 
     async fn merge_prefs(&self, mut principal: Principal) -> Principal {
         if let Some(store) = &self.store
-            && let Ok(prefs) = store.get(&profile_key(&principal)).await
+            && let Some(identity) =
+                ProfileIdentity::from_principal(&principal.role, &principal.ref_)
+            && let Ok(prefs) = load_profile_prefs(store.as_ref(), &identity).await
         {
             principal = merge_profile_prefs(principal, prefs);
         }
@@ -244,17 +251,7 @@ fn merge_profile_prefs(mut principal: Principal, prefs: ProfilePrefs) -> Princip
 }
 
 fn profile_key(principal: &Principal) -> String {
-    format!("{}:{}", role_key(&principal.role), principal.ref_.trim())
-}
-
-fn role_key(role: &PrincipalRole) -> &'static str {
-    match role {
-        PrincipalRole::Supplier => "supplier",
-        PrincipalRole::Werka => "werka",
-        PrincipalRole::Customer => "customer",
-        PrincipalRole::Aparatchi => "aparatchi",
-        PrincipalRole::Qolipchi => "qolipchi",
-        PrincipalRole::MaterialTaminotchi => "material_taminotchi",
-        PrincipalRole::Admin => "admin",
-    }
+    ProfileIdentity::from_principal(&principal.role, &principal.ref_)
+        .expect("authenticated principal has a profile identity")
+        .vault_key()
 }

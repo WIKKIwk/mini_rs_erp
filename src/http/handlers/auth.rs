@@ -135,12 +135,52 @@ pub(crate) fn with_avatar_proxy(
     };
 
     principal.avatar_url = format!(
-        "{}://{}/v1/mobile/profile/avatar/view?token={}",
+        "{}://{}/v1/mobile/profile/avatar/view?token={}&v={}",
         request_scheme(headers),
         host,
-        urlencoding::encode(token.trim())
+        urlencoding::encode(token.trim()),
+        urlencoding::encode(avatar_version(&principal.avatar_url))
     );
     principal
+}
+
+pub(crate) fn profile_avatar_proxy_url(
+    headers: &HeaderMap,
+    avatar_url: &str,
+    role_key: &str,
+    principal_ref: &str,
+    token: &str,
+) -> Option<String> {
+    if avatar_url.trim().is_empty()
+        || role_key.trim().is_empty()
+        || principal_ref.trim().is_empty()
+        || token.trim().is_empty()
+    {
+        return None;
+    }
+    let host = headers
+        .get(axum::http::header::HOST)
+        .and_then(|value| value.to_str().ok())
+        .map(str::trim)
+        .filter(|value| !value.is_empty())?;
+    Some(format!(
+        "{}://{}/v1/mobile/profile/avatar/view?role={}&ref={}&token={}&v={}",
+        request_scheme(headers),
+        host,
+        urlencoding::encode(role_key.trim()),
+        urlencoding::encode(principal_ref.trim()),
+        urlencoding::encode(token.trim()),
+        urlencoding::encode(avatar_version(avatar_url))
+    ))
+}
+
+fn avatar_version(avatar_url: &str) -> &str {
+    avatar_url
+        .trim()
+        .trim_end_matches('/')
+        .rsplit('/')
+        .next()
+        .unwrap_or("avatar")
 }
 
 fn request_scheme(headers: &HeaderMap) -> &str {
@@ -183,22 +223,7 @@ fn is_public_host(host: &str) -> bool {
         || host.starts_with("127.")
         || host.starts_with("10.")
         || host.starts_with("192.168.")
-        || host.starts_with("172.16.")
-        || host.starts_with("172.17.")
-        || host.starts_with("172.18.")
-        || host.starts_with("172.19.")
-        || host.starts_with("172.20.")
-        || host.starts_with("172.21.")
-        || host.starts_with("172.22.")
-        || host.starts_with("172.23.")
-        || host.starts_with("172.24.")
-        || host.starts_with("172.25.")
-        || host.starts_with("172.26.")
-        || host.starts_with("172.27.")
-        || host.starts_with("172.28.")
-        || host.starts_with("172.29.")
-        || host.starts_with("172.30.")
-        || host.starts_with("172.31.")
+        || (16..=31).any(|octet| host.starts_with(&format!("172.{octet}.")))
     {
         return false;
     }
@@ -266,7 +291,7 @@ fn _login_response_contract(_response: LoginResponse) {}
 mod tests {
     use axum::http::{HeaderMap, HeaderValue};
 
-    use super::with_avatar_proxy;
+    use super::{is_public_host, profile_avatar_proxy_url, with_avatar_proxy};
     use crate::core::auth::models::{Principal, PrincipalRole};
 
     #[test]
@@ -289,7 +314,7 @@ mod tests {
 
         assert_eq!(
             principal.avatar_url,
-            "https://mobile.test/v1/mobile/profile/avatar/view?token=abc%20token"
+            "https://mobile.test/v1/mobile/profile/avatar/view?token=abc%20token&v=avatar.png"
         );
     }
 
@@ -313,7 +338,33 @@ mod tests {
 
         assert_eq!(
             principal.avatar_url,
-            "http://127.0.0.1:18081/v1/mobile/profile/avatar/view?token=token"
+            "http://127.0.0.1:18081/v1/mobile/profile/avatar/view?token=token&v=avatar.jpg"
         );
+    }
+
+    #[test]
+    fn another_profile_avatar_url_contains_vault_identity_and_version() {
+        let mut headers = HeaderMap::new();
+        headers.insert("host", HeaderValue::from_static("mobile.test"));
+
+        let url = profile_avatar_proxy_url(
+            &headers,
+            "local://profile_avatars/aparatchi/worker_1/abc123.jpg",
+            "aparatchi",
+            "worker_1",
+            "viewer token",
+        )
+        .expect("proxy url");
+
+        assert_eq!(
+            url,
+            "https://mobile.test/v1/mobile/profile/avatar/view?role=aparatchi&ref=worker_1&token=viewer%20token&v=abc123.jpg"
+        );
+    }
+
+    #[test]
+    fn private_172_hosts_are_not_public() {
+        assert!(!is_public_host("172.16.0.1:3000"));
+        assert!(!is_public_host("172.31.255.255:8080"));
     }
 }

@@ -148,6 +148,38 @@ async fn refresh_exposes_local_avatar_when_only_object_key_is_stored() {
     );
 }
 
+#[tokio::test]
+async fn worker_alias_reads_and_migrates_legacy_profile_vault() {
+    let store = Arc::new(FakeProfileStore::default());
+    let legacy_prefs = ProfilePrefs {
+        nickname: "Operator".to_string(),
+        avatar_url: "local://profile_avatars/worker/worker_1/avatar.jpg".to_string(),
+        avatar_object_key: "profile_avatars/worker/worker_1/avatar.jpg".to_string(),
+    };
+    store
+        .put("worker:worker_1", legacy_prefs.clone())
+        .await
+        .expect("seed legacy vault");
+    let service = ProfileService::new(String::new())
+        .with_store(store.clone())
+        .with_avatar_storage(Arc::new(FakeAvatarStorage::default()));
+
+    let file = service
+        .download_avatar_for_profile("worker", "worker_1")
+        .await
+        .expect("download")
+        .expect("avatar");
+
+    assert_eq!(file.body, b"pngdata");
+    assert_eq!(
+        store
+            .get("aparatchi:worker_1")
+            .await
+            .expect("canonical vault"),
+        legacy_prefs
+    );
+}
+
 struct FakeProfileLookup;
 
 #[async_trait]

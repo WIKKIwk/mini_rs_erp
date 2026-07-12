@@ -143,6 +143,8 @@ pub struct AdminUserListEntry {
     pub principal_role: PrincipalRole,
     pub name: String,
     pub phone: String,
+    #[serde(default)]
+    pub avatar_url: String,
     pub role_label: String,
     pub blocked: bool,
     pub status: String,

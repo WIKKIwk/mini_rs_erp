@@ -209,6 +209,44 @@ pub async fn worker_detail(
     Ok(json_response(detail))
 }
 
+pub(super) async fn worker_user_list_page(
+    state: &AppState,
+    query: &PageQuery,
+) -> Result<AdminUserListPage, AdminError> {
+    let limit = optional_search_limit(query.limit.as_deref(), 20, 50);
+    let offset = optional_offset(query.offset.as_deref());
+    let workers = state
+        .workers
+        .workers(
+            query.q.as_deref().unwrap_or_default(),
+            offset.saturating_add(limit).saturating_add(1),
+        )
+        .await
+        .map_err(worker_error)?;
+    let has_more = workers.len() > offset.saturating_add(limit);
+    let mut items = Vec::new();
+    for worker in workers.into_iter().skip(offset).take(limit) {
+        let detail = state
+            .admin
+            .worker_detail(worker)
+            .await
+            .map_err(|_| server_error("worker detail failed"))?;
+        items.push(AdminUserListEntry {
+            id: format!("worker:{}", detail.id),
+            source: "worker".to_string(),
+            entity_ref: detail.id,
+            principal_role: PrincipalRole::Aparatchi,
+            name: detail.name,
+            phone: detail.phone,
+            avatar_url: detail.avatar_url,
+            role_label: detail.level,
+            blocked: false,
+            status: "active".to_string(),
+        });
+    }
+    Ok(AdminUserListPage { items, has_more })
+}
+
 pub async fn worker_code_regenerate(
     State(state): State<AppState>,
     method: Method,

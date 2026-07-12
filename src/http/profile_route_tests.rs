@@ -119,6 +119,67 @@ async fn profile_avatar_upload_persists_worker_avatar_without_r2() {
 }
 
 #[tokio::test]
+async fn authenticated_user_can_view_another_profile_avatar_by_vault_identity() {
+    let mut state = test_state();
+    let store = Arc::new(FakeProfileStore::default());
+    state.profiles = ProfileService::new(String::new())
+        .with_store(store)
+        .with_avatar_storage(Arc::new(LocalProfileAvatarStorage::new(
+            unique_profile_avatar_store_dir(),
+        )));
+    state
+        .profiles
+        .upload_avatar(
+            Principal {
+                role: PrincipalRole::Aparatchi,
+                display_name: "Worker".to_string(),
+                legal_name: "Worker".to_string(),
+                ref_: "worker_001".to_string(),
+                phone: "+998901112233".to_string(),
+                avatar_url: String::new(),
+            },
+            "avatar.png",
+            "image/png",
+            test_png(160, 80),
+        )
+        .await
+        .expect("store worker avatar");
+    let viewer_token = state
+        .sessions
+        .create(Principal {
+            role: PrincipalRole::Customer,
+            display_name: "Viewer".to_string(),
+            legal_name: "Viewer".to_string(),
+            ref_: "customer_001".to_string(),
+            phone: "+998909998877".to_string(),
+            avatar_url: String::new(),
+        })
+        .await
+        .expect("viewer session");
+
+    let response = build_router(state)
+        .oneshot(
+            Request::builder()
+                .uri(format!(
+                    "/v1/mobile/profile/avatar/view?role=worker&ref=worker_001&token={viewer_token}"
+                ))
+                .body(Body::empty())
+                .expect("request"),
+        )
+        .await
+        .expect("response");
+
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(
+        response
+            .headers()
+            .get(header::CONTENT_TYPE)
+            .and_then(|value| value.to_str().ok()),
+        Some("image/jpeg")
+    );
+}
+
+#[tokio::test]
 async fn profile_get_requires_auth_like_go() {
     let app = build_router(test_state());
     let response = app
@@ -349,7 +410,7 @@ async fn profile_avatar_upload_returns_proxied_supplier_avatar_like_go() {
     assert_eq!(response.status(), StatusCode::OK);
     assert_eq!(
         json_body(response).await["avatar_url"],
-        format!("https://mobile.test/v1/mobile/profile/avatar/view?token={token}")
+        format!("https://mobile.test/v1/mobile/profile/avatar/view?token={token}&v=uploaded.png")
     );
 }
 

@@ -60,7 +60,8 @@ use crate::core::admin::models::{
     AdminCustomerDetail, AdminItemGroupBulkMoveResult, AdminMoveItemGroupRequest,
     AdminPhoneUpdateRequest, AdminSettings, AdminSupplier, AdminSupplierDetail,
     AdminSupplierItemMutationRequest, AdminSupplierItemsUpdateRequest,
-    AdminSupplierStatusUpdateRequest, AdminSupplierSummary, AdminSuppliersPage, AdminUserListPage,
+    AdminSupplierStatusUpdateRequest, AdminSupplierSummary, AdminSuppliersPage, AdminUserListEntry,
+    AdminUserListPage,
 };
 use crate::core::admin::ports::AdminPortError;
 use crate::core::apparatus_groups::{ApparatusGroupError, ApparatusGroupUpsert, ApparatusUpsert};
@@ -70,7 +71,7 @@ use crate::core::authz::{
 };
 use crate::core::warehouses::{WarehouseAssignmentUpsert, WarehouseError, WarehouseUpsert};
 use crate::core::werka::models::{CustomerDirectoryEntry, DispatchRecord, SupplierItem};
-use crate::http::handlers::auth::bearer_token;
+use crate::http::handlers::auth::{bearer_token, profile_avatar_proxy_url};
 
 type AdminError = (StatusCode, Json<AdminErrorResponse>);
 
@@ -116,70 +117,30 @@ fn with_admin_profile_avatar_proxy(
     let Some(token) = bearer_token(headers) else {
         return avatar_url;
     };
-    let Some(host) = headers
-        .get(header::HOST)
-        .and_then(|value| value.to_str().ok())
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-    else {
-        return avatar_url;
-    };
-    format!(
-        "{}://{}/v1/mobile/admin/profile/avatar/view?role={}&ref={}&token={}",
-        admin_request_scheme(headers),
-        host,
-        urlencoding::encode(role_key.trim()),
-        urlencoding::encode(ref_.trim()),
-        urlencoding::encode(token.trim()),
-    )
+    profile_avatar_proxy_url(headers, &avatar_url, role_key, ref_, &token).unwrap_or(avatar_url)
 }
 
-fn admin_request_scheme(headers: &HeaderMap) -> &str {
-    if headers
-        .get("x-forwarded-proto")
-        .and_then(|value| value.to_str().ok())
-        .map(str::trim)
-        .filter(|value| value.eq_ignore_ascii_case("https"))
-        .is_some()
-    {
-        return "https";
+fn profile_role_key(role: &PrincipalRole) -> &'static str {
+    match role {
+        PrincipalRole::Supplier => "supplier",
+        PrincipalRole::Werka => "werka",
+        PrincipalRole::Customer => "customer",
+        PrincipalRole::Aparatchi => "aparatchi",
+        PrincipalRole::Qolipchi => "qolipchi",
+        PrincipalRole::MaterialTaminotchi => "material_taminotchi",
+        PrincipalRole::Admin => "admin",
     }
-
-    if headers
-        .get("cf-visitor")
-        .and_then(|value| value.to_str().ok())
-        .map(|value| value.to_ascii_lowercase().contains("\"scheme\":\"https\""))
-        .unwrap_or(false)
-    {
-        return "https";
-    }
-
-    let host = headers
-        .get(header::HOST)
-        .and_then(|value| value.to_str().ok())
-        .map(str::trim)
-        .unwrap_or_default();
-    if is_public_admin_host(host) {
-        return "https";
-    }
-
-    "http"
 }
 
-fn is_public_admin_host(host: &str) -> bool {
-    let host = host.trim().trim_matches(['[', ']']).to_ascii_lowercase();
-    if host.is_empty()
-        || host == "localhost"
-        || host.starts_with("localhost:")
-        || host.starts_with("127.")
-        || host.starts_with("10.")
-        || host.starts_with("192.168.")
-        || (172..=31).any(|octet| host.starts_with(&format!("172.{octet}.")))
-    {
-        return false;
+fn proxy_user_list_avatars(headers: &HeaderMap, page: &mut AdminUserListPage) {
+    for entry in &mut page.items {
+        entry.avatar_url = with_admin_profile_avatar_proxy(
+            headers,
+            std::mem::take(&mut entry.avatar_url),
+            profile_role_key(&entry.principal_role),
+            &entry.entity_ref,
+        );
     }
-
-    host.parse::<std::net::IpAddr>().is_err()
 }
 
 fn optional_search_limit(value: Option<&str>, default: usize, max: usize) -> usize {

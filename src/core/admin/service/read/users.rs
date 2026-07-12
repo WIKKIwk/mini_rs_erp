@@ -22,13 +22,12 @@ impl AdminService {
         let mut entries = Vec::new();
         let mut seen_ids = BTreeSet::new();
 
-        if role_filter.is_none() || role_filter == Some("werka") {
-            if let Some(entry) = werka_user_list_entry(&settings, &role_labels)
-                && user_list_matches(&entry, &normalized_query)
-                && seen_ids.insert(entry.id.clone())
-            {
-                entries.push(entry);
-            }
+        if (role_filter.is_none() || role_filter == Some("werka"))
+            && let Some(entry) = werka_user_list_entry(&settings, &role_labels)
+            && user_list_matches(&entry, &normalized_query)
+            && seen_ids.insert(entry.id.clone())
+        {
+            entries.push(entry);
         }
 
         if role_filter.is_none() || role_filter == Some("supplier") {
@@ -50,6 +49,7 @@ impl AdminService {
                     principal_role: PrincipalRole::Supplier,
                     name: supplier.name,
                     phone: supplier.phone,
+                    avatar_url: String::new(),
                     role_label,
                     blocked: supplier.blocked,
                     status: if supplier.blocked {
@@ -103,6 +103,12 @@ impl AdminService {
                     entries.push(entry);
                 }
             }
+        }
+
+        for entry in &mut entries {
+            entry.avatar_url = self
+                .profile_avatar_url(profile_role_key(&entry.principal_role), &entry.entity_ref)
+                .await;
         }
 
         let has_more = entries.len() > offset.saturating_add(limit);
@@ -214,6 +220,7 @@ fn customer_user_list_entry(
         principal_role,
         name: entry.name,
         phone: entry.phone,
+        avatar_url: String::new(),
         role_label,
         blocked: false,
         status: "active".to_string(),
@@ -243,6 +250,7 @@ fn material_taminotchi_user_list_entry(
         principal_role: PrincipalRole::MaterialTaminotchi,
         name: entry.name,
         phone: entry.phone,
+        avatar_url: String::new(),
         role_label,
         blocked: state.blocked,
         status: if state.blocked {
@@ -292,6 +300,7 @@ fn werka_user_list_entry(
             settings.werka_name.trim().to_string()
         },
         phone: settings.werka_phone.trim().to_string(),
+        avatar_url: String::new(),
         role_label: role_labels
             .get(&role_assignment_key(&PrincipalRole::Werka, "werka"))
             .cloned()
@@ -299,6 +308,18 @@ fn werka_user_list_entry(
         blocked: false,
         status: "active".to_string(),
     })
+}
+
+fn profile_role_key(role: &PrincipalRole) -> &'static str {
+    match role {
+        PrincipalRole::Supplier => "supplier",
+        PrincipalRole::Werka => "werka",
+        PrincipalRole::Customer => "customer",
+        PrincipalRole::Aparatchi => "aparatchi",
+        PrincipalRole::Qolipchi => "qolipchi",
+        PrincipalRole::MaterialTaminotchi => "material_taminotchi",
+        PrincipalRole::Admin => "admin",
+    }
 }
 
 fn normalize_search(value: &str) -> String {

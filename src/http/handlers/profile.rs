@@ -15,6 +15,9 @@ const AVATAR_BODY_LIMIT: usize = 5 * 1024 * 1024;
 #[derive(Debug, Deserialize)]
 pub struct AvatarViewQuery {
     token: Option<String>,
+    role: Option<String>,
+    #[serde(rename = "ref")]
+    ref_: Option<String>,
 }
 
 pub async fn profile(
@@ -194,7 +197,30 @@ pub async fn avatar_view(
     let Ok(principal) = state.sessions.get(&token).await else {
         return unauthorized().into_response();
     };
-    match state.profiles.download_avatar(principal).await {
+    let requested_role = query
+        .role
+        .as_deref()
+        .map(str::trim)
+        .filter(|v| !v.is_empty());
+    let requested_ref = query
+        .ref_
+        .as_deref()
+        .map(str::trim)
+        .filter(|v| !v.is_empty());
+    if requested_role.is_some() != requested_ref.is_some() {
+        return (
+            StatusCode::BAD_REQUEST,
+            axum::Json(ErrorResponse {
+                error: "role and ref are required together",
+            }),
+        )
+            .into_response();
+    }
+    let file = match (requested_role, requested_ref) {
+        (Some(role), Some(ref_)) => state.profiles.download_avatar_for_profile(role, ref_).await,
+        _ => state.profiles.download_avatar(principal).await,
+    };
+    match file {
         Ok(Some(file)) => {
             let mut response = Body::from(file.body).into_response();
             if !file.content_type.trim().is_empty() {

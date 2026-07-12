@@ -153,24 +153,29 @@ pub async fn user_list(
     }
     require_capability(&state, &principal, Capability::SupplierDirectoryRead).await?;
     require_capability(&state, &principal, Capability::CustomerDirectoryRead).await?;
-    if query.role.as_deref().map(str::trim).map(str::to_ascii_lowercase).as_deref()
-        == Some("qolipchi")
-    {
-        return system_users::system_user_list_page(&state, &query)
+    let role = query
+        .role
+        .as_deref()
+        .map(str::trim)
+        .map(str::to_ascii_lowercase);
+    let mut page = match role.as_deref() {
+        Some("qolipchi") => system_users::system_user_list_page(&state, &query).await?,
+        Some("worker" | "ishchi" | "aparatchi" | "apparatchi") => {
+            workers::worker_user_list_page(&state, &query).await?
+        }
+        _ => state
+            .admin
+            .user_list_page(
+                query.q.as_deref().unwrap_or_default(),
+                optional_search_limit(query.limit.as_deref(), 20, 50),
+                optional_offset(query.offset.as_deref()),
+                query.role.as_deref(),
+            )
             .await
-            .map(Json);
-    }
-    state
-        .admin
-        .user_list_page(
-            query.q.as_deref().unwrap_or_default(),
-            optional_search_limit(query.limit.as_deref(), 20, 50),
-            optional_offset(query.offset.as_deref()),
-            query.role.as_deref(),
-        )
-        .await
-        .map(Json)
-        .map_err(|_| server_error("admin users page failed"))
+            .map_err(|_| server_error("admin users page failed"))?,
+    };
+    proxy_user_list_avatars(&headers, &mut page);
+    Ok(Json(page))
 }
 
 pub async fn supplier_summary(
@@ -257,7 +262,14 @@ pub async fn admin_profile_avatar_view(
         return bad_request("ref is required").into_response();
     };
     let role_key = match role {
-        "supplier" | "customer" | "worker" | "werka" | "admin" | "aparatchi" | "qolipchi" => role,
+        "supplier"
+        | "customer"
+        | "worker"
+        | "werka"
+        | "admin"
+        | "aparatchi"
+        | "qolipchi"
+        | "material_taminotchi" => role,
         _ => return bad_request("invalid role").into_response(),
     };
     match state

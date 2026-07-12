@@ -123,6 +123,7 @@ fn system_user_list_entry(detail: AdminSystemUserDetail) -> AdminUserListEntry {
         principal_role: detail.role,
         name: detail.name,
         phone: detail.phone,
+        avatar_url: detail.avatar_url,
         role_label: "Qolipchi".to_string(),
         blocked: detail.blocked,
         status: if detail.blocked { "blocked" } else { "active" }.to_string(),
