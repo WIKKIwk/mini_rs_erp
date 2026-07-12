@@ -46,6 +46,7 @@ pub(super) fn routes() -> Router<AppState> {
             any(chat::mark_read),
         )
         .route("/v1/mobile/chat/socket-ticket", any(chat::socket_ticket))
+        .route("/v1/mobile/chat/device-token", any(chat::device_token))
         .route("/v1/mobile/chat/live", any(chat::live))
         .route("/v1/mobile/gscale/items", any(gscale::items))
         .route(

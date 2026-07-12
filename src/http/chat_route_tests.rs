@@ -83,3 +83,38 @@ async fn authenticated_user_can_issue_chat_socket_ticket() {
     assert!(value["ticket"].as_str().unwrap_or_default().len() >= 32);
     assert_eq!(value["expires_in_seconds"], 30);
 }
+
+#[tokio::test]
+async fn customer_can_register_device_token_for_chat() {
+    let state = test_state();
+    let store = state.push.store_for_tests();
+    let token = state
+        .sessions
+        .create(Principal {
+            role: PrincipalRole::Customer,
+            display_name: "Customer".to_string(),
+            legal_name: "Customer".to_string(),
+            ref_: "customer_001".to_string(),
+            phone: String::new(),
+            avatar_url: String::new(),
+        })
+        .await
+        .expect("session");
+    let response = build_router(state)
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v1/mobile/chat/device-token")
+                .header(header::AUTHORIZATION, format!("Bearer {token}"))
+                .header(header::CONTENT_TYPE, "application/json")
+                .body(Body::from(r#"{"token":"fcm-customer","platform":"ios"}"#))
+                .expect("request"),
+        )
+        .await
+        .expect("response");
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let records = store.list("customer:customer_001").await.expect("tokens");
+    assert_eq!(records.len(), 1);
+    assert_eq!(records[0].token, "fcm-customer");
+}

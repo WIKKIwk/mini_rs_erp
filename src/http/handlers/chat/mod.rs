@@ -1,9 +1,11 @@
 mod auth;
 mod conversations;
+mod devices;
 mod directory;
 mod realtime;
 
 pub use conversations::{conversation_messages, conversations, create_dm, mark_read};
+pub use devices::device_token;
 pub use directory::directory;
 pub use realtime::{live, socket_ticket};
 
