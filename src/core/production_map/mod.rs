@@ -18,6 +18,7 @@ mod service_maps;
 mod service_progress;
 mod service_progress_metrics;
 mod service_progress_support;
+mod service_qolip;
 mod service_queue;
 mod service_queue_support;
 mod service_wip;

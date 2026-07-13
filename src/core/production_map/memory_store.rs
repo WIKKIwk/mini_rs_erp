@@ -158,6 +158,13 @@ impl ProductionMapStorePort for MemoryProductionMapStore {
         runs::active_order_run_session(self, apparatus, order_id).await
     }
 
+    async fn active_order_run_session_for_qolip(
+        &self,
+        qolip_code: &str,
+    ) -> Result<Option<OrderRunSession>, ProductionMapError> {
+        runs::active_order_run_session_for_qolip(self, qolip_code).await
+    }
+
     async fn active_order_run_sessions_for_worker(
         &self,
         worker_refs: &[String],
@@ -273,6 +280,21 @@ impl ProductionMapStorePort for MemoryProductionMapStore {
             .swap(false, Ordering::SeqCst)
         {
             return Err(ProductionMapError::StoreFailed);
+        }
+        if let Some(session) = &write.session
+            && matches!(session.status, OrderRunStatus::Active | OrderRunStatus::Paused)
+            && let Some(qolip_code) = session
+                .payload_json
+                .get("qolip_code")
+                .and_then(serde_json::Value::as_str)
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+            && self
+                .active_order_run_session_for_qolip(qolip_code)
+                .await?
+                .is_some_and(|active| active.session_id != session.session_id)
+        {
+            return Err(ProductionMapError::QolipAlreadyInUse);
         }
         self.put_apparatus_queue_states_with_event(&write.apparatus, write.states, write.event)
             .await?;

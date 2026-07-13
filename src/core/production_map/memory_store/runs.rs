@@ -25,6 +25,32 @@ pub(super) async fn active_order_run_session(
         .cloned())
 }
 
+pub(super) async fn active_order_run_session_for_qolip(
+    store: &MemoryProductionMapStore,
+    qolip_code: &str,
+) -> Result<Option<OrderRunSession>, ProductionMapError> {
+    let qolip_code = qolip_code.trim();
+    if qolip_code.is_empty() {
+        return Ok(None);
+    }
+    Ok(store
+        .order_run_sessions
+        .read()
+        .await
+        .values()
+        .find(|session| {
+            matches!(
+                session.status,
+                OrderRunStatus::Active | OrderRunStatus::Paused
+            ) && session
+                .payload_json
+                .get("qolip_code")
+                .and_then(serde_json::Value::as_str)
+                .is_some_and(|value| value.trim().eq_ignore_ascii_case(qolip_code))
+        })
+        .cloned())
+}
+
 pub(super) async fn active_order_run_sessions_for_worker(
     store: &MemoryProductionMapStore,
     worker_refs: &[String],

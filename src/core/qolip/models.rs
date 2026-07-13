@@ -111,6 +111,12 @@ pub struct QolipCheckout {
     pub issued_at: String,
 }
 
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct QolipOrderStartPreparation {
+    pub spec: QolipProductSpec,
+    pub checkout: Option<QolipCheckout>,
+}
+
 #[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize)]
 pub struct QolipCheckoutCreate {
     #[serde(default)]

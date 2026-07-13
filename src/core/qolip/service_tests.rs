@@ -11,6 +11,50 @@ use super::ports::QolipStorePort;
 use super::service::QolipService;
 
 #[tokio::test]
+async fn order_start_accepts_matching_qolip_without_location() {
+    let store = std::sync::Arc::new(MemoryQolipStore::new());
+    store
+        .seed_products(vec![QolipProduct {
+            code: "ITEM-ORDER".to_string(),
+            name: "Order product".to_string(),
+            item_group: "Tayyor mahsulot".to_string(),
+            qolip_code: String::new(),
+            size: 0,
+            has_qolip_spec: false,
+        }])
+        .await;
+    let service = QolipService::new(store);
+    service
+        .upsert_product_spec(
+            QolipProductSpecUpsert {
+                item_code: "ITEM-ORDER".to_string(),
+                item_name: "Order product".to_string(),
+                item_group: "Tayyor mahsulot".to_string(),
+                qolip_code: "QOLIP-NO-LOCATION".to_string(),
+                size: 42,
+            },
+            &principal(),
+        )
+        .await
+        .expect("save product spec");
+
+    let preparation = service
+        .prepare_qolip_code_for_order_start(
+            "QOLIP-NO-LOCATION",
+            "ITEM-ORDER",
+            "Order product",
+            "worker-1",
+            "Worker",
+            &principal(),
+        )
+        .await
+        .expect("matching qolip without location must be accepted");
+
+    assert_eq!(preparation.spec.qolip_code, "QOLIP-NO-LOCATION");
+    assert!(preparation.checkout.is_none());
+}
+
+#[tokio::test]
 async fn assigned_blocks_include_direct_block_assignments() {
     let service = QolipService::new(std::sync::Arc::new(DirectBlockAssignmentStore));
     let blocks = service

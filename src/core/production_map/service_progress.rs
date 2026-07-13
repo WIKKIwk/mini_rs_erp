@@ -135,13 +135,9 @@ impl ProductionMapService {
                     .await?
                     .unwrap_or_else(|| legacy_order_run_session(apparatus, order_id, actor, now));
                 let input_progress = session_progress_links(&session);
-                let session = OrderRunSession {
-                    status: run_status_for_progress_action(action),
-                    worker_role: actor.role.trim().to_string(),
-                    worker_ref: actor.ref_.trim().to_string(),
-                    worker_display_name: actor.display_name.trim().to_string(),
-                    updated_at_unix: now,
-                    payload_json: progress_session_payload(
+                let payload_json = preserve_qolip_code(
+                    &session,
+                    progress_session_payload(
                         action,
                         quantity.produced_qty,
                         &quantity.uom,
@@ -149,6 +145,14 @@ impl ProductionMapService {
                         &description,
                         &input_progress,
                     ),
+                );
+                let session = OrderRunSession {
+                    status: run_status_for_progress_action(action),
+                    worker_role: actor.role.trim().to_string(),
+                    worker_ref: actor.ref_.trim().to_string(),
+                    worker_display_name: actor.display_name.trim().to_string(),
+                    updated_at_unix: now,
+                    payload_json,
                     ..session
                 };
                 let output_identity = progress_output_identity(
@@ -213,13 +217,15 @@ impl ProductionMapService {
                         .unwrap_or_else(|| {
                             legacy_order_run_session(apparatus, order_id, actor, now)
                         });
+                    let payload_json =
+                        preserve_qolip_code(&session, resume_without_progress_payload());
                     let session = OrderRunSession {
                         status: OrderRunStatus::Active,
                         worker_role: actor.role.trim().to_string(),
                         worker_ref: actor.ref_.trim().to_string(),
                         worker_display_name: actor.display_name.trim().to_string(),
                         updated_at_unix: now,
-                        payload_json: resume_without_progress_payload(),
+                        payload_json,
                         ..session
                     };
                     let context = ProgressRecordContext {
@@ -266,14 +272,18 @@ impl ProductionMapService {
                     .order_run_session(&batch.session_id)
                     .await?
                     .or_else(|| Some(legacy_order_run_session(apparatus, order_id, actor, now)))
-                    .map(|session| OrderRunSession {
-                        status: OrderRunStatus::Active,
-                        worker_role: actor.role.trim().to_string(),
-                        worker_ref: actor.ref_.trim().to_string(),
-                        worker_display_name: actor.display_name.trim().to_string(),
-                        updated_at_unix: now,
-                        payload_json: resumed_session_payload(&batch),
-                        ..session
+                    .map(|session| {
+                        let payload_json =
+                            preserve_qolip_code(&session, resumed_session_payload(&batch));
+                        OrderRunSession {
+                            status: OrderRunStatus::Active,
+                            worker_role: actor.role.trim().to_string(),
+                            worker_ref: actor.ref_.trim().to_string(),
+                            worker_display_name: actor.display_name.trim().to_string(),
+                            updated_at_unix: now,
+                            payload_json,
+                            ..session
+                        }
                     })
                     .ok_or(ProductionMapError::ProgressBatchNotFound)?;
                 let context = ProgressRecordContext {

@@ -170,6 +170,12 @@ pub trait ProductionMapStorePort: Send + Sync {
     ) -> StoreResult<Option<OrderRunSession>> {
         Ok(None)
     }
+    async fn active_order_run_session_for_qolip(
+        &self,
+        _qolip_code: &str,
+    ) -> StoreResult<Option<OrderRunSession>> {
+        Ok(None)
+    }
     async fn active_order_run_sessions_for_worker(
         &self,
         _worker_refs: &[String],

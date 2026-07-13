@@ -1,5 +1,7 @@
 use super::*;
-use super::queue_actions::{apparatus_requires_qolip_scan, qolip_queue_error};
+use super::queue_actions::{
+    apparatus_requires_qolip_scan, qolip_queue_error, reject_qolip_in_use,
+};
 
 #[derive(serde::Deserialize)]
 struct QolipStartValidationRequest {
@@ -55,7 +57,7 @@ pub async fn production_map_qolip_validate(
     else {
         return Err(production_map_error(ProductionMapError::MapNotFound));
     };
-    let checkout = state
+    let preparation = state
         .qolip
         .prepare_qolip_code_for_order_start(
             &input.qolip_code,
@@ -67,15 +69,27 @@ pub async fn production_map_qolip_validate(
         )
         .await
         .map_err(qolip_queue_error)?;
+    reject_qolip_in_use(
+        &state,
+        apparatus,
+        order_id,
+        &preparation.spec.qolip_code,
+    )
+    .await?;
+    let block = preparation
+        .checkout
+        .as_ref()
+        .map(|checkout| checkout.block.as_str())
+        .unwrap_or_default();
     Ok(json_response(serde_json::json!({
         "ok": true,
         "qolip": {
-            "qolip_code": checkout.qolip_code,
-            "item_code": checkout.item_code,
-            "item_name": checkout.item_name,
-            "item_group": checkout.item_group,
-            "size": checkout.size,
-            "block": checkout.block,
+            "qolip_code": preparation.spec.qolip_code,
+            "item_code": preparation.spec.item_code,
+            "item_name": preparation.spec.item_name,
+            "item_group": preparation.spec.item_group,
+            "size": preparation.spec.size,
+            "block": block,
         }
     })))
 }

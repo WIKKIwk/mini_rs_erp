@@ -150,6 +150,33 @@ pub(super) async fn load_active_order_run_session(
     row.map(progress_session_from_row).transpose()
 }
 
+pub(super) async fn load_active_order_run_session_for_qolip(
+    pool: &PgPool,
+    qolip_code: &str,
+) -> Result<Option<OrderRunSession>, ProductionMapError> {
+    let qolip_code = qolip_code.trim();
+    if qolip_code.is_empty() {
+        return Ok(None);
+    }
+    let row = sqlx::query_as::<_, ProgressSessionRow>(
+        "SELECT session_id, apparatus, order_id, status,
+                worker_role, worker_ref, worker_display_name,
+                EXTRACT(EPOCH FROM started_at)::bigint AS started_at_unix,
+                EXTRACT(EPOCH FROM updated_at)::bigint AS updated_at_unix,
+                payload_json
+         FROM mini_order_run_sessions
+         WHERE status IN ('active', 'paused')
+           AND lower(payload_json->>'qolip_code') = lower($1)
+         ORDER BY updated_at DESC
+         LIMIT 1",
+    )
+    .bind(qolip_code)
+    .fetch_optional(pool)
+    .await
+    .map_err(|_| ProductionMapError::StoreFailed)?;
+    row.map(progress_session_from_row).transpose()
+}
+
 pub(super) async fn load_active_order_run_sessions_for_worker(
     pool: &PgPool,
     worker_refs: &[String],

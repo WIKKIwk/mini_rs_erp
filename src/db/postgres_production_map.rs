@@ -20,6 +20,7 @@ mod map_helpers;
 mod material_helpers;
 mod order_query_helpers;
 mod progress_helpers;
+mod qolip_session_helpers;
 mod queue_helpers;
 mod raw_material_stock_helpers;
 mod wip_query_helpers;
@@ -42,7 +43,8 @@ use self::material_helpers::{
     save_apparatus_material_rule, save_raw_material_assignment,
 };
 use self::order_query_helpers::{
-    load_active_order_run_session, load_active_order_run_sessions_for_worker,
+    load_active_order_run_session, load_active_order_run_session_for_qolip,
+    load_active_order_run_sessions_for_worker,
     load_completed_queue_orders_for_actor, load_order_run_session,
     load_order_run_sessions_for_audit, load_order_run_sessions_for_order, load_progress_batch,
     load_progress_batch_by_qr, load_progress_batches_for_audit, load_progress_batches_for_order,
@@ -54,6 +56,7 @@ use self::progress_helpers::{
     put_order_progress_event_tx, put_order_run_session, put_order_run_session_tx,
     receive_finished_goods_batch_tx,
 };
+use self::qolip_session_helpers::reject_qolip_in_use_tx;
 use self::queue_helpers::{insert_queue_action_event_tx, put_queue_states_tx};
 use self::raw_material_stock_helpers::apply_raw_material_stock_transitions_tx;
 use self::wip_query_helpers::load_wip_progress_batches;
@@ -263,6 +266,13 @@ impl ProductionMapStorePort for PostgresProductionMapStore {
         load_active_order_run_session(&self.pool, apparatus, order_id).await
     }
 
+    async fn active_order_run_session_for_qolip(
+        &self,
+        qolip_code: &str,
+    ) -> Result<Option<OrderRunSession>, ProductionMapError> {
+        load_active_order_run_session_for_qolip(&self.pool, qolip_code).await
+    }
+
     async fn active_order_run_sessions_for_worker(
         &self,
         worker_refs: &[String],
@@ -388,6 +398,9 @@ impl ProductionMapStorePort for PostgresProductionMapStore {
             .begin()
             .await
             .map_err(|_| ProductionMapError::StoreFailed)?;
+        if let Some(session) = &write.session {
+            reject_qolip_in_use_tx(&mut tx, session).await?;
+        }
         put_queue_states_tx(&mut tx, apparatus, write.states).await?;
         insert_queue_action_event_tx(&mut tx, &write.event).await?;
         if let Some(session) = write.session {

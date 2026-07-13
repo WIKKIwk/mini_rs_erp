@@ -376,6 +376,196 @@ async fn pechat_queue_start_requires_matching_qolip_code_scan() {
 }
 
 #[tokio::test]
+async fn pechat_qolip_without_location_starts_and_is_blocked_on_another_apparatus() {
+    let state = test_state();
+    state
+        .admin
+        .upsert_role_assignment(crate::core::authz::RoleAssignmentUpsert {
+            principal_role: PrincipalRole::Aparatchi,
+            principal_ref: "pechat-worker-shared-qolip".to_string(),
+            role_id: "aparatchi".to_string(),
+            assigned_apparatus: vec![
+                "7 ta rangli pechat - A".to_string(),
+                "8 ta rangli bosma aparat".to_string(),
+            ],
+            assigned_item_groups: Vec::new(),
+        })
+        .await
+        .expect("aparatchi assignment");
+    let admin_token = session(&state, PrincipalRole::Admin).await;
+    let worker_token = session_for(
+        &state,
+        PrincipalRole::Aparatchi,
+        "pechat-worker-shared-qolip",
+    )
+    .await;
+    let router = build_router(state);
+
+    for (order_id, order_number, apparatus, color_count) in [
+        (
+            "zakaz-shared-qolip-a",
+            "9911",
+            "7 ta rangli pechat - A",
+            7.0,
+        ),
+        (
+            "zakaz-shared-qolip-b",
+            "9912",
+            "8 ta rangli bosma aparat",
+            8.0,
+        ),
+    ] {
+        let response = router
+            .clone()
+            .oneshot(request_with_body(
+                "PUT",
+                "/v1/mobile/admin/production-maps",
+                &admin_token,
+                &production_order_map_json_with_product(
+                    order_id,
+                    "Shared qolip order",
+                    "ITEM-SHARED-QOLIP",
+                    order_number,
+                    apparatus,
+                    color_count,
+                    1250.0,
+                ),
+            ))
+            .await
+            .expect("map save");
+        assert_eq!(response.status(), StatusCode::OK);
+    }
+
+    let spec = router
+        .clone()
+        .oneshot(request_with_body(
+            "POST",
+            "/v1/mobile/qolip/product-specs",
+            &admin_token,
+            r#"{
+                "item_code":"ITEM-SHARED-QOLIP",
+                "item_name":"Shared qolip order",
+                "item_group":"Tayyor mahsulot",
+                "qolip_code":"QOLIP-SHARED-1",
+                "size":42
+            }"#,
+        ))
+        .await
+        .expect("spec save");
+    assert_eq!(spec.status(), StatusCode::OK);
+
+    let validation = router
+        .clone()
+        .oneshot(request_with_body(
+            "POST",
+            "/v1/mobile/admin/production-maps/qolip-validate",
+            &worker_token,
+            r#"{
+                "apparatus":"7 ta rangli pechat - A",
+                "order_id":"zakaz-shared-qolip-a",
+                "qolip_code":"QOLIP-SHARED-1"
+            }"#,
+        ))
+        .await
+        .expect("validate qolip without location");
+    assert_eq!(validation.status(), StatusCode::OK);
+
+    let started = router
+        .clone()
+        .oneshot(request_with_body(
+            "POST",
+            "/v1/mobile/admin/production-maps/queue-action",
+            &worker_token,
+            r#"{
+                "apparatus":"7 ta rangli pechat - A",
+                "order_id":"zakaz-shared-qolip-a",
+                "action":"start",
+                "qolip_code":"QOLIP-SHARED-1"
+            }"#,
+        ))
+        .await
+        .expect("start with qolip without location");
+    assert_eq!(started.status(), StatusCode::OK);
+    assert_eq!(
+        json_body(started).await["session"]["payload_json"]["qolip_code"],
+        "QOLIP-SHARED-1"
+    );
+
+    let blocked = router
+        .clone()
+        .oneshot(request_with_body(
+            "POST",
+            "/v1/mobile/admin/production-maps/qolip-validate",
+            &worker_token,
+            r#"{
+                "apparatus":"8 ta rangli bosma aparat",
+                "order_id":"zakaz-shared-qolip-b",
+                "qolip_code":"QOLIP-SHARED-1"
+            }"#,
+        ))
+        .await
+        .expect("reject qolip in use on another apparatus");
+    assert_eq!(blocked.status(), StatusCode::BAD_REQUEST);
+    assert_eq!(json_body(blocked).await["error"], "qolip_already_in_use");
+
+    let blocked_start = router
+        .clone()
+        .oneshot(request_with_body(
+            "POST",
+            "/v1/mobile/admin/production-maps/queue-action",
+            &worker_token,
+            r#"{
+                "apparatus":"8 ta rangli bosma aparat",
+                "order_id":"zakaz-shared-qolip-b",
+                "action":"start",
+                "qolip_code":"QOLIP-SHARED-1"
+            }"#,
+        ))
+        .await
+        .expect("reject start with qolip in use on another apparatus");
+    assert_eq!(blocked_start.status(), StatusCode::BAD_REQUEST);
+    assert_eq!(
+        json_body(blocked_start).await["error"],
+        "qolip_already_in_use"
+    );
+
+    let completed = router
+        .clone()
+        .oneshot(request_with_body(
+            "POST",
+            "/v1/mobile/admin/production-maps/queue-action",
+            &worker_token,
+            r#"{
+                "apparatus":"7 ta rangli pechat - A",
+                "order_id":"zakaz-shared-qolip-a",
+                "action":"complete",
+                "return_ink_kg":1,
+                "total_waste":1,
+                "finished_goods_kg":10,
+                "finished_goods_meter":100
+            }"#,
+        ))
+        .await
+        .expect("complete first apparatus work");
+    assert_eq!(completed.status(), StatusCode::OK);
+
+    let released = router
+        .oneshot(request_with_body(
+            "POST",
+            "/v1/mobile/admin/production-maps/qolip-validate",
+            &worker_token,
+            r#"{
+                "apparatus":"8 ta rangli bosma aparat",
+                "order_id":"zakaz-shared-qolip-b",
+                "qolip_code":"QOLIP-SHARED-1"
+            }"#,
+        ))
+        .await
+        .expect("accept qolip after first apparatus completes");
+    assert_eq!(released.status(), StatusCode::OK);
+}
+
+#[tokio::test]
 async fn failed_queue_commit_does_not_checkout_qolip() {
     let production_store = Arc::new(MemoryProductionMapStore::new());
     let mut state = test_state();

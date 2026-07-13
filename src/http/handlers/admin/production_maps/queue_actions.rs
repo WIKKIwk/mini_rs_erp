@@ -172,7 +172,7 @@ pub async fn production_map_queue_action(
             "completion_request": result.completion_request,
         })));
     }
-    let prepared = state
+    let mut prepared = state
         .production_maps
         .prepare_apparatus_queue_action_with_material_scan_and_progress(
             MaterialScanProgressAction {
@@ -187,11 +187,15 @@ pub async fn production_map_queue_action(
         )
         .await
         .map_err(production_map_error)?;
-    let qolip_checkout = if matches!(input.action, queue_state::ApparatusQueueAction::Start) {
+    let qolip_preparation = if matches!(input.action, queue_state::ApparatusQueueAction::Start) {
         prepare_qolip_for_bosma_start(&state, &principal, &input).await?
     } else {
         None
     };
+    if let Some(preparation) = &qolip_preparation {
+        prepared.attach_qolip_code(&preparation.spec.qolip_code);
+    }
+    let qolip_checkout = qolip_preparation.and_then(|preparation| preparation.checkout);
     let mut raw_material_stock_transitions = Vec::new();
     if matches!(input.action, queue_state::ApparatusQueueAction::Start) {
         let material_stock_barcodes = material_barcode
@@ -370,7 +374,7 @@ async fn prepare_qolip_for_bosma_start(
     state: &AppState,
     principal: &Principal,
     input: &ApparatusQueueActionRequest,
-) -> Result<Option<crate::core::qolip::QolipCheckout>, AdminError> {
+) -> Result<Option<crate::core::qolip::QolipOrderStartPreparation>, AdminError> {
     if !apparatus_requires_qolip_scan(&input.apparatus) {
         return Ok(None);
     }
@@ -386,7 +390,7 @@ async fn prepare_qolip_for_bosma_start(
     if qolip_code.is_empty() {
         return Err(bad_request("qolip_scan_required"));
     }
-    let checkout = state
+    let preparation = state
         .qolip
         .prepare_qolip_code_for_order_start(
             qolip_code,
@@ -398,7 +402,36 @@ async fn prepare_qolip_for_bosma_start(
         )
         .await
         .map_err(qolip_queue_error)?;
-    Ok(Some(checkout))
+    reject_qolip_in_use(
+        state,
+        &input.apparatus,
+        &input.order_id,
+        &preparation.spec.qolip_code,
+    )
+    .await?;
+    Ok(Some(preparation))
+}
+
+pub(super) async fn reject_qolip_in_use(
+    state: &AppState,
+    apparatus: &str,
+    order_id: &str,
+    qolip_code: &str,
+) -> Result<(), AdminError> {
+    let active = state
+        .production_maps
+        .active_order_run_session_for_qolip(qolip_code)
+        .await
+        .map_err(production_map_error)?;
+    if active.is_some_and(|session| {
+        session.order_id.trim() != order_id.trim()
+            || !queue_state::apparatus_titles_match(&session.apparatus, apparatus)
+    }) {
+        return Err(production_map_error(
+            ProductionMapError::QolipAlreadyInUse,
+        ));
+    }
+    Ok(())
 }
 
 pub(super) fn apparatus_requires_qolip_scan(apparatus: &str) -> bool {

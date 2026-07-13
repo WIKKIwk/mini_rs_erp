@@ -330,6 +330,26 @@ pub(super) fn progress_session_payload(
     })
 }
 
+pub(super) fn preserve_qolip_code(
+    current: &OrderRunSession,
+    mut replacement: serde_json::Value,
+) -> serde_json::Value {
+    let Some(qolip_code) = current
+        .payload_json
+        .get("qolip_code")
+        .and_then(serde_json::Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    else {
+        return replacement;
+    };
+    if !replacement.is_object() {
+        replacement = serde_json::json!({});
+    }
+    replacement["qolip_code"] = serde_json::json!(qolip_code);
+    replacement
+}
+
 fn progress_batch_payload(
     order_map: &ProductionMapDefinition,
     apparatus: &str,

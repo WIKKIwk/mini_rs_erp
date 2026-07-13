@@ -5,7 +5,7 @@ use crate::core::auth::models::Principal;
 use super::models::{
     QolipBlock, QolipCellQr, QolipCellQrInput, QolipCheckout, QolipCheckoutCreate,
     QolipCheckoutReturn, QolipError, QolipLocation, QolipLocationMove, QolipLocationUpsert,
-    QolipProduct, QolipProductSpec, QolipProductSpecUpsert,
+    QolipOrderStartPreparation, QolipProduct, QolipProductSpec, QolipProductSpecUpsert,
 };
 use super::normalize::{
     normalize_cell_qr, normalize_checkout, normalize_location, normalize_move_target,
@@ -164,7 +164,7 @@ impl QolipService {
         worker_name: &str,
         principal: &Principal,
     ) -> Result<QolipCheckout, QolipError> {
-        let checkout = self
+        let preparation = self
             .prepare_qolip_code_for_order_start(
                 qolip_code,
                 expected_item_code,
@@ -174,6 +174,7 @@ impl QolipService {
                 principal,
             )
             .await?;
+        let checkout = preparation.checkout.ok_or(QolipError::LocationNotFound)?;
         self.issue_prepared_checkout(checkout).await
     }
 
@@ -185,7 +186,7 @@ impl QolipService {
         worker_id: &str,
         worker_name: &str,
         principal: &Principal,
-    ) -> Result<QolipCheckout, QolipError> {
+    ) -> Result<QolipOrderStartPreparation, QolipError> {
         let qolip_code = qolip_code.trim();
         if qolip_code.is_empty() {
             return Err(QolipError::MissingQolipCode);
@@ -202,17 +203,19 @@ impl QolipService {
         if !qolip_spec_matches_order(&spec, &expected_product) {
             return Err(QolipError::QolipCodeMismatch);
         }
-        let location = self
-            .store
-            .location_by_qolip_code(qolip_code)
-            .await?
-            .ok_or(QolipError::LocationNotFound)?;
-        if !qolip_location_matches_spec(&location, &spec) {
-            return Err(QolipError::QolipCodeMismatch);
-        }
-        let mut checkout = normalize_checkout(location, 1, worker_id, worker_name, principal)?;
-        checkout.item_group = spec.item_group;
-        Ok(checkout)
+        let checkout = match self.store.location_by_qolip_code(qolip_code).await? {
+            Some(location) => {
+                if !qolip_location_matches_spec(&location, &spec) {
+                    return Err(QolipError::QolipCodeMismatch);
+                }
+                let mut checkout =
+                    normalize_checkout(location, 1, worker_id, worker_name, principal)?;
+                checkout.item_group = spec.item_group.clone();
+                Some(checkout)
+            }
+            None => None,
+        };
+        Ok(QolipOrderStartPreparation { spec, checkout })
     }
 
     pub async fn issue_prepared_checkout(

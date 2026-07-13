@@ -56,6 +56,7 @@ pub(super) fn production_map_error(error: ProductionMapError) -> AdminError {
         }
         ProductionMapError::QolipLocationNotFound => bad_request("qolip_location_not_found"),
         ProductionMapError::QolipCodeMismatch => bad_request("qolip_code_mismatch"),
+        ProductionMapError::QolipAlreadyInUse => bad_request("qolip_already_in_use"),
         ProductionMapError::QolipInsufficientStock => bad_request("insufficient_stock"),
         ProductionMapError::QolipLocationIdentityMismatch => {
             bad_request("location_identity_mismatch")

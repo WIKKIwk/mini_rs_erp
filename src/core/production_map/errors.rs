@@ -78,6 +78,8 @@ pub enum ProductionMapError {
     QolipLocationNotFound,
     #[error("qolip does not match order product")]
     QolipCodeMismatch,
+    #[error("qolip is already in use by another apparatus")]
+    QolipAlreadyInUse,
     #[error("qolip stock is insufficient")]
     QolipInsufficientStock,
     #[error("qolip location identity does not match")]
