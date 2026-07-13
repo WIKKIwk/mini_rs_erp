@@ -244,9 +244,7 @@ impl MaterialReceiptStorePort for PostgresGscaleReceiptStore {
                     previous.map(|row| row.status.clone()),
                     Some("in_use".to_string()),
                     order_id,
-                    "system",
-                    "system",
-                    "",
+                    ("system", "system", ""),
                 ),
             )
             .await
@@ -311,9 +309,7 @@ impl MaterialReceiptStorePort for PostgresGscaleReceiptStore {
                     previous.map(|row| row.status.clone()),
                     Some("consumed".to_string()),
                     order_id,
-                    "system",
-                    "system",
-                    "",
+                    ("system", "system", ""),
                 ),
             )
             .await
@@ -519,10 +515,9 @@ fn stock_status_event_draft(
     stock_status_before: Option<String>,
     stock_status_after: Option<String>,
     order_id: &str,
-    actor_role: &str,
-    actor_ref: &str,
-    actor_display_name: &str,
+    actor: (&str, &str, &str),
 ) -> RawMaterialEventDraft {
+    let (actor_role, actor_ref, actor_display_name) = actor;
     let qty_delta = if event_type == "consumption_posted" {
         -row.qty
     } else {

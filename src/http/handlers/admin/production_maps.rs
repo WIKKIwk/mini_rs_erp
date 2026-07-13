@@ -39,8 +39,8 @@ pub use self::progress_qr::{
 pub use self::qolip_validation::production_map_qolip_validate;
 pub use self::queue_actions::production_map_queue_action;
 pub use self::raw_materials::{
-    raw_material_assignment_lookup, raw_material_assignments, raw_material_rules,
-    raw_material_history, raw_material_stock,
+    raw_material_assignment_lookup, raw_material_assignments, raw_material_history,
+    raw_material_rules, raw_material_stock,
 };
 pub use self::wip::{production_map_finished_goods_receive, production_map_wip_batches};
 
@@ -230,17 +230,16 @@ pub async fn production_map_save_with_order(
                         Some(saved_template)
                     }
                     Err(error) => {
-                        if let Some(template_map_id) = template_map_id.as_deref() {
-                            if let Err(rollback_error) = state
+                        if let Some(template_map_id) = template_map_id.as_deref()
+                            && let Err(rollback_error) = state
                                 .production_maps
                                 .restore_map(previous_template_map.as_ref(), template_map_id)
                                 .await
-                            {
-                                tracing::error!(
-                                    ?rollback_error,
-                                    "with-order template map rollback failed"
-                                );
-                            }
+                        {
+                            tracing::error!(
+                                ?rollback_error,
+                                "with-order template map rollback failed"
+                            );
                         }
                         if let Err(rollback_error) = state
                             .production_maps

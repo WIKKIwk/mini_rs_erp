@@ -52,8 +52,12 @@ pub(crate) async fn save_checkout_tx(
         let Some((item_code, item_name, item_group, qolip_code, size)) = spec else {
             return Err(QolipError::QolipCodeNotFound);
         };
-        if !item_code.trim().eq_ignore_ascii_case(checkout.item_code.trim())
-            || !item_name.trim().eq_ignore_ascii_case(checkout.item_name.trim())
+        if !item_code
+            .trim()
+            .eq_ignore_ascii_case(checkout.item_code.trim())
+            || !item_name
+                .trim()
+                .eq_ignore_ascii_case(checkout.item_name.trim())
             || !item_group
                 .trim()
                 .eq_ignore_ascii_case(checkout.item_group.trim())
@@ -83,7 +87,7 @@ pub(crate) async fn save_checkout_tx(
         return Err(QolipError::LocationNotFound);
     };
     let current = row_to_location(current_row);
-    let expected = location_from_checkout(&checkout);
+    let expected = location_from_checkout(checkout);
     if !location_identity_matches(&current, &expected) {
         return Err(QolipError::LocationIdentityMismatch);
     }
@@ -144,7 +148,7 @@ pub(crate) async fn save_checkout_tx(
     .bind(checkout.issued_by_role.trim())
     .bind(checkout.issued_by_ref.trim())
     .bind(checkout.issued_by_name.trim())
-    .bind(serde_json::to_value(&checkout).map_err(|_| QolipError::StoreFailed)?)
+    .bind(serde_json::to_value(checkout).map_err(|_| QolipError::StoreFailed)?)
     .fetch_one(&mut **tx)
     .await
     .map_err(|_| QolipError::StoreFailed)?;

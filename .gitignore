@@ -4,6 +4,7 @@ target-docker-amd64/
 
 /data/
 /garbage/
+.codegraph/
 backups/
 logs/
 CLOUDFLARE.txt
