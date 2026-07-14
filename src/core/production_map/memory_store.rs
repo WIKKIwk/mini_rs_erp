@@ -310,6 +310,13 @@ impl ProductionMapStorePort for MemoryProductionMapStore {
         for batch in write.progress_batch_updates {
             self.put_order_progress_batch(batch).await?;
         }
+        if let Some(report) = write.returned_paint_report {
+            self.returned_paint_requests
+                .write()
+                .await
+                .entry(report.id.clone())
+                .or_insert(report);
+        }
         Ok(QueueActionProgressWriteResult::default())
     }
 

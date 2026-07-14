@@ -1,5 +1,6 @@
 use super::*;
 use crate::core::production_map::pechat;
+use crate::core::returned_paint::{ReturnedPaintItem, ReturnedPaintRequestCreate};
 
 #[derive(serde::Deserialize)]
 struct ApparatusQueueActionRequest {
@@ -59,6 +60,8 @@ struct ApparatusQueueActionRequest {
     completion_request_note: String,
     #[serde(default)]
     description: String,
+    #[serde(default)]
+    returned_paint_items: Vec<ReturnedPaintItem>,
     action: queue_state::ApparatusQueueAction,
 }
 
@@ -172,6 +175,48 @@ pub async fn production_map_queue_action(
             "completion_request": result.completion_request,
         })));
     }
+    if !matches!(input.action, queue_state::ApparatusQueueAction::Complete)
+        && !input.returned_paint_items.is_empty()
+    {
+        return Err(bad_request("returned_paint_only_on_complete"));
+    }
+    let returned_paint_report = if matches!(input.action, queue_state::ApparatusQueueAction::Complete)
+        && !input.returned_paint_items.is_empty()
+    {
+        let map = state
+            .production_maps
+            .raw_map(&input.order_id)
+            .await
+            .map_err(production_map_error)?
+            .ok_or_else(|| production_map_error(ProductionMapError::MapNotFound))?;
+        let order_code = if map.code.trim().is_empty() {
+            map.order_number.clone()
+        } else {
+            map.code.clone()
+        };
+        Some(
+            state
+                .returned_paint
+                .prepare_request(
+                    ReturnedPaintRequestCreate {
+                        order_id: map.id,
+                        order_code,
+                        order_name: map.title,
+                        apparatus: input.apparatus.clone(),
+                        items: input.returned_paint_items.clone(),
+                    },
+                    &principal,
+                    format!(
+                        "returned_paint_complete:{}:{}",
+                        input.order_id.trim(),
+                        input.apparatus.trim()
+                    ),
+                )
+                .map_err(|error| bad_request(error.to_string()))?,
+        )
+    } else {
+        None
+    };
     let mut prepared = state
         .production_maps
         .prepare_apparatus_queue_action_with_material_scan_and_progress(
@@ -263,6 +308,7 @@ pub async fn production_map_queue_action(
             prepared,
             raw_material_stock_transitions.clone(),
             qolip_checkout,
+            returned_paint_report,
         )
         .await
         .map_err(production_map_error)?;

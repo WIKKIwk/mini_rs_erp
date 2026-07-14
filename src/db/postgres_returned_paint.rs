@@ -1,9 +1,10 @@
 use async_trait::async_trait;
-use sqlx::PgPool;
+use sqlx::{PgPool, Postgres, Transaction};
 
 use crate::core::auth::models::PrincipalRole;
 use crate::core::returned_paint::{
-    ReturnedPaintError, ReturnedPaintItem, ReturnedPaintRequest, ReturnedPaintStorePort,
+    completion_report_message, ReturnedPaintError, ReturnedPaintItem, ReturnedPaintRequest,
+    ReturnedPaintStorePort,
 };
 
 #[derive(Clone)]
@@ -23,31 +24,16 @@ impl ReturnedPaintStorePort for PostgresReturnedPaintStore {
         &self,
         request: ReturnedPaintRequest,
     ) -> Result<ReturnedPaintRequest, ReturnedPaintError> {
-        let items_json = serde_json::to_value(&request.items)
+        let mut tx = self
+            .pool
+            .begin()
+            .await
             .map_err(|_| ReturnedPaintError::StoreFailed)?;
-        let row = sqlx::query_as::<_, ReturnedPaintRow>(
-            "INSERT INTO mini_returned_paint_requests (
-                id, target_role, order_id, order_code, order_name, apparatus,
-                sender_role, sender_ref, sender_display_name, items_json, created_at
-             ) VALUES ($1, 'boyoqchi', $2, $3, $4, $5, $6, $7, $8, $9, to_timestamp($10))
-             RETURNING id, order_id, order_code, order_name, apparatus,
-                sender_role, sender_ref, sender_display_name, items_json,
-                EXTRACT(EPOCH FROM created_at)::BIGINT AS created_at_unix",
-        )
-        .bind(&request.id)
-        .bind(&request.order_id)
-        .bind(&request.order_code)
-        .bind(&request.order_name)
-        .bind(&request.apparatus)
-        .bind(role_key(&request.sender_role))
-        .bind(&request.sender_ref)
-        .bind(&request.sender_display_name)
-        .bind(items_json)
-        .bind(request.created_at_unix as f64)
-        .fetch_one(&self.pool)
-        .await
-        .map_err(|_| ReturnedPaintError::StoreFailed)?;
-        row.into_model()
+        let result = insert_returned_paint_request_tx(&mut tx, &request).await?;
+        tx.commit()
+            .await
+            .map_err(|_| ReturnedPaintError::StoreFailed)?;
+        Ok(result)
     }
 
     async fn list(
@@ -89,7 +75,7 @@ struct ReturnedPaintRow {
 
 impl ReturnedPaintRow {
     fn into_model(self) -> Result<ReturnedPaintRequest, ReturnedPaintError> {
-        Ok(ReturnedPaintRequest {
+        let mut request = ReturnedPaintRequest {
             id: self.id,
             order_id: self.order_id,
             order_code: self.order_code,
@@ -100,9 +86,59 @@ impl ReturnedPaintRow {
             sender_display_name: self.sender_display_name,
             items: serde_json::from_value::<Vec<ReturnedPaintItem>>(self.items_json)
                 .map_err(|_| ReturnedPaintError::StoreFailed)?,
+            message: String::new(),
             created_at_unix: self.created_at_unix,
-        })
+        };
+        request.message = completion_report_message(&request);
+        Ok(request)
     }
+}
+
+pub(crate) async fn insert_returned_paint_request_tx(
+    tx: &mut Transaction<'_, Postgres>,
+    request: &ReturnedPaintRequest,
+) -> Result<ReturnedPaintRequest, ReturnedPaintError> {
+    let items_json = serde_json::to_value(&request.items)
+        .map_err(|_| ReturnedPaintError::StoreFailed)?;
+    let row = sqlx::query_as::<_, ReturnedPaintRow>(
+        "INSERT INTO mini_returned_paint_requests (
+            id, target_role, order_id, order_code, order_name, apparatus,
+            sender_role, sender_ref, sender_display_name, items_json, created_at
+         ) VALUES ($1, 'boyoqchi', $2, $3, $4, $5, $6, $7, $8, $9, to_timestamp($10))
+         ON CONFLICT (id) DO NOTHING
+         RETURNING id, order_id, order_code, order_name, apparatus,
+            sender_role, sender_ref, sender_display_name, items_json,
+            EXTRACT(EPOCH FROM created_at)::BIGINT AS created_at_unix",
+    )
+    .bind(&request.id)
+    .bind(&request.order_id)
+    .bind(&request.order_code)
+    .bind(&request.order_name)
+    .bind(&request.apparatus)
+    .bind(role_key(&request.sender_role))
+    .bind(&request.sender_ref)
+    .bind(&request.sender_display_name)
+    .bind(items_json)
+    .bind(request.created_at_unix as f64)
+    .fetch_optional(&mut **tx)
+    .await
+    .map_err(|_| ReturnedPaintError::StoreFailed)?;
+    let row = match row {
+        Some(row) => row,
+        None => sqlx::query_as::<_, ReturnedPaintRow>(
+            "SELECT id, order_id, order_code, order_name, apparatus,
+                sender_role, sender_ref, sender_display_name, items_json,
+                EXTRACT(EPOCH FROM created_at)::BIGINT AS created_at_unix
+             FROM mini_returned_paint_requests
+             WHERE id = $1",
+        )
+        .bind(&request.id)
+        .fetch_optional(&mut **tx)
+        .await
+        .map_err(|_| ReturnedPaintError::StoreFailed)?
+        .ok_or(ReturnedPaintError::StoreFailed)?,
+    };
+    row.into_model()
 }
 
 fn role_key(role: &PrincipalRole) -> &'static str {

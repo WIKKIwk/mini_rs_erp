@@ -37,6 +37,8 @@ pub struct ReturnedPaintRequest {
     pub sender_ref: String,
     pub sender_display_name: String,
     pub items: Vec<ReturnedPaintItem>,
+    #[serde(default)]
+    pub message: String,
     pub created_at_unix: i64,
 }
 
@@ -95,32 +97,49 @@ impl ReturnedPaintService {
         input: ReturnedPaintRequestCreate,
         sender: &Principal,
     ) -> Result<ReturnedPaintRequest, ReturnedPaintError> {
+        let bytes: [u8; 12] = rand::random();
+        let request = self.prepare_request(
+            input,
+            sender,
+            format!(
+                "returned_paint_{}",
+                data_encoding::HEXLOWER.encode(&bytes)
+            ),
+        )?;
+        self.store
+            .create(request)
+            .await
+    }
+
+    pub fn prepare_request(
+        &self,
+        input: ReturnedPaintRequestCreate,
+        sender: &Principal,
+        id: String,
+    ) -> Result<ReturnedPaintRequest, ReturnedPaintError> {
         let order_id = required_text(input.order_id, ReturnedPaintError::MissingOrderId)?;
         let apparatus = required_text(input.apparatus, ReturnedPaintError::MissingApparatus)?;
         let items = normalize_items(input.items)?;
         let sender_ref = sender.ref_.trim();
         let sender_display_name = sender.display_name.trim();
-        if sender_ref.is_empty() || sender_display_name.is_empty() {
+        if sender_ref.is_empty() || sender_display_name.is_empty() || id.trim().is_empty() {
             return Err(ReturnedPaintError::StoreFailed);
         }
-        let bytes: [u8; 12] = rand::random();
-        self.store
-            .create(ReturnedPaintRequest {
-                id: format!(
-                    "returned_paint_{}",
-                    data_encoding::HEXLOWER.encode(&bytes)
-                ),
-                order_id,
-                order_code: input.order_code.trim().to_string(),
-                order_name: input.order_name.trim().to_string(),
-                apparatus,
-                sender_role: sender.role.clone(),
-                sender_ref: sender_ref.to_string(),
-                sender_display_name: sender_display_name.to_string(),
-                items,
-                created_at_unix: time::OffsetDateTime::now_utc().unix_timestamp(),
-            })
-            .await
+        let mut request = ReturnedPaintRequest {
+            id,
+            order_id,
+            order_code: input.order_code.trim().to_string(),
+            order_name: input.order_name.trim().to_string(),
+            apparatus,
+            sender_role: sender.role.clone(),
+            sender_ref: sender_ref.to_string(),
+            sender_display_name: sender_display_name.to_string(),
+            items,
+            message: String::new(),
+            created_at_unix: time::OffsetDateTime::now_utc().unix_timestamp(),
+        };
+        request.message = completion_report_message(&request);
+        Ok(request)
     }
 
     pub async fn list(
@@ -130,6 +149,25 @@ impl ReturnedPaintService {
     ) -> Result<Vec<ReturnedPaintRequest>, ReturnedPaintError> {
         self.store.list(limit.clamp(1, 101), offset).await
     }
+}
+
+pub fn completion_report_message(request: &ReturnedPaintRequest) -> String {
+    let order_label = [request.order_code.trim(), request.order_name.trim()]
+        .into_iter()
+        .filter(|value| !value.is_empty())
+        .collect::<Vec<_>>()
+        .join(" · ");
+    let order_label = if order_label.is_empty() {
+        request.order_id.trim().to_string()
+    } else {
+        format!("{} ({})", order_label, request.order_id.trim())
+    };
+    format!(
+        "Operator {} {} orderini {} apparatida muvaffaqiyatli yopdi. Rasxot bo‘yoq sarfi va Astatka qolgan bo‘yoq miqdorlari, berilgan lak va erituvchi qiymatlari qayd etildi.",
+        request.sender_display_name.trim(),
+        order_label,
+        request.apparatus.trim(),
+    )
 }
 
 fn required_text(

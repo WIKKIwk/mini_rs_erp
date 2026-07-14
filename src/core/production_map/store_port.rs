@@ -3,6 +3,7 @@ use std::collections::BTreeMap;
 use async_trait::async_trait;
 
 use crate::core::qolip::QolipCheckout;
+use crate::core::returned_paint::ReturnedPaintRequest;
 
 use super::materials::{ApparatusMaterialRule, RawMaterialAssignment};
 use super::types::*;
@@ -66,6 +67,7 @@ pub struct QueueActionProgressWrite {
     pub progress_batch_updates: Vec<OrderProgressBatch>,
     pub raw_material_stock_transitions: Vec<RawMaterialStockTransition>,
     pub qolip_checkout: Option<QolipCheckout>,
+    pub returned_paint_report: Option<ReturnedPaintRequest>,
 }
 
 #[async_trait]

@@ -431,6 +431,11 @@ impl ProductionMapStorePort for PostgresProductionMapStore {
                 &write.event.apparatus,
             )
             .await?;
+        if let Some(report) = &write.returned_paint_report {
+            super::postgres_returned_paint::insert_returned_paint_request_tx(&mut tx, report)
+                .await
+                .map_err(|_| ProductionMapError::StoreFailed)?;
+        }
         tx.commit()
             .await
             .map_err(|_| ProductionMapError::StoreFailed)?;
