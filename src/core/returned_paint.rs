@@ -1,7 +1,9 @@
 use std::collections::BTreeMap;
+use std::fmt;
 use std::sync::Arc;
 
 use async_trait::async_trait;
+use serde::de::Error as _;
 use serde::{Deserialize, Serialize};
 use tokio::sync::RwLock;
 
@@ -12,7 +14,40 @@ pub struct ReturnedPaintItem {
     pub usage: String,
     pub category: String,
     pub name: String,
-    pub values: BTreeMap<String, f64>,
+    #[serde(deserialize_with = "deserialize_decimal_values")]
+    pub values: BTreeMap<String, String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ReturnedPaintCalculation {
+    pub rasxot_mix_total: String,
+    pub astatka_mix_total: String,
+    pub rasxot_alcohol: String,
+    pub astatka_alcohol: String,
+    pub final_used_alcohol: String,
+    pub rasxot_pure_paint: String,
+    pub astatka_pure_paint: String,
+    pub final_used_paint: String,
+}
+
+fn deserialize_decimal_values<'de, D>(
+    deserializer: D,
+) -> Result<BTreeMap<String, String>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let values = BTreeMap::<String, serde_json::Value>::deserialize(deserializer)?;
+    values
+        .into_iter()
+        .map(|(label, value)| {
+            let value = match value {
+                serde_json::Value::Number(value) => value.to_string(),
+                serde_json::Value::String(value) => value,
+                _ => return Err(D::Error::custom("returned paint value must be decimal")),
+            };
+            Ok((label, value))
+        })
+        .collect()
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -37,6 +72,8 @@ pub struct ReturnedPaintRequest {
     pub sender_ref: String,
     pub sender_display_name: String,
     pub items: Vec<ReturnedPaintItem>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub calculation: Option<ReturnedPaintCalculation>,
     #[serde(default)]
     pub message: String,
     pub created_at_unix: i64,
@@ -60,6 +97,8 @@ pub enum ReturnedPaintError {
     MissingValues,
     #[error("returned paint value is invalid")]
     InvalidValue,
+    #[error("astatka cannot exceed rasxot")]
+    NegativeFinalValue,
     #[error("returned paint store failed")]
     StoreFailed,
 }
@@ -120,6 +159,7 @@ impl ReturnedPaintService {
         let order_id = required_text(input.order_id, ReturnedPaintError::MissingOrderId)?;
         let apparatus = required_text(input.apparatus, ReturnedPaintError::MissingApparatus)?;
         let items = normalize_items(input.items)?;
+        let calculation = calculate_returned_paint(&items)?;
         let sender_ref = sender.ref_.trim();
         let sender_display_name = sender.display_name.trim();
         if sender_ref.is_empty() || sender_display_name.is_empty() || id.trim().is_empty() {
@@ -135,6 +175,7 @@ impl ReturnedPaintService {
             sender_ref: sender_ref.to_string(),
             sender_display_name: sender_display_name.to_string(),
             items,
+            calculation: Some(calculation),
             message: String::new(),
             created_at_unix: time::OffsetDateTime::now_utc().unix_timestamp(),
         };
@@ -173,16 +214,260 @@ pub fn completion_report_message(request: &ReturnedPaintRequest) -> String {
 pub fn returned_paint_astatka_total(
     items: &[ReturnedPaintItem],
 ) -> Result<f64, ReturnedPaintError> {
-    items
+    let total = items
         .iter()
         .filter(|item| item.usage.trim().eq_ignore_ascii_case("astatka"))
-        .flat_map(|item| item.values.values().copied())
-        .try_fold(0.0, |total, value| {
-            let next = total + value;
-            next.is_finite()
-                .then_some(next)
-                .ok_or(ReturnedPaintError::InvalidValue)
-        })
+        .flat_map(|item| item.values.values())
+        .try_fold(DecimalAmount::ZERO, |total, value| {
+            checked_add(total, DecimalAmount::parse_input(value)?)
+        })?;
+    total.to_f64()
+}
+
+pub fn calculate_returned_paint(
+    items: &[ReturnedPaintItem],
+) -> Result<ReturnedPaintCalculation, ReturnedPaintError> {
+    let mut rasxot = PaintUsageTotals::default();
+    let mut astatka = PaintUsageTotals::default();
+
+    for item in items
+        .iter()
+        .filter(|item| item.category.trim().eq_ignore_ascii_case("colors"))
+    {
+        let totals = if item.usage.trim().eq_ignore_ascii_case("rasxot") {
+            &mut rasxot
+        } else if item.usage.trim().eq_ignore_ascii_case("astatka") {
+            &mut astatka
+        } else {
+            return Err(ReturnedPaintError::InvalidUsage);
+        };
+        for (label, value) in &item.values {
+            let value = DecimalAmount::parse_input(value)?;
+            if label.trim().eq_ignore_ascii_case("mix") {
+                totals.mix = checked_add(totals.mix, value)?;
+            } else {
+                totals.direct_paint = checked_add(totals.direct_paint, value)?;
+            }
+        }
+    }
+
+    let rasxot_mix_paint = rasxot.mix.checked_percent(70)?;
+    let astatka_mix_paint = astatka.mix.checked_percent(70)?;
+    let rasxot_alcohol = rasxot.mix.checked_percent(30)?;
+    let astatka_alcohol = astatka.mix.checked_percent(30)?;
+    let rasxot_pure_paint = checked_add(rasxot.direct_paint, rasxot_mix_paint)?;
+    let astatka_pure_paint = checked_add(astatka.direct_paint, astatka_mix_paint)?;
+    let final_used_alcohol =
+        checked_non_negative_sub(rasxot_alcohol, astatka_alcohol)?;
+    let final_used_paint = checked_non_negative_sub(rasxot_pure_paint, astatka_pure_paint)?;
+
+    for value in [
+        rasxot.mix,
+        astatka.mix,
+        rasxot_alcohol,
+        astatka_alcohol,
+        final_used_alcohol,
+        rasxot_pure_paint,
+        astatka_pure_paint,
+        final_used_paint,
+    ] {
+        validate_storable_decimal(value)?;
+    }
+    Ok(ReturnedPaintCalculation {
+        rasxot_mix_total: rasxot.mix.to_string(),
+        astatka_mix_total: astatka.mix.to_string(),
+        rasxot_alcohol: rasxot_alcohol.to_string(),
+        astatka_alcohol: astatka_alcohol.to_string(),
+        final_used_alcohol: final_used_alcohol.to_string(),
+        rasxot_pure_paint: rasxot_pure_paint.to_string(),
+        astatka_pure_paint: astatka_pure_paint.to_string(),
+        final_used_paint: final_used_paint.to_string(),
+    })
+}
+
+#[derive(Default)]
+struct PaintUsageTotals {
+    mix: DecimalAmount,
+    direct_paint: DecimalAmount,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, PartialOrd, Ord)]
+struct DecimalAmount(i128);
+
+impl DecimalAmount {
+    const SCALE_DIGITS: usize = 12;
+    const SCALE_FACTOR: i128 = 1_000_000_000_000;
+    const MAX_STORED_UNITS: i128 =
+        999_999_999_999_999_999 * Self::SCALE_FACTOR;
+    const ZERO: Self = Self(0);
+
+    fn parse_input(value: &str) -> Result<Self, ReturnedPaintError> {
+        Self::parse(value, 11)
+    }
+
+    fn parse_stored(value: &str) -> Result<Self, ReturnedPaintError> {
+        Self::parse(value, Self::SCALE_DIGITS)
+    }
+
+    fn parse(
+        value: &str,
+        max_fraction_digits: usize,
+    ) -> Result<Self, ReturnedPaintError> {
+        const MAX_SIGNIFICAND_DIGITS: usize = 64;
+
+        let value = value.trim();
+        if value.is_empty() || matches!(value.as_bytes().first(), Some(b'-' | b'+')) {
+            return Err(ReturnedPaintError::InvalidValue);
+        }
+        let mut scientific_parts = value.split(|character| matches!(character, 'e' | 'E'));
+        let mantissa = scientific_parts.next().unwrap_or_default();
+        let exponent = match scientific_parts.next() {
+            Some(value) => value
+                .parse::<i32>()
+                .map_err(|_| ReturnedPaintError::InvalidValue)?,
+            None => 0,
+        };
+        if scientific_parts.next().is_some() {
+            return Err(ReturnedPaintError::InvalidValue);
+        }
+        let mut parts = mantissa.split('.');
+        let integer = parts.next().unwrap_or_default();
+        let fraction = parts.next().unwrap_or_default();
+        if (integer.is_empty() && fraction.is_empty())
+            || parts.next().is_some()
+            || (!integer.is_empty() && !integer.bytes().all(|byte| byte.is_ascii_digit()))
+            || !fraction.bytes().all(|byte| byte.is_ascii_digit())
+        {
+            return Err(ReturnedPaintError::InvalidValue);
+        }
+        if integer.len() + fraction.len() > MAX_SIGNIFICAND_DIGITS {
+            return Err(ReturnedPaintError::InvalidValue);
+        }
+        let mut digits = format!("{integer}{fraction}");
+        let mut fraction_digits = i64::try_from(fraction.len())
+            .ok()
+            .and_then(|length| length.checked_sub(i64::from(exponent)))
+            .ok_or(ReturnedPaintError::InvalidValue)?;
+        while fraction_digits > 0 && digits.ends_with('0') {
+            digits.pop();
+            fraction_digits -= 1;
+        }
+        let digits = digits.trim_start_matches('0');
+        if digits.is_empty() {
+            return Ok(Self::ZERO);
+        }
+        if fraction_digits > max_fraction_digits as i64 {
+            return Err(ReturnedPaintError::InvalidValue);
+        }
+        let significand = digits
+            .parse::<i128>()
+            .map_err(|_| ReturnedPaintError::InvalidValue)?;
+        let units = if fraction_digits >= 0 {
+            let scale_power = i64::try_from(Self::SCALE_DIGITS)
+                .ok()
+                .and_then(|scale| scale.checked_sub(fraction_digits))
+                .and_then(|power| u32::try_from(power).ok())
+                .ok_or(ReturnedPaintError::InvalidValue)?;
+            significand
+                .checked_mul(
+                    10_i128
+                        .checked_pow(scale_power)
+                        .ok_or(ReturnedPaintError::InvalidValue)?,
+                )
+                .ok_or(ReturnedPaintError::InvalidValue)?
+        } else {
+            let integer_power = fraction_digits
+                .checked_neg()
+                .and_then(|power| u32::try_from(power).ok())
+                .ok_or(ReturnedPaintError::InvalidValue)?;
+            significand
+                .checked_mul(
+                    10_i128
+                        .checked_pow(integer_power)
+                        .ok_or(ReturnedPaintError::InvalidValue)?,
+                )
+                .and_then(|value| value.checked_mul(Self::SCALE_FACTOR))
+                .ok_or(ReturnedPaintError::InvalidValue)?
+        };
+        let amount = Self(units);
+        validate_storable_decimal(amount)?;
+        Ok(amount)
+    }
+
+    fn checked_percent(self, percent: i128) -> Result<Self, ReturnedPaintError> {
+        let multiplied = self
+            .0
+            .checked_mul(percent)
+            .ok_or(ReturnedPaintError::InvalidValue)?;
+        if multiplied % 100 != 0 {
+            return Err(ReturnedPaintError::InvalidValue);
+        }
+        Ok(Self(multiplied / 100))
+    }
+
+    fn to_f64(self) -> Result<f64, ReturnedPaintError> {
+        let value = self
+            .to_string()
+            .parse::<f64>()
+            .map_err(|_| ReturnedPaintError::InvalidValue)?;
+        if value.is_finite() {
+            Ok(value)
+        } else {
+            Err(ReturnedPaintError::InvalidValue)
+        }
+    }
+}
+
+impl fmt::Display for DecimalAmount {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let integer = self.0 / Self::SCALE_FACTOR;
+        let fraction = self.0 % Self::SCALE_FACTOR;
+        if fraction == 0 {
+            return write!(formatter, "{integer}");
+        }
+        let fraction = format!("{fraction:0width$}", width = Self::SCALE_DIGITS)
+            .trim_end_matches('0')
+            .to_string();
+        write!(formatter, "{integer}.{fraction}")
+    }
+}
+
+fn checked_add(
+    left: DecimalAmount,
+    right: DecimalAmount,
+) -> Result<DecimalAmount, ReturnedPaintError> {
+    left.0
+        .checked_add(right.0)
+        .map(DecimalAmount)
+        .ok_or(ReturnedPaintError::InvalidValue)
+}
+
+fn checked_non_negative_sub(
+    left: DecimalAmount,
+    right: DecimalAmount,
+) -> Result<DecimalAmount, ReturnedPaintError> {
+    if left < right {
+        Err(ReturnedPaintError::NegativeFinalValue)
+    } else {
+        left.0
+            .checked_sub(right.0)
+            .map(DecimalAmount)
+            .ok_or(ReturnedPaintError::InvalidValue)
+    }
+}
+
+fn validate_storable_decimal(value: DecimalAmount) -> Result<(), ReturnedPaintError> {
+    if value < DecimalAmount::ZERO || value.0 > DecimalAmount::MAX_STORED_UNITS {
+        Err(ReturnedPaintError::InvalidValue)
+    } else {
+        Ok(())
+    }
+}
+
+pub(crate) fn normalize_returned_paint_stored_decimal(
+    value: &str,
+) -> Result<String, ReturnedPaintError> {
+    Ok(DecimalAmount::parse_stored(value)?.to_string())
 }
 
 fn required_text(
@@ -226,10 +511,11 @@ fn normalize_items(
                 .into_iter()
                 .map(|(label, value)| {
                     let label = label.trim();
-                    if label.is_empty() || !value.is_finite() || value < 0.0 {
+                    if label.is_empty() {
                         return Err(ReturnedPaintError::InvalidValue);
                     }
-                    Ok((label.to_string(), value))
+                    let value = DecimalAmount::parse_input(&value)?;
+                    Ok((label.to_string(), value.to_string()))
                 })
                 .collect::<Result<BTreeMap<_, _>, _>>()?;
             if values.is_empty() {
@@ -329,13 +615,19 @@ mod tests {
                             usage: "rasxot".to_string(),
                             category: "colors".to_string(),
                             name: "Oq".to_string(),
-                            values: BTreeMap::from([("Mix".to_string(), 3.0)]),
+                            values: BTreeMap::from([(
+                                "Mix".to_string(),
+                                "3".to_string(),
+                            )]),
                         },
                         ReturnedPaintItem {
                             usage: "astatka".to_string(),
                             category: "colors".to_string(),
                             name: "Oq".to_string(),
-                            values: BTreeMap::from([("Mix".to_string(), 1.0)]),
+                            values: BTreeMap::from([(
+                                "Mix".to_string(),
+                                "1".to_string(),
+                            )]),
                         },
                     ],
                 },
@@ -345,9 +637,92 @@ mod tests {
             .expect("create request");
 
         assert_eq!(request.items[0].usage, "rasxot");
-        assert_eq!(request.items[0].values["Mix"], 3.0);
+        assert_eq!(request.items[0].values["Mix"], "3");
         assert_eq!(request.items[1].usage, "astatka");
-        assert_eq!(request.items[1].values["Mix"], 1.0);
+        assert_eq!(request.items[1].values["Mix"], "1");
         assert_eq!(returned_paint_astatka_total(&request.items), Ok(1.0));
+    }
+
+    #[test]
+    fn calculates_only_color_values_with_exact_mix_ratios() {
+        let items = vec![
+            item(
+                "rasxot",
+                "colors",
+                [("Mix", "10"), ("Oq", "2"), ("Spirt", "1")],
+            ),
+            item("rasxot", "colors", [("Mix", "2.5"), ("Qora", "0.5")]),
+            item("astatka", "colors", [("Mix", "4"), ("Oq", "1")]),
+            item("astatka", "colors", [("Mix", "1"), ("Qora", "0.25")]),
+            item("rasxot", "lacquers", [("OPV lak", "100")]),
+            item("astatka", "solvents", [("Etil", "100")]),
+        ];
+
+        let result = calculate_returned_paint(&items).expect("calculation");
+
+        assert_eq!(result.rasxot_mix_total, "12.5");
+        assert_eq!(result.astatka_mix_total, "5");
+        assert_eq!(result.rasxot_alcohol, "3.75");
+        assert_eq!(result.astatka_alcohol, "1.5");
+        assert_eq!(result.final_used_alcohol, "2.25");
+        assert_eq!(result.rasxot_pure_paint, "12.25");
+        assert_eq!(result.astatka_pure_paint, "4.75");
+        assert_eq!(result.final_used_paint, "7.5");
+    }
+
+    #[test]
+    fn rejects_astatka_that_would_make_a_final_value_negative() {
+        let alcohol_negative = vec![
+            item("rasxot", "colors", [("Mix", "1")]),
+            item("astatka", "colors", [("Mix", "2")]),
+        ];
+        let paint_negative = vec![
+            item("rasxot", "colors", [("Mix", "1")]),
+            item("astatka", "colors", [("Oq", "1")]),
+        ];
+
+        assert_eq!(
+            calculate_returned_paint(&alcohol_negative),
+            Err(ReturnedPaintError::NegativeFinalValue)
+        );
+        assert_eq!(
+            calculate_returned_paint(&paint_negative),
+            Err(ReturnedPaintError::NegativeFinalValue)
+        );
+    }
+
+    #[test]
+    fn keeps_eleven_digit_input_precision_without_floating_point_rounding() {
+        let items = serde_json::from_str::<Vec<ReturnedPaintItem>>(
+            r#"[
+                {"usage":"rasxot","category":"colors","name":"Oq","values":{"Mix":3e-11}},
+                {"usage":"astatka","category":"colors","name":"Oq","values":{"Mix":1e-11}}
+            ]"#,
+        )
+        .expect("decimal JSON");
+        let items = normalize_items(items).expect("normalized items");
+
+        let result = calculate_returned_paint(&items).expect("calculation");
+
+        assert_eq!(result.rasxot_alcohol, "0.000000000009");
+        assert_eq!(result.astatka_alcohol, "0.000000000003");
+        assert_eq!(result.final_used_alcohol, "0.000000000006");
+        assert_eq!(result.final_used_paint, "0.000000000014");
+    }
+
+    fn item<const N: usize>(
+        usage: &str,
+        category: &str,
+        values: [(&str, &str); N],
+    ) -> ReturnedPaintItem {
+        ReturnedPaintItem {
+            usage: usage.to_string(),
+            category: category.to_string(),
+            name: "card".to_string(),
+            values: values
+                .into_iter()
+                .map(|(label, value)| (label.to_string(), value.to_string()))
+                .collect(),
+        }
     }
 }

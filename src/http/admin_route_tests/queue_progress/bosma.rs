@@ -78,6 +78,35 @@ async fn bosma_complete_requires_or_persists_completion_metrics() {
         "bosma_completion_metrics_required"
     );
 
+    let invalid_astatka = router
+        .clone()
+        .oneshot(request_with_body(
+            "POST",
+            "/v1/mobile/admin/production-maps/queue-action",
+            &worker_token,
+            r#"{
+                "apparatus":"7 ta rangli bosma",
+                "order_id":"zakaz-bosma-complete",
+                "action":"complete",
+                "returned_paint_items":[
+                    {"usage":"rasxot","category":"colors","name":"Oq","values":{"Mix":1}},
+                    {"usage":"astatka","category":"colors","name":"Oq","values":{"Mix":2}}
+                ],
+                "total_waste":2.5,
+                "finished_goods_kg":18.75,
+                "finished_goods_meter":125.5,
+                "printer":"zebra",
+                "print_mode":"rfid"
+            }"#,
+        ))
+        .await
+        .expect("complete with invalid astatka");
+    assert_eq!(invalid_astatka.status(), StatusCode::BAD_REQUEST);
+    assert_eq!(
+        json_body(invalid_astatka).await["error"],
+        "astatka cannot exceed rasxot"
+    );
+
     let completed = router
         .clone()
         .oneshot(request_with_body(

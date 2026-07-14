@@ -114,7 +114,10 @@ fn returned_paint_error(
         | ReturnedPaintError::InvalidCategory
         | ReturnedPaintError::MissingItemName
         | ReturnedPaintError::MissingValues
-        | ReturnedPaintError::InvalidValue => bad_request("returned paint request is invalid"),
+        | ReturnedPaintError::InvalidValue
+        | ReturnedPaintError::NegativeFinalValue => {
+            bad_request("returned paint request is invalid")
+        }
         ReturnedPaintError::StoreFailed => server_error(),
     }
 }

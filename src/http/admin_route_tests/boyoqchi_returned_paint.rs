@@ -72,8 +72,12 @@ async fn aparatchi_sends_returned_paint_and_only_boyoqchi_can_read_it() {
                 "order_name":"Estello",
                 "apparatus":"7 ta rangli bosma",
                 "items":[
-                    {"usage":"rasxot","category":"colors","name":"Oq","values":{"Mix":3}},
-                    {"usage":"astatka","category":"solvents","name":"Spirtlar","values":{"Etil":1.5}}
+                    {"usage":"rasxot","category":"colors","name":"Oq","values":{"Mix":10,"Oq":2,"Spirt":1}},
+                    {"usage":"rasxot","category":"colors","name":"Qora","values":{"Mix":2.5,"Qora":0.5}},
+                    {"usage":"astatka","category":"colors","name":"Oq","values":{"Mix":4,"Oq":1}},
+                    {"usage":"astatka","category":"colors","name":"Qora","values":{"Mix":1,"Qora":0.25}},
+                    {"usage":"rasxot","category":"lacquers","name":"Laklar","values":{"OPV lak":100}},
+                    {"usage":"astatka","category":"solvents","name":"Spirtlar","values":{"Etil":100}}
                 ]
             }"#,
         ))
@@ -103,5 +107,37 @@ async fn aparatchi_sends_returned_paint_and_only_boyoqchi_can_read_it() {
     let body = json_body(inbox).await;
     assert_eq!(body["items"][0]["order_id"], "order-1");
     assert_eq!(body["items"][0]["items"][0]["usage"], "rasxot");
-    assert_eq!(body["items"][0]["items"][1]["usage"], "astatka");
+    assert_eq!(body["items"][0]["items"][2]["usage"], "astatka");
+    assert_eq!(
+        body["items"][0]["calculation"]["rasxot_mix_total"],
+        "12.5"
+    );
+    assert_eq!(
+        body["items"][0]["calculation"]["astatka_mix_total"],
+        "5"
+    );
+    assert_eq!(
+        body["items"][0]["calculation"]["rasxot_alcohol"],
+        "3.75"
+    );
+    assert_eq!(
+        body["items"][0]["calculation"]["astatka_alcohol"],
+        "1.5"
+    );
+    assert_eq!(
+        body["items"][0]["calculation"]["final_used_alcohol"],
+        "2.25"
+    );
+    assert_eq!(
+        body["items"][0]["calculation"]["rasxot_pure_paint"],
+        "12.25"
+    );
+    assert_eq!(
+        body["items"][0]["calculation"]["astatka_pure_paint"],
+        "4.75"
+    );
+    assert_eq!(
+        body["items"][0]["calculation"]["final_used_paint"],
+        "7.5"
+    );
 }

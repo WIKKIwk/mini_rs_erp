@@ -9,7 +9,7 @@ const DEFAULT_MAX_CONNECTIONS: u32 = 16;
 const DEFAULT_ACQUIRE_TIMEOUT_MS: u64 = 500;
 const MIGRATION_LOCK_KEY: i64 = 6_514_811_918_052_026_001;
 
-const POSTGRES_MIGRATIONS: [(&str, &str); 7] = [
+const POSTGRES_MIGRATIONS: [(&str, &str); 8] = [
     (
         "0001_mini_erp_foundation",
         include_str!("../../migrations/postgres/0001_mini_erp_foundation.sql"),
@@ -37,6 +37,10 @@ const POSTGRES_MIGRATIONS: [(&str, &str); 7] = [
     (
         "0007_runtime_table_ownership",
         include_str!("../../migrations/postgres/0007_runtime_table_ownership.sql"),
+    ),
+    (
+        "0008_returned_paint_calculations",
+        include_str!("../../migrations/postgres/0008_returned_paint_calculations.sql"),
     ),
 ];
 
@@ -483,6 +487,19 @@ mod tests {
             assert!(migration.contains(&format!("'{table}'")));
         }
         assert!(migration.contains("owner to mini_rs_erp"));
+    }
+
+    #[test]
+    fn postgres_returned_paint_calculation_migration_uses_exact_numeric_columns() {
+        let migration = POSTGRES_MIGRATIONS[7].1.to_lowercase();
+
+        assert!(migration.contains("numeric(30, 12)"));
+        assert!(migration.contains("rasxot_mix_total"));
+        assert!(migration.contains("final_used_alcohol"));
+        assert!(migration.contains("final_used_paint"));
+        assert!(migration.contains("jsonb_each"));
+        assert!(migration.contains("round(rasxot_mix_total, 12)"));
+        assert!(migration.contains("999999999999999999"));
     }
 
     #[test]
