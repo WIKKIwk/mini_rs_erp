@@ -9,7 +9,7 @@ const DEFAULT_MAX_CONNECTIONS: u32 = 16;
 const DEFAULT_ACQUIRE_TIMEOUT_MS: u64 = 500;
 const MIGRATION_LOCK_KEY: i64 = 6_514_811_918_052_026_001;
 
-const POSTGRES_MIGRATIONS: [(&str, &str); 6] = [
+const POSTGRES_MIGRATIONS: [(&str, &str); 7] = [
     (
         "0001_mini_erp_foundation",
         include_str!("../../migrations/postgres/0001_mini_erp_foundation.sql"),
@@ -33,6 +33,10 @@ const POSTGRES_MIGRATIONS: [(&str, &str); 6] = [
     (
         "0006_boyoqchi_returned_paint",
         include_str!("../../migrations/postgres/0006_boyoqchi_returned_paint.sql"),
+    ),
+    (
+        "0007_runtime_table_ownership",
+        include_str!("../../migrations/postgres/0007_runtime_table_ownership.sql"),
     ),
 ];
 
@@ -459,6 +463,26 @@ mod tests {
         assert!(migration.contains("create table if not exists mini_returned_paint_requests"));
         assert!(migration.contains("target_role = 'boyoqchi'"));
         assert!(migration.contains("jsonb_array_length(items_json) > 0"));
+    }
+
+    #[test]
+    fn postgres_runtime_ownership_migration_repairs_service_tables() {
+        let migration = POSTGRES_MIGRATIONS[6].1.to_lowercase();
+
+        assert!(migration.contains("rolname = 'mini_rs_erp'"));
+        for table in [
+            "mini_system_users",
+            "mini_chat_principals",
+            "mini_chat_conversations",
+            "mini_chat_conversation_members",
+            "mini_chat_messages",
+            "mini_chat_device_cursors",
+            "mini_chat_outbox_events",
+            "mini_returned_paint_requests",
+        ] {
+            assert!(migration.contains(&format!("'{table}'")));
+        }
+        assert!(migration.contains("owner to mini_rs_erp"));
     }
 
     #[test]
