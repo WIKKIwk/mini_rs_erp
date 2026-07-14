@@ -28,6 +28,33 @@ impl AuthService {
         normalized_phone: &str,
         code: &str,
     ) -> Result<Principal, AuthError> {
+        self.login_system_user_by_role(
+            normalized_phone,
+            code,
+            PrincipalRole::Qolipchi,
+        )
+        .await
+    }
+
+    pub(super) async fn login_boyoqchi(
+        &self,
+        normalized_phone: &str,
+        code: &str,
+    ) -> Result<Principal, AuthError> {
+        self.login_system_user_by_role(
+            normalized_phone,
+            code,
+            PrincipalRole::Boyoqchi,
+        )
+        .await
+    }
+
+    async fn login_system_user_by_role(
+        &self,
+        normalized_phone: &str,
+        code: &str,
+        role: PrincipalRole,
+    ) -> Result<Principal, AuthError> {
         let lookup = self
             .system_user_lookup
             .as_ref()
@@ -40,12 +67,12 @@ impl AuthService {
             .await
             .map_err(|_| AuthError::Internal)?;
         let users = self
-            .search_system_users_for_login(lookup.as_ref(), normalized_phone)
+            .search_system_users_for_login(lookup.as_ref(), normalized_phone, role.clone())
             .await?;
 
         for user in users {
             let state = states.get(user.id.trim()).cloned().unwrap_or_default();
-            if state.removed || state.blocked || user.role != PrincipalRole::Qolipchi {
+            if state.removed || state.blocked || user.role != role {
                 continue;
             }
             if !state.custom_code.trim().is_empty()
@@ -53,7 +80,7 @@ impl AuthService {
                 && phone_matches_normalized(&user.phone, normalized_phone)
             {
                 return Ok(Principal {
-                    role: PrincipalRole::Qolipchi,
+                    role,
                     display_name: user.name.clone(),
                     legal_name: user.name,
                     ref_: user.id,
@@ -144,14 +171,15 @@ impl AuthService {
         &self,
         lookup: &dyn SystemUserLookup,
         normalized_phone: &str,
+        role: PrincipalRole,
     ) -> Result<Vec<SystemUserRecord>, AuthError> {
         let mut users = lookup
-            .search_system_users(PrincipalRole::Qolipchi, normalized_phone, 50)
+            .search_system_users(role.clone(), normalized_phone, 50)
             .await
             .map_err(|_| AuthError::Internal)?;
         if let Some(local_phone) = local_phone_query(normalized_phone) {
             let local_matches = lookup
-                .search_system_users(PrincipalRole::Qolipchi, &local_phone, 50)
+                .search_system_users(role.clone(), &local_phone, 50)
                 .await
                 .map_err(|_| AuthError::Internal)?;
             for user in local_matches {
@@ -162,7 +190,7 @@ impl AuthService {
         }
         if users.is_empty() {
             users = lookup
-                .search_system_users(PrincipalRole::Qolipchi, "", 500)
+                .search_system_users(role, "", 500)
                 .await
                 .map_err(|_| AuthError::Internal)?;
         }

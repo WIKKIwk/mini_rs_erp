@@ -4,7 +4,7 @@ use axum::routing::any;
 use crate::app::AppState;
 use crate::http::handlers::{
     auth, calculate, chat, customer, gscale, iroh_discovery, notifications, profile, push, qolip,
-    rezka, rps_batch, stock_entry, supplier, werka,
+    returned_paint, rezka, rps_batch, stock_entry, supplier, werka,
 };
 
 pub(super) fn routes() -> Router<AppState> {
@@ -12,6 +12,10 @@ pub(super) fn routes() -> Router<AppState> {
         .route("/v1/mobile/auth/login", any(auth::login))
         .route("/v1/mobile/auth/logout", any(auth::logout))
         .route("/v1/mobile/me", any(auth::me))
+        .route(
+            "/v1/mobile/returned-paint/requests",
+            any(returned_paint::requests),
+        )
         .route("/v1/mobile/iroh-ticket", any(iroh_discovery::ticket))
         .route("/v1/mobile/calculate", any(calculate::calculate_route))
         .route(

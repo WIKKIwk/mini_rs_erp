@@ -6,6 +6,8 @@ const WERKA_ONLY: &[PrincipalRole] = &[PrincipalRole::Werka];
 const SUPPLIER_ONLY: &[PrincipalRole] = &[PrincipalRole::Supplier];
 const CUSTOMER_ONLY: &[PrincipalRole] = &[PrincipalRole::Customer];
 const QOLIPCHI_ONLY: &[PrincipalRole] = &[PrincipalRole::Qolipchi];
+const BOYOQCHI_ONLY: &[PrincipalRole] = &[PrincipalRole::Boyoqchi];
+const ADMIN_APARATCHI: &[PrincipalRole] = &[PrincipalRole::Admin, PrincipalRole::Aparatchi];
 const SUPPLIER_WERKA: &[PrincipalRole] = &[PrincipalRole::Supplier, PrincipalRole::Werka];
 const ADMIN_MATERIAL_TAMINOTCHI: &[PrincipalRole] =
     &[PrincipalRole::Admin, PrincipalRole::MaterialTaminotchi];
@@ -63,6 +65,24 @@ pub(super) const CAPABILITY_CATALOG: &[CapabilityDefinition] = &[
         code: "customer.access",
         label: "Customer workspace",
         default_roles: CUSTOMER_ONLY,
+    },
+    CapabilityDefinition {
+        capability: Capability::BoyoqchiAccess,
+        code: "boyoqchi.access",
+        label: "Bo‘yoqchi ish joyi",
+        default_roles: BOYOQCHI_ONLY,
+    },
+    CapabilityDefinition {
+        capability: Capability::ReturnedPaintRequestCreate,
+        code: "returned_paint.request.create",
+        label: "Qaytarilgan bo‘yoq ma’lumotini yuborish",
+        default_roles: ADMIN_APARATCHI,
+    },
+    CapabilityDefinition {
+        capability: Capability::ReturnedPaintRequestRead,
+        code: "returned_paint.request.read",
+        label: "Qaytarilgan bo‘yoq ma’lumotlarini ko‘rish",
+        default_roles: BOYOQCHI_ONLY,
     },
     CapabilityDefinition {
         capability: Capability::PushTokenManage,

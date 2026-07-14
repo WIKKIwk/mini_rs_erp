@@ -143,7 +143,9 @@ impl AdminService {
         if state.removed {
             return Err(AdminPortError::NotFound);
         }
-        let avatar_url = self.profile_avatar_url("qolipchi", &user.id).await;
+        let avatar_url = self
+            .profile_avatar_url(profile_role_key(&user.role), &user.id)
+            .await;
         let now = OffsetDateTime::now_utc();
         Ok(AdminSystemUserDetail {
             id: user.id,
@@ -179,6 +181,7 @@ fn normalize_user_role_filter(value: Option<&str>) -> Option<&'static str> {
         }
         "worker" | "ishchi" => Some("worker"),
         "qolipchi" => Some("qolipchi"),
+        "boyoqchi" | "bo'yoqchi" | "bo‘yoqchi" => Some("boyoqchi"),
         _ => Some("__unknown__"),
     }
 }
@@ -317,6 +320,7 @@ fn profile_role_key(role: &PrincipalRole) -> &'static str {
         PrincipalRole::Customer => "customer",
         PrincipalRole::Aparatchi => "aparatchi",
         PrincipalRole::Qolipchi => "qolipchi",
+        PrincipalRole::Boyoqchi => "boyoqchi",
         PrincipalRole::MaterialTaminotchi => "material_taminotchi",
         PrincipalRole::Admin => "admin",
     }

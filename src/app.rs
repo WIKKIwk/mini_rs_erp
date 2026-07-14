@@ -19,6 +19,7 @@ use crate::core::profile::service::ProfileService;
 use crate::core::push::service::PushService;
 use crate::core::qolip::QolipService;
 use crate::core::rezka::RezkaService;
+use crate::core::returned_paint::ReturnedPaintService;
 use crate::core::rps_batch::RpsBatchService;
 use crate::core::session::manager::SessionManager;
 use crate::core::system_users::SystemUserService;
@@ -71,6 +72,7 @@ pub struct AppState {
     pub gscale: GscaleService,
     pub qolip: QolipService,
     pub rezka: RezkaService,
+    pub returned_paint: ReturnedPaintService,
     pub rps_batch: RpsBatchService,
     pub werka: WerkaService,
     pub warehouses: WarehouseService,
@@ -140,6 +142,7 @@ impl AppState {
         let gscale = build_gscale_service(scale_driver.clone(), warehouse_events.clone());
         let rezka = build_rezka_service(scale_driver);
         let qolip = build_qolip_service();
+        let returned_paint = build_returned_paint_service();
         let werka = build_werka_service(&config);
         let warehouses = build_warehouse_service();
         let worker_groups = build_worker_group_service();
@@ -162,6 +165,7 @@ impl AppState {
             gscale,
             qolip,
             rezka,
+            returned_paint,
             rps_batch,
             werka,
             warehouses,

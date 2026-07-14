@@ -16,6 +16,7 @@ pub mod push;
 pub mod qolip;
 pub mod quantity;
 pub mod rezka;
+pub mod returned_paint;
 pub mod rps_batch;
 pub mod session;
 pub mod system_users;

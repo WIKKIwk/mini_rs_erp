@@ -62,7 +62,7 @@ pub async fn system_user_detail(
     detail.avatar_url = with_admin_profile_avatar_proxy(
         &headers,
         detail.avatar_url,
-        "qolipchi",
+        system_role_key(&detail.role),
         &detail.id,
     );
     Ok(json_response(detail))
@@ -93,10 +93,11 @@ pub(super) async fn system_user_list_page(
 ) -> Result<AdminUserListPage, AdminError> {
     let limit = optional_search_limit(query.limit.as_deref(), 20, 50);
     let offset = optional_offset(query.offset.as_deref());
+    let role = required_system_role(query.role.as_deref())?;
     let users = state
         .system_users
         .users(
-            &PrincipalRole::Qolipchi,
+            &role,
             query.q.as_deref().unwrap_or_default(),
             offset.saturating_add(limit).saturating_add(1),
         )
@@ -116,6 +117,11 @@ pub(super) async fn system_user_list_page(
 }
 
 fn system_user_list_entry(detail: AdminSystemUserDetail) -> AdminUserListEntry {
+    let role_label = match detail.role {
+        PrincipalRole::Qolipchi => "Qolipchi",
+        PrincipalRole::Boyoqchi => "Bo‘yoqchi",
+        _ => "System user",
+    };
     AdminUserListEntry {
         id: format!("system_user:{}", detail.id),
         source: "system_user".to_string(),
@@ -124,7 +130,7 @@ fn system_user_list_entry(detail: AdminSystemUserDetail) -> AdminUserListEntry {
         name: detail.name,
         phone: detail.phone,
         avatar_url: detail.avatar_url,
-        role_label: "Qolipchi".to_string(),
+        role_label: role_label.to_string(),
         blocked: detail.blocked,
         status: if detail.blocked { "blocked" } else { "active" }.to_string(),
     }
@@ -133,7 +139,16 @@ fn system_user_list_entry(detail: AdminSystemUserDetail) -> AdminUserListEntry {
 fn required_system_role(value: Option<&str>) -> Result<PrincipalRole, AdminError> {
     match value.unwrap_or("qolipchi").trim().to_ascii_lowercase().as_str() {
         "qolipchi" => Ok(PrincipalRole::Qolipchi),
+        "boyoqchi" | "bo'yoqchi" | "bo‘yoqchi" => Ok(PrincipalRole::Boyoqchi),
         _ => Err(bad_request("system user role is invalid")),
+    }
+}
+
+fn system_role_key(role: &PrincipalRole) -> &'static str {
+    match role {
+        PrincipalRole::Qolipchi => "qolipchi",
+        PrincipalRole::Boyoqchi => "boyoqchi",
+        _ => "system_user",
     }
 }
 

@@ -34,6 +34,14 @@ pub async fn login(
     {
         return Err(login_error(AuthError::InvalidCredentials));
     }
+    if principal.role == PrincipalRole::Boyoqchi
+        && !state
+            .admin
+            .principal_has_capability(&principal, Capability::BoyoqchiAccess)
+            .await
+    {
+        return Err(login_error(AuthError::InvalidCredentials));
+    }
     let token = state
         .sessions
         .create(principal.clone())

@@ -108,6 +108,7 @@ fn row_to_user(
 fn role_as_str(role: &PrincipalRole) -> Result<&'static str, SystemUserError> {
     match role {
         PrincipalRole::Qolipchi => Ok("qolipchi"),
+        PrincipalRole::Boyoqchi => Ok("boyoqchi"),
         _ => Err(SystemUserError::InvalidRole),
     }
 }
@@ -115,6 +116,7 @@ fn role_as_str(role: &PrincipalRole) -> Result<&'static str, SystemUserError> {
 fn role_from_str(role: &str) -> Result<PrincipalRole, SystemUserError> {
     match role.trim().to_lowercase().as_str() {
         "qolipchi" => Ok(PrincipalRole::Qolipchi),
+        "boyoqchi" => Ok(PrincipalRole::Boyoqchi),
         _ => Err(SystemUserError::InvalidRole),
     }
 }

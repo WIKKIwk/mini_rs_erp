@@ -35,6 +35,7 @@ use crate::core::gscale::models::{
 use crate::core::gscale::ports::{GscalePortError, MaterialReceiptStorePort, ScaleDriverPort};
 use crate::core::mini_orders::{MiniOrderError, MiniOrderSink, NoopMiniOrderSink};
 use crate::core::production_map::{MemoryProductionMapStore, ProductionMapService};
+use crate::core::returned_paint::{MemoryReturnedPaintStore, ReturnedPaintService};
 use crate::core::session::manager::SessionManager;
 use crate::core::system_users::{MemorySystemUserStore, SystemUserService};
 use crate::core::warehouses::{
@@ -51,6 +52,7 @@ mod admin_edge_cases;
 mod auth_roles;
 mod batch_move_advanced;
 mod batch_move_basic;
+mod boyoqchi_returned_paint;
 mod completion_rejections;
 mod completion_requests;
 mod fakes;
@@ -290,6 +292,8 @@ fn test_state() -> AppState {
         .with_write_port(admin_port.clone())
         .with_state_port(admin_state_port.clone());
     state.production_maps = ProductionMapService::new(Arc::new(MemoryProductionMapStore::new()));
+    state.returned_paint =
+        ReturnedPaintService::new(Arc::new(MemoryReturnedPaintStore::new()));
     state.apparatus_groups = ApparatusGroupService::new(Arc::new(MemoryApparatusGroupStore::new()));
     state.warehouses = WarehouseService::new(Arc::new(MemoryWarehouseStore::new()));
     state.workers = WorkerService::new(Arc::new(MemoryWorkerStore::new()));

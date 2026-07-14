@@ -127,22 +127,20 @@ async fn load_directory_entries(
         }
     }
 
-    if let Ok(users) = state
-        .system_users
-        .users(&PrincipalRole::Qolipchi, query, 500)
-        .await
-    {
-        for user in users {
-            let detail = match state.admin.system_user_detail(user).await {
-                Ok(detail) if !detail.blocked => detail,
-                _ => continue,
-            };
-            items.push(ChatDirectoryEntry {
-                role: PrincipalRole::Qolipchi,
-                ref_: detail.id,
-                display_name: detail.name,
-                avatar_url: detail.avatar_url,
-            });
+    for role in [PrincipalRole::Qolipchi, PrincipalRole::Boyoqchi] {
+        if let Ok(users) = state.system_users.users(&role, query, 500).await {
+            for user in users {
+                let detail = match state.admin.system_user_detail(user).await {
+                    Ok(detail) if !detail.blocked => detail,
+                    _ => continue,
+                };
+                items.push(ChatDirectoryEntry {
+                    role: role.clone(),
+                    ref_: detail.id,
+                    display_name: detail.name,
+                    avatar_url: detail.avatar_url,
+                });
+            }
         }
     }
 

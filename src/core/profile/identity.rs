@@ -82,6 +82,7 @@ fn principal_role_key(role: &PrincipalRole) -> &'static str {
         PrincipalRole::Customer => "customer",
         PrincipalRole::Aparatchi => "aparatchi",
         PrincipalRole::Qolipchi => "qolipchi",
+        PrincipalRole::Boyoqchi => "boyoqchi",
         PrincipalRole::MaterialTaminotchi => "material_taminotchi",
         PrincipalRole::Admin => "admin",
     }
@@ -94,6 +95,7 @@ fn canonical_role_key(value: &str) -> Option<&'static str> {
         "customer" | "haridor" => Some("customer"),
         "worker" | "ishchi" | "aparatchi" | "apparatchi" => Some("aparatchi"),
         "qolipchi" | "system_user" | "system-user" => Some("qolipchi"),
+        "boyoqchi" | "bo'yoqchi" | "bo‘yoqchi" => Some("boyoqchi"),
         "material_taminotchi" | "material-taminotchi" | "materialtaminotchi" => {
             Some("material_taminotchi")
         }

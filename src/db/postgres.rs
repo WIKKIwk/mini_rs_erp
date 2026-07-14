@@ -9,7 +9,7 @@ const DEFAULT_MAX_CONNECTIONS: u32 = 16;
 const DEFAULT_ACQUIRE_TIMEOUT_MS: u64 = 500;
 const MIGRATION_LOCK_KEY: i64 = 6_514_811_918_052_026_001;
 
-const POSTGRES_MIGRATIONS: [(&str, &str); 5] = [
+const POSTGRES_MIGRATIONS: [(&str, &str); 6] = [
     (
         "0001_mini_erp_foundation",
         include_str!("../../migrations/postgres/0001_mini_erp_foundation.sql"),
@@ -29,6 +29,10 @@ const POSTGRES_MIGRATIONS: [(&str, &str); 5] = [
     (
         "0005_chat",
         include_str!("../../migrations/postgres/0005_chat.sql"),
+    ),
+    (
+        "0006_boyoqchi_returned_paint",
+        include_str!("../../migrations/postgres/0006_boyoqchi_returned_paint.sql"),
     ),
 ];
 
@@ -445,6 +449,16 @@ mod tests {
         assert!(migration.contains("last_read_sequence"));
         assert!(migration.contains("published_at is null"));
         assert!(!migration.contains("partition by"));
+    }
+
+    #[test]
+    fn postgres_boyoqchi_migration_defines_role_inbox() {
+        let migration = POSTGRES_MIGRATIONS[5].1.to_lowercase();
+
+        assert!(migration.contains("'qolipchi', 'boyoqchi'"));
+        assert!(migration.contains("create table if not exists mini_returned_paint_requests"));
+        assert!(migration.contains("target_role = 'boyoqchi'"));
+        assert!(migration.contains("jsonb_array_length(items_json) > 0"));
     }
 
     #[test]

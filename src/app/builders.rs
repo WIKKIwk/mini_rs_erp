@@ -11,6 +11,7 @@ use crate::db::postgres_mini_order::PostgresMiniOrderSink;
 use crate::db::postgres_production_map::PostgresProductionMapStore;
 use crate::db::postgres_qolip::PostgresQolipStore;
 use crate::db::postgres_raw_material_events::PostgresRawMaterialEventStore;
+use crate::db::postgres_returned_paint::PostgresReturnedPaintStore;
 use crate::db::postgres_warehouse::PostgresWarehouseStore;
 use crate::db::postgres_worker::PostgresWorkerStore;
 use crate::db::postgres_worker_group::PostgresWorkerGroupStore;
@@ -110,6 +111,16 @@ pub(super) fn build_system_user_service() -> SystemUserService {
             SystemUserService::new(Arc::new(PostgresSystemUserStore::new(pool)))
         }
         None => SystemUserService::unavailable(),
+    }
+}
+
+pub(super) fn build_returned_paint_service() -> ReturnedPaintService {
+    match postgres_pool("returned paint") {
+        Some(pool) => {
+            tracing::info!("mini ERP postgres returned paint store configured");
+            ReturnedPaintService::new(Arc::new(PostgresReturnedPaintStore::new(pool)))
+        }
+        None => ReturnedPaintService::unavailable(),
     }
 }
 

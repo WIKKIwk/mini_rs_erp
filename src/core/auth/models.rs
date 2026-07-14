@@ -10,6 +10,7 @@ pub enum PrincipalRole {
     Customer,
     Aparatchi,
     Qolipchi,
+    Boyoqchi,
     MaterialTaminotchi,
     Admin,
 }

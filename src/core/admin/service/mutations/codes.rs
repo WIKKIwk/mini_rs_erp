@@ -57,12 +57,22 @@ impl AdminService {
     ) -> Result<AdminSystemUserDetail, AdminPortError> {
         let mut existing = self.existing_state_codes().await?;
         let mut state = self.state_for(&user.id).await?;
-        if state.removed || user.role != PrincipalRole::Qolipchi {
+        if state.removed
+            || !matches!(
+                user.role,
+                PrincipalRole::Qolipchi | PrincipalRole::Boyoqchi
+            )
+        {
             return Err(AdminPortError::NotFound);
         }
         let now = OffsetDateTime::now_utc();
         state = bump_code_regen_state(state, now)?;
-        state.custom_code = random_code("50", &mut existing);
+        let prefix = match user.role {
+            PrincipalRole::Qolipchi => "50",
+            PrincipalRole::Boyoqchi => "80",
+            _ => return Err(AdminPortError::NotFound),
+        };
+        state.custom_code = random_code(prefix, &mut existing);
         self.put_state(&user.id, state).await?;
         self.system_user_detail(user).await
     }

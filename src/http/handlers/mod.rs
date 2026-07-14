@@ -11,6 +11,7 @@ pub mod push;
 pub mod push_notify;
 pub mod qolip;
 pub mod rezka;
+pub mod returned_paint;
 pub mod rps_batch;
 pub mod stock_entry;
 pub mod supplier;

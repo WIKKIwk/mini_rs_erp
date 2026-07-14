@@ -140,10 +140,9 @@ impl SystemUserLookup for SystemUserService {
 }
 
 fn validate_role(role: &PrincipalRole) -> Result<(), SystemUserError> {
-    if *role == PrincipalRole::Qolipchi {
-        Ok(())
-    } else {
-        Err(SystemUserError::InvalidRole)
+    match role {
+        PrincipalRole::Qolipchi | PrincipalRole::Boyoqchi => Ok(()),
+        _ => Err(SystemUserError::InvalidRole),
     }
 }
 
@@ -151,6 +150,7 @@ fn new_system_user_id(role: &PrincipalRole) -> String {
     let bytes: [u8; 12] = rand::random();
     let prefix = match role {
         PrincipalRole::Qolipchi => "qolipchi",
+        PrincipalRole::Boyoqchi => "boyoqchi",
         _ => "system_user",
     };
     format!("{prefix}_{}", data_encoding::HEXLOWER.encode(&bytes))

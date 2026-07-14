@@ -64,6 +64,7 @@ impl ProfileService {
             }
             PrincipalRole::Werka
             | PrincipalRole::Qolipchi
+            | PrincipalRole::Boyoqchi
             | PrincipalRole::MaterialTaminotchi
             | PrincipalRole::Admin => {}
         }

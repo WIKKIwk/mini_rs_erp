@@ -32,6 +32,7 @@ pub fn system_role_definitions() -> Vec<RoleDefinition> {
         (PrincipalRole::Supplier, "supplier", "Supplier"),
         (PrincipalRole::Customer, "customer", "Customer"),
         (PrincipalRole::Qolipchi, "qolipchi", "Qolipchi"),
+        (PrincipalRole::Boyoqchi, "boyoqchi", "Bo‘yoqchi"),
         (
             PrincipalRole::MaterialTaminotchi,
             "material_taminotchi",
