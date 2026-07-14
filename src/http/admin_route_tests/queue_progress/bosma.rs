@@ -88,7 +88,11 @@ async fn bosma_complete_requires_or_persists_completion_metrics() {
                 "apparatus":"7 ta rangli bosma",
                 "order_id":"zakaz-bosma-complete",
                 "action":"complete",
-                "return_ink_kg":1.25,
+                "returned_paint_items":[
+                    {"usage":"rasxot","category":"colors","name":"Oq","values":{"Mix":9}},
+                    {"usage":"astatka","category":"colors","name":"Oq","values":{"Mix":0.75,"Oq":0.25}},
+                    {"usage":"astatka","category":"solvents","name":"Spirtlar","values":{"Etil":0.25}}
+                ],
                 "total_waste":2.5,
                 "finished_goods_kg":18.75,
                 "finished_goods_meter":125.5,

@@ -1,6 +1,8 @@
 use super::*;
 use crate::core::production_map::pechat;
-use crate::core::returned_paint::{ReturnedPaintItem, ReturnedPaintRequestCreate};
+use crate::core::returned_paint::{
+    ReturnedPaintItem, ReturnedPaintRequestCreate, returned_paint_astatka_total,
+};
 
 #[derive(serde::Deserialize)]
 struct ApparatusQueueActionRequest {
@@ -101,85 +103,12 @@ pub async fn production_map_queue_action(
     } else {
         input.completion_request_note.clone()
     };
-    let progress = QueueProgressInput {
-        produced_qty,
-        uom: if input.uom.trim().is_empty() {
-            input.unit.clone()
-        } else {
-            input.uom.clone()
-        },
-        progress_batch_id: input.progress_batch_id.clone(),
-        qr_payload: if input.qr_payload.trim().is_empty() {
-            input.progress_qr.clone()
-        } else {
-            input.qr_payload.clone()
-        },
-        return_ink_kg: input.return_ink_kg,
-        lamination_print_leftover_rolls: input.lamination_print_leftover_rolls,
-        lamination_film_leftover_rolls: input.lamination_film_leftover_rolls,
-        rezka_bosma_waste: input.rezka_bosma_waste,
-        rezka_lamination_waste: input.rezka_lamination_waste,
-        rezka_edge_waste: input.rezka_edge_waste,
-        total_waste: input.total_waste,
-        finished_goods_kg: input.finished_goods_kg,
-        finished_goods_meter: input.finished_goods_meter,
-        description: completion_request_note.clone(),
-    };
-    let _queue_action_guard = state.production_maps.queue_action_guard().await;
-    let has_complete_bosma_metrics = input.return_ink_kg.is_some()
-        && input.total_waste.is_some()
-        && input.finished_goods_kg.is_some()
-        && input.finished_goods_meter.is_some();
-    let has_complete_laminatsiya_metrics = (input.lamination_print_leftover_rolls.is_some()
-        || input.lamination_film_leftover_rolls.is_some())
-        && input.total_waste.is_some()
-        && input.finished_goods_kg.is_some()
-        && input.finished_goods_meter.is_some();
-    let has_rezka_progress_metrics = input.rezka_bosma_waste.is_some()
-        && input.rezka_lamination_waste.is_some()
-        && input.rezka_edge_waste.is_some();
-    let zero_metric_codes = zero_completion_metric_codes(&input);
-    if matches!(input.action, queue_state::ApparatusQueueAction::Complete)
-        && !zero_metric_codes.is_empty()
-        && completion_request_note.trim().is_empty()
-    {
-        return Err(bad_request("zero_metric_explanation_required"));
-    }
-    let missing_output_with_explanation = !has_complete_bosma_metrics
-        && !has_complete_laminatsiya_metrics
-        && !has_rezka_progress_metrics
-        && input.gross_qty.is_none()
-        && !completion_request_note.trim().is_empty();
-    if matches!(input.action, queue_state::ApparatusQueueAction::Complete)
-        && (!zero_metric_codes.is_empty() || missing_output_with_explanation)
-    {
-        let result = state
-            .production_maps
-            .request_completion_with_issue(
-                &input.apparatus,
-                &input.order_id,
-                &assigned_apparatus,
-                queue_action_actor(&principal),
-                &completion_request_note,
-                zero_metric_codes,
-            )
-            .await
-            .map_err(production_map_error)?;
-        return Ok(json_response(serde_json::json!({
-            "ok": true,
-            "states": result.states,
-            "session": null,
-            "progress_event": null,
-            "progress_batch": null,
-            "print": null,
-            "completion_request": result.completion_request,
-        })));
-    }
     if !matches!(input.action, queue_state::ApparatusQueueAction::Complete)
         && !input.returned_paint_items.is_empty()
     {
         return Err(bad_request("returned_paint_only_on_complete"));
     }
+    let _queue_action_guard = state.production_maps.queue_action_guard().await;
     let returned_paint_report = if matches!(input.action, queue_state::ApparatusQueueAction::Complete)
         && !input.returned_paint_items.is_empty()
     {
@@ -217,6 +146,86 @@ pub async fn production_map_queue_action(
     } else {
         None
     };
+    let return_ink_kg = match &returned_paint_report {
+        Some(report) => Some(
+            returned_paint_astatka_total(&report.items)
+                .map_err(|error| bad_request(error.to_string()))?,
+        ),
+        None => input.return_ink_kg,
+    };
+    let progress = QueueProgressInput {
+        produced_qty,
+        uom: if input.uom.trim().is_empty() {
+            input.unit.clone()
+        } else {
+            input.uom.clone()
+        },
+        progress_batch_id: input.progress_batch_id.clone(),
+        qr_payload: if input.qr_payload.trim().is_empty() {
+            input.progress_qr.clone()
+        } else {
+            input.qr_payload.clone()
+        },
+        return_ink_kg,
+        lamination_print_leftover_rolls: input.lamination_print_leftover_rolls,
+        lamination_film_leftover_rolls: input.lamination_film_leftover_rolls,
+        rezka_bosma_waste: input.rezka_bosma_waste,
+        rezka_lamination_waste: input.rezka_lamination_waste,
+        rezka_edge_waste: input.rezka_edge_waste,
+        total_waste: input.total_waste,
+        finished_goods_kg: input.finished_goods_kg,
+        finished_goods_meter: input.finished_goods_meter,
+        description: completion_request_note.clone(),
+    };
+    let has_complete_bosma_metrics = return_ink_kg.is_some()
+        && input.total_waste.is_some()
+        && input.finished_goods_kg.is_some()
+        && input.finished_goods_meter.is_some();
+    let has_complete_laminatsiya_metrics = (input.lamination_print_leftover_rolls.is_some()
+        || input.lamination_film_leftover_rolls.is_some())
+        && input.total_waste.is_some()
+        && input.finished_goods_kg.is_some()
+        && input.finished_goods_meter.is_some();
+    let has_rezka_progress_metrics = input.rezka_bosma_waste.is_some()
+        && input.rezka_lamination_waste.is_some()
+        && input.rezka_edge_waste.is_some();
+    let zero_metric_codes = zero_completion_metric_codes(&input, return_ink_kg);
+    if matches!(input.action, queue_state::ApparatusQueueAction::Complete)
+        && !zero_metric_codes.is_empty()
+        && completion_request_note.trim().is_empty()
+    {
+        return Err(bad_request("zero_metric_explanation_required"));
+    }
+    let missing_output_with_explanation = !has_complete_bosma_metrics
+        && !has_complete_laminatsiya_metrics
+        && !has_rezka_progress_metrics
+        && input.gross_qty.is_none()
+        && !completion_request_note.trim().is_empty();
+    if matches!(input.action, queue_state::ApparatusQueueAction::Complete)
+        && (!zero_metric_codes.is_empty() || missing_output_with_explanation)
+    {
+        let result = state
+            .production_maps
+            .request_completion_with_issue(
+                &input.apparatus,
+                &input.order_id,
+                &assigned_apparatus,
+                queue_action_actor(&principal),
+                &completion_request_note,
+                zero_metric_codes,
+            )
+            .await
+            .map_err(production_map_error)?;
+        return Ok(json_response(serde_json::json!({
+            "ok": true,
+            "states": result.states,
+            "session": null,
+            "progress_event": null,
+            "progress_batch": null,
+            "print": null,
+            "completion_request": result.completion_request,
+        })));
+    }
     let mut prepared = state
         .production_maps
         .prepare_apparatus_queue_action_with_material_scan_and_progress(
@@ -384,14 +393,17 @@ pub async fn production_map_queue_action(
     })))
 }
 
-fn zero_completion_metric_codes(input: &ApparatusQueueActionRequest) -> Vec<String> {
+fn zero_completion_metric_codes(
+    input: &ApparatusQueueActionRequest,
+    return_ink_kg: Option<f64>,
+) -> Vec<String> {
     if !matches!(input.action, queue_state::ApparatusQueueAction::Complete) {
         return Vec::new();
     }
     [
         ("produced_qty", input.produced_qty.or(input.qty)),
         ("gross_qty", input.gross_qty),
-        ("return_ink_kg", input.return_ink_kg),
+        ("return_ink_kg", return_ink_kg),
         (
             "lamination_print_leftover_rolls",
             input.lamination_print_leftover_rolls,

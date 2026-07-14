@@ -170,6 +170,21 @@ pub fn completion_report_message(request: &ReturnedPaintRequest) -> String {
     )
 }
 
+pub fn returned_paint_astatka_total(
+    items: &[ReturnedPaintItem],
+) -> Result<f64, ReturnedPaintError> {
+    items
+        .iter()
+        .filter(|item| item.usage.trim().eq_ignore_ascii_case("astatka"))
+        .flat_map(|item| item.values.values().copied())
+        .try_fold(0.0, |total, value| {
+            let next = total + value;
+            next.is_finite()
+                .then_some(next)
+                .ok_or(ReturnedPaintError::InvalidValue)
+        })
+}
+
 fn required_text(
     value: String,
     error: ReturnedPaintError,
@@ -333,5 +348,6 @@ mod tests {
         assert_eq!(request.items[0].values["Mix"], 3.0);
         assert_eq!(request.items[1].usage, "astatka");
         assert_eq!(request.items[1].values["Mix"], 1.0);
+        assert_eq!(returned_paint_astatka_total(&request.items), Ok(1.0));
     }
 }
