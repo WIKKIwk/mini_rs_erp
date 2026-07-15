@@ -273,8 +273,8 @@ async fn image_only_report_waits_for_boyoqchi_and_completes_same_record_once() {
                 r#"{{
                     "request_id":"{request_id}",
                     "items":[
-                        {{"usage":"rasxot","category":"colors","name":"Oq","values":{{"Mix":10,"Oq":2}}}},
-                        {{"usage":"astatka","category":"colors","name":"Oq","values":{{"Mix":1}}}}
+                        {{"usage":"rasxot","category":"colors","name":"Oq","values":{{"Mix":10,"Oq":2,"Qora":0}}}},
+                        {{"usage":"astatka","category":"colors","name":"Oq","values":{{"Mix":1,"Oq":0,"Qora":0}}}}
                     ]
                 }}"#
             ),
@@ -299,8 +299,8 @@ async fn image_only_report_waits_for_boyoqchi_and_completes_same_record_once() {
                 r#"{{
                     "request_id":"{request_id}",
                     "items":[
-                        {{"usage":"rasxot","category":"colors","name":"Qora","values":{{"Mix":99,"Qora":99}}}},
-                        {{"usage":"astatka","category":"colors","name":"Qora","values":{{"Mix":1}}}}
+                        {{"usage":"rasxot","category":"colors","name":"Qora","values":{{"Mix":99,"Qora":99,"Sariq":0}}}},
+                        {{"usage":"astatka","category":"colors","name":"Qora","values":{{"Mix":1,"Qora":0,"Sariq":0}}}}
                     ]
                 }}"#
             ),

@@ -124,7 +124,7 @@ pub enum ReturnedPaintError {
     MissingApparatus,
     #[error("at least one returned paint value is required")]
     MissingItems,
-    #[error("at least three returned paint fields are required")]
+    #[error("at least three returned paint fields are required in both tabs")]
     InsufficientValues,
     #[error("returned paint request was not found")]
     RequestNotFound,
@@ -261,7 +261,7 @@ impl ReturnedPaintService {
             )
         } else {
             let items = normalize_items(input.items)?;
-            if returned_paint_value_count(&items) < 3 {
+            if !returned_paint_has_minimum_values_per_usage(&items) {
                 return Err(ReturnedPaintError::InsufficientValues);
             }
             let calculation = calculate_returned_paint(&items)?;
@@ -308,7 +308,7 @@ impl ReturnedPaintService {
             return Err(ReturnedPaintError::RequestNotFound);
         }
         let items = normalize_items(input.items)?;
-        if returned_paint_value_count(&items) < 3 {
+        if !returned_paint_has_minimum_values_per_usage(&items) {
             return Err(ReturnedPaintError::InsufficientValues);
         }
         let calculation = calculate_returned_paint(&items)?;
@@ -399,6 +399,32 @@ pub fn returned_paint_value_count(items: &[ReturnedPaintItem]) -> usize {
     items.iter().map(|item| item.values.len()).sum()
 }
 
+pub fn returned_paint_value_count_for_usage(
+    items: &[ReturnedPaintItem],
+    usage: &str,
+) -> usize {
+    items
+        .iter()
+        .filter(|item| item.usage.trim().eq_ignore_ascii_case(usage.trim()))
+        .map(|item| item.values.len())
+        .sum()
+}
+
+pub fn returned_paint_has_minimum_values_per_usage(
+    items: &[ReturnedPaintItem],
+) -> bool {
+    returned_paint_value_count_for_usage(items, "rasxot") >= 3
+        && returned_paint_value_count_for_usage(items, "astatka") >= 3
+}
+
+pub fn returned_paint_report_can_close(
+    items: &[ReturnedPaintItem],
+    has_image: bool,
+) -> bool {
+    returned_paint_has_minimum_values_per_usage(items)
+        || (returned_paint_value_count(items) == 0 && has_image)
+}
+
 pub fn completion_report_message(request: &ReturnedPaintRequest) -> String {
     let order_label = [request.order_code.trim(), request.order_name.trim()]
         .into_iter()
@@ -460,7 +486,9 @@ pub fn calculate_returned_paint(
             let value = DecimalAmount::parse_input(value)?;
             if item.category.trim().eq_ignore_ascii_case("solvents") {
                 totals.direct_alcohol = checked_add(totals.direct_alcohol, value)?;
-            } else if label.trim().eq_ignore_ascii_case("mix") {
+            } else if item.name.trim().eq_ignore_ascii_case("mix")
+                || label.trim().eq_ignore_ascii_case("mix")
+            {
                 totals.mix = checked_add(totals.mix, value)?;
             } else {
                 totals.direct_paint = checked_add(totals.direct_paint, value)?;
@@ -942,16 +970,18 @@ mod tests {
                             values: BTreeMap::from([
                                 ("Mix".to_string(), "3".to_string()),
                                 ("Oq".to_string(), "1".to_string()),
+                                ("Qora".to_string(), "0".to_string()),
                             ]),
                         },
                         ReturnedPaintItem {
                             usage: "astatka".to_string(),
                             category: "colors".to_string(),
                             name: "Oq".to_string(),
-                            values: BTreeMap::from([(
-                                "Mix".to_string(),
-                                "1".to_string(),
-                            )]),
+                            values: BTreeMap::from([
+                                ("Mix".to_string(), "1".to_string()),
+                                ("Oq".to_string(), "0".to_string()),
+                                ("Qora".to_string(), "0".to_string()),
+                            ]),
                         },
                     ],
                 },
@@ -965,6 +995,39 @@ mod tests {
         assert_eq!(request.items[1].usage, "astatka");
         assert_eq!(request.items[1].values["Mix"], "1");
         assert_eq!(returned_paint_astatka_total(&request.items), Ok(1.0));
+    }
+
+    #[test]
+    fn minimum_returned_paint_fields_are_checked_per_usage() {
+        let rasxot_only = vec![item(
+            "rasxot",
+            "colors",
+            [("Mix", "1"), ("Oq", "1"), ("Qora", "0")],
+        )];
+        let both_usages = vec![
+            item(
+                "rasxot",
+                "colors",
+                [("Mix", "1"), ("Oq", "1"), ("Qora", "0")],
+            ),
+            item(
+                "astatka",
+                "colors",
+                [("Mix", "0.5"), ("Oq", "0"), ("Qora", "0")],
+            ),
+        ];
+
+        assert_eq!(
+            returned_paint_value_count_for_usage(&rasxot_only, "rasxot"),
+            3
+        );
+        assert_eq!(
+            returned_paint_value_count_for_usage(&rasxot_only, "astatka"),
+            0
+        );
+        assert!(!returned_paint_report_can_close(&rasxot_only, false));
+        assert!(returned_paint_report_can_close(&both_usages, false));
+        assert!(returned_paint_report_can_close(&[], true));
     }
 
     #[test]
@@ -1001,6 +1064,35 @@ mod tests {
         assert_eq!(result.rasxot_pure_paint, "12.25");
         assert_eq!(result.astatka_pure_paint, "4.75");
         assert_eq!(result.final_used_paint, "7.5");
+    }
+
+    #[test]
+    fn treats_named_values_inside_mix_item_as_mix() {
+        let items = vec![
+            item(
+                "rasxot",
+                "colors",
+                [("Batch A", "10"), ("Blue recipe", "2")],
+            ),
+            item("astatka", "colors", [("Batch A", "4")]),
+        ];
+
+        let result = calculate_returned_paint(
+            &items
+                .into_iter()
+                .map(|mut value| {
+                    value.name = "Mix".to_string();
+                    value
+                })
+                .collect::<Vec<_>>(),
+        )
+        .expect("named mix calculation");
+
+        assert_eq!(result.rasxot_mix_total, "12");
+        assert_eq!(result.astatka_mix_total, "4");
+        assert_eq!(result.rasxot_alcohol, "3.6");
+        assert_eq!(result.astatka_alcohol, "1.2");
+        assert_eq!(result.final_used_paint, "5.6");
     }
 
     #[test]

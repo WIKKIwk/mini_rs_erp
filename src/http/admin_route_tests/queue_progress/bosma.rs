@@ -69,8 +69,8 @@ async fn bosma_complete_requires_or_persists_completion_metrics() {
                 "order_id":"zakaz-bosma-complete",
                 "action":"complete",
                 "returned_paint_items":[
-                    {"usage":"rasxot","category":"colors","name":"Oq","values":{"Mix":3,"Oq":1}},
-                    {"usage":"astatka","category":"colors","name":"Oq","values":{"Mix":1}}
+                    {"usage":"rasxot","category":"colors","name":"Oq","values":{"Mix":3,"Oq":1,"Qora":0}},
+                    {"usage":"astatka","category":"colors","name":"Oq","values":{"Mix":1,"Oq":0,"Qora":0}}
                 ]
             }"#,
         ))
@@ -93,8 +93,8 @@ async fn bosma_complete_requires_or_persists_completion_metrics() {
                 "order_id":"zakaz-bosma-complete",
                 "action":"complete",
                 "returned_paint_items":[
-                    {"usage":"rasxot","category":"colors","name":"Oq","values":{"Mix":1,"Oq":1}},
-                    {"usage":"astatka","category":"colors","name":"Oq","values":{"Mix":2}}
+                    {"usage":"rasxot","category":"colors","name":"Oq","values":{"Mix":1,"Oq":1,"Qora":0}},
+                    {"usage":"astatka","category":"colors","name":"Oq","values":{"Mix":2,"Oq":0,"Qora":0}}
                 ],
                 "total_waste":2.5,
                 "finished_goods_kg":18.75,
@@ -122,7 +122,7 @@ async fn bosma_complete_requires_or_persists_completion_metrics() {
                 "order_id":"zakaz-bosma-complete",
                 "action":"complete",
                 "returned_paint_items":[
-                    {"usage":"rasxot","category":"colors","name":"Oq","values":{"Mix":9}},
+                    {"usage":"rasxot","category":"colors","name":"Oq","values":{"Mix":9,"Oq":0,"Qora":0}},
                     {"usage":"astatka","category":"colors","name":"Oq","values":{"Mix":0.75,"Oq":0.25}},
                     {"usage":"astatka","category":"solvents","name":"Spirtlar","values":{"Etil":0.25}}
                 ],

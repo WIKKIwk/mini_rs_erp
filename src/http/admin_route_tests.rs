@@ -465,13 +465,13 @@ fn with_test_returned_paint(body: &str) -> String {
             "usage": "rasxot",
             "category": "colors",
             "name": "Oq",
-            "values": {"Mix": 3, "Oq": 1}
+            "values": {"Mix": 3, "Oq": 1, "Qora": 0}
         },
         {
             "usage": "astatka",
             "category": "colors",
             "name": "Oq",
-            "values": {"Mix": 1}
+            "values": {"Mix": 1, "Oq": 0, "Qora": 0}
         }
     ]);
     payload.to_string()

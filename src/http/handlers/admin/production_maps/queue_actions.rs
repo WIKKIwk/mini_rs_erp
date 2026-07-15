@@ -1,8 +1,9 @@
 use super::*;
 use crate::core::production_map::pechat;
 use crate::core::returned_paint::{
-    returned_paint_astatka_total, returned_paint_value_count, ReturnedPaintItem,
-    ReturnedPaintRequestCreate, ReturnedPaintStatus,
+    returned_paint_astatka_total, returned_paint_report_can_close,
+    returned_paint_value_count, ReturnedPaintItem, ReturnedPaintRequestCreate,
+    ReturnedPaintStatus,
 };
 
 #[derive(serde::Deserialize)]
@@ -119,8 +120,10 @@ pub async fn production_map_queue_action(
         queue_state::ApparatusQueueAction::Complete
     ) && pechat::pechat_color_count(&input.apparatus).is_some();
     if is_bosma_complete
-        && !(returned_paint_field_count >= 3
-            || (returned_paint_field_count == 0 && has_returned_paint_image))
+        && !returned_paint_report_can_close(
+            &input.returned_paint_items,
+            has_returned_paint_image,
+        )
     {
         return Err(bad_request("returned_paint_minimum_three_fields_or_image_only"));
     }
