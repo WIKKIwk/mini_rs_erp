@@ -242,6 +242,7 @@ async fn require_capability(
 fn returned_paint_error(
     error: ReturnedPaintError,
 ) -> (StatusCode, Json<ErrorResponse>) {
+    let message = returned_paint_error_message(&error);
     match error {
         ReturnedPaintError::RequestNotFound | ReturnedPaintError::ImageNotFound => (
             StatusCode::NOT_FOUND,
@@ -261,9 +262,29 @@ fn returned_paint_error(
         | ReturnedPaintError::MissingValues
         | ReturnedPaintError::InvalidValue
         | ReturnedPaintError::NegativeFinalValue => {
-            bad_request("returned paint request is invalid")
+            bad_request(message)
         }
         ReturnedPaintError::StoreFailed => server_error(),
+    }
+}
+
+fn returned_paint_error_message(error: &ReturnedPaintError) -> &'static str {
+    match error {
+        ReturnedPaintError::MissingOrderId => "order id is required",
+        ReturnedPaintError::MissingApparatus => "apparatus is required",
+        ReturnedPaintError::MissingItems => "at least one returned paint value is required",
+        ReturnedPaintError::InsufficientValues => {
+            "at least three returned paint fields are required in both tabs"
+        }
+        ReturnedPaintError::ImageMismatch => "returned paint image does not belong to this order",
+        ReturnedPaintError::ImageDeleteNotAllowed => "returned paint image cannot be removed",
+        ReturnedPaintError::InvalidUsage => "returned paint usage is invalid",
+        ReturnedPaintError::InvalidCategory => "returned paint category is invalid",
+        ReturnedPaintError::MissingItemName => "returned paint item name is required",
+        ReturnedPaintError::MissingValues => "returned paint item values are required",
+        ReturnedPaintError::InvalidValue => "returned paint value is invalid",
+        ReturnedPaintError::NegativeFinalValue => "astatka cannot exceed rasxot",
+        _ => "returned paint request is invalid",
     }
 }
 
