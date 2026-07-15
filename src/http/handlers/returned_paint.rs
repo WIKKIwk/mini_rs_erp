@@ -244,10 +244,16 @@ fn returned_paint_error(
 ) -> (StatusCode, Json<ErrorResponse>) {
     let message = returned_paint_error_message(&error);
     match error {
-        ReturnedPaintError::RequestNotFound | ReturnedPaintError::ImageNotFound => (
+        ReturnedPaintError::RequestNotFound => (
             StatusCode::NOT_FOUND,
             Json(ErrorResponse {
-                error: "returned paint data was not found",
+                error: "Qaytarilgan bo‘yoq hisoboti topilmadi",
+            }),
+        ),
+        ReturnedPaintError::ImageNotFound => (
+            StatusCode::NOT_FOUND,
+            Json(ErrorResponse {
+                error: "Qaytarilgan bo‘yoq rasmi topilmadi",
             }),
         ),
         ReturnedPaintError::MissingOrderId
@@ -264,27 +270,32 @@ fn returned_paint_error(
         | ReturnedPaintError::NegativeFinalValue => {
             bad_request(message)
         }
-        ReturnedPaintError::StoreFailed => server_error(),
+        ReturnedPaintError::StoreFailed => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ErrorResponse {
+                error: "Qaytarilgan bo‘yoq hisoboti saqlanmadi",
+            }),
+        ),
     }
 }
 
 fn returned_paint_error_message(error: &ReturnedPaintError) -> &'static str {
     match error {
-        ReturnedPaintError::MissingOrderId => "order id is required",
-        ReturnedPaintError::MissingApparatus => "apparatus is required",
-        ReturnedPaintError::MissingItems => "at least one returned paint value is required",
+        ReturnedPaintError::MissingOrderId => "Buyurtma IDsi kiritilmagan",
+        ReturnedPaintError::MissingApparatus => "Apparat kiritilmagan",
+        ReturnedPaintError::MissingItems => "Kamida bitta qaytarilgan bo‘yoq qiymati kerak",
         ReturnedPaintError::InsufficientValues => {
-            "at least three returned paint fields are required in both tabs"
+            "Rasxot va Astatka tablarining har birida kamida 3 ta field kerak"
         }
-        ReturnedPaintError::ImageMismatch => "returned paint image does not belong to this order",
-        ReturnedPaintError::ImageDeleteNotAllowed => "returned paint image cannot be removed",
-        ReturnedPaintError::InvalidUsage => "returned paint usage is invalid",
-        ReturnedPaintError::InvalidCategory => "returned paint category is invalid",
-        ReturnedPaintError::MissingItemName => "returned paint item name is required",
-        ReturnedPaintError::MissingValues => "returned paint item values are required",
-        ReturnedPaintError::InvalidValue => "returned paint value is invalid",
-        ReturnedPaintError::NegativeFinalValue => "astatka cannot exceed rasxot",
-        _ => "returned paint request is invalid",
+        ReturnedPaintError::ImageMismatch => "Qaytarilgan bo‘yoq rasmi bu buyurtmaga tegishli emas",
+        ReturnedPaintError::ImageDeleteNotAllowed => "Qaytarilgan bo‘yoq rasmini olib tashlab bo‘lmaydi",
+        ReturnedPaintError::InvalidUsage => "Qaytarilgan bo‘yoq ishlatilish turi noto‘g‘ri",
+        ReturnedPaintError::InvalidCategory => "Qaytarilgan bo‘yoq kategoriyasi noto‘g‘ri",
+        ReturnedPaintError::MissingItemName => "Qaytarilgan bo‘yoq maydoni nomi kiritilmagan",
+        ReturnedPaintError::MissingValues => "Qaytarilgan bo‘yoq maydoni qiymatlari kiritilmagan",
+        ReturnedPaintError::InvalidValue => "Qaytarilgan bo‘yoq qiymati noto‘g‘ri",
+        ReturnedPaintError::NegativeFinalValue => "Astatka Rasxotdan katta bo‘lishi mumkin emas",
+        _ => "Qaytarilgan bo‘yoq hisoboti noto‘g‘ri",
     }
 }
 
