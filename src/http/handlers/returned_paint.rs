@@ -1,14 +1,15 @@
 use axum::Json;
-use axum::body::Bytes;
+use axum::body::{Body, Bytes};
 use axum::extract::{Query, State};
-use axum::http::{HeaderMap, Method, StatusCode};
+use axum::http::{HeaderMap, Method, Response, StatusCode, header};
 use serde::{Deserialize, Serialize};
 
 use crate::app::AppState;
 use crate::core::auth::models::Principal;
 use crate::core::authz::Capability;
 use crate::core::returned_paint::{
-    ReturnedPaintError, ReturnedPaintRequest, ReturnedPaintRequestCreate,
+    ReturnedPaintError, ReturnedPaintRequest, ReturnedPaintRequestComplete,
+    ReturnedPaintRequestCreate,
 };
 use crate::http::handlers::auth::{ErrorResponse, bearer_token};
 
@@ -22,6 +23,16 @@ pub struct ReturnedPaintListQuery {
 pub struct ReturnedPaintListResponse {
     items: Vec<ReturnedPaintRequest>,
     has_more: bool,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct ReturnedPaintImageQuery {
+    #[serde(default)]
+    id: String,
+    #[serde(default)]
+    order_id: String,
+    #[serde(default)]
+    apparatus: String,
 }
 
 pub async fn requests(
@@ -76,6 +87,131 @@ pub async fn requests(
     }
 }
 
+pub async fn complete_request(
+    State(state): State<AppState>,
+    method: Method,
+    headers: HeaderMap,
+    body: Bytes,
+) -> Result<Json<serde_json::Value>, (StatusCode, Json<ErrorResponse>)> {
+    if method != Method::POST {
+        return Err(method_not_allowed());
+    }
+    let principal = authorize(&state, &headers).await?;
+    require_capability(
+        &state,
+        &principal,
+        Capability::ReturnedPaintRequestRead,
+    )
+    .await?;
+    let input = serde_json::from_slice::<ReturnedPaintRequestComplete>(&body)
+        .map_err(|_| bad_request("invalid json"))?;
+    let request = state
+        .returned_paint
+        .complete(input)
+        .await
+        .map_err(returned_paint_error)?;
+    Ok(Json(
+        serde_json::to_value(request).map_err(|_| server_error())?,
+    ))
+}
+
+pub async fn images(
+    State(state): State<AppState>,
+    method: Method,
+    headers: HeaderMap,
+    Query(query): Query<ReturnedPaintImageQuery>,
+    body: Bytes,
+) -> Result<Json<serde_json::Value>, (StatusCode, Json<ErrorResponse>)> {
+    let principal = authorize(&state, &headers).await?;
+    require_capability(
+        &state,
+        &principal,
+        Capability::ReturnedPaintRequestCreate,
+    )
+    .await?;
+    match method {
+        Method::POST => {
+            if body.is_empty() {
+                return Err(bad_request("returned paint image is required"));
+            }
+            const MAX_IMAGE_BYTES: usize = 6 * 1024 * 1024;
+            if body.len() > MAX_IMAGE_BYTES {
+                return Err(bad_request("returned paint image is too large"));
+            }
+            let mime = headers
+                .get(header::CONTENT_TYPE)
+                .and_then(|value| value.to_str().ok())
+                .unwrap_or("image/jpeg")
+                .split(';')
+                .next()
+                .unwrap_or("image/jpeg")
+                .trim()
+                .to_ascii_lowercase();
+            let extension = image_extension(&mime)
+                .ok_or_else(|| bad_request("returned paint image format is invalid"))?;
+            let image_name = headers
+                .get("x-file-name")
+                .and_then(|value| value.to_str().ok())
+                .map(clean_file_name)
+                .filter(|value| !value.is_empty())
+                .unwrap_or_else(|| format!("qaytarilgan-boyoq.{extension}"));
+            let image = state
+                .returned_paint
+                .save_image(
+                    query.order_id,
+                    query.apparatus,
+                    image_name,
+                    mime,
+                    body.to_vec(),
+                    &principal,
+                )
+                .await
+                .map_err(returned_paint_error)?;
+            Ok(Json(serde_json::json!({"ok": true, "image": image})))
+        }
+        Method::DELETE => {
+            state
+                .returned_paint
+                .delete_image(&query.id, &principal)
+                .await
+                .map_err(returned_paint_error)?;
+            Ok(Json(serde_json::json!({"ok": true})))
+        }
+        _ => Err(method_not_allowed()),
+    }
+}
+
+pub async fn image_view(
+    State(state): State<AppState>,
+    method: Method,
+    headers: HeaderMap,
+    Query(query): Query<ReturnedPaintImageQuery>,
+) -> Result<Response<Body>, (StatusCode, Json<ErrorResponse>)> {
+    if method != Method::GET {
+        return Err(method_not_allowed());
+    }
+    let principal = authorize(&state, &headers).await?;
+    let image = state
+        .returned_paint
+        .image(&query.id)
+        .await
+        .map_err(returned_paint_error)?;
+    let can_read = state
+        .admin
+        .principal_has_capability(&principal, Capability::ReturnedPaintRequestRead)
+        .await;
+    if image.owner_ref.trim() != principal.ref_.trim() && !can_read {
+        return Err(forbidden());
+    }
+    Response::builder()
+        .status(StatusCode::OK)
+        .header(header::CONTENT_TYPE, image.image.image_mime)
+        .header(header::CACHE_CONTROL, "private, max-age=86400")
+        .header("x-content-type-options", "nosniff")
+        .body(Body::from(image.body))
+        .map_err(|_| server_error())
+}
+
 async fn authorize(
     state: &AppState,
     headers: &HeaderMap,
@@ -107,9 +243,18 @@ fn returned_paint_error(
     error: ReturnedPaintError,
 ) -> (StatusCode, Json<ErrorResponse>) {
     match error {
+        ReturnedPaintError::RequestNotFound | ReturnedPaintError::ImageNotFound => (
+            StatusCode::NOT_FOUND,
+            Json(ErrorResponse {
+                error: "returned paint data was not found",
+            }),
+        ),
         ReturnedPaintError::MissingOrderId
         | ReturnedPaintError::MissingApparatus
         | ReturnedPaintError::MissingItems
+        | ReturnedPaintError::InsufficientValues
+        | ReturnedPaintError::ImageMismatch
+        | ReturnedPaintError::ImageDeleteNotAllowed
         | ReturnedPaintError::InvalidUsage
         | ReturnedPaintError::InvalidCategory
         | ReturnedPaintError::MissingItemName
@@ -122,12 +267,43 @@ fn returned_paint_error(
     }
 }
 
+fn image_extension(mime: &str) -> Option<&'static str> {
+    match mime {
+        "image/jpeg" => Some("jpg"),
+        "image/png" => Some("png"),
+        "image/webp" => Some("webp"),
+        "image/heic" => Some("heic"),
+        "image/heif" => Some("heif"),
+        _ => None,
+    }
+}
+
+fn clean_file_name(value: &str) -> String {
+    value
+        .chars()
+        .filter(|character| {
+            character.is_ascii_alphanumeric()
+                || matches!(character, '.' | '-' | '_' | ' ')
+        })
+        .take(120)
+        .collect::<String>()
+        .trim()
+        .to_string()
+}
+
 fn unauthorized() -> (StatusCode, Json<ErrorResponse>) {
     (
         StatusCode::UNAUTHORIZED,
         Json(ErrorResponse {
             error: "unauthorized",
         }),
+    )
+}
+
+fn forbidden() -> (StatusCode, Json<ErrorResponse>) {
+    (
+        StatusCode::FORBIDDEN,
+        Json(ErrorResponse { error: "forbidden" }),
     )
 }
 

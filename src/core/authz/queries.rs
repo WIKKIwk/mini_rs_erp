@@ -58,6 +58,9 @@ pub fn system_role_definitions() -> Vec<RoleDefinition> {
             capability_code(Capability::ApparatusQueueManage)
                 .unwrap_or("apparatus.queue.manage")
                 .to_string(),
+            capability_code(Capability::ReturnedPaintRequestCreate)
+                .unwrap_or("returned_paint.request.create")
+                .to_string(),
         ],
         base_role: None,
         system: true,

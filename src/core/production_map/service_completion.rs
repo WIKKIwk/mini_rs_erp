@@ -17,6 +17,7 @@ impl ProductionMapService {
         actor: QueueActionActor,
         description: &str,
         zero_metric_codes: Vec<String>,
+        returned_paint_report: Option<crate::core::returned_paint::ReturnedPaintRequest>,
     ) -> Result<CompletionRequestResult, ProductionMapError> {
         let apparatus = apparatus.trim();
         let order_id = order_id.trim();
@@ -106,6 +107,7 @@ impl ProductionMapService {
             notice_kind: notice_kind.to_string(),
             decision_required: true,
             created_at_unix: now,
+            returned_paint_report,
         };
         let event = ApparatusQueueActionEvent {
             event_id,
@@ -135,6 +137,7 @@ impl ProductionMapService {
                 "worker_ref": request.worker_ref.clone(),
                 "worker_display_name": request.worker_display_name.clone(),
                 "created_at_unix": now,
+                "returned_paint_report": request.returned_paint_report.clone(),
             }),
         };
         self.store
@@ -271,6 +274,7 @@ impl ProductionMapService {
                 },
                 session,
                 raw_material_stock_transitions,
+                returned_paint_report: request.returned_paint_report.clone(),
             })
         } else {
             None

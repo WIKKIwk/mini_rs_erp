@@ -41,6 +41,11 @@ pub(in crate::core::production_map) fn completion_request_notification_from_even
         },
         decision_required: true,
         created_at_unix,
+        returned_paint_report: event
+            .payload_json
+            .get("returned_paint_report")
+            .filter(|value| !value.is_null())
+            .and_then(|value| serde_json::from_value(value.clone()).ok()),
     })
 }
 
@@ -72,6 +77,7 @@ pub(in crate::core::production_map) fn laminatsiya_metric_notice_from_event(
         notice_kind: "laminatsiya_double_leftover".to_string(),
         decision_required: false,
         created_at_unix,
+        returned_paint_report: None,
     })
 }
 

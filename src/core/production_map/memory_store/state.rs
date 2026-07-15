@@ -48,6 +48,17 @@ impl MemoryProductionMapStore {
         self.fail_next_queue_progress_commit
             .store(true, std::sync::atomic::Ordering::SeqCst);
     }
+
+    pub async fn returned_paint_request(
+        &self,
+        request_id: &str,
+    ) -> Option<crate::core::returned_paint::ReturnedPaintRequest> {
+        self.returned_paint_requests
+            .read()
+            .await
+            .get(request_id.trim())
+            .cloned()
+    }
 }
 
 #[cfg(test)]

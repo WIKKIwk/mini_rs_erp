@@ -41,7 +41,12 @@ pub(super) fn validated_progress_metrics(
         finished_goods_kg: valid_optional_progress_qty(progress.finished_goods_kg)?,
         finished_goods_meter: valid_optional_progress_qty(progress.finished_goods_meter)?,
     };
-    validate_progress_metrics(apparatus, action, metrics)?;
+    validate_progress_metrics(
+        apparatus,
+        action,
+        metrics,
+        progress.returned_paint_report_attached,
+    )?;
     Ok(metrics)
 }
 
@@ -49,16 +54,21 @@ fn validate_progress_metrics(
     apparatus: &str,
     action: queue_state::ApparatusQueueAction,
     metrics: ProgressMetrics,
+    returned_paint_report_attached: bool,
 ) -> Result<(), ProductionMapError> {
     let is_complete = action == queue_state::ApparatusQueueAction::Complete;
     if is_complete
         && pechat::pechat_color_count(apparatus).is_some()
+        && !(returned_paint_report_attached
+            && metrics.total_waste.is_some()
+            && metrics.finished_goods_kg.is_some()
+            && metrics.finished_goods_meter.is_some())
         && !bosma_completion_metrics_are_complete(
-            metrics.return_ink_kg,
-            metrics.total_waste,
-            metrics.finished_goods_kg,
-            metrics.finished_goods_meter,
-        )
+                metrics.return_ink_kg,
+                metrics.total_waste,
+                metrics.finished_goods_kg,
+                metrics.finished_goods_meter,
+            )
     {
         return Err(ProductionMapError::BosmaCompletionMetricsRequired);
     }

@@ -1,4 +1,5 @@
 use axum::Router;
+use axum::extract::DefaultBodyLimit;
 use axum::routing::any;
 
 use crate::app::AppState;
@@ -15,6 +16,18 @@ pub(super) fn routes() -> Router<AppState> {
         .route(
             "/v1/mobile/returned-paint/requests",
             any(returned_paint::requests),
+        )
+        .route(
+            "/v1/mobile/returned-paint/requests/complete",
+            any(returned_paint::complete_request),
+        )
+        .route(
+            "/v1/mobile/returned-paint/images",
+            any(returned_paint::images).layer(DefaultBodyLimit::max(6 * 1024 * 1024)),
+        )
+        .route(
+            "/v1/mobile/returned-paint/images/view",
+            any(returned_paint::image_view),
         )
         .route("/v1/mobile/iroh-ticket", any(iroh_discovery::ticket))
         .route("/v1/mobile/calculate", any(calculate::calculate_route))

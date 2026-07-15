@@ -9,7 +9,7 @@ use tokio::sync::RwLock;
 
 use crate::core::auth::models::{Principal, PrincipalRole};
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ReturnedPaintItem {
     pub usage: String,
     pub category: String,
@@ -28,6 +28,31 @@ pub struct ReturnedPaintCalculation {
     pub rasxot_pure_paint: String,
     pub astatka_pure_paint: String,
     pub final_used_paint: String,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ReturnedPaintStatus {
+    WaitingForBoyoqchiInput,
+    Completed,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ReturnedPaintImage {
+    pub image_id: String,
+    pub image_name: String,
+    pub image_mime: String,
+    pub image_size_bytes: u64,
+    pub image_url: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ReturnedPaintStoredImage {
+    pub image: ReturnedPaintImage,
+    pub order_id: String,
+    pub apparatus: String,
+    pub owner_ref: String,
+    pub body: Vec<u8>,
 }
 
 fn deserialize_decimal_values<'de, D>(
@@ -50,7 +75,7 @@ where
         .collect()
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ReturnedPaintRequestCreate {
     pub order_id: String,
     #[serde(default)]
@@ -58,10 +83,19 @@ pub struct ReturnedPaintRequestCreate {
     #[serde(default)]
     pub order_name: String,
     pub apparatus: String,
+    #[serde(default)]
+    pub image_id: String,
+    #[serde(default)]
     pub items: Vec<ReturnedPaintItem>,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ReturnedPaintRequestComplete {
+    pub request_id: String,
+    pub items: Vec<ReturnedPaintItem>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ReturnedPaintRequest {
     pub id: String,
     pub order_id: String,
@@ -72,6 +106,9 @@ pub struct ReturnedPaintRequest {
     pub sender_ref: String,
     pub sender_display_name: String,
     pub items: Vec<ReturnedPaintItem>,
+    pub status: ReturnedPaintStatus,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub image: Option<ReturnedPaintImage>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub calculation: Option<ReturnedPaintCalculation>,
     #[serde(default)]
@@ -87,6 +124,16 @@ pub enum ReturnedPaintError {
     MissingApparatus,
     #[error("at least one returned paint value is required")]
     MissingItems,
+    #[error("at least three returned paint fields are required")]
+    InsufficientValues,
+    #[error("returned paint request was not found")]
+    RequestNotFound,
+    #[error("returned paint image was not found")]
+    ImageNotFound,
+    #[error("returned paint image does not belong to this order")]
+    ImageMismatch,
+    #[error("returned paint image cannot be removed")]
+    ImageDeleteNotAllowed,
     #[error("returned paint usage is invalid")]
     InvalidUsage,
     #[error("returned paint category is invalid")]
@@ -115,6 +162,29 @@ pub trait ReturnedPaintStorePort: Send + Sync {
         limit: usize,
         offset: usize,
     ) -> Result<Vec<ReturnedPaintRequest>, ReturnedPaintError>;
+
+    async fn complete(
+        &self,
+        request_id: &str,
+        items: Vec<ReturnedPaintItem>,
+        calculation: ReturnedPaintCalculation,
+    ) -> Result<ReturnedPaintRequest, ReturnedPaintError>;
+
+    async fn save_image(
+        &self,
+        image: ReturnedPaintStoredImage,
+    ) -> Result<ReturnedPaintStoredImage, ReturnedPaintError>;
+
+    async fn image(
+        &self,
+        image_id: &str,
+    ) -> Result<Option<ReturnedPaintStoredImage>, ReturnedPaintError>;
+
+    async fn delete_image(
+        &self,
+        image_id: &str,
+        owner_ref: &str,
+    ) -> Result<bool, ReturnedPaintError>;
 }
 
 #[derive(Clone)]
@@ -144,13 +214,14 @@ impl ReturnedPaintService {
                 "returned_paint_{}",
                 data_encoding::HEXLOWER.encode(&bytes)
             ),
-        )?;
+        )
+        .await?;
         self.store
             .create(request)
             .await
     }
 
-    pub fn prepare_request(
+    pub async fn prepare_request(
         &self,
         input: ReturnedPaintRequestCreate,
         sender: &Principal,
@@ -158,13 +229,48 @@ impl ReturnedPaintService {
     ) -> Result<ReturnedPaintRequest, ReturnedPaintError> {
         let order_id = required_text(input.order_id, ReturnedPaintError::MissingOrderId)?;
         let apparatus = required_text(input.apparatus, ReturnedPaintError::MissingApparatus)?;
-        let items = normalize_items(input.items)?;
-        let calculation = calculate_returned_paint(&items)?;
         let sender_ref = sender.ref_.trim();
         let sender_display_name = sender.display_name.trim();
         if sender_ref.is_empty() || sender_display_name.is_empty() || id.trim().is_empty() {
             return Err(ReturnedPaintError::StoreFailed);
         }
+        let image = if input.image_id.trim().is_empty() {
+            None
+        } else {
+            let stored = self
+                .store
+                .image(input.image_id.trim())
+                .await?
+                .ok_or(ReturnedPaintError::ImageNotFound)?;
+            if stored.owner_ref.trim() != sender_ref
+                || stored.order_id.trim() != order_id
+                || !stored.apparatus.trim().eq_ignore_ascii_case(&apparatus)
+            {
+                return Err(ReturnedPaintError::ImageMismatch);
+            }
+            Some(stored.image)
+        };
+        let (items, status, calculation) = if input.items.is_empty() {
+            if image.is_none() {
+                return Err(ReturnedPaintError::MissingItems);
+            }
+            (
+                Vec::new(),
+                ReturnedPaintStatus::WaitingForBoyoqchiInput,
+                None,
+            )
+        } else {
+            let items = normalize_items(input.items)?;
+            if returned_paint_value_count(&items) < 3 {
+                return Err(ReturnedPaintError::InsufficientValues);
+            }
+            let calculation = calculate_returned_paint(&items)?;
+            (
+                items,
+                ReturnedPaintStatus::Completed,
+                Some(calculation),
+            )
+        };
         let mut request = ReturnedPaintRequest {
             id,
             order_id,
@@ -175,7 +281,9 @@ impl ReturnedPaintService {
             sender_ref: sender_ref.to_string(),
             sender_display_name: sender_display_name.to_string(),
             items,
-            calculation: Some(calculation),
+            status,
+            image,
+            calculation,
             message: String::new(),
             created_at_unix: time::OffsetDateTime::now_utc().unix_timestamp(),
         };
@@ -190,6 +298,105 @@ impl ReturnedPaintService {
     ) -> Result<Vec<ReturnedPaintRequest>, ReturnedPaintError> {
         self.store.list(limit.clamp(1, 101), offset).await
     }
+
+    pub async fn complete(
+        &self,
+        input: ReturnedPaintRequestComplete,
+    ) -> Result<ReturnedPaintRequest, ReturnedPaintError> {
+        let request_id = input.request_id.trim();
+        if request_id.is_empty() {
+            return Err(ReturnedPaintError::RequestNotFound);
+        }
+        let items = normalize_items(input.items)?;
+        if returned_paint_value_count(&items) < 3 {
+            return Err(ReturnedPaintError::InsufficientValues);
+        }
+        let calculation = calculate_returned_paint(&items)?;
+        self.store.complete(request_id, items, calculation).await
+    }
+
+    pub async fn save_image(
+        &self,
+        order_id: String,
+        apparatus: String,
+        image_name: String,
+        image_mime: String,
+        body: Vec<u8>,
+        owner: &Principal,
+    ) -> Result<ReturnedPaintImage, ReturnedPaintError> {
+        let order_id = required_text(order_id, ReturnedPaintError::MissingOrderId)?;
+        let apparatus = required_text(apparatus, ReturnedPaintError::MissingApparatus)?;
+        let owner_ref = owner.ref_.trim();
+        let image_name = image_name.trim();
+        let image_mime = image_mime.trim().to_ascii_lowercase();
+        if owner_ref.is_empty()
+            || image_name.is_empty()
+            || body.is_empty()
+            || body.len() > 6 * 1024 * 1024
+            || !matches!(
+                image_mime.as_str(),
+                "image/jpeg" | "image/png" | "image/webp" | "image/heic" | "image/heif"
+            )
+        {
+            return Err(ReturnedPaintError::InvalidValue);
+        }
+        let bytes: [u8; 12] = rand::random();
+        let image_id = format!(
+            "returned_paint_image_{}",
+            data_encoding::HEXLOWER.encode(&bytes)
+        );
+        let image = ReturnedPaintStoredImage {
+            image: ReturnedPaintImage {
+                image_url: returned_paint_image_url(&image_id),
+                image_id,
+                image_name: image_name.to_string(),
+                image_mime,
+                image_size_bytes: body.len() as u64,
+            },
+            order_id,
+            apparatus,
+            owner_ref: owner_ref.to_string(),
+            body,
+        };
+        Ok(self.store.save_image(image).await?.image)
+    }
+
+    pub async fn image(
+        &self,
+        image_id: &str,
+    ) -> Result<ReturnedPaintStoredImage, ReturnedPaintError> {
+        self.store
+            .image(image_id.trim())
+            .await?
+            .ok_or(ReturnedPaintError::ImageNotFound)
+    }
+
+    pub async fn delete_image(
+        &self,
+        image_id: &str,
+        owner: &Principal,
+    ) -> Result<(), ReturnedPaintError> {
+        let image_id = image_id.trim();
+        if image_id.is_empty() {
+            return Err(ReturnedPaintError::ImageNotFound);
+        }
+        if self.store.delete_image(image_id, owner.ref_.trim()).await? {
+            Ok(())
+        } else {
+            Err(ReturnedPaintError::ImageDeleteNotAllowed)
+        }
+    }
+}
+
+pub fn returned_paint_image_url(image_id: &str) -> String {
+    format!(
+        "/v1/mobile/returned-paint/images/view?id={}",
+        image_id.trim()
+    )
+}
+
+pub fn returned_paint_value_count(items: &[ReturnedPaintItem]) -> usize {
+    items.iter().map(|item| item.values.len()).sum()
 }
 
 pub fn completion_report_message(request: &ReturnedPaintRequest) -> String {
@@ -203,12 +410,20 @@ pub fn completion_report_message(request: &ReturnedPaintRequest) -> String {
     } else {
         format!("{} ({})", order_label, request.order_id.trim())
     };
-    format!(
-        "Operator {} {} orderini {} apparatida muvaffaqiyatli yopdi. Rasxot bo‘yoq sarfi va Astatka qolgan bo‘yoq miqdorlari, berilgan lak va erituvchi qiymatlari qayd etildi.",
-        request.sender_display_name.trim(),
-        order_label,
-        request.apparatus.trim(),
-    )
+    match request.status {
+        ReturnedPaintStatus::WaitingForBoyoqchiInput => format!(
+            "Operator {} {} orderini {} apparatida rasm bilan yopdi. Qaytarilgan bo‘yoq qiymatlari Bo‘yoqchi tomonidan kiritilishi kutilmoqda.",
+            request.sender_display_name.trim(),
+            order_label,
+            request.apparatus.trim(),
+        ),
+        ReturnedPaintStatus::Completed => format!(
+            "Operator {} {} orderini {} apparatida muvaffaqiyatli yopdi. Rasxot bo‘yoq sarfi va Astatka qolgan bo‘yoq miqdorlari, berilgan lak va erituvchi qiymatlari qayd etildi.",
+            request.sender_display_name.trim(),
+            order_label,
+            request.apparatus.trim(),
+        ),
+    }
 }
 
 pub fn returned_paint_astatka_total(
@@ -230,10 +445,10 @@ pub fn calculate_returned_paint(
     let mut rasxot = PaintUsageTotals::default();
     let mut astatka = PaintUsageTotals::default();
 
-    for item in items
-        .iter()
-        .filter(|item| item.category.trim().eq_ignore_ascii_case("colors"))
-    {
+    for item in items.iter().filter(|item| {
+        item.category.trim().eq_ignore_ascii_case("colors")
+            || item.category.trim().eq_ignore_ascii_case("solvents")
+    }) {
         let totals = if item.usage.trim().eq_ignore_ascii_case("rasxot") {
             &mut rasxot
         } else if item.usage.trim().eq_ignore_ascii_case("astatka") {
@@ -243,7 +458,9 @@ pub fn calculate_returned_paint(
         };
         for (label, value) in &item.values {
             let value = DecimalAmount::parse_input(value)?;
-            if label.trim().eq_ignore_ascii_case("mix") {
+            if item.category.trim().eq_ignore_ascii_case("solvents") {
+                totals.direct_alcohol = checked_add(totals.direct_alcohol, value)?;
+            } else if label.trim().eq_ignore_ascii_case("mix") {
                 totals.mix = checked_add(totals.mix, value)?;
             } else {
                 totals.direct_paint = checked_add(totals.direct_paint, value)?;
@@ -253,8 +470,14 @@ pub fn calculate_returned_paint(
 
     let rasxot_mix_paint = rasxot.mix.checked_percent(70)?;
     let astatka_mix_paint = astatka.mix.checked_percent(70)?;
-    let rasxot_alcohol = rasxot.mix.checked_percent(30)?;
-    let astatka_alcohol = astatka.mix.checked_percent(30)?;
+    let rasxot_alcohol = checked_add(
+        rasxot.direct_alcohol,
+        rasxot.mix.checked_percent(30)?,
+    )?;
+    let astatka_alcohol = checked_add(
+        astatka.direct_alcohol,
+        astatka.mix.checked_percent(30)?,
+    )?;
     let rasxot_pure_paint = checked_add(rasxot.direct_paint, rasxot_mix_paint)?;
     let astatka_pure_paint = checked_add(astatka.direct_paint, astatka_mix_paint)?;
     let final_used_alcohol =
@@ -289,6 +512,7 @@ pub fn calculate_returned_paint(
 struct PaintUsageTotals {
     mix: DecimalAmount,
     direct_paint: DecimalAmount,
+    direct_alcohol: DecimalAmount,
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, PartialOrd, Ord)]
@@ -549,11 +773,43 @@ impl ReturnedPaintStorePort for UnavailableReturnedPaintStore {
     ) -> Result<Vec<ReturnedPaintRequest>, ReturnedPaintError> {
         Err(ReturnedPaintError::StoreFailed)
     }
+
+    async fn complete(
+        &self,
+        _request_id: &str,
+        _items: Vec<ReturnedPaintItem>,
+        _calculation: ReturnedPaintCalculation,
+    ) -> Result<ReturnedPaintRequest, ReturnedPaintError> {
+        Err(ReturnedPaintError::StoreFailed)
+    }
+
+    async fn save_image(
+        &self,
+        _image: ReturnedPaintStoredImage,
+    ) -> Result<ReturnedPaintStoredImage, ReturnedPaintError> {
+        Err(ReturnedPaintError::StoreFailed)
+    }
+
+    async fn image(
+        &self,
+        _image_id: &str,
+    ) -> Result<Option<ReturnedPaintStoredImage>, ReturnedPaintError> {
+        Err(ReturnedPaintError::StoreFailed)
+    }
+
+    async fn delete_image(
+        &self,
+        _image_id: &str,
+        _owner_ref: &str,
+    ) -> Result<bool, ReturnedPaintError> {
+        Err(ReturnedPaintError::StoreFailed)
+    }
 }
 
 #[derive(Default)]
 pub struct MemoryReturnedPaintStore {
     requests: RwLock<Vec<ReturnedPaintRequest>>,
+    images: RwLock<BTreeMap<String, ReturnedPaintStoredImage>>,
 }
 
 impl MemoryReturnedPaintStore {
@@ -568,7 +824,11 @@ impl ReturnedPaintStorePort for MemoryReturnedPaintStore {
         &self,
         request: ReturnedPaintRequest,
     ) -> Result<ReturnedPaintRequest, ReturnedPaintError> {
-        self.requests.write().await.push(request.clone());
+        let mut requests = self.requests.write().await;
+        if let Some(existing) = requests.iter().find(|existing| existing.id == request.id) {
+            return Ok(existing.clone());
+        }
+        requests.push(request.clone());
         Ok(request)
     }
 
@@ -585,6 +845,69 @@ impl ReturnedPaintStorePort for MemoryReturnedPaintStore {
                 .then_with(|| right.id.cmp(&left.id))
         });
         Ok(requests.into_iter().skip(offset).take(limit).collect())
+    }
+
+    async fn complete(
+        &self,
+        request_id: &str,
+        items: Vec<ReturnedPaintItem>,
+        calculation: ReturnedPaintCalculation,
+    ) -> Result<ReturnedPaintRequest, ReturnedPaintError> {
+        let mut requests = self.requests.write().await;
+        let request = requests
+            .iter_mut()
+            .find(|request| request.id == request_id)
+            .ok_or(ReturnedPaintError::RequestNotFound)?;
+        if request.status == ReturnedPaintStatus::Completed {
+            return Ok(request.clone());
+        }
+        request.items = items;
+        request.calculation = Some(calculation);
+        request.status = ReturnedPaintStatus::Completed;
+        request.message = completion_report_message(request);
+        Ok(request.clone())
+    }
+
+    async fn save_image(
+        &self,
+        image: ReturnedPaintStoredImage,
+    ) -> Result<ReturnedPaintStoredImage, ReturnedPaintError> {
+        self.images
+            .write()
+            .await
+            .insert(image.image.image_id.clone(), image.clone());
+        Ok(image)
+    }
+
+    async fn image(
+        &self,
+        image_id: &str,
+    ) -> Result<Option<ReturnedPaintStoredImage>, ReturnedPaintError> {
+        Ok(self.images.read().await.get(image_id).cloned())
+    }
+
+    async fn delete_image(
+        &self,
+        image_id: &str,
+        owner_ref: &str,
+    ) -> Result<bool, ReturnedPaintError> {
+        if self
+            .requests
+            .read()
+            .await
+            .iter()
+            .any(|request| request.image.as_ref().is_some_and(|image| image.image_id == image_id))
+        {
+            return Ok(false);
+        }
+        let mut images = self.images.write().await;
+        if images
+            .get(image_id)
+            .map_or(true, |image| image.owner_ref != owner_ref)
+        {
+            return Ok(false);
+        }
+        Ok(images.remove(image_id).is_some())
     }
 }
 
@@ -610,15 +933,16 @@ mod tests {
                     order_code: "1212".to_string(),
                     order_name: "Mahsulot".to_string(),
                     apparatus: "7 ta rangli bosma".to_string(),
+                    image_id: String::new(),
                     items: vec![
                         ReturnedPaintItem {
                             usage: "rasxot".to_string(),
                             category: "colors".to_string(),
                             name: "Oq".to_string(),
-                            values: BTreeMap::from([(
-                                "Mix".to_string(),
-                                "3".to_string(),
-                            )]),
+                            values: BTreeMap::from([
+                                ("Mix".to_string(), "3".to_string()),
+                                ("Oq".to_string(), "1".to_string()),
+                            ]),
                         },
                         ReturnedPaintItem {
                             usage: "astatka".to_string(),
@@ -644,7 +968,7 @@ mod tests {
     }
 
     #[test]
-    fn calculates_only_color_values_with_exact_mix_ratios() {
+    fn calculates_color_mix_and_all_solvent_fields_as_pure_alcohol() {
         let items = vec![
             item(
                 "rasxot",
@@ -655,16 +979,25 @@ mod tests {
             item("astatka", "colors", [("Mix", "4"), ("Oq", "1")]),
             item("astatka", "colors", [("Mix", "1"), ("Qora", "0.25")]),
             item("rasxot", "lacquers", [("OPV lak", "100")]),
-            item("astatka", "solvents", [("Etil", "100")]),
+            item(
+                "rasxot",
+                "solvents",
+                [("Etil", "10"), ("Metoxil", "2"), ("Rasvavitel", "0.5")],
+            ),
+            item(
+                "astatka",
+                "solvents",
+                [("Etil", "1"), ("Aralashmalar", "0.25")],
+            ),
         ];
 
         let result = calculate_returned_paint(&items).expect("calculation");
 
         assert_eq!(result.rasxot_mix_total, "12.5");
         assert_eq!(result.astatka_mix_total, "5");
-        assert_eq!(result.rasxot_alcohol, "3.75");
-        assert_eq!(result.astatka_alcohol, "1.5");
-        assert_eq!(result.final_used_alcohol, "2.25");
+        assert_eq!(result.rasxot_alcohol, "16.25");
+        assert_eq!(result.astatka_alcohol, "2.75");
+        assert_eq!(result.final_used_alcohol, "13.5");
         assert_eq!(result.rasxot_pure_paint, "12.25");
         assert_eq!(result.astatka_pure_paint, "4.75");
         assert_eq!(result.final_used_paint, "7.5");
@@ -676,6 +1009,10 @@ mod tests {
             item("rasxot", "colors", [("Mix", "1")]),
             item("astatka", "colors", [("Mix", "2")]),
         ];
+        let solvent_negative = vec![
+            item("rasxot", "solvents", [("Etil", "1")]),
+            item("astatka", "solvents", [("Metoxil", "2")]),
+        ];
         let paint_negative = vec![
             item("rasxot", "colors", [("Mix", "1")]),
             item("astatka", "colors", [("Oq", "1")]),
@@ -683,6 +1020,10 @@ mod tests {
 
         assert_eq!(
             calculate_returned_paint(&alcohol_negative),
+            Err(ReturnedPaintError::NegativeFinalValue)
+        );
+        assert_eq!(
+            calculate_returned_paint(&solvent_negative),
             Err(ReturnedPaintError::NegativeFinalValue)
         );
         assert_eq!(

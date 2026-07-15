@@ -45,6 +45,10 @@ async fn go_mobile_route_inventory_is_registered() {
         "/v1/mobile/auth/login",
         "/v1/mobile/auth/logout",
         "/v1/mobile/me",
+        "/v1/mobile/returned-paint/requests",
+        "/v1/mobile/returned-paint/requests/complete",
+        "/v1/mobile/returned-paint/images",
+        "/v1/mobile/returned-paint/images/view",
         "/v1/mobile/iroh-ticket",
         "/v1/mobile/profile",
         "/v1/mobile/profile/avatar",
@@ -202,5 +206,12 @@ async fn browser_preview_cors_headers_are_registered() {
     assert_eq!(
         response.headers().get(header::ACCESS_CONTROL_ALLOW_ORIGIN),
         Some(&"*".parse().expect("header value"))
+    );
+    assert!(
+        response
+            .headers()
+            .get(header::ACCESS_CONTROL_ALLOW_HEADERS)
+            .and_then(|value| value.to_str().ok())
+            .is_some_and(|value| value.contains("x-file-name"))
     );
 }

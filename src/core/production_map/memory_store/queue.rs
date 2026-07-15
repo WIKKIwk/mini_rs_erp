@@ -183,6 +183,14 @@ pub(super) async fn resolve_completion_request_decision(
                 .await
                 .insert(session.session_id.clone(), session);
         }
+        if let Some(report) = resolution.returned_paint_report {
+            store
+                .returned_paint_requests
+                .write()
+                .await
+                .entry(report.id.clone())
+                .or_insert(report);
+        }
     }
     let mut events = store.queue_events.write().await;
     let Some(event) = events

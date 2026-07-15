@@ -9,7 +9,7 @@ const DEFAULT_MAX_CONNECTIONS: u32 = 16;
 const DEFAULT_ACQUIRE_TIMEOUT_MS: u64 = 500;
 const MIGRATION_LOCK_KEY: i64 = 6_514_811_918_052_026_001;
 
-const POSTGRES_MIGRATIONS: [(&str, &str); 8] = [
+const POSTGRES_MIGRATIONS: [(&str, &str); 10] = [
     (
         "0001_mini_erp_foundation",
         include_str!("../../migrations/postgres/0001_mini_erp_foundation.sql"),
@@ -41,6 +41,14 @@ const POSTGRES_MIGRATIONS: [(&str, &str); 8] = [
     (
         "0008_returned_paint_calculations",
         include_str!("../../migrations/postgres/0008_returned_paint_calculations.sql"),
+    ),
+    (
+        "0009_returned_paint_solvent_calculations",
+        include_str!("../../migrations/postgres/0009_returned_paint_solvent_calculations.sql"),
+    ),
+    (
+        "0010_returned_paint_image_workflow",
+        include_str!("../../migrations/postgres/0010_returned_paint_image_workflow.sql"),
     ),
 ];
 
@@ -500,6 +508,31 @@ mod tests {
         assert!(migration.contains("jsonb_each"));
         assert!(migration.contains("round(rasxot_mix_total, 12)"));
         assert!(migration.contains("999999999999999999"));
+    }
+
+    #[test]
+    fn postgres_returned_paint_solvent_migration_adds_all_solvent_values_to_alcohol() {
+        let migration = POSTGRES_MIGRATIONS[8].1.to_lowercase();
+
+        assert!(migration.contains("category = 'solvents'"));
+        assert!(migration.contains("jsonb_each"));
+        assert!(migration.contains("rasxot_direct_alcohol"));
+        assert!(migration.contains("astatka_direct_alcohol"));
+        assert!(migration.contains("rasxot_mix_total * 0.30::numeric"));
+        assert!(migration.contains("astatka_mix_total * 0.30::numeric"));
+        assert!(migration.contains("final_used_alcohol"));
+    }
+
+    #[test]
+    fn postgres_returned_paint_image_migration_supports_pending_and_idempotent_completion() {
+        let migration = POSTGRES_MIGRATIONS[9].1.to_lowercase();
+
+        assert!(migration.contains("create table if not exists mini_returned_paint_images"));
+        assert!(migration.contains("waiting_for_boyoqchi_input"));
+        assert!(migration.contains("mini_returned_paint_requests_workflow_consistent"));
+        assert!(migration.contains("jsonb_array_length(items_json) = 0"));
+        assert!(migration.contains("image_size_bytes = octet_length(body)"));
+        assert!(migration.contains("create unique index"));
     }
 
     #[test]

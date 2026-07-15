@@ -67,7 +67,11 @@ async fn bosma_complete_requires_or_persists_completion_metrics() {
             r#"{
                 "apparatus":"7 ta rangli bosma",
                 "order_id":"zakaz-bosma-complete",
-                "action":"complete"
+                "action":"complete",
+                "returned_paint_items":[
+                    {"usage":"rasxot","category":"colors","name":"Oq","values":{"Mix":3,"Oq":1}},
+                    {"usage":"astatka","category":"colors","name":"Oq","values":{"Mix":1}}
+                ]
             }"#,
         ))
         .await
@@ -89,7 +93,7 @@ async fn bosma_complete_requires_or_persists_completion_metrics() {
                 "order_id":"zakaz-bosma-complete",
                 "action":"complete",
                 "returned_paint_items":[
-                    {"usage":"rasxot","category":"colors","name":"Oq","values":{"Mix":1}},
+                    {"usage":"rasxot","category":"colors","name":"Oq","values":{"Mix":1,"Oq":1}},
                     {"usage":"astatka","category":"colors","name":"Oq","values":{"Mix":2}}
                 ],
                 "total_waste":2.5,
@@ -251,4 +255,120 @@ async fn bosma_pause_does_not_persist_return_ink_metric() {
     assert!(paused_body["progress_batch"]["return_ink_kg"].is_null());
     assert_eq!(paused_body["progress_batch"]["finished_goods_kg"], 12.0);
     assert_eq!(paused_body["progress_batch"]["finished_goods_meter"], 80.0);
+}
+
+#[tokio::test]
+async fn bosma_can_complete_with_an_image_only_returned_paint_report() {
+    let state = test_state();
+    state
+        .admin
+        .upsert_role_assignment(crate::core::authz::RoleAssignmentUpsert {
+            principal_role: PrincipalRole::Aparatchi,
+            principal_ref: "worker-bosma-image-only".to_string(),
+            role_id: "aparatchi".to_string(),
+            assigned_apparatus: vec!["7 ta rangli bosma".to_string()],
+            assigned_item_groups: Vec::new(),
+        })
+        .await
+        .expect("assignment");
+    let admin_token = session(&state, PrincipalRole::Admin).await;
+    let worker_token =
+        session_for(&state, PrincipalRole::Aparatchi, "worker-bosma-image-only").await;
+    let router = build_router(state);
+
+    let saved = router
+        .clone()
+        .oneshot(request_with_body(
+            "PUT",
+            "/v1/mobile/admin/production-maps",
+            &admin_token,
+            &pechat_order_map_json(
+                "zakaz-bosma-image-only",
+                "Rasmli Bosma order",
+                "8963",
+                "7 ta rangli bosma",
+            ),
+        ))
+        .await
+        .expect("save map");
+    assert_eq!(saved.status(), StatusCode::OK);
+
+    provision_test_qolip(&router, &admin_token, "zakaz-bosma-image-only").await;
+
+    let started = router
+        .clone()
+        .oneshot(request_with_body(
+            "POST",
+            "/v1/mobile/admin/production-maps/queue-action",
+            &worker_token,
+            &with_test_qolip(
+                r#"{
+                    "apparatus":"7 ta rangli bosma",
+                    "order_id":"zakaz-bosma-image-only",
+                    "action":"start"
+                }"#,
+                "zakaz-bosma-image-only",
+            ),
+        ))
+        .await
+        .expect("start");
+    assert_eq!(started.status(), StatusCode::OK);
+
+    let upload = router
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(
+                    "/v1/mobile/returned-paint/images?order_id=zakaz-bosma-image-only&apparatus=7%20ta%20rangli%20bosma",
+                )
+                .header(header::AUTHORIZATION, format!("Bearer {worker_token}"))
+                .header(header::CONTENT_TYPE, "image/jpeg")
+                .header("x-file-name", "8963-qoldiq.jpg")
+                .body(Body::from(b"image-only-returned-paint".to_vec()))
+                .expect("upload request"),
+        )
+        .await
+        .expect("upload response");
+    let upload_status = upload.status();
+    let upload_body = json_body(upload).await;
+    assert_eq!(upload_status, StatusCode::OK, "{upload_body}");
+    let image_id = upload_body["image"]["image_id"]
+        .as_str()
+        .expect("image id");
+
+    let completed = router
+        .oneshot(request_with_body(
+            "POST",
+            "/v1/mobile/admin/production-maps/queue-action",
+            &worker_token,
+            &format!(
+                r#"{{
+                    "apparatus":"7 ta rangli bosma",
+                    "order_id":"zakaz-bosma-image-only",
+                    "action":"complete",
+                    "returned_paint_image_id":"{image_id}",
+                    "returned_paint_items":[],
+                    "total_waste":2.5,
+                    "finished_goods_kg":18.75,
+                    "finished_goods_meter":125.5
+                }}"#
+            ),
+        ))
+        .await
+        .expect("image-only complete");
+    let completed_status = completed.status();
+    let completed_body = json_body(completed).await;
+    assert_eq!(completed_status, StatusCode::OK, "{completed_body}");
+    assert_eq!(
+        completed_body["states"]["zakaz-bosma-image-only"],
+        "completed"
+    );
+    assert!(completed_body["progress_batch"]["return_ink_kg"].is_null());
+    assert_eq!(completed_body["progress_batch"]["total_waste"], 2.5);
+    assert_eq!(completed_body["progress_batch"]["finished_goods_kg"], 18.75);
+    assert_eq!(
+        completed_body["progress_batch"]["finished_goods_meter"],
+        125.5
+    );
 }

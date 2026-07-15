@@ -458,6 +458,25 @@ fn with_test_qolip(body: &str, order_id: &str) -> String {
     payload.to_string()
 }
 
+fn with_test_returned_paint(body: &str) -> String {
+    let mut payload: serde_json::Value = serde_json::from_str(body).expect("queue action json");
+    payload["returned_paint_items"] = serde_json::json!([
+        {
+            "usage": "rasxot",
+            "category": "colors",
+            "name": "Oq",
+            "values": {"Mix": 3, "Oq": 1}
+        },
+        {
+            "usage": "astatka",
+            "category": "colors",
+            "name": "Oq",
+            "values": {"Mix": 1}
+        }
+    ]);
+    payload.to_string()
+}
+
 fn entry(ref_: &str, name: &str, phone: &str) -> AdminDirectoryEntry {
     AdminDirectoryEntry {
         ref_: ref_.to_string(),

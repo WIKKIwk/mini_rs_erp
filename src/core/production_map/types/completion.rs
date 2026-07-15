@@ -3,6 +3,7 @@ use std::collections::BTreeMap;
 use serde::{Deserialize, Serialize};
 
 use crate::core::production_map::queue_state;
+use crate::core::returned_paint::ReturnedPaintRequest;
 
 use super::super::store_port::RawMaterialStockTransition;
 use super::progress::OrderRunSession;
@@ -27,6 +28,8 @@ pub struct CompletionRequestNotification {
     #[serde(default = "default_decision_required")]
     pub decision_required: bool,
     pub created_at_unix: i64,
+    #[serde(skip)]
+    pub returned_paint_report: Option<ReturnedPaintRequest>,
 }
 
 fn default_decision_required() -> bool {
@@ -130,4 +133,5 @@ pub struct CompletionRequestStateResolution {
     pub event: ApparatusQueueActionEvent,
     pub session: Option<OrderRunSession>,
     pub raw_material_stock_transitions: Vec<RawMaterialStockTransition>,
+    pub returned_paint_report: Option<ReturnedPaintRequest>,
 }

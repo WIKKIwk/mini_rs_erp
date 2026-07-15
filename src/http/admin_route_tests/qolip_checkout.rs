@@ -535,7 +535,7 @@ async fn pechat_qolip_without_location_starts_and_is_blocked_on_another_apparatu
             "POST",
             "/v1/mobile/admin/production-maps/queue-action",
             &worker_token,
-            r#"{
+            &with_test_returned_paint(r#"{
                 "apparatus":"7 ta rangli pechat - A",
                 "order_id":"zakaz-shared-qolip-a",
                 "action":"complete",
@@ -543,7 +543,7 @@ async fn pechat_qolip_without_location_starts_and_is_blocked_on_another_apparatu
                 "total_waste":1,
                 "finished_goods_kg":10,
                 "finished_goods_meter":100
-            }"#,
+            }"#),
         ))
         .await
         .expect("complete first apparatus work");

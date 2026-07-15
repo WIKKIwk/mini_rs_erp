@@ -5,6 +5,7 @@ use crate::core::production_map::{
     CompletionRequestNotification, CompletionRequestStateResolution, ProductionMapError,
     QueueActionActor, QueueActionProgressWriteResult,
 };
+use crate::db::postgres_returned_paint::insert_returned_paint_request_tx;
 
 use super::progress_helpers::put_order_run_session_tx;
 use super::queue_helpers::{insert_queue_action_event_tx, put_queue_states_tx};
@@ -25,6 +26,7 @@ struct CompletionRequestRow {
     notice_kind: String,
     decision_required: bool,
     created_at_unix: i64,
+    returned_paint_report: serde_json::Value,
 }
 
 #[derive(sqlx::FromRow)]
@@ -70,7 +72,9 @@ pub(super) async fn load_completion_requests(
                 COALESCE(payload_json->'zero_metric_codes', '[]'::jsonb) AS zero_metric_codes,
                 COALESCE(payload_json->>'notice_kind', 'completion_request') AS notice_kind,
                 COALESCE((payload_json->>'decision_required')::boolean, true) AS decision_required,
-                EXTRACT(EPOCH FROM created_at)::bigint AS created_at_unix
+                EXTRACT(EPOCH FROM created_at)::bigint AS created_at_unix,
+                COALESCE(payload_json->'returned_paint_report', 'null'::jsonb)
+                    AS returned_paint_report
          FROM mini_queue_action_events
          WHERE action = 'complete'
            AND (
@@ -117,7 +121,9 @@ pub(super) async fn load_completion_request_by_event_id(
                 COALESCE(payload_json->'zero_metric_codes', '[]'::jsonb) AS zero_metric_codes,
                 COALESCE(payload_json->>'notice_kind', 'completion_request') AS notice_kind,
                 true AS decision_required,
-                EXTRACT(EPOCH FROM created_at)::bigint AS created_at_unix
+                EXTRACT(EPOCH FROM created_at)::bigint AS created_at_unix,
+                COALESCE(payload_json->'returned_paint_report', 'null'::jsonb)
+                    AS returned_paint_report
          FROM mini_queue_action_events
          WHERE event_id = $1
            AND action = 'complete'
@@ -233,6 +239,11 @@ pub(super) async fn resolve_completion_request_decision(
                 &resolution.apparatus,
             )
             .await?;
+        if let Some(report) = resolution.returned_paint_report {
+            insert_returned_paint_request_tx(&mut tx, &report)
+                .await
+                .map_err(|_| ProductionMapError::StoreFailed)?;
+        }
     }
     let result = sqlx::query(
         "UPDATE mini_queue_action_events
@@ -282,6 +293,11 @@ fn completion_request_from_row(row: CompletionRequestRow) -> CompletionRequestNo
         notice_kind: row.notice_kind,
         decision_required: row.decision_required,
         created_at_unix: row.created_at_unix,
+        returned_paint_report: if row.returned_paint_report.is_null() {
+            None
+        } else {
+            serde_json::from_value(row.returned_paint_report).ok()
+        },
     }
 }
 

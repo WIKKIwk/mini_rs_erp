@@ -283,7 +283,7 @@ async fn raw_material_routes_assign_and_require_scan_for_queue_start() {
             "POST",
             "/v1/mobile/admin/production-maps/queue-action",
             &worker_token,
-            r#"{
+            &with_test_returned_paint(r#"{
                 "apparatus":"7 ta rangli pechat - A",
                 "order_id":"zakaz-raw-route",
                 "action":"complete",
@@ -296,7 +296,7 @@ async fn raw_material_routes_assign_and_require_scan_for_queue_start() {
                 "uom":"kg",
                 "printer":"zebra",
                 "print_mode":"rfid"
-            }"#,
+            }"#),
         ))
         .await
         .expect("complete after raw material scan");

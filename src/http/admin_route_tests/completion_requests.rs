@@ -58,12 +58,12 @@ async fn queue_complete_without_output_creates_admin_completion_request() {
             "POST",
             "/v1/mobile/admin/production-maps/queue-action",
             &worker_token,
-            r#"{
+            &with_test_returned_paint(r#"{
                 "apparatus":"7 ta rangli pechat",
                 "order_id":"zakaz-zero-complete",
                 "action":"complete",
                 "completion_request_note":"Metraj va kg yo'q, brigader tekshirsin"
-            }"#,
+            }"#),
         ))
         .await
         .expect("complete request");
@@ -168,15 +168,14 @@ async fn queue_complete_with_zero_metric_requires_reason_and_creates_admin_reque
             "POST",
             "/v1/mobile/admin/production-maps/queue-action",
             &worker_token,
-            r#"{
+            &with_test_returned_paint(r#"{
                 "apparatus":"7 ta rangli pechat",
                 "order_id":"zakaz-zero-metric",
                 "action":"complete",
-                "return_ink_kg":0,
-                "total_waste":1,
+                "total_waste":0,
                 "finished_goods_kg":1,
                 "finished_goods_meter":1
-            }"#,
+            }"#),
         ))
         .await
         .expect("complete without reason");
@@ -194,16 +193,15 @@ async fn queue_complete_with_zero_metric_requires_reason_and_creates_admin_reque
             "POST",
             "/v1/mobile/admin/production-maps/queue-action",
             &worker_token,
-            r#"{
+            &with_test_returned_paint(r#"{
                 "apparatus":"7 ta rangli pechat",
                 "order_id":"zakaz-zero-metric",
                 "action":"complete",
-                "return_ink_kg":0,
-                "total_waste":1,
+                "total_waste":0,
                 "finished_goods_kg":1,
                 "finished_goods_meter":1,
-                "completion_request_note":"Kraska qaytimi nol chiqdi, brigader tekshirsin"
-            }"#,
+                "completion_request_note":"Chiqindi nol chiqdi, brigader tekshirsin"
+            }"#),
         ))
         .await
         .expect("complete request");
@@ -216,7 +214,7 @@ async fn queue_complete_with_zero_metric_requires_reason_and_creates_admin_reque
     );
     assert_eq!(
         requested_body["completion_request"]["zero_metric_codes"],
-        serde_json::json!(["return_ink_kg"])
+        serde_json::json!(["total_waste"])
     );
 
     let listed = router
@@ -232,15 +230,17 @@ async fn queue_complete_with_zero_metric_requires_reason_and_creates_admin_reque
     assert_eq!(listed_status, StatusCode::OK, "{listed_body:?}");
     assert_eq!(
         listed_body["completion_requests"][0]["zero_metric_codes"],
-        serde_json::json!(["return_ink_kg"])
+        serde_json::json!(["total_waste"])
     );
 }
 
 #[tokio::test]
 async fn admin_approves_zero_output_completion_request_and_closes_order_with_issue_history() {
     let material_store = Arc::new(RawMaterialStockLookup::default());
+    let production_store = Arc::new(MemoryProductionMapStore::new());
     let mut state = test_state();
     state.gscale = GscaleService::new().with_receipt_store(material_store);
+    state.production_maps = ProductionMapService::new(production_store.clone());
     state
         .admin
         .upsert_role_assignment(crate::core::authz::RoleAssignmentUpsert {
@@ -345,12 +345,12 @@ async fn admin_approves_zero_output_completion_request_and_closes_order_with_iss
             "POST",
             "/v1/mobile/admin/production-maps/queue-action",
             &worker_token,
-            r#"{
+            &with_test_returned_paint(r#"{
                 "apparatus":"7 ta rangli pechat",
                 "order_id":"zakaz-approve-zero",
                 "action":"complete",
                 "completion_request_note":"kg va metraj kiritilmagan, buyurtma muammo bilan yopilsin"
-            }"#,
+            }"#),
         ))
         .await
         .expect("complete request");
@@ -380,6 +380,17 @@ async fn admin_approves_zero_output_completion_request_and_closes_order_with_iss
         approved_body["order_status"]["order_status"],
         "completed_with_issue"
     );
+    let returned_paint = production_store
+        .returned_paint_request(
+            "returned_paint_complete:zakaz-approve-zero:7 ta rangli pechat",
+        )
+        .await
+        .expect("returned paint is committed with approval");
+    assert_eq!(
+        returned_paint.status,
+        crate::core::returned_paint::ReturnedPaintStatus::Completed
+    );
+    assert!(returned_paint.calculation.is_some());
 
     let assignments_after_approve = router
         .clone()

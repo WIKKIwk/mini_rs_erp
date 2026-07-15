@@ -344,4 +344,5 @@ pub struct QueueProgressInput {
     pub finished_goods_kg: Option<f64>,
     pub finished_goods_meter: Option<f64>,
     pub description: String,
+    pub returned_paint_report_attached: bool,
 }

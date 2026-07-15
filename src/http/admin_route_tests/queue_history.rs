@@ -71,6 +71,8 @@ async fn worker_completed_orders_are_actor_scoped_and_latest_first() {
             );
             let body = if action == "start" {
                 with_test_qolip(&body, order_id)
+            } else if action == "complete" {
+                with_test_returned_paint(&body)
             } else {
                 body
             };
@@ -179,6 +181,8 @@ async fn closed_orders_return_only_fully_completed_maps_with_action_logs() {
         );
         let body = if action == "start" {
             with_test_qolip(&body, "zakaz-closed-route")
+        } else if action == "complete" {
+            with_test_returned_paint(&body)
         } else {
             body
         };

@@ -59,12 +59,12 @@ async fn admin_rejects_zero_output_completion_request_and_notifies_worker() {
             "POST",
             "/v1/mobile/admin/production-maps/queue-action",
             &worker_token,
-            r#"{
+            &with_test_returned_paint(r#"{
                 "apparatus":"7 ta rangli pechat",
                 "order_id":"zakaz-reject-zero",
                 "action":"complete",
                 "completion_request_note":"kg va metraj yo'q"
-            }"#,
+            }"#),
         ))
         .await
         .expect("complete request");

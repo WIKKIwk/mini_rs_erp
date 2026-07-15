@@ -9,6 +9,11 @@ fn aparatchi_system_role_assigns_to_customer_principal() {
         .find(|role| role.id == "aparatchi")
         .expect("aparatchi role");
     assert_eq!(role.base_role, None);
+    assert!(
+        role.capability_codes
+            .iter()
+            .any(|code| code == "returned_paint.request.create")
+    );
 
     let assignment = normalize_role_assignment(
         RoleAssignmentUpsert {

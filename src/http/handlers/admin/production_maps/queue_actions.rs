@@ -1,7 +1,8 @@
 use super::*;
 use crate::core::production_map::pechat;
 use crate::core::returned_paint::{
-    ReturnedPaintItem, ReturnedPaintRequestCreate, returned_paint_astatka_total,
+    returned_paint_astatka_total, returned_paint_value_count, ReturnedPaintItem,
+    ReturnedPaintRequestCreate, ReturnedPaintStatus,
 };
 
 #[derive(serde::Deserialize)]
@@ -64,6 +65,8 @@ struct ApparatusQueueActionRequest {
     description: String,
     #[serde(default)]
     returned_paint_items: Vec<ReturnedPaintItem>,
+    #[serde(default)]
+    returned_paint_image_id: String,
     action: queue_state::ApparatusQueueAction,
 }
 
@@ -104,13 +107,26 @@ pub async fn production_map_queue_action(
         input.completion_request_note.clone()
     };
     if !matches!(input.action, queue_state::ApparatusQueueAction::Complete)
-        && !input.returned_paint_items.is_empty()
+        && (!input.returned_paint_items.is_empty()
+            || !input.returned_paint_image_id.trim().is_empty())
     {
         return Err(bad_request("returned_paint_only_on_complete"));
     }
+    let returned_paint_field_count = returned_paint_value_count(&input.returned_paint_items);
+    let has_returned_paint_image = !input.returned_paint_image_id.trim().is_empty();
+    let is_bosma_complete = matches!(
+        input.action,
+        queue_state::ApparatusQueueAction::Complete
+    ) && pechat::pechat_color_count(&input.apparatus).is_some();
+    if is_bosma_complete
+        && !(returned_paint_field_count >= 3
+            || (returned_paint_field_count == 0 && has_returned_paint_image))
+    {
+        return Err(bad_request("returned_paint_minimum_three_fields_or_image_only"));
+    }
     let _queue_action_guard = state.production_maps.queue_action_guard().await;
     let returned_paint_report = if matches!(input.action, queue_state::ApparatusQueueAction::Complete)
-        && !input.returned_paint_items.is_empty()
+        && (returned_paint_field_count > 0 || has_returned_paint_image)
     {
         let map = state
             .production_maps
@@ -132,6 +148,7 @@ pub async fn production_map_queue_action(
                         order_code,
                         order_name: map.title,
                         apparatus: input.apparatus.clone(),
+                        image_id: input.returned_paint_image_id.clone(),
                         items: input.returned_paint_items.clone(),
                     },
                     &principal,
@@ -141,16 +158,20 @@ pub async fn production_map_queue_action(
                         input.apparatus.trim()
                     ),
                 )
+                .await
                 .map_err(|error| bad_request(error.to_string()))?,
         )
     } else {
         None
     };
+    let returned_paint_report_attached = returned_paint_report.is_some();
     let return_ink_kg = match &returned_paint_report {
-        Some(report) => Some(
-            returned_paint_astatka_total(&report.items)
-                .map_err(|error| bad_request(error.to_string()))?,
-        ),
+        Some(report) if report.status == ReturnedPaintStatus::Completed => {
+            let total = returned_paint_astatka_total(&report.items)
+                .map_err(|error| bad_request(error.to_string()))?;
+            (total > 0.0).then_some(total)
+        }
+        Some(_) => None,
         None => input.return_ink_kg,
     };
     let progress = QueueProgressInput {
@@ -176,8 +197,9 @@ pub async fn production_map_queue_action(
         finished_goods_kg: input.finished_goods_kg,
         finished_goods_meter: input.finished_goods_meter,
         description: completion_request_note.clone(),
+        returned_paint_report_attached,
     };
-    let has_complete_bosma_metrics = return_ink_kg.is_some()
+    let has_complete_bosma_metrics = (return_ink_kg.is_some() || returned_paint_report_attached)
         && input.total_waste.is_some()
         && input.finished_goods_kg.is_some()
         && input.finished_goods_meter.is_some();
@@ -213,6 +235,7 @@ pub async fn production_map_queue_action(
                 queue_action_actor(&principal),
                 &completion_request_note,
                 zero_metric_codes,
+                returned_paint_report,
             )
             .await
             .map_err(production_map_error)?;

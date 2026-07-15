@@ -77,7 +77,8 @@ async fn aparatchi_sends_returned_paint_and_only_boyoqchi_can_read_it() {
                     {"usage":"astatka","category":"colors","name":"Oq","values":{"Mix":4,"Oq":1}},
                     {"usage":"astatka","category":"colors","name":"Qora","values":{"Mix":1,"Qora":0.25}},
                     {"usage":"rasxot","category":"lacquers","name":"Laklar","values":{"OPV lak":100}},
-                    {"usage":"astatka","category":"solvents","name":"Spirtlar","values":{"Etil":100}}
+                    {"usage":"rasxot","category":"solvents","name":"Spirtlar","values":{"Etil":10,"Metoxil":2,"Rasvavitel":0.5}},
+                    {"usage":"astatka","category":"solvents","name":"Spirtlar","values":{"Etil":1,"Aralashmalar":0.25}}
                 ]
             }"#,
         ))
@@ -118,15 +119,15 @@ async fn aparatchi_sends_returned_paint_and_only_boyoqchi_can_read_it() {
     );
     assert_eq!(
         body["items"][0]["calculation"]["rasxot_alcohol"],
-        "3.75"
+        "16.25"
     );
     assert_eq!(
         body["items"][0]["calculation"]["astatka_alcohol"],
-        "1.5"
+        "2.75"
     );
     assert_eq!(
         body["items"][0]["calculation"]["final_used_alcohol"],
-        "2.25"
+        "13.5"
     );
     assert_eq!(
         body["items"][0]["calculation"]["rasxot_pure_paint"],
@@ -140,4 +141,200 @@ async fn aparatchi_sends_returned_paint_and_only_boyoqchi_can_read_it() {
         body["items"][0]["calculation"]["final_used_paint"],
         "7.5"
     );
+}
+
+#[tokio::test]
+async fn image_only_report_waits_for_boyoqchi_and_completes_same_record_once() {
+    let state = test_state();
+    let aparatchi_token = session_for(&state, PrincipalRole::Aparatchi, "worker-image").await;
+    let boyoqchi_token = session_for(&state, PrincipalRole::Boyoqchi, "boyoqchi-image").await;
+    let router = build_router(state);
+    let image_body = vec![0xA5; 2 * 1024 * 1024 + 1];
+
+    let upload = router
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v1/mobile/returned-paint/images?order_id=order-image&apparatus=7%20ta%20rangli%20bosma")
+                .header(header::AUTHORIZATION, format!("Bearer {aparatchi_token}"))
+                .header(header::CONTENT_TYPE, "image/jpeg")
+                .header("x-file-name", "qoldiq.jpg")
+                .body(Body::from(image_body.clone()))
+                .expect("upload request"),
+        )
+        .await
+        .expect("upload response");
+    let upload_status = upload.status();
+    let upload_body = json_body(upload).await;
+    assert_eq!(upload_status, StatusCode::OK, "{upload_body}");
+    let image_id = upload_body["image"]["image_id"]
+        .as_str()
+        .expect("image id")
+        .to_string();
+
+    let mismatched_order = router
+        .clone()
+        .oneshot(request_with_body(
+            "POST",
+            "/v1/mobile/returned-paint/requests",
+            &aparatchi_token,
+            &format!(
+                r#"{{
+                    "order_id":"another-order",
+                    "order_code":"8964",
+                    "order_name":"Boshqa order",
+                    "apparatus":"7 ta rangli bosma",
+                    "image_id":"{image_id}",
+                    "items":[]
+                }}"#
+            ),
+        ))
+        .await
+        .expect("mismatched image request");
+    assert_eq!(mismatched_order.status(), StatusCode::BAD_REQUEST);
+
+    let partially_filled = router
+        .clone()
+        .oneshot(request_with_body(
+            "POST",
+            "/v1/mobile/returned-paint/requests",
+            &aparatchi_token,
+            &format!(
+                r#"{{
+                    "order_id":"order-image",
+                    "order_code":"8963",
+                    "order_name":"Rasmli order",
+                    "apparatus":"7 ta rangli bosma",
+                    "image_id":"{image_id}",
+                    "items":[
+                        {{"usage":"rasxot","category":"colors","name":"Oq","values":{{"Mix":10,"Oq":2}}}}
+                    ]
+                }}"#
+            ),
+        ))
+        .await
+        .expect("partially filled image request");
+    assert_eq!(partially_filled.status(), StatusCode::BAD_REQUEST);
+
+    let pending = router
+        .clone()
+        .oneshot(request_with_body(
+            "POST",
+            "/v1/mobile/returned-paint/requests",
+            &aparatchi_token,
+            &format!(
+                r#"{{
+                    "order_id":"order-image",
+                    "order_code":"8963",
+                    "order_name":"Rasmli order",
+                    "apparatus":"7 ta rangli bosma",
+                    "image_id":"{image_id}",
+                    "items":[]
+                }}"#
+            ),
+        ))
+        .await
+        .expect("pending request");
+    let pending_status = pending.status();
+    let pending_body = json_body(pending).await;
+    assert_eq!(pending_status, StatusCode::OK, "{pending_body}");
+    assert_eq!(pending_body["status"], "waiting_for_boyoqchi_input");
+    assert!(pending_body.get("calculation").is_none());
+    assert_eq!(pending_body["image"]["image_id"], image_id);
+    let request_id = pending_body["id"].as_str().expect("request id").to_string();
+
+    let insufficient = router
+        .clone()
+        .oneshot(request_with_body(
+            "POST",
+            "/v1/mobile/returned-paint/requests/complete",
+            &boyoqchi_token,
+            &format!(
+                r#"{{
+                    "request_id":"{request_id}",
+                    "items":[
+                        {{"usage":"rasxot","category":"colors","name":"Oq","values":{{"Mix":10,"Oq":2}}}}
+                    ]
+                }}"#
+            ),
+        ))
+        .await
+        .expect("insufficient completion");
+    assert_eq!(insufficient.status(), StatusCode::BAD_REQUEST);
+
+    let completed = router
+        .clone()
+        .oneshot(request_with_body(
+            "POST",
+            "/v1/mobile/returned-paint/requests/complete",
+            &boyoqchi_token,
+            &format!(
+                r#"{{
+                    "request_id":"{request_id}",
+                    "items":[
+                        {{"usage":"rasxot","category":"colors","name":"Oq","values":{{"Mix":10,"Oq":2}}}},
+                        {{"usage":"astatka","category":"colors","name":"Oq","values":{{"Mix":1}}}}
+                    ]
+                }}"#
+            ),
+        ))
+        .await
+        .expect("complete request");
+    let completed_status = completed.status();
+    let completed_body = json_body(completed).await;
+    assert_eq!(completed_status, StatusCode::OK, "{completed_body}");
+    assert_eq!(completed_body["id"], request_id);
+    assert_eq!(completed_body["status"], "completed");
+    assert_eq!(completed_body["calculation"]["rasxot_mix_total"], "10");
+    assert_eq!(completed_body["calculation"]["astatka_mix_total"], "1");
+
+    let retry = router
+        .clone()
+        .oneshot(request_with_body(
+            "POST",
+            "/v1/mobile/returned-paint/requests/complete",
+            &boyoqchi_token,
+            &format!(
+                r#"{{
+                    "request_id":"{request_id}",
+                    "items":[
+                        {{"usage":"rasxot","category":"colors","name":"Qora","values":{{"Mix":99,"Qora":99}}}},
+                        {{"usage":"astatka","category":"colors","name":"Qora","values":{{"Mix":1}}}}
+                    ]
+                }}"#
+            ),
+        ))
+        .await
+        .expect("retry completion");
+    let retry_body = json_body(retry).await;
+    assert_eq!(retry_body["id"], request_id);
+    assert_eq!(retry_body["calculation"]["rasxot_mix_total"], "10");
+
+    let view = router
+        .clone()
+        .oneshot(request(
+            "GET",
+            &format!("/v1/mobile/returned-paint/images/view?id={image_id}"),
+            &boyoqchi_token,
+        ))
+        .await
+        .expect("view image");
+    assert_eq!(view.status(), StatusCode::OK);
+    assert_eq!(
+        &to_bytes(view.into_body(), usize::MAX)
+            .await
+            .expect("image body")[..],
+        &image_body
+    );
+
+    let delete_attached = router
+        .oneshot(request(
+            "DELETE",
+            &format!("/v1/mobile/returned-paint/images?id={image_id}"),
+            &aparatchi_token,
+        ))
+        .await
+        .expect("delete attached image");
+    assert_eq!(delete_attached.status(), StatusCode::BAD_REQUEST);
 }
