@@ -58,6 +58,7 @@ pub trait WorkerStorePort: Send + Sync {
     async fn upsert_worker(&self, worker: Worker) -> Result<Worker, WorkerError>;
     async fn update_worker_level(&self, id: &str, level: &str) -> Result<Worker, WorkerError>;
     async fn update_worker_phone(&self, id: &str, phone: &str) -> Result<Worker, WorkerError>;
+    async fn delete_worker(&self, id: &str) -> Result<(), WorkerError>;
 }
 
 #[derive(Clone)]
@@ -119,6 +120,14 @@ impl WorkerService {
         }
         self.store.update_worker_phone(id, input.phone.trim()).await
     }
+
+    pub async fn delete_worker(&self, id: &str) -> Result<(), WorkerError> {
+        let id = id.trim();
+        if id.is_empty() {
+            return Err(WorkerError::MissingId);
+        }
+        self.store.delete_worker(id).await
+    }
 }
 
 #[async_trait]
@@ -179,6 +188,10 @@ impl WorkerStorePort for UnavailableWorkerStore {
     }
 
     async fn update_worker_phone(&self, _id: &str, _phone: &str) -> Result<Worker, WorkerError> {
+        Err(WorkerError::StoreFailed)
+    }
+
+    async fn delete_worker(&self, _id: &str) -> Result<(), WorkerError> {
         Err(WorkerError::StoreFailed)
     }
 }
@@ -256,6 +269,16 @@ impl WorkerStorePort for MemoryWorkerStore {
         };
         worker.phone = phone.trim().to_string();
         Ok(worker.clone())
+    }
+
+    async fn delete_worker(&self, id: &str) -> Result<(), WorkerError> {
+        let mut workers = self.workers.write().await;
+        let previous_len = workers.len();
+        workers.retain(|worker| worker.id != id.trim());
+        if workers.len() == previous_len {
+            return Err(WorkerError::NotFound);
+        }
+        Ok(())
     }
 }
 

@@ -233,6 +233,42 @@ pub(super) async fn load_checkouts(
     Ok(rows.into_iter().map(row_to_checkout).collect())
 }
 
+pub(super) async fn load_open_checkouts_for_worker(
+    pool: &PgPool,
+    worker_refs: &[String],
+    worker_name: &str,
+    limit: usize,
+) -> Result<Vec<QolipCheckout>, QolipError> {
+    let worker_refs = worker_refs
+        .iter()
+        .map(|value| value.trim().to_ascii_lowercase())
+        .filter(|value| !value.is_empty())
+        .collect::<Vec<_>>();
+    let worker_name = worker_name.trim();
+    if worker_refs.is_empty() && worker_name.is_empty() {
+        return Ok(Vec::new());
+    }
+    let rows = sqlx::query_as::<_, QolipCheckoutRow>(
+        "SELECT id, location_id, block, warehouse, item_code, item_name, qolip_code,
+                size, quantity, row_letter, column_number, location_label,
+                issued_to_ref, issued_to_name, status,
+                issued_by_role, issued_by_ref, issued_by_name,
+                to_char(issued_at AT TIME ZONE 'UTC', 'YYYY-MM-DD\"T\"HH24:MI:SS\"Z\"') AS issued_at
+         FROM mini_qolip_checkouts
+         WHERE lower(status) = 'open'
+           AND (lower(issued_to_ref) = ANY($1) OR lower(issued_to_name) = lower($2))
+         ORDER BY issued_at DESC
+         LIMIT $3",
+    )
+    .bind(&worker_refs)
+    .bind(worker_name)
+    .bind(limit.max(1) as i64)
+    .fetch_all(pool)
+    .await
+    .map_err(|_| QolipError::StoreFailed)?;
+    Ok(rows.into_iter().map(row_to_checkout).collect())
+}
+
 pub(super) async fn load_checkout_by_id(
     pool: &PgPool,
     checkout_id: &str,

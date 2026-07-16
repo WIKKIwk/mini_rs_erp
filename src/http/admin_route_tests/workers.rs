@@ -1,4 +1,8 @@
 use super::*;
+use crate::core::production_map::{OrderRunSession, OrderRunStatus, ProductionMapStorePort};
+use crate::core::qolip::{
+    MemoryQolipStore, QolipCheckout, QolipLocation, QolipService, QolipStorePort,
+};
 
 #[tokio::test]
 async fn admin_workers_are_separate_from_users_and_persist_level() {
@@ -53,6 +57,265 @@ async fn admin_workers_are_separate_from_users_and_persist_level() {
     assert_eq!(workers.as_array().expect("workers").len(), 1);
     assert_eq!(workers[0]["name"], "Ali ishchi");
     assert_eq!(workers[0]["phone"], "+998901112233");
+}
+
+#[tokio::test]
+async fn admin_worker_delete_requires_connection_confirmation_and_cleans_assignments() {
+    let state = test_state();
+    let token = session(&state, PrincipalRole::Admin).await;
+
+    let created = build_router(state.clone())
+        .oneshot(request_with_body(
+            "POST",
+            "/v1/mobile/admin/workers",
+            &token,
+            r#"{"id":"worker_delete_1","name":"Delete worker","level":"Master"}"#,
+        ))
+        .await
+        .expect("create worker");
+    assert_eq!(created.status(), StatusCode::OK);
+
+    let group = build_router(state.clone())
+        .oneshot(request_with_body(
+            "PUT",
+            "/v1/mobile/admin/worker-groups",
+            &token,
+            r#"{
+                "apparatus":"Laminatsiya 1",
+                "group_code":"A",
+                "shift":"kunduz",
+                "worker_ids":["worker_delete_1"]
+            }"#,
+        ))
+        .await
+        .expect("save worker group");
+    assert_eq!(group.status(), StatusCode::OK);
+
+    let check = build_router(state.clone())
+        .oneshot(request(
+            "GET",
+            "/v1/mobile/admin/workers/delete-check?id=worker_delete_1",
+            &token,
+        ))
+        .await
+        .expect("delete check");
+    assert_eq!(check.status(), StatusCode::OK);
+    let check_body = json_body(check).await;
+    assert_eq!(check_body["blocked"], false);
+    assert_eq!(check_body["requires_confirmation"], true);
+    assert!(check_body["connections"].as_array().is_some_and(|items| {
+        items.iter().any(|item| item["kind"] == "worker_group")
+            && items.iter().any(|item| item["kind"] == "apparatus")
+    }));
+
+    let rejected = build_router(state.clone())
+        .oneshot(request(
+            "DELETE",
+            "/v1/mobile/admin/workers?id=worker_delete_1",
+            &token,
+        ))
+        .await
+        .expect("unconfirmed delete");
+    assert_eq!(rejected.status(), StatusCode::CONFLICT);
+    assert_eq!(json_body(rejected).await["requires_confirmation"], true);
+
+    let deleted = build_router(state.clone())
+        .oneshot(request(
+            "DELETE",
+            "/v1/mobile/admin/workers?id=worker_delete_1&confirm_connections=true",
+            &token,
+        ))
+        .await
+        .expect("confirmed delete");
+    assert_eq!(deleted.status(), StatusCode::OK);
+    assert_eq!(json_body(deleted).await["ok"], true);
+
+    let groups = build_router(state.clone())
+        .oneshot(request(
+            "GET",
+            "/v1/mobile/admin/worker-groups?apparatus=Laminatsiya%201",
+            &token,
+        ))
+        .await
+        .expect("worker groups after delete");
+    let groups_body = json_body(groups).await;
+    assert_eq!(groups_body[0]["worker_ids"], serde_json::json!([]));
+
+    let assignments = build_router(state.clone())
+        .oneshot(request("GET", "/v1/mobile/admin/role-assignments", &token))
+        .await
+        .expect("role assignments after delete");
+    assert!(!json_body(assignments)
+        .await
+        .as_array()
+        .expect("assignments")
+        .iter()
+        .any(|assignment| assignment["principal_ref"] == "worker_delete_1"));
+
+    let workers = build_router(state)
+        .oneshot(request("GET", "/v1/mobile/admin/workers", &token))
+        .await
+        .expect("workers after delete");
+    assert!(json_body(workers)
+        .await
+        .as_array()
+        .expect("workers")
+        .is_empty());
+}
+
+#[tokio::test]
+async fn admin_worker_delete_is_blocked_by_active_work_even_when_confirmed() {
+    let mut state = test_state();
+    let production_store = Arc::new(MemoryProductionMapStore::new());
+    state.production_maps = ProductionMapService::new(production_store.clone());
+    let token = session(&state, PrincipalRole::Admin).await;
+
+    let created = build_router(state.clone())
+        .oneshot(request_with_body(
+            "POST",
+            "/v1/mobile/admin/workers",
+            &token,
+            r#"{"id":"worker_active_1","name":"Active worker","level":"Master"}"#,
+        ))
+        .await
+        .expect("create worker");
+    assert_eq!(created.status(), StatusCode::OK);
+
+    production_store
+        .put_order_run_session(OrderRunSession {
+            session_id: "session-worker-active-1".to_string(),
+            apparatus: "Pechat 1".to_string(),
+            order_id: "zakaz-worker-active-1".to_string(),
+            status: OrderRunStatus::Active,
+            worker_role: "aparatchi".to_string(),
+            worker_ref: "worker_active_1".to_string(),
+            worker_display_name: "Active worker".to_string(),
+            started_at_unix: 1,
+            updated_at_unix: 1,
+            payload_json: serde_json::json!({}),
+        })
+        .await
+        .expect("active worker session");
+
+    let rejected = build_router(state.clone())
+        .oneshot(request(
+            "DELETE",
+            "/v1/mobile/admin/workers?id=worker_active_1&confirm_connections=true",
+            &token,
+        ))
+        .await
+        .expect("delete active worker");
+    assert_eq!(rejected.status(), StatusCode::CONFLICT);
+    let rejected_body = json_body(rejected).await;
+    assert_eq!(rejected_body["blocked"], true);
+    assert_eq!(
+        rejected_body["active_work"][0]["order_id"],
+        "zakaz-worker-active-1"
+    );
+    assert_eq!(rejected_body["active_work"][0]["apparatus"], "Pechat 1");
+
+    let workers = build_router(state)
+        .oneshot(request("GET", "/v1/mobile/admin/workers", &token))
+        .await
+        .expect("workers after blocked delete");
+    assert_eq!(
+        json_body(workers)
+            .await
+            .as_array()
+            .expect("workers")
+            .len(),
+        1
+    );
+}
+
+#[tokio::test]
+async fn admin_worker_delete_is_blocked_by_open_qolip_checkout() {
+    let mut state = test_state();
+    let qolip_store = Arc::new(MemoryQolipStore::new());
+    state.qolip = QolipService::new(qolip_store.clone());
+    let token = session(&state, PrincipalRole::Admin).await;
+
+    let created = build_router(state.clone())
+        .oneshot(request_with_body(
+            "POST",
+            "/v1/mobile/admin/workers",
+            &token,
+            r#"{"id":"worker_qolip_1","name":"Qolip worker","level":"Master"}"#,
+        ))
+        .await
+        .expect("create worker");
+    assert_eq!(created.status(), StatusCode::OK);
+
+    qolip_store
+        .put_location(QolipLocation {
+            id: "location-worker-qolip-1".to_string(),
+            block: "A".to_string(),
+            warehouse: "Qolip ombor".to_string(),
+            item_code: "ITEM-1".to_string(),
+            item_name: "Item 1".to_string(),
+            qolip_code: "Q-1".to_string(),
+            size: 10,
+            quantity: 2,
+            row_letter: "A".to_string(),
+            column_number: Some(1),
+            location_label: "A1".to_string(),
+            created_by_role: "admin".to_string(),
+            created_by_ref: "admin".to_string(),
+            created_by_name: "Admin".to_string(),
+        })
+        .await
+        .expect("qolip location");
+    qolip_store
+        .issue_checkout(QolipCheckout {
+            id: "checkout-worker-qolip-1".to_string(),
+            location_id: "location-worker-qolip-1".to_string(),
+            block: "A".to_string(),
+            warehouse: "Qolip ombor".to_string(),
+            item_code: "ITEM-1".to_string(),
+            item_name: "Item 1".to_string(),
+            item_group: String::new(),
+            qolip_code: "Q-1".to_string(),
+            size: 10,
+            quantity: 1,
+            row_letter: "A".to_string(),
+            column_number: Some(1),
+            location_label: "A1".to_string(),
+            issued_to_ref: "worker_qolip_1".to_string(),
+            issued_to_name: "Qolip worker".to_string(),
+            status: "open".to_string(),
+            issued_by_role: "admin".to_string(),
+            issued_by_ref: "admin".to_string(),
+            issued_by_name: "Admin".to_string(),
+            issued_at: String::new(),
+        })
+        .await
+        .expect("open qolip checkout");
+
+    let rejected = build_router(state.clone())
+        .oneshot(request(
+            "DELETE",
+            "/v1/mobile/admin/workers?id=worker_qolip_1&confirm_connections=true",
+            &token,
+        ))
+        .await
+        .expect("delete worker with open qolip checkout");
+    assert_eq!(rejected.status(), StatusCode::CONFLICT);
+    let rejected_body = json_body(rejected).await;
+    assert_eq!(rejected_body["blocked"], true);
+    assert_eq!(rejected_body["active_work"][0]["kind"], "qolip_checkout");
+
+    let workers = build_router(state)
+        .oneshot(request("GET", "/v1/mobile/admin/workers", &token))
+        .await
+        .expect("workers after blocked qolip delete");
+    assert_eq!(
+        json_body(workers)
+            .await
+            .as_array()
+            .expect("workers")
+            .len(),
+        1
+    );
 }
 
 #[tokio::test]

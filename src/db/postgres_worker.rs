@@ -156,6 +156,18 @@ impl WorkerStorePort for PostgresWorkerStore {
             level,
         })
     }
+
+    async fn delete_worker(&self, id: &str) -> Result<(), WorkerError> {
+        let result = sqlx::query("DELETE FROM mini_workers WHERE id = $1")
+            .bind(id.trim())
+            .execute(&self.pool)
+            .await
+            .map_err(|_| WorkerError::StoreFailed)?;
+        if result.rows_affected() == 0 {
+            return Err(WorkerError::NotFound);
+        }
+        Ok(())
+    }
 }
 
 fn map_worker_write_error(error: sqlx::Error) -> WorkerError {

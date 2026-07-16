@@ -14,6 +14,10 @@ pub(super) fn routes() -> Router<AppState> {
         .route("/v1/mobile/admin/capabilities", any(admin::capabilities))
         .route("/v1/mobile/admin/roles", any(admin::roles))
         .route("/v1/mobile/admin/workers", any(admin::workers))
+        .route(
+            "/v1/mobile/admin/workers/delete-check",
+            any(admin::worker_delete_check),
+        )
         .route("/v1/mobile/admin/system-users", any(admin::system_users))
         .route(
             "/v1/mobile/admin/system-users/detail",

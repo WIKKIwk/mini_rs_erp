@@ -350,6 +350,17 @@ impl QolipService {
         self.store.checkouts(None, None, status, limit).await
     }
 
+    pub async fn open_checkouts_for_worker(
+        &self,
+        worker_refs: &[String],
+        worker_name: &str,
+        limit: usize,
+    ) -> Result<Vec<QolipCheckout>, QolipError> {
+        self.store
+            .open_checkouts_for_worker(worker_refs, worker_name, limit.clamp(1, 500))
+            .await
+    }
+
     pub async fn checkout_by_id(
         &self,
         checkout_id: &str,

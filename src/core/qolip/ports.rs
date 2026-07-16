@@ -49,6 +49,34 @@ pub trait QolipStorePort: Send + Sync {
         status: &str,
         limit: usize,
     ) -> Result<Vec<QolipCheckout>, QolipError>;
+    async fn open_checkouts_for_worker(
+        &self,
+        worker_refs: &[String],
+        worker_name: &str,
+        limit: usize,
+    ) -> Result<Vec<QolipCheckout>, QolipError> {
+        let refs = worker_refs
+            .iter()
+            .map(|value| value.trim().to_ascii_lowercase())
+            .filter(|value| !value.is_empty())
+            .collect::<std::collections::BTreeSet<_>>();
+        let worker_name = worker_name.trim().to_ascii_lowercase();
+        let mut checkouts = self
+            .checkouts(None, None, "open", 10_000)
+            .await?
+            .into_iter()
+            .filter(|checkout| {
+                refs.contains(&checkout.issued_to_ref.trim().to_ascii_lowercase())
+                    || !worker_name.is_empty()
+                        && checkout
+                            .issued_to_name
+                            .trim()
+                            .eq_ignore_ascii_case(&worker_name)
+            })
+            .collect::<Vec<_>>();
+        checkouts.truncate(limit.max(1));
+        Ok(checkouts)
+    }
     async fn checkout_by_id(&self, checkout_id: &str) -> Result<Option<QolipCheckout>, QolipError>;
     async fn return_checkout(
         &self,

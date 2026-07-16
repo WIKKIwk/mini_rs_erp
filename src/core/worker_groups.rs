@@ -170,6 +170,41 @@ impl WorkerGroupService {
             .find(|group| group.group_code == next.group_code)
             .ok_or(WorkerGroupError::StoreFailed)
     }
+
+    pub async fn remove_worker(&self, worker_id: &str) -> Result<(), WorkerGroupError> {
+        let worker_id = worker_id.trim();
+        if worker_id.is_empty() {
+            return Ok(());
+        }
+        let all_groups = self.store.worker_groups(None).await?;
+        let apparatuses = all_groups
+            .iter()
+            .filter(|group| {
+                group
+                    .worker_ids
+                    .iter()
+                    .any(|id| id.trim().eq_ignore_ascii_case(worker_id))
+            })
+            .map(|group| group.apparatus.clone())
+            .collect::<BTreeSet<_>>();
+
+        for apparatus in apparatuses {
+            let mut groups = all_groups
+                .iter()
+                .filter(|group| group.apparatus.eq_ignore_ascii_case(&apparatus))
+                .cloned()
+                .collect::<Vec<_>>();
+            for group in &mut groups {
+                group
+                    .worker_ids
+                    .retain(|id| !id.trim().eq_ignore_ascii_case(worker_id));
+            }
+            self.store
+                .put_apparatus_worker_groups(&apparatus, sort_groups(groups))
+                .await?;
+        }
+        Ok(())
+    }
 }
 
 fn default_work_days_per_week() -> i32 {

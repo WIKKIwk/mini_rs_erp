@@ -17,6 +17,35 @@ pub struct WorkerIdQuery {
     id: Option<String>,
 }
 
+#[derive(Debug, Deserialize)]
+pub struct WorkersQuery {
+    q: Option<String>,
+    limit: Option<String>,
+    role: Option<String>,
+    id: Option<String>,
+    #[serde(default)]
+    confirm_connections: bool,
+}
+
+#[derive(Debug, Serialize)]
+struct WorkerDeletionDependency {
+    kind: String,
+    label: String,
+    apparatus: String,
+    order_id: String,
+    status: String,
+}
+
+#[derive(Debug, Serialize)]
+struct WorkerDeletionCheck {
+    worker_id: String,
+    worker_name: String,
+    blocked: bool,
+    requires_confirmation: bool,
+    active_work: Vec<WorkerDeletionDependency>,
+    connections: Vec<WorkerDeletionDependency>,
+}
+
 #[derive(Debug, Serialize)]
 struct WorkerGroupResponse {
     apparatus: String,
@@ -44,11 +73,14 @@ pub async fn workers(
     State(state): State<AppState>,
     method: Method,
     headers: HeaderMap,
-    Query(query): Query<PageQuery>,
+    Query(query): Query<WorkersQuery>,
     body: Bytes,
 ) -> Result<Response, AdminError> {
     authorize_capability(&state, &headers, Capability::AdminAccess).await?;
-    if !matches!(method, Method::GET | Method::POST | Method::PUT) {
+    if !matches!(
+        method,
+        Method::GET | Method::POST | Method::PUT | Method::DELETE
+    ) {
         return Err(method_not_allowed());
     }
     match method {
@@ -96,8 +128,180 @@ pub async fn workers(
                     .map_err(worker_error)
             }
         }
+        Method::DELETE => {
+            let worker = required_worker(&state, query.id.as_deref()).await?;
+            let check = worker_deletion_check(&state, &worker).await?;
+            if check.blocked || check.requires_confirmation && !query.confirm_connections {
+                return Ok((StatusCode::CONFLICT, Json(check)).into_response());
+            }
+            state
+                .worker_groups
+                .remove_worker(&worker.id)
+                .await
+                .map_err(worker_group_error)?;
+            state
+                .admin
+                .delete_role_assignment(&PrincipalRole::Aparatchi, &worker.id)
+                .await
+                .map_err(|_| server_error("admin role assignment delete failed"))?;
+            state
+                .workers
+                .delete_worker(&worker.id)
+                .await
+                .map_err(worker_error)?;
+            Ok(json_response(OkResponse { ok: true }))
+        }
         _ => Err(method_not_allowed()),
     }
+}
+
+pub async fn worker_delete_check(
+    State(state): State<AppState>,
+    method: Method,
+    headers: HeaderMap,
+    Query(query): Query<WorkerIdQuery>,
+) -> Result<Response, AdminError> {
+    authorize_capability(&state, &headers, Capability::AdminAccess).await?;
+    if method != Method::GET {
+        return Err(method_not_allowed());
+    }
+    let worker = required_worker(&state, query.id.as_deref()).await?;
+    Ok(json_response(worker_deletion_check(&state, &worker).await?))
+}
+
+async fn worker_deletion_check(
+    state: &AppState,
+    worker: &Worker,
+) -> Result<WorkerDeletionCheck, AdminError> {
+    let refs = worker_activity_refs(worker);
+    let active_sessions = state
+        .production_maps
+        .active_order_run_sessions_for_worker(&refs, &worker.name, 100)
+        .await
+        .map_err(|_| server_error("worker activity failed"))?;
+    let mut active_work = active_sessions
+        .into_iter()
+        .map(|session| WorkerDeletionDependency {
+            kind: "active_order".to_string(),
+            label: format!("{} — {}", session.order_id, session.apparatus),
+            apparatus: session.apparatus,
+            order_id: session.order_id,
+            status: session.status.as_str().to_string(),
+        })
+        .collect::<Vec<_>>();
+    let open_qolip_checkouts = state
+        .qolip
+        .open_checkouts_for_worker(&refs, &worker.name, 100)
+        .await
+        .map_err(|_| server_error("worker qolip activity failed"))?;
+    active_work.extend(
+        open_qolip_checkouts
+            .into_iter()
+            .map(|checkout| WorkerDeletionDependency {
+                kind: "qolip_checkout".to_string(),
+                label: format!("{} • {} dona", checkout.qolip_code, checkout.quantity),
+                apparatus: checkout.warehouse,
+                order_id: String::new(),
+                status: checkout.status,
+            }),
+    );
+
+    let assigned_groups = state
+        .worker_groups
+        .worker_groups(None)
+        .await
+        .map_err(worker_group_error)?
+        .into_iter()
+        .filter(|group| {
+            group
+                .worker_ids
+                .iter()
+                .any(|id| id.trim().eq_ignore_ascii_case(worker.id.trim()))
+        })
+        .collect::<Vec<_>>();
+    let mut connections = assigned_groups
+        .iter()
+        .map(|group| WorkerDeletionDependency {
+            kind: "worker_group".to_string(),
+            label: group.group_code.clone(),
+            apparatus: group.apparatus.clone(),
+            order_id: String::new(),
+            status: String::new(),
+        })
+        .collect::<Vec<_>>();
+    let mut apparatuses = assigned_groups
+        .iter()
+        .map(|group| group.apparatus.trim())
+        .filter(|apparatus| {
+            !apparatus.is_empty() && !apparatus.eq_ignore_ascii_case("worker-settings")
+        })
+        .map(ToString::to_string)
+        .collect::<BTreeSet<_>>();
+
+    let assignments = state
+        .admin
+        .role_assignments()
+        .await
+        .map_err(|_| server_error("admin role assignments failed"))?;
+    for assignment in assignments.into_iter().filter(|assignment| {
+        assignment.principal_role == PrincipalRole::Aparatchi
+            && assignment
+                .principal_ref
+                .trim()
+                .eq_ignore_ascii_case(worker.id.trim())
+    }) {
+        connections.push(WorkerDeletionDependency {
+            kind: "role_assignment".to_string(),
+            label: assignment.role_id,
+            apparatus: String::new(),
+            order_id: String::new(),
+            status: String::new(),
+        });
+        apparatuses.extend(
+            assignment
+                .assigned_apparatus
+                .into_iter()
+                .map(|apparatus| apparatus.trim().to_string())
+                .filter(|apparatus| {
+                    !apparatus.is_empty()
+                        && !apparatus.eq_ignore_ascii_case("worker-settings")
+                }),
+        );
+        connections.extend(
+            assignment
+                .assigned_item_groups
+                .into_iter()
+                .filter_map(|item_group| {
+                    let item_group = item_group.trim().to_string();
+                    (!item_group.is_empty()).then(|| WorkerDeletionDependency {
+                        kind: "item_group".to_string(),
+                        label: item_group,
+                        apparatus: String::new(),
+                        order_id: String::new(),
+                        status: String::new(),
+                    })
+                }),
+        );
+    }
+    connections.extend(apparatuses.into_iter().map(|apparatus| {
+        WorkerDeletionDependency {
+            kind: "apparatus".to_string(),
+            label: apparatus.clone(),
+            apparatus,
+            order_id: String::new(),
+            status: String::new(),
+        }
+    }));
+
+    let blocked = !active_work.is_empty();
+    Ok(WorkerDeletionCheck {
+        worker_id: worker.id.clone(),
+        worker_name: worker.name.clone(),
+        blocked,
+        requires_confirmation: !blocked && !connections.is_empty(),
+        active_work,
+        connections,
+    })
 }
 
 enum WorkerRoleFilter {
