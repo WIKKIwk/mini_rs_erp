@@ -7,7 +7,7 @@ REPO_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 PUBLIC_HOSTNAME="${1:-${PUBLIC_HOSTNAME:-}}"
 if [ -z "${PUBLIC_HOSTNAME:-}" ]; then
 	echo "usage: $0 <hostname>" >&2
-	echo "example: $0 mini-rs-erp-dev.wspace.sbs" >&2
+	echo "example: $0 mini-rs-erp-test.wspace.sbs" >&2
 	exit 2
 fi
 

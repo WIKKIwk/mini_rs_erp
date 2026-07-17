@@ -61,6 +61,8 @@ struct ApparatusQueueActionRequest {
     #[serde(default)]
     print_count: u32,
     #[serde(default)]
+    print_transport: String,
+    #[serde(default)]
     completion_request_note: String,
     #[serde(default)]
     description: String,
@@ -392,7 +394,16 @@ pub async fn production_map_queue_action(
     }
     let mut print = serde_json::Value::Null;
     if let Some(request) = print_request {
-        match state.gscale.print_progress_label(request).await {
+        let print_result = if input
+            .print_transport
+            .trim()
+            .eq_ignore_ascii_case("offline")
+        {
+            state.gscale.prepare_progress_label(request)
+        } else {
+            state.gscale.print_progress_label(request).await
+        };
+        match print_result {
             Ok(response) => {
                 print = serde_json::to_value(response).unwrap_or(serde_json::Value::Null);
             }

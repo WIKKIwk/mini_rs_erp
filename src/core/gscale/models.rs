@@ -93,6 +93,7 @@ pub struct ProgressLabelPrintResponse {
     pub gross_qty: f64,
     pub unit: String,
     pub progress_unit: String,
+    pub label_kind: String,
     pub printer: String,
     pub print_mode: String,
     pub printer_status: String,

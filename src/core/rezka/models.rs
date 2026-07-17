@@ -40,6 +40,8 @@ fn default_print_qr() -> bool {
 #[derive(Debug, Clone, Default, PartialEq, Deserialize)]
 pub struct RezkaSplitOutputRequest {
     #[serde(default)]
+    pub epc: String,
+    #[serde(default)]
     pub item_code: String,
     #[serde(default)]
     pub item_name: String,

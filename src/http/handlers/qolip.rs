@@ -442,25 +442,37 @@ pub async fn cell_qr_print(
         .cell_qr(cell_input, &principal)
         .await
         .map_err(qolip_error)?;
-    let print = state
-        .gscale
-        .print_progress_label(ProgressLabelPrintRequest {
-            driver_url: input.driver_url,
-            qr_payload: cell_qr.qr_payload.clone(),
-            item_code: cell_qr.qr_payload.clone(),
-            item_name: cell_qr.location_label.clone(),
-            executor_name: principal.display_name.trim().to_string(),
-            printer: input.printer,
-            print_mode: input.print_mode,
-            label_kind: "qr_center".to_string(),
-            gross_qty: 1.0,
-            progress_qty: 1.0,
-            unit: "dona".to_string(),
-            progress_unit: "dona".to_string(),
-            print_count: input.print_count,
-        })
-        .await
-        .map_err(gscale_print_error)?;
+    let client_print = input
+        .print_transport
+        .trim()
+        .eq_ignore_ascii_case("offline");
+    let print_request = ProgressLabelPrintRequest {
+        driver_url: input.driver_url,
+        qr_payload: cell_qr.qr_payload.clone(),
+        item_code: cell_qr.qr_payload.clone(),
+        item_name: cell_qr.location_label.clone(),
+        executor_name: principal.display_name.trim().to_string(),
+        printer: input.printer,
+        print_mode: input.print_mode,
+        label_kind: "qolip_cell".to_string(),
+        gross_qty: 1.0,
+        progress_qty: 1.0,
+        unit: "dona".to_string(),
+        progress_unit: "dona".to_string(),
+        print_count: input.print_count,
+    };
+    let print = if client_print {
+        state
+            .gscale
+            .prepare_progress_label(print_request)
+            .map_err(gscale_print_error)?
+    } else {
+        state
+            .gscale
+            .print_progress_label(print_request)
+            .await
+            .map_err(gscale_print_error)?
+    };
     Ok(Json(serde_json::json!({
         "ok": true,
         "cell_qr": cell_qr,
@@ -492,25 +504,37 @@ pub async fn code_qr_print(
         .map_err(qolip_error)?
         .ok_or_else(|| bad_request("qolip_code_not_found"))?;
     let label = format!("{} • {}", spec.item_name.trim(), spec.size);
-    let print = state
-        .gscale
-        .print_progress_label(ProgressLabelPrintRequest {
-            driver_url: input.driver_url,
-            qr_payload: spec.qolip_code.clone(),
-            item_code: spec.qolip_code.clone(),
-            item_name: label,
-            executor_name: principal.display_name.trim().to_string(),
-            printer: input.printer,
-            print_mode: input.print_mode,
-            label_kind: "qr_center".to_string(),
-            gross_qty: 1.0,
-            progress_qty: 1.0,
-            unit: "dona".to_string(),
-            progress_unit: "dona".to_string(),
-            print_count: input.print_count,
-        })
-        .await
-        .map_err(gscale_print_error)?;
+    let client_print = input
+        .print_transport
+        .trim()
+        .eq_ignore_ascii_case("offline");
+    let print_request = ProgressLabelPrintRequest {
+        driver_url: input.driver_url,
+        qr_payload: spec.qolip_code.clone(),
+        item_code: spec.qolip_code.clone(),
+        item_name: label,
+        executor_name: principal.display_name.trim().to_string(),
+        printer: input.printer,
+        print_mode: input.print_mode,
+        label_kind: "qolip_code".to_string(),
+        gross_qty: 1.0,
+        progress_qty: 1.0,
+        unit: "dona".to_string(),
+        progress_unit: "dona".to_string(),
+        print_count: input.print_count,
+    };
+    let print = if client_print {
+        state
+            .gscale
+            .prepare_progress_label(print_request)
+            .map_err(gscale_print_error)?
+    } else {
+        state
+            .gscale
+            .print_progress_label(print_request)
+            .await
+            .map_err(gscale_print_error)?
+    };
     Ok(Json(serde_json::json!({
         "ok": true,
         "qolip_qr": {

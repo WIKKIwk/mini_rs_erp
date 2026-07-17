@@ -1,3 +1,5 @@
+use std::collections::HashSet;
+
 use super::*;
 
 #[derive(Debug, Clone, PartialEq)]
@@ -9,6 +11,7 @@ pub(super) struct NormalizedRezkaSplit {
     print_mode: String,
     pub(super) outputs: Vec<RezkaOutputLabel>,
     pub(super) printable_outputs: Vec<RezkaOutputLabel>,
+    pub(super) all_printable_epcs_supplied: bool,
 }
 
 impl NormalizedRezkaSplit {
@@ -56,6 +59,8 @@ impl NormalizedRezkaSplit {
         let mut total = 0.0;
         let mut outputs = Vec::with_capacity(request.outputs.len());
         let mut printable_outputs = Vec::new();
+        let mut all_printable_epcs_supplied = true;
+        let mut client_epcs = HashSet::new();
         for output in request.outputs {
             let target_warehouse = output.target_warehouse.trim().to_string();
             let print_qr =
@@ -75,12 +80,24 @@ impl NormalizedRezkaSplit {
                 ));
             }
             let next_epc = if print_qr {
-                let epc = epc.ok_or(RezkaServiceError::EpcGenerationFailed)?;
-                let next_epc = epc.next_epc().trim().to_ascii_uppercase();
-                if next_epc.is_empty() {
-                    return Err(RezkaServiceError::EpcGenerationFailed);
+                let requested_epc = output.epc.trim().to_ascii_uppercase();
+                if requested_epc.is_empty() {
+                    all_printable_epcs_supplied = false;
+                    let epc = epc.ok_or(RezkaServiceError::EpcGenerationFailed)?;
+                    let next_epc = epc.next_epc().trim().to_ascii_uppercase();
+                    if next_epc.is_empty() {
+                        return Err(RezkaServiceError::EpcGenerationFailed);
+                    }
+                    next_epc
+                } else {
+                    validate_client_epc(&requested_epc)?;
+                    if !client_epcs.insert(requested_epc.clone()) {
+                        return Err(RezkaServiceError::InvalidInput(
+                            "client_print_epc_duplicate".to_string(),
+                        ));
+                    }
+                    requested_epc
                 }
-                next_epc
             } else {
                 String::new()
             };
@@ -119,6 +136,7 @@ impl NormalizedRezkaSplit {
             print_mode: blank_default(&request.print_mode.to_ascii_lowercase(), "rfid"),
             outputs,
             printable_outputs,
+            all_printable_epcs_supplied,
         })
     }
 
@@ -142,6 +160,18 @@ impl NormalizedRezkaSplit {
             print_count: 1,
         }
     }
+}
+
+fn validate_client_epc(value: &str) -> Result<(), RezkaServiceError> {
+    if value.len() != 24
+        || !value.starts_with("30")
+        || !value.bytes().all(|byte| byte.is_ascii_hexdigit())
+    {
+        return Err(RezkaServiceError::InvalidInput(
+            "client_print_epc_invalid".to_string(),
+        ));
+    }
+    Ok(())
 }
 
 fn is_rezka_scrap_output(warehouse: &str, reason: &str) -> bool {

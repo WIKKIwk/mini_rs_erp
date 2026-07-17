@@ -10,7 +10,10 @@ use crate::app::AppState;
 use crate::core::auth::models::{Principal, PrincipalRole};
 use crate::core::authz::Capability;
 use crate::core::gscale::GscaleServiceError;
-use crate::core::rps_batch::{RpsBatchPrintRequest, RpsBatchServiceError, RpsBatchStartRequest};
+use crate::core::rps_batch::{
+    RpsBatchClientPrintConfirmRequest, RpsBatchPrintRequest, RpsBatchServiceError,
+    RpsBatchStartRequest,
+};
 use crate::http::handlers::auth::bearer_token;
 
 pub async fn start(
@@ -116,6 +119,70 @@ pub async fn print(
     Ok(Json(
         serde_json::to_value(response).unwrap_or_else(|_| serde_json::json!({"ok": false})),
     ))
+}
+
+pub async fn client_print_prepare(
+    State(state): State<AppState>,
+    method: Method,
+    headers: HeaderMap,
+    body: Bytes,
+) -> Result<Json<serde_json::Value>, (StatusCode, Json<RpsBatchErrorResponse>)> {
+    if method != Method::POST {
+        return Err(method_not_allowed());
+    }
+    let principal = authenticated_principal(&state, &headers).await?;
+    let request: RpsBatchPrintRequest =
+        serde_json::from_slice(&body).map_err(|_| bad_request("invalid_json", "invalid json"))?;
+    let mut material_request = state
+        .rps_batch
+        .material_receipt_request(&principal, request)
+        .await
+        .map_err(batch_error)?;
+    attach_actor(&mut material_request, &principal);
+    let response = state
+        .gscale
+        .prepare_material_receipt_client_print(material_request)
+        .map_err(gscale_error)?;
+    Ok(Json(
+        serde_json::to_value(response).unwrap_or_else(|_| serde_json::json!({"ok": false})),
+    ))
+}
+
+pub async fn client_print_confirm(
+    State(state): State<AppState>,
+    method: Method,
+    headers: HeaderMap,
+    body: Bytes,
+) -> Result<Json<serde_json::Value>, (StatusCode, Json<RpsBatchErrorResponse>)> {
+    if method != Method::POST {
+        return Err(method_not_allowed());
+    }
+    let principal = authenticated_principal(&state, &headers).await?;
+    let request: RpsBatchClientPrintConfirmRequest =
+        serde_json::from_slice(&body).map_err(|_| bad_request("invalid_json", "invalid json"))?;
+    let mut material_request = state
+        .rps_batch
+        .material_receipt_request(&principal, request.print)
+        .await
+        .map_err(batch_error)?;
+    attach_actor(&mut material_request, &principal);
+    let response = state
+        .gscale
+        .confirm_material_receipt_client_print(material_request, &request.epc)
+        .await
+        .map_err(gscale_error)?;
+    Ok(Json(
+        serde_json::to_value(response).unwrap_or_else(|_| serde_json::json!({"ok": false})),
+    ))
+}
+
+fn attach_actor(
+    request: &mut crate::core::gscale::models::MaterialReceiptPrintRequest,
+    principal: &Principal,
+) {
+    request.actor_role = principal_role_code(&principal.role).to_string();
+    request.actor_ref = principal.ref_.trim().to_string();
+    request.actor_display_name = principal.display_name.trim().to_string();
 }
 
 async fn require_material_warehouse_access(

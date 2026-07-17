@@ -36,6 +36,7 @@ async fn split_creates_repack_prints_each_output_and_submits() {
                 print_mode: "label".to_string(),
                 outputs: vec![
                     RezkaSplitOutputRequest {
+                        epc: String::new(),
                         item_code: "FLEXO-400".to_string(),
                         item_name: "Flexo 400".to_string(),
                         qty: 400.0,
@@ -45,6 +46,7 @@ async fn split_creates_repack_prints_each_output_and_submits() {
                         print_qr: true,
                     },
                     RezkaSplitOutputRequest {
+                        epc: String::new(),
                         item_code: "FLEXO-200".to_string(),
                         item_name: "Flexo 200".to_string(),
                         qty: 200.0,
@@ -102,6 +104,7 @@ async fn split_keeps_scrap_in_repack_without_printing_qr() {
                 print_mode: "label".to_string(),
                 outputs: vec![
                     RezkaSplitOutputRequest {
+                        epc: String::new(),
                         item_code: "FLEXO-550".to_string(),
                         item_name: "Flexo 550".to_string(),
                         qty: 550.0,
@@ -161,6 +164,7 @@ async fn split_does_not_print_brak_warehouse_even_when_client_requests_qr() {
                 print_mode: "label".to_string(),
                 outputs: vec![
                     RezkaSplitOutputRequest {
+                        epc: String::new(),
                         item_code: "FLEXO-550".to_string(),
                         item_name: "Flexo 550".to_string(),
                         qty: 550.0,
@@ -170,6 +174,7 @@ async fn split_does_not_print_brak_warehouse_even_when_client_requests_qr() {
                         print_qr: true,
                     },
                     RezkaSplitOutputRequest {
+                        epc: String::new(),
                         item_code: "FLEXO-RAW".to_string(),
                         item_name: "Flexo raw".to_string(),
                         qty: 50.0,
@@ -233,6 +238,103 @@ async fn split_rejects_output_total_that_does_not_match_source_qty() {
         .expect_err("invalid total");
 
     assert_eq!(error.code(), "invalid_input");
+}
+
+#[tokio::test]
+async fn client_split_commits_only_after_prepared_epcs_are_confirmed() {
+    const FIRST_EPC: &str = "303132333435363738394142";
+    const SECOND_EPC: &str = "304142434445464748493031";
+    let events = Arc::new(Mutex::new(Vec::new()));
+    let service = RezkaService::new()
+        .with_repack_store(Arc::new(FakeRezkaRepackStore {
+            events: events.clone(),
+        }))
+        .with_epc_source(Arc::new(SeqEpc::new([FIRST_EPC, SECOND_EPC])));
+    let mut request = client_split_request();
+
+    let prepared = service
+        .prepare_client_split(source(), request.clone())
+        .await
+        .expect("prepare client split");
+
+    assert_eq!(prepared.status, "prepared");
+    assert_eq!(prepared.outputs[0].epc, FIRST_EPC);
+    assert_eq!(prepared.outputs[1].epc, SECOND_EPC);
+    assert!(events.lock().unwrap().is_empty());
+
+    for (output, prepared_output) in request.outputs.iter_mut().zip(&prepared.outputs) {
+        output.epc = prepared_output.epc.clone();
+    }
+    let confirmed = service
+        .confirm_client_split(source(), request)
+        .await
+        .expect("confirm client split");
+
+    assert_eq!(confirmed.status, "printed");
+    assert_eq!(confirmed.stock_entry_name, "MAT-STE-REPACK-1");
+    assert_eq!(
+        events.lock().unwrap().as_slice(),
+        [
+            "draft:SRC-600:2:Offline USB:400 metr,200 metr",
+            "submit:MAT-STE-REPACK-1"
+        ]
+    );
+}
+
+#[tokio::test]
+async fn client_split_rejects_duplicate_prepared_epcs() {
+    const EPC: &str = "303132333435363738394142";
+    let events = Arc::new(Mutex::new(Vec::new()));
+    let service = RezkaService::new().with_repack_store(Arc::new(FakeRezkaRepackStore {
+        events: events.clone(),
+    }));
+    let mut request = client_split_request();
+    for output in &mut request.outputs {
+        output.epc = EPC.to_string();
+    }
+
+    let error = service
+        .confirm_client_split(source(), request)
+        .await
+        .expect_err("duplicate EPC must fail");
+
+    assert_eq!(error.code(), "invalid_input");
+    assert!(error.to_string().contains("client_print_epc_duplicate"));
+    assert!(events.lock().unwrap().is_empty());
+}
+
+fn client_split_request() -> RezkaSplitRequest {
+    RezkaSplitRequest {
+        source_barcode: "SRC-600".to_string(),
+        source_stock_entry: "MAT-STE-001".to_string(),
+        source_line_index: 1,
+        reason: "Offline USB".to_string(),
+        driver_url: "usb://local".to_string(),
+        printer: "godex".to_string(),
+        print_mode: "label".to_string(),
+        outputs: vec![
+            RezkaSplitOutputRequest {
+                epc: String::new(),
+                item_code: "FLEXO-400".to_string(),
+                item_name: "Flexo 400".to_string(),
+                qty: 400.0,
+                uom: "m".to_string(),
+                target_warehouse: "Work In Progress - A".to_string(),
+                reason: "400 metr".to_string(),
+                print_qr: true,
+            },
+            RezkaSplitOutputRequest {
+                epc: String::new(),
+                item_code: "FLEXO-200".to_string(),
+                item_name: "Flexo 200".to_string(),
+                qty: 200.0,
+                uom: "m".to_string(),
+                target_warehouse: "Stores - A".to_string(),
+                reason: "200 metr".to_string(),
+                print_qr: true,
+            },
+        ],
+    }
 }
 
 fn source() -> RezkaSourceEntry {

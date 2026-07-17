@@ -134,6 +134,80 @@ async fn rps_batch_print_uses_active_rs_batch_and_transaction_flow() {
 }
 
 #[tokio::test]
+async fn rps_batch_client_print_prepares_then_confirms_without_driver() {
+    const EPC: &str = "303132333435363738394142";
+    let events = Arc::new(Mutex::new(Vec::new()));
+    let receipt_actors = Arc::new(Mutex::new(Vec::new()));
+    let mut state = test_state();
+    state.gscale = GscaleService::new()
+        .with_receipt_store(Arc::new(FakeReceiptStore {
+            events: events.clone(),
+            receipt_actors: receipt_actors.clone(),
+        }))
+        .with_epc_source(Arc::new(FixedEpc(EPC)));
+    let token = session(&state, PrincipalRole::Werka).await;
+    let router = build_router(state);
+
+    let started = router
+        .clone()
+        .oneshot(request(
+            "POST",
+            "/v1/mobile/rps/batch/start",
+            &token,
+            r#"{
+                "client_batch_id":"batch-client-print-1",
+                "driver_url":"usb://local",
+                "item_code":"ITEM-1",
+                "item_name":"Green Tea",
+                "warehouse":"Stores - A",
+                "printer":"godex",
+                "print_mode":"label"
+            }"#,
+        ))
+        .await
+        .expect("start response");
+    assert_eq!(json_body(started).await["ok"], true);
+
+    let prepared = router
+        .clone()
+        .oneshot(request(
+            "POST",
+            "/v1/mobile/rps/batch/client-print/prepare",
+            &token,
+            r#"{"gross_qty":2.5,"unit":"kg"}"#,
+        ))
+        .await
+        .expect("prepare response");
+    let prepared_body = json_body(prepared).await;
+
+    assert_eq!(prepared_body["status"], "prepared");
+    assert_eq!(prepared_body["epc"], EPC);
+    assert!(events.lock().unwrap().is_empty());
+
+    let confirmed = router
+        .oneshot(request(
+            "POST",
+            "/v1/mobile/rps/batch/client-print/confirm",
+            &token,
+            &format!(r#"{{"gross_qty":2.5,"unit":"kg","epc":"{EPC}"}}"#),
+        ))
+        .await
+        .expect("confirm response");
+    let confirmed_body = json_body(confirmed).await;
+
+    assert_eq!(confirmed_body["status"], "printed");
+    assert_eq!(confirmed_body["draft_name"], "MAT-STE-ROUTE");
+    assert_eq!(
+        events.lock().unwrap().as_slice(),
+        ["create:2.500", "submit:MAT-STE-ROUTE"]
+    );
+    assert_eq!(
+        receipt_actors.lock().unwrap().as_slice(),
+        ["werka:admin:Admin"]
+    );
+}
+
+#[tokio::test]
 async fn rps_batch_print_returns_after_driver_without_waiting_for_receipt_submit() {
     let events = Arc::new(Mutex::new(Vec::new()));
     let mut state = test_state();

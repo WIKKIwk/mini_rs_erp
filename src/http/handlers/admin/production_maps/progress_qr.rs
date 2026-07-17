@@ -150,6 +150,8 @@ struct ProgressQrReprintRequest {
     print_mode: String,
     #[serde(default)]
     print_count: u32,
+    #[serde(default)]
+    print_transport: String,
 }
 
 pub async fn production_map_progress_qr_reprint(
@@ -186,7 +188,16 @@ pub async fn production_map_progress_qr_reprint(
         return Err(forbidden());
     }
     let request = progress_reprint_request(&input, &batch);
-    let print = match state.gscale.print_progress_label(request).await {
+    let print_result = if input
+        .print_transport
+        .trim()
+        .eq_ignore_ascii_case("offline")
+    {
+        state.gscale.prepare_progress_label(request)
+    } else {
+        state.gscale.print_progress_label(request).await
+    };
+    let print = match print_result {
         Ok(response) => serde_json::to_value(response).unwrap_or(serde_json::Value::Null),
         Err(error) => {
             tracing::warn!(

@@ -54,6 +54,54 @@ pub async fn split(
     ))
 }
 
+pub async fn split_client_prepare(
+    State(state): State<AppState>,
+    method: Method,
+    headers: HeaderMap,
+    body: Bytes,
+) -> Result<Json<serde_json::Value>, (StatusCode, Json<RezkaErrorResponse>)> {
+    if method != Method::POST {
+        return Err(method_not_allowed());
+    }
+    let principal = authenticated_principal(&state, &headers).await?;
+    ensure_rezka_access(&state, &principal).await?;
+    let request: RezkaSplitRequest =
+        serde_json::from_slice(&body).map_err(|_| bad_request("invalid_json", "invalid json"))?;
+    let source = source_by_barcode(&state, &request.source_barcode).await?;
+    let response = state
+        .rezka
+        .prepare_client_split(source, request)
+        .await
+        .map_err(rezka_error)?;
+    Ok(Json(
+        serde_json::to_value(response).unwrap_or_else(|_| serde_json::json!({"ok": false})),
+    ))
+}
+
+pub async fn split_client_confirm(
+    State(state): State<AppState>,
+    method: Method,
+    headers: HeaderMap,
+    body: Bytes,
+) -> Result<Json<serde_json::Value>, (StatusCode, Json<RezkaErrorResponse>)> {
+    if method != Method::POST {
+        return Err(method_not_allowed());
+    }
+    let principal = authenticated_principal(&state, &headers).await?;
+    ensure_rezka_access(&state, &principal).await?;
+    let request: RezkaSplitRequest =
+        serde_json::from_slice(&body).map_err(|_| bad_request("invalid_json", "invalid json"))?;
+    let source = source_by_barcode(&state, &request.source_barcode).await?;
+    let response = state
+        .rezka
+        .confirm_client_split(source, request)
+        .await
+        .map_err(rezka_error)?;
+    Ok(Json(
+        serde_json::to_value(response).unwrap_or_else(|_| serde_json::json!({"ok": false})),
+    ))
+}
+
 #[derive(Debug, Deserialize)]
 pub struct RezkaSourceQuery {
     barcode: Option<String>,

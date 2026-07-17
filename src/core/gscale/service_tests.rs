@@ -209,6 +209,63 @@ async fn progress_label_prints_without_receipt_store() {
     );
 }
 
+#[test]
+fn progress_label_can_be_prepared_without_calling_a_driver() {
+    let service = GscaleService::new();
+
+    let response = service
+        .prepare_progress_label(ProgressLabelPrintRequest {
+            qr_payload: "GSP:PROGRESS-2".to_string(),
+            item_code: "ORDER-2".to_string(),
+            item_name: "Progress label".to_string(),
+            executor_name: "Ali".to_string(),
+            gross_qty: 20.0,
+            progress_qty: 125.0,
+            unit: "kg".to_string(),
+            progress_unit: "m".to_string(),
+            label_kind: "progress".to_string(),
+            print_count: 2,
+            ..ProgressLabelPrintRequest::default()
+        })
+        .expect("prepare progress label");
+
+    assert_eq!(response.status, "prepared");
+    assert_eq!(response.printer_status, "client_usb_pending");
+    assert_eq!(response.label_kind, "progress");
+    assert_eq!(response.qty, 125.0);
+    assert_eq!(response.print_count, 2);
+}
+
+#[tokio::test]
+async fn material_receipt_client_print_records_only_after_usb_confirmation() {
+    const EPC: &str = "303132333435363738394142";
+    let events = Arc::new(Mutex::new(Vec::new()));
+    let service = GscaleService::new()
+        .with_receipt_store(Arc::new(FakeReceiptStore::new(events.clone())))
+        .with_epc_source(Arc::new(QueueEpc::new([EPC])));
+    let input = request();
+
+    let prepared = service
+        .prepare_material_receipt_client_print(input.clone())
+        .expect("prepare client print");
+
+    assert_eq!(prepared.status, "prepared");
+    assert_eq!(prepared.epc, EPC);
+    assert!(events.lock().unwrap().is_empty());
+
+    let confirmed = service
+        .confirm_material_receipt_client_print(input, &prepared.epc)
+        .await
+        .expect("confirm client print");
+
+    assert_eq!(confirmed.status, "printed");
+    assert_eq!(confirmed.draft_name, "MAT-STE-001");
+    assert_eq!(
+        events.lock().unwrap().as_slice(),
+        ["create:303132333435363738394142:1.720", "submit:MAT-STE-001"]
+    );
+}
+
 async fn wait_for_event(events: &Arc<Mutex<Vec<String>>>, needle: &str) {
     for _ in 0..50 {
         if events.lock().unwrap().iter().any(|event| event == needle) {

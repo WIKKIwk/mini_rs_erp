@@ -109,7 +109,7 @@ Expected:
 For a test or production instance behind a Cloudflare-managed hostname:
 
 ```bash
-make up-domain DOMAIN=mini-rs-erp-dev.wspace.sbs
+make up-domain DOMAIN=mini-rs-erp-test.wspace.sbs
 ```
 
 For production, require the database URL explicitly:
@@ -137,7 +137,7 @@ Useful knobs:
 Stop only local processes started for a hostname:
 
 ```bash
-make stop-domain DOMAIN=mini-rs-erp-dev.wspace.sbs
+make stop-domain DOMAIN=mini-rs-erp-test.wspace.sbs
 ```
 
 ## Main Workflows

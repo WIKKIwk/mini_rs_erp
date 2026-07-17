@@ -90,6 +90,14 @@ pub struct RpsBatchPrintRequest {
     pub print_count: u32,
 }
 
+#[derive(Debug, Clone, Default, PartialEq, Deserialize)]
+pub struct RpsBatchClientPrintConfirmRequest {
+    #[serde(default)]
+    pub epc: String,
+    #[serde(flatten)]
+    pub print: RpsBatchPrintRequest,
+}
+
 impl RpsBatchSession {
     pub fn material_receipt_request(
         &self,

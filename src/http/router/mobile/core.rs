@@ -101,6 +101,14 @@ pub(super) fn routes() -> Router<AppState> {
         .route("/v1/mobile/rps/batch/state", any(rps_batch::state))
         .route("/v1/mobile/rps/batch/stop", any(rps_batch::stop))
         .route("/v1/mobile/rps/batch/print", any(rps_batch::print))
+        .route(
+            "/v1/mobile/rps/batch/client-print/prepare",
+            any(rps_batch::client_print_prepare),
+        )
+        .route(
+            "/v1/mobile/rps/batch/client-print/confirm",
+            any(rps_batch::client_print_confirm),
+        )
         .route("/v1/mobile/qolip/blocks", any(qolip::blocks))
         .route("/v1/mobile/qolip/products", any(qolip::products))
         .route("/v1/mobile/qolip/product-specs", any(qolip::product_specs))
@@ -117,6 +125,14 @@ pub(super) fn routes() -> Router<AppState> {
         )
         .route("/v1/mobile/rezka/source", any(rezka::source))
         .route("/v1/mobile/rezka/split", any(rezka::split))
+        .route(
+            "/v1/mobile/rezka/split/client-print/prepare",
+            any(rezka::split_client_prepare),
+        )
+        .route(
+            "/v1/mobile/rezka/split/client-print/confirm",
+            any(rezka::split_client_confirm),
+        )
         .route("/v1/mobile/stock-entry/lookup", any(stock_entry::lookup))
         .route("/v1/mobile/customer/summary", any(customer::summary))
         .route("/v1/mobile/customer/history", any(customer::history))

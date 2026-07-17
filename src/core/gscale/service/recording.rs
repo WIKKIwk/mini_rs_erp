@@ -32,6 +32,70 @@ pub(super) async fn record_parallel_material_receipt(
     }
 }
 
+pub(super) async fn record_confirmed_material_receipt(
+    receipt_store: Arc<dyn MaterialReceiptStorePort>,
+    job: &NormalizedMaterialReceiptJob,
+    epc: String,
+    warehouse_event_handler: Option<WarehouseEventHandler>,
+) -> Result<String, GscaleServiceError> {
+    if let Some(stock) = receipt_store
+        .raw_material_stock_by_barcode(&epc)
+        .await
+        .map_err(|error| GscaleServiceError::StoreWrite(error.message()))?
+    {
+        validate_existing_receipt(
+            &stock.item_code,
+            &stock.warehouse,
+            stock.qty,
+            job,
+        )?;
+        return Ok(stock.source_receipt_id);
+    }
+
+    let draft = match receipt_store
+        .material_receipt_by_barcode(&epc)
+        .await
+        .map_err(|error| GscaleServiceError::StoreWrite(error.message()))?
+    {
+        Some(draft) => {
+            validate_existing_receipt(
+                &draft.item_code,
+                &draft.warehouse,
+                draft.qty,
+                job,
+            )?;
+            draft
+        }
+        None => create_material_receipt_draft(receipt_store.as_ref(), job, epc).await?,
+    };
+
+    receipt_store
+        .submit_stock_entry_draft(&draft.name)
+        .await
+        .map_err(|error| GscaleServiceError::SubmitFailed(clean_store_error(&error.message())))?;
+    if let Some(handler) = warehouse_event_handler {
+        handler(job.warehouse.clone(), "raw_material_stock".to_string());
+    }
+    Ok(draft.name)
+}
+
+fn validate_existing_receipt(
+    item_code: &str,
+    warehouse: &str,
+    qty: f64,
+    job: &NormalizedMaterialReceiptJob,
+) -> Result<(), GscaleServiceError> {
+    if !item_code.trim().eq_ignore_ascii_case(&job.item_code)
+        || !warehouse.trim().eq_ignore_ascii_case(&job.warehouse)
+        || (qty - job.net_qty).abs() > 0.000_001
+    {
+        return Err(GscaleServiceError::InvalidInput(
+            "client_print_epc_already_used".to_string(),
+        ));
+    }
+    Ok(())
+}
+
 async fn record_parallel_material_receipt_inner(
     receipt_store: Arc<dyn MaterialReceiptStorePort>,
     job: NormalizedMaterialReceiptJob,

@@ -1,6 +1,58 @@
 use super::*;
 
 impl RezkaService {
+    pub async fn prepare_client_split(
+        &self,
+        source: RezkaSourceEntry,
+        request: RezkaSplitRequest,
+    ) -> Result<RezkaSplitResponse, RezkaServiceError> {
+        let job = NormalizedRezkaSplit::from_request(source, request, self.epc.as_deref())?;
+        Ok(RezkaSplitResponse {
+            ok: true,
+            status: "prepared".to_string(),
+            stock_entry_name: String::new(),
+            source_barcode: job.source.barcode,
+            outputs: job.outputs,
+        })
+    }
+
+    pub async fn confirm_client_split(
+        &self,
+        source: RezkaSourceEntry,
+        request: RezkaSplitRequest,
+    ) -> Result<RezkaSplitResponse, RezkaServiceError> {
+        let repack_store = self.repack_store.as_ref().ok_or_else(|| {
+            RezkaServiceError::NotConfigured("rezka repack store is not configured".into())
+        })?;
+        let job = NormalizedRezkaSplit::from_request(source, request, self.epc.as_deref())?;
+        if !job.all_printable_epcs_supplied {
+            return Err(RezkaServiceError::InvalidInput(
+                "prepared_output_epc_required".to_string(),
+            ));
+        }
+        let draft = repack_store
+            .create_rezka_repack_draft(CreateRezkaRepackDraftInput {
+                source: job.source.clone(),
+                reason: job.reason.clone(),
+                outputs: job.outputs.clone(),
+            })
+            .await
+            .map_err(|error| RezkaServiceError::StoreWrite(error.message()))?;
+        repack_store
+            .submit_rezka_repack_draft(&draft.name)
+            .await
+            .map_err(|error| {
+                RezkaServiceError::SubmitFailed(clean_store_error(&error.message()))
+            })?;
+        Ok(RezkaSplitResponse {
+            ok: true,
+            status: "printed".to_string(),
+            stock_entry_name: draft.name,
+            source_barcode: job.source.barcode,
+            outputs: job.printable_outputs,
+        })
+    }
+
     pub async fn split(
         &self,
         source: RezkaSourceEntry,

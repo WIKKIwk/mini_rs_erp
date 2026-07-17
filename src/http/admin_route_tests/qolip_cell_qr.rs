@@ -58,8 +58,41 @@ async fn qolip_cell_qr_print_reuses_same_payload_for_same_cell() {
     assert_eq!(printed.len(), 2);
     assert_eq!(printed[0].epc, first_qr);
     assert_eq!(printed[1].epc, first_qr);
-    assert_eq!(printed[0].label_kind, "qr_center");
+    assert_eq!(printed[0].label_kind, "qolip_cell");
     assert_eq!(printed[0].item_name, "B7");
+}
+
+#[tokio::test]
+async fn qolip_cell_qr_offline_prepares_label_without_rps_driver() {
+    let mut state = test_state();
+    state.gscale = GscaleService::new();
+    let token = session(&state, PrincipalRole::Admin).await;
+
+    let response = build_router(state)
+        .oneshot(request_with_body(
+            "POST",
+            "/v1/mobile/qolip/cell-qr/print",
+            &token,
+            r#"{
+                "warehouse":"Qolip ombor",
+                "block":"A",
+                "row_letter":"B",
+                "column_number":7,
+                "driver_url":"usb://local",
+                "printer":"godex",
+                "print_mode":"label",
+                "print_transport":"offline"
+            }"#,
+        ))
+        .await
+        .expect("offline print prepare");
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = json_body(response).await;
+    assert_eq!(body["print"]["status"], "prepared");
+    assert_eq!(body["print"]["printer_status"], "client_usb_pending");
+    assert_eq!(body["print"]["label_kind"], "qolip_cell");
+    assert_eq!(body["print"]["qr_payload"], body["cell_qr"]["qr_payload"]);
 }
 
 #[tokio::test]
@@ -134,7 +167,7 @@ async fn qolip_code_qr_print_uses_code_as_stable_payload() {
     assert_eq!(printed[0].epc, "QOLIP-0007");
     assert_eq!(printed[0].item_code, "QOLIP-0007");
     assert_eq!(printed[0].item_name, "Kross qolip • 42");
-    assert_eq!(printed[0].label_kind, "qr_center");
+    assert_eq!(printed[0].label_kind, "qolip_cell");
 }
 
 struct ForbiddenQolipStore {
