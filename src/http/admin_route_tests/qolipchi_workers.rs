@@ -144,3 +144,38 @@ async fn qolipchi_is_listed_as_system_user_and_never_as_worker() {
     assert_eq!(body["items"][0]["entity_ref"], "qolipchi_list");
     assert_eq!(body["items"][0]["principal_role"], "qolipchi");
 }
+
+#[tokio::test]
+async fn active_qolipchi_is_returned_by_warehouse_assignee_search_filter() {
+    let state = test_state();
+    let token = session(&state, PrincipalRole::Admin).await;
+
+    build_router(state.clone())
+        .oneshot(request_with_body(
+            "POST",
+            "/v1/mobile/admin/system-users",
+            &token,
+            r#"{"id":"qolipchi_jumaniyoz","role":"qolipchi","name":"Jumaniyoz qolipchi","phone":"+998110000011"}"#,
+        ))
+        .await
+        .expect("create qolipchi");
+
+    let response = build_router(state)
+        .oneshot(request(
+            "GET",
+            "/v1/mobile/admin/users/list?role=qolipchi&q=jumaniyoz&limit=20&offset=0",
+            &token,
+        ))
+        .await
+        .expect("qolipchi assignee search");
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = json_body(response).await;
+    let items = body["items"].as_array().expect("items");
+    assert_eq!(items.len(), 1);
+    assert_eq!(items[0]["entity_ref"], "qolipchi_jumaniyoz");
+    assert_eq!(items[0]["principal_role"], "qolipchi");
+    assert_eq!(items[0]["name"], "Jumaniyoz qolipchi");
+    assert_eq!(items[0]["blocked"], false);
+    assert_eq!(items[0]["status"], "active");
+}
