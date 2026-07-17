@@ -118,3 +118,96 @@ async fn customer_can_register_device_token_for_chat() {
     assert_eq!(records.len(), 1);
     assert_eq!(records[0].token, "fcm-customer");
 }
+
+#[tokio::test]
+async fn chat_media_upload_initialization_requires_authenticated_session() {
+    let response = build_router(test_state())
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v1/mobile/chat/conversations/conversation_1/media/uploads")
+                .header(header::CONTENT_TYPE, "application/json")
+                .body(Body::from(
+                    r#"{"client_upload_id":"upload_1","kind":"image","filename":"photo.jpg","content_type":"image/jpeg","size_bytes":3}"#,
+                ))
+                .expect("request"),
+        )
+        .await
+        .expect("response");
+
+    assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+}
+
+#[tokio::test]
+async fn chat_media_upload_initialization_rejects_oversized_images_before_storage() {
+    let mut state = test_state();
+    state.chat_media = crate::core::chat_media::ChatMediaService::unavailable();
+    let token = state
+        .sessions
+        .create(Principal {
+            role: PrincipalRole::Customer,
+            display_name: "Customer".to_string(),
+            legal_name: "Customer".to_string(),
+            ref_: "customer_001".to_string(),
+            phone: String::new(),
+            avatar_url: String::new(),
+        })
+        .await
+        .expect("session");
+    let response = build_router(state)
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v1/mobile/chat/conversations/conversation_1/media/uploads")
+                .header(header::AUTHORIZATION, format!("Bearer {token}"))
+                .header(header::CONTENT_TYPE, "application/json")
+                .body(Body::from(
+                    r#"{"client_upload_id":"upload_1","kind":"image","filename":"photo.jpg","content_type":"image/jpeg","size_bytes":15728641}"#,
+                ))
+                .expect("request"),
+        )
+        .await
+        .expect("response");
+
+    assert_eq!(response.status(), StatusCode::PAYLOAD_TOO_LARGE);
+    let body = to_bytes(response.into_body(), usize::MAX)
+        .await
+        .expect("body");
+    assert_eq!(
+        serde_json::from_slice::<serde_json::Value>(&body).unwrap()["error"],
+        "chat_media_too_large"
+    );
+}
+
+#[tokio::test]
+async fn chat_media_upload_initialization_rejects_unknown_media_kind() {
+    let state = test_state();
+    let token = state
+        .sessions
+        .create(Principal {
+            role: PrincipalRole::Customer,
+            display_name: "Customer".to_string(),
+            legal_name: "Customer".to_string(),
+            ref_: "customer_001".to_string(),
+            phone: String::new(),
+            avatar_url: String::new(),
+        })
+        .await
+        .expect("session");
+    let response = build_router(state)
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v1/mobile/chat/conversations/conversation_1/media/uploads")
+                .header(header::AUTHORIZATION, format!("Bearer {token}"))
+                .header(header::CONTENT_TYPE, "application/json")
+                .body(Body::from(
+                    r#"{"client_upload_id":"upload_1","kind":"document","filename":"file.bin","content_type":"application/octet-stream","size_bytes":3}"#,
+                ))
+                .expect("request"),
+        )
+        .await
+        .expect("response");
+
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+}

@@ -12,3 +12,6 @@ pub mod push_token_store;
 #[cfg(test)]
 mod push_token_store_tests;
 pub mod role_store;
+
+#[cfg(test)]
+mod chat_media_storage_tests;

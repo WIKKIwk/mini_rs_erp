@@ -472,6 +472,30 @@ mod tests {
     }
 
     #[test]
+    fn postgres_chat_media_migration_defines_private_upload_foundation() {
+        let migration = POSTGRES_MIGRATIONS[10].1.to_lowercase();
+
+        for table in [
+            "mini_chat_media",
+            "mini_chat_message_attachments",
+            "mini_chat_media_jobs",
+        ] {
+            assert!(
+                migration.contains(&format!("create table if not exists {table}")),
+                "missing chat media table {table}"
+            );
+        }
+        assert!(migration.contains("mini_chat_media_client_upload_unique"));
+        assert!(migration.contains("declared_size_bytes > 0"));
+        assert!(migration.contains("declared_duration_ms between 1 and 120000"));
+        assert!(migration.contains("media_kind in ('image', 'video')"));
+        assert!(migration.contains("message_id text not null unique"));
+        assert!(migration.contains("media_id text not null unique"));
+        assert!(migration.contains("job_status = 'pending'"));
+        assert!(!migration.contains("public_url"));
+    }
+
+    #[test]
     fn postgres_boyoqchi_migration_defines_role_inbox() {
         let migration = POSTGRES_MIGRATIONS[5].1.to_lowercase();
 
@@ -719,13 +743,16 @@ mod tests {
                  'mini_apparatus_queue_policies',
                  'mini_queue_action_events',
                  'mini_engine_events',
-                 'mini_idempotency_keys'
+                 'mini_idempotency_keys',
+                 'mini_chat_media',
+                 'mini_chat_message_attachments',
+                 'mini_chat_media_jobs'
                )",
         )
         .fetch_one(&pool)
         .await
         .expect("count tables");
-        assert_eq!(table_count, 20);
+        assert_eq!(table_count, 23);
 
         sqlx::query(
             "INSERT INTO mini_idempotency_keys (key, domain, action, entity_id)

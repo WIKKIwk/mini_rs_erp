@@ -28,6 +28,17 @@ EXTRACT(EPOCH FROM created_at)::BIGINT AS created_at_unix,
 EXTRACT(EPOCH FROM updated_at)::BIGINT AS updated_at_unix
 "#;
 
+const AUTHORIZED_PRINCIPAL_SQL: &str = r#"SELECT chat_principal.principal_id
+FROM mini_chat_principals chat_principal
+JOIN mini_chat_conversation_members member
+  ON member.principal_id = chat_principal.principal_id
+WHERE chat_principal.principal_role = $1
+  AND chat_principal.principal_ref = $2
+  AND chat_principal.active = TRUE
+  AND member.conversation_id = $3
+  AND member.left_at IS NULL
+  AND ($4 = FALSE OR member.can_post = TRUE)"#;
+
 pub(super) async fn initialize_upload(
     pool: &PgPool,
     principal: &Principal,
@@ -315,18 +326,7 @@ async fn authorized_principal_id(
     conversation_id: &str,
     require_can_post: bool,
 ) -> Result<String, ChatMediaError> {
-    sqlx::query_scalar::<_, String>(
-        r#"SELECT chat_principal.principal_id
-           FROM mini_chat_principals chat_principal
-           JOIN mini_chat_conversation_members member
-             ON member.principal_id = chat_principal.principal_id
-           WHERE chat_principal.principal_role = $1
-             AND chat_principal.principal_ref = $2
-             AND chat_principal.active = TRUE
-             AND member.conversation_id = $3
-             AND member.left_at IS NULL
-             AND ($4 = FALSE OR member.can_post = TRUE)"#,
-    )
+    sqlx::query_scalar::<_, String>(AUTHORIZED_PRINCIPAL_SQL)
     .bind(role_key(&principal.role))
     .bind(principal.ref_.trim())
     .bind(conversation_id)
@@ -335,6 +335,31 @@ async fn authorized_principal_id(
     .await
     .map_err(|_| ChatMediaError::StoreFailed)?
     .ok_or(ChatMediaError::Forbidden)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{AUTHORIZED_PRINCIPAL_SQL, prefixed_columns};
+
+    #[test]
+    fn media_authorization_requires_active_conversation_membership_and_can_post_when_requested() {
+        let query = AUTHORIZED_PRINCIPAL_SQL.to_ascii_lowercase();
+
+        assert!(query.contains("mini_chat_conversation_members"));
+        assert!(query.contains("chat_principal.active = true"));
+        assert!(query.contains("member.conversation_id = $3"));
+        assert!(query.contains("member.left_at is null"));
+        assert!(query.contains("member.can_post = true"));
+    }
+
+    #[test]
+    fn orphan_returning_columns_are_qualified_for_update_query() {
+        let columns = prefixed_columns("media").to_ascii_lowercase();
+
+        assert!(columns.contains("media.media_id"));
+        assert!(columns.contains("extract(epoch from media.expires_at)"));
+        assert!(!columns.contains("\nmedia.extract"));
+    }
 }
 
 async fn by_upload_id(

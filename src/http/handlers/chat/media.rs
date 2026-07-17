@@ -114,6 +114,9 @@ pub async fn media_upload_content(
         .get(header::CONTENT_LENGTH)
         .and_then(|value| value.to_str().ok())
         .and_then(|value| value.parse::<i64>().ok());
+    let content_type = headers
+        .get(header::CONTENT_TYPE)
+        .and_then(|value| value.to_str().ok());
     let stream = Box::pin(UploadBodyStream {
         inner: body.into_data_stream(),
     });
@@ -124,6 +127,7 @@ pub async fn media_upload_content(
             &conversation_id,
             &upload_id,
             content_length,
+            content_type,
             stream,
         )
         .await

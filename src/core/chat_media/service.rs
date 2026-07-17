@@ -75,6 +75,14 @@ impl ChatMediaService {
             )
             .await?;
         ensure_idempotent_input_matches(&created, &input)?;
+        if !created.created
+            && !matches!(
+                created.record.status,
+                ChatMediaStatus::Pending | ChatMediaStatus::Uploaded
+            )
+        {
+            return Err(ChatMediaError::Conflict);
+        }
         let storage_upload = self
             .storage
             .prepare_upload(
@@ -112,6 +120,7 @@ impl ChatMediaService {
         conversation_id: &str,
         upload_id: &str,
         content_length: Option<i64>,
+        content_type: Option<&str>,
         stream: ChatMediaByteStream,
     ) -> Result<ChatMediaUploadView, ChatMediaError> {
         let conversation_id = validate_identifier(conversation_id)?;
@@ -124,6 +133,13 @@ impl ChatMediaService {
             return Err(ChatMediaError::Conflict);
         }
         if content_length.is_some_and(|value| value != record.declared_size_bytes) {
+            return Err(ChatMediaError::InvalidInput);
+        }
+        if content_type
+            .map(normalize_content_type)
+            .as_deref()
+            .is_none_or(|value| value != record.declared_content_type)
+        {
             return Err(ChatMediaError::InvalidInput);
         }
         let stored = self
