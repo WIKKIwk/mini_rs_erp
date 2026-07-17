@@ -189,6 +189,11 @@ impl WarehouseStorePort for PostgresWarehouseStore {
                 FROM mini_raw_material_stock
                 GROUP BY warehouse
             ),
+            finished_counts AS (
+                SELECT warehouse, count(*)::bigint AS finished_count
+                FROM mini_finished_goods_stock
+                GROUP BY warehouse
+            ),
             qolip_counts AS (
                 SELECT warehouse, COALESCE(sum(quantity), 0)::bigint AS qolip_count
                 FROM mini_qolip_locations
@@ -230,6 +235,8 @@ impl WarehouseStorePort for PostgresWarehouseStore {
                 UNION
                 SELECT warehouse FROM raw_counts
                 UNION
+                SELECT warehouse FROM finished_counts
+                UNION
                 SELECT warehouse FROM qolip_counts
                 UNION
                 SELECT warehouse FROM qolip_checkout_counts
@@ -243,6 +250,7 @@ impl WarehouseStorePort for PostgresWarehouseStore {
                 (
                     COALESCE(item_counts.item_count, 0)
                     + COALESCE(raw_counts.raw_count, 0)
+                    + COALESCE(finished_counts.finished_count, 0)
                     + COALESCE(qolip_counts.qolip_count, 0)
                 )::bigint AS product_count,
                 (
@@ -254,6 +262,7 @@ impl WarehouseStorePort for PostgresWarehouseStore {
             FROM warehouse_names
             LEFT JOIN item_counts ON lower(item_counts.warehouse) = lower(warehouse_names.warehouse)
             LEFT JOIN raw_counts ON lower(raw_counts.warehouse) = lower(warehouse_names.warehouse)
+            LEFT JOIN finished_counts ON lower(finished_counts.warehouse) = lower(warehouse_names.warehouse)
             LEFT JOIN qolip_counts ON lower(qolip_counts.warehouse) = lower(warehouse_names.warehouse)
             LEFT JOIN qolip_checkout_counts ON lower(qolip_checkout_counts.warehouse) = lower(warehouse_names.warehouse)
             LEFT JOIN reservation_counts ON lower(reservation_counts.warehouse) = lower(warehouse_names.warehouse)
@@ -309,6 +318,107 @@ impl WarehouseStorePort for PostgresWarehouseStore {
         .await
         .map_err(|_| WarehouseError::StoreFailed)
         .and_then(row_to_assignment)
+    }
+
+    async fn delete_warehouse(&self, warehouse: &str) -> Result<(), WarehouseError> {
+        let warehouse = warehouse.trim();
+        if warehouse.is_empty() {
+            return Err(WarehouseError::MissingWarehouse);
+        }
+        let mut transaction = self
+            .pool
+            .begin()
+            .await
+            .map_err(|_| WarehouseError::StoreFailed)?;
+        let item_codes = sqlx::query_scalar::<_, String>(
+            r#"
+            WITH RECURSIVE group_path(group_name, node_name, parent_name) AS (
+                SELECT lower(name), lower(name), lower(parent_item_group)
+                FROM mini_item_groups
+                UNION ALL
+                SELECT group_path.group_name, lower(parent.name), lower(parent.parent_item_group)
+                FROM group_path
+                JOIN mini_item_groups parent ON lower(parent.name) = group_path.parent_name
+                WHERE group_path.parent_name <> ''
+            ),
+            group_kind AS (
+                SELECT
+                    group_name,
+                    bool_or(node_name LIKE '%homashyo%' OR node_name LIKE '%xomashyo%') AS is_raw,
+                    bool_or(node_name LIKE '%tayyor%' AND node_name LIKE '%mahsulot%') AS is_finished
+                FROM group_path
+                GROUP BY group_name
+            ),
+            warehouse_kind AS (
+                SELECT
+                    (
+                        SELECT name FROM mini_warehouses
+                        WHERE lower(name) LIKE '%homashyo%' OR lower(name) LIKE '%xomashyo%'
+                        ORDER BY lower(name) LIMIT 1
+                    ) AS raw_warehouse,
+                    (
+                        SELECT name FROM mini_warehouses
+                        WHERE lower(name) LIKE '%tayyor%' AND lower(name) LIKE '%mahsulot%'
+                        ORDER BY lower(name) LIMIT 1
+                    ) AS finished_warehouse
+            )
+            SELECT items.code
+            FROM mini_items items
+            LEFT JOIN group_kind ON lower(items.item_group) = group_kind.group_name
+            CROSS JOIN warehouse_kind
+            WHERE lower(
+                COALESCE(
+                    NULLIF(btrim(items.warehouse), ''),
+                    CASE
+                        WHEN group_kind.is_raw THEN warehouse_kind.raw_warehouse
+                        WHEN group_kind.is_finished THEN warehouse_kind.finished_warehouse
+                        ELSE ''
+                    END,
+                    ''
+                )
+            ) = lower($1)
+            "#,
+        )
+        .bind(warehouse)
+        .fetch_all(&mut *transaction)
+        .await
+        .map_err(|_| WarehouseError::StoreFailed)?;
+
+        for table in [
+            "mini_qolip_cell_qrs",
+            "mini_qolip_locations",
+            "mini_raw_material_stock",
+            "mini_finished_goods_stock",
+        ] {
+            sqlx::query(&format!(
+                "DELETE FROM {table} WHERE lower(warehouse) = lower($1)"
+            ))
+            .bind(warehouse)
+            .execute(&mut *transaction)
+            .await
+            .map_err(|_| WarehouseError::StoreFailed)?;
+        }
+        if !item_codes.is_empty() {
+            sqlx::query("DELETE FROM mini_items WHERE code = ANY($1)")
+                .bind(&item_codes)
+                .execute(&mut *transaction)
+                .await
+                .map_err(|_| WarehouseError::StoreFailed)?;
+        }
+        sqlx::query("DELETE FROM mini_warehouse_assignments WHERE lower(warehouse) = lower($1)")
+            .bind(warehouse)
+            .execute(&mut *transaction)
+            .await
+            .map_err(|_| WarehouseError::StoreFailed)?;
+        sqlx::query("DELETE FROM mini_warehouses WHERE lower(name) = lower($1)")
+            .bind(warehouse)
+            .execute(&mut *transaction)
+            .await
+            .map_err(|_| WarehouseError::StoreFailed)?;
+        transaction
+            .commit()
+            .await
+            .map_err(|_| WarehouseError::StoreFailed)
     }
 }
 

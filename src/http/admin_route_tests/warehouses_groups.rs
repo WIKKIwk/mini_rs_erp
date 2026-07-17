@@ -306,6 +306,117 @@ async fn admin_can_assign_warehouse_to_user_and_list_assignments() {
 }
 
 #[tokio::test]
+async fn admin_deletes_empty_warehouse_and_its_assignments() {
+    let state = test_state();
+    let token = session(&state, PrincipalRole::Admin).await;
+
+    build_router(state.clone())
+        .oneshot(request_with_body(
+            "POST",
+            "/v1/mobile/admin/warehouses",
+            &token,
+            r#"{"warehouse":"Delete me"}"#,
+        ))
+        .await
+        .expect("create warehouse");
+    build_router(state.clone())
+        .oneshot(request_with_body(
+            "POST",
+            "/v1/mobile/admin/warehouses/assignments",
+            &token,
+            r#"{"warehouse":"Delete me","principal_role":"supplier","principal_ref":"SUP-001","display_name":"Supplier One"}"#,
+        ))
+        .await
+        .expect("assign warehouse");
+
+    let response = build_router(state.clone())
+        .oneshot(request_with_body(
+            "DELETE",
+            "/v1/mobile/admin/warehouses",
+            &token,
+            r#"{"warehouse":"Delete me","delete_products":false}"#,
+        ))
+        .await
+        .expect("delete warehouse");
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = json_body(response).await;
+    assert_eq!(body["warehouse"], "Delete me");
+    assert_eq!(body["deleted_product_count"], 0);
+    assert_eq!(body["deleted_assignment_count"], 1);
+
+    let assignments = build_router(state)
+        .oneshot(request(
+            "GET",
+            "/v1/mobile/admin/warehouses/assignments?warehouse=Delete%20me",
+            &token,
+        ))
+        .await
+        .expect("list assignments");
+    assert!(json_body(assignments).await.as_array().unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn warehouse_products_require_confirmation_and_active_reservations_block_delete() {
+    let mut state = test_state();
+    let store = Arc::new(MemoryWarehouseStore::new());
+    state.warehouses = WarehouseService::new(store.clone());
+    let token = session(&state, PrincipalRole::Admin).await;
+
+    build_router(state.clone())
+        .oneshot(request_with_body(
+            "POST",
+            "/v1/mobile/admin/warehouses",
+            &token,
+            r#"{"warehouse":"Stock warehouse"}"#,
+        ))
+        .await
+        .expect("create warehouse");
+    store.set_summary_counts("Stock warehouse", 4, 1).await;
+
+    let reserved = build_router(state.clone())
+        .oneshot(request_with_body(
+            "DELETE",
+            "/v1/mobile/admin/warehouses",
+            &token,
+            r#"{"warehouse":"Stock warehouse","delete_products":true}"#,
+        ))
+        .await
+        .expect("reserved delete");
+    assert_eq!(reserved.status(), StatusCode::CONFLICT);
+    assert_eq!(
+        json_body(reserved).await["error"],
+        "warehouse_has_active_reservations"
+    );
+
+    store.set_summary_counts("Stock warehouse", 4, 0).await;
+    let unconfirmed = build_router(state.clone())
+        .oneshot(request_with_body(
+            "DELETE",
+            "/v1/mobile/admin/warehouses",
+            &token,
+            r#"{"warehouse":"Stock warehouse","delete_products":false}"#,
+        ))
+        .await
+        .expect("unconfirmed delete");
+    assert_eq!(unconfirmed.status(), StatusCode::CONFLICT);
+    assert_eq!(json_body(unconfirmed).await["error"], "warehouse_not_empty");
+
+    let confirmed = build_router(state)
+        .oneshot(request_with_body(
+            "DELETE",
+            "/v1/mobile/admin/warehouses",
+            &token,
+            r#"{"warehouse":"Stock warehouse","delete_products":true}"#,
+        ))
+        .await
+        .expect("confirmed delete");
+    assert_eq!(confirmed.status(), StatusCode::OK);
+    let body = json_body(confirmed).await;
+    assert_eq!(body["deleted_product_count"], 4);
+}
+
+#[tokio::test]
 async fn admin_warehouse_summary_returns_lightweight_counts() {
     let state = test_state();
     let token = session(&state, PrincipalRole::Admin).await;

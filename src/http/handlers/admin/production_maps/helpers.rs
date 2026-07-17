@@ -107,6 +107,10 @@ pub(super) fn warehouse_error(error: WarehouseError) -> AdminError {
     match error {
         WarehouseError::MissingWarehouse => bad_request("warehouse is required"),
         WarehouseError::MissingPrincipalRef => bad_request("principal ref is required"),
+        WarehouseError::NotFound => not_found("warehouse not found"),
+        WarehouseError::NotEmpty(_)
+        | WarehouseError::HasActiveReservations(_)
+        | WarehouseError::HasChildren => bad_request("warehouse operation is not allowed"),
         WarehouseError::StoreFailed => server_error("warehouse store failed"),
     }
 }

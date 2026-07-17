@@ -1,4 +1,4 @@
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 
 use async_trait::async_trait;
@@ -47,12 +47,34 @@ pub struct WarehouseAssignmentUpsert {
     pub display_name: String,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+pub struct WarehouseDeleteRequest {
+    pub warehouse: String,
+    #[serde(default)]
+    pub delete_products: bool,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct WarehouseDeleteResult {
+    pub warehouse: String,
+    pub deleted_product_count: usize,
+    pub deleted_assignment_count: usize,
+}
+
 #[derive(Debug, Error, Clone, PartialEq, Eq)]
 pub enum WarehouseError {
     #[error("warehouse is required")]
     MissingWarehouse,
     #[error("principal ref is required")]
     MissingPrincipalRef,
+    #[error("warehouse not found")]
+    NotFound,
+    #[error("warehouse contains {0} products")]
+    NotEmpty(usize),
+    #[error("warehouse contains {0} active reservations")]
+    HasActiveReservations(usize),
+    #[error("warehouse contains child warehouses")]
+    HasChildren,
     #[error("warehouse store failed")]
     StoreFailed,
 }
@@ -86,6 +108,8 @@ pub trait WarehouseStorePort: Send + Sync {
         &self,
         assignment: WarehouseAssignment,
     ) -> Result<WarehouseAssignment, WarehouseError>;
+
+    async fn delete_warehouse(&self, warehouse: &str) -> Result<(), WarehouseError>;
 }
 
 #[derive(Clone)]
@@ -166,6 +190,40 @@ impl WarehouseService {
         let assignment = normalize_assignment(input)?;
         self.store.put_warehouse_assignment(assignment).await
     }
+
+    pub async fn delete_warehouse(
+        &self,
+        input: WarehouseDeleteRequest,
+    ) -> Result<WarehouseDeleteResult, WarehouseError> {
+        let warehouse = input.warehouse.trim();
+        if warehouse.is_empty() {
+            return Err(WarehouseError::MissingWarehouse);
+        }
+        if !self.store.warehouses("", warehouse, 1).await?.is_empty() {
+            return Err(WarehouseError::HasChildren);
+        }
+        let summary = self
+            .store
+            .warehouse_summaries(warehouse, 500)
+            .await?
+            .into_iter()
+            .find(|summary| summary.warehouse.trim().eq_ignore_ascii_case(warehouse))
+            .ok_or(WarehouseError::NotFound)?;
+        if summary.reserved_count > 0 {
+            return Err(WarehouseError::HasActiveReservations(
+                summary.reserved_count,
+            ));
+        }
+        if summary.product_count > 0 && !input.delete_products {
+            return Err(WarehouseError::NotEmpty(summary.product_count));
+        }
+        self.store.delete_warehouse(warehouse).await?;
+        Ok(WarehouseDeleteResult {
+            warehouse: summary.warehouse,
+            deleted_product_count: summary.product_count,
+            deleted_assignment_count: summary.assignment_count,
+        })
+    }
 }
 
 fn normalize_warehouse(input: WarehouseUpsert) -> Result<AdminWarehouse, WarehouseError> {
@@ -230,11 +288,25 @@ pub fn merge_admin_warehouses(
 pub struct MemoryWarehouseStore {
     warehouses: RwLock<Vec<AdminWarehouse>>,
     assignments: RwLock<Vec<WarehouseAssignment>>,
+    summary_counts: RwLock<BTreeMap<String, (usize, usize)>>,
 }
 
 impl MemoryWarehouseStore {
     pub fn new() -> Self {
         Self::default()
+    }
+
+    #[cfg(test)]
+    pub async fn set_summary_counts(
+        &self,
+        warehouse: &str,
+        product_count: usize,
+        reserved_count: usize,
+    ) {
+        self.summary_counts.write().await.insert(
+            warehouse.trim().to_lowercase(),
+            (product_count, reserved_count),
+        );
     }
 }
 
@@ -322,6 +394,20 @@ impl WarehouseStorePort for MemoryWarehouseStore {
         Ok(assignment)
     }
 
+    async fn delete_warehouse(&self, warehouse: &str) -> Result<(), WarehouseError> {
+        let key = warehouse.trim().to_lowercase();
+        self.warehouses
+            .write()
+            .await
+            .retain(|item| item.warehouse.trim().to_lowercase() != key);
+        self.assignments
+            .write()
+            .await
+            .retain(|item| item.warehouse.trim().to_lowercase() != key);
+        self.summary_counts.write().await.remove(&key);
+        Ok(())
+    }
+
     async fn warehouse_summaries(
         &self,
         query: &str,
@@ -330,6 +416,7 @@ impl WarehouseStorePort for MemoryWarehouseStore {
         let query = query.trim().to_lowercase();
         let warehouses = self.warehouses.read().await.clone();
         let assignments = self.assignments.read().await.clone();
+        let summary_counts = self.summary_counts.read().await.clone();
         let mut summaries = warehouses
             .into_iter()
             .filter(|warehouse| {
@@ -341,10 +428,14 @@ impl WarehouseStorePort for MemoryWarehouseStore {
                     .iter()
                     .filter(|item| item.warehouse.eq_ignore_ascii_case(&warehouse.warehouse))
                     .collect::<Vec<_>>();
+                let (product_count, reserved_count) = summary_counts
+                    .get(&warehouse.warehouse.trim().to_lowercase())
+                    .copied()
+                    .unwrap_or_default();
                 WarehouseSummary {
                     warehouse: warehouse.warehouse,
-                    product_count: 0,
-                    reserved_count: 0,
+                    product_count,
+                    reserved_count,
                     assignment_count: assigned.len(),
                     assigned_display_names: assigned
                         .into_iter()

@@ -70,7 +70,9 @@ use crate::core::auth::models::{Principal, PrincipalRole};
 use crate::core::authz::{
     Capability, RoleAssignmentUpsert, RoleDefinitionUpsert, capability_catalog_entries,
 };
-use crate::core::warehouses::{WarehouseAssignmentUpsert, WarehouseError, WarehouseUpsert};
+use crate::core::warehouses::{
+    WarehouseAssignmentUpsert, WarehouseDeleteRequest, WarehouseError, WarehouseUpsert,
+};
 use crate::core::werka::models::{CustomerDirectoryEntry, DispatchRecord, SupplierItem};
 use crate::http::handlers::auth::{bearer_token, profile_avatar_proxy_url};
 

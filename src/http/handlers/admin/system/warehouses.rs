@@ -22,8 +22,21 @@ pub async fn warehouses(
         ],
     )
     .await?;
-    if !matches!(method, Method::GET | Method::POST) {
+    if !matches!(method, Method::GET | Method::POST | Method::DELETE) {
         return Err(method_not_allowed());
+    }
+    if method == Method::DELETE {
+        require_capability(&state, &principal, Capability::AdminAccess).await?;
+        let input: WarehouseDeleteRequest = parse_json(&body)?;
+        let deleted = state
+            .warehouses
+            .delete_warehouse(input)
+            .await
+            .map_err(warehouse_error)?;
+        state
+            .warehouse_events
+            .notify_updated(&deleted.warehouse, "warehouse_deleted");
+        return Ok(json_response(deleted));
     }
     if method == Method::POST {
         require_capability(&state, &principal, Capability::ProductionMapManage).await?;
@@ -249,6 +262,21 @@ fn warehouse_error(error: WarehouseError) -> AdminError {
     match error {
         WarehouseError::MissingWarehouse => bad_request("warehouse is required"),
         WarehouseError::MissingPrincipalRef => bad_request("principal ref is required"),
+        WarehouseError::NotFound => not_found("warehouse_not_found"),
+        WarehouseError::NotEmpty(_) => (
+            StatusCode::CONFLICT,
+            Json(AdminErrorResponse::new("warehouse_not_empty")),
+        ),
+        WarehouseError::HasActiveReservations(_) => (
+            StatusCode::CONFLICT,
+            Json(AdminErrorResponse::new(
+                "warehouse_has_active_reservations",
+            )),
+        ),
+        WarehouseError::HasChildren => (
+            StatusCode::CONFLICT,
+            Json(AdminErrorResponse::new("warehouse_has_children")),
+        ),
         WarehouseError::StoreFailed => server_error("warehouse store failed"),
     }
 }
