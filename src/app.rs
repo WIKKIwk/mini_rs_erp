@@ -10,6 +10,7 @@ use crate::core::auth::service::AuthService;
 use crate::core::auth::ports::CustomerLookup;
 use crate::core::calculate_orders::CalculateOrderStorePort;
 use crate::core::chat::ChatService;
+use crate::core::chat_media::ChatMediaService;
 use crate::core::customer::service::CustomerService;
 use crate::core::gscale::GscaleService;
 use crate::core::mini_orders::MiniOrderSink;
@@ -37,6 +38,8 @@ use crate::rps::RpsDriverClient;
 use crate::store::admin_store::JsonAdminStore;
 use crate::store::profile_avatar_local::LocalProfileAvatarStorage;
 use crate::store::profile_avatar_r2::R2ProfileAvatarStorage;
+use crate::store::chat_media_local::LocalChatMediaStorage;
+use crate::store::chat_media_r2::R2ChatMediaStorage;
 use crate::store::role_store::RoleDefinitionStore;
 
 #[path = "app_local_store.rs"]
@@ -65,6 +68,7 @@ pub struct AppState {
     pub apparatus_groups: ApparatusGroupService,
     pub calculate_orders: Arc<dyn CalculateOrderStorePort>,
     pub chat: ChatService,
+    pub chat_media: ChatMediaService,
     pub order_sheets: Arc<dyn OrderSheetSink>,
     pub production_orders: Arc<dyn MiniOrderSink>,
     pub calculate_order_image_dir: Arc<std::path::PathBuf>,
@@ -134,6 +138,7 @@ impl AppState {
         let push = PushService::new(push_token_store.clone())
             .with_sender(discover_push_sender(push_token_store));
         let chat = build_chat_service();
+        let chat_media = build_chat_media_service(&config);
         chat.start_delivery_worker(push.clone());
         let rps_batch = RpsBatchService::new(build_rps_batch_store());
         let scale_driver = build_scale_driver(&config);
@@ -158,6 +163,7 @@ impl AppState {
             apparatus_groups,
             calculate_orders,
             chat,
+            chat_media,
             order_sheets,
             production_orders,
             calculate_order_image_dir,

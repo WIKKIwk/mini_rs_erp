@@ -3,6 +3,7 @@ pub mod postgres_admin_catalog;
 pub mod postgres_apparatus_group;
 pub mod postgres_calculate_order;
 pub mod postgres_chat;
+pub mod postgres_chat_media;
 pub mod postgres_customer;
 pub mod postgres_engine;
 pub mod postgres_gscale_receipt;

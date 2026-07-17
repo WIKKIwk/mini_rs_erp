@@ -4,6 +4,7 @@ use crate::core::mini_orders::{MiniOrderSink, NoopMiniOrderSink};
 use crate::db::postgres_apparatus_group::PostgresApparatusGroupStore;
 use crate::db::postgres_calculate_order::PostgresCalculateOrderStore;
 use crate::db::postgres_chat::PostgresChatStore;
+use crate::db::postgres_chat_media::PostgresChatMediaRepository;
 use crate::db::postgres_customer::PostgresCustomerStore;
 use crate::db::postgres_engine::PostgresEngineStore;
 use crate::db::postgres_gscale_receipt::PostgresGscaleReceiptStore;
@@ -192,6 +193,26 @@ pub(super) fn build_chat_service() -> ChatService {
         }
         None => ChatService::unavailable(),
     }
+}
+
+pub(super) fn build_chat_media_service(config: &AppConfig) -> ChatMediaService {
+    let Some(pool) = postgres_pool("chat media") else {
+        return ChatMediaService::unavailable();
+    };
+    let storage: Arc<dyn crate::core::chat_media::ChatMediaStorage> =
+        if let Some(storage) = R2ChatMediaStorage::from_env(config.http_timeout) {
+            tracing::info!("private R2 chat media storage configured");
+            Arc::new(storage)
+        } else {
+            tracing::info!("local private chat media storage configured");
+            Arc::new(LocalChatMediaStorage::from_env())
+        };
+    let service = ChatMediaService::new(
+        Arc::new(PostgresChatMediaRepository::new(pool)),
+        storage,
+    );
+    service.start_cleanup_worker();
+    service
 }
 
 fn build_sqlite_calculate_order_store() -> Arc<dyn CalculateOrderStorePort> {
