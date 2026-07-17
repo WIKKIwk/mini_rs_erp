@@ -31,6 +31,42 @@ BUILD_RELEASE="${BUILD_RELEASE:-1}"
 REQUIRE_DATABASE_URL="${REQUIRE_DATABASE_URL:-0}"
 ROUTE_DNS="${ROUTE_DNS:-1}"
 
+configure_chat_media_processor() {
+	local ffmpeg="${MOBILE_CHAT_MEDIA_FFMPEG_BIN:-}"
+	local ffprobe="${MOBILE_CHAT_MEDIA_FFPROBE_BIN:-}"
+	local bundled_bin="$REPO_ROOT/../.tools/ffmpeg/bin"
+
+	if [ -z "$ffmpeg" ] && [ -x "$bundled_bin/ffmpeg" ]; then
+		ffmpeg="$bundled_bin/ffmpeg"
+	fi
+	if [ -z "$ffprobe" ] && [ -x "$bundled_bin/ffprobe" ]; then
+		ffprobe="$bundled_bin/ffprobe"
+	fi
+	if [ -z "$ffmpeg" ]; then
+		ffmpeg="$(command -v ffmpeg 2>/dev/null || true)"
+	fi
+	if [ -z "$ffprobe" ]; then
+		ffprobe="$(command -v ffprobe 2>/dev/null || true)"
+	fi
+
+	if [ -n "$ffmpeg" ] && [ ! -x "$ffmpeg" ]; then
+		echo "configured ffmpeg is not executable: $ffmpeg" >&2
+		exit 1
+	fi
+	if [ -n "$ffprobe" ] && [ ! -x "$ffprobe" ]; then
+		echo "configured ffprobe is not executable: $ffprobe" >&2
+		exit 1
+	fi
+	if [ -z "$ffmpeg" ] || [ -z "$ffprobe" ]; then
+		echo "warning: ffmpeg/ffprobe unavailable; video processing will be disabled" >&2
+		return 0
+	fi
+
+	export MOBILE_CHAT_MEDIA_FFMPEG_BIN="$ffmpeg"
+	export MOBILE_CHAT_MEDIA_FFPROBE_BIN="$ffprobe"
+	echo "chat media processor ready: $ffmpeg / $ffprobe"
+}
+
 HOSTNAME_SLUG="$(
 	printf '%s' "$PUBLIC_HOSTNAME" |
 		tr '[:upper:]' '[:lower:]' |
@@ -220,6 +256,7 @@ EOF
 }
 
 require_cmd curl
+configure_chat_media_processor
 ensure_backend
 ensure_tunnel
 
