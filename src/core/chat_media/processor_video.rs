@@ -125,7 +125,7 @@ impl SystemChatMediaProcessor {
                 "-maxrate",
                 "12M",
                 "-bufsize",
-                "24M",
+                "6M",
                 "-pix_fmt",
                 "yuv420p",
                 "-profile:v",
