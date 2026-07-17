@@ -3,8 +3,8 @@ use sqlx::{PgPool, Postgres, Transaction};
 use super::rows::{MessageRow, PrincipalRow, role_key};
 use crate::core::auth::models::Principal;
 use crate::core::chat::{
-    ChatConversation, ChatError, ChatMessage, ChatOutboxEvent, ChatPrincipal, ChatPrincipalInput,
-    ChatRealtimeEvent, ChatSendResult,
+    ChatConversation, ChatError, ChatMessage, ChatMessageAttachment, ChatOutboxEvent,
+    ChatPrincipal, ChatPrincipalInput, ChatRealtimeEvent, ChatSendResult,
 };
 
 pub(super) async fn ensure_principal(
@@ -93,6 +93,7 @@ pub(super) async fn send_message(
     conversation_id: &str,
     client_message_id: &str,
     body: &str,
+    media_id: Option<&str>,
 ) -> Result<ChatSendResult, ChatError> {
     let mut tx = pool.begin().await.map_err(|_| ChatError::StoreFailed)?;
     let sender = sender_for_conversation(&mut tx, principal, conversation_id).await?;
@@ -119,23 +120,42 @@ pub(super) async fn send_message(
     .map_err(|_| ChatError::StoreFailed)?
     .ok_or(ChatError::NotFound)?;
     let sequence = last_sequence.saturating_add(1);
+    let ready_attachment = match media_id {
+        Some(media_id) => Some(
+            ready_attachment(&mut tx, conversation_id, &sender.principal_id, media_id)
+                .await?,
+        ),
+        None => None,
+    };
+    let message_type = ready_attachment
+        .as_ref()
+        .map(|attachment| attachment.kind.as_str())
+        .unwrap_or("text");
     let message_id = new_id("message");
     let row = sqlx::query_as::<_, MessageRow>(
         r#"INSERT INTO mini_chat_messages
              (message_id, conversation_id, sender_principal_id, client_message_id,
               message_sequence, message_type, body)
-           VALUES ($1, $2, $3, $4, $5, 'text', $6)
+           VALUES ($1, $2, $3, $4, $5, $6, $7)
            RETURNING
              message_id,
              conversation_id,
              sender_principal_id,
-             $7::TEXT AS sender_role,
-             $8::TEXT AS sender_ref,
-             $9::TEXT AS sender_display_name,
+             $8::TEXT AS sender_role,
+             $9::TEXT AS sender_ref,
+             $10::TEXT AS sender_display_name,
              client_message_id,
              message_sequence,
              message_type,
              body,
+             NULL::TEXT AS attachment_id,
+             NULL::TEXT AS media_id,
+             NULL::TEXT AS media_kind,
+             NULL::TEXT AS media_content_type,
+             NULL::BIGINT AS media_size_bytes,
+             NULL::INTEGER AS media_width_pixels,
+             NULL::INTEGER AS media_height_pixels,
+             NULL::BIGINT AS media_duration_ms,
              EXTRACT(EPOCH FROM created_at)::BIGINT AS created_at_unix,
              NULL::BIGINT AS edited_at_unix,
              NULL::BIGINT AS deleted_at_unix"#,
@@ -145,6 +165,7 @@ pub(super) async fn send_message(
     .bind(&sender.principal_id)
     .bind(client_message_id)
     .bind(sequence)
+    .bind(message_type)
     .bind(body)
     .bind(role_key(&sender.role))
     .bind(&sender.ref_)
@@ -152,7 +173,22 @@ pub(super) async fn send_message(
     .fetch_one(&mut *tx)
     .await
     .map_err(|_| ChatError::StoreFailed)?;
-    let message = row.into_model()?;
+    let mut message = row.into_model()?;
+    if let Some(attachment) = ready_attachment {
+        sqlx::query(
+            r#"INSERT INTO mini_chat_message_attachments
+                 (attachment_id, message_id, conversation_id, media_id, ordinal)
+               VALUES ($1, $2, $3, $4, 0)"#,
+        )
+        .bind(&attachment.attachment_id)
+        .bind(&message_id)
+        .bind(conversation_id)
+        .bind(&attachment.media_id)
+        .execute(&mut *tx)
+        .await
+        .map_err(|_| ChatError::Conflict)?;
+        message.attachment = Some(attachment);
+    }
     sqlx::query(
         "UPDATE mini_chat_conversations SET last_message_sequence = $2, updated_at = now() WHERE conversation_id = $1",
     )
@@ -364,11 +400,21 @@ async fn existing_message(
              m.message_sequence,
              m.message_type,
              m.body,
+             attachment.attachment_id,
+             media.media_id,
+             media.media_kind,
+             media.processed_content_type AS media_content_type,
+             media.processed_size_bytes AS media_size_bytes,
+             media.width_pixels AS media_width_pixels,
+             media.height_pixels AS media_height_pixels,
+             media.duration_ms AS media_duration_ms,
              EXTRACT(EPOCH FROM m.created_at)::BIGINT AS created_at_unix,
              EXTRACT(EPOCH FROM m.edited_at)::BIGINT AS edited_at_unix,
              EXTRACT(EPOCH FROM m.deleted_at)::BIGINT AS deleted_at_unix
            FROM mini_chat_messages m
            JOIN mini_chat_principals sender ON sender.principal_id = m.sender_principal_id
+           LEFT JOIN mini_chat_message_attachments attachment ON attachment.message_id = m.message_id
+           LEFT JOIN mini_chat_media media ON media.media_id = attachment.media_id
            WHERE m.conversation_id = $1
              AND m.sender_principal_id = $2
              AND m.client_message_id = $3"#,
@@ -380,6 +426,53 @@ async fn existing_message(
     .await
     .map_err(|_| ChatError::StoreFailed)?;
     row.map(MessageRow::into_model).transpose()
+}
+
+async fn ready_attachment(
+    tx: &mut Transaction<'_, Postgres>,
+    conversation_id: &str,
+    sender_principal_id: &str,
+    media_id: &str,
+) -> Result<ChatMessageAttachment, ChatError> {
+    let row = sqlx::query_as::<_, (String, String, i64, i32, i32, Option<i64>)>(
+        r#"SELECT media_kind, processed_content_type, processed_size_bytes,
+                  width_pixels, height_pixels, duration_ms
+           FROM mini_chat_media media
+           WHERE media.media_id = $1
+             AND media.conversation_id = $2
+             AND media.uploader_principal_id = $3
+             AND media.upload_status = 'ready'
+             AND media.processed_object_key IS NOT NULL
+             AND media.thumbnail_object_key IS NOT NULL
+             AND NOT EXISTS (
+               SELECT 1 FROM mini_chat_message_attachments attachment
+               WHERE attachment.media_id = media.media_id
+             )
+           FOR UPDATE"#,
+    )
+    .bind(media_id)
+    .bind(conversation_id)
+    .bind(sender_principal_id)
+    .fetch_optional(&mut **tx)
+    .await
+    .map_err(|_| ChatError::StoreFailed)?
+    .ok_or(ChatError::Conflict)?;
+    let (kind, content_type, size_bytes, width_pixels, height_pixels, duration_ms) = row;
+    if !matches!(kind.as_str(), "image" | "video") {
+        return Err(ChatError::StoreFailed);
+    }
+    Ok(ChatMessageAttachment {
+        attachment_id: new_id("attachment"),
+        media_id: media_id.to_string(),
+        kind,
+        content_type,
+        size_bytes,
+        width_pixels,
+        height_pixels,
+        duration_ms,
+        content_url: format!("/v1/mobile/chat/media/{media_id}/content"),
+        thumbnail_url: format!("/v1/mobile/chat/media/{media_id}/thumbnail"),
+    })
 }
 
 fn new_id(prefix: &str) -> String {

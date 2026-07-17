@@ -1,5 +1,7 @@
 use crate::core::auth::models::PrincipalRole;
-use crate::core::chat::{ChatConversation, ChatError, ChatMessage, ChatPrincipal};
+use crate::core::chat::{
+    ChatConversation, ChatError, ChatMessage, ChatMessageAttachment, ChatPrincipal,
+};
 
 #[derive(sqlx::FromRow)]
 pub(super) struct PrincipalRow {
@@ -34,6 +36,14 @@ pub(super) struct MessageRow {
     pub message_sequence: i64,
     pub message_type: String,
     pub body: String,
+    pub attachment_id: Option<String>,
+    pub media_id: Option<String>,
+    pub media_kind: Option<String>,
+    pub media_content_type: Option<String>,
+    pub media_size_bytes: Option<i64>,
+    pub media_width_pixels: Option<i32>,
+    pub media_height_pixels: Option<i32>,
+    pub media_duration_ms: Option<i64>,
     pub created_at_unix: i64,
     pub edited_at_unix: Option<i64>,
     pub deleted_at_unix: Option<i64>,
@@ -52,6 +62,16 @@ impl MessageRow {
             sequence: self.message_sequence,
             message_type: self.message_type,
             body: self.body,
+            attachment: attachment(
+                self.attachment_id,
+                self.media_id,
+                self.media_kind,
+                self.media_content_type,
+                self.media_size_bytes,
+                self.media_width_pixels,
+                self.media_height_pixels,
+                self.media_duration_ms,
+            ),
             created_at_unix: self.created_at_unix,
             edited_at_unix: self.edited_at_unix,
             deleted_at_unix: self.deleted_at_unix,
@@ -81,6 +101,14 @@ pub(super) struct ConversationRow {
     pub message_sequence: Option<i64>,
     pub message_type: Option<String>,
     pub body: Option<String>,
+    pub attachment_id: Option<String>,
+    pub media_id: Option<String>,
+    pub media_kind: Option<String>,
+    pub media_content_type: Option<String>,
+    pub media_size_bytes: Option<i64>,
+    pub media_width_pixels: Option<i32>,
+    pub media_height_pixels: Option<i32>,
+    pub media_duration_ms: Option<i64>,
     pub message_created_at_unix: Option<i64>,
     pub edited_at_unix: Option<i64>,
     pub deleted_at_unix: Option<i64>,
@@ -139,6 +167,16 @@ impl ConversationRow {
                 sequence,
                 message_type,
                 body,
+                attachment: attachment(
+                    self.attachment_id,
+                    self.media_id,
+                    self.media_kind,
+                    self.media_content_type,
+                    self.media_size_bytes,
+                    self.media_width_pixels,
+                    self.media_height_pixels,
+                    self.media_duration_ms,
+                ),
                 created_at_unix,
                 edited_at_unix: self.edited_at_unix,
                 deleted_at_unix: self.deleted_at_unix,
@@ -156,6 +194,50 @@ impl ConversationRow {
             updated_at_unix: self.updated_at_unix,
         })
     }
+}
+
+fn attachment(
+    attachment_id: Option<String>,
+    media_id: Option<String>,
+    kind: Option<String>,
+    content_type: Option<String>,
+    size_bytes: Option<i64>,
+    width_pixels: Option<i32>,
+    height_pixels: Option<i32>,
+    duration_ms: Option<i64>,
+) -> Option<ChatMessageAttachment> {
+    let (
+        Some(attachment_id),
+        Some(media_id),
+        Some(kind),
+        Some(content_type),
+        Some(size_bytes),
+        Some(width_pixels),
+        Some(height_pixels),
+    ) = (
+        attachment_id,
+        media_id,
+        kind,
+        content_type,
+        size_bytes,
+        width_pixels,
+        height_pixels,
+    )
+    else {
+        return None;
+    };
+    Some(ChatMessageAttachment {
+        attachment_id,
+        content_url: format!("/v1/mobile/chat/media/{media_id}/content"),
+        thumbnail_url: format!("/v1/mobile/chat/media/{media_id}/thumbnail"),
+        media_id,
+        kind,
+        content_type,
+        size_bytes,
+        width_pixels,
+        height_pixels,
+        duration_ms,
+    })
 }
 
 pub(super) fn role_key(role: &PrincipalRole) -> &'static str {

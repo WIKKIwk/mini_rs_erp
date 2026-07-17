@@ -6,8 +6,8 @@ use async_trait::async_trait;
 use tokio::sync::mpsc;
 
 use crate::core::chat_media::{
-    ChatMediaByteStream, ChatMediaStorage, ChatMediaStorageError, ChatMediaStorageObject,
-    ChatMediaStorageUpload,
+    ChatMediaByteStream, ChatMediaStorage, ChatMediaStorageDownload, ChatMediaStorageError,
+    ChatMediaStorageObject, ChatMediaStorageUpload, ChatMediaStoredContent,
 };
 
 #[derive(Clone)]
@@ -116,6 +116,46 @@ impl ChatMediaStorage for LocalChatMediaStorage {
         let path = self.path_for_key(object_key)?;
         remove_if_exists(&path).await?;
         remove_if_exists(&content_type_path(&path)).await
+    }
+
+    async fn read_object(
+        &self,
+        object_key: &str,
+    ) -> Result<ChatMediaStoredContent, ChatMediaStorageError> {
+        let path = self.path_for_key(object_key)?;
+        let bytes = tokio::fs::read(&path).await.map_err(map_io_error)?;
+        let content_type = tokio::fs::read_to_string(content_type_path(&path))
+            .await
+            .ok()
+            .map(|value| value.trim().to_string())
+            .filter(|value| !value.is_empty());
+        Ok(ChatMediaStoredContent {
+            bytes: bytes.into(),
+            content_type,
+            etag: None,
+        })
+    }
+
+    async fn put_private_object(
+        &self,
+        object_key: &str,
+        content_type: &str,
+        content: bytes::Bytes,
+    ) -> Result<ChatMediaStorageObject, ChatMediaStorageError> {
+        let size = i64::try_from(content.len())
+            .map_err(|_| ChatMediaStorageError::SizeMismatch)?;
+        let stream = Box::pin(async_stream::stream! {
+            yield Ok(content);
+        });
+        self.put_object(object_key, content_type, size, stream).await
+    }
+
+    async fn prepare_download(
+        &self,
+        object_key: &str,
+    ) -> Result<ChatMediaStorageDownload, ChatMediaStorageError> {
+        self.path_for_key(object_key)?;
+        Ok(ChatMediaStorageDownload::LocalProxy)
     }
 }
 

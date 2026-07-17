@@ -3,6 +3,7 @@ pub mod apparatus_group_store;
 pub mod calculate_order_store;
 pub mod chat_media_local;
 pub mod chat_media_r2;
+mod chat_media_r2_signing;
 pub mod json_file;
 pub mod production_map_store;
 pub mod profile_avatar_local;

@@ -1,5 +1,6 @@
 use std::collections::BTreeMap;
 
+use bytes::Bytes;
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -58,6 +59,15 @@ pub struct ChatMediaUploadRecord {
     pub source_object_key: String,
     pub actual_size_bytes: Option<i64>,
     pub storage_etag: Option<String>,
+    pub detected_content_type: Option<String>,
+    pub processed_object_key: Option<String>,
+    pub thumbnail_object_key: Option<String>,
+    pub processed_content_type: Option<String>,
+    pub processed_size_bytes: Option<i64>,
+    pub processed_etag: Option<String>,
+    pub width_pixels: Option<i32>,
+    pub height_pixels: Option<i32>,
+    pub duration_ms: Option<i64>,
     pub error_code: Option<String>,
     pub expires_at_unix: i64,
     pub created_at_unix: i64,
@@ -80,6 +90,12 @@ pub struct ChatMediaUploadView {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub actual_size_bytes: Option<i64>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub width_pixels: Option<i32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub height_pixels: Option<i32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub processed_duration_ms: Option<i64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub error_code: Option<String>,
     pub expires_at_unix: i64,
     pub created_at_unix: i64,
@@ -100,6 +116,9 @@ impl From<&ChatMediaUploadRecord> for ChatMediaUploadView {
             size_bytes: record.declared_size_bytes,
             duration_ms: record.declared_duration_ms,
             actual_size_bytes: record.actual_size_bytes,
+            width_pixels: record.width_pixels,
+            height_pixels: record.height_pixels,
+            processed_duration_ms: record.duration_ms,
             error_code: record.error_code.clone(),
             expires_at_unix: record.expires_at_unix,
             created_at_unix: record.created_at_unix,
@@ -170,6 +189,70 @@ pub struct ChatMediaStorageObject {
     pub size_bytes: i64,
     pub content_type: Option<String>,
     pub etag: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ChatMediaStoredContent {
+    pub bytes: Bytes,
+    pub content_type: Option<String>,
+    pub etag: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ChatMediaStorageDownload {
+    LocalProxy,
+    DirectGet {
+        url: String,
+        expires_at_unix: i64,
+    },
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ChatMediaAccessVariant {
+    Content,
+    Thumbnail,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ChatMediaAccess {
+    Local {
+        content: ChatMediaStoredContent,
+    },
+    Redirect {
+        url: String,
+        expires_at_unix: i64,
+    },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ChatMediaProcessedContent {
+    pub content: Bytes,
+    pub content_type: String,
+    pub thumbnail: Bytes,
+    pub thumbnail_content_type: String,
+    pub width_pixels: i32,
+    pub height_pixels: i32,
+    pub duration_ms: Option<i64>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ChatMediaProcessingWorkItem {
+    pub job_id: String,
+    pub attempts: i32,
+    pub max_attempts: i32,
+    pub media: ChatMediaUploadRecord,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ChatMediaReadyInput {
+    pub processed_object_key: String,
+    pub processed_content_type: String,
+    pub processed_size_bytes: i64,
+    pub processed_etag: Option<String>,
+    pub thumbnail_object_key: String,
+    pub width_pixels: i32,
+    pub height_pixels: i32,
+    pub duration_ms: Option<i64>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

@@ -22,6 +22,15 @@ declared_duration_ms,
 source_object_key,
 actual_size_bytes,
 storage_etag,
+detected_content_type,
+processed_object_key,
+thumbnail_object_key,
+processed_content_type,
+processed_size_bytes,
+processed_etag,
+width_pixels,
+height_pixels,
+duration_ms,
 error_code,
 EXTRACT(EPOCH FROM expires_at)::BIGINT AS expires_at_unix,
 EXTRACT(EPOCH FROM created_at)::BIGINT AS created_at_unix,
@@ -226,7 +235,7 @@ pub(super) async fn cancel_upload(
     let record = by_upload_id(&mut tx, conversation_id, &uploader_id, upload_id, true)
         .await?
         .ok_or(ChatMediaError::NotFound)?;
-    if matches!(record.status, ChatMediaStatus::Processing | ChatMediaStatus::Ready) {
+    if record.status == ChatMediaStatus::Ready {
         return Err(ChatMediaError::Conflict);
     }
     if record.status != ChatMediaStatus::Cancelled {
@@ -242,7 +251,7 @@ pub(super) async fn cancel_upload(
         sqlx::query(
             r#"UPDATE mini_chat_media_jobs
                SET job_status = 'cancelled', locked_until = NULL, updated_at = now()
-               WHERE media_id = $1 AND job_status IN ('pending', 'failed')"#,
+               WHERE media_id = $1 AND job_status IN ('pending', 'running', 'failed')"#,
         )
         .bind(&record.media_id)
         .execute(&mut *tx)
@@ -267,7 +276,11 @@ pub(super) async fn claim_orphaned_uploads(
              FROM mini_chat_media
              WHERE cleaned_at IS NULL
                AND expires_at <= to_timestamp($1)
-               AND upload_status IN ('pending', 'uploaded', 'failed', 'cancelled')
+               AND upload_status IN ('pending', 'uploaded', 'failed', 'cancelled', 'ready')
+               AND NOT EXISTS (
+                 SELECT 1 FROM mini_chat_message_attachments attachment
+                 WHERE attachment.media_id = mini_chat_media.media_id
+               )
                AND (cleanup_locked_until IS NULL OR cleanup_locked_until < now())
              ORDER BY expires_at
              FOR UPDATE SKIP LOCKED
@@ -404,7 +417,7 @@ async fn by_client_upload_id(
         .transpose()
 }
 
-fn prefixed_columns(prefix: &str) -> String {
+pub(super) fn prefixed_columns(prefix: &str) -> String {
     MEDIA_COLUMNS
         .lines()
         .filter(|line| !line.trim().is_empty())
@@ -427,7 +440,7 @@ fn job_type(kind: ChatMediaKind) -> &'static str {
     }
 }
 
-fn role_key(role: &PrincipalRole) -> &'static str {
+pub(super) fn role_key(role: &PrincipalRole) -> &'static str {
     match role {
         PrincipalRole::Supplier => "supplier",
         PrincipalRole::Werka => "werka",

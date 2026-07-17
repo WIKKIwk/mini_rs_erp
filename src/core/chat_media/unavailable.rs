@@ -1,9 +1,10 @@
 use async_trait::async_trait;
 
 use super::{
-    ChatMediaByteStream, ChatMediaCreateResult, ChatMediaError, ChatMediaRepository,
-    ChatMediaStorage, ChatMediaStorageError, ChatMediaStorageObject, ChatMediaStorageUpload,
-    ChatMediaUploadRecord, NewChatMediaUpload,
+    ChatMediaByteStream, ChatMediaCreateResult, ChatMediaError, ChatMediaProcessingWorkItem,
+    ChatMediaReadyInput, ChatMediaRepository, ChatMediaStorage, ChatMediaStorageDownload,
+    ChatMediaStorageError, ChatMediaStorageObject, ChatMediaStorageUpload,
+    ChatMediaStoredContent, ChatMediaUploadRecord, NewChatMediaUpload,
 };
 use crate::core::auth::models::Principal;
 
@@ -74,6 +75,39 @@ impl ChatMediaRepository for UnavailableChatMediaRepository {
     async fn release_orphan_cleanup(&self, _media_id: &str) -> Result<(), ChatMediaError> {
         Err(ChatMediaError::Unavailable)
     }
+
+    async fn claim_processing_jobs(
+        &self,
+        _limit: usize,
+    ) -> Result<Vec<ChatMediaProcessingWorkItem>, ChatMediaError> {
+        Err(ChatMediaError::Unavailable)
+    }
+
+    async fn mark_processing_ready(
+        &self,
+        _job_id: &str,
+        _media_id: &str,
+        _ready: &ChatMediaReadyInput,
+    ) -> Result<(), ChatMediaError> {
+        Err(ChatMediaError::Unavailable)
+    }
+
+    async fn mark_processing_failed(
+        &self,
+        _job_id: &str,
+        _media_id: &str,
+        _error_code: &str,
+    ) -> Result<(), ChatMediaError> {
+        Err(ChatMediaError::Unavailable)
+    }
+
+    async fn media_for_access(
+        &self,
+        _principal: &Principal,
+        _media_id: &str,
+    ) -> Result<ChatMediaUploadRecord, ChatMediaError> {
+        Err(ChatMediaError::Unavailable)
+    }
 }
 
 pub(super) struct UnavailableChatMediaStorage;
@@ -107,6 +141,29 @@ impl ChatMediaStorage for UnavailableChatMediaStorage {
     }
 
     async fn delete_object(&self, _object_key: &str) -> Result<(), ChatMediaStorageError> {
+        Err(ChatMediaStorageError::Unavailable)
+    }
+
+    async fn read_object(
+        &self,
+        _object_key: &str,
+    ) -> Result<ChatMediaStoredContent, ChatMediaStorageError> {
+        Err(ChatMediaStorageError::Unavailable)
+    }
+
+    async fn put_private_object(
+        &self,
+        _object_key: &str,
+        _content_type: &str,
+        _content: bytes::Bytes,
+    ) -> Result<ChatMediaStorageObject, ChatMediaStorageError> {
+        Err(ChatMediaStorageError::Unavailable)
+    }
+
+    async fn prepare_download(
+        &self,
+        _object_key: &str,
+    ) -> Result<ChatMediaStorageDownload, ChatMediaStorageError> {
         Err(ChatMediaStorageError::Unavailable)
     }
 }

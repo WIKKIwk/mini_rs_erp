@@ -8,7 +8,9 @@ mod realtime;
 pub use conversations::{conversation_messages, conversations, create_dm, mark_read};
 pub use devices::device_token;
 pub use directory::directory;
-pub use media::{media_upload, media_upload_complete, media_upload_content, media_uploads};
+pub use media::{
+    media_access, media_upload, media_upload_complete, media_upload_content, media_uploads,
+};
 pub use realtime::{live, socket_ticket};
 
 use axum::Json;
@@ -39,6 +41,7 @@ fn map_chat_error(error: ChatError) -> ChatHttpError {
         ChatError::InvalidInput => http_error(StatusCode::BAD_REQUEST, "chat_input_invalid"),
         ChatError::NotFound => http_error(StatusCode::NOT_FOUND, "chat_not_found"),
         ChatError::Forbidden => http_error(StatusCode::FORBIDDEN, "chat_forbidden"),
+        ChatError::Conflict => http_error(StatusCode::CONFLICT, "chat_state_conflict"),
         ChatError::Unavailable => http_error(StatusCode::SERVICE_UNAVAILABLE, "chat_unavailable"),
         ChatError::StoreFailed => {
             http_error(StatusCode::INTERNAL_SERVER_ERROR, "chat_store_failed")

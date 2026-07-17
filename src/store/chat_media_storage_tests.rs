@@ -3,7 +3,8 @@ use bytes::Bytes;
 use super::chat_media_local::LocalChatMediaStorage;
 use super::chat_media_r2::{R2ChatMediaConfig, R2ChatMediaStorage};
 use crate::core::chat_media::{
-    ChatMediaByteStream, ChatMediaStorage, ChatMediaStorageError, ChatMediaStorageUpload,
+    ChatMediaByteStream, ChatMediaStorage, ChatMediaStorageDownload, ChatMediaStorageError,
+    ChatMediaStorageUpload,
 };
 
 #[tokio::test]
@@ -121,6 +122,23 @@ async fn r2_chat_media_storage_returns_only_short_lived_private_put_access() {
             .unwrap_err(),
         ChatMediaStorageError::DirectUploadRequired
     );
+
+    let download = storage
+        .prepare_download("chat_media/conversation_1/media_1/processed")
+        .await
+        .expect("prepare R2 download");
+    let ChatMediaStorageDownload::DirectGet {
+        url,
+        expires_at_unix,
+    } = download
+    else {
+        panic!("R2 must use a short-lived private GET");
+    };
+    assert!(url.contains("X-Amz-Algorithm=AWS4-HMAC-SHA256"));
+    assert!(url.contains("X-Amz-Expires=300"));
+    assert!(url.contains("X-Amz-Signature="));
+    assert!(!url.contains("super-secret-value"));
+    assert!(expires_at_unix > time::OffsetDateTime::now_utc().unix_timestamp());
 }
 
 fn chunks(chunks: Vec<&'static [u8]>) -> ChatMediaByteStream {

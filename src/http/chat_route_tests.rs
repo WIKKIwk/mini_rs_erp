@@ -139,6 +139,21 @@ async fn chat_media_upload_initialization_requires_authenticated_session() {
 }
 
 #[tokio::test]
+async fn private_chat_media_content_requires_authenticated_session() {
+    let response = build_router(test_state())
+        .oneshot(
+            Request::builder()
+                .uri("/v1/mobile/chat/media/media_1/content")
+                .body(Body::empty())
+                .expect("request"),
+        )
+        .await
+        .expect("response");
+
+    assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+}
+
+#[tokio::test]
 async fn chat_media_upload_initialization_rejects_oversized_images_before_storage() {
     let mut state = test_state();
     state.chat_media = crate::core::chat_media::ChatMediaService::unavailable();

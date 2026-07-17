@@ -126,6 +126,7 @@ mod tests {
                 sequence: 1,
                 message_type: "text".to_string(),
                 body: "Salom".to_string(),
+                attachment: None,
                 created_at_unix: 1,
                 edited_at_unix: None,
                 deleted_at_unix: None,

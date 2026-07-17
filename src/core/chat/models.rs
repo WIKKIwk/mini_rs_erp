@@ -50,11 +50,28 @@ pub struct ChatMessage {
     #[serde(rename = "type")]
     pub message_type: String,
     pub body: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub attachment: Option<ChatMessageAttachment>,
     pub created_at_unix: i64,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub edited_at_unix: Option<i64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub deleted_at_unix: Option<i64>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ChatMessageAttachment {
+    pub attachment_id: String,
+    pub media_id: String,
+    pub kind: String,
+    pub content_type: String,
+    pub size_bytes: i64,
+    pub width_pixels: i32,
+    pub height_pixels: i32,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub duration_ms: Option<i64>,
+    pub content_url: String,
+    pub thumbnail_url: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

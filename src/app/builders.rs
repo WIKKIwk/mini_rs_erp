@@ -212,6 +212,7 @@ pub(super) fn build_chat_media_service(config: &AppConfig) -> ChatMediaService {
         storage,
     );
     service.start_cleanup_worker();
+    service.start_processing_worker();
     service
 }
 

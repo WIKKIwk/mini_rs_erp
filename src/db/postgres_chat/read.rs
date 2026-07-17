@@ -26,6 +26,14 @@ SELECT
   lm.message_sequence,
   lm.message_type,
   lm.body,
+  attachment.attachment_id,
+  media.media_id,
+  media.media_kind,
+  media.processed_content_type AS media_content_type,
+  media.processed_size_bytes AS media_size_bytes,
+  media.width_pixels AS media_width_pixels,
+  media.height_pixels AS media_height_pixels,
+  media.duration_ms AS media_duration_ms,
   EXTRACT(EPOCH FROM lm.created_at)::BIGINT AS message_created_at_unix,
   EXTRACT(EPOCH FROM lm.edited_at)::BIGINT AS edited_at_unix,
   EXTRACT(EPOCH FROM lm.deleted_at)::BIGINT AS deleted_at_unix
@@ -47,6 +55,8 @@ LEFT JOIN mini_chat_messages lm
   ON lm.conversation_id = c.conversation_id
  AND lm.message_sequence = c.last_message_sequence
 LEFT JOIN mini_chat_principals sender ON sender.principal_id = lm.sender_principal_id
+LEFT JOIN mini_chat_message_attachments attachment ON attachment.message_id = lm.message_id
+LEFT JOIN mini_chat_media media ON media.media_id = attachment.media_id
 WHERE current_principal.principal_role = $1
   AND current_principal.principal_ref = $2
   AND c.last_message_sequence > 0
@@ -119,11 +129,21 @@ pub(super) async fn messages(
              m.message_sequence,
              m.message_type,
              m.body,
+             attachment.attachment_id,
+             media.media_id,
+             media.media_kind,
+             media.processed_content_type AS media_content_type,
+             media.processed_size_bytes AS media_size_bytes,
+             media.width_pixels AS media_width_pixels,
+             media.height_pixels AS media_height_pixels,
+             media.duration_ms AS media_duration_ms,
              EXTRACT(EPOCH FROM m.created_at)::BIGINT AS created_at_unix,
              EXTRACT(EPOCH FROM m.edited_at)::BIGINT AS edited_at_unix,
              EXTRACT(EPOCH FROM m.deleted_at)::BIGINT AS deleted_at_unix
            FROM mini_chat_messages m
            JOIN mini_chat_principals sender ON sender.principal_id = m.sender_principal_id
+           LEFT JOIN mini_chat_message_attachments attachment ON attachment.message_id = m.message_id
+           LEFT JOIN mini_chat_media media ON media.media_id = attachment.media_id
            WHERE m.conversation_id = $1
              AND ($2::BIGINT IS NULL OR m.message_sequence < $2)
            ORDER BY m.message_sequence DESC

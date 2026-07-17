@@ -1,13 +1,15 @@
 use std::sync::Arc;
-use std::time::Duration;
 
 use time::OffsetDateTime;
 
 use super::{
-    ChatMediaByteStream, ChatMediaCreateResult, ChatMediaError, ChatMediaInitialization,
-    ChatMediaInitializeInput, ChatMediaKind, ChatMediaRepository, ChatMediaStatus,
-    ChatMediaStorage, ChatMediaStorageError, ChatMediaStorageObject, ChatMediaStorageUpload,
-    ChatMediaUploadInstruction, ChatMediaUploadRecord, ChatMediaUploadView, NewChatMediaUpload,
+    ChatMediaAccess, ChatMediaAccessVariant, ChatMediaByteStream, ChatMediaCreateResult,
+    ChatMediaError, ChatMediaInitialization, ChatMediaInitializeInput, ChatMediaKind,
+    ChatMediaProcessor, ChatMediaRepository,
+    ChatMediaStatus, ChatMediaStorage, ChatMediaStorageDownload, ChatMediaStorageError,
+    ChatMediaStorageObject, ChatMediaStorageUpload,
+    ChatMediaUploadInstruction, ChatMediaUploadRecord, ChatMediaUploadView,
+    NewChatMediaUpload, SystemChatMediaProcessor,
 };
 use crate::core::auth::models::Principal;
 
@@ -16,12 +18,12 @@ pub const MAX_CHAT_VIDEO_SIZE_BYTES: i64 = 75 * 1024 * 1024;
 pub const MAX_CHAT_VIDEO_DURATION_MS: i64 = 120_000;
 
 const UPLOAD_RETENTION_SECONDS: i64 = 24 * 60 * 60;
-const CLEANUP_INTERVAL_SECONDS: u64 = 60 * 60;
 
 #[derive(Clone)]
 pub struct ChatMediaService {
-    repository: Arc<dyn ChatMediaRepository>,
-    storage: Arc<dyn ChatMediaStorage>,
+    pub(super) repository: Arc<dyn ChatMediaRepository>,
+    pub(super) storage: Arc<dyn ChatMediaStorage>,
+    pub(super) processor: Arc<dyn ChatMediaProcessor>,
 }
 
 impl ChatMediaService {
@@ -32,7 +34,13 @@ impl ChatMediaService {
         Self {
             repository,
             storage,
+            processor: Arc::new(SystemChatMediaProcessor::from_env()),
         }
+    }
+
+    pub fn with_processor(mut self, processor: Arc<dyn ChatMediaProcessor>) -> Self {
+        self.processor = processor;
+        self
     }
 
     pub fn unavailable() -> Self {
@@ -207,12 +215,20 @@ impl ChatMediaService {
             .repository
             .cancel_upload(principal, conversation_id, upload_id)
             .await?;
-        match self.storage.delete_object(&record.source_object_key).await {
-            Ok(()) | Err(ChatMediaStorageError::ObjectNotFound) => {
-                Ok(ChatMediaUploadView::from(&record))
+        for key in [
+            Some(record.source_object_key.as_str()),
+            record.processed_object_key.as_deref(),
+            record.thumbnail_object_key.as_deref(),
+        ]
+        .into_iter()
+        .flatten()
+        {
+            match self.storage.delete_object(key).await {
+                Ok(()) | Err(ChatMediaStorageError::ObjectNotFound) => {}
+                Err(error) => return Err(map_storage_error(error)),
             }
-            Err(error) => Err(map_storage_error(error)),
         }
+        Ok(ChatMediaUploadView::from(&record))
     }
 
     pub async fn cleanup_orphaned_uploads(&self, limit: usize) -> Result<usize, ChatMediaError> {
@@ -225,39 +241,69 @@ impl ChatMediaService {
             .await?;
         let mut cleaned = 0;
         for record in records {
-            match self.storage.delete_object(&record.source_object_key).await {
-                Ok(()) | Err(ChatMediaStorageError::ObjectNotFound) => {
+            let keys = [
+                Some(record.source_object_key.as_str()),
+                record.processed_object_key.as_deref(),
+                record.thumbnail_object_key.as_deref(),
+            ];
+            let mut deleted = true;
+            for key in keys.into_iter().flatten() {
+                if !matches!(
+                    self.storage.delete_object(key).await,
+                    Ok(()) | Err(ChatMediaStorageError::ObjectNotFound)
+                ) {
+                    deleted = false;
+                }
+            }
+            if deleted {
                     self.repository
                         .mark_orphan_cleaned(&record.media_id)
                         .await?;
                     cleaned += 1;
-                }
-                Err(_) => {
-                    self.repository
-                        .release_orphan_cleanup(&record.media_id)
-                        .await?;
-                }
+            } else {
+                self.repository
+                    .release_orphan_cleanup(&record.media_id)
+                    .await?;
             }
         }
         Ok(cleaned)
     }
 
-    pub fn start_cleanup_worker(&self) {
-        let Ok(handle) = tokio::runtime::Handle::try_current() else {
-            return;
-        };
-        let service = self.clone();
-        handle.spawn(async move {
-            let mut interval = tokio::time::interval(Duration::from_secs(CLEANUP_INTERVAL_SECONDS));
-            interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
-            loop {
-                interval.tick().await;
-                if let Err(error) = service.cleanup_orphaned_uploads(100).await {
-                    tracing::warn!(%error, "chat media orphan cleanup failed");
-                }
-            }
-        });
+    pub async fn media_access(
+        &self,
+        principal: &Principal,
+        media_id: &str,
+        variant: ChatMediaAccessVariant,
+    ) -> Result<ChatMediaAccess, ChatMediaError> {
+        let media_id = validate_identifier(media_id)?;
+        let media = self.repository.media_for_access(principal, media_id).await?;
+        let object_key = match variant {
+            ChatMediaAccessVariant::Content => media.processed_object_key.as_deref(),
+            ChatMediaAccessVariant::Thumbnail => media.thumbnail_object_key.as_deref(),
+        }
+        .ok_or(ChatMediaError::NotFound)?;
+        match self
+            .storage
+            .prepare_download(object_key)
+            .await
+            .map_err(map_storage_error)?
+        {
+            ChatMediaStorageDownload::DirectGet {
+                url,
+                expires_at_unix,
+            } => Ok(ChatMediaAccess::Redirect {
+                url,
+                expires_at_unix,
+            }),
+            ChatMediaStorageDownload::LocalProxy => self
+                .storage
+                .read_object(object_key)
+                .await
+                .map(|content| ChatMediaAccess::Local { content })
+                .map_err(map_storage_error),
+        }
     }
+
 }
 
 fn validate_initialize_input(

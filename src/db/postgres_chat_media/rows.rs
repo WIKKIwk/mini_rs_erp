@@ -1,5 +1,6 @@
 use crate::core::chat_media::{
-    ChatMediaError, ChatMediaKind, ChatMediaStatus, ChatMediaUploadRecord,
+    ChatMediaError, ChatMediaKind, ChatMediaProcessingWorkItem, ChatMediaStatus,
+    ChatMediaUploadRecord,
 };
 
 #[derive(sqlx::FromRow)]
@@ -18,10 +19,39 @@ pub(super) struct ChatMediaRow {
     pub source_object_key: String,
     pub actual_size_bytes: Option<i64>,
     pub storage_etag: Option<String>,
+    pub detected_content_type: Option<String>,
+    pub processed_object_key: Option<String>,
+    pub thumbnail_object_key: Option<String>,
+    pub processed_content_type: Option<String>,
+    pub processed_size_bytes: Option<i64>,
+    pub processed_etag: Option<String>,
+    pub width_pixels: Option<i32>,
+    pub height_pixels: Option<i32>,
+    pub duration_ms: Option<i64>,
     pub error_code: Option<String>,
     pub expires_at_unix: i64,
     pub created_at_unix: i64,
     pub updated_at_unix: i64,
+}
+
+#[derive(sqlx::FromRow)]
+pub(super) struct ChatMediaWorkRow {
+    pub job_id: String,
+    pub attempts: i32,
+    pub max_attempts: i32,
+    #[sqlx(flatten)]
+    pub media: ChatMediaRow,
+}
+
+impl ChatMediaWorkRow {
+    pub fn into_model(self) -> Result<ChatMediaProcessingWorkItem, ChatMediaError> {
+        Ok(ChatMediaProcessingWorkItem {
+            job_id: self.job_id,
+            attempts: self.attempts,
+            max_attempts: self.max_attempts,
+            media: self.media.into_model()?,
+        })
+    }
 }
 
 impl ChatMediaRow {
@@ -41,6 +71,15 @@ impl ChatMediaRow {
             source_object_key: self.source_object_key,
             actual_size_bytes: self.actual_size_bytes,
             storage_etag: self.storage_etag,
+            detected_content_type: self.detected_content_type,
+            processed_object_key: self.processed_object_key,
+            thumbnail_object_key: self.thumbnail_object_key,
+            processed_content_type: self.processed_content_type,
+            processed_size_bytes: self.processed_size_bytes,
+            processed_etag: self.processed_etag,
+            width_pixels: self.width_pixels,
+            height_pixels: self.height_pixels,
+            duration_ms: self.duration_ms,
             error_code: self.error_code,
             expires_at_unix: self.expires_at_unix,
             created_at_unix: self.created_at_unix,

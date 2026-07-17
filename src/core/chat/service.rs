@@ -123,6 +123,33 @@ impl ChatService {
             .await
     }
 
+    pub async fn send_media_message(
+        &self,
+        principal: &Principal,
+        conversation_id: &str,
+        client_message_id: &str,
+        caption: &str,
+        media_id: &str,
+    ) -> Result<ChatSendResult, ChatError> {
+        let caption = caption.trim();
+        if conversation_id.trim().is_empty()
+            || client_message_id.trim().is_empty()
+            || media_id.trim().is_empty()
+            || caption.chars().count() > 4000
+        {
+            return Err(ChatError::InvalidInput);
+        }
+        self.store
+            .send_media_message(
+                principal,
+                conversation_id.trim(),
+                client_message_id.trim(),
+                caption,
+                media_id.trim(),
+            )
+            .await
+    }
+
     pub async fn mark_read(
         &self,
         principal: &Principal,
@@ -176,6 +203,10 @@ impl ChatService {
                                     "message_id".to_string(),
                                     event.payload.message.message_id.clone(),
                                 );
+                                data.insert(
+                                    "message_type".to_string(),
+                                    event.payload.message.message_type.clone(),
+                                );
                                 if let Some((role, ref_)) = recipient.split_once(':') {
                                     data.insert("target_role".to_string(), role.to_string());
                                     data.insert("target_ref".to_string(), ref_.to_string());
@@ -184,7 +215,7 @@ impl ChatService {
                                     .send_to_key(
                                         recipient,
                                         &event.payload.message.sender_display_name,
-                                        &message_preview(&event.payload.message.body),
+                                        &message_preview(&event.payload.message),
                                         data,
                                     )
                                     .await
@@ -211,13 +242,36 @@ impl ChatService {
     }
 }
 
-fn message_preview(body: &str) -> String {
-    let mut chars = body.chars();
+fn message_preview(message: &super::ChatMessage) -> String {
+    message_preview_text(&message.message_type, &message.body)
+}
+
+fn message_preview_text(message_type: &str, body: &str) -> String {
+    let fallback = match message_type {
+        "image" => "Rasm",
+        "video" => "Video",
+        _ => "Xabar",
+    };
+    let body = body.trim();
+    let mut chars = if body.is_empty() { fallback } else { body }.chars();
     let preview = chars.by_ref().take(120).collect::<String>();
     if chars.next().is_some() {
         format!("{preview}…")
     } else {
         preview
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::message_preview_text;
+
+    #[test]
+    fn media_notification_preview_uses_caption_or_kind_fallback() {
+        assert_eq!(message_preview_text("image", ""), "Rasm");
+        assert_eq!(message_preview_text("video", "  "), "Video");
+        assert_eq!(message_preview_text("image", "Mahsulot rasmi"), "Mahsulot rasmi");
+        assert_eq!(message_preview_text("text", "Salom"), "Salom");
     }
 }
 
@@ -265,6 +319,17 @@ impl ChatStorePort for UnavailableChatStore {
         _conversation_id: &str,
         _client_message_id: &str,
         _body: &str,
+    ) -> Result<ChatSendResult, ChatError> {
+        Err(ChatError::Unavailable)
+    }
+
+    async fn send_media_message(
+        &self,
+        _principal: &Principal,
+        _conversation_id: &str,
+        _client_message_id: &str,
+        _caption: &str,
+        _media_id: &str,
     ) -> Result<ChatSendResult, ChatError> {
         Err(ChatError::Unavailable)
     }

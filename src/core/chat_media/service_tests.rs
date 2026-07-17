@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
@@ -5,11 +6,13 @@ use async_trait::async_trait;
 use bytes::Bytes;
 
 use super::{
-    ChatMediaByteStream, ChatMediaCreateResult, ChatMediaError, ChatMediaInitializeInput,
-    ChatMediaKind, ChatMediaRepository, ChatMediaService, ChatMediaStatus, ChatMediaStorage,
-    ChatMediaStorageError, ChatMediaStorageObject, ChatMediaStorageUpload,
-    ChatMediaUploadRecord, NewChatMediaUpload, MAX_CHAT_IMAGE_SIZE_BYTES,
-    MAX_CHAT_VIDEO_DURATION_MS, MAX_CHAT_VIDEO_SIZE_BYTES,
+    ChatMediaAccess, ChatMediaAccessVariant, ChatMediaByteStream, ChatMediaCreateResult,
+    ChatMediaError, ChatMediaInitializeInput, ChatMediaKind, ChatMediaProcessedContent,
+    ChatMediaProcessingError, ChatMediaProcessingWorkItem, ChatMediaProcessor,
+    ChatMediaReadyInput, ChatMediaRepository, ChatMediaService, ChatMediaStatus,
+    ChatMediaStorage, ChatMediaStorageDownload, ChatMediaStorageError, ChatMediaStorageObject,
+    ChatMediaStorageUpload, ChatMediaStoredContent, ChatMediaUploadRecord, NewChatMediaUpload,
+    MAX_CHAT_IMAGE_SIZE_BYTES, MAX_CHAT_VIDEO_DURATION_MS, MAX_CHAT_VIDEO_SIZE_BYTES,
 };
 use crate::core::auth::models::{Principal, PrincipalRole};
 
@@ -227,13 +230,11 @@ async fn local_upload_completion_is_exact_and_enqueues_one_durable_job() {
             .unwrap_err(),
         ChatMediaError::Conflict
     );
-    assert_eq!(
-        service
-            .cancel_upload(&owner(), CONVERSATION_ID, &initialized.media.upload_id)
-            .await
-            .unwrap_err(),
-        ChatMediaError::Conflict
-    );
+    let cancelled = service
+        .cancel_upload(&owner(), CONVERSATION_ID, &initialized.media.upload_id)
+        .await
+        .expect("processing cancellation");
+    assert_eq!(cancelled.status, ChatMediaStatus::Cancelled);
 }
 
 #[tokio::test]
@@ -317,6 +318,120 @@ async fn cancellation_and_orphan_cleanup_remove_private_objects() {
     assert!(repository.cleaned.load(Ordering::SeqCst));
 }
 
+#[tokio::test]
+async fn processing_canonicalizes_objects_marks_ready_and_serves_authorized_variants() {
+    let (service, repository, storage) = service_with_processor(Ok(ChatMediaProcessedContent {
+        content: Bytes::from_static(b"canonical"),
+        content_type: "image/jpeg".to_string(),
+        thumbnail: Bytes::from_static(b"thumbnail"),
+        thumbnail_content_type: "image/jpeg".to_string(),
+        width_pixels: 1200,
+        height_pixels: 800,
+        duration_ms: None,
+    }));
+    let initialized = service
+        .initialize_upload(
+            &owner(),
+            CONVERSATION_ID,
+            input("process", ChatMediaKind::Image, 3),
+        )
+        .await
+        .expect("initialize");
+    service
+        .upload_content(
+            &owner(),
+            CONVERSATION_ID,
+            &initialized.media.upload_id,
+            Some(3),
+            Some("image/jpeg"),
+            byte_stream(b"abc"),
+        )
+        .await
+        .expect("upload");
+    service
+        .complete_upload(&owner(), CONVERSATION_ID, &initialized.media.upload_id)
+        .await
+        .expect("complete");
+
+    assert_eq!(service.process_pending_jobs(2).await.expect("process"), 1);
+    let ready = repository.record.lock().unwrap().clone().expect("record");
+    assert_eq!(ready.status, ChatMediaStatus::Ready);
+    assert_eq!(ready.width_pixels, Some(1200));
+    assert_eq!(ready.height_pixels, Some(800));
+    assert_eq!(ready.processed_content_type.as_deref(), Some("image/jpeg"));
+
+    let ChatMediaAccess::Local { content } = service
+        .media_access(
+            &owner(),
+            &initialized.media.media_id,
+            ChatMediaAccessVariant::Content,
+        )
+        .await
+        .expect("content access")
+    else {
+        panic!("local storage must use an authorized proxy");
+    };
+    assert_eq!(content.bytes, Bytes::from_static(b"canonical"));
+    let ChatMediaAccess::Local { content } = service
+        .media_access(
+            &owner(),
+            &initialized.media.media_id,
+            ChatMediaAccessVariant::Thumbnail,
+        )
+        .await
+        .expect("thumbnail access")
+    else {
+        panic!("local storage must use an authorized proxy");
+    };
+    assert_eq!(content.bytes, Bytes::from_static(b"thumbnail"));
+    assert_eq!(
+        service
+            .media_access(
+                &intruder(),
+                &initialized.media.media_id,
+                ChatMediaAccessVariant::Content,
+            )
+            .await
+            .unwrap_err(),
+        ChatMediaError::Forbidden
+    );
+    assert!(storage.deleted.load(Ordering::SeqCst));
+}
+
+#[tokio::test]
+async fn processing_failure_is_visible_in_upload_status() {
+    let (service, repository, _) =
+        service_with_processor(Err(ChatMediaProcessingError::InvalidContent));
+    let initialized = service
+        .initialize_upload(
+            &owner(),
+            CONVERSATION_ID,
+            input("invalid", ChatMediaKind::Image, 3),
+        )
+        .await
+        .expect("initialize");
+    service
+        .upload_content(
+            &owner(),
+            CONVERSATION_ID,
+            &initialized.media.upload_id,
+            Some(3),
+            Some("image/jpeg"),
+            byte_stream(b"abc"),
+        )
+        .await
+        .expect("upload");
+    service
+        .complete_upload(&owner(), CONVERSATION_ID, &initialized.media.upload_id)
+        .await
+        .expect("complete");
+
+    assert_eq!(service.process_pending_jobs(1).await.expect("process"), 1);
+    let failed = repository.record.lock().unwrap().clone().expect("record");
+    assert_eq!(failed.status, ChatMediaStatus::Failed);
+    assert_eq!(failed.error_code.as_deref(), Some("invalid_media_content"));
+}
+
 fn service() -> (
     ChatMediaService,
     Arc<MemoryRepository>,
@@ -329,6 +444,20 @@ fn service() -> (
         repository,
         storage,
     )
+}
+
+fn service_with_processor(
+    result: Result<ChatMediaProcessedContent, ChatMediaProcessingError>,
+) -> (
+    ChatMediaService,
+    Arc<MemoryRepository>,
+    Arc<MemoryStorage>,
+) {
+    let repository = Arc::new(MemoryRepository::default());
+    let storage = Arc::new(MemoryStorage::default());
+    let service = ChatMediaService::new(repository.clone(), storage.clone())
+        .with_processor(Arc::new(StaticProcessor { result }));
+    (service, repository, storage)
 }
 
 fn owner() -> Principal {
@@ -447,6 +576,15 @@ impl ChatMediaRepository for MemoryRepository {
             source_object_key: upload.source_object_key,
             actual_size_bytes: None,
             storage_etag: None,
+            detected_content_type: None,
+            processed_object_key: None,
+            thumbnail_object_key: None,
+            processed_content_type: None,
+            processed_size_bytes: None,
+            processed_etag: None,
+            width_pixels: None,
+            height_pixels: None,
+            duration_ms: None,
             error_code: None,
             expires_at_unix: upload.expires_at_unix,
             created_at_unix: now,
@@ -527,7 +665,7 @@ impl ChatMediaRepository for MemoryRepository {
         if record.upload_id != upload_id {
             return Err(ChatMediaError::NotFound);
         }
-        if matches!(record.status, ChatMediaStatus::Processing | ChatMediaStatus::Ready) {
+        if record.status == ChatMediaStatus::Ready {
             return Err(ChatMediaError::Conflict);
         }
         record.status = ChatMediaStatus::Cancelled;
@@ -550,11 +688,80 @@ impl ChatMediaRepository for MemoryRepository {
     async fn release_orphan_cleanup(&self, _media_id: &str) -> Result<(), ChatMediaError> {
         Ok(())
     }
+
+    async fn claim_processing_jobs(
+        &self,
+        _limit: usize,
+    ) -> Result<Vec<ChatMediaProcessingWorkItem>, ChatMediaError> {
+        let record = self.record.lock().unwrap().clone();
+        Ok(record
+            .filter(|record| record.status == ChatMediaStatus::Processing)
+            .map(|media| ChatMediaProcessingWorkItem {
+                job_id: "job_1".to_string(),
+                attempts: 1,
+                max_attempts: 5,
+                media,
+            })
+            .into_iter()
+            .collect())
+    }
+
+    async fn mark_processing_ready(
+        &self,
+        _job_id: &str,
+        media_id: &str,
+        ready: &ChatMediaReadyInput,
+    ) -> Result<(), ChatMediaError> {
+        let mut record = self.record.lock().unwrap();
+        let record = record.as_mut().ok_or(ChatMediaError::NotFound)?;
+        if record.media_id != media_id || record.status != ChatMediaStatus::Processing {
+            return Err(ChatMediaError::Conflict);
+        }
+        record.status = ChatMediaStatus::Ready;
+        record.processed_object_key = Some(ready.processed_object_key.clone());
+        record.thumbnail_object_key = Some(ready.thumbnail_object_key.clone());
+        record.processed_content_type = Some(ready.processed_content_type.clone());
+        record.processed_size_bytes = Some(ready.processed_size_bytes);
+        record.width_pixels = Some(ready.width_pixels);
+        record.height_pixels = Some(ready.height_pixels);
+        record.duration_ms = ready.duration_ms;
+        Ok(())
+    }
+
+    async fn mark_processing_failed(
+        &self,
+        _job_id: &str,
+        media_id: &str,
+        error_code: &str,
+    ) -> Result<(), ChatMediaError> {
+        let mut record = self.record.lock().unwrap();
+        let record = record.as_mut().ok_or(ChatMediaError::NotFound)?;
+        if record.media_id == media_id && record.status == ChatMediaStatus::Processing {
+            record.status = ChatMediaStatus::Failed;
+            record.error_code = Some(error_code.to_string());
+        }
+        Ok(())
+    }
+
+    async fn media_for_access(
+        &self,
+        principal: &Principal,
+        media_id: &str,
+    ) -> Result<ChatMediaUploadRecord, ChatMediaError> {
+        self.authorize(principal, CONVERSATION_ID, false)?;
+        self.record
+            .lock()
+            .unwrap()
+            .clone()
+            .filter(|record| record.media_id == media_id && record.status == ChatMediaStatus::Ready)
+            .ok_or(ChatMediaError::NotFound)
+    }
 }
 
 #[derive(Default)]
 struct MemoryStorage {
     metadata: Mutex<Option<ChatMediaStorageObject>>,
+    objects: Mutex<HashMap<String, ChatMediaStoredContent>>,
     deleted: AtomicBool,
 }
 
@@ -571,18 +778,18 @@ impl ChatMediaStorage for MemoryStorage {
 
     async fn put_object(
         &self,
-        _object_key: &str,
+        object_key: &str,
         content_type: &str,
         expected_size_bytes: i64,
         mut stream: ChatMediaByteStream,
     ) -> Result<ChatMediaStorageObject, ChatMediaStorageError> {
-        let mut size = 0_i64;
+        let mut bytes = Vec::new();
         while let Some(chunk) =
             std::future::poll_fn(|context| stream.as_mut().poll_next(context)).await
         {
-            size += i64::try_from(chunk?.len())
-                .map_err(|_| ChatMediaStorageError::SizeMismatch)?;
+            bytes.extend_from_slice(&chunk?);
         }
+        let size = i64::try_from(bytes.len()).map_err(|_| ChatMediaStorageError::SizeMismatch)?;
         if size != expected_size_bytes {
             return Err(ChatMediaStorageError::SizeMismatch);
         }
@@ -592,6 +799,14 @@ impl ChatMediaStorage for MemoryStorage {
             etag: None,
         };
         *self.metadata.lock().unwrap() = Some(metadata.clone());
+        self.objects.lock().unwrap().insert(
+            object_key.to_string(),
+            ChatMediaStoredContent {
+                bytes: Bytes::from(bytes),
+                content_type: Some(content_type.to_string()),
+                etag: None,
+            },
+        );
         Ok(metadata)
     }
 
@@ -606,8 +821,64 @@ impl ChatMediaStorage for MemoryStorage {
             .ok_or(ChatMediaStorageError::ObjectNotFound)
     }
 
-    async fn delete_object(&self, _object_key: &str) -> Result<(), ChatMediaStorageError> {
+    async fn delete_object(&self, object_key: &str) -> Result<(), ChatMediaStorageError> {
         self.deleted.store(true, Ordering::SeqCst);
+        self.objects.lock().unwrap().remove(object_key);
         Ok(())
+    }
+
+    async fn read_object(
+        &self,
+        object_key: &str,
+    ) -> Result<ChatMediaStoredContent, ChatMediaStorageError> {
+        self.objects
+            .lock()
+            .unwrap()
+            .get(object_key)
+            .cloned()
+            .ok_or(ChatMediaStorageError::ObjectNotFound)
+    }
+
+    async fn put_private_object(
+        &self,
+        object_key: &str,
+        content_type: &str,
+        content: Bytes,
+    ) -> Result<ChatMediaStorageObject, ChatMediaStorageError> {
+        self.objects.lock().unwrap().insert(
+            object_key.to_string(),
+            ChatMediaStoredContent {
+                bytes: content.clone(),
+                content_type: Some(content_type.to_string()),
+                etag: None,
+            },
+        );
+        Ok(ChatMediaStorageObject {
+            size_bytes: content.len() as i64,
+            content_type: Some(content_type.to_string()),
+            etag: None,
+        })
+    }
+
+    async fn prepare_download(
+        &self,
+        _object_key: &str,
+    ) -> Result<ChatMediaStorageDownload, ChatMediaStorageError> {
+        Ok(ChatMediaStorageDownload::LocalProxy)
+    }
+}
+
+struct StaticProcessor {
+    result: Result<ChatMediaProcessedContent, ChatMediaProcessingError>,
+}
+
+#[async_trait]
+impl ChatMediaProcessor for StaticProcessor {
+    async fn process(
+        &self,
+        _media: &ChatMediaUploadRecord,
+        _source: Bytes,
+    ) -> Result<ChatMediaProcessedContent, ChatMediaProcessingError> {
+        self.result.clone()
     }
 }

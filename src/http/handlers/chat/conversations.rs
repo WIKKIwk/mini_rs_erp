@@ -35,7 +35,9 @@ struct CreateDmRequest {
 #[derive(Deserialize)]
 struct SendMessageRequest {
     client_message_id: String,
+    #[serde(default)]
     body: String,
+    media_id: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -129,16 +131,29 @@ pub async fn conversation_messages(
             let request: SendMessageRequest = serde_json::from_slice(&body).map_err(|_| {
                 http_error(axum::http::StatusCode::BAD_REQUEST, "chat_request_invalid")
             })?;
-            let result: ChatSendResult = state
-                .chat
-                .send_message(
-                    &principal,
-                    &conversation_id,
-                    &request.client_message_id,
-                    &request.body,
-                )
-                .await
-                .map_err(map_chat_error)?;
+            let result: ChatSendResult = if let Some(media_id) = request.media_id {
+                state
+                    .chat
+                    .send_media_message(
+                        &principal,
+                        &conversation_id,
+                        &request.client_message_id,
+                        &request.body,
+                        &media_id,
+                    )
+                    .await
+            } else {
+                state
+                    .chat
+                    .send_message(
+                        &principal,
+                        &conversation_id,
+                        &request.client_message_id,
+                        &request.body,
+                    )
+                    .await
+            }
+            .map_err(map_chat_error)?;
             Ok(Json(serde_json::json!({
                 "message": result.message,
                 "created": result.created,

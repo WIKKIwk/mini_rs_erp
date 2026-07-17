@@ -77,6 +77,10 @@ pub(super) fn routes() -> Router<AppState> {
             any(chat::media_upload_complete),
         )
         .route(
+            "/v1/mobile/chat/media/{media_id}/{variant}",
+            any(chat::media_access),
+        )
+        .route(
             "/v1/mobile/chat/conversations/{conversation_id}/read",
             any(chat::mark_read),
         )

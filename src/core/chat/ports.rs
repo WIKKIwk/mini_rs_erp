@@ -16,6 +16,8 @@ pub enum ChatError {
     NotFound,
     #[error("chat access is forbidden")]
     Forbidden,
+    #[error("chat state conflicts with this operation")]
+    Conflict,
     #[error("chat store failed")]
     StoreFailed,
 }
@@ -54,6 +56,15 @@ pub trait ChatStorePort: Send + Sync {
         conversation_id: &str,
         client_message_id: &str,
         body: &str,
+    ) -> Result<ChatSendResult, ChatError>;
+
+    async fn send_media_message(
+        &self,
+        principal: &Principal,
+        conversation_id: &str,
+        client_message_id: &str,
+        caption: &str,
+        media_id: &str,
     ) -> Result<ChatSendResult, ChatError>;
 
     async fn mark_read(

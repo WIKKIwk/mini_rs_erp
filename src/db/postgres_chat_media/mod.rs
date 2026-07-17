@@ -1,4 +1,5 @@
 mod repository;
+mod repository_processing;
 mod rows;
 
 #[cfg(test)]
@@ -9,8 +10,8 @@ use sqlx::PgPool;
 
 use crate::core::auth::models::Principal;
 use crate::core::chat_media::{
-    ChatMediaCreateResult, ChatMediaError, ChatMediaRepository, ChatMediaStorageObject,
-    ChatMediaUploadRecord, NewChatMediaUpload,
+    ChatMediaCreateResult, ChatMediaError, ChatMediaProcessingWorkItem, ChatMediaReadyInput,
+    ChatMediaRepository, ChatMediaStorageObject, ChatMediaUploadRecord, NewChatMediaUpload,
 };
 
 #[derive(Clone)]
@@ -103,5 +104,38 @@ impl ChatMediaRepository for PostgresChatMediaRepository {
 
     async fn release_orphan_cleanup(&self, media_id: &str) -> Result<(), ChatMediaError> {
         repository::release_orphan_cleanup(&self.pool, media_id).await
+    }
+
+    async fn claim_processing_jobs(
+        &self,
+        limit: usize,
+    ) -> Result<Vec<ChatMediaProcessingWorkItem>, ChatMediaError> {
+        repository_processing::claim_processing_jobs(&self.pool, limit).await
+    }
+
+    async fn mark_processing_ready(
+        &self,
+        job_id: &str,
+        media_id: &str,
+        ready: &ChatMediaReadyInput,
+    ) -> Result<(), ChatMediaError> {
+        repository_processing::mark_processing_ready(&self.pool, job_id, media_id, ready).await
+    }
+
+    async fn mark_processing_failed(
+        &self,
+        job_id: &str,
+        media_id: &str,
+        error_code: &str,
+    ) -> Result<(), ChatMediaError> {
+        repository_processing::mark_processing_failed(&self.pool, job_id, media_id, error_code).await
+    }
+
+    async fn media_for_access(
+        &self,
+        principal: &Principal,
+        media_id: &str,
+    ) -> Result<ChatMediaUploadRecord, ChatMediaError> {
+        repository_processing::media_for_access(&self.pool, principal, media_id).await
     }
 }

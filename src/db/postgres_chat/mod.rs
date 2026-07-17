@@ -78,6 +78,26 @@ impl ChatStorePort for PostgresChatStore {
             conversation_id,
             client_message_id,
             body,
+            None,
+        )
+        .await
+    }
+
+    async fn send_media_message(
+        &self,
+        principal: &Principal,
+        conversation_id: &str,
+        client_message_id: &str,
+        caption: &str,
+        media_id: &str,
+    ) -> Result<ChatSendResult, ChatError> {
+        write::send_message(
+            &self.pool,
+            principal,
+            conversation_id,
+            client_message_id,
+            caption,
+            Some(media_id),
         )
         .await
     }

@@ -4,11 +4,13 @@ use bytes::Bytes;
 
 use super::PostgresChatMediaRepository;
 use crate::core::auth::models::{Principal, PrincipalRole};
+use crate::core::chat::ChatService;
 use crate::core::chat_media::{
-    ChatMediaByteStream, ChatMediaError, ChatMediaInitializeInput, ChatMediaKind,
-    ChatMediaService, ChatMediaStatus,
+    ChatMediaAccess, ChatMediaAccessVariant, ChatMediaByteStream, ChatMediaError,
+    ChatMediaInitializeInput, ChatMediaKind, ChatMediaService, ChatMediaStatus,
 };
 use crate::db::postgres::apply_foundation_migration;
+use crate::db::postgres_chat::PostgresChatStore;
 use crate::store::chat_media_local::LocalChatMediaStorage;
 
 #[tokio::test]
@@ -35,24 +37,25 @@ async fn postgres_chat_media_enforces_authorization_idempotency_and_completion()
         .expect("apply migrations");
     seed_conversation(&pool).await;
     let directory = tempfile::tempdir().expect("media directory");
-    let service = ChatMediaService::new(
+    let media_service = ChatMediaService::new(
         Arc::new(PostgresChatMediaRepository::new(pool.clone())),
         Arc::new(LocalChatMediaStorage::new(directory.path())),
     );
 
+    let source = test_image();
     let input = ChatMediaInitializeInput {
         client_upload_id: "client_upload_1".to_string(),
         kind: ChatMediaKind::Image,
-        filename: "photo.jpg".to_string(),
-        content_type: "image/jpeg".to_string(),
-        size_bytes: 3,
+        filename: "photo.png".to_string(),
+        content_type: "image/png".to_string(),
+        size_bytes: source.len() as i64,
         duration_ms: None,
     };
-    let first = service
+    let first = media_service
         .initialize_upload(&owner(), "conversation_1", input.clone())
         .await
         .expect("initialize");
-    let repeated = service
+    let repeated = media_service
         .initialize_upload(&owner(), "conversation_1", input)
         .await
         .expect("idempotent initialize");
@@ -61,20 +64,20 @@ async fn postgres_chat_media_enforces_authorization_idempotency_and_completion()
     assert_eq!(first.media.media_id, repeated.media.media_id);
 
     assert_eq!(
-        service
+        media_service
             .upload_status(&intruder(), "conversation_1", &first.media.upload_id)
             .await
             .unwrap_err(),
         ChatMediaError::Forbidden
     );
-    service
+    media_service
         .upload_content(
             &owner(),
             "conversation_1",
             &first.media.upload_id,
-            Some(3),
-            Some("image/jpeg"),
-            bytes(b"abc"),
+            Some(source.len() as i64),
+            Some("image/png"),
+            bytes(source),
         )
         .await
         .expect("store upload");
@@ -86,7 +89,7 @@ async fn postgres_chat_media_enforces_authorization_idempotency_and_completion()
     .await
     .expect("disable posting");
     assert_eq!(
-        service
+        media_service
             .complete_upload(&owner(), "conversation_1", &first.media.upload_id)
             .await
             .unwrap_err(),
@@ -99,7 +102,7 @@ async fn postgres_chat_media_enforces_authorization_idempotency_and_completion()
     .await
     .expect("enable posting");
 
-    let completed = service
+    let completed = media_service
         .complete_upload(&owner(), "conversation_1", &first.media.upload_id)
         .await
         .expect("complete");
@@ -112,6 +115,48 @@ async fn postgres_chat_media_enforces_authorization_idempotency_and_completion()
     .await
     .expect("job count");
     assert_eq!(job_count, 1);
+
+    assert_eq!(
+        media_service
+            .process_pending_jobs(1)
+            .await
+            .expect("process media"),
+        1
+    );
+    let ready = media_service
+        .upload_status(&owner(), "conversation_1", &first.media.upload_id)
+        .await
+        .expect("ready status");
+    assert_eq!(ready.status, ChatMediaStatus::Ready);
+    assert_eq!(ready.width_pixels, Some(32));
+    assert_eq!(ready.height_pixels, Some(18));
+
+    let chat_service = ChatService::new(Arc::new(PostgresChatStore::new(pool.clone())));
+    let sent = chat_service
+        .send_media_message(
+            &owner(),
+            "conversation_1",
+            "client_message_media_1",
+            "",
+            &ready.media_id,
+        )
+        .await
+        .expect("send media message");
+    assert_eq!(sent.message.message_type, "image");
+    let attachment = sent.message.attachment.expect("attachment payload");
+    assert_eq!(attachment.media_id, ready.media_id);
+    assert_eq!(attachment.content_type, "image/jpeg");
+    assert!(attachment.content_url.ends_with("/content"));
+    assert!(attachment.thumbnail_url.ends_with("/thumbnail"));
+
+    let ChatMediaAccess::Local { content } = media_service
+        .media_access(&owner(), &ready.media_id, ChatMediaAccessVariant::Content)
+        .await
+        .expect("authorized private access")
+    else {
+        panic!("local development storage must be proxied");
+    };
+    assert!(!content.bytes.is_empty());
 
     pool.close().await;
     let admin_pool = sqlx::PgPool::connect(&admin_url)
@@ -174,10 +219,19 @@ fn principal(reference: &str) -> Principal {
     }
 }
 
-fn bytes(value: &'static [u8]) -> ChatMediaByteStream {
+fn bytes(value: Vec<u8>) -> ChatMediaByteStream {
     Box::pin(async_stream::stream! {
-        yield Ok(Bytes::from_static(value));
+        yield Ok(Bytes::from(value));
     })
+}
+
+fn test_image() -> Vec<u8> {
+    let image = image::DynamicImage::new_rgb8(32, 18);
+    let mut output = std::io::Cursor::new(Vec::new());
+    image
+        .write_to(&mut output, image::ImageFormat::Png)
+        .expect("encode test image");
+    output.into_inner()
 }
 
 fn database_url(admin_url: &str, database: &str) -> String {

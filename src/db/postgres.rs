@@ -9,7 +9,7 @@ const DEFAULT_MAX_CONNECTIONS: u32 = 16;
 const DEFAULT_ACQUIRE_TIMEOUT_MS: u64 = 500;
 const MIGRATION_LOCK_KEY: i64 = 6_514_811_918_052_026_001;
 
-const POSTGRES_MIGRATIONS: [(&str, &str); 11] = [
+const POSTGRES_MIGRATIONS: [(&str, &str); 12] = [
     (
         "0001_mini_erp_foundation",
         include_str!("../../migrations/postgres/0001_mini_erp_foundation.sql"),
@@ -53,6 +53,10 @@ const POSTGRES_MIGRATIONS: [(&str, &str); 11] = [
     (
         "0011_chat_media_foundation",
         include_str!("../../migrations/postgres/0011_chat_media_foundation.sql"),
+    ),
+    (
+        "0012_chat_media_v1",
+        include_str!("../../migrations/postgres/0012_chat_media_v1.sql"),
     ),
 ];
 
@@ -492,6 +496,18 @@ mod tests {
         assert!(migration.contains("message_id text not null unique"));
         assert!(migration.contains("media_id text not null unique"));
         assert!(migration.contains("job_status = 'pending'"));
+        assert!(!migration.contains("public_url"));
+    }
+
+    #[test]
+    fn postgres_chat_media_v1_migration_enables_processed_attachments() {
+        let migration = POSTGRES_MIGRATIONS[11].1.to_lowercase();
+
+        assert!(migration.contains("processed_content_type"));
+        assert!(migration.contains("processed_size_bytes"));
+        assert!(migration.contains("'image', 'video'"));
+        assert!(migration.contains("char_length(body) between 0 and 4000"));
+        assert!(migration.contains("idx_mini_chat_media_jobs_claim"));
         assert!(!migration.contains("public_url"));
     }
 
