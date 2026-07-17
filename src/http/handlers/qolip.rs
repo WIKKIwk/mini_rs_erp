@@ -503,7 +503,6 @@ pub async fn code_qr_print(
         .await
         .map_err(qolip_error)?
         .ok_or_else(|| bad_request("qolip_code_not_found"))?;
-    let label = format!("{} • {}", spec.item_name.trim(), spec.size);
     let client_print = input
         .print_transport
         .trim()
@@ -512,7 +511,7 @@ pub async fn code_qr_print(
         driver_url: input.driver_url,
         qr_payload: spec.qolip_code.clone(),
         item_code: spec.qolip_code.clone(),
-        item_name: label,
+        item_name: spec.item_name.clone(),
         executor_name: principal.display_name.trim().to_string(),
         printer: input.printer,
         print_mode: input.print_mode,
