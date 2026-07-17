@@ -4,7 +4,8 @@ use super::{
     ChatMediaByteStream, ChatMediaCreateResult, ChatMediaError, ChatMediaProcessingWorkItem,
     ChatMediaReadyInput, ChatMediaRepository, ChatMediaStorage, ChatMediaStorageDownload,
     ChatMediaStorageError, ChatMediaStorageObject, ChatMediaStorageUpload,
-    ChatMediaStoredContent, ChatMediaUploadRecord, NewChatMediaUpload,
+    ChatMediaStoredContent, ChatMediaUploadRecord, ChatMediaUploadedChunk,
+    NewChatMediaUpload, NewChatMediaUploadedChunk,
 };
 use crate::core::auth::models::Principal;
 
@@ -27,6 +28,36 @@ impl ChatMediaRepository for UnavailableChatMediaRepository {
         _upload_id: &str,
         _require_can_post: bool,
     ) -> Result<ChatMediaUploadRecord, ChatMediaError> {
+        Err(ChatMediaError::Unavailable)
+    }
+
+    async fn set_multipart_upload_id(
+        &self,
+        _principal: &Principal,
+        _conversation_id: &str,
+        _upload_id: &str,
+        _storage_upload_id: &str,
+    ) -> Result<ChatMediaUploadRecord, ChatMediaError> {
+        Err(ChatMediaError::Unavailable)
+    }
+
+    async fn uploaded_chunks(
+        &self,
+        _principal: &Principal,
+        _conversation_id: &str,
+        _upload_id: &str,
+        _require_can_post: bool,
+    ) -> Result<Vec<ChatMediaUploadedChunk>, ChatMediaError> {
+        Err(ChatMediaError::Unavailable)
+    }
+
+    async fn record_uploaded_chunk(
+        &self,
+        _principal: &Principal,
+        _conversation_id: &str,
+        _upload_id: &str,
+        _chunk: NewChatMediaUploadedChunk,
+    ) -> Result<ChatMediaUploadedChunk, ChatMediaError> {
         Err(ChatMediaError::Unavailable)
     }
 

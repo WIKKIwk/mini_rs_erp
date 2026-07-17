@@ -3,7 +3,7 @@ use axum::extract::DefaultBodyLimit;
 use axum::routing::any;
 
 use crate::app::AppState;
-use crate::core::chat_media::MAX_CHAT_VIDEO_SIZE_BYTES;
+use crate::core::chat_media::{MAX_CHAT_IMAGE_SIZE_BYTES, MAX_CHAT_MEDIA_CHUNK_SIZE_BYTES};
 use crate::http::handlers::{
     auth, calculate, chat, customer, gscale, iroh_discovery, notifications, profile, push, qolip,
     returned_paint, rezka, rps_batch, stock_entry, supplier, werka,
@@ -70,7 +70,12 @@ pub(super) fn routes() -> Router<AppState> {
         .route(
             "/v1/mobile/chat/conversations/{conversation_id}/media/uploads/{upload_id}/content",
             any(chat::media_upload_content)
-                .layer(DefaultBodyLimit::max(MAX_CHAT_VIDEO_SIZE_BYTES as usize)),
+                .layer(DefaultBodyLimit::max(MAX_CHAT_IMAGE_SIZE_BYTES as usize)),
+        )
+        .route(
+            "/v1/mobile/chat/conversations/{conversation_id}/media/uploads/{upload_id}/chunks/{chunk_index}",
+            any(chat::media_upload_chunk)
+                .layer(DefaultBodyLimit::max(MAX_CHAT_MEDIA_CHUNK_SIZE_BYTES as usize)),
         )
         .route(
             "/v1/mobile/chat/conversations/{conversation_id}/media/uploads/{upload_id}/complete",

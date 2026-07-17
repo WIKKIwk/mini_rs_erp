@@ -26,7 +26,9 @@ fn insert_cors_headers(headers: &mut HeaderMap) {
     );
     headers.insert(
         header::ACCESS_CONTROL_ALLOW_HEADERS,
-        HeaderValue::from_static("authorization,content-type,x-file-name,range"),
+        HeaderValue::from_static(
+            "authorization,content-length,content-range,content-type,x-file-name,range",
+        ),
     );
     headers.insert(
         header::ACCESS_CONTROL_EXPOSE_HEADERS,

@@ -1,6 +1,6 @@
 use std::fs;
+use std::io::Write;
 use std::path::{Path, PathBuf};
-use std::process::Command;
 
 use async_trait::async_trait;
 use bytes::Bytes;
@@ -9,8 +9,8 @@ use image::imageops::FilterType;
 use image::{DynamicImage, GenericImageView, Rgb, RgbImage};
 
 use super::{
-    ChatMediaKind, ChatMediaProcessedContent, ChatMediaProcessingError, ChatMediaProcessor,
-    ChatMediaUploadRecord, MAX_CHAT_VIDEO_DURATION_MS, MAX_CHAT_VIDEO_SIZE_BYTES,
+    ChatMediaKind, ChatMediaProcessedContent, ChatMediaProcessedFiles,
+    ChatMediaProcessingError, ChatMediaProcessor, ChatMediaUploadRecord,
 };
 
 const IMAGE_LONG_EDGE: u32 = 1920;
@@ -20,8 +20,8 @@ const THUMBNAIL_QUALITY: u8 = 78;
 
 #[derive(Clone)]
 pub struct SystemChatMediaProcessor {
-    ffmpeg_bin: String,
-    ffprobe_bin: String,
+    pub(super) ffmpeg_bin: String,
+    pub(super) ffprobe_bin: String,
     temp_root: PathBuf,
 }
 
@@ -66,12 +66,80 @@ impl ChatMediaProcessor for SystemChatMediaProcessor {
                 let processor = self.clone();
                 let media_id = media.media_id.clone();
                 tokio::task::spawn_blocking(move || {
-                    processor.process_video(&media_id, &source)
+                    let workspace = ProcessingWorkspace::create(&processor.temp_root, &media_id)?;
+                    let source_path = workspace.path.join("source.upload");
+                    let content_path = workspace.path.join("canonical.mp4");
+                    let thumbnail_path = workspace.path.join("thumbnail.jpg");
+                    fs::write(&source_path, source)
+                        .map_err(|_| ChatMediaProcessingError::ProcessingFailed)?;
+                    let processed = processor.process_video_files(
+                        &source_path,
+                        &content_path,
+                        &thumbnail_path,
+                    )?;
+                    Ok(ChatMediaProcessedContent {
+                        content: Bytes::from(
+                            fs::read(&processed.content_path)
+                                .map_err(|_| ChatMediaProcessingError::ProcessingFailed)?,
+                        ),
+                        content_type: processed.content_type,
+                        thumbnail: Bytes::from(
+                            fs::read(&processed.thumbnail_path)
+                                .map_err(|_| ChatMediaProcessingError::ProcessingFailed)?,
+                        ),
+                        thumbnail_content_type: processed.thumbnail_content_type,
+                        width_pixels: processed.width_pixels,
+                        height_pixels: processed.height_pixels,
+                        duration_ms: processed.duration_ms,
+                        frame_rate_milli: processed.frame_rate_milli,
+                        video_codec: processed.video_codec,
+                        audio_codec: processed.audio_codec,
+                    })
                 })
                 .await
                 .map_err(|_| ChatMediaProcessingError::ProcessingFailed)?
             }
         }
+    }
+
+    async fn process_file(
+        &self,
+        media: &ChatMediaUploadRecord,
+        source_path: &Path,
+        content_path: &Path,
+        thumbnail_path: &Path,
+    ) -> Result<ChatMediaProcessedFiles, ChatMediaProcessingError> {
+        let processor = self.clone();
+        let source_path = source_path.to_path_buf();
+        let content_path = content_path.to_path_buf();
+        let thumbnail_path = thumbnail_path.to_path_buf();
+        let kind = media.kind;
+        tokio::task::spawn_blocking(move || match kind {
+            ChatMediaKind::Image => {
+                let source = fs::read(&source_path)
+                    .map_err(|_| ChatMediaProcessingError::ProcessingFailed)?;
+                let processed = process_image(&source)?;
+                write_file(&content_path, &processed.content)?;
+                write_file(&thumbnail_path, &processed.thumbnail)?;
+                Ok(ChatMediaProcessedFiles {
+                    content_path,
+                    content_type: processed.content_type,
+                    thumbnail_path,
+                    thumbnail_content_type: processed.thumbnail_content_type,
+                    width_pixels: processed.width_pixels,
+                    height_pixels: processed.height_pixels,
+                    duration_ms: processed.duration_ms,
+                    frame_rate_milli: processed.frame_rate_milli,
+                    video_codec: processed.video_codec,
+                    audio_codec: processed.audio_codec,
+                })
+            }
+            ChatMediaKind::Video => {
+                processor.process_video_files(&source_path, &content_path, &thumbnail_path)
+            }
+        })
+        .await
+        .map_err(|_| ChatMediaProcessingError::ProcessingFailed)?
     }
 }
 
@@ -91,178 +159,18 @@ fn process_image(source: &[u8]) -> Result<ChatMediaProcessedContent, ChatMediaPr
         height_pixels: i32::try_from(height)
             .map_err(|_| ChatMediaProcessingError::InvalidContent)?,
         duration_ms: None,
+        frame_rate_milli: None,
+        video_codec: None,
+        audio_codec: None,
     })
 }
 
-impl SystemChatMediaProcessor {
-    fn process_video(
-        &self,
-        media_id: &str,
-        source: &[u8],
-    ) -> Result<ChatMediaProcessedContent, ChatMediaProcessingError> {
-        let workspace = ProcessingWorkspace::create(&self.temp_root, media_id)?;
-        let source_path = workspace.path.join("source.upload");
-        let output_path = workspace.path.join("canonical.mp4");
-        let thumbnail_path = workspace.path.join("thumbnail.jpg");
-        fs::write(&source_path, source)
-            .map_err(|_| ChatMediaProcessingError::ProcessingFailed)?;
-        let source_probe = self.probe_video(&source_path)?;
-        validate_video_duration(source_probe.duration_ms)?;
-        let scale = "scale='if(gt(iw,ih),min(iw\\,1280),min(iw\\,720))':'if(gt(iw,ih),min(ih\\,720),min(ih\\,1280))':force_original_aspect_ratio=decrease,scale=trunc(iw/2)*2:trunc(ih/2)*2";
-        run_command(
-            &self.ffmpeg_bin,
-            [
-                "-nostdin",
-                "-hide_banner",
-                "-loglevel",
-                "error",
-                "-y",
-                "-i",
-                path_str(&source_path)?,
-                "-map",
-                "0:v:0",
-                "-map",
-                "0:a?",
-                "-vf",
-                scale,
-                "-c:v",
-                "libx264",
-                "-preset",
-                "medium",
-                "-crf",
-                "23",
-                "-pix_fmt",
-                "yuv420p",
-                "-c:a",
-                "aac",
-                "-b:a",
-                "128k",
-                "-movflags",
-                "+faststart",
-                path_str(&output_path)?,
-            ],
-        )?;
-        let output_probe = self.probe_video(&output_path)?;
-        run_command(
-            &self.ffmpeg_bin,
-            [
-                "-nostdin",
-                "-hide_banner",
-                "-loglevel",
-                "error",
-                "-y",
-                "-ss",
-                "0.5",
-                "-i",
-                path_str(&output_path)?,
-                "-frames:v",
-                "1",
-                "-vf",
-                "scale=480:480:force_original_aspect_ratio=decrease",
-                "-q:v",
-                "3",
-                path_str(&thumbnail_path)?,
-            ],
-        )?;
-        let content = fs::read(&output_path)
-            .map_err(|_| ChatMediaProcessingError::ProcessingFailed)?;
-        let thumbnail = fs::read(&thumbnail_path)
-            .map_err(|_| ChatMediaProcessingError::ProcessingFailed)?;
-        if content.is_empty()
-            || thumbnail.is_empty()
-            || content.len() as i64 > MAX_CHAT_VIDEO_SIZE_BYTES
-        {
-            return Err(ChatMediaProcessingError::ProcessingFailed);
-        }
-        Ok(ChatMediaProcessedContent {
-            content: Bytes::from(content),
-            content_type: "video/mp4".to_string(),
-            thumbnail: Bytes::from(thumbnail),
-            thumbnail_content_type: "image/jpeg".to_string(),
-            width_pixels: output_probe.width_pixels,
-            height_pixels: output_probe.height_pixels,
-            duration_ms: Some(output_probe.duration_ms),
-        })
-    }
-
-    fn probe_video(&self, path: &Path) -> Result<VideoProbe, ChatMediaProcessingError> {
-        let output = Command::new(&self.ffprobe_bin)
-            .args([
-                "-v",
-                "error",
-                "-select_streams",
-                "v:0",
-                "-show_entries",
-                "stream=width,height:format=duration,format_name",
-                "-of",
-                "json",
-                path_str(path)?,
-            ])
-            .output()
-            .map_err(|_| ChatMediaProcessingError::Unavailable)?;
-        if !output.status.success() {
-            return Err(ChatMediaProcessingError::InvalidContent);
-        }
-        parse_probe(&output.stdout)
-    }
-}
-
-struct VideoProbe {
-    width_pixels: i32,
-    height_pixels: i32,
-    duration_ms: i64,
-}
-
-fn parse_probe(bytes: &[u8]) -> Result<VideoProbe, ChatMediaProcessingError> {
-    let value: serde_json::Value = serde_json::from_slice(bytes)
-        .map_err(|_| ChatMediaProcessingError::InvalidContent)?;
-    let stream = value["streams"]
-        .as_array()
-        .and_then(|streams| streams.first())
-        .ok_or(ChatMediaProcessingError::InvalidContent)?;
-    let width_pixels = stream["width"]
-        .as_i64()
-        .and_then(|value| i32::try_from(value).ok())
-        .filter(|value| *value > 0)
-        .ok_or(ChatMediaProcessingError::InvalidContent)?;
-    let height_pixels = stream["height"]
-        .as_i64()
-        .and_then(|value| i32::try_from(value).ok())
-        .filter(|value| *value > 0)
-        .ok_or(ChatMediaProcessingError::InvalidContent)?;
-    let duration = value["format"]["duration"]
-        .as_str()
-        .and_then(|value| value.parse::<f64>().ok())
-        .filter(|value| value.is_finite() && *value > 0.0)
-        .ok_or(ChatMediaProcessingError::InvalidContent)?;
-    Ok(VideoProbe {
-        width_pixels,
-        height_pixels,
-        duration_ms: (duration * 1000.0).ceil() as i64,
-    })
-}
-
-fn validate_video_duration(duration_ms: i64) -> Result<(), ChatMediaProcessingError> {
-    if (1..=MAX_CHAT_VIDEO_DURATION_MS).contains(&duration_ms) {
-        Ok(())
-    } else {
-        Err(ChatMediaProcessingError::DurationTooLong)
-    }
-}
-
-fn run_command<'a>(
-    binary: &str,
-    args: impl IntoIterator<Item = &'a str>,
-) -> Result<(), ChatMediaProcessingError> {
-    let status = Command::new(binary)
-        .args(args)
-        .status()
-        .map_err(|_| ChatMediaProcessingError::Unavailable)?;
-    if status.success() {
-        Ok(())
-    } else {
-        Err(ChatMediaProcessingError::ProcessingFailed)
-    }
+fn write_file(path: &Path, bytes: &[u8]) -> Result<(), ChatMediaProcessingError> {
+    let mut file =
+        fs::File::create(path).map_err(|_| ChatMediaProcessingError::ProcessingFailed)?;
+    file.write_all(bytes)
+        .and_then(|_| file.flush())
+        .map_err(|_| ChatMediaProcessingError::ProcessingFailed)
 }
 
 fn resize_long_edge(image: DynamicImage, maximum: u32) -> DynamicImage {
@@ -301,11 +209,6 @@ fn flatten_on_white(image: &DynamicImage) -> RgbImage {
     rgb
 }
 
-fn path_str(path: &Path) -> Result<&str, ChatMediaProcessingError> {
-    path.to_str()
-        .ok_or(ChatMediaProcessingError::ProcessingFailed)
-}
-
 fn env_or(key: &str, fallback: &str) -> String {
     std::env::var(key)
         .ok()
@@ -339,10 +242,7 @@ mod tests {
 
     use image::{DynamicImage, GenericImageView, ImageFormat, Rgba, RgbaImage};
 
-    use super::{
-        MAX_CHAT_VIDEO_DURATION_MS, ChatMediaProcessingError, parse_probe, process_image,
-        validate_video_duration,
-    };
+    use super::{ChatMediaProcessingError, process_image};
 
     #[test]
     fn image_processing_reencodes_and_limits_both_long_edges() {
@@ -365,22 +265,6 @@ mod tests {
         assert_eq!(
             process_image(b"not an image").unwrap_err(),
             ChatMediaProcessingError::InvalidContent
-        );
-    }
-
-    #[test]
-    fn probe_metadata_and_server_duration_limit_are_enforced() {
-        let probe = parse_probe(
-            br#"{"streams":[{"width":1280,"height":720}],"format":{"duration":"120.000","format_name":"mov,mp4"}}"#,
-        )
-        .expect("probe");
-        assert_eq!(probe.width_pixels, 1280);
-        assert_eq!(probe.height_pixels, 720);
-        assert_eq!(probe.duration_ms, MAX_CHAT_VIDEO_DURATION_MS);
-        assert_eq!(validate_video_duration(probe.duration_ms), Ok(()));
-        assert_eq!(
-            validate_video_duration(MAX_CHAT_VIDEO_DURATION_MS + 1),
-            Err(ChatMediaProcessingError::DurationTooLong)
         );
     }
 

@@ -19,6 +19,10 @@ original_filename,
 declared_content_type,
 declared_size_bytes,
 declared_duration_ms,
+upload_mode,
+chunk_size_bytes,
+total_chunks,
+storage_multipart_upload_id,
 source_object_key,
 actual_size_bytes,
 storage_etag,
@@ -31,6 +35,9 @@ processed_etag,
 width_pixels,
 height_pixels,
 duration_ms,
+frame_rate_milli,
+video_codec,
+audio_codec,
 error_code,
 EXTRACT(EPOCH FROM expires_at)::BIGINT AS expires_at_unix,
 EXTRACT(EPOCH FROM created_at)::BIGINT AS created_at_unix,
@@ -80,9 +87,9 @@ pub(super) async fn initialize_upload(
              (media_id, upload_id, conversation_id, uploader_principal_id,
               client_upload_id, media_kind, upload_status, original_filename,
               declared_content_type, declared_size_bytes, declared_duration_ms,
-              source_object_key, expires_at)
+              upload_mode, chunk_size_bytes, total_chunks, source_object_key, expires_at)
            VALUES ($1, $2, $3, $4, $5, $6, 'pending', $7, $8, $9, $10, $11,
-                   to_timestamp($12))
+                   $12, $13, $14, to_timestamp($15))
            ON CONFLICT (conversation_id, uploader_principal_id, client_upload_id)
            DO NOTHING"#,
     )
@@ -96,6 +103,9 @@ pub(super) async fn initialize_upload(
     .bind(&upload.declared_content_type)
     .bind(upload.declared_size_bytes)
     .bind(upload.declared_duration_ms)
+    .bind(upload.upload_mode.as_str())
+    .bind(upload.chunk_size_bytes)
+    .bind(upload.total_chunks)
     .bind(&upload.source_object_key)
     .bind(upload.expires_at_unix)
     .execute(&mut *tx)
@@ -333,7 +343,7 @@ pub(super) async fn release_orphan_cleanup(
     .map_err(|_| ChatMediaError::StoreFailed)
 }
 
-async fn authorized_principal_id(
+pub(super) async fn authorized_principal_id(
     tx: &mut Transaction<'_, Postgres>,
     principal: &Principal,
     conversation_id: &str,
@@ -375,7 +385,7 @@ mod tests {
     }
 }
 
-async fn by_upload_id(
+pub(super) async fn by_upload_id(
     tx: &mut Transaction<'_, Postgres>,
     conversation_id: &str,
     uploader_id: &str,

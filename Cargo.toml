@@ -33,7 +33,7 @@ pingora-core = { version = "0.8.1", features = ["rustls"] }
 pingora-http = "0.8.1"
 pingora-proxy = { version = "0.8.1", features = ["rustls"] }
 rand = "0.9"
-reqwest = { version = "0.12", default-features = false, features = ["json", "multipart", "rustls-tls"] }
+reqwest = { version = "0.12", default-features = false, features = ["json", "multipart", "rustls-tls", "stream"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 sha2 = "0.10"

@@ -1,4 +1,5 @@
 mod repository;
+mod repository_chunks;
 mod repository_processing;
 mod rows;
 
@@ -11,7 +12,8 @@ use sqlx::PgPool;
 use crate::core::auth::models::Principal;
 use crate::core::chat_media::{
     ChatMediaCreateResult, ChatMediaError, ChatMediaProcessingWorkItem, ChatMediaReadyInput,
-    ChatMediaRepository, ChatMediaStorageObject, ChatMediaUploadRecord, NewChatMediaUpload,
+    ChatMediaRepository, ChatMediaStorageObject, ChatMediaUploadRecord, ChatMediaUploadedChunk,
+    NewChatMediaUpload, NewChatMediaUploadedChunk,
 };
 
 #[derive(Clone)]
@@ -48,6 +50,57 @@ impl ChatMediaRepository for PostgresChatMediaRepository {
             conversation_id,
             upload_id,
             require_can_post,
+        )
+        .await
+    }
+
+    async fn set_multipart_upload_id(
+        &self,
+        principal: &Principal,
+        conversation_id: &str,
+        upload_id: &str,
+        storage_upload_id: &str,
+    ) -> Result<ChatMediaUploadRecord, ChatMediaError> {
+        repository_chunks::set_multipart_upload_id(
+            &self.pool,
+            principal,
+            conversation_id,
+            upload_id,
+            storage_upload_id,
+        )
+        .await
+    }
+
+    async fn uploaded_chunks(
+        &self,
+        principal: &Principal,
+        conversation_id: &str,
+        upload_id: &str,
+        require_can_post: bool,
+    ) -> Result<Vec<ChatMediaUploadedChunk>, ChatMediaError> {
+        repository_chunks::uploaded_chunks(
+            &self.pool,
+            principal,
+            conversation_id,
+            upload_id,
+            require_can_post,
+        )
+        .await
+    }
+
+    async fn record_uploaded_chunk(
+        &self,
+        principal: &Principal,
+        conversation_id: &str,
+        upload_id: &str,
+        chunk: NewChatMediaUploadedChunk,
+    ) -> Result<ChatMediaUploadedChunk, ChatMediaError> {
+        repository_chunks::record_uploaded_chunk(
+            &self.pool,
+            principal,
+            conversation_id,
+            upload_id,
+            chunk,
         )
         .await
     }

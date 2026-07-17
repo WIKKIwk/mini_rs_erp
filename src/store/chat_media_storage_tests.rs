@@ -3,8 +3,8 @@ use bytes::Bytes;
 use super::chat_media_local::LocalChatMediaStorage;
 use super::chat_media_r2::{R2ChatMediaConfig, R2ChatMediaStorage};
 use crate::core::chat_media::{
-    ChatMediaByteStream, ChatMediaStorage, ChatMediaStorageDownload, ChatMediaStorageError,
-    ChatMediaStorageUpload,
+    ChatMediaByteStream, ChatMediaRangeRequest, ChatMediaStorage,
+    ChatMediaStorageDownload, ChatMediaStorageError, ChatMediaStorageUpload,
 };
 
 #[tokio::test]
@@ -48,6 +48,37 @@ async fn local_chat_media_storage_writes_exact_bytes_and_deletes_privately() {
 }
 
 #[tokio::test]
+async fn local_chat_media_storage_streams_only_the_requested_video_range() {
+    let directory = tempfile::tempdir().expect("temporary directory");
+    let storage = LocalChatMediaStorage::new(directory.path());
+    let object_key = "chat_media/conversation_1/video_1/processed";
+    storage
+        .put_object(
+            object_key,
+            "video/mp4",
+            10,
+            chunks(vec![b"01234", b"56789"]),
+        )
+        .await
+        .expect("store video");
+
+    let ranged = storage
+        .stream_object(
+            object_key,
+            ChatMediaRangeRequest::From {
+                start_byte: 2,
+                end_byte_inclusive: Some(5),
+            },
+        )
+        .await
+        .expect("stream range");
+    assert!(ranged.partial);
+    assert_eq!(ranged.total_size_bytes, 10);
+    assert_eq!(ranged.content_length(), 4);
+    assert_eq!(collect(ranged.stream).await, Bytes::from_static(b"2345"));
+}
+
+#[tokio::test]
 async fn local_chat_media_storage_rejects_size_mismatch_and_path_traversal() {
     let directory = tempfile::tempdir().expect("temporary directory");
     let storage = LocalChatMediaStorage::new(directory.path());
@@ -70,6 +101,85 @@ async fn local_chat_media_storage_rejects_size_mismatch_and_path_traversal() {
             .await
             .unwrap_err(),
         ChatMediaStorageError::InvalidObjectKey
+    );
+}
+
+#[tokio::test]
+async fn local_chat_media_storage_persists_completes_and_aborts_multipart_uploads() {
+    let directory = tempfile::tempdir().expect("temporary directory");
+    let storage = LocalChatMediaStorage::new(directory.path());
+    let object_key = "chat_media/conversation_1/video_1/source";
+    let upload = storage
+        .begin_multipart_upload(object_key, "video/mp4")
+        .await
+        .expect("begin multipart");
+    let first = storage
+        .put_multipart_part(
+            object_key,
+            &upload.storage_upload_id,
+            1,
+            Bytes::from_static(b"abc"),
+        )
+        .await
+        .expect("first part");
+    let second = storage
+        .put_multipart_part(
+            object_key,
+            &upload.storage_upload_id,
+            2,
+            Bytes::from_static(b"def"),
+        )
+        .await
+        .expect("second part");
+    assert!(
+        directory
+            .path()
+            .join(".multipart")
+            .join(&upload.storage_upload_id)
+            .join("part-00001")
+            .is_file()
+    );
+
+    let stored = storage
+        .complete_multipart_upload(
+            object_key,
+            "video/mp4",
+            &upload.storage_upload_id,
+            6,
+            &[first, second],
+        )
+        .await
+        .expect("complete multipart");
+    assert_eq!(stored.size_bytes, 6);
+    assert_eq!(
+        storage.read_object(object_key).await.expect("read").bytes,
+        Bytes::from_static(b"abcdef")
+    );
+    assert!(
+        !directory
+            .path()
+            .join(".multipart")
+            .join(&upload.storage_upload_id)
+            .exists()
+    );
+
+    let cancelled = storage
+        .begin_multipart_upload("chat_media/conversation_1/video_2/source", "video/mp4")
+        .await
+        .expect("begin cancellable multipart");
+    storage
+        .abort_multipart_upload(
+            "chat_media/conversation_1/video_2/source",
+            &cancelled.storage_upload_id,
+        )
+        .await
+        .expect("abort multipart");
+    assert!(
+        !directory
+            .path()
+            .join(".multipart")
+            .join(cancelled.storage_upload_id)
+            .exists()
     );
 }
 
@@ -147,4 +257,14 @@ fn chunks(chunks: Vec<&'static [u8]>) -> ChatMediaByteStream {
             yield Ok(Bytes::copy_from_slice(chunk));
         }
     })
+}
+
+async fn collect(mut stream: ChatMediaByteStream) -> Bytes {
+    let mut bytes = Vec::new();
+    while let Some(chunk) =
+        std::future::poll_fn(|context| stream.as_mut().poll_next(context)).await
+    {
+        bytes.extend_from_slice(&chunk.expect("stream chunk"));
+    }
+    Bytes::from(bytes)
 }

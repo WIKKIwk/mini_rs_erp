@@ -1,6 +1,6 @@
 use crate::core::chat_media::{
     ChatMediaError, ChatMediaKind, ChatMediaProcessingWorkItem, ChatMediaStatus,
-    ChatMediaUploadRecord,
+    ChatMediaUploadMode, ChatMediaUploadRecord, ChatMediaUploadedChunk,
 };
 
 #[derive(sqlx::FromRow)]
@@ -16,6 +16,10 @@ pub(super) struct ChatMediaRow {
     pub declared_content_type: String,
     pub declared_size_bytes: i64,
     pub declared_duration_ms: Option<i64>,
+    pub upload_mode: String,
+    pub chunk_size_bytes: Option<i64>,
+    pub total_chunks: Option<i32>,
+    pub storage_multipart_upload_id: Option<String>,
     pub source_object_key: String,
     pub actual_size_bytes: Option<i64>,
     pub storage_etag: Option<String>,
@@ -28,10 +32,34 @@ pub(super) struct ChatMediaRow {
     pub width_pixels: Option<i32>,
     pub height_pixels: Option<i32>,
     pub duration_ms: Option<i64>,
+    pub frame_rate_milli: Option<i32>,
+    pub video_codec: Option<String>,
+    pub audio_codec: Option<String>,
     pub error_code: Option<String>,
     pub expires_at_unix: i64,
     pub created_at_unix: i64,
     pub updated_at_unix: i64,
+}
+
+#[derive(sqlx::FromRow)]
+pub(super) struct ChatMediaChunkRow {
+    pub chunk_index: i32,
+    pub offset_bytes: i64,
+    pub size_bytes: i64,
+    pub storage_part_etag: String,
+    pub uploaded_at_unix: i64,
+}
+
+impl ChatMediaChunkRow {
+    pub fn into_model(self) -> ChatMediaUploadedChunk {
+        ChatMediaUploadedChunk {
+            chunk_index: self.chunk_index,
+            offset_bytes: self.offset_bytes,
+            size_bytes: self.size_bytes,
+            storage_part_etag: self.storage_part_etag,
+            uploaded_at_unix: self.uploaded_at_unix,
+        }
+    }
 }
 
 #[derive(sqlx::FromRow)]
@@ -68,6 +96,10 @@ impl ChatMediaRow {
             declared_content_type: self.declared_content_type,
             declared_size_bytes: self.declared_size_bytes,
             declared_duration_ms: self.declared_duration_ms,
+            upload_mode: parse_upload_mode(&self.upload_mode)?,
+            chunk_size_bytes: self.chunk_size_bytes,
+            total_chunks: self.total_chunks,
+            storage_multipart_upload_id: self.storage_multipart_upload_id,
             source_object_key: self.source_object_key,
             actual_size_bytes: self.actual_size_bytes,
             storage_etag: self.storage_etag,
@@ -80,11 +112,22 @@ impl ChatMediaRow {
             width_pixels: self.width_pixels,
             height_pixels: self.height_pixels,
             duration_ms: self.duration_ms,
+            frame_rate_milli: self.frame_rate_milli,
+            video_codec: self.video_codec,
+            audio_codec: self.audio_codec,
             error_code: self.error_code,
             expires_at_unix: self.expires_at_unix,
             created_at_unix: self.created_at_unix,
             updated_at_unix: self.updated_at_unix,
         })
+    }
+}
+
+fn parse_upload_mode(value: &str) -> Result<ChatMediaUploadMode, ChatMediaError> {
+    match value {
+        "single" => Ok(ChatMediaUploadMode::Single),
+        "chunked" => Ok(ChatMediaUploadMode::Chunked),
+        _ => Err(ChatMediaError::StoreFailed),
     }
 }
 

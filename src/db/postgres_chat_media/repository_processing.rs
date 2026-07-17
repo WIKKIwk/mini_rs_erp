@@ -58,6 +58,7 @@ pub(super) async fn mark_processing_ready(
                processed_size_bytes = $5, processed_etag = $6,
                thumbnail_object_key = $7, width_pixels = $8,
                height_pixels = $9, duration_ms = $10,
+               frame_rate_milli = $11, video_codec = $12, audio_codec = $13,
                error_code = NULL, updated_at = now()
            WHERE media_id = $1 AND upload_status = 'processing'
              AND EXISTS (
@@ -75,6 +76,9 @@ pub(super) async fn mark_processing_ready(
     .bind(ready.width_pixels)
     .bind(ready.height_pixels)
     .bind(ready.duration_ms)
+    .bind(ready.frame_rate_milli)
+    .bind(ready.video_codec.as_deref())
+    .bind(ready.audio_codec.as_deref())
     .execute(&mut *tx)
     .await
     .map_err(|_| ChatMediaError::StoreFailed)?;

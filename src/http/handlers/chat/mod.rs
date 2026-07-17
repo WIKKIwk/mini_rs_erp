@@ -9,7 +9,8 @@ pub use conversations::{conversation_messages, conversations, create_dm, mark_re
 pub use devices::device_token;
 pub use directory::directory;
 pub use media::{
-    media_access, media_upload, media_upload_complete, media_upload_content, media_uploads,
+    media_access, media_upload, media_upload_chunk, media_upload_complete,
+    media_upload_content, media_uploads,
 };
 pub use realtime::{live, socket_ticket};
 
@@ -56,6 +57,9 @@ fn map_chat_media_error(error: ChatMediaError) -> ChatHttpError {
         }
         ChatMediaError::TooLarge => {
             http_error(StatusCode::PAYLOAD_TOO_LARGE, "chat_media_too_large")
+        }
+        ChatMediaError::DurationTooLong => {
+            http_error(StatusCode::UNPROCESSABLE_ENTITY, "video_duration_too_long")
         }
         ChatMediaError::NotFound => {
             http_error(StatusCode::NOT_FOUND, "chat_media_upload_not_found")

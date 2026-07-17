@@ -154,6 +154,26 @@ async fn private_chat_media_content_requires_authenticated_session() {
 }
 
 #[tokio::test]
+async fn resumable_chat_media_chunk_requires_authenticated_session() {
+    let response = build_router(test_state())
+        .oneshot(
+            Request::builder()
+                .method("PUT")
+                .uri(
+                    "/v1/mobile/chat/conversations/conversation_1/media/uploads/upload_1/chunks/0",
+                )
+                .header(header::CONTENT_LENGTH, "3")
+                .header(header::CONTENT_RANGE, "bytes 0-2/3")
+                .body(Body::from("123"))
+                .expect("request"),
+        )
+        .await
+        .expect("response");
+
+    assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+}
+
+#[tokio::test]
 async fn chat_media_upload_initialization_rejects_oversized_images_before_storage() {
     let mut state = test_state();
     state.chat_media = crate::core::chat_media::ChatMediaService::unavailable();
@@ -191,6 +211,88 @@ async fn chat_media_upload_initialization_rejects_oversized_images_before_storag
     assert_eq!(
         serde_json::from_slice::<serde_json::Value>(&body).unwrap()["error"],
         "chat_media_too_large"
+    );
+}
+
+#[tokio::test]
+async fn chat_media_upload_initialization_rejects_video_over_two_gibibytes() {
+    let mut state = test_state();
+    state.chat_media = crate::core::chat_media::ChatMediaService::unavailable();
+    let token = state
+        .sessions
+        .create(Principal {
+            role: PrincipalRole::Customer,
+            display_name: "Customer".to_string(),
+            legal_name: "Customer".to_string(),
+            ref_: "customer_001".to_string(),
+            phone: String::new(),
+            avatar_url: String::new(),
+        })
+        .await
+        .expect("session");
+    let response = build_router(state)
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v1/mobile/chat/conversations/conversation_1/media/uploads")
+                .header(header::AUTHORIZATION, format!("Bearer {token}"))
+                .header(header::CONTENT_TYPE, "application/json")
+                .body(Body::from(
+                    r#"{"client_upload_id":"upload_1","kind":"video","filename":"incident.mp4","content_type":"video/mp4","size_bytes":2147483649,"duration_ms":600000}"#,
+                ))
+                .expect("request"),
+        )
+        .await
+        .expect("response");
+
+    assert_eq!(response.status(), StatusCode::PAYLOAD_TOO_LARGE);
+    let body = to_bytes(response.into_body(), usize::MAX)
+        .await
+        .expect("body");
+    assert_eq!(
+        serde_json::from_slice::<serde_json::Value>(&body).unwrap()["error"],
+        "chat_media_too_large"
+    );
+}
+
+#[tokio::test]
+async fn chat_media_upload_initialization_rejects_video_over_ten_minutes() {
+    let mut state = test_state();
+    state.chat_media = crate::core::chat_media::ChatMediaService::unavailable();
+    let token = state
+        .sessions
+        .create(Principal {
+            role: PrincipalRole::Customer,
+            display_name: "Customer".to_string(),
+            legal_name: "Customer".to_string(),
+            ref_: "customer_001".to_string(),
+            phone: String::new(),
+            avatar_url: String::new(),
+        })
+        .await
+        .expect("session");
+    let response = build_router(state)
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v1/mobile/chat/conversations/conversation_1/media/uploads")
+                .header(header::AUTHORIZATION, format!("Bearer {token}"))
+                .header(header::CONTENT_TYPE, "application/json")
+                .body(Body::from(
+                    r#"{"client_upload_id":"upload_1","kind":"video","filename":"incident.mp4","content_type":"video/mp4","size_bytes":1024,"duration_ms":600001}"#,
+                ))
+                .expect("request"),
+        )
+        .await
+        .expect("response");
+
+    assert_eq!(response.status(), StatusCode::UNPROCESSABLE_ENTITY);
+    let body = to_bytes(response.into_body(), usize::MAX)
+        .await
+        .expect("body");
+    assert_eq!(
+        serde_json::from_slice::<serde_json::Value>(&body).unwrap()["error"],
+        "video_duration_too_long"
     );
 }
 

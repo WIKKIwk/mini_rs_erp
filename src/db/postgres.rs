@@ -9,7 +9,7 @@ const DEFAULT_MAX_CONNECTIONS: u32 = 16;
 const DEFAULT_ACQUIRE_TIMEOUT_MS: u64 = 500;
 const MIGRATION_LOCK_KEY: i64 = 6_514_811_918_052_026_001;
 
-const POSTGRES_MIGRATIONS: [(&str, &str); 12] = [
+const POSTGRES_MIGRATIONS: [(&str, &str); 13] = [
     (
         "0001_mini_erp_foundation",
         include_str!("../../migrations/postgres/0001_mini_erp_foundation.sql"),
@@ -57,6 +57,10 @@ const POSTGRES_MIGRATIONS: [(&str, &str); 12] = [
     (
         "0012_chat_media_v1",
         include_str!("../../migrations/postgres/0012_chat_media_v1.sql"),
+    ),
+    (
+        "0013_chat_media_incident_video",
+        include_str!("../../migrations/postgres/0013_chat_media_incident_video.sql"),
     ),
 ];
 
@@ -491,7 +495,6 @@ mod tests {
         }
         assert!(migration.contains("mini_chat_media_client_upload_unique"));
         assert!(migration.contains("declared_size_bytes > 0"));
-        assert!(migration.contains("declared_duration_ms between 1 and 120000"));
         assert!(migration.contains("media_kind in ('image', 'video')"));
         assert!(migration.contains("message_id text not null unique"));
         assert!(migration.contains("media_id text not null unique"));
@@ -508,6 +511,20 @@ mod tests {
         assert!(migration.contains("'image', 'video'"));
         assert!(migration.contains("char_length(body) between 0 and 4000"));
         assert!(migration.contains("idx_mini_chat_media_jobs_claim"));
+        assert!(!migration.contains("public_url"));
+    }
+
+    #[test]
+    fn postgres_chat_media_incident_video_migration_enables_resumable_limits() {
+        let migration = POSTGRES_MIGRATIONS[12].1.to_lowercase();
+
+        assert!(migration.contains("declared_duration_ms between 1 and 600000"));
+        assert!(migration.contains("declared_size_bytes <= 2147483648"));
+        assert!(migration.contains("processed_size_bytes <= 1073741824"));
+        assert!(migration.contains("upload_mode in ('single', 'chunked')"));
+        assert!(migration.contains("create table if not exists mini_chat_media_upload_chunks"));
+        assert!(migration.contains("primary key (media_id, chunk_index)"));
+        assert!(migration.contains("frame_rate_milli between 1 and 60000"));
         assert!(!migration.contains("public_url"));
     }
 

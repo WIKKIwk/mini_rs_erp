@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::path::Path;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
@@ -7,16 +8,21 @@ use bytes::Bytes;
 
 use super::{
     ChatMediaAccess, ChatMediaAccessVariant, ChatMediaByteStream, ChatMediaCreateResult,
-    ChatMediaError, ChatMediaInitializeInput, ChatMediaKind, ChatMediaProcessedContent,
-    ChatMediaProcessingError, ChatMediaProcessingWorkItem, ChatMediaProcessor,
-    ChatMediaReadyInput, ChatMediaRepository, ChatMediaService, ChatMediaStatus,
-    ChatMediaStorage, ChatMediaStorageDownload, ChatMediaStorageError, ChatMediaStorageObject,
-    ChatMediaStorageUpload, ChatMediaStoredContent, ChatMediaUploadRecord, NewChatMediaUpload,
-    MAX_CHAT_IMAGE_SIZE_BYTES, MAX_CHAT_VIDEO_DURATION_MS, MAX_CHAT_VIDEO_SIZE_BYTES,
+    ChatMediaError, ChatMediaInitializeInput, ChatMediaKind, ChatMediaMultipartUpload,
+    ChatMediaProcessedContent, ChatMediaProcessedFiles, ChatMediaProcessingError,
+    ChatMediaProcessingWorkItem,
+    ChatMediaProcessor, ChatMediaReadyInput, ChatMediaRepository, ChatMediaService,
+    ChatMediaStatus, ChatMediaStorage, ChatMediaStorageDownload, ChatMediaStorageError,
+    ChatMediaStorageObject, ChatMediaStoragePart, ChatMediaStorageUpload,
+    ChatMediaStoredContent, ChatMediaUploadMode, ChatMediaUploadRecord,
+    ChatMediaUploadedChunk, NewChatMediaUpload, NewChatMediaUploadedChunk,
+    MAX_CHAT_IMAGE_SIZE_BYTES, MAX_CHAT_PROCESSED_VIDEO_SIZE_BYTES,
+    MAX_CHAT_VIDEO_DURATION_MS, MAX_CHAT_VIDEO_SIZE_BYTES,
 };
 use crate::core::auth::models::{Principal, PrincipalRole};
 
 const CONVERSATION_ID: &str = "conversation_1";
+const TEST_VIDEO_CHUNK_SIZE: i64 = 5 * 1024 * 1024;
 
 #[tokio::test]
 async fn initializes_private_upload_and_accepts_approved_limits() {
@@ -44,10 +50,97 @@ async fn initializes_private_upload_and_accepts_approved_limits() {
         MAX_CHAT_VIDEO_SIZE_BYTES,
     );
     video.duration_ms = Some(MAX_CHAT_VIDEO_DURATION_MS);
-    service
+    let initialized = service
         .initialize_upload(&owner(), CONVERSATION_ID, video)
         .await
         .expect("video initialization");
+    assert_eq!(initialized.media.upload_mode, ChatMediaUploadMode::Chunked);
+    assert_eq!(initialized.upload.strategy, "resumable_chunks");
+    assert_eq!(initialized.upload.chunk_size_bytes, Some(8 * 1024 * 1024));
+    assert_eq!(initialized.upload.total_chunks, Some(256));
+    assert!(initialized.media.uploaded_chunks.is_empty());
+}
+
+#[tokio::test]
+async fn chunked_video_resumes_after_restart_and_skips_duplicate_chunks() {
+    let repository = Arc::new(MemoryRepository::default());
+    let storage = Arc::new(MemoryStorage::default());
+    let service = ChatMediaService::new(repository.clone(), storage.clone())
+        .with_video_chunk_size(TEST_VIDEO_CHUNK_SIZE);
+    let total_size = TEST_VIDEO_CHUNK_SIZE + 3;
+    let mut request = input("resumable_video", ChatMediaKind::Video, total_size);
+    request.duration_ms = Some(60_000);
+    let initialized = service
+        .initialize_upload(&owner(), CONVERSATION_ID, request.clone())
+        .await
+        .expect("initialize resumable upload");
+    assert_eq!(initialized.upload.total_chunks, Some(2));
+
+    let first_range = format!("bytes 0-{}/{total_size}", TEST_VIDEO_CHUNK_SIZE - 1);
+    service
+        .upload_chunk(
+            &owner(),
+            CONVERSATION_ID,
+            &initialized.media.upload_id,
+            0,
+            Some(TEST_VIDEO_CHUNK_SIZE),
+            Some(&first_range),
+            owned_byte_stream(vec![7_u8; TEST_VIDEO_CHUNK_SIZE as usize]),
+        )
+        .await
+        .expect("upload first chunk");
+    assert_eq!(storage.multipart_part_puts.load(Ordering::SeqCst), 1);
+
+    let restarted = ChatMediaService::new(repository.clone(), storage.clone());
+    let recovered = restarted
+        .initialize_upload(&owner(), CONVERSATION_ID, request)
+        .await
+        .expect("recover persisted upload");
+    assert!(!recovered.created);
+    assert_eq!(recovered.media.uploaded_chunks.len(), 1);
+    assert_eq!(recovered.media.uploaded_chunks[0].chunk_index, 0);
+
+    restarted
+        .upload_chunk(
+            &owner(),
+            CONVERSATION_ID,
+            &initialized.media.upload_id,
+            0,
+            Some(TEST_VIDEO_CHUNK_SIZE),
+            Some(&first_range),
+            owned_byte_stream(Vec::new()),
+        )
+        .await
+        .expect("duplicate chunk is idempotent");
+    assert_eq!(
+        storage.multipart_part_puts.load(Ordering::SeqCst),
+        1,
+        "an already persisted chunk must not be uploaded again"
+    );
+
+    let final_range = format!(
+        "bytes {}-{}/{total_size}",
+        TEST_VIDEO_CHUNK_SIZE,
+        TEST_VIDEO_CHUNK_SIZE + 2
+    );
+    restarted
+        .upload_chunk(
+            &owner(),
+            CONVERSATION_ID,
+            &initialized.media.upload_id,
+            1,
+            Some(3),
+            Some(&final_range),
+            owned_byte_stream(vec![8, 9, 10]),
+        )
+        .await
+        .expect("upload final chunk");
+    let completed = restarted
+        .complete_upload(&owner(), CONVERSATION_ID, &initialized.media.upload_id)
+        .await
+        .expect("complete resumed upload");
+    assert_eq!(completed.status, ChatMediaStatus::Processing);
+    assert_eq!(completed.uploaded_chunks.len(), 2);
 }
 
 #[tokio::test]
@@ -82,7 +175,7 @@ async fn rejects_oversized_mismatched_and_invalid_inputs() {
             .initialize_upload(&owner(), CONVERSATION_ID, invalid_duration)
             .await
             .unwrap_err(),
-        ChatMediaError::InvalidInput
+        ChatMediaError::DurationTooLong
     );
 
     let mut wrong_type = input("wrong_type", ChatMediaKind::Image, 10);
@@ -319,6 +412,26 @@ async fn cancellation_and_orphan_cleanup_remove_private_objects() {
 }
 
 #[tokio::test]
+async fn cancelling_chunked_video_aborts_persisted_multipart_state() {
+    let (service, _, storage) = service();
+    let mut request = input("cancel_video", ChatMediaKind::Video, 3);
+    request.duration_ms = Some(1_000);
+    let initialized = service
+        .initialize_upload(&owner(), CONVERSATION_ID, request)
+        .await
+        .expect("initialize video");
+
+    let cancelled = service
+        .cancel_upload(&owner(), CONVERSATION_ID, &initialized.media.upload_id)
+        .await
+        .expect("cancel chunked upload");
+
+    assert_eq!(cancelled.status, ChatMediaStatus::Cancelled);
+    assert!(storage.multipart_aborted.load(Ordering::SeqCst));
+    assert!(storage.multipart_parts.lock().unwrap().is_empty());
+}
+
+#[tokio::test]
 async fn processing_canonicalizes_objects_marks_ready_and_serves_authorized_variants() {
     let (service, repository, storage) = service_with_processor(Ok(ChatMediaProcessedContent {
         content: Bytes::from_static(b"canonical"),
@@ -328,6 +441,9 @@ async fn processing_canonicalizes_objects_marks_ready_and_serves_authorized_vari
         width_pixels: 1200,
         height_pixels: 800,
         duration_ms: None,
+        frame_rate_milli: None,
+        video_codec: None,
+        audio_codec: None,
     }));
     let initialized = service
         .initialize_upload(
@@ -432,6 +548,44 @@ async fn processing_failure_is_visible_in_upload_status() {
     assert_eq!(failed.error_code.as_deref(), Some("invalid_media_content"));
 }
 
+#[tokio::test]
+async fn final_processed_video_size_limit_is_enforced() {
+    let repository = Arc::new(MemoryRepository::default());
+    let storage = Arc::new(MemoryStorage::default());
+    let service = ChatMediaService::new(repository.clone(), storage)
+        .with_processor(Arc::new(OversizedFileProcessor));
+    let mut request = input("oversized_processed", ChatMediaKind::Video, 3);
+    request.duration_ms = Some(1_000);
+    let initialized = service
+        .initialize_upload(&owner(), CONVERSATION_ID, request)
+        .await
+        .expect("initialize video");
+    service
+        .upload_chunk(
+            &owner(),
+            CONVERSATION_ID,
+            &initialized.media.upload_id,
+            0,
+            Some(3),
+            Some("bytes 0-2/3"),
+            owned_byte_stream(vec![1, 2, 3]),
+        )
+        .await
+        .expect("upload video");
+    service
+        .complete_upload(&owner(), CONVERSATION_ID, &initialized.media.upload_id)
+        .await
+        .expect("complete video");
+
+    assert_eq!(service.process_pending_jobs(1).await.expect("process"), 1);
+    let failed = repository.record.lock().unwrap().clone().expect("record");
+    assert_eq!(failed.status, ChatMediaStatus::Failed);
+    assert_eq!(
+        failed.error_code.as_deref(),
+        Some("processed_video_too_large")
+    );
+}
+
 fn service() -> (
     ChatMediaService,
     Arc<MemoryRepository>,
@@ -504,8 +658,15 @@ fn byte_stream(bytes: &'static [u8]) -> ChatMediaByteStream {
     })
 }
 
+fn owned_byte_stream(bytes: Vec<u8>) -> ChatMediaByteStream {
+    Box::pin(async_stream::stream! {
+        yield Ok(Bytes::from(bytes));
+    })
+}
+
 struct MemoryRepository {
     record: Mutex<Option<ChatMediaUploadRecord>>,
+    chunks: Mutex<Vec<ChatMediaUploadedChunk>>,
     can_post: AtomicBool,
     jobs: AtomicUsize,
     cleaned: AtomicBool,
@@ -529,6 +690,7 @@ impl MemoryRepository {
 
     fn clear(&self) {
         *self.record.lock().unwrap() = None;
+        self.chunks.lock().unwrap().clear();
     }
 }
 
@@ -536,6 +698,7 @@ impl Default for MemoryRepository {
     fn default() -> Self {
         Self {
             record: Mutex::new(None),
+            chunks: Mutex::new(Vec::new()),
             can_post: AtomicBool::new(true),
             jobs: AtomicUsize::new(0),
             cleaned: AtomicBool::new(false),
@@ -573,6 +736,10 @@ impl ChatMediaRepository for MemoryRepository {
             declared_content_type: upload.declared_content_type,
             declared_size_bytes: upload.declared_size_bytes,
             declared_duration_ms: upload.declared_duration_ms,
+            upload_mode: upload.upload_mode,
+            chunk_size_bytes: upload.chunk_size_bytes,
+            total_chunks: upload.total_chunks,
+            storage_multipart_upload_id: None,
             source_object_key: upload.source_object_key,
             actual_size_bytes: None,
             storage_etag: None,
@@ -585,6 +752,9 @@ impl ChatMediaRepository for MemoryRepository {
             width_pixels: None,
             height_pixels: None,
             duration_ms: None,
+            frame_rate_milli: None,
+            video_codec: None,
+            audio_codec: None,
             error_code: None,
             expires_at_unix: upload.expires_at_unix,
             created_at_unix: now,
@@ -611,6 +781,72 @@ impl ChatMediaRepository for MemoryRepository {
             .clone()
             .filter(|record| record.upload_id == upload_id)
             .ok_or(ChatMediaError::NotFound)
+    }
+
+    async fn set_multipart_upload_id(
+        &self,
+        principal: &Principal,
+        conversation_id: &str,
+        upload_id: &str,
+        storage_upload_id: &str,
+    ) -> Result<ChatMediaUploadRecord, ChatMediaError> {
+        self.authorize(principal, conversation_id, true)?;
+        let mut record = self.record.lock().unwrap();
+        let record = record.as_mut().ok_or(ChatMediaError::NotFound)?;
+        if record.upload_id != upload_id || record.upload_mode != ChatMediaUploadMode::Chunked {
+            return Err(ChatMediaError::Conflict);
+        }
+        if record.storage_multipart_upload_id.is_none() {
+            record.storage_multipart_upload_id = Some(storage_upload_id.to_string());
+        }
+        Ok(record.clone())
+    }
+
+    async fn uploaded_chunks(
+        &self,
+        principal: &Principal,
+        conversation_id: &str,
+        upload_id: &str,
+        require_can_post: bool,
+    ) -> Result<Vec<ChatMediaUploadedChunk>, ChatMediaError> {
+        self.authorize(principal, conversation_id, require_can_post)?;
+        let record = self.record.lock().unwrap();
+        if record.as_ref().is_none_or(|record| record.upload_id != upload_id) {
+            return Err(ChatMediaError::NotFound);
+        }
+        Ok(self.chunks.lock().unwrap().clone())
+    }
+
+    async fn record_uploaded_chunk(
+        &self,
+        principal: &Principal,
+        conversation_id: &str,
+        upload_id: &str,
+        chunk: NewChatMediaUploadedChunk,
+    ) -> Result<ChatMediaUploadedChunk, ChatMediaError> {
+        self.authorize(principal, conversation_id, true)?;
+        let record = self.record.lock().unwrap();
+        if record.as_ref().is_none_or(|record| record.upload_id != upload_id) {
+            return Err(ChatMediaError::NotFound);
+        }
+        drop(record);
+        let mut chunks = self.chunks.lock().unwrap();
+        if let Some(existing) = chunks
+            .iter()
+            .find(|existing| existing.chunk_index == chunk.chunk_index)
+        {
+            return Ok(existing.clone());
+        }
+        let uploaded = ChatMediaUploadedChunk {
+            chunk_index: chunk.chunk_index,
+            offset_bytes: chunk.offset_bytes,
+            size_bytes: chunk.size_bytes,
+            storage_part_etag: chunk.storage_part_etag,
+            uploaded_at_unix: time::OffsetDateTime::now_utc().unix_timestamp(),
+        };
+        chunks.push(uploaded.clone());
+        chunks.sort_by_key(|chunk| chunk.chunk_index);
+        Ok(uploaded)
     }
 
     async fn mark_uploaded(
@@ -725,6 +961,9 @@ impl ChatMediaRepository for MemoryRepository {
         record.width_pixels = Some(ready.width_pixels);
         record.height_pixels = Some(ready.height_pixels);
         record.duration_ms = ready.duration_ms;
+        record.frame_rate_milli = ready.frame_rate_milli;
+        record.video_codec = ready.video_codec.clone();
+        record.audio_codec = ready.audio_codec.clone();
         Ok(())
     }
 
@@ -763,6 +1002,9 @@ struct MemoryStorage {
     metadata: Mutex<Option<ChatMediaStorageObject>>,
     objects: Mutex<HashMap<String, ChatMediaStoredContent>>,
     deleted: AtomicBool,
+    multipart_parts: Mutex<HashMap<i32, Bytes>>,
+    multipart_part_puts: AtomicUsize,
+    multipart_aborted: AtomicBool,
 }
 
 #[async_trait]
@@ -808,6 +1050,82 @@ impl ChatMediaStorage for MemoryStorage {
             },
         );
         Ok(metadata)
+    }
+
+    async fn begin_multipart_upload(
+        &self,
+        _object_key: &str,
+        _content_type: &str,
+    ) -> Result<ChatMediaMultipartUpload, ChatMediaStorageError> {
+        Ok(ChatMediaMultipartUpload {
+            storage_upload_id: "memory_multipart".to_string(),
+        })
+    }
+
+    async fn put_multipart_part(
+        &self,
+        _object_key: &str,
+        _storage_upload_id: &str,
+        part_number: i32,
+        content: Bytes,
+    ) -> Result<ChatMediaStoragePart, ChatMediaStorageError> {
+        self.multipart_part_puts.fetch_add(1, Ordering::SeqCst);
+        self.multipart_parts
+            .lock()
+            .unwrap()
+            .insert(part_number, content.clone());
+        Ok(ChatMediaStoragePart {
+            part_number,
+            size_bytes: content.len() as i64,
+            etag: format!("etag-{part_number}-{}", content.len()),
+        })
+    }
+
+    async fn complete_multipart_upload(
+        &self,
+        object_key: &str,
+        content_type: &str,
+        _storage_upload_id: &str,
+        expected_size_bytes: i64,
+        parts: &[ChatMediaStoragePart],
+    ) -> Result<ChatMediaStorageObject, ChatMediaStorageError> {
+        let stored_parts = self.multipart_parts.lock().unwrap();
+        let mut bytes = Vec::new();
+        for part in parts {
+            bytes.extend_from_slice(
+                stored_parts
+                    .get(&part.part_number)
+                    .ok_or(ChatMediaStorageError::ObjectNotFound)?,
+            );
+        }
+        if bytes.len() as i64 != expected_size_bytes {
+            return Err(ChatMediaStorageError::SizeMismatch);
+        }
+        let metadata = ChatMediaStorageObject {
+            size_bytes: expected_size_bytes,
+            content_type: Some(content_type.to_string()),
+            etag: Some("multipart-etag".to_string()),
+        };
+        self.objects.lock().unwrap().insert(
+            object_key.to_string(),
+            ChatMediaStoredContent {
+                bytes: Bytes::from(bytes),
+                content_type: Some(content_type.to_string()),
+                etag: metadata.etag.clone(),
+            },
+        );
+        *self.metadata.lock().unwrap() = Some(metadata.clone());
+        Ok(metadata)
+    }
+
+    async fn abort_multipart_upload(
+        &self,
+        _object_key: &str,
+        _storage_upload_id: &str,
+    ) -> Result<(), ChatMediaStorageError> {
+        self.multipart_aborted.store(true, Ordering::SeqCst);
+        self.multipart_parts.lock().unwrap().clear();
+        Ok(())
     }
 
     async fn object_metadata(
@@ -880,5 +1198,44 @@ impl ChatMediaProcessor for StaticProcessor {
         _source: Bytes,
     ) -> Result<ChatMediaProcessedContent, ChatMediaProcessingError> {
         self.result.clone()
+    }
+}
+
+struct OversizedFileProcessor;
+
+#[async_trait]
+impl ChatMediaProcessor for OversizedFileProcessor {
+    async fn process(
+        &self,
+        _media: &ChatMediaUploadRecord,
+        _source: Bytes,
+    ) -> Result<ChatMediaProcessedContent, ChatMediaProcessingError> {
+        Err(ChatMediaProcessingError::ProcessingFailed)
+    }
+
+    async fn process_file(
+        &self,
+        _media: &ChatMediaUploadRecord,
+        _source_path: &Path,
+        content_path: &Path,
+        thumbnail_path: &Path,
+    ) -> Result<ChatMediaProcessedFiles, ChatMediaProcessingError> {
+        std::fs::File::create(content_path)
+            .and_then(|file| file.set_len((MAX_CHAT_PROCESSED_VIDEO_SIZE_BYTES + 1) as u64))
+            .map_err(|_| ChatMediaProcessingError::ProcessingFailed)?;
+        std::fs::write(thumbnail_path, b"thumbnail")
+            .map_err(|_| ChatMediaProcessingError::ProcessingFailed)?;
+        Ok(ChatMediaProcessedFiles {
+            content_path: content_path.to_path_buf(),
+            content_type: "video/mp4".to_string(),
+            thumbnail_path: thumbnail_path.to_path_buf(),
+            thumbnail_content_type: "image/jpeg".to_string(),
+            width_pixels: 1920,
+            height_pixels: 1080,
+            duration_ms: Some(1_000),
+            frame_rate_milli: Some(60_000),
+            video_codec: Some("h264".to_string()),
+            audio_codec: Some("aac".to_string()),
+        })
     }
 }

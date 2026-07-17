@@ -1,4 +1,5 @@
 use std::collections::BTreeMap;
+use std::path::PathBuf;
 
 use bytes::Bytes;
 use serde::{Deserialize, Serialize};
@@ -15,6 +16,22 @@ impl ChatMediaKind {
         match self {
             Self::Image => "image",
             Self::Video => "video",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ChatMediaUploadMode {
+    Single,
+    Chunked,
+}
+
+impl ChatMediaUploadMode {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Single => "single",
+            Self::Chunked => "chunked",
         }
     }
 }
@@ -56,6 +73,10 @@ pub struct ChatMediaUploadRecord {
     pub declared_content_type: String,
     pub declared_size_bytes: i64,
     pub declared_duration_ms: Option<i64>,
+    pub upload_mode: ChatMediaUploadMode,
+    pub chunk_size_bytes: Option<i64>,
+    pub total_chunks: Option<i32>,
+    pub storage_multipart_upload_id: Option<String>,
     pub source_object_key: String,
     pub actual_size_bytes: Option<i64>,
     pub storage_etag: Option<String>,
@@ -68,6 +89,9 @@ pub struct ChatMediaUploadRecord {
     pub width_pixels: Option<i32>,
     pub height_pixels: Option<i32>,
     pub duration_ms: Option<i64>,
+    pub frame_rate_milli: Option<i32>,
+    pub video_codec: Option<String>,
+    pub audio_codec: Option<String>,
     pub error_code: Option<String>,
     pub expires_at_unix: i64,
     pub created_at_unix: i64,
@@ -85,6 +109,13 @@ pub struct ChatMediaUploadView {
     pub original_filename: String,
     pub content_type: String,
     pub size_bytes: i64,
+    pub upload_mode: ChatMediaUploadMode,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub chunk_size_bytes: Option<i64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub total_chunks: Option<i32>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub uploaded_chunks: Vec<ChatMediaUploadedChunk>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub duration_ms: Option<i64>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -95,6 +126,14 @@ pub struct ChatMediaUploadView {
     pub height_pixels: Option<i32>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub processed_duration_ms: Option<i64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub processed_size_bytes: Option<i64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub frame_rate_milli: Option<i32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub video_codec: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub audio_codec: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub error_code: Option<String>,
     pub expires_at_unix: i64,
@@ -114,16 +153,31 @@ impl From<&ChatMediaUploadRecord> for ChatMediaUploadView {
             original_filename: record.original_filename.clone(),
             content_type: record.declared_content_type.clone(),
             size_bytes: record.declared_size_bytes,
+            upload_mode: record.upload_mode,
+            chunk_size_bytes: record.chunk_size_bytes,
+            total_chunks: record.total_chunks,
+            uploaded_chunks: Vec::new(),
             duration_ms: record.declared_duration_ms,
             actual_size_bytes: record.actual_size_bytes,
             width_pixels: record.width_pixels,
             height_pixels: record.height_pixels,
             processed_duration_ms: record.duration_ms,
+            processed_size_bytes: record.processed_size_bytes,
+            frame_rate_milli: record.frame_rate_milli,
+            video_codec: record.video_codec.clone(),
+            audio_codec: record.audio_codec.clone(),
             error_code: record.error_code.clone(),
             expires_at_unix: record.expires_at_unix,
             created_at_unix: record.created_at_unix,
             updated_at_unix: record.updated_at_unix,
         }
+    }
+}
+
+impl ChatMediaUploadView {
+    pub fn with_uploaded_chunks(mut self, chunks: Vec<ChatMediaUploadedChunk>) -> Self {
+        self.uploaded_chunks = chunks;
+        self
     }
 }
 
@@ -148,6 +202,9 @@ pub struct NewChatMediaUpload {
     pub declared_content_type: String,
     pub declared_size_bytes: i64,
     pub declared_duration_ms: Option<i64>,
+    pub upload_mode: ChatMediaUploadMode,
+    pub chunk_size_bytes: Option<i64>,
+    pub total_chunks: Option<i32>,
     pub source_object_key: String,
     pub expires_at_unix: i64,
 }
@@ -165,6 +222,10 @@ pub struct ChatMediaUploadInstruction {
     pub url: String,
     pub headers: BTreeMap<String, String>,
     pub expires_at_unix: i64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub chunk_size_bytes: Option<i64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub total_chunks: Option<i32>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -172,6 +233,29 @@ pub struct ChatMediaInitialization {
     pub media: ChatMediaUploadView,
     pub upload: ChatMediaUploadInstruction,
     pub created: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct ChatMediaChunkUploadResult {
+    pub media: ChatMediaUploadView,
+    pub chunk: ChatMediaUploadedChunk,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ChatMediaUploadedChunk {
+    pub chunk_index: i32,
+    pub offset_bytes: i64,
+    pub size_bytes: i64,
+    pub storage_part_etag: String,
+    pub uploaded_at_unix: i64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NewChatMediaUploadedChunk {
+    pub chunk_index: i32,
+    pub offset_bytes: i64,
+    pub size_bytes: i64,
+    pub storage_part_etag: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -182,6 +266,18 @@ pub enum ChatMediaStorageUpload {
         headers: BTreeMap<String, String>,
         expires_at_unix: i64,
     },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ChatMediaMultipartUpload {
+    pub storage_upload_id: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ChatMediaStoragePart {
+    pub part_number: i32,
+    pub size_bytes: i64,
+    pub etag: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -233,6 +329,23 @@ pub struct ChatMediaProcessedContent {
     pub width_pixels: i32,
     pub height_pixels: i32,
     pub duration_ms: Option<i64>,
+    pub frame_rate_milli: Option<i32>,
+    pub video_codec: Option<String>,
+    pub audio_codec: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ChatMediaProcessedFiles {
+    pub content_path: PathBuf,
+    pub content_type: String,
+    pub thumbnail_path: PathBuf,
+    pub thumbnail_content_type: String,
+    pub width_pixels: i32,
+    pub height_pixels: i32,
+    pub duration_ms: Option<i64>,
+    pub frame_rate_milli: Option<i32>,
+    pub video_codec: Option<String>,
+    pub audio_codec: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -253,6 +366,9 @@ pub struct ChatMediaReadyInput {
     pub width_pixels: i32,
     pub height_pixels: i32,
     pub duration_ms: Option<i64>,
+    pub frame_rate_milli: Option<i32>,
+    pub video_codec: Option<String>,
+    pub audio_codec: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

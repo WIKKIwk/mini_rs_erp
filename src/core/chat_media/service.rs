@@ -2,20 +2,27 @@ use std::sync::Arc;
 
 use time::OffsetDateTime;
 
+use super::service_support::{
+    configured_video_chunk_size, map_storage_error, new_id,
+};
 use super::{
     ChatMediaAccess, ChatMediaAccessVariant, ChatMediaByteStream, ChatMediaCreateResult,
     ChatMediaError, ChatMediaInitialization, ChatMediaInitializeInput, ChatMediaKind,
-    ChatMediaProcessor, ChatMediaRepository,
-    ChatMediaStatus, ChatMediaStorage, ChatMediaStorageDownload, ChatMediaStorageError,
-    ChatMediaStorageObject, ChatMediaStorageUpload,
-    ChatMediaUploadInstruction, ChatMediaUploadRecord, ChatMediaUploadView,
-    NewChatMediaUpload, SystemChatMediaProcessor,
+    ChatMediaProcessor, ChatMediaRangeRequest, ChatMediaRepository, ChatMediaStatus,
+    ChatMediaStorage, ChatMediaStorageDownload, ChatMediaStorageError,
+    ChatMediaStorageObject, ChatMediaStreamAccess, ChatMediaUploadMode,
+    ChatMediaUploadRecord, ChatMediaUploadView, NewChatMediaUpload,
+    SystemChatMediaProcessor,
 };
 use crate::core::auth::models::Principal;
 
 pub const MAX_CHAT_IMAGE_SIZE_BYTES: i64 = 15 * 1024 * 1024;
-pub const MAX_CHAT_VIDEO_SIZE_BYTES: i64 = 75 * 1024 * 1024;
-pub const MAX_CHAT_VIDEO_DURATION_MS: i64 = 120_000;
+pub const MAX_CHAT_VIDEO_SIZE_BYTES: i64 = 2 * 1024 * 1024 * 1024;
+pub const MAX_CHAT_PROCESSED_VIDEO_SIZE_BYTES: i64 = 1024 * 1024 * 1024;
+pub const MAX_CHAT_VIDEO_DURATION_MS: i64 = 600_000;
+pub const DEFAULT_CHAT_VIDEO_CHUNK_SIZE_BYTES: i64 = 8 * 1024 * 1024;
+pub const MAX_CHAT_MEDIA_CHUNK_SIZE_BYTES: i64 = 64 * 1024 * 1024;
+pub(super) const MIN_CHAT_MEDIA_CHUNK_SIZE_BYTES: i64 = 5 * 1024 * 1024;
 
 const UPLOAD_RETENTION_SECONDS: i64 = 24 * 60 * 60;
 
@@ -24,6 +31,7 @@ pub struct ChatMediaService {
     pub(super) repository: Arc<dyn ChatMediaRepository>,
     pub(super) storage: Arc<dyn ChatMediaStorage>,
     pub(super) processor: Arc<dyn ChatMediaProcessor>,
+    pub(super) video_chunk_size_bytes: i64,
 }
 
 impl ChatMediaService {
@@ -35,11 +43,21 @@ impl ChatMediaService {
             repository,
             storage,
             processor: Arc::new(SystemChatMediaProcessor::from_env()),
+            video_chunk_size_bytes: configured_video_chunk_size(),
         }
     }
 
     pub fn with_processor(mut self, processor: Arc<dyn ChatMediaProcessor>) -> Self {
         self.processor = processor;
+        self
+    }
+
+    #[cfg(test)]
+    pub fn with_video_chunk_size(mut self, chunk_size_bytes: i64) -> Self {
+        self.video_chunk_size_bytes = chunk_size_bytes.clamp(
+            MIN_CHAT_MEDIA_CHUNK_SIZE_BYTES,
+            MAX_CHAT_MEDIA_CHUNK_SIZE_BYTES,
+        );
         self
     }
 
@@ -61,6 +79,8 @@ impl ChatMediaService {
         let now = OffsetDateTime::now_utc().unix_timestamp();
         let media_id = new_id("media");
         let upload_id = new_id("upload");
+        let (upload_mode, chunk_size_bytes, total_chunks) = self
+            .upload_configuration(input.kind, input.size_bytes)?;
         let created = self
             .repository
             .initialize_upload(
@@ -78,6 +98,9 @@ impl ChatMediaService {
                     declared_content_type: input.content_type.clone(),
                     declared_size_bytes: input.size_bytes,
                     declared_duration_ms: input.duration_ms,
+                    upload_mode,
+                    chunk_size_bytes,
+                    total_chunks,
                     expires_at_unix: now + UPLOAD_RETENTION_SECONDS,
                 },
             )
@@ -91,21 +114,7 @@ impl ChatMediaService {
         {
             return Err(ChatMediaError::Conflict);
         }
-        let storage_upload = self
-            .storage
-            .prepare_upload(
-                &created.record.source_object_key,
-                &created.record.declared_content_type,
-                created.record.declared_size_bytes,
-            )
-            .await
-            .map_err(map_storage_error)?;
-        let instruction = upload_instruction(&created.record, storage_upload);
-        Ok(ChatMediaInitialization {
-            media: ChatMediaUploadView::from(&created.record),
-            upload: instruction,
-            created: created.created,
-        })
+        self.prepare_initialization(principal, created).await
     }
 
     pub async fn upload_status(
@@ -116,10 +125,8 @@ impl ChatMediaService {
     ) -> Result<ChatMediaUploadView, ChatMediaError> {
         let conversation_id = validate_identifier(conversation_id)?;
         let upload_id = validate_identifier(upload_id)?;
-        self.repository
-            .upload(principal, conversation_id, upload_id, false)
+        self.upload_view(principal, conversation_id, upload_id, false)
             .await
-            .map(|record| ChatMediaUploadView::from(&record))
     }
 
     pub async fn upload_content(
@@ -137,6 +144,9 @@ impl ChatMediaService {
             .repository
             .upload(principal, conversation_id, upload_id, true)
             .await?;
+        if record.upload_mode != ChatMediaUploadMode::Single {
+            return Err(ChatMediaError::Conflict);
+        }
         if !matches!(record.status, ChatMediaStatus::Pending | ChatMediaStatus::Uploaded) {
             return Err(ChatMediaError::Conflict);
         }
@@ -179,6 +189,11 @@ impl ChatMediaService {
             .repository
             .upload(principal, conversation_id, upload_id, true)
             .await?;
+        if record.upload_mode == ChatMediaUploadMode::Chunked {
+            return self
+                .complete_chunked_upload(principal, conversation_id, upload_id, record)
+                .await;
+        }
         if matches!(record.status, ChatMediaStatus::Processing | ChatMediaStatus::Ready) {
             return Ok(ChatMediaUploadView::from(&record));
         }
@@ -215,6 +230,19 @@ impl ChatMediaService {
             .repository
             .cancel_upload(principal, conversation_id, upload_id)
             .await?;
+        if let Some(storage_upload_id) = record.storage_multipart_upload_id.as_deref() {
+            match self
+                .storage
+                .abort_multipart_upload(
+                    &record.source_object_key,
+                    storage_upload_id,
+                )
+                .await
+            {
+                Ok(()) | Err(ChatMediaStorageError::ObjectNotFound) => {}
+                Err(error) => return Err(map_storage_error(error)),
+            }
+        }
         for key in [
             Some(record.source_object_key.as_str()),
             record.processed_object_key.as_deref(),
@@ -241,6 +269,22 @@ impl ChatMediaService {
             .await?;
         let mut cleaned = 0;
         for record in records {
+            if let Some(storage_upload_id) = record.storage_multipart_upload_id.as_deref() {
+                if !matches!(
+                    self.storage
+                        .abort_multipart_upload(
+                            &record.source_object_key,
+                            storage_upload_id,
+                        )
+                        .await,
+                    Ok(()) | Err(ChatMediaStorageError::ObjectNotFound)
+                ) {
+                    self.repository
+                        .release_orphan_cleanup(&record.media_id)
+                        .await?;
+                    continue;
+                }
+            }
             let keys = [
                 Some(record.source_object_key.as_str()),
                 record.processed_object_key.as_deref(),
@@ -304,6 +348,42 @@ impl ChatMediaService {
         }
     }
 
+    pub async fn media_stream_access(
+        &self,
+        principal: &Principal,
+        media_id: &str,
+        variant: ChatMediaAccessVariant,
+        range: ChatMediaRangeRequest,
+    ) -> Result<ChatMediaStreamAccess, ChatMediaError> {
+        let media_id = validate_identifier(media_id)?;
+        let media = self.repository.media_for_access(principal, media_id).await?;
+        let object_key = match variant {
+            ChatMediaAccessVariant::Content => media.processed_object_key.as_deref(),
+            ChatMediaAccessVariant::Thumbnail => media.thumbnail_object_key.as_deref(),
+        }
+        .ok_or(ChatMediaError::NotFound)?;
+        match self
+            .storage
+            .prepare_download(object_key)
+            .await
+            .map_err(map_storage_error)?
+        {
+            ChatMediaStorageDownload::DirectGet {
+                url,
+                expires_at_unix,
+            } => Ok(ChatMediaStreamAccess::Redirect {
+                url,
+                expires_at_unix,
+            }),
+            ChatMediaStorageDownload::LocalProxy => self
+                .storage
+                .stream_object(object_key, range)
+                .await
+                .map(|content| ChatMediaStreamAccess::Local { content })
+                .map_err(map_storage_error),
+        }
+    }
+
 }
 
 fn validate_initialize_input(
@@ -337,9 +417,10 @@ fn validate_initialize_input(
     }
     match (input.kind, input.duration_ms) {
         (ChatMediaKind::Image, Some(_)) => return Err(ChatMediaError::InvalidInput),
-        (ChatMediaKind::Video, Some(duration))
-            if !(1..=MAX_CHAT_VIDEO_DURATION_MS).contains(&duration) =>
-        {
+        (ChatMediaKind::Video, Some(duration)) if duration > MAX_CHAT_VIDEO_DURATION_MS => {
+            return Err(ChatMediaError::DurationTooLong);
+        }
+        (ChatMediaKind::Video, Some(duration)) if duration <= 0 => {
             return Err(ChatMediaError::InvalidInput);
         }
         _ => {}
@@ -347,7 +428,7 @@ fn validate_initialize_input(
     Ok(input)
 }
 
-fn validate_identifier(value: &str) -> Result<&str, ChatMediaError> {
+pub(super) fn validate_identifier(value: &str) -> Result<&str, ChatMediaError> {
     let value = value.trim();
     if value.is_empty()
         || value.len() > 128
@@ -384,7 +465,7 @@ fn ensure_idempotent_input_matches(
     Ok(())
 }
 
-fn validate_stored_object(
+pub(super) fn validate_stored_object(
     record: &ChatMediaUploadRecord,
     stored: &ChatMediaStorageObject,
 ) -> Result<(), ChatMediaError> {
@@ -399,51 +480,4 @@ fn validate_stored_object(
         return Err(ChatMediaError::TooLarge);
     }
     Ok(())
-}
-
-fn upload_instruction(
-    record: &ChatMediaUploadRecord,
-    upload: ChatMediaStorageUpload,
-) -> ChatMediaUploadInstruction {
-    match upload {
-        ChatMediaStorageUpload::LocalProxy => ChatMediaUploadInstruction {
-            strategy: "local_proxy".to_string(),
-            method: "PUT".to_string(),
-            url: format!(
-                "/v1/mobile/chat/conversations/{}/media/uploads/{}/content",
-                record.conversation_id, record.upload_id
-            ),
-            headers: [("content-type".to_string(), record.declared_content_type.clone())]
-                .into_iter()
-                .collect(),
-            expires_at_unix: record.expires_at_unix,
-        },
-        ChatMediaStorageUpload::DirectPut {
-            url,
-            headers,
-            expires_at_unix,
-        } => ChatMediaUploadInstruction {
-            strategy: "direct_put".to_string(),
-            method: "PUT".to_string(),
-            url,
-            headers,
-            expires_at_unix,
-        },
-    }
-}
-
-fn map_storage_error(error: ChatMediaStorageError) -> ChatMediaError {
-    match error {
-        ChatMediaStorageError::Unavailable => ChatMediaError::Unavailable,
-        ChatMediaStorageError::ObjectNotFound => ChatMediaError::NotFound,
-        ChatMediaStorageError::SizeMismatch => ChatMediaError::InvalidInput,
-        ChatMediaStorageError::DirectUploadRequired => ChatMediaError::Conflict,
-        ChatMediaStorageError::InvalidObjectKey => ChatMediaError::StoreFailed,
-        ChatMediaStorageError::OperationFailed => ChatMediaError::StorageFailed,
-    }
-}
-
-fn new_id(prefix: &str) -> String {
-    let bytes: [u8; 16] = rand::random();
-    format!("{prefix}_{}", data_encoding::HEXLOWER.encode(&bytes))
 }
