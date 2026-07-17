@@ -36,7 +36,8 @@ pub use suppliers::{
 pub use system::{
     apparatus_create, apparatus_groups, capabilities, items_bulk_move_group, role_assignments,
     roles, system_backup_create, system_backup_download, system_monitor, system_monitor_live,
-    warehouse_assignments, warehouse_summaries, warehouses, werka_code_regenerate,
+    warehouse_assignments, warehouse_items, warehouse_summaries, warehouses,
+    werka_code_regenerate,
 };
 pub use system_users::{system_user_code_regenerate, system_user_detail, system_users};
 use system::{authorize_any_capability, authorize_capability, require_capability};

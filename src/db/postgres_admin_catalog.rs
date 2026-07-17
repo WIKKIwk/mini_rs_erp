@@ -75,6 +75,96 @@ impl AdminReadPort for PostgresAdminCatalogStore {
         .map_err(|_| AdminPortError::LookupFailed)
     }
 
+    async fn items_page_by_warehouse(
+        &self,
+        warehouse: &str,
+        query: &str,
+        limit: usize,
+        offset: usize,
+    ) -> Result<Vec<SupplierItem>, AdminPortError> {
+        let warehouse = warehouse.trim();
+        if warehouse.is_empty() || limit == 0 {
+            return Ok(Vec::new());
+        }
+        let needle = format!("%{}%", query.trim().to_lowercase());
+        sqlx::query_as::<_, ItemRow>(
+            r#"
+            WITH RECURSIVE group_path(group_name, node_name, parent_name) AS (
+                SELECT lower(name), lower(name), lower(parent_item_group)
+                FROM mini_item_groups
+                UNION ALL
+                SELECT group_path.group_name, lower(parent.name), lower(parent.parent_item_group)
+                FROM group_path
+                JOIN mini_item_groups parent ON lower(parent.name) = group_path.parent_name
+                WHERE group_path.parent_name <> ''
+            ),
+            group_kind AS (
+                SELECT
+                    group_name,
+                    bool_or(node_name LIKE '%homashyo%' OR node_name LIKE '%xomashyo%') AS is_raw,
+                    bool_or(node_name LIKE '%tayyor%' AND node_name LIKE '%mahsulot%') AS is_finished
+                FROM group_path
+                GROUP BY group_name
+            ),
+            warehouse_kind AS (
+                SELECT
+                    (
+                        SELECT name
+                        FROM mini_warehouses
+                        WHERE lower(name) LIKE '%homashyo%' OR lower(name) LIKE '%xomashyo%'
+                        ORDER BY lower(name)
+                        LIMIT 1
+                    ) AS raw_warehouse,
+                    (
+                        SELECT name
+                        FROM mini_warehouses
+                        WHERE lower(name) LIKE '%tayyor%' AND lower(name) LIKE '%mahsulot%'
+                        ORDER BY lower(name)
+                        LIMIT 1
+                    ) AS finished_warehouse
+            ),
+            item_map AS (
+                SELECT
+                    items.code,
+                    items.name,
+                    items.uom,
+                    items.item_group,
+                    COALESCE(
+                        NULLIF(btrim(items.warehouse), ''),
+                        CASE
+                            WHEN group_kind.is_raw THEN warehouse_kind.raw_warehouse
+                            WHEN group_kind.is_finished THEN warehouse_kind.finished_warehouse
+                            ELSE ''
+                        END,
+                        ''
+                    ) AS warehouse
+                FROM mini_items items
+                LEFT JOIN group_kind ON lower(items.item_group) = group_kind.group_name
+                CROSS JOIN warehouse_kind
+            )
+            SELECT code, name, uom, warehouse, item_group
+            FROM item_map
+            WHERE lower(warehouse) = lower($1)
+              AND (
+                    $2 = '%%'
+                    OR lower(code) LIKE $2
+                    OR lower(name) LIKE $2
+                    OR lower(item_group) LIKE $2
+              )
+            ORDER BY lower(code)
+            LIMIT $3 OFFSET $4
+            "#,
+        )
+        .bind(warehouse)
+        .bind(needle)
+        .bind(limit.min(500) as i64)
+        .bind(offset as i64)
+        .fetch_all(&self.pool)
+        .await
+        .map(|rows| rows.into_iter().map(ItemRow::into_item).collect())
+        .map_err(|_| AdminPortError::LookupFailed)
+    }
+
     async fn items_page_by_group(
         &self,
         group: &str,

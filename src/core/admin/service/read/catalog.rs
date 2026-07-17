@@ -4,6 +4,18 @@ use super::super::*;
 use crate::core::admin::models::{AdminItemGroup, AdminWarehouse};
 
 impl AdminService {
+    pub async fn items_page_by_warehouse(
+        &self,
+        warehouse: &str,
+        query: &str,
+        limit: usize,
+        offset: usize,
+    ) -> Result<Vec<SupplierItem>, AdminPortError> {
+        self.read_port()?
+            .items_page_by_warehouse(warehouse, query, limit, offset)
+            .await
+    }
+
     pub async fn items_page_by_group(
         &self,
         group: &str,

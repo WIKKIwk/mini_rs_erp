@@ -49,6 +49,49 @@ pub trait AdminReadPort: Send + Sync {
         offset: usize,
     ) -> Result<Vec<SupplierItem>, AdminPortError>;
 
+    async fn items_page_by_warehouse(
+        &self,
+        warehouse: &str,
+        query: &str,
+        limit: usize,
+        offset: usize,
+    ) -> Result<Vec<SupplierItem>, AdminPortError> {
+        let warehouse = warehouse.trim();
+        if warehouse.is_empty() || limit == 0 {
+            return Ok(Vec::new());
+        }
+
+        let page_size = limit.clamp(80, 500);
+        let mut scan_offset = 0;
+        let mut matched = 0;
+        let mut result = Vec::with_capacity(limit);
+        while result.len() < limit {
+            let page = self.items_page(query, page_size, scan_offset).await?;
+            if page.is_empty() {
+                break;
+            }
+            let page_len = page.len();
+            for item in page {
+                if !item.warehouse.trim().eq_ignore_ascii_case(warehouse) {
+                    continue;
+                }
+                if matched < offset {
+                    matched += 1;
+                    continue;
+                }
+                result.push(item);
+                if result.len() == limit {
+                    break;
+                }
+            }
+            if page_len < page_size {
+                break;
+            }
+            scan_offset += page_len;
+        }
+        Ok(result)
+    }
+
     async fn items_page_by_group(
         &self,
         group: &str,

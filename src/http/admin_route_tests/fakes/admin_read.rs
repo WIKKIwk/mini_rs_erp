@@ -259,6 +259,31 @@ impl AdminReadPort for FakeAdminReadPort {
         Ok(vec![item("ITEM-001")])
     }
 
+    async fn items_page_by_warehouse(
+        &self,
+        warehouse: &str,
+        query: &str,
+        limit: usize,
+        offset: usize,
+    ) -> Result<Vec<SupplierItem>, AdminPortError> {
+        let mut other = item("OTHER-001");
+        other.name = "Other warehouse item".to_string();
+        other.warehouse = "Other warehouse".to_string();
+        let query = query.trim().to_lowercase();
+        Ok([item("ITEM-001"), item("INK-BLACK"), other]
+            .into_iter()
+            .filter(|item| item.warehouse.eq_ignore_ascii_case(warehouse))
+            .filter(|item| {
+                query.is_empty()
+                    || item.code.to_lowercase().contains(&query)
+                    || item.name.to_lowercase().contains(&query)
+                    || item.item_group.to_lowercase().contains(&query)
+            })
+            .skip(offset)
+            .take(limit)
+            .collect())
+    }
+
     async fn items_by_codes(
         &self,
         item_codes: &[String],

@@ -42,6 +42,49 @@ async fn admin_warehouses_filters_by_parent() {
 }
 
 #[tokio::test]
+async fn warehouse_items_are_filtered_searched_and_paginated_on_the_backend() {
+    let state = test_state();
+    let token = session(&state, PrincipalRole::Admin).await;
+
+    let first = build_router(state.clone())
+        .oneshot(request(
+            "GET",
+            "/v1/mobile/admin/warehouses/items?warehouse=Stores%20-%20CH&limit=1",
+            &token,
+        ))
+        .await
+        .expect("first warehouse item page");
+    assert_eq!(first.status(), StatusCode::OK);
+    let first_body = json_body(first).await;
+    assert_eq!(first_body.as_array().expect("array").len(), 1);
+    assert_eq!(first_body[0]["code"], "ITEM-001");
+
+    let second = build_router(state.clone())
+        .oneshot(request(
+            "GET",
+            "/v1/mobile/admin/warehouses/items?warehouse=Stores%20-%20CH&limit=1&offset=1",
+            &token,
+        ))
+        .await
+        .expect("second warehouse item page");
+    assert_eq!(second.status(), StatusCode::OK);
+    assert_eq!(json_body(second).await[0]["code"], "INK-BLACK");
+
+    let searched = build_router(state)
+        .oneshot(request(
+            "GET",
+            "/v1/mobile/admin/warehouses/items?warehouse=Stores%20-%20CH&q=black&limit=80",
+            &token,
+        ))
+        .await
+        .expect("searched warehouse items");
+    assert_eq!(searched.status(), StatusCode::OK);
+    let searched_body = json_body(searched).await;
+    assert_eq!(searched_body.as_array().expect("array").len(), 1);
+    assert_eq!(searched_body[0]["code"], "INK-BLACK");
+}
+
+#[tokio::test]
 async fn admin_apparatus_defaults_are_available_on_empty_store() {
     let state = test_state();
     let token = session(&state, PrincipalRole::Admin).await;

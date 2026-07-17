@@ -147,6 +147,54 @@ pub async fn warehouse_summaries(
     Ok(json_response(summaries))
 }
 
+pub async fn warehouse_items(
+    State(state): State<AppState>,
+    method: Method,
+    headers: HeaderMap,
+    Query(query): Query<ItemQuery>,
+) -> Result<Response, AdminError> {
+    let principal = authorize_any_capability(
+        &state,
+        &headers,
+        &[
+            Capability::AdminAccess,
+            Capability::CatalogItemRead,
+            Capability::RawMaterialAssign,
+        ],
+    )
+    .await?;
+    if method != Method::GET {
+        return Err(method_not_allowed());
+    }
+    if principal.role == PrincipalRole::MaterialTaminotchi {
+        require_capability(&state, &principal, Capability::RawMaterialAssign).await?;
+    } else {
+        require_capability(&state, &principal, Capability::CatalogItemRead).await?;
+    }
+
+    let warehouse = query.warehouse.as_deref().unwrap_or("").trim();
+    if warehouse.is_empty() {
+        return Err(bad_request("warehouse is required"));
+    }
+    if let Some(scope) = material_warehouse_scope(&state, &principal).await?
+        && !scope.contains(&warehouse.to_lowercase())
+    {
+        return Err(forbidden());
+    }
+
+    let items = state
+        .admin
+        .items_page_by_warehouse(
+            warehouse,
+            query.q.as_deref().unwrap_or(""),
+            optional_search_limit(query.limit.as_deref(), 80, 200),
+            optional_offset(query.offset.as_deref()),
+        )
+        .await
+        .map_err(|_| server_error("warehouse items fetch failed"))?;
+    Ok(json_response(items))
+}
+
 pub async fn warehouse_assignments(
     State(state): State<AppState>,
     method: Method,

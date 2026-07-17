@@ -130,6 +130,7 @@ async fn go_mobile_route_inventory_is_registered() {
         "/v1/mobile/admin/items",
         "/v1/mobile/admin/apparatus",
         "/v1/mobile/admin/warehouses",
+        "/v1/mobile/admin/warehouses/items",
         "/v1/mobile/admin/items/bulk-move-group",
         "/v1/mobile/admin/activity",
         "/v1/mobile/admin/werka/code/regenerate",
