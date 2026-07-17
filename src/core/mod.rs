@@ -2,6 +2,7 @@ pub mod admin;
 pub mod apparatus_groups;
 pub mod auth;
 pub mod authz;
+pub mod backup_doctor;
 pub mod calculate_orders;
 pub mod chat;
 pub mod chat_media;

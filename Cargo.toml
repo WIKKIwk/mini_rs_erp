@@ -41,7 +41,7 @@ socket2 = "0.6"
 sqlx = { version = "0.8", default-features = false, features = ["derive", "mysql", "postgres", "runtime-tokio-rustls"] }
 thiserror = "2"
 time = { version = "0.3", features = ["formatting", "parsing", "serde", "serde-well-known"] }
-tokio = { version = "1", features = ["macros", "net", "rt-multi-thread", "fs", "sync", "time"] }
+tokio = { version = "1", features = ["macros", "net", "rt-multi-thread", "fs", "io-util", "process", "sync", "time"] }
 tower-http = { version = "0.6", features = ["trace"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }

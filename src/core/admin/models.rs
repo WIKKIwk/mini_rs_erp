@@ -51,6 +51,16 @@ pub struct AdminServerMonitorBackups {
     pub file_count: usize,
     pub latest: Option<AdminServerMonitorBackupFile>,
     pub files: Vec<AdminServerMonitorBackupFile>,
+    #[serde(default)]
+    pub snapshot_count: usize,
+    #[serde(default)]
+    pub latest_snapshot: Option<AdminServerMonitorBackupSnapshot>,
+    #[serde(default)]
+    pub snapshots: Vec<AdminServerMonitorBackupSnapshot>,
+    #[serde(default)]
+    pub active_job: Option<AdminServerMonitorBackupSnapshot>,
+    #[serde(default)]
+    pub healthy: bool,
     pub error: String,
 }
 
@@ -61,6 +71,22 @@ pub struct AdminServerMonitorBackupFile {
     pub size_bytes: u64,
     pub modified_at_unix: i64,
     pub age_seconds: i64,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AdminServerMonitorBackupSnapshot {
+    pub id: String,
+    pub status: String,
+    pub source: String,
+    pub requested_by: String,
+    pub created_at_unix: i64,
+    pub started_at_unix: i64,
+    pub completed_at_unix: i64,
+    pub size_bytes: u64,
+    pub artifact_name: String,
+    pub checksum_sha256: String,
+    pub verified: bool,
+    pub error: String,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]

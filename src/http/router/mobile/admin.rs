@@ -1,5 +1,5 @@
 use axum::Router;
-use axum::routing::{any, get};
+use axum::routing::{any, get, post};
 
 use crate::app::AppState;
 use crate::http::handlers::admin;
@@ -278,6 +278,14 @@ pub(super) fn routes() -> Router<AppState> {
         .route(
             "/v1/mobile/admin/system/monitor/live",
             get(admin::system_monitor_live),
+        )
+        .route(
+            "/v1/mobile/admin/system/backups",
+            post(admin::system_backup_create),
+        )
+        .route(
+            "/v1/mobile/admin/system/backups/{id}/download",
+            get(admin::system_backup_download),
         )
         .route(
             "/v1/mobile/admin/werka/code/regenerate",

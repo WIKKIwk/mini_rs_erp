@@ -1,4 +1,3 @@
-use self::backup::scan_backup_directory;
 use super::*;
 use crate::core::admin::models::{
     AdminServerMonitorDatabase, AdminServerMonitorResponse, AdminServerMonitorRuntime,
@@ -13,8 +12,11 @@ use time::OffsetDateTime;
 use tokio::time::{Duration, timeout};
 
 mod backup;
+mod backup_api;
 #[cfg(test)]
 mod tests;
+
+pub use backup_api::{system_backup_create, system_backup_download};
 
 const DATABASE_PING_TIMEOUT: Duration = Duration::from_secs(2);
 const LIVE_SNAPSHOT_INTERVAL: Duration = Duration::from_secs(2);
@@ -75,7 +77,7 @@ async fn system_monitor_report(state: &AppState) -> AdminServerMonitorResponse {
             error: "mini engine store is not configured".to_string(),
         },
     };
-    let backups = scan_backup_directory(now);
+    let backups = state.backup_doctor.report(now);
     let runtime = runtime_snapshot();
     AdminServerMonitorResponse {
         server,

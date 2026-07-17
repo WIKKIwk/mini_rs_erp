@@ -8,6 +8,7 @@ use crate::core::admin::service::AdminService;
 use crate::core::apparatus_groups::ApparatusGroupService;
 use crate::core::auth::service::AuthService;
 use crate::core::auth::ports::CustomerLookup;
+use crate::core::backup_doctor::BackupDoctor;
 use crate::core::calculate_orders::CalculateOrderStorePort;
 use crate::core::chat::ChatService;
 use crate::core::chat_media::ChatMediaService;
@@ -87,6 +88,7 @@ pub struct AppState {
     pub warehouse_events: WarehouseEventHub,
     pub raw_material_events: Option<PostgresRawMaterialEventStore>,
     pub system_monitor_hub: SystemMonitorHub,
+    pub backup_doctor: BackupDoctor,
     #[allow(dead_code)]
     pub mini_engine: Option<PostgresEngineStore>,
     pub started_at: Instant,
@@ -144,6 +146,8 @@ impl AppState {
         let scale_driver = build_scale_driver(&config);
         let warehouse_events = WarehouseEventHub::new();
         let system_monitor_hub = SystemMonitorHub::new();
+        let backup_doctor = BackupDoctor::from_env();
+        backup_doctor.start_scheduler();
         let gscale = build_gscale_service(scale_driver.clone(), warehouse_events.clone());
         let rezka = build_rezka_service(scale_driver);
         let qolip = build_qolip_service();
@@ -182,6 +186,7 @@ impl AppState {
             warehouse_events,
             raw_material_events,
             system_monitor_hub,
+            backup_doctor,
             mini_engine,
             started_at: Instant::now(),
             started_at_unix: time::OffsetDateTime::now_utc().unix_timestamp(),

@@ -101,3 +101,109 @@ async fn admin_system_monitor_reports_server_and_backup_state() {
     assert!(body["runtime"]["disk_total_mb"].as_i64().unwrap_or(-1) >= 0);
     assert!(body["runtime"]["disk_available_mb"].as_i64().unwrap_or(-1) >= 0);
 }
+
+#[tokio::test]
+async fn admin_starts_guarded_backup_and_downloads_verified_dump() {
+    let backup_dir = tempfile::tempdir().expect("backup dir");
+    let script_dir = tempfile::tempdir().expect("script dir");
+    let script = script_dir.path().join("fake_backup.sh");
+    std::fs::write(
+        &script,
+        r#"#!/usr/bin/env bash
+set -euo pipefail
+dir="$MINI_ERP_BACKUP_DIR/$MINI_ERP_BACKUP_TIMESTAMP"
+mkdir -p "$dir"
+sleep 1
+printf 'verified-backup-bytes' > "$dir/mini_rs_erp.dump"
+printf '%s\n' "$dir"
+"#,
+    )
+    .expect("fake backup script");
+
+    let mut state = test_state();
+    state.backup_doctor = crate::core::backup_doctor::BackupDoctor::for_test(
+        backup_dir.path(),
+        &script,
+        "postgres://test",
+    );
+    let token = session(&state, PrincipalRole::Admin).await;
+    let router = build_router(state.clone());
+
+    let started = router
+        .clone()
+        .oneshot(request(
+            "POST",
+            "/v1/mobile/admin/system/backups",
+            &token,
+        ))
+        .await
+        .expect("start backup");
+    assert_eq!(started.status(), StatusCode::ACCEPTED);
+    let started_body = json_body(started).await;
+    let backup_id = started_body["id"].as_str().unwrap_or_default().to_string();
+    assert!(!backup_id.is_empty());
+    assert_eq!(started_body["status"], "queued");
+
+    let pending_download = router
+        .clone()
+        .oneshot(request(
+            "GET",
+            &format!(
+                "/v1/mobile/admin/system/backups/{backup_id}/download"
+            ),
+            &token,
+        ))
+        .await
+        .expect("pending download");
+    assert_eq!(pending_download.status(), StatusCode::CONFLICT);
+    assert_eq!(json_body(pending_download).await["error"], "backup_not_ready");
+
+    let duplicate = router
+        .clone()
+        .oneshot(request(
+            "POST",
+            "/v1/mobile/admin/system/backups",
+            &token,
+        ))
+        .await
+        .expect("duplicate backup");
+    assert_eq!(duplicate.status(), StatusCode::CONFLICT);
+    assert_eq!(json_body(duplicate).await["error"], "backup_already_running");
+
+    let mut ready = false;
+    for _ in 0..40 {
+        let report = state.backup_doctor.report(time::OffsetDateTime::now_utc());
+        ready = report
+            .snapshots
+            .iter()
+            .any(|snapshot| snapshot.id == backup_id && snapshot.status == "ready");
+        if ready {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    assert!(ready, "backup did not become ready");
+
+    let download = router
+        .oneshot(request(
+            "GET",
+            &format!(
+                "/v1/mobile/admin/system/backups/{backup_id}/download"
+            ),
+            &token,
+        ))
+        .await
+        .expect("download backup");
+    assert_eq!(download.status(), StatusCode::OK);
+    assert_eq!(
+        download
+            .headers()
+            .get(header::CONTENT_DISPOSITION)
+            .and_then(|value| value.to_str().ok()),
+        Some("attachment; filename=\"mini_rs_erp.dump\"")
+    );
+    let bytes = to_bytes(download.into_body(), usize::MAX)
+        .await
+        .expect("download bytes");
+    assert_eq!(&bytes[..], b"verified-backup-bytes");
+}

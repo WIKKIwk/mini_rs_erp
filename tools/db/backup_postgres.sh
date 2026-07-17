@@ -38,7 +38,13 @@ if [ -z "$DATABASE_NAME" ]; then
 	exit 1
 fi
 
-TIMESTAMP="$(date +%Y%m%d_%H%M%S)"
+TIMESTAMP="${MINI_ERP_BACKUP_TIMESTAMP:-$(date +%Y%m%d_%H%M%S)}"
+case "$TIMESTAMP" in
+	*[!A-Za-z0-9._-]*|'')
+		echo "MINI_ERP_BACKUP_TIMESTAMP contains unsupported characters" >&2
+		exit 2
+		;;
+esac
 BACKUP_ROOT="${MINI_ERP_BACKUP_DIR:-$REPO_ROOT/../backups/mini_rs_erp_db}"
 BACKUP_DIR="$BACKUP_ROOT/$TIMESTAMP"
 mkdir -p "$BACKUP_DIR"
