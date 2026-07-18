@@ -9,7 +9,7 @@ const DEFAULT_MAX_CONNECTIONS: u32 = 16;
 const DEFAULT_ACQUIRE_TIMEOUT_MS: u64 = 500;
 const MIGRATION_LOCK_KEY: i64 = 6_514_811_918_052_026_001;
 
-const POSTGRES_MIGRATIONS: [(&str, &str); 13] = [
+const POSTGRES_MIGRATIONS: [(&str, &str); 14] = [
     (
         "0001_mini_erp_foundation",
         include_str!("../../migrations/postgres/0001_mini_erp_foundation.sql"),
@@ -61,6 +61,10 @@ const POSTGRES_MIGRATIONS: [(&str, &str); 13] = [
     (
         "0013_chat_media_incident_video",
         include_str!("../../migrations/postgres/0013_chat_media_incident_video.sql"),
+    ),
+    (
+        "0014_raw_material_stock_corrections",
+        include_str!("../../migrations/postgres/0014_raw_material_stock_corrections.sql"),
     ),
 ];
 
@@ -155,16 +159,35 @@ pub fn foundation_migration_sql() -> &'static str {
 
 #[allow(dead_code)]
 pub async fn apply_foundation_migration(pool: &PgPool) -> Result<(), sqlx::Error> {
+    apply_postgres_migrations(pool, &POSTGRES_MIGRATIONS).await
+}
+
+async fn apply_postgres_migrations(
+    pool: &PgPool,
+    migrations: &[(&str, &str)],
+) -> Result<(), sqlx::Error> {
     let mut tx = pool.begin().await?;
     sqlx::query("SELECT pg_advisory_xact_lock($1)")
         .bind(MIGRATION_LOCK_KEY)
         .execute(&mut *tx)
         .await?;
     ensure_migration_history(&mut tx).await?;
-    for (version, sql) in POSTGRES_MIGRATIONS {
+    for &(version, sql) in migrations {
         apply_migration(&mut tx, version, sql).await?;
     }
     tx.commit().await
+}
+
+#[cfg(test)]
+pub(crate) async fn apply_postgres_migrations_through(
+    pool: &PgPool,
+    migration_count: usize,
+) -> Result<(), sqlx::Error> {
+    apply_postgres_migrations(
+        pool,
+        &POSTGRES_MIGRATIONS[..migration_count.min(POSTGRES_MIGRATIONS.len())],
+    )
+    .await
 }
 
 async fn ensure_migration_history(
@@ -526,6 +549,23 @@ mod tests {
         assert!(migration.contains("primary key (media_id, chunk_index)"));
         assert!(migration.contains("frame_rate_milli between 1 and 60000"));
         assert!(!migration.contains("public_url"));
+    }
+
+    #[test]
+    fn postgres_raw_material_correction_migration_extends_audit_constraints_safely() {
+        let migration = POSTGRES_MIGRATIONS[13].1.to_lowercase();
+
+        assert!(migration.contains("'stock_corrected'"));
+        assert!(migration.contains("'stock_correction'"));
+        assert!(migration.contains("mini_rme_stock_correction_consistent"));
+        assert!(migration.contains("set local lock_timeout = '5s'"));
+        assert!(migration.contains("set local statement_timeout = '60s'"));
+        assert!(migration.contains("not valid"));
+        assert!(migration.contains("validate constraint mini_rme_event_type_allowed"));
+        assert!(migration.contains("validate constraint mini_rme_source_type_allowed"));
+        assert!(migration.contains("validate constraint mini_rme_qty_sign_allowed"));
+        assert!(!migration.contains("delete from mini_raw_material_events"));
+        assert!(!migration.contains("update mini_raw_material_events"));
     }
 
     #[test]
