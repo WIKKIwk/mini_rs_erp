@@ -1,7 +1,9 @@
 use super::apparatus::{apparatus_warehouse, is_apparat_parent};
 use super::*;
 use crate::core::admin::models::AdminWarehouse;
-use crate::core::warehouses::{WarehouseAssignment, WarehouseSummary};
+use crate::core::warehouses::{
+    WarehouseAssignment, WarehouseAssignmentDeleteRequest, WarehouseSummary,
+};
 
 pub async fn warehouses(
     State(state): State<AppState>,
@@ -212,7 +214,7 @@ pub async fn warehouse_assignments(
         ],
     )
     .await?;
-    if !matches!(method, Method::GET | Method::POST) {
+    if !matches!(method, Method::GET | Method::POST | Method::DELETE) {
         return Err(method_not_allowed());
     }
     match method {
@@ -235,6 +237,7 @@ pub async fn warehouse_assignments(
         Method::POST => {
             require_capability(&state, &principal, Capability::AdminAccess).await?;
             let input: WarehouseAssignmentUpsert = parse_json(&body)?;
+            validate_warehouse_assignee(&state, &input).await?;
             let saved = state
                 .warehouses
                 .assign_warehouse(input)
@@ -245,7 +248,50 @@ pub async fn warehouse_assignments(
                 .notify_updated(&saved.warehouse, "warehouse_assignment");
             Ok(json_response(saved))
         }
+        Method::DELETE => {
+            require_capability(&state, &principal, Capability::AdminAccess).await?;
+            let input: WarehouseAssignmentDeleteRequest = parse_json(&body)?;
+            let removed = state
+                .warehouses
+                .unassign_warehouse(input)
+                .await
+                .map_err(warehouse_error)?;
+            state
+                .warehouse_events
+                .notify_updated(&removed.warehouse, "warehouse_assignment_removed");
+            Ok(json_response(serde_json::json!({
+                "ok": true,
+                "assignment": removed,
+            })))
+        }
         _ => Err(method_not_allowed()),
+    }
+}
+
+async fn validate_warehouse_assignee(
+    state: &AppState,
+    input: &WarehouseAssignmentUpsert,
+) -> Result<(), AdminError> {
+    match input.principal_role {
+        PrincipalRole::Werka
+        | PrincipalRole::MaterialTaminotchi
+        | PrincipalRole::Qolipchi => Ok(()),
+        PrincipalRole::Aparatchi => {
+            let workers = state
+                .workers
+                .workers_by_ids(&[input.principal_ref.trim().to_string()])
+                .await
+                .map_err(|_| server_error("warehouse assignee lookup failed"))?;
+            if workers
+                .iter()
+                .any(|worker| worker.level.trim().eq_ignore_ascii_case("Brigader"))
+            {
+                Ok(())
+            } else {
+                Err(bad_request("warehouse_assignee_not_allowed"))
+            }
+        }
+        _ => Err(bad_request("warehouse_assignee_not_allowed")),
     }
 }
 
@@ -311,6 +357,7 @@ fn warehouse_error(error: WarehouseError) -> AdminError {
         WarehouseError::MissingWarehouse => bad_request("warehouse is required"),
         WarehouseError::MissingPrincipalRef => bad_request("principal ref is required"),
         WarehouseError::NotFound => not_found("warehouse_not_found"),
+        WarehouseError::AssignmentNotFound => not_found("warehouse_assignment_not_found"),
         WarehouseError::NotEmpty(_) => (
             StatusCode::CONFLICT,
             Json(AdminErrorResponse::new("warehouse_not_empty")),

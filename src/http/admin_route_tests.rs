@@ -45,7 +45,7 @@ use crate::core::werka::models::{DispatchRecord, SupplierItem};
 use crate::core::werka::ports::{WerkaHomeLookup, WerkaPortError};
 use crate::core::werka::service::WerkaService;
 use crate::core::worker_groups::{MemoryWorkerGroupStore, WorkerGroupService};
-use crate::core::workers::{MemoryWorkerStore, WorkerService};
+use crate::core::workers::{MemoryWorkerStore, WorkerService, WorkerUpsert};
 use crate::store::calculate_order_store::CalculateOrderStore;
 
 mod admin_edge_cases;

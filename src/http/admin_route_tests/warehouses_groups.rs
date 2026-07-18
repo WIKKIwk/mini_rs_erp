@@ -323,16 +323,16 @@ async fn admin_can_assign_warehouse_to_user_and_list_assignments() {
             "POST",
             "/v1/mobile/admin/warehouses/assignments",
             &token,
-            r#"{"warehouse":" Ombor ","principal_role":"supplier","principal_ref":"SUP-001","display_name":"Supplier One"}"#,
+            r#"{"warehouse":" Ombor ","principal_role":"werka","principal_ref":"werka","display_name":"Werka"}"#,
         ))
         .await
         .expect("assign warehouse");
     assert_eq!(created.status(), StatusCode::OK);
     let created_body = json_body(created).await;
     assert_eq!(created_body["warehouse"], "Ombor");
-    assert_eq!(created_body["principal_role"], "supplier");
-    assert_eq!(created_body["principal_ref"], "SUP-001");
-    assert_eq!(created_body["display_name"], "Supplier One");
+    assert_eq!(created_body["principal_role"], "werka");
+    assert_eq!(created_body["principal_ref"], "werka");
+    assert_eq!(created_body["display_name"], "Werka");
 
     let listed = build_router(state)
         .oneshot(request(
@@ -345,7 +345,140 @@ async fn admin_can_assign_warehouse_to_user_and_list_assignments() {
     assert_eq!(listed.status(), StatusCode::OK);
     let listed_body = json_body(listed).await;
     assert_eq!(listed_body[0]["warehouse"], "Ombor");
-    assert_eq!(listed_body[0]["principal_ref"], "SUP-001");
+    assert_eq!(listed_body[0]["principal_ref"], "werka");
+}
+
+#[tokio::test]
+async fn warehouse_assignment_accepts_only_allowed_roles_and_brigader_workers() {
+    let state = test_state();
+    let token = session(&state, PrincipalRole::Admin).await;
+    let brigader = state
+        .workers
+        .upsert_worker(WorkerUpsert {
+            id: "brigader-1".to_string(),
+            name: "Brigader One".to_string(),
+            phone: String::new(),
+            level: "Brigader".to_string(),
+        })
+        .await
+        .expect("brigader");
+    let master = state
+        .workers
+        .upsert_worker(WorkerUpsert {
+            id: "master-1".to_string(),
+            name: "Master One".to_string(),
+            phone: String::new(),
+            level: "Master".to_string(),
+        })
+        .await
+        .expect("master");
+
+    let allowed = build_router(state.clone())
+        .oneshot(request_with_body(
+            "POST",
+            "/v1/mobile/admin/warehouses/assignments",
+            &token,
+            &format!(
+                r#"{{"warehouse":"Ombor","principal_role":"aparatchi","principal_ref":"{}","display_name":"Brigader One"}}"#,
+                brigader.id
+            ),
+        ))
+        .await
+        .expect("assign brigader");
+    assert_eq!(allowed.status(), StatusCode::OK);
+
+    let master_rejected = build_router(state.clone())
+        .oneshot(request_with_body(
+            "POST",
+            "/v1/mobile/admin/warehouses/assignments",
+            &token,
+            &format!(
+                r#"{{"warehouse":"Ombor","principal_role":"aparatchi","principal_ref":"{}","display_name":"Master One"}}"#,
+                master.id
+            ),
+        ))
+        .await
+        .expect("reject master");
+    assert_eq!(master_rejected.status(), StatusCode::BAD_REQUEST);
+    assert_eq!(
+        json_body(master_rejected).await["error"],
+        "warehouse_assignee_not_allowed"
+    );
+
+    let supplier_rejected = build_router(state)
+        .oneshot(request_with_body(
+            "POST",
+            "/v1/mobile/admin/warehouses/assignments",
+            &token,
+            r#"{"warehouse":"Ombor","principal_role":"supplier","principal_ref":"SUP-001","display_name":"Supplier One"}"#,
+        ))
+        .await
+        .expect("reject supplier");
+    assert_eq!(supplier_rejected.status(), StatusCode::BAD_REQUEST);
+    assert_eq!(
+        json_body(supplier_rejected).await["error"],
+        "warehouse_assignee_not_allowed"
+    );
+}
+
+#[tokio::test]
+async fn admin_can_remove_one_warehouse_assignment() {
+    let state = test_state();
+    let token = session(&state, PrincipalRole::Admin).await;
+    let assignment =
+        r#"{"warehouse":"Ombor","principal_role":"werka","principal_ref":"werka","display_name":"Werka"}"#;
+
+    let created = build_router(state.clone())
+        .oneshot(request_with_body(
+            "POST",
+            "/v1/mobile/admin/warehouses/assignments",
+            &token,
+            assignment,
+        ))
+        .await
+        .expect("assign warehouse");
+    assert_eq!(created.status(), StatusCode::OK);
+
+    let removed = build_router(state.clone())
+        .oneshot(request_with_body(
+            "DELETE",
+            "/v1/mobile/admin/warehouses/assignments",
+            &token,
+            assignment,
+        ))
+        .await
+        .expect("remove warehouse assignment");
+    assert_eq!(removed.status(), StatusCode::OK);
+    let removed_body = json_body(removed).await;
+    assert_eq!(removed_body["ok"], true);
+    assert_eq!(removed_body["assignment"]["warehouse"], "Ombor");
+    assert_eq!(removed_body["assignment"]["principal_ref"], "werka");
+
+    let listed = build_router(state.clone())
+        .oneshot(request(
+            "GET",
+            "/v1/mobile/admin/warehouses/assignments?warehouse=Ombor",
+            &token,
+        ))
+        .await
+        .expect("list assignments after remove");
+    assert_eq!(listed.status(), StatusCode::OK);
+    assert!(json_body(listed).await.as_array().unwrap().is_empty());
+
+    let missing = build_router(state)
+        .oneshot(request_with_body(
+            "DELETE",
+            "/v1/mobile/admin/warehouses/assignments",
+            &token,
+            assignment,
+        ))
+        .await
+        .expect("remove missing warehouse assignment");
+    assert_eq!(missing.status(), StatusCode::NOT_FOUND);
+    assert_eq!(
+        json_body(missing).await["error"],
+        "warehouse_assignment_not_found"
+    );
 }
 
 #[tokio::test]
@@ -367,7 +500,7 @@ async fn admin_deletes_empty_warehouse_and_its_assignments() {
             "POST",
             "/v1/mobile/admin/warehouses/assignments",
             &token,
-            r#"{"warehouse":"Delete me","principal_role":"supplier","principal_ref":"SUP-001","display_name":"Supplier One"}"#,
+            r#"{"warehouse":"Delete me","principal_role":"werka","principal_ref":"werka","display_name":"Werka"}"#,
         ))
         .await
         .expect("assign warehouse");
@@ -480,7 +613,7 @@ async fn admin_warehouse_summary_returns_lightweight_counts() {
             "POST",
             "/v1/mobile/admin/warehouses/assignments",
             &token,
-            r#"{"warehouse":" Ombor ","principal_role":"supplier","principal_ref":"SUP-001","display_name":"Supplier One"}"#,
+            r#"{"warehouse":" Ombor ","principal_role":"werka","principal_ref":"werka","display_name":"Werka"}"#,
         ))
         .await
         .expect("assign warehouse");
@@ -500,7 +633,7 @@ async fn admin_warehouse_summary_returns_lightweight_counts() {
     assert_eq!(body[0]["product_count"], 0);
     assert_eq!(body[0]["reserved_count"], 0);
     assert_eq!(body[0]["assignment_count"], 1);
-    assert_eq!(body[0]["assigned_display_names"][0], "Supplier One");
+    assert_eq!(body[0]["assigned_display_names"][0], "Werka");
 }
 
 #[tokio::test]

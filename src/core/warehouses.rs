@@ -48,6 +48,13 @@ pub struct WarehouseAssignmentUpsert {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+pub struct WarehouseAssignmentDeleteRequest {
+    pub warehouse: String,
+    pub principal_role: PrincipalRole,
+    pub principal_ref: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 pub struct WarehouseDeleteRequest {
     pub warehouse: String,
     #[serde(default)]
@@ -69,6 +76,8 @@ pub enum WarehouseError {
     MissingPrincipalRef,
     #[error("warehouse not found")]
     NotFound,
+    #[error("warehouse assignment not found")]
+    AssignmentNotFound,
     #[error("warehouse contains {0} products")]
     NotEmpty(usize),
     #[error("warehouse contains {0} active reservations")]
@@ -108,6 +117,13 @@ pub trait WarehouseStorePort: Send + Sync {
         &self,
         assignment: WarehouseAssignment,
     ) -> Result<WarehouseAssignment, WarehouseError>;
+
+    async fn delete_warehouse_assignment(
+        &self,
+        warehouse: &str,
+        principal_role: &PrincipalRole,
+        principal_ref: &str,
+    ) -> Result<Option<WarehouseAssignment>, WarehouseError>;
 
     async fn delete_warehouse(&self, warehouse: &str) -> Result<(), WarehouseError>;
 }
@@ -189,6 +205,24 @@ impl WarehouseService {
     ) -> Result<WarehouseAssignment, WarehouseError> {
         let assignment = normalize_assignment(input)?;
         self.store.put_warehouse_assignment(assignment).await
+    }
+
+    pub async fn unassign_warehouse(
+        &self,
+        input: WarehouseAssignmentDeleteRequest,
+    ) -> Result<WarehouseAssignment, WarehouseError> {
+        let warehouse = input.warehouse.trim();
+        if warehouse.is_empty() {
+            return Err(WarehouseError::MissingWarehouse);
+        }
+        let principal_ref = input.principal_ref.trim();
+        if principal_ref.is_empty() {
+            return Err(WarehouseError::MissingPrincipalRef);
+        }
+        self.store
+            .delete_warehouse_assignment(warehouse, &input.principal_role, principal_ref)
+            .await?
+            .ok_or(WarehouseError::AssignmentNotFound)
     }
 
     pub async fn delete_warehouse(
@@ -392,6 +426,24 @@ impl WarehouseStorePort for MemoryWarehouseStore {
                 .then_with(|| left.display_name.cmp(&right.display_name))
         });
         Ok(assignment)
+    }
+
+    async fn delete_warehouse_assignment(
+        &self,
+        warehouse: &str,
+        principal_role: &PrincipalRole,
+        principal_ref: &str,
+    ) -> Result<Option<WarehouseAssignment>, WarehouseError> {
+        let mut assignments = self.assignments.write().await;
+        let index = assignments.iter().position(|assignment| {
+            assignment.warehouse.trim().eq_ignore_ascii_case(warehouse.trim())
+                && assignment.principal_role == *principal_role
+                && assignment
+                    .principal_ref
+                    .trim()
+                    .eq_ignore_ascii_case(principal_ref.trim())
+        });
+        Ok(index.map(|index| assignments.remove(index)))
     }
 
     async fn delete_warehouse(&self, warehouse: &str) -> Result<(), WarehouseError> {

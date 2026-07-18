@@ -320,6 +320,29 @@ impl WarehouseStorePort for PostgresWarehouseStore {
         .and_then(row_to_assignment)
     }
 
+    async fn delete_warehouse_assignment(
+        &self,
+        warehouse: &str,
+        principal_role: &PrincipalRole,
+        principal_ref: &str,
+    ) -> Result<Option<WarehouseAssignment>, WarehouseError> {
+        let row = sqlx::query_as::<_, WarehouseAssignmentRow>(
+            "DELETE FROM mini_warehouse_assignments
+             WHERE warehouse = $1
+               AND principal_role = $2
+               AND principal_ref = $3
+             RETURNING warehouse, principal_role, principal_ref, display_name",
+        )
+        .bind(warehouse.trim())
+        .bind(role_as_str(principal_role))
+        .bind(principal_ref.trim())
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(|_| WarehouseError::StoreFailed)?;
+
+        row.map(row_to_assignment).transpose()
+    }
+
     async fn delete_warehouse(&self, warehouse: &str) -> Result<(), WarehouseError> {
         let warehouse = warehouse.trim();
         if warehouse.is_empty() {
