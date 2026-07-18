@@ -484,7 +484,7 @@ fn raw_material_stock_update_error(
     }
 }
 
-fn raw_material_stock_locked_error() -> AdminError {
+pub(super) fn raw_material_stock_locked_error() -> AdminError {
     (
         StatusCode::CONFLICT,
         Json(AdminErrorResponse::new("raw_material_stock_locked")),
@@ -620,7 +620,7 @@ async fn material_scoped_raw_material_assignments(
     Ok(out)
 }
 
-async fn material_warehouse_scope(
+pub(super) async fn material_warehouse_scope(
     state: &AppState,
     principal: &Principal,
 ) -> Result<Vec<String>, AdminError> {
@@ -635,7 +635,7 @@ async fn material_warehouse_scope(
         .collect())
 }
 
-fn warehouse_in_scope(assigned: &[String], warehouse: &str) -> bool {
+pub(super) fn warehouse_in_scope(assigned: &[String], warehouse: &str) -> bool {
     assigned
         .iter()
         .any(|assigned| assigned.trim().eq_ignore_ascii_case(warehouse.trim()))

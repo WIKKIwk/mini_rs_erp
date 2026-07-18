@@ -142,6 +142,14 @@ pub(super) fn routes() -> Router<AppState> {
             any(admin::raw_material_stock),
         )
         .route(
+            "/v1/mobile/admin/raw-material-stock/reprint/prepare",
+            any(admin::raw_material_stock_reprint_prepare),
+        )
+        .route(
+            "/v1/mobile/admin/raw-material-stock/reprint/confirm",
+            any(admin::raw_material_stock_reprint_confirm),
+        )
+        .route(
             "/v1/mobile/admin/raw-material-history",
             any(admin::raw_material_history),
         )

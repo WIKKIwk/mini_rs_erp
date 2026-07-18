@@ -24,6 +24,7 @@ mod progress_qr;
 mod qolip_validation;
 mod queue_actions;
 mod raw_material_details;
+mod raw_material_reprint;
 mod raw_materials;
 mod wip;
 
@@ -43,6 +44,9 @@ pub use self::queue_actions::production_map_queue_action;
 pub use self::raw_materials::{
     raw_material_assignment_lookup, raw_material_assignments, raw_material_history,
     raw_material_rules, raw_material_stock,
+};
+pub use self::raw_material_reprint::{
+    raw_material_stock_reprint_confirm, raw_material_stock_reprint_prepare,
 };
 pub use self::wip::{production_map_finished_goods_receive, production_map_wip_batches};
 
