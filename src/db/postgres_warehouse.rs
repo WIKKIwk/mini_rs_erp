@@ -4,7 +4,8 @@ use sqlx::PgPool;
 use crate::core::admin::models::AdminWarehouse;
 use crate::core::auth::models::PrincipalRole;
 use crate::core::warehouses::{
-    WarehouseAssignment, WarehouseError, WarehouseStorePort, WarehouseSummary,
+    WarehouseAssignment, WarehouseError, WarehouseStockItem, WarehouseStorePort,
+    WarehouseSummary,
 };
 
 #[derive(Clone)]
@@ -128,70 +129,18 @@ impl WarehouseStorePort for PostgresWarehouseStore {
         let pattern = format!("%{query}%");
         let rows = sqlx::query_as::<_, WarehouseSummaryRow>(
             r#"
-            WITH RECURSIVE group_path(group_name, node_name, parent_name) AS (
-                SELECT lower(name), lower(name), lower(parent_item_group)
-                FROM mini_item_groups
-                UNION ALL
-                SELECT group_path.group_name, lower(parent.name), lower(parent.parent_item_group)
-                FROM group_path
-                JOIN mini_item_groups parent ON lower(parent.name) = group_path.parent_name
-                WHERE group_path.parent_name <> ''
-            ),
-            group_kind AS (
-                SELECT
-                    group_name,
-                    bool_or(node_name LIKE '%homashyo%' OR node_name LIKE '%xomashyo%') AS is_raw,
-                    bool_or(node_name LIKE '%tayyor%' AND node_name LIKE '%mahsulot%') AS is_finished
-                FROM group_path
-                GROUP BY group_name
-            ),
-            warehouse_kind AS (
-                SELECT
-                    (
-                        SELECT name
-                        FROM mini_warehouses
-                        WHERE lower(name) LIKE '%homashyo%' OR lower(name) LIKE '%xomashyo%'
-                        ORDER BY lower(name)
-                        LIMIT 1
-                    ) AS raw_warehouse,
-                    (
-                        SELECT name
-                        FROM mini_warehouses
-                        WHERE lower(name) LIKE '%tayyor%' AND lower(name) LIKE '%mahsulot%'
-                        ORDER BY lower(name)
-                        LIMIT 1
-                    ) AS finished_warehouse
-            ),
-            item_map AS (
-                SELECT
-                    items.code,
-                    COALESCE(
-                        NULLIF(btrim(items.warehouse), ''),
-                        CASE
-                            WHEN group_kind.is_raw THEN warehouse_kind.raw_warehouse
-                            WHEN group_kind.is_finished THEN warehouse_kind.finished_warehouse
-                            ELSE ''
-                        END,
-                        ''
-                    ) AS warehouse
-                FROM mini_items items
-                LEFT JOIN group_kind ON lower(items.item_group) = group_kind.group_name
-                CROSS JOIN warehouse_kind
-            ),
-            item_counts AS (
-                SELECT warehouse, count(*)::bigint AS item_count
-                FROM item_map
-                WHERE btrim(warehouse) <> ''
-                GROUP BY warehouse
-            ),
-            raw_counts AS (
+            WITH raw_counts AS (
                 SELECT warehouse, count(*)::bigint AS raw_count
                 FROM mini_raw_material_stock
+                WHERE status = 'available' AND qty > 0
                 GROUP BY warehouse
             ),
             finished_counts AS (
-                SELECT warehouse, count(*)::bigint AS finished_count
+                SELECT
+                    warehouse,
+                    count(DISTINCT (lower(item_code), lower(uom)))::bigint AS finished_count
                 FROM mini_finished_goods_stock
+                WHERE status = 'available' AND qty > 0
                 GROUP BY warehouse
             ),
             qolip_counts AS (
@@ -208,14 +157,13 @@ impl WarehouseStorePort for PostgresWarehouseStore {
             ),
             reservation_counts AS (
                 SELECT
-                    COALESCE(NULLIF(btrim(stock.warehouse), ''), NULLIF(btrim(item_map.warehouse), '')) AS warehouse,
+                    stock.warehouse,
                     count(*)::bigint AS reserved_count
                 FROM mini_raw_material_assignments assignments
-                LEFT JOIN mini_raw_material_stock stock
+                JOIN mini_raw_material_stock stock
                     ON lower(stock.barcode) = lower(assignments.barcode)
-                LEFT JOIN item_map
-                    ON lower(item_map.code) = lower(assignments.item_code)
-                GROUP BY COALESCE(NULLIF(btrim(stock.warehouse), ''), NULLIF(btrim(item_map.warehouse), ''))
+                WHERE btrim(stock.warehouse) <> ''
+                GROUP BY stock.warehouse
             ),
             assignment_counts AS (
                 SELECT
@@ -230,8 +178,6 @@ impl WarehouseStorePort for PostgresWarehouseStore {
                 SELECT name AS warehouse
                 FROM mini_warehouses
                 WHERE btrim(parent_warehouse) = ''
-                UNION
-                SELECT warehouse FROM item_counts
                 UNION
                 SELECT warehouse FROM raw_counts
                 UNION
@@ -248,8 +194,7 @@ impl WarehouseStorePort for PostgresWarehouseStore {
             SELECT
                 warehouse_names.warehouse,
                 (
-                    COALESCE(item_counts.item_count, 0)
-                    + COALESCE(raw_counts.raw_count, 0)
+                    COALESCE(raw_counts.raw_count, 0)
                     + COALESCE(finished_counts.finished_count, 0)
                     + COALESCE(qolip_counts.qolip_count, 0)
                 )::bigint AS product_count,
@@ -260,7 +205,6 @@ impl WarehouseStorePort for PostgresWarehouseStore {
                 COALESCE(assignment_counts.assignment_count, 0)::bigint AS assignment_count,
                 COALESCE(assignment_counts.assigned_display_names, '') AS assigned_display_names
             FROM warehouse_names
-            LEFT JOIN item_counts ON lower(item_counts.warehouse) = lower(warehouse_names.warehouse)
             LEFT JOIN raw_counts ON lower(raw_counts.warehouse) = lower(warehouse_names.warehouse)
             LEFT JOIN finished_counts ON lower(finished_counts.warehouse) = lower(warehouse_names.warehouse)
             LEFT JOIN qolip_counts ON lower(qolip_counts.warehouse) = lower(warehouse_names.warehouse)
@@ -279,6 +223,60 @@ impl WarehouseStorePort for PostgresWarehouseStore {
         .await
         .map_err(|_| WarehouseError::StoreFailed)?;
         Ok(rows.into_iter().map(row_to_summary).collect())
+    }
+
+    async fn warehouse_stock_items(
+        &self,
+        warehouse: &str,
+        query: &str,
+        limit: usize,
+        offset: usize,
+    ) -> Result<Vec<WarehouseStockItem>, WarehouseError> {
+        let warehouse = warehouse.trim();
+        if warehouse.is_empty() || limit == 0 {
+            return Ok(Vec::new());
+        }
+        let needle = format!("%{}%", query.trim().to_lowercase());
+        let rows = sqlx::query_as::<_, WarehouseStockItemRow>(
+            r#"
+            SELECT
+                MAX(stock.item_code) AS code,
+                COALESCE(
+                    MAX(NULLIF(btrim(stock.item_name), '')),
+                    MAX(NULLIF(btrim(items.name), '')),
+                    MAX(stock.item_code)
+                ) AS name,
+                COALESCE(MAX(NULLIF(btrim(stock.uom), '')), MAX(NULLIF(btrim(items.uom), '')), '') AS uom,
+                MAX(stock.warehouse) AS warehouse,
+                COALESCE(MAX(NULLIF(btrim(items.item_group), '')), '') AS item_group,
+                SUM(stock.qty)::float8 AS on_hand_qty,
+                COUNT(*)::bigint AS package_count
+            FROM mini_finished_goods_stock stock
+            LEFT JOIN mini_items items ON lower(items.code) = lower(stock.item_code)
+            WHERE lower(stock.warehouse) = lower($1)
+              AND stock.status = 'available'
+              AND stock.qty > 0
+              AND (
+                    $2 = '%%'
+                    OR lower(stock.item_code) LIKE $2
+                    OR lower(stock.item_name) LIKE $2
+                    OR lower(COALESCE(items.name, '')) LIKE $2
+                    OR lower(COALESCE(items.item_group, '')) LIKE $2
+              )
+            GROUP BY lower(stock.item_code), lower(stock.uom), lower(stock.warehouse)
+            ORDER BY lower(COALESCE(MAX(NULLIF(btrim(stock.item_name), '')), MAX(NULLIF(btrim(items.name), '')), MAX(stock.item_code)))
+            LIMIT $3 OFFSET $4
+            "#,
+        )
+        .bind(warehouse)
+        .bind(needle)
+        .bind(limit.min(500) as i64)
+        .bind(offset as i64)
+        .fetch_all(&self.pool)
+        .await
+        .map_err(|_| WarehouseError::StoreFailed)?;
+
+        Ok(rows.into_iter().map(row_to_stock_item).collect())
     }
 
     async fn put_warehouse_assignment(
@@ -353,60 +351,6 @@ impl WarehouseStorePort for PostgresWarehouseStore {
             .begin()
             .await
             .map_err(|_| WarehouseError::StoreFailed)?;
-        let item_codes = sqlx::query_scalar::<_, String>(
-            r#"
-            WITH RECURSIVE group_path(group_name, node_name, parent_name) AS (
-                SELECT lower(name), lower(name), lower(parent_item_group)
-                FROM mini_item_groups
-                UNION ALL
-                SELECT group_path.group_name, lower(parent.name), lower(parent.parent_item_group)
-                FROM group_path
-                JOIN mini_item_groups parent ON lower(parent.name) = group_path.parent_name
-                WHERE group_path.parent_name <> ''
-            ),
-            group_kind AS (
-                SELECT
-                    group_name,
-                    bool_or(node_name LIKE '%homashyo%' OR node_name LIKE '%xomashyo%') AS is_raw,
-                    bool_or(node_name LIKE '%tayyor%' AND node_name LIKE '%mahsulot%') AS is_finished
-                FROM group_path
-                GROUP BY group_name
-            ),
-            warehouse_kind AS (
-                SELECT
-                    (
-                        SELECT name FROM mini_warehouses
-                        WHERE lower(name) LIKE '%homashyo%' OR lower(name) LIKE '%xomashyo%'
-                        ORDER BY lower(name) LIMIT 1
-                    ) AS raw_warehouse,
-                    (
-                        SELECT name FROM mini_warehouses
-                        WHERE lower(name) LIKE '%tayyor%' AND lower(name) LIKE '%mahsulot%'
-                        ORDER BY lower(name) LIMIT 1
-                    ) AS finished_warehouse
-            )
-            SELECT items.code
-            FROM mini_items items
-            LEFT JOIN group_kind ON lower(items.item_group) = group_kind.group_name
-            CROSS JOIN warehouse_kind
-            WHERE lower(
-                COALESCE(
-                    NULLIF(btrim(items.warehouse), ''),
-                    CASE
-                        WHEN group_kind.is_raw THEN warehouse_kind.raw_warehouse
-                        WHEN group_kind.is_finished THEN warehouse_kind.finished_warehouse
-                        ELSE ''
-                    END,
-                    ''
-                )
-            ) = lower($1)
-            "#,
-        )
-        .bind(warehouse)
-        .fetch_all(&mut *transaction)
-        .await
-        .map_err(|_| WarehouseError::StoreFailed)?;
-
         for table in [
             "mini_qolip_cell_qrs",
             "mini_qolip_locations",
@@ -420,13 +364,6 @@ impl WarehouseStorePort for PostgresWarehouseStore {
             .execute(&mut *transaction)
             .await
             .map_err(|_| WarehouseError::StoreFailed)?;
-        }
-        if !item_codes.is_empty() {
-            sqlx::query("DELETE FROM mini_items WHERE code = ANY($1)")
-                .bind(&item_codes)
-                .execute(&mut *transaction)
-                .await
-                .map_err(|_| WarehouseError::StoreFailed)?;
         }
         sqlx::query("DELETE FROM mini_warehouse_assignments WHERE lower(warehouse) = lower($1)")
             .bind(warehouse)
@@ -468,6 +405,17 @@ struct WarehouseSummaryRow {
     reserved_count: i64,
     assignment_count: i64,
     assigned_display_names: String,
+}
+
+#[derive(sqlx::FromRow)]
+struct WarehouseStockItemRow {
+    code: String,
+    name: String,
+    uom: String,
+    warehouse: String,
+    item_group: String,
+    on_hand_qty: f64,
+    package_count: i64,
 }
 
 fn warehouse_id(name: &str) -> String {
@@ -523,5 +471,17 @@ fn row_to_summary(row: WarehouseSummaryRow) -> WarehouseSummary {
             .filter(|item| !item.is_empty())
             .map(ToString::to_string)
             .collect(),
+    }
+}
+
+fn row_to_stock_item(row: WarehouseStockItemRow) -> WarehouseStockItem {
+    WarehouseStockItem {
+        code: row.code,
+        name: row.name,
+        uom: row.uom,
+        warehouse: row.warehouse,
+        item_group: row.item_group,
+        on_hand_qty: row.on_hand_qty.max(0.0),
+        package_count: row.package_count.max(0) as usize,
     }
 }

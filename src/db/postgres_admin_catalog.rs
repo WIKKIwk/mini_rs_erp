@@ -247,29 +247,30 @@ impl AdminReadPort for PostgresAdminCatalogStore {
         parent: &str,
         limit: usize,
     ) -> Result<Vec<AdminWarehouse>, AdminPortError> {
-        if !parent.trim().is_empty() {
-            return Ok(Vec::new());
-        }
-        let needle = format!("%{}%", query.trim().to_lowercase());
-        sqlx::query_scalar::<_, String>(
-            "SELECT DISTINCT warehouse
-             FROM mini_items
-             WHERE btrim(warehouse) <> ''
-               AND ($1 = '%%' OR lower(warehouse) LIKE $1)
-             ORDER BY warehouse
-             LIMIT $2",
+        let query = query.trim().to_lowercase();
+        let needle = format!("%{query}%");
+        let parent = parent.trim().to_lowercase();
+        sqlx::query_as::<_, (String, String, bool, String)>(
+            "SELECT name, company, is_group, parent_warehouse
+             FROM mini_warehouses
+             WHERE ($1 = '' OR lower(name) LIKE $2)
+               AND ($3 = '' OR lower(parent_warehouse) = $3)
+             ORDER BY lower(name)
+             LIMIT $4",
         )
+        .bind(query)
         .bind(needle)
-        .bind(limit.min(500) as i64)
+        .bind(parent)
+        .bind(limit.clamp(1, 500) as i64)
         .fetch_all(&self.pool)
         .await
         .map(|rows| {
             rows.into_iter()
-                .map(|warehouse| AdminWarehouse {
+                .map(|(warehouse, company, is_group, parent_warehouse)| AdminWarehouse {
                     warehouse,
-                    company: String::new(),
-                    is_group: false,
-                    parent_warehouse: String::new(),
+                    company,
+                    is_group,
+                    parent_warehouse,
                 })
                 .collect()
         })

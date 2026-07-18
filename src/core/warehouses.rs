@@ -38,6 +38,18 @@ pub struct WarehouseSummary {
     pub assigned_display_names: Vec<String>,
 }
 
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct WarehouseStockItem {
+    pub code: String,
+    pub name: String,
+    pub uom: String,
+    pub warehouse: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub item_group: String,
+    pub on_hand_qty: f64,
+    pub package_count: usize,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 pub struct WarehouseAssignmentUpsert {
     pub warehouse: String,
@@ -112,6 +124,14 @@ pub trait WarehouseStorePort: Send + Sync {
         query: &str,
         limit: usize,
     ) -> Result<Vec<WarehouseSummary>, WarehouseError>;
+
+    async fn warehouse_stock_items(
+        &self,
+        warehouse: &str,
+        query: &str,
+        limit: usize,
+        offset: usize,
+    ) -> Result<Vec<WarehouseStockItem>, WarehouseError>;
 
     async fn put_warehouse_assignment(
         &self,
@@ -197,6 +217,22 @@ impl WarehouseService {
         limit: usize,
     ) -> Result<Vec<WarehouseSummary>, WarehouseError> {
         self.store.warehouse_summaries(query, limit).await
+    }
+
+    pub async fn warehouse_stock_items(
+        &self,
+        warehouse: &str,
+        query: &str,
+        limit: usize,
+        offset: usize,
+    ) -> Result<Vec<WarehouseStockItem>, WarehouseError> {
+        let warehouse = warehouse.trim();
+        if warehouse.is_empty() {
+            return Err(WarehouseError::MissingWarehouse);
+        }
+        self.store
+            .warehouse_stock_items(warehouse, query.trim(), limit, offset)
+            .await
     }
 
     pub async fn assign_warehouse(
@@ -322,6 +358,7 @@ pub fn merge_admin_warehouses(
 pub struct MemoryWarehouseStore {
     warehouses: RwLock<Vec<AdminWarehouse>>,
     assignments: RwLock<Vec<WarehouseAssignment>>,
+    stock_items: RwLock<Vec<WarehouseStockItem>>,
     summary_counts: RwLock<BTreeMap<String, (usize, usize)>>,
 }
 
@@ -341,6 +378,11 @@ impl MemoryWarehouseStore {
             warehouse.trim().to_lowercase(),
             (product_count, reserved_count),
         );
+    }
+
+    #[cfg(test)]
+    pub async fn set_stock_items(&self, items: Vec<WarehouseStockItem>) {
+        *self.stock_items.write().await = items;
     }
 }
 
@@ -405,6 +447,50 @@ impl WarehouseStorePort for MemoryWarehouseStore {
             .collect())
     }
 
+    async fn warehouse_stock_items(
+        &self,
+        warehouse: &str,
+        query: &str,
+        limit: usize,
+        offset: usize,
+    ) -> Result<Vec<WarehouseStockItem>, WarehouseError> {
+        if limit == 0 {
+            return Ok(Vec::new());
+        }
+        let warehouse = warehouse.trim().to_lowercase();
+        let query = query.trim().to_lowercase();
+        let mut items = self
+            .stock_items
+            .read()
+            .await
+            .iter()
+            .filter(|item| {
+                item.on_hand_qty > 0.0
+                    && item.warehouse.trim().to_lowercase() == warehouse
+                    && (query.is_empty()
+                        || item.code.to_lowercase().contains(&query)
+                        || item.name.to_lowercase().contains(&query)
+                        || item.item_group.to_lowercase().contains(&query))
+            })
+            .cloned()
+            .collect::<Vec<_>>();
+        items.sort_by(|left, right| {
+            left.name
+                .to_lowercase()
+                .cmp(&right.name.to_lowercase())
+                .then_with(|| {
+                    left.code
+                        .to_lowercase()
+                        .cmp(&right.code.to_lowercase())
+                })
+        });
+        Ok(items
+            .into_iter()
+            .skip(offset)
+            .take(limit)
+            .collect())
+    }
+
     async fn put_warehouse_assignment(
         &self,
         assignment: WarehouseAssignment,
@@ -456,6 +542,10 @@ impl WarehouseStorePort for MemoryWarehouseStore {
             .write()
             .await
             .retain(|item| item.warehouse.trim().to_lowercase() != key);
+        self.stock_items
+            .write()
+            .await
+            .retain(|item| item.warehouse.trim().to_lowercase() != key);
         self.summary_counts.write().await.remove(&key);
         Ok(())
     }
@@ -468,6 +558,7 @@ impl WarehouseStorePort for MemoryWarehouseStore {
         let query = query.trim().to_lowercase();
         let warehouses = self.warehouses.read().await.clone();
         let assignments = self.assignments.read().await.clone();
+        let stock_items = self.stock_items.read().await.clone();
         let summary_counts = self.summary_counts.read().await.clone();
         let mut summaries = warehouses
             .into_iter()
@@ -480,10 +571,20 @@ impl WarehouseStorePort for MemoryWarehouseStore {
                     .iter()
                     .filter(|item| item.warehouse.eq_ignore_ascii_case(&warehouse.warehouse))
                     .collect::<Vec<_>>();
+                let stock_product_count = stock_items
+                    .iter()
+                    .filter(|item| {
+                        item.on_hand_qty > 0.0
+                            && item
+                                .warehouse
+                                .trim()
+                                .eq_ignore_ascii_case(&warehouse.warehouse)
+                    })
+                    .count();
                 let (product_count, reserved_count) = summary_counts
                     .get(&warehouse.warehouse.trim().to_lowercase())
                     .copied()
-                    .unwrap_or_default();
+                    .unwrap_or((stock_product_count, 0));
                 WarehouseSummary {
                     warehouse: warehouse.warehouse,
                     product_count,

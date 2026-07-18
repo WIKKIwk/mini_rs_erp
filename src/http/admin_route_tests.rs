@@ -39,7 +39,8 @@ use crate::core::returned_paint::{MemoryReturnedPaintStore, ReturnedPaintService
 use crate::core::session::manager::SessionManager;
 use crate::core::system_users::{MemorySystemUserStore, SystemUserService};
 use crate::core::warehouses::{
-    MemoryWarehouseStore, WarehouseAssignmentUpsert, WarehouseService, WarehouseUpsert,
+    MemoryWarehouseStore, WarehouseAssignmentUpsert, WarehouseService, WarehouseStockItem,
+    WarehouseUpsert,
 };
 use crate::core::werka::models::{DispatchRecord, SupplierItem};
 use crate::core::werka::ports::{WerkaHomeLookup, WerkaPortError};

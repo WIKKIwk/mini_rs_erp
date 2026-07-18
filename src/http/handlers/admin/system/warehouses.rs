@@ -185,15 +185,15 @@ pub async fn warehouse_items(
     }
 
     let items = state
-        .admin
-        .items_page_by_warehouse(
+        .warehouses
+        .warehouse_stock_items(
             warehouse,
             query.q.as_deref().unwrap_or(""),
             optional_search_limit(query.limit.as_deref(), 80, 200),
             optional_offset(query.offset.as_deref()),
         )
         .await
-        .map_err(|_| server_error("warehouse items fetch failed"))?;
+        .map_err(warehouse_error)?;
     Ok(json_response(items))
 }
 
