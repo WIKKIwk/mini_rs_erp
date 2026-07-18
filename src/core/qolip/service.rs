@@ -300,6 +300,17 @@ impl QolipService {
         self.store.location_by_id(location_id).await
     }
 
+    pub async fn location_by_qolip_code(
+        &self,
+        qolip_code: &str,
+    ) -> Result<Option<QolipLocation>, QolipError> {
+        let qolip_code = qolip_code.trim();
+        if qolip_code.is_empty() {
+            return Err(QolipError::MissingQolipCode);
+        }
+        self.store.location_by_qolip_code(qolip_code).await
+    }
+
     pub async fn issue_checkout(
         &self,
         input: QolipCheckoutCreate,

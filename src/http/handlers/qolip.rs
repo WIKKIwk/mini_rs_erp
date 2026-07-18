@@ -372,6 +372,66 @@ pub async fn location_move(
     })))
 }
 
+pub async fn scan(
+    State(state): State<AppState>,
+    method: Method,
+    headers: HeaderMap,
+    Query(query): Query<QolipCellQrLookupQuery>,
+) -> Result<Json<serde_json::Value>, (StatusCode, Json<QolipErrorResponse>)> {
+    if method != Method::GET {
+        return Err(method_not_allowed());
+    }
+    let principal = authenticated_principal(&state, &headers).await?;
+    ensure_qolip_access(&state, &principal).await?;
+    let qr = query.qr.as_deref().unwrap_or("").trim();
+    if qr.is_empty() {
+        return Err(bad_request("qr_required"));
+    }
+
+    if let Some(cell_qr) = state
+        .qolip
+        .resolve_cell_qr(qr, &principal)
+        .await
+        .map_err(qolip_error)?
+    {
+        let _ = accessible_qolip_block(&state, &principal, &cell_qr.block).await?;
+        return Ok(Json(serde_json::json!({
+            "ok": true,
+            "kind": "cell",
+            "cell_qr": cell_qr,
+        })));
+    }
+
+    let spec = state
+        .qolip
+        .product_spec_by_qolip_code(qr)
+        .await
+        .map_err(qolip_error)?
+        .ok_or_else(|| bad_request("qolip_code_not_found"))?;
+    let location = state
+        .qolip
+        .location_by_qolip_code(qr)
+        .await
+        .map_err(qolip_error)?;
+    if let Some(location) = &location {
+        let _ = accessible_qolip_block(&state, &principal, &location.block).await?;
+    }
+
+    Ok(Json(serde_json::json!({
+        "ok": true,
+        "kind": "qolip",
+        "product": {
+            "code": spec.item_code,
+            "name": spec.item_name,
+            "item_group": spec.item_group,
+            "qolip_code": spec.qolip_code,
+            "size": spec.size,
+            "has_qolip_spec": true,
+        },
+        "location": location,
+    })))
+}
+
 pub async fn cell_qr(
     State(state): State<AppState>,
     method: Method,
