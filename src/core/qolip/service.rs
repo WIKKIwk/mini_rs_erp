@@ -113,6 +113,23 @@ impl QolipService {
         self.store.put_product_spec(normalized).await
     }
 
+    pub async fn delete_product_specs(
+        &self,
+        qolip_codes: Vec<String>,
+    ) -> Result<usize, QolipError> {
+        let mut normalized = qolip_codes
+            .into_iter()
+            .map(|code| code.trim().to_string())
+            .filter(|code| !code.is_empty())
+            .collect::<Vec<_>>();
+        normalized.sort_by_key(|code| code.to_lowercase());
+        normalized.dedup_by(|left, right| left.eq_ignore_ascii_case(right));
+        if normalized.is_empty() {
+            return Err(QolipError::MissingQolipCode);
+        }
+        self.store.delete_product_specs(&normalized).await
+    }
+
     pub async fn product_spec_by_qolip_code(
         &self,
         qolip_code: &str,

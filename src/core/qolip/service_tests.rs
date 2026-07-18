@@ -21,6 +21,7 @@ async fn order_start_accepts_matching_qolip_without_location() {
             qolip_code: String::new(),
             size: 0,
             has_qolip_spec: false,
+            is_in_use: false,
         }])
         .await;
     let service = QolipService::new(store);
@@ -99,6 +100,7 @@ async fn order_start_rejects_qolip_from_another_finished_product_group() {
             qolip_code: String::new(),
             size: 0,
             has_qolip_spec: false,
+            is_in_use: false,
         }])
         .await;
     let service = QolipService::new(store);
@@ -161,6 +163,7 @@ async fn order_start_rejects_another_products_qolip_from_same_group() {
                 qolip_code: String::new(),
                 size: 0,
                 has_qolip_spec: false,
+                is_in_use: false,
             },
             QolipProduct {
                 code: "ITEM-OTHER".to_string(),
@@ -169,6 +172,7 @@ async fn order_start_rejects_another_products_qolip_from_same_group() {
                 qolip_code: String::new(),
                 size: 0,
                 has_qolip_spec: false,
+                is_in_use: false,
             },
         ])
         .await;

@@ -1,5 +1,5 @@
 use async_trait::async_trait;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use tokio::sync::RwLock;
 
 use crate::core::auth::models::Principal;
@@ -71,6 +71,14 @@ impl QolipStorePort for MemoryQolipStore {
         with_qolip_only: bool,
     ) -> Result<Vec<QolipProduct>, QolipError> {
         let query = query.trim().to_lowercase();
+        let in_use_codes = self
+            .checkouts
+            .read()
+            .await
+            .iter()
+            .filter(|checkout| checkout.status.trim().eq_ignore_ascii_case("open"))
+            .map(|checkout| checkout.qolip_code.trim().to_lowercase())
+            .collect::<BTreeSet<_>>();
         let specs = self.product_specs.read().await;
         let products = self.products.read().await;
         let mut items = Vec::new();
@@ -91,7 +99,9 @@ impl QolipStorePort for MemoryQolipStore {
                     || product.name.to_lowercase().contains(&query)
                     || product.code.to_lowercase().contains(&query);
                 if matches {
-                    items.push(product.clone());
+                    let mut item = product.clone();
+                    item.is_in_use = false;
+                    items.push(item);
                 }
                 continue;
             }
@@ -105,6 +115,8 @@ impl QolipStorePort for MemoryQolipStore {
                     item.qolip_code = spec.qolip_code.clone();
                     item.size = spec.size;
                     item.has_qolip_spec = true;
+                    item.is_in_use =
+                        in_use_codes.contains(&spec.qolip_code.trim().to_lowercase());
                     items.push(item);
                 }
             }
@@ -159,6 +171,7 @@ impl QolipStorePort for MemoryQolipStore {
                 qolip_code: spec.qolip_code.clone(),
                 size: spec.size,
                 has_qolip_spec: true,
+                is_in_use: false,
             });
         }
         drop(products);
@@ -167,6 +180,33 @@ impl QolipStorePort for MemoryQolipStore {
             .await
             .insert(spec.qolip_code.trim().to_lowercase(), spec.clone());
         Ok(spec)
+    }
+
+    async fn delete_product_specs(&self, qolip_codes: &[String]) -> Result<usize, QolipError> {
+        let normalized = qolip_codes
+            .iter()
+            .map(|code| code.trim().to_lowercase())
+            .filter(|code| !code.is_empty())
+            .collect::<BTreeSet<_>>();
+        if normalized.is_empty() {
+            return Err(QolipError::MissingQolipCode);
+        }
+        if self.checkouts.read().await.iter().any(|checkout| {
+            checkout.status.trim().eq_ignore_ascii_case("open")
+                && normalized.contains(&checkout.qolip_code.trim().to_lowercase())
+        }) {
+            return Err(QolipError::QolipInUse);
+        }
+        let mut specs = self.product_specs.write().await;
+        let before = specs.len();
+        specs.retain(|code, _| !normalized.contains(&code.trim().to_lowercase()));
+        let deleted = before - specs.len();
+        drop(specs);
+        self.locations
+            .write()
+            .await
+            .retain(|location| !normalized.contains(&location.qolip_code.trim().to_lowercase()));
+        Ok(deleted)
     }
 
     async fn locations(&self, block: &str) -> Result<Vec<QolipLocation>, QolipError> {
@@ -417,6 +457,7 @@ mod tests {
             qolip_code: String::new(),
             size: 0,
             has_qolip_spec: false,
+            is_in_use: false,
         }
     }
 
@@ -501,6 +542,71 @@ mod tests {
                 .collect::<Vec<_>>(),
             vec!["QOLIP-0001", "QOLIP-0002"]
         );
+    }
+
+    #[tokio::test]
+    async fn delete_product_specs_is_atomic_and_rejects_open_checkout() {
+        let store = MemoryQolipStore::default();
+        store
+            .seed_products(vec![product("ITEM-001", "Kross qolip")])
+            .await;
+        store
+            .put_product_spec(product_spec("ITEM-001", "Q-1"))
+            .await
+            .expect("free spec");
+        store
+            .put_product_spec(product_spec("ITEM-001", "Q-2"))
+            .await
+            .expect("used spec");
+        store
+            .put_location(location("free-location", "ITEM-001", 1))
+            .await
+            .expect("free location");
+        let mut used_location = location("used-location", "ITEM-001", 2);
+        used_location.qolip_code = "Q-2".to_string();
+        store
+            .put_location(used_location)
+            .await
+            .expect("used location");
+        let mut open_checkout = checkout("checkout-1", "used-location", "ITEM-001", "open");
+        open_checkout.qolip_code = "Q-2".to_string();
+        store
+            .issue_checkout(open_checkout)
+            .await
+            .expect("open checkout");
+
+        let products = store.products("", 20, true).await.expect("products");
+        assert!(
+            !products
+                .iter()
+                .find(|item| item.qolip_code == "Q-1")
+                .unwrap()
+                .is_in_use
+        );
+        assert!(
+            products
+                .iter()
+                .find(|item| item.qolip_code == "Q-2")
+                .unwrap()
+                .is_in_use
+        );
+
+        let error = store
+            .delete_product_specs(&["Q-1".to_string(), "Q-2".to_string()])
+            .await
+            .expect_err("batch containing open checkout must fail");
+        assert_eq!(error, QolipError::QolipInUse);
+        assert_eq!(store.products("", 20, true).await.unwrap().len(), 2);
+
+        let deleted = store
+            .delete_product_specs(&["Q-1".to_string()])
+            .await
+            .expect("delete free spec");
+        assert_eq!(deleted, 1);
+        assert!(store.location_by_qolip_code("Q-1").await.unwrap().is_none());
+        let remaining = store.products("", 20, true).await.unwrap();
+        assert_eq!(remaining.len(), 1);
+        assert_eq!(remaining[0].qolip_code, "Q-2");
     }
 
     #[tokio::test]

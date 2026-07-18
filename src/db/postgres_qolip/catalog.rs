@@ -121,7 +121,13 @@ pub(super) async fn load_products(
             items.item_group,
             COALESCE(spec.qolip_code, '') AS qolip_code,
             COALESCE(spec.size, 0) AS size,
-            spec.item_code IS NOT NULL AS has_qolip_spec
+            spec.item_code IS NOT NULL AS has_qolip_spec,
+            EXISTS (
+                SELECT 1
+                FROM mini_qolip_checkouts checkout
+                WHERE lower(checkout.qolip_code) = lower(spec.qolip_code)
+                  AND lower(checkout.status) = 'open'
+            ) AS is_in_use
         FROM mini_items items
         LEFT JOIN group_kind ON lower(items.item_group) = group_kind.group_name
         LEFT JOIN mini_qolip_product_specs spec
@@ -155,6 +161,7 @@ pub(super) async fn load_products(
             qolip_code: row.qolip_code,
             size: row.size,
             has_qolip_spec: row.has_qolip_spec,
+            is_in_use: row.is_in_use,
         })
         .collect())
 }
@@ -234,4 +241,74 @@ pub(super) async fn save_product_spec(
     .map_err(|_| QolipError::StoreFailed)?;
 
     Ok(row_to_product_spec(row))
+}
+
+pub(super) async fn delete_product_specs(
+    pool: &PgPool,
+    qolip_codes: &[String],
+) -> Result<usize, QolipError> {
+    let mut normalized = qolip_codes
+        .iter()
+        .map(|code| code.trim().to_lowercase())
+        .filter(|code| !code.is_empty())
+        .collect::<Vec<_>>();
+    normalized.sort();
+    normalized.dedup();
+    if normalized.is_empty() {
+        return Err(QolipError::MissingQolipCode);
+    }
+
+    let mut tx = pool.begin().await.map_err(|_| QolipError::StoreFailed)?;
+    for code in &normalized {
+        sqlx::query("SELECT pg_advisory_xact_lock(hashtext($1)::bigint)")
+            .bind(code)
+            .execute(&mut *tx)
+            .await
+            .map_err(|_| QolipError::StoreFailed)?;
+    }
+
+    let locked_codes = sqlx::query_scalar::<_, String>(
+        "SELECT qolip_code
+         FROM mini_qolip_product_specs
+         WHERE lower(qolip_code) = ANY($1)
+         ORDER BY lower(qolip_code)
+         FOR UPDATE",
+    )
+    .bind(&normalized)
+    .fetch_all(&mut *tx)
+    .await
+    .map_err(|_| QolipError::StoreFailed)?;
+
+    let in_use = sqlx::query_scalar::<_, bool>(
+        "SELECT EXISTS (
+             SELECT 1
+             FROM mini_qolip_checkouts
+             WHERE lower(qolip_code) = ANY($1)
+               AND lower(status) = 'open'
+         )",
+    )
+    .bind(&normalized)
+    .fetch_one(&mut *tx)
+    .await
+    .map_err(|_| QolipError::StoreFailed)?;
+    if in_use {
+        return Err(QolipError::QolipInUse);
+    }
+
+    sqlx::query("DELETE FROM mini_qolip_locations WHERE lower(qolip_code) = ANY($1)")
+        .bind(&normalized)
+        .execute(&mut *tx)
+        .await
+        .map_err(|_| QolipError::StoreFailed)?;
+    let deleted = sqlx::query(
+        "DELETE FROM mini_qolip_product_specs WHERE lower(qolip_code) = ANY($1)",
+    )
+    .bind(&normalized)
+    .execute(&mut *tx)
+    .await
+    .map_err(|_| QolipError::StoreFailed)?
+    .rows_affected() as usize;
+    debug_assert!(deleted <= locked_codes.len());
+    tx.commit().await.map_err(|_| QolipError::StoreFailed)?;
+    Ok(deleted)
 }

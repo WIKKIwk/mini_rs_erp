@@ -14,6 +14,7 @@ pub(super) struct QolipProductRow {
     pub(super) qolip_code: String,
     pub(super) size: i32,
     pub(super) has_qolip_spec: bool,
+    pub(super) is_in_use: bool,
 }
 
 #[derive(sqlx::FromRow)]

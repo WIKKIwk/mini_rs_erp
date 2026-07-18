@@ -293,6 +293,167 @@ async fn qolip_scan_distinguishes_cell_and_qolip_with_location() {
     assert_eq!(cell_body["cell_qr"]["location_label"], "B7");
 }
 
+#[tokio::test]
+async fn qolip_product_delete_is_blocked_by_open_checkout_and_removes_free_location() {
+    let mut state = test_state();
+    let store = Arc::new(crate::core::qolip::MemoryQolipStore::new());
+    store
+        .seed_blocks(vec![QolipBlock {
+            name: "A".to_string(),
+            warehouse: "Qolip ombor".to_string(),
+        }])
+        .await;
+    state.qolip = QolipService::new(store.clone());
+    let token = session_for(&state, PrincipalRole::Qolipchi, "qolipchi-delete").await;
+    let router = build_router(state);
+
+    for (item_code, qolip_code) in [("ITEM-FREE", "Q-FREE"), ("ITEM-USED", "Q-USED")] {
+        let spec = router
+            .clone()
+            .oneshot(request_with_body(
+                "POST",
+                "/v1/mobile/qolip/product-specs",
+                &token,
+                &format!(
+                    r#"{{
+                        "item_code":"{item_code}",
+                        "item_name":"{item_code}",
+                        "item_group":"Qolip",
+                        "qolip_code":"{qolip_code}",
+                        "size":42
+                    }}"#
+                ),
+            ))
+            .await
+            .expect("save product spec");
+        assert_eq!(spec.status(), StatusCode::OK);
+    }
+
+    let free_location = QolipLocation {
+        id: "free-location".to_string(),
+        block: "A".to_string(),
+        warehouse: "Qolip ombor".to_string(),
+        item_code: "ITEM-FREE".to_string(),
+        item_name: "ITEM-FREE".to_string(),
+        qolip_code: "Q-FREE".to_string(),
+        size: 42,
+        quantity: 1,
+        row_letter: "A".to_string(),
+        column_number: Some(1),
+        location_label: "A1".to_string(),
+        created_by_role: "qolipchi".to_string(),
+        created_by_ref: "qolipchi-delete".to_string(),
+        created_by_name: "Qolipchi".to_string(),
+    };
+    store
+        .put_location(free_location)
+        .await
+        .expect("save free location");
+    let used_location = QolipLocation {
+        id: "used-location".to_string(),
+        block: "A".to_string(),
+        warehouse: "Qolip ombor".to_string(),
+        item_code: "ITEM-USED".to_string(),
+        item_name: "ITEM-USED".to_string(),
+        qolip_code: "Q-USED".to_string(),
+        size: 42,
+        quantity: 1,
+        row_letter: "A".to_string(),
+        column_number: Some(2),
+        location_label: "A2".to_string(),
+        created_by_role: "qolipchi".to_string(),
+        created_by_ref: "qolipchi-delete".to_string(),
+        created_by_name: "Qolipchi".to_string(),
+    };
+    store
+        .put_location(used_location.clone())
+        .await
+        .expect("save used location");
+    let open_checkout = QolipCheckout {
+        id: "checkout-used".to_string(),
+        location_id: used_location.id.clone(),
+        block: used_location.block.clone(),
+        warehouse: used_location.warehouse.clone(),
+        item_code: used_location.item_code.clone(),
+        item_name: used_location.item_name.clone(),
+        item_group: String::new(),
+        qolip_code: used_location.qolip_code.clone(),
+        size: used_location.size,
+        quantity: 1,
+        row_letter: used_location.row_letter.clone(),
+        column_number: used_location.column_number,
+        location_label: used_location.location_label.clone(),
+        issued_to_ref: "worker-1".to_string(),
+        issued_to_name: "Worker".to_string(),
+        status: "open".to_string(),
+        issued_by_role: "qolipchi".to_string(),
+        issued_by_ref: "qolipchi-delete".to_string(),
+        issued_by_name: "Qolipchi".to_string(),
+        issued_at: String::new(),
+    };
+    store
+        .issue_checkout(open_checkout)
+        .await
+        .expect("issue used qolip");
+
+    let products = router
+        .clone()
+        .oneshot(request(
+            "GET",
+            "/v1/mobile/qolip/products?with_qolip=true&limit=20",
+            &token,
+        ))
+        .await
+        .expect("load products");
+    let products_body = json_body(products).await;
+    let used = products_body["products"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|item| item["qolip_code"] == "Q-USED")
+        .unwrap();
+    assert_eq!(used["is_in_use"], true);
+
+    let blocked = router
+        .clone()
+        .oneshot(request_with_body(
+            "DELETE",
+            "/v1/mobile/qolip/product-specs",
+            &token,
+            r#"{"qolip_codes":["Q-FREE","Q-USED"]}"#,
+        ))
+        .await
+        .expect("blocked delete");
+    assert_eq!(blocked.status(), StatusCode::CONFLICT);
+    assert_eq!(json_body(blocked).await["error"], "qolip_in_use");
+
+    let deleted = router
+        .oneshot(request_with_body(
+            "DELETE",
+            "/v1/mobile/qolip/product-specs",
+            &token,
+            r#"{"qolip_codes":["Q-FREE"]}"#,
+        ))
+        .await
+        .expect("delete free qolip");
+    assert_eq!(deleted.status(), StatusCode::OK);
+    assert_eq!(json_body(deleted).await["deleted_count"], 1);
+    assert!(
+        store
+            .location_by_qolip_code("Q-FREE")
+            .await
+            .unwrap()
+            .is_none()
+    );
+    assert!(
+        store
+            .product_spec_by_qolip_code("Q-FREE")
+            .await
+            .unwrap()
+            .is_none()
+    );
+}
+
 struct ForbiddenQolipStore {
     created: Mutex<Vec<QolipCellQr>>,
 }

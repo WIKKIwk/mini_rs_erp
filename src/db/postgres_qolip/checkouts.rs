@@ -21,6 +21,12 @@ pub(crate) async fn save_checkout_tx(
     tx: &mut Transaction<'_, Postgres>,
     checkout: &QolipCheckout,
 ) -> Result<QolipCheckout, QolipError> {
+    sqlx::query("SELECT pg_advisory_xact_lock(hashtext(lower($1))::bigint)")
+        .bind(checkout.qolip_code.trim())
+        .execute(&mut **tx)
+        .await
+        .map_err(|_| QolipError::StoreFailed)?;
+
     if !checkout.item_group.trim().is_empty() {
         let product_group = sqlx::query_scalar::<_, String>(
             "SELECT item_group

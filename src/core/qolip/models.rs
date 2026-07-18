@@ -14,6 +14,8 @@ pub struct QolipProduct {
     pub qolip_code: String,
     pub size: i32,
     pub has_qolip_spec: bool,
+    #[serde(default)]
+    pub is_in_use: bool,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -40,6 +42,12 @@ pub struct QolipProductSpecUpsert {
     pub qolip_code: String,
     #[serde(default)]
     pub size: i32,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize)]
+pub struct QolipProductSpecDelete {
+    #[serde(default)]
+    pub qolip_codes: Vec<String>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -187,6 +195,8 @@ pub enum QolipError {
     QolipCodeNotFound,
     #[error("qolip code does not match item")]
     QolipCodeMismatch,
+    #[error("qolip is in use")]
+    QolipInUse,
     #[error("size is required")]
     InvalidSize,
     #[error("quantity is required")]

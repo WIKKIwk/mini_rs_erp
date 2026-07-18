@@ -30,6 +30,13 @@ pub trait QolipStorePort: Send + Sync {
         &self,
         spec: QolipProductSpec,
     ) -> Result<QolipProductSpec, QolipError>;
+    async fn delete_product_specs(
+        &self,
+        qolip_codes: &[String],
+    ) -> Result<usize, QolipError> {
+        let _ = qolip_codes;
+        Err(QolipError::StoreFailed)
+    }
     async fn locations(&self, block: &str) -> Result<Vec<QolipLocation>, QolipError>;
     async fn location_by_id(&self, location_id: &str) -> Result<Option<QolipLocation>, QolipError>;
     async fn location_by_qolip_code(

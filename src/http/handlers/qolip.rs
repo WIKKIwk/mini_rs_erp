@@ -8,7 +8,7 @@ use crate::core::authz::Capability;
 use crate::core::gscale::ProgressLabelPrintRequest;
 use crate::core::qolip::{
     QolipBlock, QolipCellQrInput, QolipCheckoutCreate, QolipCheckoutReturn, QolipError,
-    QolipLocationMove, QolipLocationUpsert, QolipProductSpecUpsert,
+    QolipLocationMove, QolipLocationUpsert, QolipProductSpecDelete, QolipProductSpecUpsert,
 };
 use crate::core::warehouses::WarehouseUpsert;
 
@@ -116,29 +116,48 @@ pub async fn product_specs(
     headers: HeaderMap,
     body: Bytes,
 ) -> Result<Json<serde_json::Value>, (StatusCode, Json<QolipErrorResponse>)> {
-    if method != Method::POST {
+    if method != Method::POST && method != Method::DELETE {
         return Err(method_not_allowed());
     }
     let principal = authenticated_principal(&state, &headers).await?;
     ensure_qolip_access(&state, &principal).await?;
-    let input: QolipProductSpecUpsert =
-        serde_json::from_slice(&body).map_err(|_| bad_request("invalid_json"))?;
-    let spec = state
-        .qolip
-        .upsert_product_spec(input, &principal)
-        .await
-        .map_err(qolip_error)?;
-    Ok(Json(serde_json::json!({
-        "ok": true,
-        "product": {
-            "code": spec.item_code,
-            "name": spec.item_name,
-            "item_group": spec.item_group,
-            "qolip_code": spec.qolip_code,
-            "size": spec.size,
-            "has_qolip_spec": true,
-        },
-    })))
+    match method {
+        Method::POST => {
+            let input: QolipProductSpecUpsert =
+                serde_json::from_slice(&body).map_err(|_| bad_request("invalid_json"))?;
+            let spec = state
+                .qolip
+                .upsert_product_spec(input, &principal)
+                .await
+                .map_err(qolip_error)?;
+            Ok(Json(serde_json::json!({
+                "ok": true,
+                "product": {
+                    "code": spec.item_code,
+                    "name": spec.item_name,
+                    "item_group": spec.item_group,
+                    "qolip_code": spec.qolip_code,
+                    "size": spec.size,
+                    "has_qolip_spec": true,
+                    "is_in_use": false,
+                },
+            })))
+        }
+        Method::DELETE => {
+            let input: QolipProductSpecDelete =
+                serde_json::from_slice(&body).map_err(|_| bad_request("invalid_json"))?;
+            let deleted_count = state
+                .qolip
+                .delete_product_specs(input.qolip_codes)
+                .await
+                .map_err(qolip_error)?;
+            Ok(Json(serde_json::json!({
+                "ok": true,
+                "deleted_count": deleted_count,
+            })))
+        }
+        _ => Err(method_not_allowed()),
+    }
 }
 
 pub async fn locations(
