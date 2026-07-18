@@ -104,6 +104,27 @@ impl MaterialReceiptStorePort for RawMaterialStockLookup {
         Ok(self.stock.lock().await.values().cloned().collect())
     }
 
+    async fn update_raw_material_stock(
+        &self,
+        input: RawMaterialStockUpdateInput,
+    ) -> Result<RawMaterialStockEntry, GscalePortError> {
+        let mut stock = self.stock.lock().await;
+        let item = stock
+            .get_mut(&input.barcode.trim().to_ascii_uppercase())
+            .ok_or_else(|| {
+                GscalePortError::InvalidInput("raw_material_stock_not_found".to_string())
+            })?;
+        if item.status != "available" || !item.reserved_order_id.trim().is_empty() {
+            return Err(GscalePortError::InvalidInput(
+                "raw_material_stock_locked".to_string(),
+            ));
+        }
+        item.item_code = input.item_code.trim().to_string();
+        item.item_name = input.item_name.trim().to_string();
+        item.qty = input.qty;
+        Ok(item.clone())
+    }
+
     async fn mark_raw_material_stock_in_use(
         &self,
         barcodes: &[String],

@@ -452,6 +452,89 @@ async fn material_taminotchi_can_list_raw_material_stock_for_assignment() {
 }
 
 #[tokio::test]
+async fn material_taminotchi_can_correct_available_raw_material_without_changing_identity() {
+    let material_store = Arc::new(RawMaterialStockLookup::default());
+    let mut state = test_state();
+    state.gscale = GscaleService::new().with_receipt_store(material_store.clone());
+    state
+        .admin
+        .upsert_role_assignment(crate::core::authz::RoleAssignmentUpsert {
+            principal_role: PrincipalRole::MaterialTaminotchi,
+            principal_ref: "material-stock-edit".to_string(),
+            role_id: "material_taminotchi".to_string(),
+            assigned_apparatus: Vec::new(),
+            assigned_item_groups: vec!["Kraska".to_string()],
+        })
+        .await
+        .expect("material stock edit role");
+    assign_warehouse_to_principal(
+        &state,
+        PrincipalRole::MaterialTaminotchi,
+        "material-stock-edit",
+        "Kalidor",
+    )
+    .await;
+    let token = session_for(
+        &state,
+        PrincipalRole::MaterialTaminotchi,
+        "material-stock-edit",
+    )
+    .await;
+    let admin_token = session(&state, PrincipalRole::Admin).await;
+    let router = build_router(state);
+
+    let admin_edit = router
+        .clone()
+        .oneshot(request_with_body(
+            "PUT",
+            "/v1/mobile/admin/raw-material-stock",
+            &admin_token,
+            r#"{"barcode":"30AA","item_code":"INK-WHITE","qty":10.5}"#,
+        ))
+        .await
+        .expect("admin raw stock correction");
+    assert_eq!(admin_edit.status(), StatusCode::FORBIDDEN);
+
+    let response = router
+        .clone()
+        .oneshot(request_with_body(
+            "PUT",
+            "/v1/mobile/admin/raw-material-stock",
+            &token,
+            r#"{"barcode":"30AA","item_code":"INK-WHITE","qty":10.5}"#,
+        ))
+        .await
+        .expect("raw stock correction");
+
+    let status = response.status();
+    let body = json_body(response).await;
+    assert_eq!(status, StatusCode::OK, "{body:?}");
+    assert_eq!(body["item_code"], "INK-WHITE");
+    assert_eq!(body["item_name"], "White ink");
+    assert_eq!(body["qty"], 10.5);
+    assert_eq!(body["barcode"], "30AA");
+    assert_eq!(body["source_receipt_id"], "GSR-30AA");
+
+    material_store
+        .set_stock_status("30AA", "reserved", "zakaz-locked")
+        .await;
+    let locked = router
+        .oneshot(request_with_body(
+            "PUT",
+            "/v1/mobile/admin/raw-material-stock",
+            &token,
+            r#"{"barcode":"30AA","item_code":"INK-BLACK","qty":9}"#,
+        ))
+        .await
+        .expect("locked raw stock correction");
+    assert_eq!(locked.status(), StatusCode::CONFLICT);
+    assert_eq!(
+        json_body(locked).await["error"],
+        "raw_material_stock_locked"
+    );
+}
+
+#[tokio::test]
 async fn material_taminotchi_raw_material_stock_hides_unassigned_warehouse() {
     let mut state = test_state();
     state.gscale =

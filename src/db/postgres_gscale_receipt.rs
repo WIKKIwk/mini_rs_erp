@@ -5,6 +5,7 @@ use sqlx::{PgPool, Postgres, Transaction};
 
 use crate::core::gscale::models::{
     CreateMaterialReceiptDraftInput, MaterialReceiptDraft, RawMaterialStockEntry,
+    RawMaterialStockUpdateInput,
 };
 use crate::core::gscale::ports::{GscalePortError, MaterialReceiptStorePort};
 use crate::core::quantity::positive_erp_quantity;
@@ -189,6 +190,135 @@ impl MaterialReceiptStorePort for PostgresGscaleReceiptStore {
         .await
         .map(|rows| rows.into_iter().map(row_to_stock).collect())
         .map_err(|error| GscalePortError::StoreWrite(error.to_string()))
+    }
+
+    async fn update_raw_material_stock(
+        &self,
+        input: RawMaterialStockUpdateInput,
+    ) -> Result<RawMaterialStockEntry, GscalePortError> {
+        let barcode = input.barcode.trim();
+        let item_code = input.item_code.trim();
+        let item_name = input.item_name.trim();
+        let qty = positive_erp_quantity(input.qty).ok_or_else(|| {
+            GscalePortError::InvalidInput("raw_material_stock_qty_invalid".to_string())
+        })?;
+        if barcode.is_empty() || item_code.is_empty() || item_name.is_empty() {
+            return Err(GscalePortError::InvalidInput(
+                "raw_material_stock_update_invalid".to_string(),
+            ));
+        }
+
+        let mut tx = self
+            .pool
+            .begin()
+            .await
+            .map_err(|error| GscalePortError::StoreWrite(error.to_string()))?;
+        let previous = sqlx::query_as::<_, RawMaterialStockRow>(
+            "SELECT id, warehouse, item_code, item_name, barcode,
+                    qty::float8 AS qty, uom,
+                    status, reserved_order_id, source_receipt_id
+             FROM mini_raw_material_stock
+             WHERE lower(barcode) = lower($1)
+             FOR UPDATE",
+        )
+        .bind(barcode)
+        .fetch_optional(&mut *tx)
+        .await
+        .map_err(|error| GscalePortError::StoreWrite(error.to_string()))?
+        .ok_or_else(|| {
+            GscalePortError::InvalidInput("raw_material_stock_not_found".to_string())
+        })?;
+
+        let assignment_exists = sqlx::query_scalar::<_, bool>(
+            "SELECT EXISTS(
+                 SELECT 1
+                 FROM mini_raw_material_assignments
+                 WHERE lower(barcode) = lower($1)
+             )",
+        )
+        .bind(barcode)
+        .fetch_one(&mut *tx)
+        .await
+        .map_err(|error| GscalePortError::StoreWrite(error.to_string()))?;
+        if !previous.status.trim().eq_ignore_ascii_case("available")
+            || !previous.reserved_order_id.trim().is_empty()
+            || assignment_exists
+        {
+            return Err(GscalePortError::InvalidInput(
+                "raw_material_stock_locked".to_string(),
+            ));
+        }
+
+        let updated = sqlx::query_as::<_, RawMaterialStockRow>(
+            "UPDATE mini_raw_material_stock
+             SET item_code = $2,
+                 item_name = $3,
+                 qty = ($4::double precision)::numeric(24,9),
+                 payload_json = payload_json || jsonb_build_object(
+                     'item_code', $2::text,
+                     'item_name', $3::text,
+                     'qty', ($4::double precision)::numeric(24,9),
+                     'corrected_by_role', $5::text,
+                     'corrected_by_ref', $6::text,
+                     'corrected_by_display_name', $7::text,
+                     'corrected_at', now()
+                 ),
+                 updated_at = now()
+             WHERE lower(barcode) = lower($1)
+             RETURNING id, warehouse, item_code, item_name, barcode,
+                       qty::float8 AS qty, uom,
+                       status, reserved_order_id, source_receipt_id",
+        )
+        .bind(barcode)
+        .bind(item_code)
+        .bind(item_name)
+        .bind(qty)
+        .bind(input.actor_role.trim())
+        .bind(input.actor_ref.trim())
+        .bind(input.actor_display_name.trim())
+        .fetch_one(&mut *tx)
+        .await
+        .map_err(|error| GscalePortError::StoreWrite(error.to_string()))?;
+
+        sqlx::query(
+            "UPDATE mini_gscale_receipts
+             SET item_code = $2,
+                 qty = ($3::double precision)::numeric(24,9),
+                 payload_json = payload_json || jsonb_build_object(
+                     'item_code', $2::text,
+                     'item_name', $4::text,
+                     'qty', ($3::double precision)::numeric(24,9),
+                     'corrected_by_role', $5::text,
+                     'corrected_by_ref', $6::text,
+                     'corrected_by_display_name', $7::text,
+                     'corrected_at', now()
+                 ),
+                 updated_at = now()
+             WHERE lower(barcode) = lower($1)
+               AND ($8 = '' OR name = $8)",
+        )
+        .bind(barcode)
+        .bind(item_code)
+        .bind(qty)
+        .bind(item_name)
+        .bind(input.actor_role.trim())
+        .bind(input.actor_ref.trim())
+        .bind(input.actor_display_name.trim())
+        .bind(previous.source_receipt_id.trim())
+        .execute(&mut *tx)
+        .await
+        .map_err(|error| GscalePortError::StoreWrite(error.to_string()))?;
+
+        insert_raw_material_event_tx(
+            &mut tx,
+            raw_material_stock_correction_event(&previous, &updated, &input),
+        )
+        .await
+        .map_err(|error| GscalePortError::StoreWrite(error.to_string()))?;
+        tx.commit()
+            .await
+            .map_err(|error| GscalePortError::StoreWrite(error.to_string()))?;
+        Ok(row_to_stock(updated))
     }
 
     async fn mark_raw_material_stock_in_use(
@@ -586,6 +716,66 @@ fn row_to_stock(row: RawMaterialStockRow) -> RawMaterialStockEntry {
         status: row.status,
         reserved_order_id: row.reserved_order_id,
         source_receipt_id: row.source_receipt_id,
+    }
+}
+
+fn raw_material_stock_correction_event(
+    previous: &RawMaterialStockRow,
+    updated: &RawMaterialStockRow,
+    input: &RawMaterialStockUpdateInput,
+) -> RawMaterialEventDraft {
+    let random: [u8; 16] = rand::random();
+    let owner_is_material = input.actor_role.trim() == "material_taminotchi";
+    RawMaterialEventDraft {
+        idempotency_key: format!(
+            "stock_corrected:{}",
+            data_encoding::HEXLOWER.encode(&random)
+        ),
+        event_type: "stock_corrected".to_string(),
+        warehouse: updated.warehouse.trim().to_string(),
+        barcode: updated.barcode.trim().to_string(),
+        item_code: updated.item_code.trim().to_string(),
+        item_name: updated.item_name.trim().to_string(),
+        qty_delta: updated.qty - previous.qty,
+        uom: updated.uom.trim().to_string(),
+        stock_status_before: Some(previous.status.trim().to_string()),
+        stock_status_after: Some(updated.status.trim().to_string()),
+        order_id: None,
+        apparatus: None,
+        actor_role: input.actor_role.trim().to_string(),
+        actor_ref: input.actor_ref.trim().to_string(),
+        actor_display_name: input.actor_display_name.trim().to_string(),
+        owner_role: if owner_is_material {
+            input.actor_role.trim().to_string()
+        } else {
+            String::new()
+        },
+        owner_ref: if owner_is_material {
+            input.actor_ref.trim().to_string()
+        } else {
+            String::new()
+        },
+        owner_display_name: if owner_is_material {
+            input.actor_display_name.trim().to_string()
+        } else {
+            String::new()
+        },
+        source_type: "stock_correction".to_string(),
+        source_id: updated.source_receipt_id.trim().to_string(),
+        source_line_ref: Some(updated.barcode.trim().to_string()),
+        correlation_id: None,
+        payload_json: serde_json::json!({
+            "stock_id": updated.id.trim(),
+            "source_receipt_id": updated.source_receipt_id.trim(),
+            "previous_item_code": previous.item_code.trim(),
+            "previous_item_name": previous.item_name.trim(),
+            "previous_qty": previous.qty,
+            "item_code": updated.item_code.trim(),
+            "item_name": updated.item_name.trim(),
+            "qty": updated.qty,
+            "barcode_unchanged": true,
+            "source_receipt_id_unchanged": true,
+        }),
     }
 }
 

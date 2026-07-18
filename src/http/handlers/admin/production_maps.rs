@@ -4,7 +4,9 @@ use crate::core::calculate_orders::{
     CalculateOrderError, CalculateOrderTemplate, owner_key, validate_template,
 };
 use crate::core::formula::{CalculateRequest, LayerInput, calculate};
-use crate::core::gscale::models::{ProgressLabelPrintRequest, RawMaterialStockEntry};
+use crate::core::gscale::models::{
+    ProgressLabelPrintRequest, RawMaterialStockEntry, RawMaterialStockUpdateInput,
+};
 use crate::core::production_map::{
     ApparatusMaterialRuleUpsert, ApparatusQueuePolicy, CompletionRequestDecision,
     MaterialScanProgressAction, OrderProgressBatchWipStatus, ProductionMapBatchMoveRequest,

@@ -22,8 +22,32 @@ async fn raw_material_routes_assign_and_require_scan_for_queue_start() {
         })
         .await
         .expect("aparatchi assignment");
+    state
+        .admin
+        .upsert_role_assignment(crate::core::authz::RoleAssignmentUpsert {
+            principal_role: PrincipalRole::MaterialTaminotchi,
+            principal_ref: "material-raw-route".to_string(),
+            role_id: "material_taminotchi".to_string(),
+            assigned_apparatus: Vec::new(),
+            assigned_item_groups: vec!["Kraska".to_string()],
+        })
+        .await
+        .expect("material assignment");
+    assign_warehouse_to_principal(
+        &state,
+        PrincipalRole::MaterialTaminotchi,
+        "material-raw-route",
+        "Kalidor",
+    )
+    .await;
     let token = session(&state, PrincipalRole::Admin).await;
     let worker_token = session_for(&state, PrincipalRole::Aparatchi, "worker-raw-route").await;
+    let material_token = session_for(
+        &state,
+        PrincipalRole::MaterialTaminotchi,
+        "material-raw-route",
+    )
+    .await;
     let mut warehouse_events = state.warehouse_events.subscribe();
     let router = build_router(state);
 
@@ -120,6 +144,22 @@ async fn raw_material_routes_assign_and_require_scan_for_queue_start() {
     assert_eq!(warehouse_event.event, "warehouse.updated");
     assert_eq!(warehouse_event.warehouse, "Kalidor");
     assert_eq!(warehouse_event.reason, "raw_material_assignment");
+
+    let assigned_edit = router
+        .clone()
+        .oneshot(request_with_body(
+            "PUT",
+            "/v1/mobile/admin/raw-material-stock",
+            &material_token,
+            r#"{"barcode":"30AA","item_code":"INK-WHITE","qty":10}"#,
+        ))
+        .await
+        .expect("assigned raw stock correction");
+    assert_eq!(assigned_edit.status(), StatusCode::CONFLICT);
+    assert_eq!(
+        json_body(assigned_edit).await["error"],
+        "raw_material_stock_locked"
+    );
 
     let duplicate_same_order = router
         .clone()
