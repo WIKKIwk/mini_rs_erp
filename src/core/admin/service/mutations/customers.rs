@@ -1,5 +1,8 @@
 use super::super::helpers::*;
 use super::super::*;
+use crate::core::admin::item_customer_policy::{
+    FINISHED_GOODS_CUSTOMER_REQUIRED, item_group_requires_customer,
+};
 
 impl AdminService {
     pub async fn create_customer(
@@ -63,8 +66,23 @@ impl AdminService {
         if state.removed {
             return Err(AdminPortError::NotFound);
         }
+        let item_code = item_code.trim();
+        let detail = self.item_detail(item_code).await?;
+        let groups = self.item_group_tree().await?;
+        let removes_existing_assignment = detail
+            .customers
+            .iter()
+            .any(|customer| customer.ref_.trim().eq_ignore_ascii_case(&entry.ref_));
+        if removes_existing_assignment
+            && detail.customers.len() <= 1
+            && item_group_requires_customer(&detail.item_group, &groups)
+        {
+            return Err(AdminPortError::InvalidInput(
+                FINISHED_GOODS_CUSTOMER_REQUIRED.to_string(),
+            ));
+        }
         self.write_port()?
-            .unassign_customer_item(&entry.ref_, item_code.trim())
+            .unassign_customer_item_guarded(&entry.ref_, item_code)
             .await?;
         self.customer_detail(&entry.ref_).await
     }

@@ -2,7 +2,9 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 
-use crate::core::admin::models::{AdminDirectoryEntry, AdminItemGroup, AdminWarehouse};
+use crate::core::admin::models::{
+    AdminDirectoryEntry, AdminItemDetail, AdminItemGroup, AdminWarehouse,
+};
 use crate::core::admin::ports::{AdminPortError, AdminReadPort, AdminWritePort};
 use crate::core::werka::models::SupplierItem;
 use crate::db::postgres::PostgresConfig;
@@ -141,18 +143,6 @@ impl AdminReadPort for AdminCatalogOverlay {
         self.catalog.items_page(query, limit, offset).await
     }
 
-    async fn items_page_by_warehouse(
-        &self,
-        warehouse: &str,
-        query: &str,
-        limit: usize,
-        offset: usize,
-    ) -> Result<Vec<SupplierItem>, AdminPortError> {
-        self.catalog
-            .items_page_by_warehouse(warehouse, query, limit, offset)
-            .await
-    }
-
     async fn items_page_by_group(
         &self,
         group: &str,
@@ -170,6 +160,10 @@ impl AdminReadPort for AdminCatalogOverlay {
         item_codes: &[String],
     ) -> Result<Vec<SupplierItem>, AdminPortError> {
         self.catalog.items_by_codes(item_codes).await
+    }
+
+    async fn item_detail(&self, item_code: &str) -> Result<AdminItemDetail, AdminPortError> {
+        self.catalog.item_detail(item_code).await
     }
 
     async fn item_groups(&self, query: &str, limit: usize) -> Result<Vec<String>, AdminPortError> {
@@ -207,10 +201,11 @@ impl AdminReadPort for AdminCatalogOverlay {
     ) -> Result<Vec<SupplierItem>, AdminPortError> {
         match &self.customer_store {
             Some(store) => store.customer_items(customer_ref, query, limit).await,
-            None => self
-                .admin_store
-                .customer_items(customer_ref, query, limit)
-                .await,
+            None => {
+                self.admin_store
+                    .customer_items(customer_ref, query, limit)
+                    .await
+            }
         }
     }
 }
@@ -317,12 +312,21 @@ impl AdminWritePort for AdminCatalogOverlay {
         ref_: &str,
         item_code: &str,
     ) -> Result<(), AdminPortError> {
+        self.unassign_customer_item_guarded(ref_, item_code).await
+    }
+
+    async fn unassign_customer_item_guarded(
+        &self,
+        ref_: &str,
+        item_code: &str,
+    ) -> Result<(), AdminPortError> {
         match &self.customer_store {
-            Some(store) => store.unassign_customer_item(ref_, item_code).await,
-            None => self
-                .admin_store
-                .unassign_customer_item(ref_, item_code)
-                .await,
+            Some(store) => store.unassign_customer_item_guarded(ref_, item_code).await,
+            None => {
+                self.admin_store
+                    .unassign_customer_item_guarded(ref_, item_code)
+                    .await
+            }
         }
     }
 
@@ -341,6 +345,67 @@ impl AdminWritePort for AdminCatalogOverlay {
         Ok(item)
     }
 
+    async fn create_item_with_customer(
+        &self,
+        code: &str,
+        name: &str,
+        uom: &str,
+        item_group: &str,
+        customer_ref: Option<&str>,
+    ) -> Result<SupplierItem, AdminPortError> {
+        let item = self
+            .catalog
+            .create_item_with_customer(code, name, uom, item_group, customer_ref)
+            .await?;
+        if let Err(error) = self.sync_item_to_admin_store(&item).await {
+            tracing::warn!(?error, "item create JSON projection sync failed");
+        }
+        Ok(item)
+    }
+
+    async fn update_item(
+        &self,
+        original_code: &str,
+        code: &str,
+        name: &str,
+    ) -> Result<AdminItemDetail, AdminPortError> {
+        let detail = self.catalog.update_item(original_code, code, name).await?;
+        match self
+            .admin_store
+            .update_item(original_code, &detail.code, &detail.name)
+            .await
+        {
+            Ok(_) => {}
+            Err(AdminPortError::NotFound) => {
+                let item = SupplierItem {
+                    code: detail.code.clone(),
+                    name: detail.name.clone(),
+                    uom: detail.uom.clone(),
+                    warehouse: String::new(),
+                    item_group: detail.item_group.clone(),
+                };
+                if let Err(error) = self.sync_item_to_admin_store(&item).await {
+                    tracing::warn!(?error, "item update JSON projection sync failed");
+                }
+            }
+            Err(error) => {
+                tracing::warn!(?error, "item update JSON projection sync failed");
+            }
+        }
+        Ok(detail)
+    }
+
+    async fn delete_item(&self, code: &str) -> Result<(), AdminPortError> {
+        self.catalog.delete_item(code).await?;
+        match self.admin_store.delete_item(code).await {
+            Ok(()) | Err(AdminPortError::NotFound) => Ok(()),
+            Err(error) => {
+                tracing::warn!(?error, item_code = %code, "item delete JSON projection sync failed");
+                Ok(())
+            }
+        }
+    }
+
     async fn create_item_group(
         &self,
         name: &str,
@@ -351,9 +416,13 @@ impl AdminWritePort for AdminCatalogOverlay {
             .catalog
             .create_item_group(name, parent, is_group)
             .await?;
-        self.admin_store
+        if let Err(error) = self
+            .admin_store
             .create_item_group(&group.name, &group.parent_item_group, group.is_group)
-            .await?;
+            .await
+        {
+            tracing::warn!(?error, "item group JSON projection sync failed");
+        }
         Ok(group)
     }
 
@@ -362,7 +431,15 @@ impl AdminWritePort for AdminCatalogOverlay {
         name: &str,
         parent: &str,
     ) -> Result<AdminItemGroup, AdminPortError> {
-        self.catalog.move_item_group_parent(name, parent).await
+        let group = self.catalog.move_item_group_parent(name, parent).await?;
+        if let Err(error) = self
+            .admin_store
+            .move_item_group_parent(&group.name, &group.parent_item_group)
+            .await
+        {
+            tracing::warn!(?error, "item group parent JSON projection sync failed");
+        }
+        Ok(group)
     }
 
     async fn update_item_group(
@@ -371,6 +448,31 @@ impl AdminWritePort for AdminCatalogOverlay {
         item_group: &str,
     ) -> Result<(), AdminPortError> {
         self.catalog.update_item_group(item_code, item_group).await
+    }
+
+    async fn update_item_groups_bulk(
+        &self,
+        item_codes: &[String],
+        item_group: &str,
+    ) -> Result<Vec<String>, AdminPortError> {
+        let updated = self
+            .catalog
+            .update_item_groups_bulk(item_codes, item_group)
+            .await?;
+        for item_code in &updated {
+            if let Err(error) = self
+                .admin_store
+                .update_item_group(item_code, item_group)
+                .await
+            {
+                tracing::warn!(
+                    ?error,
+                    %item_code,
+                    "item group JSON projection sync failed"
+                );
+            }
+        }
+        Ok(updated)
     }
 }
 

@@ -1,12 +1,11 @@
-use crate::core::admin::models::AdminItemGroup;
-use crate::core::werka::models::SupplierItem;
+use crate::core::admin::models::{AdminItemDetail, AdminItemGroup};
+use crate::core::werka::models::{CustomerDirectoryEntry, SupplierItem};
 
 #[derive(sqlx::FromRow)]
 pub(super) struct ItemRow {
     code: String,
     name: String,
     uom: String,
-    warehouse: String,
     item_group: String,
 }
 
@@ -16,8 +15,58 @@ impl ItemRow {
             code: self.code,
             name: self.name,
             uom: self.uom,
-            warehouse: self.warehouse,
+            warehouse: String::new(),
             item_group: self.item_group,
+        }
+    }
+}
+
+#[derive(sqlx::FromRow)]
+pub(super) struct ItemDetailRow {
+    code: String,
+    name: String,
+    uom: String,
+    item_group: String,
+    created_at_unix: i64,
+    updated_at_unix: i64,
+}
+
+impl ItemDetailRow {
+    pub(super) fn item_group(&self) -> &str {
+        &self.item_group
+    }
+
+    pub(super) fn into_detail(
+        self,
+        customers: Vec<CustomerDirectoryEntry>,
+        is_finished_goods: bool,
+    ) -> AdminItemDetail {
+        AdminItemDetail {
+            code: self.code,
+            name: self.name,
+            uom: self.uom,
+            item_group: self.item_group,
+            is_finished_goods,
+            created_at_unix: self.created_at_unix,
+            updated_at_unix: self.updated_at_unix,
+            customers,
+        }
+    }
+}
+
+#[derive(sqlx::FromRow)]
+pub(super) struct ItemCustomerRow {
+    customer_ref: String,
+    name: String,
+    phone: String,
+}
+
+impl ItemCustomerRow {
+    pub(super) fn into_customer(self) -> CustomerDirectoryEntry {
+        CustomerDirectoryEntry {
+            ref_: self.customer_ref,
+            name: self.name,
+            phone: self.phone,
         }
     }
 }

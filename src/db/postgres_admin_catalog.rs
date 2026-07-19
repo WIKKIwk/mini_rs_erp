@@ -1,13 +1,19 @@
 use async_trait::async_trait;
 use sqlx::PgPool;
 
-use crate::core::admin::models::{AdminDirectoryEntry, AdminItemGroup, AdminWarehouse};
+use crate::core::admin::item_customer_policy::FINISHED_GOODS_CUSTOMER_REQUIRED;
+use crate::core::admin::models::{
+    AdminDirectoryEntry, AdminItemDetail, AdminItemGroup, AdminWarehouse,
+};
 use crate::core::admin::ports::{AdminPortError, AdminReadPort, AdminWritePort};
 use crate::core::werka::models::SupplierItem;
 
+pub(crate) mod customer_policy;
 mod helpers;
+mod item_delete_safety;
 mod rows;
 
+use self::customer_policy::{customerless_items_in_subtree, lock_item_customer_policy};
 use self::rows::{ItemGroupRow, ItemRow};
 
 #[derive(Clone)]
@@ -57,7 +63,7 @@ impl AdminReadPort for PostgresAdminCatalogStore {
     ) -> Result<Vec<SupplierItem>, AdminPortError> {
         let needle = format!("%{}%", query.trim().to_lowercase());
         sqlx::query_as::<_, ItemRow>(
-            "SELECT code, name, uom, warehouse, item_group
+            "SELECT code, name, uom, item_group
              FROM mini_items
              WHERE $1 = '%%'
                 OR lower(code) LIKE $1
@@ -66,96 +72,6 @@ impl AdminReadPort for PostgresAdminCatalogStore {
              ORDER BY lower(code)
              LIMIT $2 OFFSET $3",
         )
-        .bind(needle)
-        .bind(limit.min(500) as i64)
-        .bind(offset as i64)
-        .fetch_all(&self.pool)
-        .await
-        .map(|rows| rows.into_iter().map(ItemRow::into_item).collect())
-        .map_err(|_| AdminPortError::LookupFailed)
-    }
-
-    async fn items_page_by_warehouse(
-        &self,
-        warehouse: &str,
-        query: &str,
-        limit: usize,
-        offset: usize,
-    ) -> Result<Vec<SupplierItem>, AdminPortError> {
-        let warehouse = warehouse.trim();
-        if warehouse.is_empty() || limit == 0 {
-            return Ok(Vec::new());
-        }
-        let needle = format!("%{}%", query.trim().to_lowercase());
-        sqlx::query_as::<_, ItemRow>(
-            r#"
-            WITH RECURSIVE group_path(group_name, node_name, parent_name) AS (
-                SELECT lower(name), lower(name), lower(parent_item_group)
-                FROM mini_item_groups
-                UNION ALL
-                SELECT group_path.group_name, lower(parent.name), lower(parent.parent_item_group)
-                FROM group_path
-                JOIN mini_item_groups parent ON lower(parent.name) = group_path.parent_name
-                WHERE group_path.parent_name <> ''
-            ),
-            group_kind AS (
-                SELECT
-                    group_name,
-                    bool_or(node_name LIKE '%homashyo%' OR node_name LIKE '%xomashyo%') AS is_raw,
-                    bool_or(node_name LIKE '%tayyor%' AND node_name LIKE '%mahsulot%') AS is_finished
-                FROM group_path
-                GROUP BY group_name
-            ),
-            warehouse_kind AS (
-                SELECT
-                    (
-                        SELECT name
-                        FROM mini_warehouses
-                        WHERE lower(name) LIKE '%homashyo%' OR lower(name) LIKE '%xomashyo%'
-                        ORDER BY lower(name)
-                        LIMIT 1
-                    ) AS raw_warehouse,
-                    (
-                        SELECT name
-                        FROM mini_warehouses
-                        WHERE lower(name) LIKE '%tayyor%' AND lower(name) LIKE '%mahsulot%'
-                        ORDER BY lower(name)
-                        LIMIT 1
-                    ) AS finished_warehouse
-            ),
-            item_map AS (
-                SELECT
-                    items.code,
-                    items.name,
-                    items.uom,
-                    items.item_group,
-                    COALESCE(
-                        NULLIF(btrim(items.warehouse), ''),
-                        CASE
-                            WHEN group_kind.is_raw THEN warehouse_kind.raw_warehouse
-                            WHEN group_kind.is_finished THEN warehouse_kind.finished_warehouse
-                            ELSE ''
-                        END,
-                        ''
-                    ) AS warehouse
-                FROM mini_items items
-                LEFT JOIN group_kind ON lower(items.item_group) = group_kind.group_name
-                CROSS JOIN warehouse_kind
-            )
-            SELECT code, name, uom, warehouse, item_group
-            FROM item_map
-            WHERE lower(warehouse) = lower($1)
-              AND (
-                    $2 = '%%'
-                    OR lower(code) LIKE $2
-                    OR lower(name) LIKE $2
-                    OR lower(item_group) LIKE $2
-              )
-            ORDER BY lower(code)
-            LIMIT $3 OFFSET $4
-            "#,
-        )
-        .bind(warehouse)
         .bind(needle)
         .bind(limit.min(500) as i64)
         .bind(offset as i64)
@@ -178,7 +94,7 @@ impl AdminReadPort for PostgresAdminCatalogStore {
         }
         let needle = format!("%{}%", query.trim().to_lowercase());
         sqlx::query_as::<_, ItemRow>(
-            "SELECT code, name, uom, warehouse, item_group
+            "SELECT code, name, uom, item_group
              FROM mini_items
              WHERE lower(item_group) = lower($1)
                AND (
@@ -213,7 +129,7 @@ impl AdminReadPort for PostgresAdminCatalogStore {
             return Ok(Vec::new());
         }
         sqlx::query_as::<_, ItemRow>(
-            "SELECT code, name, uom, warehouse, item_group
+            "SELECT code, name, uom, item_group
              FROM mini_items
              WHERE lower(code) = ANY($1)
              ORDER BY lower(code)",
@@ -223,6 +139,10 @@ impl AdminReadPort for PostgresAdminCatalogStore {
         .await
         .map(|rows| rows.into_iter().map(ItemRow::into_item).collect())
         .map_err(|_| AdminPortError::LookupFailed)
+    }
+
+    async fn item_detail(&self, item_code: &str) -> Result<AdminItemDetail, AdminPortError> {
+        self.load_item_detail(item_code).await
     }
 
     async fn item_groups(&self, query: &str, limit: usize) -> Result<Vec<String>, AdminPortError> {
@@ -266,12 +186,14 @@ impl AdminReadPort for PostgresAdminCatalogStore {
         .await
         .map(|rows| {
             rows.into_iter()
-                .map(|(warehouse, company, is_group, parent_warehouse)| AdminWarehouse {
-                    warehouse,
-                    company,
-                    is_group,
-                    parent_warehouse,
-                })
+                .map(
+                    |(warehouse, company, is_group, parent_warehouse)| AdminWarehouse {
+                        warehouse,
+                        company,
+                        is_group,
+                        parent_warehouse,
+                    },
+                )
                 .collect()
         })
         .map_err(|_| AdminPortError::LookupFailed)
@@ -376,14 +298,32 @@ impl AdminWritePort for PostgresAdminCatalogStore {
         uom: &str,
         item_group: &str,
     ) -> Result<SupplierItem, AdminPortError> {
-        self.upsert_item(&SupplierItem {
-            code: code.trim().to_string(),
-            name: name.trim().to_string(),
-            uom: uom.trim().to_string(),
-            warehouse: String::new(),
-            item_group: item_group.trim().to_string(),
-        })
-        .await
+        self.insert_item(code, name, uom, item_group).await
+    }
+
+    async fn create_item_with_customer(
+        &self,
+        code: &str,
+        name: &str,
+        uom: &str,
+        item_group: &str,
+        customer_ref: Option<&str>,
+    ) -> Result<SupplierItem, AdminPortError> {
+        self.insert_item_with_customer(code, name, uom, item_group, customer_ref)
+            .await
+    }
+
+    async fn update_item(
+        &self,
+        original_code: &str,
+        code: &str,
+        name: &str,
+    ) -> Result<AdminItemDetail, AdminPortError> {
+        self.update_item_identity(original_code, code, name).await
+    }
+
+    async fn delete_item(&self, code: &str) -> Result<(), AdminPortError> {
+        self.delete_item_safely(code).await
     }
 
     async fn create_item_group(
@@ -406,6 +346,12 @@ impl AdminWritePort for PostgresAdminCatalogStore {
         name: &str,
         parent: &str,
     ) -> Result<AdminItemGroup, AdminPortError> {
+        let mut transaction = self
+            .pool
+            .begin()
+            .await
+            .map_err(|_| AdminPortError::LookupFailed)?;
+        lock_item_customer_policy(&mut transaction).await?;
         let affected = sqlx::query(
             "UPDATE mini_item_groups
              SET parent_item_group = $2, updated_at = now()
@@ -413,13 +359,23 @@ impl AdminWritePort for PostgresAdminCatalogStore {
         )
         .bind(name.trim())
         .bind(parent.trim())
-        .execute(&self.pool)
+        .execute(&mut *transaction)
         .await
         .map_err(|_| AdminPortError::LookupFailed)?
         .rows_affected();
         if affected == 0 {
             return Err(AdminPortError::NotFound);
         }
+        let customerless = customerless_items_in_subtree(&mut transaction, name).await?;
+        if !customerless.is_empty() {
+            return Err(AdminPortError::InvalidInput(
+                FINISHED_GOODS_CUSTOMER_REQUIRED.to_string(),
+            ));
+        }
+        transaction
+            .commit()
+            .await
+            .map_err(|_| AdminPortError::LookupFailed)?;
         Ok(AdminItemGroup {
             name: name.trim().to_string(),
             item_group_name: name.trim().to_string(),
@@ -433,23 +389,21 @@ impl AdminWritePort for PostgresAdminCatalogStore {
         item_code: &str,
         item_group: &str,
     ) -> Result<(), AdminPortError> {
-        self.ensure_item_group(item_group).await?;
-        let affected = sqlx::query(
-            "UPDATE mini_items
-             SET item_group = $2,
-                 payload_json = jsonb_set(payload_json, '{item_group}', to_jsonb($2::text), true),
-                 updated_at = now()
-             WHERE code = $1",
-        )
-        .bind(item_code.trim())
-        .bind(item_group.trim())
-        .execute(&self.pool)
-        .await
-        .map_err(|_| AdminPortError::LookupFailed)?
-        .rows_affected();
-        if affected == 0 {
+        let updated = self
+            .update_item_groups_bulk_atomic(&[item_code.trim().to_string()], item_group)
+            .await?;
+        if updated.is_empty() {
             return Err(AdminPortError::NotFound);
         }
         Ok(())
+    }
+
+    async fn update_item_groups_bulk(
+        &self,
+        item_codes: &[String],
+        item_group: &str,
+    ) -> Result<Vec<String>, AdminPortError> {
+        self.update_item_groups_bulk_atomic(item_codes, item_group)
+            .await
     }
 }

@@ -1,4 +1,5 @@
 mod customers;
+mod items;
 mod production_maps;
 mod supplier_mutations;
 mod suppliers;
@@ -13,6 +14,7 @@ pub use customers::{
     material_taminotchi_code_regenerate, material_taminotchi_detail, material_taminotchi_phone,
     material_taminotchilar,
 };
+pub use items::item_detail;
 pub use production_maps::{
     production_map_audit, production_map_closed_orders, production_map_completed_orders,
     production_map_completion_request_decision, production_map_completion_request_decisions,
@@ -63,8 +65,8 @@ use crate::core::admin::models::{
     AdminCustomerDetail, AdminItemGroupBulkMoveResult, AdminMoveItemGroupRequest,
     AdminPhoneUpdateRequest, AdminSettings, AdminSupplier, AdminSupplierDetail,
     AdminSupplierItemMutationRequest, AdminSupplierItemsUpdateRequest,
-    AdminSupplierStatusUpdateRequest, AdminSupplierSummary, AdminSuppliersPage, AdminUserListEntry,
-    AdminUserListPage,
+    AdminSupplierStatusUpdateRequest, AdminSupplierSummary, AdminSuppliersPage,
+    AdminUpdateItemRequest, AdminUserListEntry, AdminUserListPage,
 };
 use crate::core::admin::ports::AdminPortError;
 use crate::core::apparatus_groups::{ApparatusGroupError, ApparatusGroupUpsert, ApparatusUpsert};
@@ -215,6 +217,10 @@ fn bad_request(error: impl Into<String>) -> AdminError {
         StatusCode::BAD_REQUEST,
         Json(AdminErrorResponse::new(error)),
     )
+}
+
+fn conflict(error: impl Into<String>) -> AdminError {
+    (StatusCode::CONFLICT, Json(AdminErrorResponse::new(error)))
 }
 
 fn server_error(error: impl Into<String>) -> AdminError {

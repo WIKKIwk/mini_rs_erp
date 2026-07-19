@@ -12,7 +12,9 @@ use tower::ServiceExt;
 use super::router::build_router;
 use crate::app::AppState;
 use crate::config::AppConfig;
-use crate::core::admin::models::{AdminDirectoryEntry, AdminItemGroup, AdminState};
+use crate::core::admin::models::{
+    AdminDirectoryEntry, AdminItemDetail, AdminItemGroup, AdminState,
+};
 use crate::core::admin::ports::{AdminPortError, AdminReadPort, AdminStatePort, AdminWritePort};
 use crate::core::admin::service::AdminService;
 use crate::core::apparatus_groups::{ApparatusGroupService, MemoryApparatusGroupStore};
@@ -42,7 +44,7 @@ use crate::core::warehouses::{
     MemoryWarehouseStore, WarehouseAssignmentUpsert, WarehouseService, WarehouseStockItem,
     WarehouseUpsert,
 };
-use crate::core::werka::models::{DispatchRecord, SupplierItem};
+use crate::core::werka::models::{CustomerDirectoryEntry, DispatchRecord, SupplierItem};
 use crate::core::werka::ports::{WerkaHomeLookup, WerkaPortError};
 use crate::core::werka::service::WerkaService;
 use crate::core::worker_groups::{MemoryWorkerGroupStore, WorkerGroupService};
@@ -293,22 +295,17 @@ fn test_state() -> AppState {
         .with_write_port(admin_port.clone())
         .with_state_port(admin_state_port.clone());
     state.production_maps = ProductionMapService::new(Arc::new(MemoryProductionMapStore::new()));
-    state.returned_paint =
-        ReturnedPaintService::new(Arc::new(MemoryReturnedPaintStore::new()));
+    state.returned_paint = ReturnedPaintService::new(Arc::new(MemoryReturnedPaintStore::new()));
     state.apparatus_groups = ApparatusGroupService::new(Arc::new(MemoryApparatusGroupStore::new()));
     state.warehouses = WarehouseService::new(Arc::new(MemoryWarehouseStore::new()));
     state.workers = WorkerService::new(Arc::new(MemoryWorkerStore::new()));
-    state.system_users =
-        SystemUserService::new(Arc::new(MemorySystemUserStore::new()));
+    state.system_users = SystemUserService::new(Arc::new(MemorySystemUserStore::new()));
     state.auth = crate::core::auth::service::AuthService::new(&state.config)
         .with_customer_dependencies(admin_port.clone(), admin_state_port.clone())
         .with_supplier_dependencies(admin_port.clone(), admin_state_port.clone())
         .with_material_taminotchi_dependencies(admin_port, admin_state_port.clone())
         .with_worker_dependencies(Arc::new(state.workers.clone()), admin_state_port.clone())
-        .with_system_user_dependencies(
-            Arc::new(state.system_users.clone()),
-            admin_state_port,
-        );
+        .with_system_user_dependencies(Arc::new(state.system_users.clone()), admin_state_port);
     state.worker_groups = WorkerGroupService::new(Arc::new(MemoryWorkerGroupStore::new()));
     state.production_orders = Arc::new(NoopMiniOrderSink);
     state

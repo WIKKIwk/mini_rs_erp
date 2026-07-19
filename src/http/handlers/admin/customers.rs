@@ -260,6 +260,9 @@ pub async fn items(
                 .await
             {
                 Ok(item) => Ok(json_response(item)),
+                Err(AdminPortError::InvalidInput(error)) if error == "item code already exists" => {
+                    Err(conflict(error))
+                }
                 Err(AdminPortError::InvalidInput(error)) => Err(bad_request(error)),
                 Err(AdminPortError::NotFound) => Err(not_found("customer not found")),
                 Err(_) => Err(server_error("admin item create failed")),
@@ -357,7 +360,10 @@ pub async fn item_group_tree(
     let principal = authorize_any_capability(
         &state,
         &headers,
-        &[Capability::CatalogItemGroupRead, Capability::GscaleCatalogRead],
+        &[
+            Capability::CatalogItemGroupRead,
+            Capability::GscaleCatalogRead,
+        ],
     )
     .await?;
     if method != Method::GET {
@@ -475,6 +481,7 @@ pub async fn customer_item_remove(
     match state.admin.unassign_customer_item(ref_, item_code).await {
         Ok(detail) => Ok(Json(detail)),
         Err(AdminPortError::NotFound) => Err(not_found("customer not found")),
+        Err(AdminPortError::InvalidInput(message)) => Err(bad_request(message)),
         Err(_) => Err(server_error("customer item remove failed")),
     }
 }

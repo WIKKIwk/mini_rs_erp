@@ -255,6 +255,7 @@ pub(super) fn routes() -> Router<AppState> {
             any(admin::customer_remove),
         )
         .route("/v1/mobile/admin/items", any(admin::items))
+        .route("/v1/mobile/admin/items/detail", any(admin::item_detail))
         .route("/v1/mobile/admin/apparatus", any(admin::apparatus_create))
         .route("/v1/mobile/admin/warehouses", any(admin::warehouses))
         .route(

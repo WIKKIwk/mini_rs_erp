@@ -1,10 +1,14 @@
 use async_trait::async_trait;
 use sqlx::{FromRow, PgPool};
 
+use crate::core::admin::item_customer_policy::FINISHED_GOODS_CUSTOMER_REQUIRED;
 use crate::core::admin::models::AdminDirectoryEntry;
 use crate::core::admin::ports::AdminPortError;
 use crate::core::auth::ports::{AuthPortError, CustomerLookup, CustomerRecord};
 use crate::core::werka::models::SupplierItem;
+use crate::db::postgres_admin_catalog::customer_policy::{
+    item_requires_customer, lock_item_customer_policy,
+};
 
 #[derive(Debug, Clone)]
 pub struct PostgresCustomerStore {
@@ -23,7 +27,6 @@ struct CustomerItemRow {
     code: String,
     name: String,
     uom: String,
-    warehouse: String,
     item_group: String,
 }
 
@@ -58,10 +61,7 @@ impl PostgresCustomerStore {
         .map_err(|_| AdminPortError::LookupFailed)
     }
 
-    pub async fn customer_by_ref(
-        &self,
-        ref_: &str,
-    ) -> Result<AdminDirectoryEntry, AdminPortError> {
+    pub async fn customer_by_ref(&self, ref_: &str) -> Result<AdminDirectoryEntry, AdminPortError> {
         sqlx::query_as::<_, CustomerRow>(
             "SELECT ref AS customer_ref, name, phone
              FROM mini_customers
@@ -92,12 +92,11 @@ impl PostgresCustomerStore {
             .begin()
             .await
             .map_err(|_| AdminPortError::LookupFailed)?;
-        let ref_: String = sqlx::query_scalar(
-            "SELECT format('CUST-%s', nextval('mini_customer_ref_seq'))",
-        )
-        .fetch_one(&mut *transaction)
-        .await
-        .map_err(|_| AdminPortError::LookupFailed)?;
+        let ref_: String =
+            sqlx::query_scalar("SELECT format('CUST-%s', nextval('mini_customer_ref_seq'))")
+                .fetch_one(&mut *transaction)
+                .await
+                .map_err(|_| AdminPortError::LookupFailed)?;
         sqlx::query(
             "INSERT INTO mini_customers (ref, name, phone)
              VALUES ($1, $2, $3)",
@@ -149,7 +148,7 @@ impl PostgresCustomerStore {
     ) -> Result<Vec<SupplierItem>, AdminPortError> {
         let needle = format!("%{}%", query.trim().to_lowercase());
         sqlx::query_as::<_, CustomerItemRow>(
-            "SELECT items.code, items.name, items.uom, items.warehouse, items.item_group
+            "SELECT items.code, items.name, items.uom, items.item_group
              FROM mini_customer_items assignments
              JOIN mini_items items ON items.code = assignments.item_code
              WHERE assignments.customer_ref = $1
@@ -194,16 +193,78 @@ impl PostgresCustomerStore {
         customer_ref: &str,
         item_code: &str,
     ) -> Result<(), AdminPortError> {
+        self.unassign_customer_item_guarded(customer_ref, item_code)
+            .await
+    }
+
+    pub async fn unassign_customer_item_guarded(
+        &self,
+        customer_ref: &str,
+        item_code: &str,
+    ) -> Result<(), AdminPortError> {
+        let mut transaction = self
+            .pool
+            .begin()
+            .await
+            .map_err(|_| AdminPortError::LookupFailed)?;
+        lock_item_customer_policy(&mut transaction).await?;
+        let stored_code = sqlx::query_scalar::<_, String>(
+            "SELECT code
+             FROM mini_items
+             WHERE lower(code) = lower($1)
+             FOR UPDATE",
+        )
+        .bind(item_code.trim())
+        .fetch_optional(&mut *transaction)
+        .await
+        .map_err(|_| AdminPortError::LookupFailed)?
+        .ok_or(AdminPortError::NotFound)?;
+        let assignment_exists = sqlx::query_scalar::<_, bool>(
+            "SELECT EXISTS (
+                 SELECT 1
+                 FROM mini_customer_items
+                 WHERE customer_ref = $1 AND item_code = $2
+             )",
+        )
+        .bind(customer_ref.trim())
+        .bind(&stored_code)
+        .fetch_one(&mut *transaction)
+        .await
+        .map_err(|_| AdminPortError::LookupFailed)?;
+        if !assignment_exists {
+            transaction
+                .commit()
+                .await
+                .map_err(|_| AdminPortError::LookupFailed)?;
+            return Ok(());
+        }
+        if item_requires_customer(&mut transaction, &stored_code).await? {
+            let customer_count = sqlx::query_scalar::<_, i64>(
+                "SELECT count(*) FROM mini_customer_items WHERE item_code = $1",
+            )
+            .bind(&stored_code)
+            .fetch_one(&mut *transaction)
+            .await
+            .map_err(|_| AdminPortError::LookupFailed)?;
+            if customer_count <= 1 {
+                return Err(AdminPortError::InvalidInput(
+                    FINISHED_GOODS_CUSTOMER_REQUIRED.to_string(),
+                ));
+            }
+        }
         sqlx::query(
             "DELETE FROM mini_customer_items
              WHERE customer_ref = $1 AND item_code = $2",
         )
         .bind(customer_ref.trim())
-        .bind(item_code.trim())
-        .execute(&self.pool)
+        .bind(&stored_code)
+        .execute(&mut *transaction)
         .await
         .map_err(|_| AdminPortError::LookupFailed)?;
-        Ok(())
+        transaction
+            .commit()
+            .await
+            .map_err(|_| AdminPortError::LookupFailed)
     }
 }
 
@@ -258,7 +319,7 @@ impl CustomerItemRow {
             code: self.code,
             name: self.name,
             uom: self.uom,
-            warehouse: self.warehouse,
+            warehouse: String::new(),
             item_group: self.item_group,
         }
     }

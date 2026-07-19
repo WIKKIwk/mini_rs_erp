@@ -259,36 +259,28 @@ impl AdminReadPort for FakeAdminReadPort {
         Ok(vec![item("ITEM-001")])
     }
 
-    async fn items_page_by_warehouse(
-        &self,
-        warehouse: &str,
-        query: &str,
-        limit: usize,
-        offset: usize,
-    ) -> Result<Vec<SupplierItem>, AdminPortError> {
-        let mut other = item("OTHER-001");
-        other.name = "Other warehouse item".to_string();
-        other.warehouse = "Other warehouse".to_string();
-        let query = query.trim().to_lowercase();
-        Ok([item("ITEM-001"), item("INK-BLACK"), other]
-            .into_iter()
-            .filter(|item| item.warehouse.eq_ignore_ascii_case(warehouse))
-            .filter(|item| {
-                query.is_empty()
-                    || item.code.to_lowercase().contains(&query)
-                    || item.name.to_lowercase().contains(&query)
-                    || item.item_group.to_lowercase().contains(&query)
-            })
-            .skip(offset)
-            .take(limit)
-            .collect())
-    }
-
     async fn items_by_codes(
         &self,
         item_codes: &[String],
     ) -> Result<Vec<SupplierItem>, AdminPortError> {
         Ok(item_codes.iter().map(|code| item(code)).collect())
+    }
+
+    async fn item_detail(&self, item_code: &str) -> Result<AdminItemDetail, AdminPortError> {
+        if item_code.trim() == "MISSING" {
+            return Err(AdminPortError::NotFound);
+        }
+        let item = item(item_code);
+        Ok(AdminItemDetail {
+            code: item.code,
+            name: item.name,
+            uom: item.uom,
+            item_group: item.item_group,
+            is_finished_goods: false,
+            created_at_unix: 1_720_000_000,
+            updated_at_unix: 1_720_000_100,
+            customers: Vec::new(),
+        })
     }
 
     async fn item_groups(

@@ -1,63 +1,359 @@
-use crate::core::admin::models::AdminItemGroup;
-use crate::core::admin::ports::AdminPortError;
+use sqlx::{Postgres, Transaction};
+
+use crate::core::admin::item_customer_policy::{
+    FINISHED_GOODS_CUSTOMER_REQUIRED, item_group_requires_customer,
+};
+use crate::core::admin::models::{AdminItemDetail, AdminItemGroup};
+use crate::core::admin::ports::{AdminPortError, AdminReadPort};
 use crate::core::werka::models::SupplierItem;
 use crate::db::postgres_admin_catalog::PostgresAdminCatalogStore;
 
-use super::rows::blank_default;
+use super::customer_policy::{
+    customerless_item_codes, customerless_items_in_subtree, group_requires_customer,
+    lock_item_customer_policy,
+};
+use super::item_delete_safety::{item_delete_blocker, map_item_delete_write_error};
+use super::rows::{ItemCustomerRow, ItemDetailRow, blank_default};
 
 impl PostgresAdminCatalogStore {
-    pub(super) async fn upsert_item(
+    pub(super) async fn load_item_detail(
         &self,
-        item: &SupplierItem,
+        item_code: &str,
+    ) -> Result<AdminItemDetail, AdminPortError> {
+        let item_code = item_code.trim();
+        if item_code.is_empty() {
+            return Err(AdminPortError::InvalidInput(
+                "item code is required".to_string(),
+            ));
+        }
+        let row = sqlx::query_as::<_, ItemDetailRow>(
+            r#"
+            SELECT items.code, items.name, items.uom, items.item_group,
+                   EXTRACT(EPOCH FROM items.created_at)::bigint AS created_at_unix,
+                   EXTRACT(EPOCH FROM items.updated_at)::bigint AS updated_at_unix
+            FROM mini_items items
+            WHERE items.code = $1
+            "#,
+        )
+        .bind(item_code)
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(|_| AdminPortError::LookupFailed)?
+        .ok_or(AdminPortError::NotFound)?;
+        let groups = AdminReadPort::item_group_tree(self).await?;
+        let is_finished_goods = item_group_requires_customer(row.item_group(), &groups);
+        let customers = sqlx::query_as::<_, ItemCustomerRow>(
+            "SELECT customers.ref AS customer_ref, customers.name, customers.phone
+             FROM mini_customer_items assignments
+             JOIN mini_customers customers ON customers.ref = assignments.customer_ref
+             WHERE assignments.item_code = $1
+             ORDER BY lower(customers.name), customers.ref",
+        )
+        .bind(item_code)
+        .fetch_all(&self.pool)
+        .await
+        .map_err(|_| AdminPortError::LookupFailed)?
+        .into_iter()
+        .map(ItemCustomerRow::into_customer)
+        .collect();
+        Ok(row.into_detail(customers, is_finished_goods))
+    }
+
+    pub(super) async fn update_item_identity(
+        &self,
+        original_code: &str,
+        code: &str,
+        name: &str,
+    ) -> Result<AdminItemDetail, AdminPortError> {
+        let original_code = original_code.trim();
+        let code = code.trim();
+        let name = name.trim();
+        let mut transaction = self
+            .pool
+            .begin()
+            .await
+            .map_err(|_| AdminPortError::LookupFailed)?;
+        let duplicate = sqlx::query_scalar::<_, bool>(
+            "SELECT EXISTS (
+                 SELECT 1 FROM mini_items
+                 WHERE lower(code) = lower($1) AND code <> $2
+             )",
+        )
+        .bind(code)
+        .bind(original_code)
+        .fetch_one(&mut *transaction)
+        .await
+        .map_err(|_| AdminPortError::LookupFailed)?;
+        if duplicate {
+            return Err(AdminPortError::InvalidInput(
+                "item code already exists".to_string(),
+            ));
+        }
+        let affected = sqlx::query(
+            "UPDATE mini_items
+             SET code = $2,
+                 name = $3,
+                 payload_json = jsonb_set(
+                     jsonb_set(payload_json, '{code}', to_jsonb($2::text), true),
+                     '{name}', to_jsonb($3::text), true
+                 ),
+                 updated_at = now()
+             WHERE code = $1",
+        )
+        .bind(original_code)
+        .bind(code)
+        .bind(name)
+        .execute(&mut *transaction)
+        .await
+        .map_err(map_item_identity_write_error)?
+        .rows_affected();
+        if affected == 0 {
+            return Err(AdminPortError::NotFound);
+        }
+        update_operational_item_projections(&mut transaction, original_code, code, name).await?;
+        transaction
+            .commit()
+            .await
+            .map_err(|_| AdminPortError::LookupFailed)?;
+        self.load_item_detail(code).await
+    }
+
+    pub(super) async fn insert_item(
+        &self,
+        code: &str,
+        name: &str,
+        uom: &str,
+        item_group: &str,
     ) -> Result<SupplierItem, AdminPortError> {
-        let code = item.code.trim();
+        self.insert_item_with_customer(code, name, uom, item_group, None)
+            .await
+    }
+
+    pub(super) async fn insert_item_with_customer(
+        &self,
+        code: &str,
+        name: &str,
+        uom: &str,
+        item_group: &str,
+        customer_ref: Option<&str>,
+    ) -> Result<SupplierItem, AdminPortError> {
+        let code = code.trim();
         if code.is_empty() {
             return Err(AdminPortError::InvalidInput(
                 "item code is required".to_string(),
             ));
         }
-        let name = blank_default(&item.name, code);
-        let uom = blank_default(&item.uom, "Kg");
-        let group = blank_default(&item.item_group, "All Item Groups");
-        let payload = serde_json::to_value(SupplierItem {
-            code: code.to_string(),
-            name: name.clone(),
-            uom: uom.clone(),
-            warehouse: item.warehouse.trim().to_string(),
-            item_group: group.clone(),
-        })
-        .map_err(|_| AdminPortError::LookupFailed)?;
+        let name = blank_default(name, code);
+        let uom = blank_default(uom, "Kg");
+        let group = blank_default(item_group, "All Item Groups");
+        let payload = serde_json::json!({
+            "code": code,
+            "name": name,
+            "uom": uom,
+            "item_group": group,
+        });
 
         self.ensure_item_group(&group).await?;
-        sqlx::query(
+        let mut transaction = self
+            .pool
+            .begin()
+            .await
+            .map_err(|_| AdminPortError::LookupFailed)?;
+        lock_item_customer_policy(&mut transaction).await?;
+        let customer_ref = customer_ref
+            .map(str::trim)
+            .filter(|customer_ref| !customer_ref.is_empty());
+        if group_requires_customer(&mut transaction, &group).await? && customer_ref.is_none() {
+            return Err(AdminPortError::InvalidInput(
+                FINISHED_GOODS_CUSTOMER_REQUIRED.to_string(),
+            ));
+        }
+        if let Some(customer_ref) = customer_ref {
+            let customer_exists = sqlx::query_scalar::<_, bool>(
+                "SELECT EXISTS (SELECT 1 FROM mini_customers WHERE ref = $1)",
+            )
+            .bind(customer_ref)
+            .fetch_one(&mut *transaction)
+            .await
+            .map_err(|_| AdminPortError::LookupFailed)?;
+            if !customer_exists {
+                return Err(AdminPortError::NotFound);
+            }
+        }
+        sqlx::query("SELECT pg_advisory_xact_lock(hashtextextended(lower($1::text), 0))")
+            .bind(code)
+            .execute(&mut *transaction)
+            .await
+            .map_err(|_| AdminPortError::LookupFailed)?;
+        let duplicate = sqlx::query_scalar::<_, bool>(
+            "SELECT EXISTS (SELECT 1 FROM mini_items WHERE lower(code) = lower($1))",
+        )
+        .bind(code)
+        .fetch_one(&mut *transaction)
+        .await
+        .map_err(|_| AdminPortError::LookupFailed)?;
+        if duplicate {
+            return Err(AdminPortError::InvalidInput(
+                "item code already exists".to_string(),
+            ));
+        }
+        let affected = sqlx::query(
             "INSERT INTO mini_items
-                (code, name, uom, warehouse, item_group, payload_json, updated_at)
-             VALUES ($1, $2, $3, $4, $5, $6, now())
-             ON CONFLICT (code) DO UPDATE SET
-               name = excluded.name,
-               uom = excluded.uom,
-               warehouse = excluded.warehouse,
-               item_group = excluded.item_group,
-               payload_json = excluded.payload_json,
-               updated_at = excluded.updated_at",
+                (code, name, uom, item_group, payload_json, updated_at)
+             VALUES ($1, $2, $3, $4, $5, now())
+             ON CONFLICT (code) DO NOTHING",
         )
         .bind(code)
         .bind(&name)
         .bind(&uom)
-        .bind(item.warehouse.trim())
         .bind(&group)
         .bind(payload)
-        .execute(&self.pool)
+        .execute(&mut *transaction)
         .await
-        .map_err(|_| AdminPortError::LookupFailed)?;
+        .map_err(map_item_identity_write_error)?
+        .rows_affected();
+        if affected == 0 {
+            return Err(AdminPortError::InvalidInput(
+                "item code already exists".to_string(),
+            ));
+        }
+        if let Some(customer_ref) = customer_ref {
+            sqlx::query(
+                "INSERT INTO mini_customer_items (customer_ref, item_code) VALUES ($1, $2)",
+            )
+            .bind(customer_ref)
+            .bind(code)
+            .execute(&mut *transaction)
+            .await
+            .map_err(|_| AdminPortError::LookupFailed)?;
+        }
+        transaction
+            .commit()
+            .await
+            .map_err(|_| AdminPortError::LookupFailed)?;
 
         Ok(SupplierItem {
             code: code.to_string(),
             name,
             uom,
-            warehouse: item.warehouse.trim().to_string(),
+            warehouse: String::new(),
             item_group: group,
         })
+    }
+
+    pub(super) async fn update_item_groups_bulk_atomic(
+        &self,
+        item_codes: &[String],
+        item_group: &str,
+    ) -> Result<Vec<String>, AdminPortError> {
+        let normalized_codes = item_codes
+            .iter()
+            .map(|code| code.trim().to_ascii_lowercase())
+            .filter(|code| !code.is_empty())
+            .collect::<Vec<_>>();
+        if normalized_codes.is_empty() {
+            return Ok(Vec::new());
+        }
+        let item_group = item_group.trim();
+        self.ensure_item_group(item_group).await?;
+        let mut transaction = self
+            .pool
+            .begin()
+            .await
+            .map_err(|_| AdminPortError::LookupFailed)?;
+        lock_item_customer_policy(&mut transaction).await?;
+        let stored_codes = sqlx::query_scalar::<_, String>(
+            "SELECT code
+             FROM mini_items
+             WHERE lower(code) = ANY($1)
+             ORDER BY lower(code)
+             FOR UPDATE",
+        )
+        .bind(&normalized_codes)
+        .fetch_all(&mut *transaction)
+        .await
+        .map_err(|_| AdminPortError::LookupFailed)?;
+        if group_requires_customer(&mut transaction, item_group).await? {
+            let customerless = customerless_item_codes(&mut transaction, &stored_codes).await?;
+            if !customerless.is_empty() {
+                return Err(AdminPortError::InvalidInput(
+                    FINISHED_GOODS_CUSTOMER_REQUIRED.to_string(),
+                ));
+            }
+        }
+        if !stored_codes.is_empty() {
+            sqlx::query(
+                "UPDATE mini_items
+                 SET item_group = $2,
+                     payload_json = jsonb_set(
+                         payload_json,
+                         '{item_group}',
+                         to_jsonb($2::text),
+                         true
+                     ),
+                     updated_at = now()
+                 WHERE code = ANY($1)",
+            )
+            .bind(&stored_codes)
+            .bind(item_group)
+            .execute(&mut *transaction)
+            .await
+            .map_err(|_| AdminPortError::LookupFailed)?;
+        }
+        transaction
+            .commit()
+            .await
+            .map_err(|_| AdminPortError::LookupFailed)?;
+        Ok(stored_codes)
+    }
+
+    pub(super) async fn delete_item_safely(&self, code: &str) -> Result<(), AdminPortError> {
+        let code = code.trim();
+        if code.is_empty() {
+            return Err(AdminPortError::InvalidInput(
+                "item code is required".to_string(),
+            ));
+        }
+        let mut transaction = self
+            .pool
+            .begin()
+            .await
+            .map_err(|_| AdminPortError::LookupFailed)?;
+        sqlx::query("SELECT pg_advisory_xact_lock(hashtextextended(lower($1::text), 0))")
+            .bind(code)
+            .execute(&mut *transaction)
+            .await
+            .map_err(|_| AdminPortError::LookupFailed)?;
+        let (stored_code, stored_name) = sqlx::query_as::<_, (String, String)>(
+            "SELECT code, name
+             FROM mini_items
+             WHERE lower(code) = lower($1)
+             ORDER BY (code = $1) DESC
+             LIMIT 1
+             FOR UPDATE",
+        )
+        .bind(code)
+        .fetch_optional(&mut *transaction)
+        .await
+        .map_err(|_| AdminPortError::LookupFailed)?
+        .ok_or(AdminPortError::NotFound)?;
+        let blocker = item_delete_blocker(&mut transaction, &stored_code, &stored_name).await?;
+        if !blocker.is_empty() {
+            return Err(AdminPortError::InvalidInput(blocker));
+        }
+        let affected = sqlx::query("DELETE FROM mini_items WHERE code = $1")
+            .bind(&stored_code)
+            .execute(&mut *transaction)
+            .await
+            .map_err(map_item_delete_write_error)?
+            .rows_affected();
+        if affected == 0 {
+            return Err(AdminPortError::NotFound);
+        }
+        transaction
+            .commit()
+            .await
+            .map_err(|_| AdminPortError::LookupFailed)
     }
 
     pub(super) async fn upsert_item_group(
@@ -77,6 +373,13 @@ impl PostgresAdminCatalogStore {
             Some(parent)
         };
         let payload = serde_json::to_value(group).map_err(|_| AdminPortError::LookupFailed)?;
+        let mut transaction = self
+            .pool
+            .begin()
+            .await
+            .map_err(|_| AdminPortError::LookupFailed)?;
+        lock_item_customer_policy(&mut transaction).await?;
+        let required_before = group_requires_customer(&mut transaction, name).await?;
         sqlx::query(
             "INSERT INTO mini_item_groups
                 (name, parent_item_group, is_group, payload_json, updated_at)
@@ -91,9 +394,22 @@ impl PostgresAdminCatalogStore {
         .bind(parent_group)
         .bind(group.is_group)
         .bind(payload)
-        .execute(&self.pool)
+        .execute(&mut *transaction)
         .await
         .map_err(|_| AdminPortError::LookupFailed)?;
+        let required_after = group_requires_customer(&mut transaction, name).await?;
+        if !required_before && required_after {
+            let customerless = customerless_items_in_subtree(&mut transaction, name).await?;
+            if !customerless.is_empty() {
+                return Err(AdminPortError::InvalidInput(
+                    FINISHED_GOODS_CUSTOMER_REQUIRED.to_string(),
+                ));
+            }
+        }
+        transaction
+            .commit()
+            .await
+            .map_err(|_| AdminPortError::LookupFailed)?;
 
         Ok(AdminItemGroup {
             name: name.to_string(),
@@ -143,5 +459,107 @@ impl PostgresAdminCatalogStore {
         .await
         .map_err(|_| AdminPortError::LookupFailed)?;
         Ok(())
+    }
+}
+
+async fn update_operational_item_projections(
+    transaction: &mut Transaction<'_, Postgres>,
+    original_code: &str,
+    code: &str,
+    name: &str,
+) -> Result<(), AdminPortError> {
+    sqlx::query(
+        "UPDATE mini_raw_material_assignments
+         SET payload_json = jsonb_set(
+                 jsonb_set(payload_json, '{item_code}', to_jsonb($1::text), true),
+                 '{item_name}', to_jsonb($2::text), true
+             ),
+             updated_at = now()
+         WHERE item_code = $1",
+    )
+    .bind(code)
+    .bind(name)
+    .execute(&mut **transaction)
+    .await
+    .map_err(|_| AdminPortError::LookupFailed)?;
+
+    for statement in [
+        "UPDATE mini_gscale_receipts
+         SET item_code = $2,
+             payload_json = jsonb_set(jsonb_set(payload_json, '{item_code}', to_jsonb($2::text), true), '{item_name}', to_jsonb($3::text), true),
+             updated_at = now()
+         WHERE item_code = $1 AND status = 'draft'",
+        "UPDATE mini_raw_material_stock
+         SET item_code = $2, item_name = $3,
+             payload_json = jsonb_set(jsonb_set(payload_json, '{item_code}', to_jsonb($2::text), true), '{item_name}', to_jsonb($3::text), true),
+             updated_at = now()
+         WHERE item_code = $1",
+        "UPDATE mini_finished_goods_stock
+         SET item_code = $2, item_name = $3,
+             payload_json = jsonb_set(jsonb_set(payload_json, '{item_code}', to_jsonb($2::text), true), '{item_name}', to_jsonb($3::text), true),
+             updated_at = now()
+         WHERE item_code = $1",
+        "UPDATE mini_qolip_locations
+         SET item_code = $2, item_name = $3,
+             payload_json = jsonb_set(jsonb_set(payload_json, '{item_code}', to_jsonb($2::text), true), '{item_name}', to_jsonb($3::text), true),
+             updated_at = now()
+         WHERE item_code = $1",
+        "UPDATE mini_qolip_product_specs
+         SET item_code = $2, item_name = $3,
+             payload_json = jsonb_set(jsonb_set(payload_json, '{item_code}', to_jsonb($2::text), true), '{item_name}', to_jsonb($3::text), true),
+             updated_at = now()
+         WHERE item_code = $1",
+        "UPDATE mini_qolip_checkouts
+         SET item_code = $2, item_name = $3,
+             payload_json = jsonb_set(jsonb_set(payload_json, '{item_code}', to_jsonb($2::text), true), '{item_name}', to_jsonb($3::text), true),
+             updated_at = now()
+         WHERE item_code = $1 AND status = 'open'",
+    ] {
+        sqlx::query(statement)
+            .bind(original_code)
+            .bind(code)
+            .bind(name)
+            .execute(&mut **transaction)
+            .await
+            .map_err(|_| AdminPortError::LookupFailed)?;
+    }
+
+    sqlx::query(
+        "UPDATE mini_quick_order_templates
+         SET item_code = $2, product_name = $3,
+             payload_json = jsonb_set(jsonb_set(payload_json, '{item_code}', to_jsonb($2::text), true), '{product_name}', to_jsonb($3::text), true)
+         WHERE item_code = $1",
+    )
+    .bind(original_code)
+    .bind(code)
+    .bind(name)
+    .execute(&mut **transaction)
+    .await
+    .map_err(|_| AdminPortError::LookupFailed)?;
+
+    sqlx::query(
+        "UPDATE mini_rps_batches
+         SET item_code = $2,
+             payload_json = jsonb_set(payload_json, '{item_code}', to_jsonb($2::text), true),
+             updated_at = now()
+         WHERE item_code = $1",
+    )
+    .bind(original_code)
+    .bind(code)
+    .execute(&mut **transaction)
+    .await
+    .map_err(|_| AdminPortError::LookupFailed)?;
+    Ok(())
+}
+
+fn map_item_identity_write_error(error: sqlx::Error) -> AdminPortError {
+    if error
+        .as_database_error()
+        .and_then(|error| error.code())
+        .is_some_and(|code| code == "23505")
+    {
+        AdminPortError::InvalidInput("item code already exists".to_string())
+    } else {
+        AdminPortError::LookupFailed
     }
 }

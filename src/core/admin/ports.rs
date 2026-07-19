@@ -2,7 +2,9 @@ use std::collections::BTreeMap;
 
 use async_trait::async_trait;
 
-use crate::core::admin::models::{AdminDirectoryEntry, AdminItemGroup, AdminState, AdminWarehouse};
+use crate::core::admin::models::{
+    AdminDirectoryEntry, AdminItemDetail, AdminItemGroup, AdminState, AdminWarehouse,
+};
 use crate::core::auth::ports::AuthConfigSink;
 use crate::core::werka::models::SupplierItem;
 
@@ -49,49 +51,6 @@ pub trait AdminReadPort: Send + Sync {
         offset: usize,
     ) -> Result<Vec<SupplierItem>, AdminPortError>;
 
-    async fn items_page_by_warehouse(
-        &self,
-        warehouse: &str,
-        query: &str,
-        limit: usize,
-        offset: usize,
-    ) -> Result<Vec<SupplierItem>, AdminPortError> {
-        let warehouse = warehouse.trim();
-        if warehouse.is_empty() || limit == 0 {
-            return Ok(Vec::new());
-        }
-
-        let page_size = limit.clamp(80, 500);
-        let mut scan_offset = 0;
-        let mut matched = 0;
-        let mut result = Vec::with_capacity(limit);
-        while result.len() < limit {
-            let page = self.items_page(query, page_size, scan_offset).await?;
-            if page.is_empty() {
-                break;
-            }
-            let page_len = page.len();
-            for item in page {
-                if !item.warehouse.trim().eq_ignore_ascii_case(warehouse) {
-                    continue;
-                }
-                if matched < offset {
-                    matched += 1;
-                    continue;
-                }
-                result.push(item);
-                if result.len() == limit {
-                    break;
-                }
-            }
-            if page_len < page_size {
-                break;
-            }
-            scan_offset += page_len;
-        }
-        Ok(result)
-    }
-
     async fn items_page_by_group(
         &self,
         group: &str,
@@ -130,34 +89,19 @@ pub trait AdminReadPort: Send + Sync {
         item_codes: &[String],
     ) -> Result<Vec<SupplierItem>, AdminPortError>;
 
+    async fn item_detail(&self, _item_code: &str) -> Result<AdminItemDetail, AdminPortError> {
+        Err(AdminPortError::LookupFailed)
+    }
+
     async fn item_groups(&self, query: &str, limit: usize) -> Result<Vec<String>, AdminPortError>;
 
     async fn warehouses(
         &self,
-        query: &str,
-        parent: &str,
-        limit: usize,
+        _query: &str,
+        _parent: &str,
+        _limit: usize,
     ) -> Result<Vec<AdminWarehouse>, AdminPortError> {
-        let items = self.items_page(query, limit, 0).await?;
-        if !parent.trim().is_empty() {
-            return Ok(Vec::new());
-        }
-        let mut seen = std::collections::BTreeSet::new();
-        Ok(items
-            .into_iter()
-            .filter_map(|item| {
-                let warehouse = item.warehouse.trim();
-                if warehouse.is_empty() || !seen.insert(warehouse.to_lowercase()) {
-                    return None;
-                }
-                Some(AdminWarehouse {
-                    warehouse: warehouse.to_string(),
-                    company: String::new(),
-                    is_group: false,
-                    parent_warehouse: String::new(),
-                })
-            })
-            .collect())
+        Ok(Vec::new())
     }
 
     async fn item_group_tree(&self) -> Result<Vec<AdminItemGroup>, AdminPortError> {
@@ -270,6 +214,14 @@ pub trait AdminWritePort: Send + Sync {
         item_code: &str,
     ) -> Result<(), AdminPortError>;
 
+    async fn unassign_customer_item_guarded(
+        &self,
+        ref_: &str,
+        item_code: &str,
+    ) -> Result<(), AdminPortError> {
+        self.unassign_customer_item(ref_, item_code).await
+    }
+
     async fn create_item(
         &self,
         code: &str,
@@ -277,6 +229,34 @@ pub trait AdminWritePort: Send + Sync {
         uom: &str,
         item_group: &str,
     ) -> Result<SupplierItem, AdminPortError>;
+
+    async fn create_item_with_customer(
+        &self,
+        code: &str,
+        name: &str,
+        uom: &str,
+        item_group: &str,
+        customer_ref: Option<&str>,
+    ) -> Result<SupplierItem, AdminPortError> {
+        let item = self.create_item(code, name, uom, item_group).await?;
+        if let Some(customer_ref) = customer_ref.filter(|value| !value.trim().is_empty()) {
+            self.assign_customer_item(customer_ref, &item.code).await?;
+        }
+        Ok(item)
+    }
+
+    async fn update_item(
+        &self,
+        _original_code: &str,
+        _code: &str,
+        _name: &str,
+    ) -> Result<AdminItemDetail, AdminPortError> {
+        Err(AdminPortError::LookupFailed)
+    }
+
+    async fn delete_item(&self, _code: &str) -> Result<(), AdminPortError> {
+        Err(AdminPortError::LookupFailed)
+    }
 
     async fn create_item_group(
         &self,
@@ -296,6 +276,20 @@ pub trait AdminWritePort: Send + Sync {
         item_code: &str,
         item_group: &str,
     ) -> Result<(), AdminPortError>;
+
+    async fn update_item_groups_bulk(
+        &self,
+        item_codes: &[String],
+        item_group: &str,
+    ) -> Result<Vec<String>, AdminPortError> {
+        let mut updated = Vec::new();
+        for item_code in item_codes {
+            if self.update_item_group(item_code, item_group).await.is_ok() {
+                updated.push(item_code.clone());
+            }
+        }
+        Ok(updated)
+    }
 }
 
 #[derive(Debug, thiserror::Error)]

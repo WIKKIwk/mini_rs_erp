@@ -1,20 +1,25 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 use time::OffsetDateTime;
 use tokio::sync::Mutex;
 
-use crate::core::admin::models::{AdminDirectoryEntry, AdminItemGroup, AdminState, AdminWarehouse};
+use crate::core::admin::item_customer_policy::item_group_requires_customer;
+use crate::core::admin::models::{
+    AdminDirectoryEntry, AdminItemDetail, AdminItemGroup, AdminState, AdminWarehouse,
+};
 use crate::core::admin::ports::{AdminPortError, AdminReadPort, AdminStatePort, AdminWritePort};
 use crate::core::auth::ports::{
     AdminAccessState, AdminAccessStateLookup, AuthPortError, CustomerLookup, CustomerRecord,
     MaterialTaminotchiLookup, MaterialTaminotchiRecord, SupplierLookup, SupplierRecord,
 };
-use crate::core::werka::models::SupplierItem;
+use crate::core::werka::models::{CustomerDirectoryEntry, SupplierItem};
 
 mod access_ports;
 mod read_port;
+#[cfg(test)]
+mod tests;
 mod write_port;
 
 #[derive(Debug)]
@@ -62,8 +67,11 @@ struct StoredSupplierItem {
     code: String,
     name: String,
     uom: String,
-    warehouse: String,
     item_group: String,
+    #[serde(default)]
+    created_at_unix: i64,
+    #[serde(default)]
+    updated_at_unix: i64,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -223,7 +231,7 @@ impl From<&StoredSupplierItem> for SupplierItem {
             code: value.code.clone(),
             name: value.name.clone(),
             uom: value.uom.clone(),
-            warehouse: value.warehouse.clone(),
+            warehouse: String::new(),
             item_group: value.item_group.clone(),
         }
     }
@@ -342,6 +350,65 @@ fn push_unique(values: &mut Vec<String>, item_code: &str) {
 
 fn remove_code(values: &mut Vec<String>, item_code: &str) {
     values.retain(|value| !value.trim().eq_ignore_ascii_case(item_code.trim()));
+}
+
+fn replace_assigned_item_code(
+    assignments: &mut BTreeMap<String, Vec<String>>,
+    original_code: &str,
+    code: &str,
+) {
+    for values in assignments.values_mut() {
+        for value in values.iter_mut() {
+            if value.trim().eq_ignore_ascii_case(original_code) {
+                *value = code.to_string();
+            }
+        }
+        let mut seen = BTreeSet::new();
+        values.retain(|value| seen.insert(value.trim().to_ascii_lowercase()));
+    }
+}
+
+fn stored_item_detail(data: &StoredAdminData, item: &StoredSupplierItem) -> AdminItemDetail {
+    let mut customers = data
+        .customer_items
+        .iter()
+        .filter(|(_, item_codes)| {
+            item_codes
+                .iter()
+                .any(|code| code.trim().eq_ignore_ascii_case(&item.code))
+        })
+        .filter_map(|(customer_ref, _)| data.customers.get(customer_ref))
+        .map(|customer| CustomerDirectoryEntry {
+            ref_: customer.ref_.clone(),
+            name: customer.name.clone(),
+            phone: customer.phone.clone(),
+        })
+        .collect::<Vec<_>>();
+    customers.sort_by(|left, right| {
+        left.name
+            .to_ascii_lowercase()
+            .cmp(&right.name.to_ascii_lowercase())
+            .then_with(|| left.ref_.cmp(&right.ref_))
+    });
+    AdminItemDetail {
+        code: item.code.clone(),
+        name: item.name.clone(),
+        uom: item.uom.clone(),
+        item_group: item.item_group.clone(),
+        is_finished_goods: stored_item_group_is_finished_goods(data, &item.item_group),
+        created_at_unix: item.created_at_unix,
+        updated_at_unix: item.updated_at_unix,
+        customers,
+    }
+}
+
+fn stored_item_group_is_finished_goods(data: &StoredAdminData, item_group: &str) -> bool {
+    let groups = data
+        .item_groups
+        .values()
+        .map(AdminItemGroup::from)
+        .collect::<Vec<_>>();
+    item_group_requires_customer(item_group, &groups)
 }
 
 fn assigned_items(

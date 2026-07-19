@@ -266,6 +266,26 @@ pub struct AdminCreateItemRequest {
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AdminUpdateItemRequest {
+    pub original_code: String,
+    pub code: String,
+    pub name: String,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AdminItemDetail {
+    pub code: String,
+    pub name: String,
+    pub uom: String,
+    pub item_group: String,
+    pub is_finished_goods: bool,
+    pub created_at_unix: i64,
+    pub updated_at_unix: i64,
+    #[serde(default)]
+    pub customers: Vec<CustomerDirectoryEntry>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AdminCreateItemGroupRequest {
     pub name: String,
     pub parent: String,

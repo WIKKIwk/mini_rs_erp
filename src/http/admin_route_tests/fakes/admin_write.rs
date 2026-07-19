@@ -94,13 +94,49 @@ impl AdminWritePort for FakeAdminReadPort {
         uom: &str,
         item_group: &str,
     ) -> Result<SupplierItem, AdminPortError> {
+        if code.eq_ignore_ascii_case("ITEM-DUPLICATE") {
+            return Err(AdminPortError::InvalidInput(
+                "item code already exists".to_string(),
+            ));
+        }
         Ok(SupplierItem {
             code: code.to_string(),
             name: name.to_string(),
             uom: uom.to_string(),
-            warehouse: "Stores - CH".to_string(),
+            warehouse: String::new(),
             item_group: item_group.to_string(),
         })
+    }
+
+    async fn update_item(
+        &self,
+        _original_code: &str,
+        code: &str,
+        name: &str,
+    ) -> Result<AdminItemDetail, AdminPortError> {
+        Ok(AdminItemDetail {
+            code: code.trim().to_string(),
+            name: name.trim().to_string(),
+            uom: "Kg".to_string(),
+            item_group: "Tayyor mahsulot".to_string(),
+            is_finished_goods: true,
+            created_at_unix: 1_720_000_000,
+            updated_at_unix: 1_720_000_200,
+            customers: vec![CustomerDirectoryEntry {
+                ref_: "CUST-001".to_string(),
+                name: "Customer One".to_string(),
+                phone: "+998904444444".to_string(),
+            }],
+        })
+    }
+
+    async fn delete_item(&self, code: &str) -> Result<(), AdminPortError> {
+        if code.eq_ignore_ascii_case("ITEM-ACTIVE") {
+            return Err(AdminPortError::InvalidInput(
+                "item is used by active order".to_string(),
+            ));
+        }
+        Ok(())
     }
 
     async fn create_item_group(

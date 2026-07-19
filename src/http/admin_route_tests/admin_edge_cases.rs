@@ -393,7 +393,7 @@ async fn admin_item_create_and_werka_regenerate_like_go() {
     assert_eq!(missing_customer.status(), StatusCode::BAD_REQUEST);
     assert_eq!(
         json_body(missing_customer).await["error"],
-        "customer_ref is required for tayyor mahsulot"
+        "tayyor mahsulot uchun kamida bitta customer kerak"
     );
 
     let item = build_router(state.clone())
@@ -440,6 +440,116 @@ async fn admin_item_create_and_werka_regenerate_like_go() {
             .expect("code")
             .starts_with("20")
     );
+}
+
+#[tokio::test]
+async fn admin_item_create_returns_conflict_for_duplicate_code() {
+    let state = test_state();
+    let token = session(&state, PrincipalRole::Admin).await;
+
+    let response = build_router(state)
+        .oneshot(request_with_body(
+            "POST",
+            "/v1/mobile/admin/items",
+            &token,
+            r#"{"code":"ITEM-DUPLICATE","name":"Must not replace","uom":"Dona","item_group":"Products"}"#,
+        ))
+        .await
+        .expect("response");
+
+    assert_eq!(response.status(), StatusCode::CONFLICT);
+    assert_eq!(
+        json_body(response).await["error"],
+        "item code already exists"
+    );
+}
+
+#[tokio::test]
+async fn admin_item_detail_and_update_are_admin_only() {
+    let state = test_state();
+    let admin_token = session(&state, PrincipalRole::Admin).await;
+    let material_token = session_for(
+        &state,
+        PrincipalRole::MaterialTaminotchi,
+        "material-item-detail",
+    )
+    .await;
+    let router = build_router(state);
+
+    let detail = router
+        .clone()
+        .oneshot(request(
+            "GET",
+            "/v1/mobile/admin/items/detail?code=ITEM-001",
+            &admin_token,
+        ))
+        .await
+        .expect("detail response");
+    assert_eq!(detail.status(), StatusCode::OK);
+    let detail = json_body(detail).await;
+    assert_eq!(detail["code"], "ITEM-001");
+    assert_eq!(detail["item_group"], "Products");
+    assert_eq!(detail["created_at_unix"], 1_720_000_000_i64);
+    assert!(detail.get("warehouse").is_none());
+
+    let updated = router
+        .clone()
+        .oneshot(request_with_body(
+            "PUT",
+            "/v1/mobile/admin/items/detail",
+            &admin_token,
+            r#"{"original_code":"ITEM-001","code":"ITEM-UPDATED","name":"Updated item"}"#,
+        ))
+        .await
+        .expect("update response");
+    assert_eq!(updated.status(), StatusCode::OK);
+    let updated = json_body(updated).await;
+    assert_eq!(updated["code"], "ITEM-UPDATED");
+    assert_eq!(updated["name"], "Updated item");
+    assert_eq!(updated["customers"][0]["ref"], "CUST-001");
+
+    let forbidden = router
+        .oneshot(request(
+            "GET",
+            "/v1/mobile/admin/items/detail?code=ITEM-001",
+            &material_token,
+        ))
+        .await
+        .expect("forbidden response");
+    assert_eq!(forbidden.status(), StatusCode::FORBIDDEN);
+}
+
+#[tokio::test]
+async fn admin_item_delete_returns_conflict_while_item_is_in_active_order() {
+    let state = test_state();
+    let token = session(&state, PrincipalRole::Admin).await;
+    let router = build_router(state);
+
+    let blocked = router
+        .clone()
+        .oneshot(request(
+            "DELETE",
+            "/v1/mobile/admin/items/detail?code=ITEM-ACTIVE",
+            &token,
+        ))
+        .await
+        .expect("blocked delete response");
+    assert_eq!(blocked.status(), StatusCode::CONFLICT);
+    assert_eq!(
+        json_body(blocked).await["error"],
+        "item is used by active order"
+    );
+
+    let deleted = router
+        .oneshot(request(
+            "DELETE",
+            "/v1/mobile/admin/items/detail?code=ITEM-UNUSED",
+            &token,
+        ))
+        .await
+        .expect("delete response");
+    assert_eq!(deleted.status(), StatusCode::OK);
+    assert_eq!(json_body(deleted).await["ok"], true);
 }
 
 #[tokio::test]

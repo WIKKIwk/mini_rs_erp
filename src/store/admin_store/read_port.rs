@@ -122,6 +122,16 @@ impl AdminReadPort for JsonAdminStore {
             .collect())
     }
 
+    async fn item_detail(&self, item_code: &str) -> Result<AdminItemDetail, AdminPortError> {
+        let data = self.data.lock().await;
+        let item = data
+            .items
+            .values()
+            .find(|item| item.code.trim().eq_ignore_ascii_case(item_code.trim()))
+            .ok_or(AdminPortError::NotFound)?;
+        Ok(stored_item_detail(&data, item))
+    }
+
     async fn item_groups(&self, query: &str, limit: usize) -> Result<Vec<String>, AdminPortError> {
         let needle = query.trim().to_lowercase();
         let data = self.data.lock().await;
@@ -138,38 +148,11 @@ impl AdminReadPort for JsonAdminStore {
 
     async fn warehouses(
         &self,
-        query: &str,
-        parent: &str,
-        limit: usize,
+        _query: &str,
+        _parent: &str,
+        _limit: usize,
     ) -> Result<Vec<AdminWarehouse>, AdminPortError> {
-        if !parent.trim().is_empty() {
-            return Ok(Vec::new());
-        }
-        let needle = query.trim().to_lowercase();
-        let data = self.data.lock().await;
-        let mut seen = BTreeSet::new();
-        Ok(paginate(
-            data.items
-                .values()
-                .filter_map(|item| {
-                    let warehouse = item.warehouse.trim();
-                    if warehouse.is_empty()
-                        || !seen.insert(warehouse.to_lowercase())
-                        || (!needle.is_empty() && !warehouse.to_lowercase().contains(&needle))
-                    {
-                        return None;
-                    }
-                    Some(AdminWarehouse {
-                        warehouse: warehouse.to_string(),
-                        company: String::new(),
-                        is_group: false,
-                        parent_warehouse: String::new(),
-                    })
-                })
-                .collect(),
-            limit,
-            0,
-        ))
+        Ok(Vec::new())
     }
 
     async fn item_group_tree(&self) -> Result<Vec<AdminItemGroup>, AdminPortError> {

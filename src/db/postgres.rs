@@ -9,7 +9,7 @@ const DEFAULT_MAX_CONNECTIONS: u32 = 16;
 const DEFAULT_ACQUIRE_TIMEOUT_MS: u64 = 500;
 const MIGRATION_LOCK_KEY: i64 = 6_514_811_918_052_026_001;
 
-const POSTGRES_MIGRATIONS: [(&str, &str); 14] = [
+const POSTGRES_MIGRATIONS: [(&str, &str); 16] = [
     (
         "0001_mini_erp_foundation",
         include_str!("../../migrations/postgres/0001_mini_erp_foundation.sql"),
@@ -65,6 +65,14 @@ const POSTGRES_MIGRATIONS: [(&str, &str); 14] = [
     (
         "0014_raw_material_stock_corrections",
         include_str!("../../migrations/postgres/0014_raw_material_stock_corrections.sql"),
+    ),
+    (
+        "0015_item_identity_updates",
+        include_str!("../../migrations/postgres/0015_item_identity_updates.sql"),
+    ),
+    (
+        "0018_item_master_without_warehouse",
+        include_str!("../../migrations/postgres/0018_item_master_without_warehouse.sql"),
     ),
 ];
 
