@@ -706,6 +706,88 @@ async fn material_taminotchi_warehouses_are_limited_to_assigned_warehouses() {
 }
 
 #[tokio::test]
+async fn werka_gscale_warehouses_are_limited_to_assigned_warehouses() {
+    let state = test_state();
+    assign_warehouse_to_principal(
+        &state,
+        PrincipalRole::Werka,
+        "werka-warehouse-scope",
+        "Kalidor",
+    )
+    .await;
+    state
+        .warehouses
+        .upsert_warehouse(WarehouseUpsert {
+            warehouse: "Boshqa ombor".to_string(),
+            company: "Company".to_string(),
+            is_group: false,
+            parent_warehouse: String::new(),
+        })
+        .await
+        .expect("other warehouse");
+    let token = session_for(&state, PrincipalRole::Werka, "werka-warehouse-scope").await;
+
+    let response = build_router(state.clone())
+        .oneshot(request(
+            "GET",
+            "/v1/mobile/admin/warehouses?limit=50",
+            &token,
+        ))
+        .await
+        .expect("warehouses response");
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = json_body(response).await;
+    let warehouses = body.as_array().expect("warehouse array");
+    assert_eq!(warehouses.len(), 1, "{body}");
+    assert_eq!(warehouses[0]["warehouse"], "Kalidor");
+
+    let write_attempt = build_router(state.clone())
+        .oneshot(request_with_body(
+            "POST",
+            "/v1/mobile/admin/warehouses",
+            &token,
+            r#"{"warehouse":"Werka yaratgan ombor"}"#,
+        ))
+        .await
+        .expect("warehouse write response");
+    assert_eq!(write_attempt.status(), StatusCode::FORBIDDEN);
+
+    let delete_attempt = build_router(state)
+        .oneshot(request_with_body(
+            "DELETE",
+            "/v1/mobile/admin/warehouses",
+            &token,
+            r#"{"warehouse":"Kalidor"}"#,
+        ))
+        .await
+        .expect("warehouse delete response");
+    assert_eq!(delete_attempt.status(), StatusCode::FORBIDDEN);
+}
+
+#[tokio::test]
+async fn werka_without_assignment_gets_an_empty_warehouse_catalog() {
+    let state = test_state();
+    let token = session_for(&state, PrincipalRole::Werka, "werka-without-warehouse").await;
+
+    let response = build_router(state)
+        .oneshot(request(
+            "GET",
+            "/v1/mobile/admin/warehouses?limit=50",
+            &token,
+        ))
+        .await
+        .expect("warehouses response");
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = json_body(response).await;
+    assert!(
+        body.as_array().expect("warehouse array").is_empty(),
+        "{body}"
+    );
+}
+
+#[tokio::test]
 async fn material_taminotchi_warehouse_summary_uses_assigned_warehouses_only() {
     let state = test_state();
     assign_warehouse_to_principal(
@@ -715,13 +797,7 @@ async fn material_taminotchi_warehouse_summary_uses_assigned_warehouses_only() {
         "Kalidor",
     )
     .await;
-    assign_warehouse_to_principal(
-        &state,
-        PrincipalRole::Supplier,
-        "SUP-001",
-        "Boshqa ombor",
-    )
-    .await;
+    assign_warehouse_to_principal(&state, PrincipalRole::Supplier, "SUP-001", "Boshqa ombor").await;
     let token = session_for(
         &state,
         PrincipalRole::MaterialTaminotchi,

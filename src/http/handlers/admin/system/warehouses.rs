@@ -21,6 +21,7 @@ pub async fn warehouses(
             Capability::CatalogItemRead,
             Capability::ApparatusQueueRead,
             Capability::RawMaterialAssign,
+            Capability::GscaleCatalogRead,
         ],
     )
     .await?;
@@ -54,8 +55,12 @@ pub async fn warehouses(
         return Ok(json_response(saved));
     }
     let limit = optional_search_limit(query.limit.as_deref(), 30, 500);
-    let material_scope = material_warehouse_scope(&state, &principal).await?;
-    let fetch_limit = if material_scope.is_some() { 500 } else { limit };
+    let warehouse_scope = warehouse_list_scope(&state, &principal).await?;
+    let fetch_limit = if warehouse_scope.is_some() {
+        500
+    } else {
+        limit
+    };
     let mut warehouses = state
         .admin
         .warehouses(
@@ -101,7 +106,7 @@ pub async fn warehouses(
                 .cmp(&right.warehouse.to_lowercase())
         });
     }
-    if let Some(scope) = material_scope.as_ref() {
+    if let Some(scope) = warehouse_scope.as_ref() {
         warehouses = scoped_warehouses(warehouses, scope);
     }
     warehouses.truncate(limit);
@@ -302,18 +307,36 @@ async fn material_warehouse_scope(
     if principal.role != PrincipalRole::MaterialTaminotchi {
         return Ok(None);
     }
+    Ok(Some(assigned_warehouse_scope(state, principal).await?))
+}
+
+async fn warehouse_list_scope(
+    state: &AppState,
+    principal: &Principal,
+) -> Result<Option<std::collections::BTreeSet<String>>, AdminError> {
+    if !matches!(
+        principal.role,
+        PrincipalRole::Werka | PrincipalRole::MaterialTaminotchi
+    ) {
+        return Ok(None);
+    }
+    Ok(Some(assigned_warehouse_scope(state, principal).await?))
+}
+
+async fn assigned_warehouse_scope(
+    state: &AppState,
+    principal: &Principal,
+) -> Result<std::collections::BTreeSet<String>, AdminError> {
     let assigned = state
         .warehouses
         .assigned_warehouse_names(principal)
         .await
         .map_err(warehouse_error)?;
-    Ok(Some(
-        assigned
-            .into_iter()
-            .map(|warehouse| warehouse.trim().to_lowercase())
-            .filter(|warehouse| !warehouse.is_empty())
-            .collect(),
-    ))
+    Ok(assigned
+        .into_iter()
+        .map(|warehouse| warehouse.trim().to_lowercase())
+        .filter(|warehouse| !warehouse.is_empty())
+        .collect())
 }
 
 fn scoped_warehouses(
