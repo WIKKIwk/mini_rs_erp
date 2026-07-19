@@ -62,16 +62,16 @@ impl MessageRow {
             sequence: self.message_sequence,
             message_type: self.message_type,
             body: self.body,
-            attachment: attachment(
-                self.attachment_id,
-                self.media_id,
-                self.media_kind,
-                self.media_content_type,
-                self.media_size_bytes,
-                self.media_width_pixels,
-                self.media_height_pixels,
-                self.media_duration_ms,
-            ),
+            attachment: attachment(AttachmentFields {
+                attachment_id: self.attachment_id,
+                media_id: self.media_id,
+                kind: self.media_kind,
+                content_type: self.media_content_type,
+                size_bytes: self.media_size_bytes,
+                width_pixels: self.media_width_pixels,
+                height_pixels: self.media_height_pixels,
+                duration_ms: self.media_duration_ms,
+            }),
             created_at_unix: self.created_at_unix,
             edited_at_unix: self.edited_at_unix,
             deleted_at_unix: self.deleted_at_unix,
@@ -167,16 +167,16 @@ impl ConversationRow {
                 sequence,
                 message_type,
                 body,
-                attachment: attachment(
-                    self.attachment_id,
-                    self.media_id,
-                    self.media_kind,
-                    self.media_content_type,
-                    self.media_size_bytes,
-                    self.media_width_pixels,
-                    self.media_height_pixels,
-                    self.media_duration_ms,
-                ),
+                attachment: attachment(AttachmentFields {
+                    attachment_id: self.attachment_id,
+                    media_id: self.media_id,
+                    kind: self.media_kind,
+                    content_type: self.media_content_type,
+                    size_bytes: self.media_size_bytes,
+                    width_pixels: self.media_width_pixels,
+                    height_pixels: self.media_height_pixels,
+                    duration_ms: self.media_duration_ms,
+                }),
                 created_at_unix,
                 edited_at_unix: self.edited_at_unix,
                 deleted_at_unix: self.deleted_at_unix,
@@ -196,7 +196,7 @@ impl ConversationRow {
     }
 }
 
-fn attachment(
+struct AttachmentFields {
     attachment_id: Option<String>,
     media_id: Option<String>,
     kind: Option<String>,
@@ -205,7 +205,9 @@ fn attachment(
     width_pixels: Option<i32>,
     height_pixels: Option<i32>,
     duration_ms: Option<i64>,
-) -> Option<ChatMessageAttachment> {
+}
+
+fn attachment(fields: AttachmentFields) -> Option<ChatMessageAttachment> {
     let (
         Some(attachment_id),
         Some(media_id),
@@ -215,13 +217,13 @@ fn attachment(
         Some(width_pixels),
         Some(height_pixels),
     ) = (
-        attachment_id,
-        media_id,
-        kind,
-        content_type,
-        size_bytes,
-        width_pixels,
-        height_pixels,
+        fields.attachment_id,
+        fields.media_id,
+        fields.kind,
+        fields.content_type,
+        fields.size_bytes,
+        fields.width_pixels,
+        fields.height_pixels,
     )
     else {
         return None;
@@ -236,7 +238,7 @@ fn attachment(
         size_bytes,
         width_pixels,
         height_pixels,
-        duration_ms,
+        duration_ms: fields.duration_ms,
     })
 }
 
@@ -253,7 +255,7 @@ pub(super) fn role_key(role: &PrincipalRole) -> &'static str {
     }
 }
 
-fn parse_role(value: &str) -> Result<PrincipalRole, ChatError> {
+pub(super) fn parse_role(value: &str) -> Result<PrincipalRole, ChatError> {
     match value.trim() {
         "supplier" => Ok(PrincipalRole::Supplier),
         "werka" => Ok(PrincipalRole::Werka),

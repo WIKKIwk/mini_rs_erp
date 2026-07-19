@@ -8,15 +8,13 @@ use tokio::io::{AsyncReadExt, AsyncSeekExt};
 use tokio::sync::mpsc;
 
 use super::chat_media_local_files::{
-    assemble_multipart, content_type_path, copy_private_file, map_io_error,
-    multipart_part_path, remove_if_exists, sha256_etag, temporary_path,
-    write_stream,
+    assemble_multipart, content_type_path, copy_private_file, map_io_error, multipart_part_path,
+    remove_if_exists, sha256_etag, temporary_path, write_stream,
 };
 use crate::core::chat_media::{
-    ChatMediaByteStream, ChatMediaMultipartUpload, ChatMediaRangeRequest,
-    ChatMediaStorage, ChatMediaStorageDownload, ChatMediaStorageError,
-    ChatMediaStorageObject, ChatMediaStoragePart, ChatMediaStorageUpload,
-    ChatMediaStoredContent, ChatMediaStoredStream, resolve_media_range,
+    ChatMediaByteStream, ChatMediaMultipartUpload, ChatMediaRangeRequest, ChatMediaStorage,
+    ChatMediaStorageDownload, ChatMediaStorageError, ChatMediaStorageObject, ChatMediaStoragePart,
+    ChatMediaStorageUpload, ChatMediaStoredContent, ChatMediaStoredStream, resolve_media_range,
 };
 
 #[derive(Clone)]
@@ -54,10 +52,7 @@ impl LocalChatMediaStorage {
         Ok(path)
     }
 
-    fn multipart_path(
-        &self,
-        storage_upload_id: &str,
-    ) -> Result<PathBuf, ChatMediaStorageError> {
+    fn multipart_path(&self, storage_upload_id: &str) -> Result<PathBuf, ChatMediaStorageError> {
         if storage_upload_id.is_empty()
             || storage_upload_id.len() > 128
             || !storage_upload_id
@@ -76,8 +71,7 @@ impl LocalChatMediaStorage {
     ) -> Result<PathBuf, ChatMediaStorageError> {
         self.path_for_key(object_key)?;
         let path = self.multipart_path(storage_upload_id)?;
-        let stored_key = fs::read_to_string(path.join("object-key"))
-            .map_err(map_io_error)?;
+        let stored_key = fs::read_to_string(path.join("object-key")).map_err(map_io_error)?;
         if stored_key != object_key {
             return Err(ChatMediaStorageError::InvalidObjectKey);
         }
@@ -235,8 +229,8 @@ impl ChatMediaStorage for LocalChatMediaStorage {
     ) -> Result<ChatMediaStorageObject, ChatMediaStorageError> {
         let path = self.path_for_key(object_key)?;
         let metadata = tokio::fs::metadata(&path).await.map_err(map_io_error)?;
-        let size_bytes = i64::try_from(metadata.len())
-            .map_err(|_| ChatMediaStorageError::OperationFailed)?;
+        let size_bytes =
+            i64::try_from(metadata.len()).map_err(|_| ChatMediaStorageError::OperationFailed)?;
         let content_type = tokio::fs::read_to_string(content_type_path(&path))
             .await
             .ok()
@@ -280,8 +274,8 @@ impl ChatMediaStorage for LocalChatMediaStorage {
     ) -> Result<ChatMediaStoredStream, ChatMediaStorageError> {
         let path = self.path_for_key(object_key)?;
         let metadata = tokio::fs::metadata(&path).await.map_err(map_io_error)?;
-        let total_size_bytes = i64::try_from(metadata.len())
-            .map_err(|_| ChatMediaStorageError::SizeMismatch)?;
+        let total_size_bytes =
+            i64::try_from(metadata.len()).map_err(|_| ChatMediaStorageError::SizeMismatch)?;
         let (start_byte, end_byte_inclusive, partial) =
             resolve_media_range(range, total_size_bytes)?;
         let content_length = end_byte_inclusive - start_byte + 1;
@@ -344,12 +338,12 @@ impl ChatMediaStorage for LocalChatMediaStorage {
         content_type: &str,
         content: bytes::Bytes,
     ) -> Result<ChatMediaStorageObject, ChatMediaStorageError> {
-        let size = i64::try_from(content.len())
-            .map_err(|_| ChatMediaStorageError::SizeMismatch)?;
+        let size = i64::try_from(content.len()).map_err(|_| ChatMediaStorageError::SizeMismatch)?;
         let stream = Box::pin(async_stream::stream! {
             yield Ok(content);
         });
-        self.put_object(object_key, content_type, size, stream).await
+        self.put_object(object_key, content_type, size, stream)
+            .await
     }
 
     async fn put_private_file(

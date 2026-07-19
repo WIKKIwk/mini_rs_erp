@@ -78,10 +78,7 @@ impl SystemUserService {
         self.store.users(role, query, limit.clamp(1, 500)).await
     }
 
-    pub async fn users_by_ids(
-        &self,
-        ids: &[String],
-    ) -> Result<Vec<SystemUser>, SystemUserError> {
+    pub async fn users_by_ids(&self, ids: &[String]) -> Result<Vec<SystemUser>, SystemUserError> {
         self.store.users_by_ids(ids).await
     }
 

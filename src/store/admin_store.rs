@@ -17,6 +17,7 @@ use crate::core::auth::ports::{
 use crate::core::werka::models::{CustomerDirectoryEntry, SupplierItem};
 
 mod access_ports;
+mod item_customer_writes;
 mod read_port;
 #[cfg(test)]
 mod tests;

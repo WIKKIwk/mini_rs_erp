@@ -61,6 +61,8 @@ impl AdminService {
             code_locked: state.code_locked(now),
             code_retry_after_sec: state.retry_after_seconds(now),
             assigned_items,
+            assigned_item_groups: Vec::new(),
+            assigned_warehouses: Vec::new(),
         })
     }
 }

@@ -5,9 +5,7 @@ use std::path::{Path, PathBuf};
 use bytes::Bytes;
 use tokio::sync::mpsc;
 
-use crate::core::chat_media::{
-    ChatMediaByteStream, ChatMediaStorageError, ChatMediaStoragePart,
-};
+use crate::core::chat_media::{ChatMediaByteStream, ChatMediaStorageError, ChatMediaStoragePart};
 
 pub(super) fn validate_multipart_parts(
     parts: &[ChatMediaStoragePart],
@@ -18,11 +16,9 @@ pub(super) fn validate_multipart_parts(
     }
     let mut total = 0_i64;
     for (index, part) in parts.iter().enumerate() {
-        let expected_part = i32::try_from(index + 1)
-            .map_err(|_| ChatMediaStorageError::SizeMismatch)?;
-        if part.part_number != expected_part
-            || part.size_bytes <= 0
-            || part.etag.trim().is_empty()
+        let expected_part =
+            i32::try_from(index + 1).map_err(|_| ChatMediaStorageError::SizeMismatch)?;
+        if part.part_number != expected_part || part.size_bytes <= 0 || part.etag.trim().is_empty()
         {
             return Err(ChatMediaStorageError::SizeMismatch);
         }
@@ -122,8 +118,7 @@ pub(super) fn write_download(
     std::fs::create_dir_all(parent).map_err(|_| ChatMediaStorageError::OperationFailed)?;
     let temporary = temporary_path(&destination);
     let _ = std::fs::remove_file(&temporary);
-    let mut file =
-        File::create(&temporary).map_err(|_| ChatMediaStorageError::OperationFailed)?;
+    let mut file = File::create(&temporary).map_err(|_| ChatMediaStorageError::OperationFailed)?;
     let mut written = 0_i64;
     while let Some(chunk) = receiver.blocking_recv() {
         let chunk = chunk?;
@@ -131,8 +126,7 @@ pub(super) fn write_download(
             .map_err(|_| ChatMediaStorageError::OperationFailed)?;
         written = written
             .checked_add(
-                i64::try_from(chunk.len())
-                    .map_err(|_| ChatMediaStorageError::SizeMismatch)?,
+                i64::try_from(chunk.len()).map_err(|_| ChatMediaStorageError::SizeMismatch)?,
             )
             .ok_or(ChatMediaStorageError::SizeMismatch)?;
     }

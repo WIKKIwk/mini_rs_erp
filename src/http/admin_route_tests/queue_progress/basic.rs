@@ -48,11 +48,14 @@ async fn queue_pause_prints_progress_qr_and_resume_uses_lookup() {
             "POST",
             "/v1/mobile/admin/production-maps/queue-action",
             &worker_token,
-            &with_test_qolip(r#"{
+            &with_test_qolip(
+                r#"{
                 "apparatus":"7 ta rangli pechat",
                 "order_id":"zakaz-progress-route",
                 "action":"start"
-            }"#, "zakaz-progress-route"),
+            }"#,
+                "zakaz-progress-route",
+            ),
         ))
         .await
         .expect("start");
@@ -184,11 +187,14 @@ async fn queue_pause_keeps_state_successful_when_progress_print_fails() {
             "POST",
             "/v1/mobile/admin/production-maps/queue-action",
             &worker_token,
-            &with_test_qolip(r#"{
+            &with_test_qolip(
+                r#"{
                 "apparatus":"7 ta rangli pechat",
                 "order_id":"zakaz-progress-print-fail",
                 "action":"start"
-            }"#, "zakaz-progress-print-fail"),
+            }"#,
+                "zakaz-progress-print-fail",
+            ),
         ))
         .await
         .expect("start");

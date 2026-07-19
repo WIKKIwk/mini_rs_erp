@@ -32,7 +32,9 @@ fn insert_cors_headers(headers: &mut HeaderMap) {
     );
     headers.insert(
         header::ACCESS_CONTROL_EXPOSE_HEADERS,
-        HeaderValue::from_static("accept-ranges,content-length,content-range,content-type,location"),
+        HeaderValue::from_static(
+            "accept-ranges,content-length,content-range,content-type,location",
+        ),
     );
     headers.insert(
         header::ACCESS_CONTROL_MAX_AGE,

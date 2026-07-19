@@ -44,12 +44,11 @@ use self::material_helpers::{
 };
 use self::order_query_helpers::{
     load_active_order_run_session, load_active_order_run_session_for_qolip,
-    load_active_order_run_sessions_for_worker,
-    load_completed_queue_orders_for_actor, load_order_run_session,
-    load_order_run_sessions_for_audit, load_order_run_sessions_for_order, load_progress_batch,
-    load_progress_batch_by_qr, load_progress_batches_for_audit, load_progress_batches_for_order,
-    load_progress_batches_for_worker, load_queue_action_logs_for_orders,
-    load_queue_action_logs_for_worker,
+    load_active_order_run_sessions_for_worker, load_completed_queue_orders_for_actor,
+    load_order_run_session, load_order_run_sessions_for_audit, load_order_run_sessions_for_order,
+    load_progress_batch, load_progress_batch_by_qr, load_progress_batches_for_audit,
+    load_progress_batches_for_order, load_progress_batches_for_worker,
+    load_queue_action_logs_for_orders, load_queue_action_logs_for_worker,
 };
 use self::progress_helpers::{
     put_order_progress_batch, put_order_progress_batch_tx, put_order_progress_event,
@@ -423,14 +422,13 @@ impl ProductionMapStorePort for PostgresProductionMapStore {
         } else {
             false
         };
-        let raw_material_stock_warehouses =
-            apply_raw_material_stock_transitions_tx(
-                &mut tx,
-                &write.raw_material_stock_transitions,
-                &write.event.actor,
-                &write.event.apparatus,
-            )
-            .await?;
+        let raw_material_stock_warehouses = apply_raw_material_stock_transitions_tx(
+            &mut tx,
+            &write.raw_material_stock_transitions,
+            &write.event.actor,
+            &write.event.apparatus,
+        )
+        .await?;
         if let Some(report) = &write.returned_paint_report {
             super::postgres_returned_paint::insert_returned_paint_request_tx(&mut tx, report)
                 .await
@@ -487,9 +485,7 @@ fn production_map_qolip_checkout_error(error: QolipError) -> ProductionMapError 
             ProductionMapError::QolipCodeMismatch
         }
         QolipError::InsufficientStock => ProductionMapError::QolipInsufficientStock,
-        QolipError::LocationIdentityMismatch => {
-            ProductionMapError::QolipLocationIdentityMismatch
-        }
+        QolipError::LocationIdentityMismatch => ProductionMapError::QolipLocationIdentityMismatch,
         _ => ProductionMapError::StoreFailed,
     }
 }

@@ -535,7 +535,8 @@ async fn pechat_qolip_without_location_starts_and_is_blocked_on_another_apparatu
             "POST",
             "/v1/mobile/admin/production-maps/queue-action",
             &worker_token,
-            &with_test_returned_paint(r#"{
+            &with_test_returned_paint(
+                r#"{
                 "apparatus":"7 ta rangli pechat - A",
                 "order_id":"zakaz-shared-qolip-a",
                 "action":"complete",
@@ -543,7 +544,8 @@ async fn pechat_qolip_without_location_starts_and_is_blocked_on_another_apparatu
                 "total_waste":1,
                 "finished_goods_kg":10,
                 "finished_goods_meter":100
-            }"#),
+            }"#,
+            ),
         ))
         .await
         .expect("complete first apparatus work");
@@ -582,8 +584,7 @@ async fn failed_queue_commit_does_not_checkout_qolip() {
         .await
         .expect("aparatchi assignment");
     let admin_token = session(&state, PrincipalRole::Admin).await;
-    let worker_token =
-        session_for(&state, PrincipalRole::Aparatchi, "pechat-worker-atomic").await;
+    let worker_token = session_for(&state, PrincipalRole::Aparatchi, "pechat-worker-atomic").await;
     let router = build_router(state);
 
     let saved = router
@@ -677,11 +678,7 @@ async fn failed_queue_commit_does_not_checkout_qolip() {
     assert_eq!(locations_body["locations"][0]["quantity"], 1);
 
     let checkouts = router
-        .oneshot(request(
-            "GET",
-            "/v1/mobile/qolip/checkouts",
-            &admin_token,
-        ))
+        .oneshot(request("GET", "/v1/mobile/qolip/checkouts", &admin_token))
         .await
         .expect("checkouts after rollback");
     let checkouts_body = json_body(checkouts).await;

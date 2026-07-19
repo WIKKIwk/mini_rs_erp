@@ -226,6 +226,10 @@ pub(super) fn routes() -> Router<AppState> {
             any(admin::material_taminotchi_phone),
         )
         .route(
+            "/v1/mobile/admin/material-taminotchilar/item-groups",
+            any(admin::material_taminotchi_item_groups),
+        )
+        .route(
             "/v1/mobile/admin/material-taminotchilar/code/regenerate",
             any(admin::material_taminotchi_code_regenerate),
         )
@@ -256,7 +260,7 @@ pub(super) fn routes() -> Router<AppState> {
         )
         .route("/v1/mobile/admin/items", any(admin::items))
         .route("/v1/mobile/admin/items/detail", any(admin::item_detail))
-        .route("/v1/mobile/admin/apparatus", any(admin::apparatus_create))
+        .route("/v1/mobile/admin/apparatus", any(admin::apparatus))
         .route("/v1/mobile/admin/warehouses", any(admin::warehouses))
         .route(
             "/v1/mobile/admin/warehouses/live",

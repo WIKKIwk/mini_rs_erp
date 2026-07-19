@@ -1,7 +1,7 @@
-use super::*;
 use super::raw_materials::{
     material_warehouse_scope, raw_material_stock_locked_error, warehouse_in_scope,
 };
+use super::*;
 
 #[derive(Debug, serde::Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -82,13 +82,8 @@ pub async fn raw_material_stock_reprint_confirm(
         return Err(bad_request("raw_material_reprint_id_required"));
     }
     let stock = material_stock_in_scope(&state, &principal, &request.barcode).await?;
-    record_raw_material_label_reprinted(
-        &state,
-        &principal,
-        &stock,
-        request.reprint_id.trim(),
-    )
-    .await;
+    record_raw_material_label_reprinted(&state, &principal, &stock, request.reprint_id.trim())
+        .await;
     Ok(json_response(serde_json::json!({
         "ok": true,
         "reprint_id": request.reprint_id.trim(),
@@ -119,7 +114,12 @@ async fn reprintable_material_stock(
         .await
         .map_err(production_map_error)?
         .iter()
-        .any(|assignment| assignment.barcode.trim().eq_ignore_ascii_case(stock.barcode.trim()));
+        .any(|assignment| {
+            assignment
+                .barcode
+                .trim()
+                .eq_ignore_ascii_case(stock.barcode.trim())
+        });
     if has_assignment
         || !stock.status.trim().eq_ignore_ascii_case("available")
         || !stock.reserved_order_id.trim().is_empty()

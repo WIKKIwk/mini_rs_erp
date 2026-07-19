@@ -163,6 +163,7 @@ pub struct SupplierItem {
     pub code: String,
     pub name: String,
     pub uom: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
     pub warehouse: String,
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub item_group: String,

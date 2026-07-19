@@ -13,10 +13,10 @@ use crate::db::postgres_production_map::PostgresProductionMapStore;
 use crate::db::postgres_qolip::PostgresQolipStore;
 use crate::db::postgres_raw_material_events::PostgresRawMaterialEventStore;
 use crate::db::postgres_returned_paint::PostgresReturnedPaintStore;
+use crate::db::postgres_system_user::PostgresSystemUserStore;
 use crate::db::postgres_warehouse::PostgresWarehouseStore;
 use crate::db::postgres_worker::PostgresWorkerStore;
 use crate::db::postgres_worker_group::PostgresWorkerGroupStore;
-use crate::db::postgres_system_user::PostgresSystemUserStore;
 use crate::rps::RpsDriverClient;
 use crate::store::apparatus_group_store::ApparatusGroupStore;
 use crate::store::calculate_order_store::CalculateOrderStore;
@@ -189,7 +189,9 @@ pub(super) fn build_chat_service() -> ChatService {
     match postgres_pool("chat") {
         Some(pool) => {
             tracing::info!("mini ERP postgres chat store configured");
-            ChatService::new(Arc::new(PostgresChatStore::new(pool)))
+            let service = ChatService::new(Arc::new(PostgresChatStore::new(pool.clone())));
+            crate::db::postgres_chat::start_realtime_listener(pool, service.hub().clone());
+            service
         }
         None => ChatService::unavailable(),
     }
@@ -207,10 +209,7 @@ pub(super) fn build_chat_media_service(config: &AppConfig) -> ChatMediaService {
             tracing::info!("local private chat media storage configured");
             Arc::new(LocalChatMediaStorage::from_env())
         };
-    let service = ChatMediaService::new(
-        Arc::new(PostgresChatMediaRepository::new(pool)),
-        storage,
-    );
+    let service = ChatMediaService::new(Arc::new(PostgresChatMediaRepository::new(pool)), storage);
     service.start_cleanup_worker();
     service.start_processing_worker();
     service

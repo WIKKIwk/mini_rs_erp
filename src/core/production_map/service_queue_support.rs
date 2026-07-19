@@ -296,6 +296,8 @@ fn repair_next_apparatus_field(
 pub(super) fn finished_goods_stock_entry(
     batch: &OrderProgressBatch,
     warehouse: &str,
+    item_code: &str,
+    item_name: &str,
     actor: &QueueActionActor,
     qty: f64,
     uom: String,
@@ -305,8 +307,8 @@ pub(super) fn finished_goods_stock_entry(
         id: format!("finished:{}", batch.batch_id.trim()),
         warehouse: warehouse.to_string(),
         order_id: batch.order_id.trim().to_string(),
-        item_code: batch.label_item_code.trim().to_string(),
-        item_name: batch.label_item_name.trim().to_string(),
+        item_code: item_code.trim().to_string(),
+        item_name: item_name.trim().to_string(),
         qty,
         uom,
         status: "available".to_string(),
@@ -316,13 +318,17 @@ pub(super) fn finished_goods_stock_entry(
         accepted_by_ref: actor.ref_.trim().to_string(),
         accepted_by_display_name: actor.display_name.trim().to_string(),
         accepted_at_unix: now,
-        payload_json: finished_goods_stock_payload(batch, warehouse, actor, now),
+        payload_json: finished_goods_stock_payload(
+            batch, warehouse, item_code, item_name, actor, now,
+        ),
     }
 }
 
 fn finished_goods_stock_payload(
     batch: &OrderProgressBatch,
     warehouse: &str,
+    item_code: &str,
+    item_name: &str,
     actor: &QueueActionActor,
     now: i64,
 ) -> serde_json::Value {
@@ -332,6 +338,8 @@ fn finished_goods_stock_payload(
         "qr_payload": batch.qr_payload.trim(),
         "warehouse": warehouse,
         "order_id": batch.order_id.trim(),
+        "item_code": item_code.trim(),
+        "item_name": item_name.trim(),
         "accepted_by_role": actor.role.trim(),
         "accepted_by_ref": actor.ref_.trim(),
         "accepted_by_display_name": actor.display_name.trim(),

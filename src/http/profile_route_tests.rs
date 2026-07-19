@@ -298,10 +298,7 @@ async fn profile_get_returns_material_scope_and_capabilities() {
         value["assigned_item_groups"],
         serde_json::json!(["Kley", "Kraska"])
     );
-    assert_eq!(
-        value["assigned_warehouses"],
-        serde_json::json!(["Kalidor"])
-    );
+    assert_eq!(value["assigned_warehouses"], serde_json::json!(["Kalidor"]));
     assert!(
         value["capabilities"]
             .as_array()

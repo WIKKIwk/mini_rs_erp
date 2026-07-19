@@ -1,5 +1,9 @@
 use super::*;
-use crate::core::production_map::{OrderRunSession, OrderRunStatus, ProductionMapStorePort};
+use crate::core::production_map::queue_state::{ApparatusQueueAction, ApparatusQueueOrderState};
+use crate::core::production_map::{
+    ApparatusQueueActionEvent, ApparatusQueuePolicy, OrderRunSession, OrderRunStatus,
+    ProductionMapStorePort, QueueActionActor,
+};
 use crate::core::qolip::{
     MemoryQolipStore, QolipCheckout, QolipLocation, QolipService, QolipStorePort,
 };
@@ -145,22 +149,26 @@ async fn admin_worker_delete_requires_connection_confirmation_and_cleans_assignm
         .oneshot(request("GET", "/v1/mobile/admin/role-assignments", &token))
         .await
         .expect("role assignments after delete");
-    assert!(!json_body(assignments)
-        .await
-        .as_array()
-        .expect("assignments")
-        .iter()
-        .any(|assignment| assignment["principal_ref"] == "worker_delete_1"));
+    assert!(
+        !json_body(assignments)
+            .await
+            .as_array()
+            .expect("assignments")
+            .iter()
+            .any(|assignment| assignment["principal_ref"] == "worker_delete_1")
+    );
 
     let workers = build_router(state)
         .oneshot(request("GET", "/v1/mobile/admin/workers", &token))
         .await
         .expect("workers after delete");
-    assert!(json_body(workers)
-        .await
-        .as_array()
-        .expect("workers")
-        .is_empty());
+    assert!(
+        json_body(workers)
+            .await
+            .as_array()
+            .expect("workers")
+            .is_empty()
+    );
 }
 
 #[tokio::test]
@@ -219,11 +227,7 @@ async fn admin_worker_delete_is_blocked_by_active_work_even_when_confirmed() {
         .await
         .expect("workers after blocked delete");
     assert_eq!(
-        json_body(workers)
-            .await
-            .as_array()
-            .expect("workers")
-            .len(),
+        json_body(workers).await.as_array().expect("workers").len(),
         1
     );
 }
@@ -309,11 +313,7 @@ async fn admin_worker_delete_is_blocked_by_open_qolip_checkout() {
         .await
         .expect("workers after blocked qolip delete");
     assert_eq!(
-        json_body(workers)
-            .await
-            .as_array()
-            .expect("workers")
-            .len(),
+        json_body(workers).await.as_array().expect("workers").len(),
         1
     );
 }
@@ -709,11 +709,14 @@ async fn admin_worker_profile_detail_returns_assignments_and_activity() {
             "POST",
             "/v1/mobile/admin/production-maps/queue-action",
             &worker_token,
-            &with_test_qolip(r#"{
+            &with_test_qolip(
+                r#"{
                 "apparatus":"7 ta rangli pechat",
                 "order_id":"zakaz-worker-profile",
                 "action":"start"
-            }"#, "zakaz-worker-profile"),
+            }"#,
+                "zakaz-worker-profile",
+            ),
         ))
         .await
         .expect("start queue");
@@ -739,4 +742,84 @@ async fn admin_worker_profile_detail_returns_assignments_and_activity() {
         "zakaz-worker-profile"
     );
     assert_eq!(body["recent_logs"][0]["actor_ref"], "worker_profile_1");
+}
+
+#[tokio::test]
+async fn replacement_worker_with_same_name_does_not_inherit_old_history() {
+    let mut state = test_state();
+    let production_store = Arc::new(MemoryProductionMapStore::new());
+    state.production_maps = ProductionMapService::new(production_store.clone());
+    let admin_token = session(&state, PrincipalRole::Admin).await;
+
+    let old_worker = build_router(state.clone())
+        .oneshot(request_with_body(
+            "POST",
+            "/v1/mobile/admin/workers",
+            &admin_token,
+            r#"{"id":"worker_history_old","name":"Bir xil ism","phone":"+998901119999","level":"Master"}"#,
+        ))
+        .await
+        .expect("create old worker");
+    assert_eq!(old_worker.status(), StatusCode::OK);
+
+    production_store
+        .append_apparatus_queue_action_event(ApparatusQueueActionEvent {
+            event_id: "event-worker-history-old".to_string(),
+            apparatus: "Pechat 1".to_string(),
+            order_id: "zakaz-worker-history-old".to_string(),
+            action: ApparatusQueueAction::Start,
+            from_state: ApparatusQueueOrderState::Pending,
+            to_state: ApparatusQueueOrderState::InProgress,
+            policy: ApparatusQueuePolicy::FreePick,
+            actor: QueueActionActor {
+                role: "aparatchi".to_string(),
+                ref_: "worker_history_old".to_string(),
+                display_name: "Bir xil ism".to_string(),
+            },
+            assigned_apparatus: Vec::new(),
+            payload_json: serde_json::json!({}),
+        })
+        .await
+        .expect("old worker history");
+
+    let deactivated = build_router(state.clone())
+        .oneshot(request(
+            "DELETE",
+            "/v1/mobile/admin/workers?id=worker_history_old",
+            &admin_token,
+        ))
+        .await
+        .expect("deactivate old worker");
+    assert_eq!(deactivated.status(), StatusCode::OK);
+
+    let replacement = build_router(state.clone())
+        .oneshot(request_with_body(
+            "POST",
+            "/v1/mobile/admin/workers",
+            &admin_token,
+            r#"{"id":"worker_history_new","name":"Bir xil ism","phone":"+998901119999","level":"Master"}"#,
+        ))
+        .await
+        .expect("create replacement worker");
+    assert_eq!(replacement.status(), StatusCode::OK);
+
+    let detail = build_router(state)
+        .oneshot(request(
+            "GET",
+            "/v1/mobile/admin/workers/profile-detail?id=worker_history_new",
+            &admin_token,
+        ))
+        .await
+        .expect("replacement profile detail");
+    assert_eq!(detail.status(), StatusCode::OK);
+    let detail_body = json_body(detail).await;
+    assert_eq!(detail_body["worker"]["id"], "worker_history_new");
+    assert_eq!(detail_body["recent_logs"], serde_json::json!([]));
+
+    let old_history = production_store
+        .queue_action_logs_for_worker(&["worker_history_old".to_string()], "", 10)
+        .await
+        .expect("preserved old history");
+    assert_eq!(old_history.len(), 1);
+    assert_eq!(old_history[0].actor_ref, "worker_history_old");
 }

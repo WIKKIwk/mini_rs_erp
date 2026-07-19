@@ -1028,11 +1028,8 @@ async fn downstream_output_processes_input_batch_and_links_new_wip_batch() {
     assert_eq!(output.payload_json["parent_batch_id"], first_batch.batch_id);
     assert_eq!(output.payload_json["from_apparatus"], second);
     assert_eq!(output.status_detail.work_status, "completed");
-    assert_eq!(
-        output.status_detail.flow_status,
-        "finished_pending_acceptance"
-    );
-    assert_eq!(output.status_detail.stock_status, "pending_acceptance");
+    assert_eq!(output.status_detail.flow_status, "free_wip");
+    assert!(output.status_detail.stock_status.is_empty());
 }
 
 #[tokio::test]
@@ -1120,7 +1117,7 @@ async fn downstream_complete_keeps_order_open_until_all_input_wips_processed() {
     assert_eq!(partial_order_status.order_status, "partially_completed");
     assert_eq!(partial_order_status.waiting_wip_count, 2);
     assert_eq!(partial_order_status.waiting_next_stage_count, 1);
-    assert_eq!(partial_order_status.finished_pending_acceptance_count, 1);
+    assert_eq!(partial_order_status.free_wip_count, 1);
     assert_eq!(partial_order_status.processed_wip_count, 1);
     assert_eq!(
         service
@@ -1199,30 +1196,41 @@ async fn downstream_complete_keeps_order_open_until_all_input_wips_processed() {
         .order_status_detail(order_id)
         .await
         .expect("final order status");
-    assert_eq!(
-        final_order_status.order_status,
-        "finished_pending_acceptance"
-    );
-    assert_eq!(final_order_status.finished_pending_acceptance_count, 2);
+    assert_eq!(final_order_status.order_status, "completed");
+    assert_eq!(final_order_status.flow_status, "free_wip");
+    assert!(final_order_status.stock_status.is_empty());
+    assert_eq!(final_order_status.free_wip_count, 2);
     let final_output = final_complete
         .progress_batch
         .expect("final output batch has status detail");
     assert_eq!(final_output.status_detail.work_status, "completed");
-    assert_eq!(
-        final_output.status_detail.flow_status,
-        "finished_pending_acceptance"
-    );
-    assert_eq!(
-        final_output.status_detail.stock_status,
-        "pending_acceptance"
-    );
+    assert_eq!(final_output.status_detail.flow_status, "free_wip");
+    assert!(final_output.status_detail.stock_status.is_empty());
 
-    service
+    let aparatchi_receive = service
         .receive_finished_goods(
             &first_final_output.batch_id,
             &first_final_output.qr_payload,
             "Tayyor mahsulot ombori",
             actor.clone(),
+        )
+        .await;
+    assert_eq!(
+        aparatchi_receive,
+        Err(ProductionMapError::QueueActionNotAllowed)
+    );
+
+    let warehouse_actor = QueueActionActor {
+        role: "werka".to_string(),
+        ref_: "warehouse-worker".to_string(),
+        display_name: "Warehouse Worker".to_string(),
+    };
+    service
+        .receive_finished_goods(
+            &first_final_output.batch_id,
+            &first_final_output.qr_payload,
+            "Tayyor mahsulot ombori",
+            warehouse_actor.clone(),
         )
         .await
         .expect("receive first final output");
@@ -1231,11 +1239,13 @@ async fn downstream_complete_keeps_order_open_until_all_input_wips_processed() {
             &final_output.batch_id,
             &final_output.qr_payload,
             "Tayyor mahsulot ombori",
-            actor,
+            warehouse_actor,
         )
         .await
         .expect("receive second final output");
-    assert_eq!(received.order_status.order_status, "accepted");
+    assert_eq!(received.order_status.order_status, "completed");
+    assert_eq!(received.order_status.flow_status, "accepted_to_stock");
+    assert_eq!(received.order_status.stock_status, "accepted");
     assert_eq!(received.order_status.accepted_wip_count, 2);
 }
 

@@ -9,7 +9,7 @@ const DEFAULT_MAX_CONNECTIONS: u32 = 16;
 const DEFAULT_ACQUIRE_TIMEOUT_MS: u64 = 500;
 const MIGRATION_LOCK_KEY: i64 = 6_514_811_918_052_026_001;
 
-const POSTGRES_MIGRATIONS: [(&str, &str); 16] = [
+const POSTGRES_MIGRATIONS: [(&str, &str); 20] = [
     (
         "0001_mini_erp_foundation",
         include_str!("../../migrations/postgres/0001_mini_erp_foundation.sql"),
@@ -71,8 +71,24 @@ const POSTGRES_MIGRATIONS: [(&str, &str); 16] = [
         include_str!("../../migrations/postgres/0015_item_identity_updates.sql"),
     ),
     (
+        "0016_chat_delivery_reliability",
+        include_str!("../../migrations/postgres/0016_chat_delivery_reliability.sql"),
+    ),
+    (
+        "0017_chat_delivery_reliability_followup",
+        include_str!("../../migrations/postgres/0017_chat_delivery_reliability_followup.sql"),
+    ),
+    (
         "0018_item_master_without_warehouse",
         include_str!("../../migrations/postgres/0018_item_master_without_warehouse.sql"),
+    ),
+    (
+        "0019_chat_voice_messages",
+        include_str!("../../migrations/postgres/0019_chat_voice_messages.sql"),
+    ),
+    (
+        "0020_worker_identity_lifecycle",
+        include_str!("../../migrations/postgres/0020_worker_identity_lifecycle.sql"),
     ),
 ];
 
@@ -198,9 +214,7 @@ pub(crate) async fn apply_postgres_migrations_through(
     .await
 }
 
-async fn ensure_migration_history(
-    tx: &mut Transaction<'_, Postgres>,
-) -> Result<(), sqlx::Error> {
+async fn ensure_migration_history(tx: &mut Transaction<'_, Postgres>) -> Result<(), sqlx::Error> {
     sqlx::query(
         "CREATE TABLE IF NOT EXISTS mini_schema_migrations (
              version TEXT PRIMARY KEY,
@@ -242,13 +256,11 @@ async fn apply_migration(
             .execute(&mut **tx)
             .await?;
     }
-    sqlx::query(
-        "INSERT INTO mini_schema_migrations (version, checksum) VALUES ($1, $2)",
-    )
-    .bind(version)
-    .bind(checksum)
-    .execute(&mut **tx)
-    .await?;
+    sqlx::query("INSERT INTO mini_schema_migrations (version, checksum) VALUES ($1, $2)")
+        .bind(version)
+        .bind(checksum)
+        .execute(&mut **tx)
+        .await?;
     Ok(())
 }
 
@@ -328,11 +340,7 @@ fn split_sql_statements(sql: &str) -> Vec<String> {
 }
 
 fn next_char_len(sql: &str, index: usize) -> usize {
-    sql[index..]
-        .chars()
-        .next()
-        .map(char::len_utf8)
-        .unwrap_or(1)
+    sql[index..].chars().next().map(char::len_utf8).unwrap_or(1)
 }
 
 fn dollar_quote_tag(input: &str) -> Option<String> {
@@ -354,514 +362,4 @@ fn dollar_quote_tag(input: &str) -> Option<String> {
     None
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn postgres_config_uses_mini_erp_database_url() {
-        let config = PostgresConfig::from_env_with(|key| match key {
-            "MINI_ERP_DATABASE_URL" => {
-                Some("postgres://mini:secret@127.0.0.1:5432/mini_rs_erp".to_string())
-            }
-            _ => None,
-        })
-        .expect("config");
-
-        assert_eq!(
-            config.database_url,
-            "postgres://mini:secret@127.0.0.1:5432/mini_rs_erp"
-        );
-        assert_eq!(config.max_connections, 16);
-        assert_eq!(config.min_connections, 2);
-    }
-
-    #[test]
-    fn postgres_config_rejects_blank_database_url() {
-        let error = PostgresConfig::from_env_with(|_| Some(" ".to_string()))
-            .expect_err("blank url rejected");
-
-        assert_eq!(error, PostgresConfigError::MissingDatabaseUrl);
-    }
-
-    #[tokio::test]
-    async fn postgres_bootstrap_requires_database_url() {
-        let previous = std::env::var("MINI_ERP_DATABASE_URL").ok();
-        unsafe {
-            std::env::remove_var("MINI_ERP_DATABASE_URL");
-        }
-
-        let error = connect_and_migrate_required()
-            .await
-            .expect_err("missing database url must fail");
-
-        assert!(matches!(error, PostgresBootstrapError::MissingDatabaseUrl));
-        unsafe {
-            if let Some(value) = previous {
-                std::env::set_var("MINI_ERP_DATABASE_URL", value);
-            }
-        }
-    }
-
-    #[test]
-    fn postgres_foundation_migration_defines_core_tables() {
-        let migration = foundation_migration_sql();
-
-        for table in [
-            "mini_orders",
-            "mini_order_products",
-            "mini_quick_order_templates",
-            "mini_quick_order_images",
-            "mini_push_tokens",
-            "mini_items",
-            "mini_customers",
-            "mini_customer_items",
-            "mini_item_groups",
-            "mini_production_maps",
-            "mini_production_map_nodes",
-            "mini_production_map_edges",
-            "mini_apparatus",
-            "mini_apparatus_groups",
-            "mini_workers",
-            "mini_worker_groups",
-            "mini_queue_sequences",
-            "mini_queue_states",
-            "mini_warehouses",
-            "mini_qolip_locations",
-            "mini_gscale_receipts",
-            "mini_raw_material_stock",
-            "mini_raw_material_events",
-            "mini_finished_goods_stock",
-            "mini_rps_batches",
-            "mini_engine_events",
-            "mini_idempotency_keys",
-        ] {
-            assert!(
-                migration.contains(&format!("CREATE TABLE IF NOT EXISTS {table}")),
-                "missing table {table}"
-            );
-        }
-
-        for forbidden in ["tabWork Order", "tabBOM", "tabStock Entry", "doctype"] {
-            assert!(
-                !migration.to_lowercase().contains(&forbidden.to_lowercase()),
-                "migration must not contain legacy term {forbidden}"
-            );
-        }
-    }
-
-    #[test]
-    fn postgres_migration_runner_splits_foundation_sql() {
-        let statements = split_sql_statements(foundation_migration_sql());
-
-        assert!(statements.len() > 12);
-        assert!(
-            statements
-                .iter()
-                .any(|statement| statement.starts_with("CREATE TABLE IF NOT EXISTS mini_orders"))
-        );
-        assert!(statements.iter().all(|statement| !statement.ends_with(';')));
-    }
-
-    #[test]
-    fn postgres_migration_runner_keeps_dollar_quoted_functions_together() {
-        let statements = split_sql_statements(
-            "SELECT 1;\nCREATE FUNCTION demo() RETURNS void LANGUAGE plpgsql AS $$\nBEGIN\n  PERFORM 1;\nEND;\n$$;\nSELECT 2;",
-        );
-
-        assert_eq!(statements.len(), 3);
-        assert!(statements[1].contains("PERFORM 1;"));
-        assert!(statements[1].contains("END;"));
-    }
-
-    #[test]
-    fn postgres_migrations_are_versioned_and_checksummed() {
-        let versions = POSTGRES_MIGRATIONS
-            .iter()
-            .map(|(version, _)| *version)
-            .collect::<std::collections::BTreeSet<_>>();
-
-        assert_eq!(versions.len(), POSTGRES_MIGRATIONS.len());
-        assert!(POSTGRES_MIGRATIONS.iter().all(|(version, sql)| {
-            !version.trim().is_empty() && migration_checksum(sql).len() == 64
-        }));
-    }
-
-    #[test]
-    fn postgres_chat_migration_defines_durable_message_flow() {
-        let migration = POSTGRES_MIGRATIONS[4].1.to_lowercase();
-
-        for table in [
-            "mini_chat_principals",
-            "mini_chat_conversations",
-            "mini_chat_conversation_members",
-            "mini_chat_messages",
-            "mini_chat_device_cursors",
-            "mini_chat_outbox_events",
-        ] {
-            assert!(
-                migration.contains(&format!("create table if not exists {table}")),
-                "missing chat table {table}"
-            );
-        }
-        assert!(migration.contains("mini_chat_messages_client_id_unique"));
-        assert!(migration.contains("last_read_sequence"));
-        assert!(migration.contains("published_at is null"));
-        assert!(!migration.contains("partition by"));
-    }
-
-    #[test]
-    fn postgres_chat_media_migration_defines_private_upload_foundation() {
-        let migration = POSTGRES_MIGRATIONS[10].1.to_lowercase();
-
-        for table in [
-            "mini_chat_media",
-            "mini_chat_message_attachments",
-            "mini_chat_media_jobs",
-        ] {
-            assert!(
-                migration.contains(&format!("create table if not exists {table}")),
-                "missing chat media table {table}"
-            );
-        }
-        assert!(migration.contains("mini_chat_media_client_upload_unique"));
-        assert!(migration.contains("declared_size_bytes > 0"));
-        assert!(migration.contains("media_kind in ('image', 'video')"));
-        assert!(migration.contains("message_id text not null unique"));
-        assert!(migration.contains("media_id text not null unique"));
-        assert!(migration.contains("job_status = 'pending'"));
-        assert!(!migration.contains("public_url"));
-    }
-
-    #[test]
-    fn postgres_chat_media_v1_migration_enables_processed_attachments() {
-        let migration = POSTGRES_MIGRATIONS[11].1.to_lowercase();
-
-        assert!(migration.contains("processed_content_type"));
-        assert!(migration.contains("processed_size_bytes"));
-        assert!(migration.contains("'image', 'video'"));
-        assert!(migration.contains("char_length(body) between 0 and 4000"));
-        assert!(migration.contains("idx_mini_chat_media_jobs_claim"));
-        assert!(!migration.contains("public_url"));
-    }
-
-    #[test]
-    fn postgres_chat_media_incident_video_migration_enables_resumable_limits() {
-        let migration = POSTGRES_MIGRATIONS[12].1.to_lowercase();
-
-        assert!(migration.contains("declared_duration_ms between 1 and 600000"));
-        assert!(migration.contains("declared_size_bytes <= 2147483648"));
-        assert!(migration.contains("processed_size_bytes <= 1073741824"));
-        assert!(migration.contains("upload_mode in ('single', 'chunked')"));
-        assert!(migration.contains("create table if not exists mini_chat_media_upload_chunks"));
-        assert!(migration.contains("primary key (media_id, chunk_index)"));
-        assert!(migration.contains("frame_rate_milli between 1 and 60000"));
-        assert!(!migration.contains("public_url"));
-    }
-
-    #[test]
-    fn postgres_raw_material_correction_migration_extends_audit_constraints_safely() {
-        let migration = POSTGRES_MIGRATIONS[13].1.to_lowercase();
-
-        assert!(migration.contains("'stock_corrected'"));
-        assert!(migration.contains("'stock_correction'"));
-        assert!(migration.contains("mini_rme_stock_correction_consistent"));
-        assert!(migration.contains("set local lock_timeout = '5s'"));
-        assert!(migration.contains("set local statement_timeout = '60s'"));
-        assert!(migration.contains("not valid"));
-        assert!(migration.contains("validate constraint mini_rme_event_type_allowed"));
-        assert!(migration.contains("validate constraint mini_rme_source_type_allowed"));
-        assert!(migration.contains("validate constraint mini_rme_qty_sign_allowed"));
-        assert!(!migration.contains("delete from mini_raw_material_events"));
-        assert!(!migration.contains("update mini_raw_material_events"));
-    }
-
-    #[test]
-    fn postgres_boyoqchi_migration_defines_role_inbox() {
-        let migration = POSTGRES_MIGRATIONS[5].1.to_lowercase();
-
-        assert!(migration.contains("'qolipchi', 'boyoqchi'"));
-        assert!(migration.contains("create table if not exists mini_returned_paint_requests"));
-        assert!(migration.contains("target_role = 'boyoqchi'"));
-        assert!(migration.contains("jsonb_array_length(items_json) > 0"));
-    }
-
-    #[test]
-    fn postgres_runtime_ownership_migration_repairs_service_tables() {
-        let migration = POSTGRES_MIGRATIONS[6].1.to_lowercase();
-
-        assert!(migration.contains("rolname = 'mini_rs_erp'"));
-        for table in [
-            "mini_system_users",
-            "mini_chat_principals",
-            "mini_chat_conversations",
-            "mini_chat_conversation_members",
-            "mini_chat_messages",
-            "mini_chat_device_cursors",
-            "mini_chat_outbox_events",
-            "mini_returned_paint_requests",
-        ] {
-            assert!(migration.contains(&format!("'{table}'")));
-        }
-        assert!(migration.contains("owner to mini_rs_erp"));
-    }
-
-    #[test]
-    fn postgres_returned_paint_calculation_migration_uses_exact_numeric_columns() {
-        let migration = POSTGRES_MIGRATIONS[7].1.to_lowercase();
-
-        assert!(migration.contains("numeric(30, 12)"));
-        assert!(migration.contains("rasxot_mix_total"));
-        assert!(migration.contains("final_used_alcohol"));
-        assert!(migration.contains("final_used_paint"));
-        assert!(migration.contains("jsonb_each"));
-        assert!(migration.contains("round(rasxot_mix_total, 12)"));
-        assert!(migration.contains("999999999999999999"));
-    }
-
-    #[test]
-    fn postgres_returned_paint_solvent_migration_adds_all_solvent_values_to_alcohol() {
-        let migration = POSTGRES_MIGRATIONS[8].1.to_lowercase();
-
-        assert!(migration.contains("category = 'solvents'"));
-        assert!(migration.contains("jsonb_each"));
-        assert!(migration.contains("rasxot_direct_alcohol"));
-        assert!(migration.contains("astatka_direct_alcohol"));
-        assert!(migration.contains("rasxot_mix_total * 0.30::numeric"));
-        assert!(migration.contains("astatka_mix_total * 0.30::numeric"));
-        assert!(migration.contains("final_used_alcohol"));
-    }
-
-    #[test]
-    fn postgres_returned_paint_image_migration_supports_pending_and_idempotent_completion() {
-        let migration = POSTGRES_MIGRATIONS[9].1.to_lowercase();
-
-        assert!(migration.contains("create table if not exists mini_returned_paint_images"));
-        assert!(migration.contains("waiting_for_boyoqchi_input"));
-        assert!(migration.contains("mini_returned_paint_requests_workflow_consistent"));
-        assert!(migration.contains("jsonb_array_length(items_json) = 0"));
-        assert!(migration.contains("image_size_bytes = octet_length(body)"));
-        assert!(migration.contains("create unique index"));
-    }
-
-    #[test]
-    fn postgres_order_integrity_migration_links_orders_and_indexes_foreign_keys() {
-        let migration = POSTGRES_MIGRATIONS[1].1.to_lowercase();
-
-        assert!(migration.contains("idx_mini_order_products_order_id"));
-        assert!(migration.contains("idx_mini_customer_items_item_code"));
-        assert!(migration.contains("set order_id = orders.id"));
-        assert!(migration.contains("maps.id = orders.id"));
-    }
-
-    #[test]
-    fn postgres_erp_integrity_migration_uses_exact_quantities_and_constraints() {
-        let migration = POSTGRES_MIGRATIONS[2].1.to_lowercase();
-
-        assert!(migration.contains("numeric(24, 9)"));
-        assert!(migration.contains("mini_production_maps_width_positive"));
-        assert!(migration.contains("mini_gscale_receipts_qty_positive"));
-        assert!(migration.contains("mini_raw_material_events_qty_finite"));
-        assert!(migration.contains("idx_mini_customers_phone_key_unique"));
-        assert!(migration.contains("mini_raw_material_assignments_order_fkey"));
-        assert!(migration.contains("product_form"));
-    }
-
-    #[test]
-    fn postgres_foundation_migration_indexes_apparatus_case_insensitively() {
-        let migration = foundation_migration_sql().to_lowercase();
-
-        assert!(
-            migration.contains("idx_mini_apparatus_groups_lower_name")
-                && migration.contains("lower(name)")
-        );
-        assert!(migration.contains("idx_mini_apparatus_lower_name"));
-    }
-
-    #[test]
-    fn postgres_foundation_migration_keeps_quick_template_codes_unique() {
-        let migration = foundation_migration_sql().to_lowercase();
-
-        assert!(migration.contains("idx_mini_quick_order_templates_owner_lower_code"));
-        assert!(migration.contains("idx_mini_quick_order_templates_owner_quick_key"));
-        assert!(!migration.contains("owner_key_unique unique"));
-    }
-
-    #[test]
-    fn postgres_foundation_migration_keeps_qolip_codes_unique_not_item_codes() {
-        let migration = foundation_migration_sql().to_lowercase();
-
-        assert!(migration.contains(
-            "alter table mini_qolip_product_specs drop constraint if exists mini_qolip_product_specs_pkey"
-        ));
-        assert!(migration.contains("idx_mini_qolip_product_specs_qolip_code_unique"));
-        assert!(migration.contains("lower(qolip_code)"));
-        assert!(!migration.contains("item_code text primary key"));
-    }
-
-    #[test]
-    fn postgres_foundation_migration_backfills_quick_template_frame_fields() {
-        let migration = foundation_migration_sql().to_lowercase();
-
-        assert!(migration.contains("quick_template_dimensions"));
-        assert!(migration.contains("frame_product_size_mm"));
-        assert!(migration.contains("frame_count"));
-        assert!(migration.contains("jsonb_set"));
-    }
-
-    #[test]
-    fn postgres_foundation_migration_leaves_production_order_number_to_store_logic() {
-        let migration = foundation_migration_sql().to_lowercase();
-
-        assert!(migration.contains("idx_mini_production_maps_order_number"));
-        assert!(!migration.contains("mini_production_maps_order_number_unique"));
-    }
-
-    #[test]
-    fn postgres_foundation_migration_guards_one_open_order_run_session() {
-        let migration = foundation_migration_sql().to_lowercase();
-
-        assert!(migration.contains("idx_mini_order_run_sessions_one_open"));
-        assert!(migration.contains("where status in ('active', 'paused')"));
-    }
-
-    #[test]
-    fn postgres_foundation_migration_persists_bosma_progress_metrics() {
-        let migration = foundation_migration_sql().to_lowercase();
-
-        for column in [
-            "return_ink_kg",
-            "lamination_print_leftover_rolls",
-            "lamination_film_leftover_rolls",
-            "rezka_bosma_waste",
-            "rezka_lamination_waste",
-            "rezka_edge_waste",
-            "total_waste",
-            "finished_goods_kg",
-            "finished_goods_meter",
-            "description",
-        ] {
-            assert!(
-                migration.contains(column),
-                "missing progress metric column {column}"
-            );
-        }
-    }
-
-    #[test]
-    fn postgres_foundation_migration_indexes_wip_apparatus_key() {
-        let migration = foundation_migration_sql().to_lowercase();
-
-        assert!(migration.contains("current_apparatus_key"));
-        assert!(migration.contains("idx_mini_progress_batches_wip_status_apparatus_key"));
-        assert!(migration.contains("wip_status, current_apparatus_key, updated_at desc"));
-    }
-
-    #[test]
-    fn postgres_foundation_migration_persists_material_requirement_groups() {
-        let migration = foundation_migration_sql().to_lowercase();
-
-        assert!(migration.contains("mini_apparatus_material_rules"));
-        assert!(migration.contains("requirement_groups jsonb not null default '[]'::jsonb"));
-        assert!(
-            migration.contains("mini_apparatus_material_rules_requirement_groups_array"),
-            "missing requirement_groups array constraint"
-        );
-    }
-
-    #[tokio::test]
-    #[ignore = "requires local PostgreSQL and creates/drops mini_rs_erp_test"]
-    async fn postgres_live_foundation_migration_applies_to_clean_database() {
-        let admin_url = std::env::var("MINI_ERP_TEST_ADMIN_DATABASE_URL")
-            .unwrap_or_else(|_| "postgres://wikki@127.0.0.1:5432/postgres".to_string());
-        let db_name = std::env::var("MINI_ERP_TEST_DATABASE_NAME")
-            .unwrap_or_else(|_| "mini_rs_erp_test".to_string());
-        assert!(
-            db_name.starts_with("mini_rs_erp_test"),
-            "test database name must start with mini_rs_erp_test"
-        );
-
-        let admin_pool = sqlx::PgPool::connect(&admin_url).await.expect("admin db");
-        sqlx::query(&format!(
-            r#"DROP DATABASE IF EXISTS "{db_name}" WITH (FORCE)"#
-        ))
-        .execute(&admin_pool)
-        .await
-        .expect("drop test db");
-        sqlx::query(&format!(r#"CREATE DATABASE "{db_name}""#))
-            .execute(&admin_pool)
-            .await
-            .expect("create test db");
-        admin_pool.close().await;
-
-        let test_url = format!("postgres://wikki@127.0.0.1:5432/{db_name}");
-        let pool = sqlx::PgPool::connect(&test_url).await.expect("test db");
-        apply_foundation_migration(&pool)
-            .await
-            .expect("apply foundation migration");
-
-        let table_count: i64 = sqlx::query_scalar(
-            "SELECT COUNT(*)
-             FROM information_schema.tables
-             WHERE table_schema = 'public'
-               AND table_name IN (
-                 'mini_orders',
-                 'mini_order_products',
-                 'mini_quick_order_templates',
-                 'mini_quick_order_images',
-                 'mini_items',
-                 'mini_item_groups',
-                 'mini_production_maps',
-                 'mini_production_map_nodes',
-                 'mini_production_map_edges',
-                 'mini_apparatus',
-                 'mini_apparatus_groups',
-                 'mini_workers',
-                 'mini_worker_groups',
-                 'mini_qolip_locations',
-                 'mini_queue_sequences',
-                 'mini_queue_states',
-                 'mini_apparatus_queue_policies',
-                 'mini_queue_action_events',
-                 'mini_engine_events',
-                 'mini_idempotency_keys',
-                 'mini_chat_media',
-                 'mini_chat_message_attachments',
-                 'mini_chat_media_jobs'
-               )",
-        )
-        .fetch_one(&pool)
-        .await
-        .expect("count tables");
-        assert_eq!(table_count, 23);
-
-        sqlx::query(
-            "INSERT INTO mini_idempotency_keys (key, domain, action, entity_id)
-             VALUES ('test-key-1', 'production_maps', 'batch_move', 'zakaz-1')",
-        )
-        .execute(&pool)
-        .await
-        .expect("insert idempotency key");
-
-        let duplicate = sqlx::query(
-            "INSERT INTO mini_idempotency_keys (key, domain, action)
-             VALUES ('test-key-1', 'production_maps', 'batch_move')",
-        )
-        .execute(&pool)
-        .await;
-        assert!(duplicate.is_err(), "idempotency key must be unique");
-
-        pool.close().await;
-
-        let admin_pool = sqlx::PgPool::connect(&admin_url)
-            .await
-            .expect("admin db cleanup");
-        sqlx::query(&format!(
-            r#"DROP DATABASE IF EXISTS "{db_name}" WITH (FORCE)"#
-        ))
-        .execute(&admin_pool)
-        .await
-        .expect("cleanup test db");
-        admin_pool.close().await;
-    }
-}
+include!("postgres_inline_tests.rs");

@@ -3,8 +3,8 @@ use sqlx::{PgPool, Postgres, Transaction};
 use super::rows::ChatMediaRow;
 use crate::core::auth::models::{Principal, PrincipalRole};
 use crate::core::chat_media::{
-    ChatMediaCreateResult, ChatMediaError, ChatMediaKind, ChatMediaStatus,
-    ChatMediaStorageObject, ChatMediaUploadRecord, NewChatMediaUpload,
+    ChatMediaCreateResult, ChatMediaError, ChatMediaKind, ChatMediaStatus, ChatMediaStorageObject,
+    ChatMediaUploadRecord, NewChatMediaUpload,
 };
 
 const MEDIA_COLUMNS: &str = r#"
@@ -60,14 +60,12 @@ pub(super) async fn initialize_upload(
     principal: &Principal,
     upload: NewChatMediaUpload,
 ) -> Result<ChatMediaCreateResult, ChatMediaError> {
-    let mut tx = pool.begin().await.map_err(|_| ChatMediaError::StoreFailed)?;
-    let uploader_id = authorized_principal_id(
-        &mut tx,
-        principal,
-        &upload.conversation_id,
-        true,
-    )
-    .await?;
+    let mut tx = pool
+        .begin()
+        .await
+        .map_err(|_| ChatMediaError::StoreFailed)?;
+    let uploader_id =
+        authorized_principal_id(&mut tx, principal, &upload.conversation_id, true).await?;
     if let Some(record) = by_client_upload_id(
         &mut tx,
         &upload.conversation_id,
@@ -133,7 +131,10 @@ pub(super) async fn upload(
     upload_id: &str,
     require_can_post: bool,
 ) -> Result<ChatMediaUploadRecord, ChatMediaError> {
-    let mut tx = pool.begin().await.map_err(|_| ChatMediaError::StoreFailed)?;
+    let mut tx = pool
+        .begin()
+        .await
+        .map_err(|_| ChatMediaError::StoreFailed)?;
     let uploader_id =
         authorized_principal_id(&mut tx, principal, conversation_id, require_can_post).await?;
     let record = by_upload_id(&mut tx, conversation_id, &uploader_id, upload_id, false)
@@ -150,12 +151,18 @@ pub(super) async fn mark_uploaded(
     upload_id: &str,
     storage: &ChatMediaStorageObject,
 ) -> Result<ChatMediaUploadRecord, ChatMediaError> {
-    let mut tx = pool.begin().await.map_err(|_| ChatMediaError::StoreFailed)?;
+    let mut tx = pool
+        .begin()
+        .await
+        .map_err(|_| ChatMediaError::StoreFailed)?;
     let uploader_id = authorized_principal_id(&mut tx, principal, conversation_id, true).await?;
     let record = by_upload_id(&mut tx, conversation_id, &uploader_id, upload_id, true)
         .await?
         .ok_or(ChatMediaError::NotFound)?;
-    if !matches!(record.status, ChatMediaStatus::Pending | ChatMediaStatus::Uploaded) {
+    if !matches!(
+        record.status,
+        ChatMediaStatus::Pending | ChatMediaStatus::Uploaded
+    ) {
         return Err(ChatMediaError::Conflict);
     }
     if storage.size_bytes != record.declared_size_bytes {
@@ -188,16 +195,25 @@ pub(super) async fn complete_upload(
     storage: &ChatMediaStorageObject,
     job_id: &str,
 ) -> Result<ChatMediaUploadRecord, ChatMediaError> {
-    let mut tx = pool.begin().await.map_err(|_| ChatMediaError::StoreFailed)?;
+    let mut tx = pool
+        .begin()
+        .await
+        .map_err(|_| ChatMediaError::StoreFailed)?;
     let uploader_id = authorized_principal_id(&mut tx, principal, conversation_id, true).await?;
     let record = by_upload_id(&mut tx, conversation_id, &uploader_id, upload_id, true)
         .await?
         .ok_or(ChatMediaError::NotFound)?;
-    if matches!(record.status, ChatMediaStatus::Processing | ChatMediaStatus::Ready) {
+    if matches!(
+        record.status,
+        ChatMediaStatus::Processing | ChatMediaStatus::Ready
+    ) {
         tx.commit().await.map_err(|_| ChatMediaError::StoreFailed)?;
         return Ok(record);
     }
-    if !matches!(record.status, ChatMediaStatus::Pending | ChatMediaStatus::Uploaded) {
+    if !matches!(
+        record.status,
+        ChatMediaStatus::Pending | ChatMediaStatus::Uploaded
+    ) {
         return Err(ChatMediaError::Conflict);
     }
     if storage.size_bytes != record.declared_size_bytes {
@@ -240,7 +256,10 @@ pub(super) async fn cancel_upload(
     conversation_id: &str,
     upload_id: &str,
 ) -> Result<ChatMediaUploadRecord, ChatMediaError> {
-    let mut tx = pool.begin().await.map_err(|_| ChatMediaError::StoreFailed)?;
+    let mut tx = pool
+        .begin()
+        .await
+        .map_err(|_| ChatMediaError::StoreFailed)?;
     let uploader_id = authorized_principal_id(&mut tx, principal, conversation_id, false).await?;
     let record = by_upload_id(&mut tx, conversation_id, &uploader_id, upload_id, true)
         .await?
@@ -350,14 +369,14 @@ pub(super) async fn authorized_principal_id(
     require_can_post: bool,
 ) -> Result<String, ChatMediaError> {
     sqlx::query_scalar::<_, String>(AUTHORIZED_PRINCIPAL_SQL)
-    .bind(role_key(&principal.role))
-    .bind(principal.ref_.trim())
-    .bind(conversation_id)
-    .bind(require_can_post)
-    .fetch_optional(&mut **tx)
-    .await
-    .map_err(|_| ChatMediaError::StoreFailed)?
-    .ok_or(ChatMediaError::Forbidden)
+        .bind(role_key(&principal.role))
+        .bind(principal.ref_.trim())
+        .bind(conversation_id)
+        .bind(require_can_post)
+        .fetch_optional(&mut **tx)
+        .await
+        .map_err(|_| ChatMediaError::StoreFailed)?
+        .ok_or(ChatMediaError::Forbidden)
 }
 
 #[cfg(test)]
@@ -447,6 +466,7 @@ fn job_type(kind: ChatMediaKind) -> &'static str {
     match kind {
         ChatMediaKind::Image => "canonicalize_image",
         ChatMediaKind::Video => "canonicalize_video",
+        ChatMediaKind::Audio => "canonicalize_audio",
     }
 }
 

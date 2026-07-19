@@ -98,20 +98,15 @@ pub async fn production_map_finished_goods_receive(
     headers: HeaderMap,
     body: Bytes,
 ) -> Result<Response, AdminError> {
-    let principal = authorize_any_capability(
-        &state,
-        &headers,
-        &[
-            Capability::AdminAccess,
-            Capability::ProductionMapManage,
-            Capability::GscalePrint,
-        ],
-    )
-    .await?;
+    let principal = authorize_any_capability(&state, &headers, &[Capability::WerkaAccess]).await?;
+    if principal.role != PrincipalRole::Werka {
+        return Err(forbidden());
+    }
     if method != Method::POST {
         return Err(method_not_allowed());
     }
     let input: FinishedGoodsReceiveRequest = parse_json(&body)?;
+    let warehouse = assigned_finished_goods_warehouse(&state, &principal, &input.warehouse).await?;
     let qr_payload = if input.qr_payload.trim().is_empty() {
         input.progress_qr.clone()
     } else {
@@ -122,7 +117,7 @@ pub async fn production_map_finished_goods_receive(
         .receive_finished_goods(
             &input.progress_batch_id,
             &qr_payload,
-            &input.warehouse,
+            &warehouse,
             queue_action_actor(&principal),
         )
         .await
@@ -136,4 +131,24 @@ pub async fn production_map_finished_goods_receive(
         "stock": receipt.stock,
         "order_status": receipt.order_status,
     })))
+}
+
+async fn assigned_finished_goods_warehouse(
+    state: &AppState,
+    principal: &Principal,
+    warehouse: &str,
+) -> Result<String, AdminError> {
+    let warehouse = warehouse.trim();
+    if warehouse.is_empty() {
+        return Err(bad_request("progress_input_invalid"));
+    }
+    let assigned = state
+        .warehouses
+        .assigned_warehouse_names(principal)
+        .await
+        .map_err(warehouse_error)?;
+    assigned
+        .into_iter()
+        .find(|item| item.trim().eq_ignore_ascii_case(warehouse))
+        .ok_or_else(forbidden)
 }

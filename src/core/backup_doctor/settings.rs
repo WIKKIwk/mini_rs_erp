@@ -43,7 +43,12 @@ pub(super) fn non_empty_env(key: &str) -> Option<String> {
 
 pub(super) fn bool_env(key: &str, fallback: bool) -> bool {
     non_empty_env(key)
-        .map(|value| matches!(value.to_ascii_lowercase().as_str(), "1" | "true" | "yes" | "on"))
+        .map(|value| {
+            matches!(
+                value.to_ascii_lowercase().as_str(),
+                "1" | "true" | "yes" | "on"
+            )
+        })
         .unwrap_or(fallback)
 }
 

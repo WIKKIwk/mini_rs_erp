@@ -155,6 +155,44 @@ async fn lmdb_updates_and_deletes_expiry_index_entries() {
     assert_eq!(expiry_index_len(&store), 0);
 }
 
+#[tokio::test]
+async fn lmdb_deletes_all_sessions_for_exact_principal() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let store =
+        LmdbSessionStore::open(dir.path().join("sessions.lmdb"), 1024 * 1024).expect("lmdb store");
+    let now = time::OffsetDateTime::now_utc();
+    store
+        .put(
+            "worker-token-a",
+            SessionRecord::new(worker_principal("worker-a"), now, None, Some(60)),
+        )
+        .await
+        .expect("worker session");
+    store
+        .put(
+            "worker-token-b",
+            SessionRecord::new(worker_principal("worker-b"), now, None, Some(60)),
+        )
+        .await
+        .expect("other session");
+
+    let deleted = store
+        .delete_for_principal(&PrincipalRole::Aparatchi, "worker-a")
+        .await
+        .expect("delete principal sessions");
+
+    assert_eq!(deleted, 1);
+    assert!(
+        store
+            .get("worker-token-a")
+            .await
+            .expect("deleted")
+            .is_none()
+    );
+    assert!(store.get("worker-token-b").await.expect("active").is_some());
+    assert_eq!(expiry_index_len(&store), 1);
+}
+
 fn principal() -> Principal {
     Principal {
         role: PrincipalRole::Admin,
@@ -162,6 +200,17 @@ fn principal() -> Principal {
         legal_name: "Admin".to_string(),
         ref_: "admin".to_string(),
         phone: "+998880000000".to_string(),
+        avatar_url: String::new(),
+    }
+}
+
+fn worker_principal(ref_: &str) -> Principal {
+    Principal {
+        role: PrincipalRole::Aparatchi,
+        display_name: "Worker".to_string(),
+        legal_name: "Worker".to_string(),
+        ref_: ref_.to_string(),
+        phone: "+998901112233".to_string(),
         avatar_url: String::new(),
     }
 }

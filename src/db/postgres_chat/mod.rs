@@ -1,4 +1,5 @@
 mod read;
+mod realtime;
 mod rows;
 mod write;
 
@@ -8,8 +9,10 @@ use sqlx::PgPool;
 use crate::core::auth::models::Principal;
 use crate::core::chat::{
     ChatConversation, ChatError, ChatMessagePage, ChatOutboxEvent, ChatPrincipal,
-    ChatPrincipalInput, ChatSendResult, ChatStorePort,
+    ChatPrincipalInput, ChatPushDelivery, ChatRealtimeEvent, ChatSendResult, ChatStorePort,
 };
+
+pub use realtime::start_realtime_listener;
 
 #[derive(Clone)]
 pub struct PostgresChatStore {
@@ -53,6 +56,7 @@ impl ChatStorePort for PostgresChatStore {
         principal: &Principal,
         conversation_id: &str,
         before_sequence: Option<i64>,
+        after_sequence: Option<i64>,
         limit: usize,
     ) -> Result<ChatMessagePage, ChatError> {
         read::messages(
@@ -60,6 +64,7 @@ impl ChatStorePort for PostgresChatStore {
             principal,
             conversation_id,
             before_sequence,
+            after_sequence,
             limit,
         )
         .await
@@ -110,6 +115,72 @@ impl ChatStorePort for PostgresChatStore {
         device_id: &str,
     ) -> Result<(), ChatError> {
         write::mark_read(&self.pool, principal, conversation_id, sequence, device_id).await
+    }
+
+    async fn mark_delivered(
+        &self,
+        principal: &Principal,
+        conversation_id: &str,
+        sequence: i64,
+        device_id: &str,
+    ) -> Result<(), ChatError> {
+        write::mark_delivered(&self.pool, principal, conversation_id, sequence, device_id).await
+    }
+
+    async fn sync_events(
+        &self,
+        principal: &Principal,
+        after_cursor: i64,
+        limit: usize,
+    ) -> Result<(Vec<ChatRealtimeEvent>, i64, bool), ChatError> {
+        read::sync_events(&self.pool, principal, after_cursor, limit).await
+    }
+
+    async fn issue_socket_ticket(
+        &self,
+        principal: &Principal,
+        ticket: &str,
+        expires_at_unix: i64,
+    ) -> Result<(), ChatError> {
+        write::issue_socket_ticket(&self.pool, principal, ticket, expires_at_unix).await
+    }
+
+    async fn consume_socket_ticket(&self, ticket: &str) -> Result<Principal, ChatError> {
+        write::consume_socket_ticket(&self.pool, ticket).await
+    }
+
+    async fn claim_push_deliveries(
+        &self,
+        limit: usize,
+    ) -> Result<Vec<ChatPushDelivery>, ChatError> {
+        write::claim_push_deliveries(&self.pool, limit).await
+    }
+
+    async fn mark_push_delivered(
+        &self,
+        event_id: &str,
+        recipient_key: &str,
+    ) -> Result<(), ChatError> {
+        write::mark_push_delivered(&self.pool, event_id, recipient_key).await
+    }
+
+    async fn reschedule_push_delivery(
+        &self,
+        event_id: &str,
+        recipient_key: &str,
+        retry_after_seconds: i64,
+        dead_letter: bool,
+        error: &str,
+    ) -> Result<(), ChatError> {
+        write::reschedule_push_delivery(
+            &self.pool,
+            event_id,
+            recipient_key,
+            retry_after_seconds,
+            dead_letter,
+            error,
+        )
+        .await
     }
 
     async fn claim_outbox(&self, limit: usize) -> Result<Vec<ChatOutboxEvent>, ChatError> {

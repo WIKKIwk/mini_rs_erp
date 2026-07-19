@@ -202,6 +202,11 @@ async fn admin_creates_material_taminotchi_with_seventy_prefix_code() {
     let material = json_body(response).await;
     assert!(material["ref"].as_str().expect("ref").starts_with("MAT-"));
     assert!(material["code"].as_str().expect("code").starts_with("70"));
+    assert_eq!(
+        material["assigned_item_groups"],
+        serde_json::json!(["Kraska"])
+    );
+    assert_eq!(material["assigned_warehouses"], serde_json::json!([]));
     assign_warehouse_to_principal(
         &state,
         PrincipalRole::MaterialTaminotchi,
@@ -210,7 +215,66 @@ async fn admin_creates_material_taminotchi_with_seventy_prefix_code() {
     )
     .await;
 
-    let login = build_router(state)
+    let detail = build_router(state.clone())
+        .oneshot(request(
+            "GET",
+            &format!(
+                "/v1/mobile/admin/material-taminotchilar/detail?ref={}",
+                material["ref"].as_str().expect("ref")
+            ),
+            &admin_token,
+        ))
+        .await
+        .expect("material detail response");
+    assert_eq!(detail.status(), StatusCode::OK);
+    let detail = json_body(detail).await;
+    assert_eq!(
+        detail["assigned_item_groups"],
+        serde_json::json!(["Kraska"])
+    );
+    assert_eq!(
+        detail["assigned_warehouses"],
+        serde_json::json!(["Kalidor"])
+    );
+
+    let updated = build_router(state.clone())
+        .oneshot(request_with_body(
+            "PUT",
+            &format!(
+                "/v1/mobile/admin/material-taminotchilar/item-groups?ref={}",
+                material["ref"].as_str().expect("ref")
+            ),
+            &admin_token,
+            r#"{"assigned_item_groups":["Rulon","Kley","Rulon"]}"#,
+        ))
+        .await
+        .expect("material item groups update response");
+    assert_eq!(updated.status(), StatusCode::OK);
+    let updated = json_body(updated).await;
+    assert_eq!(
+        updated["assigned_item_groups"],
+        serde_json::json!(["Kley", "Rulon"])
+    );
+    assert_eq!(
+        updated["assigned_warehouses"],
+        serde_json::json!(["Kalidor"])
+    );
+
+    let empty_update = build_router(state.clone())
+        .oneshot(request_with_body(
+            "PUT",
+            &format!(
+                "/v1/mobile/admin/material-taminotchilar/item-groups?ref={}",
+                material["ref"].as_str().expect("ref")
+            ),
+            &admin_token,
+            r#"{"assigned_item_groups":[]}"#,
+        ))
+        .await
+        .expect("empty material item groups update response");
+    assert_eq!(empty_update.status(), StatusCode::BAD_REQUEST);
+
+    let login = build_router(state.clone())
         .oneshot(request_with_body(
             "POST",
             "/v1/mobile/auth/login",
@@ -226,8 +290,26 @@ async fn admin_creates_material_taminotchi_with_seventy_prefix_code() {
     assert_eq!(login.status(), StatusCode::OK);
     let login = json_body(login).await;
     assert_eq!(login["profile"]["role"], "material_taminotchi");
-    assert_eq!(login["assigned_item_groups"], serde_json::json!(["Kraska"]));
+    assert_eq!(
+        login["assigned_item_groups"],
+        serde_json::json!(["Kley", "Rulon"])
+    );
     assert_eq!(login["assigned_warehouses"], serde_json::json!(["Kalidor"]));
+
+    let material_token = login["token"].as_str().expect("material token");
+    let forbidden = build_router(state)
+        .oneshot(request_with_body(
+            "PUT",
+            &format!(
+                "/v1/mobile/admin/material-taminotchilar/item-groups?ref={}",
+                material["ref"].as_str().expect("ref")
+            ),
+            material_token,
+            r#"{"assigned_item_groups":["Kraska"]}"#,
+        ))
+        .await
+        .expect("material item groups forbidden response");
+    assert_eq!(forbidden.status(), StatusCode::FORBIDDEN);
 }
 
 #[tokio::test]

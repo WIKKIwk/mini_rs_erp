@@ -34,7 +34,7 @@ async fn postgres_admin_item_update_preserves_details_and_live_references() {
         .connect_with(admin_options.database(db_name))
         .await
         .expect("test db");
-    apply_postgres_migrations_through(&pool, 15)
+    apply_postgres_migrations_through(&pool, 17)
         .await
         .expect("apply migrations before item warehouse removal");
     sqlx::query(
@@ -48,7 +48,7 @@ async fn postgres_admin_item_update_preserves_details_and_live_references() {
     .execute(&pool)
     .await
     .expect("seed legacy item warehouse");
-    apply_postgres_migrations_through(&pool, 16)
+    apply_postgres_migrations_through(&pool, 18)
         .await
         .expect("remove item warehouse ownership");
     let warehouse_column_exists: bool = sqlx::query_scalar(

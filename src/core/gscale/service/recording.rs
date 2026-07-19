@@ -43,12 +43,7 @@ pub(super) async fn record_confirmed_material_receipt(
         .await
         .map_err(|error| GscaleServiceError::StoreWrite(error.message()))?
     {
-        validate_existing_receipt(
-            &stock.item_code,
-            &stock.warehouse,
-            stock.qty,
-            job,
-        )?;
+        validate_existing_receipt(&stock.item_code, &stock.warehouse, stock.qty, job)?;
         return Ok(stock.source_receipt_id);
     }
 
@@ -58,12 +53,7 @@ pub(super) async fn record_confirmed_material_receipt(
         .map_err(|error| GscaleServiceError::StoreWrite(error.message()))?
     {
         Some(draft) => {
-            validate_existing_receipt(
-                &draft.item_code,
-                &draft.warehouse,
-                draft.qty,
-                job,
-            )?;
+            validate_existing_receipt(&draft.item_code, &draft.warehouse, draft.qty, job)?;
             draft
         }
         None => create_material_receipt_draft(receipt_store.as_ref(), job, epc).await?,

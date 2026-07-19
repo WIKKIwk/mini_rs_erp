@@ -2,9 +2,7 @@ use tokio::sync::oneshot;
 
 use super::error::{print_done, print_error_detail};
 use super::jobs::{NormalizedMaterialReceiptJob, NormalizedProgressLabelJob};
-use super::recording::{
-    record_confirmed_material_receipt, record_parallel_material_receipt,
-};
+use super::recording::{record_confirmed_material_receipt, record_parallel_material_receipt};
 use super::{GscaleService, GscaleServiceError, LateMaterialReceiptErrorHandler};
 use crate::core::gscale::models::{
     MaterialReceiptPrintRequest, MaterialReceiptPrintResponse, ProgressLabelPrintRequest,
@@ -71,11 +69,7 @@ impl GscaleService {
         )
         .await?;
         Ok(material_receipt_client_response(
-            job,
-            epc,
-            draft_name,
-            "printed",
-            "USB OK",
+            job, epc, draft_name, "printed", "USB OK",
         ))
     }
 

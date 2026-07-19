@@ -10,6 +10,7 @@ use crate::core::werka::models::SupplierItem;
 
 pub(crate) mod customer_policy;
 mod helpers;
+mod item_customer_writes;
 mod item_delete_safety;
 mod rows;
 

@@ -175,12 +175,15 @@ async fn raw_material_assignment_unlink_rejects_started_stock() {
             "POST",
             "/v1/mobile/admin/production-maps/queue-action",
             &worker_token,
-            &with_test_qolip(r#"{
+            &with_test_qolip(
+                r#"{
                 "apparatus":"7 ta rangli pechat - A",
                 "order_id":"zakaz-raw-unlink-locked",
                 "action":"start",
                 "material_barcodes":["30AA"]
-            }"#, "zakaz-raw-unlink-locked"),
+            }"#,
+                "zakaz-raw-unlink-locked",
+            ),
         ))
         .await
         .expect("start with material");

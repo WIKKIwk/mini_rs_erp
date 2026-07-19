@@ -176,13 +176,12 @@ async fn postgres_production_map_store_persists_maps_sequences_and_queue_states(
             .fetch_one(&pool)
             .await
             .expect("count deleted queue states");
-    let sequence_order_ids: serde_json::Value = sqlx::query_scalar(
-        "SELECT order_ids FROM mini_queue_sequences WHERE apparatus = $1",
-    )
-    .bind("7 ta rangli pechat")
-    .fetch_one(&pool)
-    .await
-    .expect("read cleaned sequence");
+    let sequence_order_ids: serde_json::Value =
+        sqlx::query_scalar("SELECT order_ids FROM mini_queue_sequences WHERE apparatus = $1")
+            .bind("7 ta rangli pechat")
+            .fetch_one(&pool)
+            .await
+            .expect("read cleaned sequence");
     assert_eq!(queue_state_count, 0);
     assert_eq!(sequence_order_ids, serde_json::json!([]));
 

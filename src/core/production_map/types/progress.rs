@@ -147,8 +147,8 @@ pub struct ProductionOrderStatusDetail {
     pub waiting_next_stage_count: usize,
     #[serde(default)]
     pub consumed_by_next_stage_count: usize,
-    #[serde(default)]
-    pub finished_pending_acceptance_count: usize,
+    #[serde(default, alias = "finished_pending_acceptance_count")]
+    pub free_wip_count: usize,
     #[serde(default)]
     pub accepted_wip_count: usize,
     #[serde(default)]

@@ -9,6 +9,7 @@ use serde::{Deserialize, Serialize};
 pub enum ChatMediaKind {
     Image,
     Video,
+    Audio,
 }
 
 impl ChatMediaKind {
@@ -16,6 +17,7 @@ impl ChatMediaKind {
         match self {
             Self::Image => "image",
             Self::Video => "video",
+            Self::Audio => "audio",
         }
     }
 }
@@ -297,10 +299,7 @@ pub struct ChatMediaStoredContent {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ChatMediaStorageDownload {
     LocalProxy,
-    DirectGet {
-        url: String,
-        expires_at_unix: i64,
-    },
+    DirectGet { url: String, expires_at_unix: i64 },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -311,13 +310,8 @@ pub enum ChatMediaAccessVariant {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ChatMediaAccess {
-    Local {
-        content: ChatMediaStoredContent,
-    },
-    Redirect {
-        url: String,
-        expires_at_unix: i64,
-    },
+    Local { content: ChatMediaStoredContent },
+    Redirect { url: String, expires_at_unix: i64 },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

@@ -101,15 +101,16 @@ pub async fn material_taminotchilar(
         Method::POST => {
             require_capability(&state, &principal, Capability::CustomerDirectoryManage).await?;
             let input: AdminCreateMaterialTaminotchiRequest = parse_json(&body)?;
-            state
+            let detail = state
                 .admin
                 .create_material_taminotchi(&input.name, &input.phone, input.assigned_item_groups)
                 .await
-                .map(json_response)
                 .map_err(|error| match error {
                     AdminPortError::InvalidInput(message) => bad_request(message),
                     _ => server_error("material taminotchi create failed"),
-                })
+                })?;
+            let detail = hydrate_material_taminotchi_detail(&state, &headers, detail).await?;
+            Ok(json_response(detail))
         }
         _ => Err(method_not_allowed()),
     }
@@ -147,14 +148,14 @@ pub async fn material_taminotchi_detail(
         return Err(method_not_allowed());
     }
     let ref_ = required_ref(query.ref_.as_deref())?;
-    let mut detail = state
+    let detail = state
         .admin
         .material_taminotchi_detail(ref_)
         .await
         .map_err(|_| server_error("material taminotchi detail failed"))?;
-    detail.avatar_url =
-        with_admin_profile_avatar_proxy(&headers, detail.avatar_url, "material_taminotchi", ref_);
-    Ok(Json(detail))
+    Ok(Json(
+        hydrate_material_taminotchi_detail(&state, &headers, detail).await?,
+    ))
 }
 
 pub async fn material_taminotchi_phone(
@@ -170,15 +171,18 @@ pub async fn material_taminotchi_phone(
     }
     let ref_ = required_ref(query.ref_.as_deref())?;
     let input: AdminPhoneUpdateRequest = parse_json(&body)?;
-    match state
+    let detail = match state
         .admin
         .update_material_taminotchi_phone(ref_, &input.phone)
         .await
     {
-        Ok(detail) => Ok(Json(detail)),
-        Err(AdminPortError::NotFound) => Err(not_found("material taminotchi not found")),
-        Err(_) => Err(server_error("material taminotchi phone update failed")),
-    }
+        Ok(detail) => detail,
+        Err(AdminPortError::NotFound) => return Err(not_found("material taminotchi not found")),
+        Err(_) => return Err(server_error("material taminotchi phone update failed")),
+    };
+    Ok(Json(
+        hydrate_material_taminotchi_detail(&state, &headers, detail).await?,
+    ))
 }
 
 pub async fn material_taminotchi_code_regenerate(
@@ -192,14 +196,74 @@ pub async fn material_taminotchi_code_regenerate(
         return Err(method_not_allowed());
     }
     let ref_ = required_ref(query.ref_.as_deref())?;
-    match state.admin.regenerate_material_taminotchi_code(ref_).await {
-        Ok(detail) => Ok(Json(detail)),
+    let detail = match state.admin.regenerate_material_taminotchi_code(ref_).await {
+        Ok(detail) => detail,
         Err(AdminPortError::CodeRegenCooldown) => {
-            Err(too_many_requests("code regenerate cooldown"))
+            return Err(too_many_requests("code regenerate cooldown"));
         }
-        Err(AdminPortError::NotFound) => Err(not_found("material taminotchi not found")),
-        Err(_) => Err(server_error("material taminotchi code regenerate failed")),
+        Err(AdminPortError::NotFound) => return Err(not_found("material taminotchi not found")),
+        Err(_) => return Err(server_error("material taminotchi code regenerate failed")),
+    };
+    Ok(Json(
+        hydrate_material_taminotchi_detail(&state, &headers, detail).await?,
+    ))
+}
+
+pub async fn material_taminotchi_item_groups(
+    State(state): State<AppState>,
+    method: Method,
+    headers: HeaderMap,
+    Query(query): Query<RefQuery>,
+    body: Bytes,
+) -> Result<Json<AdminCustomerDetail>, AdminError> {
+    authorize_capability(&state, &headers, Capability::AdminAccess).await?;
+    if method != Method::PUT {
+        return Err(method_not_allowed());
     }
+    let ref_ = required_ref(query.ref_.as_deref())?;
+    let input: AdminMaterialItemGroupsUpdateRequest = parse_json(&body)?;
+    let detail = state
+        .admin
+        .update_material_taminotchi_item_groups(ref_, input.assigned_item_groups)
+        .await
+        .map_err(|error| match error {
+            AdminPortError::InvalidInput(message) => bad_request(message),
+            AdminPortError::NotFound => not_found("material taminotchi not found"),
+            _ => server_error("material taminotchi item groups update failed"),
+        })?;
+    Ok(Json(
+        hydrate_material_taminotchi_detail(&state, &headers, detail).await?,
+    ))
+}
+
+async fn hydrate_material_taminotchi_detail(
+    state: &AppState,
+    headers: &HeaderMap,
+    mut detail: AdminCustomerDetail,
+) -> Result<AdminCustomerDetail, AdminError> {
+    let principal = Principal {
+        role: PrincipalRole::MaterialTaminotchi,
+        display_name: detail.name.clone(),
+        legal_name: detail.name.clone(),
+        ref_: detail.ref_.clone(),
+        phone: detail.phone.clone(),
+        avatar_url: detail.avatar_url.clone(),
+    };
+    detail.assigned_warehouses = state
+        .warehouses
+        .assigned_warehouse_names(&principal)
+        .await
+        .map_err(|_| server_error("material taminotchi warehouses fetch failed"))?;
+    detail
+        .assigned_warehouses
+        .sort_by_key(|value| value.to_lowercase());
+    detail.avatar_url = with_admin_profile_avatar_proxy(
+        headers,
+        detail.avatar_url,
+        "material_taminotchi",
+        &detail.ref_,
+    );
+    Ok(detail)
 }
 
 pub async fn items(
@@ -382,124 +446,4 @@ pub async fn item_group_tree(
     Ok(json_response(groups))
 }
 
-pub async fn activity(
-    State(state): State<AppState>,
-    method: Method,
-    headers: HeaderMap,
-) -> Result<Json<Vec<DispatchRecord>>, AdminError> {
-    authorize_capability(&state, &headers, Capability::AdminActivityRead).await?;
-    if method != Method::GET {
-        return Err(method_not_allowed());
-    }
-    match state.werka.history().await {
-        Ok(Some(history)) => state
-            .admin
-            .activity(history)
-            .await
-            .map(Json)
-            .map_err(|_| server_error("admin activity failed")),
-        Ok(None) => Ok(Json(Vec::new())),
-        Err(_) => Err(server_error("admin activity failed")),
-    }
-}
-
-pub async fn customer_phone(
-    State(state): State<AppState>,
-    method: Method,
-    headers: HeaderMap,
-    Query(query): Query<RefQuery>,
-    body: Bytes,
-) -> Result<Json<AdminCustomerDetail>, AdminError> {
-    authorize_capability(&state, &headers, Capability::CustomerDirectoryManage).await?;
-    if method != Method::PUT {
-        return Err(method_not_allowed());
-    }
-    let ref_ = required_ref(query.ref_.as_deref())?;
-    let input: AdminPhoneUpdateRequest = parse_json(&body)?;
-    state
-        .admin
-        .update_customer_phone(ref_, &input.phone)
-        .await
-        .map(Json)
-        .map_err(|_| server_error("customer phone update failed"))
-}
-
-pub async fn customer_code_regenerate(
-    State(state): State<AppState>,
-    method: Method,
-    headers: HeaderMap,
-    Query(query): Query<RefQuery>,
-) -> Result<Json<AdminCustomerDetail>, AdminError> {
-    authorize_capability(&state, &headers, Capability::CustomerCodeManage).await?;
-    if method != Method::POST {
-        return Err(method_not_allowed());
-    }
-    let ref_ = required_ref(query.ref_.as_deref())?;
-    state
-        .admin
-        .regenerate_customer_code(ref_)
-        .await
-        .map(Json)
-        .map_err(|_| server_error("customer code regenerate failed"))
-}
-
-pub async fn customer_item_add(
-    State(state): State<AppState>,
-    method: Method,
-    headers: HeaderMap,
-    Query(query): Query<RefQuery>,
-    body: Bytes,
-) -> Result<Json<AdminCustomerDetail>, AdminError> {
-    authorize_capability(&state, &headers, Capability::CustomerItemAssign).await?;
-    if method != Method::POST {
-        return Err(method_not_allowed());
-    }
-    let ref_ = required_ref(query.ref_.as_deref())?;
-    let input: AdminSupplierItemMutationRequest = parse_json(&body)?;
-    match state
-        .admin
-        .assign_customer_item(ref_, &input.item_code)
-        .await
-    {
-        Ok(detail) => Ok(Json(detail)),
-        Err(AdminPortError::NotFound) => Err(not_found("customer not found")),
-        Err(_) => Err(server_error("customer item add failed")),
-    }
-}
-
-pub async fn customer_item_remove(
-    State(state): State<AppState>,
-    method: Method,
-    headers: HeaderMap,
-    Query(query): Query<RefItemQuery>,
-) -> Result<Json<AdminCustomerDetail>, AdminError> {
-    authorize_capability(&state, &headers, Capability::CustomerItemAssign).await?;
-    if method != Method::DELETE {
-        return Err(method_not_allowed());
-    }
-    let (ref_, item_code) = required_ref_item(query.ref_.as_deref(), query.item_code.as_deref())?;
-    match state.admin.unassign_customer_item(ref_, item_code).await {
-        Ok(detail) => Ok(Json(detail)),
-        Err(AdminPortError::NotFound) => Err(not_found("customer not found")),
-        Err(AdminPortError::InvalidInput(message)) => Err(bad_request(message)),
-        Err(_) => Err(server_error("customer item remove failed")),
-    }
-}
-
-pub async fn customer_remove(
-    State(state): State<AppState>,
-    method: Method,
-    headers: HeaderMap,
-    Query(query): Query<RefQuery>,
-) -> Result<Json<OkResponse>, AdminError> {
-    authorize_capability(&state, &headers, Capability::CustomerDirectoryManage).await?;
-    if method != Method::DELETE {
-        return Err(method_not_allowed());
-    }
-    let ref_ = required_ref(query.ref_.as_deref())?;
-    match state.admin.remove_customer(ref_).await {
-        Ok(()) => Ok(Json(OkResponse { ok: true })),
-        Err(AdminPortError::NotFound) => Err(not_found("customer not found")),
-        Err(_) => Err(server_error("customer remove failed")),
-    }
-}
+include!("customers_mutations.rs");

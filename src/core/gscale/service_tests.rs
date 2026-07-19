@@ -262,7 +262,10 @@ async fn material_receipt_client_print_records_only_after_usb_confirmation() {
     assert_eq!(confirmed.draft_name, "MAT-STE-001");
     assert_eq!(
         events.lock().unwrap().as_slice(),
-        ["create:303132333435363738394142:1.720", "submit:MAT-STE-001"]
+        [
+            "create:303132333435363738394142:1.720",
+            "submit:MAT-STE-001"
+        ]
     );
 }
 

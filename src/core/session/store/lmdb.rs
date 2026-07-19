@@ -11,6 +11,7 @@ use tokio::sync::Mutex;
 use super::SessionStore;
 use super::lmdb_codec::SessionRecordCodec;
 use super::lmdb_expiry::{ExpiryKey, ExpiryKeyCodec};
+use crate::core::auth::models::PrincipalRole;
 use crate::core::session::models::SessionRecord;
 use crate::error::AppError;
 
@@ -102,6 +103,37 @@ impl SessionStore for LmdbSessionStore {
             .delete(&mut wtxn, token.as_bytes())
             .map_err(lmdb_error)?;
         wtxn.commit().map_err(lmdb_error)
+    }
+
+    async fn delete_for_principal(
+        &self,
+        role: &PrincipalRole,
+        principal_ref: &str,
+    ) -> Result<usize, AppError> {
+        let principal_ref = principal_ref.trim();
+        if principal_ref.is_empty() {
+            return Ok(0);
+        }
+        let _guard = self.write_lock.lock().await;
+        let mut wtxn = self.env.write_txn().map_err(lmdb_error)?;
+        let matches = {
+            let mut iter = self.db.iter(&wtxn).map_err(lmdb_error)?;
+            let mut matches = Vec::new();
+            while let Some((key, record)) = iter.next().transpose().map_err(lmdb_error)? {
+                if record.principal.role == *role && record.principal.ref_.trim() == principal_ref {
+                    matches.push((key.to_vec(), record));
+                }
+            }
+            matches
+        };
+        for (key, record) in &matches {
+            if let Ok(hashed_key) = <&[u8; 32]>::try_from(key.as_slice()) {
+                self.delete_expiry_index(&mut wtxn, hashed_key, record)?;
+            }
+            self.db.delete(&mut wtxn, key).map_err(lmdb_error)?;
+        }
+        wtxn.commit().map_err(lmdb_error)?;
+        Ok(matches.len())
     }
 }
 

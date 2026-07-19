@@ -167,7 +167,7 @@ async fn qolip_code_qr_print_uses_code_as_stable_payload() {
     assert_eq!(printed[0].epc, "QOLIP-0007");
     assert_eq!(printed[0].item_code, "QOLIP-0007");
     assert_eq!(printed[0].item_name, "Kross qolip");
-    assert_eq!(printed[0].label_kind, "qolip_cell");
+    assert_eq!(printed[0].label_kind, "qolip_code");
 }
 
 #[tokio::test]

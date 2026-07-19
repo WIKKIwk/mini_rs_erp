@@ -11,9 +11,7 @@ use time::{OffsetDateTime, UtcOffset};
 use tokio::process::Command;
 use tokio::time::timeout;
 
-use crate::core::admin::models::{
-    AdminServerMonitorBackupSnapshot, AdminServerMonitorBackups,
-};
+use crate::core::admin::models::{AdminServerMonitorBackupSnapshot, AdminServerMonitorBackups};
 
 const MANIFEST_NAME: &str = "backup-doctor.json";
 const DEFAULT_HEALTH_MAX_AGE_HOURS: i64 = 30;
@@ -215,7 +213,12 @@ impl BackupDoctor {
         if let Some(artifact) = scan.artifacts.get(id) {
             return Ok(artifact.clone());
         }
-        if scan.report.snapshots.iter().any(|snapshot| snapshot.id == id) {
+        if scan
+            .report
+            .snapshots
+            .iter()
+            .any(|snapshot| snapshot.id == id)
+        {
             return Err(BackupDoctorError::NotReady);
         }
         Err(BackupDoctorError::NotFound)
@@ -246,7 +249,10 @@ impl BackupDoctor {
             .active_job
             .lock()
             .map_err(|_| BackupDoctorError::Storage)?;
-        if active.as_ref().is_some_and(|job| !terminal_status(&job.status)) {
+        if active
+            .as_ref()
+            .is_some_and(|job| !terminal_status(&job.status))
+        {
             return Err(BackupDoctorError::AlreadyRunning);
         }
 
@@ -284,9 +290,7 @@ impl BackupDoctor {
         {
             self.finish_failed(
                 job,
-                format!(
-                    "backup uchun disk joyi yetarli emas: {available_mb} MiB mavjud"
-                ),
+                format!("backup uchun disk joyi yetarli emas: {available_mb} MiB mavjud"),
             );
             return;
         }
@@ -296,7 +300,11 @@ impl BackupDoctor {
             .arg(&self.inner.config.script_path)
             .env(
                 "MINI_ERP_DATABASE_URL",
-                self.inner.config.database_url.as_deref().unwrap_or_default(),
+                self.inner
+                    .config
+                    .database_url
+                    .as_deref()
+                    .unwrap_or_default(),
             )
             .env("MINI_ERP_BACKUP_DIR", &self.inner.config.backup_root)
             .env("MINI_ERP_BACKUP_TIMESTAMP", &job.id)
@@ -331,7 +339,8 @@ impl BackupDoctor {
             return;
         };
         let checksum_path = artifact_path.clone();
-        let checksum = match tokio::task::spawn_blocking(move || sha256_file(&checksum_path)).await {
+        let checksum = match tokio::task::spawn_blocking(move || sha256_file(&checksum_path)).await
+        {
             Ok(Ok(checksum)) => checksum,
             _ => {
                 self.finish_failed(job, "backup checksum tekshiruvi bajarilmadi".to_string());
@@ -480,7 +489,7 @@ use self::catalog::{
     sha256_file, terminal_status, truncate_error, write_manifest,
 };
 use self::retention::apply_retention;
+pub use self::settings::first_existing_backup_directory;
 use self::settings::{
     backup_directory, backup_script_path, bool_env, int_env, non_empty_env, parse_clock, uint_env,
 };
-pub use self::settings::first_existing_backup_directory;

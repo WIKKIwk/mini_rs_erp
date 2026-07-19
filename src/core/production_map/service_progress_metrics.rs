@@ -64,11 +64,11 @@ fn validate_progress_metrics(
             && metrics.finished_goods_kg.is_some()
             && metrics.finished_goods_meter.is_some())
         && !bosma_completion_metrics_are_complete(
-                metrics.return_ink_kg,
-                metrics.total_waste,
-                metrics.finished_goods_kg,
-                metrics.finished_goods_meter,
-            )
+            metrics.return_ink_kg,
+            metrics.total_waste,
+            metrics.finished_goods_kg,
+            metrics.finished_goods_meter,
+        )
     {
         return Err(ProductionMapError::BosmaCompletionMetricsRequired);
     }

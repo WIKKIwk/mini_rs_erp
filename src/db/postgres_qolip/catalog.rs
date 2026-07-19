@@ -300,14 +300,13 @@ pub(super) async fn delete_product_specs(
         .execute(&mut *tx)
         .await
         .map_err(|_| QolipError::StoreFailed)?;
-    let deleted = sqlx::query(
-        "DELETE FROM mini_qolip_product_specs WHERE lower(qolip_code) = ANY($1)",
-    )
-    .bind(&normalized)
-    .execute(&mut *tx)
-    .await
-    .map_err(|_| QolipError::StoreFailed)?
-    .rows_affected() as usize;
+    let deleted =
+        sqlx::query("DELETE FROM mini_qolip_product_specs WHERE lower(qolip_code) = ANY($1)")
+            .bind(&normalized)
+            .execute(&mut *tx)
+            .await
+            .map_err(|_| QolipError::StoreFailed)?
+            .rows_affected() as usize;
     debug_assert!(deleted <= locked_codes.len());
     tx.commit().await.map_err(|_| QolipError::StoreFailed)?;
     Ok(deleted)

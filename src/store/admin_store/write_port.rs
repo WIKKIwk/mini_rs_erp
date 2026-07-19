@@ -1,9 +1,6 @@
 use async_trait::async_trait;
 
 use super::*;
-use crate::core::admin::item_customer_policy::{
-    FINISHED_GOODS_CUSTOMER_REQUIRED, item_group_is_descendant_of, item_group_requires_customer,
-};
 
 #[async_trait]
 impl AdminWritePort for JsonAdminStore {
@@ -166,40 +163,8 @@ impl AdminWritePort for JsonAdminStore {
         ref_: &str,
         item_code: &str,
     ) -> Result<(), AdminPortError> {
-        let mut data = self.data.lock().await;
-        let item = data
-            .items
-            .values()
-            .find(|item| item.code.trim().eq_ignore_ascii_case(item_code.trim()))
-            .ok_or(AdminPortError::NotFound)?;
-        let assigned_to_target = data.customer_items.get(ref_.trim()).is_some_and(|codes| {
-            codes
-                .iter()
-                .any(|code| code.trim().eq_ignore_ascii_case(&item.code))
-        });
-        if assigned_to_target && stored_item_group_is_finished_goods(&data, &item.item_group) {
-            let customer_count = data
-                .customer_items
-                .values()
-                .filter(|codes| {
-                    codes
-                        .iter()
-                        .any(|code| code.trim().eq_ignore_ascii_case(&item.code))
-                })
-                .count();
-            if customer_count <= 1 {
-                return Err(AdminPortError::InvalidInput(
-                    FINISHED_GOODS_CUSTOMER_REQUIRED.to_string(),
-                ));
-            }
-        }
-        remove_code(
-            data.customer_items
-                .entry(ref_.trim().to_string())
-                .or_default(),
-            item_code,
-        );
-        self.persist(&data).await
+        self.unassign_customer_item_with_policy(ref_, item_code)
+            .await
     }
 
     async fn create_item(
@@ -254,59 +219,8 @@ impl AdminWritePort for JsonAdminStore {
         item_group: &str,
         customer_ref: Option<&str>,
     ) -> Result<SupplierItem, AdminPortError> {
-        let code = code.trim();
-        if code.is_empty() {
-            return Err(AdminPortError::InvalidInput(
-                "item code is required".to_string(),
-            ));
-        }
-        let customer_ref = customer_ref
-            .map(str::trim)
-            .filter(|customer_ref| !customer_ref.is_empty());
-        let mut data = self.data.lock().await;
-        if stored_item_group_is_finished_goods(&data, item_group) && customer_ref.is_none() {
-            return Err(AdminPortError::InvalidInput(
-                FINISHED_GOODS_CUSTOMER_REQUIRED.to_string(),
-            ));
-        }
-        if let Some(customer_ref) = customer_ref {
-            if !data.customers.contains_key(customer_ref) {
-                return Err(AdminPortError::NotFound);
-            }
-        }
-        let now = OffsetDateTime::now_utc().unix_timestamp();
-        let created_at_unix = data
-            .items
-            .get(code)
-            .map(|item| item.created_at_unix)
-            .filter(|created_at| *created_at > 0)
-            .unwrap_or(now);
-        let item = StoredSupplierItem {
-            code: code.to_string(),
-            name: name.trim().to_string(),
-            uom: blank_default(uom, "Kg"),
-            item_group: blank_default(item_group, "All Item Groups"),
-            created_at_unix,
-            updated_at_unix: now,
-        };
-        data.items.insert(code.to_string(), item.clone());
-        data.item_groups
-            .entry(item.item_group.clone())
-            .or_insert_with(|| StoredItemGroup {
-                name: item.item_group.clone(),
-                parent_item_group: "All Item Groups".to_string(),
-                is_group: true,
-            });
-        if let Some(customer_ref) = customer_ref {
-            push_unique(
-                data.customer_items
-                    .entry(customer_ref.to_string())
-                    .or_default(),
-                code,
-            );
-        }
-        self.persist(&data).await?;
-        Ok(SupplierItem::from(&item))
+        self.create_item_and_customer_atomic(code, name, uom, item_group, customer_ref)
+            .await
     }
 
     async fn update_item(
@@ -381,45 +295,8 @@ impl AdminWritePort for JsonAdminStore {
         parent: &str,
         is_group: bool,
     ) -> Result<AdminItemGroup, AdminPortError> {
-        let mut data = self.data.lock().await;
-        let group = StoredItemGroup {
-            name: name.trim().to_string(),
-            parent_item_group: parent.trim().to_string(),
-            is_group,
-        };
-        let existing_groups = data
-            .item_groups
-            .values()
-            .map(AdminItemGroup::from)
-            .collect::<Vec<_>>();
-        let required_before = data.item_groups.contains_key(&group.name)
-            && item_group_requires_customer(&group.name, &existing_groups);
-        let mut proposed_groups = data.item_groups.clone();
-        proposed_groups.insert(group.name.clone(), group.clone());
-        let groups = proposed_groups
-            .values()
-            .map(AdminItemGroup::from)
-            .collect::<Vec<_>>();
-        if !required_before && item_group_requires_customer(&group.name, &groups) {
-            for item in data.items.values() {
-                if !item_group_is_descendant_of(&item.item_group, &group.name, &groups) {
-                    continue;
-                }
-                let has_customer = data.customer_items.values().any(|codes| {
-                    codes
-                        .iter()
-                        .any(|code| code.trim().eq_ignore_ascii_case(&item.code))
-                });
-                if !has_customer {
-                    return Err(AdminPortError::InvalidInput(
-                        FINISHED_GOODS_CUSTOMER_REQUIRED.to_string(),
-                    ));
-                }
-            }
-        }
-        data.item_groups = proposed_groups;
-        self.persist(&data).await?;
-        Ok(AdminItemGroup::from(&group))
+        self.upsert_item_group_with_customer_policy(name, parent, is_group)
+            .await
     }
 
     async fn move_item_group_parent(
@@ -427,37 +304,8 @@ impl AdminWritePort for JsonAdminStore {
         name: &str,
         parent: &str,
     ) -> Result<AdminItemGroup, AdminPortError> {
-        let mut data = self.data.lock().await;
-        let mut proposed_groups = data.item_groups.clone();
-        let group = proposed_groups
-            .get_mut(name.trim())
-            .ok_or(AdminPortError::NotFound)?;
-        group.parent_item_group = parent.trim().to_string();
-        let result = AdminItemGroup::from(&*group);
-        let groups = proposed_groups
-            .values()
-            .map(AdminItemGroup::from)
-            .collect::<Vec<_>>();
-        for item in data.items.values() {
-            if !item_group_is_descendant_of(&item.item_group, name, &groups)
-                || !item_group_requires_customer(&item.item_group, &groups)
-            {
-                continue;
-            }
-            let has_customer = data.customer_items.values().any(|codes| {
-                codes
-                    .iter()
-                    .any(|code| code.trim().eq_ignore_ascii_case(&item.code))
-            });
-            if !has_customer {
-                return Err(AdminPortError::InvalidInput(
-                    FINISHED_GOODS_CUSTOMER_REQUIRED.to_string(),
-                ));
-            }
-        }
-        data.item_groups = proposed_groups;
-        self.persist(&data).await?;
-        Ok(result)
+        self.move_item_group_parent_with_customer_policy(name, parent)
+            .await
     }
 
     async fn update_item_group(
@@ -479,48 +327,7 @@ impl AdminWritePort for JsonAdminStore {
         item_codes: &[String],
         item_group: &str,
     ) -> Result<Vec<String>, AdminPortError> {
-        let mut data = self.data.lock().await;
-        let groups = data
-            .item_groups
-            .values()
-            .map(AdminItemGroup::from)
-            .collect::<Vec<_>>();
-        if item_group_requires_customer(item_group, &groups) {
-            for item_code in item_codes {
-                let Some(item) = data
-                    .items
-                    .values()
-                    .find(|item| item.code.trim().eq_ignore_ascii_case(item_code.trim()))
-                else {
-                    continue;
-                };
-                let has_customer = data.customer_items.values().any(|codes| {
-                    codes
-                        .iter()
-                        .any(|code| code.trim().eq_ignore_ascii_case(&item.code))
-                });
-                if !has_customer {
-                    return Err(AdminPortError::InvalidInput(
-                        FINISHED_GOODS_CUSTOMER_REQUIRED.to_string(),
-                    ));
-                }
-            }
-        }
-        let now = OffsetDateTime::now_utc().unix_timestamp();
-        let mut updated = Vec::new();
-        for item_code in item_codes {
-            let Some(item) = data
-                .items
-                .values_mut()
-                .find(|item| item.code.trim().eq_ignore_ascii_case(item_code.trim()))
-            else {
-                continue;
-            };
-            item.item_group = item_group.trim().to_string();
-            item.updated_at_unix = now;
-            updated.push(item.code.clone());
-        }
-        self.persist(&data).await?;
-        Ok(updated)
+        self.update_item_groups_bulk_with_customer_policy(item_codes, item_group)
+            .await
     }
 }

@@ -58,8 +58,17 @@ configure_chat_media_processor() {
 		exit 1
 	fi
 	if [ -z "$ffmpeg" ] || [ -z "$ffprobe" ]; then
-		echo "warning: ffmpeg/ffprobe unavailable; video processing will be disabled" >&2
-		return 0
+		echo "ffmpeg/ffprobe unavailable; chat video/audio processing cannot start" >&2
+		echo "run: $REPO_ROOT/tools/runtime/setup_chat_media_processor.sh" >&2
+		exit 1
+	fi
+	if ! "$ffmpeg" -version >/dev/null 2>&1; then
+		echo "configured ffmpeg cannot be executed: $ffmpeg" >&2
+		exit 1
+	fi
+	if ! "$ffprobe" -version >/dev/null 2>&1; then
+		echo "configured ffprobe cannot be executed: $ffprobe" >&2
+		exit 1
 	fi
 
 	export MOBILE_CHAT_MEDIA_FFMPEG_BIN="$ffmpeg"

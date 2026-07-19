@@ -1,10 +1,6 @@
-use crate::core::gscale::models::{
-    CreateMaterialReceiptDraftInput, RawMaterialStockUpdateInput,
-};
+use crate::core::gscale::models::{CreateMaterialReceiptDraftInput, RawMaterialStockUpdateInput};
 use crate::core::gscale::ports::MaterialReceiptStorePort;
-use crate::db::postgres::{
-    apply_foundation_migration, apply_postgres_migrations_through,
-};
+use crate::db::postgres::{apply_foundation_migration, apply_postgres_migrations_through};
 use crate::db::postgres_gscale_receipt::PostgresGscaleReceiptStore;
 
 #[tokio::test]
@@ -79,11 +75,10 @@ async fn postgres_gscale_receipt_preserves_precision_and_supports_stock_correcti
     apply_foundation_migration(&pool)
         .await
         .expect("migrations remain idempotent");
-    let migration_count: i64 =
-        sqlx::query_scalar("SELECT COUNT(*) FROM mini_schema_migrations")
-            .fetch_one(&pool)
-            .await
-            .expect("migration count");
+    let migration_count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM mini_schema_migrations")
+        .fetch_one(&pool)
+        .await
+        .expect("migration count");
     assert_eq!(migration_count, 14);
 
     let increased = store

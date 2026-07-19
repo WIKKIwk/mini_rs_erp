@@ -255,7 +255,7 @@ pub(super) async fn queue_action_logs_for_orders(
 pub(super) async fn queue_action_logs_for_worker(
     store: &MemoryProductionMapStore,
     worker_refs: &[String],
-    worker_display_name: &str,
+    _worker_display_name: &str,
     limit: usize,
 ) -> Result<Vec<ProductionOrderLogEntry>, ProductionMapError> {
     let worker_refs = worker_refs
@@ -263,21 +263,14 @@ pub(super) async fn queue_action_logs_for_worker(
         .map(|item| item.trim().to_string())
         .filter(|item| !item.is_empty())
         .collect::<BTreeSet<_>>();
-    let worker_display_name = worker_display_name.trim().to_ascii_lowercase();
-    if worker_refs.is_empty() && worker_display_name.is_empty() || limit == 0 {
+    if worker_refs.is_empty() || limit == 0 {
         return Ok(Vec::new());
     }
     let events = store.queue_events.read().await;
     let mut logs = Vec::new();
     for (index, event) in events.iter().enumerate().rev() {
         let matches_ref = worker_refs.contains(event.actor.ref_.trim());
-        let matches_name = !worker_display_name.is_empty()
-            && event
-                .actor
-                .display_name
-                .trim()
-                .eq_ignore_ascii_case(&worker_display_name);
-        if !matches_ref && !matches_name {
+        if !matches_ref {
             continue;
         }
         logs.push(production_order_log_entry(

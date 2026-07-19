@@ -137,7 +137,12 @@ fn system_user_list_entry(detail: AdminSystemUserDetail) -> AdminUserListEntry {
 }
 
 fn required_system_role(value: Option<&str>) -> Result<PrincipalRole, AdminError> {
-    match value.unwrap_or("qolipchi").trim().to_ascii_lowercase().as_str() {
+    match value
+        .unwrap_or("qolipchi")
+        .trim()
+        .to_ascii_lowercase()
+        .as_str()
+    {
         "qolipchi" => Ok(PrincipalRole::Qolipchi),
         "boyoqchi" | "bo'yoqchi" | "bo‘yoqchi" => Ok(PrincipalRole::Boyoqchi),
         _ => Err(bad_request("system user role is invalid")),

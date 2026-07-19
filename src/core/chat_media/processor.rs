@@ -9,8 +9,8 @@ use image::imageops::FilterType;
 use image::{DynamicImage, GenericImageView, Rgb, RgbImage};
 
 use super::{
-    ChatMediaKind, ChatMediaProcessedContent, ChatMediaProcessedFiles,
-    ChatMediaProcessingError, ChatMediaProcessor, ChatMediaUploadRecord,
+    ChatMediaKind, ChatMediaProcessedContent, ChatMediaProcessedFiles, ChatMediaProcessingError,
+    ChatMediaProcessor, ChatMediaUploadRecord,
 };
 
 const IMAGE_LONG_EDGE: u32 = 1920;
@@ -99,6 +99,43 @@ impl ChatMediaProcessor for SystemChatMediaProcessor {
                 .await
                 .map_err(|_| ChatMediaProcessingError::ProcessingFailed)?
             }
+            ChatMediaKind::Audio => {
+                let processor = self.clone();
+                let media_id = media.media_id.clone();
+                tokio::task::spawn_blocking(move || {
+                    let workspace = ProcessingWorkspace::create(&processor.temp_root, &media_id)?;
+                    let source_path = workspace.path.join("source.upload");
+                    let content_path = workspace.path.join("canonical.m4a");
+                    let thumbnail_path = workspace.path.join("waveform.jpg");
+                    fs::write(&source_path, source)
+                        .map_err(|_| ChatMediaProcessingError::ProcessingFailed)?;
+                    let processed = processor.process_audio_files(
+                        &source_path,
+                        &content_path,
+                        &thumbnail_path,
+                    )?;
+                    Ok(ChatMediaProcessedContent {
+                        content: Bytes::from(
+                            fs::read(&processed.content_path)
+                                .map_err(|_| ChatMediaProcessingError::ProcessingFailed)?,
+                        ),
+                        content_type: processed.content_type,
+                        thumbnail: Bytes::from(
+                            fs::read(&processed.thumbnail_path)
+                                .map_err(|_| ChatMediaProcessingError::ProcessingFailed)?,
+                        ),
+                        thumbnail_content_type: processed.thumbnail_content_type,
+                        width_pixels: processed.width_pixels,
+                        height_pixels: processed.height_pixels,
+                        duration_ms: processed.duration_ms,
+                        frame_rate_milli: processed.frame_rate_milli,
+                        video_codec: processed.video_codec,
+                        audio_codec: processed.audio_codec,
+                    })
+                })
+                .await
+                .map_err(|_| ChatMediaProcessingError::ProcessingFailed)?
+            }
         }
     }
 
@@ -137,6 +174,9 @@ impl ChatMediaProcessor for SystemChatMediaProcessor {
             ChatMediaKind::Video => {
                 processor.process_video_files(&source_path, &content_path, &thumbnail_path)
             }
+            ChatMediaKind::Audio => {
+                processor.process_audio_files(&source_path, &content_path, &thumbnail_path)
+            }
         })
         .await
         .map_err(|_| ChatMediaProcessingError::ProcessingFailed)?
@@ -144,8 +184,8 @@ impl ChatMediaProcessor for SystemChatMediaProcessor {
 }
 
 fn process_image(source: &[u8]) -> Result<ChatMediaProcessedContent, ChatMediaProcessingError> {
-    let image = image::load_from_memory(source)
-        .map_err(|_| ChatMediaProcessingError::InvalidContent)?;
+    let image =
+        image::load_from_memory(source).map_err(|_| ChatMediaProcessingError::InvalidContent)?;
     let canonical = resize_long_edge(image, IMAGE_LONG_EDGE);
     let (width, height) = canonical.dimensions();
     let thumbnail = resize_long_edge(canonical.clone(), THUMBNAIL_LONG_EDGE);
@@ -154,8 +194,7 @@ fn process_image(source: &[u8]) -> Result<ChatMediaProcessedContent, ChatMediaPr
         content_type: "image/jpeg".to_string(),
         thumbnail: Bytes::from(encode_jpeg(&thumbnail, THUMBNAIL_QUALITY)?),
         thumbnail_content_type: "image/jpeg".to_string(),
-        width_pixels: i32::try_from(width)
-            .map_err(|_| ChatMediaProcessingError::InvalidContent)?,
+        width_pixels: i32::try_from(width).map_err(|_| ChatMediaProcessingError::InvalidContent)?,
         height_pixels: i32::try_from(height)
             .map_err(|_| ChatMediaProcessingError::InvalidContent)?,
         duration_ms: None,

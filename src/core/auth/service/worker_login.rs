@@ -28,12 +28,8 @@ impl AuthService {
         normalized_phone: &str,
         code: &str,
     ) -> Result<Principal, AuthError> {
-        self.login_system_user_by_role(
-            normalized_phone,
-            code,
-            PrincipalRole::Qolipchi,
-        )
-        .await
+        self.login_system_user_by_role(normalized_phone, code, PrincipalRole::Qolipchi)
+            .await
     }
 
     pub(super) async fn login_boyoqchi(
@@ -41,12 +37,8 @@ impl AuthService {
         normalized_phone: &str,
         code: &str,
     ) -> Result<Principal, AuthError> {
-        self.login_system_user_by_role(
-            normalized_phone,
-            code,
-            PrincipalRole::Boyoqchi,
-        )
-        .await
+        self.login_system_user_by_role(normalized_phone, code, PrincipalRole::Boyoqchi)
+            .await
     }
 
     async fn login_system_user_by_role(

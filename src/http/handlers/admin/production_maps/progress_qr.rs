@@ -96,8 +96,6 @@ pub struct ProgressQrHistoryQuery {
     #[serde(default)]
     worker_ref: String,
     #[serde(default)]
-    worker_display_name: String,
-    #[serde(default)]
     limit: Option<usize>,
 }
 
@@ -188,11 +186,7 @@ pub async fn production_map_progress_qr_reprint(
         return Err(forbidden());
     }
     let request = progress_reprint_request(&input, &batch);
-    let print_result = if input
-        .print_transport
-        .trim()
-        .eq_ignore_ascii_case("offline")
-    {
+    let print_result = if input.print_transport.trim().eq_ignore_ascii_case("offline") {
         state.gscale.prepare_progress_label(request)
     } else {
         state.gscale.print_progress_label(request).await
@@ -232,15 +226,14 @@ fn progress_history_scope(
             .map(|item| item.trim().to_string())
             .filter(|item| !item.is_empty())
             .collect::<Vec<_>>();
-        let display_name = query.worker_display_name.trim().to_string();
-        if refs.is_empty() && display_name.is_empty() {
+        if refs.is_empty() {
             return Err(bad_request("worker_ref is required"));
         }
-        return Ok((refs, display_name));
+        return Ok((refs, String::new()));
     }
     let principal_ref = principal.ref_.trim().to_string();
     if principal_ref.is_empty() {
-        return Ok((Vec::new(), principal.display_name.trim().to_string()));
+        return Err(forbidden());
     }
     Ok((vec![principal_ref], String::new()))
 }
@@ -252,12 +245,6 @@ fn principal_can_reprint_progress_batch(
     let principal_ref = principal.ref_.trim();
     principal.role == PrincipalRole::Admin
         || (!principal_ref.is_empty() && batch.worker_ref.trim() == principal_ref)
-        || (principal_ref.is_empty()
-            && !principal.display_name.trim().is_empty()
-            && batch
-                .worker_display_name
-                .trim()
-                .eq_ignore_ascii_case(principal.display_name.trim()))
 }
 
 fn progress_reprint_request(

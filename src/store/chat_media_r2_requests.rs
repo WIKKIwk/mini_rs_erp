@@ -12,10 +12,7 @@ use super::chat_media_r2_signing::{
 use crate::core::chat_media::ChatMediaStorageError;
 
 impl R2ChatMediaStorage {
-    pub(super) fn object_url(
-        &self,
-        object_key: &str,
-    ) -> Result<String, ChatMediaStorageError> {
+    pub(super) fn object_url(&self, object_key: &str) -> Result<String, ChatMediaStorageError> {
         validate_object_key(object_key)?;
         Ok(format!(
             "{}/{}/{}",
@@ -36,8 +33,8 @@ impl R2ChatMediaStorage {
         now: OffsetDateTime,
     ) -> Result<String, ChatMediaStorageError> {
         let base_url = self.object_url(object_key)?;
-        let url = reqwest::Url::parse(&base_url)
-            .map_err(|_| ChatMediaStorageError::OperationFailed)?;
+        let url =
+            reqwest::Url::parse(&base_url).map_err(|_| ChatMediaStorageError::OperationFailed)?;
         let host = request_host(&url)?;
         let (date, amz_date) = signing_dates(now);
         let scope = format!("{date}/{}/s3/aws4_request", self.region);
@@ -81,8 +78,8 @@ impl R2ChatMediaStorage {
         now: OffsetDateTime,
     ) -> Result<String, ChatMediaStorageError> {
         let base_url = self.object_url(object_key)?;
-        let url = reqwest::Url::parse(&base_url)
-            .map_err(|_| ChatMediaStorageError::OperationFailed)?;
+        let url =
+            reqwest::Url::parse(&base_url).map_err(|_| ChatMediaStorageError::OperationFailed)?;
         let host = request_host(&url)?;
         let (date, amz_date) = signing_dates(now);
         let scope = format!("{date}/{}/s3/aws4_request", self.region);
@@ -98,7 +95,9 @@ impl R2ChatMediaStorage {
         let canonical_query = canonical_query(&query);
         let canonical_request = format!(
             "GET\n{}\n{}\nhost:{}\n\nhost\nUNSIGNED-PAYLOAD",
-            url.path(), canonical_query, host
+            url.path(),
+            canonical_query,
+            host
         );
         let string_to_sign = format!(
             "AWS4-HMAC-SHA256\n{amz_date}\n{scope}\n{}",
@@ -171,7 +170,8 @@ impl R2ChatMediaStorage {
         let signed_headers = "content-type;host;x-amz-content-sha256;x-amz-date";
         let canonical_request = format!(
             "PUT\n{}\n\n{}\n\n{signed_headers}\n{payload_hash}",
-            url.path(), canonical_headers
+            url.path(),
+            canonical_headers
         );
         let scope = format!("{date}/{}/s3/aws4_request", self.region);
         let string_to_sign = format!(
@@ -204,8 +204,8 @@ impl R2ChatMediaStorage {
         now: OffsetDateTime,
     ) -> Result<(String, HeaderMap), ChatMediaStorageError> {
         let base_url = self.object_url(object_key)?;
-        let url = reqwest::Url::parse(&base_url)
-            .map_err(|_| ChatMediaStorageError::OperationFailed)?;
+        let url =
+            reqwest::Url::parse(&base_url).map_err(|_| ChatMediaStorageError::OperationFailed)?;
         let host = request_host(&url)?;
         let (date, amz_date) = signing_dates(now);
         let payload_hash = sha256_hex(content);
@@ -222,9 +222,7 @@ impl R2ChatMediaStorage {
                 "content-type;host;x-amz-content-sha256;x-amz-date",
             ),
             None => (
-                format!(
-                    "host:{host}\nx-amz-content-sha256:{payload_hash}\nx-amz-date:{amz_date}"
-                ),
+                format!("host:{host}\nx-amz-content-sha256:{payload_hash}\nx-amz-date:{amz_date}"),
                 "host;x-amz-content-sha256;x-amz-date",
             ),
         };

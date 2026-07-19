@@ -24,13 +24,10 @@ pub(super) fn apply_retention(root: &Path, now: OffsetDateTime) {
         let keep = if index == 0 || age_days <= 14 {
             true
         } else if age_days <= 56 {
-            completed.is_some_and(|value| {
-                kept_weeks.insert((value.year(), value.iso_week()))
-            })
+            completed.is_some_and(|value| kept_weeks.insert((value.year(), value.iso_week())))
         } else if age_days <= 365 {
-            completed.is_some_and(|value| {
-                kept_months.insert((value.year(), u8::from(value.month())))
-            })
+            completed
+                .is_some_and(|value| kept_months.insert((value.year(), u8::from(value.month()))))
         } else {
             false
         };

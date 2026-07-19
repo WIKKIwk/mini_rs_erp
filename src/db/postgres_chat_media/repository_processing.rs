@@ -50,7 +50,10 @@ pub(super) async fn mark_processing_ready(
     media_id: &str,
     ready: &ChatMediaReadyInput,
 ) -> Result<(), ChatMediaError> {
-    let mut tx = pool.begin().await.map_err(|_| ChatMediaError::StoreFailed)?;
+    let mut tx = pool
+        .begin()
+        .await
+        .map_err(|_| ChatMediaError::StoreFailed)?;
     let updated = sqlx::query(
         r#"UPDATE mini_chat_media
            SET upload_status = 'ready', detected_content_type = $3,
@@ -105,7 +108,10 @@ pub(super) async fn mark_processing_failed(
     media_id: &str,
     error_code: &str,
 ) -> Result<(), ChatMediaError> {
-    let mut tx = pool.begin().await.map_err(|_| ChatMediaError::StoreFailed)?;
+    let mut tx = pool
+        .begin()
+        .await
+        .map_err(|_| ChatMediaError::StoreFailed)?;
     sqlx::query(
         r#"UPDATE mini_chat_media_jobs
            SET job_status = 'failed', locked_until = NULL,
@@ -152,6 +158,76 @@ pub(super) async fn media_for_access(
         .bind(media_id)
         .bind(role_key(&principal.role))
         .bind(principal.ref_.trim())
+        .fetch_optional(pool)
+        .await
+        .map_err(|_| ChatMediaError::StoreFailed)?
+        .ok_or(ChatMediaError::NotFound)?
+        .into_model()
+}
+
+pub(super) async fn create_access_ticket(
+    pool: &PgPool,
+    principal: &Principal,
+    media_id: &str,
+    ticket_hash: &[u8],
+    expires_at_unix: i64,
+) -> Result<(), ChatMediaError> {
+    let mut tx = pool
+        .begin()
+        .await
+        .map_err(|_| ChatMediaError::StoreFailed)?;
+    sqlx::query("DELETE FROM mini_chat_media_access_tickets WHERE expires_at <= now()")
+        .execute(&mut *tx)
+        .await
+        .map_err(|_| ChatMediaError::StoreFailed)?;
+    let inserted = sqlx::query(
+        r#"INSERT INTO mini_chat_media_access_tickets
+             (ticket_hash, media_id, principal_id, expires_at)
+           SELECT $4, media.media_id, viewer.principal_id, to_timestamp($5)
+           FROM mini_chat_media media
+           JOIN mini_chat_message_attachments attachment ON attachment.media_id = media.media_id
+           JOIN mini_chat_conversation_members member
+             ON member.conversation_id = attachment.conversation_id AND member.left_at IS NULL
+           JOIN mini_chat_principals viewer ON viewer.principal_id = member.principal_id
+           WHERE media.media_id = $1
+             AND media.upload_status = 'ready'
+             AND viewer.principal_role = $2
+             AND viewer.principal_ref = $3
+             AND viewer.active = TRUE
+           ON CONFLICT (ticket_hash) DO NOTHING"#,
+    )
+    .bind(media_id)
+    .bind(role_key(&principal.role))
+    .bind(principal.ref_.trim())
+    .bind(ticket_hash)
+    .bind(expires_at_unix)
+    .execute(&mut *tx)
+    .await
+    .map_err(|_| ChatMediaError::StoreFailed)?;
+    if inserted.rows_affected() != 1 {
+        return Err(ChatMediaError::NotFound);
+    }
+    tx.commit().await.map_err(|_| ChatMediaError::StoreFailed)
+}
+
+pub(super) async fn media_for_access_ticket(
+    pool: &PgPool,
+    media_id: &str,
+    ticket_hash: &[u8],
+) -> Result<ChatMediaUploadRecord, ChatMediaError> {
+    let query = format!(
+        r#"SELECT {}
+           FROM mini_chat_media media
+           JOIN mini_chat_media_access_tickets ticket ON ticket.media_id = media.media_id
+           WHERE media.media_id = $1
+             AND media.upload_status = 'ready'
+             AND ticket.ticket_hash = $2
+             AND ticket.expires_at > now()"#,
+        prefixed_columns("media")
+    );
+    sqlx::query_as::<_, ChatMediaRow>(&query)
+        .bind(media_id)
+        .bind(ticket_hash)
         .fetch_optional(pool)
         .await
         .map_err(|_| ChatMediaError::StoreFailed)?

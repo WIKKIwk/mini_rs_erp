@@ -42,11 +42,14 @@ async fn queue_complete_without_output_creates_admin_completion_request() {
             "POST",
             "/v1/mobile/admin/production-maps/queue-action",
             &worker_token,
-            &with_test_qolip(r#"{
+            &with_test_qolip(
+                r#"{
                 "apparatus":"7 ta rangli pechat",
                 "order_id":"zakaz-zero-complete",
                 "action":"start"
-            }"#, "zakaz-zero-complete"),
+            }"#,
+                "zakaz-zero-complete",
+            ),
         ))
         .await
         .expect("start");
@@ -58,12 +61,14 @@ async fn queue_complete_without_output_creates_admin_completion_request() {
             "POST",
             "/v1/mobile/admin/production-maps/queue-action",
             &worker_token,
-            &with_test_returned_paint(r#"{
+            &with_test_returned_paint(
+                r#"{
                 "apparatus":"7 ta rangli pechat",
                 "order_id":"zakaz-zero-complete",
                 "action":"complete",
                 "completion_request_note":"Metraj va kg yo'q, brigader tekshirsin"
-            }"#),
+            }"#,
+            ),
         ))
         .await
         .expect("complete request");
@@ -124,8 +129,7 @@ async fn queue_complete_with_zero_metric_requires_reason_and_creates_admin_reque
         .await
         .expect("assignment");
     let admin_token = session(&state, PrincipalRole::Admin).await;
-    let worker_token =
-        session_for(&state, PrincipalRole::Aparatchi, "worker-zero-metric").await;
+    let worker_token = session_for(&state, PrincipalRole::Aparatchi, "worker-zero-metric").await;
     let router = build_router(state);
 
     let saved = router
@@ -152,11 +156,14 @@ async fn queue_complete_with_zero_metric_requires_reason_and_creates_admin_reque
             "POST",
             "/v1/mobile/admin/production-maps/queue-action",
             &worker_token,
-            &with_test_qolip(r#"{
+            &with_test_qolip(
+                r#"{
                 "apparatus":"7 ta rangli pechat",
                 "order_id":"zakaz-zero-metric",
                 "action":"start"
-            }"#, "zakaz-zero-metric"),
+            }"#,
+                "zakaz-zero-metric",
+            ),
         ))
         .await
         .expect("start");
@@ -168,14 +175,16 @@ async fn queue_complete_with_zero_metric_requires_reason_and_creates_admin_reque
             "POST",
             "/v1/mobile/admin/production-maps/queue-action",
             &worker_token,
-            &with_test_returned_paint(r#"{
+            &with_test_returned_paint(
+                r#"{
                 "apparatus":"7 ta rangli pechat",
                 "order_id":"zakaz-zero-metric",
                 "action":"complete",
                 "total_waste":0,
                 "finished_goods_kg":1,
                 "finished_goods_meter":1
-            }"#),
+            }"#,
+            ),
         ))
         .await
         .expect("complete without reason");
@@ -193,7 +202,8 @@ async fn queue_complete_with_zero_metric_requires_reason_and_creates_admin_reque
             "POST",
             "/v1/mobile/admin/production-maps/queue-action",
             &worker_token,
-            &with_test_returned_paint(r#"{
+            &with_test_returned_paint(
+                r#"{
                 "apparatus":"7 ta rangli pechat",
                 "order_id":"zakaz-zero-metric",
                 "action":"complete",
@@ -201,17 +211,15 @@ async fn queue_complete_with_zero_metric_requires_reason_and_creates_admin_reque
                 "finished_goods_kg":1,
                 "finished_goods_meter":1,
                 "completion_request_note":"Chiqindi nol chiqdi, brigader tekshirsin"
-            }"#),
+            }"#,
+            ),
         ))
         .await
         .expect("complete request");
     let requested_status = requested.status();
     let requested_body = json_body(requested).await;
     assert_eq!(requested_status, StatusCode::OK, "{requested_body:?}");
-    assert_eq!(
-        requested_body["states"]["zakaz-zero-metric"],
-        "in_progress"
-    );
+    assert_eq!(requested_body["states"]["zakaz-zero-metric"], "in_progress");
     assert_eq!(
         requested_body["completion_request"]["zero_metric_codes"],
         serde_json::json!(["total_waste"])
@@ -328,12 +336,15 @@ async fn admin_approves_zero_output_completion_request_and_closes_order_with_iss
             "POST",
             "/v1/mobile/admin/production-maps/queue-action",
             &worker_token,
-            &with_test_qolip(r#"{
+            &with_test_qolip(
+                r#"{
                 "apparatus":"7 ta rangli pechat",
                 "order_id":"zakaz-approve-zero",
                 "action":"start",
                 "material_barcodes":["30AA"]
-            }"#, "zakaz-approve-zero"),
+            }"#,
+                "zakaz-approve-zero",
+            ),
         ))
         .await
         .expect("start");
@@ -381,9 +392,7 @@ async fn admin_approves_zero_output_completion_request_and_closes_order_with_iss
         "completed_with_issue"
     );
     let returned_paint = production_store
-        .returned_paint_request(
-            "returned_paint_complete:zakaz-approve-zero:7 ta rangli pechat",
-        )
+        .returned_paint_request("returned_paint_complete:zakaz-approve-zero:7 ta rangli pechat")
         .await
         .expect("returned paint is committed with approval");
     assert_eq!(
@@ -476,11 +485,14 @@ async fn admin_approves_zero_output_completion_request_and_closes_order_with_iss
             "POST",
             "/v1/mobile/admin/production-maps/queue-action",
             &worker_token,
-            &with_test_qolip(r#"{
+            &with_test_qolip(
+                r#"{
                 "apparatus":"7 ta rangli pechat",
                 "order_id":"zakaz-approve-next",
                 "action":"start"
-            }"#, "zakaz-approve-next"),
+            }"#,
+                "zakaz-approve-next",
+            ),
         ))
         .await
         .expect("start next");

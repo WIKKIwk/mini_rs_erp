@@ -208,6 +208,16 @@ pub struct AdminCustomerDetail {
     pub code_locked: bool,
     pub code_retry_after_sec: i64,
     pub assigned_items: Vec<SupplierItem>,
+    #[serde(default)]
+    pub assigned_item_groups: Vec<String>,
+    #[serde(default)]
+    pub assigned_warehouses: Vec<String>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AdminMaterialItemGroupsUpdateRequest {
+    #[serde(default)]
+    pub assigned_item_groups: Vec<String>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]

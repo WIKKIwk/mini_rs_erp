@@ -3,9 +3,8 @@ use async_trait::async_trait;
 use super::{
     ChatMediaByteStream, ChatMediaCreateResult, ChatMediaError, ChatMediaProcessingWorkItem,
     ChatMediaReadyInput, ChatMediaRepository, ChatMediaStorage, ChatMediaStorageDownload,
-    ChatMediaStorageError, ChatMediaStorageObject, ChatMediaStorageUpload,
-    ChatMediaStoredContent, ChatMediaUploadRecord, ChatMediaUploadedChunk,
-    NewChatMediaUpload, NewChatMediaUploadedChunk,
+    ChatMediaStorageError, ChatMediaStorageObject, ChatMediaStorageUpload, ChatMediaStoredContent,
+    ChatMediaUploadRecord, ChatMediaUploadedChunk, NewChatMediaUpload, NewChatMediaUploadedChunk,
 };
 use crate::core::auth::models::Principal;
 

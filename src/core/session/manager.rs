@@ -7,7 +7,7 @@ use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use rand::RngCore;
 use tokio::sync::RwLock;
 
-use crate::core::auth::models::Principal;
+use crate::core::auth::models::{Principal, PrincipalRole};
 use crate::core::session::models::SessionRecord;
 use crate::core::session::store::{JsonSessionStore, LmdbSessionStore, SessionStore};
 use crate::error::AppError;
@@ -84,6 +84,22 @@ impl SessionManager {
     pub async fn delete(&self, token: &str) {
         let _ = self.store.delete(token).await;
         self.cache.write().await.remove(token);
+    }
+
+    pub async fn delete_for_principal(
+        &self,
+        role: &PrincipalRole,
+        principal_ref: &str,
+    ) -> Result<usize, AppError> {
+        let principal_ref = principal_ref.trim();
+        if principal_ref.is_empty() {
+            return Ok(0);
+        }
+        let deleted = self.store.delete_for_principal(role, principal_ref).await?;
+        self.cache.write().await.retain(|_, record| {
+            record.principal.role != *role || record.principal.ref_.trim() != principal_ref
+        });
+        Ok(deleted)
     }
 
     pub async fn update(&self, token: &str, principal: Principal) {
@@ -179,6 +195,46 @@ mod tests {
 
         sessions.delete(&token).await;
         assert!(sessions.get(&token).await.is_err());
+    }
+
+    #[tokio::test]
+    async fn deleting_principal_sessions_revokes_only_that_identity() {
+        let sessions = SessionManager::memory(Some(60));
+        let worker_token = sessions
+            .create(worker_principal("worker-deactivated"))
+            .await
+            .expect("worker session");
+        let other_token = sessions
+            .create(worker_principal("worker-active"))
+            .await
+            .expect("other session");
+
+        let deleted = sessions
+            .delete_for_principal(&PrincipalRole::Aparatchi, "worker-deactivated")
+            .await
+            .expect("revoke sessions");
+
+        assert_eq!(deleted, 1);
+        assert!(sessions.get(&worker_token).await.is_err());
+        assert_eq!(
+            sessions
+                .get(&other_token)
+                .await
+                .expect("active session")
+                .ref_,
+            "worker-active"
+        );
+    }
+
+    fn worker_principal(ref_: &str) -> Principal {
+        Principal {
+            role: PrincipalRole::Aparatchi,
+            display_name: "Worker".to_string(),
+            legal_name: "Worker".to_string(),
+            ref_: ref_.to_string(),
+            phone: "+998901112233".to_string(),
+            avatar_url: String::new(),
+        }
     }
 
     fn contains_bytes(haystack: &[u8], needle: &[u8]) -> bool {

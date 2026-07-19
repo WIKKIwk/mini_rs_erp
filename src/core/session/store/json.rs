@@ -6,6 +6,7 @@ use async_trait::async_trait;
 use tokio::sync::Mutex;
 
 use super::SessionStore;
+use crate::core::auth::models::PrincipalRole;
 use crate::core::session::models::SessionRecord;
 use crate::error::AppError;
 use crate::store::json_file;
@@ -84,5 +85,27 @@ impl SessionStore for JsonSessionStore {
             self.save(&state).await?;
         }
         Ok(())
+    }
+
+    async fn delete_for_principal(
+        &self,
+        role: &PrincipalRole,
+        principal_ref: &str,
+    ) -> Result<usize, AppError> {
+        let principal_ref = principal_ref.trim();
+        if principal_ref.is_empty() {
+            return Ok(0);
+        }
+        let mut state = self.state.lock().await;
+        self.load_if_needed(&mut state).await?;
+        let previous_len = state.sessions.len();
+        state.sessions.retain(|_, record| {
+            record.principal.role != *role || record.principal.ref_.trim() != principal_ref
+        });
+        let deleted = previous_len.saturating_sub(state.sessions.len());
+        if deleted > 0 {
+            self.save(&state).await?;
+        }
+        Ok(deleted)
     }
 }

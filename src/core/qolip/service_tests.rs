@@ -2,11 +2,11 @@ use async_trait::async_trait;
 
 use crate::core::auth::models::{Principal, PrincipalRole};
 
-use super::models::{
-    QolipBlock, QolipCellQr, QolipCheckout, QolipError, QolipLocation, QolipProduct,
-    QolipLocationUpsert, QolipProductSpec, QolipProductSpecUpsert,
-};
 use super::memory_store::MemoryQolipStore;
+use super::models::{
+    QolipBlock, QolipCellQr, QolipCheckout, QolipError, QolipLocation, QolipLocationUpsert,
+    QolipProduct, QolipProductSpec, QolipProductSpecUpsert,
+};
 use super::ports::QolipStorePort;
 use super::service::QolipService;
 

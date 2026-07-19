@@ -52,11 +52,14 @@ async fn wip_batches_endpoint_lists_waiting_and_in_use_batches() {
             "POST",
             "/v1/mobile/admin/production-maps/queue-action",
             &worker_token,
-            &with_test_qolip(r#"{
+            &with_test_qolip(
+                r#"{
                 "apparatus":"7 ta rangli pechat",
                 "order_id":"zakaz-wip-route",
                 "action":"start"
-            }"#, "zakaz-wip-route"),
+            }"#,
+                "zakaz-wip-route",
+            ),
         ))
         .await
         .expect("start first");
@@ -239,11 +242,14 @@ async fn wip_batches_endpoint_lists_batches_for_assigned_next_apparatus() {
             "POST",
             "/v1/mobile/admin/production-maps/queue-action",
             &first_token,
-            &with_test_qolip(r#"{
+            &with_test_qolip(
+                r#"{
                 "apparatus":"7 ta rangli pechat",
                 "order_id":"zakaz-wip-next",
                 "action":"start"
-            }"#, "zakaz-wip-next"),
+            }"#,
+                "zakaz-wip-next",
+            ),
         ))
         .await
         .expect("start first");
@@ -341,11 +347,14 @@ async fn complete_after_wip_start_does_not_reuse_input_qr_as_output_qr() {
             "POST",
             "/v1/mobile/admin/production-maps/queue-action",
             &worker_token,
-            &with_test_qolip(r#"{
+            &with_test_qolip(
+                r#"{
                 "apparatus":"7 ta rangli pechat",
                 "order_id":"zakaz-wip-complete-qr",
                 "action":"start"
-            }"#, "zakaz-wip-complete-qr"),
+            }"#,
+                "zakaz-wip-complete-qr",
+            ),
         ))
         .await
         .expect("start first");
@@ -475,11 +484,14 @@ async fn wip_batches_endpoint_forbids_worker_unassigned_or_unscoped_listing() {
             "POST",
             "/v1/mobile/admin/production-maps/queue-action",
             &worker_token,
-            &with_test_qolip(r#"{
+            &with_test_qolip(
+                r#"{
                 "apparatus":"7 ta rangli pechat",
                 "order_id":"zakaz-wip-scope",
                 "action":"start"
-            }"#, "zakaz-wip-scope"),
+            }"#,
+                "zakaz-wip-scope",
+            ),
         ))
         .await
         .expect("start first");

@@ -1,7 +1,5 @@
+use super::queue_actions::{apparatus_requires_qolip_scan, qolip_queue_error, reject_qolip_in_use};
 use super::*;
-use super::queue_actions::{
-    apparatus_requires_qolip_scan, qolip_queue_error, reject_qolip_in_use,
-};
 
 #[derive(serde::Deserialize)]
 struct QolipStartValidationRequest {
@@ -69,13 +67,7 @@ pub async fn production_map_qolip_validate(
         )
         .await
         .map_err(qolip_queue_error)?;
-    reject_qolip_in_use(
-        &state,
-        apparatus,
-        order_id,
-        &preparation.spec.qolip_code,
-    )
-    .await?;
+    reject_qolip_in_use(&state, apparatus, order_id, &preparation.spec.qolip_code).await?;
     let block = preparation
         .checkout
         .as_ref()

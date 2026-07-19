@@ -3,11 +3,10 @@ use bytes::{Bytes, BytesMut};
 use super::service::{validate_identifier, validate_stored_object};
 use super::service_support::{map_storage_error, new_id, upload_instruction};
 use super::{
-    ChatMediaByteStream, ChatMediaChunkUploadResult, ChatMediaCreateResult,
-    ChatMediaError, ChatMediaInitialization, ChatMediaKind, ChatMediaStatus,
-    ChatMediaStorageError, ChatMediaStoragePart, ChatMediaUploadInstruction,
-    ChatMediaUploadMode, ChatMediaUploadRecord, ChatMediaUploadView,
-    ChatMediaUploadedChunk, NewChatMediaUploadedChunk,
+    ChatMediaByteStream, ChatMediaChunkUploadResult, ChatMediaCreateResult, ChatMediaError,
+    ChatMediaInitialization, ChatMediaKind, ChatMediaStatus, ChatMediaStorageError,
+    ChatMediaStoragePart, ChatMediaUploadInstruction, ChatMediaUploadMode, ChatMediaUploadRecord,
+    ChatMediaUploadView, ChatMediaUploadedChunk, NewChatMediaUploadedChunk,
 };
 use crate::core::auth::models::Principal;
 
@@ -17,7 +16,7 @@ impl super::ChatMediaService {
         kind: ChatMediaKind,
         size_bytes: i64,
     ) -> Result<(ChatMediaUploadMode, Option<i64>, Option<i32>), ChatMediaError> {
-        if kind == ChatMediaKind::Image {
+        if kind != ChatMediaKind::Video {
             return Ok((ChatMediaUploadMode::Single, None, None));
         }
         let chunk_size = self.video_chunk_size_bytes;
@@ -27,11 +26,7 @@ impl super::ChatMediaService {
             .and_then(|value| i32::try_from(value).ok())
             .filter(|value| *value > 0)
             .ok_or(ChatMediaError::InvalidInput)?;
-        Ok((
-            ChatMediaUploadMode::Chunked,
-            Some(chunk_size),
-            Some(total),
-        ))
+        Ok((ChatMediaUploadMode::Chunked, Some(chunk_size), Some(total)))
     }
 
     pub(super) async fn prepare_initialization(
@@ -61,10 +56,7 @@ impl super::ChatMediaService {
         if record.storage_multipart_upload_id.is_none() {
             let multipart = self
                 .storage
-                .begin_multipart_upload(
-                    &record.source_object_key,
-                    &record.declared_content_type,
-                )
+                .begin_multipart_upload(&record.source_object_key, &record.declared_content_type)
                 .await
                 .map_err(map_storage_error)?;
             let updated = self
@@ -105,12 +97,7 @@ impl super::ChatMediaService {
         }
         let chunks = self
             .repository
-            .uploaded_chunks(
-                principal,
-                &record.conversation_id,
-                &record.upload_id,
-                false,
-            )
+            .uploaded_chunks(principal, &record.conversation_id, &record.upload_id, false)
             .await?;
         Ok(ChatMediaInitialization {
             media: ChatMediaUploadView::from(&record).with_uploaded_chunks(chunks),
@@ -128,21 +115,11 @@ impl super::ChatMediaService {
     ) -> Result<ChatMediaUploadView, ChatMediaError> {
         let record = self
             .repository
-            .upload(
-                principal,
-                conversation_id,
-                upload_id,
-                require_can_post,
-            )
+            .upload(principal, conversation_id, upload_id, require_can_post)
             .await?;
         let chunks = if record.upload_mode == ChatMediaUploadMode::Chunked {
             self.repository
-                .uploaded_chunks(
-                    principal,
-                    conversation_id,
-                    upload_id,
-                    require_can_post,
-                )
+                .uploaded_chunks(principal, conversation_id, upload_id, require_can_post)
                 .await?
         } else {
             Vec::new()
@@ -246,7 +223,10 @@ impl super::ChatMediaService {
         upload_id: &str,
         record: ChatMediaUploadRecord,
     ) -> Result<ChatMediaUploadView, ChatMediaError> {
-        if matches!(record.status, ChatMediaStatus::Processing | ChatMediaStatus::Ready) {
+        if matches!(
+            record.status,
+            ChatMediaStatus::Processing | ChatMediaStatus::Ready
+        ) {
             return self
                 .upload_view(principal, conversation_id, upload_id, false)
                 .await;
@@ -317,9 +297,12 @@ fn chunk_upload_instruction(
             "/v1/mobile/chat/conversations/{}/media/uploads/{}/chunks/{{chunk_index}}",
             record.conversation_id, record.upload_id
         ),
-        headers: [("content-type".to_string(), "application/octet-stream".to_string())]
-            .into_iter()
-            .collect(),
+        headers: [(
+            "content-type".to_string(),
+            "application/octet-stream".to_string(),
+        )]
+        .into_iter()
+        .collect(),
         expires_at_unix: record.expires_at_unix,
         chunk_size_bytes: Some(chunk_size),
         total_chunks: Some(total_chunks),
@@ -355,8 +338,7 @@ async fn collect_exact(
 ) -> Result<Bytes, ChatMediaError> {
     let capacity = usize::try_from(expected_size).map_err(|_| ChatMediaError::InvalidInput)?;
     let mut bytes = BytesMut::with_capacity(capacity);
-    while let Some(chunk) =
-        std::future::poll_fn(|context| stream.as_mut().poll_next(context)).await
+    while let Some(chunk) = std::future::poll_fn(|context| stream.as_mut().poll_next(context)).await
     {
         let chunk = chunk.map_err(map_storage_error)?;
         if bytes.len().saturating_add(chunk.len()) > capacity {
@@ -382,10 +364,7 @@ fn validate_complete_chunks(
     for (index, chunk) in chunks.iter().enumerate() {
         let index = i32::try_from(index).map_err(|_| ChatMediaError::StoreFailed)?;
         let (offset, size) = expected_chunk(record, index)?;
-        if chunk.chunk_index != index
-            || chunk.offset_bytes != offset
-            || chunk.size_bytes != size
-        {
+        if chunk.chunk_index != index || chunk.offset_bytes != offset || chunk.size_bytes != size {
             return Err(ChatMediaError::Conflict);
         }
         total = total

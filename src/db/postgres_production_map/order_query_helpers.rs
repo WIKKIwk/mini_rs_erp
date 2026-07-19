@@ -94,12 +94,11 @@ pub(super) async fn load_queue_action_logs_for_orders(
 pub(super) async fn load_queue_action_logs_for_worker(
     pool: &PgPool,
     worker_refs: &[String],
-    worker_display_name: &str,
+    _worker_display_name: &str,
     limit: usize,
 ) -> Result<Vec<ProductionOrderLogEntry>, ProductionMapError> {
     let worker_refs = normalized_refs(worker_refs);
-    let worker_display_name = worker_display_name.trim();
-    if worker_refs.is_empty() && worker_display_name.is_empty() || limit == 0 {
+    if worker_refs.is_empty() || limit == 0 {
         return Ok(Vec::new());
     }
     let limit = i64::try_from(limit.min(500)).unwrap_or(500);
@@ -109,14 +108,22 @@ pub(super) async fn load_queue_action_logs_for_worker(
                 EXTRACT(EPOCH FROM created_at)::bigint AS created_at_unix,
                 COALESCE((payload_json->>'completed_with_issue')::boolean, false) AS completed_with_issue,
                 COALESCE(payload_json->>'issue_note', '') AS issue_note
-         FROM mini_queue_action_events
-         WHERE actor_ref = ANY($1)
-            OR lower(actor_display_name) = lower($2)
+         FROM mini_queue_action_events AS event
+         WHERE event.actor_ref = ANY($1)
+            OR EXISTS (
+                SELECT 1
+                FROM mini_worker_identity_aliases AS alias
+                WHERE alias.worker_id = ANY($1)
+                  AND alias.alias_type = 'phone'
+                  AND event.actor_ref ~ '^[+0-9() .-]+$'
+                  AND alias.alias_key = regexp_replace(event.actor_ref, '[^0-9]', '', 'g')
+                  AND event.created_at >= alias.valid_from
+                  AND (alias.valid_to IS NULL OR event.created_at < alias.valid_to)
+            )
          ORDER BY created_at DESC, id DESC
-         LIMIT $3",
+         LIMIT $2",
     )
     .bind(&worker_refs)
-    .bind(worker_display_name)
     .bind(limit)
     .fetch_all(pool)
     .await
@@ -180,12 +187,11 @@ pub(super) async fn load_active_order_run_session_for_qolip(
 pub(super) async fn load_active_order_run_sessions_for_worker(
     pool: &PgPool,
     worker_refs: &[String],
-    worker_display_name: &str,
+    _worker_display_name: &str,
     limit: usize,
 ) -> Result<Vec<OrderRunSession>, ProductionMapError> {
     let worker_refs = normalized_refs(worker_refs);
-    let worker_display_name = worker_display_name.trim();
-    if worker_refs.is_empty() && worker_display_name.is_empty() || limit == 0 {
+    if worker_refs.is_empty() || limit == 0 {
         return Ok(Vec::new());
     }
     let limit = i64::try_from(limit.min(500)).unwrap_or(500);
@@ -195,14 +201,25 @@ pub(super) async fn load_active_order_run_sessions_for_worker(
                 EXTRACT(EPOCH FROM started_at)::bigint AS started_at_unix,
                 EXTRACT(EPOCH FROM updated_at)::bigint AS updated_at_unix,
                 payload_json
-         FROM mini_order_run_sessions
-         WHERE status IN ('active', 'paused')
-           AND (worker_ref = ANY($1) OR lower(worker_display_name) = lower($2))
+         FROM mini_order_run_sessions AS session
+         WHERE session.status IN ('active', 'paused')
+           AND (
+               session.worker_ref = ANY($1)
+               OR EXISTS (
+                   SELECT 1
+                   FROM mini_worker_identity_aliases AS alias
+                   WHERE alias.worker_id = ANY($1)
+                     AND alias.alias_type = 'phone'
+                     AND session.worker_ref ~ '^[+0-9() .-]+$'
+                     AND alias.alias_key = regexp_replace(session.worker_ref, '[^0-9]', '', 'g')
+                     AND session.started_at >= alias.valid_from
+                     AND (alias.valid_to IS NULL OR session.started_at < alias.valid_to)
+               )
+           )
          ORDER BY updated_at DESC, session_id DESC
-         LIMIT $3",
+         LIMIT $2",
     )
     .bind(&worker_refs)
-    .bind(worker_display_name)
     .bind(limit)
     .fetch_all(pool)
     .await
@@ -310,12 +327,11 @@ pub(super) async fn load_progress_batch(
 pub(super) async fn load_progress_batches_for_worker(
     pool: &PgPool,
     worker_refs: &[String],
-    worker_display_name: &str,
+    _worker_display_name: &str,
     limit: usize,
 ) -> Result<Vec<OrderProgressBatch>, ProductionMapError> {
     let worker_refs = normalized_refs(worker_refs);
-    let worker_display_name = worker_display_name.trim();
-    if worker_refs.is_empty() && worker_display_name.is_empty() || limit == 0 {
+    if worker_refs.is_empty() || limit == 0 {
         return Ok(Vec::new());
     }
     let limit = i64::try_from(limit.min(500)).unwrap_or(500);
@@ -339,14 +355,22 @@ pub(super) async fn load_progress_batches_for_worker(
                 finished_goods_meter::float8 AS finished_goods_meter,
                 description,
                 payload_json
-         FROM mini_progress_batches
-         WHERE worker_ref = ANY($1)
-            OR lower(worker_display_name) = lower($2)
+         FROM mini_progress_batches AS batch
+         WHERE batch.worker_ref = ANY($1)
+            OR EXISTS (
+                SELECT 1
+                FROM mini_worker_identity_aliases AS alias
+                WHERE alias.worker_id = ANY($1)
+                  AND alias.alias_type = 'phone'
+                  AND batch.worker_ref ~ '^[+0-9() .-]+$'
+                  AND alias.alias_key = regexp_replace(batch.worker_ref, '[^0-9]', '', 'g')
+                  AND batch.created_at >= alias.valid_from
+                  AND (alias.valid_to IS NULL OR batch.created_at < alias.valid_to)
+            )
          ORDER BY updated_at DESC, created_at DESC, batch_id DESC
-         LIMIT $3",
+         LIMIT $2",
     )
     .bind(&worker_refs)
-    .bind(worker_display_name)
     .bind(limit)
     .fetch_all(pool)
     .await

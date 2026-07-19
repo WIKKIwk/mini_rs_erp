@@ -181,7 +181,8 @@ impl ChatMediaRepository for PostgresChatMediaRepository {
         media_id: &str,
         error_code: &str,
     ) -> Result<(), ChatMediaError> {
-        repository_processing::mark_processing_failed(&self.pool, job_id, media_id, error_code).await
+        repository_processing::mark_processing_failed(&self.pool, job_id, media_id, error_code)
+            .await
     }
 
     async fn media_for_access(
@@ -190,5 +191,30 @@ impl ChatMediaRepository for PostgresChatMediaRepository {
         media_id: &str,
     ) -> Result<ChatMediaUploadRecord, ChatMediaError> {
         repository_processing::media_for_access(&self.pool, principal, media_id).await
+    }
+
+    async fn create_access_ticket(
+        &self,
+        principal: &Principal,
+        media_id: &str,
+        ticket_hash: &[u8],
+        expires_at_unix: i64,
+    ) -> Result<(), ChatMediaError> {
+        repository_processing::create_access_ticket(
+            &self.pool,
+            principal,
+            media_id,
+            ticket_hash,
+            expires_at_unix,
+        )
+        .await
+    }
+
+    async fn media_for_access_ticket(
+        &self,
+        media_id: &str,
+        ticket_hash: &[u8],
+    ) -> Result<ChatMediaUploadRecord, ChatMediaError> {
+        repository_processing::media_for_access_ticket(&self.pool, media_id, ticket_hash).await
     }
 }

@@ -124,9 +124,8 @@ impl NormalizedMaterialReceiptJob {
         }
         let tare_enabled = request.tare_enabled || request.tare_kg > 0.0;
         let tare_kg = if tare_enabled && request.tare_kg > 0.0 {
-            positive_erp_quantity(request.tare_kg).ok_or_else(|| {
-                GscaleServiceError::InvalidInput("tare_kg_invalid".to_string())
-            })?
+            positive_erp_quantity(request.tare_kg)
+                .ok_or_else(|| GscaleServiceError::InvalidInput("tare_kg_invalid".to_string()))?
         } else {
             0.0
         };

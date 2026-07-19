@@ -2,7 +2,7 @@ use async_trait::async_trait;
 
 use super::{
     ChatConversation, ChatMessagePage, ChatOutboxEvent, ChatPrincipal, ChatPrincipalInput,
-    ChatSendResult,
+    ChatPushDelivery, ChatRealtimeEvent, ChatSendResult,
 };
 use crate::core::auth::models::Principal;
 
@@ -47,6 +47,7 @@ pub trait ChatStorePort: Send + Sync {
         principal: &Principal,
         conversation_id: &str,
         before_sequence: Option<i64>,
+        after_sequence: Option<i64>,
         limit: usize,
     ) -> Result<ChatMessagePage, ChatError>;
 
@@ -73,6 +74,48 @@ pub trait ChatStorePort: Send + Sync {
         conversation_id: &str,
         sequence: i64,
         device_id: &str,
+    ) -> Result<(), ChatError>;
+
+    async fn mark_delivered(
+        &self,
+        principal: &Principal,
+        conversation_id: &str,
+        sequence: i64,
+        device_id: &str,
+    ) -> Result<(), ChatError>;
+
+    async fn sync_events(
+        &self,
+        principal: &Principal,
+        after_cursor: i64,
+        limit: usize,
+    ) -> Result<(Vec<ChatRealtimeEvent>, i64, bool), ChatError>;
+
+    async fn issue_socket_ticket(
+        &self,
+        principal: &Principal,
+        ticket: &str,
+        expires_at_unix: i64,
+    ) -> Result<(), ChatError>;
+
+    async fn consume_socket_ticket(&self, ticket: &str) -> Result<Principal, ChatError>;
+
+    async fn claim_push_deliveries(&self, limit: usize)
+    -> Result<Vec<ChatPushDelivery>, ChatError>;
+
+    async fn mark_push_delivered(
+        &self,
+        event_id: &str,
+        recipient_key: &str,
+    ) -> Result<(), ChatError>;
+
+    async fn reschedule_push_delivery(
+        &self,
+        event_id: &str,
+        recipient_key: &str,
+        retry_after_seconds: i64,
+        dead_letter: bool,
+        error: &str,
     ) -> Result<(), ChatError>;
 
     async fn claim_outbox(&self, limit: usize) -> Result<Vec<ChatOutboxEvent>, ChatError>;

@@ -242,7 +242,7 @@ pub(super) async fn load_checkouts(
 pub(super) async fn load_open_checkouts_for_worker(
     pool: &PgPool,
     worker_refs: &[String],
-    worker_name: &str,
+    _worker_name: &str,
     limit: usize,
 ) -> Result<Vec<QolipCheckout>, QolipError> {
     let worker_refs = worker_refs
@@ -250,8 +250,7 @@ pub(super) async fn load_open_checkouts_for_worker(
         .map(|value| value.trim().to_ascii_lowercase())
         .filter(|value| !value.is_empty())
         .collect::<Vec<_>>();
-    let worker_name = worker_name.trim();
-    if worker_refs.is_empty() && worker_name.is_empty() {
+    if worker_refs.is_empty() {
         return Ok(Vec::new());
     }
     let rows = sqlx::query_as::<_, QolipCheckoutRow>(
@@ -260,14 +259,25 @@ pub(super) async fn load_open_checkouts_for_worker(
                 issued_to_ref, issued_to_name, status,
                 issued_by_role, issued_by_ref, issued_by_name,
                 to_char(issued_at AT TIME ZONE 'UTC', 'YYYY-MM-DD\"T\"HH24:MI:SS\"Z\"') AS issued_at
-         FROM mini_qolip_checkouts
-         WHERE lower(status) = 'open'
-           AND (lower(issued_to_ref) = ANY($1) OR lower(issued_to_name) = lower($2))
+         FROM mini_qolip_checkouts AS checkout
+         WHERE lower(checkout.status) = 'open'
+           AND (
+               lower(checkout.issued_to_ref) = ANY($1)
+               OR EXISTS (
+                   SELECT 1
+                   FROM mini_worker_identity_aliases AS alias
+                   WHERE lower(alias.worker_id) = ANY($1)
+                     AND alias.alias_type = 'phone'
+                     AND checkout.issued_to_ref ~ '^[+0-9() .-]+$'
+                     AND alias.alias_key = regexp_replace(checkout.issued_to_ref, '[^0-9]', '', 'g')
+                     AND checkout.issued_at >= alias.valid_from
+                     AND (alias.valid_to IS NULL OR checkout.issued_at < alias.valid_to)
+               )
+           )
          ORDER BY issued_at DESC
-         LIMIT $3",
+         LIMIT $2",
     )
     .bind(&worker_refs)
-    .bind(worker_name)
     .bind(limit.max(1) as i64)
     .fetch_all(pool)
     .await

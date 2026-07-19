@@ -99,11 +99,17 @@ mod tests {
             ..CalculateOrderTemplate::default()
         }];
 
-        let synced = sink.sync_orders(&maps, &templates).await.expect("sync orders");
+        let synced = sink
+            .sync_orders(&maps, &templates)
+            .await
+            .expect("sync orders");
 
         assert_eq!(synced, 1);
         assert_eq!(
-            sink.saved_map_ids.lock().expect("recording sink lock").as_slice(),
+            sink.saved_map_ids
+                .lock()
+                .expect("recording sink lock")
+                .as_slice(),
             ["zakaz-1111"]
         );
     }

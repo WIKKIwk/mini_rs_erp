@@ -9,11 +9,10 @@ async fn main() {
         .fetch_one(&pool)
         .await
         .expect("read current database");
-    let migration_count: i64 =
-        sqlx::query_scalar("SELECT COUNT(*) FROM mini_schema_migrations")
-            .fetch_one(&pool)
-            .await
-            .expect("count applied migrations");
+    let migration_count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM mini_schema_migrations")
+        .fetch_one(&pool)
+        .await
+        .expect("count applied migrations");
     println!("database={database} applied_migrations={migration_count}");
     pool.close().await;
 }

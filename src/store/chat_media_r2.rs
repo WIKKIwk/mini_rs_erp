@@ -3,20 +3,20 @@ use std::path::Path;
 
 use async_trait::async_trait;
 use bytes::Bytes;
-use reqwest::header::{CONTENT_LENGTH, CONTENT_TYPE, ETAG};
 use reqwest::Method;
+use reqwest::header::{CONTENT_LENGTH, CONTENT_TYPE, ETAG};
 use time::OffsetDateTime;
 use tokio::sync::mpsc;
 
 use super::chat_media_r2_signing::{normalized_region, optional_header};
 use super::chat_media_r2_transfer::{
-    complete_multipart_xml, env, file_stream, validate_multipart_parts, write_download,
-    xml_tag, xml_unescape,
+    complete_multipart_xml, env, file_stream, validate_multipart_parts, write_download, xml_tag,
+    xml_unescape,
 };
 use crate::core::chat_media::{
-    ChatMediaByteStream, ChatMediaMultipartUpload, ChatMediaStorage,
-    ChatMediaStorageDownload, ChatMediaStorageError, ChatMediaStorageObject,
-    ChatMediaStoragePart, ChatMediaStorageUpload, ChatMediaStoredContent,
+    ChatMediaByteStream, ChatMediaMultipartUpload, ChatMediaStorage, ChatMediaStorageDownload,
+    ChatMediaStorageError, ChatMediaStorageObject, ChatMediaStoragePart, ChatMediaStorageUpload,
+    ChatMediaStoredContent,
 };
 
 #[derive(Clone)]
@@ -154,9 +154,7 @@ impl ChatMediaStorage for R2ChatMediaStorage {
             .map(xml_unescape)
             .filter(|value| !value.trim().is_empty())
             .ok_or(ChatMediaStorageError::OperationFailed)?;
-        Ok(ChatMediaMultipartUpload {
-            storage_upload_id,
-        })
+        Ok(ChatMediaMultipartUpload { storage_upload_id })
     }
 
     async fn put_multipart_part(
@@ -314,7 +312,11 @@ impl ChatMediaStorage for R2ChatMediaStorage {
         let response = self
             .client
             .delete(self.object_url(object_key)?)
-            .headers(self.signed_request_headers("DELETE", object_key, OffsetDateTime::now_utc())?)
+            .headers(self.signed_request_headers(
+                "DELETE",
+                object_key,
+                OffsetDateTime::now_utc(),
+            )?)
             .send()
             .await
             .map_err(|_| ChatMediaStorageError::OperationFailed)?;
@@ -463,7 +465,9 @@ impl ChatMediaStorage for R2ChatMediaStorage {
             .put(url)
             .header(CONTENT_TYPE, content_type.trim().to_ascii_lowercase())
             .header(CONTENT_LENGTH, size_bytes)
-            .body(reqwest::Body::wrap_stream(file_stream(source.to_path_buf())))
+            .body(reqwest::Body::wrap_stream(file_stream(
+                source.to_path_buf(),
+            )))
             .send()
             .await
             .map_err(|_| ChatMediaStorageError::OperationFailed)?;

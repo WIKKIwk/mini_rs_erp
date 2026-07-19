@@ -2,9 +2,7 @@ use super::*;
 use crate::core::backup_doctor::BackupDoctorError;
 use axum::body::Body;
 use axum::extract::Path;
-use axum::http::header::{
-    CACHE_CONTROL, CONTENT_DISPOSITION, CONTENT_LENGTH, CONTENT_TYPE,
-};
+use axum::http::header::{CACHE_CONTROL, CONTENT_DISPOSITION, CONTENT_LENGTH, CONTENT_TYPE};
 use tokio::io::AsyncReadExt;
 
 pub async fn system_backup_create(
@@ -95,7 +93,9 @@ fn backup_error(error: BackupDoctorError) -> AdminError {
 fn safe_download_name(value: &str) -> String {
     let name = value
         .chars()
-        .filter(|character| character.is_ascii_alphanumeric() || matches!(character, '.' | '_' | '-'))
+        .filter(|character| {
+            character.is_ascii_alphanumeric() || matches!(character, '.' | '_' | '-')
+        })
         .collect::<String>();
     if name.is_empty() {
         "mini_rs_erp.dump".to_string()

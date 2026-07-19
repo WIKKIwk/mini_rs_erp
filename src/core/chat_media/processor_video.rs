@@ -4,8 +4,8 @@ use std::process::Command;
 
 use super::processor::SystemChatMediaProcessor;
 use super::{
-    ChatMediaProcessedFiles, ChatMediaProcessingError,
-    MAX_CHAT_PROCESSED_VIDEO_SIZE_BYTES, MAX_CHAT_VIDEO_DURATION_MS,
+    ChatMediaProcessedFiles, ChatMediaProcessingError, MAX_CHAT_PROCESSED_VIDEO_SIZE_BYTES,
+    MAX_CHAT_VIDEO_DURATION_MS,
 };
 
 const MAX_VIDEO_LONG_EDGE: i32 = 1920;
@@ -138,6 +138,10 @@ impl SystemChatMediaProcessor {
                 "aac",
                 "-b:a",
                 "192k",
+                "-ac",
+                "2",
+                "-tag:v",
+                "avc1",
                 "-movflags",
                 "+faststart",
                 "-f",
@@ -181,7 +185,7 @@ impl SystemChatMediaProcessor {
                 "-v",
                 "error",
                 "-show_entries",
-                "stream=index,codec_type,codec_name,width,height,avg_frame_rate,r_frame_rate,bit_rate:format=duration,format_name,size,bit_rate",
+                "stream=index,codec_type,codec_name,profile,level,pix_fmt,width,height,avg_frame_rate,r_frame_rate,bit_rate:format=duration,format_name,size,bit_rate",
                 "-of",
                 "json",
                 path_str(path)?,
@@ -202,6 +206,9 @@ struct VideoProbe {
     duration_ms: i64,
     frame_rate_milli: i32,
     video_codec: String,
+    video_profile: Option<String>,
+    video_level: Option<i32>,
+    pixel_format: Option<String>,
     audio_codec: Option<String>,
     video_bit_rate: Option<i64>,
     audio_bit_rate: Option<i64>,
@@ -209,8 +216,8 @@ struct VideoProbe {
 }
 
 fn parse_probe(bytes: &[u8]) -> Result<VideoProbe, ChatMediaProcessingError> {
-    let value: serde_json::Value = serde_json::from_slice(bytes)
-        .map_err(|_| ChatMediaProcessingError::InvalidContent)?;
+    let value: serde_json::Value =
+        serde_json::from_slice(bytes).map_err(|_| ChatMediaProcessingError::InvalidContent)?;
     let streams = value["streams"]
         .as_array()
         .ok_or(ChatMediaProcessingError::InvalidContent)?;
@@ -236,6 +243,12 @@ fn parse_probe(bytes: &[u8]) -> Result<VideoProbe, ChatMediaProcessingError> {
         .max()
         .ok_or(ChatMediaProcessingError::InvalidContent)?;
     let video_codec = required_codec(video)?;
+    let video_profile = optional_normalized_string(&video["profile"]);
+    let video_level = video["level"]
+        .as_i64()
+        .and_then(|value| i32::try_from(value).ok())
+        .filter(|value| *value > 0);
+    let pixel_format = optional_normalized_string(&video["pix_fmt"]);
     let audio = audio_streams.first().copied();
     let audio_codec = audio.map(required_codec).transpose()?;
     let duration = value["format"]["duration"]
@@ -255,6 +268,9 @@ fn parse_probe(bytes: &[u8]) -> Result<VideoProbe, ChatMediaProcessingError> {
         duration_ms: (duration * 1000.0).ceil() as i64,
         frame_rate_milli,
         video_codec,
+        video_profile,
+        video_level,
+        pixel_format,
         audio_codec,
         video_bit_rate: optional_positive_i64(&video["bit_rate"]),
         audio_bit_rate: audio.and_then(|stream| optional_positive_i64(&stream["bit_rate"])),
@@ -275,7 +291,11 @@ fn validate_source_video(probe: &VideoProbe) -> Result<(), ChatMediaProcessingEr
 fn validate_canonical_output(probe: &VideoProbe) -> Result<(), ChatMediaProcessingError> {
     validate_source_video(probe)?;
     if probe.video_codec != "h264"
-        || probe.audio_codec.as_deref().is_some_and(|codec| codec != "aac")
+        || !canonical_h264_shape(probe)
+        || probe
+            .audio_codec
+            .as_deref()
+            .is_some_and(|codec| codec != "aac")
         || !is_mp4_format(&probe.format_names)
     {
         return Err(ChatMediaProcessingError::ProcessingFailed);
@@ -294,13 +314,28 @@ fn validate_canonical_output(probe: &VideoProbe) -> Result<(), ChatMediaProcessi
 
 fn source_is_canonical(probe: &VideoProbe) -> bool {
     probe.video_codec == "h264"
-        && probe.audio_codec.as_deref().is_none_or(|codec| codec == "aac")
+        && canonical_h264_shape(probe)
+        && probe
+            .audio_codec
+            .as_deref()
+            .is_none_or(|codec| codec == "aac")
         && probe
             .video_bit_rate
             .is_some_and(|rate| rate <= MAX_VIDEO_BIT_RATE)
         && probe
             .audio_bit_rate
             .is_none_or(|rate| rate <= MAX_AUDIO_BIT_RATE)
+}
+
+fn canonical_h264_shape(probe: &VideoProbe) -> bool {
+    probe.pixel_format.as_deref() == Some("yuv420p")
+        && probe.video_profile.as_deref().is_some_and(|profile| {
+            matches!(
+                profile,
+                "baseline" | "constrained baseline" | "main" | "high"
+            )
+        })
+        && probe.video_level.is_some_and(|level| level <= 42)
 }
 
 fn validate_duration(duration_ms: i64) -> Result<(), ChatMediaProcessingError> {
@@ -379,6 +414,14 @@ fn required_codec(stream: &serde_json::Value) -> Result<String, ChatMediaProcess
         .ok_or(ChatMediaProcessingError::InvalidContent)
 }
 
+fn optional_normalized_string(value: &serde_json::Value) -> Option<String> {
+    value
+        .as_str()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_ascii_lowercase)
+}
+
 fn run_command(binary: &str, args: &[&str]) -> Result<(), ChatMediaProcessingError> {
     let status = Command::new(binary)
         .args(args)
@@ -404,69 +447,4 @@ fn path_str(path: &Path) -> Result<&str, ChatMediaProcessingError> {
         .ok_or(ChatMediaProcessingError::ProcessingFailed)
 }
 
-#[cfg(test)]
-mod tests {
-    use super::{
-        ChatMediaProcessingError, MAX_CHAT_VIDEO_DURATION_MS, parse_probe,
-        validate_source_video,
-    };
-
-    #[test]
-    fn accepts_exact_ten_minute_1080p60_video() {
-        let probe = parse_probe(&probe_json(1920, 1080, "600.000", "60/1"))
-            .expect("probe");
-        assert_eq!(probe.duration_ms, MAX_CHAT_VIDEO_DURATION_MS);
-        assert_eq!(probe.frame_rate_milli, 60_000);
-        assert_eq!(validate_source_video(&probe), Ok(()));
-    }
-
-    #[test]
-    fn accepts_portrait_1080p60_without_upscale_or_downscale_requirement() {
-        let probe = parse_probe(&probe_json(1080, 1920, "10.000", "60000/1000"))
-            .expect("probe");
-        assert_eq!(validate_source_video(&probe), Ok(()));
-    }
-
-    #[test]
-    fn rejects_duration_resolution_and_frame_rate_over_limits() {
-        let duration = parse_probe(&probe_json(1920, 1080, "600.001", "30/1"))
-            .expect("duration probe");
-        assert_eq!(
-            validate_source_video(&duration),
-            Err(ChatMediaProcessingError::DurationTooLong)
-        );
-        let resolution = parse_probe(&probe_json(1921, 1080, "10.000", "30/1"))
-            .expect("resolution probe");
-        assert_eq!(
-            validate_source_video(&resolution),
-            Err(ChatMediaProcessingError::ResolutionTooLarge)
-        );
-        let frame_rate = parse_probe(&probe_json(1920, 1080, "10.000", "60001/1000"))
-            .expect("frame-rate probe");
-        assert_eq!(
-            validate_source_video(&frame_rate),
-            Err(ChatMediaProcessingError::FrameRateTooHigh)
-        );
-    }
-
-    #[test]
-    fn rejects_missing_or_duplicate_video_streams() {
-        let no_video = br#"{"streams":[{"codec_type":"audio","codec_name":"aac","bit_rate":"128000"}],"format":{"duration":"10.0","format_name":"mov,mp4"}}"#;
-        assert_eq!(
-            parse_probe(no_video).unwrap_err(),
-            ChatMediaProcessingError::InvalidContent
-        );
-        let duplicate = br#"{"streams":[{"codec_type":"video","codec_name":"h264","width":1920,"height":1080,"avg_frame_rate":"30/1","r_frame_rate":"30/1"},{"codec_type":"video","codec_name":"h264","width":1920,"height":1080,"avg_frame_rate":"30/1","r_frame_rate":"30/1"}],"format":{"duration":"10.0","format_name":"mov,mp4"}}"#;
-        assert_eq!(
-            parse_probe(duplicate).unwrap_err(),
-            ChatMediaProcessingError::InvalidContent
-        );
-    }
-
-    fn probe_json(width: i32, height: i32, duration: &str, frame_rate: &str) -> Vec<u8> {
-        format!(
-            r#"{{"streams":[{{"codec_type":"video","codec_name":"h264","width":{width},"height":{height},"avg_frame_rate":"{frame_rate}","r_frame_rate":"{frame_rate}","bit_rate":"12000000"}},{{"codec_type":"audio","codec_name":"aac","bit_rate":"192000"}}],"format":{{"duration":"{duration}","format_name":"mov,mp4,m4a,3gp,3g2,mj2"}}}}"#
-        )
-        .into_bytes()
-    }
-}
+include!("processor_video_inline_tests.rs");

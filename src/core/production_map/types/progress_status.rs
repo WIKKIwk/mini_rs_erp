@@ -28,9 +28,7 @@ impl OrderProgressBatchStatusDetail {
             && batch.status == OrderProgressBatchStatus::Completed
             && batch.next_apparatus.trim().is_empty();
         let flow_status = match batch.wip_status {
-            OrderProgressBatchWipStatus::Waiting if is_final_output => {
-                "finished_pending_acceptance"
-            }
+            OrderProgressBatchWipStatus::Waiting if is_final_output => "free_wip",
             OrderProgressBatchWipStatus::Waiting => "waiting_next_stage",
             OrderProgressBatchWipStatus::InUse => "in_progress",
             OrderProgressBatchWipStatus::Processed
@@ -42,7 +40,6 @@ impl OrderProgressBatchStatusDetail {
         }
         .to_string();
         let stock_status = match flow_status.as_str() {
-            "finished_pending_acceptance" => "pending_acceptance",
             "accepted_to_stock" => "accepted",
             _ => "",
         }
@@ -88,8 +85,8 @@ impl ProductionOrderStatusDetail {
         let order_status = detail.derive_order_status(has_pending_queue, has_in_progress_queue);
         detail.order_status = order_status.to_string();
         detail.work_status = work_status_for_order(order_status).to_string();
-        detail.flow_status = flow_status_for_order(order_status).to_string();
-        detail.stock_status = stock_status_for_order(order_status).to_string();
+        detail.flow_status = detail.derive_flow_status(order_status).to_string();
+        detail.stock_status = detail.derive_stock_status().to_string();
         detail
     }
 
@@ -117,7 +114,7 @@ impl ProductionOrderStatusDetail {
                 "waiting_next_stage" => self.waiting_next_stage_count += 1,
                 "in_progress" => {}
                 "consumed_by_next_stage" => self.consumed_by_next_stage_count += 1,
-                "finished_pending_acceptance" => self.finished_pending_acceptance_count += 1,
+                "free_wip" => self.free_wip_count += 1,
                 "accepted_to_stock" => self.accepted_wip_count += 1,
                 _ => {}
             }
@@ -131,12 +128,14 @@ impl ProductionOrderStatusDetail {
     ) -> &'static str {
         if self.active_session_count > 0 || self.in_use_wip_count > 0 || has_in_progress_queue {
             "in_progress"
-        } else if self.all_final_wips_are_accepted() {
-            "accepted"
-        } else if self.all_wips_are_final_pending() {
-            "finished_pending_acceptance"
+        } else if !has_pending_queue && self.all_remaining_wips_are_final_outputs() {
+            if self.completed_with_issue_count > 0 {
+                "completed_with_issue"
+            } else {
+                "completed"
+            }
         } else if self.processed_wip_count > 0
-            || self.finished_pending_acceptance_count > 0
+            || self.free_wip_count > 0
             || self.consumed_by_next_stage_count > 0
         {
             "partially_completed"
@@ -155,19 +154,37 @@ impl ProductionOrderStatusDetail {
         }
     }
 
-    fn all_wips_are_final_pending(&self) -> bool {
-        self.finished_pending_acceptance_count > 0
-            && self.waiting_wip_count == self.finished_pending_acceptance_count
+    fn all_remaining_wips_are_final_outputs(&self) -> bool {
+        self.free_wip_count + self.accepted_wip_count > 0
+            && self.waiting_wip_count == self.free_wip_count
             && self.in_use_wip_count == 0
             && self.waiting_next_stage_count == 0
     }
 
-    fn all_final_wips_are_accepted(&self) -> bool {
-        self.accepted_wip_count > 0
-            && self.waiting_wip_count == 0
-            && self.in_use_wip_count == 0
+    fn derive_flow_status(&self, order_status: &str) -> &'static str {
+        if self.free_wip_count > 0 && self.waiting_next_stage_count == 0 {
+            "free_wip"
+        } else if self.accepted_wip_count > 0
+            && self.free_wip_count == 0
             && self.waiting_next_stage_count == 0
-            && self.finished_pending_acceptance_count == 0
+            && self.in_use_wip_count == 0
+        {
+            "accepted_to_stock"
+        } else {
+            flow_status_for_order(order_status)
+        }
+    }
+
+    fn derive_stock_status(&self) -> &'static str {
+        if self.accepted_wip_count > 0
+            && self.free_wip_count == 0
+            && self.waiting_next_stage_count == 0
+            && self.in_use_wip_count == 0
+        {
+            "accepted"
+        } else {
+            ""
+        }
     }
 }
 
@@ -175,9 +192,7 @@ fn work_status_for_order(order_status: &str) -> &'static str {
     match order_status {
         "in_progress" => "in_progress",
         "paused" => "paused",
-        "accepted" | "finished_pending_acceptance" | "completed" | "completed_with_issue" => {
-            "completed"
-        }
+        "completed" | "completed_with_issue" => "completed",
         "partially_completed" => "partially_completed",
         "waiting_next_stage" | "ready" => "waiting",
         _ => "not_started",
@@ -186,8 +201,6 @@ fn work_status_for_order(order_status: &str) -> &'static str {
 
 fn flow_status_for_order(order_status: &str) -> &'static str {
     match order_status {
-        "accepted" => "accepted_to_stock",
-        "finished_pending_acceptance" => "finished_pending_acceptance",
         "completed_with_issue" => "completed_with_issue",
         "completed" => "completed",
         "partially_completed" => "partially_completed",
@@ -196,13 +209,5 @@ fn flow_status_for_order(order_status: &str) -> &'static str {
         "waiting_next_stage" => "waiting_next_stage",
         "ready" => "ready",
         _ => "not_started",
-    }
-}
-
-fn stock_status_for_order(order_status: &str) -> &'static str {
-    match order_status {
-        "accepted" => "accepted",
-        "finished_pending_acceptance" => "pending_acceptance",
-        _ => "",
     }
 }

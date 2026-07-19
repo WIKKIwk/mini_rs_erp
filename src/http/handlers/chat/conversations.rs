@@ -23,6 +23,7 @@ pub struct PageQuery {
 pub struct MessagesQuery {
     limit: Option<usize>,
     before_sequence: Option<i64>,
+    after_sequence: Option<i64>,
 }
 
 #[derive(Deserialize)]
@@ -116,6 +117,7 @@ pub async fn conversation_messages(
                     &principal,
                     &conversation_id,
                     query.before_sequence,
+                    query.after_sequence,
                     query.limit.unwrap_or(50),
                 )
                 .await
@@ -185,6 +187,35 @@ pub async fn mark_read(
     state
         .chat
         .mark_read(
+            &principal,
+            &conversation_id,
+            request.sequence,
+            &request.device_id,
+        )
+        .await
+        .map_err(map_chat_error)?;
+    Ok(Json(serde_json::json!({"ok": true})))
+}
+
+pub async fn mark_delivered(
+    State(state): State<AppState>,
+    Path(conversation_id): Path<String>,
+    method: Method,
+    headers: HeaderMap,
+    body: Bytes,
+) -> Result<Json<serde_json::Value>, ChatHttpError> {
+    if method != Method::POST {
+        return Err(http_error(
+            axum::http::StatusCode::METHOD_NOT_ALLOWED,
+            "method_not_allowed",
+        ));
+    }
+    let (_, principal) = authorize(&state, &headers).await?;
+    let request: MarkReadRequest = serde_json::from_slice(&body)
+        .map_err(|_| http_error(axum::http::StatusCode::BAD_REQUEST, "chat_request_invalid"))?;
+    state
+        .chat
+        .mark_delivered(
             &principal,
             &conversation_id,
             request.sequence,

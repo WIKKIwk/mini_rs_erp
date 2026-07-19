@@ -3,8 +3,8 @@ use super::service::{
     MIN_CHAT_MEDIA_CHUNK_SIZE_BYTES,
 };
 use super::{
-    ChatMediaError, ChatMediaStorageError, ChatMediaStorageUpload,
-    ChatMediaUploadInstruction, ChatMediaUploadRecord,
+    ChatMediaError, ChatMediaStorageError, ChatMediaStorageUpload, ChatMediaUploadInstruction,
+    ChatMediaUploadRecord,
 };
 
 pub(super) fn upload_instruction(

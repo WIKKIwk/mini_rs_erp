@@ -45,12 +45,7 @@ pub async fn requests(
     let principal = authorize(&state, &headers).await?;
     match method {
         Method::POST => {
-            require_capability(
-                &state,
-                &principal,
-                Capability::ReturnedPaintRequestCreate,
-            )
-            .await?;
+            require_capability(&state, &principal, Capability::ReturnedPaintRequestCreate).await?;
             let input = serde_json::from_slice::<ReturnedPaintRequestCreate>(&body)
                 .map_err(|_| bad_request("invalid json"))?;
             let request = state
@@ -63,12 +58,7 @@ pub async fn requests(
             ))
         }
         Method::GET => {
-            require_capability(
-                &state,
-                &principal,
-                Capability::ReturnedPaintRequestRead,
-            )
-            .await?;
+            require_capability(&state, &principal, Capability::ReturnedPaintRequestRead).await?;
             let limit = query.limit.unwrap_or(20).clamp(1, 100);
             let offset = query.offset.unwrap_or(0);
             let mut items = state
@@ -97,12 +87,7 @@ pub async fn complete_request(
         return Err(method_not_allowed());
     }
     let principal = authorize(&state, &headers).await?;
-    require_capability(
-        &state,
-        &principal,
-        Capability::ReturnedPaintRequestRead,
-    )
-    .await?;
+    require_capability(&state, &principal, Capability::ReturnedPaintRequestRead).await?;
     let input = serde_json::from_slice::<ReturnedPaintRequestComplete>(&body)
         .map_err(|_| bad_request("invalid json"))?;
     let request = state
@@ -123,12 +108,7 @@ pub async fn images(
     body: Bytes,
 ) -> Result<Json<serde_json::Value>, (StatusCode, Json<ErrorResponse>)> {
     let principal = authorize(&state, &headers).await?;
-    require_capability(
-        &state,
-        &principal,
-        Capability::ReturnedPaintRequestCreate,
-    )
-    .await?;
+    require_capability(&state, &principal, Capability::ReturnedPaintRequestCreate).await?;
     match method {
         Method::POST => {
             if body.is_empty() {
@@ -239,9 +219,7 @@ async fn require_capability(
     }
 }
 
-fn returned_paint_error(
-    error: ReturnedPaintError,
-) -> (StatusCode, Json<ErrorResponse>) {
+fn returned_paint_error(error: ReturnedPaintError) -> (StatusCode, Json<ErrorResponse>) {
     let message = returned_paint_error_message(&error);
     match error {
         ReturnedPaintError::RequestNotFound => (
@@ -267,9 +245,7 @@ fn returned_paint_error(
         | ReturnedPaintError::MissingItemName
         | ReturnedPaintError::MissingValues
         | ReturnedPaintError::InvalidValue
-        | ReturnedPaintError::NegativeFinalValue => {
-            bad_request(message)
-        }
+        | ReturnedPaintError::NegativeFinalValue => bad_request(message),
         ReturnedPaintError::StoreFailed => (
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(ErrorResponse {
@@ -288,7 +264,9 @@ fn returned_paint_error_message(error: &ReturnedPaintError) -> &'static str {
             "Rasxot va Astatka tablarining har birida kamida 3 ta field kerak"
         }
         ReturnedPaintError::ImageMismatch => "Qaytarilgan bo‘yoq rasmi bu buyurtmaga tegishli emas",
-        ReturnedPaintError::ImageDeleteNotAllowed => "Qaytarilgan bo‘yoq rasmini olib tashlab bo‘lmaydi",
+        ReturnedPaintError::ImageDeleteNotAllowed => {
+            "Qaytarilgan bo‘yoq rasmini olib tashlab bo‘lmaydi"
+        }
         ReturnedPaintError::InvalidUsage => "Qaytarilgan bo‘yoq ishlatilish turi noto‘g‘ri",
         ReturnedPaintError::InvalidCategory => "Qaytarilgan bo‘yoq kategoriyasi noto‘g‘ri",
         ReturnedPaintError::MissingItemName => "Qaytarilgan bo‘yoq maydoni nomi kiritilmagan",
@@ -314,8 +292,7 @@ fn clean_file_name(value: &str) -> String {
     value
         .chars()
         .filter(|character| {
-            character.is_ascii_alphanumeric()
-                || matches!(character, '.' | '-' | '_' | ' ')
+            character.is_ascii_alphanumeric() || matches!(character, '.' | '-' | '_' | ' ')
         })
         .take(120)
         .collect::<String>()

@@ -92,6 +92,9 @@ impl ProductionMapService {
         if warehouse.is_empty() {
             return Err(ProductionMapError::ProgressInputInvalid);
         }
+        if !actor.role.trim().eq_ignore_ascii_case("werka") {
+            return Err(ProductionMapError::QueueActionNotAllowed);
+        }
         let _guard = self.queue_action_guard().await;
         let mut batch = self
             .progress_batch_for_qr(progress_batch_id, qr_payload)
@@ -103,9 +106,24 @@ impl ProductionMapService {
         {
             return Err(ProductionMapError::ProgressBatchNotAccepted);
         }
+        let order_map = self
+            .raw_map(&batch.order_id)
+            .await?
+            .ok_or(ProductionMapError::MapNotFound)?;
+        let item_code = order_map.product_code.trim();
+        if item_code.is_empty() {
+            return Err(ProductionMapError::ProgressInputInvalid);
+        }
+        let item_name = if order_map.title.trim().is_empty() {
+            batch.label_item_name.trim()
+        } else {
+            order_map.title.trim()
+        };
         let now = unix_seconds();
         let (qty, uom) = finished_goods_qty_uom(&batch)?;
-        let stock = finished_goods_stock_entry(&batch, warehouse, &actor, qty, uom, now);
+        let stock = finished_goods_stock_entry(
+            &batch, warehouse, item_code, item_name, &actor, qty, uom, now,
+        );
         mark_finished_goods_batch_received(&mut batch, &stock, warehouse, &actor, now);
         self.store
             .receive_finished_goods_batch(batch.clone(), stock.clone())

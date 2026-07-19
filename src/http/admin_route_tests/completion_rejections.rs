@@ -43,11 +43,14 @@ async fn admin_rejects_zero_output_completion_request_and_notifies_worker() {
             "POST",
             "/v1/mobile/admin/production-maps/queue-action",
             &worker_token,
-            &with_test_qolip(r#"{
+            &with_test_qolip(
+                r#"{
                 "apparatus":"7 ta rangli pechat",
                 "order_id":"zakaz-reject-zero",
                 "action":"start"
-            }"#, "zakaz-reject-zero"),
+            }"#,
+                "zakaz-reject-zero",
+            ),
         ))
         .await
         .expect("start");
@@ -59,12 +62,14 @@ async fn admin_rejects_zero_output_completion_request_and_notifies_worker() {
             "POST",
             "/v1/mobile/admin/production-maps/queue-action",
             &worker_token,
-            &with_test_returned_paint(r#"{
+            &with_test_returned_paint(
+                r#"{
                 "apparatus":"7 ta rangli pechat",
                 "order_id":"zakaz-reject-zero",
                 "action":"complete",
                 "completion_request_note":"kg va metraj yo'q"
-            }"#),
+            }"#,
+            ),
         ))
         .await
         .expect("complete request");
@@ -180,11 +185,14 @@ async fn queue_pause_print_failure_keeps_committed_pause_log() {
             "POST",
             "/v1/mobile/admin/production-maps/queue-action",
             &worker_token,
-            &with_test_qolip(r#"{
+            &with_test_qolip(
+                r#"{
                 "apparatus":"7 ta rangli pechat",
                 "order_id":"zakaz-print-fail",
                 "action":"start"
-            }"#, "zakaz-print-fail"),
+            }"#,
+                "zakaz-print-fail",
+            ),
         ))
         .await
         .expect("start");

@@ -29,8 +29,8 @@ pub struct ApparatusGroupUpsert {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ApparatusUpsert {
-    #[serde(default, alias = "name")]
-    pub warehouse: String,
+    #[serde(default, alias = "warehouse")]
+    pub name: String,
 }
 
 #[derive(Debug, Error, Clone, PartialEq, Eq)]
@@ -116,7 +116,7 @@ impl ApparatusGroupService {
         &self,
         input: ApparatusUpsert,
     ) -> Result<String, ApparatusGroupError> {
-        let name = input.warehouse.trim().to_string();
+        let name = input.name.trim().to_string();
         if name.is_empty() {
             return Err(ApparatusGroupError::MissingApparatus);
         }

@@ -10,14 +10,13 @@ use super::{
     ChatMediaAccess, ChatMediaAccessVariant, ChatMediaByteStream, ChatMediaCreateResult,
     ChatMediaError, ChatMediaInitializeInput, ChatMediaKind, ChatMediaMultipartUpload,
     ChatMediaProcessedContent, ChatMediaProcessedFiles, ChatMediaProcessingError,
-    ChatMediaProcessingWorkItem,
-    ChatMediaProcessor, ChatMediaReadyInput, ChatMediaRepository, ChatMediaService,
-    ChatMediaStatus, ChatMediaStorage, ChatMediaStorageDownload, ChatMediaStorageError,
-    ChatMediaStorageObject, ChatMediaStoragePart, ChatMediaStorageUpload,
-    ChatMediaStoredContent, ChatMediaUploadMode, ChatMediaUploadRecord,
-    ChatMediaUploadedChunk, NewChatMediaUpload, NewChatMediaUploadedChunk,
-    MAX_CHAT_IMAGE_SIZE_BYTES, MAX_CHAT_PROCESSED_VIDEO_SIZE_BYTES,
-    MAX_CHAT_VIDEO_DURATION_MS, MAX_CHAT_VIDEO_SIZE_BYTES,
+    ChatMediaProcessingWorkItem, ChatMediaProcessor, ChatMediaReadyInput, ChatMediaRepository,
+    ChatMediaService, ChatMediaStatus, ChatMediaStorage, ChatMediaStorageDownload,
+    ChatMediaStorageError, ChatMediaStorageObject, ChatMediaStoragePart, ChatMediaStorageUpload,
+    ChatMediaStoredContent, ChatMediaUploadMode, ChatMediaUploadRecord, ChatMediaUploadedChunk,
+    MAX_CHAT_AUDIO_DURATION_MS, MAX_CHAT_AUDIO_SIZE_BYTES, MAX_CHAT_IMAGE_SIZE_BYTES,
+    MAX_CHAT_PROCESSED_VIDEO_SIZE_BYTES, MAX_CHAT_VIDEO_DURATION_MS, MAX_CHAT_VIDEO_SIZE_BYTES,
+    NewChatMediaUpload, NewChatMediaUploadedChunk,
 };
 use crate::core::auth::models::{Principal, PrincipalRole};
 
@@ -41,14 +40,14 @@ async fn initializes_private_upload_and_accepts_approved_limits() {
     assert_eq!(image.upload.method, "PUT");
     assert!(image.upload.url.ends_with("/content"));
     assert!(!image.upload.url.contains("chat_media/"));
-    assert!(!serde_json::to_string(&image).unwrap().contains("source_object_key"));
+    assert!(
+        !serde_json::to_string(&image)
+            .unwrap()
+            .contains("source_object_key")
+    );
 
     repository.clear();
-    let mut video = input(
-        "video_1",
-        ChatMediaKind::Video,
-        MAX_CHAT_VIDEO_SIZE_BYTES,
-    );
+    let mut video = input("video_1", ChatMediaKind::Video, MAX_CHAT_VIDEO_SIZE_BYTES);
     video.duration_ms = Some(MAX_CHAT_VIDEO_DURATION_MS);
     let initialized = service
         .initialize_upload(&owner(), CONVERSATION_ID, video)
@@ -59,6 +58,16 @@ async fn initializes_private_upload_and_accepts_approved_limits() {
     assert_eq!(initialized.upload.chunk_size_bytes, Some(8 * 1024 * 1024));
     assert_eq!(initialized.upload.total_chunks, Some(256));
     assert!(initialized.media.uploaded_chunks.is_empty());
+
+    repository.clear();
+    let mut audio = input("audio_1", ChatMediaKind::Audio, MAX_CHAT_AUDIO_SIZE_BYTES);
+    audio.duration_ms = Some(MAX_CHAT_AUDIO_DURATION_MS);
+    let initialized = service
+        .initialize_upload(&owner(), CONVERSATION_ID, audio)
+        .await
+        .expect("audio initialization");
+    assert_eq!(initialized.media.upload_mode, ChatMediaUploadMode::Single);
+    assert_eq!(initialized.upload.strategy, "local_proxy");
 }
 
 #[tokio::test]
@@ -158,6 +167,11 @@ async fn rejects_oversized_mismatched_and_invalid_inputs() {
             ChatMediaKind::Video,
             MAX_CHAT_VIDEO_SIZE_BYTES + 1,
         ),
+        input(
+            "large_audio",
+            ChatMediaKind::Audio,
+            MAX_CHAT_AUDIO_SIZE_BYTES + 1,
+        ),
     ] {
         assert_eq!(
             service
@@ -176,6 +190,26 @@ async fn rejects_oversized_mismatched_and_invalid_inputs() {
             .await
             .unwrap_err(),
         ChatMediaError::DurationTooLong
+    );
+
+    let mut invalid_audio_duration = input("audio", ChatMediaKind::Audio, 10);
+    invalid_audio_duration.duration_ms = Some(MAX_CHAT_AUDIO_DURATION_MS + 1);
+    assert_eq!(
+        service
+            .initialize_upload(&owner(), CONVERSATION_ID, invalid_audio_duration)
+            .await
+            .unwrap_err(),
+        ChatMediaError::AudioDurationTooLong
+    );
+
+    let mut missing_audio_duration = input("audio_without_duration", ChatMediaKind::Audio, 10);
+    missing_audio_duration.duration_ms = None;
+    assert_eq!(
+        service
+            .initialize_upload(&owner(), CONVERSATION_ID, missing_audio_duration)
+            .await
+            .unwrap_err(),
+        ChatMediaError::InvalidInput
     );
 
     let mut wrong_type = input("wrong_type", ChatMediaKind::Image, 10);
@@ -270,10 +304,12 @@ async fn membership_can_post_ownership_and_conversation_are_enforced() {
             .unwrap_err(),
         ChatMediaError::Forbidden
     );
-    assert!(service
-        .upload_status(&owner(), CONVERSATION_ID, &initialized.media.upload_id)
-        .await
-        .is_ok());
+    assert!(
+        service
+            .upload_status(&owner(), CONVERSATION_ID, &initialized.media.upload_id)
+            .await
+            .is_ok()
+    );
 }
 
 #[tokio::test]
@@ -515,6 +551,75 @@ async fn processing_canonicalizes_objects_marks_ready_and_serves_authorized_vari
 }
 
 #[tokio::test]
+async fn audio_processing_marks_ready_with_canonical_metadata_and_private_playback() {
+    let (service, repository, storage) = service_with_processor(Ok(ChatMediaProcessedContent {
+        content: Bytes::from_static(b"canonical-m4a"),
+        content_type: "audio/mp4".to_string(),
+        thumbnail: Bytes::from_static(b"waveform"),
+        thumbnail_content_type: "image/jpeg".to_string(),
+        width_pixels: 480,
+        height_pixels: 120,
+        duration_ms: Some(1_250),
+        frame_rate_milli: None,
+        video_codec: None,
+        audio_codec: Some("aac".to_string()),
+    }));
+    let mut request = input("voice_process", ChatMediaKind::Audio, 3);
+    request.duration_ms = Some(1_250);
+    let initialized = service
+        .initialize_upload(&owner(), CONVERSATION_ID, request)
+        .await
+        .expect("initialize audio");
+    service
+        .upload_content(
+            &owner(),
+            CONVERSATION_ID,
+            &initialized.media.upload_id,
+            Some(3),
+            Some("audio/mp4"),
+            byte_stream(b"aac"),
+        )
+        .await
+        .expect("upload audio");
+    service
+        .complete_upload(&owner(), CONVERSATION_ID, &initialized.media.upload_id)
+        .await
+        .expect("complete audio");
+
+    assert_eq!(
+        service
+            .process_pending_jobs(1)
+            .await
+            .expect("process audio"),
+        1
+    );
+    let ready = repository.record.lock().unwrap().clone().expect("record");
+    assert_eq!(ready.status, ChatMediaStatus::Ready);
+    assert_eq!(ready.processed_content_type.as_deref(), Some("audio/mp4"));
+    assert_eq!(ready.duration_ms, Some(1_250));
+    assert_eq!(ready.audio_codec.as_deref(), Some("aac"));
+    assert_eq!(
+        (ready.width_pixels, ready.height_pixels),
+        (Some(480), Some(120))
+    );
+
+    let ChatMediaAccess::Local { content } = service
+        .media_access(
+            &owner(),
+            &initialized.media.media_id,
+            ChatMediaAccessVariant::Content,
+        )
+        .await
+        .expect("audio playback")
+    else {
+        panic!("local storage must use an authorized proxy");
+    };
+    assert_eq!(content.content_type.as_deref(), Some("audio/mp4"));
+    assert_eq!(content.bytes, Bytes::from_static(b"canonical-m4a"));
+    assert!(storage.deleted.load(Ordering::SeqCst));
+}
+
+#[tokio::test]
 async fn processing_failure_is_visible_in_upload_status() {
     let (service, repository, _) =
         service_with_processor(Err(ChatMediaProcessingError::InvalidContent));
@@ -586,11 +691,7 @@ async fn final_processed_video_size_limit_is_enforced() {
     );
 }
 
-fn service() -> (
-    ChatMediaService,
-    Arc<MemoryRepository>,
-    Arc<MemoryStorage>,
-) {
+fn service() -> (ChatMediaService, Arc<MemoryRepository>, Arc<MemoryStorage>) {
     let repository = Arc::new(MemoryRepository::default());
     let storage = Arc::new(MemoryStorage::default());
     (
@@ -602,11 +703,7 @@ fn service() -> (
 
 fn service_with_processor(
     result: Result<ChatMediaProcessedContent, ChatMediaProcessingError>,
-) -> (
-    ChatMediaService,
-    Arc<MemoryRepository>,
-    Arc<MemoryStorage>,
-) {
+) -> (ChatMediaService, Arc<MemoryRepository>, Arc<MemoryStorage>) {
     let repository = Arc::new(MemoryRepository::default());
     let storage = Arc::new(MemoryStorage::default());
     let service = ChatMediaService::new(repository.clone(), storage.clone())
@@ -640,15 +737,17 @@ fn input(client_id: &str, kind: ChatMediaKind, size_bytes: i64) -> ChatMediaInit
         filename: match kind {
             ChatMediaKind::Image => "photo.jpg",
             ChatMediaKind::Video => "video.mp4",
+            ChatMediaKind::Audio => "voice.m4a",
         }
         .to_string(),
         content_type: match kind {
             ChatMediaKind::Image => "image/jpeg",
             ChatMediaKind::Video => "video/mp4",
+            ChatMediaKind::Audio => "audio/mp4",
         }
         .to_string(),
         size_bytes,
-        duration_ms: None,
+        duration_ms: (kind == ChatMediaKind::Audio).then_some(1_000),
     }
 }
 
@@ -811,7 +910,10 @@ impl ChatMediaRepository for MemoryRepository {
     ) -> Result<Vec<ChatMediaUploadedChunk>, ChatMediaError> {
         self.authorize(principal, conversation_id, require_can_post)?;
         let record = self.record.lock().unwrap();
-        if record.as_ref().is_none_or(|record| record.upload_id != upload_id) {
+        if record
+            .as_ref()
+            .is_none_or(|record| record.upload_id != upload_id)
+        {
             return Err(ChatMediaError::NotFound);
         }
         Ok(self.chunks.lock().unwrap().clone())
@@ -826,7 +928,10 @@ impl ChatMediaRepository for MemoryRepository {
     ) -> Result<ChatMediaUploadedChunk, ChatMediaError> {
         self.authorize(principal, conversation_id, true)?;
         let record = self.record.lock().unwrap();
-        if record.as_ref().is_none_or(|record| record.upload_id != upload_id) {
+        if record
+            .as_ref()
+            .is_none_or(|record| record.upload_id != upload_id)
+        {
             return Err(ChatMediaError::NotFound);
         }
         drop(record);

@@ -3,7 +3,7 @@ use std::task::{Context, Poll};
 
 use axum::Json;
 use axum::body::{Body, BodyDataStream, Bytes};
-use axum::extract::{Path, State};
+use axum::extract::{Path, Query, State};
 use axum::http::{HeaderMap, Method, Response, StatusCode, header};
 use futures_core::Stream;
 use serde::Deserialize;
@@ -12,9 +12,9 @@ use super::auth::authorize;
 use super::{ChatHttpError, http_error, map_chat_media_error};
 use crate::app::AppState;
 use crate::core::chat_media::{
-    ChatMediaAccessVariant, ChatMediaInitialization, ChatMediaInitializeInput,
-    ChatMediaKind, ChatMediaRangeRequest, ChatMediaStorageError,
-    ChatMediaStoredStream, ChatMediaStreamAccess, ChatMediaUploadView,
+    ChatMediaAccessVariant, ChatMediaInitialization, ChatMediaInitializeInput, ChatMediaKind,
+    ChatMediaRangeRequest, ChatMediaStorageError, ChatMediaStoredStream, ChatMediaStreamAccess,
+    ChatMediaUploadView,
 };
 
 #[derive(Deserialize)]
@@ -25,6 +25,39 @@ struct InitializeMediaUploadRequest {
     content_type: String,
     size_bytes: i64,
     duration_ms: Option<i64>,
+}
+
+#[derive(Default, Deserialize)]
+pub struct MediaAccessQuery {
+    ticket: Option<String>,
+}
+
+pub async fn media_playback_ticket(
+    State(state): State<AppState>,
+    Path(media_id): Path<String>,
+    method: Method,
+    headers: HeaderMap,
+) -> Result<Json<serde_json::Value>, ChatHttpError> {
+    if method != Method::POST {
+        return Err(http_error(
+            StatusCode::METHOD_NOT_ALLOWED,
+            "method_not_allowed",
+        ));
+    }
+    let (_, principal) = authorize(&state, &headers).await?;
+    let (ticket, expires_at_unix) = state
+        .chat_media
+        .issue_playback_ticket(&principal, &media_id)
+        .await
+        .map_err(map_chat_media_error)?;
+    Ok(Json(serde_json::json!({
+        "url": format!(
+            "/v1/mobile/chat/media/{}/content?ticket={}",
+            urlencoding::encode(&media_id),
+            urlencoding::encode(&ticket),
+        ),
+        "expires_at_unix": expires_at_unix,
+    })))
 }
 
 pub async fn media_uploads(
@@ -205,30 +238,49 @@ pub async fn media_access(
     Path((media_id, variant)): Path<(String, String)>,
     method: Method,
     headers: HeaderMap,
+    Query(query): Query<MediaAccessQuery>,
 ) -> Result<Response<Body>, ChatHttpError> {
-    if method != Method::GET {
-        return Err(http_error(StatusCode::METHOD_NOT_ALLOWED, "method_not_allowed"));
+    if method != Method::GET && method != Method::HEAD {
+        return Err(http_error(
+            StatusCode::METHOD_NOT_ALLOWED,
+            "method_not_allowed",
+        ));
     }
-    let (_, principal) = authorize(&state, &headers).await?;
     let variant = match variant.as_str() {
         "content" => ChatMediaAccessVariant::Content,
         "thumbnail" => ChatMediaAccessVariant::Thumbnail,
         _ => return Err(http_error(StatusCode::NOT_FOUND, "chat_media_not_found")),
     };
     let range = media_range_request(&headers);
-    match state
-        .chat_media
-        .media_stream_access(&principal, &media_id, variant, range)
-        .await
-        .map_err(map_chat_media_error)?
-    {
+    let access = if let Some(ticket) = query.ticket.as_deref().filter(|value| !value.is_empty()) {
+        state
+            .chat_media
+            .media_stream_access_with_ticket(&media_id, ticket, variant, range)
+            .await
+    } else {
+        let (_, principal) = authorize(&state, &headers).await?;
+        state
+            .chat_media
+            .media_stream_access(&principal, &media_id, variant, range)
+            .await
+    }
+    .map_err(map_chat_media_error)?;
+    let include_body = method == Method::GET;
+    match access {
         ChatMediaStreamAccess::Redirect { url, .. } => Response::builder()
             .status(StatusCode::TEMPORARY_REDIRECT)
             .header(header::LOCATION, url)
             .header(header::CACHE_CONTROL, "private, max-age=60")
             .body(Body::empty())
-            .map_err(|_| http_error(StatusCode::INTERNAL_SERVER_ERROR, "chat_media_response_failed")),
-        ChatMediaStreamAccess::Local { content } => local_media_stream_response(content),
+            .map_err(|_| {
+                http_error(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "chat_media_response_failed",
+                )
+            }),
+        ChatMediaStreamAccess::Local { content } => {
+            local_media_stream_response(content, include_body)
+        }
     }
 }
 
@@ -276,6 +328,7 @@ fn media_range_request(headers: &HeaderMap) -> ChatMediaRangeRequest {
 
 fn local_media_stream_response(
     content: ChatMediaStoredStream,
+    include_body: bool,
 ) -> Result<Response<Body>, ChatHttpError> {
     let status = if content.partial {
         StatusCode::PARTIAL_CONTENT
@@ -284,7 +337,13 @@ fn local_media_stream_response(
     };
     let mut response = Response::builder()
         .status(status)
-        .header(header::CONTENT_TYPE, content.content_type.as_deref().unwrap_or("application/octet-stream"))
+        .header(
+            header::CONTENT_TYPE,
+            content
+                .content_type
+                .as_deref()
+                .unwrap_or("application/octet-stream"),
+        )
         .header(header::CONTENT_LENGTH, content.content_length().to_string())
         .header(header::ACCEPT_RANGES, "bytes")
         .header(header::CACHE_CONTROL, "private, max-age=300");
@@ -300,9 +359,17 @@ fn local_media_stream_response(
     if let Some(etag) = content.etag.as_deref() {
         response = response.header(header::ETAG, etag);
     }
-    response
-        .body(Body::from_stream(content.stream))
-        .map_err(|_| http_error(StatusCode::INTERNAL_SERVER_ERROR, "chat_media_response_failed"))
+    let body = if include_body {
+        Body::from_stream(content.stream)
+    } else {
+        Body::empty()
+    };
+    response.body(body).map_err(|_| {
+        http_error(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "chat_media_response_failed",
+        )
+    })
 }
 
 fn media_response(media: ChatMediaUploadView) -> Result<Json<serde_json::Value>, ChatHttpError> {
@@ -320,9 +387,9 @@ impl Stream for UploadBodyStream {
         let this = self.get_mut();
         match Pin::new(&mut this.inner).poll_next(context) {
             Poll::Ready(Some(Ok(bytes))) => Poll::Ready(Some(Ok(bytes))),
-            Poll::Ready(Some(Err(_))) => Poll::Ready(Some(Err(
-                ChatMediaStorageError::OperationFailed,
-            ))),
+            Poll::Ready(Some(Err(_))) => {
+                Poll::Ready(Some(Err(ChatMediaStorageError::OperationFailed)))
+            }
             Poll::Ready(None) => Poll::Ready(None),
             Poll::Pending => Poll::Pending,
         }

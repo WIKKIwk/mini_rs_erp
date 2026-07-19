@@ -3,8 +3,8 @@ use bytes::Bytes;
 use super::chat_media_local::LocalChatMediaStorage;
 use super::chat_media_r2::{R2ChatMediaConfig, R2ChatMediaStorage};
 use crate::core::chat_media::{
-    ChatMediaByteStream, ChatMediaRangeRequest, ChatMediaStorage,
-    ChatMediaStorageDownload, ChatMediaStorageError, ChatMediaStorageUpload,
+    ChatMediaByteStream, ChatMediaRangeRequest, ChatMediaStorage, ChatMediaStorageDownload,
+    ChatMediaStorageError, ChatMediaStorageUpload,
 };
 
 #[tokio::test]
@@ -21,21 +21,13 @@ async fn local_chat_media_storage_writes_exact_bytes_and_deletes_privately() {
         ChatMediaStorageUpload::LocalProxy
     );
     let stored = storage
-        .put_object(
-            object_key,
-            "image/jpeg",
-            6,
-            chunks(vec![b"abc", b"def"]),
-        )
+        .put_object(object_key, "image/jpeg", 6, chunks(vec![b"abc", b"def"]))
         .await
         .expect("store");
     assert_eq!(stored.size_bytes, 6);
     assert_eq!(stored.content_type.as_deref(), Some("image/jpeg"));
     assert_eq!(
-        storage
-            .object_metadata(object_key)
-            .await
-            .expect("metadata"),
+        storage.object_metadata(object_key).await.expect("metadata"),
         stored
     );
     assert!(directory.path().join(object_key).is_file());
@@ -211,14 +203,15 @@ async fn r2_chat_media_storage_returns_only_short_lived_private_put_access() {
     else {
         panic!("R2 must use direct PUT");
     };
-    assert!(url.starts_with(
-        "https://account.r2.cloudflarestorage.com/private-chat/chat_media/"
-    ));
+    assert!(url.starts_with("https://account.r2.cloudflarestorage.com/private-chat/chat_media/"));
     assert!(url.contains("X-Amz-Algorithm=AWS4-HMAC-SHA256"));
     assert!(url.contains("X-Amz-Expires=300"));
     assert!(url.contains("X-Amz-Signature="));
     assert!(!url.contains("super-secret-value"));
-    assert_eq!(headers.get("content-type").map(String::as_str), Some("video/mp4"));
+    assert_eq!(
+        headers.get("content-type").map(String::as_str),
+        Some("video/mp4")
+    );
     assert!(expires_at_unix > time::OffsetDateTime::now_utc().unix_timestamp());
     assert_eq!(
         storage
@@ -261,8 +254,7 @@ fn chunks(chunks: Vec<&'static [u8]>) -> ChatMediaByteStream {
 
 async fn collect(mut stream: ChatMediaByteStream) -> Bytes {
     let mut bytes = Vec::new();
-    while let Some(chunk) =
-        std::future::poll_fn(|context| stream.as_mut().poll_next(context)).await
+    while let Some(chunk) = std::future::poll_fn(|context| stream.as_mut().poll_next(context)).await
     {
         bytes.extend_from_slice(&chunk.expect("stream chunk"));
     }

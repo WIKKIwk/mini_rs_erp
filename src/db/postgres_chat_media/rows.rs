@@ -135,6 +135,7 @@ fn parse_kind(value: &str) -> Result<ChatMediaKind, ChatMediaError> {
     match value {
         "image" => Ok(ChatMediaKind::Image),
         "video" => Ok(ChatMediaKind::Video),
+        "audio" => Ok(ChatMediaKind::Audio),
         _ => Err(ChatMediaError::StoreFailed),
     }
 }

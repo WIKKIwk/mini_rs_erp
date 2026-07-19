@@ -8,7 +8,7 @@ mod werka;
 
 use super::*;
 
-pub use apparatus::{apparatus_create, apparatus_groups};
+pub use apparatus::{apparatus, apparatus_groups};
 pub(super) use auth::{authorize_any_capability, authorize_capability, require_capability};
 pub use catalog::items_bulk_move_group;
 pub use monitor::{

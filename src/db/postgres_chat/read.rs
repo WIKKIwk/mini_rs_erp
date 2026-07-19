@@ -2,7 +2,9 @@ use sqlx::PgPool;
 
 use super::rows::{ConversationRow, MessageRow, role_key};
 use crate::core::auth::models::Principal;
-use crate::core::chat::{ChatConversation, ChatError, ChatMessagePage};
+use crate::core::chat::{
+    ChatConversation, ChatError, ChatMessagePage, ChatOutboxEvent, ChatRealtimeEvent,
+};
 
 const CONVERSATION_SELECT: &str = r#"
 SELECT
@@ -95,8 +97,12 @@ pub(super) async fn messages(
     principal: &Principal,
     conversation_id: &str,
     before_sequence: Option<i64>,
+    after_sequence: Option<i64>,
     limit: usize,
 ) -> Result<ChatMessagePage, ChatError> {
+    if before_sequence.is_some() && after_sequence.is_some() {
+        return Err(ChatError::InvalidInput);
+    }
     let is_member = sqlx::query_scalar::<_, bool>(
         r#"SELECT EXISTS (
              SELECT 1
@@ -144,13 +150,17 @@ pub(super) async fn messages(
            JOIN mini_chat_principals sender ON sender.principal_id = m.sender_principal_id
            LEFT JOIN mini_chat_message_attachments attachment ON attachment.message_id = m.message_id
            LEFT JOIN mini_chat_media media ON media.media_id = attachment.media_id
-           WHERE m.conversation_id = $1
+             WHERE m.conversation_id = $1
              AND ($2::BIGINT IS NULL OR m.message_sequence < $2)
-           ORDER BY m.message_sequence DESC
-           LIMIT $3"#,
+             AND ($3::BIGINT IS NULL OR m.message_sequence > $3)
+           ORDER BY
+             CASE WHEN $3::BIGINT IS NOT NULL THEN m.message_sequence END ASC,
+             CASE WHEN $3::BIGINT IS NULL THEN m.message_sequence END DESC
+           LIMIT $4"#,
     )
     .bind(conversation_id)
     .bind(before_sequence)
+    .bind(after_sequence)
     .bind(limit.saturating_add(1) as i64)
     .fetch_all(pool)
     .await
@@ -162,6 +172,87 @@ pub(super) async fn messages(
         .take(limit)
         .map(MessageRow::into_model)
         .collect::<Result<Vec<_>, _>>()?;
-    items.reverse();
+    if after_sequence.is_none() {
+        items.reverse();
+    }
     Ok(ChatMessagePage { items, has_more })
+}
+
+pub(super) async fn sync_events(
+    pool: &PgPool,
+    principal: &Principal,
+    after_cursor: i64,
+    limit: usize,
+) -> Result<(Vec<ChatRealtimeEvent>, i64, bool), ChatError> {
+    let key = format!("{}:{}", role_key(&principal.role), principal.ref_.trim());
+    // Capture the high watermark first. Event cursors are allocated through the
+    // transactionally locked clock, so anything committing later is guaranteed
+    // to be above this watermark and will be returned by the next sync.
+    let watermark = sqlx::query_scalar::<_, i64>(
+        "SELECT COALESCE(MAX(event_cursor), 0) FROM mini_chat_outbox_events",
+    )
+    .fetch_one(pool)
+    .await
+    .map_err(|_| ChatError::StoreFailed)?
+    .max(after_cursor);
+    if watermark <= after_cursor {
+        return Ok((Vec::new(), after_cursor, false));
+    }
+    let rows = sqlx::query_as::<_, (i64, serde_json::Value)>(
+        r#"SELECT event_cursor, payload_json
+           FROM mini_chat_outbox_events
+           WHERE event_cursor > $1
+             AND event_cursor <= $2
+             AND recipient_keys @> to_jsonb(ARRAY[$3]::TEXT[])
+           ORDER BY event_cursor ASC
+           LIMIT $4"#,
+    )
+    .bind(after_cursor.max(0))
+    .bind(watermark)
+    .bind(key)
+    .bind(limit.saturating_add(1) as i64)
+    .fetch_all(pool)
+    .await
+    .map_err(|_| ChatError::StoreFailed)?;
+    let has_more = rows.len() > limit;
+    let mut events = Vec::with_capacity(rows.len().min(limit));
+    for (cursor, payload) in rows.into_iter().take(limit) {
+        let mut event: ChatRealtimeEvent =
+            serde_json::from_value(payload).map_err(|_| ChatError::StoreFailed)?;
+        event.cursor = cursor;
+        events.push(event);
+    }
+    let next_cursor = if has_more {
+        events
+            .last()
+            .map(|event| event.cursor)
+            .unwrap_or(after_cursor)
+    } else {
+        watermark
+    };
+    Ok((events, next_cursor, has_more))
+}
+
+pub async fn outbox_event(pool: &PgPool, event_id: &str) -> Result<ChatOutboxEvent, ChatError> {
+    let (cursor, recipient_keys, payload) =
+        sqlx::query_as::<_, (i64, serde_json::Value, serde_json::Value)>(
+            r#"SELECT event_cursor, recipient_keys, payload_json
+               FROM mini_chat_outbox_events
+               WHERE event_id = $1"#,
+        )
+        .bind(event_id)
+        .fetch_optional(pool)
+        .await
+        .map_err(|_| ChatError::StoreFailed)?
+        .ok_or(ChatError::NotFound)?;
+    let mut payload: ChatRealtimeEvent =
+        serde_json::from_value(payload).map_err(|_| ChatError::StoreFailed)?;
+    payload.cursor = cursor;
+    Ok(ChatOutboxEvent {
+        event_id: event_id.to_string(),
+        cursor,
+        recipient_keys: serde_json::from_value(recipient_keys)
+            .map_err(|_| ChatError::StoreFailed)?,
+        payload,
+    })
 }

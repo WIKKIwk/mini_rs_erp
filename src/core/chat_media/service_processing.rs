@@ -5,7 +5,8 @@ use std::time::Duration;
 use super::service::ChatMediaService;
 use super::{
     ChatMediaError, ChatMediaKind, ChatMediaProcessingError, ChatMediaProcessingWorkItem,
-    ChatMediaReadyInput, ChatMediaStorageError, MAX_CHAT_IMAGE_SIZE_BYTES,
+    ChatMediaReadyInput, ChatMediaStorageError, MAX_CHAT_AUDIO_SIZE_BYTES,
+    MAX_CHAT_IMAGE_SIZE_BYTES, MAX_CHAT_PROCESSED_AUDIO_SIZE_BYTES,
     MAX_CHAT_PROCESSED_VIDEO_SIZE_BYTES, MAX_CHAT_VIDEO_SIZE_BYTES,
 };
 
@@ -50,12 +51,7 @@ impl ChatMediaService {
         validate_source_size(job, source.size_bytes)?;
         let processed = self
             .processor
-            .process_file(
-                &job.media,
-                &source_path,
-                &content_path,
-                &thumbnail_path,
-            )
+            .process_file(&job.media, &source_path, &content_path, &thumbnail_path)
             .await?;
         let processed_size = file_size(&processed.content_path).await?;
         if processed_size <= 0 {
@@ -65,6 +61,11 @@ impl ChatMediaService {
             && processed_size > MAX_CHAT_PROCESSED_VIDEO_SIZE_BYTES
         {
             return Err(ChatMediaProcessingError::ProcessedTooLarge);
+        }
+        if job.media.kind == ChatMediaKind::Audio
+            && processed_size > MAX_CHAT_PROCESSED_AUDIO_SIZE_BYTES
+        {
+            return Err(ChatMediaProcessingError::ProcessedAudioTooLarge);
         }
         if file_size(&processed.thumbnail_path).await? <= 0 {
             return Err(ChatMediaProcessingError::ProcessingFailed);
@@ -167,8 +168,9 @@ fn storage_processing_error(error: ChatMediaStorageError) -> ChatMediaProcessing
         ChatMediaStorageError::ObjectNotFound
         | ChatMediaStorageError::SizeMismatch
         | ChatMediaStorageError::InvalidObjectKey => ChatMediaProcessingError::InvalidContent,
-        ChatMediaStorageError::DirectUploadRequired
-        | ChatMediaStorageError::OperationFailed => ChatMediaProcessingError::ProcessingFailed,
+        ChatMediaStorageError::DirectUploadRequired | ChatMediaStorageError::OperationFailed => {
+            ChatMediaProcessingError::ProcessingFailed
+        }
     }
 }
 
@@ -177,9 +179,11 @@ fn processing_error_code(error: ChatMediaProcessingError) -> &'static str {
         ChatMediaProcessingError::Unavailable => "processor_unavailable",
         ChatMediaProcessingError::InvalidContent => "invalid_media_content",
         ChatMediaProcessingError::DurationTooLong => "video_duration_too_long",
+        ChatMediaProcessingError::AudioDurationTooLong => "audio_duration_too_long",
         ChatMediaProcessingError::ResolutionTooLarge => "video_resolution_too_large",
         ChatMediaProcessingError::FrameRateTooHigh => "video_frame_rate_too_high",
         ChatMediaProcessingError::ProcessedTooLarge => "processed_video_too_large",
+        ChatMediaProcessingError::ProcessedAudioTooLarge => "processed_audio_too_large",
         ChatMediaProcessingError::ProcessingFailed => "media_processing_failed",
     }
 }
@@ -191,6 +195,7 @@ fn validate_source_size(
     let maximum = match job.media.kind {
         ChatMediaKind::Image => MAX_CHAT_IMAGE_SIZE_BYTES,
         ChatMediaKind::Video => MAX_CHAT_VIDEO_SIZE_BYTES,
+        ChatMediaKind::Audio => MAX_CHAT_AUDIO_SIZE_BYTES,
     };
     if actual_size != job.media.declared_size_bytes || !(1..=maximum).contains(&actual_size) {
         Err(ChatMediaProcessingError::InvalidContent)
@@ -204,8 +209,7 @@ async fn file_size(path: &Path) -> Result<i64, ChatMediaProcessingError> {
         .await
         .map_err(|_| ChatMediaProcessingError::ProcessingFailed)
         .and_then(|metadata| {
-            i64::try_from(metadata.len())
-                .map_err(|_| ChatMediaProcessingError::ProcessingFailed)
+            i64::try_from(metadata.len()).map_err(|_| ChatMediaProcessingError::ProcessingFailed)
         })
 }
 

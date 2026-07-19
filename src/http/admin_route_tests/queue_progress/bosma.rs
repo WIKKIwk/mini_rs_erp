@@ -48,11 +48,14 @@ async fn bosma_complete_requires_or_persists_completion_metrics() {
             "POST",
             "/v1/mobile/admin/production-maps/queue-action",
             &worker_token,
-            &with_test_qolip(r#"{
+            &with_test_qolip(
+                r#"{
                 "apparatus":"7 ta rangli bosma",
                 "order_id":"zakaz-bosma-complete",
                 "action":"start"
-            }"#, "zakaz-bosma-complete"),
+            }"#,
+                "zakaz-bosma-complete",
+            ),
         ))
         .await
         .expect("start");
@@ -219,11 +222,14 @@ async fn bosma_pause_does_not_persist_return_ink_metric() {
             "POST",
             "/v1/mobile/admin/production-maps/queue-action",
             &worker_token,
-            &with_test_qolip(r#"{
+            &with_test_qolip(
+                r#"{
                 "apparatus":"8 ta rangli bosma",
                 "order_id":"zakaz-bosma-pause",
                 "action":"start"
-            }"#, "zakaz-bosma-pause"),
+            }"#,
+                "zakaz-bosma-pause",
+            ),
         ))
         .await
         .expect("start");
@@ -333,9 +339,7 @@ async fn bosma_can_complete_with_an_image_only_returned_paint_report() {
     let upload_status = upload.status();
     let upload_body = json_body(upload).await;
     assert_eq!(upload_status, StatusCode::OK, "{upload_body}");
-    let image_id = upload_body["image"]["image_id"]
-        .as_str()
-        .expect("image id");
+    let image_id = upload_body["image"]["image_id"].as_str().expect("image id");
 
     let completed = router
         .oneshot(request_with_body(

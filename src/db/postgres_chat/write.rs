@@ -1,10 +1,12 @@
 use sqlx::{PgPool, Postgres, Transaction};
 
-use super::rows::{MessageRow, PrincipalRow, role_key};
+use sha2::{Digest, Sha256};
+
+use super::rows::{MessageRow, PrincipalRow, parse_role, role_key};
 use crate::core::auth::models::Principal;
 use crate::core::chat::{
     ChatConversation, ChatError, ChatMessage, ChatMessageAttachment, ChatOutboxEvent,
-    ChatPrincipal, ChatPrincipalInput, ChatRealtimeEvent, ChatSendResult,
+    ChatPrincipal, ChatPrincipalInput, ChatPushDelivery, ChatRealtimeEvent, ChatSendResult,
 };
 
 pub(super) async fn ensure_principal(
@@ -105,11 +107,9 @@ pub(super) async fn send_message(
     )
     .await?
     {
+        let result = idempotent_send_result(existing, body, media_id)?;
         tx.commit().await.map_err(|_| ChatError::StoreFailed)?;
-        return Ok(ChatSendResult {
-            message: existing,
-            created: false,
-        });
+        return Ok(result);
     }
     let last_sequence = sqlx::query_scalar::<_, i64>(
         "SELECT last_message_sequence FROM mini_chat_conversations WHERE conversation_id = $1 FOR UPDATE",
@@ -119,12 +119,28 @@ pub(super) async fn send_message(
     .await
     .map_err(|_| ChatError::StoreFailed)?
     .ok_or(ChatError::NotFound)?;
+    // The first idempotency lookup happens before the conversation write lock.
+    // A concurrent retry can therefore commit while this transaction is waiting
+    // for the lock. Recheck after acquiring it so both callers resolve to the
+    // same persisted message instead of leaking the unique-constraint race as a
+    // store failure.
+    if let Some(existing) = existing_message(
+        &mut tx,
+        conversation_id,
+        &sender.principal_id,
+        client_message_id,
+    )
+    .await?
+    {
+        let result = idempotent_send_result(existing, body, media_id)?;
+        tx.commit().await.map_err(|_| ChatError::StoreFailed)?;
+        return Ok(result);
+    }
     let sequence = last_sequence.saturating_add(1);
     let ready_attachment = match media_id {
-        Some(media_id) => Some(
-            ready_attachment(&mut tx, conversation_id, &sender.principal_id, media_id)
-                .await?,
-        ),
+        Some(media_id) => {
+            Some(ready_attachment(&mut tx, conversation_id, &sender.principal_id, media_id).await?)
+        }
         None => None,
     };
     let message_type = ready_attachment
@@ -208,25 +224,39 @@ pub(super) async fn send_message(
     .execute(&mut *tx)
     .await
     .map_err(|_| ChatError::StoreFailed)?;
-    let recipient_keys = sqlx::query_as::<_, (String, String)>(
-        r#"SELECT recipient.principal_role, recipient.principal_ref
+    let recipients = sqlx::query_as::<_, (String, String, String)>(
+        r#"SELECT recipient.principal_id, recipient.principal_role, recipient.principal_ref
            FROM mini_chat_conversation_members member
            JOIN mini_chat_principals recipient ON recipient.principal_id = member.principal_id
            WHERE member.conversation_id = $1
-             AND member.principal_id <> $2
              AND member.left_at IS NULL
              AND recipient.active = TRUE"#,
     )
     .bind(conversation_id)
-    .bind(&sender.principal_id)
     .fetch_all(&mut *tx)
     .await
-    .map_err(|_| ChatError::StoreFailed)?
-    .into_iter()
-    .map(|(role, ref_)| format!("{role}:{ref_}"))
-    .collect::<Vec<_>>();
+    .map_err(|_| ChatError::StoreFailed)?;
+    let recipient_keys = recipients
+        .iter()
+        .map(|(_, role, ref_)| format!("{role}:{ref_}"))
+        .collect::<Vec<_>>();
+    let push_recipient_keys = recipients
+        .iter()
+        .filter(|(principal_id, _, _)| principal_id != &sender.principal_id)
+        .map(|(_, role, ref_)| format!("{role}:{ref_}"))
+        .collect::<Vec<_>>();
+    let cursor = sqlx::query_scalar::<_, i64>(
+        r#"UPDATE mini_chat_event_clock
+           SET cursor = cursor + 1
+           WHERE singleton = TRUE
+           RETURNING cursor"#,
+    )
+    .fetch_one(&mut *tx)
+    .await
+    .map_err(|_| ChatError::StoreFailed)?;
     let event = ChatRealtimeEvent {
         event_id: new_id("event"),
+        cursor,
         event: "chat.message.created".to_string(),
         conversation_id: conversation_id.to_string(),
         sequence,
@@ -234,17 +264,37 @@ pub(super) async fn send_message(
     };
     sqlx::query(
         r#"INSERT INTO mini_chat_outbox_events
-             (event_id, topic, conversation_id, message_sequence, recipient_keys, payload_json)
-           VALUES ($1, 'chat.message.created', $2, $3, $4, $5)"#,
+             (event_id, event_cursor, topic, conversation_id, message_sequence,
+              recipient_keys, push_recipient_keys, payload_json)
+           VALUES ($1, $2, 'chat.message.created', $3, $4, $5, $6, $7)"#,
     )
     .bind(&event.event_id)
+    .bind(cursor)
     .bind(conversation_id)
     .bind(sequence)
     .bind(serde_json::json!(recipient_keys))
+    .bind(serde_json::json!(push_recipient_keys))
     .bind(serde_json::to_value(&event).map_err(|_| ChatError::StoreFailed)?)
     .execute(&mut *tx)
     .await
     .map_err(|_| ChatError::StoreFailed)?;
+    sqlx::query(
+        r#"INSERT INTO mini_chat_push_deliveries (event_id, recipient_key)
+           SELECT $1, value
+           FROM jsonb_array_elements_text($2::JSONB) value
+           ON CONFLICT (event_id, recipient_key) DO NOTHING"#,
+    )
+    .bind(&event.event_id)
+    .bind(serde_json::json!(push_recipient_keys))
+    .execute(&mut *tx)
+    .await
+    .map_err(|_| ChatError::StoreFailed)?;
+    finalize_outbox_if_complete(&mut tx, &event.event_id).await?;
+    sqlx::query("SELECT pg_notify('mini_chat_realtime', $1)")
+        .bind(&event.event_id)
+        .execute(&mut *tx)
+        .await
+        .map_err(|_| ChatError::StoreFailed)?;
     tx.commit().await.map_err(|_| ChatError::StoreFailed)?;
     Ok(ChatSendResult {
         message,
@@ -252,230 +302,4 @@ pub(super) async fn send_message(
     })
 }
 
-pub(super) async fn mark_read(
-    pool: &PgPool,
-    principal: &Principal,
-    conversation_id: &str,
-    sequence: i64,
-    device_id: &str,
-) -> Result<(), ChatError> {
-    let mut tx = pool.begin().await.map_err(|_| ChatError::StoreFailed)?;
-    let principal_id = sqlx::query_scalar::<_, String>(
-        "SELECT principal_id FROM mini_chat_principals WHERE principal_role = $1 AND principal_ref = $2",
-    )
-    .bind(role_key(&principal.role))
-    .bind(principal.ref_.trim())
-    .fetch_optional(&mut *tx)
-    .await
-    .map_err(|_| ChatError::StoreFailed)?
-    .ok_or(ChatError::NotFound)?;
-    let read_sequence = sqlx::query_scalar::<_, i64>(
-        r#"UPDATE mini_chat_conversation_members member
-           SET last_read_sequence = GREATEST(
-             member.last_read_sequence,
-             LEAST($3, conversation.last_message_sequence)
-           )
-           FROM mini_chat_conversations conversation
-           WHERE member.conversation_id = $1
-             AND member.principal_id = $2
-             AND member.left_at IS NULL
-             AND conversation.conversation_id = member.conversation_id
-           RETURNING member.last_read_sequence"#,
-    )
-    .bind(conversation_id)
-    .bind(&principal_id)
-    .bind(sequence)
-    .fetch_optional(&mut *tx)
-    .await
-    .map_err(|_| ChatError::StoreFailed)?
-    .ok_or(ChatError::Forbidden)?;
-    sqlx::query(
-        r#"INSERT INTO mini_chat_device_cursors
-             (principal_id, device_id, conversation_id, last_delivered_sequence, last_read_sequence)
-           VALUES ($1, $2, $3, $4, $4)
-           ON CONFLICT (principal_id, device_id, conversation_id) DO UPDATE SET
-             last_delivered_sequence = GREATEST(mini_chat_device_cursors.last_delivered_sequence, excluded.last_delivered_sequence),
-             last_read_sequence = GREATEST(mini_chat_device_cursors.last_read_sequence, excluded.last_read_sequence),
-             last_sync_at = now()"#,
-    )
-    .bind(&principal_id)
-    .bind(device_id)
-    .bind(conversation_id)
-    .bind(read_sequence)
-    .execute(&mut *tx)
-    .await
-    .map_err(|_| ChatError::StoreFailed)?;
-    tx.commit().await.map_err(|_| ChatError::StoreFailed)
-}
-
-pub(super) async fn claim_outbox(
-    pool: &PgPool,
-    limit: usize,
-) -> Result<Vec<ChatOutboxEvent>, ChatError> {
-    let rows = sqlx::query_as::<_, (String, serde_json::Value, serde_json::Value)>(
-        r#"WITH picked AS (
-             SELECT event_id
-             FROM mini_chat_outbox_events
-             WHERE published_at IS NULL
-               AND (locked_until IS NULL OR locked_until < now())
-             ORDER BY created_at
-             FOR UPDATE SKIP LOCKED
-             LIMIT $1
-           )
-           UPDATE mini_chat_outbox_events event
-           SET locked_until = now() + interval '30 seconds',
-               attempts = attempts + 1
-           FROM picked
-           WHERE event.event_id = picked.event_id
-           RETURNING event.event_id, event.recipient_keys, event.payload_json"#,
-    )
-    .bind(limit.clamp(1, 500) as i64)
-    .fetch_all(pool)
-    .await
-    .map_err(|_| ChatError::StoreFailed)?;
-    rows.into_iter()
-        .map(|(event_id, recipient_keys, payload)| {
-            Ok(ChatOutboxEvent {
-                event_id,
-                recipient_keys: serde_json::from_value(recipient_keys)
-                    .map_err(|_| ChatError::StoreFailed)?,
-                payload: serde_json::from_value(payload).map_err(|_| ChatError::StoreFailed)?,
-            })
-        })
-        .collect()
-}
-
-pub(super) async fn mark_outbox_published(pool: &PgPool, event_id: &str) -> Result<(), ChatError> {
-    sqlx::query(
-        "UPDATE mini_chat_outbox_events SET published_at = now(), locked_until = NULL WHERE event_id = $1",
-    )
-    .bind(event_id)
-    .execute(pool)
-    .await
-    .map(|_| ())
-    .map_err(|_| ChatError::StoreFailed)
-}
-
-async fn sender_for_conversation(
-    tx: &mut Transaction<'_, Postgres>,
-    principal: &Principal,
-    conversation_id: &str,
-) -> Result<ChatPrincipal, ChatError> {
-    let row = sqlx::query_as::<_, PrincipalRow>(
-        r#"SELECT p.principal_id, p.principal_role, p.principal_ref, p.display_name, p.avatar_url
-           FROM mini_chat_principals p
-           JOIN mini_chat_conversation_members member ON member.principal_id = p.principal_id
-           WHERE p.principal_role = $1
-             AND p.principal_ref = $2
-             AND member.conversation_id = $3
-             AND member.left_at IS NULL
-             AND member.can_post = TRUE
-             AND p.active = TRUE"#,
-    )
-    .bind(role_key(&principal.role))
-    .bind(principal.ref_.trim())
-    .bind(conversation_id)
-    .fetch_optional(&mut **tx)
-    .await
-    .map_err(|_| ChatError::StoreFailed)?
-    .ok_or(ChatError::Forbidden)?;
-    row.into_model()
-}
-
-async fn existing_message(
-    tx: &mut Transaction<'_, Postgres>,
-    conversation_id: &str,
-    sender_principal_id: &str,
-    client_message_id: &str,
-) -> Result<Option<ChatMessage>, ChatError> {
-    let row = sqlx::query_as::<_, MessageRow>(
-        r#"SELECT
-             m.message_id,
-             m.conversation_id,
-             m.sender_principal_id,
-             sender.principal_role AS sender_role,
-             sender.principal_ref AS sender_ref,
-             sender.display_name AS sender_display_name,
-             m.client_message_id,
-             m.message_sequence,
-             m.message_type,
-             m.body,
-             attachment.attachment_id,
-             media.media_id,
-             media.media_kind,
-             media.processed_content_type AS media_content_type,
-             media.processed_size_bytes AS media_size_bytes,
-             media.width_pixels AS media_width_pixels,
-             media.height_pixels AS media_height_pixels,
-             media.duration_ms AS media_duration_ms,
-             EXTRACT(EPOCH FROM m.created_at)::BIGINT AS created_at_unix,
-             EXTRACT(EPOCH FROM m.edited_at)::BIGINT AS edited_at_unix,
-             EXTRACT(EPOCH FROM m.deleted_at)::BIGINT AS deleted_at_unix
-           FROM mini_chat_messages m
-           JOIN mini_chat_principals sender ON sender.principal_id = m.sender_principal_id
-           LEFT JOIN mini_chat_message_attachments attachment ON attachment.message_id = m.message_id
-           LEFT JOIN mini_chat_media media ON media.media_id = attachment.media_id
-           WHERE m.conversation_id = $1
-             AND m.sender_principal_id = $2
-             AND m.client_message_id = $3"#,
-    )
-    .bind(conversation_id)
-    .bind(sender_principal_id)
-    .bind(client_message_id)
-    .fetch_optional(&mut **tx)
-    .await
-    .map_err(|_| ChatError::StoreFailed)?;
-    row.map(MessageRow::into_model).transpose()
-}
-
-async fn ready_attachment(
-    tx: &mut Transaction<'_, Postgres>,
-    conversation_id: &str,
-    sender_principal_id: &str,
-    media_id: &str,
-) -> Result<ChatMessageAttachment, ChatError> {
-    let row = sqlx::query_as::<_, (String, String, i64, i32, i32, Option<i64>)>(
-        r#"SELECT media_kind, processed_content_type, processed_size_bytes,
-                  width_pixels, height_pixels, duration_ms
-           FROM mini_chat_media media
-           WHERE media.media_id = $1
-             AND media.conversation_id = $2
-             AND media.uploader_principal_id = $3
-             AND media.upload_status = 'ready'
-             AND media.processed_object_key IS NOT NULL
-             AND media.thumbnail_object_key IS NOT NULL
-             AND NOT EXISTS (
-               SELECT 1 FROM mini_chat_message_attachments attachment
-               WHERE attachment.media_id = media.media_id
-             )
-           FOR UPDATE"#,
-    )
-    .bind(media_id)
-    .bind(conversation_id)
-    .bind(sender_principal_id)
-    .fetch_optional(&mut **tx)
-    .await
-    .map_err(|_| ChatError::StoreFailed)?
-    .ok_or(ChatError::Conflict)?;
-    let (kind, content_type, size_bytes, width_pixels, height_pixels, duration_ms) = row;
-    if !matches!(kind.as_str(), "image" | "video") {
-        return Err(ChatError::StoreFailed);
-    }
-    Ok(ChatMessageAttachment {
-        attachment_id: new_id("attachment"),
-        media_id: media_id.to_string(),
-        kind,
-        content_type,
-        size_bytes,
-        width_pixels,
-        height_pixels,
-        duration_ms,
-        content_url: format!("/v1/mobile/chat/media/{media_id}/content"),
-        thumbnail_url: format!("/v1/mobile/chat/media/{media_id}/thumbnail"),
-    })
-}
-
-fn new_id(prefix: &str) -> String {
-    let bytes: [u8; 16] = rand::random();
-    format!("{prefix}_{}", data_encoding::HEXLOWER.encode(&bytes))
-}
+include!("write_delivery.rs");

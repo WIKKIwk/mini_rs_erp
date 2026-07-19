@@ -109,22 +109,10 @@ async fn aparatchi_sends_returned_paint_and_only_boyoqchi_can_read_it() {
     assert_eq!(body["items"][0]["order_id"], "order-1");
     assert_eq!(body["items"][0]["items"][0]["usage"], "rasxot");
     assert_eq!(body["items"][0]["items"][2]["usage"], "astatka");
-    assert_eq!(
-        body["items"][0]["calculation"]["rasxot_mix_total"],
-        "12.5"
-    );
-    assert_eq!(
-        body["items"][0]["calculation"]["astatka_mix_total"],
-        "5"
-    );
-    assert_eq!(
-        body["items"][0]["calculation"]["rasxot_alcohol"],
-        "16.25"
-    );
-    assert_eq!(
-        body["items"][0]["calculation"]["astatka_alcohol"],
-        "2.75"
-    );
+    assert_eq!(body["items"][0]["calculation"]["rasxot_mix_total"], "12.5");
+    assert_eq!(body["items"][0]["calculation"]["astatka_mix_total"], "5");
+    assert_eq!(body["items"][0]["calculation"]["rasxot_alcohol"], "16.25");
+    assert_eq!(body["items"][0]["calculation"]["astatka_alcohol"], "2.75");
     assert_eq!(
         body["items"][0]["calculation"]["final_used_alcohol"],
         "13.5"
@@ -137,10 +125,7 @@ async fn aparatchi_sends_returned_paint_and_only_boyoqchi_can_read_it() {
         body["items"][0]["calculation"]["astatka_pure_paint"],
         "4.75"
     );
-    assert_eq!(
-        body["items"][0]["calculation"]["final_used_paint"],
-        "7.5"
-    );
+    assert_eq!(body["items"][0]["calculation"]["final_used_paint"], "7.5");
 }
 
 #[tokio::test]

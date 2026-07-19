@@ -20,10 +20,12 @@ async fn postgres_chat_media_enforces_authorization_idempotency_and_completion()
         .unwrap_or_else(|_| "postgres://wikki@127.0.0.1:5432/postgres".to_string());
     let db_name = format!("mini_rs_erp_test_chat_media_{}", std::process::id());
     let admin_pool = sqlx::PgPool::connect(&admin_url).await.expect("admin db");
-    sqlx::query(&format!(r#"DROP DATABASE IF EXISTS "{db_name}" WITH (FORCE)"#))
-        .execute(&admin_pool)
-        .await
-        .expect("drop stale test db");
+    sqlx::query(&format!(
+        r#"DROP DATABASE IF EXISTS "{db_name}" WITH (FORCE)"#
+    ))
+    .execute(&admin_pool)
+    .await
+    .expect("drop stale test db");
     sqlx::query(&format!(r#"CREATE DATABASE "{db_name}""#))
         .execute(&admin_pool)
         .await
@@ -162,15 +164,20 @@ async fn postgres_chat_media_enforces_authorization_idempotency_and_completion()
     let admin_pool = sqlx::PgPool::connect(&admin_url)
         .await
         .expect("admin cleanup");
-    sqlx::query(&format!(r#"DROP DATABASE IF EXISTS "{db_name}" WITH (FORCE)"#))
-        .execute(&admin_pool)
-        .await
-        .expect("drop test db");
+    sqlx::query(&format!(
+        r#"DROP DATABASE IF EXISTS "{db_name}" WITH (FORCE)"#
+    ))
+    .execute(&admin_pool)
+    .await
+    .expect("drop test db");
     admin_pool.close().await;
 }
 
 async fn seed_conversation(pool: &sqlx::PgPool) {
-    for (id, reference) in [("principal_owner", "owner"), ("principal_intruder", "intruder")] {
+    for (id, reference) in [
+        ("principal_owner", "owner"),
+        ("principal_intruder", "intruder"),
+    ] {
         sqlx::query(
             r#"INSERT INTO mini_chat_principals
                  (principal_id, principal_role, principal_ref, display_name)

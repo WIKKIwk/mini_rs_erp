@@ -66,6 +66,17 @@ impl AdminService {
         let avatar_url = self
             .profile_avatar_url("material_taminotchi", &entry.ref_)
             .await;
+        let assignment_key = role_assignment_key(&PrincipalRole::MaterialTaminotchi, &entry.ref_);
+        let assigned_item_groups = self
+            .role_assignments()
+            .await?
+            .into_iter()
+            .find(|assignment| {
+                role_assignment_key(&assignment.principal_role, &assignment.principal_ref)
+                    == assignment_key
+            })
+            .map(|assignment| assignment.assigned_item_groups)
+            .unwrap_or_default();
         let now = OffsetDateTime::now_utc();
         Ok(AdminCustomerDetail {
             ref_: entry.ref_,
@@ -76,7 +87,26 @@ impl AdminService {
             code_locked: state.code_locked(now),
             code_retry_after_sec: state.retry_after_seconds(now),
             assigned_items: Vec::new(),
+            assigned_item_groups,
+            assigned_warehouses: Vec::new(),
         })
+    }
+
+    pub async fn update_material_taminotchi_item_groups(
+        &self,
+        ref_: &str,
+        assigned_item_groups: Vec<String>,
+    ) -> Result<AdminCustomerDetail, AdminPortError> {
+        let detail = self.material_taminotchi_detail(ref_).await?;
+        self.upsert_role_assignment(RoleAssignmentUpsert {
+            principal_role: PrincipalRole::MaterialTaminotchi,
+            principal_ref: detail.ref_.clone(),
+            role_id: "material_taminotchi".to_string(),
+            assigned_apparatus: Vec::new(),
+            assigned_item_groups,
+        })
+        .await?;
+        self.material_taminotchi_detail(&detail.ref_).await
     }
 
     pub async fn update_material_taminotchi_phone(

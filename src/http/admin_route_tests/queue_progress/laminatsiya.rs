@@ -134,7 +134,7 @@ async fn laminatsiya_complete_requires_or_persists_completion_metrics() {
 }
 
 #[tokio::test]
-async fn finished_goods_requires_warehouse_receipt_before_stock() {
+async fn finished_goods_stays_free_wip_until_assigned_warehouse_accepts() {
     let print_requests = Arc::new(Mutex::new(Vec::<ScaleDriverPrintRequest>::new()));
     let mut state = test_state();
     state.gscale = GscaleService::new().with_driver(Arc::new(FakeProgressDriver {
@@ -155,6 +155,13 @@ async fn finished_goods_requires_warehouse_receipt_before_stock() {
     let admin_token = session(&state, PrincipalRole::Admin).await;
     let worker_token = session_for(&state, PrincipalRole::Aparatchi, "worker-fg-receipt").await;
     let warehouse_token = session_for(&state, PrincipalRole::Werka, "warehouse-keeper-1").await;
+    assign_warehouse_to_principal(
+        &state,
+        PrincipalRole::Werka,
+        "warehouse-keeper-1",
+        "Tayyor mahsulot ombori",
+    )
+    .await;
     let router = build_router(state);
 
     let saved = router
@@ -218,24 +225,20 @@ async fn finished_goods_requires_warehouse_receipt_before_stock() {
         .expect("progress qr");
     assert_eq!(
         completed_body["progress_batch"]["wip_status"], "waiting",
-        "final output must wait for warehouse receipt"
+        "final output must remain free WIP until a receiver accepts it"
     );
     assert_eq!(
         completed_body["progress_batch"]["status_detail"]["flow_status"],
-        "finished_pending_acceptance"
+        "free_wip"
     );
-    assert_eq!(
-        completed_body["progress_batch"]["status_detail"]["stock_status"],
-        "pending_acceptance"
+    assert!(
+        completed_body["progress_batch"]["status_detail"]
+            .get("stock_status")
+            .is_none()
     );
-    assert_eq!(
-        completed_body["order_status"]["order_status"],
-        "finished_pending_acceptance"
-    );
-    assert_eq!(
-        completed_body["order_status"]["finished_pending_acceptance_count"],
-        1
-    );
+    assert_eq!(completed_body["order_status"]["order_status"], "completed");
+    assert_eq!(completed_body["order_status"]["flow_status"], "free_wip");
+    assert_eq!(completed_body["order_status"]["free_wip_count"], 1);
 
     let waiting = router
         .clone()
@@ -251,6 +254,30 @@ async fn finished_goods_requires_warehouse_receipt_before_stock() {
         waiting_body["batches"].as_array().expect("waiting").len(),
         1
     );
+
+    let worker_cannot_receive = router
+        .clone()
+        .oneshot(request_with_body(
+            "POST",
+            "/v1/mobile/admin/production-maps/finished-goods/receive",
+            &worker_token,
+            &format!(r#"{{"qr_payload":"{qr_payload}","warehouse":"Tayyor mahsulot ombori"}}"#),
+        ))
+        .await
+        .expect("worker receive attempt");
+    assert_eq!(worker_cannot_receive.status(), StatusCode::FORBIDDEN);
+
+    let unassigned_warehouse = router
+        .clone()
+        .oneshot(request_with_body(
+            "POST",
+            "/v1/mobile/admin/production-maps/finished-goods/receive",
+            &warehouse_token,
+            &format!(r#"{{"qr_payload":"{qr_payload}","warehouse":"Boshqa ombor"}}"#),
+        ))
+        .await
+        .expect("unassigned warehouse attempt");
+    assert_eq!(unassigned_warehouse.status(), StatusCode::FORBIDDEN);
 
     let received = router
         .clone()
@@ -275,6 +302,11 @@ async fn finished_goods_requires_warehouse_receipt_before_stock() {
         "Tayyor mahsulot ombori"
     );
     assert_eq!(received_body["stock"]["order_id"], "zakaz-fg-receipt");
+    assert_eq!(received_body["stock"]["item_code"], "PECHAT-9407");
+    assert_eq!(
+        received_body["stock"]["item_name"],
+        "Finished goods receipt order"
+    );
     assert_eq!(received_body["stock"]["qty"], 24.0);
     assert_eq!(received_body["stock"]["uom"], "kg");
     assert_eq!(
@@ -290,7 +322,11 @@ async fn finished_goods_requires_warehouse_receipt_before_stock() {
         received_body["batch"]["status_detail"]["stock_status"],
         "accepted"
     );
-    assert_eq!(received_body["order_status"]["order_status"], "accepted");
+    assert_eq!(received_body["order_status"]["order_status"], "completed");
+    assert_eq!(
+        received_body["order_status"]["flow_status"],
+        "accepted_to_stock"
+    );
     assert_eq!(received_body["order_status"]["accepted_wip_count"], 1);
     assert_eq!(
         received_body["batch"]["payload_json"]["received_warehouse"],

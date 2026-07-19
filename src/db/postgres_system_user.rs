@@ -2,9 +2,7 @@ use async_trait::async_trait;
 use sqlx::PgPool;
 
 use crate::core::auth::models::PrincipalRole;
-use crate::core::system_users::{
-    SystemUser, SystemUserError, SystemUserStorePort,
-};
+use crate::core::system_users::{SystemUser, SystemUserError, SystemUserStorePort};
 
 #[derive(Clone)]
 pub struct PostgresSystemUserStore {

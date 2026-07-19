@@ -246,7 +246,7 @@ async fn admin_apparatus_group_keeps_laminatsiya_apparatus_manual() {
 }
 
 #[tokio::test]
-async fn admin_can_create_apparatus_and_list_it_as_apparat_warehouse() {
+async fn admin_can_create_and_list_typed_apparatus_without_breaking_legacy_clients() {
     let state = test_state();
     let token = session(&state, PrincipalRole::Admin).await;
 
@@ -255,14 +255,41 @@ async fn admin_can_create_apparatus_and_list_it_as_apparat_warehouse() {
             "POST",
             "/v1/mobile/admin/apparatus",
             &token,
-            r#"{"warehouse":" Bobst 1 "}"#,
+            r#"{"name":" Bobst 1 "}"#,
         ))
         .await
         .expect("create apparatus");
     assert_eq!(created.status(), StatusCode::OK);
     let created_body = json_body(created).await;
+    assert_eq!(created_body["name"], "Bobst 1");
     assert_eq!(created_body["warehouse"], "Bobst 1");
     assert_eq!(created_body["parent_warehouse"], "aparat - A");
+
+    let typed_list = build_router(state.clone())
+        .oneshot(request(
+            "GET",
+            "/v1/mobile/admin/apparatus?q=Bobst&limit=50",
+            &token,
+        ))
+        .await
+        .expect("typed apparatus list");
+    assert_eq!(typed_list.status(), StatusCode::OK);
+    let typed_body = json_body(typed_list).await;
+    assert_eq!(typed_body, serde_json::json!([{"name": "Bobst 1"}]));
+
+    let legacy_created = build_router(state.clone())
+        .oneshot(request_with_body(
+            "POST",
+            "/v1/mobile/admin/apparatus",
+            &token,
+            r#"{"warehouse":" Legacy Bobst "}"#,
+        ))
+        .await
+        .expect("legacy create apparatus");
+    assert_eq!(legacy_created.status(), StatusCode::OK);
+    let legacy_created_body = json_body(legacy_created).await;
+    assert_eq!(legacy_created_body["name"], "Legacy Bobst");
+    assert_eq!(legacy_created_body["warehouse"], "Legacy Bobst");
 
     let listed = build_router(state)
         .oneshot(request(
@@ -274,13 +301,54 @@ async fn admin_can_create_apparatus_and_list_it_as_apparat_warehouse() {
         .expect("list apparatus");
     assert_eq!(listed.status(), StatusCode::OK);
     let listed_body = json_body(listed).await;
+    assert!(listed_body.as_array().expect("array").iter().any(|item| {
+        item["warehouse"] == "Bobst 1" && item["parent_warehouse"] == "aparat - A"
+    }));
+}
+
+#[tokio::test]
+async fn apparatus_queue_reader_can_list_but_cannot_create_apparatus() {
+    let state = test_state();
+    state
+        .admin
+        .upsert_role_assignment(crate::core::authz::RoleAssignmentUpsert {
+            principal_role: PrincipalRole::Aparatchi,
+            principal_ref: "apparatus-reader".to_string(),
+            role_id: "aparatchi".to_string(),
+            assigned_apparatus: vec!["Godex aparat - DEMO".to_string()],
+            assigned_item_groups: Vec::new(),
+        })
+        .await
+        .expect("apparatus reader assignment");
+    let token = session_for(&state, PrincipalRole::Aparatchi, "apparatus-reader").await;
+
+    let listed = build_router(state.clone())
+        .oneshot(request(
+            "GET",
+            "/v1/mobile/admin/apparatus?limit=20",
+            &token,
+        ))
+        .await
+        .expect("apparatus list");
+    assert_eq!(listed.status(), StatusCode::OK);
     assert!(
-        listed_body
+        !json_body(listed)
+            .await
             .as_array()
-            .expect("array")
-            .iter()
-            .any(|item| item["warehouse"] == "Bobst 1")
+            .expect("apparatus array")
+            .is_empty()
     );
+
+    let create_attempt = build_router(state)
+        .oneshot(request_with_body(
+            "POST",
+            "/v1/mobile/admin/apparatus",
+            &token,
+            r#"{"name":"Forbidden apparatus"}"#,
+        ))
+        .await
+        .expect("create attempt");
+    assert_eq!(create_attempt.status(), StatusCode::FORBIDDEN);
 }
 
 #[tokio::test]
@@ -451,8 +519,7 @@ async fn warehouse_assignment_accepts_only_allowed_roles_and_brigader_workers() 
 async fn admin_can_remove_one_warehouse_assignment() {
     let state = test_state();
     let token = session(&state, PrincipalRole::Admin).await;
-    let assignment =
-        r#"{"warehouse":"Ombor","principal_role":"werka","principal_ref":"werka","display_name":"Werka"}"#;
+    let assignment = r#"{"warehouse":"Ombor","principal_role":"werka","principal_ref":"werka","display_name":"Werka"}"#;
 
     let created = build_router(state.clone())
         .oneshot(request_with_body(

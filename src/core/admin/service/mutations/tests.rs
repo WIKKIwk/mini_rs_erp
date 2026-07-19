@@ -64,6 +64,21 @@ async fn finished_goods_item_is_assigned_to_customer_on_create() {
             .iter()
             .any(|entry| entry.code == item.code)
     );
+
+    let duplicate = service
+        .create_item(
+            "ITEM-FINISHED",
+            "Duplicate",
+            "Kg",
+            "tayyor mahsulot",
+            &customer.ref_,
+        )
+        .await
+        .expect_err("atomic create must preserve duplicate-code protection");
+    assert!(matches!(
+        duplicate,
+        AdminPortError::InvalidInput(message) if message == "item code already exists"
+    ));
 }
 
 #[tokio::test]

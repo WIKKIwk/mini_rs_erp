@@ -19,7 +19,10 @@ pub(super) async fn set_multipart_upload_id(
     if storage_upload_id.is_empty() || storage_upload_id.len() > 1024 {
         return Err(ChatMediaError::StorageFailed);
     }
-    let mut tx = pool.begin().await.map_err(|_| ChatMediaError::StoreFailed)?;
+    let mut tx = pool
+        .begin()
+        .await
+        .map_err(|_| ChatMediaError::StoreFailed)?;
     let uploader_id = authorized_principal_id(&mut tx, principal, conversation_id, true).await?;
     let record = by_upload_id(&mut tx, conversation_id, &uploader_id, upload_id, true)
         .await?
@@ -55,14 +58,12 @@ pub(super) async fn uploaded_chunks(
     upload_id: &str,
     require_can_post: bool,
 ) -> Result<Vec<ChatMediaUploadedChunk>, ChatMediaError> {
-    let mut tx = pool.begin().await.map_err(|_| ChatMediaError::StoreFailed)?;
-    let uploader_id = authorized_principal_id(
-        &mut tx,
-        principal,
-        conversation_id,
-        require_can_post,
-    )
-    .await?;
+    let mut tx = pool
+        .begin()
+        .await
+        .map_err(|_| ChatMediaError::StoreFailed)?;
+    let uploader_id =
+        authorized_principal_id(&mut tx, principal, conversation_id, require_can_post).await?;
     let record = by_upload_id(&mut tx, conversation_id, &uploader_id, upload_id, false)
         .await?
         .ok_or(ChatMediaError::NotFound)?;
@@ -78,7 +79,10 @@ pub(super) async fn uploaded_chunks(
     .await
     .map_err(|_| ChatMediaError::StoreFailed)?;
     tx.commit().await.map_err(|_| ChatMediaError::StoreFailed)?;
-    Ok(rows.into_iter().map(ChatMediaChunkRow::into_model).collect())
+    Ok(rows
+        .into_iter()
+        .map(ChatMediaChunkRow::into_model)
+        .collect())
 }
 
 pub(super) async fn record_uploaded_chunk(
@@ -88,7 +92,10 @@ pub(super) async fn record_uploaded_chunk(
     upload_id: &str,
     chunk: NewChatMediaUploadedChunk,
 ) -> Result<ChatMediaUploadedChunk, ChatMediaError> {
-    let mut tx = pool.begin().await.map_err(|_| ChatMediaError::StoreFailed)?;
+    let mut tx = pool
+        .begin()
+        .await
+        .map_err(|_| ChatMediaError::StoreFailed)?;
     let uploader_id = authorized_principal_id(&mut tx, principal, conversation_id, true).await?;
     let record = by_upload_id(&mut tx, conversation_id, &uploader_id, upload_id, true)
         .await?
@@ -155,7 +162,10 @@ fn validate_chunk(
         .checked_mul(chunk_size)
         .ok_or(ChatMediaError::InvalidInput)?;
     let expected_size = (record.declared_size_bytes - expected_offset).min(chunk_size);
-    if chunk.offset_bytes != expected_offset || chunk.size_bytes != expected_size || expected_size <= 0 {
+    if chunk.offset_bytes != expected_offset
+        || chunk.size_bytes != expected_size
+        || expected_size <= 0
+    {
         return Err(ChatMediaError::InvalidInput);
     }
     Ok(())
@@ -207,25 +217,29 @@ mod tests {
             created_at_unix: 1,
             updated_at_unix: 1,
         };
-        assert!(validate_chunk(
-            &record,
-            &NewChatMediaUploadedChunk {
-                chunk_index: 2,
-                offset_bytes: 10,
-                size_bytes: 1,
-                storage_part_etag: "etag".into(),
-            }
-        )
-        .is_ok());
-        assert!(validate_chunk(
-            &record,
-            &NewChatMediaUploadedChunk {
-                chunk_index: 2,
-                offset_bytes: 9,
-                size_bytes: 2,
-                storage_part_etag: "etag".into(),
-            }
-        )
-        .is_err());
+        assert!(
+            validate_chunk(
+                &record,
+                &NewChatMediaUploadedChunk {
+                    chunk_index: 2,
+                    offset_bytes: 10,
+                    size_bytes: 1,
+                    storage_part_etag: "etag".into(),
+                }
+            )
+            .is_ok()
+        );
+        assert!(
+            validate_chunk(
+                &record,
+                &NewChatMediaUploadedChunk {
+                    chunk_index: 2,
+                    offset_bytes: 9,
+                    size_bytes: 2,
+                    storage_part_etag: "etag".into(),
+                }
+            )
+            .is_err()
+        );
     }
 }

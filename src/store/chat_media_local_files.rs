@@ -28,8 +28,7 @@ pub(super) fn write_stream(
     while let Some(chunk) = receiver.blocking_recv() {
         written = written
             .checked_add(
-                i64::try_from(chunk.len())
-                    .map_err(|_| ChatMediaStorageError::SizeMismatch)?,
+                i64::try_from(chunk.len()).map_err(|_| ChatMediaStorageError::SizeMismatch)?,
             )
             .ok_or(ChatMediaStorageError::SizeMismatch)?;
         if written > expected_size_bytes {
@@ -116,8 +115,7 @@ pub(super) fn assemble_multipart(
         .and_then(|_| destination.sync_all())
         .map_err(|_| ChatMediaStorageError::OperationFailed)?;
     drop(destination);
-    fs::rename(&temporary, &object_path)
-        .map_err(|_| ChatMediaStorageError::OperationFailed)?;
+    fs::rename(&temporary, &object_path).map_err(|_| ChatMediaStorageError::OperationFailed)?;
     if fs::write(content_type_path(&object_path), &content_type).is_err() {
         let _ = fs::remove_file(&object_path);
         return Err(ChatMediaStorageError::OperationFailed);

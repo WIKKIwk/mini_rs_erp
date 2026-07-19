@@ -298,7 +298,10 @@ pub(super) fn preferred_artifact_in(directory: &Path) -> Option<PathBuf> {
     candidates.into_iter().next()
 }
 
-fn backup_file_snapshot(now: OffsetDateTime, file: &BackupDataFile) -> AdminServerMonitorBackupFile {
+fn backup_file_snapshot(
+    now: OffsetDateTime,
+    file: &BackupDataFile,
+) -> AdminServerMonitorBackupFile {
     let modified_at_unix = system_time_to_unix(file.modified);
     AdminServerMonitorBackupFile {
         name: file
@@ -366,10 +369,12 @@ pub(super) async fn available_disk_mb(path: &Path) -> Option<u64> {
     let body = String::from_utf8_lossy(&output.stdout);
     let line = body.lines().rev().find(|line| !line.trim().is_empty())?;
     let fields = line.split_whitespace().collect::<Vec<_>>();
-    let available_kb = fields.get(fields.len().checked_sub(3)?)?.parse::<u64>().ok()?;
+    let available_kb = fields
+        .get(fields.len().checked_sub(3)?)?
+        .parse::<u64>()
+        .ok()?;
     Some(available_kb / 1024)
 }
-
 
 pub(super) fn terminal_status(status: &str) -> bool {
     matches!(status, "ready" | "failed" | "cancelled")

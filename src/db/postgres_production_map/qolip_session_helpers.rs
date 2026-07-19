@@ -6,7 +6,10 @@ pub(super) async fn reject_qolip_in_use_tx(
     tx: &mut Transaction<'_, Postgres>,
     session: &OrderRunSession,
 ) -> Result<(), ProductionMapError> {
-    if !matches!(session.status, OrderRunStatus::Active | OrderRunStatus::Paused) {
+    if !matches!(
+        session.status,
+        OrderRunStatus::Active | OrderRunStatus::Paused
+    ) {
         return Ok(());
     }
     let Some(qolip_code) = session

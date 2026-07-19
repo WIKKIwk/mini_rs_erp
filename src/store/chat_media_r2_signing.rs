@@ -110,12 +110,9 @@ pub(super) fn signing_key(
     hmac_sha256(&service_key, b"aws4_request")
 }
 
-pub(super) fn hmac_sha256(
-    key: &[u8],
-    bytes: &[u8],
-) -> Result<Vec<u8>, ChatMediaStorageError> {
-    let mut mac = HmacSha256::new_from_slice(key)
-        .map_err(|_| ChatMediaStorageError::OperationFailed)?;
+pub(super) fn hmac_sha256(key: &[u8], bytes: &[u8]) -> Result<Vec<u8>, ChatMediaStorageError> {
+    let mut mac =
+        HmacSha256::new_from_slice(key).map_err(|_| ChatMediaStorageError::OperationFailed)?;
     mac.update(bytes);
     Ok(mac.finalize().into_bytes().to_vec())
 }

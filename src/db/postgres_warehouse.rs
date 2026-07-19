@@ -4,8 +4,7 @@ use sqlx::PgPool;
 use crate::core::admin::models::AdminWarehouse;
 use crate::core::auth::models::PrincipalRole;
 use crate::core::warehouses::{
-    WarehouseAssignment, WarehouseError, WarehouseStockItem, WarehouseStorePort,
-    WarehouseSummary,
+    WarehouseAssignment, WarehouseError, WarehouseStockItem, WarehouseStorePort, WarehouseSummary,
 };
 
 #[derive(Clone)]

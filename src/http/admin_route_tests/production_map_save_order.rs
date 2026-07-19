@@ -483,11 +483,14 @@ async fn production_map_sequence_blocks_reorder_before_active_order() {
             "POST",
             "/v1/mobile/admin/production-maps/queue-action",
             &worker_token,
-            &with_test_qolip(r#"{
+            &with_test_qolip(
+                r#"{
                 "apparatus":"7 ta rangli pechat",
                 "order_id":"zakaz-active-a",
                 "action":"start"
-            }"#, "zakaz-active-a"),
+            }"#,
+                "zakaz-active-a",
+            ),
         ))
         .await
         .expect("start order");

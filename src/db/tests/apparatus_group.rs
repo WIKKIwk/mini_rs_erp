@@ -57,7 +57,7 @@ async fn postgres_apparatus_group_store_round_trips_groups() {
 
     let created = service
         .upsert_apparatus(crate::core::apparatus_groups::ApparatusUpsert {
-            warehouse: " Bobst 1 ".to_string(),
+            name: " Bobst 1 ".to_string(),
         })
         .await
         .expect("save apparatus");

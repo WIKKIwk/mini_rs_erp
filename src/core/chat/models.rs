@@ -107,6 +107,8 @@ pub struct ChatSendResult {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ChatRealtimeEvent {
     pub event_id: String,
+    #[serde(default)]
+    pub cursor: i64,
     pub event: String,
     pub conversation_id: String,
     pub sequence: i64,
@@ -116,6 +118,22 @@ pub struct ChatRealtimeEvent {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ChatOutboxEvent {
     pub event_id: String,
+    pub cursor: i64,
     pub recipient_keys: Vec<String>,
+    pub payload: ChatRealtimeEvent,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct ChatSyncPage {
+    pub events: Vec<ChatRealtimeEvent>,
+    pub next_cursor: i64,
+    pub has_more: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ChatPushDelivery {
+    pub event_id: String,
+    pub recipient_key: String,
+    pub attempts: i32,
     pub payload: ChatRealtimeEvent,
 }

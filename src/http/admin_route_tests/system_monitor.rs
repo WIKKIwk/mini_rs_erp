@@ -131,11 +131,7 @@ printf '%s\n' "$dir"
 
     let started = router
         .clone()
-        .oneshot(request(
-            "POST",
-            "/v1/mobile/admin/system/backups",
-            &token,
-        ))
+        .oneshot(request("POST", "/v1/mobile/admin/system/backups", &token))
         .await
         .expect("start backup");
     assert_eq!(started.status(), StatusCode::ACCEPTED);
@@ -148,27 +144,27 @@ printf '%s\n' "$dir"
         .clone()
         .oneshot(request(
             "GET",
-            &format!(
-                "/v1/mobile/admin/system/backups/{backup_id}/download"
-            ),
+            &format!("/v1/mobile/admin/system/backups/{backup_id}/download"),
             &token,
         ))
         .await
         .expect("pending download");
     assert_eq!(pending_download.status(), StatusCode::CONFLICT);
-    assert_eq!(json_body(pending_download).await["error"], "backup_not_ready");
+    assert_eq!(
+        json_body(pending_download).await["error"],
+        "backup_not_ready"
+    );
 
     let duplicate = router
         .clone()
-        .oneshot(request(
-            "POST",
-            "/v1/mobile/admin/system/backups",
-            &token,
-        ))
+        .oneshot(request("POST", "/v1/mobile/admin/system/backups", &token))
         .await
         .expect("duplicate backup");
     assert_eq!(duplicate.status(), StatusCode::CONFLICT);
-    assert_eq!(json_body(duplicate).await["error"], "backup_already_running");
+    assert_eq!(
+        json_body(duplicate).await["error"],
+        "backup_already_running"
+    );
 
     let mut ready = false;
     for _ in 0..40 {
@@ -187,9 +183,7 @@ printf '%s\n' "$dir"
     let download = router
         .oneshot(request(
             "GET",
-            &format!(
-                "/v1/mobile/admin/system/backups/{backup_id}/download"
-            ),
+            &format!("/v1/mobile/admin/system/backups/{backup_id}/download"),
             &token,
         ))
         .await

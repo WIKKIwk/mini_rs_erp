@@ -82,6 +82,10 @@ pub(super) fn routes() -> Router<AppState> {
             any(chat::media_upload_complete),
         )
         .route(
+            "/v1/mobile/chat/media/{media_id}/playback-ticket",
+            any(chat::media_playback_ticket),
+        )
+        .route(
             "/v1/mobile/chat/media/{media_id}/{variant}",
             any(chat::media_access),
         )
@@ -89,6 +93,11 @@ pub(super) fn routes() -> Router<AppState> {
             "/v1/mobile/chat/conversations/{conversation_id}/read",
             any(chat::mark_read),
         )
+        .route(
+            "/v1/mobile/chat/conversations/{conversation_id}/delivered",
+            any(chat::mark_delivered),
+        )
+        .route("/v1/mobile/chat/sync", any(chat::sync))
         .route("/v1/mobile/chat/socket-ticket", any(chat::socket_ticket))
         .route("/v1/mobile/chat/device-token", any(chat::device_token))
         .route("/v1/mobile/chat/live", any(chat::live))

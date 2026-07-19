@@ -5,14 +5,16 @@ mod directory;
 mod media;
 mod realtime;
 
-pub use conversations::{conversation_messages, conversations, create_dm, mark_read};
+pub use conversations::{
+    conversation_messages, conversations, create_dm, mark_delivered, mark_read,
+};
 pub use devices::device_token;
 pub use directory::directory;
 pub use media::{
-    media_access, media_upload, media_upload_chunk, media_upload_complete,
+    media_access, media_playback_ticket, media_upload, media_upload_chunk, media_upload_complete,
     media_upload_content, media_uploads,
 };
-pub use realtime::{live, socket_ticket};
+pub use realtime::{live, socket_ticket, sync};
 
 use axum::Json;
 use axum::http::StatusCode;
@@ -61,15 +63,14 @@ fn map_chat_media_error(error: ChatMediaError) -> ChatHttpError {
         ChatMediaError::DurationTooLong => {
             http_error(StatusCode::UNPROCESSABLE_ENTITY, "video_duration_too_long")
         }
+        ChatMediaError::AudioDurationTooLong => {
+            http_error(StatusCode::UNPROCESSABLE_ENTITY, "audio_duration_too_long")
+        }
         ChatMediaError::NotFound => {
             http_error(StatusCode::NOT_FOUND, "chat_media_upload_not_found")
         }
-        ChatMediaError::Forbidden => {
-            http_error(StatusCode::FORBIDDEN, "chat_media_forbidden")
-        }
-        ChatMediaError::Conflict => {
-            http_error(StatusCode::CONFLICT, "chat_media_state_conflict")
-        }
+        ChatMediaError::Forbidden => http_error(StatusCode::FORBIDDEN, "chat_media_forbidden"),
+        ChatMediaError::Conflict => http_error(StatusCode::CONFLICT, "chat_media_state_conflict"),
         ChatMediaError::Unavailable => {
             http_error(StatusCode::SERVICE_UNAVAILABLE, "chat_media_unavailable")
         }

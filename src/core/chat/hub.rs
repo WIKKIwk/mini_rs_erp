@@ -112,6 +112,7 @@ mod tests {
         let mut second_events = hub.subscribe(&second).await;
         let event = ChatRealtimeEvent {
             event_id: "event-1".to_string(),
+            cursor: 1,
             event: "chat.message.created".to_string(),
             conversation_id: "conversation-1".to_string(),
             sequence: 1,

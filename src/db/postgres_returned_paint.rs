@@ -3,10 +3,9 @@ use sqlx::{PgPool, Postgres, Transaction};
 
 use crate::core::auth::models::PrincipalRole;
 use crate::core::returned_paint::{
-    completion_report_message, normalize_returned_paint_stored_decimal,
-    returned_paint_image_url, ReturnedPaintCalculation, ReturnedPaintError,
-    ReturnedPaintImage, ReturnedPaintItem, ReturnedPaintRequest, ReturnedPaintStatus,
-    ReturnedPaintStorePort, ReturnedPaintStoredImage,
+    ReturnedPaintCalculation, ReturnedPaintError, ReturnedPaintImage, ReturnedPaintItem,
+    ReturnedPaintRequest, ReturnedPaintStatus, ReturnedPaintStorePort, ReturnedPaintStoredImage,
+    completion_report_message, normalize_returned_paint_stored_decimal, returned_paint_image_url,
 };
 
 #[derive(Clone)]
@@ -80,8 +79,8 @@ impl ReturnedPaintStorePort for PostgresReturnedPaintStore {
         items: Vec<ReturnedPaintItem>,
         calculation: ReturnedPaintCalculation,
     ) -> Result<ReturnedPaintRequest, ReturnedPaintError> {
-        let items_json = serde_json::to_value(items)
-            .map_err(|_| ReturnedPaintError::StoreFailed)?;
+        let items_json =
+            serde_json::to_value(items).map_err(|_| ReturnedPaintError::StoreFailed)?;
         let mut tx = self
             .pool
             .begin()
@@ -269,8 +268,8 @@ struct ReturnedPaintImageRow {
 
 impl ReturnedPaintImageRow {
     fn into_model(self) -> Result<ReturnedPaintStoredImage, ReturnedPaintError> {
-        let image_size_bytes = u64::try_from(self.image_size_bytes)
-            .map_err(|_| ReturnedPaintError::StoreFailed)?;
+        let image_size_bytes =
+            u64::try_from(self.image_size_bytes).map_err(|_| ReturnedPaintError::StoreFailed)?;
         if image_size_bytes != self.body.len() as u64 {
             return Err(ReturnedPaintError::StoreFailed);
         }
@@ -294,8 +293,8 @@ pub(crate) async fn insert_returned_paint_request_tx(
     tx: &mut Transaction<'_, Postgres>,
     request: &ReturnedPaintRequest,
 ) -> Result<ReturnedPaintRequest, ReturnedPaintError> {
-    let items_json = serde_json::to_value(&request.items)
-        .map_err(|_| ReturnedPaintError::StoreFailed)?;
+    let items_json =
+        serde_json::to_value(&request.items).map_err(|_| ReturnedPaintError::StoreFailed)?;
     let calculation = request.calculation.as_ref();
     let image_id = request.image.as_ref().map(|image| image.image_id.as_str());
     sqlx::query(
@@ -431,8 +430,8 @@ fn image_from_columns(
     match (image_id, image_name, image_mime, image_size_bytes) {
         (None, None, None, None) => Ok(None),
         (Some(image_id), Some(image_name), Some(image_mime), Some(image_size_bytes)) => {
-            let image_size_bytes = u64::try_from(image_size_bytes)
-                .map_err(|_| ReturnedPaintError::StoreFailed)?;
+            let image_size_bytes =
+                u64::try_from(image_size_bytes).map_err(|_| ReturnedPaintError::StoreFailed)?;
             Ok(Some(ReturnedPaintImage {
                 image_url: returned_paint_image_url(&image_id),
                 image_id,
@@ -446,8 +445,7 @@ fn image_from_columns(
 }
 
 fn parse_decimal(value: &str) -> Result<String, ReturnedPaintError> {
-    normalize_returned_paint_stored_decimal(value)
-        .map_err(|_| ReturnedPaintError::StoreFailed)
+    normalize_returned_paint_stored_decimal(value).map_err(|_| ReturnedPaintError::StoreFailed)
 }
 
 fn status_key(status: ReturnedPaintStatus) -> &'static str {

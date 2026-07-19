@@ -282,7 +282,10 @@ impl ProductionMapStorePort for MemoryProductionMapStore {
             return Err(ProductionMapError::StoreFailed);
         }
         if let Some(session) = &write.session
-            && matches!(session.status, OrderRunStatus::Active | OrderRunStatus::Paused)
+            && matches!(
+                session.status,
+                OrderRunStatus::Active | OrderRunStatus::Paused
+            )
             && let Some(qolip_code) = session
                 .payload_json
                 .get("qolip_code")

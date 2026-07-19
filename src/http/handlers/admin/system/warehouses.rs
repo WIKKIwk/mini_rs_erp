@@ -1,4 +1,4 @@
-use super::apparatus::{apparatus_warehouse, is_apparat_parent};
+use super::apparatus::{is_legacy_apparatus_parent, legacy_apparatus_warehouse};
 use super::*;
 use crate::core::admin::models::AdminWarehouse;
 use crate::core::warehouses::{
@@ -81,7 +81,8 @@ pub async fn warehouses(
         .map_err(warehouse_error)?;
     warehouses =
         crate::core::warehouses::merge_admin_warehouses(warehouses, mini_warehouses, fetch_limit);
-    if is_apparat_parent(query.parent.as_deref().unwrap_or("")) {
+    // Compatibility for released clients. New clients use GET /admin/apparatus.
+    if is_legacy_apparatus_parent(query.parent.as_deref().unwrap_or("")) {
         let remaining = fetch_limit.saturating_sub(warehouses.len()).max(1);
         let mut seen = warehouses
             .iter()
@@ -94,7 +95,7 @@ pub async fn warehouses(
             .map_err(apparatus_group_error)?
         {
             if seen.insert(name.to_lowercase()) {
-                warehouses.push(apparatus_warehouse(name));
+                warehouses.push(legacy_apparatus_warehouse(name));
             }
             if warehouses.len() >= fetch_limit {
                 break;
@@ -278,9 +279,9 @@ async fn validate_warehouse_assignee(
     input: &WarehouseAssignmentUpsert,
 ) -> Result<(), AdminError> {
     match input.principal_role {
-        PrincipalRole::Werka
-        | PrincipalRole::MaterialTaminotchi
-        | PrincipalRole::Qolipchi => Ok(()),
+        PrincipalRole::Werka | PrincipalRole::MaterialTaminotchi | PrincipalRole::Qolipchi => {
+            Ok(())
+        }
         PrincipalRole::Aparatchi => {
             let workers = state
                 .workers
@@ -387,9 +388,7 @@ fn warehouse_error(error: WarehouseError) -> AdminError {
         ),
         WarehouseError::HasActiveReservations(_) => (
             StatusCode::CONFLICT,
-            Json(AdminErrorResponse::new(
-                "warehouse_has_active_reservations",
-            )),
+            Json(AdminErrorResponse::new("warehouse_has_active_reservations")),
         ),
         WarehouseError::HasChildren => (
             StatusCode::CONFLICT,

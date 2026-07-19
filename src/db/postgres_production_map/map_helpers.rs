@@ -26,8 +26,7 @@ pub(super) async fn put_map_inner_tx(
     let mut stored_map = map.clone();
     stored_map.roll_count = map.roll_count.and_then(positive_erp_quantity);
     stored_map.width_mm = map.width_mm.and_then(positive_erp_quantity);
-    let payload =
-        serde_json::to_value(&stored_map).map_err(|_| ProductionMapError::StoreFailed)?;
+    let payload = serde_json::to_value(&stored_map).map_err(|_| ProductionMapError::StoreFailed)?;
     sqlx::query(
         "INSERT INTO mini_production_maps
             (id, product_code, title, code, order_number, roll_count, width_mm, map_json, updated_at)

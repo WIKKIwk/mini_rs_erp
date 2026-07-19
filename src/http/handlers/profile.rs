@@ -37,7 +37,9 @@ pub async fn profile(
         Method::GET => {
             let current = state.profiles.refresh(principal).await;
             state.sessions.update(&token, current.clone()).await;
-            Ok(Json(profile_payload(&state, &headers, current, &token).await))
+            Ok(Json(
+                profile_payload(&state, &headers, current, &token).await,
+            ))
         }
         Method::PUT => {
             let request: ProfileUpdateRequest = serde_json::from_slice(&body).map_err(|_| {
@@ -61,7 +63,9 @@ pub async fn profile(
                     )
                 })?;
             state.sessions.update(&token, current.clone()).await;
-            Ok(Json(profile_payload(&state, &headers, current, &token).await))
+            Ok(Json(
+                profile_payload(&state, &headers, current, &token).await,
+            ))
         }
         _ => Err((
             StatusCode::METHOD_NOT_ALLOWED,
@@ -140,7 +144,9 @@ pub async fn avatar_upload(
             )
         })?;
     state.sessions.update(&token, current.clone()).await;
-    Ok(Json(profile_payload(&state, &headers, current, &token).await))
+    Ok(Json(
+        profile_payload(&state, &headers, current, &token).await,
+    ))
 }
 
 async fn profile_payload(
@@ -151,19 +157,14 @@ async fn profile_payload(
 ) -> Value {
     let capabilities = state.admin.principal_capability_codes(&principal).await;
     let assigned_apparatus = state.admin.principal_assigned_apparatus(&principal).await;
-    let assigned_item_groups = state
-        .admin
-        .principal_assigned_item_groups(&principal)
-        .await;
+    let assigned_item_groups = state.admin.principal_assigned_item_groups(&principal).await;
     let assigned_warehouses = state
         .warehouses
         .assigned_warehouse_names(&principal)
         .await
         .unwrap_or_default();
-    let mut value =
-        serde_json::to_value(with_avatar_proxy(headers, principal, token)).unwrap_or_else(
-            |_| json!({}),
-        );
+    let mut value = serde_json::to_value(with_avatar_proxy(headers, principal, token))
+        .unwrap_or_else(|_| json!({}));
     if let Value::Object(object) = &mut value {
         object.insert("capabilities".to_string(), json!(capabilities));
         object.insert("assigned_apparatus".to_string(), json!(assigned_apparatus));
@@ -171,7 +172,10 @@ async fn profile_payload(
             "assigned_item_groups".to_string(),
             json!(assigned_item_groups),
         );
-        object.insert("assigned_warehouses".to_string(), json!(assigned_warehouses));
+        object.insert(
+            "assigned_warehouses".to_string(),
+            json!(assigned_warehouses),
+        );
     }
     value
 }

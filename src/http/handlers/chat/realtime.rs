@@ -1,4 +1,5 @@
 use std::time::Duration;
+use std::time::Instant;
 
 use axum::Json;
 use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
@@ -21,6 +22,37 @@ pub struct LiveQuery {
     ticket: String,
 }
 
+#[derive(Default, Deserialize)]
+pub struct SyncQuery {
+    cursor: Option<i64>,
+    limit: Option<usize>,
+}
+
+pub async fn sync(
+    State(state): State<AppState>,
+    method: Method,
+    headers: HeaderMap,
+    Query(query): Query<SyncQuery>,
+) -> Result<Json<crate::core::chat::ChatSyncPage>, ChatHttpError> {
+    if method != Method::GET {
+        return Err(http_error(
+            axum::http::StatusCode::METHOD_NOT_ALLOWED,
+            "method_not_allowed",
+        ));
+    }
+    let (_, principal) = authorize(&state, &headers).await?;
+    state
+        .chat
+        .sync(
+            &principal,
+            query.cursor.unwrap_or(0),
+            query.limit.unwrap_or(200),
+        )
+        .await
+        .map(Json)
+        .map_err(super::map_chat_error)
+}
+
 pub async fn socket_ticket(
     State(state): State<AppState>,
     method: Method,
@@ -33,10 +65,15 @@ pub async fn socket_ticket(
         ));
     }
     let (_, principal) = authorize(&state, &headers).await?;
-    let ticket = state.chat.hub().issue_ticket(principal).await;
+    let (ticket, expires_at_unix) = state
+        .chat
+        .issue_socket_ticket(principal)
+        .await
+        .map_err(super::map_chat_error)?;
     Ok(Json(serde_json::json!({
         "ticket": ticket,
         "expires_in_seconds": 30,
+        "expires_at_unix": expires_at_unix,
     })))
 }
 
@@ -54,10 +91,9 @@ pub async fn live(
     }
     let principal = state
         .chat
-        .hub()
-        .consume_ticket(&query.ticket)
+        .consume_socket_ticket(&query.ticket)
         .await
-        .ok_or_else(|| http_error(axum::http::StatusCode::UNAUTHORIZED, "chat_ticket_invalid"))?;
+        .map_err(|_| http_error(axum::http::StatusCode::UNAUTHORIZED, "chat_ticket_invalid"))?;
     Ok(ws
         .on_upgrade(move |socket| chat_socket(state, socket, principal))
         .into_response())
@@ -69,8 +105,20 @@ async fn chat_socket(state: AppState, mut socket: WebSocket, principal: Principa
         return;
     }
     let mut heartbeat = interval(CHAT_HEARTBEAT_INTERVAL);
+    let mut last_inbound = Instant::now();
     loop {
         tokio::select! {
+            incoming = socket.recv() => {
+                match incoming {
+                    Some(Ok(Message::Pong(_))) | Some(Ok(Message::Ping(_))) => {
+                        last_inbound = Instant::now();
+                    }
+                    Some(Ok(Message::Close(_))) | None | Some(Err(_)) => break,
+                    Some(Ok(_)) => {
+                        last_inbound = Instant::now();
+                    }
+                }
+            }
             event = receiver.recv() => {
                 match event {
                     Ok(event) => {
@@ -87,6 +135,9 @@ async fn chat_socket(state: AppState, mut socket: WebSocket, principal: Principa
                 }
             }
             _ = heartbeat.tick() => {
+                if last_inbound.elapsed() > CHAT_HEARTBEAT_INTERVAL * 3 {
+                    break;
+                }
                 if !matches!(
                     timeout(CHAT_SEND_TIMEOUT, socket.send(Message::Ping(Vec::new().into()))).await,
                     Ok(Ok(()))

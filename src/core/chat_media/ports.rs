@@ -1,5 +1,5 @@
-use std::pin::Pin;
 use std::path::Path;
+use std::pin::Pin;
 
 use async_trait::async_trait;
 use bytes::Bytes;
@@ -8,9 +8,9 @@ use futures_core::Stream;
 use super::{
     ChatMediaCreateResult, ChatMediaMultipartUpload, ChatMediaProcessedContent,
     ChatMediaProcessedFiles, ChatMediaProcessingWorkItem, ChatMediaReadyInput,
-    ChatMediaStorageDownload, ChatMediaStorageObject, ChatMediaStoragePart,
-    ChatMediaStorageUpload, ChatMediaStoredContent, ChatMediaUploadRecord,
-    ChatMediaUploadedChunk, NewChatMediaUpload, NewChatMediaUploadedChunk,
+    ChatMediaStorageDownload, ChatMediaStorageObject, ChatMediaStoragePart, ChatMediaStorageUpload,
+    ChatMediaStoredContent, ChatMediaUploadRecord, ChatMediaUploadedChunk, NewChatMediaUpload,
+    NewChatMediaUploadedChunk,
 };
 use crate::core::auth::models::Principal;
 
@@ -60,6 +60,8 @@ pub enum ChatMediaError {
     TooLarge,
     #[error("chat video exceeds the duration limit")]
     DurationTooLong,
+    #[error("chat audio exceeds the duration limit")]
+    AudioDurationTooLong,
     #[error("chat media upload was not found")]
     NotFound,
     #[error("chat media access is forbidden")]
@@ -186,6 +188,24 @@ pub trait ChatMediaRepository: Send + Sync {
         principal: &Principal,
         media_id: &str,
     ) -> Result<ChatMediaUploadRecord, ChatMediaError>;
+
+    async fn create_access_ticket(
+        &self,
+        _principal: &Principal,
+        _media_id: &str,
+        _ticket_hash: &[u8],
+        _expires_at_unix: i64,
+    ) -> Result<(), ChatMediaError> {
+        Err(ChatMediaError::Unavailable)
+    }
+
+    async fn media_for_access_ticket(
+        &self,
+        _media_id: &str,
+        _ticket_hash: &[u8],
+    ) -> Result<ChatMediaUploadRecord, ChatMediaError> {
+        Err(ChatMediaError::Unavailable)
+    }
 }
 
 #[async_trait]
@@ -260,14 +280,13 @@ pub trait ChatMediaStorage: Send + Sync {
         range: ChatMediaRangeRequest,
     ) -> Result<ChatMediaStoredStream, ChatMediaStorageError> {
         let content = self.read_object(object_key).await?;
-        let total_size_bytes = i64::try_from(content.bytes.len())
-            .map_err(|_| ChatMediaStorageError::SizeMismatch)?;
+        let total_size_bytes =
+            i64::try_from(content.bytes.len()).map_err(|_| ChatMediaStorageError::SizeMismatch)?;
         let (start_byte, end_byte_inclusive, partial) =
             resolve_media_range(range, total_size_bytes)?;
-        let start = usize::try_from(start_byte)
-            .map_err(|_| ChatMediaStorageError::SizeMismatch)?;
-        let end = usize::try_from(end_byte_inclusive)
-            .map_err(|_| ChatMediaStorageError::SizeMismatch)?;
+        let start = usize::try_from(start_byte).map_err(|_| ChatMediaStorageError::SizeMismatch)?;
+        let end =
+            usize::try_from(end_byte_inclusive).map_err(|_| ChatMediaStorageError::SizeMismatch)?;
         let bytes = content.bytes.slice(start..=end);
         Ok(ChatMediaStoredStream {
             stream: Box::pin(async_stream::stream! {
@@ -365,12 +384,16 @@ pub enum ChatMediaProcessingError {
     InvalidContent,
     #[error("uploaded video exceeds the duration limit")]
     DurationTooLong,
+    #[error("uploaded audio exceeds the duration limit")]
+    AudioDurationTooLong,
     #[error("uploaded video exceeds the resolution limit")]
     ResolutionTooLarge,
     #[error("uploaded video exceeds the frame-rate limit")]
     FrameRateTooHigh,
     #[error("processed video exceeds the output size limit")]
     ProcessedTooLarge,
+    #[error("processed audio exceeds the output size limit")]
+    ProcessedAudioTooLarge,
     #[error("media processing failed")]
     ProcessingFailed,
 }

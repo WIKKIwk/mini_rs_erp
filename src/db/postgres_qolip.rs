@@ -18,11 +18,11 @@ use self::catalog::{
     load_product_spec, load_product_spec_by_qolip_code, load_products, save_product_spec,
 };
 use self::cell_qr::{load_cell_qr_by_payload, save_cell_qr};
+pub(crate) use self::checkouts::save_checkout_tx;
 use self::checkouts::{
     load_checkout_by_id, load_checkouts, load_open_checkouts_for_worker,
     return_checkout_to_location, save_checkout,
 };
-pub(crate) use self::checkouts::save_checkout_tx;
 use self::locations::{
     load_location_by_id, load_location_by_qolip_code, load_locations, move_location_to_cell,
     save_location,

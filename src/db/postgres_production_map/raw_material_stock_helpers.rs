@@ -3,7 +3,8 @@ use std::collections::{BTreeMap, BTreeSet};
 use sqlx::{Postgres, Transaction};
 
 use crate::core::production_map::{
-    ProductionMapError, QueueActionActor, RawMaterialStockTransition, RawMaterialStockTransitionKind,
+    ProductionMapError, QueueActionActor, RawMaterialStockTransition,
+    RawMaterialStockTransitionKind,
 };
 use crate::db::postgres_raw_material_events::{
     RawMaterialEventDraft, insert_raw_material_event_tx,
