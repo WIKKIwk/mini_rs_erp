@@ -85,6 +85,16 @@ pub struct QolipBlockUpsert {
 }
 
 #[derive(Debug, Deserialize)]
+pub struct QolipBlockUpdate {
+    #[serde(default)]
+    pub(super) warehouse: String,
+    #[serde(default)]
+    pub(super) block: String,
+    #[serde(default)]
+    pub(super) new_block: String,
+}
+
+#[derive(Debug, Deserialize)]
 pub struct QolipCheckoutsQuery {
     #[serde(default)]
     pub(super) block: Option<String>,
@@ -239,6 +249,13 @@ pub(super) fn method_not_allowed() -> (StatusCode, Json<QolipErrorResponse>) {
 pub(super) fn bad_request(error: &'static str) -> (StatusCode, Json<QolipErrorResponse>) {
     (
         StatusCode::BAD_REQUEST,
+        Json(QolipErrorResponse::new(error)),
+    )
+}
+
+pub(super) fn conflict(error: &'static str) -> (StatusCode, Json<QolipErrorResponse>) {
+    (
+        StatusCode::CONFLICT,
         Json(QolipErrorResponse::new(error)),
     )
 }

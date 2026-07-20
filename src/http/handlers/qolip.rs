@@ -10,14 +10,14 @@ use crate::core::qolip::{
     QolipBlock, QolipCellQrInput, QolipCheckoutCreate, QolipCheckoutReturn, QolipError,
     QolipLocationMove, QolipLocationUpsert, QolipProductSpecDelete, QolipProductSpecUpsert,
 };
-use crate::core::warehouses::WarehouseUpsert;
+use crate::core::warehouses::{WarehouseDeleteRequest, WarehouseUpsert};
 
 mod support;
 
 use self::support::*;
 pub use self::support::{
-    QolipBlockUpsert, QolipCellQrLookupQuery, QolipCellQrPrintRequest, QolipCheckoutsQuery,
-    QolipCodeQrPrintRequest, QolipErrorResponse, QolipSearchQuery,
+    QolipBlockUpdate, QolipBlockUpsert, QolipCellQrLookupQuery, QolipCellQrPrintRequest,
+    QolipCheckoutsQuery, QolipCodeQrPrintRequest, QolipErrorResponse, QolipSearchQuery,
 };
 
 pub async fn blocks(
@@ -26,7 +26,11 @@ pub async fn blocks(
     headers: HeaderMap,
     body: Bytes,
 ) -> Result<Json<serde_json::Value>, (StatusCode, Json<QolipErrorResponse>)> {
-    if method != Method::GET && method != Method::POST {
+    if method != Method::GET
+        && method != Method::POST
+        && method != Method::PUT
+        && method != Method::DELETE
+    {
         return Err(method_not_allowed());
     }
     let principal = authenticated_principal(&state, &headers).await?;
@@ -80,7 +84,139 @@ pub async fn blocks(
                 "block": block,
             })))
         }
+        Method::PUT => {
+            let input: QolipBlockUpdate =
+                serde_json::from_slice(&body).map_err(|_| bad_request("invalid_json"))?;
+            let new_block = input.new_block.trim();
+            if new_block.is_empty() {
+                return Err(bad_request("block_required"));
+            }
+            let is_admin = state
+                .admin
+                .principal_has_capability(&principal, Capability::AdminAccess)
+                .await;
+            let current = managed_qolip_block(&state, &principal, &input.block, is_admin).await?;
+            ensure_qolip_block_is_empty(&state, &principal, &current, is_admin).await?;
+            let warehouse = accessible_qolip_warehouse(&state, &principal, &input.warehouse).await?;
+
+            if !current.name.trim().eq_ignore_ascii_case(new_block) {
+                let already_exists = state
+                    .warehouses
+                    .warehouses(new_block, "", 200)
+                    .await
+                    .map_err(|_| qolip_error(QolipError::StoreFailed))?
+                    .into_iter()
+                    .any(|item| item.warehouse.trim().eq_ignore_ascii_case(new_block));
+                if already_exists {
+                    return Err(conflict("block_exists"));
+                }
+            }
+
+            let saved = state
+                .warehouses
+                .upsert_warehouse(WarehouseUpsert {
+                    warehouse: new_block.to_string(),
+                    company: String::new(),
+                    is_group: false,
+                    parent_warehouse: warehouse,
+                })
+                .await
+                .map_err(|_| qolip_error(QolipError::StoreFailed))?;
+
+            if !current.name.trim().eq_ignore_ascii_case(saved.warehouse.trim())
+                && state
+                    .warehouses
+                    .delete_warehouse(WarehouseDeleteRequest {
+                        warehouse: current.name.clone(),
+                        delete_products: false,
+                    })
+                    .await
+                    .is_err()
+            {
+                let _ = state
+                    .warehouses
+                    .delete_warehouse(WarehouseDeleteRequest {
+                        warehouse: saved.warehouse.clone(),
+                        delete_products: false,
+                    })
+                    .await;
+                return Err(conflict("block_in_use"));
+            }
+
+            Ok(Json(serde_json::json!({
+                "ok": true,
+                "block": QolipBlock {
+                    name: saved.warehouse,
+                    warehouse: saved.parent_warehouse,
+                },
+            })))
+        }
+        Method::DELETE => {
+            let input: QolipBlockUpsert =
+                serde_json::from_slice(&body).map_err(|_| bad_request("invalid_json"))?;
+            let is_admin = state
+                .admin
+                .principal_has_capability(&principal, Capability::AdminAccess)
+                .await;
+            let current = managed_qolip_block(&state, &principal, &input.block, is_admin).await?;
+            ensure_qolip_block_is_empty(&state, &principal, &current, is_admin).await?;
+            state
+                .warehouses
+                .delete_warehouse(WarehouseDeleteRequest {
+                    warehouse: current.name,
+                    delete_products: false,
+                })
+                .await
+                .map_err(|_| conflict("block_in_use"))?;
+            Ok(Json(serde_json::json!({"ok": true})))
+        }
         _ => Err(method_not_allowed()),
+    }
+}
+
+async fn managed_qolip_block(
+    state: &AppState,
+    principal: &crate::core::auth::models::Principal,
+    block: &str,
+    is_admin: bool,
+) -> Result<QolipBlock, (StatusCode, Json<QolipErrorResponse>)> {
+    let block = block.trim();
+    if block.is_empty() {
+        return Err(bad_request("block_required"));
+    }
+    state
+        .qolip
+        .blocks_for_principal(principal, is_admin)
+        .await
+        .map_err(qolip_error)?
+        .into_iter()
+        .find(|item| item.name.trim().eq_ignore_ascii_case(block))
+        .ok_or_else(forbidden)
+}
+
+async fn ensure_qolip_block_is_empty(
+    state: &AppState,
+    principal: &crate::core::auth::models::Principal,
+    block: &QolipBlock,
+    is_admin: bool,
+) -> Result<(), (StatusCode, Json<QolipErrorResponse>)> {
+    let locations = state
+        .qolip
+        .locations(&block.name)
+        .await
+        .map_err(qolip_error)?;
+    if !locations.is_empty() {
+        return Err(conflict("block_in_use"));
+    }
+    let open_checkouts = state
+        .qolip
+        .checkouts(principal, is_admin, Some(&block.name), "open", 1)
+        .await
+        .map_err(qolip_error)?;
+    if open_checkouts.is_empty() {
+        Ok(())
+    } else {
+        Err(conflict("block_in_use"))
     }
 }
 
