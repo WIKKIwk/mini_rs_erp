@@ -51,6 +51,22 @@ pub trait AdminReadPort: Send + Sync {
         offset: usize,
     ) -> Result<Vec<SupplierItem>, AdminPortError>;
 
+    async fn item_uoms(&self) -> Result<Vec<String>, AdminPortError> {
+        const PAGE_SIZE: usize = 500;
+        let mut uoms = Vec::new();
+        let mut offset = 0;
+        loop {
+            let page = self.items_page("", PAGE_SIZE, offset).await?;
+            let page_len = page.len();
+            uoms.extend(page.into_iter().map(|item| item.uom));
+            if page_len < PAGE_SIZE {
+                break;
+            }
+            offset += page_len;
+        }
+        Ok(uoms)
+    }
+
     async fn items_page_by_group(
         &self,
         group: &str,

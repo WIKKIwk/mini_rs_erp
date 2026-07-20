@@ -14,7 +14,7 @@ pub use customers::{
     material_taminotchi_code_regenerate, material_taminotchi_detail,
     material_taminotchi_item_groups, material_taminotchi_phone, material_taminotchilar,
 };
-pub use items::item_detail;
+pub use items::{item_detail, item_uoms};
 pub use production_maps::{
     production_map_audit, production_map_closed_orders, production_map_completed_orders,
     production_map_completion_request_decision, production_map_completion_request_decisions,

@@ -465,6 +465,41 @@ async fn admin_item_create_returns_conflict_for_duplicate_code() {
 }
 
 #[tokio::test]
+async fn admin_item_uoms_returns_catalog_values_and_is_admin_only() {
+    let state = test_state();
+    let admin_token = session(&state, PrincipalRole::Admin).await;
+    let material_token = session_for(
+        &state,
+        PrincipalRole::MaterialTaminotchi,
+        "material-item-uoms",
+    )
+    .await;
+    let router = build_router(state);
+
+    let response = router
+        .clone()
+        .oneshot(request(
+            "GET",
+            "/v1/mobile/admin/items/uoms",
+            &admin_token,
+        ))
+        .await
+        .expect("UOM response");
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(json_body(response).await, serde_json::json!(["Kg"]));
+
+    let forbidden = router
+        .oneshot(request(
+            "GET",
+            "/v1/mobile/admin/items/uoms",
+            &material_token,
+        ))
+        .await
+        .expect("forbidden response");
+    assert_eq!(forbidden.status(), StatusCode::FORBIDDEN);
+}
+
+#[tokio::test]
 async fn admin_item_detail_and_update_are_admin_only() {
     let state = test_state();
     let admin_token = session(&state, PrincipalRole::Admin).await;

@@ -5,6 +5,23 @@ pub struct AdminItemDetailQuery {
     pub code: Option<String>,
 }
 
+pub async fn item_uoms(
+    State(state): State<AppState>,
+    method: Method,
+    headers: HeaderMap,
+) -> Result<Response, AdminError> {
+    authorize_capability(&state, &headers, Capability::AdminAccess).await?;
+    if method != Method::GET {
+        return Err(method_not_allowed());
+    }
+    state
+        .admin
+        .item_uoms()
+        .await
+        .map(json_response)
+        .map_err(|_| server_error("admin item UOMs failed"))
+}
+
 pub async fn item_detail(
     State(state): State<AppState>,
     method: Method,

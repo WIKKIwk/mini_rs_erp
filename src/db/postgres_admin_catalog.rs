@@ -101,6 +101,19 @@ impl AdminReadPort for PostgresAdminCatalogStore {
         .map_err(|_| AdminPortError::LookupFailed)
     }
 
+    async fn item_uoms(&self) -> Result<Vec<String>, AdminPortError> {
+        sqlx::query_scalar::<_, String>(
+            "SELECT min(btrim(uom)) AS uom
+             FROM mini_items
+             WHERE btrim(uom) <> ''
+             GROUP BY lower(btrim(uom))
+             ORDER BY lower(min(btrim(uom)))",
+        )
+        .fetch_all(&self.pool)
+        .await
+        .map_err(|_| AdminPortError::LookupFailed)
+    }
+
     async fn items_page_by_group(
         &self,
         group: &str,

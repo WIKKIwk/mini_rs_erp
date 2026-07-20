@@ -1,9 +1,32 @@
 use super::super::helpers::*;
 use super::super::*;
 
+use std::collections::HashSet;
+
 use crate::core::admin::models::{AdminItemGroup, AdminWarehouse};
 
 impl AdminService {
+    pub async fn item_uoms(&self) -> Result<Vec<String>, AdminPortError> {
+        let mut catalog_uoms = self.read_port()?.item_uoms().await?;
+        catalog_uoms.sort_by_key(|value| value.trim().to_lowercase());
+
+        let default_uom = self.settings().await?.default_uom;
+        let default_uom = if default_uom.trim().is_empty() {
+            "Kg"
+        } else {
+            default_uom.trim()
+        };
+        let mut seen = HashSet::new();
+        let mut result = Vec::new();
+        for value in std::iter::once(default_uom.to_string()).chain(catalog_uoms) {
+            let value = value.trim();
+            if !value.is_empty() && seen.insert(value.to_lowercase()) {
+                result.push(value.to_string());
+            }
+        }
+        Ok(result)
+    }
+
     pub async fn item_detail(&self, item_code: &str) -> Result<AdminItemDetail, AdminPortError> {
         let item_code = item_code.trim();
         if item_code.is_empty() {
