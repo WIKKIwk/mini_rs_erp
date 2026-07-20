@@ -123,6 +123,7 @@ pub(super) struct FakeReceiptStore {
 #[derive(Default)]
 struct MemoryRpsBatchStore {
     batches: Mutex<BTreeMap<String, RpsBatchSession>>,
+    history: Mutex<BTreeMap<String, RpsBatchSession>>,
 }
 
 #[async_trait]
@@ -137,6 +138,44 @@ impl RpsBatchStorePort for MemoryRpsBatchStore {
             .unwrap()
             .insert(batch.owner_key.trim().to_string(), batch);
         Ok(())
+    }
+
+    async fn complete(&self, batch: RpsBatchSession) -> Result<(), RpsBatchStoreError> {
+        self.batches
+            .lock()
+            .unwrap()
+            .insert(batch.owner_key.trim().to_string(), batch.clone());
+        self.history
+            .lock()
+            .unwrap()
+            .insert(
+                format!("{}:{}", batch.owner_key.trim(), batch.id.trim()),
+                batch,
+            );
+        Ok(())
+    }
+
+    async fn list_completed(
+        &self,
+        owner_key: &str,
+        limit: usize,
+    ) -> Result<Vec<RpsBatchSession>, RpsBatchStoreError> {
+        let mut batches = self
+            .history
+            .lock()
+            .unwrap()
+            .values()
+            .filter(|batch| batch.owner_key == owner_key.trim())
+            .cloned()
+            .collect::<Vec<_>>();
+        batches.sort_by(|left, right| {
+            right
+                .updated_at
+                .cmp(&left.updated_at)
+                .then_with(|| right.id.cmp(&left.id))
+        });
+        batches.truncate(limit.min(100));
+        Ok(batches)
     }
 }
 

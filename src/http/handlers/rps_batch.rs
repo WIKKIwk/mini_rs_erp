@@ -2,9 +2,9 @@ use std::sync::Arc;
 
 use axum::Json;
 use axum::body::Bytes;
-use axum::extract::State;
+use axum::extract::{Query, State};
 use axum::http::{HeaderMap, Method, StatusCode};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 use crate::app::AppState;
 use crate::core::auth::models::{Principal, PrincipalRole};
@@ -51,6 +51,26 @@ pub async fn state(
     let response = state
         .rps_batch
         .state(&principal)
+        .await
+        .map_err(batch_error)?;
+    Ok(Json(
+        serde_json::to_value(response).unwrap_or_else(|_| serde_json::json!({"ok": false})),
+    ))
+}
+
+pub async fn history(
+    State(state): State<AppState>,
+    method: Method,
+    headers: HeaderMap,
+    Query(query): Query<RpsBatchHistoryQuery>,
+) -> Result<Json<serde_json::Value>, (StatusCode, Json<RpsBatchErrorResponse>)> {
+    if method != Method::GET {
+        return Err(method_not_allowed());
+    }
+    let principal = authenticated_principal(&state, &headers).await?;
+    let response = state
+        .rps_batch
+        .history(&principal, query.limit.unwrap_or(50))
         .await
         .map_err(batch_error)?;
     Ok(Json(
@@ -365,6 +385,11 @@ pub struct RpsBatchErrorResponse {
     pub ok: bool,
     pub error: &'static str,
     pub detail: String,
+}
+
+#[derive(Debug, Default, Deserialize)]
+pub struct RpsBatchHistoryQuery {
+    pub limit: Option<usize>,
 }
 
 impl RpsBatchErrorResponse {

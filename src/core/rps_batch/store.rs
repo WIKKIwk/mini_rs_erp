@@ -189,6 +189,49 @@ impl RpsBatchStorePort for RpsBatchLmdbStore {
             .map_err(lmdb_store_error)?;
         wtxn.commit().map_err(lmdb_store_error)
     }
+
+    async fn complete(&self, batch: RpsBatchSession) -> Result<(), RpsBatchStoreError> {
+        let _guard = self.write_lock.lock().await;
+        let mut wtxn = self.env.write_txn().map_err(lmdb_store_error)?;
+        self.db
+            .put(&mut wtxn, batch.owner_key.trim().as_bytes(), &batch)
+            .map_err(lmdb_store_error)?;
+        self.db
+            .put(&mut wtxn, history_key(&batch).as_bytes(), &batch)
+            .map_err(lmdb_store_error)?;
+        wtxn.commit().map_err(lmdb_store_error)
+    }
+
+    async fn list_completed(
+        &self,
+        owner_key: &str,
+        limit: usize,
+    ) -> Result<Vec<RpsBatchSession>, RpsBatchStoreError> {
+        let prefix = format!("history:{}:", owner_key.trim());
+        let rtxn = self.env.read_txn().map_err(lmdb_store_error)?;
+        let mut batches = self
+            .db
+            .iter(&rtxn)
+            .map_err(lmdb_store_error)?
+            .filter_map(|entry| match entry {
+                Ok((key, batch)) if key.starts_with(prefix.as_bytes()) => Some(Ok(batch)),
+                Ok(_) => None,
+                Err(error) => Some(Err(lmdb_store_error(error))),
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        batches.sort_by(|left, right| {
+            right
+                .updated_at
+                .cmp(&left.updated_at)
+                .then_with(|| right.id.cmp(&left.id))
+        });
+        batches.truncate(limit.min(100));
+        Ok(batches)
+    }
+}
+
+fn history_key(batch: &RpsBatchSession) -> String {
+    format!("history:{}:{}", batch.owner_key.trim(), batch.id.trim())
 }
 
 fn lmdb_app_error(error: heed::Error) -> AppError {
@@ -220,6 +263,32 @@ mod tests {
         store.put(batch.clone()).await.expect("put");
 
         assert_eq!(store.get("werka:W-1").await.expect("get"), Some(batch));
+    }
+
+    #[tokio::test]
+    async fn lmdb_batch_store_completes_and_lists_history() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let store = RpsBatchLmdbStore::open(dir.path().join("batch.lmdb"), 1024 * 1024)
+            .expect("lmdb store");
+        let batch = RpsBatchSession {
+            id: "batch-1".to_string(),
+            owner_key: "material_taminotchi:M-1".to_string(),
+            owner_role: "material_taminotchi".to_string(),
+            owner_ref: "M-1".to_string(),
+            updated_at: "2026-07-20T05:00:00Z".to_string(),
+            ..RpsBatchSession::default()
+        };
+
+        store.complete(batch.clone()).await.expect("complete");
+        store.complete(batch.clone()).await.expect("idempotent complete");
+
+        assert_eq!(
+            store
+                .list_completed("material_taminotchi:M-1", 50)
+                .await
+                .expect("history"),
+            vec![batch]
+        );
     }
 
     #[test]

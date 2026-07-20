@@ -108,6 +108,7 @@ pub(super) fn routes() -> Router<AppState> {
         )
         .route("/v1/mobile/rps/batch/start", any(rps_batch::start))
         .route("/v1/mobile/rps/batch/state", any(rps_batch::state))
+        .route("/v1/mobile/rps/batch/history", any(rps_batch::history))
         .route("/v1/mobile/rps/batch/stop", any(rps_batch::stop))
         .route("/v1/mobile/rps/batch/print", any(rps_batch::print))
         .route(

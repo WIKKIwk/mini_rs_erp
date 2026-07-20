@@ -58,6 +58,7 @@ async fn rps_batch_start_state_stop_is_persisted_by_rs() {
     assert_eq!(current_body["batch"]["item_name"], "Green Tea");
 
     let stopped = router
+        .clone()
         .oneshot(request("POST", "/v1/mobile/rps/batch/stop", &token, ""))
         .await
         .expect("stop response");
@@ -148,6 +149,7 @@ async fn rps_batch_print_uses_active_rs_batch_and_transaction_flow() {
     assert!(!prints[0]["epc"].as_str().unwrap_or_default().is_empty());
 
     let stopped = router
+        .clone()
         .oneshot(request("POST", "/v1/mobile/rps/batch/stop", &token, ""))
         .await
         .expect("stop response");
@@ -156,6 +158,24 @@ async fn rps_batch_print_uses_active_rs_batch_and_transaction_flow() {
     assert_eq!(
         stopped_body["batch"]["prints"].as_array().map(Vec::len),
         Some(1)
+    );
+
+    let history = router
+        .oneshot(request(
+            "GET",
+            "/v1/mobile/rps/batch/history?limit=50",
+            &token,
+            "",
+        ))
+        .await
+        .expect("history response");
+    assert_eq!(history.status(), StatusCode::OK);
+    let history_body = json_body(history).await;
+    assert_eq!(history_body["batches"].as_array().map(Vec::len), Some(1));
+    assert_eq!(history_body["batches"][0]["id"], "batch-print-1");
+    assert_eq!(
+        history_body["batches"][0]["prints"][0]["epc"],
+        stopped_body["batch"]["prints"][0]["epc"]
     );
 }
 

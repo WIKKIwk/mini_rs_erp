@@ -145,6 +145,22 @@ mod tests {
     }
 
     #[test]
+    fn rps_batch_history_migration_is_additive_and_owner_scoped() {
+        let migration = POSTGRES_MIGRATIONS
+            .iter()
+            .find(|(version, _)| *version == "0021_rps_batch_history")
+            .map(|(_, sql)| sql.to_lowercase())
+            .expect("RPS batch history migration");
+
+        assert!(migration.contains("create table if not exists mini_rps_batch_history"));
+        assert!(migration.contains("primary key (owner_key, batch_id)"));
+        assert!(migration.contains("owner_key text not null"));
+        assert!(migration.contains("payload_json jsonb not null"));
+        assert!(!migration.contains("delete from"));
+        assert!(!migration.contains("drop table"));
+    }
+
+    #[test]
     fn applied_chat_delivery_migration_checksum_is_immutable() {
         let migration = POSTGRES_MIGRATIONS
             .iter()

@@ -89,6 +89,18 @@ pub struct RpsBatchResponse {
     pub batch: RpsBatchSession,
 }
 
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct RpsBatchHistoryResponse {
+    pub ok: bool,
+    pub batches: Vec<RpsBatchSession>,
+}
+
+impl RpsBatchHistoryResponse {
+    pub fn new(batches: Vec<RpsBatchSession>) -> Self {
+        Self { ok: true, batches }
+    }
+}
+
 impl RpsBatchResponse {
     pub fn new(batch: RpsBatchSession) -> Self {
         Self { ok: true, batch }

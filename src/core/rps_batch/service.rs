@@ -7,8 +7,8 @@ use crate::core::auth::models::{Principal, PrincipalRole};
 use crate::core::gscale::models::{MaterialReceiptPrintRequest, MaterialReceiptPrintResponse};
 
 use super::models::{
-    RpsBatchPrintEntry, RpsBatchPrintRequest, RpsBatchResponse, RpsBatchSession,
-    RpsBatchStartRequest,
+    RpsBatchHistoryResponse, RpsBatchPrintEntry, RpsBatchPrintRequest, RpsBatchResponse,
+    RpsBatchSession, RpsBatchStartRequest,
 };
 use super::ports::{RpsBatchStoreError, RpsBatchStorePort};
 
@@ -73,8 +73,25 @@ impl RpsBatchService {
             .unwrap_or_else(|| owner.inactive_batch());
         batch.active = false;
         batch.updated_at = now_string();
-        self.store.put(batch.clone()).await?;
+        if !batch.id.is_empty() {
+            self.store.complete(batch.clone()).await?;
+        } else {
+            self.store.put(batch.clone()).await?;
+        }
         Ok(RpsBatchResponse::new(batch))
+    }
+
+    pub async fn history(
+        &self,
+        principal: &Principal,
+        limit: usize,
+    ) -> Result<RpsBatchHistoryResponse, RpsBatchServiceError> {
+        let owner = BatchOwner::from_principal(principal);
+        let batches = self
+            .store
+            .list_completed(&owner.key, limit.clamp(1, 100))
+            .await?;
+        Ok(RpsBatchHistoryResponse::new(batches))
     }
 
     pub async fn record_late_error(
@@ -94,7 +111,11 @@ impl RpsBatchService {
         batch.last_error = detail.into();
         batch.last_error_at = now_string();
         batch.updated_at = batch.last_error_at.clone();
-        self.store.put(batch).await?;
+        if batch.active {
+            self.store.put(batch).await?;
+        } else {
+            self.store.complete(batch).await?;
+        }
         Ok(true)
     }
 
@@ -135,7 +156,11 @@ impl RpsBatchService {
             printed_at: printed_at.clone(),
         });
         batch.updated_at = printed_at;
-        self.store.put(batch).await?;
+        if batch.active {
+            self.store.put(batch).await?;
+        } else {
+            self.store.complete(batch).await?;
+        }
         Ok(true)
     }
 
