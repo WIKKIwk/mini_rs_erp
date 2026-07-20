@@ -1,22 +1,29 @@
 use std::sync::Arc;
 
+use tokio::sync::Mutex;
+
 use crate::core::auth::models::{Principal, PrincipalRole};
 
-use crate::core::gscale::models::MaterialReceiptPrintRequest;
+use crate::core::gscale::models::{MaterialReceiptPrintRequest, MaterialReceiptPrintResponse};
 
 use super::models::{
-    RpsBatchPrintRequest, RpsBatchResponse, RpsBatchSession, RpsBatchStartRequest,
+    RpsBatchPrintEntry, RpsBatchPrintRequest, RpsBatchResponse, RpsBatchSession,
+    RpsBatchStartRequest,
 };
 use super::ports::{RpsBatchStoreError, RpsBatchStorePort};
 
 #[derive(Clone)]
 pub struct RpsBatchService {
     store: Arc<dyn RpsBatchStorePort>,
+    mutation_lock: Arc<Mutex<()>>,
 }
 
 impl RpsBatchService {
     pub fn new(store: Arc<dyn RpsBatchStorePort>) -> Self {
-        Self { store }
+        Self {
+            store,
+            mutation_lock: Arc::new(Mutex::new(())),
+        }
     }
 
     pub async fn start(
@@ -24,7 +31,16 @@ impl RpsBatchService {
         principal: &Principal,
         request: RpsBatchStartRequest,
     ) -> Result<RpsBatchResponse, RpsBatchServiceError> {
+        let _guard = self.mutation_lock.lock().await;
         let owner = BatchOwner::from_principal(principal);
+        if self
+            .store
+            .get(&owner.key)
+            .await?
+            .is_some_and(|batch| batch.active)
+        {
+            return Err(RpsBatchServiceError::BatchAlreadyActive);
+        }
         let now = now_string();
         let batch = normalize_start(owner, request, now)?;
         self.store.put(batch.clone()).await?;
@@ -48,6 +64,7 @@ impl RpsBatchService {
         &self,
         principal: &Principal,
     ) -> Result<RpsBatchResponse, RpsBatchServiceError> {
+        let _guard = self.mutation_lock.lock().await;
         let owner = BatchOwner::from_principal(principal);
         let mut batch = self
             .store
@@ -63,24 +80,70 @@ impl RpsBatchService {
     pub async fn record_late_error(
         &self,
         principal: &Principal,
+        batch_id: &str,
         detail: impl Into<String>,
-    ) -> Result<(), RpsBatchServiceError> {
+    ) -> Result<bool, RpsBatchServiceError> {
+        let _guard = self.mutation_lock.lock().await;
         let owner = BatchOwner::from_principal(principal);
         let Some(mut batch) = self.store.get(&owner.key).await? else {
-            return Ok(());
+            return Ok(false);
         };
+        if batch.id != batch_id {
+            return Ok(false);
+        }
         batch.last_error = detail.into();
         batch.last_error_at = now_string();
         batch.updated_at = batch.last_error_at.clone();
         self.store.put(batch).await?;
-        Ok(())
+        Ok(true)
+    }
+
+    pub async fn record_print(
+        &self,
+        principal: &Principal,
+        batch_id: &str,
+        response: &MaterialReceiptPrintResponse,
+    ) -> Result<bool, RpsBatchServiceError> {
+        let _guard = self.mutation_lock.lock().await;
+        let owner = BatchOwner::from_principal(principal);
+        let Some(mut batch) = self.store.get(&owner.key).await? else {
+            return Ok(false);
+        };
+        if batch.id != batch_id {
+            return Ok(false);
+        }
+        if !response.epc.trim().is_empty()
+            && batch
+                .prints
+                .iter()
+                .any(|entry| entry.epc == response.epc)
+        {
+            return Ok(true);
+        }
+        let printed_at = now_string();
+        batch.prints.push(RpsBatchPrintEntry {
+            epc: response.epc.clone(),
+            draft_name: response.draft_name.clone(),
+            status: response.status.clone(),
+            qty: response.qty,
+            net_qty: response.net_qty,
+            gross_qty: response.gross_qty,
+            unit: response.unit.clone(),
+            printer: response.printer.clone(),
+            print_mode: response.print_mode.clone(),
+            print_count: response.print_count,
+            printed_at: printed_at.clone(),
+        });
+        batch.updated_at = printed_at;
+        self.store.put(batch).await?;
+        Ok(true)
     }
 
     pub async fn material_receipt_request(
         &self,
         principal: &Principal,
         request: RpsBatchPrintRequest,
-    ) -> Result<MaterialReceiptPrintRequest, RpsBatchServiceError> {
+    ) -> Result<(String, MaterialReceiptPrintRequest), RpsBatchServiceError> {
         let owner = BatchOwner::from_principal(principal);
         let Some(batch) = self.store.get(&owner.key).await? else {
             return Err(RpsBatchServiceError::BatchNotActive);
@@ -88,7 +151,7 @@ impl RpsBatchService {
         if !batch.active {
             return Err(RpsBatchServiceError::BatchNotActive);
         }
-        Ok(batch.material_receipt_request(request))
+        Ok((batch.id.clone(), batch.material_receipt_request(request)))
     }
 }
 
@@ -152,6 +215,7 @@ fn normalize_start(
         tare_kg: positive_or_zero(request.tare_kg),
         last_error: String::new(),
         last_error_at: String::new(),
+        prints: Vec::new(),
         created_at: now.clone(),
         updated_at: now,
     })
@@ -221,6 +285,8 @@ pub enum RpsBatchServiceError {
     InvalidInput(String),
     #[error("batch not active")]
     BatchNotActive,
+    #[error("batch already active")]
+    BatchAlreadyActive,
     #[error("store failed")]
     StoreFailed,
 }

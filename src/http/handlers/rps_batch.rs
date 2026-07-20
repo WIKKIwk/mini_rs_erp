@@ -89,7 +89,7 @@ pub async fn print(
     let principal = authenticated_principal(&state, &headers).await?;
     let request: RpsBatchPrintRequest =
         serde_json::from_slice(&body).map_err(|_| bad_request("invalid_json", "invalid json"))?;
-    let mut material_request = state
+    let (batch_id, mut material_request) = state
         .rps_batch
         .material_receipt_request(&principal, request)
         .await
@@ -99,15 +99,27 @@ pub async fn print(
     material_request.actor_display_name = principal.display_name.trim().to_string();
     let batch_service = state.rps_batch.clone();
     let batch_principal = principal.clone();
+    let late_error_batch_id = batch_id.clone();
     let late_error = Arc::new(move |detail: String| {
         let batch_service = batch_service.clone();
         let batch_principal = batch_principal.clone();
+        let batch_id = late_error_batch_id.clone();
         tokio::spawn(async move {
-            if let Err(error) = batch_service
-                .record_late_error(&batch_principal, detail)
+            match batch_service
+                .record_late_error(&batch_principal, &batch_id, detail)
                 .await
             {
-                tracing::warn!(%error, "failed to record late RPS material receipt error");
+                Ok(true) => {}
+                Ok(false) => {
+                    tracing::warn!(batch_id, "RPS batch changed before late error was recorded");
+                }
+                Err(error) => {
+                    tracing::warn!(
+                        %error,
+                        batch_id,
+                        "failed to record late RPS material receipt error"
+                    );
+                }
             }
         });
     });
@@ -116,6 +128,7 @@ pub async fn print(
         .print_material_receipt_driver_first_with_late_error(material_request, Some(late_error))
         .await
         .map_err(gscale_error)?;
+    record_batch_print(&state, &principal, &batch_id, &response).await;
     Ok(Json(
         serde_json::to_value(response).unwrap_or_else(|_| serde_json::json!({"ok": false})),
     ))
@@ -133,7 +146,7 @@ pub async fn client_print_prepare(
     let principal = authenticated_principal(&state, &headers).await?;
     let request: RpsBatchPrintRequest =
         serde_json::from_slice(&body).map_err(|_| bad_request("invalid_json", "invalid json"))?;
-    let mut material_request = state
+    let (_, mut material_request) = state
         .rps_batch
         .material_receipt_request(&principal, request)
         .await
@@ -160,7 +173,7 @@ pub async fn client_print_confirm(
     let principal = authenticated_principal(&state, &headers).await?;
     let request: RpsBatchClientPrintConfirmRequest =
         serde_json::from_slice(&body).map_err(|_| bad_request("invalid_json", "invalid json"))?;
-    let mut material_request = state
+    let (batch_id, mut material_request) = state
         .rps_batch
         .material_receipt_request(&principal, request.print)
         .await
@@ -171,9 +184,31 @@ pub async fn client_print_confirm(
         .confirm_material_receipt_client_print(material_request, &request.epc)
         .await
         .map_err(gscale_error)?;
+    record_batch_print(&state, &principal, &batch_id, &response).await;
     Ok(Json(
         serde_json::to_value(response).unwrap_or_else(|_| serde_json::json!({"ok": false})),
     ))
+}
+
+async fn record_batch_print(
+    state: &AppState,
+    principal: &Principal,
+    batch_id: &str,
+    response: &crate::core::gscale::models::MaterialReceiptPrintResponse,
+) {
+    match state
+        .rps_batch
+        .record_print(principal, batch_id, response)
+        .await
+    {
+        Ok(true) => {}
+        Ok(false) => {
+            tracing::warn!(batch_id, "RPS batch changed before print could be recorded");
+        }
+        Err(error) => {
+            tracing::warn!(%error, batch_id, "failed to record RPS batch print");
+        }
+    }
 }
 
 fn attach_actor(
@@ -244,7 +279,9 @@ async fn authenticated_principal(
 fn batch_error(error: RpsBatchServiceError) -> (StatusCode, Json<RpsBatchErrorResponse>) {
     let status = match error {
         RpsBatchServiceError::InvalidInput(_) => StatusCode::BAD_REQUEST,
-        RpsBatchServiceError::BatchNotActive => StatusCode::CONFLICT,
+        RpsBatchServiceError::BatchNotActive | RpsBatchServiceError::BatchAlreadyActive => {
+            StatusCode::CONFLICT
+        }
         RpsBatchServiceError::StoreFailed => StatusCode::INTERNAL_SERVER_ERROR,
     };
     (
@@ -345,6 +382,7 @@ impl RpsBatchServiceError {
         match self {
             Self::InvalidInput(_) => "invalid_input",
             Self::BatchNotActive => "batch_not_active",
+            Self::BatchAlreadyActive => "batch_already_active",
             Self::StoreFailed => "batch_store_failed",
         }
     }

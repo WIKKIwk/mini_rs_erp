@@ -41,10 +41,63 @@ impl<'a> BytesDecode<'a> for RpsBatchSessionCodec {
         if let Some(payload) = bytes.strip_prefix(RPS_BATCH_MAGIC) {
             return Ok(match bincode::deserialize(payload) {
                 Ok(batch) => batch,
-                Err(_) => bincode::deserialize::<RpsBatchSessionV1>(payload)?.into(),
+                Err(_) => match bincode::deserialize::<RpsBatchSessionV2>(payload) {
+                    Ok(batch) => batch.into(),
+                    Err(_) => bincode::deserialize::<RpsBatchSessionV1>(payload)?.into(),
+                },
             });
         }
         Ok(serde_json::from_slice(bytes)?)
+    }
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+struct RpsBatchSessionV2 {
+    id: String,
+    active: bool,
+    owner_key: String,
+    owner_role: String,
+    owner_ref: String,
+    driver_url: String,
+    item_code: String,
+    item_name: String,
+    warehouse: String,
+    printer: String,
+    print_mode: String,
+    quantity_source: String,
+    manual_qty_kg: f64,
+    tare_enabled: bool,
+    tare_kg: f64,
+    last_error: String,
+    last_error_at: String,
+    created_at: String,
+    updated_at: String,
+}
+
+impl From<RpsBatchSessionV2> for RpsBatchSession {
+    fn from(batch: RpsBatchSessionV2) -> Self {
+        Self {
+            id: batch.id,
+            active: batch.active,
+            owner_key: batch.owner_key,
+            owner_role: batch.owner_role,
+            owner_ref: batch.owner_ref,
+            driver_url: batch.driver_url,
+            item_code: batch.item_code,
+            item_name: batch.item_name,
+            warehouse: batch.warehouse,
+            printer: batch.printer,
+            print_mode: batch.print_mode,
+            quantity_source: batch.quantity_source,
+            manual_qty_kg: batch.manual_qty_kg,
+            tare_enabled: batch.tare_enabled,
+            tare_kg: batch.tare_kg,
+            last_error: batch.last_error,
+            last_error_at: batch.last_error_at,
+            created_at: batch.created_at,
+            updated_at: batch.updated_at,
+            ..RpsBatchSession::default()
+        }
     }
 }
 
@@ -167,5 +220,23 @@ mod tests {
         store.put(batch.clone()).await.expect("put");
 
         assert_eq!(store.get("werka:W-1").await.expect("get"), Some(batch));
+    }
+
+    #[test]
+    fn lmdb_batch_store_reads_pre_print_list_session() {
+        let legacy = RpsBatchSessionV2 {
+            id: "batch-v2".to_string(),
+            owner_key: "material_taminotchi:M-1".to_string(),
+            item_code: "ITEM-1".to_string(),
+            warehouse: "Stores - A".to_string(),
+            ..RpsBatchSessionV2::default()
+        };
+        let mut bytes = RPS_BATCH_MAGIC.to_vec();
+        bytes.extend_from_slice(&bincode::serialize(&legacy).expect("serialize legacy batch"));
+
+        let decoded = RpsBatchSessionCodec::bytes_decode(&bytes).expect("decode legacy batch");
+
+        assert_eq!(decoded.id, "batch-v2");
+        assert!(decoded.prints.is_empty());
     }
 }

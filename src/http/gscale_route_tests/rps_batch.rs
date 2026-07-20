@@ -131,6 +131,32 @@ async fn rps_batch_print_uses_active_rs_batch_and_transaction_flow() {
         receipt_actors.lock().unwrap().as_slice(),
         ["werka:admin:Admin"]
     );
+
+    let current = router
+        .clone()
+        .oneshot(request("GET", "/v1/mobile/rps/batch/state", &token, ""))
+        .await
+        .expect("state response");
+    let current_body = json_body(current).await;
+    let prints = current_body["batch"]["prints"]
+        .as_array()
+        .expect("batch prints");
+
+    assert_eq!(prints.len(), 1);
+    assert_eq!(prints[0]["status"], "printed");
+    assert_eq!(prints[0]["gross_qty"], 2.5);
+    assert!(!prints[0]["epc"].as_str().unwrap_or_default().is_empty());
+
+    let stopped = router
+        .oneshot(request("POST", "/v1/mobile/rps/batch/stop", &token, ""))
+        .await
+        .expect("stop response");
+    let stopped_body = json_body(stopped).await;
+    assert_eq!(stopped_body["batch"]["active"], false);
+    assert_eq!(
+        stopped_body["batch"]["prints"].as_array().map(Vec::len),
+        Some(1)
+    );
 }
 
 #[tokio::test]
@@ -184,7 +210,20 @@ async fn rps_batch_client_print_prepares_then_confirms_without_driver() {
     assert_eq!(prepared_body["epc"], EPC);
     assert!(events.lock().unwrap().is_empty());
 
+    let preparing_state = router
+        .clone()
+        .oneshot(request("GET", "/v1/mobile/rps/batch/state", &token, ""))
+        .await
+        .expect("state response");
+    assert_eq!(
+        json_body(preparing_state).await["batch"]["prints"]
+            .as_array()
+            .map(Vec::len),
+        Some(0)
+    );
+
     let confirmed = router
+        .clone()
         .oneshot(request(
             "POST",
             "/v1/mobile/rps/batch/client-print/confirm",
@@ -205,6 +244,43 @@ async fn rps_batch_client_print_prepares_then_confirms_without_driver() {
         receipt_actors.lock().unwrap().as_slice(),
         ["werka:admin:Admin"]
     );
+
+    let confirmed_state = router
+        .oneshot(request("GET", "/v1/mobile/rps/batch/state", &token, ""))
+        .await
+        .expect("state response");
+    let confirmed_body = json_body(confirmed_state).await;
+    assert_eq!(confirmed_body["batch"]["prints"][0]["epc"], EPC);
+}
+
+#[tokio::test]
+async fn rps_batch_start_rejects_overwriting_active_cycle() {
+    let state = test_state();
+    let token = session(&state, PrincipalRole::Werka).await;
+    let router = build_router(state);
+    let body = r#"{
+        "client_batch_id":"batch-protected",
+        "driver_url":"http://127.0.0.1:39117",
+        "item_code":"ITEM-1",
+        "warehouse":"Stores - A"
+    }"#;
+
+    let first = router
+        .clone()
+        .oneshot(request("POST", "/v1/mobile/rps/batch/start", &token, body))
+        .await
+        .expect("first start response");
+    assert_eq!(first.status(), StatusCode::OK);
+
+    let second = router
+        .oneshot(request("POST", "/v1/mobile/rps/batch/start", &token, body))
+        .await
+        .expect("second start response");
+    let status = second.status();
+    let second_body = json_body(second).await;
+
+    assert_eq!(status, StatusCode::CONFLICT);
+    assert_eq!(second_body["error"], "batch_already_active");
 }
 
 #[tokio::test]

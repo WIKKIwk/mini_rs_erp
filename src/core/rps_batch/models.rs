@@ -49,8 +49,25 @@ pub struct RpsBatchSession {
     pub last_error: String,
     #[serde(default)]
     pub last_error_at: String,
+    #[serde(default)]
+    pub prints: Vec<RpsBatchPrintEntry>,
     pub created_at: String,
     pub updated_at: String,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct RpsBatchPrintEntry {
+    pub epc: String,
+    pub draft_name: String,
+    pub status: String,
+    pub qty: f64,
+    pub net_qty: f64,
+    pub gross_qty: f64,
+    pub unit: String,
+    pub printer: String,
+    pub print_mode: String,
+    pub print_count: u32,
+    pub printed_at: String,
 }
 
 impl RpsBatchSession {
