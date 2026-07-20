@@ -316,6 +316,7 @@ fn fake_catalog_items() -> Vec<SupplierItem> {
             uom: "Kg".to_string(),
             warehouse: "Stores - A".to_string(),
             item_group: "Products".to_string(),
+            customer_names: Vec::new(),
         },
         SupplierItem {
             code: "INK-BLACK".to_string(),
@@ -323,6 +324,7 @@ fn fake_catalog_items() -> Vec<SupplierItem> {
             uom: "Kg".to_string(),
             warehouse: "Stores - A".to_string(),
             item_group: "Kraska".to_string(),
+            customer_names: Vec::new(),
         },
         SupplierItem {
             code: "GLUE-001".to_string(),
@@ -330,6 +332,7 @@ fn fake_catalog_items() -> Vec<SupplierItem> {
             uom: "Kg".to_string(),
             warehouse: "Stores - A".to_string(),
             item_group: "Kley".to_string(),
+            customer_names: Vec::new(),
         },
         SupplierItem {
             code: "ROLL-1000".to_string(),
@@ -337,6 +340,7 @@ fn fake_catalog_items() -> Vec<SupplierItem> {
             uom: "Kg".to_string(),
             warehouse: "Stores - A".to_string(),
             item_group: "Rulon eni".to_string(),
+            customer_names: Vec::new(),
         },
     ]
 }

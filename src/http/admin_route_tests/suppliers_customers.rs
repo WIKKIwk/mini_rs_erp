@@ -242,7 +242,9 @@ async fn admin_customers_and_items_read_like_go() {
         .await
         .expect("response");
     assert_eq!(group_items.status(), StatusCode::OK);
-    assert_eq!(json_body(group_items).await[0]["code"], "ITEM-001");
+    let group_items = json_body(group_items).await;
+    assert_eq!(group_items[0]["code"], "ITEM-001");
+    assert_eq!(group_items[0]["customer_names"][0], "Customer One");
 
     let groups = build_router(state)
         .oneshot(request("GET", "/v1/mobile/admin/item-groups", &token))

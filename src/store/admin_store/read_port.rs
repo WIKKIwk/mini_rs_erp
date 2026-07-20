@@ -94,11 +94,18 @@ impl AdminReadPort for JsonAdminStore {
         offset: usize,
     ) -> Result<Vec<SupplierItem>, AdminPortError> {
         let data = self.data.lock().await;
+        let needle = query.trim().to_ascii_lowercase();
         Ok(paginate(
             data.items
                 .values()
-                .filter(|item| item_matches(item, query))
-                .map(SupplierItem::from)
+                .filter(|item| {
+                    item_matches(item, query)
+                        || (!needle.is_empty()
+                            && stored_item_customer_names(&data, &item.code)
+                                .iter()
+                                .any(|name| name.to_ascii_lowercase().contains(&needle)))
+                })
+                .map(|item| stored_item_summary(&data, item))
                 .collect(),
             limit,
             offset,
@@ -118,7 +125,7 @@ impl AdminReadPort for JsonAdminStore {
             .items
             .values()
             .filter(|item| wanted.contains(&item.code.trim().to_lowercase()))
-            .map(SupplierItem::from)
+            .map(|item| stored_item_summary(&data, item))
             .collect())
     }
 

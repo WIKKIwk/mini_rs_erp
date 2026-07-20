@@ -64,13 +64,32 @@ impl AdminReadPort for PostgresAdminCatalogStore {
     ) -> Result<Vec<SupplierItem>, AdminPortError> {
         let needle = format!("%{}%", query.trim().to_lowercase());
         sqlx::query_as::<_, ItemRow>(
-            "SELECT code, name, uom, item_group
-             FROM mini_items
+            "SELECT items.code, items.name, items.uom, items.item_group,
+                    COALESCE((
+                        SELECT array_agg(
+                            CASE WHEN btrim(customers.name) <> ''
+                                 THEN customers.name ELSE customers.ref END
+                            ORDER BY lower(customers.name), customers.ref
+                        )
+                        FROM mini_customer_items assignments
+                        JOIN mini_customers customers
+                          ON customers.ref = assignments.customer_ref
+                        WHERE assignments.item_code = items.code
+                    ), ARRAY[]::text[]) AS customer_names
+             FROM mini_items items
              WHERE $1 = '%%'
-                OR lower(code) LIKE $1
-                OR lower(name) LIKE $1
-                OR lower(item_group) LIKE $1
-             ORDER BY lower(code)
+                OR lower(items.code) LIKE $1
+                OR lower(items.name) LIKE $1
+                OR lower(items.item_group) LIKE $1
+                OR EXISTS (
+                    SELECT 1
+                    FROM mini_customer_items assignments
+                    JOIN mini_customers customers
+                      ON customers.ref = assignments.customer_ref
+                    WHERE assignments.item_code = items.code
+                      AND lower(customers.name) LIKE $1
+                )
+             ORDER BY lower(items.code)
              LIMIT $2 OFFSET $3",
         )
         .bind(needle)
@@ -95,16 +114,35 @@ impl AdminReadPort for PostgresAdminCatalogStore {
         }
         let needle = format!("%{}%", query.trim().to_lowercase());
         sqlx::query_as::<_, ItemRow>(
-            "SELECT code, name, uom, item_group
-             FROM mini_items
-             WHERE lower(item_group) = lower($1)
+            "SELECT items.code, items.name, items.uom, items.item_group,
+                    COALESCE((
+                        SELECT array_agg(
+                            CASE WHEN btrim(customers.name) <> ''
+                                 THEN customers.name ELSE customers.ref END
+                            ORDER BY lower(customers.name), customers.ref
+                        )
+                        FROM mini_customer_items assignments
+                        JOIN mini_customers customers
+                          ON customers.ref = assignments.customer_ref
+                        WHERE assignments.item_code = items.code
+                    ), ARRAY[]::text[]) AS customer_names
+             FROM mini_items items
+             WHERE lower(items.item_group) = lower($1)
                AND (
                     $2 = '%%'
-                    OR lower(code) LIKE $2
-                    OR lower(name) LIKE $2
-                    OR lower(item_group) LIKE $2
+                    OR lower(items.code) LIKE $2
+                    OR lower(items.name) LIKE $2
+                    OR lower(items.item_group) LIKE $2
+                    OR EXISTS (
+                        SELECT 1
+                        FROM mini_customer_items assignments
+                        JOIN mini_customers customers
+                          ON customers.ref = assignments.customer_ref
+                        WHERE assignments.item_code = items.code
+                          AND lower(customers.name) LIKE $2
+                    )
                )
-             ORDER BY lower(code)
+             ORDER BY lower(items.code)
              LIMIT $3 OFFSET $4",
         )
         .bind(group)
@@ -130,10 +168,21 @@ impl AdminReadPort for PostgresAdminCatalogStore {
             return Ok(Vec::new());
         }
         sqlx::query_as::<_, ItemRow>(
-            "SELECT code, name, uom, item_group
-             FROM mini_items
-             WHERE lower(code) = ANY($1)
-             ORDER BY lower(code)",
+            "SELECT items.code, items.name, items.uom, items.item_group,
+                    COALESCE((
+                        SELECT array_agg(
+                            CASE WHEN btrim(customers.name) <> ''
+                                 THEN customers.name ELSE customers.ref END
+                            ORDER BY lower(customers.name), customers.ref
+                        )
+                        FROM mini_customer_items assignments
+                        JOIN mini_customers customers
+                          ON customers.ref = assignments.customer_ref
+                        WHERE assignments.item_code = items.code
+                    ), ARRAY[]::text[]) AS customer_names
+             FROM mini_items items
+             WHERE lower(items.code) = ANY($1)
+             ORDER BY lower(items.code)",
         )
         .bind(codes)
         .fetch_all(&self.pool)

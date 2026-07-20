@@ -42,6 +42,16 @@ async fn item_update_preserves_assignments_and_creation_time() {
     assert!(updated.created_at_unix > 0);
     assert_eq!(updated.customers.len(), 1);
     assert_eq!(updated.customers[0].ref_, customer.ref_);
+    let picker_items = store
+        .items_page("Customer One", 10, 0)
+        .await
+        .expect("items searchable by customer");
+    assert_eq!(picker_items.len(), 1);
+    assert_eq!(picker_items[0].code, "ITEM-NEW");
+    assert_eq!(
+        picker_items[0].customer_names,
+        vec!["Customer One".to_string()]
+    );
     assert!(matches!(
         store.item_detail("ITEM-OLD").await,
         Err(AdminPortError::NotFound)

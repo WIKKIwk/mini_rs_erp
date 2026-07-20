@@ -105,6 +105,7 @@ impl AdminWritePort for FakeAdminReadPort {
             uom: uom.to_string(),
             warehouse: String::new(),
             item_group: item_group.to_string(),
+            customer_names: Vec::new(),
         })
     }
 

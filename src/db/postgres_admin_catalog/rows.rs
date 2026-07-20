@@ -7,6 +7,7 @@ pub(super) struct ItemRow {
     name: String,
     uom: String,
     item_group: String,
+    customer_names: Vec<String>,
 }
 
 impl ItemRow {
@@ -17,6 +18,7 @@ impl ItemRow {
             uom: self.uom,
             warehouse: String::new(),
             item_group: self.item_group,
+            customer_names: self.customer_names,
         }
     }
 }

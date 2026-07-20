@@ -120,6 +120,16 @@ async fn postgres_admin_item_update_preserves_details_and_live_references() {
     let before = store.item_detail("ITEM-OLD").await.expect("item detail");
     assert!(before.is_finished_goods);
     assert_eq!(before.customers.len(), 1);
+    let picker_items = store
+        .items_page_by_group("Tayyor mahsulot / Paket", "Customer One", 20, 0)
+        .await
+        .expect("items page with customer names");
+    assert_eq!(picker_items.len(), 1);
+    assert_eq!(picker_items[0].code, "ITEM-OLD");
+    assert_eq!(
+        picker_items[0].customer_names,
+        vec!["Customer One".to_string()]
+    );
 
     let missing_customer_error = store
         .create_item(

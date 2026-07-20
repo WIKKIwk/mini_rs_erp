@@ -234,6 +234,7 @@ impl From<&StoredSupplierItem> for SupplierItem {
             uom: value.uom.clone(),
             warehouse: String::new(),
             item_group: value.item_group.clone(),
+            customer_names: Vec::new(),
         }
     }
 }
@@ -401,6 +402,37 @@ fn stored_item_detail(data: &StoredAdminData, item: &StoredSupplierItem) -> Admi
         updated_at_unix: item.updated_at_unix,
         customers,
     }
+}
+
+fn stored_item_summary(data: &StoredAdminData, item: &StoredSupplierItem) -> SupplierItem {
+    let mut summary = SupplierItem::from(item);
+    summary.customer_names = stored_item_customer_names(data, &item.code);
+    summary
+}
+
+fn stored_item_customer_names(data: &StoredAdminData, item_code: &str) -> Vec<String> {
+    let mut names = data
+        .customer_items
+        .iter()
+        .filter(|(_, item_codes)| {
+            item_codes
+                .iter()
+                .any(|code| code.trim().eq_ignore_ascii_case(item_code.trim()))
+        })
+        .filter_map(|(customer_ref, _)| data.customers.get(customer_ref))
+        .map(|customer| {
+            let name = customer.name.trim();
+            if name.is_empty() {
+                customer.ref_.trim().to_string()
+            } else {
+                name.to_string()
+            }
+        })
+        .filter(|name| !name.is_empty())
+        .collect::<Vec<_>>();
+    names.sort_by_key(|name| name.to_ascii_lowercase());
+    names.dedup_by(|left, right| left.eq_ignore_ascii_case(right));
+    names
 }
 
 fn stored_item_group_is_finished_goods(data: &StoredAdminData, item_group: &str) -> bool {

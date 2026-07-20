@@ -171,6 +171,7 @@ impl AdminWritePort for AdminCatalogOverlay {
                     uom: detail.uom.clone(),
                     warehouse: String::new(),
                     item_group: detail.item_group.clone(),
+                    customer_names: Vec::new(),
                 };
                 if let Err(error) = self.sync_item_to_admin_store(&item).await {
                     tracing::warn!(?error, "item update JSON projection sync failed");
@@ -263,4 +264,3 @@ impl AdminWritePort for AdminCatalogOverlay {
         Ok(updated)
     }
 }
-

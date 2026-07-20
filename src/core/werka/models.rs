@@ -167,6 +167,8 @@ pub struct SupplierItem {
     pub warehouse: String,
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub item_group: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub customer_names: Vec<String>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]

@@ -131,6 +131,7 @@ impl PostgresAdminCatalogStore {
             uom,
             warehouse: String::new(),
             item_group: group,
+            customer_names: Vec::new(),
         })
     }
 

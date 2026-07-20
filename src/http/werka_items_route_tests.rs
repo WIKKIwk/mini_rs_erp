@@ -333,6 +333,7 @@ fn supplier_item(code: &str, name: &str) -> SupplierItem {
         uom: "Kg".to_string(),
         warehouse: "Stores - A".to_string(),
         item_group: String::new(),
+        customer_names: Vec::new(),
     }
 }
 

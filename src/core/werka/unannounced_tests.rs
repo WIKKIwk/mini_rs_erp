@@ -45,6 +45,7 @@ async fn unannounced_create_prefers_direct_supplier_item_lookup_like_go_reader()
                 uom: "Nos".to_string(),
                 warehouse: "Stores - A".to_string(),
                 item_group: String::new(),
+                customer_names: Vec::new(),
             }],
         }))
         .with_unannounced_writer(Arc::new(FakeUnannouncedWriter {

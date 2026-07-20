@@ -239,6 +239,7 @@ impl SupplierItemLookup for FakeSupplierItems {
             uom: "Kg".to_string(),
             warehouse: "Stores - CH".to_string(),
             item_group: String::new(),
+            customer_names: Vec::new(),
         }])
     }
 

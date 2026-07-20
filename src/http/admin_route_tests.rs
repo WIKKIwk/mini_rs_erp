@@ -501,5 +501,10 @@ fn item(code: &str) -> SupplierItem {
             "ROLL-980" | "ROLL-1000" | "ROLL-1020" => "Rulon eni".to_string(),
             _ => "Products".to_string(),
         },
+        customer_names: if code == "ITEM-001" {
+            vec!["Customer One".to_string()]
+        } else {
+            Vec::new()
+        },
     }
 }

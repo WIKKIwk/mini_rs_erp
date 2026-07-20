@@ -321,6 +321,7 @@ impl CustomerItemRow {
             uom: self.uom,
             warehouse: String::new(),
             item_group: self.item_group,
+            customer_names: Vec::new(),
         }
     }
 }
