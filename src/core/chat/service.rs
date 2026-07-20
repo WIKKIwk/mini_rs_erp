@@ -8,10 +8,11 @@ use tokio::task::JoinSet;
 use tokio::time::sleep;
 
 use super::{
-    ChatConversation, ChatConversationPage, ChatError, ChatHub, ChatMessagePage, ChatPrincipal,
-    ChatPrincipalInput, ChatSendResult, ChatStorePort, ChatSyncPage,
+    can_participate_in_chat, ChatConversation, ChatConversationPage, ChatError, ChatHub,
+    ChatMessagePage, ChatPrincipal, ChatPrincipalInput, ChatSendResult, ChatStorePort,
+    ChatSyncPage,
 };
-use crate::core::auth::models::Principal;
+use crate::core::auth::models::{Principal, PrincipalRole};
 use crate::core::push::service::PushService;
 
 #[derive(Clone)]
@@ -46,6 +47,7 @@ impl ChatService {
         &self,
         principal: ChatPrincipalInput,
     ) -> Result<ChatPrincipal, ChatError> {
+        ensure_chat_role(&principal.role)?;
         if principal.ref_.trim().is_empty() || principal.display_name.trim().is_empty() {
             return Err(ChatError::InvalidInput);
         }
@@ -57,6 +59,8 @@ impl ChatService {
         actor: ChatPrincipalInput,
         target: ChatPrincipalInput,
     ) -> Result<ChatConversation, ChatError> {
+        ensure_chat_role(&actor.role)?;
+        ensure_chat_role(&target.role)?;
         if actor.role == target.role && actor.ref_.trim() == target.ref_.trim() {
             return Err(ChatError::InvalidInput);
         }
@@ -71,6 +75,7 @@ impl ChatService {
         limit: usize,
         offset: usize,
     ) -> Result<ChatConversationPage, ChatError> {
+        ensure_chat_role(&principal.role)?;
         let limit = limit.clamp(1, 100);
         let mut items = self
             .store
@@ -89,6 +94,7 @@ impl ChatService {
         after_sequence: Option<i64>,
         limit: usize,
     ) -> Result<ChatMessagePage, ChatError> {
+        ensure_chat_role(&principal.role)?;
         if conversation_id.trim().is_empty() {
             return Err(ChatError::InvalidInput);
         }
@@ -110,6 +116,7 @@ impl ChatService {
         client_message_id: &str,
         body: &str,
     ) -> Result<ChatSendResult, ChatError> {
+        ensure_chat_role(&principal.role)?;
         let body = body.trim();
         if conversation_id.trim().is_empty()
             || client_message_id.trim().is_empty()
@@ -136,6 +143,7 @@ impl ChatService {
         caption: &str,
         media_id: &str,
     ) -> Result<ChatSendResult, ChatError> {
+        ensure_chat_role(&principal.role)?;
         let caption = caption.trim();
         if conversation_id.trim().is_empty()
             || client_message_id.trim().is_empty()
@@ -162,6 +170,7 @@ impl ChatService {
         sequence: i64,
         device_id: &str,
     ) -> Result<(), ChatError> {
+        ensure_chat_role(&principal.role)?;
         if conversation_id.trim().is_empty() || sequence < 0 || device_id.trim().is_empty() {
             return Err(ChatError::InvalidInput);
         }
@@ -182,6 +191,7 @@ impl ChatService {
         sequence: i64,
         device_id: &str,
     ) -> Result<(), ChatError> {
+        ensure_chat_role(&principal.role)?;
         if conversation_id.trim().is_empty() || sequence < 0 || device_id.trim().is_empty() {
             return Err(ChatError::InvalidInput);
         }
@@ -201,6 +211,7 @@ impl ChatService {
         after_cursor: i64,
         limit: usize,
     ) -> Result<ChatSyncPage, ChatError> {
+        ensure_chat_role(&principal.role)?;
         let (events, next_cursor, has_more) = self
             .store
             .sync_events(principal, after_cursor.max(0), limit.clamp(1, 500))
@@ -216,6 +227,7 @@ impl ChatService {
         &self,
         principal: Principal,
     ) -> Result<(String, i64), ChatError> {
+        ensure_chat_role(&principal.role)?;
         let mut bytes = [0_u8; 24];
         rand::fill(&mut bytes);
         let ticket = URL_SAFE_NO_PAD.encode(bytes);
@@ -235,7 +247,7 @@ impl ChatService {
     }
 
     pub async fn consume_socket_ticket(&self, ticket: &str) -> Result<Principal, ChatError> {
-        match self.store.consume_socket_ticket(ticket.trim()).await {
+        let principal = match self.store.consume_socket_ticket(ticket.trim()).await {
             Ok(principal) => Ok(principal),
             Err(ChatError::Unavailable) => self
                 .hub
@@ -243,7 +255,9 @@ impl ChatService {
                 .await
                 .ok_or(ChatError::NotFound),
             Err(error) => Err(error),
-        }
+        }?;
+        ensure_chat_role(&principal.role)?;
+        Ok(principal)
     }
 
     pub fn start_delivery_worker(&self, push: PushService) {
@@ -362,6 +376,12 @@ fn message_preview_text(message_type: &str, body: &str) -> String {
     } else {
         preview
     }
+}
+
+fn ensure_chat_role(role: &PrincipalRole) -> Result<(), ChatError> {
+    can_participate_in_chat(role)
+        .then_some(())
+        .ok_or(ChatError::Forbidden)
 }
 
 include!("service_inline_tests.rs");

@@ -53,6 +53,16 @@ WHERE chat_principal.principal_role = $1
   AND chat_principal.active = TRUE
   AND member.conversation_id = $3
   AND member.left_at IS NULL
+  AND chat_principal.principal_role <> 'customer'
+  AND NOT EXISTS (
+    SELECT 1
+    FROM mini_chat_conversation_members customer_member
+    JOIN mini_chat_principals customer_principal
+      ON customer_principal.principal_id = customer_member.principal_id
+    WHERE customer_member.conversation_id = member.conversation_id
+      AND customer_member.left_at IS NULL
+      AND customer_principal.principal_role = 'customer'
+  )
   AND ($4 = FALSE OR member.can_post = TRUE)"#;
 
 pub(super) async fn initialize_upload(
@@ -392,6 +402,8 @@ mod tests {
         assert!(query.contains("member.conversation_id = $3"));
         assert!(query.contains("member.left_at is null"));
         assert!(query.contains("member.can_post = true"));
+        assert!(query.contains("chat_principal.principal_role <> 'customer'"));
+        assert!(query.contains("customer_principal.principal_role = 'customer'"));
     }
 
     #[test]

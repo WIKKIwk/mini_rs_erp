@@ -3,7 +3,7 @@ use sqlx::{PgPool, Postgres, Transaction};
 use sha2::{Digest, Sha256};
 
 use super::rows::{MessageRow, PrincipalRow, parse_role, role_key};
-use crate::core::auth::models::Principal;
+use crate::core::auth::models::{Principal, PrincipalRole};
 use crate::core::chat::{
     ChatConversation, ChatError, ChatMessage, ChatMessageAttachment, ChatOutboxEvent,
     ChatPrincipal, ChatPrincipalInput, ChatPushDelivery, ChatRealtimeEvent, ChatSendResult,
@@ -13,6 +13,9 @@ pub(super) async fn ensure_principal(
     pool: &PgPool,
     principal: ChatPrincipalInput,
 ) -> Result<ChatPrincipal, ChatError> {
+    if principal.role == PrincipalRole::Customer {
+        return Err(ChatError::Forbidden);
+    }
     let row = sqlx::query_as::<_, PrincipalRow>(
         r#"INSERT INTO mini_chat_principals
              (principal_id, principal_role, principal_ref, display_name, avatar_url)
@@ -40,6 +43,9 @@ pub(super) async fn create_or_get_dm(
     actor: &ChatPrincipal,
     target: &ChatPrincipal,
 ) -> Result<ChatConversation, ChatError> {
+    if actor.role == PrincipalRole::Customer || target.role == PrincipalRole::Customer {
+        return Err(ChatError::Forbidden);
+    }
     let mut ids = [actor.principal_id.as_str(), target.principal_id.as_str()];
     ids.sort_unstable();
     let dm_key = format!("{}:{}", ids[0], ids[1]);
@@ -230,6 +236,7 @@ pub(super) async fn send_message(
            JOIN mini_chat_principals recipient ON recipient.principal_id = member.principal_id
            WHERE member.conversation_id = $1
              AND member.left_at IS NULL
+             AND recipient.principal_role <> 'customer'
              AND recipient.active = TRUE"#,
     )
     .bind(conversation_id)

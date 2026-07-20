@@ -7,7 +7,9 @@ use super::auth::authorize;
 use super::{ChatHttpError, http_error};
 use crate::app::AppState;
 use crate::core::auth::models::{Principal, PrincipalRole};
-use crate::core::chat::{ChatDirectoryEntry, ChatDirectoryPage, ChatPrincipalInput};
+use crate::core::chat::{
+    can_participate_in_chat, ChatDirectoryEntry, ChatDirectoryPage, ChatPrincipalInput,
+};
 use crate::core::profile::identity::ProfileIdentity;
 use crate::http::handlers::auth::profile_avatar_proxy_url;
 
@@ -31,6 +33,12 @@ pub async fn directory(
         ));
     }
     let (token, viewer) = authorize(&state, &headers).await?;
+    if !can_participate_in_chat(&viewer.role) {
+        return Err(http_error(
+            axum::http::StatusCode::FORBIDDEN,
+            "chat_forbidden",
+        ));
+    }
     let limit = query.limit.unwrap_or(50).clamp(1, 100);
     let offset = query.offset.unwrap_or(0);
     let mut items = load_directory_entries(
@@ -103,7 +111,11 @@ async fn load_directory_entries(
         admin_page
             .items
             .into_iter()
-            .filter(|item| !item.blocked && item.status != "removed")
+            .filter(|item| {
+                !item.blocked
+                    && item.status != "removed"
+                    && can_participate_in_chat(&item.principal_role)
+            })
             .map(|item| ChatDirectoryEntry {
                 role: item.principal_role,
                 ref_: item.entity_ref,

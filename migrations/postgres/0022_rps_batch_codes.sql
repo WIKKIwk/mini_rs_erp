@@ -15,7 +15,7 @@ CREATE TABLE IF NOT EXISTS mini_rps_batch_identities (
 );
 
 -- Backfill every real batch once. Prefix 42 reserves a separate namespace from
--- product EPCs; the hash keeps retries deterministic and avoids changing IDs.
+-- product EPCs, the hash keeps retries deterministic and avoids changing IDs.
 WITH known_batches AS (
     SELECT owner_key, batch_id, updated_at AS created_at
     FROM mini_rps_batches

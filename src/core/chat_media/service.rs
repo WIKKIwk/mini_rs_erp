@@ -15,6 +15,7 @@ use super::{
     NewChatMediaUpload, SystemChatMediaProcessor,
 };
 use crate::core::auth::models::Principal;
+use crate::core::chat::can_participate_in_chat;
 
 pub const MAX_CHAT_IMAGE_SIZE_BYTES: i64 = 15 * 1024 * 1024;
 pub const MAX_CHAT_VIDEO_SIZE_BYTES: i64 = 2 * 1024 * 1024 * 1024;
@@ -78,6 +79,7 @@ impl ChatMediaService {
         conversation_id: &str,
         input: ChatMediaInitializeInput,
     ) -> Result<ChatMediaInitialization, ChatMediaError> {
+        ensure_chat_principal(principal)?;
         let conversation_id = validate_identifier(conversation_id)?;
         let input = validate_initialize_input(input)?;
         let now = OffsetDateTime::now_utc().unix_timestamp();
@@ -125,6 +127,7 @@ impl ChatMediaService {
         conversation_id: &str,
         upload_id: &str,
     ) -> Result<ChatMediaUploadView, ChatMediaError> {
+        ensure_chat_principal(principal)?;
         let conversation_id = validate_identifier(conversation_id)?;
         let upload_id = validate_identifier(upload_id)?;
         self.upload_view(principal, conversation_id, upload_id, false)
@@ -140,6 +143,7 @@ impl ChatMediaService {
         content_type: Option<&str>,
         stream: ChatMediaByteStream,
     ) -> Result<ChatMediaUploadView, ChatMediaError> {
+        ensure_chat_principal(principal)?;
         let conversation_id = validate_identifier(conversation_id)?;
         let upload_id = validate_identifier(upload_id)?;
         let record = self
@@ -188,6 +192,7 @@ impl ChatMediaService {
         conversation_id: &str,
         upload_id: &str,
     ) -> Result<ChatMediaUploadView, ChatMediaError> {
+        ensure_chat_principal(principal)?;
         let conversation_id = validate_identifier(conversation_id)?;
         let upload_id = validate_identifier(upload_id)?;
         let record = self
@@ -235,6 +240,7 @@ impl ChatMediaService {
         conversation_id: &str,
         upload_id: &str,
     ) -> Result<ChatMediaUploadView, ChatMediaError> {
+        ensure_chat_principal(principal)?;
         let conversation_id = validate_identifier(conversation_id)?;
         let upload_id = validate_identifier(upload_id)?;
         let record = self
@@ -324,6 +330,7 @@ impl ChatMediaService {
         media_id: &str,
         variant: ChatMediaAccessVariant,
     ) -> Result<ChatMediaAccess, ChatMediaError> {
+        ensure_chat_principal(principal)?;
         let media_id = validate_identifier(media_id)?;
         let media = self
             .repository
@@ -363,6 +370,7 @@ impl ChatMediaService {
         variant: ChatMediaAccessVariant,
         range: ChatMediaRangeRequest,
     ) -> Result<ChatMediaStreamAccess, ChatMediaError> {
+        ensure_chat_principal(principal)?;
         let media_id = validate_identifier(media_id)?;
         let media = self
             .repository
@@ -400,6 +408,7 @@ impl ChatMediaService {
         principal: &Principal,
         media_id: &str,
     ) -> Result<(String, i64), ChatMediaError> {
+        ensure_chat_principal(principal)?;
         let media_id = validate_identifier(media_id)?;
         let mut bytes = [0_u8; 32];
         rand::fill(&mut bytes);
@@ -462,6 +471,12 @@ impl ChatMediaService {
                 .map_err(map_storage_error),
         }
     }
+}
+
+pub(super) fn ensure_chat_principal(principal: &Principal) -> Result<(), ChatMediaError> {
+    can_participate_in_chat(&principal.role)
+        .then_some(())
+        .ok_or(ChatMediaError::Forbidden)
 }
 
 include!("service_validation.rs");

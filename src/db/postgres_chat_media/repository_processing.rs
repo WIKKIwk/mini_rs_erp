@@ -151,7 +151,17 @@ pub(super) async fn media_for_access(
            JOIN mini_chat_principals viewer ON viewer.principal_id = member.principal_id
            WHERE media.media_id = $1 AND media.upload_status = 'ready'
              AND viewer.principal_role = $2 AND viewer.principal_ref = $3
-             AND viewer.active = TRUE"#,
+             AND viewer.active = TRUE
+             AND viewer.principal_role <> 'customer'
+             AND NOT EXISTS (
+               SELECT 1
+               FROM mini_chat_conversation_members customer_member
+               JOIN mini_chat_principals customer_principal
+                 ON customer_principal.principal_id = customer_member.principal_id
+               WHERE customer_member.conversation_id = attachment.conversation_id
+                 AND customer_member.left_at IS NULL
+                 AND customer_principal.principal_role = 'customer'
+             )"#,
         prefixed_columns("media")
     );
     sqlx::query_as::<_, ChatMediaRow>(&query)
@@ -194,6 +204,16 @@ pub(super) async fn create_access_ticket(
              AND viewer.principal_role = $2
              AND viewer.principal_ref = $3
              AND viewer.active = TRUE
+             AND viewer.principal_role <> 'customer'
+             AND NOT EXISTS (
+               SELECT 1
+               FROM mini_chat_conversation_members customer_member
+               JOIN mini_chat_principals customer_principal
+                 ON customer_principal.principal_id = customer_member.principal_id
+               WHERE customer_member.conversation_id = attachment.conversation_id
+                 AND customer_member.left_at IS NULL
+                 AND customer_principal.principal_role = 'customer'
+             )
            ON CONFLICT (ticket_hash) DO NOTHING"#,
     )
     .bind(media_id)
@@ -222,7 +242,18 @@ pub(super) async fn media_for_access_ticket(
            WHERE media.media_id = $1
              AND media.upload_status = 'ready'
              AND ticket.ticket_hash = $2
-             AND ticket.expires_at > now()"#,
+             AND ticket.expires_at > now()
+             AND NOT EXISTS (
+               SELECT 1
+               FROM mini_chat_message_attachments customer_attachment
+               JOIN mini_chat_conversation_members customer_member
+                 ON customer_member.conversation_id = customer_attachment.conversation_id
+                AND customer_member.left_at IS NULL
+               JOIN mini_chat_principals customer_principal
+                 ON customer_principal.principal_id = customer_member.principal_id
+               WHERE customer_attachment.media_id = media.media_id
+                 AND customer_principal.principal_role = 'customer'
+             )"#,
         prefixed_columns("media")
     );
     sqlx::query_as::<_, ChatMediaRow>(&query)

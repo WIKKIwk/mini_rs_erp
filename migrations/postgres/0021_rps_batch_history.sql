@@ -1,5 +1,5 @@
 -- Completed RPS batches are immutable identities. Their payload keeps the exact
--- print EPC list; every EPC can be reconciled with mini_gscale_receipts.barcode.
+-- print EPC list and every EPC can be reconciled with mini_gscale_receipts.barcode.
 CREATE TABLE IF NOT EXISTS mini_rps_batch_history (
     batch_id TEXT NOT NULL,
     owner_key TEXT NOT NULL,

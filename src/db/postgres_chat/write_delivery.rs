@@ -170,6 +170,7 @@ pub(super) async fn claim_push_deliveries(
                AND dead_lettered_at IS NULL
                AND next_attempt_at <= now()
                AND (locked_until IS NULL OR locked_until < now())
+               AND recipient_key NOT LIKE 'customer:%'
              ORDER BY next_attempt_at, created_at
              FOR UPDATE SKIP LOCKED
              LIMIT $1
@@ -342,10 +343,20 @@ async fn sender_for_conversation(
            JOIN mini_chat_conversation_members member ON member.principal_id = p.principal_id
            WHERE p.principal_role = $1
              AND p.principal_ref = $2
+             AND p.principal_role <> 'customer'
              AND member.conversation_id = $3
              AND member.left_at IS NULL
              AND member.can_post = TRUE
-             AND p.active = TRUE"#,
+             AND p.active = TRUE
+             AND NOT EXISTS (
+               SELECT 1
+               FROM mini_chat_conversation_members customer_member
+               JOIN mini_chat_principals customer_principal
+                 ON customer_principal.principal_id = customer_member.principal_id
+               WHERE customer_member.conversation_id = member.conversation_id
+                 AND customer_member.left_at IS NULL
+                 AND customer_principal.principal_role = 'customer'
+             )"#,
     )
     .bind(role_key(&principal.role))
     .bind(principal.ref_.trim())

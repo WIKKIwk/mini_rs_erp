@@ -1,6 +1,6 @@
 use bytes::{Bytes, BytesMut};
 
-use super::service::{validate_identifier, validate_stored_object};
+use super::service::{ensure_chat_principal, validate_identifier, validate_stored_object};
 use super::service_support::{map_storage_error, new_id, upload_instruction};
 use super::{
     ChatMediaByteStream, ChatMediaChunkUploadResult, ChatMediaCreateResult, ChatMediaError,
@@ -138,6 +138,7 @@ impl super::ChatMediaService {
         content_range: Option<&str>,
         stream: ChatMediaByteStream,
     ) -> Result<ChatMediaChunkUploadResult, ChatMediaError> {
+        ensure_chat_principal(principal)?;
         let conversation_id = validate_identifier(conversation_id)?;
         let upload_id = validate_identifier(upload_id)?;
         let record = self

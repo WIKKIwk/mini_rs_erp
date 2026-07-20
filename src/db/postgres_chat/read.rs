@@ -62,6 +62,15 @@ LEFT JOIN mini_chat_media media ON media.media_id = attachment.media_id
 WHERE current_principal.principal_role = $1
   AND current_principal.principal_ref = $2
   AND c.last_message_sequence > 0
+  AND NOT EXISTS (
+    SELECT 1
+    FROM mini_chat_conversation_members customer_member
+    JOIN mini_chat_principals customer_principal
+      ON customer_principal.principal_id = customer_member.principal_id
+    WHERE customer_member.conversation_id = c.conversation_id
+      AND customer_member.left_at IS NULL
+      AND customer_principal.principal_role = 'customer'
+  )
 "#;
 
 pub(super) async fn conversations(
@@ -89,6 +98,7 @@ mod tests {
     #[test]
     fn conversation_list_excludes_threads_without_messages() {
         assert!(CONVERSATION_SELECT.contains("c.last_message_sequence > 0"));
+        assert!(CONVERSATION_SELECT.contains("customer_principal.principal_role = 'customer'"));
     }
 }
 
@@ -112,6 +122,15 @@ pub(super) async fn messages(
                AND member.left_at IS NULL
                AND viewer.principal_role = $2
                AND viewer.principal_ref = $3
+               AND NOT EXISTS (
+                 SELECT 1
+                 FROM mini_chat_conversation_members customer_member
+                 JOIN mini_chat_principals customer_principal
+                   ON customer_principal.principal_id = customer_member.principal_id
+                 WHERE customer_member.conversation_id = member.conversation_id
+                   AND customer_member.left_at IS NULL
+                   AND customer_principal.principal_role = 'customer'
+               )
            )"#,
     )
     .bind(conversation_id)
@@ -199,12 +218,21 @@ pub(super) async fn sync_events(
         return Ok((Vec::new(), after_cursor, false));
     }
     let rows = sqlx::query_as::<_, (i64, serde_json::Value)>(
-        r#"SELECT event_cursor, payload_json
-           FROM mini_chat_outbox_events
-           WHERE event_cursor > $1
-             AND event_cursor <= $2
-             AND recipient_keys @> to_jsonb(ARRAY[$3]::TEXT[])
-           ORDER BY event_cursor ASC
+        r#"SELECT event.event_cursor, event.payload_json
+           FROM mini_chat_outbox_events event
+           WHERE event.event_cursor > $1
+             AND event.event_cursor <= $2
+             AND event.recipient_keys @> to_jsonb(ARRAY[$3]::TEXT[])
+             AND NOT EXISTS (
+               SELECT 1
+               FROM mini_chat_conversation_members customer_member
+               JOIN mini_chat_principals customer_principal
+                 ON customer_principal.principal_id = customer_member.principal_id
+               WHERE customer_member.conversation_id = event.conversation_id
+                 AND customer_member.left_at IS NULL
+                 AND customer_principal.principal_role = 'customer'
+             )
+           ORDER BY event.event_cursor ASC
            LIMIT $4"#,
     )
     .bind(after_cursor.max(0))
@@ -236,9 +264,18 @@ pub(super) async fn sync_events(
 pub async fn outbox_event(pool: &PgPool, event_id: &str) -> Result<ChatOutboxEvent, ChatError> {
     let (cursor, recipient_keys, payload) =
         sqlx::query_as::<_, (i64, serde_json::Value, serde_json::Value)>(
-            r#"SELECT event_cursor, recipient_keys, payload_json
-               FROM mini_chat_outbox_events
-               WHERE event_id = $1"#,
+            r#"SELECT event.event_cursor, event.recipient_keys, event.payload_json
+               FROM mini_chat_outbox_events event
+               WHERE event.event_id = $1
+                 AND NOT EXISTS (
+                   SELECT 1
+                   FROM mini_chat_conversation_members customer_member
+                   JOIN mini_chat_principals customer_principal
+                     ON customer_principal.principal_id = customer_member.principal_id
+                   WHERE customer_member.conversation_id = event.conversation_id
+                     AND customer_member.left_at IS NULL
+                     AND customer_principal.principal_role = 'customer'
+                 )"#,
         )
         .bind(event_id)
         .fetch_optional(pool)

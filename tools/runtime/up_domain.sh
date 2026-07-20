@@ -71,6 +71,36 @@ configure_chat_media_processor() {
 		exit 1
 	fi
 
+	local verification_dir
+	verification_dir="$(mktemp -d "${TMPDIR:-/tmp}/mini-rs-chat-media.XXXXXX")"
+	if ! "$ffmpeg" -hide_banner -encoders >"$verification_dir/encoders.txt" 2>&1 ||
+		! grep -Eq '[[:space:]]aac[[:space:]]' "$verification_dir/encoders.txt"; then
+		rm -rf -- "$verification_dir"
+		echo "configured ffmpeg does not provide the AAC encoder: $ffmpeg" >&2
+		exit 1
+	fi
+	if ! "$ffmpeg" -hide_banner -filters >"$verification_dir/filters.txt" 2>&1 ||
+		! grep -Eq '[[:space:]]showwavespic[[:space:]]' "$verification_dir/filters.txt"; then
+		rm -rf -- "$verification_dir"
+		echo "configured ffmpeg does not provide the showwavespic filter: $ffmpeg" >&2
+		exit 1
+	fi
+	if ! "$ffmpeg" -nostdin -hide_banner -loglevel error -y \
+		-f lavfi -i "sine=frequency=440:duration=0.2" \
+		-c:a aac -b:a 64k -ar 48000 -ac 1 "$verification_dir/probe.m4a" ||
+		! "$ffprobe" -v error -select_streams a:0 \
+			-show_entries stream=codec_name,channels,sample_rate \
+			-of default=noprint_wrappers=1 "$verification_dir/probe.m4a" \
+			>"$verification_dir/probe.txt" ||
+		! grep -Fxq 'codec_name=aac' "$verification_dir/probe.txt" ||
+		! grep -Fxq 'sample_rate=48000' "$verification_dir/probe.txt" ||
+		! grep -Fxq 'channels=1' "$verification_dir/probe.txt"; then
+		rm -rf -- "$verification_dir"
+		echo "chat media processor probe failed: $ffmpeg / $ffprobe" >&2
+		exit 1
+	fi
+	rm -rf -- "$verification_dir"
+
 	export MOBILE_CHAT_MEDIA_FFMPEG_BIN="$ffmpeg"
 	export MOBILE_CHAT_MEDIA_FFPROBE_BIN="$ffprobe"
 	echo "chat media processor ready: $ffmpeg / $ffprobe"

@@ -1,6 +1,11 @@
 #[cfg(test)]
 mod tests {
-    use super::{message_preview_text, push_retry_delay_seconds};
+    use super::{
+        ChatError, ChatPrincipalInput, ChatService, message_preview_text,
+        push_retry_delay_seconds,
+    };
+    use crate::core::auth::models::{Principal, PrincipalRole};
+    use crate::core::chat::can_participate_in_chat;
 
     #[test]
     fn media_notification_preview_uses_caption_or_kind_fallback() {
@@ -19,6 +24,58 @@ mod tests {
         assert_eq!(push_retry_delay_seconds(1), 2);
         assert_eq!(push_retry_delay_seconds(4), 16);
         assert_eq!(push_retry_delay_seconds(20), 900);
+    }
+
+    #[test]
+    fn chat_policy_excludes_customers_and_keeps_other_roles_available() {
+        assert!(!can_participate_in_chat(&PrincipalRole::Customer));
+        for role in [
+            PrincipalRole::Supplier,
+            PrincipalRole::Werka,
+            PrincipalRole::Aparatchi,
+            PrincipalRole::Qolipchi,
+            PrincipalRole::Boyoqchi,
+            PrincipalRole::MaterialTaminotchi,
+            PrincipalRole::Admin,
+        ] {
+            assert!(can_participate_in_chat(&role));
+        }
+    }
+
+    #[tokio::test]
+    async fn customer_cannot_create_or_list_chat() {
+        let service = ChatService::unavailable();
+        let customer = Principal {
+            role: PrincipalRole::Customer,
+            display_name: "Customer".to_string(),
+            legal_name: "Customer".to_string(),
+            ref_: "customer-1".to_string(),
+            phone: String::new(),
+            avatar_url: String::new(),
+        };
+        assert_eq!(
+            service.conversations(&customer, 30, 0).await,
+            Err(ChatError::Forbidden)
+        );
+        assert_eq!(
+            service
+                .create_or_get_dm(
+                    ChatPrincipalInput {
+                        role: PrincipalRole::Aparatchi,
+                        ref_: "worker-1".to_string(),
+                        display_name: "Worker".to_string(),
+                        avatar_url: String::new(),
+                    },
+                    ChatPrincipalInput {
+                        role: PrincipalRole::Customer,
+                        ref_: "customer-1".to_string(),
+                        display_name: "Customer".to_string(),
+                        avatar_url: String::new(),
+                    },
+                )
+                .await,
+            Err(ChatError::Forbidden)
+        );
     }
 }
 
