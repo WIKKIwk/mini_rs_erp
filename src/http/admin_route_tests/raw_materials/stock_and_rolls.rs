@@ -590,6 +590,7 @@ async fn material_taminotchi_reprints_only_the_existing_raw_material_identity() 
     assert_eq!(body["print"]["item_code"], "INK-BLACK");
     assert_eq!(body["print"]["gross_qty"], 12.0);
     assert_eq!(body["print"]["print_count"], 1);
+    assert_eq!(body["print"]["label_kind"], "material_product");
     let reprint_id = body["reprint_id"].as_str().expect("reprint id");
 
     let confirm_body = serde_json::json!({

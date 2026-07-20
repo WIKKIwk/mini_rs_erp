@@ -39,6 +39,7 @@ impl GscaleService {
         request: MaterialReceiptPrintRequest,
     ) -> Result<MaterialReceiptPrintResponse, GscaleServiceError> {
         let job = NormalizedMaterialReceiptJob::from_request(request)?;
+        require_single_material_receipt(&job)?;
         let epc = self.next_epc()?;
         Ok(material_receipt_client_response(
             job,
@@ -60,6 +61,7 @@ impl GscaleService {
             )
         })?;
         let job = NormalizedMaterialReceiptJob::from_request(request)?;
+        require_single_material_receipt(&job)?;
         let epc = normalize_client_epc(epc)?;
         let draft_name = record_confirmed_material_receipt(
             receipt_store.clone(),
@@ -129,6 +131,37 @@ impl GscaleService {
         request: MaterialReceiptPrintRequest,
         late_error: Option<LateMaterialReceiptErrorHandler>,
     ) -> Result<MaterialReceiptPrintResponse, GscaleServiceError> {
+        let print_count = Self::material_receipt_print_count(&request)?;
+        let mut last_response = None;
+        for _ in 0..print_count {
+            let mut single_request = request.clone();
+            single_request.print_count = 1;
+            last_response = Some(
+                self.print_material_receipt_driver_once_with_late_error(
+                    single_request,
+                    late_error.clone(),
+                )
+                .await?,
+            );
+        }
+        let mut response = last_response.ok_or_else(|| {
+            GscaleServiceError::InvalidInput("print_count_required".to_string())
+        })?;
+        response.print_count = print_count;
+        Ok(response)
+    }
+
+    pub fn material_receipt_print_count(
+        request: &MaterialReceiptPrintRequest,
+    ) -> Result<u32, GscaleServiceError> {
+        Ok(NormalizedMaterialReceiptJob::from_request(request.clone())?.print_count)
+    }
+
+    pub async fn print_material_receipt_driver_once_with_late_error(
+        &self,
+        request: MaterialReceiptPrintRequest,
+        late_error: Option<LateMaterialReceiptErrorHandler>,
+    ) -> Result<MaterialReceiptPrintResponse, GscaleServiceError> {
         let receipt_store = self.receipt_store.as_ref().ok_or_else(|| {
             GscaleServiceError::NotConfigured(
                 "material receipt store is not configured".to_string(),
@@ -138,6 +171,7 @@ impl GscaleService {
             GscaleServiceError::NotConfigured("scale driver is not configured".to_string())
         })?;
         let job = NormalizedMaterialReceiptJob::from_request(request)?;
+        require_single_material_receipt(&job)?;
         let epc = self.next_epc()?;
         let (print_result_tx, print_result_rx) = oneshot::channel();
         tokio::spawn(record_parallel_material_receipt(
@@ -188,6 +222,17 @@ impl GscaleService {
             print_count: job.print_count,
         })
     }
+}
+
+fn require_single_material_receipt(
+    job: &NormalizedMaterialReceiptJob,
+) -> Result<(), GscaleServiceError> {
+    if job.print_count != 1 {
+        return Err(GscaleServiceError::InvalidInput(
+            "material_receipt_requires_unique_epc_per_print".to_string(),
+        ));
+    }
+    Ok(())
 }
 
 fn material_receipt_client_response(

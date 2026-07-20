@@ -46,6 +46,7 @@ pub async fn raw_material_stock_reprint_prepare(
             "unit": stock.uom,
             "printer": "godex",
             "print_mode": "label",
+            "label_kind": "material_product",
             "printer_status": "client_usb_pending",
             "print_count": 1,
         }

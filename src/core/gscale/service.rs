@@ -18,6 +18,7 @@ use super::ports::{EpcSource, MaterialReceiptStorePort, ScaleDriverPort};
 pub use error::GscaleServiceError;
 
 pub(super) const MIN_BATCH_QTY_KG: f64 = 0.100;
+pub(super) const MAX_MATERIAL_PRINT_COUNT: u32 = 100;
 pub type LateMaterialReceiptErrorHandler = Arc<dyn Fn(String) + Send + Sync>;
 pub type WarehouseEventHandler = Arc<dyn Fn(String, String) + Send + Sync>;
 

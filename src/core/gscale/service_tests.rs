@@ -155,12 +155,18 @@ async fn notifies_warehouse_after_successful_material_receipt_submit() {
 }
 
 #[tokio::test]
-async fn forwards_print_count_to_driver_without_creating_extra_receipt_drafts() {
+async fn duplicate_count_creates_one_unique_epc_and_receipt_per_product() {
     let events = Arc::new(Mutex::new(Vec::new()));
     let service = GscaleService::new()
         .with_receipt_store(Arc::new(FakeReceiptStore::new(events.clone())))
         .with_driver(Arc::new(FakeDriver::done(events.clone())))
-        .with_epc_source(Arc::new(QueueEpc::new(["EPC-DUP"])));
+        .with_epc_source(Arc::new(QueueEpc::new([
+            "EPC-DUP-1",
+            "EPC-DUP-2",
+            "EPC-DUP-3",
+            "EPC-DUP-4",
+            "EPC-DUP-5",
+        ])));
     let mut request = request();
     request.print_count = 5;
 
@@ -171,14 +177,18 @@ async fn forwards_print_count_to_driver_without_creating_extra_receipt_drafts() 
 
     assert_eq!(response.status, "printed");
     assert_eq!(response.print_count, 5);
-    wait_for_event(&events, "submit:MAT-STE-001").await;
+    wait_for_event_count(&events, "submit:MAT-STE-001", 5).await;
+    let events = events.lock().unwrap();
+    for index in 1..=5 {
+        assert!(events.iter().any(|event| event == &format!("print:EPC-DUP-{index}:1")));
+        assert!(events.iter().any(|event| event == &format!("create:EPC-DUP-{index}:1.720")));
+    }
     assert_eq!(
-        events.lock().unwrap().as_slice(),
-        [
-            "print:EPC-DUP:5",
-            "create:EPC-DUP:1.720",
-            "submit:MAT-STE-001"
-        ]
+        events
+            .iter()
+            .filter(|event| event.as_str() == "submit:MAT-STE-001")
+            .count(),
+        5
     );
 }
 
@@ -290,6 +300,23 @@ async fn material_receipt_client_print_records_only_after_usb_confirmation() {
     );
 }
 
+#[test]
+fn client_print_rejects_multiple_products_with_one_prepared_epc() {
+    let service = GscaleService::new()
+        .with_epc_source(Arc::new(QueueEpc::new(["303132333435363738394142"])));
+    let mut input = request();
+    input.print_count = 2;
+
+    let error = service
+        .prepare_material_receipt_client_print(input)
+        .expect_err("one prepared EPC must never represent multiple products");
+
+    assert_eq!(
+        error.to_string(),
+        "invalid input: material_receipt_requires_unique_epc_per_print"
+    );
+}
+
 async fn wait_for_event(events: &Arc<Mutex<Vec<String>>>, needle: &str) {
     for _ in 0..50 {
         if events.lock().unwrap().iter().any(|event| event == needle) {
@@ -299,6 +326,30 @@ async fn wait_for_event(events: &Arc<Mutex<Vec<String>>>, needle: &str) {
     }
     panic!(
         "timed out waiting for {needle}; events={:?}",
+        events.lock().unwrap()
+    );
+}
+
+async fn wait_for_event_count(
+    events: &Arc<Mutex<Vec<String>>>,
+    needle: &str,
+    expected: usize,
+) {
+    for _ in 0..50 {
+        if events
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|event| event.as_str() == needle)
+            .count()
+            >= expected
+        {
+            return;
+        }
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    panic!(
+        "timed out waiting for {expected} x {needle}; events={:?}",
         events.lock().unwrap()
     );
 }

@@ -9,7 +9,7 @@ use serde::{Deserialize, Serialize};
 use crate::app::AppState;
 use crate::core::auth::models::{Principal, PrincipalRole};
 use crate::core::authz::Capability;
-use crate::core::gscale::GscaleServiceError;
+use crate::core::gscale::{GscaleService, GscaleServiceError};
 use crate::core::rps_batch::{
     RpsBatchClientPrintConfirmRequest, RpsBatchPrintRequest, RpsBatchServiceError,
     RpsBatchStartRequest,
@@ -143,12 +143,37 @@ pub async fn print(
             }
         });
     });
-    let response = state
-        .gscale
-        .print_material_receipt_driver_first_with_late_error(material_request, Some(late_error))
-        .await
+    let print_count = GscaleService::material_receipt_print_count(&material_request)
         .map_err(gscale_error)?;
-    record_batch_print(&state, &principal, &batch_id, &response).await;
+    material_request.print_count = 1;
+    let mut last_response = None;
+    for completed in 0..print_count {
+        let response = match state
+            .gscale
+            .print_material_receipt_driver_once_with_late_error(
+                material_request.clone(),
+                Some(late_error.clone()),
+            )
+            .await
+        {
+            Ok(response) => response,
+            Err(error) if completed > 0 => {
+                let (status, Json(mut body)) = gscale_error(error);
+                body.detail = format!(
+                    "{completed}/{print_count} ta mahsulot chop etildi; keyingi print to'xtadi: {}",
+                    body.detail
+                );
+                return Err((status, Json(body)));
+            }
+            Err(error) => return Err(gscale_error(error)),
+        };
+        record_batch_print(&state, &principal, &batch_id, &response).await;
+        last_response = Some(response);
+    }
+    let mut response = last_response.ok_or_else(|| {
+        bad_request("print_count_required", "print_count must be at least one")
+    })?;
+    response.print_count = print_count;
     Ok(Json(
         serde_json::to_value(response).unwrap_or_else(|_| serde_json::json!({"ok": false})),
     ))

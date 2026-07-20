@@ -1,3 +1,4 @@
+use std::collections::HashSet;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
@@ -193,6 +194,90 @@ async fn rps_batch_print_uses_active_rs_batch_and_transaction_flow() {
     assert_eq!(
         history_body["batches"][0]["prints"][0]["epc"],
         stopped_body["batch"]["prints"][0]["epc"]
+    );
+}
+
+#[tokio::test]
+async fn rps_batch_duplicate_count_records_distinct_products_and_epcs() {
+    let events = Arc::new(Mutex::new(Vec::new()));
+    let mut state = test_state();
+    state.gscale = GscaleService::new()
+        .with_receipt_store(Arc::new(FakeReceiptStore {
+            events: events.clone(),
+            receipt_actors: Arc::new(Mutex::new(Vec::new())),
+        }))
+        .with_driver(Arc::new(FakeDriver {
+            events: events.clone(),
+        }));
+    assign_warehouse_to_principal(
+        &state,
+        PrincipalRole::MaterialTaminotchi,
+        "admin",
+        "Stores - A",
+    )
+    .await;
+    let token = session(&state, PrincipalRole::MaterialTaminotchi).await;
+    let router = build_router(state);
+
+    let started = router
+        .clone()
+        .oneshot(request(
+            "POST",
+            "/v1/mobile/rps/batch/start",
+            &token,
+            r#"{
+                "client_batch_id":"batch-unique-products",
+                "driver_url":"http://127.0.0.1:39117",
+                "item_code":"ITEM-1",
+                "item_name":"Green Tea",
+                "warehouse":"Stores - A",
+                "printer":"godex",
+                "print_mode":"label"
+            }"#,
+        ))
+        .await
+        .expect("start response");
+    assert_eq!(json_body(started).await["ok"], true);
+
+    let printed = router
+        .clone()
+        .oneshot(request(
+            "POST",
+            "/v1/mobile/rps/batch/print",
+            &token,
+            r#"{"gross_qty":2.5,"unit":"kg","print_count":3}"#,
+        ))
+        .await
+        .expect("print response");
+    let printed_body = json_body(printed).await;
+    assert_eq!(printed_body["ok"], true);
+    assert_eq!(printed_body["print_count"], 3);
+
+    tokio::time::sleep(Duration::from_millis(25)).await;
+    let current = router
+        .oneshot(request("GET", "/v1/mobile/rps/batch/state", &token, ""))
+        .await
+        .expect("state response");
+    let current_body = json_body(current).await;
+    let prints = current_body["batch"]["prints"]
+        .as_array()
+        .expect("batch prints");
+    let epcs = prints
+        .iter()
+        .filter_map(|entry| entry["epc"].as_str())
+        .collect::<HashSet<_>>();
+
+    assert_eq!(prints.len(), 3);
+    assert_eq!(epcs.len(), 3);
+    assert!(prints.iter().all(|entry| entry["print_count"] == 1));
+    assert_eq!(
+        events
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|event| event.as_str() == "print")
+            .count(),
+        3
     );
 }
 

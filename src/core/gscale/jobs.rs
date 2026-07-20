@@ -1,4 +1,4 @@
-use super::{GscaleServiceError, MIN_BATCH_QTY_KG};
+use super::{GscaleServiceError, MAX_MATERIAL_PRINT_COUNT, MIN_BATCH_QTY_KG};
 use crate::core::gscale::models::{
     MaterialReceiptPrintRequest, ProgressLabelPrintRequest, ScaleDriverPrintRequest,
 };
@@ -105,6 +105,11 @@ impl NormalizedMaterialReceiptJob {
     pub(super) fn from_request(
         request: MaterialReceiptPrintRequest,
     ) -> Result<Self, GscaleServiceError> {
+        if request.print_count > MAX_MATERIAL_PRINT_COUNT {
+            return Err(GscaleServiceError::InvalidInput(format!(
+                "print_count_must_not_exceed_{MAX_MATERIAL_PRINT_COUNT}"
+            )));
+        }
         let item_code = request.item_code.trim().to_string();
         let warehouse = request.warehouse.trim().to_string();
         if item_code.is_empty() || warehouse.is_empty() {
