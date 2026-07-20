@@ -1,7 +1,7 @@
 use async_trait::async_trait;
-use sqlx::PgPool;
+use sqlx::{PgPool, Postgres, Transaction};
 
-use crate::core::rps_batch::models::RpsBatchSession;
+use crate::core::rps_batch::models::{RpsBatchSession, is_valid_batch_code};
 use crate::core::rps_batch::ports::{RpsBatchStoreError, RpsBatchStorePort};
 
 #[derive(Clone)]
@@ -27,16 +27,18 @@ impl RpsBatchStorePort for PostgresRpsBatchStore {
         .fetch_optional(&self.pool)
         .await
         .map_err(|_| RpsBatchStoreError::StoreFailed)?;
-        payload
-            .map(|value| {
-                serde_json::from_value::<RpsBatchSession>(value)
-                    .map_err(|_| RpsBatchStoreError::StoreFailed)
-            })
-            .transpose()
+        payload.map(decode_batch).transpose()
     }
 
-    async fn put(&self, batch: RpsBatchSession) -> Result<(), RpsBatchStoreError> {
+    async fn put(&self, mut batch: RpsBatchSession) -> Result<(), RpsBatchStoreError> {
+        batch.ensure_batch_code();
         let payload = serde_json::to_value(&batch).map_err(|_| RpsBatchStoreError::StoreFailed)?;
+        let mut tx = self
+            .pool
+            .begin()
+            .await
+            .map_err(|_| RpsBatchStoreError::StoreFailed)?;
+        reserve_batch_identity(&mut tx, &batch).await?;
         sqlx::query(
             "INSERT INTO mini_rps_batches
                 (owner_key, batch_id, active, owner_role, owner_ref, item_code, warehouse,
@@ -60,19 +62,23 @@ impl RpsBatchStorePort for PostgresRpsBatchStore {
         .bind(batch.item_code.trim())
         .bind(batch.warehouse.trim())
         .bind(payload)
-        .execute(&self.pool)
+        .execute(&mut *tx)
         .await
         .map_err(|_| RpsBatchStoreError::StoreFailed)?;
-        Ok(())
+        tx.commit()
+            .await
+            .map_err(|_| RpsBatchStoreError::StoreFailed)
     }
 
-    async fn complete(&self, batch: RpsBatchSession) -> Result<(), RpsBatchStoreError> {
+    async fn complete(&self, mut batch: RpsBatchSession) -> Result<(), RpsBatchStoreError> {
+        batch.ensure_batch_code();
         let payload = serde_json::to_value(&batch).map_err(|_| RpsBatchStoreError::StoreFailed)?;
         let mut tx = self
             .pool
             .begin()
             .await
             .map_err(|_| RpsBatchStoreError::StoreFailed)?;
+        reserve_batch_identity(&mut tx, &batch).await?;
         sqlx::query(
             "INSERT INTO mini_rps_batches
                 (owner_key, batch_id, active, owner_role, owner_ref, item_code, warehouse,
@@ -164,6 +170,9 @@ impl RpsBatchStorePort for PostgresRpsBatchStore {
                  SELECT
                      jsonb_build_object(
                          'id', 'legacy_receipt_' || receipt.barcode,
+                         'batch_code', '42' || upper(substr(md5(
+                             $1 || chr(31) || 'legacy_receipt_' || receipt.barcode
+                         ), 1, 22)),
                          'active', false,
                          'owner_key', $1,
                          'owner_role', receipt.payload_json->>'actor_role',
@@ -230,10 +239,50 @@ impl RpsBatchStorePort for PostgresRpsBatchStore {
         .map_err(|_| RpsBatchStoreError::StoreFailed)?;
         payloads
             .into_iter()
-            .map(|value| {
-                serde_json::from_value::<RpsBatchSession>(value)
-                    .map_err(|_| RpsBatchStoreError::StoreFailed)
-            })
+            .map(decode_batch)
             .collect()
     }
+}
+
+fn decode_batch(value: serde_json::Value) -> Result<RpsBatchSession, RpsBatchStoreError> {
+    let mut batch = serde_json::from_value::<RpsBatchSession>(value)
+        .map_err(|_| RpsBatchStoreError::StoreFailed)?;
+    batch.ensure_batch_code();
+    Ok(batch)
+}
+
+async fn reserve_batch_identity(
+    tx: &mut Transaction<'_, Postgres>,
+    batch: &RpsBatchSession,
+) -> Result<(), RpsBatchStoreError> {
+    if !is_valid_batch_code(&batch.batch_code) {
+        return Err(RpsBatchStoreError::StoreFailed);
+    }
+    sqlx::query(
+        "INSERT INTO mini_rps_batch_identities (batch_code, owner_key, batch_id)
+         VALUES ($1, $2, $3)
+         ON CONFLICT DO NOTHING",
+    )
+    .bind(batch.batch_code.trim())
+    .bind(batch.owner_key.trim())
+    .bind(batch.id.trim())
+    .execute(&mut **tx)
+    .await
+    .map_err(|_| RpsBatchStoreError::StoreFailed)?;
+
+    let stored_code = sqlx::query_scalar::<_, String>(
+        "SELECT batch_code::TEXT
+         FROM mini_rps_batch_identities
+         WHERE owner_key = $1 AND batch_id = $2",
+    )
+    .bind(batch.owner_key.trim())
+    .bind(batch.id.trim())
+    .fetch_optional(&mut **tx)
+    .await
+    .map_err(|_| RpsBatchStoreError::StoreFailed)?;
+
+    if stored_code.as_deref().map(str::trim) != Some(batch.batch_code.trim()) {
+        return Err(RpsBatchStoreError::StoreFailed);
+    }
+    Ok(())
 }

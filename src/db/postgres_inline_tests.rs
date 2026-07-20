@@ -161,6 +161,23 @@ mod tests {
     }
 
     #[test]
+    fn rps_batch_code_migration_is_unique_additive_and_backfills_payloads() {
+        let migration = POSTGRES_MIGRATIONS
+            .iter()
+            .find(|(version, _)| *version == "0022_rps_batch_codes")
+            .map(|(_, sql)| sql.to_lowercase())
+            .expect("RPS batch code migration");
+
+        assert!(migration.contains("create table if not exists mini_rps_batch_identities"));
+        assert!(migration.contains("batch_code char(24) primary key"));
+        assert!(migration.contains("unique (owner_key, batch_id)"));
+        assert!(migration.contains("jsonb_set"));
+        assert!(migration.contains("on conflict (owner_key, batch_id) do nothing"));
+        assert!(!migration.contains("delete from"));
+        assert!(!migration.contains("drop table"));
+    }
+
+    #[test]
     fn applied_chat_delivery_migration_checksum_is_immutable() {
         let migration = POSTGRES_MIGRATIONS
             .iter()

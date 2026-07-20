@@ -43,6 +43,17 @@ async fn rps_batch_start_state_stop_is_persisted_by_rs() {
     assert_eq!(started_body["ok"], true);
     assert_eq!(started_body["batch"]["active"], true);
     assert_eq!(started_body["batch"]["id"], "batch-1");
+    let batch_code = started_body["batch"]["batch_code"]
+        .as_str()
+        .expect("batch code")
+        .to_string();
+    assert_eq!(batch_code.len(), 24);
+    assert!(batch_code.starts_with("42"));
+    assert!(
+        batch_code
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'A'..=b'F').contains(&byte))
+    );
     assert_eq!(started_body["batch"]["item_code"], "ITEM-1");
     assert_eq!(started_body["batch"]["warehouse"], "Stores - A");
     assert_eq!(started_body["batch"]["tare_kg"], 0.78);
@@ -55,6 +66,7 @@ async fn rps_batch_start_state_stop_is_persisted_by_rs() {
     let current_body = json_body(current).await;
 
     assert_eq!(current_body["batch"]["active"], true);
+    assert_eq!(current_body["batch"]["batch_code"], batch_code);
     assert_eq!(current_body["batch"]["item_name"], "Green Tea");
 
     let stopped = router
@@ -65,6 +77,7 @@ async fn rps_batch_start_state_stop_is_persisted_by_rs() {
     let stopped_body = json_body(stopped).await;
 
     assert_eq!(stopped_body["batch"]["active"], false);
+    assert_eq!(stopped_body["batch"]["batch_code"], batch_code);
     assert_eq!(stopped_body["batch"]["item_code"], "ITEM-1");
 }
 
@@ -173,6 +186,10 @@ async fn rps_batch_print_uses_active_rs_batch_and_transaction_flow() {
     let history_body = json_body(history).await;
     assert_eq!(history_body["batches"].as_array().map(Vec::len), Some(1));
     assert_eq!(history_body["batches"][0]["id"], "batch-print-1");
+    assert_eq!(
+        history_body["batches"][0]["batch_code"],
+        stopped_body["batch"]["batch_code"]
+    );
     assert_eq!(
         history_body["batches"][0]["prints"][0]["epc"],
         stopped_body["batch"]["prints"][0]["epc"]

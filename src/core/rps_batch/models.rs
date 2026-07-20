@@ -1,4 +1,5 @@
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 
 use crate::core::gscale::models::MaterialReceiptPrintRequest;
 
@@ -31,6 +32,8 @@ pub struct RpsBatchStartRequest {
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct RpsBatchSession {
     pub id: String,
+    #[serde(default)]
+    pub batch_code: String,
     pub active: bool,
     pub owner_key: String,
     pub owner_role: String,
@@ -81,6 +84,12 @@ impl RpsBatchSession {
             ..Self::default()
         }
     }
+
+    pub fn ensure_batch_code(&mut self) {
+        if self.batch_code.trim().is_empty() && !self.id.trim().is_empty() {
+            self.batch_code = legacy_batch_code(&self.owner_key, &self.id);
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
@@ -96,15 +105,38 @@ pub struct RpsBatchHistoryResponse {
 }
 
 impl RpsBatchHistoryResponse {
-    pub fn new(batches: Vec<RpsBatchSession>) -> Self {
+    pub fn new(mut batches: Vec<RpsBatchSession>) -> Self {
+        for batch in &mut batches {
+            batch.ensure_batch_code();
+        }
         Self { ok: true, batches }
     }
 }
 
 impl RpsBatchResponse {
-    pub fn new(batch: RpsBatchSession) -> Self {
+    pub fn new(mut batch: RpsBatchSession) -> Self {
+        batch.ensure_batch_code();
         Self { ok: true, batch }
     }
+}
+
+pub fn new_batch_code() -> String {
+    let random: [u8; 11] = rand::random();
+    format!("42{}", data_encoding::HEXUPPER.encode(&random))
+}
+
+pub fn legacy_batch_code(owner_key: &str, batch_id: &str) -> String {
+    let digest = Sha256::digest(format!("{}\u{1f}{}", owner_key.trim(), batch_id.trim()));
+    format!("42{}", data_encoding::HEXUPPER.encode(&digest[..11]))
+}
+
+pub fn is_valid_batch_code(value: &str) -> bool {
+    let value = value.trim();
+    value.len() == 24
+        && value.starts_with("42")
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'A'..=b'F').contains(&byte))
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Deserialize)]
@@ -187,5 +219,16 @@ mod tests {
         assert_eq!(request.label_kind, "material_product");
         assert_eq!(request.item_code, "CPP 1030/25");
         assert_eq!(request.print_mode, "rfid");
+    }
+
+    #[test]
+    fn batch_codes_have_a_separate_stable_24_hex_namespace() {
+        let generated = new_batch_code();
+        assert!(is_valid_batch_code(&generated));
+
+        let legacy = legacy_batch_code("material_taminotchi:M-1", "batch-1");
+        assert_eq!(legacy, legacy_batch_code("material_taminotchi:M-1", "batch-1"));
+        assert!(is_valid_batch_code(&legacy));
+        assert_ne!(legacy, legacy_batch_code("material_taminotchi:M-1", "batch-2"));
     }
 }

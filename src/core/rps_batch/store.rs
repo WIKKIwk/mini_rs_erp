@@ -8,7 +8,7 @@ use heed::{BoxedError, BytesDecode, BytesEncode, Database, Env, EnvOpenOptions};
 use serde::{Deserialize, Serialize};
 use tokio::sync::Mutex;
 
-use super::models::RpsBatchSession;
+use super::models::{RpsBatchSession, is_valid_batch_code};
 use super::ports::{RpsBatchStoreError, RpsBatchStorePort};
 use crate::error::AppError;
 
@@ -39,15 +39,19 @@ impl<'a> BytesDecode<'a> for RpsBatchSessionCodec {
 
     fn bytes_decode(bytes: &'a [u8]) -> Result<Self::DItem, BoxedError> {
         if let Some(payload) = bytes.strip_prefix(RPS_BATCH_MAGIC) {
-            return Ok(match bincode::deserialize(payload) {
+            let mut batch: RpsBatchSession = match bincode::deserialize(payload) {
                 Ok(batch) => batch,
                 Err(_) => match bincode::deserialize::<RpsBatchSessionV2>(payload) {
                     Ok(batch) => batch.into(),
                     Err(_) => bincode::deserialize::<RpsBatchSessionV1>(payload)?.into(),
                 },
-            });
+            };
+            batch.ensure_batch_code();
+            return Ok(batch);
         }
-        Ok(serde_json::from_slice(bytes)?)
+        let mut batch: RpsBatchSession = serde_json::from_slice(bytes)?;
+        batch.ensure_batch_code();
+        Ok(batch)
     }
 }
 
@@ -181,8 +185,10 @@ impl RpsBatchStorePort for RpsBatchLmdbStore {
             .map_err(lmdb_store_error)
     }
 
-    async fn put(&self, batch: RpsBatchSession) -> Result<(), RpsBatchStoreError> {
+    async fn put(&self, mut batch: RpsBatchSession) -> Result<(), RpsBatchStoreError> {
         let _guard = self.write_lock.lock().await;
+        batch.ensure_batch_code();
+        self.ensure_unique_batch_code(&batch)?;
         let mut wtxn = self.env.write_txn().map_err(lmdb_store_error)?;
         self.db
             .put(&mut wtxn, batch.owner_key.trim().as_bytes(), &batch)
@@ -190,8 +196,10 @@ impl RpsBatchStorePort for RpsBatchLmdbStore {
         wtxn.commit().map_err(lmdb_store_error)
     }
 
-    async fn complete(&self, batch: RpsBatchSession) -> Result<(), RpsBatchStoreError> {
+    async fn complete(&self, mut batch: RpsBatchSession) -> Result<(), RpsBatchStoreError> {
         let _guard = self.write_lock.lock().await;
+        batch.ensure_batch_code();
+        self.ensure_unique_batch_code(&batch)?;
         let mut wtxn = self.env.write_txn().map_err(lmdb_store_error)?;
         self.db
             .put(&mut wtxn, batch.owner_key.trim().as_bytes(), &batch)
@@ -227,6 +235,27 @@ impl RpsBatchStorePort for RpsBatchLmdbStore {
         });
         batches.truncate(limit.min(100));
         Ok(batches)
+    }
+}
+
+impl RpsBatchLmdbStore {
+    fn ensure_unique_batch_code(
+        &self,
+        batch: &RpsBatchSession,
+    ) -> Result<(), RpsBatchStoreError> {
+        if !is_valid_batch_code(&batch.batch_code) {
+            return Err(RpsBatchStoreError::StoreFailed);
+        }
+        let rtxn = self.env.read_txn().map_err(lmdb_store_error)?;
+        for entry in self.db.iter(&rtxn).map_err(lmdb_store_error)? {
+            let (_, stored) = entry.map_err(lmdb_store_error)?;
+            if stored.batch_code == batch.batch_code
+                && (stored.owner_key != batch.owner_key || stored.id != batch.id)
+            {
+                return Err(RpsBatchStoreError::StoreFailed);
+            }
+        }
+        Ok(())
     }
 }
 
@@ -291,6 +320,31 @@ mod tests {
         );
     }
 
+    #[tokio::test]
+    async fn lmdb_batch_store_rejects_batch_code_reuse() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let store = RpsBatchLmdbStore::open(dir.path().join("batch.lmdb"), 1024 * 1024)
+            .expect("lmdb store");
+        let first = RpsBatchSession {
+            id: "batch-1".to_string(),
+            batch_code: "421234567890ABCDEF123456".to_string(),
+            owner_key: "material_taminotchi:M-1".to_string(),
+            ..RpsBatchSession::default()
+        };
+        let second = RpsBatchSession {
+            id: "batch-2".to_string(),
+            batch_code: first.batch_code.clone(),
+            owner_key: "material_taminotchi:M-2".to_string(),
+            ..RpsBatchSession::default()
+        };
+
+        store.put(first).await.expect("first batch");
+        assert_eq!(
+            store.put(second).await,
+            Err(RpsBatchStoreError::StoreFailed)
+        );
+    }
+
     #[test]
     fn lmdb_batch_store_reads_pre_print_list_session() {
         let legacy = RpsBatchSessionV2 {
@@ -306,6 +360,7 @@ mod tests {
         let decoded = RpsBatchSessionCodec::bytes_decode(&bytes).expect("decode legacy batch");
 
         assert_eq!(decoded.id, "batch-v2");
+        assert!(super::super::models::is_valid_batch_code(&decoded.batch_code));
         assert!(decoded.prints.is_empty());
     }
 }

@@ -8,7 +8,7 @@ use crate::core::gscale::models::{MaterialReceiptPrintRequest, MaterialReceiptPr
 
 use super::models::{
     RpsBatchHistoryResponse, RpsBatchPrintEntry, RpsBatchPrintRequest, RpsBatchResponse,
-    RpsBatchSession, RpsBatchStartRequest,
+    RpsBatchSession, RpsBatchStartRequest, new_batch_code,
 };
 use super::ports::{RpsBatchStoreError, RpsBatchStorePort};
 
@@ -224,6 +224,7 @@ fn normalize_start(
 
     Ok(RpsBatchSession {
         id: batch_id(&request.client_batch_id, &owner.key),
+        batch_code: new_batch_code(),
         active: true,
         owner_key: owner.key,
         owner_role: owner.role,
