@@ -7,6 +7,7 @@ use crate::core::auth::models::Principal;
 use crate::core::authz::Capability;
 use crate::core::gscale::GscaleServiceError;
 use crate::core::qolip::{QolipBlock, QolipError};
+use crate::core::warehouses::WarehouseError;
 use crate::http::handlers::auth::bearer_token;
 
 pub(super) async fn accessible_qolip_block(
@@ -258,6 +259,24 @@ pub(super) fn conflict(error: &'static str) -> (StatusCode, Json<QolipErrorRespo
         StatusCode::CONFLICT,
         Json(QolipErrorResponse::new(error)),
     )
+}
+
+pub(super) fn qolip_block_delete_error(
+    error: WarehouseError,
+) -> (StatusCode, Json<QolipErrorResponse>) {
+    match error {
+        WarehouseError::MissingWarehouse => bad_request("block_required"),
+        WarehouseError::NotFound => bad_request("block_not_found"),
+        WarehouseError::NotEmpty(_)
+        | WarehouseError::HasActiveReservations(_)
+        | WarehouseError::HasChildren => conflict("block_in_use"),
+        WarehouseError::MissingPrincipalRef
+        | WarehouseError::AssignmentNotFound
+        | WarehouseError::StoreFailed => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(QolipErrorResponse::new("qolip_store_failed")),
+        ),
+    }
 }
 
 #[derive(Debug, Serialize)]

@@ -102,6 +102,8 @@ pub enum WarehouseError {
 
 #[async_trait]
 pub trait WarehouseStorePort: Send + Sync {
+    async fn warehouse(&self, warehouse: &str) -> Result<Option<AdminWarehouse>, WarehouseError>;
+
     async fn warehouses(
         &self,
         query: &str,
@@ -277,8 +279,21 @@ impl WarehouseService {
             .warehouse_summaries(warehouse, 500)
             .await?
             .into_iter()
-            .find(|summary| summary.warehouse.trim().eq_ignore_ascii_case(warehouse))
-            .ok_or(WarehouseError::NotFound)?;
+            .find(|summary| summary.warehouse.trim().eq_ignore_ascii_case(warehouse));
+        let summary = match summary {
+            Some(summary) => summary,
+            None => {
+                let existing = self
+                    .store
+                    .warehouse(warehouse)
+                    .await?
+                    .ok_or(WarehouseError::NotFound)?;
+                WarehouseSummary {
+                    warehouse: existing.warehouse,
+                    ..WarehouseSummary::default()
+                }
+            }
+        };
         if summary.reserved_count > 0 {
             return Err(WarehouseError::HasActiveReservations(
                 summary.reserved_count,
@@ -387,6 +402,47 @@ impl MemoryWarehouseStore {
 }
 
 include!("warehouses_memory_store.rs");
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn delete_warehouse_allows_an_empty_child_warehouse() {
+        let store = Arc::new(MemoryWarehouseStore::new());
+        let service = WarehouseService::new(store);
+        service
+            .upsert_warehouse(WarehouseUpsert {
+                warehouse: "Qolip ombori".to_string(),
+                ..WarehouseUpsert::default()
+            })
+            .await
+            .expect("parent warehouse should be created");
+        service
+            .upsert_warehouse(WarehouseUpsert {
+                warehouse: "A blok".to_string(),
+                parent_warehouse: "Qolip ombori".to_string(),
+                ..WarehouseUpsert::default()
+            })
+            .await
+            .expect("child warehouse should be created");
+
+        let deleted = service
+            .delete_warehouse(WarehouseDeleteRequest {
+                warehouse: "A blok".to_string(),
+                delete_products: false,
+            })
+            .await
+            .expect("empty child warehouse should be deleted");
+
+        assert_eq!(deleted.warehouse, "A blok");
+        assert!(service
+            .warehouses("A blok", "", 10)
+            .await
+            .expect("warehouses should load")
+            .is_empty());
+    }
+}
 
 fn assignment_key(assignment: &WarehouseAssignment) -> String {
     format!(

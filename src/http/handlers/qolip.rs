@@ -123,24 +123,24 @@ pub async fn blocks(
                 .await
                 .map_err(|_| qolip_error(QolipError::StoreFailed))?;
 
-            if !current.name.trim().eq_ignore_ascii_case(saved.warehouse.trim())
-                && state
+            if !current.name.trim().eq_ignore_ascii_case(saved.warehouse.trim()) {
+                if let Err(error) = state
                     .warehouses
                     .delete_warehouse(WarehouseDeleteRequest {
                         warehouse: current.name.clone(),
                         delete_products: false,
                     })
                     .await
-                    .is_err()
-            {
-                let _ = state
-                    .warehouses
-                    .delete_warehouse(WarehouseDeleteRequest {
-                        warehouse: saved.warehouse.clone(),
-                        delete_products: false,
-                    })
-                    .await;
-                return Err(conflict("block_in_use"));
+                {
+                    let _ = state
+                        .warehouses
+                        .delete_warehouse(WarehouseDeleteRequest {
+                            warehouse: saved.warehouse.clone(),
+                            delete_products: false,
+                        })
+                        .await;
+                    return Err(qolip_block_delete_error(error));
+                }
             }
 
             Ok(Json(serde_json::json!({
@@ -167,7 +167,7 @@ pub async fn blocks(
                     delete_products: false,
                 })
                 .await
-                .map_err(|_| conflict("block_in_use"))?;
+                .map_err(qolip_block_delete_error)?;
             Ok(Json(serde_json::json!({"ok": true})))
         }
         _ => Err(method_not_allowed()),

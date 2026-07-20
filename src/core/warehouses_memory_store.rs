@@ -1,5 +1,16 @@
 #[async_trait]
 impl WarehouseStorePort for MemoryWarehouseStore {
+    async fn warehouse(&self, warehouse: &str) -> Result<Option<AdminWarehouse>, WarehouseError> {
+        let warehouse = warehouse.trim();
+        Ok(self
+            .warehouses
+            .read()
+            .await
+            .iter()
+            .find(|item| item.warehouse.trim().eq_ignore_ascii_case(warehouse))
+            .cloned())
+    }
+
     async fn warehouses(
         &self,
         query: &str,
@@ -219,4 +230,3 @@ impl WarehouseStorePort for MemoryWarehouseStore {
         Ok(summaries)
     }
 }
-

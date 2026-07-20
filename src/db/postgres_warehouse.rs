@@ -20,6 +20,28 @@ impl PostgresWarehouseStore {
 
 #[async_trait]
 impl WarehouseStorePort for PostgresWarehouseStore {
+    async fn warehouse(&self, warehouse: &str) -> Result<Option<AdminWarehouse>, WarehouseError> {
+        let warehouse = warehouse.trim();
+        if warehouse.is_empty() {
+            return Ok(None);
+        }
+        let row = sqlx::query_as::<_, WarehouseRow>(
+            "SELECT name, company, is_group, parent_warehouse
+             FROM mini_warehouses
+             WHERE lower(name) = lower($1)",
+        )
+        .bind(warehouse)
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(|_| WarehouseError::StoreFailed)?;
+        Ok(row.map(|row| AdminWarehouse {
+            warehouse: row.name,
+            company: row.company,
+            is_group: row.is_group,
+            parent_warehouse: row.parent_warehouse,
+        }))
+    }
+
     async fn warehouses(
         &self,
         query: &str,
@@ -350,12 +372,17 @@ impl WarehouseStorePort for PostgresWarehouseStore {
             .begin()
             .await
             .map_err(|_| WarehouseError::StoreFailed)?;
-        for table in [
-            "mini_qolip_cell_qrs",
-            "mini_qolip_locations",
-            "mini_raw_material_stock",
-            "mini_finished_goods_stock",
-        ] {
+        for table in ["mini_qolip_cell_qrs", "mini_qolip_locations"] {
+            sqlx::query(&format!(
+                "DELETE FROM {table}
+                 WHERE lower(warehouse) = lower($1) OR lower(block) = lower($1)"
+            ))
+            .bind(warehouse)
+            .execute(&mut *transaction)
+            .await
+            .map_err(|_| WarehouseError::StoreFailed)?;
+        }
+        for table in ["mini_raw_material_stock", "mini_finished_goods_stock"] {
             sqlx::query(&format!(
                 "DELETE FROM {table} WHERE lower(warehouse) = lower($1)"
             ))
