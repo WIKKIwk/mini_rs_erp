@@ -11,6 +11,7 @@ pub(super) struct QolipProductRow {
     pub(super) code: String,
     pub(super) name: String,
     pub(super) item_group: String,
+    pub(super) customer_names: Vec<String>,
     pub(super) qolip_code: String,
     pub(super) size: i32,
     pub(super) has_qolip_spec: bool,

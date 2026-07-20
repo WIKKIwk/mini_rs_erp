@@ -167,6 +167,7 @@ impl QolipStorePort for MemoryQolipStore {
                 code: spec.item_code.clone(),
                 name: spec.item_name.clone(),
                 item_group: spec.item_group.clone(),
+                customer_names: Vec::new(),
                 qolip_code: spec.qolip_code.clone(),
                 size: spec.size,
                 has_qolip_spec: true,

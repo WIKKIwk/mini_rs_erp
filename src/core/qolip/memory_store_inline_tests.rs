@@ -7,6 +7,7 @@ mod tests {
             code: code.to_string(),
             name: name.to_string(),
             item_group: "Tayyor mahsulot".to_string(),
+            customer_names: Vec::new(),
             qolip_code: String::new(),
             size: 0,
             has_qolip_spec: false,

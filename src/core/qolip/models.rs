@@ -11,6 +11,8 @@ pub struct QolipProduct {
     pub code: String,
     pub name: String,
     pub item_group: String,
+    #[serde(default)]
+    pub customer_names: Vec<String>,
     pub qolip_code: String,
     pub size: i32,
     pub has_qolip_spec: bool,

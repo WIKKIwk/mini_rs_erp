@@ -119,6 +119,17 @@ pub(super) async fn load_products(
             items.code,
             items.name,
             items.item_group,
+            COALESCE((
+                SELECT array_agg(
+                    CASE WHEN btrim(customers.name) <> ''
+                         THEN customers.name ELSE customers.ref END
+                    ORDER BY lower(customers.name), customers.ref
+                )
+                FROM mini_customer_items assignments
+                JOIN mini_customers customers
+                  ON customers.ref = assignments.customer_ref
+                WHERE assignments.item_code = items.code
+            ), ARRAY[]::text[]) AS customer_names,
             COALESCE(spec.qolip_code, '') AS qolip_code,
             COALESCE(spec.size, 0) AS size,
             spec.item_code IS NOT NULL AS has_qolip_spec,
@@ -139,6 +150,14 @@ pub(super) async fn load_products(
             OR lower(items.code) LIKE $2
             OR lower(items.name) LIKE $2
             OR lower(COALESCE(spec.qolip_code, '')) LIKE $2
+            OR EXISTS (
+                SELECT 1
+                FROM mini_customer_items assignments
+                JOIN mini_customers customers
+                  ON customers.ref = assignments.customer_ref
+                WHERE assignments.item_code = items.code
+                  AND lower(customers.name) LIKE $2
+            )
           )
         ORDER BY lower(items.name), lower(items.code)
         LIMIT $3
@@ -158,6 +177,7 @@ pub(super) async fn load_products(
             code: row.code,
             name: row.name,
             item_group: row.item_group,
+            customer_names: row.customer_names,
             qolip_code: row.qolip_code,
             size: row.size,
             has_qolip_spec: row.has_qolip_spec,
