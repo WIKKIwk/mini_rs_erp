@@ -139,6 +139,7 @@ impl RpsBatchSession {
             warehouse: self.warehouse.clone(),
             printer: self.printer.clone(),
             print_mode: self.print_mode.clone(),
+            label_kind: "material_product".to_string(),
             gross_qty: request.gross_qty,
             unit: first_non_empty(&request.unit, "kg"),
             tare_enabled: self.tare_enabled,
@@ -157,5 +158,34 @@ fn first_non_empty(value: &str, default: &str) -> String {
         default.trim().to_string()
     } else {
         value.to_string()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn material_batch_print_uses_large_qr_product_label() {
+        let batch = RpsBatchSession {
+            driver_url: "http://127.0.0.1:39117".to_string(),
+            item_code: "CPP 1030/25".to_string(),
+            item_name: "CPP 1030/25".to_string(),
+            warehouse: "Kalidor".to_string(),
+            printer: "zebra".to_string(),
+            print_mode: "rfid".to_string(),
+            ..RpsBatchSession::default()
+        };
+
+        let request = batch.material_receipt_request(RpsBatchPrintRequest {
+            gross_qty: 23.0,
+            unit: "kg".to_string(),
+            driver_url: String::new(),
+            print_count: 1,
+        });
+
+        assert_eq!(request.label_kind, "material_product");
+        assert_eq!(request.item_code, "CPP 1030/25");
+        assert_eq!(request.print_mode, "rfid");
     }
 }

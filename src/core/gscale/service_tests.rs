@@ -17,6 +17,7 @@ fn request() -> MaterialReceiptPrintRequest {
         warehouse: " Stores - A ".to_string(),
         printer: "zebra".to_string(),
         print_mode: "rfid".to_string(),
+        label_kind: String::new(),
         gross_qty: 2.5,
         unit: String::new(),
         tare_enabled: true,
@@ -179,6 +180,26 @@ async fn forwards_print_count_to_driver_without_creating_extra_receipt_drafts() 
             "submit:MAT-STE-001"
         ]
     );
+}
+
+#[tokio::test]
+async fn forwards_material_product_label_kind_to_driver() {
+    let events = Arc::new(Mutex::new(Vec::new()));
+    let service = GscaleService::new()
+        .with_receipt_store(Arc::new(FakeReceiptStore::new(events.clone())))
+        .with_driver(Arc::new(FakeDriver::done(events.clone())))
+        .with_epc_source(Arc::new(QueueEpc::new(["EPC-LABEL"])));
+    let mut request = request();
+    request.label_kind = "material_product".to_string();
+
+    service
+        .print_material_receipt_driver_first(request)
+        .await
+        .expect("material product print");
+
+    assert!(events.lock().unwrap().iter().any(|event| {
+        event == "print:material_product:EPC-LABEL::1"
+    }));
 }
 
 #[tokio::test]

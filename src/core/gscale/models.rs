@@ -15,6 +15,8 @@ pub struct MaterialReceiptPrintRequest {
     #[serde(default)]
     pub print_mode: String,
     #[serde(default)]
+    pub label_kind: String,
+    #[serde(default)]
     pub gross_qty: f64,
     #[serde(default)]
     pub unit: String,
