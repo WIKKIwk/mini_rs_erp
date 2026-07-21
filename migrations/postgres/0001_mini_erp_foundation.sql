@@ -553,7 +553,7 @@ CREATE TABLE IF NOT EXISTS mini_qolip_locations (
     CONSTRAINT mini_qolip_locations_qolip_code_not_blank CHECK (btrim(qolip_code) <> ''),
     CONSTRAINT mini_qolip_locations_size_positive CHECK (size > 0),
     CONSTRAINT mini_qolip_locations_quantity_positive CHECK (quantity > 0),
-    CONSTRAINT mini_qolip_locations_column_range CHECK (column_number IS NULL OR column_number BETWEEN 1 AND 13)
+    CONSTRAINT mini_qolip_locations_column_range CHECK (column_number IS NULL OR column_number BETWEEN 1 AND 9)
 );
 
 CREATE TABLE IF NOT EXISTS mini_qolip_product_specs (
@@ -592,7 +592,7 @@ CREATE TABLE IF NOT EXISTS mini_qolip_cell_qrs (
     updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
     CONSTRAINT mini_qolip_cell_qrs_block_not_blank CHECK (btrim(block) <> ''),
     CONSTRAINT mini_qolip_cell_qrs_row_not_blank CHECK (btrim(row_letter) <> ''),
-    CONSTRAINT mini_qolip_cell_qrs_column_range CHECK (column_number BETWEEN 1 AND 13),
+    CONSTRAINT mini_qolip_cell_qrs_column_range CHECK (column_number BETWEEN 1 AND 9),
     CONSTRAINT mini_qolip_cell_qrs_label_not_blank CHECK (btrim(location_label) <> ''),
     CONSTRAINT mini_qolip_cell_qrs_qr_not_blank CHECK (btrim(qr_payload) <> ''),
     CONSTRAINT mini_qolip_cell_qrs_cell_unique UNIQUE (warehouse, block, row_letter, column_number),
