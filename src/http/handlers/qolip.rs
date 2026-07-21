@@ -53,6 +53,7 @@ pub async fn blocks(
                 .map_err(qolip_error)?;
             Ok(Json(serde_json::json!({
                 "ok": true,
+                "supports_cross_block_move": true,
                 "warehouses": warehouses,
                 "blocks": blocks,
             })))

@@ -217,8 +217,10 @@ async fn qolip_move_changes_only_the_location_across_existing_blocks() {
         .await
         .expect("list unchanged blocks");
     assert_eq!(blocks.status(), StatusCode::OK);
+    let blocks_body = json_body(blocks).await;
+    assert_eq!(blocks_body["supports_cross_block_move"], true);
     assert_eq!(
-        json_body(blocks).await["blocks"]
+        blocks_body["blocks"]
             .as_array()
             .expect("blocks")
             .len(),
