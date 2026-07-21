@@ -12,6 +12,18 @@ use crate::core::production_map::pechat;
 const DEFAULT_BOSMA_GROUP_NAME: &str = "Bosma aparat";
 const DEFAULT_LAMINATSIYA_GROUP_NAME: &str = "Laminatsiya";
 const DEFAULT_REZKA_GROUP_NAME: &str = "Rezka";
+const DEFAULT_APPARATUS: [&str; 10] = [
+    "7 ta rangli bosma aparat",
+    "8 ta rangli bosma aparat",
+    "9 ta rangli bosma aparat",
+    "Extruder laminatsiya",
+    "Flexo pechat",
+    "Holodniy kley aparat",
+    "Laminatsiya 1",
+    "Laminatsiya 2",
+    "Paket aparat",
+    "Rezka",
+];
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ApparatusGroup {
@@ -39,6 +51,8 @@ pub enum ApparatusGroupError {
     MissingName,
     #[error("apparatus is required")]
     MissingApparatus,
+    #[error("apparatus is invalid")]
+    InvalidApparatus,
     #[error("apparatus group store failed")]
     StoreFailed,
 }
@@ -101,7 +115,10 @@ impl ApparatusGroupService {
         }
         for item in self.store.apparatus(query, limit).await? {
             let name = item.trim().to_string();
-            if name.is_empty() || !seen.insert(name.to_lowercase()) {
+            if name.is_empty()
+                || is_invalid_legacy_apparatus_name(&name)
+                || !seen.insert(name.to_lowercase())
+            {
                 continue;
             }
             result.push(name);
@@ -119,6 +136,9 @@ impl ApparatusGroupService {
         let name = input.name.trim().to_string();
         if name.is_empty() {
             return Err(ApparatusGroupError::MissingApparatus);
+        }
+        if is_invalid_legacy_apparatus_name(&name) {
+            return Err(ApparatusGroupError::InvalidApparatus);
         }
         self.store.put_apparatus(&name).await
     }
@@ -235,10 +255,14 @@ fn default_apparatus_groups() -> Vec<ApparatusGroup> {
 }
 
 fn default_apparatus() -> Vec<String> {
-    default_apparatus_groups()
-        .into_iter()
-        .flat_map(|group| group.apparatus)
-        .collect()
+    DEFAULT_APPARATUS.into_iter().map(str::to_string).collect()
+}
+
+fn is_invalid_legacy_apparatus_name(value: &str) -> bool {
+    matches!(
+        value.trim().to_lowercase().as_str(),
+        "7 ta rangli pechat" | "8 ta rangli pechat" | "9 ta rangli pechat"
+    )
 }
 
 fn group_is_bosma(group: &ApparatusGroup) -> bool {
@@ -347,5 +371,44 @@ impl ApparatusGroupStorePort for MemoryApparatusGroupStore {
             apparatus.sort_by_key(|item| item.to_lowercase());
         }
         Ok(name)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn apparatus_catalog_returns_one_default_each_and_keeps_custom_names() {
+        let store = Arc::new(MemoryApparatusGroupStore::new());
+        for name in DEFAULT_APPARATUS.into_iter().chain([
+            "7 ta rangli pechat",
+            "8 ta rangli pechat",
+            "9 ta rangli pechat",
+        ]) {
+            store
+                .put_apparatus(name)
+                .await
+                .expect("seed stored apparatus");
+        }
+        store
+            .put_apparatus("Maxsus aparat")
+            .await
+            .expect("seed custom apparatus");
+        let service = ApparatusGroupService::new(store);
+
+        let apparatus = service.apparatus("", 50).await.expect("list apparatus");
+
+        let mut expected = default_apparatus();
+        expected.push("Maxsus aparat".to_string());
+        assert_eq!(apparatus, expected);
+        assert_eq!(
+            service
+                .upsert_apparatus(ApparatusUpsert {
+                    name: "7 ta rangli pechat".to_string(),
+                })
+                .await,
+            Err(ApparatusGroupError::InvalidApparatus)
+        );
     }
 }

@@ -152,8 +152,12 @@ async fn admin_apparatus_defaults_are_available_on_empty_store() {
         "7 ta rangli bosma aparat",
         "8 ta rangli bosma aparat",
         "9 ta rangli bosma aparat",
+        "Extruder laminatsiya",
+        "Flexo pechat",
+        "Holodniy kley aparat",
         "Laminatsiya 1",
         "Laminatsiya 2",
+        "Paket aparat",
         "Rezka",
     ] {
         assert!(
@@ -165,6 +169,51 @@ async fn admin_apparatus_defaults_are_available_on_empty_store() {
             "missing default apparatus {expected}"
         );
     }
+}
+
+#[tokio::test]
+async fn admin_apparatus_catalog_rejects_legacy_pechat_names() {
+    let state = test_state();
+    let token = session(&state, PrincipalRole::Admin).await;
+
+    let created = build_router(state.clone())
+        .oneshot(request_with_body(
+            "POST",
+            "/v1/mobile/admin/apparatus",
+            &token,
+            r#"{"name":"7 ta rangli pechat"}"#,
+        ))
+        .await
+        .expect("create legacy apparatus name");
+    assert_eq!(created.status(), StatusCode::BAD_REQUEST);
+    assert_eq!(json_body(created).await["error"], "apparatus is invalid");
+
+    let listed = build_router(state)
+        .oneshot(request(
+            "GET",
+            "/v1/mobile/admin/apparatus?limit=50",
+            &token,
+        ))
+        .await
+        .expect("apparatus list");
+    assert_eq!(listed.status(), StatusCode::OK);
+    let listed_body = json_body(listed).await;
+    assert_eq!(
+        listed_body
+            .as_array()
+            .expect("apparatus array")
+            .iter()
+            .filter(|item| item["name"] == "7 ta rangli bosma aparat")
+            .count(),
+        1
+    );
+    assert!(
+        listed_body
+            .as_array()
+            .expect("apparatus array")
+            .iter()
+            .all(|item| item["name"] != "7 ta rangli pechat")
+    );
 }
 
 #[tokio::test]

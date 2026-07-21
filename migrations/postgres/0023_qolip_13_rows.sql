@@ -1,4 +1,4 @@
--- Qolip ombori UI 13 qatorni ko‘rsatadi; eski schema faqat 1..9 ni qabul qilgan.
+-- Qolip ombori UI 13 qatorni ko‘rsatadi, eski schema faqat 1..9 ni qabul qilgan.
 ALTER TABLE mini_qolip_locations
     DROP CONSTRAINT IF EXISTS mini_qolip_locations_column_range;
 

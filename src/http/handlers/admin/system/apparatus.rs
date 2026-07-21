@@ -122,6 +122,7 @@ fn apparatus_group_error(error: ApparatusGroupError) -> AdminError {
     match error {
         ApparatusGroupError::MissingName => bad_request("group name is required"),
         ApparatusGroupError::MissingApparatus => bad_request("apparatus is required"),
+        ApparatusGroupError::InvalidApparatus => bad_request("apparatus is invalid"),
         ApparatusGroupError::StoreFailed => server_error("apparatus group store failed"),
     }
 }
