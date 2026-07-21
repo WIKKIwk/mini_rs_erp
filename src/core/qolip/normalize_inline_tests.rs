@@ -34,7 +34,7 @@ mod tests {
         assert_eq!(normalized.location_label, "A1");
 
         let invalid = QolipLocationUpsert {
-            column_number: Some(10),
+            column_number: Some(14),
             ..base
         };
         assert_eq!(
@@ -60,14 +60,14 @@ mod tests {
                 block: "A".to_string(),
                 warehouse: "Qolip ombor".to_string(),
                 row_letter: "B".to_string(),
-                column_number: Some(3),
+                column_number: Some(13),
             },
             &principal(),
         )
         .expect("cell");
         let resolved = resolve_cell_qr_from_payload(&seed.qr_payload, &blocks, &principal())
             .expect("resolved");
-        assert_eq!(resolved.location_label, "B3");
+        assert_eq!(resolved.location_label, "B13");
         assert_eq!(resolved.block, "A");
     }
 }

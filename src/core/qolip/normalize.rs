@@ -159,7 +159,7 @@ fn normalize_column_number(
 ) -> Result<Option<i32>, QolipError> {
     match (row_letter, value) {
         (None, None) => Ok(None),
-        (Some(_), Some(column)) if (1..=9).contains(&column) => Ok(Some(column)),
+        (Some(_), Some(column)) if (1..=13).contains(&column) => Ok(Some(column)),
         _ => Err(QolipError::InvalidLocation),
     }
 }
@@ -386,7 +386,7 @@ pub(crate) fn resolve_cell_qr_from_payload(
     }
     for block in blocks {
         for row in 'A'..='Z' {
-            for column in 1..=9 {
+            for column in 1..=13 {
                 let input = QolipCellQrInput {
                     block: block.name.clone(),
                     warehouse: block.warehouse.clone(),
