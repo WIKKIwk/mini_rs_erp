@@ -442,12 +442,20 @@ impl QolipService {
             .await?
             .ok_or(QolipError::LocationNotFound)?;
         let column_number = input.column_number.ok_or(QolipError::InvalidLocation)?;
-        let _target =
-            normalize_move_target(&source, &input.row_letter, column_number, input.quantity)?;
+        let target = normalize_move_target(
+            &source,
+            &input.block,
+            &input.warehouse,
+            &input.row_letter,
+            column_number,
+            input.quantity,
+        )?;
         self.store
             .move_location(
                 location_id,
-                &input.row_letter,
+                &target.block,
+                &target.warehouse,
+                &target.row_letter,
                 column_number,
                 input.quantity,
             )

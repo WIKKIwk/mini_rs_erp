@@ -156,11 +156,22 @@ impl QolipStorePort for PostgresQolipStore {
     async fn move_location(
         &self,
         location_id: &str,
+        block: &str,
+        warehouse: &str,
         row_letter: &str,
         column_number: i32,
         quantity: i32,
     ) -> Result<QolipLocation, QolipError> {
-        move_location_to_cell(&self.pool, location_id, row_letter, column_number, quantity).await
+        move_location_to_cell(
+            &self.pool,
+            location_id,
+            block,
+            warehouse,
+            row_letter,
+            column_number,
+            quantity,
+        )
+        .await
     }
 
     async fn cell_qr_by_payload(

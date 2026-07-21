@@ -375,7 +375,9 @@ mod tests {
             location("qolip:a:item_a:q_1:40:d:3", "ITEM-B", 4),
         ]);
 
-        let result = store.move_location("source", "D", 3, 2).await;
+        let result = store
+            .move_location("source", "A", "Qolip ombor", "D", 3, 2)
+            .await;
 
         assert!(matches!(result, Err(QolipError::LocationIdentityMismatch)));
     }

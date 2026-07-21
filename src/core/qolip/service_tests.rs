@@ -378,6 +378,8 @@ impl QolipStorePort for CheckoutLedgerStore {
     async fn move_location(
         &self,
         _location_id: &str,
+        _block: &str,
+        _warehouse: &str,
         _row_letter: &str,
         _column_number: i32,
         _quantity: i32,
@@ -482,6 +484,8 @@ impl QolipStorePort for DirectBlockAssignmentStore {
     async fn move_location(
         &self,
         _location_id: &str,
+        _block: &str,
+        _warehouse: &str,
         _row_letter: &str,
         _column_number: i32,
         _quantity: i32,

@@ -485,7 +485,7 @@ pub async fn location_move(
     }
     let principal = authenticated_principal(&state, &headers).await?;
     ensure_qolip_access(&state, &principal).await?;
-    let input: QolipLocationMove =
+    let mut input: QolipLocationMove =
         serde_json::from_slice(&body).map_err(|_| bad_request("invalid_json"))?;
     let location = state
         .qolip
@@ -494,6 +494,25 @@ pub async fn location_move(
         .map_err(qolip_error)?
         .ok_or_else(|| bad_request("location_not_found"))?;
     let _ = accessible_qolip_block(&state, &principal, &location.block).await?;
+    let requested_block = input.block.trim();
+    if requested_block.is_empty() || requested_block.eq_ignore_ascii_case(location.block.trim()) {
+        input.block = location.block.clone();
+        input.warehouse = location.warehouse.clone();
+    } else {
+        let target = match accessible_qolip_block(&state, &principal, requested_block).await? {
+            Some(block) => block,
+            None => state
+                .qolip
+                .blocks_for_principal(&principal, true)
+                .await
+                .map_err(qolip_error)?
+                .into_iter()
+                .find(|block| block.name.trim().eq_ignore_ascii_case(requested_block))
+                .ok_or_else(|| bad_request("block_not_found"))?,
+        };
+        input.block = target.name;
+        input.warehouse = target.warehouse;
+    }
     let saved = state
         .qolip
         .move_location(input, &principal)

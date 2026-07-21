@@ -92,6 +92,8 @@ pub trait QolipStorePort: Send + Sync {
     async fn move_location(
         &self,
         location_id: &str,
+        block: &str,
+        warehouse: &str,
         row_letter: &str,
         column_number: i32,
         quantity: i32,

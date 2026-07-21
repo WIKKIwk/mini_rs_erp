@@ -283,6 +283,8 @@ pub(crate) fn location_from_checkout_target(
 
 pub(crate) fn normalize_move_target(
     source: &QolipLocation,
+    block: &str,
+    warehouse: &str,
     row_letter: &str,
     column_number: i32,
     quantity: i32,
@@ -296,9 +298,24 @@ pub(crate) fn normalize_move_target(
     let row_letter = normalize_row_letter(row_letter)?.ok_or(QolipError::InvalidLocation)?;
     let column_number = normalize_column_number(Some(column_number), Some(&row_letter))?
         .ok_or(QolipError::InvalidLocation)?;
+    let block = if block.trim().is_empty() {
+        source.block.trim()
+    } else {
+        block.trim()
+    };
+    let warehouse = if warehouse.trim().is_empty()
+        && block.eq_ignore_ascii_case(source.block.trim())
+    {
+        source.warehouse.trim()
+    } else {
+        warehouse.trim()
+    };
+    if block.is_empty() || warehouse.is_empty() {
+        return Err(QolipError::InvalidLocation);
+    }
     let location_label = format!("{row_letter}{column_number}");
     let target_id = qolip_location_id(
-        &source.block,
+        block,
         &source.item_code,
         &source.qolip_code,
         source.size,
@@ -310,8 +327,8 @@ pub(crate) fn normalize_move_target(
     }
     Ok(QolipLocation {
         id: target_id,
-        block: source.block.clone(),
-        warehouse: source.warehouse.clone(),
+        block: block.to_string(),
+        warehouse: warehouse.to_string(),
         item_code: source.item_code.clone(),
         item_name: source.item_name.clone(),
         qolip_code: source.qolip_code.clone(),

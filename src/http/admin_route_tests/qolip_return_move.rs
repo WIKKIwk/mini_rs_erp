@@ -122,6 +122,111 @@ async fn qolip_return_restores_stock_and_move_changes_cell() {
 }
 
 #[tokio::test]
+async fn qolip_move_changes_only_the_location_across_existing_blocks() {
+    let mut state = test_state();
+    let store = Arc::new(crate::core::qolip::MemoryQolipStore::new());
+    store
+        .seed_blocks(vec![
+            crate::core::qolip::QolipBlock {
+                name: "A".to_string(),
+                warehouse: "Qolip ombor".to_string(),
+            },
+            crate::core::qolip::QolipBlock {
+                name: "B".to_string(),
+                warehouse: "Qolip ombor".to_string(),
+            },
+        ])
+        .await;
+    state.qolip = crate::core::qolip::QolipService::new(store);
+    let token = session(&state, PrincipalRole::Admin).await;
+
+    let source = build_router(state.clone())
+        .oneshot(request_with_body(
+            "POST",
+            "/v1/mobile/qolip/locations",
+            &token,
+            r#"{
+                "block":"A",
+                "warehouse":"Qolip ombor",
+                "item_code":"ITEM-CROSS-BLOCK",
+                "item_name":"Cross-block qolip",
+                "qolip_code":"Q-CROSS-BLOCK",
+                "size":44,
+                "quantity":2,
+                "row_letter":"A",
+                "column_number":1
+            }"#,
+        ))
+        .await
+        .expect("create source location");
+    assert_eq!(source.status(), StatusCode::OK);
+    let source_body = json_body(source).await;
+    let source_id = source_body["location"]["id"]
+        .as_str()
+        .expect("source id");
+
+    let moved = build_router(state.clone())
+        .oneshot(request_with_body(
+            "POST",
+            "/v1/mobile/qolip/locations/move",
+            &token,
+            &format!(
+                r#"{{"location_id":"{source_id}","block":"B","warehouse":"ignored-client-value","quantity":2,"row_letter":"D","column_number":13}}"#
+            ),
+        ))
+        .await
+        .expect("move across blocks");
+    assert_eq!(moved.status(), StatusCode::OK);
+    let moved_body = json_body(moved).await;
+    assert_eq!(moved_body["location"]["block"], "B");
+    assert_eq!(moved_body["location"]["warehouse"], "Qolip ombor");
+    assert_eq!(moved_body["location"]["location_label"], "D13");
+    assert_eq!(moved_body["location"]["qolip_code"], "Q-CROSS-BLOCK");
+
+    let source_locations = build_router(state.clone())
+        .oneshot(request(
+            "GET",
+            "/v1/mobile/qolip/locations?block=A",
+            &token,
+        ))
+        .await
+        .expect("list source block");
+    assert_eq!(source_locations.status(), StatusCode::OK);
+    assert_eq!(
+        json_body(source_locations).await["locations"]
+            .as_array()
+            .expect("source locations")
+            .len(),
+        0
+    );
+
+    let target_locations = build_router(state.clone())
+        .oneshot(request(
+            "GET",
+            "/v1/mobile/qolip/locations?block=B",
+            &token,
+        ))
+        .await
+        .expect("list target block");
+    assert_eq!(target_locations.status(), StatusCode::OK);
+    let target_body = json_body(target_locations).await;
+    assert_eq!(target_body["locations"][0]["qolip_code"], "Q-CROSS-BLOCK");
+
+    let blocks = build_router(state)
+        .oneshot(request("GET", "/v1/mobile/qolip/blocks", &token))
+        .await
+        .expect("list unchanged blocks");
+    assert_eq!(blocks.status(), StatusCode::OK);
+    assert_eq!(
+        json_body(blocks).await["blocks"]
+            .as_array()
+            .expect("blocks")
+            .len(),
+        2
+    );
+}
+
+#[tokio::test]
 async fn qolip_return_can_restore_to_selected_cell() {
     let state = test_state();
     let token = session(&state, PrincipalRole::Admin).await;

@@ -152,6 +152,10 @@ pub struct QolipLocationMove {
     #[serde(default)]
     pub location_id: String,
     #[serde(default)]
+    pub block: String,
+    #[serde(default)]
+    pub warehouse: String,
+    #[serde(default)]
     pub quantity: i32,
     #[serde(default)]
     pub row_letter: String,

@@ -141,6 +141,8 @@ pub(super) async fn load_location_by_qolip_code(
 pub(super) async fn move_location_to_cell(
     pool: &PgPool,
     location_id: &str,
+    block: &str,
+    warehouse: &str,
     row_letter: &str,
     column_number: i32,
     quantity: i32,
@@ -164,7 +166,14 @@ pub(super) async fn move_location_to_cell(
         return Err(QolipError::LocationNotFound);
     };
     let source = row_to_location(source_row);
-    let target = normalize_move_target(&source, row_letter, column_number, quantity)?;
+    let target = normalize_move_target(
+        &source,
+        block,
+        warehouse,
+        row_letter,
+        column_number,
+        quantity,
+    )?;
 
     let mut lock_ids = vec![source.id.clone(), target.id.clone()];
     lock_ids.sort();
@@ -192,7 +201,14 @@ pub(super) async fn move_location_to_cell(
         return Err(QolipError::LocationNotFound);
     };
     let source = row_to_location(source_row);
-    let target = normalize_move_target(&source, row_letter, column_number, quantity)?;
+    let target = normalize_move_target(
+        &source,
+        block,
+        warehouse,
+        row_letter,
+        column_number,
+        quantity,
+    )?;
 
     let target_row = sqlx::query_as::<_, QolipLocationRow>(
         "SELECT id, block, warehouse, item_code, item_name, qolip_code,

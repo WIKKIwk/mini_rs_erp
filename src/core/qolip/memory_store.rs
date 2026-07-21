@@ -681,6 +681,8 @@ impl QolipStorePort for MemoryQolipStore {
     async fn move_location(
         &self,
         location_id: &str,
+        block: &str,
+        warehouse: &str,
         row_letter: &str,
         column_number: i32,
         quantity: i32,
@@ -691,7 +693,19 @@ impl QolipStorePort for MemoryQolipStore {
             return Err(QolipError::LocationNotFound);
         };
         let source = locations[source_index].clone();
-        let target = normalize_move_target(&source, row_letter, column_number, quantity)?;
+        let target = normalize_move_target(
+            &source,
+            block,
+            warehouse,
+            row_letter,
+            column_number,
+            quantity,
+        )?;
+        if let Some(existing) = locations.iter().find(|item| item.id == target.id) {
+            if !location_identity_matches(existing, &target) {
+                return Err(QolipError::LocationIdentityMismatch);
+            }
+        }
         let remaining = source.quantity - quantity;
         if remaining > 0 {
             locations[source_index].quantity = remaining;
@@ -699,9 +713,6 @@ impl QolipStorePort for MemoryQolipStore {
             locations.remove(source_index);
         }
         if let Some(target_index) = locations.iter().position(|item| item.id == target.id) {
-            if !location_identity_matches(&locations[target_index], &target) {
-                return Err(QolipError::LocationIdentityMismatch);
-            }
             locations[target_index].quantity += target.quantity;
             let saved = locations[target_index].clone();
             locations.sort_by(|left, right| {

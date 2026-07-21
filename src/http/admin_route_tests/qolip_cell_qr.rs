@@ -560,6 +560,8 @@ impl QolipStorePort for ForbiddenQolipStore {
     async fn move_location(
         &self,
         _location_id: &str,
+        _block: &str,
+        _warehouse: &str,
         _row_letter: &str,
         _column_number: i32,
         _quantity: i32,
