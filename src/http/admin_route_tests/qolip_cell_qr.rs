@@ -18,7 +18,7 @@ async fn qolip_cell_qr_print_reuses_same_payload_for_same_cell() {
         "warehouse":"Qolip ombor",
         "block":"A",
         "row_letter":"B",
-        "column_number":7,
+        "column_number":13,
         "driver_url":"http://127.0.0.1:39117",
         "printer":"zebra",
         "print_mode":"rfid"
@@ -59,7 +59,7 @@ async fn qolip_cell_qr_print_reuses_same_payload_for_same_cell() {
     assert_eq!(printed[0].epc, first_qr);
     assert_eq!(printed[1].epc, first_qr);
     assert_eq!(printed[0].label_kind, "qolip_cell");
-    assert_eq!(printed[0].item_name, "B7");
+    assert_eq!(printed[0].item_name, "B13");
 }
 
 #[tokio::test]
