@@ -15,7 +15,8 @@ mod rows;
 
 use self::catalog::{
     delete_product_specs, load_all_blocks, load_assigned_blocks, load_assigned_warehouses,
-    load_product_spec, load_product_spec_by_qolip_code, load_products, save_product_spec,
+    load_product_spec, load_product_spec_by_qolip_code, load_products,
+    rename_block as rename_qolip_block, save_product_spec,
 };
 use self::cell_qr::{load_cell_qr_by_payload, save_cell_qr};
 pub(crate) use self::checkouts::save_checkout_tx;
@@ -51,6 +52,15 @@ impl QolipStorePort for PostgresQolipStore {
 
     async fn all_blocks(&self) -> Result<Vec<QolipBlock>, QolipError> {
         load_all_blocks(&self.pool).await
+    }
+
+    async fn rename_block(
+        &self,
+        block: &str,
+        new_block: &str,
+        warehouse: &str,
+    ) -> Result<QolipBlock, QolipError> {
+        rename_qolip_block(&self.pool, block, new_block, warehouse).await
     }
 
     async fn products(

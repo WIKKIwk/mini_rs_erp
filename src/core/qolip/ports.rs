@@ -12,6 +12,15 @@ pub trait QolipStorePort: Send + Sync {
     async fn assigned_warehouses(&self, principal: &Principal) -> Result<Vec<String>, QolipError>;
     async fn assigned_blocks(&self, principal: &Principal) -> Result<Vec<QolipBlock>, QolipError>;
     async fn all_blocks(&self) -> Result<Vec<QolipBlock>, QolipError>;
+    async fn rename_block(
+        &self,
+        block: &str,
+        new_block: &str,
+        warehouse: &str,
+    ) -> Result<QolipBlock, QolipError> {
+        let _ = (block, new_block, warehouse);
+        Err(QolipError::StoreFailed)
+    }
     async fn products(
         &self,
         query: &str,

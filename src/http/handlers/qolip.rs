@@ -96,8 +96,14 @@ pub async fn blocks(
                 .principal_has_capability(&principal, Capability::AdminAccess)
                 .await;
             let current = managed_qolip_block(&state, &principal, &input.block, is_admin).await?;
-            ensure_qolip_block_is_empty(&state, &principal, &current, is_admin).await?;
             let warehouse = accessible_qolip_warehouse(&state, &principal, &input.warehouse).await?;
+            if !current
+                .warehouse
+                .trim()
+                .eq_ignore_ascii_case(warehouse.trim())
+            {
+                return Err(forbidden());
+            }
 
             if !current.name.trim().eq_ignore_ascii_case(new_block) {
                 let already_exists = state
@@ -113,42 +119,14 @@ pub async fn blocks(
             }
 
             let saved = state
-                .warehouses
-                .upsert_warehouse(WarehouseUpsert {
-                    warehouse: new_block.to_string(),
-                    company: String::new(),
-                    is_group: false,
-                    parent_warehouse: warehouse,
-                })
+                .qolip
+                .rename_block(&current.name, new_block, &warehouse)
                 .await
                 .map_err(|_| qolip_error(QolipError::StoreFailed))?;
 
-            if !current.name.trim().eq_ignore_ascii_case(saved.warehouse.trim()) {
-                if let Err(error) = state
-                    .warehouses
-                    .delete_warehouse(WarehouseDeleteRequest {
-                        warehouse: current.name.clone(),
-                        delete_products: false,
-                    })
-                    .await
-                {
-                    let _ = state
-                        .warehouses
-                        .delete_warehouse(WarehouseDeleteRequest {
-                            warehouse: saved.warehouse.clone(),
-                            delete_products: false,
-                        })
-                        .await;
-                    return Err(qolip_block_delete_error(error));
-                }
-            }
-
             Ok(Json(serde_json::json!({
                 "ok": true,
-                "block": QolipBlock {
-                    name: saved.warehouse,
-                    warehouse: saved.parent_warehouse,
-                },
+                "block": saved,
             })))
         }
         Method::DELETE => {

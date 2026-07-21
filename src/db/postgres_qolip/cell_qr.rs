@@ -14,7 +14,7 @@ pub(super) async fn save_cell_qr(
              qr_payload, created_by_role, created_by_ref, created_by_name, payload_json
          )
          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
-         ON CONFLICT (id) DO UPDATE SET
+         ON CONFLICT (warehouse, block, row_letter, column_number) DO UPDATE SET
              block = excluded.block,
              warehouse = excluded.warehouse,
              row_letter = excluded.row_letter,

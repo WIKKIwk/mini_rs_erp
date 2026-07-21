@@ -89,6 +89,143 @@ pub(super) async fn load_all_blocks(pool: &PgPool) -> Result<Vec<QolipBlock>, Qo
         .collect())
 }
 
+pub(super) async fn rename_block(
+    pool: &PgPool,
+    block: &str,
+    new_block: &str,
+    warehouse: &str,
+) -> Result<QolipBlock, QolipError> {
+    let block = block.trim();
+    let new_block = new_block.trim();
+    let warehouse = warehouse.trim();
+    let mut tx = pool.begin().await.map_err(|_| QolipError::StoreFailed)?;
+    let mut lock_keys = [block.to_lowercase(), new_block.to_lowercase()];
+    lock_keys.sort();
+    for key in lock_keys {
+        sqlx::query("SELECT pg_advisory_xact_lock(hashtext($1)::bigint)")
+            .bind(key)
+            .execute(&mut *tx)
+            .await
+            .map_err(|_| QolipError::StoreFailed)?;
+    }
+
+    let current = sqlx::query_as::<_, QolipBlockRow>(
+        "SELECT name AS block, parent_warehouse AS warehouse
+         FROM mini_warehouses
+         WHERE lower(name) = lower($1)
+           AND lower(parent_warehouse) = lower($2)
+         FOR UPDATE",
+    )
+    .bind(block)
+    .bind(warehouse)
+    .fetch_optional(&mut *tx)
+    .await
+    .map_err(|_| QolipError::StoreFailed)?
+    .ok_or(QolipError::MissingBlock)?;
+
+    let conflict = sqlx::query_scalar::<_, bool>(
+        "SELECT EXISTS (
+             SELECT 1
+             FROM mini_warehouses
+             WHERE lower(name) = lower($1)
+               AND lower(name) <> lower($2)
+         )",
+    )
+    .bind(new_block)
+    .bind(block)
+    .fetch_one(&mut *tx)
+    .await
+    .map_err(|_| QolipError::StoreFailed)?;
+    if conflict {
+        return Err(QolipError::StoreFailed);
+    }
+
+    let renamed = sqlx::query_as::<_, QolipBlockRow>(
+        "UPDATE mini_warehouses
+         SET name = $2,
+             payload_json = jsonb_set(
+                 COALESCE(payload_json, '{}'::jsonb),
+                 '{warehouse}',
+                 to_jsonb($2::text),
+                 true
+             ),
+             updated_at = now()
+         WHERE lower(name) = lower($1)
+         RETURNING name AS block, parent_warehouse AS warehouse",
+    )
+    .bind(&current.block)
+    .bind(new_block)
+    .fetch_one(&mut *tx)
+    .await
+    .map_err(|_| QolipError::StoreFailed)?;
+
+    sqlx::query(
+        "UPDATE mini_warehouses
+         SET parent_warehouse = $2,
+             payload_json = jsonb_set(
+                 COALESCE(payload_json, '{}'::jsonb),
+                 '{parent_warehouse}',
+                 to_jsonb($2::text),
+                 true
+             ),
+             updated_at = now()
+         WHERE lower(parent_warehouse) = lower($1)",
+    )
+    .bind(&current.block)
+    .bind(new_block)
+    .execute(&mut *tx)
+    .await
+    .map_err(|_| QolipError::StoreFailed)?;
+
+    sqlx::query(
+        "UPDATE mini_warehouse_assignments
+         SET warehouse = $2,
+             payload_json = jsonb_set(
+                 COALESCE(payload_json, '{}'::jsonb),
+                 '{warehouse}',
+                 to_jsonb($2::text),
+                 true
+             ),
+             updated_at = now()
+         WHERE lower(warehouse) = lower($1)",
+    )
+    .bind(&current.block)
+    .bind(new_block)
+    .execute(&mut *tx)
+    .await
+    .map_err(|_| QolipError::StoreFailed)?;
+
+    for table in [
+        "mini_qolip_locations",
+        "mini_qolip_cell_qrs",
+        "mini_qolip_checkouts",
+    ] {
+        sqlx::query(&format!(
+            "UPDATE {table}
+             SET block = $2,
+                 payload_json = jsonb_set(
+                     COALESCE(payload_json, '{{}}'::jsonb),
+                     '{{block}}',
+                     to_jsonb($2::text),
+                     true
+                 ),
+                 updated_at = now()
+             WHERE lower(block) = lower($1)"
+        ))
+        .bind(&current.block)
+        .bind(new_block)
+        .execute(&mut *tx)
+        .await
+        .map_err(|_| QolipError::StoreFailed)?;
+    }
+
+    tx.commit().await.map_err(|_| QolipError::StoreFailed)?;
+    Ok(QolipBlock {
+        name: renamed.block,
+        warehouse: renamed.warehouse,
+    })
+}
+
 pub(super) async fn load_products(
     pool: &PgPool,
     query: &str,
@@ -114,11 +251,103 @@ pub(super) async fn load_products(
                 bool_or(node_name LIKE '%tayyor%' AND node_name LIKE '%mahsulot%') AS is_finished
             FROM group_path
             GROUP BY group_name
+        ),
+        eligible_items AS (
+            SELECT items.code, items.name, items.item_group
+            FROM mini_items items
+            LEFT JOIN group_kind ON lower(items.item_group) = group_kind.group_name
+            WHERE COALESCE(group_kind.is_finished, false)
+        ),
+        legacy_locations AS (
+            SELECT DISTINCT ON (lower(location.qolip_code))
+                location.item_code,
+                location.item_name,
+                COALESCE(NULLIF(btrim(items.item_group), ''), '') AS item_group,
+                location.qolip_code,
+                location.size,
+                location.updated_at
+            FROM mini_qolip_locations location
+            LEFT JOIN mini_items items
+              ON lower(items.code) = lower(location.item_code)
+            WHERE NOT EXISTS (
+                SELECT 1
+                FROM mini_qolip_product_specs spec
+                WHERE lower(spec.qolip_code) = lower(location.qolip_code)
+            )
+            ORDER BY lower(location.qolip_code), location.updated_at DESC, location.created_at DESC
+        ),
+        legacy_checkouts AS (
+            SELECT DISTINCT ON (lower(checkout.qolip_code))
+                checkout.item_code,
+                checkout.item_name,
+                COALESCE(NULLIF(btrim(items.item_group), ''), '') AS item_group,
+                checkout.qolip_code,
+                checkout.size
+            FROM mini_qolip_checkouts checkout
+            LEFT JOIN mini_items items
+              ON lower(items.code) = lower(checkout.item_code)
+            WHERE lower(checkout.status) = 'open'
+              AND NOT EXISTS (
+                  SELECT 1
+                  FROM mini_qolip_product_specs spec
+                  WHERE lower(spec.qolip_code) = lower(checkout.qolip_code)
+              )
+              AND NOT EXISTS (
+                  SELECT 1
+                  FROM mini_qolip_locations location
+                  WHERE lower(location.qolip_code) = lower(checkout.qolip_code)
+              )
+            ORDER BY lower(checkout.qolip_code), checkout.updated_at DESC, checkout.issued_at DESC
+        ),
+        qolip_sources AS (
+            SELECT
+                spec.item_code,
+                spec.item_name,
+                spec.item_group,
+                spec.qolip_code,
+                spec.size
+            FROM mini_qolip_product_specs spec
+            UNION ALL
+            SELECT
+                location.item_code,
+                location.item_name,
+                location.item_group,
+                location.qolip_code,
+                location.size
+            FROM legacy_locations location
+            UNION ALL
+            SELECT
+                checkout.item_code,
+                checkout.item_name,
+                checkout.item_group,
+                checkout.qolip_code,
+                checkout.size
+            FROM legacy_checkouts checkout
+        ),
+        product_rows AS (
+            SELECT
+                COALESCE(items.code, source.item_code) AS code,
+                COALESCE(
+                    NULLIF(btrim(items.name), ''),
+                    NULLIF(btrim(source.item_name), ''),
+                    source.item_code
+                ) AS name,
+                COALESCE(
+                    NULLIF(btrim(items.item_group), ''),
+                    NULLIF(btrim(source.item_group), ''),
+                    ''
+                ) AS item_group,
+                source.qolip_code,
+                source.size,
+                source.qolip_code IS NOT NULL AS has_qolip_spec
+            FROM eligible_items items
+            FULL OUTER JOIN qolip_sources source
+              ON lower(source.item_code) = lower(items.code)
         )
         SELECT
-            items.code,
-            items.name,
-            items.item_group,
+            product.code,
+            product.name,
+            product.item_group,
             COALESCE((
                 SELECT array_agg(
                     CASE WHEN btrim(customers.name) <> ''
@@ -128,38 +357,37 @@ pub(super) async fn load_products(
                 FROM mini_customer_items assignments
                 JOIN mini_customers customers
                   ON customers.ref = assignments.customer_ref
-                WHERE assignments.item_code = items.code
+                WHERE lower(assignments.item_code) = lower(product.code)
             ), ARRAY[]::text[]) AS customer_names,
-            COALESCE(spec.qolip_code, '') AS qolip_code,
-            COALESCE(spec.size, 0) AS size,
-            spec.item_code IS NOT NULL AS has_qolip_spec,
+            COALESCE(product.qolip_code, '') AS qolip_code,
+            COALESCE(product.size, 0) AS size,
+            product.has_qolip_spec,
             EXISTS (
                 SELECT 1
                 FROM mini_qolip_checkouts checkout
-                WHERE lower(checkout.qolip_code) = lower(spec.qolip_code)
+                WHERE lower(checkout.qolip_code) = lower(product.qolip_code)
                   AND lower(checkout.status) = 'open'
             ) AS is_in_use
-        FROM mini_items items
-        LEFT JOIN group_kind ON lower(items.item_group) = group_kind.group_name
-        LEFT JOIN mini_qolip_product_specs spec
-          ON lower(spec.item_code) = lower(items.code)
-        WHERE COALESCE(group_kind.is_finished, false)
-          AND (NOT $4 OR spec.item_code IS NOT NULL)
+        FROM product_rows product
+        WHERE (NOT $4 OR product.has_qolip_spec)
           AND (
             $1 = ''
-            OR lower(items.code) LIKE $2
-            OR lower(items.name) LIKE $2
-            OR lower(COALESCE(spec.qolip_code, '')) LIKE $2
+            OR lower(product.code) LIKE $2
+            OR lower(product.name) LIKE $2
+            OR lower(COALESCE(product.qolip_code, '')) LIKE $2
             OR EXISTS (
                 SELECT 1
                 FROM mini_customer_items assignments
                 JOIN mini_customers customers
                   ON customers.ref = assignments.customer_ref
-                WHERE assignments.item_code = items.code
-                  AND lower(customers.name) LIKE $2
+                WHERE lower(assignments.item_code) = lower(product.code)
+                  AND (
+                    lower(customers.name) LIKE $2
+                    OR lower(customers.ref) LIKE $2
+                  )
             )
           )
-        ORDER BY lower(items.name), lower(items.code)
+        ORDER BY lower(product.name), lower(product.code), lower(COALESCE(product.qolip_code, ''))
         LIMIT $3
         "#,
     )
@@ -191,12 +419,75 @@ pub(super) async fn load_product_spec(
     item_code: &str,
 ) -> Result<Option<QolipProductSpec>, QolipError> {
     let row = sqlx::query_as::<_, QolipProductSpecRow>(
-        "SELECT item_code, item_name, item_group, qolip_code, size,
-                created_by_role, created_by_ref, created_by_name
-         FROM mini_qolip_product_specs
-         WHERE lower(item_code) = lower($1)
-         ORDER BY updated_at DESC, created_at DESC
-         LIMIT 1",
+        r#"
+        SELECT item_code, item_name, item_group, qolip_code, size,
+               created_by_role, created_by_ref, created_by_name
+        FROM (
+            SELECT
+                spec.item_code,
+                spec.item_name,
+                spec.item_group,
+                spec.qolip_code,
+                spec.size,
+                spec.created_by_role,
+                spec.created_by_ref,
+                spec.created_by_name,
+                0 AS source_priority,
+                spec.updated_at
+            FROM mini_qolip_product_specs spec
+            WHERE lower(spec.item_code) = lower($1)
+            UNION ALL
+            SELECT
+                location.item_code,
+                location.item_name,
+                COALESCE(NULLIF(btrim(items.item_group), ''), '') AS item_group,
+                location.qolip_code,
+                location.size,
+                location.created_by_role,
+                location.created_by_ref,
+                location.created_by_name,
+                1 AS source_priority,
+                location.updated_at
+            FROM mini_qolip_locations location
+            LEFT JOIN mini_items items
+              ON lower(items.code) = lower(location.item_code)
+            WHERE lower(location.item_code) = lower($1)
+              AND NOT EXISTS (
+                  SELECT 1
+                  FROM mini_qolip_product_specs spec
+                  WHERE lower(spec.qolip_code) = lower(location.qolip_code)
+              )
+            UNION ALL
+            SELECT
+                checkout.item_code,
+                checkout.item_name,
+                COALESCE(NULLIF(btrim(items.item_group), ''), '') AS item_group,
+                checkout.qolip_code,
+                checkout.size,
+                checkout.issued_by_role AS created_by_role,
+                checkout.issued_by_ref AS created_by_ref,
+                checkout.issued_by_name AS created_by_name,
+                2 AS source_priority,
+                checkout.updated_at
+            FROM mini_qolip_checkouts checkout
+            LEFT JOIN mini_items items
+              ON lower(items.code) = lower(checkout.item_code)
+            WHERE lower(checkout.item_code) = lower($1)
+              AND lower(checkout.status) = 'open'
+              AND NOT EXISTS (
+                  SELECT 1
+                  FROM mini_qolip_product_specs spec
+                  WHERE lower(spec.qolip_code) = lower(checkout.qolip_code)
+              )
+              AND NOT EXISTS (
+                  SELECT 1
+                  FROM mini_qolip_locations location
+                  WHERE lower(location.qolip_code) = lower(checkout.qolip_code)
+              )
+        ) candidates
+        ORDER BY source_priority, updated_at DESC
+        LIMIT 1
+        "#,
     )
     .bind(item_code.trim())
     .fetch_optional(pool)
@@ -211,10 +502,75 @@ pub(super) async fn load_product_spec_by_qolip_code(
     qolip_code: &str,
 ) -> Result<Option<QolipProductSpec>, QolipError> {
     let row = sqlx::query_as::<_, QolipProductSpecRow>(
-        "SELECT item_code, item_name, item_group, qolip_code, size,
-                created_by_role, created_by_ref, created_by_name
-         FROM mini_qolip_product_specs
-         WHERE lower(qolip_code) = lower($1)",
+        r#"
+        SELECT item_code, item_name, item_group, qolip_code, size,
+               created_by_role, created_by_ref, created_by_name
+        FROM (
+            SELECT
+                spec.item_code,
+                spec.item_name,
+                spec.item_group,
+                spec.qolip_code,
+                spec.size,
+                spec.created_by_role,
+                spec.created_by_ref,
+                spec.created_by_name,
+                0 AS source_priority,
+                spec.updated_at
+            FROM mini_qolip_product_specs spec
+            WHERE lower(spec.qolip_code) = lower($1)
+            UNION ALL
+            SELECT
+                location.item_code,
+                location.item_name,
+                COALESCE(NULLIF(btrim(items.item_group), ''), '') AS item_group,
+                location.qolip_code,
+                location.size,
+                location.created_by_role,
+                location.created_by_ref,
+                location.created_by_name,
+                1 AS source_priority,
+                location.updated_at
+            FROM mini_qolip_locations location
+            LEFT JOIN mini_items items
+              ON lower(items.code) = lower(location.item_code)
+            WHERE lower(location.qolip_code) = lower($1)
+              AND NOT EXISTS (
+                  SELECT 1
+                  FROM mini_qolip_product_specs spec
+                  WHERE lower(spec.qolip_code) = lower(location.qolip_code)
+              )
+            UNION ALL
+            SELECT
+                checkout.item_code,
+                checkout.item_name,
+                COALESCE(NULLIF(btrim(items.item_group), ''), '') AS item_group,
+                checkout.qolip_code,
+                checkout.size,
+                checkout.issued_by_role AS created_by_role,
+                checkout.issued_by_ref AS created_by_ref,
+                checkout.issued_by_name AS created_by_name,
+                2 AS source_priority,
+                checkout.updated_at
+            FROM mini_qolip_checkouts checkout
+            LEFT JOIN mini_items items
+              ON lower(items.code) = lower(checkout.item_code)
+            WHERE lower(checkout.qolip_code) = lower($1)
+              AND lower(checkout.status) = 'open'
+              AND NOT EXISTS (
+                  SELECT 1
+                  FROM mini_qolip_product_specs spec
+                  WHERE lower(spec.qolip_code) = lower(checkout.qolip_code)
+              )
+              AND NOT EXISTS (
+                  SELECT 1
+                  FROM mini_qolip_locations location
+                  WHERE lower(location.qolip_code) = lower(checkout.qolip_code)
+              )
+        ) candidates
+        ORDER BY source_priority, updated_at DESC
+        LIMIT 1
+        "#,
     )
     .bind(qolip_code.trim())
     .fetch_optional(pool)
@@ -287,11 +643,22 @@ pub(super) async fn delete_product_specs(
             .map_err(|_| QolipError::StoreFailed)?;
     }
 
-    let locked_codes = sqlx::query_scalar::<_, String>(
+    let _locked_specs = sqlx::query_scalar::<_, String>(
         "SELECT qolip_code
          FROM mini_qolip_product_specs
          WHERE lower(qolip_code) = ANY($1)
          ORDER BY lower(qolip_code)
+         FOR UPDATE",
+    )
+    .bind(&normalized)
+    .fetch_all(&mut *tx)
+    .await
+    .map_err(|_| QolipError::StoreFailed)?;
+    let _locked_locations = sqlx::query_scalar::<_, String>(
+        "SELECT qolip_code
+         FROM mini_qolip_locations
+         WHERE lower(qolip_code) = ANY($1)
+         ORDER BY lower(qolip_code), id
          FOR UPDATE",
     )
     .bind(&normalized)
@@ -315,19 +682,33 @@ pub(super) async fn delete_product_specs(
         return Err(QolipError::QolipInUse);
     }
 
+    let deleted = sqlx::query_scalar::<_, i64>(
+        "SELECT COUNT(*)::bigint
+         FROM (
+             SELECT lower(qolip_code) AS code
+             FROM mini_qolip_product_specs
+             WHERE lower(qolip_code) = ANY($1)
+             UNION
+             SELECT lower(qolip_code) AS code
+             FROM mini_qolip_locations
+             WHERE lower(qolip_code) = ANY($1)
+         ) existing",
+    )
+    .bind(&normalized)
+    .fetch_one(&mut *tx)
+    .await
+    .map_err(|_| QolipError::StoreFailed)? as usize;
+
     sqlx::query("DELETE FROM mini_qolip_locations WHERE lower(qolip_code) = ANY($1)")
         .bind(&normalized)
         .execute(&mut *tx)
         .await
         .map_err(|_| QolipError::StoreFailed)?;
-    let deleted =
-        sqlx::query("DELETE FROM mini_qolip_product_specs WHERE lower(qolip_code) = ANY($1)")
-            .bind(&normalized)
-            .execute(&mut *tx)
-            .await
-            .map_err(|_| QolipError::StoreFailed)?
-            .rows_affected() as usize;
-    debug_assert!(deleted <= locked_codes.len());
+    sqlx::query("DELETE FROM mini_qolip_product_specs WHERE lower(qolip_code) = ANY($1)")
+        .bind(&normalized)
+        .execute(&mut *tx)
+        .await
+        .map_err(|_| QolipError::StoreFailed)?;
     tx.commit().await.map_err(|_| QolipError::StoreFailed)?;
     Ok(deleted)
 }

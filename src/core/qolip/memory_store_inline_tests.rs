@@ -99,6 +99,146 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn legacy_location_is_listed_and_deleted_without_product_spec() {
+        let store = MemoryQolipStore::default();
+        let mut legacy_product = product("ITEM-LEGACY", "Legacy kross");
+        legacy_product.customer_names = vec!["Legacy customer".to_string()];
+        store.seed_products(vec![legacy_product]).await;
+        let mut legacy_location = location("legacy-location", "ITEM-LEGACY", 1);
+        legacy_location.item_name = "Legacy kross".to_string();
+        legacy_location.qolip_code = "Q-LEGACY".to_string();
+        store
+            .put_location(legacy_location)
+            .await
+            .expect("legacy location");
+
+        let products = store
+            .products("legacy customer", 20, true)
+            .await
+            .expect("legacy catalog");
+        assert_eq!(products.len(), 1);
+        assert_eq!(products[0].qolip_code, "Q-LEGACY");
+        assert!(products[0].has_qolip_spec);
+        assert!(
+            store
+                .product_spec_by_qolip_code("Q-LEGACY")
+                .await
+                .expect("legacy spec lookup")
+                .is_some()
+        );
+
+        let deleted = store
+            .delete_product_specs(&["Q-LEGACY".to_string()])
+            .await
+            .expect("delete legacy location");
+        assert_eq!(deleted, 1);
+        assert!(store.locations("A").await.expect("locations").is_empty());
+    }
+
+    #[tokio::test]
+    async fn legacy_open_checkout_stays_visible_as_in_use() {
+        let store = MemoryQolipStore::default();
+        store
+            .seed_products(vec![product("ITEM-DEBT", "Legacy debt qolip")])
+            .await;
+        let mut open_checkout = checkout("legacy-debt", "gone-location", "ITEM-DEBT", "open");
+        open_checkout.item_name = "Legacy debt qolip".to_string();
+        open_checkout.qolip_code = "Q-LEGACY-DEBT".to_string();
+        store.checkouts.write().await.push(open_checkout);
+
+        let products = store
+            .products("legacy debt", 20, true)
+            .await
+            .expect("legacy debt catalog");
+        assert_eq!(products.len(), 1);
+        assert_eq!(products[0].qolip_code, "Q-LEGACY-DEBT");
+        assert!(products[0].is_in_use);
+        assert!(
+            store
+                .product_spec_by_qolip_code("Q-LEGACY-DEBT")
+                .await
+                .expect("legacy debt spec lookup")
+                .is_some()
+        );
+        assert_eq!(
+            store
+                .delete_product_specs(&["Q-LEGACY-DEBT".to_string()])
+                .await
+                .expect_err("open legacy checkout cannot be deleted"),
+            QolipError::QolipInUse
+        );
+    }
+
+    #[tokio::test]
+    async fn renaming_block_preserves_locations_checkouts_and_cell_qr() {
+        let store = MemoryQolipStore::default();
+        store
+            .seed_blocks(vec![QolipBlock {
+                name: "A".to_string(),
+                warehouse: "Qolip ombor".to_string(),
+            }])
+            .await;
+        store
+            .put_location(location("location-a", "ITEM-A", 2))
+            .await
+            .expect("location");
+        store
+            .checkouts
+            .write()
+            .await
+            .push(checkout("checkout-a", "location-a", "ITEM-A", "open"));
+        let original_cell = QolipCellQr {
+            id: "cell-a-c2".to_string(),
+            block: "A".to_string(),
+            warehouse: "Qolip ombor".to_string(),
+            row_letter: "C".to_string(),
+            column_number: 2,
+            location_label: "C2".to_string(),
+            qr_payload: "4002-ORIGINAL".to_string(),
+            created_by_role: "admin".to_string(),
+            created_by_ref: "admin".to_string(),
+            created_by_name: "Admin".to_string(),
+        };
+        store
+            .get_or_create_cell_qr(original_cell.clone())
+            .await
+            .expect("cell qr");
+
+        let renamed = store
+            .rename_block("A", "B", "Qolip ombor")
+            .await
+            .expect("rename block");
+
+        assert_eq!(renamed.name, "B");
+        assert!(store.locations("A").await.expect("old locations").is_empty());
+        assert_eq!(store.locations("B").await.expect("new locations").len(), 1);
+        assert_eq!(
+            store
+                .checkouts(Some("B"), None, "open", 20)
+                .await
+                .expect("renamed checkouts")
+                .len(),
+            1
+        );
+        let scanned = store
+            .cell_qr_by_payload("4002-ORIGINAL")
+            .await
+            .expect("cell lookup")
+            .expect("cell");
+        assert_eq!(scanned.block, "B");
+
+        let reused = store
+            .get_or_create_cell_qr(QolipCellQr {
+                id: "new-derived-cell-id".to_string(),
+                block: "B".to_string(),
+                ..original_cell
+            })
+            .await
+            .expect("reuse cell qr");
+        assert_eq!(reused.qr_payload, "4002-ORIGINAL");
+    }
+
+    #[tokio::test]
     async fn delete_product_specs_is_atomic_and_rejects_open_checkout() {
         let store = MemoryQolipStore::default();
         store

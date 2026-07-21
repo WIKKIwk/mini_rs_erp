@@ -38,6 +38,59 @@ impl MemoryQolipStore {
     pub async fn seed_products(&self, products: Vec<QolipProduct>) {
         *self.products.write().await = products;
     }
+
+    async fn legacy_spec(&self, location: &QolipLocation) -> QolipProductSpec {
+        let item_group = self
+            .products
+            .read()
+            .await
+            .iter()
+            .find(|product| {
+                product
+                    .code
+                    .trim()
+                    .eq_ignore_ascii_case(location.item_code.trim())
+            })
+            .map(|product| product.item_group.clone())
+            .unwrap_or_default();
+        QolipProductSpec {
+            item_code: location.item_code.clone(),
+            item_name: location.item_name.clone(),
+            item_group,
+            qolip_code: location.qolip_code.clone(),
+            size: location.size,
+            created_by_role: location.created_by_role.clone(),
+            created_by_ref: location.created_by_ref.clone(),
+            created_by_name: location.created_by_name.clone(),
+        }
+    }
+
+    async fn legacy_checkout_spec(&self, checkout: &QolipCheckout) -> QolipProductSpec {
+        let item_group = self
+            .products
+            .read()
+            .await
+            .iter()
+            .find(|product| {
+                product
+                    .code
+                    .trim()
+                    .eq_ignore_ascii_case(checkout.item_code.trim())
+            })
+            .map(|product| product.item_group.clone())
+            .filter(|group| !group.trim().is_empty())
+            .unwrap_or_else(|| checkout.item_group.clone());
+        QolipProductSpec {
+            item_code: checkout.item_code.clone(),
+            item_name: checkout.item_name.clone(),
+            item_group,
+            qolip_code: checkout.qolip_code.clone(),
+            size: checkout.size,
+            created_by_role: checkout.issued_by_role.clone(),
+            created_by_ref: checkout.issued_by_ref.clone(),
+            created_by_name: checkout.issued_by_name.clone(),
+        }
+    }
 }
 
 #[async_trait]
@@ -64,6 +117,62 @@ impl QolipStorePort for MemoryQolipStore {
         Ok(self.blocks.read().await.clone())
     }
 
+    async fn rename_block(
+        &self,
+        block: &str,
+        new_block: &str,
+        warehouse: &str,
+    ) -> Result<QolipBlock, QolipError> {
+        let block = block.trim();
+        let new_block = new_block.trim();
+        let warehouse = warehouse.trim();
+        let mut blocks = self.blocks.write().await;
+        let Some(index) = blocks
+            .iter()
+            .position(|item| item.name.trim().eq_ignore_ascii_case(block))
+        else {
+            return Err(QolipError::MissingBlock);
+        };
+        if blocks.iter().enumerate().any(|(candidate_index, item)| {
+            candidate_index != index && item.name.trim().eq_ignore_ascii_case(new_block)
+        }) {
+            return Err(QolipError::StoreFailed);
+        }
+        let resolved_warehouse = if warehouse.is_empty() {
+            blocks[index].warehouse.clone()
+        } else {
+            warehouse.to_string()
+        };
+        blocks[index] = QolipBlock {
+            name: new_block.to_string(),
+            warehouse: resolved_warehouse.clone(),
+        };
+        drop(blocks);
+
+        for location in self.locations.write().await.iter_mut() {
+            if location.block.trim().eq_ignore_ascii_case(block) {
+                location.block = new_block.to_string();
+                location.warehouse = resolved_warehouse.clone();
+            }
+        }
+        for cell in self.cell_qrs.write().await.values_mut() {
+            if cell.block.trim().eq_ignore_ascii_case(block) {
+                cell.block = new_block.to_string();
+                cell.warehouse = resolved_warehouse.clone();
+            }
+        }
+        for checkout in self.checkouts.write().await.iter_mut() {
+            if checkout.block.trim().eq_ignore_ascii_case(block) {
+                checkout.block = new_block.to_string();
+                checkout.warehouse = resolved_warehouse.clone();
+            }
+        }
+        Ok(QolipBlock {
+            name: new_block.to_string(),
+            warehouse: resolved_warehouse,
+        })
+    }
+
     async fn products(
         &self,
         query: &str,
@@ -71,67 +180,189 @@ impl QolipStorePort for MemoryQolipStore {
         with_qolip_only: bool,
     ) -> Result<Vec<QolipProduct>, QolipError> {
         let query = query.trim().to_lowercase();
-        let in_use_codes = self
-            .checkouts
-            .read()
-            .await
+        let checkouts = self.checkouts.read().await.clone();
+        let in_use_codes = checkouts
             .iter()
             .filter(|checkout| checkout.status.trim().eq_ignore_ascii_case("open"))
             .map(|checkout| checkout.qolip_code.trim().to_lowercase())
             .collect::<BTreeSet<_>>();
-        let specs = self.product_specs.read().await;
-        let products = self.products.read().await;
+        let specs = self
+            .product_specs
+            .read()
+            .await
+            .values()
+            .cloned()
+            .collect::<Vec<_>>();
+        let products = self.products.read().await.clone();
+        let locations = self.locations.read().await.clone();
+        let products_by_code = products
+            .iter()
+            .map(|product| (product.code.trim().to_lowercase(), product.clone()))
+            .collect::<BTreeMap<_, _>>();
         let mut items = Vec::new();
-        for product in products.iter() {
-            let product_specs = specs
-                .values()
-                .filter(|spec| {
-                    spec.item_code
-                        .trim()
-                        .eq_ignore_ascii_case(product.code.trim())
-                })
-                .collect::<Vec<_>>();
-            if with_qolip_only && product_specs.is_empty() {
+        let mut seen_qolip_codes = BTreeSet::new();
+        let mut item_codes_with_qolip = BTreeSet::new();
+
+        for spec in &specs {
+            let qolip_key = spec.qolip_code.trim().to_lowercase();
+            if qolip_key.is_empty() || !seen_qolip_codes.insert(qolip_key.clone()) {
                 continue;
             }
-            if product_specs.is_empty() {
-                let matches = query.is_empty()
-                    || product.name.to_lowercase().contains(&query)
-                    || product.code.to_lowercase().contains(&query);
-                if matches {
-                    let mut item = product.clone();
-                    item.is_in_use = false;
-                    items.push(item);
+            let item_key = spec.item_code.trim().to_lowercase();
+            item_codes_with_qolip.insert(item_key.clone());
+            let base = products_by_code.get(&item_key);
+            let item = QolipProduct {
+                code: spec.item_code.clone(),
+                name: base
+                    .map(|product| product.name.clone())
+                    .filter(|name| !name.trim().is_empty())
+                    .unwrap_or_else(|| spec.item_name.clone()),
+                item_group: base
+                    .map(|product| product.item_group.clone())
+                    .filter(|group| !group.trim().is_empty())
+                    .unwrap_or_else(|| spec.item_group.clone()),
+                customer_names: base
+                    .map(|product| product.customer_names.clone())
+                    .unwrap_or_default(),
+                qolip_code: spec.qolip_code.clone(),
+                size: spec.size,
+                has_qolip_spec: true,
+                is_in_use: in_use_codes.contains(&qolip_key),
+            };
+            if memory_product_matches(&item, &query) {
+                items.push(item);
+            }
+        }
+
+        for location in &locations {
+            let qolip_key = location.qolip_code.trim().to_lowercase();
+            if qolip_key.is_empty() || !seen_qolip_codes.insert(qolip_key.clone()) {
+                continue;
+            }
+            let item_key = location.item_code.trim().to_lowercase();
+            item_codes_with_qolip.insert(item_key.clone());
+            let base = products_by_code.get(&item_key);
+            let item = QolipProduct {
+                code: location.item_code.clone(),
+                name: base
+                    .map(|product| product.name.clone())
+                    .filter(|name| !name.trim().is_empty())
+                    .unwrap_or_else(|| location.item_name.clone()),
+                item_group: base
+                    .map(|product| product.item_group.clone())
+                    .unwrap_or_default(),
+                customer_names: base
+                    .map(|product| product.customer_names.clone())
+                    .unwrap_or_default(),
+                qolip_code: location.qolip_code.clone(),
+                size: location.size,
+                has_qolip_spec: true,
+                is_in_use: in_use_codes.contains(&qolip_key),
+            };
+            if memory_product_matches(&item, &query) {
+                items.push(item);
+            }
+        }
+
+        for checkout in checkouts
+            .iter()
+            .filter(|checkout| checkout.status.trim().eq_ignore_ascii_case("open"))
+        {
+            let qolip_key = checkout.qolip_code.trim().to_lowercase();
+            if qolip_key.is_empty() || !seen_qolip_codes.insert(qolip_key.clone()) {
+                continue;
+            }
+            let item_key = checkout.item_code.trim().to_lowercase();
+            item_codes_with_qolip.insert(item_key.clone());
+            let base = products_by_code.get(&item_key);
+            let item = QolipProduct {
+                code: checkout.item_code.clone(),
+                name: base
+                    .map(|product| product.name.clone())
+                    .filter(|name| !name.trim().is_empty())
+                    .unwrap_or_else(|| checkout.item_name.clone()),
+                item_group: base
+                    .map(|product| product.item_group.clone())
+                    .filter(|group| !group.trim().is_empty())
+                    .unwrap_or_else(|| checkout.item_group.clone()),
+                customer_names: base
+                    .map(|product| product.customer_names.clone())
+                    .unwrap_or_default(),
+                qolip_code: checkout.qolip_code.clone(),
+                size: checkout.size,
+                has_qolip_spec: true,
+                is_in_use: true,
+            };
+            if memory_product_matches(&item, &query) {
+                items.push(item);
+            }
+        }
+
+        if !with_qolip_only {
+            for product in &products {
+                if item_codes_with_qolip.contains(&product.code.trim().to_lowercase()) {
+                    continue;
                 }
-                continue;
-            }
-            for spec in product_specs {
-                let matches = query.is_empty()
-                    || product.name.to_lowercase().contains(&query)
-                    || product.code.to_lowercase().contains(&query)
-                    || spec.qolip_code.to_lowercase().contains(&query);
-                if matches {
-                    let mut item = product.clone();
-                    item.qolip_code = spec.qolip_code.clone();
-                    item.size = spec.size;
-                    item.has_qolip_spec = true;
-                    item.is_in_use = in_use_codes.contains(&spec.qolip_code.trim().to_lowercase());
+                let mut item = product.clone();
+                item.is_in_use = false;
+                if memory_product_matches(&item, &query) {
                     items.push(item);
                 }
             }
         }
+        items.sort_by(|left, right| {
+            left.name
+                .to_lowercase()
+                .cmp(&right.name.to_lowercase())
+                .then_with(|| left.code.to_lowercase().cmp(&right.code.to_lowercase()))
+                .then_with(|| {
+                    left.qolip_code
+                        .to_lowercase()
+                        .cmp(&right.qolip_code.to_lowercase())
+                })
+        });
         items.truncate(limit.max(1));
         Ok(items)
     }
 
     async fn product_spec(&self, item_code: &str) -> Result<Option<QolipProductSpec>, QolipError> {
-        Ok(self
+        let saved = self
             .product_specs
             .read()
             .await
             .values()
             .find(|spec| spec.item_code.trim().eq_ignore_ascii_case(item_code.trim()))
-            .cloned())
+            .cloned();
+        if saved.is_some() {
+            return Ok(saved);
+        }
+        let location = self
+            .locations
+            .read()
+            .await
+            .iter()
+            .find(|location| location.item_code.trim().eq_ignore_ascii_case(item_code.trim()))
+            .cloned();
+        if let Some(location) = location {
+            return Ok(Some(self.legacy_spec(&location).await));
+        }
+        let checkout = self
+            .checkouts
+            .read()
+            .await
+            .iter()
+            .find(|checkout| {
+                checkout.status.trim().eq_ignore_ascii_case("open")
+                    && checkout
+                        .item_code
+                        .trim()
+                        .eq_ignore_ascii_case(item_code.trim())
+            })
+            .cloned();
+        match checkout {
+            Some(checkout) => Ok(Some(self.legacy_checkout_spec(&checkout).await)),
+            None => Ok(None),
+        }
     }
 
     async fn product_spec_by_qolip_code(
@@ -139,13 +370,43 @@ impl QolipStorePort for MemoryQolipStore {
         qolip_code: &str,
     ) -> Result<Option<QolipProductSpec>, QolipError> {
         let qolip_code = qolip_code.trim();
-        Ok(self
+        let saved = self
             .product_specs
             .read()
             .await
             .values()
             .find(|spec| spec.qolip_code.trim().eq_ignore_ascii_case(qolip_code))
-            .cloned())
+            .cloned();
+        if saved.is_some() {
+            return Ok(saved);
+        }
+        let location = self
+            .locations
+            .read()
+            .await
+            .iter()
+            .find(|location| location.qolip_code.trim().eq_ignore_ascii_case(qolip_code))
+            .cloned();
+        if let Some(location) = location {
+            return Ok(Some(self.legacy_spec(&location).await));
+        }
+        let checkout = self
+            .checkouts
+            .read()
+            .await
+            .iter()
+            .find(|checkout| {
+                checkout.status.trim().eq_ignore_ascii_case("open")
+                    && checkout
+                        .qolip_code
+                        .trim()
+                        .eq_ignore_ascii_case(qolip_code)
+            })
+            .cloned();
+        match checkout {
+            Some(checkout) => Ok(Some(self.legacy_checkout_spec(&checkout).await)),
+            None => Ok(None),
+        }
     }
 
     async fn put_product_spec(
@@ -197,16 +458,33 @@ impl QolipStorePort for MemoryQolipStore {
         }) {
             return Err(QolipError::QolipInUse);
         }
+        let spec_codes = self
+            .product_specs
+            .read()
+            .await
+            .values()
+            .map(|spec| spec.qolip_code.trim().to_lowercase())
+            .collect::<Vec<_>>();
+        let location_codes = self
+            .locations
+            .read()
+            .await
+            .iter()
+            .map(|location| location.qolip_code.trim().to_lowercase())
+            .collect::<Vec<_>>();
+        let existing_codes = spec_codes
+            .into_iter()
+            .chain(location_codes)
+            .filter(|code| normalized.contains(code))
+            .collect::<BTreeSet<_>>();
         let mut specs = self.product_specs.write().await;
-        let before = specs.len();
         specs.retain(|code, _| !normalized.contains(&code.trim().to_lowercase()));
-        let deleted = before - specs.len();
         drop(specs);
         self.locations
             .write()
             .await
             .retain(|location| !normalized.contains(&location.qolip_code.trim().to_lowercase()));
-        Ok(deleted)
+        Ok(existing_codes.len())
     }
 
     async fn locations(&self, block: &str) -> Result<Vec<QolipLocation>, QolipError> {
@@ -242,6 +520,20 @@ impl QolipStorePort for MemoryQolipStore {
     async fn get_or_create_cell_qr(&self, cell: QolipCellQr) -> Result<QolipCellQr, QolipError> {
         let mut cell_qrs = self.cell_qrs.write().await;
         if let Some(existing) = cell_qrs.get(&cell.id) {
+            return Ok(existing.clone());
+        }
+        if let Some(existing) = cell_qrs.values().find(|existing| {
+            existing
+                .warehouse
+                .trim()
+                .eq_ignore_ascii_case(cell.warehouse.trim())
+                && existing.block.trim().eq_ignore_ascii_case(cell.block.trim())
+                && existing
+                    .row_letter
+                    .trim()
+                    .eq_ignore_ascii_case(cell.row_letter.trim())
+                && existing.column_number == cell.column_number
+        }) {
             return Ok(existing.clone());
         }
         cell_qrs.insert(cell.id.clone(), cell.clone());
@@ -443,6 +735,17 @@ impl QolipStorePort for MemoryQolipStore {
             .find(|cell| cell.qr_payload.eq_ignore_ascii_case(qr_payload))
             .cloned())
     }
+}
+
+fn memory_product_matches(product: &QolipProduct, query: &str) -> bool {
+    query.is_empty()
+        || product.name.to_lowercase().contains(query)
+        || product.code.to_lowercase().contains(query)
+        || product.qolip_code.to_lowercase().contains(query)
+        || product
+            .customer_names
+            .iter()
+            .any(|customer| customer.to_lowercase().contains(query))
 }
 
 include!("memory_store_inline_tests.rs");

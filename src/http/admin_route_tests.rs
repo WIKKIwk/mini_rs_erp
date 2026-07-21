@@ -64,6 +64,7 @@ mod production_map_basic;
 mod production_map_save_order;
 mod production_map_validation;
 mod qolip_cell_qr;
+mod qolip_blocks;
 mod qolip_checkout;
 mod qolip_return_move;
 mod qolipchi_workers;

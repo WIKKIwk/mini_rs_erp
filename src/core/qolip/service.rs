@@ -66,6 +66,21 @@ impl QolipService {
         }
     }
 
+    pub async fn rename_block(
+        &self,
+        block: &str,
+        new_block: &str,
+        warehouse: &str,
+    ) -> Result<QolipBlock, QolipError> {
+        let block = block.trim();
+        let new_block = new_block.trim();
+        let warehouse = warehouse.trim();
+        if block.is_empty() || new_block.is_empty() {
+            return Err(QolipError::MissingBlock);
+        }
+        self.store.rename_block(block, new_block, warehouse).await
+    }
+
     pub async fn warehouses_for_principal(
         &self,
         principal: &Principal,

@@ -145,6 +145,19 @@ mod tests {
     }
 
     #[test]
+    fn qolip_legacy_lookup_migration_indexes_locations_and_checkouts() {
+        let migration = POSTGRES_MIGRATIONS
+            .iter()
+            .find(|(version, _)| *version == "0024_qolip_legacy_lookup_index")
+            .map(|(_, sql)| sql.to_lowercase())
+            .expect("qolip legacy lookup migration");
+
+        assert!(migration.contains("idx_mini_qolip_locations_qolip_code"));
+        assert!(migration.contains("idx_mini_qolip_checkouts_qolip_code_status"));
+        assert!(migration.contains("lower(qolip_code)"));
+    }
+
+    #[test]
     fn rps_batch_history_migration_is_additive_and_owner_scoped() {
         let migration = POSTGRES_MIGRATIONS
             .iter()
