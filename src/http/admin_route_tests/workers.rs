@@ -64,6 +64,88 @@ async fn admin_workers_are_separate_from_users_and_persist_level() {
 }
 
 #[tokio::test]
+async fn admin_worker_phone_update_accepts_nine_digit_local_phone() {
+    let state = test_state();
+    let token = session(&state, PrincipalRole::Admin).await;
+
+    let created = build_router(state.clone())
+        .oneshot(request_with_body(
+            "POST",
+            "/v1/mobile/admin/workers",
+            &token,
+            r#"{"name":"Local phone worker","level":"Master"}"#,
+        ))
+        .await
+        .expect("create worker");
+    assert_eq!(created.status(), StatusCode::OK);
+    let worker_id = json_body(created).await["id"]
+        .as_str()
+        .expect("worker id")
+        .to_string();
+
+    let updated = build_router(state)
+        .oneshot(request_with_body(
+            "PUT",
+            "/v1/mobile/admin/workers",
+            &token,
+            &format!(r#"{{"id":"{worker_id}","phone":"110000066"}}"#),
+        ))
+        .await
+        .expect("update phone");
+
+    assert_eq!(updated.status(), StatusCode::OK);
+    assert_eq!(json_body(updated).await["phone"], "110000066");
+}
+
+#[tokio::test]
+async fn admin_worker_phone_update_returns_duplicate_phone_error() {
+    let state = test_state();
+    let token = session(&state, PrincipalRole::Admin).await;
+
+    for (id, name) in [
+        ("worker_phone_a", "Phone worker A"),
+        ("worker_phone_b", "Phone worker B"),
+    ] {
+        let created = build_router(state.clone())
+            .oneshot(request_with_body(
+                "POST",
+                "/v1/mobile/admin/workers",
+                &token,
+                &format!(r#"{{"id":"{id}","name":"{name}","level":"Master"}}"#),
+            ))
+            .await
+            .expect("create worker");
+        assert_eq!(created.status(), StatusCode::OK);
+    }
+
+    let first_phone = build_router(state.clone())
+        .oneshot(request_with_body(
+            "PUT",
+            "/v1/mobile/admin/workers",
+            &token,
+            r#"{"id":"worker_phone_a","phone":"110000066"}"#,
+        ))
+        .await
+        .expect("set first phone");
+    assert_eq!(first_phone.status(), StatusCode::OK);
+
+    let duplicate = build_router(state)
+        .oneshot(request_with_body(
+            "PUT",
+            "/v1/mobile/admin/workers",
+            &token,
+            r#"{"id":"worker_phone_b","phone":"110000066"}"#,
+        ))
+        .await
+        .expect("duplicate phone response");
+    assert_eq!(duplicate.status(), StatusCode::BAD_REQUEST);
+    assert_eq!(
+        json_body(duplicate).await["error"],
+        "worker phone already exists"
+    );
+}
+
+#[tokio::test]
 async fn admin_worker_delete_requires_connection_confirmation_and_cleans_assignments() {
     let state = test_state();
     let token = session(&state, PrincipalRole::Admin).await;
