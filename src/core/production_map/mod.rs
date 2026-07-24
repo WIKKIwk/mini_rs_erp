@@ -15,6 +15,7 @@ mod service;
 mod service_audit;
 mod service_completion;
 mod service_maps;
+mod service_order_control;
 mod service_progress;
 mod service_progress_metrics;
 mod service_progress_support;

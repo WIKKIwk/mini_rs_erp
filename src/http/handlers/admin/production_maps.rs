@@ -20,6 +20,7 @@ use crate::google_sheets::is_sheet_order_map;
 mod completion;
 mod helpers;
 mod move_run;
+mod order_control;
 mod progress_qr;
 mod qolip_validation;
 mod queue_actions;
@@ -35,6 +36,7 @@ pub use self::completion::{
 };
 use self::helpers::*;
 pub use self::move_run::{production_map_move, production_map_move_batch, production_map_run};
+pub use self::order_control::production_map_order_control;
 pub use self::progress_qr::{
     production_map_progress_qr_history, production_map_progress_qr_lookup,
     production_map_progress_qr_report, production_map_progress_qr_reprint,
@@ -332,6 +334,11 @@ pub async fn production_map_sequence(
                 .order_status_details()
                 .await
                 .map_err(production_map_error)?;
+            let order_controls = state
+                .production_maps
+                .order_control_states()
+                .await
+                .map_err(production_map_error)?;
             Ok(json_response(serde_json::json!({
                 "ok": true,
                 "sequences": sequences,
@@ -339,6 +346,7 @@ pub async fn production_map_sequence(
                 "queue_states": queue_states,
                 "queue_policies": queue_policies,
                 "order_statuses": order_statuses,
+                "order_controls": order_controls,
             })))
         }
         Method::PUT => {

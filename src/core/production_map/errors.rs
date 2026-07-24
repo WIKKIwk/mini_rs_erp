@@ -50,6 +50,24 @@ pub enum ProductionMapError {
     StoreFailed,
     #[error("queue action is not allowed")]
     QueueActionNotAllowed,
+    #[error("order has not started")]
+    OrderNotStarted,
+    #[error("order is already completed")]
+    OrderAlreadyCompleted,
+    #[error("order freeze acknowledgement is pending")]
+    OrderFreezeRequested,
+    #[error("order is frozen")]
+    OrderFrozen,
+    #[error("order control action is not allowed")]
+    OrderControlActionNotAllowed,
+    #[error("active worker session for freeze request was not found")]
+    OrderFreezeTargetNotFound,
+    #[error("multiple active worker sessions exist for freeze request")]
+    OrderFreezeTargetAmbiguous,
+    #[error("freeze request does not belong to this worker session")]
+    OrderFreezeRequestMismatch,
+    #[error("order cannot be deleted")]
+    OrderDeleteBlocked(Vec<super::types::OrderDeleteBlocker>),
     #[error("previous production stage is not completed")]
     PreviousStageNotCompleted,
     #[error("apparatus is not assigned to this operator")]

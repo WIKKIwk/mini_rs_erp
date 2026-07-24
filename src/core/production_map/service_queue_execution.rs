@@ -11,6 +11,23 @@ impl ProductionMapService {
         let apparatus = apparatus.trim();
         let order_id = order_id.trim();
         validate_queue_action_request(apparatus, order_id, assigned_apparatus)?;
+        let control = self.order_control_state(order_id).await?;
+        validate_freeze_request_pause(
+            &control,
+            apparatus,
+            action,
+            &actor,
+            &progress.freeze_request_id,
+        )?;
+        match control.state {
+            OrderControlState::Active => {}
+            OrderControlState::FreezeRequested
+                if action == queue_state::ApparatusQueueAction::Pause => {}
+            OrderControlState::FreezeRequested => {
+                return Err(ProductionMapError::OrderFreezeRequested);
+            }
+            OrderControlState::Frozen => return Err(ProductionMapError::OrderFrozen),
+        }
         let sequences = self.store.apparatus_sequences().await?;
         let all_states = self.store.apparatus_queue_states().await?;
         let policies = self.store.apparatus_queue_policies().await?;
@@ -23,6 +40,13 @@ impl ProductionMapService {
         let sequence =
             queue_state::effective_apparatus_sequence(&stored_sequence, &visible_order_ids);
         if !sequence.iter().any(|id| id.trim() == order_id) {
+            return Err(ProductionMapError::QueueActionNotAllowed);
+        }
+        if action == queue_state::ApparatusQueueAction::Resume
+            && sequence
+                .first()
+                .is_none_or(|first| first.trim() != order_id)
+        {
             return Err(ProductionMapError::QueueActionNotAllowed);
         }
         let order_map = all_maps
@@ -52,6 +76,20 @@ impl ProductionMapService {
             .get(order_id)
             .copied()
             .unwrap_or(queue_state::ApparatusQueueOrderState::Pending);
+        let frozen_queue_states = self
+            .store
+            .order_control_states()
+            .await?
+            .into_iter()
+            .filter_map(|(frozen_order_id, control)| {
+                if control.state != OrderControlState::Frozen {
+                    return None;
+                }
+                parsed
+                    .remove(&frozen_order_id)
+                    .map(|state| (frozen_order_id, state))
+            })
+            .collect::<Vec<_>>();
         apply_queue_policy(
             policy,
             previous_progress_ready,
@@ -60,6 +98,7 @@ impl ProductionMapService {
             order_id,
             action,
         )?;
+        parsed.extend(frozen_queue_states);
         let to_state = parsed
             .get(order_id)
             .copied()
@@ -100,6 +139,26 @@ impl ProductionMapService {
             order_map,
             &mut event,
         );
+        let order_control_update = if control.state == OrderControlState::FreezeRequested
+            && action == queue_state::ApparatusQueueAction::Pause
+        {
+            let now = progress::unix_seconds();
+            let mut freeze_request = control
+                .freeze_request
+                .ok_or(ProductionMapError::OrderFreezeRequestMismatch)?;
+            freeze_request.status = OrderFreezeRequestStatus::Frozen;
+            freeze_request.transitioned_at_unix = now;
+            Some(OrderControlRecord {
+                order_id: order_id.to_string(),
+                state: OrderControlState::Frozen,
+                actor: control.actor,
+                requested_at_unix: control.requested_at_unix,
+                frozen_at_unix: Some(now),
+                freeze_request: Some(freeze_request),
+            })
+        } else {
+            None
+        };
         Ok(PreparedApparatusQueueAction {
             apparatus: storage_key,
             states: saved,
@@ -109,6 +168,7 @@ impl ProductionMapService {
             progress_batch: progress.progress_batch,
             progress_batch_updates: progress.progress_batch_updates,
             claimed_alternative_map,
+            order_control_update,
         })
     }
 
@@ -200,6 +260,7 @@ impl ProductionMapService {
                 raw_material_stock_transitions,
                 qolip_checkout,
                 returned_paint_report,
+                order_control_update: prepared.order_control_update.clone(),
             })
             .await;
         let write_result = match write_result {
@@ -223,4 +284,37 @@ impl ProductionMapService {
             qolip_checkout_committed: write_result.qolip_checkout_committed,
         })
     }
+}
+
+fn validate_freeze_request_pause(
+    control: &OrderControlRecord,
+    apparatus: &str,
+    action: queue_state::ApparatusQueueAction,
+    actor: &QueueActionActor,
+    supplied_request_id: &str,
+) -> Result<(), ProductionMapError> {
+    let supplied_request_id = supplied_request_id.trim();
+    if control.state != OrderControlState::FreezeRequested {
+        if supplied_request_id.is_empty() {
+            return Ok(());
+        }
+        return Err(ProductionMapError::OrderFreezeRequestMismatch);
+    }
+    if action != queue_state::ApparatusQueueAction::Pause {
+        return Ok(());
+    }
+    let request = control
+        .freeze_request
+        .as_ref()
+        .ok_or(ProductionMapError::OrderFreezeRequestMismatch)?;
+    let request_id_matches =
+        supplied_request_id.is_empty() || request.request_id.trim() == supplied_request_id;
+    let worker_matches = request.target_worker_role.trim() == actor.role.trim()
+        && request.target_worker_ref.trim() == actor.ref_.trim();
+    let apparatus_matches =
+        queue_state::apparatus_titles_match(&request.target_apparatus, apparatus);
+    if !request_id_matches || !worker_matches || !apparatus_matches {
+        return Err(ProductionMapError::OrderFreezeRequestMismatch);
+    }
+    Ok(())
 }

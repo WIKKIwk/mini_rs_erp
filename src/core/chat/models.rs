@@ -50,6 +50,8 @@ pub struct ChatMessage {
     #[serde(rename = "type")]
     pub message_type: String,
     pub body: String,
+    #[serde(default)]
+    pub metadata: serde_json::Value,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub attachment: Option<ChatMessageAttachment>,
     pub created_at_unix: i64,
@@ -57,6 +59,63 @@ pub struct ChatMessage {
     pub edited_at_unix: Option<i64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub deleted_at_unix: Option<i64>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct OrderFreezeChatEvent {
+    pub event_sequence: i64,
+    pub event_id: String,
+    pub request_id: String,
+    pub status: String,
+    pub order_id: String,
+    pub order_number: String,
+    pub order_title: String,
+    pub requester_role: String,
+    pub requester_ref: String,
+    pub requester_display_name: String,
+    pub target_session_id: String,
+    pub target_apparatus: String,
+    pub target_worker_role: String,
+    pub target_worker_ref: String,
+    pub target_worker_display_name: String,
+    pub requested_at_unix: i64,
+    pub transitioned_at_unix: i64,
+    pub attempts: i32,
+}
+
+impl OrderFreezeChatEvent {
+    pub fn message_body(&self) -> String {
+        format!(
+            "{} buyurtmasini muzlatish so‘rovi",
+            if self.order_number.trim().is_empty() {
+                self.order_id.trim()
+            } else {
+                self.order_number.trim()
+            }
+        )
+    }
+
+    pub fn metadata(&self) -> serde_json::Value {
+        serde_json::json!({
+            "kind": "order_freeze_request",
+            "event_sequence": self.event_sequence,
+            "request_id": self.request_id,
+            "status": self.status,
+            "order_id": self.order_id,
+            "order_number": self.order_number,
+            "order_title": self.order_title,
+            "requester_role": self.requester_role,
+            "requester_ref": self.requester_ref,
+            "requester_display_name": self.requester_display_name,
+            "target_session_id": self.target_session_id,
+            "target_apparatus": self.target_apparatus,
+            "target_worker_role": self.target_worker_role,
+            "target_worker_ref": self.target_worker_ref,
+            "target_worker_display_name": self.target_worker_display_name,
+            "requested_at_unix": self.requested_at_unix,
+            "transitioned_at_unix": self.transitioned_at_unix,
+        })
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

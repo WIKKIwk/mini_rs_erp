@@ -1,7 +1,9 @@
-use axum::body::Body;
+use axum::body::{Body, to_bytes};
 use axum::http::{Request, StatusCode, header};
+use sha2::{Digest, Sha256};
 use tower::ServiceExt;
 
+use crate::core::mobile_release::MobileReleaseStore;
 use crate::http::router::build_router;
 
 use super::support::{json_body, test_state};
@@ -42,6 +44,7 @@ async fn auth_me_route_is_not_registered() {
 async fn go_mobile_route_inventory_is_registered() {
     const ROUTES: &[&str] = &[
         "/healthz",
+        "/v1/mobile/app-update/android",
         "/v1/mobile/auth/login",
         "/v1/mobile/auth/logout",
         "/v1/mobile/me",
@@ -149,6 +152,85 @@ async fn go_mobile_route_inventory_is_registered() {
 
         assert_ne!(response.status(), StatusCode::NOT_FOUND, "{route}");
     }
+}
+
+#[tokio::test]
+async fn android_app_update_metadata_and_apk_are_served() {
+    let directory = tempfile::tempdir().expect("release directory");
+    let apk = b"accord-mobile-apk";
+    let apk_name = "accord-mobile-0.2.0-5.apk";
+    tokio::fs::write(directory.path().join(apk_name), apk)
+        .await
+        .expect("write apk");
+    let sha256 = format!("{:x}", Sha256::digest(apk));
+    let manifest = serde_json::json!({
+        "version_code": 5,
+        "version_name": "0.2.0",
+        "minimum_supported_version_code": 4,
+        "mandatory": false,
+        "apk_file": apk_name,
+        "sha256": sha256,
+        "size_bytes": apk.len(),
+        "release_notes": "Updater",
+        "published_at": "2026-07-23T12:00:00Z"
+    });
+    tokio::fs::write(
+        directory.path().join("android.json"),
+        serde_json::to_vec(&manifest).expect("manifest json"),
+    )
+    .await
+    .expect("write manifest");
+
+    let mut state = test_state();
+    state.mobile_releases = MobileReleaseStore::new(directory.path());
+    let app = build_router(state);
+
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/v1/mobile/app-update/android")
+                .body(Body::empty())
+                .expect("request"),
+        )
+        .await
+        .expect("response");
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(
+        response.headers().get(header::CACHE_CONTROL),
+        Some(&"no-store, max-age=0".parse().expect("header"))
+    );
+    let json = json_body(response).await;
+    assert_eq!(json["version_code"], 5);
+    assert_eq!(
+        json["apk_url"],
+        format!("/v1/mobile/app-update/android/apk/{apk_name}")
+    );
+    assert!(json.get("apk_file").is_none());
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri(format!("/v1/mobile/app-update/android/apk/{apk_name}"))
+                .header(header::RANGE, "bytes=2-7")
+                .body(Body::empty())
+                .expect("request"),
+        )
+        .await
+        .expect("response");
+    assert_eq!(response.status(), StatusCode::PARTIAL_CONTENT);
+    assert_eq!(
+        response.headers().get(header::CONTENT_TYPE),
+        Some(
+            &"application/vnd.android.package-archive"
+                .parse()
+                .expect("content type")
+        )
+    );
+    let bytes = to_bytes(response.into_body(), usize::MAX)
+        .await
+        .expect("apk body");
+    assert_eq!(&bytes[..], b"cord-m");
 }
 
 #[tokio::test]

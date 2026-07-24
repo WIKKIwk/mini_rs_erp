@@ -27,6 +27,7 @@ The service currently covers these business areas:
 | Warehouse flow | Dashboard, pending/history/archive, confirmations, unannounced receipt, customer issue flows. |
 | GScale/RPS printing | Progress labels, QR labels, driver-first print flow, receipt drafts. |
 | Admin | Settings, users, roles, suppliers/customers/items, activity, monitoring. |
+| Mobile distribution | Android release metadata and verified APK delivery for in-app updates. |
 | Push/profile/local state | FCM token storage, push dispatch, profile prefs, avatar storage. |
 
 `werka` is still used in routes, roles, config, and older internal module names
@@ -128,6 +129,7 @@ Useful knobs:
 | `PORT` | `18081` | Local mini ERP port. |
 | `CORE_URL` | `http://127.0.0.1:$PORT` | Local service URL exposed through the tunnel. |
 | `MOBILE_API_ADDR` | `127.0.0.1:$PORT` | Bind address passed to the service. |
+| `MOBILE_APP_RELEASE_DIR` | `data/mobile_releases` | Persistent directory containing the published Android APK and `android.json`. |
 | `TUNNEL_NAME` | hostname-derived | Cloudflare Tunnel name. |
 | `REQUIRE_DATABASE_URL` | `0` | Set to `1` for production enforcement. |
 | `BUILD_RELEASE` | `1` | Build the release binary before starting. |
@@ -139,6 +141,43 @@ Stop only local processes started for a hostname:
 ```bash
 make stop-domain DOMAIN=mini-rs-erp-test.wspace.sbs
 ```
+
+## Android APK Updates
+
+The backend exposes two public, read-only routes used before a user logs in:
+
+| Route | Result |
+| --- | --- |
+| `GET /v1/mobile/app-update/android` | Current version, minimum supported version, SHA-256, size, notes, and APK URL; `204` when nothing is published. |
+| `GET /v1/mobile/app-update/android/apk/{file}` | An immutable, content-addressed APK with byte-range support. |
+
+Publish an already-built APK atomically:
+
+```bash
+make publish-mobile-apk \
+  APK=/absolute/path/to/accord.apk \
+  VERSION_CODE=5 \
+  VERSION_NAME=0.2.0 \
+  RELEASE_NOTES="Ilova ichidan yangilash qo'shildi"
+```
+
+The default is an optional update. Use `MINIMUM_VERSION_CODE=5` to force only
+clients below version code 5, or `MANDATORY_UPDATE=1` to force every older
+client. `RELEASE_NOTES_FILE=/absolute/path/notes.txt` avoids shell quoting for
+long notes.
+
+The publisher copies the APK under a content-addressed filename and swaps
+`android.json` only after SHA-256 and size are known. The running service reads
+the manifest on each request, so publishing does not require a restart.
+
+For a deployed service, set `MOBILE_APP_RELEASE_DIR` to a persistent absolute
+directory and pass that same path as `MOBILE_RELEASE_DIR` to the publish
+command. Every APK update must keep the same Android application ID and signing
+certificate as the installed app.
+
+Complete public deployment, remote SSH publishing, verification, rollback, and
+security instructions are in
+[Self-hosted Android APK updates](docs/deploy/android-apk-updates.md).
 
 ## Main Workflows
 
@@ -421,6 +460,8 @@ handlers.
 | `/v1/mobile/auth/login` | Login by role-specific phone/code. |
 | `/v1/mobile/auth/logout` | Revoke current bearer session. |
 | `/v1/mobile/me` | Return current principal/session profile. |
+| `/v1/mobile/app-update/android` | Return current Android release metadata. |
+| `/v1/mobile/app-update/android/apk/{file}` | Stream one content-addressed Android APK. |
 | `/v1/mobile/calculate` | Quick production calculation. |
 | `/v1/mobile/calculate/orders` | Save/list quick calculate orders. |
 | `/v1/mobile/calculate/orders/delete` | Delete quick calculate order. |

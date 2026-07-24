@@ -10,6 +10,7 @@ use crate::core::auth::models::Principal;
 use crate::core::chat::{
     ChatConversation, ChatError, ChatMessagePage, ChatOutboxEvent, ChatPrincipal,
     ChatPrincipalInput, ChatPushDelivery, ChatRealtimeEvent, ChatSendResult, ChatStorePort,
+    OrderFreezeChatEvent,
 };
 
 pub use realtime::start_realtime_listener;
@@ -189,5 +190,36 @@ impl ChatStorePort for PostgresChatStore {
 
     async fn mark_outbox_published(&self, event_id: &str) -> Result<(), ChatError> {
         write::mark_outbox_published(&self.pool, event_id).await
+    }
+
+    async fn claim_order_freeze_chat_events(
+        &self,
+        limit: usize,
+    ) -> Result<Vec<OrderFreezeChatEvent>, ChatError> {
+        write::claim_order_freeze_chat_events(&self.pool, limit).await
+    }
+
+    async fn upsert_order_freeze_card(
+        &self,
+        principal: &Principal,
+        conversation_id: &str,
+        event: &OrderFreezeChatEvent,
+    ) -> Result<ChatSendResult, ChatError> {
+        write::upsert_order_freeze_card(&self.pool, principal, conversation_id, event).await
+    }
+
+    async fn mark_order_freeze_chat_event_delivered(
+        &self,
+        event_id: &str,
+    ) -> Result<(), ChatError> {
+        write::mark_order_freeze_chat_event_delivered(&self.pool, event_id).await
+    }
+
+    async fn reschedule_order_freeze_chat_event(
+        &self,
+        event_id: &str,
+        error: &str,
+    ) -> Result<(), ChatError> {
+        write::reschedule_order_freeze_chat_event(&self.pool, event_id, error).await
     }
 }

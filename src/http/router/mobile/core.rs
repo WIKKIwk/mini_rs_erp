@@ -1,16 +1,24 @@
 use axum::Router;
 use axum::extract::DefaultBodyLimit;
-use axum::routing::any;
+use axum::routing::{any, get};
 
 use crate::app::AppState;
 use crate::core::chat_media::{MAX_CHAT_IMAGE_SIZE_BYTES, MAX_CHAT_MEDIA_CHUNK_SIZE_BYTES};
 use crate::http::handlers::{
-    auth, calculate, chat, customer, gscale, iroh_discovery, notifications, profile, push, qolip,
-    returned_paint, rezka, rps_batch, stock_entry, supplier, werka,
+    app_update, auth, calculate, chat, customer, gscale, iroh_discovery, notifications, profile,
+    push, qolip, returned_paint, rezka, rps_batch, stock_entry, supplier, werka,
 };
 
 pub(super) fn routes() -> Router<AppState> {
     Router::new()
+        .route(
+            "/v1/mobile/app-update/android",
+            get(app_update::android_metadata),
+        )
+        .route(
+            "/v1/mobile/app-update/android/apk/{file_name}",
+            get(app_update::android_apk),
+        )
         .route("/v1/mobile/auth/login", any(auth::login))
         .route("/v1/mobile/auth/logout", any(auth::logout))
         .route("/v1/mobile/me", any(auth::me))

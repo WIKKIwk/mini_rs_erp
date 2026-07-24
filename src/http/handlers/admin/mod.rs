@@ -19,14 +19,14 @@ pub use production_maps::{
     production_map_audit, production_map_closed_orders, production_map_completed_orders,
     production_map_completion_request_decision, production_map_completion_request_decisions,
     production_map_completion_requests, production_map_finished_goods_receive, production_map_live,
-    production_map_move, production_map_move_batch, production_map_progress_qr_history,
-    production_map_progress_qr_lookup, production_map_progress_qr_report,
-    production_map_progress_qr_reprint, production_map_qolip_validate, production_map_queue_action,
-    production_map_queue_policies, production_map_run, production_map_save_with_order,
-    production_map_sequence, production_map_wip_batches, production_maps,
-    raw_material_assignment_lookup, raw_material_assignments, raw_material_history,
-    raw_material_rules, raw_material_stock, raw_material_stock_reprint_confirm,
-    raw_material_stock_reprint_prepare,
+    production_map_move, production_map_move_batch, production_map_order_control,
+    production_map_progress_qr_history, production_map_progress_qr_lookup,
+    production_map_progress_qr_report, production_map_progress_qr_reprint,
+    production_map_qolip_validate, production_map_queue_action, production_map_queue_policies,
+    production_map_run, production_map_save_with_order, production_map_sequence,
+    production_map_wip_batches, production_maps, raw_material_assignment_lookup,
+    raw_material_assignments, raw_material_history, raw_material_rules, raw_material_stock,
+    raw_material_stock_reprint_confirm, raw_material_stock_reprint_prepare,
 };
 pub use supplier_mutations::{
     supplier_code_regenerate, supplier_item_add, supplier_item_remove, supplier_items,
@@ -244,6 +244,8 @@ fn too_many_requests(error: impl Into<String>) -> AdminError {
 pub struct AdminErrorResponse {
     pub error: String,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub blockers: Option<Vec<crate::core::production_map::OrderDeleteBlocker>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub apparatus_options: Option<Vec<String>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub order_width_mm: Option<f64>,
@@ -255,6 +257,7 @@ impl AdminErrorResponse {
     fn new(error: impl Into<String>) -> Self {
         Self {
             error: error.into(),
+            blockers: None,
             apparatus_options: None,
             order_width_mm: None,
             roll_width_mm: None,
@@ -264,6 +267,7 @@ impl AdminErrorResponse {
     fn roll_size_mismatch(order_width_mm: f64, roll_width_mm: f64) -> Self {
         Self {
             error: "raw_material_roll_size_mismatch".to_string(),
+            blockers: None,
             apparatus_options: None,
             order_width_mm: Some(order_width_mm),
             roll_width_mm: Some(roll_width_mm),

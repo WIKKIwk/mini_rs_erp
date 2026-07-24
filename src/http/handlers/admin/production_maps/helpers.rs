@@ -24,6 +24,26 @@ pub(super) fn production_map_error(error: ProductionMapError) -> AdminError {
         ProductionMapError::OrderNumberImmutable => bad_request("order_number_immutable"),
         ProductionMapError::MoveNotAllowed => bad_request("move_not_allowed"),
         ProductionMapError::QueueActionNotAllowed => bad_request("queue_action_not_allowed"),
+        ProductionMapError::OrderNotStarted => conflict("order_not_started"),
+        ProductionMapError::OrderAlreadyCompleted => conflict("order_already_completed"),
+        ProductionMapError::OrderFreezeRequested => conflict("order_freeze_requested"),
+        ProductionMapError::OrderFrozen => conflict("order_frozen"),
+        ProductionMapError::OrderControlActionNotAllowed => {
+            conflict("order_control_action_not_allowed")
+        }
+        ProductionMapError::OrderFreezeTargetNotFound => conflict("order_freeze_target_not_found"),
+        ProductionMapError::OrderFreezeTargetAmbiguous => conflict("order_freeze_target_ambiguous"),
+        ProductionMapError::OrderFreezeRequestMismatch => conflict("order_freeze_request_mismatch"),
+        ProductionMapError::OrderDeleteBlocked(blockers) => (
+            StatusCode::CONFLICT,
+            Json(AdminErrorResponse {
+                error: "order_delete_blocked".to_string(),
+                blockers: Some(blockers),
+                apparatus_options: None,
+                order_width_mm: None,
+                roll_width_mm: None,
+            }),
+        ),
         ProductionMapError::PreviousStageNotCompleted => {
             bad_request("previous_stage_not_completed")
         }
@@ -96,6 +116,7 @@ fn ambiguous_raw_material_apparatuses(apparatuses: Vec<String>) -> AdminError {
         StatusCode::BAD_REQUEST,
         Json(AdminErrorResponse {
             error: "raw_material_group_ambiguous".to_string(),
+            blockers: None,
             apparatus_options: Some(apparatuses),
             order_width_mm: None,
             roll_width_mm: None,

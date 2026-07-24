@@ -35,6 +35,14 @@ pub(super) async fn delete_map_by_id(
         .begin()
         .await
         .map_err(|_| ProductionMapError::StoreFailed)?;
+    let mini_order_id = sqlx::query_scalar::<_, Option<String>>(
+        "SELECT order_id FROM mini_production_maps WHERE id = $1 FOR UPDATE",
+    )
+    .bind(map_id)
+    .fetch_optional(&mut *tx)
+    .await
+    .map_err(|_| ProductionMapError::StoreFailed)?
+    .flatten();
     sqlx::query("DELETE FROM mini_queue_states WHERE order_id = $1")
         .bind(map_id)
         .execute(&mut *tx)
@@ -63,6 +71,13 @@ pub(super) async fn delete_map_by_id(
         .execute(&mut *tx)
         .await
         .map_err(|_| ProductionMapError::StoreFailed)?;
+    if let Some(order_id) = mini_order_id {
+        sqlx::query("DELETE FROM mini_orders WHERE id = $1")
+            .bind(order_id)
+            .execute(&mut *tx)
+            .await
+            .map_err(|_| ProductionMapError::StoreFailed)?;
+    }
     tx.commit()
         .await
         .map_err(|_| ProductionMapError::StoreFailed)

@@ -1,4 +1,5 @@
 pub mod admin;
+pub mod app_update;
 pub mod auth;
 pub mod calculate;
 pub mod chat;

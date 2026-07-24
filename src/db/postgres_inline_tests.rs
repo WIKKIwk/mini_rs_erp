@@ -158,6 +158,37 @@ mod tests {
     }
 
     #[test]
+    fn order_control_migration_persists_strict_freeze_states() {
+        let migration = POSTGRES_MIGRATIONS
+            .iter()
+            .find(|(version, _)| *version == "0025_order_control_state")
+            .map(|(_, sql)| sql.to_lowercase())
+            .expect("order control migration");
+
+        assert!(migration.contains("create table if not exists mini_order_control_states"));
+        assert!(migration.contains("freeze_requested"));
+        assert!(migration.contains("frozen_at_unix"));
+        assert!(migration.contains("references mini_production_maps(id) on delete cascade"));
+    }
+
+    #[test]
+    fn order_freeze_chat_card_migration_is_request_scoped_and_ordered() {
+        let migration = POSTGRES_MIGRATIONS
+            .iter()
+            .find(|(version, _)| *version == "0026_order_freeze_request_chat_cards")
+            .map(|(_, sql)| sql.to_lowercase())
+            .expect("order freeze chat card migration");
+
+        assert!(migration.contains("create table if not exists mini_order_freeze_requests"));
+        assert!(migration.contains("target_session_id"));
+        assert!(migration.contains("target_worker_ref"));
+        assert!(migration.contains("freeze_request_id"));
+        assert!(migration.contains("create table if not exists mini_order_freeze_chat_outbox"));
+        assert!(migration.contains("event_sequence bigserial primary key"));
+        assert!(migration.contains("order_freeze_request"));
+    }
+
+    #[test]
     fn rps_batch_history_migration_is_additive_and_owner_scoped() {
         let migration = POSTGRES_MIGRATIONS
             .iter()

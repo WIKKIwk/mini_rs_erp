@@ -69,6 +69,8 @@ struct ApparatusQueueActionRequest {
     returned_paint_items: Vec<ReturnedPaintItem>,
     #[serde(default)]
     returned_paint_image_id: String,
+    #[serde(default)]
+    freeze_request_id: String,
     action: queue_state::ApparatusQueueAction,
 }
 
@@ -177,6 +179,7 @@ pub async fn production_map_queue_action(
         None => input.return_ink_kg,
     };
     let progress = QueueProgressInput {
+        freeze_request_id: input.freeze_request_id.clone(),
         produced_qty,
         uom: if input.uom.trim().is_empty() {
             input.unit.clone()

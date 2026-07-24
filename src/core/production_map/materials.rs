@@ -113,6 +113,7 @@ impl ProductionMapService {
         &self,
         input: RawMaterialAssignmentDeleteInput,
     ) -> Result<RawMaterialAssignment, ProductionMapError> {
+        let _guard = self.queue_action_guard().await;
         let order_id = input.order_id.trim().to_string();
         let barcode = normalize_barcode(&input.barcode);
         if order_id.is_empty() || barcode.is_empty() {
@@ -132,6 +133,7 @@ impl ProductionMapService {
         input: RawMaterialAssignmentInput,
         actor: &QueueActionActor,
     ) -> Result<RawMaterialAssignment, ProductionMapError> {
+        let _guard = self.queue_action_guard().await;
         let order_id = input.order_id.trim().to_string();
         let barcode = normalize_barcode(&input.barcode);
         let item_code = input.item_code.trim().to_string();

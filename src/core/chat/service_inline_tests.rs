@@ -214,4 +214,35 @@ impl ChatStorePort for UnavailableChatStore {
     async fn mark_outbox_published(&self, _event_id: &str) -> Result<(), ChatError> {
         Err(ChatError::Unavailable)
     }
+
+    async fn claim_order_freeze_chat_events(
+        &self,
+        _limit: usize,
+    ) -> Result<Vec<super::OrderFreezeChatEvent>, ChatError> {
+        Err(ChatError::Unavailable)
+    }
+
+    async fn upsert_order_freeze_card(
+        &self,
+        _principal: &Principal,
+        _conversation_id: &str,
+        _event: &super::OrderFreezeChatEvent,
+    ) -> Result<ChatSendResult, ChatError> {
+        Err(ChatError::Unavailable)
+    }
+
+    async fn mark_order_freeze_chat_event_delivered(
+        &self,
+        _event_id: &str,
+    ) -> Result<(), ChatError> {
+        Err(ChatError::Unavailable)
+    }
+
+    async fn reschedule_order_freeze_chat_event(
+        &self,
+        _event_id: &str,
+        _error: &str,
+    ) -> Result<(), ChatError> {
+        Err(ChatError::Unavailable)
+    }
 }

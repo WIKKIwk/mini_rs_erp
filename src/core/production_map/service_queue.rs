@@ -22,10 +22,20 @@ impl ProductionMapService {
     ) -> Result<BTreeMap<String, Vec<String>>, ProductionMapError> {
         let maps = self.store.maps().await?;
         let sequences = self.store.apparatus_sequences().await?;
-        Ok(sequences
+        let visible_by_apparatus = visible_order_ids_by_apparatus(&maps);
+        let apparatuses = sequences
+            .keys()
+            .chain(visible_by_apparatus.keys())
+            .cloned()
+            .collect::<BTreeSet<_>>();
+        Ok(apparatuses
             .into_iter()
-            .map(|(apparatus, stored_sequence)| {
-                let visible_order_ids = visible_order_ids_for_apparatus(&maps, &apparatus);
+            .map(|apparatus| {
+                let stored_sequence = sequences.get(&apparatus).cloned().unwrap_or_default();
+                let visible_order_ids = visible_by_apparatus
+                    .get(&apparatus)
+                    .cloned()
+                    .unwrap_or_default();
                 let sequence = if visible_order_ids.is_empty() {
                     stored_sequence
                 } else {
@@ -48,6 +58,7 @@ impl ProductionMapService {
         apparatus: &str,
         order_ids: Vec<String>,
     ) -> Result<(), ProductionMapError> {
+        let _guard = self.queue_action_guard().await;
         let apparatus = apparatus.trim();
         if apparatus.is_empty() {
             return Err(ProductionMapError::MissingId);
@@ -78,7 +89,21 @@ impl ProductionMapService {
             .or_else(|| all_states.get(apparatus))
             .cloned()
             .unwrap_or_default();
-        validate_active_sequence_barrier(&current_sequence, &order_ids, &states)?;
+        let frozen_order_ids = self
+            .store
+            .order_control_states()
+            .await?
+            .into_iter()
+            .filter_map(|(order_id, control)| {
+                (control.state == OrderControlState::Frozen).then_some(order_id)
+            })
+            .collect::<BTreeSet<_>>();
+        validate_active_sequence_barrier(
+            &current_sequence,
+            &order_ids,
+            &states,
+            &frozen_order_ids,
+        )?;
         self.store
             .put_apparatus_sequence(apparatus, order_ids)
             .await?;

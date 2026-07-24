@@ -98,6 +98,10 @@ pub(super) fn routes() -> Router<AppState> {
             any(admin::production_map_queue_action),
         )
         .route(
+            "/v1/mobile/admin/production-maps/order-control",
+            post(admin::production_map_order_control),
+        )
+        .route(
             "/v1/mobile/admin/production-maps/qolip-validate",
             any(admin::production_map_qolip_validate),
         )

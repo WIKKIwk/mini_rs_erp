@@ -8,9 +8,8 @@ use tokio::task::JoinSet;
 use tokio::time::sleep;
 
 use super::{
-    can_participate_in_chat, ChatConversation, ChatConversationPage, ChatError, ChatHub,
-    ChatMessagePage, ChatPrincipal, ChatPrincipalInput, ChatSendResult, ChatStorePort,
-    ChatSyncPage,
+    ChatConversation, ChatConversationPage, ChatError, ChatHub, ChatMessagePage, ChatPrincipal,
+    ChatPrincipalInput, ChatSendResult, ChatStorePort, ChatSyncPage, can_participate_in_chat,
 };
 use crate::core::auth::models::{Principal, PrincipalRole};
 use crate::core::push::service::PushService;
@@ -292,6 +291,76 @@ impl ChatService {
                 }
             }
         });
+        let service = self.clone();
+        handle.spawn(async move {
+            loop {
+                match service.store.claim_order_freeze_chat_events(32).await {
+                    Ok(events) if events.is_empty() => sleep(Duration::from_millis(350)).await,
+                    Ok(events) => {
+                        for event in events {
+                            service.deliver_order_freeze_card(event).await;
+                        }
+                    }
+                    Err(error) => {
+                        tracing::warn!(%error, "order freeze chat card worker failed");
+                        sleep(Duration::from_secs(1)).await;
+                    }
+                }
+            }
+        });
+    }
+
+    async fn deliver_order_freeze_card(&self, event: super::OrderFreezeChatEvent) {
+        let result = async {
+            let requester_role = chat_role_from_code(&event.requester_role)?;
+            let target_role = chat_role_from_code(&event.target_worker_role)?;
+            let conversation = self
+                .create_or_get_dm(
+                    ChatPrincipalInput {
+                        role: requester_role.clone(),
+                        ref_: event.requester_ref.clone(),
+                        display_name: event.requester_display_name.clone(),
+                        avatar_url: String::new(),
+                    },
+                    ChatPrincipalInput {
+                        role: target_role,
+                        ref_: event.target_worker_ref.clone(),
+                        display_name: event.target_worker_display_name.clone(),
+                        avatar_url: String::new(),
+                    },
+                )
+                .await?;
+            let principal = Principal {
+                role: requester_role,
+                display_name: event.requester_display_name.clone(),
+                legal_name: event.requester_display_name.clone(),
+                ref_: event.requester_ref.clone(),
+                phone: String::new(),
+                avatar_url: String::new(),
+            };
+            self.store
+                .upsert_order_freeze_card(&principal, &conversation.conversation_id, &event)
+                .await
+        }
+        .await;
+        match result {
+            Ok(_) => {
+                if let Err(error) = self
+                    .store
+                    .mark_order_freeze_chat_event_delivered(&event.event_id)
+                    .await
+                {
+                    tracing::warn!(%error, event_id = %event.event_id, "freeze card marker failed");
+                }
+            }
+            Err(error) => {
+                tracing::warn!(%error, event_id = %event.event_id, "freeze card delivery failed");
+                let _ = self
+                    .store
+                    .reschedule_order_freeze_chat_event(&event.event_id, &error.to_string())
+                    .await;
+            }
+        }
     }
 
     async fn deliver_push(&self, push: PushService, delivery: super::ChatPushDelivery) {
@@ -382,6 +451,19 @@ fn ensure_chat_role(role: &PrincipalRole) -> Result<(), ChatError> {
     can_participate_in_chat(role)
         .then_some(())
         .ok_or(ChatError::Forbidden)
+}
+
+fn chat_role_from_code(value: &str) -> Result<PrincipalRole, ChatError> {
+    match value.trim() {
+        "supplier" => Ok(PrincipalRole::Supplier),
+        "werka" => Ok(PrincipalRole::Werka),
+        "aparatchi" => Ok(PrincipalRole::Aparatchi),
+        "qolipchi" => Ok(PrincipalRole::Qolipchi),
+        "boyoqchi" => Ok(PrincipalRole::Boyoqchi),
+        "material_taminotchi" => Ok(PrincipalRole::MaterialTaminotchi),
+        "admin" => Ok(PrincipalRole::Admin),
+        _ => Err(ChatError::InvalidInput),
+    }
 }
 
 include!("service_inline_tests.rs");

@@ -2,7 +2,7 @@ use async_trait::async_trait;
 
 use super::{
     ChatConversation, ChatMessagePage, ChatOutboxEvent, ChatPrincipal, ChatPrincipalInput,
-    ChatPushDelivery, ChatRealtimeEvent, ChatSendResult,
+    ChatPushDelivery, ChatRealtimeEvent, ChatSendResult, OrderFreezeChatEvent,
 };
 use crate::core::auth::models::Principal;
 
@@ -121,4 +121,35 @@ pub trait ChatStorePort: Send + Sync {
     async fn claim_outbox(&self, limit: usize) -> Result<Vec<ChatOutboxEvent>, ChatError>;
 
     async fn mark_outbox_published(&self, event_id: &str) -> Result<(), ChatError>;
+
+    async fn claim_order_freeze_chat_events(
+        &self,
+        _limit: usize,
+    ) -> Result<Vec<OrderFreezeChatEvent>, ChatError> {
+        Err(ChatError::Unavailable)
+    }
+
+    async fn upsert_order_freeze_card(
+        &self,
+        _principal: &Principal,
+        _conversation_id: &str,
+        _event: &OrderFreezeChatEvent,
+    ) -> Result<ChatSendResult, ChatError> {
+        Err(ChatError::Unavailable)
+    }
+
+    async fn mark_order_freeze_chat_event_delivered(
+        &self,
+        _event_id: &str,
+    ) -> Result<(), ChatError> {
+        Err(ChatError::Unavailable)
+    }
+
+    async fn reschedule_order_freeze_chat_event(
+        &self,
+        _event_id: &str,
+        _error: &str,
+    ) -> Result<(), ChatError> {
+        Err(ChatError::Unavailable)
+    }
 }

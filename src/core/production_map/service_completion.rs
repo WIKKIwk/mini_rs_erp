@@ -28,6 +28,13 @@ impl ProductionMapService {
         if !queue_state::apparatus_matches_assigned(apparatus, assigned_apparatus) {
             return Err(ProductionMapError::ApparatusNotAssigned);
         }
+        match self.order_control_state(order_id).await?.state {
+            OrderControlState::Active => {}
+            OrderControlState::FreezeRequested => {
+                return Err(ProductionMapError::OrderFreezeRequested);
+            }
+            OrderControlState::Frozen => return Err(ProductionMapError::OrderFrozen),
+        }
 
         let sequences = self.store.apparatus_sequences().await?;
         let all_states = self.store.apparatus_queue_states().await?;
@@ -166,6 +173,15 @@ impl ProductionMapService {
             .completion_request_by_event_id(request_event_id)
             .await?
             .ok_or(ProductionMapError::QueueActionNotAllowed)?;
+        if decision == CompletionRequestDecision::Approved {
+            match self.order_control_state(&request.order_id).await?.state {
+                OrderControlState::Active => {}
+                OrderControlState::FreezeRequested => {
+                    return Err(ProductionMapError::OrderFreezeRequested);
+                }
+                OrderControlState::Frozen => return Err(ProductionMapError::OrderFrozen),
+            }
+        }
         let all_states = self.store.apparatus_queue_states().await?;
         let mut states = all_states
             .get(&request.apparatus)

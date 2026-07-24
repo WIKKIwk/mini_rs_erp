@@ -12,6 +12,7 @@ pub mod formula;
 mod formula_tests;
 pub mod gscale;
 pub mod mini_orders;
+pub mod mobile_release;
 pub mod production_map;
 pub mod profile;
 pub mod push;

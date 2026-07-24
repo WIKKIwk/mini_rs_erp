@@ -56,7 +56,15 @@ pub(super) async fn delete_map(
     store: &MemoryProductionMapStore,
     map_id: &str,
 ) -> Result<(), ProductionMapError> {
-    store.maps.write().await.remove(map_id.trim());
+    let map_id = map_id.trim();
+    store.maps.write().await.remove(map_id);
+    for order_ids in store.sequences.write().await.values_mut() {
+        order_ids.retain(|order_id| order_id.trim() != map_id);
+    }
+    for states in store.queue_states.write().await.values_mut() {
+        states.remove(map_id);
+    }
+    store.order_controls.write().await.remove(map_id);
     Ok(())
 }
 

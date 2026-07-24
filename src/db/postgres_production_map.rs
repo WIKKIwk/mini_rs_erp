@@ -7,10 +7,10 @@ use crate::core::production_map::{
     ApparatusMaterialRule, ApparatusQueueActionEvent, ApparatusQueuePolicy, CompletedQueueOrder,
     CompletionRequestDecision, CompletionRequestDecisionNotification,
     CompletionRequestNotification, CompletionRequestStateResolution, FinishedGoodsStockEntry,
-    OrderProgressBatch, OrderProgressEvent, OrderRunSession, ProductionMapDefinition,
-    ProductionMapError, ProductionMapStorePort, ProductionOrderLogEntry, QueueActionActor,
-    QueueActionProgressWrite, QueueActionProgressWriteResult, RawMaterialAssignment,
-    WipProgressBatchQuery,
+    OrderControlRecord, OrderProgressBatch, OrderProgressEvent, OrderRunSession,
+    ProductionMapDefinition, ProductionMapError, ProductionMapStorePort, ProductionOrderLogEntry,
+    QueueActionActor, QueueActionProgressWrite, QueueActionProgressWriteResult,
+    RawMaterialAssignment, WipProgressBatchQuery,
 };
 use crate::core::qolip::QolipError;
 
@@ -18,6 +18,7 @@ mod catalog_helpers;
 mod completion_helpers;
 mod map_helpers;
 mod material_helpers;
+mod order_control_helpers;
 mod order_query_helpers;
 mod progress_helpers;
 mod qolip_session_helpers;
@@ -41,6 +42,9 @@ use self::map_helpers::{
 use self::material_helpers::{
     delete_raw_material_assignment, load_apparatus_material_rules, load_raw_material_assignments,
     save_apparatus_material_rule, save_raw_material_assignment,
+};
+use self::order_control_helpers::{
+    load_order_control_states, save_order_control_state, save_order_control_state_tx,
 };
 use self::order_query_helpers::{
     load_active_order_run_session, load_active_order_run_session_for_qolip,
@@ -104,6 +108,19 @@ impl ProductionMapStorePort for PostgresProductionMapStore {
 
     async fn delete_map(&self, map_id: &str) -> Result<(), ProductionMapError> {
         delete_map_by_id(&self.pool, map_id).await
+    }
+
+    async fn order_control_states(
+        &self,
+    ) -> Result<BTreeMap<String, OrderControlRecord>, ProductionMapError> {
+        load_order_control_states(&self.pool).await
+    }
+
+    async fn put_order_control_state(
+        &self,
+        record: OrderControlRecord,
+    ) -> Result<(), ProductionMapError> {
+        save_order_control_state(&self.pool, &record).await
     }
 
     async fn apparatus_sequences(
@@ -413,6 +430,9 @@ impl ProductionMapStorePort for PostgresProductionMapStore {
         }
         for batch in write.progress_batch_updates {
             put_order_progress_batch_tx(&mut tx, &batch).await?;
+        }
+        if let Some(record) = &write.order_control_update {
+            save_order_control_state_tx(&mut tx, record).await?;
         }
         let qolip_checkout_committed = if let Some(checkout) = &write.qolip_checkout {
             super::postgres_qolip::save_checkout_tx(&mut tx, checkout)

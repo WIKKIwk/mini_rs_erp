@@ -330,6 +330,7 @@ pub struct FinishedGoodsReceipt {
 
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct QueueProgressInput {
+    pub freeze_request_id: String,
     pub produced_qty: Option<f64>,
     pub uom: String,
     pub progress_batch_id: String,

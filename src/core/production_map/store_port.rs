@@ -14,6 +14,7 @@ pub type QueueStateMap = BTreeMap<String, String>;
 pub type ApparatusQueueStateMap = BTreeMap<String, QueueStateMap>;
 pub type ApparatusQueuePolicyMap = BTreeMap<String, ApparatusQueuePolicy>;
 pub type OrderLogMap = BTreeMap<String, Vec<ProductionOrderLogEntry>>;
+pub type OrderControlMap = BTreeMap<String, OrderControlRecord>;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RawMaterialStockTransitionKind {
@@ -68,6 +69,7 @@ pub struct QueueActionProgressWrite {
     pub raw_material_stock_transitions: Vec<RawMaterialStockTransition>,
     pub qolip_checkout: Option<QolipCheckout>,
     pub returned_paint_report: Option<ReturnedPaintRequest>,
+    pub order_control_update: Option<OrderControlRecord>,
 }
 
 #[async_trait]
@@ -77,6 +79,12 @@ pub trait ProductionMapStorePort: Send + Sync {
     async fn put_map(&self, map: ProductionMapDefinition) -> StoreResult<()>;
     async fn put_maps_batch(&self, maps: &[ProductionMapDefinition]) -> StoreResult<()>;
     async fn delete_map(&self, map_id: &str) -> StoreResult<()>;
+    async fn order_control_states(&self) -> StoreResult<OrderControlMap> {
+        Ok(BTreeMap::new())
+    }
+    async fn put_order_control_state(&self, _record: OrderControlRecord) -> StoreResult<()> {
+        Ok(())
+    }
     async fn apparatus_sequences(&self) -> StoreResult<ApparatusSequenceMap>;
     async fn put_apparatus_sequence(
         &self,
@@ -266,6 +274,9 @@ pub trait ProductionMapStorePort: Send + Sync {
         }
         for batch in write.progress_batch_updates {
             self.put_order_progress_batch(batch).await?;
+        }
+        if let Some(record) = write.order_control_update {
+            self.put_order_control_state(record).await?;
         }
         Ok(QueueActionProgressWriteResult::default())
     }

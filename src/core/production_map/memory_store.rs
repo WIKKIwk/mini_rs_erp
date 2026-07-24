@@ -35,6 +35,23 @@ impl ProductionMapStorePort for MemoryProductionMapStore {
         maps::delete_map(self, map_id).await
     }
 
+    async fn order_control_states(
+        &self,
+    ) -> Result<BTreeMap<String, OrderControlRecord>, ProductionMapError> {
+        Ok(self.order_controls.read().await.clone())
+    }
+
+    async fn put_order_control_state(
+        &self,
+        record: OrderControlRecord,
+    ) -> Result<(), ProductionMapError> {
+        self.order_controls
+            .write()
+            .await
+            .insert(record.order_id.trim().to_string(), record);
+        Ok(())
+    }
+
     async fn apparatus_sequences(
         &self,
     ) -> Result<BTreeMap<String, Vec<String>>, ProductionMapError> {
@@ -312,6 +329,9 @@ impl ProductionMapStorePort for MemoryProductionMapStore {
         }
         for batch in write.progress_batch_updates {
             self.put_order_progress_batch(batch).await?;
+        }
+        if let Some(record) = write.order_control_update {
+            self.put_order_control_state(record).await?;
         }
         if let Some(report) = write.returned_paint_report {
             self.returned_paint_requests

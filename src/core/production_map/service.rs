@@ -15,6 +15,7 @@ pub struct ProductionMapLiveSnapshot {
     pub queue_states: BTreeMap<String, BTreeMap<String, String>>,
     pub queue_policies: Vec<ApparatusQueuePolicyRecord>,
     pub order_statuses: BTreeMap<String, ProductionOrderStatusDetail>,
+    pub order_controls: BTreeMap<String, OrderControlRecord>,
 }
 
 #[derive(Clone)]
@@ -40,6 +41,7 @@ pub struct PreparedApparatusQueueAction {
     pub(super) progress_batch: Option<OrderProgressBatch>,
     pub(super) progress_batch_updates: Vec<OrderProgressBatch>,
     pub(super) claimed_alternative_map: Option<ClaimedAlternativeMapUpdate>,
+    pub(super) order_control_update: Option<OrderControlRecord>,
 }
 
 #[derive(Clone)]
@@ -97,6 +99,7 @@ impl ProductionMapService {
             queue_states: self.apparatus_queue_states().await?,
             queue_policies: self.apparatus_queue_policy_records().await?,
             order_statuses: self.order_status_details().await?,
+            order_controls: self.order_control_states().await?,
         })
     }
 }

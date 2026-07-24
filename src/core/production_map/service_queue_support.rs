@@ -405,6 +405,7 @@ pub(super) fn validate_active_sequence_barrier(
     current_sequence: &[String],
     next_sequence: &[String],
     states: &BTreeMap<String, String>,
+    frozen_order_ids: &BTreeSet<String>,
 ) -> Result<(), ProductionMapError> {
     for (order_id, state) in states {
         let Some(parsed) = queue_state::ApparatusQueueOrderState::parse(state) else {
@@ -414,6 +415,9 @@ pub(super) fn validate_active_sequence_barrier(
             continue;
         }
         let order_id = order_id.trim();
+        if frozen_order_ids.contains(order_id) {
+            continue;
+        }
         let Some(next_index) = next_sequence.iter().position(|id| id.trim() == order_id) else {
             return Err(ProductionMapError::QueueActionNotAllowed);
         };

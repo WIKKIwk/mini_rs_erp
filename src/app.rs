@@ -15,6 +15,7 @@ use crate::core::chat_media::ChatMediaService;
 use crate::core::customer::service::CustomerService;
 use crate::core::gscale::GscaleService;
 use crate::core::mini_orders::MiniOrderSink;
+use crate::core::mobile_release::MobileReleaseStore;
 use crate::core::production_map::ProductionMapService;
 use crate::core::profile::ports::ProfileStorePort;
 use crate::core::profile::service::ProfileService;
@@ -72,6 +73,7 @@ pub struct AppState {
     pub chat_media: ChatMediaService,
     pub order_sheets: Arc<dyn OrderSheetSink>,
     pub production_orders: Arc<dyn MiniOrderSink>,
+    pub mobile_releases: MobileReleaseStore,
     pub calculate_order_image_dir: Arc<std::path::PathBuf>,
     pub push: PushService,
     pub gscale: GscaleService,
@@ -122,6 +124,7 @@ impl AppState {
         let calculate_orders = build_calculate_order_store();
         let order_sheets = discover_order_sheet_sink();
         let production_orders = build_mini_order_sink();
+        let mobile_releases = MobileReleaseStore::from_env();
         spawn_mini_orders_sync_loop_if_enabled(
             production_maps.clone(),
             calculate_orders.clone(),
@@ -170,6 +173,7 @@ impl AppState {
             chat_media,
             order_sheets,
             production_orders,
+            mobile_releases,
             calculate_order_image_dir,
             push,
             gscale,

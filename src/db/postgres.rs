@@ -9,7 +9,7 @@ const DEFAULT_MAX_CONNECTIONS: u32 = 16;
 const DEFAULT_ACQUIRE_TIMEOUT_MS: u64 = 500;
 const MIGRATION_LOCK_KEY: i64 = 6_514_811_918_052_026_001;
 
-const POSTGRES_MIGRATIONS: [(&str, &str); 24] = [
+const POSTGRES_MIGRATIONS: [(&str, &str); 26] = [
     (
         "0001_mini_erp_foundation",
         include_str!("../../migrations/postgres/0001_mini_erp_foundation.sql"),
@@ -105,6 +105,14 @@ const POSTGRES_MIGRATIONS: [(&str, &str); 24] = [
     (
         "0024_qolip_legacy_lookup_index",
         include_str!("../../migrations/postgres/0024_qolip_legacy_lookup_index.sql"),
+    ),
+    (
+        "0025_order_control_state",
+        include_str!("../../migrations/postgres/0025_order_control_state.sql"),
+    ),
+    (
+        "0026_order_freeze_request_chat_cards",
+        include_str!("../../migrations/postgres/0026_order_freeze_request_chat_cards.sql"),
     ),
 ];
 

@@ -337,34 +337,14 @@ async fn sender_for_conversation(
     principal: &Principal,
     conversation_id: &str,
 ) -> Result<ChatPrincipal, ChatError> {
-    let row = sqlx::query_as::<_, PrincipalRow>(
-        r#"SELECT p.principal_id, p.principal_role, p.principal_ref, p.display_name, p.avatar_url
-           FROM mini_chat_principals p
-           JOIN mini_chat_conversation_members member ON member.principal_id = p.principal_id
-           WHERE p.principal_role = $1
-             AND p.principal_ref = $2
-             AND p.principal_role <> 'customer'
-             AND member.conversation_id = $3
-             AND member.left_at IS NULL
-             AND member.can_post = TRUE
-             AND p.active = TRUE
-             AND NOT EXISTS (
-               SELECT 1
-               FROM mini_chat_conversation_members customer_member
-               JOIN mini_chat_principals customer_principal
-                 ON customer_principal.principal_id = customer_member.principal_id
-               WHERE customer_member.conversation_id = member.conversation_id
-                 AND customer_member.left_at IS NULL
-                 AND customer_principal.principal_role = 'customer'
-             )"#,
-    )
-    .bind(role_key(&principal.role))
-    .bind(principal.ref_.trim())
-    .bind(conversation_id)
-    .fetch_optional(&mut **tx)
-    .await
-    .map_err(|_| ChatError::StoreFailed)?
-    .ok_or(ChatError::Forbidden)?;
+    let row = sqlx::query_as::<_, PrincipalRow>(CHAT_SENDER_FOR_CONVERSATION_SQL)
+        .bind(role_key(&principal.role))
+        .bind(principal.ref_.trim())
+        .bind(conversation_id)
+        .fetch_optional(&mut **tx)
+        .await
+        .map_err(|_| ChatError::StoreFailed)?
+        .ok_or(ChatError::Forbidden)?;
     row.into_model()
 }
 
@@ -374,43 +354,13 @@ async fn existing_message(
     sender_principal_id: &str,
     client_message_id: &str,
 ) -> Result<Option<ChatMessage>, ChatError> {
-    let row = sqlx::query_as::<_, MessageRow>(
-        r#"SELECT
-             m.message_id,
-             m.conversation_id,
-             m.sender_principal_id,
-             sender.principal_role AS sender_role,
-             sender.principal_ref AS sender_ref,
-             sender.display_name AS sender_display_name,
-             m.client_message_id,
-             m.message_sequence,
-             m.message_type,
-             m.body,
-             attachment.attachment_id,
-             media.media_id,
-             media.media_kind,
-             media.processed_content_type AS media_content_type,
-             media.processed_size_bytes AS media_size_bytes,
-             media.width_pixels AS media_width_pixels,
-             media.height_pixels AS media_height_pixels,
-             media.duration_ms AS media_duration_ms,
-             EXTRACT(EPOCH FROM m.created_at)::BIGINT AS created_at_unix,
-             EXTRACT(EPOCH FROM m.edited_at)::BIGINT AS edited_at_unix,
-             EXTRACT(EPOCH FROM m.deleted_at)::BIGINT AS deleted_at_unix
-           FROM mini_chat_messages m
-           JOIN mini_chat_principals sender ON sender.principal_id = m.sender_principal_id
-           LEFT JOIN mini_chat_message_attachments attachment ON attachment.message_id = m.message_id
-           LEFT JOIN mini_chat_media media ON media.media_id = attachment.media_id
-           WHERE m.conversation_id = $1
-             AND m.sender_principal_id = $2
-             AND m.client_message_id = $3"#,
-    )
-    .bind(conversation_id)
-    .bind(sender_principal_id)
-    .bind(client_message_id)
-    .fetch_optional(&mut **tx)
-    .await
-    .map_err(|_| ChatError::StoreFailed)?;
+    let row = sqlx::query_as::<_, MessageRow>(EXISTING_MESSAGE_SQL)
+        .bind(conversation_id)
+        .bind(sender_principal_id)
+        .bind(client_message_id)
+        .fetch_optional(&mut **tx)
+        .await
+        .map_err(|_| ChatError::StoreFailed)?;
     row.map(MessageRow::into_model).transpose()
 }
 
@@ -477,6 +427,58 @@ async fn ready_attachment(
         content_url: format!("/v1/mobile/chat/media/{media_id}/content"),
         thumbnail_url: format!("/v1/mobile/chat/media/{media_id}/thumbnail"),
     })
+}
+
+pub(super) async fn claim_order_freeze_chat_events(
+    pool: &PgPool,
+    limit: usize,
+) -> Result<Vec<OrderFreezeChatEvent>, ChatError> {
+    let rows = sqlx::query_as::<_, super::rows::OrderFreezeChatEventRow>(
+        CLAIM_ORDER_FREEZE_CHAT_EVENTS_SQL,
+    )
+    .bind(limit.clamp(1, 100) as i64)
+    .fetch_all(pool)
+    .await
+    .map_err(|_| ChatError::StoreFailed)?;
+    Ok(rows
+        .into_iter()
+        .map(super::rows::OrderFreezeChatEventRow::into_model)
+        .collect())
+}
+
+pub(super) async fn mark_order_freeze_chat_event_delivered(
+    pool: &PgPool,
+    event_id: &str,
+) -> Result<(), ChatError> {
+    sqlx::query(
+        r#"UPDATE mini_order_freeze_chat_outbox
+           SET delivered_at = now(), locked_until = NULL, last_error = ''
+           WHERE event_id = $1"#,
+    )
+    .bind(event_id.trim())
+    .execute(pool)
+    .await
+    .map(|_| ())
+    .map_err(|_| ChatError::StoreFailed)
+}
+
+pub(super) async fn reschedule_order_freeze_chat_event(
+    pool: &PgPool,
+    event_id: &str,
+    error: &str,
+) -> Result<(), ChatError> {
+    sqlx::query(
+        r#"UPDATE mini_order_freeze_chat_outbox
+           SET locked_until = now() + interval '2 seconds',
+               last_error = left($2, 1000)
+           WHERE event_id = $1 AND delivered_at IS NULL"#,
+    )
+    .bind(event_id.trim())
+    .bind(error.trim())
+    .execute(pool)
+    .await
+    .map(|_| ())
+    .map_err(|_| ChatError::StoreFailed)
 }
 
 fn new_id(prefix: &str) -> String {

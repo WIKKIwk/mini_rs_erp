@@ -1,6 +1,7 @@
 use crate::core::auth::models::PrincipalRole;
 use crate::core::chat::{
     ChatConversation, ChatError, ChatMessage, ChatMessageAttachment, ChatPrincipal,
+    OrderFreezeChatEvent,
 };
 
 #[derive(sqlx::FromRow)]
@@ -10,6 +11,53 @@ pub(super) struct PrincipalRow {
     pub principal_ref: String,
     pub display_name: String,
     pub avatar_url: String,
+}
+
+#[derive(sqlx::FromRow)]
+pub(super) struct OrderFreezeChatEventRow {
+    pub event_sequence: i64,
+    pub event_id: String,
+    pub request_id: String,
+    pub status: String,
+    pub order_id: String,
+    pub order_number: String,
+    pub order_title: String,
+    pub requester_role: String,
+    pub requester_ref: String,
+    pub requester_display_name: String,
+    pub target_session_id: String,
+    pub target_apparatus: String,
+    pub target_worker_role: String,
+    pub target_worker_ref: String,
+    pub target_worker_display_name: String,
+    pub requested_at_unix: i64,
+    pub transitioned_at_unix: i64,
+    pub attempts: i32,
+}
+
+impl OrderFreezeChatEventRow {
+    pub fn into_model(self) -> OrderFreezeChatEvent {
+        OrderFreezeChatEvent {
+            event_sequence: self.event_sequence,
+            event_id: self.event_id,
+            request_id: self.request_id,
+            status: self.status,
+            order_id: self.order_id,
+            order_number: self.order_number,
+            order_title: self.order_title,
+            requester_role: self.requester_role,
+            requester_ref: self.requester_ref,
+            requester_display_name: self.requester_display_name,
+            target_session_id: self.target_session_id,
+            target_apparatus: self.target_apparatus,
+            target_worker_role: self.target_worker_role,
+            target_worker_ref: self.target_worker_ref,
+            target_worker_display_name: self.target_worker_display_name,
+            requested_at_unix: self.requested_at_unix,
+            transitioned_at_unix: self.transitioned_at_unix,
+            attempts: self.attempts,
+        }
+    }
 }
 
 impl PrincipalRow {
@@ -36,6 +84,7 @@ pub(super) struct MessageRow {
     pub message_sequence: i64,
     pub message_type: String,
     pub body: String,
+    pub metadata_json: serde_json::Value,
     pub attachment_id: Option<String>,
     pub media_id: Option<String>,
     pub media_kind: Option<String>,
@@ -62,6 +111,7 @@ impl MessageRow {
             sequence: self.message_sequence,
             message_type: self.message_type,
             body: self.body,
+            metadata: self.metadata_json,
             attachment: attachment(AttachmentFields {
                 attachment_id: self.attachment_id,
                 media_id: self.media_id,
@@ -101,6 +151,7 @@ pub(super) struct ConversationRow {
     pub message_sequence: Option<i64>,
     pub message_type: Option<String>,
     pub body: Option<String>,
+    pub metadata_json: Option<serde_json::Value>,
     pub attachment_id: Option<String>,
     pub media_id: Option<String>,
     pub media_kind: Option<String>,
@@ -167,6 +218,7 @@ impl ConversationRow {
                 sequence,
                 message_type,
                 body,
+                metadata: self.metadata_json.unwrap_or_else(|| serde_json::json!({})),
                 attachment: attachment(AttachmentFields {
                     attachment_id: self.attachment_id,
                     media_id: self.media_id,
