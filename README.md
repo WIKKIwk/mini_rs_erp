@@ -815,8 +815,13 @@ controlled deployment requires it:
 
 ```bash
 MINI_ERP_DATABASE_URL='postgres://mini_rs_erp:secret@127.0.0.1:5432/mini_rs_erp' \
+MINI_ERP_MIGRATION_DATABASE_URL='postgres://schema_owner:secret@127.0.0.1:5432/mini_rs_erp' \
 make db-migrate
 ```
+
+`MINI_ERP_MIGRATION_DATABASE_URL` is only needed when existing tables are
+owned by a separate schema owner. Runtime pools always use
+`MINI_ERP_DATABASE_URL`.
 
 ## Configuration
 
@@ -826,6 +831,7 @@ Common runtime variables:
 | --- | --- | --- |
 | `MOBILE_API_ADDR` | `:8081` | Bind address. `:8081` is normalized to `0.0.0.0:8081`. |
 | `MINI_ERP_DATABASE_URL` | empty | PostgreSQL URL for mini ERP state. Required for production ERP workflows. |
+| `MINI_ERP_MIGRATION_DATABASE_URL` | `MINI_ERP_DATABASE_URL` | Optional schema-owner URL used only while applying migrations. |
 | `MINI_ORDER_SYNC_INTERVAL_SECONDS` | `30` | Retry interval for reconciling production maps into PostgreSQL order rows. |
 | `MINI_ERP_HTTP_TIMEOUT_SECONDS` | `15` | HTTP client timeout baseline. |
 | `MINI_ERP_DEFAULT_TARGET_WAREHOUSE` | empty | Default target warehouse setting. |

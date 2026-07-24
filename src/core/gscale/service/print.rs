@@ -222,6 +222,66 @@ impl GscaleService {
             print_count: job.print_count,
         })
     }
+
+    pub async fn print_material_receipt_driver_once_strict(
+        &self,
+        request: MaterialReceiptPrintRequest,
+    ) -> Result<MaterialReceiptPrintResponse, GscaleServiceError> {
+        let receipt_store = self.receipt_store.as_ref().ok_or_else(|| {
+            GscaleServiceError::NotConfigured(
+                "material receipt store is not configured".to_string(),
+            )
+        })?;
+        let driver = self.driver.as_ref().ok_or_else(|| {
+            GscaleServiceError::NotConfigured("scale driver is not configured".to_string())
+        })?;
+        let job = NormalizedMaterialReceiptJob::from_request(request)?;
+        require_single_material_receipt(&job)?;
+        let epc = self.next_epc()?;
+        let print = driver
+            .print_material_receipt(job.driver_request(&epc))
+            .await;
+        let print = match print {
+            Ok(print) if print_done(&print) => print,
+            Ok(print) => {
+                return Err(GscaleServiceError::PrintFailed {
+                    detail: print_error_detail(&print),
+                    delete_error: None,
+                });
+            }
+            Err(error) => {
+                return Err(GscaleServiceError::PrintFailed {
+                    detail: error.message(),
+                    delete_error: None,
+                });
+            }
+        };
+        let draft_name = record_confirmed_material_receipt(
+            receipt_store.clone(),
+            &job,
+            epc.clone(),
+            self.warehouse_event_handler.clone(),
+        )
+        .await?;
+
+        Ok(MaterialReceiptPrintResponse {
+            ok: true,
+            status: "printed".to_string(),
+            draft_name,
+            epc,
+            item_code: job.item_code,
+            item_name: job.item_name,
+            warehouse: job.warehouse,
+            qty: job.net_qty,
+            net_qty: job.net_qty,
+            gross_qty: job.gross_qty,
+            unit: job.unit,
+            printer: print.printer,
+            print_mode: print.mode,
+            printer_status: print.printer_status,
+            print_count: job.print_count,
+        })
+    }
 }
 
 fn require_single_material_receipt(

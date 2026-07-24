@@ -44,6 +44,7 @@ async fn rps_batch_start_state_stop_is_persisted_by_rs() {
     assert_eq!(started_body["ok"], true);
     assert_eq!(started_body["batch"]["active"], true);
     assert_eq!(started_body["batch"]["id"], "batch-1");
+    assert_eq!(started_body["batch"]["revision"], 1);
     let batch_code = started_body["batch"]["batch_code"]
         .as_str()
         .expect("batch code")
@@ -72,14 +73,116 @@ async fn rps_batch_start_state_stop_is_persisted_by_rs() {
 
     let stopped = router
         .clone()
-        .oneshot(request("POST", "/v1/mobile/rps/batch/stop", &token, ""))
+        .oneshot(request(
+            "POST",
+            "/v1/mobile/rps/batch/stop",
+            &token,
+            r#"{"batch_id":"batch-1","expected_revision":1}"#,
+        ))
         .await
         .expect("stop response");
     let stopped_body = json_body(stopped).await;
 
     assert_eq!(stopped_body["batch"]["active"], false);
+    assert_eq!(stopped_body["batch"]["revision"], 2);
     assert_eq!(stopped_body["batch"]["batch_code"], batch_code);
     assert_eq!(stopped_body["batch"]["item_code"], "ITEM-1");
+
+    let stopped_again = router
+        .clone()
+        .oneshot(request(
+            "POST",
+            "/v1/mobile/rps/batch/stop",
+            &token,
+            r#"{"batch_id":"batch-1","expected_revision":1}"#,
+        ))
+        .await
+        .expect("idempotent stop response");
+    assert_eq!(stopped_again.status(), StatusCode::OK);
+    assert_eq!(json_body(stopped_again).await["batch"]["revision"], 2);
+
+    let next = router
+        .oneshot(request(
+            "POST",
+            "/v1/mobile/rps/batch/start",
+            &token,
+            r#"{
+                "client_batch_id":"batch-2",
+                "driver_url":"http://127.0.0.1:39117",
+                "item_code":"ITEM-2",
+                "warehouse":"Stores - B"
+            }"#,
+        ))
+        .await
+        .expect("next start response");
+    let next_body = json_body(next).await;
+    assert_eq!(next_body["batch"]["active"], true);
+    assert_eq!(next_body["batch"]["id"], "batch-2");
+}
+
+#[tokio::test]
+async fn rps_batch_rejects_stale_print_context_before_any_side_effect() {
+    let events = Arc::new(Mutex::new(Vec::new()));
+    let mut state = test_state();
+    state.gscale = GscaleService::new()
+        .with_receipt_store(Arc::new(FakeReceiptStore {
+            events: events.clone(),
+            receipt_actors: Arc::new(Mutex::new(Vec::new())),
+        }))
+        .with_driver(Arc::new(FakeDriver {
+            events: events.clone(),
+        }));
+    let token = session(&state, PrincipalRole::Werka).await;
+    let router = build_router(state);
+
+    let started = router
+        .clone()
+        .oneshot(request(
+            "POST",
+            "/v1/mobile/rps/batch/start",
+            &token,
+            r#"{
+                "client_batch_id":"batch-context-1",
+                "driver_url":"http://127.0.0.1:39117",
+                "item_code":"ITEM-1",
+                "warehouse":"Stores - A"
+            }"#,
+        ))
+        .await
+        .expect("start response");
+    assert_eq!(started.status(), StatusCode::OK);
+
+    let legacy_print = router
+        .clone()
+        .oneshot(request(
+            "POST",
+            "/v1/mobile/rps/batch/print",
+            &token,
+            r#"{"gross_qty":10,"unit":"kg"}"#,
+        ))
+        .await
+        .expect("legacy request response");
+    let legacy_status = legacy_print.status();
+    let legacy_body = json_body(legacy_print).await;
+    assert_eq!(legacy_status, StatusCode::BAD_REQUEST);
+    assert_eq!(legacy_body["error"], "invalid_input");
+    assert!(events.lock().unwrap().is_empty());
+
+    let printed = router
+        .oneshot(request(
+            "POST",
+            "/v1/mobile/rps/batch/print",
+            &token,
+            r#"{"batch_id":"batch-context-1","expected_revision":1,"expected_item_code":"ITEM-2","expected_warehouse":"Stores - A","gross_qty":10,"unit":"kg"}"#,
+        ))
+        .await
+        .expect("conflict response");
+    let status = printed.status();
+    let body = json_body(printed).await;
+
+    assert_eq!(status, StatusCode::CONFLICT);
+    assert_eq!(body["error"], "batch_context_conflict");
+    assert!(events.lock().unwrap().is_empty());
 }
 
 #[tokio::test]
@@ -125,7 +228,7 @@ async fn rps_batch_print_uses_active_rs_batch_and_transaction_flow() {
             "POST",
             "/v1/mobile/rps/batch/print",
             &token,
-            r#"{"gross_qty":2.5,"unit":"kg"}"#,
+            r#"{"batch_id":"batch-print-1","expected_revision":1,"expected_item_code":"ITEM-1","expected_warehouse":"Stores - A","gross_qty":2.5,"unit":"kg"}"#,
         ))
         .await
         .expect("print response");
@@ -164,7 +267,12 @@ async fn rps_batch_print_uses_active_rs_batch_and_transaction_flow() {
 
     let stopped = router
         .clone()
-        .oneshot(request("POST", "/v1/mobile/rps/batch/stop", &token, ""))
+        .oneshot(request(
+            "POST",
+            "/v1/mobile/rps/batch/stop",
+            &token,
+            r#"{"batch_id":"batch-print-1","expected_revision":1}"#,
+        ))
         .await
         .expect("stop response");
     let stopped_body = json_body(stopped).await;
@@ -245,7 +353,7 @@ async fn rps_batch_duplicate_count_records_distinct_products_and_epcs() {
             "POST",
             "/v1/mobile/rps/batch/print",
             &token,
-            r#"{"gross_qty":2.5,"unit":"kg","print_count":3}"#,
+            r#"{"batch_id":"batch-unique-products","expected_revision":1,"expected_item_code":"ITEM-1","expected_warehouse":"Stores - A","gross_qty":2.5,"unit":"kg","print_count":3}"#,
         ))
         .await
         .expect("print response");
@@ -322,7 +430,7 @@ async fn rps_batch_client_print_prepares_then_confirms_without_driver() {
             "POST",
             "/v1/mobile/rps/batch/client-print/prepare",
             &token,
-            r#"{"gross_qty":2.5,"unit":"kg"}"#,
+            r#"{"batch_id":"batch-client-print-1","expected_revision":1,"expected_item_code":"ITEM-1","expected_warehouse":"Stores - A","gross_qty":2.5,"unit":"kg"}"#,
         ))
         .await
         .expect("prepare response");
@@ -350,7 +458,7 @@ async fn rps_batch_client_print_prepares_then_confirms_without_driver() {
             "POST",
             "/v1/mobile/rps/batch/client-print/confirm",
             &token,
-            &format!(r#"{{"gross_qty":2.5,"unit":"kg","epc":"{EPC}"}}"#),
+            &format!(r#"{{"batch_id":"batch-client-print-1","expected_revision":1,"expected_item_code":"ITEM-1","expected_warehouse":"Stores - A","gross_qty":2.5,"unit":"kg","epc":"{EPC}"}}"#),
         ))
         .await
         .expect("confirm response");
@@ -406,7 +514,7 @@ async fn rps_batch_start_rejects_overwriting_active_cycle() {
 }
 
 #[tokio::test]
-async fn rps_batch_print_returns_after_driver_without_waiting_for_receipt_submit() {
+async fn rps_batch_print_waits_for_receipt_submit_before_success() {
     let events = Arc::new(Mutex::new(Vec::new()));
     let mut state = test_state();
     state.gscale = GscaleService::new()
@@ -448,25 +556,19 @@ async fn rps_batch_print_returns_after_driver_without_waiting_for_receipt_submit
             "POST",
             "/v1/mobile/rps/batch/print",
             &token,
-            r#"{"gross_qty":2.5,"unit":"kg"}"#,
+            r#"{"batch_id":"batch-fast-print-1","expected_revision":1,"expected_item_code":"ITEM-1","expected_warehouse":"Stores - A","gross_qty":2.5,"unit":"kg"}"#,
         ))
         .await
         .expect("print response");
     let elapsed = started_at.elapsed();
     let body = json_body(printed).await;
 
-    assert!(
-        elapsed < Duration::from_millis(500),
-        "RPS print response took {elapsed:?}"
-    );
+    assert!(elapsed >= Duration::from_millis(750), "RPS print returned early: {elapsed:?}");
     assert_eq!(body["ok"], true);
     assert_eq!(body["status"], "printed");
     assert_eq!(body["epc"], "FAST-EPC-1");
     assert_eq!(body["item_code"], "ITEM-1");
     assert_eq!(body["warehouse"], "Stores - A");
-    assert_eq!(events.lock().unwrap().as_slice(), ["print"]);
-
-    tokio::time::sleep(Duration::from_millis(900)).await;
     assert_eq!(
         events.lock().unwrap().as_slice(),
         ["print", "create:2.500", "submit:MAT-STE-ROUTE"]
@@ -474,7 +576,82 @@ async fn rps_batch_print_returns_after_driver_without_waiting_for_receipt_submit
 }
 
 #[tokio::test]
-async fn rps_batch_print_returns_printed_before_late_receipt_store_failure() {
+async fn rps_batch_stop_waits_for_in_flight_print_and_then_closes_exact_batch() {
+    let events = Arc::new(Mutex::new(Vec::new()));
+    let mut state = test_state();
+    state.gscale = GscaleService::new()
+        .with_receipt_store(Arc::new(SlowReceiptStore {
+            events: events.clone(),
+            delay: Duration::from_millis(500),
+        }))
+        .with_driver(Arc::new(FakeDriver {
+            events: events.clone(),
+        }));
+    let token = session(&state, PrincipalRole::Werka).await;
+    let router = build_router(state);
+
+    let started = router
+        .clone()
+        .oneshot(request(
+            "POST",
+            "/v1/mobile/rps/batch/start",
+            &token,
+            r#"{
+                "client_batch_id":"batch-stop-during-print",
+                "driver_url":"http://127.0.0.1:39117",
+                "item_code":"ITEM-1",
+                "warehouse":"Stores - A"
+            }"#,
+        ))
+        .await
+        .expect("start response");
+    assert_eq!(started.status(), StatusCode::OK);
+
+    let print_router = router.clone();
+    let print_token = token.clone();
+    let print_task = tokio::spawn(async move {
+        print_router
+            .oneshot(request(
+                "POST",
+                "/v1/mobile/rps/batch/print",
+                &print_token,
+                r#"{"batch_id":"batch-stop-during-print","expected_revision":1,"expected_item_code":"ITEM-1","expected_warehouse":"Stores - A","gross_qty":2.5,"unit":"kg"}"#,
+            ))
+            .await
+            .expect("print response")
+    });
+    tokio::time::sleep(Duration::from_millis(50)).await;
+
+    let stop_started_at = Instant::now();
+    let stopped = router
+        .oneshot(request(
+            "POST",
+            "/v1/mobile/rps/batch/stop",
+            &token,
+            r#"{"batch_id":"batch-stop-during-print","expected_revision":1}"#,
+        ))
+        .await
+        .expect("stop response");
+    let stop_elapsed = stop_started_at.elapsed();
+    let printed = print_task.await.expect("print task");
+
+    assert_eq!(printed.status(), StatusCode::OK);
+    assert!(stop_elapsed >= Duration::from_millis(400));
+    let stopped_body = json_body(stopped).await;
+    assert_eq!(stopped_body["batch"]["active"], false);
+    assert_eq!(stopped_body["batch"]["revision"], 2);
+    assert_eq!(
+        stopped_body["batch"]["prints"].as_array().map(Vec::len),
+        Some(1)
+    );
+    assert_eq!(
+        events.lock().unwrap().as_slice(),
+        ["print", "create:2.500", "submit:MAT-STE-ROUTE"]
+    );
+}
+
+#[tokio::test]
+async fn rps_batch_print_failure_is_returned_and_stops_the_batch() {
     let events = Arc::new(Mutex::new(Vec::new()));
     let mut state = test_state();
     state.gscale = GscaleService::new()
@@ -513,20 +690,15 @@ async fn rps_batch_print_returns_printed_before_late_receipt_store_failure() {
             "POST",
             "/v1/mobile/rps/batch/print",
             &token,
-            r#"{"gross_qty":2.5,"unit":"kg"}"#,
+            r#"{"batch_id":"batch-print-fail-1","expected_revision":1,"expected_item_code":"ABCD Family","expected_warehouse":"Stores - A","gross_qty":2.5,"unit":"kg"}"#,
         ))
         .await
         .expect("print response");
     let status = printed.status();
     let body = json_body(printed).await;
 
-    assert_eq!(status, StatusCode::OK);
-    assert_eq!(body["ok"], true);
-    assert_eq!(body["status"], "printed");
-    assert_eq!(body["item_code"], "ABCD Family");
-    assert_eq!(events.lock().unwrap().as_slice(), ["print"]);
-
-    tokio::time::sleep(Duration::from_millis(25)).await;
+    assert_eq!(status, StatusCode::FAILED_DEPENDENCY);
+    assert_eq!(body["ok"], false);
     assert_eq!(
         events.lock().unwrap().as_slice(),
         ["print", "create:2.500", "submit:MAT-STE-ROUTE"]
@@ -538,7 +710,8 @@ async fn rps_batch_print_returns_printed_before_late_receipt_store_failure() {
         .expect("state response");
     let body = json_body(state).await;
 
-    assert_eq!(body["batch"]["active"], true);
+    assert_eq!(body["batch"]["active"], false);
+    assert_eq!(body["batch"]["revision"], 2);
     assert_eq!(
         body["batch"]["last_error"],
         "submit failed: NegativeStockError: insufficient stock"
@@ -604,7 +777,7 @@ async fn live_rps_batch_print_routes_through_rs_to_driver_when_env_is_set() {
             "POST",
             "/v1/mobile/rps/batch/print",
             &token,
-            r#"{"gross_qty":2.5,"unit":"kg"}"#,
+            r#"{"batch_id":"live-rps-driver-test","expected_revision":1,"expected_item_code":"TEST-GODEX","expected_warehouse":"5070 Lab","gross_qty":2.5,"unit":"kg"}"#,
         ))
         .await
         .expect("print response");

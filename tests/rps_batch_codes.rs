@@ -3,8 +3,8 @@ use std::sync::{Arc, Mutex};
 use async_trait::async_trait;
 use mini_rs_erp::core::auth::models::{Principal, PrincipalRole};
 use mini_rs_erp::core::rps_batch::models::{
-    RpsBatchResponse, RpsBatchSession, RpsBatchStartRequest, is_valid_batch_code,
-    legacy_batch_code, new_batch_code,
+    RpsBatchResponse, RpsBatchSession, RpsBatchStartRequest, RpsBatchStopRequest,
+    is_valid_batch_code, legacy_batch_code, new_batch_code,
 };
 use mini_rs_erp::core::rps_batch::ports::{RpsBatchStoreError, RpsBatchStorePort};
 use mini_rs_erp::core::rps_batch::{RpsBatchLmdbStore, RpsBatchService};
@@ -138,7 +138,17 @@ async fn service_generates_batch_code_once_and_preserves_it_through_stop() {
     let current = service.state(&principal).await.expect("batch state").batch;
     assert_eq!(current.batch_code, started.batch_code);
 
-    let stopped = service.stop(&principal).await.expect("stop batch").batch;
+    let stopped = service
+        .stop(
+            &principal,
+            RpsBatchStopRequest {
+                batch_id: started.id.clone(),
+                expected_revision: started.revision,
+            },
+        )
+        .await
+        .expect("stop batch")
+        .batch;
     assert!(!stopped.active);
     assert_eq!(stopped.batch_code, started.batch_code);
     assert_eq!(stopped.id, started.id);

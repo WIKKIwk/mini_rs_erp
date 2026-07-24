@@ -34,6 +34,8 @@ pub struct RpsBatchSession {
     pub id: String,
     #[serde(default)]
     pub batch_code: String,
+    #[serde(default)]
+    pub revision: u64,
     pub active: bool,
     pub owner_key: String,
     pub owner_role: String,
@@ -85,9 +87,12 @@ impl RpsBatchSession {
         }
     }
 
-    pub fn ensure_batch_code(&mut self) {
+    pub fn ensure_context(&mut self) {
         if self.batch_code.trim().is_empty() && !self.id.trim().is_empty() {
             self.batch_code = legacy_batch_code(&self.owner_key, &self.id);
+        }
+        if self.revision == 0 && !self.id.trim().is_empty() {
+            self.revision = 1;
         }
     }
 }
@@ -107,7 +112,7 @@ pub struct RpsBatchHistoryResponse {
 impl RpsBatchHistoryResponse {
     pub fn new(mut batches: Vec<RpsBatchSession>) -> Self {
         for batch in &mut batches {
-            batch.ensure_batch_code();
+            batch.ensure_context();
         }
         Self { ok: true, batches }
     }
@@ -115,7 +120,7 @@ impl RpsBatchHistoryResponse {
 
 impl RpsBatchResponse {
     pub fn new(mut batch: RpsBatchSession) -> Self {
-        batch.ensure_batch_code();
+        batch.ensure_context();
         Self { ok: true, batch }
     }
 }
@@ -140,7 +145,23 @@ pub fn is_valid_batch_code(value: &str) -> bool {
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Deserialize)]
+pub struct RpsBatchStopRequest {
+    #[serde(default)]
+    pub batch_id: String,
+    #[serde(default)]
+    pub expected_revision: u64,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Deserialize)]
 pub struct RpsBatchPrintRequest {
+    #[serde(default)]
+    pub batch_id: String,
+    #[serde(default)]
+    pub expected_revision: u64,
+    #[serde(default)]
+    pub expected_item_code: String,
+    #[serde(default)]
+    pub expected_warehouse: String,
     #[serde(default)]
     pub gross_qty: f64,
     #[serde(default)]
@@ -210,6 +231,10 @@ mod tests {
         };
 
         let request = batch.material_receipt_request(RpsBatchPrintRequest {
+            batch_id: "batch-1".to_string(),
+            expected_revision: 1,
+            expected_item_code: "CPP 1030/25".to_string(),
+            expected_warehouse: "Kalidor".to_string(),
             gross_qty: 23.0,
             unit: "kg".to_string(),
             driver_url: String::new(),

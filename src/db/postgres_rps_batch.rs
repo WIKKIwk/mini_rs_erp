@@ -26,18 +26,19 @@ impl RpsBatchStorePort for PostgresRpsBatchStore {
         .bind(owner_key.trim())
         .fetch_optional(&self.pool)
         .await
-        .map_err(|_| RpsBatchStoreError::StoreFailed)?;
+        .map_err(|error| store_failed("read current batch", error))?;
         payload.map(decode_batch).transpose()
     }
 
     async fn put(&self, mut batch: RpsBatchSession) -> Result<(), RpsBatchStoreError> {
-        batch.ensure_batch_code();
-        let payload = serde_json::to_value(&batch).map_err(|_| RpsBatchStoreError::StoreFailed)?;
+        batch.ensure_context();
+        let payload = serde_json::to_value(&batch)
+            .map_err(|error| store_failed("encode current batch", error))?;
         let mut tx = self
             .pool
             .begin()
             .await
-            .map_err(|_| RpsBatchStoreError::StoreFailed)?;
+            .map_err(|error| store_failed("begin current batch transaction", error))?;
         reserve_batch_identity(&mut tx, &batch).await?;
         sqlx::query(
             "INSERT INTO mini_rps_batches
@@ -64,20 +65,21 @@ impl RpsBatchStorePort for PostgresRpsBatchStore {
         .bind(payload)
         .execute(&mut *tx)
         .await
-        .map_err(|_| RpsBatchStoreError::StoreFailed)?;
+        .map_err(|error| store_failed("upsert current batch", error))?;
         tx.commit()
             .await
-            .map_err(|_| RpsBatchStoreError::StoreFailed)
+            .map_err(|error| store_failed("commit current batch", error))
     }
 
     async fn complete(&self, mut batch: RpsBatchSession) -> Result<(), RpsBatchStoreError> {
-        batch.ensure_batch_code();
-        let payload = serde_json::to_value(&batch).map_err(|_| RpsBatchStoreError::StoreFailed)?;
+        batch.ensure_context();
+        let payload = serde_json::to_value(&batch)
+            .map_err(|error| store_failed("encode completed batch", error))?;
         let mut tx = self
             .pool
             .begin()
             .await
-            .map_err(|_| RpsBatchStoreError::StoreFailed)?;
+            .map_err(|error| store_failed("begin completed batch transaction", error))?;
         reserve_batch_identity(&mut tx, &batch).await?;
         sqlx::query(
             "INSERT INTO mini_rps_batches
@@ -104,7 +106,7 @@ impl RpsBatchStorePort for PostgresRpsBatchStore {
         .bind(payload.clone())
         .execute(&mut *tx)
         .await
-        .map_err(|_| RpsBatchStoreError::StoreFailed)?;
+        .map_err(|error| store_failed("persist stopped current batch", error))?;
         sqlx::query(
             "INSERT INTO mini_rps_batch_history
                 (batch_id, owner_key, owner_role, owner_ref, item_code, warehouse,
@@ -126,10 +128,10 @@ impl RpsBatchStorePort for PostgresRpsBatchStore {
         .bind(payload)
         .execute(&mut *tx)
         .await
-        .map_err(|_| RpsBatchStoreError::StoreFailed)?;
+        .map_err(|error| store_failed("persist completed batch history", error))?;
         tx.commit()
             .await
-            .map_err(|_| RpsBatchStoreError::StoreFailed)
+            .map_err(|error| store_failed("commit completed batch", error))
     }
 
     async fn list_completed(
@@ -236,7 +238,7 @@ impl RpsBatchStorePort for PostgresRpsBatchStore {
         .bind(limit.min(100) as i64)
         .fetch_all(&self.pool)
         .await
-        .map_err(|_| RpsBatchStoreError::StoreFailed)?;
+        .map_err(|error| store_failed("list completed batches", error))?;
         payloads
             .into_iter()
             .map(decode_batch)
@@ -246,8 +248,8 @@ impl RpsBatchStorePort for PostgresRpsBatchStore {
 
 fn decode_batch(value: serde_json::Value) -> Result<RpsBatchSession, RpsBatchStoreError> {
     let mut batch = serde_json::from_value::<RpsBatchSession>(value)
-        .map_err(|_| RpsBatchStoreError::StoreFailed)?;
-    batch.ensure_batch_code();
+        .map_err(|error| store_failed("decode batch payload", error))?;
+    batch.ensure_context();
     Ok(batch)
 }
 
@@ -256,6 +258,11 @@ async fn reserve_batch_identity(
     batch: &RpsBatchSession,
 ) -> Result<(), RpsBatchStoreError> {
     if !is_valid_batch_code(&batch.batch_code) {
+        tracing::error!(
+            batch_id = %batch.id,
+            owner_key = %batch.owner_key,
+            "RPS batch identity code is invalid"
+        );
         return Err(RpsBatchStoreError::StoreFailed);
     }
     sqlx::query(
@@ -268,7 +275,7 @@ async fn reserve_batch_identity(
     .bind(batch.id.trim())
     .execute(&mut **tx)
     .await
-    .map_err(|_| RpsBatchStoreError::StoreFailed)?;
+    .map_err(|error| store_failed("reserve batch identity", error))?;
 
     let stored_code = sqlx::query_scalar::<_, String>(
         "SELECT batch_code::TEXT
@@ -279,10 +286,22 @@ async fn reserve_batch_identity(
     .bind(batch.id.trim())
     .fetch_optional(&mut **tx)
     .await
-    .map_err(|_| RpsBatchStoreError::StoreFailed)?;
+    .map_err(|error| store_failed("read reserved batch identity", error))?;
 
     if stored_code.as_deref().map(str::trim) != Some(batch.batch_code.trim()) {
+        tracing::error!(
+            batch_id = %batch.id,
+            owner_key = %batch.owner_key,
+            expected_code = %batch.batch_code,
+            stored_code = ?stored_code,
+            "RPS batch identity conflicts with persisted identity"
+        );
         return Err(RpsBatchStoreError::StoreFailed);
     }
     Ok(())
+}
+
+fn store_failed(operation: &'static str, error: impl std::fmt::Display) -> RpsBatchStoreError {
+    tracing::error!(%error, operation, "RPS batch postgres store failed");
+    RpsBatchStoreError::StoreFailed
 }

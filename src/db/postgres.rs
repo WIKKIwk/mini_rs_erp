@@ -9,7 +9,7 @@ const DEFAULT_MAX_CONNECTIONS: u32 = 16;
 const DEFAULT_ACQUIRE_TIMEOUT_MS: u64 = 500;
 const MIGRATION_LOCK_KEY: i64 = 6_514_811_918_052_026_001;
 
-const POSTGRES_MIGRATIONS: [(&str, &str); 26] = [
+const POSTGRES_MIGRATIONS: [(&str, &str); 27] = [
     (
         "0001_mini_erp_foundation",
         include_str!("../../migrations/postgres/0001_mini_erp_foundation.sql"),
@@ -114,11 +114,16 @@ const POSTGRES_MIGRATIONS: [(&str, &str); 26] = [
         "0026_order_freeze_request_chat_cards",
         include_str!("../../migrations/postgres/0026_order_freeze_request_chat_cards.sql"),
     ),
+    (
+        "0027_rps_runtime_privileges",
+        include_str!("../../migrations/postgres/0027_rps_runtime_privileges.sql"),
+    ),
 ];
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PostgresConfig {
     pub database_url: String,
+    pub migration_database_url: String,
     pub min_connections: u32,
     pub max_connections: u32,
     pub acquire_timeout: Duration,
@@ -140,6 +145,15 @@ impl PostgresConfig {
         if database_url.is_empty() {
             return Err(PostgresConfigError::MissingDatabaseUrl);
         }
+        let migration_database_url = get_env("MINI_ERP_MIGRATION_DATABASE_URL")
+            .unwrap_or_else(|| database_url.clone())
+            .trim()
+            .to_string();
+        let migration_database_url = if migration_database_url.is_empty() {
+            database_url.clone()
+        } else {
+            migration_database_url
+        };
 
         let max_connections = env_u32(&get_env, "MINI_ERP_PG_MAX_CONNECTIONS")
             .filter(|value| *value > 0)
@@ -156,6 +170,7 @@ impl PostgresConfig {
 
         Ok(Self {
             database_url,
+            migration_database_url,
             min_connections,
             max_connections,
             acquire_timeout,
@@ -191,7 +206,7 @@ pub async fn connect_and_migrate_required() -> Result<PgPool, PostgresBootstrapE
         PostgresConfig::from_env().map_err(|_| PostgresBootstrapError::MissingDatabaseUrl)?;
     let pool = config
         .pool_options()
-        .connect(&config.database_url)
+        .connect(&config.migration_database_url)
         .await
         .map_err(PostgresBootstrapError::Connect)?;
     apply_foundation_migration(&pool)

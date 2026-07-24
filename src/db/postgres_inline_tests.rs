@@ -16,8 +16,22 @@ mod tests {
             config.database_url,
             "postgres://mini:secret@127.0.0.1:5432/mini_rs_erp"
         );
+        assert_eq!(config.migration_database_url, config.database_url);
         assert_eq!(config.max_connections, 16);
         assert_eq!(config.min_connections, 2);
+    }
+
+    #[test]
+    fn postgres_config_supports_a_separate_migration_role() {
+        let config = PostgresConfig::from_env_with(|key| match key {
+            "MINI_ERP_DATABASE_URL" => Some("postgres://runtime/db".to_string()),
+            "MINI_ERP_MIGRATION_DATABASE_URL" => Some("postgres://owner/db".to_string()),
+            _ => None,
+        })
+        .expect("config");
+
+        assert_eq!(config.database_url, "postgres://runtime/db");
+        assert_eq!(config.migration_database_url, "postgres://owner/db");
     }
 
     #[test]
@@ -142,6 +156,25 @@ mod tests {
         assert!(POSTGRES_MIGRATIONS.iter().all(|(version, sql)| {
             !version.trim().is_empty() && migration_checksum(sql).len() == 64
         }));
+    }
+
+    #[test]
+    fn rps_runtime_privilege_migration_is_fail_closed() {
+        let migration = POSTGRES_MIGRATIONS
+            .iter()
+            .find(|(version, _)| *version == "0027_rps_runtime_privileges")
+            .map(|(_, sql)| sql.to_lowercase())
+            .expect("RPS runtime privilege migration");
+
+        for table in [
+            "mini_rps_batches",
+            "mini_rps_batch_history",
+            "mini_rps_batch_identities",
+        ] {
+            assert!(migration.contains(table));
+        }
+        assert!(migration.contains("grant select, insert, update, delete"));
+        assert!(migration.contains("raise exception"));
     }
 
     #[test]

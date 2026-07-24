@@ -41,17 +41,74 @@ impl<'a> BytesDecode<'a> for RpsBatchSessionCodec {
         if let Some(payload) = bytes.strip_prefix(RPS_BATCH_MAGIC) {
             let mut batch: RpsBatchSession = match bincode::deserialize(payload) {
                 Ok(batch) => batch,
-                Err(_) => match bincode::deserialize::<RpsBatchSessionV2>(payload) {
+                Err(_) => match bincode::deserialize::<RpsBatchSessionV3>(payload) {
                     Ok(batch) => batch.into(),
-                    Err(_) => bincode::deserialize::<RpsBatchSessionV1>(payload)?.into(),
+                    Err(_) => match bincode::deserialize::<RpsBatchSessionV2>(payload) {
+                        Ok(batch) => batch.into(),
+                        Err(_) => bincode::deserialize::<RpsBatchSessionV1>(payload)?.into(),
+                    },
                 },
             };
-            batch.ensure_batch_code();
+            batch.ensure_context();
             return Ok(batch);
         }
         let mut batch: RpsBatchSession = serde_json::from_slice(bytes)?;
-        batch.ensure_batch_code();
+        batch.ensure_context();
         Ok(batch)
+    }
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+struct RpsBatchSessionV3 {
+    id: String,
+    batch_code: String,
+    active: bool,
+    owner_key: String,
+    owner_role: String,
+    owner_ref: String,
+    driver_url: String,
+    item_code: String,
+    item_name: String,
+    warehouse: String,
+    printer: String,
+    print_mode: String,
+    quantity_source: String,
+    manual_qty_kg: f64,
+    tare_enabled: bool,
+    tare_kg: f64,
+    last_error: String,
+    last_error_at: String,
+    prints: Vec<super::models::RpsBatchPrintEntry>,
+    created_at: String,
+    updated_at: String,
+}
+
+impl From<RpsBatchSessionV3> for RpsBatchSession {
+    fn from(batch: RpsBatchSessionV3) -> Self {
+        Self {
+            id: batch.id,
+            batch_code: batch.batch_code,
+            revision: 1,
+            active: batch.active,
+            owner_key: batch.owner_key,
+            owner_role: batch.owner_role,
+            owner_ref: batch.owner_ref,
+            driver_url: batch.driver_url,
+            item_code: batch.item_code,
+            item_name: batch.item_name,
+            warehouse: batch.warehouse,
+            printer: batch.printer,
+            print_mode: batch.print_mode,
+            quantity_source: batch.quantity_source,
+            manual_qty_kg: batch.manual_qty_kg,
+            tare_enabled: batch.tare_enabled,
+            tare_kg: batch.tare_kg,
+            last_error: batch.last_error,
+            last_error_at: batch.last_error_at,
+            prints: batch.prints,
+            created_at: batch.created_at,
+            updated_at: batch.updated_at,
+        }
     }
 }
 
@@ -187,7 +244,7 @@ impl RpsBatchStorePort for RpsBatchLmdbStore {
 
     async fn put(&self, mut batch: RpsBatchSession) -> Result<(), RpsBatchStoreError> {
         let _guard = self.write_lock.lock().await;
-        batch.ensure_batch_code();
+        batch.ensure_context();
         self.ensure_unique_batch_code(&batch)?;
         let mut wtxn = self.env.write_txn().map_err(lmdb_store_error)?;
         self.db
@@ -198,7 +255,7 @@ impl RpsBatchStorePort for RpsBatchLmdbStore {
 
     async fn complete(&self, mut batch: RpsBatchSession) -> Result<(), RpsBatchStoreError> {
         let _guard = self.write_lock.lock().await;
-        batch.ensure_batch_code();
+        batch.ensure_context();
         self.ensure_unique_batch_code(&batch)?;
         let mut wtxn = self.env.write_txn().map_err(lmdb_store_error)?;
         self.db
@@ -280,7 +337,7 @@ mod tests {
         let dir = tempfile::tempdir().expect("tempdir");
         let store = RpsBatchLmdbStore::open(dir.path().join("batch.lmdb"), 1024 * 1024)
             .expect("lmdb store");
-        let batch = RpsBatchSession {
+        let mut batch = RpsBatchSession {
             id: "batch-1".to_string(),
             active: true,
             owner_key: "werka:W-1".to_string(),
@@ -288,6 +345,7 @@ mod tests {
             warehouse: "Stores - A".to_string(),
             ..RpsBatchSession::default()
         };
+        batch.ensure_context();
 
         store.put(batch.clone()).await.expect("put");
 
@@ -299,7 +357,7 @@ mod tests {
         let dir = tempfile::tempdir().expect("tempdir");
         let store = RpsBatchLmdbStore::open(dir.path().join("batch.lmdb"), 1024 * 1024)
             .expect("lmdb store");
-        let batch = RpsBatchSession {
+        let mut batch = RpsBatchSession {
             id: "batch-1".to_string(),
             owner_key: "material_taminotchi:M-1".to_string(),
             owner_role: "material_taminotchi".to_string(),
@@ -307,6 +365,7 @@ mod tests {
             updated_at: "2026-07-20T05:00:00Z".to_string(),
             ..RpsBatchSession::default()
         };
+        batch.ensure_context();
 
         store.complete(batch.clone()).await.expect("complete");
         store.complete(batch.clone()).await.expect("idempotent complete");

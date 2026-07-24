@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use tokio::sync::Mutex;
+use tokio::sync::{Mutex, OwnedRwLockReadGuard, RwLock};
 
 use crate::core::auth::models::{Principal, PrincipalRole};
 
@@ -8,7 +8,7 @@ use crate::core::gscale::models::{MaterialReceiptPrintRequest, MaterialReceiptPr
 
 use super::models::{
     RpsBatchHistoryResponse, RpsBatchPrintEntry, RpsBatchPrintRequest, RpsBatchResponse,
-    RpsBatchSession, RpsBatchStartRequest, new_batch_code,
+    RpsBatchSession, RpsBatchStartRequest, RpsBatchStopRequest, new_batch_code,
 };
 use super::ports::{RpsBatchStoreError, RpsBatchStorePort};
 
@@ -16,6 +16,7 @@ use super::ports::{RpsBatchStoreError, RpsBatchStorePort};
 pub struct RpsBatchService {
     store: Arc<dyn RpsBatchStorePort>,
     mutation_lock: Arc<Mutex<()>>,
+    lifecycle_lock: Arc<RwLock<()>>,
 }
 
 impl RpsBatchService {
@@ -23,6 +24,7 @@ impl RpsBatchService {
         Self {
             store,
             mutation_lock: Arc::new(Mutex::new(())),
+            lifecycle_lock: Arc::new(RwLock::new(())),
         }
     }
 
@@ -31,6 +33,7 @@ impl RpsBatchService {
         principal: &Principal,
         request: RpsBatchStartRequest,
     ) -> Result<RpsBatchResponse, RpsBatchServiceError> {
+        let _lifecycle_guard = self.lifecycle_lock.write().await;
         let _guard = self.mutation_lock.lock().await;
         let owner = BatchOwner::from_principal(principal);
         if self
@@ -63,21 +66,23 @@ impl RpsBatchService {
     pub async fn stop(
         &self,
         principal: &Principal,
+        request: RpsBatchStopRequest,
     ) -> Result<RpsBatchResponse, RpsBatchServiceError> {
+        let _lifecycle_guard = self.lifecycle_lock.write().await;
         let _guard = self.mutation_lock.lock().await;
         let owner = BatchOwner::from_principal(principal);
-        let mut batch = self
-            .store
-            .get(&owner.key)
-            .await?
-            .unwrap_or_else(|| owner.inactive_batch());
-        batch.active = false;
-        batch.updated_at = now_string();
-        if !batch.id.is_empty() {
-            self.store.complete(batch.clone()).await?;
-        } else {
-            self.store.put(batch.clone()).await?;
+        let Some(mut batch) = self.store.get(&owner.key).await? else {
+            return Err(RpsBatchServiceError::BatchNotActive);
+        };
+        batch.ensure_context();
+        validate_stop_context(&batch, &request)?;
+        if !batch.active {
+            return Ok(RpsBatchResponse::new(batch));
         }
+        batch.active = false;
+        batch.revision = next_revision(batch.revision);
+        batch.updated_at = now_string();
+        self.store.complete(batch.clone()).await?;
         Ok(RpsBatchResponse::new(batch))
     }
 
@@ -116,6 +121,33 @@ impl RpsBatchService {
         } else {
             self.store.complete(batch).await?;
         }
+        Ok(true)
+    }
+
+    pub async fn fail_batch(
+        &self,
+        principal: &Principal,
+        batch_id: &str,
+        detail: impl Into<String>,
+    ) -> Result<bool, RpsBatchServiceError> {
+        let _guard = self.mutation_lock.lock().await;
+        let owner = BatchOwner::from_principal(principal);
+        let Some(mut batch) = self.store.get(&owner.key).await? else {
+            return Ok(false);
+        };
+        batch.ensure_context();
+        if batch.id != batch_id.trim() {
+            return Ok(false);
+        }
+        let now = now_string();
+        batch.last_error = detail.into();
+        batch.last_error_at = now.clone();
+        batch.updated_at = now;
+        if batch.active {
+            batch.active = false;
+            batch.revision = next_revision(batch.revision);
+        }
+        self.store.complete(batch).await?;
         Ok(true)
     }
 
@@ -168,15 +200,29 @@ impl RpsBatchService {
         &self,
         principal: &Principal,
         request: RpsBatchPrintRequest,
-    ) -> Result<(String, MaterialReceiptPrintRequest), RpsBatchServiceError> {
+    ) -> Result<
+        (
+            String,
+            MaterialReceiptPrintRequest,
+            OwnedRwLockReadGuard<()>,
+        ),
+        RpsBatchServiceError,
+    > {
+        let lifecycle_guard = self.lifecycle_lock.clone().read_owned().await;
         let owner = BatchOwner::from_principal(principal);
-        let Some(batch) = self.store.get(&owner.key).await? else {
+        let Some(mut batch) = self.store.get(&owner.key).await? else {
             return Err(RpsBatchServiceError::BatchNotActive);
         };
+        batch.ensure_context();
         if !batch.active {
             return Err(RpsBatchServiceError::BatchNotActive);
         }
-        Ok((batch.id.clone(), batch.material_receipt_request(request)))
+        validate_print_context(&batch, &request)?;
+        Ok((
+            batch.id.clone(),
+            batch.material_receipt_request(request),
+            lifecycle_guard,
+        ))
     }
 }
 
@@ -225,6 +271,7 @@ fn normalize_start(
     Ok(RpsBatchSession {
         id: batch_id(&request.client_batch_id, &owner.key),
         batch_code: new_batch_code(),
+        revision: 1,
         active: true,
         owner_key: owner.key,
         owner_role: owner.role,
@@ -305,6 +352,52 @@ fn positive_or_zero(value: f64) -> f64 {
     }
 }
 
+fn validate_stop_context(
+    batch: &RpsBatchSession,
+    request: &RpsBatchStopRequest,
+) -> Result<(), RpsBatchServiceError> {
+    let batch_id = request.batch_id.trim();
+    if batch_id.is_empty() || request.expected_revision == 0 {
+        return Err(RpsBatchServiceError::InvalidInput(
+            "batch_context_required".to_string(),
+        ));
+    }
+    if batch.id.trim() != batch_id {
+        return Err(RpsBatchServiceError::BatchContextConflict);
+    }
+    if batch.active && batch.revision != request.expected_revision {
+        return Err(RpsBatchServiceError::BatchContextConflict);
+    }
+    Ok(())
+}
+
+fn validate_print_context(
+    batch: &RpsBatchSession,
+    request: &RpsBatchPrintRequest,
+) -> Result<(), RpsBatchServiceError> {
+    if request.batch_id.trim().is_empty()
+        || request.expected_revision == 0
+        || request.expected_item_code.trim().is_empty()
+        || request.expected_warehouse.trim().is_empty()
+    {
+        return Err(RpsBatchServiceError::InvalidInput(
+            "batch_context_required".to_string(),
+        ));
+    }
+    if batch.id.trim() != request.batch_id.trim()
+        || batch.revision != request.expected_revision
+        || batch.item_code.trim() != request.expected_item_code.trim()
+        || batch.warehouse.trim() != request.expected_warehouse.trim()
+    {
+        return Err(RpsBatchServiceError::BatchContextConflict);
+    }
+    Ok(())
+}
+
+fn next_revision(current: u64) -> u64 {
+    current.saturating_add(1).max(1)
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum RpsBatchServiceError {
     #[error("invalid input: {0}")]
@@ -313,6 +406,8 @@ pub enum RpsBatchServiceError {
     BatchNotActive,
     #[error("batch already active")]
     BatchAlreadyActive,
+    #[error("batch context conflict")]
+    BatchContextConflict,
     #[error("store failed")]
     StoreFailed,
 }
