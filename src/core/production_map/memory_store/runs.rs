@@ -42,13 +42,45 @@ pub(super) async fn active_order_run_session_for_qolip(
             matches!(
                 session.status,
                 OrderRunStatus::Active | OrderRunStatus::Paused
-            ) && session
-                .payload_json
-                .get("qolip_code")
-                .and_then(serde_json::Value::as_str)
-                .is_some_and(|value| value.trim().eq_ignore_ascii_case(qolip_code))
+            ) && session_qolip_codes(session)
+                .iter()
+                .any(|value| value.eq_ignore_ascii_case(qolip_code))
         })
         .cloned())
+}
+
+pub(super) fn session_qolip_codes(session: &OrderRunSession) -> Vec<String> {
+    let mut result = Vec::new();
+    if let Some(values) = session
+        .payload_json
+        .get("qolip_codes")
+        .and_then(serde_json::Value::as_array)
+    {
+        for value in values {
+            let Some(code) = value.as_str().map(str::trim).filter(|code| !code.is_empty()) else {
+                continue;
+            };
+            if !result
+                .iter()
+                .any(|existing: &String| existing.eq_ignore_ascii_case(code))
+            {
+                result.push(code.to_string());
+            }
+        }
+    }
+    if let Some(code) = session
+        .payload_json
+        .get("qolip_code")
+        .and_then(serde_json::Value::as_str)
+        .map(str::trim)
+        .filter(|code| !code.is_empty())
+        && !result
+            .iter()
+            .any(|existing| existing.eq_ignore_ascii_case(code))
+    {
+        result.push(code.to_string());
+    }
+    result
 }
 
 pub(super) async fn active_order_run_sessions_for_worker(

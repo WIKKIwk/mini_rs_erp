@@ -18,6 +18,8 @@ struct ApparatusQueueActionRequest {
     #[serde(default)]
     qolip_code: String,
     #[serde(default)]
+    qolip_codes: Vec<String>,
+    #[serde(default)]
     produced_qty: Option<f64>,
     #[serde(default)]
     qty: Option<f64>,
@@ -269,15 +271,23 @@ pub async fn production_map_queue_action(
         )
         .await
         .map_err(production_map_error)?;
-    let qolip_preparation = if matches!(input.action, queue_state::ApparatusQueueAction::Start) {
-        prepare_qolip_for_bosma_start(&state, &principal, &input).await?
+    let qolip_preparations = if matches!(input.action, queue_state::ApparatusQueueAction::Start) {
+        prepare_qolips_for_bosma_start(&state, &principal, &input).await?
     } else {
-        None
+        Vec::new()
     };
-    if let Some(preparation) = &qolip_preparation {
-        prepared.attach_qolip_code(&preparation.spec.qolip_code);
+    if !qolip_preparations.is_empty() {
+        prepared.attach_qolip_codes(
+            &qolip_preparations
+                .iter()
+                .map(|preparation| preparation.spec.qolip_code.clone())
+                .collect::<Vec<_>>(),
+        );
     }
-    let qolip_checkout = qolip_preparation.and_then(|preparation| preparation.checkout);
+    let qolip_checkouts = qolip_preparations
+        .into_iter()
+        .filter_map(|preparation| preparation.checkout)
+        .collect::<Vec<_>>();
     let mut raw_material_stock_transitions = Vec::new();
     if matches!(input.action, queue_state::ApparatusQueueAction::Start) {
         let material_stock_barcodes = material_barcode
@@ -338,25 +348,27 @@ pub async fn production_map_queue_action(
             None
         }
     });
-    let fallback_qolip_checkout = qolip_checkout.clone();
+    let fallback_qolip_checkouts = qolip_checkouts.clone();
     let result = state
         .production_maps
         .commit_prepared_queue_action_with_raw_material_stock(
             prepared,
             raw_material_stock_transitions.clone(),
-            qolip_checkout,
+            qolip_checkouts,
             returned_paint_report,
         )
         .await
         .map_err(production_map_error)?;
     if !result.qolip_checkout_committed
-        && let Some(checkout) = fallback_qolip_checkout
+        && !fallback_qolip_checkouts.is_empty()
     {
-        state
-            .qolip
-            .issue_prepared_checkout(checkout)
-            .await
-            .map_err(qolip_queue_error)?;
+        for checkout in fallback_qolip_checkouts {
+            state
+                .qolip
+                .issue_prepared_checkout(checkout)
+                .await
+                .map_err(qolip_queue_error)?;
+        }
     }
     let mut warehouse_stock_update_warehouses = result.raw_material_stock_warehouses.clone();
     if !raw_material_stock_transitions.is_empty() && warehouse_stock_update_warehouses.is_empty() {

@@ -67,7 +67,7 @@ pub struct QueueActionProgressWrite {
     pub progress_batch: Option<OrderProgressBatch>,
     pub progress_batch_updates: Vec<OrderProgressBatch>,
     pub raw_material_stock_transitions: Vec<RawMaterialStockTransition>,
-    pub qolip_checkout: Option<QolipCheckout>,
+    pub qolip_checkouts: Vec<QolipCheckout>,
     pub returned_paint_report: Option<ReturnedPaintRequest>,
     pub order_control_update: Option<OrderControlRecord>,
 }

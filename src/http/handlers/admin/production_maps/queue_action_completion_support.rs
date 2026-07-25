@@ -33,13 +33,13 @@ fn zero_completion_metric_codes(
     .collect()
 }
 
-async fn prepare_qolip_for_bosma_start(
+async fn prepare_qolips_for_bosma_start(
     state: &AppState,
     principal: &Principal,
     input: &ApparatusQueueActionRequest,
-) -> Result<Option<crate::core::qolip::QolipOrderStartPreparation>, AdminError> {
+) -> Result<Vec<crate::core::qolip::QolipOrderStartPreparation>, AdminError> {
     if !apparatus_requires_qolip_scan(&input.apparatus) {
-        return Ok(None);
+        return Ok(Vec::new());
     }
     let Some(map) = state
         .production_maps
@@ -49,30 +49,55 @@ async fn prepare_qolip_for_bosma_start(
     else {
         return Err(production_map_error(ProductionMapError::MapNotFound));
     };
-    let qolip_code = input.qolip_code.trim();
-    if qolip_code.is_empty() {
+    let qolip_codes = qolip_codes_for_start(input);
+    if qolip_codes.is_empty() {
         return Err(bad_request("qolip_scan_required"));
     }
-    let preparation = state
-        .qolip
-        .prepare_qolip_code_for_order_start(
-            qolip_code,
-            &map.product_code,
-            &map.title,
-            &principal.ref_,
-            &principal.display_name,
-            principal,
+    let mut preparations = Vec::with_capacity(qolip_codes.len());
+    for qolip_code in qolip_codes {
+        let preparation = state
+            .qolip
+            .prepare_qolip_code_for_order_start(
+                &qolip_code,
+                &map.product_code,
+                &map.title,
+                &principal.ref_,
+                &principal.display_name,
+                principal,
+            )
+            .await
+            .map_err(qolip_queue_error)?;
+        reject_qolip_in_use(
+            state,
+            &input.apparatus,
+            &input.order_id,
+            &preparation.spec.qolip_code,
         )
-        .await
-        .map_err(qolip_queue_error)?;
-    reject_qolip_in_use(
-        state,
-        &input.apparatus,
-        &input.order_id,
-        &preparation.spec.qolip_code,
-    )
-    .await?;
-    Ok(Some(preparation))
+        .await?;
+        preparations.push(preparation);
+    }
+    Ok(preparations)
+}
+
+fn qolip_codes_for_start(input: &ApparatusQueueActionRequest) -> Vec<String> {
+    let mut result = Vec::new();
+    for code in input
+        .qolip_codes
+        .iter()
+        .map(String::as_str)
+        .chain(std::iter::once(input.qolip_code.as_str()))
+    {
+        let code = code.trim();
+        if code.is_empty()
+            || result
+                .iter()
+                .any(|existing: &String| existing.eq_ignore_ascii_case(code))
+        {
+            continue;
+        }
+        result.push(code.to_string());
+    }
+    result
 }
 
 pub(super) async fn reject_qolip_in_use(
@@ -142,4 +167,3 @@ pub(super) fn clean_progress_print_error(detail: &str) -> String {
         .unwrap_or_else(|| detail.trim())
         .to_string()
 }
-

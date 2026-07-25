@@ -334,19 +334,30 @@ pub(super) fn preserve_qolip_code(
     current: &OrderRunSession,
     mut replacement: serde_json::Value,
 ) -> serde_json::Value {
-    let Some(qolip_code) = current
+    let qolip_code = current
         .payload_json
         .get("qolip_code")
         .and_then(serde_json::Value::as_str)
         .map(str::trim)
-        .filter(|value| !value.is_empty())
-    else {
+        .filter(|value| !value.is_empty());
+    let qolip_codes = current
+        .payload_json
+        .get("qolip_codes")
+        .and_then(serde_json::Value::as_array)
+        .filter(|values| !values.is_empty())
+        .cloned();
+    if qolip_code.is_none() && qolip_codes.is_none() {
         return replacement;
-    };
+    }
     if !replacement.is_object() {
         replacement = serde_json::json!({});
     }
-    replacement["qolip_code"] = serde_json::json!(qolip_code);
+    if let Some(qolip_code) = qolip_code {
+        replacement["qolip_code"] = serde_json::json!(qolip_code);
+    }
+    if let Some(qolip_codes) = qolip_codes {
+        replacement["qolip_codes"] = serde_json::Value::Array(qolip_codes);
+    }
     replacement
 }
 

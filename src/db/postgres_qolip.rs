@@ -90,6 +90,14 @@ impl QolipStorePort for PostgresQolipStore {
         save_product_spec(&self.pool, spec).await
     }
 
+    async fn rename_product_spec(
+        &self,
+        previous_qolip_code: &str,
+        spec: QolipProductSpec,
+    ) -> Result<QolipProductSpec, QolipError> {
+        catalog::rename_product_spec(&self.pool, previous_qolip_code, spec).await
+    }
+
     async fn delete_product_specs(&self, qolip_codes: &[String]) -> Result<usize, QolipError> {
         delete_product_specs(&self.pool, qolip_codes).await
     }

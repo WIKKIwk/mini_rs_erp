@@ -43,6 +43,8 @@ pub struct QolipProductSpecUpsert {
     #[serde(default)]
     pub qolip_code: String,
     #[serde(default)]
+    pub previous_qolip_code: String,
+    #[serde(default)]
     pub size: i32,
 }
 
@@ -201,6 +203,8 @@ pub enum QolipError {
     QolipCodeNotFound,
     #[error("qolip code does not match item")]
     QolipCodeMismatch,
+    #[error("qolip code already exists")]
+    QolipCodeConflict,
     #[error("qolip is in use")]
     QolipInUse,
     #[error("size is required")]

@@ -55,16 +55,28 @@ impl PreparedApparatusQueueAction {
         self.progress_batch.as_ref()
     }
 
-    pub fn attach_qolip_code(&mut self, qolip_code: &str) {
-        let qolip_code = qolip_code.trim();
-        if qolip_code.is_empty() {
+    pub fn attach_qolip_codes(&mut self, qolip_codes: &[String]) {
+        let mut normalized = Vec::new();
+        for code in qolip_codes {
+            let code = code.trim();
+            if code.is_empty()
+                || normalized
+                    .iter()
+                    .any(|existing: &String| existing.eq_ignore_ascii_case(code))
+            {
+                continue;
+            }
+            normalized.push(code.to_string());
+        }
+        if normalized.is_empty() {
             return;
         }
         if let Some(session) = &mut self.session {
             if !session.payload_json.is_object() {
                 session.payload_json = serde_json::json!({});
             }
-            session.payload_json["qolip_code"] = serde_json::json!(qolip_code);
+            session.payload_json["qolip_code"] = serde_json::json!(normalized[0]);
+            session.payload_json["qolip_codes"] = serde_json::json!(normalized);
         }
     }
 }

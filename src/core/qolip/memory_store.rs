@@ -443,6 +443,46 @@ impl QolipStorePort for MemoryQolipStore {
         Ok(spec)
     }
 
+    async fn rename_product_spec(
+        &self,
+        previous_qolip_code: &str,
+        spec: QolipProductSpec,
+    ) -> Result<QolipProductSpec, QolipError> {
+        let previous_key = previous_qolip_code.trim().to_lowercase();
+        let next_key = spec.qolip_code.trim().to_lowercase();
+        if previous_key.is_empty() || next_key.is_empty() {
+            return Err(QolipError::MissingQolipCode);
+        }
+        if previous_key == next_key {
+            return self.put_product_spec(spec).await;
+        }
+        if self.checkouts.read().await.iter().any(|checkout| {
+            checkout.status.trim().eq_ignore_ascii_case("open")
+                && checkout.qolip_code.trim().eq_ignore_ascii_case(previous_qolip_code)
+        }) || self.locations.read().await.iter().any(|location| {
+            location.qolip_code.trim().eq_ignore_ascii_case(previous_qolip_code)
+        }) {
+            return Err(QolipError::QolipInUse);
+        }
+        let mut specs = self.product_specs.write().await;
+        if specs.contains_key(&next_key) {
+            return Err(QolipError::QolipCodeConflict);
+        }
+        if specs.remove(&previous_key).is_none() {
+            return Err(QolipError::QolipCodeNotFound);
+        }
+        specs.insert(next_key, spec.clone());
+        drop(specs);
+        let mut products = self.products.write().await;
+        if let Some(product) = products.iter_mut().find(|product| {
+            product.qolip_code.trim().eq_ignore_ascii_case(previous_qolip_code)
+        }) {
+            product.qolip_code = spec.qolip_code.clone();
+            product.size = spec.size;
+        }
+        Ok(spec)
+    }
+
     async fn delete_product_specs(&self, qolip_codes: &[String]) -> Result<usize, QolipError> {
         let normalized = qolip_codes
             .iter()

@@ -124,7 +124,16 @@ impl QolipService {
         input: QolipProductSpecUpsert,
         principal: &Principal,
     ) -> Result<QolipProductSpec, QolipError> {
+        let previous_qolip_code = input.previous_qolip_code.trim().to_string();
         let normalized = normalize_product_spec(input, principal)?;
+        if !previous_qolip_code.is_empty()
+            && !previous_qolip_code.eq_ignore_ascii_case(&normalized.qolip_code)
+        {
+            return self
+                .store
+                .rename_product_spec(&previous_qolip_code, normalized)
+                .await;
+        }
         self.store.put_product_spec(normalized).await
     }
 

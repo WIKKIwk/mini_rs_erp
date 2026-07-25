@@ -303,18 +303,16 @@ impl ProductionMapStorePort for MemoryProductionMapStore {
                 session.status,
                 OrderRunStatus::Active | OrderRunStatus::Paused
             )
-            && let Some(qolip_code) = session
-                .payload_json
-                .get("qolip_code")
-                .and_then(serde_json::Value::as_str)
-                .map(str::trim)
-                .filter(|value| !value.is_empty())
-            && self
-                .active_order_run_session_for_qolip(qolip_code)
-                .await?
-                .is_some_and(|active| active.session_id != session.session_id)
         {
-            return Err(ProductionMapError::QolipAlreadyInUse);
+            for qolip_code in runs::session_qolip_codes(session) {
+                if self
+                    .active_order_run_session_for_qolip(&qolip_code)
+                    .await?
+                    .is_some_and(|active| active.session_id != session.session_id)
+                {
+                    return Err(ProductionMapError::QolipAlreadyInUse);
+                }
+            }
         }
         self.put_apparatus_queue_states_with_event(&write.apparatus, write.states, write.event)
             .await?;

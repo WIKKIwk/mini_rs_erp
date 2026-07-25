@@ -434,14 +434,12 @@ impl ProductionMapStorePort for PostgresProductionMapStore {
         if let Some(record) = &write.order_control_update {
             save_order_control_state_tx(&mut tx, record).await?;
         }
-        let qolip_checkout_committed = if let Some(checkout) = &write.qolip_checkout {
+        let qolip_checkout_committed = !write.qolip_checkouts.is_empty();
+        for checkout in &write.qolip_checkouts {
             super::postgres_qolip::save_checkout_tx(&mut tx, checkout)
                 .await
                 .map_err(production_map_qolip_checkout_error)?;
-            true
-        } else {
-            false
-        };
+        }
         let raw_material_stock_warehouses = apply_raw_material_stock_transitions_tx(
             &mut tx,
             &write.raw_material_stock_transitions,

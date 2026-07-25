@@ -209,45 +209,49 @@ async fn pechat_queue_start_requires_matching_qolip_code_scan() {
         .expect("map save");
     assert_eq!(map.status(), StatusCode::OK);
 
-    let spec = router
-        .clone()
-        .oneshot(request_with_body(
-            "POST",
-            "/v1/mobile/qolip/product-specs",
-            &token,
-            r#"{
-                "item_code":"ITEM-QOLIP",
-                "item_name":"Test qolip order",
-                "item_group":"Tayyor mahsulot",
-                "qolip_code":"QOLIP-SCAN-1",
-                "size":42
-            }"#,
-        ))
-        .await
-        .expect("spec save");
-    assert_eq!(spec.status(), StatusCode::OK);
+    for (qolip_code, column_number) in [("QOLIP-SCAN-1", 2), ("QOLIP-SCAN-2", 3)] {
+        let spec = router
+            .clone()
+            .oneshot(request_with_body(
+                "POST",
+                "/v1/mobile/qolip/product-specs",
+                &token,
+                &serde_json::json!({
+                    "item_code": "ITEM-QOLIP",
+                    "item_name": "Test qolip order",
+                    "item_group": "Tayyor mahsulot",
+                    "qolip_code": qolip_code,
+                    "size": 42,
+                })
+                .to_string(),
+            ))
+            .await
+            .expect("spec save");
+        assert_eq!(spec.status(), StatusCode::OK);
 
-    let location = router
-        .clone()
-        .oneshot(request_with_body(
-            "POST",
-            "/v1/mobile/qolip/locations",
-            &token,
-            r#"{
-                "block":"A",
-                "warehouse":"Qolip ombor",
-                "item_code":"ITEM-QOLIP",
-                "item_name":"Test qolip order",
-                "qolip_code":"QOLIP-SCAN-1",
-                "size":42,
-                "quantity":1,
-                "row_letter":"B",
-                "column_number":2
-            }"#,
-        ))
-        .await
-        .expect("location save");
-    assert_eq!(location.status(), StatusCode::OK);
+        let location = router
+            .clone()
+            .oneshot(request_with_body(
+                "POST",
+                "/v1/mobile/qolip/locations",
+                &token,
+                &serde_json::json!({
+                    "block": "A",
+                    "warehouse": "Qolip ombor",
+                    "item_code": "ITEM-QOLIP",
+                    "item_name": "Test qolip order",
+                    "qolip_code": qolip_code,
+                    "size": 42,
+                    "quantity": 1,
+                    "row_letter": "B",
+                    "column_number": column_number,
+                })
+                .to_string(),
+            ))
+            .await
+            .expect("location save");
+        assert_eq!(location.status(), StatusCode::OK);
+    }
 
     let validation = router
         .clone()
@@ -266,6 +270,22 @@ async fn pechat_queue_start_requires_matching_qolip_code_scan() {
     assert_eq!(validation.status(), StatusCode::OK);
     let validation_body = json_body(validation).await;
     assert_eq!(validation_body["qolip"]["qolip_code"], "QOLIP-SCAN-1");
+
+    let second_validation = router
+        .clone()
+        .oneshot(request_with_body(
+            "POST",
+            "/v1/mobile/admin/production-maps/qolip-validate",
+            &worker_token,
+            r#"{
+                "apparatus":"7 ta rangli pechat - A",
+                "order_id":"zakaz-qolip-scan",
+                "qolip_code":"QOLIP-SCAN-2"
+            }"#,
+        ))
+        .await
+        .expect("validate second matching qolip");
+    assert_eq!(second_validation.status(), StatusCode::OK);
 
     let checkouts_before_start = router
         .clone()
@@ -329,13 +349,25 @@ async fn pechat_queue_start_requires_matching_qolip_code_scan() {
                 "apparatus":"7 ta rangli pechat - A",
                 "order_id":"zakaz-qolip-scan",
                 "action":"start",
-                "qolip_code":"QOLIP-WRONG"
+                "qolip_codes":["QOLIP-SCAN-1","QOLIP-WRONG"]
             }"#,
         ))
         .await
         .expect("queue action with wrong qolip");
     assert_eq!(wrong_scan.status(), StatusCode::BAD_REQUEST);
     assert_eq!(json_body(wrong_scan).await["error"], "qolip_code_not_found");
+
+    let checkouts_after_failed_start = router
+        .clone()
+        .oneshot(request("GET", "/v1/mobile/qolip/checkouts", &token))
+        .await
+        .expect("checkouts after failed multi qolip start");
+    assert!(
+        json_body(checkouts_after_failed_start).await["checkouts"]
+            .as_array()
+            .expect("checkouts")
+            .is_empty()
+    );
 
     let started = router
         .clone()
@@ -347,7 +379,7 @@ async fn pechat_queue_start_requires_matching_qolip_code_scan() {
                 "apparatus":"7 ta rangli pechat - A",
                 "order_id":"zakaz-qolip-scan",
                 "action":"start",
-                "qolip_code":"QOLIP-SCAN-1"
+                "qolip_codes":["QOLIP-SCAN-1","QOLIP-SCAN-2","qolip-scan-2"]
             }"#,
         ))
         .await
@@ -358,6 +390,10 @@ async fn pechat_queue_start_requires_matching_qolip_code_scan() {
         started_body["states"]["zakaz-qolip-scan"],
         serde_json::json!("in_progress")
     );
+    assert_eq!(
+        started_body["session"]["payload_json"]["qolip_codes"],
+        serde_json::json!(["QOLIP-SCAN-1", "QOLIP-SCAN-2"])
+    );
 
     let checkouts = router
         .oneshot(request("GET", "/v1/mobile/qolip/checkouts", &token))
@@ -365,14 +401,18 @@ async fn pechat_queue_start_requires_matching_qolip_code_scan() {
         .expect("qolip checkouts");
     assert_eq!(checkouts.status(), StatusCode::OK);
     let checkouts_body = json_body(checkouts).await;
-    let checkout = checkouts_body["checkouts"]
+    let checkouts = checkouts_body["checkouts"]
         .as_array()
-        .expect("checkouts")
-        .iter()
-        .find(|entry| entry["qolip_code"] == "QOLIP-SCAN-1")
-        .expect("qolip checkout");
-    assert_eq!(checkout["issued_to_ref"], "pechat-worker-qolip");
-    assert_eq!(checkout["quantity"], 1);
+        .expect("checkouts");
+    assert_eq!(checkouts.len(), 2);
+    for qolip_code in ["QOLIP-SCAN-1", "QOLIP-SCAN-2"] {
+        let checkout = checkouts
+            .iter()
+            .find(|entry| entry["qolip_code"] == qolip_code)
+            .expect("qolip checkout");
+        assert_eq!(checkout["issued_to_ref"], "pechat-worker-qolip");
+        assert_eq!(checkout["quantity"], 1);
+    }
 }
 
 #[tokio::test]

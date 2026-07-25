@@ -39,6 +39,14 @@ pub trait QolipStorePort: Send + Sync {
         &self,
         spec: QolipProductSpec,
     ) -> Result<QolipProductSpec, QolipError>;
+    async fn rename_product_spec(
+        &self,
+        previous_qolip_code: &str,
+        spec: QolipProductSpec,
+    ) -> Result<QolipProductSpec, QolipError> {
+        let _ = (previous_qolip_code, spec);
+        Err(QolipError::StoreFailed)
+    }
     async fn delete_product_specs(&self, qolip_codes: &[String]) -> Result<usize, QolipError> {
         let _ = qolip_codes;
         Err(QolipError::StoreFailed)

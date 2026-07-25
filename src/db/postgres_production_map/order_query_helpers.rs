@@ -173,7 +173,20 @@ pub(super) async fn load_active_order_run_session_for_qolip(
                 payload_json
          FROM mini_order_run_sessions
          WHERE status IN ('active', 'paused')
-           AND lower(payload_json->>'qolip_code') = lower($1)
+           AND (
+             lower(payload_json->>'qolip_code') = lower($1)
+             OR EXISTS (
+                 SELECT 1
+                 FROM jsonb_array_elements_text(
+                     CASE
+                         WHEN jsonb_typeof(payload_json->'qolip_codes') = 'array'
+                         THEN payload_json->'qolip_codes'
+                         ELSE '[]'::jsonb
+                     END
+                 ) AS code(value)
+                 WHERE lower(code.value) = lower($1)
+             )
+           )
          ORDER BY updated_at DESC
          LIMIT 1",
     )
