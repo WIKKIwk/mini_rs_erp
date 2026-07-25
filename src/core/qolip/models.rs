@@ -207,6 +207,10 @@ pub enum QolipError {
     QolipCodeConflict,
     #[error("qolip is in use")]
     QolipInUse,
+    #[error("qolip must be checked out to a worker before order start")]
+    CheckoutRequired,
+    #[error("qolip is checked out to another worker")]
+    CheckoutAssignedToAnotherWorker,
     #[error("size is required")]
     InvalidSize,
     #[error("quantity is required")]

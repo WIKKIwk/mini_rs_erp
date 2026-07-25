@@ -63,6 +63,25 @@ pub trait QolipStorePort: Send + Sync {
     async fn put_location(&self, location: QolipLocation) -> Result<QolipLocation, QolipError>;
     async fn get_or_create_cell_qr(&self, cell: QolipCellQr) -> Result<QolipCellQr, QolipError>;
     async fn issue_checkout(&self, checkout: QolipCheckout) -> Result<QolipCheckout, QolipError>;
+    async fn open_checkout_by_qolip_code(
+        &self,
+        qolip_code: &str,
+    ) -> Result<Option<QolipCheckout>, QolipError> {
+        let qolip_code = qolip_code.trim();
+        if qolip_code.is_empty() {
+            return Ok(None);
+        }
+        Ok(self
+            .checkouts(None, None, "open", 10_000)
+            .await?
+            .into_iter()
+            .find(|checkout| {
+                checkout
+                    .qolip_code
+                    .trim()
+                    .eq_ignore_ascii_case(qolip_code)
+            }))
+    }
     async fn checkouts(
         &self,
         block: Option<&str>,

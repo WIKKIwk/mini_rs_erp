@@ -55,6 +55,7 @@ pub async fn production_map_qolip_validate(
     else {
         return Err(production_map_error(ProductionMapError::MapNotFound));
     };
+    reject_qolip_in_use(&state, apparatus, order_id, &input.qolip_code).await?;
     let preparation = state
         .qolip
         .prepare_qolip_code_for_order_start(
@@ -67,7 +68,6 @@ pub async fn production_map_qolip_validate(
         )
         .await
         .map_err(qolip_queue_error)?;
-    reject_qolip_in_use(&state, apparatus, order_id, &preparation.spec.qolip_code).await?;
     let block = preparation
         .checkout
         .as_ref()

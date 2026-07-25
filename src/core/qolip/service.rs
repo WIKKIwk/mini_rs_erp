@@ -213,8 +213,13 @@ impl QolipService {
                 principal,
             )
             .await?;
-        let checkout = preparation.checkout.ok_or(QolipError::LocationNotFound)?;
-        self.issue_prepared_checkout(checkout).await
+        if let Some(checkout) = preparation.checkout {
+            return self.issue_prepared_checkout(checkout).await;
+        }
+        self.store
+            .open_checkout_by_qolip_code(qolip_code)
+            .await?
+            .ok_or(QolipError::CheckoutRequired)
     }
 
     pub async fn prepare_qolip_code_for_order_start(
@@ -242,8 +247,29 @@ impl QolipService {
         if !qolip_spec_matches_order(&spec, &expected_product) {
             return Err(QolipError::QolipCodeMismatch);
         }
-        let checkout = match self.store.location_by_qolip_code(qolip_code).await? {
-            Some(location) => {
+        let existing_checkout = self
+            .store
+            .open_checkout_by_qolip_code(qolip_code)
+            .await?;
+        if let Some(checkout) = &existing_checkout {
+            if !checkout
+                .issued_to_ref
+                .trim()
+                .eq_ignore_ascii_case(worker_id.trim())
+            {
+                return Err(QolipError::CheckoutAssignedToAnotherWorker);
+            }
+            if self.store.location_by_qolip_code(qolip_code).await?.is_some() {
+                return Err(QolipError::QolipInUse);
+            }
+        }
+
+        let checkout = match (
+            existing_checkout,
+            self.store.location_by_qolip_code(qolip_code).await?,
+        ) {
+            (Some(_), None) => None,
+            (None, Some(location)) => {
                 if !qolip_location_matches_spec(&location, &spec) {
                     return Err(QolipError::QolipCodeMismatch);
                 }
@@ -252,7 +278,8 @@ impl QolipService {
                 checkout.item_group = spec.item_group.clone();
                 Some(checkout)
             }
-            None => None,
+            (Some(_), Some(_)) => return Err(QolipError::QolipInUse),
+            (None, None) => return Err(QolipError::CheckoutRequired),
         };
         Ok(QolipOrderStartPreparation { spec, checkout })
     }

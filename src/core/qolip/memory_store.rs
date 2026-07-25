@@ -633,6 +633,26 @@ impl QolipStorePort for MemoryQolipStore {
         Ok(saved)
     }
 
+    async fn open_checkout_by_qolip_code(
+        &self,
+        qolip_code: &str,
+    ) -> Result<Option<QolipCheckout>, QolipError> {
+        let qolip_code = qolip_code.trim();
+        Ok(self
+            .checkouts
+            .read()
+            .await
+            .iter()
+            .find(|checkout| {
+                checkout.status.trim().eq_ignore_ascii_case("open")
+                    && checkout
+                        .qolip_code
+                        .trim()
+                        .eq_ignore_ascii_case(qolip_code)
+            })
+            .cloned())
+    }
+
     async fn checkouts(
         &self,
         block: Option<&str>,

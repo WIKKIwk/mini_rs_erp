@@ -367,6 +367,24 @@ pub(super) async fn load_products(
                 FROM mini_qolip_checkouts checkout
                 WHERE lower(checkout.qolip_code) = lower(product.qolip_code)
                   AND lower(checkout.status) = 'open'
+            ) OR EXISTS (
+                SELECT 1
+                FROM mini_order_run_sessions session
+                WHERE session.status IN ('active', 'paused')
+                  AND (
+                      lower(session.payload_json->>'qolip_code') = lower(product.qolip_code)
+                      OR EXISTS (
+                          SELECT 1
+                          FROM jsonb_array_elements_text(
+                              CASE
+                                  WHEN jsonb_typeof(session.payload_json->'qolip_codes') = 'array'
+                                  THEN session.payload_json->'qolip_codes'
+                                  ELSE '[]'::jsonb
+                              END
+                          ) AS code(value)
+                          WHERE lower(code.value) = lower(product.qolip_code)
+                      )
+                  )
             ) AS is_in_use
         FROM product_rows product
         WHERE (NOT $4 OR product.has_qolip_spec)
@@ -655,6 +673,23 @@ pub(super) async fn rename_product_spec(
              UNION ALL
              SELECT 1 FROM mini_qolip_checkouts
              WHERE lower(qolip_code) = $1 AND lower(status) = 'open'
+             UNION ALL
+             SELECT 1 FROM mini_order_run_sessions
+             WHERE status IN ('active', 'paused')
+               AND (
+                   lower(payload_json->>'qolip_code') = $1
+                   OR EXISTS (
+                       SELECT 1
+                       FROM jsonb_array_elements_text(
+                           CASE
+                               WHEN jsonb_typeof(payload_json->'qolip_codes') = 'array'
+                               THEN payload_json->'qolip_codes'
+                               ELSE '[]'::jsonb
+                           END
+                       ) AS code(value)
+                       WHERE lower(code.value) = $1
+                   )
+               )
          )",
     )
     .bind(&previous)
@@ -744,6 +779,24 @@ pub(super) async fn delete_product_specs(
              FROM mini_qolip_checkouts
              WHERE lower(qolip_code) = ANY($1)
                AND lower(status) = 'open'
+             UNION ALL
+             SELECT 1
+             FROM mini_order_run_sessions
+             WHERE status IN ('active', 'paused')
+               AND (
+                   lower(payload_json->>'qolip_code') = ANY($1)
+                   OR EXISTS (
+                       SELECT 1
+                       FROM jsonb_array_elements_text(
+                           CASE
+                               WHEN jsonb_typeof(payload_json->'qolip_codes') = 'array'
+                               THEN payload_json->'qolip_codes'
+                               ELSE '[]'::jsonb
+                           END
+                       ) AS code(value)
+                       WHERE lower(code.value) = ANY($1)
+                   )
+               )
          )",
     )
     .bind(&normalized)

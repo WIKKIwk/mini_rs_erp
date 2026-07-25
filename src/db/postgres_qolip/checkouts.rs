@@ -27,6 +27,35 @@ pub(crate) async fn save_checkout_tx(
         .await
         .map_err(|_| QolipError::StoreFailed)?;
 
+    let attached_to_active_order = sqlx::query_scalar::<_, bool>(
+        "SELECT EXISTS (
+             SELECT 1
+             FROM mini_order_run_sessions session
+             WHERE session.status IN ('active', 'paused')
+               AND (
+                   lower(session.payload_json->>'qolip_code') = lower($1)
+                   OR EXISTS (
+                       SELECT 1
+                       FROM jsonb_array_elements_text(
+                           CASE
+                               WHEN jsonb_typeof(session.payload_json->'qolip_codes') = 'array'
+                               THEN session.payload_json->'qolip_codes'
+                               ELSE '[]'::jsonb
+                           END
+                       ) AS code(value)
+                       WHERE lower(code.value) = lower($1)
+                   )
+               )
+         )",
+    )
+    .bind(checkout.qolip_code.trim())
+    .fetch_one(&mut **tx)
+    .await
+    .map_err(|_| QolipError::StoreFailed)?;
+    if attached_to_active_order {
+        return Err(QolipError::QolipInUse);
+    }
+
     if !checkout.item_group.trim().is_empty() {
         let product_group = sqlx::query_scalar::<_, String>(
             "SELECT item_group
@@ -239,6 +268,30 @@ pub(super) async fn load_checkouts(
     Ok(rows.into_iter().map(row_to_checkout).collect())
 }
 
+pub(super) async fn load_open_checkout_by_qolip_code(
+    pool: &PgPool,
+    qolip_code: &str,
+) -> Result<Option<QolipCheckout>, QolipError> {
+    let row = sqlx::query_as::<_, QolipCheckoutRow>(
+        "SELECT id, location_id, block, warehouse, item_code, item_name, qolip_code,
+                size, quantity, row_letter, column_number, location_label,
+                issued_to_ref, issued_to_name, status,
+                issued_by_role, issued_by_ref, issued_by_name,
+                to_char(issued_at AT TIME ZONE 'UTC', 'YYYY-MM-DD\"T\"HH24:MI:SS\"Z\"') AS issued_at
+         FROM mini_qolip_checkouts
+         WHERE lower(qolip_code) = lower($1)
+           AND lower(status) = 'open'
+         ORDER BY issued_at DESC
+         LIMIT 1",
+    )
+    .bind(qolip_code.trim())
+    .fetch_optional(pool)
+    .await
+    .map_err(|_| QolipError::StoreFailed)?;
+
+    Ok(row.map(row_to_checkout))
+}
+
 pub(super) async fn load_open_checkouts_for_worker(
     pool: &PgPool,
     worker_refs: &[String],
@@ -346,6 +399,34 @@ pub(super) async fn return_checkout_to_location(
     };
 
     let checkout = row_to_checkout(row);
+    let attached_to_active_order = sqlx::query_scalar::<_, bool>(
+        "SELECT EXISTS (
+             SELECT 1
+             FROM mini_order_run_sessions session
+             WHERE session.status IN ('active', 'paused')
+               AND (
+                   lower(session.payload_json->>'qolip_code') = lower($1)
+                   OR EXISTS (
+                       SELECT 1
+                       FROM jsonb_array_elements_text(
+                           CASE
+                               WHEN jsonb_typeof(session.payload_json->'qolip_codes') = 'array'
+                               THEN session.payload_json->'qolip_codes'
+                               ELSE '[]'::jsonb
+                           END
+                       ) AS code(value)
+                       WHERE lower(code.value) = lower($1)
+                   )
+               )
+         )",
+    )
+    .bind(checkout.qolip_code.trim())
+    .fetch_one(&mut *tx)
+    .await
+    .map_err(|_| QolipError::StoreFailed)?;
+    if attached_to_active_order {
+        return Err(QolipError::QolipInUse);
+    }
     let restore = location_from_checkout_target(&checkout, row_letter, column_number)?;
     let existing_row = sqlx::query_as::<_, QolipLocationRow>(
         "SELECT id, block, warehouse, item_code, item_name, qolip_code,

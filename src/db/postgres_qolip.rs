@@ -21,7 +21,8 @@ use self::catalog::{
 use self::cell_qr::{load_cell_qr_by_payload, save_cell_qr};
 pub(crate) use self::checkouts::save_checkout_tx;
 use self::checkouts::{
-    load_checkout_by_id, load_checkouts, load_open_checkouts_for_worker,
+    load_checkout_by_id, load_checkouts, load_open_checkout_by_qolip_code,
+    load_open_checkouts_for_worker,
     return_checkout_to_location, save_checkout,
 };
 use self::locations::{
@@ -127,6 +128,13 @@ impl QolipStorePort for PostgresQolipStore {
 
     async fn issue_checkout(&self, checkout: QolipCheckout) -> Result<QolipCheckout, QolipError> {
         save_checkout(&self.pool, checkout).await
+    }
+
+    async fn open_checkout_by_qolip_code(
+        &self,
+        qolip_code: &str,
+    ) -> Result<Option<QolipCheckout>, QolipError> {
+        load_open_checkout_by_qolip_code(&self.pool, qolip_code).await
     }
 
     async fn checkouts(

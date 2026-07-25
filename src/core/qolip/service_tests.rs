@@ -11,7 +11,7 @@ use super::ports::QolipStorePort;
 use super::service::QolipService;
 
 #[tokio::test]
-async fn order_start_accepts_matching_qolip_without_location() {
+async fn order_start_rejects_matching_qolip_without_location_or_checkout() {
     let store = std::sync::Arc::new(MemoryQolipStore::new());
     store
         .seed_products(vec![QolipProduct {
@@ -41,7 +41,7 @@ async fn order_start_accepts_matching_qolip_without_location() {
         .await
         .expect("save product spec");
 
-    let preparation = service
+    let error = service
         .prepare_qolip_code_for_order_start(
             "QOLIP-NO-LOCATION",
             "ITEM-ORDER",
@@ -51,9 +51,83 @@ async fn order_start_accepts_matching_qolip_without_location() {
             &principal(),
         )
         .await
-        .expect("matching qolip without location must be accepted");
+        .expect_err("a qolip without a warehouse location or worker checkout must be rejected");
 
-    assert_eq!(preparation.spec.qolip_code, "QOLIP-NO-LOCATION");
+    assert_eq!(error, QolipError::CheckoutRequired);
+}
+
+#[tokio::test]
+async fn order_start_accepts_existing_checkout_for_same_worker() {
+    let store = std::sync::Arc::new(MemoryQolipStore::new());
+    store
+        .seed_products(vec![QolipProduct {
+            code: "ITEM-ORDER".to_string(),
+            name: "Order product".to_string(),
+            item_group: "Tayyor mahsulot".to_string(),
+            customer_names: Vec::new(),
+            qolip_code: String::new(),
+            size: 0,
+            has_qolip_spec: false,
+            is_in_use: false,
+        }])
+        .await;
+    let service = QolipService::new(store);
+    service
+        .upsert_product_spec(
+            QolipProductSpecUpsert {
+                item_code: "ITEM-ORDER".to_string(),
+                item_name: "Order product".to_string(),
+                item_group: "Tayyor mahsulot".to_string(),
+                qolip_code: "QOLIP-CHECKED-OUT".to_string(),
+                previous_qolip_code: String::new(),
+                size: 42,
+            },
+            &principal(),
+        )
+        .await
+        .expect("save product spec");
+    let location = service
+        .upsert_location(
+            QolipLocationUpsert {
+                block: "A".to_string(),
+                warehouse: "Qolip ombor".to_string(),
+                item_code: "ITEM-ORDER".to_string(),
+                item_name: "Order product".to_string(),
+                item_group: "Tayyor mahsulot".to_string(),
+                qolip_code: "QOLIP-CHECKED-OUT".to_string(),
+                size: 42,
+                quantity: 1,
+                row_letter: "A".to_string(),
+                column_number: Some(1),
+            },
+            &principal(),
+        )
+        .await
+        .expect("save location");
+    service
+        .issue_checkout_from_location(
+            location,
+            1,
+            "worker-1",
+            "Worker",
+            &principal(),
+        )
+        .await
+        .expect("issue checkout");
+
+    let preparation = service
+        .prepare_qolip_code_for_order_start(
+            "QOLIP-CHECKED-OUT",
+            "ITEM-ORDER",
+            "Order product",
+            "worker-1",
+            "Worker",
+            &principal(),
+        )
+        .await
+        .expect("existing worker checkout must be accepted");
+
+    assert_eq!(preparation.spec.qolip_code, "QOLIP-CHECKED-OUT");
     assert!(preparation.checkout.is_none());
 }
 

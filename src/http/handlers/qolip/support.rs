@@ -193,6 +193,13 @@ pub(super) fn qolip_error(error: QolipError) -> (StatusCode, Json<QolipErrorResp
             StatusCode::CONFLICT,
             Json(QolipErrorResponse::new("qolip_in_use")),
         ),
+        QolipError::CheckoutRequired => bad_request("qolip_checkout_required"),
+        QolipError::CheckoutAssignedToAnotherWorker => (
+            StatusCode::CONFLICT,
+            Json(QolipErrorResponse::new(
+                "qolip_checkout_assigned_to_another_worker",
+            )),
+        ),
         QolipError::InvalidSize => bad_request("size_required"),
         QolipError::InvalidQuantity => bad_request("quantity_required"),
         QolipError::InvalidLocation => bad_request("location_invalid"),

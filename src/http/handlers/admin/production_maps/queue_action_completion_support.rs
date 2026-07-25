@@ -55,6 +55,13 @@ async fn prepare_qolips_for_bosma_start(
     }
     let mut preparations = Vec::with_capacity(qolip_codes.len());
     for qolip_code in qolip_codes {
+        reject_qolip_in_use(
+            state,
+            &input.apparatus,
+            &input.order_id,
+            &qolip_code,
+        )
+        .await?;
         let preparation = state
             .qolip
             .prepare_qolip_code_for_order_start(
@@ -67,13 +74,6 @@ async fn prepare_qolips_for_bosma_start(
             )
             .await
             .map_err(qolip_queue_error)?;
-        reject_qolip_in_use(
-            state,
-            &input.apparatus,
-            &input.order_id,
-            &preparation.spec.qolip_code,
-        )
-        .await?;
         preparations.push(preparation);
     }
     Ok(preparations)
@@ -129,6 +129,12 @@ pub(super) fn qolip_queue_error(error: crate::core::qolip::QolipError) -> AdminE
         crate::core::qolip::QolipError::MissingQolipCode => bad_request("qolip_scan_required"),
         crate::core::qolip::QolipError::QolipCodeNotFound => bad_request("qolip_code_not_found"),
         crate::core::qolip::QolipError::QolipCodeMismatch => bad_request("qolip_code_mismatch"),
+        crate::core::qolip::QolipError::CheckoutRequired => {
+            bad_request("qolip_checkout_required")
+        }
+        crate::core::qolip::QolipError::CheckoutAssignedToAnotherWorker => {
+            bad_request("qolip_checkout_assigned_to_another_worker")
+        }
         crate::core::qolip::QolipError::LocationNotFound => bad_request("qolip_location_not_found"),
         crate::core::qolip::QolipError::InsufficientStock => bad_request("insufficient_stock"),
         crate::core::qolip::QolipError::LocationIdentityMismatch => {
