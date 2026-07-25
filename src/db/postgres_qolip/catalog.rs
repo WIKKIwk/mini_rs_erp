@@ -1,4 +1,4 @@
-use sqlx::PgPool;
+use sqlx::{PgPool, Postgres, Transaction};
 
 use crate::core::auth::models::Principal;
 use crate::core::qolip::{QolipBlock, QolipError, QolipProduct, QolipProductSpec, role_code};
@@ -615,8 +615,10 @@ pub(super) async fn load_product_spec_by_qolip_code(
 
 pub(super) async fn save_product_spec(
     pool: &PgPool,
-    spec: QolipProductSpec,
+    mut spec: QolipProductSpec,
 ) -> Result<QolipProductSpec, QolipError> {
+    let mut tx = pool.begin().await.map_err(|_| QolipError::StoreFailed)?;
+    spec.color = allocate_panton_color(&mut tx, &spec.qolip_code, None, &spec.color).await?;
     let row = sqlx::query_as::<_, QolipProductSpecRow>(
         "INSERT INTO mini_qolip_product_specs (
              item_code, item_name, item_group, qolip_code, size,
@@ -646,17 +648,67 @@ pub(super) async fn save_product_spec(
     .bind(spec.created_by_ref.trim())
     .bind(spec.created_by_name.trim())
     .bind(serde_json::to_value(&spec).map_err(|_| QolipError::StoreFailed)?)
-    .fetch_one(pool)
+    .fetch_one(&mut *tx)
     .await
     .map_err(|_| QolipError::StoreFailed)?;
+    tx.commit().await.map_err(|_| QolipError::StoreFailed)?;
 
     Ok(row_to_product_spec(row))
+}
+
+async fn allocate_panton_color(
+    tx: &mut Transaction<'_, Postgres>,
+    qolip_code: &str,
+    excluded_qolip_code: Option<&str>,
+    requested_color: &str,
+) -> Result<String, QolipError> {
+    let requested = requested_color.trim();
+    if !requested.to_ascii_uppercase().starts_with("PANTON") {
+        return Ok(requested.to_string());
+    }
+    sqlx::query("SELECT pg_advisory_xact_lock(hashtext('qolip-panton-global')::bigint)")
+        .execute(&mut **tx)
+        .await
+        .map_err(|_| QolipError::StoreFailed)?;
+    let colors = sqlx::query_scalar::<_, String>(
+        "SELECT COALESCE(payload_json->>'color', '')
+         FROM mini_qolip_product_specs
+         WHERE ($1 = '' OR lower(qolip_code) <> lower($1))
+           AND ($2 = '' OR lower(qolip_code) <> lower($2))
+         FOR UPDATE",
+    )
+    .bind(qolip_code.trim())
+    .bind(excluded_qolip_code.unwrap_or_default().trim())
+    .fetch_all(&mut **tx)
+    .await
+    .map_err(|_| QolipError::StoreFailed)?;
+    let used = colors
+        .iter()
+        .filter_map(|color| panton_number(color))
+        .collect::<std::collections::BTreeSet<_>>();
+    let requested_number = panton_number(requested);
+    let number = requested_number
+        .filter(|number| !used.contains(number))
+        .or_else(|| (1..=7).find(|number| !used.contains(number)))
+        .ok_or(QolipError::PantonLimitExceeded)?;
+    Ok(format!("Panton {number}"))
+}
+
+fn panton_number(color: &str) -> Option<i32> {
+    let mut parts = color.split_whitespace();
+    if !parts.next()?.eq_ignore_ascii_case("panton") {
+        return None;
+    }
+    match parts.next()?.parse::<i32>().ok()? {
+        number @ 1..=7 if parts.next().is_none() => Some(number),
+        _ => None,
+    }
 }
 
 pub(super) async fn rename_product_spec(
     pool: &PgPool,
     previous_qolip_code: &str,
-    spec: QolipProductSpec,
+    mut spec: QolipProductSpec,
 ) -> Result<QolipProductSpec, QolipError> {
     let previous = previous_qolip_code.trim().to_lowercase();
     let next = spec.qolip_code.trim().to_lowercase();
@@ -664,6 +716,13 @@ pub(super) async fn rename_product_spec(
         return Err(QolipError::MissingQolipCode);
     }
     let mut tx = pool.begin().await.map_err(|_| QolipError::StoreFailed)?;
+    spec.color = allocate_panton_color(
+        &mut tx,
+        &spec.qolip_code,
+        Some(&previous),
+        &spec.color,
+    )
+    .await?;
     for code in [&previous, &next] {
         sqlx::query("SELECT pg_advisory_xact_lock(hashtext($1)::bigint)")
             .bind(code)

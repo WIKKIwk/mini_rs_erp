@@ -211,6 +211,8 @@ pub enum QolipError {
     QolipCodeMismatch,
     #[error("qolip code already exists")]
     QolipCodeConflict,
+    #[error("all seven Panton colors are already assigned")]
+    PantonLimitExceeded,
     #[error("qolip is in use")]
     QolipInUse,
     #[error("qolip must be checked out to a worker before order start")]
