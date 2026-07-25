@@ -637,15 +637,17 @@ pub(super) async fn rename_product_spec(
             .await
             .map_err(|_| QolipError::StoreFailed)?;
     }
-    let exists = sqlx::query_scalar::<_, bool>(
-        "SELECT EXISTS (SELECT 1 FROM mini_qolip_product_specs WHERE lower(qolip_code) = $1)",
-    )
-    .bind(&next)
-    .fetch_one(&mut *tx)
-    .await
-    .map_err(|_| QolipError::StoreFailed)?;
-    if exists {
-        return Err(QolipError::QolipCodeConflict);
+    if previous != next {
+        let exists = sqlx::query_scalar::<_, bool>(
+            "SELECT EXISTS (SELECT 1 FROM mini_qolip_product_specs WHERE lower(qolip_code) = $1)",
+        )
+        .bind(&next)
+        .fetch_one(&mut *tx)
+        .await
+        .map_err(|_| QolipError::StoreFailed)?;
+        if exists {
+            return Err(QolipError::QolipCodeConflict);
+        }
     }
     let blocked = sqlx::query_scalar::<_, bool>(
         "SELECT EXISTS (

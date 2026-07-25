@@ -453,9 +453,6 @@ impl QolipStorePort for MemoryQolipStore {
         if previous_key.is_empty() || next_key.is_empty() {
             return Err(QolipError::MissingQolipCode);
         }
-        if previous_key == next_key {
-            return self.put_product_spec(spec).await;
-        }
         if self.checkouts.read().await.iter().any(|checkout| {
             checkout.status.trim().eq_ignore_ascii_case("open")
                 && checkout.qolip_code.trim().eq_ignore_ascii_case(previous_qolip_code)
@@ -465,7 +462,7 @@ impl QolipStorePort for MemoryQolipStore {
             return Err(QolipError::QolipInUse);
         }
         let mut specs = self.product_specs.write().await;
-        if specs.contains_key(&next_key) {
+        if previous_key != next_key && specs.contains_key(&next_key) {
             return Err(QolipError::QolipCodeConflict);
         }
         if specs.remove(&previous_key).is_none() {

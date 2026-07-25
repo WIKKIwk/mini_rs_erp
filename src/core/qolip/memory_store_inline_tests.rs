@@ -99,6 +99,37 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn renaming_product_spec_replaces_the_old_code_without_duplicates() {
+        let store = MemoryQolipStore::default();
+        store
+            .seed_products(vec![product("ITEM-001", "Kross qolip")])
+            .await;
+        store
+            .put_product_spec(product_spec("ITEM-001", "Q-OLD"))
+            .await
+            .expect("old spec");
+
+        store
+            .rename_product_spec("Q-OLD", product_spec("ITEM-001", "Q-NEW"))
+            .await
+            .expect("rename spec");
+
+        let products = store.products("Kross", 20, true).await.expect("products");
+        assert_eq!(products.len(), 1);
+        assert_eq!(products[0].qolip_code, "Q-NEW");
+        assert!(store
+            .product_spec_by_qolip_code("Q-OLD")
+            .await
+            .expect("old spec lookup")
+            .is_none());
+        assert!(store
+            .product_spec_by_qolip_code("Q-NEW")
+            .await
+            .expect("new spec lookup")
+            .is_some());
+    }
+
+    #[tokio::test]
     async fn legacy_location_is_listed_and_deleted_without_product_spec() {
         let store = MemoryQolipStore::default();
         let mut legacy_product = product("ITEM-LEGACY", "Legacy kross");
