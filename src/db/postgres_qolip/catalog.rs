@@ -671,11 +671,19 @@ async fn allocate_panton_color(
         .await
         .map_err(|_| QolipError::StoreFailed)?;
     let colors = sqlx::query_scalar::<_, String>(
-        "SELECT COALESCE(payload_json->>'color', '')
-         FROM mini_qolip_product_specs
+        "SELECT color
+         FROM (
+             SELECT qolip_code, COALESCE(payload_json->>'color', '') AS color
+             FROM mini_qolip_product_specs
+             UNION ALL
+             SELECT qolip_code, COALESCE(payload_json->>'color', '') AS color
+             FROM mini_qolip_locations
+             UNION ALL
+             SELECT qolip_code, COALESCE(payload_json->>'color', '') AS color
+             FROM mini_qolip_checkouts
+         ) colors
          WHERE ($1 = '' OR lower(qolip_code) <> lower($1))
-           AND ($2 = '' OR lower(qolip_code) <> lower($2))
-         FOR UPDATE",
+           AND ($2 = '' OR lower(qolip_code) <> lower($2))",
     )
     .bind(qolip_code.trim())
     .bind(excluded_qolip_code.unwrap_or_default().trim())
