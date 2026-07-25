@@ -127,10 +127,21 @@ impl QolipService {
         let previous_qolip_code = input.previous_qolip_code.trim().to_string();
         let normalized = normalize_product_spec(input, principal)?;
         if !previous_qolip_code.is_empty() {
-            return self
+            let next_qolip_code = normalized.qolip_code.clone();
+            return match self
                 .store
-                .rename_product_spec(&previous_qolip_code, normalized)
-                .await;
+                .rename_product_spec(&previous_qolip_code, normalized.clone())
+                .await
+            {
+                Ok(spec) => Ok(spec),
+                Err(QolipError::QolipCodeNotFound)
+                    if previous_qolip_code
+                        .eq_ignore_ascii_case(&next_qolip_code) =>
+                {
+                    self.store.put_product_spec(normalized).await
+                }
+                Err(error) => Err(error),
+            };
         }
         self.store.put_product_spec(normalized).await
     }

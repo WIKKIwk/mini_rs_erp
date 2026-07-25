@@ -119,6 +119,7 @@ pub(super) fn normalize_product_spec(
         item_group: input.item_group.trim().to_string(),
         qolip_code,
         size: input.size,
+        color: input.color.trim().to_string(),
         created_by_role: role_code(&principal.role).to_string(),
         created_by_ref: principal.ref_.trim().to_string(),
         created_by_name: principal.display_name.trim().to_string(),

@@ -21,6 +21,7 @@ async fn order_start_rejects_matching_qolip_without_location_or_checkout() {
             customer_names: Vec::new(),
             qolip_code: String::new(),
             size: 0,
+            color: String::new(),
             has_qolip_spec: false,
             is_in_use: false,
         }])
@@ -35,6 +36,7 @@ async fn order_start_rejects_matching_qolip_without_location_or_checkout() {
                 qolip_code: "QOLIP-NO-LOCATION".to_string(),
                 previous_qolip_code: String::new(),
                 size: 42,
+                color: String::new(),
             },
             &principal(),
         )
@@ -57,6 +59,66 @@ async fn order_start_rejects_matching_qolip_without_location_or_checkout() {
 }
 
 #[tokio::test]
+async fn legacy_stocked_qolip_can_be_promoted_to_colored_spec() {
+    let store = std::sync::Arc::new(MemoryQolipStore::new());
+    store
+        .seed_products(vec![QolipProduct {
+            code: "ITEM-LEGACY".to_string(),
+            name: "Legacy product".to_string(),
+            item_group: "Tayyor mahsulot".to_string(),
+            customer_names: Vec::new(),
+            qolip_code: String::new(),
+            size: 0,
+            color: String::new(),
+            has_qolip_spec: false,
+            is_in_use: false,
+        }])
+        .await;
+    let service = QolipService::new(store.clone());
+    service
+        .upsert_location(
+            QolipLocationUpsert {
+                block: "A".to_string(),
+                warehouse: "Qolip ombor".to_string(),
+                item_code: "ITEM-LEGACY".to_string(),
+                item_name: "Legacy product".to_string(),
+                item_group: "Tayyor mahsulot".to_string(),
+                qolip_code: "Q-LEGACY".to_string(),
+                size: 42,
+                quantity: 1,
+                row_letter: "A".to_string(),
+                column_number: Some(1),
+            },
+            &principal(),
+        )
+        .await
+        .expect("save legacy location");
+
+    let saved = service
+        .upsert_product_spec(
+            QolipProductSpecUpsert {
+                item_code: "ITEM-LEGACY".to_string(),
+                item_name: "Legacy product".to_string(),
+                item_group: "Tayyor mahsulot".to_string(),
+                qolip_code: "Q-LEGACY".to_string(),
+                previous_qolip_code: "Q-LEGACY".to_string(),
+                size: 42,
+                color: "#E53935".to_string(),
+            },
+            &principal(),
+        )
+        .await
+        .expect("promote legacy location to product spec");
+
+    assert_eq!(saved.color, "#E53935");
+    let products = service
+        .products("Q-LEGACY", 20, true)
+        .await
+        .expect("colored legacy product");
+    assert_eq!(products.first().expect("legacy product").color, "#E53935");
+}
+
+#[tokio::test]
 async fn order_start_accepts_existing_checkout_for_same_worker() {
     let store = std::sync::Arc::new(MemoryQolipStore::new());
     store
@@ -67,6 +129,7 @@ async fn order_start_accepts_existing_checkout_for_same_worker() {
             customer_names: Vec::new(),
             qolip_code: String::new(),
             size: 0,
+            color: String::new(),
             has_qolip_spec: false,
             is_in_use: false,
         }])
@@ -81,6 +144,7 @@ async fn order_start_accepts_existing_checkout_for_same_worker() {
                 qolip_code: "QOLIP-CHECKED-OUT".to_string(),
                 previous_qolip_code: String::new(),
                 size: 42,
+                color: String::new(),
             },
             &principal(),
         )
@@ -176,6 +240,7 @@ async fn order_start_rejects_qolip_from_another_finished_product_group() {
             customer_names: Vec::new(),
             qolip_code: String::new(),
             size: 0,
+            color: String::new(),
             has_qolip_spec: false,
             is_in_use: false,
         }])
@@ -190,6 +255,7 @@ async fn order_start_rejects_qolip_from_another_finished_product_group() {
                 qolip_code: "QOLIP-WRONG-GROUP".to_string(),
                 previous_qolip_code: String::new(),
                 size: 42,
+                color: String::new(),
             },
             &principal(),
         )
@@ -241,6 +307,7 @@ async fn order_start_rejects_another_products_qolip_from_same_group() {
                 customer_names: Vec::new(),
                 qolip_code: String::new(),
                 size: 0,
+                color: String::new(),
                 has_qolip_spec: false,
                 is_in_use: false,
             },
@@ -251,6 +318,7 @@ async fn order_start_rejects_another_products_qolip_from_same_group() {
                 customer_names: Vec::new(),
                 qolip_code: String::new(),
                 size: 0,
+                color: String::new(),
                 has_qolip_spec: false,
                 is_in_use: false,
             },
@@ -266,6 +334,7 @@ async fn order_start_rejects_another_products_qolip_from_same_group() {
                 qolip_code: "QOLIP-OTHER".to_string(),
                 previous_qolip_code: String::new(),
                 size: 42,
+                color: String::new(),
             },
             &principal(),
         )

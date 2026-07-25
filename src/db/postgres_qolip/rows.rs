@@ -14,6 +14,7 @@ pub(super) struct QolipProductRow {
     pub(super) customer_names: Vec<String>,
     pub(super) qolip_code: String,
     pub(super) size: i32,
+    pub(super) color: String,
     pub(super) has_qolip_spec: bool,
     pub(super) is_in_use: bool,
 }
@@ -25,6 +26,7 @@ pub(super) struct QolipProductSpecRow {
     item_group: String,
     qolip_code: String,
     size: i32,
+    color: String,
     created_by_role: String,
     created_by_ref: String,
     created_by_name: String,
@@ -111,6 +113,7 @@ pub(super) fn row_to_product_spec(row: QolipProductSpecRow) -> QolipProductSpec 
         item_group: row.item_group,
         qolip_code: row.qolip_code,
         size: row.size,
+        color: row.color,
         created_by_role: row.created_by_role,
         created_by_ref: row.created_by_ref,
         created_by_name: row.created_by_name,

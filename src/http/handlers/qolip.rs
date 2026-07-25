@@ -253,6 +253,7 @@ pub async fn product_specs(
                     "item_group": spec.item_group,
                     "qolip_code": spec.qolip_code,
                     "size": spec.size,
+                    "color": spec.color,
                     "has_qolip_spec": true,
                     "is_in_use": false,
                 },

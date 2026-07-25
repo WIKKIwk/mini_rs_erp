@@ -59,6 +59,7 @@ impl MemoryQolipStore {
             item_group,
             qolip_code: location.qolip_code.clone(),
             size: location.size,
+            color: String::new(),
             created_by_role: location.created_by_role.clone(),
             created_by_ref: location.created_by_ref.clone(),
             created_by_name: location.created_by_name.clone(),
@@ -86,6 +87,7 @@ impl MemoryQolipStore {
             item_group,
             qolip_code: checkout.qolip_code.clone(),
             size: checkout.size,
+            color: String::new(),
             created_by_role: checkout.issued_by_role.clone(),
             created_by_ref: checkout.issued_by_ref.clone(),
             created_by_name: checkout.issued_by_name.clone(),
@@ -226,6 +228,7 @@ impl QolipStorePort for MemoryQolipStore {
                     .unwrap_or_default(),
                 qolip_code: spec.qolip_code.clone(),
                 size: spec.size,
+                color: spec.color.clone(),
                 has_qolip_spec: true,
                 is_in_use: in_use_codes.contains(&qolip_key),
             };
@@ -256,6 +259,7 @@ impl QolipStorePort for MemoryQolipStore {
                     .unwrap_or_default(),
                 qolip_code: location.qolip_code.clone(),
                 size: location.size,
+                color: String::new(),
                 has_qolip_spec: true,
                 is_in_use: in_use_codes.contains(&qolip_key),
             };
@@ -290,6 +294,7 @@ impl QolipStorePort for MemoryQolipStore {
                     .unwrap_or_default(),
                 qolip_code: checkout.qolip_code.clone(),
                 size: checkout.size,
+                color: String::new(),
                 has_qolip_spec: true,
                 is_in_use: true,
             };
@@ -422,6 +427,7 @@ impl QolipStorePort for MemoryQolipStore {
         }) {
             product.qolip_code = spec.qolip_code.clone();
             product.size = spec.size;
+            product.color = spec.color.clone();
             product.has_qolip_spec = true;
         } else {
             products.push(QolipProduct {
@@ -431,6 +437,7 @@ impl QolipStorePort for MemoryQolipStore {
                 customer_names: Vec::new(),
                 qolip_code: spec.qolip_code.clone(),
                 size: spec.size,
+                color: spec.color.clone(),
                 has_qolip_spec: true,
                 is_in_use: false,
             });
@@ -481,6 +488,7 @@ impl QolipStorePort for MemoryQolipStore {
         }) {
             product.qolip_code = spec.qolip_code.clone();
             product.size = spec.size;
+            product.color = spec.color.clone();
         }
         drop(products);
         let mut locations = self.locations.write().await;

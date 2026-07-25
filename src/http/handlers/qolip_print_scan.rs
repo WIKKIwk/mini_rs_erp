@@ -52,6 +52,7 @@ pub async fn scan(
             "item_group": spec.item_group,
             "qolip_code": spec.qolip_code,
             "size": spec.size,
+            "color": spec.color,
             "has_qolip_spec": true,
         },
         "location": location,

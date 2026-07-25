@@ -266,6 +266,7 @@ pub(super) async fn load_products(
                 COALESCE(NULLIF(btrim(items.item_group), ''), '') AS item_group,
                 location.qolip_code,
                 location.size,
+                COALESCE(location.payload_json->>'color', '') AS color,
                 location.updated_at
             FROM mini_qolip_locations location
             LEFT JOIN mini_items items
@@ -283,7 +284,8 @@ pub(super) async fn load_products(
                 checkout.item_name,
                 COALESCE(NULLIF(btrim(items.item_group), ''), '') AS item_group,
                 checkout.qolip_code,
-                checkout.size
+                checkout.size,
+                COALESCE(checkout.payload_json->>'color', '') AS color
             FROM mini_qolip_checkouts checkout
             LEFT JOIN mini_items items
               ON lower(items.code) = lower(checkout.item_code)
@@ -306,7 +308,8 @@ pub(super) async fn load_products(
                 spec.item_name,
                 spec.item_group,
                 spec.qolip_code,
-                spec.size
+                spec.size,
+                COALESCE(spec.payload_json->>'color', '') AS color
             FROM mini_qolip_product_specs spec
             UNION ALL
             SELECT
@@ -314,7 +317,8 @@ pub(super) async fn load_products(
                 location.item_name,
                 location.item_group,
                 location.qolip_code,
-                location.size
+                location.size,
+                location.color
             FROM legacy_locations location
             UNION ALL
             SELECT
@@ -322,7 +326,8 @@ pub(super) async fn load_products(
                 checkout.item_name,
                 checkout.item_group,
                 checkout.qolip_code,
-                checkout.size
+                checkout.size,
+                checkout.color
             FROM legacy_checkouts checkout
         ),
         product_rows AS (
@@ -340,6 +345,7 @@ pub(super) async fn load_products(
                 ) AS item_group,
                 source.qolip_code,
                 source.size,
+                source.color,
                 source.qolip_code IS NOT NULL AS has_qolip_spec
             FROM eligible_items items
             FULL OUTER JOIN qolip_sources source
@@ -362,6 +368,7 @@ pub(super) async fn load_products(
             ), ARRAY[]::text[]) AS customer_names,
             COALESCE(product.qolip_code, '') AS qolip_code,
             COALESCE(product.size, 0) AS size,
+            COALESCE(product.color, '') AS color,
             product.has_qolip_spec,
             EXISTS (
                 SELECT 1
@@ -427,6 +434,7 @@ pub(super) async fn load_products(
             customer_names: row.customer_names,
             qolip_code: row.qolip_code,
             size: row.size,
+            color: row.color,
             has_qolip_spec: row.has_qolip_spec,
             is_in_use: row.is_in_use,
         })
@@ -439,7 +447,7 @@ pub(super) async fn load_product_spec(
 ) -> Result<Option<QolipProductSpec>, QolipError> {
     let row = sqlx::query_as::<_, QolipProductSpecRow>(
         r#"
-        SELECT item_code, item_name, item_group, qolip_code, size,
+        SELECT item_code, item_name, item_group, qolip_code, size, color,
                created_by_role, created_by_ref, created_by_name
         FROM (
             SELECT
@@ -448,6 +456,7 @@ pub(super) async fn load_product_spec(
                 spec.item_group,
                 spec.qolip_code,
                 spec.size,
+                COALESCE(spec.payload_json->>'color', '') AS color,
                 spec.created_by_role,
                 spec.created_by_ref,
                 spec.created_by_name,
@@ -462,6 +471,7 @@ pub(super) async fn load_product_spec(
                 COALESCE(NULLIF(btrim(items.item_group), ''), '') AS item_group,
                 location.qolip_code,
                 location.size,
+                COALESCE(location.payload_json->>'color', '') AS color,
                 location.created_by_role,
                 location.created_by_ref,
                 location.created_by_name,
@@ -483,6 +493,7 @@ pub(super) async fn load_product_spec(
                 COALESCE(NULLIF(btrim(items.item_group), ''), '') AS item_group,
                 checkout.qolip_code,
                 checkout.size,
+                COALESCE(checkout.payload_json->>'color', '') AS color,
                 checkout.issued_by_role AS created_by_role,
                 checkout.issued_by_ref AS created_by_ref,
                 checkout.issued_by_name AS created_by_name,
@@ -522,7 +533,7 @@ pub(super) async fn load_product_spec_by_qolip_code(
 ) -> Result<Option<QolipProductSpec>, QolipError> {
     let row = sqlx::query_as::<_, QolipProductSpecRow>(
         r#"
-        SELECT item_code, item_name, item_group, qolip_code, size,
+        SELECT item_code, item_name, item_group, qolip_code, size, color,
                created_by_role, created_by_ref, created_by_name
         FROM (
             SELECT
@@ -531,6 +542,7 @@ pub(super) async fn load_product_spec_by_qolip_code(
                 spec.item_group,
                 spec.qolip_code,
                 spec.size,
+                COALESCE(spec.payload_json->>'color', '') AS color,
                 spec.created_by_role,
                 spec.created_by_ref,
                 spec.created_by_name,
@@ -545,6 +557,7 @@ pub(super) async fn load_product_spec_by_qolip_code(
                 COALESCE(NULLIF(btrim(items.item_group), ''), '') AS item_group,
                 location.qolip_code,
                 location.size,
+                COALESCE(location.payload_json->>'color', '') AS color,
                 location.created_by_role,
                 location.created_by_ref,
                 location.created_by_name,
@@ -566,6 +579,7 @@ pub(super) async fn load_product_spec_by_qolip_code(
                 COALESCE(NULLIF(btrim(items.item_group), ''), '') AS item_group,
                 checkout.qolip_code,
                 checkout.size,
+                COALESCE(checkout.payload_json->>'color', '') AS color,
                 checkout.issued_by_role AS created_by_role,
                 checkout.issued_by_ref AS created_by_ref,
                 checkout.issued_by_name AS created_by_name,
@@ -620,6 +634,7 @@ pub(super) async fn save_product_spec(
              payload_json = excluded.payload_json,
              updated_at = now()
          RETURNING item_code, item_name, item_group, qolip_code, size,
+             COALESCE(payload_json->>'color', '') AS color,
              created_by_role, created_by_ref, created_by_name",
     )
     .bind(spec.item_code.trim())
@@ -800,6 +815,7 @@ pub(super) async fn rename_product_spec(
              created_by_name = $9, payload_json = $10, updated_at = now()
          WHERE lower(qolip_code) = $1
          RETURNING item_code, item_name, item_group, qolip_code, size,
+             COALESCE(payload_json->>'color', '') AS color,
              created_by_role, created_by_ref, created_by_name",
     )
     .bind(&previous)

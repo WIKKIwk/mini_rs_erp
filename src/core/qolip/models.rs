@@ -15,6 +15,8 @@ pub struct QolipProduct {
     pub customer_names: Vec<String>,
     pub qolip_code: String,
     pub size: i32,
+    #[serde(default)]
+    pub color: String,
     pub has_qolip_spec: bool,
     #[serde(default)]
     pub is_in_use: bool,
@@ -27,6 +29,8 @@ pub struct QolipProductSpec {
     pub item_group: String,
     pub qolip_code: String,
     pub size: i32,
+    #[serde(default)]
+    pub color: String,
     pub created_by_role: String,
     pub created_by_ref: String,
     pub created_by_name: String,
@@ -46,6 +50,8 @@ pub struct QolipProductSpecUpsert {
     pub previous_qolip_code: String,
     #[serde(default)]
     pub size: i32,
+    #[serde(default)]
+    pub color: String,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize)]

@@ -10,6 +10,7 @@ mod tests {
             customer_names: Vec::new(),
             qolip_code: String::new(),
             size: 0,
+            color: String::new(),
             has_qolip_spec: false,
             is_in_use: false,
         }
@@ -22,6 +23,7 @@ mod tests {
             item_group: "Tayyor mahsulot".to_string(),
             qolip_code: qolip_code.to_string(),
             size: 42,
+            color: String::new(),
             created_by_role: "qolipchi".to_string(),
             created_by_ref: "qolipchi-1".to_string(),
             created_by_name: "Qolipchi".to_string(),
