@@ -100,8 +100,6 @@ pub enum ProductionMapError {
     QolipCodeMismatch,
     #[error("qolip is already in use by another apparatus")]
     QolipAlreadyInUse,
-    #[error("an order can use at most seven Panton colors")]
-    QolipPantonLimitExceeded,
     #[error("qolip stock is insufficient")]
     QolipInsufficientStock,
     #[error("qolip location identity does not match")]

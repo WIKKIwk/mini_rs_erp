@@ -23,7 +23,6 @@ mod order_control_helpers;
 mod order_query_helpers;
 mod progress_helpers;
 mod qolip_session_helpers;
-mod qolip_panton_helpers;
 mod queue_helpers;
 mod raw_material_stock_helpers;
 mod wip_query_helpers;
@@ -62,7 +61,6 @@ use self::progress_helpers::{
     receive_finished_goods_batch_tx,
 };
 use self::qolip_session_helpers::reject_qolip_in_use_tx;
-use self::qolip_panton_helpers::assign_order_qolip_pantons_tx;
 use self::queue_helpers::{insert_queue_action_event_tx, put_queue_states_tx};
 use self::raw_material_stock_helpers::apply_raw_material_stock_transitions_tx;
 use self::wip_query_helpers::load_wip_progress_batches;
@@ -423,7 +421,6 @@ impl ProductionMapStorePort for PostgresProductionMapStore {
         put_queue_states_tx(&mut tx, apparatus, write.states).await?;
         insert_queue_action_event_tx(&mut tx, &write.event).await?;
         if let Some(mut session) = write.session {
-            assign_order_qolip_pantons_tx(&mut tx, &mut session).await?;
             put_order_run_session_tx(&mut tx, &session).await?;
         }
         if let Some(event) = write.progress_event {
