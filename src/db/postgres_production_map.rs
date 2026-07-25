@@ -10,7 +10,8 @@ use crate::core::production_map::{
     OrderControlRecord, OrderProgressBatch, OrderProgressEvent, OrderRunSession,
     ProductionMapDefinition, ProductionMapError, ProductionMapStorePort, ProductionOrderLogEntry,
     QueueActionActor, QueueActionProgressWrite, QueueActionProgressWriteResult,
-    RawMaterialAssignment, WipProgressBatchQuery,
+    RawMaterialAssignment, RawMaterialStockTransition, RawMaterialStockTransitionKind,
+    WipProgressBatchQuery,
 };
 use crate::core::qolip::QolipError;
 
@@ -22,6 +23,7 @@ mod order_control_helpers;
 mod order_query_helpers;
 mod progress_helpers;
 mod qolip_session_helpers;
+mod qolip_panton_helpers;
 mod queue_helpers;
 mod raw_material_stock_helpers;
 mod wip_query_helpers;
@@ -41,7 +43,7 @@ use self::map_helpers::{
 };
 use self::material_helpers::{
     delete_raw_material_assignment, load_apparatus_material_rules, load_raw_material_assignments,
-    save_apparatus_material_rule, save_raw_material_assignment,
+    save_apparatus_material_rule, save_raw_material_assignment, save_raw_material_assignment_tx,
 };
 use self::order_control_helpers::{
     load_order_control_states, save_order_control_state, save_order_control_state_tx,
@@ -60,6 +62,7 @@ use self::progress_helpers::{
     receive_finished_goods_batch_tx,
 };
 use self::qolip_session_helpers::reject_qolip_in_use_tx;
+use self::qolip_panton_helpers::assign_order_qolip_pantons_tx;
 use self::queue_helpers::{insert_queue_action_event_tx, put_queue_states_tx};
 use self::raw_material_stock_helpers::apply_raw_material_stock_transitions_tx;
 use self::wip_query_helpers::load_wip_progress_batches;
@@ -419,7 +422,8 @@ impl ProductionMapStorePort for PostgresProductionMapStore {
         }
         put_queue_states_tx(&mut tx, apparatus, write.states).await?;
         insert_queue_action_event_tx(&mut tx, &write.event).await?;
-        if let Some(session) = write.session {
+        if let Some(mut session) = write.session {
+            assign_order_qolip_pantons_tx(&mut tx, &mut session).await?;
             put_order_run_session_tx(&mut tx, &session).await?;
         }
         if let Some(event) = write.progress_event {
@@ -485,6 +489,74 @@ impl ProductionMapStorePort for PostgresProductionMapStore {
         assignment: RawMaterialAssignment,
     ) -> Result<(), ProductionMapError> {
         save_raw_material_assignment(&self.pool, assignment).await
+    }
+
+    async fn receive_raw_material_assignment(
+        &self,
+        assignment: RawMaterialAssignment,
+        actor: &QueueActionActor,
+    ) -> Result<Vec<String>, ProductionMapError> {
+        let mut tx = self
+            .pool
+            .begin()
+            .await
+            .map_err(|_| ProductionMapError::StoreFailed)?;
+        let active_state = sqlx::query_scalar::<_, String>(
+            "SELECT state
+             FROM mini_queue_states
+             WHERE lower(apparatus) = lower($1)
+               AND order_id = $2
+             FOR UPDATE",
+        )
+        .bind(assignment.apparatus.trim())
+        .bind(assignment.order_id.trim())
+        .fetch_optional(&mut *tx)
+        .await
+        .map_err(|_| ProductionMapError::StoreFailed)?
+        .and_then(|state| crate::core::production_map::queue_state::ApparatusQueueOrderState::parse(&state))
+        .is_some_and(crate::core::production_map::queue_state::ApparatusQueueOrderState::is_active);
+        if !active_state {
+            return Err(ProductionMapError::RawMaterialOrderNotActive);
+        }
+        let control_state = sqlx::query_scalar::<_, String>(
+            "SELECT state
+             FROM mini_order_control_states
+             WHERE order_id = $1
+             FOR UPDATE",
+        )
+        .bind(assignment.order_id.trim())
+        .fetch_optional(&mut *tx)
+        .await
+        .map_err(|_| ProductionMapError::StoreFailed)?;
+        if let Some(control_state) = control_state {
+            match crate::core::production_map::OrderControlState::parse(&control_state)
+                .ok_or(ProductionMapError::StoreFailed)?
+            {
+                crate::core::production_map::OrderControlState::Active => {}
+                crate::core::production_map::OrderControlState::FreezeRequested => {
+                    return Err(ProductionMapError::OrderFreezeRequested);
+                }
+                crate::core::production_map::OrderControlState::Frozen => {
+                    return Err(ProductionMapError::OrderFrozen);
+                }
+            }
+        }
+        save_raw_material_assignment_tx(&mut tx, &assignment).await?;
+        let warehouses = apply_raw_material_stock_transitions_tx(
+            &mut tx,
+            &[RawMaterialStockTransition::new(
+                RawMaterialStockTransitionKind::InUse,
+                vec![assignment.barcode.clone()],
+                &assignment.order_id,
+            )],
+            actor,
+            &assignment.apparatus,
+        )
+        .await?;
+        tx.commit()
+            .await
+            .map_err(|_| ProductionMapError::StoreFailed)?;
+        Ok(warehouses)
     }
 
     async fn delete_raw_material_assignment(

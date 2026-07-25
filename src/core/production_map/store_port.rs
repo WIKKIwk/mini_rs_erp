@@ -289,6 +289,14 @@ pub trait ProductionMapStorePort: Send + Sync {
         &self,
         assignment: RawMaterialAssignment,
     ) -> StoreResult<()>;
+    async fn receive_raw_material_assignment(
+        &self,
+        assignment: RawMaterialAssignment,
+        _actor: &QueueActionActor,
+    ) -> StoreResult<Vec<String>> {
+        self.put_raw_material_assignment(assignment).await?;
+        Ok(Vec::new())
+    }
     async fn delete_raw_material_assignment(
         &self,
         order_id: &str,

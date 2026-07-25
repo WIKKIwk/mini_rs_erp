@@ -3,6 +3,9 @@ use super::*;
 #[tokio::test]
 async fn raw_material_routes_assign_and_require_scan_for_queue_start() {
     let material_store = Arc::new(RawMaterialStockLookup::default());
+    material_store
+        .insert_stock("30DD", "INK-BLACK", "Black ink", 5.0)
+        .await;
     let print_requests = Arc::new(Mutex::new(Vec::<ScaleDriverPrintRequest>::new()));
     let mut state = test_state();
     state.gscale = GscaleService::new()
@@ -236,6 +239,26 @@ async fn raw_material_routes_assign_and_require_scan_for_queue_start() {
     assert!(lookup_body["queue_states"].is_object());
     assert!(lookup_body["logs"].is_array());
 
+    let intake_before_start = router
+        .clone()
+        .oneshot(request_with_body(
+            "POST",
+            "/v1/mobile/admin/raw-material-intake",
+            &worker_token,
+            r#"{
+                "order_id":"zakaz-raw-route",
+                "apparatus":"7 ta rangli pechat - A",
+                "barcode":"30DD"
+            }"#,
+        ))
+        .await
+        .expect("intake before start");
+    assert_eq!(intake_before_start.status(), StatusCode::CONFLICT);
+    assert_eq!(
+        json_body(intake_before_start).await["error"],
+        "raw_material_order_not_active"
+    );
+
     let missing_scan = router
         .clone()
         .oneshot(request_with_body(
@@ -328,6 +351,38 @@ async fn raw_material_routes_assign_and_require_scan_for_queue_start() {
     assert!(started_materials.iter().all(|item| {
         item["stock_status"] == "in_use" && item["reserved_order_id"] == "zakaz-raw-route"
     }));
+    assert_eq!(
+        started_materials
+            .iter()
+            .filter_map(|item| item["received_qty"].as_f64())
+            .sum::<f64>(),
+        20.0
+    );
+
+    let intake = router
+        .clone()
+        .oneshot(request_with_body(
+            "POST",
+            "/v1/mobile/admin/raw-material-intake",
+            &worker_token,
+            r#"{
+                "order_id":"zakaz-raw-route",
+                "apparatus":"7 ta rangli pechat - A",
+                "barcode":"30DD"
+            }"#,
+        ))
+        .await
+        .expect("additional material intake");
+    let intake_status = intake.status();
+    let intake_body = json_body(intake).await;
+    assert_eq!(intake_status, StatusCode::OK, "{intake_body:?}");
+    assert_eq!(intake_body["stock_status"], "in_use");
+    assert_eq!(intake_body["reserved_order_id"], "zakaz-raw-route");
+    assert_eq!(intake_body["stock_qty"], 5.0);
+    assert_eq!(intake_body["stock_uom"], "Kg");
+    assert_eq!(intake_body["received_qty"], 5.0);
+    assert_eq!(intake_body["consumed_qty"], 0.0);
+    assert_eq!(intake_body["remaining_qty"], 5.0);
 
     let completed = router
         .clone()
@@ -375,10 +430,27 @@ async fn raw_material_routes_assign_and_require_scan_for_queue_start() {
         .iter()
         .filter(|item| item["order_id"] == "zakaz-raw-route")
         .collect::<Vec<_>>();
-    assert_eq!(completed_materials.len(), 2);
+    assert_eq!(completed_materials.len(), 3);
     assert!(completed_materials.iter().all(|item| {
         item["stock_status"] == "consumed" && item["reserved_order_id"] == "zakaz-raw-route"
     }));
+    assert_eq!(
+        completed_materials
+            .iter()
+            .filter_map(|item| item["received_qty"].as_f64())
+            .sum::<f64>(),
+        25.0
+    );
+    assert_eq!(
+        completed_materials
+            .iter()
+            .filter_map(|item| item["consumed_qty"].as_f64())
+            .sum::<f64>(),
+        25.0
+    );
+    assert!(completed_materials
+        .iter()
+        .all(|item| item["remaining_qty"] == 0.0));
 }
 
 #[tokio::test]

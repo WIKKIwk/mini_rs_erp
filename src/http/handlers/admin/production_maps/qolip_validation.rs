@@ -73,6 +73,21 @@ pub async fn production_map_qolip_validate(
         .as_ref()
         .map(|checkout| checkout.block.as_str())
         .unwrap_or_default();
+    let mut order_pantons = serde_json::Map::new();
+    for session in state
+        .production_maps
+        .order_run_sessions_for_order(order_id)
+        .await
+        .map_err(production_map_error)?
+    {
+        if let Some(pantons) = session
+            .payload_json
+            .get("qolip_pantons")
+            .and_then(serde_json::Value::as_object)
+        {
+            order_pantons.extend(pantons.clone());
+        }
+    }
     Ok(json_response(serde_json::json!({
         "ok": true,
         "qolip": {
@@ -82,6 +97,7 @@ pub async fn production_map_qolip_validate(
             "item_group": preparation.spec.item_group,
             "size": preparation.spec.size,
             "block": block,
+            "qolip_pantons": order_pantons,
         }
     })))
 }

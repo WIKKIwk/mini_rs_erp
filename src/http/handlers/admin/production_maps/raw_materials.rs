@@ -127,6 +127,68 @@ pub async fn raw_material_assignments(
     }
 }
 
+/// Receives one additional physical raw-material roll while the order is running.
+pub async fn raw_material_intake(
+    State(state): State<AppState>,
+    method: Method,
+    headers: HeaderMap,
+    body: Bytes,
+) -> Result<Response, AdminError> {
+    let principal = authorize_any_capability(
+        &state,
+        &headers,
+        &[
+            Capability::AdminAccess,
+            Capability::ProductionMapManage,
+            Capability::ApparatusQueueManage,
+        ],
+    )
+    .await?;
+    if method != Method::POST {
+        return Err(method_not_allowed());
+    }
+    require_capability(&state, &principal, Capability::ApparatusQueueManage).await?;
+    let input: RawMaterialAssignmentInput = parse_json(&body)?;
+    let (input, warehouse) = fill_raw_material_assignment_input(&state, &principal, input).await?;
+    let assigned_apparatus = state.admin.principal_assigned_apparatus(&principal).await;
+    let actor = queue_action_actor(&principal);
+    let (assignment, mut warehouses) = state
+        .production_maps
+        .receive_raw_material_for_active_order(input, &assigned_apparatus, &actor)
+        .await
+        .map_err(production_map_error)?;
+
+    // Non-Postgres stores do not own the stock ledger transaction. Production's
+    // Postgres store returns the touched warehouse from the atomic transaction.
+    if warehouses.is_empty() {
+        warehouses = state
+            .gscale
+            .mark_raw_material_stock_in_use(
+                std::slice::from_ref(&assignment.barcode),
+                &assignment.order_id,
+            )
+            .await
+            .map_err(raw_material_stock_status_error)?
+            .into_iter()
+            .map(|stock| stock.warehouse)
+            .filter(|warehouse| !warehouse.trim().is_empty())
+            .collect();
+    }
+    if warehouses.is_empty() && !warehouse.trim().is_empty() {
+        warehouses.push(warehouse);
+    }
+    warehouses.sort();
+    warehouses.dedup();
+    for warehouse in warehouses {
+        state
+            .warehouse_events
+            .notify_updated(&warehouse, "raw_material_intake");
+    }
+    Ok(json_response(
+        raw_material_assignment_response(&state, assignment).await,
+    ))
+}
+
 async fn record_raw_material_unassignment_event(
     state: &AppState,
     principal: &Principal,
@@ -294,14 +356,20 @@ async fn raw_material_assignment_response(
         .flatten();
     let mut value = serde_json::to_value(&assignment).unwrap_or_else(|_| serde_json::json!({}));
     if let Some(object) = value.as_object_mut() {
+        let stock_status = stock
+            .as_ref()
+            .map(|entry| entry.status.trim())
+            .unwrap_or_default();
+        let stock_qty = stock
+            .as_ref()
+            .map(|entry| entry.qty)
+            .filter(|qty| qty.is_finite() && *qty > 0.0)
+            .unwrap_or(0.0);
+        let (received_qty, consumed_qty, remaining_qty) =
+            raw_material_assignment_quantities(&assignment, stock.as_ref());
         object.insert(
             "stock_status".to_string(),
-            serde_json::Value::String(
-                stock
-                    .as_ref()
-                    .map(|entry| entry.status.clone())
-                    .unwrap_or_default(),
-            ),
+            serde_json::Value::String(stock_status.to_string()),
         );
         object.insert(
             "reserved_order_id".to_string(),
@@ -314,10 +382,127 @@ async fn raw_material_assignment_response(
         );
         object.insert(
             "stock_warehouse".to_string(),
-            serde_json::Value::String(stock.map(|entry| entry.warehouse).unwrap_or_default()),
+            serde_json::Value::String(
+                stock
+                    .as_ref()
+                    .map(|entry| entry.warehouse.clone())
+                    .unwrap_or_default(),
+            ),
+        );
+        object.insert(
+            "stock_qty".to_string(),
+            serde_json::json!(stock_qty),
+        );
+        object.insert(
+            "stock_uom".to_string(),
+            serde_json::Value::String(
+                stock
+                    .as_ref()
+                    .map(|entry| entry.uom.clone())
+                    .unwrap_or_default(),
+            ),
+        );
+        object.insert("received_qty".to_string(), serde_json::json!(received_qty));
+        object.insert("consumed_qty".to_string(), serde_json::json!(consumed_qty));
+        object.insert(
+            "remaining_qty".to_string(),
+            serde_json::json!(remaining_qty),
         );
     }
     value
+}
+
+fn raw_material_assignment_quantities(
+    assignment: &RawMaterialAssignment,
+    stock: Option<&RawMaterialStockEntry>,
+) -> (f64, f64, f64) {
+    let Some(stock) = stock else {
+        return (0.0, 0.0, 0.0);
+    };
+    let qty = if stock.qty.is_finite() && stock.qty > 0.0 {
+        stock.qty
+    } else {
+        0.0
+    };
+    let belongs_to_order = stock
+        .reserved_order_id
+        .trim()
+        .eq_ignore_ascii_case(assignment.order_id.trim());
+    let received = belongs_to_order
+        && matches!(
+            stock.status.trim().to_ascii_lowercase().as_str(),
+            "in_use" | "consumed"
+        );
+    let consumed = belongs_to_order && stock.status.trim().eq_ignore_ascii_case("consumed");
+    let received_qty = if received { qty } else { 0.0 };
+    let consumed_qty = if consumed { qty } else { 0.0 };
+    (
+        received_qty,
+        consumed_qty,
+        (received_qty - consumed_qty).max(0.0),
+    )
+}
+
+#[cfg(test)]
+mod raw_material_assignment_quantity_tests {
+    use super::*;
+
+    fn assignment() -> RawMaterialAssignment {
+        RawMaterialAssignment {
+            order_id: "zakaz-1".to_string(),
+            apparatus: "Pechat".to_string(),
+            barcode: "ROLL-1000".to_string(),
+            item_code: "RULON".to_string(),
+            item_name: "Rulon".to_string(),
+            item_group: "Rulon".to_string(),
+            assigned_by_role: "aparatchi".to_string(),
+            assigned_by_ref: "worker-1".to_string(),
+            assigned_by_display_name: "Worker".to_string(),
+            assigned_at: String::new(),
+        }
+    }
+
+    fn stock(status: &str, order_id: &str) -> RawMaterialStockEntry {
+        RawMaterialStockEntry {
+            qty: 1_000.0,
+            status: status.to_string(),
+            reserved_order_id: order_id.to_string(),
+            ..RawMaterialStockEntry::default()
+        }
+    }
+
+    #[test]
+    fn quantity_ledger_preserves_received_consumed_remaining_invariant() {
+        let assignment = assignment();
+        assert_eq!(
+            raw_material_assignment_quantities(
+                &assignment,
+                Some(&stock("available", ""))
+            ),
+            (0.0, 0.0, 0.0)
+        );
+        assert_eq!(
+            raw_material_assignment_quantities(
+                &assignment,
+                Some(&stock("in_use", "zakaz-1"))
+            ),
+            (1_000.0, 0.0, 1_000.0)
+        );
+        assert_eq!(
+            raw_material_assignment_quantities(
+                &assignment,
+                Some(&stock("consumed", "zakaz-1"))
+            ),
+            (1_000.0, 1_000.0, 0.0)
+        );
+        assert_eq!(
+            raw_material_assignment_quantities(
+                &assignment,
+                Some(&stock("in_use", "zakaz-2"))
+            ),
+            (0.0, 0.0, 0.0)
+        );
+    }
 }
 
 pub async fn raw_material_stock(

@@ -92,12 +92,16 @@ pub enum ProductionMapError {
     RawMaterialAssignmentLocked,
     #[error("raw material stock is unavailable")]
     RawMaterialStockUnavailable,
+    #[error("raw material can only be received while the order is active")]
+    RawMaterialOrderNotActive,
     #[error("qolip location not found")]
     QolipLocationNotFound,
     #[error("qolip does not match order product")]
     QolipCodeMismatch,
     #[error("qolip is already in use by another apparatus")]
     QolipAlreadyInUse,
+    #[error("an order can use at most seven Panton colors")]
+    QolipPantonLimitExceeded,
     #[error("qolip stock is insufficient")]
     QolipInsufficientStock,
     #[error("qolip location identity does not match")]

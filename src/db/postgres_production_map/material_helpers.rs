@@ -86,7 +86,18 @@ pub(super) async fn save_raw_material_assignment(
         .begin()
         .await
         .map_err(|_| ProductionMapError::StoreFailed)?;
-    let stock = raw_material_stock_for_assignment_tx(&mut tx, &assignment.barcode).await?;
+    save_raw_material_assignment_tx(&mut tx, &assignment).await?;
+    tx.commit()
+        .await
+        .map_err(|_| ProductionMapError::StoreFailed)?;
+    Ok(())
+}
+
+pub(super) async fn save_raw_material_assignment_tx(
+    tx: &mut Transaction<'_, Postgres>,
+    assignment: &RawMaterialAssignment,
+) -> Result<(), ProductionMapError> {
+    let stock = raw_material_stock_for_assignment_tx(tx, &assignment.barcode).await?;
     let payload = serde_json::to_value(&assignment).map_err(|_| ProductionMapError::StoreFailed)?;
     let result = sqlx::query(
         "INSERT INTO mini_raw_material_assignments
@@ -100,16 +111,13 @@ pub(super) async fn save_raw_material_assignment(
     .bind(assignment.item_code.trim())
     .bind(assignment.item_group.trim())
     .bind(payload)
-    .execute(&mut *tx)
+    .execute(&mut **tx)
     .await
     .map_err(|_| ProductionMapError::StoreFailed)?;
     if result.rows_affected() == 0 {
         return Err(ProductionMapError::RawMaterialAlreadyAssigned);
     }
-    insert_raw_material_event_tx(&mut tx, assignment_event_draft(&assignment, &stock))
-        .await
-        .map_err(|_| ProductionMapError::StoreFailed)?;
-    tx.commit()
+    insert_raw_material_event_tx(tx, assignment_event_draft(assignment, &stock))
         .await
         .map_err(|_| ProductionMapError::StoreFailed)?;
     Ok(())

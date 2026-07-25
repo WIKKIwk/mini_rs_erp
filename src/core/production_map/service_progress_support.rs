@@ -346,7 +346,13 @@ pub(super) fn preserve_qolip_code(
         .and_then(serde_json::Value::as_array)
         .filter(|values| !values.is_empty())
         .cloned();
-    if qolip_code.is_none() && qolip_codes.is_none() {
+    let qolip_panton_codes = current.payload_json.get("qolip_panton_codes").cloned();
+    let qolip_pantons = current.payload_json.get("qolip_pantons").cloned();
+    if qolip_code.is_none()
+        && qolip_codes.is_none()
+        && qolip_panton_codes.is_none()
+        && qolip_pantons.is_none()
+    {
         return replacement;
     }
     if !replacement.is_object() {
@@ -357,6 +363,12 @@ pub(super) fn preserve_qolip_code(
     }
     if let Some(qolip_codes) = qolip_codes {
         replacement["qolip_codes"] = serde_json::Value::Array(qolip_codes);
+    }
+    if let Some(qolip_panton_codes) = qolip_panton_codes {
+        replacement["qolip_panton_codes"] = qolip_panton_codes;
+    }
+    if let Some(qolip_pantons) = qolip_pantons {
+        replacement["qolip_pantons"] = qolip_pantons;
     }
     replacement
 }

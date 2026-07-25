@@ -5,8 +5,8 @@ use serde::{Deserialize, Serialize};
 use super::materials_support::*;
 use super::queue_state;
 use super::{
-    ApparatusQueueActionResult, PreparedApparatusQueueAction, ProductionMapError,
-    ProductionMapService, QueueActionActor, QueueProgressInput, chain,
+    ApparatusQueueActionResult, OrderControlState, PreparedApparatusQueueAction,
+    ProductionMapError, ProductionMapService, QueueActionActor, QueueProgressInput, chain,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -134,6 +134,63 @@ impl ProductionMapService {
         actor: &QueueActionActor,
     ) -> Result<RawMaterialAssignment, ProductionMapError> {
         let _guard = self.queue_action_guard().await;
+        let assignment = self.prepare_raw_material_assignment(input, actor).await?;
+        self.store
+            .put_raw_material_assignment(assignment.clone())
+            .await?;
+        self.notify_live();
+        Ok(assignment)
+    }
+
+    pub async fn receive_raw_material_for_active_order(
+        &self,
+        input: RawMaterialAssignmentInput,
+        assigned_apparatus: &[String],
+        actor: &QueueActionActor,
+    ) -> Result<(RawMaterialAssignment, Vec<String>), ProductionMapError> {
+        let _guard = self.queue_action_guard().await;
+        let assignment = self.prepare_raw_material_assignment(input, actor).await?;
+        if !queue_state::apparatus_matches_assigned(&assignment.apparatus, assigned_apparatus) {
+            return Err(ProductionMapError::ApparatusNotAssigned);
+        }
+        let queue_states = self.store.apparatus_queue_states().await?;
+        let is_active = queue_states.iter().any(|(apparatus, states)| {
+            queue_state::apparatus_titles_match(apparatus, &assignment.apparatus)
+                && states
+                    .get(&assignment.order_id)
+                    .and_then(|state| queue_state::ApparatusQueueOrderState::parse(state))
+                    .is_some_and(queue_state::ApparatusQueueOrderState::is_active)
+        });
+        if !is_active {
+            return Err(ProductionMapError::RawMaterialOrderNotActive);
+        }
+        if let Some(control) = self
+            .store
+            .order_control_states()
+            .await?
+            .get(&assignment.order_id)
+        {
+            match control.state {
+                OrderControlState::Active => {}
+                OrderControlState::FreezeRequested => {
+                    return Err(ProductionMapError::OrderFreezeRequested);
+                }
+                OrderControlState::Frozen => return Err(ProductionMapError::OrderFrozen),
+            }
+        }
+        let warehouses = self
+            .store
+            .receive_raw_material_assignment(assignment.clone(), actor)
+            .await?;
+        self.notify_live();
+        Ok((assignment, warehouses))
+    }
+
+    async fn prepare_raw_material_assignment(
+        &self,
+        input: RawMaterialAssignmentInput,
+        actor: &QueueActionActor,
+    ) -> Result<RawMaterialAssignment, ProductionMapError> {
         let order_id = input.order_id.trim().to_string();
         let barcode = normalize_barcode(&input.barcode);
         let item_code = input.item_code.trim().to_string();
@@ -182,7 +239,7 @@ impl ProductionMapService {
                 return Err(ProductionMapError::RawMaterialAlreadyAssigned);
             }
         }
-        let assignment = RawMaterialAssignment {
+        Ok(RawMaterialAssignment {
             order_id,
             apparatus,
             barcode,
@@ -193,12 +250,7 @@ impl ProductionMapService {
             assigned_by_ref: actor.ref_.trim().to_string(),
             assigned_by_display_name: actor.display_name.trim().to_string(),
             assigned_at: now_rfc3339(),
-        };
-        self.store
-            .put_raw_material_assignment(assignment.clone())
-            .await?;
-        self.notify_live();
-        Ok(assignment)
+        })
     }
 
     pub async fn apply_apparatus_queue_action_with_material_scan(

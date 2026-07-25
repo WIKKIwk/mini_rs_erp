@@ -266,9 +266,15 @@ pub(super) fn production_map_error(error: ProductionMapError) -> AdminError {
         ProductionMapError::RawMaterialStockUnavailable => {
             bad_request("raw_material_stock_unavailable")
         }
+        ProductionMapError::RawMaterialOrderNotActive => {
+            conflict("raw_material_order_not_active")
+        }
         ProductionMapError::QolipLocationNotFound => bad_request("qolip_location_not_found"),
         ProductionMapError::QolipCodeMismatch => bad_request("qolip_code_mismatch"),
         ProductionMapError::QolipAlreadyInUse => bad_request("qolip_already_in_use"),
+        ProductionMapError::QolipPantonLimitExceeded => {
+            bad_request("qolip_panton_limit_exceeded")
+        }
         ProductionMapError::QolipInsufficientStock => bad_request("insufficient_stock"),
         ProductionMapError::QolipLocationIdentityMismatch => {
             bad_request("location_identity_mismatch")

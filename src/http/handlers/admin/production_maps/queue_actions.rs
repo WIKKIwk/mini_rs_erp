@@ -20,6 +20,8 @@ struct ApparatusQueueActionRequest {
     #[serde(default)]
     qolip_codes: Vec<String>,
     #[serde(default)]
+    qolip_panton_codes: Vec<String>,
+    #[serde(default)]
     produced_qty: Option<f64>,
     #[serde(default)]
     qty: Option<f64>,
@@ -283,6 +285,9 @@ pub async fn production_map_queue_action(
                 .map(|preparation| preparation.spec.qolip_code.clone())
                 .collect::<Vec<_>>(),
         );
+        prepared
+            .attach_qolip_panton_codes(&input.qolip_panton_codes)
+            .map_err(production_map_error)?;
     }
     let qolip_checkouts = qolip_preparations
         .into_iter()

@@ -250,6 +250,145 @@ async fn raw_material_assignment_requires_exact_scan_before_start() {
 }
 
 #[tokio::test]
+async fn additional_raw_material_is_only_received_by_assigned_worker_while_order_is_active() {
+    let store = std::sync::Arc::new(MemoryProductionMapStore::new());
+    let service = ProductionMapService::new(store.clone());
+    let apparatus = "7 ta rangli pechat - A";
+    let order_id = "zakaz-raw-intake";
+    let actor = QueueActionActor {
+        role: "aparatchi".to_string(),
+        ref_: "worker-1".to_string(),
+        display_name: "Worker 1".to_string(),
+    };
+    service
+        .upsert_map(apparatus_stage_map(order_id, apparatus))
+        .await
+        .expect("map");
+    service
+        .set_apparatus_material_rule(ApparatusMaterialRuleUpsert {
+            apparatus: apparatus.to_string(),
+            requires_material: true,
+            item_groups: vec!["Kraska".to_string()],
+            requirement_groups: Vec::new(),
+        })
+        .await
+        .expect("material rule");
+
+    let input = |barcode: &str| RawMaterialAssignmentInput {
+        order_id: order_id.to_string(),
+        barcode: barcode.to_string(),
+        item_code: "INK-BLACK".to_string(),
+        item_name: "Black ink".to_string(),
+        item_group: "Kraska".to_string(),
+        item_group_path: Vec::new(),
+        apparatus: apparatus.to_string(),
+    };
+    store
+        .put_apparatus_queue_states(
+            apparatus,
+            BTreeMap::from([(order_id.to_string(), "pending".to_string())]),
+        )
+        .await
+        .expect("pending state");
+    let before_start = service
+        .receive_raw_material_for_active_order(
+            input("ROLL-1000-A"),
+            &[apparatus.to_string()],
+            &actor,
+        )
+        .await;
+    assert_eq!(
+        before_start,
+        Err(ProductionMapError::RawMaterialOrderNotActive)
+    );
+
+    store
+        .put_apparatus_queue_states(
+            apparatus,
+            BTreeMap::from([(order_id.to_string(), "in_progress".to_string())]),
+        )
+        .await
+        .expect("active state");
+    let wrong_worker = service
+        .receive_raw_material_for_active_order(
+            input("ROLL-1000-A"),
+            &["Rezka apparat".to_string()],
+            &actor,
+        )
+        .await;
+    assert_eq!(wrong_worker, Err(ProductionMapError::ApparatusNotAssigned));
+
+    let (first, warehouses) = service
+        .receive_raw_material_for_active_order(
+            input("ROLL-1000-A"),
+            &[apparatus.to_string()],
+            &actor,
+        )
+        .await
+        .expect("receive while running");
+    assert_eq!(first.barcode, "ROLL-1000-A");
+    assert!(warehouses.is_empty());
+
+    store
+        .put_apparatus_queue_states(
+            apparatus,
+            BTreeMap::from([(order_id.to_string(), "paused".to_string())]),
+        )
+        .await
+        .expect("paused state");
+    service
+        .receive_raw_material_for_active_order(
+            input("ROLL-1000-B"),
+            &[apparatus.to_string()],
+            &actor,
+        )
+        .await
+        .expect("receive while paused");
+    assert_eq!(
+        service.raw_material_assignments().await.expect("assignments").len(),
+        2
+    );
+
+    let mut frozen_control = OrderControlRecord::active(order_id);
+    frozen_control.state = OrderControlState::Frozen;
+    store
+        .put_order_control_state(frozen_control)
+        .await
+        .expect("frozen control");
+    let while_frozen = service
+        .receive_raw_material_for_active_order(
+            input("ROLL-1000-C"),
+            &[apparatus.to_string()],
+            &actor,
+        )
+        .await;
+    assert_eq!(while_frozen, Err(ProductionMapError::OrderFrozen));
+    store
+        .put_order_control_state(OrderControlRecord::active(order_id))
+        .await
+        .expect("active control");
+
+    store
+        .put_apparatus_queue_states(
+            apparatus,
+            BTreeMap::from([(order_id.to_string(), "completed".to_string())]),
+        )
+        .await
+        .expect("completed state");
+    let after_complete = service
+        .receive_raw_material_for_active_order(
+            input("ROLL-1000-C"),
+            &[apparatus.to_string()],
+            &actor,
+        )
+        .await;
+    assert_eq!(
+        after_complete,
+        Err(ProductionMapError::RawMaterialOrderNotActive)
+    );
+}
+
+#[tokio::test]
 async fn raw_material_assignment_returns_choices_and_accepts_selected_apparatus() {
     let store = std::sync::Arc::new(MemoryProductionMapStore::new());
     let service = ProductionMapService::new(store);

@@ -79,6 +79,55 @@ impl PreparedApparatusQueueAction {
             session.payload_json["qolip_codes"] = serde_json::json!(normalized);
         }
     }
+
+    pub fn attach_qolip_panton_codes(
+        &mut self,
+        qolip_codes: &[String],
+    ) -> Result<(), ProductionMapError> {
+        let Some(session) = &mut self.session else {
+            return if qolip_codes.is_empty() {
+                Ok(())
+            } else {
+                Err(ProductionMapError::QolipCodeMismatch)
+            };
+        };
+        let assigned_codes = session
+            .payload_json
+            .get("qolip_codes")
+            .and_then(serde_json::Value::as_array)
+            .into_iter()
+            .flatten()
+            .filter_map(serde_json::Value::as_str)
+            .map(str::trim)
+            .filter(|code| !code.is_empty())
+            .map(str::to_ascii_lowercase)
+            .collect::<std::collections::BTreeSet<_>>();
+        let mut normalized = Vec::new();
+        for code in qolip_codes {
+            let code = code.trim();
+            if code.is_empty() {
+                continue;
+            }
+            if !assigned_codes.contains(&code.to_ascii_lowercase()) {
+                return Err(ProductionMapError::QolipCodeMismatch);
+            }
+            if normalized
+                    .iter()
+                    .any(|existing: &String| existing.eq_ignore_ascii_case(code))
+            {
+                continue;
+            }
+            normalized.push(code.to_string());
+        }
+        if normalized.is_empty() {
+            return Ok(());
+        }
+        if !session.payload_json.is_object() {
+            session.payload_json = serde_json::json!({});
+        }
+        session.payload_json["qolip_panton_codes"] = serde_json::json!(normalized);
+        Ok(())
+    }
 }
 
 impl ProductionMapService {
