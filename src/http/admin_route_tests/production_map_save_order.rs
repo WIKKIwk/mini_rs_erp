@@ -13,6 +13,7 @@ async fn production_map_save_with_order_saves_map_and_template() {
             "template":{{
                 "name":"atomic mahsulot",
                 "product":"atomic mahsulot",
+                "customer":"555 kukuruz",
                 "frame_product_size_mm":635,
                 "frame_count":1,
                 "waste_percent":5,
@@ -36,6 +37,7 @@ async fn production_map_save_with_order_saves_map_and_template() {
     let value = json_body(response).await;
     assert_eq!(value["ok"], true);
     assert_eq!(value["saved"]["map"]["id"], "zakaz-7777");
+    assert_eq!(value["saved"]["map"]["customer_name"], "555 kukuruz");
     assert_eq!(value["template"]["name"], "atomic mahsulot");
     assert_eq!(
         value["template"]["source_map_id"].as_str().unwrap_or(""),
@@ -65,6 +67,22 @@ async fn production_map_save_with_order_saves_map_and_template() {
     let fetched_value = json_body(fetched).await;
     assert_eq!(fetched_value["map"]["id"], "zakaz-7777");
     assert_eq!(fetched_value["map"]["order_number"], "7777");
+    assert_eq!(fetched_value["map"]["customer_name"], "555 kukuruz");
+
+    let sequence = build_router(state.clone())
+        .oneshot(request(
+            "GET",
+            "/v1/mobile/admin/production-maps/sequence",
+            &token,
+        ))
+        .await
+        .expect("fetch sequence customer");
+    assert_eq!(sequence.status(), StatusCode::OK);
+    let sequence_value = json_body(sequence).await;
+    assert_eq!(
+        sequence_value["order_customers"]["zakaz-7777"],
+        "555 kukuruz"
+    );
 
     let fetched_template_map = build_router(state.clone())
         .oneshot(request(

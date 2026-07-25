@@ -1,6 +1,198 @@
+use std::collections::{BTreeMap, BTreeSet};
+
 use crate::core::auth::models::PrincipalRole;
+use crate::core::calculate_orders::CalculateOrderTemplate;
+use crate::core::production_map::{ProductionMapDefinition, ProductionMapSaved};
 
 use super::*;
+
+pub(super) async fn production_map_order_customers(
+    state: &AppState,
+    maps: &[ProductionMapSaved],
+) -> BTreeMap<String, String> {
+    let order_maps = maps
+        .iter()
+        .filter(|saved| is_customer_order_map(&saved.map))
+        .collect::<Vec<_>>();
+    let mut customers = order_maps
+        .iter()
+        .filter_map(|saved| {
+            let map_id = saved.map.id.trim();
+            let customer = saved.map.customer_name.trim();
+            (!map_id.is_empty() && !customer.is_empty())
+                .then(|| (map_id.to_string(), customer.to_string()))
+        })
+        .collect::<BTreeMap<_, _>>();
+
+    if customers.len() == order_maps.len() {
+        return customers;
+    }
+    let templates = match state.calculate_orders.list_all().await {
+        Ok(templates) => templates,
+        Err(error) => {
+            tracing::warn!(%error, "production map customer fallback load failed");
+            return customers;
+        }
+    };
+    for saved in order_maps {
+        let map_id = saved.map.id.trim();
+        if map_id.is_empty() || customers.contains_key(map_id) {
+            continue;
+        }
+        if let Some(customer) = resolve_production_map_customer(&saved.map, &templates) {
+            customers.insert(map_id.to_string(), customer);
+        }
+    }
+    customers
+}
+
+fn is_customer_order_map(map: &ProductionMapDefinition) -> bool {
+    let map_id = map.id.trim();
+    !map_id.is_empty()
+        && !map_id.starts_with("template-")
+        && (map_id.starts_with("zakaz-")
+            || !map.order_number.trim().is_empty()
+            || !map.code.trim().is_empty())
+}
+
+fn resolve_production_map_customer(
+    map: &ProductionMapDefinition,
+    templates: &[CalculateOrderTemplate],
+) -> Option<String> {
+    let map_id = map.id.trim();
+    let template_map_id = (!map_id.is_empty()).then(|| format!("template-{map_id}"));
+    let source_matches = templates
+        .iter()
+        .filter(|template| {
+            let source_map_id = template.source_map_id.trim();
+            source_map_id == map_id
+                || template_map_id
+                    .as_deref()
+                    .is_some_and(|template_map_id| source_map_id == template_map_id)
+        })
+        .collect::<Vec<_>>();
+    if !source_matches.is_empty() {
+        return unique_template_customer(source_matches.into_iter());
+    }
+
+    let id_suffix = map_id.strip_prefix("zakaz-").unwrap_or("").trim();
+    let order_keys = [map.order_number.trim(), map.code.trim(), id_suffix]
+        .into_iter()
+        .filter(|value| !value.is_empty())
+        .collect::<BTreeSet<_>>();
+    let order_matches = templates
+        .iter()
+        .filter(|template| {
+            !order_keys.is_empty()
+                && (order_keys.contains(template.order_number.trim())
+                    || order_keys.contains(template.code.trim()))
+        })
+        .collect::<Vec<_>>();
+    if !order_matches.is_empty() {
+        return unique_template_customer(order_matches.into_iter());
+    }
+
+    let mut product_keys = [map.product_code.as_str(), map.title.as_str()]
+        .into_iter()
+        .map(normalized_customer_match_key)
+        .filter(|value| !value.is_empty())
+        .collect::<BTreeSet<_>>();
+    product_keys.extend(
+        map.nodes
+            .iter()
+            .map(|node| normalized_customer_match_key(&node.item_code))
+            .filter(|value| !value.is_empty()),
+    );
+    if product_keys.is_empty() {
+        return None;
+    }
+    unique_template_customer(templates.iter().filter(|template| {
+        let product_matches = product_keys.contains(&normalized_customer_match_key(
+            &template.product,
+        )) || product_keys.contains(&normalized_customer_match_key(&template.item_code));
+        if !product_matches {
+            return false;
+        }
+        match (map.width_mm, template.width_mm) {
+            (Some(map_width), template_width)
+                if map_width > 0.0 && template_width > 0.0 =>
+            {
+                (map_width - template_width).abs() <= 0.5
+            }
+            _ => true,
+        }
+    }))
+}
+
+fn unique_template_customer<'a>(
+    templates: impl Iterator<Item = &'a CalculateOrderTemplate>,
+) -> Option<String> {
+    let customers = templates
+        .filter_map(|template| {
+            let customer = template.customer.trim();
+            (!customer.is_empty()).then(|| {
+                (
+                    normalized_customer_match_key(customer),
+                    customer.to_string(),
+                )
+            })
+        })
+        .collect::<BTreeMap<_, _>>();
+    (customers.len() == 1)
+        .then(|| customers.into_values().next())
+        .flatten()
+}
+
+fn normalized_customer_match_key(value: &str) -> String {
+    value.trim().to_lowercase()
+}
+
+#[cfg(test)]
+mod customer_resolution_tests {
+    use super::*;
+
+    fn test_map() -> ProductionMapDefinition {
+        serde_json::from_value(serde_json::json!({
+            "id": "zakaz-8768",
+            "product_code": "YASHIL",
+            "title": "yashil",
+            "order_number": "8768"
+        }))
+        .expect("test production map")
+    }
+
+    #[test]
+    fn resolves_legacy_order_from_its_template_map() {
+        let template = CalculateOrderTemplate {
+            customer: "555 kukuruz".to_string(),
+            source_map_id: "template-zakaz-8768".to_string(),
+            ..CalculateOrderTemplate::default()
+        };
+
+        assert_eq!(
+            resolve_production_map_customer(&test_map(), &[template]).as_deref(),
+            Some("555 kukuruz")
+        );
+    }
+
+    #[test]
+    fn refuses_ambiguous_product_customer_fallback() {
+        let templates = [
+            CalculateOrderTemplate {
+                customer: "Customer A".to_string(),
+                product: "yashil".to_string(),
+                ..CalculateOrderTemplate::default()
+            },
+            CalculateOrderTemplate {
+                customer: "Customer B".to_string(),
+                product: "yashil".to_string(),
+                ..CalculateOrderTemplate::default()
+            },
+        ];
+
+        assert_eq!(resolve_production_map_customer(&test_map(), &templates), None);
+    }
+}
 
 pub(super) fn raw_material_stock_status_error(
     error: crate::core::gscale::GscaleServiceError,

@@ -92,7 +92,7 @@ async fn production_map_live_socket(
     let mut last_payload = String::new();
 
     if !send_production_map_live_snapshot(
-        &service,
+        &state,
         &mut socket,
         &actor_ref,
         include_completion_requests,
@@ -109,7 +109,7 @@ async fn production_map_live_socket(
                 match received {
                     Ok(()) => {
                         if !send_production_map_live_snapshot(
-                            &service,
+                            &state,
                             &mut socket,
                             &actor_ref,
                             include_completion_requests,
@@ -120,7 +120,7 @@ async fn production_map_live_socket(
                     }
                     Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {
                         if !send_production_map_live_snapshot(
-                            &service,
+                            &state,
                             &mut socket,
                             &actor_ref,
                             include_completion_requests,
@@ -142,12 +142,13 @@ async fn production_map_live_socket(
 }
 
 async fn send_production_map_live_snapshot(
-    service: &crate::core::production_map::ProductionMapService,
+    state: &AppState,
     socket: &mut WebSocket,
     actor_ref: &str,
     include_completion_requests: bool,
     last_payload: &mut String,
 ) -> bool {
+    let service = &state.production_maps;
     let snapshot = service.live_snapshot().await;
     let completed_orders = service
         .completed_queue_orders_for_actor(actor_ref, 200)
@@ -172,6 +173,7 @@ async fn send_production_map_live_snapshot(
             Ok(completion_requests),
             Ok(completion_request_decisions),
         ) => {
+            let order_customers = production_map_order_customers(state, &snapshot.maps).await;
             let payload = serde_json::json!({
                 "ok": true,
                 "maps": snapshot.maps,
@@ -181,6 +183,7 @@ async fn send_production_map_live_snapshot(
                 "queue_policies": snapshot.queue_policies,
                 "order_statuses": snapshot.order_statuses,
                 "order_controls": snapshot.order_controls,
+                "order_customers": order_customers,
                 "completed_orders": completed_orders,
                 "completion_requests": completion_requests,
                 "completion_request_decisions": completion_request_decisions,

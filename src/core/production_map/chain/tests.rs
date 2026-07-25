@@ -60,6 +60,7 @@ fn hotlunch_map() -> ProductionMapDefinition {
         title: "Hotlunch".to_string(),
         code: String::new(),
         order_number: "100".to_string(),
+        customer_name: String::new(),
         roll_count: None,
         width_mm: None,
         order_kg: None,

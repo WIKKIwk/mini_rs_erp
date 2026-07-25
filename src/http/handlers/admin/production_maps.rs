@@ -163,6 +163,7 @@ pub async fn production_map_save_with_order(
     let mut input: ProductionMapSaveWithOrderRequest = parse_json(&body)?;
     if let Some(template) = &input.template {
         validate_template(template).map_err(calculate_order_error)?;
+        input.map.customer_name = template.customer.trim().to_string();
         if template.kg > 0.0 {
             apply_authoritative_calculation(&mut input.map, template)?;
         }
@@ -309,6 +310,12 @@ pub async fn production_map_sequence(
     .await?;
     match method {
         Method::GET => {
+            let maps = state
+                .production_maps
+                .maps()
+                .await
+                .map_err(production_map_error)?;
+            let order_customers = production_map_order_customers(&state, &maps).await;
             let sequences = state
                 .production_maps
                 .effective_apparatus_sequences()
@@ -347,6 +354,7 @@ pub async fn production_map_sequence(
                 "queue_policies": queue_policies,
                 "order_statuses": order_statuses,
                 "order_controls": order_controls,
+                "order_customers": order_customers,
             })))
         }
         Method::PUT => {

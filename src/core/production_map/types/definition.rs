@@ -11,6 +11,8 @@ pub struct ProductionMapDefinition {
     pub code: String,
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub order_number: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub customer_name: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub roll_count: Option<f64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]

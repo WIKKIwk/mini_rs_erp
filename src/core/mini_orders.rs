@@ -121,6 +121,7 @@ mod tests {
             title: "Test map".to_string(),
             code: order_number.to_string(),
             order_number: order_number.to_string(),
+            customer_name: String::new(),
             roll_count: None,
             width_mm: None,
             order_kg: None,
