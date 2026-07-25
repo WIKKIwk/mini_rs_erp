@@ -10,7 +10,7 @@ use super::models::{
 };
 use super::normalize::{
     location_from_checkout, location_from_checkout_target, location_identity_matches,
-    normalize_move_target,
+    normalize_move_target, qolip_location_id,
 };
 use super::ports::QolipStorePort;
 
@@ -456,10 +456,15 @@ impl QolipStorePort for MemoryQolipStore {
         if self.checkouts.read().await.iter().any(|checkout| {
             checkout.status.trim().eq_ignore_ascii_case("open")
                 && checkout.qolip_code.trim().eq_ignore_ascii_case(previous_qolip_code)
-        }) || self.locations.read().await.iter().any(|location| {
-            location.qolip_code.trim().eq_ignore_ascii_case(previous_qolip_code)
         }) {
             return Err(QolipError::QolipInUse);
+        }
+        if previous_key != next_key
+            && self.locations.read().await.iter().any(|location| {
+                location.qolip_code.trim().eq_ignore_ascii_case(&spec.qolip_code)
+            })
+        {
+            return Err(QolipError::QolipCodeConflict);
         }
         let mut specs = self.product_specs.write().await;
         if previous_key != next_key && specs.contains_key(&next_key) {
@@ -476,6 +481,27 @@ impl QolipStorePort for MemoryQolipStore {
         }) {
             product.qolip_code = spec.qolip_code.clone();
             product.size = spec.size;
+        }
+        drop(products);
+        let mut locations = self.locations.write().await;
+        for location in locations.iter_mut().filter(|location| {
+            location
+                .qolip_code
+                .trim()
+                .eq_ignore_ascii_case(previous_qolip_code)
+        }) {
+            location.item_code = spec.item_code.clone();
+            location.item_name = spec.item_name.clone();
+            location.qolip_code = spec.qolip_code.clone();
+            location.size = spec.size;
+            location.id = qolip_location_id(
+                &location.block,
+                &location.item_code,
+                &location.qolip_code,
+                location.size,
+                &location.row_letter,
+                location.column_number,
+            );
         }
         Ok(spec)
     }

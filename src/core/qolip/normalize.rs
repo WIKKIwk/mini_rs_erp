@@ -164,7 +164,7 @@ fn normalize_column_number(
     }
 }
 
-fn qolip_location_id(
+pub(crate) fn qolip_location_id(
     block: &str,
     item_code: &str,
     qolip_code: &str,

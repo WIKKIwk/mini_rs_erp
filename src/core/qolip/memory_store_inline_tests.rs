@@ -130,6 +130,33 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn renaming_product_spec_updates_a_warehouse_location() {
+        let store = MemoryQolipStore::default();
+        store
+            .seed_products(vec![product("ITEM-001", "Kross qolip")])
+            .await;
+        store
+            .put_product_spec(product_spec("ITEM-001", "Q-OLD"))
+            .await
+            .expect("old spec");
+        let mut stocked = location("old-location", "ITEM-001", 1);
+        stocked.qolip_code = "Q-OLD".to_string();
+        store.put_location(stocked).await.expect("warehouse location");
+
+        store
+            .rename_product_spec("Q-OLD", product_spec("ITEM-001", "Q-NEW"))
+            .await
+            .expect("rename stocked spec");
+
+        let locations = store.locations("A").await.expect("locations");
+        assert_eq!(locations.len(), 1);
+        assert_eq!(locations[0].qolip_code, "Q-NEW");
+        assert_eq!(locations[0].size, 42);
+        assert_eq!(locations[0].item_name, "Kross qolip");
+        assert_ne!(locations[0].id, "old-location");
+    }
+
+    #[tokio::test]
     async fn legacy_location_is_listed_and_deleted_without_product_spec() {
         let store = MemoryQolipStore::default();
         let mut legacy_product = product("ITEM-LEGACY", "Legacy kross");
