@@ -15,6 +15,7 @@ pub(super) async fn load_locations(
                 created_by_role, created_by_ref, created_by_name
          FROM mini_qolip_locations
          WHERE lower(block) = lower($1)
+           AND btrim(inventory_transfer_id) = ''
          ORDER BY lower(row_letter), column_number NULLS LAST, lower(item_name), lower(qolip_code)",
     )
     .bind(block.trim())
@@ -107,7 +108,8 @@ pub(super) async fn load_location_by_id(
                 size, quantity, row_letter, column_number, location_label,
                 created_by_role, created_by_ref, created_by_name
          FROM mini_qolip_locations
-         WHERE id = $1",
+         WHERE id = $1
+           AND btrim(inventory_transfer_id) = ''",
     )
     .bind(location_id.trim())
     .fetch_optional(pool)
@@ -127,6 +129,7 @@ pub(super) async fn load_location_by_qolip_code(
                 created_by_role, created_by_ref, created_by_name
          FROM mini_qolip_locations
          WHERE lower(qolip_code) = lower($1)
+           AND btrim(inventory_transfer_id) = ''
          ORDER BY updated_at DESC, created_at DESC
          LIMIT 1",
     )

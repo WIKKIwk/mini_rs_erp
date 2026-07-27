@@ -7,10 +7,12 @@ pub mod calculate_orders;
 pub mod chat;
 pub mod chat_media;
 pub mod customer;
+pub mod factory_locations;
 pub mod formula;
 #[cfg(test)]
 mod formula_tests;
 pub mod gscale;
+pub mod inventory_movements;
 pub mod mini_orders;
 pub mod mobile_release;
 pub mod production_map;

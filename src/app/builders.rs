@@ -7,7 +7,9 @@ use crate::db::postgres_chat::PostgresChatStore;
 use crate::db::postgres_chat_media::PostgresChatMediaRepository;
 use crate::db::postgres_customer::PostgresCustomerStore;
 use crate::db::postgres_engine::PostgresEngineStore;
+use crate::db::postgres_factory_location::PostgresFactoryLocationStore;
 use crate::db::postgres_gscale_receipt::PostgresGscaleReceiptStore;
+use crate::db::postgres_inventory_movements::PostgresInventoryMovementStore;
 use crate::db::postgres_mini_order::PostgresMiniOrderSink;
 use crate::db::postgres_production_map::PostgresProductionMapStore;
 use crate::db::postgres_qolip::PostgresQolipStore;
@@ -61,6 +63,18 @@ pub(super) fn build_warehouse_service() -> WarehouseService {
         }
         None => WarehouseService::new(Arc::new(
             crate::core::warehouses::MemoryWarehouseStore::new(),
+        )),
+    }
+}
+
+pub(super) fn build_inventory_movement_service() -> InventoryMovementService {
+    match postgres_pool("inventory movement") {
+        Some(pool) => {
+            tracing::info!("mini ERP postgres inventory movement store configured");
+            InventoryMovementService::new(Arc::new(PostgresInventoryMovementStore::new(pool)))
+        }
+        None => InventoryMovementService::new(Arc::new(
+            crate::core::inventory_movements::MemoryInventoryMovementStore::new(),
         )),
     }
 }
@@ -166,6 +180,24 @@ pub(super) fn build_apparatus_groups_service() -> ApparatusGroupService {
             ApparatusGroupService::new(Arc::new(PostgresApparatusGroupStore::new(pool)))
         }
         None => build_sqlite_apparatus_groups_service(),
+    }
+}
+
+pub(super) fn build_factory_location_service(
+    apparatus_groups: ApparatusGroupService,
+) -> FactoryLocationService {
+    match postgres_pool("factory location") {
+        Some(pool) => {
+            tracing::info!("mini ERP postgres factory location store configured");
+            FactoryLocationService::new(
+                Arc::new(PostgresFactoryLocationStore::new(pool)),
+                apparatus_groups,
+            )
+        }
+        None => FactoryLocationService::new(
+            Arc::new(crate::core::factory_locations::MemoryFactoryLocationStore::new()),
+            apparatus_groups,
+        ),
     }
 }
 

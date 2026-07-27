@@ -1,7 +1,9 @@
 use async_trait::async_trait;
 use sqlx::PgPool;
 
-use crate::core::apparatus_groups::{ApparatusGroup, ApparatusGroupError, ApparatusGroupStorePort};
+use crate::core::apparatus_groups::{
+    ApparatusGroup, ApparatusGroupError, ApparatusGroupStorePort, custom_apparatus_id,
+};
 
 #[derive(Clone)]
 pub struct PostgresApparatusGroupStore {
@@ -129,5 +131,5 @@ fn group_id(name: &str) -> String {
 }
 
 fn apparatus_id(name: &str) -> String {
-    format!("apparatus:{}", name.trim().to_lowercase())
+    custom_apparatus_id(name)
 }

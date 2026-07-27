@@ -35,6 +35,10 @@ use crate::core::gscale::models::{
     RawMaterialStockUpdateInput, ScaleDriverPrintRequest, ScaleDriverPrintResponse,
 };
 use crate::core::gscale::ports::{GscalePortError, MaterialReceiptStorePort, ScaleDriverPort};
+use crate::core::inventory_movements::{
+    InventoryAsset, InventoryAssetKind, InventoryLocation, InventoryLocationKind,
+    InventoryLocationRef, InventoryMovementService, MemoryInventoryMovementStore,
+};
 use crate::core::mini_orders::{MiniOrderError, MiniOrderSink, NoopMiniOrderSink};
 use crate::core::production_map::{MemoryProductionMapStore, ProductionMapService};
 use crate::core::returned_paint::{MemoryReturnedPaintStore, ReturnedPaintService};
@@ -59,6 +63,8 @@ mod boyoqchi_returned_paint;
 mod completion_rejections;
 mod completion_requests;
 mod fakes;
+mod factory_locations;
+mod inventory_movements;
 mod item_groups;
 mod production_map_basic;
 mod production_map_save_order;

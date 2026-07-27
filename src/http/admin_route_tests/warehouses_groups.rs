@@ -324,7 +324,10 @@ async fn admin_can_create_and_list_typed_apparatus_without_breaking_legacy_clien
         .expect("typed apparatus list");
     assert_eq!(typed_list.status(), StatusCode::OK);
     let typed_body = json_body(typed_list).await;
-    assert_eq!(typed_body, serde_json::json!([{"name": "Bobst 1"}]));
+    assert_eq!(typed_body[0]["name"], "Bobst 1");
+    assert_eq!(typed_body[0]["id"], "apparatus:bobst 1");
+    assert_eq!(typed_body[0]["source"], "custom");
+    assert_eq!(typed_body[0]["sort_order"], 0);
 
     let legacy_created = build_router(state.clone())
         .oneshot(request_with_body(

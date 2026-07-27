@@ -12,18 +12,36 @@ use crate::core::production_map::pechat;
 const DEFAULT_BOSMA_GROUP_NAME: &str = "Bosma aparat";
 const DEFAULT_LAMINATSIYA_GROUP_NAME: &str = "Laminatsiya";
 const DEFAULT_REZKA_GROUP_NAME: &str = "Rezka";
-const DEFAULT_APPARATUS: [&str; 10] = [
-    "7 ta rangli bosma aparat",
-    "8 ta rangli bosma aparat",
-    "9 ta rangli bosma aparat",
-    "Extruder laminatsiya",
-    "Flexo pechat",
-    "Holodniy kley aparat",
-    "Laminatsiya 1",
-    "Laminatsiya 2",
-    "Paket aparat",
-    "Rezka",
+const DEFAULT_APPARATUS: [(&str, &str); 10] = [
+    ("apparatus:default:bosma_7", "7 ta rangli bosma aparat"),
+    ("apparatus:default:bosma_8", "8 ta rangli bosma aparat"),
+    ("apparatus:default:bosma_9", "9 ta rangli bosma aparat"),
+    (
+        "apparatus:default:extruder_laminatsiya",
+        "Extruder laminatsiya",
+    ),
+    ("apparatus:default:flexo_pechat", "Flexo pechat"),
+    ("apparatus:default:holodniy_kley", "Holodniy kley aparat"),
+    ("apparatus:default:laminatsiya_1", "Laminatsiya 1"),
+    ("apparatus:default:laminatsiya_2", "Laminatsiya 2"),
+    ("apparatus:default:paket", "Paket aparat"),
+    ("apparatus:default:rezka", "Rezka"),
 ];
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ApparatusSource {
+    Default,
+    Custom,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ApparatusCatalogEntry {
+    pub id: String,
+    pub name: String,
+    pub source: ApparatusSource,
+    pub sort_order: usize,
+}
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ApparatusGroup {
@@ -101,13 +119,23 @@ impl ApparatusGroupService {
         query: &str,
         limit: usize,
     ) -> Result<Vec<String>, ApparatusGroupError> {
+        self.apparatus_catalog(query, limit)
+            .await
+            .map(|items| items.into_iter().map(|item| item.name).collect())
+    }
+
+    pub async fn apparatus_catalog(
+        &self,
+        query: &str,
+        limit: usize,
+    ) -> Result<Vec<ApparatusCatalogEntry>, ApparatusGroupError> {
         let limit = limit.max(1);
         let needle = query.trim().to_lowercase();
         let mut seen = BTreeSet::new();
-        let mut result = default_apparatus()
+        let mut result = default_apparatus_catalog()
             .into_iter()
-            .filter(|item| needle.is_empty() || item.to_lowercase().contains(&needle))
-            .filter(|item| seen.insert(item.to_lowercase()))
+            .filter(|item| needle.is_empty() || item.name.to_lowercase().contains(&needle))
+            .filter(|item| seen.insert(item.name.to_lowercase()))
             .take(limit)
             .collect::<Vec<_>>();
         if result.len() >= limit {
@@ -121,7 +149,12 @@ impl ApparatusGroupService {
             {
                 continue;
             }
-            result.push(name);
+            result.push(ApparatusCatalogEntry {
+                id: custom_apparatus_id(&name),
+                name,
+                source: ApparatusSource::Custom,
+                sort_order: result.len(),
+            });
             if result.len() >= limit {
                 break;
             }
@@ -254,8 +287,29 @@ fn default_apparatus_groups() -> Vec<ApparatusGroup> {
     ]
 }
 
+#[cfg(test)]
 fn default_apparatus() -> Vec<String> {
-    DEFAULT_APPARATUS.into_iter().map(str::to_string).collect()
+    DEFAULT_APPARATUS
+        .into_iter()
+        .map(|(_, name)| name.to_string())
+        .collect()
+}
+
+fn default_apparatus_catalog() -> Vec<ApparatusCatalogEntry> {
+    DEFAULT_APPARATUS
+        .into_iter()
+        .enumerate()
+        .map(|(sort_order, (id, name))| ApparatusCatalogEntry {
+            id: id.to_string(),
+            name: name.to_string(),
+            source: ApparatusSource::Default,
+            sort_order,
+        })
+        .collect()
+}
+
+pub fn custom_apparatus_id(name: &str) -> String {
+    format!("apparatus:{}", name.trim().to_lowercase())
 }
 
 fn is_invalid_legacy_apparatus_name(value: &str) -> bool {
@@ -381,7 +435,7 @@ mod tests {
     #[tokio::test]
     async fn apparatus_catalog_returns_one_default_each_and_keeps_custom_names() {
         let store = Arc::new(MemoryApparatusGroupStore::new());
-        for name in DEFAULT_APPARATUS.into_iter().chain([
+        for name in DEFAULT_APPARATUS.into_iter().map(|(_, name)| name).chain([
             "7 ta rangli pechat",
             "8 ta rangli pechat",
             "9 ta rangli pechat",
@@ -402,6 +456,16 @@ mod tests {
         let mut expected = default_apparatus();
         expected.push("Maxsus aparat".to_string());
         assert_eq!(apparatus, expected);
+
+        let catalog = service
+            .apparatus_catalog("", 50)
+            .await
+            .expect("list apparatus catalog");
+        assert_eq!(catalog[0].id, "apparatus:default:bosma_7");
+        assert_eq!(catalog[0].source, ApparatusSource::Default);
+        let custom = catalog.last().expect("custom apparatus");
+        assert_eq!(custom.id, "apparatus:maxsus aparat");
+        assert_eq!(custom.source, ApparatusSource::Custom);
         assert_eq!(
             service
                 .upsert_apparatus(ApparatusUpsert {

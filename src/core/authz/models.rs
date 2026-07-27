@@ -33,6 +33,8 @@ pub enum Capability {
     AdminActivityRead,
     WerkaCodeManage,
     ProductionMapManage,
+    FactoryLocationManage,
+    InventoryMovementManage,
     ApparatusQueueRead,
     ApparatusQueueManage,
     GscaleCatalogRead,

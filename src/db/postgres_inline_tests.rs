@@ -178,6 +178,66 @@ mod tests {
     }
 
     #[test]
+    fn factory_location_migration_has_stable_apparatus_ids_and_runtime_grants() {
+        let migration = POSTGRES_MIGRATIONS
+            .iter()
+            .find(|(version, _)| *version == "0028_factory_locations")
+            .map(|(_, sql)| sql.to_lowercase())
+            .expect("factory location migration");
+
+        for expected in [
+            "mini_factory_locations",
+            "mini_factory_location_apparatus_links",
+            "apparatus:default:bosma_7",
+            "apparatus:default:rezka",
+            "on delete cascade",
+            "on delete restrict",
+        ] {
+            assert!(migration.contains(expected), "missing {expected}");
+        }
+        assert!(migration.contains("grant select, insert, update, delete"));
+        assert!(migration.contains("raise exception"));
+    }
+
+    #[test]
+    fn inventory_movement_migration_preserves_stock_quantity_sources() {
+        let migration = POSTGRES_MIGRATIONS
+            .iter()
+            .find(|(version, _)| *version == "0029_inventory_movements")
+            .map(|(_, sql)| sql.to_lowercase())
+            .expect("inventory movement migration");
+
+        for expected in [
+            "mini_inventory_locations",
+            "mini_inventory_placements",
+            "mini_inventory_transfers",
+            "mini_inventory_transfer_actions",
+            "mini_inventory_transfer_lines",
+            "mini_inventory_movement_events",
+            "transfer_reserved",
+            "in_transit",
+            "append-only",
+            "mini_qolip_transfer_lock_guard",
+        ] {
+            assert!(migration.contains(expected), "missing {expected}");
+        }
+        let placement_definition = migration
+            .split("create table if not exists mini_inventory_placements")
+            .nth(1)
+            .and_then(|tail| tail.split(");").next())
+            .expect("placement table definition");
+        assert!(
+            !placement_definition.contains("qty"),
+            "physical placement must never become a quantity source"
+        );
+        assert!(!migration.contains("drop table"));
+        assert!(!migration.contains("delete from mini_raw_material_stock"));
+        assert!(!migration.contains("delete from mini_finished_goods_stock"));
+        assert!(!migration.contains("delete from mini_qolip_locations"));
+        assert!(split_sql_statements(&migration).len() > 20);
+    }
+
+    #[test]
     fn qolip_legacy_lookup_migration_indexes_locations_and_checkouts() {
         let migration = POSTGRES_MIGRATIONS
             .iter()

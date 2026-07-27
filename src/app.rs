@@ -13,7 +13,9 @@ use crate::core::calculate_orders::CalculateOrderStorePort;
 use crate::core::chat::ChatService;
 use crate::core::chat_media::ChatMediaService;
 use crate::core::customer::service::CustomerService;
+use crate::core::factory_locations::FactoryLocationService;
 use crate::core::gscale::GscaleService;
+use crate::core::inventory_movements::InventoryMovementService;
 use crate::core::mini_orders::MiniOrderSink;
 use crate::core::mobile_release::MobileReleaseStore;
 use crate::core::production_map::ProductionMapService;
@@ -68,6 +70,8 @@ pub struct AppState {
     pub profiles: ProfileService,
     pub production_maps: ProductionMapService,
     pub apparatus_groups: ApparatusGroupService,
+    pub factory_locations: FactoryLocationService,
+    pub inventory_movements: InventoryMovementService,
     pub calculate_orders: Arc<dyn CalculateOrderStorePort>,
     pub chat: ChatService,
     pub chat_media: ChatMediaService,
@@ -121,6 +125,8 @@ impl AppState {
         let customer = CustomerService::new();
         let production_maps = build_production_map_service();
         let apparatus_groups = build_apparatus_groups_service();
+        let factory_locations = build_factory_location_service(apparatus_groups.clone());
+        let inventory_movements = build_inventory_movement_service();
         let calculate_orders = build_calculate_order_store();
         let order_sheets = discover_order_sheet_sink();
         let production_orders = build_mini_order_sink();
@@ -168,6 +174,8 @@ impl AppState {
             profiles,
             production_maps,
             apparatus_groups,
+            factory_locations,
+            inventory_movements,
             calculate_orders,
             chat,
             chat_media,

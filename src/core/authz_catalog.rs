@@ -16,6 +16,13 @@ const ADMIN_WERKA_MATERIAL_TAMINOTCHI: &[PrincipalRole] = &[
     PrincipalRole::Werka,
     PrincipalRole::MaterialTaminotchi,
 ];
+const INVENTORY_MOVEMENT_ROLES: &[PrincipalRole] = &[
+    PrincipalRole::Admin,
+    PrincipalRole::Werka,
+    PrincipalRole::MaterialTaminotchi,
+    PrincipalRole::Qolipchi,
+    PrincipalRole::Aparatchi,
+];
 
 pub(super) const CAPABILITY_CATALOG: &[CapabilityDefinition] = &[
     CapabilityDefinition {
@@ -191,6 +198,18 @@ pub(super) const CAPABILITY_CATALOG: &[CapabilityDefinition] = &[
         code: "production.map.manage",
         label: "Production map manage",
         default_roles: ADMIN_ONLY,
+    },
+    CapabilityDefinition {
+        capability: Capability::FactoryLocationManage,
+        code: "factory.location.manage",
+        label: "Factory location manage",
+        default_roles: ADMIN_ONLY,
+    },
+    CapabilityDefinition {
+        capability: Capability::InventoryMovementManage,
+        code: "inventory.movement.manage",
+        label: "Inventory location and warehouse transfer manage",
+        default_roles: INVENTORY_MOVEMENT_ROLES,
     },
     CapabilityDefinition {
         capability: Capability::ApparatusQueueRead,

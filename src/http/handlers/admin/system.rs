@@ -1,6 +1,8 @@
 mod apparatus;
 mod auth;
 mod catalog;
+mod factory_locations;
+mod inventory_movements;
 mod monitor;
 mod roles;
 mod warehouses;
@@ -11,6 +13,11 @@ use super::*;
 pub use apparatus::{apparatus, apparatus_groups};
 pub(super) use auth::{authorize_any_capability, authorize_capability, require_capability};
 pub use catalog::items_bulk_move_group;
+pub use factory_locations::{factory_location, factory_location_apparatus, factory_locations};
+pub use inventory_movements::{
+    inventory_assets, inventory_locations, inventory_relocations, inventory_transfer_action,
+    inventory_transfers,
+};
 pub use monitor::{
     system_backup_create, system_backup_download, system_monitor, system_monitor_live,
 };

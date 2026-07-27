@@ -26,8 +26,7 @@ pub use production_maps::{
     production_map_run, production_map_save_with_order, production_map_sequence,
     production_map_wip_batches, production_maps, raw_material_assignment_lookup,
     raw_material_assignments, raw_material_history, raw_material_intake, raw_material_rules,
-    raw_material_stock,
-    raw_material_stock_reprint_confirm, raw_material_stock_reprint_prepare,
+    raw_material_stock, raw_material_stock_reprint_confirm, raw_material_stock_reprint_prepare,
 };
 pub use supplier_mutations::{
     supplier_code_regenerate, supplier_item_add, supplier_item_remove, supplier_items,
@@ -38,9 +37,12 @@ pub use suppliers::{
     supplier_detail, supplier_list, supplier_summary, suppliers, user_list,
 };
 pub use system::{
-    apparatus, apparatus_groups, capabilities, items_bulk_move_group, role_assignments, roles,
-    system_backup_create, system_backup_download, system_monitor, system_monitor_live,
-    warehouse_assignments, warehouse_items, warehouse_summaries, warehouses, werka_code_regenerate,
+    apparatus, apparatus_groups, capabilities, factory_location, factory_location_apparatus,
+    factory_locations, inventory_assets, inventory_locations, inventory_relocations,
+    inventory_transfer_action, inventory_transfers, items_bulk_move_group, role_assignments,
+    roles, system_backup_create, system_backup_download, system_monitor, system_monitor_live,
+    warehouse_assignments, warehouse_items, warehouse_summaries, warehouses,
+    werka_code_regenerate,
 };
 use system::{authorize_any_capability, authorize_capability, require_capability};
 pub use system_users::{system_user_code_regenerate, system_user_detail, system_users};
@@ -52,7 +54,7 @@ pub use workers::{
 
 use axum::Json;
 use axum::body::Bytes;
-use axum::extract::{Query, State};
+use axum::extract::{Path, Query, State};
 use axum::http::{HeaderMap, HeaderValue, Method, StatusCode, header};
 use axum::response::{IntoResponse, Response};
 use serde::de::DeserializeOwned;
@@ -73,6 +75,10 @@ use crate::core::apparatus_groups::{ApparatusGroupError, ApparatusGroupUpsert, A
 use crate::core::auth::models::{Principal, PrincipalRole};
 use crate::core::authz::{
     Capability, RoleAssignmentUpsert, RoleDefinitionUpsert, capability_catalog_entries,
+};
+use crate::core::factory_locations::{
+    FactoryLocationApparatusReplace, FactoryLocationCreate, FactoryLocationError,
+    FactoryLocationUpdate,
 };
 use crate::core::warehouses::{
     WarehouseAssignmentUpsert, WarehouseDeleteRequest, WarehouseError, WarehouseUpsert,

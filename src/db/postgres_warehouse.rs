@@ -186,6 +186,19 @@ impl WarehouseStorePort for PostgresWarehouseStore {
                 WHERE btrim(stock.warehouse) <> ''
                 GROUP BY stock.warehouse
             ),
+            transfer_counts AS (
+                SELECT warehouse, count(*)::bigint AS transfer_count
+                FROM (
+                    SELECT source_warehouse AS warehouse
+                    FROM mini_inventory_transfers
+                    WHERE status IN ('requested', 'approved', 'in_transit')
+                    UNION ALL
+                    SELECT destination_warehouse AS warehouse
+                    FROM mini_inventory_transfers
+                    WHERE status IN ('requested', 'approved', 'in_transit')
+                ) active_transfers
+                GROUP BY warehouse
+            ),
             assignment_counts AS (
                 SELECT
                     warehouse,
@@ -210,6 +223,8 @@ impl WarehouseStorePort for PostgresWarehouseStore {
                 UNION
                 SELECT warehouse FROM reservation_counts WHERE btrim(COALESCE(warehouse, '')) <> ''
                 UNION
+                SELECT warehouse FROM transfer_counts
+                UNION
                 SELECT warehouse FROM assignment_counts
             )
             SELECT
@@ -222,6 +237,7 @@ impl WarehouseStorePort for PostgresWarehouseStore {
                 (
                     COALESCE(reservation_counts.reserved_count, 0)
                     + COALESCE(qolip_checkout_counts.checkout_count, 0)
+                    + COALESCE(transfer_counts.transfer_count, 0)
                 )::bigint AS reserved_count,
                 COALESCE(assignment_counts.assignment_count, 0)::bigint AS assignment_count,
                 COALESCE(assignment_counts.assigned_display_names, '') AS assigned_display_names
@@ -231,6 +247,7 @@ impl WarehouseStorePort for PostgresWarehouseStore {
             LEFT JOIN qolip_counts ON lower(qolip_counts.warehouse) = lower(warehouse_names.warehouse)
             LEFT JOIN qolip_checkout_counts ON lower(qolip_checkout_counts.warehouse) = lower(warehouse_names.warehouse)
             LEFT JOIN reservation_counts ON lower(reservation_counts.warehouse) = lower(warehouse_names.warehouse)
+            LEFT JOIN transfer_counts ON lower(transfer_counts.warehouse) = lower(warehouse_names.warehouse)
             LEFT JOIN assignment_counts ON lower(assignment_counts.warehouse) = lower(warehouse_names.warehouse)
             WHERE ($1 = '' OR lower(warehouse_names.warehouse) LIKE $2)
             ORDER BY lower(warehouse_names.warehouse)

@@ -66,14 +66,8 @@ pub async fn apparatus(
             let limit = optional_search_limit(query.limit.as_deref(), 50, 500);
             state
                 .apparatus_groups
-                .apparatus(query.q.as_deref().unwrap_or(""), limit)
+                .apparatus_catalog(query.q.as_deref().unwrap_or(""), limit)
                 .await
-                .map(|items| {
-                    items
-                        .into_iter()
-                        .map(|name| AdminApparatusResponse { name })
-                        .collect::<Vec<_>>()
-                })
                 .map(json_response)
                 .map_err(apparatus_group_error)
         }
@@ -89,11 +83,6 @@ pub async fn apparatus(
         }
         _ => Err(method_not_allowed()),
     }
-}
-
-#[derive(Serialize)]
-struct AdminApparatusResponse {
-    name: String,
 }
 
 #[derive(Serialize)]
