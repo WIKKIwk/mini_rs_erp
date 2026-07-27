@@ -5,6 +5,89 @@ use crate::db::postgres_raw_material_events::{
 };
 use std::collections::BTreeMap;
 
+#[derive(Debug, serde::Deserialize)]
+pub struct RawMaterialStartRequirementsQuery {
+    #[serde(default)]
+    order_id: String,
+    #[serde(default)]
+    apparatus: String,
+}
+
+pub async fn raw_material_start_requirements(
+    State(state): State<AppState>,
+    Query(query): Query<RawMaterialStartRequirementsQuery>,
+    method: Method,
+    headers: HeaderMap,
+) -> Result<Response, AdminError> {
+    authorize_any_capability(
+        &state,
+        &headers,
+        &[
+            Capability::AdminAccess,
+            Capability::ProductionMapManage,
+            Capability::ApparatusQueueRead,
+            Capability::ApparatusQueueManage,
+        ],
+    )
+    .await?;
+    if method != Method::GET {
+        return Err(method_not_allowed());
+    }
+    if query.order_id.trim().is_empty() || query.apparatus.trim().is_empty() {
+        return Err(bad_request("apparatus and order_id are required"));
+    }
+    let staged_barcodes = raw_material_state_barcodes_for_order_apparatus(
+        &state,
+        &query.order_id,
+        &query.apparatus,
+    )
+    .await?;
+    state
+        .production_maps
+        .raw_material_start_requirements(
+            &query.apparatus,
+            &query.order_id,
+            &staged_barcodes,
+        )
+        .await
+        .map(json_response)
+        .map_err(production_map_error)
+}
+
+pub(super) async fn raw_material_state_barcodes_for_order_apparatus(
+    state: &AppState,
+    order_id: &str,
+    apparatus: &str,
+) -> Result<Vec<String>, AdminError> {
+    let assignment_barcodes = state
+        .production_maps
+        .raw_material_assignments()
+        .await
+        .map_err(production_map_error)?
+        .into_iter()
+        .filter(|assignment| {
+            assignment.order_id.trim() == order_id.trim()
+                && queue_state::apparatus_titles_match(&assignment.apparatus, apparatus)
+        })
+        .map(|assignment| assignment.barcode)
+        .collect::<Vec<_>>();
+    let placements = state
+        .inventory_movements
+        .raw_material_state_placements(&assignment_barcodes)
+        .await
+        .map_err(|_| server_error("raw material state placements failed"))?;
+    Ok(placements
+        .into_iter()
+        .filter(|placement| {
+            placement
+                .apparatus
+                .iter()
+                .any(|candidate| queue_state::apparatus_titles_match(candidate, apparatus))
+        })
+        .map(|placement| placement.barcode)
+        .collect())
+}
+
 pub async fn raw_material_rules(
     State(state): State<AppState>,
     method: Method,

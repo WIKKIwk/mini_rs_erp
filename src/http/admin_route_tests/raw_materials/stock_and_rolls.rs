@@ -44,7 +44,7 @@ async fn queue_start_rejects_raw_material_stock_reserved_for_other_order() {
             "PUT",
             "/v1/mobile/admin/raw-material-rules",
             &token,
-            r#"{"apparatus":"7 ta rangli pechat - A","requires_material":true,"item_groups":["Kraska"]}"#,
+            r#"{"apparatus":"7 ta rangli pechat - A","requires_material":true,"start_policy":"requirement_groups","item_groups":["Kraska"]}"#,
         ))
         .await
         .expect("rule save");
@@ -146,7 +146,7 @@ async fn queue_start_commit_failure_does_not_reserve_raw_material_stock() {
             "PUT",
             "/v1/mobile/admin/raw-material-rules",
             &token,
-            r#"{"apparatus":"7 ta rangli pechat - A","requires_material":true,"item_groups":["Kraska"]}"#,
+            r#"{"apparatus":"7 ta rangli pechat - A","requires_material":true,"start_policy":"requirement_groups","item_groups":["Kraska"]}"#,
         ))
         .await
         .expect("rule save");
@@ -238,7 +238,7 @@ async fn raw_material_assignment_checks_rulon_size_for_pechat_orders() {
             "PUT",
             "/v1/mobile/admin/raw-material-rules",
             &token,
-            r#"{"apparatus":"7 ta rangli pechat - A","requires_material":true,"item_groups":["Rulon"]}"#,
+            r#"{"apparatus":"7 ta rangli pechat - A","requires_material":true,"start_policy":"requirement_groups","item_groups":["Rulon"]}"#,
         ))
         .await
         .expect("rule save");
@@ -365,7 +365,7 @@ async fn material_taminotchi_raw_material_assignment_allows_child_group_from_ass
             "PUT",
             "/v1/mobile/admin/raw-material-rules",
             &admin_token,
-            r#"{"apparatus":"7 ta rangli pechat - A","requires_material":true,"item_groups":["Rulon"]}"#,
+            r#"{"apparatus":"7 ta rangli pechat - A","requires_material":true,"start_policy":"requirement_groups","item_groups":["Rulon"]}"#,
         ))
         .await
         .expect("rule save");

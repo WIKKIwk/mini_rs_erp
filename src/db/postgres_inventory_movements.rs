@@ -9,6 +9,7 @@ use crate::core::inventory_movements::{
     InventoryActor, InventoryAsset, InventoryAssetKind, InventoryAssetQuery, InventoryLocation,
     InventoryLocationApparatus, InventoryLocationKind, InventoryLocationRef,
     InventoryMovementError, InventoryMovementStorePort, InventoryRelocationCreate,
+    RawMaterialStatePlacement,
     InventoryTransfer, InventoryTransferAction, InventoryTransferActionKind,
     InventoryTransferCreate, InventoryTransferLine, InventoryTransferQuery,
     InventoryTransferStatus, inventory_role_code,
@@ -78,6 +79,66 @@ impl InventoryMovementStorePort for PostgresInventoryMovementStore {
         rows.into_iter().map(location_from_row).collect()
     }
 
+    async fn raw_material_state_placements(
+        &self,
+        barcodes: &[String],
+    ) -> Result<Vec<RawMaterialStatePlacement>, InventoryMovementError> {
+        let normalized = barcodes
+            .iter()
+            .map(|barcode| barcode.trim().to_ascii_lowercase())
+            .filter(|barcode| !barcode.is_empty())
+            .collect::<Vec<_>>();
+        if normalized.is_empty() {
+            return Ok(Vec::new());
+        }
+        let rows = sqlx::query_as::<_, RawMaterialStatePlacementRow>(
+            r#"
+            SELECT
+                stock.barcode,
+                location.id AS location_id,
+                location.name AS location_name,
+                COALESCE(
+                    jsonb_agg(apparatus.name ORDER BY lower(apparatus.name))
+                        FILTER (WHERE apparatus.id IS NOT NULL),
+                    '[]'::jsonb
+                ) AS apparatus_json
+            FROM mini_raw_material_stock stock
+            JOIN mini_inventory_placements placement
+              ON placement.asset_kind = 'raw_material'
+             AND lower(placement.asset_ref) = lower(stock.id)
+            JOIN mini_inventory_locations location
+              ON location.id = placement.physical_location_id
+             AND location.kind = 'state'
+             AND location.active = true
+            LEFT JOIN mini_factory_location_apparatus_links links
+              ON links.location_id = location.factory_location_id
+            LEFT JOIN mini_apparatus apparatus
+              ON apparatus.id = links.apparatus_id
+            WHERE lower(stock.barcode) = ANY($1)
+              AND stock.qty > 0
+              AND stock.status <> 'consumed'
+            GROUP BY stock.barcode, location.id, location.name
+            ORDER BY lower(stock.barcode)
+            "#,
+        )
+        .bind(normalized)
+        .fetch_all(&self.pool)
+        .await
+        .map_err(store_error)?;
+        rows.into_iter()
+            .map(|row| {
+                let apparatus = serde_json::from_value::<Vec<String>>(row.apparatus_json)
+                    .map_err(|_| InventoryMovementError::StoreFailed)?;
+                Ok(RawMaterialStatePlacement {
+                    barcode: row.barcode,
+                    location_id: row.location_id,
+                    location_name: row.location_name,
+                    apparatus,
+                })
+            })
+            .collect()
+    }
+
     async fn assets(
         &self,
         actor: &InventoryActor,
@@ -108,6 +169,8 @@ impl InventoryMovementStorePort for PostgresInventoryMovementStore {
             .bind(needle)
             .bind(query.limit as i64)
             .bind(query.offset as i64)
+            .bind(query.current_user_states_only)
+            .bind(actor.principal.ref_.trim())
             .fetch_all(&self.pool)
             .await
             .map_err(store_error)?;
@@ -233,6 +296,9 @@ impl InventoryMovementStorePort for PostgresInventoryMovementStore {
         if destination.assignment_count == 0 {
             return Err(InventoryMovementError::DestinationWarehouseUnassigned);
         }
+        let internal_transfer =
+            actor.manages_transfer_internally(&source.name, &destination.name);
+        let source_location_id = warehouse_location_id_tx(&mut tx, &source.id).await?;
 
         sqlx::query(
             r#"
@@ -274,6 +340,9 @@ impl InventoryMovementStorePort for PostgresInventoryMovementStore {
             let asset_kind = InventoryAssetKind::parse(&asset.asset_kind)?;
             if asset.warehouse_id != source.id {
                 return Err(InventoryMovementError::WarehouseForbidden);
+            }
+            if asset.physical_location_id != source_location_id {
+                return Err(InventoryMovementError::AssetNotInSourceWarehouse);
             }
             reserve_asset_tx(&mut tx, &asset, transfer_id).await?;
             sqlx::query(
@@ -323,6 +392,51 @@ impl InventoryMovementStorePort for PostgresInventoryMovementStore {
                     actor,
                     note: &input.note,
                 },
+            )
+            .await?;
+        }
+        if internal_transfer {
+            let transfer = transfer_for_update_tx(&mut tx, transfer_id).await?;
+            let lines = transfer_lines_tx(&mut tx, transfer_id).await?;
+            update_transfer_actor_tx(&mut tx, transfer_id, "approved", "approved", actor)
+                .await?;
+            dispatch_transfer_assets_tx(&mut tx, transfer_id, &lines).await?;
+            update_transfer_actor_tx(&mut tx, transfer_id, "dispatched", "in_transit", actor)
+                .await?;
+            receive_transfer_assets_tx(&mut tx, &transfer, &lines, actor).await?;
+            update_transfer_actor_tx(&mut tx, transfer_id, "received", "received", actor)
+                .await?;
+            insert_transfer_stage_events_tx(
+                &mut tx,
+                &transfer,
+                &lines,
+                actor,
+                &input.note,
+                &format!("{}:internal:approve", input.idempotency_key),
+                "transfer_approved",
+                false,
+            )
+            .await?;
+            insert_transfer_stage_events_tx(
+                &mut tx,
+                &transfer,
+                &lines,
+                actor,
+                &input.note,
+                &format!("{}:internal:dispatch", input.idempotency_key),
+                "transfer_dispatched",
+                false,
+            )
+            .await?;
+            insert_transfer_stage_events_tx(
+                &mut tx,
+                &transfer,
+                &lines,
+                actor,
+                &input.note,
+                &format!("{}:internal:receive", input.idempotency_key),
+                "transfer_received",
+                true,
             )
             .await?;
         }
@@ -402,6 +516,10 @@ impl InventoryMovementStorePort for PostgresInventoryMovementStore {
         let status = InventoryTransferStatus::parse(&transfer.status)?;
         let source_access = actor.can_manage_warehouse(&transfer.source_warehouse);
         let destination_access = actor.can_manage_warehouse(&transfer.destination_warehouse);
+        let internal_transfer = actor.manages_transfer_internally(
+            &transfer.source_warehouse,
+            &transfer.destination_warehouse,
+        );
         let lines = transfer_lines_tx(&mut tx, transfer_id).await?;
 
         let authorized = match action {
@@ -473,6 +591,26 @@ impl InventoryMovementStorePort for PostgresInventoryMovementStore {
             InventoryTransferActionKind::Approve => {
                 update_transfer_actor_tx(&mut tx, transfer_id, "approved", "approved", actor)
                     .await?;
+                if internal_transfer {
+                    dispatch_transfer_assets_tx(&mut tx, transfer_id, &lines).await?;
+                    update_transfer_actor_tx(
+                        &mut tx,
+                        transfer_id,
+                        "dispatched",
+                        "in_transit",
+                        actor,
+                    )
+                    .await?;
+                    receive_transfer_assets_tx(&mut tx, &transfer, &lines, actor).await?;
+                    update_transfer_actor_tx(
+                        &mut tx,
+                        transfer_id,
+                        "received",
+                        "received",
+                        actor,
+                    )
+                    .await?;
+                }
             }
             InventoryTransferActionKind::Reject => {
                 release_transfer_assets_tx(&mut tx, transfer_id, &lines).await?;
@@ -483,6 +621,17 @@ impl InventoryMovementStorePort for PostgresInventoryMovementStore {
                 dispatch_transfer_assets_tx(&mut tx, transfer_id, &lines).await?;
                 update_transfer_actor_tx(&mut tx, transfer_id, "dispatched", "in_transit", actor)
                     .await?;
+                if internal_transfer {
+                    receive_transfer_assets_tx(&mut tx, &transfer, &lines, actor).await?;
+                    update_transfer_actor_tx(
+                        &mut tx,
+                        transfer_id,
+                        "received",
+                        "received",
+                        actor,
+                    )
+                    .await?;
+                }
             }
             InventoryTransferActionKind::Receive => {
                 receive_transfer_assets_tx(&mut tx, &transfer, &lines, actor).await?;
@@ -503,35 +652,50 @@ impl InventoryMovementStorePort for PostgresInventoryMovementStore {
             InventoryTransferActionKind::Receive => "transfer_received",
             InventoryTransferActionKind::Cancel => "transfer_cancelled",
         };
-        let destination_location =
-            warehouse_location_id_tx(&mut tx, &transfer.destination_warehouse_id).await?;
-        for line in &lines {
-            insert_movement_event_tx(
+        insert_transfer_stage_events_tx(
+            &mut tx,
+            &transfer,
+            &lines,
+            actor,
+            &input.note,
+            &input.idempotency_key,
+            event_type,
+            action == InventoryTransferActionKind::Receive,
+        )
+        .await?;
+        if internal_transfer && action == InventoryTransferActionKind::Approve {
+            insert_transfer_stage_events_tx(
                 &mut tx,
-                MovementEventDraft {
-                    idempotency_key: format!(
-                        "{}:{}:{}",
-                        input.idempotency_key,
-                        line.asset_kind,
-                        line.asset_ref.to_ascii_lowercase()
-                    ),
-                    event_type,
-                    transfer_id,
-                    asset_kind: InventoryAssetKind::parse(&line.asset_kind)?,
-                    asset_ref: line.asset_ref.clone(),
-                    from_warehouse_id: &transfer.source_warehouse_id,
-                    to_warehouse_id: &transfer.destination_warehouse_id,
-                    from_location_id: &line.source_physical_location_id,
-                    to_location_id: if action == InventoryTransferActionKind::Receive {
-                        &destination_location
-                    } else {
-                        &line.source_physical_location_id
-                    },
-                    qty: line.qty,
-                    uom: &line.uom,
-                    actor,
-                    note: &input.note,
-                },
+                &transfer,
+                &lines,
+                actor,
+                &input.note,
+                &format!("{}:internal:dispatch", input.idempotency_key),
+                "transfer_dispatched",
+                false,
+            )
+            .await?;
+            insert_transfer_stage_events_tx(
+                &mut tx,
+                &transfer,
+                &lines,
+                actor,
+                &input.note,
+                &format!("{}:internal:receive", input.idempotency_key),
+                "transfer_received",
+                true,
+            )
+            .await?;
+        } else if internal_transfer && action == InventoryTransferActionKind::Dispatch {
+            insert_transfer_stage_events_tx(
+                &mut tx,
+                &transfer,
+                &lines,
+                actor,
+                &input.note,
+                &format!("{}:internal:receive", input.idempotency_key),
+                "transfer_received",
+                true,
             )
             .await?;
         }
@@ -626,7 +790,13 @@ LEFT JOIN mini_inventory_placements placement
 JOIN mini_inventory_locations location
   ON location.id = COALESCE(placement.physical_location_id, warehouse_location.id)
 WHERE ($1 = true OR lower(assets.warehouse) = ANY($2))
-  AND ($3 = '' OR warehouse.id = $3)
+  AND (
+        $3 = ''
+        OR (
+            location.kind = 'warehouse'
+            AND location.warehouse_id = $3
+        )
+  )
   AND ($4 = '' OR assets.asset_kind = $4)
   AND (
         $5 = ''
@@ -634,6 +804,13 @@ WHERE ($1 = true OR lower(assets.warehouse) = ANY($2))
         OR lower(assets.item_name) LIKE $6
         OR lower(assets.identifier) LIKE $6
         OR lower(assets.asset_ref) LIKE $6
+  )
+  AND (
+        $9 = false
+        OR (
+            location.kind = 'state'
+            AND placement.updated_by_ref = $10
+        )
   )
 ORDER BY lower(assets.item_name), lower(assets.identifier), assets.asset_ref
 LIMIT $7 OFFSET $8
@@ -647,6 +824,14 @@ struct InventoryLocationRow {
     warehouse_id: String,
     factory_location_id: String,
     active: bool,
+    apparatus_json: Value,
+}
+
+#[derive(sqlx::FromRow)]
+struct RawMaterialStatePlacementRow {
+    barcode: String,
+    location_id: String,
+    location_name: String,
     apparatus_json: Value,
 }
 
@@ -796,6 +981,8 @@ async fn fetch_asset(
         .bind(format!("%{}%", asset_ref.trim().to_ascii_lowercase()))
         .bind(50_i64)
         .bind(0_i64)
+        .bind(false)
+        .bind("")
         .fetch_all(pool)
         .await
         .map_err(store_error)?;
@@ -1587,6 +1774,52 @@ async fn update_transfer_actor_tx(
         .execute(&mut **tx)
         .await
         .map_err(store_error)?;
+    Ok(())
+}
+
+async fn insert_transfer_stage_events_tx(
+    tx: &mut Transaction<'_, Postgres>,
+    transfer: &InventoryTransferRow,
+    lines: &[InventoryTransferLineRow],
+    actor: &InventoryActor,
+    note: &str,
+    idempotency_prefix: &str,
+    event_type: &str,
+    moved_to_destination: bool,
+) -> Result<(), InventoryMovementError> {
+    let destination_location = if moved_to_destination {
+        Some(warehouse_location_id_tx(tx, &transfer.destination_warehouse_id).await?)
+    } else {
+        None
+    };
+    for line in lines {
+        insert_movement_event_tx(
+            tx,
+            MovementEventDraft {
+                idempotency_key: format!(
+                    "{}:{}:{}",
+                    idempotency_prefix,
+                    line.asset_kind,
+                    line.asset_ref.to_ascii_lowercase()
+                ),
+                event_type,
+                transfer_id: &transfer.id,
+                asset_kind: InventoryAssetKind::parse(&line.asset_kind)?,
+                asset_ref: line.asset_ref.clone(),
+                from_warehouse_id: &transfer.source_warehouse_id,
+                to_warehouse_id: &transfer.destination_warehouse_id,
+                from_location_id: &line.source_physical_location_id,
+                to_location_id: destination_location
+                    .as_deref()
+                    .unwrap_or(&line.source_physical_location_id),
+                qty: line.qty,
+                uom: &line.uom,
+                actor,
+                note,
+            },
+        )
+        .await?;
+    }
     Ok(())
 }
 

@@ -151,24 +151,66 @@ impl WarehouseStorePort for PostgresWarehouseStore {
         let rows = sqlx::query_as::<_, WarehouseSummaryRow>(
             r#"
             WITH raw_counts AS (
-                SELECT warehouse, count(*)::bigint AS raw_count
-                FROM mini_raw_material_stock
-                WHERE status = 'available' AND qty > 0
-                GROUP BY warehouse
+                SELECT stock.warehouse, count(*)::bigint AS raw_count
+                FROM mini_raw_material_stock stock
+                LEFT JOIN mini_inventory_placements placement
+                  ON placement.asset_kind = 'raw_material'
+                 AND lower(placement.asset_ref) = lower(stock.id)
+                LEFT JOIN mini_inventory_locations physical_location
+                  ON physical_location.id = placement.physical_location_id
+                LEFT JOIN mini_warehouses physical_warehouse
+                  ON physical_warehouse.id = physical_location.warehouse_id
+                WHERE stock.status = 'available' AND stock.qty > 0
+                  AND (
+                        placement.asset_ref IS NULL
+                        OR (
+                            physical_location.kind = 'warehouse'
+                            AND lower(physical_warehouse.name) = lower(stock.warehouse)
+                        )
+                  )
+                GROUP BY stock.warehouse
             ),
             finished_counts AS (
                 SELECT
-                    warehouse,
-                    count(DISTINCT (lower(item_code), lower(uom)))::bigint AS finished_count
-                FROM mini_finished_goods_stock
-                WHERE status = 'available' AND qty > 0
-                GROUP BY warehouse
+                    stock.warehouse,
+                    count(DISTINCT (lower(stock.item_code), lower(stock.uom)))::bigint AS finished_count
+                FROM mini_finished_goods_stock stock
+                LEFT JOIN mini_inventory_placements placement
+                  ON placement.asset_kind = 'finished_goods'
+                 AND lower(placement.asset_ref) = lower(stock.id)
+                LEFT JOIN mini_inventory_locations physical_location
+                  ON physical_location.id = placement.physical_location_id
+                LEFT JOIN mini_warehouses physical_warehouse
+                  ON physical_warehouse.id = physical_location.warehouse_id
+                WHERE stock.status = 'available' AND stock.qty > 0
+                  AND (
+                        placement.asset_ref IS NULL
+                        OR (
+                            physical_location.kind = 'warehouse'
+                            AND lower(physical_warehouse.name) = lower(stock.warehouse)
+                        )
+                  )
+                GROUP BY stock.warehouse
             ),
             qolip_counts AS (
-                SELECT warehouse, COALESCE(sum(quantity), 0)::bigint AS qolip_count
-                FROM mini_qolip_locations
-                WHERE btrim(warehouse) <> ''
-                GROUP BY warehouse
+                SELECT stock.warehouse, COALESCE(sum(stock.quantity), 0)::bigint AS qolip_count
+                FROM mini_qolip_locations stock
+                LEFT JOIN mini_inventory_placements placement
+                  ON placement.asset_kind = 'qolip'
+                 AND lower(placement.asset_ref) = lower(stock.id)
+                LEFT JOIN mini_inventory_locations physical_location
+                  ON physical_location.id = placement.physical_location_id
+                LEFT JOIN mini_warehouses physical_warehouse
+                  ON physical_warehouse.id = physical_location.warehouse_id
+                WHERE btrim(stock.warehouse) <> ''
+                  AND (
+                        placement.asset_ref IS NULL
+                        OR (
+                            physical_location.kind = 'warehouse'
+                            AND lower(physical_warehouse.name) = lower(stock.warehouse)
+                        )
+                  )
+                GROUP BY stock.warehouse
             ),
             qolip_checkout_counts AS (
                 SELECT warehouse, COALESCE(sum(quantity), 0)::bigint AS checkout_count
@@ -291,9 +333,23 @@ impl WarehouseStorePort for PostgresWarehouseStore {
                 COUNT(*)::bigint AS package_count
             FROM mini_finished_goods_stock stock
             LEFT JOIN mini_items items ON lower(items.code) = lower(stock.item_code)
+            LEFT JOIN mini_inventory_placements placement
+              ON placement.asset_kind = 'finished_goods'
+             AND lower(placement.asset_ref) = lower(stock.id)
+            LEFT JOIN mini_inventory_locations physical_location
+              ON physical_location.id = placement.physical_location_id
+            LEFT JOIN mini_warehouses physical_warehouse
+              ON physical_warehouse.id = physical_location.warehouse_id
             WHERE lower(stock.warehouse) = lower($1)
               AND stock.status = 'available'
               AND stock.qty > 0
+              AND (
+                    placement.asset_ref IS NULL
+                    OR (
+                        physical_location.kind = 'warehouse'
+                        AND lower(physical_warehouse.name) = lower(stock.warehouse)
+                    )
+              )
               AND (
                     $2 = '%%'
                     OR lower(stock.item_code) LIKE $2

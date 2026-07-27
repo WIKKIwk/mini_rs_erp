@@ -43,7 +43,9 @@ pub(super) async fn apply_raw_material_stock_transitions_tx(
             );
             ProductionMapError::StoreFailed
         })?;
-        if rows.len() != barcodes.len() {
+        if matches!(transition.kind, RawMaterialStockTransitionKind::InUse)
+            && rows.len() != barcodes.len()
+        {
             return Err(ProductionMapError::RawMaterialStockUnavailable);
         }
         for row in &rows {

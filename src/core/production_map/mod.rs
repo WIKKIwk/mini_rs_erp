@@ -30,7 +30,7 @@ pub use compiler::{compile_map, run_map_with_variables};
 pub use materials::{
     ApparatusMaterialRequirementGroup, ApparatusMaterialRule, ApparatusMaterialRuleUpsert,
     MaterialScanProgressAction, RawMaterialAssignment, RawMaterialAssignmentDeleteInput,
-    RawMaterialAssignmentInput,
+    RawMaterialAssignmentInput, RawMaterialStartPolicy, RawMaterialStartRequirements,
 };
 #[cfg(test)]
 pub use memory_store::MemoryProductionMapStore;

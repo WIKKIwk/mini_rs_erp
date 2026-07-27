@@ -106,6 +106,17 @@ pub async fn production_map_queue_action(
     } else {
         material_barcodes.join(",")
     };
+    let state_material_barcodes =
+        if matches!(input.action, queue_state::ApparatusQueueAction::Start) {
+            super::raw_materials::raw_material_state_barcodes_for_order_apparatus(
+                &state,
+                &input.order_id,
+                &input.apparatus,
+            )
+            .await?
+        } else {
+            Vec::new()
+        };
     let produced_qty = input.produced_qty.or(input.qty);
     let completion_request_note = if input.completion_request_note.trim().is_empty() {
         input.description.clone()
@@ -266,6 +277,7 @@ pub async fn production_map_queue_action(
                 assigned_apparatus: &assigned_apparatus,
                 actor: queue_action_actor(&principal),
                 material_barcode: &material_barcode,
+                state_material_barcodes: &state_material_barcodes,
                 progress,
             },
         )

@@ -151,6 +151,14 @@ pub struct InventoryAsset {
     pub placement_version: i64,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RawMaterialStatePlacement {
+    pub barcode: String,
+    pub location_id: String,
+    pub location_name: String,
+    pub apparatus: Vec<String>,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct InventoryTransferLine {
     pub asset_kind: InventoryAssetKind,
@@ -195,6 +203,8 @@ pub struct InventoryAssetQuery {
     pub query: String,
     #[serde(default)]
     pub asset_kind: Option<InventoryAssetKind>,
+    #[serde(default)]
+    pub current_user_states_only: bool,
     #[serde(default = "default_asset_limit")]
     pub limit: usize,
     #[serde(default)]
@@ -287,6 +297,20 @@ impl InventoryActor {
                 .assigned_warehouses
                 .contains(&warehouse.trim().to_ascii_lowercase())
     }
+
+    pub fn is_assigned_to_warehouse(&self, warehouse: &str) -> bool {
+        self.assigned_warehouses
+            .contains(&warehouse.trim().to_ascii_lowercase())
+    }
+
+    pub fn manages_transfer_internally(
+        &self,
+        source_warehouse: &str,
+        destination_warehouse: &str,
+    ) -> bool {
+        self.is_assigned_to_warehouse(source_warehouse)
+            && self.is_assigned_to_warehouse(destination_warehouse)
+    }
 }
 
 #[derive(Debug, Error, Clone, PartialEq, Eq)]
@@ -299,6 +323,8 @@ pub enum InventoryMovementError {
     AssetNotFound,
     #[error("inventory asset is not available")]
     AssetUnavailable,
+    #[error("inventory asset is not physically located in the source warehouse")]
+    AssetNotInSourceWarehouse,
     #[error("inventory location is invalid")]
     InvalidLocation,
     #[error("inventory location not found")]
@@ -338,6 +364,11 @@ pub enum InventoryMovementError {
 #[async_trait]
 pub trait InventoryMovementStorePort: Send + Sync {
     async fn locations(&self) -> Result<Vec<InventoryLocation>, InventoryMovementError>;
+
+    async fn raw_material_state_placements(
+        &self,
+        barcodes: &[String],
+    ) -> Result<Vec<RawMaterialStatePlacement>, InventoryMovementError>;
 
     async fn assets(
         &self,
@@ -417,6 +448,23 @@ impl InventoryMovementService {
 
     pub async fn locations(&self) -> Result<Vec<InventoryLocation>, InventoryMovementError> {
         self.store.locations().await
+    }
+
+    pub async fn raw_material_state_placements(
+        &self,
+        barcodes: &[String],
+    ) -> Result<Vec<RawMaterialStatePlacement>, InventoryMovementError> {
+        let barcodes = barcodes
+            .iter()
+            .map(|barcode| barcode.trim().to_ascii_uppercase())
+            .filter(|barcode| !barcode.is_empty())
+            .collect::<BTreeSet<_>>()
+            .into_iter()
+            .collect::<Vec<_>>();
+        if barcodes.is_empty() {
+            return Ok(Vec::new());
+        }
+        self.store.raw_material_state_placements(&barcodes).await
     }
 
     pub async fn assets(
@@ -572,6 +620,7 @@ fn now_unix() -> i64 {
 struct MemoryInventoryState {
     locations: BTreeMap<String, InventoryLocation>,
     assets: BTreeMap<(InventoryAssetKind, String), InventoryAsset>,
+    placement_updated_by_ref: BTreeMap<(InventoryAssetKind, String), String>,
     transfers: BTreeMap<String, InventoryTransfer>,
     idempotency: BTreeMap<String, String>,
     relocation_idempotency: BTreeMap<String, (InventoryAssetKind, String, String)>,
@@ -627,6 +676,40 @@ impl InventoryMovementStorePort for MemoryInventoryMovementStore {
         Ok(locations)
     }
 
+    async fn raw_material_state_placements(
+        &self,
+        barcodes: &[String],
+    ) -> Result<Vec<RawMaterialStatePlacement>, InventoryMovementError> {
+        let requested = barcodes
+            .iter()
+            .map(|barcode| barcode.trim().to_ascii_uppercase())
+            .collect::<BTreeSet<_>>();
+        let state = self.state.read().await;
+        Ok(state
+            .assets
+            .values()
+            .filter(|asset| {
+                asset.kind == InventoryAssetKind::RawMaterial
+                    && asset.physical_location.kind == InventoryLocationKind::State
+                    && requested.contains(&asset.identifier.trim().to_ascii_uppercase())
+                    && asset.status != "consumed"
+            })
+            .filter_map(|asset| {
+                let location = state.locations.get(&asset.physical_location.id)?;
+                Some(RawMaterialStatePlacement {
+                    barcode: asset.identifier.trim().to_string(),
+                    location_id: location.id.clone(),
+                    location_name: location.name.clone(),
+                    apparatus: location
+                        .apparatus
+                        .iter()
+                        .map(|apparatus| apparatus.name.clone())
+                        .collect(),
+                })
+            })
+            .collect())
+    }
+
     async fn assets(
         &self,
         actor: &InventoryActor,
@@ -642,12 +725,12 @@ impl InventoryMovementStorePort for MemoryInventoryMovementStore {
                         .warehouse_id
                         .eq_ignore_ascii_case(query.warehouse_id.trim())
             })
-            .map(|location| location.name.clone());
+            .cloned();
         if !query.warehouse_id.trim().is_empty() && requested_warehouse.is_none() {
             return Err(InventoryMovementError::WarehouseNotFound);
         }
-        if let Some(warehouse) = requested_warehouse.as_deref() {
-            if !actor.can_manage_warehouse(warehouse) {
+        if let Some(warehouse) = requested_warehouse.as_ref() {
+            if !actor.can_manage_warehouse(&warehouse.name) {
                 return Err(InventoryMovementError::WarehouseForbidden);
             }
         }
@@ -657,9 +740,22 @@ impl InventoryMovementStorePort for MemoryInventoryMovementStore {
             .values()
             .filter(|asset| actor.can_manage_warehouse(&asset.custody_warehouse))
             .filter(|asset| {
+                !query.current_user_states_only
+                    || (asset.physical_location.kind == InventoryLocationKind::State
+                        && state
+                            .placement_updated_by_ref
+                            .get(&(asset.kind, asset.asset_ref.to_ascii_lowercase()))
+                            .is_some_and(|owner_ref| {
+                                owner_ref.trim() == actor.principal.ref_.trim()
+                            }))
+            })
+            .filter(|asset| {
                 requested_warehouse
-                    .as_deref()
-                    .map(|warehouse| asset.custody_warehouse.eq_ignore_ascii_case(warehouse))
+                    .as_ref()
+                    .map(|warehouse| {
+                        asset.physical_location.kind == InventoryLocationKind::Warehouse
+                            && asset.physical_location.id == warehouse.id
+                    })
                     .unwrap_or(true)
             })
             .filter(|asset| {
@@ -744,6 +840,10 @@ impl InventoryMovementStorePort for MemoryInventoryMovementStore {
         asset.physical_location = InventoryLocationRef::from(&location);
         asset.placement_version += 1;
         let saved = asset.clone();
+        state.placement_updated_by_ref.insert(
+            key,
+            actor.principal.ref_.trim().to_string(),
+        );
         state.relocation_idempotency.insert(
             input.idempotency_key.clone(),
             (
@@ -797,6 +897,11 @@ impl InventoryMovementStorePort for MemoryInventoryMovementStore {
             if !asset.transfer_id.is_empty() || asset.status != "available" {
                 return Err(InventoryMovementError::AssetUnavailable);
             }
+            if asset.physical_location.kind != InventoryLocationKind::Warehouse
+                || asset.physical_location.id != source.id
+            {
+                return Err(InventoryMovementError::AssetNotInSourceWarehouse);
+            }
             lines.push(InventoryTransferLine {
                 asset_kind: asset.kind,
                 asset_ref: asset.asset_ref.clone(),
@@ -820,7 +925,9 @@ impl InventoryMovementStorePort for MemoryInventoryMovementStore {
             asset.transfer_id = transfer_id.to_string();
             asset.status = "transfer_reserved".to_string();
         }
-        let transfer = InventoryTransfer {
+        let internal_transfer =
+            actor.manages_transfer_internally(&source.name, &destination.name);
+        let mut transfer = InventoryTransfer {
             id: transfer_id.to_string(),
             source_warehouse_id: source.warehouse_id,
             source_warehouse: source.name,
@@ -842,6 +949,9 @@ impl InventoryMovementStorePort for MemoryInventoryMovementStore {
             cancelled_at_unix: None,
             lines,
         };
+        if internal_transfer {
+            complete_memory_transfer(&mut state, &mut transfer, actor, now_unix())?;
+        }
         state
             .idempotency
             .insert(input.idempotency_key.clone(), transfer.id.clone());
@@ -919,6 +1029,10 @@ impl InventoryMovementStorePort for MemoryInventoryMovementStore {
             return Ok(transfer);
         }
         let now = now_unix();
+        let internal_transfer = actor.manages_transfer_internally(
+            &transfer.source_warehouse,
+            &transfer.destination_warehouse,
+        );
 
         let mut updated = transfer.clone();
         if transfer_action_already_applied(updated.status, action) {
@@ -936,6 +1050,9 @@ impl InventoryMovementStorePort for MemoryInventoryMovementStore {
                 updated.status = InventoryTransferStatus::Approved;
                 updated.approved_by_name = actor.principal.display_name.clone();
                 updated.approved_at_unix = Some(now);
+                if internal_transfer {
+                    complete_memory_transfer(&mut state, &mut updated, actor, now)?;
+                }
             }
             InventoryTransferActionKind::Reject => {
                 if updated.status != InventoryTransferStatus::Requested {
@@ -953,12 +1070,16 @@ impl InventoryMovementStorePort for MemoryInventoryMovementStore {
                 updated.status = InventoryTransferStatus::InTransit;
                 updated.dispatched_by_name = actor.principal.display_name.clone();
                 updated.dispatched_at_unix = Some(now);
-                for line in &updated.lines {
-                    if let Some(asset) = state
-                        .assets
-                        .get_mut(&(line.asset_kind, line.asset_ref.to_ascii_lowercase()))
-                    {
-                        asset.status = "in_transit".to_string();
+                if internal_transfer {
+                    complete_memory_transfer(&mut state, &mut updated, actor, now)?;
+                } else {
+                    for line in &updated.lines {
+                        if let Some(asset) = state
+                            .assets
+                            .get_mut(&(line.asset_kind, line.asset_ref.to_ascii_lowercase()))
+                        {
+                            asset.status = "in_transit".to_string();
+                        }
                     }
                 }
             }
@@ -1090,6 +1211,43 @@ fn release_memory_assets(state: &mut MemoryInventoryState, transfer: &InventoryT
     }
 }
 
+fn complete_memory_transfer(
+    state: &mut MemoryInventoryState,
+    transfer: &mut InventoryTransfer,
+    actor: &InventoryActor,
+    now: i64,
+) -> Result<(), InventoryMovementError> {
+    let destination = warehouse_location(state, &transfer.destination_warehouse_id)?;
+    for line in &transfer.lines {
+        let asset = state
+            .assets
+            .get_mut(&(line.asset_kind, line.asset_ref.to_ascii_lowercase()))
+            .ok_or(InventoryMovementError::AssetNotFound)?;
+        if asset.transfer_id != transfer.id {
+            return Err(InventoryMovementError::AssetUnavailable);
+        }
+        asset.custody_warehouse_id = transfer.destination_warehouse_id.clone();
+        asset.custody_warehouse = transfer.destination_warehouse.clone();
+        asset.physical_location = InventoryLocationRef::from(&destination);
+        asset.transfer_id.clear();
+        asset.status = "available".to_string();
+        asset.placement_version += 1;
+    }
+    let actor_name = actor.principal.display_name.clone();
+    if transfer.approved_at_unix.is_none() {
+        transfer.approved_by_name = actor_name.clone();
+        transfer.approved_at_unix = Some(now);
+    }
+    if transfer.dispatched_at_unix.is_none() {
+        transfer.dispatched_by_name = actor_name.clone();
+        transfer.dispatched_at_unix = Some(now);
+    }
+    transfer.status = InventoryTransferStatus::Received;
+    transfer.received_by_name = actor_name;
+    transfer.received_at_unix = Some(now);
+    Ok(())
+}
+
 fn location_kind_rank(kind: InventoryLocationKind) -> u8 {
     match kind {
         InventoryLocationKind::State => 0,
@@ -1126,9 +1284,83 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn relocation_changes_only_physical_location() {
+    async fn raw_material_state_placements_return_only_requested_state_assets() {
+        let store = Arc::new(MemoryInventoryMovementStore::new());
+        let warehouse = warehouse_location_fixture("warehouse:a", "A ombor");
+        let state_location = InventoryLocation {
+            id: "location:state:pechat".to_string(),
+            kind: InventoryLocationKind::State,
+            name: "Pechat oldi".to_string(),
+            warehouse_id: String::new(),
+            factory_location_id: "factory:pechat".to_string(),
+            active: true,
+            apparatus: vec![InventoryLocationApparatus {
+                id: "apparatus:pechat".to_string(),
+                name: "7 ta rangli pechat - A".to_string(),
+            }],
+        };
+        store
+            .seed_locations(vec![warehouse.clone(), state_location.clone()])
+            .await;
+        store
+            .seed_assets(vec![
+                InventoryAsset {
+                    kind: InventoryAssetKind::RawMaterial,
+                    asset_ref: "raw:state".to_string(),
+                    custody_warehouse_id: warehouse.warehouse_id.clone(),
+                    custody_warehouse: warehouse.name.clone(),
+                    item_code: "PE".to_string(),
+                    item_name: "Polietilen".to_string(),
+                    identifier: "RM-STATE".to_string(),
+                    qty: 10.0,
+                    uom: "kg".to_string(),
+                    status: "available".to_string(),
+                    physical_location: InventoryLocationRef::from(&state_location),
+                    transfer_id: String::new(),
+                    placement_version: 2,
+                },
+                InventoryAsset {
+                    kind: InventoryAssetKind::RawMaterial,
+                    asset_ref: "raw:warehouse".to_string(),
+                    custody_warehouse_id: warehouse.warehouse_id.clone(),
+                    custody_warehouse: warehouse.name.clone(),
+                    item_code: "PE".to_string(),
+                    item_name: "Polietilen".to_string(),
+                    identifier: "RM-WAREHOUSE".to_string(),
+                    qty: 10.0,
+                    uom: "kg".to_string(),
+                    status: "available".to_string(),
+                    physical_location: InventoryLocationRef::from(&warehouse),
+                    transfer_id: String::new(),
+                    placement_version: 1,
+                },
+            ])
+            .await;
+        let service = InventoryMovementService::new(store);
+
+        let placements = service
+            .raw_material_state_placements(&[
+                "rm-state".to_string(),
+                "RM-WAREHOUSE".to_string(),
+                "RM-NOT-REQUESTED".to_string(),
+            ])
+            .await
+            .expect("state placements");
+
+        assert_eq!(placements.len(), 1);
+        assert_eq!(placements[0].barcode, "RM-STATE");
+        assert_eq!(placements[0].location_id, state_location.id);
+        assert_eq!(
+            placements[0].apparatus,
+            vec!["7 ta rangli pechat - A".to_string()]
+        );
+    }
+
+    #[tokio::test]
+    async fn state_relocation_blocks_transfer_until_asset_returns_to_warehouse() {
         let store = Arc::new(MemoryInventoryMovementStore::new());
         let source = warehouse_location_fixture("warehouse:a", "A ombor");
+        let destination = warehouse_location_fixture("warehouse:b", "B ombor");
         let state_location = InventoryLocation {
             id: "location:state:bosma".to_string(),
             kind: InventoryLocationKind::State,
@@ -1139,7 +1371,11 @@ mod tests {
             apparatus: Vec::new(),
         };
         store
-            .seed_locations(vec![source.clone(), state_location.clone()])
+            .seed_locations(vec![
+                source.clone(),
+                destination.clone(),
+                state_location.clone(),
+            ])
             .await;
         store
             .seed_assets(vec![InventoryAsset {
@@ -1182,6 +1418,73 @@ mod tests {
         assert_eq!(moved.qty, 10.0);
         assert_eq!(moved.custody_warehouse, "A ombor");
         assert_eq!(moved.physical_location.name, "Bosma oldi");
+
+        let state_assets = service
+            .assets(
+                &actor,
+                InventoryAssetQuery {
+                    current_user_states_only: true,
+                    ..InventoryAssetQuery::default()
+                },
+            )
+            .await
+            .expect("current user state assets");
+        assert_eq!(state_assets.len(), 1);
+
+        let other_actor = InventoryActor::new(
+            principal(
+                PrincipalRole::MaterialTaminotchi,
+                "m2",
+                "Boshqa materialchi",
+            ),
+            false,
+            ["A ombor".to_string()],
+        );
+        let other_state_assets = service
+            .assets(
+                &other_actor,
+                InventoryAssetQuery {
+                    current_user_states_only: true,
+                    ..InventoryAssetQuery::default()
+                },
+            )
+            .await
+            .expect("other user state assets");
+        assert!(other_state_assets.is_empty());
+
+        let source_assets = service
+            .assets(
+                &actor,
+                InventoryAssetQuery {
+                    warehouse_id: source.warehouse_id.clone(),
+                    ..InventoryAssetQuery::default()
+                },
+            )
+            .await
+            .expect("source warehouse assets");
+        assert!(source_assets.is_empty());
+
+        let error = service
+            .create_transfer(
+                &actor,
+                InventoryTransferCreate {
+                    source_warehouse_id: source.warehouse_id,
+                    destination_warehouse_id: destination.warehouse_id,
+                    assets: vec![InventoryAssetSelector {
+                        asset_kind: InventoryAssetKind::RawMaterial,
+                        asset_ref: "raw:1".to_string(),
+                    }],
+                    note: String::new(),
+                    idempotency_key: "state-transfer-1".to_string(),
+                },
+            )
+            .await
+            .expect_err("state asset must return to a warehouse before transfer");
+
+        assert_eq!(
+            error,
+            InventoryMovementError::AssetNotInSourceWarehouse
+        );
     }
 
     #[tokio::test]
@@ -1343,6 +1646,88 @@ mod tests {
         assert_eq!(destination_assets.len(), 1);
         assert_eq!(destination_assets[0].qty, 4.0);
         assert_eq!(destination_assets[0].custody_warehouse, "B ombor");
+    }
+
+    #[tokio::test]
+    async fn transfer_between_warehouses_assigned_to_same_actor_completes_immediately() {
+        let store = Arc::new(MemoryInventoryMovementStore::new());
+        let source = warehouse_location_fixture("warehouse:a", "A ombor");
+        let destination = warehouse_location_fixture("warehouse:b", "B ombor");
+        store
+            .seed_locations(vec![source.clone(), destination.clone()])
+            .await;
+        store
+            .seed_assets(vec![InventoryAsset {
+                kind: InventoryAssetKind::RawMaterial,
+                asset_ref: "raw:1".to_string(),
+                custody_warehouse_id: source.warehouse_id.clone(),
+                custody_warehouse: source.name.clone(),
+                item_code: "M-1".to_string(),
+                item_name: "Material".to_string(),
+                identifier: "RAW-1".to_string(),
+                qty: 8.0,
+                uom: "kg".to_string(),
+                status: "available".to_string(),
+                physical_location: InventoryLocationRef::from(&source),
+                transfer_id: String::new(),
+                placement_version: 1,
+            }])
+            .await;
+        let service = InventoryMovementService::new(store);
+        let actor = InventoryActor::new(
+            principal(PrincipalRole::MaterialTaminotchi, "m1", "Materialchi"),
+            false,
+            [source.name.clone(), destination.name.clone()],
+        );
+
+        let transfer = service
+            .create_transfer(
+                &actor,
+                InventoryTransferCreate {
+                    source_warehouse_id: source.warehouse_id.clone(),
+                    destination_warehouse_id: destination.warehouse_id.clone(),
+                    assets: vec![InventoryAssetSelector {
+                        asset_kind: InventoryAssetKind::RawMaterial,
+                        asset_ref: "raw:1".to_string(),
+                    }],
+                    note: String::new(),
+                    idempotency_key: "internal-transfer-1".to_string(),
+                },
+            )
+            .await
+            .expect("internal transfer");
+
+        assert_eq!(transfer.status, InventoryTransferStatus::Received);
+        assert_eq!(transfer.approved_by_name, "Materialchi");
+        assert_eq!(transfer.dispatched_by_name, "Materialchi");
+        assert_eq!(transfer.received_by_name, "Materialchi");
+
+        let source_assets = service
+            .assets(
+                &actor,
+                InventoryAssetQuery {
+                    warehouse_id: source.warehouse_id,
+                    ..InventoryAssetQuery::default()
+                },
+            )
+            .await
+            .expect("source assets");
+        assert!(source_assets.is_empty());
+
+        let destination_assets = service
+            .assets(
+                &actor,
+                InventoryAssetQuery {
+                    warehouse_id: destination.warehouse_id,
+                    ..InventoryAssetQuery::default()
+                },
+            )
+            .await
+            .expect("destination assets");
+        assert_eq!(destination_assets.len(), 1);
+        assert_eq!(destination_assets[0].status, "available");
+        assert!(destination_assets[0].transfer_id.is_empty());
+        assert_eq!(destination_assets[0].physical_location.id, destination.id);
     }
 
     #[tokio::test]

@@ -153,6 +153,9 @@ fn inventory_error(error: InventoryMovementError) -> AdminError {
         InventoryMovementError::MissingAssetRef => bad_request("inventory_asset_ref_required"),
         InventoryMovementError::AssetNotFound => not_found("inventory_asset_not_found"),
         InventoryMovementError::AssetUnavailable => conflict("inventory_asset_unavailable"),
+        InventoryMovementError::AssetNotInSourceWarehouse => {
+            conflict("inventory_asset_not_in_source_warehouse")
+        }
         InventoryMovementError::InvalidLocation => bad_request("inventory_location_invalid"),
         InventoryMovementError::LocationNotFound => not_found("inventory_location_not_found"),
         InventoryMovementError::LocationInactive => conflict("inventory_location_inactive"),

@@ -161,14 +161,12 @@ impl MaterialReceiptStorePort for RawMaterialStockLookup {
         for barcode in barcodes {
             let key = barcode.trim().to_ascii_uppercase();
             let Some(item) = stock.get_mut(&key) else {
-                return Err(GscalePortError::StoreWrite(format!("missing stock {key}")));
+                continue;
             };
             if item.reserved_order_id != order_id.trim()
                 || (item.status != "in_use" && item.status != "consumed")
             {
-                return Err(GscalePortError::InvalidInput(
-                    "raw_material_stock_unavailable".to_string(),
-                ));
+                continue;
             }
             item.status = "consumed".to_string();
             updated.push(item.clone());

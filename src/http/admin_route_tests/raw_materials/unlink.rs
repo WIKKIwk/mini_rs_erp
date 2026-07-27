@@ -31,7 +31,7 @@ async fn raw_material_assignment_can_be_unlinked_before_start() {
             "PUT",
             "/v1/mobile/admin/raw-material-rules",
             &token,
-            r#"{"apparatus":"7 ta rangli pechat - A","requires_material":true,"item_groups":["Kraska"]}"#,
+            r#"{"apparatus":"7 ta rangli pechat - A","requires_material":true,"start_policy":"requirement_groups","item_groups":["Kraska"]}"#,
         ))
         .await
         .expect("rule save");
@@ -151,7 +151,7 @@ async fn raw_material_assignment_unlink_rejects_started_stock() {
             "PUT",
             "/v1/mobile/admin/raw-material-rules",
             &token,
-            r#"{"apparatus":"7 ta rangli pechat - A","requires_material":true,"item_groups":["Kraska"]}"#,
+            r#"{"apparatus":"7 ta rangli pechat - A","requires_material":true,"start_policy":"requirement_groups","item_groups":["Kraska"]}"#,
         ))
         .await
         .expect("rule save");

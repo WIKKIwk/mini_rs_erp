@@ -18,11 +18,21 @@ pub struct ApparatusMaterialRequirementGroup {
     pub min_required_count: usize,
 }
 
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RawMaterialStartPolicy {
+    #[default]
+    StateAll,
+    RequirementGroups,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ApparatusMaterialRule {
     pub apparatus: String,
     #[serde(default)]
     pub requires_material: bool,
+    #[serde(default)]
+    pub start_policy: RawMaterialStartPolicy,
     #[serde(default)]
     pub item_groups: Vec<String>,
     #[serde(default)]
@@ -34,6 +44,8 @@ pub struct ApparatusMaterialRuleUpsert {
     pub apparatus: String,
     #[serde(default)]
     pub requires_material: bool,
+    #[serde(default)]
+    pub start_policy: RawMaterialStartPolicy,
     #[serde(default)]
     pub item_groups: Vec<String>,
     #[serde(default)]
@@ -76,6 +88,15 @@ pub struct RawMaterialAssignment {
     pub assigned_at: String,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct RawMaterialStartRequirements {
+    pub policy: RawMaterialStartPolicy,
+    pub requires_material: bool,
+    pub requirement_groups: Vec<ApparatusMaterialRequirementGroup>,
+    pub assigned_barcodes: Vec<String>,
+    pub staged_barcodes: Vec<String>,
+}
+
 pub struct MaterialScanProgressAction<'a> {
     pub apparatus: &'a str,
     pub order_id: &'a str,
@@ -83,6 +104,7 @@ pub struct MaterialScanProgressAction<'a> {
     pub assigned_apparatus: &'a [String],
     pub actor: QueueActionActor,
     pub material_barcode: &'a str,
+    pub state_material_barcodes: &'a [String],
     pub progress: QueueProgressInput,
 }
 
@@ -107,6 +129,44 @@ impl ProductionMapService {
         &self,
     ) -> Result<Vec<RawMaterialAssignment>, ProductionMapError> {
         self.store.raw_material_assignments().await
+    }
+
+    pub async fn raw_material_start_requirements(
+        &self,
+        apparatus: &str,
+        order_id: &str,
+        state_material_barcodes: &[String],
+    ) -> Result<RawMaterialStartRequirements, ProductionMapError> {
+        let assignments = self
+            .raw_material_assignments_for_order_apparatus(order_id, apparatus)
+            .await?;
+        let rule = self.material_rule_for_apparatus(apparatus).await?;
+        let policy = rule
+            .as_ref()
+            .map(|rule| rule.start_policy)
+            .unwrap_or_default();
+        let assigned = assignments
+            .iter()
+            .map(|assignment| normalize_barcode(&assignment.barcode))
+            .filter(|barcode| !barcode.is_empty())
+            .collect::<BTreeSet<_>>();
+        let staged = state_material_barcodes
+            .iter()
+            .map(|barcode| normalize_barcode(barcode))
+            .filter(|barcode| assigned.contains(barcode))
+            .collect::<BTreeSet<_>>();
+        Ok(RawMaterialStartRequirements {
+            policy,
+            requires_material: rule
+                .as_ref()
+                .is_some_and(|rule| rule.requires_material),
+            requirement_groups: rule
+                .as_ref()
+                .map(effective_requirement_groups)
+                .unwrap_or_default(),
+            assigned_barcodes: assigned.into_iter().collect(),
+            staged_barcodes: staged.into_iter().collect(),
+        })
     }
 
     pub async fn unlink_raw_material_assignment(
@@ -149,7 +209,28 @@ impl ProductionMapService {
         actor: &QueueActionActor,
     ) -> Result<(RawMaterialAssignment, Vec<String>), ProductionMapError> {
         let _guard = self.queue_action_guard().await;
-        let assignment = self.prepare_raw_material_assignment(input, actor).await?;
+        let normalized_barcode = normalize_barcode(&input.barcode);
+        let requested_apparatus = input.apparatus.trim().to_string();
+        let existing = self
+            .store
+            .raw_material_assignments()
+            .await?
+            .into_iter()
+            .find(|assignment| same_barcode(&assignment.barcode, &normalized_barcode));
+        let assignment = match existing {
+            Some(assignment)
+                if assignment.order_id.trim() == input.order_id.trim()
+                    && (requested_apparatus.is_empty()
+                        || queue_state::apparatus_titles_match(
+                            &assignment.apparatus,
+                            &requested_apparatus,
+                        )) =>
+            {
+                assignment
+            }
+            Some(_) => return Err(ProductionMapError::RawMaterialAlreadyAssigned),
+            None => self.prepare_raw_material_assignment(input, actor).await?,
+        };
         if !queue_state::apparatus_matches_assigned(&assignment.apparatus, assigned_apparatus) {
             return Err(ProductionMapError::ApparatusNotAssigned);
         }
@@ -261,12 +342,19 @@ impl ProductionMapService {
         assigned_apparatus: &[String],
         actor: QueueActionActor,
         material_barcode: &str,
+        state_material_barcodes: &[String],
     ) -> Result<std::collections::BTreeMap<String, String>, ProductionMapError> {
         if !queue_state::apparatus_matches_assigned(apparatus, assigned_apparatus) {
             return Err(ProductionMapError::ApparatusNotAssigned);
         }
-        self.validate_material_scan(apparatus, order_id, action, material_barcode)
-            .await?;
+        self.validate_material_scan(
+            apparatus,
+            order_id,
+            action,
+            material_barcode,
+            state_material_barcodes,
+        )
+        .await?;
         self.apply_apparatus_queue_action(apparatus, order_id, action, assigned_apparatus, actor)
             .await
     }
@@ -293,13 +381,20 @@ impl ProductionMapService {
             assigned_apparatus,
             actor,
             material_barcode,
+            state_material_barcodes,
             progress,
         } = request;
         if !queue_state::apparatus_matches_assigned(apparatus, assigned_apparatus) {
             return Err(ProductionMapError::ApparatusNotAssigned);
         }
-        self.validate_material_scan(apparatus, order_id, action, material_barcode)
-            .await?;
+        self.validate_material_scan(
+            apparatus,
+            order_id,
+            action,
+            material_barcode,
+            state_material_barcodes,
+        )
+        .await?;
         self.prepare_apparatus_queue_action_with_progress(
             apparatus,
             order_id,
@@ -335,28 +430,24 @@ impl ProductionMapService {
         order_id: &str,
         action: queue_state::ApparatusQueueAction,
         material_barcode: &str,
+        state_material_barcodes: &[String],
     ) -> Result<(), ProductionMapError> {
         if !matches!(action, queue_state::ApparatusQueueAction::Start) {
             return Ok(());
         }
         let assignments = self
-            .store
-            .raw_material_assignments()
-            .await?
-            .into_iter()
-            .filter(|assignment| {
-                assignment.order_id.trim() == order_id.trim()
-                    && queue_state::apparatus_titles_match(&assignment.apparatus, apparatus)
-            })
-            .collect::<Vec<_>>();
+            .raw_material_assignments_for_order_apparatus(order_id, apparatus)
+            .await?;
+        let rule = self.material_rule_for_apparatus(apparatus).await?;
         if assignments.is_empty() {
-            if self.apparatus_requires_material(apparatus).await? {
+            if rule.as_ref().is_some_and(|rule| rule.requires_material) {
                 return Err(ProductionMapError::RawMaterialAssignmentNotFound);
             }
             return Ok(());
         }
-        if let Some(rule) = self.material_rule_for_apparatus(apparatus).await?
+        if let Some(rule) = rule.as_ref()
             && rule.requires_material
+            && rule.start_policy == RawMaterialStartPolicy::RequirementGroups
             && !material_requirements_met(&rule, &assignments)
         {
             return Err(ProductionMapError::RawMaterialAssignmentNotFound);
@@ -369,20 +460,61 @@ impl ProductionMapService {
             .iter()
             .map(|assignment| normalize_barcode(&assignment.barcode))
             .collect::<BTreeSet<_>>();
-        if scanned != assigned {
+        if !scanned.is_subset(&assigned) {
             return Err(ProductionMapError::RawMaterialMismatch);
+        }
+        match rule
+            .as_ref()
+            .map(|rule| rule.start_policy)
+            .unwrap_or_default()
+        {
+            RawMaterialStartPolicy::StateAll => {
+                let staged = state_material_barcodes
+                    .iter()
+                    .map(|barcode| normalize_barcode(barcode))
+                    .filter(|barcode| assigned.contains(barcode))
+                    .collect::<BTreeSet<_>>();
+                if staged.is_empty() {
+                    return Err(ProductionMapError::RawMaterialStateNotReady);
+                }
+                if scanned != staged {
+                    return Err(ProductionMapError::RawMaterialScanIncomplete);
+                }
+            }
+            RawMaterialStartPolicy::RequirementGroups => {
+                let scanned_assignments = assignments
+                    .iter()
+                    .filter(|assignment| {
+                        scanned.contains(&normalize_barcode(&assignment.barcode))
+                    })
+                    .cloned()
+                    .collect::<Vec<_>>();
+                let Some(rule) = rule.as_ref() else {
+                    return Err(ProductionMapError::RawMaterialRequirementNotMet);
+                };
+                if !material_requirements_met(rule, &scanned_assignments) {
+                    return Err(ProductionMapError::RawMaterialRequirementNotMet);
+                }
+            }
         }
         Ok(())
     }
 
-    async fn apparatus_requires_material(
+    async fn raw_material_assignments_for_order_apparatus(
         &self,
+        order_id: &str,
         apparatus: &str,
-    ) -> Result<bool, ProductionMapError> {
+    ) -> Result<Vec<RawMaterialAssignment>, ProductionMapError> {
         Ok(self
-            .material_rule_for_apparatus(apparatus)
+            .store
+            .raw_material_assignments()
             .await?
-            .is_some_and(|rule| rule.requires_material))
+            .into_iter()
+            .filter(|assignment| {
+                assignment.order_id.trim() == order_id.trim()
+                    && queue_state::apparatus_titles_match(&assignment.apparatus, apparatus)
+            })
+            .collect())
     }
 
     async fn material_rule_for_apparatus(

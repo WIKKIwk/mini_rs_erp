@@ -21,6 +21,7 @@ pub(super) fn normalize_rule(
     Ok(ApparatusMaterialRule {
         apparatus,
         requires_material: input.requires_material,
+        start_policy: input.start_policy,
         item_groups,
         requirement_groups,
     })
@@ -43,32 +44,72 @@ pub(super) fn material_requirements_met(
     rule: &ApparatusMaterialRule,
     assignments: &[RawMaterialAssignment],
 ) -> bool {
-    effective_requirement_groups(rule).into_iter().all(|group| {
-        let required_count = group.min_required_count.max(1);
-        let matched_count = assignments
-            .iter()
-            .filter(|assignment| {
-                group
-                    .item_groups
-                    .iter()
-                    .any(|item_group| item_group.eq_ignore_ascii_case(assignment.item_group.trim()))
-            })
-            .count();
-        matched_count >= required_count
-    })
+    let slots = effective_requirement_groups(rule)
+        .into_iter()
+        .flat_map(|group| {
+            (0..group.min_required_count.max(1)).map(move |_| group.item_groups.clone())
+        })
+        .collect::<Vec<_>>();
+    let mut matched_slots = vec![None; slots.len()];
+    for assignment_index in 0..assignments.len() {
+        let mut visited = vec![false; slots.len()];
+        try_match_material_assignment(
+            assignment_index,
+            assignments,
+            &slots,
+            &mut matched_slots,
+            &mut visited,
+        );
+    }
+    matched_slots.iter().all(Option::is_some)
 }
 
-fn effective_requirement_groups(
+pub(super) fn effective_requirement_groups(
     rule: &ApparatusMaterialRule,
 ) -> Vec<ApparatusMaterialRequirementGroup> {
     if !rule.requirement_groups.is_empty() {
         return rule.requirement_groups.clone();
     }
-    vec![ApparatusMaterialRequirementGroup {
-        name: String::new(),
-        item_groups: rule.item_groups.clone(),
-        min_required_count: 1,
-    }]
+    rule.item_groups
+        .iter()
+        .map(|item_group| ApparatusMaterialRequirementGroup {
+            name: item_group.clone(),
+            item_groups: vec![item_group.clone()],
+            min_required_count: 1,
+        })
+        .collect()
+}
+
+fn try_match_material_assignment(
+    assignment_index: usize,
+    assignments: &[RawMaterialAssignment],
+    slots: &[Vec<String>],
+    matched_slots: &mut [Option<usize>],
+    visited: &mut [bool],
+) -> bool {
+    for (slot_index, item_groups) in slots.iter().enumerate() {
+        if visited[slot_index]
+            || !item_groups.iter().any(|item_group| {
+                item_group.eq_ignore_ascii_case(assignments[assignment_index].item_group.trim())
+            })
+        {
+            continue;
+        }
+        visited[slot_index] = true;
+        if matched_slots[slot_index].is_none()
+            || try_match_material_assignment(
+                matched_slots[slot_index].unwrap_or_default(),
+                assignments,
+                slots,
+                matched_slots,
+                visited,
+            )
+        {
+            matched_slots[slot_index] = Some(assignment_index);
+            return true;
+        }
+    }
+    false
 }
 
 fn item_groups_match(groups: &[String], item_group_path: &[String]) -> bool {

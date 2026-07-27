@@ -538,7 +538,31 @@ impl ProductionMapStorePort for PostgresProductionMapStore {
                 }
             }
         }
-        save_raw_material_assignment_tx(&mut tx, &assignment).await?;
+        let existing_assignment = sqlx::query_scalar::<_, serde_json::Value>(
+            "SELECT payload_json
+             FROM mini_raw_material_assignments
+             WHERE lower(barcode) = lower($1)
+             FOR UPDATE",
+        )
+        .bind(assignment.barcode.trim())
+        .fetch_optional(&mut *tx)
+        .await
+        .map_err(|_| ProductionMapError::StoreFailed)?
+        .map(|payload| {
+            serde_json::from_value::<RawMaterialAssignment>(payload)
+                .map_err(|_| ProductionMapError::StoreFailed)
+        })
+        .transpose()?;
+        match existing_assignment {
+            Some(existing)
+                if existing.order_id.trim() == assignment.order_id.trim()
+                    && crate::core::production_map::queue_state::apparatus_titles_match(
+                        &existing.apparatus,
+                        &assignment.apparatus,
+                    ) => {}
+            Some(_) => return Err(ProductionMapError::RawMaterialAlreadyAssigned),
+            None => save_raw_material_assignment_tx(&mut tx, &assignment).await?,
+        }
         let warehouses = apply_raw_material_stock_transitions_tx(
             &mut tx,
             &[RawMaterialStockTransition::new(

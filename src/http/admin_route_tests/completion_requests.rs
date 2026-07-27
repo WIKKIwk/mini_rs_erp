@@ -292,7 +292,7 @@ async fn admin_approves_zero_output_completion_request_and_closes_order_with_iss
             "PUT",
             "/v1/mobile/admin/raw-material-rules",
             &admin_token,
-            r#"{"apparatus":"7 ta rangli pechat","requires_material":false,"item_groups":["Kraska"]}"#,
+            r#"{"apparatus":"7 ta rangli pechat","requires_material":false,"start_policy":"requirement_groups","item_groups":["Kraska"]}"#,
         ))
         .await
         .expect("rule save");

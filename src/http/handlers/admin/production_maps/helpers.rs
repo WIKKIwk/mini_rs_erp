@@ -278,6 +278,15 @@ pub(super) fn production_map_error(error: ProductionMapError) -> AdminError {
         }
         ProductionMapError::RawMaterialScanRequired => bad_request("raw_material_scan_required"),
         ProductionMapError::RawMaterialMismatch => bad_request("raw_material_mismatch"),
+        ProductionMapError::RawMaterialStateNotReady => {
+            bad_request("raw_material_state_not_ready")
+        }
+        ProductionMapError::RawMaterialScanIncomplete => {
+            bad_request("raw_material_scan_incomplete")
+        }
+        ProductionMapError::RawMaterialRequirementNotMet => {
+            bad_request("raw_material_requirement_not_met")
+        }
         ProductionMapError::RawMaterialRollSizeMissing => {
             bad_request("raw_material_roll_size_missing")
         }

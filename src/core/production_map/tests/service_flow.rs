@@ -94,7 +94,7 @@ async fn pechat_queue_policy_is_always_locked_strict() {
 }
 
 #[tokio::test]
-async fn raw_material_assignment_requires_exact_scan_before_start() {
+async fn raw_material_state_policy_requires_only_staged_scan_before_start() {
     let service = ProductionMapService::new(std::sync::Arc::new(MemoryProductionMapStore::new()));
     let actor = QueueActionActor {
         role: "aparatchi".to_string(),
@@ -109,7 +109,8 @@ async fn raw_material_assignment_requires_exact_scan_before_start() {
         .set_apparatus_material_rule(ApparatusMaterialRuleUpsert {
             apparatus: "7 ta rangli pechat - A".to_string(),
             requires_material: true,
-            item_groups: vec!["Kraska".to_string()],
+            start_policy: RawMaterialStartPolicy::StateAll,
+            item_groups: vec!["Kraska".to_string(), "Kley".to_string()],
             requirement_groups: Vec::new(),
         })
         .await
@@ -122,6 +123,7 @@ async fn raw_material_assignment_requires_exact_scan_before_start() {
             &["7 ta rangli pechat - A".to_string()],
             actor.clone(),
             "",
+            &[],
         )
         .await;
     assert_eq!(
@@ -192,6 +194,7 @@ async fn raw_material_assignment_requires_exact_scan_before_start() {
             &["Rezka apparat".to_string()],
             actor.clone(),
             "",
+            &[],
         )
         .await;
     assert_eq!(not_assigned, Err(ProductionMapError::ApparatusNotAssigned));
@@ -204,6 +207,7 @@ async fn raw_material_assignment_requires_exact_scan_before_start() {
             &["7 ta rangli pechat - A".to_string()],
             actor.clone(),
             "",
+            &["30AA".to_string()],
         )
         .await;
     assert_eq!(
@@ -219,6 +223,7 @@ async fn raw_material_assignment_requires_exact_scan_before_start() {
             &["7 ta rangli pechat - A".to_string()],
             actor.clone(),
             "30BB",
+            &["30AA".to_string()],
         )
         .await;
     assert_eq!(wrong_scan, Err(ProductionMapError::RawMaterialMismatch));
@@ -231,9 +236,31 @@ async fn raw_material_assignment_requires_exact_scan_before_start() {
             &["7 ta rangli pechat - A".to_string()],
             actor.clone(),
             "30AA",
+            &["30AA".to_string(), "30CC".to_string()],
         )
         .await;
-    assert_eq!(partial_scan, Err(ProductionMapError::RawMaterialMismatch));
+    assert_eq!(
+        partial_scan,
+        Err(ProductionMapError::RawMaterialScanIncomplete)
+    );
+
+    let requirements = service
+        .raw_material_start_requirements(
+            "7 ta rangli pechat - A",
+            "zakaz-raw-1",
+            &["30AA".to_string()],
+        )
+        .await
+        .expect("start requirements");
+    assert_eq!(requirements.policy, RawMaterialStartPolicy::StateAll);
+    assert_eq!(
+        requirements.assigned_barcodes,
+        vec!["30AA".to_string(), "30CC".to_string()]
+    );
+    assert_eq!(
+        requirements.staged_barcodes,
+        vec!["30AA".to_string()]
+    );
 
     let states = service
         .apply_apparatus_queue_action_with_material_scan(
@@ -242,10 +269,11 @@ async fn raw_material_assignment_requires_exact_scan_before_start() {
             queue_state::ApparatusQueueAction::Start,
             &["7 ta rangli pechat - A".to_string()],
             actor.clone(),
-            "30AA,30CC",
+            "30AA",
+            &["30AA".to_string()],
         )
         .await
-        .expect("start with exact material");
+        .expect("start with the staged material only");
     assert_eq!(states.get("zakaz-raw-1"), Some(&"in_progress".to_string()));
 }
 
@@ -268,6 +296,7 @@ async fn additional_raw_material_is_only_received_by_assigned_worker_while_order
         .set_apparatus_material_rule(ApparatusMaterialRuleUpsert {
             apparatus: apparatus.to_string(),
             requires_material: true,
+            start_policy: RawMaterialStartPolicy::StateAll,
             item_groups: vec!["Kraska".to_string()],
             requirement_groups: Vec::new(),
         })
@@ -328,6 +357,15 @@ async fn additional_raw_material_is_only_received_by_assigned_worker_while_order
         .expect("receive while running");
     assert_eq!(first.barcode, "ROLL-1000-A");
     assert!(warehouses.is_empty());
+    let (existing, _) = service
+        .receive_raw_material_for_active_order(
+            input("ROLL-1000-A"),
+            &[apparatus.to_string()],
+            &actor,
+        )
+        .await
+        .expect("receive an already assigned roll while running");
+    assert_eq!(existing.barcode, "ROLL-1000-A");
 
     store
         .put_apparatus_queue_states(
@@ -425,6 +463,7 @@ async fn raw_material_assignment_returns_choices_and_accepts_selected_apparatus(
             .set_apparatus_material_rule(ApparatusMaterialRuleUpsert {
                 apparatus: apparatus.to_string(),
                 requires_material: true,
+                start_policy: RawMaterialStartPolicy::StateAll,
                 item_groups: vec!["Kraska".to_string()],
                 requirement_groups: Vec::new(),
             })
@@ -488,6 +527,7 @@ async fn raw_material_requirement_group_accepts_alternative_item_group() {
         .set_apparatus_material_rule(ApparatusMaterialRuleUpsert {
             apparatus: "Laminatsiya 1".to_string(),
             requires_material: true,
+            start_policy: RawMaterialStartPolicy::RequirementGroups,
             item_groups: vec!["Kley".to_string(), "Kraska".to_string()],
             requirement_groups: vec![ApparatusMaterialRequirementGroup {
                 name: "Yopishtiruvchi".to_string(),
@@ -524,11 +564,101 @@ async fn raw_material_requirement_group_accepts_alternative_item_group() {
             &["Laminatsiya 1".to_string()],
             actor,
             "30ALT",
+            &[],
         )
         .await
         .expect("start with alternative material");
     assert_eq!(
         states.get("zakaz-raw-alt"),
+        Some(&"in_progress".to_string())
+    );
+}
+
+#[tokio::test]
+async fn raw_material_requirement_groups_need_distinct_scanned_materials() {
+    let service = ProductionMapService::new(std::sync::Arc::new(MemoryProductionMapStore::new()));
+    let actor = QueueActionActor {
+        role: "aparatchi".to_string(),
+        ref_: "worker-distinct-material".to_string(),
+        display_name: "Worker Distinct Material".to_string(),
+    };
+    service
+        .upsert_map(apparatus_stage_map("zakaz-raw-distinct", "Pechat A"))
+        .await
+        .expect("map");
+    service
+        .set_apparatus_material_rule(ApparatusMaterialRuleUpsert {
+            apparatus: "Pechat A".to_string(),
+            requires_material: true,
+            start_policy: RawMaterialStartPolicy::RequirementGroups,
+            item_groups: vec![
+                "Universal".to_string(),
+                "Kraska".to_string(),
+                "Kley".to_string(),
+            ],
+            requirement_groups: vec![
+                ApparatusMaterialRequirementGroup {
+                    name: "Bo'yoq".to_string(),
+                    item_groups: vec!["Kraska".to_string(), "Universal".to_string()],
+                    min_required_count: 1,
+                },
+                ApparatusMaterialRequirementGroup {
+                    name: "Yopishtiruvchi".to_string(),
+                    item_groups: vec!["Kley".to_string(), "Universal".to_string()],
+                    min_required_count: 1,
+                },
+            ],
+        })
+        .await
+        .expect("material rule");
+    for (barcode, item_group) in [("30UNIVERSAL", "Universal"), ("30KLEY", "Kley")] {
+        service
+            .assign_raw_material_to_order(
+                RawMaterialAssignmentInput {
+                    order_id: "zakaz-raw-distinct".to_string(),
+                    barcode: barcode.to_string(),
+                    item_code: barcode.to_string(),
+                    item_name: barcode.to_string(),
+                    item_group: item_group.to_string(),
+                    item_group_path: Vec::new(),
+                    apparatus: String::new(),
+                },
+                &actor,
+            )
+            .await
+            .expect("assign material");
+    }
+
+    let reused_for_two_groups = service
+        .apply_apparatus_queue_action_with_material_scan(
+            "Pechat A",
+            "zakaz-raw-distinct",
+            queue_state::ApparatusQueueAction::Start,
+            &["Pechat A".to_string()],
+            actor.clone(),
+            "30UNIVERSAL",
+            &[],
+        )
+        .await;
+    assert_eq!(
+        reused_for_two_groups,
+        Err(ProductionMapError::RawMaterialRequirementNotMet)
+    );
+
+    let states = service
+        .apply_apparatus_queue_action_with_material_scan(
+            "Pechat A",
+            "zakaz-raw-distinct",
+            queue_state::ApparatusQueueAction::Start,
+            &["Pechat A".to_string()],
+            actor,
+            "30UNIVERSAL,30KLEY",
+            &[],
+        )
+        .await
+        .expect("start with two distinct materials");
+    assert_eq!(
+        states.get("zakaz-raw-distinct"),
         Some(&"in_progress".to_string())
     );
 }

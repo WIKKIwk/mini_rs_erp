@@ -81,6 +81,7 @@ async fn raw_material_routes_assign_and_require_scan_for_queue_start() {
             r#"{
                 "apparatus":"7 ta rangli pechat - A",
                 "requires_material":true,
+                "start_policy":"requirement_groups",
                 "item_groups":["Kraska","Kley"],
                 "requirement_groups":[
                     {
@@ -282,7 +283,7 @@ async fn raw_material_routes_assign_and_require_scan_for_queue_start() {
         "raw_material_scan_required"
     );
 
-    let partial_scan = router
+    let started = router
         .clone()
         .oneshot(request_with_body(
             "POST",
@@ -299,31 +300,7 @@ async fn raw_material_routes_assign_and_require_scan_for_queue_start() {
             ),
         ))
         .await
-        .expect("queue action with partial scan");
-    assert_eq!(partial_scan.status(), StatusCode::BAD_REQUEST);
-    assert_eq!(
-        json_body(partial_scan).await["error"],
-        "raw_material_mismatch"
-    );
-
-    let started = router
-        .clone()
-        .oneshot(request_with_body(
-            "POST",
-            "/v1/mobile/admin/production-maps/queue-action",
-            &worker_token,
-            &with_test_qolip(
-                r#"{
-                "apparatus":"7 ta rangli pechat - A",
-                "order_id":"zakaz-raw-route",
-                "action":"start",
-                "material_barcodes":["30AA","30CC"]
-            }"#,
-                "zakaz-raw-route",
-            ),
-        ))
-        .await
-        .expect("queue action with scan");
+        .expect("queue action with one material from the required group");
     assert_eq!(started.status(), StatusCode::OK);
     assert_eq!(
         json_body(started).await["states"]["zakaz-raw-route"],
@@ -348,15 +325,26 @@ async fn raw_material_routes_assign_and_require_scan_for_queue_start() {
         .filter(|item| item["order_id"] == "zakaz-raw-route")
         .collect::<Vec<_>>();
     assert_eq!(started_materials.len(), 2);
-    assert!(started_materials.iter().all(|item| {
-        item["stock_status"] == "in_use" && item["reserved_order_id"] == "zakaz-raw-route"
-    }));
+    assert_eq!(
+        started_materials
+            .iter()
+            .filter(|item| item["stock_status"] == "in_use")
+            .count(),
+        1
+    );
+    assert_eq!(
+        started_materials
+            .iter()
+            .filter(|item| item["stock_status"] == "available")
+            .count(),
+        1
+    );
     assert_eq!(
         started_materials
             .iter()
             .filter_map(|item| item["received_qty"].as_f64())
             .sum::<f64>(),
-        20.0
+        12.0
     );
 
     let intake = router
@@ -431,26 +419,48 @@ async fn raw_material_routes_assign_and_require_scan_for_queue_start() {
         .filter(|item| item["order_id"] == "zakaz-raw-route")
         .collect::<Vec<_>>();
     assert_eq!(completed_materials.len(), 3);
-    assert!(completed_materials.iter().all(|item| {
-        item["stock_status"] == "consumed" && item["reserved_order_id"] == "zakaz-raw-route"
-    }));
+    assert_eq!(
+        completed_materials
+            .iter()
+            .filter(|item| item["stock_status"] == "consumed")
+            .count(),
+        2
+    );
+    assert_eq!(
+        completed_materials
+            .iter()
+            .filter(|item| item["stock_status"] == "available")
+            .count(),
+        1
+    );
     assert_eq!(
         completed_materials
             .iter()
             .filter_map(|item| item["received_qty"].as_f64())
             .sum::<f64>(),
-        25.0
+        17.0
     );
     assert_eq!(
         completed_materials
             .iter()
             .filter_map(|item| item["consumed_qty"].as_f64())
             .sum::<f64>(),
-        25.0
+        17.0
     );
-    assert!(completed_materials
-        .iter()
-        .all(|item| item["remaining_qty"] == 0.0));
+    assert_eq!(
+        completed_materials
+            .iter()
+            .filter_map(|item| item["remaining_qty"].as_f64())
+            .sum::<f64>(),
+        0.0
+    );
+    assert_eq!(
+        completed_materials
+            .iter()
+            .find(|item| item["stock_status"] == "available")
+            .and_then(|item| item["stock_qty"].as_f64()),
+        Some(8.0)
+    );
 }
 
 #[tokio::test]
@@ -504,6 +514,7 @@ async fn material_taminotchi_raw_material_assignment_rejects_unassigned_item_gro
             r#"{
                 "apparatus":"7 ta rangli pechat - A",
                 "requires_material":true,
+                "start_policy":"requirement_groups",
                 "item_groups":["Kraska"]
             }"#,
         ))
