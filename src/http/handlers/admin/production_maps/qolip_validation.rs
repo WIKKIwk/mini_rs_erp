@@ -55,6 +55,31 @@ pub async fn production_map_qolip_validate(
     else {
         return Err(production_map_error(ProductionMapError::MapNotFound));
     };
+    let required_qolips = state
+        .qolip
+        .required_qolips_for_order(&map.product_code, &map.title)
+        .await
+        .map_err(qolip_queue_error)?;
+    let required_qolip_codes = required_qolips
+        .iter()
+        .map(|spec| spec.qolip_code.trim().to_string())
+        .collect::<Vec<_>>();
+    let required_qolip_count = required_qolips.len();
+    let required_qolips_payload = required_qolips
+        .iter()
+        .map(required_qolip_payload)
+        .collect::<Vec<_>>();
+    if input.qolip_code.trim().is_empty() {
+        return Ok(json_response(serde_json::json!({
+            "ok": true,
+            "qolip": {
+                "qolip_code": "",
+                "required_qolip_codes": required_qolip_codes,
+                "required_qolip_count": required_qolip_count,
+                "required_qolips": required_qolips_payload,
+            }
+        })));
+    }
     reject_qolip_in_use(&state, apparatus, order_id, &input.qolip_code).await?;
     let preparation = state
         .qolip
@@ -68,20 +93,21 @@ pub async fn production_map_qolip_validate(
         )
         .await
         .map_err(qolip_queue_error)?;
-    let block = preparation
-        .checkout
-        .as_ref()
-        .map(|checkout| checkout.block.as_str())
-        .unwrap_or_default();
     Ok(json_response(serde_json::json!({
         "ok": true,
         "qolip": {
             "qolip_code": preparation.spec.qolip_code,
-            "item_code": preparation.spec.item_code,
-            "item_name": preparation.spec.item_name,
-            "item_group": preparation.spec.item_group,
-            "size": preparation.spec.size,
-            "block": block,
+            "color": preparation.spec.color,
+            "required_qolip_codes": required_qolip_codes,
+            "required_qolip_count": required_qolip_count,
+            "required_qolips": required_qolips_payload,
         }
     })))
+}
+
+fn required_qolip_payload(spec: &crate::core::qolip::QolipProductSpec) -> serde_json::Value {
+    serde_json::json!({
+        "qolip_code": spec.qolip_code.as_str(),
+        "color": spec.color.as_str(),
+    })
 }

@@ -1,8 +1,8 @@
 use sqlx::{PgPool, Postgres, Transaction};
 
 use crate::core::auth::models::Principal;
-use crate::core::qolip::{QolipBlock, QolipError, QolipProduct, QolipProductSpec, role_code};
 use crate::core::qolip::normalize::qolip_location_id;
+use crate::core::qolip::{QolipBlock, QolipError, QolipProduct, QolipProductSpec, role_code};
 
 use super::rows::{QolipBlockRow, QolipProductRow, QolipProductSpecRow, row_to_product_spec};
 
@@ -445,7 +445,17 @@ pub(super) async fn load_product_spec(
     pool: &PgPool,
     item_code: &str,
 ) -> Result<Option<QolipProductSpec>, QolipError> {
-    let row = sqlx::query_as::<_, QolipProductSpecRow>(
+    Ok(load_product_specs(pool, item_code)
+        .await?
+        .into_iter()
+        .next())
+}
+
+pub(super) async fn load_product_specs(
+    pool: &PgPool,
+    item_code: &str,
+) -> Result<Vec<QolipProductSpec>, QolipError> {
+    let rows = sqlx::query_as::<_, QolipProductSpecRow>(
         r#"
         SELECT item_code, item_name, item_group, qolip_code, size, color,
                created_by_role, created_by_ref, created_by_name
@@ -515,16 +525,15 @@ pub(super) async fn load_product_spec(
                   WHERE lower(location.qolip_code) = lower(checkout.qolip_code)
               )
         ) candidates
-        ORDER BY source_priority, updated_at DESC
-        LIMIT 1
+        ORDER BY lower(qolip_code), source_priority, updated_at DESC
         "#,
     )
     .bind(item_code.trim())
-    .fetch_optional(pool)
+    .fetch_all(pool)
     .await
     .map_err(|_| QolipError::StoreFailed)?;
 
-    Ok(row.map(row_to_product_spec))
+    Ok(rows.into_iter().map(row_to_product_spec).collect())
 }
 
 pub(super) async fn load_product_spec_by_qolip_code(
@@ -618,6 +627,21 @@ pub(super) async fn save_product_spec(
     mut spec: QolipProductSpec,
 ) -> Result<QolipProductSpec, QolipError> {
     let mut tx = pool.begin().await.map_err(|_| QolipError::StoreFailed)?;
+    let normalized_qolip_code = spec.qolip_code.trim().to_lowercase();
+    let exists = sqlx::query_scalar::<_, bool>(
+        "SELECT EXISTS (
+             SELECT 1
+             FROM mini_qolip_product_specs
+             WHERE lower(qolip_code) = $1
+         )",
+    )
+    .bind(&normalized_qolip_code)
+    .fetch_one(&mut *tx)
+    .await
+    .map_err(|_| QolipError::StoreFailed)?;
+    if exists {
+        return Err(QolipError::QolipCodeConflict);
+    }
     spec.color = allocate_panton_color(&mut tx, &spec.qolip_code, None, &spec.color).await?;
     let row = sqlx::query_as::<_, QolipProductSpecRow>(
         "INSERT INTO mini_qolip_product_specs (
@@ -625,16 +649,7 @@ pub(super) async fn save_product_spec(
              created_by_role, created_by_ref, created_by_name, payload_json
          )
          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
-         ON CONFLICT (lower(qolip_code)) DO UPDATE SET
-             item_name = excluded.item_name,
-             item_group = excluded.item_group,
-             item_code = excluded.item_code,
-             size = excluded.size,
-             created_by_role = excluded.created_by_role,
-             created_by_ref = excluded.created_by_ref,
-             created_by_name = excluded.created_by_name,
-             payload_json = excluded.payload_json,
-             updated_at = now()
+         ON CONFLICT (lower(qolip_code)) DO NOTHING
          RETURNING item_code, item_name, item_group, qolip_code, size,
              COALESCE(payload_json->>'color', '') AS color,
              created_by_role, created_by_ref, created_by_name",
@@ -648,9 +663,10 @@ pub(super) async fn save_product_spec(
     .bind(spec.created_by_ref.trim())
     .bind(spec.created_by_name.trim())
     .bind(serde_json::to_value(&spec).map_err(|_| QolipError::StoreFailed)?)
-    .fetch_one(&mut *tx)
+    .fetch_optional(&mut *tx)
     .await
-    .map_err(|_| QolipError::StoreFailed)?;
+    .map_err(|_| QolipError::StoreFailed)?
+    .ok_or(QolipError::QolipCodeConflict)?;
     tx.commit().await.map_err(|_| QolipError::StoreFailed)?;
 
     Ok(row_to_product_spec(row))
@@ -724,13 +740,8 @@ pub(super) async fn rename_product_spec(
         return Err(QolipError::MissingQolipCode);
     }
     let mut tx = pool.begin().await.map_err(|_| QolipError::StoreFailed)?;
-    spec.color = allocate_panton_color(
-        &mut tx,
-        &spec.qolip_code,
-        Some(&previous),
-        &spec.color,
-    )
-    .await?;
+    spec.color =
+        allocate_panton_color(&mut tx, &spec.qolip_code, Some(&previous), &spec.color).await?;
     for code in [&previous, &next] {
         sqlx::query("SELECT pg_advisory_xact_lock(hashtext($1)::bigint)")
             .bind(code)
@@ -816,17 +827,26 @@ pub(super) async fn rename_product_spec(
     .map_err(|_| QolipError::StoreFailed)?;
     let location_updates = locations
         .into_iter()
-        .map(|(old_id, block, item_code, item_name, row_letter, column_number)| {
-            let new_id = qolip_location_id(
-                &block,
-                &item_code,
-                &spec.qolip_code,
-                spec.size,
-                &row_letter,
-                column_number,
-            );
-            (old_id, new_id, item_code, item_name, row_letter, column_number)
-        })
+        .map(
+            |(old_id, block, item_code, item_name, row_letter, column_number)| {
+                let new_id = qolip_location_id(
+                    &block,
+                    &item_code,
+                    &spec.qolip_code,
+                    spec.size,
+                    &row_letter,
+                    column_number,
+                );
+                (
+                    old_id,
+                    new_id,
+                    item_code,
+                    item_name,
+                    row_letter,
+                    column_number,
+                )
+            },
+        )
         .collect::<Vec<_>>();
     for (old_id, new_id, item_code, item_name, _row_letter, _column_number) in &location_updates {
         if old_id != new_id {

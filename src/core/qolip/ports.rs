@@ -28,6 +28,9 @@ pub trait QolipStorePort: Send + Sync {
         with_qolip_only: bool,
     ) -> Result<Vec<QolipProduct>, QolipError>;
     async fn product_spec(&self, item_code: &str) -> Result<Option<QolipProductSpec>, QolipError>;
+    async fn product_specs(&self, item_code: &str) -> Result<Vec<QolipProductSpec>, QolipError> {
+        Ok(self.product_spec(item_code).await?.into_iter().collect())
+    }
     async fn product_spec_by_qolip_code(
         &self,
         qolip_code: &str,
@@ -75,12 +78,7 @@ pub trait QolipStorePort: Send + Sync {
             .checkouts(None, None, "open", 10_000)
             .await?
             .into_iter()
-            .find(|checkout| {
-                checkout
-                    .qolip_code
-                    .trim()
-                    .eq_ignore_ascii_case(qolip_code)
-            }))
+            .find(|checkout| checkout.qolip_code.trim().eq_ignore_ascii_case(qolip_code)))
     }
     async fn checkouts(
         &self,

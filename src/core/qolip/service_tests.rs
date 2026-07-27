@@ -11,7 +11,7 @@ use super::ports::QolipStorePort;
 use super::service::QolipService;
 
 #[tokio::test]
-async fn order_start_rejects_matching_qolip_without_location_or_checkout() {
+async fn order_start_accepts_catalog_qolip_without_inventing_checkout() {
     let store = std::sync::Arc::new(MemoryQolipStore::new());
     store
         .seed_products(vec![QolipProduct {
@@ -43,7 +43,7 @@ async fn order_start_rejects_matching_qolip_without_location_or_checkout() {
         .await
         .expect("save product spec");
 
-    let error = service
+    let preparation = service
         .prepare_qolip_code_for_order_start(
             "QOLIP-NO-LOCATION",
             "ITEM-ORDER",
@@ -53,9 +53,10 @@ async fn order_start_rejects_matching_qolip_without_location_or_checkout() {
             &principal(),
         )
         .await
-        .expect_err("a qolip without a warehouse location or worker checkout must be rejected");
+        .expect("a catalog qolip for the order product must be accepted");
 
-    assert_eq!(error, QolipError::CheckoutRequired);
+    assert_eq!(preparation.spec.qolip_code, "QOLIP-NO-LOCATION");
+    assert!(preparation.checkout.is_none());
 }
 
 #[tokio::test]
@@ -169,13 +170,7 @@ async fn order_start_accepts_existing_checkout_for_same_worker() {
         .await
         .expect("save location");
     service
-        .issue_checkout_from_location(
-            location,
-            1,
-            "worker-1",
-            "Worker",
-            &principal(),
-        )
+        .issue_checkout_from_location(location, 1, "worker-1", "Worker", &principal())
         .await
         .expect("issue checkout");
 

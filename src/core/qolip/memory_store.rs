@@ -346,7 +346,12 @@ impl QolipStorePort for MemoryQolipStore {
             .read()
             .await
             .iter()
-            .find(|location| location.item_code.trim().eq_ignore_ascii_case(item_code.trim()))
+            .find(|location| {
+                location
+                    .item_code
+                    .trim()
+                    .eq_ignore_ascii_case(item_code.trim())
+            })
             .cloned();
         if let Some(location) = location {
             return Ok(Some(self.legacy_spec(&location).await));
@@ -368,6 +373,43 @@ impl QolipStorePort for MemoryQolipStore {
             Some(checkout) => Ok(Some(self.legacy_checkout_spec(&checkout).await)),
             None => Ok(None),
         }
+    }
+
+    async fn product_specs(&self, item_code: &str) -> Result<Vec<QolipProductSpec>, QolipError> {
+        let item_code = item_code.trim();
+        let mut specs = self
+            .product_specs
+            .read()
+            .await
+            .values()
+            .filter(|spec| spec.item_code.trim().eq_ignore_ascii_case(item_code))
+            .cloned()
+            .collect::<Vec<_>>();
+        let mut seen = specs
+            .iter()
+            .map(|spec| spec.qolip_code.trim().to_lowercase())
+            .collect::<BTreeSet<_>>();
+        for location in self
+            .locations
+            .read()
+            .await
+            .iter()
+            .filter(|location| location.item_code.trim().eq_ignore_ascii_case(item_code))
+        {
+            if seen.insert(location.qolip_code.trim().to_lowercase()) {
+                specs.push(self.legacy_spec(location).await);
+            }
+        }
+        for checkout in self.checkouts.read().await.iter().filter(|checkout| {
+            checkout.status.trim().eq_ignore_ascii_case("open")
+                && checkout.item_code.trim().eq_ignore_ascii_case(item_code)
+        }) {
+            if seen.insert(checkout.qolip_code.trim().to_lowercase()) {
+                specs.push(self.legacy_checkout_spec(checkout).await);
+            }
+        }
+        specs.sort_by_key(|spec| spec.qolip_code.trim().to_lowercase());
+        Ok(specs)
     }
 
     async fn product_spec_by_qolip_code(
@@ -402,10 +444,7 @@ impl QolipStorePort for MemoryQolipStore {
             .iter()
             .find(|checkout| {
                 checkout.status.trim().eq_ignore_ascii_case("open")
-                    && checkout
-                        .qolip_code
-                        .trim()
-                        .eq_ignore_ascii_case(qolip_code)
+                    && checkout.qolip_code.trim().eq_ignore_ascii_case(qolip_code)
             })
             .cloned();
         match checkout {
@@ -418,6 +457,13 @@ impl QolipStorePort for MemoryQolipStore {
         &self,
         spec: QolipProductSpec,
     ) -> Result<QolipProductSpec, QolipError> {
+        let spec_key = spec.qolip_code.trim().to_lowercase();
+        let mut specs = self.product_specs.write().await;
+        if specs.contains_key(&spec_key) {
+            return Err(QolipError::QolipCodeConflict);
+        }
+        specs.insert(spec_key, spec.clone());
+
         let mut products = self.products.write().await;
         if let Some(product) = products.iter_mut().find(|product| {
             product
@@ -442,11 +488,6 @@ impl QolipStorePort for MemoryQolipStore {
                 is_in_use: false,
             });
         }
-        drop(products);
-        self.product_specs
-            .write()
-            .await
-            .insert(spec.qolip_code.trim().to_lowercase(), spec.clone());
         Ok(spec)
     }
 
@@ -462,13 +503,19 @@ impl QolipStorePort for MemoryQolipStore {
         }
         if self.checkouts.read().await.iter().any(|checkout| {
             checkout.status.trim().eq_ignore_ascii_case("open")
-                && checkout.qolip_code.trim().eq_ignore_ascii_case(previous_qolip_code)
+                && checkout
+                    .qolip_code
+                    .trim()
+                    .eq_ignore_ascii_case(previous_qolip_code)
         }) {
             return Err(QolipError::QolipInUse);
         }
         if previous_key != next_key
             && self.locations.read().await.iter().any(|location| {
-                location.qolip_code.trim().eq_ignore_ascii_case(&spec.qolip_code)
+                location
+                    .qolip_code
+                    .trim()
+                    .eq_ignore_ascii_case(&spec.qolip_code)
             })
         {
             return Err(QolipError::QolipCodeConflict);
@@ -484,7 +531,10 @@ impl QolipStorePort for MemoryQolipStore {
         drop(specs);
         let mut products = self.products.write().await;
         if let Some(product) = products.iter_mut().find(|product| {
-            product.qolip_code.trim().eq_ignore_ascii_case(previous_qolip_code)
+            product
+                .qolip_code
+                .trim()
+                .eq_ignore_ascii_case(previous_qolip_code)
         }) {
             product.qolip_code = spec.qolip_code.clone();
             product.size = spec.size;
@@ -598,7 +648,10 @@ impl QolipStorePort for MemoryQolipStore {
                 .warehouse
                 .trim()
                 .eq_ignore_ascii_case(cell.warehouse.trim())
-                && existing.block.trim().eq_ignore_ascii_case(cell.block.trim())
+                && existing
+                    .block
+                    .trim()
+                    .eq_ignore_ascii_case(cell.block.trim())
                 && existing
                     .row_letter
                     .trim()
@@ -679,10 +732,7 @@ impl QolipStorePort for MemoryQolipStore {
             .iter()
             .find(|checkout| {
                 checkout.status.trim().eq_ignore_ascii_case("open")
-                    && checkout
-                        .qolip_code
-                        .trim()
-                        .eq_ignore_ascii_case(qolip_code)
+                    && checkout.qolip_code.trim().eq_ignore_ascii_case(qolip_code)
             })
             .cloned())
     }

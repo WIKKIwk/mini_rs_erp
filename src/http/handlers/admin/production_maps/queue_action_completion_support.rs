@@ -53,15 +53,14 @@ async fn prepare_qolips_for_bosma_start(
     if qolip_codes.is_empty() {
         return Err(bad_request("qolip_scan_required"));
     }
+    let required_qolips = state
+        .qolip
+        .required_qolips_for_order(&map.product_code, &map.title)
+        .await
+        .map_err(qolip_queue_error)?;
     let mut preparations = Vec::with_capacity(qolip_codes.len());
-    for qolip_code in qolip_codes {
-        reject_qolip_in_use(
-            state,
-            &input.apparatus,
-            &input.order_id,
-            &qolip_code,
-        )
-        .await?;
+    for qolip_code in &qolip_codes {
+        reject_qolip_in_use(state, &input.apparatus, &input.order_id, &qolip_code).await?;
         let preparation = state
             .qolip
             .prepare_qolip_code_for_order_start(
@@ -75,6 +74,17 @@ async fn prepare_qolips_for_bosma_start(
             .await
             .map_err(qolip_queue_error)?;
         preparations.push(preparation);
+    }
+    let scanned = qolip_codes
+        .iter()
+        .map(|code| code.trim().to_lowercase())
+        .collect::<std::collections::BTreeSet<_>>();
+    let required = required_qolips
+        .iter()
+        .map(|spec| spec.qolip_code.trim().to_lowercase())
+        .collect::<std::collections::BTreeSet<_>>();
+    if scanned != required {
+        return Err(bad_request("qolip_scan_incomplete"));
     }
     Ok(preparations)
 }
@@ -129,9 +139,7 @@ pub(super) fn qolip_queue_error(error: crate::core::qolip::QolipError) -> AdminE
         crate::core::qolip::QolipError::MissingQolipCode => bad_request("qolip_scan_required"),
         crate::core::qolip::QolipError::QolipCodeNotFound => bad_request("qolip_code_not_found"),
         crate::core::qolip::QolipError::QolipCodeMismatch => bad_request("qolip_code_mismatch"),
-        crate::core::qolip::QolipError::CheckoutRequired => {
-            bad_request("qolip_checkout_required")
-        }
+        crate::core::qolip::QolipError::CheckoutRequired => bad_request("qolip_checkout_required"),
         crate::core::qolip::QolipError::CheckoutAssignedToAnotherWorker => {
             bad_request("qolip_checkout_assigned_to_another_worker")
         }

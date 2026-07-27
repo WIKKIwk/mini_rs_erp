@@ -15,15 +15,14 @@ mod rows;
 
 use self::catalog::{
     delete_product_specs, load_all_blocks, load_assigned_blocks, load_assigned_warehouses,
-    load_product_spec, load_product_spec_by_qolip_code, load_products,
+    load_product_spec, load_product_spec_by_qolip_code, load_product_specs, load_products,
     rename_block as rename_qolip_block, save_product_spec,
 };
 use self::cell_qr::{load_cell_qr_by_payload, save_cell_qr};
 pub(crate) use self::checkouts::save_checkout_tx;
 use self::checkouts::{
     load_checkout_by_id, load_checkouts, load_open_checkout_by_qolip_code,
-    load_open_checkouts_for_worker,
-    return_checkout_to_location, save_checkout,
+    load_open_checkouts_for_worker, return_checkout_to_location, save_checkout,
 };
 use self::locations::{
     load_location_by_id, load_location_by_qolip_code, load_locations, move_location_to_cell,
@@ -75,6 +74,10 @@ impl QolipStorePort for PostgresQolipStore {
 
     async fn product_spec(&self, item_code: &str) -> Result<Option<QolipProductSpec>, QolipError> {
         load_product_spec(&self.pool, item_code).await
+    }
+
+    async fn product_specs(&self, item_code: &str) -> Result<Vec<QolipProductSpec>, QolipError> {
+        load_product_specs(&self.pool, item_code).await
     }
 
     async fn product_spec_by_qolip_code(

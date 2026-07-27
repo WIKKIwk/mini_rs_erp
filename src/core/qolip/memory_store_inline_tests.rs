@@ -101,6 +101,33 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn putting_the_same_qolip_code_twice_is_rejected_without_overwriting() {
+        let store = MemoryQolipStore::default();
+        let original = product_spec("ITEM-001", "QOLIP-0001");
+        store
+            .put_product_spec(original.clone())
+            .await
+            .expect("first spec");
+        let mut duplicate = product_spec("ITEM-002", "qolip-0001");
+        duplicate.item_name = "Other product".to_string();
+        duplicate.color = "#E53935".to_string();
+
+        let error = store
+            .put_product_spec(duplicate)
+            .await
+            .expect_err("case-insensitive duplicate code must be rejected");
+
+        assert_eq!(error, QolipError::QolipCodeConflict);
+        assert_eq!(
+            store
+                .product_spec_by_qolip_code("QOLIP-0001")
+                .await
+                .expect("original lookup"),
+            Some(original)
+        );
+    }
+
+    #[tokio::test]
     async fn renaming_product_spec_replaces_the_old_code_without_duplicates() {
         let store = MemoryQolipStore::default();
         store
@@ -119,16 +146,20 @@ mod tests {
         let products = store.products("Kross", 20, true).await.expect("products");
         assert_eq!(products.len(), 1);
         assert_eq!(products[0].qolip_code, "Q-NEW");
-        assert!(store
-            .product_spec_by_qolip_code("Q-OLD")
-            .await
-            .expect("old spec lookup")
-            .is_none());
-        assert!(store
-            .product_spec_by_qolip_code("Q-NEW")
-            .await
-            .expect("new spec lookup")
-            .is_some());
+        assert!(
+            store
+                .product_spec_by_qolip_code("Q-OLD")
+                .await
+                .expect("old spec lookup")
+                .is_none()
+        );
+        assert!(
+            store
+                .product_spec_by_qolip_code("Q-NEW")
+                .await
+                .expect("new spec lookup")
+                .is_some()
+        );
     }
 
     #[tokio::test]
@@ -143,7 +174,10 @@ mod tests {
             .expect("old spec");
         let mut stocked = location("old-location", "ITEM-001", 1);
         stocked.qolip_code = "Q-OLD".to_string();
-        store.put_location(stocked).await.expect("warehouse location");
+        store
+            .put_location(stocked)
+            .await
+            .expect("warehouse location");
 
         store
             .rename_product_spec("Q-OLD", product_spec("ITEM-001", "Q-NEW"))
@@ -270,7 +304,13 @@ mod tests {
             .expect("rename block");
 
         assert_eq!(renamed.name, "B");
-        assert!(store.locations("A").await.expect("old locations").is_empty());
+        assert!(
+            store
+                .locations("A")
+                .await
+                .expect("old locations")
+                .is_empty()
+        );
         assert_eq!(store.locations("B").await.expect("new locations").len(), 1);
         assert_eq!(
             store

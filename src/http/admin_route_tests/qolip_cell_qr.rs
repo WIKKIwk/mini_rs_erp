@@ -171,6 +171,66 @@ async fn qolip_code_qr_print_uses_code_as_stable_payload() {
 }
 
 #[tokio::test]
+async fn product_spec_create_rejects_duplicate_qolip_code_without_overwriting() {
+    let state = test_state();
+    let token = session(&state, PrincipalRole::Admin).await;
+    let router = build_router(state);
+
+    let first = router
+        .clone()
+        .oneshot(request_with_body(
+            "POST",
+            "/v1/mobile/qolip/product-specs",
+            &token,
+            r##"{
+                "item_code":"ITEM-001",
+                "item_name":"First product",
+                "item_group":"Tayyor mahsulot",
+                "qolip_code":"QOLIP-UNIQUE-1",
+                "size":42,
+                "color":"#E53935"
+            }"##,
+        ))
+        .await
+        .expect("first product spec");
+    assert_eq!(first.status(), StatusCode::OK);
+
+    let duplicate = router
+        .clone()
+        .oneshot(request_with_body(
+            "POST",
+            "/v1/mobile/qolip/product-specs",
+            &token,
+            r##"{
+                "item_code":"ITEM-002",
+                "item_name":"Other product",
+                "item_group":"Tayyor mahsulot",
+                "qolip_code":"qolip-unique-1",
+                "size":58,
+                "color":"#43A047"
+            }"##,
+        ))
+        .await
+        .expect("duplicate product spec");
+    assert_eq!(duplicate.status(), StatusCode::CONFLICT);
+    assert_eq!(json_body(duplicate).await["error"], "qolip_code_conflict");
+
+    let lookup = router
+        .oneshot(request(
+            "GET",
+            "/v1/mobile/qolip/scan?qr=QOLIP-UNIQUE-1",
+            &token,
+        ))
+        .await
+        .expect("original product spec lookup");
+    assert_eq!(lookup.status(), StatusCode::OK);
+    let body = json_body(lookup).await;
+    assert_eq!(body["product"]["code"], "ITEM-001");
+    assert_eq!(body["product"]["name"], "First product");
+    assert_eq!(body["product"]["color"], "#E53935");
+}
+
+#[tokio::test]
 async fn qolip_scan_distinguishes_cell_and_qolip_with_location() {
     let mut state = test_state();
     let store = Arc::new(crate::core::qolip::MemoryQolipStore::new());

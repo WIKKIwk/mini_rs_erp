@@ -135,8 +135,7 @@ impl QolipService {
             {
                 Ok(spec) => Ok(spec),
                 Err(QolipError::QolipCodeNotFound)
-                    if previous_qolip_code
-                        .eq_ignore_ascii_case(&next_qolip_code) =>
+                    if previous_qolip_code.eq_ignore_ascii_case(&next_qolip_code) =>
                 {
                     self.store.put_product_spec(normalized).await
                 }
@@ -172,6 +171,32 @@ impl QolipService {
             return Err(QolipError::MissingQolipCode);
         }
         self.store.product_spec_by_qolip_code(qolip_code).await
+    }
+
+    pub async fn required_qolips_for_order(
+        &self,
+        item_code: &str,
+        item_name: &str,
+    ) -> Result<Vec<QolipProductSpec>, QolipError> {
+        let expected_product = self
+            .order_product(item_code, item_name)
+            .await?
+            .ok_or(QolipError::QolipCodeMismatch)?;
+        let mut specs = self
+            .store
+            .product_specs(&expected_product.code)
+            .await?
+            .into_iter()
+            .filter(|spec| qolip_spec_matches_order(spec, &expected_product))
+            .filter(|spec| !spec.qolip_code.trim().is_empty())
+            .collect::<Vec<_>>();
+        specs.sort_by_key(|spec| spec.qolip_code.trim().to_lowercase());
+        specs.dedup_by(|left, right| {
+            left.qolip_code
+                .trim()
+                .eq_ignore_ascii_case(right.qolip_code.trim())
+        });
+        Ok(specs)
     }
 
     pub async fn product_requires_qolip(&self, item_code: &str) -> Result<bool, QolipError> {
@@ -258,10 +283,7 @@ impl QolipService {
         if !qolip_spec_matches_order(&spec, &expected_product) {
             return Err(QolipError::QolipCodeMismatch);
         }
-        let existing_checkout = self
-            .store
-            .open_checkout_by_qolip_code(qolip_code)
-            .await?;
+        let existing_checkout = self.store.open_checkout_by_qolip_code(qolip_code).await?;
         if let Some(checkout) = &existing_checkout {
             if !checkout
                 .issued_to_ref
@@ -270,7 +292,12 @@ impl QolipService {
             {
                 return Err(QolipError::CheckoutAssignedToAnotherWorker);
             }
-            if self.store.location_by_qolip_code(qolip_code).await?.is_some() {
+            if self
+                .store
+                .location_by_qolip_code(qolip_code)
+                .await?
+                .is_some()
+            {
                 return Err(QolipError::QolipInUse);
             }
         }
@@ -290,7 +317,7 @@ impl QolipService {
                 Some(checkout)
             }
             (Some(_), Some(_)) => return Err(QolipError::QolipInUse),
-            (None, None) => return Err(QolipError::CheckoutRequired),
+            (None, None) => None,
         };
         Ok(QolipOrderStartPreparation { spec, checkout })
     }

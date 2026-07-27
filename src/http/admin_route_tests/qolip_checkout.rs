@@ -209,7 +209,10 @@ async fn pechat_queue_start_requires_matching_qolip_code_scan() {
         .expect("map save");
     assert_eq!(map.status(), StatusCode::OK);
 
-    for (qolip_code, column_number) in [("QOLIP-SCAN-1", 2), ("QOLIP-SCAN-2", 3)] {
+    for (qolip_code, color, column_number) in [
+        ("QOLIP-SCAN-1", "#E53935", 2),
+        ("QOLIP-SCAN-2", "#43A047", 3),
+    ] {
         let spec = router
             .clone()
             .oneshot(request_with_body(
@@ -222,6 +225,7 @@ async fn pechat_queue_start_requires_matching_qolip_code_scan() {
                     "item_group": "Tayyor mahsulot",
                     "qolip_code": qolip_code,
                     "size": 42,
+                    "color": color,
                 })
                 .to_string(),
             ))
@@ -253,6 +257,45 @@ async fn pechat_queue_start_requires_matching_qolip_code_scan() {
         assert_eq!(location.status(), StatusCode::OK);
     }
 
+    let requirements = router
+        .clone()
+        .oneshot(request_with_body(
+            "POST",
+            "/v1/mobile/admin/production-maps/qolip-validate",
+            &worker_token,
+            r#"{
+                "apparatus":"7 ta rangli pechat - A",
+                "order_id":"zakaz-qolip-scan",
+                "qolip_code":""
+            }"#,
+        ))
+        .await
+        .expect("load required qolip set");
+    assert_eq!(requirements.status(), StatusCode::OK);
+    let requirements_body = json_body(requirements).await;
+    assert_eq!(requirements_body["qolip"]["qolip_code"], "");
+    assert_eq!(
+        requirements_body["qolip"]["required_qolip_codes"],
+        serde_json::json!(["QOLIP-SCAN-1", "QOLIP-SCAN-2"])
+    );
+    assert_eq!(
+        requirements_body["qolip"]["required_qolip_count"],
+        serde_json::json!(2)
+    );
+    assert_eq!(
+        requirements_body["qolip"]["required_qolips"],
+        serde_json::json!([
+            {
+                "qolip_code": "QOLIP-SCAN-1",
+                "color": "#E53935"
+            },
+            {
+                "qolip_code": "QOLIP-SCAN-2",
+                "color": "#43A047"
+            }
+        ])
+    );
+
     let validation = router
         .clone()
         .oneshot(request_with_body(
@@ -270,6 +313,18 @@ async fn pechat_queue_start_requires_matching_qolip_code_scan() {
     assert_eq!(validation.status(), StatusCode::OK);
     let validation_body = json_body(validation).await;
     assert_eq!(validation_body["qolip"]["qolip_code"], "QOLIP-SCAN-1");
+    assert_eq!(
+        validation_body["qolip"]["required_qolip_codes"],
+        serde_json::json!(["QOLIP-SCAN-1", "QOLIP-SCAN-2"])
+    );
+    assert_eq!(
+        validation_body["qolip"]["required_qolip_count"],
+        serde_json::json!(2)
+    );
+    assert_eq!(
+        validation_body["qolip"]["required_qolips"][0]["color"],
+        "#E53935"
+    );
 
     let second_validation = router
         .clone()
@@ -339,6 +394,27 @@ async fn pechat_queue_start_requires_matching_qolip_code_scan() {
         "qolip_scan_required"
     );
 
+    let partial_scan = router
+        .clone()
+        .oneshot(request_with_body(
+            "POST",
+            "/v1/mobile/admin/production-maps/queue-action",
+            &worker_token,
+            r#"{
+                "apparatus":"7 ta rangli pechat - A",
+                "order_id":"zakaz-qolip-scan",
+                "action":"start",
+                "qolip_codes":["QOLIP-SCAN-1"]
+            }"#,
+        ))
+        .await
+        .expect("queue action with partial qolip set");
+    assert_eq!(partial_scan.status(), StatusCode::BAD_REQUEST);
+    assert_eq!(
+        json_body(partial_scan).await["error"],
+        "qolip_scan_incomplete"
+    );
+
     let wrong_scan = router
         .clone()
         .oneshot(request_with_body(
@@ -401,9 +477,7 @@ async fn pechat_queue_start_requires_matching_qolip_code_scan() {
         .expect("qolip checkouts");
     assert_eq!(checkouts.status(), StatusCode::OK);
     let checkouts_body = json_body(checkouts).await;
-    let checkouts = checkouts_body["checkouts"]
-        .as_array()
-        .expect("checkouts");
+    let checkouts = checkouts_body["checkouts"].as_array().expect("checkouts");
     assert_eq!(checkouts.len(), 2);
     for qolip_code in ["QOLIP-SCAN-1", "QOLIP-SCAN-2"] {
         let checkout = checkouts
@@ -416,7 +490,7 @@ async fn pechat_queue_start_requires_matching_qolip_code_scan() {
 }
 
 #[tokio::test]
-async fn pechat_qolip_without_location_starts_and_is_blocked_on_another_apparatus() {
+async fn catalog_qolip_starts_without_checkout_and_is_locked_by_active_order() {
     let state = test_state();
     state
         .admin
@@ -507,7 +581,7 @@ async fn pechat_qolip_without_location_starts_and_is_blocked_on_another_apparatu
             }"#,
         ))
         .await
-        .expect("validate qolip without location");
+        .expect("validate shared qolip");
     assert_eq!(validation.status(), StatusCode::OK);
 
     let started = router
@@ -529,6 +603,20 @@ async fn pechat_qolip_without_location_starts_and_is_blocked_on_another_apparatu
     assert_eq!(
         json_body(started).await["session"]["payload_json"]["qolip_code"],
         "QOLIP-SHARED-1"
+    );
+    let checkouts = router
+        .clone()
+        .oneshot(request(
+            "GET",
+            "/v1/mobile/qolip/checkouts?status=open",
+            &admin_token,
+        ))
+        .await
+        .expect("catalog-only qolip checkouts");
+    assert_eq!(checkouts.status(), StatusCode::OK);
+    assert_eq!(
+        json_body(checkouts).await["checkouts"],
+        serde_json::json!([])
     );
 
     let blocked = router
