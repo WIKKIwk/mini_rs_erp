@@ -6,8 +6,50 @@ async fn raw_material_routes_assign_and_require_scan_for_queue_start() {
     material_store
         .insert_stock("30DD", "INK-BLACK", "Black ink", 5.0)
         .await;
+    material_store
+        .insert_stock("30EE", "INK-BLACK", "Black ink", 4.0)
+        .await;
     let print_requests = Arc::new(Mutex::new(Vec::<ScaleDriverPrintRequest>::new()));
     let mut state = test_state();
+    let inventory_store = Arc::new(MemoryInventoryMovementStore::new());
+    let state_location = InventoryLocation {
+        id: "location:state:pechat-a".to_string(),
+        kind: InventoryLocationKind::State,
+        name: "Pechat A oldi".to_string(),
+        warehouse_id: String::new(),
+        factory_location_id: "factory:pechat".to_string(),
+        active: true,
+        apparatus: vec![InventoryLocationApparatus {
+            id: "apparatus:pechat-a".to_string(),
+            name: "7 ta rangli pechat - A".to_string(),
+        }],
+    };
+    inventory_store
+        .seed_locations(vec![state_location.clone()])
+        .await;
+    inventory_store
+        .seed_assets(
+            ["30AA", "30CC", "30DD"]
+                .into_iter()
+                .map(|barcode| InventoryAsset {
+                    kind: InventoryAssetKind::RawMaterial,
+                    asset_ref: format!("raw:{barcode}"),
+                    custody_warehouse_id: "warehouse:kalidor".to_string(),
+                    custody_warehouse: "Kalidor".to_string(),
+                    item_code: "INK-BLACK".to_string(),
+                    item_name: "Black ink".to_string(),
+                    identifier: barcode.to_string(),
+                    qty: 5.0,
+                    uom: "Kg".to_string(),
+                    status: "available".to_string(),
+                    physical_location: InventoryLocationRef::from(&state_location),
+                    transfer_id: String::new(),
+                    placement_version: 1,
+                })
+                .collect(),
+        )
+        .await;
+    state.inventory_movements = InventoryMovementService::new(inventory_store);
     state.gscale = GscaleService::new()
         .with_receipt_store(material_store.clone())
         .with_driver(Arc::new(FakeProgressDriver {
@@ -210,6 +252,25 @@ async fn raw_material_routes_assign_and_require_scan_for_queue_start() {
         .await
         .expect("second warehouse event");
 
+    let not_staged_assigned = router
+        .clone()
+        .oneshot(request_with_body(
+            "POST",
+            "/v1/mobile/admin/raw-material-assignments",
+            &token,
+            r#"{
+                "order_id":"zakaz-raw-route",
+                "barcode":"30EE"
+            }"#,
+        ))
+        .await
+        .expect("assign material outside apparatus state");
+    assert_eq!(not_staged_assigned.status(), StatusCode::OK);
+    let _third_warehouse_event = warehouse_events
+        .recv()
+        .await
+        .expect("third warehouse event");
+
     let lookup = router
         .clone()
         .oneshot(request(
@@ -240,6 +301,54 @@ async fn raw_material_routes_assign_and_require_scan_for_queue_start() {
     assert!(lookup_body["queue_states"].is_object());
     assert!(lookup_body["logs"].is_array());
 
+    let scoped_assignments = router
+        .clone()
+        .oneshot(request(
+            "GET",
+            "/v1/mobile/admin/raw-material-assignments?order_id=zakaz-raw-route&apparatus=7%20ta%20rangli%20pechat%20-%20A",
+            &worker_token,
+        ))
+        .await
+        .expect("scoped raw material assignments");
+    assert_eq!(scoped_assignments.status(), StatusCode::OK);
+    let scoped_assignments_body = json_body(scoped_assignments).await;
+    assert_eq!(scoped_assignments_body.as_array().map(Vec::len), Some(3));
+    assert!(scoped_assignments_body.as_array().is_some_and(|items| {
+        items.iter().all(|item| {
+            item["order_id"] == "zakaz-raw-route"
+                && item["apparatus"] == "7 ta rangli pechat - A"
+        })
+    }));
+
+    let start_requirements = router
+        .clone()
+        .oneshot(request(
+            "GET",
+            "/v1/mobile/admin/raw-material-start-requirements?order_id=zakaz-raw-route&apparatus=7%20ta%20rangli%20pechat%20-%20A&material_barcodes=30AA",
+            &worker_token,
+        ))
+        .await
+        .expect("raw material start requirements");
+    assert_eq!(start_requirements.status(), StatusCode::OK);
+    let start_requirements_body = json_body(start_requirements).await;
+    assert_eq!(start_requirements_body["policy"], "requirement_groups");
+    assert_eq!(start_requirements_body["required_scan_count"], 1);
+    assert_eq!(start_requirements_body["matched_scan_count"], 1);
+    assert_eq!(start_requirements_body["assignments_satisfied"], true);
+    assert_eq!(start_requirements_body["scan_satisfied"], true);
+    assert_eq!(
+        start_requirements_body["assignments"]
+            .as_array()
+            .map(Vec::len),
+        Some(3)
+    );
+    assert_eq!(
+        start_requirements_body["start_assignments"]
+            .as_array()
+            .map(Vec::len),
+        Some(3)
+    );
+
     let intake_before_start = router
         .clone()
         .oneshot(request_with_body(
@@ -249,7 +358,7 @@ async fn raw_material_routes_assign_and_require_scan_for_queue_start() {
             r#"{
                 "order_id":"zakaz-raw-route",
                 "apparatus":"7 ta rangli pechat - A",
-                "barcode":"30DD"
+                "barcode":"30CC"
             }"#,
         ))
         .await
@@ -324,7 +433,7 @@ async fn raw_material_routes_assign_and_require_scan_for_queue_start() {
         .iter()
         .filter(|item| item["order_id"] == "zakaz-raw-route")
         .collect::<Vec<_>>();
-    assert_eq!(started_materials.len(), 2);
+    assert_eq!(started_materials.len(), 3);
     assert_eq!(
         started_materials
             .iter()
@@ -337,7 +446,7 @@ async fn raw_material_routes_assign_and_require_scan_for_queue_start() {
             .iter()
             .filter(|item| item["stock_status"] == "available")
             .count(),
-        1
+        2
     );
     assert_eq!(
         started_materials
@@ -347,7 +456,27 @@ async fn raw_material_routes_assign_and_require_scan_for_queue_start() {
         12.0
     );
 
-    let intake = router
+    let not_staged_intake = router
+        .clone()
+        .oneshot(request_with_body(
+            "POST",
+            "/v1/mobile/admin/raw-material-intake",
+            &worker_token,
+            r#"{
+                "order_id":"zakaz-raw-route",
+                "apparatus":"7 ta rangli pechat - A",
+                "barcode":"30EE"
+            }"#,
+        ))
+        .await
+        .expect("not staged additional material intake");
+    assert_eq!(not_staged_intake.status(), StatusCode::BAD_REQUEST);
+    assert_eq!(
+        json_body(not_staged_intake).await["error"],
+        "raw_material_state_not_ready"
+    );
+
+    let unassigned_intake = router
         .clone()
         .oneshot(request_with_body(
             "POST",
@@ -360,17 +489,57 @@ async fn raw_material_routes_assign_and_require_scan_for_queue_start() {
             }"#,
         ))
         .await
-        .expect("additional material intake");
+        .expect("unassigned additional material intake");
+    assert_eq!(unassigned_intake.status(), StatusCode::BAD_REQUEST);
+    assert_eq!(
+        json_body(unassigned_intake).await["error"],
+        "raw_material_assignment_not_found"
+    );
+
+    let intake = router
+        .clone()
+        .oneshot(request_with_body(
+            "POST",
+            "/v1/mobile/admin/raw-material-intake",
+            &worker_token,
+            r#"{
+                "order_id":"zakaz-raw-route",
+                "apparatus":"7 ta rangli pechat - A",
+                "barcode":"30CC"
+            }"#,
+        ))
+        .await
+        .expect("assigned additional material intake");
     let intake_status = intake.status();
     let intake_body = json_body(intake).await;
     assert_eq!(intake_status, StatusCode::OK, "{intake_body:?}");
     assert_eq!(intake_body["stock_status"], "in_use");
     assert_eq!(intake_body["reserved_order_id"], "zakaz-raw-route");
-    assert_eq!(intake_body["stock_qty"], 5.0);
+    assert_eq!(intake_body["stock_qty"], 8.0);
     assert_eq!(intake_body["stock_uom"], "Kg");
-    assert_eq!(intake_body["received_qty"], 5.0);
+    assert_eq!(intake_body["received_qty"], 8.0);
     assert_eq!(intake_body["consumed_qty"], 0.0);
-    assert_eq!(intake_body["remaining_qty"], 5.0);
+    assert_eq!(intake_body["remaining_qty"], 8.0);
+
+    let repeated_intake = router
+        .clone()
+        .oneshot(request_with_body(
+            "POST",
+            "/v1/mobile/admin/raw-material-intake",
+            &worker_token,
+            r#"{
+                "order_id":"zakaz-raw-route",
+                "apparatus":"7 ta rangli pechat - A",
+                "barcode":"30CC"
+            }"#,
+        ))
+        .await
+        .expect("repeated additional material intake");
+    assert_eq!(repeated_intake.status(), StatusCode::BAD_REQUEST);
+    assert_eq!(
+        json_body(repeated_intake).await["error"],
+        "raw_material_stock_unavailable"
+    );
 
     let completed = router
         .clone()
@@ -438,14 +607,14 @@ async fn raw_material_routes_assign_and_require_scan_for_queue_start() {
             .iter()
             .filter_map(|item| item["received_qty"].as_f64())
             .sum::<f64>(),
-        17.0
+        20.0
     );
     assert_eq!(
         completed_materials
             .iter()
             .filter_map(|item| item["consumed_qty"].as_f64())
             .sum::<f64>(),
-        17.0
+        20.0
     );
     assert_eq!(
         completed_materials
@@ -459,7 +628,7 @@ async fn raw_material_routes_assign_and_require_scan_for_queue_start() {
             .iter()
             .find(|item| item["stock_status"] == "available")
             .and_then(|item| item["stock_qty"].as_f64()),
-        Some(8.0)
+        Some(4.0)
     );
 }
 

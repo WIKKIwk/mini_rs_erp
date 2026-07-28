@@ -42,7 +42,7 @@ use self::map_helpers::{
 };
 use self::material_helpers::{
     delete_raw_material_assignment, load_apparatus_material_rules, load_raw_material_assignments,
-    save_apparatus_material_rule, save_raw_material_assignment, save_raw_material_assignment_tx,
+    save_apparatus_material_rule, save_raw_material_assignment,
 };
 use self::order_control_helpers::{
     load_order_control_states, save_order_control_state, save_order_control_state_tx,
@@ -561,7 +561,21 @@ impl ProductionMapStorePort for PostgresProductionMapStore {
                         &assignment.apparatus,
                     ) => {}
             Some(_) => return Err(ProductionMapError::RawMaterialAlreadyAssigned),
-            None => save_raw_material_assignment_tx(&mut tx, &assignment).await?,
+            None => return Err(ProductionMapError::RawMaterialAssignmentNotFound),
+        }
+        let stock_available = sqlx::query_scalar::<_, bool>(
+            "SELECT lower(status) = 'available'
+                    AND COALESCE(reserved_order_id, '') = ''
+             FROM mini_raw_material_stock
+             WHERE lower(barcode) = lower($1)
+             FOR UPDATE",
+        )
+        .bind(assignment.barcode.trim())
+        .fetch_optional(&mut *tx)
+        .await
+        .map_err(|_| ProductionMapError::StoreFailed)?;
+        if stock_available != Some(true) {
+            return Err(ProductionMapError::RawMaterialStockUnavailable);
         }
         let warehouses = apply_raw_material_stock_transitions_tx(
             &mut tx,

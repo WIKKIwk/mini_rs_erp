@@ -44,6 +44,20 @@ pub(super) fn material_requirements_met(
     rule: &ApparatusMaterialRule,
     assignments: &[RawMaterialAssignment],
 ) -> bool {
+    material_requirement_match_count(rule, assignments) == material_requirement_slot_count(rule)
+}
+
+pub(super) fn material_requirement_slot_count(rule: &ApparatusMaterialRule) -> usize {
+    effective_requirement_groups(rule)
+        .iter()
+        .map(|group| group.min_required_count.max(1))
+        .sum()
+}
+
+pub(super) fn material_requirement_match_count(
+    rule: &ApparatusMaterialRule,
+    assignments: &[RawMaterialAssignment],
+) -> usize {
     let slots = effective_requirement_groups(rule)
         .into_iter()
         .flat_map(|group| {
@@ -61,7 +75,7 @@ pub(super) fn material_requirements_met(
             &mut visited,
         );
     }
-    matched_slots.iter().all(Option::is_some)
+    matched_slots.iter().filter(|slot| slot.is_some()).count()
 }
 
 pub(super) fn effective_requirement_groups(

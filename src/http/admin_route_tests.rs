@@ -36,8 +36,9 @@ use crate::core::gscale::models::{
 };
 use crate::core::gscale::ports::{GscalePortError, MaterialReceiptStorePort, ScaleDriverPort};
 use crate::core::inventory_movements::{
-    InventoryAsset, InventoryAssetKind, InventoryLocation, InventoryLocationKind,
-    InventoryLocationRef, InventoryMovementService, MemoryInventoryMovementStore,
+    InventoryAsset, InventoryAssetKind, InventoryLocation, InventoryLocationApparatus,
+    InventoryLocationKind, InventoryLocationRef, InventoryMovementService,
+    MemoryInventoryMovementStore,
 };
 use crate::core::mini_orders::{MiniOrderError, MiniOrderSink, NoopMiniOrderSink};
 use crate::core::production_map::{MemoryProductionMapStore, ProductionMapService};

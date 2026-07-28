@@ -95,6 +95,11 @@ pub struct RawMaterialStartRequirements {
     pub requirement_groups: Vec<ApparatusMaterialRequirementGroup>,
     pub assigned_barcodes: Vec<String>,
     pub staged_barcodes: Vec<String>,
+    pub eligible_barcodes: Vec<String>,
+    pub required_scan_count: usize,
+    pub matched_scan_count: usize,
+    pub assignments_satisfied: bool,
+    pub scan_satisfied: bool,
 }
 
 pub struct MaterialScanProgressAction<'a> {
@@ -136,37 +141,18 @@ impl ProductionMapService {
         apparatus: &str,
         order_id: &str,
         state_material_barcodes: &[String],
+        material_barcodes: &str,
     ) -> Result<RawMaterialStartRequirements, ProductionMapError> {
         let assignments = self
             .raw_material_assignments_for_order_apparatus(order_id, apparatus)
             .await?;
         let rule = self.material_rule_for_apparatus(apparatus).await?;
-        let policy = rule
-            .as_ref()
-            .map(|rule| rule.start_policy)
-            .unwrap_or_default();
-        let assigned = assignments
-            .iter()
-            .map(|assignment| normalize_barcode(&assignment.barcode))
-            .filter(|barcode| !barcode.is_empty())
-            .collect::<BTreeSet<_>>();
-        let staged = state_material_barcodes
-            .iter()
-            .map(|barcode| normalize_barcode(barcode))
-            .filter(|barcode| assigned.contains(barcode))
-            .collect::<BTreeSet<_>>();
-        Ok(RawMaterialStartRequirements {
-            policy,
-            requires_material: rule
-                .as_ref()
-                .is_some_and(|rule| rule.requires_material),
-            requirement_groups: rule
-                .as_ref()
-                .map(effective_requirement_groups)
-                .unwrap_or_default(),
-            assigned_barcodes: assigned.into_iter().collect(),
-            staged_barcodes: staged.into_iter().collect(),
-        })
+        Ok(build_raw_material_start_requirements(
+            rule.as_ref(),
+            &assignments,
+            state_material_barcodes,
+            material_barcodes,
+        ))
     }
 
     pub async fn unlink_raw_material_assignment(
@@ -211,6 +197,8 @@ impl ProductionMapService {
         let _guard = self.queue_action_guard().await;
         let normalized_barcode = normalize_barcode(&input.barcode);
         let requested_apparatus = input.apparatus.trim().to_string();
+        let item_group_path =
+            normalize_group_path(&input.item_group, input.item_group_path.clone());
         let existing = self
             .store
             .raw_material_assignments()
@@ -229,7 +217,7 @@ impl ProductionMapService {
                 assignment
             }
             Some(_) => return Err(ProductionMapError::RawMaterialAlreadyAssigned),
-            None => self.prepare_raw_material_assignment(input, actor).await?,
+            None => return Err(ProductionMapError::RawMaterialAssignmentNotFound),
         };
         if !queue_state::apparatus_matches_assigned(&assignment.apparatus, assigned_apparatus) {
             return Err(ProductionMapError::ApparatusNotAssigned);
@@ -258,6 +246,19 @@ impl ProductionMapService {
                 }
                 OrderControlState::Frozen => return Err(ProductionMapError::OrderFrozen),
             }
+        }
+        if self
+            .material_rule_for_apparatus(&assignment.apparatus)
+            .await?
+            .is_some_and(|rule| {
+                !rule_matches(
+                    &rule,
+                    &assignment.apparatus,
+                    &item_group_path,
+                )
+            })
+        {
+            return Err(ProductionMapError::RawMaterialGroupNotAllowed);
         }
         let warehouses = self
             .store
@@ -439,17 +440,19 @@ impl ProductionMapService {
             .raw_material_assignments_for_order_apparatus(order_id, apparatus)
             .await?;
         let rule = self.material_rule_for_apparatus(apparatus).await?;
+        let requirements = build_raw_material_start_requirements(
+            rule.as_ref(),
+            &assignments,
+            state_material_barcodes,
+            material_barcode,
+        );
         if assignments.is_empty() {
-            if rule.as_ref().is_some_and(|rule| rule.requires_material) {
+            if !requirements.assignments_satisfied {
                 return Err(ProductionMapError::RawMaterialAssignmentNotFound);
             }
             return Ok(());
         }
-        if let Some(rule) = rule.as_ref()
-            && rule.requires_material
-            && rule.start_policy == RawMaterialStartPolicy::RequirementGroups
-            && !material_requirements_met(&rule, &assignments)
-        {
+        if !requirements.assignments_satisfied {
             return Err(ProductionMapError::RawMaterialAssignmentNotFound);
         }
         let scanned = normalized_barcodes(material_barcode);
@@ -477,22 +480,12 @@ impl ProductionMapService {
                 if staged.is_empty() {
                     return Err(ProductionMapError::RawMaterialStateNotReady);
                 }
-                if scanned != staged {
+                if !requirements.scan_satisfied {
                     return Err(ProductionMapError::RawMaterialScanIncomplete);
                 }
             }
             RawMaterialStartPolicy::RequirementGroups => {
-                let scanned_assignments = assignments
-                    .iter()
-                    .filter(|assignment| {
-                        scanned.contains(&normalize_barcode(&assignment.barcode))
-                    })
-                    .cloned()
-                    .collect::<Vec<_>>();
-                let Some(rule) = rule.as_ref() else {
-                    return Err(ProductionMapError::RawMaterialRequirementNotMet);
-                };
-                if !material_requirements_met(rule, &scanned_assignments) {
+                if !requirements.scan_satisfied {
                     return Err(ProductionMapError::RawMaterialRequirementNotMet);
                 }
             }
@@ -527,5 +520,82 @@ impl ProductionMapService {
             .await?
             .into_iter()
             .find(|rule| queue_state::apparatus_titles_match(&rule.apparatus, apparatus)))
+    }
+}
+
+fn build_raw_material_start_requirements(
+    rule: Option<&ApparatusMaterialRule>,
+    assignments: &[RawMaterialAssignment],
+    state_material_barcodes: &[String],
+    material_barcodes: &str,
+) -> RawMaterialStartRequirements {
+    let policy = rule.map(|rule| rule.start_policy).unwrap_or_default();
+    let requires_material = rule.is_some_and(|rule| rule.requires_material);
+    let assigned = assignments
+        .iter()
+        .map(|assignment| normalize_barcode(&assignment.barcode))
+        .filter(|barcode| !barcode.is_empty())
+        .collect::<BTreeSet<_>>();
+    let staged = state_material_barcodes
+        .iter()
+        .map(|barcode| normalize_barcode(barcode))
+        .filter(|barcode| assigned.contains(barcode))
+        .collect::<BTreeSet<_>>();
+    let scanned = normalized_barcodes(material_barcodes);
+    let requirement_groups = rule.map(effective_requirement_groups).unwrap_or_default();
+    let assignments_satisfied = if assignments.is_empty() {
+        !requires_material
+    } else {
+        !requires_material
+            || policy != RawMaterialStartPolicy::RequirementGroups
+            || rule.is_some_and(|rule| material_requirements_met(rule, assignments))
+    };
+    let (eligible, required_scan_count, matched_scan_count, scan_satisfied) = match policy {
+        RawMaterialStartPolicy::StateAll => {
+            let matched = scanned.intersection(&staged).count();
+            (
+                staged.clone(),
+                staged.len(),
+                matched,
+                assignments.is_empty() && !requires_material
+                    || !assignments.is_empty()
+                        && !scanned.is_empty()
+                        && scanned.is_subset(&assigned)
+                        && scanned == staged,
+            )
+        }
+        RawMaterialStartPolicy::RequirementGroups => {
+            let scanned_assignments = assignments
+                .iter()
+                .filter(|assignment| scanned.contains(&normalize_barcode(&assignment.barcode)))
+                .cloned()
+                .collect::<Vec<_>>();
+            let required = rule.map(material_requirement_slot_count).unwrap_or_default();
+            let matched = rule
+                .map(|rule| material_requirement_match_count(rule, &scanned_assignments))
+                .unwrap_or_default();
+            (
+                assigned.clone(),
+                required,
+                matched,
+                assignments.is_empty() && !requires_material
+                    || !assignments.is_empty()
+                        && scanned.is_subset(&assigned)
+                        && required > 0
+                        && matched == required,
+            )
+        }
+    };
+    RawMaterialStartRequirements {
+        policy,
+        requires_material,
+        requirement_groups,
+        assigned_barcodes: assigned.into_iter().collect(),
+        staged_barcodes: staged.into_iter().collect(),
+        eligible_barcodes: eligible.into_iter().collect(),
+        required_scan_count,
+        matched_scan_count,
+        assignments_satisfied,
+        scan_satisfied,
     }
 }

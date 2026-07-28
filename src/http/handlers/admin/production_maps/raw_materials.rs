@@ -3,10 +3,20 @@ use super::*;
 use crate::db::postgres_raw_material_events::{
     RawMaterialEventDraft, RawMaterialEventQuery, RawMaterialEventScope,
 };
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 #[derive(Debug, serde::Deserialize)]
 pub struct RawMaterialStartRequirementsQuery {
+    #[serde(default)]
+    order_id: String,
+    #[serde(default)]
+    apparatus: String,
+    #[serde(default)]
+    material_barcodes: String,
+}
+
+#[derive(Debug, Default, serde::Deserialize)]
+pub struct RawMaterialAssignmentsQuery {
     #[serde(default)]
     order_id: String,
     #[serde(default)]
@@ -42,16 +52,53 @@ pub async fn raw_material_start_requirements(
         &query.apparatus,
     )
     .await?;
-    state
+    let requirements = state
         .production_maps
         .raw_material_start_requirements(
             &query.apparatus,
             &query.order_id,
             &staged_barcodes,
+            &query.material_barcodes,
         )
         .await
-        .map(json_response)
-        .map_err(production_map_error)
+        .map_err(production_map_error)?;
+    let eligible_barcodes = requirements
+        .eligible_barcodes
+        .iter()
+        .map(|barcode| barcode.trim().to_ascii_uppercase())
+        .collect::<BTreeSet<_>>();
+    let mut assignments = state
+        .production_maps
+        .raw_material_assignments()
+        .await
+        .map_err(production_map_error)?;
+    assignments.retain(|assignment| assignment.order_id.trim() == query.order_id.trim());
+    let mut start_assignments = assignments
+        .iter()
+        .filter(|assignment| {
+            queue_state::apparatus_titles_match(&assignment.apparatus, &query.apparatus)
+                && eligible_barcodes.contains(&assignment.barcode.trim().to_ascii_uppercase())
+        })
+        .cloned()
+        .collect::<Vec<_>>();
+    sort_raw_material_assignments(&mut assignments);
+    sort_raw_material_assignments(&mut start_assignments);
+    let assignments = raw_material_assignment_responses(&state, assignments).await;
+    let start_assignments = raw_material_assignment_responses(&state, start_assignments).await;
+    Ok(json_response(serde_json::json!({
+        "policy": requirements.policy,
+        "requires_material": requirements.requires_material,
+        "requirement_groups": requirements.requirement_groups,
+        "assigned_barcodes": requirements.assigned_barcodes,
+        "staged_barcodes": requirements.staged_barcodes,
+        "eligible_barcodes": requirements.eligible_barcodes,
+        "required_scan_count": requirements.required_scan_count,
+        "matched_scan_count": requirements.matched_scan_count,
+        "assignments_satisfied": requirements.assignments_satisfied,
+        "scan_satisfied": requirements.scan_satisfied,
+        "assignments": assignments,
+        "start_assignments": start_assignments,
+    })))
 }
 
 pub(super) async fn raw_material_state_barcodes_for_order_apparatus(
@@ -131,6 +178,7 @@ pub async fn raw_material_rules(
 /// Assigns a printed raw-material QR to the order apparatus selected by rules.
 pub async fn raw_material_assignments(
     State(state): State<AppState>,
+    Query(query): Query<RawMaterialAssignmentsQuery>,
     method: Method,
     headers: HeaderMap,
     body: Bytes,
@@ -158,6 +206,20 @@ pub async fn raw_material_assignments(
                     material_scoped_raw_material_assignments(&state, &principal, assignments)
                         .await?;
             }
+            if !query.order_id.trim().is_empty() {
+                assignments.retain(|assignment| {
+                    assignment.order_id.trim() == query.order_id.trim()
+                });
+            }
+            if !query.apparatus.trim().is_empty() {
+                assignments.retain(|assignment| {
+                    queue_state::apparatus_titles_match(
+                        &assignment.apparatus,
+                        &query.apparatus,
+                    )
+                });
+            }
+            sort_raw_material_assignments(&mut assignments);
             Ok(json_response(
                 raw_material_assignment_responses(&state, assignments).await,
             ))
@@ -210,6 +272,25 @@ pub async fn raw_material_assignments(
     }
 }
 
+fn sort_raw_material_assignments(assignments: &mut [RawMaterialAssignment]) {
+    assignments.sort_by(|left, right| {
+        let left_title = if left.item_name.trim().is_empty() {
+            left.item_code.trim()
+        } else {
+            left.item_name.trim()
+        };
+        let right_title = if right.item_name.trim().is_empty() {
+            right.item_code.trim()
+        } else {
+            right.item_name.trim()
+        };
+        left_title
+            .to_ascii_lowercase()
+            .cmp(&right_title.to_ascii_lowercase())
+            .then_with(|| left.barcode.cmp(&right.barcode))
+    });
+}
+
 /// Receives one additional physical raw-material roll while the order is running.
 pub async fn raw_material_intake(
     State(state): State<AppState>,
@@ -232,7 +313,49 @@ pub async fn raw_material_intake(
     }
     require_capability(&state, &principal, Capability::ApparatusQueueManage).await?;
     let input: RawMaterialAssignmentInput = parse_json(&body)?;
-    let (input, warehouse) = fill_raw_material_assignment_input(&state, &principal, input).await?;
+    let requested_apparatus = input.apparatus.trim().to_string();
+    if requested_apparatus.is_empty() {
+        return Err(production_map_error(
+            ProductionMapError::RawMaterialInvalidInput,
+        ));
+    }
+    let assignment = find_raw_material_assignment(&state, &input.order_id, &input.barcode)
+        .await?
+        .filter(|assignment| {
+            queue_state::apparatus_titles_match(&assignment.apparatus, &requested_apparatus)
+        })
+        .ok_or_else(|| {
+            production_map_error(ProductionMapError::RawMaterialAssignmentNotFound)
+        })?;
+    let staged_barcodes = raw_material_state_barcodes_for_order_apparatus(
+        &state,
+        &assignment.order_id,
+        &assignment.apparatus,
+    )
+    .await?;
+    if !staged_barcodes
+        .iter()
+        .any(|barcode| barcode.trim().eq_ignore_ascii_case(&assignment.barcode))
+    {
+        return Err(production_map_error(
+            ProductionMapError::RawMaterialStateNotReady,
+        ));
+    }
+    let stock = state
+        .gscale
+        .raw_material_stock_by_barcode(&assignment.barcode)
+        .await
+        .map_err(|_| server_error("raw material stock fetch failed"))?
+        .ok_or_else(|| production_map_error(ProductionMapError::RawMaterialStockUnavailable))?;
+    if !stock.status.trim().eq_ignore_ascii_case("available")
+        || !stock.reserved_order_id.trim().is_empty()
+    {
+        return Err(production_map_error(
+            ProductionMapError::RawMaterialStockUnavailable,
+        ));
+    }
+    let warehouse = stock.warehouse.trim().to_string();
+    let (input, _) = fill_raw_material_assignment_input(&state, &principal, input).await?;
     let assigned_apparatus = state.admin.principal_assigned_apparatus(&principal).await;
     let actor = queue_action_actor(&principal);
     let (assignment, mut warehouses) = state

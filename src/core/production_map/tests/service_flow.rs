@@ -249,6 +249,7 @@ async fn raw_material_state_policy_requires_only_staged_scan_before_start() {
             "7 ta rangli pechat - A",
             "zakaz-raw-1",
             &["30AA".to_string()],
+            "30AA",
         )
         .await
         .expect("start requirements");
@@ -261,6 +262,11 @@ async fn raw_material_state_policy_requires_only_staged_scan_before_start() {
         requirements.staged_barcodes,
         vec!["30AA".to_string()]
     );
+    assert_eq!(requirements.eligible_barcodes, vec!["30AA".to_string()]);
+    assert_eq!(requirements.required_scan_count, 1);
+    assert_eq!(requirements.matched_scan_count, 1);
+    assert!(requirements.assignments_satisfied);
+    assert!(requirements.scan_satisfied);
 
     let states = service
         .apply_apparatus_queue_action_with_material_scan(
@@ -312,6 +318,17 @@ async fn additional_raw_material_is_only_received_by_assigned_worker_while_order
         item_group_path: Vec::new(),
         apparatus: apparatus.to_string(),
     };
+    let supplier_actor = QueueActionActor {
+        role: "material_taminotchi".to_string(),
+        ref_: "supplier-1".to_string(),
+        display_name: "Material Supplier".to_string(),
+    };
+    for barcode in ["ROLL-1000-A", "ROLL-1000-B", "ROLL-1000-C"] {
+        service
+            .assign_raw_material_to_order(input(barcode), &supplier_actor)
+            .await
+            .expect("supplier assignment");
+    }
     store
         .put_apparatus_queue_states(
             apparatus,
@@ -347,6 +364,63 @@ async fn additional_raw_material_is_only_received_by_assigned_worker_while_order
         .await;
     assert_eq!(wrong_worker, Err(ProductionMapError::ApparatusNotAssigned));
 
+    service
+        .set_apparatus_material_rule(ApparatusMaterialRuleUpsert {
+            apparatus: apparatus.to_string(),
+            requires_material: true,
+            start_policy: RawMaterialStartPolicy::StateAll,
+            item_groups: vec!["Kley".to_string()],
+            requirement_groups: Vec::new(),
+        })
+        .await
+        .expect("changed material rule");
+    let disallowed_by_current_rule = service
+        .receive_raw_material_for_active_order(
+            input("ROLL-1000-A"),
+            &[apparatus.to_string()],
+            &actor,
+        )
+        .await;
+    assert_eq!(
+        disallowed_by_current_rule,
+        Err(ProductionMapError::RawMaterialGroupNotAllowed)
+    );
+    service
+        .set_apparatus_material_rule(ApparatusMaterialRuleUpsert {
+            apparatus: apparatus.to_string(),
+            requires_material: true,
+            start_policy: RawMaterialStartPolicy::StateAll,
+            item_groups: vec!["Kraska".to_string()],
+            requirement_groups: Vec::new(),
+        })
+        .await
+        .expect("restored material rule");
+
+    let assignment_count = service
+        .raw_material_assignments()
+        .await
+        .expect("assignments")
+        .len();
+    let unassigned = service
+        .receive_raw_material_for_active_order(
+            input("ROLL-UNASSIGNED"),
+            &[apparatus.to_string()],
+            &actor,
+        )
+        .await;
+    assert_eq!(
+        unassigned,
+        Err(ProductionMapError::RawMaterialAssignmentNotFound)
+    );
+    assert_eq!(
+        service
+            .raw_material_assignments()
+            .await
+            .expect("assignments after rejected intake")
+            .len(),
+        assignment_count
+    );
+
     let (first, warehouses) = service
         .receive_raw_material_for_active_order(
             input("ROLL-1000-A"),
@@ -357,15 +431,6 @@ async fn additional_raw_material_is_only_received_by_assigned_worker_while_order
         .expect("receive while running");
     assert_eq!(first.barcode, "ROLL-1000-A");
     assert!(warehouses.is_empty());
-    let (existing, _) = service
-        .receive_raw_material_for_active_order(
-            input("ROLL-1000-A"),
-            &[apparatus.to_string()],
-            &actor,
-        )
-        .await
-        .expect("receive an already assigned roll while running");
-    assert_eq!(existing.barcode, "ROLL-1000-A");
 
     store
         .put_apparatus_queue_states(
@@ -384,7 +449,7 @@ async fn additional_raw_material_is_only_received_by_assigned_worker_while_order
         .expect("receive while paused");
     assert_eq!(
         service.raw_material_assignments().await.expect("assignments").len(),
-        2
+        3
     );
 
     let mut frozen_control = OrderControlRecord::active(order_id);
@@ -659,6 +724,60 @@ async fn raw_material_requirement_groups_need_distinct_scanned_materials() {
         .expect("start with two distinct materials");
     assert_eq!(
         states.get("zakaz-raw-distinct"),
+        Some(&"in_progress".to_string())
+    );
+}
+
+#[tokio::test]
+async fn paused_next_order_resumes_after_previous_order_completed() {
+    let store = std::sync::Arc::new(MemoryProductionMapStore::new());
+    let service = ProductionMapService::new(store.clone());
+    let apparatus = "7 ta rangli bosma aparat";
+    let completed_order_id = "zakaz-resume-completed";
+    let paused_order_id = "zakaz-resume-paused";
+    service
+        .upsert_map(apparatus_stage_map(completed_order_id, apparatus))
+        .await
+        .expect("completed map");
+    service
+        .upsert_map(apparatus_stage_map(paused_order_id, apparatus))
+        .await
+        .expect("paused map");
+    service
+        .set_apparatus_sequence(
+            apparatus,
+            vec![completed_order_id.to_string(), paused_order_id.to_string()],
+        )
+        .await
+        .expect("sequence");
+    store
+        .put_apparatus_queue_states(
+            apparatus,
+            BTreeMap::from([
+                (completed_order_id.to_string(), "completed".to_string()),
+                (paused_order_id.to_string(), "paused".to_string()),
+            ]),
+        )
+        .await
+        .expect("queue states");
+
+    let states = service
+        .apply_apparatus_queue_action(
+            apparatus,
+            paused_order_id,
+            queue_state::ApparatusQueueAction::Resume,
+            &[apparatus.to_string()],
+            QueueActionActor {
+                role: "aparatchi".to_string(),
+                ref_: "worker-resume".to_string(),
+                display_name: "Worker Resume".to_string(),
+            },
+        )
+        .await
+        .expect("resume paused next order");
+
+    assert_eq!(
+        states.get(paused_order_id),
         Some(&"in_progress".to_string())
     );
 }
