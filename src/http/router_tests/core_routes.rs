@@ -102,6 +102,7 @@ async fn go_mobile_route_inventory_is_registered() {
         "/v1/mobile/admin/raw-material-rules",
         "/v1/mobile/admin/raw-material-start-requirements",
         "/v1/mobile/admin/raw-material-assignments",
+        "/v1/mobile/admin/raw-material-intake-candidates",
         "/v1/mobile/admin/role-assignments",
         "/v1/mobile/admin/suppliers",
         "/v1/mobile/admin/users/list",

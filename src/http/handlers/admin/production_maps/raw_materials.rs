@@ -1,4 +1,6 @@
-use super::raw_material_details::{fill_raw_material_assignment_input, lookup_raw_material_detail};
+use super::raw_material_details::{
+    fill_raw_material_assignment_input, item_group_path, lookup_raw_material_detail,
+};
 use super::*;
 use crate::db::postgres_raw_material_events::{
     RawMaterialEventDraft, RawMaterialEventQuery, RawMaterialEventScope,
@@ -289,6 +291,108 @@ fn sort_raw_material_assignments(assignments: &mut [RawMaterialAssignment]) {
             .cmp(&right_title.to_ascii_lowercase())
             .then_with(|| left.barcode.cmp(&right.barcode))
     });
+}
+
+pub async fn raw_material_intake_candidates(
+    State(state): State<AppState>,
+    Query(query): Query<RawMaterialAssignmentsQuery>,
+    method: Method,
+    headers: HeaderMap,
+) -> Result<Response, AdminError> {
+    let principal = authorize_any_capability(
+        &state,
+        &headers,
+        &[
+            Capability::AdminAccess,
+            Capability::ProductionMapManage,
+            Capability::ApparatusQueueRead,
+            Capability::ApparatusQueueManage,
+        ],
+    )
+    .await?;
+    if method != Method::GET {
+        return Err(method_not_allowed());
+    }
+    let order_id = query.order_id.trim();
+    let apparatus = query.apparatus.trim();
+    if order_id.is_empty() || apparatus.is_empty() {
+        return Err(bad_request("apparatus and order_id are required"));
+    }
+    if principal.role == PrincipalRole::Aparatchi {
+        let assigned_apparatus = state.admin.principal_assigned_apparatus(&principal).await;
+        if !queue_state::apparatus_matches_assigned(apparatus, &assigned_apparatus) {
+            return Err(production_map_error(
+                ProductionMapError::ApparatusNotAssigned,
+            ));
+        }
+    }
+    if !state
+        .production_maps
+        .raw_material_intake_is_available(order_id, apparatus)
+        .await
+        .map_err(production_map_error)?
+    {
+        return Ok(json_response(Vec::<serde_json::Value>::new()));
+    }
+
+    let staged_barcodes = raw_material_state_barcodes_for_order_apparatus(
+        &state,
+        order_id,
+        apparatus,
+    )
+    .await?
+    .into_iter()
+    .map(|barcode| barcode.trim().to_ascii_uppercase())
+    .collect::<BTreeSet<_>>();
+    let groups = state
+        .admin
+        .item_group_tree()
+        .await
+        .map_err(|_| server_error("item group tree fetch failed"))?;
+    let mut assignments = state
+        .production_maps
+        .raw_material_assignments()
+        .await
+        .map_err(production_map_error)?;
+    assignments.retain(|assignment| {
+        assignment.order_id.trim() == order_id
+            && queue_state::apparatus_titles_match(&assignment.apparatus, apparatus)
+            && staged_barcodes.contains(&assignment.barcode.trim().to_ascii_uppercase())
+    });
+
+    let mut candidates = Vec::new();
+    for assignment in assignments {
+        let stock = state
+            .gscale
+            .raw_material_stock_by_barcode(&assignment.barcode)
+            .await
+            .map_err(|_| server_error("raw material stock fetch failed"))?;
+        let Some(stock) = stock else {
+            continue;
+        };
+        if !stock.status.trim().eq_ignore_ascii_case("available")
+            || !stock.reserved_order_id.trim().is_empty()
+        {
+            continue;
+        }
+        if !state
+            .production_maps
+            .raw_material_matches_apparatus_rule(
+                apparatus,
+                &assignment.item_group,
+                item_group_path(&groups, &assignment.item_group),
+            )
+            .await
+            .map_err(production_map_error)?
+        {
+            continue;
+        }
+        candidates.push(assignment);
+    }
+    sort_raw_material_assignments(&mut candidates);
+    Ok(json_response(
+        raw_material_assignment_responses(&state, candidates).await,
+    ))
 }
 
 /// Receives one additional physical raw-material roll while the order is running.

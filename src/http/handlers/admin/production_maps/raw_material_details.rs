@@ -151,7 +151,10 @@ async fn validate_rulon_size_for_pechat_order(
     Ok(())
 }
 
-fn item_group_path(groups: &[AdminItemGroup], item_group: &str) -> Vec<String> {
+pub(super) fn item_group_path(
+    groups: &[AdminItemGroup],
+    item_group: &str,
+) -> Vec<String> {
     let mut path = Vec::new();
     let mut current = item_group.trim().to_string();
     let mut seen = std::collections::BTreeSet::new();

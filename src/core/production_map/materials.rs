@@ -136,6 +136,43 @@ impl ProductionMapService {
         self.store.raw_material_assignments().await
     }
 
+    pub async fn raw_material_intake_is_available(
+        &self,
+        order_id: &str,
+        apparatus: &str,
+    ) -> Result<bool, ProductionMapError> {
+        let queue_states = self.store.apparatus_queue_states().await?;
+        let is_active = queue_states.iter().any(|(candidate, states)| {
+            queue_state::apparatus_titles_match(candidate, apparatus)
+                && states
+                    .get(order_id.trim())
+                    .and_then(|state| queue_state::ApparatusQueueOrderState::parse(state))
+                    .is_some_and(queue_state::ApparatusQueueOrderState::is_active)
+        });
+        if !is_active {
+            return Ok(false);
+        }
+        Ok(!self
+            .store
+            .order_control_states()
+            .await?
+            .get(order_id.trim())
+            .is_some_and(|control| control.state != OrderControlState::Active))
+    }
+
+    pub async fn raw_material_matches_apparatus_rule(
+        &self,
+        apparatus: &str,
+        item_group: &str,
+        item_group_path: Vec<String>,
+    ) -> Result<bool, ProductionMapError> {
+        let path = normalize_group_path(item_group, item_group_path);
+        Ok(self
+            .material_rule_for_apparatus(apparatus)
+            .await?
+            .is_none_or(|rule| rule_matches(&rule, apparatus, &path)))
+    }
+
     pub async fn raw_material_start_requirements(
         &self,
         apparatus: &str,

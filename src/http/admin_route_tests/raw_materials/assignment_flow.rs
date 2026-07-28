@@ -456,6 +456,21 @@ async fn raw_material_routes_assign_and_require_scan_for_queue_start() {
         12.0
     );
 
+    let intake_candidates = router
+        .clone()
+        .oneshot(request(
+            "GET",
+            "/v1/mobile/admin/raw-material-intake-candidates?order_id=zakaz-raw-route&apparatus=7%20ta%20rangli%20pechat%20-%20A",
+            &worker_token,
+        ))
+        .await
+        .expect("additional material intake candidates");
+    assert_eq!(intake_candidates.status(), StatusCode::OK);
+    let intake_candidates_body = json_body(intake_candidates).await;
+    assert_eq!(intake_candidates_body.as_array().map(Vec::len), Some(1));
+    assert_eq!(intake_candidates_body[0]["barcode"], "30CC");
+    assert_eq!(intake_candidates_body[0]["stock_status"], "available");
+
     let not_staged_intake = router
         .clone()
         .oneshot(request_with_body(
@@ -520,6 +535,24 @@ async fn raw_material_routes_assign_and_require_scan_for_queue_start() {
     assert_eq!(intake_body["received_qty"], 8.0);
     assert_eq!(intake_body["consumed_qty"], 0.0);
     assert_eq!(intake_body["remaining_qty"], 8.0);
+
+    let candidates_after_intake = router
+        .clone()
+        .oneshot(request(
+            "GET",
+            "/v1/mobile/admin/raw-material-intake-candidates?order_id=zakaz-raw-route&apparatus=7%20ta%20rangli%20pechat%20-%20A",
+            &worker_token,
+        ))
+        .await
+        .expect("candidates after additional material intake");
+    assert_eq!(candidates_after_intake.status(), StatusCode::OK);
+    assert_eq!(
+        json_body(candidates_after_intake)
+            .await
+            .as_array()
+            .map(Vec::len),
+        Some(0)
+    );
 
     let repeated_intake = router
         .clone()
