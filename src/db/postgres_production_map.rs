@@ -415,6 +415,12 @@ impl ProductionMapStorePort for PostgresProductionMapStore {
             .begin()
             .await
             .map_err(|_| ProductionMapError::StoreFailed)?;
+        let current_session_id = write
+            .session
+            .as_ref()
+            .map(|session| session.session_id.trim())
+            .filter(|session_id| !session_id.is_empty())
+            .map(str::to_string);
         if let Some(session) = &write.session {
             reject_qolip_in_use_tx(&mut tx, session).await?;
         }
@@ -437,7 +443,11 @@ impl ProductionMapStorePort for PostgresProductionMapStore {
         }
         let qolip_checkout_committed = !write.qolip_checkouts.is_empty();
         for checkout in &write.qolip_checkouts {
-            super::postgres_qolip::save_checkout_tx(&mut tx, checkout)
+            super::postgres_qolip::save_checkout_tx(
+                &mut tx,
+                checkout,
+                current_session_id.as_deref(),
+            )
                 .await
                 .map_err(production_map_qolip_checkout_error)?;
         }
@@ -611,6 +621,20 @@ fn production_map_qolip_checkout_error(error: QolipError) -> ProductionMapError 
         }
         QolipError::InsufficientStock => ProductionMapError::QolipInsufficientStock,
         QolipError::LocationIdentityMismatch => ProductionMapError::QolipLocationIdentityMismatch,
+        QolipError::QolipInUse => ProductionMapError::QolipAlreadyInUse,
         _ => ProductionMapError::StoreFailed,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn qolip_in_use_checkout_error_is_returned_as_business_error() {
+        assert_eq!(
+            production_map_qolip_checkout_error(QolipError::QolipInUse),
+            ProductionMapError::QolipAlreadyInUse
+        );
     }
 }

@@ -13,6 +13,7 @@ pub(super) struct QolipProductRow {
     pub(super) item_group: String,
     pub(super) customer_names: Vec<String>,
     pub(super) qolip_code: String,
+    pub(super) first_qolip_code: String,
     pub(super) size: i32,
     pub(super) color: String,
     pub(super) has_qolip_spec: bool,

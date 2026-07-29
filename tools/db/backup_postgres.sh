@@ -71,10 +71,18 @@ EOF
 
 (
 	cd "$BACKUP_DIR"
+	CHECKSUM_FILES=(
+		"$(basename "$CUSTOM_DUMP")"
+		"$(basename "$PLAIN_DUMP")"
+		"backup.meta"
+	)
+	if [ -f "globals.sql" ]; then
+		CHECKSUM_FILES+=("globals.sql")
+	fi
 	if command -v sha256sum >/dev/null 2>&1; then
-		sha256sum ./* > SHA256SUMS
+		sha256sum "${CHECKSUM_FILES[@]}" > SHA256SUMS
 	else
-		shasum -a 256 ./* > SHA256SUMS
+		shasum -a 256 "${CHECKSUM_FILES[@]}" > SHA256SUMS
 	fi
 )
 

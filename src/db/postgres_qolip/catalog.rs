@@ -254,7 +254,7 @@ pub(super) async fn load_products(
             GROUP BY group_name
         ),
         eligible_items AS (
-            SELECT items.code, items.name, items.item_group
+            SELECT items.code, items.name, items.item_group, items.payload_json
             FROM mini_items items
             LEFT JOIN group_kind ON lower(items.item_group) = group_kind.group_name
             WHERE COALESCE(group_kind.is_finished, false)
@@ -267,6 +267,7 @@ pub(super) async fn load_products(
                 location.qolip_code,
                 location.size,
                 COALESCE(location.payload_json->>'color', '') AS color,
+                location.created_at,
                 location.updated_at
             FROM mini_qolip_locations location
             LEFT JOIN mini_items items
@@ -285,7 +286,8 @@ pub(super) async fn load_products(
                 COALESCE(NULLIF(btrim(items.item_group), ''), '') AS item_group,
                 checkout.qolip_code,
                 checkout.size,
-                COALESCE(checkout.payload_json->>'color', '') AS color
+                COALESCE(checkout.payload_json->>'color', '') AS color,
+                checkout.created_at
             FROM mini_qolip_checkouts checkout
             LEFT JOIN mini_items items
               ON lower(items.code) = lower(checkout.item_code)
@@ -309,7 +311,8 @@ pub(super) async fn load_products(
                 spec.item_group,
                 spec.qolip_code,
                 spec.size,
-                COALESCE(spec.payload_json->>'color', '') AS color
+                COALESCE(spec.payload_json->>'color', '') AS color,
+                spec.created_at
             FROM mini_qolip_product_specs spec
             UNION ALL
             SELECT
@@ -318,7 +321,8 @@ pub(super) async fn load_products(
                 location.item_group,
                 location.qolip_code,
                 location.size,
-                location.color
+                location.color,
+                location.created_at
             FROM legacy_locations location
             UNION ALL
             SELECT
@@ -327,7 +331,8 @@ pub(super) async fn load_products(
                 checkout.item_group,
                 checkout.qolip_code,
                 checkout.size,
-                checkout.color
+                checkout.color,
+                checkout.created_at
             FROM legacy_checkouts checkout
         ),
         product_rows AS (
@@ -344,6 +349,15 @@ pub(super) async fn load_products(
                     ''
                 ) AS item_group,
                 source.qolip_code,
+                COALESCE(
+                    NULLIF(btrim(items.payload_json->>'qolip_first_code'), ''),
+                    FIRST_VALUE(source.qolip_code) OVER (
+                        PARTITION BY lower(COALESCE(items.code, source.item_code))
+                        ORDER BY source.created_at ASC NULLS LAST,
+                                 lower(source.qolip_code)
+                    ),
+                    ''
+                ) AS first_qolip_code,
                 source.size,
                 source.color,
                 source.qolip_code IS NOT NULL AS has_qolip_spec
@@ -367,6 +381,7 @@ pub(super) async fn load_products(
                 WHERE lower(assignments.item_code) = lower(product.code)
             ), ARRAY[]::text[]) AS customer_names,
             COALESCE(product.qolip_code, '') AS qolip_code,
+            product.first_qolip_code,
             COALESCE(product.size, 0) AS size,
             COALESCE(product.color, '') AS color,
             product.has_qolip_spec,
@@ -433,6 +448,7 @@ pub(super) async fn load_products(
             item_group: row.item_group,
             customer_names: row.customer_names,
             qolip_code: row.qolip_code,
+            first_qolip_code: row.first_qolip_code,
             size: row.size,
             color: row.color,
             has_qolip_spec: row.has_qolip_spec,
@@ -642,6 +658,32 @@ pub(super) async fn save_product_spec(
     if exists {
         return Err(QolipError::QolipCodeConflict);
     }
+    sqlx::query(
+        "UPDATE mini_items item
+         SET payload_json = jsonb_set(
+                 COALESCE(item.payload_json, '{}'::jsonb),
+                 '{qolip_first_code}',
+                 to_jsonb(COALESCE(
+                     (
+                         SELECT existing.qolip_code
+                         FROM mini_qolip_product_specs existing
+                         WHERE lower(existing.item_code) = lower($1)
+                         ORDER BY existing.created_at ASC, lower(existing.qolip_code)
+                         LIMIT 1
+                     ),
+                     $2
+                 )::text),
+                 true
+             ),
+             updated_at = now()
+         WHERE lower(item.code) = lower($1)
+           AND COALESCE(btrim(item.payload_json->>'qolip_first_code'), '') = ''",
+    )
+    .bind(spec.item_code.trim())
+    .bind(spec.qolip_code.trim())
+    .execute(&mut *tx)
+    .await
+    .map_err(|_| QolipError::StoreFailed)?;
     spec.color = allocate_panton_color(&mut tx, &spec.qolip_code, None, &spec.color).await?;
     let row = sqlx::query_as::<_, QolipProductSpecRow>(
         "INSERT INTO mini_qolip_product_specs (

@@ -42,13 +42,6 @@ impl ProductionMapService {
         if !sequence.iter().any(|id| id.trim() == order_id) {
             return Err(ProductionMapError::QueueActionNotAllowed);
         }
-        if action == queue_state::ApparatusQueueAction::Resume
-            && sequence
-                .first()
-                .is_none_or(|first| first.trim() != order_id)
-        {
-            return Err(ProductionMapError::QueueActionNotAllowed);
-        }
         let order_map = all_maps
             .iter()
             .find(|map| map.id.trim() == order_id)

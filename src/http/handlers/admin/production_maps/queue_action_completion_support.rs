@@ -1,3 +1,12 @@
+fn returned_paint_queue_error(error: ReturnedPaintError) -> AdminError {
+    match error {
+        ReturnedPaintError::NegativeFinalValue => {
+            bad_request("returned_paint_astatka_exceeds_rasxot")
+        }
+        other => bad_request(other.to_string()),
+    }
+}
+
 fn zero_completion_metric_codes(
     input: &ApparatusQueueActionRequest,
     return_ink_kg: Option<f64>,

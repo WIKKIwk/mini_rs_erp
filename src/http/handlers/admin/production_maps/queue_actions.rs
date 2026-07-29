@@ -1,7 +1,7 @@
 use super::*;
 use crate::core::production_map::pechat;
 use crate::core::returned_paint::{
-    ReturnedPaintItem, ReturnedPaintRequestCreate, ReturnedPaintStatus,
+    ReturnedPaintError, ReturnedPaintItem, ReturnedPaintRequestCreate, ReturnedPaintStatus,
     returned_paint_astatka_total, returned_paint_report_can_close, returned_paint_value_count,
 };
 
@@ -176,7 +176,7 @@ pub async fn production_map_queue_action(
                         ),
                     )
                     .await
-                    .map_err(|error| bad_request(error.to_string()))?,
+                    .map_err(returned_paint_queue_error)?,
             )
         } else {
             None
@@ -185,7 +185,7 @@ pub async fn production_map_queue_action(
     let return_ink_kg = match &returned_paint_report {
         Some(report) if report.status == ReturnedPaintStatus::Completed => {
             let total = returned_paint_astatka_total(&report.items)
-                .map_err(|error| bad_request(error.to_string()))?;
+                .map_err(returned_paint_queue_error)?;
             (total > 0.0).then_some(total)
         }
         Some(_) => None,
@@ -454,7 +454,8 @@ include!("queue_action_completion_support.rs");
 
 #[cfg(test)]
 mod tests {
-    use super::apparatus_requires_qolip_scan;
+    use super::{apparatus_requires_qolip_scan, returned_paint_queue_error};
+    use crate::core::returned_paint::ReturnedPaintError;
 
     #[test]
     fn qolip_scan_is_required_only_for_seven_eight_and_nine_color_bosma_family() {
@@ -464,5 +465,14 @@ mod tests {
         assert!(!apparatus_requires_qolip_scan("Laminatsiya"));
         assert!(!apparatus_requires_qolip_scan("Rezka aparat"));
         assert!(!apparatus_requires_qolip_scan("Pechat"));
+    }
+
+    #[test]
+    fn astatka_exceeding_rasxot_returns_stable_queue_error_code() {
+        let (status, axum::Json(body)) =
+            returned_paint_queue_error(ReturnedPaintError::NegativeFinalValue);
+
+        assert_eq!(status, axum::http::StatusCode::BAD_REQUEST);
+        assert_eq!(body.error, "returned_paint_astatka_exceeds_rasxot");
     }
 }

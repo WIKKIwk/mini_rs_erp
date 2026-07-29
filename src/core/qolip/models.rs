@@ -14,6 +14,8 @@ pub struct QolipProduct {
     #[serde(default)]
     pub customer_names: Vec<String>,
     pub qolip_code: String,
+    #[serde(default)]
+    pub first_qolip_code: String,
     pub size: i32,
     #[serde(default)]
     pub color: String,

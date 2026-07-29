@@ -9,6 +9,7 @@ mod tests {
             item_group: "Tayyor mahsulot".to_string(),
             customer_names: Vec::new(),
             qolip_code: String::new(),
+            first_qolip_code: String::new(),
             size: 0,
             color: String::new(),
             has_qolip_spec: false,
@@ -81,11 +82,11 @@ mod tests {
             .seed_products(vec![product("ITEM-001", "Kross qolip")])
             .await;
         store
-            .put_product_spec(product_spec("ITEM-001", "QOLIP-0001"))
+            .put_product_spec(product_spec("ITEM-001", "QOLIP-Z9"))
             .await
             .expect("first spec");
         store
-            .put_product_spec(product_spec("ITEM-001", "QOLIP-0002"))
+            .put_product_spec(product_spec("ITEM-001", "QOLIP-A1"))
             .await
             .expect("second spec");
 
@@ -96,8 +97,21 @@ mod tests {
                 .iter()
                 .map(|product| product.qolip_code.as_str())
                 .collect::<Vec<_>>(),
-            vec!["QOLIP-0001", "QOLIP-0002"]
+            vec!["QOLIP-A1", "QOLIP-Z9"]
         );
+        assert!(
+            products
+                .iter()
+                .all(|product| product.first_qolip_code == "QOLIP-Z9")
+        );
+
+        store
+            .delete_product_specs(&["QOLIP-Z9".to_string()])
+            .await
+            .expect("delete first spec");
+        let remaining = store.products("Kross", 20, true).await.expect("products");
+        assert_eq!(remaining.len(), 1);
+        assert_eq!(remaining[0].first_qolip_code, "QOLIP-Z9");
     }
 
     #[tokio::test]

@@ -12,7 +12,7 @@ pub(super) async fn save_checkout(
     checkout: QolipCheckout,
 ) -> Result<QolipCheckout, QolipError> {
     let mut tx = pool.begin().await.map_err(|_| QolipError::StoreFailed)?;
-    let saved = save_checkout_tx(&mut tx, &checkout).await?;
+    let saved = save_checkout_tx(&mut tx, &checkout, None).await?;
     tx.commit().await.map_err(|_| QolipError::StoreFailed)?;
     Ok(saved)
 }
@@ -20,6 +20,7 @@ pub(super) async fn save_checkout(
 pub(crate) async fn save_checkout_tx(
     tx: &mut Transaction<'_, Postgres>,
     checkout: &QolipCheckout,
+    excluded_session_id: Option<&str>,
 ) -> Result<QolipCheckout, QolipError> {
     sqlx::query("SELECT pg_advisory_xact_lock(hashtext(lower($1))::bigint)")
         .bind(checkout.qolip_code.trim())
@@ -32,6 +33,7 @@ pub(crate) async fn save_checkout_tx(
              SELECT 1
              FROM mini_order_run_sessions session
              WHERE session.status IN ('active', 'paused')
+               AND ($2::text IS NULL OR session.session_id <> $2)
                AND (
                    lower(session.payload_json->>'qolip_code') = lower($1)
                    OR EXISTS (
@@ -49,6 +51,7 @@ pub(crate) async fn save_checkout_tx(
          )",
     )
     .bind(checkout.qolip_code.trim())
+    .bind(excluded_session_id.map(str::trim).filter(|value| !value.is_empty()))
     .fetch_one(&mut **tx)
     .await
     .map_err(|_| QolipError::StoreFailed)?;
