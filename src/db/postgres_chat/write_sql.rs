@@ -162,3 +162,64 @@ const CLAIM_ORDER_FREEZE_CHAT_EVENTS_SQL: &str = r#"WITH candidates AS (
      ON request.request_id = claimed.request_id
    JOIN mini_production_maps map ON map.id = request.order_id
    ORDER BY claimed.event_sequence ASC"#;
+
+const CLAIM_INVENTORY_TRANSFER_CHAT_EVENTS_SQL: &str = r#"WITH candidates AS (
+     SELECT event_sequence
+     FROM mini_inventory_transfer_chat_outbox
+     WHERE delivered_at IS NULL
+       AND (locked_until IS NULL OR locked_until < now())
+     ORDER BY event_sequence ASC
+     FOR UPDATE SKIP LOCKED
+     LIMIT $1
+   ),
+   claimed AS (
+     UPDATE mini_inventory_transfer_chat_outbox event
+     SET attempts = event.attempts + 1,
+         locked_until = now() + interval '30 seconds'
+     FROM candidates
+     WHERE event.event_sequence = candidates.event_sequence
+     RETURNING event.event_sequence, event.event_id, event.transfer_id,
+               event.status, event.target_role, event.target_ref,
+               event.target_display_name, event.attempts
+   )
+   SELECT
+     claimed.event_sequence,
+     claimed.event_id,
+     transfer.id AS transfer_id,
+     claimed.status,
+     transfer.source_warehouse,
+     transfer.destination_warehouse,
+     transfer.note,
+     transfer.requested_by_role AS requester_role,
+     transfer.requested_by_ref AS requester_ref,
+     transfer.requested_by_name AS requester_display_name,
+     claimed.target_role,
+     claimed.target_ref,
+     claimed.target_display_name,
+     transfer.approved_by_name,
+     transfer.dispatched_by_name,
+     transfer.received_by_name,
+     transfer.rejected_by_name,
+     transfer.cancelled_by_name,
+     EXTRACT(EPOCH FROM transfer.created_at)::BIGINT AS created_at_unix,
+     COALESCE(lines.lines_json, '[]'::jsonb) AS lines_json,
+     claimed.attempts
+   FROM claimed
+   JOIN mini_inventory_transfers transfer ON transfer.id = claimed.transfer_id
+   LEFT JOIN LATERAL (
+     SELECT jsonb_agg(
+       jsonb_build_object(
+         'asset_kind', line.asset_kind,
+         'asset_ref', line.asset_ref,
+         'item_code', line.item_code,
+         'item_name', line.item_name,
+         'identifier', line.identifier,
+         'qty', line.qty,
+         'uom', line.uom
+       )
+       ORDER BY line.asset_kind, line.asset_ref
+     ) AS lines_json
+     FROM mini_inventory_transfer_lines line
+     WHERE line.transfer_id = transfer.id
+   ) lines ON TRUE
+   ORDER BY claimed.event_sequence ASC"#;

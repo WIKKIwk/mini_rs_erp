@@ -308,6 +308,23 @@ impl ChatService {
                 }
             }
         });
+        let service = self.clone();
+        handle.spawn(async move {
+            loop {
+                match service.store.claim_inventory_transfer_chat_events(32).await {
+                    Ok(events) if events.is_empty() => sleep(Duration::from_millis(350)).await,
+                    Ok(events) => {
+                        for event in events {
+                            service.deliver_inventory_transfer_card(event).await;
+                        }
+                    }
+                    Err(error) => {
+                        tracing::warn!(%error, "inventory transfer chat card worker failed");
+                        sleep(Duration::from_secs(1)).await;
+                    }
+                }
+            }
+        });
     }
 
     async fn deliver_order_freeze_card(&self, event: super::OrderFreezeChatEvent) {
@@ -358,6 +375,59 @@ impl ChatService {
                 let _ = self
                     .store
                     .reschedule_order_freeze_chat_event(&event.event_id, &error.to_string())
+                    .await;
+            }
+        }
+    }
+
+    async fn deliver_inventory_transfer_card(&self, event: super::InventoryTransferChatEvent) {
+        let result = async {
+            let requester_role = chat_role_from_code(&event.requester_role)?;
+            let target_role = chat_role_from_code(&event.target_role)?;
+            let conversation = self
+                .create_or_get_dm(
+                    ChatPrincipalInput {
+                        role: requester_role.clone(),
+                        ref_: event.requester_ref.clone(),
+                        display_name: event.requester_display_name.clone(),
+                        avatar_url: String::new(),
+                    },
+                    ChatPrincipalInput {
+                        role: target_role,
+                        ref_: event.target_ref.clone(),
+                        display_name: event.target_display_name.clone(),
+                        avatar_url: String::new(),
+                    },
+                )
+                .await?;
+            let principal = Principal {
+                role: requester_role,
+                display_name: event.requester_display_name.clone(),
+                legal_name: event.requester_display_name.clone(),
+                ref_: event.requester_ref.clone(),
+                phone: String::new(),
+                avatar_url: String::new(),
+            };
+            self.store
+                .upsert_inventory_transfer_card(&principal, &conversation.conversation_id, &event)
+                .await
+        }
+        .await;
+        match result {
+            Ok(_) => {
+                if let Err(error) = self
+                    .store
+                    .mark_inventory_transfer_chat_event_delivered(&event.event_id)
+                    .await
+                {
+                    tracing::warn!(%error, event_id = %event.event_id, "inventory transfer card marker failed");
+                }
+            }
+            Err(error) => {
+                tracing::warn!(%error, event_id = %event.event_id, "inventory transfer card delivery failed");
+                let _ = self
+                    .store
+                    .reschedule_inventory_transfer_chat_event(&event.event_id, &error.to_string())
                     .await;
             }
         }
@@ -461,6 +531,7 @@ fn chat_role_from_code(value: &str) -> Result<PrincipalRole, ChatError> {
         "qolipchi" => Ok(PrincipalRole::Qolipchi),
         "boyoqchi" => Ok(PrincipalRole::Boyoqchi),
         "material_taminotchi" => Ok(PrincipalRole::MaterialTaminotchi),
+        "customer" => Ok(PrincipalRole::Customer),
         "admin" => Ok(PrincipalRole::Admin),
         _ => Err(ChatError::InvalidInput),
     }

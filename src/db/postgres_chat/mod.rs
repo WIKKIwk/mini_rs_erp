@@ -10,7 +10,7 @@ use crate::core::auth::models::Principal;
 use crate::core::chat::{
     ChatConversation, ChatError, ChatMessagePage, ChatOutboxEvent, ChatPrincipal,
     ChatPrincipalInput, ChatPushDelivery, ChatRealtimeEvent, ChatSendResult, ChatStorePort,
-    OrderFreezeChatEvent,
+    InventoryTransferChatEvent, OrderFreezeChatEvent,
 };
 
 pub use realtime::start_realtime_listener;
@@ -221,5 +221,36 @@ impl ChatStorePort for PostgresChatStore {
         error: &str,
     ) -> Result<(), ChatError> {
         write::reschedule_order_freeze_chat_event(&self.pool, event_id, error).await
+    }
+
+    async fn claim_inventory_transfer_chat_events(
+        &self,
+        limit: usize,
+    ) -> Result<Vec<InventoryTransferChatEvent>, ChatError> {
+        write::claim_inventory_transfer_chat_events(&self.pool, limit).await
+    }
+
+    async fn upsert_inventory_transfer_card(
+        &self,
+        principal: &Principal,
+        conversation_id: &str,
+        event: &InventoryTransferChatEvent,
+    ) -> Result<ChatSendResult, ChatError> {
+        write::upsert_inventory_transfer_card(&self.pool, principal, conversation_id, event).await
+    }
+
+    async fn mark_inventory_transfer_chat_event_delivered(
+        &self,
+        event_id: &str,
+    ) -> Result<(), ChatError> {
+        write::mark_inventory_transfer_chat_event_delivered(&self.pool, event_id).await
+    }
+
+    async fn reschedule_inventory_transfer_chat_event(
+        &self,
+        event_id: &str,
+        error: &str,
+    ) -> Result<(), ChatError> {
+        write::reschedule_inventory_transfer_chat_event(&self.pool, event_id, error).await
     }
 }

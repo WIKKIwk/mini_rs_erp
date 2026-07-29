@@ -10,6 +10,6 @@ pub use models::*;
 pub use ports::{ChatError, ChatStorePort};
 pub use service::ChatService;
 
-pub fn can_participate_in_chat(role: &PrincipalRole) -> bool {
-    !matches!(role, PrincipalRole::Customer)
+pub fn can_participate_in_chat(_role: &PrincipalRole) -> bool {
+    true
 }

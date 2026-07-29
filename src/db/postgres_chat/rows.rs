@@ -1,7 +1,7 @@
 use crate::core::auth::models::PrincipalRole;
 use crate::core::chat::{
     ChatConversation, ChatError, ChatMessage, ChatMessageAttachment, ChatPrincipal,
-    OrderFreezeChatEvent,
+    InventoryTransferChatEvent, OrderFreezeChatEvent,
 };
 
 #[derive(sqlx::FromRow)]
@@ -55,6 +55,59 @@ impl OrderFreezeChatEventRow {
             target_worker_display_name: self.target_worker_display_name,
             requested_at_unix: self.requested_at_unix,
             transitioned_at_unix: self.transitioned_at_unix,
+            attempts: self.attempts,
+        }
+    }
+}
+
+#[derive(sqlx::FromRow)]
+pub(super) struct InventoryTransferChatEventRow {
+    pub event_sequence: i64,
+    pub event_id: String,
+    pub transfer_id: String,
+    pub status: String,
+    pub source_warehouse: String,
+    pub destination_warehouse: String,
+    pub note: String,
+    pub requester_role: String,
+    pub requester_ref: String,
+    pub requester_display_name: String,
+    pub target_role: String,
+    pub target_ref: String,
+    pub target_display_name: String,
+    pub approved_by_name: String,
+    pub dispatched_by_name: String,
+    pub received_by_name: String,
+    pub rejected_by_name: String,
+    pub cancelled_by_name: String,
+    pub created_at_unix: i64,
+    pub lines_json: serde_json::Value,
+    pub attempts: i32,
+}
+
+impl InventoryTransferChatEventRow {
+    pub fn into_model(self) -> InventoryTransferChatEvent {
+        InventoryTransferChatEvent {
+            event_sequence: self.event_sequence,
+            event_id: self.event_id,
+            transfer_id: self.transfer_id,
+            status: self.status,
+            source_warehouse: self.source_warehouse,
+            destination_warehouse: self.destination_warehouse,
+            note: self.note,
+            requester_role: self.requester_role,
+            requester_ref: self.requester_ref,
+            requester_display_name: self.requester_display_name,
+            target_role: self.target_role,
+            target_ref: self.target_ref,
+            target_display_name: self.target_display_name,
+            approved_by_name: self.approved_by_name,
+            dispatched_by_name: self.dispatched_by_name,
+            received_by_name: self.received_by_name,
+            rejected_by_name: self.rejected_by_name,
+            cancelled_by_name: self.cancelled_by_name,
+            created_at_unix: self.created_at_unix,
+            lines: self.lines_json,
             attempts: self.attempts,
         }
     }

@@ -439,6 +439,14 @@ impl InventoryMovementStorePort for PostgresInventoryMovementStore {
                 true,
             )
             .await?;
+        } else {
+            enqueue_transfer_chat_events_tx(
+                &mut tx,
+                transfer_id,
+                "requested",
+                &destination.name,
+            )
+            .await?;
         }
         tx.commit().await.map_err(store_error)?;
         load_transfer(&self.pool, transfer_id).await
@@ -696,6 +704,15 @@ impl InventoryMovementStorePort for PostgresInventoryMovementStore {
                 &format!("{}:internal:receive", input.idempotency_key),
                 "transfer_received",
                 true,
+            )
+            .await?;
+        }
+        if !internal_transfer {
+            enqueue_transfer_chat_events_tx(
+                &mut tx,
+                transfer_id,
+                transfer_chat_status(action),
+                &transfer.destination_warehouse,
             )
             .await?;
         }
@@ -1598,6 +1615,78 @@ async fn warehouse_location_id_tx(
     .await
     .map_err(store_error)?
     .ok_or(InventoryMovementError::LocationNotFound)
+}
+
+async fn enqueue_transfer_chat_events_tx(
+    tx: &mut Transaction<'_, Postgres>,
+    transfer_id: &str,
+    status: &str,
+    destination_warehouse: &str,
+) -> Result<(), InventoryMovementError> {
+    let existing_targets = sqlx::query_as::<_, (String, String, String)>(
+        r#"
+        SELECT DISTINCT target_role, target_ref, target_display_name
+        FROM mini_inventory_transfer_chat_outbox
+        WHERE transfer_id = $1
+        ORDER BY target_role, target_ref
+        "#,
+    )
+    .bind(transfer_id.trim())
+    .fetch_all(&mut **tx)
+    .await
+    .map_err(store_error)?;
+    let targets = if existing_targets.is_empty() {
+        sqlx::query_as::<_, (String, String, String)>(
+        r#"
+        SELECT principal_role, principal_ref, display_name
+        FROM mini_warehouse_assignments
+        WHERE lower(warehouse) = lower($1)
+          AND principal_role <> 'customer'
+        ORDER BY lower(display_name), lower(principal_ref)
+        "#,
+        )
+        .bind(destination_warehouse.trim())
+        .fetch_all(&mut **tx)
+        .await
+        .map_err(store_error)?
+    } else {
+        existing_targets
+    };
+    if targets.is_empty() {
+        return Err(InventoryMovementError::DestinationWarehouseUnassigned);
+    }
+    for (target_role, target_ref, target_display_name) in targets {
+        sqlx::query(
+            r#"
+            INSERT INTO mini_inventory_transfer_chat_outbox (
+                event_id, transfer_id, status,
+                target_role, target_ref, target_display_name
+            )
+            VALUES ($1, $2, $3, $4, $5, $6)
+            ON CONFLICT (transfer_id, target_role, target_ref, status) DO NOTHING
+            "#,
+        )
+        .bind(new_id("inventory_transfer_chat"))
+        .bind(transfer_id.trim())
+        .bind(status)
+        .bind(target_role)
+        .bind(target_ref)
+        .bind(target_display_name)
+        .execute(&mut **tx)
+        .await
+        .map_err(store_error)?;
+    }
+    Ok(())
+}
+
+fn transfer_chat_status(action: InventoryTransferActionKind) -> &'static str {
+    match action {
+        InventoryTransferActionKind::Approve => "approved",
+        InventoryTransferActionKind::Reject => "rejected",
+        InventoryTransferActionKind::Dispatch => "in_transit",
+        InventoryTransferActionKind::Receive => "received",
+        InventoryTransferActionKind::Cancel => "cancelled",
+    }
 }
 
 async fn advisory_idempotency_lock(

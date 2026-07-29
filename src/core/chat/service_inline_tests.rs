@@ -27,11 +27,11 @@ mod tests {
     }
 
     #[test]
-    fn chat_policy_excludes_customers_and_keeps_other_roles_available() {
-        assert!(!can_participate_in_chat(&PrincipalRole::Customer));
+    fn chat_policy_keeps_all_roles_available() {
         for role in [
             PrincipalRole::Supplier,
             PrincipalRole::Werka,
+            PrincipalRole::Customer,
             PrincipalRole::Aparatchi,
             PrincipalRole::Qolipchi,
             PrincipalRole::Boyoqchi,
@@ -43,7 +43,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn customer_cannot_create_or_list_chat() {
+    async fn customer_reaches_chat_store() {
         let service = ChatService::unavailable();
         let customer = Principal {
             role: PrincipalRole::Customer,
@@ -55,7 +55,7 @@ mod tests {
         };
         assert_eq!(
             service.conversations(&customer, 30, 0).await,
-            Err(ChatError::Forbidden)
+            Err(ChatError::Unavailable)
         );
         assert_eq!(
             service
@@ -74,7 +74,7 @@ mod tests {
                     },
                 )
                 .await,
-            Err(ChatError::Forbidden)
+            Err(ChatError::Unavailable)
         );
     }
 }

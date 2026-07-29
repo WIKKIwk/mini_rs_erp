@@ -238,6 +238,26 @@ mod tests {
     }
 
     #[test]
+    fn inventory_transfer_chat_card_migration_is_recipient_scoped_and_additive() {
+        let migration = POSTGRES_MIGRATIONS
+            .iter()
+            .find(|(version, _)| *version == "0030_inventory_transfer_chat_cards")
+            .map(|(_, sql)| sql.to_lowercase())
+            .expect("inventory transfer chat card migration");
+
+        for expected in [
+            "mini_inventory_transfer_chat_outbox",
+            "target_role",
+            "target_ref",
+            "inventory_transfer_request",
+            "event_sequence bigserial primary key",
+        ] {
+            assert!(migration.contains(expected), "missing {expected}");
+        }
+        assert!(!migration.contains("drop table"));
+    }
+
+    #[test]
     fn qolip_legacy_lookup_migration_indexes_locations_and_checkouts() {
         let migration = POSTGRES_MIGRATIONS
             .iter()

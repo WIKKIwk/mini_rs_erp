@@ -83,6 +83,66 @@ pub struct OrderFreezeChatEvent {
     pub attempts: i32,
 }
 
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct InventoryTransferChatEvent {
+    pub event_sequence: i64,
+    pub event_id: String,
+    pub transfer_id: String,
+    pub status: String,
+    pub source_warehouse: String,
+    pub destination_warehouse: String,
+    pub note: String,
+    pub requester_role: String,
+    pub requester_ref: String,
+    pub requester_display_name: String,
+    pub target_role: String,
+    pub target_ref: String,
+    pub target_display_name: String,
+    pub approved_by_name: String,
+    pub dispatched_by_name: String,
+    pub received_by_name: String,
+    pub rejected_by_name: String,
+    pub cancelled_by_name: String,
+    pub created_at_unix: i64,
+    pub lines: serde_json::Value,
+    pub attempts: i32,
+}
+
+impl InventoryTransferChatEvent {
+    pub fn message_body(&self) -> String {
+        format!(
+            "{} omboridan {} omboriga transfer",
+            self.source_warehouse.trim(),
+            self.destination_warehouse.trim()
+        )
+    }
+
+    pub fn metadata(&self) -> serde_json::Value {
+        serde_json::json!({
+            "kind": "inventory_transfer_request",
+            "event_sequence": self.event_sequence,
+            "transfer_id": self.transfer_id,
+            "status": self.status,
+            "source_warehouse": self.source_warehouse,
+            "destination_warehouse": self.destination_warehouse,
+            "note": self.note,
+            "requester_role": self.requester_role,
+            "requester_ref": self.requester_ref,
+            "requester_display_name": self.requester_display_name,
+            "target_role": self.target_role,
+            "target_ref": self.target_ref,
+            "target_display_name": self.target_display_name,
+            "approved_by_name": self.approved_by_name,
+            "dispatched_by_name": self.dispatched_by_name,
+            "received_by_name": self.received_by_name,
+            "rejected_by_name": self.rejected_by_name,
+            "cancelled_by_name": self.cancelled_by_name,
+            "created_at_unix": self.created_at_unix,
+            "lines": self.lines,
+        })
+    }
+}
+
 impl OrderFreezeChatEvent {
     pub fn message_body(&self) -> String {
         format!(
