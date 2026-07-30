@@ -19,6 +19,23 @@ fn calculates_formula_with_waste_and_rounding() {
 }
 
 #[test]
+fn calculates_single_layer_order() {
+    let result = calculate(CalculateRequest {
+        kg: Some(300.0),
+        frame_product_size_mm: Some(515.0),
+        frame_count: Some(1.0),
+        first_layer: LayerInput::new("pet", "12"),
+        ..CalculateRequest::default()
+    })
+    .expect("calculate single layer");
+
+    assert_eq!(result.layers.len(), 1);
+    assert_eq!(result.layers[0].material, "pet");
+    assert_eq!(result.results[0].other_coeff, 0.0);
+    assert!(result.results[0].base_length > 0.0);
+}
+
+#[test]
 fn calculates_with_custom_waste_percent() {
     let result = calculate(CalculateRequest {
         kg: Some(300.0),

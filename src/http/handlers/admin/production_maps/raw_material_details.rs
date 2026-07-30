@@ -35,6 +35,13 @@ pub(super) async fn fill_raw_material_assignment_input(
         ));
     }
     let (stock, item) = resolve_raw_material_stock_item(state, barcode).await?;
+    if !stock.status.trim().eq_ignore_ascii_case("available")
+        || !stock.reserved_order_id.trim().is_empty()
+    {
+        return Err(production_map_error(
+            ProductionMapError::RawMaterialStockUnavailable,
+        ));
+    }
     let item_code = stock.item_code.trim().to_string();
     if item_code.is_empty() {
         return Err(production_map_error(
@@ -130,7 +137,16 @@ async fn validate_rulon_size_for_pechat_order(
         .await
         .map_err(production_map_error)?
         .ok_or_else(|| production_map_error(ProductionMapError::MapNotFound))?;
-    if !map_has_pechat_stage(&map) {
+    validate_rulon_size_for_pechat_map(&map, stock, item, item_group_path)
+}
+
+pub(super) fn validate_rulon_size_for_pechat_map(
+    map: &ProductionMapDefinition,
+    stock: &RawMaterialStockEntry,
+    item: &SupplierItem,
+    item_group_path: &[String],
+) -> Result<(), AdminError> {
+    if !is_rulon_group(item_group_path) || !map_has_pechat_stage(map) {
         return Ok(());
     }
     let order_width = map

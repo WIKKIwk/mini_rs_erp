@@ -6,7 +6,8 @@ use super::materials_support::*;
 use super::queue_state;
 use super::{
     ApparatusQueueActionResult, OrderControlState, PreparedApparatusQueueAction,
-    ProductionMapError, ProductionMapService, QueueActionActor, QueueProgressInput, chain,
+    ProductionMapError, ProductionMapSaved, ProductionMapService, QueueActionActor,
+    QueueProgressInput, chain,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -114,6 +115,28 @@ pub struct MaterialScanProgressAction<'a> {
 }
 
 impl ProductionMapService {
+    pub async fn raw_material_assignment_orders(
+        &self,
+    ) -> Result<Vec<ProductionMapSaved>, ProductionMapError> {
+        let mut active_orders = Vec::new();
+        let order_controls = self.order_control_states().await?;
+        for saved in self.maps().await? {
+            let order_id = saved.map.id.trim();
+            if !order_id.starts_with("zakaz-")
+                || order_controls
+                    .get(order_id)
+                    .is_some_and(|control| control.state != OrderControlState::Active)
+            {
+                continue;
+            }
+            let status = self.order_status_detail(order_id).await?;
+            if !matches!(status.order_status.as_str(), "completed" | "completed_with_issue") {
+                active_orders.push(saved);
+            }
+        }
+        Ok(active_orders)
+    }
+
     pub async fn apparatus_material_rules(
         &self,
     ) -> Result<Vec<ApparatusMaterialRule>, ProductionMapError> {
@@ -225,6 +248,22 @@ impl ProductionMapService {
         Ok(assignment)
     }
 
+    pub async fn raw_material_assignment_apparatus_options(
+        &self,
+        order_id: &str,
+        item_group_path: &[String],
+    ) -> Result<Vec<String>, ProductionMapError> {
+        let order_id = order_id.trim();
+        if order_id.is_empty() || item_group_path.is_empty() {
+            return Err(ProductionMapError::RawMaterialInvalidInput);
+        }
+        let Some(map) = self.raw_map(order_id).await? else {
+            return Err(ProductionMapError::MapNotFound);
+        };
+        self.resolve_material_apparatus_options(&map, item_group_path)
+            .await
+    }
+
     pub async fn receive_raw_material_for_active_order(
         &self,
         input: RawMaterialAssignmentInput,
@@ -322,11 +361,8 @@ impl ProductionMapService {
         {
             return Err(ProductionMapError::RawMaterialInvalidInput);
         }
-        let Some(map) = self.raw_map(&order_id).await? else {
-            return Err(ProductionMapError::MapNotFound);
-        };
         let apparatus_options = self
-            .resolve_material_apparatus_options(&map, &item_group_path)
+            .raw_material_assignment_apparatus_options(&order_id, &item_group_path)
             .await?;
         let requested_apparatus = input.apparatus.trim();
         let apparatus = if requested_apparatus.is_empty() {

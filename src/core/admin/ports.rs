@@ -100,6 +100,44 @@ pub trait AdminReadPort: Send + Sync {
         Ok(result)
     }
 
+    async fn items_page_in_groups(
+        &self,
+        groups: &[String],
+        query: &str,
+        limit: usize,
+        offset: usize,
+    ) -> Result<Vec<SupplierItem>, AdminPortError> {
+        if limit == 0 {
+            return Ok(Vec::new());
+        }
+        let groups = groups
+            .iter()
+            .map(|group| group.trim().to_lowercase())
+            .filter(|group| !group.is_empty())
+            .collect::<std::collections::BTreeSet<_>>();
+        if groups.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        let fetch_limit = offset.saturating_add(limit);
+        let mut items = Vec::new();
+        for group in groups {
+            items.extend(
+                self.items_page_by_group(&group, query, fetch_limit, 0)
+                    .await?,
+            );
+        }
+        items.sort_by(|left, right| {
+            left.code
+                .trim()
+                .to_lowercase()
+                .cmp(&right.code.trim().to_lowercase())
+                .then_with(|| left.code.cmp(&right.code))
+        });
+        items.dedup_by(|left, right| left.code.trim().eq_ignore_ascii_case(right.code.trim()));
+        Ok(items.into_iter().skip(offset).take(limit).collect())
+    }
+
     async fn items_by_codes(
         &self,
         item_codes: &[String],

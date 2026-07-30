@@ -142,6 +142,14 @@ pub(super) fn routes() -> Router<AppState> {
             any(admin::raw_material_assignment_lookup),
         )
         .route(
+            "/v1/mobile/admin/raw-material-assignments/orders",
+            any(admin::raw_material_assignment_orders),
+        )
+        .route(
+            "/v1/mobile/admin/raw-material-assignments/candidates",
+            any(admin::raw_material_assignment_candidates),
+        )
+        .route(
             "/v1/mobile/admin/raw-material-assignments",
             any(admin::raw_material_assignments),
         )

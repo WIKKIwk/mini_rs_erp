@@ -47,7 +47,8 @@ pub use self::raw_material_reprint::{
     raw_material_stock_reprint_confirm, raw_material_stock_reprint_prepare,
 };
 pub use self::raw_materials::{
-    raw_material_assignment_lookup, raw_material_assignments, raw_material_history,
+    raw_material_assignment_candidates, raw_material_assignment_lookup,
+    raw_material_assignment_orders, raw_material_assignments, raw_material_history,
     raw_material_intake, raw_material_intake_candidates, raw_material_rules,
     raw_material_start_requirements, raw_material_stock,
 };

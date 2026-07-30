@@ -228,6 +228,37 @@ impl AdminReadPort for FakeAdminCatalogReadPort {
         Ok(filter_fake_catalog_items(group, query, limit, offset))
     }
 
+    async fn items_page_in_groups(
+        &self,
+        groups: &[String],
+        query: &str,
+        limit: usize,
+        offset: usize,
+    ) -> Result<Vec<SupplierItem>, AdminPortError> {
+        let groups = groups
+            .iter()
+            .map(|group| group.trim().to_lowercase())
+            .collect::<std::collections::BTreeSet<_>>();
+        let query = query.trim().to_lowercase();
+        let mut items = fake_catalog_items()
+            .into_iter()
+            .filter(|item| groups.contains(&item.item_group.trim().to_lowercase()))
+            .filter(|item| {
+                query.is_empty()
+                    || item.code.to_lowercase().contains(&query)
+                    || item.name.to_lowercase().contains(&query)
+                    || item.item_group.to_lowercase().contains(&query)
+            })
+            .collect::<Vec<_>>();
+        items.sort_by(|left, right| {
+            left.code
+                .to_lowercase()
+                .cmp(&right.code.to_lowercase())
+                .then_with(|| left.code.cmp(&right.code))
+        });
+        Ok(items.into_iter().skip(offset).take(limit).collect())
+    }
+
     async fn items_by_codes(
         &self,
         _item_codes: &[String],

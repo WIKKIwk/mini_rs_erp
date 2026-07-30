@@ -1,5 +1,6 @@
 use super::raw_material_details::{
     fill_raw_material_assignment_input, item_group_path, lookup_raw_material_detail,
+    validate_rulon_size_for_pechat_map,
 };
 use super::*;
 use crate::db::postgres_raw_material_events::{
@@ -23,6 +24,18 @@ pub struct RawMaterialAssignmentsQuery {
     order_id: String,
     #[serde(default)]
     apparatus: String,
+}
+
+#[derive(Debug, serde::Serialize)]
+struct RawMaterialAssignmentCandidateResponse {
+    barcode: String,
+    warehouse: String,
+    item_code: String,
+    item_name: String,
+    item_group: String,
+    qty: f64,
+    uom: String,
+    apparatus_options: Vec<String>,
 }
 
 pub async fn raw_material_start_requirements(
@@ -272,6 +285,180 @@ pub async fn raw_material_assignments(
         }
         _ => Err(method_not_allowed()),
     }
+}
+
+pub async fn raw_material_assignment_orders(
+    State(state): State<AppState>,
+    method: Method,
+    headers: HeaderMap,
+) -> Result<Response, AdminError> {
+    authorize_any_capability(
+        &state,
+        &headers,
+        &[
+            Capability::AdminAccess,
+            Capability::ProductionMapManage,
+            Capability::RawMaterialAssign,
+        ],
+    )
+    .await?;
+    if method != Method::GET {
+        return Err(method_not_allowed());
+    }
+    state
+        .production_maps
+        .raw_material_assignment_orders()
+        .await
+        .map(json_response)
+        .map_err(production_map_error)
+}
+
+pub async fn raw_material_assignment_candidates(
+    State(state): State<AppState>,
+    Query(query): Query<RawMaterialAssignmentsQuery>,
+    method: Method,
+    headers: HeaderMap,
+) -> Result<Response, AdminError> {
+    let principal = authorize_any_capability(
+        &state,
+        &headers,
+        &[
+            Capability::AdminAccess,
+            Capability::ProductionMapManage,
+            Capability::RawMaterialAssign,
+        ],
+    )
+    .await?;
+    if method != Method::GET {
+        return Err(method_not_allowed());
+    }
+    let order_id = query.order_id.trim();
+    if order_id.is_empty() {
+        return Err(bad_request("order_id is required"));
+    }
+
+    let order = state
+        .production_maps
+        .raw_material_assignment_orders()
+        .await
+        .map_err(production_map_error)?
+        .into_iter()
+        .find(|saved| saved.map.id.trim() == order_id)
+        .ok_or_else(|| production_map_error(ProductionMapError::MapNotFound))?;
+    let stock = if principal.role == PrincipalRole::MaterialTaminotchi {
+        material_scoped_raw_material_stock(&state, &principal, "", 500).await?
+    } else {
+        state
+            .gscale
+            .raw_material_stock("", 500)
+            .await
+            .map_err(|_| server_error("raw material stock fetch failed"))?
+    };
+    let assigned_barcodes = state
+        .production_maps
+        .raw_material_assignments()
+        .await
+        .map_err(production_map_error)?
+        .into_iter()
+        .map(|assignment| assignment.barcode.trim().to_ascii_uppercase())
+        .collect::<BTreeSet<_>>();
+    let item_codes = stock
+        .iter()
+        .map(|entry| entry.item_code.trim().to_string())
+        .filter(|code| !code.is_empty())
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .collect::<Vec<_>>();
+    let items = state
+        .admin
+        .items_by_codes(&item_codes)
+        .await
+        .map_err(|_| server_error("raw material items fetch failed"))?
+        .into_iter()
+        .map(|item| (item.code.trim().to_ascii_lowercase(), item))
+        .collect::<BTreeMap<_, _>>();
+    let groups = state
+        .admin
+        .item_group_tree()
+        .await
+        .map_err(|_| server_error("item group tree fetch failed"))?;
+    let assigned_item_groups = if principal.role == PrincipalRole::MaterialTaminotchi {
+        Some(
+            state
+                .admin
+                .principal_assigned_item_group_scope(&principal)
+                .await
+                .map_err(|_| server_error("material item group scope fetch failed"))?,
+        )
+    } else {
+        None
+    };
+
+    let mut apparatus_options_by_group = BTreeMap::<String, Vec<String>>::new();
+    let mut candidates = Vec::<RawMaterialAssignmentCandidateResponse>::new();
+    for entry in stock {
+        let barcode = entry.barcode.trim();
+        if barcode.is_empty()
+            || !entry.status.trim().eq_ignore_ascii_case("available")
+            || !entry.reserved_order_id.trim().is_empty()
+            || assigned_barcodes.contains(&barcode.to_ascii_uppercase())
+        {
+            continue;
+        }
+        let Some(item) = items.get(&entry.item_code.trim().to_ascii_lowercase()) else {
+            continue;
+        };
+        if assigned_item_groups.as_ref().is_some_and(|assigned| {
+            !assigned
+                .iter()
+                .any(|group| group.trim().eq_ignore_ascii_case(item.item_group.trim()))
+        }) {
+            continue;
+        }
+        let group_path = item_group_path(&groups, &item.item_group);
+        if group_path.is_empty() {
+            continue;
+        }
+        if validate_rulon_size_for_pechat_map(&order.map, &entry, item, &group_path).is_err() {
+            continue;
+        }
+        let group_key = group_path
+            .iter()
+            .map(|group| group.trim().to_ascii_lowercase())
+            .collect::<Vec<_>>()
+            .join("\u{1f}");
+        let apparatus_options = if let Some(options) = apparatus_options_by_group.get(&group_key) {
+            options.clone()
+        } else {
+            let options = state
+                .production_maps
+                .raw_material_assignment_apparatus_options(order_id, &group_path)
+                .await
+                .map_err(production_map_error)?;
+            apparatus_options_by_group.insert(group_key, options.clone());
+            options
+        };
+        if apparatus_options.is_empty() {
+            continue;
+        }
+        candidates.push(RawMaterialAssignmentCandidateResponse {
+            barcode: barcode.to_string(),
+            warehouse: entry.warehouse.trim().to_string(),
+            item_code: entry.item_code.trim().to_string(),
+            item_name: item.name.trim().to_string(),
+            item_group: item.item_group.trim().to_string(),
+            qty: entry.qty,
+            uom: entry.uom.trim().to_string(),
+            apparatus_options,
+        });
+    }
+    candidates.sort_by(|left, right| {
+        left.item_name
+            .to_ascii_lowercase()
+            .cmp(&right.item_name.to_ascii_lowercase())
+            .then_with(|| left.barcode.cmp(&right.barcode))
+    });
+    Ok(json_response(candidates))
 }
 
 fn sort_raw_material_assignments(assignments: &mut [RawMaterialAssignment]) {

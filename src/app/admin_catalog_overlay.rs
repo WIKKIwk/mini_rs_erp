@@ -159,6 +159,18 @@ impl AdminReadPort for AdminCatalogOverlay {
             .await
     }
 
+    async fn items_page_in_groups(
+        &self,
+        groups: &[String],
+        query: &str,
+        limit: usize,
+        offset: usize,
+    ) -> Result<Vec<SupplierItem>, AdminPortError> {
+        self.catalog
+            .items_page_in_groups(groups, query, limit, offset)
+            .await
+    }
+
     async fn items_by_codes(
         &self,
         item_codes: &[String],

@@ -168,6 +168,67 @@ impl AdminReadPort for PostgresAdminCatalogStore {
         .map_err(|_| AdminPortError::LookupFailed)
     }
 
+    async fn items_page_in_groups(
+        &self,
+        groups: &[String],
+        query: &str,
+        limit: usize,
+        offset: usize,
+    ) -> Result<Vec<SupplierItem>, AdminPortError> {
+        let mut groups = groups
+            .iter()
+            .map(|group| group.trim().to_lowercase())
+            .filter(|group| !group.is_empty())
+            .collect::<Vec<_>>();
+        groups.sort_unstable();
+        groups.dedup();
+        if groups.is_empty() || limit == 0 {
+            return Ok(Vec::new());
+        }
+
+        let needle = format!("%{}%", query.trim().to_lowercase());
+        sqlx::query_as::<_, ItemRow>(
+            "SELECT items.code, items.name, items.uom, items.item_group,
+                    COALESCE((
+                        SELECT array_agg(
+                            CASE WHEN btrim(customers.name) <> ''
+                                 THEN customers.name ELSE customers.ref END
+                            ORDER BY lower(customers.name), customers.ref
+                        )
+                        FROM mini_customer_items assignments
+                        JOIN mini_customers customers
+                          ON customers.ref = assignments.customer_ref
+                        WHERE assignments.item_code = items.code
+                    ), ARRAY[]::text[]) AS customer_names
+             FROM mini_items items
+             WHERE lower(items.item_group) = ANY($1::text[])
+               AND (
+                    $2 = '%%'
+                    OR lower(items.code) LIKE $2
+                    OR lower(items.name) LIKE $2
+                    OR lower(items.item_group) LIKE $2
+                    OR EXISTS (
+                        SELECT 1
+                        FROM mini_customer_items assignments
+                        JOIN mini_customers customers
+                          ON customers.ref = assignments.customer_ref
+                        WHERE assignments.item_code = items.code
+                          AND lower(customers.name) LIKE $2
+                    )
+               )
+             ORDER BY lower(items.code), items.code
+             LIMIT $3 OFFSET $4",
+        )
+        .bind(groups)
+        .bind(needle)
+        .bind(limit.min(500) as i64)
+        .bind(offset as i64)
+        .fetch_all(&self.pool)
+        .await
+        .map(|rows| rows.into_iter().map(ItemRow::into_item).collect())
+        .map_err(|_| AdminPortError::LookupFailed)
+    }
+
     async fn items_by_codes(
         &self,
         item_codes: &[String],

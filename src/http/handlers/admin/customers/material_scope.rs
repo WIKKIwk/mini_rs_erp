@@ -39,22 +39,11 @@ pub(super) async fn material_scoped_items(
         return Ok(Vec::new());
     }
 
-    let mut items = Vec::new();
-    let mut seen_codes = std::collections::BTreeSet::new();
-    for group in groups {
-        let group_items = state
-            .admin
-            .items_page_by_group(&group, search, limit, 0)
-            .await
-            .map_err(|_| server_error("admin items failed"))?;
-        for item in group_items {
-            let key = item.code.trim().to_lowercase();
-            if key.is_empty() || seen_codes.insert(key) {
-                items.push(item);
-            }
-        }
-    }
-    Ok(items.into_iter().skip(offset).take(limit).collect())
+    state
+        .admin
+        .items_page_in_groups(&groups, search, limit, offset)
+        .await
+        .map_err(|_| server_error("admin items failed"))
 }
 
 pub(super) async fn scoped_item_group_tree(

@@ -165,14 +165,67 @@ pub fn validate_template(template: &CalculateOrderTemplate) -> Result<(), Calcul
             "1-qavat kerak".to_string(),
         ));
     }
-    if template.second_layer_material.trim().is_empty()
-        || template.second_layer_micron.trim().is_empty()
-    {
-        return Err(CalculateOrderError::InvalidInput(
-            "2-qavat kerak".to_string(),
-        ));
+    validate_optional_layer(
+        &template.second_layer_material,
+        &template.second_layer_micron,
+        "2-qavat",
+    )?;
+    validate_optional_layer(
+        &template.third_layer_material,
+        &template.third_layer_micron,
+        "3-qavat",
+    )?;
+    Ok(())
+}
+
+fn validate_optional_layer(
+    material: &str,
+    micron: &str,
+    layer_name: &str,
+) -> Result<(), CalculateOrderError> {
+    let material_empty = material.trim().is_empty();
+    let micron_empty = micron.trim().is_empty();
+    if material_empty != micron_empty {
+        return Err(CalculateOrderError::InvalidInput(format!(
+            "{layer_name} materiali va mikroni birga kiritilishi kerak"
+        )));
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn valid_template() -> CalculateOrderTemplate {
+        CalculateOrderTemplate {
+            name: "Bir qavatli zakaz".to_string(),
+            product: "Mahsulot".to_string(),
+            frame_product_size_mm: 100.0,
+            frame_count: 1.0,
+            first_layer_material: "pet".to_string(),
+            first_layer_micron: "12".to_string(),
+            ..CalculateOrderTemplate::default()
+        }
+    }
+
+    #[test]
+    fn accepts_single_layer_template() {
+        validate_template(&valid_template()).expect("single-layer template");
+    }
+
+    #[test]
+    fn rejects_partially_filled_optional_layer() {
+        let mut template = valid_template();
+        template.second_layer_material = "pe oq".to_string();
+
+        let error = validate_template(&template).expect_err("incomplete second layer");
+
+        assert_eq!(
+            error.to_string(),
+            "invalid input: 2-qavat materiali va mikroni birga kiritilishi kerak"
+        );
+    }
 }
 
 pub fn hydrate_template_dimensions(mut template: CalculateOrderTemplate) -> CalculateOrderTemplate {

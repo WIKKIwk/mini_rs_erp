@@ -48,7 +48,7 @@ async fn gscale_items_for_principal(
 ) -> Result<Vec<SupplierItem>, AdminPortError> {
     let group = query.group.as_deref().unwrap_or("");
     let search = query.q.as_deref().unwrap_or("");
-    let limit = positive_int(query.limit.as_deref(), 80).min(200);
+    let limit = positive_int(query.limit.as_deref(), 50).min(200);
     let offset = optional_offset(query.offset.as_deref());
     if principal.role != PrincipalRole::MaterialTaminotchi {
         return state
@@ -84,15 +84,10 @@ async fn gscale_items_for_principal(
         return Ok(Vec::new());
     }
 
-    let mut scoped_items = Vec::new();
-    for assigned_group in groups {
-        let group_items = state
-            .admin
-            .items_page_by_group(&assigned_group, search, limit, 0)
-            .await?;
-        scoped_items.extend(group_items);
-    }
-    Ok(scoped_items.into_iter().skip(offset).take(limit).collect())
+    state
+        .admin
+        .items_page_in_groups(&groups, search, limit, offset)
+        .await
 }
 
 pub async fn material_receipt_print(

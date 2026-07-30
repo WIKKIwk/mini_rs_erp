@@ -1666,7 +1666,7 @@ async fn enqueue_transfer_chat_events_tx(
             ON CONFLICT (transfer_id, target_role, target_ref, status) DO NOTHING
             "#,
         )
-        .bind(new_id("inventory_transfer_chat"))
+        .bind(random_id("inventory_transfer_chat"))
         .bind(transfer_id.trim())
         .bind(status)
         .bind(target_role)

@@ -331,3 +331,81 @@ async fn material_taminotchi_gscale_items_include_child_groups_from_assigned_par
     assert_eq!(items[0]["code"], "ROLL-1000");
     assert_eq!(items[0]["item_group"], "Rulon eni");
 }
+
+#[tokio::test]
+async fn material_taminotchi_gscale_items_paginate_across_assigned_groups() {
+    let mut state = test_state();
+    state.admin =
+        AdminService::new(&state.config).with_read_port(Arc::new(FakeAdminCatalogReadPort));
+    state
+        .admin
+        .upsert_role_assignment(RoleAssignmentUpsert {
+            principal_role: PrincipalRole::MaterialTaminotchi,
+            principal_ref: "material-paged-scope".to_string(),
+            role_id: "material_taminotchi".to_string(),
+            assigned_apparatus: Vec::new(),
+            assigned_item_groups: vec![
+                "Products".to_string(),
+                "Kraska".to_string(),
+                "Kley".to_string(),
+                "Rulon".to_string(),
+            ],
+        })
+        .await
+        .expect("material scope");
+    let material_token = state
+        .sessions
+        .create(Principal {
+            role: PrincipalRole::MaterialTaminotchi,
+            display_name: "Materialchi".to_string(),
+            legal_name: "Materialchi".to_string(),
+            ref_: "material-paged-scope".to_string(),
+            phone: "+998901006061".to_string(),
+            avatar_url: String::new(),
+        })
+        .await
+        .expect("session");
+    let router = build_router(state);
+
+    let first_page = json_body(
+        router
+            .clone()
+            .oneshot(request(
+                "GET",
+                "/v1/mobile/gscale/items?limit=2&offset=0",
+                &material_token,
+                "",
+            ))
+            .await
+            .expect("first page"),
+    )
+    .await;
+    let second_page = json_body(
+        router
+            .oneshot(request(
+                "GET",
+                "/v1/mobile/gscale/items?limit=2&offset=2",
+                &material_token,
+                "",
+            ))
+            .await
+            .expect("second page"),
+    )
+    .await;
+
+    let first_codes = first_page
+        .as_array()
+        .expect("first items")
+        .iter()
+        .map(|item| item["code"].as_str().expect("code"))
+        .collect::<Vec<_>>();
+    let second_codes = second_page
+        .as_array()
+        .expect("second items")
+        .iter()
+        .map(|item| item["code"].as_str().expect("code"))
+        .collect::<Vec<_>>();
+
+    assert_eq!(first_codes, vec!["GLUE-001", "GSCALE-ITEM-001"]);
+    assert_eq!(second_codes, vec!["INK-BLACK", "ROLL-1000"]);
+}
