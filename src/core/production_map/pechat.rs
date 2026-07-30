@@ -5,10 +5,10 @@
 //! The server is the source of truth: moves are validated here before any
 //! apparatus change is persisted.
 
-/// Rubber plate size derived from order width, in 50mm steps (50..=1300).
+/// Rubber plate size derived from order width, in 50mm steps (50..=1350).
 pub fn rubber_size_from_width(width_mm: f64) -> i64 {
     let steps = (width_mm / 50.0).ceil() as i64;
-    steps.clamp(1, 26) * 50
+    steps.clamp(1, 27) * 50
 }
 
 /// Parses the pechat color count (7/8/9) out of an apparatus title such as
@@ -78,12 +78,12 @@ pub fn recommended_pechat_color_count(
     }
     if let Some(width) = width {
         let rubber = rubber_size_from_width(width);
-        if rubber > 1300 {
+        if rubber > 1350 {
             return None;
         }
-        let rubber_required = if rubber > 1000 {
+        let rubber_required = if rubber > 1050 {
             9
-        } else if rubber > 800 {
+        } else if rubber > 850 {
             8
         } else {
             7
@@ -109,9 +109,9 @@ pub fn pechat_can_handle_order(
     };
     let rubber = rubber_size_from_width(width);
     match apparatus_color_count {
-        7 => rubber <= 800,
-        8 => (150..=1000).contains(&rubber),
-        9 => (800..=1300).contains(&rubber),
+        7 => rubber <= 850,
+        8 => (150..=1050).contains(&rubber),
+        9 => (800..=1350).contains(&rubber),
         _ => false,
     }
 }
@@ -186,9 +186,11 @@ mod tests {
         assert_eq!(recommended_pechat_color_count(Some(9.0), None), Some(9));
         assert_eq!(recommended_pechat_color_count(Some(10.0), None), None);
         assert_eq!(recommended_pechat_color_count(None, Some(650.0)), Some(7));
+        assert_eq!(recommended_pechat_color_count(None, Some(815.0)), Some(7));
         assert_eq!(recommended_pechat_color_count(None, Some(900.0)), Some(8));
+        assert_eq!(recommended_pechat_color_count(None, Some(1050.0)), Some(8));
         assert_eq!(recommended_pechat_color_count(None, Some(1250.0)), Some(9));
-        // Width is clamped to 26 rubber steps (1300mm), matching the client.
+        // Width is clamped to 27 rubber steps (1350mm), matching the client.
         assert_eq!(recommended_pechat_color_count(None, Some(1500.0)), Some(9));
         assert_eq!(
             recommended_pechat_color_count(Some(7.0), Some(1250.0)),
@@ -224,7 +226,19 @@ mod tests {
     fn move_down_requires_width_and_compatibility() {
         assert!(!pechat_can_move_order(7, Some(7.0), None, Some(8)));
         assert!(pechat_can_move_order(7, Some(7.0), Some(650.0), Some(8)));
+        assert!(pechat_can_move_order(7, Some(7.0), Some(815.0), Some(8)));
         assert!(!pechat_can_move_order(7, Some(7.0), Some(900.0), Some(8)));
+    }
+
+    #[test]
+    fn expanded_rubber_limits_are_enforced() {
+        assert_eq!(rubber_size_from_width(815.0), 850);
+        assert!(pechat_can_handle_order(7, Some(7.0), Some(815.0)));
+        assert!(!pechat_can_handle_order(7, Some(7.0), Some(851.0)));
+        assert!(pechat_can_handle_order(8, Some(8.0), Some(1050.0)));
+        assert!(!pechat_can_handle_order(8, Some(8.0), Some(1051.0)));
+        assert_eq!(rubber_size_from_width(1500.0), 1350);
+        assert!(pechat_can_handle_order(9, Some(9.0), Some(1350.0)));
     }
 
     #[test]
