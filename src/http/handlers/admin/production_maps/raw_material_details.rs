@@ -65,7 +65,7 @@ pub(super) async fn fill_raw_material_assignment_input(
     Ok((input, stock.warehouse.trim().to_string()))
 }
 
-async fn require_material_item_group_scope(
+pub(super) async fn require_material_item_group_scope(
     state: &AppState,
     principal: &Principal,
     item_group: &str,
@@ -91,7 +91,7 @@ async fn require_material_item_group_scope(
     ))
 }
 
-async fn require_material_warehouse_scope(
+pub(super) async fn require_material_warehouse_scope(
     state: &AppState,
     principal: &Principal,
     warehouse: &str,
@@ -255,7 +255,7 @@ pub(super) async fn lookup_raw_material_detail(
     })
 }
 
-async fn resolve_raw_material_stock_item(
+pub(super) async fn resolve_raw_material_stock_item(
     state: &AppState,
     barcode: &str,
 ) -> Result<(RawMaterialStockEntry, SupplierItem), AdminError> {

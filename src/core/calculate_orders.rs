@@ -2,7 +2,7 @@ use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
-use crate::core::formula::{DEFAULT_EDGE_ALLOWANCE_MM, derive_width_mm};
+use crate::core::formula::{DEFAULT_EDGE_ALLOWANCE_MM, LayerInput, derive_width_mm};
 
 #[derive(Debug, Clone, Default, Deserialize, Serialize, PartialEq)]
 pub struct CalculateOrderTemplate {
@@ -52,6 +52,8 @@ pub struct CalculateOrderTemplate {
     pub waste_percent: f64,
     #[serde(default)]
     pub roll_count: Option<f64>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub layers: Vec<LayerInput>,
     #[serde(default)]
     pub first_layer_material: String,
     #[serde(default)]
@@ -158,39 +160,61 @@ pub fn validate_template(template: &CalculateOrderTemplate) -> Result<(), Calcul
             "atxod foiz noto'g'ri".to_string(),
         ));
     }
-    if template.first_layer_material.trim().is_empty()
-        || template.first_layer_micron.trim().is_empty()
-    {
+    let layers = template.effective_layers();
+    if layers.is_empty() {
         return Err(CalculateOrderError::InvalidInput(
             "1-qavat kerak".to_string(),
         ));
     }
-    validate_optional_layer(
-        &template.second_layer_material,
-        &template.second_layer_micron,
-        "2-qavat",
-    )?;
-    validate_optional_layer(
-        &template.third_layer_material,
-        &template.third_layer_micron,
-        "3-qavat",
-    )?;
+    for (index, layer) in layers.iter().enumerate() {
+        validate_layer(layer, index + 1)?;
+    }
     Ok(())
 }
 
-fn validate_optional_layer(
-    material: &str,
-    micron: &str,
-    layer_name: &str,
-) -> Result<(), CalculateOrderError> {
-    let material_empty = material.trim().is_empty();
-    let micron_empty = micron.trim().is_empty();
-    if material_empty != micron_empty {
+fn validate_layer(layer: &LayerInput, number: usize) -> Result<(), CalculateOrderError> {
+    if layer.material.trim().is_empty() || layer.micron.trim().is_empty() {
         return Err(CalculateOrderError::InvalidInput(format!(
-            "{layer_name} materiali va mikroni birga kiritilishi kerak"
+            "{number}-qavat materiali va mikroni birga kiritilishi kerak"
         )));
     }
     Ok(())
+}
+
+impl CalculateOrderTemplate {
+    pub fn effective_layers(&self) -> Vec<LayerInput> {
+        if !self.layers.is_empty() {
+            return self.layers.clone();
+        }
+        [
+            LayerInput::new(&self.first_layer_material, &self.first_layer_micron),
+            LayerInput::new(&self.second_layer_material, &self.second_layer_micron),
+            LayerInput::new(&self.third_layer_material, &self.third_layer_micron),
+        ]
+        .into_iter()
+        .filter(|layer| !layer.is_empty())
+        .collect()
+    }
+}
+
+pub fn hydrate_template_layers(mut template: CalculateOrderTemplate) -> CalculateOrderTemplate {
+    template.layers = template
+        .effective_layers()
+        .into_iter()
+        .map(|layer| LayerInput::new(layer.material.trim(), layer.micron.trim()))
+        .filter(|layer| !layer.is_empty())
+        .collect();
+    let layer = |index: usize| template.layers.get(index).cloned().unwrap_or_default();
+    let first = layer(0);
+    let second = layer(1);
+    let third = layer(2);
+    template.first_layer_material = first.material;
+    template.first_layer_micron = first.micron;
+    template.second_layer_material = second.material;
+    template.second_layer_micron = second.micron;
+    template.third_layer_material = third.material;
+    template.third_layer_micron = third.micron;
+    template
 }
 
 #[cfg(test)]
@@ -226,9 +250,20 @@ mod tests {
             "invalid input: 2-qavat materiali va mikroni birga kiritilishi kerak"
         );
     }
+
+    #[test]
+    fn accepts_template_with_arbitrary_layer_count() {
+        let mut template = valid_template();
+        template.layers = (1..=8)
+            .map(|number| LayerInput::new(format!("pet{number}"), "12"))
+            .collect();
+
+        validate_template(&template).expect("arbitrary layer template");
+    }
 }
 
 pub fn hydrate_template_dimensions(mut template: CalculateOrderTemplate) -> CalculateOrderTemplate {
+    template = hydrate_template_layers(template);
     if !template.edge_allowance_mm.is_finite() || template.edge_allowance_mm < 0.0 {
         template.edge_allowance_mm = DEFAULT_EDGE_ALLOWANCE_MM;
     }

@@ -133,6 +133,7 @@ fn test_template(code: &str, width_mm: f64, kg: f64) -> CalculateOrderTemplate {
         width_mm,
         waste_percent: 5.0,
         roll_count: Some(7.0),
+        layers: Vec::new(),
         first_layer_material: "pet".to_string(),
         first_layer_micron: "12".to_string(),
         second_layer_material: "pe oq".to_string(),

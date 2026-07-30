@@ -198,6 +198,134 @@ async fn raw_material_assignment_candidates_only_return_assignable_stock() {
 }
 
 #[tokio::test]
+async fn raw_material_assignment_candidate_orders_only_return_compatible_orders() {
+    let material_store = Arc::new(RawMaterialStockLookup::default());
+    let mut state = test_state();
+    state.gscale = GscaleService::new().with_receipt_store(material_store);
+    state
+        .admin
+        .upsert_role_assignment(crate::core::authz::RoleAssignmentUpsert {
+            principal_role: PrincipalRole::MaterialTaminotchi,
+            principal_ref: "material-candidate-orders".to_string(),
+            role_id: "material_taminotchi".to_string(),
+            assigned_apparatus: Vec::new(),
+            assigned_item_groups: vec!["Kraska".to_string()],
+        })
+        .await
+        .expect("material assignment");
+    assign_warehouse_to_principal(
+        &state,
+        PrincipalRole::MaterialTaminotchi,
+        "material-candidate-orders",
+        "Kalidor",
+    )
+    .await;
+    let admin_token = session(&state, PrincipalRole::Admin).await;
+    let material_token = session_for(
+        &state,
+        PrincipalRole::MaterialTaminotchi,
+        "material-candidate-orders",
+    )
+    .await;
+    let router = build_router(state);
+
+    for (id, title, code, apparatus) in [
+        (
+            "zakaz-compatible",
+            "Compatible order",
+            "8814",
+            "7 ta rangli pechat - A",
+        ),
+        (
+            "zakaz-incompatible",
+            "Incompatible order",
+            "8815",
+            "7 ta rangli pechat - B",
+        ),
+    ] {
+        let response = router
+            .clone()
+            .oneshot(request_with_body(
+                "PUT",
+                "/v1/mobile/admin/production-maps",
+                &admin_token,
+                &pechat_order_map_json(id, title, code, apparatus),
+            ))
+            .await
+            .expect("production map save");
+        assert_eq!(response.status(), StatusCode::OK);
+    }
+    for (apparatus, item_group) in [
+        ("7 ta rangli pechat - A", "Kraska"),
+        ("7 ta rangli pechat - B", "Rulon"),
+    ] {
+        let response = router
+            .clone()
+            .oneshot(request_with_body(
+                "PUT",
+                "/v1/mobile/admin/raw-material-rules",
+                &admin_token,
+                &format!(
+                    r#"{{
+                        "apparatus":"{apparatus}",
+                        "requires_material":true,
+                        "start_policy":"requirement_groups",
+                        "item_groups":["{item_group}"]
+                    }}"#
+                ),
+            ))
+            .await
+            .expect("rule save");
+        assert_eq!(response.status(), StatusCode::OK);
+    }
+
+    let candidates = router
+        .clone()
+        .oneshot(request(
+            "GET",
+            "/v1/mobile/admin/raw-material-assignments/candidate-orders?barcode=30AA",
+            &material_token,
+        ))
+        .await
+        .expect("candidate orders");
+    assert_eq!(candidates.status(), StatusCode::OK);
+    let body = json_body(candidates).await;
+    assert_eq!(body.as_array().map(Vec::len), Some(1));
+    assert_eq!(body[0]["order"]["map"]["id"], "zakaz-compatible");
+    assert_eq!(
+        body[0]["apparatus_options"][0],
+        "7 ta rangli pechat - A"
+    );
+
+    let assigned = router
+        .clone()
+        .oneshot(request_with_body(
+            "POST",
+            "/v1/mobile/admin/raw-material-assignments",
+            &material_token,
+            r#"{
+                "order_id":"zakaz-compatible",
+                "barcode":"30AA",
+                "apparatus":"7 ta rangli pechat - A"
+            }"#,
+        ))
+        .await
+        .expect("assign candidate order");
+    assert_eq!(assigned.status(), StatusCode::OK);
+
+    let candidates = router
+        .oneshot(request(
+            "GET",
+            "/v1/mobile/admin/raw-material-assignments/candidate-orders?barcode=30AA",
+            &material_token,
+        ))
+        .await
+        .expect("candidate orders after assignment");
+    assert_eq!(candidates.status(), StatusCode::OK);
+    assert_eq!(json_body(candidates).await.as_array().map(Vec::len), Some(0));
+}
+
+#[tokio::test]
 async fn raw_material_routes_assign_and_require_scan_for_queue_start() {
     let material_store = Arc::new(RawMaterialStockLookup::default());
     material_store

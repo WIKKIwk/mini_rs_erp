@@ -10,13 +10,11 @@ pub(super) fn hydrate_layers_from_material_display(request: &mut CalculateReques
     {
         return;
     }
-    if !request.first_layer.is_empty()
-        || !request.second_layer.is_empty()
-        || !request.third_layer.is_empty()
-    {
+    if !request.effective_layers().is_empty() {
         return;
     }
     let layers = parse_material_layers(request.material_display.as_deref().unwrap_or(""));
+    request.layers = layers.clone();
     if let Some(layer) = layers.first() {
         request.first_layer = layer.clone();
     }
@@ -29,34 +27,32 @@ pub(super) fn hydrate_layers_from_material_display(request: &mut CalculateReques
 }
 
 pub(super) fn request_variants(request: &CalculateRequest) -> Vec<CalculateRequest> {
-    let first_materials = alternatives(&request.first_layer.material, &request.first_layer.micron);
-    let second_materials =
-        alternatives(&request.second_layer.material, &request.second_layer.micron);
-    let third_materials = alternatives(&request.third_layer.material, &request.third_layer.micron);
-    let mut variants = Vec::new();
-    for first_material in &first_materials {
-        for second_material in &second_materials {
-            for third_material in &third_materials {
-                let mut variant = request.clone();
-                variant.first_layer.material = first_material.clone();
-                variant.second_layer.material = second_material.clone();
-                variant.third_layer.material = third_material.clone();
-                variants.push(variant);
+    let layers = request.effective_layers();
+    let mut variants = vec![request.clone()];
+    for (index, layer) in layers.iter().enumerate() {
+        let materials = alternatives(&layer.material, &layer.micron);
+        let mut expanded = Vec::with_capacity(variants.len() * materials.len());
+        for variant in variants {
+            for material in &materials {
+                let mut next = variant.clone();
+                if next.layers.is_empty() {
+                    next.layers = layers.clone();
+                }
+                next.layers[index].material = material.clone();
+                expanded.push(next);
             }
         }
+        variants = expanded;
     }
     variants
 }
 
 pub(super) fn visible_layers(request: &CalculateRequest) -> Vec<LayerInput> {
-    [
-        request.first_layer.clone(),
-        request.second_layer.clone(),
-        request.third_layer.clone(),
-    ]
-    .into_iter()
-    .filter(|layer| !layer.is_empty())
-    .collect()
+    request
+        .effective_layers()
+        .into_iter()
+        .filter(|layer| !layer.is_empty())
+        .collect()
 }
 
 fn alternatives(value: &str, micron_text: &str) -> Vec<String> {
@@ -92,7 +88,6 @@ fn parse_material_layers(value: &str) -> Vec<LayerInput> {
     value
         .split('+')
         .filter_map(parse_material_layer)
-        .take(3)
         .collect()
 }
 

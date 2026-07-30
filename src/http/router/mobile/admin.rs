@@ -150,6 +150,10 @@ pub(super) fn routes() -> Router<AppState> {
             any(admin::raw_material_assignment_candidates),
         )
         .route(
+            "/v1/mobile/admin/raw-material-assignments/candidate-orders",
+            any(admin::raw_material_assignment_candidate_orders),
+        )
+        .route(
             "/v1/mobile/admin/raw-material-assignments",
             any(admin::raw_material_assignments),
         )
@@ -309,6 +313,14 @@ pub(super) fn routes() -> Router<AppState> {
         .route(
             "/v1/mobile/admin/inventory/relocations",
             any(admin::inventory_relocations),
+        )
+        .route(
+            "/v1/mobile/admin/inventory/relocations/batch",
+            any(admin::inventory_relocations_batch),
+        )
+        .route(
+            "/v1/mobile/admin/inventory/returns/batch",
+            any(admin::inventory_returns_batch),
         )
         .route(
             "/v1/mobile/admin/inventory/transfers",

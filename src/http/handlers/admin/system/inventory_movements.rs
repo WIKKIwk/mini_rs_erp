@@ -1,8 +1,8 @@
 use super::*;
 use crate::core::inventory_movements::{
-    InventoryActor, InventoryAssetQuery, InventoryMovementError, InventoryRelocationCreate,
-    InventoryTransferAction, InventoryTransferActionKind, InventoryTransferCreate,
-    InventoryTransferQuery,
+    InventoryActor, InventoryAssetQuery, InventoryMovementError, InventoryRelocationBatchCreate,
+    InventoryRelocationCreate, InventoryReturnBatchCreate, InventoryTransferAction,
+    InventoryTransferActionKind, InventoryTransferCreate, InventoryTransferQuery,
 };
 
 pub async fn inventory_locations(
@@ -60,6 +60,62 @@ pub async fn inventory_relocations(
         .warehouse_events
         .notify_updated(&asset.custody_warehouse, "inventory_relocated");
     Ok(json_response(asset))
+}
+
+pub async fn inventory_relocations_batch(
+    State(state): State<AppState>,
+    method: Method,
+    headers: HeaderMap,
+    body: Bytes,
+) -> Result<Response, AdminError> {
+    let actor = inventory_actor(&state, &headers).await?;
+    if method != Method::POST {
+        return Err(method_not_allowed());
+    }
+    let input: InventoryRelocationBatchCreate = parse_json(&body)?;
+    let assets = state
+        .inventory_movements
+        .relocate_batch(&actor, input)
+        .await
+        .map_err(inventory_error)?;
+    let warehouses = assets
+        .iter()
+        .map(|asset| asset.custody_warehouse.as_str())
+        .collect::<std::collections::BTreeSet<_>>();
+    for warehouse in warehouses {
+        state
+            .warehouse_events
+            .notify_updated(warehouse, "inventory_relocated");
+    }
+    Ok(json_response(assets))
+}
+
+pub async fn inventory_returns_batch(
+    State(state): State<AppState>,
+    method: Method,
+    headers: HeaderMap,
+    body: Bytes,
+) -> Result<Response, AdminError> {
+    let actor = inventory_actor(&state, &headers).await?;
+    if method != Method::POST {
+        return Err(method_not_allowed());
+    }
+    let input: InventoryReturnBatchCreate = parse_json(&body)?;
+    let assets = state
+        .inventory_movements
+        .return_to_warehouses_batch(&actor, input)
+        .await
+        .map_err(inventory_error)?;
+    let warehouses = assets
+        .iter()
+        .map(|asset| asset.custody_warehouse.as_str())
+        .collect::<std::collections::BTreeSet<_>>();
+    for warehouse in warehouses {
+        state
+            .warehouse_events
+            .notify_updated(warehouse, "inventory_relocated");
+    }
+    Ok(json_response(assets))
 }
 
 pub async fn inventory_transfers(

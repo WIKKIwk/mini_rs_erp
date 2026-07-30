@@ -15,8 +15,8 @@ pub(super) use auth::{authorize_any_capability, authorize_capability, require_ca
 pub use catalog::items_bulk_move_group;
 pub use factory_locations::{factory_location, factory_location_apparatus, factory_locations};
 pub use inventory_movements::{
-    inventory_assets, inventory_locations, inventory_relocations, inventory_transfer_action,
-    inventory_transfers,
+    inventory_assets, inventory_locations, inventory_relocations, inventory_relocations_batch,
+    inventory_returns_batch, inventory_transfer_action, inventory_transfers,
 };
 pub use monitor::{
     system_backup_create, system_backup_download, system_monitor, system_monitor_live,

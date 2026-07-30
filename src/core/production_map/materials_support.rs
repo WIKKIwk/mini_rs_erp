@@ -32,12 +32,33 @@ pub(super) fn rule_matches(
     apparatus: &str,
     item_group_path: &[String],
 ) -> bool {
-    queue_state::apparatus_titles_match(&rule.apparatus, apparatus)
+    material_rule_apparatus_matches(&rule.apparatus, apparatus)
         && (item_groups_match(&rule.item_groups, item_group_path)
             || rule
                 .requirement_groups
                 .iter()
                 .any(|group| item_groups_match(&group.item_groups, item_group_path)))
+}
+
+fn material_rule_apparatus_matches(rule_apparatus: &str, apparatus: &str) -> bool {
+    let rule_apparatus = rule_apparatus.trim();
+    let apparatus = apparatus.trim();
+    if rule_apparatus.is_empty() || apparatus.is_empty() {
+        return false;
+    }
+    if rule_apparatus.eq_ignore_ascii_case(apparatus) {
+        return true;
+    }
+
+    let rule_base = queue_state::warehouse_base_title(rule_apparatus);
+    let apparatus_base = queue_state::warehouse_base_title(apparatus);
+    let rule_has_instance = !rule_base.eq_ignore_ascii_case(rule_apparatus);
+    let apparatus_has_instance = !apparatus_base.eq_ignore_ascii_case(apparatus);
+    if rule_has_instance && apparatus_has_instance {
+        return false;
+    }
+
+    queue_state::apparatus_titles_match(rule_apparatus, apparatus)
 }
 
 pub(super) fn material_requirements_met(

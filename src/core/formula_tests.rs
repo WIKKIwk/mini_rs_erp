@@ -36,6 +36,34 @@ fn calculates_single_layer_order() {
 }
 
 #[test]
+fn calculates_order_with_arbitrary_layer_count() {
+    let layers = [
+        ("pet", "12"),
+        ("pe oq", "30"),
+        ("pe pr", "40"),
+        ("mcp", "25"),
+        ("jem", "20"),
+        ("opp", "18"),
+    ]
+    .into_iter()
+    .map(|(material, micron)| LayerInput::new(material, micron))
+    .collect();
+    let result = calculate(CalculateRequest {
+        kg: Some(300.0),
+        frame_product_size_mm: Some(515.0),
+        frame_count: Some(1.0),
+        layers,
+        ..CalculateRequest::default()
+    })
+    .expect("calculate arbitrary layers");
+
+    assert_eq!(result.layers.len(), 6);
+    assert!(result.results[0].first_coeff > 0.0);
+    assert!(result.results[0].other_coeff > 0.0);
+    assert!(result.results[0].base_length > 0.0);
+}
+
+#[test]
 fn calculates_with_custom_waste_percent() {
     let result = calculate(CalculateRequest {
         kg: Some(300.0),

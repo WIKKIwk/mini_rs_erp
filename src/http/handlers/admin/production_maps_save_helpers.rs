@@ -94,18 +94,7 @@ fn apply_authoritative_calculation(
         edge_allowance_mm: Some(template.edge_allowance_mm),
         waste_percent: Some(template.waste_percent),
         roll_count: template.roll_count,
-        first_layer: LayerInput::new(
-            template.first_layer_material.trim(),
-            template.first_layer_micron.trim(),
-        ),
-        second_layer: LayerInput::new(
-            template.second_layer_material.trim(),
-            template.second_layer_micron.trim(),
-        ),
-        third_layer: LayerInput::new(
-            template.third_layer_material.trim(),
-            template.third_layer_micron.trim(),
-        ),
+        layers: template.effective_layers(),
         note: if template.note.trim().is_empty() {
             None
         } else {
@@ -141,4 +130,3 @@ fn spawn_order_integrations(
         }
     });
 }
-

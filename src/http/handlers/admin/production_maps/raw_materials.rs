@@ -1,6 +1,7 @@
 use super::raw_material_details::{
     fill_raw_material_assignment_input, item_group_path, lookup_raw_material_detail,
-    validate_rulon_size_for_pechat_map,
+    require_material_item_group_scope, require_material_warehouse_scope,
+    resolve_raw_material_stock_item, validate_rulon_size_for_pechat_map,
 };
 use super::*;
 use crate::db::postgres_raw_material_events::{
@@ -24,6 +25,8 @@ pub struct RawMaterialAssignmentsQuery {
     order_id: String,
     #[serde(default)]
     apparatus: String,
+    #[serde(default)]
+    barcode: String,
 }
 
 #[derive(Debug, serde::Serialize)]
@@ -35,6 +38,12 @@ struct RawMaterialAssignmentCandidateResponse {
     item_group: String,
     qty: f64,
     uom: String,
+    apparatus_options: Vec<String>,
+}
+
+#[derive(Debug, serde::Serialize)]
+struct RawMaterialAssignmentOrderCandidateResponse {
+    order: crate::core::production_map::ProductionMapSaved,
     apparatus_options: Vec<String>,
 }
 
@@ -457,6 +466,99 @@ pub async fn raw_material_assignment_candidates(
             .to_ascii_lowercase()
             .cmp(&right.item_name.to_ascii_lowercase())
             .then_with(|| left.barcode.cmp(&right.barcode))
+    });
+    Ok(json_response(candidates))
+}
+
+pub async fn raw_material_assignment_candidate_orders(
+    State(state): State<AppState>,
+    Query(query): Query<RawMaterialAssignmentsQuery>,
+    method: Method,
+    headers: HeaderMap,
+) -> Result<Response, AdminError> {
+    let principal = authorize_any_capability(
+        &state,
+        &headers,
+        &[
+            Capability::AdminAccess,
+            Capability::ProductionMapManage,
+            Capability::RawMaterialAssign,
+        ],
+    )
+    .await?;
+    if method != Method::GET {
+        return Err(method_not_allowed());
+    }
+    let barcode = query.barcode.trim();
+    if barcode.is_empty() {
+        return Err(bad_request("barcode is required"));
+    }
+
+    let (stock, item) = resolve_raw_material_stock_item(&state, barcode).await?;
+    require_material_item_group_scope(&state, &principal, &item.item_group).await?;
+    require_material_warehouse_scope(&state, &principal, &stock.warehouse).await?;
+    if !stock.status.trim().eq_ignore_ascii_case("available")
+        || !stock.reserved_order_id.trim().is_empty()
+    {
+        return Ok(json_response(
+            Vec::<RawMaterialAssignmentOrderCandidateResponse>::new(),
+        ));
+    }
+    let normalized_barcode = barcode.to_ascii_uppercase();
+    if state
+        .production_maps
+        .raw_material_assignments()
+        .await
+        .map_err(production_map_error)?
+        .iter()
+        .any(|assignment| assignment.barcode.trim().to_ascii_uppercase() == normalized_barcode)
+    {
+        return Ok(json_response(
+            Vec::<RawMaterialAssignmentOrderCandidateResponse>::new(),
+        ));
+    }
+
+    let groups = state
+        .admin
+        .item_group_tree()
+        .await
+        .map_err(|_| server_error("item group tree fetch failed"))?;
+    let group_path = item_group_path(&groups, &item.item_group);
+    if group_path.is_empty() {
+        return Ok(json_response(
+            Vec::<RawMaterialAssignmentOrderCandidateResponse>::new(),
+        ));
+    }
+    let active_orders = state
+        .production_maps
+        .raw_material_assignment_orders()
+        .await
+        .map_err(production_map_error)?;
+    let mut candidates = Vec::<RawMaterialAssignmentOrderCandidateResponse>::new();
+    for order in active_orders {
+        if validate_rulon_size_for_pechat_map(&order.map, &stock, &item, &group_path).is_err() {
+            continue;
+        }
+        let apparatus_options = state
+            .production_maps
+            .raw_material_assignment_apparatus_options(&order.map.id, &group_path)
+            .await
+            .map_err(production_map_error)?;
+        if apparatus_options.is_empty() {
+            continue;
+        }
+        candidates.push(RawMaterialAssignmentOrderCandidateResponse {
+            order,
+            apparatus_options,
+        });
+    }
+    candidates.sort_by(|left, right| {
+        left.order
+            .map
+            .code
+            .to_ascii_lowercase()
+            .cmp(&right.order.map.code.to_ascii_lowercase())
+            .then_with(|| left.order.map.id.cmp(&right.order.map.id))
     });
     Ok(json_response(candidates))
 }

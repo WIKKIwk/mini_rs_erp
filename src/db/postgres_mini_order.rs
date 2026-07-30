@@ -38,6 +38,12 @@ impl MiniOrderSink for PostgresMiniOrderSink {
             .roll_count
             .or(map.roll_count)
             .and_then(positive_erp_quantity);
+        let layers = template.effective_layers();
+        let layer = |index: usize| layers.get(index).cloned().unwrap_or_default();
+        let first_layer = layer(0);
+        let second_layer = layer(1);
+        let third_layer = layer(2);
+        let layers_json = serde_json::to_value(&layers).map_err(|_| MiniOrderError::StoreFailed)?;
 
         let mut tx = self
             .pool
@@ -103,8 +109,9 @@ impl MiniOrderSink for PostgresMiniOrderSink {
             "INSERT INTO mini_order_products
                 (id, order_id, item_code, product_name, material_display, color,
                  first_layer_material, first_layer_micron, second_layer_material,
-                 second_layer_micron, third_layer_material, third_layer_micron, note)
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
+                 second_layer_micron, third_layer_material, third_layer_micron,
+                 layers_json, note)
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
              ON CONFLICT (id) DO UPDATE SET
                 order_id = excluded.order_id,
                 item_code = excluded.item_code,
@@ -117,6 +124,7 @@ impl MiniOrderSink for PostgresMiniOrderSink {
                 second_layer_micron = excluded.second_layer_micron,
                 third_layer_material = excluded.third_layer_material,
                 third_layer_micron = excluded.third_layer_micron,
+                layers_json = excluded.layers_json,
                 note = excluded.note
              WHERE (mini_order_products.order_id, mini_order_products.item_code,
                     mini_order_products.product_name, mini_order_products.material_display,
@@ -126,6 +134,7 @@ impl MiniOrderSink for PostgresMiniOrderSink {
                     mini_order_products.second_layer_micron,
                     mini_order_products.third_layer_material,
                     mini_order_products.third_layer_micron,
+                    mini_order_products.layers_json,
                     mini_order_products.note)
                    IS DISTINCT FROM
                    (excluded.order_id, excluded.item_code,
@@ -136,6 +145,7 @@ impl MiniOrderSink for PostgresMiniOrderSink {
                     excluded.second_layer_micron,
                     excluded.third_layer_material,
                     excluded.third_layer_micron,
+                    excluded.layers_json,
                     excluded.note)",
         )
         .bind(product_id)
@@ -144,12 +154,13 @@ impl MiniOrderSink for PostgresMiniOrderSink {
         .bind(product_name)
         .bind(template.material_display.trim())
         .bind(template.color.trim())
-        .bind(template.first_layer_material.trim())
-        .bind(template.first_layer_micron.trim())
-        .bind(template.second_layer_material.trim())
-        .bind(template.second_layer_micron.trim())
-        .bind(template.third_layer_material.trim())
-        .bind(template.third_layer_micron.trim())
+        .bind(first_layer.material)
+        .bind(first_layer.micron)
+        .bind(second_layer.material)
+        .bind(second_layer.micron)
+        .bind(third_layer.material)
+        .bind(third_layer.micron)
+        .bind(layers_json)
         .bind(template.note.trim())
         .execute(&mut *tx)
         .await

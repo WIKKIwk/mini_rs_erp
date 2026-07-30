@@ -111,7 +111,7 @@ async fn bosma_complete_requires_or_persists_completion_metrics() {
     assert_eq!(invalid_astatka.status(), StatusCode::BAD_REQUEST);
     assert_eq!(
         json_body(invalid_astatka).await["error"],
-        "astatka cannot exceed rasxot"
+        "returned_paint_astatka_exceeds_rasxot"
     );
 
     let completed = router

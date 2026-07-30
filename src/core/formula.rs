@@ -39,6 +39,8 @@ pub struct CalculateRequest {
     #[serde(default)]
     pub roll_count: Option<f64>,
     #[serde(default)]
+    pub layers: Vec<LayerInput>,
+    #[serde(default)]
     pub first_layer: LayerInput,
     #[serde(default)]
     pub second_layer: LayerInput,
@@ -48,7 +50,7 @@ pub struct CalculateRequest {
     pub note: Option<String>,
 }
 
-#[derive(Debug, Clone, Default, Deserialize, Serialize)]
+#[derive(Debug, Clone, Default, Deserialize, Serialize, PartialEq)]
 pub struct LayerInput {
     #[serde(default)]
     pub material: String,
@@ -64,8 +66,24 @@ impl LayerInput {
         }
     }
 
-    fn is_empty(&self) -> bool {
+    pub fn is_empty(&self) -> bool {
         self.material.trim().is_empty() && self.micron.trim().is_empty()
+    }
+}
+
+impl CalculateRequest {
+    pub fn effective_layers(&self) -> Vec<LayerInput> {
+        if !self.layers.is_empty() {
+            return self.layers.clone();
+        }
+        [
+            self.first_layer.clone(),
+            self.second_layer.clone(),
+            self.third_layer.clone(),
+        ]
+        .into_iter()
+        .filter(|layer| !layer.is_empty())
+        .collect()
     }
 }
 

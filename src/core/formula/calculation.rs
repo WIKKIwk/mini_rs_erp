@@ -69,35 +69,24 @@ fn calculate_variants(request: &CalculateRequest) -> Result<Vec<CalcResult>, Str
 fn calculate_single(request: &CalculateRequest) -> Result<CalcResult, String> {
     let kg = require_number(request.kg, "KG")?;
     let width_mm = width_mm_from_request(request)?;
-    let q1 = require_text(&request.first_layer.material, "1-qavat")?;
-    let m1 = require_text(&request.first_layer.micron, "1-mikron")?;
-    let q2 = request.second_layer.material.clone();
-    let m2 = if request.second_layer.micron.trim().is_empty() {
-        "--".to_string()
-    } else {
-        request.second_layer.micron.clone()
-    };
-    let q3 = request.third_layer.material.clone();
-    let m3 = request.third_layer.micron.clone();
-    let (q_other, m_other) = merge_layers(q2, m2, q3, m3)?;
-    let first_empty = is_empty_material(&q1);
-    let first_micron = if first_empty { 0 } else { parse_micron(&m1)? };
-    let other_micron = if is_empty_material(&q_other) {
-        0
-    } else {
-        parse_micron(&m_other)?
-    };
-
-    let first_coeff = if first_empty {
-        0.0
-    } else {
-        coefficient_cell(&q1, &m1, first_micron, true)?
-    };
-    let other_coeff = if is_empty_material(&q_other) {
-        0.0
-    } else {
-        coefficient_cell(&q_other, &m_other, other_micron, false)?
-    };
+    let layers = request.effective_layers();
+    if layers.is_empty() {
+        return Err("kamida bitta qavat materiali kerak".to_string());
+    }
+    let mut first_coeff = 0.0;
+    let mut other_coeff = 0.0;
+    for (index, layer) in layers.iter().enumerate() {
+        let number = index + 1;
+        let material = require_text(&layer.material, &format!("{number}-qavat"))?;
+        let micron_text = require_text(&layer.micron, &format!("{number}-mikron"))?;
+        let micron = parse_micron(&micron_text)?;
+        let coefficient = coefficient_cell(&material, &micron_text, micron, index == 0)?;
+        if index == 0 {
+            first_coeff = coefficient;
+        } else {
+            other_coeff += coefficient;
+        }
+    }
     let coeff_sum = first_coeff + other_coeff;
     if coeff_sum <= 0.0 {
         return Err("kamida bitta qavat materiali kerak".to_string());
@@ -121,27 +110,6 @@ fn calculate_single(request: &CalculateRequest) -> Result<CalcResult, String> {
         waste_length,
         rounded_length,
     })
-}
-
-fn merge_layers(
-    q2: String,
-    m2: String,
-    q3: String,
-    m3: String,
-) -> Result<(String, String), String> {
-    let q2_empty = is_empty_material(&q2);
-    let q3_empty = is_empty_material(&q3);
-    match (q2_empty, q3_empty) {
-        (true, true) => Ok(("--".to_string(), "--".to_string())),
-        (true, false) => Ok((q3, m3)),
-        (false, true) => Ok((q2, m2)),
-        (false, false) => {
-            if m3.trim().is_empty() {
-                return Err("3-qavat mikroni berilmagan".to_string());
-            }
-            Ok((format!("{q2}/{q3}"), format!("{m2}/{m3}")))
-        }
-    }
 }
 
 fn parse_micron(value: &str) -> Result<u32, String> {
@@ -210,11 +178,6 @@ fn width_mm_from_request(request: &CalculateRequest) -> Result<f64, String> {
 fn min_mold_size_mm(frame_product_size_mm: f64, frame_count: f64, rubber_size_mm: u32) -> f64 {
     (frame_product_size_mm * frame_count + MIN_MOLD_EXTRA_MM)
         .max(f64::from(rubber_size_mm) + MIN_MOLD_EXTRA_MM)
-}
-
-fn is_empty_material(material: &str) -> bool {
-    let n = normalize(material);
-    n.is_empty() || n.chars().all(|ch| ch == '-') || matches!(n.as_str(), "yoq" | "yuq")
 }
 
 pub(super) fn split_parts(value: &str) -> Vec<&str> {

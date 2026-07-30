@@ -3,7 +3,7 @@ use std::collections::BTreeSet;
 use rusqlite::{Connection, OptionalExtension, params};
 
 use crate::core::calculate_orders::{
-    CalculateOrderError, CalculateOrderImage, CalculateOrderTemplate,
+    CalculateOrderError, CalculateOrderImage, CalculateOrderTemplate, hydrate_template_layers,
 };
 use crate::core::formula::{DEFAULT_EDGE_ALLOWANCE_MM, derive_width_mm};
 
@@ -26,9 +26,10 @@ pub(super) fn existing_id_by_code(
 }
 
 pub(super) fn stamp_template(
-    mut template: CalculateOrderTemplate,
+    template: CalculateOrderTemplate,
     existing_id: Option<String>,
 ) -> CalculateOrderTemplate {
+    let mut template = hydrate_template_layers(template);
     template.id = existing_id
         .filter(|id| !id.trim().is_empty())
         .or_else(|| (!template.id.trim().is_empty()).then(|| template.id.trim().to_string()))
@@ -131,7 +132,7 @@ fn quick_template_key(template: &CalculateOrderTemplate) -> String {
     if product_key.is_empty() {
         return legacy_template_key(template);
     }
-    [
+    let mut parts = vec![
         "quick".to_string(),
         normalize_key(&template.customer_ref),
         normalize_key(&template.customer),
@@ -144,15 +145,13 @@ fn quick_template_key(template: &CalculateOrderTemplate) -> String {
         number_key(template.edge_allowance_mm),
         number_key(template.waste_percent),
         option_number_key(template.roll_count),
-        normalize_key(&template.first_layer_material),
-        normalize_key(&template.first_layer_micron),
-        normalize_key(&template.second_layer_material),
-        normalize_key(&template.second_layer_micron),
-        normalize_key(&template.third_layer_material),
-        normalize_key(&template.third_layer_micron),
-        normalize_key(&template.note),
-    ]
-    .join("|")
+    ];
+    for layer in template.effective_layers() {
+        parts.push(normalize_key(&layer.material));
+        parts.push(normalize_key(&layer.micron));
+    }
+    parts.push(normalize_key(&template.note));
+    parts.join("|")
 }
 
 fn legacy_template_key(template: &CalculateOrderTemplate) -> String {

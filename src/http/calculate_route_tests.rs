@@ -42,6 +42,41 @@ async fn calculate_endpoint_returns_formula_result() {
 }
 
 #[tokio::test]
+async fn calculate_endpoint_accepts_arbitrary_layer_count() {
+    let state = test_state();
+    let token = session(&state, PrincipalRole::Admin).await;
+
+    let response = build_router(state)
+        .oneshot(request(
+            "POST",
+            "/v1/mobile/calculate",
+            &token,
+            r#"{
+                "product":"dynamic layers",
+                "kg":300,
+                "frame_product_size_mm":515,
+                "frame_count":1,
+                "layers":[
+                    {"material":"pet","micron":"12"},
+                    {"material":"pe oq","micron":"30"},
+                    {"material":"pe pr","micron":"40"},
+                    {"material":"mcp","micron":"25"},
+                    {"material":"jem","micron":"20"},
+                    {"material":"opp","micron":"18"}
+                ]
+            }"#,
+        ))
+        .await
+        .expect("response");
+    let status = response.status();
+    let body = json_body(response).await;
+
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body["layers"].as_array().expect("layers").len(), 6);
+    assert!(body["results"][0]["rounded_length"].as_f64().unwrap_or(0.0) > 0.0);
+}
+
+#[tokio::test]
 async fn calculate_endpoint_rejects_supplier() {
     let state = test_state();
     let token = session(&state, PrincipalRole::Supplier).await;

@@ -8,8 +8,8 @@ use sqlx::{PgPool, Postgres, Transaction};
 use crate::core::inventory_movements::{
     InventoryActor, InventoryAsset, InventoryAssetKind, InventoryAssetQuery, InventoryLocation,
     InventoryLocationApparatus, InventoryLocationKind, InventoryLocationRef,
-    InventoryMovementError, InventoryMovementStorePort, InventoryRelocationCreate,
-    RawMaterialStatePlacement,
+    InventoryMovementError, InventoryMovementStorePort, InventoryRelocationBatchCreate,
+    InventoryRelocationCreate, InventoryReturnBatchCreate, RawMaterialStatePlacement,
     InventoryTransfer, InventoryTransferAction, InventoryTransferActionKind,
     InventoryTransferCreate, InventoryTransferLine, InventoryTransferQuery,
     InventoryTransferStatus, inventory_role_code,
@@ -261,6 +261,229 @@ impl InventoryMovementStorePort for PostgresInventoryMovementStore {
 
         let mut saved = fetch_asset(&self.pool, input.asset_kind, &input.asset_ref).await?;
         saved.placement_version = version;
+        Ok(saved)
+    }
+
+    async fn relocate_batch(
+        &self,
+        actor: &InventoryActor,
+        input: &InventoryRelocationBatchCreate,
+    ) -> Result<Vec<InventoryAsset>, InventoryMovementError> {
+        let mut tx = self.pool.begin().await.map_err(store_error)?;
+        advisory_idempotency_lock(&mut tx, &input.idempotency_key).await?;
+        let event_key = |index: usize| format!("{}:batch:{index}", input.idempotency_key);
+        let existing_first = movement_event_identity_tx(&mut tx, &event_key(0)).await?;
+        if existing_first.is_some() {
+            for (index, selector) in input.assets.iter().enumerate() {
+                let existing = movement_event_identity_tx(&mut tx, &event_key(index))
+                    .await?
+                    .ok_or(InventoryMovementError::IdempotencyConflict)?;
+                if existing.event_type != "relocated"
+                    || existing.asset_kind != selector.asset_kind.as_str()
+                    || !existing.asset_ref.eq_ignore_ascii_case(&selector.asset_ref)
+                    || existing.to_location_id != input.physical_location_id
+                {
+                    return Err(InventoryMovementError::IdempotencyConflict);
+                }
+            }
+            if movement_event_identity_tx(&mut tx, &event_key(input.assets.len()))
+                .await?
+                .is_some()
+            {
+                return Err(InventoryMovementError::IdempotencyConflict);
+            }
+            tx.commit().await.map_err(store_error)?;
+            let mut saved = Vec::with_capacity(input.assets.len());
+            for selector in &input.assets {
+                saved.push(
+                    fetch_asset(&self.pool, selector.asset_kind, &selector.asset_ref).await?,
+                );
+            }
+            return Ok(saved);
+        }
+
+        let location =
+            inventory_location_for_update_tx(&mut tx, &input.physical_location_id).await?;
+        if !location.active {
+            return Err(InventoryMovementError::LocationInactive);
+        }
+        let location_kind = InventoryLocationKind::parse(&location.kind)?;
+        for (index, selector) in input.assets.iter().enumerate() {
+            let asset =
+                lock_asset_tx(&mut tx, selector.asset_kind, &selector.asset_ref).await?;
+            ensure_asset_available(&asset)?;
+            if !actor.can_manage_warehouse(&asset.warehouse) {
+                return Err(InventoryMovementError::WarehouseForbidden);
+            }
+            if location_kind == InventoryLocationKind::Warehouse
+                && location.warehouse_id != asset.warehouse_id
+            {
+                return Err(InventoryMovementError::CrossWarehouseRelocation);
+            }
+            sqlx::query(
+                r#"
+                INSERT INTO mini_inventory_placements (
+                    asset_kind, asset_ref, physical_location_id, version,
+                    updated_by_role, updated_by_ref, updated_by_name
+                )
+                VALUES ($1, $2, $3, 1, $4, $5, $6)
+                ON CONFLICT (asset_kind, asset_ref) DO UPDATE SET
+                    physical_location_id = excluded.physical_location_id,
+                    version = mini_inventory_placements.version + 1,
+                    updated_by_role = excluded.updated_by_role,
+                    updated_by_ref = excluded.updated_by_ref,
+                    updated_by_name = excluded.updated_by_name,
+                    updated_at = now()
+                "#,
+            )
+            .bind(selector.asset_kind.as_str())
+            .bind(selector.asset_ref.trim())
+            .bind(&location.id)
+            .bind(inventory_role_code(&actor.principal.role))
+            .bind(actor.principal.ref_.trim())
+            .bind(actor.principal.display_name.trim())
+            .execute(&mut *tx)
+            .await
+            .map_err(store_error)?;
+            let key = event_key(index);
+            insert_movement_event_tx(
+                &mut tx,
+                MovementEventDraft {
+                    idempotency_key: key,
+                    event_type: "relocated",
+                    transfer_id: "",
+                    asset_kind: selector.asset_kind,
+                    asset_ref: selector.asset_ref.clone(),
+                    from_warehouse_id: &asset.warehouse_id,
+                    to_warehouse_id: &asset.warehouse_id,
+                    from_location_id: &asset.physical_location_id,
+                    to_location_id: &location.id,
+                    qty: asset.qty,
+                    uom: &asset.uom,
+                    actor,
+                    note: &input.note,
+                },
+            )
+            .await?;
+        }
+        tx.commit().await.map_err(store_error)?;
+
+        let mut saved = Vec::with_capacity(input.assets.len());
+        for selector in &input.assets {
+            saved.push(fetch_asset(&self.pool, selector.asset_kind, &selector.asset_ref).await?);
+        }
+        Ok(saved)
+    }
+
+    async fn return_to_warehouses_batch(
+        &self,
+        actor: &InventoryActor,
+        input: &InventoryReturnBatchCreate,
+    ) -> Result<Vec<InventoryAsset>, InventoryMovementError> {
+        let mut tx = self.pool.begin().await.map_err(store_error)?;
+        advisory_idempotency_lock(&mut tx, &input.idempotency_key).await?;
+        let event_key = |index: usize| format!("{}:return:{index}", input.idempotency_key);
+        let existing_first = movement_event_identity_tx(&mut tx, &event_key(0)).await?;
+        if existing_first.is_some() {
+            for (index, selector) in input.assets.iter().enumerate() {
+                let existing = movement_event_identity_tx(&mut tx, &event_key(index))
+                    .await?
+                    .ok_or(InventoryMovementError::IdempotencyConflict)?;
+                if existing.event_type != "returned_to_warehouse"
+                    || existing.asset_kind != selector.asset_kind.as_str()
+                    || !existing.asset_ref.eq_ignore_ascii_case(&selector.asset_ref)
+                {
+                    return Err(InventoryMovementError::IdempotencyConflict);
+                }
+            }
+            if movement_event_identity_tx(&mut tx, &event_key(input.assets.len()))
+                .await?
+                .is_some()
+            {
+                return Err(InventoryMovementError::IdempotencyConflict);
+            }
+            tx.commit().await.map_err(store_error)?;
+            let mut saved = Vec::with_capacity(input.assets.len());
+            for selector in &input.assets {
+                saved.push(
+                    fetch_asset(&self.pool, selector.asset_kind, &selector.asset_ref).await?,
+                );
+            }
+            return Ok(saved);
+        }
+
+        for (index, selector) in input.assets.iter().enumerate() {
+            let asset =
+                lock_asset_tx(&mut tx, selector.asset_kind, &selector.asset_ref).await?;
+            ensure_asset_available(&asset)?;
+            if !actor.can_manage_warehouse(&asset.warehouse) {
+                return Err(InventoryMovementError::WarehouseForbidden);
+            }
+            let source_kind = sqlx::query_scalar::<_, String>(
+                "SELECT kind FROM mini_inventory_locations WHERE id = $1",
+            )
+            .bind(&asset.physical_location_id)
+            .fetch_optional(&mut *tx)
+            .await
+            .map_err(store_error)?
+            .ok_or(InventoryMovementError::LocationNotFound)?;
+            if InventoryLocationKind::parse(&source_kind)? != InventoryLocationKind::State {
+                return Err(InventoryMovementError::InvalidLocation);
+            }
+            let destination_location_id =
+                warehouse_location_id_tx(&mut tx, &asset.warehouse_id).await?;
+            sqlx::query(
+                r#"
+                INSERT INTO mini_inventory_placements (
+                    asset_kind, asset_ref, physical_location_id, version,
+                    updated_by_role, updated_by_ref, updated_by_name
+                )
+                VALUES ($1, $2, $3, 1, $4, $5, $6)
+                ON CONFLICT (asset_kind, asset_ref) DO UPDATE SET
+                    physical_location_id = excluded.physical_location_id,
+                    version = mini_inventory_placements.version + 1,
+                    updated_by_role = excluded.updated_by_role,
+                    updated_by_ref = excluded.updated_by_ref,
+                    updated_by_name = excluded.updated_by_name,
+                    updated_at = now()
+                "#,
+            )
+            .bind(selector.asset_kind.as_str())
+            .bind(selector.asset_ref.trim())
+            .bind(&destination_location_id)
+            .bind(inventory_role_code(&actor.principal.role))
+            .bind(actor.principal.ref_.trim())
+            .bind(actor.principal.display_name.trim())
+            .execute(&mut *tx)
+            .await
+            .map_err(store_error)?;
+            let key = event_key(index);
+            insert_movement_event_tx(
+                &mut tx,
+                MovementEventDraft {
+                    idempotency_key: key,
+                    event_type: "returned_to_warehouse",
+                    transfer_id: "",
+                    asset_kind: selector.asset_kind,
+                    asset_ref: selector.asset_ref.clone(),
+                    from_warehouse_id: &asset.warehouse_id,
+                    to_warehouse_id: &asset.warehouse_id,
+                    from_location_id: &asset.physical_location_id,
+                    to_location_id: &destination_location_id,
+                    qty: asset.qty,
+                    uom: &asset.uom,
+                    actor,
+                    note: &input.note,
+                },
+            )
+            .await?;
+        }
+        tx.commit().await.map_err(store_error)?;
+
+        let mut saved = Vec::with_capacity(input.assets.len());
+        for selector in &input.assets {
+            saved.push(fetch_asset(&self.pool, selector.asset_kind, &selector.asset_ref).await?);
+        }
         Ok(saved)
     }
 

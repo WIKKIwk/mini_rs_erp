@@ -249,6 +249,25 @@ pub struct InventoryRelocationCreate {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+pub struct InventoryRelocationBatchCreate {
+    pub assets: Vec<InventoryAssetSelector>,
+    pub physical_location_id: String,
+    #[serde(default)]
+    pub note: String,
+    #[serde(default)]
+    pub idempotency_key: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+pub struct InventoryReturnBatchCreate {
+    pub assets: Vec<InventoryAssetSelector>,
+    #[serde(default)]
+    pub note: String,
+    #[serde(default)]
+    pub idempotency_key: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 pub struct InventoryTransferCreate {
     pub source_warehouse_id: String,
     pub destination_warehouse_id: String,
@@ -382,6 +401,18 @@ pub trait InventoryMovementStorePort: Send + Sync {
         input: &InventoryRelocationCreate,
     ) -> Result<InventoryAsset, InventoryMovementError>;
 
+    async fn relocate_batch(
+        &self,
+        actor: &InventoryActor,
+        input: &InventoryRelocationBatchCreate,
+    ) -> Result<Vec<InventoryAsset>, InventoryMovementError>;
+
+    async fn return_to_warehouses_batch(
+        &self,
+        actor: &InventoryActor,
+        input: &InventoryReturnBatchCreate,
+    ) -> Result<Vec<InventoryAsset>, InventoryMovementError>;
+
     async fn create_transfer(
         &self,
         actor: &InventoryActor,
@@ -494,6 +525,32 @@ impl InventoryMovementService {
         self.store.relocate(actor, &input).await
     }
 
+    pub async fn relocate_batch(
+        &self,
+        actor: &InventoryActor,
+        mut input: InventoryRelocationBatchCreate,
+    ) -> Result<Vec<InventoryAsset>, InventoryMovementError> {
+        input.physical_location_id = required(
+            input.physical_location_id,
+            InventoryMovementError::InvalidLocation,
+        )?;
+        input.idempotency_key = normalize_idempotency(input.idempotency_key)?;
+        input.note = input.note.trim().to_string();
+        input.assets = normalize_asset_selectors(input.assets)?;
+        self.store.relocate_batch(actor, &input).await
+    }
+
+    pub async fn return_to_warehouses_batch(
+        &self,
+        actor: &InventoryActor,
+        mut input: InventoryReturnBatchCreate,
+    ) -> Result<Vec<InventoryAsset>, InventoryMovementError> {
+        input.idempotency_key = normalize_idempotency(input.idempotency_key)?;
+        input.note = input.note.trim().to_string();
+        input.assets = normalize_asset_selectors(input.assets)?;
+        self.store.return_to_warehouses_batch(actor, &input).await
+    }
+
     pub async fn create_transfer(
         &self,
         actor: &InventoryActor,
@@ -512,24 +569,7 @@ impl InventoryMovementService {
         }
         input.idempotency_key = normalize_idempotency(input.idempotency_key)?;
         input.note = input.note.trim().to_string();
-        let mut seen = BTreeSet::new();
-        input.assets = input
-            .assets
-            .into_iter()
-            .map(|mut asset| {
-                asset.asset_ref = asset.asset_ref.trim().to_string();
-                asset
-            })
-            .filter(|asset| !asset.asset_ref.is_empty())
-            .collect();
-        if input.assets.is_empty() {
-            return Err(InventoryMovementError::MissingAssets);
-        }
-        for asset in &input.assets {
-            if !seen.insert((asset.asset_kind, asset.asset_ref.to_ascii_lowercase())) {
-                return Err(InventoryMovementError::DuplicateAsset);
-            }
-        }
+        input.assets = normalize_asset_selectors(input.assets)?;
         let transfer_id = movement_id("inventory_transfer");
         self.store
             .create_transfer(actor, &transfer_id, &input)
@@ -592,6 +632,36 @@ fn normalize_idempotency(value: String) -> Result<String, InventoryMovementError
     required(value, InventoryMovementError::MissingIdempotencyKey)
 }
 
+fn normalize_asset_selectors(
+    assets: Vec<InventoryAssetSelector>,
+) -> Result<Vec<InventoryAssetSelector>, InventoryMovementError> {
+    let mut seen = BTreeSet::new();
+    let mut assets = assets
+        .into_iter()
+        .map(|mut asset| {
+            asset.asset_ref = asset.asset_ref.trim().to_string();
+            asset
+        })
+        .filter(|asset| !asset.asset_ref.is_empty())
+        .collect::<Vec<_>>();
+    if assets.is_empty() {
+        return Err(InventoryMovementError::MissingAssets);
+    }
+    for asset in &assets {
+        if !seen.insert((asset.asset_kind, asset.asset_ref.to_ascii_lowercase())) {
+            return Err(InventoryMovementError::DuplicateAsset);
+        }
+    }
+    assets.sort_by(|left, right| {
+        left.asset_kind.cmp(&right.asset_kind).then_with(|| {
+            left.asset_ref
+                .to_ascii_lowercase()
+                .cmp(&right.asset_ref.to_ascii_lowercase())
+        })
+    });
+    Ok(assets)
+}
+
 pub fn inventory_role_code(role: &PrincipalRole) -> &'static str {
     match role {
         PrincipalRole::Supplier => "supplier",
@@ -624,6 +694,9 @@ struct MemoryInventoryState {
     transfers: BTreeMap<String, InventoryTransfer>,
     idempotency: BTreeMap<String, String>,
     relocation_idempotency: BTreeMap<String, (InventoryAssetKind, String, String)>,
+    relocation_batch_idempotency:
+        BTreeMap<String, (Vec<(InventoryAssetKind, String)>, String)>,
+    return_batch_idempotency: BTreeMap<String, Vec<(InventoryAssetKind, String)>>,
     action_idempotency: BTreeMap<String, (String, InventoryTransferActionKind)>,
 }
 
@@ -852,6 +925,177 @@ impl InventoryMovementStorePort for MemoryInventoryMovementStore {
                 input.physical_location_id.clone(),
             ),
         );
+        Ok(saved)
+    }
+
+    async fn relocate_batch(
+        &self,
+        actor: &InventoryActor,
+        input: &InventoryRelocationBatchCreate,
+    ) -> Result<Vec<InventoryAsset>, InventoryMovementError> {
+        let mut state = self.state.write().await;
+        let selectors = input
+            .assets
+            .iter()
+            .map(|asset| {
+                (
+                    asset.asset_kind,
+                    asset.asset_ref.to_ascii_lowercase(),
+                )
+            })
+            .collect::<Vec<_>>();
+        if let Some((existing, location_id)) =
+            state.relocation_batch_idempotency.get(&input.idempotency_key)
+        {
+            if existing != &selectors || location_id != &input.physical_location_id {
+                return Err(InventoryMovementError::IdempotencyConflict);
+            }
+            return selectors
+                .iter()
+                .map(|key| {
+                    state
+                        .assets
+                        .get(key)
+                        .cloned()
+                        .ok_or(InventoryMovementError::AssetNotFound)
+                })
+                .collect();
+        }
+        let location = state
+            .locations
+            .get(input.physical_location_id.trim())
+            .cloned()
+            .ok_or(InventoryMovementError::LocationNotFound)?;
+        if !location.active {
+            return Err(InventoryMovementError::LocationInactive);
+        }
+        for key in &selectors {
+            let asset = state
+                .assets
+                .get(key)
+                .ok_or(InventoryMovementError::AssetNotFound)?;
+            if !actor.can_manage_warehouse(&asset.custody_warehouse) {
+                return Err(InventoryMovementError::WarehouseForbidden);
+            }
+            if !asset.transfer_id.is_empty() || asset.status != "available" {
+                return Err(InventoryMovementError::AssetUnavailable);
+            }
+            if location.kind == InventoryLocationKind::Warehouse
+                && !location
+                    .warehouse_id
+                    .eq_ignore_ascii_case(&asset.custody_warehouse_id)
+            {
+                return Err(InventoryMovementError::CrossWarehouseRelocation);
+            }
+        }
+        let mut saved = Vec::with_capacity(selectors.len());
+        for key in &selectors {
+            let asset = state
+                .assets
+                .get_mut(key)
+                .ok_or(InventoryMovementError::AssetNotFound)?;
+            asset.physical_location = InventoryLocationRef::from(&location);
+            asset.placement_version += 1;
+            saved.push(asset.clone());
+        }
+        for key in &selectors {
+            state.placement_updated_by_ref.insert(
+                key.clone(),
+                actor.principal.ref_.trim().to_string(),
+            );
+        }
+        state.relocation_batch_idempotency.insert(
+            input.idempotency_key.clone(),
+            (selectors, input.physical_location_id.clone()),
+        );
+        Ok(saved)
+    }
+
+    async fn return_to_warehouses_batch(
+        &self,
+        actor: &InventoryActor,
+        input: &InventoryReturnBatchCreate,
+    ) -> Result<Vec<InventoryAsset>, InventoryMovementError> {
+        let mut state = self.state.write().await;
+        let selectors = input
+            .assets
+            .iter()
+            .map(|asset| {
+                (
+                    asset.asset_kind,
+                    asset.asset_ref.to_ascii_lowercase(),
+                )
+            })
+            .collect::<Vec<_>>();
+        if let Some(existing) = state
+            .return_batch_idempotency
+            .get(&input.idempotency_key)
+        {
+            if existing != &selectors {
+                return Err(InventoryMovementError::IdempotencyConflict);
+            }
+            return selectors
+                .iter()
+                .map(|key| {
+                    state
+                        .assets
+                        .get(key)
+                        .cloned()
+                        .ok_or(InventoryMovementError::AssetNotFound)
+                })
+                .collect();
+        }
+        let mut destinations = BTreeMap::new();
+        for key in &selectors {
+            let asset = state
+                .assets
+                .get(key)
+                .ok_or(InventoryMovementError::AssetNotFound)?;
+            if !actor.can_manage_warehouse(&asset.custody_warehouse) {
+                return Err(InventoryMovementError::WarehouseForbidden);
+            }
+            if !asset.transfer_id.is_empty() || asset.status != "available" {
+                return Err(InventoryMovementError::AssetUnavailable);
+            }
+            if asset.physical_location.kind != InventoryLocationKind::State {
+                return Err(InventoryMovementError::InvalidLocation);
+            }
+            let destination = state
+                .locations
+                .values()
+                .find(|location| {
+                    location.active
+                        && location.kind == InventoryLocationKind::Warehouse
+                        && location
+                            .warehouse_id
+                            .eq_ignore_ascii_case(&asset.custody_warehouse_id)
+                })
+                .cloned()
+                .ok_or(InventoryMovementError::LocationNotFound)?;
+            destinations.insert(key.clone(), destination);
+        }
+        let mut saved = Vec::with_capacity(selectors.len());
+        for key in &selectors {
+            let destination = destinations
+                .get(key)
+                .ok_or(InventoryMovementError::LocationNotFound)?;
+            let asset = state
+                .assets
+                .get_mut(key)
+                .ok_or(InventoryMovementError::AssetNotFound)?;
+            asset.physical_location = InventoryLocationRef::from(destination);
+            asset.placement_version += 1;
+            saved.push(asset.clone());
+        }
+        for key in &selectors {
+            state.placement_updated_by_ref.insert(
+                key.clone(),
+                actor.principal.ref_.trim().to_string(),
+            );
+        }
+        state
+            .return_batch_idempotency
+            .insert(input.idempotency_key.clone(), selectors);
         Ok(saved)
     }
 
@@ -1485,6 +1729,194 @@ mod tests {
             error,
             InventoryMovementError::AssetNotInSourceWarehouse
         );
+    }
+
+    #[tokio::test]
+    async fn batch_relocation_is_atomic_when_an_asset_is_unavailable() {
+        let store = Arc::new(MemoryInventoryMovementStore::new());
+        let source = warehouse_location_fixture("warehouse:a", "A ombor");
+        let state_location = InventoryLocation {
+            id: "location:state:bosma".to_string(),
+            kind: InventoryLocationKind::State,
+            name: "Bosma oldi".to_string(),
+            warehouse_id: String::new(),
+            factory_location_id: "state_bosma".to_string(),
+            active: true,
+            apparatus: Vec::new(),
+        };
+        store
+            .seed_locations(vec![source.clone(), state_location.clone()])
+            .await;
+        store
+            .seed_assets(vec![
+                InventoryAsset {
+                    kind: InventoryAssetKind::RawMaterial,
+                    asset_ref: "raw:1".to_string(),
+                    custody_warehouse_id: source.warehouse_id.clone(),
+                    custody_warehouse: source.name.clone(),
+                    item_code: "PE-1".to_string(),
+                    item_name: "Polietilen 1".to_string(),
+                    identifier: "QR-1".to_string(),
+                    qty: 10.0,
+                    uom: "kg".to_string(),
+                    status: "available".to_string(),
+                    physical_location: InventoryLocationRef::from(&source),
+                    transfer_id: String::new(),
+                    placement_version: 1,
+                },
+                InventoryAsset {
+                    kind: InventoryAssetKind::RawMaterial,
+                    asset_ref: "raw:2".to_string(),
+                    custody_warehouse_id: source.warehouse_id.clone(),
+                    custody_warehouse: source.name.clone(),
+                    item_code: "PE-2".to_string(),
+                    item_name: "Polietilen 2".to_string(),
+                    identifier: "QR-2".to_string(),
+                    qty: 8.0,
+                    uom: "kg".to_string(),
+                    status: "reserved".to_string(),
+                    physical_location: InventoryLocationRef::from(&source),
+                    transfer_id: "transfer:active".to_string(),
+                    placement_version: 1,
+                },
+            ])
+            .await;
+        let service = InventoryMovementService::new(store);
+        let actor = InventoryActor::new(
+            principal(PrincipalRole::MaterialTaminotchi, "m1", "Materialchi"),
+            false,
+            ["A ombor".to_string()],
+        );
+
+        let error = service
+            .relocate_batch(
+                &actor,
+                InventoryRelocationBatchCreate {
+                    assets: vec![
+                        InventoryAssetSelector {
+                            asset_kind: InventoryAssetKind::RawMaterial,
+                            asset_ref: "raw:1".to_string(),
+                        },
+                        InventoryAssetSelector {
+                            asset_kind: InventoryAssetKind::RawMaterial,
+                            asset_ref: "raw:2".to_string(),
+                        },
+                    ],
+                    physical_location_id: state_location.id,
+                    note: String::new(),
+                    idempotency_key: "relocate-batch-atomic".to_string(),
+                },
+            )
+            .await
+            .expect_err("the whole batch must fail");
+        assert_eq!(error, InventoryMovementError::AssetUnavailable);
+
+        let assets = service
+            .assets(
+                &actor,
+                InventoryAssetQuery {
+                    warehouse_id: source.warehouse_id,
+                    ..InventoryAssetQuery::default()
+                },
+            )
+            .await
+            .expect("source assets");
+        let first = assets
+            .iter()
+            .find(|asset| asset.asset_ref == "raw:1")
+            .expect("first asset");
+        assert_eq!(first.physical_location.id, source.id);
+        assert_eq!(first.placement_version, 1);
+    }
+
+    #[tokio::test]
+    async fn batch_return_sends_each_state_asset_to_its_custody_warehouse() {
+        let store = Arc::new(MemoryInventoryMovementStore::new());
+        let warehouse_a = warehouse_location_fixture("warehouse:a", "A ombor");
+        let warehouse_b = warehouse_location_fixture("warehouse:b", "B ombor");
+        let state_location = InventoryLocation {
+            id: "location:state:bosma".to_string(),
+            kind: InventoryLocationKind::State,
+            name: "Bosma oldi".to_string(),
+            warehouse_id: String::new(),
+            factory_location_id: "state_bosma".to_string(),
+            active: true,
+            apparatus: Vec::new(),
+        };
+        store
+            .seed_locations(vec![
+                warehouse_a.clone(),
+                warehouse_b.clone(),
+                state_location.clone(),
+            ])
+            .await;
+        store
+            .seed_assets(vec![
+                InventoryAsset {
+                    kind: InventoryAssetKind::RawMaterial,
+                    asset_ref: "raw:a".to_string(),
+                    custody_warehouse_id: warehouse_a.warehouse_id.clone(),
+                    custody_warehouse: warehouse_a.name.clone(),
+                    item_code: "PE-A".to_string(),
+                    item_name: "Polietilen A".to_string(),
+                    identifier: "QR-A".to_string(),
+                    qty: 10.0,
+                    uom: "kg".to_string(),
+                    status: "available".to_string(),
+                    physical_location: InventoryLocationRef::from(&state_location),
+                    transfer_id: String::new(),
+                    placement_version: 2,
+                },
+                InventoryAsset {
+                    kind: InventoryAssetKind::RawMaterial,
+                    asset_ref: "raw:b".to_string(),
+                    custody_warehouse_id: warehouse_b.warehouse_id.clone(),
+                    custody_warehouse: warehouse_b.name.clone(),
+                    item_code: "PE-B".to_string(),
+                    item_name: "Polietilen B".to_string(),
+                    identifier: "QR-B".to_string(),
+                    qty: 8.0,
+                    uom: "kg".to_string(),
+                    status: "available".to_string(),
+                    physical_location: InventoryLocationRef::from(&state_location),
+                    transfer_id: String::new(),
+                    placement_version: 3,
+                },
+            ])
+            .await;
+        let service = InventoryMovementService::new(store);
+        let actor = InventoryActor::new(
+            principal(PrincipalRole::MaterialTaminotchi, "m1", "Materialchi"),
+            false,
+            ["A ombor".to_string(), "B ombor".to_string()],
+        );
+
+        let returned = service
+            .return_to_warehouses_batch(
+                &actor,
+                InventoryReturnBatchCreate {
+                    assets: vec![
+                        InventoryAssetSelector {
+                            asset_kind: InventoryAssetKind::RawMaterial,
+                            asset_ref: "raw:a".to_string(),
+                        },
+                        InventoryAssetSelector {
+                            asset_kind: InventoryAssetKind::RawMaterial,
+                            asset_ref: "raw:b".to_string(),
+                        },
+                    ],
+                    note: String::new(),
+                    idempotency_key: "state-return-own-warehouses".to_string(),
+                },
+            )
+            .await
+            .expect("return batch");
+
+        assert_eq!(returned.len(), 2);
+        assert_eq!(returned[0].physical_location.id, warehouse_a.id);
+        assert_eq!(returned[1].physical_location.id, warehouse_b.id);
+        assert_eq!(returned[0].placement_version, 3);
+        assert_eq!(returned[1].placement_version, 4);
     }
 
     #[tokio::test]
