@@ -167,6 +167,31 @@ pub(super) fn validate_rulon_size_for_pechat_map(
     Ok(())
 }
 
+pub(super) fn raw_material_rulon_match_metrics(
+    map: &ProductionMapDefinition,
+    stock: &RawMaterialStockEntry,
+    item: &SupplierItem,
+    item_group_path: &[String],
+) -> Option<(f64, f64, f64)> {
+    if !is_rulon_group(item_group_path) || !map_has_pechat_stage(map) {
+        return None;
+    }
+    let order_width = map
+        .width_mm
+        .filter(|value| value.is_finite() && *value > 0.0)?;
+    let roll_width = roll_width_mm(stock, item)?;
+    let leftover_width = roll_width - order_width;
+    Some((
+        order_width,
+        roll_width,
+        if leftover_width.abs() <= 0.001 {
+            0.0
+        } else {
+            leftover_width
+        },
+    ))
+}
+
 pub(super) fn item_group_path(groups: &[AdminItemGroup], item_group: &str) -> Vec<String> {
     let mut path = Vec::new();
     let mut current = item_group.trim().to_string();

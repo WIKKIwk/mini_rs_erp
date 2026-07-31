@@ -394,6 +394,10 @@ pub(super) fn routes() -> Router<AppState> {
             get(admin::system_backup_download),
         )
         .route(
+            "/v1/mobile/admin/system/backups/import",
+            post(admin::system_backup_import),
+        )
+        .route(
             "/v1/mobile/admin/werka/code/regenerate",
             any(admin::werka_code_regenerate),
         )

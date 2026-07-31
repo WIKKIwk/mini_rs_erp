@@ -180,6 +180,38 @@ printf '%s\n' "$dir"
     }
     assert!(ready, "backup did not become ready");
 
+    let repeated = router
+        .clone()
+        .oneshot(request("POST", "/v1/mobile/admin/system/backups", &token))
+        .await
+        .expect("repeat backup");
+    assert_eq!(repeated.status(), StatusCode::ACCEPTED);
+    let repeated_id = json_body(repeated).await["id"]
+        .as_str()
+        .unwrap_or_default()
+        .to_string();
+    assert!(!repeated_id.is_empty());
+    for _ in 0..40 {
+        let repeated_ready = state
+            .backup_doctor
+            .report(time::OffsetDateTime::now_utc())
+            .snapshots
+            .iter()
+            .any(|snapshot| snapshot.id == repeated_id && snapshot.status == "ready");
+        if repeated_ready {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    assert!(
+        state
+            .backup_doctor
+            .report(time::OffsetDateTime::now_utc())
+            .snapshots
+            .iter()
+            .any(|snapshot| snapshot.id == repeated_id && snapshot.status == "ready")
+    );
+
     let download = router
         .oneshot(request(
             "GET",
@@ -200,4 +232,79 @@ printf '%s\n' "$dir"
         .await
         .expect("download bytes");
     assert_eq!(&bytes[..], b"verified-backup-bytes");
+}
+
+#[tokio::test]
+async fn admin_imports_mobile_dump_and_exposes_verified_snapshot() {
+    let backup_dir = tempfile::tempdir().expect("backup dir");
+    let restore_script_dir = tempfile::tempdir().expect("restore script dir");
+    let restore_script = restore_script_dir.path().join("fake_restore.sh");
+    std::fs::write(
+        &restore_script,
+        r#"#!/usr/bin/env bash
+set -euo pipefail
+test -s "$MINI_ERP_RESTORE_DUMP"
+printf 'restore-ran' > "${MINI_ERP_RESTORE_DUMP}.restored"
+"#,
+    )
+    .expect("write restore script");
+
+    let mut state = test_state();
+    state.backup_doctor = crate::core::backup_doctor::BackupDoctor::for_test_with_restore(
+        backup_dir.path(),
+        "missing-backup.sh",
+        &restore_script,
+        "postgres://test",
+    );
+    let token = session(&state, PrincipalRole::Admin).await;
+    let router = build_router(state.clone());
+    let import = Request::builder()
+        .method("POST")
+        .uri("/v1/mobile/admin/system/backups/import")
+        .header(header::AUTHORIZATION, format!("Bearer {token}"))
+        .header(header::CONTENT_TYPE, "application/octet-stream")
+        .header("x-backup-filename", "mobile-export.dump")
+        .body(Body::from("mobile-dump-bytes"))
+        .expect("import request");
+    let response = router
+        .clone()
+        .oneshot(import)
+        .await
+        .expect("import response");
+    assert_eq!(response.status(), StatusCode::ACCEPTED);
+    let started = json_body(response).await;
+    let import_id = started["id"].as_str().unwrap_or_default().to_string();
+    assert_eq!(started["source"], "imported");
+    assert_eq!(started["status"], "queued");
+
+    let mut ready = false;
+    for _ in 0..40 {
+        ready = state
+            .backup_doctor
+            .report(time::OffsetDateTime::now_utc())
+            .snapshots
+            .iter()
+            .any(|snapshot| {
+                snapshot.id == import_id && snapshot.status == "ready" && snapshot.verified
+            });
+        if ready {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    assert!(ready, "import did not become ready");
+
+    let download = router
+        .oneshot(request(
+            "GET",
+            &format!("/v1/mobile/admin/system/backups/{import_id}/download"),
+            &token,
+        ))
+        .await
+        .expect("download imported backup");
+    assert_eq!(download.status(), StatusCode::OK);
+    let bytes = to_bytes(download.into_body(), usize::MAX)
+        .await
+        .expect("download imported bytes");
+    assert_eq!(&bytes[..], b"mobile-dump-bytes");
 }

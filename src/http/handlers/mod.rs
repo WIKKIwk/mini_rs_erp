@@ -14,6 +14,7 @@ pub mod qolip;
 pub mod returned_paint;
 pub mod rezka;
 pub mod rps_batch;
+pub mod server;
 pub mod stock_entry;
 pub mod supplier;
 pub mod werka;

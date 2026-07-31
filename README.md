@@ -561,6 +561,9 @@ handlers.
 | `/v1/mobile/admin/activity` | Admin activity feed. |
 | `/v1/mobile/admin/system/monitor` | Runtime/database/backup monitor snapshot. |
 | `/v1/mobile/admin/system/monitor/live` | Monitor WebSocket stream. |
+| `/v1/mobile/admin/system/backups` | Start a manual PostgreSQL backup. |
+| `/v1/mobile/admin/system/backups/{id}/download` | Export a verified custom dump. |
+| `/v1/mobile/admin/system/backups/import` | Upload and restore a custom dump. |
 | `/v1/mobile/admin/werka/code/regenerate` | Regenerate warehouse/werka code. |
 
 #### Admin Production Routes
@@ -797,6 +800,28 @@ Recovery expectations:
   from the repository;
 - after restore, run the smoke test checklist before letting operators resume.
 
+The admin mobile Server Status page can export a verified PostgreSQL custom
+.dump and import a previously exported .dump. Import uploads the archive to
+the server, validates it with pg_restore, and restores the configured
+MINI_ERP_DATABASE_URL after an explicit confirmation in the app. It does not
+restore LMDB, PostgreSQL globals, or secret files. The default restore helper is
+tools/db/restore_postgres.sh; set MINI_ERP_RESTORE_SCRIPT when the runtime uses
+another controlled restore wrapper.
+
+Import is asynchronous: the API returns after the upload is durably staged and
+the restore job is queued, while the monitor reports the job state over its
+live stream. The restore helper validates the archive before touching the
+database. It uses a single transaction for small archives (the normal case for
+this service) and automatically enables up to eight pg_restore workers for
+large custom archives. Set MINI_ERP_RESTORE_JOBS=1 to force the
+all-or-nothing serial mode, or set a measured worker count for a large
+dedicated database host.
+
+Import fails fast when the database is holding a conflicting lock instead of
+leaving the restore job invisible indefinitely. The default lock wait is 30
+seconds; adjust MINI_ERP_RESTORE_LOCK_TIMEOUT_MS only after checking the
+application transaction behavior.
+
 Create a PostgreSQL backup before every schema or production deployment change:
 
 ```bash
@@ -832,6 +857,8 @@ Common runtime variables:
 | `MOBILE_API_ADDR` | `:8081` | Bind address. `:8081` is normalized to `0.0.0.0:8081`. |
 | `MINI_ERP_DATABASE_URL` | empty | PostgreSQL URL for mini ERP state. Required for production ERP workflows. |
 | `MINI_ERP_MIGRATION_DATABASE_URL` | `MINI_ERP_DATABASE_URL` | Optional schema-owner URL used only while applying migrations. |
+| `MINI_ERP_RESTORE_JOBS` | adaptive | PostgreSQL restore worker count; `1` enables the atomic serial restore path. |
+| `MINI_ERP_RESTORE_LOCK_TIMEOUT_MS` | `30000` | Maximum time pg_restore waits for a conflicting PostgreSQL lock. |
 | `MINI_ORDER_SYNC_INTERVAL_SECONDS` | `30` | Retry interval for reconciling production maps into PostgreSQL order rows. |
 | `MINI_ERP_HTTP_TIMEOUT_SECONDS` | `15` | HTTP client timeout baseline. |
 | `MINI_ERP_DEFAULT_TARGET_WAREHOUSE` | empty | Default target warehouse setting. |

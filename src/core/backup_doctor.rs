@@ -23,6 +23,7 @@ const DEFAULT_AUTO_RETRY_MINUTES: i64 = 60;
 pub struct BackupDoctorConfig {
     pub backup_root: PathBuf,
     pub script_path: PathBuf,
+    pub restore_script_path: PathBuf,
     pub database_url: Option<String>,
     pub admin_database_url: Option<String>,
     pub auto_enabled: bool,
@@ -39,6 +40,7 @@ impl BackupDoctorConfig {
     fn from_env() -> Self {
         let backup_root = backup_directory();
         let script_path = backup_script_path();
+        let restore_script_path = restore_script_path();
         let (schedule_hour, schedule_minute) = std::env::var("MINI_ERP_BACKUP_TIME")
             .ok()
             .and_then(|value| parse_clock(&value))
@@ -46,6 +48,7 @@ impl BackupDoctorConfig {
         Self {
             backup_root,
             script_path,
+            restore_script_path,
             database_url: non_empty_env("MINI_ERP_DATABASE_URL"),
             admin_database_url: non_empty_env("MINI_ERP_ADMIN_DATABASE_URL"),
             auto_enabled: bool_env("MINI_ERP_AUTO_BACKUP_ENABLED", true),
@@ -102,6 +105,8 @@ pub enum BackupDoctorError {
     Storage,
     #[error("backup runtime is unavailable")]
     RuntimeUnavailable,
+    #[error("backup import is invalid")]
+    InvalidImport,
 }
 
 #[derive(Debug, Clone)]
@@ -109,6 +114,11 @@ pub struct BackupArtifact {
     pub path: PathBuf,
     pub filename: String,
     pub size_bytes: u64,
+}
+
+pub struct BackupImportUpload {
+    pub job: AdminServerMonitorBackupSnapshot,
+    pub path: PathBuf,
 }
 
 impl BackupDoctor {
@@ -137,6 +147,31 @@ impl BackupDoctor {
         Self::new(BackupDoctorConfig {
             backup_root: backup_root.into(),
             script_path: script_path.into(),
+            restore_script_path: PathBuf::from("missing-restore.sh"),
+            database_url: Some(database_url.into()),
+            admin_database_url: None,
+            auto_enabled: false,
+            schedule_hour: 2,
+            schedule_minute: 0,
+            utc_offset_minutes: 300,
+            health_max_age_hours: DEFAULT_HEALTH_MAX_AGE_HOURS,
+            max_runtime: StdDuration::from_secs(30),
+            min_available_mb: 0,
+            retention_enabled: false,
+        })
+    }
+
+    #[cfg(test)]
+    pub fn for_test_with_restore(
+        backup_root: impl Into<PathBuf>,
+        script_path: impl Into<PathBuf>,
+        restore_script_path: impl Into<PathBuf>,
+        database_url: impl Into<String>,
+    ) -> Self {
+        Self::new(BackupDoctorConfig {
+            backup_root: backup_root.into(),
+            script_path: script_path.into(),
+            restore_script_path: restore_script_path.into(),
             database_url: Some(database_url.into()),
             admin_database_url: None,
             auto_enabled: false,
@@ -181,6 +216,92 @@ impl BackupDoctor {
         requested_by: impl Into<String>,
     ) -> Result<AdminServerMonitorBackupSnapshot, BackupDoctorError> {
         self.start_backup("manual", requested_by.into())
+    }
+
+    pub fn prepare_import(
+        &self,
+        requested_by: impl Into<String>,
+        filename: &str,
+    ) -> Result<BackupImportUpload, BackupDoctorError> {
+        let database_url = self
+            .inner
+            .config
+            .database_url
+            .as_ref()
+            .filter(|value| !value.trim().is_empty())
+            .ok_or(BackupDoctorError::NotConfigured)?;
+        if database_url.trim().is_empty() {
+            return Err(BackupDoctorError::NotConfigured);
+        }
+        if !self.inner.config.restore_script_path.is_file() {
+            return Err(BackupDoctorError::EngineUnavailable);
+        }
+        tokio::runtime::Handle::try_current().map_err(|_| BackupDoctorError::RuntimeUnavailable)?;
+        let artifact_name = safe_import_name(filename).ok_or(BackupDoctorError::InvalidImport)?;
+        let mut active = self
+            .inner
+            .active_job
+            .lock()
+            .map_err(|_| BackupDoctorError::Storage)?;
+        if active
+            .as_ref()
+            .is_some_and(|job| !terminal_status(&job.status))
+        {
+            return Err(BackupDoctorError::AlreadyRunning);
+        }
+
+        let now = OffsetDateTime::now_utc().unix_timestamp();
+        let id = format!("import-{now}-{:08x}", rand::random::<u32>());
+        let job_dir = self.inner.config.backup_root.join(&id);
+        fs::create_dir_all(&job_dir).map_err(|_| BackupDoctorError::Storage)?;
+        let job = AdminServerMonitorBackupSnapshot {
+            id,
+            status: "queued".to_string(),
+            source: "imported".to_string(),
+            requested_by: requested_by.into().trim().to_string(),
+            created_at_unix: now,
+            artifact_name,
+            ..Default::default()
+        };
+        write_manifest(&job_dir, &job).map_err(|_| BackupDoctorError::Storage)?;
+        *active = Some(job.clone());
+        drop(active);
+
+        Ok(BackupImportUpload {
+            job,
+            path: job_dir.join("uploaded.dump.part"),
+        })
+    }
+
+    pub fn complete_import(
+        &self,
+        upload: BackupImportUpload,
+    ) -> Result<AdminServerMonitorBackupSnapshot, BackupDoctorError> {
+        if !upload.path.is_file() {
+            return Err(BackupDoctorError::Storage);
+        }
+        let handle = tokio::runtime::Handle::try_current()
+            .map_err(|_| BackupDoctorError::RuntimeUnavailable)?;
+        let doctor = self.clone();
+        let job = upload.job.clone();
+        let staged_path = upload.path;
+        handle.spawn(async move {
+            doctor.run_import(job, staged_path).await;
+        });
+        Ok(upload.job)
+    }
+
+    pub fn abort_import(&self, id: &str, error: impl Into<String>) {
+        let job = self
+            .inner
+            .active_job
+            .lock()
+            .ok()
+            .and_then(|active| active.clone())
+            .filter(|job| job.id == id);
+        if let Some(job) = job {
+            self.finish_failed(job, error.into());
+        }
     }
 
     pub fn report(&self, now: OffsetDateTime) -> AdminServerMonitorBackups {
@@ -373,6 +494,78 @@ impl BackupDoctor {
         tracing::info!(backup_id = %job.id, size_bytes = job.size_bytes, "backup doctor completed backup");
     }
 
+    async fn run_import(&self, mut job: AdminServerMonitorBackupSnapshot, staged_path: PathBuf) {
+        job.status = "running".to_string();
+        job.started_at_unix = OffsetDateTime::now_utc().unix_timestamp();
+        self.publish_job(&job);
+
+        let mut command = Command::new("bash");
+        command
+            .arg(&self.inner.config.restore_script_path)
+            .env(
+                "MINI_ERP_DATABASE_URL",
+                self.inner
+                    .config
+                    .database_url
+                    .as_deref()
+                    .unwrap_or_default(),
+            )
+            .env("MINI_ERP_RESTORE_DUMP", &staged_path)
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .kill_on_drop(true);
+        let output = match timeout(self.inner.config.max_runtime, command.output()).await {
+            Ok(Ok(output)) => output,
+            Ok(Err(error)) => {
+                self.finish_failed(job, format!("restore engine ishga tushmadi: {error}"));
+                return;
+            }
+            Err(_) => {
+                self.finish_failed(job, "restore vaqti chegaradan oshdi".to_string());
+                return;
+            }
+        };
+        if !output.status.success() {
+            let error = String::from_utf8_lossy(&output.stderr).trim().to_string();
+            self.finish_failed(job, truncate_error(&error));
+            return;
+        }
+
+        let artifact_path = staged_path
+            .parent()
+            .map(|directory| directory.join(&job.artifact_name))
+            .unwrap_or(staged_path.clone());
+        if let Err(error) = tokio::fs::rename(&staged_path, &artifact_path).await {
+            self.finish_failed(job, format!("import backup fayli saqlanmadi: {error}"));
+            return;
+        }
+        let checksum_path = artifact_path.clone();
+        let checksum = match tokio::task::spawn_blocking(move || sha256_file(&checksum_path)).await
+        {
+            Ok(Ok(checksum)) => checksum,
+            _ => {
+                self.finish_failed(job, "import checksum tekshiruvi bajarilmadi".to_string());
+                return;
+            }
+        };
+        let metadata = match tokio::fs::metadata(&artifact_path).await {
+            Ok(metadata) => metadata,
+            Err(_) => {
+                self.finish_failed(job, "import backup metadata o‘qilmadi".to_string());
+                return;
+            }
+        };
+        job.status = "ready".to_string();
+        job.completed_at_unix = OffsetDateTime::now_utc().unix_timestamp();
+        job.size_bytes = metadata.len();
+        job.checksum_sha256 = checksum;
+        job.verified = true;
+        job.error.clear();
+        self.publish_job(&job);
+        self.clear_active(&job.id);
+        tracing::info!(backup_id = %job.id, size_bytes = job.size_bytes, "backup doctor completed database import");
+    }
+
     fn publish_job(&self, job: &AdminServerMonitorBackupSnapshot) {
         let job_dir = self.inner.config.backup_root.join(&job.id);
         if let Err(error) = write_manifest(&job_dir, job) {
@@ -472,6 +665,21 @@ impl BackupDoctor {
     }
 }
 
+fn safe_import_name(value: &str) -> Option<String> {
+    let name = value.trim().rsplit(['/', '\\']).next().unwrap_or_default();
+    let cleaned = name
+        .chars()
+        .filter(|character| {
+            character.is_ascii_alphanumeric() || matches!(character, '.' | '_' | '-')
+        })
+        .collect::<String>();
+    if cleaned.is_empty() || !cleaned.to_ascii_lowercase().ends_with(".dump") {
+        None
+    } else {
+        Some(cleaned)
+    }
+}
+
 impl Default for BackupDoctor {
     fn default() -> Self {
         Self::from_env()
@@ -491,5 +699,6 @@ use self::catalog::{
 use self::retention::apply_retention;
 pub use self::settings::first_existing_backup_directory;
 use self::settings::{
-    backup_directory, backup_script_path, bool_env, int_env, non_empty_env, parse_clock, uint_env,
+    backup_directory, backup_script_path, bool_env, int_env, non_empty_env, parse_clock,
+    restore_script_path, uint_env,
 };

@@ -198,6 +198,102 @@ async fn raw_material_assignment_candidates_only_return_assignable_stock() {
 }
 
 #[tokio::test]
+async fn raw_material_assignment_candidates_rank_rulons_by_smallest_leftover() {
+    let material_store = Arc::new(RawMaterialStockLookup::default());
+    for (barcode, code, name) in [
+        ("30R985", "ROLL-1000", "CPP 985/35"),
+        ("30R1000", "ROLL-1000", "CPP 1000/35"),
+        ("30R1005", "ROLL-1000", "CPP 1005/35"),
+    ] {
+        material_store.insert_stock(barcode, code, name, 10.0).await;
+    }
+    let mut state = test_state();
+    state.gscale = GscaleService::new().with_receipt_store(material_store);
+    state
+        .admin
+        .upsert_role_assignment(crate::core::authz::RoleAssignmentUpsert {
+            principal_role: PrincipalRole::MaterialTaminotchi,
+            principal_ref: "material-ranked-rulons".to_string(),
+            role_id: "material_taminotchi".to_string(),
+            assigned_apparatus: Vec::new(),
+            assigned_item_groups: vec!["Rulon".to_string()],
+        })
+        .await
+        .expect("material assignment");
+    assign_warehouse_to_principal(
+        &state,
+        PrincipalRole::MaterialTaminotchi,
+        "material-ranked-rulons",
+        "Kalidor",
+    )
+    .await;
+    let token = session(&state, PrincipalRole::Admin).await;
+    let material_token = session_for(
+        &state,
+        PrincipalRole::MaterialTaminotchi,
+        "material-ranked-rulons",
+    )
+    .await;
+    let router = build_router(state);
+
+    let map = router
+        .clone()
+        .oneshot(request_with_body(
+            "PUT",
+            "/v1/mobile/admin/production-maps",
+            &token,
+            &pechat_order_map_json_with_dims(
+                "zakaz-ranked-rulons",
+                "Ranked rulons",
+                "8816",
+                "7 ta rangli pechat - A",
+                7.0,
+                985.0,
+            ),
+        ))
+        .await
+        .expect("map save");
+    assert_eq!(map.status(), StatusCode::OK);
+
+    let rule = router
+        .clone()
+        .oneshot(request_with_body(
+            "PUT",
+            "/v1/mobile/admin/raw-material-rules",
+            &token,
+            r#"{
+                "apparatus":"7 ta rangli pechat - A",
+                "requires_material":true,
+                "start_policy":"requirement_groups",
+                "item_groups":["Rulon"]
+            }"#,
+        ))
+        .await
+        .expect("rule save");
+    assert_eq!(rule.status(), StatusCode::OK);
+
+    let candidates = router
+        .oneshot(request(
+            "GET",
+            "/v1/mobile/admin/raw-material-assignments/candidates?order_id=zakaz-ranked-rulons",
+            &material_token,
+        ))
+        .await
+        .expect("assignment candidates");
+    assert_eq!(candidates.status(), StatusCode::OK);
+    let body = json_body(candidates).await;
+    assert_eq!(body.as_array().map(Vec::len), Some(3));
+    assert_eq!(body[0]["barcode"], "30R985");
+    assert_eq!(body[0]["match_type"], "exact_width");
+    assert_eq!(body[0]["leftover_width_mm"], 0.0);
+    assert_eq!(body[1]["barcode"], "30R1000");
+    assert_eq!(body[1]["match_type"], "closest_width");
+    assert_eq!(body[1]["leftover_width_mm"], 15.0);
+    assert_eq!(body[2]["barcode"], "30R1005");
+    assert_eq!(body[2]["leftover_width_mm"], 20.0);
+}
+
+#[tokio::test]
 async fn raw_material_assignment_candidate_orders_only_return_compatible_orders() {
     let material_store = Arc::new(RawMaterialStockLookup::default());
     let mut state = test_state();
@@ -518,6 +614,20 @@ async fn raw_material_routes_assign_and_require_scan_for_queue_start() {
     assert_eq!(warehouse_event.event, "warehouse.updated");
     assert_eq!(warehouse_event.warehouse, "Kalidor");
     assert_eq!(warehouse_event.reason, "raw_material_assignment");
+
+    let material_assignments = router
+        .clone()
+        .oneshot(request(
+            "GET",
+            "/v1/mobile/admin/raw-material-assignments?order_id=zakaz-raw-route&apparatus=7%20ta%20rangli%20pechat%20-%20A",
+            &material_token,
+        ))
+        .await
+        .expect("material assignment list");
+    assert_eq!(material_assignments.status(), StatusCode::OK);
+    let material_assignments_body = json_body(material_assignments).await;
+    assert_eq!(material_assignments_body.as_array().map(Vec::len), Some(1));
+    assert_eq!(material_assignments_body[0]["barcode"], "30AA");
 
     let assigned_edit = router
         .clone()

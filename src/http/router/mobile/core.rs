@@ -6,7 +6,7 @@ use crate::app::AppState;
 use crate::core::chat_media::{MAX_CHAT_IMAGE_SIZE_BYTES, MAX_CHAT_MEDIA_CHUNK_SIZE_BYTES};
 use crate::http::handlers::{
     app_update, auth, calculate, chat, customer, gscale, iroh_discovery, notifications, profile,
-    push, qolip, returned_paint, rezka, rps_batch, stock_entry, supplier, werka,
+    push, qolip, returned_paint, rezka, rps_batch, server, stock_entry, supplier, werka,
 };
 
 pub(super) fn routes() -> Router<AppState> {
@@ -22,6 +22,10 @@ pub(super) fn routes() -> Router<AppState> {
         .route("/v1/mobile/auth/login", any(auth::login))
         .route("/v1/mobile/auth/logout", any(auth::logout))
         .route("/v1/mobile/me", any(auth::me))
+        .route(
+            "/v1/mobile/server/handshake",
+            get(server::mobile_server_handshake),
+        )
         .route(
             "/v1/mobile/returned-paint/requests",
             any(returned_paint::requests),

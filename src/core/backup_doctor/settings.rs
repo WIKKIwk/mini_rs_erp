@@ -23,6 +23,19 @@ pub(super) fn backup_script_path() -> PathBuf {
     .unwrap_or_else(|| PathBuf::from("tools/db/backup_postgres.sh"))
 }
 
+pub(super) fn restore_script_path() -> PathBuf {
+    if let Some(path) = non_empty_env("MINI_ERP_RESTORE_SCRIPT").map(PathBuf::from) {
+        return path;
+    }
+    [
+        PathBuf::from("tools/db/restore_postgres.sh"),
+        PathBuf::from("../mini_rs_erp/tools/db/restore_postgres.sh"),
+    ]
+    .into_iter()
+    .find(|path| path.is_file())
+    .unwrap_or_else(|| PathBuf::from("tools/db/restore_postgres.sh"))
+}
+
 pub fn first_existing_backup_directory<const N: usize>(candidates: [PathBuf; N]) -> PathBuf {
     let fallback = candidates
         .first()

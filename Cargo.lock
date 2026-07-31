@@ -1855,6 +1855,7 @@ dependencies = [
  "futures-core",
  "heed",
  "hmac",
+ "http-body-util",
  "hyper",
  "hyper-util",
  "image",

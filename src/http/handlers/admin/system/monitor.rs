@@ -16,7 +16,7 @@ mod backup_api;
 #[cfg(test)]
 mod tests;
 
-pub use backup_api::{system_backup_create, system_backup_download};
+pub use backup_api::{system_backup_create, system_backup_download, system_backup_import};
 
 const DATABASE_PING_TIMEOUT: Duration = Duration::from_secs(2);
 const LIVE_SNAPSHOT_INTERVAL: Duration = Duration::from_secs(2);

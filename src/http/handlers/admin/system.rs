@@ -19,7 +19,8 @@ pub use inventory_movements::{
     inventory_returns_batch, inventory_transfer_action, inventory_transfers,
 };
 pub use monitor::{
-    system_backup_create, system_backup_download, system_monitor, system_monitor_live,
+    system_backup_create, system_backup_download, system_backup_import, system_monitor,
+    system_monitor_live,
 };
 pub use roles::{capabilities, role_assignments, roles};
 pub use warehouses::{warehouse_assignments, warehouse_items, warehouse_summaries, warehouses};

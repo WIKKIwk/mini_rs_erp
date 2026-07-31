@@ -41,6 +41,26 @@ async fn auth_me_route_is_not_registered() {
 }
 
 #[tokio::test]
+async fn server_handshake_identifies_mini_rs_erp() {
+    let response = build_router(test_state())
+        .oneshot(
+            Request::builder()
+                .uri("/v1/mobile/server/handshake")
+                .body(Body::empty())
+                .expect("request"),
+        )
+        .await
+        .expect("response");
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let json = json_body(response).await;
+    assert_eq!(json["service"], "mini_rs_erp");
+    assert_eq!(json["product"], "mini_rs_erp");
+    assert_eq!(json["api_contract"], "v1");
+    assert_eq!(json["version"], env!("CARGO_PKG_VERSION"));
+}
+
+#[tokio::test]
 async fn go_mobile_route_inventory_is_registered() {
     const ROUTES: &[&str] = &[
         "/healthz",
@@ -48,6 +68,7 @@ async fn go_mobile_route_inventory_is_registered() {
         "/v1/mobile/auth/login",
         "/v1/mobile/auth/logout",
         "/v1/mobile/me",
+        "/v1/mobile/server/handshake",
         "/v1/mobile/returned-paint/requests",
         "/v1/mobile/returned-paint/requests/complete",
         "/v1/mobile/returned-paint/images",

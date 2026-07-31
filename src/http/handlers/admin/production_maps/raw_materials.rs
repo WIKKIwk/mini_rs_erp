@@ -1,12 +1,14 @@
 use super::raw_material_details::{
     fill_raw_material_assignment_input, item_group_path, lookup_raw_material_detail,
-    require_material_item_group_scope, require_material_warehouse_scope,
-    resolve_raw_material_stock_item, validate_rulon_size_for_pechat_map,
+    raw_material_rulon_match_metrics, require_material_item_group_scope,
+    require_material_warehouse_scope, resolve_raw_material_stock_item,
+    validate_rulon_size_for_pechat_map,
 };
 use super::*;
 use crate::db::postgres_raw_material_events::{
     RawMaterialEventDraft, RawMaterialEventQuery, RawMaterialEventScope,
 };
+use std::cmp::Ordering;
 use std::collections::{BTreeMap, BTreeSet};
 
 #[derive(Debug, serde::Deserialize)]
@@ -39,6 +41,10 @@ struct RawMaterialAssignmentCandidateResponse {
     qty: f64,
     uom: String,
     apparatus_options: Vec<String>,
+    order_width_mm: Option<f64>,
+    roll_width_mm: Option<f64>,
+    leftover_width_mm: Option<f64>,
+    match_type: String,
 }
 
 #[derive(Debug, serde::Serialize)]
@@ -450,6 +456,20 @@ pub async fn raw_material_assignment_candidates(
         if apparatus_options.is_empty() {
             continue;
         }
+        let (order_width_mm, roll_width_mm, leftover_width_mm, match_type) =
+            match raw_material_rulon_match_metrics(&order.map, &entry, item, &group_path) {
+                Some((order_width, roll_width, leftover_width)) => (
+                    Some(order_width),
+                    Some(roll_width),
+                    Some(leftover_width),
+                    if leftover_width <= 0.001 {
+                        "exact_width".to_string()
+                    } else {
+                        "closest_width".to_string()
+                    },
+                ),
+                None => (None, None, None, "compatible".to_string()),
+            };
         candidates.push(RawMaterialAssignmentCandidateResponse {
             barcode: barcode.to_string(),
             warehouse: entry.warehouse.trim().to_string(),
@@ -459,15 +479,37 @@ pub async fn raw_material_assignment_candidates(
             qty: entry.qty,
             uom: entry.uom.trim().to_string(),
             apparatus_options,
+            order_width_mm,
+            roll_width_mm,
+            leftover_width_mm,
+            match_type,
         });
     }
     candidates.sort_by(|left, right| {
-        left.item_name
-            .to_ascii_lowercase()
-            .cmp(&right.item_name.to_ascii_lowercase())
+        raw_material_candidate_match_priority(&left.match_type)
+            .cmp(&raw_material_candidate_match_priority(&right.match_type))
+            .then_with(|| {
+                left.leftover_width_mm
+                    .unwrap_or(f64::INFINITY)
+                    .partial_cmp(&right.leftover_width_mm.unwrap_or(f64::INFINITY))
+                    .unwrap_or(Ordering::Equal)
+            })
+            .then_with(|| {
+                left.item_name
+                    .to_ascii_lowercase()
+                    .cmp(&right.item_name.to_ascii_lowercase())
+            })
             .then_with(|| left.barcode.cmp(&right.barcode))
     });
     Ok(json_response(candidates))
+}
+
+fn raw_material_candidate_match_priority(match_type: &str) -> u8 {
+    match match_type.trim() {
+        "exact_width" => 0,
+        "closest_width" => 1,
+        _ => 2,
+    }
 }
 
 pub async fn raw_material_assignment_candidate_orders(
