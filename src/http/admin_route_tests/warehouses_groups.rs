@@ -127,7 +127,8 @@ async fn admin_apparatus_defaults_are_available_on_empty_store() {
         serde_json::json!([
             "7 ta rangli bosma aparat",
             "8 ta rangli bosma aparat",
-            "9 ta rangli bosma aparat"
+            "9 ta rangli bosma aparat",
+            "Flexo pechat"
         ])
     );
     assert_eq!(group_body[1]["name"], "Laminatsiya");
@@ -238,7 +239,8 @@ async fn admin_apparatus_groups_round_trip_on_server() {
         serde_json::json!([
             "7 ta rangli bosma aparat",
             "8 ta rangli bosma aparat",
-            "9 ta rangli bosma aparat"
+            "9 ta rangli bosma aparat",
+            "Flexo pechat"
         ])
     );
 
@@ -254,7 +256,8 @@ async fn admin_apparatus_groups_round_trip_on_server() {
         serde_json::json!([
             "7 ta rangli bosma aparat",
             "8 ta rangli bosma aparat",
-            "9 ta rangli bosma aparat"
+            "9 ta rangli bosma aparat",
+            "Flexo pechat"
         ])
     );
 }

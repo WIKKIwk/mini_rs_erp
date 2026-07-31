@@ -56,6 +56,7 @@ pub async fn apparatus(
             Capability::CatalogItemRead,
             Capability::ApparatusQueueRead,
             Capability::RawMaterialAssign,
+            Capability::QolipManage,
         ],
     )
     .await?;

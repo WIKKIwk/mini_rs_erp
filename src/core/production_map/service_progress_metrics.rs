@@ -58,7 +58,7 @@ fn validate_progress_metrics(
 ) -> Result<(), ProductionMapError> {
     let is_complete = action == queue_state::ApparatusQueueAction::Complete;
     if is_complete
-        && pechat::pechat_color_count(apparatus).is_some()
+        && pechat::is_pechat_apparatus(apparatus)
         && !(returned_paint_report_attached
             && metrics.total_waste.is_some()
             && metrics.finished_goods_kg.is_some()

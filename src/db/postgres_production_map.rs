@@ -8,6 +8,7 @@ use crate::core::production_map::{
     CompletionRequestDecision, CompletionRequestDecisionNotification,
     CompletionRequestNotification, CompletionRequestStateResolution, FinishedGoodsStockEntry,
     OrderControlRecord, OrderProgressBatch, OrderProgressEvent, OrderRunSession,
+    ProductionMapApparatusTransferRecord, ProductionMapApparatusTransferWrite,
     ProductionMapDefinition, ProductionMapError, ProductionMapStorePort, ProductionOrderLogEntry,
     QueueActionActor, QueueActionProgressWrite, QueueActionProgressWriteResult,
     RawMaterialAssignment, RawMaterialStockTransition, RawMaterialStockTransitionKind,
@@ -25,6 +26,7 @@ mod progress_helpers;
 mod qolip_session_helpers;
 mod queue_helpers;
 mod raw_material_stock_helpers;
+mod transfer_helpers;
 mod wip_query_helpers;
 
 use self::catalog_helpers::{
@@ -63,6 +65,10 @@ use self::progress_helpers::{
 use self::qolip_session_helpers::reject_qolip_in_use_tx;
 use self::queue_helpers::{insert_queue_action_event_tx, put_queue_states_tx};
 use self::raw_material_stock_helpers::apply_raw_material_stock_transitions_tx;
+use self::transfer_helpers::{
+    commit_apparatus_transfer as commit_apparatus_transfer_record,
+    load_apparatus_transfer_by_idempotency_key,
+};
 use self::wip_query_helpers::load_wip_progress_batches;
 
 #[derive(Clone)]
@@ -387,6 +393,20 @@ impl ProductionMapStorePort for PostgresProductionMapStore {
         batch: OrderProgressBatch,
     ) -> Result<(), ProductionMapError> {
         put_order_progress_batch(&self.pool, &batch).await
+    }
+
+    async fn apparatus_transfer_by_idempotency_key(
+        &self,
+        idempotency_key: &str,
+    ) -> Result<Option<ProductionMapApparatusTransferRecord>, ProductionMapError> {
+        load_apparatus_transfer_by_idempotency_key(&self.pool, idempotency_key).await
+    }
+
+    async fn commit_apparatus_transfer(
+        &self,
+        write: ProductionMapApparatusTransferWrite,
+    ) -> Result<ProductionMapApparatusTransferRecord, ProductionMapError> {
+        commit_apparatus_transfer_record(&self.pool, write).await
     }
 
     async fn receive_finished_goods_batch(

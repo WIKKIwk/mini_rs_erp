@@ -20,6 +20,7 @@ mod service_progress;
 mod service_progress_metrics;
 mod service_progress_support;
 mod service_qolip;
+mod service_transfer;
 mod service_queue;
 mod service_queue_support;
 mod service_wip;
@@ -36,8 +37,8 @@ pub use materials::{
 pub use memory_store::MemoryProductionMapStore;
 pub use service::{PreparedApparatusQueueAction, ProductionMapLiveSnapshot, ProductionMapService};
 pub use store_port::{
-    ProductionMapStorePort, QueueActionProgressWrite, QueueActionProgressWriteResult,
-    RawMaterialStockTransition, RawMaterialStockTransitionKind,
+    ProductionMapApparatusTransferWrite, ProductionMapStorePort, QueueActionProgressWrite,
+    QueueActionProgressWriteResult, RawMaterialStockTransition, RawMaterialStockTransitionKind,
 };
 pub use types::*;
 

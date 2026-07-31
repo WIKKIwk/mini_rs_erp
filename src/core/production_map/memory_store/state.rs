@@ -22,6 +22,8 @@ pub struct MemoryProductionMapStore {
     pub(super) material_assignments: RwLock<BTreeMap<String, RawMaterialAssignment>>,
     pub(super) returned_paint_requests:
         RwLock<BTreeMap<String, crate::core::returned_paint::ReturnedPaintRequest>>,
+    pub(super) apparatus_transfers:
+        RwLock<BTreeMap<String, ProductionMapApparatusTransferRecord>>,
     pub(super) fail_next_queue_progress_commit: AtomicBool,
 }
 
@@ -42,6 +44,7 @@ impl MemoryProductionMapStore {
             material_rules: RwLock::new(BTreeMap::new()),
             material_assignments: RwLock::new(BTreeMap::new()),
             returned_paint_requests: RwLock::new(BTreeMap::new()),
+            apparatus_transfers: RwLock::new(BTreeMap::new()),
             fail_next_queue_progress_commit: AtomicBool::new(false),
         }
     }

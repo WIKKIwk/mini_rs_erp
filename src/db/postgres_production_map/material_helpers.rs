@@ -146,6 +146,35 @@ pub(super) async fn delete_raw_material_assignment(
     .transpose()
 }
 
+pub(super) async fn transfer_raw_material_assignments_tx(
+    tx: &mut Transaction<'_, Postgres>,
+    assignments: &[RawMaterialAssignment],
+) -> Result<(), ProductionMapError> {
+    for assignment in assignments {
+        let payload =
+            serde_json::to_value(assignment).map_err(|_| ProductionMapError::StoreFailed)?;
+        let result = sqlx::query(
+            "UPDATE mini_raw_material_assignments
+             SET apparatus = $3,
+                 payload_json = $4,
+                 updated_at = now()
+             WHERE order_id = $1
+               AND lower(barcode) = lower($2)",
+        )
+        .bind(assignment.order_id.trim())
+        .bind(assignment.barcode.trim())
+        .bind(assignment.apparatus.trim())
+        .bind(payload)
+        .execute(&mut **tx)
+        .await
+        .map_err(|_| ProductionMapError::StoreFailed)?;
+        if result.rows_affected() != 1 {
+            return Err(ProductionMapError::RawMaterialAssignmentNotFound);
+        }
+    }
+    Ok(())
+}
+
 #[derive(sqlx::FromRow)]
 struct AssignmentStockRow {
     warehouse: String,

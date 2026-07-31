@@ -238,3 +238,166 @@ async fn production_map_batch_move_stress_moves_many_orders_atomically() {
         Some(24)
     );
 }
+
+#[tokio::test]
+async fn paused_order_transfer_route_moves_state_and_is_idempotent() {
+    let state = test_state();
+    state
+        .admin
+        .upsert_role_assignment(crate::core::authz::RoleAssignmentUpsert {
+            principal_role: PrincipalRole::Aparatchi,
+            principal_ref: "worker-apparatus-transfer".to_string(),
+            role_id: "aparatchi".to_string(),
+            assigned_apparatus: vec![
+                "7 ta rangli pechat".to_string(),
+                "8 ta rangli pechat".to_string(),
+            ],
+            assigned_item_groups: Vec::new(),
+        })
+        .await
+        .expect("assignment");
+    let admin_token = session(&state, PrincipalRole::Admin).await;
+    let worker_token =
+        session_for(&state, PrincipalRole::Aparatchi, "worker-apparatus-transfer").await;
+    let router = build_router(state);
+    let order_id = "zakaz-apparatus-transfer-route";
+
+    let saved = router
+        .clone()
+        .oneshot(request_with_body(
+            "PUT",
+            "/v1/mobile/admin/production-maps",
+            &admin_token,
+            &pechat_order_map_json_with_dims(
+                order_id,
+                "Apparatus transfer route",
+                "7601",
+                "7 ta rangli pechat",
+                7.0,
+                650.0,
+            ),
+        ))
+        .await
+        .expect("save map");
+    assert_eq!(saved.status(), StatusCode::OK);
+    provision_test_qolip(&router, &admin_token, order_id).await;
+
+    let sequence = router
+        .clone()
+        .oneshot(request_with_body(
+            "PUT",
+            "/v1/mobile/admin/production-maps/sequence",
+            &admin_token,
+            &format!(
+                r#"{{"apparatus":"7 ta rangli pechat","order_ids":["{order_id}"]}}"#
+            ),
+        ))
+        .await
+        .expect("save sequence");
+    assert_eq!(sequence.status(), StatusCode::OK);
+
+    let started = router
+        .clone()
+        .oneshot(request_with_body(
+            "POST",
+            "/v1/mobile/admin/production-maps/queue-action",
+            &worker_token,
+            &with_test_qolip(
+                &format!(
+                    r#"{{"apparatus":"7 ta rangli pechat","order_id":"{order_id}","action":"start"}}"#
+                ),
+                order_id,
+            ),
+        ))
+        .await
+        .expect("start order");
+    assert_eq!(started.status(), StatusCode::OK);
+
+    let normal_move = router
+        .clone()
+        .oneshot(request_with_body(
+            "POST",
+            "/v1/mobile/admin/production-maps/move-batch",
+            &admin_token,
+            &format!(
+                r#"{{"from_apparatus":"7 ta rangli pechat","to_apparatus":"8 ta rangli pechat","map_ids":["{order_id}"]}}"#
+            ),
+        ))
+        .await
+        .expect("normal move");
+    assert_eq!(normal_move.status(), StatusCode::CONFLICT);
+    assert_eq!(json_body(normal_move).await["error"], "started_order_move_requires_transfer");
+
+    let paused = router
+        .clone()
+        .oneshot(request_with_body(
+            "POST",
+            "/v1/mobile/admin/production-maps/queue-action",
+            &worker_token,
+            &format!(
+                r#"{{"apparatus":"7 ta rangli pechat","order_id":"{order_id}","action":"pause","produced_qty":11}}"#
+            ),
+        ))
+        .await
+        .expect("pause order");
+    assert_eq!(paused.status(), StatusCode::OK);
+
+    let transfer_body = format!(
+        r#"{{"order_id":"{order_id}","from_apparatus":"7 ta rangli pechat","to_apparatus":"8 ta rangli pechat","reason":"7 rangli pechat apparati buzildi","idempotency_key":"route-transfer-{order_id}"}}"#
+    );
+    let transferred = router
+        .clone()
+        .oneshot(request_with_body(
+            "POST",
+            "/v1/mobile/admin/production-maps/apparatus-transfer",
+            &admin_token,
+            &transfer_body,
+        ))
+        .await
+        .expect("transfer order");
+    assert_eq!(transferred.status(), StatusCode::OK);
+    let transferred_body = json_body(transferred).await;
+    assert_eq!(transferred_body["queue_state"], "paused");
+    assert_eq!(
+        transferred_body["saved"]["map"]["nodes"]
+            .as_array()
+            .expect("nodes")
+            .iter()
+            .find(|node| node["kind"] == "apparatus")
+            .expect("apparatus")["title"],
+        "8 ta rangli pechat"
+    );
+
+    let resumed = router
+        .clone()
+        .oneshot(request_with_body(
+            "POST",
+            "/v1/mobile/admin/production-maps/queue-action",
+            &worker_token,
+            &format!(
+                r#"{{"apparatus":"8 ta rangli pechat","order_id":"{order_id}","action":"resume","progress_batch_id":"{}"}}"#,
+                transferred_body["progress_batch_id"]
+                    .as_str()
+                    .expect("progress batch id")
+            ),
+        ))
+        .await
+        .expect("resume on replacement apparatus");
+    assert_eq!(resumed.status(), StatusCode::OK);
+    assert_eq!(json_body(resumed).await["states"][order_id], "in_progress");
+
+    let replay = router
+        .oneshot(request_with_body(
+            "POST",
+            "/v1/mobile/admin/production-maps/apparatus-transfer",
+            &admin_token,
+            &transfer_body.replace("7 rangli pechat apparati buzildi", "retry reason"),
+        ))
+        .await
+        .expect("replay transfer");
+    assert_eq!(replay.status(), StatusCode::OK);
+    assert_eq!(
+        json_body(replay).await["transfer_id"],
+        transferred_body["transfer_id"]
+    );
+}

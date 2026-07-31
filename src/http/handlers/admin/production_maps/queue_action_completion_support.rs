@@ -140,7 +140,7 @@ pub(super) async fn reject_qolip_in_use(
 }
 
 pub(super) fn apparatus_requires_qolip_scan(apparatus: &str) -> bool {
-    pechat::pechat_color_count(apparatus).is_some()
+    pechat::is_pechat_apparatus(apparatus)
 }
 
 pub(super) fn qolip_queue_error(error: crate::core::qolip::QolipError) -> AdminError {

@@ -302,6 +302,54 @@ async fn material_taminotchi_can_read_production_maps_for_assignment_only() {
 }
 
 #[tokio::test]
+async fn qolipchi_and_material_taminotchi_can_read_order_sequence_but_not_reorder() {
+    let state = test_state();
+    let qolipchi_token = session_for(&state, PrincipalRole::Qolipchi, "qolipchi").await;
+    let material_token = session_for(
+        &state,
+        PrincipalRole::MaterialTaminotchi,
+        "material_taminotchi",
+    )
+    .await;
+
+    for (role, token) in [
+        ("qolipchi", qolipchi_token),
+        ("material_taminotchi", material_token),
+    ] {
+        for path in [
+            "/v1/mobile/admin/production-maps",
+            "/v1/mobile/admin/production-maps/sequence",
+            "/v1/mobile/admin/apparatus?limit=200",
+        ] {
+            let response = build_router(state.clone())
+                .oneshot(request("GET", path, &token))
+                .await
+                .expect("read sequence dependency");
+            assert_eq!(
+                response.status(),
+                StatusCode::OK,
+                "{role} must be able to read {path}"
+            );
+        }
+
+        let response = build_router(state.clone())
+            .oneshot(request_with_body(
+                "PUT",
+                "/v1/mobile/admin/production-maps/sequence",
+                &token,
+                r#"{"apparatus":"Bobst 1","order_ids":[]}"#,
+            ))
+            .await
+            .expect("reorder response");
+        assert_eq!(
+            response.status(),
+            StatusCode::FORBIDDEN,
+            "{role} must not be able to reorder apparatus queues"
+        );
+    }
+}
+
+#[tokio::test]
 async fn admin_access_capability_can_save_production_maps() {
     let state = test_state();
     let admin_token = session(&state, PrincipalRole::Admin).await;

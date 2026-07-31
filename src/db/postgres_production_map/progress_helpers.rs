@@ -34,6 +34,7 @@ pub(super) async fn put_order_run_session_tx(
          )
          VALUES ($1, $2, $3, $4, $5, $6, $7, to_timestamp($8), to_timestamp($9), $10)
          ON CONFLICT (session_id) DO UPDATE SET
+            apparatus = excluded.apparatus,
             status = excluded.status,
             worker_role = excluded.worker_role,
             worker_ref = excluded.worker_ref,
@@ -206,6 +207,8 @@ pub(super) async fn put_order_progress_batch_tx(
                  ($34::double precision)::numeric(24,9),
                  $35, $36, now(), now())
          ON CONFLICT (batch_id) DO UPDATE SET
+            session_id = excluded.session_id,
+            apparatus = excluded.apparatus,
             status = excluded.status,
             produced_qty = excluded.produced_qty,
             uom = excluded.uom,

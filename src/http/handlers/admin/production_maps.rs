@@ -9,7 +9,8 @@ use crate::core::gscale::models::{
 };
 use crate::core::production_map::{
     ApparatusMaterialRuleUpsert, ApparatusQueuePolicy, CompletionRequestDecision,
-    MaterialScanProgressAction, OrderProgressBatchWipStatus, ProductionMapBatchMoveRequest,
+    MaterialScanProgressAction, OrderProgressBatchWipStatus, ProductionMapApparatusTransferRequest,
+    ProductionMapBatchMoveRequest,
     ProductionMapDefinition, ProductionMapError, ProductionMapMoveRequest, ProductionMapRunRequest,
     QueueActionActor, QueueProgressInput, RawMaterialAssignment, RawMaterialAssignmentDeleteInput,
     RawMaterialAssignmentInput, RawMaterialStockTransition, RawMaterialStockTransitionKind,
@@ -35,7 +36,10 @@ pub use self::completion::{
     production_map_completion_requests, production_map_live,
 };
 use self::helpers::*;
-pub use self::move_run::{production_map_move, production_map_move_batch, production_map_run};
+pub use self::move_run::{
+    production_map_apparatus_transfer, production_map_move, production_map_move_batch,
+    production_map_run,
+};
 pub use self::order_control::production_map_order_control;
 pub use self::progress_qr::{
     production_map_progress_qr_history, production_map_progress_qr_lookup,
@@ -91,6 +95,7 @@ pub async fn production_maps(
             Capability::ProductionMapManage,
             Capability::ApparatusQueueRead,
             Capability::RawMaterialAssign,
+            Capability::QolipManage,
         ],
     )
     .await?;
@@ -307,6 +312,8 @@ pub async fn production_map_sequence(
             Capability::AdminAccess,
             Capability::ProductionMapManage,
             Capability::ApparatusQueueRead,
+            Capability::RawMaterialAssign,
+            Capability::QolipManage,
         ],
     )
     .await?;

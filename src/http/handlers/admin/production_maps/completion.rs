@@ -68,6 +68,8 @@ async fn require_any_live_capability(
         Capability::AdminAccess,
         Capability::ProductionMapManage,
         Capability::ApparatusQueueRead,
+        Capability::RawMaterialAssign,
+        Capability::QolipManage,
     ] {
         if state
             .admin

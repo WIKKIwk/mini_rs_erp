@@ -3,6 +3,7 @@ mod materials;
 mod queue;
 mod runs;
 mod state;
+mod transfers;
 
 use super::*;
 
@@ -286,6 +287,20 @@ impl ProductionMapStorePort for MemoryProductionMapStore {
         batch: OrderProgressBatch,
     ) -> Result<(), ProductionMapError> {
         runs::put_order_progress_batch(self, batch).await
+    }
+
+    async fn apparatus_transfer_by_idempotency_key(
+        &self,
+        idempotency_key: &str,
+    ) -> Result<Option<ProductionMapApparatusTransferRecord>, ProductionMapError> {
+        transfers::apparatus_transfer_by_idempotency_key(self, idempotency_key).await
+    }
+
+    async fn commit_apparatus_transfer(
+        &self,
+        write: ProductionMapApparatusTransferWrite,
+    ) -> Result<ProductionMapApparatusTransferRecord, ProductionMapError> {
+        transfers::commit_apparatus_transfer(self, write).await
     }
 
     async fn put_apparatus_queue_states_with_event_and_progress(

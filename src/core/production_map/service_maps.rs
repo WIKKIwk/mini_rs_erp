@@ -179,6 +179,7 @@ impl ProductionMapService {
         &self,
         input: ProductionMapBatchMoveRequest,
     ) -> Result<Vec<ProductionMapSaved>, ProductionMapError> {
+        let _guard = self.queue_action_guard().await;
         let from = input.from_apparatus.trim();
         let to = input.to_apparatus.trim();
         if from.is_empty() || to.is_empty() || from == to {
@@ -203,6 +204,8 @@ impl ProductionMapService {
             if !move_allowed(&map, from, to) {
                 return Err(ProductionMapError::MoveNotAllowed);
             }
+            self.ensure_normal_map_move_is_pending(&map_id, from)
+                .await?;
             let mut next = map;
             if !reassign_alternative_apparatus_assignment(&mut next, from, to)
                 && !reassign_apparatus_nodes(&mut next, from, to)
@@ -228,6 +231,7 @@ impl ProductionMapService {
         &self,
         input: ProductionMapMoveRequest,
     ) -> Result<ProductionMapSaved, ProductionMapError> {
+        let _guard = self.queue_action_guard().await;
         let map_id = input.map_id.trim().to_ascii_lowercase();
         let from = input.from_apparatus.trim();
         let to = input.to_apparatus.trim();
@@ -244,6 +248,8 @@ impl ProductionMapService {
         if !move_allowed(&map, from, to) {
             return Err(ProductionMapError::MoveNotAllowed);
         }
+        self.ensure_normal_map_move_is_pending(&map_id, from)
+            .await?;
         let mut next = map;
         if !reassign_alternative_apparatus_assignment(&mut next, from, to)
             && !reassign_apparatus_nodes(&mut next, from, to)

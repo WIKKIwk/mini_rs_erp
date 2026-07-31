@@ -131,6 +131,24 @@ pub struct ProductionMapBatchMoveRequest {
     pub map_ids: Vec<String>,
 }
 
+/// Explicit emergency failover for an order which has already started and
+/// was paused on its original apparatus. This is intentionally separate from
+/// the normal map move request: an active production flow must move together
+/// with its queue, progress, and custody state.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ProductionMapApparatusTransferRequest {
+    #[serde(default)]
+    pub order_id: String,
+    #[serde(default)]
+    pub from_apparatus: String,
+    #[serde(default)]
+    pub to_apparatus: String,
+    #[serde(default)]
+    pub reason: String,
+    #[serde(default)]
+    pub idempotency_key: String,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ProductionMapRunRequest {
     #[serde(default)]

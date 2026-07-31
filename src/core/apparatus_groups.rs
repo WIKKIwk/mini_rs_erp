@@ -333,10 +333,12 @@ fn merge_groups(left: ApparatusGroup, right: ApparatusGroup) -> ApparatusGroup {
 }
 
 fn default_bosma_apparatus() -> Vec<String> {
-    [7_u8, 8, 9]
+    let mut apparatus = [7_u8, 8, 9]
         .into_iter()
         .map(|count| format!("{count} ta rangli bosma aparat"))
-        .collect()
+        .collect::<Vec<_>>();
+    apparatus.push("Flexo pechat".to_string());
+    apparatus
 }
 
 fn default_laminatsiya_apparatus() -> Vec<String> {
@@ -503,9 +505,9 @@ fn is_invalid_legacy_apparatus_name(value: &str) -> bool {
 }
 
 fn group_is_bosma(group: &ApparatusGroup) -> bool {
-    pechat::pechat_color_count(&group.name).is_some()
+    pechat::is_pechat_apparatus(&group.name)
         || group.apparatus.iter().any(|item| {
-            pechat::pechat_color_count(item).is_some()
+            pechat::is_pechat_apparatus(item)
                 || item.trim().eq_ignore_ascii_case(DEFAULT_BOSMA_GROUP_NAME)
         })
         || group
@@ -744,5 +746,22 @@ mod tests {
                 .await,
             Err(ApparatusGroupError::InvalidApparatus)
         );
+    }
+
+    #[tokio::test]
+    async fn flexo_apparatus_group_is_canonicalized_as_bosma() {
+        let store = Arc::new(MemoryApparatusGroupStore::new());
+        let service = ApparatusGroupService::new(store);
+
+        let saved = service
+            .upsert_group(ApparatusGroupUpsert {
+                name: "Flexo bosma".to_string(),
+                apparatus: vec!["Flexo pechat".to_string()],
+            })
+            .await
+            .expect("flexo group");
+
+        assert_eq!(saved.name, "Bosma aparat");
+        assert!(saved.apparatus.iter().any(|item| item == "Flexo pechat"));
     }
 }

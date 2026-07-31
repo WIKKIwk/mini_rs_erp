@@ -1,6 +1,6 @@
 use std::collections::BTreeMap;
 
-use sqlx::PgPool;
+use sqlx::{PgPool, Postgres, Transaction};
 
 use crate::core::production_map::{
     ApparatusQueuePolicy, ProductionMapDefinition, ProductionMapError, QueueActionActor,
@@ -125,6 +125,32 @@ pub(super) async fn save_apparatus_sequence(
     .bind(apparatus.trim())
     .bind(payload)
     .execute(pool)
+    .await
+    .map_err(|_| ProductionMapError::StoreFailed)?;
+    Ok(())
+}
+
+pub(super) async fn save_apparatus_sequence_tx(
+    tx: &mut Transaction<'_, Postgres>,
+    apparatus: &str,
+    order_ids: &[String],
+) -> Result<(), ProductionMapError> {
+    let order_ids = order_ids
+        .iter()
+        .map(|id| id.trim().to_string())
+        .filter(|id| !id.is_empty())
+        .collect::<Vec<_>>();
+    let payload = serde_json::to_value(order_ids).map_err(|_| ProductionMapError::StoreFailed)?;
+    sqlx::query(
+        "INSERT INTO mini_queue_sequences (apparatus, order_ids, updated_at)
+         VALUES ($1, $2, now())
+         ON CONFLICT (apparatus) DO UPDATE SET
+           order_ids = excluded.order_ids,
+           updated_at = excluded.updated_at",
+    )
+    .bind(apparatus.trim())
+    .bind(payload)
+    .execute(&mut **tx)
     .await
     .map_err(|_| ProductionMapError::StoreFailed)?;
     Ok(())

@@ -215,6 +215,36 @@ pub(super) fn production_map_error(error: ProductionMapError) -> AdminError {
         ProductionMapError::DuplicateOrderNumber => bad_request("duplicate_order_number"),
         ProductionMapError::OrderNumberImmutable => bad_request("order_number_immutable"),
         ProductionMapError::MoveNotAllowed => bad_request("move_not_allowed"),
+        ProductionMapError::StartedOrderMoveRequiresTransfer => {
+            conflict("started_order_move_requires_transfer")
+        }
+        ProductionMapError::ApparatusTransferReasonRequired => {
+            bad_request("apparatus_transfer_reason_required")
+        }
+        ProductionMapError::ApparatusTransferIdempotencyRequired => {
+            bad_request("apparatus_transfer_idempotency_required")
+        }
+        ProductionMapError::ApparatusTransferIdempotencyConflict => {
+            conflict("apparatus_transfer_idempotency_conflict")
+        }
+        ProductionMapError::ApparatusTransferOrderNotPaused => {
+            conflict("apparatus_transfer_order_not_paused")
+        }
+        ProductionMapError::ApparatusTransferSessionNotFound => {
+            conflict("apparatus_transfer_session_not_found")
+        }
+        ProductionMapError::ApparatusTransferProgressNotFound => {
+            conflict("apparatus_transfer_progress_not_found")
+        }
+        ProductionMapError::ApparatusTransferSessionMismatch => {
+            conflict("apparatus_transfer_session_mismatch")
+        }
+        ProductionMapError::ApparatusTransferProgressMismatch => {
+            conflict("apparatus_transfer_progress_mismatch")
+        }
+        ProductionMapError::ApparatusTransferTargetConflict => {
+            conflict("apparatus_transfer_target_conflict")
+        }
         ProductionMapError::QueueActionNotAllowed => bad_request("queue_action_not_allowed"),
         ProductionMapError::OrderNotStarted => conflict("order_not_started"),
         ProductionMapError::OrderAlreadyCompleted => conflict("order_already_completed"),

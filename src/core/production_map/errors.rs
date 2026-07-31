@@ -46,6 +46,26 @@ pub enum ProductionMapError {
     MissingConditionBranch,
     #[error("order is not allowed on the target apparatus")]
     MoveNotAllowed,
+    #[error("started order requires an apparatus transfer")]
+    StartedOrderMoveRequiresTransfer,
+    #[error("apparatus transfer reason is required")]
+    ApparatusTransferReasonRequired,
+    #[error("apparatus transfer requires a stable idempotency key")]
+    ApparatusTransferIdempotencyRequired,
+    #[error("apparatus transfer idempotency key belongs to another request")]
+    ApparatusTransferIdempotencyConflict,
+    #[error("apparatus transfer is allowed only for a paused order")]
+    ApparatusTransferOrderNotPaused,
+    #[error("apparatus transfer session was not found")]
+    ApparatusTransferSessionNotFound,
+    #[error("apparatus transfer progress batch was not found")]
+    ApparatusTransferProgressNotFound,
+    #[error("apparatus transfer session does not match the paused order")]
+    ApparatusTransferSessionMismatch,
+    #[error("apparatus transfer progress batch does not match the paused session")]
+    ApparatusTransferProgressMismatch,
+    #[error("apparatus transfer target already contains the order")]
+    ApparatusTransferTargetConflict,
     #[error("store failed")]
     StoreFailed,
     #[error("queue action is not allowed")]

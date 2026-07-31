@@ -4,6 +4,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::core::production_map::queue_state;
 
+use super::definition::{ProductionMapDefinition, ProductionMapSaved};
 use super::progress::{
     OrderProgressBatch, OrderProgressEvent, OrderRunSession, ProductionOrderStatusDetail,
 };
@@ -49,6 +50,35 @@ pub struct QueueActionActor {
     pub ref_: String,
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub display_name: String,
+}
+
+/// Durable receipt of an emergency apparatus transfer. The full post-transfer
+/// snapshot is kept in the receipt so an idempotent retry can return exactly
+/// the same result without guessing from mutable queue state.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ProductionMapApparatusTransferRecord {
+    pub transfer_id: String,
+    pub idempotency_key: String,
+    pub order_id: String,
+    pub from_apparatus: String,
+    pub to_apparatus: String,
+    pub reason: String,
+    pub actor: QueueActionActor,
+    pub session_id: String,
+    pub progress_batch_id: String,
+    #[serde(default)]
+    pub material_barcodes: Vec<String>,
+    pub map: ProductionMapDefinition,
+    pub session: OrderRunSession,
+    pub progress_batch: OrderProgressBatch,
+    pub created_at_unix: i64,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct ProductionMapApparatusTransferResult {
+    pub transfer: ProductionMapApparatusTransferRecord,
+    pub saved: ProductionMapSaved,
+    pub order_status: ProductionOrderStatusDetail,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

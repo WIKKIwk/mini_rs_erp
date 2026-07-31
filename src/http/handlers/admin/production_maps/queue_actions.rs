@@ -132,7 +132,7 @@ pub async fn production_map_queue_action(
     let returned_paint_field_count = returned_paint_value_count(&input.returned_paint_items);
     let has_returned_paint_image = !input.returned_paint_image_id.trim().is_empty();
     let is_bosma_complete = matches!(input.action, queue_state::ApparatusQueueAction::Complete)
-        && pechat::pechat_color_count(&input.apparatus).is_some();
+        && pechat::is_pechat_apparatus(&input.apparatus);
     if is_bosma_complete
         && !returned_paint_report_can_close(&input.returned_paint_items, has_returned_paint_image)
     {
@@ -184,8 +184,8 @@ pub async fn production_map_queue_action(
     let returned_paint_report_attached = returned_paint_report.is_some();
     let return_ink_kg = match &returned_paint_report {
         Some(report) if report.status == ReturnedPaintStatus::Completed => {
-            let total = returned_paint_astatka_total(&report.items)
-                .map_err(returned_paint_queue_error)?;
+            let total =
+                returned_paint_astatka_total(&report.items).map_err(returned_paint_queue_error)?;
             (total > 0.0).then_some(total)
         }
         Some(_) => None,
@@ -371,9 +371,7 @@ pub async fn production_map_queue_action(
         )
         .await
         .map_err(production_map_error)?;
-    if !result.qolip_checkout_committed
-        && !fallback_qolip_checkouts.is_empty()
-    {
+    if !result.qolip_checkout_committed && !fallback_qolip_checkouts.is_empty() {
         for checkout in fallback_qolip_checkouts {
             state
                 .qolip

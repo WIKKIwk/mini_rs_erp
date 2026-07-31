@@ -167,10 +167,7 @@ pub(super) fn validate_rulon_size_for_pechat_map(
     Ok(())
 }
 
-pub(super) fn item_group_path(
-    groups: &[AdminItemGroup],
-    item_group: &str,
-) -> Vec<String> {
+pub(super) fn item_group_path(groups: &[AdminItemGroup], item_group: &str) -> Vec<String> {
     let mut path = Vec::new();
     let mut current = item_group.trim().to_string();
     let mut seen = std::collections::BTreeSet::new();
@@ -196,7 +193,7 @@ fn is_rulon_group(item_group_path: &[String]) -> bool {
 fn map_has_pechat_stage(map: &ProductionMapDefinition) -> bool {
     chain::linear_work_stages(map)
         .iter()
-        .any(|stage| pechat::pechat_color_count(&stage.station_title).is_some())
+        .any(|stage| pechat::is_pechat_apparatus(&stage.station_title))
 }
 
 fn roll_width_mm(stock: &RawMaterialStockEntry, item: &SupplierItem) -> Option<f64> {

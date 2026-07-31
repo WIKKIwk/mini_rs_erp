@@ -72,6 +72,18 @@ pub struct QueueActionProgressWrite {
     pub order_control_update: Option<OrderControlRecord>,
 }
 
+pub struct ProductionMapApparatusTransferWrite {
+    pub record: ProductionMapApparatusTransferRecord,
+    pub updated_map: ProductionMapDefinition,
+    pub from_sequence: Vec<String>,
+    pub to_sequence: Vec<String>,
+    pub from_states: QueueStateMap,
+    pub to_states: QueueStateMap,
+    pub session: OrderRunSession,
+    pub progress_batch: OrderProgressBatch,
+    pub raw_material_assignments: Vec<RawMaterialAssignment>,
+}
+
 #[async_trait]
 pub trait ProductionMapStorePort: Send + Sync {
     // Maps and apparatus sequence persistence.
@@ -249,6 +261,18 @@ pub trait ProductionMapStorePort: Send + Sync {
     }
     async fn put_order_progress_batch(&self, _batch: OrderProgressBatch) -> StoreResult<()> {
         Ok(())
+    }
+    async fn apparatus_transfer_by_idempotency_key(
+        &self,
+        _idempotency_key: &str,
+    ) -> StoreResult<Option<ProductionMapApparatusTransferRecord>> {
+        Ok(None)
+    }
+    async fn commit_apparatus_transfer(
+        &self,
+        _write: ProductionMapApparatusTransferWrite,
+    ) -> StoreResult<ProductionMapApparatusTransferRecord> {
+        Err(ProductionMapError::StoreFailed)
     }
     async fn receive_finished_goods_batch(
         &self,

@@ -28,6 +28,163 @@ async fn maps_skips_legacy_invalid_map_without_failing_list() {
 }
 
 #[tokio::test]
+async fn paused_order_can_transfer_between_compatible_pechat_apparatuses_atomically() {
+    let store = std::sync::Arc::new(MemoryProductionMapStore::new());
+    let service = ProductionMapService::new(store.clone());
+    let actor = QueueActionActor {
+        role: "aparatchi".to_string(),
+        ref_: "worker-transfer".to_string(),
+        display_name: "Transfer Worker".to_string(),
+    };
+    let order_id = "zakaz-transfer-7-to-8";
+    let from = "7 ta rangli pechat";
+    let to = "8 ta rangli pechat";
+    service
+        .upsert_map(apparatus_stage_map(order_id, from))
+        .await
+        .expect("map");
+    let batch = pause_first_stage_batch(&service, order_id, from, &actor, 42.5)
+        .await
+        .expect("pause");
+
+    let result = service
+        .transfer_apparatus_order(
+            ProductionMapApparatusTransferRequest {
+                order_id: order_id.to_string(),
+                from_apparatus: from.to_string(),
+                to_apparatus: to.to_string(),
+                reason: "7 rangli aparat avariyasi".to_string(),
+                idempotency_key: "transfer-test-7-to-8".to_string(),
+            },
+            actor.clone(),
+        )
+        .await
+        .expect("transfer");
+    assert_eq!(result.saved.map.id, order_id);
+    assert_eq!(result.transfer.from_apparatus, from);
+    assert_eq!(result.transfer.to_apparatus, to);
+    assert_eq!(result.transfer.progress_batch_id, batch.batch_id);
+    assert_eq!(result.transfer.session.apparatus, to);
+    assert_eq!(result.transfer.progress_batch.apparatus, to);
+
+    let states = service.apparatus_queue_states().await.expect("states");
+    assert_eq!(states.get(from).and_then(|states| states.get(order_id)), None);
+    assert_eq!(
+        states.get(to).and_then(|states| states.get(order_id)),
+        Some(&"paused".to_string())
+    );
+    let session = store
+        .order_run_session(&result.transfer.session_id)
+        .await
+        .expect("session lookup")
+        .expect("session");
+    assert_eq!(session.apparatus, to);
+    let moved_batch = store
+        .progress_batch(&result.transfer.progress_batch_id)
+        .await
+        .expect("batch lookup")
+        .expect("batch");
+    assert_eq!(moved_batch.apparatus, to);
+    assert_eq!(moved_batch.produced_qty, 42.5);
+
+    let resumed = service
+        .apply_apparatus_queue_action_with_progress(
+            to,
+            order_id,
+            queue_state::ApparatusQueueAction::Resume,
+            &[to.to_string()],
+            actor.clone(),
+            QueueProgressInput {
+                qr_payload: result.transfer.progress_batch.qr_payload.clone(),
+                ..QueueProgressInput::default()
+            },
+        )
+        .await
+        .expect("resume on replacement apparatus");
+    assert_eq!(resumed.states.get(order_id), Some(&"in_progress".to_string()));
+    assert_eq!(
+        resumed.progress_batch.expect("resumed batch").status,
+        OrderProgressBatchStatus::Resumed
+    );
+
+    let replay = service
+        .transfer_apparatus_order(
+            ProductionMapApparatusTransferRequest {
+                order_id: order_id.to_string(),
+                from_apparatus: from.to_string(),
+                to_apparatus: to.to_string(),
+                reason: "different retry text".to_string(),
+                idempotency_key: "transfer-test-7-to-8".to_string(),
+            },
+            actor,
+        )
+        .await
+        .expect("idempotent replay");
+    assert_eq!(replay.transfer.transfer_id, result.transfer.transfer_id);
+    assert_eq!(replay.transfer.reason, "7 rangli aparat avariyasi");
+
+    let conflicting_replay = service
+        .transfer_apparatus_order(
+            ProductionMapApparatusTransferRequest {
+                order_id: order_id.to_string(),
+                from_apparatus: from.to_string(),
+                to_apparatus: "9 ta rangli pechat".to_string(),
+                reason: "wrong target reuse".to_string(),
+                idempotency_key: "transfer-test-7-to-8".to_string(),
+            },
+            QueueActionActor {
+                role: "admin".to_string(),
+                ref_: "retry".to_string(),
+                display_name: "Retry".to_string(),
+            },
+        )
+        .await;
+    assert_eq!(
+        conflicting_replay,
+        Err(ProductionMapError::ApparatusTransferIdempotencyConflict)
+    );
+}
+
+#[tokio::test]
+async fn normal_move_rejects_started_order_and_requires_pause_transfer() {
+    let service = ProductionMapService::new(std::sync::Arc::new(MemoryProductionMapStore::new()));
+    let actor = QueueActionActor {
+        role: "aparatchi".to_string(),
+        ref_: "worker-transfer-guard".to_string(),
+        display_name: "Transfer Guard".to_string(),
+    };
+    let order_id = "zakaz-transfer-guard";
+    let from = "7 ta rangli pechat";
+    service
+        .upsert_map(apparatus_stage_map(order_id, from))
+        .await
+        .expect("map");
+    service
+        .apply_apparatus_queue_action_with_progress(
+            from,
+            order_id,
+            queue_state::ApparatusQueueAction::Start,
+            &[from.to_string()],
+            actor,
+            QueueProgressInput::default(),
+        )
+        .await
+        .expect("start");
+
+    let result = service
+        .move_apparatus(ProductionMapMoveRequest {
+            map_id: order_id.to_string(),
+            from_apparatus: from.to_string(),
+            to_apparatus: "8 ta rangli pechat".to_string(),
+        })
+        .await;
+    assert_eq!(
+        result,
+        Err(ProductionMapError::StartedOrderMoveRequiresTransfer)
+    );
+}
+
+#[tokio::test]
 async fn free_pick_policy_allows_ready_order_outside_sequence_head() {
     let store = std::sync::Arc::new(MemoryProductionMapStore::new());
     let service = ProductionMapService::new(store);
