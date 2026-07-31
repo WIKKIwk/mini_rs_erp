@@ -87,7 +87,7 @@ impl ProductionMapService {
         let mut capability_level_insufficient = false;
         let mut best_slot = None;
         for (candidate_index, candidate) in candidates.iter().enumerate() {
-            if !candidate_allowed_for_order(&map, &candidate.apparatus) {
+            if !candidate_allowed_for_order(&map, &input.apparatus, &candidate.apparatus) {
                 continue;
             }
             route_candidate_count += 1;
@@ -378,16 +378,25 @@ struct ScheduledCandidate {
     ends_at_unix: i64,
 }
 
-fn candidate_allowed_for_order(map: &ProductionMapDefinition, candidate: &str) -> bool {
-    map.nodes
+fn candidate_allowed_for_order(
+    map: &ProductionMapDefinition,
+    source: &str,
+    candidate: &str,
+) -> bool {
+    let source = source.trim();
+    if source.is_empty() {
+        return false;
+    }
+    let source_is_in_route = map
+        .nodes
         .iter()
         .filter(|node| node.kind == ProductionMapNodeKind::Apparatus)
         .map(|node| node.title.trim())
         .filter(|title| !title.is_empty())
-        .any(|source| {
-            queue_state::apparatus_titles_match(source, candidate)
-                || move_allowed(map, source, candidate)
-        })
+        .any(|title| queue_state::apparatus_titles_match(title, source));
+    source_is_in_route
+        && (queue_state::apparatus_titles_match(source, candidate)
+            || move_allowed(map, source, candidate))
 }
 
 fn profile_for_apparatus(
