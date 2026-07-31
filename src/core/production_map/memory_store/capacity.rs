@@ -79,6 +79,7 @@ pub(super) async fn put_apparatus_schedule_reservation(
     store: &MemoryProductionMapStore,
     reservation: ApparatusScheduleReservation,
     capacity_slots: u16,
+    finite_capacity: bool,
 ) -> Result<ApparatusScheduleReservation, ProductionMapError> {
     let mut reservations = store.apparatus_schedule_reservations.write().await;
     if let Some(existing) = reservations
@@ -102,7 +103,7 @@ pub(super) async fn put_apparatus_schedule_reservation(
                 && reservation.starts_at_unix < item.ends_at_unix
         })
         .count();
-    if capacity_slots == 0 || conflicts >= usize::from(capacity_slots) {
+    if finite_capacity && (capacity_slots == 0 || conflicts >= usize::from(capacity_slots)) {
         return Err(ProductionMapError::CapacityConflict);
     }
     reservations.insert(reservation.reservation_id.clone(), reservation.clone());

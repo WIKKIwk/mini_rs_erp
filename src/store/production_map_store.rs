@@ -129,8 +129,15 @@ impl ProductionMapStorePort for ProductionMapStore {
         &self,
         reservation: ApparatusScheduleReservation,
         capacity_slots: u16,
+        finite_capacity: bool,
     ) -> Result<ApparatusScheduleReservation, ProductionMapError> {
-        capacity::put_apparatus_schedule_reservation(self, reservation, capacity_slots).await
+        capacity::put_apparatus_schedule_reservation(
+            self,
+            reservation,
+            capacity_slots,
+            finite_capacity,
+        )
+        .await
     }
 
     async fn cancel_apparatus_schedule_reservation(

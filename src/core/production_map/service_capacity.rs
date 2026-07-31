@@ -118,7 +118,11 @@ impl ProductionMapService {
         };
         let reservation = self
             .store
-            .put_apparatus_schedule_reservation(reservation, profile.capacity_slots)
+            .put_apparatus_schedule_reservation(
+                reservation,
+                profile.capacity_slots,
+                profile.finite_capacity,
+            )
             .await?;
         self.notify_live();
         Ok(ApparatusScheduleResult {

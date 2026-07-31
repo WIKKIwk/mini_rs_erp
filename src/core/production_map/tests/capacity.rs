@@ -96,6 +96,48 @@ async fn scheduler_respects_setup_cleanup_finite_capacity_and_idempotency() {
 }
 
 #[tokio::test]
+async fn scheduler_allows_parallel_reservations_when_capacity_is_unlimited() {
+    let store = Arc::new(MemoryProductionMapStore::new());
+    let service = ProductionMapService::new(store);
+    service
+        .upsert_map(apparatus_stage_map("capacity-order-unlimited-1", FLEXO_NAME))
+        .await
+        .expect("first map");
+    service
+        .upsert_map(apparatus_stage_map("capacity-order-unlimited-2", FLEXO_NAME))
+        .await
+        .expect("second map");
+    let mut unlimited = profile();
+    unlimited.finite_capacity = false;
+    service
+        .put_apparatus_capacity_profile(unlimited)
+        .await
+        .expect("unlimited profile");
+
+    let first = service
+        .schedule_apparatus_order(schedule(
+            "capacity-order-unlimited-1",
+            "capacity-key-unlimited-1",
+            20,
+        ))
+        .await
+        .expect("first reservation")
+        .reservation;
+    let second = service
+        .schedule_apparatus_order(schedule(
+            "capacity-order-unlimited-2",
+            "capacity-key-unlimited-2",
+            20,
+        ))
+        .await
+        .expect("parallel reservation")
+        .reservation;
+
+    assert_eq!(second.starts_at_unix, first.starts_at_unix);
+    assert_eq!(second.ends_at_unix, first.ends_at_unix);
+}
+
+#[tokio::test]
 async fn scheduler_skips_downtime_and_rejects_missing_capability() {
     let store = Arc::new(MemoryProductionMapStore::new());
     let service = ProductionMapService::new(store);

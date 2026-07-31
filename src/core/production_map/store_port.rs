@@ -137,6 +137,7 @@ pub trait ProductionMapStorePort: Send + Sync {
         &self,
         _reservation: ApparatusScheduleReservation,
         _capacity_slots: u16,
+        _finite_capacity: bool,
     ) -> StoreResult<ApparatusScheduleReservation> {
         Err(ProductionMapError::StoreFailed)
     }

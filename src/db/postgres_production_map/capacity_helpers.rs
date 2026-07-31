@@ -152,6 +152,7 @@ pub(super) async fn put_apparatus_schedule_reservation(
     pool: &PgPool,
     reservation: ApparatusScheduleReservation,
     capacity_slots: u16,
+    finite_capacity: bool,
 ) -> Result<ApparatusScheduleReservation, ProductionMapError> {
     let mut tx = pool
         .begin()
@@ -203,7 +204,7 @@ pub(super) async fn put_apparatus_schedule_reservation(
     .fetch_one(&mut *tx)
     .await
     .map_err(|_| ProductionMapError::StoreFailed)?;
-    if capacity_slots == 0 || conflicts >= i64::from(capacity_slots) {
+    if finite_capacity && (capacity_slots == 0 || conflicts >= i64::from(capacity_slots)) {
         return Err(ProductionMapError::CapacityConflict);
     }
     sqlx::query(

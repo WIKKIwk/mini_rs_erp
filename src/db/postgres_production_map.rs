@@ -194,8 +194,15 @@ impl ProductionMapStorePort for PostgresProductionMapStore {
         &self,
         reservation: ApparatusScheduleReservation,
         capacity_slots: u16,
+        finite_capacity: bool,
     ) -> Result<ApparatusScheduleReservation, ProductionMapError> {
-        put_apparatus_schedule_reservation(&self.pool, reservation, capacity_slots).await
+        put_apparatus_schedule_reservation(
+            &self.pool,
+            reservation,
+            capacity_slots,
+            finite_capacity,
+        )
+        .await
     }
 
     async fn cancel_apparatus_schedule_reservation(
