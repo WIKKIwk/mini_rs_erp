@@ -3,7 +3,7 @@ use std::collections::BTreeSet;
 use super::service::ProductionMapService;
 use super::service_capacity_scheduler::{
     ScheduledCandidate, candidate_allowed_for_order, effective_duration_minutes,
-    find_schedule_slot, profile_for_apparatus,
+    find_schedule_slot, profile_for_apparatus, reservations_with_active_sessions,
 };
 use super::types::*;
 use super::*;
@@ -74,7 +74,10 @@ impl ProductionMapService {
 
         let profiles = self.store.apparatus_capacity_profiles().await?;
         let downtimes = self.store.apparatus_downtimes().await?;
-        let reservations = self.store.apparatus_schedule_reservations().await?;
+        let reservations = reservations_with_active_sessions(
+            &self.store.apparatus_schedule_reservations().await?,
+            &self.store.order_run_sessions_for_audit().await?,
+        );
         let mut candidates = Vec::with_capacity(1 + input.candidate_apparatuses.len());
         candidates.push(ApparatusScheduleCandidate {
             apparatus_id: input.apparatus_id.clone(),
@@ -113,6 +116,7 @@ impl ProductionMapService {
                 &profile,
                 &input,
                 &candidate.apparatus_id,
+                &candidate.apparatus,
                 reserved_duration_minutes,
                 &downtimes,
                 &reservations,

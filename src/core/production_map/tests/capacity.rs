@@ -180,7 +180,7 @@ async fn queue_execution_keeps_schedule_reservation_in_sync_with_run_status() {
             order_id,
             queue_state::ApparatusQueueAction::Complete,
             &[FLEXO_NAME.to_string()],
-            actor,
+            actor.clone(),
             QueueProgressInput {
                 produced_qty: Some(1.0),
                 uom: "kg".to_string(),
@@ -195,6 +195,93 @@ async fn queue_execution_keeps_schedule_reservation_in_sync_with_run_status() {
         .expect("complete");
     let snapshot = service.apparatus_capacity_snapshot().await.expect("completed snapshot");
     assert_eq!(snapshot.reservations[0].status, ApparatusScheduleStatus::Completed);
+}
+
+#[tokio::test]
+async fn active_unscheduled_execution_blocks_capacity_until_pause() {
+    let store = Arc::new(MemoryProductionMapStore::new());
+    let service = ProductionMapService::new(store);
+    let first_order = "zakaz-capacity-active-1";
+    let second_order = "zakaz-capacity-active-2";
+    for order_id in [first_order, second_order] {
+        service
+            .upsert_map(apparatus_stage_map(order_id, FLEXO_NAME))
+            .await
+            .expect("map");
+    }
+    service
+        .put_apparatus_capacity_profile(profile())
+        .await
+        .expect("profile");
+    let actor = actor();
+    service
+        .apply_apparatus_queue_action(
+            FLEXO_NAME,
+            first_order,
+            queue_state::ApparatusQueueAction::Start,
+            &[FLEXO_NAME.to_string()],
+            actor.clone(),
+        )
+        .await
+        .expect("start unscheduled work");
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .expect("clock")
+        .as_secs() as i64;
+    let blocked = service
+        .schedule_apparatus_order(ApparatusScheduleRequest {
+            order_id: second_order.to_string(),
+            apparatus_id: FLEXO_ID.to_string(),
+            apparatus: FLEXO_NAME.to_string(),
+            earliest_start_unix: now.saturating_sub(60),
+            latest_end_unix: None,
+            duration_minutes: 20,
+            priority: 0,
+            source: "capacity-test".to_string(),
+            reason: String::new(),
+            idempotency_key: "capacity-key-active-blocked".to_string(),
+            capability_requirements: Vec::new(),
+            candidate_apparatuses: Vec::new(),
+            actor: actor.clone(),
+        })
+        .await;
+    assert_eq!(blocked, Err(ProductionMapError::CapacityNoWorkingWindow));
+
+    service
+        .apply_apparatus_queue_action_with_progress(
+            FLEXO_NAME,
+            first_order,
+            queue_state::ApparatusQueueAction::Pause,
+            &[FLEXO_NAME.to_string()],
+            actor.clone(),
+            QueueProgressInput {
+                produced_qty: Some(1.0),
+                uom: "kg".to_string(),
+                ..QueueProgressInput::default()
+            },
+        )
+        .await
+        .expect("pause unscheduled work");
+    let scheduled = service
+        .schedule_apparatus_order(ApparatusScheduleRequest {
+            order_id: second_order.to_string(),
+            apparatus_id: FLEXO_ID.to_string(),
+            apparatus: FLEXO_NAME.to_string(),
+            earliest_start_unix: now.saturating_sub(60),
+            latest_end_unix: None,
+            duration_minutes: 20,
+            priority: 0,
+            source: "capacity-test".to_string(),
+            reason: String::new(),
+            idempotency_key: "capacity-key-active-released".to_string(),
+            capability_requirements: Vec::new(),
+            candidate_apparatuses: Vec::new(),
+            actor: actor.clone(),
+        })
+        .await
+        .expect("schedule after pause")
+        .reservation;
+    assert_eq!(scheduled.status, ApparatusScheduleStatus::Planned);
 }
 
 #[tokio::test]

@@ -1,4 +1,4 @@
-use crate::core::apparatus_groups::apparatus_master_data_for_name;
+use crate::core::apparatus_groups::{apparatus_id_for_name, apparatus_master_data_for_name};
 
 use super::apparatus::move_allowed;
 use super::capacity::*;
@@ -76,10 +76,56 @@ pub(super) fn effective_duration_minutes(
     u32::try_from(total).map_err(|_| ProductionMapError::ScheduleInputInvalid)
 }
 
+pub(super) fn reservations_with_active_sessions(
+    reservations: &[ApparatusScheduleReservation],
+    sessions: &[OrderRunSession],
+) -> Vec<ApparatusScheduleReservation> {
+    let mut result = reservations.to_vec();
+    for session in sessions
+        .iter()
+        .filter(|session| session.status == OrderRunStatus::Active)
+    {
+        if result.iter().any(|reservation| {
+            reservation.status == ApparatusScheduleStatus::Active
+                && reservation.order_id.trim() == session.order_id.trim()
+                && queue_state::apparatus_titles_match(
+                    &reservation.apparatus,
+                    &session.apparatus,
+                )
+        }) {
+            continue;
+        }
+        result.push(ApparatusScheduleReservation {
+            reservation_id: format!("active-session:{}", session.session_id.trim()),
+            idempotency_key: format!("active-session:{}", session.session_id.trim()),
+            order_id: session.order_id.trim().to_string(),
+            apparatus_id: apparatus_id_for_name(&session.apparatus),
+            apparatus: session.apparatus.trim().to_string(),
+            starts_at_unix: session.started_at_unix.max(60),
+            ends_at_unix: i64::MAX,
+            requested_duration_minutes: 1,
+            reserved_duration_minutes: 1,
+            status: ApparatusScheduleStatus::Active,
+            priority: i32::MAX,
+            source: "active_run_session".to_string(),
+            reason: "active execution without a schedule reservation".to_string(),
+            capability_requirements: Vec::new(),
+            actor: QueueActionActor {
+                role: session.worker_role.clone(),
+                ref_: session.worker_ref.clone(),
+                display_name: session.worker_display_name.clone(),
+            },
+            created_at_unix: session.started_at_unix,
+        });
+    }
+    result
+}
+
 pub(super) fn find_schedule_slot(
     profile: &ApparatusCapacityProfile,
     input: &ApparatusScheduleRequest,
     apparatus_id: &str,
+    apparatus: &str,
     duration_minutes: u32,
     downtimes: &[ApparatusDowntime],
     reservations: &[ApparatusScheduleReservation],
@@ -110,7 +156,11 @@ pub(super) fn find_schedule_slot(
             .iter()
             .filter(|reservation| {
                 reservation.status.reserves_capacity()
-                    && reservation.apparatus_id.eq_ignore_ascii_case(apparatus_id)
+                    && (reservation.apparatus_id.eq_ignore_ascii_case(apparatus_id)
+                        || queue_state::apparatus_titles_match(
+                            &reservation.apparatus,
+                            apparatus,
+                        ))
                     && intervals_overlap(
                         cursor,
                         end,
