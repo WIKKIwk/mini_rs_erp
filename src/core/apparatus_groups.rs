@@ -75,6 +75,8 @@ pub struct ApparatusGroupUpsert {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ApparatusUpsert {
+    #[serde(default)]
+    pub id: Option<String>,
     #[serde(default, alias = "warehouse")]
     pub name: String,
     #[serde(flatten, default)]
@@ -128,6 +130,18 @@ pub trait ApparatusGroupStorePort: Send + Sync {
         _master: &ApparatusMasterData,
     ) -> Result<String, ApparatusGroupError> {
         self.put_apparatus(name).await
+    }
+    async fn put_apparatus_with_id(
+        &self,
+        requested_id: Option<&str>,
+        name: &str,
+        master: &ApparatusMasterData,
+    ) -> Result<String, ApparatusGroupError> {
+        self.put_apparatus_with_master_data(name, master).await?;
+        Ok(requested_id
+            .filter(|id| !id.trim().is_empty())
+            .map(str::to_string)
+            .unwrap_or_else(|| custom_apparatus_id(name)))
     }
 }
 
@@ -224,12 +238,14 @@ impl ApparatusGroupService {
         if is_invalid_legacy_apparatus_name(&name) {
             return Err(ApparatusGroupError::InvalidApparatus);
         }
+        let requested_id = normalize_requested_apparatus_id(input.id.as_deref())?;
         let master = normalize_apparatus_master_data(input.master, &name);
-        self.store
-            .put_apparatus_with_master_data(&name, &master)
+        let id = self
+            .store
+            .put_apparatus_with_id(requested_id.as_deref(), &name, &master)
             .await?;
         Ok(ApparatusCatalogEntry {
-            id: custom_apparatus_id(&name),
+            id,
             name,
             source: ApparatusSource::Custom,
             sort_order: 0,
@@ -464,6 +480,21 @@ pub fn custom_apparatus_id(name: &str) -> String {
     format!("apparatus:{}", name.trim().to_lowercase())
 }
 
+fn normalize_requested_apparatus_id(
+    requested_id: Option<&str>,
+) -> Result<Option<String>, ApparatusGroupError> {
+    let Some(id) = requested_id.map(str::trim).filter(|id| !id.is_empty()) else {
+        return Ok(None);
+    };
+    if !id.starts_with("apparatus:")
+        || id.starts_with("apparatus:default:")
+        || id.chars().any(char::is_control)
+    {
+        return Err(ApparatusGroupError::InvalidApparatus);
+    }
+    Ok(Some(id.to_string()))
+}
+
 fn is_invalid_legacy_apparatus_name(value: &str) -> bool {
     matches!(
         value.trim().to_lowercase().as_str(),
@@ -509,6 +540,7 @@ pub struct MemoryApparatusGroupStore {
     groups: RwLock<Vec<ApparatusGroup>>,
     apparatus: RwLock<Vec<String>>,
     apparatus_master_data: RwLock<BTreeMap<String, ApparatusMasterData>>,
+    apparatus_ids: RwLock<BTreeMap<String, String>>,
 }
 
 #[cfg(test)]
@@ -565,8 +597,9 @@ impl ApparatusGroupStorePort for MemoryApparatusGroupStore {
     }
 
     async fn put_apparatus(&self, name: &str) -> Result<String, ApparatusGroupError> {
-        self.put_apparatus_with_master_data(name, &apparatus_master_data_for_name(name))
+        self.put_apparatus_with_id(None, name, &apparatus_master_data_for_name(name))
             .await
+            .map(|_| name.trim().to_string())
     }
 
     async fn apparatus_catalog(
@@ -576,11 +609,15 @@ impl ApparatusGroupStorePort for MemoryApparatusGroupStore {
     ) -> Result<Vec<ApparatusCatalogEntry>, ApparatusGroupError> {
         let names = self.apparatus(query, limit).await?;
         let master_data = self.apparatus_master_data.read().await;
+        let apparatus_ids = self.apparatus_ids.read().await;
         Ok(names
             .into_iter()
             .enumerate()
             .map(|(sort_order, name)| ApparatusCatalogEntry {
-                id: custom_apparatus_id(&name),
+                id: apparatus_ids
+                    .get(&name.to_lowercase())
+                    .cloned()
+                    .unwrap_or_else(|| custom_apparatus_id(&name)),
                 master: master_data
                     .get(&name.to_lowercase())
                     .cloned()
@@ -597,24 +634,54 @@ impl ApparatusGroupStorePort for MemoryApparatusGroupStore {
         name: &str,
         master: &ApparatusMasterData,
     ) -> Result<String, ApparatusGroupError> {
+        self.put_apparatus_with_id(None, name, master)
+            .await
+            .map(|_| name.trim().to_string())
+    }
+
+    async fn put_apparatus_with_id(
+        &self,
+        requested_id: Option<&str>,
+        name: &str,
+        master: &ApparatusMasterData,
+    ) -> Result<String, ApparatusGroupError> {
         let name = name.trim().to_string();
         if name.is_empty() {
             return Err(ApparatusGroupError::MissingApparatus);
         }
+        let key = name.to_lowercase();
+        let requested_id = requested_id
+            .map(str::trim)
+            .filter(|id| !id.is_empty())
+            .map(str::to_string);
         let mut apparatus = self.apparatus.write().await;
+        let mut apparatus_ids = self.apparatus_ids.write().await;
+        let mut master_data = self.apparatus_master_data.write().await;
+        let previous_key = requested_id.as_deref().and_then(|id| {
+            apparatus_ids
+                .iter()
+                .find_map(|(key, value)| (value == id).then_some(key.clone()))
+        });
+        if let Some(previous_key) = previous_key.filter(|previous| previous != &key) {
+            apparatus.retain(|item| item.to_lowercase() != previous_key);
+            apparatus_ids.remove(&previous_key);
+            master_data.remove(&previous_key);
+        }
+        let stable_id = apparatus_ids
+            .get(&key)
+            .cloned()
+            .or(requested_id)
+            .unwrap_or_else(|| custom_apparatus_id(&name));
         if !apparatus
             .iter()
-            .any(|item| item.to_lowercase() == name.to_lowercase())
+            .any(|item| item.to_lowercase() == key)
         {
             apparatus.push(name.clone());
             apparatus.sort_by_key(|item| item.to_lowercase());
         }
-        drop(apparatus);
-        self.apparatus_master_data
-            .write()
-            .await
-            .insert(name.to_lowercase(), master.clone());
-        Ok(name)
+        apparatus_ids.insert(key.clone(), stable_id.clone());
+        master_data.insert(key, master.clone());
+        Ok(stable_id)
     }
 }
 
@@ -670,6 +737,7 @@ mod tests {
         assert_eq!(
             service
                 .upsert_apparatus(ApparatusUpsert {
+                    id: None,
                     name: "7 ta rangli pechat".to_string(),
                     master: ApparatusMasterData::default(),
                 })

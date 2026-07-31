@@ -126,7 +126,7 @@ impl ApparatusGroupStorePort for ApparatusGroupStore {
         let pattern = format!("%{needle}%");
         let mut stmt = conn
             .prepare(
-                "SELECT name, payload_json
+                "SELECT id, name, payload_json
                  FROM apparatus
                  WHERE (?1 = '' OR lower_name LIKE ?2)
                  ORDER BY lower_name ASC
@@ -135,12 +135,13 @@ impl ApparatusGroupStorePort for ApparatusGroupStore {
             .map_err(|_| ApparatusGroupError::StoreFailed)?;
         let rows = stmt
             .query_map(params![needle, pattern, limit.max(1) as i64], |row| {
-                let name: String = row.get(0)?;
-                let payload: String = row.get(1)?;
+                let id: String = row.get(0)?;
+                let name: String = row.get(1)?;
+                let payload: String = row.get(2)?;
                 let master = serde_json::from_str::<ApparatusMasterData>(&payload)
                     .unwrap_or_else(|_| apparatus_master_data_for_name(&name));
                 Ok(ApparatusCatalogEntry {
-                    id: custom_apparatus_id(&name),
+                    id,
                     name,
                     source: ApparatusSource::Custom,
                     sort_order: 0,
@@ -153,8 +154,9 @@ impl ApparatusGroupStorePort for ApparatusGroupStore {
     }
 
     async fn put_apparatus(&self, name: &str) -> Result<String, ApparatusGroupError> {
-        self.save_apparatus(name, &apparatus_master_data_for_name(name))
+        self.save_apparatus(None, name, &apparatus_master_data_for_name(name))
             .await
+            .map(|_| name.trim().to_string())
     }
 
     async fn put_apparatus_with_master_data(
@@ -162,13 +164,25 @@ impl ApparatusGroupStorePort for ApparatusGroupStore {
         name: &str,
         master: &ApparatusMasterData,
     ) -> Result<String, ApparatusGroupError> {
-        self.save_apparatus(name, master).await
+        self.save_apparatus(None, name, master)
+            .await
+            .map(|_| name.trim().to_string())
+    }
+
+    async fn put_apparatus_with_id(
+        &self,
+        requested_id: Option<&str>,
+        name: &str,
+        master: &ApparatusMasterData,
+    ) -> Result<String, ApparatusGroupError> {
+        self.save_apparatus(requested_id, name, master).await
     }
 }
 
 impl ApparatusGroupStore {
     async fn save_apparatus(
         &self,
+        requested_id: Option<&str>,
         name: &str,
         master: &ApparatusMasterData,
     ) -> Result<String, ApparatusGroupError> {
@@ -184,24 +198,44 @@ impl ApparatusGroupStore {
             .conn
             .lock()
             .map_err(|_| ApparatusGroupError::StoreFailed)?;
+        let existing_id = if let Some(requested_id) = requested_id {
+            conn.query_row(
+                "SELECT id FROM apparatus WHERE id = ?1",
+                params![requested_id],
+                |row| row.get::<_, String>(0),
+            )
+            .optional()
+        } else {
+            conn.query_row(
+                "SELECT id FROM apparatus WHERE lower_name = ?1",
+                params![lower_name],
+                |row| row.get::<_, String>(0),
+            )
+            .optional()
+        }
+        .map_err(|_| ApparatusGroupError::StoreFailed)?;
+        if let Some(existing_id) = existing_id {
+            conn.execute(
+                "UPDATE apparatus
+                 SET lower_name = ?1, name = ?2, payload_json = ?3,
+                     saved_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+                 WHERE id = ?4",
+                params![lower_name, name, payload.to_string(), existing_id],
+            )
+            .map_err(|_| ApparatusGroupError::StoreFailed)?;
+            return Ok(existing_id);
+        }
+        let id = requested_id
+            .filter(|id| !id.trim().is_empty())
+            .map(str::to_string)
+            .unwrap_or_else(|| custom_apparatus_id(name));
         conn.execute(
-            "INSERT INTO apparatus (lower_name, name, payload_json, saved_at)
-             VALUES (?1, ?2, ?3, strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
-             ON CONFLICT(lower_name) DO UPDATE SET
-               name = excluded.name,
-               payload_json = excluded.payload_json,
-               saved_at = excluded.saved_at",
-            params![lower_name, name, payload.to_string()],
+            "INSERT INTO apparatus (id, lower_name, name, payload_json, saved_at)
+             VALUES (?1, ?2, ?3, ?4, strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))",
+            params![id, lower_name, name, payload.to_string()],
         )
         .map_err(|_| ApparatusGroupError::StoreFailed)?;
-        conn.query_row(
-            "SELECT name FROM apparatus WHERE lower_name = ?1",
-            params![name.to_lowercase()],
-            |row| row.get(0),
-        )
-        .optional()
-        .map_err(|_| ApparatusGroupError::StoreFailed)?
-        .ok_or(ApparatusGroupError::StoreFailed)
+        Ok(id)
     }
 }
 
@@ -222,6 +256,7 @@ fn migrate(conn: &Connection) -> rusqlite::Result<()> {
         CREATE INDEX IF NOT EXISTS idx_apparatus_groups_name
             ON apparatus_groups(lower_name);
         CREATE TABLE IF NOT EXISTS apparatus (
+            id TEXT NOT NULL,
             lower_name TEXT PRIMARY KEY,
             name TEXT NOT NULL,
             payload_json TEXT NOT NULL DEFAULT '{}',
@@ -235,9 +270,20 @@ fn migrate(conn: &Connection) -> rusqlite::Result<()> {
             [],
         )?;
     }
+    if !table_has_column(conn, "id")? {
+        conn.execute("ALTER TABLE apparatus ADD COLUMN id TEXT", [])?;
+    }
+    conn.execute(
+        "UPDATE apparatus
+         SET id = 'apparatus:' || lower_name
+         WHERE id IS NULL OR trim(id) = ''",
+        [],
+    )?;
     conn.execute_batch(
         "CREATE INDEX IF NOT EXISTS idx_apparatus_name
-            ON apparatus(lower_name);",
+            ON apparatus(lower_name);
+         CREATE UNIQUE INDEX IF NOT EXISTS idx_apparatus_id
+            ON apparatus(id);",
     )
 }
 
@@ -256,7 +302,9 @@ fn table_has_column(conn: &Connection, column: &str) -> rusqlite::Result<bool> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::apparatus_groups::{ApparatusGroupService, ApparatusGroupUpsert};
+    use crate::core::apparatus_groups::{
+        ApparatusGroupService, ApparatusGroupUpsert, ApparatusMasterData,
+    };
 
     #[tokio::test]
     async fn apparatus_group_store_persists_groups_on_disk() {
@@ -302,12 +350,33 @@ mod tests {
             reloaded.apparatus("bob", 20).await.expect("list apparatus"),
             vec!["Bobst 1".to_string()]
         );
-        let catalog = ApparatusGroupService::new(Arc::new(reloaded))
+        let catalog = ApparatusGroupService::new(Arc::new(reloaded.clone()))
             .apparatus_catalog("bob", 20)
             .await
             .expect("load apparatus metadata");
         assert_eq!(catalog[0].master.family, "other");
         assert_eq!(catalog[0].master.kind, "other");
         assert_eq!(catalog[0].master.capabilities, vec!["apparatus"]);
+
+        let stable_id = reloaded
+            .put_apparatus_with_id(
+                Some("apparatus:bobst 1"),
+                "Bobst 2",
+                &ApparatusMasterData {
+                    family: "pechat".to_string(),
+                    kind: "flexo".to_string(),
+                    capabilities: vec!["print".to_string(), "flexo".to_string()],
+                    color_stations: None,
+                },
+            )
+            .await
+            .expect("rename apparatus with stable id");
+        assert_eq!(stable_id, "apparatus:bobst 1");
+        let renamed = ApparatusGroupService::new(Arc::new(reloaded))
+            .apparatus_catalog("bobst 2", 20)
+            .await
+            .expect("load renamed apparatus");
+        assert_eq!(renamed[0].id, "apparatus:bobst 1");
+        assert_eq!(renamed[0].master.kind, "flexo");
     }
 }

@@ -337,6 +337,43 @@ async fn admin_can_create_and_list_typed_apparatus_without_breaking_legacy_clien
         serde_json::json!(["apparatus"])
     );
 
+    let renamed = build_router(state.clone())
+        .oneshot(request_with_body(
+            "POST",
+            "/v1/mobile/admin/apparatus",
+            &token,
+            r#"{"id":"apparatus:bobst 1","name":"Bobst 2","family":"pechat","kind":"flexo","capabilities":["print","pechat","flexo"]}"#,
+        ))
+        .await
+        .expect("rename semantic apparatus");
+    assert_eq!(renamed.status(), StatusCode::OK);
+    let renamed_body = json_body(renamed).await;
+    assert_eq!(renamed_body["id"], "apparatus:bobst 1");
+    assert_eq!(renamed_body["name"], "Bobst 2");
+
+    let renamed_list = build_router(state.clone())
+        .oneshot(request(
+            "GET",
+            "/v1/mobile/admin/apparatus?q=Bobst%202&limit=50",
+            &token,
+        ))
+        .await
+        .expect("list renamed apparatus");
+    let renamed_list_body = json_body(renamed_list).await;
+    assert_eq!(renamed_list_body[0]["id"], "apparatus:bobst 1");
+    assert_eq!(renamed_list_body[0]["name"], "Bobst 2");
+
+    let default_update = build_router(state.clone())
+        .oneshot(request_with_body(
+            "POST",
+            "/v1/mobile/admin/apparatus",
+            &token,
+            r#"{"id":"apparatus:default:flexo_pechat","name":"Flexo pechat"}"#,
+        ))
+        .await
+        .expect("reject default apparatus update");
+    assert_eq!(default_update.status(), StatusCode::BAD_REQUEST);
+
     let semantic_created = build_router(state.clone())
         .oneshot(request_with_body(
             "POST",
@@ -392,7 +429,7 @@ async fn admin_can_create_and_list_typed_apparatus_without_breaking_legacy_clien
     assert_eq!(listed.status(), StatusCode::OK);
     let listed_body = json_body(listed).await;
     assert!(listed_body.as_array().expect("array").iter().any(|item| {
-        item["warehouse"] == "Bobst 1" && item["parent_warehouse"] == "aparat - A"
+        item["warehouse"] == "Bobst 2" && item["parent_warehouse"] == "aparat - A"
     }));
 }
 

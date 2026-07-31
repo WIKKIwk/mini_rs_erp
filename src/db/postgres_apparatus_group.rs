@@ -121,8 +121,9 @@ impl ApparatusGroupStorePort for PostgresApparatusGroupStore {
     }
 
     async fn put_apparatus(&self, name: &str) -> Result<String, ApparatusGroupError> {
-        self.save_apparatus(name, &apparatus_master_data_for_name(name))
+        self.save_apparatus(None, name, &apparatus_master_data_for_name(name))
             .await
+            .map(|_| name.trim().to_string())
     }
 
     async fn put_apparatus_with_master_data(
@@ -130,13 +131,25 @@ impl ApparatusGroupStorePort for PostgresApparatusGroupStore {
         name: &str,
         master: &ApparatusMasterData,
     ) -> Result<String, ApparatusGroupError> {
-        self.save_apparatus(name, master).await
+        self.save_apparatus(None, name, master)
+            .await
+            .map(|_| name.trim().to_string())
+    }
+
+    async fn put_apparatus_with_id(
+        &self,
+        requested_id: Option<&str>,
+        name: &str,
+        master: &ApparatusMasterData,
+    ) -> Result<String, ApparatusGroupError> {
+        self.save_apparatus(requested_id, name, master).await
     }
 }
 
 impl PostgresApparatusGroupStore {
     async fn save_apparatus(
         &self,
+        requested_id: Option<&str>,
         name: &str,
         master: &ApparatusMasterData,
     ) -> Result<String, ApparatusGroupError> {
@@ -147,15 +160,27 @@ impl PostgresApparatusGroupStore {
         let mut payload =
             serde_json::to_value(master).map_err(|_| ApparatusGroupError::StoreFailed)?;
         payload["warehouse"] = serde_json::Value::String(name.to_string());
-        let existing_id = sqlx::query_scalar::<_, String>(
-            "SELECT id
-             FROM mini_apparatus
-             WHERE lower(name) = lower($1)
-             LIMIT 1",
-        )
-        .bind(name)
-        .fetch_optional(&self.pool)
-        .await
+        let existing_id = if let Some(requested_id) = requested_id {
+            sqlx::query_scalar::<_, String>(
+                "SELECT id
+                 FROM mini_apparatus
+                 WHERE id = $1
+                 LIMIT 1",
+            )
+            .bind(requested_id)
+            .fetch_optional(&self.pool)
+            .await
+        } else {
+            sqlx::query_scalar::<_, String>(
+                "SELECT id
+                 FROM mini_apparatus
+                 WHERE lower(name) = lower($1)
+                 LIMIT 1",
+            )
+            .bind(name)
+            .fetch_optional(&self.pool)
+            .await
+        }
         .map_err(|_| ApparatusGroupError::StoreFailed)?;
 
         if let Some(id) = existing_id {
@@ -173,12 +198,16 @@ impl PostgresApparatusGroupStore {
             .map_err(|_| ApparatusGroupError::StoreFailed);
         }
 
+        let id = requested_id
+            .filter(|id| !id.trim().is_empty())
+            .map(str::to_string)
+            .unwrap_or_else(|| apparatus_id(name));
         sqlx::query_scalar::<_, String>(
             "INSERT INTO mini_apparatus (id, name, base_name, kind, payload_json)
              VALUES ($1, $2, $2, 'custom', $3)
              RETURNING name",
         )
-        .bind(apparatus_id(name))
+        .bind(id)
         .bind(name)
         .bind(payload)
         .fetch_one(&self.pool)
