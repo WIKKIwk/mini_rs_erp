@@ -1,5 +1,7 @@
 use std::sync::Arc;
 
+use std::collections::BTreeMap;
+
 use crate::core::production_map::*;
 
 use super::fixtures::apparatus_stage_map;
@@ -47,6 +49,44 @@ async fn production_workflow_audit_reports_duplicate_qr_and_unknown_order_batch(
                 && violation.order_id == "missing-order"
                 && violation.subject == "batch-3")
     );
+}
+
+#[tokio::test]
+async fn production_workflow_audit_reports_queue_and_lineage_invariants() {
+    let store = Arc::new(MemoryProductionMapStore::new());
+    let service = ProductionMapService::new(store.clone());
+    let order_id = "zakaz-audit-invariants";
+    let apparatus = "7 ta rangli pechat";
+    store
+        .put_map(apparatus_stage_map(order_id, apparatus))
+        .await
+        .expect("map");
+    store
+        .put_apparatus_queue_states(
+            apparatus,
+            BTreeMap::from([(order_id.to_string(), "corrupt_state".to_string())]),
+        )
+        .await
+        .expect("queue states");
+    store
+        .put_apparatus_sequence(
+            apparatus,
+            vec![order_id.to_string(), order_id.to_string(), "missing-order".to_string()],
+        )
+        .await
+        .expect("sequence");
+
+    let report = service.audit_production_workflow().await.expect("audit");
+    assert!(!report.ok);
+    assert!(report.violations.iter().any(|violation| {
+        violation.code == "invalid_queue_state" && violation.order_id == order_id
+    }));
+    assert!(report.violations.iter().any(|violation| {
+        violation.code == "duplicate_queue_sequence_order" && violation.order_id == order_id
+    }));
+    assert!(report.violations.iter().any(|violation| {
+        violation.code == "unknown_order_queue_sequence" && violation.order_id == "missing-order"
+    }));
 }
 
 fn audit_test_batch(batch_id: &str, order_id: &str, qr_payload: &str) -> OrderProgressBatch {

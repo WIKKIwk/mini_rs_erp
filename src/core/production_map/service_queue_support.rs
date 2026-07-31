@@ -90,6 +90,22 @@ pub(super) fn parsed_queue_states(
         .collect()
 }
 
+/// A malformed persisted state must never be treated as an absent state.
+/// Treating it as `pending` would allow an operator to start an order while
+/// the durable queue record is already corrupt. The audit endpoint reports
+/// malformed states, while this guard keeps the live execution path safe.
+pub(super) fn validate_requested_queue_state(
+    states: &BTreeMap<String, String>,
+    order_id: &str,
+) -> Result<(), ProductionMapError> {
+    let Some(raw_state) = states.get(order_id.trim()) else {
+        return Ok(());
+    };
+    queue_state::ApparatusQueueOrderState::parse(raw_state)
+        .map(|_| ())
+        .ok_or(ProductionMapError::QueueActionNotAllowed)
+}
+
 pub(super) fn apply_queue_policy(
     policy: ApparatusQueuePolicy,
     previous_progress_ready: bool,

@@ -62,6 +62,27 @@ pub(super) fn move_allowed(map: &ProductionMapDefinition, from: &str, to: &str) 
             && to_is_laminatsiya
             && alternative_assigned_group_contains_target(map, from, to);
     }
+
+    // A queue move is a change of the work-center assignment, not a way to
+    // turn one operation into another. Keep known apparatus families
+    // compatible before applying the more specific pechat rules below. This
+    // also prevents a printing order from being silently moved to rezka or a
+    // packaging station merely because its title has no colour count.
+    if let (Some(from_family), Some(to_family)) =
+        (known_apparatus_family(from), known_apparatus_family(to))
+        && from_family != to_family
+    {
+        return false;
+    }
+
+    let from_is_flexo = pechat::is_flexo_apparatus(from);
+    let to_is_flexo = pechat::is_flexo_apparatus(to);
+    if from_is_flexo != to_is_flexo {
+        return false;
+    }
+    if (from_is_flexo || to_is_flexo) && !is_flexo_order(map) {
+        return false;
+    }
     let Some(target_color) = pechat::pechat_color_count(to) else {
         return true;
     };
@@ -87,6 +108,9 @@ fn is_flexo_order(map: &ProductionMapDefinition) -> bool {
     let mut haystack = format!("{} {} {}", map.title, map.product_code, map.code).to_lowercase();
     for node in &map.nodes {
         if node.kind == ProductionMapNodeKind::Apparatus {
+            if pechat::is_flexo_apparatus(&node.title) {
+                return true;
+            }
             continue;
         }
         haystack.push(' ');
@@ -97,6 +121,26 @@ fn is_flexo_order(map: &ProductionMapDefinition) -> bool {
     ["fleksa", "fleska", "flex", "flexe", "flexo"]
         .iter()
         .any(|keyword| haystack.contains(keyword))
+}
+
+fn known_apparatus_family(title: &str) -> Option<&'static str> {
+    let normalized = title.trim().to_ascii_lowercase();
+    if pechat::is_pechat_apparatus(&normalized) {
+        return Some("pechat");
+    }
+    if normalized.contains("laminatsiya") {
+        return Some("laminatsiya");
+    }
+    if normalized.contains("rezka") {
+        return Some("rezka");
+    }
+    if normalized.contains("paket") {
+        return Some("paket");
+    }
+    if normalized.contains("kley") {
+        return Some("kley");
+    }
+    None
 }
 
 pub(super) fn is_laminatsiya_title(title: &str) -> bool {

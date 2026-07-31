@@ -146,6 +146,100 @@ async fn paused_order_can_transfer_between_compatible_pechat_apparatuses_atomica
 }
 
 #[tokio::test]
+async fn apparatus_transfer_updates_parent_wip_next_apparatus_lineage() {
+    let store = std::sync::Arc::new(MemoryProductionMapStore::new());
+    let service = ProductionMapService::new(store.clone());
+    let actor = QueueActionActor {
+        role: "aparatchi".to_string(),
+        ref_: "worker-transfer-lineage".to_string(),
+        display_name: "Transfer Lineage Worker".to_string(),
+    };
+    let order_id = "zakaz-transfer-lineage";
+    let from = "7 ta rangli pechat";
+    let to = "8 ta rangli pechat";
+    service
+        .upsert_map(apparatus_stage_map(order_id, from))
+        .await
+        .expect("map");
+    let child = pause_first_stage_batch(&service, order_id, from, &actor, 12.0)
+        .await
+        .expect("pause");
+
+    let mut parent = child.clone();
+    parent.batch_id = "parent-lineage-batch".to_string();
+    parent.action = queue_state::ApparatusQueueAction::Complete;
+    parent.status = OrderProgressBatchStatus::Completed;
+    parent.parent_batch_id.clear();
+    parent.next_apparatus = from.to_string();
+    parent.qr_payload = "parent-lineage-qr".to_string();
+    store
+        .put_order_progress_batch(parent)
+        .await
+        .expect("parent batch");
+    let mut child_with_parent = child.clone();
+    child_with_parent.parent_batch_id = "parent-lineage-batch".to_string();
+    store
+        .put_order_progress_batch(child_with_parent)
+        .await
+        .expect("child lineage");
+
+    let result = service
+        .transfer_apparatus_order(
+            ProductionMapApparatusTransferRequest {
+                order_id: order_id.to_string(),
+                from_apparatus: from.to_string(),
+                to_apparatus: to.to_string(),
+                reason: "7 rangli aparat avariyasi".to_string(),
+                idempotency_key: "transfer-lineage-test".to_string(),
+            },
+            actor,
+        )
+        .await
+        .expect("transfer");
+    assert_eq!(result.transfer.progress_batch_updates.len(), 1);
+    let updated_parent = store
+        .progress_batch("parent-lineage-batch")
+        .await
+        .expect("parent lookup")
+        .expect("parent");
+    assert_eq!(updated_parent.next_apparatus, to);
+}
+
+#[tokio::test]
+async fn flexo_transfer_does_not_cross_into_colour_pechat() {
+    let store = std::sync::Arc::new(MemoryProductionMapStore::new());
+    let service = ProductionMapService::new(store.clone());
+    let actor = QueueActionActor {
+        role: "aparatchi".to_string(),
+        ref_: "worker-flexo-transfer".to_string(),
+        display_name: "Flexo Worker".to_string(),
+    };
+    let order_id = "zakaz-flexo-transfer";
+    let from = "Flexo pechat";
+    service
+        .upsert_map(apparatus_stage_map(order_id, from))
+        .await
+        .expect("map");
+    pause_first_stage_batch(&service, order_id, from, &actor, 8.0)
+        .await
+        .expect("pause");
+
+    let result = service
+        .transfer_apparatus_order(
+            ProductionMapApparatusTransferRequest {
+                order_id: order_id.to_string(),
+                from_apparatus: from.to_string(),
+                to_apparatus: "8 ta rangli pechat".to_string(),
+                reason: "flexo apparat avariyasi".to_string(),
+                idempotency_key: "transfer-flexo-cross-family".to_string(),
+            },
+            actor,
+        )
+        .await;
+    assert_eq!(result, Err(ProductionMapError::MoveNotAllowed));
+}
+
+#[tokio::test]
 async fn normal_move_rejects_started_order_and_requires_pause_transfer() {
     let service = ProductionMapService::new(std::sync::Arc::new(MemoryProductionMapStore::new()));
     let actor = QueueActionActor {

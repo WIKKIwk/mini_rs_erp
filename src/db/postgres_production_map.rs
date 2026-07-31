@@ -76,6 +76,7 @@ use self::raw_material_stock_helpers::apply_raw_material_stock_transitions_tx;
 use self::transfer_helpers::{
     commit_apparatus_transfer as commit_apparatus_transfer_record,
     load_apparatus_transfer_by_idempotency_key,
+    load_apparatus_transfers_for_audit,
 };
 use self::wip_query_helpers::load_wip_progress_batches;
 
@@ -425,6 +426,12 @@ impl ProductionMapStorePort for PostgresProductionMapStore {
         &self,
     ) -> Result<Vec<OrderProgressBatch>, ProductionMapError> {
         load_progress_batches_for_audit(&self.pool).await
+    }
+
+    async fn apparatus_transfers_for_audit(
+        &self,
+    ) -> Result<Vec<ProductionMapApparatusTransferRecord>, ProductionMapError> {
+        load_apparatus_transfers_for_audit(&self.pool).await
     }
 
     async fn wip_progress_batches(

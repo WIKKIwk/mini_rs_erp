@@ -175,6 +175,16 @@ fn normalize_capacity_profile(
         .map(|value| value.trim().to_ascii_lowercase())
         .filter(|value| !value.is_empty() && capabilities.insert(value.clone()))
         .collect();
+    // A capacity record is allowed to override levels and calendars, but an
+    // empty capability list must not erase the apparatus master-data family.
+    // This is especially important for Flexo: it is a printing work centre
+    // even though it has no 7/8/9 colour-count suffix in its name.
+    let inferred = apparatus_master_data_for_name(&profile.apparatus);
+    for capability in inferred.capabilities {
+        if capabilities.insert(capability.clone()) {
+            profile.capabilities.push(capability);
+        }
+    }
     let mut levels = profile
         .capability_levels
         .into_iter()
@@ -183,6 +193,13 @@ fn normalize_capacity_profile(
         .collect::<std::collections::BTreeMap<_, _>>();
     for code in &profile.capabilities {
         levels.entry(code.clone()).or_insert(1);
+    }
+    for capability in inferred.capability_profiles {
+        if capability.is_valid_at(unix_seconds()) {
+            levels
+                .entry(capability.code.trim().to_ascii_lowercase())
+                .or_insert(capability.level.max(1));
+        }
     }
     profile.capability_levels = levels;
     profile.updated_at_unix = unix_seconds();

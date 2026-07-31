@@ -314,6 +314,18 @@ impl ProductionMapStorePort for MemoryProductionMapStore {
             .collect())
     }
 
+    async fn apparatus_transfers_for_audit(
+        &self,
+    ) -> Result<Vec<ProductionMapApparatusTransferRecord>, ProductionMapError> {
+        Ok(self
+            .apparatus_transfers
+            .read()
+            .await
+            .values()
+            .cloned()
+            .collect())
+    }
+
     async fn wip_progress_batches(
         &self,
         query: WipProgressBatchQuery,

@@ -82,6 +82,7 @@ pub struct ProductionMapApparatusTransferWrite {
     pub to_states: QueueStateMap,
     pub session: OrderRunSession,
     pub progress_batch: OrderProgressBatch,
+    pub progress_batch_updates: Vec<OrderProgressBatch>,
     pub raw_material_assignments: Vec<RawMaterialAssignment>,
 }
 
@@ -288,6 +289,11 @@ pub trait ProductionMapStorePort: Send + Sync {
             "", "", "", None, true, "", 10_000,
         ))
         .await
+    }
+    async fn apparatus_transfers_for_audit(
+        &self,
+    ) -> StoreResult<Vec<ProductionMapApparatusTransferRecord>> {
+        Ok(Vec::new())
     }
     async fn wip_progress_batches(
         &self,

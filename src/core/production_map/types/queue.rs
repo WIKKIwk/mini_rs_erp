@@ -81,6 +81,11 @@ pub struct ProductionMapApparatusTransferRecord {
     pub map: ProductionMapDefinition,
     pub session: OrderRunSession,
     pub progress_batch: OrderProgressBatch,
+    /// Parent WIP records whose next-apparatus pointer changed with the
+    /// transfer. Keeping these in the receipt makes replay/audit able to
+    /// reconstruct the complete lineage change, not only the paused batch.
+    #[serde(default)]
+    pub progress_batch_updates: Vec<OrderProgressBatch>,
     pub created_at_unix: i64,
 }
 

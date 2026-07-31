@@ -42,6 +42,8 @@ impl ProductionMapService {
         if !sequence.iter().any(|id| id.trim() == order_id) {
             return Err(ProductionMapError::QueueActionNotAllowed);
         }
+        let stored_states = all_states.get(&storage_key).cloned().unwrap_or_default();
+        validate_requested_queue_state(&stored_states, order_id)?;
         let order_map = all_maps
             .iter()
             .find(|map| map.id.trim() == order_id)
@@ -63,8 +65,7 @@ impl ProductionMapService {
         let previous_progress_ready = self
             .previous_progress_ready_for_action(action, order_id, order_map, apparatus, &progress)
             .await?;
-        let states = all_states.get(&storage_key).cloned().unwrap_or_default();
-        let mut parsed = parsed_queue_states(states);
+        let mut parsed = parsed_queue_states(stored_states);
         let from_state = parsed
             .get(order_id)
             .copied()

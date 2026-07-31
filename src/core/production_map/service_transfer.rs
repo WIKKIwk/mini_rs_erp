@@ -1,9 +1,12 @@
 use std::collections::BTreeSet;
 
+use crate::core::apparatus_groups::{apparatus_id_for_name, apparatus_master_data_for_name};
+
 use super::apparatus::{
     move_allowed, reassign_alternative_apparatus_assignment, reassign_apparatus_nodes,
 };
 use super::compiler::compile_map;
+use super::pechat;
 use super::queue_state;
 use super::service::ProductionMapService;
 use super::store_port::ProductionMapApparatusTransferWrite;
@@ -54,6 +57,7 @@ impl ProductionMapService {
         if !move_allowed(&map, from, to) {
             return Err(ProductionMapError::MoveNotAllowed);
         }
+        self.ensure_transfer_target_capabilities(to).await?;
 
         let sequences = self.store.apparatus_sequences().await?;
         let all_states = self.store.apparatus_queue_states().await?;
@@ -96,7 +100,7 @@ impl ProductionMapService {
 
         let progress_batches = self.store.progress_batches_for_order(&order_id).await?;
         let paused_batches = progress_batches
-            .into_iter()
+            .iter()
             .filter(|batch| {
                 batch.session_id.trim() == source_session.session_id.trim()
                     && batch.action == queue_state::ApparatusQueueAction::Pause
@@ -110,6 +114,7 @@ impl ProductionMapService {
         let mut progress_batch = paused_batches
             .into_iter()
             .next()
+            .cloned()
             .ok_or(ProductionMapError::ApparatusTransferProgressNotFound)?;
 
         let transfer_id = format!("apparatus-transfer:{idempotency_key}");
@@ -154,6 +159,32 @@ impl ProductionMapService {
         progress_batch.refresh_status_detail();
         progress_batch.payload_json["status_detail"] =
             serde_json::json!(progress_batch.status_detail);
+
+        let mut progress_batch_updates = Vec::new();
+        if !progress_batch.parent_batch_id.trim().is_empty() {
+            let Some(mut parent_batch) = progress_batches
+                .iter()
+                .find(|candidate| {
+                    candidate.batch_id.trim() == progress_batch.parent_batch_id.trim()
+                })
+                .cloned()
+            else {
+                return Err(ProductionMapError::ApparatusTransferProgressMismatch);
+            };
+            if parent_batch.order_id.trim() != order_id {
+                return Err(ProductionMapError::ApparatusTransferProgressMismatch);
+            }
+            parent_batch.next_apparatus = to_key.clone();
+            if !parent_batch.payload_json.is_object() {
+                parent_batch.payload_json = serde_json::json!({});
+            }
+            parent_batch.payload_json["next_apparatus"] =
+                serde_json::json!(parent_batch.next_apparatus);
+            parent_batch.refresh_status_detail();
+            parent_batch.payload_json["status_detail"] =
+                serde_json::json!(parent_batch.status_detail);
+            progress_batch_updates.push(parent_batch);
+        }
 
         let mut updated_map = map;
         if !reassign_alternative_apparatus_assignment(&mut updated_map, from, to)
@@ -208,6 +239,7 @@ impl ProductionMapService {
             map: updated_map.clone(),
             session: session.clone(),
             progress_batch: progress_batch.clone(),
+            progress_batch_updates: progress_batch_updates.clone(),
             created_at_unix: now,
         };
         let record = self
@@ -221,11 +253,60 @@ impl ProductionMapService {
                 to_states,
                 session,
                 progress_batch,
+                progress_batch_updates,
                 raw_material_assignments,
             })
             .await?;
         self.notify_live();
         self.transfer_result(record).await
+    }
+
+    async fn ensure_transfer_target_capabilities(
+        &self,
+        target_apparatus: &str,
+    ) -> Result<(), ProductionMapError> {
+        let requirements = if pechat::is_flexo_apparatus(target_apparatus) {
+            ["print", "pechat", "flexo"].as_slice()
+        } else if pechat::is_pechat_apparatus(target_apparatus) {
+            ["print", "pechat"].as_slice()
+        } else {
+            return Ok(());
+        };
+        let target_id = apparatus_id_for_name(target_apparatus);
+        let profiles = self.store.apparatus_capacity_profiles().await?;
+        let levels = profiles
+            .iter()
+            .find(|profile| {
+                profile.apparatus_id.eq_ignore_ascii_case(&target_id)
+                    || profile.apparatus.eq_ignore_ascii_case(target_apparatus)
+            })
+            .map(|profile| {
+                requirements
+                    .iter()
+                    .map(|code| profile.capability_level(code))
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_else(|| {
+                let master = apparatus_master_data_for_name(target_apparatus);
+                requirements
+                    .iter()
+                    .map(|code| {
+                        master
+                            .capability_profiles
+                            .iter()
+                            .find(|profile| {
+                                profile.code.eq_ignore_ascii_case(code)
+                                    && profile.is_valid_at(unix_seconds())
+                            })
+                            .map(|profile| profile.level)
+                            .unwrap_or_default()
+                    })
+                    .collect::<Vec<_>>()
+            });
+        if levels.iter().any(|level| *level == 0) {
+            return Err(ProductionMapError::CapabilityNotSupported);
+        }
+        Ok(())
     }
 
     async fn transfer_result(

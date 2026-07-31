@@ -29,6 +29,23 @@ pub(super) async fn load_apparatus_transfer_by_idempotency_key(
         .transpose()
 }
 
+pub(super) async fn load_apparatus_transfers_for_audit(
+    pool: &PgPool,
+) -> Result<Vec<ProductionMapApparatusTransferRecord>, ProductionMapError> {
+    let payloads = sqlx::query_scalar::<_, serde_json::Value>(
+        "SELECT payload_json
+         FROM mini_apparatus_order_transfers
+         ORDER BY created_at ASC, id ASC",
+    )
+    .fetch_all(pool)
+    .await
+    .map_err(|_| ProductionMapError::StoreFailed)?;
+    payloads
+        .into_iter()
+        .map(|payload| serde_json::from_value(payload).map_err(|_| ProductionMapError::StoreFailed))
+        .collect()
+}
+
 pub(super) async fn commit_apparatus_transfer(
     pool: &PgPool,
     write: ProductionMapApparatusTransferWrite,
@@ -92,6 +109,9 @@ pub(super) async fn commit_apparatus_transfer(
     transfer_raw_material_assignments_tx(&mut tx, &write.raw_material_assignments).await?;
     put_order_run_session_tx(&mut tx, &write.session).await?;
     put_order_progress_batch_tx(&mut tx, &write.progress_batch).await?;
+    for batch in &write.progress_batch_updates {
+        put_order_progress_batch_tx(&mut tx, batch).await?;
+    }
 
     tx.commit()
         .await
@@ -237,6 +257,22 @@ async fn verify_transfer_preconditions(
         || batch.4 != "paused"
     {
         return Err(ProductionMapError::ApparatusTransferProgressMismatch);
+    }
+    for update in &write.progress_batch_updates {
+        let update_order_id = sqlx::query_scalar::<_, String>(
+            "SELECT order_id
+             FROM mini_progress_batches
+             WHERE batch_id = $1
+             FOR UPDATE",
+        )
+        .bind(update.batch_id.trim())
+        .fetch_optional(&mut **tx)
+        .await
+        .map_err(|_| ProductionMapError::StoreFailed)?
+        .ok_or(ProductionMapError::ApparatusTransferProgressMismatch)?;
+        if update_order_id.trim() != write.record.order_id.trim() {
+            return Err(ProductionMapError::ApparatusTransferProgressMismatch);
+        }
     }
     Ok(())
 }

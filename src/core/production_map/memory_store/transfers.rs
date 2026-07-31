@@ -81,6 +81,18 @@ pub(super) async fn commit_apparatus_transfer(
     {
         return Err(ProductionMapError::ApparatusTransferProgressMismatch);
     }
+    for update in &write.progress_batch_updates {
+        let current = store
+            .order_progress_batches
+            .read()
+            .await
+            .get(update.batch_id.trim())
+            .cloned()
+            .ok_or(ProductionMapError::ApparatusTransferProgressMismatch)?;
+        if current.order_id.trim() != order_id {
+            return Err(ProductionMapError::ApparatusTransferProgressMismatch);
+        }
+    }
 
     let qolip_codes = session_qolip_codes(&write.session);
     if !qolip_codes.is_empty() {
@@ -137,6 +149,12 @@ pub(super) async fn commit_apparatus_transfer(
         write.progress_batch.batch_id.trim().to_string(),
         write.progress_batch.clone(),
     );
+    for update in &write.progress_batch_updates {
+        store.order_progress_batches.write().await.insert(
+            update.batch_id.trim().to_string(),
+            update.clone(),
+        );
+    }
     if !write.raw_material_assignments.is_empty() {
         let mut assignments = store.material_assignments.write().await;
         for assignment in &write.raw_material_assignments {
