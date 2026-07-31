@@ -146,7 +146,8 @@ pub(super) fn find_schedule_slot(
         }
         if downtimes.iter().any(|downtime| {
             downtime.active
-                && downtime.apparatus_id.eq_ignore_ascii_case(apparatus_id)
+                && (downtime.apparatus_id.eq_ignore_ascii_case(apparatus_id)
+                    || queue_state::apparatus_titles_match(&downtime.apparatus, apparatus))
                 && intervals_overlap(cursor, end, downtime.starts_at_unix, downtime.ends_at_unix)
         }) {
             cursor += 60;
@@ -178,7 +179,11 @@ pub(super) fn find_schedule_slot(
     Err(ProductionMapError::CapacityNoWorkingWindow)
 }
 
-fn fits_working_window(profile: &ApparatusCapacityProfile, start: i64, end: i64) -> bool {
+pub(super) fn fits_working_window(
+    profile: &ApparatusCapacityProfile,
+    start: i64,
+    end: i64,
+) -> bool {
     if profile.working_windows.is_empty() {
         return true;
     }

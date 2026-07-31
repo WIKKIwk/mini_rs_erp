@@ -93,6 +93,14 @@ impl ProductionMapService {
             action,
         )?;
         parsed.extend(frozen_queue_states);
+        if matches!(
+            action,
+            queue_state::ApparatusQueueAction::Start
+                | queue_state::ApparatusQueueAction::Resume
+        ) {
+            self.ensure_apparatus_execution_capacity(&storage_key, order_id, &all_states)
+                .await?;
+        }
         let to_state = parsed
             .get(order_id)
             .copied()

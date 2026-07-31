@@ -285,6 +285,48 @@ async fn active_unscheduled_execution_blocks_capacity_until_pause() {
 }
 
 #[tokio::test]
+async fn queue_start_rejects_an_apparatus_during_active_downtime() {
+    let service = ProductionMapService::new(Arc::new(MemoryProductionMapStore::new()));
+    let order_id = "zakaz-capacity-downtime";
+    service
+        .upsert_map(apparatus_stage_map(order_id, FLEXO_NAME))
+        .await
+        .expect("map");
+    service
+        .put_apparatus_capacity_profile(profile())
+        .await
+        .expect("profile");
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .expect("clock")
+        .as_secs() as i64;
+    service
+        .put_apparatus_downtime(ApparatusDowntime {
+            id: "downtime-execution-active".to_string(),
+            apparatus_id: FLEXO_ID.to_string(),
+            apparatus: FLEXO_NAME.to_string(),
+            starts_at_unix: now.saturating_sub(60),
+            ends_at_unix: now + 3_600,
+            reason: "planned maintenance".to_string(),
+            active: true,
+            actor: actor(),
+            created_at_unix: now,
+        })
+        .await
+        .expect("downtime");
+    let result = service
+        .apply_apparatus_queue_action(
+            FLEXO_NAME,
+            order_id,
+            queue_state::ApparatusQueueAction::Start,
+            &[FLEXO_NAME.to_string()],
+            actor(),
+        )
+        .await;
+    assert_eq!(result, Err(ProductionMapError::CapacityUnavailable));
+}
+
+#[tokio::test]
 async fn scheduler_allows_parallel_reservations_when_capacity_is_unlimited() {
     let store = Arc::new(MemoryProductionMapStore::new());
     let service = ProductionMapService::new(store);

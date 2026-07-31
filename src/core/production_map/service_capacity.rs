@@ -3,13 +3,90 @@ use std::collections::BTreeSet;
 use super::service::ProductionMapService;
 use super::service_capacity_scheduler::{
     ScheduledCandidate, candidate_allowed_for_order, effective_duration_minutes,
-    find_schedule_slot, profile_for_apparatus, reservations_with_active_sessions,
+    find_schedule_slot, fits_working_window, profile_for_apparatus,
+    reservations_with_active_sessions,
 };
+use super::store_port::ApparatusQueueStateMap;
 use super::types::*;
 use super::*;
 use crate::core::apparatus_groups::{apparatus_id_for_name, apparatus_master_data_for_name};
 
 impl ProductionMapService {
+    pub(super) async fn ensure_apparatus_execution_capacity(
+        &self,
+        apparatus: &str,
+        order_id: &str,
+        all_states: &ApparatusQueueStateMap,
+    ) -> Result<(), ProductionMapError> {
+        let apparatus = apparatus.trim();
+        let order_id = order_id.trim();
+        let profiles = self.store.apparatus_capacity_profiles().await?;
+        let profile = profile_for_apparatus(
+            &profiles,
+            &apparatus_id_for_name(apparatus),
+            apparatus,
+        );
+        let now = unix_seconds();
+        let same_apparatus = |candidate_id: &str, candidate_name: &str| {
+            candidate_id.eq_ignore_ascii_case(&profile.apparatus_id)
+                || queue_state::apparatus_titles_match(candidate_name, apparatus)
+        };
+        if self
+            .store
+            .apparatus_downtimes()
+            .await?
+            .iter()
+            .any(|downtime| {
+                downtime.active
+                    && same_apparatus(&downtime.apparatus_id, &downtime.apparatus)
+                    && downtime.starts_at_unix <= now
+                    && now < downtime.ends_at_unix
+            })
+        {
+            return Err(ProductionMapError::CapacityUnavailable);
+        }
+        if !fits_working_window(&profile, now, now + 60) {
+            return Err(ProductionMapError::CapacityNoWorkingWindow);
+        }
+
+        let mut occupied_orders = BTreeSet::new();
+        for (candidate_apparatus, states) in all_states {
+            if !queue_state::apparatus_titles_match(candidate_apparatus, apparatus) {
+                continue;
+            }
+            for (candidate_order_id, state) in states {
+                if queue_state::ApparatusQueueOrderState::parse(state)
+                    == Some(queue_state::ApparatusQueueOrderState::InProgress)
+                    && !candidate_order_id.eq_ignore_ascii_case(order_id)
+                {
+                    occupied_orders.insert(candidate_order_id.trim().to_string());
+                }
+            }
+        }
+        for session in self.store.order_run_sessions_for_audit().await? {
+            if session.status == OrderRunStatus::Active
+                && same_apparatus(&apparatus_id_for_name(&session.apparatus), &session.apparatus)
+                && !session.order_id.eq_ignore_ascii_case(order_id)
+            {
+                occupied_orders.insert(session.order_id.trim().to_string());
+            }
+        }
+        for reservation in self.store.apparatus_schedule_reservations().await? {
+            if reservation.status.reserves_capacity()
+                && same_apparatus(&reservation.apparatus_id, &reservation.apparatus)
+                && reservation.starts_at_unix <= now
+                && now < reservation.ends_at_unix
+                && !reservation.order_id.eq_ignore_ascii_case(order_id)
+            {
+                occupied_orders.insert(reservation.order_id.trim().to_string());
+            }
+        }
+        if profile.finite_capacity && occupied_orders.len() >= usize::from(profile.capacity_slots) {
+            return Err(ProductionMapError::CapacityConflict);
+        }
+        Ok(())
+    }
+
     pub async fn apparatus_capacity_snapshot(
         &self,
     ) -> Result<ApparatusCapacitySnapshot, ProductionMapError> {
