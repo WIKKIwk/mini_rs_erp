@@ -8,9 +8,10 @@ use crate::core::gscale::models::{
     ProgressLabelPrintRequest, RawMaterialStockEntry, RawMaterialStockUpdateInput,
 };
 use crate::core::production_map::{
-    ApparatusMaterialRuleUpsert, ApparatusQueuePolicy, CompletionRequestDecision,
-    MaterialScanProgressAction, OrderProgressBatchWipStatus, ProductionMapApparatusTransferRequest,
-    ProductionMapBatchMoveRequest,
+    ApparatusCapacityProfile, ApparatusDowntime, ApparatusMaterialRuleUpsert,
+    ApparatusQueuePolicy, ApparatusScheduleCancelRequest, ApparatusScheduleRequest,
+    CompletionRequestDecision, MaterialScanProgressAction, OrderProgressBatchWipStatus,
+    ProductionMapApparatusTransferRequest, ProductionMapBatchMoveRequest,
     ProductionMapDefinition, ProductionMapError, ProductionMapMoveRequest, ProductionMapRunRequest,
     QueueActionActor, QueueProgressInput, RawMaterialAssignment, RawMaterialAssignmentDeleteInput,
     RawMaterialAssignmentInput, RawMaterialStockTransition, RawMaterialStockTransitionKind,
@@ -78,6 +79,147 @@ pub async fn production_map_audit(
         .await
         .map_err(production_map_error)?;
     Ok(json_response(report))
+}
+
+/// Capacity calendars and schedule reservations are shared planning state. Read
+/// access is available to queue viewers; mutation remains an admin/planner
+/// capability and the server stamps the authenticated actor on every write.
+pub async fn production_map_capacity(
+    State(state): State<AppState>,
+    method: Method,
+    headers: HeaderMap,
+    body: Bytes,
+) -> Result<Response, AdminError> {
+    let principal = authorize_any_capability(
+        &state,
+        &headers,
+        &[
+            Capability::AdminAccess,
+            Capability::ProductionMapManage,
+            Capability::ApparatusQueueRead,
+        ],
+    )
+    .await?;
+    match method {
+        Method::GET => {
+            let snapshot = state
+                .production_maps
+                .apparatus_capacity_snapshot()
+                .await
+                .map_err(production_map_error)?;
+            Ok(json_response(serde_json::json!({
+                "ok": true,
+                "capacity": snapshot,
+            })))
+        }
+        Method::PUT => {
+            authorize_any_capability(
+                &state,
+                &headers,
+                &[Capability::AdminAccess, Capability::ProductionMapManage],
+            )
+            .await?;
+            let input: ApparatusCapacityProfile = parse_json(&body)?;
+            let profile = state
+                .production_maps
+                .put_apparatus_capacity_profile(input)
+                .await
+                .map_err(production_map_error)?;
+            Ok(json_response(serde_json::json!({
+                "ok": true,
+                "profile": profile,
+            })))
+        }
+        _ => {
+            let _ = principal;
+            Err(method_not_allowed())
+        }
+    }
+}
+
+pub async fn production_map_capacity_downtime(
+    State(state): State<AppState>,
+    method: Method,
+    headers: HeaderMap,
+    body: Bytes,
+) -> Result<Response, AdminError> {
+    let principal = authorize_any_capability(
+        &state,
+        &headers,
+        &[Capability::AdminAccess, Capability::ProductionMapManage],
+    )
+    .await?;
+    if method != Method::POST && method != Method::PUT {
+        return Err(method_not_allowed());
+    }
+    let mut input: ApparatusDowntime = parse_json(&body)?;
+    input.actor = queue_action_actor(&principal);
+    let downtime = state
+        .production_maps
+        .put_apparatus_downtime(input)
+        .await
+        .map_err(production_map_error)?;
+    Ok(json_response(serde_json::json!({
+        "ok": true,
+        "downtime": downtime,
+    })))
+}
+
+pub async fn production_map_schedule(
+    State(state): State<AppState>,
+    method: Method,
+    headers: HeaderMap,
+    body: Bytes,
+) -> Result<Response, AdminError> {
+    let principal = authorize_any_capability(
+        &state,
+        &headers,
+        &[Capability::AdminAccess, Capability::ProductionMapManage],
+    )
+    .await?;
+    if method != Method::POST {
+        return Err(method_not_allowed());
+    }
+    let mut input: ApparatusScheduleRequest = parse_json(&body)?;
+    input.actor = queue_action_actor(&principal);
+    let result = state
+        .production_maps
+        .schedule_apparatus_order(input)
+        .await
+        .map_err(production_map_error)?;
+    Ok(json_response(serde_json::json!({
+        "ok": true,
+        "reservation": result.reservation,
+        "conflicts": result.conflicts,
+    })))
+}
+
+pub async fn production_map_schedule_cancel(
+    State(state): State<AppState>,
+    method: Method,
+    headers: HeaderMap,
+    body: Bytes,
+) -> Result<Response, AdminError> {
+    let principal = authorize_any_capability(
+        &state,
+        &headers,
+        &[Capability::AdminAccess, Capability::ProductionMapManage],
+    )
+    .await?;
+    if method != Method::POST {
+        return Err(method_not_allowed());
+    }
+    let mut input: ApparatusScheduleCancelRequest = parse_json(&body)?;
+    input.actor = queue_action_actor(&principal);
+    let reservation = state
+        .production_maps
+        .cancel_apparatus_schedule_reservation(input)
+        .await
+        .map_err(production_map_error)?;
+    Ok(json_response(serde_json::json!({
+        "ok": true,
+        "reservation": reservation,
+    })))
 }
 
 pub async fn production_maps(

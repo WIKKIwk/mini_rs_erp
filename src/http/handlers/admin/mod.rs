@@ -17,6 +17,7 @@ pub use customers::{
 pub use items::{item_detail, item_uoms};
 pub use production_maps::{
     production_map_audit, production_map_closed_orders, production_map_completed_orders,
+    production_map_capacity, production_map_capacity_downtime,
     production_map_completion_request_decision, production_map_completion_request_decisions,
     production_map_completion_requests, production_map_finished_goods_receive, production_map_live,
     production_map_apparatus_transfer, production_map_move, production_map_move_batch,
@@ -24,7 +25,8 @@ pub use production_maps::{
     production_map_progress_qr_history, production_map_progress_qr_lookup,
     production_map_progress_qr_report, production_map_progress_qr_reprint,
     production_map_qolip_validate, production_map_queue_action, production_map_queue_policies,
-    production_map_run, production_map_save_with_order, production_map_sequence,
+    production_map_run, production_map_save_with_order, production_map_schedule,
+    production_map_schedule_cancel, production_map_sequence,
     production_map_wip_batches, production_maps, raw_material_assignment_candidate_orders,
     raw_material_assignment_candidates, raw_material_assignment_lookup,
     raw_material_assignment_orders, raw_material_assignments, raw_material_history,

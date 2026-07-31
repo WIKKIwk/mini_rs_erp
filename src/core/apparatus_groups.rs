@@ -482,6 +482,14 @@ pub fn custom_apparatus_id(name: &str) -> String {
     format!("apparatus:{}", name.trim().to_lowercase())
 }
 
+pub fn apparatus_id_for_name(name: &str) -> String {
+    DEFAULT_APPARATUS
+        .into_iter()
+        .find(|(_, default_name)| default_name.eq_ignore_ascii_case(name.trim()))
+        .map(|(id, _)| id.to_string())
+        .unwrap_or_else(|| custom_apparatus_id(name))
+}
+
 fn normalize_requested_apparatus_id(
     requested_id: Option<&str>,
 ) -> Result<Option<String>, ApparatusGroupError> {

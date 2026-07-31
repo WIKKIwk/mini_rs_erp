@@ -1,5 +1,6 @@
 mod apparatus;
 pub mod chain;
+mod capacity;
 mod compiler;
 mod errors;
 mod formula;
@@ -14,6 +15,7 @@ pub mod queue_state;
 mod service;
 mod service_audit;
 mod service_completion;
+mod service_capacity;
 mod service_maps;
 mod service_order_control;
 mod service_progress;
@@ -33,6 +35,7 @@ pub use materials::{
     MaterialScanProgressAction, RawMaterialAssignment, RawMaterialAssignmentDeleteInput,
     RawMaterialAssignmentInput, RawMaterialStartPolicy, RawMaterialStartRequirements,
 };
+pub use capacity::*;
 #[cfg(test)]
 pub use memory_store::MemoryProductionMapStore;
 pub use service::{PreparedApparatusQueueAction, ProductionMapLiveSnapshot, ProductionMapService};

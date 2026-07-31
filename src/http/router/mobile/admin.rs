@@ -50,6 +50,22 @@ pub(super) fn routes() -> Router<AppState> {
             get(admin::production_map_audit),
         )
         .route(
+            "/v1/mobile/admin/production-maps/capacity",
+            any(admin::production_map_capacity),
+        )
+        .route(
+            "/v1/mobile/admin/production-maps/capacity/downtime",
+            any(admin::production_map_capacity_downtime),
+        )
+        .route(
+            "/v1/mobile/admin/production-maps/schedule",
+            any(admin::production_map_schedule),
+        )
+        .route(
+            "/v1/mobile/admin/production-maps/schedule/cancel",
+            any(admin::production_map_schedule_cancel),
+        )
+        .route(
             "/v1/mobile/admin/production-maps/with-order",
             any(admin::production_map_save_with_order),
         )

@@ -154,4 +154,26 @@ pub enum ProductionMapError {
     ProgressBatchNotAccepted,
     #[error("progress batch cannot resume")]
     ProgressBatchNotResumable,
+    #[error("capacity profile is invalid")]
+    CapacityProfileInvalid,
+    #[error("capacity profile was not found")]
+    CapacityProfileNotFound,
+    #[error("apparatus does not support the requested capability")]
+    CapabilityNotSupported,
+    #[error("apparatus capability level is insufficient")]
+    CapabilityLevelInsufficient,
+    #[error("apparatus capacity is fully reserved")]
+    CapacityConflict,
+    #[error("apparatus has no working window for the requested duration")]
+    CapacityNoWorkingWindow,
+    #[error("apparatus is unavailable during the requested time")]
+    CapacityUnavailable,
+    #[error("schedule reservation input is invalid")]
+    ScheduleInputInvalid,
+    #[error("schedule reservation idempotency key conflicts with another order")]
+    ScheduleIdempotencyConflict,
+    #[error("schedule reservation was not found")]
+    ScheduleReservationNotFound,
+    #[error("schedule reservation cannot be cancelled")]
+    ScheduleReservationLocked,
 }

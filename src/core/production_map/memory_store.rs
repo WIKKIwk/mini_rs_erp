@@ -1,5 +1,6 @@
 mod maps;
 mod materials;
+mod capacity;
 mod queue;
 mod runs;
 mod state;
@@ -65,6 +66,58 @@ impl ProductionMapStorePort for MemoryProductionMapStore {
         order_ids: Vec<String>,
     ) -> Result<(), ProductionMapError> {
         maps::put_apparatus_sequence(self, apparatus, order_ids).await
+    }
+
+    async fn apparatus_capacity_profiles(
+        &self,
+    ) -> Result<Vec<ApparatusCapacityProfile>, ProductionMapError> {
+        capacity::apparatus_capacity_profiles(self).await
+    }
+
+    async fn put_apparatus_capacity_profile(
+        &self,
+        profile: ApparatusCapacityProfile,
+    ) -> Result<(), ProductionMapError> {
+        capacity::put_apparatus_capacity_profile(self, profile).await
+    }
+
+    async fn apparatus_downtimes(&self) -> Result<Vec<ApparatusDowntime>, ProductionMapError> {
+        capacity::apparatus_downtimes(self).await
+    }
+
+    async fn put_apparatus_downtime(
+        &self,
+        downtime: ApparatusDowntime,
+    ) -> Result<(), ProductionMapError> {
+        capacity::put_apparatus_downtime(self, downtime).await
+    }
+
+    async fn apparatus_schedule_reservations(
+        &self,
+    ) -> Result<Vec<ApparatusScheduleReservation>, ProductionMapError> {
+        capacity::apparatus_schedule_reservations(self).await
+    }
+
+    async fn apparatus_schedule_reservation_by_idempotency_key(
+        &self,
+        idempotency_key: &str,
+    ) -> Result<Option<ApparatusScheduleReservation>, ProductionMapError> {
+        capacity::apparatus_schedule_reservation_by_idempotency_key(self, idempotency_key).await
+    }
+
+    async fn put_apparatus_schedule_reservation(
+        &self,
+        reservation: ApparatusScheduleReservation,
+        capacity_slots: u16,
+    ) -> Result<ApparatusScheduleReservation, ProductionMapError> {
+        capacity::put_apparatus_schedule_reservation(self, reservation, capacity_slots).await
+    }
+
+    async fn cancel_apparatus_schedule_reservation(
+        &self,
+        input: ApparatusScheduleCancelRequest,
+    ) -> Result<ApparatusScheduleReservation, ProductionMapError> {
+        capacity::cancel_apparatus_schedule_reservation(self, input).await
     }
 
     async fn apparatus_queue_states(

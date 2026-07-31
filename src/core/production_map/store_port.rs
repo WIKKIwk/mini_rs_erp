@@ -5,6 +5,7 @@ use async_trait::async_trait;
 use crate::core::qolip::QolipCheckout;
 use crate::core::returned_paint::ReturnedPaintRequest;
 
+use super::capacity::*;
 use super::materials::{ApparatusMaterialRule, RawMaterialAssignment};
 use super::types::*;
 
@@ -103,6 +104,47 @@ pub trait ProductionMapStorePort: Send + Sync {
         apparatus: &str,
         order_ids: Vec<String>,
     ) -> StoreResult<()>;
+
+    // Finite capacity, working calendars, downtime, and reservations.
+    async fn apparatus_capacity_profiles(&self) -> StoreResult<Vec<ApparatusCapacityProfile>> {
+        Ok(Vec::new())
+    }
+    async fn put_apparatus_capacity_profile(
+        &self,
+        _profile: ApparatusCapacityProfile,
+    ) -> StoreResult<()> {
+        Ok(())
+    }
+    async fn apparatus_downtimes(&self) -> StoreResult<Vec<ApparatusDowntime>> {
+        Ok(Vec::new())
+    }
+    async fn put_apparatus_downtime(&self, _downtime: ApparatusDowntime) -> StoreResult<()> {
+        Ok(())
+    }
+    async fn apparatus_schedule_reservations(
+        &self,
+    ) -> StoreResult<Vec<ApparatusScheduleReservation>> {
+        Ok(Vec::new())
+    }
+    async fn apparatus_schedule_reservation_by_idempotency_key(
+        &self,
+        _idempotency_key: &str,
+    ) -> StoreResult<Option<ApparatusScheduleReservation>> {
+        Ok(None)
+    }
+    async fn put_apparatus_schedule_reservation(
+        &self,
+        _reservation: ApparatusScheduleReservation,
+        _capacity_slots: u16,
+    ) -> StoreResult<ApparatusScheduleReservation> {
+        Err(ProductionMapError::StoreFailed)
+    }
+    async fn cancel_apparatus_schedule_reservation(
+        &self,
+        _input: ApparatusScheduleCancelRequest,
+    ) -> StoreResult<ApparatusScheduleReservation> {
+        Err(ProductionMapError::ScheduleReservationNotFound)
+    }
 
     // Queue state, policy, log, and completion-request persistence.
     async fn apparatus_queue_states(&self) -> StoreResult<ApparatusQueueStateMap>;

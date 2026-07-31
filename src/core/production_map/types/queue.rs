@@ -52,6 +52,16 @@ pub struct QueueActionActor {
     pub display_name: String,
 }
 
+impl Default for QueueActionActor {
+    fn default() -> Self {
+        Self {
+            role: String::new(),
+            ref_: String::new(),
+            display_name: String::new(),
+        }
+    }
+}
+
 /// Durable receipt of an emergency apparatus transfer. The full post-transfer
 /// snapshot is kept in the receipt so an idempotent retry can return exactly
 /// the same result without guessing from mutable queue state.

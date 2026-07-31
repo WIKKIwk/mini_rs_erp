@@ -10,6 +10,11 @@ use super::super::*;
 pub struct MemoryProductionMapStore {
     pub(super) maps: RwLock<BTreeMap<String, ProductionMapDefinition>>,
     pub(super) sequences: RwLock<BTreeMap<String, Vec<String>>>,
+    pub(super) apparatus_capacity_profiles:
+        RwLock<BTreeMap<String, ApparatusCapacityProfile>>,
+    pub(super) apparatus_downtimes: RwLock<BTreeMap<String, ApparatusDowntime>>,
+    pub(super) apparatus_schedule_reservations:
+        RwLock<BTreeMap<String, ApparatusScheduleReservation>>,
     pub(super) queue_states: RwLock<BTreeMap<String, BTreeMap<String, String>>>,
     pub(super) order_controls: RwLock<BTreeMap<String, OrderControlRecord>>,
     pub(super) queue_policies: RwLock<BTreeMap<String, ApparatusQueuePolicy>>,
@@ -33,6 +38,9 @@ impl MemoryProductionMapStore {
         Self {
             maps: RwLock::new(BTreeMap::new()),
             sequences: RwLock::new(BTreeMap::new()),
+            apparatus_capacity_profiles: RwLock::new(BTreeMap::new()),
+            apparatus_downtimes: RwLock::new(BTreeMap::new()),
+            apparatus_schedule_reservations: RwLock::new(BTreeMap::new()),
             queue_states: RwLock::new(BTreeMap::new()),
             order_controls: RwLock::new(BTreeMap::new()),
             queue_policies: RwLock::new(BTreeMap::new()),

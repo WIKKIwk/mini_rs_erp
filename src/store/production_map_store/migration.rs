@@ -57,6 +57,49 @@ pub(super) fn migrate(conn: &Connection) -> rusqlite::Result<()> {
             assigned_apparatus_json TEXT NOT NULL DEFAULT '[]',
             payload_json TEXT NOT NULL DEFAULT '{}',
             saved_at TEXT NOT NULL
+        );
+        CREATE TABLE IF NOT EXISTS apparatus_capacity_profiles (
+            apparatus_id TEXT PRIMARY KEY,
+            apparatus TEXT NOT NULL,
+            capacity_slots INTEGER NOT NULL,
+            setup_minutes INTEGER NOT NULL,
+            cleanup_minutes INTEGER NOT NULL,
+            efficiency_percent INTEGER NOT NULL,
+            finite_capacity INTEGER NOT NULL,
+            working_windows_json TEXT NOT NULL,
+            capabilities_json TEXT NOT NULL,
+            capability_levels_json TEXT NOT NULL,
+            notes TEXT NOT NULL,
+            updated_at INTEGER NOT NULL
+        );
+        CREATE TABLE IF NOT EXISTS apparatus_downtimes (
+            id TEXT PRIMARY KEY,
+            apparatus_id TEXT NOT NULL,
+            apparatus TEXT NOT NULL,
+            starts_at_unix INTEGER NOT NULL,
+            ends_at_unix INTEGER NOT NULL,
+            reason TEXT NOT NULL,
+            active INTEGER NOT NULL,
+            actor_json TEXT NOT NULL,
+            created_at_unix INTEGER NOT NULL
+        );
+        CREATE TABLE IF NOT EXISTS apparatus_schedule_reservations (
+            reservation_id TEXT PRIMARY KEY,
+            idempotency_key TEXT NOT NULL UNIQUE,
+            order_id TEXT NOT NULL,
+            apparatus_id TEXT NOT NULL,
+            apparatus TEXT NOT NULL,
+            starts_at_unix INTEGER NOT NULL,
+            ends_at_unix INTEGER NOT NULL,
+            requested_duration_minutes INTEGER NOT NULL,
+            reserved_duration_minutes INTEGER NOT NULL,
+            status TEXT NOT NULL,
+            priority INTEGER NOT NULL,
+            source TEXT NOT NULL,
+            reason TEXT NOT NULL,
+            capability_requirements_json TEXT NOT NULL,
+            actor_json TEXT NOT NULL,
+            created_at_unix INTEGER NOT NULL
         );",
     )
 }

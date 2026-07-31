@@ -7,7 +7,8 @@ use crate::core::production_map::{
     ApparatusMaterialRule, ApparatusQueueActionEvent, ApparatusQueuePolicy, CompletedQueueOrder,
     CompletionRequestDecision, CompletionRequestDecisionNotification,
     CompletionRequestNotification, CompletionRequestStateResolution, FinishedGoodsStockEntry,
-    OrderControlRecord, OrderProgressBatch, OrderProgressEvent, OrderRunSession,
+    ApparatusCapacityProfile, ApparatusDowntime, ApparatusScheduleCancelRequest,
+    ApparatusScheduleReservation, OrderControlRecord, OrderProgressBatch, OrderProgressEvent, OrderRunSession,
     ProductionMapApparatusTransferRecord, ProductionMapApparatusTransferWrite,
     ProductionMapDefinition, ProductionMapError, ProductionMapStorePort, ProductionOrderLogEntry,
     QueueActionActor, QueueActionProgressWrite, QueueActionProgressWriteResult,
@@ -17,6 +18,7 @@ use crate::core::production_map::{
 use crate::core::qolip::QolipError;
 
 mod catalog_helpers;
+mod capacity_helpers;
 mod completion_helpers;
 mod map_helpers;
 mod material_helpers;
@@ -32,6 +34,12 @@ mod wip_query_helpers;
 use self::catalog_helpers::{
     delete_map_by_id, load_apparatus_queue_policies, load_apparatus_queue_states,
     load_apparatus_sequences, load_maps, save_apparatus_queue_policy, save_apparatus_sequence,
+};
+use self::capacity_helpers::{
+    cancel_apparatus_schedule_reservation, load_apparatus_capacity_profiles,
+    load_apparatus_downtimes, load_apparatus_schedule_reservation_by_idempotency_key,
+    load_apparatus_schedule_reservations, put_apparatus_capacity_profile,
+    put_apparatus_downtime, put_apparatus_schedule_reservation,
 };
 use self::completion_helpers::{
     load_completion_request_by_event_id, load_completion_request_decisions_for_actor,
@@ -142,6 +150,58 @@ impl ProductionMapStorePort for PostgresProductionMapStore {
         order_ids: Vec<String>,
     ) -> Result<(), ProductionMapError> {
         save_apparatus_sequence(&self.pool, apparatus, order_ids).await
+    }
+
+    async fn apparatus_capacity_profiles(
+        &self,
+    ) -> Result<Vec<ApparatusCapacityProfile>, ProductionMapError> {
+        load_apparatus_capacity_profiles(&self.pool).await
+    }
+
+    async fn put_apparatus_capacity_profile(
+        &self,
+        profile: ApparatusCapacityProfile,
+    ) -> Result<(), ProductionMapError> {
+        put_apparatus_capacity_profile(&self.pool, profile).await
+    }
+
+    async fn apparatus_downtimes(&self) -> Result<Vec<ApparatusDowntime>, ProductionMapError> {
+        load_apparatus_downtimes(&self.pool).await
+    }
+
+    async fn put_apparatus_downtime(
+        &self,
+        downtime: ApparatusDowntime,
+    ) -> Result<(), ProductionMapError> {
+        put_apparatus_downtime(&self.pool, downtime).await
+    }
+
+    async fn apparatus_schedule_reservations(
+        &self,
+    ) -> Result<Vec<ApparatusScheduleReservation>, ProductionMapError> {
+        load_apparatus_schedule_reservations(&self.pool).await
+    }
+
+    async fn apparatus_schedule_reservation_by_idempotency_key(
+        &self,
+        idempotency_key: &str,
+    ) -> Result<Option<ApparatusScheduleReservation>, ProductionMapError> {
+        load_apparatus_schedule_reservation_by_idempotency_key(&self.pool, idempotency_key).await
+    }
+
+    async fn put_apparatus_schedule_reservation(
+        &self,
+        reservation: ApparatusScheduleReservation,
+        capacity_slots: u16,
+    ) -> Result<ApparatusScheduleReservation, ProductionMapError> {
+        put_apparatus_schedule_reservation(&self.pool, reservation, capacity_slots).await
+    }
+
+    async fn cancel_apparatus_schedule_reservation(
+        &self,
+        input: ApparatusScheduleCancelRequest,
+    ) -> Result<ApparatusScheduleReservation, ProductionMapError> {
+        cancel_apparatus_schedule_reservation(&self.pool, input).await
     }
 
     async fn apparatus_queue_states(
