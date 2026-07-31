@@ -3,7 +3,10 @@ use std::collections::BTreeMap;
 use async_trait::async_trait;
 use sqlx::{PgPool, Row};
 
-use crate::core::apparatus_groups::{ApparatusCatalogEntry, ApparatusSource};
+use crate::core::apparatus_groups::{
+    ApparatusCatalogEntry, ApparatusMasterData, ApparatusSource, apparatus_master_data_for_name,
+    normalize_apparatus_master_data,
+};
 use crate::core::factory_locations::{
     FactoryLocation, FactoryLocationError, FactoryLocationStorePort,
 };
@@ -179,6 +182,7 @@ async fn load_locations(
 
     let link_rows = sqlx::query(
         "SELECT links.location_id, apparatus.id, apparatus.name, apparatus.kind,
+                apparatus.payload_json,
                 COALESCE((apparatus.payload_json ->> 'sort_order')::BIGINT, 10000)
                     AS sort_order
          FROM mini_factory_location_apparatus_links links
@@ -197,18 +201,23 @@ async fn load_locations(
     let mut apparatus_by_location = BTreeMap::<String, Vec<ApparatusCatalogEntry>>::new();
     for row in link_rows {
         let kind: String = row.get("kind");
+        let name: String = row.get("name");
+        let payload: serde_json::Value = row.get("payload_json");
+        let master = serde_json::from_value::<ApparatusMasterData>(payload)
+            .unwrap_or_else(|_| apparatus_master_data_for_name(&name));
         apparatus_by_location
             .entry(row.get("location_id"))
             .or_default()
             .push(ApparatusCatalogEntry {
                 id: row.get("id"),
-                name: row.get("name"),
+                name: name.clone(),
                 source: if kind == "default" {
                     ApparatusSource::Default
                 } else {
                     ApparatusSource::Custom
                 },
                 sort_order: row.get::<i64, _>("sort_order").max(0) as usize,
+                master: normalize_apparatus_master_data(master, &name),
             });
     }
 

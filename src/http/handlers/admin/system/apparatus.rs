@@ -1,4 +1,5 @@
 use super::*;
+use crate::core::apparatus_groups::{ApparatusCatalogEntry, ApparatusMasterData, ApparatusSource};
 
 pub async fn apparatus_groups(
     State(state): State<AppState>,
@@ -74,12 +75,12 @@ pub async fn apparatus(
         Method::POST => {
             require_capability(&state, &principal, Capability::ProductionMapManage).await?;
             let input: ApparatusUpsert = parse_json(&body)?;
-            let name = state
+            let entry = state
                 .apparatus_groups
                 .upsert_apparatus(input)
                 .await
                 .map_err(apparatus_group_error)?;
-            Ok(json_response(AdminApparatusMutationResponse::new(name)))
+            Ok(json_response(AdminApparatusMutationResponse::new(entry)))
         }
         _ => Err(method_not_allowed()),
     }
@@ -93,16 +94,25 @@ struct AdminApparatusMutationResponse {
     company: String,
     is_group: bool,
     parent_warehouse: String,
+    id: String,
+    source: ApparatusSource,
+    sort_order: usize,
+    #[serde(flatten)]
+    master: ApparatusMasterData,
 }
 
 impl AdminApparatusMutationResponse {
-    fn new(name: String) -> Self {
+    fn new(entry: ApparatusCatalogEntry) -> Self {
         Self {
-            warehouse: name.clone(),
-            name,
+            warehouse: entry.name.clone(),
+            name: entry.name,
             company: String::new(),
             is_group: false,
             parent_warehouse: "aparat - A".to_string(),
+            id: entry.id,
+            source: entry.source,
+            sort_order: entry.sort_order,
+            master: entry.master,
         }
     }
 }

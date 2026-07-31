@@ -1,8 +1,9 @@
 use async_trait::async_trait;
-use sqlx::PgPool;
+use sqlx::{PgPool, Row};
 
 use crate::core::apparatus_groups::{
-    ApparatusGroup, ApparatusGroupError, ApparatusGroupStorePort, custom_apparatus_id,
+    ApparatusCatalogEntry, ApparatusGroup, ApparatusGroupError, ApparatusGroupStorePort,
+    ApparatusMasterData, ApparatusSource, apparatus_master_data_for_name, custom_apparatus_id,
 };
 
 #[derive(Clone)]
@@ -81,11 +82,71 @@ impl ApparatusGroupStorePort for PostgresApparatusGroupStore {
         .map_err(|_| ApparatusGroupError::StoreFailed)
     }
 
+    async fn apparatus_catalog(
+        &self,
+        query: &str,
+        limit: usize,
+    ) -> Result<Vec<ApparatusCatalogEntry>, ApparatusGroupError> {
+        let needle = query.trim().to_lowercase();
+        let pattern = format!("%{needle}%");
+        let rows = sqlx::query(
+            "SELECT id, name, payload_json
+             FROM mini_apparatus
+             WHERE ($1 = '' OR lower(name) LIKE $2)
+             ORDER BY lower(name) ASC
+             LIMIT $3",
+        )
+        .bind(needle)
+        .bind(pattern)
+        .bind(limit.max(1) as i64)
+        .fetch_all(&self.pool)
+        .await
+        .map_err(|_| ApparatusGroupError::StoreFailed)?;
+        Ok(rows
+            .into_iter()
+            .map(|row| {
+                let name: String = row.get("name");
+                let payload: serde_json::Value = row.get("payload_json");
+                let master = serde_json::from_value::<ApparatusMasterData>(payload)
+                    .unwrap_or_else(|_| apparatus_master_data_for_name(&name));
+                ApparatusCatalogEntry {
+                    id: row.get("id"),
+                    name,
+                    source: ApparatusSource::Custom,
+                    sort_order: 0,
+                    master,
+                }
+            })
+            .collect())
+    }
+
     async fn put_apparatus(&self, name: &str) -> Result<String, ApparatusGroupError> {
+        self.save_apparatus(name, &apparatus_master_data_for_name(name))
+            .await
+    }
+
+    async fn put_apparatus_with_master_data(
+        &self,
+        name: &str,
+        master: &ApparatusMasterData,
+    ) -> Result<String, ApparatusGroupError> {
+        self.save_apparatus(name, master).await
+    }
+}
+
+impl PostgresApparatusGroupStore {
+    async fn save_apparatus(
+        &self,
+        name: &str,
+        master: &ApparatusMasterData,
+    ) -> Result<String, ApparatusGroupError> {
         let name = name.trim();
         if name.is_empty() {
             return Err(ApparatusGroupError::MissingApparatus);
         }
+        let mut payload =
+            serde_json::to_value(master).map_err(|_| ApparatusGroupError::StoreFailed)?;
+        payload["warehouse"] = serde_json::Value::String(name.to_string());
         let existing_id = sqlx::query_scalar::<_, String>(
             "SELECT id
              FROM mini_apparatus
@@ -106,20 +167,20 @@ impl ApparatusGroupStorePort for PostgresApparatusGroupStore {
             )
             .bind(id)
             .bind(name)
-            .bind(serde_json::json!({"warehouse": name}))
+            .bind(payload.clone())
             .fetch_one(&self.pool)
             .await
             .map_err(|_| ApparatusGroupError::StoreFailed);
         }
 
         sqlx::query_scalar::<_, String>(
-            "INSERT INTO mini_apparatus (id, name, payload_json)
-             VALUES ($1, $2, $3)
+            "INSERT INTO mini_apparatus (id, name, base_name, kind, payload_json)
+             VALUES ($1, $2, $2, 'custom', $3)
              RETURNING name",
         )
         .bind(apparatus_id(name))
         .bind(name)
-        .bind(serde_json::json!({"warehouse": name}))
+        .bind(payload)
         .fetch_one(&self.pool)
         .await
         .map_err(|_| ApparatusGroupError::StoreFailed)

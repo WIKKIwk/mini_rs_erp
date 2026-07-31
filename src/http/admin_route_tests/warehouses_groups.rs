@@ -313,6 +313,8 @@ async fn admin_can_create_and_list_typed_apparatus_without_breaking_legacy_clien
     assert_eq!(created_body["name"], "Bobst 1");
     assert_eq!(created_body["warehouse"], "Bobst 1");
     assert_eq!(created_body["parent_warehouse"], "aparat - A");
+    assert_eq!(created_body["family"], "other");
+    assert_eq!(created_body["kind"], "other");
 
     let typed_list = build_router(state.clone())
         .oneshot(request(
@@ -328,6 +330,42 @@ async fn admin_can_create_and_list_typed_apparatus_without_breaking_legacy_clien
     assert_eq!(typed_body[0]["id"], "apparatus:bobst 1");
     assert_eq!(typed_body[0]["source"], "custom");
     assert_eq!(typed_body[0]["sort_order"], 0);
+    assert_eq!(typed_body[0]["family"], "other");
+    assert_eq!(typed_body[0]["kind"], "other");
+    assert_eq!(
+        typed_body[0]["capabilities"],
+        serde_json::json!(["apparatus"])
+    );
+
+    let semantic_created = build_router(state.clone())
+        .oneshot(request_with_body(
+            "POST",
+            "/v1/mobile/admin/apparatus",
+            &token,
+            r#"{"name":"Flexo liniya 1","family":"pechat","kind":"flexo","capabilities":["print","pechat","flexo"]}"#,
+        ))
+        .await
+        .expect("create semantic apparatus");
+    assert_eq!(semantic_created.status(), StatusCode::OK);
+    let semantic_body = json_body(semantic_created).await;
+    assert_eq!(semantic_body["family"], "pechat");
+    assert_eq!(semantic_body["kind"], "flexo");
+    assert_eq!(
+        semantic_body["capabilities"],
+        serde_json::json!(["print", "pechat", "flexo"])
+    );
+
+    let semantic_list = build_router(state.clone())
+        .oneshot(request(
+            "GET",
+            "/v1/mobile/admin/apparatus?q=Flexo%20liniya%201&limit=50",
+            &token,
+        ))
+        .await
+        .expect("list semantic apparatus");
+    let semantic_list_body = json_body(semantic_list).await;
+    assert_eq!(semantic_list_body[0]["family"], "pechat");
+    assert_eq!(semantic_list_body[0]["kind"], "flexo");
 
     let legacy_created = build_router(state.clone())
         .oneshot(request_with_body(

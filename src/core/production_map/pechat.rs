@@ -27,6 +27,22 @@ pub fn pechat_color_count(title: &str) -> Option<u8> {
     None
 }
 
+/// Whether an apparatus is part of the printing/pechat family.
+///
+/// Color-count machines use the 7/8/9 parser above. Flexo is a printing
+/// apparatus too, but its process is not expressed as a color count, so it
+/// must be classified separately from color-specific compatibility rules.
+pub fn is_flexo_apparatus(title: &str) -> bool {
+    let lower = title.trim().to_lowercase();
+    ["fleksa", "fleska", "flex", "flexe", "flexo"]
+        .iter()
+        .any(|keyword| lower.contains(keyword))
+}
+
+pub fn is_pechat_apparatus(title: &str) -> bool {
+    pechat_color_count(title).is_some() || is_flexo_apparatus(title)
+}
+
 fn color_count_before(bytes: &[u8], rangli_start: usize) -> Option<u8> {
     let mut i = rangli_start;
     while i > 0 && bytes[i - 1].is_ascii_whitespace() {
@@ -177,6 +193,13 @@ mod tests {
         assert_eq!(pechat_color_count("Paket aparat"), None);
         assert_eq!(pechat_color_count("17 rangli"), None);
         assert_eq!(pechat_color_count("rangli pechat"), None);
+    }
+
+    #[test]
+    fn flexo_apparatus_belongs_to_pechat_family_without_color_count() {
+        assert!(is_flexo_apparatus("Flexo pechat - A"));
+        assert!(is_pechat_apparatus("Flexo bosma aparat"));
+        assert!(!is_pechat_apparatus("Paket aparat"));
     }
 
     #[test]

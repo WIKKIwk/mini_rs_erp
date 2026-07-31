@@ -3,6 +3,8 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
+#[cfg(test)]
+use std::collections::BTreeMap;
 use thiserror::Error;
 #[cfg(test)]
 use tokio::sync::RwLock;
@@ -28,11 +30,23 @@ const DEFAULT_APPARATUS: [(&str, &str); 10] = [
     ("apparatus:default:rezka", "Rezka"),
 ];
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ApparatusSource {
     Default,
     Custom,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ApparatusMasterData {
+    #[serde(default)]
+    pub family: String,
+    #[serde(default)]
+    pub kind: String,
+    #[serde(default)]
+    pub capabilities: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub color_stations: Option<u8>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -41,6 +55,8 @@ pub struct ApparatusCatalogEntry {
     pub name: String,
     pub source: ApparatusSource,
     pub sort_order: usize,
+    #[serde(flatten, default)]
+    pub master: ApparatusMasterData,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -61,6 +77,8 @@ pub struct ApparatusGroupUpsert {
 pub struct ApparatusUpsert {
     #[serde(default, alias = "warehouse")]
     pub name: String,
+    #[serde(flatten, default)]
+    pub master: ApparatusMasterData,
 }
 
 #[derive(Debug, Error, Clone, PartialEq, Eq)]
@@ -84,7 +102,33 @@ pub trait ApparatusGroupStorePort: Send + Sync {
         query: &str,
         limit: usize,
     ) -> Result<Vec<String>, ApparatusGroupError>;
+    async fn apparatus_catalog(
+        &self,
+        query: &str,
+        limit: usize,
+    ) -> Result<Vec<ApparatusCatalogEntry>, ApparatusGroupError> {
+        self.apparatus(query, limit).await.map(|items| {
+            items
+                .into_iter()
+                .enumerate()
+                .map(|(sort_order, name)| ApparatusCatalogEntry {
+                    id: custom_apparatus_id(&name),
+                    master: apparatus_master_data_for_name(&name),
+                    name,
+                    source: ApparatusSource::Custom,
+                    sort_order,
+                })
+                .collect()
+        })
+    }
     async fn put_apparatus(&self, name: &str) -> Result<String, ApparatusGroupError>;
+    async fn put_apparatus_with_master_data(
+        &self,
+        name: &str,
+        _master: &ApparatusMasterData,
+    ) -> Result<String, ApparatusGroupError> {
+        self.put_apparatus(name).await
+    }
 }
 
 #[derive(Clone)]
@@ -141,19 +185,26 @@ impl ApparatusGroupService {
         if result.len() >= limit {
             return Ok(result);
         }
-        for item in self.store.apparatus(query, limit).await? {
-            let name = item.trim().to_string();
+        for item in self.store.apparatus_catalog(query, limit).await? {
+            let name = item.name.trim().to_string();
             if name.is_empty()
                 || is_invalid_legacy_apparatus_name(&name)
                 || !seen.insert(name.to_lowercase())
             {
                 continue;
             }
+            let id = if item.id.trim().is_empty() {
+                custom_apparatus_id(&name)
+            } else {
+                item.id
+            };
+            let master = normalize_apparatus_master_data(item.master, &name);
             result.push(ApparatusCatalogEntry {
-                id: custom_apparatus_id(&name),
+                id,
                 name,
                 source: ApparatusSource::Custom,
                 sort_order: result.len(),
+                master,
             });
             if result.len() >= limit {
                 break;
@@ -165,7 +216,7 @@ impl ApparatusGroupService {
     pub async fn upsert_apparatus(
         &self,
         input: ApparatusUpsert,
-    ) -> Result<String, ApparatusGroupError> {
+    ) -> Result<ApparatusCatalogEntry, ApparatusGroupError> {
         let name = input.name.trim().to_string();
         if name.is_empty() {
             return Err(ApparatusGroupError::MissingApparatus);
@@ -173,7 +224,17 @@ impl ApparatusGroupService {
         if is_invalid_legacy_apparatus_name(&name) {
             return Err(ApparatusGroupError::InvalidApparatus);
         }
-        self.store.put_apparatus(&name).await
+        let master = normalize_apparatus_master_data(input.master, &name);
+        self.store
+            .put_apparatus_with_master_data(&name, &master)
+            .await?;
+        Ok(ApparatusCatalogEntry {
+            id: custom_apparatus_id(&name),
+            name,
+            source: ApparatusSource::Custom,
+            sort_order: 0,
+            master,
+        })
     }
 }
 
@@ -304,8 +365,99 @@ fn default_apparatus_catalog() -> Vec<ApparatusCatalogEntry> {
             name: name.to_string(),
             source: ApparatusSource::Default,
             sort_order,
+            master: apparatus_master_data_for_name(name),
         })
         .collect()
+}
+
+pub fn apparatus_master_data_for_name(name: &str) -> ApparatusMasterData {
+    let normalized = name.trim().to_lowercase();
+    if pechat::is_flexo_apparatus(&normalized) {
+        return ApparatusMasterData {
+            family: "pechat".to_string(),
+            kind: "flexo".to_string(),
+            capabilities: vec![
+                "print".to_string(),
+                "pechat".to_string(),
+                "flexo".to_string(),
+            ],
+            color_stations: None,
+        };
+    }
+    if let Some(color_stations) = pechat::pechat_color_count(&normalized) {
+        return ApparatusMasterData {
+            family: "pechat".to_string(),
+            kind: "color_pechat".to_string(),
+            capabilities: vec!["print".to_string(), "pechat".to_string()],
+            color_stations: Some(color_stations),
+        };
+    }
+    if normalized.contains("extruder") && normalized.contains("laminatsiya") {
+        return apparatus_master_data("laminatsiya", "extruder_laminatsiya", ["laminate"], None);
+    }
+    if normalized.contains("laminatsiya") {
+        return apparatus_master_data("laminatsiya", "laminatsiya", ["laminate"], None);
+    }
+    if normalized.contains("rezka") {
+        return apparatus_master_data("rezka", "rezka", ["cut"], None);
+    }
+    if normalized.contains("paket") {
+        return apparatus_master_data("paket", "paket", ["package"], None);
+    }
+    if normalized.contains("kley") {
+        return apparatus_master_data("kley", "holodniy_kley", ["glue"], None);
+    }
+    apparatus_master_data("other", "other", ["apparatus"], None)
+}
+
+fn apparatus_master_data(
+    family: &str,
+    kind: &str,
+    capabilities: impl IntoIterator<Item = &'static str>,
+    color_stations: Option<u8>,
+) -> ApparatusMasterData {
+    ApparatusMasterData {
+        family: family.to_string(),
+        kind: kind.to_string(),
+        capabilities: capabilities.into_iter().map(str::to_string).collect(),
+        color_stations,
+    }
+}
+
+pub fn normalize_apparatus_master_data(
+    mut master: ApparatusMasterData,
+    name: &str,
+) -> ApparatusMasterData {
+    let inferred = apparatus_master_data_for_name(name);
+    if master.family.trim().is_empty() {
+        master.family = inferred.family;
+    } else {
+        master.family = master.family.trim().to_lowercase();
+    }
+    if master.kind.trim().is_empty() {
+        master.kind = inferred.kind;
+    } else {
+        master.kind = master.kind.trim().to_lowercase();
+    }
+    if master.capabilities.is_empty() {
+        master.capabilities = inferred.capabilities;
+    } else {
+        master.capabilities = master
+            .capabilities
+            .into_iter()
+            .map(|capability| capability.trim().to_lowercase())
+            .filter(|capability| !capability.is_empty())
+            .fold(Vec::new(), |mut values, capability| {
+                if !values.iter().any(|item| item == &capability) {
+                    values.push(capability);
+                }
+                values
+            });
+    }
+    if master.color_stations.is_none() {
+        master.color_stations = inferred.color_stations;
+    }
+    master
 }
 
 pub fn custom_apparatus_id(name: &str) -> String {
@@ -356,6 +508,7 @@ fn text_contains_word(value: &str, needle: &str) -> bool {
 pub struct MemoryApparatusGroupStore {
     groups: RwLock<Vec<ApparatusGroup>>,
     apparatus: RwLock<Vec<String>>,
+    apparatus_master_data: RwLock<BTreeMap<String, ApparatusMasterData>>,
 }
 
 #[cfg(test)]
@@ -412,6 +565,38 @@ impl ApparatusGroupStorePort for MemoryApparatusGroupStore {
     }
 
     async fn put_apparatus(&self, name: &str) -> Result<String, ApparatusGroupError> {
+        self.put_apparatus_with_master_data(name, &apparatus_master_data_for_name(name))
+            .await
+    }
+
+    async fn apparatus_catalog(
+        &self,
+        query: &str,
+        limit: usize,
+    ) -> Result<Vec<ApparatusCatalogEntry>, ApparatusGroupError> {
+        let names = self.apparatus(query, limit).await?;
+        let master_data = self.apparatus_master_data.read().await;
+        Ok(names
+            .into_iter()
+            .enumerate()
+            .map(|(sort_order, name)| ApparatusCatalogEntry {
+                id: custom_apparatus_id(&name),
+                master: master_data
+                    .get(&name.to_lowercase())
+                    .cloned()
+                    .unwrap_or_else(|| apparatus_master_data_for_name(&name)),
+                name,
+                source: ApparatusSource::Custom,
+                sort_order,
+            })
+            .collect())
+    }
+
+    async fn put_apparatus_with_master_data(
+        &self,
+        name: &str,
+        master: &ApparatusMasterData,
+    ) -> Result<String, ApparatusGroupError> {
         let name = name.trim().to_string();
         if name.is_empty() {
             return Err(ApparatusGroupError::MissingApparatus);
@@ -424,6 +609,11 @@ impl ApparatusGroupStorePort for MemoryApparatusGroupStore {
             apparatus.push(name.clone());
             apparatus.sort_by_key(|item| item.to_lowercase());
         }
+        drop(apparatus);
+        self.apparatus_master_data
+            .write()
+            .await
+            .insert(name.to_lowercase(), master.clone());
         Ok(name)
     }
 }
@@ -463,6 +653,17 @@ mod tests {
             .expect("list apparatus catalog");
         assert_eq!(catalog[0].id, "apparatus:default:bosma_7");
         assert_eq!(catalog[0].source, ApparatusSource::Default);
+        assert_eq!(catalog[0].master.family, "pechat");
+        assert_eq!(catalog[0].master.kind, "color_pechat");
+        assert_eq!(catalog[0].master.color_stations, Some(7));
+        let flexo = catalog
+            .iter()
+            .find(|item| item.name == "Flexo pechat")
+            .expect("flexo catalog entry");
+        assert_eq!(flexo.master.family, "pechat");
+        assert_eq!(flexo.master.kind, "flexo");
+        assert!(flexo.master.capabilities.iter().any(|item| item == "print"));
+        assert_eq!(flexo.master.color_stations, None);
         let custom = catalog.last().expect("custom apparatus");
         assert_eq!(custom.id, "apparatus:maxsus aparat");
         assert_eq!(custom.source, ApparatusSource::Custom);
@@ -470,6 +671,7 @@ mod tests {
             service
                 .upsert_apparatus(ApparatusUpsert {
                     name: "7 ta rangli pechat".to_string(),
+                    master: ApparatusMasterData::default(),
                 })
                 .await,
             Err(ApparatusGroupError::InvalidApparatus)

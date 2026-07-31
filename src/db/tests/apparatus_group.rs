@@ -1,6 +1,8 @@
 use std::sync::Arc;
 
-use crate::core::apparatus_groups::{ApparatusGroupService, ApparatusGroupUpsert};
+use crate::core::apparatus_groups::{
+    ApparatusGroupService, ApparatusGroupUpsert, ApparatusMasterData,
+};
 use crate::db::postgres::apply_foundation_migration;
 use crate::db::postgres_apparatus_group::PostgresApparatusGroupStore;
 
@@ -58,10 +60,11 @@ async fn postgres_apparatus_group_store_round_trips_groups() {
     let created = service
         .upsert_apparatus(crate::core::apparatus_groups::ApparatusUpsert {
             name: " Bobst 1 ".to_string(),
+            master: ApparatusMasterData::default(),
         })
         .await
         .expect("save apparatus");
-    assert_eq!(created, "Bobst 1");
+    assert_eq!(created.name, "Bobst 1");
     assert_eq!(
         service.apparatus("bob", 20).await.expect("list apparatus"),
         vec!["Bobst 1".to_string()]
