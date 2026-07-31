@@ -1,6 +1,7 @@
 use std::collections::BTreeSet;
 
 use crate::core::apparatus_groups::{apparatus_id_for_name, apparatus_master_data_for_name};
+use super::apparatus::move_allowed;
 use super::service::ProductionMapService;
 use super::types::*;
 use super::*;
@@ -46,7 +47,8 @@ impl ProductionMapService {
     ) -> Result<ApparatusScheduleResult, ProductionMapError> {
         let _guard = self.queue_action_guard().await;
         let input = normalize_schedule_request(input)?;
-        self.store
+        let map = self
+            .store
             .maps()
             .await?
             .into_iter()
@@ -70,65 +72,118 @@ impl ProductionMapService {
         }
 
         let profiles = self.store.apparatus_capacity_profiles().await?;
-        let profile = profile_for_apparatus(
-            &profiles,
-            &input.apparatus_id,
-            &input.apparatus,
-        );
-        if !profile.supports(&input.capability_requirements) {
-            let missing = input
-                .capability_requirements
-                .iter()
-                .find(|requirement| profile.capability_level(&requirement.code) == 0);
-            return Err(if missing.is_some() {
-                ProductionMapError::CapabilityNotSupported
-            } else {
-                ProductionMapError::CapabilityLevelInsufficient
-            });
-        }
-
-        let reserved_duration_minutes = effective_duration_minutes(&profile, input.duration_minutes)?;
         let downtimes = self.store.apparatus_downtimes().await?;
         let reservations = self.store.apparatus_schedule_reservations().await?;
-        let (starts_at_unix, ends_at_unix) = find_schedule_slot(
-            &profile,
-            &input,
-            reserved_duration_minutes,
-            &downtimes,
-            &reservations,
-        )?;
-        let now = unix_seconds();
-        let reservation = ApparatusScheduleReservation {
-            reservation_id: format!("apparatus-reservation:{}", input.idempotency_key),
-            idempotency_key: input.idempotency_key,
-            order_id: input.order_id,
-            apparatus_id: input.apparatus_id,
-            apparatus: input.apparatus,
-            starts_at_unix,
-            ends_at_unix,
-            requested_duration_minutes: input.duration_minutes,
-            reserved_duration_minutes,
-            status: ApparatusScheduleStatus::Planned,
-            priority: input.priority,
-            source: input.source,
-            reason: input.reason,
-            capability_requirements: input.capability_requirements,
-            actor: input.actor,
-            created_at_unix: now,
-        };
-        let reservation = self
-            .store
-            .put_apparatus_schedule_reservation(
+        let mut candidates = Vec::with_capacity(1 + input.candidate_apparatuses.len());
+        candidates.push(ApparatusScheduleCandidate {
+            apparatus_id: input.apparatus_id.clone(),
+            apparatus: input.apparatus.clone(),
+        });
+        candidates.extend(input.candidate_apparatuses.clone());
+
+        let mut route_candidate_count = 0;
+        let mut supported_candidate_count = 0;
+        let mut capability_not_supported = false;
+        let mut capability_level_insufficient = false;
+        let mut best_slot = None;
+        for (candidate_index, candidate) in candidates.iter().enumerate() {
+            if !candidate_allowed_for_order(&map, &candidate.apparatus) {
+                continue;
+            }
+            route_candidate_count += 1;
+            let profile = profile_for_apparatus(
+                &profiles,
+                &candidate.apparatus_id,
+                &candidate.apparatus,
+            );
+            if !profile.supports(&input.capability_requirements) {
+                let missing = input
+                    .capability_requirements
+                    .iter()
+                    .find(|requirement| profile.capability_level(&requirement.code) == 0);
+                if missing.is_some() {
+                    capability_not_supported = true;
+                } else {
+                    capability_level_insufficient = true;
+                }
+                continue;
+            }
+            supported_candidate_count += 1;
+            let reserved_duration_minutes =
+                effective_duration_minutes(&profile, input.duration_minutes)?;
+            let Ok((starts_at_unix, ends_at_unix)) = find_schedule_slot(
+                &profile,
+                &input,
+                &candidate.apparatus_id,
+                reserved_duration_minutes,
+                &downtimes,
+                &reservations,
+            ) else {
+                continue;
+            };
+            let is_better = best_slot.as_ref().is_none_or(|best: &ScheduledCandidate| {
+                (starts_at_unix, candidate_index) < (best.starts_at_unix, best.index)
+            });
+            if is_better {
+                best_slot = Some(ScheduledCandidate {
+                    index: candidate_index,
+                    candidate: candidate.clone(),
+                    profile,
+                    reserved_duration_minutes,
+                    starts_at_unix,
+                    ends_at_unix,
+                });
+            }
+        }
+        if route_candidate_count == 0 {
+            return Err(ProductionMapError::MoveNotAllowed);
+        }
+        if let Some(best) = best_slot {
+            let candidate = best.candidate;
+            let profile = best.profile;
+            let now = unix_seconds();
+            let reservation = ApparatusScheduleReservation {
+                reservation_id: format!("apparatus-reservation:{}", input.idempotency_key),
+                idempotency_key: input.idempotency_key,
+                order_id: input.order_id,
+                apparatus_id: candidate.apparatus_id,
+                apparatus: candidate.apparatus,
+                starts_at_unix: best.starts_at_unix,
+                ends_at_unix: best.ends_at_unix,
+                requested_duration_minutes: input.duration_minutes,
+                reserved_duration_minutes: best.reserved_duration_minutes,
+                status: ApparatusScheduleStatus::Planned,
+                priority: input.priority,
+                source: input.source,
+                reason: input.reason,
+                capability_requirements: input.capability_requirements,
+                actor: input.actor,
+                created_at_unix: now,
+            };
+            let reservation = self
+                .store
+                .put_apparatus_schedule_reservation(
+                    reservation,
+                    profile.capacity_slots,
+                    profile.finite_capacity,
+                )
+                .await?;
+            self.notify_live();
+            return Ok(ApparatusScheduleResult {
                 reservation,
-                profile.capacity_slots,
-                profile.finite_capacity,
-            )
-            .await?;
-        self.notify_live();
-        Ok(ApparatusScheduleResult {
-            reservation,
-            conflicts: Vec::new(),
-        })
+                conflicts: Vec::new(),
+            });
+        }
+        if supported_candidate_count == 0 {
+            return Err(if capability_not_supported {
+                ProductionMapError::CapabilityNotSupported
+            } else if capability_level_insufficient {
+                ProductionMapError::CapabilityLevelInsufficient
+            } else {
+                ProductionMapError::CapacityNoWorkingWindow
+            });
+        }
+        Err(ProductionMapError::CapacityNoWorkingWindow)
     }
 
     pub async fn cancel_apparatus_schedule_reservation(
@@ -282,7 +337,57 @@ fn normalize_schedule_request(
             !requirement.code.is_empty() && seen.insert(requirement.code.clone())
         })
         .collect();
+    let primary_id = input.apparatus_id.to_ascii_lowercase();
+    let mut seen_candidates = BTreeSet::new();
+    input.candidate_apparatuses = input
+        .candidate_apparatuses
+        .into_iter()
+        .map(|mut candidate| {
+            candidate.apparatus_id = candidate.apparatus_id.trim().to_string();
+            candidate.apparatus = candidate.apparatus.trim().to_string();
+            if candidate.apparatus_id.is_empty() && !candidate.apparatus.is_empty() {
+                candidate.apparatus_id = apparatus_id_for_name(&candidate.apparatus);
+            }
+            if candidate.apparatus.is_empty() && !candidate.apparatus_id.is_empty() {
+                candidate.apparatus = candidate.apparatus_id.clone();
+            }
+            candidate
+        })
+        .filter(|candidate| {
+            let key = if candidate.apparatus_id.is_empty() {
+                candidate.apparatus.to_ascii_lowercase()
+            } else {
+                candidate.apparatus_id.to_ascii_lowercase()
+            };
+            !key.is_empty()
+                && key != primary_id
+                && !seen_candidates.contains(&key)
+                && seen_candidates.insert(key)
+        })
+        .collect();
     Ok(input)
+}
+
+#[derive(Debug, Clone)]
+struct ScheduledCandidate {
+    index: usize,
+    candidate: ApparatusScheduleCandidate,
+    profile: ApparatusCapacityProfile,
+    reserved_duration_minutes: u32,
+    starts_at_unix: i64,
+    ends_at_unix: i64,
+}
+
+fn candidate_allowed_for_order(map: &ProductionMapDefinition, candidate: &str) -> bool {
+    map.nodes
+        .iter()
+        .filter(|node| node.kind == ProductionMapNodeKind::Apparatus)
+        .map(|node| node.title.trim())
+        .filter(|title| !title.is_empty())
+        .any(|source| {
+            queue_state::apparatus_titles_match(source, candidate)
+                || move_allowed(map, source, candidate)
+        })
 }
 
 fn profile_for_apparatus(
@@ -331,6 +436,7 @@ fn effective_duration_minutes(
 fn find_schedule_slot(
     profile: &ApparatusCapacityProfile,
     input: &ApparatusScheduleRequest,
+    apparatus_id: &str,
     duration_minutes: u32,
     downtimes: &[ApparatusDowntime],
     reservations: &[ApparatusScheduleReservation],
@@ -351,7 +457,7 @@ fn find_schedule_slot(
         }
         if downtimes.iter().any(|downtime| {
             downtime.active
-                && downtime.apparatus_id.eq_ignore_ascii_case(&input.apparatus_id)
+                && downtime.apparatus_id.eq_ignore_ascii_case(apparatus_id)
                 && intervals_overlap(
                     cursor,
                     end,
@@ -366,7 +472,7 @@ fn find_schedule_slot(
             .iter()
             .filter(|reservation| {
                 reservation.status.reserves_capacity()
-                    && reservation.apparatus_id.eq_ignore_ascii_case(&input.apparatus_id)
+                    && reservation.apparatus_id.eq_ignore_ascii_case(apparatus_id)
                     && intervals_overlap(
                         cursor,
                         end,

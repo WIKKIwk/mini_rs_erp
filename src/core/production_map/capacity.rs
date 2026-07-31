@@ -161,6 +161,12 @@ pub struct ApparatusScheduleReservation {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ApparatusScheduleCandidate {
+    pub apparatus_id: String,
+    pub apparatus: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ApparatusScheduleRequest {
     pub order_id: String,
     pub apparatus_id: String,
@@ -178,6 +184,8 @@ pub struct ApparatusScheduleRequest {
     pub idempotency_key: String,
     #[serde(default)]
     pub capability_requirements: Vec<ApparatusCapabilityRequirement>,
+    #[serde(default)]
+    pub candidate_apparatuses: Vec<ApparatusScheduleCandidate>,
     #[serde(default)]
     pub actor: QueueActionActor,
 }
