@@ -40,6 +40,7 @@ use self::capacity_helpers::{
     load_apparatus_downtimes, load_apparatus_schedule_reservation_by_idempotency_key,
     load_apparatus_schedule_reservations, put_apparatus_capacity_profile,
     put_apparatus_downtime, put_apparatus_schedule_reservation,
+    update_apparatus_schedule_reservation_status_tx,
 };
 use self::completion_helpers::{
     load_completion_request_by_event_id, load_completion_request_decisions_for_actor,
@@ -520,6 +521,16 @@ impl ProductionMapStorePort for PostgresProductionMapStore {
         }
         put_queue_states_tx(&mut tx, apparatus, write.states).await?;
         insert_queue_action_event_tx(&mut tx, &write.event).await?;
+        if let Some(status) = write.schedule_reservation_status {
+            update_apparatus_schedule_reservation_status_tx(
+                &mut tx,
+                &write.event.order_id,
+                apparatus,
+                status,
+                &write.event.actor,
+            )
+            .await?;
+        }
         if let Some(mut session) = write.session {
             put_order_run_session_tx(&mut tx, &session).await?;
         }

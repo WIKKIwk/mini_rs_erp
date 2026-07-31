@@ -71,6 +71,7 @@ pub struct QueueActionProgressWrite {
     pub qolip_checkouts: Vec<QolipCheckout>,
     pub returned_paint_report: Option<ReturnedPaintRequest>,
     pub order_control_update: Option<OrderControlRecord>,
+    pub schedule_reservation_status: Option<ApparatusScheduleStatus>,
 }
 
 pub struct ProductionMapApparatusTransferWrite {
@@ -80,6 +81,7 @@ pub struct ProductionMapApparatusTransferWrite {
     pub to_sequence: Vec<String>,
     pub from_states: QueueStateMap,
     pub to_states: QueueStateMap,
+    pub target_apparatus_id: String,
     pub session: OrderRunSession,
     pub progress_batch: OrderProgressBatch,
     pub progress_batch_updates: Vec<OrderProgressBatch>,
@@ -146,6 +148,15 @@ pub trait ProductionMapStorePort: Send + Sync {
         _input: ApparatusScheduleCancelRequest,
     ) -> StoreResult<ApparatusScheduleReservation> {
         Err(ProductionMapError::ScheduleReservationNotFound)
+    }
+    async fn update_apparatus_schedule_reservation_status(
+        &self,
+        _order_id: &str,
+        _apparatus: &str,
+        _status: ApparatusScheduleStatus,
+        _actor: &QueueActionActor,
+    ) -> StoreResult<()> {
+        Ok(())
     }
 
     // Queue state, policy, log, and completion-request persistence.
@@ -334,6 +345,10 @@ pub trait ProductionMapStorePort: Send + Sync {
         &self,
         write: QueueActionProgressWrite,
     ) -> StoreResult<QueueActionProgressWriteResult> {
+        let schedule_reservation_status = write.schedule_reservation_status;
+        let event_order_id = write.event.order_id.clone();
+        let event_actor = write.event.actor.clone();
+        let event_apparatus = write.apparatus.clone();
         self.put_apparatus_queue_states_with_event(&write.apparatus, write.states, write.event)
             .await?;
         if let Some(session) = write.session {
@@ -350,6 +365,15 @@ pub trait ProductionMapStorePort: Send + Sync {
         }
         if let Some(record) = write.order_control_update {
             self.put_order_control_state(record).await?;
+        }
+        if let Some(status) = schedule_reservation_status {
+            self.update_apparatus_schedule_reservation_status(
+                &event_order_id,
+                &event_apparatus,
+                status,
+                &event_actor,
+            )
+            .await?;
         }
         Ok(QueueActionProgressWriteResult::default())
     }

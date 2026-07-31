@@ -127,6 +127,19 @@ impl ProductionMapStorePort for MemoryProductionMapStore {
         capacity::cancel_apparatus_schedule_reservation(self, input).await
     }
 
+    async fn update_apparatus_schedule_reservation_status(
+        &self,
+        order_id: &str,
+        apparatus: &str,
+        status: ApparatusScheduleStatus,
+        actor: &QueueActionActor,
+    ) -> Result<(), ProductionMapError> {
+        capacity::update_apparatus_schedule_reservation_status(
+            self, order_id, apparatus, status, actor,
+        )
+        .await
+    }
+
     async fn apparatus_queue_states(
         &self,
     ) -> Result<BTreeMap<String, BTreeMap<String, String>>, ProductionMapError> {
@@ -401,6 +414,10 @@ impl ProductionMapStorePort for MemoryProductionMapStore {
                 }
             }
         }
+        let schedule_reservation_status = write.schedule_reservation_status;
+        let event_order_id = write.event.order_id.clone();
+        let event_actor = write.event.actor.clone();
+        let event_apparatus = write.apparatus.clone();
         self.put_apparatus_queue_states_with_event(&write.apparatus, write.states, write.event)
             .await?;
         if let Some(session) = write.session {
@@ -417,6 +434,15 @@ impl ProductionMapStorePort for MemoryProductionMapStore {
         }
         if let Some(record) = write.order_control_update {
             self.put_order_control_state(record).await?;
+        }
+        if let Some(status) = schedule_reservation_status {
+            self.update_apparatus_schedule_reservation_status(
+                &event_order_id,
+                &event_apparatus,
+                status,
+                &event_actor,
+            )
+            .await?;
         }
         if let Some(report) = write.returned_paint_report {
             self.returned_paint_requests

@@ -246,6 +246,8 @@ impl ProductionMapService {
         if let Some(update) = &claimed_alternative_map {
             self.store.put_map(update.updated.clone()).await?;
         }
+        let schedule_reservation_status =
+            schedule_reservation_status_for_action(prepared.event.action);
         let write_result = self
             .store
             .put_apparatus_queue_states_with_event_and_progress(QueueActionProgressWrite {
@@ -260,6 +262,7 @@ impl ProductionMapService {
                 qolip_checkouts,
                 returned_paint_report,
                 order_control_update: prepared.order_control_update.clone(),
+                schedule_reservation_status,
             })
             .await;
         let write_result = match write_result {
@@ -283,6 +286,18 @@ impl ProductionMapService {
             qolip_checkout_committed: write_result.qolip_checkout_committed,
         })
     }
+}
+
+fn schedule_reservation_status_for_action(
+    action: queue_state::ApparatusQueueAction,
+) -> Option<ApparatusScheduleStatus> {
+    Some(match action {
+        queue_state::ApparatusQueueAction::Start | queue_state::ApparatusQueueAction::Resume => {
+            ApparatusScheduleStatus::Active
+        }
+        queue_state::ApparatusQueueAction::Pause => ApparatusScheduleStatus::Paused,
+        queue_state::ApparatusQueueAction::Complete => ApparatusScheduleStatus::Completed,
+    })
 }
 
 fn validate_freeze_request_pause(

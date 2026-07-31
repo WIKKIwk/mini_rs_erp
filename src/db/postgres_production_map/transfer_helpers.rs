@@ -112,6 +112,21 @@ pub(super) async fn commit_apparatus_transfer(
     for batch in &write.progress_batch_updates {
         put_order_progress_batch_tx(&mut tx, batch).await?;
     }
+    sqlx::query(
+        "UPDATE mini_apparatus_schedule_reservations
+         SET apparatus_id = $1, apparatus = $2, actor_json = $3
+         WHERE order_id = $4
+           AND status = 'paused'
+           AND (lower(apparatus) = lower($5) OR lower(apparatus_id) = lower($5))",
+    )
+    .bind(write.target_apparatus_id.trim())
+    .bind(write.record.to_apparatus.trim())
+    .bind(serde_json::to_value(&write.record.actor).map_err(|_| ProductionMapError::StoreFailed)?)
+    .bind(write.record.order_id.trim())
+    .bind(write.record.from_apparatus.trim())
+    .execute(&mut *tx)
+    .await
+    .map_err(|_| ProductionMapError::StoreFailed)?;
 
     tx.commit()
         .await

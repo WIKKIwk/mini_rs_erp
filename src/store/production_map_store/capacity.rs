@@ -365,6 +365,36 @@ pub(super) async fn cancel_apparatus_schedule_reservation(
     Ok(reservation)
 }
 
+pub(super) async fn update_apparatus_schedule_reservation_status(
+    store: &ProductionMapStore,
+    order_id: &str,
+    apparatus: &str,
+    status: ApparatusScheduleStatus,
+    actor: &QueueActionActor,
+) -> Result<(), ProductionMapError> {
+    let conn = store
+        .conn
+        .lock()
+        .map_err(|_| ProductionMapError::StoreFailed)?;
+    let actor_json = encode(actor)?;
+    let status = status.as_str();
+    conn.execute(
+        "UPDATE apparatus_schedule_reservations
+         SET status = ?1, actor_json = ?2
+         WHERE order_id = ?3
+           AND (lower(apparatus) = lower(?4) OR lower(apparatus_id) = lower(?4))
+           AND (
+                status = ?1
+                OR (?1 = 'active' AND status IN ('planned', 'paused'))
+                OR (?1 = 'paused' AND status = 'active')
+                OR (?1 = 'completed' AND status IN ('planned', 'active', 'paused'))
+           )",
+        params![status, actor_json, order_id.trim(), apparatus.trim()],
+    )
+    .map_err(|_| ProductionMapError::StoreFailed)?;
+    Ok(())
+}
+
 fn reservation_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<ApparatusScheduleReservation> {
     Ok(ApparatusScheduleReservation {
         reservation_id: row.get(0)?,

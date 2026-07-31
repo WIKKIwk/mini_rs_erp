@@ -71,6 +71,7 @@ impl ProductionMapService {
             .collect::<Vec<_>>();
         let from_key = queue_state::resolve_apparatus_storage_key(from, &known_keys);
         let to_key = queue_state::resolve_apparatus_storage_key(to, &known_keys);
+        let target_apparatus_id = apparatus_id_for_name(&to_key);
         if from_key == to_key {
             return Err(ProductionMapError::MoveNotAllowed);
         }
@@ -251,6 +252,7 @@ impl ProductionMapService {
                 to_sequence,
                 from_states,
                 to_states,
+                target_apparatus_id,
                 session,
                 progress_batch,
                 progress_batch_updates,

@@ -99,6 +99,7 @@ pub struct ApparatusDowntime {
 pub enum ApparatusScheduleStatus {
     Planned,
     Active,
+    Paused,
     Completed,
     Cancelled,
 }
@@ -108,6 +109,7 @@ impl ApparatusScheduleStatus {
         match value.trim().to_ascii_lowercase().as_str() {
             "planned" => Some(Self::Planned),
             "active" => Some(Self::Active),
+            "paused" => Some(Self::Paused),
             "completed" => Some(Self::Completed),
             "cancelled" => Some(Self::Cancelled),
             _ => None,
@@ -118,6 +120,7 @@ impl ApparatusScheduleStatus {
         match self {
             Self::Planned => "planned",
             Self::Active => "active",
+            Self::Paused => "paused",
             Self::Completed => "completed",
             Self::Cancelled => "cancelled",
         }

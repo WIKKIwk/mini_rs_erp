@@ -97,6 +97,107 @@ async fn scheduler_respects_setup_cleanup_finite_capacity_and_idempotency() {
 }
 
 #[tokio::test]
+async fn queue_execution_keeps_schedule_reservation_in_sync_with_run_status() {
+    let store = Arc::new(MemoryProductionMapStore::new());
+    let service = ProductionMapService::new(store.clone());
+    let order_id = "zakaz-capacity-order-lifecycle";
+    service
+        .upsert_map(apparatus_stage_map(order_id, FLEXO_NAME))
+        .await
+        .expect("map");
+    service
+        .put_apparatus_capacity_profile(profile())
+        .await
+        .expect("profile");
+    let reservation = service
+        .schedule_apparatus_order(schedule(order_id, "capacity-key-lifecycle", 20))
+        .await
+        .expect("reservation")
+        .reservation;
+    assert_eq!(reservation.status, ApparatusScheduleStatus::Planned);
+    assert!(service
+        .maps()
+        .await
+        .expect("maps")
+        .iter()
+        .any(|saved| saved.map.id == order_id));
+
+    let actor = actor();
+    service
+        .apply_apparatus_queue_action(
+            FLEXO_NAME,
+            order_id,
+            queue_state::ApparatusQueueAction::Start,
+            &[FLEXO_NAME.to_string()],
+            actor.clone(),
+        )
+        .await
+        .expect("start");
+    let snapshot = service.apparatus_capacity_snapshot().await.expect("active snapshot");
+    assert_eq!(snapshot.reservations[0].status, ApparatusScheduleStatus::Active);
+
+    let paused = service
+        .apply_apparatus_queue_action_with_progress(
+            FLEXO_NAME,
+            order_id,
+            queue_state::ApparatusQueueAction::Pause,
+            &[FLEXO_NAME.to_string()],
+            actor.clone(),
+            QueueProgressInput {
+                produced_qty: Some(1.0),
+                uom: "kg".to_string(),
+                ..QueueProgressInput::default()
+            },
+        )
+        .await
+        .expect("pause");
+    let snapshot = service.apparatus_capacity_snapshot().await.expect("paused snapshot");
+    assert_eq!(snapshot.reservations[0].status, ApparatusScheduleStatus::Paused);
+
+    service
+        .apply_apparatus_queue_action_with_progress(
+            FLEXO_NAME,
+            order_id,
+            queue_state::ApparatusQueueAction::Resume,
+            &[FLEXO_NAME.to_string()],
+            actor.clone(),
+            QueueProgressInput {
+                qr_payload: paused
+                    .progress_batch
+                    .expect("pause batch")
+                    .qr_payload,
+                ..QueueProgressInput::default()
+            },
+        )
+        .await
+        .expect("resume");
+    let snapshot = service.apparatus_capacity_snapshot().await.expect("resumed snapshot");
+    assert_eq!(snapshot.reservations[0].status, ApparatusScheduleStatus::Active);
+
+    service
+        .apply_apparatus_queue_action_with_progress(
+            FLEXO_NAME,
+            order_id,
+            queue_state::ApparatusQueueAction::Complete,
+            &[FLEXO_NAME.to_string()],
+            actor,
+            QueueProgressInput {
+                produced_qty: Some(1.0),
+                uom: "kg".to_string(),
+                return_ink_kg: Some(0.1),
+                total_waste: Some(0.1),
+                finished_goods_kg: Some(1.0),
+                finished_goods_meter: Some(1.0),
+                ..QueueProgressInput::default()
+            },
+        )
+        .await
+        .expect("complete");
+    let snapshot = service.apparatus_capacity_snapshot().await.expect("completed snapshot");
+    assert_eq!(snapshot.reservations[0].status, ApparatusScheduleStatus::Completed);
+}
+
+#[tokio::test]
 async fn scheduler_allows_parallel_reservations_when_capacity_is_unlimited() {
     let store = Arc::new(MemoryProductionMapStore::new());
     let service = ProductionMapService::new(store);

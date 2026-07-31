@@ -291,6 +291,35 @@ pub(super) async fn cancel_apparatus_schedule_reservation(
     Ok(reservation)
 }
 
+pub(super) async fn update_apparatus_schedule_reservation_status_tx(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    order_id: &str,
+    apparatus: &str,
+    status: ApparatusScheduleStatus,
+    actor: &QueueActionActor,
+) -> Result<(), ProductionMapError> {
+    sqlx::query(
+        "UPDATE mini_apparatus_schedule_reservations
+         SET status = $1, actor_json = $2
+         WHERE order_id = $3
+           AND (lower(apparatus) = lower($4) OR lower(apparatus_id) = lower($4))
+           AND (
+                status = $1
+                OR ($1 = 'active' AND status IN ('planned', 'paused'))
+                OR ($1 = 'paused' AND status = 'active')
+                OR ($1 = 'completed' AND status IN ('planned', 'active', 'paused'))
+           )",
+    )
+    .bind(status.as_str())
+    .bind(serde_json::to_value(actor).map_err(|_| ProductionMapError::StoreFailed)?)
+    .bind(order_id.trim())
+    .bind(apparatus.trim())
+    .execute(&mut **tx)
+    .await
+    .map_err(|_| ProductionMapError::StoreFailed)?;
+    Ok(())
+}
+
 fn profile_from_row(row: sqlx::postgres::PgRow) -> Result<ApparatusCapacityProfile, ProductionMapError> {
     Ok(ApparatusCapacityProfile {
         apparatus_id: row.try_get("apparatus_id").map_err(|_| ProductionMapError::StoreFailed)?,

@@ -177,6 +177,20 @@ mod tests {
     }
 
     #[test]
+    fn apparatus_schedule_paused_status_migration_is_registered_with_the_runner() {
+        let migration = POSTGRES_MIGRATIONS
+            .iter()
+            .find(|(version, _)| *version == "0035_apparatus_schedule_paused_status")
+            .map(|(_, sql)| sql.to_lowercase())
+            .expect("apparatus schedule paused status migration");
+
+        assert!(migration.contains("drop constraint if exists"));
+        assert!(migration.contains(
+            "status in ('planned', 'active', 'paused', 'completed', 'cancelled')"
+        ));
+    }
+
+    #[test]
     fn rps_runtime_privilege_migration_is_fail_closed() {
         let migration = POSTGRES_MIGRATIONS
             .iter()

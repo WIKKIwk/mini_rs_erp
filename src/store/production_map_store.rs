@@ -147,6 +147,19 @@ impl ProductionMapStorePort for ProductionMapStore {
         capacity::cancel_apparatus_schedule_reservation(self, input).await
     }
 
+    async fn update_apparatus_schedule_reservation_status(
+        &self,
+        order_id: &str,
+        apparatus: &str,
+        status: crate::core::production_map::ApparatusScheduleStatus,
+        actor: &QueueActionActor,
+    ) -> Result<(), ProductionMapError> {
+        capacity::update_apparatus_schedule_reservation_status(
+            self, order_id, apparatus, status, actor,
+        )
+        .await
+    }
+
     async fn apparatus_queue_states(
         &self,
     ) -> Result<BTreeMap<String, BTreeMap<String, String>>, ProductionMapError> {

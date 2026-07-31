@@ -1,5 +1,6 @@
 use std::collections::BTreeMap;
 
+use crate::core::apparatus_groups::apparatus_id_for_name;
 use crate::core::production_map::*;
 
 use super::fixtures::{apparatus_stage_map, sample_map};
@@ -43,9 +44,36 @@ async fn paused_order_can_transfer_between_compatible_pechat_apparatuses_atomica
         .upsert_map(apparatus_stage_map(order_id, from))
         .await
         .expect("map");
+    service
+        .schedule_apparatus_order(ApparatusScheduleRequest {
+            order_id: order_id.to_string(),
+            apparatus_id: apparatus_id_for_name(from),
+            apparatus: from.to_string(),
+            earliest_start_unix: 1_700_000_000,
+            latest_end_unix: None,
+            duration_minutes: 20,
+            priority: 0,
+            source: "transfer-test".to_string(),
+            reason: "capacity reservation".to_string(),
+            idempotency_key: "transfer-capacity-reservation".to_string(),
+            capability_requirements: Vec::new(),
+            candidate_apparatuses: Vec::new(),
+            actor: actor.clone(),
+        })
+        .await
+        .expect("schedule");
     let batch = pause_first_stage_batch(&service, order_id, from, &actor, 42.5)
         .await
         .expect("pause");
+    assert_eq!(
+        service
+            .apparatus_capacity_snapshot()
+            .await
+            .expect("paused reservation")
+            .reservations[0]
+            .status,
+        ApparatusScheduleStatus::Paused
+    );
 
     let result = service
         .transfer_apparatus_order(
@@ -66,6 +94,17 @@ async fn paused_order_can_transfer_between_compatible_pechat_apparatuses_atomica
     assert_eq!(result.transfer.progress_batch_id, batch.batch_id);
     assert_eq!(result.transfer.session.apparatus, to);
     assert_eq!(result.transfer.progress_batch.apparatus, to);
+    let reservation = service
+        .apparatus_capacity_snapshot()
+        .await
+        .expect("transferred reservation")
+        .reservations
+        .into_iter()
+        .next()
+        .expect("reservation");
+    assert_eq!(reservation.status, ApparatusScheduleStatus::Paused);
+    assert_eq!(reservation.apparatus, to);
+    assert_eq!(reservation.apparatus_id, apparatus_id_for_name(to));
 
     let states = service.apparatus_queue_states().await.expect("states");
     assert_eq!(states.get(from).and_then(|states| states.get(order_id)), None);

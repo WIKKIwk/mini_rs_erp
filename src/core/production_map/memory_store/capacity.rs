@@ -130,6 +130,44 @@ pub(super) async fn cancel_apparatus_schedule_reservation(
     Ok(reservation.clone())
 }
 
+pub(super) async fn update_apparatus_schedule_reservation_status(
+    store: &MemoryProductionMapStore,
+    order_id: &str,
+    apparatus: &str,
+    status: ApparatusScheduleStatus,
+    actor: &QueueActionActor,
+) -> Result<(), ProductionMapError> {
+    let mut reservations = store.apparatus_schedule_reservations.write().await;
+    let Some(reservation) = reservations.values_mut().find(|reservation| {
+        reservation.order_id.trim() == order_id.trim()
+            && queue_state::apparatus_titles_match(&reservation.apparatus, apparatus)
+    }) else {
+        return Ok(());
+    };
+    if reservation.status == status {
+        return Ok(());
+    }
+    let allowed = match status {
+        ApparatusScheduleStatus::Active => {
+            matches!(reservation.status, ApparatusScheduleStatus::Planned | ApparatusScheduleStatus::Paused)
+        }
+        ApparatusScheduleStatus::Paused => reservation.status == ApparatusScheduleStatus::Active,
+        ApparatusScheduleStatus::Completed => matches!(
+            reservation.status,
+            ApparatusScheduleStatus::Planned
+                | ApparatusScheduleStatus::Active
+                | ApparatusScheduleStatus::Paused
+        ),
+        ApparatusScheduleStatus::Planned | ApparatusScheduleStatus::Cancelled => false,
+    };
+    if !allowed {
+        return Err(ProductionMapError::ScheduleReservationLocked);
+    }
+    reservation.status = status;
+    reservation.actor = actor.clone();
+    Ok(())
+}
+
 #[allow(dead_code)]
 fn _queue_state_is_active(value: &str) -> bool {
     queue_state::ApparatusQueueOrderState::parse(value)

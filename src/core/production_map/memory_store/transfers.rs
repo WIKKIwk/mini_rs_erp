@@ -94,6 +94,19 @@ pub(super) async fn commit_apparatus_transfer(
         }
     }
 
+    {
+        let mut reservations = store.apparatus_schedule_reservations.write().await;
+        if let Some(reservation) = reservations.values_mut().find(|reservation| {
+            reservation.order_id.trim() == order_id
+                && reservation.status == ApparatusScheduleStatus::Paused
+                && queue_state::apparatus_titles_match(&reservation.apparatus, from)
+        }) {
+            reservation.apparatus_id = write.target_apparatus_id.trim().to_string();
+            reservation.apparatus = to.to_string();
+            reservation.actor = write.record.actor.clone();
+        }
+    }
+
     let qolip_codes = session_qolip_codes(&write.session);
     if !qolip_codes.is_empty() {
         let sessions = store.order_run_sessions.read().await;
