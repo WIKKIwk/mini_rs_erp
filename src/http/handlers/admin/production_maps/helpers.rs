@@ -212,8 +212,29 @@ pub(super) fn calculate_order_error(error: CalculateOrderError) -> AdminError {
 
 pub(super) fn production_map_error(error: ProductionMapError) -> AdminError {
     match error {
+        ProductionMapError::MissingId => bad_request("map_id_required"),
+        ProductionMapError::MissingProductCode => bad_request("map_product_code_required"),
+        ProductionMapError::MissingTitle => bad_request("map_title_required"),
+        ProductionMapError::MissingStart => bad_request("map_start_required"),
+        ProductionMapError::MissingEnd => bad_request("map_end_required"),
+        ProductionMapError::DuplicateNode(_) => bad_request("duplicate_node_id"),
         ProductionMapError::DuplicateOrderNumber => bad_request("duplicate_order_number"),
         ProductionMapError::OrderNumberImmutable => bad_request("order_number_immutable"),
+        ProductionMapError::MissingEdgeNode(_) => bad_request("missing_edge_node"),
+        ProductionMapError::Cycle => bad_request("production_map_cycle"),
+        ProductionMapError::MissingFormulaTarget => bad_request("formula_target_required"),
+        ProductionMapError::MissingFormulaExpression => bad_request("formula_expression_required"),
+        ProductionMapError::InvalidFormulaTarget(_) => bad_request("invalid_formula_target"),
+        ProductionMapError::InvalidFormulaExpression(_) => {
+            bad_request("invalid_formula_expression")
+        }
+        ProductionMapError::MapNotFound => not_found("map_not_found"),
+        ProductionMapError::InvalidOrderQty => bad_request("invalid_order_qty"),
+        ProductionMapError::InvalidNodeQty(_) => bad_request("invalid_node_qty"),
+        ProductionMapError::InvalidLocation(_) => bad_request("invalid_location"),
+        ProductionMapError::UnknownFormulaVariable(_) => bad_request("unknown_formula_variable"),
+        ProductionMapError::FormulaDivisionByZero => bad_request("formula_division_by_zero"),
+        ProductionMapError::MissingConditionBranch => bad_request("condition_branch_required"),
         ProductionMapError::MoveNotAllowed => bad_request("move_not_allowed"),
         ProductionMapError::StartedOrderMoveRequiresTransfer => {
             conflict("started_order_move_requires_transfer")
@@ -245,6 +266,7 @@ pub(super) fn production_map_error(error: ProductionMapError) -> AdminError {
         ProductionMapError::ApparatusTransferTargetConflict => {
             conflict("apparatus_transfer_target_conflict")
         }
+        ProductionMapError::StoreFailed => server_error("store_failed"),
         ProductionMapError::QueueActionNotAllowed => bad_request("queue_action_not_allowed"),
         ProductionMapError::OrderNotStarted => conflict("order_not_started"),
         ProductionMapError::OrderAlreadyCompleted => conflict("order_already_completed"),
@@ -339,9 +361,59 @@ pub(super) fn production_map_error(error: ProductionMapError) -> AdminError {
         ProductionMapError::ProgressBatchNotResumable => {
             bad_request("progress_batch_not_resumable")
         }
-        ProductionMapError::MapNotFound => not_found("map_not_found"),
-        ProductionMapError::StoreFailed => server_error("store failed"),
-        other => bad_request(other.to_string()),
+        ProductionMapError::CapacityProfileInvalid => bad_request("capacity_profile_invalid"),
+        ProductionMapError::CapacityProfileNotFound => not_found("capacity_profile_not_found"),
+        ProductionMapError::CapabilityNotSupported => bad_request("capability_not_supported"),
+        ProductionMapError::CapabilityLevelInsufficient => {
+            conflict("capability_level_insufficient")
+        }
+        ProductionMapError::CapacityConflict => conflict("capacity_conflict"),
+        ProductionMapError::CapacityNoWorkingWindow => conflict("capacity_no_working_window"),
+        ProductionMapError::CapacityUnavailable => conflict("capacity_unavailable"),
+        ProductionMapError::ScheduleInputInvalid => bad_request("schedule_input_invalid"),
+        ProductionMapError::ScheduleIdempotencyConflict => {
+            conflict("schedule_idempotency_conflict")
+        }
+        ProductionMapError::ScheduleReservationNotFound => {
+            not_found("schedule_reservation_not_found")
+        }
+        ProductionMapError::ScheduleReservationLocked => conflict("schedule_reservation_locked"),
+    }
+}
+
+#[cfg(test)]
+mod production_map_error_tests {
+    use super::*;
+
+    fn assert_code(error: ProductionMapError, expected: &str) {
+        let (_, response) = production_map_error(error);
+        assert_eq!(response.0.error, expected);
+    }
+
+    #[test]
+    fn validation_errors_use_stable_codes_instead_of_display_text() {
+        assert_code(ProductionMapError::MissingId, "map_id_required");
+        assert_code(
+            ProductionMapError::DuplicateNode("node-1".to_string()),
+            "duplicate_node_id",
+        );
+        assert_code(
+            ProductionMapError::InvalidFormulaExpression("x".to_string()),
+            "invalid_formula_expression",
+        );
+        assert_code(ProductionMapError::Cycle, "production_map_cycle");
+    }
+
+    #[test]
+    fn capacity_errors_keep_their_specific_http_and_api_identity() {
+        let (status, response) = production_map_error(ProductionMapError::CapacityConflict);
+        assert_eq!(status, StatusCode::CONFLICT);
+        assert_eq!(response.0.error, "capacity_conflict");
+
+        let (status, response) =
+            production_map_error(ProductionMapError::ScheduleReservationNotFound);
+        assert_eq!(status, StatusCode::NOT_FOUND);
+        assert_eq!(response.0.error, "schedule_reservation_not_found");
     }
 }
 
