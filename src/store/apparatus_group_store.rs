@@ -366,6 +366,7 @@ mod tests {
                     family: "pechat".to_string(),
                     kind: "flexo".to_string(),
                     capabilities: vec!["print".to_string(), "flexo".to_string()],
+                    capability_profiles: Vec::new(),
                     color_stations: None,
                 },
             )

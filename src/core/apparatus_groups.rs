@@ -45,8 +45,35 @@ pub struct ApparatusMasterData {
     pub kind: String,
     #[serde(default)]
     pub capabilities: Vec<String>,
+    #[serde(default)]
+    pub capability_profiles: Vec<ApparatusCapabilityProfile>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub color_stations: Option<u8>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ApparatusCapabilityProfile {
+    pub code: String,
+    #[serde(default = "default_capability_level")]
+    pub level: u16,
+    #[serde(default)]
+    pub valid_from_unix: Option<i64>,
+    #[serde(default)]
+    pub valid_to_unix: Option<i64>,
+    #[serde(default = "default_capability_enabled")]
+    pub enabled: bool,
+}
+
+impl ApparatusCapabilityProfile {
+    pub fn is_valid_at(&self, at_unix: i64) -> bool {
+        self.enabled
+            && self
+                .valid_from_unix
+                .is_none_or(|starts_at| at_unix >= starts_at)
+            && self
+                .valid_to_unix
+                .is_none_or(|ends_at| at_unix < ends_at)
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -399,6 +426,7 @@ pub fn apparatus_master_data_for_name(name: &str) -> ApparatusMasterData {
                 "pechat".to_string(),
                 "flexo".to_string(),
             ],
+            capability_profiles: default_capability_profiles(["print", "pechat", "flexo"]),
             color_stations: None,
         };
     }
@@ -407,6 +435,7 @@ pub fn apparatus_master_data_for_name(name: &str) -> ApparatusMasterData {
             family: "pechat".to_string(),
             kind: "color_pechat".to_string(),
             capabilities: vec!["print".to_string(), "pechat".to_string()],
+            capability_profiles: default_capability_profiles(["print", "pechat"]),
             color_stations: Some(color_stations),
         };
     }
@@ -434,10 +463,12 @@ fn apparatus_master_data(
     capabilities: impl IntoIterator<Item = &'static str>,
     color_stations: Option<u8>,
 ) -> ApparatusMasterData {
+    let capabilities = capabilities.into_iter().map(str::to_string).collect::<Vec<_>>();
     ApparatusMasterData {
         family: family.to_string(),
         kind: kind.to_string(),
-        capabilities: capabilities.into_iter().map(str::to_string).collect(),
+        capability_profiles: default_capability_profiles(capabilities.iter().map(String::as_str)),
+        capabilities,
         color_stations,
     }
 }
@@ -472,10 +503,94 @@ pub fn normalize_apparatus_master_data(
                 values
             });
     }
+    if master.kind == "flexo" || master.capabilities.iter().any(|item| item == "flexo") {
+        master.family = "pechat".to_string();
+        master.kind = "flexo".to_string();
+        for capability in ["print", "pechat", "flexo"] {
+            if !master.capabilities.iter().any(|item| item == capability) {
+                master.capabilities.push(capability.to_string());
+            }
+        }
+    }
+    master.capability_profiles = normalize_capability_profiles(
+        master.capability_profiles,
+        &master.capabilities,
+    );
     if master.color_stations.is_none() {
         master.color_stations = inferred.color_stations;
     }
     master
+}
+
+fn default_capability_level() -> u16 {
+    1
+}
+
+fn default_capability_enabled() -> bool {
+    true
+}
+
+fn default_capability_profiles<'a>(
+    capabilities: impl IntoIterator<Item = &'a str>,
+) -> Vec<ApparatusCapabilityProfile> {
+    capabilities
+        .into_iter()
+        .map(|code| ApparatusCapabilityProfile {
+            code: code.to_string(),
+            level: 1,
+            valid_from_unix: None,
+            valid_to_unix: None,
+            enabled: true,
+        })
+        .collect()
+}
+
+fn normalize_capability_profiles(
+    profiles: Vec<ApparatusCapabilityProfile>,
+    capabilities: &[String],
+) -> Vec<ApparatusCapabilityProfile> {
+    let mut normalized = Vec::new();
+    for mut profile in profiles {
+        profile.code = profile.code.trim().to_ascii_lowercase();
+        if profile.code.is_empty()
+            || profile.level == 0
+            || profile
+                .valid_from_unix
+                .zip(profile.valid_to_unix)
+                .is_some_and(|(starts_at, ends_at)| ends_at <= starts_at)
+            || normalized.iter().any(|item: &ApparatusCapabilityProfile| {
+                item.code == profile.code
+                    && item.valid_from_unix == profile.valid_from_unix
+            })
+        {
+            continue;
+        }
+        profile.level = profile.level.clamp(1, 100);
+        normalized.push(profile);
+    }
+    for capability in capabilities {
+        let code = capability.trim().to_ascii_lowercase();
+        if code.is_empty()
+            || normalized
+                .iter()
+                .any(|profile| profile.code == code && profile.valid_from_unix.is_none())
+        {
+            continue;
+        }
+        normalized.push(ApparatusCapabilityProfile {
+            code,
+            level: 1,
+            valid_from_unix: None,
+            valid_to_unix: None,
+            enabled: true,
+        });
+    }
+    normalized.sort_by(|left, right| {
+        left.code
+            .cmp(&right.code)
+            .then(left.valid_from_unix.cmp(&right.valid_from_unix))
+    });
+    normalized
 }
 
 pub fn custom_apparatus_id(name: &str) -> String {
@@ -771,5 +886,37 @@ mod tests {
 
         assert_eq!(saved.name, "Bosma aparat");
         assert!(saved.apparatus.iter().any(|item| item == "Flexo pechat"));
+    }
+
+    #[test]
+    fn explicit_flexo_master_data_is_promoted_to_printing_capabilities() {
+        let master = normalize_apparatus_master_data(
+            ApparatusMasterData {
+                family: String::new(),
+                kind: "flexo".to_string(),
+                capabilities: Vec::new(),
+                capability_profiles: vec![ApparatusCapabilityProfile {
+                    code: "flexo".to_string(),
+                    level: 3,
+                    valid_from_unix: None,
+                    valid_to_unix: None,
+                    enabled: true,
+                }],
+                color_stations: None,
+            },
+            "Maxsus liniya 1",
+        );
+
+        assert_eq!(master.family, "pechat");
+        assert_eq!(master.kind, "flexo");
+        assert!(master.capabilities.iter().any(|item| item == "print"));
+        assert!(master.capabilities.iter().any(|item| item == "pechat"));
+        let flexo = master
+            .capability_profiles
+            .iter()
+            .find(|profile| profile.code == "flexo")
+            .expect("flexo capability profile");
+        assert_eq!(flexo.level, 3);
+        assert!(flexo.is_valid_at(1_700_000_000));
     }
 }

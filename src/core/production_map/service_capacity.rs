@@ -279,10 +279,17 @@ fn profile_for_apparatus(
     let inferred = apparatus_master_data_for_name(apparatus);
     profile.capabilities = inferred.capabilities.clone();
     profile.capability_levels = inferred
-        .capabilities
-        .into_iter()
-        .map(|code| (code, 1))
+        .capability_profiles
+        .iter()
+        .filter(|capability| capability.is_valid_at(unix_seconds()))
+        .map(|capability| (capability.code.clone(), capability.level))
         .collect();
+    for capability in inferred.capabilities {
+        profile
+            .capability_levels
+            .entry(capability)
+            .or_insert(1);
+    }
     profile
 }
 

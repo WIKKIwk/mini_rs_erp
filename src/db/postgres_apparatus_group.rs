@@ -188,7 +188,7 @@ impl PostgresApparatusGroupStore {
                 "UPDATE mini_apparatus
                  SET name = $2, payload_json = $3, updated_at = now()
                  WHERE id = $1
-                 RETURNING name",
+                 RETURNING id",
             )
             .bind(id)
             .bind(name)
