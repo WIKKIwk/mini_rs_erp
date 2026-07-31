@@ -16,6 +16,7 @@ mod service;
 mod service_audit;
 mod service_completion;
 mod service_capacity;
+mod service_capacity_scheduler;
 mod service_maps;
 mod service_order_control;
 mod service_progress;
