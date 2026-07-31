@@ -159,6 +159,24 @@ mod tests {
     }
 
     #[test]
+    fn apparatus_capacity_migration_is_registered_with_the_runner() {
+        let migration = POSTGRES_MIGRATIONS
+            .iter()
+            .find(|(version, _)| *version == "0034_apparatus_capacity_scheduling")
+            .map(|(_, sql)| sql.to_lowercase())
+            .expect("apparatus capacity migration");
+
+        for expected in [
+            "mini_apparatus_capacity_profiles",
+            "mini_apparatus_downtimes",
+            "mini_apparatus_schedule_reservations",
+            "status in ('planned', 'active', 'completed', 'cancelled')",
+        ] {
+            assert!(migration.contains(expected), "missing {expected}");
+        }
+    }
+
+    #[test]
     fn rps_runtime_privilege_migration_is_fail_closed() {
         let migration = POSTGRES_MIGRATIONS
             .iter()
