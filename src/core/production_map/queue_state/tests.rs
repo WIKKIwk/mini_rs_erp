@@ -31,9 +31,30 @@ fn first_actionable_prioritizes_in_progress_order() {
 }
 
 #[test]
-fn effective_sequence_uses_visible_order_when_store_empty() {
-    let visible = vec!["zakaz-1236".to_string(), "zakaz-6687".to_string()];
-    assert_eq!(effective_apparatus_sequence(&[], &visible), visible,);
+fn effective_sequence_appends_unsequenced_orders_oldest_first() {
+    let visible = vec!["zakaz-new".to_string(), "zakaz-old".to_string()];
+    assert_eq!(
+        effective_apparatus_sequence(&[], &visible),
+        vec!["zakaz-old".to_string(), "zakaz-new".to_string()],
+    );
+}
+
+#[test]
+fn effective_sequence_appends_new_orders_after_saved_sequence() {
+    let stored = vec!["zakaz-old".to_string()];
+    let visible = vec![
+        "zakaz-newer".to_string(),
+        "zakaz-new".to_string(),
+        "zakaz-old".to_string(),
+    ];
+    assert_eq!(
+        effective_apparatus_sequence(&stored, &visible),
+        vec![
+            "zakaz-old".to_string(),
+            "zakaz-new".to_string(),
+            "zakaz-newer".to_string(),
+        ],
+    );
 }
 
 #[test]

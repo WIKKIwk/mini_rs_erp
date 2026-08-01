@@ -15,13 +15,6 @@ pub fn effective_apparatus_sequence(
     if visible.is_empty() {
         return Vec::new();
     }
-    if stored_sequence.is_empty() {
-        return visible_order_ids
-            .iter()
-            .map(|id| id.trim().to_string())
-            .filter(|id| !id.is_empty())
-            .collect();
-    }
     let mut result = Vec::new();
     for id in stored_sequence {
         let id = id.trim();
@@ -32,6 +25,10 @@ pub fn effective_apparatus_sequence(
             result.push(id.to_string());
         }
     }
+    // Production maps are loaded newest-first. Orders that are not yet part
+    // of a saved sequence must therefore be appended oldest-first so a new
+    // order cannot jump ahead of the existing queue.
+    let visible_order_ids = visible_order_ids.iter().rev();
     for id in visible_order_ids {
         let id = id.trim();
         if id.is_empty() {
