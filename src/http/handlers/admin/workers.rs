@@ -423,6 +423,10 @@ fn worker_group_error(error: WorkerGroupError) -> AdminError {
         WorkerGroupError::DuplicateWorker => {
             bad_request("worker is duplicated in apparatus groups")
         }
+        WorkerGroupError::GroupNotFound => bad_request("worker group was not found"),
+        WorkerGroupError::DuplicateGroup => {
+            bad_request("worker group name already exists")
+        }
         WorkerGroupError::StoreFailed => server_error("worker group store failed"),
     }
 }

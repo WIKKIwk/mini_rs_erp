@@ -187,6 +187,20 @@ pub async fn worker_groups(
                 .worker_groups(None)
                 .await
                 .map_err(worker_group_error)?;
+            let has_previous_identity =
+                input.previous_apparatus.is_some() || input.previous_group_code.is_some();
+            let previous_apparatus = input
+                .previous_apparatus
+                .as_deref()
+                .unwrap_or(input.apparatus.as_str())
+                .trim()
+                .to_string();
+            let previous_group_code = input
+                .previous_group_code
+                .as_deref()
+                .unwrap_or(input.group_code.as_str())
+                .trim()
+                .to_string();
             let saved = state
                 .worker_groups
                 .upsert_group(input)
@@ -194,7 +208,20 @@ pub async fn worker_groups(
                 .map_err(worker_group_error)?;
             let affected_worker_ids = previous_groups
                 .iter()
-                .filter(|group| group.group_code == saved.group_code)
+                .filter(|group| {
+                    if has_previous_identity {
+                        group
+                            .apparatus
+                            .eq_ignore_ascii_case(&previous_apparatus)
+                            && group
+                                .group_code
+                                .eq_ignore_ascii_case(&previous_group_code)
+                    } else {
+                        group
+                            .group_code
+                            .eq_ignore_ascii_case(&saved.group_code)
+                    }
+                })
                 .flat_map(|group| group.worker_ids.iter())
                 .chain(saved.worker_ids.iter())
                 .map(|id| id.trim().to_string())
@@ -268,4 +295,3 @@ async fn sync_worker_group_apparatchi_assignments(
     }
     Ok(())
 }
-

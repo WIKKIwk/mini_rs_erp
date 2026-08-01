@@ -601,6 +601,59 @@ async fn admin_worker_groups_save_custom_codes_schedule_and_reject_duplicate_wor
 }
 
 #[tokio::test]
+async fn admin_worker_group_can_be_renamed_without_leaving_the_old_group() {
+    let state = test_state();
+    let token = session(&state, PrincipalRole::Admin).await;
+
+    let created = build_router(state.clone())
+        .oneshot(request_with_body(
+            "PUT",
+            "/v1/mobile/admin/worker-groups",
+            &token,
+            r#"{
+                "apparatus":"Laminatsiya 1",
+                "group_code":"A guruh",
+                "shift":"kunduz"
+            }"#,
+        ))
+        .await
+        .expect("create worker group");
+    assert_eq!(created.status(), StatusCode::OK);
+
+    let renamed = build_router(state.clone())
+        .oneshot(request_with_body(
+            "PUT",
+            "/v1/mobile/admin/worker-groups",
+            &token,
+            r#"{
+                "apparatus":"Laminatsiya 1",
+                "group_code":"A laminatsiya",
+                "previous_apparatus":"Laminatsiya 1",
+                "previous_group_code":"A guruh",
+                "shift":"kunduz"
+            }"#,
+        ))
+        .await
+        .expect("rename worker group");
+    assert_eq!(renamed.status(), StatusCode::OK);
+    assert_eq!(json_body(renamed).await["group_code"], "A LAMINATSIYA");
+
+    let listed = build_router(state)
+        .oneshot(request(
+            "GET",
+            "/v1/mobile/admin/worker-groups?apparatus=Laminatsiya%201",
+            &token,
+        ))
+        .await
+        .expect("list renamed worker group");
+    assert_eq!(listed.status(), StatusCode::OK);
+    let groups = json_body(listed).await;
+    let groups = groups.as_array().expect("groups");
+    assert_eq!(groups.len(), 1);
+    assert_eq!(groups[0]["group_code"], "A LAMINATSIYA");
+}
+
+#[tokio::test]
 async fn worker_login_receives_group_assigned_apparatus() {
     let state = test_state();
     let token = session(&state, PrincipalRole::Admin).await;

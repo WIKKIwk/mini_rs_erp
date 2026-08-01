@@ -37,7 +37,7 @@ pub(super) fn normalize_input(
     })
 }
 
-fn normalize_group_code(value: &str) -> Result<String, WorkerGroupError> {
+pub(super) fn normalize_group_code(value: &str) -> Result<String, WorkerGroupError> {
     let upper = value
         .split_whitespace()
         .collect::<Vec<_>>()

@@ -9,6 +9,8 @@ async fn worker_group_accepts_custom_codes_schedule_and_rejects_duplicate_worker
         .upsert_group(WorkerGroupUpsert {
             apparatus: "Laminatsiya 1".to_string(),
             group_code: "b guruh".to_string(),
+            previous_apparatus: None,
+            previous_group_code: None,
             shift: "kechki".to_string(),
             start_time: "08:30".to_string(),
             end_time: "20:30".to_string(),
@@ -96,4 +98,42 @@ async fn worker_group_accepts_custom_codes_schedule_and_rejects_duplicate_worker
             .collect::<Vec<_>>(),
         vec!["B GURUH"]
     );
+}
+
+#[tokio::test]
+async fn worker_group_can_be_renamed_without_leaving_the_old_group() {
+    let service = WorkerGroupService::new(Arc::new(MemoryWorkerGroupStore::new()));
+
+    service
+        .upsert_group(WorkerGroupUpsert {
+            apparatus: "Laminatsiya 1".to_string(),
+            group_code: "A guruh".to_string(),
+            shift: "kunduz".to_string(),
+            worker_ids: vec!["w1".to_string()],
+            ..WorkerGroupUpsert::default()
+        })
+        .await
+        .expect("create group");
+
+    let renamed = service
+        .upsert_group(WorkerGroupUpsert {
+            apparatus: "Laminatsiya 1".to_string(),
+            group_code: "A laminatsiya".to_string(),
+            previous_apparatus: Some("Laminatsiya 1".to_string()),
+            previous_group_code: Some("A guruh".to_string()),
+            shift: "kunduz".to_string(),
+            worker_ids: vec!["w1".to_string()],
+            ..WorkerGroupUpsert::default()
+        })
+        .await
+        .expect("rename group");
+
+    assert_eq!(renamed.group_code, "A LAMINATSIYA");
+    let groups = service
+        .worker_groups(Some("Laminatsiya 1"))
+        .await
+        .expect("list groups");
+    assert_eq!(groups.len(), 1);
+    assert_eq!(groups[0].group_code, "A LAMINATSIYA");
+    assert_eq!(groups[0].worker_ids, vec!["w1"]);
 }
