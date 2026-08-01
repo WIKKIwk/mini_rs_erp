@@ -48,6 +48,8 @@ pub enum ProductionMapError {
     MoveNotAllowed,
     #[error("started order requires an apparatus transfer")]
     StartedOrderMoveRequiresTransfer,
+    #[error("started production map stages cannot be changed")]
+    StartedProductionMapStageLocked,
     #[error("apparatus transfer reason is required")]
     ApparatusTransferReasonRequired,
     #[error("apparatus transfer requires a stable idempotency key")]

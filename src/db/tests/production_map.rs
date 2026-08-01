@@ -165,6 +165,16 @@ async fn postgres_production_map_store_persists_maps_sequences_and_queue_states(
         .await
         .expect("remove protected run session");
 
+    let audit = service
+        .audit_production_workflow()
+        .await
+        .expect("audit production workflow");
+    assert!(
+        audit.ok,
+        "unexpected workflow audit violations: {:?}",
+        audit.violations
+    );
+
     service
         .restore_map(None, "zakaz-1001")
         .await
@@ -421,6 +431,8 @@ fn wip_batch(current_apparatus: &str) -> OrderProgressBatch {
     OrderProgressBatch {
         batch_id: "batch-wip-suffix".to_string(),
         session_id: "session-wip-suffix".to_string(),
+        started_at_unix: 0,
+        completed_at_unix: 0,
         apparatus: "Laminatsiya - A".to_string(),
         order_id: "order-wip-suffix".to_string(),
         action: queue_state::ApparatusQueueAction::Pause,

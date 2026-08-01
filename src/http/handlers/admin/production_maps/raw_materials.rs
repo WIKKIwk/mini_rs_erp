@@ -2,7 +2,7 @@ use super::raw_material_details::{
     fill_raw_material_assignment_input, item_group_path, lookup_raw_material_detail,
     raw_material_rulon_match_metrics, require_material_item_group_scope,
     require_material_warehouse_scope, resolve_raw_material_stock_item,
-    validate_rulon_size_for_pechat_map,
+    validate_rulon_size_for_apparatus_map,
 };
 use super::*;
 use crate::db::postgres_raw_material_events::{
@@ -226,6 +226,20 @@ pub async fn raw_material_assignments(
     .await?;
     match method {
         Method::GET => {
+            if principal.role == PrincipalRole::MaterialTaminotchi
+                && !query.apparatus.trim().is_empty()
+            {
+                let assigned_apparatus =
+                    state.admin.principal_assigned_apparatus(&principal).await;
+                if !queue_state::apparatus_matches_assigned(
+                    &query.apparatus,
+                    &assigned_apparatus,
+                ) {
+                    return Err(production_map_error(
+                        ProductionMapError::ApparatusNotAssigned,
+                    ));
+                }
+            }
             let mut assignments = state
                 .production_maps
                 .raw_material_assignments()
@@ -408,6 +422,20 @@ pub async fn raw_material_assignment_candidates(
     } else {
         None
     };
+    let assigned_apparatus = if principal.role == PrincipalRole::MaterialTaminotchi {
+        Some(state.admin.principal_assigned_apparatus(&principal).await)
+    } else {
+        None
+    };
+    let requested_apparatus = query.apparatus.trim();
+    if assigned_apparatus.as_ref().is_some_and(|assigned| {
+        !requested_apparatus.is_empty()
+            && !queue_state::apparatus_matches_assigned(requested_apparatus, assigned)
+    }) {
+        return Err(production_map_error(
+            ProductionMapError::ApparatusNotAssigned,
+        ));
+    }
 
     let mut apparatus_options_by_group = BTreeMap::<String, Vec<String>>::new();
     let mut candidates = Vec::<RawMaterialAssignmentCandidateResponse>::new();
@@ -434,9 +462,6 @@ pub async fn raw_material_assignment_candidates(
         if group_path.is_empty() {
             continue;
         }
-        if validate_rulon_size_for_pechat_map(&order.map, &entry, item, &group_path).is_err() {
-            continue;
-        }
         let group_key = group_path
             .iter()
             .map(|group| group.trim().to_ascii_lowercase())
@@ -450,14 +475,34 @@ pub async fn raw_material_assignment_candidates(
                 .raw_material_assignment_apparatus_options(order_id, &group_path)
                 .await
                 .map_err(production_map_error)?;
+            let options = filter_raw_material_apparatus_options(
+                options,
+                requested_apparatus,
+                assigned_apparatus.as_deref(),
+            );
             apparatus_options_by_group.insert(group_key, options.clone());
             options
         };
+        let apparatus_options = apparatus_options
+            .into_iter()
+            .filter(|apparatus| {
+                validate_rulon_size_for_apparatus_map(
+                    &order.map,
+                    apparatus,
+                    &entry,
+                    item,
+                    &group_path,
+                )
+                .is_ok()
+            })
+            .collect::<Vec<_>>();
         if apparatus_options.is_empty() {
             continue;
         }
         let (order_width_mm, roll_width_mm, leftover_width_mm, match_type) =
-            match raw_material_rulon_match_metrics(&order.map, &entry, item, &group_path) {
+            match apparatus_options.iter().find_map(|apparatus| {
+                raw_material_rulon_match_metrics(&order.map, apparatus, &entry, item, &group_path)
+            }) {
                 Some((order_width, roll_width, leftover_width)) => (
                     Some(order_width),
                     Some(roll_width),
@@ -510,6 +555,24 @@ fn raw_material_candidate_match_priority(match_type: &str) -> u8 {
         "closest_width" => 1,
         _ => 2,
     }
+}
+
+fn filter_raw_material_apparatus_options(
+    options: Vec<String>,
+    requested_apparatus: &str,
+    assigned_apparatus: Option<&[String]>,
+) -> Vec<String> {
+    options
+        .into_iter()
+        .filter(|apparatus| {
+            assigned_apparatus
+                .is_none_or(|assigned| queue_state::apparatus_matches_assigned(apparatus, assigned))
+        })
+        .filter(|apparatus| {
+            requested_apparatus.is_empty()
+                || queue_state::apparatus_titles_match(apparatus, requested_apparatus)
+        })
+        .collect()
 }
 
 pub async fn raw_material_assignment_candidate_orders(
@@ -576,16 +639,38 @@ pub async fn raw_material_assignment_candidate_orders(
         .raw_material_assignment_orders()
         .await
         .map_err(production_map_error)?;
+    let assigned_apparatus = if principal.role == PrincipalRole::MaterialTaminotchi {
+        Some(state.admin.principal_assigned_apparatus(&principal).await)
+    } else {
+        None
+    };
+    let requested_apparatus = query.apparatus.trim();
+    if assigned_apparatus.as_ref().is_some_and(|assigned| {
+        !requested_apparatus.is_empty()
+            && !queue_state::apparatus_matches_assigned(requested_apparatus, assigned)
+    }) {
+        return Err(production_map_error(
+            ProductionMapError::ApparatusNotAssigned,
+        ));
+    }
     let mut candidates = Vec::<RawMaterialAssignmentOrderCandidateResponse>::new();
     for order in active_orders {
-        if validate_rulon_size_for_pechat_map(&order.map, &stock, &item, &group_path).is_err() {
-            continue;
-        }
         let apparatus_options = state
             .production_maps
             .raw_material_assignment_apparatus_options(&order.map.id, &group_path)
             .await
             .map_err(production_map_error)?;
+        let apparatus_options = filter_raw_material_apparatus_options(
+            apparatus_options,
+            requested_apparatus,
+            assigned_apparatus.as_deref(),
+        )
+        .into_iter()
+        .filter(|apparatus| {
+            validate_rulon_size_for_apparatus_map(&order.map, apparatus, &stock, &item, &group_path)
+                .is_ok()
+        })
+        .collect::<Vec<_>>();
         if apparatus_options.is_empty() {
             continue;
         }

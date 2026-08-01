@@ -306,6 +306,132 @@ async fn raw_material_assignment_checks_rulon_size_for_pechat_orders() {
 }
 
 #[tokio::test]
+async fn raw_material_assignment_limits_laminatsiya_roll_width_to_thirty_mm() {
+    let material_store = Arc::new(RawMaterialStockLookup::default());
+    material_store
+        .insert_stock("30L660", "ROLL-1000", "CPP 660/35", 10.0)
+        .await;
+    material_store
+        .insert_stock("30L690", "ROLL-1000", "CPP 690/35", 11.0)
+        .await;
+    material_store
+        .insert_stock("30L691", "ROLL-1000", "CPP 691/35", 9.0)
+        .await;
+    let mut state = test_state();
+    state.gscale = GscaleService::new().with_receipt_store(material_store);
+    state
+        .admin
+        .upsert_role_assignment(crate::core::authz::RoleAssignmentUpsert {
+            principal_role: PrincipalRole::MaterialTaminotchi,
+            principal_ref: "material-laminatsiya-width".to_string(),
+            role_id: "material_taminotchi".to_string(),
+            assigned_apparatus: vec!["Laminatsiya - A".to_string()],
+            assigned_item_groups: vec!["Rulon".to_string()],
+        })
+        .await
+        .expect("material laminatsiya assignment");
+    assign_warehouse_to_principal(
+        &state,
+        PrincipalRole::MaterialTaminotchi,
+        "material-laminatsiya-width",
+        "Kalidor",
+    )
+    .await;
+    let token = session(&state, PrincipalRole::Admin).await;
+    let material_token = session_for(
+        &state,
+        PrincipalRole::MaterialTaminotchi,
+        "material-laminatsiya-width",
+    )
+    .await;
+    let router = build_router(state);
+
+    let map = router
+        .clone()
+        .oneshot(request_with_body(
+            "PUT",
+            "/v1/mobile/admin/production-maps",
+            &token,
+            &pechat_order_map_json_with_dims(
+                "zakaz-laminatsiya-rulon-size",
+                "Laminatsiya rulon size",
+                "8817",
+                "Laminatsiya - A",
+                7.0,
+                660.0,
+            ),
+        ))
+        .await
+        .expect("laminatsiya map save");
+    assert_eq!(map.status(), StatusCode::OK);
+
+    let rule = router
+        .clone()
+        .oneshot(request_with_body(
+            "PUT",
+            "/v1/mobile/admin/raw-material-rules",
+            &token,
+            r#"{"apparatus":"Laminatsiya - A","requires_material":true,"start_policy":"requirement_groups","item_groups":["Rulon"]}"#,
+        ))
+        .await
+        .expect("laminatsiya rule save");
+    assert_eq!(rule.status(), StatusCode::OK);
+
+    let candidates = router
+        .clone()
+        .oneshot(request(
+            "GET",
+            "/v1/mobile/admin/raw-material-assignments/candidates?order_id=zakaz-laminatsiya-rulon-size&apparatus=Laminatsiya%20-%20A",
+            &material_token,
+        ))
+        .await
+        .expect("laminatsiya candidates");
+    assert_eq!(candidates.status(), StatusCode::OK);
+    let candidates_body = json_body(candidates).await;
+    assert_eq!(candidates_body.as_array().map(Vec::len), Some(2));
+    assert_eq!(candidates_body[0]["barcode"], "30L660");
+    assert_eq!(candidates_body[1]["barcode"], "30L690");
+    assert_eq!(candidates_body[1]["leftover_width_mm"], 30.0);
+
+    let maximum_allowed = router
+        .clone()
+        .oneshot(request_with_body(
+            "POST",
+            "/v1/mobile/admin/raw-material-assignments",
+            &material_token,
+            r#"{
+                "order_id":"zakaz-laminatsiya-rulon-size",
+                "barcode":"30L690",
+                "apparatus":"Laminatsiya - A"
+            }"#,
+        ))
+        .await
+        .expect("assign maximum laminatsiya width");
+    let maximum_status = maximum_allowed.status();
+    let maximum_body = json_body(maximum_allowed).await;
+    assert_eq!(maximum_status, StatusCode::OK, "{maximum_body:?}");
+
+    let oversized = router
+        .oneshot(request_with_body(
+            "POST",
+            "/v1/mobile/admin/raw-material-assignments",
+            &material_token,
+            r#"{
+                "order_id":"zakaz-laminatsiya-rulon-size",
+                "barcode":"30L691",
+                "apparatus":"Laminatsiya - A"
+            }"#,
+        ))
+        .await
+        .expect("assign oversized laminatsiya width");
+    assert_eq!(oversized.status(), StatusCode::BAD_REQUEST);
+    let oversized_body = json_body(oversized).await;
+    assert_eq!(oversized_body["error"], "raw_material_roll_size_mismatch");
+    assert_eq!(oversized_body["order_width_mm"], 660.0);
+    assert_eq!(oversized_body["roll_width_mm"], 691.0);
+}
+
+#[tokio::test]
 async fn material_taminotchi_raw_material_assignment_allows_child_group_from_assigned_parent() {
     let material_store = Arc::new(RawMaterialStockLookup::default());
     material_store
@@ -319,7 +445,7 @@ async fn material_taminotchi_raw_material_assignment_allows_child_group_from_ass
             principal_role: PrincipalRole::MaterialTaminotchi,
             principal_ref: "material-rulon-parent".to_string(),
             role_id: "material_taminotchi".to_string(),
-            assigned_apparatus: Vec::new(),
+            assigned_apparatus: vec!["7 ta rangli pechat - A".to_string()],
             assigned_item_groups: vec!["Rulon".to_string()],
         })
         .await

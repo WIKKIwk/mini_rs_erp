@@ -1788,6 +1788,15 @@ async fn downstream_complete_keeps_order_open_until_all_input_wips_processed() {
         partial_complete.states.get(order_id),
         Some(&"pending".to_string())
     );
+    let partial_history = service
+        .completed_queue_orders_for_actor(&actor.ref_, 10)
+        .await
+        .expect("partial queue history");
+    assert_eq!(partial_history.len(), 1);
+    assert_eq!(
+        partial_history[0].status,
+        CompletedQueueOrderStatus::InProgress
+    );
     let partial_order_status = service
         .order_status_detail(order_id)
         .await
@@ -2254,6 +2263,8 @@ fn test_progress_batch(
     OrderProgressBatch {
         batch_id: batch_id.to_string(),
         session_id: format!("session-{batch_id}"),
+        started_at_unix: 0,
+        completed_at_unix: 0,
         apparatus: apparatus.to_string(),
         order_id: order_id.to_string(),
         action: queue_state::ApparatusQueueAction::Complete,

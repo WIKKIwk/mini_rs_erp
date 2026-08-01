@@ -5,12 +5,12 @@ use tokio::sync::RwLock;
 use crate::core::auth::models::Principal;
 
 use super::models::{
-    QolipBlock, QolipCellQr, QolipCheckout, QolipError, QolipLocation, QolipProduct,
-    QolipProductSpec,
+    QolipBlock, QolipCellQr, QolipCheckout, QolipError, QolipLocation, QolipOrderNote,
+    QolipProduct, QolipProductSpec,
 };
 use super::normalize::{
     location_from_checkout, location_from_checkout_target, location_identity_matches,
-    normalize_move_target, qolip_location_id,
+    normalize_move_target, qolip_location_id, role_code,
 };
 use super::ports::QolipStorePort;
 
@@ -22,6 +22,7 @@ pub struct MemoryQolipStore {
     locations: RwLock<Vec<QolipLocation>>,
     cell_qrs: RwLock<BTreeMap<String, QolipCellQr>>,
     checkouts: RwLock<Vec<QolipCheckout>>,
+    order_notes: RwLock<BTreeMap<String, QolipOrderNote>>,
 }
 
 impl MemoryQolipStore {
@@ -465,6 +466,93 @@ impl QolipStorePort for MemoryQolipStore {
         }
     }
 
+    async fn order_notes(&self, principal: &Principal) -> Result<Vec<QolipOrderNote>, QolipError> {
+        let prefix = order_note_key_prefix(principal);
+        let mut notes = self
+            .order_notes
+            .read()
+            .await
+            .iter()
+            .filter(|(key, _)| key.starts_with(&prefix))
+            .map(|(_, note)| note.clone())
+            .collect::<Vec<_>>();
+        notes.sort_by(|left, right| {
+            right
+                .updated_at
+                .cmp(&left.updated_at)
+                .then_with(|| left.order_id.cmp(&right.order_id))
+        });
+        Ok(notes)
+    }
+
+    async fn order_note_qolip_codes_in_use(
+        &self,
+        principal: &Principal,
+        order_id: &str,
+    ) -> Result<Vec<String>, QolipError> {
+        let current_key = order_note_key(principal, order_id);
+        let mut codes = BTreeSet::new();
+        for (key, note) in self.order_notes.read().await.iter() {
+            if key == &current_key || !note.status.eq_ignore_ascii_case("given") {
+                continue;
+            }
+            for code in &note.qolip_codes {
+                let code = code.trim().to_lowercase();
+                if !code.is_empty() {
+                    codes.insert(code);
+                }
+            }
+        }
+        Ok(codes.into_iter().collect())
+    }
+
+    async fn order_note(
+        &self,
+        principal: &Principal,
+        order_id: &str,
+    ) -> Result<Option<QolipOrderNote>, QolipError> {
+        Ok(self
+            .order_notes
+            .read()
+            .await
+            .get(&order_note_key(principal, order_id))
+            .cloned())
+    }
+
+    async fn save_order_note(
+        &self,
+        principal: &Principal,
+        mut note: QolipOrderNote,
+    ) -> Result<QolipOrderNote, QolipError> {
+        note.order_id = note.order_id.trim().to_string();
+        note.item_code = note.item_code.trim().to_string();
+        note.item_name = note.item_name.trim().to_string();
+        note.status = note.status.trim().to_ascii_lowercase();
+        note.qolip_codes = normalize_order_note_codes(note.qolip_codes);
+        let note_key = order_note_key(principal, &note.order_id);
+        let mut notes = self.order_notes.write().await;
+        if note.status == "given" {
+            let requested = note
+                .qolip_codes
+                .iter()
+                .map(|code| code.to_lowercase())
+                .collect::<BTreeSet<_>>();
+            let in_use = notes.iter().any(|(key, existing)| {
+                key != &note_key
+                    && existing.status.eq_ignore_ascii_case("given")
+                    && existing
+                        .qolip_codes
+                        .iter()
+                        .any(|code| requested.contains(&code.trim().to_lowercase()))
+            });
+            if in_use {
+                return Err(QolipError::QolipInUse);
+            }
+        }
+        notes.insert(note_key, note.clone());
+        Ok(note)
+    }
+
     async fn put_product_spec(
         &self,
         spec: QolipProductSpec,
@@ -903,6 +991,31 @@ impl QolipStorePort for MemoryQolipStore {
             .find(|cell| cell.qr_payload.eq_ignore_ascii_case(qr_payload))
             .cloned())
     }
+}
+
+fn order_note_key_prefix(principal: &Principal) -> String {
+    format!("{}:{}:", role_code(&principal.role), principal.ref_.trim())
+}
+
+fn order_note_key(principal: &Principal, order_id: &str) -> String {
+    format!("{}{}", order_note_key_prefix(principal), order_id.trim())
+}
+
+fn normalize_order_note_codes(codes: Vec<String>) -> Vec<String> {
+    let mut normalized = Vec::new();
+    for code in codes {
+        let code = code.trim();
+        if code.is_empty()
+            || normalized
+                .iter()
+                .any(|existing: &String| existing.eq_ignore_ascii_case(code))
+        {
+            continue;
+        }
+        normalized.push(code.to_string());
+    }
+    normalized.sort_by_key(|code| code.to_ascii_lowercase());
+    normalized
 }
 
 fn memory_product_matches(product: &QolipProduct, query: &str) -> bool {

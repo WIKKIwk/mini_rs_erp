@@ -218,6 +218,8 @@ pub struct OrderProgressEvent {
 pub struct OrderProgressBatch {
     pub batch_id: String,
     pub session_id: String,
+    pub started_at_unix: i64,
+    pub completed_at_unix: i64,
     pub apparatus: String,
     pub order_id: String,
     pub action: queue_state::ApparatusQueueAction,
@@ -332,6 +334,7 @@ pub struct FinishedGoodsReceipt {
 pub struct QueueProgressInput {
     pub freeze_request_id: String,
     pub produced_qty: Option<f64>,
+    pub gross_qty: Option<f64>,
     pub uom: String,
     pub progress_batch_id: String,
     pub qr_payload: String,

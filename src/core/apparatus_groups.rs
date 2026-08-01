@@ -1,10 +1,8 @@
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
-#[cfg(test)]
-use std::collections::BTreeMap;
 use thiserror::Error;
 #[cfg(test)]
 use tokio::sync::RwLock;
@@ -14,6 +12,8 @@ use crate::core::production_map::pechat;
 const DEFAULT_BOSMA_GROUP_NAME: &str = "Bosma aparat";
 const DEFAULT_LAMINATSIYA_GROUP_NAME: &str = "Laminatsiya";
 const DEFAULT_REZKA_GROUP_NAME: &str = "Rezka";
+pub const APPARATUS_COLOR_STATIONS_MIN: u8 = 1;
+pub const APPARATUS_COLOR_STATIONS_MAX: u8 = 24;
 const DEFAULT_APPARATUS: [(&str, &str); 10] = [
     ("apparatus:default:bosma_7", "7 ta rangli bosma aparat"),
     ("apparatus:default:bosma_8", "8 ta rangli bosma aparat"),
@@ -49,6 +49,15 @@ pub struct ApparatusMasterData {
     pub capability_profiles: Vec<ApparatusCapabilityProfile>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub color_stations: Option<u8>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ApparatusMasterOptions {
+    pub families: Vec<String>,
+    pub kinds_by_family: BTreeMap<String, Vec<String>>,
+    pub capabilities: Vec<String>,
+    pub color_stations_min: u8,
+    pub color_stations_max: u8,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -118,6 +127,14 @@ pub enum ApparatusGroupError {
     MissingApparatus,
     #[error("apparatus is invalid")]
     InvalidApparatus,
+    #[error("apparatus family is invalid")]
+    InvalidFamily,
+    #[error("apparatus kind is invalid")]
+    InvalidKind,
+    #[error("apparatus capability is invalid")]
+    InvalidCapability,
+    #[error("apparatus color stations are invalid")]
+    InvalidColorStations,
     #[error("apparatus group store failed")]
     StoreFailed,
 }
@@ -266,7 +283,9 @@ impl ApparatusGroupService {
             return Err(ApparatusGroupError::InvalidApparatus);
         }
         let requested_id = normalize_requested_apparatus_id(input.id.as_deref())?;
+        validate_explicit_apparatus_master_data(&input.master)?;
         let master = normalize_apparatus_master_data(input.master, &name);
+        validate_apparatus_master_data(&master)?;
         let id = self
             .store
             .put_apparatus_with_id(requested_id.as_deref(), &name, &master)
@@ -413,6 +432,136 @@ fn default_apparatus_catalog() -> Vec<ApparatusCatalogEntry> {
             master: apparatus_master_data_for_name(name),
         })
         .collect()
+}
+
+pub fn apparatus_master_options() -> ApparatusMasterOptions {
+    let families = vec![
+        "pechat".to_string(),
+        "laminatsiya".to_string(),
+        "rezka".to_string(),
+        "paket".to_string(),
+        "kley".to_string(),
+        "other".to_string(),
+    ];
+    let mut kinds_by_family = BTreeMap::new();
+    kinds_by_family.insert(
+        "pechat".to_string(),
+        vec!["color_pechat".to_string(), "flexo".to_string()],
+    );
+    kinds_by_family.insert(
+        "laminatsiya".to_string(),
+        vec![
+            "laminatsiya".to_string(),
+            "extruder_laminatsiya".to_string(),
+        ],
+    );
+    kinds_by_family.insert("rezka".to_string(), vec!["rezka".to_string()]);
+    kinds_by_family.insert("paket".to_string(), vec!["paket".to_string()]);
+    kinds_by_family.insert("kley".to_string(), vec!["holodniy_kley".to_string()]);
+    kinds_by_family.insert("other".to_string(), vec!["other".to_string()]);
+
+    ApparatusMasterOptions {
+        families,
+        kinds_by_family,
+        capabilities: [
+            "print",
+            "pechat",
+            "flexo",
+            "laminate",
+            "cut",
+            "package",
+            "glue",
+            "apparatus",
+        ]
+        .into_iter()
+        .map(str::to_string)
+        .collect(),
+        color_stations_min: APPARATUS_COLOR_STATIONS_MIN,
+        color_stations_max: APPARATUS_COLOR_STATIONS_MAX,
+    }
+}
+
+fn validate_explicit_apparatus_master_data(
+    master: &ApparatusMasterData,
+) -> Result<(), ApparatusGroupError> {
+    let options = apparatus_master_options();
+    let family = master.family.trim().to_lowercase();
+    if !family.is_empty() && !options.families.iter().any(|item| item == &family) {
+        return Err(ApparatusGroupError::InvalidFamily);
+    }
+
+    let kind = master.kind.trim().to_lowercase();
+    if !kind.is_empty() {
+        let kind_is_known = if family.is_empty() {
+            options
+                .kinds_by_family
+                .values()
+                .any(|kinds| kinds.iter().any(|item| item == &kind))
+        } else {
+            options
+                .kinds_by_family
+                .get(&family)
+                .is_some_and(|kinds| kinds.iter().any(|item| item == &kind))
+        };
+        if !kind_is_known {
+            return Err(ApparatusGroupError::InvalidKind);
+        }
+    }
+
+    for code in master.capabilities.iter().map(String::as_str).chain(
+        master
+            .capability_profiles
+            .iter()
+            .map(|profile| profile.code.as_str()),
+    ) {
+        let code = code.trim().to_lowercase();
+        if !code.is_empty() && !options.capabilities.iter().any(|item| item == &code) {
+            return Err(ApparatusGroupError::InvalidCapability);
+        }
+    }
+
+    if let Some(color_stations) = master.color_stations {
+        if !(APPARATUS_COLOR_STATIONS_MIN..=APPARATUS_COLOR_STATIONS_MAX).contains(&color_stations)
+        {
+            return Err(ApparatusGroupError::InvalidColorStations);
+        }
+    }
+    Ok(())
+}
+
+fn validate_apparatus_master_data(master: &ApparatusMasterData) -> Result<(), ApparatusGroupError> {
+    let options = apparatus_master_options();
+    let family = master.family.trim().to_lowercase();
+    let Some(kinds) = options.kinds_by_family.get(&family) else {
+        return Err(ApparatusGroupError::InvalidFamily);
+    };
+    let kind = master.kind.trim().to_lowercase();
+    if !kinds.iter().any(|item| item == &kind) {
+        return Err(ApparatusGroupError::InvalidKind);
+    }
+    if master.capabilities.is_empty() {
+        return Err(ApparatusGroupError::InvalidCapability);
+    }
+    for code in master.capabilities.iter().map(String::as_str).chain(
+        master
+            .capability_profiles
+            .iter()
+            .map(|profile| profile.code.as_str()),
+    ) {
+        let code = code.trim().to_lowercase();
+        if code.is_empty() || !options.capabilities.iter().any(|item| item == &code) {
+            return Err(ApparatusGroupError::InvalidCapability);
+        }
+    }
+    if let Some(color_stations) = master.color_stations {
+        if kind != "color_pechat"
+            || !(APPARATUS_COLOR_STATIONS_MIN..=APPARATUS_COLOR_STATIONS_MAX)
+                .contains(&color_stations)
+        {
+            return Err(ApparatusGroupError::InvalidColorStations);
+        }
+    }
+    Ok(())
 }
 
 pub fn apparatus_master_data_for_name(name: &str) -> ApparatusMasterData {
@@ -918,5 +1067,75 @@ mod tests {
             .expect("flexo capability profile");
         assert_eq!(flexo.level, 3);
         assert!(flexo.is_valid_at(1_700_000_000));
+    }
+
+    #[test]
+    fn apparatus_master_options_keep_family_kind_and_capability_values_canonical() {
+        let options = apparatus_master_options();
+
+        assert_eq!(
+            options.kinds_by_family.get("pechat"),
+            Some(&vec!["color_pechat".to_string(), "flexo".to_string()])
+        );
+        assert!(options.capabilities.iter().any(|item| item == "print"));
+        assert_eq!(options.color_stations_min, 1);
+        assert_eq!(options.color_stations_max, 24);
+    }
+
+    #[tokio::test]
+    async fn apparatus_upsert_rejects_unknown_master_data() {
+        let store = Arc::new(MemoryApparatusGroupStore::new());
+        let service = ApparatusGroupService::new(store);
+
+        let invalid_family = service
+            .upsert_apparatus(ApparatusUpsert {
+                id: None,
+                name: "Invalid family".to_string(),
+                master: ApparatusMasterData {
+                    family: "dshjkhgdsjhjksdh".to_string(),
+                    kind: "other".to_string(),
+                    capabilities: vec!["apparatus".to_string()],
+                    capability_profiles: Vec::new(),
+                    color_stations: None,
+                },
+            })
+            .await;
+        assert_eq!(invalid_family, Err(ApparatusGroupError::InvalidFamily));
+
+        let invalid_capability = service
+            .upsert_apparatus(ApparatusUpsert {
+                id: None,
+                name: "Invalid capability".to_string(),
+                master: ApparatusMasterData {
+                    family: "other".to_string(),
+                    kind: "other".to_string(),
+                    capabilities: vec!["hgjhjkd".to_string()],
+                    capability_profiles: Vec::new(),
+                    color_stations: None,
+                },
+            })
+            .await;
+        assert_eq!(
+            invalid_capability,
+            Err(ApparatusGroupError::InvalidCapability)
+        );
+
+        let invalid_color_stations = service
+            .upsert_apparatus(ApparatusUpsert {
+                id: None,
+                name: "Invalid color stations".to_string(),
+                master: ApparatusMasterData {
+                    family: "pechat".to_string(),
+                    kind: "color_pechat".to_string(),
+                    capabilities: vec!["print".to_string(), "pechat".to_string()],
+                    capability_profiles: Vec::new(),
+                    color_stations: Some(25),
+                },
+            })
+            .await;
+        assert_eq!(
+            invalid_color_stations,
+            Err(ApparatusGroupError::InvalidColorStations)
+        );
     }
 }

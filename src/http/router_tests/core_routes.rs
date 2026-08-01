@@ -157,6 +157,7 @@ async fn go_mobile_route_inventory_is_registered() {
         "/v1/mobile/admin/suppliers/restore",
         "/v1/mobile/admin/item-groups",
         "/v1/mobile/admin/items",
+        "/v1/mobile/admin/apparatus/options",
         "/v1/mobile/admin/apparatus",
         "/v1/mobile/admin/warehouses",
         "/v1/mobile/admin/warehouses/items",

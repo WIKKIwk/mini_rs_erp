@@ -169,6 +169,7 @@ impl ProductionMapService {
             progress_event: progress.progress_event,
             progress_batch: progress.progress_batch,
             progress_batch_updates: progress.progress_batch_updates,
+            material_scan_skipped: false,
             claimed_alternative_map,
             order_control_update,
         })

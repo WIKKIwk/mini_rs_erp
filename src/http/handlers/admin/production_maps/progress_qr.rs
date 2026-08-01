@@ -164,6 +164,7 @@ pub async fn production_map_progress_qr_reprint(
         &[
             Capability::AdminAccess,
             Capability::ProductionMapManage,
+            Capability::ApparatusQueueRead,
             Capability::ApparatusQueueManage,
         ],
     )

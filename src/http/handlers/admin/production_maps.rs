@@ -24,6 +24,7 @@ mod helpers;
 mod move_run;
 mod order_control;
 mod progress_qr;
+mod qolip_order_notes;
 mod qolip_validation;
 mod queue_actions;
 mod raw_material_details;
@@ -46,6 +47,7 @@ pub use self::progress_qr::{
     production_map_progress_qr_history, production_map_progress_qr_lookup,
     production_map_progress_qr_report, production_map_progress_qr_reprint,
 };
+pub use self::qolip_order_notes::production_map_qolip_order_notes;
 pub use self::qolip_validation::production_map_qolip_validate;
 pub use self::queue_actions::production_map_queue_action;
 pub use self::raw_material_reprint::{
@@ -447,7 +449,7 @@ pub async fn production_map_sequence(
     headers: HeaderMap,
     body: Bytes,
 ) -> Result<Response, AdminError> {
-    authorize_any_capability(
+    let principal = authorize_any_capability(
         &state,
         &headers,
         &[
@@ -497,6 +499,19 @@ pub async fn production_map_sequence(
                 .order_control_states()
                 .await
                 .map_err(production_map_error)?;
+            let qolip_order_notes = if state
+                .admin
+                .principal_has_capability(&principal, Capability::QolipManage)
+                .await
+            {
+                state
+                    .qolip
+                    .order_notes(&principal)
+                    .await
+                    .map_err(|_| server_error("qolip order notes load failed"))?
+            } else {
+                Vec::new()
+            };
             Ok(json_response(serde_json::json!({
                 "ok": true,
                 "sequences": sequences,
@@ -506,6 +521,7 @@ pub async fn production_map_sequence(
                 "order_statuses": order_statuses,
                 "order_controls": order_controls,
                 "order_customers": order_customers,
+                "qolip_order_notes": qolip_order_notes,
             })))
         }
         Method::PUT => {

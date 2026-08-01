@@ -194,6 +194,7 @@ pub async fn production_map_queue_action(
     let progress = QueueProgressInput {
         freeze_request_id: input.freeze_request_id.clone(),
         produced_qty,
+        gross_qty: input.gross_qty,
         uom: if input.uom.trim().is_empty() {
             input.unit.clone()
         } else {
@@ -226,9 +227,17 @@ pub async fn production_map_queue_action(
         && input.total_waste.is_some()
         && input.finished_goods_kg.is_some()
         && input.finished_goods_meter.is_some();
-    let has_rezka_progress_metrics = input.rezka_bosma_waste.is_some()
-        && input.rezka_lamination_waste.is_some()
-        && input.rezka_edge_waste.is_some();
+    let is_rezka = input.apparatus.trim().to_ascii_lowercase().contains("rezka");
+    let has_rezka_progress_metrics =
+        is_rezka && rezka_queue_input_metrics_are_complete(&input, produced_qty);
+    if matches!(
+        input.action,
+        queue_state::ApparatusQueueAction::Pause | queue_state::ApparatusQueueAction::Complete
+    ) && is_rezka
+        && !has_rezka_progress_metrics
+    {
+        return Err(bad_request("rezka_progress_metrics_required"));
+    }
     let zero_metric_codes = zero_completion_metric_codes(&input, return_ink_kg);
     if matches!(input.action, queue_state::ApparatusQueueAction::Complete)
         && !zero_metric_codes.is_empty()
@@ -307,7 +316,7 @@ pub async fn production_map_queue_action(
             .map(|barcode| barcode.trim().to_string())
             .filter(|barcode| !barcode.is_empty())
             .collect::<Vec<_>>();
-        if !material_stock_barcodes.is_empty() {
+        if !prepared.material_scan_skipped() && !material_stock_barcodes.is_empty() {
             raw_material_stock_transitions.push(RawMaterialStockTransition::new(
                 RawMaterialStockTransitionKind::InUse,
                 material_stock_barcodes,

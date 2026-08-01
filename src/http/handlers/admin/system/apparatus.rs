@@ -1,5 +1,7 @@
 use super::*;
-use crate::core::apparatus_groups::{ApparatusCatalogEntry, ApparatusMasterData, ApparatusSource};
+use crate::core::apparatus_groups::{
+    ApparatusCatalogEntry, ApparatusMasterData, ApparatusSource, apparatus_master_options,
+};
 
 pub async fn apparatus_groups(
     State(state): State<AppState>,
@@ -38,6 +40,31 @@ pub async fn apparatus_groups(
         }
         _ => Err(method_not_allowed()),
     }
+}
+
+pub async fn apparatus_options(
+    State(state): State<AppState>,
+    method: Method,
+    headers: HeaderMap,
+) -> Result<Response, AdminError> {
+    let principal = authorize_any_capability(
+        &state,
+        &headers,
+        &[
+            Capability::AdminAccess,
+            Capability::ProductionMapManage,
+            Capability::CatalogItemRead,
+            Capability::ApparatusQueueRead,
+            Capability::RawMaterialAssign,
+            Capability::QolipManage,
+        ],
+    )
+    .await?;
+    if method != Method::GET {
+        return Err(method_not_allowed());
+    }
+    require_capability(&state, &principal, Capability::ProductionMapManage).await?;
+    Ok(json_response(apparatus_master_options()))
 }
 
 pub async fn apparatus(
@@ -123,6 +150,12 @@ fn apparatus_group_error(error: ApparatusGroupError) -> AdminError {
         ApparatusGroupError::MissingName => bad_request("group name is required"),
         ApparatusGroupError::MissingApparatus => bad_request("apparatus is required"),
         ApparatusGroupError::InvalidApparatus => bad_request("apparatus is invalid"),
+        ApparatusGroupError::InvalidFamily => bad_request("apparatus family is invalid"),
+        ApparatusGroupError::InvalidKind => bad_request("apparatus kind is invalid"),
+        ApparatusGroupError::InvalidCapability => bad_request("apparatus capability is invalid"),
+        ApparatusGroupError::InvalidColorStations => {
+            bad_request("apparatus color stations are invalid")
+        }
         ApparatusGroupError::StoreFailed => server_error("apparatus group store failed"),
     }
 }

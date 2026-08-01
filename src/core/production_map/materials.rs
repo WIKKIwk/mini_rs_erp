@@ -5,9 +5,9 @@ use serde::{Deserialize, Serialize};
 use super::materials_support::*;
 use super::queue_state;
 use super::{
-    ApparatusQueueActionResult, OrderControlState, PreparedApparatusQueueAction,
-    ProductionMapError, ProductionMapSaved, ProductionMapService, QueueActionActor,
-    QueueProgressInput, chain,
+    ApparatusQueueActionResult, OrderControlState, OrderProgressBatchWipStatus,
+    PreparedApparatusQueueAction, ProductionMapError, ProductionMapSaved, ProductionMapService,
+    QueueActionActor, QueueProgressInput, chain,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -461,15 +461,22 @@ impl ProductionMapService {
         if !queue_state::apparatus_matches_assigned(apparatus, assigned_apparatus) {
             return Err(ProductionMapError::ApparatusNotAssigned);
         }
-        self.validate_material_scan(
-            apparatus,
-            order_id,
-            action,
-            material_barcode,
-            state_material_barcodes,
-        )
-        .await?;
-        self.prepare_apparatus_queue_action_with_progress(
+        let skip_material_scan = matches!(action, queue_state::ApparatusQueueAction::Start)
+            && self
+                .laminatsiya_material_scan_can_be_skipped_for_wip(apparatus, order_id, &progress)
+                .await?;
+        if !skip_material_scan {
+            self.validate_material_scan(
+                apparatus,
+                order_id,
+                action,
+                material_barcode,
+                state_material_barcodes,
+            )
+            .await?;
+        }
+        let mut prepared = self
+            .prepare_apparatus_queue_action_with_progress(
             apparatus,
             order_id,
             action,
@@ -477,7 +484,9 @@ impl ProductionMapService {
             actor,
             progress,
         )
-        .await
+        .await?;
+        prepared.material_scan_skipped = skip_material_scan;
+        Ok(prepared)
     }
 
     async fn resolve_material_apparatus_options(
@@ -519,8 +528,12 @@ impl ProductionMapService {
             state_material_barcodes,
             material_barcode,
         );
+        let scanned = normalized_barcodes(material_barcode);
         if assignments.is_empty() {
-            if !requirements.assignments_satisfied {
+            if !scanned.is_empty() {
+                return Err(ProductionMapError::RawMaterialMismatch);
+            }
+            if !is_laminatsiya_apparatus(apparatus) && !requirements.assignments_satisfied {
                 return Err(ProductionMapError::RawMaterialAssignmentNotFound);
             }
             return Ok(());
@@ -528,7 +541,6 @@ impl ProductionMapService {
         if !requirements.assignments_satisfied {
             return Err(ProductionMapError::RawMaterialAssignmentNotFound);
         }
-        let scanned = normalized_barcodes(material_barcode);
         if scanned.is_empty() {
             return Err(ProductionMapError::RawMaterialScanRequired);
         }
@@ -566,6 +578,42 @@ impl ProductionMapService {
         Ok(())
     }
 
+    async fn laminatsiya_material_scan_can_be_skipped_for_wip(
+        &self,
+        apparatus: &str,
+        order_id: &str,
+        progress: &QueueProgressInput,
+    ) -> Result<bool, ProductionMapError> {
+        if !is_laminatsiya_apparatus(apparatus)
+            || (progress.qr_payload.trim().is_empty()
+                && progress.progress_batch_id.trim().is_empty())
+        {
+            return Ok(false);
+        }
+        let Some(order_map) = self.raw_map(order_id).await? else {
+            return Ok(false);
+        };
+        let Some(previous_apparatus) = chain::previous_work_stage_station(&order_map, apparatus)
+        else {
+            return Ok(false);
+        };
+        let batches = self.store.progress_batches_for_order(order_id).await?;
+        Ok(batches.into_iter().any(|batch| {
+            let processed_by = if batch.processed_by_apparatus.trim().is_empty() {
+                batch.current_apparatus.as_str()
+            } else {
+                batch.processed_by_apparatus.as_str()
+            };
+            let next_apparatus = batch.next_apparatus.trim();
+            batch.order_id.trim() == order_id.trim()
+                && batch.wip_status == OrderProgressBatchWipStatus::Processed
+                && queue_state::apparatus_titles_match(&batch.apparatus, &previous_apparatus)
+                && (next_apparatus.is_empty()
+                    || queue_state::next_stage_title_matches_apparatus(next_apparatus, apparatus))
+                && queue_state::apparatus_titles_match(processed_by, apparatus)
+        }))
+    }
+
     async fn raw_material_assignments_for_order_apparatus(
         &self,
         order_id: &str,
@@ -594,6 +642,13 @@ impl ProductionMapService {
             .into_iter()
             .find(|rule| queue_state::apparatus_titles_match(&rule.apparatus, apparatus)))
     }
+}
+
+fn is_laminatsiya_apparatus(apparatus: &str) -> bool {
+    apparatus
+        .trim()
+        .to_ascii_lowercase()
+        .contains("laminatsiya")
 }
 
 fn build_raw_material_start_requirements(

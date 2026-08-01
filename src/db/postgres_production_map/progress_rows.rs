@@ -16,6 +16,8 @@ pub(super) struct ProgressSessionRow {
 pub(super) struct ProgressBatchRow {
     pub(super) batch_id: String,
     pub(super) session_id: String,
+    pub(super) started_at_unix: i64,
+    pub(super) completed_at_unix: i64,
     pub(super) apparatus: String,
     pub(super) order_id: String,
     pub(super) action: String,
@@ -117,6 +119,8 @@ pub(super) fn progress_batch_from_row(
     let mut batch = OrderProgressBatch {
         batch_id: row.batch_id,
         session_id: row.session_id,
+        started_at_unix: row.started_at_unix,
+        completed_at_unix: row.completed_at_unix,
         apparatus: row.apparatus,
         order_id: row.order_id,
         action: queue_action_from_str(&row.action).ok_or(ProductionMapError::StoreFailed)?,

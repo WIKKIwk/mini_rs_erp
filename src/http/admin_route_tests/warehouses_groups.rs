@@ -298,6 +298,88 @@ async fn admin_apparatus_group_keeps_laminatsiya_apparatus_manual() {
 }
 
 #[tokio::test]
+async fn admin_apparatus_options_and_metadata_validation_are_enforced() {
+    let state = test_state();
+    let token = session(&state, PrincipalRole::Admin).await;
+
+    let options = build_router(state.clone())
+        .oneshot(request("GET", "/v1/mobile/admin/apparatus/options", &token))
+        .await
+        .expect("apparatus options");
+    assert_eq!(options.status(), StatusCode::OK);
+    let options_body = json_body(options).await;
+    assert!(
+        options_body["families"]
+            .as_array()
+            .expect("families")
+            .iter()
+            .any(|item| item == "pechat")
+    );
+    assert_eq!(options_body["color_stations_min"], 1);
+    assert_eq!(options_body["color_stations_max"], 24);
+
+    let invalid_family = build_router(state.clone())
+        .oneshot(request_with_body(
+            "POST",
+            "/v1/mobile/admin/apparatus",
+            &token,
+            r#"{"name":"Invalid family","family":"dshjkhgdsjhjksdh","kind":"other","capabilities":["apparatus"]}"#,
+        ))
+        .await
+        .expect("invalid family");
+    assert_eq!(invalid_family.status(), StatusCode::BAD_REQUEST);
+    assert_eq!(
+        json_body(invalid_family).await["error"],
+        "apparatus family is invalid"
+    );
+
+    let invalid_kind = build_router(state.clone())
+        .oneshot(request_with_body(
+            "POST",
+            "/v1/mobile/admin/apparatus",
+            &token,
+            r#"{"name":"Invalid kind","family":"other","kind":"hgjhjkd","capabilities":["apparatus"]}"#,
+        ))
+        .await
+        .expect("invalid kind");
+    assert_eq!(invalid_kind.status(), StatusCode::BAD_REQUEST);
+    assert_eq!(
+        json_body(invalid_kind).await["error"],
+        "apparatus kind is invalid"
+    );
+
+    let invalid_capability = build_router(state.clone())
+        .oneshot(request_with_body(
+            "POST",
+            "/v1/mobile/admin/apparatus",
+            &token,
+            r#"{"name":"Invalid capability","family":"other","kind":"other","capabilities":["hgjhjkd"]}"#,
+        ))
+        .await
+        .expect("invalid capability");
+    assert_eq!(invalid_capability.status(), StatusCode::BAD_REQUEST);
+    assert_eq!(
+        json_body(invalid_capability).await["error"],
+        "apparatus capability is invalid"
+    );
+
+    let invalid_color_stations = build_router(state)
+        .oneshot(request_with_body(
+            "POST",
+            "/v1/mobile/admin/apparatus",
+            &token,
+            r#"{"name":"Invalid color stations","family":"pechat","kind":"color_pechat","capabilities":["print","pechat"],"color_stations":25}"#,
+        ))
+        .await
+        .expect("invalid color stations");
+    assert_eq!(invalid_color_stations.status(), StatusCode::BAD_REQUEST);
+    assert_eq!(
+        json_body(invalid_color_stations).await["error"],
+        "apparatus color stations are invalid"
+    );
+}
+
+#[tokio::test]
 async fn admin_can_create_and_list_typed_apparatus_without_breaking_legacy_clients() {
     let state = test_state();
     let token = session(&state, PrincipalRole::Admin).await;

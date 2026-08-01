@@ -98,11 +98,22 @@ impl AdminService {
         assigned_item_groups: Vec<String>,
     ) -> Result<AdminCustomerDetail, AdminPortError> {
         let detail = self.material_taminotchi_detail(ref_).await?;
+        let assignment_key = role_assignment_key(&PrincipalRole::MaterialTaminotchi, &detail.ref_);
+        let assigned_apparatus = self
+            .role_assignments()
+            .await?
+            .into_iter()
+            .find(|assignment| {
+                role_assignment_key(&assignment.principal_role, &assignment.principal_ref)
+                    == assignment_key
+            })
+            .map(|assignment| assignment.assigned_apparatus)
+            .unwrap_or_default();
         self.upsert_role_assignment(RoleAssignmentUpsert {
             principal_role: PrincipalRole::MaterialTaminotchi,
             principal_ref: detail.ref_.clone(),
             role_id: "material_taminotchi".to_string(),
-            assigned_apparatus: Vec::new(),
+            assigned_apparatus,
             assigned_item_groups,
         })
         .await?;

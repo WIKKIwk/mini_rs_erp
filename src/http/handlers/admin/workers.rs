@@ -112,7 +112,17 @@ pub async fn workers(
         }
         Method::PUT => {
             let input: WorkerUpsert = parse_json(&body)?;
-            if input.level.trim().is_empty() && !input.phone.trim().is_empty() {
+            if !input.name.trim().is_empty()
+                && input.level.trim().is_empty()
+                && input.phone.trim().is_empty()
+            {
+                state
+                    .workers
+                    .update_worker_name(input)
+                    .await
+                    .map(json_response)
+                    .map_err(worker_error)
+            } else if input.level.trim().is_empty() && !input.phone.trim().is_empty() {
                 state
                     .workers
                     .update_worker_phone(input)

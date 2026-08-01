@@ -79,6 +79,29 @@ async fn rezka_complete_requires_or_persists_progress_metrics() {
         "rezka_progress_metrics_required"
     );
 
+    let missing_quantity = router
+        .clone()
+        .oneshot(request_with_body(
+            "POST",
+            "/v1/mobile/admin/production-maps/queue-action",
+            &worker_token,
+            r#"{
+                "apparatus":"Rezka",
+                "order_id":"zakaz-rezka-complete",
+                "action":"complete",
+                "produced_qty":32,
+                "total_waste":1,
+                "uom":"kg"
+            }"#,
+        ))
+        .await
+        .expect("complete without rezka weight");
+    assert_eq!(missing_quantity.status(), StatusCode::BAD_REQUEST);
+    assert_eq!(
+        json_body(missing_quantity).await["error"],
+        "rezka_progress_metrics_required"
+    );
+
     let completed = router
         .clone()
         .oneshot(request_with_body(
@@ -194,6 +217,29 @@ async fn rezka_pause_requires_and_persists_progress_metrics() {
         "rezka_progress_metrics_required"
     );
 
+    let missing_quantity = router
+        .clone()
+        .oneshot(request_with_body(
+            "POST",
+            "/v1/mobile/admin/production-maps/queue-action",
+            &worker_token,
+            r#"{
+                "apparatus":"Rezka",
+                "order_id":"zakaz-rezka-pause",
+                "action":"pause",
+                "produced_qty":18,
+                "rezka_bosma_waste":1,
+                "uom":"kg"
+            }"#,
+        ))
+        .await
+        .expect("pause without rezka weight");
+    assert_eq!(missing_quantity.status(), StatusCode::BAD_REQUEST);
+    assert_eq!(
+        json_body(missing_quantity).await["error"],
+        "rezka_progress_metrics_required"
+    );
+
     let paused = router
         .clone()
         .oneshot(request_with_body(
@@ -207,9 +253,7 @@ async fn rezka_pause_requires_and_persists_progress_metrics() {
                 "produced_qty":18,
                 "gross_qty":18,
                 "uom":"kg",
-                "rezka_bosma_waste":1,
-                "rezka_lamination_waste":2,
-                "rezka_edge_waste":3,
+                "total_waste":4,
                 "printer":"zebra",
                 "print_mode":"rfid"
             }"#,
@@ -220,7 +264,5 @@ async fn rezka_pause_requires_and_persists_progress_metrics() {
     let paused_body = json_body(paused).await;
     assert_eq!(paused_status, StatusCode::OK, "{paused_body:?}");
     assert_eq!(paused_body["progress_batch"]["status"], "paused");
-    assert_eq!(paused_body["progress_batch"]["rezka_bosma_waste"], 1.0);
-    assert_eq!(paused_body["progress_batch"]["rezka_lamination_waste"], 2.0);
-    assert_eq!(paused_body["progress_batch"]["rezka_edge_waste"], 3.0);
+    assert_eq!(paused_body["progress_batch"]["total_waste"], 4.0);
 }

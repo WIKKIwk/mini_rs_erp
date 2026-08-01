@@ -3,8 +3,8 @@ use async_trait::async_trait;
 use crate::core::auth::models::Principal;
 
 use super::models::{
-    QolipBlock, QolipCellQr, QolipCheckout, QolipError, QolipLocation, QolipProduct,
-    QolipProductSpec,
+    QolipBlock, QolipCellQr, QolipCheckout, QolipError, QolipLocation, QolipOrderNote,
+    QolipProduct, QolipProductSpec,
 };
 
 #[async_trait]
@@ -30,6 +30,38 @@ pub trait QolipStorePort: Send + Sync {
     async fn product_spec(&self, item_code: &str) -> Result<Option<QolipProductSpec>, QolipError>;
     async fn product_specs(&self, item_code: &str) -> Result<Vec<QolipProductSpec>, QolipError> {
         Ok(self.product_spec(item_code).await?.into_iter().collect())
+    }
+    async fn order_notes(&self, _principal: &Principal) -> Result<Vec<QolipOrderNote>, QolipError> {
+        Ok(Vec::new())
+    }
+    async fn order_note_qolip_codes_in_use(
+        &self,
+        _principal: &Principal,
+        _order_id: &str,
+    ) -> Result<Vec<String>, QolipError> {
+        Ok(Vec::new())
+    }
+    async fn order_note(
+        &self,
+        principal: &Principal,
+        order_id: &str,
+    ) -> Result<Option<QolipOrderNote>, QolipError> {
+        let order_id = order_id.trim();
+        if order_id.is_empty() {
+            return Ok(None);
+        }
+        Ok(self
+            .order_notes(principal)
+            .await?
+            .into_iter()
+            .find(|note| note.order_id.trim() == order_id))
+    }
+    async fn save_order_note(
+        &self,
+        _principal: &Principal,
+        _note: QolipOrderNote,
+    ) -> Result<QolipOrderNote, QolipError> {
+        Err(QolipError::StoreFailed)
     }
     async fn product_spec_by_qolip_code(
         &self,

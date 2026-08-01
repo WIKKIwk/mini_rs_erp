@@ -111,11 +111,19 @@ pub struct ApparatusQueueActionEvent {
     pub payload_json: serde_json::Value,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CompletedQueueOrderStatus {
+    InProgress,
+    Completed,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct CompletedQueueOrder {
     pub apparatus: String,
     pub order_id: String,
     pub completed_at_unix: i64,
+    pub status: CompletedQueueOrderStatus,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize)]

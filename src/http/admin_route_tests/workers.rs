@@ -40,6 +40,18 @@ async fn admin_workers_are_separate_from_users_and_persist_level() {
     assert_eq!(updated.status(), StatusCode::OK);
     assert_eq!(json_body(updated).await["level"], "2 - darajali");
 
+    let renamed = build_router(state.clone())
+        .oneshot(request_with_body(
+            "PUT",
+            "/v1/mobile/admin/workers",
+            &token,
+            &format!(r#"{{"id":"{worker_id}","name":"Ali yangilandi"}}"#),
+        ))
+        .await
+        .expect("rename worker");
+    assert_eq!(renamed.status(), StatusCode::OK);
+    assert_eq!(json_body(renamed).await["name"], "Ali yangilandi");
+
     let phone_updated = build_router(state.clone())
         .oneshot(request_with_body(
             "PUT",
@@ -59,7 +71,7 @@ async fn admin_workers_are_separate_from_users_and_persist_level() {
     assert_eq!(listed.status(), StatusCode::OK);
     let workers = json_body(listed).await;
     assert_eq!(workers.as_array().expect("workers").len(), 1);
-    assert_eq!(workers[0]["name"], "Ali ishchi");
+    assert_eq!(workers[0]["name"], "Ali yangilandi");
     assert_eq!(workers[0]["phone"], "+998901112233");
 }
 

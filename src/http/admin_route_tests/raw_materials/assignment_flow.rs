@@ -72,7 +72,7 @@ async fn raw_material_assignment_candidates_only_return_assignable_stock() {
             principal_role: PrincipalRole::MaterialTaminotchi,
             principal_ref: "material-candidates".to_string(),
             role_id: "material_taminotchi".to_string(),
-            assigned_apparatus: Vec::new(),
+            assigned_apparatus: vec!["7 ta rangli pechat - A".to_string()],
             assigned_item_groups: vec!["Kraska".to_string()],
         })
         .await
@@ -142,6 +142,21 @@ async fn raw_material_assignment_candidates_only_return_assignable_stock() {
     assert_eq!(body[0]["warehouse"], "Kalidor");
     assert_eq!(body[0]["item_group"], "Kraska");
     assert_eq!(body[0]["apparatus_options"][0], "7 ta rangli pechat - A");
+
+    let forbidden_apparatus = router
+        .clone()
+        .oneshot(request(
+            "GET",
+            "/v1/mobile/admin/raw-material-assignments/candidates?order_id=zakaz-candidates&apparatus=Laminatsiya%20-%20A",
+            &material_token,
+        ))
+        .await
+        .expect("unassigned apparatus candidates");
+    assert_eq!(forbidden_apparatus.status(), StatusCode::BAD_REQUEST);
+    assert_eq!(
+        json_body(forbidden_apparatus).await["error"],
+        "apparatus_not_assigned"
+    );
 
     material_store
         .set_stock_status("30AA", "in_use", "zakaz-other")
@@ -215,7 +230,7 @@ async fn raw_material_assignment_candidates_rank_rulons_by_smallest_leftover() {
             principal_role: PrincipalRole::MaterialTaminotchi,
             principal_ref: "material-ranked-rulons".to_string(),
             role_id: "material_taminotchi".to_string(),
-            assigned_apparatus: Vec::new(),
+            assigned_apparatus: vec!["7 ta rangli pechat - A".to_string()],
             assigned_item_groups: vec!["Rulon".to_string()],
         })
         .await
@@ -304,7 +319,7 @@ async fn raw_material_assignment_candidate_orders_only_return_compatible_orders(
             principal_role: PrincipalRole::MaterialTaminotchi,
             principal_ref: "material-candidate-orders".to_string(),
             role_id: "material_taminotchi".to_string(),
-            assigned_apparatus: Vec::new(),
+            assigned_apparatus: vec!["7 ta rangli pechat - A".to_string()],
             assigned_item_groups: vec!["Kraska".to_string()],
         })
         .await
@@ -494,7 +509,7 @@ async fn raw_material_routes_assign_and_require_scan_for_queue_start() {
             principal_role: PrincipalRole::MaterialTaminotchi,
             principal_ref: "material-raw-route".to_string(),
             role_id: "material_taminotchi".to_string(),
-            assigned_apparatus: Vec::new(),
+            assigned_apparatus: vec!["7 ta rangli pechat - A".to_string()],
             assigned_item_groups: vec!["Kraska".to_string()],
         })
         .await
@@ -1111,7 +1126,7 @@ async fn material_taminotchi_raw_material_assignment_rejects_unassigned_item_gro
             principal_role: PrincipalRole::MaterialTaminotchi,
             principal_ref: "material-raw-route".to_string(),
             role_id: "material_taminotchi".to_string(),
-            assigned_apparatus: Vec::new(),
+            assigned_apparatus: vec!["7 ta rangli pechat - A".to_string()],
             assigned_item_groups: vec!["Kley".to_string()],
         })
         .await

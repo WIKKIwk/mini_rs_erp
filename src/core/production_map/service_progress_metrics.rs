@@ -20,6 +20,11 @@ pub(super) fn validated_progress_metrics(
     progress: &QueueProgressInput,
 ) -> Result<ProgressMetrics, ProductionMapError> {
     let is_complete = action == queue_state::ApparatusQueueAction::Complete;
+    let rezka_gross_qty = if apparatus::is_rezka_title(apparatus) {
+        valid_optional_progress_qty(progress.gross_qty)?
+    } else {
+        None
+    };
     let metrics = ProgressMetrics {
         return_ink_kg: if is_complete {
             valid_optional_progress_qty(progress.return_ink_kg)?
@@ -44,6 +49,8 @@ pub(super) fn validated_progress_metrics(
     validate_progress_metrics(
         apparatus,
         action,
+        progress,
+        rezka_gross_qty,
         metrics,
         progress.returned_paint_report_attached,
     )?;
@@ -53,6 +60,8 @@ pub(super) fn validated_progress_metrics(
 fn validate_progress_metrics(
     apparatus: &str,
     action: queue_state::ApparatusQueueAction,
+    progress: &QueueProgressInput,
+    rezka_gross_qty: Option<f64>,
     metrics: ProgressMetrics,
     returned_paint_report_attached: bool,
 ) -> Result<(), ProductionMapError> {
@@ -85,11 +94,17 @@ fn validate_progress_metrics(
         return Err(ProductionMapError::LaminatsiyaCompletionMetricsRequired);
     }
     if apparatus::is_rezka_title(apparatus)
-        && !rezka_progress_metrics_are_complete(
+        && (!rezka_progress_metrics_are_complete(
+            metrics.total_waste,
             metrics.rezka_bosma_waste,
             metrics.rezka_lamination_waste,
             metrics.rezka_edge_waste,
-        )
+        ) || !rezka_quantity_metrics_are_complete(
+            progress.produced_qty,
+            rezka_gross_qty,
+            metrics.finished_goods_kg,
+            metrics.finished_goods_meter,
+        ))
     {
         return Err(ProductionMapError::RezkaProgressMetricsRequired);
     }
@@ -131,9 +146,23 @@ fn laminatsiya_completion_metrics_are_complete(
 }
 
 fn rezka_progress_metrics_are_complete(
+    total_waste: Option<f64>,
     rezka_bosma_waste: Option<f64>,
     rezka_lamination_waste: Option<f64>,
     rezka_edge_waste: Option<f64>,
 ) -> bool {
-    rezka_bosma_waste.is_some() && rezka_lamination_waste.is_some() && rezka_edge_waste.is_some()
+    total_waste.is_some()
+        || rezka_bosma_waste.is_some()
+        || rezka_lamination_waste.is_some()
+        || rezka_edge_waste.is_some()
+}
+
+fn rezka_quantity_metrics_are_complete(
+    produced_qty: Option<f64>,
+    gross_qty: Option<f64>,
+    finished_goods_kg: Option<f64>,
+    finished_goods_meter: Option<f64>,
+) -> bool {
+    (produced_qty.is_some() || finished_goods_meter.is_some())
+        && (gross_qty.is_some() || finished_goods_kg.is_some())
 }

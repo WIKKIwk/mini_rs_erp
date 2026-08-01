@@ -70,11 +70,27 @@ pub(super) async fn completed_queue_orders_for_actor(
     let mut completed = Vec::new();
     for (index, event) in events.iter().enumerate().rev() {
         if event.actor.ref_.trim() != actor_ref
-            || event.action != queue_state::ApparatusQueueAction::Complete
-            || event.to_state != queue_state::ApparatusQueueOrderState::Completed
+            || event
+                .payload_json
+                .get("completion_request")
+                .and_then(|value| value.as_bool())
+                == Some(true)
         {
             continue;
         }
+        let status = match event.action {
+            queue_state::ApparatusQueueAction::Pause => {
+                CompletedQueueOrderStatus::InProgress
+            }
+            queue_state::ApparatusQueueAction::Complete => {
+                if event.to_state == queue_state::ApparatusQueueOrderState::Completed {
+                    CompletedQueueOrderStatus::Completed
+                } else {
+                    CompletedQueueOrderStatus::InProgress
+                }
+            }
+            _ => continue,
+        };
         let order_id = event.order_id.trim();
         if order_id.is_empty() || !seen.insert(order_id.to_string()) {
             continue;
@@ -83,6 +99,7 @@ pub(super) async fn completed_queue_orders_for_actor(
             apparatus: event.apparatus.trim().to_string(),
             order_id: order_id.to_string(),
             completed_at_unix: index as i64 + 1,
+            status,
         });
         if completed.len() >= limit {
             break;

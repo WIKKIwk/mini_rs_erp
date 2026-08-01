@@ -239,6 +239,9 @@ pub(super) fn production_map_error(error: ProductionMapError) -> AdminError {
         ProductionMapError::StartedOrderMoveRequiresTransfer => {
             conflict("started_order_move_requires_transfer")
         }
+        ProductionMapError::StartedProductionMapStageLocked => {
+            conflict("production_map_started_stage_locked")
+        }
         ProductionMapError::ApparatusTransferReasonRequired => {
             bad_request("apparatus_transfer_reason_required")
         }

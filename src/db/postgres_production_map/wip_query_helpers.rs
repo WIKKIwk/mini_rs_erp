@@ -34,7 +34,12 @@ pub(super) async fn load_wip_progress_batches(
     let status = status.map(|value| value.as_str()).unwrap_or_default();
     let limit = i64::try_from(limit.min(500)).unwrap_or(500);
     let rows = sqlx::query_as::<_, ProgressBatchRow>(
-        "SELECT batch_id, session_id, apparatus, order_id, action, status,
+        "SELECT batch.batch_id, batch.session_id,
+                COALESCE(EXTRACT(EPOCH FROM session.started_at)::bigint,
+                         EXTRACT(EPOCH FROM batch.created_at)::bigint) AS started_at_unix,
+                COALESCE(EXTRACT(EPOCH FROM session.session_updated_at)::bigint,
+                         EXTRACT(EPOCH FROM batch.updated_at)::bigint) AS completed_at_unix,
+                batch.apparatus, batch.order_id, batch.action, batch.status,
                 produced_qty::float8 AS produced_qty, uom, qr_payload,
                 label_item_code, label_item_name, executor_name,
                 worker_role, worker_ref, worker_display_name,
@@ -53,7 +58,11 @@ pub(super) async fn load_wip_progress_batches(
                 finished_goods_meter::float8 AS finished_goods_meter,
                 description,
                 payload_json
-         FROM mini_progress_batches
+         FROM mini_progress_batches AS batch
+         LEFT JOIN (
+             SELECT session_id, started_at, updated_at AS session_updated_at
+             FROM mini_order_run_sessions
+         ) AS session ON session.session_id = batch.session_id
          WHERE ($1 = '' OR current_apparatus_key = $1)
            AND ($2 = '' OR order_id = $2)
            AND ($7 OR (($3 = '' AND wip_status <> 'processed') OR ($3 <> '' AND wip_status = $3)))

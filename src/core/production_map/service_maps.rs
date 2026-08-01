@@ -1,5 +1,7 @@
 use super::*;
 
+use std::collections::BTreeSet;
+
 use super::apparatus::{
     move_allowed, reassign_alternative_apparatus_assignment, reassign_apparatus_nodes,
 };
@@ -113,12 +115,120 @@ impl ProductionMapService {
         Ok(Some(ProductionMapSaved { map, program }))
     }
 
+    async fn reject_started_stage_changes(
+        &self,
+        next: &ProductionMapDefinition,
+    ) -> Result<(), ProductionMapError> {
+        let Some(previous) = self.raw_map(&next.id).await? else {
+            return Ok(());
+        };
+        let order_id = previous.id.trim();
+        let mut started_apparatus = BTreeSet::new();
+
+        for (apparatus, states) in self.store.apparatus_queue_states().await? {
+            let Some(state) = states.get(order_id) else {
+                continue;
+            };
+            if queue_state::ApparatusQueueOrderState::parse(state)
+                != Some(queue_state::ApparatusQueueOrderState::Pending)
+            {
+                insert_non_empty(&mut started_apparatus, &apparatus);
+            }
+        }
+        for session in self.store.order_run_sessions_for_order(order_id).await? {
+            insert_non_empty(&mut started_apparatus, &session.apparatus);
+        }
+        for batch in self.store.progress_batches_for_order(order_id).await? {
+            insert_non_empty(&mut started_apparatus, &batch.apparatus);
+            insert_non_empty(&mut started_apparatus, &batch.current_apparatus);
+            insert_non_empty(&mut started_apparatus, &batch.used_by_apparatus);
+            insert_non_empty(&mut started_apparatus, &batch.processed_by_apparatus);
+        }
+        if started_apparatus.is_empty() {
+            return Ok(());
+        }
+
+        let mut locked_node_ids = previous
+            .nodes
+            .iter()
+            .filter(|node| node.kind == ProductionMapNodeKind::Apparatus)
+            .filter(|node| {
+                let title = effective_apparatus_title(node);
+                started_apparatus
+                    .iter()
+                    .any(|apparatus| queue_state::apparatus_titles_match(title, apparatus))
+            })
+            .map(|node| node.id.clone())
+            .collect::<BTreeSet<_>>();
+        let locked_group_ids = previous
+            .nodes
+            .iter()
+            .filter(|node| locked_node_ids.contains(&node.id))
+            .map(|node| node.alternative_group_id.trim())
+            .filter(|group_id| !group_id.is_empty())
+            .map(str::to_string)
+            .collect::<BTreeSet<_>>();
+        if !locked_group_ids.is_empty() {
+            locked_node_ids.extend(
+                previous
+                    .nodes
+                    .iter()
+                    .filter(|node| {
+                        locked_group_ids.contains(node.alternative_group_id.trim())
+                    })
+                    .map(|node| node.id.clone()),
+            );
+        }
+        if locked_node_ids.is_empty() {
+            return Ok(());
+        }
+
+        let locked_node_changed = locked_node_ids.iter().any(|node_id| {
+            let previous_node = previous.nodes.iter().find(|node| node.id == *node_id);
+            let next_node = next.nodes.iter().find(|node| node.id == *node_id);
+            previous_node != next_node
+        });
+        if locked_node_changed {
+            return Err(ProductionMapError::StartedProductionMapStageLocked);
+        }
+
+        // An incoming edge is part of the already executed route. Outgoing
+        // edges may still be rewired so admins can replace future stages.
+        let previous_incoming = previous
+            .edges
+            .iter()
+            .filter(|edge| locked_node_ids.contains(&edge.to))
+            .collect::<Vec<_>>();
+        let next_incoming = next
+            .edges
+            .iter()
+            .filter(|edge| locked_node_ids.contains(&edge.to))
+            .collect::<Vec<_>>();
+        let incoming_edges_changed = previous_incoming.len() != next_incoming.len()
+            || previous_incoming
+                .iter()
+                .any(|edge| !next_incoming.contains(edge));
+        if incoming_edges_changed {
+            return Err(ProductionMapError::StartedProductionMapStageLocked);
+        }
+        Ok(())
+    }
+
     pub async fn upsert_map(
+        &self,
+        map: ProductionMapDefinition,
+    ) -> Result<ProductionMapSaved, ProductionMapError> {
+        let _guard = self.queue_action_guard().await;
+        self.upsert_map_under_queue_guard(map).await
+    }
+
+    async fn upsert_map_under_queue_guard(
         &self,
         mut map: ProductionMapDefinition,
     ) -> Result<ProductionMapSaved, ProductionMapError> {
         normalize_map(&mut map);
         let program = compile_map(&map)?;
+        self.reject_started_stage_changes(&map).await?;
         self.store.put_map(map.clone()).await?;
         self.notify_live();
         Ok(ProductionMapSaved { map, program })
@@ -129,11 +239,13 @@ impl ProductionMapService {
         &self,
         maps: Vec<ProductionMapDefinition>,
     ) -> Result<Vec<ProductionMapSaved>, ProductionMapError> {
+        let _guard = self.queue_action_guard().await;
         let mut normalized = Vec::with_capacity(maps.len());
         let mut saved = Vec::with_capacity(maps.len());
         for mut map in maps {
             normalize_map(&mut map);
             let program = compile_map(&map)?;
+            self.reject_started_stage_changes(&map).await?;
             saved.push(ProductionMapSaved {
                 map: map.clone(),
                 program,
@@ -256,7 +368,7 @@ impl ProductionMapService {
         {
             return Err(ProductionMapError::MoveNotAllowed);
         }
-        self.upsert_map(next).await
+        self.upsert_map_under_queue_guard(next).await
     }
 
     pub async fn run_map(
@@ -276,5 +388,21 @@ impl ProductionMapService {
             return Err(ProductionMapError::MapNotFound);
         };
         run_map_with_variables(&map, input.order_qty, input.variables)
+    }
+}
+
+fn insert_non_empty(target: &mut BTreeSet<String>, value: &str) {
+    let value = value.trim();
+    if !value.is_empty() {
+        target.insert(value.to_string());
+    }
+}
+
+fn effective_apparatus_title(node: &ProductionMapNode) -> &str {
+    let assigned = node.alternative_assigned_title.trim();
+    if assigned.is_empty() {
+        node.title.trim()
+    } else {
+        assigned
     }
 }

@@ -42,6 +42,26 @@ fn zero_completion_metric_codes(
     .collect()
 }
 
+fn rezka_queue_input_metrics_are_complete(
+    input: &ApparatusQueueActionRequest,
+    produced_qty: Option<f64>,
+) -> bool {
+    let is_positive = |value: Option<f64>| {
+        value.is_some_and(|value| value.is_finite() && value > 0.0)
+    };
+    let has_output_meter = is_positive(produced_qty.or(input.finished_goods_meter));
+    let has_output_kg = is_positive(input.gross_qty.or(input.finished_goods_kg));
+    let has_waste = [
+        input.total_waste,
+        input.rezka_bosma_waste,
+        input.rezka_lamination_waste,
+        input.rezka_edge_waste,
+    ]
+    .into_iter()
+    .any(is_positive);
+    has_output_meter && has_output_kg && has_waste
+}
+
 async fn prepare_qolips_for_bosma_start(
     state: &AppState,
     principal: &Principal,
@@ -152,6 +172,7 @@ pub(super) fn qolip_queue_error(error: crate::core::qolip::QolipError) -> AdminE
         crate::core::qolip::QolipError::CheckoutAssignedToAnotherWorker => {
             bad_request("qolip_checkout_assigned_to_another_worker")
         }
+        crate::core::qolip::QolipError::QolipInUse => bad_request("qolip_already_in_use"),
         crate::core::qolip::QolipError::LocationNotFound => bad_request("qolip_location_not_found"),
         crate::core::qolip::QolipError::InsufficientStock => bad_request("insufficient_stock"),
         crate::core::qolip::QolipError::LocationIdentityMismatch => {

@@ -117,6 +117,32 @@ impl WorkerStorePort for PostgresWorkerStore {
         })
     }
 
+    async fn update_worker_name(&self, id: &str, name: &str) -> Result<Worker, WorkerError> {
+        let row = sqlx::query_as::<_, (String, String, String, String)>(
+            "UPDATE mini_workers
+             SET name = $2,
+                 payload_json = jsonb_set(payload_json, '{name}', to_jsonb($2::text), true),
+                 updated_at = now()
+             WHERE id = $1 AND active
+             RETURNING id, name, COALESCE(phone, ''), level",
+        )
+        .bind(id.trim())
+        .bind(name.trim())
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(|_| WorkerError::StoreFailed)?;
+
+        let Some((id, name, phone, level)) = row else {
+            return Err(WorkerError::NotFound);
+        };
+        Ok(Worker {
+            id,
+            name,
+            phone,
+            level,
+        })
+    }
+
     async fn update_worker_level(&self, id: &str, level: &str) -> Result<Worker, WorkerError> {
         let row = sqlx::query_as::<_, (String, String, String, String)>(
             "UPDATE mini_workers

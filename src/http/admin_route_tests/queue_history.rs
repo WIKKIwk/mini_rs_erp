@@ -30,6 +30,7 @@ async fn worker_completed_orders_are_actor_scoped_and_latest_first() {
         ("zakaz-complete-1", "9101"),
         ("zakaz-complete-2", "9102"),
         ("zakaz-complete-3", "9103"),
+        ("zakaz-partial-pause", "9104"),
     ] {
         let response = router
             .clone()
@@ -53,7 +54,7 @@ async fn worker_completed_orders_are_actor_scoped_and_latest_first() {
             &admin_token,
             r#"{
                 "apparatus":"7 ta rangli pechat",
-                "order_ids":["zakaz-complete-1","zakaz-complete-2","zakaz-complete-3"]
+                "order_ids":["zakaz-complete-1","zakaz-complete-2","zakaz-complete-3","zakaz-partial-pause"]
             }"#,
         ))
         .await
@@ -90,6 +91,33 @@ async fn worker_completed_orders_are_actor_scoped_and_latest_first() {
         }
     }
 
+    let start_body = with_test_qolip(
+        r#"{"apparatus":"7 ta rangli pechat","order_id":"zakaz-partial-pause","action":"start"}"#,
+        "zakaz-partial-pause",
+    );
+    let start_response = router
+        .clone()
+        .oneshot(request_with_body(
+            "POST",
+            "/v1/mobile/admin/production-maps/queue-action",
+            &worker_one,
+            &start_body,
+        ))
+        .await
+        .expect("partial start");
+    assert_eq!(start_response.status(), StatusCode::OK);
+    let pause_response = router
+        .clone()
+        .oneshot(request_with_body(
+            "POST",
+            "/v1/mobile/admin/production-maps/queue-action",
+            &worker_one,
+            r#"{"apparatus":"7 ta rangli pechat","order_id":"zakaz-partial-pause","action":"pause","produced_qty":1,"uom":"kg","return_ink_kg":1,"total_waste":1,"finished_goods_kg":1,"finished_goods_meter":1}"#,
+        ))
+        .await
+        .expect("partial pause");
+    assert_eq!(pause_response.status(), StatusCode::OK);
+
     let first_worker_completed = router
         .clone()
         .oneshot(request(
@@ -104,9 +132,13 @@ async fn worker_completed_orders_are_actor_scoped_and_latest_first() {
     let items = body["completed_orders"]
         .as_array()
         .expect("completed_orders");
-    assert_eq!(items.len(), 2);
-    assert_eq!(items[0]["order_id"], "zakaz-complete-2");
-    assert_eq!(items[1]["order_id"], "zakaz-complete-1");
+    assert_eq!(items.len(), 3);
+    assert_eq!(items[0]["order_id"], "zakaz-partial-pause");
+    assert_eq!(items[0]["status"], "in_progress");
+    assert_eq!(items[1]["order_id"], "zakaz-complete-2");
+    assert_eq!(items[1]["status"], "completed");
+    assert_eq!(items[2]["order_id"], "zakaz-complete-1");
+    assert_eq!(items[2]["status"], "completed");
 
     let second_worker_completed = router
         .oneshot(request(
@@ -123,6 +155,7 @@ async fn worker_completed_orders_are_actor_scoped_and_latest_first() {
         .expect("completed_orders");
     assert_eq!(items.len(), 1);
     assert_eq!(items[0]["order_id"], "zakaz-complete-3");
+    assert_eq!(items[0]["status"], "completed");
 }
 
 #[tokio::test]

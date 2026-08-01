@@ -403,6 +403,12 @@ fn apparatus_group_error(error: ApparatusGroupError) -> AdminError {
         ApparatusGroupError::MissingName => bad_request("group name is required"),
         ApparatusGroupError::MissingApparatus => bad_request("apparatus is required"),
         ApparatusGroupError::InvalidApparatus => bad_request("apparatus is invalid"),
+        ApparatusGroupError::InvalidFamily => bad_request("apparatus family is invalid"),
+        ApparatusGroupError::InvalidKind => bad_request("apparatus kind is invalid"),
+        ApparatusGroupError::InvalidCapability => bad_request("apparatus capability is invalid"),
+        ApparatusGroupError::InvalidColorStations => {
+            bad_request("apparatus color stations are invalid")
+        }
         ApparatusGroupError::StoreFailed => server_error("apparatus group store failed"),
     }
 }

@@ -11,6 +11,7 @@ mod catalog;
 mod cell_qr;
 mod checkouts;
 mod locations;
+mod order_notes;
 mod rows;
 
 use self::catalog::{
@@ -27,6 +28,9 @@ use self::checkouts::{
 use self::locations::{
     load_location_by_id, load_location_by_qolip_code, load_locations, move_location_to_cell,
     save_location,
+};
+use self::order_notes::{
+    load_order_note, load_order_note_qolip_codes_in_use, load_order_notes, save_order_note,
 };
 
 #[derive(Clone)]
@@ -78,6 +82,37 @@ impl QolipStorePort for PostgresQolipStore {
 
     async fn product_specs(&self, item_code: &str) -> Result<Vec<QolipProductSpec>, QolipError> {
         load_product_specs(&self.pool, item_code).await
+    }
+
+    async fn order_notes(
+        &self,
+        principal: &Principal,
+    ) -> Result<Vec<crate::core::qolip::QolipOrderNote>, QolipError> {
+        load_order_notes(&self.pool, principal).await
+    }
+
+    async fn order_note_qolip_codes_in_use(
+        &self,
+        principal: &Principal,
+        order_id: &str,
+    ) -> Result<Vec<String>, QolipError> {
+        load_order_note_qolip_codes_in_use(&self.pool, principal, order_id).await
+    }
+
+    async fn order_note(
+        &self,
+        principal: &Principal,
+        order_id: &str,
+    ) -> Result<Option<crate::core::qolip::QolipOrderNote>, QolipError> {
+        load_order_note(&self.pool, principal, order_id).await
+    }
+
+    async fn save_order_note(
+        &self,
+        principal: &Principal,
+        note: crate::core::qolip::QolipOrderNote,
+    ) -> Result<crate::core::qolip::QolipOrderNote, QolipError> {
+        save_order_note(&self.pool, principal, note).await
     }
 
     async fn product_spec_by_qolip_code(

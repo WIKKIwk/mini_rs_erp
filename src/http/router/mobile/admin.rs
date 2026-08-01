@@ -126,6 +126,10 @@ pub(super) fn routes() -> Router<AppState> {
             any(admin::production_map_qolip_validate),
         )
         .route(
+            "/v1/mobile/admin/production-maps/qolip-order-notes",
+            any(admin::production_map_qolip_order_notes),
+        )
+        .route(
             "/v1/mobile/admin/production-maps/progress-qr/lookup",
             any(admin::production_map_progress_qr_lookup),
         )
@@ -309,6 +313,10 @@ pub(super) fn routes() -> Router<AppState> {
         .route("/v1/mobile/admin/items", any(admin::items))
         .route("/v1/mobile/admin/items/uoms", any(admin::item_uoms))
         .route("/v1/mobile/admin/items/detail", any(admin::item_detail))
+        .route(
+            "/v1/mobile/admin/apparatus/options",
+            any(admin::apparatus_options),
+        )
         .route("/v1/mobile/admin/apparatus", any(admin::apparatus))
         .route(
             "/v1/mobile/admin/factory-locations",

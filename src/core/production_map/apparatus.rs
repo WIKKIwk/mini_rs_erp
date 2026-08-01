@@ -60,7 +60,13 @@ pub(super) fn move_allowed(map: &ProductionMapDefinition, from: &str, to: &str) 
     if from_is_laminatsiya || to_is_laminatsiya {
         return from_is_laminatsiya
             && to_is_laminatsiya
-            && alternative_assigned_group_contains_target(map, from, to);
+            && (alternative_assigned_group_contains_target(map, from, to)
+                || unassigned_alternative_group_contains_target(map, from, to));
+    }
+    if has_unassigned_alternative_candidate(map, from)
+        && !unassigned_alternative_group_contains_target(map, from, to)
+    {
+        return false;
     }
 
     // A queue move is a change of the work-center assignment, not a way to
@@ -176,6 +182,64 @@ fn alternative_assigned_group_contains_target(
     })
 }
 
+fn has_unassigned_alternative_candidate(
+    map: &ProductionMapDefinition,
+    apparatus: &str,
+) -> bool {
+    map.nodes.iter().any(|node| {
+        node.kind == ProductionMapNodeKind::Apparatus
+            && !node.alternative_group_id.trim().is_empty()
+            && node.alternative_assigned_title.trim().is_empty()
+            && queue_state::apparatus_titles_match(&node.title, apparatus)
+    })
+}
+
+fn unassigned_alternative_group_contains_target(
+    map: &ProductionMapDefinition,
+    from: &str,
+    to: &str,
+) -> bool {
+    !unassigned_alternative_candidate_groups(map, from, to).is_empty()
+}
+
+fn unassigned_alternative_candidate_groups(
+    map: &ProductionMapDefinition,
+    from: &str,
+    to: &str,
+) -> BTreeSet<String> {
+    let candidate_groups: BTreeSet<String> = map
+        .nodes
+        .iter()
+        .filter(|node| {
+            node.kind == ProductionMapNodeKind::Apparatus
+                && !node.alternative_group_id.trim().is_empty()
+                && node.alternative_assigned_title.trim().is_empty()
+                && queue_state::apparatus_titles_match(&node.title, from)
+        })
+        .map(|node| node.alternative_group_id.trim().to_string())
+        .collect();
+    candidate_groups
+        .into_iter()
+        .filter(|group_id| {
+            let group_nodes = map.nodes.iter().filter(|node| {
+                node.kind == ProductionMapNodeKind::Apparatus
+                    && node.alternative_group_id.trim() == group_id
+            });
+            let mut has_target = false;
+            let mut all_unassigned = true;
+            for node in group_nodes {
+                if !node.alternative_assigned_title.trim().is_empty() {
+                    all_unassigned = false;
+                }
+                if queue_state::apparatus_titles_match(&node.title, to) {
+                    has_target = true;
+                }
+            }
+            all_unassigned && has_target
+        })
+        .collect()
+}
+
 pub(super) fn reassign_apparatus_nodes(
     map: &mut ProductionMapDefinition,
     from: &str,
@@ -203,7 +267,7 @@ pub(super) fn reassign_alternative_apparatus_assignment(
     if to.is_empty() {
         return false;
     }
-    let candidate_groups: BTreeSet<String> = map
+    let mut candidate_groups: BTreeSet<String> = map
         .nodes
         .iter()
         .filter(|node| {
@@ -213,6 +277,9 @@ pub(super) fn reassign_alternative_apparatus_assignment(
         })
         .map(|node| node.alternative_group_id.trim().to_string())
         .collect();
+    if candidate_groups.is_empty() {
+        candidate_groups = unassigned_alternative_candidate_groups(map, from, to);
+    }
     if candidate_groups.is_empty() {
         return false;
     }

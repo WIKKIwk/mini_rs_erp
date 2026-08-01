@@ -56,6 +56,7 @@ pub trait WorkerStorePort: Send + Sync {
     async fn workers(&self, query: &str, limit: usize) -> Result<Vec<Worker>, WorkerError>;
     async fn workers_by_ids(&self, ids: &[String]) -> Result<Vec<Worker>, WorkerError>;
     async fn upsert_worker(&self, worker: Worker) -> Result<Worker, WorkerError>;
+    async fn update_worker_name(&self, id: &str, name: &str) -> Result<Worker, WorkerError>;
     async fn update_worker_level(&self, id: &str, level: &str) -> Result<Worker, WorkerError>;
     async fn update_worker_phone(&self, id: &str, phone: &str) -> Result<Worker, WorkerError>;
     async fn deactivate_worker(&self, id: &str) -> Result<(), WorkerError>;
@@ -111,6 +112,18 @@ impl WorkerService {
         }
         let level = normalize_level(&input.level)?;
         self.store.update_worker_level(id, &level).await
+    }
+
+    pub async fn update_worker_name(&self, input: WorkerUpsert) -> Result<Worker, WorkerError> {
+        let id = input.id.trim();
+        if id.is_empty() {
+            return Err(WorkerError::MissingId);
+        }
+        let name = input.name.trim();
+        if name.is_empty() {
+            return Err(WorkerError::MissingName);
+        }
+        self.store.update_worker_name(id, name).await
     }
 
     pub async fn update_worker_phone(&self, input: WorkerUpsert) -> Result<Worker, WorkerError> {
@@ -180,6 +193,10 @@ impl WorkerStorePort for UnavailableWorkerStore {
     }
 
     async fn upsert_worker(&self, _worker: Worker) -> Result<Worker, WorkerError> {
+        Err(WorkerError::StoreFailed)
+    }
+
+    async fn update_worker_name(&self, _id: &str, _name: &str) -> Result<Worker, WorkerError> {
         Err(WorkerError::StoreFailed)
     }
 
@@ -281,6 +298,18 @@ impl WorkerStorePort for MemoryWorkerStore {
             active: true,
         });
         Ok(worker)
+    }
+
+    async fn update_worker_name(&self, id: &str, name: &str) -> Result<Worker, WorkerError> {
+        let mut workers = self.workers.write().await;
+        let Some(entry) = workers
+            .iter_mut()
+            .find(|entry| entry.active && entry.worker.id == id.trim())
+        else {
+            return Err(WorkerError::NotFound);
+        };
+        entry.worker.name = name.trim().to_string();
+        Ok(entry.worker.clone())
     }
 
     async fn update_worker_level(&self, id: &str, level: &str) -> Result<Worker, WorkerError> {

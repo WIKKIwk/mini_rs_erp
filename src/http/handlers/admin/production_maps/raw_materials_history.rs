@@ -106,11 +106,18 @@ async fn material_scoped_raw_material_assignments(
     assignments: Vec<RawMaterialAssignment>,
 ) -> Result<Vec<RawMaterialAssignment>, AdminError> {
     let assigned = material_warehouse_scope(state, principal).await?;
-    if assigned.is_empty() {
+    let assigned_apparatus = state.admin.principal_assigned_apparatus(principal).await;
+    if assigned.is_empty() || assigned_apparatus.is_empty() {
         return Ok(Vec::new());
     }
     let mut out = Vec::new();
     for assignment in assignments {
+        if !queue_state::apparatus_matches_assigned(
+            &assignment.apparatus,
+            &assigned_apparatus,
+        ) {
+            continue;
+        }
         let stock = state
             .gscale
             .raw_material_stock_by_barcode(&assignment.barcode)

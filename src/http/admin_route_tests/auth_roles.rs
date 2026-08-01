@@ -214,6 +214,25 @@ async fn admin_creates_material_taminotchi_with_seventy_prefix_code() {
         "Kalidor",
     )
     .await;
+    let apparatus_assignment = build_router(state.clone())
+        .oneshot(request_with_body(
+            "PUT",
+            "/v1/mobile/admin/role-assignments",
+            &admin_token,
+            &format!(
+                r#"{{
+                    "principal_role":"material_taminotchi",
+                    "principal_ref":"{}",
+                    "role_id":"material_taminotchi",
+                    "assigned_apparatus":["Laminatsiya - A"],
+                    "assigned_item_groups":["Kraska"]
+                }}"#,
+                material["ref"].as_str().expect("ref")
+            ),
+        ))
+        .await
+        .expect("material apparatus assignment response");
+    assert_eq!(apparatus_assignment.status(), StatusCode::OK);
 
     let detail = build_router(state.clone())
         .oneshot(request(
@@ -290,6 +309,10 @@ async fn admin_creates_material_taminotchi_with_seventy_prefix_code() {
     assert_eq!(login.status(), StatusCode::OK);
     let login = json_body(login).await;
     assert_eq!(login["profile"]["role"], "material_taminotchi");
+    assert_eq!(
+        login["assigned_apparatus"],
+        serde_json::json!(["Laminatsiya - A"])
+    );
     assert_eq!(
         login["assigned_item_groups"],
         serde_json::json!(["Kley", "Rulon"])

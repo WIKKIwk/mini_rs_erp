@@ -10,7 +10,7 @@ mod werka;
 
 use super::*;
 
-pub use apparatus::{apparatus, apparatus_groups};
+pub use apparatus::{apparatus, apparatus_groups, apparatus_options};
 pub(super) use auth::{authorize_any_capability, authorize_capability, require_capability};
 pub use catalog::items_bulk_move_group;
 pub use factory_locations::{factory_location, factory_location_apparatus, factory_locations};

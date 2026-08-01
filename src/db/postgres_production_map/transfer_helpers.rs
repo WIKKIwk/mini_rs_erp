@@ -35,7 +35,7 @@ pub(super) async fn load_apparatus_transfers_for_audit(
     let payloads = sqlx::query_scalar::<_, serde_json::Value>(
         "SELECT payload_json
          FROM mini_apparatus_order_transfers
-         ORDER BY created_at ASC, id ASC",
+         ORDER BY created_at ASC, transfer_id ASC",
     )
     .fetch_all(pool)
     .await

@@ -33,6 +33,16 @@ pub(super) struct QolipProductSpecRow {
     created_by_name: String,
 }
 
+#[derive(sqlx::FromRow)]
+pub(super) struct QolipOrderNoteRow {
+    pub(super) order_id: String,
+    pub(super) item_code: String,
+    pub(super) item_name: String,
+    pub(super) qolip_codes: Vec<String>,
+    pub(super) status: String,
+    pub(super) updated_at: String,
+}
+
 #[derive(Clone, sqlx::FromRow)]
 pub(super) struct QolipLocationRow {
     pub(super) id: String,

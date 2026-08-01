@@ -24,7 +24,8 @@ pub use production_maps::{
     production_map_order_control,
     production_map_progress_qr_history, production_map_progress_qr_lookup,
     production_map_progress_qr_report, production_map_progress_qr_reprint,
-    production_map_qolip_validate, production_map_queue_action, production_map_queue_policies,
+    production_map_qolip_order_notes, production_map_qolip_validate, production_map_queue_action,
+    production_map_queue_policies,
     production_map_run, production_map_save_with_order, production_map_schedule,
     production_map_schedule_cancel, production_map_sequence,
     production_map_wip_batches, production_maps, raw_material_assignment_candidate_orders,
@@ -43,7 +44,8 @@ pub use suppliers::{
     supplier_detail, supplier_list, supplier_summary, suppliers, user_list,
 };
 pub use system::{
-    apparatus, apparatus_groups, capabilities, factory_location, factory_location_apparatus,
+    apparatus, apparatus_groups, apparatus_options, capabilities, factory_location,
+    factory_location_apparatus,
     factory_locations, inventory_assets, inventory_locations, inventory_relocations,
     inventory_relocations_batch, inventory_returns_batch, inventory_transfer_action,
     inventory_transfers, items_bulk_move_group, role_assignments, roles, system_backup_create,

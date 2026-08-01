@@ -93,6 +93,8 @@ fn audit_test_batch(batch_id: &str, order_id: &str, qr_payload: &str) -> OrderPr
     OrderProgressBatch {
         batch_id: batch_id.to_string(),
         session_id: format!("session-{batch_id}"),
+        started_at_unix: 0,
+        completed_at_unix: 0,
         apparatus: "7 ta rangli pechat".to_string(),
         order_id: order_id.to_string(),
         action: queue_state::ApparatusQueueAction::Pause,

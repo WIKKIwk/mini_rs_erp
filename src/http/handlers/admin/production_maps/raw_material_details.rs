@@ -1,7 +1,7 @@
 use super::*;
 use crate::core::admin::models::AdminItemGroup;
 use crate::core::gscale::models::RawMaterialStockEntry;
-use crate::core::production_map::{ProductionMapDefinition, chain, pechat};
+use crate::core::production_map::{ProductionMapDefinition, pechat};
 use crate::core::werka::models::SupplierItem;
 
 #[derive(serde::Serialize)]
@@ -54,12 +54,71 @@ pub(super) async fn fill_raw_material_assignment_input(
         .await
         .map_err(|_| server_error("item group tree fetch failed"))?;
     let item_group_path = item_group_path(&groups, &item.item_group);
-    validate_rulon_size_for_pechat_order(state, &input.order_id, &stock, &item, &item_group_path)
-        .await?;
+    let map = state
+        .production_maps
+        .raw_map(&input.order_id)
+        .await
+        .map_err(production_map_error)?
+        .ok_or_else(|| production_map_error(ProductionMapError::MapNotFound))?;
+    let all_apparatus_options = state
+        .production_maps
+        .raw_material_assignment_apparatus_options(&input.order_id, &item_group_path)
+        .await
+        .map_err(production_map_error)?;
+    let assigned_apparatus = if principal.role == PrincipalRole::MaterialTaminotchi {
+        state.admin.principal_assigned_apparatus(principal).await
+    } else {
+        Vec::new()
+    };
+    let requested_apparatus = input.apparatus.trim();
+    if principal.role == PrincipalRole::MaterialTaminotchi
+        && !requested_apparatus.is_empty()
+        && !queue_state::apparatus_matches_assigned(requested_apparatus, &assigned_apparatus)
+    {
+        return Err(production_map_error(
+            ProductionMapError::ApparatusNotAssigned,
+        ));
+    }
+    let apparatus_options = all_apparatus_options
+        .iter()
+        .filter(|apparatus| {
+            principal.role != PrincipalRole::MaterialTaminotchi
+                || queue_state::apparatus_matches_assigned(apparatus, &assigned_apparatus)
+        })
+        .cloned()
+        .collect::<Vec<_>>();
+    let apparatus = if requested_apparatus.is_empty() {
+        match apparatus_options.as_slice() {
+            [] if !all_apparatus_options.is_empty() => {
+                return Err(production_map_error(
+                    ProductionMapError::ApparatusNotAssigned,
+                ));
+            }
+            [] => {
+                return Err(production_map_error(
+                    ProductionMapError::RawMaterialGroupNotAllowed,
+                ));
+            }
+            [apparatus] => apparatus.clone(),
+            _ => {
+                return Err(production_map_error(
+                    ProductionMapError::RawMaterialGroupAmbiguous(apparatus_options),
+                ));
+            }
+        }
+    } else {
+        apparatus_options
+            .iter()
+            .find(|apparatus| queue_state::apparatus_titles_match(apparatus, requested_apparatus))
+            .cloned()
+            .ok_or_else(|| production_map_error(ProductionMapError::RawMaterialGroupNotAllowed))?
+    };
+    validate_rulon_size_for_apparatus_map(&map, &apparatus, &stock, &item, &item_group_path)?;
     input.item_code = item_code;
     input.item_name = item.name.trim().to_string();
     input.item_group = item.item_group.trim().to_string();
     input.item_group_path = item_group_path;
+    input.apparatus = apparatus;
     require_material_item_group_scope(state, principal, &input.item_group).await?;
     require_material_warehouse_scope(state, principal, &stock.warehouse).await?;
     Ok((input, stock.warehouse.trim().to_string()))
@@ -121,32 +180,17 @@ pub(super) async fn require_material_warehouse_scope(
     ))
 }
 
-async fn validate_rulon_size_for_pechat_order(
-    state: &AppState,
-    order_id: &str,
-    stock: &RawMaterialStockEntry,
-    item: &SupplierItem,
-    item_group_path: &[String],
-) -> Result<(), AdminError> {
-    if !is_rulon_group(item_group_path) {
-        return Ok(());
-    }
-    let map = state
-        .production_maps
-        .raw_map(order_id)
-        .await
-        .map_err(production_map_error)?
-        .ok_or_else(|| production_map_error(ProductionMapError::MapNotFound))?;
-    validate_rulon_size_for_pechat_map(&map, stock, item, item_group_path)
-}
-
-pub(super) fn validate_rulon_size_for_pechat_map(
+pub(super) fn validate_rulon_size_for_apparatus_map(
     map: &ProductionMapDefinition,
+    apparatus: &str,
     stock: &RawMaterialStockEntry,
     item: &SupplierItem,
     item_group_path: &[String],
 ) -> Result<(), AdminError> {
-    if !is_rulon_group(item_group_path) || !map_has_pechat_stage(map) {
+    let Some(maximum_leftover_width_mm) = roll_width_allowance_mm(apparatus) else {
+        return Ok(());
+    };
+    if !is_rulon_group(item_group_path) {
         return Ok(());
     }
     let order_width = map
@@ -155,7 +199,9 @@ pub(super) fn validate_rulon_size_for_pechat_map(
         .ok_or_else(|| production_map_error(ProductionMapError::RawMaterialRollSizeMissing))?;
     let roll_width = roll_width_mm(stock, item)
         .ok_or_else(|| production_map_error(ProductionMapError::RawMaterialRollSizeMissing))?;
-    if roll_width + f64::EPSILON < order_width || roll_width > order_width + 20.0 + f64::EPSILON {
+    if roll_width + f64::EPSILON < order_width
+        || roll_width > order_width + maximum_leftover_width_mm + f64::EPSILON
+    {
         return Err((
             StatusCode::BAD_REQUEST,
             Json(AdminErrorResponse::roll_size_mismatch(
@@ -169,11 +215,12 @@ pub(super) fn validate_rulon_size_for_pechat_map(
 
 pub(super) fn raw_material_rulon_match_metrics(
     map: &ProductionMapDefinition,
+    apparatus: &str,
     stock: &RawMaterialStockEntry,
     item: &SupplierItem,
     item_group_path: &[String],
 ) -> Option<(f64, f64, f64)> {
-    if !is_rulon_group(item_group_path) || !map_has_pechat_stage(map) {
+    if !is_rulon_group(item_group_path) || roll_width_allowance_mm(apparatus).is_none() {
         return None;
     }
     let order_width = map
@@ -215,10 +262,14 @@ fn is_rulon_group(item_group_path: &[String]) -> bool {
         .any(|group| group.trim().eq_ignore_ascii_case("Rulon"))
 }
 
-fn map_has_pechat_stage(map: &ProductionMapDefinition) -> bool {
-    chain::linear_work_stages(map)
-        .iter()
-        .any(|stage| pechat::is_pechat_apparatus(&stage.station_title))
+fn roll_width_allowance_mm(apparatus: &str) -> Option<f64> {
+    if pechat::is_pechat_apparatus(apparatus) {
+        return Some(20.0);
+    }
+    if apparatus.trim().to_lowercase().contains("laminatsiya") {
+        return Some(30.0);
+    }
+    None
 }
 
 fn roll_width_mm(stock: &RawMaterialStockEntry, item: &SupplierItem) -> Option<f64> {
