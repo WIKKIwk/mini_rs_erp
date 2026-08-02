@@ -237,6 +237,18 @@ printf '%s\n' "$dir"
 #[tokio::test]
 async fn admin_imports_mobile_dump_and_exposes_verified_snapshot() {
     let backup_dir = tempfile::tempdir().expect("backup dir");
+    let backup_script_dir = tempfile::tempdir().expect("backup script dir");
+    let backup_script = backup_script_dir.path().join("fake_backup.sh");
+    std::fs::write(
+        &backup_script,
+        r#"#!/usr/bin/env bash
+set -euo pipefail
+dir="$MINI_ERP_BACKUP_DIR/$MINI_ERP_BACKUP_TIMESTAMP"
+mkdir -p "$dir"
+printf 'pre-restore-backup-bytes' > "$dir/mini_rs_erp.dump"
+"#,
+    )
+    .expect("write fake backup script");
     let restore_script_dir = tempfile::tempdir().expect("restore script dir");
     let restore_script = restore_script_dir.path().join("fake_restore.sh");
     std::fs::write(
@@ -244,6 +256,8 @@ async fn admin_imports_mobile_dump_and_exposes_verified_snapshot() {
         r#"#!/usr/bin/env bash
 set -euo pipefail
 test -s "$MINI_ERP_RESTORE_DUMP"
+backup_root="$(dirname "$(dirname "$MINI_ERP_RESTORE_DUMP")")"
+test -n "$(find "$backup_root" -maxdepth 1 -type d -name 'backup-pre-restore-*' -print -quit)"
 printf 'restore-ran' > "${MINI_ERP_RESTORE_DUMP}.restored"
 "#,
     )
@@ -252,7 +266,7 @@ printf 'restore-ran' > "${MINI_ERP_RESTORE_DUMP}.restored"
     let mut state = test_state();
     state.backup_doctor = crate::core::backup_doctor::BackupDoctor::for_test_with_restore(
         backup_dir.path(),
-        "missing-backup.sh",
+        &backup_script,
         &restore_script,
         "postgres://test",
     );
@@ -293,6 +307,13 @@ printf 'restore-ran' > "${MINI_ERP_RESTORE_DUMP}.restored"
         tokio::time::sleep(Duration::from_millis(100)).await;
     }
     assert!(ready, "import did not become ready");
+    let snapshots = state
+        .backup_doctor
+        .report(time::OffsetDateTime::now_utc())
+        .snapshots;
+    assert!(snapshots.iter().any(|snapshot| {
+        snapshot.source == "pre_restore" && snapshot.status == "ready" && snapshot.verified
+    }));
 
     let download = router
         .oneshot(request(
@@ -307,4 +328,99 @@ printf 'restore-ran' > "${MINI_ERP_RESTORE_DUMP}.restored"
         .await
         .expect("download imported bytes");
     assert_eq!(&bytes[..], b"mobile-dump-bytes");
+}
+
+#[tokio::test]
+async fn admin_import_rolls_back_when_post_restore_migration_fails() {
+    let backup_dir = tempfile::tempdir().expect("backup dir");
+    let backup_script_dir = tempfile::tempdir().expect("backup script dir");
+    let backup_script = backup_script_dir.path().join("fake_backup.sh");
+    std::fs::write(
+        &backup_script,
+        r#"#!/usr/bin/env bash
+set -euo pipefail
+dir="$MINI_ERP_BACKUP_DIR/$MINI_ERP_BACKUP_TIMESTAMP"
+mkdir -p "$dir"
+printf 'pre-restore-backup-bytes' > "$dir/mini_rs_erp.dump"
+"#,
+    )
+    .expect("write fake backup script");
+    let restore_script_dir = tempfile::tempdir().expect("restore script dir");
+    let restore_script = restore_script_dir.path().join("fake_restore.sh");
+    std::fs::write(
+        &restore_script,
+        r#"#!/usr/bin/env bash
+set -euo pipefail
+test -s "$MINI_ERP_RESTORE_DUMP"
+backup_root="$(dirname "$(dirname "$MINI_ERP_RESTORE_DUMP")")"
+printf '%s\n' "$MINI_ERP_RESTORE_DUMP" >> "$backup_root/restore-calls.log"
+"#,
+    )
+    .expect("write restore script");
+
+    let mut state = test_state();
+    state.backup_doctor =
+        crate::core::backup_doctor::BackupDoctor::for_test_with_restore_and_migration(
+            backup_dir.path(),
+            &backup_script,
+            &restore_script,
+            "not-a-postgres-url",
+        );
+    let token = session(&state, PrincipalRole::Admin).await;
+    let router = build_router(state.clone());
+    let import = Request::builder()
+        .method("POST")
+        .uri("/v1/mobile/admin/system/backups/import")
+        .header(header::AUTHORIZATION, format!("Bearer {token}"))
+        .header(header::CONTENT_TYPE, "application/octet-stream")
+        .header("x-backup-filename", "mobile-export.dump")
+        .body(Body::from("mobile-dump-bytes"))
+        .expect("import request");
+    let response = router.oneshot(import).await.expect("import response");
+    assert_eq!(response.status(), StatusCode::ACCEPTED);
+    let import_id = json_body(response).await["id"]
+        .as_str()
+        .unwrap_or_default()
+        .to_string();
+
+    let mut failed = false;
+    for _ in 0..40 {
+        failed = state
+            .backup_doctor
+            .report(time::OffsetDateTime::now_utc())
+            .snapshots
+            .iter()
+            .any(|snapshot| snapshot.id == import_id && snapshot.status == "failed");
+        if failed {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    assert!(
+        failed,
+        "import did not fail after migration connection refusal"
+    );
+
+    let calls = std::fs::read_to_string(backup_dir.path().join("restore-calls.log"))
+        .expect("restore calls log");
+    assert_eq!(calls.lines().count(), 2);
+    assert!(
+        calls
+            .lines()
+            .nth(1)
+            .unwrap_or_default()
+            .contains("backup-pre-restore-")
+    );
+    let snapshots = state
+        .backup_doctor
+        .report(time::OffsetDateTime::now_utc())
+        .snapshots;
+    let failed_import = snapshots
+        .iter()
+        .find(|snapshot| snapshot.id == import_id)
+        .expect("failed import snapshot");
+    assert!(failed_import.error.contains("migration"));
+    assert!(snapshots.iter().any(|snapshot| {
+        snapshot.source == "pre_restore" && snapshot.status == "ready" && snapshot.verified
+    }));
 }

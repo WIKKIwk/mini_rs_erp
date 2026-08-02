@@ -1,6 +1,6 @@
 use std::fs;
 use std::path::PathBuf;
-use std::process::Stdio;
+use std::process::{Output, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration as StdDuration;
@@ -25,7 +25,9 @@ pub struct BackupDoctorConfig {
     pub script_path: PathBuf,
     pub restore_script_path: PathBuf,
     pub database_url: Option<String>,
+    pub migration_database_url: Option<String>,
     pub admin_database_url: Option<String>,
+    pub auto_migrate_after_restore: bool,
     pub auto_enabled: bool,
     pub schedule_hour: u8,
     pub schedule_minute: u8,
@@ -50,7 +52,9 @@ impl BackupDoctorConfig {
             script_path,
             restore_script_path,
             database_url: non_empty_env("MINI_ERP_DATABASE_URL"),
+            migration_database_url: non_empty_env("MINI_ERP_MIGRATION_DATABASE_URL"),
             admin_database_url: non_empty_env("MINI_ERP_ADMIN_DATABASE_URL"),
+            auto_migrate_after_restore: bool_env("MINI_ERP_AUTO_MIGRATE_AFTER_RESTORE", true),
             auto_enabled: bool_env("MINI_ERP_AUTO_BACKUP_ENABLED", true),
             schedule_hour,
             schedule_minute,
@@ -121,6 +125,11 @@ pub struct BackupImportUpload {
     pub path: PathBuf,
 }
 
+struct PreRestoreBackup {
+    job: AdminServerMonitorBackupSnapshot,
+    artifact: BackupArtifact,
+}
+
 impl BackupDoctor {
     pub fn from_env() -> Self {
         Self::new(BackupDoctorConfig::from_env())
@@ -149,7 +158,9 @@ impl BackupDoctor {
             script_path: script_path.into(),
             restore_script_path: PathBuf::from("missing-restore.sh"),
             database_url: Some(database_url.into()),
+            migration_database_url: None,
             admin_database_url: None,
+            auto_migrate_after_restore: false,
             auto_enabled: false,
             schedule_hour: 2,
             schedule_minute: 0,
@@ -173,7 +184,9 @@ impl BackupDoctor {
             script_path: script_path.into(),
             restore_script_path: restore_script_path.into(),
             database_url: Some(database_url.into()),
+            migration_database_url: None,
             admin_database_url: None,
+            auto_migrate_after_restore: false,
             auto_enabled: false,
             schedule_hour: 2,
             schedule_minute: 0,
@@ -183,6 +196,26 @@ impl BackupDoctor {
             min_available_mb: 0,
             retention_enabled: false,
         })
+    }
+
+    #[cfg(test)]
+    pub fn for_test_with_restore_and_migration(
+        backup_root: impl Into<PathBuf>,
+        script_path: impl Into<PathBuf>,
+        restore_script_path: impl Into<PathBuf>,
+        database_url: impl Into<String>,
+    ) -> Self {
+        let mut doctor = Self::for_test_with_restore(
+            backup_root,
+            script_path,
+            restore_script_path,
+            database_url,
+        );
+        Arc::get_mut(&mut doctor.inner)
+            .expect("test backup doctor must be uniquely owned")
+            .config
+            .auto_migrate_after_restore = true;
+        doctor
     }
 
     pub fn start_scheduler(&self) {
@@ -233,7 +266,9 @@ impl BackupDoctor {
         if database_url.trim().is_empty() {
             return Err(BackupDoctorError::NotConfigured);
         }
-        if !self.inner.config.restore_script_path.is_file() {
+        if !self.inner.config.restore_script_path.is_file()
+            || !self.inner.config.script_path.is_file()
+        {
             return Err(BackupDoctorError::EngineUnavailable);
         }
         tokio::runtime::Handle::try_current().map_err(|_| BackupDoctorError::RuntimeUnavailable)?;
@@ -499,44 +534,53 @@ impl BackupDoctor {
         job.started_at_unix = OffsetDateTime::now_utc().unix_timestamp();
         self.publish_job(&job);
 
-        let mut command = Command::new("bash");
-        command
-            .arg(&self.inner.config.restore_script_path)
-            .env(
-                "MINI_ERP_DATABASE_URL",
-                self.inner
-                    .config
-                    .database_url
-                    .as_deref()
-                    .unwrap_or_default(),
-            )
-            .env("MINI_ERP_RESTORE_DUMP", &staged_path)
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .kill_on_drop(true);
-        let output = match timeout(self.inner.config.max_runtime, command.output()).await {
-            Ok(Ok(output)) => output,
-            Ok(Err(error)) => {
-                self.finish_failed(job, format!("restore engine ishga tushmadi: {error}"));
-                return;
-            }
-            Err(_) => {
-                self.finish_failed(job, "restore vaqti chegaradan oshdi".to_string());
+        let safety_backup = match self.create_pre_restore_backup(&job).await {
+            Ok(backup) => backup,
+            Err(error) => {
+                self.finish_failed(job, error);
                 return;
             }
         };
-        if !output.status.success() {
-            let error = String::from_utf8_lossy(&output.stderr).trim().to_string();
-            self.finish_failed(job, truncate_error(&error));
+
+        if let Err(error) = self.run_restore_script(&staged_path).await {
+            self.finish_failed(
+                job,
+                format!(
+                    "restore bajarilmadi: {error}. O‘zgarish boshlanishidan oldingi safety backup: {}",
+                    safety_backup.job.id
+                ),
+            );
             return;
         }
+
+        if self.inner.config.auto_migrate_after_restore
+            && let Err(error) = self.run_restore_migrations().await
+        {
+            let error = self
+                .rollback_after_restore(
+                    &safety_backup,
+                    format!("restore’dan keyingi schema migration bajarilmadi: {error}"),
+                )
+                .await;
+            self.finish_failed(job, error);
+            return;
+        }
+
+        job.status = "verifying".to_string();
+        self.publish_job(&job);
 
         let artifact_path = staged_path
             .parent()
             .map(|directory| directory.join(&job.artifact_name))
             .unwrap_or(staged_path.clone());
         if let Err(error) = tokio::fs::rename(&staged_path, &artifact_path).await {
-            self.finish_failed(job, format!("import backup fayli saqlanmadi: {error}"));
+            let error = self
+                .rollback_after_restore(
+                    &safety_backup,
+                    format!("import backup fayli saqlanmadi: {error}"),
+                )
+                .await;
+            self.finish_failed(job, error);
             return;
         }
         let checksum_path = artifact_path.clone();
@@ -544,14 +588,26 @@ impl BackupDoctor {
         {
             Ok(Ok(checksum)) => checksum,
             _ => {
-                self.finish_failed(job, "import checksum tekshiruvi bajarilmadi".to_string());
+                let error = self
+                    .rollback_after_restore(
+                        &safety_backup,
+                        "import checksum tekshiruvi bajarilmadi".to_string(),
+                    )
+                    .await;
+                self.finish_failed(job, error);
                 return;
             }
         };
         let metadata = match tokio::fs::metadata(&artifact_path).await {
             Ok(metadata) => metadata,
             Err(_) => {
-                self.finish_failed(job, "import backup metadata o‘qilmadi".to_string());
+                let error = self
+                    .rollback_after_restore(
+                        &safety_backup,
+                        "import backup metadata o‘qilmadi".to_string(),
+                    )
+                    .await;
+                self.finish_failed(job, error);
                 return;
             }
         };
@@ -563,7 +619,224 @@ impl BackupDoctor {
         job.error.clear();
         self.publish_job(&job);
         self.clear_active(&job.id);
-        tracing::info!(backup_id = %job.id, size_bytes = job.size_bytes, "backup doctor completed database import");
+        tracing::info!(
+            backup_id = %job.id,
+            safety_backup_id = %safety_backup.job.id,
+            size_bytes = job.size_bytes,
+            "backup doctor completed database import"
+        );
+    }
+
+    async fn create_pre_restore_backup(
+        &self,
+        import_job: &AdminServerMonitorBackupSnapshot,
+    ) -> Result<PreRestoreBackup, String> {
+        let now = OffsetDateTime::now_utc().unix_timestamp();
+        let id = format!("backup-pre-restore-{now}-{:08x}", rand::random::<u32>());
+        let job_dir = self.inner.config.backup_root.join(&id);
+        fs::create_dir_all(&job_dir)
+            .map_err(|error| format!("restore oldidan backup papkasi yaratilmadi: {error}"))?;
+        let mut job = AdminServerMonitorBackupSnapshot {
+            id,
+            status: "running".to_string(),
+            source: "pre_restore".to_string(),
+            requested_by: format!("Restore oldidan: {}", import_job.requested_by),
+            created_at_unix: now,
+            started_at_unix: now,
+            ..Default::default()
+        };
+        self.persist_standalone_job(&job)?;
+
+        if let Some(available_mb) = available_disk_mb(&self.inner.config.backup_root).await
+            && available_mb < self.inner.config.min_available_mb
+        {
+            let error = format!(
+                "restore oldidan safety backup uchun disk joyi yetarli emas: {available_mb} MiB mavjud"
+            );
+            self.finish_standalone_failed(job, error.clone());
+            return Err(error);
+        }
+
+        let mut command = Command::new("bash");
+        command
+            .arg(&self.inner.config.script_path)
+            .env(
+                "MINI_ERP_DATABASE_URL",
+                self.inner
+                    .config
+                    .database_url
+                    .as_deref()
+                    .unwrap_or_default(),
+            )
+            .env("MINI_ERP_BACKUP_DIR", &self.inner.config.backup_root)
+            .env("MINI_ERP_BACKUP_TIMESTAMP", &job.id)
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .kill_on_drop(true);
+        if let Some(admin_url) = &self.inner.config.admin_database_url {
+            command.env("MINI_ERP_ADMIN_DATABASE_URL", admin_url);
+        }
+        let output = match timeout(self.inner.config.max_runtime, command.output()).await {
+            Ok(Ok(output)) => output,
+            Ok(Err(error)) => {
+                let error = format!("restore oldidan backup engine ishga tushmadi: {error}");
+                self.finish_standalone_failed(job, error.clone());
+                return Err(error);
+            }
+            Err(_) => {
+                let error = "restore oldidan backup vaqti chegaradan oshdi".to_string();
+                self.finish_standalone_failed(job, error.clone());
+                return Err(error);
+            }
+        };
+        if !output.status.success() {
+            let error = command_failure("restore oldidan safety backup", &output);
+            self.finish_standalone_failed(job, error.clone());
+            return Err(error);
+        }
+
+        job.status = "verifying".to_string();
+        self.persist_standalone_job(&job)?;
+        let Some(artifact_path) = preferred_artifact_in(&job_dir) else {
+            let error = "restore oldidan safety backup dump fayli yaratilmagan".to_string();
+            self.finish_standalone_failed(job, error.clone());
+            return Err(error);
+        };
+        let checksum_path = artifact_path.clone();
+        let checksum = match tokio::task::spawn_blocking(move || sha256_file(&checksum_path)).await
+        {
+            Ok(Ok(checksum)) => checksum,
+            _ => {
+                let error = "restore oldidan safety backup checksum tekshiruvi bajarilmadi";
+                self.finish_standalone_failed(job, error.to_string());
+                return Err(error.to_string());
+            }
+        };
+        let metadata = match fs::metadata(&artifact_path) {
+            Ok(metadata) => metadata,
+            Err(error) => {
+                let error = format!("restore oldidan safety backup metadata o‘qilmadi: {error}");
+                self.finish_standalone_failed(job, error.clone());
+                return Err(error);
+            }
+        };
+        job.status = "ready".to_string();
+        job.completed_at_unix = OffsetDateTime::now_utc().unix_timestamp();
+        job.size_bytes = metadata.len();
+        job.artifact_name = artifact_path
+            .file_name()
+            .and_then(|value| value.to_str())
+            .unwrap_or_default()
+            .to_string();
+        job.checksum_sha256 = checksum.clone();
+        job.verified = true;
+        job.error.clear();
+        self.persist_standalone_job(&job)?;
+        let artifact_name = job.artifact_name.clone();
+
+        Ok(PreRestoreBackup {
+            job,
+            artifact: BackupArtifact {
+                path: artifact_path,
+                filename: artifact_name,
+                size_bytes: metadata.len(),
+            },
+        })
+    }
+
+    async fn run_restore_script(&self, dump: &std::path::Path) -> Result<(), String> {
+        let database_url = self
+            .inner
+            .config
+            .database_url
+            .as_deref()
+            .filter(|value| !value.trim().is_empty())
+            .ok_or_else(|| "restore uchun database URL sozlanmagan".to_string())?;
+        let mut command = Command::new("bash");
+        command
+            .arg(&self.inner.config.restore_script_path)
+            .env("MINI_ERP_DATABASE_URL", database_url)
+            .env("MINI_ERP_RESTORE_DUMP", dump)
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .kill_on_drop(true);
+        if let Some(migration_url) = &self.inner.config.migration_database_url {
+            command
+                .env("MINI_ERP_MIGRATION_DATABASE_URL", migration_url)
+                .env("MINI_ERP_RESTORE_DATABASE_URL", migration_url);
+        }
+        let output = match timeout(self.inner.config.max_runtime, command.output()).await {
+            Ok(Ok(output)) => output,
+            Ok(Err(error)) => return Err(format!("restore engine ishga tushmadi: {error}")),
+            Err(_) => return Err("restore vaqti chegaradan oshdi".to_string()),
+        };
+        if output.status.success() {
+            Ok(())
+        } else {
+            Err(command_failure("restore engine", &output))
+        }
+    }
+
+    async fn run_restore_migrations(&self) -> Result<(), String> {
+        let database_url = self
+            .inner
+            .config
+            .database_url
+            .as_deref()
+            .filter(|value| !value.trim().is_empty())
+            .ok_or_else(|| {
+                "restore’dan keyingi migration uchun database URL sozlanmagan".to_string()
+            })?;
+        match timeout(
+            self.inner.config.max_runtime,
+            crate::db::postgres::migrate_database(
+                database_url,
+                self.inner.config.migration_database_url.as_deref(),
+            ),
+        )
+        .await
+        {
+            Ok(Ok(())) => Ok(()),
+            Ok(Err(error)) => Err(error.to_string()),
+            Err(_) => {
+                Err("restore’dan keyingi schema migration vaqti chegaradan oshdi".to_string())
+            }
+        }
+    }
+
+    async fn rollback_after_restore(
+        &self,
+        safety_backup: &PreRestoreBackup,
+        reason: impl Into<String>,
+    ) -> String {
+        let reason = reason.into();
+        match self.run_restore_script(&safety_backup.artifact.path).await {
+            Ok(()) => format!(
+                "{reason}; database restore oldidagi holatga qaytarildi: {}",
+                safety_backup.job.id
+            ),
+            Err(error) => format!(
+                "{reason}; rollback ham bajarilmadi. Safety backup qo‘lda tiklash uchun tayyor: {}. Rollback xatosi: {error}",
+                safety_backup.job.id
+            ),
+        }
+    }
+
+    fn persist_standalone_job(&self, job: &AdminServerMonitorBackupSnapshot) -> Result<(), String> {
+        let job_dir = self.inner.config.backup_root.join(&job.id);
+        write_manifest(&job_dir, job)
+            .map_err(|error| format!("backup manifest saqlanmadi: {error}"))
+    }
+
+    fn finish_standalone_failed(&self, mut job: AdminServerMonitorBackupSnapshot, error: String) {
+        job.status = "failed".to_string();
+        job.completed_at_unix = OffsetDateTime::now_utc().unix_timestamp();
+        job.error = truncate_error(&error);
+        job.verified = false;
+        if let Err(write_error) = self.persist_standalone_job(&job) {
+            tracing::warn!(%write_error, backup_id = %job.id, "safety backup failure manifest write failed");
+        }
+        tracing::error!(backup_id = %job.id, error = %job.error, "pre-restore safety backup failed");
     }
 
     fn publish_job(&self, job: &AdminServerMonitorBackupSnapshot) {
@@ -677,6 +950,25 @@ fn safe_import_name(value: &str) -> Option<String> {
         None
     } else {
         Some(cleaned)
+    }
+}
+
+fn command_failure(prefix: &str, output: &Output) -> String {
+    let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+    let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    let details = if stderr.is_empty() { stdout } else { stderr };
+    let status = output
+        .status
+        .code()
+        .map(|code| code.to_string())
+        .unwrap_or_else(|| "signal".to_string());
+    if details.is_empty() {
+        format!("{prefix} muvaffaqiyatsiz tugadi (exit {status})")
+    } else {
+        format!(
+            "{prefix} muvaffaqiyatsiz tugadi (exit {status}): {}",
+            truncate_error(&details)
+        )
     }
 }
 

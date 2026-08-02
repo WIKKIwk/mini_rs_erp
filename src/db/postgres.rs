@@ -255,6 +255,32 @@ pub async fn connect_and_migrate_required() -> Result<PgPool, PostgresBootstrapE
     Ok(pool)
 }
 
+/// Apply the complete versioned migration set after an external database
+/// restore. The restore flow uses this entry point so it does not depend on a
+/// separate `mini_rs_migrate` process being available in the runtime image.
+pub async fn migrate_database(
+    database_url: &str,
+    migration_database_url: Option<&str>,
+) -> Result<(), PostgresBootstrapError> {
+    let database_url = database_url.trim();
+    if database_url.is_empty() {
+        return Err(PostgresBootstrapError::MissingDatabaseUrl);
+    }
+    let migration_database_url = migration_database_url
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .unwrap_or(database_url);
+    let pool = PgPoolOptions::new()
+        .connect(migration_database_url)
+        .await
+        .map_err(PostgresBootstrapError::Connect)?;
+    let result = apply_foundation_migration(&pool)
+        .await
+        .map_err(PostgresBootstrapError::Migrate);
+    pool.close().await;
+    result
+}
+
 #[allow(dead_code)]
 pub fn foundation_migration_sql() -> &'static str {
     POSTGRES_MIGRATIONS[0].1

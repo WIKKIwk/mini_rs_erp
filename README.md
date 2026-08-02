@@ -810,17 +810,18 @@ another controlled restore wrapper.
 
 Import is asynchronous: the API returns after the upload is durably staged and
 the restore job is queued, while the monitor reports the job state over its
-live stream. The restore helper validates the archive before touching the
-database. It uses a single transaction for small archives (the normal case for
-this service) and automatically enables up to eight pg_restore workers for
-large custom archives. Set MINI_ERP_RESTORE_JOBS=1 to force the
-all-or-nothing serial mode, or set a measured worker count for a large
-dedicated database host.
+live stream. Before any destructive restore, the server creates and verifies a
+separate safety backup. The restore helper validates the archive, drops and
+recreates the `public` schema with `CASCADE`, and feeds the generated SQL to
+`psql` in one transaction. A restore error therefore rolls back the schema
+replacement; a migration error also triggers an automatic restore of the
+safety backup. After a successful restore, the complete versioned PostgreSQL
+migration set is applied automatically.
 
 Import fails fast when the database is holding a conflicting lock instead of
 leaving the restore job invisible indefinitely. The default lock wait is 30
-seconds; adjust MINI_ERP_RESTORE_LOCK_TIMEOUT_MS only after checking the
-application transaction behavior.
+seconds for the schema replacement; adjust MINI_ERP_RESTORE_LOCK_TIMEOUT_MS
+only after checking the application transaction behavior.
 
 Create a PostgreSQL backup before every schema or production deployment change:
 
@@ -857,8 +858,8 @@ Common runtime variables:
 | `MOBILE_API_ADDR` | `:8081` | Bind address. `:8081` is normalized to `0.0.0.0:8081`. |
 | `MINI_ERP_DATABASE_URL` | empty | PostgreSQL URL for mini ERP state. Required for production ERP workflows. |
 | `MINI_ERP_MIGRATION_DATABASE_URL` | `MINI_ERP_DATABASE_URL` | Optional schema-owner URL used only while applying migrations. |
-| `MINI_ERP_RESTORE_JOBS` | adaptive | PostgreSQL restore worker count; `1` enables the atomic serial restore path. |
-| `MINI_ERP_RESTORE_LOCK_TIMEOUT_MS` | `30000` | Maximum time pg_restore waits for a conflicting PostgreSQL lock. |
+| `MINI_ERP_AUTO_MIGRATE_AFTER_RESTORE` | `1` | Apply all versioned PostgreSQL migrations after a successful restore. |
+| `MINI_ERP_RESTORE_LOCK_TIMEOUT_MS` | `30000` | Maximum time the restore connection waits for a conflicting PostgreSQL lock. |
 | `MINI_ORDER_SYNC_INTERVAL_SECONDS` | `30` | Retry interval for reconciling production maps into PostgreSQL order rows. |
 | `MINI_ERP_HTTP_TIMEOUT_SECONDS` | `15` | HTTP client timeout baseline. |
 | `MINI_ERP_DEFAULT_TARGET_WAREHOUSE` | empty | Default target warehouse setting. |

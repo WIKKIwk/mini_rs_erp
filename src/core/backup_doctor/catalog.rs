@@ -385,7 +385,18 @@ pub(super) fn truncate_error(error: &str) -> String {
     if cleaned.is_empty() {
         return "backup bajarilmadi".to_string();
     }
-    cleaned.chars().take(500).collect()
+    const MAX_ERROR_CHARS: usize = 4_000;
+    let characters = cleaned.chars().collect::<Vec<_>>();
+    if characters.len() <= MAX_ERROR_CHARS {
+        return cleaned.to_string();
+    }
+    let head_len = 1_200;
+    let tail_len = MAX_ERROR_CHARS - head_len - 40;
+    let head = characters[..head_len].iter().collect::<String>();
+    let tail = characters[characters.len() - tail_len..]
+        .iter()
+        .collect::<String>();
+    format!("{head}\n... [error log qisqartirildi] ...\n{tail}")
 }
 
 fn system_time_to_unix(time: SystemTime) -> i64 {
