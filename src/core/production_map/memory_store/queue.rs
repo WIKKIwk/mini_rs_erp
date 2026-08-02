@@ -5,7 +5,6 @@ use std::collections::{BTreeMap, BTreeSet};
 use super::super::progress::{
     actor_display_name, completion_request_decision_notification_from_event,
     completion_request_notification_from_event, json_string_field,
-    laminatsiya_metric_notice_from_event,
 };
 use super::super::queue_state;
 
@@ -118,8 +117,7 @@ pub(super) async fn completion_requests(
     let events = store.queue_events.read().await;
     let mut requests = Vec::new();
     for (index, event) in events.iter().enumerate().rev() {
-        let request = completion_request_notification_from_event(event, index as i64 + 1)
-            .or_else(|| laminatsiya_metric_notice_from_event(event, index as i64 + 1));
+        let request = completion_request_notification_from_event(event, index as i64 + 1);
         let Some(request) = request else { continue };
         requests.push(request);
         if requests.len() >= limit {
@@ -324,5 +322,7 @@ fn production_order_log_entry(
             .and_then(|value| value.as_bool())
             .unwrap_or(false),
         issue_note: json_string_field(&event.payload_json, "issue_note"),
+        transfer: None,
+        freeze: None,
     }
 }

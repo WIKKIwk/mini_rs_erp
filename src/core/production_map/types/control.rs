@@ -84,6 +84,14 @@ pub struct OrderControlRecord {
     pub freeze_request: Option<OrderFreezeRequest>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct OrderFreezeAuditRecord {
+    pub order_id: String,
+    pub request: OrderFreezeRequest,
+    pub actor: QueueActionActor,
+    pub occurred_at_unix: i64,
+}
+
 impl OrderControlRecord {
     pub fn active(order_id: &str) -> Self {
         Self {

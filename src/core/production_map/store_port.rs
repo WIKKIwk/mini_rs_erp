@@ -98,6 +98,9 @@ pub trait ProductionMapStorePort: Send + Sync {
     async fn order_control_states(&self) -> StoreResult<OrderControlMap> {
         Ok(BTreeMap::new())
     }
+    async fn order_freeze_requests_for_audit(&self) -> StoreResult<Vec<OrderFreezeAuditRecord>> {
+        Ok(Vec::new())
+    }
     async fn put_order_control_state(&self, _record: OrderControlRecord) -> StoreResult<()> {
         Ok(())
     }

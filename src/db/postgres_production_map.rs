@@ -56,7 +56,8 @@ use self::material_helpers::{
     save_apparatus_material_rule, save_raw_material_assignment,
 };
 use self::order_control_helpers::{
-    load_order_control_states, save_order_control_state, save_order_control_state_tx,
+    load_order_control_states, load_order_freeze_requests_for_audit, save_order_control_state,
+    save_order_control_state_tx,
 };
 use self::order_query_helpers::{
     load_active_order_run_session, load_active_order_run_session_for_qolip,
@@ -131,6 +132,12 @@ impl ProductionMapStorePort for PostgresProductionMapStore {
         &self,
     ) -> Result<BTreeMap<String, OrderControlRecord>, ProductionMapError> {
         load_order_control_states(&self.pool).await
+    }
+
+    async fn order_freeze_requests_for_audit(
+        &self,
+    ) -> Result<Vec<crate::core::production_map::OrderFreezeAuditRecord>, ProductionMapError> {
+        load_order_freeze_requests_for_audit(&self.pool).await
     }
 
     async fn put_order_control_state(

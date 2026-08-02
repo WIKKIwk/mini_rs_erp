@@ -135,12 +135,6 @@ impl ProductionMapService {
         {
             downgrade_completed_state_to_pending(order_id, &mut saved, &mut event);
         }
-        append_laminatsiya_double_leftover_notice(
-            action,
-            progress.progress_batch.as_ref(),
-            order_map,
-            &mut event,
-        );
         let order_control_update = if control.state == OrderControlState::FreezeRequested
             && action == queue_state::ApparatusQueueAction::Pause
         {

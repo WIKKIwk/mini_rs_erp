@@ -3,8 +3,8 @@ use std::collections::BTreeMap;
 use sqlx::{PgPool, Postgres, Transaction};
 
 use crate::core::production_map::{
-    OrderControlRecord, OrderControlState, OrderFreezeRequest, OrderFreezeRequestStatus,
-    ProductionMapError, QueueActionActor,
+    OrderControlRecord, OrderControlState, OrderFreezeAuditRecord, OrderFreezeRequest,
+    OrderFreezeRequestStatus, ProductionMapError, QueueActionActor,
 };
 
 #[derive(sqlx::FromRow)]
@@ -24,6 +24,25 @@ struct OrderControlRow {
     target_worker_ref: Option<String>,
     target_worker_display_name: Option<String>,
     request_transitioned_at_unix: Option<i64>,
+}
+
+#[derive(sqlx::FromRow)]
+struct OrderFreezeAuditRow {
+    order_id: String,
+    request_id: String,
+    status: String,
+    requester_role: String,
+    requester_ref: String,
+    requester_display_name: String,
+    target_session_id: String,
+    target_apparatus: String,
+    target_worker_role: String,
+    target_worker_ref: String,
+    target_worker_display_name: String,
+    requested_at_unix: i64,
+    transitioned_at_unix: i64,
+    event_status: Option<String>,
+    event_at_unix: Option<i64>,
 }
 
 pub(super) async fn load_order_control_states(
@@ -90,6 +109,80 @@ pub(super) async fn load_order_control_states(
                     freeze_request,
                 },
             ))
+        })
+        .collect()
+}
+
+pub(super) async fn load_order_freeze_requests_for_audit(
+    pool: &PgPool,
+) -> Result<Vec<OrderFreezeAuditRecord>, ProductionMapError> {
+    let rows = sqlx::query_as::<_, OrderFreezeAuditRow>(
+        r#"SELECT
+             request.order_id,
+             request.request_id,
+             request.status,
+             request.requester_role,
+             request.requester_ref,
+             request.requester_display_name,
+             request.target_session_id,
+             request.target_apparatus,
+             request.target_worker_role,
+             request.target_worker_ref,
+             request.target_worker_display_name,
+             request.requested_at_unix,
+             request.transitioned_at_unix,
+             event.status AS event_status,
+             COALESCE(
+                 EXTRACT(EPOCH FROM event.created_at)::bigint,
+                 CASE
+                     WHEN request.status = 'pending' THEN request.requested_at_unix
+                     ELSE request.transitioned_at_unix
+                 END
+             ) AS event_at_unix
+           FROM mini_order_freeze_requests request
+           LEFT JOIN mini_order_freeze_chat_outbox event
+             ON event.request_id = request.request_id
+           ORDER BY COALESCE(event.created_at, to_timestamp(request.requested_at_unix)) ASC,
+                    event.event_sequence ASC NULLS FIRST,
+                    request.request_id ASC"#,
+    )
+    .fetch_all(pool)
+    .await
+    .map_err(|_| ProductionMapError::StoreFailed)?;
+
+    rows.into_iter()
+        .map(|row| {
+            let status = OrderFreezeRequestStatus::parse(
+                row.event_status.as_deref().unwrap_or(&row.status),
+            )
+                .ok_or(ProductionMapError::StoreFailed)?;
+            let occurred_at_unix = row.event_at_unix.unwrap_or_else(|| {
+                if status == OrderFreezeRequestStatus::Pending {
+                    row.requested_at_unix
+                } else {
+                    row.transitioned_at_unix
+                }
+            });
+            Ok(OrderFreezeAuditRecord {
+                order_id: row.order_id,
+                actor: QueueActionActor {
+                    role: row.requester_role,
+                    ref_: row.requester_ref,
+                    display_name: row.requester_display_name,
+                },
+                request: OrderFreezeRequest {
+                    request_id: row.request_id,
+                    status,
+                    target_session_id: row.target_session_id,
+                    target_apparatus: row.target_apparatus,
+                    target_worker_role: row.target_worker_role,
+                    target_worker_ref: row.target_worker_ref,
+                    target_worker_display_name: row.target_worker_display_name,
+                    requested_at_unix: row.requested_at_unix,
+                    transitioned_at_unix: occurred_at_unix,
+                },
+                occurred_at_unix,
+            })
         })
         .collect()
 }

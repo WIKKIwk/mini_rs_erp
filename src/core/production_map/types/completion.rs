@@ -6,7 +6,7 @@ use crate::core::production_map::queue_state;
 use crate::core::returned_paint::ReturnedPaintRequest;
 
 use super::super::store_port::RawMaterialStockTransition;
-use super::progress::OrderRunSession;
+use super::progress::{OrderProgressBatch, OrderRunSession};
 use super::queue::ApparatusQueueActionEvent;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -82,6 +82,31 @@ pub struct CompletionRequestDecisionNotification {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ProductionOrderTransferDetails {
+    pub transfer_id: String,
+    pub from_apparatus: String,
+    pub to_apparatus: String,
+    pub reason: String,
+    pub session_id: String,
+    pub progress_batch_id: String,
+    #[serde(default)]
+    pub material_barcodes: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ProductionOrderFreezeDetails {
+    pub request_id: String,
+    pub status: String,
+    pub target_session_id: String,
+    pub target_apparatus: String,
+    pub target_worker_role: String,
+    pub target_worker_ref: String,
+    pub target_worker_display_name: String,
+    pub requested_at_unix: i64,
+    pub transitioned_at_unix: i64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ProductionOrderLogEntry {
     pub event_id: String,
     pub apparatus: String,
@@ -97,9 +122,13 @@ pub struct ProductionOrderLogEntry {
     pub completed_with_issue: bool,
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub issue_note: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub transfer: Option<ProductionOrderTransferDetails>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub freeze: Option<ProductionOrderFreezeDetails>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct FullyCompletedProductionOrder {
     pub order_id: String,
     pub order_number: String,
@@ -110,6 +139,8 @@ pub struct FullyCompletedProductionOrder {
     pub closed_by_ref: String,
     pub closed_by_display_name: String,
     pub logs: Vec<ProductionOrderLogEntry>,
+    #[serde(default)]
+    pub progress_batches: Vec<OrderProgressBatch>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]

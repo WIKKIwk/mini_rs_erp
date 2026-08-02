@@ -210,42 +210,6 @@ pub(super) fn downgrade_completed_state_to_pending(
     event.payload_json["batch_complete_order_state"] = serde_json::json!("pending");
 }
 
-pub(super) fn append_laminatsiya_double_leftover_notice(
-    action: queue_state::ApparatusQueueAction,
-    batch: Option<&OrderProgressBatch>,
-    order_map: &ProductionMapDefinition,
-    event: &mut ApparatusQueueActionEvent,
-) {
-    if action != queue_state::ApparatusQueueAction::Complete {
-        return;
-    }
-    let Some(batch) = batch else {
-        return;
-    };
-    if batch.lamination_print_leftover_rolls.is_none()
-        || batch.lamination_film_leftover_rolls.is_none()
-    {
-        return;
-    }
-    let print_leftover = batch.lamination_print_leftover_rolls.unwrap_or_default();
-    let film_leftover = batch.lamination_film_leftover_rolls.unwrap_or_default();
-    let total_waste = batch.total_waste.unwrap_or_default();
-    let finished_kg = batch.finished_goods_kg.unwrap_or_default();
-    let finished_meter = batch.finished_goods_meter.unwrap_or_default();
-    event.payload_json["notice_kind"] =
-        serde_json::Value::String("laminatsiya_double_leftover".to_string());
-    event.payload_json["decision_required"] = serde_json::Value::Bool(false);
-    event.payload_json["order_number"] =
-        serde_json::Value::String(order_map.order_number.trim().to_string());
-    event.payload_json["order_title"] =
-        serde_json::Value::String(order_map.title.trim().to_string());
-    event.payload_json["product_code"] =
-        serde_json::Value::String(order_map.product_code.trim().to_string());
-    event.payload_json["description"] = serde_json::Value::String(format!(
-        "Laminatsiya tugatishda ikkala qavat qoldig'i yozildi. Bosmadan ortgan rulon: {print_leftover}. Plyonkadan ortgan rulon: {film_leftover}. Jami chiqindi: {total_waste} kg. Tayyor mahsulot: {finished_kg} kg, {finished_meter} m."
-    ));
-}
-
 pub(super) fn finished_goods_qty_uom(
     batch: &OrderProgressBatch,
 ) -> Result<(f64, String), ProductionMapError> {

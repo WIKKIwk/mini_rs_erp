@@ -1,7 +1,7 @@
 use super::*;
 
 #[tokio::test]
-async fn laminatsiya_complete_with_both_leftovers_creates_admin_notice() {
+async fn laminatsiya_complete_with_both_leftovers_stays_in_history() {
     let print_requests = Arc::new(Mutex::new(Vec::<ScaleDriverPrintRequest>::new()));
     let mut state = test_state();
     state.gscale = GscaleService::new().with_driver(Arc::new(FakeProgressDriver {
@@ -89,6 +89,7 @@ async fn laminatsiya_complete_with_both_leftovers_creates_admin_notice() {
     assert_eq!(completed_status, StatusCode::OK, "{completed_body:?}");
 
     let requests = router
+        .clone()
         .oneshot(request(
             "GET",
             "/v1/mobile/admin/production-maps/completion-requests",
@@ -99,22 +100,25 @@ async fn laminatsiya_complete_with_both_leftovers_creates_admin_notice() {
     let requests_status = requests.status();
     let requests_body = json_body(requests).await;
     assert_eq!(requests_status, StatusCode::OK, "{requests_body:?}");
-    assert_eq!(
-        requests_body["completion_requests"][0]["order_id"],
-        "zakaz-laminatsiya-notice"
-    );
-    assert_eq!(
-        requests_body["completion_requests"][0]["notice_kind"],
-        "laminatsiya_double_leftover"
-    );
-    assert_eq!(
-        requests_body["completion_requests"][0]["decision_required"],
-        false
-    );
-    assert!(
-        requests_body["completion_requests"][0]["description"]
-            .as_str()
-            .unwrap()
-            .contains("Bosmadan ortgan rulon: 1.5")
-    );
+    assert!(requests_body["completion_requests"]
+        .as_array()
+        .expect("completion_requests")
+        .is_empty());
+
+    let history = router
+        .oneshot(request(
+            "GET",
+            "/v1/mobile/admin/production-maps/progress-qr/history",
+            &worker_token,
+        ))
+        .await
+        .expect("progress history");
+    let history_status = history.status();
+    let history_body = json_body(history).await;
+    assert_eq!(history_status, StatusCode::OK, "{history_body:?}");
+    let batches = history_body["batches"].as_array().expect("batches");
+    assert_eq!(batches.len(), 1);
+    assert_eq!(batches[0]["order_id"], "zakaz-laminatsiya-notice");
+    assert_eq!(batches[0]["lamination_print_leftover_rolls"], 1.5);
+    assert_eq!(batches[0]["lamination_film_leftover_rolls"], 2.5);
 }

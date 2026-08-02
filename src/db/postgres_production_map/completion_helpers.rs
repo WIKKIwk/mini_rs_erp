@@ -77,13 +77,8 @@ pub(super) async fn load_completion_requests(
                     AS returned_paint_report
          FROM mini_queue_action_events
          WHERE action = 'complete'
-           AND (
-                (
-                    payload_json->>'completion_request' = 'true'
-                    AND COALESCE(payload_json->>'completion_request_status', 'pending') = 'pending'
-                )
-                OR payload_json->>'notice_kind' = 'laminatsiya_double_leftover'
-           )
+           AND payload_json->>'completion_request' = 'true'
+           AND COALESCE(payload_json->>'completion_request_status', 'pending') = 'pending'
          ORDER BY created_at DESC, id DESC
          LIMIT $1",
     )

@@ -43,6 +43,18 @@ impl ProductionMapStorePort for MemoryProductionMapStore {
         Ok(self.order_controls.read().await.clone())
     }
 
+    async fn order_freeze_requests_for_audit(
+        &self,
+    ) -> Result<Vec<OrderFreezeAuditRecord>, ProductionMapError> {
+        Ok(self
+            .order_freeze_requests
+            .read()
+            .await
+            .values()
+            .cloned()
+            .collect())
+    }
+
     async fn put_order_control_state(
         &self,
         record: OrderControlRecord,
@@ -50,7 +62,28 @@ impl ProductionMapStorePort for MemoryProductionMapStore {
         self.order_controls
             .write()
             .await
-            .insert(record.order_id.trim().to_string(), record);
+            .insert(record.order_id.trim().to_string(), record.clone());
+        if let Some(request) = record.freeze_request {
+            let request_id = request.request_id.trim().to_string();
+            if !request_id.is_empty() {
+                let mut requests = self.order_freeze_requests.write().await;
+                let status = request.status.as_str();
+                let occurred_at_unix = if request.status == OrderFreezeRequestStatus::Pending {
+                    request.requested_at_unix
+                } else {
+                    request.transitioned_at_unix
+                };
+                requests.insert(
+                    format!("{request_id}:{status}"),
+                    OrderFreezeAuditRecord {
+                        order_id: record.order_id,
+                        request,
+                        actor: record.actor,
+                        occurred_at_unix,
+                    },
+                );
+            }
+        }
         Ok(())
     }
 

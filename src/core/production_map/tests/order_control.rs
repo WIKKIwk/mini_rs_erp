@@ -140,6 +140,97 @@ async fn freeze_request_requires_worker_pause_then_blocks_worker_actions() {
 }
 
 #[tokio::test]
+async fn closed_order_logs_include_freeze_lifecycle_events() {
+    let service =
+        ProductionMapService::new(std::sync::Arc::new(MemoryProductionMapStore::new()));
+    let apparatus = "7 ta rangli pechat";
+    let order_id = "zakaz-freeze-history";
+    service
+        .upsert_map(apparatus_stage_map(order_id, apparatus))
+        .await
+        .expect("map");
+    service
+        .apply_apparatus_queue_action(
+            apparatus,
+            order_id,
+            queue_state::ApparatusQueueAction::Start,
+            &[apparatus.to_string()],
+            actor("worker"),
+        )
+        .await
+        .expect("start");
+    service
+        .request_order_freeze(order_id, actor("admin"))
+        .await
+        .expect("freeze request");
+    service
+        .apply_apparatus_queue_action_with_progress(
+            apparatus,
+            order_id,
+            queue_state::ApparatusQueueAction::Pause,
+            &[apparatus.to_string()],
+            actor("worker"),
+            QueueProgressInput {
+                produced_qty: Some(1.0),
+                uom: "kg".to_string(),
+                ..QueueProgressInput::default()
+            },
+        )
+        .await
+        .expect("freeze pause");
+    service
+        .unfreeze_order(order_id, actor("admin"))
+        .await
+        .expect("unfreeze");
+    service
+        .apply_apparatus_queue_action(
+            apparatus,
+            order_id,
+            queue_state::ApparatusQueueAction::Resume,
+            &[apparatus.to_string()],
+            actor("worker"),
+        )
+        .await
+        .expect("resume");
+    service
+        .apply_apparatus_queue_action_with_progress(
+            apparatus,
+            order_id,
+            queue_state::ApparatusQueueAction::Complete,
+            &[apparatus.to_string()],
+            actor("worker"),
+            QueueProgressInput {
+                produced_qty: Some(1.0),
+                uom: "kg".to_string(),
+                return_ink_kg: Some(1.0),
+                total_waste: Some(1.0),
+                finished_goods_kg: Some(1.0),
+                finished_goods_meter: Some(1.0),
+                ..QueueProgressInput::default()
+            },
+        )
+        .await
+        .expect("complete");
+
+    let closed = service
+        .fully_completed_orders(10)
+        .await
+        .expect("closed orders");
+    let logs = &closed
+        .first()
+        .expect("closed order")
+        .logs;
+    let freeze_statuses = logs
+        .iter()
+        .filter_map(|log| log.freeze.as_ref().map(|freeze| freeze.status.as_str()))
+        .collect::<Vec<_>>();
+    assert_eq!(freeze_statuses.len(), 3);
+    assert!(freeze_statuses.contains(&"pending"));
+    assert!(freeze_statuses.contains(&"frozen"));
+    assert!(freeze_statuses.contains(&"unfrozen"));
+}
+
+#[tokio::test]
 async fn cancelled_freeze_request_rejects_a_late_card_pause() {
     let service = ProductionMapService::new(std::sync::Arc::new(MemoryProductionMapStore::new()));
     let apparatus = "7 ta rangli pechat";

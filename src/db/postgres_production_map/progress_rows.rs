@@ -88,6 +88,8 @@ pub(super) fn queue_action_log_from_row(
         created_at_unix: row.created_at_unix,
         completed_with_issue: row.completed_with_issue,
         issue_note: row.issue_note,
+        transfer: None,
+        freeze: None,
     })
 }
 

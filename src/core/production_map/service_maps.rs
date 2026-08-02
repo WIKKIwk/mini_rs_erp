@@ -67,14 +67,79 @@ impl ProductionMapService {
             .map(|(map, _)| map.id.trim().to_string())
             .collect::<Vec<_>>();
         let logs_by_order = self.store.queue_action_logs_for_orders(&order_ids).await?;
+        let transfers = match self.store.apparatus_transfers_for_audit().await {
+            Ok(transfers) => transfers,
+            Err(error) => {
+                tracing::warn!(
+                    error = ?error,
+                    "closed order apparatus transfer audit is unavailable"
+                );
+                Vec::new()
+            }
+        };
+        let freeze_requests = match self.store.order_freeze_requests_for_audit().await {
+            Ok(freeze_requests) => freeze_requests,
+            Err(error) => {
+                tracing::warn!(
+                    error = ?error,
+                    "closed order freeze audit is unavailable"
+                );
+                Vec::new()
+            }
+        };
         let mut closed = Vec::new();
         for (map, required_apparatus) in candidates {
             let order_id = map.id.trim().to_string();
-            let logs = logs_by_order.get(&order_id).cloned().unwrap_or_default();
-            let Some(closed_event) = latest_required_complete_event(&logs, &required_apparatus)
+            let queue_logs = logs_by_order.get(&order_id).cloned().unwrap_or_default();
+            let Some(closed_event) =
+                latest_required_complete_event(&queue_logs, &required_apparatus).cloned()
             else {
                 continue;
             };
+            let mut logs = queue_logs;
+            for transfer in transfers.iter().filter(|transfer| {
+                transfer.order_id.trim().eq_ignore_ascii_case(&order_id)
+            }) {
+                logs.push(ProductionOrderLogEntry {
+                    event_id: transfer.transfer_id.clone(),
+                    apparatus: transfer.to_apparatus.clone(),
+                    order_id: transfer.order_id.clone(),
+                    action: queue_state::ApparatusQueueAction::Pause,
+                    from_state: queue_state::ApparatusQueueOrderState::Paused,
+                    to_state: queue_state::ApparatusQueueOrderState::Paused,
+                    actor_role: transfer.actor.role.clone(),
+                    actor_ref: transfer.actor.ref_.clone(),
+                    actor_display_name: transfer.actor.display_name.clone(),
+                    created_at_unix: transfer.created_at_unix,
+                    completed_with_issue: false,
+                    issue_note: String::new(),
+                    transfer: Some(ProductionOrderTransferDetails {
+                        transfer_id: transfer.transfer_id.clone(),
+                        from_apparatus: transfer.from_apparatus.clone(),
+                        to_apparatus: transfer.to_apparatus.clone(),
+                        reason: transfer.reason.clone(),
+                        session_id: transfer.session_id.clone(),
+                        progress_batch_id: transfer.progress_batch_id.clone(),
+                        material_barcodes: transfer.material_barcodes.clone(),
+                    }),
+                    freeze: None,
+                });
+            }
+            for freeze in freeze_requests.iter().filter(|freeze| {
+                freeze.order_id.trim().eq_ignore_ascii_case(&order_id)
+            }) {
+                logs.push(closed_order_freeze_log_entry(freeze));
+            }
+            logs.sort_by(|left, right| {
+                left.created_at_unix
+                    .cmp(&right.created_at_unix)
+                    .then_with(|| {
+                        closed_order_log_rank(left)
+                            .cmp(&closed_order_log_rank(right))
+                    })
+                    .then_with(|| left.event_id.cmp(&right.event_id))
+            });
+            let progress_batches = self.store.progress_batches_for_order(&order_id).await?;
             closed.push(FullyCompletedProductionOrder {
                 order_id,
                 order_number: map.order_number.trim().to_string(),
@@ -85,6 +150,7 @@ impl ProductionMapService {
                 closed_by_ref: closed_event.actor_ref.clone(),
                 closed_by_display_name: closed_event.actor_display_name.clone(),
                 logs,
+                progress_batches,
             });
         }
         closed.sort_by(|left, right| {
@@ -388,6 +454,58 @@ impl ProductionMapService {
             return Err(ProductionMapError::MapNotFound);
         };
         run_map_with_variables(&map, input.order_qty, input.variables)
+    }
+}
+
+fn closed_order_log_rank(log: &ProductionOrderLogEntry) -> u8 {
+    if let Some(freeze) = &log.freeze {
+        return match freeze.status.trim() {
+            "pending" => 1,
+            "unfrozen" => 4,
+            _ => 2,
+        };
+    }
+    if log.transfer.is_some() {
+        return 3;
+    }
+    match log.action {
+        queue_state::ApparatusQueueAction::Start => 0,
+        queue_state::ApparatusQueueAction::Pause => 1,
+        queue_state::ApparatusQueueAction::Resume => 4,
+        queue_state::ApparatusQueueAction::Complete => 5,
+    }
+}
+
+fn closed_order_freeze_log_entry(
+    freeze: &OrderFreezeAuditRecord,
+) -> ProductionOrderLogEntry {
+    let request = &freeze.request;
+    let status = request.status.as_str();
+    ProductionOrderLogEntry {
+        event_id: format!("order-freeze:{}:{}", request.request_id, status),
+        apparatus: request.target_apparatus.clone(),
+        order_id: freeze.order_id.clone(),
+        action: queue_state::ApparatusQueueAction::Pause,
+        from_state: queue_state::ApparatusQueueOrderState::Paused,
+        to_state: queue_state::ApparatusQueueOrderState::Paused,
+        actor_role: freeze.actor.role.clone(),
+        actor_ref: freeze.actor.ref_.clone(),
+        actor_display_name: freeze.actor.display_name.clone(),
+        created_at_unix: freeze.occurred_at_unix,
+        completed_with_issue: false,
+        issue_note: String::new(),
+        transfer: None,
+        freeze: Some(ProductionOrderFreezeDetails {
+            request_id: request.request_id.clone(),
+            status: status.to_string(),
+            target_session_id: request.target_session_id.clone(),
+            target_apparatus: request.target_apparatus.clone(),
+            target_worker_role: request.target_worker_role.clone(),
+            target_worker_ref: request.target_worker_ref.clone(),
+            target_worker_display_name: request.target_worker_display_name.clone(),
+            requested_at_unix: request.requested_at_unix,
+            transitioned_at_unix: request.transitioned_at_unix,
+        }),
     }
 }
 
