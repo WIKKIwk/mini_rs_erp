@@ -11,6 +11,79 @@ use super::ports::QolipStorePort;
 use super::service::QolipService;
 
 #[tokio::test]
+async fn batch_product_spec_save_is_atomic() {
+    let store = std::sync::Arc::new(MemoryQolipStore::new());
+    store
+        .seed_products(vec![QolipProduct {
+            code: "ITEM-BATCH".to_string(),
+            name: "Batch product".to_string(),
+            item_group: "Tayyor mahsulot".to_string(),
+            customer_names: Vec::new(),
+            qolip_code: String::new(),
+            first_qolip_code: String::new(),
+            size: 0,
+            color: String::new(),
+            has_qolip_spec: false,
+            is_in_use: false,
+        }])
+        .await;
+    let service = QolipService::new(store);
+
+    let batch = (1..=8)
+        .map(|number| QolipProductSpecUpsert {
+            item_code: "ITEM-BATCH".to_string(),
+            item_name: "Batch product".to_string(),
+            item_group: "Tayyor mahsulot".to_string(),
+            qolip_code: format!("BATCH-{number}"),
+            previous_qolip_code: String::new(),
+            size: 42,
+            color: format!("#00000{number}"),
+        })
+        .collect();
+
+    let saved = service
+        .upsert_product_specs(batch, &principal())
+        .await
+        .expect("save batch product specs");
+    assert_eq!(saved.len(), 8);
+    assert!(saved.iter().all(|spec| spec.size == 42));
+
+    let conflict = service
+        .upsert_product_specs(
+            vec![
+                QolipProductSpecUpsert {
+                    item_code: "ITEM-BATCH".to_string(),
+                    item_name: "Batch product".to_string(),
+                    item_group: "Tayyor mahsulot".to_string(),
+                    qolip_code: "BATCH-1".to_string(),
+                    previous_qolip_code: String::new(),
+                    size: 42,
+                    color: "#FFFFFF".to_string(),
+                },
+                QolipProductSpecUpsert {
+                    item_code: "ITEM-BATCH".to_string(),
+                    item_name: "Batch product".to_string(),
+                    item_group: "Tayyor mahsulot".to_string(),
+                    qolip_code: "BATCH-9".to_string(),
+                    previous_qolip_code: String::new(),
+                    size: 42,
+                    color: "#FFFFFF".to_string(),
+                },
+            ],
+            &principal(),
+        )
+        .await
+        .expect_err("a conflicting batch must fail");
+    assert_eq!(conflict, QolipError::QolipCodeConflict);
+
+    let products = service
+        .products("BATCH-9", 20, true)
+        .await
+        .expect("load products after rejected batch");
+    assert!(products.is_empty());
+}
+
+#[tokio::test]
 async fn order_start_accepts_catalog_qolip_without_inventing_checkout() {
     let store = std::sync::Arc::new(MemoryQolipStore::new());
     store
@@ -482,13 +555,11 @@ async fn given_order_note_reserves_qolip_until_it_is_returned() {
         .await
         .expect("return first note");
 
-    assert!(
-        service
-            .order_note_qolip_codes_in_use(&second_principal, "ORDER-2")
-            .await
-            .expect("reload in-use qolips")
-            .is_empty()
-    );
+    assert!(service
+        .order_note_qolip_codes_in_use(&second_principal, "ORDER-2")
+        .await
+        .expect("reload in-use qolips")
+        .is_empty());
     service
         .save_order_note(
             QolipOrderNote {

@@ -2,9 +2,9 @@ use sqlx::{PgPool, Postgres, Transaction};
 
 use crate::core::auth::models::Principal;
 use crate::core::qolip::normalize::qolip_location_id;
-use crate::core::qolip::{QolipBlock, QolipError, QolipProduct, QolipProductSpec, role_code};
+use crate::core::qolip::{role_code, QolipBlock, QolipError, QolipProduct, QolipProductSpec};
 
-use super::rows::{QolipBlockRow, QolipProductRow, QolipProductSpecRow, row_to_product_spec};
+use super::rows::{row_to_product_spec, QolipBlockRow, QolipProductRow, QolipProductSpecRow};
 
 pub(super) async fn load_assigned_warehouses(
     pool: &PgPool,
@@ -640,9 +640,34 @@ pub(super) async fn load_product_spec_by_qolip_code(
 
 pub(super) async fn save_product_spec(
     pool: &PgPool,
-    mut spec: QolipProductSpec,
+    spec: QolipProductSpec,
 ) -> Result<QolipProductSpec, QolipError> {
     let mut tx = pool.begin().await.map_err(|_| QolipError::StoreFailed)?;
+    let saved = save_product_spec_tx(&mut tx, spec).await?;
+    tx.commit().await.map_err(|_| QolipError::StoreFailed)?;
+    Ok(saved)
+}
+
+pub(super) async fn save_product_specs(
+    pool: &PgPool,
+    specs: Vec<QolipProductSpec>,
+) -> Result<Vec<QolipProductSpec>, QolipError> {
+    if specs.is_empty() {
+        return Err(QolipError::MissingQolipCode);
+    }
+    let mut tx = pool.begin().await.map_err(|_| QolipError::StoreFailed)?;
+    let mut saved = Vec::with_capacity(specs.len());
+    for spec in specs {
+        saved.push(save_product_spec_tx(&mut tx, spec).await?);
+    }
+    tx.commit().await.map_err(|_| QolipError::StoreFailed)?;
+    Ok(saved)
+}
+
+async fn save_product_spec_tx(
+    tx: &mut Transaction<'_, Postgres>,
+    mut spec: QolipProductSpec,
+) -> Result<QolipProductSpec, QolipError> {
     let normalized_qolip_code = spec.qolip_code.trim().to_lowercase();
     let exists = sqlx::query_scalar::<_, bool>(
         "SELECT EXISTS (
@@ -652,7 +677,7 @@ pub(super) async fn save_product_spec(
          )",
     )
     .bind(&normalized_qolip_code)
-    .fetch_one(&mut *tx)
+    .fetch_one(&mut **tx)
     .await
     .map_err(|_| QolipError::StoreFailed)?;
     if exists {
@@ -681,10 +706,10 @@ pub(super) async fn save_product_spec(
     )
     .bind(spec.item_code.trim())
     .bind(spec.qolip_code.trim())
-    .execute(&mut *tx)
+    .execute(&mut **tx)
     .await
     .map_err(|_| QolipError::StoreFailed)?;
-    spec.color = allocate_panton_color(&mut tx, &spec.qolip_code, None, &spec.color).await?;
+    spec.color = allocate_panton_color(tx, &spec.qolip_code, None, &spec.color).await?;
     let row = sqlx::query_as::<_, QolipProductSpecRow>(
         "INSERT INTO mini_qolip_product_specs (
              item_code, item_name, item_group, qolip_code, size,
@@ -705,12 +730,10 @@ pub(super) async fn save_product_spec(
     .bind(spec.created_by_ref.trim())
     .bind(spec.created_by_name.trim())
     .bind(serde_json::to_value(&spec).map_err(|_| QolipError::StoreFailed)?)
-    .fetch_optional(&mut *tx)
+    .fetch_optional(&mut **tx)
     .await
     .map_err(|_| QolipError::StoreFailed)?
     .ok_or(QolipError::QolipCodeConflict)?;
-    tx.commit().await.map_err(|_| QolipError::StoreFailed)?;
-
     Ok(row_to_product_spec(row))
 }
 

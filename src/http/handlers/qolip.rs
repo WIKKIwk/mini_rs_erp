@@ -1,14 +1,15 @@
-use axum::Json;
 use axum::body::Bytes;
 use axum::extract::{Query, State};
 use axum::http::{HeaderMap, Method, StatusCode};
+use axum::Json;
 
 use crate::app::AppState;
 use crate::core::authz::Capability;
 use crate::core::gscale::ProgressLabelPrintRequest;
 use crate::core::qolip::{
     QolipBlock, QolipCellQrInput, QolipCheckoutCreate, QolipCheckoutReturn, QolipError,
-    QolipLocationMove, QolipLocationUpsert, QolipProductSpecDelete, QolipProductSpecUpsert,
+    QolipLocationMove, QolipLocationUpsert, QolipProductSpecBatchUpsert, QolipProductSpecDelete,
+    QolipProductSpecUpsert,
 };
 use crate::core::warehouses::{WarehouseDeleteRequest, WarehouseUpsert};
 
@@ -97,7 +98,8 @@ pub async fn blocks(
                 .principal_has_capability(&principal, Capability::AdminAccess)
                 .await;
             let current = managed_qolip_block(&state, &principal, &input.block, is_admin).await?;
-            let warehouse = accessible_qolip_warehouse(&state, &principal, &input.warehouse).await?;
+            let warehouse =
+                accessible_qolip_warehouse(&state, &principal, &input.warehouse).await?;
             if !current
                 .warehouse
                 .trim()
@@ -274,6 +276,45 @@ pub async fn product_specs(
         }
         _ => Err(method_not_allowed()),
     }
+}
+
+pub async fn product_specs_batch(
+    State(state): State<AppState>,
+    method: Method,
+    headers: HeaderMap,
+    body: Bytes,
+) -> Result<Json<serde_json::Value>, (StatusCode, Json<QolipErrorResponse>)> {
+    if method != Method::POST {
+        return Err(method_not_allowed());
+    }
+    let principal = authenticated_principal(&state, &headers).await?;
+    ensure_qolip_access(&state, &principal).await?;
+    let input: QolipProductSpecBatchUpsert =
+        serde_json::from_slice(&body).map_err(|_| bad_request("invalid_json"))?;
+    let specs = state
+        .qolip
+        .upsert_product_specs(input.specs, &principal)
+        .await
+        .map_err(qolip_error)?;
+    let products = specs
+        .into_iter()
+        .map(|spec| {
+            serde_json::json!({
+                "code": spec.item_code,
+                "name": spec.item_name,
+                "item_group": spec.item_group,
+                "qolip_code": spec.qolip_code,
+                "size": spec.size,
+                "color": spec.color,
+                "has_qolip_spec": true,
+                "is_in_use": false,
+            })
+        })
+        .collect::<Vec<_>>();
+    Ok(Json(serde_json::json!({
+        "ok": true,
+        "products": products,
+    })))
 }
 
 pub async fn locations(

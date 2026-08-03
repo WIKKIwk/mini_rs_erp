@@ -69,6 +69,12 @@ pub struct QolipProductSpecUpsert {
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize)]
+pub struct QolipProductSpecBatchUpsert {
+    #[serde(default)]
+    pub specs: Vec<QolipProductSpecUpsert>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize)]
 pub struct QolipProductSpecDelete {
     #[serde(default)]
     pub qolip_codes: Vec<String>,

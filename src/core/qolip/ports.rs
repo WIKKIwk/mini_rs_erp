@@ -74,6 +74,16 @@ pub trait QolipStorePort: Send + Sync {
         &self,
         spec: QolipProductSpec,
     ) -> Result<QolipProductSpec, QolipError>;
+    async fn put_product_specs(
+        &self,
+        specs: Vec<QolipProductSpec>,
+    ) -> Result<Vec<QolipProductSpec>, QolipError> {
+        let mut saved = Vec::with_capacity(specs.len());
+        for spec in specs {
+            saved.push(self.put_product_spec(spec).await?);
+        }
+        Ok(saved)
+    }
     async fn rename_product_spec(
         &self,
         previous_qolip_code: &str,
@@ -156,5 +166,5 @@ pub trait QolipStorePort: Send + Sync {
         quantity: i32,
     ) -> Result<QolipLocation, QolipError>;
     async fn cell_qr_by_payload(&self, qr_payload: &str)
-    -> Result<Option<QolipCellQr>, QolipError>;
+        -> Result<Option<QolipCellQr>, QolipError>;
 }

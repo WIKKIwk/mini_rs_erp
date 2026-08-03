@@ -1,6 +1,6 @@
-use axum::Router;
 use axum::extract::DefaultBodyLimit;
 use axum::routing::{any, get};
+use axum::Router;
 
 use crate::app::AppState;
 use crate::core::chat_media::{MAX_CHAT_IMAGE_SIZE_BYTES, MAX_CHAT_MEDIA_CHUNK_SIZE_BYTES};
@@ -134,6 +134,10 @@ pub(super) fn routes() -> Router<AppState> {
         .route("/v1/mobile/qolip/blocks", any(qolip::blocks))
         .route("/v1/mobile/qolip/products", any(qolip::products))
         .route("/v1/mobile/qolip/product-specs", any(qolip::product_specs))
+        .route(
+            "/v1/mobile/qolip/product-specs/batch",
+            any(qolip::product_specs_batch),
+        )
         .route("/v1/mobile/qolip/locations", any(qolip::locations))
         .route("/v1/mobile/qolip/locations/move", any(qolip::location_move))
         .route("/v1/mobile/qolip/scan", any(qolip::scan))

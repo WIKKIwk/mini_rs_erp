@@ -146,6 +146,29 @@ impl QolipService {
         self.store.put_product_spec(normalized).await
     }
 
+    pub async fn upsert_product_specs(
+        &self,
+        inputs: Vec<QolipProductSpecUpsert>,
+        principal: &Principal,
+    ) -> Result<Vec<QolipProductSpec>, QolipError> {
+        if inputs.is_empty() {
+            return Err(QolipError::MissingQolipCode);
+        }
+        let mut seen_codes = std::collections::BTreeSet::new();
+        let mut normalized = Vec::with_capacity(inputs.len());
+        for input in inputs {
+            if !input.previous_qolip_code.trim().is_empty() {
+                return Err(QolipError::QolipCodeConflict);
+            }
+            let spec = normalize_product_spec(input, principal)?;
+            if !seen_codes.insert(spec.qolip_code.trim().to_lowercase()) {
+                return Err(QolipError::QolipCodeConflict);
+            }
+            normalized.push(spec);
+        }
+        self.store.put_product_specs(normalized).await
+    }
+
     pub async fn delete_product_specs(
         &self,
         qolip_codes: Vec<String>,

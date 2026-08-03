@@ -595,6 +595,58 @@ impl QolipStorePort for MemoryQolipStore {
         Ok(spec)
     }
 
+    async fn put_product_specs(
+        &self,
+        batch_specs: Vec<QolipProductSpec>,
+    ) -> Result<Vec<QolipProductSpec>, QolipError> {
+        if batch_specs.is_empty() {
+            return Err(QolipError::MissingQolipCode);
+        }
+        let mut stored_specs = self.product_specs.write().await;
+        let mut seen = BTreeSet::new();
+        for spec in &batch_specs {
+            let key = spec.qolip_code.trim().to_lowercase();
+            if !seen.insert(key.clone()) || stored_specs.contains_key(&key) {
+                return Err(QolipError::QolipCodeConflict);
+            }
+        }
+
+        let mut products = self.products.write().await;
+        for spec in &batch_specs {
+            if let Some(product) = products.iter_mut().find(|product| {
+                product
+                    .code
+                    .trim()
+                    .eq_ignore_ascii_case(spec.item_code.trim())
+            }) {
+                if product.first_qolip_code.trim().is_empty() {
+                    product.first_qolip_code = spec.qolip_code.clone();
+                }
+                product.qolip_code = spec.qolip_code.clone();
+                product.size = spec.size;
+                product.color = spec.color.clone();
+                product.has_qolip_spec = true;
+            } else {
+                products.push(QolipProduct {
+                    code: spec.item_code.clone(),
+                    name: spec.item_name.clone(),
+                    item_group: spec.item_group.clone(),
+                    customer_names: Vec::new(),
+                    qolip_code: spec.qolip_code.clone(),
+                    first_qolip_code: spec.qolip_code.clone(),
+                    size: spec.size,
+                    color: spec.color.clone(),
+                    has_qolip_spec: true,
+                    is_in_use: false,
+                });
+            }
+        }
+        for spec in &batch_specs {
+            stored_specs.insert(spec.qolip_code.trim().to_lowercase(), spec.clone());
+        }
+        Ok(batch_specs)
+    }
+
     async fn rename_product_spec(
         &self,
         previous_qolip_code: &str,
