@@ -230,6 +230,11 @@ fn production_order_map_json_with_product(
     roll_count: f64,
     width_mm: f64,
 ) -> String {
+    let rezka_config = if apparatus.to_ascii_lowercase().contains("rezka") {
+        r#", "rezka_kadr_count": 4, "rezka_label_length": 100"#
+    } else {
+        ""
+    };
     format!(
         r#"{{
             "id":"{id}",
@@ -240,7 +245,7 @@ fn production_order_map_json_with_product(
             "width_mm":{width_mm},
             "nodes":[
                 {{"id":"start","kind":"start","title":"Start"}},
-                {{"id":"apparatus","kind":"apparatus","title":"{apparatus}"}},
+                {{"id":"apparatus","kind":"apparatus","title":"{apparatus}"{rezka_config}}},
                 {{"id":"end","kind":"end","title":"End"}}
             ],
             "edges":[

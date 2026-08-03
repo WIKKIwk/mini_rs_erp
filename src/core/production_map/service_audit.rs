@@ -446,7 +446,13 @@ fn audit_progress_batch(
         OrderProgressBatchStatus::Paused | OrderProgressBatchStatus::Resumed => {
             queue_state::ApparatusQueueAction::Pause
         }
-        OrderProgressBatchStatus::Completed => queue_state::ApparatusQueueAction::Complete,
+        OrderProgressBatchStatus::Completed => {
+            if batch.action == queue_state::ApparatusQueueAction::RollComplete {
+                queue_state::ApparatusQueueAction::RollComplete
+            } else {
+                queue_state::ApparatusQueueAction::Complete
+            }
+        }
     };
     if batch.action != expected_action {
         violations.push(ProductionWorkflowAuditViolation::new(
@@ -619,12 +625,12 @@ fn audit_paused_session_progress(
                     && queue_state::apparatus_titles_match(&batch.apparatus, &session.apparatus)
             })
             .count();
-        if matching != 1 {
+        if matching == 0 {
             violations.push(ProductionWorkflowAuditViolation::new(
                 "paused_session_progress_mismatch",
                 session.order_id.trim(),
                 session.session_id.trim(),
-                "a paused session must have exactly one matching paused progress batch",
+                "a paused session must have at least one matching paused progress batch",
             ));
         }
     }

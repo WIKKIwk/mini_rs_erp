@@ -122,7 +122,7 @@ impl ProductionMapService {
         let progress = self
             .build_progress_records(&storage_key, order_id, order_map, action, &actor, progress)
             .await?;
-        if action == queue_state::ApparatusQueueAction::Complete
+        let has_unprocessed_previous_wips = action == queue_state::ApparatusQueueAction::Complete
             && to_state == queue_state::ApparatusQueueOrderState::Completed
             && self
                 .has_unprocessed_previous_wips(
@@ -131,8 +131,11 @@ impl ProductionMapService {
                     &storage_key,
                     &progress.progress_batch_updates,
                 )
-                .await?
-        {
+                .await?;
+        if has_unprocessed_previous_wips && apparatus::is_rezka_title(&storage_key) {
+            return Err(ProductionMapError::RezkaFinalRollRequired);
+        }
+        if has_unprocessed_previous_wips {
             downgrade_completed_state_to_pending(order_id, &mut saved, &mut event);
         }
         let order_control_update = if control.state == OrderControlState::FreezeRequested
@@ -162,6 +165,7 @@ impl ProductionMapService {
             session: progress.session,
             progress_event: progress.progress_event,
             progress_batch: progress.progress_batch,
+            progress_batches: progress.progress_batches,
             progress_batch_updates: progress.progress_batch_updates,
             material_scan_skipped: false,
             claimed_alternative_map,
@@ -260,6 +264,7 @@ impl ProductionMapService {
                 session: prepared.session.clone(),
                 progress_event: prepared.progress_event.clone(),
                 progress_batch: prepared.progress_batch.clone(),
+                progress_batches: prepared.progress_batches.clone(),
                 progress_batch_updates: prepared.progress_batch_updates.clone(),
                 raw_material_stock_transitions,
                 qolip_checkouts,
@@ -285,6 +290,7 @@ impl ProductionMapService {
             session: prepared.session,
             progress_event: prepared.progress_event,
             progress_batch: prepared.progress_batch,
+            progress_batches: prepared.progress_batches,
             raw_material_stock_warehouses: write_result.raw_material_stock_warehouses,
             qolip_checkout_committed: write_result.qolip_checkout_committed,
         })
@@ -299,6 +305,7 @@ fn schedule_reservation_status_for_action(
             ApparatusScheduleStatus::Active
         }
         queue_state::ApparatusQueueAction::Pause => ApparatusScheduleStatus::Paused,
+        queue_state::ApparatusQueueAction::RollComplete => ApparatusScheduleStatus::Active,
         queue_state::ApparatusQueueAction::Complete => ApparatusScheduleStatus::Completed,
     })
 }

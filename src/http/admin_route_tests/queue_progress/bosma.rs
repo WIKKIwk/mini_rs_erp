@@ -175,7 +175,7 @@ async fn bosma_complete_requires_or_persists_completion_metrics() {
 }
 
 #[tokio::test]
-async fn bosma_pause_does_not_persist_return_ink_metric() {
+async fn bosma_pause_does_not_persist_completion_metrics() {
     let print_requests = Arc::new(Mutex::new(Vec::<ScaleDriverPrintRequest>::new()));
     let mut state = test_state();
     state.gscale = GscaleService::new().with_driver(Arc::new(FakeProgressDriver {
@@ -248,17 +248,19 @@ async fn bosma_pause_does_not_persist_return_ink_metric() {
                 "finished_goods_kg":12,
                 "finished_goods_meter":80,
                 "return_ink_kg":9,
+                "total_waste":2.5,
                 "printer":"zebra",
                 "print_mode":"rfid"
             }"#,
         ))
         .await
-        .expect("pause with return ink ignored");
+        .expect("pause with completion metrics ignored");
     let paused_status = paused.status();
     let paused_body = json_body(paused).await;
     assert_eq!(paused_status, StatusCode::OK, "{paused_body:?}");
     assert_eq!(paused_body["progress_batch"]["status"], "paused");
     assert!(paused_body["progress_batch"]["return_ink_kg"].is_null());
+    assert!(paused_body["progress_batch"]["total_waste"].is_null());
     assert_eq!(paused_body["progress_batch"]["finished_goods_kg"], 12.0);
     assert_eq!(paused_body["progress_batch"]["finished_goods_meter"], 80.0);
 }

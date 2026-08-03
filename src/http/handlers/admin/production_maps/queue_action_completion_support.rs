@@ -59,7 +59,9 @@ fn rezka_queue_input_metrics_are_complete(
     ]
     .into_iter()
     .any(is_positive);
-    has_output_meter && has_output_kg && has_waste
+    has_output_meter
+        && has_output_kg
+        && (input.action != queue_state::ApparatusQueueAction::Complete || has_waste)
 }
 
 async fn prepare_qolips_for_bosma_start(

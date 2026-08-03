@@ -2,7 +2,7 @@ use sqlx::PgPool;
 
 use crate::core::qolip::{QolipCellQr, QolipError};
 
-use super::rows::{QolipCellQrRow, row_to_cell_qr};
+use super::rows::{row_to_cell_qr, QolipCellQrRow};
 
 pub(super) async fn save_cell_qr(
     pool: &PgPool,

@@ -4,7 +4,7 @@ mod calculation;
 mod materials;
 mod request_layers;
 
-pub use self::calculation::{calculate, derive_width_mm};
+pub use self::calculation::{calculate, calculate_with_material_catalog, derive_width_mm};
 use self::calculation::{close, normalize, parse_micron_parts, split_parts};
 
 pub const DEFAULT_EDGE_ALLOWANCE_MM: f64 = 15.0;
@@ -52,6 +52,8 @@ pub struct CalculateRequest {
 
 #[derive(Debug, Clone, Default, Deserialize, Serialize, PartialEq)]
 pub struct LayerInput {
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub material_id: String,
     #[serde(default)]
     pub material: String,
     #[serde(default)]
@@ -61,6 +63,19 @@ pub struct LayerInput {
 impl LayerInput {
     pub fn new(material: impl Into<String>, micron: impl Into<String>) -> Self {
         Self {
+            material_id: String::new(),
+            material: material.into(),
+            micron: micron.into(),
+        }
+    }
+
+    pub fn with_material_id(
+        material_id: impl Into<String>,
+        material: impl Into<String>,
+        micron: impl Into<String>,
+    ) -> Self {
+        Self {
+            material_id: material_id.into(),
             material: material.into(),
             micron: micron.into(),
         }

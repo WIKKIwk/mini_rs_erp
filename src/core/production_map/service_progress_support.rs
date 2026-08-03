@@ -107,6 +107,14 @@ pub(super) fn session_progress_links(session: &OrderRunSession) -> SessionProgre
     }
 }
 
+pub(super) fn progress_links_from_batch(batch: &OrderProgressBatch) -> SessionProgressLinks {
+    SessionProgressLinks {
+        batch_id: batch.batch_id.clone(),
+        qr_payload: batch.qr_payload.clone(),
+        apparatus: batch.apparatus.clone(),
+    }
+}
+
 pub(super) struct ProgressQuantity {
     pub(super) produced_qty: f64,
     pub(super) uom: String,
@@ -125,9 +133,12 @@ pub(super) fn progress_quantity(
     Ok(ProgressQuantity { produced_qty, uom })
 }
 
+#[derive(Clone)]
 pub(super) struct ProgressOutputIdentity {
-    batch_id: String,
-    qr_payload: String,
+    pub(super) batch_id: String,
+    pub(super) qr_payload: String,
+    pub(super) frame_index: Option<usize>,
+    pub(super) frame_count: Option<usize>,
 }
 
 pub(super) fn progress_output_identity(
@@ -138,7 +149,13 @@ pub(super) fn progress_output_identity(
     progress: &QueueProgressInput,
     input_progress: &SessionProgressLinks,
 ) -> ProgressOutputIdentity {
-    let output_batch_id_input = if action == queue_state::ApparatusQueueAction::Complete
+    let input_qr_is_source = matches!(
+        action,
+        queue_state::ApparatusQueueAction::Pause
+            | queue_state::ApparatusQueueAction::RollComplete
+            | queue_state::ApparatusQueueAction::Complete
+    );
+    let output_batch_id_input = if input_qr_is_source
         && !input_progress.batch_id.trim().is_empty()
         && progress
             .progress_batch_id
@@ -153,7 +170,7 @@ pub(super) fn progress_output_identity(
         output_batch_id_input,
         &progress_batch_id(apparatus, order_id, action, now),
     );
-    let output_qr_input = if action == queue_state::ApparatusQueueAction::Complete
+    let output_qr_input = if input_qr_is_source
         && !input_progress.qr_payload.trim().is_empty()
         && progress
             .qr_payload
@@ -168,7 +185,40 @@ pub(super) fn progress_output_identity(
     ProgressOutputIdentity {
         batch_id,
         qr_payload,
+        frame_index: None,
+        frame_count: None,
     }
+}
+
+pub(super) fn rezka_output_identities(
+    apparatus: &str,
+    order_id: &str,
+    action: queue_state::ApparatusQueueAction,
+    now: i64,
+    order_map: &ProductionMapDefinition,
+) -> Result<Vec<ProgressOutputIdentity>, ProductionMapError> {
+    let frame_count = order_map
+        .nodes
+        .iter()
+        .find(|node| {
+            node.kind == ProductionMapNodeKind::Apparatus
+                && progress_apparatus_node_matches(node, apparatus)
+        })
+        .and_then(|node| node.rezka_kadr_count)
+        .filter(|value| *value > 0)
+        .ok_or(ProductionMapError::RezkaKadrCountRequired)? as usize;
+    let base_id = progress_batch_id(apparatus, order_id, action, now);
+    Ok((0..frame_count)
+        .map(|index| {
+            let batch_id = format!("{base_id}:frame:{}", index + 1);
+            ProgressOutputIdentity {
+                qr_payload: progress_qr_payload(&batch_id),
+                batch_id,
+                frame_index: Some(index + 1),
+                frame_count: Some(frame_count),
+            }
+        })
+        .collect())
 }
 
 pub(super) fn run_status_for_progress_action(
@@ -177,6 +227,7 @@ pub(super) fn run_status_for_progress_action(
     match action {
         queue_state::ApparatusQueueAction::Pause => OrderRunStatus::Paused,
         queue_state::ApparatusQueueAction::Complete => OrderRunStatus::Completed,
+        queue_state::ApparatusQueueAction::RollComplete => OrderRunStatus::Active,
         _ => OrderRunStatus::Active,
     }
 }
@@ -186,6 +237,9 @@ fn batch_status_for_progress_action(
 ) -> Result<OrderProgressBatchStatus, ProductionMapError> {
     match action {
         queue_state::ApparatusQueueAction::Pause => Ok(OrderProgressBatchStatus::Paused),
+        queue_state::ApparatusQueueAction::RollComplete => {
+            Ok(OrderProgressBatchStatus::Completed)
+        }
         queue_state::ApparatusQueueAction::Complete => Ok(OrderProgressBatchStatus::Completed),
         _ => Err(ProductionMapError::ProgressInputInvalid),
     }
@@ -259,6 +313,54 @@ pub(super) fn progress_batch_record(
     };
     sync_wip_payload_fields(&mut batch);
     Ok(batch)
+}
+
+pub(super) fn apply_rezka_frame_metadata(
+    batch: &mut OrderProgressBatch,
+    identity: &ProgressOutputIdentity,
+    order_map: &ProductionMapDefinition,
+    apparatus: &str,
+) {
+    let (Some(frame_index), Some(frame_count)) = (identity.frame_index, identity.frame_count)
+    else {
+        return;
+    };
+    if !batch.payload_json.is_object() {
+        batch.payload_json = serde_json::json!({});
+    }
+    batch.payload_json["rezka_frame_index"] = serde_json::json!(frame_index);
+    batch.payload_json["rezka_frame_count"] = serde_json::json!(frame_count);
+    batch.payload_json["rezka_output_kind"] = serde_json::json!("frame");
+    batch.payload_json["rezka_metrics_owner"] = serde_json::json!(true);
+    if let Some(node) = order_map.nodes.iter().find(|node| {
+        node.kind == ProductionMapNodeKind::Apparatus
+            && progress_apparatus_node_matches(node, apparatus)
+    }) {
+        if let Some(kadr_count) = node.rezka_kadr_count {
+            batch.payload_json["rezka_kadr_count"] = serde_json::json!(kadr_count);
+        }
+        if let Some(label_length) = node.rezka_label_length {
+            batch.payload_json["rezka_label_length"] = serde_json::json!(label_length);
+        }
+    }
+}
+
+fn progress_apparatus_node_matches(node: &ProductionMapNode, apparatus: &str) -> bool {
+    queue_state::apparatus_titles_match(&node.title, apparatus)
+        || (!node.alternative_assigned_title.trim().is_empty()
+            && queue_state::apparatus_titles_match(
+                &node.alternative_assigned_title,
+                apparatus,
+            ))
+}
+
+pub(super) fn clear_rezka_duplicate_metrics(batch: &mut OrderProgressBatch) {
+    batch.rezka_bosma_waste = None;
+    batch.rezka_lamination_waste = None;
+    batch.rezka_edge_waste = None;
+    batch.total_waste = None;
+    batch.payload_json["rezka_metrics_owner"] = serde_json::json!(false);
+    sync_wip_payload_fields(batch);
 }
 
 pub(super) struct ProgressEventRecordInput<'a> {

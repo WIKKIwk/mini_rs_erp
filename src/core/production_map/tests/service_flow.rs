@@ -2216,6 +2216,64 @@ async fn progress_qr_report_keeps_lineage_when_order_has_more_than_500_batches()
     assert!(report.progress_batches.len() > 500);
 }
 
+#[tokio::test]
+async fn roll_complete_final_output_can_be_received_as_finished_goods() {
+    let store = std::sync::Arc::new(MemoryProductionMapStore::new());
+    let service = ProductionMapService::new(store.clone());
+    let worker = QueueActionActor {
+        role: "aparatchi".to_string(),
+        ref_: "worker-roll-complete-receipt".to_string(),
+        display_name: "Roll Complete Worker".to_string(),
+    };
+    let order_id = "zakaz-roll-complete-receipt";
+    let apparatus = "Rezka";
+    let mut map = apparatus_stage_map(order_id, apparatus);
+    map.nodes
+        .iter_mut()
+        .find(|node| node.kind == ProductionMapNodeKind::Apparatus)
+        .expect("rezka node")
+        .rezka_kadr_count = Some(1);
+    service
+        .upsert_map(map)
+        .await
+        .expect("map");
+
+    let mut output = pause_first_stage_batch(&service, order_id, apparatus, &worker, 90.0)
+        .await
+        .expect("source batch");
+    output.action = queue_state::ApparatusQueueAction::RollComplete;
+    output.status = OrderProgressBatchStatus::Completed;
+    output.wip_status = OrderProgressBatchWipStatus::Waiting;
+    output.finished_goods_kg = Some(11.0);
+    output.finished_goods_meter = Some(90.0);
+    output.refresh_status_detail();
+    store
+        .put_order_progress_batch(output.clone())
+        .await
+        .expect("final roll output");
+
+    let warehouse = QueueActionActor {
+        role: "werka".to_string(),
+        ref_: "warehouse-roll-complete-receipt".to_string(),
+        display_name: "Warehouse Worker".to_string(),
+    };
+    let receipt = service
+        .receive_finished_goods(
+            &output.batch_id,
+            &output.qr_payload,
+            "Tayyor mahsulot ombori",
+            warehouse,
+        )
+        .await
+        .expect("receive roll-complete output");
+    assert_eq!(
+        receipt.batch.action,
+        queue_state::ApparatusQueueAction::RollComplete
+    );
+    assert_eq!(receipt.batch.wip_status, OrderProgressBatchWipStatus::Processed);
+    assert_eq!(receipt.batch.status_detail.flow_status, "accepted_to_stock");
+}
+
 async fn pause_first_stage_batch(
     service: &ProductionMapService,
     order_id: &str,

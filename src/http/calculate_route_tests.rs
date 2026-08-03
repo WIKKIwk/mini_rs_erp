@@ -77,6 +77,54 @@ async fn calculate_endpoint_accepts_arbitrary_layer_count() {
 }
 
 #[tokio::test]
+async fn calculate_material_catalog_drives_selected_layer_coefficient() {
+    let state = test_state();
+    let token = session(&state, PrincipalRole::Admin).await;
+    let saved = build_router(state.clone())
+        .oneshot(request(
+            "PUT",
+            "/v1/mobile/admin/calculate-materials",
+            &token,
+            r#"{
+                "name":"BOPP custom",
+                "aliases":["bopp custom"],
+                "active":true,
+                "variants":[{"micron":12,"coefficient":1.25}]
+            }"#,
+        ))
+        .await
+        .expect("save material");
+    assert_eq!(saved.status(), StatusCode::OK);
+    let saved_body = json_body(saved).await;
+    let material_id = saved_body["material"]["id"]
+        .as_str()
+        .expect("material id");
+
+    let calculate_body = format!(
+        r#"{{
+            "product":"catalog material",
+            "kg":100,
+            "frame_product_size_mm":500,
+            "frame_count":1,
+            "layers":[{{"material_id":"{material_id}","material":"BOPP custom","micron":"12"}}]
+        }}"#
+    );
+    let response = build_router(state)
+        .oneshot(request(
+            "POST",
+            "/v1/mobile/calculate",
+            &token,
+            &calculate_body,
+        ))
+        .await
+        .expect("calculate response");
+    let body = json_body(response).await;
+
+    assert_eq!(body["ok"], true);
+    assert_eq!(body["results"][0]["first_coeff"], 1.25);
+}
+
+#[tokio::test]
 async fn calculate_endpoint_rejects_supplier() {
     let state = test_state();
     let token = session(&state, PrincipalRole::Supplier).await;

@@ -304,13 +304,12 @@ pub(crate) fn normalize_move_target(
     } else {
         block.trim()
     };
-    let warehouse = if warehouse.trim().is_empty()
-        && block.eq_ignore_ascii_case(source.block.trim())
-    {
-        source.warehouse.trim()
-    } else {
-        warehouse.trim()
-    };
+    let warehouse =
+        if warehouse.trim().is_empty() && block.eq_ignore_ascii_case(source.block.trim()) {
+            source.warehouse.trim()
+        } else {
+            warehouse.trim()
+        };
     if block.is_empty() || warehouse.is_empty() {
         return Err(QolipError::InvalidLocation);
     }

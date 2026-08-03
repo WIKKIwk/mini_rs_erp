@@ -10,6 +10,7 @@ use crate::core::auth::ports::CustomerLookup;
 use crate::core::auth::service::AuthService;
 use crate::core::backup_doctor::BackupDoctor;
 use crate::core::calculate_orders::CalculateOrderStorePort;
+use crate::core::calculate_materials::CalculateMaterialStorePort;
 use crate::core::chat::ChatService;
 use crate::core::chat_media::ChatMediaService;
 use crate::core::customer::service::CustomerService;
@@ -73,6 +74,7 @@ pub struct AppState {
     pub factory_locations: FactoryLocationService,
     pub inventory_movements: InventoryMovementService,
     pub calculate_orders: Arc<dyn CalculateOrderStorePort>,
+    pub calculate_materials: Arc<dyn CalculateMaterialStorePort>,
     pub chat: ChatService,
     pub chat_media: ChatMediaService,
     pub order_sheets: Arc<dyn OrderSheetSink>,
@@ -128,6 +130,7 @@ impl AppState {
         let factory_locations = build_factory_location_service(apparatus_groups.clone());
         let inventory_movements = build_inventory_movement_service();
         let calculate_orders = build_calculate_order_store();
+        let calculate_materials = build_calculate_material_store();
         let order_sheets = discover_order_sheet_sink();
         let production_orders = build_mini_order_sink();
         let mobile_releases = MobileReleaseStore::from_env();
@@ -177,6 +180,7 @@ impl AppState {
             factory_locations,
             inventory_movements,
             calculate_orders,
+            calculate_materials,
             chat,
             chat_media,
             order_sheets,

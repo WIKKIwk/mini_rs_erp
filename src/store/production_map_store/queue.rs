@@ -164,6 +164,8 @@ pub(super) async fn append_apparatus_queue_action_event(
                 crate::core::production_map::queue_state::ApparatusQueueAction::Start => "start",
                 crate::core::production_map::queue_state::ApparatusQueueAction::Pause => "pause",
                 crate::core::production_map::queue_state::ApparatusQueueAction::Resume => "resume",
+                crate::core::production_map::queue_state::ApparatusQueueAction::RollComplete =>
+                    "roll_complete",
                 crate::core::production_map::queue_state::ApparatusQueueAction::Complete =>
                     "complete",
             },

@@ -24,8 +24,11 @@ impl OrderProgressBatchStatusDetail {
         .to_string();
         let wip_status = batch.wip_status.as_str().to_string();
         let processed_by = batch.processed_by_apparatus.trim();
-        let is_final_output = batch.action == queue_state::ApparatusQueueAction::Complete
-            && batch.status == OrderProgressBatchStatus::Completed
+        let is_final_output = matches!(
+            batch.action,
+            queue_state::ApparatusQueueAction::RollComplete
+                | queue_state::ApparatusQueueAction::Complete
+        ) && batch.status == OrderProgressBatchStatus::Completed
             && batch.next_apparatus.trim().is_empty();
         let flow_status = match batch.wip_status {
             OrderProgressBatchWipStatus::Waiting if is_final_output => "free_wip",

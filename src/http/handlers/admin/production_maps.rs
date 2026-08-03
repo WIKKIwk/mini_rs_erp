@@ -3,7 +3,7 @@ use crate::core::auth::models::{Principal, PrincipalRole};
 use crate::core::calculate_orders::{
     CalculateOrderError, CalculateOrderTemplate, owner_key, validate_template,
 };
-use crate::core::formula::{CalculateRequest, calculate};
+use crate::core::formula::{CalculateRequest, calculate_with_material_catalog};
 use crate::core::gscale::models::{
     ProgressLabelPrintRequest, RawMaterialStockEntry, RawMaterialStockUpdateInput,
 };
@@ -316,7 +316,12 @@ pub async fn production_map_save_with_order(
         validate_template(template).map_err(calculate_order_error)?;
         input.map.customer_name = template.customer.trim().to_string();
         if template.kg > 0.0 {
-            apply_authoritative_calculation(&mut input.map, template)?;
+            let material_catalog = state
+                .calculate_materials
+                .list()
+                .await
+                .map_err(|_| production_map_error(ProductionMapError::StoreFailed))?;
+            apply_authoritative_calculation(&mut input.map, template, &material_catalog)?;
         }
     }
     let opens_quick_template_as_order = input

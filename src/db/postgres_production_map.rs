@@ -544,8 +544,15 @@ impl ProductionMapStorePort for PostgresProductionMapStore {
         if let Some(event) = write.progress_event {
             put_order_progress_event_tx(&mut tx, &event).await?;
         }
-        if let Some(batch) = write.progress_batch {
-            put_order_progress_batch_tx(&mut tx, &batch).await?;
+        let progress_batches = write.progress_batches;
+        if progress_batches.is_empty() {
+            if let Some(batch) = write.progress_batch {
+                put_order_progress_batch_tx(&mut tx, &batch).await?;
+            }
+        } else {
+            for batch in progress_batches {
+                put_order_progress_batch_tx(&mut tx, &batch).await?;
+            }
         }
         for batch in write.progress_batch_updates {
             put_order_progress_batch_tx(&mut tx, &batch).await?;

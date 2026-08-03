@@ -60,8 +60,9 @@ fn template_source_map_id_for_save(
 fn apply_authoritative_calculation(
     map: &mut ProductionMapDefinition,
     template: &CalculateOrderTemplate,
+    material_catalog: &[crate::core::calculate_materials::CalculateMaterial],
 ) -> Result<(), AdminError> {
-    let response = calculate(CalculateRequest {
+    let response = calculate_with_material_catalog(CalculateRequest {
         order_number: if template.order_number.trim().is_empty() {
             None
         } else {
@@ -101,7 +102,7 @@ fn apply_authoritative_calculation(
             Some(template.note.trim().to_string())
         },
         ..CalculateRequest::default()
-    })
+    }, material_catalog)
     .map_err(|error| bad_request(&error))?;
 
     let base_length = response

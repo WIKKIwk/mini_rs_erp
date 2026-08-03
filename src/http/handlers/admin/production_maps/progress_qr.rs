@@ -57,7 +57,12 @@ pub async fn production_map_progress_qr_report(
     authorize_any_capability(
         &state,
         &headers,
-        &[Capability::AdminAccess, Capability::ProductionMapManage],
+        &[
+            Capability::AdminAccess,
+            Capability::ProductionMapManage,
+            Capability::ApparatusQueueRead,
+            Capability::ApparatusQueueManage,
+        ],
     )
     .await?;
     if method != Method::POST {

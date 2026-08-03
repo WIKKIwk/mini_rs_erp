@@ -359,6 +359,12 @@ pub(super) fn production_map_error(error: ProductionMapError) -> AdminError {
         ProductionMapError::RezkaProgressMetricsRequired => {
             bad_request("rezka_progress_metrics_required")
         }
+        ProductionMapError::RezkaKadrCountRequired => {
+            bad_request("rezka_kadr_count_required")
+        }
+        ProductionMapError::RezkaFinalRollRequired => {
+            bad_request("rezka_final_roll_required")
+        }
         ProductionMapError::ProgressBatchNotFound => not_found("progress_batch_not_found"),
         ProductionMapError::ProgressBatchNotAccepted => bad_request("progress_batch_not_accepted"),
         ProductionMapError::ProgressBatchNotResumable => {

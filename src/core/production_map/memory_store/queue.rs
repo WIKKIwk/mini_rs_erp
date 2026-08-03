@@ -81,6 +81,9 @@ pub(super) async fn completed_queue_orders_for_actor(
             queue_state::ApparatusQueueAction::Pause => {
                 CompletedQueueOrderStatus::InProgress
             }
+            queue_state::ApparatusQueueAction::RollComplete => {
+                CompletedQueueOrderStatus::InProgress
+            }
             queue_state::ApparatusQueueAction::Complete => {
                 if event.to_state == queue_state::ApparatusQueueOrderState::Completed {
                     CompletedQueueOrderStatus::Completed

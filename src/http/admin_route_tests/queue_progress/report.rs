@@ -174,7 +174,10 @@ async fn progress_qr_report_marks_processed_qr_as_stale_and_returns_order_flow()
         ))
         .await
         .expect("worker qr report");
-    assert_eq!(worker_report.status(), StatusCode::FORBIDDEN);
+    let worker_report_status = worker_report.status();
+    let worker_report_body = json_body(worker_report).await;
+    assert_eq!(worker_report_status, StatusCode::OK, "{worker_report_body:?}");
+    assert_eq!(worker_report_body["scanned_batch"]["qr_payload"], old_qr_payload);
 
     let report = router
         .oneshot(request_with_body(

@@ -99,7 +99,11 @@ impl ProductionMapService {
         let mut batch = self
             .progress_batch_for_qr(progress_batch_id, qr_payload)
             .await?;
-        if batch.action != queue_state::ApparatusQueueAction::Complete
+        if !matches!(
+            batch.action,
+            queue_state::ApparatusQueueAction::RollComplete
+                | queue_state::ApparatusQueueAction::Complete
+        )
             || batch.status != OrderProgressBatchStatus::Completed
             || batch.wip_status != OrderProgressBatchWipStatus::Waiting
             || !batch.next_apparatus.trim().is_empty()

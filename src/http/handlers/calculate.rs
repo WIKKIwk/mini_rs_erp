@@ -10,7 +10,7 @@ use crate::core::authz::Capability;
 use crate::core::calculate_orders::{
     CalculateOrderError, CalculateOrderImage, CalculateOrderTemplate, owner_key,
 };
-use crate::core::formula::{CalculateRequest, calculate};
+use crate::core::formula::{CalculateRequest, calculate_with_material_catalog};
 use crate::http::handlers::auth::bearer_token;
 
 pub async fn calculate_route(
@@ -36,7 +36,13 @@ pub async fn calculate_route(
     }
     let request: CalculateRequest =
         serde_json::from_slice(&body).map_err(|_| bad_request("invalid_json", "invalid json"))?;
-    let response = calculate(request).map_err(|error| bad_request("invalid_input", error))?;
+    let material_catalog = state
+        .calculate_materials
+        .list()
+        .await
+        .map_err(|_| store_error(CalculateOrderError::StoreFailed))?;
+    let response = calculate_with_material_catalog(request, &material_catalog)
+        .map_err(|error| bad_request("invalid_input", error))?;
     Ok(Json(
         serde_json::to_value(response).unwrap_or_else(|_| serde_json::json!({"ok": false})),
     ))

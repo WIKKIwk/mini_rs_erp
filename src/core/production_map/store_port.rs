@@ -66,6 +66,7 @@ pub struct QueueActionProgressWrite {
     pub session: Option<OrderRunSession>,
     pub progress_event: Option<OrderProgressEvent>,
     pub progress_batch: Option<OrderProgressBatch>,
+    pub progress_batches: Vec<OrderProgressBatch>,
     pub progress_batch_updates: Vec<OrderProgressBatch>,
     pub raw_material_stock_transitions: Vec<RawMaterialStockTransition>,
     pub qolip_checkouts: Vec<QolipCheckout>,
@@ -360,8 +361,15 @@ pub trait ProductionMapStorePort: Send + Sync {
         if let Some(event) = write.progress_event {
             self.put_order_progress_event(event).await?;
         }
-        if let Some(batch) = write.progress_batch {
-            self.put_order_progress_batch(batch).await?;
+        let progress_batches = write.progress_batches;
+        if progress_batches.is_empty() {
+            if let Some(batch) = write.progress_batch {
+                self.put_order_progress_batch(batch).await?;
+            }
+        } else {
+            for batch in progress_batches {
+                self.put_order_progress_batch(batch).await?;
+            }
         }
         for batch in write.progress_batch_updates {
             self.put_order_progress_batch(batch).await?;

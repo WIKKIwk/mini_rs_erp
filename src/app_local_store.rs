@@ -132,6 +132,21 @@ pub(super) fn calculate_order_store_path() -> std::path::PathBuf {
         })
 }
 
+pub(super) fn calculate_material_store_path() -> std::path::PathBuf {
+    std::env::var("MOBILE_API_CALCULATE_MATERIAL_STORE_PATH")
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|_| {
+            #[cfg(test)]
+            {
+                test_sqlite_path("mobile_calculate_materials")
+            }
+            #[cfg(not(test))]
+            {
+                std::path::PathBuf::from("data/mobile_calculate_materials.sqlite")
+            }
+        })
+}
+
 pub(super) fn calculate_order_image_dir() -> std::path::PathBuf {
     std::env::var("MOBILE_API_CALCULATE_ORDER_IMAGE_DIR")
         .map(std::path::PathBuf::from)

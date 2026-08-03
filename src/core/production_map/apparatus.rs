@@ -9,7 +9,8 @@ pub(super) fn visible_order_ids_for_apparatus(
 ) -> Vec<String> {
     maps.iter()
         .filter(|map| {
-            !flexo_order_blocked_for_color_pechat(map, apparatus)
+            !is_template_map(map)
+                && !flexo_order_blocked_for_color_pechat(map, apparatus)
                 && chain::map_has_work_stage_for_station(map, apparatus)
         })
         .map(|map| map.id.trim().to_string())
@@ -46,12 +47,16 @@ pub(super) fn visible_order_ids_by_apparatus(
 
 fn is_visible_queue_order(map: &ProductionMapDefinition) -> bool {
     let order_id = map.id.trim();
-    if order_id.is_empty() || order_id.starts_with("template-") {
+    if order_id.is_empty() || is_template_map(map) {
         return false;
     }
     !map.code.trim().is_empty()
         || !map.order_number.trim().is_empty()
         || order_id.starts_with("zakaz-")
+}
+
+fn is_template_map(map: &ProductionMapDefinition) -> bool {
+    map.id.trim().starts_with("template-")
 }
 
 pub(super) fn move_allowed(map: &ProductionMapDefinition, from: &str, to: &str) -> bool {
@@ -334,4 +339,46 @@ pub(super) fn claim_unassigned_alternative_apparatus_assignment(
         }
     }
     changed
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn queue_map(id: &str, code: &str, order_number: &str) -> ProductionMapDefinition {
+        serde_json::from_value(serde_json::json!({
+            "id": id,
+            "product_code": "TEST-PRODUCT",
+            "title": "Test order",
+            "code": code,
+            "order_number": order_number,
+            "nodes": [
+                {"id": "start", "kind": "start", "title": "Start"},
+                {
+                    "id": "apparatus",
+                    "kind": "apparatus",
+                    "title": "8 ta rangli pechat"
+                },
+                {"id": "end", "kind": "end", "title": "End"}
+            ],
+            "edges": [
+                {"from": "start", "to": "apparatus"},
+                {"from": "apparatus", "to": "end"}
+            ]
+        }))
+        .expect("queue map fixture")
+    }
+
+    #[test]
+    fn queue_execution_ignores_template_maps_for_real_orders() {
+        let maps = vec![
+            queue_map("template-zakaz-1234", "", ""),
+            queue_map("zakaz-1234", "1234", "1234"),
+        ];
+
+        assert_eq!(
+            visible_order_ids_for_apparatus(&maps, "8 ta rangli bosma aparat"),
+            vec!["zakaz-1234".to_string()]
+        );
+    }
 }

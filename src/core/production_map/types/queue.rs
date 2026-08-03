@@ -136,6 +136,8 @@ pub struct ApparatusQueueActionResult {
     pub progress_event: Option<OrderProgressEvent>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub progress_batch: Option<OrderProgressBatch>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub progress_batches: Vec<OrderProgressBatch>,
     #[serde(skip)]
     pub raw_material_stock_warehouses: Vec<String>,
     #[serde(skip)]

@@ -450,7 +450,7 @@ async fn laminatsiya_complete_keeps_state_successful_when_progress_print_fails()
 }
 
 #[tokio::test]
-async fn laminatsiya_pause_does_not_persist_print_leftover_metric() {
+async fn laminatsiya_pause_does_not_persist_leftover_or_order_waste_metrics() {
     let print_requests = Arc::new(Mutex::new(Vec::<ScaleDriverPrintRequest>::new()));
     let mut state = test_state();
     state.gscale = GscaleService::new().with_driver(Arc::new(FakeProgressDriver {
@@ -528,17 +528,16 @@ async fn laminatsiya_pause_does_not_persist_print_leftover_metric() {
             }"#,
         ))
         .await
-        .expect("pause with print leftover ignored");
+        .expect("pause with leftover metrics ignored");
     let paused_status = paused.status();
     let paused_body = json_body(paused).await;
     assert_eq!(paused_status, StatusCode::OK, "{paused_body:?}");
     assert_eq!(paused_body["progress_batch"]["status"], "paused");
     assert!(paused_body["progress_batch"]["lamination_print_leftover_rolls"].is_null());
-    assert_eq!(
-        paused_body["progress_batch"]["lamination_film_leftover_rolls"],
-        4.0
-    );
-    assert_eq!(paused_body["progress_batch"]["total_waste"], 1.5);
+    assert!(paused_body["progress_batch"]["lamination_film_leftover_rolls"].is_null());
+    assert!(paused_body["progress_batch"]["total_waste"].is_null());
     assert_eq!(paused_body["progress_batch"]["finished_goods_kg"], 10.0);
     assert_eq!(paused_body["progress_batch"]["finished_goods_meter"], 72.0);
+    assert!(paused_body["progress_event"]["lamination_film_leftover_rolls"].is_null());
+    assert!(paused_body["progress_event"]["total_waste"].is_null());
 }

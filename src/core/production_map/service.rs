@@ -29,6 +29,7 @@ pub(super) struct QueueProgressRecords {
     pub(super) session: Option<OrderRunSession>,
     pub(super) progress_event: Option<OrderProgressEvent>,
     pub(super) progress_batch: Option<OrderProgressBatch>,
+    pub(super) progress_batches: Vec<OrderProgressBatch>,
     pub(super) progress_batch_updates: Vec<OrderProgressBatch>,
 }
 
@@ -39,6 +40,7 @@ pub struct PreparedApparatusQueueAction {
     pub(super) session: Option<OrderRunSession>,
     pub(super) progress_event: Option<OrderProgressEvent>,
     pub(super) progress_batch: Option<OrderProgressBatch>,
+    pub(super) progress_batches: Vec<OrderProgressBatch>,
     pub(super) progress_batch_updates: Vec<OrderProgressBatch>,
     pub(super) material_scan_skipped: bool,
     pub(super) claimed_alternative_map: Option<ClaimedAlternativeMapUpdate>,
@@ -54,6 +56,10 @@ pub(super) struct ClaimedAlternativeMapUpdate {
 impl PreparedApparatusQueueAction {
     pub fn progress_batch(&self) -> Option<&OrderProgressBatch> {
         self.progress_batch.as_ref()
+    }
+
+    pub fn progress_batches(&self) -> &[OrderProgressBatch] {
+        &self.progress_batches
     }
 
     pub fn material_scan_skipped(&self) -> bool {

@@ -150,6 +150,10 @@ pub enum ProductionMapError {
     LaminatsiyaCompletionMetricsRequired,
     #[error("rezka progress metrics are required")]
     RezkaProgressMetricsRequired,
+    #[error("rezka kadr count is required")]
+    RezkaKadrCountRequired,
+    #[error("rezka final roll is required")]
+    RezkaFinalRollRequired,
     #[error("progress batch not found")]
     ProgressBatchNotFound,
     #[error("progress batch does not match previous stage")]

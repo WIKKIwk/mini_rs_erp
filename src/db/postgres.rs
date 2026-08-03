@@ -9,7 +9,7 @@ const DEFAULT_MAX_CONNECTIONS: u32 = 16;
 const DEFAULT_ACQUIRE_TIMEOUT_MS: u64 = 500;
 const MIGRATION_LOCK_KEY: i64 = 6_514_811_918_052_026_001;
 
-const POSTGRES_MIGRATIONS: [(&str, &str); 37] = [
+const POSTGRES_MIGRATIONS: [(&str, &str); 39] = [
     (
         "0001_mini_erp_foundation",
         include_str!("../../migrations/postgres/0001_mini_erp_foundation.sql"),
@@ -157,6 +157,14 @@ const POSTGRES_MIGRATIONS: [(&str, &str); 37] = [
     (
         "0037_qolip_order_notes",
         include_str!("../../migrations/postgres/0037_qolip_order_notes.sql"),
+    ),
+    (
+        "0038_calculate_material_catalog",
+        include_str!("../../migrations/postgres/0038_calculate_material_catalog.sql"),
+    ),
+    (
+        "0039_rezka_roll_fanout",
+        include_str!("../../migrations/postgres/0039_rezka_roll_fanout.sql"),
     ),
 ];
 
@@ -387,6 +395,8 @@ fn split_sql_statements(sql: &str) -> Vec<String> {
     let mut index = 0;
     let mut in_single_quote = false;
     let mut dollar_quote: Option<String> = None;
+    let mut in_line_comment = false;
+    let mut block_comment_depth = 0_usize;
 
     while index < sql.len() {
         if let Some(tag) = dollar_quote.as_deref() {
@@ -400,6 +410,29 @@ fn split_sql_statements(sql: &str) -> Vec<String> {
         }
 
         let ch = sql[index..].chars().next().expect("char");
+        if in_line_comment {
+            if ch == '\n' || ch == '\r' {
+                in_line_comment = false;
+            }
+            index += ch.len_utf8();
+            continue;
+        }
+
+        if block_comment_depth > 0 {
+            if sql[index..].starts_with("/*") {
+                block_comment_depth += 1;
+                index += 2;
+                continue;
+            }
+            if sql[index..].starts_with("*/") {
+                block_comment_depth -= 1;
+                index += 2;
+                continue;
+            }
+            index += ch.len_utf8();
+            continue;
+        }
+
         if in_single_quote {
             if ch == '\'' {
                 let next = index + ch.len_utf8();
@@ -410,6 +443,18 @@ fn split_sql_statements(sql: &str) -> Vec<String> {
                 in_single_quote = false;
             }
             index += ch.len_utf8();
+            continue;
+        }
+
+        if sql[index..].starts_with("--") {
+            in_line_comment = true;
+            index += 2;
+            continue;
+        }
+
+        if sql[index..].starts_with("/*") {
+            block_comment_depth = 1;
+            index += 2;
             continue;
         }
 

@@ -146,6 +146,17 @@ mod tests {
     }
 
     #[test]
+    fn postgres_migration_runner_ignores_semicolons_in_sql_comments() {
+        let statements = split_sql_statements(
+            "-- line comment; the rest is still a comment\nSELECT 1;\n/* block comment; with nesting /* inner; */ */ SELECT 2;",
+        );
+
+        assert_eq!(statements.len(), 2);
+        assert!(statements[0].contains("SELECT 1"));
+        assert!(statements[1].contains("SELECT 2"));
+    }
+
+    #[test]
     fn postgres_migrations_are_versioned_and_checksummed() {
         let versions = POSTGRES_MIGRATIONS
             .iter()
@@ -188,6 +199,22 @@ mod tests {
         assert!(migration.contains(
             "status in ('planned', 'active', 'paused', 'completed', 'cancelled')"
         ));
+    }
+
+    #[test]
+    fn rezka_roll_fanout_migration_is_registered_with_the_runner() {
+        let migration = POSTGRES_MIGRATIONS
+            .iter()
+            .find(|(version, _)| *version == "0039_rezka_roll_fanout")
+            .map(|(_, sql)| *sql)
+            .expect("rezka roll fanout migration");
+        let migration_lower = migration.to_lowercase();
+
+        assert!(migration_lower.contains("roll_complete"));
+        assert!(migration_lower.contains("mini_progress_batches_action_allowed"));
+
+        let statements = split_sql_statements(migration);
+        assert_eq!(statements.len(), 6);
     }
 
     #[test]

@@ -42,6 +42,7 @@ pub enum ApparatusQueueAction {
     Start,
     Pause,
     Resume,
+    RollComplete,
     Complete,
 }
 
@@ -73,6 +74,13 @@ pub fn next_queue_state(
         }
         ApparatusQueueAction::Resume => {
             if current == ApparatusQueueOrderState::Paused {
+                Ok(ApparatusQueueOrderState::InProgress)
+            } else {
+                Err(ProductionMapError::QueueActionNotAllowed)
+            }
+        }
+        ApparatusQueueAction::RollComplete => {
+            if current == ApparatusQueueOrderState::InProgress {
                 Ok(ApparatusQueueOrderState::InProgress)
             } else {
                 Err(ProductionMapError::QueueActionNotAllowed)

@@ -1,4 +1,77 @@
 use super::{close, normalize, parse_micron_parts, split_parts};
+use crate::core::calculate_materials::{CalculateMaterial, normalize_key};
+
+pub(super) fn coefficient_cell_with_catalog(
+    material: &str,
+    material_id: &str,
+    micron_text: &str,
+    micron: u32,
+    is_first: bool,
+    catalog: &[CalculateMaterial],
+) -> Result<f64, String> {
+    if material_id.trim().is_empty() {
+        let material_key = normalize_key(material);
+        let Some(catalog_material) = catalog.iter().find(|candidate| {
+            (normalize_key(&candidate.name) == material_key
+                || candidate
+                    .aliases
+                    .iter()
+                    .any(|alias| normalize_key(alias) == material_key))
+                && candidate
+                    .variants
+                    .iter()
+                    .any(|variant| variant.micron == micron)
+        }) else {
+            return coefficient_cell(material, micron_text, micron, is_first);
+        };
+        let variant = catalog_material
+            .variants
+            .iter()
+            .find(|variant| variant.micron == micron)
+            .expect("catalog variant checked above");
+        return Ok(if is_first {
+            variant
+                .first_layer_coefficient
+                .unwrap_or(variant.coefficient)
+        } else {
+            variant.coefficient
+        });
+    }
+
+    let catalog_material = catalog
+        .iter()
+        .find(|candidate| candidate.id.trim() == material_id.trim())
+        .ok_or_else(|| format!("material topilmadi: {material}"))?;
+    let microns = parse_micron_parts(micron_text)?;
+    if microns.len() != 1 {
+        return Err(format!(
+            "material/mikron mos emas: {material} / {micron_text}"
+        ));
+    }
+    let variant = catalog_material
+        .variants
+        .iter()
+        .find(|variant| variant.micron == micron)
+        .ok_or_else(|| {
+            let available = catalog_material
+                .variants
+                .iter()
+                .map(|variant| variant.micron.to_string())
+                .collect::<Vec<_>>()
+                .join(", ");
+            format!(
+                "'{}' uchun {} mikron topilmadi. Bor mikronlar: {}",
+                catalog_material.name, micron, available
+            )
+        })?;
+    Ok(if is_first {
+        variant
+            .first_layer_coefficient
+            .unwrap_or(variant.coefficient)
+    } else {
+        variant.coefficient
+    })
+}
 
 pub(super) fn coefficient_cell(
     material: &str,

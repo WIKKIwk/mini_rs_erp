@@ -37,7 +37,7 @@ pub(super) async fn load_completed_queue_orders_for_actor(
                 EXTRACT(EPOCH FROM created_at)::bigint AS completed_at_unix
             FROM mini_queue_action_events
             WHERE actor_ref = $1
-              AND action IN ('pause', 'complete')
+              AND action IN ('pause', 'roll_complete', 'complete')
               AND COALESCE(payload_json->>'completion_request', 'false') <> 'true'
             ORDER BY order_id, created_at DESC
          ) latest

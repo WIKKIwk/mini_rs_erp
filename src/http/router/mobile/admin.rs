@@ -158,6 +158,10 @@ pub(super) fn routes() -> Router<AppState> {
             any(admin::raw_material_rules),
         )
         .route(
+            "/v1/mobile/admin/calculate-materials",
+            any(admin::calculate_materials),
+        )
+        .route(
             "/v1/mobile/admin/raw-material-start-requirements",
             any(admin::raw_material_start_requirements),
         )

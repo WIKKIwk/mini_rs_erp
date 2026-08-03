@@ -201,7 +201,11 @@ pub fn hydrate_template_layers(mut template: CalculateOrderTemplate) -> Calculat
     template.layers = template
         .effective_layers()
         .into_iter()
-        .map(|layer| LayerInput::new(layer.material.trim(), layer.micron.trim()))
+        .map(|layer| LayerInput {
+            material_id: layer.material_id.trim().to_string(),
+            material: layer.material.trim().to_string(),
+            micron: layer.micron.trim().to_string(),
+        })
         .filter(|layer| !layer.is_empty())
         .collect();
     let layer = |index: usize| template.layers.get(index).cloned().unwrap_or_default();

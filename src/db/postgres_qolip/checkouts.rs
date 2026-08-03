@@ -5,7 +5,7 @@ use crate::core::qolip::normalize::{
 };
 use crate::core::qolip::{QolipCheckout, QolipError};
 
-use super::rows::{QolipCheckoutRow, QolipLocationRow, row_to_checkout, row_to_location};
+use super::rows::{row_to_checkout, row_to_location, QolipCheckoutRow, QolipLocationRow};
 
 pub(super) async fn save_checkout(
     pool: &PgPool,
@@ -51,7 +51,11 @@ pub(crate) async fn save_checkout_tx(
          )",
     )
     .bind(checkout.qolip_code.trim())
-    .bind(excluded_session_id.map(str::trim).filter(|value| !value.is_empty()))
+    .bind(
+        excluded_session_id
+            .map(str::trim)
+            .filter(|value| !value.is_empty()),
+    )
     .fetch_one(&mut **tx)
     .await
     .map_err(|_| QolipError::StoreFailed)?;

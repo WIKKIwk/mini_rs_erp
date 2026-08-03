@@ -3,6 +3,7 @@ use std::sync::Arc;
 use crate::core::mini_orders::{MiniOrderSink, NoopMiniOrderSink};
 use crate::db::postgres_apparatus_group::PostgresApparatusGroupStore;
 use crate::db::postgres_calculate_order::PostgresCalculateOrderStore;
+use crate::db::postgres_calculate_material::PostgresCalculateMaterialStore;
 use crate::db::postgres_chat::PostgresChatStore;
 use crate::db::postgres_chat_media::PostgresChatMediaRepository;
 use crate::db::postgres_customer::PostgresCustomerStore;
@@ -22,8 +23,11 @@ use crate::db::postgres_worker_group::PostgresWorkerGroupStore;
 use crate::rps::RpsDriverClient;
 use crate::store::apparatus_group_store::ApparatusGroupStore;
 use crate::store::calculate_order_store::CalculateOrderStore;
+use crate::store::calculate_material_store::CalculateMaterialStore;
 
-use super::app_local_store::{apparatus_group_store_path, calculate_order_store_path};
+use super::app_local_store::{
+    apparatus_group_store_path, calculate_material_store_path, calculate_order_store_path,
+};
 use super::postgres_pool::postgres_pool;
 use super::unavailable_production_map_store::UnavailableProductionMapStore;
 use super::*;
@@ -214,6 +218,16 @@ pub(super) fn build_calculate_order_store() -> Arc<dyn CalculateOrderStorePort> 
             Arc::new(PostgresCalculateOrderStore::new(pool))
         }
         None => build_sqlite_calculate_order_store(),
+    }
+}
+
+pub(super) fn build_calculate_material_store() -> Arc<dyn CalculateMaterialStorePort> {
+    match postgres_pool("calculate material") {
+        Some(pool) => {
+            tracing::info!("mini ERP postgres calculate material store configured");
+            Arc::new(PostgresCalculateMaterialStore::new(pool))
+        }
+        None => Arc::new(CalculateMaterialStore::new(calculate_material_store_path())),
     }
 }
 

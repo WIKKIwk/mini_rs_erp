@@ -459,8 +459,15 @@ impl ProductionMapStorePort for MemoryProductionMapStore {
         if let Some(event) = write.progress_event {
             self.put_order_progress_event(event).await?;
         }
-        if let Some(batch) = write.progress_batch {
-            self.put_order_progress_batch(batch).await?;
+        let progress_batches = write.progress_batches;
+        if progress_batches.is_empty() {
+            if let Some(batch) = write.progress_batch {
+                self.put_order_progress_batch(batch).await?;
+            }
+        } else {
+            for batch in progress_batches {
+                self.put_order_progress_batch(batch).await?;
+            }
         }
         for batch in write.progress_batch_updates {
             self.put_order_progress_batch(batch).await?;

@@ -21,10 +21,13 @@ pub(super) fn validated_progress_metrics(
 ) -> Result<ProgressMetrics, ProductionMapError> {
     let is_complete = action == queue_state::ApparatusQueueAction::Complete;
     let rezka_gross_qty = if apparatus::is_rezka_title(apparatus) {
-        valid_optional_progress_qty(progress.gross_qty)?
+        valid_optional_progress_qty(progress.gross_qty.or(progress.finished_goods_kg))?
     } else {
         None
     };
+    let is_rezka = apparatus::is_rezka_title(apparatus);
+    let is_laminatsiya = apparatus::is_laminatsiya_title(apparatus);
+    let is_pechat = pechat::is_pechat_apparatus(apparatus);
     let metrics = ProgressMetrics {
         return_ink_kg: if is_complete {
             valid_optional_progress_qty(progress.return_ink_kg)?
@@ -36,15 +39,43 @@ pub(super) fn validated_progress_metrics(
         } else {
             None
         },
-        lamination_film_leftover_rolls: valid_optional_progress_qty(
-            progress.lamination_film_leftover_rolls,
-        )?,
-        rezka_bosma_waste: valid_optional_progress_qty(progress.rezka_bosma_waste)?,
-        rezka_lamination_waste: valid_optional_progress_qty(progress.rezka_lamination_waste)?,
-        rezka_edge_waste: valid_optional_progress_qty(progress.rezka_edge_waste)?,
-        total_waste: valid_optional_progress_qty(progress.total_waste)?,
-        finished_goods_kg: valid_optional_progress_qty(progress.finished_goods_kg)?,
-        finished_goods_meter: valid_optional_progress_qty(progress.finished_goods_meter)?,
+        lamination_film_leftover_rolls: if is_complete {
+            valid_optional_progress_qty(progress.lamination_film_leftover_rolls)?
+        } else {
+            None
+        },
+        rezka_bosma_waste: if is_complete {
+            valid_optional_progress_qty(progress.rezka_bosma_waste)?
+        } else {
+            None
+        },
+        rezka_lamination_waste: if is_complete {
+            valid_optional_progress_qty(progress.rezka_lamination_waste)?
+        } else {
+            None
+        },
+        rezka_edge_waste: if is_complete {
+            valid_optional_progress_qty(progress.rezka_edge_waste)?
+        } else {
+            None
+        },
+        total_waste: if (is_rezka || is_laminatsiya || is_pechat) && !is_complete {
+            None
+        } else {
+            valid_optional_progress_qty(progress.total_waste)?
+        },
+        finished_goods_kg: if is_rezka {
+            valid_optional_progress_qty(progress.finished_goods_kg.or(progress.gross_qty))?
+        } else {
+            valid_optional_progress_qty(progress.finished_goods_kg)?
+        },
+        finished_goods_meter: if is_rezka {
+            valid_optional_progress_qty(
+                progress.finished_goods_meter.or(progress.produced_qty),
+            )?
+        } else {
+            valid_optional_progress_qty(progress.finished_goods_meter)?
+        },
     };
     validate_progress_metrics(
         apparatus,
@@ -66,6 +97,7 @@ fn validate_progress_metrics(
     returned_paint_report_attached: bool,
 ) -> Result<(), ProductionMapError> {
     let is_complete = action == queue_state::ApparatusQueueAction::Complete;
+    let is_rezka = apparatus::is_rezka_title(apparatus);
     if is_complete
         && pechat::is_pechat_apparatus(apparatus)
         && !(returned_paint_report_attached
@@ -93,19 +125,20 @@ fn validate_progress_metrics(
     {
         return Err(ProductionMapError::LaminatsiyaCompletionMetricsRequired);
     }
-    if apparatus::is_rezka_title(apparatus)
-        && (!rezka_progress_metrics_are_complete(
+    let missing_rezka_waste = is_complete
+        && !rezka_progress_metrics_are_complete(
             metrics.total_waste,
             metrics.rezka_bosma_waste,
             metrics.rezka_lamination_waste,
             metrics.rezka_edge_waste,
-        ) || !rezka_quantity_metrics_are_complete(
-            progress.produced_qty,
-            rezka_gross_qty,
-            metrics.finished_goods_kg,
-            metrics.finished_goods_meter,
-        ))
-    {
+        );
+    let missing_rezka_quantity = !rezka_quantity_metrics_are_complete(
+        progress.produced_qty,
+        rezka_gross_qty,
+        metrics.finished_goods_kg,
+        metrics.finished_goods_meter,
+    );
+    if is_rezka && (missing_rezka_waste || missing_rezka_quantity) {
         return Err(ProductionMapError::RezkaProgressMetricsRequired);
     }
     Ok(())

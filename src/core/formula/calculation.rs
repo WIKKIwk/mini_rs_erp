@@ -1,4 +1,6 @@
-use super::materials::coefficient_cell;
+use crate::core::calculate_materials::CalculateMaterial;
+
+use super::materials::coefficient_cell_with_catalog;
 use super::request_layers::{
     hydrate_layers_from_material_display, request_variants, visible_layers,
 };
@@ -6,7 +8,14 @@ use super::{
     CalcResult, CalculateRequest, CalculateResponse, DEFAULT_EDGE_ALLOWANCE_MM, MIN_MOLD_EXTRA_MM,
 };
 
-pub fn calculate(mut request: CalculateRequest) -> Result<CalculateResponse, String> {
+pub fn calculate(request: CalculateRequest) -> Result<CalculateResponse, String> {
+    calculate_with_material_catalog(request, &[])
+}
+
+pub fn calculate_with_material_catalog(
+    mut request: CalculateRequest,
+    material_catalog: &[CalculateMaterial],
+) -> Result<CalculateResponse, String> {
     hydrate_layers_from_material_display(&mut request);
     let kg = require_number(request.kg, "KG")?;
     let frame_product_size_mm =
@@ -27,7 +36,7 @@ pub fn calculate(mut request: CalculateRequest) -> Result<CalculateResponse, Str
     if waste_percent < 0.0 {
         return Err("Atxod foiz noto'g'ri".to_string());
     }
-    let results = calculate_variants(&request)?;
+    let results = calculate_variants(&request, material_catalog)?;
     let layers = visible_layers(&request);
 
     let rubber_size_mm = rubber_size(width_mm);
@@ -55,10 +64,13 @@ pub fn calculate(mut request: CalculateRequest) -> Result<CalculateResponse, Str
     })
 }
 
-fn calculate_variants(request: &CalculateRequest) -> Result<Vec<CalcResult>, String> {
+fn calculate_variants(
+    request: &CalculateRequest,
+    material_catalog: &[CalculateMaterial],
+) -> Result<Vec<CalcResult>, String> {
     let mut results = Vec::new();
     for variant in request_variants(request) {
-        results.push(calculate_single(&variant)?);
+        results.push(calculate_single(&variant, material_catalog)?);
     }
     if results.is_empty() {
         return Err("hisob varianti topilmadi".to_string());
@@ -66,7 +78,10 @@ fn calculate_variants(request: &CalculateRequest) -> Result<Vec<CalcResult>, Str
     Ok(results)
 }
 
-fn calculate_single(request: &CalculateRequest) -> Result<CalcResult, String> {
+fn calculate_single(
+    request: &CalculateRequest,
+    material_catalog: &[CalculateMaterial],
+) -> Result<CalcResult, String> {
     let kg = require_number(request.kg, "KG")?;
     let width_mm = width_mm_from_request(request)?;
     let layers = request.effective_layers();
@@ -80,7 +95,14 @@ fn calculate_single(request: &CalculateRequest) -> Result<CalcResult, String> {
         let material = require_text(&layer.material, &format!("{number}-qavat"))?;
         let micron_text = require_text(&layer.micron, &format!("{number}-mikron"))?;
         let micron = parse_micron(&micron_text)?;
-        let coefficient = coefficient_cell(&material, &micron_text, micron, index == 0)?;
+        let coefficient = coefficient_cell_with_catalog(
+            &material,
+            &layer.material_id,
+            &micron_text,
+            micron,
+            index == 0,
+            material_catalog,
+        )?;
         if index == 0 {
             first_coeff = coefficient;
         } else {

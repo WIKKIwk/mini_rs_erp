@@ -1,5 +1,5 @@
-use axum::Json;
 use axum::http::{HeaderMap, StatusCode};
+use axum::Json;
 use serde::{Deserialize, Serialize};
 
 use crate::app::AppState;
@@ -264,10 +264,7 @@ pub(super) fn bad_request(error: &'static str) -> (StatusCode, Json<QolipErrorRe
 }
 
 pub(super) fn conflict(error: &'static str) -> (StatusCode, Json<QolipErrorResponse>) {
-    (
-        StatusCode::CONFLICT,
-        Json(QolipErrorResponse::new(error)),
-    )
+    (StatusCode::CONFLICT, Json(QolipErrorResponse::new(error)))
 }
 
 pub(super) fn qolip_block_delete_error(

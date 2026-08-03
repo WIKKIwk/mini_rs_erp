@@ -232,7 +232,9 @@ pub async fn production_map_queue_action(
         is_rezka && rezka_queue_input_metrics_are_complete(&input, produced_qty);
     if matches!(
         input.action,
-        queue_state::ApparatusQueueAction::Pause | queue_state::ApparatusQueueAction::Complete
+        queue_state::ApparatusQueueAction::Pause
+            | queue_state::ApparatusQueueAction::RollComplete
+            | queue_state::ApparatusQueueAction::Complete
     ) && is_rezka
         && !has_rezka_progress_metrics
     {
@@ -338,12 +340,24 @@ pub async fn production_map_queue_action(
             &input.order_id,
         ));
     }
-    let print_request = prepared.progress_batch().and_then(|batch| {
-        if matches!(
-            input.action,
-            queue_state::ApparatusQueueAction::Pause | queue_state::ApparatusQueueAction::Complete
-        ) {
-            Some(ProgressLabelPrintRequest {
+    let print_batches = if prepared.progress_batches().is_empty() {
+        prepared
+            .progress_batch()
+            .into_iter()
+            .cloned()
+            .collect::<Vec<_>>()
+    } else {
+        prepared.progress_batches().to_vec()
+    };
+    let print_requests = if matches!(
+        input.action,
+        queue_state::ApparatusQueueAction::Pause
+            | queue_state::ApparatusQueueAction::RollComplete
+            | queue_state::ApparatusQueueAction::Complete
+    ) {
+        print_batches
+            .iter()
+            .map(|batch| ProgressLabelPrintRequest {
                 driver_url: input.driver_url.clone(),
                 qr_payload: batch.qr_payload.clone(),
                 item_code: batch.label_item_code.clone(),
@@ -365,10 +379,10 @@ pub async fn production_map_queue_action(
                 label_kind: String::new(),
                 print_count: input.print_count,
             })
-        } else {
-            None
-        }
-    });
+            .collect::<Vec<_>>()
+    } else {
+        Vec::new()
+    };
     let fallback_qolip_checkouts = qolip_checkouts.clone();
     let result = state
         .production_maps
@@ -423,8 +437,8 @@ pub async fn production_map_queue_action(
             .warehouse_events
             .notify_updated(&warehouse, "raw_material_stock");
     }
-    let mut print = serde_json::Value::Null;
-    if let Some(request) = print_request {
+    let mut prints = Vec::with_capacity(print_requests.len());
+    for request in print_requests {
         let print_result = if input.print_transport.trim().eq_ignore_ascii_case("offline") {
             state.gscale.prepare_progress_label(request)
         } else {
@@ -432,7 +446,7 @@ pub async fn production_map_queue_action(
         };
         match print_result {
             Ok(response) => {
-                print = serde_json::to_value(response).unwrap_or(serde_json::Value::Null);
+                prints.push(serde_json::to_value(response).unwrap_or(serde_json::Value::Null));
             }
             Err(error) => {
                 tracing::warn!(
@@ -442,10 +456,11 @@ pub async fn production_map_queue_action(
                     action = ?input.action,
                     "progress label print failed after queue action commit"
                 );
-                print = progress_print_failure_json(error);
+                prints.push(progress_print_failure_json(error));
             }
         }
     }
+    let print = prints.first().cloned().unwrap_or(serde_json::Value::Null);
     Ok(json_response(serde_json::json!({
         "ok": true,
         "states": result.states,
@@ -453,7 +468,9 @@ pub async fn production_map_queue_action(
         "session": result.session,
         "progress_event": result.progress_event,
         "progress_batch": result.progress_batch,
+        "progress_batches": result.progress_batches,
         "print": print,
+        "prints": prints,
     })))
 }
 
