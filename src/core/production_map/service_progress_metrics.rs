@@ -28,18 +28,20 @@ pub(super) fn validated_progress_metrics(
     let is_rezka = apparatus::is_rezka_title(apparatus);
     let is_laminatsiya = apparatus::is_laminatsiya_title(apparatus);
     let is_pechat = pechat::is_pechat_apparatus(apparatus);
+    let allow_partial_laminatsiya_completion =
+        is_laminatsiya && is_complete && progress.allow_partial_laminatsiya_completion;
     let metrics = ProgressMetrics {
         return_ink_kg: if is_complete {
             valid_optional_progress_qty(progress.return_ink_kg)?
         } else {
             None
         },
-        lamination_print_leftover_rolls: if is_complete {
+        lamination_print_leftover_rolls: if is_complete && !allow_partial_laminatsiya_completion {
             valid_optional_progress_qty(progress.lamination_print_leftover_rolls)?
         } else {
             None
         },
-        lamination_film_leftover_rolls: if is_complete {
+        lamination_film_leftover_rolls: if is_complete && !allow_partial_laminatsiya_completion {
             valid_optional_progress_qty(progress.lamination_film_leftover_rolls)?
         } else {
             None
@@ -59,7 +61,9 @@ pub(super) fn validated_progress_metrics(
         } else {
             None
         },
-        total_waste: if (is_rezka || is_laminatsiya || is_pechat) && !is_complete {
+        total_waste: if (is_rezka || is_laminatsiya || is_pechat)
+            && (!is_complete || allow_partial_laminatsiya_completion)
+        {
             None
         } else {
             valid_optional_progress_qty(progress.total_waste)?
@@ -84,8 +88,67 @@ pub(super) fn validated_progress_metrics(
         rezka_gross_qty,
         metrics,
         progress.returned_paint_report_attached,
+        allow_partial_laminatsiya_completion,
     )?;
     Ok(metrics)
+}
+
+pub(super) fn validated_laminatsiya_worker_handoff_metrics(
+    apparatus: &str,
+    progress: &QueueProgressInput,
+) -> Result<ProgressMetrics, ProductionMapError> {
+    if !apparatus::is_laminatsiya_title(apparatus) {
+        return Err(ProductionMapError::ProgressInputInvalid);
+    }
+    let metrics = ProgressMetrics {
+        return_ink_kg: None,
+        lamination_print_leftover_rolls:
+            valid_non_negative_optional_progress_qty(progress.lamination_print_leftover_rolls)?,
+        lamination_film_leftover_rolls:
+            valid_non_negative_optional_progress_qty(progress.lamination_film_leftover_rolls)?,
+        rezka_bosma_waste: None,
+        rezka_lamination_waste: None,
+        rezka_edge_waste: None,
+        total_waste: valid_non_negative_optional_progress_qty(progress.total_waste)?,
+        finished_goods_kg: None,
+        finished_goods_meter: None,
+    };
+    if metrics.lamination_print_leftover_rolls.is_none()
+        || metrics.lamination_film_leftover_rolls.is_none()
+        || metrics.total_waste.is_none()
+    {
+        return Err(ProductionMapError::LaminatsiyaCompletionMetricsRequired);
+    }
+    Ok(metrics)
+}
+
+pub(super) fn validated_laminatsiya_removed_roll_metrics(
+    apparatus: &str,
+    progress: &QueueProgressInput,
+) -> Result<ProgressMetrics, ProductionMapError> {
+    if !apparatus::is_laminatsiya_title(apparatus) {
+        return Err(ProductionMapError::ProgressInputInvalid);
+    }
+    let finished_goods_meter = valid_optional_progress_qty(
+        progress.finished_goods_meter.or(progress.produced_qty),
+    )?;
+    let finished_goods_kg = valid_optional_progress_qty(
+        progress.finished_goods_kg.or(progress.gross_qty),
+    )?;
+    if finished_goods_meter.is_none() || finished_goods_kg.is_none() {
+        return Err(ProductionMapError::LaminatsiyaCompletionMetricsRequired);
+    }
+    Ok(ProgressMetrics {
+        return_ink_kg: None,
+        lamination_print_leftover_rolls: None,
+        lamination_film_leftover_rolls: None,
+        rezka_bosma_waste: None,
+        rezka_lamination_waste: None,
+        rezka_edge_waste: None,
+        total_waste: None,
+        finished_goods_kg,
+        finished_goods_meter,
+    })
 }
 
 fn validate_progress_metrics(
@@ -95,6 +158,7 @@ fn validate_progress_metrics(
     rezka_gross_qty: Option<f64>,
     metrics: ProgressMetrics,
     returned_paint_report_attached: bool,
+    allow_partial_laminatsiya_completion: bool,
 ) -> Result<(), ProductionMapError> {
     let is_complete = action == queue_state::ApparatusQueueAction::Complete;
     let is_rezka = apparatus::is_rezka_title(apparatus);
@@ -115,6 +179,7 @@ fn validate_progress_metrics(
     }
     if is_complete
         && apparatus::is_laminatsiya_title(apparatus)
+        && !allow_partial_laminatsiya_completion
         && !laminatsiya_completion_metrics_are_complete(
             metrics.lamination_print_leftover_rolls,
             metrics.lamination_film_leftover_rolls,
@@ -122,6 +187,13 @@ fn validate_progress_metrics(
             metrics.finished_goods_kg,
             metrics.finished_goods_meter,
         )
+    {
+        return Err(ProductionMapError::LaminatsiyaCompletionMetricsRequired);
+    }
+    if is_complete
+        && apparatus::is_laminatsiya_title(apparatus)
+        && allow_partial_laminatsiya_completion
+        && (metrics.finished_goods_kg.is_none() || metrics.finished_goods_meter.is_none())
     {
         return Err(ProductionMapError::LaminatsiyaCompletionMetricsRequired);
     }
@@ -149,6 +221,16 @@ fn valid_optional_progress_qty(value: Option<f64>) -> Result<Option<f64>, Produc
         Some(value) => positive_erp_quantity(value)
             .map(Some)
             .ok_or(ProductionMapError::ProgressInputInvalid),
+        None => Ok(None),
+    }
+}
+
+fn valid_non_negative_optional_progress_qty(
+    value: Option<f64>,
+) -> Result<Option<f64>, ProductionMapError> {
+    match value {
+        Some(value) if value.is_finite() && value >= 0.0 => Ok(Some(value)),
+        Some(_) => Err(ProductionMapError::ProgressInputInvalid),
         None => Ok(None),
     }
 }

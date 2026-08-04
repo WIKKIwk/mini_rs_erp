@@ -2,7 +2,7 @@ use std::collections::BTreeMap;
 
 use super::super::ProductionMapError;
 use super::sequence::first_actionable_order_id;
-use super::state::{ApparatusQueueAction, ApparatusQueueOrderState, next_queue_state};
+use super::state::{next_queue_state, ApparatusQueueAction, ApparatusQueueOrderState};
 
 pub fn apply_queue_action(
     sequence: &[String],
@@ -37,9 +37,9 @@ pub fn apply_unordered_queue_action(
         return Err(ProductionMapError::MissingId);
     }
     if matches!(action, ApparatusQueueAction::Start)
-        && states
-            .iter()
-            .any(|(id, state)| id.trim() != order_id && state.is_active())
+        && states.iter().any(|(id, state)| {
+            id.trim() != order_id && *state == ApparatusQueueOrderState::InProgress
+        })
     {
         return Err(ProductionMapError::QueueActionNotAllowed);
     }

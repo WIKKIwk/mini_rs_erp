@@ -66,6 +66,12 @@ struct ApparatusQueueActionRequest {
     #[serde(default)]
     completion_request_note: String,
     #[serde(default)]
+    full_completion_report_required: bool,
+    #[serde(default)]
+    worker_handoff: bool,
+    #[serde(default)]
+    remove_roll_from_apparatus: bool,
+    #[serde(default)]
     description: String,
     #[serde(default)]
     returned_paint_items: Vec<ReturnedPaintItem>,
@@ -98,6 +104,14 @@ pub async fn production_map_queue_action(
     let input: ApparatusQueueActionRequest = parse_json(&body)?;
     if input.apparatus.trim().is_empty() || input.order_id.trim().is_empty() {
         return Err(bad_request("apparatus and order_id are required"));
+    }
+    if (input.worker_handoff || input.remove_roll_from_apparatus)
+        && !matches!(input.action, queue_state::ApparatusQueueAction::Pause)
+    {
+        return Err(bad_request("worker_handoff_only_on_pause"));
+    }
+    if input.worker_handoff && input.remove_roll_from_apparatus {
+        return Err(bad_request("worker_handoff_actions_conflict"));
     }
     let assigned_apparatus = state.admin.principal_assigned_apparatus(&principal).await;
     let material_barcodes = input.material_barcodes.clone();
@@ -217,6 +231,10 @@ pub async fn production_map_queue_action(
         finished_goods_meter: input.finished_goods_meter,
         description: completion_request_note.clone(),
         returned_paint_report_attached,
+        force_full_completion_metrics: input.full_completion_report_required,
+        allow_partial_laminatsiya_completion: false,
+        worker_handoff: input.worker_handoff,
+        remove_roll_from_apparatus: input.remove_roll_from_apparatus,
     };
     let has_complete_bosma_metrics = (return_ink_kg.is_some() || returned_paint_report_attached)
         && input.total_waste.is_some()

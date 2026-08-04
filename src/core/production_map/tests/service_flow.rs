@@ -1165,6 +1165,177 @@ async fn progress_pause_creates_qr_batch_and_resume_reopens_order() {
 }
 
 #[tokio::test]
+async fn laminatsiya_worker_handoff_keeps_roll_in_apparatus_until_continue_or_remove() {
+    let store = std::sync::Arc::new(MemoryProductionMapStore::new());
+    let service = ProductionMapService::new(store.clone());
+    let actor = QueueActionActor {
+        role: "laminatsiyachi".to_string(),
+        ref_: "worker-laminatsiya-handoff".to_string(),
+        display_name: "Laminatsiya Handoff".to_string(),
+    };
+    let order_id = "zakaz-laminatsiya-handoff";
+    let first = "Bosma aparat";
+    let second = "Laminatsiya mashinasi";
+    service
+        .upsert_map(two_stage_map(order_id, first, second))
+        .await
+        .expect("map");
+
+    service
+        .apply_apparatus_queue_action_with_progress(
+            first,
+            order_id,
+            queue_state::ApparatusQueueAction::Start,
+            &[first.to_string()],
+            actor.clone(),
+            QueueProgressInput::default(),
+        )
+        .await
+        .expect("bosma start");
+    let bosma_pause = service
+        .apply_apparatus_queue_action_with_progress(
+            first,
+            order_id,
+            queue_state::ApparatusQueueAction::Pause,
+            &[first.to_string()],
+            actor.clone(),
+            QueueProgressInput {
+                produced_qty: Some(18.0),
+                uom: "kg".to_string(),
+                ..QueueProgressInput::default()
+            },
+        )
+        .await
+        .expect("bosma pause");
+    let source_batch = bosma_pause.progress_batch.expect("bosma WIP");
+
+    service
+        .apply_apparatus_queue_action_with_progress(
+            second,
+            order_id,
+            queue_state::ApparatusQueueAction::Start,
+            &[second.to_string()],
+            actor.clone(),
+            QueueProgressInput {
+                qr_payload: source_batch.qr_payload.clone(),
+                ..QueueProgressInput::default()
+            },
+        )
+        .await
+        .expect("laminatsiya start");
+    let handoff = service
+        .apply_apparatus_queue_action_with_progress(
+            second,
+            order_id,
+            queue_state::ApparatusQueueAction::Pause,
+            &[second.to_string()],
+            actor.clone(),
+            QueueProgressInput {
+                lamination_print_leftover_rolls: Some(0.0),
+                lamination_film_leftover_rolls: Some(0.0),
+                total_waste: Some(0.0),
+                worker_handoff: true,
+                ..QueueProgressInput::default()
+            },
+        )
+        .await
+        .expect("worker handoff");
+    assert_eq!(handoff.states.get(order_id), Some(&"paused".to_string()));
+    assert!(handoff.progress_batch.is_none());
+    assert_eq!(
+        handoff.progress_event.as_ref().expect("handoff event").payload_json["event"],
+        "worker_handoff"
+    );
+
+    let handed_off_source = store
+        .progress_batch(&source_batch.batch_id)
+        .await
+        .expect("handoff source lookup")
+        .expect("handoff source");
+    assert_eq!(handed_off_source.wip_status, OrderProgressBatchWipStatus::InUse);
+    assert_eq!(
+        handed_off_source.payload_json["worker_handoff"],
+        serde_json::Value::Bool(true)
+    );
+
+    let removed = service
+        .apply_apparatus_queue_action_with_progress(
+            second,
+            order_id,
+            queue_state::ApparatusQueueAction::Pause,
+            &[second.to_string()],
+            actor.clone(),
+            QueueProgressInput {
+                finished_goods_meter: Some(320.0),
+                finished_goods_kg: Some(12.0),
+                remove_roll_from_apparatus: true,
+                ..QueueProgressInput::default()
+            },
+        )
+        .await
+        .expect("remove roll");
+    assert_eq!(removed.states.get(order_id), Some(&"paused".to_string()));
+    assert!(removed.progress_batch.is_none());
+    let removed_source = store
+        .progress_batch(&source_batch.batch_id)
+        .await
+        .expect("removed source lookup")
+        .expect("removed source");
+    assert_eq!(removed_source.wip_status, OrderProgressBatchWipStatus::Waiting);
+    assert_eq!(
+        removed_source.payload_json["roll_removed_from_apparatus"],
+        serde_json::Value::Bool(true)
+    );
+    assert!(removed_source.used_by_apparatus.is_empty());
+
+    let resumed = service
+        .apply_apparatus_queue_action_with_progress(
+            second,
+            order_id,
+            queue_state::ApparatusQueueAction::Resume,
+            &[second.to_string()],
+            actor.clone(),
+            QueueProgressInput::default(),
+        )
+        .await
+        .expect("resume removed roll");
+    assert_eq!(resumed.states.get(order_id), Some(&"in_progress".to_string()));
+    let resumed_source = store
+        .progress_batch(&source_batch.batch_id)
+        .await
+        .expect("resumed source lookup")
+        .expect("resumed source");
+    assert_eq!(resumed_source.wip_status, OrderProgressBatchWipStatus::InUse);
+    assert_eq!(
+        resumed_source.payload_json["worker_handoff"],
+        serde_json::Value::Bool(false)
+    );
+
+    let normal_pause = service
+        .apply_apparatus_queue_action_with_progress(
+            second,
+            order_id,
+            queue_state::ApparatusQueueAction::Pause,
+            &[second.to_string()],
+            actor,
+            QueueProgressInput {
+                finished_goods_meter: Some(300.0),
+                finished_goods_kg: Some(11.0),
+                ..QueueProgressInput::default()
+            },
+        )
+        .await
+        .expect("normal pause after resume");
+    assert!(normal_pause.progress_batch.is_some());
+    let processed_source = store
+        .progress_batch(&source_batch.batch_id)
+        .await
+        .expect("processed source lookup")
+        .expect("processed source");
+    assert_eq!(processed_source.wip_status, OrderProgressBatchWipStatus::Processed);
+}
+
+#[tokio::test]
 async fn downstream_start_requires_previous_stage_progress_qr() {
     let service = ProductionMapService::new(std::sync::Arc::new(MemoryProductionMapStore::new()));
     let actor = QueueActionActor {
@@ -1745,6 +1916,13 @@ async fn downstream_complete_keeps_order_open_until_all_input_wips_processed() {
         .put_order_progress_batch(second_pause.clone())
         .await
         .expect("second waiting wip");
+    store
+        .put_apparatus_queue_states(
+            first,
+            BTreeMap::from([(order_id.to_string(), "completed".to_string())]),
+        )
+        .await
+        .expect("first stage completed after producing all wips");
 
     service
         .apply_apparatus_queue_action_with_progress(
@@ -1770,8 +1948,6 @@ async fn downstream_complete_keeps_order_open_until_all_input_wips_processed() {
             QueueProgressInput {
                 produced_qty: Some(11.0),
                 uom: "kg".to_string(),
-                lamination_film_leftover_rolls: Some(1.0),
-                total_waste: Some(0.5),
                 finished_goods_kg: Some(11.0),
                 finished_goods_meter: Some(110.0),
                 ..QueueProgressInput::default()

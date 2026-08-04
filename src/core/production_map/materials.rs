@@ -5,9 +5,9 @@ use serde::{Deserialize, Serialize};
 use super::materials_support::*;
 use super::queue_state;
 use super::{
-    ApparatusQueueActionResult, OrderControlState, OrderProgressBatchWipStatus,
-    PreparedApparatusQueueAction, ProductionMapError, ProductionMapSaved, ProductionMapService,
-    QueueActionActor, QueueProgressInput, chain,
+    ApparatusQueueActionResult, OrderControlState, PreparedApparatusQueueAction,
+    ProductionMapError, ProductionMapSaved, ProductionMapService, QueueActionActor,
+    QueueProgressInput, chain,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -593,25 +593,12 @@ impl ProductionMapService {
         let Some(order_map) = self.raw_map(order_id).await? else {
             return Ok(false);
         };
-        let Some(previous_apparatus) = chain::previous_work_stage_station(&order_map, apparatus)
-        else {
-            return Ok(false);
-        };
-        let batches = self.store.progress_batches_for_order(order_id).await?;
-        Ok(batches.into_iter().any(|batch| {
-            let processed_by = if batch.processed_by_apparatus.trim().is_empty() {
-                batch.current_apparatus.as_str()
-            } else {
-                batch.processed_by_apparatus.as_str()
-            };
-            let next_apparatus = batch.next_apparatus.trim();
-            batch.order_id.trim() == order_id.trim()
-                && batch.wip_status == OrderProgressBatchWipStatus::Processed
-                && queue_state::apparatus_titles_match(&batch.apparatus, &previous_apparatus)
-                && (next_apparatus.is_empty()
-                    || queue_state::next_stage_title_matches_apparatus(next_apparatus, apparatus))
-                && queue_state::apparatus_titles_match(processed_by, apparatus)
-        }))
+        Ok(self
+            .previous_stage_start_progress_batch(order_id, &order_map, apparatus, progress)
+            .await
+            .ok()
+            .flatten()
+            .is_some())
     }
 
     async fn raw_material_assignments_for_order_apparatus(

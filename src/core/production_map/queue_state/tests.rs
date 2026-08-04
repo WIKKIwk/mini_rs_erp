@@ -127,6 +127,21 @@ fn unordered_action_blocks_second_start_while_order_in_progress() {
 }
 
 #[test]
+fn unordered_action_allows_start_when_other_order_is_paused() {
+    let mut states = BTreeMap::new();
+    apply_unordered_queue_action(&mut states, "a", ApparatusQueueAction::Start)
+        .expect("start first order");
+    apply_unordered_queue_action(&mut states, "a", ApparatusQueueAction::Pause)
+        .expect("pause first order");
+
+    apply_unordered_queue_action(&mut states, "b", ApparatusQueueAction::Start)
+        .expect("start second order after pause");
+
+    assert_eq!(states.get("a"), Some(&ApparatusQueueOrderState::Paused));
+    assert_eq!(states.get("b"), Some(&ApparatusQueueOrderState::InProgress));
+}
+
+#[test]
 fn resolve_apparatus_storage_key_matches_pechat_suffixes() {
     let keys = vec![
         "7 ta rangli pechat".to_string(),

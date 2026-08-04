@@ -405,6 +405,30 @@ pub(super) fn progress_event_record(input: ProgressEventRecordInput<'_>) -> Orde
     }
 }
 
+pub(super) fn progress_metrics_event(
+    context: ProgressRecordContext<'_>,
+    batch_id: String,
+    qr_payload: String,
+    metrics: ProgressMetrics,
+    description: &str,
+    event_name: &str,
+) -> OrderProgressEvent {
+    let mut event = zero_quantity_event(
+        context,
+        batch_id,
+        qr_payload,
+        progress_event_payload(context.action, metrics, description),
+    );
+    event.payload_json["event"] = serde_json::json!(event_name);
+    event.lamination_print_leftover_rolls = metrics.lamination_print_leftover_rolls;
+    event.lamination_film_leftover_rolls = metrics.lamination_film_leftover_rolls;
+    event.total_waste = metrics.total_waste;
+    event.finished_goods_kg = metrics.finished_goods_kg;
+    event.finished_goods_meter = metrics.finished_goods_meter;
+    event.description = description.to_string();
+    event
+}
+
 pub(super) fn progress_session_payload(
     action: queue_state::ApparatusQueueAction,
     produced_qty: f64,
@@ -490,7 +514,7 @@ fn progress_batch_payload(
     })
 }
 
-fn progress_event_payload(
+pub(super) fn progress_event_payload(
     action: queue_state::ApparatusQueueAction,
     metrics: ProgressMetrics,
     description: &str,
@@ -515,6 +539,60 @@ pub(super) fn resume_without_progress_payload() -> serde_json::Value {
     serde_json::json!({
         "resumed_without_progress_qr": true,
     })
+}
+
+pub(super) fn worker_handoff_session_payload(
+    metrics: ProgressMetrics,
+    description: &str,
+    input_progress: &SessionProgressLinks,
+) -> serde_json::Value {
+    let mut payload = progress_session_payload(
+        queue_state::ApparatusQueueAction::Pause,
+        0.0,
+        "",
+        metrics,
+        description,
+        input_progress,
+    );
+    payload["worker_handoff"] = serde_json::json!(true);
+    payload["roll_removed_from_apparatus"] = serde_json::json!(false);
+    payload
+}
+
+pub(super) fn removed_roll_session_payload(
+    metrics: ProgressMetrics,
+    description: &str,
+    input_progress: &SessionProgressLinks,
+) -> serde_json::Value {
+    let mut payload = progress_session_payload(
+        queue_state::ApparatusQueueAction::Pause,
+        0.0,
+        "",
+        metrics,
+        description,
+        input_progress,
+    );
+    payload["worker_handoff"] = serde_json::json!(false);
+    payload["roll_removed_from_apparatus"] = serde_json::json!(true);
+    payload
+}
+
+pub(super) fn resumed_handoff_session_payload(
+    current: &OrderRunSession,
+    input_progress: &SessionProgressLinks,
+) -> serde_json::Value {
+    let mut payload = current.payload_json.clone();
+    if !payload.is_object() {
+        payload = serde_json::json!({});
+    }
+    payload["resumed_batch_id"] = serde_json::json!(input_progress.batch_id);
+    payload["resumed_qr_payload"] = serde_json::json!(input_progress.qr_payload);
+    payload["input_progress_batch_id"] = serde_json::json!(input_progress.batch_id);
+    payload["input_progress_qr_payload"] = serde_json::json!(input_progress.qr_payload);
+    payload["input_progress_apparatus"] = serde_json::json!(input_progress.apparatus);
+    payload["worker_handoff"] = serde_json::json!(false);
+    payload["roll_removed_from_apparatus"] = serde_json::json!(false);
+    preserve_qolip_code(current, payload)
 }
 
 pub(super) fn resumed_batch_payload(actor: &QueueActionActor, now: i64) -> serde_json::Value {
@@ -548,6 +626,57 @@ pub(super) fn wip_batch_in_use(
     batch.used_by_session_id = session_id.trim().to_string();
     batch.used_by_apparatus = apparatus.trim().to_string();
     batch.payload_json["wip_in_use_at_unix"] = serde_json::json!(now);
+    sync_wip_payload_fields(&mut batch);
+    batch
+}
+
+pub(super) fn wip_batch_worker_handoff(
+    mut batch: OrderProgressBatch,
+    apparatus: &str,
+    session_id: &str,
+    now: i64,
+) -> OrderProgressBatch {
+    batch = wip_batch_in_use(batch, apparatus, session_id, now);
+    batch.payload_json["worker_handoff"] = serde_json::json!(true);
+    batch.payload_json["roll_removed_from_apparatus"] = serde_json::json!(false);
+    batch.payload_json["worker_handoff_at_unix"] = serde_json::json!(now);
+    sync_wip_payload_fields(&mut batch);
+    batch
+}
+
+pub(super) fn wip_batch_claimed_after_handoff(
+    mut batch: OrderProgressBatch,
+    apparatus: &str,
+    session_id: &str,
+    now: i64,
+) -> OrderProgressBatch {
+    batch = wip_batch_in_use(batch, apparatus, session_id, now);
+    batch.payload_json["worker_handoff"] = serde_json::json!(false);
+    batch.payload_json["roll_removed_from_apparatus"] = serde_json::json!(false);
+    batch.payload_json["roll_claimed_after_handoff_at_unix"] = serde_json::json!(now);
+    sync_wip_payload_fields(&mut batch);
+    batch
+}
+
+pub(super) fn wip_batch_removed_from_apparatus(
+    mut batch: OrderProgressBatch,
+    apparatus: &str,
+    finished_goods_meter: f64,
+    finished_goods_kg: f64,
+    now: i64,
+) -> OrderProgressBatch {
+    batch.wip_status = OrderProgressBatchWipStatus::Waiting;
+    batch.current_apparatus = apparatus.trim().to_string();
+    batch.current_apparatus_key = queue_state::apparatus_search_key(apparatus);
+    batch.current_location = format!("{} olib tashlandi", apparatus.trim());
+    batch.used_by_session_id.clear();
+    batch.used_by_apparatus.clear();
+    batch.payload_json["worker_handoff"] = serde_json::json!(false);
+    batch.payload_json["roll_removed_from_apparatus"] = serde_json::json!(true);
+    batch.payload_json["roll_removed_at_unix"] = serde_json::json!(now);
+    batch.payload_json["roll_removed_finished_goods_meter"] =
+        serde_json::json!(finished_goods_meter);
+    batch.payload_json["roll_removed_finished_goods_kg"] = serde_json::json!(finished_goods_kg);
     sync_wip_payload_fields(&mut batch);
     batch
 }

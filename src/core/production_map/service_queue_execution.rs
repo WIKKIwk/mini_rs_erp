@@ -84,14 +84,35 @@ impl ProductionMapService {
                     .map(|state| (frozen_order_id, state))
             })
             .collect::<Vec<_>>();
-        apply_queue_policy(
-            policy,
-            previous_progress_ready,
-            &sequence,
-            &mut parsed,
-            order_id,
-            action,
-        )?;
+        let remove_roll_from_apparatus =
+            action == queue_state::ApparatusQueueAction::Pause
+                && progress.remove_roll_from_apparatus;
+        if remove_roll_from_apparatus {
+            if !apparatus::is_laminatsiya_title(&storage_key)
+                || from_state != queue_state::ApparatusQueueOrderState::Paused
+            {
+                return Err(ProductionMapError::QueueActionNotAllowed);
+            }
+            if policy == ApparatusQueuePolicy::StrictSequence
+                && queue_state::first_actionable_order_id(&sequence, &parsed).as_deref()
+                    != Some(order_id)
+            {
+                return Err(ProductionMapError::QueueActionNotAllowed);
+            }
+            parsed.insert(
+                order_id.to_string(),
+                queue_state::ApparatusQueueOrderState::Paused,
+            );
+        } else {
+            apply_queue_policy(
+                policy,
+                previous_progress_ready,
+                &sequence,
+                &mut parsed,
+                order_id,
+                action,
+            )?;
+        }
         parsed.extend(frozen_queue_states);
         if matches!(
             action,
@@ -119,6 +140,31 @@ impl ProductionMapService {
             sequence: &sequence,
             visible_order_ids: &visible_order_ids,
         });
+        let mut progress = progress;
+        if progress.worker_handoff {
+            event.payload_json["worker_handoff"] = serde_json::json!(true);
+        }
+        if progress.remove_roll_from_apparatus {
+            event.payload_json["roll_removed_from_apparatus"] = serde_json::json!(true);
+        }
+        if action == queue_state::ApparatusQueueAction::Complete
+            && apparatus::is_laminatsiya_title(&storage_key)
+            && !progress.force_full_completion_metrics
+        {
+            let input_batch_id = self
+                .completion_input_batch_id(apparatus, order_id, &progress)
+                .await?;
+            progress.allow_partial_laminatsiya_completion = self
+                .has_unprocessed_previous_wips(
+                    order_id,
+                    order_map,
+                    &storage_key,
+                    &all_states,
+                    &[],
+                    &input_batch_id,
+                )
+                .await?;
+        }
         let progress = self
             .build_progress_records(&storage_key, order_id, order_map, action, &actor, progress)
             .await?;
@@ -129,7 +175,9 @@ impl ProductionMapService {
                     order_id,
                     order_map,
                     &storage_key,
+                    &all_states,
                     &progress.progress_batch_updates,
+                    "",
                 )
                 .await?;
         if has_unprocessed_previous_wips && apparatus::is_rezka_title(&storage_key) {
@@ -195,12 +243,26 @@ impl ProductionMapService {
         order_id: &str,
         order_map: &ProductionMapDefinition,
         apparatus: &str,
+        all_states: &ApparatusQueueStateMap,
         progress_batch_updates: &[OrderProgressBatch],
+        ignored_batch_id: &str,
     ) -> Result<bool, ProductionMapError> {
         let Some(previous_apparatus) = chain::previous_work_stage_station(order_map, apparatus)
         else {
             return Ok(false);
         };
+        let requires_previous_stage_completion = apparatus::is_laminatsiya_title(apparatus)
+            || apparatus::is_rezka_title(apparatus);
+        let previous_stage_completed = all_states.iter().any(|(candidate, states)| {
+            queue_state::apparatus_titles_match(candidate, &previous_apparatus)
+                && states
+                    .get(order_id)
+                    .and_then(|state| queue_state::ApparatusQueueOrderState::parse(state))
+                    == Some(queue_state::ApparatusQueueOrderState::Completed)
+        });
+        if requires_previous_stage_completion && !previous_stage_completed {
+            return Ok(true);
+        }
         let mut batches = self
             .store
             .progress_batches_for_order(order_id)
@@ -222,10 +284,42 @@ impl ProductionMapService {
                     )
             })
             .any(|batch| {
+                if !ignored_batch_id.trim().is_empty()
+                    && batch.batch_id.trim() == ignored_batch_id.trim()
+                {
+                    return false;
+                }
                 batch.wip_status == OrderProgressBatchWipStatus::Waiting
                     || (batch.wip_status == OrderProgressBatchWipStatus::InUse
                         && queue_state::apparatus_titles_match(&batch.used_by_apparatus, apparatus))
             }))
+    }
+
+    async fn completion_input_batch_id(
+        &self,
+        apparatus: &str,
+        order_id: &str,
+        progress: &QueueProgressInput,
+    ) -> Result<String, ProductionMapError> {
+        if !progress.progress_batch_id.trim().is_empty() {
+            return Ok(progress.progress_batch_id.trim().to_string());
+        }
+        if !progress.qr_payload.trim().is_empty() {
+            return Ok(self
+                .store
+                .progress_batch_by_qr(progress.qr_payload.trim())
+                .await?
+                .map(|batch| batch.batch_id)
+                .unwrap_or_default());
+        }
+        let Some(session) = self
+            .store
+            .active_order_run_session(apparatus, order_id)
+            .await?
+        else {
+            return Ok(String::new());
+        };
+        Ok(session_progress_links(&session).batch_id)
     }
 
     pub(crate) async fn commit_prepared_queue_action(

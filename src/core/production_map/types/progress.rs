@@ -349,4 +349,19 @@ pub struct QueueProgressInput {
     pub finished_goods_meter: Option<f64>,
     pub description: String,
     pub returned_paint_report_attached: bool,
+    /// A worker may finish the currently available Laminatsiya WIP while the
+    /// upstream stage is still producing more WIPs. In that case only the
+    /// finished-goods quantities are reported. This flag is computed by the
+    /// queue service; clients can force the full accounting form when they
+    /// intentionally leave an order for another order.
+    pub force_full_completion_metrics: bool,
+    pub allow_partial_laminatsiya_completion: bool,
+    /// Laminatsiya worker is leaving the order while the current roll remains
+    /// in the apparatus. This is a handoff, not a production pause with a
+    /// finished WIP output.
+    pub worker_handoff: bool,
+    /// The worker is removing the unfinished roll from the apparatus after a
+    /// previous worker handed the order off. The roll remains unfinished and
+    /// is put back into waiting WIP.
+    pub remove_roll_from_apparatus: bool,
 }
