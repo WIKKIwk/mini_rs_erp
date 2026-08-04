@@ -22,6 +22,7 @@ pub use production_maps::{
     production_map_capacity, production_map_capacity_downtime,
     production_map_completion_request_decision, production_map_completion_request_decisions,
     production_map_completion_requests, production_map_finished_goods_receive, production_map_live,
+    production_map_laminatsiya_astatka,
     production_map_apparatus_transfer, production_map_move, production_map_move_batch,
     production_map_order_control,
     production_map_progress_qr_history, production_map_progress_qr_lookup,

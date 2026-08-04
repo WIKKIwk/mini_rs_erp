@@ -1422,6 +1422,123 @@ async fn downstream_start_requires_previous_stage_progress_qr() {
 }
 
 #[tokio::test]
+async fn laminatsiya_complete_requires_previous_stage_qr() {
+    let store = std::sync::Arc::new(MemoryProductionMapStore::new());
+    let service = ProductionMapService::new(store.clone());
+    let actor = QueueActionActor {
+        role: "aparatchi".to_string(),
+        ref_: "worker-laminatsiya-complete-without-input".to_string(),
+        display_name: "Laminatsiya Complete Without Input".to_string(),
+    };
+    let order_id = "zakaz-laminatsiya-complete-without-input";
+    let first = "Bosma aparat";
+    let second = "Laminatsiya mashinasi";
+    service
+        .upsert_map(two_stage_map(order_id, first, second))
+        .await
+        .expect("map");
+    store
+        .put_apparatus_queue_states(
+            second,
+            BTreeMap::from([(order_id.to_string(), "in_progress".to_string())]),
+        )
+        .await
+        .expect("in-progress state");
+
+    let result = service
+        .apply_apparatus_queue_action_with_progress(
+            second,
+            order_id,
+            queue_state::ApparatusQueueAction::Complete,
+            &[second.to_string()],
+            actor,
+            QueueProgressInput {
+                produced_qty: Some(10.0),
+                uom: "kg".to_string(),
+                lamination_print_leftover_rolls: Some(0.0),
+                lamination_film_leftover_rolls: Some(0.0),
+                total_waste: Some(0.0),
+                finished_goods_kg: Some(10.0),
+                finished_goods_meter: Some(100.0),
+                ..QueueProgressInput::default()
+            },
+        )
+        .await;
+
+    assert_eq!(result, Err(ProductionMapError::ProgressQrRequired));
+}
+
+#[tokio::test]
+async fn laminatsiya_astatka_uses_order_timeline_and_previous_report_anchor() {
+    let store = std::sync::Arc::new(MemoryProductionMapStore::new());
+    let service = ProductionMapService::new(store.clone());
+    let actor = QueueActionActor {
+        role: "aparatchi".to_string(),
+        ref_: "worker-laminatsiya-astatka".to_string(),
+        display_name: "Laminatsiya Astatka Worker".to_string(),
+    };
+    let order_id = "zakaz-laminatsiya-astatka";
+    let apparatus = "Laminatsiya mashinasi";
+    service
+        .upsert_map(two_stage_map(order_id, "Bosma aparat", apparatus))
+        .await
+        .expect("map");
+    store
+        .put_order_run_session(OrderRunSession {
+            session_id: "session-laminatsiya-astatka".to_string(),
+            apparatus: apparatus.to_string(),
+            order_id: order_id.to_string(),
+            status: OrderRunStatus::Active,
+            worker_role: actor.role.clone(),
+            worker_ref: actor.ref_.clone(),
+            worker_display_name: actor.display_name.clone(),
+            started_at_unix: 100,
+            updated_at_unix: 100,
+            payload_json: serde_json::json!({}),
+        })
+        .await
+        .expect("session");
+
+    let first = service
+        .record_laminatsiya_astatka(
+            apparatus,
+            order_id,
+            actor.clone(),
+            Some(1.0),
+            Some(2.0),
+            Some(0.5),
+            "birinchi astatka",
+        )
+        .await
+        .expect("first astatka");
+    assert_eq!(first.from_at_unix, 100);
+    assert_eq!(first.lamination_print_leftover_rolls, 1.0);
+
+    let second = service
+        .record_laminatsiya_astatka(
+            apparatus,
+            order_id,
+            actor,
+            Some(0.0),
+            Some(0.0),
+            Some(0.0),
+            "ikkinchi astatka",
+        )
+        .await
+        .expect("second astatka");
+    assert_eq!(second.from_at_unix, first.to_at_unix);
+    assert!(second.to_at_unix >= second.from_at_unix);
+    assert_eq!(
+        store
+            .laminatsiya_astatka_reports_for_order(order_id)
+            .await
+            .expect("reports")
+            .len(),
+        2
+    );
+}
+
+#[tokio::test]
 async fn downstream_start_rejects_previous_stage_qr_after_resume() {
     let service = ProductionMapService::new(std::sync::Arc::new(MemoryProductionMapStore::new()));
     let actor = QueueActionActor {

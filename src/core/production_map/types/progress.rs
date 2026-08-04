@@ -215,6 +215,24 @@ pub struct OrderProgressEvent {
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct LaminatsiyaAstatkaReport {
+    pub report_id: String,
+    pub order_id: String,
+    pub apparatus: String,
+    pub from_at_unix: i64,
+    pub to_at_unix: i64,
+    pub lamination_print_leftover_rolls: f64,
+    pub lamination_film_leftover_rolls: f64,
+    pub total_waste: f64,
+    pub worker_role: String,
+    pub worker_ref: String,
+    pub worker_display_name: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub description: String,
+    pub created_at_unix: i64,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct OrderProgressBatch {
     pub batch_id: String,
     pub session_id: String,

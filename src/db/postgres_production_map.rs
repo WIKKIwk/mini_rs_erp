@@ -9,6 +9,7 @@ use crate::core::production_map::{
     CompletionRequestNotification, CompletionRequestStateResolution, FinishedGoodsStockEntry,
     ApparatusCapacityProfile, ApparatusDowntime, ApparatusScheduleCancelRequest,
     ApparatusScheduleReservation, OrderControlRecord, OrderProgressBatch, OrderProgressEvent, OrderRunSession,
+    LaminatsiyaAstatkaReport,
     ProductionMapApparatusTransferRecord, ProductionMapApparatusTransferWrite,
     ProductionMapDefinition, ProductionMapError, ProductionMapStorePort, ProductionOrderLogEntry,
     QueueActionActor, QueueActionProgressWrite, QueueActionProgressWriteResult,
@@ -18,6 +19,7 @@ use crate::core::production_map::{
 use crate::core::qolip::QolipError;
 
 mod catalog_helpers;
+mod astatka_helpers;
 mod capacity_helpers;
 mod completion_helpers;
 mod map_helpers;
@@ -34,6 +36,9 @@ mod wip_query_helpers;
 use self::catalog_helpers::{
     delete_map_by_id, load_apparatus_queue_policies, load_apparatus_queue_states,
     load_apparatus_sequences, load_maps, save_apparatus_queue_policy, save_apparatus_sequence,
+};
+use self::astatka_helpers::{
+    load_laminatsiya_astatka_reports_for_order, put_laminatsiya_astatka_report,
 };
 use self::capacity_helpers::{
     cancel_apparatus_schedule_reservation, load_apparatus_capacity_profiles,
@@ -399,6 +404,20 @@ impl ProductionMapStorePort for PostgresProductionMapStore {
         order_id: &str,
     ) -> Result<Vec<OrderRunSession>, ProductionMapError> {
         load_order_run_sessions_for_order(&self.pool, order_id).await
+    }
+
+    async fn laminatsiya_astatka_reports_for_order(
+        &self,
+        order_id: &str,
+    ) -> Result<Vec<LaminatsiyaAstatkaReport>, ProductionMapError> {
+        load_laminatsiya_astatka_reports_for_order(&self.pool, order_id).await
+    }
+
+    async fn put_laminatsiya_astatka_report(
+        &self,
+        report: LaminatsiyaAstatkaReport,
+    ) -> Result<(), ProductionMapError> {
+        put_laminatsiya_astatka_report(&self.pool, &report).await
     }
 
     async fn order_run_sessions_for_audit(

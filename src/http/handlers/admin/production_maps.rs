@@ -20,6 +20,7 @@ use crate::core::production_map::{
 use crate::google_sheets::is_sheet_order_map;
 
 mod completion;
+mod astatka;
 mod helpers;
 mod move_run;
 mod order_control;
@@ -37,6 +38,7 @@ pub use self::completion::{
     production_map_completion_request_decision, production_map_completion_request_decisions,
     production_map_completion_requests, production_map_live,
 };
+pub use self::astatka::production_map_laminatsiya_astatka;
 use self::helpers::*;
 pub use self::move_run::{
     production_map_apparatus_transfer, production_map_move, production_map_move_batch,

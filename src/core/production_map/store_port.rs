@@ -277,6 +277,18 @@ pub trait ProductionMapStorePort: Send + Sync {
     async fn order_run_sessions_for_audit(&self) -> StoreResult<Vec<OrderRunSession>> {
         Ok(Vec::new())
     }
+    async fn laminatsiya_astatka_reports_for_order(
+        &self,
+        _order_id: &str,
+    ) -> StoreResult<Vec<LaminatsiyaAstatkaReport>> {
+        Ok(Vec::new())
+    }
+    async fn put_laminatsiya_astatka_report(
+        &self,
+        _report: LaminatsiyaAstatkaReport,
+    ) -> StoreResult<()> {
+        Ok(())
+    }
     async fn progress_batch(&self, _batch_id: &str) -> StoreResult<Option<OrderProgressBatch>> {
         Ok(None)
     }

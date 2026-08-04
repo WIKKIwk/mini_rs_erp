@@ -14,6 +14,7 @@ mod progress;
 pub mod queue_state;
 mod service;
 mod service_audit;
+mod service_astatka;
 mod service_completion;
 mod service_capacity;
 mod service_capacity_scheduler;

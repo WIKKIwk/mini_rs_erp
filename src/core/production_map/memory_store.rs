@@ -313,6 +313,38 @@ impl ProductionMapStorePort for MemoryProductionMapStore {
         runs::order_run_sessions_for_order(self, order_id).await
     }
 
+    async fn laminatsiya_astatka_reports_for_order(
+        &self,
+        order_id: &str,
+    ) -> Result<Vec<LaminatsiyaAstatkaReport>, ProductionMapError> {
+        let order_id = order_id.trim();
+        let mut reports = self
+            .laminatsiya_astatka_reports
+            .read()
+            .await
+            .iter()
+            .filter(|report| report.order_id.trim().eq_ignore_ascii_case(order_id))
+            .cloned()
+            .collect::<Vec<_>>();
+        reports.sort_by(|left, right| {
+            left.to_at_unix
+                .cmp(&right.to_at_unix)
+                .then_with(|| left.created_at_unix.cmp(&right.created_at_unix))
+                .then_with(|| left.report_id.cmp(&right.report_id))
+        });
+        Ok(reports)
+    }
+
+    async fn put_laminatsiya_astatka_report(
+        &self,
+        report: LaminatsiyaAstatkaReport,
+    ) -> Result<(), ProductionMapError> {
+        let mut reports = self.laminatsiya_astatka_reports.write().await;
+        reports.retain(|existing| existing.report_id != report.report_id);
+        reports.push(report);
+        Ok(())
+    }
+
     async fn order_run_sessions_for_audit(
         &self,
     ) -> Result<Vec<OrderRunSession>, ProductionMapError> {
