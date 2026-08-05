@@ -430,7 +430,7 @@ async fn complete_after_wip_start_does_not_reuse_input_qr_as_output_qr() {
     assert_eq!(completed_status, StatusCode::OK, "{completed_body:?}");
     assert_eq!(
         completed_body["states"]["zakaz-wip-complete-qr"],
-        "completed"
+        "pending"
     );
     assert_ne!(completed_body["progress_batch"]["qr_payload"], input_qr);
 }

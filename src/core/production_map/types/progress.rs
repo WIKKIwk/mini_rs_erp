@@ -233,6 +233,25 @@ pub struct LaminatsiyaAstatkaReport {
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct RezkaAstatkaReport {
+    pub report_id: String,
+    pub order_id: String,
+    pub apparatus: String,
+    pub from_at_unix: i64,
+    pub to_at_unix: i64,
+    pub total_waste: f64,
+    pub rezka_bosma_waste: f64,
+    pub rezka_lamination_waste: f64,
+    pub rezka_edge_waste: f64,
+    pub worker_role: String,
+    pub worker_ref: String,
+    pub worker_display_name: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub description: String,
+    pub created_at_unix: i64,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct OrderProgressBatch {
     pub batch_id: String,
     pub session_id: String,
@@ -367,13 +386,13 @@ pub struct QueueProgressInput {
     pub finished_goods_meter: Option<f64>,
     pub description: String,
     pub returned_paint_report_attached: bool,
-    /// A worker may finish the currently available Laminatsiya WIP while the
-    /// upstream stage is still producing more WIPs. In that case only the
-    /// finished-goods quantities are reported. This flag is computed by the
-    /// queue service; clients can force the full accounting form when they
-    /// intentionally leave an order for another order.
+    /// A worker may finish the currently available Laminatsiya or Rezka WIP
+    /// while the upstream stage is still producing more WIPs. In that case
+    /// only the finished-goods quantities are reported. This flag is computed
+    /// by the queue service; clients can force the full accounting form when
+    /// they intentionally leave an order for another order.
     pub force_full_completion_metrics: bool,
-    pub allow_partial_laminatsiya_completion: bool,
+    pub allow_partial_station_completion: bool,
     /// Laminatsiya worker is leaving the order while the current roll remains
     /// in the apparatus. This is a handoff, not a production pause with a
     /// finished WIP output.

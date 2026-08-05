@@ -28,41 +28,42 @@ pub(super) fn validated_progress_metrics(
     let is_rezka = apparatus::is_rezka_title(apparatus);
     let is_laminatsiya = apparatus::is_laminatsiya_title(apparatus);
     let is_pechat = pechat::is_pechat_apparatus(apparatus);
-    let allow_partial_laminatsiya_completion =
-        is_laminatsiya && is_complete && progress.allow_partial_laminatsiya_completion;
+    let allow_partial_station_completion = (is_laminatsiya || is_rezka)
+        && is_complete
+        && progress.allow_partial_station_completion;
     let metrics = ProgressMetrics {
         return_ink_kg: if is_complete {
             valid_optional_progress_qty(progress.return_ink_kg)?
         } else {
             None
         },
-        lamination_print_leftover_rolls: if is_complete && !allow_partial_laminatsiya_completion {
+        lamination_print_leftover_rolls: if is_complete && !allow_partial_station_completion {
             valid_optional_progress_qty(progress.lamination_print_leftover_rolls)?
         } else {
             None
         },
-        lamination_film_leftover_rolls: if is_complete && !allow_partial_laminatsiya_completion {
+        lamination_film_leftover_rolls: if is_complete && !allow_partial_station_completion {
             valid_optional_progress_qty(progress.lamination_film_leftover_rolls)?
         } else {
             None
         },
-        rezka_bosma_waste: if is_complete {
+        rezka_bosma_waste: if is_complete && !allow_partial_station_completion {
             valid_optional_progress_qty(progress.rezka_bosma_waste)?
         } else {
             None
         },
-        rezka_lamination_waste: if is_complete {
+        rezka_lamination_waste: if is_complete && !allow_partial_station_completion {
             valid_optional_progress_qty(progress.rezka_lamination_waste)?
         } else {
             None
         },
-        rezka_edge_waste: if is_complete {
+        rezka_edge_waste: if is_complete && !allow_partial_station_completion {
             valid_optional_progress_qty(progress.rezka_edge_waste)?
         } else {
             None
         },
         total_waste: if (is_rezka || is_laminatsiya || is_pechat)
-            && (!is_complete || allow_partial_laminatsiya_completion)
+            && (!is_complete || allow_partial_station_completion)
         {
             None
         } else {
@@ -88,7 +89,7 @@ pub(super) fn validated_progress_metrics(
         rezka_gross_qty,
         metrics,
         progress.returned_paint_report_attached,
-        allow_partial_laminatsiya_completion,
+        allow_partial_station_completion,
     )?;
     Ok(metrics)
 }
@@ -158,7 +159,7 @@ fn validate_progress_metrics(
     rezka_gross_qty: Option<f64>,
     metrics: ProgressMetrics,
     returned_paint_report_attached: bool,
-    allow_partial_laminatsiya_completion: bool,
+    allow_partial_station_completion: bool,
 ) -> Result<(), ProductionMapError> {
     let is_complete = action == queue_state::ApparatusQueueAction::Complete;
     let is_rezka = apparatus::is_rezka_title(apparatus);
@@ -179,7 +180,7 @@ fn validate_progress_metrics(
     }
     if is_complete
         && apparatus::is_laminatsiya_title(apparatus)
-        && !allow_partial_laminatsiya_completion
+        && !allow_partial_station_completion
         && !laminatsiya_completion_metrics_are_complete(
             metrics.lamination_print_leftover_rolls,
             metrics.lamination_film_leftover_rolls,
@@ -192,12 +193,13 @@ fn validate_progress_metrics(
     }
     if is_complete
         && apparatus::is_laminatsiya_title(apparatus)
-        && allow_partial_laminatsiya_completion
+        && allow_partial_station_completion
         && (metrics.finished_goods_kg.is_none() || metrics.finished_goods_meter.is_none())
     {
         return Err(ProductionMapError::LaminatsiyaCompletionMetricsRequired);
     }
     let missing_rezka_waste = is_complete
+        && !allow_partial_station_completion
         && !rezka_progress_metrics_are_complete(
             metrics.total_waste,
             metrics.rezka_bosma_waste,

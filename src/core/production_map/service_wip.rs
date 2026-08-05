@@ -3,6 +3,7 @@ use std::collections::BTreeMap;
 use super::*;
 
 use super::progress::unix_seconds;
+use super::service_progress_support::normalize_self_consumed_wip_history;
 use super::service_queue_support::*;
 
 impl ProductionMapService {
@@ -17,6 +18,7 @@ impl ProductionMapService {
         let order_id = scanned_batch.order_id.trim().to_string();
         let order = self.raw_map(&order_id).await?;
         let mut progress_batches = self.store.progress_batches_for_order(&order_id).await?;
+        normalize_self_consumed_wip_history(&mut progress_batches);
         for batch in &mut progress_batches {
             batch.refresh_status_detail();
         }
@@ -145,7 +147,29 @@ impl ProductionMapService {
         &self,
         query: WipProgressBatchQuery,
     ) -> Result<Vec<OrderProgressBatch>, ProductionMapError> {
-        let mut batches = self.store.wip_progress_batches(query).await?;
+        let requested_status = query.status;
+        let include_processed = query.include_processed;
+        let requested_limit = query.limit;
+        let mut store_query = query;
+        if !include_processed
+            && requested_status.is_none_or(|status| {
+                status == OrderProgressBatchWipStatus::Waiting
+            })
+        {
+            store_query.status = None;
+            store_query.include_processed = true;
+            store_query.limit = 500;
+        }
+        let mut batches = self.store.wip_progress_batches(store_query).await?;
+        normalize_self_consumed_wip_history(&mut batches);
+        if !include_processed {
+            batches.retain(|batch| {
+                requested_status.map_or(
+                    batch.wip_status != OrderProgressBatchWipStatus::Processed,
+                    |status| batch.wip_status == status,
+                )
+            });
+        }
         if batches.iter().any(progress_batch_needs_location_repair) {
             let maps_by_id = self
                 .store
@@ -159,6 +183,7 @@ impl ProductionMapService {
         for batch in &mut batches {
             batch.refresh_status_detail();
         }
+        batches.truncate(requested_limit.min(500));
         Ok(batches)
     }
 }

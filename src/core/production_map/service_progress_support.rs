@@ -603,14 +603,19 @@ pub(super) fn resumed_batch_payload(
     payload
 }
 
-pub(super) fn resumed_session_payload(batch: &OrderProgressBatch) -> serde_json::Value {
-    serde_json::json!({
-        "resumed_batch_id": batch.batch_id,
-        "resumed_qr_payload": batch.qr_payload,
-        "input_progress_batch_id": batch.batch_id,
-        "input_progress_qr_payload": batch.qr_payload,
-        "input_progress_apparatus": batch.apparatus,
-    })
+pub(super) fn resumed_session_payload(
+    current: &OrderRunSession,
+    output_batch: &OrderProgressBatch,
+    resumed_without_progress_qr: bool,
+) -> serde_json::Value {
+    let mut payload = current.payload_json.clone();
+    if !payload.is_object() {
+        payload = serde_json::json!({});
+    }
+    payload["resumed_batch_id"] = serde_json::json!(output_batch.batch_id);
+    payload["resumed_qr_payload"] = serde_json::json!(output_batch.qr_payload);
+    payload["resumed_without_progress_qr"] = serde_json::json!(resumed_without_progress_qr);
+    preserve_qolip_code(current, payload)
 }
 
 pub(super) fn resume_event_payload() -> serde_json::Value {
@@ -623,6 +628,7 @@ pub(super) fn wip_batch_in_use(
     session_id: &str,
     now: i64,
 ) -> OrderProgressBatch {
+    clear_wip_processing_fields(&mut batch);
     batch.wip_status = OrderProgressBatchWipStatus::InUse;
     batch.current_apparatus = apparatus.trim().to_string();
     batch.current_apparatus_key = queue_state::apparatus_search_key(apparatus);
@@ -630,6 +636,88 @@ pub(super) fn wip_batch_in_use(
     batch.used_by_session_id = session_id.trim().to_string();
     batch.used_by_apparatus = apparatus.trim().to_string();
     batch.payload_json["wip_in_use_at_unix"] = serde_json::json!(now);
+    sync_wip_payload_fields(&mut batch);
+    batch
+}
+
+pub(super) fn wip_batch_was_consumed_by_producer(batch: &OrderProgressBatch) -> bool {
+    batch.action == queue_state::ApparatusQueueAction::Pause
+        && batch.wip_status == OrderProgressBatchWipStatus::Processed
+        && queue_state::apparatus_titles_match(&batch.processed_by_apparatus, &batch.apparatus)
+        && (batch.used_by_apparatus.trim().is_empty()
+            || queue_state::apparatus_titles_match(&batch.used_by_apparatus, &batch.apparatus))
+        && (batch.processed_by_session_id.trim().is_empty()
+            || batch.processed_by_session_id.trim() == batch.session_id.trim())
+}
+
+pub(super) fn restore_self_consumed_wip(batch: &mut OrderProgressBatch) -> bool {
+    if !wip_batch_was_consumed_by_producer(batch) {
+        return false;
+    }
+    clear_wip_usage_fields(batch);
+    batch.wip_status = OrderProgressBatchWipStatus::Waiting;
+    batch.current_apparatus = batch.apparatus.trim().to_string();
+    batch.current_apparatus_key = queue_state::apparatus_search_key(&batch.apparatus);
+    batch.current_location = wip_waiting_location(&batch.apparatus);
+    if !batch.payload_json.is_object() {
+        batch.payload_json = serde_json::json!({});
+    }
+    batch.payload_json["recovered_self_consumed_wip"] = serde_json::json!(true);
+    sync_wip_payload_fields(batch);
+    true
+}
+
+pub(super) fn normalize_self_consumed_wip_history(batches: &mut [OrderProgressBatch]) {
+    let recovered_parents = batches
+        .iter()
+        .filter(|batch| wip_batch_was_consumed_by_producer(batch))
+        .cloned()
+        .collect::<Vec<_>>();
+    for batch in batches.iter_mut() {
+        for parent in &recovered_parents {
+            if repair_self_consumed_sibling_lineage(batch, parent) {
+                break;
+            }
+        }
+    }
+    for batch in batches {
+        restore_self_consumed_wip(batch);
+    }
+}
+
+pub(super) fn repair_self_consumed_sibling_lineage(
+    batch: &mut OrderProgressBatch,
+    recovered_parent: &OrderProgressBatch,
+) -> bool {
+    if batch.parent_batch_id.trim() != recovered_parent.batch_id.trim()
+        || batch.session_id.trim() != recovered_parent.session_id.trim()
+        || !queue_state::apparatus_titles_match(&batch.apparatus, &recovered_parent.apparatus)
+    {
+        return false;
+    }
+    batch.parent_batch_id.clear();
+    if !batch.payload_json.is_object() {
+        batch.payload_json = serde_json::json!({});
+    }
+    batch.payload_json["recovered_sibling_lineage"] = serde_json::json!(true);
+    sync_wip_payload_fields(batch);
+    true
+}
+
+pub(super) fn restore_misbound_output_wip(
+    mut batch: OrderProgressBatch,
+    now: i64,
+) -> OrderProgressBatch {
+    clear_wip_usage_fields(&mut batch);
+    batch.wip_status = OrderProgressBatchWipStatus::Waiting;
+    batch.current_apparatus = batch.apparatus.trim().to_string();
+    batch.current_apparatus_key = queue_state::apparatus_search_key(&batch.apparatus);
+    batch.current_location = wip_waiting_location(&batch.apparatus);
+    if !batch.payload_json.is_object() {
+        batch.payload_json = serde_json::json!({});
+    }
+    batch.payload_json["recovered_output_input_confusion"] = serde_json::json!(true);
+    batch.payload_json["recovered_at_unix"] = serde_json::json!(now);
     sync_wip_payload_fields(&mut batch);
     batch
 }
@@ -724,6 +812,23 @@ pub(super) fn sync_wip_payload_fields(batch: &mut OrderProgressBatch) {
         serde_json::json!(batch.processed_by_session_id);
     batch.payload_json["processed_by_apparatus"] = serde_json::json!(batch.processed_by_apparatus);
     batch.payload_json["from_apparatus"] = serde_json::json!(batch.apparatus);
+}
+
+fn clear_wip_processing_fields(batch: &mut OrderProgressBatch) {
+    batch.processed_by_session_id.clear();
+    batch.processed_by_apparatus.clear();
+    if let Some(payload) = batch.payload_json.as_object_mut() {
+        payload.remove("wip_processed_at_unix");
+    }
+}
+
+fn clear_wip_usage_fields(batch: &mut OrderProgressBatch) {
+    batch.used_by_session_id.clear();
+    batch.used_by_apparatus.clear();
+    clear_wip_processing_fields(batch);
+    if let Some(payload) = batch.payload_json.as_object_mut() {
+        payload.remove("wip_in_use_at_unix");
+    }
 }
 
 fn wip_waiting_location(apparatus: &str) -> String {

@@ -359,6 +359,9 @@ pub(super) fn production_map_error(error: ProductionMapError) -> AdminError {
         ProductionMapError::LaminatsiyaAstatkaMetricsRequired => {
             bad_request("laminatsiya_astatka_metrics_required")
         }
+        ProductionMapError::RezkaAstatkaMetricsRequired => {
+            bad_request("rezka_astatka_metrics_required")
+        }
         ProductionMapError::RezkaProgressMetricsRequired => {
             bad_request("rezka_progress_metrics_required")
         }

@@ -12,7 +12,8 @@ use crate::core::production_map::{
     ApparatusQueuePolicy, ApparatusScheduleCancelRequest, ApparatusScheduleRequest,
     CompletionRequestDecision, MaterialScanProgressAction, OrderProgressBatchWipStatus,
     ProductionMapApparatusTransferRequest, ProductionMapBatchMoveRequest,
-    ProductionMapDefinition, ProductionMapError, ProductionMapMoveRequest, ProductionMapRunRequest,
+    ProductionMapDefinition, ProductionMapError, ProductionMapMoveRequest, ProductionMapNodeKind,
+    ProductionMapRunRequest,
     QueueActionActor, QueueProgressInput, RawMaterialAssignment, RawMaterialAssignmentDeleteInput,
     RawMaterialAssignmentInput, RawMaterialStockTransition, RawMaterialStockTransitionKind,
     WipProgressBatchQuery, queue_state,
@@ -38,7 +39,9 @@ pub use self::completion::{
     production_map_completion_request_decision, production_map_completion_request_decisions,
     production_map_completion_requests, production_map_live,
 };
-pub use self::astatka::production_map_laminatsiya_astatka;
+pub use self::astatka::{
+    production_map_laminatsiya_astatka, production_map_rezka_astatka,
+};
 use self::helpers::*;
 pub use self::move_run::{
     production_map_apparatus_transfer, production_map_move, production_map_move_batch,
@@ -342,6 +345,12 @@ pub async fn production_map_save_with_order(
         .raw_map(&map_id)
         .await
         .map_err(production_map_error)?;
+    if previous.is_none()
+        && is_sheet_order_map(&input.map)
+        && let Some(template) = input.template.as_ref()
+    {
+        apply_order_rezka_kadr_count(&mut input.map, template);
+    }
     let previous_template_map = match &template_map_id {
         Some(template_map_id) => state
             .production_maps

@@ -125,6 +125,7 @@ async fn laminatsiya_complete_requires_or_persists_completion_metrics() {
         completed_body["progress_event"]["lamination_film_leftover_rolls"],
         3.5
     );
+    wait_for_progress_print_request_count(&print_requests, 1).await;
     let printed = print_requests.lock().await;
     assert_eq!(printed.len(), 1);
     assert_eq!(printed[0].gross_qty, 14.75);
@@ -443,9 +444,13 @@ async fn laminatsiya_complete_keeps_state_successful_when_progress_print_fails()
         "completed"
     );
     assert_eq!(completed_body["progress_batch"]["status"], "completed");
-    assert_eq!(completed_body["print"]["ok"], false);
-    assert_eq!(completed_body["print"]["status"], "failed");
-    assert_eq!(completed_body["print"]["error"], "printer offline");
+    assert_eq!(completed_body["print"]["ok"], true);
+    assert_eq!(completed_body["print"]["status"], "queued");
+    assert_eq!(
+        completed_body["print"]["printer_status"],
+        "server_print_queued"
+    );
+    wait_for_progress_print_request_count(&print_requests, 1).await;
     assert_eq!(print_requests.lock().await.len(), 1);
 }
 

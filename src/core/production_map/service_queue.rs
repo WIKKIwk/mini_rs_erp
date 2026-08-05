@@ -12,7 +12,9 @@ use super::progress::{
     required_apparatus_for_closed_order,
 };
 use super::service::ClaimedAlternativeMapUpdate;
-use super::service_progress_support::session_progress_links;
+use super::service_progress_support::{
+    session_progress_links, wip_batch_was_consumed_by_producer,
+};
 use super::service_queue_support::*;
 use super::store_port::ApparatusQueueStateMap;
 
@@ -389,6 +391,13 @@ impl ProductionMapService {
                                 allowed_actions.push(queue_state::ApparatusQueueAction::Pause);
                             }
                             if control == OrderControlState::Active {
+                                let current_input_batch_id = self
+                                    .completion_input_batch_id(
+                                        &storage_key,
+                                        order_id.trim(),
+                                        &QueueProgressInput::default(),
+                                    )
+                                    .await?;
                                 let has_unprocessed_previous_wips =
                                     self.has_unprocessed_previous_wips(
                                         order_id.trim(),
@@ -396,20 +405,14 @@ impl ProductionMapService {
                                         &storage_key,
                                         &all_states,
                                         &[],
-                                        "",
+                                        &current_input_batch_id,
                                     )
                                     .await?;
-                                if apparatus::is_rezka_title(&storage_key)
-                                    && has_unprocessed_previous_wips
-                                {
-                                    allowed_actions
-                                        .push(queue_state::ApparatusQueueAction::RollComplete);
-                                } else {
-                                    allowed_actions
-                                        .push(queue_state::ApparatusQueueAction::Complete);
-                                }
+                                allowed_actions
+                                    .push(queue_state::ApparatusQueueAction::Complete);
                                 complete_requires_full_report =
-                                    !apparatus::is_laminatsiya_title(&storage_key)
+                                    !(apparatus::is_laminatsiya_title(&storage_key)
+                                        || apparatus::is_rezka_title(&storage_key))
                                         || !has_unprocessed_previous_wips;
                             }
                         }

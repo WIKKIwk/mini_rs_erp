@@ -122,6 +122,10 @@ pub(super) fn routes() -> Router<AppState> {
             any(admin::production_map_laminatsiya_astatka),
         )
         .route(
+            "/v1/mobile/admin/production-maps/rezka-astatka",
+            any(admin::production_map_rezka_astatka),
+        )
+        .route(
             "/v1/mobile/admin/production-maps/order-control",
             post(admin::production_map_order_control),
         )

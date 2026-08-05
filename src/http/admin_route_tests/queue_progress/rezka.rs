@@ -138,8 +138,12 @@ async fn rezka_complete_requires_or_persists_progress_metrics() {
     );
     assert_eq!(completed_body["progress_batch"]["rezka_edge_waste"], 0.75);
     assert_eq!(completed_body["progress_event"]["rezka_edge_waste"], 0.75);
-    assert_eq!(completed_body["progress_batches"].as_array().unwrap().len(), 4);
+    assert_eq!(
+        completed_body["progress_batches"].as_array().unwrap().len(),
+        4
+    );
     assert_eq!(completed_body["prints"].as_array().unwrap().len(), 4);
+    wait_for_progress_print_request_count(&print_requests, 4).await;
     let printed = print_requests.lock().await;
     assert_eq!(printed.len(), 4);
     assert_eq!(printed[0].gross_qty, 32.0);
@@ -305,17 +309,28 @@ async fn rezka_pause_records_quantities_without_waste_and_fans_out_frames() {
         .expect("roll complete after resume");
     let roll_completed_status = roll_completed.status();
     let roll_completed_body = json_body(roll_completed).await;
-    assert_eq!(roll_completed_status, StatusCode::OK, "{roll_completed_body:?}");
+    assert_eq!(
+        roll_completed_status,
+        StatusCode::OK,
+        "{roll_completed_body:?}"
+    );
     assert_eq!(
         roll_completed_body["states"]["zakaz-rezka-pause"],
         "in_progress"
     );
-    assert_eq!(roll_completed_body["progress_batch"]["action"], "roll_complete");
     assert_eq!(
-        roll_completed_body["progress_batches"].as_array().unwrap().len(),
+        roll_completed_body["progress_batch"]["action"],
+        "roll_complete"
+    );
+    assert_eq!(
+        roll_completed_body["progress_batches"]
+            .as_array()
+            .unwrap()
+            .len(),
         4
     );
     assert_eq!(roll_completed_body["prints"].as_array().unwrap().len(), 4);
+    wait_for_progress_print_request_count(&print_requests, 8).await;
     let printed = print_requests.lock().await;
     assert_eq!(printed.len(), 8);
 }
@@ -340,12 +355,8 @@ async fn rezka_consumes_laminatsiya_wip_and_creates_distinct_frame_wips() {
         .await
         .expect("assignment");
     let admin_token = session(&state, PrincipalRole::Admin).await;
-    let worker_token = session_for(
-        &state,
-        PrincipalRole::Aparatchi,
-        "worker-rezka-wip-fanout",
-    )
-    .await;
+    let worker_token =
+        session_for(&state, PrincipalRole::Aparatchi, "worker-rezka-wip-fanout").await;
     let router = build_router(state);
 
     let map = serde_json::json!({
@@ -443,7 +454,7 @@ async fn rezka_consumes_laminatsiya_wip_and_creates_distinct_frame_wips() {
         .expect("resume laminatsiya");
     assert_eq!(laminatsiya_resumed.status(), StatusCode::OK);
 
-    let second_laminatsiya_paused = router
+    let second_laminatsiya_completed = router
         .clone()
         .oneshot(request_with_body(
             "POST",
@@ -452,23 +463,28 @@ async fn rezka_consumes_laminatsiya_wip_and_creates_distinct_frame_wips() {
             r#"{
                 "apparatus":"Laminatsiya",
                 "order_id":"zakaz-rezka-wip-fanout",
-                "action":"pause",
-                "produced_qty":80,
+                "action":"complete",
+                "finished_goods_meter":80,
+                "finished_goods_kg":10,
+                "lamination_film_leftover_rolls":1,
+                "total_waste":1,
                 "uom":"m"
             }"#,
         ))
         .await
-        .expect("pause second laminatsiya roll");
-    assert_eq!(second_laminatsiya_paused.status(), StatusCode::OK);
-    let second_laminatsiya_paused_body = json_body(second_laminatsiya_paused).await;
-    let second_source_batch_id = second_laminatsiya_paused_body["progress_batch"]["batch_id"]
+        .expect("complete final laminatsiya roll");
+    assert_eq!(second_laminatsiya_completed.status(), StatusCode::OK);
+    let second_laminatsiya_completed_body = json_body(second_laminatsiya_completed).await;
+    let second_source_batch_id = second_laminatsiya_completed_body["progress_batch"]["batch_id"]
         .as_str()
         .expect("second source batch id")
         .to_string();
-    let second_source_qr = second_laminatsiya_paused_body["progress_batch"]["qr_payload"]
+    let second_source_qr = second_laminatsiya_completed_body["progress_batch"]["qr_payload"]
         .as_str()
         .expect("second source qr")
         .to_string();
+    wait_for_progress_print_request_count(&print_requests, 2).await;
+    let print_request_count_before_rezka = print_requests.lock().await.len();
 
     let rezka_started = router
         .clone()
@@ -485,11 +501,34 @@ async fn rezka_consumes_laminatsiya_wip_and_creates_distinct_frame_wips() {
                 }}"#
             ),
         ))
-    .await
+        .await
         .expect("start rezka from laminatsiya wip");
     assert_eq!(rezka_started.status(), StatusCode::OK);
 
-    let premature_roll_switch = router
+    let queue_snapshot = router
+        .clone()
+        .oneshot(request(
+            "GET",
+            "/v1/mobile/admin/production-maps/sequence",
+            &admin_token,
+        ))
+        .await
+        .expect("rezka queue controls");
+    let queue_snapshot_body = json_body(queue_snapshot).await;
+    let action_control =
+        &queue_snapshot_body["queue_action_controls"]["Rezka"]["zakaz-rezka-wip-fanout"];
+    let allowed_actions = action_control["allowed_actions"]
+        .as_array()
+        .expect("allowed rezka actions");
+    assert!(allowed_actions.iter().any(|action| action == "complete"));
+    assert!(
+        !allowed_actions
+            .iter()
+            .any(|action| action == "roll_complete")
+    );
+    assert_eq!(action_control["complete_requires_full_report"], false);
+
+    let premature_source_switch = router
         .clone()
         .oneshot(request_with_body(
             "POST",
@@ -499,7 +538,7 @@ async fn rezka_consumes_laminatsiya_wip_and_creates_distinct_frame_wips() {
                 r#"{{
                     "apparatus":"Rezka",
                     "order_id":"zakaz-rezka-wip-fanout",
-                    "action":"roll_complete",
+                    "action":"complete",
                     "produced_qty":90,
                     "gross_qty":11,
                     "uom":"m",
@@ -509,13 +548,13 @@ async fn rezka_consumes_laminatsiya_wip_and_creates_distinct_frame_wips() {
         ))
         .await
         .expect("reject switching active rezka source");
-    assert_eq!(premature_roll_switch.status(), StatusCode::BAD_REQUEST);
+    assert_eq!(premature_source_switch.status(), StatusCode::BAD_REQUEST);
     assert_eq!(
-        json_body(premature_roll_switch).await["error"],
+        json_body(premature_source_switch).await["error"],
         "progress_batch_not_accepted"
     );
 
-    let premature_complete = router
+    let partially_completed = router
         .clone()
         .oneshot(request_with_body(
             "POST",
@@ -530,53 +569,33 @@ async fn rezka_consumes_laminatsiya_wip_and_creates_distinct_frame_wips() {
                     "gross_qty":11,
                     "uom":"m",
                     "qr_payload":"{source_qr}",
-                    "total_waste":1
-                }}"#
-            ),
-        ))
-        .await
-        .expect("reject premature rezka complete");
-    assert_eq!(premature_complete.status(), StatusCode::BAD_REQUEST);
-    assert_eq!(
-        json_body(premature_complete).await["error"],
-        "rezka_final_roll_required"
-    );
-
-    let roll_completed = router
-        .clone()
-        .oneshot(request_with_body(
-            "POST",
-            "/v1/mobile/admin/production-maps/queue-action",
-            &worker_token,
-            &format!(
-                r#"{{
-                    "apparatus":"Rezka",
-                    "order_id":"zakaz-rezka-wip-fanout",
-                    "action":"roll_complete",
-                    "produced_qty":90,
-                    "gross_qty":11,
-                    "uom":"m",
-                    "qr_payload":"{source_qr}",
                     "printer":"zebra",
                     "print_mode":"rfid"
                 }}"#
             ),
         ))
         .await
-        .expect("roll complete rezka");
-    let roll_completed_status = roll_completed.status();
-    let roll_completed_body = json_body(roll_completed).await;
-    assert_eq!(roll_completed_status, StatusCode::OK, "{roll_completed_body:?}");
+        .expect("complete current rezka WIP");
+    let partially_completed_status = partially_completed.status();
+    let partially_completed_body = json_body(partially_completed).await;
     assert_eq!(
-        roll_completed_body["states"]["zakaz-rezka-wip-fanout"],
-        "in_progress"
+        partially_completed_status,
+        StatusCode::OK,
+        "{partially_completed_body:?}"
+    );
+    assert_eq!(
+        partially_completed_body["states"]["zakaz-rezka-wip-fanout"],
+        "pending"
     );
 
-    let output_batches = roll_completed_body["progress_batches"]
+    let output_batches = partially_completed_body["progress_batches"]
         .as_array()
         .expect("frame batches");
     assert_eq!(output_batches.len(), 4);
-    assert_eq!(roll_completed_body["prints"].as_array().unwrap().len(), 4);
+    assert_eq!(
+        partially_completed_body["prints"].as_array().unwrap().len(),
+        4
+    );
     let output_ids = output_batches
         .iter()
         .map(|batch| batch["batch_id"].as_str().expect("frame batch id"))
@@ -595,10 +614,34 @@ async fn rezka_consumes_laminatsiya_wip_and_creates_distinct_frame_wips() {
             && batch["finished_goods_kg"] == 11.0
             && batch["finished_goods_meter"] == 90.0
     }));
-    assert!(output_batches.iter().all(|batch| {
-        batch["status_detail"]["flow_status"] == "free_wip"
-    }));
-    assert_eq!(output_batches[0]["rezka_bosma_waste"], serde_json::Value::Null);
+    assert!(
+        output_batches
+            .iter()
+            .all(|batch| { batch["status_detail"]["flow_status"] == "free_wip" })
+    );
+    assert_eq!(
+        output_batches[0]["rezka_bosma_waste"],
+        serde_json::Value::Null
+    );
+
+    let second_rezka_started = router
+        .clone()
+        .oneshot(request_with_body(
+            "POST",
+            "/v1/mobile/admin/production-maps/queue-action",
+            &worker_token,
+            &format!(
+                r#"{{
+                    "apparatus":"Rezka",
+                    "order_id":"zakaz-rezka-wip-fanout",
+                    "action":"start",
+                    "qr_payload":"{second_source_qr}"
+                }}"#
+            ),
+        ))
+        .await
+        .expect("start second rezka WIP");
+    assert_eq!(second_rezka_started.status(), StatusCode::OK);
 
     let final_completed = router
         .clone()
@@ -627,7 +670,11 @@ async fn rezka_consumes_laminatsiya_wip_and_creates_distinct_frame_wips() {
         .expect("complete final rezka roll");
     let final_completed_status = final_completed.status();
     let final_completed_body = json_body(final_completed).await;
-    assert_eq!(final_completed_status, StatusCode::OK, "{final_completed_body:?}");
+    assert_eq!(
+        final_completed_status,
+        StatusCode::OK,
+        "{final_completed_body:?}"
+    );
     assert_eq!(
         final_completed_body["states"]["zakaz-rezka-wip-fanout"],
         "completed"
@@ -637,11 +684,16 @@ async fn rezka_consumes_laminatsiya_wip_and_creates_distinct_frame_wips() {
         .expect("final frame batches");
     assert_eq!(final_output_batches.len(), 4);
     assert_eq!(final_completed_body["prints"].as_array().unwrap().len(), 4);
-    assert_eq!(final_output_batches[0]["parent_batch_id"], second_source_batch_id);
+    assert_eq!(
+        final_output_batches[0]["parent_batch_id"],
+        second_source_batch_id
+    );
     assert_eq!(final_output_batches[0]["rezka_bosma_waste"], 1.25);
-    assert!(final_output_batches[1..]
-        .iter()
-        .all(|batch| batch["rezka_bosma_waste"].is_null()));
+    assert!(
+        final_output_batches[1..]
+            .iter()
+            .all(|batch| batch["rezka_bosma_waste"].is_null())
+    );
 
     let source_status = router
         .oneshot(request(
@@ -652,11 +704,28 @@ async fn rezka_consumes_laminatsiya_wip_and_creates_distinct_frame_wips() {
         .await
         .expect("list rezka lineage");
     let source_status_body = json_body(source_status).await;
-    assert!(source_status_body["batches"].as_array().unwrap().iter().any(|batch| {
-        batch["batch_id"] == source_batch_id && batch["wip_status"] == "processed"
-    }));
-    assert!(source_status_body["batches"].as_array().unwrap().iter().any(|batch| {
-        batch["batch_id"] == second_source_batch_id && batch["wip_status"] == "processed"
-    }));
-    assert_eq!(print_requests.lock().await.len(), 8);
+    assert!(
+        source_status_body["batches"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|batch| {
+                batch["batch_id"] == source_batch_id && batch["wip_status"] == "processed"
+            })
+    );
+    assert!(
+        source_status_body["batches"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|batch| {
+                batch["batch_id"] == second_source_batch_id && batch["wip_status"] == "processed"
+            })
+    );
+    wait_for_progress_print_request_count(&print_requests, print_request_count_before_rezka + 8)
+        .await;
+    assert_eq!(
+        print_requests.lock().await.len(),
+        print_request_count_before_rezka + 8
+    );
 }

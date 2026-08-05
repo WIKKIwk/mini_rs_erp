@@ -150,6 +150,8 @@ pub enum ProductionMapError {
     LaminatsiyaCompletionMetricsRequired,
     #[error("laminatsiya astatka metrics are required")]
     LaminatsiyaAstatkaMetricsRequired,
+    #[error("rezka astatka metrics are required")]
+    RezkaAstatkaMetricsRequired,
     #[error("rezka progress metrics are required")]
     RezkaProgressMetricsRequired,
     #[error("rezka kadr count is required")]

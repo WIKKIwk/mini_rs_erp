@@ -219,8 +219,8 @@ async fn queue_pause_print_failure_keeps_committed_pause_log() {
     let pause_status = pause_failed.status();
     let pause_body = json_body(pause_failed).await;
     assert_eq!(pause_status, StatusCode::OK, "{pause_body:?}");
-    assert_eq!(pause_body["print"]["ok"], false);
-    assert_eq!(pause_body["print"]["status"], "failed");
+    assert_eq!(pause_body["print"]["ok"], true);
+    assert_eq!(pause_body["print"]["status"], "queued");
 
     let sequence = router
         .oneshot(request(
@@ -235,5 +235,6 @@ async fn queue_pause_print_failure_keeps_committed_pause_log() {
         body["queue_states"]["7 ta rangli pechat"]["zakaz-print-fail"],
         "paused"
     );
+    wait_for_progress_print_request_count(&print_requests, 1).await;
     assert_eq!(print_requests.lock().await.len(), 1);
 }

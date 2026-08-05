@@ -42,26 +42,15 @@ fn zero_completion_metric_codes(
     .collect()
 }
 
-fn rezka_queue_input_metrics_are_complete(
+fn rezka_queue_quantity_metrics_are_complete(
     input: &ApparatusQueueActionRequest,
     produced_qty: Option<f64>,
 ) -> bool {
-    let is_positive = |value: Option<f64>| {
-        value.is_some_and(|value| value.is_finite() && value > 0.0)
-    };
+    let is_positive =
+        |value: Option<f64>| value.is_some_and(|value| value.is_finite() && value > 0.0);
     let has_output_meter = is_positive(produced_qty.or(input.finished_goods_meter));
     let has_output_kg = is_positive(input.gross_qty.or(input.finished_goods_kg));
-    let has_waste = [
-        input.total_waste,
-        input.rezka_bosma_waste,
-        input.rezka_lamination_waste,
-        input.rezka_edge_waste,
-    ]
-    .into_iter()
-    .any(is_positive);
-    has_output_meter
-        && has_output_kg
-        && (input.action != queue_state::ApparatusQueueAction::Complete || has_waste)
+    has_output_meter && has_output_kg
 }
 
 async fn prepare_qolips_for_bosma_start(
@@ -206,10 +195,157 @@ pub(super) fn progress_print_failure_json(
     })
 }
 
+pub(super) fn dispatch_progress_label_prints(
+    gscale: crate::core::gscale::GscaleService,
+    requests: Vec<crate::core::gscale::models::ProgressLabelPrintRequest>,
+    print_transport: &str,
+    apparatus: &str,
+    order_id: &str,
+    action: crate::core::production_map::queue_state::ApparatusQueueAction,
+) -> Vec<serde_json::Value> {
+    if print_transport.trim().eq_ignore_ascii_case("offline") {
+        return requests
+            .into_iter()
+            .map(|request| match gscale.prepare_progress_label(request) {
+                Ok(response) => serde_json::to_value(response).unwrap_or(serde_json::Value::Null),
+                Err(error) => progress_print_failure_json(error),
+            })
+            .collect();
+    }
+
+    let mut prints = Vec::with_capacity(requests.len());
+    let mut queued_requests = Vec::with_capacity(requests.len());
+    for request in requests {
+        match gscale.prepare_progress_label(request.clone()) {
+            Ok(mut response) => {
+                response.status = "queued".to_string();
+                response.printer_status = "server_print_queued".to_string();
+                prints.push(serde_json::to_value(response).unwrap_or(serde_json::Value::Null));
+                queued_requests.push(request);
+            }
+            Err(error) => prints.push(progress_print_failure_json(error)),
+        }
+    }
+
+    if !queued_requests.is_empty() {
+        let apparatus = apparatus.trim().to_string();
+        let order_id = order_id.trim().to_string();
+        tokio::spawn(async move {
+            for request in queued_requests {
+                if let Err(error) = gscale.print_progress_label(request).await {
+                    tracing::warn!(
+                        error = %error,
+                        apparatus = %apparatus,
+                        order_id = %order_id,
+                        action = ?action,
+                        "queued progress label print failed after queue action commit"
+                    );
+                }
+            }
+        });
+    }
+
+    prints
+}
+
 pub(super) fn clean_progress_print_error(detail: &str) -> String {
     detail
         .trim()
         .strip_prefix("driver request failed: ")
         .unwrap_or_else(|| detail.trim())
         .to_string()
+}
+
+#[cfg(test)]
+mod background_print_tests {
+    use std::sync::Arc;
+    use std::time::Duration;
+
+    use async_trait::async_trait;
+    use tokio::sync::Notify;
+
+    use super::dispatch_progress_label_prints;
+    use crate::core::gscale::GscaleService;
+    use crate::core::gscale::models::{
+        ProgressLabelPrintRequest, ScaleDriverPrintRequest, ScaleDriverPrintResponse,
+    };
+    use crate::core::gscale::ports::{GscalePortError, ScaleDriverPort};
+    use crate::core::production_map::queue_state::ApparatusQueueAction;
+
+    struct BlockingProgressDriver {
+        started: Arc<Notify>,
+        release: Arc<Notify>,
+        finished: Arc<Notify>,
+    }
+
+    #[async_trait]
+    impl ScaleDriverPort for BlockingProgressDriver {
+        async fn print_material_receipt(
+            &self,
+            request: ScaleDriverPrintRequest,
+        ) -> Result<ScaleDriverPrintResponse, GscalePortError> {
+            self.started.notify_one();
+            self.release.notified().await;
+            self.finished.notify_one();
+            Ok(ScaleDriverPrintResponse {
+                ok: true,
+                status: "done".to_string(),
+                epc: request.epc,
+                printer: request.printer,
+                mode: request.print_mode,
+                qty: request.gross_qty,
+                gross_qty: request.gross_qty,
+                unit: request.unit,
+                printer_status: "OK".to_string(),
+                ..ScaleDriverPrintResponse::default()
+            })
+        }
+    }
+
+    #[tokio::test]
+    async fn server_progress_print_is_queued_without_blocking_queue_action_response() {
+        let started = Arc::new(Notify::new());
+        let release = Arc::new(Notify::new());
+        let finished = Arc::new(Notify::new());
+        let gscale = GscaleService::new().with_driver(Arc::new(BlockingProgressDriver {
+            started: started.clone(),
+            release: release.clone(),
+            finished: finished.clone(),
+        }));
+
+        let prints = dispatch_progress_label_prints(
+            gscale,
+            vec![ProgressLabelPrintRequest {
+                driver_url: "http://127.0.0.1:39117".to_string(),
+                qr_payload: "WIP-QR-1".to_string(),
+                item_code: "ITEM-1".to_string(),
+                item_name: "Test item".to_string(),
+                executor_name: "Worker".to_string(),
+                printer: "godex".to_string(),
+                print_mode: "label".to_string(),
+                gross_qty: 10.0,
+                progress_qty: 100.0,
+                unit: "kg".to_string(),
+                progress_unit: "m".to_string(),
+                print_count: 1,
+                ..ProgressLabelPrintRequest::default()
+            }],
+            "wifi",
+            "Rezka",
+            "zakaz-background-print",
+            ApparatusQueueAction::Complete,
+        );
+
+        assert_eq!(prints.len(), 1);
+        assert_eq!(prints[0]["ok"], true);
+        assert_eq!(prints[0]["status"], "queued");
+        tokio::time::timeout(Duration::from_secs(1), started.notified())
+            .await
+            .expect("background print started");
+
+        release.notify_one();
+        tokio::time::timeout(Duration::from_secs(1), finished.notified())
+            .await
+            .expect("background print finished");
+    }
 }

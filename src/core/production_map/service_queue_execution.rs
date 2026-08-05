@@ -148,13 +148,14 @@ impl ProductionMapService {
             event.payload_json["roll_removed_from_apparatus"] = serde_json::json!(true);
         }
         if action == queue_state::ApparatusQueueAction::Complete
-            && apparatus::is_laminatsiya_title(&storage_key)
+            && (apparatus::is_laminatsiya_title(&storage_key)
+                || apparatus::is_rezka_title(&storage_key))
             && !progress.force_full_completion_metrics
         {
             let input_batch_id = self
                 .completion_input_batch_id(apparatus, order_id, &progress)
                 .await?;
-            progress.allow_partial_laminatsiya_completion = self
+            progress.allow_partial_station_completion = self
                 .has_unprocessed_previous_wips(
                     order_id,
                     order_map,
@@ -180,9 +181,6 @@ impl ProductionMapService {
                     "",
                 )
                 .await?;
-        if has_unprocessed_previous_wips && apparatus::is_rezka_title(&storage_key) {
-            return Err(ProductionMapError::RezkaFinalRollRequired);
-        }
         if has_unprocessed_previous_wips {
             downgrade_completed_state_to_pending(order_id, &mut saved, &mut event);
         }
@@ -292,6 +290,7 @@ impl ProductionMapService {
                 batch.wip_status == OrderProgressBatchWipStatus::Waiting
                     || (batch.wip_status == OrderProgressBatchWipStatus::InUse
                         && queue_state::apparatus_titles_match(&batch.used_by_apparatus, apparatus))
+                    || wip_batch_was_consumed_by_producer(batch)
             }))
     }
 

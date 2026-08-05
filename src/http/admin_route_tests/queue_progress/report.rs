@@ -176,8 +176,15 @@ async fn progress_qr_report_marks_processed_qr_as_stale_and_returns_order_flow()
         .expect("worker qr report");
     let worker_report_status = worker_report.status();
     let worker_report_body = json_body(worker_report).await;
-    assert_eq!(worker_report_status, StatusCode::OK, "{worker_report_body:?}");
-    assert_eq!(worker_report_body["scanned_batch"]["qr_payload"], old_qr_payload);
+    assert_eq!(
+        worker_report_status,
+        StatusCode::OK,
+        "{worker_report_body:?}"
+    );
+    assert_eq!(
+        worker_report_body["scanned_batch"]["qr_payload"],
+        old_qr_payload
+    );
 
     let report = router
         .oneshot(request_with_body(
@@ -381,6 +388,7 @@ async fn progress_qr_history_lists_own_batches_and_reprints_existing_qr() {
     assert_eq!(batches.len(), 1);
     assert_eq!(batches[0]["order_id"], "zakaz-qr-history-a");
     let own_qr = batches[0]["qr_payload"].as_str().expect("own qr");
+    wait_for_progress_print_request_count(&print_requests, 2).await;
 
     let forbidden = router
         .clone()
@@ -431,7 +439,8 @@ async fn progress_qr_history_lists_own_batches_and_reprints_existing_qr() {
     assert_eq!(reprinted_body["ok"], true);
     assert_eq!(reprinted_body["batch"]["qr_payload"], own_qr);
     assert_eq!(reprinted_body["print"]["status"], "printed");
+    wait_for_progress_print_request_count(&print_requests, 3).await;
     let printed = print_requests.lock().await;
     assert_eq!(printed.len(), 3);
-    assert_eq!(printed[2].epc, own_qr);
+    assert!(printed.iter().any(|request| request.epc == own_qr));
 }

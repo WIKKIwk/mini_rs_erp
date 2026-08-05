@@ -218,6 +218,25 @@ mod tests {
     }
 
     #[test]
+    fn rezka_astatka_migration_is_registered_with_the_runner() {
+        let migration = POSTGRES_MIGRATIONS
+            .iter()
+            .find(|(version, _)| *version == "0041_rezka_astatka_reports")
+            .map(|(_, sql)| sql.to_lowercase())
+            .expect("rezka astatka migration");
+
+        for expected in [
+            "mini_rezka_astatka_reports",
+            "rezka_bosma_waste",
+            "rezka_lamination_waste",
+            "rezka_edge_waste",
+            "check (to_at >= from_at)",
+        ] {
+            assert!(migration.contains(expected), "missing {expected}");
+        }
+    }
+
+    #[test]
     fn rps_runtime_privilege_migration_is_fail_closed() {
         let migration = POSTGRES_MIGRATIONS
             .iter()

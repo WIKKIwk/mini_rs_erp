@@ -57,6 +57,29 @@ fn template_source_map_id_for_save(
     }
 }
 
+fn apply_order_rezka_kadr_count(
+    map: &mut ProductionMapDefinition,
+    template: &CalculateOrderTemplate,
+) {
+    let frame_count = template.frame_count.round();
+    if !template.frame_count.is_finite() || frame_count <= 0.0 {
+        return;
+    }
+    let frame_count = frame_count as i64;
+    for node in &mut map.nodes {
+        if node.kind != ProductionMapNodeKind::Apparatus
+            || (!node.title.to_ascii_lowercase().contains("rezka")
+                && !node
+                    .alternative_assigned_title
+                    .to_ascii_lowercase()
+                    .contains("rezka"))
+        {
+            continue;
+        }
+        node.rezka_kadr_count = Some(frame_count);
+    }
+}
+
 fn apply_authoritative_calculation(
     map: &mut ProductionMapDefinition,
     template: &CalculateOrderTemplate,

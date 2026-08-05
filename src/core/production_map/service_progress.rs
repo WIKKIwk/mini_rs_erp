@@ -8,6 +8,11 @@ use super::service_progress_metrics::{
 };
 use super::service_progress_support::*;
 
+struct RecoveredSessionInputBatch {
+    input_batch: OrderProgressBatch,
+    output_update: OrderProgressBatch,
+}
+
 impl ProductionMapService {
     pub async fn progress_batch_for_qr(
         &self,
@@ -34,6 +39,7 @@ impl ProductionMapService {
             return Err(ProductionMapError::ProgressInputInvalid);
         };
         let mut batch = batch.ok_or(ProductionMapError::ProgressBatchNotFound)?;
+        restore_self_consumed_wip(&mut batch);
         batch.refresh_status_detail();
         Ok(batch)
     }
@@ -139,56 +145,87 @@ impl ProductionMapService {
         &self,
         apparatus: &str,
         order_id: &str,
+        order_map: &ProductionMapDefinition,
         session: &OrderRunSession,
-        actor: &QueueActionActor,
         now: i64,
-    ) -> Result<Option<OrderProgressBatch>, ProductionMapError> {
-        let mut candidates = self
-            .store
-            .progress_batches_for_order(order_id)
-            .await?
-            .into_iter()
+    ) -> Result<Option<RecoveredSessionInputBatch>, ProductionMapError> {
+        let Some(previous_apparatus) = chain::previous_work_stage_station(order_map, apparatus)
+        else {
+            return Ok(None);
+        };
+        let batches = self.store.progress_batches_for_order(order_id).await?;
+        let linked_batch_id = session_progress_links(session).batch_id;
+        let mut output_candidates = batches
+            .iter()
             .filter(|batch| {
-                let used_by_apparatus = if batch.used_by_apparatus.trim().is_empty() {
-                    batch.current_apparatus.as_str()
-                } else {
-                    batch.used_by_apparatus.as_str()
-                };
-                let paused_waiting = batch.status == OrderProgressBatchStatus::Paused
-                    && batch.wip_status == OrderProgressBatchWipStatus::Waiting;
-                let resumed_in_use = batch.status == OrderProgressBatchStatus::Resumed
-                    && batch.wip_status == OrderProgressBatchWipStatus::InUse
-                    && queue_state::apparatus_titles_match(used_by_apparatus, apparatus)
-                    && (batch.used_by_session_id.trim().is_empty()
-                        || batch.used_by_session_id.trim() == session.session_id.trim());
+                let linked_candidate = !linked_batch_id.trim().is_empty()
+                    && batch.batch_id.trim() == linked_batch_id.trim();
+                let unlinked_candidate = linked_batch_id.trim().is_empty()
+                    && (batch.status == OrderProgressBatchStatus::Paused
+                        || batch.wip_status == OrderProgressBatchWipStatus::InUse);
                 batch.order_id.trim() == order_id.trim()
                     && batch.session_id.trim() == session.session_id.trim()
                     && batch.action == queue_state::ApparatusQueueAction::Pause
                     && queue_state::apparatus_titles_match(&batch.apparatus, apparatus)
-                    && (paused_waiting || resumed_in_use)
+                    && !batch.parent_batch_id.trim().is_empty()
+                    && (linked_candidate || unlinked_candidate)
             })
+            .cloned()
             .collect::<Vec<_>>();
-        if candidates.len() > 1 {
+        if output_candidates.len() > 1 {
             return Err(ProductionMapError::ProgressBatchNotAccepted);
         }
-        let Some(mut batch) = candidates.pop() else {
+        let Some(output_batch) = output_candidates.pop() else {
             return Ok(None);
         };
-        if batch.status == OrderProgressBatchStatus::Paused {
-            batch.status = OrderProgressBatchStatus::Resumed;
-            batch.payload_json = resumed_batch_payload(&batch, actor, now);
+        let Some(parent_batch) = batches.into_iter().find(|batch| {
+            batch.batch_id.trim() == output_batch.parent_batch_id.trim()
+                && batch.order_id.trim() == order_id.trim()
+                && queue_state::apparatus_titles_match(&batch.apparatus, &previous_apparatus)
+                && (batch.next_apparatus.trim().is_empty()
+                    || queue_state::next_stage_title_matches_apparatus(
+                        &batch.next_apparatus,
+                        apparatus,
+                    ))
+        }) else {
+            return Ok(None);
+        };
+        let used_by_apparatus = if parent_batch.used_by_apparatus.trim().is_empty() {
+            parent_batch.current_apparatus.as_str()
+        } else {
+            parent_batch.used_by_apparatus.as_str()
+        };
+        let owned_in_use = parent_batch.wip_status == OrderProgressBatchWipStatus::InUse
+            && queue_state::apparatus_titles_match(used_by_apparatus, apparatus)
+            && (parent_batch.used_by_session_id.trim().is_empty()
+                || parent_batch.used_by_session_id.trim() == session.session_id.trim());
+        let prematurely_processed = parent_batch.wip_status
+            == OrderProgressBatchWipStatus::Processed
+            && queue_state::apparatus_titles_match(
+                &parent_batch.processed_by_apparatus,
+                apparatus,
+            )
+            && (parent_batch.processed_by_session_id.trim().is_empty()
+                || parent_batch.processed_by_session_id.trim() == session.session_id.trim());
+        if parent_batch.wip_status != OrderProgressBatchWipStatus::Waiting
+            && !owned_in_use
+            && !prematurely_processed
+        {
+            return Ok(None);
         }
-        if !batch.payload_json.is_object() {
-            batch.payload_json = serde_json::json!({});
-        }
-        batch.payload_json["recovered_missing_session_progress_link"] = serde_json::json!(true);
-        batch.payload_json["recovered_at_unix"] = serde_json::json!(now);
-        Ok(Some(wip_batch_in_use(
-            batch,
+        let mut input_batch = wip_batch_in_use(
+            parent_batch,
             apparatus,
             &session.session_id,
             now,
-        )))
+        );
+        input_batch.payload_json["recovered_original_input_link"] = serde_json::json!(true);
+        input_batch.payload_json["recovered_at_unix"] = serde_json::json!(now);
+        sync_wip_payload_fields(&mut input_batch);
+        Ok(Some(RecoveredSessionInputBatch {
+            input_batch,
+            output_update: restore_misbound_output_wip(output_batch, now),
+        }))
     }
 
     pub(super) async fn build_progress_records(
@@ -241,10 +278,27 @@ impl ProductionMapService {
                     String::new(),
                     start_event_payload(input_progress_batch.as_ref()),
                 );
-                let progress_batch_updates = input_progress_batch
-                    .map(|batch| wip_batch_in_use(batch, apparatus, &session.session_id, now))
-                    .into_iter()
-                    .collect();
+                let mut progress_batch_updates = Vec::new();
+                if let Some(input_batch) = input_progress_batch {
+                    let recovered_self_consumed = input_batch
+                        .payload_json
+                        .get("recovered_self_consumed_wip")
+                        .and_then(serde_json::Value::as_bool)
+                        == Some(true);
+                    if recovered_self_consumed {
+                        for mut sibling in self.store.progress_batches_for_order(order_id).await? {
+                            if repair_self_consumed_sibling_lineage(&mut sibling, &input_batch) {
+                                progress_batch_updates.push(sibling);
+                            }
+                        }
+                    }
+                    progress_batch_updates.push(wip_batch_in_use(
+                        input_batch,
+                        apparatus,
+                        &session.session_id,
+                        now,
+                    ));
+                }
                 Ok(QueueProgressRecords {
                     session: Some(session),
                     progress_event: Some(event),
@@ -291,18 +345,46 @@ impl ProductionMapService {
                 } else {
                     None
                 };
+                let previous_apparatus =
+                    chain::previous_work_stage_station(order_map, apparatus);
                 let linked_input_batch = session_input_batch
                     .as_ref()
-                    .filter(|batch| batch.wip_status == OrderProgressBatchWipStatus::InUse)
+                    .filter(|batch| {
+                        let used_by_apparatus = if batch.used_by_apparatus.trim().is_empty() {
+                            batch.current_apparatus.as_str()
+                        } else {
+                            batch.used_by_apparatus.as_str()
+                        };
+                        previous_apparatus.as_ref().is_some_and(|previous| {
+                            batch.order_id.trim() == order_id.trim()
+                                && queue_state::apparatus_titles_match(
+                                    &batch.apparatus,
+                                    previous,
+                                )
+                                && (batch.next_apparatus.trim().is_empty()
+                                    || queue_state::next_stage_title_matches_apparatus(
+                                        &batch.next_apparatus,
+                                        apparatus,
+                                    ))
+                                && batch.wip_status == OrderProgressBatchWipStatus::InUse
+                                && queue_state::apparatus_titles_match(
+                                    used_by_apparatus,
+                                    apparatus,
+                                )
+                                && (batch.used_by_session_id.trim().is_empty()
+                                    || batch.used_by_session_id.trim()
+                                        == session.session_id.trim())
+                        })
+                    })
                     .cloned();
-                let recovered_input_batch = if explicit_input_batch.is_none()
+                let recovered_input = if explicit_input_batch.is_none()
                     && linked_input_batch.is_none()
                 {
                     self.recoverable_session_input_batch(
                         apparatus,
                         order_id,
+                        order_map,
                         &session,
-                        actor,
                         now,
                     )
                     .await?
@@ -318,9 +400,9 @@ impl ProductionMapService {
                     Some(batch)
                 } else if let Some(batch) = linked_input_batch {
                     Some(batch)
-                } else if let Some(batch) = recovered_input_batch {
-                    Some(batch)
-                } else if chain::previous_work_stage_station(order_map, apparatus).is_some() {
+                } else if let Some(recovered) = recovered_input.as_ref() {
+                    Some(recovered.input_batch.clone())
+                } else if previous_apparatus.is_some() {
                     return Err(ProductionMapError::ProgressQrRequired);
                 } else {
                     None
@@ -388,14 +470,24 @@ impl ProductionMapService {
                     }
                     batches.push(batch);
                 }
-                let mut progress_batch_updates = Vec::new();
+                let input_was_recovered = recovered_input.is_some();
+                let mut progress_batch_updates = recovered_input
+                    .into_iter()
+                    .map(|recovered| recovered.output_update)
+                    .collect::<Vec<_>>();
                 if let Some(input_batch) = input_batch {
-                    progress_batch_updates.push(wip_batch_processed(
-                        input_batch,
-                        apparatus,
-                        &session.session_id,
-                        now,
-                    ));
+                    if action == queue_state::ApparatusQueueAction::Pause {
+                        if input_was_recovered {
+                            progress_batch_updates.push(input_batch);
+                        }
+                    } else {
+                        progress_batch_updates.push(wip_batch_processed(
+                            input_batch,
+                            apparatus,
+                            &session.session_id,
+                            now,
+                        ));
+                    }
                 }
                 let output_identity = output_identities
                     .first()
@@ -487,8 +579,8 @@ impl ProductionMapService {
                         None
                     };
                     let is_handoff = handoff_batch.is_some();
-                    let resumed_batch = if let Some(batch) = handoff_batch {
-                        batch
+                    let resumed_batches = if let Some(batch) = handoff_batch {
+                        vec![batch]
                     } else {
                         let mut paused_batches = self
                             .store
@@ -506,22 +598,37 @@ impl ProductionMapService {
                                     )
                             })
                             .collect::<Vec<_>>();
-                        if paused_batches.len() != 1 {
+                        if apparatus::is_rezka_title(apparatus) {
+                            let source_batch_id = session_input_progress.batch_id.trim();
+                            if !source_batch_id.is_empty() {
+                                paused_batches.retain(|batch| {
+                                    batch.parent_batch_id.trim() == source_batch_id
+                                });
+                            }
+                            if paused_batches.is_empty() {
+                                return Err(ProductionMapError::ProgressBatchNotResumable);
+                            }
+                        } else if paused_batches.len() != 1 {
                             return Err(ProductionMapError::ProgressBatchNotResumable);
                         }
-                        let mut batch = paused_batches
-                            .pop()
-                            .ok_or(ProductionMapError::ProgressBatchNotResumable)?;
-                        batch.status = OrderProgressBatchStatus::Resumed;
-                        batch.payload_json = resumed_batch_payload(&batch, actor, now);
-                        wip_batch_in_use(batch, apparatus, &session.session_id, now)
+                        paused_batches
+                            .into_iter()
+                            .map(|mut batch| {
+                                batch.status = OrderProgressBatchStatus::Resumed;
+                                batch.payload_json = resumed_batch_payload(&batch, actor, now);
+                                sync_wip_payload_fields(&mut batch);
+                                batch
+                            })
+                            .collect::<Vec<_>>()
                     };
+                    let resumed_batch = resumed_batches
+                        .first()
+                        .cloned()
+                        .ok_or(ProductionMapError::ProgressBatchNotResumable)?;
                     let payload_json = if is_handoff {
                         resumed_handoff_session_payload(&session, &session_input_progress)
                     } else {
-                        let mut payload = resumed_session_payload(&resumed_batch);
-                        payload["resumed_without_progress_qr"] = serde_json::json!(true);
-                        preserve_qolip_code(&session, payload)
+                        resumed_session_payload(&session, &resumed_batch, true)
                     };
                     let session = OrderRunSession {
                         status: OrderRunStatus::Active,
@@ -546,11 +653,18 @@ impl ProductionMapService {
                         resumed_batch.qr_payload.clone(),
                         resume_event_payload(),
                     );
+                    let progress_batches = if !is_handoff
+                        && apparatus::is_rezka_title(apparatus)
+                    {
+                        resumed_batches.clone()
+                    } else {
+                        Vec::new()
+                    };
                     return Ok(QueueProgressRecords {
                         session: Some(session),
                         progress_event: Some(event),
                         progress_batch: Some(resumed_batch.clone()),
-                        progress_batches: Vec::new(),
+                        progress_batches,
                         progress_batch_updates: if is_handoff {
                             vec![resumed_batch]
                         } else {
@@ -563,6 +677,7 @@ impl ProductionMapService {
                     .await?;
                 if batch.status != OrderProgressBatchStatus::Paused
                     || batch.action != queue_state::ApparatusQueueAction::Pause
+                    || batch.wip_status != OrderProgressBatchWipStatus::Waiting
                 {
                     return Err(ProductionMapError::ProgressBatchNotResumable);
                 }
@@ -572,17 +687,15 @@ impl ProductionMapService {
                     return Err(ProductionMapError::ProgressBatchNotResumable);
                 }
                 batch.status = OrderProgressBatchStatus::Resumed;
-                let batch_session_id = batch.session_id.clone();
                 batch.payload_json = resumed_batch_payload(&batch, actor, now);
-                batch = wip_batch_in_use(batch, apparatus, &batch_session_id, now);
+                sync_wip_payload_fields(&mut batch);
                 let session = self
                     .store
                     .order_run_session(&batch.session_id)
                     .await?
                     .or_else(|| Some(legacy_order_run_session(apparatus, order_id, actor, now)))
                     .map(|session| {
-                        let payload_json =
-                            preserve_qolip_code(&session, resumed_session_payload(&batch));
+                        let payload_json = resumed_session_payload(&session, &batch, false);
                         OrderRunSession {
                             status: OrderRunStatus::Active,
                             worker_role: actor.role.trim().to_string(),

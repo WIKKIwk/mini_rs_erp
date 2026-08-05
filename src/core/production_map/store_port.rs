@@ -289,6 +289,15 @@ pub trait ProductionMapStorePort: Send + Sync {
     ) -> StoreResult<()> {
         Ok(())
     }
+    async fn rezka_astatka_reports_for_order(
+        &self,
+        _order_id: &str,
+    ) -> StoreResult<Vec<RezkaAstatkaReport>> {
+        Ok(Vec::new())
+    }
+    async fn put_rezka_astatka_report(&self, _report: RezkaAstatkaReport) -> StoreResult<()> {
+        Ok(())
+    }
     async fn progress_batch(&self, _batch_id: &str) -> StoreResult<Option<OrderProgressBatch>> {
         Ok(None)
     }

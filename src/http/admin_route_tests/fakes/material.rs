@@ -204,3 +204,19 @@ impl ScaleDriverPort for FakeProgressDriver {
         })
     }
 }
+
+pub(crate) async fn wait_for_progress_print_request_count(
+    requests: &Arc<Mutex<Vec<ScaleDriverPrintRequest>>>,
+    expected: usize,
+) {
+    tokio::time::timeout(Duration::from_secs(1), async {
+        loop {
+            if requests.lock().await.len() >= expected {
+                return;
+            }
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .unwrap_or_else(|_| panic!("expected {expected} progress print requests"));
+}

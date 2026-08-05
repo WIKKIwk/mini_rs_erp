@@ -85,11 +85,12 @@ async fn queue_pause_prints_progress_qr_and_resume_uses_lookup() {
     assert_eq!(paused_status, StatusCode::OK, "{paused_body:?}");
     assert_eq!(paused_body["states"]["zakaz-progress-route"], "paused");
     assert_eq!(paused_body["progress_batch"]["status"], "paused");
-    assert_eq!(paused_body["print"]["status"], "printed");
+    assert_eq!(paused_body["print"]["status"], "queued");
     let qr_payload = paused_body["progress_batch"]["qr_payload"]
         .as_str()
         .expect("qr")
         .to_string();
+    wait_for_progress_print_request_count(&print_requests, 1).await;
     let printed = print_requests.lock().await;
     assert_eq!(printed.len(), 1);
     assert_eq!(printed[0].epc, qr_payload);
@@ -133,10 +134,10 @@ async fn queue_pause_prints_progress_qr_and_resume_uses_lookup() {
     );
     assert_eq!(resumed_body["progress_batch"]["qr_payload"], qr_payload);
     assert_eq!(resumed_body["progress_batch"]["status"], "resumed");
-    assert_eq!(resumed_body["progress_batch"]["wip_status"], "in_use");
+    assert_eq!(resumed_body["progress_batch"]["wip_status"], "waiting");
     assert_eq!(
         resumed_body["session"]["payload_json"]["input_progress_batch_id"],
-        resumed_body["progress_batch"]["batch_id"]
+        ""
     );
 }
 
@@ -229,8 +230,12 @@ async fn queue_pause_keeps_state_successful_when_progress_print_fails() {
     assert_eq!(paused_status, StatusCode::OK, "{paused_body:?}");
     assert_eq!(paused_body["states"]["zakaz-progress-print-fail"], "paused");
     assert_eq!(paused_body["progress_batch"]["status"], "paused");
-    assert_eq!(paused_body["print"]["ok"], false);
-    assert_eq!(paused_body["print"]["status"], "failed");
-    assert_eq!(paused_body["print"]["error"], "printer offline");
+    assert_eq!(paused_body["print"]["ok"], true);
+    assert_eq!(paused_body["print"]["status"], "queued");
+    assert_eq!(
+        paused_body["print"]["printer_status"],
+        "server_print_queued"
+    );
+    wait_for_progress_print_request_count(&print_requests, 1).await;
     assert_eq!(print_requests.lock().await.len(), 1);
 }

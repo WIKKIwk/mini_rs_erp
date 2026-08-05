@@ -9,7 +9,7 @@ use crate::core::production_map::{
     CompletionRequestNotification, CompletionRequestStateResolution, FinishedGoodsStockEntry,
     ApparatusCapacityProfile, ApparatusDowntime, ApparatusScheduleCancelRequest,
     ApparatusScheduleReservation, OrderControlRecord, OrderProgressBatch, OrderProgressEvent, OrderRunSession,
-    LaminatsiyaAstatkaReport,
+    LaminatsiyaAstatkaReport, RezkaAstatkaReport,
     ProductionMapApparatusTransferRecord, ProductionMapApparatusTransferWrite,
     ProductionMapDefinition, ProductionMapError, ProductionMapStorePort, ProductionOrderLogEntry,
     QueueActionActor, QueueActionProgressWrite, QueueActionProgressWriteResult,
@@ -38,7 +38,8 @@ use self::catalog_helpers::{
     load_apparatus_sequences, load_maps, save_apparatus_queue_policy, save_apparatus_sequence,
 };
 use self::astatka_helpers::{
-    load_laminatsiya_astatka_reports_for_order, put_laminatsiya_astatka_report,
+    load_laminatsiya_astatka_reports_for_order, load_rezka_astatka_reports_for_order,
+    put_laminatsiya_astatka_report, put_rezka_astatka_report,
 };
 use self::capacity_helpers::{
     cancel_apparatus_schedule_reservation, load_apparatus_capacity_profiles,
@@ -418,6 +419,20 @@ impl ProductionMapStorePort for PostgresProductionMapStore {
         report: LaminatsiyaAstatkaReport,
     ) -> Result<(), ProductionMapError> {
         put_laminatsiya_astatka_report(&self.pool, &report).await
+    }
+
+    async fn rezka_astatka_reports_for_order(
+        &self,
+        order_id: &str,
+    ) -> Result<Vec<RezkaAstatkaReport>, ProductionMapError> {
+        load_rezka_astatka_reports_for_order(&self.pool, order_id).await
+    }
+
+    async fn put_rezka_astatka_report(
+        &self,
+        report: RezkaAstatkaReport,
+    ) -> Result<(), ProductionMapError> {
+        put_rezka_astatka_report(&self.pool, &report).await
     }
 
     async fn order_run_sessions_for_audit(

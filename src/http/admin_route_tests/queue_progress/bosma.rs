@@ -166,6 +166,7 @@ async fn bosma_complete_requires_or_persists_completion_metrics() {
         completed_body["progress_event"]["payload_json"]["total_waste_uom"],
         "kg"
     );
+    wait_for_progress_print_request_count(&print_requests, 1).await;
     let printed = print_requests.lock().await;
     assert_eq!(printed.len(), 1);
     assert_eq!(printed[0].gross_qty, 18.75);

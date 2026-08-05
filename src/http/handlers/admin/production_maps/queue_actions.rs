@@ -232,7 +232,7 @@ pub async fn production_map_queue_action(
         description: completion_request_note.clone(),
         returned_paint_report_attached,
         force_full_completion_metrics: input.full_completion_report_required,
-        allow_partial_laminatsiya_completion: false,
+        allow_partial_station_completion: false,
         worker_handoff: input.worker_handoff,
         remove_roll_from_apparatus: input.remove_roll_from_apparatus,
     };
@@ -245,9 +245,13 @@ pub async fn production_map_queue_action(
         && input.total_waste.is_some()
         && input.finished_goods_kg.is_some()
         && input.finished_goods_meter.is_some();
-    let is_rezka = input.apparatus.trim().to_ascii_lowercase().contains("rezka");
+    let is_rezka = input
+        .apparatus
+        .trim()
+        .to_ascii_lowercase()
+        .contains("rezka");
     let has_rezka_progress_metrics =
-        is_rezka && rezka_queue_input_metrics_are_complete(&input, produced_qty);
+        is_rezka && rezka_queue_quantity_metrics_are_complete(&input, produced_qty);
     if matches!(
         input.action,
         queue_state::ApparatusQueueAction::Pause
@@ -455,29 +459,14 @@ pub async fn production_map_queue_action(
             .warehouse_events
             .notify_updated(&warehouse, "raw_material_stock");
     }
-    let mut prints = Vec::with_capacity(print_requests.len());
-    for request in print_requests {
-        let print_result = if input.print_transport.trim().eq_ignore_ascii_case("offline") {
-            state.gscale.prepare_progress_label(request)
-        } else {
-            state.gscale.print_progress_label(request).await
-        };
-        match print_result {
-            Ok(response) => {
-                prints.push(serde_json::to_value(response).unwrap_or(serde_json::Value::Null));
-            }
-            Err(error) => {
-                tracing::warn!(
-                    error = %error,
-                    apparatus = %input.apparatus,
-                    order_id = %input.order_id,
-                    action = ?input.action,
-                    "progress label print failed after queue action commit"
-                );
-                prints.push(progress_print_failure_json(error));
-            }
-        }
-    }
+    let prints = dispatch_progress_label_prints(
+        state.gscale.clone(),
+        print_requests,
+        &input.print_transport,
+        &input.apparatus,
+        &input.order_id,
+        input.action,
+    );
     let print = prints.first().cloned().unwrap_or(serde_json::Value::Null);
     Ok(json_response(serde_json::json!({
         "ok": true,

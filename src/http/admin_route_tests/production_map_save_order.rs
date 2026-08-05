@@ -116,6 +116,87 @@ async fn production_map_save_with_order_saves_map_and_template() {
 }
 
 #[tokio::test]
+async fn production_map_save_with_order_snapshots_rezka_frame_count_on_new_order() {
+    let state = test_state();
+    let token = session(&state, PrincipalRole::Admin).await;
+    let map: serde_json::Value = serde_json::from_str(
+        &production_order_map_json_with_product(
+            "zakaz-7799",
+            "Rezka snapshot order",
+            "REZKA-7799",
+            "7799",
+            "Rezka",
+            7.0,
+            1250.0,
+        ),
+    )
+    .expect("map json");
+    let template = serde_json::json!({
+        "name": "rezka snapshot mahsulot",
+        "product": "rezka snapshot mahsulot",
+        "frame_product_size_mm": 635,
+        "frame_count": 7,
+        "waste_percent": 5,
+        "first_layer_material": "pet",
+        "first_layer_micron": "12",
+        "second_layer_material": "pe oq",
+        "second_layer_micron": "30"
+    });
+    let response = build_router(state.clone())
+        .oneshot(request_with_body(
+            "PUT",
+            "/v1/mobile/admin/production-maps/with-order",
+            &token,
+            &serde_json::json!({"map": map, "template": template}).to_string(),
+        ))
+        .await
+        .expect("save with order");
+    assert_eq!(response.status(), StatusCode::OK);
+    let value = json_body(response).await;
+    let rezka_node = value["saved"]["map"]["nodes"]
+        .as_array()
+        .expect("nodes")
+        .iter()
+        .find(|node| node["title"] == "Rezka")
+        .expect("rezka node");
+    assert_eq!(rezka_node["rezka_kadr_count"], 7);
+
+    let second_template = serde_json::json!({
+        "name": "rezka snapshot mahsulot",
+        "product": "rezka snapshot mahsulot",
+        "frame_product_size_mm": 635,
+        "frame_count": 8,
+        "waste_percent": 5,
+        "first_layer_material": "pet",
+        "first_layer_micron": "12",
+        "second_layer_material": "pe oq",
+        "second_layer_micron": "30"
+    });
+    let response = build_router(state)
+        .oneshot(request_with_body(
+            "PUT",
+            "/v1/mobile/admin/production-maps/with-order",
+            &token,
+            &serde_json::json!({
+                "map": value["saved"]["map"].clone(),
+                "template": second_template
+            })
+            .to_string(),
+        ))
+        .await
+        .expect("edit order");
+    assert_eq!(response.status(), StatusCode::OK);
+    let edited = json_body(response).await;
+    let edited_rezka_node = edited["saved"]["map"]["nodes"]
+        .as_array()
+        .expect("nodes")
+        .iter()
+        .find(|node| node["title"] == "Rezka")
+        .expect("rezka node");
+    assert_eq!(edited_rezka_node["rezka_kadr_count"], 7);
+}
+
+#[tokio::test]
 async fn production_map_save_with_order_records_mini_order_without_blocking_response() {
     let sink = Arc::new(FakeProductionOrderSink::fail_after(Duration::from_millis(
         200,
