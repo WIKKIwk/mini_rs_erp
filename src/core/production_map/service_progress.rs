@@ -135,6 +135,62 @@ impl ProductionMapService {
         Ok(Some(batch))
     }
 
+    async fn recoverable_session_input_batch(
+        &self,
+        apparatus: &str,
+        order_id: &str,
+        session: &OrderRunSession,
+        actor: &QueueActionActor,
+        now: i64,
+    ) -> Result<Option<OrderProgressBatch>, ProductionMapError> {
+        let mut candidates = self
+            .store
+            .progress_batches_for_order(order_id)
+            .await?
+            .into_iter()
+            .filter(|batch| {
+                let used_by_apparatus = if batch.used_by_apparatus.trim().is_empty() {
+                    batch.current_apparatus.as_str()
+                } else {
+                    batch.used_by_apparatus.as_str()
+                };
+                let paused_waiting = batch.status == OrderProgressBatchStatus::Paused
+                    && batch.wip_status == OrderProgressBatchWipStatus::Waiting;
+                let resumed_in_use = batch.status == OrderProgressBatchStatus::Resumed
+                    && batch.wip_status == OrderProgressBatchWipStatus::InUse
+                    && queue_state::apparatus_titles_match(used_by_apparatus, apparatus)
+                    && (batch.used_by_session_id.trim().is_empty()
+                        || batch.used_by_session_id.trim() == session.session_id.trim());
+                batch.order_id.trim() == order_id.trim()
+                    && batch.session_id.trim() == session.session_id.trim()
+                    && batch.action == queue_state::ApparatusQueueAction::Pause
+                    && queue_state::apparatus_titles_match(&batch.apparatus, apparatus)
+                    && (paused_waiting || resumed_in_use)
+            })
+            .collect::<Vec<_>>();
+        if candidates.len() > 1 {
+            return Err(ProductionMapError::ProgressBatchNotAccepted);
+        }
+        let Some(mut batch) = candidates.pop() else {
+            return Ok(None);
+        };
+        if batch.status == OrderProgressBatchStatus::Paused {
+            batch.status = OrderProgressBatchStatus::Resumed;
+            batch.payload_json = resumed_batch_payload(&batch, actor, now);
+        }
+        if !batch.payload_json.is_object() {
+            batch.payload_json = serde_json::json!({});
+        }
+        batch.payload_json["recovered_missing_session_progress_link"] = serde_json::json!(true);
+        batch.payload_json["recovered_at_unix"] = serde_json::json!(now);
+        Ok(Some(wip_batch_in_use(
+            batch,
+            apparatus,
+            &session.session_id,
+            now,
+        )))
+    }
+
     pub(super) async fn build_progress_records(
         &self,
         apparatus: &str,
@@ -235,23 +291,35 @@ impl ProductionMapService {
                 } else {
                     None
                 };
+                let linked_input_batch = session_input_batch
+                    .as_ref()
+                    .filter(|batch| batch.wip_status == OrderProgressBatchWipStatus::InUse)
+                    .cloned();
+                let recovered_input_batch = if explicit_input_batch.is_none()
+                    && linked_input_batch.is_none()
+                {
+                    self.recoverable_session_input_batch(
+                        apparatus,
+                        order_id,
+                        &session,
+                        actor,
+                        now,
+                    )
+                    .await?
+                } else {
+                    None
+                };
                 let input_batch = if let Some(batch) = explicit_input_batch {
-                    if session_input_batch.as_ref().is_some_and(|session_batch| {
-                        session_batch.wip_status == OrderProgressBatchWipStatus::InUse
-                            && session_batch.batch_id.trim() != batch.batch_id.trim()
+                    if linked_input_batch.as_ref().is_some_and(|session_batch| {
+                        session_batch.batch_id.trim() != batch.batch_id.trim()
                     }) {
                         return Err(ProductionMapError::ProgressBatchNotAccepted);
                     }
                     Some(batch)
-                } else if !session_input_progress.batch_id.trim().is_empty() {
-                    let batch = session_input_batch
-                        .filter(|batch| batch.wip_status == OrderProgressBatchWipStatus::InUse);
-                    if batch.is_none()
-                        && chain::previous_work_stage_station(order_map, apparatus).is_some()
-                    {
-                        return Err(ProductionMapError::ProgressQrRequired);
-                    }
-                    batch
+                } else if let Some(batch) = linked_input_batch {
+                    Some(batch)
+                } else if let Some(batch) = recovered_input_batch {
+                    Some(batch)
                 } else if chain::previous_work_stage_station(order_map, apparatus).is_some() {
                     return Err(ProductionMapError::ProgressQrRequired);
                 } else {

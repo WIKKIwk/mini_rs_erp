@@ -1625,6 +1625,110 @@ async fn downstream_pause_resume_without_qr_rebinds_pause_wip_before_complete() 
 }
 
 #[tokio::test]
+async fn complete_recovers_orphan_pause_wip_from_legacy_resume() {
+    let store = std::sync::Arc::new(MemoryProductionMapStore::new());
+    let service = ProductionMapService::new(store.clone());
+    let actor = QueueActionActor {
+        role: "laminatsiyachi".to_string(),
+        ref_: "worker-laminatsiya-legacy-resume".to_string(),
+        display_name: "Laminatsiya Legacy Resume".to_string(),
+    };
+    let order_id = "zakaz-laminatsiya-legacy-resume";
+    let apparatus = "Laminatsiya 1";
+    let session_id = "session-laminatsiya-legacy-resume";
+    let orphan_batch_id = "batch-laminatsiya-legacy-pause";
+    service
+        .upsert_map(two_stage_map(order_id, "7 ta rangli bosma aparat", apparatus))
+        .await
+        .expect("map");
+    store
+        .put_apparatus_queue_states(
+            apparatus,
+            BTreeMap::from([(order_id.to_string(), "in_progress".to_string())]),
+        )
+        .await
+        .expect("legacy active queue state");
+    store
+        .put_order_run_session(OrderRunSession {
+            session_id: session_id.to_string(),
+            apparatus: apparatus.to_string(),
+            order_id: order_id.to_string(),
+            status: OrderRunStatus::Active,
+            worker_role: actor.role.clone(),
+            worker_ref: actor.ref_.clone(),
+            worker_display_name: actor.display_name.clone(),
+            started_at_unix: 100,
+            updated_at_unix: 200,
+            payload_json: serde_json::json!({
+                "resumed_without_progress_qr": true,
+            }),
+        })
+        .await
+        .expect("legacy active session");
+    let mut orphan_batch = test_progress_batch(
+        orphan_batch_id,
+        order_id,
+        apparatus,
+        "legacy-pause-qr",
+        OrderProgressBatchWipStatus::Waiting,
+        "source-bosma-batch",
+    );
+    orphan_batch.session_id = session_id.to_string();
+    orphan_batch.action = queue_state::ApparatusQueueAction::Pause;
+    orphan_batch.status = OrderProgressBatchStatus::Paused;
+    store
+        .put_order_progress_batch(orphan_batch)
+        .await
+        .expect("orphan pause WIP");
+
+    let completed = service
+        .apply_apparatus_queue_action_with_progress(
+            apparatus,
+            order_id,
+            queue_state::ApparatusQueueAction::Complete,
+            &[apparatus.to_string()],
+            actor,
+            QueueProgressInput {
+                produced_qty: Some(9.0),
+                uom: "kg".to_string(),
+                finished_goods_kg: Some(9.0),
+                finished_goods_meter: Some(90.0),
+                ..QueueProgressInput::default()
+            },
+        )
+        .await
+        .expect("complete recovers orphan pause WIP");
+
+    assert_eq!(
+        completed
+            .progress_batch
+            .as_ref()
+            .expect("completed WIP")
+            .parent_batch_id,
+        orphan_batch_id
+    );
+    assert_eq!(
+        completed
+            .session
+            .as_ref()
+            .expect("completed session")
+            .payload_json["input_progress_batch_id"],
+        orphan_batch_id
+    );
+    let recovered = store
+        .progress_batch(orphan_batch_id)
+        .await
+        .expect("recovered WIP lookup")
+        .expect("recovered WIP");
+    assert_eq!(recovered.status, OrderProgressBatchStatus::Resumed);
+    assert_eq!(recovered.wip_status, OrderProgressBatchWipStatus::Processed);
+    assert_eq!(
+        recovered.payload_json["recovered_missing_session_progress_link"],
+        true
+    );
+}
+
+#[tokio::test]
 async fn resume_without_resumable_wip_keeps_queue_paused() {
     let store = std::sync::Arc::new(MemoryProductionMapStore::new());
     let service = ProductionMapService::new(store.clone());
