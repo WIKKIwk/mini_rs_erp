@@ -6,6 +6,7 @@ use super::apparatus::{
     claim_unassigned_alternative_apparatus_assignment, visible_order_ids_by_apparatus,
     visible_order_ids_for_apparatus,
 };
+use super::chain;
 use super::progress::{
     effective_apparatus_queue_policy_record, order_completed_on_apparatus,
     required_apparatus_for_closed_order,
@@ -278,6 +279,165 @@ impl ProductionMapService {
             .into_iter()
             .map(|(apparatus, policy)| effective_apparatus_queue_policy_record(&apparatus, policy))
             .collect())
+    }
+
+    pub async fn queue_action_controls(
+        &self,
+    ) -> Result<
+        BTreeMap<String, BTreeMap<String, ApparatusQueueOrderActionControl>>,
+        ProductionMapError,
+    > {
+        let maps = self.store.maps().await?;
+        let sequences = self.store.apparatus_sequences().await?;
+        let all_states = self.store.apparatus_queue_states().await?;
+        let policies = self.store.apparatus_queue_policies().await?;
+        let order_controls = self.order_control_states().await?;
+        let visible_by_apparatus = visible_order_ids_by_apparatus(&maps);
+        let known_keys = sequences
+            .keys()
+            .chain(all_states.keys())
+            .chain(policies.keys())
+            .chain(visible_by_apparatus.keys())
+            .map(|key| key.as_str())
+            .collect::<BTreeSet<_>>()
+            .into_iter()
+            .map(str::to_string)
+            .collect::<Vec<_>>();
+        let apparatuses = known_keys.iter().cloned().collect::<BTreeSet<_>>();
+        let mut result = BTreeMap::new();
+
+        for apparatus in apparatuses {
+            let storage_key =
+                queue_state::resolve_apparatus_storage_key(&apparatus, &known_keys);
+            let stored_sequence = sequences
+                .get(&storage_key)
+                .or_else(|| sequences.get(&apparatus))
+                .cloned()
+                .unwrap_or_default();
+            let visible_order_ids = visible_order_ids_for_apparatus(&maps, &storage_key);
+            let sequence = queue_state::effective_apparatus_sequence(
+                &stored_sequence,
+                &visible_order_ids,
+            );
+            let stored_states = all_states
+                .get(&storage_key)
+                .or_else(|| all_states.get(&apparatus))
+                .cloned()
+                .unwrap_or_default();
+            let mut effective_states = parsed_queue_states(stored_states);
+            effective_states.retain(|order_id, _| {
+                order_controls
+                    .get(order_id)
+                    .is_none_or(|control| control.state != OrderControlState::Frozen)
+            });
+            let policy = queue_policy_for_apparatus(&apparatus, &storage_key, &policies);
+            let active_order_id = effective_states
+                .iter()
+                .find_map(|(order_id, state)| {
+                    (*state == queue_state::ApparatusQueueOrderState::InProgress)
+                        .then_some(order_id.as_str())
+                });
+            let actionable_order_id =
+                queue_state::first_actionable_order_id(&sequence, &effective_states);
+            let mut apparatus_controls = BTreeMap::new();
+
+            for order_id in sequence {
+                let Some(order_map) = maps.iter().find(|map| map.id.trim() == order_id.trim())
+                else {
+                    continue;
+                };
+                let state = effective_states
+                    .get(order_id.trim())
+                    .copied()
+                    .unwrap_or(queue_state::ApparatusQueueOrderState::Pending);
+                let control = order_controls
+                    .get(order_id.trim())
+                    .map(|control| control.state)
+                    .unwrap_or(OrderControlState::Active);
+                let previous_stage = chain::previous_work_stage_station(order_map, &apparatus);
+                let previous_stage_ready = chain::order_ready_for_station(
+                    order_map,
+                    order_id.trim(),
+                    &apparatus,
+                    &all_states,
+                    &known_keys,
+                );
+                let active_order_is_this = active_order_id
+                    .is_none_or(|active_order_id| active_order_id == order_id.trim());
+                let queue_actionable = state.is_active()
+                    || actionable_order_id.as_deref() == Some(order_id.trim())
+                    || (state == queue_state::ApparatusQueueOrderState::Pending
+                        && previous_stage.is_some()
+                        && previous_stage_ready
+                        && active_order_is_this);
+                let mut allowed_actions = Vec::new();
+                let mut complete_requires_full_report = false;
+
+                if queue_actionable {
+                    match state {
+                        queue_state::ApparatusQueueOrderState::Pending
+                            if control == OrderControlState::Active
+                                && (policy == ApparatusQueuePolicy::FreePick
+                                    || active_order_is_this) => {
+                            allowed_actions.push(queue_state::ApparatusQueueAction::Start);
+                        }
+                        queue_state::ApparatusQueueOrderState::InProgress => {
+                            if matches!(
+                                control,
+                                OrderControlState::Active | OrderControlState::FreezeRequested
+                            ) {
+                                allowed_actions.push(queue_state::ApparatusQueueAction::Pause);
+                            }
+                            if control == OrderControlState::Active {
+                                let has_unprocessed_previous_wips =
+                                    self.has_unprocessed_previous_wips(
+                                        order_id.trim(),
+                                        order_map,
+                                        &storage_key,
+                                        &all_states,
+                                        &[],
+                                        "",
+                                    )
+                                    .await?;
+                                if apparatus::is_rezka_title(&storage_key)
+                                    && has_unprocessed_previous_wips
+                                {
+                                    allowed_actions
+                                        .push(queue_state::ApparatusQueueAction::RollComplete);
+                                } else {
+                                    allowed_actions
+                                        .push(queue_state::ApparatusQueueAction::Complete);
+                                }
+                                complete_requires_full_report =
+                                    !apparatus::is_laminatsiya_title(&storage_key)
+                                        || !has_unprocessed_previous_wips;
+                            }
+                        }
+                        queue_state::ApparatusQueueOrderState::Paused
+                            if control == OrderControlState::Active => {
+                            allowed_actions.push(queue_state::ApparatusQueueAction::Resume);
+                        }
+                        queue_state::ApparatusQueueOrderState::Completed => {}
+                        _ => {}
+                    }
+                }
+
+                apparatus_controls.insert(
+                    order_id.trim().to_string(),
+                    ApparatusQueueOrderActionControl {
+                        state,
+                        allowed_actions,
+                        previous_stage: previous_stage.unwrap_or_default(),
+                        previous_stage_ready,
+                        complete_requires_full_report,
+                    },
+                );
+            }
+            if !apparatus_controls.is_empty() {
+                result.insert(storage_key, apparatus_controls);
+            }
+        }
+        Ok(result)
     }
 
     pub async fn set_apparatus_queue_policy(

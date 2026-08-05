@@ -496,6 +496,11 @@ pub async fn production_map_sequence(
                 .apparatus_queue_policy_records()
                 .await
                 .map_err(production_map_error)?;
+            let queue_action_controls = state
+                .production_maps
+                .queue_action_controls()
+                .await
+                .map_err(production_map_error)?;
             let order_statuses = state
                 .production_maps
                 .order_status_details()
@@ -525,6 +530,7 @@ pub async fn production_map_sequence(
                 "visible_order_ids": visible_order_ids,
                 "queue_states": queue_states,
                 "queue_policies": queue_policies,
+                "queue_action_controls": queue_action_controls,
                 "order_statuses": order_statuses,
                 "order_controls": order_controls,
                 "order_customers": order_customers,

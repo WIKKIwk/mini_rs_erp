@@ -14,6 +14,8 @@ pub struct ProductionMapLiveSnapshot {
     pub visible_order_ids: BTreeMap<String, Vec<String>>,
     pub queue_states: BTreeMap<String, BTreeMap<String, String>>,
     pub queue_policies: Vec<ApparatusQueuePolicyRecord>,
+    pub queue_action_controls:
+        BTreeMap<String, BTreeMap<String, ApparatusQueueOrderActionControl>>,
     pub order_statuses: BTreeMap<String, ProductionOrderStatusDetail>,
     pub order_controls: BTreeMap<String, OrderControlRecord>,
 }
@@ -122,6 +124,7 @@ impl ProductionMapService {
             visible_order_ids: self.visible_order_ids_by_apparatus().await?,
             queue_states: self.apparatus_queue_states().await?,
             queue_policies: self.apparatus_queue_policy_records().await?,
+            queue_action_controls: self.queue_action_controls().await?,
             order_statuses: self.order_status_details().await?,
             order_controls: self.order_control_states().await?,
         })

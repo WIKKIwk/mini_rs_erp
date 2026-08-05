@@ -43,6 +43,24 @@ pub struct ApparatusQueuePolicyRecord {
     pub reason: String,
 }
 
+/// Backend-owned presentation contract for an order at one apparatus.
+///
+/// The mobile client may render these actions, but it must not derive them
+/// from queue state, production-map topology, or WIP records. Every action is
+/// still revalidated by the queue action command before it is committed.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct ApparatusQueueOrderActionControl {
+    pub state: queue_state::ApparatusQueueOrderState,
+    #[serde(default)]
+    pub allowed_actions: Vec<queue_state::ApparatusQueueAction>,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub previous_stage: String,
+    #[serde(default)]
+    pub previous_stage_ready: bool,
+    #[serde(default)]
+    pub complete_requires_full_report: bool,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct QueueActionActor {
     pub role: String,

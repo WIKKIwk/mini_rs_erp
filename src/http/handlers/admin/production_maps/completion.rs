@@ -183,6 +183,7 @@ async fn send_production_map_live_snapshot(
                 "visible_order_ids": snapshot.visible_order_ids,
                 "queue_states": snapshot.queue_states,
                 "queue_policies": snapshot.queue_policies,
+                "queue_action_controls": snapshot.queue_action_controls,
                 "order_statuses": snapshot.order_statuses,
                 "order_controls": snapshot.order_controls,
                 "order_customers": order_customers,

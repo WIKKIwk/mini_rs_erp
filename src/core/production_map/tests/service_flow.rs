@@ -384,6 +384,67 @@ async fn pechat_queue_policy_is_always_locked_strict() {
 }
 
 #[tokio::test]
+async fn queue_action_controls_are_backend_owned_for_each_order_state() {
+    let store = std::sync::Arc::new(MemoryProductionMapStore::new());
+    let service = ProductionMapService::new(store.clone());
+    let apparatus = "7 ta rangli pechat";
+    let order_id = "zakaz-action-controls";
+
+    service
+        .upsert_map(apparatus_stage_map(order_id, apparatus))
+        .await
+        .expect("map");
+    service
+        .set_apparatus_sequence(apparatus, vec![order_id.to_string()])
+        .await
+        .expect("sequence");
+
+    store
+        .put_apparatus_queue_states(
+            apparatus,
+            BTreeMap::from([(order_id.to_string(), "in_progress".to_string())]),
+        )
+        .await
+        .expect("in-progress state");
+    let controls = service.queue_action_controls().await.expect("controls");
+    let in_progress = controls
+        .get(apparatus)
+        .and_then(|orders| orders.get(order_id))
+        .expect("in-progress control");
+    assert_eq!(
+        in_progress.state,
+        queue_state::ApparatusQueueOrderState::InProgress
+    );
+    assert!(in_progress
+        .allowed_actions
+        .contains(&queue_state::ApparatusQueueAction::Pause));
+    assert!(in_progress
+        .allowed_actions
+        .contains(&queue_state::ApparatusQueueAction::Complete));
+    assert!(!in_progress
+        .allowed_actions
+        .contains(&queue_state::ApparatusQueueAction::Resume));
+    assert!(in_progress.complete_requires_full_report);
+
+    store
+        .put_apparatus_queue_states(
+            apparatus,
+            BTreeMap::from([(order_id.to_string(), "paused".to_string())]),
+        )
+        .await
+        .expect("paused state");
+    let controls = service.queue_action_controls().await.expect("paused controls");
+    let paused = controls
+        .get(apparatus)
+        .and_then(|orders| orders.get(order_id))
+        .expect("paused control");
+    assert_eq!(
+        paused.allowed_actions,
+        vec![queue_state::ApparatusQueueAction::Resume]
+    );
+}
+
+#[tokio::test]
 async fn raw_material_state_policy_requires_only_staged_scan_before_start() {
     let service = ProductionMapService::new(std::sync::Arc::new(MemoryProductionMapStore::new()));
     let actor = QueueActionActor {
