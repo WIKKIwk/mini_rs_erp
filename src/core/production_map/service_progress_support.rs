@@ -535,12 +535,6 @@ pub(super) fn progress_event_payload(
     })
 }
 
-pub(super) fn resume_without_progress_payload() -> serde_json::Value {
-    serde_json::json!({
-        "resumed_without_progress_qr": true,
-    })
-}
-
 pub(super) fn worker_handoff_session_payload(
     metrics: ProgressMetrics,
     description: &str,
@@ -595,17 +589,27 @@ pub(super) fn resumed_handoff_session_payload(
     preserve_qolip_code(current, payload)
 }
 
-pub(super) fn resumed_batch_payload(actor: &QueueActionActor, now: i64) -> serde_json::Value {
-    serde_json::json!({
-        "resumed_by": actor,
-        "resumed_at_unix": now,
-    })
+pub(super) fn resumed_batch_payload(
+    batch: &OrderProgressBatch,
+    actor: &QueueActionActor,
+    now: i64,
+) -> serde_json::Value {
+    let mut payload = batch.payload_json.clone();
+    if !payload.is_object() {
+        payload = serde_json::json!({});
+    }
+    payload["resumed_by"] = serde_json::json!(actor);
+    payload["resumed_at_unix"] = serde_json::json!(now);
+    payload
 }
 
 pub(super) fn resumed_session_payload(batch: &OrderProgressBatch) -> serde_json::Value {
     serde_json::json!({
         "resumed_batch_id": batch.batch_id,
         "resumed_qr_payload": batch.qr_payload,
+        "input_progress_batch_id": batch.batch_id,
+        "input_progress_qr_payload": batch.qr_payload,
+        "input_progress_apparatus": batch.apparatus,
     })
 }
 

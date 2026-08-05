@@ -131,7 +131,13 @@ async fn queue_pause_prints_progress_qr_and_resume_uses_lookup() {
         resumed_body["states"]["zakaz-progress-route"],
         "in_progress"
     );
-    assert!(resumed_body["progress_batch"].is_null());
+    assert_eq!(resumed_body["progress_batch"]["qr_payload"], qr_payload);
+    assert_eq!(resumed_body["progress_batch"]["status"], "resumed");
+    assert_eq!(resumed_body["progress_batch"]["wip_status"], "in_use");
+    assert_eq!(
+        resumed_body["session"]["payload_json"]["input_progress_batch_id"],
+        resumed_body["progress_batch"]["batch_id"]
+    );
 }
 
 #[tokio::test]

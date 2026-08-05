@@ -1022,6 +1022,11 @@ async fn raw_material_requirement_groups_need_distinct_scanned_materials() {
 async fn paused_next_order_resumes_after_previous_order_completed() {
     let store = std::sync::Arc::new(MemoryProductionMapStore::new());
     let service = ProductionMapService::new(store.clone());
+    let actor = QueueActionActor {
+        role: "aparatchi".to_string(),
+        ref_: "worker-resume".to_string(),
+        display_name: "Worker Resume".to_string(),
+    };
     let apparatus = "7 ta rangli bosma aparat";
     let completed_order_id = "zakaz-resume-completed";
     let paused_order_id = "zakaz-resume-paused";
@@ -1045,11 +1050,37 @@ async fn paused_next_order_resumes_after_previous_order_completed() {
             apparatus,
             BTreeMap::from([
                 (completed_order_id.to_string(), "completed".to_string()),
-                (paused_order_id.to_string(), "paused".to_string()),
+                (paused_order_id.to_string(), "pending".to_string()),
             ]),
         )
         .await
         .expect("queue states");
+    service
+        .apply_apparatus_queue_action_with_progress(
+            apparatus,
+            paused_order_id,
+            queue_state::ApparatusQueueAction::Start,
+            &[apparatus.to_string()],
+            actor.clone(),
+            QueueProgressInput::default(),
+        )
+        .await
+        .expect("start next order");
+    service
+        .apply_apparatus_queue_action_with_progress(
+            apparatus,
+            paused_order_id,
+            queue_state::ApparatusQueueAction::Pause,
+            &[apparatus.to_string()],
+            actor.clone(),
+            QueueProgressInput {
+                produced_qty: Some(1.0),
+                uom: "kg".to_string(),
+                ..QueueProgressInput::default()
+            },
+        )
+        .await
+        .expect("pause next order");
 
     let states = service
         .apply_apparatus_queue_action(
@@ -1057,11 +1088,7 @@ async fn paused_next_order_resumes_after_previous_order_completed() {
             paused_order_id,
             queue_state::ApparatusQueueAction::Resume,
             &[apparatus.to_string()],
-            QueueActionActor {
-                role: "aparatchi".to_string(),
-                ref_: "worker-resume".to_string(),
-                display_name: "Worker Resume".to_string(),
-            },
+            actor,
         )
         .await
         .expect("resume paused next order");
@@ -1159,8 +1186,21 @@ async fn progress_pause_creates_qr_batch_and_resume_reopens_order() {
         Some(&"in_progress".to_string())
     );
     assert_eq!(
-        resumed.progress_batch.expect("resumed batch").status,
+        resumed
+            .progress_batch
+            .as_ref()
+            .expect("resumed batch")
+            .status,
         OrderProgressBatchStatus::Resumed
+    );
+    assert_eq!(
+        resumed
+            .session
+            .as_ref()
+            .expect("resumed session")
+            .payload_json["input_progress_batch_id"]
+            .as_str(),
+        Some(batch.batch_id.as_str())
     );
 }
 
@@ -1466,6 +1506,183 @@ async fn laminatsiya_complete_requires_previous_stage_qr() {
         .await;
 
     assert_eq!(result, Err(ProductionMapError::ProgressQrRequired));
+}
+
+#[tokio::test]
+async fn downstream_pause_resume_without_qr_rebinds_pause_wip_before_complete() {
+    let store = std::sync::Arc::new(MemoryProductionMapStore::new());
+    let service = ProductionMapService::new(store.clone());
+    let actor = QueueActionActor {
+        role: "laminatsiyachi".to_string(),
+        ref_: "worker-laminatsiya-pause-resume".to_string(),
+        display_name: "Laminatsiya Pause Resume".to_string(),
+    };
+    let order_id = "zakaz-laminatsiya-pause-resume";
+    let first = "Bosma aparat";
+    let second = "Laminatsiya mashinasi";
+    service
+        .upsert_map(two_stage_map(order_id, first, second))
+        .await
+        .expect("map");
+    let source_batch = pause_first_stage_batch(&service, order_id, first, &actor, 20.0)
+        .await
+        .expect("source WIP");
+    service
+        .apply_apparatus_queue_action_with_progress(
+            second,
+            order_id,
+            queue_state::ApparatusQueueAction::Start,
+            &[second.to_string()],
+            actor.clone(),
+            QueueProgressInput {
+                qr_payload: source_batch.qr_payload,
+                ..QueueProgressInput::default()
+            },
+        )
+        .await
+        .expect("laminatsiya start");
+
+    let paused = service
+        .apply_apparatus_queue_action_with_progress(
+            second,
+            order_id,
+            queue_state::ApparatusQueueAction::Pause,
+            &[second.to_string()],
+            actor.clone(),
+            QueueProgressInput {
+                produced_qty: Some(10.0),
+                uom: "kg".to_string(),
+                ..QueueProgressInput::default()
+            },
+        )
+        .await
+        .expect("laminatsiya pause");
+    let pause_batch = paused.progress_batch.expect("pause WIP");
+    assert_eq!(pause_batch.wip_status, OrderProgressBatchWipStatus::Waiting);
+
+    let resumed = service
+        .apply_apparatus_queue_action_with_progress(
+            second,
+            order_id,
+            queue_state::ApparatusQueueAction::Resume,
+            &[second.to_string()],
+            actor.clone(),
+            QueueProgressInput::default(),
+        )
+        .await
+        .expect("resume without QR");
+    let resumed_batch = resumed.progress_batch.as_ref().expect("resumed WIP");
+    let resumed_session = resumed.session.as_ref().expect("resumed session");
+    assert_eq!(
+        resumed.states.get(order_id),
+        Some(&"in_progress".to_string())
+    );
+    assert_eq!(resumed_batch.batch_id, pause_batch.batch_id);
+    assert_eq!(resumed_batch.status, OrderProgressBatchStatus::Resumed);
+    assert_eq!(resumed_batch.wip_status, OrderProgressBatchWipStatus::InUse);
+    assert_eq!(resumed_batch.used_by_session_id, resumed_session.session_id);
+    assert_eq!(
+        resumed_session.payload_json["input_progress_batch_id"].as_str(),
+        Some(pause_batch.batch_id.as_str())
+    );
+
+    let completed = service
+        .apply_apparatus_queue_action_with_progress(
+            second,
+            order_id,
+            queue_state::ApparatusQueueAction::Complete,
+            &[second.to_string()],
+            actor,
+            QueueProgressInput {
+                produced_qty: Some(9.0),
+                uom: "kg".to_string(),
+                lamination_film_leftover_rolls: Some(1.0),
+                total_waste: Some(0.5),
+                finished_goods_kg: Some(9.0),
+                finished_goods_meter: Some(90.0),
+                ..QueueProgressInput::default()
+            },
+        )
+        .await
+        .expect("complete after resume");
+    assert_eq!(
+        completed
+            .progress_batch
+            .as_ref()
+            .expect("completed WIP")
+            .parent_batch_id,
+        pause_batch.batch_id
+    );
+    assert_eq!(
+        store
+            .progress_batch(&pause_batch.batch_id)
+            .await
+            .expect("pause WIP lookup")
+            .expect("persisted pause WIP")
+            .wip_status,
+        OrderProgressBatchWipStatus::Processed
+    );
+}
+
+#[tokio::test]
+async fn resume_without_resumable_wip_keeps_queue_paused() {
+    let store = std::sync::Arc::new(MemoryProductionMapStore::new());
+    let service = ProductionMapService::new(store.clone());
+    let actor = QueueActionActor {
+        role: "laminatsiyachi".to_string(),
+        ref_: "worker-laminatsiya-ghost-resume".to_string(),
+        display_name: "Laminatsiya Ghost Resume".to_string(),
+    };
+    let order_id = "zakaz-laminatsiya-ghost-resume";
+    let apparatus = "Laminatsiya mashinasi";
+    service
+        .upsert_map(two_stage_map(order_id, "Bosma aparat", apparatus))
+        .await
+        .expect("map");
+    store
+        .put_apparatus_queue_states(
+            apparatus,
+            BTreeMap::from([(order_id.to_string(), "paused".to_string())]),
+        )
+        .await
+        .expect("paused queue state");
+    store
+        .put_order_run_session(OrderRunSession {
+            session_id: "session-laminatsiya-ghost-resume".to_string(),
+            apparatus: apparatus.to_string(),
+            order_id: order_id.to_string(),
+            status: OrderRunStatus::Paused,
+            worker_role: actor.role.clone(),
+            worker_ref: actor.ref_.clone(),
+            worker_display_name: actor.display_name.clone(),
+            started_at_unix: 100,
+            updated_at_unix: 100,
+            payload_json: serde_json::json!({}),
+        })
+        .await
+        .expect("paused session");
+
+    let result = service
+        .apply_apparatus_queue_action_with_progress(
+            apparatus,
+            order_id,
+            queue_state::ApparatusQueueAction::Resume,
+            &[apparatus.to_string()],
+            actor,
+            QueueProgressInput::default(),
+        )
+        .await;
+
+    assert_eq!(result, Err(ProductionMapError::ProgressBatchNotResumable));
+    assert_eq!(
+        service
+            .apparatus_queue_states()
+            .await
+            .expect("queue states")
+            .get(apparatus)
+            .and_then(|states| states.get(order_id)),
+        Some(&"paused".to_string())
+    );
 }
 
 #[tokio::test]
