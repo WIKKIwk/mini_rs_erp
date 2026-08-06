@@ -118,6 +118,7 @@ async fn rezka_complete_requires_or_persists_progress_metrics() {
                 "rezka_bosma_waste":1.25,
                 "rezka_lamination_waste":2.5,
                 "rezka_edge_waste":0.75,
+                "diameter":45.5,
                 "printer":"zebra",
                 "print_mode":"rfid"
             }"#,
@@ -137,7 +138,9 @@ async fn rezka_complete_requires_or_persists_progress_metrics() {
         2.5
     );
     assert_eq!(completed_body["progress_batch"]["rezka_edge_waste"], 0.75);
+    assert_eq!(completed_body["progress_batch"]["diameter"], 45.5);
     assert_eq!(completed_body["progress_event"]["rezka_edge_waste"], 0.75);
+    assert_eq!(completed_body["progress_event"]["diameter"], 45.5);
     assert_eq!(
         completed_body["progress_batches"].as_array().unwrap().len(),
         4
@@ -245,6 +248,30 @@ async fn rezka_pause_records_quantities_without_waste_and_fans_out_frames() {
         "rezka_progress_metrics_required"
     );
 
+    let missing_diameter = router
+        .clone()
+        .oneshot(request_with_body(
+            "POST",
+            "/v1/mobile/admin/production-maps/queue-action",
+            &worker_token,
+            r#"{
+                "apparatus":"Rezka",
+                "order_id":"zakaz-rezka-pause",
+                "action":"pause",
+                "produced_qty":18,
+                "gross_qty":18,
+                "rezka_bosma_waste":1,
+                "uom":"kg"
+            }"#,
+        ))
+        .await
+        .expect("pause without diameter");
+    assert_eq!(missing_diameter.status(), StatusCode::BAD_REQUEST);
+    assert_eq!(
+        json_body(missing_diameter).await["error"],
+        "rezka_progress_metrics_required"
+    );
+
     let paused = router
         .clone()
         .oneshot(request_with_body(
@@ -257,6 +284,7 @@ async fn rezka_pause_records_quantities_without_waste_and_fans_out_frames() {
                 "action":"pause",
                 "produced_qty":18,
                 "gross_qty":18,
+                "diameter":45.5,
                 "uom":"kg",
                 "printer":"zebra",
                 "print_mode":"rfid"
@@ -269,6 +297,8 @@ async fn rezka_pause_records_quantities_without_waste_and_fans_out_frames() {
     assert_eq!(paused_status, StatusCode::OK, "{paused_body:?}");
     assert_eq!(paused_body["progress_batch"]["status"], "paused");
     assert!(paused_body["progress_batch"]["total_waste"].is_null());
+    assert_eq!(paused_body["progress_batch"]["diameter"], 45.5);
+    assert_eq!(paused_body["progress_event"]["diameter"], 45.5);
     assert_eq!(paused_body["progress_batches"].as_array().unwrap().len(), 4);
     assert_eq!(paused_body["prints"].as_array().unwrap().len(), 4);
 
@@ -300,6 +330,7 @@ async fn rezka_pause_records_quantities_without_waste_and_fans_out_frames() {
                 "action":"roll_complete",
                 "produced_qty":18,
                 "gross_qty":18,
+                "diameter":45.5,
                 "uom":"kg",
                 "printer":"zebra",
                 "print_mode":"rfid"
@@ -322,6 +353,8 @@ async fn rezka_pause_records_quantities_without_waste_and_fans_out_frames() {
         roll_completed_body["progress_batch"]["action"],
         "roll_complete"
     );
+    assert_eq!(roll_completed_body["progress_batch"]["diameter"], 45.5);
+    assert_eq!(roll_completed_body["progress_event"]["diameter"], 45.5);
     assert_eq!(
         roll_completed_body["progress_batches"]
             .as_array()
@@ -541,6 +574,7 @@ async fn rezka_consumes_laminatsiya_wip_and_creates_distinct_frame_wips() {
                     "action":"complete",
                     "produced_qty":90,
                     "gross_qty":11,
+                    "diameter":45.5,
                     "uom":"m",
                     "qr_payload":"{second_source_qr}"
                 }}"#
@@ -567,6 +601,7 @@ async fn rezka_consumes_laminatsiya_wip_and_creates_distinct_frame_wips() {
                     "action":"complete",
                     "produced_qty":90,
                     "gross_qty":11,
+                    "diameter":45.5,
                     "uom":"m",
                     "qr_payload":"{source_qr}",
                     "printer":"zebra",
@@ -623,6 +658,7 @@ async fn rezka_consumes_laminatsiya_wip_and_creates_distinct_frame_wips() {
         output_batches[0]["rezka_bosma_waste"],
         serde_json::Value::Null
     );
+    assert_eq!(output_batches[0]["diameter"], 45.5);
 
     let second_rezka_started = router
         .clone()
@@ -656,6 +692,7 @@ async fn rezka_consumes_laminatsiya_wip_and_creates_distinct_frame_wips() {
                     "action":"complete",
                     "produced_qty":80,
                     "gross_qty":10,
+                    "diameter":45.5,
                     "uom":"m",
                     "qr_payload":"{second_source_qr}",
                     "rezka_bosma_waste":1.25,
@@ -689,6 +726,7 @@ async fn rezka_consumes_laminatsiya_wip_and_creates_distinct_frame_wips() {
         second_source_batch_id
     );
     assert_eq!(final_output_batches[0]["rezka_bosma_waste"], 1.25);
+    assert_eq!(final_output_batches[0]["diameter"], 45.5);
     assert!(
         final_output_batches[1..]
             .iter()

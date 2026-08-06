@@ -128,6 +128,7 @@ fn audit_test_batch(batch_id: &str, order_id: &str, qr_payload: &str) -> OrderPr
         total_waste: None,
         finished_goods_kg: None,
         finished_goods_meter: None,
+        diameter: None,
         description: String::new(),
         payload_json: serde_json::json!({}),
     }

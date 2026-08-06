@@ -340,6 +340,7 @@ pub(super) async fn load_progress_batch(
                 total_waste::float8 AS total_waste,
                 finished_goods_kg::float8 AS finished_goods_kg,
                 finished_goods_meter::float8 AS finished_goods_meter,
+                diameter::float8 AS diameter,
                 description,
                 payload_json
          FROM mini_progress_batches AS batch
@@ -390,6 +391,7 @@ pub(super) async fn load_progress_batches_for_worker(
                 total_waste::float8 AS total_waste,
                 finished_goods_kg::float8 AS finished_goods_kg,
                 finished_goods_meter::float8 AS finished_goods_meter,
+                diameter::float8 AS diameter,
                 description,
                 payload_json
          FROM mini_progress_batches AS batch
@@ -450,6 +452,7 @@ pub(super) async fn load_progress_batches_for_order(
                 total_waste::float8 AS total_waste,
                 finished_goods_kg::float8 AS finished_goods_kg,
                 finished_goods_meter::float8 AS finished_goods_meter,
+                diameter::float8 AS diameter,
                 description,
                 payload_json
          FROM mini_progress_batches AS batch
@@ -493,6 +496,7 @@ pub(super) async fn load_progress_batches_for_audit(
                 total_waste::float8 AS total_waste,
                 finished_goods_kg::float8 AS finished_goods_kg,
                 finished_goods_meter::float8 AS finished_goods_meter,
+                diameter::float8 AS diameter,
                 description,
                 payload_json
          FROM mini_progress_batches AS batch
@@ -535,6 +539,7 @@ pub(super) async fn load_progress_batch_by_qr(
                 total_waste::float8 AS total_waste,
                 finished_goods_kg::float8 AS finished_goods_kg,
                 finished_goods_meter::float8 AS finished_goods_meter,
+                diameter::float8 AS diameter,
                 description,
                 payload_json
          FROM mini_progress_batches AS batch

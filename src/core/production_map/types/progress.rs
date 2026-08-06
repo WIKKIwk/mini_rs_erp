@@ -209,6 +209,8 @@ pub struct OrderProgressEvent {
     pub finished_goods_kg: Option<f64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub finished_goods_meter: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub diameter: Option<f64>,
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub description: String,
     pub payload_json: serde_json::Value,
@@ -309,6 +311,8 @@ pub struct OrderProgressBatch {
     pub finished_goods_kg: Option<f64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub finished_goods_meter: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub diameter: Option<f64>,
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub description: String,
     pub payload_json: serde_json::Value,
@@ -384,6 +388,7 @@ pub struct QueueProgressInput {
     pub total_waste: Option<f64>,
     pub finished_goods_kg: Option<f64>,
     pub finished_goods_meter: Option<f64>,
+    pub diameter: Option<f64>,
     pub description: String,
     pub returned_paint_report_attached: bool,
     /// A worker may finish the currently available Laminatsiya or Rezka WIP

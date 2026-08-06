@@ -50,6 +50,7 @@ pub(super) struct ProgressBatchRow {
     pub(super) total_waste: Option<f64>,
     pub(super) finished_goods_kg: Option<f64>,
     pub(super) finished_goods_meter: Option<f64>,
+    pub(super) diameter: Option<f64>,
     pub(super) description: String,
     pub(super) payload_json: serde_json::Value,
 }
@@ -158,6 +159,7 @@ pub(super) fn progress_batch_from_row(
         total_waste: row.total_waste,
         finished_goods_kg: row.finished_goods_kg,
         finished_goods_meter: row.finished_goods_meter,
+        diameter: row.diameter,
         description: row.description,
         payload_json: row.payload_json,
     };

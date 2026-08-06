@@ -88,6 +88,7 @@ pub(super) fn zero_quantity_event(
         total_waste: None,
         finished_goods_kg: None,
         finished_goods_meter: None,
+        diameter: None,
         description: String::new(),
         payload_json,
     }
@@ -302,6 +303,7 @@ pub(super) fn progress_batch_record(
         total_waste: input.metrics.total_waste,
         finished_goods_kg: input.metrics.finished_goods_kg,
         finished_goods_meter: input.metrics.finished_goods_meter,
+        diameter: input.metrics.diameter,
         description: input.description.to_string(),
         payload_json: progress_batch_payload(
             input.order_map,
@@ -359,6 +361,10 @@ pub(super) fn clear_rezka_duplicate_metrics(batch: &mut OrderProgressBatch) {
     batch.rezka_lamination_waste = None;
     batch.rezka_edge_waste = None;
     batch.total_waste = None;
+    batch.diameter = None;
+    if let Some(payload) = batch.payload_json.as_object_mut() {
+        payload.remove("diameter");
+    }
     batch.payload_json["rezka_metrics_owner"] = serde_json::json!(false);
     sync_wip_payload_fields(batch);
 }
@@ -400,6 +406,7 @@ pub(super) fn progress_event_record(input: ProgressEventRecordInput<'_>) -> Orde
         total_waste: input.metrics.total_waste,
         finished_goods_kg: input.metrics.finished_goods_kg,
         finished_goods_meter: input.metrics.finished_goods_meter,
+        diameter: input.metrics.diameter,
         description: input.description.to_string(),
         payload_json: progress_event_payload(context.action, input.metrics, input.description),
     }
@@ -425,6 +432,7 @@ pub(super) fn progress_metrics_event(
     event.total_waste = metrics.total_waste;
     event.finished_goods_kg = metrics.finished_goods_kg;
     event.finished_goods_meter = metrics.finished_goods_meter;
+    event.diameter = metrics.diameter;
     event.description = description.to_string();
     event
 }
@@ -451,6 +459,7 @@ pub(super) fn progress_session_payload(
         "total_waste_uom": "kg",
         "finished_goods_kg": metrics.finished_goods_kg,
         "finished_goods_meter": metrics.finished_goods_meter,
+        "diameter": metrics.diameter,
         "description": description,
         "input_progress_batch_id": input_progress.batch_id,
         "input_progress_qr_payload": input_progress.qr_payload,
@@ -510,6 +519,7 @@ fn progress_batch_payload(
         "total_waste_uom": "kg",
         "finished_goods_kg": metrics.finished_goods_kg,
         "finished_goods_meter": metrics.finished_goods_meter,
+        "diameter": metrics.diameter,
         "description": description,
     })
 }
@@ -531,6 +541,7 @@ pub(super) fn progress_event_payload(
         "total_waste_uom": "kg",
         "finished_goods_kg": metrics.finished_goods_kg,
         "finished_goods_meter": metrics.finished_goods_meter,
+        "diameter": metrics.diameter,
         "description": description,
     })
 }

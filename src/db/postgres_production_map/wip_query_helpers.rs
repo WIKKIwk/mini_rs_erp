@@ -56,6 +56,7 @@ pub(super) async fn load_wip_progress_batches(
                 total_waste::float8 AS total_waste,
                 finished_goods_kg::float8 AS finished_goods_kg,
                 finished_goods_meter::float8 AS finished_goods_meter,
+                diameter::float8 AS diameter,
                 description,
                 payload_json
          FROM mini_progress_batches AS batch

@@ -466,6 +466,7 @@ fn wip_batch(current_apparatus: &str) -> OrderProgressBatch {
         total_waste: None,
         finished_goods_kg: None,
         finished_goods_meter: None,
+        diameter: None,
         description: String::new(),
         payload_json: serde_json::json!({}),
     }

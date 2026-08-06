@@ -44,6 +44,8 @@ struct ApparatusQueueActionRequest {
     #[serde(default)]
     finished_goods_meter: Option<f64>,
     #[serde(default)]
+    diameter: Option<f64>,
+    #[serde(default)]
     uom: String,
     #[serde(default)]
     unit: String,
@@ -229,6 +231,7 @@ pub async fn production_map_queue_action(
         total_waste: input.total_waste,
         finished_goods_kg: input.finished_goods_kg,
         finished_goods_meter: input.finished_goods_meter,
+        diameter: input.diameter,
         description: completion_request_note.clone(),
         returned_paint_report_attached,
         force_full_completion_metrics: input.full_completion_report_required,

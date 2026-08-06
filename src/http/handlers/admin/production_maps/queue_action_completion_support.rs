@@ -50,7 +50,8 @@ fn rezka_queue_quantity_metrics_are_complete(
         |value: Option<f64>| value.is_some_and(|value| value.is_finite() && value > 0.0);
     let has_output_meter = is_positive(produced_qty.or(input.finished_goods_meter));
     let has_output_kg = is_positive(input.gross_qty.or(input.finished_goods_kg));
-    has_output_meter && has_output_kg
+    let has_diameter = is_positive(input.diameter);
+    has_output_meter && has_output_kg && has_diameter
 }
 
 async fn prepare_qolips_for_bosma_start(

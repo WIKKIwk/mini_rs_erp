@@ -12,6 +12,7 @@ pub(super) struct ProgressMetrics {
     pub(super) total_waste: Option<f64>,
     pub(super) finished_goods_kg: Option<f64>,
     pub(super) finished_goods_meter: Option<f64>,
+    pub(super) diameter: Option<f64>,
 }
 
 pub(super) fn validated_progress_metrics(
@@ -81,6 +82,11 @@ pub(super) fn validated_progress_metrics(
         } else {
             valid_optional_progress_qty(progress.finished_goods_meter)?
         },
+        diameter: if is_rezka {
+            valid_optional_progress_qty(progress.diameter)?
+        } else {
+            None
+        },
     };
     validate_progress_metrics(
         apparatus,
@@ -113,6 +119,7 @@ pub(super) fn validated_laminatsiya_worker_handoff_metrics(
         total_waste: valid_non_negative_optional_progress_qty(progress.total_waste)?,
         finished_goods_kg: None,
         finished_goods_meter: None,
+        diameter: None,
     };
     if metrics.lamination_print_leftover_rolls.is_none()
         || metrics.lamination_film_leftover_rolls.is_none()
@@ -149,6 +156,7 @@ pub(super) fn validated_laminatsiya_removed_roll_metrics(
         total_waste: None,
         finished_goods_kg,
         finished_goods_meter,
+        diameter: None,
     })
 }
 
@@ -212,7 +220,8 @@ fn validate_progress_metrics(
         metrics.finished_goods_kg,
         metrics.finished_goods_meter,
     );
-    if is_rezka && (missing_rezka_waste || missing_rezka_quantity) {
+    let missing_rezka_diameter = is_rezka && metrics.diameter.is_none();
+    if is_rezka && (missing_rezka_waste || missing_rezka_quantity || missing_rezka_diameter) {
         return Err(ProductionMapError::RezkaProgressMetricsRequired);
     }
     Ok(())
@@ -282,4 +291,49 @@ fn rezka_quantity_metrics_are_complete(
 ) -> bool {
     (produced_qty.is_some() || finished_goods_meter.is_some())
         && (gross_qty.is_some() || finished_goods_kg.is_some())
+}
+
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn rezka_pause_progress(diameter: Option<f64>) -> QueueProgressInput {
+        QueueProgressInput {
+            produced_qty: Some(10.0),
+            gross_qty: Some(11.0),
+            diameter,
+            ..QueueProgressInput::default()
+        }
+    }
+
+    #[test]
+    fn rezka_pause_requires_positive_finite_diameter() {
+        let valid = validated_progress_metrics(
+            "Rezka",
+            queue_state::ApparatusQueueAction::Pause,
+            &rezka_pause_progress(Some(45.5)),
+        )
+        .expect("positive finite diameter");
+        assert_eq!(valid.diameter, Some(45.5));
+
+        for diameter in [Some(0.0), Some(-1.0), Some(f64::NAN), Some(f64::INFINITY)] {
+            assert_eq!(
+                validated_progress_metrics(
+                    "Rezka",
+                    queue_state::ApparatusQueueAction::Pause,
+                    &rezka_pause_progress(diameter),
+                ),
+                Err(ProductionMapError::ProgressInputInvalid),
+            );
+        }
+        assert_eq!(
+            validated_progress_metrics(
+                "Rezka",
+                queue_state::ApparatusQueueAction::Pause,
+                &rezka_pause_progress(None),
+            ),
+            Err(ProductionMapError::RezkaProgressMetricsRequired),
+        );
+    }
 }

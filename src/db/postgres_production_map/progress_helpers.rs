@@ -83,7 +83,7 @@ pub(super) async fn put_order_progress_event_tx(
             qr_payload, return_ink_kg, lamination_print_leftover_rolls,
             lamination_film_leftover_rolls, rezka_bosma_waste,
             rezka_lamination_waste, rezka_edge_waste, total_waste,
-            finished_goods_kg, finished_goods_meter, description,
+            finished_goods_kg, finished_goods_meter, diameter, description,
             payload_json, created_at
          )
          VALUES ($1, $2, $3, $4, $5, $6,
@@ -98,7 +98,8 @@ pub(super) async fn put_order_progress_event_tx(
                  ($19::double precision)::numeric(24,9),
                  ($20::double precision)::numeric(24,9),
                  ($21::double precision)::numeric(24,9),
-                 $22, $23, now())
+                 ($22::double precision)::numeric(24,9),
+                 $23, $24, now())
          ON CONFLICT (event_id) DO UPDATE SET
             session_id = excluded.session_id,
             batch_id = excluded.batch_id,
@@ -118,6 +119,7 @@ pub(super) async fn put_order_progress_event_tx(
             total_waste = excluded.total_waste,
             finished_goods_kg = excluded.finished_goods_kg,
             finished_goods_meter = excluded.finished_goods_meter,
+            diameter = excluded.diameter,
             description = excluded.description,
             payload_json = excluded.payload_json",
     )
@@ -142,6 +144,7 @@ pub(super) async fn put_order_progress_event_tx(
     .bind(event.total_waste)
     .bind(event.finished_goods_kg)
     .bind(event.finished_goods_meter)
+    .bind(event.diameter)
     .bind(event.description.trim())
     .bind(&event.payload_json)
     .execute(&mut **tx)
@@ -189,7 +192,7 @@ pub(super) async fn put_order_progress_batch_tx(
             return_ink_kg, lamination_print_leftover_rolls,
             lamination_film_leftover_rolls, rezka_bosma_waste,
             rezka_lamination_waste, rezka_edge_waste, total_waste,
-            finished_goods_kg, finished_goods_meter, description,
+            finished_goods_kg, finished_goods_meter, diameter, description,
             payload_json, created_at, updated_at
          )
          VALUES ($1, $2, $3, $4, $5, $6,
@@ -205,7 +208,8 @@ pub(super) async fn put_order_progress_batch_tx(
                  ($32::double precision)::numeric(24,9),
                  ($33::double precision)::numeric(24,9),
                  ($34::double precision)::numeric(24,9),
-                 $35, $36, now(), now())
+                 ($35::double precision)::numeric(24,9),
+                 $36, $37, now(), now())
          ON CONFLICT (batch_id) DO UPDATE SET
             session_id = excluded.session_id,
             apparatus = excluded.apparatus,
@@ -238,6 +242,7 @@ pub(super) async fn put_order_progress_batch_tx(
             total_waste = excluded.total_waste,
             finished_goods_kg = excluded.finished_goods_kg,
             finished_goods_meter = excluded.finished_goods_meter,
+            diameter = excluded.diameter,
             description = excluded.description,
             payload_json = excluded.payload_json,
             updated_at = now()",
@@ -276,6 +281,7 @@ pub(super) async fn put_order_progress_batch_tx(
     .bind(batch.total_waste)
     .bind(batch.finished_goods_kg)
     .bind(batch.finished_goods_meter)
+    .bind(batch.diameter)
     .bind(batch.description.trim())
     .bind(&batch.payload_json)
     .execute(&mut **tx)

@@ -1917,6 +1917,7 @@ async fn rezka_resume_reopens_all_frames_from_the_scanned_input_wip() {
             QueueProgressInput {
                 produced_qty: Some(12.0),
                 gross_qty: Some(15.0),
+                diameter: Some(45.5),
                 uom: "m".to_string(),
                 finished_goods_kg: Some(15.0),
                 finished_goods_meter: Some(12.0),
@@ -3461,6 +3462,7 @@ async fn roll_complete_final_output_can_be_received_as_finished_goods() {
             QueueProgressInput {
                 produced_qty: Some(90.0),
                 gross_qty: Some(11.0),
+                diameter: Some(45.5),
                 uom: "m".to_string(),
                 ..QueueProgressInput::default()
             },
@@ -3584,6 +3586,7 @@ fn test_progress_batch(
         total_waste: None,
         finished_goods_kg: None,
         finished_goods_meter: None,
+        diameter: None,
         description: String::new(),
         payload_json: serde_json::json!({}),
     }
