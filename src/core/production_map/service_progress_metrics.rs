@@ -318,22 +318,22 @@ mod tests {
         assert_eq!(valid.diameter, Some(45.5));
 
         for diameter in [Some(0.0), Some(-1.0), Some(f64::NAN), Some(f64::INFINITY)] {
-            assert_eq!(
+            assert!(matches!(
                 validated_progress_metrics(
                     "Rezka",
                     queue_state::ApparatusQueueAction::Pause,
                     &rezka_pause_progress(diameter),
                 ),
-                Err(ProductionMapError::ProgressInputInvalid),
-            );
+                Err(ProductionMapError::ProgressInputInvalid)
+            ));
         }
-        assert_eq!(
+        assert!(matches!(
             validated_progress_metrics(
                 "Rezka",
                 queue_state::ApparatusQueueAction::Pause,
                 &rezka_pause_progress(None),
             ),
-            Err(ProductionMapError::RezkaProgressMetricsRequired),
-        );
+            Err(ProductionMapError::RezkaProgressMetricsRequired)
+        ));
     }
 }
