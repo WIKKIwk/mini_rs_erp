@@ -276,7 +276,10 @@ pub async fn production_maps(
                 &[Capability::AdminAccess, Capability::ProductionMapManage],
             )
             .await?;
-            let input: ProductionMapDefinition = parse_json(&body)?;
+            let mut input: ProductionMapDefinition = parse_json(&body)?;
+            assign_order_number_if_missing(&state, &mut input)
+                .await
+                .map_err(production_map_error)?;
             match state.production_maps.upsert_map(input).await {
                 Ok(saved) => Ok(json_response(saved)),
                 Err(error) => Err(production_map_error(error)),
@@ -327,6 +330,15 @@ pub async fn production_map_save_with_order(
                 .await
                 .map_err(|_| production_map_error(ProductionMapError::StoreFailed))?;
             apply_authoritative_calculation(&mut input.map, template, &material_catalog)?;
+        }
+    }
+    let order_number_was_generated = assign_order_number_if_missing(&state, &mut input.map)
+        .await
+        .map_err(production_map_error)?;
+    if order_number_was_generated {
+        let order_number = input.map.order_number.trim().to_string();
+        if let Some(template) = input.template.as_mut() {
+            template.order_number = order_number;
         }
     }
     let opens_quick_template_as_order = input

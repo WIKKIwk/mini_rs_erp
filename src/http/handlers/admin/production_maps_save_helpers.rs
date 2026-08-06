@@ -1,3 +1,20 @@
+async fn assign_order_number_if_missing(
+    state: &AppState,
+    map: &mut ProductionMapDefinition,
+) -> Result<bool, ProductionMapError> {
+    let map_id = map.id.trim();
+    if !map.order_number.trim().is_empty()
+        || !map_id.to_ascii_lowercase().starts_with("zakaz-draft-")
+    {
+        return Ok(false);
+    }
+    let order_number = state.production_maps.next_order_number().await?;
+    map.id = format!("zakaz-{order_number}");
+    map.code = order_number.clone();
+    map.order_number = order_number;
+    Ok(true)
+}
+
 fn template_map_copy_for_save(
     map: &ProductionMapDefinition,
     template: &CalculateOrderTemplate,

@@ -18,6 +18,8 @@ pub enum ProductionMapError {
     DuplicateOrderNumber,
     #[error("order number cannot be changed")]
     OrderNumberImmutable,
+    #[error("order number sequence is exhausted")]
+    OrderNumberExhausted,
     #[error("edge references missing node: {0}")]
     MissingEdgeNode(String),
     #[error("map has a cycle")]

@@ -95,6 +95,27 @@ pub trait ProductionMapStorePort: Send + Sync {
     async fn maps(&self) -> StoreResult<Vec<ProductionMapDefinition>>;
     async fn put_map(&self, map: ProductionMapDefinition) -> StoreResult<()>;
     async fn put_maps_batch(&self, maps: &[ProductionMapDefinition]) -> StoreResult<()>;
+    async fn next_order_number(&self) -> StoreResult<String> {
+        let max_order_number = self
+            .maps()
+            .await?
+            .iter()
+            .filter_map(|map| {
+                let value = map.order_number.trim();
+                (value.len() <= 4
+                    && !value.is_empty()
+                    && value.chars().all(|ch| ch.is_ascii_digit()))
+                    .then(|| value.parse::<u32>().ok())
+                    .flatten()
+            })
+            .max()
+            .unwrap_or_default();
+        let next_order_number = max_order_number
+            .checked_add(1)
+            .filter(|value| *value <= 9999)
+            .ok_or(ProductionMapError::OrderNumberExhausted)?;
+        Ok(format!("{next_order_number:04}"))
+    }
     async fn delete_map(&self, map_id: &str) -> StoreResult<()>;
     async fn order_control_states(&self) -> StoreResult<OrderControlMap> {
         Ok(BTreeMap::new())

@@ -220,6 +220,7 @@ pub(super) fn production_map_error(error: ProductionMapError) -> AdminError {
         ProductionMapError::DuplicateNode(_) => bad_request("duplicate_node_id"),
         ProductionMapError::DuplicateOrderNumber => bad_request("duplicate_order_number"),
         ProductionMapError::OrderNumberImmutable => bad_request("order_number_immutable"),
+        ProductionMapError::OrderNumberExhausted => bad_request("order_number_exhausted"),
         ProductionMapError::MissingEdgeNode(_) => bad_request("missing_edge_node"),
         ProductionMapError::Cycle => bad_request("production_map_cycle"),
         ProductionMapError::MissingFormulaTarget => bad_request("formula_target_required"),

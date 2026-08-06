@@ -116,6 +116,71 @@ async fn production_map_save_with_order_saves_map_and_template() {
 }
 
 #[tokio::test]
+async fn production_map_save_allocates_order_number_for_direct_and_atomic_saves() {
+    let state = test_state();
+    let token = session(&state, PrincipalRole::Admin).await;
+
+    let direct_map: serde_json::Value = serde_json::from_str(&pechat_order_map_json(
+        "zakaz-draft-direct",
+        "Direct auto zakaz",
+        "",
+        "8 ta rangli pechat",
+    ))
+    .expect("direct map json");
+    let direct = build_router(state.clone())
+        .oneshot(request_with_body(
+            "PUT",
+            "/v1/mobile/admin/production-maps",
+            &token,
+            &direct_map.to_string(),
+        ))
+        .await
+        .expect("direct save");
+    assert_eq!(direct.status(), StatusCode::OK);
+    let direct_value = json_body(direct).await;
+    assert_eq!(direct_value["map"]["id"], "zakaz-0001");
+    assert_eq!(direct_value["map"]["code"], "0001");
+    assert_eq!(direct_value["map"]["order_number"], "0001");
+
+    let with_order_map: serde_json::Value = serde_json::from_str(&pechat_order_map_json(
+        "zakaz-draft-with-order",
+        "Atomic auto zakaz",
+        "",
+        "8 ta rangli pechat",
+    ))
+    .expect("with-order map json");
+    let body = serde_json::json!({
+        "map": with_order_map,
+        "template": {
+            "name": "atomic auto mahsulot",
+            "product": "atomic auto mahsulot",
+            "frame_product_size_mm": 635,
+            "frame_count": 1,
+            "waste_percent": 5,
+            "first_layer_material": "pet",
+            "first_layer_micron": "12",
+            "second_layer_material": "pe oq",
+            "second_layer_micron": "30"
+        }
+    });
+    let with_order = build_router(state)
+        .oneshot(request_with_body(
+            "PUT",
+            "/v1/mobile/admin/production-maps/with-order",
+            &token,
+            &body.to_string(),
+        ))
+        .await
+        .expect("atomic save");
+    assert_eq!(with_order.status(), StatusCode::OK);
+    let with_order_value = json_body(with_order).await;
+    assert_eq!(with_order_value["saved"]["map"]["id"], "zakaz-0002");
+    assert_eq!(with_order_value["saved"]["map"]["code"], "0002");
+    assert_eq!(with_order_value["saved"]["map"]["order_number"], "0002");
+    assert_eq!(with_order_value["template"]["order_number"], "0002");
+}
+
+#[tokio::test]
 async fn production_map_save_with_order_snapshots_rezka_frame_count_on_new_order() {
     let state = test_state();
     let token = session(&state, PrincipalRole::Admin).await;

@@ -12,6 +12,10 @@ use super::progress::{
 };
 
 impl ProductionMapService {
+    pub async fn next_order_number(&self) -> Result<String, ProductionMapError> {
+        self.store.next_order_number().await
+    }
+
     pub async fn maps(&self) -> Result<Vec<ProductionMapSaved>, ProductionMapError> {
         let maps = self.store.maps().await?;
         let mut saved = Vec::with_capacity(maps.len());

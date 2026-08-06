@@ -105,6 +105,20 @@ impl ProductionMapStorePort for PostgresProductionMapStore {
         load_maps(&self.pool).await
     }
 
+    async fn next_order_number(&self) -> Result<String, ProductionMapError> {
+        sqlx::query_scalar::<_, Option<String>>(
+            "SELECT CASE
+                WHEN is_called AND last_value >= 9999 THEN NULL
+                ELSE lpad(nextval('mini_production_order_number_seq')::text, 4, '0')
+             END
+             FROM mini_production_order_number_seq",
+        )
+        .fetch_one(&self.pool)
+        .await
+        .map_err(|_| ProductionMapError::StoreFailed)?
+        .ok_or(ProductionMapError::OrderNumberExhausted)
+    }
+
     async fn put_map(&self, map: ProductionMapDefinition) -> Result<(), ProductionMapError> {
         reject_order_number_immutable(&self.pool, &map).await?;
         reject_duplicate_order_number(&self.pool, &map).await?;
