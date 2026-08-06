@@ -377,6 +377,15 @@ pub(super) fn production_map_error(error: ProductionMapError) -> AdminError {
         ProductionMapError::ProgressBatchNotResumable => {
             bad_request("progress_batch_not_resumable")
         }
+        ProductionMapError::PaddonInvalidInput => bad_request("paddon_invalid_input"),
+        ProductionMapError::PaddonCodeExhausted => conflict("paddon_code_exhausted"),
+        ProductionMapError::PaddonNotFound => not_found("paddon_not_found"),
+        ProductionMapError::PaddonItemAlreadyAssigned => {
+            conflict("paddon_item_already_assigned")
+        }
+        ProductionMapError::PaddonItemNotAssigned => {
+            bad_request("paddon_item_not_assigned")
+        }
         ProductionMapError::CapacityProfileInvalid => bad_request("capacity_profile_invalid"),
         ProductionMapError::CapacityProfileNotFound => not_found("capacity_profile_not_found"),
         ProductionMapError::CapabilityNotSupported => bad_request("capability_not_supported"),

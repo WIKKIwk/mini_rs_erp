@@ -23,6 +23,7 @@ mod service_order_control;
 mod service_progress;
 mod service_progress_metrics;
 mod service_progress_support;
+mod service_paddon;
 mod service_qolip;
 mod service_transfer;
 mod service_queue;

@@ -4,6 +4,7 @@ umask 077
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
+source "$SCRIPT_DIR/qolip_backup_validation.sh"
 
 RESTORE_DATABASE_URL="${MINI_ERP_RESTORE_DATABASE_URL:-${MINI_ERP_MIGRATION_DATABASE_URL:-${MINI_ERP_DATABASE_URL:-}}}"
 if [ -z "$RESTORE_DATABASE_URL" ]; then
@@ -46,7 +47,7 @@ fi
 export PGOPTIONS="${PGOPTIONS:-} -c lock_timeout=${LOCK_TIMEOUT_MS}"
 
 # Validate the custom-format dump before touching the target database.
-"$PG_RESTORE" --list "$MINI_ERP_RESTORE_DUMP" >/dev/null
+validate_qolip_dump "$PG_RESTORE" "$MINI_ERP_RESTORE_DUMP"
 
 # pg_restore has no CASCADE option for its generated DROP statements. Generate
 # the SQL stream and execute it through psql so the public schema can be

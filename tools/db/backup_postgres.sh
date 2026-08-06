@@ -4,6 +4,7 @@ umask 077
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
+source "$SCRIPT_DIR/qolip_backup_validation.sh"
 
 if [ -z "${MINI_ERP_DATABASE_URL:-}" ]; then
 	echo "MINI_ERP_DATABASE_URL is required" >&2
@@ -38,6 +39,8 @@ if [ -z "$DATABASE_NAME" ]; then
 	exit 1
 fi
 
+validate_qolip_database_tables "$PSQL" "$MINI_ERP_DATABASE_URL"
+
 TIMESTAMP="${MINI_ERP_BACKUP_TIMESTAMP:-$(date +%Y%m%d_%H%M%S)}"
 case "$TIMESTAMP" in
 	*[!A-Za-z0-9._-]*|'')
@@ -54,7 +57,7 @@ PLAIN_DUMP="$BACKUP_DIR/$DATABASE_NAME.sql"
 
 "$PG_DUMP" --format=custom --compress=0 --file="$CUSTOM_DUMP" "$MINI_ERP_DATABASE_URL"
 "$PG_DUMP" --format=plain --file="$PLAIN_DUMP" "$MINI_ERP_DATABASE_URL"
-"$PG_RESTORE" --list "$CUSTOM_DUMP" >/dev/null
+validate_qolip_dump "$PG_RESTORE" "$CUSTOM_DUMP"
 
 if [ -n "${MINI_ERP_ADMIN_DATABASE_URL:-}" ]; then
 	"$PG_DUMPALL" --globals-only --database="$MINI_ERP_ADMIN_DATABASE_URL" \
@@ -67,6 +70,7 @@ created_at_utc=$(date -u +%Y-%m-%dT%H:%M:%SZ)
 postgres_client_version=$($PG_DUMP --version)
 custom_dump=$(basename "$CUSTOM_DUMP")
 plain_dump=$(basename "$PLAIN_DUMP")
+qolip_tables_validated=true
 EOF
 
 (

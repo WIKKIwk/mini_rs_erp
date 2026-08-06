@@ -25,6 +25,7 @@ mod astatka;
 mod helpers;
 mod move_run;
 mod order_control;
+mod paddons;
 mod progress_qr;
 mod qolip_order_notes;
 mod qolip_validation;
@@ -48,6 +49,11 @@ pub use self::move_run::{
     production_map_run,
 };
 pub use self::order_control::production_map_order_control;
+pub use self::paddons::{
+    production_map_paddon_create, production_map_paddon_detail,
+    production_map_paddon_item_add, production_map_paddon_item_remove,
+    production_map_paddons,
+};
 pub use self::progress_qr::{
     production_map_progress_qr_history, production_map_progress_qr_lookup,
     production_map_progress_qr_report, production_map_progress_qr_reprint,

@@ -359,6 +359,34 @@ pub trait ProductionMapStorePort: Send + Sync {
     ) -> StoreResult<Vec<OrderProgressBatch>> {
         Ok(Vec::new())
     }
+    async fn paddons(&self, _limit: usize) -> StoreResult<Vec<PaddonSummary>> {
+        Ok(Vec::new())
+    }
+    async fn create_paddon(
+        &self,
+        _input: PaddonCreateInput,
+    ) -> StoreResult<PaddonSummary> {
+        Err(ProductionMapError::StoreFailed)
+    }
+    async fn paddon_snapshot(&self, _code: &str) -> StoreResult<Option<PaddonSnapshot>> {
+        Ok(None)
+    }
+    async fn add_paddon_item(
+        &self,
+        _code: &str,
+        _progress_batch_id: &str,
+        _actor: &QueueActionActor,
+    ) -> StoreResult<PaddonSnapshot> {
+        Err(ProductionMapError::StoreFailed)
+    }
+    async fn remove_paddon_item(
+        &self,
+        _code: &str,
+        _progress_batch_id: &str,
+        _actor: &QueueActionActor,
+    ) -> StoreResult<PaddonSnapshot> {
+        Err(ProductionMapError::StoreFailed)
+    }
     async fn put_order_run_session(&self, _session: OrderRunSession) -> StoreResult<()> {
         Ok(())
     }

@@ -154,6 +154,26 @@ pub(super) fn routes() -> Router<AppState> {
             any(admin::production_map_progress_qr_reprint),
         )
         .route(
+            "/v1/mobile/admin/production-maps/paddons",
+            any(admin::production_map_paddons),
+        )
+        .route(
+            "/v1/mobile/admin/production-maps/paddons/detail",
+            any(admin::production_map_paddon_detail),
+        )
+        .route(
+            "/v1/mobile/admin/production-maps/paddons/create",
+            any(admin::production_map_paddon_create),
+        )
+        .route(
+            "/v1/mobile/admin/production-maps/paddons/items/add",
+            any(admin::production_map_paddon_item_add),
+        )
+        .route(
+            "/v1/mobile/admin/production-maps/paddons/items/remove",
+            any(admin::production_map_paddon_item_remove),
+        )
+        .route(
             "/v1/mobile/admin/production-maps/wip-batches",
             any(admin::production_map_wip_batches),
         )

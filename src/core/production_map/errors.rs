@@ -166,6 +166,16 @@ pub enum ProductionMapError {
     ProgressBatchNotAccepted,
     #[error("progress batch cannot resume")]
     ProgressBatchNotResumable,
+    #[error("paddon input is invalid")]
+    PaddonInvalidInput,
+    #[error("paddon code sequence is exhausted")]
+    PaddonCodeExhausted,
+    #[error("paddon was not found")]
+    PaddonNotFound,
+    #[error("progress batch is already assigned to another paddon")]
+    PaddonItemAlreadyAssigned,
+    #[error("progress batch is not assigned to this paddon")]
+    PaddonItemNotAssigned,
     #[error("capacity profile is invalid")]
     CapacityProfileInvalid,
     #[error("capacity profile was not found")]

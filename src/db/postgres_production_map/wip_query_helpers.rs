@@ -10,6 +10,21 @@ pub(super) async fn load_wip_progress_batches(
     pool: &PgPool,
     query: WipProgressBatchQuery,
 ) -> Result<Vec<OrderProgressBatch>, ProductionMapError> {
+    load_wip_progress_batches_inner(pool, query, false).await
+}
+
+pub(super) async fn load_unassigned_wip_progress_batches(
+    pool: &PgPool,
+    query: WipProgressBatchQuery,
+) -> Result<Vec<OrderProgressBatch>, ProductionMapError> {
+    load_wip_progress_batches_inner(pool, query, true).await
+}
+
+async fn load_wip_progress_batches_inner(
+    pool: &PgPool,
+    query: WipProgressBatchQuery,
+    exclude_assigned_paddon_items: bool,
+) -> Result<Vec<OrderProgressBatch>, ProductionMapError> {
     let WipProgressBatchQuery {
         apparatus,
         next_apparatus,
@@ -33,7 +48,17 @@ pub(super) async fn load_wip_progress_batches(
     let current_location = current_location.trim();
     let status = status.map(|value| value.as_str()).unwrap_or_default();
     let limit = i64::try_from(limit.min(500)).unwrap_or(500);
-    let rows = sqlx::query_as::<_, ProgressBatchRow>(
+    let paddon_filter = if exclude_assigned_paddon_items {
+        "AND NOT EXISTS (
+                 SELECT 1
+                 FROM mini_paddon_items AS paddon_item
+                 WHERE btrim(paddon_item.progress_batch_id) = btrim(batch.batch_id)
+                   AND paddon_item.removed_at IS NULL
+             )"
+    } else {
+        ""
+    };
+    let sql = format!(
         "SELECT batch.batch_id, batch.session_id,
                 COALESCE(EXTRACT(EPOCH FROM session.started_at)::bigint,
                          EXTRACT(EPOCH FROM batch.created_at)::bigint) AS started_at_unix,
@@ -70,22 +95,24 @@ pub(super) async fn load_wip_progress_batches(
            AND ($4 = '' OR current_location = $4)
            AND (
              $5 = ''
-             OR lower(regexp_replace(trim(next_apparatus), '\\s+-\\s+[A-Za-z0-9_-]{1,16}$', '')) = $5
-             OR $5 LIKE lower(regexp_replace(trim(next_apparatus), '\\s+-\\s+[A-Za-z0-9_-]{1,16}$', '')) || ' %'
+             OR lower(regexp_replace(trim(next_apparatus), '\\s+-\\s+[A-Za-z0-9_-]{{1,16}}$', '')) = $5
+             OR $5 LIKE lower(regexp_replace(trim(next_apparatus), '\\s+-\\s+[A-Za-z0-9_-]{{1,16}}$', '')) || ' %'
            )
+           {paddon_filter}
          ORDER BY updated_at DESC, created_at DESC, batch_id DESC
-         LIMIT $6",
-    )
-    .bind(query_apparatus_key)
-    .bind(order_id.trim())
-    .bind(status)
-    .bind(current_location)
-    .bind(next_apparatus_key)
-    .bind(limit)
-    .bind(include_processed)
-    .fetch_all(pool)
-    .await
-    .map_err(|_| ProductionMapError::StoreFailed)?;
+         LIMIT $6"
+    );
+    let rows = sqlx::query_as::<_, ProgressBatchRow>(&sql)
+        .bind(query_apparatus_key)
+        .bind(order_id.trim())
+        .bind(status)
+        .bind(current_location)
+        .bind(next_apparatus_key)
+        .bind(limit)
+        .bind(include_processed)
+        .fetch_all(pool)
+        .await
+        .map_err(|_| ProductionMapError::StoreFailed)?;
     let batches = rows
         .into_iter()
         .map(progress_batch_from_row)

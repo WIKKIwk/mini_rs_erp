@@ -9,7 +9,7 @@ const DEFAULT_MAX_CONNECTIONS: u32 = 16;
 const DEFAULT_ACQUIRE_TIMEOUT_MS: u64 = 500;
 const MIGRATION_LOCK_KEY: i64 = 6_514_811_918_052_026_001;
 
-const POSTGRES_MIGRATIONS: [(&str, &str); 43] = [
+const POSTGRES_MIGRATIONS: [(&str, &str); 45] = [
     (
         "0001_mini_erp_foundation",
         include_str!("../../migrations/postgres/0001_mini_erp_foundation.sql"),
@@ -181,6 +181,16 @@ const POSTGRES_MIGRATIONS: [(&str, &str); 43] = [
     (
         "0043_rezka_progress_diameter",
         include_str!("../../migrations/postgres/0043_rezka_progress_diameter.sql"),
+    ),
+    (
+        "0044_paddons",
+        include_str!("../../migrations/postgres/0044_paddons.sql"),
+    ),
+    (
+        "0045_paddon_sequence_and_package_shape",
+        include_str!(
+            "../../migrations/postgres/0045_paddon_sequence_and_package_shape.sql"
+        ),
     ),
 ];
 
