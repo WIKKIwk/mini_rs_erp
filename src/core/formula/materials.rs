@@ -1,6 +1,7 @@
 use super::{close, normalize, parse_micron_parts, split_parts};
 use crate::core::calculate_materials::{
-    CalculateMaterial, CalculateMaterialVariant, effective_variant_gsm, normalize_key,
+    CalculateMaterial, CalculateMaterialVariant, DEFAULT_PE_DENSITY_G_CM3,
+    DEFAULT_PET_DENSITY_G_CM3, DEFAULT_PP_FILM_DENSITY_G_CM3, effective_variant_gsm, normalize_key,
 };
 
 pub(super) fn gsm_cell_with_catalog(
@@ -88,10 +89,10 @@ pub(super) fn gsm_cell(material: &str, micron_text: &str, micron: u32) -> Result
 fn gsm_single(material: &str, micron: u32) -> Result<f64, String> {
     let family = material_family(material)?;
     let gsm = match family {
-        Family::Pet => Some(f64::from(micron) * 1.40),
-        Family::Opp => Some(f64::from(micron) * 0.91),
-        Family::Cpp => Some(f64::from(micron) * 0.90),
-        Family::Pe => Some(f64::from(micron) * 0.92),
+        Family::Pet => Some(f64::from(micron) * DEFAULT_PET_DENSITY_G_CM3),
+        Family::Opp => Some(f64::from(micron) * DEFAULT_PP_FILM_DENSITY_G_CM3),
+        Family::Cpp => Some(f64::from(micron) * DEFAULT_PP_FILM_DENSITY_G_CM3),
+        Family::Pe => Some(f64::from(micron) * DEFAULT_PE_DENSITY_G_CM3),
         Family::Jem => legacy_jem_gsm(micron),
         Family::Twist => Some(1_000_000.0 / 30_000.0),
         Family::Empty => None,

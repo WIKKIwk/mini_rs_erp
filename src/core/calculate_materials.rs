@@ -5,6 +5,10 @@ use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
+pub const DEFAULT_PET_DENSITY_G_CM3: f64 = 1.400;
+pub const DEFAULT_PP_FILM_DENSITY_G_CM3: f64 = 0.905;
+pub const DEFAULT_PE_DENSITY_G_CM3: f64 = 0.920;
+
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq)]
 pub struct CalculateMaterialVariant {
     pub micron: u32,
@@ -225,68 +229,92 @@ pub fn default_calculate_materials() -> Vec<CalculateMaterial> {
         builtin(
             "builtin-pet",
             "PET",
-            1.40,
-            density_variants(&[12, 20, 25, 30, 35, 40, 45, 50, 60], 1.40),
+            DEFAULT_PET_DENSITY_G_CM3,
+            density_variants(
+                &[12, 20, 25, 30, 35, 40, 45, 50, 60],
+                DEFAULT_PET_DENSITY_G_CM3,
+            ),
         ),
         builtin(
             "builtin-opp",
             "OPP",
-            0.91,
-            density_variants(&[18, 20, 25, 30, 35, 40, 45, 50, 60], 0.91),
+            DEFAULT_PP_FILM_DENSITY_G_CM3,
+            density_variants(
+                &[18, 20, 25, 30, 35, 40, 45, 50, 60],
+                DEFAULT_PP_FILM_DENSITY_G_CM3,
+            ),
         ),
         builtin(
             "builtin-bopp",
             "BOPP",
-            0.91,
-            density_variants(&[18, 20, 25, 30, 35, 40, 45, 50, 60], 0.91),
+            DEFAULT_PP_FILM_DENSITY_G_CM3,
+            density_variants(
+                &[18, 20, 25, 30, 35, 40, 45, 50, 60],
+                DEFAULT_PP_FILM_DENSITY_G_CM3,
+            ),
         ),
         builtin(
             "builtin-bopp-metal",
             "BOPP metal",
-            0.91,
-            density_variants(&[18, 20, 25, 30, 35, 40, 45, 50, 60], 0.91),
+            DEFAULT_PP_FILM_DENSITY_G_CM3,
+            density_variants(
+                &[18, 20, 25, 30, 35, 40, 45, 50, 60],
+                DEFAULT_PP_FILM_DENSITY_G_CM3,
+            ),
         ),
         builtin(
             "builtin-mcp",
             "MCP",
-            0.90,
-            density_variants(&[20, 25, 30, 35, 40, 45, 50, 60], 0.90),
+            DEFAULT_PP_FILM_DENSITY_G_CM3,
+            density_variants(
+                &[20, 25, 30, 35, 40, 45, 50, 60],
+                DEFAULT_PP_FILM_DENSITY_G_CM3,
+            ),
         ),
         builtin(
             "builtin-mcpp",
             "MCPP",
-            0.90,
-            density_variants(&[20, 25, 30, 35, 40, 45, 50, 60], 0.90),
+            DEFAULT_PP_FILM_DENSITY_G_CM3,
+            density_variants(
+                &[20, 25, 30, 35, 40, 45, 50, 60],
+                DEFAULT_PP_FILM_DENSITY_G_CM3,
+            ),
         ),
         builtin(
             "builtin-cpp",
             "CPP",
-            0.90,
-            density_variants(&[20, 25, 30, 35, 40, 45, 50, 60], 0.90),
+            DEFAULT_PP_FILM_DENSITY_G_CM3,
+            density_variants(
+                &[20, 25, 30, 35, 40, 45, 50, 60],
+                DEFAULT_PP_FILM_DENSITY_G_CM3,
+            ),
         ),
         builtin(
             "builtin-pe",
             "PE",
-            0.92,
-            density_variants(&[30, 35, 40, 45, 50, 55, 60, 65, 70, 75, 80, 85, 90], 0.92),
+            DEFAULT_PE_DENSITY_G_CM3,
+            density_variants(
+                &[30, 35, 40, 45, 50, 55, 60, 65, 70, 75, 80, 85, 90],
+                DEFAULT_PE_DENSITY_G_CM3,
+            ),
         ),
         builtin(
             "builtin-pe-oq",
             "PE oq",
-            0.92,
-            density_variants(&[30, 35, 40, 45, 50, 55, 60, 65, 70, 75, 80, 85, 90], 0.92),
-        ),
-        builtin(
-            "builtin-pe-qora",
-            "PE qora",
-            0.92,
-            density_variants(&[30, 35, 40, 45, 50, 55, 60, 65, 70, 75, 80, 85, 90], 0.92),
+            DEFAULT_PE_DENSITY_G_CM3,
+            density_variants(
+                &[30, 35, 40, 45, 50, 55, 60, 65, 70, 75, 80, 85, 90],
+                DEFAULT_PE_DENSITY_G_CM3,
+            ),
         ),
         builtin(
             "builtin-pe-pr",
             "PE PR",
-            0.92,
-            density_variants(&[30, 35, 40, 45, 50, 55, 60, 65, 70, 75, 80, 85, 90], 0.92),
+            DEFAULT_PE_DENSITY_G_CM3,
+            density_variants(
+                &[30, 35, 40, 45, 50, 55, 60, 65, 70, 75, 80, 85, 90],
+                DEFAULT_PE_DENSITY_G_CM3,
+            ),
         ),
         builtin("builtin-jem", "JEM", 0.0, legacy_jem_variants()),
     ]
@@ -299,12 +327,9 @@ pub fn merge_default_calculate_materials(
     for override_material in overrides {
         let override_material = upgrade_stored_material(override_material, &materials);
         let override_name = normalize_key(&override_material.name);
-        if let Some(current) = materials
-            .iter_mut()
-            .find(|current| {
-                current.id == override_material.id || normalize_key(&current.name) == override_name
-            })
-        {
+        if let Some(current) = materials.iter_mut().find(|current| {
+            current.id == override_material.id || normalize_key(&current.name) == override_name
+        }) {
             *current = override_material;
         } else {
             materials.push(override_material);
@@ -492,6 +517,27 @@ mod tests {
                 .any(|material| material.name == "BOPP metal")
         );
         assert!(materials.iter().any(|material| material.name == "PE oq"));
-        assert!(materials.iter().any(|material| material.name == "PE qora"));
+        assert!(materials.iter().any(|material| material.name == "PE PR"));
+        assert!(!materials.iter().any(|material| material.name == "PE qora"));
+    }
+
+    #[test]
+    fn default_pp_gsm_matches_manufacturer_nominal_substance() {
+        let materials = default_calculate_materials();
+        for name in ["BOPP", "CPP", "MCPP"] {
+            let material = materials
+                .iter()
+                .find(|material| material.name == name)
+                .expect("default PP material");
+            let variant = material
+                .variants
+                .iter()
+                .find(|variant| variant.micron == 20)
+                .expect("20 micron variant");
+
+            let gsm = effective_variant_gsm(material.density_g_cm3, variant)
+                .expect("effective default GSM");
+            assert!((gsm - 18.1).abs() < 0.001);
+        }
     }
 }

@@ -143,7 +143,7 @@ fn calculates_alternative_material_variants() {
         .collect::<Vec<_>>();
     assert_eq!(total_gsm.len(), 2);
     assert!((total_gsm[0] - 46.9).abs() < 0.001);
-    assert!((total_gsm[1] - 46.3).abs() < 0.001);
+    assert!((total_gsm[1] - 46.45).abs() < 0.001);
 }
 
 #[test]
