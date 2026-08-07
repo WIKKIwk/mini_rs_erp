@@ -6,6 +6,8 @@ use crate::core::qolip::{role_code, QolipBlock, QolipError, QolipProduct, QolipP
 
 use super::rows::{row_to_product_spec, QolipBlockRow, QolipProductRow, QolipProductSpecRow};
 
+const QOLIP_PANTON_MAX_NUMBER: i32 = 100;
+
 pub(super) async fn load_assigned_warehouses(
     pool: &PgPool,
     principal: &Principal,
@@ -778,7 +780,7 @@ async fn allocate_panton_color(
     let requested_number = panton_number(requested);
     let number = requested_number
         .filter(|number| !used.contains(number))
-        .or_else(|| (1..=7).find(|number| !used.contains(number)))
+        .or_else(|| (1..=QOLIP_PANTON_MAX_NUMBER).find(|number| !used.contains(number)))
         .ok_or(QolipError::PantonLimitExceeded)?;
     Ok(format!("Panton {number}"))
 }
@@ -789,7 +791,7 @@ fn panton_number(color: &str) -> Option<i32> {
         return None;
     }
     match parts.next()?.parse::<i32>().ok()? {
-        number @ 1..=7 if parts.next().is_none() => Some(number),
+        number @ 1..=QOLIP_PANTON_MAX_NUMBER if parts.next().is_none() => Some(number),
         _ => None,
     }
 }

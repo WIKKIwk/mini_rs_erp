@@ -179,6 +179,7 @@ pub async fn production_map_paddon_qr_print(
         qr_payload: code.clone(),
         item_code: code.clone(),
         item_name: format!("Paddon {code}"),
+        apparatus: String::new(),
         customer_name: String::new(),
         executor_name: principal.display_name.trim().to_string(),
         printer: input.printer,

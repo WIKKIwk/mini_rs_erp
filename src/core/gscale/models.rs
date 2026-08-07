@@ -64,6 +64,8 @@ pub struct ProgressLabelPrintRequest {
     #[serde(default)]
     pub item_name: String,
     #[serde(default)]
+    pub apparatus: String,
+    #[serde(default)]
     pub customer_name: String,
     #[serde(default)]
     pub executor_name: String,
@@ -96,6 +98,7 @@ pub struct ProgressLabelPrintResponse {
     pub qr_payload: String,
     pub item_code: String,
     pub item_name: String,
+    pub apparatus: String,
     pub customer_name: String,
     pub executor_name: String,
     pub qty: f64,

@@ -272,6 +272,7 @@ fn progress_reprint_request(
         qr_payload: batch.qr_payload.clone(),
         item_code: batch.label_item_code.clone(),
         item_name: item_name.to_string(),
+        apparatus: batch.apparatus.clone(),
         customer_name: batch
             .payload_json
             .get("customer_name")
@@ -292,7 +293,7 @@ fn progress_reprint_request(
         } else {
             batch.uom.clone()
         },
-        label_kind: String::new(),
+        label_kind: "progress".to_string(),
         print_count: input.print_count,
     }
 }

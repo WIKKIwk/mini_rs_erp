@@ -392,6 +392,7 @@ pub async fn production_map_queue_action(
                 qr_payload: batch.qr_payload.clone(),
                 item_code: batch.label_item_code.clone(),
                 item_name: batch.label_item_name.clone(),
+                apparatus: batch.apparatus.clone(),
                 customer_name: input.customer_name.trim().to_string(),
                 executor_name: batch.executor_name.clone(),
                 printer: input.printer.clone(),
@@ -409,7 +410,7 @@ pub async fn production_map_queue_action(
                 } else {
                     batch.uom.clone()
                 },
-                label_kind: String::new(),
+                label_kind: "progress".to_string(),
                 print_count: input.print_count,
             })
             .collect::<Vec<_>>()
