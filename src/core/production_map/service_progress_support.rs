@@ -87,6 +87,7 @@ pub(super) fn zero_quantity_event(
         rezka_edge_waste: None,
         total_waste: None,
         finished_goods_kg: None,
+        bobina_kg: None,
         finished_goods_meter: None,
         diameter: None,
         description: String::new(),
@@ -302,6 +303,7 @@ pub(super) fn progress_batch_record(
         rezka_edge_waste: input.metrics.rezka_edge_waste,
         total_waste: input.metrics.total_waste,
         finished_goods_kg: input.metrics.finished_goods_kg,
+        bobina_kg: input.metrics.bobina_kg,
         finished_goods_meter: input.metrics.finished_goods_meter,
         diameter: input.metrics.diameter,
         description: input.description.to_string(),
@@ -361,8 +363,10 @@ pub(super) fn clear_rezka_duplicate_metrics(batch: &mut OrderProgressBatch) {
     batch.rezka_lamination_waste = None;
     batch.rezka_edge_waste = None;
     batch.total_waste = None;
+    batch.bobina_kg = None;
     batch.diameter = None;
     if let Some(payload) = batch.payload_json.as_object_mut() {
+        payload.remove("bobina_kg");
         payload.remove("diameter");
     }
     batch.payload_json["rezka_metrics_owner"] = serde_json::json!(false);
@@ -405,6 +409,7 @@ pub(super) fn progress_event_record(input: ProgressEventRecordInput<'_>) -> Orde
         rezka_edge_waste: input.metrics.rezka_edge_waste,
         total_waste: input.metrics.total_waste,
         finished_goods_kg: input.metrics.finished_goods_kg,
+        bobina_kg: input.metrics.bobina_kg,
         finished_goods_meter: input.metrics.finished_goods_meter,
         diameter: input.metrics.diameter,
         description: input.description.to_string(),
@@ -431,6 +436,7 @@ pub(super) fn progress_metrics_event(
     event.lamination_film_leftover_rolls = metrics.lamination_film_leftover_rolls;
     event.total_waste = metrics.total_waste;
     event.finished_goods_kg = metrics.finished_goods_kg;
+    event.bobina_kg = metrics.bobina_kg;
     event.finished_goods_meter = metrics.finished_goods_meter;
     event.diameter = metrics.diameter;
     event.description = description.to_string();
@@ -458,6 +464,7 @@ pub(super) fn progress_session_payload(
         "total_waste": metrics.total_waste,
         "total_waste_uom": "kg",
         "finished_goods_kg": metrics.finished_goods_kg,
+        "bobina_kg": metrics.bobina_kg,
         "finished_goods_meter": metrics.finished_goods_meter,
         "diameter": metrics.diameter,
         "description": description,
@@ -507,6 +514,7 @@ fn progress_batch_payload(
 ) -> serde_json::Value {
     serde_json::json!({
         "order_title": order_map.title.trim(),
+        "customer_name": order_map.customer_name.trim(),
         "apparatus": apparatus,
         "action": queue_action_str(action),
         "return_ink_kg": metrics.return_ink_kg,
@@ -518,6 +526,7 @@ fn progress_batch_payload(
         "total_waste": metrics.total_waste,
         "total_waste_uom": "kg",
         "finished_goods_kg": metrics.finished_goods_kg,
+        "bobina_kg": metrics.bobina_kg,
         "finished_goods_meter": metrics.finished_goods_meter,
         "diameter": metrics.diameter,
         "description": description,
@@ -540,6 +549,7 @@ pub(super) fn progress_event_payload(
         "total_waste": metrics.total_waste,
         "total_waste_uom": "kg",
         "finished_goods_kg": metrics.finished_goods_kg,
+        "bobina_kg": metrics.bobina_kg,
         "finished_goods_meter": metrics.finished_goods_meter,
         "diameter": metrics.diameter,
         "description": description,
@@ -766,6 +776,7 @@ pub(super) fn wip_batch_removed_from_apparatus(
     apparatus: &str,
     finished_goods_meter: f64,
     finished_goods_kg: f64,
+    bobina_kg: f64,
     now: i64,
 ) -> OrderProgressBatch {
     batch.wip_status = OrderProgressBatchWipStatus::Waiting;
@@ -780,6 +791,8 @@ pub(super) fn wip_batch_removed_from_apparatus(
     batch.payload_json["roll_removed_finished_goods_meter"] =
         serde_json::json!(finished_goods_meter);
     batch.payload_json["roll_removed_finished_goods_kg"] = serde_json::json!(finished_goods_kg);
+    batch.payload_json["roll_removed_bobina_kg"] = serde_json::json!(bobina_kg);
+    batch.bobina_kg = Some(bobina_kg);
     sync_wip_payload_fields(&mut batch);
     batch
 }

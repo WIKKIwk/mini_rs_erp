@@ -2218,6 +2218,9 @@ async fn laminatsiya_astatka_uses_order_timeline_and_previous_report_anchor() {
             Some(1.0),
             Some(2.0),
             Some(0.5),
+            None,
+            None,
+            None,
             "birinchi astatka",
         )
         .await
@@ -2233,6 +2236,9 @@ async fn laminatsiya_astatka_uses_order_timeline_and_previous_report_anchor() {
             Some(0.0),
             Some(0.0),
             Some(0.0),
+            None,
+            None,
+            None,
             "ikkinchi astatka",
         )
         .await
@@ -2289,6 +2295,9 @@ async fn rezka_astatka_uses_order_timeline_and_accepts_zero_metrics() {
             Some(2.0),
             Some(3.0),
             Some(4.0),
+            None,
+            None,
+            None,
             "birinchi astatka",
         )
         .await
@@ -2305,6 +2314,9 @@ async fn rezka_astatka_uses_order_timeline_and_accepts_zero_metrics() {
             Some(0.0),
             Some(0.0),
             Some(0.0),
+            None,
+            None,
+            None,
             "ikkinchi astatka",
         )
         .await
@@ -3585,6 +3597,7 @@ fn test_progress_batch(
         rezka_edge_waste: None,
         total_waste: None,
         finished_goods_kg: None,
+        bobina_kg: None,
         finished_goods_meter: None,
         diameter: None,
         description: String::new(),

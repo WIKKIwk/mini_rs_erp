@@ -465,6 +465,7 @@ fn wip_batch(current_apparatus: &str) -> OrderProgressBatch {
         rezka_edge_waste: None,
         total_waste: None,
         finished_goods_kg: None,
+        bobina_kg: None,
         finished_goods_meter: None,
         diameter: None,
         description: String::new(),

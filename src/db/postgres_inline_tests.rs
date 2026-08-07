@@ -237,6 +237,25 @@ mod tests {
     }
 
     #[test]
+    fn production_progress_bobina_migration_is_registered_with_the_runner() {
+        let migration = POSTGRES_MIGRATIONS
+            .iter()
+            .find(|(version, _)| *version == "0046_production_progress_bobina")
+            .map(|(_, sql)| sql.to_lowercase())
+            .expect("production progress bobina migration");
+
+        for expected in [
+            "mini_order_progress_events",
+            "mini_progress_batches",
+            "mini_laminatsiya_astatka_reports",
+            "mini_rezka_astatka_reports",
+            "bobina_kg",
+        ] {
+            assert!(migration.contains(expected), "missing {expected}");
+        }
+    }
+
+    #[test]
     fn rps_runtime_privilege_migration_is_fail_closed() {
         let migration = POSTGRES_MIGRATIONS
             .iter()

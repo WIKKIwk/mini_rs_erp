@@ -4,6 +4,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use super::apparatus::{is_laminatsiya_title, is_rezka_title};
 use super::progress::unix_seconds;
+use crate::core::quantity::positive_erp_quantity;
 
 impl ProductionMapService {
     pub async fn record_laminatsiya_astatka(
@@ -14,6 +15,9 @@ impl ProductionMapService {
         lamination_print_leftover_rolls: Option<f64>,
         lamination_film_leftover_rolls: Option<f64>,
         total_waste: Option<f64>,
+        finished_goods_meter: Option<f64>,
+        finished_goods_kg: Option<f64>,
+        bobina_kg: Option<f64>,
         description: &str,
     ) -> Result<LaminatsiyaAstatkaReport, ProductionMapError> {
         let apparatus = apparatus.trim();
@@ -30,6 +34,11 @@ impl ProductionMapService {
             total_waste,
         ] {
             if !metric.is_some_and(|value| value.is_finite() && value >= 0.0) {
+                return Err(ProductionMapError::LaminatsiyaAstatkaMetricsRequired);
+            }
+        }
+        for metric in [finished_goods_meter, finished_goods_kg, bobina_kg] {
+            if metric.is_some_and(|value| positive_erp_quantity(value).is_none()) {
                 return Err(ProductionMapError::LaminatsiyaAstatkaMetricsRequired);
             }
         }
@@ -72,6 +81,9 @@ impl ProductionMapService {
             lamination_film_leftover_rolls: lamination_film_leftover_rolls
                 .expect("validated laminatsiya astatka metric"),
             total_waste: total_waste.expect("validated laminatsiya astatka metric"),
+            finished_goods_meter,
+            finished_goods_kg,
+            bobina_kg,
             worker_role: actor.role.trim().to_string(),
             worker_ref: actor.ref_.trim().to_string(),
             worker_display_name: actor.display_name.trim().to_string(),
@@ -94,6 +106,9 @@ impl ProductionMapService {
         rezka_bosma_waste: Option<f64>,
         rezka_lamination_waste: Option<f64>,
         rezka_edge_waste: Option<f64>,
+        finished_goods_meter: Option<f64>,
+        finished_goods_kg: Option<f64>,
+        bobina_kg: Option<f64>,
         description: &str,
     ) -> Result<RezkaAstatkaReport, ProductionMapError> {
         let apparatus = apparatus.trim();
@@ -111,6 +126,11 @@ impl ProductionMapService {
             rezka_edge_waste,
         ] {
             if !metric.is_some_and(|value| value.is_finite() && value >= 0.0) {
+                return Err(ProductionMapError::RezkaAstatkaMetricsRequired);
+            }
+        }
+        for metric in [finished_goods_meter, finished_goods_kg, bobina_kg] {
+            if metric.is_some_and(|value| positive_erp_quantity(value).is_none()) {
                 return Err(ProductionMapError::RezkaAstatkaMetricsRequired);
             }
         }
@@ -146,6 +166,9 @@ impl ProductionMapService {
             rezka_lamination_waste: rezka_lamination_waste
                 .expect("validated rezka astatka metric"),
             rezka_edge_waste: rezka_edge_waste.expect("validated rezka astatka metric"),
+            finished_goods_meter,
+            finished_goods_kg,
+            bobina_kg,
             worker_role: actor.role.trim().to_string(),
             worker_ref: actor.ref_.trim().to_string(),
             worker_display_name: actor.display_name.trim().to_string(),

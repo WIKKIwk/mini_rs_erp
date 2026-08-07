@@ -362,6 +362,9 @@ pub trait ProductionMapStorePort: Send + Sync {
     async fn paddons(&self, _limit: usize) -> StoreResult<Vec<PaddonSummary>> {
         Ok(Vec::new())
     }
+    async fn paddon_summary(&self, _code: &str) -> StoreResult<Option<PaddonSummary>> {
+        Ok(None)
+    }
     async fn create_paddon(
         &self,
         _input: PaddonCreateInput,
@@ -369,6 +372,9 @@ pub trait ProductionMapStorePort: Send + Sync {
         Err(ProductionMapError::StoreFailed)
     }
     async fn paddon_snapshot(&self, _code: &str) -> StoreResult<Option<PaddonSnapshot>> {
+        Ok(None)
+    }
+    async fn paddon_scan_snapshot(&self, _code: &str) -> StoreResult<Option<PaddonSnapshot>> {
         Ok(None)
     }
     async fn add_paddon_item(
@@ -379,10 +385,26 @@ pub trait ProductionMapStorePort: Send + Sync {
     ) -> StoreResult<PaddonSnapshot> {
         Err(ProductionMapError::StoreFailed)
     }
+    async fn add_paddon_items(
+        &self,
+        _code: &str,
+        _progress_batch_ids: &[String],
+        _actor: &QueueActionActor,
+    ) -> StoreResult<PaddonSnapshot> {
+        Err(ProductionMapError::StoreFailed)
+    }
     async fn remove_paddon_item(
         &self,
         _code: &str,
         _progress_batch_id: &str,
+        _actor: &QueueActionActor,
+    ) -> StoreResult<PaddonSnapshot> {
+        Err(ProductionMapError::StoreFailed)
+    }
+    async fn remove_paddon_items(
+        &self,
+        _code: &str,
+        _progress_batch_ids: &[String],
         _actor: &QueueActionActor,
     ) -> StoreResult<PaddonSnapshot> {
         Err(ProductionMapError::StoreFailed)

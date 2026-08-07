@@ -10,10 +10,13 @@ pub(super) struct NormalizedProgressLabelJob {
     pub(super) qr_payload: String,
     pub(super) item_code: String,
     pub(super) item_name: String,
+    pub(super) customer_name: String,
     pub(super) executor_name: String,
     pub(super) printer: String,
     pub(super) print_mode: String,
     pub(super) gross_qty: f64,
+    pub(super) tare_enabled: bool,
+    pub(super) tare_kg: f64,
     pub(super) progress_qty: f64,
     pub(super) unit: String,
     pub(super) progress_unit: String,
@@ -42,15 +45,26 @@ impl NormalizedProgressLabelJob {
             Some(gross_qty)
         }
         .ok_or_else(|| GscaleServiceError::InvalidInput("progress_qty_required".to_string()))?;
+        let tare_enabled = request.tare_enabled || request.tare_kg > 0.0;
+        let tare_kg = if tare_enabled && request.tare_kg > 0.0 {
+            positive_erp_quantity(request.tare_kg)
+                .ok_or_else(|| GscaleServiceError::InvalidInput("tare_kg_invalid".to_string()))?
+                .min(gross_qty)
+        } else {
+            0.0
+        };
         Ok(Self {
             driver_url: request.driver_url.trim().to_string(),
             qr_payload,
             item_code,
             item_name,
+            customer_name: request.customer_name.trim().to_string(),
             executor_name: request.executor_name.trim().to_string(),
             printer: request.printer.trim().to_ascii_lowercase(),
             print_mode: request.print_mode.trim().to_ascii_lowercase(),
             gross_qty,
+            tare_enabled: tare_kg > 0.0,
+            tare_kg,
             progress_qty,
             unit: blank_default(&request.unit, "kg"),
             progress_unit: blank_default(&request.progress_unit, "m"),
@@ -74,8 +88,8 @@ impl NormalizedProgressLabelJob {
             qty: Some(self.progress_qty),
             unit: self.unit.clone(),
             progress_unit: self.progress_unit.clone(),
-            tare_enabled: false,
-            tare_kg: 0.0,
+            tare_enabled: self.tare_enabled,
+            tare_kg: self.tare_kg,
             print_count: self.print_count,
         }
     }

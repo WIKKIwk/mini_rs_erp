@@ -11,6 +11,7 @@ pub(super) struct ProgressMetrics {
     pub(super) rezka_edge_waste: Option<f64>,
     pub(super) total_waste: Option<f64>,
     pub(super) finished_goods_kg: Option<f64>,
+    pub(super) bobina_kg: Option<f64>,
     pub(super) finished_goods_meter: Option<f64>,
     pub(super) diameter: Option<f64>,
 }
@@ -75,6 +76,7 @@ pub(super) fn validated_progress_metrics(
         } else {
             valid_optional_progress_qty(progress.finished_goods_kg)?
         },
+        bobina_kg: valid_optional_progress_qty(progress.bobina_kg)?,
         finished_goods_meter: if is_rezka {
             valid_optional_progress_qty(
                 progress.finished_goods_meter.or(progress.produced_qty),
@@ -118,6 +120,7 @@ pub(super) fn validated_laminatsiya_worker_handoff_metrics(
         rezka_edge_waste: None,
         total_waste: valid_non_negative_optional_progress_qty(progress.total_waste)?,
         finished_goods_kg: None,
+        bobina_kg: valid_optional_progress_qty(progress.bobina_kg)?,
         finished_goods_meter: None,
         diameter: None,
     };
@@ -155,6 +158,7 @@ pub(super) fn validated_laminatsiya_removed_roll_metrics(
         rezka_edge_waste: None,
         total_waste: None,
         finished_goods_kg,
+        bobina_kg: valid_optional_progress_qty(progress.bobina_kg)?,
         finished_goods_meter,
         diameter: None,
     })

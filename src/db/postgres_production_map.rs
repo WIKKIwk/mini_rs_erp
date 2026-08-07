@@ -68,7 +68,9 @@ use self::order_control_helpers::{
     save_order_control_state_tx,
 };
 use self::paddon_helpers::{
-    add_paddon_item, create_paddon, load_paddon_snapshot, load_paddons, remove_paddon_item,
+    add_paddon_item, add_paddon_items, create_paddon, load_paddon_scan_snapshot,
+    load_paddon_snapshot, load_paddon_summary, load_paddons, remove_paddon_item,
+    remove_paddon_items,
 };
 use self::order_query_helpers::{
     load_active_order_run_session, load_active_order_run_session_for_qolip,
@@ -513,6 +515,13 @@ impl ProductionMapStorePort for PostgresProductionMapStore {
         load_paddons(&self.pool, limit).await
     }
 
+    async fn paddon_summary(
+        &self,
+        code: &str,
+    ) -> Result<Option<PaddonSummary>, ProductionMapError> {
+        load_paddon_summary(&self.pool, code).await
+    }
+
     async fn create_paddon(
         &self,
         input: PaddonCreateInput,
@@ -527,6 +536,13 @@ impl ProductionMapStorePort for PostgresProductionMapStore {
         load_paddon_snapshot(&self.pool, code).await
     }
 
+    async fn paddon_scan_snapshot(
+        &self,
+        code: &str,
+    ) -> Result<Option<PaddonSnapshot>, ProductionMapError> {
+        load_paddon_scan_snapshot(&self.pool, code).await
+    }
+
     async fn add_paddon_item(
         &self,
         code: &str,
@@ -536,6 +552,15 @@ impl ProductionMapStorePort for PostgresProductionMapStore {
         add_paddon_item(&self.pool, code, progress_batch_id, actor).await
     }
 
+    async fn add_paddon_items(
+        &self,
+        code: &str,
+        progress_batch_ids: &[String],
+        actor: &QueueActionActor,
+    ) -> Result<PaddonSnapshot, ProductionMapError> {
+        add_paddon_items(&self.pool, code, progress_batch_ids, actor).await
+    }
+
     async fn remove_paddon_item(
         &self,
         code: &str,
@@ -543,6 +568,15 @@ impl ProductionMapStorePort for PostgresProductionMapStore {
         actor: &QueueActionActor,
     ) -> Result<PaddonSnapshot, ProductionMapError> {
         remove_paddon_item(&self.pool, code, progress_batch_id, actor).await
+    }
+
+    async fn remove_paddon_items(
+        &self,
+        code: &str,
+        progress_batch_ids: &[String],
+        actor: &QueueActionActor,
+    ) -> Result<PaddonSnapshot, ProductionMapError> {
+        remove_paddon_items(&self.pool, code, progress_batch_ids, actor).await
     }
 
     async fn put_order_run_session(

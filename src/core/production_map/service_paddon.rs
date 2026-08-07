@@ -1,8 +1,44 @@
+use std::collections::HashSet;
+
 use super::*;
+
+const MAX_PADDON_BATCH_ITEMS: usize = 500;
+
+fn normalize_paddon_batch_ids(
+    progress_batch_ids: &[String],
+) -> Result<Vec<String>, ProductionMapError> {
+    let mut seen = HashSet::with_capacity(progress_batch_ids.len());
+    let mut normalized = Vec::with_capacity(progress_batch_ids.len());
+    for progress_batch_id in progress_batch_ids {
+        let progress_batch_id = progress_batch_id.trim();
+        if progress_batch_id.is_empty() || !seen.insert(progress_batch_id.to_string()) {
+            if progress_batch_id.is_empty() {
+                return Err(ProductionMapError::PaddonInvalidInput);
+            }
+            continue;
+        }
+        normalized.push(progress_batch_id.to_string());
+    }
+    if normalized.is_empty() || normalized.len() > MAX_PADDON_BATCH_ITEMS {
+        return Err(ProductionMapError::PaddonInvalidInput);
+    }
+    Ok(normalized)
+}
 
 impl ProductionMapService {
     pub async fn paddons(&self, limit: usize) -> Result<Vec<PaddonSummary>, ProductionMapError> {
         self.store.paddons(limit.clamp(1, 200)).await
+    }
+
+    pub async fn paddon_summary(&self, code: &str) -> Result<PaddonSummary, ProductionMapError> {
+        let code = code.trim();
+        if code.is_empty() {
+            return Err(ProductionMapError::PaddonInvalidInput);
+        }
+        self.store
+            .paddon_summary(code)
+            .await?
+            .ok_or(ProductionMapError::PaddonNotFound)
     }
 
     pub async fn create_paddon(
@@ -25,7 +61,18 @@ impl ProductionMapService {
         self.store.create_paddon(input).await
     }
 
-    pub async fn paddon_snapshot(
+    pub async fn paddon_snapshot(&self, code: &str) -> Result<PaddonSnapshot, ProductionMapError> {
+        let code = code.trim();
+        if code.is_empty() {
+            return Err(ProductionMapError::PaddonInvalidInput);
+        }
+        self.store
+            .paddon_snapshot(code)
+            .await?
+            .ok_or(ProductionMapError::PaddonNotFound)
+    }
+
+    pub async fn paddon_scan_snapshot(
         &self,
         code: &str,
     ) -> Result<PaddonSnapshot, ProductionMapError> {
@@ -34,7 +81,7 @@ impl ProductionMapService {
             return Err(ProductionMapError::PaddonInvalidInput);
         }
         self.store
-            .paddon_snapshot(code)
+            .paddon_scan_snapshot(code)
             .await?
             .ok_or(ProductionMapError::PaddonNotFound)
     }
@@ -55,6 +102,22 @@ impl ProductionMapService {
             .await
     }
 
+    pub async fn add_paddon_items(
+        &self,
+        code: &str,
+        progress_batch_ids: &[String],
+        actor: &QueueActionActor,
+    ) -> Result<PaddonSnapshot, ProductionMapError> {
+        let code = code.trim();
+        if code.is_empty() {
+            return Err(ProductionMapError::PaddonInvalidInput);
+        }
+        let progress_batch_ids = normalize_paddon_batch_ids(progress_batch_ids)?;
+        self.store
+            .add_paddon_items(code, &progress_batch_ids, actor)
+            .await
+    }
+
     pub async fn remove_paddon_item(
         &self,
         code: &str,
@@ -69,5 +132,56 @@ impl ProductionMapService {
         self.store
             .remove_paddon_item(code, progress_batch_id, actor)
             .await
+    }
+
+    pub async fn remove_paddon_items(
+        &self,
+        code: &str,
+        progress_batch_ids: &[String],
+        actor: &QueueActionActor,
+    ) -> Result<PaddonSnapshot, ProductionMapError> {
+        let code = code.trim();
+        if code.is_empty() {
+            return Err(ProductionMapError::PaddonInvalidInput);
+        }
+        let progress_batch_ids = normalize_paddon_batch_ids(progress_batch_ids)?;
+        self.store
+            .remove_paddon_items(code, &progress_batch_ids, actor)
+            .await
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn batch_ids_trim_and_deduplicate() {
+        let ids = vec![
+            " wip-1 ".to_string(),
+            "wip-1".to_string(),
+            "wip-2".to_string(),
+        ];
+
+        assert_eq!(
+            normalize_paddon_batch_ids(&ids).expect("normalized ids"),
+            vec!["wip-1".to_string(), "wip-2".to_string()]
+        );
+    }
+
+    #[test]
+    fn batch_ids_reject_empty_and_oversized_inputs() {
+        assert_eq!(
+            normalize_paddon_batch_ids(&[String::new()]),
+            Err(ProductionMapError::PaddonInvalidInput)
+        );
+
+        let oversized = (0..=MAX_PADDON_BATCH_ITEMS)
+            .map(|index| format!("wip-{index}"))
+            .collect::<Vec<_>>();
+        assert_eq!(
+            normalize_paddon_batch_ids(&oversized),
+            Err(ProductionMapError::PaddonInvalidInput)
+        );
     }
 }

@@ -52,7 +52,8 @@ pub use self::order_control::production_map_order_control;
 pub use self::paddons::{
     production_map_paddon_create, production_map_paddon_detail,
     production_map_paddon_item_add, production_map_paddon_item_remove,
-    production_map_paddons,
+    production_map_paddon_items_add, production_map_paddon_items_remove,
+    production_map_paddon_qr_print, production_map_paddon_qr_report, production_map_paddons,
 };
 pub use self::progress_qr::{
     production_map_progress_qr_history, production_map_progress_qr_lookup,

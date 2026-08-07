@@ -41,6 +41,8 @@ struct ApparatusQueueActionRequest {
     total_waste: Option<f64>,
     #[serde(default)]
     finished_goods_kg: Option<f64>,
+    #[serde(default, alias = "babina_kg")]
+    bobina_kg: Option<f64>,
     #[serde(default)]
     finished_goods_meter: Option<f64>,
     #[serde(default)]
@@ -61,6 +63,8 @@ struct ApparatusQueueActionRequest {
     printer: String,
     #[serde(default)]
     print_mode: String,
+    #[serde(default)]
+    customer_name: String,
     #[serde(default)]
     print_count: u32,
     #[serde(default)]
@@ -230,6 +234,7 @@ pub async fn production_map_queue_action(
         rezka_edge_waste: input.rezka_edge_waste,
         total_waste: input.total_waste,
         finished_goods_kg: input.finished_goods_kg,
+        bobina_kg: input.bobina_kg,
         finished_goods_meter: input.finished_goods_meter,
         diameter: input.diameter,
         description: completion_request_note.clone(),
@@ -387,6 +392,7 @@ pub async fn production_map_queue_action(
                 qr_payload: batch.qr_payload.clone(),
                 item_code: batch.label_item_code.clone(),
                 item_name: batch.label_item_name.clone(),
+                customer_name: input.customer_name.trim().to_string(),
                 executor_name: batch.executor_name.clone(),
                 printer: input.printer.clone(),
                 print_mode: input.print_mode.clone(),
@@ -394,6 +400,8 @@ pub async fn production_map_queue_action(
                     .gross_qty
                     .or(input.finished_goods_kg)
                     .unwrap_or(batch.produced_qty),
+                tare_enabled: input.bobina_kg.is_some_and(|value| value > 0.0),
+                tare_kg: input.bobina_kg.unwrap_or(0.0),
                 progress_qty: batch.produced_qty,
                 unit: "kg".to_string(),
                 progress_unit: if batch.uom.trim().is_empty() {

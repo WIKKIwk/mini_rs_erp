@@ -1,5 +1,7 @@
 use super::*;
 
+use crate::core::gscale::GscaleServiceError;
+
 #[derive(Default, serde::Deserialize)]
 pub struct PaddonsQuery {
     #[serde(default)]
@@ -22,6 +24,30 @@ struct PaddonItemRequest {
     progress_batch_id: String,
     #[serde(default)]
     qr_payload: String,
+}
+
+#[derive(Default, serde::Deserialize)]
+struct PaddonItemsRequest {
+    #[serde(default)]
+    code: String,
+    #[serde(default)]
+    progress_batch_ids: Vec<String>,
+}
+
+#[derive(Default, serde::Deserialize)]
+struct PaddonQrPrintRequest {
+    #[serde(default)]
+    code: String,
+    #[serde(default)]
+    driver_url: String,
+    #[serde(default)]
+    printer: String,
+    #[serde(default)]
+    print_mode: String,
+    #[serde(default)]
+    print_count: u32,
+    #[serde(default)]
+    print_transport: String,
 }
 
 pub async fn production_map_paddons(
@@ -86,6 +112,115 @@ pub async fn production_map_paddon_detail(
         "items": snapshot.items,
         "available_items": snapshot.available_items,
     })))
+}
+
+pub async fn production_map_paddon_qr_report(
+    State(state): State<AppState>,
+    Query(query): Query<PaddonCodeQuery>,
+    method: Method,
+    headers: HeaderMap,
+) -> Result<Response, AdminError> {
+    authorize_any_capability(
+        &state,
+        &headers,
+        &[
+            Capability::AdminAccess,
+            Capability::ProductionMapManage,
+            Capability::ApparatusQueueRead,
+            Capability::ApparatusQueueManage,
+        ],
+    )
+    .await?;
+    if method != Method::GET {
+        return Err(method_not_allowed());
+    }
+    let snapshot = state
+        .production_maps
+        .paddon_scan_snapshot(&query.code)
+        .await
+        .map_err(production_map_error)?;
+    Ok(json_response(serde_json::json!({
+        "ok": true,
+        "paddon": snapshot.paddon,
+        "items": snapshot.items,
+        "qr_payload": query.code.trim(),
+    })))
+}
+
+pub async fn production_map_paddon_qr_print(
+    State(state): State<AppState>,
+    method: Method,
+    headers: HeaderMap,
+    body: Bytes,
+) -> Result<Response, AdminError> {
+    let principal = authorize_any_capability(
+        &state,
+        &headers,
+        &[
+            Capability::AdminAccess,
+            Capability::ProductionMapManage,
+            Capability::ApparatusQueueRead,
+            Capability::ApparatusQueueManage,
+        ],
+    )
+    .await?;
+    if method != Method::POST {
+        return Err(method_not_allowed());
+    }
+    let input: PaddonQrPrintRequest = parse_json(&body)?;
+    let paddon = state
+        .production_maps
+        .paddon_summary(&input.code)
+        .await
+        .map_err(production_map_error)?;
+    let code = paddon.code.clone();
+    let print_request = ProgressLabelPrintRequest {
+        driver_url: input.driver_url,
+        qr_payload: code.clone(),
+        item_code: code.clone(),
+        item_name: format!("Paddon {code}"),
+        customer_name: String::new(),
+        executor_name: principal.display_name.trim().to_string(),
+        printer: input.printer,
+        print_mode: input.print_mode,
+        label_kind: "paddon_code".to_string(),
+        gross_qty: 1.0,
+        tare_enabled: false,
+        tare_kg: 0.0,
+        progress_qty: 1.0,
+        unit: "dona".to_string(),
+        progress_unit: "dona".to_string(),
+        print_count: input.print_count,
+    };
+    let print = if input.print_transport.trim().eq_ignore_ascii_case("offline") {
+        state
+            .gscale
+            .prepare_progress_label(print_request)
+            .map_err(paddon_print_error)?
+    } else {
+        state
+            .gscale
+            .print_progress_label(print_request)
+            .await
+            .map_err(paddon_print_error)?
+    };
+    Ok(json_response(serde_json::json!({
+        "ok": true,
+        "paddon": paddon,
+        "qr_payload": code,
+        "print": print,
+    })))
+}
+
+fn paddon_print_error(error: GscaleServiceError) -> AdminError {
+    match error {
+        GscaleServiceError::InvalidInput(detail) => bad_request(detail),
+        GscaleServiceError::NotConfigured(detail) => server_error(detail),
+        GscaleServiceError::EpcGenerationFailed => server_error("epc_generation_failed"),
+        GscaleServiceError::StoreWrite(detail) => server_error(detail),
+        GscaleServiceError::PrintFailed { detail, .. } => server_error(detail),
+        GscaleServiceError::SubmitFailed(detail) => server_error(detail),
+    }
 }
 
 #[derive(Default, serde::Deserialize)]
@@ -167,6 +302,43 @@ pub async fn production_map_paddon_item_add(
     })))
 }
 
+pub async fn production_map_paddon_items_add(
+    State(state): State<AppState>,
+    method: Method,
+    headers: HeaderMap,
+    body: Bytes,
+) -> Result<Response, AdminError> {
+    let principal = authorize_any_capability(
+        &state,
+        &headers,
+        &[
+            Capability::AdminAccess,
+            Capability::ProductionMapManage,
+            Capability::ApparatusQueueManage,
+        ],
+    )
+    .await?;
+    if method != Method::POST {
+        return Err(method_not_allowed());
+    }
+    let input: PaddonItemsRequest = parse_json(&body)?;
+    let snapshot = state
+        .production_maps
+        .add_paddon_items(
+            &input.code,
+            &input.progress_batch_ids,
+            &queue_action_actor(&principal),
+        )
+        .await
+        .map_err(production_map_error)?;
+    Ok(json_response(serde_json::json!({
+        "ok": true,
+        "paddon": snapshot.paddon,
+        "items": snapshot.items,
+        "available_items": snapshot.available_items,
+    })))
+}
+
 pub async fn production_map_paddon_item_remove(
     State(state): State<AppState>,
     method: Method,
@@ -196,6 +368,43 @@ pub async fn production_map_paddon_item_remove(
         .remove_paddon_item(
             &input.code,
             progress_batch_id,
+            &queue_action_actor(&principal),
+        )
+        .await
+        .map_err(production_map_error)?;
+    Ok(json_response(serde_json::json!({
+        "ok": true,
+        "paddon": snapshot.paddon,
+        "items": snapshot.items,
+        "available_items": snapshot.available_items,
+    })))
+}
+
+pub async fn production_map_paddon_items_remove(
+    State(state): State<AppState>,
+    method: Method,
+    headers: HeaderMap,
+    body: Bytes,
+) -> Result<Response, AdminError> {
+    let principal = authorize_any_capability(
+        &state,
+        &headers,
+        &[
+            Capability::AdminAccess,
+            Capability::ProductionMapManage,
+            Capability::ApparatusQueueManage,
+        ],
+    )
+    .await?;
+    if method != Method::POST {
+        return Err(method_not_allowed());
+    }
+    let input: PaddonItemsRequest = parse_json(&body)?;
+    let snapshot = state
+        .production_maps
+        .remove_paddon_items(
+            &input.code,
+            &input.progress_batch_ids,
             &queue_action_actor(&principal),
         )
         .await

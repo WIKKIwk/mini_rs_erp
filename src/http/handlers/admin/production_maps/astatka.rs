@@ -15,6 +15,12 @@ struct LaminatsiyaAstatkaRequest {
     #[serde(default)]
     total_waste: Option<f64>,
     #[serde(default)]
+    finished_goods_meter: Option<f64>,
+    #[serde(default)]
+    finished_goods_kg: Option<f64>,
+    #[serde(default, alias = "babina_kg")]
+    bobina_kg: Option<f64>,
+    #[serde(default)]
     description: String,
 }
 
@@ -32,6 +38,12 @@ struct RezkaAstatkaRequest {
     rezka_lamination_waste: Option<f64>,
     #[serde(default)]
     rezka_edge_waste: Option<f64>,
+    #[serde(default)]
+    finished_goods_meter: Option<f64>,
+    #[serde(default)]
+    finished_goods_kg: Option<f64>,
+    #[serde(default, alias = "babina_kg")]
+    bobina_kg: Option<f64>,
     #[serde(default)]
     description: String,
 }
@@ -78,6 +90,9 @@ pub async fn production_map_laminatsiya_astatka(
             input.lamination_print_leftover_rolls,
             input.lamination_film_leftover_rolls,
             input.total_waste,
+            input.finished_goods_meter,
+            input.finished_goods_kg,
+            input.bobina_kg,
             &input.description,
         )
         .await
@@ -131,6 +146,9 @@ pub async fn production_map_rezka_astatka(
             input.rezka_bosma_waste,
             input.rezka_lamination_waste,
             input.rezka_edge_waste,
+            input.finished_goods_meter,
+            input.finished_goods_kg,
+            input.bobina_kg,
             &input.description,
         )
         .await

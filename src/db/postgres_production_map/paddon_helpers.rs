@@ -70,9 +70,17 @@ async fn load_summary_by_code(
     Ok(row.map(summary_from_row))
 }
 
+pub(super) async fn load_paddon_summary(
+    pool: &PgPool,
+    code: &str,
+) -> Result<Option<PaddonSummary>, ProductionMapError> {
+    load_summary_by_code(pool, code).await
+}
+
 async fn load_snapshot_by_code(
     pool: &PgPool,
     code: &str,
+    include_available_items: bool,
 ) -> Result<Option<PaddonSnapshot>, ProductionMapError> {
     let Some(paddon) = load_summary_by_code(pool, code).await? else {
         return Ok(None);
@@ -94,11 +102,15 @@ async fn load_snapshot_by_code(
             .ok_or(ProductionMapError::ProgressBatchNotFound)?;
         items.push(batch);
     }
-    let available_items = load_unassigned_wip_progress_batches(
-        pool,
-        WipProgressBatchQuery::new("", "", "", None, false, "", 500),
-    )
-    .await?;
+    let available_items = if include_available_items {
+        load_unassigned_wip_progress_batches(
+            pool,
+            WipProgressBatchQuery::new("", "", "", None, false, "", 500),
+        )
+        .await?
+    } else {
+        Vec::new()
+    };
     Ok(Some(PaddonSnapshot {
         paddon,
         items,
@@ -177,7 +189,14 @@ pub(super) async fn load_paddon_snapshot(
     pool: &PgPool,
     code: &str,
 ) -> Result<Option<PaddonSnapshot>, ProductionMapError> {
-    load_snapshot_by_code(pool, code).await
+    load_snapshot_by_code(pool, code, true).await
+}
+
+pub(super) async fn load_paddon_scan_snapshot(
+    pool: &PgPool,
+    code: &str,
+) -> Result<Option<PaddonSnapshot>, ProductionMapError> {
+    load_snapshot_by_code(pool, code, false).await
 }
 
 async fn lock_paddon(
@@ -211,72 +230,84 @@ pub(super) async fn add_paddon_item(
     progress_batch_id: &str,
     actor: &QueueActionActor,
 ) -> Result<PaddonSnapshot, ProductionMapError> {
+    let progress_batch_ids = [progress_batch_id.trim().to_string()];
+    add_paddon_items(pool, code, &progress_batch_ids, actor).await
+}
+
+pub(super) async fn add_paddon_items(
+    pool: &PgPool,
+    code: &str,
+    progress_batch_ids: &[String],
+    actor: &QueueActionActor,
+) -> Result<PaddonSnapshot, ProductionMapError> {
     let mut tx = pool
         .begin()
         .await
         .map_err(|_| ProductionMapError::StoreFailed)?;
     let paddon = lock_paddon(&mut tx, code).await?;
-    let batch_exists = sqlx::query_scalar::<_, String>(
-        "SELECT batch_id FROM mini_progress_batches WHERE batch_id = $1",
-    )
-    .bind(progress_batch_id.trim())
-    .fetch_optional(&mut *tx)
-    .await
-    .map_err(|_| ProductionMapError::StoreFailed)?
-    .is_some();
-    if !batch_exists {
-        return Err(ProductionMapError::ProgressBatchNotFound);
-    }
-    let active_paddon = sqlx::query_scalar::<_, String>(
-        "SELECT paddon_id
-         FROM mini_paddon_items
-         WHERE progress_batch_id = $1 AND removed_at IS NULL
-         FOR UPDATE",
-    )
-    .bind(progress_batch_id.trim())
-    .fetch_optional(&mut *tx)
-    .await
-    .map_err(|_| ProductionMapError::StoreFailed)?;
-    if let Some(active_paddon) = active_paddon {
-        if active_paddon != paddon.id {
-            return Err(ProductionMapError::PaddonItemAlreadyAssigned);
+    let mut changed = false;
+    for progress_batch_id in progress_batch_ids {
+        let progress_batch_id = progress_batch_id.trim();
+        let batch_exists = sqlx::query_scalar::<_, String>(
+            "SELECT batch_id FROM mini_progress_batches WHERE batch_id = $1",
+        )
+        .bind(progress_batch_id)
+        .fetch_optional(&mut *tx)
+        .await
+        .map_err(|_| ProductionMapError::StoreFailed)?
+        .is_some();
+        if !batch_exists {
+            return Err(ProductionMapError::ProgressBatchNotFound);
         }
-        tx.commit()
-            .await
-            .map_err(|_| ProductionMapError::StoreFailed)?;
-        return load_snapshot_by_code(pool, code)
-            .await?
-            .ok_or(ProductionMapError::PaddonNotFound);
-    }
-    sqlx::query(
-        "INSERT INTO mini_paddon_items (
-             id, paddon_id, progress_batch_id, added_by_ref, added_by_display_name
-         ) VALUES ($1, $2, $3, $4, $5)",
-    )
-    .bind(new_item_id())
-    .bind(&paddon.id)
-    .bind(progress_batch_id.trim())
-    .bind(actor.ref_.trim())
-    .bind(actor.display_name.trim())
-    .execute(&mut *tx)
-    .await
-    .map_err(|error| match error {
-        sqlx::Error::Database(database_error)
-            if database_error.constraint() == Some("idx_mini_paddon_items_active_batch") =>
-        {
-            ProductionMapError::PaddonItemAlreadyAssigned
-        }
-        _ => ProductionMapError::StoreFailed,
-    })?;
-    sqlx::query("UPDATE mini_paddons SET updated_at = now() WHERE id = $1")
-        .bind(&paddon.id)
-        .execute(&mut *tx)
+        let active_paddon = sqlx::query_scalar::<_, String>(
+            "SELECT paddon_id
+             FROM mini_paddon_items
+             WHERE progress_batch_id = $1 AND removed_at IS NULL
+             FOR UPDATE",
+        )
+        .bind(progress_batch_id)
+        .fetch_optional(&mut *tx)
         .await
         .map_err(|_| ProductionMapError::StoreFailed)?;
+        if let Some(active_paddon) = active_paddon {
+            if active_paddon != paddon.id {
+                return Err(ProductionMapError::PaddonItemAlreadyAssigned);
+            }
+            continue;
+        }
+        sqlx::query(
+            "INSERT INTO mini_paddon_items (
+                 id, paddon_id, progress_batch_id, added_by_ref, added_by_display_name
+             ) VALUES ($1, $2, $3, $4, $5)",
+        )
+        .bind(new_item_id())
+        .bind(&paddon.id)
+        .bind(progress_batch_id)
+        .bind(actor.ref_.trim())
+        .bind(actor.display_name.trim())
+        .execute(&mut *tx)
+        .await
+        .map_err(|error| match error {
+            sqlx::Error::Database(database_error)
+                if database_error.constraint() == Some("idx_mini_paddon_items_active_batch") =>
+            {
+                ProductionMapError::PaddonItemAlreadyAssigned
+            }
+            _ => ProductionMapError::StoreFailed,
+        })?;
+        changed = true;
+    }
+    if changed {
+        sqlx::query("UPDATE mini_paddons SET updated_at = now() WHERE id = $1")
+            .bind(&paddon.id)
+            .execute(&mut *tx)
+            .await
+            .map_err(|_| ProductionMapError::StoreFailed)?;
+    }
     tx.commit()
         .await
         .map_err(|_| ProductionMapError::StoreFailed)?;
-    load_snapshot_by_code(pool, code)
+    load_snapshot_by_code(pool, code, true)
         .await?
         .ok_or(ProductionMapError::PaddonNotFound)
 }
@@ -287,34 +318,50 @@ pub(super) async fn remove_paddon_item(
     progress_batch_id: &str,
     actor: &QueueActionActor,
 ) -> Result<PaddonSnapshot, ProductionMapError> {
+    let progress_batch_ids = [progress_batch_id.trim().to_string()];
+    remove_paddon_items(pool, code, &progress_batch_ids, actor).await
+}
+
+pub(super) async fn remove_paddon_items(
+    pool: &PgPool,
+    code: &str,
+    progress_batch_ids: &[String],
+    actor: &QueueActionActor,
+) -> Result<PaddonSnapshot, ProductionMapError> {
     let mut tx = pool
         .begin()
         .await
         .map_err(|_| ProductionMapError::StoreFailed)?;
     let paddon = lock_paddon(&mut tx, code).await?;
-    let item_id = sqlx::query_scalar::<_, String>(
-        "SELECT id
-         FROM mini_paddon_items
-         WHERE paddon_id = $1 AND progress_batch_id = $2 AND removed_at IS NULL
-         FOR UPDATE",
-    )
-    .bind(&paddon.id)
-    .bind(progress_batch_id.trim())
-    .fetch_optional(&mut *tx)
-    .await
-    .map_err(|_| ProductionMapError::StoreFailed)?
-    .ok_or(ProductionMapError::PaddonItemNotAssigned)?;
-    sqlx::query(
-        "UPDATE mini_paddon_items
-         SET removed_at = now(), removed_by_ref = $2, removed_by_display_name = $3
-         WHERE id = $1",
-    )
-    .bind(item_id)
-    .bind(actor.ref_.trim())
-    .bind(actor.display_name.trim())
-    .execute(&mut *tx)
-    .await
-    .map_err(|_| ProductionMapError::StoreFailed)?;
+    let mut item_ids = Vec::with_capacity(progress_batch_ids.len());
+    for progress_batch_id in progress_batch_ids {
+        let item_id = sqlx::query_scalar::<_, String>(
+            "SELECT id
+             FROM mini_paddon_items
+             WHERE paddon_id = $1 AND progress_batch_id = $2 AND removed_at IS NULL
+             FOR UPDATE",
+        )
+        .bind(&paddon.id)
+        .bind(progress_batch_id.trim())
+        .fetch_optional(&mut *tx)
+        .await
+        .map_err(|_| ProductionMapError::StoreFailed)?
+        .ok_or(ProductionMapError::PaddonItemNotAssigned)?;
+        item_ids.push(item_id);
+    }
+    for item_id in item_ids {
+        sqlx::query(
+            "UPDATE mini_paddon_items
+             SET removed_at = now(), removed_by_ref = $2, removed_by_display_name = $3
+             WHERE id = $1",
+        )
+        .bind(item_id)
+        .bind(actor.ref_.trim())
+        .bind(actor.display_name.trim())
+        .execute(&mut *tx)
+        .await
+        .map_err(|_| ProductionMapError::StoreFailed)?;
+    }
     sqlx::query("UPDATE mini_paddons SET updated_at = now() WHERE id = $1")
         .bind(&paddon.id)
         .execute(&mut *tx)
@@ -323,7 +370,7 @@ pub(super) async fn remove_paddon_item(
     tx.commit()
         .await
         .map_err(|_| ProductionMapError::StoreFailed)?;
-    load_snapshot_by_code(pool, code)
+    load_snapshot_by_code(pool, code, true)
         .await?
         .ok_or(ProductionMapError::PaddonNotFound)
 }

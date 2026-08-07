@@ -811,6 +811,9 @@ impl ProductionMapService {
                 metrics
                     .finished_goods_kg
                     .ok_or(ProductionMapError::ProgressInputInvalid)?,
+                metrics
+                    .bobina_kg
+                    .ok_or(ProductionMapError::ProgressInputInvalid)?,
                 now,
             )
         } else {

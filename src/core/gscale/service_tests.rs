@@ -249,8 +249,11 @@ fn progress_label_can_be_prepared_without_calling_a_driver() {
             qr_payload: "GSP:PROGRESS-2".to_string(),
             item_code: "ORDER-2".to_string(),
             item_name: "Progress label".to_string(),
+            customer_name: "Customer One".to_string(),
             executor_name: "Ali".to_string(),
-            gross_qty: 20.0,
+            gross_qty: 10.0,
+            tare_enabled: true,
+            tare_kg: 1.0,
             progress_qty: 125.0,
             unit: "kg".to_string(),
             progress_unit: "m".to_string(),
@@ -264,6 +267,9 @@ fn progress_label_can_be_prepared_without_calling_a_driver() {
     assert_eq!(response.printer_status, "client_usb_pending");
     assert_eq!(response.label_kind, "progress");
     assert_eq!(response.qty, 125.0);
+    assert_eq!(response.customer_name, "Customer One");
+    assert!(response.tare_enabled);
+    assert_eq!(response.tare_kg, 1.0);
     assert_eq!(response.print_count, 2);
 }
 

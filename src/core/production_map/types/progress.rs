@@ -207,6 +207,8 @@ pub struct OrderProgressEvent {
     pub total_waste: Option<f64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub finished_goods_kg: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none", alias = "babina_kg")]
+    pub bobina_kg: Option<f64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub finished_goods_meter: Option<f64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -226,6 +228,12 @@ pub struct LaminatsiyaAstatkaReport {
     pub lamination_print_leftover_rolls: f64,
     pub lamination_film_leftover_rolls: f64,
     pub total_waste: f64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub finished_goods_meter: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub finished_goods_kg: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none", alias = "babina_kg")]
+    pub bobina_kg: Option<f64>,
     pub worker_role: String,
     pub worker_ref: String,
     pub worker_display_name: String,
@@ -245,6 +253,12 @@ pub struct RezkaAstatkaReport {
     pub rezka_bosma_waste: f64,
     pub rezka_lamination_waste: f64,
     pub rezka_edge_waste: f64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub finished_goods_meter: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub finished_goods_kg: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none", alias = "babina_kg")]
+    pub bobina_kg: Option<f64>,
     pub worker_role: String,
     pub worker_ref: String,
     pub worker_display_name: String,
@@ -309,6 +323,8 @@ pub struct OrderProgressBatch {
     pub total_waste: Option<f64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub finished_goods_kg: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none", alias = "babina_kg")]
+    pub bobina_kg: Option<f64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub finished_goods_meter: Option<f64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -387,6 +403,7 @@ pub struct QueueProgressInput {
     pub rezka_edge_waste: Option<f64>,
     pub total_waste: Option<f64>,
     pub finished_goods_kg: Option<f64>,
+    pub bobina_kg: Option<f64>,
     pub finished_goods_meter: Option<f64>,
     pub diameter: Option<f64>,
     pub description: String,

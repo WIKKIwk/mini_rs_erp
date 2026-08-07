@@ -32,6 +32,7 @@ fn zero_completion_metric_codes(
         ("total_waste", input.total_waste),
         ("finished_goods_kg", input.finished_goods_kg),
         ("finished_goods_meter", input.finished_goods_meter),
+        ("bobina_kg", input.bobina_kg),
     ]
     .into_iter()
     .filter_map(|(code, value)| {

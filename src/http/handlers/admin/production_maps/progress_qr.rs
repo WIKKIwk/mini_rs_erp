@@ -262,10 +262,19 @@ fn progress_reprint_request(
         qr_payload: batch.qr_payload.clone(),
         item_code: batch.label_item_code.clone(),
         item_name: batch.label_item_name.clone(),
+        customer_name: batch
+            .payload_json
+            .get("customer_name")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or_default()
+            .trim()
+            .to_string(),
         executor_name: batch.executor_name.clone(),
         printer: input.printer.clone(),
         print_mode: input.print_mode.clone(),
         gross_qty: batch.finished_goods_kg.unwrap_or(batch.produced_qty),
+        tare_enabled: batch.bobina_kg.is_some_and(|value| value > 0.0),
+        tare_kg: batch.bobina_kg.unwrap_or(0.0),
         progress_qty: batch.produced_qty,
         unit: "kg".to_string(),
         progress_unit: if batch.uom.trim().is_empty() {
