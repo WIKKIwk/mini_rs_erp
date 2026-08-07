@@ -8,6 +8,7 @@ use thiserror::Error;
 pub const DEFAULT_PET_DENSITY_G_CM3: f64 = 1.400;
 pub const DEFAULT_PP_FILM_DENSITY_G_CM3: f64 = 0.905;
 pub const DEFAULT_PE_DENSITY_G_CM3: f64 = 0.920;
+const RETIRED_BUILTIN_MATERIAL_IDS: &[&str] = &["builtin-pe-qora"];
 
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq)]
 pub struct CalculateMaterialVariant {
@@ -325,6 +326,9 @@ pub fn merge_default_calculate_materials(
 ) -> Vec<CalculateMaterial> {
     let mut materials = default_calculate_materials();
     for override_material in overrides {
+        if RETIRED_BUILTIN_MATERIAL_IDS.contains(&override_material.id.as_str()) {
+            continue;
+        }
         let override_material = upgrade_stored_material(override_material, &materials);
         let override_name = normalize_key(&override_material.name);
         if let Some(current) = materials.iter_mut().find(|current| {
@@ -505,6 +509,25 @@ mod tests {
         assert_eq!(pe_oq.len(), 1);
         assert_eq!(pe_oq[0].id, "existing-pe-oq");
         assert_eq!(pe_oq[0].density_g_cm3, 0.93);
+    }
+
+    #[test]
+    fn retired_invented_builtin_is_not_restored_from_an_existing_database() {
+        let retired = CalculateMaterial {
+            id: "builtin-pe-qora".to_string(),
+            name: "PE qora".to_string(),
+            active: true,
+            density_g_cm3: DEFAULT_PE_DENSITY_G_CM3,
+            variants: density_variants(&[30], DEFAULT_PE_DENSITY_G_CM3),
+        };
+
+        let materials = merge_default_calculate_materials(vec![retired]);
+
+        assert!(
+            !materials
+                .iter()
+                .any(|material| material.id == "builtin-pe-qora")
+        );
     }
 
     #[tokio::test]
