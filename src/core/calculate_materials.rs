@@ -235,6 +235,12 @@ pub fn default_calculate_materials() -> Vec<CalculateMaterial> {
             density_variants(&[18, 20, 25, 30, 35, 40, 45, 50, 60], 0.91),
         ),
         builtin(
+            "builtin-bopp",
+            "BOPP",
+            0.91,
+            density_variants(&[18, 20, 25, 30, 35, 40, 45, 50, 60], 0.91),
+        ),
+        builtin(
             "builtin-bopp-metal",
             "BOPP metal",
             0.91,
@@ -243,6 +249,12 @@ pub fn default_calculate_materials() -> Vec<CalculateMaterial> {
         builtin(
             "builtin-mcp",
             "MCP",
+            0.90,
+            density_variants(&[20, 25, 30, 35, 40, 45, 50, 60], 0.90),
+        ),
+        builtin(
+            "builtin-mcpp",
+            "MCPP",
             0.90,
             density_variants(&[20, 25, 30, 35, 40, 45, 50, 60], 0.90),
         ),
@@ -258,6 +270,24 @@ pub fn default_calculate_materials() -> Vec<CalculateMaterial> {
             0.92,
             density_variants(&[30, 35, 40, 45, 50, 55, 60, 65, 70, 75, 80, 85, 90], 0.92),
         ),
+        builtin(
+            "builtin-pe-oq",
+            "PE oq",
+            0.92,
+            density_variants(&[30, 35, 40, 45, 50, 55, 60, 65, 70, 75, 80, 85, 90], 0.92),
+        ),
+        builtin(
+            "builtin-pe-qora",
+            "PE qora",
+            0.92,
+            density_variants(&[30, 35, 40, 45, 50, 55, 60, 65, 70, 75, 80, 85, 90], 0.92),
+        ),
+        builtin(
+            "builtin-pe-pr",
+            "PE PR",
+            0.92,
+            density_variants(&[30, 35, 40, 45, 50, 55, 60, 65, 70, 75, 80, 85, 90], 0.92),
+        ),
         builtin("builtin-jem", "JEM", 0.0, legacy_jem_variants()),
     ]
 }
@@ -268,9 +298,12 @@ pub fn merge_default_calculate_materials(
     let mut materials = default_calculate_materials();
     for override_material in overrides {
         let override_material = upgrade_stored_material(override_material, &materials);
+        let override_name = normalize_key(&override_material.name);
         if let Some(current) = materials
             .iter_mut()
-            .find(|current| current.id == override_material.id)
+            .find(|current| {
+                current.id == override_material.id || normalize_key(&current.name) == override_name
+            })
         {
             *current = override_material;
         } else {
@@ -428,8 +461,29 @@ mod tests {
         assert!(result.is_err());
     }
 
+    #[test]
+    fn existing_material_with_a_default_name_replaces_the_new_default() {
+        let existing = CalculateMaterial {
+            id: "existing-pe-oq".to_string(),
+            name: "PE oq".to_string(),
+            active: true,
+            density_g_cm3: 0.93,
+            variants: density_variants(&[30], 0.93),
+        };
+
+        let materials = merge_default_calculate_materials(vec![existing]);
+        let pe_oq = materials
+            .iter()
+            .filter(|material| normalize_key(&material.name) == "peoq")
+            .collect::<Vec<_>>();
+
+        assert_eq!(pe_oq.len(), 1);
+        assert_eq!(pe_oq[0].id, "existing-pe-oq");
+        assert_eq!(pe_oq[0].density_g_cm3, 0.93);
+    }
+
     #[tokio::test]
-    async fn memory_store_starts_with_legacy_materials() {
+    async fn memory_store_starts_with_exact_materials() {
         let store = MemoryCalculateMaterialStore::new();
         let materials = store.list().await.expect("materials");
         assert!(
@@ -437,5 +491,7 @@ mod tests {
                 .iter()
                 .any(|material| material.name == "BOPP metal")
         );
+        assert!(materials.iter().any(|material| material.name == "PE oq"));
+        assert!(materials.iter().any(|material| material.name == "PE qora"));
     }
 }

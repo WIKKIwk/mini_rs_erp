@@ -201,8 +201,8 @@ fn rejects_waste_percent_that_cannot_be_a_yield() {
 }
 
 #[test]
-fn catalog_requires_an_exact_material_instead_of_an_alias() {
-    let error = calculate_with_material_catalog(
+fn catalog_resolves_pe_oq_as_a_separate_material() {
+    let value = calculate_with_material_catalog(
         CalculateRequest {
             kg: Some(1000.0),
             frame_product_size_mm: Some(250.0),
@@ -212,7 +212,25 @@ fn catalog_requires_an_exact_material_instead_of_an_alias() {
         },
         &default_calculate_materials(),
     )
-    .expect_err("PE oq must be configured as a separate material");
+    .expect("PE oq must be available as a separate material");
 
-    assert_eq!(error, "material katalogdan tanlanmagan: PE oq");
+    assert_eq!(value.results.len(), 1);
+    assert_eq!(value.results[0].film_gsm, 27.6);
+}
+
+#[test]
+fn catalog_still_rejects_an_unknown_material_name() {
+    let error = calculate_with_material_catalog(
+        CalculateRequest {
+            kg: Some(1000.0),
+            frame_product_size_mm: Some(250.0),
+            frame_count: Some(3.0),
+            first_layer: LayerInput::new("PE white", "30"),
+            ..CalculateRequest::default()
+        },
+        &default_calculate_materials(),
+    )
+    .expect_err("unknown material names must not behave as aliases");
+
+    assert_eq!(error, "material katalogdan tanlanmagan: PE white");
 }
