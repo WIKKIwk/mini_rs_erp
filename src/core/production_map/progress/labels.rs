@@ -21,20 +21,25 @@ pub(in crate::core::production_map) fn non_empty_or(value: &str, fallback: &str)
     }
 }
 
-pub(in crate::core::production_map) fn progress_label_item_name(
+pub(crate) fn progress_label_item_name(
     order_map: &ProductionMapDefinition,
     apparatus: &str,
     action: queue_state::ApparatusQueueAction,
 ) -> String {
     let order_title = non_empty_or(&order_map.title, &order_map.product_code);
     let state_label = match action {
-        queue_state::ApparatusQueueAction::Pause => "pauza",
+        queue_state::ApparatusQueueAction::Pause => "chiqarildi",
         queue_state::ApparatusQueueAction::RollComplete => "rulon tugatildi",
-        queue_state::ApparatusQueueAction::Complete => "tugatildi",
+        queue_state::ApparatusQueueAction::Complete => "ish tugatildi",
         _ => queue_action_str(action),
     };
+    let product_kind = if super::super::chain::is_final_work_stage_station(order_map, apparatus) {
+        "tayyor mahsulot"
+    } else {
+        "yarim tayyor mahsulot"
+    };
     format!(
-        "{order_title} yarim tayyor, {} holatda, {state_label}",
+        "{order_title} {product_kind}, apparat: {}, {state_label}",
         apparatus.trim()
     )
 }

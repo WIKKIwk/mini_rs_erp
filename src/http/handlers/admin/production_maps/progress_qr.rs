@@ -191,7 +191,16 @@ pub async fn production_map_progress_qr_reprint(
     if !principal_can_reprint_progress_batch(&principal, &batch) {
         return Err(forbidden());
     }
-    let request = progress_reprint_request(&input, &batch);
+    let item_name = match state.production_maps.raw_map(&batch.order_id).await {
+        Ok(Some(order_map)) => crate::core::production_map::progress_label_item_name(
+            &order_map,
+            &batch.apparatus,
+            batch.action,
+        ),
+        Ok(None) => batch.label_item_name.clone(),
+        Err(error) => return Err(production_map_error(error)),
+    };
+    let request = progress_reprint_request(&input, &batch, &item_name);
     let print_result = if input.print_transport.trim().eq_ignore_ascii_case("offline") {
         state.gscale.prepare_progress_label(request)
     } else {
@@ -256,12 +265,13 @@ fn principal_can_reprint_progress_batch(
 fn progress_reprint_request(
     input: &ProgressQrReprintRequest,
     batch: &crate::core::production_map::OrderProgressBatch,
+    item_name: &str,
 ) -> ProgressLabelPrintRequest {
     ProgressLabelPrintRequest {
         driver_url: input.driver_url.clone(),
         qr_payload: batch.qr_payload.clone(),
         item_code: batch.label_item_code.clone(),
-        item_name: batch.label_item_name.clone(),
+        item_name: item_name.to_string(),
         customer_name: batch
             .payload_json
             .get("customer_name")

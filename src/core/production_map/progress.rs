@@ -15,9 +15,9 @@ pub(super) use ids::{
     unix_seconds,
 };
 pub(super) use labels::{
-    actor_display_name, legacy_order_run_session, non_empty_or, progress_label_item_name,
-    valid_progress_qty,
+    actor_display_name, legacy_order_run_session, non_empty_or, valid_progress_qty,
 };
+pub(crate) use labels::progress_label_item_name;
 #[cfg(test)]
 pub(super) use notifications::{
     completion_request_decision_notification_from_event,

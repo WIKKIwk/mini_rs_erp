@@ -129,6 +129,18 @@ fn linear_work_stages_follows_production_chain() {
             .collect::<Vec<_>>(),
         vec!["9 ta rangli pechat - A", "Laminatsiya", "Rezka aparat - A"]
     );
+    assert!(!is_final_work_stage_station(
+        &hotlunch_map(),
+        "9 ta rangli pechat - A"
+    ));
+    assert!(is_final_work_stage_station(
+        &hotlunch_map(),
+        "Rezka aparat - A"
+    ));
+    assert!(!is_final_work_stage_station(
+        &hotlunch_map(),
+        "Noma'lum aparat"
+    ));
 }
 
 #[test]

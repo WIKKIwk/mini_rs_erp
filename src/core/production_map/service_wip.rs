@@ -101,21 +101,16 @@ impl ProductionMapService {
         let mut batch = self
             .progress_batch_for_qr(progress_batch_id, qr_payload)
             .await?;
-        if !matches!(
-            batch.action,
-            queue_state::ApparatusQueueAction::RollComplete
-                | queue_state::ApparatusQueueAction::Complete
-        )
-            || batch.status != OrderProgressBatchStatus::Completed
-            || batch.wip_status != OrderProgressBatchWipStatus::Waiting
-            || !batch.next_apparatus.trim().is_empty()
-        {
-            return Err(ProductionMapError::ProgressBatchNotAccepted);
-        }
         let order_map = self
             .raw_map(&batch.order_id)
             .await?
             .ok_or(ProductionMapError::MapNotFound)?;
+        if !batch.is_finished_goods_output()
+            || !chain::is_final_work_stage_station(&order_map, &batch.apparatus)
+            || batch.wip_status != OrderProgressBatchWipStatus::Waiting
+        {
+            return Err(ProductionMapError::ProgressBatchNotAccepted);
+        }
         let item_code = order_map.product_code.trim();
         if item_code.is_empty() {
             return Err(ProductionMapError::ProgressInputInvalid);

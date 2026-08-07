@@ -443,4 +443,8 @@ async fn progress_qr_history_lists_own_batches_and_reprints_existing_qr() {
     let printed = print_requests.lock().await;
     assert_eq!(printed.len(), 3);
     assert!(printed.iter().any(|request| request.epc == own_qr));
+    let reprint_request = printed.last().expect("reprint request");
+    assert_eq!(reprint_request.epc, own_qr);
+    assert!(reprint_request.item_name.contains("tayyor mahsulot"));
+    assert!(!reprint_request.item_name.contains("yarim tayyor mahsulot"));
 }

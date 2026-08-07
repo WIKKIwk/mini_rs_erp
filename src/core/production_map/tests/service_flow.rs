@@ -1161,7 +1161,7 @@ async fn paused_next_order_resumes_after_previous_order_completed() {
 }
 
 #[tokio::test]
-async fn first_stage_pause_output_stays_waiting_when_work_resumes() {
+async fn final_stage_pause_output_is_finished_goods_while_work_resumes() {
     let service = ProductionMapService::new(std::sync::Arc::new(MemoryProductionMapStore::new()));
     let actor = QueueActionActor {
         role: "aparatchi".to_string(),
@@ -1219,8 +1219,19 @@ async fn first_stage_pause_output_stays_waiting_when_work_resumes() {
     assert_eq!(batch.qr_payload.len(), 24);
     assert!(batch.qr_payload.starts_with("4001"));
     assert!(batch.qr_payload.chars().all(|ch| ch.is_ascii_hexdigit()));
-    assert!(batch.label_item_name.contains("pauza"));
+    assert!(batch.label_item_name.contains("tayyor mahsulot"));
+    assert!(batch.label_item_name.contains("chiqarildi"));
+    assert!(!batch.label_item_name.contains("yarim tayyor mahsulot"));
+    assert!(batch.next_apparatus.is_empty());
+    assert_eq!(batch.status_detail.flow_status, "free_wip");
     assert_eq!(batch.executor_name, "Worker Progress");
+
+    let paused_order_status = service
+        .order_status_detail("zakaz-progress-1")
+        .await
+        .expect("paused order status");
+    assert_eq!(paused_order_status.order_status, "paused");
+    assert_eq!(paused_order_status.flow_status, "free_wip");
 
     let lookup = service
         .progress_batch_for_qr("", &batch.qr_payload)
@@ -1279,6 +1290,15 @@ async fn first_stage_pause_output_stays_waiting_when_work_resumes() {
             .as_str()
             .unwrap_or_default(),
         ""
+    );
+    assert_eq!(
+        resumed
+            .progress_batch
+            .as_ref()
+            .expect("resumed batch")
+            .status_detail
+            .flow_status,
+        "free_wip"
     );
 }
 
@@ -2525,6 +2545,26 @@ async fn downstream_start_marks_previous_stage_batch_in_use() {
     let first_batch = pause_first_stage_batch(&service, order_id, first, &actor, 21.0)
         .await
         .expect("first batch");
+    assert!(first_batch.label_item_name.contains("yarim tayyor mahsulot"));
+    assert!(!first_batch.is_finished_goods_output());
+    assert_eq!(first_batch.next_apparatus, second);
+    assert_eq!(first_batch.status_detail.flow_status, "waiting_next_stage");
+    let intermediate_receipt = service
+        .receive_finished_goods(
+            &first_batch.batch_id,
+            &first_batch.qr_payload,
+            "Tayyor mahsulot ombori",
+            QueueActionActor {
+                role: "werka".to_string(),
+                ref_: "warehouse-intermediate-rejection".to_string(),
+                display_name: "Warehouse Worker".to_string(),
+            },
+        )
+        .await;
+    assert_eq!(
+        intermediate_receipt,
+        Err(ProductionMapError::ProgressBatchNotAccepted)
+    );
 
     service
         .apply_apparatus_queue_action_with_progress(
@@ -3514,6 +3554,92 @@ async fn roll_complete_final_output_can_be_received_as_finished_goods() {
     );
     assert_eq!(receipt.batch.wip_status, OrderProgressBatchWipStatus::Processed);
     assert_eq!(receipt.batch.status_detail.flow_status, "accepted_to_stock");
+}
+
+#[tokio::test]
+async fn pause_final_output_can_be_received_as_finished_goods() {
+    let service = ProductionMapService::new(std::sync::Arc::new(
+        MemoryProductionMapStore::new(),
+    ));
+    let worker = QueueActionActor {
+        role: "aparatchi".to_string(),
+        ref_: "worker-pause-receipt".to_string(),
+        display_name: "Pause Worker".to_string(),
+    };
+    let order_id = "zakaz-pause-receipt";
+    let apparatus = "Rezka";
+    let mut map = apparatus_stage_map(order_id, apparatus);
+    map.nodes
+        .iter_mut()
+        .find(|node| node.kind == ProductionMapNodeKind::Apparatus)
+        .expect("rezka node")
+        .rezka_kadr_count = Some(1);
+    service
+        .upsert_map(map)
+        .await
+        .expect("map");
+    service
+        .apply_apparatus_queue_action_with_progress(
+            apparatus,
+            order_id,
+            queue_state::ApparatusQueueAction::Start,
+            &[apparatus.to_string()],
+            worker.clone(),
+            QueueProgressInput::default(),
+        )
+        .await
+        .expect("start final stage");
+    let output = service
+        .apply_apparatus_queue_action_with_progress(
+            apparatus,
+            order_id,
+            queue_state::ApparatusQueueAction::Pause,
+            &[apparatus.to_string()],
+            worker,
+            QueueProgressInput {
+                produced_qty: Some(11.0),
+                gross_qty: Some(11.0),
+                diameter: Some(45.0),
+                uom: "kg".to_string(),
+                ..QueueProgressInput::default()
+            },
+        )
+        .await
+        .expect("take finished output")
+        .progress_batch
+        .expect("pause output");
+
+    assert!(output.is_finished_goods_output());
+    assert_eq!(output.status_detail.flow_status, "free_wip");
+    assert_eq!(
+        service
+            .order_status_detail(order_id)
+            .await
+            .expect("paused order status")
+            .order_status,
+        "paused"
+    );
+
+    let warehouse = QueueActionActor {
+        role: "werka".to_string(),
+        ref_: "warehouse-pause-receipt".to_string(),
+        display_name: "Warehouse Worker".to_string(),
+    };
+    let receipt = service
+        .receive_finished_goods(
+            &output.batch_id,
+            &output.qr_payload,
+            "Tayyor mahsulot ombori",
+            warehouse,
+        )
+        .await
+        .expect("receive pause output");
+    assert_eq!(receipt.batch.wip_status, OrderProgressBatchWipStatus::Processed);
+    assert_eq!(receipt.batch.status_detail.flow_status, "accepted_to_stock");
+    assert_eq!(receipt.stock.qty, 11.0);
+    assert_eq!(receipt.stock.uom, "kg");
+    assert_eq!(receipt.order_status.order_status, "paused");
+    assert_eq!(receipt.order_status.flow_status, "accepted_to_stock");
 }
 
 async fn pause_first_stage_batch(

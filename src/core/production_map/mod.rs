@@ -47,6 +47,7 @@ pub use store_port::{
     QueueActionProgressWriteResult, RawMaterialStockTransition, RawMaterialStockTransitionKind,
 };
 pub use types::*;
+pub(crate) use progress::progress_label_item_name;
 
 #[cfg(test)]
 mod tests;

@@ -12,6 +12,23 @@ impl OrderProgressBatch {
     pub fn refresh_status_detail(&mut self) {
         self.status_detail = OrderProgressBatchStatusDetail::from_batch(self);
     }
+
+    pub fn is_finished_goods_output(&self) -> bool {
+        if !self.next_apparatus.trim().is_empty() {
+            return false;
+        }
+        match self.action {
+            queue_state::ApparatusQueueAction::Pause => matches!(
+                self.status,
+                OrderProgressBatchStatus::Paused | OrderProgressBatchStatus::Resumed
+            ),
+            queue_state::ApparatusQueueAction::RollComplete
+            | queue_state::ApparatusQueueAction::Complete => {
+                self.status == OrderProgressBatchStatus::Completed
+            }
+            _ => false,
+        }
+    }
 }
 
 impl OrderProgressBatchStatusDetail {
@@ -24,12 +41,7 @@ impl OrderProgressBatchStatusDetail {
         .to_string();
         let wip_status = batch.wip_status.as_str().to_string();
         let processed_by = batch.processed_by_apparatus.trim();
-        let is_final_output = matches!(
-            batch.action,
-            queue_state::ApparatusQueueAction::RollComplete
-                | queue_state::ApparatusQueueAction::Complete
-        ) && batch.status == OrderProgressBatchStatus::Completed
-            && batch.next_apparatus.trim().is_empty();
+        let is_final_output = batch.is_finished_goods_output();
         let flow_status = match batch.wip_status {
             OrderProgressBatchWipStatus::Waiting if is_final_output => "free_wip",
             OrderProgressBatchWipStatus::Waiting => "waiting_next_stage",
@@ -75,6 +87,16 @@ impl ProductionOrderStatusDetail {
             .values()
             .flat_map(|states| states.values())
             .any(|state| state == "in_progress");
+        let has_paused_final_output_queue = progress_batches.iter().any(|batch| {
+            batch.action == queue_state::ApparatusQueueAction::Pause
+                && batch.is_finished_goods_output()
+                && queue_states.iter().any(|(apparatus, states)| {
+                    queue_state::apparatus_titles_match(apparatus, &batch.apparatus)
+                        && states
+                            .get(batch.order_id.trim())
+                            .is_some_and(|state| state == "paused")
+                })
+        });
         detail.completed_queue_count = queue_states
             .values()
             .flat_map(|states| states.values())
@@ -85,7 +107,11 @@ impl ProductionOrderStatusDetail {
             .filter(|entry| entry.completed_with_issue)
             .count();
 
-        let order_status = detail.derive_order_status(has_pending_queue, has_in_progress_queue);
+        let order_status = detail.derive_order_status(
+            has_pending_queue,
+            has_in_progress_queue,
+            has_paused_final_output_queue,
+        );
         detail.order_status = order_status.to_string();
         detail.work_status = work_status_for_order(order_status).to_string();
         detail.flow_status = detail.derive_flow_status(order_status).to_string();
@@ -128,9 +154,12 @@ impl ProductionOrderStatusDetail {
         &self,
         has_pending_queue: bool,
         has_in_progress_queue: bool,
+        has_paused_final_output_queue: bool,
     ) -> &'static str {
         if self.active_session_count > 0 || self.in_use_wip_count > 0 || has_in_progress_queue {
             "in_progress"
+        } else if has_paused_final_output_queue {
+            "paused"
         } else if !has_pending_queue && self.all_remaining_wips_are_final_outputs() {
             if self.completed_with_issue_count > 0 {
                 "completed_with_issue"

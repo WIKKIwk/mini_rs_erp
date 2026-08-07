@@ -152,6 +152,11 @@ pub fn map_has_work_stage_for_station(map: &ProductionMapDefinition, station: &s
         .any(|stage| queue_state::apparatus_titles_match(&stage.station_title, station))
 }
 
+pub fn is_final_work_stage_station(map: &ProductionMapDefinition, station: &str) -> bool {
+    map_has_work_stage_for_station(map, station)
+        && next_work_stage_station(map, station).is_none()
+}
+
 fn queue_state_for_station(
     station: &str,
     order_id: &str,
