@@ -10,33 +10,24 @@ pub(super) fn gsm_cell_with_catalog(
     micron: u32,
     catalog: &[CalculateMaterial],
 ) -> Result<f64, String> {
-    if material_id.trim().is_empty() {
+    let catalog_material = if material_id.trim().is_empty() {
         let material_key = normalize_key(material);
-        let Some(catalog_material) = catalog.iter().find(|candidate| {
-            (normalize_key(&candidate.name) == material_key
-                || candidate
-                    .aliases
-                    .iter()
-                    .any(|alias| normalize_key(alias) == material_key))
-                && candidate
-                    .variants
-                    .iter()
-                    .any(|variant| variant.micron == micron)
-        }) else {
+        let Some(catalog_material) = catalog
+            .iter()
+            .find(|candidate| normalize_key(&candidate.name) == material_key)
+        else {
+            if !catalog.is_empty() {
+                return Err(format!("material katalogdan tanlanmagan: {material}"));
+            }
             return gsm_cell(material, micron_text, micron);
         };
-        let variant = catalog_material
-            .variants
+        catalog_material
+    } else {
+        catalog
             .iter()
-            .find(|variant| variant.micron == micron)
-            .expect("catalog variant checked above");
-        return variant_gsm(catalog_material, variant);
-    }
-
-    let catalog_material = catalog
-        .iter()
-        .find(|candidate| candidate.id.trim() == material_id.trim())
-        .ok_or_else(|| format!("material topilmadi: {material}"))?;
+            .find(|candidate| candidate.id.trim() == material_id.trim())
+            .ok_or_else(|| format!("material topilmadi: {material}"))?
+    };
     let microns = parse_micron_parts(micron_text)?;
     if microns.len() != 1 {
         return Err(format!(
@@ -97,10 +88,10 @@ pub(super) fn gsm_cell(material: &str, micron_text: &str, micron: u32) -> Result
 fn gsm_single(material: &str, micron: u32) -> Result<f64, String> {
     let family = material_family(material)?;
     let gsm = match family {
-        Family::Pet => f64::from(micron) * 1.40,
-        Family::Opp => f64::from(micron) * 0.91,
-        Family::Cpp => f64::from(micron) * 0.90,
-        Family::Pe => f64::from(micron) * 0.92,
+        Family::Pet => Some(f64::from(micron) * 1.40),
+        Family::Opp => Some(f64::from(micron) * 0.91),
+        Family::Cpp => Some(f64::from(micron) * 0.90),
+        Family::Pe => Some(f64::from(micron) * 0.92),
         Family::Jem => legacy_jem_gsm(micron),
         Family::Twist => Some(1_000_000.0 / 30_000.0),
         Family::Empty => None,

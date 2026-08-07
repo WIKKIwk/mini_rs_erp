@@ -21,8 +21,6 @@ pub struct CalculateMaterial {
     #[serde(default)]
     pub id: String,
     pub name: String,
-    #[serde(default)]
-    pub aliases: Vec<String>,
     #[serde(default = "default_active")]
     pub active: bool,
     #[serde(default)]
@@ -31,13 +29,12 @@ pub struct CalculateMaterial {
 }
 
 #[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct CalculateMaterialUpsert {
     #[serde(default)]
     pub id: String,
     #[serde(default)]
     pub name: String,
-    #[serde(default)]
-    pub aliases: Vec<String>,
     #[serde(default = "default_active")]
     pub active: bool,
     #[serde(default)]
@@ -51,7 +48,6 @@ impl Default for CalculateMaterialUpsert {
         Self {
             id: String::new(),
             name: String::new(),
-            aliases: Vec::new(),
             active: true,
             density_g_cm3: 0.0,
             variants: Vec::new(),
@@ -186,20 +182,6 @@ pub fn normalize_material(
         ));
     }
 
-    let mut aliases = Vec::new();
-    for alias in input.aliases {
-        let alias = alias.trim();
-        if alias.is_empty() || normalize_key(alias) == normalize_key(&name) {
-            continue;
-        }
-        if !aliases
-            .iter()
-            .any(|current: &String| normalize_key(current) == normalize_key(alias))
-        {
-            aliases.push(alias.to_string());
-        }
-    }
-
     Ok(CalculateMaterial {
         id: if input.id.trim().is_empty() {
             format!("material-{}", unix_micros())
@@ -207,7 +189,6 @@ pub fn normalize_material(
             input.id.trim().to_string()
         },
         name,
-        aliases,
         active: input.active,
         density_g_cm3,
         variants,
@@ -244,46 +225,40 @@ pub fn default_calculate_materials() -> Vec<CalculateMaterial> {
         builtin(
             "builtin-pet",
             "PET",
-            &["pet"],
             1.40,
             density_variants(&[12, 20, 25, 30, 35, 40, 45, 50, 60], 1.40),
         ),
         builtin(
             "builtin-opp",
             "OPP",
-            &["opp", "bopp"],
             0.91,
             density_variants(&[18, 20, 25, 30, 35, 40, 45, 50, 60], 0.91),
         ),
         builtin(
             "builtin-bopp-metal",
             "BOPP metal",
-            &["bopp metall", "boppmetal"],
             0.91,
             density_variants(&[18, 20, 25, 30, 35, 40, 45, 50, 60], 0.91),
         ),
         builtin(
             "builtin-mcp",
             "MCP",
-            &["mcp", "mcpp"],
             0.90,
             density_variants(&[20, 25, 30, 35, 40, 45, 50, 60], 0.90),
         ),
         builtin(
             "builtin-cpp",
             "CPP",
-            &["cpp"],
             0.90,
             density_variants(&[20, 25, 30, 35, 40, 45, 50, 60], 0.90),
         ),
         builtin(
             "builtin-pe",
             "PE",
-            &["pe", "pe oq", "pe pr"],
             0.92,
             density_variants(&[30, 35, 40, 45, 50, 55, 60, 65, 70, 75, 80, 85, 90], 0.92),
         ),
-        builtin("builtin-jem", "JEM", &["jem"], 0.0, legacy_jem_variants()),
+        builtin("builtin-jem", "JEM", 0.0, legacy_jem_variants()),
     ]
 }
 
@@ -309,14 +284,12 @@ pub fn merge_default_calculate_materials(
 fn builtin(
     id: &str,
     name: &str,
-    aliases: &[&str],
     density_g_cm3: f64,
     variants: Vec<CalculateMaterialVariant>,
 ) -> CalculateMaterial {
     CalculateMaterial {
         id: id.to_string(),
         name: name.to_string(),
-        aliases: aliases.iter().map(|value| (*value).to_string()).collect(),
         active: true,
         density_g_cm3,
         variants,
@@ -414,10 +387,9 @@ mod tests {
     use super::*;
 
     #[test]
-    fn normalizes_and_sorts_material_variants() {
+    fn normalizes_density_and_sorts_material_variants() {
         let material = normalize_material(CalculateMaterialUpsert {
             name: " BOPP metal ".to_string(),
-            aliases: vec!["bopp metall".to_string(), "BOPP METALL".to_string()],
             variants: vec![
                 CalculateMaterialVariant {
                     micron: 30,
@@ -439,7 +411,21 @@ mod tests {
 
         assert_eq!(material.name, "BOPP metal");
         assert_eq!(material.variants[0].micron, 20);
-        assert_eq!(material.aliases, vec!["bopp metall"]);
+        assert!((material.variants[0].coefficient - 1.092).abs() < 0.001);
+    }
+
+    #[test]
+    fn rejects_legacy_alias_field() {
+        let result = serde_json::from_str::<CalculateMaterialUpsert>(
+            r#"{
+                "name":"PE oq",
+                "aliases":["PE white"],
+                "density_g_cm3":0.93,
+                "variants":[{"micron":30}]
+            }"#,
+        );
+
+        assert!(result.is_err());
     }
 
     #[tokio::test]

@@ -88,7 +88,6 @@ async fn calculate_material_catalog_drives_selected_layer_gsm() {
             &token,
             r#"{
                 "name":"BOPP custom",
-                "aliases":["bopp custom"],
                 "active":true,
                 "density_g_cm3":1.2,
                 "variants":[{"micron":12}]
