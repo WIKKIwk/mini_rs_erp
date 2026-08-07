@@ -13,9 +13,12 @@ fn calculates_formula_with_waste_and_rounding() {
     .expect("calculate");
 
     assert_eq!(result.results.len(), 1);
-    assert_eq!(result.results[0].rounded_length, 12000.0);
-    assert!((result.results[0].base_length - 11320.7547).abs() < 0.001);
-    assert!((result.results[0].waste_length - 566.0377).abs() < 0.001);
+    assert_eq!(result.results[0].rounded_length, 13000.0);
+    assert!((result.results[0].film_gsm - 44.4).abs() < 0.001);
+    assert!((result.results[0].adhesive_gsm - 2.5).abs() < 0.001);
+    assert!((result.results[0].total_gsm - 46.9).abs() < 0.001);
+    assert!((result.results[0].base_length - 12069.0349).abs() < 0.001);
+    assert!((result.results[0].waste_length - 635.2124).abs() < 0.001);
 }
 
 #[test]
@@ -31,6 +34,7 @@ fn calculates_single_layer_order() {
 
     assert_eq!(result.layers.len(), 1);
     assert_eq!(result.layers[0].material, "pet");
+    assert_eq!(result.results[0].adhesive_gsm, 0.0);
     assert_eq!(result.results[0].other_coeff, 0.0);
     assert!(result.results[0].base_length > 0.0);
 }
@@ -77,8 +81,8 @@ fn calculates_with_custom_waste_percent() {
     .expect("calculate");
 
     assert_eq!(result.waste_percent, 10.0);
-    assert_eq!(result.results[0].rounded_length, 12500.0);
-    assert!((result.results[0].waste_length - 1132.0754).abs() < 0.001);
+    assert_eq!(result.results[0].rounded_length, 13500.0);
+    assert!((result.results[0].waste_length - 1341.0039).abs() < 0.001);
 }
 
 #[test]
@@ -129,12 +133,14 @@ fn calculates_alternative_material_variants() {
     })
     .expect("calculate");
 
-    let lengths = result
+    let total_gsm = result
         .results
         .into_iter()
-        .map(|result| result.rounded_length)
+        .map(|result| result.total_gsm)
         .collect::<Vec<_>>();
-    assert_eq!(lengths, vec![12000.0, 14000.0]);
+    assert_eq!(total_gsm.len(), 2);
+    assert!((total_gsm[0] - 46.9).abs() < 0.001);
+    assert!((total_gsm[1] - 46.3).abs() < 0.001);
 }
 
 #[test]
@@ -148,7 +154,45 @@ fn parses_material_display_when_layers_are_empty() {
     })
     .expect("calculate");
 
-    assert_eq!(result.results[0].rounded_length, 74500.0);
+    assert_eq!(result.results[0].rounded_length, 133000.0);
     assert_eq!(result.layers[0].material, "pet");
     assert_eq!(result.layers[1].material, "oppm/pe pr");
+}
+
+#[test]
+fn calculates_user_example_with_physical_gsm_and_yield_waste() {
+    let result = calculate(CalculateRequest {
+        kg: Some(1000.0),
+        frame_product_size_mm: Some(250.0),
+        frame_count: Some(3.0),
+        waste_percent: Some(5.0),
+        first_layer: LayerInput::new("PET", "12"),
+        second_layer: LayerInput::new("PET", "12"),
+        ..CalculateRequest::default()
+    })
+    .expect("calculate user example");
+
+    let value = &result.results[0];
+    assert_eq!(result.width_mm, 765.0);
+    assert!((value.film_gsm - 33.6).abs() < 0.001);
+    assert!((value.adhesive_gsm - 2.5).abs() < 0.001);
+    assert!((value.total_gsm - 36.1).abs() < 0.001);
+    assert!((value.base_length - 36210.2366).abs() < 0.001);
+    assert!((value.waste_length - 1905.8019).abs() < 0.001);
+    assert_eq!(value.rounded_length, 38500.0);
+}
+
+#[test]
+fn rejects_waste_percent_that_cannot_be_a_yield() {
+    let error = calculate(CalculateRequest {
+        kg: Some(1000.0),
+        frame_product_size_mm: Some(250.0),
+        frame_count: Some(3.0),
+        waste_percent: Some(100.0),
+        first_layer: LayerInput::new("PET", "12"),
+        ..CalculateRequest::default()
+    })
+    .expect_err("100% waste must be rejected");
+
+    assert_eq!(error, "Atxod foiz noto'g'ri");
 }

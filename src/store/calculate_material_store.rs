@@ -6,9 +6,8 @@ use async_trait::async_trait;
 use rusqlite::{Connection, params};
 
 use crate::core::calculate_materials::{
-    CalculateMaterial, CalculateMaterialError, CalculateMaterialStorePort,
-    CalculateMaterialUpsert, ensure_unique_name, merge_default_calculate_materials,
-    normalize_material,
+    CalculateMaterial, CalculateMaterialError, CalculateMaterialStorePort, CalculateMaterialUpsert,
+    ensure_unique_name, merge_default_calculate_materials, normalize_material,
 };
 
 #[derive(Clone)]
@@ -86,8 +85,8 @@ impl CalculateMaterialStorePort for CalculateMaterialStore {
         let material = normalize_material(input)?;
         let all = merge_default_calculate_materials(self.list_overrides()?);
         ensure_unique_name(&all, &material)?;
-        let payload = serde_json::to_string(&material)
-            .map_err(|_| CalculateMaterialError::StoreFailed)?;
+        let payload =
+            serde_json::to_string(&material).map_err(|_| CalculateMaterialError::StoreFailed)?;
         let conn = self
             .conn
             .lock()
@@ -124,16 +123,20 @@ mod tests {
                     micron: 12,
                     coefficient: 1.25,
                     first_layer_coefficient: None,
+                    actual_gsm: None,
                 }],
+                density_g_cm3: 0.91,
                 ..CalculateMaterialUpsert::default()
             })
             .await
             .expect("custom material");
-        assert!(store
-            .list()
-            .await
-            .expect("materials")
-            .iter()
-            .any(|item| item.id == saved.id));
+        assert!(
+            store
+                .list()
+                .await
+                .expect("materials")
+                .iter()
+                .any(|item| item.id == saved.id)
+        );
     }
 }

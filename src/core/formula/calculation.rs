@@ -1,11 +1,12 @@
-use crate::core::calculate_materials::CalculateMaterial;
+use crate::core::calculate_materials::{CalculateMaterial, gsm_to_legacy_coefficient};
 
-use super::materials::coefficient_cell_with_catalog;
+use super::materials::gsm_cell_with_catalog;
 use super::request_layers::{
     hydrate_layers_from_material_display, request_variants, visible_layers,
 };
 use super::{
-    CalcResult, CalculateRequest, CalculateResponse, DEFAULT_EDGE_ALLOWANCE_MM, MIN_MOLD_EXTRA_MM,
+    CalcResult, CalculateRequest, CalculateResponse, DEFAULT_ADHESIVE_GSM_PER_BOND,
+    DEFAULT_EDGE_ALLOWANCE_MM, MIN_MOLD_EXTRA_MM,
 };
 
 pub fn calculate(request: CalculateRequest) -> Result<CalculateResponse, String> {
@@ -33,7 +34,7 @@ pub fn calculate_with_material_catalog(
         return Err("KG noto'g'ri".to_string());
     }
     let waste_percent = request.waste_percent.unwrap_or(5.0);
-    if waste_percent < 0.0 {
+    if !(0.0..100.0).contains(&waste_percent) {
         return Err("Atxod foiz noto'g'ri".to_string());
     }
     let results = calculate_variants(&request, material_catalog)?;
@@ -88,42 +89,53 @@ fn calculate_single(
     if layers.is_empty() {
         return Err("kamida bitta qavat materiali kerak".to_string());
     }
-    let mut first_coeff = 0.0;
-    let mut other_coeff = 0.0;
+    let mut first_film_gsm = 0.0;
+    let mut other_film_gsm = 0.0;
     for (index, layer) in layers.iter().enumerate() {
         let number = index + 1;
         let material = require_text(&layer.material, &format!("{number}-qavat"))?;
         let micron_text = require_text(&layer.micron, &format!("{number}-mikron"))?;
         let micron = parse_micron(&micron_text)?;
-        let coefficient = coefficient_cell_with_catalog(
+        let gsm = gsm_cell_with_catalog(
             &material,
             &layer.material_id,
             &micron_text,
             micron,
-            index == 0,
             material_catalog,
         )?;
         if index == 0 {
-            first_coeff = coefficient;
+            first_film_gsm = gsm;
         } else {
-            other_coeff += coefficient;
+            other_film_gsm += gsm;
         }
     }
-    let coeff_sum = first_coeff + other_coeff;
-    if coeff_sum <= 0.0 {
+    let film_gsm = first_film_gsm + other_film_gsm;
+    let adhesive_gsm = (layers.len().saturating_sub(1) as f64) * DEFAULT_ADHESIVE_GSM_PER_BOND;
+    let total_gsm = film_gsm + adhesive_gsm;
+    if total_gsm <= 0.0 {
         return Err("kamida bitta qavat materiali kerak".to_string());
     }
 
+    // Keep the old coefficient fields in the response for mobile API compatibility.
+    // They are derived from GSM and are not used by the physical calculation.
+    let first_coeff = gsm_to_legacy_coefficient(first_film_gsm);
+    let other_coeff = gsm_to_legacy_coefficient(other_film_gsm + adhesive_gsm);
+    let coeff_sum = gsm_to_legacy_coefficient(total_gsm);
+
     let width_sm = width_mm / 10.0;
     let waste_percent = request.waste_percent.unwrap_or(5.0);
-    if waste_percent < 0.0 {
+    if !(0.0..100.0).contains(&waste_percent) {
         return Err("Atxod foiz noto'g'ri".to_string());
     }
-    let base_length = kg / (coeff_sum * width_sm) * 6000.0;
-    let waste_length = base_length * waste_percent / 100.0;
-    let rounded_length = round_up(base_length + waste_length, 500.0);
+    let base_length = kg * 1_000_000.0 / (width_mm * total_gsm);
+    let production_length = base_length / (1.0 - waste_percent / 100.0);
+    let waste_length = production_length - base_length;
+    let rounded_length = round_up(production_length, 500.0);
 
     Ok(CalcResult {
+        film_gsm,
+        adhesive_gsm,
+        total_gsm,
         first_coeff,
         other_coeff,
         coeff_sum,

@@ -36,7 +36,8 @@ async fn calculate_endpoint_returns_formula_result() {
 
     assert_eq!(status, StatusCode::OK, "{body}");
     assert_eq!(body["ok"], true);
-    assert_eq!(body["results"][0]["rounded_length"], 12000.0);
+    assert_eq!(body["results"][0]["rounded_length"], 13000.0);
+    assert_eq!(body["results"][0]["total_gsm"], 46.9);
     assert_eq!(body["results"][0]["width_sm"], 53.0);
     assert_eq!(body["rubber_size_mm"], 550);
 }
@@ -77,7 +78,7 @@ async fn calculate_endpoint_accepts_arbitrary_layer_count() {
 }
 
 #[tokio::test]
-async fn calculate_material_catalog_drives_selected_layer_coefficient() {
+async fn calculate_material_catalog_drives_selected_layer_gsm() {
     let state = test_state();
     let token = session(&state, PrincipalRole::Admin).await;
     let saved = build_router(state.clone())
@@ -89,16 +90,15 @@ async fn calculate_material_catalog_drives_selected_layer_coefficient() {
                 "name":"BOPP custom",
                 "aliases":["bopp custom"],
                 "active":true,
-                "variants":[{"micron":12,"coefficient":1.25}]
+                "density_g_cm3":1.2,
+                "variants":[{"micron":12}]
             }"#,
         ))
         .await
         .expect("save material");
     assert_eq!(saved.status(), StatusCode::OK);
     let saved_body = json_body(saved).await;
-    let material_id = saved_body["material"]["id"]
-        .as_str()
-        .expect("material id");
+    let material_id = saved_body["material"]["id"].as_str().expect("material id");
 
     let calculate_body = format!(
         r#"{{
@@ -121,7 +121,8 @@ async fn calculate_material_catalog_drives_selected_layer_coefficient() {
     let body = json_body(response).await;
 
     assert_eq!(body["ok"], true);
-    assert_eq!(body["results"][0]["first_coeff"], 1.25);
+    assert!((body["results"][0]["film_gsm"].as_f64().expect("film GSM") - 14.4).abs() < 0.001);
+    assert_eq!(body["results"][0]["adhesive_gsm"], 0.0);
 }
 
 #[tokio::test]

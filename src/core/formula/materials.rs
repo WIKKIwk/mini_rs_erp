@@ -1,12 +1,13 @@
 use super::{close, normalize, parse_micron_parts, split_parts};
-use crate::core::calculate_materials::{CalculateMaterial, normalize_key};
+use crate::core::calculate_materials::{
+    CalculateMaterial, CalculateMaterialVariant, effective_variant_gsm, normalize_key,
+};
 
-pub(super) fn coefficient_cell_with_catalog(
+pub(super) fn gsm_cell_with_catalog(
     material: &str,
     material_id: &str,
     micron_text: &str,
     micron: u32,
-    is_first: bool,
     catalog: &[CalculateMaterial],
 ) -> Result<f64, String> {
     if material_id.trim().is_empty() {
@@ -22,20 +23,14 @@ pub(super) fn coefficient_cell_with_catalog(
                     .iter()
                     .any(|variant| variant.micron == micron)
         }) else {
-            return coefficient_cell(material, micron_text, micron, is_first);
+            return gsm_cell(material, micron_text, micron);
         };
         let variant = catalog_material
             .variants
             .iter()
             .find(|variant| variant.micron == micron)
             .expect("catalog variant checked above");
-        return Ok(if is_first {
-            variant
-                .first_layer_coefficient
-                .unwrap_or(variant.coefficient)
-        } else {
-            variant.coefficient
-        });
+        return variant_gsm(catalog_material, variant);
     }
 
     let catalog_material = catalog
@@ -64,25 +59,28 @@ pub(super) fn coefficient_cell_with_catalog(
                 catalog_material.name, micron, available
             )
         })?;
-    Ok(if is_first {
-        variant
-            .first_layer_coefficient
-            .unwrap_or(variant.coefficient)
-    } else {
-        variant.coefficient
-    })
+    variant_gsm(catalog_material, variant)
 }
 
-pub(super) fn coefficient_cell(
-    material: &str,
-    micron_text: &str,
-    micron: u32,
-    is_first: bool,
+fn variant_gsm(
+    material: &CalculateMaterial,
+    variant: &CalculateMaterialVariant,
 ) -> Result<f64, String> {
+    effective_variant_gsm(material.density_g_cm3, variant)
+        .filter(|gsm| gsm.is_finite() && *gsm > 0.0)
+        .ok_or_else(|| {
+            format!(
+                "'{}' uchun zichlik yoki actual GSM kiritilmagan",
+                material.name
+            )
+        })
+}
+
+pub(super) fn gsm_cell(material: &str, micron_text: &str, micron: u32) -> Result<f64, String> {
     let materials = split_parts(material);
     let microns = parse_micron_parts(micron_text)?;
     if materials.len() == 1 {
-        return coefficient_single(materials[0], micron, is_first);
+        return gsm_single(materials[0], micron);
     }
     if materials.len() != microns.len() {
         return Err(format!(
@@ -92,35 +90,32 @@ pub(super) fn coefficient_cell(
     materials
         .iter()
         .zip(microns)
-        .map(|(material, micron)| coefficient_single(material, micron, is_first))
+        .map(|(material, micron)| gsm_single(material, micron))
         .sum()
 }
 
-fn coefficient_single(material: &str, micron: u32, is_first: bool) -> Result<f64, String> {
+fn gsm_single(material: &str, micron: u32) -> Result<f64, String> {
     let family = material_family(material)?;
-    if is_first && !matches!(family, Family::Empty | Family::Twist) && micron <= 20 {
-        return Ok(1.0);
-    }
-    if family == Family::First && micron <= 20 {
-        return Ok(1.0);
-    }
-
-    let value = match family {
-        Family::First | Family::McpCpp => mcp_cpp(micron),
-        Family::Jem => jem(micron),
-        Family::Pe => pe(micron),
-        Family::Twist => Some(2.0),
+    let gsm = match family {
+        Family::Pet => f64::from(micron) * 1.40,
+        Family::Opp => f64::from(micron) * 0.91,
+        Family::Cpp => f64::from(micron) * 0.90,
+        Family::Pe => f64::from(micron) * 0.92,
+        Family::Jem => legacy_jem_gsm(micron),
+        Family::Twist => Some(1_000_000.0 / 30_000.0),
         Family::Empty => None,
     };
-    value.ok_or_else(|| coefficient_error(material, micron, family))
+    gsm.filter(|value| value.is_finite() && *value > 0.0)
+        .ok_or_else(|| format!("'{material}' uchun zichlik yoki actual GSM kerak"))
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Family {
-    First,
-    McpCpp,
-    Jem,
+    Pet,
+    Opp,
+    Cpp,
     Pe,
+    Jem,
     Twist,
     Empty,
 }
@@ -134,22 +129,28 @@ fn material_family(material: &str) -> Result<Family, String> {
         return Ok(Family::Twist);
     }
     if n.starts_with("pet") || n.starts_with("mpet") || close(&n, "pet") {
-        return Ok(Family::First);
+        return Ok(Family::Pet);
     }
-    if n.starts_with("opp") || n.starts_with("popp") || n == "st01" || close(&n, "opp") {
-        return Ok(Family::First);
+    if n.starts_with("opp")
+        || n.starts_with("popp")
+        || n == "st01"
+        || n.starts_with("mat")
+        || n.starts_with("pff")
+        || n.starts_with("pf")
+        || close(&n, "opp")
+    {
+        return Ok(Family::Opp);
     }
-    if matches!(n.as_str(), "map" | "mcpp" | "msr" | "msp") {
-        return Ok(Family::McpCpp);
-    }
-    if n.starts_with("mat") || n.starts_with("pff") || n.starts_with("pf") || close(&n, "mat") {
-        return Ok(Family::First);
+    if matches!(n.as_str(), "map" | "mcpp" | "msr" | "msp")
+        || n.starts_with("cpp")
+        || n.starts_with("mcp")
+        || close(&n, "cpp")
+        || close(&n, "mcp")
+    {
+        return Ok(Family::Cpp);
     }
     if n.starts_with("pe") || close(&n, "pe") {
         return Ok(Family::Pe);
-    }
-    if n.starts_with("cpp") || n.starts_with("mcp") || close(&n, "cpp") || close(&n, "mcp") {
-        return Ok(Family::McpCpp);
     }
     if n.starts_with("jem") || close(&n, "jem") {
         return Ok(Family::Jem);
@@ -157,44 +158,10 @@ fn material_family(material: &str) -> Result<Family, String> {
     Err(format!("noma'lum material: {material}"))
 }
 
-fn mcp_cpp(micron: u32) -> Option<f64> {
+fn legacy_jem_gsm(micron: u32) -> Option<f64> {
     interpolate(
         micron,
-        &[
-            (20, 1.07),
-            (25, 1.3),
-            (30, 1.6),
-            (35, 2.0),
-            (40, 2.15),
-            (45, 2.7),
-            (50, 2.8),
-            (60, 3.2),
-        ],
-    )
-}
-
-fn jem(micron: u32) -> Option<f64> {
-    interpolate(micron, &[(25, 1.0), (30, 1.5)])
-}
-
-fn pe(micron: u32) -> Option<f64> {
-    interpolate(
-        micron,
-        &[
-            (30, 2.0),
-            (35, 2.3),
-            (40, 2.6),
-            (45, 3.0),
-            (50, 3.3),
-            (55, 3.6),
-            (60, 4.0),
-            (65, 4.3),
-            (70, 4.6),
-            (75, 5.0),
-            (80, 5.3),
-            (85, 5.6),
-            (90, 6.0),
-        ],
+        &[(25, 1_000_000.0 / 60_000.0), (30, 1_000_000.0 / 40_000.0)],
     )
 }
 
@@ -207,7 +174,7 @@ fn interpolate(micron: u32, table: &[(u32, f64)]) -> Option<f64> {
     else {
         return None;
     };
-    if micron < *first_micron {
+    if micron <= *first_micron {
         return Some(project(
             micron,
             *first_micron,
@@ -223,8 +190,13 @@ fn interpolate(micron: u32, table: &[(u32, f64)]) -> Option<f64> {
             return Some(left_value);
         }
         if micron > left_micron && micron < right_micron {
-            let ratio = (micron - left_micron) as f64 / (right_micron - left_micron) as f64;
-            return Some(left_value + (right_value - left_value) * ratio);
+            return Some(project(
+                micron,
+                left_micron,
+                left_value,
+                right_micron,
+                right_value,
+            ));
         }
     }
     let (left_micron, left_value) = table[table.len() - 2];
@@ -247,15 +219,4 @@ fn project(
 ) -> f64 {
     let ratio = (micron as f64 - left_micron as f64) / (right_micron - left_micron) as f64;
     left_value + (right_value - left_value) * ratio
-}
-
-fn coefficient_error(material: &str, micron: u32, family: Family) -> String {
-    let available = match family {
-        Family::First | Family::McpCpp => "20, 25, 30, 35, 40, 45, 50, 60",
-        Family::Jem => "25, 30",
-        Family::Pe => "30, 35, 40, 45, 50, 55, 60, 65, 70, 75, 80, 85, 90",
-        Family::Twist => "twist uchun jadval kerak emas",
-        Family::Empty => "bo'sh material",
-    };
-    format!("'{material}' uchun {micron} mikron topilmadi. Bor mikronlar: {available}")
 }

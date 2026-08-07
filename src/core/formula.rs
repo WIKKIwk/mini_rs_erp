@@ -9,6 +9,7 @@ use self::calculation::{close, normalize, parse_micron_parts, split_parts};
 
 pub const DEFAULT_EDGE_ALLOWANCE_MM: f64 = 15.0;
 pub const MIN_MOLD_EXTRA_MM: f64 = 50.0;
+pub const DEFAULT_ADHESIVE_GSM_PER_BOND: f64 = 2.5;
 
 #[derive(Debug, Clone, Default, Deserialize)]
 pub struct CalculateRequest {
@@ -128,6 +129,9 @@ pub struct CalculateResponse {
 
 #[derive(Debug, Clone, Serialize)]
 pub struct CalcResult {
+    pub film_gsm: f64,
+    pub adhesive_gsm: f64,
+    pub total_gsm: f64,
     pub first_coeff: f64,
     pub other_coeff: f64,
     pub coeff_sum: f64,
