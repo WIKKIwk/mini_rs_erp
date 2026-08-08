@@ -1116,7 +1116,7 @@ fn parse_inline_login_input(query: &str) -> Option<InlineLoginInput> {
 
 fn is_login_code(value: &str) -> bool {
     let value = value.trim();
-    (4..=8).contains(&value.len()) && value.chars().all(|character| character.is_ascii_digit())
+    matches!(value.len(), 5 | 6) && value.chars().all(|character| character.is_ascii_digit())
 }
 
 fn user_account_error_message(error: &TelegramError) -> String {
@@ -1321,7 +1321,12 @@ mod tests {
             Some(InlineLoginInput::Password("my secret password".to_string()))
         );
         assert_eq!(parse_inline_login_input("47989"), None);
-        assert_eq!(parse_inline_login_input("q7 12"), None);
+        assert_eq!(
+            parse_inline_login_input("q7 123456"),
+            Some(InlineLoginInput::Code("123456".to_string()))
+        );
+        assert_eq!(parse_inline_login_input("q7 4924"), None);
+        assert_eq!(parse_inline_login_input("q7 1234567"), None);
     }
 
     #[test]
