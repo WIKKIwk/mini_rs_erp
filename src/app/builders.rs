@@ -24,6 +24,7 @@ use crate::rps::RpsDriverClient;
 use crate::store::apparatus_group_store::ApparatusGroupStore;
 use crate::store::calculate_order_store::CalculateOrderStore;
 use crate::store::calculate_material_store::CalculateMaterialStore;
+use crate::telegram::TelegramService;
 
 use super::app_local_store::{
     apparatus_group_store_path, calculate_material_store_path, calculate_order_store_path,
@@ -38,6 +39,10 @@ pub(super) fn default_scale_driver_url() -> String {
         .map(|value| value.trim().trim_end_matches('/').to_string())
         .filter(|value| !value.is_empty())
         .unwrap_or_else(|| "http://gscale.local:39117".to_string())
+}
+
+pub(super) fn build_telegram_service() -> TelegramService {
+    TelegramService::new(telegram_store_path())
 }
 
 pub(super) fn build_gscale_service(

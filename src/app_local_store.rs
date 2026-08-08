@@ -238,6 +238,12 @@ pub(super) fn role_store_path() -> std::path::PathBuf {
         .unwrap_or_else(|_| std::path::PathBuf::from("data/mobile_roles.json"))
 }
 
+pub(super) fn telegram_store_path() -> std::path::PathBuf {
+    std::env::var("MOBILE_API_TELEGRAM_STORE_PATH")
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|_| std::path::PathBuf::from("data/mobile_telegram.json"))
+}
+
 pub(super) fn admin_store_path() -> std::path::PathBuf {
     std::env::var("MOBILE_API_ADMIN_STORE_PATH")
         .map(std::path::PathBuf::from)

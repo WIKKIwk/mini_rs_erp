@@ -17,3 +17,4 @@ pub mod google_sheets;
 pub mod http;
 pub mod rps;
 pub mod store;
+pub mod telegram;

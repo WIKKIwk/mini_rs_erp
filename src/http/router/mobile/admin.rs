@@ -8,6 +8,14 @@ pub(super) fn routes() -> Router<AppState> {
     Router::new()
         .route("/v1/mobile/admin/settings", any(admin::settings))
         .route(
+            "/v1/mobile/admin/telegram/settings",
+            any(admin::telegram_settings),
+        )
+        .route(
+            "/v1/mobile/admin/telegram/invites",
+            any(admin::telegram_invite),
+        )
+        .route(
             "/v1/mobile/admin/apparatus-groups",
             any(admin::apparatus_groups),
         )

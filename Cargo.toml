@@ -24,6 +24,7 @@ bytes = "1"
 cbc = { version = "0.1", features = ["alloc"] }
 data-encoding = "2"
 dotenvy = "0.15"
+ferogram = { version = "0.6.4", default-features = false }
 hmac = "0.12"
 hyper = { version = "1.9", features = ["http1", "server"] }
 hyper-util = { version = "0.1", features = ["service", "tokio"] }

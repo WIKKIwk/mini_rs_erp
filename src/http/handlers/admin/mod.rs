@@ -6,6 +6,7 @@ mod supplier_mutations;
 mod suppliers;
 mod system;
 mod system_users;
+mod telegram;
 mod warehouse_live;
 mod workers;
 
@@ -61,6 +62,7 @@ pub use system::{
 };
 use system::{authorize_any_capability, authorize_capability, require_capability};
 pub use system_users::{system_user_code_regenerate, system_user_detail, system_users};
+pub use telegram::{invite as telegram_invite, settings as telegram_settings};
 pub use warehouse_live::warehouse_live;
 pub use workers::{
     worker_code_regenerate, worker_delete_check, worker_detail, worker_groups,

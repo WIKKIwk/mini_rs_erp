@@ -17,4 +17,5 @@ pub mod rps_batch;
 pub mod server;
 pub mod stock_entry;
 pub mod supplier;
+pub mod telegram;
 pub mod werka;

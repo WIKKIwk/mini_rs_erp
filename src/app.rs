@@ -46,6 +46,7 @@ use crate::store::chat_media_r2::R2ChatMediaStorage;
 use crate::store::profile_avatar_local::LocalProfileAvatarStorage;
 use crate::store::profile_avatar_r2::R2ProfileAvatarStorage;
 use crate::store::role_store::RoleDefinitionStore;
+use crate::telegram::TelegramService;
 
 #[path = "app_local_store.rs"]
 mod app_local_store;
@@ -93,6 +94,7 @@ pub struct AppState {
     pub system_users: SystemUserService,
     pub worker_groups: WorkerGroupService,
     pub sessions: SessionManager,
+    pub telegram: TelegramService,
     pub warehouse_events: WarehouseEventHub,
     pub raw_material_events: Option<PostgresRawMaterialEventStore>,
     pub system_monitor_hub: SystemMonitorHub,
@@ -168,6 +170,7 @@ impl AppState {
         let warehouses = build_warehouse_service();
         let worker_groups = build_worker_group_service();
         let sessions = build_session_manager(&config);
+        let telegram = build_telegram_service();
 
         Self {
             config: Arc::new(config),
@@ -199,6 +202,7 @@ impl AppState {
             system_users,
             worker_groups,
             sessions,
+            telegram,
             warehouse_events,
             raw_material_events,
             system_monitor_hub,

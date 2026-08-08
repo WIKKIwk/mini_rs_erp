@@ -31,6 +31,7 @@ async fn main() -> Result<(), error::AppError> {
         .map_err(|error| error::AppError::Storage(error.to_string()))?;
     postgres_pool.close().await;
     let state = AppState::new(config);
+    state.telegram.start_bot_worker_if_configured().await;
     let app = http::router::build_router(state);
 
     tracing::info!(%bind_addr, "starting mini rs erp");
