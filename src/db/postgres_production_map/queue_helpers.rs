@@ -45,6 +45,9 @@ pub(super) async fn insert_queue_action_event_tx(
     .bind(match event.action {
         crate::core::production_map::queue_state::ApparatusQueueAction::Start => "start",
         crate::core::production_map::queue_state::ApparatusQueueAction::Pause => "pause",
+        crate::core::production_map::queue_state::ApparatusQueueAction::DetachRoll => {
+            "detach_roll"
+        }
         crate::core::production_map::queue_state::ApparatusQueueAction::Resume => "resume",
         crate::core::production_map::queue_state::ApparatusQueueAction::RollComplete => {
             "roll_complete"
@@ -74,6 +77,9 @@ pub(super) fn queue_action_from_str(
     match value.trim().to_ascii_lowercase().as_str() {
         "start" => Some(crate::core::production_map::queue_state::ApparatusQueueAction::Start),
         "pause" => Some(crate::core::production_map::queue_state::ApparatusQueueAction::Pause),
+        "detach_roll" => Some(
+            crate::core::production_map::queue_state::ApparatusQueueAction::DetachRoll,
+        ),
         "resume" => Some(crate::core::production_map::queue_state::ApparatusQueueAction::Resume),
         "roll_complete" => Some(
             crate::core::production_map::queue_state::ApparatusQueueAction::RollComplete,
@@ -91,6 +97,9 @@ pub(super) fn queue_action_as_str(
     match action {
         crate::core::production_map::queue_state::ApparatusQueueAction::Start => "start",
         crate::core::production_map::queue_state::ApparatusQueueAction::Pause => "pause",
+        crate::core::production_map::queue_state::ApparatusQueueAction::DetachRoll => {
+            "detach_roll"
+        }
         crate::core::production_map::queue_state::ApparatusQueueAction::Resume => "resume",
         crate::core::production_map::queue_state::ApparatusQueueAction::RollComplete => {
             "roll_complete"

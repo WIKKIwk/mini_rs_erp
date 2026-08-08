@@ -475,6 +475,7 @@ fn closed_order_log_rank(log: &ProductionOrderLogEntry) -> u8 {
     match log.action {
         queue_state::ApparatusQueueAction::Start => 0,
         queue_state::ApparatusQueueAction::Pause => 1,
+        queue_state::ApparatusQueueAction::DetachRoll => 1,
         queue_state::ApparatusQueueAction::Resume => 4,
         queue_state::ApparatusQueueAction::RollComplete => 3,
         queue_state::ApparatusQueueAction::Complete => 5,

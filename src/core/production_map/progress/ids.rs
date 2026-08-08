@@ -41,6 +41,7 @@ pub(in crate::core::production_map) fn queue_action_str(
     match action {
         queue_state::ApparatusQueueAction::Start => "start",
         queue_state::ApparatusQueueAction::Pause => "pause",
+        queue_state::ApparatusQueueAction::DetachRoll => "detach_roll",
         queue_state::ApparatusQueueAction::Resume => "resume",
         queue_state::ApparatusQueueAction::RollComplete => "roll_complete",
         queue_state::ApparatusQueueAction::Complete => "complete",

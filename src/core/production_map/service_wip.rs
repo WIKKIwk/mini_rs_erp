@@ -54,10 +54,7 @@ impl ProductionMapService {
         let active_sessions = run_sessions
             .iter()
             .filter(|session| {
-                matches!(
-                    session.status,
-                    OrderRunStatus::Active | OrderRunStatus::Paused
-                )
+                session.status.is_open()
             })
             .cloned()
             .collect();

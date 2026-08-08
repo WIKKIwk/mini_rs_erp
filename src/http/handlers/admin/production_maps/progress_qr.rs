@@ -43,7 +43,11 @@ pub async fn production_map_progress_qr_lookup(
         .map_err(production_map_error)?;
     Ok(json_response(serde_json::json!({
         "ok": true,
-        "can_resume": batch.status == crate::core::production_map::OrderProgressBatchStatus::Paused,
+        "can_resume": matches!(
+            batch.status,
+            crate::core::production_map::OrderProgressBatchStatus::Paused
+                | crate::core::production_map::OrderProgressBatchStatus::RollDetached
+        ),
         "batch": batch,
     })))
 }

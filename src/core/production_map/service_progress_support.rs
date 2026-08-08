@@ -154,6 +154,7 @@ pub(super) fn progress_output_identity(
     let input_qr_is_source = matches!(
         action,
         queue_state::ApparatusQueueAction::Pause
+            | queue_state::ApparatusQueueAction::DetachRoll
             | queue_state::ApparatusQueueAction::RollComplete
             | queue_state::ApparatusQueueAction::Complete
     );
@@ -228,6 +229,7 @@ pub(super) fn run_status_for_progress_action(
 ) -> OrderRunStatus {
     match action {
         queue_state::ApparatusQueueAction::Pause => OrderRunStatus::Paused,
+        queue_state::ApparatusQueueAction::DetachRoll => OrderRunStatus::RollDetached,
         queue_state::ApparatusQueueAction::Complete => OrderRunStatus::Completed,
         queue_state::ApparatusQueueAction::RollComplete => OrderRunStatus::Active,
         _ => OrderRunStatus::Active,
@@ -239,6 +241,9 @@ fn batch_status_for_progress_action(
 ) -> Result<OrderProgressBatchStatus, ProductionMapError> {
     match action {
         queue_state::ApparatusQueueAction::Pause => Ok(OrderProgressBatchStatus::Paused),
+        queue_state::ApparatusQueueAction::DetachRoll => {
+            Ok(OrderProgressBatchStatus::RollDetached)
+        }
         queue_state::ApparatusQueueAction::RollComplete => {
             Ok(OrderProgressBatchStatus::Completed)
         }
@@ -662,7 +667,11 @@ pub(super) fn wip_batch_in_use(
 }
 
 pub(super) fn wip_batch_was_consumed_by_producer(batch: &OrderProgressBatch) -> bool {
-    batch.action == queue_state::ApparatusQueueAction::Pause
+    matches!(
+        batch.action,
+        queue_state::ApparatusQueueAction::Pause
+            | queue_state::ApparatusQueueAction::DetachRoll
+    )
         && batch.wip_status == OrderProgressBatchWipStatus::Processed
         && queue_state::apparatus_titles_match(&batch.processed_by_apparatus, &batch.apparatus)
         && (batch.used_by_apparatus.trim().is_empty()

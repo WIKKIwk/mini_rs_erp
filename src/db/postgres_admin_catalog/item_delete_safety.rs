@@ -82,7 +82,7 @@ async fn active_order_uses_item(
                     SELECT 1
                     FROM mini_order_run_sessions sessions
                     WHERE sessions.order_id = maps.id
-                      AND sessions.status IN ('active', 'paused')
+                      AND sessions.status IN ('active', 'paused', 'roll_detached')
                   )
                OR EXISTS (
                     SELECT 1

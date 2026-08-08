@@ -6,10 +6,7 @@ pub(super) async fn reject_qolip_in_use_tx(
     tx: &mut Transaction<'_, Postgres>,
     session: &OrderRunSession,
 ) -> Result<(), ProductionMapError> {
-    if !matches!(
-        session.status,
-        OrderRunStatus::Active | OrderRunStatus::Paused
-    ) {
+    if !session.status.is_open() {
         return Ok(());
     }
     let mut qolip_codes = session
@@ -51,7 +48,7 @@ pub(super) async fn reject_qolip_in_use_tx(
             "SELECT EXISTS (
                 SELECT 1
                 FROM mini_order_run_sessions AS session
-                WHERE session.status IN ('active', 'paused')
+                WHERE session.status IN ('active', 'paused', 'roll_detached')
                   AND session.session_id <> $2
                   AND (
                     lower(session.payload_json->>'qolip_code') = lower($1)

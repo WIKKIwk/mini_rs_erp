@@ -170,6 +170,19 @@ mod tests {
     }
 
     #[test]
+    fn roll_detached_status_migration_is_registered_with_the_runner() {
+        let migration = POSTGRES_MIGRATIONS
+            .iter()
+            .find(|(version, _)| *version == "0050_roll_detached_status")
+            .map(|(_, sql)| sql.to_lowercase())
+            .expect("roll detached status migration");
+
+        assert!(migration.contains("'detach_roll'"));
+        assert!(migration.contains("'roll_detached'"));
+        assert!(migration.contains("idx_mini_order_run_sessions_one_open"));
+    }
+
+    #[test]
     fn apparatus_capacity_migration_is_registered_with_the_runner() {
         let migration = POSTGRES_MIGRATIONS
             .iter()

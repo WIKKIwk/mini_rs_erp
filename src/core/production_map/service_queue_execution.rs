@@ -85,7 +85,7 @@ impl ProductionMapService {
             })
             .collect::<Vec<_>>();
         let remove_roll_from_apparatus =
-            action == queue_state::ApparatusQueueAction::Pause
+            action == queue_state::ApparatusQueueAction::DetachRoll
                 && progress.remove_roll_from_apparatus;
         if remove_roll_from_apparatus {
             if !apparatus::is_laminatsiya_title(&storage_key)
@@ -397,7 +397,8 @@ fn schedule_reservation_status_for_action(
         queue_state::ApparatusQueueAction::Start | queue_state::ApparatusQueueAction::Resume => {
             ApparatusScheduleStatus::Active
         }
-        queue_state::ApparatusQueueAction::Pause => ApparatusScheduleStatus::Paused,
+        queue_state::ApparatusQueueAction::Pause
+        | queue_state::ApparatusQueueAction::DetachRoll => ApparatusScheduleStatus::Paused,
         queue_state::ApparatusQueueAction::RollComplete => ApparatusScheduleStatus::Active,
         queue_state::ApparatusQueueAction::Complete => ApparatusScheduleStatus::Completed,
     })

@@ -22,6 +22,10 @@ impl OrderProgressBatch {
                 self.status,
                 OrderProgressBatchStatus::Paused | OrderProgressBatchStatus::Resumed
             ),
+            queue_state::ApparatusQueueAction::DetachRoll => matches!(
+                self.status,
+                OrderProgressBatchStatus::RollDetached | OrderProgressBatchStatus::Resumed
+            ),
             queue_state::ApparatusQueueAction::RollComplete
             | queue_state::ApparatusQueueAction::Complete => {
                 self.status == OrderProgressBatchStatus::Completed
@@ -35,6 +39,7 @@ impl OrderProgressBatchStatusDetail {
     pub fn from_batch(batch: &OrderProgressBatch) -> Self {
         let work_status = match batch.status {
             OrderProgressBatchStatus::Paused => "paused",
+            OrderProgressBatchStatus::RollDetached => "roll_detached",
             OrderProgressBatchStatus::Resumed => "in_progress",
             OrderProgressBatchStatus::Completed => "completed",
         }
@@ -124,6 +129,7 @@ impl ProductionOrderStatusDetail {
             match session.status {
                 OrderRunStatus::Active => self.active_session_count += 1,
                 OrderRunStatus::Paused => self.paused_session_count += 1,
+                OrderRunStatus::RollDetached => self.roll_detached_session_count += 1,
                 OrderRunStatus::Completed => {}
             }
         }
@@ -156,7 +162,11 @@ impl ProductionOrderStatusDetail {
         has_in_progress_queue: bool,
         has_paused_final_output_queue: bool,
     ) -> &'static str {
-        if self.active_session_count > 0 || self.in_use_wip_count > 0 || has_in_progress_queue {
+        if self.active_session_count > 0
+            || self.roll_detached_session_count > 0
+            || self.in_use_wip_count > 0
+            || has_in_progress_queue
+        {
             "in_progress"
         } else if has_paused_final_output_queue {
             "paused"

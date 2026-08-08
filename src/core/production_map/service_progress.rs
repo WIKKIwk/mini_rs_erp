@@ -66,12 +66,14 @@ impl ProductionMapService {
             || !matches!(
                 batch.action,
                 queue_state::ApparatusQueueAction::Pause
+                    | queue_state::ApparatusQueueAction::DetachRoll
                     | queue_state::ApparatusQueueAction::RollComplete
                     | queue_state::ApparatusQueueAction::Complete
             )
             || !matches!(
                 batch.status,
                 OrderProgressBatchStatus::Paused
+                    | OrderProgressBatchStatus::RollDetached
                     | OrderProgressBatchStatus::Completed
                     | OrderProgressBatchStatus::Resumed
             )
@@ -120,12 +122,14 @@ impl ProductionMapService {
             || !matches!(
                 batch.action,
                 queue_state::ApparatusQueueAction::Pause
+                    | queue_state::ApparatusQueueAction::DetachRoll
                     | queue_state::ApparatusQueueAction::RollComplete
                     | queue_state::ApparatusQueueAction::Complete
             )
             || !matches!(
                 batch.status,
                 OrderProgressBatchStatus::Paused
+                    | OrderProgressBatchStatus::RollDetached
                     | OrderProgressBatchStatus::Completed
                     | OrderProgressBatchStatus::Resumed
             )
@@ -161,11 +165,19 @@ impl ProductionMapService {
                 let linked_candidate = !linked_batch_id.trim().is_empty()
                     && batch.batch_id.trim() == linked_batch_id.trim();
                 let unlinked_candidate = linked_batch_id.trim().is_empty()
-                    && (batch.status == OrderProgressBatchStatus::Paused
+                    && (matches!(
+                        batch.status,
+                        OrderProgressBatchStatus::Paused
+                            | OrderProgressBatchStatus::RollDetached
+                    )
                         || batch.wip_status == OrderProgressBatchWipStatus::InUse);
                 batch.order_id.trim() == order_id.trim()
                     && batch.session_id.trim() == session.session_id.trim()
-                    && batch.action == queue_state::ApparatusQueueAction::Pause
+                    && matches!(
+                        batch.action,
+                        queue_state::ApparatusQueueAction::Pause
+                            | queue_state::ApparatusQueueAction::DetachRoll
+                    )
                     && queue_state::apparatus_titles_match(&batch.apparatus, apparatus)
                     && !batch.parent_batch_id.trim().is_empty()
                     && (linked_candidate || unlinked_candidate)
@@ -238,12 +250,13 @@ impl ProductionMapService {
         progress: QueueProgressInput,
     ) -> Result<QueueProgressRecords, ProductionMapError> {
         let now = unix_seconds();
-        if action == queue_state::ApparatusQueueAction::Pause
-            && (progress.worker_handoff || progress.remove_roll_from_apparatus)
+        if (action == queue_state::ApparatusQueueAction::Pause && progress.worker_handoff)
+            || (action == queue_state::ApparatusQueueAction::DetachRoll
+                && progress.remove_roll_from_apparatus)
         {
             return self
                 .build_laminatsiya_worker_transition(
-                    apparatus, order_id, order_map, actor, progress, now,
+                    apparatus, order_id, order_map, action, actor, progress, now,
                 )
                 .await;
         }
@@ -308,6 +321,7 @@ impl ProductionMapService {
                 })
             }
             queue_state::ApparatusQueueAction::Pause
+            | queue_state::ApparatusQueueAction::DetachRoll
             | queue_state::ApparatusQueueAction::RollComplete
             | queue_state::ApparatusQueueAction::Complete => {
                 if action == queue_state::ApparatusQueueAction::RollComplete
@@ -476,7 +490,11 @@ impl ProductionMapService {
                     .map(|recovered| recovered.output_update)
                     .collect::<Vec<_>>();
                 if let Some(input_batch) = input_batch {
-                    if action == queue_state::ApparatusQueueAction::Pause {
+                    if matches!(
+                        action,
+                        queue_state::ApparatusQueueAction::Pause
+                            | queue_state::ApparatusQueueAction::DetachRoll
+                    ) {
                         if input_was_recovered {
                             progress_batch_updates.push(input_batch);
                         }
@@ -543,7 +561,10 @@ impl ProductionMapService {
                         .active_order_run_session(apparatus, order_id)
                         .await?
                         .ok_or(ProductionMapError::ProgressBatchNotResumable)?;
-                    if session.status != OrderRunStatus::Paused {
+                    if !matches!(
+                        session.status,
+                        OrderRunStatus::Paused | OrderRunStatus::RollDetached
+                    ) {
                         return Err(ProductionMapError::ProgressBatchNotResumable);
                     }
                     let session_input_progress = session_progress_links(&session);
@@ -589,8 +610,16 @@ impl ProductionMapService {
                             .into_iter()
                             .filter(|batch| {
                                 batch.session_id.trim() == session.session_id.trim()
-                                    && batch.action == queue_state::ApparatusQueueAction::Pause
-                                    && batch.status == OrderProgressBatchStatus::Paused
+                                    && matches!(
+                                        batch.action,
+                                        queue_state::ApparatusQueueAction::Pause
+                                            | queue_state::ApparatusQueueAction::DetachRoll
+                                    )
+                                    && matches!(
+                                        batch.status,
+                                        OrderProgressBatchStatus::Paused
+                                            | OrderProgressBatchStatus::RollDetached
+                                    )
                                     && batch.wip_status == OrderProgressBatchWipStatus::Waiting
                                     && queue_state::apparatus_titles_match(
                                         &batch.apparatus,
@@ -675,8 +704,15 @@ impl ProductionMapService {
                 let mut batch = self
                     .progress_batch_for_qr(&progress.progress_batch_id, &progress.qr_payload)
                     .await?;
-                if batch.status != OrderProgressBatchStatus::Paused
-                    || batch.action != queue_state::ApparatusQueueAction::Pause
+                if !matches!(
+                    batch.status,
+                    OrderProgressBatchStatus::Paused
+                        | OrderProgressBatchStatus::RollDetached
+                ) || !matches!(
+                    batch.action,
+                    queue_state::ApparatusQueueAction::Pause
+                        | queue_state::ApparatusQueueAction::DetachRoll
+                )
                     || batch.wip_status != OrderProgressBatchWipStatus::Waiting
                 {
                     return Err(ProductionMapError::ProgressBatchNotResumable);
@@ -737,6 +773,7 @@ impl ProductionMapService {
         apparatus: &str,
         order_id: &str,
         order_map: &ProductionMapDefinition,
+        action: queue_state::ApparatusQueueAction,
         actor: &QueueActionActor,
         progress: QueueProgressInput,
         now: i64,
@@ -830,7 +867,11 @@ impl ProductionMapService {
             worker_handoff_session_payload(metrics, &description, &input_progress)
         };
         let session = OrderRunSession {
-            status: OrderRunStatus::Paused,
+            status: if remove_roll {
+                OrderRunStatus::RollDetached
+            } else {
+                OrderRunStatus::Paused
+            },
             worker_role: actor.role.trim().to_string(),
             worker_ref: actor.ref_.trim().to_string(),
             worker_display_name: actor.display_name.trim().to_string(),
@@ -842,7 +883,7 @@ impl ProductionMapService {
             session: &session,
             apparatus,
             order_id,
-            action: queue_state::ApparatusQueueAction::Pause,
+            action,
             actor,
             now,
         };

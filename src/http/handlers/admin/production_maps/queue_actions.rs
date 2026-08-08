@@ -107,14 +107,29 @@ pub async fn production_map_queue_action(
     if method != Method::POST {
         return Err(method_not_allowed());
     }
-    let input: ApparatusQueueActionRequest = parse_json(&body)?;
+    let mut input: ApparatusQueueActionRequest = parse_json(&body)?;
     if input.apparatus.trim().is_empty() || input.order_id.trim().is_empty() {
         return Err(bad_request("apparatus and order_id are required"));
     }
-    if (input.worker_handoff || input.remove_roll_from_apparatus)
+    input.action = canonical_queue_action(
+        input.action,
+        input.worker_handoff,
+        input.remove_roll_from_apparatus,
+        &input.freeze_request_id,
+        &principal,
+    );
+    if input.worker_handoff
         && !matches!(input.action, queue_state::ApparatusQueueAction::Pause)
     {
         return Err(bad_request("worker_handoff_only_on_pause"));
+    }
+    if input.remove_roll_from_apparatus
+        && !matches!(
+            input.action,
+            queue_state::ApparatusQueueAction::DetachRoll
+        )
+    {
+        return Err(bad_request("roll_removal_only_on_detach_roll"));
     }
     if input.worker_handoff && input.remove_roll_from_apparatus {
         return Err(bad_request("worker_handoff_actions_conflict"));
@@ -263,6 +278,7 @@ pub async fn production_map_queue_action(
     if matches!(
         input.action,
         queue_state::ApparatusQueueAction::Pause
+            | queue_state::ApparatusQueueAction::DetachRoll
             | queue_state::ApparatusQueueAction::RollComplete
             | queue_state::ApparatusQueueAction::Complete
     ) && is_rezka
@@ -382,6 +398,7 @@ pub async fn production_map_queue_action(
     let print_requests = if matches!(
         input.action,
         queue_state::ApparatusQueueAction::Pause
+            | queue_state::ApparatusQueueAction::DetachRoll
             | queue_state::ApparatusQueueAction::RollComplete
             | queue_state::ApparatusQueueAction::Complete
     ) {
@@ -493,12 +510,77 @@ pub async fn production_map_queue_action(
     })))
 }
 
+fn canonical_queue_action(
+    action: queue_state::ApparatusQueueAction,
+    worker_handoff: bool,
+    remove_roll_from_apparatus: bool,
+    freeze_request_id: &str,
+    principal: &Principal,
+) -> queue_state::ApparatusQueueAction {
+    if action != queue_state::ApparatusQueueAction::Pause {
+        return action;
+    }
+    let legacy_roll_removal = remove_roll_from_apparatus;
+    let legacy_worker_detach = principal.role == PrincipalRole::Aparatchi
+        && freeze_request_id.trim().is_empty()
+        && !worker_handoff;
+    if legacy_roll_removal || legacy_worker_detach {
+        queue_state::ApparatusQueueAction::DetachRoll
+    } else {
+        queue_state::ApparatusQueueAction::Pause
+    }
+}
+
 include!("queue_action_completion_support.rs");
 
 #[cfg(test)]
 mod tests {
-    use super::{apparatus_requires_qolip_scan, returned_paint_queue_error};
+    use super::{
+        apparatus_requires_qolip_scan, canonical_queue_action, returned_paint_queue_error,
+    };
+    use crate::core::auth::models::{Principal, PrincipalRole};
+    use crate::core::production_map::queue_state::ApparatusQueueAction;
     use crate::core::returned_paint::ReturnedPaintError;
+
+    fn principal(role: PrincipalRole) -> Principal {
+        Principal {
+            role,
+            display_name: "Test".to_string(),
+            legal_name: String::new(),
+            ref_: "test-ref".to_string(),
+            phone: String::new(),
+            avatar_url: String::new(),
+        }
+    }
+
+    #[test]
+    fn legacy_worker_pause_maps_to_detach_roll_but_admin_and_freeze_pause_do_not() {
+        let worker = principal(PrincipalRole::Aparatchi);
+        let admin = principal(PrincipalRole::Admin);
+
+        assert_eq!(
+            canonical_queue_action(ApparatusQueueAction::Pause, false, false, "", &worker),
+            ApparatusQueueAction::DetachRoll
+        );
+        assert_eq!(
+            canonical_queue_action(
+                ApparatusQueueAction::Pause,
+                false,
+                false,
+                "freeze-request",
+                &worker,
+            ),
+            ApparatusQueueAction::Pause
+        );
+        assert_eq!(
+            canonical_queue_action(ApparatusQueueAction::Pause, true, false, "", &worker),
+            ApparatusQueueAction::Pause
+        );
+        assert_eq!(
+            canonical_queue_action(ApparatusQueueAction::Pause, false, false, "", &admin),
+            ApparatusQueueAction::Pause
+        );
+    }
 
     #[test]
     fn qolip_scan_is_required_only_for_seven_eight_and_nine_color_bosma_family() {

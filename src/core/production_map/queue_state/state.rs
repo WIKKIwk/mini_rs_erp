@@ -41,6 +41,7 @@ impl ApparatusQueueOrderState {
 pub enum ApparatusQueueAction {
     Start,
     Pause,
+    DetachRoll,
     Resume,
     RollComplete,
     Complete,
@@ -67,6 +68,16 @@ pub fn next_queue_state(
         }
         ApparatusQueueAction::Pause => {
             if current == ApparatusQueueOrderState::InProgress {
+                Ok(ApparatusQueueOrderState::Paused)
+            } else {
+                Err(ProductionMapError::QueueActionNotAllowed)
+            }
+        }
+        ApparatusQueueAction::DetachRoll => {
+            if current == ApparatusQueueOrderState::InProgress {
+                // `paused` remains the compatibility queue slot state. The
+                // execution records carry the canonical `roll_detached`
+                // status so a detached roll is not reported as a true pause.
                 Ok(ApparatusQueueOrderState::Paused)
             } else {
                 Err(ProductionMapError::QueueActionNotAllowed)

@@ -17,10 +17,7 @@ pub(super) async fn active_order_run_session(
         .find(|session| {
             queue_state::apparatus_titles_match(&session.apparatus, apparatus)
                 && session.order_id.trim() == order_id.trim()
-                && matches!(
-                    session.status,
-                    OrderRunStatus::Active | OrderRunStatus::Paused
-                )
+                && session.status.is_open()
         })
         .cloned())
 }
@@ -39,10 +36,7 @@ pub(super) async fn active_order_run_session_for_qolip(
         .await
         .values()
         .find(|session| {
-            matches!(
-                session.status,
-                OrderRunStatus::Active | OrderRunStatus::Paused
-            ) && session_qolip_codes(session)
+            session.status.is_open() && session_qolip_codes(session)
                 .iter()
                 .any(|value| value.eq_ignore_ascii_case(qolip_code))
         })
@@ -99,10 +93,7 @@ pub(super) async fn active_order_run_sessions_for_worker(
         .await
         .values()
         .filter(|session| {
-            matches!(
-                session.status,
-                OrderRunStatus::Active | OrderRunStatus::Paused
-            ) && refs.contains(session.worker_ref.trim())
+            session.status.is_open() && refs.contains(session.worker_ref.trim())
         })
         .cloned()
         .collect::<Vec<_>>();

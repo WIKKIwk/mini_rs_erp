@@ -395,7 +395,7 @@ pub(super) async fn load_products(
             ) OR EXISTS (
                 SELECT 1
                 FROM mini_order_run_sessions session
-                WHERE session.status IN ('active', 'paused')
+                WHERE session.status IN ('active', 'paused', 'roll_detached')
                   AND (
                       lower(session.payload_json->>'qolip_code') = lower(product.qolip_code)
                       OR EXISTS (
@@ -827,7 +827,7 @@ pub(super) async fn rename_product_spec(
                  WHERE lower(qolip_code) = $1 AND lower(status) = 'open'
                  UNION ALL
                  SELECT 1 FROM mini_order_run_sessions
-                 WHERE status IN ('active', 'paused')
+                 WHERE status IN ('active', 'paused', 'roll_detached')
                    AND (
                        lower(payload_json->>'qolip_code') = $1
                        OR EXISTS (
@@ -858,7 +858,7 @@ pub(super) async fn rename_product_spec(
              WHERE lower(qolip_code) = $1 AND lower(status) = 'open'
              UNION ALL
              SELECT 1 FROM mini_order_run_sessions
-             WHERE status IN ('active', 'paused')
+             WHERE status IN ('active', 'paused', 'roll_detached')
                AND (
                    lower(payload_json->>'qolip_code') = $1
                    OR EXISTS (
@@ -1046,7 +1046,7 @@ pub(super) async fn delete_product_specs(
              UNION ALL
              SELECT 1
              FROM mini_order_run_sessions
-             WHERE status IN ('active', 'paused')
+             WHERE status IN ('active', 'paused', 'roll_detached')
                AND (
                    lower(payload_json->>'qolip_code') = ANY($1)
                    OR EXISTS (

@@ -496,10 +496,7 @@ impl ProductionMapStorePort for MemoryProductionMapStore {
             return Err(ProductionMapError::StoreFailed);
         }
         if let Some(session) = &write.session
-            && matches!(
-                session.status,
-                OrderRunStatus::Active | OrderRunStatus::Paused
-            )
+            && session.status.is_open()
         {
             for qolip_code in runs::session_qolip_codes(session) {
                 if self

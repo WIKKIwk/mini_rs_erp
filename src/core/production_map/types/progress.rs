@@ -10,6 +10,7 @@ use super::{ProductionMapDefinition, ProductionOrderLogEntry};
 pub enum OrderRunStatus {
     Active,
     Paused,
+    RollDetached,
     Completed,
 }
 
@@ -18,6 +19,7 @@ impl OrderRunStatus {
         match value.trim().to_ascii_lowercase().as_str() {
             "active" => Some(Self::Active),
             "paused" => Some(Self::Paused),
+            "roll_detached" => Some(Self::RollDetached),
             "completed" => Some(Self::Completed),
             _ => None,
         }
@@ -27,8 +29,13 @@ impl OrderRunStatus {
         match self {
             Self::Active => "active",
             Self::Paused => "paused",
+            Self::RollDetached => "roll_detached",
             Self::Completed => "completed",
         }
+    }
+
+    pub fn is_open(self) -> bool {
+        matches!(self, Self::Active | Self::Paused | Self::RollDetached)
     }
 }
 
@@ -36,6 +43,7 @@ impl OrderRunStatus {
 #[serde(rename_all = "snake_case")]
 pub enum OrderProgressBatchStatus {
     Paused,
+    RollDetached,
     Completed,
     Resumed,
 }
@@ -44,6 +52,7 @@ impl OrderProgressBatchStatus {
     pub fn parse(value: &str) -> Option<Self> {
         match value.trim().to_ascii_lowercase().as_str() {
             "paused" => Some(Self::Paused),
+            "roll_detached" => Some(Self::RollDetached),
             "completed" => Some(Self::Completed),
             "resumed" => Some(Self::Resumed),
             _ => None,
@@ -53,6 +62,7 @@ impl OrderProgressBatchStatus {
     pub fn as_str(self) -> &'static str {
         match self {
             Self::Paused => "paused",
+            Self::RollDetached => "roll_detached",
             Self::Completed => "completed",
             Self::Resumed => "resumed",
         }
@@ -155,6 +165,8 @@ pub struct ProductionOrderStatusDetail {
     pub active_session_count: usize,
     #[serde(default)]
     pub paused_session_count: usize,
+    #[serde(default)]
+    pub roll_detached_session_count: usize,
     #[serde(default)]
     pub completed_queue_count: usize,
     #[serde(default)]

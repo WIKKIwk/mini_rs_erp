@@ -1303,6 +1303,94 @@ async fn final_stage_pause_output_is_finished_goods_while_work_resumes() {
 }
 
 #[tokio::test]
+async fn worker_roll_detach_has_canonical_status_without_pausing_order() {
+    let service = ProductionMapService::new(std::sync::Arc::new(MemoryProductionMapStore::new()));
+    let actor = QueueActionActor {
+        role: "aparatchi".to_string(),
+        ref_: "worker-roll-detach".to_string(),
+        display_name: "Worker Roll Detach".to_string(),
+    };
+    let order_id = "zakaz-roll-detach";
+    let apparatus = "7 ta rangli pechat";
+    service
+        .upsert_map(apparatus_stage_map(order_id, apparatus))
+        .await
+        .expect("map");
+
+    service
+        .apply_apparatus_queue_action_with_progress(
+            apparatus,
+            order_id,
+            queue_state::ApparatusQueueAction::Start,
+            &[apparatus.to_string()],
+            actor.clone(),
+            QueueProgressInput::default(),
+        )
+        .await
+        .expect("start");
+
+    let detached = service
+        .apply_apparatus_queue_action_with_progress(
+            apparatus,
+            order_id,
+            queue_state::ApparatusQueueAction::DetachRoll,
+            &[apparatus.to_string()],
+            actor.clone(),
+            QueueProgressInput {
+                produced_qty: Some(42.5),
+                uom: "kg".to_string(),
+                ..QueueProgressInput::default()
+            },
+        )
+        .await
+        .expect("detach roll");
+    assert_eq!(
+        detached.states.get(order_id),
+        Some(&"paused".to_string()),
+        "legacy queue scheduling state stays backward compatible"
+    );
+    assert_eq!(
+        detached.session.as_ref().expect("detached session").status,
+        OrderRunStatus::RollDetached
+    );
+    let batch = detached.progress_batch.expect("detached roll batch");
+    assert_eq!(batch.action, queue_state::ApparatusQueueAction::DetachRoll);
+    assert_eq!(batch.status, OrderProgressBatchStatus::RollDetached);
+    assert!(batch.label_item_name.contains("rulon yechildi"));
+
+    let order_status = service
+        .order_status_detail(order_id)
+        .await
+        .expect("detached order status");
+    assert_eq!(order_status.order_status, "in_progress");
+    assert_eq!(order_status.roll_detached_session_count, 1);
+    assert_eq!(order_status.paused_session_count, 0);
+
+    let resumed = service
+        .apply_apparatus_queue_action_with_progress(
+            apparatus,
+            order_id,
+            queue_state::ApparatusQueueAction::Resume,
+            &[apparatus.to_string()],
+            actor,
+            QueueProgressInput {
+                qr_payload: batch.qr_payload,
+                ..QueueProgressInput::default()
+            },
+        )
+        .await
+        .expect("resume detached roll");
+    assert_eq!(
+        resumed.states.get(order_id),
+        Some(&"in_progress".to_string())
+    );
+    assert_eq!(
+        resumed.progress_batch.expect("resumed batch").status,
+        OrderProgressBatchStatus::Resumed
+    );
+}
+
+#[tokio::test]
 async fn first_stage_pause_resume_complete_keeps_both_wips_available_for_laminatsiya() {
     let store = std::sync::Arc::new(MemoryProductionMapStore::new());
     let service = ProductionMapService::new(store.clone());

@@ -29,6 +29,7 @@ pub(crate) fn progress_label_item_name(
     let order_title = non_empty_or(&order_map.title, &order_map.product_code);
     let state_label = match action {
         queue_state::ApparatusQueueAction::Pause => "chiqarildi",
+        queue_state::ApparatusQueueAction::DetachRoll => "rulon yechildi",
         queue_state::ApparatusQueueAction::RollComplete => "rulon tugatildi",
         queue_state::ApparatusQueueAction::Complete => "ish tugatildi",
         _ => queue_action_str(action),

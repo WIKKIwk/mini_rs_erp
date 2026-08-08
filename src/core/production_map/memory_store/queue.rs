@@ -81,6 +81,9 @@ pub(super) async fn completed_queue_orders_for_actor(
             queue_state::ApparatusQueueAction::Pause => {
                 CompletedQueueOrderStatus::InProgress
             }
+            queue_state::ApparatusQueueAction::DetachRoll => {
+                CompletedQueueOrderStatus::InProgress
+            }
             queue_state::ApparatusQueueAction::RollComplete => {
                 CompletedQueueOrderStatus::InProgress
             }

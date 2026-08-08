@@ -332,7 +332,10 @@ fn audit_session(
             "run session references an order that is not present in production maps",
         ));
     }
-    if matches!(session.status, OrderRunStatus::Active | OrderRunStatus::Paused) {
+    if matches!(
+        session.status,
+        OrderRunStatus::Active | OrderRunStatus::Paused | OrderRunStatus::RollDetached
+    ) {
         active_sessions
             .entry((apparatus.to_ascii_lowercase(), order_id.to_string()))
             .or_default()
@@ -342,7 +345,10 @@ fn audit_session(
         return;
     };
     if !chain::map_has_work_stage_for_station(map, apparatus)
-        && matches!(session.status, OrderRunStatus::Active | OrderRunStatus::Paused)
+        && matches!(
+            session.status,
+            OrderRunStatus::Active | OrderRunStatus::Paused | OrderRunStatus::RollDetached
+        )
     {
         violations.push(ProductionWorkflowAuditViolation::new(
             "run_session_apparatus_mismatch",
@@ -354,7 +360,9 @@ fn audit_session(
     let state = queue_state_for_apparatus_order(queue_states, apparatus, order_id);
     let expected = match session.status {
         OrderRunStatus::Active => Some(ApparatusQueueOrderState::InProgress),
-        OrderRunStatus::Paused => Some(ApparatusQueueOrderState::Paused),
+        OrderRunStatus::Paused | OrderRunStatus::RollDetached => {
+            Some(ApparatusQueueOrderState::Paused)
+        }
         OrderRunStatus::Completed => None,
     };
     if let Some(expected) = expected {
@@ -443,9 +451,16 @@ fn audit_progress_batch(
     }
 
     let expected_action = match batch.status {
-        OrderProgressBatchStatus::Paused | OrderProgressBatchStatus::Resumed => {
-            queue_state::ApparatusQueueAction::Pause
+        OrderProgressBatchStatus::Paused => queue_state::ApparatusQueueAction::Pause,
+        OrderProgressBatchStatus::RollDetached => {
+            queue_state::ApparatusQueueAction::DetachRoll
         }
+        OrderProgressBatchStatus::Resumed
+            if batch.action == queue_state::ApparatusQueueAction::DetachRoll =>
+        {
+            queue_state::ApparatusQueueAction::DetachRoll
+        }
+        OrderProgressBatchStatus::Resumed => queue_state::ApparatusQueueAction::Pause,
         OrderProgressBatchStatus::Completed => {
             if batch.action == queue_state::ApparatusQueueAction::RollComplete {
                 queue_state::ApparatusQueueAction::RollComplete
@@ -612,16 +627,37 @@ fn audit_paused_session_progress(
     violations: &mut Vec<ProductionWorkflowAuditViolation>,
 ) {
     for session in sessions {
-        if session.status != OrderRunStatus::Paused {
+        let is_laminatsiya_handoff = session
+            .payload_json
+            .get("worker_handoff")
+            .and_then(serde_json::Value::as_bool)
+            == Some(true);
+        let is_removed_handoff_roll = session
+            .payload_json
+            .get("roll_removed_from_apparatus")
+            .and_then(serde_json::Value::as_bool)
+            == Some(true);
+        if is_laminatsiya_handoff || is_removed_handoff_roll {
             continue;
         }
+        let (expected_action, expected_status) = match session.status {
+            OrderRunStatus::Paused => (
+                queue_state::ApparatusQueueAction::Pause,
+                OrderProgressBatchStatus::Paused,
+            ),
+            OrderRunStatus::RollDetached => (
+                queue_state::ApparatusQueueAction::DetachRoll,
+                OrderProgressBatchStatus::RollDetached,
+            ),
+            _ => continue,
+        };
         let matching = batches_by_id
             .values()
             .filter(|batch| {
                 batch.session_id.trim() == session.session_id.trim()
                     && batch.order_id.trim() == session.order_id.trim()
-                    && batch.action == queue_state::ApparatusQueueAction::Pause
-                    && batch.status == OrderProgressBatchStatus::Paused
+                    && batch.action == expected_action
+                    && batch.status == expected_status
                     && queue_state::apparatus_titles_match(&batch.apparatus, &session.apparatus)
             })
             .count();
@@ -630,7 +666,7 @@ fn audit_paused_session_progress(
                 "paused_session_progress_mismatch",
                 session.order_id.trim(),
                 session.session_id.trim(),
-                "a paused session must have at least one matching paused progress batch",
+                "an interrupted session must have a matching progress batch",
             ));
         }
     }

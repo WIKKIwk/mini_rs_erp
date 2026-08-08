@@ -37,7 +37,7 @@ pub(super) async fn load_completed_queue_orders_for_actor(
                 EXTRACT(EPOCH FROM created_at)::bigint AS completed_at_unix
             FROM mini_queue_action_events
             WHERE actor_ref = $1
-              AND action IN ('pause', 'roll_complete', 'complete')
+              AND action IN ('pause', 'detach_roll', 'roll_complete', 'complete')
               AND COALESCE(payload_json->>'completion_request', 'false') <> 'true'
             ORDER BY order_id, created_at DESC
          ) latest
@@ -155,7 +155,7 @@ pub(super) async fn load_active_order_run_session(
          FROM mini_order_run_sessions
          WHERE order_id = $1
            AND lower(apparatus) = lower($2)
-           AND status IN ('active', 'paused')
+           AND status IN ('active', 'paused', 'roll_detached')
          ORDER BY updated_at DESC
          LIMIT 1",
     )
@@ -182,7 +182,7 @@ pub(super) async fn load_active_order_run_session_for_qolip(
                 EXTRACT(EPOCH FROM updated_at)::bigint AS updated_at_unix,
                 payload_json
          FROM mini_order_run_sessions
-         WHERE status IN ('active', 'paused')
+         WHERE status IN ('active', 'paused', 'roll_detached')
            AND (
              lower(payload_json->>'qolip_code') = lower($1)
              OR EXISTS (
@@ -225,7 +225,7 @@ pub(super) async fn load_active_order_run_sessions_for_worker(
                 EXTRACT(EPOCH FROM updated_at)::bigint AS updated_at_unix,
                 payload_json
          FROM mini_order_run_sessions AS session
-         WHERE session.status IN ('active', 'paused')
+         WHERE session.status IN ('active', 'paused', 'roll_detached')
            AND (
                session.worker_ref = ANY($1)
                OR EXISTS (
