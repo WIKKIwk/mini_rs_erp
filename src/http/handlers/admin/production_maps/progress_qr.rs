@@ -1,5 +1,6 @@
 use super::queue_actions::progress_print_failure_json;
 use super::*;
+use crate::core::production_map::ProgressBatchCorrectionInput;
 
 #[derive(serde::Deserialize)]
 struct ProgressQrLookupRequest {
@@ -93,6 +94,7 @@ pub async fn production_map_progress_qr_report(
         "order_status": report.order_status,
         "queue_states": report.queue_states,
         "logs": report.logs,
+        "corrections": report.corrections,
         "progress_batches": report.progress_batches,
         "run_sessions": report.run_sessions,
         "active_sessions": report.active_sessions,
@@ -138,6 +140,38 @@ pub async fn production_map_progress_qr_history(
     Ok(json_response(serde_json::json!({
         "ok": true,
         "batches": batches,
+    })))
+}
+
+pub async fn production_map_progress_batch_correct(
+    State(state): State<AppState>,
+    method: Method,
+    headers: HeaderMap,
+    body: Bytes,
+) -> Result<Response, AdminError> {
+    let principal = authorize_any_capability(
+        &state,
+        &headers,
+        &[
+            Capability::AdminAccess,
+            Capability::ProductionMapManage,
+            Capability::ApparatusQueueRead,
+            Capability::ApparatusQueueManage,
+        ],
+    )
+    .await?;
+    if method != Method::POST {
+        return Err(method_not_allowed());
+    }
+    let input: ProgressBatchCorrectionInput = parse_json(&body)?;
+    let batch = state
+        .production_maps
+        .correct_progress_batch(input, &queue_action_actor(&principal))
+        .await
+        .map_err(production_map_error)?;
+    Ok(json_response(serde_json::json!({
+        "ok": true,
+        "batch": batch,
     })))
 }
 

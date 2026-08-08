@@ -430,6 +430,7 @@ fn test_node(id: &str, kind: ProductionMapNodeKind, title: &str, y: f64) -> Prod
 fn wip_batch(current_apparatus: &str) -> OrderProgressBatch {
     OrderProgressBatch {
         batch_id: "batch-wip-suffix".to_string(),
+        revision: 1,
         session_id: "session-wip-suffix".to_string(),
         started_at_unix: 0,
         completed_at_unix: 0,

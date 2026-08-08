@@ -154,6 +154,10 @@ pub(super) fn routes() -> Router<AppState> {
             any(admin::production_map_progress_qr_history),
         )
         .route(
+            "/v1/mobile/admin/production-maps/progress-qr/correct",
+            post(admin::production_map_progress_batch_correct),
+        )
+        .route(
             "/v1/mobile/admin/production-maps/progress-qr/report",
             any(admin::production_map_progress_qr_report),
         )

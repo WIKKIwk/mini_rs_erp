@@ -268,6 +268,7 @@ pub(super) fn progress_batch_record(
     let context = input.context;
     let mut batch = OrderProgressBatch {
         batch_id: input.output_identity.batch_id.clone(),
+        revision: 1,
         session_id: context.session.session_id.clone(),
         started_at_unix: context.session.started_at_unix,
         completed_at_unix: context.session.updated_at_unix,

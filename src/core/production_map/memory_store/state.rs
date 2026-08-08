@@ -23,6 +23,7 @@ pub struct MemoryProductionMapStore {
     pub(super) order_run_sessions: RwLock<BTreeMap<String, OrderRunSession>>,
     pub(super) order_progress_events: RwLock<Vec<OrderProgressEvent>>,
     pub(super) order_progress_batches: RwLock<BTreeMap<String, OrderProgressBatch>>,
+    pub(super) progress_batch_corrections: RwLock<Vec<ProgressBatchCorrectionRecord>>,
     pub(super) laminatsiya_astatka_reports: RwLock<Vec<LaminatsiyaAstatkaReport>>,
     pub(super) rezka_astatka_reports: RwLock<Vec<RezkaAstatkaReport>>,
     pub(super) finished_goods_stock: RwLock<BTreeMap<String, FinishedGoodsStockEntry>>,
@@ -52,6 +53,7 @@ impl MemoryProductionMapStore {
             order_run_sessions: RwLock::new(BTreeMap::new()),
             order_progress_events: RwLock::new(Vec::new()),
             order_progress_batches: RwLock::new(BTreeMap::new()),
+            progress_batch_corrections: RwLock::new(Vec::new()),
             laminatsiya_astatka_reports: RwLock::new(Vec::new()),
             rezka_astatka_reports: RwLock::new(Vec::new()),
             finished_goods_stock: RwLock::new(BTreeMap::new()),
@@ -77,6 +79,12 @@ impl MemoryProductionMapStore {
             .await
             .get(request_id.trim())
             .cloned()
+    }
+
+    pub async fn progress_batch_correction_records(
+        &self,
+    ) -> Vec<ProgressBatchCorrectionRecord> {
+        self.progress_batch_corrections.read().await.clone()
     }
 }
 

@@ -239,6 +239,12 @@ async fn progress_qr_report_marks_processed_qr_as_stale_and_returns_order_flow()
             .is_none()
     );
     assert_eq!(report_body["logs"].as_array().expect("logs").len(), 4);
+    assert!(
+        report_body["corrections"]
+            .as_array()
+            .expect("corrections")
+            .is_empty()
+    );
     assert_eq!(
         report_body["run_sessions"]
             .as_array()
@@ -286,6 +292,7 @@ async fn progress_qr_history_lists_own_batches_and_reprints_existing_qr() {
     let router = build_router(state);
 
     let mut other_qr = String::new();
+    let mut other_batch_id = String::new();
     for (order_id, order_number, apparatus, token) in [
         (
             "zakaz-qr-history-a",
@@ -369,6 +376,10 @@ async fn progress_qr_history_lists_own_batches_and_reprints_existing_qr() {
                 .as_str()
                 .expect("other qr")
                 .to_string();
+            other_batch_id = paused_body["progress_batch"]["batch_id"]
+                .as_str()
+                .expect("other batch id")
+                .to_string();
         }
     }
 
@@ -387,8 +398,90 @@ async fn progress_qr_history_lists_own_batches_and_reprints_existing_qr() {
     let batches = history_body["batches"].as_array().expect("batches");
     assert_eq!(batches.len(), 1);
     assert_eq!(batches[0]["order_id"], "zakaz-qr-history-a");
-    let own_qr = batches[0]["qr_payload"].as_str().expect("own qr");
+    let own_qr = batches[0]["qr_payload"]
+        .as_str()
+        .expect("own qr")
+        .to_string();
+    let own_batch_id = batches[0]["batch_id"]
+        .as_str()
+        .expect("own batch id")
+        .to_string();
+    assert_eq!(batches[0]["revision"], 1);
     wait_for_progress_print_request_count(&print_requests, 2).await;
+
+    let corrected = router
+        .clone()
+        .oneshot(request_with_body(
+            "POST",
+            "/v1/mobile/admin/production-maps/progress-qr/correct",
+            &worker_a_token,
+            &format!(
+                r#"{{
+                    "batch_id":"{own_batch_id}",
+                    "expected_revision":1,
+                    "produced_qty":13,
+                    "uom":"kg",
+                    "description":"corrected",
+                    "reason":"O'lchov noto'g'ri kiritilgan"
+                }}"#,
+            ),
+        ))
+        .await
+        .expect("correct own progress batch");
+    let corrected_status = corrected.status();
+    let corrected_body = json_body(corrected).await;
+    assert_eq!(corrected_status, StatusCode::OK, "{corrected_body:?}");
+    assert_eq!(corrected_body["batch"]["revision"], 2);
+    assert_eq!(corrected_body["batch"]["produced_qty"], 13.0);
+
+    let correction_report = router
+        .clone()
+        .oneshot(request_with_body(
+            "POST",
+            "/v1/mobile/admin/production-maps/progress-qr/report",
+            &admin_token,
+            &format!(r#"{{"qr_payload":"{own_qr}"}}"#),
+        ))
+        .await
+        .expect("qr report with correction audit");
+    let correction_report_status = correction_report.status();
+    let correction_report_body = json_body(correction_report).await;
+    assert_eq!(
+        correction_report_status,
+        StatusCode::OK,
+        "{correction_report_body:?}"
+    );
+    let corrections = correction_report_body["corrections"]
+        .as_array()
+        .expect("corrections");
+    assert_eq!(corrections.len(), 1);
+    assert_eq!(corrections[0]["batch_id"], own_batch_id);
+    assert_eq!(corrections[0]["previous_revision"], 1);
+    assert_eq!(corrections[0]["new_revision"], 2);
+    assert_eq!(corrections[0]["reason"], "O'lchov noto'g'ri kiritilgan");
+    assert_eq!(corrections[0]["actor"]["ref_"], "worker-qr-history-a");
+    assert_eq!(corrections[0]["old_values"]["produced_qty"], 12.0);
+    assert_eq!(corrections[0]["new_values"]["produced_qty"], 13.0);
+
+    let forbidden_correction = router
+        .clone()
+        .oneshot(request_with_body(
+            "POST",
+            "/v1/mobile/admin/production-maps/progress-qr/correct",
+            &worker_a_token,
+            &format!(
+                r#"{{
+                    "batch_id":"{other_batch_id}",
+                    "expected_revision":1,
+                    "produced_qty":13,
+                    "uom":"kg",
+                    "reason":"not owner"
+                }}"#,
+            ),
+        ))
+        .await
+        .expect("reject other worker correction");
+    assert_eq!(forbidden_correction.status(), StatusCode::FORBIDDEN);
 
     let forbidden = router
         .clone()

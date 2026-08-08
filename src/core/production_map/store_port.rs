@@ -342,6 +342,20 @@ pub trait ProductionMapStorePort: Send + Sync {
     ) -> StoreResult<Vec<OrderProgressBatch>> {
         Ok(Vec::new())
     }
+    async fn progress_batch_corrections_for_order(
+        &self,
+        _order_id: &str,
+    ) -> StoreResult<Vec<ProgressBatchCorrectionRecord>> {
+        Ok(Vec::new())
+    }
+    async fn correct_progress_batch(
+        &self,
+        _current: OrderProgressBatch,
+        _input: ProgressBatchCorrectionInput,
+        _actor: QueueActionActor,
+    ) -> StoreResult<OrderProgressBatch> {
+        Err(ProductionMapError::StoreFailed)
+    }
     async fn progress_batches_for_audit(&self) -> StoreResult<Vec<OrderProgressBatch>> {
         self.wip_progress_batches(WipProgressBatchQuery::new(
             "", "", "", None, true, "", 10_000,

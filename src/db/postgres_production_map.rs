@@ -12,7 +12,8 @@ use crate::core::production_map::{
     LaminatsiyaAstatkaReport, RezkaAstatkaReport,
     ProductionMapApparatusTransferRecord, ProductionMapApparatusTransferWrite,
     ProductionMapDefinition, ProductionMapError, ProductionMapStorePort, ProductionOrderLogEntry,
-    PaddonCreateInput, PaddonSnapshot, PaddonSummary, QueueActionActor,
+    PaddonCreateInput, PaddonSnapshot, PaddonSummary, ProgressBatchCorrectionInput,
+    ProgressBatchCorrectionRecord, QueueActionActor,
     QueueActionProgressWrite, QueueActionProgressWriteResult,
     RawMaterialAssignment, RawMaterialStockTransition, RawMaterialStockTransitionKind,
     WipProgressBatchQuery,
@@ -81,9 +82,9 @@ use self::order_query_helpers::{
     load_queue_action_logs_for_orders, load_queue_action_logs_for_worker,
 };
 use self::progress_helpers::{
-    put_order_progress_batch, put_order_progress_batch_tx, put_order_progress_event,
-    put_order_progress_event_tx, put_order_run_session, put_order_run_session_tx,
-    receive_finished_goods_batch_tx,
+    correct_progress_batch, load_progress_batch_corrections_for_order, put_order_progress_batch,
+    put_order_progress_batch_tx, put_order_progress_event, put_order_progress_event_tx,
+    put_order_run_session, put_order_run_session_tx, receive_finished_goods_batch_tx,
 };
 use self::qolip_session_helpers::reject_qolip_in_use_tx;
 use self::queue_helpers::{insert_queue_action_event_tx, put_queue_states_tx};
@@ -490,6 +491,22 @@ impl ProductionMapStorePort for PostgresProductionMapStore {
         order_id: &str,
     ) -> Result<Vec<OrderProgressBatch>, ProductionMapError> {
         load_progress_batches_for_order(&self.pool, order_id).await
+    }
+
+    async fn progress_batch_corrections_for_order(
+        &self,
+        order_id: &str,
+    ) -> Result<Vec<ProgressBatchCorrectionRecord>, ProductionMapError> {
+        load_progress_batch_corrections_for_order(&self.pool, order_id).await
+    }
+
+    async fn correct_progress_batch(
+        &self,
+        current: OrderProgressBatch,
+        input: ProgressBatchCorrectionInput,
+        actor: QueueActionActor,
+    ) -> Result<OrderProgressBatch, ProductionMapError> {
+        correct_progress_batch(&self.pool, &current, &input, &actor).await
     }
 
     async fn progress_batches_for_audit(

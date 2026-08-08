@@ -207,6 +207,83 @@ pub(super) async fn progress_batches_for_order(
     Ok(batches)
 }
 
+pub(super) async fn progress_batch_corrections_for_order(
+    store: &MemoryProductionMapStore,
+    order_id: &str,
+) -> Result<Vec<ProgressBatchCorrectionRecord>, ProductionMapError> {
+    let order_id = order_id.trim();
+    if order_id.is_empty() {
+        return Ok(Vec::new());
+    }
+    let batch_ids = store
+        .order_progress_batches
+        .read()
+        .await
+        .values()
+        .filter(|batch| batch.order_id.trim() == order_id)
+        .map(|batch| batch.batch_id.trim().to_string())
+        .collect::<BTreeSet<_>>();
+    let mut corrections = store
+        .progress_batch_corrections
+        .read()
+        .await
+        .iter()
+        .filter(|record| batch_ids.contains(record.batch_id.trim()))
+        .cloned()
+        .collect::<Vec<_>>();
+    corrections.sort_by(|left, right| {
+        left.created_at_unix
+            .cmp(&right.created_at_unix)
+            .then_with(|| left.new_revision.cmp(&right.new_revision))
+            .then_with(|| left.batch_id.cmp(&right.batch_id))
+    });
+    Ok(corrections)
+}
+
+pub(super) async fn correct_progress_batch(
+    store: &MemoryProductionMapStore,
+    current: OrderProgressBatch,
+    input: ProgressBatchCorrectionInput,
+    actor: QueueActionActor,
+) -> Result<OrderProgressBatch, ProductionMapError> {
+    let mut batches = store.order_progress_batches.write().await;
+    let stored = batches
+        .get(current.batch_id.trim())
+        .cloned()
+        .ok_or(ProductionMapError::ProgressBatchNotFound)?;
+    if stored.worker_ref.trim() != actor.ref_.trim() {
+        return Err(ProductionMapError::ProgressBatchCorrectionForbidden);
+    }
+    if stored.wip_status != OrderProgressBatchWipStatus::Waiting {
+        return Err(ProductionMapError::ProgressBatchCorrectionLocked);
+    }
+    if stored.revision != input.expected_revision || stored.revision != current.revision {
+        return Err(ProductionMapError::ProgressBatchCorrectionConflict);
+    }
+    let corrected = stored.corrected(&input);
+    batches.insert(corrected.batch_id.clone(), corrected.clone());
+    drop(batches);
+    let created_at_unix = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|value| value.as_secs() as i64)
+        .unwrap_or_default();
+    store
+        .progress_batch_corrections
+        .write()
+        .await
+        .push(ProgressBatchCorrectionRecord {
+            batch_id: corrected.batch_id.clone(),
+            previous_revision: stored.revision,
+            new_revision: corrected.revision,
+            reason: input.reason.trim().to_string(),
+            actor,
+            old_values: serde_json::to_value(&stored).unwrap_or(serde_json::Value::Null),
+            new_values: serde_json::to_value(&corrected).unwrap_or(serde_json::Value::Null),
+            created_at_unix,
+        });
+    Ok(corrected)
+}
+
 pub(super) async fn wip_progress_batches(
     store: &MemoryProductionMapStore,
     query: WipProgressBatchQuery,

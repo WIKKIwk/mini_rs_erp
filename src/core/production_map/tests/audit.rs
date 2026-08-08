@@ -92,6 +92,7 @@ async fn production_workflow_audit_reports_queue_and_lineage_invariants() {
 fn audit_test_batch(batch_id: &str, order_id: &str, qr_payload: &str) -> OrderProgressBatch {
     OrderProgressBatch {
         batch_id: batch_id.to_string(),
+        revision: 1,
         session_id: format!("session-{batch_id}"),
         started_at_unix: 0,
         completed_at_unix: 0,

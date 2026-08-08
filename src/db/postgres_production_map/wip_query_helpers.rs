@@ -59,7 +59,7 @@ async fn load_wip_progress_batches_inner(
         ""
     };
     let sql = format!(
-        "SELECT batch.batch_id, batch.session_id,
+        "SELECT batch.batch_id, batch.revision, batch.session_id,
                 COALESCE(EXTRACT(EPOCH FROM session.started_at)::bigint,
                          EXTRACT(EPOCH FROM batch.created_at)::bigint) AS started_at_unix,
                 COALESCE(EXTRACT(EPOCH FROM session.session_updated_at)::bigint,

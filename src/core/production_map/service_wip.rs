@@ -44,6 +44,10 @@ impl ProductionMapService {
             .queue_action_logs_for_orders(std::slice::from_ref(&order_id))
             .await?;
         let logs = logs_by_order.get(&order_id).cloned().unwrap_or_default();
+        let corrections = self
+            .store
+            .progress_batch_corrections_for_order(&order_id)
+            .await?;
         let opened_by = logs.first().map(|entry| ProductionQrOpenedBy {
             actor_role: entry.actor_role.clone(),
             actor_ref: entry.actor_ref.clone(),
@@ -73,6 +77,7 @@ impl ProductionMapService {
             order_status,
             queue_states,
             logs,
+            corrections,
             progress_batches,
             run_sessions,
             active_sessions,

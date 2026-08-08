@@ -15,6 +15,7 @@ pub(super) struct ProgressSessionRow {
 #[derive(sqlx::FromRow)]
 pub(super) struct ProgressBatchRow {
     pub(super) batch_id: String,
+    pub(super) revision: i64,
     pub(super) session_id: String,
     pub(super) started_at_unix: i64,
     pub(super) completed_at_unix: i64,
@@ -72,6 +73,41 @@ pub(super) struct QueueActionLogRow {
     pub(super) issue_note: String,
 }
 
+#[derive(sqlx::FromRow)]
+pub(super) struct ProgressBatchCorrectionRow {
+    pub(super) batch_id: String,
+    pub(super) previous_revision: i64,
+    pub(super) new_revision: i64,
+    pub(super) reason: String,
+    pub(super) actor_role: String,
+    pub(super) actor_ref: String,
+    pub(super) actor_display_name: String,
+    pub(super) old_values: serde_json::Value,
+    pub(super) new_values: serde_json::Value,
+    pub(super) created_at_unix: i64,
+}
+
+pub(super) fn progress_batch_correction_from_row(
+    row: ProgressBatchCorrectionRow,
+) -> Result<ProgressBatchCorrectionRecord, ProductionMapError> {
+    Ok(ProgressBatchCorrectionRecord {
+        batch_id: row.batch_id,
+        previous_revision: u64::try_from(row.previous_revision)
+            .map_err(|_| ProductionMapError::StoreFailed)?,
+        new_revision: u64::try_from(row.new_revision)
+            .map_err(|_| ProductionMapError::StoreFailed)?,
+        reason: row.reason,
+        actor: QueueActionActor {
+            role: row.actor_role,
+            ref_: row.actor_ref,
+            display_name: row.actor_display_name,
+        },
+        old_values: row.old_values,
+        new_values: row.new_values,
+        created_at_unix: row.created_at_unix,
+    })
+}
+
 pub(super) fn queue_action_log_from_row(
     row: QueueActionLogRow,
 ) -> Result<ProductionOrderLogEntry, ProductionMapError> {
@@ -122,6 +158,7 @@ pub(super) fn progress_batch_from_row(
     };
     let mut batch = OrderProgressBatch {
         batch_id: row.batch_id,
+        revision: u64::try_from(row.revision).map_err(|_| ProductionMapError::StoreFailed)?,
         session_id: row.session_id,
         started_at_unix: row.started_at_unix,
         completed_at_unix: row.completed_at_unix,

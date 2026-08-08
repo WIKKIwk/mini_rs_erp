@@ -166,6 +166,16 @@ pub enum ProductionMapError {
     ProgressBatchNotAccepted,
     #[error("progress batch cannot resume")]
     ProgressBatchNotResumable,
+    #[error("progress batch correction reason is required")]
+    ProgressBatchCorrectionReasonRequired,
+    #[error("progress batch correction is forbidden")]
+    ProgressBatchCorrectionForbidden,
+    #[error("progress batch can no longer be corrected")]
+    ProgressBatchCorrectionLocked,
+    #[error("progress batch correction revision conflicts")]
+    ProgressBatchCorrectionConflict,
+    #[error("progress batch correction has no changes")]
+    ProgressBatchCorrectionUnchanged,
     #[error("paddon input is invalid")]
     PaddonInvalidInput,
     #[error("paddon code sequence is exhausted")]

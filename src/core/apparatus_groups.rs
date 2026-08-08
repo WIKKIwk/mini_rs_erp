@@ -14,6 +14,7 @@ const DEFAULT_LAMINATSIYA_GROUP_NAME: &str = "Laminatsiya";
 const DEFAULT_REZKA_GROUP_NAME: &str = "Rezka";
 pub const APPARATUS_COLOR_STATIONS_MIN: u8 = 1;
 pub const APPARATUS_COLOR_STATIONS_MAX: u8 = 24;
+const FACTORY_MAP_OBJECT_ID_MAX_LENGTH: usize = 128;
 const DEFAULT_APPARATUS: [(&str, &str); 10] = [
     ("apparatus:default:bosma_7", "7 ta rangli bosma aparat"),
     ("apparatus:default:bosma_8", "8 ta rangli bosma aparat"),
@@ -49,6 +50,8 @@ pub struct ApparatusMasterData {
     pub capability_profiles: Vec<ApparatusCapabilityProfile>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub color_stations: Option<u8>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub factory_map_object_id: Option<String>,
     #[serde(default)]
     pub training_enabled: bool,
 }
@@ -81,9 +84,7 @@ impl ApparatusCapabilityProfile {
             && self
                 .valid_from_unix
                 .is_none_or(|starts_at| at_unix >= starts_at)
-            && self
-                .valid_to_unix
-                .is_none_or(|ends_at| at_unix < ends_at)
+            && self.valid_to_unix.is_none_or(|ends_at| at_unix < ends_at)
     }
 }
 
@@ -235,22 +236,13 @@ impl ApparatusGroupService {
     ) -> Result<Vec<ApparatusCatalogEntry>, ApparatusGroupError> {
         let limit = limit.max(1);
         let needle = query.trim().to_lowercase();
-        let mut seen = BTreeSet::new();
-        let mut result = default_apparatus_catalog()
-            .into_iter()
-            .filter(|item| needle.is_empty() || item.name.to_lowercase().contains(&needle))
-            .filter(|item| seen.insert(item.name.to_lowercase()))
-            .take(limit)
-            .collect::<Vec<_>>();
-        if result.len() >= limit {
-            return Ok(result);
-        }
-        for item in self.store.apparatus_catalog(query, limit).await? {
+        // Default apparatus can have persisted metadata (for example, a 3D
+        // factory-map binding). Load stored rows first and overlay their master
+        // data while preserving the canonical default id/source.
+        let mut stored_by_name = BTreeMap::new();
+        for item in self.store.apparatus_catalog(query, 10_000).await? {
             let name = item.name.trim().to_string();
-            if name.is_empty()
-                || is_invalid_legacy_apparatus_name(&name)
-                || !seen.insert(name.to_lowercase())
-            {
+            if name.is_empty() || is_invalid_legacy_apparatus_name(&name) {
                 continue;
             }
             let id = if item.id.trim().is_empty() {
@@ -259,13 +251,43 @@ impl ApparatusGroupService {
                 item.id
             };
             let master = normalize_apparatus_master_data(item.master, &name);
-            result.push(ApparatusCatalogEntry {
-                id,
-                name,
-                source: ApparatusSource::Custom,
-                sort_order: result.len(),
-                master,
-            });
+            stored_by_name.insert(
+                name.to_lowercase(),
+                ApparatusCatalogEntry {
+                    id,
+                    name,
+                    source: ApparatusSource::Custom,
+                    sort_order: 0,
+                    master,
+                },
+            );
+        }
+
+        let mut seen = BTreeSet::new();
+        let mut result = Vec::new();
+        for mut item in default_apparatus_catalog()
+            .into_iter()
+            .filter(|item| needle.is_empty() || item.name.to_lowercase().contains(&needle))
+        {
+            let key = item.name.to_lowercase();
+            if let Some(stored) = stored_by_name.remove(&key) {
+                item.master = stored.master;
+            }
+            if seen.insert(key) {
+                item.sort_order = result.len();
+                result.push(item);
+            }
+            if result.len() >= limit {
+                return Ok(result);
+            }
+        }
+
+        for (_, mut item) in stored_by_name {
+            if !seen.insert(item.name.to_lowercase()) {
+                continue;
+            }
+            item.sort_order = result.len();
+            result.push(item);
             if result.len() >= limit {
                 break;
             }
@@ -285,9 +307,45 @@ impl ApparatusGroupService {
             return Err(ApparatusGroupError::InvalidApparatus);
         }
         let requested_id = normalize_requested_apparatus_id(input.id.as_deref())?;
+        let default_name = requested_id
+            .as_deref()
+            .and_then(default_apparatus_name_for_id);
+        if requested_id
+            .as_deref()
+            .is_some_and(|id| id.starts_with("apparatus:default:"))
+            && !default_name.is_some_and(|default_name| default_name.eq_ignore_ascii_case(&name))
+        {
+            return Err(ApparatusGroupError::InvalidApparatus);
+        }
         validate_explicit_apparatus_master_data(&input.master)?;
-        let master = normalize_apparatus_master_data(input.master, &name);
+        let master = if let Some(default_name) = default_name {
+            let factory_map_object_id = input.master.factory_map_object_id;
+            let training_enabled = input.master.training_enabled;
+            let mut canonical = apparatus_master_data_for_name(default_name);
+            canonical.factory_map_object_id = factory_map_object_id;
+            canonical.training_enabled = training_enabled;
+            normalize_apparatus_master_data(canonical, default_name)
+        } else {
+            normalize_apparatus_master_data(input.master, &name)
+        };
         validate_apparatus_master_data(&master)?;
+        if let Some(object_id) = master.factory_map_object_id.as_deref() {
+            for existing in self.store.apparatus_catalog("", 10_000).await? {
+                let same_apparatus = requested_id
+                    .as_deref()
+                    .is_some_and(|id| existing.id.trim() == id)
+                    || existing.name.trim().eq_ignore_ascii_case(&name);
+                if !same_apparatus
+                    && existing
+                        .master
+                        .factory_map_object_id
+                        .as_deref()
+                        .is_some_and(|existing_id| existing_id.trim() == object_id)
+                {
+                    return Err(ApparatusGroupError::InvalidApparatus);
+                }
+            }
+        }
         let id = self
             .store
             .put_apparatus_with_id(requested_id.as_deref(), &name, &master)
@@ -295,7 +353,11 @@ impl ApparatusGroupService {
         Ok(ApparatusCatalogEntry {
             id,
             name,
-            source: ApparatusSource::Custom,
+            source: if default_name.is_some() {
+                ApparatusSource::Default
+            } else {
+                ApparatusSource::Custom
+            },
             sort_order: 0,
             master,
         })
@@ -528,6 +590,17 @@ fn validate_explicit_apparatus_master_data(
             return Err(ApparatusGroupError::InvalidColorStations);
         }
     }
+    if master
+        .factory_map_object_id
+        .as_deref()
+        .is_some_and(|object_id| {
+            let object_id = object_id.trim();
+            object_id.chars().count() > FACTORY_MAP_OBJECT_ID_MAX_LENGTH
+                || object_id.chars().any(char::is_control)
+        })
+    {
+        return Err(ApparatusGroupError::InvalidApparatus);
+    }
     Ok(())
 }
 
@@ -579,6 +652,7 @@ pub fn apparatus_master_data_for_name(name: &str) -> ApparatusMasterData {
             ],
             capability_profiles: default_capability_profiles(["print", "pechat", "flexo"]),
             color_stations: None,
+            factory_map_object_id: None,
             training_enabled: false,
         };
     }
@@ -589,6 +663,7 @@ pub fn apparatus_master_data_for_name(name: &str) -> ApparatusMasterData {
             capabilities: vec!["print".to_string(), "pechat".to_string()],
             capability_profiles: default_capability_profiles(["print", "pechat"]),
             color_stations: Some(color_stations),
+            factory_map_object_id: None,
             training_enabled: false,
         };
     }
@@ -616,13 +691,17 @@ fn apparatus_master_data(
     capabilities: impl IntoIterator<Item = &'static str>,
     color_stations: Option<u8>,
 ) -> ApparatusMasterData {
-    let capabilities = capabilities.into_iter().map(str::to_string).collect::<Vec<_>>();
+    let capabilities = capabilities
+        .into_iter()
+        .map(str::to_string)
+        .collect::<Vec<_>>();
     ApparatusMasterData {
         family: family.to_string(),
         kind: kind.to_string(),
         capability_profiles: default_capability_profiles(capabilities.iter().map(String::as_str)),
         capabilities,
         color_stations,
+        factory_map_object_id: None,
         training_enabled: false,
     }
 }
@@ -666,13 +745,15 @@ pub fn normalize_apparatus_master_data(
             }
         }
     }
-    master.capability_profiles = normalize_capability_profiles(
-        master.capability_profiles,
-        &master.capabilities,
-    );
+    master.capability_profiles =
+        normalize_capability_profiles(master.capability_profiles, &master.capabilities);
     if master.color_stations.is_none() {
         master.color_stations = inferred.color_stations;
     }
+    master.factory_map_object_id = master
+        .factory_map_object_id
+        .map(|object_id| object_id.trim().to_string())
+        .filter(|object_id| !object_id.is_empty());
     master
 }
 
@@ -713,8 +794,7 @@ fn normalize_capability_profiles(
                 .zip(profile.valid_to_unix)
                 .is_some_and(|(starts_at, ends_at)| ends_at <= starts_at)
             || normalized.iter().any(|item: &ApparatusCapabilityProfile| {
-                item.code == profile.code
-                    && item.valid_from_unix == profile.valid_from_unix
+                item.code == profile.code && item.valid_from_unix == profile.valid_from_unix
             })
         {
             continue;
@@ -765,13 +845,16 @@ fn normalize_requested_apparatus_id(
     let Some(id) = requested_id.map(str::trim).filter(|id| !id.is_empty()) else {
         return Ok(None);
     };
-    if !id.starts_with("apparatus:")
-        || id.starts_with("apparatus:default:")
-        || id.chars().any(char::is_control)
-    {
+    if !id.starts_with("apparatus:") || id.chars().any(char::is_control) {
         return Err(ApparatusGroupError::InvalidApparatus);
     }
     Ok(Some(id.to_string()))
+}
+
+fn default_apparatus_name_for_id(id: &str) -> Option<&'static str> {
+    DEFAULT_APPARATUS
+        .into_iter()
+        .find_map(|(default_id, name)| (default_id == id).then_some(name))
 }
 
 fn is_invalid_legacy_apparatus_name(value: &str) -> bool {
@@ -951,10 +1034,7 @@ impl ApparatusGroupStorePort for MemoryApparatusGroupStore {
             .cloned()
             .or(requested_id)
             .unwrap_or_else(|| custom_apparatus_id(&name));
-        if !apparatus
-            .iter()
-            .any(|item| item.to_lowercase() == key)
-        {
+        if !apparatus.iter().any(|item| item.to_lowercase() == key) {
             apparatus.push(name.clone());
             apparatus.sort_by_key(|item| item.to_lowercase());
         }
@@ -1057,6 +1137,7 @@ mod tests {
                     enabled: true,
                 }],
                 color_stations: None,
+                factory_map_object_id: None,
                 training_enabled: false,
             },
             "Maxsus liniya 1",
@@ -1103,6 +1184,7 @@ mod tests {
                     capabilities: vec!["apparatus".to_string()],
                     capability_profiles: Vec::new(),
                     color_stations: None,
+                    factory_map_object_id: None,
                     training_enabled: false,
                 },
             })
@@ -1119,6 +1201,7 @@ mod tests {
                     capabilities: vec!["hgjhjkd".to_string()],
                     capability_profiles: Vec::new(),
                     color_stations: None,
+                    factory_map_object_id: None,
                     training_enabled: false,
                 },
             })
@@ -1138,6 +1221,7 @@ mod tests {
                     capabilities: vec!["print".to_string(), "pechat".to_string()],
                     capability_profiles: Vec::new(),
                     color_stations: Some(25),
+                    factory_map_object_id: None,
                     training_enabled: false,
                 },
             })
@@ -1146,5 +1230,116 @@ mod tests {
             invalid_color_stations,
             Err(ApparatusGroupError::InvalidColorStations)
         );
+    }
+
+    #[tokio::test]
+    async fn default_apparatus_can_persist_factory_map_binding() {
+        let store = Arc::new(MemoryApparatusGroupStore::new());
+        let service = ApparatusGroupService::new(store);
+
+        let saved = service
+            .upsert_apparatus(ApparatusUpsert {
+                id: Some("apparatus:default:bosma_7".to_string()),
+                name: "7 ta rangli bosma aparat".to_string(),
+                master: ApparatusMasterData {
+                    factory_map_object_id: Some(" node:73 ".to_string()),
+                    ..apparatus_master_data_for_name("7 ta rangli bosma aparat")
+                },
+            })
+            .await
+            .expect("save default apparatus map binding");
+
+        assert_eq!(saved.source, ApparatusSource::Default);
+        assert_eq!(
+            saved.master.factory_map_object_id.as_deref(),
+            Some("node:73")
+        );
+
+        let catalog = service
+            .apparatus_catalog("", 50)
+            .await
+            .expect("load apparatus catalog");
+        let mapped = catalog
+            .iter()
+            .find(|item| item.id == "apparatus:default:bosma_7")
+            .expect("mapped default apparatus");
+        assert_eq!(mapped.source, ApparatusSource::Default);
+        assert_eq!(
+            mapped.master.factory_map_object_id.as_deref(),
+            Some("node:73")
+        );
+    }
+
+    #[tokio::test]
+    async fn default_apparatus_can_persist_training_enabled() {
+        let service = ApparatusGroupService::new(Arc::new(MemoryApparatusGroupStore::new()));
+
+        let saved = service
+            .upsert_apparatus(ApparatusUpsert {
+                id: Some("apparatus:default:bosma_7".to_string()),
+                name: "7 ta rangli bosma aparat".to_string(),
+                master: ApparatusMasterData {
+                    training_enabled: true,
+                    ..apparatus_master_data_for_name("7 ta rangli bosma aparat")
+                },
+            })
+            .await
+            .expect("save training mode");
+
+        assert!(saved.master.training_enabled);
+        let catalog = service
+            .apparatus_catalog("", 50)
+            .await
+            .expect("load apparatus training mode");
+        assert!(catalog
+            .iter()
+            .find(|item| item.id == "apparatus:default:bosma_7")
+            .expect("training apparatus")
+            .master
+            .training_enabled);
+    }
+
+    #[tokio::test]
+    async fn default_apparatus_id_must_match_its_canonical_name() {
+        let service = ApparatusGroupService::new(Arc::new(MemoryApparatusGroupStore::new()));
+
+        let result = service
+            .upsert_apparatus(ApparatusUpsert {
+                id: Some("apparatus:default:bosma_7".to_string()),
+                name: "Laminatsiya 1".to_string(),
+                master: ApparatusMasterData::default(),
+            })
+            .await;
+
+        assert_eq!(result, Err(ApparatusGroupError::InvalidApparatus));
+    }
+
+    #[tokio::test]
+    async fn factory_map_object_cannot_be_bound_to_two_apparatus() {
+        let service = ApparatusGroupService::new(Arc::new(MemoryApparatusGroupStore::new()));
+        service
+            .upsert_apparatus(ApparatusUpsert {
+                id: None,
+                name: "Birinchi liniya".to_string(),
+                master: ApparatusMasterData {
+                    factory_map_object_id: Some("node:12".to_string()),
+                    ..ApparatusMasterData::default()
+                },
+            })
+            .await
+            .expect("save first map binding");
+
+        let duplicate = service
+            .upsert_apparatus(ApparatusUpsert {
+                id: None,
+                name: "Ikkinchi liniya".to_string(),
+                master: ApparatusMasterData {
+                    factory_map_object_id: Some("node:12".to_string()),
+                    ..ApparatusMasterData::default()
+                },
+            })
+            .await;
+
+        assert_eq!(duplicate, Err(ApparatusGroupError::InvalidApparatus));
     }
 }

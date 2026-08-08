@@ -368,6 +368,7 @@ mod tests {
                     capabilities: vec!["print".to_string(), "flexo".to_string()],
                     capability_profiles: Vec::new(),
                     color_stations: None,
+                    factory_map_object_id: None,
                     training_enabled: false,
                 },
             )

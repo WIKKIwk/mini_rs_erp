@@ -377,6 +377,19 @@ pub(super) fn production_map_error(error: ProductionMapError) -> AdminError {
         ProductionMapError::ProgressBatchNotResumable => {
             bad_request("progress_batch_not_resumable")
         }
+        ProductionMapError::ProgressBatchCorrectionReasonRequired => {
+            bad_request("progress_batch_correction_reason_required")
+        }
+        ProductionMapError::ProgressBatchCorrectionForbidden => forbidden(),
+        ProductionMapError::ProgressBatchCorrectionLocked => {
+            conflict("progress_batch_correction_locked")
+        }
+        ProductionMapError::ProgressBatchCorrectionConflict => {
+            conflict("progress_batch_correction_conflict")
+        }
+        ProductionMapError::ProgressBatchCorrectionUnchanged => {
+            bad_request("progress_batch_correction_unchanged")
+        }
         ProductionMapError::PaddonInvalidInput => bad_request("paddon_invalid_input"),
         ProductionMapError::PaddonCodeExhausted => conflict("paddon_code_exhausted"),
         ProductionMapError::PaddonNotFound => not_found("paddon_not_found"),

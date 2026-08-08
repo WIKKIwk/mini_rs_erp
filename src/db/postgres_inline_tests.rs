@@ -269,6 +269,27 @@ mod tests {
     }
 
     #[test]
+    fn progress_batch_correction_migration_is_append_only_and_revisioned() {
+        let migration = POSTGRES_MIGRATIONS
+            .iter()
+            .find(|(version, _)| *version == "0047_progress_batch_corrections")
+            .map(|(_, sql)| sql.to_lowercase())
+            .expect("progress batch correction migration");
+
+        for expected in [
+            "add column if not exists revision bigint not null default 1",
+            "create table if not exists mini_progress_batch_corrections",
+            "old_values jsonb not null",
+            "new_values jsonb not null",
+            "unique (batch_id, new_revision)",
+            "on table mini_progress_batch_corrections to mini_rs_erp",
+            "on sequence mini_progress_batch_corrections_id_seq to mini_rs_erp",
+        ] {
+            assert!(migration.contains(expected), "missing {expected}");
+        }
+    }
+
+    #[test]
     fn rps_runtime_privilege_migration_is_fail_closed() {
         let migration = POSTGRES_MIGRATIONS
             .iter()

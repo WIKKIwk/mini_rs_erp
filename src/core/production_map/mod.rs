@@ -21,6 +21,7 @@ mod service_capacity_scheduler;
 mod service_maps;
 mod service_order_control;
 mod service_progress;
+mod service_progress_correction;
 mod service_progress_metrics;
 mod service_progress_support;
 mod service_paddon;

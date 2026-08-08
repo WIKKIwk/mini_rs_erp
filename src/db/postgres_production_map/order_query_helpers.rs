@@ -318,7 +318,7 @@ pub(super) async fn load_progress_batch(
     batch_id: &str,
 ) -> Result<Option<OrderProgressBatch>, ProductionMapError> {
     let row = sqlx::query_as::<_, ProgressBatchRow>(
-        "SELECT batch.batch_id, batch.session_id,
+        "SELECT batch.batch_id, batch.revision, batch.session_id,
                 COALESCE(EXTRACT(EPOCH FROM session.started_at)::bigint,
                          EXTRACT(EPOCH FROM batch.created_at)::bigint) AS started_at_unix,
                 COALESCE(EXTRACT(EPOCH FROM session.session_updated_at)::bigint,
@@ -370,7 +370,7 @@ pub(super) async fn load_progress_batches_for_worker(
     }
     let limit = i64::try_from(limit.min(500)).unwrap_or(500);
     let rows = sqlx::query_as::<_, ProgressBatchRow>(
-        "SELECT batch.batch_id, batch.session_id,
+        "SELECT batch.batch_id, batch.revision, batch.session_id,
                 COALESCE(EXTRACT(EPOCH FROM session.started_at)::bigint,
                          EXTRACT(EPOCH FROM batch.created_at)::bigint) AS started_at_unix,
                 COALESCE(EXTRACT(EPOCH FROM session.session_updated_at)::bigint,
@@ -432,7 +432,7 @@ pub(super) async fn load_progress_batches_for_order(
         return Ok(Vec::new());
     }
     let rows = sqlx::query_as::<_, ProgressBatchRow>(
-        "SELECT batch.batch_id, batch.session_id,
+        "SELECT batch.batch_id, batch.revision, batch.session_id,
                 COALESCE(EXTRACT(EPOCH FROM session.started_at)::bigint,
                          EXTRACT(EPOCH FROM batch.created_at)::bigint) AS started_at_unix,
                 COALESCE(EXTRACT(EPOCH FROM session.session_updated_at)::bigint,
@@ -477,7 +477,7 @@ pub(super) async fn load_progress_batches_for_audit(
     pool: &PgPool,
 ) -> Result<Vec<OrderProgressBatch>, ProductionMapError> {
     let rows = sqlx::query_as::<_, ProgressBatchRow>(
-        "SELECT batch.batch_id, batch.session_id,
+        "SELECT batch.batch_id, batch.revision, batch.session_id,
                 COALESCE(EXTRACT(EPOCH FROM session.started_at)::bigint,
                          EXTRACT(EPOCH FROM batch.created_at)::bigint) AS started_at_unix,
                 COALESCE(EXTRACT(EPOCH FROM session.session_updated_at)::bigint,
@@ -521,7 +521,7 @@ pub(super) async fn load_progress_batch_by_qr(
     qr_payload: &str,
 ) -> Result<Option<OrderProgressBatch>, ProductionMapError> {
     let row = sqlx::query_as::<_, ProgressBatchRow>(
-        "SELECT batch.batch_id, batch.session_id,
+        "SELECT batch.batch_id, batch.revision, batch.session_id,
                 COALESCE(EXTRACT(EPOCH FROM session.started_at)::bigint,
                          EXTRACT(EPOCH FROM batch.created_at)::bigint) AS started_at_unix,
                 COALESCE(EXTRACT(EPOCH FROM session.session_updated_at)::bigint,

@@ -85,10 +85,7 @@ fn slash_matches_microns(material_count: usize, micron_text: &str) -> bool {
 }
 
 fn parse_material_layers(value: &str) -> Vec<LayerInput> {
-    value
-        .split('+')
-        .filter_map(parse_material_layer)
-        .collect()
+    value.split('+').filter_map(parse_material_layer).collect()
 }
 
 fn parse_material_layer(value: &str) -> Option<LayerInput> {

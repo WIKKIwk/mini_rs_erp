@@ -161,6 +161,9 @@ fn spawn_order_integrations(
     state: AppState,
     map: ProductionMapDefinition,
     template: CalculateOrderTemplate,
+    owner_key: String,
+    sender_display_name: String,
+    sender_phone: String,
 ) {
     tokio::spawn(async move {
         if let Err(error) = state.order_sheets.append_order(&map, &template).await {
@@ -168,6 +171,32 @@ fn spawn_order_integrations(
         }
         if let Err(error) = state.production_orders.save_order(&map, &template).await {
             tracing::warn!(?error, map_id = %map.id, "mini order save failed");
+        }
+        let image = if template.image_id.trim().is_empty() {
+            None
+        } else {
+            match state
+                .calculate_orders
+                .get_image(&owner_key, &template.image_id)
+                .await
+            {
+                Ok(image) => image,
+                Err(error) => {
+                    tracing::warn!(
+                        ?error,
+                        image_id = %template.image_id,
+                        "telegram order image lookup failed"
+                    );
+                    None
+                }
+            }
+        };
+        if let Err(error) = state
+            .telegram
+            .notify_order_created(map, template, image, sender_display_name, sender_phone)
+            .await
+        {
+            tracing::warn!(?error, "telegram order delivery failed");
         }
     });
 }

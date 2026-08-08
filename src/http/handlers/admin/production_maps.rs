@@ -56,7 +56,8 @@ pub use self::paddons::{
     production_map_paddon_qr_print, production_map_paddon_qr_report, production_map_paddons,
 };
 pub use self::progress_qr::{
-    production_map_progress_qr_history, production_map_progress_qr_lookup,
+    production_map_progress_batch_correct, production_map_progress_qr_history,
+    production_map_progress_qr_lookup,
     production_map_progress_qr_report, production_map_progress_qr_reprint,
 };
 pub use self::qolip_order_notes::production_map_qolip_order_notes;
@@ -457,7 +458,14 @@ pub async fn production_map_save_with_order(
             .cloned()
             .or_else(|| saved_template.clone())
     {
-        spawn_order_integrations(state.clone(), saved_map.map.clone(), template);
+        spawn_order_integrations(
+            state.clone(),
+            saved_map.map.clone(),
+            template,
+            owner_key,
+            principal.display_name.clone(),
+            principal.phone.clone(),
+        );
     }
     Ok(json_response(serde_json::json!({
         "ok": true,

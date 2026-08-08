@@ -3776,6 +3776,7 @@ fn test_progress_batch(
 ) -> OrderProgressBatch {
     OrderProgressBatch {
         batch_id: batch_id.to_string(),
+        revision: 1,
         session_id: format!("session-{batch_id}"),
         started_at_unix: 0,
         completed_at_unix: 0,
@@ -3817,6 +3818,149 @@ fn test_progress_batch(
         description: String::new(),
         payload_json: serde_json::json!({}),
     }
+}
+
+#[tokio::test]
+async fn progress_batch_correction_updates_owned_waiting_batch_with_revision() {
+    let store = std::sync::Arc::new(MemoryProductionMapStore::new());
+    let service = ProductionMapService::new(store.clone());
+    let actor = QueueActionActor {
+        role: "aparatchi".to_string(),
+        ref_: "worker-correction".to_string(),
+        display_name: "Correction Worker".to_string(),
+    };
+    let mut waiting = test_progress_batch(
+        "batch-correction",
+        "order-correction",
+        "Rezka 1",
+        "qr-correction",
+        OrderProgressBatchWipStatus::Waiting,
+        "",
+    );
+    waiting.worker_ref = actor.ref_.clone();
+    waiting.produced_qty = 10.0;
+    waiting.uom = "m".to_string();
+    store
+        .put_order_progress_batch(waiting)
+        .await
+        .expect("seed waiting batch");
+
+    let corrected = service
+        .correct_progress_batch(
+            ProgressBatchCorrectionInput {
+                batch_id: "batch-correction".to_string(),
+                expected_revision: 1,
+                produced_qty: 12.5,
+                uom: "m".to_string(),
+                return_ink_kg: None,
+                lamination_print_leftover_rolls: None,
+                lamination_film_leftover_rolls: None,
+                rezka_bosma_waste: Some(0.5),
+                rezka_lamination_waste: None,
+                rezka_edge_waste: None,
+                total_waste: None,
+                finished_goods_kg: Some(8.0),
+                bobina_kg: Some(1.0),
+                finished_goods_meter: Some(12.5),
+                diameter: Some(200.0),
+                description: "to'g'rilandi".to_string(),
+                reason: "O'lchov noto'g'ri kiritilgan".to_string(),
+            },
+            &actor,
+        )
+        .await
+        .expect("correct waiting batch");
+    assert_eq!(corrected.revision, 2);
+    assert_eq!(corrected.produced_qty, 12.5);
+    assert_eq!(corrected.finished_goods_kg, Some(8.0));
+    let corrections = store.progress_batch_correction_records().await;
+    assert_eq!(corrections.len(), 1);
+    assert_eq!(corrections[0].previous_revision, 1);
+    assert_eq!(corrections[0].new_revision, 2);
+    assert_eq!(corrections[0].old_values["produced_qty"], 10.0);
+    assert_eq!(corrections[0].new_values["produced_qty"], 12.5);
+
+    let stale = service
+        .correct_progress_batch(
+            ProgressBatchCorrectionInput {
+                batch_id: "batch-correction".to_string(),
+                expected_revision: 1,
+                produced_qty: 13.0,
+                uom: "m".to_string(),
+                return_ink_kg: None,
+                lamination_print_leftover_rolls: None,
+                lamination_film_leftover_rolls: None,
+                rezka_bosma_waste: Some(0.5),
+                rezka_lamination_waste: None,
+                rezka_edge_waste: None,
+                total_waste: None,
+                finished_goods_kg: Some(8.0),
+                bobina_kg: Some(1.0),
+                finished_goods_meter: Some(12.5),
+                diameter: Some(200.0),
+                description: "to'g'rilandi".to_string(),
+                reason: "Yana o'lchandi".to_string(),
+            },
+            &actor,
+        )
+        .await;
+    assert_eq!(stale, Err(ProductionMapError::ProgressBatchCorrectionConflict));
+}
+
+#[tokio::test]
+async fn progress_batch_correction_rejects_in_use_or_other_workers_batch() {
+    let store = std::sync::Arc::new(MemoryProductionMapStore::new());
+    let service = ProductionMapService::new(store.clone());
+    let owner = QueueActionActor {
+        role: "aparatchi".to_string(),
+        ref_: "worker-owner".to_string(),
+        display_name: "Owner".to_string(),
+    };
+    let mut in_use = test_progress_batch(
+        "batch-in-use-correction",
+        "order-correction",
+        "Laminatsiya 1",
+        "qr-in-use-correction",
+        OrderProgressBatchWipStatus::InUse,
+        "",
+    );
+    in_use.worker_ref = owner.ref_.clone();
+    store
+        .put_order_progress_batch(in_use)
+        .await
+        .expect("seed in-use batch");
+    let input = ProgressBatchCorrectionInput {
+        batch_id: "batch-in-use-correction".to_string(),
+        expected_revision: 1,
+        produced_qty: 2.0,
+        uom: "kg".to_string(),
+        return_ink_kg: None,
+        lamination_print_leftover_rolls: None,
+        lamination_film_leftover_rolls: None,
+        rezka_bosma_waste: None,
+        rezka_lamination_waste: None,
+        rezka_edge_waste: None,
+        total_waste: None,
+        finished_goods_kg: None,
+        bobina_kg: None,
+        finished_goods_meter: None,
+        diameter: None,
+        description: String::new(),
+        reason: "Test correction".to_string(),
+    };
+    assert_eq!(
+        service.correct_progress_batch(input.clone(), &owner).await,
+        Err(ProductionMapError::ProgressBatchCorrectionLocked)
+    );
+    let other = QueueActionActor {
+        role: "aparatchi".to_string(),
+        ref_: "worker-other".to_string(),
+        display_name: "Other".to_string(),
+    };
+    assert_eq!(
+        service.correct_progress_batch(input, &other).await,
+        Err(ProductionMapError::ProgressBatchCorrectionForbidden)
+    );
 }
 
 fn two_stage_map(id: &str, first: &str, second: &str) -> ProductionMapDefinition {

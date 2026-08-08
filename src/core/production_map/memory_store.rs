@@ -419,6 +419,22 @@ impl ProductionMapStorePort for MemoryProductionMapStore {
         runs::progress_batches_for_order(self, order_id).await
     }
 
+    async fn progress_batch_corrections_for_order(
+        &self,
+        order_id: &str,
+    ) -> Result<Vec<ProgressBatchCorrectionRecord>, ProductionMapError> {
+        runs::progress_batch_corrections_for_order(self, order_id).await
+    }
+
+    async fn correct_progress_batch(
+        &self,
+        current: OrderProgressBatch,
+        input: ProgressBatchCorrectionInput,
+        actor: QueueActionActor,
+    ) -> Result<OrderProgressBatch, ProductionMapError> {
+        runs::correct_progress_batch(self, current, input, actor).await
+    }
+
     async fn progress_batches_for_audit(
         &self,
     ) -> Result<Vec<OrderProgressBatch>, ProductionMapError> {
