@@ -49,6 +49,8 @@ pub struct ApparatusMasterData {
     pub capability_profiles: Vec<ApparatusCapabilityProfile>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub color_stations: Option<u8>,
+    #[serde(default)]
+    pub training_enabled: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -577,6 +579,7 @@ pub fn apparatus_master_data_for_name(name: &str) -> ApparatusMasterData {
             ],
             capability_profiles: default_capability_profiles(["print", "pechat", "flexo"]),
             color_stations: None,
+            training_enabled: false,
         };
     }
     if let Some(color_stations) = pechat::pechat_color_count(&normalized) {
@@ -586,6 +589,7 @@ pub fn apparatus_master_data_for_name(name: &str) -> ApparatusMasterData {
             capabilities: vec!["print".to_string(), "pechat".to_string()],
             capability_profiles: default_capability_profiles(["print", "pechat"]),
             color_stations: Some(color_stations),
+            training_enabled: false,
         };
     }
     if normalized.contains("extruder") && normalized.contains("laminatsiya") {
@@ -619,6 +623,7 @@ fn apparatus_master_data(
         capability_profiles: default_capability_profiles(capabilities.iter().map(String::as_str)),
         capabilities,
         color_stations,
+        training_enabled: false,
     }
 }
 
@@ -1052,6 +1057,7 @@ mod tests {
                     enabled: true,
                 }],
                 color_stations: None,
+                training_enabled: false,
             },
             "Maxsus liniya 1",
         );
@@ -1097,6 +1103,7 @@ mod tests {
                     capabilities: vec!["apparatus".to_string()],
                     capability_profiles: Vec::new(),
                     color_stations: None,
+                    training_enabled: false,
                 },
             })
             .await;
@@ -1112,6 +1119,7 @@ mod tests {
                     capabilities: vec!["hgjhjkd".to_string()],
                     capability_profiles: Vec::new(),
                     color_stations: None,
+                    training_enabled: false,
                 },
             })
             .await;
@@ -1130,6 +1138,7 @@ mod tests {
                     capabilities: vec!["print".to_string(), "pechat".to_string()],
                     capability_profiles: Vec::new(),
                     color_stations: Some(25),
+                    training_enabled: false,
                 },
             })
             .await;
