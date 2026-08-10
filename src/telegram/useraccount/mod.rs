@@ -387,14 +387,28 @@ fn api_credentials() -> Result<(i32, String), UserAccountError> {
 }
 
 async fn list_writable_groups(client: &Client) -> Result<Vec<TelegramUserGroup>, UserAccountError> {
-    let mut iter = client.iter_dialogs();
     let mut groups = Vec::new();
-    while let Some(dialog) = iter.next(client).await.map_err(map_transport)? {
-        if let Some(group) = writable_group_from_dialog(&dialog) {
-            groups.push(group);
+    for folder_id in [0, 1] {
+        let mut iter = client.iter_dialogs().folder_id(Some(folder_id));
+        while let Some(dialog) = iter.next(client).await.map_err(map_transport)? {
+            if let Some(group) = writable_group_from_dialog(&dialog) {
+                groups.push(group);
+            }
         }
     }
-    groups.sort_by(|left, right| left.title.cmp(&right.title));
+    groups.sort_by(|left, right| {
+        left.chat_type
+            .cmp(&right.chat_type)
+            .then_with(|| left.chat_id.cmp(&right.chat_id))
+    });
+    groups
+        .dedup_by(|left, right| left.chat_type == right.chat_type && left.chat_id == right.chat_id);
+    groups.sort_by(|left, right| {
+        left.title
+            .to_lowercase()
+            .cmp(&right.title.to_lowercase())
+            .then_with(|| left.chat_id.cmp(&right.chat_id))
+    });
     Ok(groups)
 }
 
@@ -404,23 +418,25 @@ async fn send_to_selected_group(
     selected_chat_type: &str,
     text: &str,
 ) -> Result<(), UserAccountError> {
-    let mut iter = client.iter_dialogs();
-    while let Some(dialog) = iter.next(client).await.map_err(map_transport)? {
-        let Some(group) = writable_group_from_dialog(&dialog) else {
-            continue;
-        };
-        if group.chat_id != selected_chat_id || group.chat_type != selected_chat_type {
-            continue;
+    for folder_id in [0, 1] {
+        let mut iter = client.iter_dialogs().folder_id(Some(folder_id));
+        while let Some(dialog) = iter.next(client).await.map_err(map_transport)? {
+            let Some(group) = writable_group_from_dialog(&dialog) else {
+                continue;
+            };
+            if group.chat_id != selected_chat_id || group.chat_type != selected_chat_type {
+                continue;
+            }
+            let peer = dialog
+                .peer()
+                .cloned()
+                .ok_or(UserAccountError::GroupNotWritable)?;
+            client
+                .send_message(peer, InputMessage::text(text))
+                .await
+                .map_err(map_transport)?;
+            return Ok(());
         }
-        let peer = dialog
-            .peer()
-            .cloned()
-            .ok_or(UserAccountError::GroupNotWritable)?;
-        client
-            .send_message(peer, InputMessage::text(text))
-            .await
-            .map_err(map_transport)?;
-        return Ok(());
     }
     Err(UserAccountError::GroupNotWritable)
 }
@@ -449,7 +465,6 @@ fn writable_group_from_dialog(dialog: &ferogram::Dialog) -> Option<TelegramUserG
                 .is_some_and(|rights| rights.post_messages);
             if !channel.megagroup()
                 || channel.raw.left
-                || channel.restricted()
                 || (!admin_can_post
                     && (banned_send_messages(channel.raw.banned_rights.as_ref())
                         || banned_send_messages(channel.raw.default_banned_rights.as_ref())))
