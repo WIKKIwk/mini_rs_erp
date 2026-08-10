@@ -9,6 +9,9 @@ use crate::core::calculate_orders::{
 };
 use crate::core::production_map::{compile_map, ProductionMapDefinition, ProductionMapSaved};
 
+#[path = "postgres_training_workspace_delete.rs"]
+mod postgres_training_workspace_delete;
+
 #[derive(Debug, Error)]
 pub enum TrainingWorkspaceError {
     #[error("store failed")]

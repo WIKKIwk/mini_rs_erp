@@ -70,6 +70,20 @@ pub async fn training_production_maps(
             let maps = store.maps().await.map_err(training_workspace_error)?;
             Ok(json_response(maps))
         }
+        Method::DELETE => {
+            let order_id = query.id.trim();
+            if order_id.is_empty() {
+                return Err(bad_request("training order id kerak"));
+            }
+            store
+                .delete_order(order_id)
+                .await
+                .map_err(training_workspace_error)?;
+            Ok(json_response(serde_json::json!({
+                "ok": true,
+                "id": order_id,
+            })))
+        }
         Method::PUT => {
             let map: ProductionMapDefinition = parse_json(&body)?;
             let saved = store
