@@ -173,12 +173,12 @@ pub(super) async fn worker_training_overlay(
     Ok(overlay)
 }
 
-pub(super) async fn training_material_assignments_for_principal(
+pub(super) async fn training_map_for_principal(
     state: &AppState,
     principal: &Principal,
     order_id: &str,
     apparatus: &str,
-) -> Result<Option<Vec<serde_json::Value>>, TrainingWorkspaceError> {
+) -> Result<Option<ProductionMapSaved>, TrainingWorkspaceError> {
     let order_id = order_id.trim();
     if !order_id.starts_with("training-") {
         return Ok(None);
@@ -197,15 +197,16 @@ pub(super) async fn training_material_assignments_for_principal(
                 !apparatus.is_empty()
                     && queue_state::apparatus_titles_match(candidate, apparatus)
             })
-        else {
+            else {
             return Err(TrainingWorkspaceError::MapNotFound);
         };
-        if !overlay.maps.iter().any(|saved| {
+        let Some(saved) = overlay.maps.iter().find(|saved| {
             saved.map.id.trim() == order_id
                 && training_map_has_apparatus(saved, active_apparatus)
-        }) {
+        }) else {
             return Err(TrainingWorkspaceError::MapNotFound);
-        }
+        };
+        Ok(Some(saved.clone()))
     } else {
         let Some(saved) = store.map(order_id).await? else {
             return Err(TrainingWorkspaceError::MapNotFound);
@@ -213,7 +214,25 @@ pub(super) async fn training_material_assignments_for_principal(
         if !apparatus.is_empty() && !training_map_has_apparatus(&saved, apparatus) {
             return Err(TrainingWorkspaceError::MapNotFound);
         }
+        Ok(Some(saved))
     }
+}
+
+pub(super) async fn training_material_assignments_for_principal(
+    state: &AppState,
+    principal: &Principal,
+    order_id: &str,
+    apparatus: &str,
+) -> Result<Option<Vec<serde_json::Value>>, TrainingWorkspaceError> {
+    let Some(_) = training_map_for_principal(state, principal, order_id, apparatus).await? else {
+        return Ok(None);
+    };
+    let store = state
+        .training_workspace
+        .as_ref()
+        .ok_or(TrainingWorkspaceError::StoreFailed)?;
+    let order_id = order_id.trim();
+    let apparatus = apparatus.trim();
     Ok(Some(
         store.raw_material_assignments(order_id, apparatus).await?,
     ))
