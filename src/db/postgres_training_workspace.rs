@@ -160,7 +160,16 @@ impl PostgresTrainingWorkspaceStore {
                 (order_id.is_empty() || row.order_id == order_id)
                     && (apparatus.is_empty() || row.apparatus.eq_ignore_ascii_case(apparatus))
             })
-            .map(|row| row.payload_json)
+            .map(|row| {
+                let mut payload = match row.payload_json {
+                    serde_json::Value::Object(object) => object,
+                    _ => serde_json::Map::new(),
+                };
+                payload.insert("order_id".to_string(), serde_json::json!(row.order_id));
+                payload.insert("apparatus".to_string(), serde_json::json!(row.apparatus));
+                payload.insert("barcode".to_string(), serde_json::json!(row.barcode));
+                serde_json::Value::Object(payload)
+            })
             .collect())
     }
 

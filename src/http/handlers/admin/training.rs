@@ -173,6 +173,107 @@ pub(super) async fn worker_training_overlay(
     Ok(overlay)
 }
 
+pub(super) async fn training_material_assignments_for_principal(
+    state: &AppState,
+    principal: &Principal,
+    order_id: &str,
+    apparatus: &str,
+) -> Result<Option<Vec<serde_json::Value>>, TrainingWorkspaceError> {
+    let order_id = order_id.trim();
+    if !order_id.starts_with("training-") {
+        return Ok(None);
+    }
+    let store = state
+        .training_workspace
+        .as_ref()
+        .ok_or(TrainingWorkspaceError::StoreFailed)?;
+    let apparatus = apparatus.trim();
+    if matches!(&principal.role, PrincipalRole::Aparatchi) {
+        let overlay = worker_training_overlay(state, principal).await?;
+        let Some(active_apparatus) = overlay
+            .active_apparatuses
+            .iter()
+            .find(|candidate| {
+                !apparatus.is_empty()
+                    && queue_state::apparatus_titles_match(candidate, apparatus)
+            })
+        else {
+            return Err(TrainingWorkspaceError::MapNotFound);
+        };
+        if !overlay.maps.iter().any(|saved| {
+            saved.map.id.trim() == order_id
+                && training_map_has_apparatus(saved, active_apparatus)
+        }) {
+            return Err(TrainingWorkspaceError::MapNotFound);
+        }
+    } else {
+        let Some(saved) = store.map(order_id).await? else {
+            return Err(TrainingWorkspaceError::MapNotFound);
+        };
+        if !apparatus.is_empty() && !training_map_has_apparatus(&saved, apparatus) {
+            return Err(TrainingWorkspaceError::MapNotFound);
+        }
+    }
+    Ok(Some(
+        store.raw_material_assignments(order_id, apparatus).await?,
+    ))
+}
+
+pub(super) async fn training_raw_material_start_requirements(
+    state: &AppState,
+    principal: &Principal,
+    order_id: &str,
+    apparatus: &str,
+    material_barcodes: &str,
+) -> Result<Option<serde_json::Value>, TrainingWorkspaceError> {
+    let Some(assignments) = training_material_assignments_for_principal(
+        state,
+        principal,
+        order_id,
+        apparatus,
+    )
+    .await?
+    else {
+        return Ok(None);
+    };
+    let assigned_barcodes = assignments
+        .iter()
+        .filter_map(|assignment| assignment.get("barcode"))
+        .filter_map(serde_json::Value::as_str)
+        .map(normalize_training_barcode)
+        .filter(|barcode| !barcode.is_empty())
+        .collect::<BTreeSet<_>>();
+    let scanned_barcodes = material_barcodes
+        .split(',')
+        .map(normalize_training_barcode)
+        .filter(|barcode| !barcode.is_empty())
+        .collect::<BTreeSet<_>>();
+    let matched_scan_count = scanned_barcodes.intersection(&assigned_barcodes).count();
+    let scan_satisfied = assigned_barcodes.is_empty()
+        || (!scanned_barcodes.is_empty()
+            && scanned_barcodes.is_subset(&assigned_barcodes)
+            && scanned_barcodes == assigned_barcodes);
+    let assigned_barcodes = assigned_barcodes.into_iter().collect::<Vec<_>>();
+    Ok(Some(serde_json::json!({
+        "policy": "state_all",
+        "requires_material": !assigned_barcodes.is_empty(),
+        "requirement_groups": [],
+        "assigned_barcodes": assigned_barcodes.clone(),
+        "staged_barcodes": assigned_barcodes.clone(),
+        "eligible_barcodes": assigned_barcodes.clone(),
+        "required_scan_count": assigned_barcodes.len(),
+        "matched_scan_count": matched_scan_count,
+        "assignments_satisfied": true,
+        "scan_satisfied": scan_satisfied,
+        "assignments": assignments.clone(),
+        "start_assignments": assignments,
+    })))
+}
+
+fn normalize_training_barcode(barcode: &str) -> String {
+    barcode.trim().to_ascii_uppercase()
+}
+
 pub(super) async fn merge_worker_training_maps(
     state: &AppState,
     principal: &Principal,

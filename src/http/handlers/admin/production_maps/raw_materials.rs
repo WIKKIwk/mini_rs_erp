@@ -59,7 +59,7 @@ pub async fn raw_material_start_requirements(
     method: Method,
     headers: HeaderMap,
 ) -> Result<Response, AdminError> {
-    authorize_any_capability(
+    let principal = authorize_any_capability(
         &state,
         &headers,
         &[
@@ -75,6 +75,19 @@ pub async fn raw_material_start_requirements(
     }
     if query.order_id.trim().is_empty() || query.apparatus.trim().is_empty() {
         return Err(bad_request("apparatus and order_id are required"));
+    }
+    if let Some(training_requirements) =
+        super::super::training::training_raw_material_start_requirements(
+            &state,
+            &principal,
+            &query.order_id,
+            &query.apparatus,
+            &query.material_barcodes,
+        )
+        .await
+        .map_err(super::super::training::training_workspace_error)?
+    {
+        return Ok(json_response(training_requirements));
     }
     let staged_barcodes = raw_material_state_barcodes_for_order_apparatus(
         &state,
@@ -226,6 +239,18 @@ pub async fn raw_material_assignments(
     .await?;
     match method {
         Method::GET => {
+            if let Some(training_assignments) =
+                super::super::training::training_material_assignments_for_principal(
+                    &state,
+                    &principal,
+                    &query.order_id,
+                    &query.apparatus,
+                )
+                .await
+                .map_err(super::super::training::training_workspace_error)?
+            {
+                return Ok(json_response(training_assignments));
+            }
             if principal.role == PrincipalRole::MaterialTaminotchi
                 && !query.apparatus.trim().is_empty()
             {
@@ -733,6 +758,18 @@ pub async fn raw_material_intake_candidates(
     let apparatus = query.apparatus.trim();
     if order_id.is_empty() || apparatus.is_empty() {
         return Err(bad_request("apparatus and order_id are required"));
+    }
+    if order_id.starts_with("training-") {
+        super::super::training::training_material_assignments_for_principal(
+            &state,
+            &principal,
+            order_id,
+            apparatus,
+        )
+        .await
+        .map_err(super::super::training::training_workspace_error)?
+        .ok_or_else(|| not_found("training_order_not_found"))?;
+        return Ok(json_response(Vec::<serde_json::Value>::new()));
     }
     if principal.role == PrincipalRole::Aparatchi {
         let assigned_apparatus = state.admin.principal_assigned_apparatus(&principal).await;
