@@ -69,6 +69,21 @@ pub(super) struct WorkerTrainingOverlay {
     pub order_customers: BTreeMap<String, String>,
 }
 
+#[derive(Default)]
+pub(super) struct TrainingQueuePrintInput {
+    pub driver_url: String,
+    pub printer: String,
+    pub print_mode: String,
+    pub print_transport: String,
+    pub progress_qty: Option<f64>,
+    pub gross_qty: Option<f64>,
+    pub finished_goods_kg: Option<f64>,
+    pub bobina_kg: Option<f64>,
+    pub uom: String,
+    pub customer_name: String,
+    pub print_count: u32,
+}
+
 pub(super) async fn worker_training_overlay(
     state: &AppState,
     principal: &Principal,
@@ -380,6 +395,7 @@ pub(super) async fn training_queue_action(
     action: queue_state::ApparatusQueueAction,
     material_barcode: &str,
     material_barcodes: &[String],
+    print_input: TrainingQueuePrintInput,
 ) -> Result<Option<serde_json::Value>, TrainingWorkspaceError> {
     let order_id = order_id.trim();
     if !order_id.starts_with("training-") {
@@ -394,11 +410,14 @@ pub(super) async fn training_queue_action(
     else {
         return Err(TrainingWorkspaceError::MapNotFound);
     };
-    if !overlay.maps.iter().any(|saved| {
-        saved.map.id.trim() == order_id && training_map_has_apparatus(saved, &apparatus)
-    }) {
-        return Err(TrainingWorkspaceError::MapNotFound);
-    }
+    let training_map = overlay
+        .maps
+        .iter()
+        .find(|saved| {
+            saved.map.id.trim() == order_id && training_map_has_apparatus(saved, &apparatus)
+        })
+        .map(|saved| saved.map.clone())
+        .ok_or(TrainingWorkspaceError::MapNotFound)?;
     let controls = overlay
         .queue_action_controls
         .get(&apparatus)
@@ -463,16 +482,43 @@ pub(super) async fn training_queue_action(
         .await?;
     state.production_maps.notify_live();
     let order_status = training_order_status(next);
+    let (progress_batch, print, prints) = if training_print_action(action) {
+        let progress_batch = training_progress_batch(
+            &training_map,
+            &apparatus,
+            order_id,
+            action,
+            principal,
+            &print_input,
+        );
+        let print_request = training_progress_print_request(
+            &progress_batch,
+            &print_input,
+        );
+        let print = training_progress_print(
+            state,
+            print_request,
+            &print_input.print_transport,
+        );
+        let prints = vec![print.clone()];
+        (Some(progress_batch), Some(print), prints)
+    } else {
+        (None, None, Vec::new())
+    };
+    let progress_batches = progress_batch
+        .clone()
+        .map(|batch| vec![batch])
+        .unwrap_or_default();
     Ok(Some(serde_json::json!({
         "ok": true,
         "states": states,
         "order_status": order_status,
         "session": null,
         "progress_event": null,
-        "progress_batch": null,
-        "progress_batches": [],
-        "print": null,
-        "prints": [],
+        "progress_batch": progress_batch,
+        "progress_batches": progress_batches,
+        "print": print,
+        "prints": prints,
     })))
 }
 
@@ -481,6 +527,205 @@ fn training_map_has_apparatus(saved: &ProductionMapSaved, apparatus: &str) -> bo
         node.kind == ProductionMapNodeKind::Apparatus
             && queue_state::apparatus_titles_match(&node.title, apparatus)
     })
+}
+
+fn training_print_action(action: queue_state::ApparatusQueueAction) -> bool {
+    matches!(
+        action,
+        queue_state::ApparatusQueueAction::Pause
+            | queue_state::ApparatusQueueAction::DetachRoll
+            | queue_state::ApparatusQueueAction::RollComplete
+            | queue_state::ApparatusQueueAction::Complete
+    )
+}
+
+fn training_action_label(action: queue_state::ApparatusQueueAction) -> &'static str {
+    match action {
+        queue_state::ApparatusQueueAction::Pause => "pauza",
+        queue_state::ApparatusQueueAction::DetachRoll => "rulon yechildi",
+        queue_state::ApparatusQueueAction::RollComplete => "rulon tugatildi",
+        queue_state::ApparatusQueueAction::Complete => "ish tugatildi",
+        queue_state::ApparatusQueueAction::Start => "ish boshlandi",
+        queue_state::ApparatusQueueAction::Resume => "ish davom etdi",
+    }
+}
+
+fn training_positive_quantity(value: Option<f64>, fallback: f64) -> f64 {
+    value
+        .filter(|value| value.is_finite() && *value > 0.0)
+        .unwrap_or(fallback)
+}
+
+fn training_progress_batch(
+    map: &ProductionMapDefinition,
+    apparatus: &str,
+    order_id: &str,
+    action: queue_state::ApparatusQueueAction,
+    principal: &Principal,
+    input: &TrainingQueuePrintInput,
+) -> serde_json::Value {
+    let stamp = unix_micros();
+    let batch_id = format!("training-progress-batch-{stamp}");
+    let qr_payload = format!("TRAINING-PROGRESS:{stamp}");
+    let item_code = if map.product_code.trim().is_empty() {
+        if map.order_number.trim().is_empty() {
+            order_id.trim().to_string()
+        } else {
+            map.order_number.trim().to_string()
+        }
+    } else {
+        map.product_code.trim().to_string()
+    };
+    let title = if map.title.trim().is_empty() {
+        item_code.clone()
+    } else {
+        map.title.trim().to_string()
+    };
+    let executor_name = if principal.display_name.trim().is_empty() {
+        principal.ref_.trim().to_string()
+    } else {
+        principal.display_name.trim().to_string()
+    };
+    let uom = if input.uom.trim().is_empty() {
+        "m"
+    } else {
+        input.uom.trim()
+    };
+    let produced_qty = training_positive_quantity(
+        input.progress_qty,
+        training_positive_quantity(input.finished_goods_kg, 1.0),
+    );
+    let gross_qty = training_positive_quantity(
+        input.gross_qty.or(input.finished_goods_kg),
+        produced_qty,
+    );
+    let timestamp = (stamp / 1_000_000) as i64;
+    serde_json::json!({
+        "batch_id": batch_id,
+        "revision": 1,
+        "session_id": format!("training-session-{stamp}"),
+        "started_at_unix": timestamp,
+        "completed_at_unix": timestamp,
+        "apparatus": apparatus.trim(),
+        "order_id": order_id.trim(),
+        "action": match action {
+            queue_state::ApparatusQueueAction::Pause => "pause",
+            queue_state::ApparatusQueueAction::DetachRoll => "detach_roll",
+            queue_state::ApparatusQueueAction::RollComplete => "roll_complete",
+            queue_state::ApparatusQueueAction::Complete => "complete",
+            queue_state::ApparatusQueueAction::Start => "start",
+            queue_state::ApparatusQueueAction::Resume => "resume",
+        },
+        "status": match action {
+            queue_state::ApparatusQueueAction::Pause => "paused",
+            queue_state::ApparatusQueueAction::DetachRoll => "roll_detached",
+            _ => "completed",
+        },
+        "produced_qty": produced_qty,
+        "uom": uom,
+        "qr_payload": qr_payload,
+        "label_item_code": item_code,
+        "label_item_name": format!(
+            "{title}, apparat: {}, {}",
+            apparatus.trim(),
+            training_action_label(action),
+        ),
+        "executor_name": executor_name,
+        "worker_role": "training",
+        "worker_ref": principal.ref_.trim(),
+        "worker_display_name": principal.display_name.trim(),
+        "wip_status": "waiting",
+        "current_apparatus": apparatus.trim(),
+        "current_apparatus_key": apparatus.trim().to_ascii_lowercase(),
+        "current_location": apparatus.trim(),
+        "return_ink_kg": serde_json::Value::Null,
+        "finished_goods_kg": gross_qty,
+        "bobina_kg": input.bobina_kg,
+        "description": "Training progress",
+        "payload_json": {
+            "training": true,
+            "action_label": training_action_label(action),
+        },
+    })
+}
+
+fn training_progress_print_request(
+    batch: &serde_json::Value,
+    input: &TrainingQueuePrintInput,
+) -> crate::core::gscale::models::ProgressLabelPrintRequest {
+    let number = |key: &str| batch.get(key).and_then(serde_json::Value::as_f64);
+    crate::core::gscale::models::ProgressLabelPrintRequest {
+        driver_url: input.driver_url.clone(),
+        qr_payload: batch
+            .get("qr_payload")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or_default()
+            .to_string(),
+        item_code: batch
+            .get("label_item_code")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or_default()
+            .to_string(),
+        item_name: batch
+            .get("label_item_name")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or_default()
+            .to_string(),
+        apparatus: batch
+            .get("apparatus")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or_default()
+            .to_string(),
+        customer_name: input.customer_name.trim().to_string(),
+        executor_name: batch
+            .get("executor_name")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or_default()
+            .to_string(),
+        printer: input.printer.clone(),
+        print_mode: input.print_mode.clone(),
+        gross_qty: number("finished_goods_kg")
+            .or_else(|| number("produced_qty"))
+            .unwrap_or(1.0),
+        tare_enabled: input.bobina_kg.is_some_and(|value| value > 0.0),
+        tare_kg: input.bobina_kg.unwrap_or(0.0),
+        progress_qty: number("produced_qty").unwrap_or(1.0),
+        unit: "kg".to_string(),
+        progress_unit: batch
+            .get("uom")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or("m")
+            .to_string(),
+        label_kind: "progress".to_string(),
+        print_count: input.print_count,
+    }
+}
+
+fn training_progress_print(
+    state: &AppState,
+    request: crate::core::gscale::models::ProgressLabelPrintRequest,
+    print_transport: &str,
+) -> serde_json::Value {
+    let prepared = state.gscale.prepare_progress_label(request.clone());
+    let Ok(mut response) = prepared else {
+        return serde_json::json!({
+            "ok": false,
+            "status": "failed",
+            "code": "training_print_failed",
+            "error": "training_progress_label_prepare_failed",
+        });
+    };
+    if !print_transport.trim().eq_ignore_ascii_case("offline") {
+        response.status = "queued".to_string();
+        response.printer_status = "server_print_queued".to_string();
+        let gscale = state.gscale.clone();
+        tokio::spawn(async move {
+            if let Err(error) = gscale.print_progress_label(request).await {
+                tracing::warn!(error = %error, "training progress label print failed");
+            }
+        });
+    }
+    serde_json::to_value(response).unwrap_or(serde_json::Value::Null)
 }
 
 fn is_training_apparatus(apparatus: &str, active_apparatuses: &[String]) -> bool {

@@ -142,6 +142,23 @@ pub async fn production_map_queue_action(
         input.action,
         &input.material_barcode,
         &input.material_barcodes,
+        super::super::training::TrainingQueuePrintInput {
+            driver_url: input.driver_url.clone(),
+            printer: input.printer.clone(),
+            print_mode: input.print_mode.clone(),
+            print_transport: input.print_transport.clone(),
+            progress_qty: input.produced_qty.or(input.qty),
+            gross_qty: input.gross_qty,
+            finished_goods_kg: input.finished_goods_kg,
+            bobina_kg: input.bobina_kg,
+            uom: if input.uom.trim().is_empty() {
+                input.unit.clone()
+            } else {
+                input.uom.clone()
+            },
+            customer_name: input.customer_name.clone(),
+            print_count: input.print_count,
+        },
     )
     .await
     .map_err(super::super::training::training_workspace_error)?
