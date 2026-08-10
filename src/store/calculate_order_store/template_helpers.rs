@@ -144,7 +144,7 @@ fn quick_template_key(template: &CalculateOrderTemplate) -> String {
         number_key(template.frame_count),
         number_key(template.edge_allowance_mm),
         number_key(template.waste_percent),
-        option_number_key(template.roll_count),
+        option_integer_key(template.roll_count),
     ];
     for layer in template.effective_layers() {
         parts.push(normalize_key(&layer.material));
@@ -171,6 +171,6 @@ fn number_key(value: f64) -> String {
     }
 }
 
-fn option_number_key(value: Option<f64>) -> String {
-    value.map(number_key).unwrap_or_default()
+fn option_integer_key(value: Option<i64>) -> String {
+    value.map(|value| value.to_string()).unwrap_or_default()
 }

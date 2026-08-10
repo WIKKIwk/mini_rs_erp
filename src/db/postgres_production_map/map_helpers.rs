@@ -24,15 +24,15 @@ pub(super) async fn put_map_inner_tx(
     map: &ProductionMapDefinition,
 ) -> Result<(), ProductionMapError> {
     let mut stored_map = map.clone();
-    stored_map.roll_count = map.roll_count.and_then(positive_erp_quantity);
+    stored_map.roll_count = map.roll_count.filter(|value| *value > 0);
     stored_map.width_mm = map.width_mm.and_then(positive_erp_quantity);
     let payload = serde_json::to_value(&stored_map).map_err(|_| ProductionMapError::StoreFailed)?;
     sqlx::query(
         "INSERT INTO mini_production_maps
             (id, product_code, title, code, order_number, roll_count, width_mm, map_json, updated_at)
          VALUES ($1, $2, $3, $4, $5,
-                 ($6::double precision)::numeric(24,9),
-                 ($7::double precision)::numeric(24,9), $8, now())
+                 $6::bigint,
+                 ($7::double precision)::numeric(18,6), $8, now())
          ON CONFLICT (id) DO UPDATE SET
             product_code = excluded.product_code,
             title = excluded.title,

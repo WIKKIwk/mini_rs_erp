@@ -40,8 +40,8 @@ async fn postgres_mini_order_sink_saves_order_and_product_rows() {
         "INSERT INTO mini_production_maps
             (id, product_code, title, code, order_number, roll_count, width_mm, map_json)
          VALUES ($1, $2, $3, $4, $5,
-                 ($6::double precision)::numeric(24,9),
-                 ($7::double precision)::numeric(24,9), $8)",
+                 $6::bigint,
+                 ($7::double precision)::numeric(18,6), $8)",
     )
     .bind(&map.id)
     .bind(&map.product_code)
@@ -97,12 +97,12 @@ async fn postgres_mini_order_sink_saves_order_and_product_rows() {
     assert_eq!(order_count, 1);
     assert_eq!(product_count, 1);
     assert_eq!(linked_order_id.as_deref(), Some("zakaz-9001"));
-    assert_eq!(migration_count, 4);
+    assert_eq!(migration_count, 51);
     assert_eq!(order_status, "draft");
     assert_eq!(product_form, "rulon");
-    assert_eq!(kg, "500.123456789");
-    assert_eq!(width_mm, "650.000030000");
-    assert_eq!(roll_count, "7.000000123");
+    assert_eq!(kg, "500.123457");
+    assert_eq!(width_mm, "650.000030");
+    assert_eq!(roll_count, "7");
 
     pool.close().await;
     let admin_pool = sqlx::PgPool::connect(&admin_url)
@@ -125,7 +125,7 @@ fn test_map() -> ProductionMapDefinition {
         code: "9001".to_string(),
         order_number: "9001".to_string(),
         customer_name: String::new(),
-        roll_count: Some(7.000000123),
+        roll_count: Some(7),
         width_mm: Some(650.00003),
         order_kg: None,
         base_length: None,
@@ -186,7 +186,7 @@ fn test_template() -> CalculateOrderTemplate {
         edge_allowance_mm: 15.0,
         width_mm: 650.00003,
         waste_percent: 5.0,
-        roll_count: Some(7.000000123),
+        roll_count: Some(7),
         layers: Vec::new(),
         first_layer_material: "pet".to_string(),
         first_layer_micron: "12".to_string(),

@@ -77,7 +77,7 @@ async fn upsert_raw_material_stock_tx(
              source_receipt_id, payload_json
          )
          VALUES ($1, $2, $3, $4, $5,
-                 ($6::double precision)::numeric(24,9), $7, 'available', $8, $9)
+                 ($6::double precision)::numeric(18,6), $7, 'available', $8, $9)
          ON CONFLICT (barcode) DO UPDATE SET
            warehouse = excluded.warehouse,
            item_code = excluded.item_code,

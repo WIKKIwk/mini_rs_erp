@@ -1,16 +1,23 @@
-pub const ERP_QUANTITY_DECIMAL_PLACES: u32 = 9;
+pub const ERP_QUANTITY_DECIMAL_PLACES: u32 = 6;
 
-const ERP_QUANTITY_FACTOR: f64 = 1_000_000_000.0;
+pub const ERP_QUANTITY_FACTOR: i64 = 1_000_000;
+
+const ERP_QUANTITY_INTEGER_LIMIT: f64 = 1_000_000_000_000.0;
+
+pub fn erp_quantity_to_units(value: f64) -> Option<i64> {
+    if !value.is_finite() || value.abs() >= ERP_QUANTITY_INTEGER_LIMIT {
+        return None;
+    }
+    let scaled = value * ERP_QUANTITY_FACTOR as f64;
+    Some(scaled.round() as i64)
+}
+
+pub fn erp_quantity_from_units(units: i64) -> f64 {
+    units as f64 / ERP_QUANTITY_FACTOR as f64
+}
 
 pub fn normalize_erp_quantity(value: f64) -> Option<f64> {
-    if !value.is_finite() {
-        return None;
-    }
-    let scaled = value * ERP_QUANTITY_FACTOR;
-    if !scaled.is_finite() {
-        return None;
-    }
-    Some(scaled.round() / ERP_QUANTITY_FACTOR)
+    erp_quantity_to_units(value).map(erp_quantity_from_units)
 }
 
 pub fn positive_erp_quantity(value: f64) -> Option<f64> {
@@ -24,6 +31,7 @@ mod tests {
     #[test]
     fn keeps_sub_milligram_inventory_precision() {
         assert_eq!(normalize_erp_quantity(13.00003), Some(13.00003));
+        assert_eq!(erp_quantity_to_units(13.00003), Some(13_000_030));
     }
 
     #[test]
@@ -35,6 +43,13 @@ mod tests {
     fn rejects_non_finite_values_and_positive_values_rounded_to_zero() {
         assert_eq!(normalize_erp_quantity(f64::NAN), None);
         assert_eq!(normalize_erp_quantity(f64::INFINITY), None);
-        assert_eq!(positive_erp_quantity(0.0000000001), None);
+        assert_eq!(positive_erp_quantity(0.0000001), None);
+        assert_eq!(erp_quantity_to_units(f64::MAX), None);
+        assert_eq!(erp_quantity_to_units(1_000_000_000_000.0), None);
+    }
+
+    #[test]
+    fn rounds_to_the_database_scale() {
+        assert_eq!(normalize_erp_quantity(1.234_567_8), Some(1.234_568));
     }
 }

@@ -39,7 +39,7 @@ async fn laminatsiya_complete_requires_or_persists_completion_metrics() {
                 "Laminatsiya complete order",
                 "9323",
                 "Laminatsiya 1",
-                2.0,
+                2,
                 950.0,
             ),
         ))
@@ -176,7 +176,7 @@ async fn finished_goods_stays_free_wip_until_assigned_warehouse_accepts() {
                 "Finished goods receipt order",
                 "9407",
                 "Laminatsiya 1",
-                2.0,
+                2,
                 950.0,
             ),
         ))
@@ -392,7 +392,7 @@ async fn laminatsiya_complete_keeps_state_successful_when_progress_print_fails()
                 "Laminatsiya print fail",
                 "9328",
                 "Laminatsiya 1",
-                2.0,
+                2,
                 950.0,
             ),
         ))
@@ -489,7 +489,7 @@ async fn laminatsiya_pause_does_not_persist_leftover_or_order_waste_metrics() {
                 "Laminatsiya pause order",
                 "9324",
                 "Laminatsiya 2",
-                2.0,
+                2,
                 950.0,
             ),
         ))

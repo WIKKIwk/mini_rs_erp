@@ -23,7 +23,7 @@ impl MaterialReceiptStorePort for PostgresGscaleReceiptStore {
                  name, status, item_code, warehouse, qty, uom, barcode, payload_json
              )
              VALUES ($1, 'draft', $2, $3,
-                     ($4::double precision)::numeric(24,9), 'kg', $5, $6)
+                     ($4::double precision)::numeric(18,6), 'kg', $5, $6)
              ON CONFLICT (barcode) DO UPDATE SET
                name = excluded.name,
                status = 'draft',
@@ -225,11 +225,11 @@ impl MaterialReceiptStorePort for PostgresGscaleReceiptStore {
             "UPDATE mini_raw_material_stock
              SET item_code = $2,
                  item_name = $3,
-                 qty = ($4::double precision)::numeric(24,9),
+                 qty = ($4::double precision)::numeric(18,6),
                  payload_json = payload_json || jsonb_build_object(
                      'item_code', $2::text,
                      'item_name', $3::text,
-                     'qty', ($4::double precision)::numeric(24,9),
+                     'qty', ($4::double precision)::numeric(18,6),
                      'corrected_by_role', $5::text,
                      'corrected_by_ref', $6::text,
                      'corrected_by_display_name', $7::text,
@@ -255,11 +255,11 @@ impl MaterialReceiptStorePort for PostgresGscaleReceiptStore {
         sqlx::query(
             "UPDATE mini_gscale_receipts
              SET item_code = $2,
-                 qty = ($3::double precision)::numeric(24,9),
+                 qty = ($3::double precision)::numeric(18,6),
                  payload_json = payload_json || jsonb_build_object(
                      'item_code', $2::text,
                      'item_name', $4::text,
-                     'qty', ($3::double precision)::numeric(24,9),
+                     'qty', ($3::double precision)::numeric(18,6),
                      'corrected_by_role', $5::text,
                      'corrected_by_ref', $6::text,
                      'corrected_by_display_name', $7::text,

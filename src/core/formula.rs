@@ -38,7 +38,7 @@ pub struct CalculateRequest {
     #[serde(default)]
     pub waste_percent: Option<f64>,
     #[serde(default)]
-    pub roll_count: Option<f64>,
+    pub roll_count: Option<i64>,
     #[serde(default)]
     pub layers: Vec<LayerInput>,
     #[serde(default)]
@@ -121,7 +121,7 @@ pub struct CalculateResponse {
     pub min_mold_size_mm: f64,
     pub rubber_size_mm: u32,
     pub waste_percent: f64,
-    pub roll_count: Option<f64>,
+    pub roll_count: Option<i64>,
     pub layers: Vec<LayerInput>,
     pub results: Vec<CalcResult>,
     pub note: Option<String>,

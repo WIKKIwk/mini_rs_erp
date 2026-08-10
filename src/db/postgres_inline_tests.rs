@@ -183,6 +183,53 @@ mod tests {
     }
 
     #[test]
+    fn quantity_precision_migration_enforces_one_operational_scale() {
+        let migration = POSTGRES_MIGRATIONS
+            .iter()
+            .find(|(version, _)| *version == "0051_quantity_precision")
+            .map(|(_, sql)| sql.to_lowercase())
+            .expect("quantity precision migration");
+        let compact = migration.replace(char::is_whitespace, "");
+
+        for table in [
+            "mini_gscale_receipts",
+            "mini_raw_material_stock",
+            "mini_finished_goods_stock",
+            "mini_raw_material_events",
+            "mini_orders",
+            "mini_production_maps",
+            "mini_order_progress_events",
+            "mini_progress_batches",
+            "mini_inventory_transfer_lines",
+            "mini_inventory_movement_events",
+            "mini_laminatsiya_astatka_reports",
+            "mini_rezka_astatka_reports",
+        ] {
+            assert!(
+                compact.contains(&format!("altertable{table}")),
+                "quantity migration does not cover {table}"
+            );
+        }
+        assert!(compact.contains("altercolumnqtytypenumeric(18,6)"));
+        assert!(compact.contains("altercolumnroll_counttypeinteger"));
+        assert!(compact.contains("mini_inventory_transfer_lines_dona_integer"));
+        assert!(compact.contains("mini_inventory_movement_events_dona_integer"));
+        assert!(!compact.contains("numeric(18,3)"));
+        assert!(!compact.contains("numeric(24,9)"));
+    }
+
+    #[test]
+    fn inventory_transfer_flow_keeps_quantities_as_exact_micro_units() {
+        let source = include_str!("postgres_inventory_movements.rs");
+
+        assert!(source.contains("(stock.qty * 1000000)::bigint AS qty_units"));
+        assert!(source.contains("asset.qty_units != line.qty_units"));
+        assert!(source.contains("($11::bigint::numeric / 1000000)::numeric(18,6)"));
+        assert!(!source.contains("qty::float8 AS qty"));
+        assert!(!source.contains("numeric(18,3)"));
+    }
+
+    #[test]
     fn apparatus_capacity_migration_is_registered_with_the_runner() {
         let migration = POSTGRES_MIGRATIONS
             .iter()
@@ -209,9 +256,10 @@ mod tests {
             .expect("apparatus schedule paused status migration");
 
         assert!(migration.contains("drop constraint if exists"));
-        assert!(migration.contains(
-            "status in ('planned', 'active', 'paused', 'completed', 'cancelled')"
-        ));
+        assert!(
+            migration
+                .contains("status in ('planned', 'active', 'paused', 'completed', 'cancelled')")
+        );
     }
 
     #[test]

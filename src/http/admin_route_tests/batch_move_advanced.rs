@@ -125,7 +125,7 @@ async fn production_map_batch_move_is_all_or_nothing() {
                     &format!("Batch {number}"),
                     number,
                     "7 ta rangli pechat",
-                    7.0,
+                    7,
                     650.0,
                 ),
             ))
@@ -205,7 +205,7 @@ async fn production_map_batch_move_stress_moves_many_orders_atomically() {
                     &format!("Stress {number}"),
                     &number,
                     "7 ta rangli pechat",
-                    7.0,
+                    7,
                     650.0,
                 ),
             ))
@@ -257,8 +257,12 @@ async fn paused_order_transfer_route_moves_state_and_is_idempotent() {
         .await
         .expect("assignment");
     let admin_token = session(&state, PrincipalRole::Admin).await;
-    let worker_token =
-        session_for(&state, PrincipalRole::Aparatchi, "worker-apparatus-transfer").await;
+    let worker_token = session_for(
+        &state,
+        PrincipalRole::Aparatchi,
+        "worker-apparatus-transfer",
+    )
+    .await;
     let router = build_router(state);
     let order_id = "zakaz-apparatus-transfer-route";
 
@@ -273,7 +277,7 @@ async fn paused_order_transfer_route_moves_state_and_is_idempotent() {
                 "Apparatus transfer route",
                 "7601",
                 "7 ta rangli pechat",
-                7.0,
+                7,
                 650.0,
             ),
         ))
@@ -288,9 +292,7 @@ async fn paused_order_transfer_route_moves_state_and_is_idempotent() {
             "PUT",
             "/v1/mobile/admin/production-maps/sequence",
             &admin_token,
-            &format!(
-                r#"{{"apparatus":"7 ta rangli pechat","order_ids":["{order_id}"]}}"#
-            ),
+            &format!(r#"{{"apparatus":"7 ta rangli pechat","order_ids":["{order_id}"]}}"#),
         ))
         .await
         .expect("save sequence");
@@ -326,7 +328,10 @@ async fn paused_order_transfer_route_moves_state_and_is_idempotent() {
         .await
         .expect("normal move");
     assert_eq!(normal_move.status(), StatusCode::CONFLICT);
-    assert_eq!(json_body(normal_move).await["error"], "started_order_move_requires_transfer");
+    assert_eq!(
+        json_body(normal_move).await["error"],
+        "started_order_move_requires_transfer"
+    );
 
     let paused = router
         .clone()

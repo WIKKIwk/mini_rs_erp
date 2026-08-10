@@ -224,7 +224,7 @@ async fn raw_material_assignment_checks_rulon_size_for_pechat_orders() {
                 "Rulon size",
                 "8813",
                 "7 ta rangli pechat - A",
-                7.0,
+                7,
                 985.0,
             ),
         ))
@@ -357,7 +357,7 @@ async fn raw_material_assignment_limits_laminatsiya_roll_width_to_thirty_mm() {
                 "Laminatsiya rulon size",
                 "8817",
                 "Laminatsiya - A",
-                7.0,
+                7,
                 660.0,
             ),
         ))
@@ -477,7 +477,7 @@ async fn material_taminotchi_raw_material_assignment_allows_child_group_from_ass
                 "Rulon parent scope",
                 "8821",
                 "7 ta rangli pechat - A",
-                7.0,
+                7,
                 985.0,
             ),
         ))

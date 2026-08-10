@@ -697,11 +697,13 @@ State ownership rules:
 
 ### Data precision and integrity
 
-- persisted ERP measurements use exact PostgreSQL `NUMERIC(24,9)`, not binary
+- persisted operational ERP measurements use exact PostgreSQL `NUMERIC(18,6)`, not binary
   floating-point columns; for example, `13.00003` is stored as
-  `13.000030000` without being rounded to three decimal places;
+  `13.000030` without being rounded to three decimal places;
 - HTTP/domain quantities remain backward-compatible numbers, but are validated
-  as finite and normalized to nine fractional digits before persistence;
+  as finite and normalized to six fractional digits before persistence;
+- physical counts such as `roll_count`, Qolip quantity, and paddon sequence
+  values are integers; `dona` quantities are database-constrained to whole numbers;
 - display formatting may hide trailing zeroes, but must never round and write a
   formatted value back over the stored quantity;
 - order lifecycle (`draft`, `ready`, `in_progress`, `completed`, `cancelled`)

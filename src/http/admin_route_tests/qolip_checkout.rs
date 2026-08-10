@@ -145,7 +145,7 @@ async fn bosma_queue_start_requires_qolip_scan_even_without_product_spec() {
                 "ITEM-QOLIP-REQUIRED",
                 "9900",
                 "8 ta rangli bosma aparat",
-                8.0,
+                8,
                 900.0,
             ),
         ))
@@ -201,7 +201,7 @@ async fn pechat_queue_start_requires_matching_qolip_code_scan() {
                 "ITEM-QOLIP",
                 "9901",
                 "7 ta rangli pechat - A",
-                7.0,
+                7,
                 1250.0,
             ),
         ))
@@ -516,17 +516,12 @@ async fn catalog_qolip_starts_without_checkout_and_is_locked_by_active_order() {
     let router = build_router(state);
 
     for (order_id, order_number, apparatus, color_count) in [
-        (
-            "zakaz-shared-qolip-a",
-            "9911",
-            "7 ta rangli pechat - A",
-            7.0,
-        ),
+        ("zakaz-shared-qolip-a", "9911", "7 ta rangli pechat - A", 7),
         (
             "zakaz-shared-qolip-b",
             "9912",
             "8 ta rangli bosma aparat",
-            8.0,
+            8,
         ),
     ] {
         let response = router
@@ -727,7 +722,7 @@ async fn failed_queue_commit_does_not_checkout_qolip() {
                 "ITEM-QOLIP-ATOMIC",
                 "9902",
                 "9 ta rangli pechat - A",
-                9.0,
+                9,
                 1250.0,
             ),
         ))

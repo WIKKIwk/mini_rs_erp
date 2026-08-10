@@ -39,7 +39,7 @@ async fn laminatsiya_complete_with_both_leftovers_stays_in_history() {
                 "Laminatsiya notice order",
                 "9325",
                 "Laminatsiya 1",
-                2.0,
+                2,
                 950.0,
             ),
         ))
@@ -100,10 +100,12 @@ async fn laminatsiya_complete_with_both_leftovers_stays_in_history() {
     let requests_status = requests.status();
     let requests_body = json_body(requests).await;
     assert_eq!(requests_status, StatusCode::OK, "{requests_body:?}");
-    assert!(requests_body["completion_requests"]
-        .as_array()
-        .expect("completion_requests")
-        .is_empty());
+    assert!(
+        requests_body["completion_requests"]
+            .as_array()
+            .expect("completion_requests")
+            .is_empty()
+    );
 
     let history = router
         .oneshot(request(

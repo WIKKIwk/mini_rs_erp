@@ -88,19 +88,19 @@ pub(super) async fn put_order_progress_event_tx(
             payload_json, created_at
          )
          VALUES ($1, $2, $3, $4, $5, $6,
-                 ($7::double precision)::numeric(24,9),
+                 ($7::double precision)::numeric(18,6),
                  $8, $9, $10, $11, $12,
-                 ($13::double precision)::numeric(24,9),
-                 ($14::double precision)::numeric(24,9),
-                 ($15::double precision)::numeric(24,9),
-                 ($16::double precision)::numeric(24,9),
-                 ($17::double precision)::numeric(24,9),
-                 ($18::double precision)::numeric(24,9),
-                 ($19::double precision)::numeric(24,9),
-                 ($20::double precision)::numeric(24,9),
-                 ($21::double precision)::numeric(24,9),
-                 ($22::double precision)::numeric(24,9),
-                 ($23::double precision)::numeric(24,9),
+                 ($13::double precision)::numeric(18,6),
+                 ($14::double precision)::numeric(18,6),
+                 ($15::double precision)::numeric(18,6),
+                 ($16::double precision)::numeric(18,6),
+                 ($17::double precision)::numeric(18,6),
+                 ($18::double precision)::numeric(18,6),
+                 ($19::double precision)::numeric(18,6),
+                 ($20::double precision)::numeric(18,6),
+                 ($21::double precision)::numeric(18,6),
+                 ($22::double precision)::numeric(18,6),
+                 ($23::double precision)::numeric(18,6),
                  $24, $25, now())
          ON CONFLICT (event_id) DO UPDATE SET
             session_id = excluded.session_id,
@@ -200,20 +200,20 @@ pub(super) async fn put_order_progress_batch_tx(
             payload_json, created_at, updated_at
          )
          VALUES ($1, $2, $3, $4, $5, $6,
-                 ($7::double precision)::numeric(24,9),
+                 ($7::double precision)::numeric(18,6),
                  $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18,
                  $19, $20, $21, $22, $23, $24, $25,
-                 ($26::double precision)::numeric(24,9),
-                 ($27::double precision)::numeric(24,9),
-                 ($28::double precision)::numeric(24,9),
-                 ($29::double precision)::numeric(24,9),
-                 ($30::double precision)::numeric(24,9),
-                 ($31::double precision)::numeric(24,9),
-                 ($32::double precision)::numeric(24,9),
-                 ($33::double precision)::numeric(24,9),
-                 ($34::double precision)::numeric(24,9),
-                 ($35::double precision)::numeric(24,9),
-                 ($36::double precision)::numeric(24,9),
+                 ($26::double precision)::numeric(18,6),
+                 ($27::double precision)::numeric(18,6),
+                 ($28::double precision)::numeric(18,6),
+                 ($29::double precision)::numeric(18,6),
+                 ($30::double precision)::numeric(18,6),
+                 ($31::double precision)::numeric(18,6),
+                 ($32::double precision)::numeric(18,6),
+                 ($33::double precision)::numeric(18,6),
+                 ($34::double precision)::numeric(18,6),
+                 ($35::double precision)::numeric(18,6),
+                 ($36::double precision)::numeric(18,6),
                  $37, $38, now(), now())
          ON CONFLICT (batch_id) DO UPDATE SET
             session_id = excluded.session_id,
@@ -326,19 +326,19 @@ pub(super) async fn correct_progress_batch(
         .map_err(|_| ProductionMapError::StoreFailed)?;
     let result = sqlx::query(
         "UPDATE mini_progress_batches SET
-            produced_qty = ($1::double precision)::numeric(24,9),
+            produced_qty = ($1::double precision)::numeric(18,6),
             uom = $2,
-            return_ink_kg = ($3::double precision)::numeric(24,9),
-            lamination_print_leftover_rolls = ($4::double precision)::numeric(24,9),
-            lamination_film_leftover_rolls = ($5::double precision)::numeric(24,9),
-            rezka_bosma_waste = ($6::double precision)::numeric(24,9),
-            rezka_lamination_waste = ($7::double precision)::numeric(24,9),
-            rezka_edge_waste = ($8::double precision)::numeric(24,9),
-            total_waste = ($9::double precision)::numeric(24,9),
-            finished_goods_kg = ($10::double precision)::numeric(24,9),
-            bobina_kg = ($11::double precision)::numeric(24,9),
-            finished_goods_meter = ($12::double precision)::numeric(24,9),
-            diameter = ($13::double precision)::numeric(24,9),
+            return_ink_kg = ($3::double precision)::numeric(18,6),
+            lamination_print_leftover_rolls = ($4::double precision)::numeric(18,6),
+            lamination_film_leftover_rolls = ($5::double precision)::numeric(18,6),
+            rezka_bosma_waste = ($6::double precision)::numeric(18,6),
+            rezka_lamination_waste = ($7::double precision)::numeric(18,6),
+            rezka_edge_waste = ($8::double precision)::numeric(18,6),
+            total_waste = ($9::double precision)::numeric(18,6),
+            finished_goods_kg = ($10::double precision)::numeric(18,6),
+            bobina_kg = ($11::double precision)::numeric(18,6),
+            finished_goods_meter = ($12::double precision)::numeric(18,6),
+            diameter = ($13::double precision)::numeric(18,6),
             description = $14,
             payload_json = $15,
             revision = revision + 1,
@@ -433,9 +433,7 @@ pub(super) async fn correct_progress_batch(
         .map_err(|_| ProductionMapError::StoreFailed)?;
         return Err(match state {
             None => ProductionMapError::ProgressBatchNotFound,
-            Some((_, _, false)) => {
-                ProductionMapError::ProgressBatchCorrectionForbidden
-            }
+            Some((_, _, false)) => ProductionMapError::ProgressBatchCorrectionForbidden,
             Some((_, wip_status, true)) if wip_status != "waiting" => {
                 ProductionMapError::ProgressBatchCorrectionLocked
             }
@@ -526,7 +524,7 @@ pub(super) async fn receive_finished_goods_batch_tx(
              id, warehouse, order_id, item_code, item_name, qty, uom, status, payload_json
          )
          VALUES ($1, $2, $3, $4, $5,
-                 ($6::double precision)::numeric(24,9), $7, $8, $9)
+                 ($6::double precision)::numeric(18,6), $7, $8, $9)
          ON CONFLICT (id) DO UPDATE SET
            warehouse = excluded.warehouse,
            order_id = excluded.order_id,

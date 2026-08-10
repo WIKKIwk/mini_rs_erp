@@ -184,17 +184,15 @@ async fn production_map_save_allocates_order_number_for_direct_and_atomic_saves(
 async fn production_map_save_with_order_snapshots_rezka_frame_count_on_new_order() {
     let state = test_state();
     let token = session(&state, PrincipalRole::Admin).await;
-    let map: serde_json::Value = serde_json::from_str(
-        &production_order_map_json_with_product(
-            "zakaz-7799",
-            "Rezka snapshot order",
-            "REZKA-7799",
-            "7799",
-            "Rezka",
-            7.0,
-            1250.0,
-        ),
-    )
+    let map: serde_json::Value = serde_json::from_str(&production_order_map_json_with_product(
+        "zakaz-7799",
+        "Rezka snapshot order",
+        "REZKA-7799",
+        "7799",
+        "Rezka",
+        7,
+        1250.0,
+    ))
     .expect("map json");
     let template = serde_json::json!({
         "name": "rezka snapshot mahsulot",
@@ -334,7 +332,7 @@ async fn production_map_save_with_order_recalculates_map_fields_from_template() 
             "frame_product_size_mm": 635.0,
             "frame_count": 1.0,
             "waste_percent": 5.0,
-            "roll_count": 7.0,
+            "roll_count": 7,
             "first_layer_material": "pet",
             "first_layer_micron": "12",
             "second_layer_material": "pe oq",

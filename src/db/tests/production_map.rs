@@ -377,7 +377,7 @@ fn test_map(id: &str, order_number: &str, product_code: &str) -> ProductionMapDe
         code: order_number.to_string(),
         order_number: order_number.to_string(),
         customer_name: String::new(),
-        roll_count: Some(7.0),
+        roll_count: Some(7),
         width_mm: Some(650.0),
         order_kg: None,
         base_length: None,

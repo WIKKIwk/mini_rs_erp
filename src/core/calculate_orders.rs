@@ -51,7 +51,7 @@ pub struct CalculateOrderTemplate {
     #[serde(default = "default_waste_percent")]
     pub waste_percent: f64,
     #[serde(default)]
-    pub roll_count: Option<f64>,
+    pub roll_count: Option<i64>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub layers: Vec<LayerInput>,
     #[serde(default)]

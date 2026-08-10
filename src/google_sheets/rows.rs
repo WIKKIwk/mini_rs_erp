@@ -69,7 +69,7 @@ pub(super) fn order_sheet_row(
         json_number(first_result.rounded_length),
         template
             .roll_count
-            .map(json_number)
+            .map(Value::from)
             .unwrap_or_else(|| Value::String(String::new())),
         json_number(f64::from(calculation.rubber_size_mm)),
     ])

@@ -17,7 +17,7 @@ async fn production_map_store_persists_maps_in_sqlite() {
             code: "Z-HOT-1".to_string(),
             order_number: "1234".to_string(),
             customer_name: String::new(),
-            roll_count: Some(7.0),
+            roll_count: Some(7),
             width_mm: Some(650.0),
             order_kg: None,
             base_length: None,
@@ -106,7 +106,7 @@ async fn production_map_store_persists_maps_in_sqlite() {
     assert_eq!(maps.len(), 1);
     assert_eq!(maps[0].map.product_code, "HOT");
     assert_eq!(maps[0].map.order_number, "1234");
-    assert_eq!(maps[0].map.roll_count, Some(7.0));
+    assert_eq!(maps[0].map.roll_count, Some(7));
     assert_eq!(maps[0].map.width_mm, Some(650.0));
     assert_eq!(maps[0].program.operations.len(), 3);
     assert_eq!(maps[0].program.operations[1].op_code, "apparatus");

@@ -37,7 +37,7 @@ impl MiniOrderSink for PostgresMiniOrderSink {
         let roll_count = template
             .roll_count
             .or(map.roll_count)
-            .and_then(positive_erp_quantity);
+            .filter(|value| *value > 0);
         let layers = template.effective_layers();
         let layer = |index: usize| layers.get(index).cloned().unwrap_or_default();
         let first_layer = layer(0);
@@ -55,9 +55,9 @@ impl MiniOrderSink for PostgresMiniOrderSink {
                 (id, code, order_number, customer_ref, customer_name, product_code,
                  product_name, product_form, status, kg, width_mm, roll_count, updated_at)
              VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 'draft',
-                     ($9::double precision)::numeric(24,9),
-                     ($10::double precision)::numeric(24,9),
-                     ($11::double precision)::numeric(24,9), now())
+                     ($9::double precision)::numeric(18,6),
+                     ($10::double precision)::numeric(18,6),
+                     $11::bigint, now())
              ON CONFLICT (id) DO UPDATE SET
                 code = excluded.code,
                 order_number = excluded.order_number,

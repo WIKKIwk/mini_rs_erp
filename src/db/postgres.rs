@@ -9,7 +9,7 @@ const DEFAULT_MAX_CONNECTIONS: u32 = 16;
 const DEFAULT_ACQUIRE_TIMEOUT_MS: u64 = 500;
 const MIGRATION_LOCK_KEY: i64 = 6_514_811_918_052_026_001;
 
-const POSTGRES_MIGRATIONS: [(&str, &str); 50] = [
+const POSTGRES_MIGRATIONS: [(&str, &str); 51] = [
     (
         "0001_mini_erp_foundation",
         include_str!("../../migrations/postgres/0001_mini_erp_foundation.sql"),
@@ -188,9 +188,7 @@ const POSTGRES_MIGRATIONS: [(&str, &str); 50] = [
     ),
     (
         "0045_paddon_sequence_and_package_shape",
-        include_str!(
-            "../../migrations/postgres/0045_paddon_sequence_and_package_shape.sql"
-        ),
+        include_str!("../../migrations/postgres/0045_paddon_sequence_and_package_shape.sql"),
     ),
     (
         "0046_production_progress_bobina",
@@ -211,6 +209,10 @@ const POSTGRES_MIGRATIONS: [(&str, &str); 50] = [
     (
         "0050_roll_detached_status",
         include_str!("../../migrations/postgres/0050_roll_detached_status.sql"),
+    ),
+    (
+        "0051_quantity_precision",
+        include_str!("../../migrations/postgres/0051_quantity_precision.sql"),
     ),
 ];
 

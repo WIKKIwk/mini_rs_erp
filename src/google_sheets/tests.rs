@@ -17,7 +17,7 @@ fn order_sheet_row_matches_legacy_excel_columns() {
         code: "7775".to_string(),
         order_number: "7775".to_string(),
         customer_name: String::new(),
-        roll_count: Some(8.0),
+        roll_count: Some(8),
         width_mm: Some(735.0),
         order_kg: None,
         base_length: None,
@@ -49,7 +49,7 @@ fn order_sheet_row_matches_legacy_excel_columns() {
         edge_allowance_mm: 15.0,
         width_mm: 735.0,
         waste_percent: 5.0,
-        roll_count: Some(8.0),
+        roll_count: Some(8),
         first_layer_material: "pet".to_string(),
         first_layer_micron: "12".to_string(),
         second_layer_material: "pe oq".to_string(),
@@ -72,7 +72,7 @@ fn order_sheet_row_matches_legacy_excel_columns() {
     assert_eq!(row[9], json_number(735.0));
     assert_eq!(row[10], Value::String("12".to_string()));
     assert_eq!(row[11], Value::String("55".to_string()));
-    assert_eq!(row[14], json_number(8.0));
+    assert_eq!(row[14], Value::from(8_i64));
     assert_eq!(row[15], json_number(750.0));
 }
 
@@ -140,7 +140,7 @@ fn test_map(id: &str, order_number: &str, apparatus: &str) -> ProductionMapDefin
         code: order_number.to_string(),
         order_number: order_number.to_string(),
         customer_name: String::new(),
-        roll_count: Some(7.0),
+        roll_count: Some(7),
         width_mm: Some(650.0),
         order_kg: None,
         base_length: None,
@@ -178,7 +178,7 @@ fn test_template(source_map_id: &str, order_number: &str) -> CalculateOrderTempl
         edge_allowance_mm: 15.0,
         width_mm: 650.0,
         waste_percent: 5.0,
-        roll_count: Some(7.0),
+        roll_count: Some(7),
         first_layer_material: "pet".to_string(),
         first_layer_micron: "12".to_string(),
         second_layer_material: "pe oq".to_string(),

@@ -209,7 +209,10 @@ async fn raw_material_assignment_candidates_only_return_assignable_stock() {
         .await
         .expect("assignment candidates after assign");
     assert_eq!(candidates.status(), StatusCode::OK);
-    assert_eq!(json_body(candidates).await.as_array().map(Vec::len), Some(0));
+    assert_eq!(
+        json_body(candidates).await.as_array().map(Vec::len),
+        Some(0)
+    );
 }
 
 #[tokio::test]
@@ -262,7 +265,7 @@ async fn raw_material_assignment_candidates_rank_rulons_by_smallest_leftover() {
                 "Ranked rulons",
                 "8816",
                 "7 ta rangli pechat - A",
-                7.0,
+                7,
                 985.0,
             ),
         ))
@@ -403,10 +406,7 @@ async fn raw_material_assignment_candidate_orders_only_return_compatible_orders(
     let body = json_body(candidates).await;
     assert_eq!(body.as_array().map(Vec::len), Some(1));
     assert_eq!(body[0]["order"]["map"]["id"], "zakaz-compatible");
-    assert_eq!(
-        body[0]["apparatus_options"][0],
-        "7 ta rangli pechat - A"
-    );
+    assert_eq!(body[0]["apparatus_options"][0], "7 ta rangli pechat - A");
 
     let assigned = router
         .clone()
@@ -433,7 +433,10 @@ async fn raw_material_assignment_candidate_orders_only_return_compatible_orders(
         .await
         .expect("candidate orders after assignment");
     assert_eq!(candidates.status(), StatusCode::OK);
-    assert_eq!(json_body(candidates).await.as_array().map(Vec::len), Some(0));
+    assert_eq!(
+        json_body(candidates).await.as_array().map(Vec::len),
+        Some(0)
+    );
 }
 
 #[tokio::test]
@@ -765,8 +768,7 @@ async fn raw_material_routes_assign_and_require_scan_for_queue_start() {
     assert_eq!(scoped_assignments_body.as_array().map(Vec::len), Some(3));
     assert!(scoped_assignments_body.as_array().is_some_and(|items| {
         items.iter().all(|item| {
-            item["order_id"] == "zakaz-raw-route"
-                && item["apparatus"] == "7 ta rangli pechat - A"
+            item["order_id"] == "zakaz-raw-route" && item["apparatus"] == "7 ta rangli pechat - A"
         })
     }));
 

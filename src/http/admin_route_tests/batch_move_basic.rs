@@ -15,7 +15,7 @@ async fn production_map_batch_move_allows_seven_to_eight_color_pechat() {
                 "Dual pechat order",
                 "3030",
                 "7 ta rangli pechat - A",
-                7.0,
+                7,
                 650.0,
             ),
         ))
@@ -71,7 +71,7 @@ async fn production_map_batch_move_blocks_flexo_order_to_color_pechat() {
                 "FLEXO-3031",
                 "3031",
                 "Flexo pechat - A",
-                7.0,
+                7,
                 650.0,
             ),
         ))

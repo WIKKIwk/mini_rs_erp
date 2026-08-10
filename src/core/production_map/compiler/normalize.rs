@@ -32,10 +32,7 @@ pub(in crate::core::production_map) fn normalize_map(map: &mut ProductionMapDefi
     map.title = map.title.trim().to_string();
     map.code = map.code.trim().to_string();
     map.order_number = map.order_number.trim().to_string();
-    if map
-        .roll_count
-        .is_some_and(|value| !value.is_finite() || value <= 0.0)
-    {
+    if map.roll_count.is_some_and(|value| value <= 0) {
         map.roll_count = None;
     }
     if map

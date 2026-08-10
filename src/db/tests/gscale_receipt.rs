@@ -79,7 +79,7 @@ async fn postgres_gscale_receipt_preserves_precision_and_supports_stock_correcti
         .fetch_one(&pool)
         .await
         .expect("migration count");
-    assert_eq!(migration_count, 14);
+    assert_eq!(migration_count, 51);
 
     let increased = store
         .update_raw_material_stock(RawMaterialStockUpdateInput {
@@ -145,7 +145,7 @@ async fn postgres_gscale_receipt_preserves_precision_and_supports_stock_correcti
     assert_eq!(receipt_name, draft.name);
     assert_eq!(receipt_barcode, draft.barcode);
     assert_eq!(receipt_item_code, "ITEM-RENAMED");
-    assert_eq!(receipt_qty, "12.500000000");
+    assert_eq!(receipt_qty, "12.500000");
     assert_eq!(receipt_item_name, "Renamed material");
 
     let corrections: Vec<(String, String, String, String, String)> = sqlx::query_as(
@@ -162,9 +162,9 @@ async fn postgres_gscale_receipt_preserves_precision_and_supports_stock_correcti
     assert_eq!(corrections.len(), 3);
     assert_eq!(corrections[0].0, "stock_corrected");
     assert_eq!(corrections[0].1, "stock_correction");
-    assert_eq!(corrections[0].2, "0.999970000");
-    assert_eq!(corrections[1].2, "-1.500000000");
-    assert_eq!(corrections[2].2, "0.000000000");
+    assert_eq!(corrections[0].2, "0.999970");
+    assert_eq!(corrections[1].2, "-1.500000");
+    assert_eq!(corrections[2].2, "0.000000");
     assert!(
         corrections
             .iter()

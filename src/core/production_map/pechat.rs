@@ -70,10 +70,10 @@ fn color_count_before(bytes: &[u8], rangli_start: usize) -> Option<u8> {
 /// Minimal pechat color count required by the order, or `None` when the
 /// order data does not constrain the pechat (or exceeds all pechats).
 pub fn recommended_pechat_color_count(
-    roll_count: Option<f64>,
+    roll_count: Option<i64>,
     width_mm: Option<f64>,
 ) -> Option<u8> {
-    let roll = roll_count.filter(|value| *value > 0.0);
+    let roll = roll_count.filter(|value| *value > 0);
     let width = width_mm.filter(|value| *value > 0.0);
     if roll.is_none() && width.is_none() {
         return None;
@@ -81,12 +81,12 @@ pub fn recommended_pechat_color_count(
 
     let mut required: u8 = 0;
     if let Some(roll) = roll {
-        if roll > 9.0 {
+        if roll > 9 {
             return None;
         }
-        required = if roll > 8.0 {
+        required = if roll > 8 {
             9
-        } else if roll > 7.0 {
+        } else if roll > 7 {
             8
         } else {
             7
@@ -112,11 +112,11 @@ pub fn recommended_pechat_color_count(
 /// Whether a pechat with the given color count can physically handle the order.
 pub fn pechat_can_handle_order(
     apparatus_color_count: u8,
-    roll_count: Option<f64>,
+    roll_count: Option<i64>,
     width_mm: Option<f64>,
 ) -> bool {
     if let Some(roll) = roll_count
-        && roll > f64::from(apparatus_color_count)
+        && roll > i64::from(apparatus_color_count)
     {
         return false;
     }
@@ -154,7 +154,7 @@ pub fn apparatus_node_matches_from(node_title: &str, from_apparatus: &str) -> bo
 /// Whether the order may be moved onto a pechat with the given color count.
 pub fn pechat_can_move_order(
     apparatus_color_count: u8,
-    roll_count: Option<f64>,
+    roll_count: Option<i64>,
     width_mm: Option<f64>,
     source_apparatus_color_count: Option<u8>,
 ) -> bool {
@@ -172,7 +172,7 @@ pub fn pechat_can_move_order(
         }
         return pechat_can_handle_order(apparatus_color_count, roll_count, width_mm);
     }
-    let has_roll = roll_count.filter(|value| *value > 0.0).is_some();
+    let has_roll = roll_count.filter(|value| *value > 0).is_some();
     let has_width = width_mm.filter(|value| *value > 0.0).is_some();
     if !has_roll || !has_width {
         return apparatus_color_count != 9;
@@ -204,10 +204,10 @@ mod tests {
 
     #[test]
     fn recommended_color_count_uses_roll_and_rubber() {
-        assert_eq!(recommended_pechat_color_count(Some(7.0), None), Some(7));
-        assert_eq!(recommended_pechat_color_count(Some(8.0), None), Some(8));
-        assert_eq!(recommended_pechat_color_count(Some(9.0), None), Some(9));
-        assert_eq!(recommended_pechat_color_count(Some(10.0), None), None);
+        assert_eq!(recommended_pechat_color_count(Some(7), None), Some(7));
+        assert_eq!(recommended_pechat_color_count(Some(8), None), Some(8));
+        assert_eq!(recommended_pechat_color_count(Some(9), None), Some(9));
+        assert_eq!(recommended_pechat_color_count(Some(10), None), None);
         assert_eq!(recommended_pechat_color_count(None, Some(650.0)), Some(7));
         assert_eq!(recommended_pechat_color_count(None, Some(815.0)), Some(7));
         assert_eq!(recommended_pechat_color_count(None, Some(900.0)), Some(8));
@@ -216,7 +216,7 @@ mod tests {
         // Width is clamped to 27 rubber steps (1350mm), matching the client.
         assert_eq!(recommended_pechat_color_count(None, Some(1500.0)), Some(9));
         assert_eq!(
-            recommended_pechat_color_count(Some(7.0), Some(1250.0)),
+            recommended_pechat_color_count(Some(7), Some(1250.0)),
             Some(9)
         );
         assert_eq!(recommended_pechat_color_count(None, None), None);
@@ -224,7 +224,7 @@ mod tests {
 
     #[test]
     fn move_allows_compatible_order_from_seven_to_eight_color_pechat() {
-        assert!(pechat_can_move_order(8, Some(7.0), Some(650.0), Some(7)));
+        assert!(pechat_can_move_order(8, Some(7), Some(650.0), Some(7)));
     }
 
     #[test]
@@ -241,27 +241,27 @@ mod tests {
 
     #[test]
     fn move_blocks_nine_color_rubber_on_seven_color_pechat() {
-        assert!(!pechat_can_move_order(7, Some(7.0), Some(1250.0), Some(8)));
-        assert!(pechat_can_move_order(9, Some(7.0), Some(1250.0), Some(8)));
+        assert!(!pechat_can_move_order(7, Some(7), Some(1250.0), Some(8)));
+        assert!(pechat_can_move_order(9, Some(7), Some(1250.0), Some(8)));
     }
 
     #[test]
     fn move_down_requires_width_and_compatibility() {
-        assert!(!pechat_can_move_order(7, Some(7.0), None, Some(8)));
-        assert!(pechat_can_move_order(7, Some(7.0), Some(650.0), Some(8)));
-        assert!(pechat_can_move_order(7, Some(7.0), Some(815.0), Some(8)));
-        assert!(!pechat_can_move_order(7, Some(7.0), Some(900.0), Some(8)));
+        assert!(!pechat_can_move_order(7, Some(7), None, Some(8)));
+        assert!(pechat_can_move_order(7, Some(7), Some(650.0), Some(8)));
+        assert!(pechat_can_move_order(7, Some(7), Some(815.0), Some(8)));
+        assert!(!pechat_can_move_order(7, Some(7), Some(900.0), Some(8)));
     }
 
     #[test]
     fn expanded_rubber_limits_are_enforced() {
         assert_eq!(rubber_size_from_width(815.0), 850);
-        assert!(pechat_can_handle_order(7, Some(7.0), Some(815.0)));
-        assert!(!pechat_can_handle_order(7, Some(7.0), Some(851.0)));
-        assert!(pechat_can_handle_order(8, Some(8.0), Some(1050.0)));
-        assert!(!pechat_can_handle_order(8, Some(8.0), Some(1051.0)));
+        assert!(pechat_can_handle_order(7, Some(7), Some(815.0)));
+        assert!(!pechat_can_handle_order(7, Some(7), Some(851.0)));
+        assert!(pechat_can_handle_order(8, Some(8), Some(1050.0)));
+        assert!(!pechat_can_handle_order(8, Some(8), Some(1051.0)));
         assert_eq!(rubber_size_from_width(1500.0), 1350);
-        assert!(pechat_can_handle_order(9, Some(9.0), Some(1350.0)));
+        assert!(pechat_can_handle_order(9, Some(9), Some(1350.0)));
     }
 
     #[test]

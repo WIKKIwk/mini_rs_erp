@@ -9,11 +9,12 @@ use crate::core::inventory_movements::{
     InventoryActor, InventoryAsset, InventoryAssetKind, InventoryAssetQuery, InventoryLocation,
     InventoryLocationApparatus, InventoryLocationKind, InventoryLocationRef,
     InventoryMovementError, InventoryMovementStorePort, InventoryRelocationBatchCreate,
-    InventoryRelocationCreate, InventoryReturnBatchCreate, RawMaterialStatePlacement,
-    InventoryTransfer, InventoryTransferAction, InventoryTransferActionKind,
-    InventoryTransferCreate, InventoryTransferLine, InventoryTransferQuery,
-    InventoryTransferStatus, inventory_role_code,
+    InventoryRelocationCreate, InventoryReturnBatchCreate, InventoryTransfer,
+    InventoryTransferAction, InventoryTransferActionKind, InventoryTransferCreate,
+    InventoryTransferLine, InventoryTransferQuery, InventoryTransferStatus,
+    RawMaterialStatePlacement, inventory_role_code,
 };
+use crate::core::quantity::erp_quantity_from_units;
 use crate::db::postgres_raw_material_events::{
     RawMaterialEventDraft, insert_raw_material_event_tx,
 };
@@ -250,7 +251,7 @@ impl InventoryMovementStorePort for PostgresInventoryMovementStore {
                 to_warehouse_id: &asset.warehouse_id,
                 from_location_id: &asset.physical_location_id,
                 to_location_id: &location.id,
-                qty: asset.qty,
+                qty_units: asset.qty_units,
                 uom: &asset.uom,
                 actor,
                 note: &input.note,
@@ -295,9 +296,8 @@ impl InventoryMovementStorePort for PostgresInventoryMovementStore {
             tx.commit().await.map_err(store_error)?;
             let mut saved = Vec::with_capacity(input.assets.len());
             for selector in &input.assets {
-                saved.push(
-                    fetch_asset(&self.pool, selector.asset_kind, &selector.asset_ref).await?,
-                );
+                saved
+                    .push(fetch_asset(&self.pool, selector.asset_kind, &selector.asset_ref).await?);
             }
             return Ok(saved);
         }
@@ -309,8 +309,7 @@ impl InventoryMovementStorePort for PostgresInventoryMovementStore {
         }
         let location_kind = InventoryLocationKind::parse(&location.kind)?;
         for (index, selector) in input.assets.iter().enumerate() {
-            let asset =
-                lock_asset_tx(&mut tx, selector.asset_kind, &selector.asset_ref).await?;
+            let asset = lock_asset_tx(&mut tx, selector.asset_kind, &selector.asset_ref).await?;
             ensure_asset_available(&asset)?;
             if !actor.can_manage_warehouse(&asset.warehouse) {
                 return Err(InventoryMovementError::WarehouseForbidden);
@@ -358,7 +357,7 @@ impl InventoryMovementStorePort for PostgresInventoryMovementStore {
                     to_warehouse_id: &asset.warehouse_id,
                     from_location_id: &asset.physical_location_id,
                     to_location_id: &location.id,
-                    qty: asset.qty,
+                    qty_units: asset.qty_units,
                     uom: &asset.uom,
                     actor,
                     note: &input.note,
@@ -405,16 +404,14 @@ impl InventoryMovementStorePort for PostgresInventoryMovementStore {
             tx.commit().await.map_err(store_error)?;
             let mut saved = Vec::with_capacity(input.assets.len());
             for selector in &input.assets {
-                saved.push(
-                    fetch_asset(&self.pool, selector.asset_kind, &selector.asset_ref).await?,
-                );
+                saved
+                    .push(fetch_asset(&self.pool, selector.asset_kind, &selector.asset_ref).await?);
             }
             return Ok(saved);
         }
 
         for (index, selector) in input.assets.iter().enumerate() {
-            let asset =
-                lock_asset_tx(&mut tx, selector.asset_kind, &selector.asset_ref).await?;
+            let asset = lock_asset_tx(&mut tx, selector.asset_kind, &selector.asset_ref).await?;
             ensure_asset_available(&asset)?;
             if !actor.can_manage_warehouse(&asset.warehouse) {
                 return Err(InventoryMovementError::WarehouseForbidden);
@@ -470,7 +467,7 @@ impl InventoryMovementStorePort for PostgresInventoryMovementStore {
                     to_warehouse_id: &asset.warehouse_id,
                     from_location_id: &asset.physical_location_id,
                     to_location_id: &destination_location_id,
-                    qty: asset.qty,
+                    qty_units: asset.qty_units,
                     uom: &asset.uom,
                     actor,
                     note: &input.note,
@@ -519,8 +516,7 @@ impl InventoryMovementStorePort for PostgresInventoryMovementStore {
         if destination.assignment_count == 0 {
             return Err(InventoryMovementError::DestinationWarehouseUnassigned);
         }
-        let internal_transfer =
-            actor.manages_transfer_internally(&source.name, &destination.name);
+        let internal_transfer = actor.manages_transfer_internally(&source.name, &destination.name);
         let source_location_id = warehouse_location_id_tx(&mut tx, &source.id).await?;
 
         sqlx::query(
@@ -577,7 +573,7 @@ impl InventoryMovementStorePort for PostgresInventoryMovementStore {
                 )
                 VALUES (
                     $1, $2, $3, $4, $5, $6,
-                    ($7::double precision)::numeric(18,3), $8, $9
+                    ($7::bigint::numeric / 1000000)::numeric(18,6), $8, $9
                 )
                 "#,
             )
@@ -587,7 +583,7 @@ impl InventoryMovementStorePort for PostgresInventoryMovementStore {
             .bind(&asset.item_code)
             .bind(&asset.item_name)
             .bind(&asset.identifier)
-            .bind(asset.qty)
+            .bind(asset.qty_units)
             .bind(&asset.uom)
             .bind(&asset.physical_location_id)
             .execute(&mut *tx)
@@ -610,7 +606,7 @@ impl InventoryMovementStorePort for PostgresInventoryMovementStore {
                     to_warehouse_id: &destination.id,
                     from_location_id: &asset.physical_location_id,
                     to_location_id: &asset.physical_location_id,
-                    qty: asset.qty,
+                    qty_units: asset.qty_units,
                     uom: &asset.uom,
                     actor,
                     note: &input.note,
@@ -621,14 +617,12 @@ impl InventoryMovementStorePort for PostgresInventoryMovementStore {
         if internal_transfer {
             let transfer = transfer_for_update_tx(&mut tx, transfer_id).await?;
             let lines = transfer_lines_tx(&mut tx, transfer_id).await?;
-            update_transfer_actor_tx(&mut tx, transfer_id, "approved", "approved", actor)
-                .await?;
+            update_transfer_actor_tx(&mut tx, transfer_id, "approved", "approved", actor).await?;
             dispatch_transfer_assets_tx(&mut tx, transfer_id, &lines).await?;
             update_transfer_actor_tx(&mut tx, transfer_id, "dispatched", "in_transit", actor)
                 .await?;
             receive_transfer_assets_tx(&mut tx, &transfer, &lines, actor).await?;
-            update_transfer_actor_tx(&mut tx, transfer_id, "received", "received", actor)
-                .await?;
+            update_transfer_actor_tx(&mut tx, transfer_id, "received", "received", actor).await?;
             insert_transfer_stage_events_tx(
                 &mut tx,
                 &transfer,
@@ -663,13 +657,8 @@ impl InventoryMovementStorePort for PostgresInventoryMovementStore {
             )
             .await?;
         } else {
-            enqueue_transfer_chat_events_tx(
-                &mut tx,
-                transfer_id,
-                "requested",
-                &destination.name,
-            )
-            .await?;
+            enqueue_transfer_chat_events_tx(&mut tx, transfer_id, "requested", &destination.name)
+                .await?;
         }
         tx.commit().await.map_err(store_error)?;
         load_transfer(&self.pool, transfer_id).await
@@ -833,14 +822,8 @@ impl InventoryMovementStorePort for PostgresInventoryMovementStore {
                     )
                     .await?;
                     receive_transfer_assets_tx(&mut tx, &transfer, &lines, actor).await?;
-                    update_transfer_actor_tx(
-                        &mut tx,
-                        transfer_id,
-                        "received",
-                        "received",
-                        actor,
-                    )
-                    .await?;
+                    update_transfer_actor_tx(&mut tx, transfer_id, "received", "received", actor)
+                        .await?;
                 }
             }
             InventoryTransferActionKind::Reject => {
@@ -854,14 +837,8 @@ impl InventoryMovementStorePort for PostgresInventoryMovementStore {
                     .await?;
                 if internal_transfer {
                     receive_transfer_assets_tx(&mut tx, &transfer, &lines, actor).await?;
-                    update_transfer_actor_tx(
-                        &mut tx,
-                        transfer_id,
-                        "received",
-                        "received",
-                        actor,
-                    )
-                    .await?;
+                    update_transfer_actor_tx(&mut tx, transfer_id, "received", "received", actor)
+                        .await?;
                 }
             }
             InventoryTransferActionKind::Receive => {
@@ -953,7 +930,7 @@ WITH assets AS (
         stock.item_code,
         COALESCE(NULLIF(btrim(stock.item_name), ''), stock.item_code) AS item_name,
         stock.barcode AS identifier,
-        stock.qty::float8 AS qty,
+        (stock.qty * 1000000)::bigint AS qty_units,
         stock.uom,
         CASE
             WHEN btrim(COALESCE(stock.payload_json->>'inventory_transfer_id', '')) <> ''
@@ -975,7 +952,7 @@ WITH assets AS (
         stock.item_code,
         COALESCE(NULLIF(btrim(stock.item_name), ''), stock.item_code),
         stock.id,
-        stock.qty::float8,
+        (stock.qty * 1000000)::bigint,
         stock.uom,
         stock.status,
         COALESCE(stock.payload_json->>'inventory_transfer_id', '')
@@ -991,7 +968,7 @@ WITH assets AS (
         stock.item_code,
         stock.item_name,
         stock.qolip_code,
-        stock.quantity::float8,
+        stock.quantity::bigint * 1000000,
         'dona'::text,
         CASE
             WHEN btrim(stock.inventory_transfer_id) = '' THEN 'available'
@@ -1011,7 +988,7 @@ SELECT
     assets.item_code,
     assets.item_name,
     assets.identifier,
-    assets.qty,
+    assets.qty_units,
     assets.uom,
     assets.status,
     location.id AS physical_location_id,
@@ -1084,7 +1061,7 @@ struct InventoryAssetRow {
     item_code: String,
     item_name: String,
     identifier: String,
-    qty: f64,
+    qty_units: i64,
     uom: String,
     status: String,
     physical_location_id: String,
@@ -1103,7 +1080,7 @@ struct AssetLockRow {
     item_code: String,
     item_name: String,
     identifier: String,
-    qty: f64,
+    qty_units: i64,
     uom: String,
     status: String,
     transfer_id: String,
@@ -1150,7 +1127,7 @@ struct InventoryTransferLineRow {
     item_code: String,
     item_name: String,
     identifier: String,
-    qty: f64,
+    qty_units: i64,
     uom: String,
     source_physical_location_id: String,
 }
@@ -1194,7 +1171,7 @@ fn asset_from_row(row: InventoryAssetRow) -> Result<InventoryAsset, InventoryMov
         item_code: row.item_code,
         item_name: row.item_name,
         identifier: row.identifier,
-        qty: row.qty,
+        qty: erp_quantity_from_units(row.qty_units),
         uom: row.uom,
         status: row.status,
         physical_location: InventoryLocationRef {
@@ -1249,7 +1226,7 @@ async fn lock_asset_tx(
                     stock.item_code,
                     COALESCE(NULLIF(btrim(stock.item_name), ''), stock.item_code) AS item_name,
                     stock.barcode AS identifier,
-                    stock.qty::float8 AS qty,
+                    (stock.qty * 1000000)::bigint AS qty_units,
                     stock.uom,
                     stock.status,
                     COALESCE(stock.payload_json->>'inventory_transfer_id', '') AS transfer_id,
@@ -1284,7 +1261,7 @@ async fn lock_asset_tx(
                     stock.item_code,
                     COALESCE(NULLIF(btrim(stock.item_name), ''), stock.item_code) AS item_name,
                     stock.id AS identifier,
-                    stock.qty::float8 AS qty,
+                    (stock.qty * 1000000)::bigint AS qty_units,
                     stock.uom,
                     stock.status,
                     COALESCE(stock.payload_json->>'inventory_transfer_id', '') AS transfer_id,
@@ -1319,7 +1296,7 @@ async fn lock_asset_tx(
                     stock.item_code,
                     stock.item_name,
                     stock.qolip_code AS identifier,
-                    stock.quantity::float8 AS qty,
+                    stock.quantity::bigint * 1000000 AS qty_units,
                     'dona'::text AS uom,
                     CASE
                         WHEN btrim(stock.inventory_transfer_id) = '' THEN 'available'
@@ -1352,7 +1329,7 @@ async fn lock_asset_tx(
 }
 
 fn ensure_asset_available(asset: &AssetLockRow) -> Result<(), InventoryMovementError> {
-    if !asset.transfer_id.trim().is_empty() || asset.status != "available" || asset.qty <= 0.0 {
+    if !asset.transfer_id.trim().is_empty() || asset.status != "available" || asset.qty_units <= 0 {
         Err(InventoryMovementError::AssetUnavailable)
     } else {
         Ok(())
@@ -1503,7 +1480,7 @@ async fn dispatch_transfer_assets_tx(
     for line in lines {
         let kind = InventoryAssetKind::parse(&line.asset_kind)?;
         let asset = lock_asset_tx(tx, kind, &line.asset_ref).await?;
-        if asset.transfer_id != transfer_id || (asset.qty - line.qty).abs() > 0.000_001 {
+        if asset.transfer_id != transfer_id || asset.qty_units != line.qty_units {
             return Err(InventoryMovementError::AssetUnavailable);
         }
         if kind == InventoryAssetKind::FinishedGoods {
@@ -1543,7 +1520,7 @@ async fn receive_transfer_assets_tx(
         let asset = lock_asset_tx(tx, kind, &line.asset_ref).await?;
         if asset.transfer_id != transfer.id
             || asset.warehouse_id != transfer.source_warehouse_id
-            || (asset.qty - line.qty).abs() > 0.000_001
+            || asset.qty_units != line.qty_units
         {
             return Err(InventoryMovementError::AssetUnavailable);
         }
@@ -1654,18 +1631,19 @@ async fn insert_raw_material_transfer_events_tx(
     line: &InventoryTransferLineRow,
     actor: &InventoryActor,
 ) -> Result<(), InventoryMovementError> {
+    let qty = erp_quantity_from_units(line.qty_units);
     for (suffix, event_type, warehouse, qty_delta) in [
         (
             "out",
             "transfer_out",
             transfer.source_warehouse.as_str(),
-            -line.qty,
+            -qty,
         ),
         (
             "in",
             "transfer_in",
             transfer.destination_warehouse.as_str(),
-            line.qty,
+            qty,
         ),
     ] {
         insert_raw_material_event_tx(
@@ -1701,7 +1679,7 @@ async fn insert_raw_material_transfer_events_tx(
                 payload_json: serde_json::json!({
                     "source_warehouse_id": transfer.source_warehouse_id,
                     "destination_warehouse_id": transfer.destination_warehouse_id,
-                    "qty": line.qty,
+                    "qty": qty,
                     "uom": line.uom,
                 }),
             },
@@ -1860,7 +1838,7 @@ async fn enqueue_transfer_chat_events_tx(
     .map_err(store_error)?;
     let targets = if existing_targets.is_empty() {
         sqlx::query_as::<_, (String, String, String)>(
-        r#"
+            r#"
         SELECT principal_role, principal_ref, display_name
         FROM mini_warehouse_assignments
         WHERE lower(warehouse) = lower($1)
@@ -2038,7 +2016,7 @@ async fn transfer_lines_tx(
         SELECT
             transfer_id, asset_kind, asset_ref,
             item_code, item_name, identifier,
-            qty::float8 AS qty, uom, source_physical_location_id
+            (qty * 1000000)::bigint AS qty_units, uom, source_physical_location_id
         FROM mini_inventory_transfer_lines
         WHERE transfer_id = $1
         ORDER BY asset_kind, asset_ref
@@ -2124,7 +2102,7 @@ async fn insert_transfer_stage_events_tx(
                 to_location_id: destination_location
                     .as_deref()
                     .unwrap_or(&line.source_physical_location_id),
-                qty: line.qty,
+                qty_units: line.qty_units,
                 uom: &line.uom,
                 actor,
                 note,
@@ -2245,7 +2223,7 @@ async fn hydrate_transfers(
         SELECT
             transfer_id, asset_kind, asset_ref,
             item_code, item_name, identifier,
-            qty::float8 AS qty, uom, source_physical_location_id
+            (qty * 1000000)::bigint AS qty_units, uom, source_physical_location_id
         FROM mini_inventory_transfer_lines
         WHERE transfer_id = ANY($1)
         ORDER BY transfer_id, asset_kind, asset_ref
@@ -2266,7 +2244,7 @@ async fn hydrate_transfers(
                 item_code: line.item_code,
                 item_name: line.item_name,
                 identifier: line.identifier,
-                qty: line.qty,
+                qty: erp_quantity_from_units(line.qty_units),
                 uom: line.uom,
                 source_physical_location_id: line.source_physical_location_id,
             });
@@ -2310,7 +2288,7 @@ struct MovementEventDraft<'a> {
     to_warehouse_id: &'a str,
     from_location_id: &'a str,
     to_location_id: &'a str,
-    qty: f64,
+    qty_units: i64,
     uom: &'a str,
     actor: &'a InventoryActor,
     note: &'a str,
@@ -2334,7 +2312,7 @@ async fn insert_movement_event_tx(
         VALUES (
             $1, $2, $3, NULLIF($4, ''),
             $5, $6, $7, $8, $9, $10,
-            ($11::double precision)::numeric(18,3), $12,
+            ($11::bigint::numeric / 1000000)::numeric(18,6), $12,
             $13, $14, $15, $16, '{}'::jsonb
         )
         ON CONFLICT (idempotency_key) DO NOTHING
@@ -2350,7 +2328,7 @@ async fn insert_movement_event_tx(
     .bind(draft.to_warehouse_id)
     .bind(draft.from_location_id)
     .bind(draft.to_location_id)
-    .bind(draft.qty)
+    .bind(draft.qty_units)
     .bind(draft.uom)
     .bind(inventory_role_code(&draft.actor.principal.role))
     .bind(draft.actor.principal.ref_.trim())

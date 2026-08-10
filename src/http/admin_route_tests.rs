@@ -63,15 +63,15 @@ mod batch_move_basic;
 mod boyoqchi_returned_paint;
 mod completion_rejections;
 mod completion_requests;
-mod fakes;
 mod factory_locations;
+mod fakes;
 mod inventory_movements;
 mod item_groups;
 mod production_map_basic;
 mod production_map_save_order;
 mod production_map_validation;
-mod qolip_cell_qr;
 mod qolip_blocks;
+mod qolip_cell_qr;
 mod qolip_checkout;
 mod qolip_return_move;
 mod qolipchi_workers;
@@ -171,7 +171,7 @@ fn test_state_with_failing_calculate() -> AppState {
 }
 
 fn pechat_order_map_json(id: &str, title: &str, order_number: &str, apparatus: &str) -> String {
-    pechat_order_map_json_with_dims(id, title, order_number, apparatus, 7.0, 1250.0)
+    pechat_order_map_json_with_dims(id, title, order_number, apparatus, 7, 1250.0)
 }
 
 fn two_apparatus_order_map_json(
@@ -207,7 +207,7 @@ fn pechat_order_map_json_with_dims(
     title: &str,
     order_number: &str,
     apparatus: &str,
-    roll_count: f64,
+    roll_count: i64,
     width_mm: f64,
 ) -> String {
     production_order_map_json_with_product(
@@ -227,7 +227,7 @@ fn production_order_map_json_with_product(
     product_code: &str,
     order_number: &str,
     apparatus: &str,
-    roll_count: f64,
+    roll_count: i64,
     width_mm: f64,
 ) -> String {
     let rezka_config = if apparatus.to_ascii_lowercase().contains("rezka") {
