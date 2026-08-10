@@ -250,6 +250,87 @@ impl PostgresTrainingWorkspaceStore {
         Ok(())
     }
 
+    pub async fn queue_states(
+        &self,
+    ) -> Result<BTreeMap<String, BTreeMap<String, String>>, TrainingWorkspaceError> {
+        let rows = sqlx::query_as::<_, (String, String, String)>(
+            "SELECT apparatus, order_id, state
+             FROM mini_training_queue_states
+             ORDER BY updated_at ASC",
+        )
+        .fetch_all(&self.pool)
+        .await
+        .map_err(|_| TrainingWorkspaceError::StoreFailed)?;
+
+        let mut states = BTreeMap::new();
+        for (apparatus, order_id, state) in rows {
+            let apparatus = apparatus.trim();
+            let order_id = order_id.trim();
+            if apparatus.is_empty() || order_id.is_empty() {
+                continue;
+            }
+            states
+                .entry(apparatus.to_string())
+                .or_insert_with(BTreeMap::new)
+                .insert(order_id.to_string(), state.trim().to_string());
+        }
+        Ok(states)
+    }
+
+    pub async fn put_queue_state(
+        &self,
+        apparatus: &str,
+        order_id: &str,
+        state: &str,
+    ) -> Result<(), TrainingWorkspaceError> {
+        let apparatus = apparatus.trim();
+        let order_id = order_id.trim();
+        let state = state.trim();
+        if apparatus.is_empty() || order_id.is_empty() || state.is_empty() {
+            return Err(TrainingWorkspaceError::InvalidInput(
+                "apparatus, order_id va state kerak".to_string(),
+            ));
+        }
+        sqlx::query(
+            "INSERT INTO mini_training_queue_states (apparatus, order_id, state, updated_at)
+             VALUES ($1, $2, $3, now())
+             ON CONFLICT (apparatus, order_id) DO UPDATE SET
+                 state = excluded.state,
+                 updated_at = now()",
+        )
+        .bind(apparatus)
+        .bind(order_id)
+        .bind(state)
+        .execute(&self.pool)
+        .await
+        .map_err(|_| TrainingWorkspaceError::StoreFailed)?;
+        Ok(())
+    }
+
+    pub async fn raw_material_barcodes_for_order_apparatus(
+        &self,
+        order_id: &str,
+        apparatus: &str,
+    ) -> Result<Vec<String>, TrainingWorkspaceError> {
+        let rows = sqlx::query_as::<_, (String,)>(
+            "SELECT barcode
+             FROM mini_training_raw_material_assignments
+             WHERE order_id = $1
+               AND lower(apparatus) = lower($2)
+             ORDER BY updated_at ASC",
+        )
+        .bind(order_id.trim())
+        .bind(apparatus.trim())
+        .fetch_all(&self.pool)
+        .await
+        .map_err(|_| TrainingWorkspaceError::StoreFailed)?;
+        Ok(rows
+            .into_iter()
+            .map(|(barcode,)| barcode.trim().to_string())
+            .filter(|barcode| !barcode.is_empty())
+            .collect())
+    }
+
     pub async fn save_image(
         &self,
         owner_key: &str,

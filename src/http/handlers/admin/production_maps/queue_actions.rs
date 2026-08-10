@@ -134,6 +134,20 @@ pub async fn production_map_queue_action(
     if input.worker_handoff && input.remove_roll_from_apparatus {
         return Err(bad_request("worker_handoff_actions_conflict"));
     }
+    if let Some(training_result) = super::super::training::training_queue_action(
+        &state,
+        &principal,
+        &input.apparatus,
+        &input.order_id,
+        input.action,
+        &input.material_barcode,
+        &input.material_barcodes,
+    )
+    .await
+    .map_err(super::super::training::training_workspace_error)?
+    {
+        return Ok(json_response(training_result));
+    }
     let assigned_apparatus = state.admin.principal_assigned_apparatus(&principal).await;
     let material_barcodes = input.material_barcodes.clone();
     let material_barcode = if material_barcodes.is_empty() {

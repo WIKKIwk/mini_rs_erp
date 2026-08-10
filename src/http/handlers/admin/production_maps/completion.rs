@@ -33,7 +33,7 @@ pub async fn production_map_live(
             production_map_live_socket(
                 state,
                 socket,
-                queue_action_actor(&principal).ref_,
+                principal,
                 include_completion_requests,
             )
         })
@@ -85,7 +85,7 @@ async fn require_any_live_capability(
 async fn production_map_live_socket(
     state: AppState,
     mut socket: WebSocket,
-    actor_ref: String,
+    principal: Principal,
     include_completion_requests: bool,
 ) {
     let service = state.production_maps.clone();
@@ -96,7 +96,7 @@ async fn production_map_live_socket(
     if !send_production_map_live_snapshot(
         &state,
         &mut socket,
-        &actor_ref,
+        &principal,
         include_completion_requests,
         &mut last_payload,
     )
@@ -113,7 +113,7 @@ async fn production_map_live_socket(
                         if !send_production_map_live_snapshot(
                             &state,
                             &mut socket,
-                            &actor_ref,
+                            &principal,
                             include_completion_requests,
                             &mut last_payload,
                         ).await {
@@ -124,7 +124,7 @@ async fn production_map_live_socket(
                         if !send_production_map_live_snapshot(
                             &state,
                             &mut socket,
-                            &actor_ref,
+                            &principal,
                             include_completion_requests,
                             &mut last_payload,
                         ).await {
@@ -146,14 +146,35 @@ async fn production_map_live_socket(
 async fn send_production_map_live_snapshot(
     state: &AppState,
     socket: &mut WebSocket,
-    actor_ref: &str,
+    principal: &Principal,
     include_completion_requests: bool,
     last_payload: &mut String,
 ) -> bool {
     let service = &state.production_maps;
-    let snapshot = service.live_snapshot().await;
+    let actor_ref = queue_action_actor(principal).ref_;
+    let snapshot = match service.live_snapshot().await {
+        Ok(mut snapshot) => {
+            if let Err(error) =
+                super::super::training::merge_worker_training_snapshot(state, principal, &mut snapshot)
+                    .await
+            {
+                let payload = serde_json::json!({
+                    "ok": false,
+                    "error": error.to_string(),
+                });
+                return match serde_json::to_string(&payload) {
+                    Ok(json) => {
+                        send_production_map_live_message(socket, Message::Text(json.into())).await
+                    }
+                    Err(_) => true,
+                };
+            }
+            Ok(snapshot)
+        }
+        Err(error) => Err(error),
+    };
     let completed_orders = service
-        .completed_queue_orders_for_actor(actor_ref, 200)
+        .completed_queue_orders_for_actor(&actor_ref, 200)
         .await;
     let completion_requests = if include_completion_requests {
         service.completion_requests(200).await
@@ -161,7 +182,7 @@ async fn send_production_map_live_snapshot(
         Ok(Vec::new())
     };
     let completion_request_decisions = service
-        .completion_request_decisions_for_actor(actor_ref, 200)
+        .completion_request_decisions_for_actor(&actor_ref, 200)
         .await;
     match (
         snapshot,

@@ -12,8 +12,8 @@ use crate::core::production_map::{
     ApparatusQueuePolicy, ApparatusScheduleCancelRequest, ApparatusScheduleRequest,
     CompletionRequestDecision, MaterialScanProgressAction, OrderProgressBatchWipStatus,
     ProductionMapApparatusTransferRequest, ProductionMapBatchMoveRequest,
-    ProductionMapDefinition, ProductionMapError, ProductionMapMoveRequest, ProductionMapNodeKind,
-    ProductionMapRunRequest,
+    ProductionMapDefinition, ProductionMapError, ProductionMapLiveSnapshot,
+    ProductionMapMoveRequest, ProductionMapNodeKind, ProductionMapRunRequest,
     QueueActionActor, QueueProgressInput, RawMaterialAssignment, RawMaterialAssignmentDeleteInput,
     RawMaterialAssignmentInput, RawMaterialStockTransition, RawMaterialStockTransitionKind,
     WipProgressBatchQuery, queue_state,
@@ -244,7 +244,7 @@ pub async fn production_maps(
     headers: HeaderMap,
     body: Bytes,
 ) -> Result<Response, AdminError> {
-    authorize_any_capability(
+    let principal = authorize_any_capability(
         &state,
         &headers,
         &[
@@ -262,6 +262,17 @@ pub async fn production_maps(
     match method {
         Method::GET => {
             if !query.id.trim().is_empty() {
+                if query.id.trim().starts_with("training-") {
+                    let overlay = super::training::worker_training_overlay(&state, &principal)
+                        .await
+                        .map_err(super::training::training_workspace_error)?;
+                    let saved = overlay
+                        .maps
+                        .into_iter()
+                        .find(|saved| saved.map.id.trim() == query.id.trim())
+                        .ok_or_else(|| not_found("map_not_found"))?;
+                    return Ok(json_response(saved));
+                }
                 let saved = state
                     .production_maps
                     .map(&query.id)
@@ -270,11 +281,14 @@ pub async fn production_maps(
                     .ok_or_else(|| not_found("map_not_found"))?;
                 return Ok(json_response(saved));
             }
-            let maps = state
+            let mut maps = state
                 .production_maps
                 .maps()
                 .await
                 .map_err(|_| server_error("production maps fetch failed"))?;
+            super::training::merge_worker_training_maps(&state, &principal, &mut maps)
+                .await
+                .map_err(super::training::training_workspace_error)?;
             Ok(json_response(maps))
         }
         Method::PUT => {
@@ -511,7 +525,6 @@ pub async fn production_map_sequence(
                 .maps()
                 .await
                 .map_err(production_map_error)?;
-            let order_customers = production_map_order_customers(&state, &maps).await;
             let sequences = state
                 .production_maps
                 .effective_apparatus_sequences()
@@ -547,6 +560,20 @@ pub async fn production_map_sequence(
                 .order_control_states()
                 .await
                 .map_err(production_map_error)?;
+            let mut snapshot = ProductionMapLiveSnapshot {
+                maps,
+                sequences,
+                visible_order_ids,
+                queue_states,
+                queue_policies,
+                queue_action_controls,
+                order_statuses,
+                order_controls,
+            };
+            super::training::merge_worker_training_snapshot(&state, &principal, &mut snapshot)
+                .await
+                .map_err(super::training::training_workspace_error)?;
+            let order_customers = production_map_order_customers(&state, &snapshot.maps).await;
             let qolip_order_notes = if state
                 .admin
                 .principal_has_capability(&principal, Capability::QolipManage)
@@ -562,13 +589,13 @@ pub async fn production_map_sequence(
             };
             Ok(json_response(serde_json::json!({
                 "ok": true,
-                "sequences": sequences,
-                "visible_order_ids": visible_order_ids,
-                "queue_states": queue_states,
-                "queue_policies": queue_policies,
-                "queue_action_controls": queue_action_controls,
-                "order_statuses": order_statuses,
-                "order_controls": order_controls,
+                "sequences": snapshot.sequences,
+                "visible_order_ids": snapshot.visible_order_ids,
+                "queue_states": snapshot.queue_states,
+                "queue_policies": snapshot.queue_policies,
+                "queue_action_controls": snapshot.queue_action_controls,
+                "order_statuses": snapshot.order_statuses,
+                "order_controls": snapshot.order_controls,
                 "order_customers": order_customers,
                 "qolip_order_notes": qolip_order_notes,
             })))

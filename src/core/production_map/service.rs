@@ -113,7 +113,7 @@ impl ProductionMapService {
         self.live_notify.subscribe()
     }
 
-    pub(super) fn notify_live(&self) {
+    pub fn notify_live(&self) {
         let _ = self.live_notify.send(());
     }
 
