@@ -28,6 +28,10 @@ impl PostgresTrainingWorkspaceStore {
                  WHERE payload_json->>'source_map_id' = $1
                     OR payload_json->>'order_number' = (SELECT order_number FROM target)
                  RETURNING id
+             ), deleted_returned_paint_reports AS (
+                 DELETE FROM mini_training_returned_paint_reports
+                 WHERE order_id = $1
+                 RETURNING id
              ), deleted_assignments AS (
                  DELETE FROM mini_training_raw_material_assignments
                  WHERE order_id = $1

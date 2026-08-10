@@ -17,6 +17,11 @@ use crate::core::production_map::{
     ApparatusQueuePolicyRecord, ProductionMapDefinition, ProductionMapLiveSnapshot,
     ProductionMapNodeKind, ProductionMapSaved, ProductionOrderStatusDetail,
 };
+use crate::core::production_map::pechat;
+use crate::core::returned_paint::{
+    calculate_returned_paint, returned_paint_astatka_total, returned_paint_report_can_close,
+    ReturnedPaintItem,
+};
 use crate::db::postgres_training_workspace::{
     PostgresTrainingWorkspaceStore, TrainingImage, TrainingWorkspaceError,
 };
@@ -79,6 +84,12 @@ pub(super) struct TrainingQueuePrintInput {
     pub gross_qty: Option<f64>,
     pub finished_goods_kg: Option<f64>,
     pub bobina_kg: Option<f64>,
+    pub return_ink_kg: Option<f64>,
+    pub total_waste: Option<f64>,
+    pub finished_goods_meter: Option<f64>,
+    pub returned_paint_items: Vec<ReturnedPaintItem>,
+    pub returned_paint_image_id: String,
+    pub description: String,
     pub uom: String,
     pub customer_name: String,
     pub print_count: u32,
@@ -147,7 +158,7 @@ pub(super) async fn worker_training_overlay(
                 }
             }
         }
-        let controls = training_queue_action_controls(&sequence, &states);
+        let controls = training_queue_action_controls(apparatus, &sequence, &states);
         let statuses = sequence
             .iter()
             .map(|order_id| {
@@ -441,6 +452,74 @@ pub(super) async fn training_queue_action(
     let next = queue_state::next_queue_state(current, action)
         .map_err(|_| TrainingWorkspaceError::InvalidInput("queue_action_not_allowed".to_string()))?;
 
+    let is_complete = matches!(action, queue_state::ApparatusQueueAction::Complete);
+    let has_returned_paint_items = !print_input.returned_paint_items.is_empty();
+    let has_returned_paint_image = !print_input.returned_paint_image_id.trim().is_empty();
+    if !is_complete && (has_returned_paint_items || has_returned_paint_image) {
+        return Err(TrainingWorkspaceError::InvalidInput(
+            "returned_paint_only_on_complete".to_string(),
+        ));
+    }
+    if is_complete
+        && training_complete_requires_full_report(&apparatus)
+        && !returned_paint_report_can_close(
+            &print_input.returned_paint_items,
+            has_returned_paint_image,
+        )
+    {
+        return Err(TrainingWorkspaceError::InvalidInput(
+            "returned_paint_minimum_three_fields_or_image_only".to_string(),
+        ));
+    }
+    let returned_paint_calculation = if has_returned_paint_items {
+        Some(
+            calculate_returned_paint(&print_input.returned_paint_items)
+                .map_err(|error| {
+                    TrainingWorkspaceError::InvalidInput(format!(
+                        "training_returned_paint_invalid: {error}"
+                    ))
+                })?,
+        )
+    } else {
+        None
+    };
+    let returned_paint_astatka_kg = if has_returned_paint_items {
+        let total = returned_paint_astatka_total(&print_input.returned_paint_items).map_err(
+            |error| {
+                TrainingWorkspaceError::InvalidInput(format!(
+                    "training_returned_paint_invalid: {error}"
+                ))
+            },
+        )?;
+        (total > 0.0).then_some(total)
+    } else {
+        None
+    };
+    let return_ink_kg = returned_paint_astatka_kg.or_else(|| {
+        print_input
+            .return_ink_kg
+            .filter(|value| value.is_finite() && *value >= 0.0)
+    });
+    let returned_paint_report = if is_complete
+        && (has_returned_paint_items || has_returned_paint_image)
+    {
+        Some(
+            store
+                .save_returned_paint_report(
+                    order_id,
+                    &apparatus,
+                    training_action_value(action),
+                    &print_input.returned_paint_items,
+                    &print_input.returned_paint_image_id,
+                    return_ink_kg,
+                    returned_paint_calculation.as_ref(),
+                )
+                .await?,
+        )
+    } else {
+        None
+    };
+
     if matches!(action, queue_state::ApparatusQueueAction::Start) {
         let assigned = store
             .raw_material_barcodes_for_order_apparatus(order_id, &apparatus)
@@ -490,6 +569,8 @@ pub(super) async fn training_queue_action(
             action,
             principal,
             &print_input,
+            returned_paint_report.as_ref(),
+            return_ink_kg,
         );
         let print_request = training_progress_print_request(
             &progress_batch,
@@ -550,6 +631,17 @@ fn training_action_label(action: queue_state::ApparatusQueueAction) -> &'static 
     }
 }
 
+fn training_action_value(action: queue_state::ApparatusQueueAction) -> &'static str {
+    match action {
+        queue_state::ApparatusQueueAction::Pause => "pause",
+        queue_state::ApparatusQueueAction::DetachRoll => "detach_roll",
+        queue_state::ApparatusQueueAction::RollComplete => "roll_complete",
+        queue_state::ApparatusQueueAction::Complete => "complete",
+        queue_state::ApparatusQueueAction::Start => "start",
+        queue_state::ApparatusQueueAction::Resume => "resume",
+    }
+}
+
 fn training_positive_quantity(value: Option<f64>, fallback: f64) -> f64 {
     value
         .filter(|value| value.is_finite() && *value > 0.0)
@@ -563,6 +655,8 @@ fn training_progress_batch(
     action: queue_state::ApparatusQueueAction,
     principal: &Principal,
     input: &TrainingQueuePrintInput,
+    returned_paint_report: Option<&serde_json::Value>,
+    return_ink_kg: Option<f64>,
 ) -> serde_json::Value {
     let stamp = unix_micros();
     let batch_id = format!("training-progress-batch-{stamp}");
@@ -638,13 +732,23 @@ fn training_progress_batch(
         "current_apparatus": apparatus.trim(),
         "current_apparatus_key": apparatus.trim().to_ascii_lowercase(),
         "current_location": apparatus.trim(),
-        "return_ink_kg": serde_json::Value::Null,
+        "return_ink_kg": return_ink_kg,
+        "total_waste": input.total_waste,
+        "finished_goods_meter": input.finished_goods_meter,
         "finished_goods_kg": gross_qty,
         "bobina_kg": input.bobina_kg,
-        "description": "Training progress",
+        "description": if input.description.trim().is_empty() {
+            "Training progress"
+        } else {
+            input.description.trim()
+        },
         "payload_json": {
             "training": true,
             "action_label": training_action_label(action),
+            "astatka_kg": return_ink_kg,
+            "returned_paint_report": returned_paint_report
+                .cloned()
+                .unwrap_or(serde_json::Value::Null),
         },
     })
 }
@@ -735,6 +839,7 @@ fn is_training_apparatus(apparatus: &str, active_apparatuses: &[String]) -> bool
 }
 
 fn training_queue_action_controls(
+    apparatus: &str,
     sequence: &[String],
     states: &BTreeMap<String, String>,
 ) -> BTreeMap<String, ApparatusQueueOrderActionControl> {
@@ -791,11 +896,15 @@ fn training_queue_action_controls(
                     allowed_actions,
                     previous_stage: String::new(),
                     previous_stage_ready: true,
-                    complete_requires_full_report: false,
+                    complete_requires_full_report: training_complete_requires_full_report(apparatus),
                 },
             )
         })
         .collect()
+}
+
+fn training_complete_requires_full_report(apparatus: &str) -> bool {
+    pechat::is_pechat_apparatus(apparatus)
 }
 
 fn training_order_status(
@@ -1030,15 +1139,34 @@ pub async fn training_raw_material_assignments(
 pub async fn training_order_image_upload(
     State(state): State<AppState>,
     method: Method,
+    uri: Uri,
     headers: HeaderMap,
     body: Bytes,
 ) -> Result<Response, AdminError> {
     let principal = authorize_any_capability(
         &state,
         &headers,
-        &[Capability::AdminAccess, Capability::ProductionMapManage],
+        &[
+            Capability::AdminAccess,
+            Capability::ProductionMapManage,
+            Capability::ApparatusQueueManage,
+        ],
     )
     .await?;
+    if method == Method::DELETE {
+        let image_id = query_value(&uri, "id")
+            .filter(|value| safe_image_id(value))
+            .ok_or_else(|| bad_request("id kerak"))?;
+        let owner = owner_key("admin", &principal.ref_);
+        let deleted = training_store(&state)?
+            .delete_image(&owner, &image_id)
+            .await
+            .map_err(training_workspace_error)?;
+        if !deleted {
+            return Err(not_found("rasm topilmadi"));
+        }
+        return Ok(json_response(serde_json::json!({"ok": true})));
+    }
     if method != Method::POST {
         return Err(method_not_allowed());
     }
@@ -1105,7 +1233,11 @@ pub async fn training_order_image_view(
     let principal = authorize_any_capability(
         &state,
         &headers,
-        &[Capability::AdminAccess, Capability::ProductionMapManage],
+        &[
+            Capability::AdminAccess,
+            Capability::ProductionMapManage,
+            Capability::ApparatusQueueManage,
+        ],
     )
     .await?;
     if method != Method::GET {

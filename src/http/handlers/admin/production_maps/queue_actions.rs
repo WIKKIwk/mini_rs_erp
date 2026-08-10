@@ -151,6 +151,16 @@ pub async fn production_map_queue_action(
             gross_qty: input.gross_qty,
             finished_goods_kg: input.finished_goods_kg,
             bobina_kg: input.bobina_kg,
+            return_ink_kg: input.return_ink_kg,
+            total_waste: input.total_waste,
+            finished_goods_meter: input.finished_goods_meter,
+            returned_paint_items: input.returned_paint_items.clone(),
+            returned_paint_image_id: input.returned_paint_image_id.clone(),
+            description: if input.completion_request_note.trim().is_empty() {
+                input.description.clone()
+            } else {
+                input.completion_request_note.clone()
+            },
             uom: if input.uom.trim().is_empty() {
                 input.unit.clone()
             } else {
