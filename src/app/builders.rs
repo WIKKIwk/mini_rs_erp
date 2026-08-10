@@ -17,6 +17,7 @@ use crate::db::postgres_qolip::PostgresQolipStore;
 use crate::db::postgres_raw_material_events::PostgresRawMaterialEventStore;
 use crate::db::postgres_returned_paint::PostgresReturnedPaintStore;
 use crate::db::postgres_system_user::PostgresSystemUserStore;
+use crate::db::postgres_training_workspace::PostgresTrainingWorkspaceStore;
 use crate::db::postgres_warehouse::PostgresWarehouseStore;
 use crate::db::postgres_worker::PostgresWorkerStore;
 use crate::db::postgres_worker_group::PostgresWorkerGroupStore;
@@ -234,6 +235,10 @@ pub(super) fn build_calculate_material_store() -> Arc<dyn CalculateMaterialStore
         }
         None => Arc::new(CalculateMaterialStore::new(calculate_material_store_path())),
     }
+}
+
+pub(super) fn build_training_workspace_store() -> Option<PostgresTrainingWorkspaceStore> {
+    postgres_pool("training workspace").map(PostgresTrainingWorkspaceStore::new)
 }
 
 pub(super) fn build_chat_service() -> ChatService {

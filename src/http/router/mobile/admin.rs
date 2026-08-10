@@ -1,4 +1,5 @@
 use axum::Router;
+use axum::extract::DefaultBodyLimit;
 use axum::routing::{any, get, post};
 
 use crate::app::AppState;
@@ -76,6 +77,31 @@ pub(super) fn routes() -> Router<AppState> {
         .route(
             "/v1/mobile/admin/production-maps/with-order",
             any(admin::production_map_save_with_order),
+        )
+        .route(
+            "/v1/mobile/admin/training/apparatus",
+            any(admin::training_apparatus_modes),
+        )
+        .route(
+            "/v1/mobile/admin/training/production-maps",
+            any(admin::training_production_maps),
+        )
+        .route(
+            "/v1/mobile/admin/training/production-maps/with-order",
+            any(admin::training_production_map_save_with_order),
+        )
+        .route(
+            "/v1/mobile/admin/training/raw-material-assignments",
+            any(admin::training_raw_material_assignments),
+        )
+        .route(
+            "/v1/mobile/admin/training/images",
+            any(admin::training_order_image_upload)
+                .layer(DefaultBodyLimit::max(6 * 1024 * 1024)),
+        )
+        .route(
+            "/v1/mobile/admin/training/images/view",
+            any(admin::training_order_image_view),
         )
         .route(
             "/v1/mobile/admin/production-maps/move",

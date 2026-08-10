@@ -97,7 +97,7 @@ fn apply_order_rezka_kadr_count(
     }
 }
 
-fn apply_authoritative_calculation(
+pub(super) fn apply_authoritative_calculation(
     map: &mut ProductionMapDefinition,
     template: &CalculateOrderTemplate,
     material_catalog: &[crate::core::calculate_materials::CalculateMaterial],

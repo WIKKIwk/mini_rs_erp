@@ -37,6 +37,7 @@ use crate::core::workers::WorkerService;
 use crate::db::postgres_customer::PostgresCustomerStore;
 use crate::db::postgres_engine::PostgresEngineStore;
 use crate::db::postgres_raw_material_events::PostgresRawMaterialEventStore;
+use crate::db::postgres_training_workspace::PostgresTrainingWorkspaceStore;
 use crate::fcm::discover_push_sender;
 use crate::google_sheets::{OrderSheetSink, discover_order_sheet_sink};
 use crate::rps::RpsDriverClient;
@@ -76,6 +77,7 @@ pub struct AppState {
     pub inventory_movements: InventoryMovementService,
     pub calculate_orders: Arc<dyn CalculateOrderStorePort>,
     pub calculate_materials: Arc<dyn CalculateMaterialStorePort>,
+    pub training_workspace: Option<PostgresTrainingWorkspaceStore>,
     pub chat: ChatService,
     pub chat_media: ChatMediaService,
     pub order_sheets: Arc<dyn OrderSheetSink>,
@@ -133,6 +135,7 @@ impl AppState {
         let inventory_movements = build_inventory_movement_service();
         let calculate_orders = build_calculate_order_store();
         let calculate_materials = build_calculate_material_store();
+        let training_workspace = build_training_workspace_store();
         let order_sheets = discover_order_sheet_sink();
         let production_orders = build_mini_order_sink();
         let mobile_releases = MobileReleaseStore::from_env();
@@ -188,6 +191,7 @@ impl AppState {
             inventory_movements,
             calculate_orders,
             calculate_materials,
+            training_workspace,
             chat,
             chat_media,
             order_sheets,

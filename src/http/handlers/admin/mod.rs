@@ -7,6 +7,7 @@ mod suppliers;
 mod system;
 mod system_users;
 mod telegram;
+mod training;
 mod warehouse_live;
 mod workers;
 
@@ -64,6 +65,11 @@ pub use system::{
 use system::{authorize_any_capability, authorize_capability, require_capability};
 pub use system_users::{system_user_code_regenerate, system_user_detail, system_users};
 pub use telegram::{invite as telegram_invite, settings as telegram_settings};
+pub use training::{
+    training_apparatus_modes, training_order_image_upload, training_order_image_view,
+    training_production_map_save_with_order, training_production_maps,
+    training_raw_material_assignments,
+};
 pub use warehouse_live::warehouse_live;
 pub use workers::{
     worker_code_regenerate, worker_delete_check, worker_detail, worker_groups,
