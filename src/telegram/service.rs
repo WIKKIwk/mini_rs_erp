@@ -325,6 +325,18 @@ impl TelegramService {
             .map_err(map_user_account)
     }
 
+    pub(crate) async fn send_order_image_to_user_profile(
+        &self,
+        telegram_user_id: &str,
+        caption: &str,
+        image: &CalculateOrderImage,
+    ) -> Result<(), TelegramError> {
+        self.useraccount
+            .send_image_to_selected_group(telegram_user_id, caption, image)
+            .await
+            .map_err(map_user_account)
+    }
+
     pub(crate) async fn order_catalog(&self) -> Result<Arc<TelegramOrderCatalog>, TelegramError> {
         self.order_catalog
             .clone()
@@ -391,24 +403,34 @@ impl TelegramService {
             .remove(&format!("{telegram_user_id}:{token}"))
     }
 
-    pub(crate) async fn deliver_order_caption(
+    pub(crate) async fn deliver_order(
         &self,
         telegram_user_id: &str,
         caption: &str,
+        image: Option<CalculateOrderImage>,
     ) -> Result<usize, TelegramError> {
         let Some(account) = self.user_by_telegram_id(telegram_user_id).await? else {
             return Err(TelegramError::UserAccountNotAuthorized);
         };
         if account.delivery_mode == TelegramDeliveryMode::UserProfile {
-            self.send_order_to_user_profile(telegram_user_id, caption)
-                .await?;
+            if let Some(image) = image.as_ref() {
+                self.send_order_image_to_user_profile(telegram_user_id, caption, image)
+                    .await?;
+            } else {
+                self.send_order_to_user_profile(telegram_user_id, caption)
+                    .await?;
+            }
             return Ok(1);
         }
         let chats = self.store.chats().await.map_err(map_store)?;
+        let notification = super::bot::TelegramOrderNotification {
+            caption: caption.to_string(),
+            image,
+        };
         let mut delivered = 0;
         let mut last_error = None;
         for chat in chats {
-            match super::bot::send_text_to_chat(self, &chat, caption).await {
+            match super::bot::send_order_to_chat(self, &chat, &notification).await {
                 Ok(()) => delivered += 1,
                 Err(error) => {
                     tracing::warn!(chat_id = %chat.chat_id, ?error, "telegram order delivery failed");

@@ -26,6 +26,8 @@ const INLINE_CUSTOMER_PREFIX: &str = "c7 ";
 const INLINE_PRODUCT_PREFIX: &str = "i7 ";
 const INLINE_MATERIAL_PREFIX: &str = "m7 ";
 const INLINE_MICRON_PREFIX: &str = "n7 ";
+const MAX_ORDER_IMAGE_BYTES: u64 = 20 * 1024 * 1024;
+const TELEGRAM_FILE_BASE: &str = "https://api.telegram.org/file/bot";
 
 #[derive(Debug, Clone)]
 pub(crate) struct TelegramOrderNotification {
@@ -142,9 +144,47 @@ struct TelegramMessage {
     #[serde(default)]
     text: Option<String>,
     #[serde(default)]
+    photo: Option<Vec<TelegramPhotoSize>>,
+    #[serde(default)]
+    document: Option<TelegramDocument>,
+    #[serde(default)]
     contact: Option<TelegramContact>,
     #[serde(default)]
     message_thread_id: Option<i64>,
+}
+
+#[derive(Debug, Deserialize)]
+struct TelegramPhotoSize {
+    file_id: String,
+    width: i64,
+    height: i64,
+    #[serde(default)]
+    file_size: Option<u64>,
+}
+
+#[derive(Debug, Deserialize)]
+struct TelegramDocument {
+    file_id: String,
+    #[serde(default)]
+    file_name: Option<String>,
+    #[serde(default)]
+    mime_type: Option<String>,
+    #[serde(default)]
+    file_size: Option<u64>,
+}
+
+#[derive(Debug, Default, Deserialize)]
+struct TelegramFile {
+    #[serde(default)]
+    file_path: Option<String>,
+}
+
+#[derive(Debug)]
+struct TelegramOrderMedia {
+    file_id: String,
+    file_name: String,
+    mime_type: String,
+    file_size: Option<u64>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -272,6 +312,9 @@ async fn handle_update(
     let is_private = message.chat.chat_type == "private";
     if is_private && let Some(contact) = message.contact.as_ref() {
         return handle_contact(service, token, &message, contact).await;
+    }
+    if is_private && (message.photo.is_some() || message.document.is_some()) {
+        return handle_private_media(service, token, &message).await;
     }
     let Some(text) = message.text.as_deref() else {
         return Ok(());
@@ -610,15 +653,7 @@ async fn handle_private_text(
         return Ok(true);
     }
     if service.order_draft(&telegram_user_id).await?.is_some() {
-        return handle_order_text(
-            service,
-            token,
-            &chat_id,
-            &telegram_user_id,
-            &account.display_name,
-            text,
-        )
-        .await;
+        return handle_order_text(service, token, &chat_id, &telegram_user_id, text).await;
     }
     if service
         .has_pending_user_profile_login(&telegram_user_id)
@@ -637,6 +672,196 @@ async fn handle_private_text(
         return Ok(true);
     }
     Ok(false)
+}
+
+async fn handle_private_media(
+    service: &TelegramService,
+    token: &str,
+    message: &TelegramMessage,
+) -> Result<(), TelegramError> {
+    let Some(user) = message.from.as_ref() else {
+        return Ok(());
+    };
+    let telegram_user_id = user.id.to_string();
+    let Some(account) = service.user_by_telegram_id(&telegram_user_id).await? else {
+        return Ok(());
+    };
+    if account.role != TelegramAccountRole::SalesManager {
+        return Ok(());
+    }
+    let chat_id = message.chat.id.to_string();
+    let Some(draft) = service.order_draft(&telegram_user_id).await? else {
+        return Ok(());
+    };
+    if draft.step != TelegramOrderStep::Attachment {
+        send_order_text(
+            service,
+            token,
+            &chat_id,
+            "Rasm faqat tirajdan keyin yuboriladi. Order jarayonini davom ettiring.",
+        )
+        .await?;
+        return Ok(());
+    }
+    let Some(media) = order_media_from_message(message) else {
+        send_order_text(
+            service,
+            token,
+            &chat_id,
+            "Iltimos, order uchun rasm yoki rasm faylini yuboring.",
+        )
+        .await?;
+        return Ok(());
+    };
+    if media
+        .file_size
+        .is_some_and(|size| size > MAX_ORDER_IMAGE_BYTES)
+    {
+        send_order_text(
+            service,
+            token,
+            &chat_id,
+            "Rasm hajmi 20 MB dan oshmasin. Boshqa rasm yuboring.",
+        )
+        .await?;
+        return Ok(());
+    }
+    let telegram_file = get_telegram_file(service, token, &media.file_id).await?;
+    let Some(file_path) = telegram_file.file_path else {
+        send_order_text(
+            service,
+            token,
+            &chat_id,
+            "Rasmni Telegram serveridan olishning iloji bo‘lmadi. Qayta yuboring.",
+        )
+        .await?;
+        return Ok(());
+    };
+    let body = download_telegram_file(service, token, &file_path).await?;
+    if body.is_empty() || body.len() as u64 > MAX_ORDER_IMAGE_BYTES {
+        send_order_text(
+            service,
+            token,
+            &chat_id,
+            "Rasm hajmi 20 MB dan oshmasin. Boshqa rasm yuboring.",
+        )
+        .await?;
+        return Ok(());
+    }
+    let caption = order_caption(&draft.order_number, &draft, &account.display_name);
+    let image = CalculateOrderImage {
+        image_id: media.file_id,
+        image_name: media.file_name,
+        image_mime: media.mime_type,
+        image_size_bytes: body.len() as u64,
+        body,
+    };
+    match service
+        .deliver_order(&telegram_user_id, &caption, Some(image))
+        .await
+    {
+        Ok(0) => {
+            send_order_text(
+                service,
+                token,
+                &chat_id,
+                "Order tayyor, lekin yuborish uchun guruh topilmadi. Guruhni ulang yoki tanlang.",
+            )
+            .await?;
+        }
+        Ok(count) => {
+            service.clear_order_draft(&telegram_user_id).await?;
+            send_order_text(
+                service,
+                token,
+                &chat_id,
+                &format!(
+                    "✅ Order №T{} rasm bilan {} ta guruhga yuborildi.",
+                    draft.order_number, count
+                ),
+            )
+            .await?;
+        }
+        Err(error) => {
+            send_order_text(
+                service,
+                token,
+                &chat_id,
+                &format!("Order yuborilmadi: {error}. Rasmni qayta yuborishingiz mumkin."),
+            )
+            .await?;
+        }
+    }
+    Ok(())
+}
+
+fn order_media_from_message(message: &TelegramMessage) -> Option<TelegramOrderMedia> {
+    if let Some(photo) = message.photo.as_ref().and_then(|photos| {
+        photos.iter().max_by_key(|photo| {
+            (
+                photo.width.saturating_mul(photo.height),
+                photo.file_size.unwrap_or_default(),
+            )
+        })
+    }) {
+        return Some(TelegramOrderMedia {
+            file_id: photo.file_id.clone(),
+            file_name: "order-image.jpg".to_string(),
+            mime_type: "image/jpeg".to_string(),
+            file_size: photo.file_size,
+        });
+    }
+    let document = message.document.as_ref()?;
+    let file_name = document
+        .file_name
+        .clone()
+        .unwrap_or_else(|| "order-image".to_string());
+    let mime_type = document.mime_type.clone().unwrap_or_default();
+    if !is_image_file(&mime_type, &file_name) {
+        return None;
+    }
+    Some(TelegramOrderMedia {
+        file_id: document.file_id.clone(),
+        file_name: file_name.clone(),
+        mime_type: if mime_type.trim().is_empty() {
+            image_mime_from_name(&file_name)
+        } else {
+            mime_type
+        },
+        file_size: document.file_size,
+    })
+}
+
+fn is_image_file(mime_type: &str, file_name: &str) -> bool {
+    if mime_type.trim().to_ascii_lowercase().starts_with("image/") {
+        return true;
+    }
+    matches!(
+        file_name
+            .rsplit('.')
+            .next()
+            .unwrap_or_default()
+            .to_ascii_lowercase()
+            .as_str(),
+        "jpg" | "jpeg" | "png" | "webp" | "gif" | "bmp"
+    )
+}
+
+fn image_mime_from_name(file_name: &str) -> String {
+    match file_name
+        .rsplit('.')
+        .next()
+        .unwrap_or_default()
+        .to_ascii_lowercase()
+        .as_str()
+    {
+        "png" => "image/png",
+        "webp" => "image/webp",
+        "gif" => "image/gif",
+        "bmp" => "image/bmp",
+        _ => "image/jpeg",
+    }
+    .to_string()
 }
 
 async fn handle_contact(
@@ -904,18 +1129,6 @@ pub(crate) async fn send_order_to_chat(
         )
         .await
     }
-}
-
-pub(crate) async fn send_text_to_chat(
-    service: &TelegramService,
-    chat: &TelegramChat,
-    text: &str,
-) -> Result<(), TelegramError> {
-    let (_, token) = service.bot_credentials().await?;
-    if token.trim().is_empty() {
-        return Err(TelegramError::BotTokenRequired);
-    }
-    send_message(service, &token, &chat.chat_id, text, chat.thread_id).await
 }
 
 async fn send_photo(
@@ -1251,7 +1464,6 @@ async fn handle_order_text(
     token: &str,
     chat_id: &str,
     telegram_user_id: &str,
-    manager_name: &str,
     text: &str,
 ) -> Result<bool, TelegramError> {
     let Some(mut draft) = service.order_draft(telegram_user_id).await? else {
@@ -1363,43 +1575,26 @@ async fn handle_order_text(
                 draft.order_number.clone()
             };
             draft.order_number = order_number.clone();
-            service
-                .save_order_draft(telegram_user_id, draft.clone())
-                .await?;
-            let caption = order_caption(&order_number, &draft, manager_name);
-            match service
-                .deliver_order_caption(telegram_user_id, &caption)
-                .await
-            {
-                Ok(0) => {
-                    send_order_text(
-                        service,
-                        token,
-                        chat_id,
-                        "Order tayyor, lekin yuborish uchun bot ulangan guruh topilmadi.",
-                    )
-                    .await?;
-                }
-                Ok(count) => {
-                    service.clear_order_draft(telegram_user_id).await?;
-                    send_order_text(
-                        service,
-                        token,
-                        chat_id,
-                        &format!("✅ Order №T{order_number} {count} ta guruhga yuborildi."),
-                    )
-                    .await?;
-                }
-                Err(error) => {
-                    send_order_text(
-                        service,
-                        token,
-                        chat_id,
-                        &format!("Order yuborilmadi: {error}"),
-                    )
-                    .await?;
-                }
-            }
+            draft.step = TelegramOrderStep::Attachment;
+            service.save_order_draft(telegram_user_id, draft).await?;
+            send_order_text(
+                service,
+                token,
+                chat_id,
+                &format!(
+                    "✅ Tiraj qabul qilindi: {tiraj} kg. Endi order rasmini photo yoki file ko‘rinishida yuboring. Rasm kelgach order guruhga yuboriladi."
+                ),
+            )
+            .await?;
+        }
+        TelegramOrderStep::Attachment => {
+            send_order_text(
+                service,
+                token,
+                chat_id,
+                "Orderni yuborish uchun rasm yoki rasm faylini yuboring.",
+            )
+            .await?;
         }
         _ => {
             send_order_text(
@@ -1836,6 +2031,44 @@ fn parse_tiraj(value: &str) -> Option<f64> {
         .filter(|value| *value > 0.0)
 }
 
+async fn get_telegram_file(
+    service: &TelegramService,
+    token: &str,
+    file_id: &str,
+) -> Result<TelegramFile, TelegramError> {
+    request_json(
+        service,
+        token,
+        "getFile",
+        &serde_json::json!({"file_id": file_id}),
+    )
+    .await
+}
+
+async fn download_telegram_file(
+    service: &TelegramService,
+    token: &str,
+    file_path: &str,
+) -> Result<Vec<u8>, TelegramError> {
+    let response = service
+        .http_client()
+        .get(format!("{TELEGRAM_FILE_BASE}{token}/{file_path}"))
+        .send()
+        .await
+        .map_err(|error| TelegramError::Transport(error.to_string()))?;
+    let status = response.status();
+    if !status.is_success() {
+        return Err(TelegramError::Transport(format!(
+            "telegram file download returned HTTP {status}"
+        )));
+    }
+    response
+        .bytes()
+        .await
+        .map(|bytes| bytes.to_vec())
+        .map_err(|error| TelegramError::Transport(error.to_string()))
+}
+
 async fn request_json<T: for<'de> Deserialize<'de> + Default, P: Serialize>(
     service: &TelegramService,
     token: &str,
@@ -1975,7 +2208,7 @@ fn role_guide(role: TelegramAccountRole) -> String {
         TelegramAccountRole::SalesManager => {
             r#"💼 Sotuv manageri vazifalari:
 • Mijozlar va orderlar bilan ishlash.
-• /new_order orqali mijoz, mahsulot, holat, qavat/mikron va tirajni ketma-ket to‘ldirish.
+• /new_order orqali mijoz, mahsulot, holat, qavat/mikron, tiraj va rasmni ketma-ket to‘ldirish.
 • Yangi orderlar yuborilgan guruhni kuzatish.
 • Order tafsilotlarini ishlab chiqarish jamoasiga yetkazish."#
         }
@@ -2058,8 +2291,9 @@ fn number_or_dash(value: f64) -> String {
 #[cfg(test)]
 mod tests {
     use super::{
-        InlineLoginInput, TelegramOrderNotification, is_login_code, number_or_dash, parse_command,
-        parse_inline_login_input, role_guide,
+        InlineLoginInput, TelegramMessage, TelegramOrderNotification, is_login_code,
+        number_or_dash, order_media_from_message, parse_command, parse_inline_login_input,
+        role_guide,
     };
     use crate::core::calculate_orders::CalculateOrderTemplate;
     use crate::core::production_map::ProductionMapDefinition;
@@ -2114,6 +2348,37 @@ mod tests {
         );
         assert_eq!(parse_inline_login_input("q7 4924"), None);
         assert_eq!(parse_inline_login_input("q7 1234567"), None);
+    }
+
+    #[test]
+    fn order_media_accepts_photos_and_image_documents_only() {
+        let photo_message: TelegramMessage = serde_json::from_value(serde_json::json!({
+            "chat": {"id": 1, "type": "private"},
+            "photo": [
+                {"file_id": "small", "width": 100, "height": 100},
+                {"file_id": "large", "width": 1000, "height": 1000, "file_size": 42}
+            ]
+        }))
+        .expect("photo message");
+        let photo = order_media_from_message(&photo_message).expect("photo media");
+        assert_eq!(photo.file_id, "large");
+        assert_eq!(photo.mime_type, "image/jpeg");
+
+        let document_message: TelegramMessage = serde_json::from_value(serde_json::json!({
+            "chat": {"id": 1, "type": "private"},
+            "document": {"file_id": "design", "file_name": "design.png"}
+        }))
+        .expect("document message");
+        let document = order_media_from_message(&document_message).expect("image document");
+        assert_eq!(document.file_id, "design");
+        assert_eq!(document.mime_type, "image/png");
+
+        let other_document: TelegramMessage = serde_json::from_value(serde_json::json!({
+            "chat": {"id": 1, "type": "private"},
+            "document": {"file_id": "spec", "file_name": "spec.pdf", "mime_type": "application/pdf"}
+        }))
+        .expect("other document message");
+        assert!(order_media_from_message(&other_document).is_none());
     }
 
     #[test]

@@ -5,6 +5,7 @@
 
 use std::collections::BTreeMap;
 use std::env;
+use std::io::Cursor;
 use std::sync::Arc;
 
 use ferogram::{
@@ -12,6 +13,8 @@ use ferogram::{
     TransportKind,
 };
 use tokio::sync::Mutex;
+
+use crate::core::calculate_orders::CalculateOrderImage;
 
 use super::models::{TelegramDeliveryMode, TelegramUserGroup};
 use super::store::{TelegramStore, TelegramStoreError};
@@ -276,6 +279,34 @@ impl TelegramUserAccountService {
         result
     }
 
+    pub(crate) async fn send_image_to_selected_group(
+        &self,
+        telegram_user_id: &str,
+        text: &str,
+        image: &CalculateOrderImage,
+    ) -> Result<(), UserAccountError> {
+        let account = self.account(telegram_user_id).await?;
+        let selected_chat_id = account
+            .selected_chat_id
+            .as_deref()
+            .ok_or(UserAccountError::GroupNotWritable)?;
+        let selected_chat_type = account
+            .selected_chat_type
+            .as_deref()
+            .ok_or(UserAccountError::GroupNotWritable)?;
+        let (client, shutdown) = self.authorized_client(telegram_user_id).await?;
+        let result = send_image_to_selected_group(
+            &client,
+            selected_chat_id,
+            selected_chat_type,
+            text,
+            image,
+        )
+        .await;
+        shutdown.cancel();
+        result
+    }
+
     async fn authorized_client(
         &self,
         telegram_user_id: &str,
@@ -418,6 +449,46 @@ async fn send_to_selected_group(
     selected_chat_type: &str,
     text: &str,
 ) -> Result<(), UserAccountError> {
+    let peer = selected_group_peer(client, selected_chat_id, selected_chat_type).await?;
+    client
+        .send_message(peer, InputMessage::text(text))
+        .await
+        .map_err(map_transport)?;
+    Ok(())
+}
+
+async fn send_image_to_selected_group(
+    client: &Client,
+    selected_chat_id: &str,
+    selected_chat_type: &str,
+    text: &str,
+    image: &CalculateOrderImage,
+) -> Result<(), UserAccountError> {
+    let peer = selected_group_peer(client, selected_chat_id, selected_chat_type).await?;
+    let file_name = if image.image_name.trim().is_empty() {
+        "order-image.jpg"
+    } else {
+        image.image_name.trim()
+    };
+    let uploaded = client
+        .upload(Cursor::new(image.body.clone()), file_name)
+        .await
+        .map_err(map_transport)?;
+    client
+        .send_message(
+            peer,
+            InputMessage::text(text).copy_media(uploaded.as_auto_media()),
+        )
+        .await
+        .map_err(map_transport)?;
+    Ok(())
+}
+
+async fn selected_group_peer(
+    client: &Client,
+    selected_chat_id: &str,
+    selected_chat_type: &str,
+) -> Result<ferogram::tl::enums::Peer, UserAccountError> {
     for folder_id in [0, 1] {
         let mut iter = client.iter_dialogs().folder_id(Some(folder_id));
         while let Some(dialog) = iter.next(client).await.map_err(map_transport)? {
@@ -431,11 +502,7 @@ async fn send_to_selected_group(
                 .peer()
                 .cloned()
                 .ok_or(UserAccountError::GroupNotWritable)?;
-            client
-                .send_message(peer, InputMessage::text(text))
-                .await
-                .map_err(map_transport)?;
-            return Ok(());
+            return Ok(peer);
         }
     }
     Err(UserAccountError::GroupNotWritable)

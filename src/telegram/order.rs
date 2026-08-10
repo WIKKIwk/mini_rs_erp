@@ -20,6 +20,7 @@ pub(crate) enum TelegramOrderStep {
     Micron,
     LayerOptions,
     Tiraj,
+    Attachment,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
