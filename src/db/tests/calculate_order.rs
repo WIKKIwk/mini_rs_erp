@@ -68,6 +68,22 @@ async fn postgres_calculate_order_store_round_trips_and_dedupes_quick_templates(
     let rows = store.list("admin:admin").await.expect("list after delete");
     assert_eq!(rows, vec![first]);
 
+    sqlx::query(
+        "UPDATE mini_quick_order_templates
+         SET payload_json = jsonb_set(payload_json, '{roll_count}', '7.0'::jsonb)
+         WHERE id = $1",
+    )
+    .bind(&rows[0].id)
+    .execute(&pool)
+    .await
+    .expect("write legacy decimal roll count");
+    let legacy_rows = store
+        .list("admin:admin")
+        .await
+        .expect("list legacy decimal roll count");
+    assert_eq!(legacy_rows.len(), 1);
+    assert_eq!(legacy_rows[0].roll_count, Some(7));
+
     let saved_image = store
         .save_image(
             "admin:admin",

@@ -3,6 +3,7 @@ use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
 use crate::core::formula::{DEFAULT_EDGE_ALLOWANCE_MM, LayerInput, derive_width_mm};
+use crate::core::quantity::deserialize_optional_integer_count;
 
 #[derive(Debug, Clone, Default, Deserialize, Serialize, PartialEq)]
 pub struct CalculateOrderTemplate {
@@ -50,7 +51,7 @@ pub struct CalculateOrderTemplate {
     pub width_mm: f64,
     #[serde(default = "default_waste_percent")]
     pub waste_percent: f64,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "deserialize_optional_integer_count")]
     pub roll_count: Option<i64>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub layers: Vec<LayerInput>,

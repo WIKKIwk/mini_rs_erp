@@ -43,6 +43,21 @@ async fn postgres_production_map_store_persists_maps_sequences_and_queue_states(
         .expect("save map");
     assert_eq!(saved.map.id, "zakaz-1001");
     assert_eq!(saved.map.order_number, "1001");
+    sqlx::query(
+        "UPDATE mini_production_maps
+         SET map_json = jsonb_set(map_json, '{roll_count}', '7.0'::jsonb)
+         WHERE id = $1",
+    )
+    .bind("zakaz-1001")
+    .execute(&pool)
+    .await
+    .expect("write legacy decimal roll count");
+    let legacy_maps = service
+        .maps()
+        .await
+        .expect("list legacy decimal roll count");
+    assert_eq!(legacy_maps.len(), 1);
+    assert_eq!(legacy_maps[0].map.roll_count, Some(7));
     let node_rows: Vec<(String, String, String)> = sqlx::query_as(
         "SELECT node_id, kind, title
              FROM mini_production_map_nodes

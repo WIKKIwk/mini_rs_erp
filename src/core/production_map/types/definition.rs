@@ -2,6 +2,8 @@ use std::collections::BTreeMap;
 
 use serde::{Deserialize, Serialize};
 
+use crate::core::quantity::deserialize_optional_integer_count;
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ProductionMapDefinition {
     pub id: String,
@@ -13,7 +15,11 @@ pub struct ProductionMapDefinition {
     pub order_number: String,
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub customer_name: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        deserialize_with = "deserialize_optional_integer_count",
+        skip_serializing_if = "Option::is_none"
+    )]
     pub roll_count: Option<i64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub width_mm: Option<f64>,
