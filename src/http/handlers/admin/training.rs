@@ -42,6 +42,12 @@ struct TrainingApparatusModeInput {
 }
 
 #[derive(Default, Deserialize)]
+struct TrainingRestartInput {
+    #[serde(default)]
+    apparatus: String,
+}
+
+#[derive(Default, Deserialize)]
 pub struct TrainingRawMaterialAssignmentsQuery {
     #[serde(default)]
     order_id: String,
@@ -691,6 +697,35 @@ pub async fn training_apparatus_modes(
         }
         _ => Err(method_not_allowed()),
     }
+}
+
+pub async fn training_restart(
+    State(state): State<AppState>,
+    method: Method,
+    headers: HeaderMap,
+    body: Bytes,
+) -> Result<Response, AdminError> {
+    authorize_any_capability(
+        &state,
+        &headers,
+        &[Capability::AdminAccess, Capability::ProductionMapManage],
+    )
+    .await?;
+    if method != Method::POST {
+        return Err(method_not_allowed());
+    }
+    let input: TrainingRestartInput = parse_json(&body)?;
+    let apparatus = input.apparatus.trim().to_string();
+    let reset_count = training_store(&state)?
+        .reset_queue_states(&apparatus)
+        .await
+        .map_err(training_workspace_error)?;
+    state.production_maps.notify_live();
+    Ok(json_response(serde_json::json!({
+        "ok": true,
+        "apparatus": apparatus,
+        "reset_count": reset_count,
+    })))
 }
 
 pub async fn training_raw_material_assignments(

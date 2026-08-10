@@ -316,6 +316,28 @@ impl PostgresTrainingWorkspaceStore {
         Ok(())
     }
 
+    pub async fn reset_queue_states(
+        &self,
+        apparatus: &str,
+    ) -> Result<u64, TrainingWorkspaceError> {
+        let apparatus = apparatus.trim();
+        let result = (if apparatus.is_empty() {
+            sqlx::query("DELETE FROM mini_training_queue_states")
+                .execute(&self.pool)
+                .await
+        } else {
+            sqlx::query(
+                "DELETE FROM mini_training_queue_states
+                 WHERE lower(apparatus) = lower($1)",
+            )
+            .bind(apparatus)
+            .execute(&self.pool)
+            .await
+        })
+        .map_err(|_| TrainingWorkspaceError::StoreFailed)?;
+        Ok(result.rows_affected())
+    }
+
     pub async fn raw_material_barcodes_for_order_apparatus(
         &self,
         order_id: &str,

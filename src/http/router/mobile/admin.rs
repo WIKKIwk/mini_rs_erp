@@ -83,6 +83,10 @@ pub(super) fn routes() -> Router<AppState> {
             any(admin::training_apparatus_modes),
         )
         .route(
+            "/v1/mobile/admin/training/restart",
+            post(admin::training_restart),
+        )
+        .route(
             "/v1/mobile/admin/training/production-maps",
             any(admin::training_production_maps),
         )
