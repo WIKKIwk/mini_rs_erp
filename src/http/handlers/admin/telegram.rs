@@ -88,5 +88,9 @@ fn telegram_error(error: TelegramError) -> AdminError {
         }
         TelegramError::UserAccount(_) => server_error("telegram user account operation failed"),
         TelegramError::Store => server_error("telegram store failed"),
+        TelegramError::OrderCatalogNotConfigured => {
+            bad_request("telegram order catalog is not configured")
+        }
+        TelegramError::OrderCatalog(_) => server_error("telegram order catalog failed"),
     }
 }

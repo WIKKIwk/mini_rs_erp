@@ -11,6 +11,7 @@ use tokio::sync::Mutex;
 use super::models::{
     TelegramAccountRole, TelegramChat, TelegramDeliveryMode, TelegramUserAccount, TelegramUserGroup,
 };
+use super::order::TelegramOrderDraft;
 
 #[derive(Debug, thiserror::Error)]
 pub enum TelegramStoreError {
@@ -46,6 +47,8 @@ struct TelegramStoreData {
     user_sessions: BTreeMap<String, String>,
     #[serde(default)]
     update_offset: i64,
+    #[serde(default)]
+    order_drafts: BTreeMap<String, TelegramOrderDraft>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -215,6 +218,34 @@ impl TelegramStore {
         let user = user.clone();
         self.persist(&data).await?;
         Ok(user)
+    }
+
+    pub async fn order_draft(
+        &self,
+        telegram_user_id: &str,
+    ) -> Result<Option<TelegramOrderDraft>, TelegramStoreError> {
+        let data = self.data.lock().await;
+        Ok(data.order_drafts.get(telegram_user_id).cloned())
+    }
+
+    pub async fn save_order_draft(
+        &self,
+        telegram_user_id: &str,
+        draft: TelegramOrderDraft,
+    ) -> Result<(), TelegramStoreError> {
+        let mut data = self.data.lock().await;
+        data.order_drafts
+            .insert(telegram_user_id.to_string(), draft);
+        self.persist(&data).await
+    }
+
+    pub async fn clear_order_draft(
+        &self,
+        telegram_user_id: &str,
+    ) -> Result<(), TelegramStoreError> {
+        let mut data = self.data.lock().await;
+        data.order_drafts.remove(telegram_user_id);
+        self.persist(&data).await
     }
 
     pub async fn create_invite(

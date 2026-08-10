@@ -65,4 +65,23 @@ impl AdminService {
             assigned_warehouses: Vec::new(),
         })
     }
+
+    pub async fn customer_items(
+        &self,
+        customer_ref: &str,
+        query: &str,
+        limit: usize,
+    ) -> Result<Vec<SupplierItem>, AdminPortError> {
+        let entry = self
+            .read_port()?
+            .customer_by_ref(customer_ref.trim())
+            .await?;
+        let state = self.state_for(&entry.ref_).await?;
+        if state.removed {
+            return Err(AdminPortError::NotFound);
+        }
+        self.read_port()?
+            .customer_items(&entry.ref_, query, limit)
+            .await
+    }
 }

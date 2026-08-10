@@ -9,8 +9,8 @@ use crate::core::apparatus_groups::ApparatusGroupService;
 use crate::core::auth::ports::CustomerLookup;
 use crate::core::auth::service::AuthService;
 use crate::core::backup_doctor::BackupDoctor;
-use crate::core::calculate_orders::CalculateOrderStorePort;
 use crate::core::calculate_materials::CalculateMaterialStorePort;
+use crate::core::calculate_orders::CalculateOrderStorePort;
 use crate::core::chat::ChatService;
 use crate::core::chat_media::ChatMediaService;
 use crate::core::customer::service::CustomerService;
@@ -170,7 +170,11 @@ impl AppState {
         let warehouses = build_warehouse_service();
         let worker_groups = build_worker_group_service();
         let sessions = build_session_manager(&config);
-        let telegram = build_telegram_service();
+        let telegram = build_telegram_service().with_order_catalog(
+            admin.clone(),
+            calculate_materials.clone(),
+            production_maps.clone(),
+        );
 
         Self {
             config: Arc::new(config),

@@ -38,7 +38,10 @@ pub async fn start(
 }
 
 fn start_error(error: TelegramError) -> (StatusCode, Json<ErrorResponse>) {
-    let is_store_error = matches!(&error, TelegramError::Store);
+    let is_store_error = matches!(
+        &error,
+        TelegramError::Store | TelegramError::OrderCatalog(_)
+    );
     let message = match error {
         TelegramError::InviteTokenRequired => "telegram invite token is required",
         TelegramError::UserIdRequired => "telegram user id is required",
@@ -60,6 +63,8 @@ fn start_error(error: TelegramError) -> (StatusCode, Json<ErrorResponse>) {
         TelegramError::UserAccountGroupNotWritable => "telegram selected group is not writable",
         TelegramError::UserAccount(_) => "telegram user account operation failed",
         TelegramError::Store => "telegram store failed",
+        TelegramError::OrderCatalogNotConfigured => "telegram order catalog is not configured",
+        TelegramError::OrderCatalog(_) => "telegram order catalog failed",
     };
     let status = if is_store_error {
         StatusCode::INTERNAL_SERVER_ERROR

@@ -5,6 +5,22 @@ use crate::core::admin::item_customer_policy::{
 };
 
 impl AdminService {
+    pub async fn create_customer_name_only(
+        &self,
+        name: &str,
+    ) -> Result<CustomerDirectoryEntry, AdminPortError> {
+        let name = name.trim();
+        if name.is_empty() {
+            return Err(AdminPortError::InvalidInput(
+                "customer name is required".to_string(),
+            ));
+        }
+        self.write_port()?
+            .create_customer(name, "")
+            .await
+            .map(customer_directory_entry)
+    }
+
     pub async fn create_customer(
         &self,
         name: &str,

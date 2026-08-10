@@ -1,3 +1,4 @@
+use std::collections::BTreeMap;
 use std::path::PathBuf;
 use std::sync::{
     Arc,
@@ -15,6 +16,8 @@ use super::models::{
     TelegramDeliveryMode, TelegramInviteRequest, TelegramInviteResponse, TelegramStartRequest,
     TelegramUserAccount, TelegramUserGroup,
 };
+use super::order::TelegramOrderDraft;
+use super::order_catalog::TelegramOrderCatalog;
 use super::store::{TelegramStore, TelegramStoreError};
 use super::useraccount::{CodeOutcome, LoginOutcome, TelegramUserAccountService, UserAccountError};
 
@@ -52,6 +55,10 @@ pub enum TelegramError {
     UserAccount(String),
     #[error("telegram store failed")]
     Store,
+    #[error("telegram order catalog is not configured")]
+    OrderCatalogNotConfigured,
+    #[error("telegram order catalog failed: {0}")]
+    OrderCatalog(String),
 }
 
 #[derive(Clone)]
@@ -60,6 +67,8 @@ pub struct TelegramService {
     useraccount: TelegramUserAccountService,
     http: reqwest::Client,
     worker_started: Arc<AtomicBool>,
+    order_catalog: Option<Arc<TelegramOrderCatalog>>,
+    order_choices: Arc<tokio::sync::Mutex<BTreeMap<String, String>>>,
 }
 
 impl TelegramService {
@@ -70,7 +79,23 @@ impl TelegramService {
             store,
             http: reqwest::Client::new(),
             worker_started: Arc::new(AtomicBool::new(false)),
+            order_catalog: None,
+            order_choices: Arc::new(tokio::sync::Mutex::new(BTreeMap::new())),
         }
+    }
+
+    pub fn with_order_catalog(
+        mut self,
+        admin: crate::core::admin::service::AdminService,
+        materials: Arc<dyn crate::core::calculate_materials::CalculateMaterialStorePort>,
+        production_maps: crate::core::production_map::ProductionMapService,
+    ) -> Self {
+        self.order_catalog = Some(Arc::new(TelegramOrderCatalog::new(
+            admin,
+            materials,
+            production_maps,
+        )));
+        self
     }
 
     pub async fn admin_overview(&self) -> Result<TelegramAdminOverview, TelegramError> {
@@ -298,6 +323,105 @@ impl TelegramService {
             .send_text_to_selected_group(telegram_user_id, caption)
             .await
             .map_err(map_user_account)
+    }
+
+    pub(crate) async fn order_catalog(&self) -> Result<Arc<TelegramOrderCatalog>, TelegramError> {
+        self.order_catalog
+            .clone()
+            .ok_or(TelegramError::OrderCatalogNotConfigured)
+    }
+
+    pub(crate) async fn order_draft(
+        &self,
+        telegram_user_id: &str,
+    ) -> Result<Option<TelegramOrderDraft>, TelegramError> {
+        self.store
+            .order_draft(telegram_user_id)
+            .await
+            .map_err(map_store)
+    }
+
+    pub(crate) async fn save_order_draft(
+        &self,
+        telegram_user_id: &str,
+        draft: TelegramOrderDraft,
+    ) -> Result<(), TelegramError> {
+        self.store
+            .save_order_draft(telegram_user_id, draft)
+            .await
+            .map_err(map_store)
+    }
+
+    pub(crate) async fn clear_order_draft(
+        &self,
+        telegram_user_id: &str,
+    ) -> Result<(), TelegramError> {
+        self.store
+            .clear_order_draft(telegram_user_id)
+            .await
+            .map_err(map_store)
+    }
+
+    pub(crate) async fn remember_order_choice(
+        &self,
+        telegram_user_id: &str,
+        value: String,
+    ) -> String {
+        let token = format!("{:016x}", rand::random::<u64>());
+        let key = format!("{telegram_user_id}:{token}");
+        let mut choices = self.order_choices.lock().await;
+        choices.insert(key, value);
+        while choices.len() > 4096 {
+            let Some(first) = choices.keys().next().cloned() else {
+                break;
+            };
+            choices.remove(&first);
+        }
+        token
+    }
+
+    pub(crate) async fn take_order_choice(
+        &self,
+        telegram_user_id: &str,
+        token: &str,
+    ) -> Option<String> {
+        self.order_choices
+            .lock()
+            .await
+            .remove(&format!("{telegram_user_id}:{token}"))
+    }
+
+    pub(crate) async fn deliver_order_caption(
+        &self,
+        telegram_user_id: &str,
+        caption: &str,
+    ) -> Result<usize, TelegramError> {
+        let Some(account) = self.user_by_telegram_id(telegram_user_id).await? else {
+            return Err(TelegramError::UserAccountNotAuthorized);
+        };
+        if account.delivery_mode == TelegramDeliveryMode::UserProfile {
+            self.send_order_to_user_profile(telegram_user_id, caption)
+                .await?;
+            return Ok(1);
+        }
+        let chats = self.store.chats().await.map_err(map_store)?;
+        let mut delivered = 0;
+        let mut last_error = None;
+        for chat in chats {
+            match super::bot::send_text_to_chat(self, &chat, caption).await {
+                Ok(()) => delivered += 1,
+                Err(error) => {
+                    tracing::warn!(chat_id = %chat.chat_id, ?error, "telegram order delivery failed");
+                    last_error = Some(error);
+                }
+            }
+        }
+        if delivered == 0
+            && let Some(error) = last_error
+        {
+            return Err(error);
+        }
+        Ok(delivered)
     }
 
     pub(crate) async fn update_offset(&self) -> Result<i64, TelegramError> {
