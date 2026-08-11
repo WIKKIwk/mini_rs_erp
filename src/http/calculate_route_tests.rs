@@ -43,6 +43,36 @@ async fn calculate_endpoint_returns_formula_result() {
 }
 
 #[tokio::test]
+async fn calculate_endpoint_accepts_mobile_decimal_roll_count() {
+    let state = test_state();
+    let token = session(&state, PrincipalRole::Admin).await;
+
+    let response = build_router(state)
+        .oneshot(request(
+            "POST",
+            "/v1/mobile/calculate",
+            &token,
+            r#"{
+                "product":"cpp / 20 mikron / 600",
+                "kg":300,
+                "frame_product_size_mm":515,
+                "frame_count":1,
+                "roll_count":7.0,
+                "first_layer":{"material":"pet","micron":"12"},
+                "second_layer":{"material":"pe oq","micron":"30"}
+            }"#,
+        ))
+        .await
+        .expect("response");
+    let status = response.status();
+    let body = json_body(response).await;
+
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body["ok"], true);
+    assert_eq!(body["roll_count"], 7);
+}
+
+#[tokio::test]
 async fn calculate_endpoint_accepts_arbitrary_layer_count() {
     let state = test_state();
     let token = session(&state, PrincipalRole::Admin).await;

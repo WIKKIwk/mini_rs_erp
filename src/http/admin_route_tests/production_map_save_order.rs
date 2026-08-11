@@ -116,6 +116,51 @@ async fn production_map_save_with_order_saves_map_and_template() {
 }
 
 #[tokio::test]
+async fn production_map_save_with_order_accepts_mobile_decimal_roll_count() {
+    let state = test_state();
+    let token = session(&state, PrincipalRole::Admin).await;
+    let mut map: serde_json::Value = serde_json::from_str(&pechat_order_map_json(
+        "zakaz-decimal-roll-count",
+        "Decimal roll count",
+        "7701",
+        "8 ta rangli pechat",
+    ))
+    .expect("map json");
+    map["roll_count"] = serde_json::json!(7.0);
+    let body = serde_json::json!({
+        "map": map,
+        "template": {
+            "name": "decimal roll mahsulot",
+            "product": "decimal roll mahsulot",
+            "frame_product_size_mm": 635.0,
+            "frame_count": 1.0,
+            "waste_percent": 5.0,
+            "roll_count": 7.0,
+            "first_layer_material": "pet",
+            "first_layer_micron": "12",
+            "second_layer_material": "pe oq",
+            "second_layer_micron": "30"
+        }
+    });
+
+    let response = build_router(state)
+        .oneshot(request_with_body(
+            "PUT",
+            "/v1/mobile/admin/production-maps/with-order",
+            &token,
+            &body.to_string(),
+        ))
+        .await
+        .expect("save with order");
+    let status = response.status();
+    let value = json_body(response).await;
+
+    assert_eq!(status, StatusCode::OK, "{value}");
+    assert_eq!(value["saved"]["map"]["roll_count"], 7);
+    assert_eq!(value["template"]["roll_count"], 7);
+}
+
+#[tokio::test]
 async fn production_map_save_allocates_order_number_for_direct_and_atomic_saves() {
     let state = test_state();
     let token = session(&state, PrincipalRole::Admin).await;

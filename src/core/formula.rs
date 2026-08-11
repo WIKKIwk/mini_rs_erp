@@ -1,5 +1,7 @@
 use serde::{Deserialize, Serialize};
 
+use crate::core::quantity::deserialize_optional_integer_count;
+
 mod calculation;
 mod materials;
 mod request_layers;
@@ -37,7 +39,7 @@ pub struct CalculateRequest {
     pub edge_allowance_mm: Option<f64>,
     #[serde(default)]
     pub waste_percent: Option<f64>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "deserialize_optional_integer_count")]
     pub roll_count: Option<i64>,
     #[serde(default)]
     pub layers: Vec<LayerInput>,

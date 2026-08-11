@@ -1485,3 +1485,31 @@ fn unix_micros() -> u128 {
         .map(|duration| duration.as_micros())
         .unwrap_or_default()
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn training_order_request_accepts_mobile_decimal_roll_count() {
+        let input: TrainingMapSaveWithOrderRequest = serde_json::from_value(serde_json::json!({
+            "map": {
+                "id": "training-decimal-roll-count",
+                "product_code": "TRAINING-7701",
+                "title": "Training decimal roll count",
+                "roll_count": 7.0,
+                "nodes": [],
+                "edges": []
+            },
+            "template": {
+                "name": "training mahsulot",
+                "product": "training mahsulot",
+                "roll_count": 7.0
+            }
+        }))
+        .expect("training order request");
+
+        assert_eq!(input.map.roll_count, Some(7));
+        assert_eq!(input.template.roll_count, Some(7));
+    }
+}
