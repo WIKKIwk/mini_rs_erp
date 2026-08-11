@@ -52,6 +52,17 @@ async fn deleting_training_order_removes_only_its_queue_states() {
     .execute(&pool)
     .await
     .expect("insert queue states");
+    sqlx::query(
+        "INSERT INTO mini_training_queue_events
+            (event_id, apparatus, order_id, action, from_state, to_state,
+             actor_ref, actor_display_name)
+         VALUES
+            ('training-event-delete', 'Flexo', 'training-1001', 'complete', 'pending', 'completed', 'worker-1', 'Worker 1'),
+            ('training-event-keep', 'Flexo', 'training-keep', 'start', 'pending', 'in_progress', 'worker-2', 'Worker 2')",
+    )
+    .execute(&pool)
+    .await
+    .expect("insert queue events");
 
     PostgresTrainingWorkspaceStore::new(pool.clone())
         .delete_order("training-1001")
@@ -70,6 +81,18 @@ async fn deleting_training_order_removes_only_its_queue_states() {
             .fetch_one(&pool)
             .await
             .expect("count unrelated states");
+    let deleted_events: i64 =
+        sqlx::query_scalar("SELECT COUNT(*) FROM mini_training_queue_events WHERE order_id = $1")
+            .bind("training-1001")
+            .fetch_one(&pool)
+            .await
+            .expect("count deleted queue events");
+    let unrelated_events: i64 =
+        sqlx::query_scalar("SELECT COUNT(*) FROM mini_training_queue_events WHERE order_id = $1")
+            .bind("training-keep")
+            .fetch_one(&pool)
+            .await
+            .expect("count unrelated queue events");
     let deleted_map: i64 =
         sqlx::query_scalar("SELECT COUNT(*) FROM mini_training_production_maps WHERE id = $1")
             .bind("training-1001")
@@ -78,6 +101,8 @@ async fn deleting_training_order_removes_only_its_queue_states() {
             .expect("count deleted map");
     assert_eq!(deleted_order_states, 0);
     assert_eq!(unrelated_states, 1);
+    assert_eq!(deleted_events, 0);
+    assert_eq!(unrelated_events, 1);
     assert_eq!(deleted_map, 0);
 
     pool.close().await;

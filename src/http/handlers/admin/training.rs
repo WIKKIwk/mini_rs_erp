@@ -556,8 +556,18 @@ pub(super) async fn training_queue_action(
         .cloned()
         .unwrap_or_default();
     states.insert(order_id.to_string(), next.as_str().to_string());
+    let event_id = format!("training-queue-event-{}-{}", unix_micros(), order_id);
     store
-        .put_queue_state(&apparatus, order_id, next.as_str())
+        .put_queue_state_with_event(
+            &apparatus,
+            order_id,
+            next.as_str(),
+            &event_id,
+            training_action_value(action),
+            current.as_str(),
+            &principal.ref_,
+            &principal.display_name,
+        )
         .await?;
     state.production_maps.notify_live();
     let order_status = training_order_status(next);
@@ -1080,6 +1090,154 @@ pub async fn training_restart(
         "apparatus": apparatus,
         "reset_count": reset_count,
     })))
+}
+
+pub async fn training_completed_orders(
+    State(state): State<AppState>,
+    method: Method,
+    headers: HeaderMap,
+) -> Result<Response, AdminError> {
+    let principal = authorize_any_capability(
+        &state,
+        &headers,
+        &[
+            Capability::AdminAccess,
+            Capability::ProductionMapManage,
+            Capability::ApparatusQueueRead,
+        ],
+    )
+    .await?;
+    if method != Method::GET {
+        return Err(method_not_allowed());
+    }
+    let events = training_store(&state)?
+        .completed_queue_events_for_actor(&principal.ref_, 200)
+        .await
+        .map_err(training_workspace_error)?;
+    let completed_orders = events
+        .into_iter()
+        .map(|event| {
+            let status = if event.action == "complete" && event.to_state == "completed" {
+                "completed"
+            } else {
+                "in_progress"
+            };
+            serde_json::json!({
+                "apparatus": event.apparatus,
+                "order_id": event.order_id,
+                "completed_at_unix": event.created_at_unix,
+                "status": status,
+                "actor_ref": event.actor_ref,
+                "actor_display_name": event.actor_display_name,
+            })
+        })
+        .collect::<Vec<_>>();
+    Ok(json_response(serde_json::json!({
+        "completed_orders": completed_orders,
+    })))
+}
+
+pub async fn training_order_statuses(
+    State(state): State<AppState>,
+    method: Method,
+    headers: HeaderMap,
+) -> Result<Response, AdminError> {
+    authorize_any_capability(
+        &state,
+        &headers,
+        &[
+            Capability::AdminAccess,
+            Capability::ProductionMapManage,
+            Capability::ApparatusQueueRead,
+        ],
+    )
+    .await?;
+    if method != Method::GET {
+        return Err(method_not_allowed());
+    }
+
+    let store = training_store(&state)?;
+    let maps = store.maps().await.map_err(training_workspace_error)?;
+    let state_records = store
+        .queue_state_records()
+        .await
+        .map_err(training_workspace_error)?;
+    let latest_events = store
+        .latest_queue_events()
+        .await
+        .map_err(training_workspace_error)?;
+    let mut statuses = BTreeMap::new();
+    for saved in maps {
+        let order_id = saved.map.id.trim().to_string();
+        if order_id.is_empty() {
+            continue;
+        }
+        let map_apparatus = saved
+            .map
+            .nodes
+            .iter()
+            .find(|node| node.kind == ProductionMapNodeKind::Apparatus)
+            .map(|node| node.title.trim().to_string())
+            .unwrap_or_default();
+        let state_record = state_records
+            .iter()
+            .filter(|record| {
+                record.order_id == order_id
+                    && (map_apparatus.is_empty()
+                        || queue_state::apparatus_titles_match(
+                            &record.apparatus,
+                            &map_apparatus,
+                        ))
+            })
+            .max_by_key(|record| record.updated_at_unix);
+        let event = latest_events
+            .iter()
+            .filter(|event| {
+                event.order_id == order_id
+                    && (map_apparatus.is_empty()
+                        || queue_state::apparatus_titles_match(
+                            &event.apparatus,
+                            &map_apparatus,
+                        ))
+            })
+            .max_by_key(|event| event.created_at_unix);
+        let state = state_record
+            .map(|record| record.state.as_str())
+            .or_else(|| event.map(|event| event.to_state.as_str()))
+            .unwrap_or("pending")
+            .to_string();
+        let apparatus = state_record
+            .map(|record| record.apparatus.clone())
+            .or_else(|| event.map(|event| event.apparatus.clone()))
+            .unwrap_or(map_apparatus);
+        let updated_at_unix = state_record
+            .map(|record| record.updated_at_unix)
+            .or_else(|| event.map(|event| event.created_at_unix))
+            .unwrap_or_default();
+        let completed_at_unix = (state == "completed"
+            && event.is_some_and(|event| {
+                event.action == "complete" && event.to_state == "completed"
+            }))
+        .then(|| event.map(|event| event.created_at_unix).unwrap_or_default())
+        .unwrap_or_default();
+        statuses.insert(
+            order_id.clone(),
+            serde_json::json!({
+                "order_id": order_id,
+                "apparatus": apparatus,
+                "state": state.clone(),
+                "status": state,
+                "action": event.map(|event| event.action.clone()).unwrap_or_default(),
+                "actor_ref": event.map(|event| event.actor_ref.clone()).unwrap_or_default(),
+                "actor_display_name": event
+                    .map(|event| event.actor_display_name.clone())
+                    .unwrap_or_default(),
+                "updated_at_unix": updated_at_unix,
+                "completed_at_unix": completed_at_unix,
+            }),
+        );
+    }
+    Ok(json_response(serde_json::json!({"statuses": statuses})))
 }
 
 pub async fn training_raw_material_assignments(

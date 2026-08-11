@@ -87,6 +87,14 @@ pub(super) fn routes() -> Router<AppState> {
             post(admin::training_restart),
         )
         .route(
+            "/v1/mobile/admin/training/completed-orders",
+            get(admin::training_completed_orders),
+        )
+        .route(
+            "/v1/mobile/admin/training/statuses",
+            get(admin::training_order_statuses),
+        )
+        .route(
             "/v1/mobile/admin/training/production-maps",
             any(admin::training_production_maps),
         )

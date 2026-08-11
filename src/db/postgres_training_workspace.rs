@@ -44,6 +44,27 @@ pub struct TrainingImage {
     pub body: Vec<u8>,
 }
 
+#[derive(Debug, Clone, Serialize)]
+pub struct TrainingQueueStateRecord {
+    pub apparatus: String,
+    pub order_id: String,
+    pub state: String,
+    pub updated_at_unix: i64,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct TrainingQueueEvent {
+    pub event_id: String,
+    pub apparatus: String,
+    pub order_id: String,
+    pub action: String,
+    pub from_state: String,
+    pub to_state: String,
+    pub actor_ref: String,
+    pub actor_display_name: String,
+    pub created_at_unix: i64,
+}
+
 #[derive(Clone)]
 pub struct PostgresTrainingWorkspaceStore {
     pool: PgPool,
@@ -287,6 +308,37 @@ impl PostgresTrainingWorkspaceStore {
         Ok(states)
     }
 
+    pub async fn queue_state_records(
+        &self,
+    ) -> Result<Vec<TrainingQueueStateRecord>, TrainingWorkspaceError> {
+        let rows = sqlx::query_as::<_, (String, String, String, i64)>(
+            "SELECT apparatus, order_id, state,
+                    EXTRACT(EPOCH FROM updated_at)::bigint AS updated_at_unix
+             FROM mini_training_queue_states
+             ORDER BY updated_at DESC",
+        )
+        .fetch_all(&self.pool)
+        .await
+        .map_err(|_| TrainingWorkspaceError::StoreFailed)?;
+
+        Ok(rows
+            .into_iter()
+            .filter_map(|(apparatus, order_id, state, updated_at_unix)| {
+                let apparatus = apparatus.trim().to_string();
+                let order_id = order_id.trim().to_string();
+                let state = state.trim().to_string();
+                (!apparatus.is_empty() && !order_id.is_empty() && !state.is_empty()).then_some(
+                    TrainingQueueStateRecord {
+                        apparatus,
+                        order_id,
+                        state,
+                        updated_at_unix,
+                    },
+                )
+            })
+            .collect())
+    }
+
     pub async fn put_queue_state(
         &self,
         apparatus: &str,
@@ -317,14 +369,145 @@ impl PostgresTrainingWorkspaceStore {
         Ok(())
     }
 
+    pub async fn put_queue_state_with_event(
+        &self,
+        apparatus: &str,
+        order_id: &str,
+        state: &str,
+        event_id: &str,
+        action: &str,
+        from_state: &str,
+        actor_ref: &str,
+        actor_display_name: &str,
+    ) -> Result<(), TrainingWorkspaceError> {
+        let apparatus = apparatus.trim();
+        let order_id = order_id.trim();
+        let state = state.trim();
+        let event_id = event_id.trim();
+        let action = action.trim();
+        let from_state = from_state.trim();
+        if apparatus.is_empty()
+            || order_id.is_empty()
+            || state.is_empty()
+            || event_id.is_empty()
+            || action.is_empty()
+            || from_state.is_empty()
+        {
+            return Err(TrainingWorkspaceError::InvalidInput(
+                "training queue event uchun aparat, order, state va amal kerak".to_string(),
+            ));
+        }
+
+        let mut tx = self
+            .pool
+            .begin()
+            .await
+            .map_err(|_| TrainingWorkspaceError::StoreFailed)?;
+        sqlx::query(
+            "INSERT INTO mini_training_queue_states (apparatus, order_id, state, updated_at)
+             VALUES ($1, $2, $3, now())
+             ON CONFLICT (apparatus, order_id) DO UPDATE SET
+                 state = excluded.state,
+                 updated_at = now()",
+        )
+        .bind(apparatus)
+        .bind(order_id)
+        .bind(state)
+        .execute(&mut *tx)
+        .await
+        .map_err(|_| TrainingWorkspaceError::StoreFailed)?;
+        sqlx::query(
+            "INSERT INTO mini_training_queue_events
+                (event_id, apparatus, order_id, action, from_state, to_state,
+                 actor_ref, actor_display_name, created_at)
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, now())",
+        )
+        .bind(event_id)
+        .bind(apparatus)
+        .bind(order_id)
+        .bind(action)
+        .bind(from_state)
+        .bind(state)
+        .bind(actor_ref.trim())
+        .bind(actor_display_name.trim())
+        .execute(&mut *tx)
+        .await
+        .map_err(|_| TrainingWorkspaceError::StoreFailed)?;
+        tx.commit()
+            .await
+            .map_err(|_| TrainingWorkspaceError::StoreFailed)?;
+        Ok(())
+    }
+
+    pub async fn latest_queue_events(
+        &self,
+    ) -> Result<Vec<TrainingQueueEvent>, TrainingWorkspaceError> {
+        let rows = sqlx::query_as::<_, (String, String, String, String, String, String, String, String, i64)>(
+            "SELECT event_id, apparatus, order_id, action, from_state, to_state,
+                    actor_ref, actor_display_name,
+                    EXTRACT(EPOCH FROM created_at)::bigint AS created_at_unix
+             FROM (
+                SELECT DISTINCT ON (apparatus, order_id)
+                    event_id, apparatus, order_id, action, from_state, to_state,
+                    actor_ref, actor_display_name, created_at
+                FROM mini_training_queue_events
+                ORDER BY apparatus, order_id, created_at DESC, event_id DESC
+             ) latest
+             ORDER BY created_at DESC, event_id DESC",
+        )
+        .fetch_all(&self.pool)
+        .await
+        .map_err(|_| TrainingWorkspaceError::StoreFailed)?;
+        Ok(rows.into_iter().map(training_queue_event_from_row).collect())
+    }
+
+    pub async fn completed_queue_events_for_actor(
+        &self,
+        actor_ref: &str,
+        limit: usize,
+    ) -> Result<Vec<TrainingQueueEvent>, TrainingWorkspaceError> {
+        let actor_ref = actor_ref.trim();
+        if actor_ref.is_empty() || limit == 0 {
+            return Ok(Vec::new());
+        }
+        let limit = i64::try_from(limit.min(500)).unwrap_or(500);
+        let rows = sqlx::query_as::<_, (String, String, String, String, String, String, String, String, i64)>(
+            "SELECT event_id, apparatus, order_id, action, from_state, to_state,
+                    actor_ref, actor_display_name,
+                    EXTRACT(EPOCH FROM created_at)::bigint AS created_at_unix
+             FROM (
+                SELECT DISTINCT ON (order_id, apparatus)
+                    event_id, apparatus, order_id, action, from_state, to_state,
+                    actor_ref, actor_display_name, created_at
+                FROM mini_training_queue_events
+                WHERE actor_ref = $1
+                  AND action IN ('pause', 'detach_roll', 'roll_complete', 'complete')
+                ORDER BY order_id, apparatus, created_at DESC, event_id DESC
+             ) latest
+             ORDER BY created_at DESC, event_id DESC
+             LIMIT $2",
+        )
+        .bind(actor_ref)
+        .bind(limit)
+        .fetch_all(&self.pool)
+        .await
+        .map_err(|_| TrainingWorkspaceError::StoreFailed)?;
+        Ok(rows.into_iter().map(training_queue_event_from_row).collect())
+    }
+
     pub async fn reset_queue_states(
         &self,
         apparatus: &str,
     ) -> Result<u64, TrainingWorkspaceError> {
         let apparatus = apparatus.trim();
+        let mut tx = self
+            .pool
+            .begin()
+            .await
+            .map_err(|_| TrainingWorkspaceError::StoreFailed)?;
         let result = (if apparatus.is_empty() {
             sqlx::query("DELETE FROM mini_training_queue_states")
-                .execute(&self.pool)
+                .execute(&mut *tx)
                 .await
         } else {
             sqlx::query(
@@ -332,10 +515,28 @@ impl PostgresTrainingWorkspaceStore {
                  WHERE lower(apparatus) = lower($1)",
             )
             .bind(apparatus)
-            .execute(&self.pool)
+            .execute(&mut *tx)
             .await
         })
         .map_err(|_| TrainingWorkspaceError::StoreFailed)?;
+        if apparatus.is_empty() {
+            sqlx::query("DELETE FROM mini_training_queue_events")
+                .execute(&mut *tx)
+                .await
+                .map_err(|_| TrainingWorkspaceError::StoreFailed)?;
+        } else {
+            sqlx::query(
+                "DELETE FROM mini_training_queue_events
+                 WHERE lower(apparatus) = lower($1)",
+            )
+            .bind(apparatus)
+            .execute(&mut *tx)
+            .await
+            .map_err(|_| TrainingWorkspaceError::StoreFailed)?;
+        }
+        tx.commit()
+            .await
+            .map_err(|_| TrainingWorkspaceError::StoreFailed)?;
         Ok(result.rows_affected())
     }
 
@@ -653,6 +854,32 @@ fn payload_string(payload: &serde_json::Value, key: &str) -> String {
         .unwrap_or_default()
         .trim()
         .to_string()
+}
+
+fn training_queue_event_from_row(
+    (
+        event_id,
+        apparatus,
+        order_id,
+        action,
+        from_state,
+        to_state,
+        actor_ref,
+        actor_display_name,
+        created_at_unix,
+    ): (String, String, String, String, String, String, String, String, i64),
+) -> TrainingQueueEvent {
+    TrainingQueueEvent {
+        event_id,
+        apparatus,
+        order_id,
+        action,
+        from_state,
+        to_state,
+        actor_ref,
+        actor_display_name,
+        created_at_unix,
+    }
 }
 
 fn training_calculate_error(error: CalculateOrderError) -> TrainingWorkspaceError {
