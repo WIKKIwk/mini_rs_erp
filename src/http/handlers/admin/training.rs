@@ -58,6 +58,8 @@ pub struct TrainingRawMaterialAssignmentsQuery {
     order_id: String,
     #[serde(default)]
     apparatus: String,
+    #[serde(default)]
+    barcode: String,
 }
 
 #[derive(Default)]
@@ -1289,6 +1291,27 @@ pub async fn training_raw_material_assignments(
                 .await
                 .map_err(training_workspace_error)?;
             Ok(json_response(assignment))
+        }
+        Method::DELETE => {
+            let order_id = query.order_id.trim();
+            let apparatus = query.apparatus.trim();
+            let barcode = query.barcode.trim();
+            if order_id.is_empty() || apparatus.is_empty() || barcode.is_empty() {
+                return Err(bad_request("order_id, apparatus va barcode kerak"));
+            }
+            let deleted = store
+                .delete_raw_material_assignment(order_id, apparatus, barcode)
+                .await
+                .map_err(training_workspace_error)?;
+            if !deleted {
+                return Err(not_found("training_material_assignment_not_found"));
+            }
+            Ok(json_response(serde_json::json!({
+                "ok": true,
+                "order_id": order_id,
+                "apparatus": apparatus,
+                "barcode": barcode,
+            })))
         }
         _ => Err(method_not_allowed()),
     }

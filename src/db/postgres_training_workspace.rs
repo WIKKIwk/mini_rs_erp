@@ -243,6 +243,40 @@ impl PostgresTrainingWorkspaceStore {
         Ok(payload)
     }
 
+    pub async fn delete_raw_material_assignment(
+        &self,
+        order_id: &str,
+        apparatus: &str,
+        barcode: &str,
+    ) -> Result<bool, TrainingWorkspaceError> {
+        let order_id = order_id.trim();
+        let apparatus = apparatus.trim();
+        let barcode = barcode.trim();
+        if order_id.is_empty()
+            || !order_id.starts_with("training-")
+            || apparatus.is_empty()
+            || barcode.is_empty()
+        {
+            return Err(TrainingWorkspaceError::InvalidInput(
+                "order_id, apparatus va barcode kerak".to_string(),
+            ));
+        }
+
+        let result = sqlx::query(
+            "DELETE FROM mini_training_raw_material_assignments
+             WHERE order_id = $1
+               AND lower(apparatus) = lower($2)
+               AND lower(barcode) = lower($3)",
+        )
+        .bind(order_id)
+        .bind(apparatus)
+        .bind(barcode)
+        .execute(&self.pool)
+        .await
+        .map_err(|_| TrainingWorkspaceError::StoreFailed)?;
+        Ok(result.rows_affected() > 0)
+    }
+
     pub async fn apparatus_modes(&self) -> Result<BTreeMap<String, bool>, TrainingWorkspaceError> {
         let rows = sqlx::query_as::<_, (String, bool)>(
             "SELECT apparatus, enabled
