@@ -1145,11 +1145,7 @@ pub async fn training_order_statuses(
     authorize_any_capability(
         &state,
         &headers,
-        &[
-            Capability::AdminAccess,
-            Capability::ProductionMapManage,
-            Capability::ApparatusQueueRead,
-        ],
+        &[Capability::AdminAccess, Capability::ProductionMapManage],
     )
     .await?;
     if method != Method::GET {
@@ -1214,12 +1210,16 @@ pub async fn training_order_statuses(
             .map(|record| record.updated_at_unix)
             .or_else(|| event.map(|event| event.created_at_unix))
             .unwrap_or_default();
-        let completed_at_unix = (state == "completed"
-            && event.is_some_and(|event| {
-                event.action == "complete" && event.to_state == "completed"
-            }))
-        .then(|| event.map(|event| event.created_at_unix).unwrap_or_default())
-        .unwrap_or_default();
+        let completed_at_unix = if state == "completed" {
+            event
+                .filter(|event| {
+                    event.action == "complete" && event.to_state == "completed"
+                })
+                .map(|event| event.created_at_unix)
+                .unwrap_or_default()
+        } else {
+            0
+        };
         statuses.insert(
             order_id.clone(),
             serde_json::json!({
