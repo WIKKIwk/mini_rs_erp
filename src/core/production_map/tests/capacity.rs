@@ -5,7 +5,7 @@ use crate::core::production_map::*;
 
 use super::fixtures::apparatus_stage_map;
 
-const FLEXO_ID: &str = "apparatus:flexo";
+const FLEXO_ID: &str = "apparatus:default:flexo_pechat";
 const FLEXO_NAME: &str = "Flexo pechat";
 const START: i64 = 1_700_000_040;
 

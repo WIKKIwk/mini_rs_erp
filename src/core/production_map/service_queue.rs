@@ -76,6 +76,27 @@ impl ProductionMapService {
             .map(|id| id.trim().to_string())
             .filter(|id| !id.is_empty())
             .collect::<Vec<_>>();
+        let maps = self.store.maps().await?;
+        let known_order_ids = maps
+            .iter()
+            .map(|map| map.id.trim())
+            .filter(|id| !id.is_empty())
+            .collect::<BTreeSet<_>>();
+        let visible_order_ids = visible_order_ids_for_apparatus(&maps, apparatus)
+            .into_iter()
+            .collect::<BTreeSet<_>>();
+        for order_id in &order_ids {
+            if !known_order_ids.contains(order_id.as_str()) {
+                return Err(ProductionMapError::QueueSequenceOrderNotFound(
+                    order_id.clone(),
+                ));
+            }
+            if !visible_order_ids.contains(order_id) {
+                return Err(ProductionMapError::QueueSequenceApparatusMismatch(
+                    order_id.clone(),
+                ));
+            }
+        }
         let sequences = self.store.apparatus_sequences().await?;
         let all_states = self.store.apparatus_queue_states().await?;
         let known_keys = sequences

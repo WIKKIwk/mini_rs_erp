@@ -2,14 +2,68 @@ use sqlx::{PgPool, Row};
 
 use crate::core::production_map::*;
 
+pub(super) async fn resolve_apparatus_identity(
+    pool: &PgPool,
+    apparatus_id: &str,
+    apparatus: &str,
+) -> Result<Option<ApparatusScheduleCandidate>, ProductionMapError> {
+    let row = sqlx::query_as::<_, (String, String)>(
+        "SELECT id, name
+         FROM mini_apparatus
+         WHERE ($1 <> '' OR $2 <> '')
+           AND ($1 = '' OR lower(id) = lower($1))
+           AND ($2 = '' OR lower(name) = lower($2))
+         LIMIT 1",
+    )
+    .bind(apparatus_id.trim())
+    .bind(apparatus.trim())
+    .fetch_optional(pool)
+    .await
+    .map_err(|_| ProductionMapError::StoreFailed)?;
+    Ok(row.map(|(apparatus_id, apparatus)| ApparatusScheduleCandidate {
+        apparatus_id,
+        apparatus,
+    }))
+}
+
 pub(super) async fn load_apparatus_capacity_profiles(
     pool: &PgPool,
 ) -> Result<Vec<ApparatusCapacityProfile>, ProductionMapError> {
     let rows = sqlx::query(
         "SELECT apparatus_id, apparatus, capacity_slots, setup_minutes, cleanup_minutes,
                 efficiency_percent, finite_capacity, working_windows, capabilities,
-                capability_levels, notes, EXTRACT(EPOCH FROM updated_at)::BIGINT AS updated_at
-         FROM mini_apparatus_capacity_profiles
+                capability_levels, notes, updated_at
+         FROM (
+             SELECT DISTINCT ON (
+                        lower(COALESCE(
+                            canonical_by_id.id,
+                            canonical_by_name.id,
+                            profile.apparatus_id
+                        ))
+                    )
+                    COALESCE(canonical_by_id.id, canonical_by_name.id, profile.apparatus_id)
+                        AS apparatus_id,
+                    COALESCE(canonical_by_id.name, canonical_by_name.name, profile.apparatus)
+                        AS apparatus,
+                    profile.capacity_slots, profile.setup_minutes, profile.cleanup_minutes,
+                    profile.efficiency_percent, profile.finite_capacity, profile.working_windows,
+                    profile.capabilities, profile.capability_levels, profile.notes,
+                    EXTRACT(EPOCH FROM profile.updated_at)::BIGINT AS updated_at
+             FROM mini_apparatus_capacity_profiles profile
+             LEFT JOIN mini_apparatus canonical_by_id
+               ON lower(canonical_by_id.id) = lower(profile.apparatus_id)
+             LEFT JOIN mini_apparatus canonical_by_name
+               ON canonical_by_id.id IS NULL
+              AND lower(canonical_by_name.name) = lower(profile.apparatus)
+             ORDER BY
+                 lower(COALESCE(
+                     canonical_by_id.id,
+                     canonical_by_name.id,
+                     profile.apparatus_id
+                 )),
+                 profile.updated_at DESC,
+                 profile.apparatus_id
+         ) canonical_profiles
          ORDER BY lower(apparatus)",
     )
     .fetch_all(pool)
@@ -22,6 +76,24 @@ pub(super) async fn put_apparatus_capacity_profile(
     pool: &PgPool,
     profile: ApparatusCapacityProfile,
 ) -> Result<(), ProductionMapError> {
+    let mut tx = pool
+        .begin()
+        .await
+        .map_err(|_| ProductionMapError::StoreFailed)?;
+    sqlx::query(
+        "DELETE FROM mini_apparatus_capacity_profiles legacy
+         WHERE lower(legacy.apparatus_id) <> lower($1)
+           AND lower(legacy.apparatus) = lower($2)
+           AND NOT EXISTS (
+               SELECT 1 FROM mini_apparatus catalog
+               WHERE lower(catalog.id) = lower(legacy.apparatus_id)
+           )",
+    )
+    .bind(profile.apparatus_id.trim())
+    .bind(profile.apparatus.trim())
+    .execute(&mut *tx)
+    .await
+    .map_err(|_| ProductionMapError::StoreFailed)?;
     sqlx::query(
         "INSERT INTO mini_apparatus_capacity_profiles (
             apparatus_id, apparatus, capacity_slots, setup_minutes, cleanup_minutes,
@@ -53,21 +125,34 @@ pub(super) async fn put_apparatus_capacity_profile(
     .bind(serde_json::to_value(&profile.capability_levels).map_err(|_| ProductionMapError::StoreFailed)?)
     .bind(profile.notes.trim())
     .bind(profile.updated_at_unix as f64)
-    .execute(pool)
+    .execute(&mut *tx)
     .await
     .map_err(|_| ProductionMapError::StoreFailed)?;
-    Ok(())
+    tx.commit()
+        .await
+        .map_err(|_| ProductionMapError::StoreFailed)
 }
 
 pub(super) async fn load_apparatus_downtimes(
     pool: &PgPool,
 ) -> Result<Vec<ApparatusDowntime>, ProductionMapError> {
     let rows = sqlx::query(
-        "SELECT id, apparatus_id, apparatus, EXTRACT(EPOCH FROM starts_at)::BIGINT AS starts_at,
-                EXTRACT(EPOCH FROM ends_at)::BIGINT AS ends_at, reason, active,
-                actor_json, EXTRACT(EPOCH FROM created_at)::BIGINT AS created_at
-         FROM mini_apparatus_downtimes
-         ORDER BY starts_at DESC",
+        "SELECT downtime.id,
+                COALESCE(canonical_by_id.id, canonical_by_name.id, downtime.apparatus_id)
+                    AS apparatus_id,
+                COALESCE(canonical_by_id.name, canonical_by_name.name, downtime.apparatus)
+                    AS apparatus,
+                EXTRACT(EPOCH FROM downtime.starts_at)::BIGINT AS starts_at,
+                EXTRACT(EPOCH FROM downtime.ends_at)::BIGINT AS ends_at,
+                downtime.reason, downtime.active, downtime.actor_json,
+                EXTRACT(EPOCH FROM downtime.created_at)::BIGINT AS created_at
+         FROM mini_apparatus_downtimes downtime
+         LEFT JOIN mini_apparatus canonical_by_id
+           ON lower(canonical_by_id.id) = lower(downtime.apparatus_id)
+         LEFT JOIN mini_apparatus canonical_by_name
+           ON canonical_by_id.id IS NULL
+          AND lower(canonical_by_name.name) = lower(downtime.apparatus)
+         ORDER BY downtime.starts_at DESC",
     )
     .fetch_all(pool)
     .await
@@ -112,14 +197,24 @@ pub(super) async fn load_apparatus_schedule_reservations(
     pool: &PgPool,
 ) -> Result<Vec<ApparatusScheduleReservation>, ProductionMapError> {
     let rows = sqlx::query(
-        "SELECT reservation_id, idempotency_key, order_id, apparatus_id, apparatus,
-                EXTRACT(EPOCH FROM starts_at)::BIGINT AS starts_at,
-                EXTRACT(EPOCH FROM ends_at)::BIGINT AS ends_at,
-                requested_duration_minutes, reserved_duration_minutes, status, priority,
-                source, reason, capability_requirements, actor_json,
-                EXTRACT(EPOCH FROM created_at)::BIGINT AS created_at
-         FROM mini_apparatus_schedule_reservations
-         ORDER BY starts_at, priority DESC, reservation_id",
+        "SELECT reservation.reservation_id, reservation.idempotency_key, reservation.order_id,
+                COALESCE(canonical_by_id.id, canonical_by_name.id, reservation.apparatus_id)
+                    AS apparatus_id,
+                COALESCE(canonical_by_id.name, canonical_by_name.name, reservation.apparatus)
+                    AS apparatus,
+                EXTRACT(EPOCH FROM reservation.starts_at)::BIGINT AS starts_at,
+                EXTRACT(EPOCH FROM reservation.ends_at)::BIGINT AS ends_at,
+                reservation.requested_duration_minutes, reservation.reserved_duration_minutes,
+                reservation.status, reservation.priority, reservation.source, reservation.reason,
+                reservation.capability_requirements, reservation.actor_json,
+                EXTRACT(EPOCH FROM reservation.created_at)::BIGINT AS created_at
+         FROM mini_apparatus_schedule_reservations reservation
+         LEFT JOIN mini_apparatus canonical_by_id
+           ON lower(canonical_by_id.id) = lower(reservation.apparatus_id)
+         LEFT JOIN mini_apparatus canonical_by_name
+           ON canonical_by_id.id IS NULL
+          AND lower(canonical_by_name.name) = lower(reservation.apparatus)
+         ORDER BY reservation.starts_at, reservation.priority DESC, reservation.reservation_id",
     )
     .fetch_all(pool)
     .await
@@ -132,14 +227,24 @@ pub(super) async fn load_apparatus_schedule_reservation_by_idempotency_key(
     idempotency_key: &str,
 ) -> Result<Option<ApparatusScheduleReservation>, ProductionMapError> {
     let row = sqlx::query(
-        "SELECT reservation_id, idempotency_key, order_id, apparatus_id, apparatus,
-                EXTRACT(EPOCH FROM starts_at)::BIGINT AS starts_at,
-                EXTRACT(EPOCH FROM ends_at)::BIGINT AS ends_at,
-                requested_duration_minutes, reserved_duration_minutes, status, priority,
-                source, reason, capability_requirements, actor_json,
-                EXTRACT(EPOCH FROM created_at)::BIGINT AS created_at
-         FROM mini_apparatus_schedule_reservations
-         WHERE idempotency_key = $1",
+        "SELECT reservation.reservation_id, reservation.idempotency_key, reservation.order_id,
+                COALESCE(canonical_by_id.id, canonical_by_name.id, reservation.apparatus_id)
+                    AS apparatus_id,
+                COALESCE(canonical_by_id.name, canonical_by_name.name, reservation.apparatus)
+                    AS apparatus,
+                EXTRACT(EPOCH FROM reservation.starts_at)::BIGINT AS starts_at,
+                EXTRACT(EPOCH FROM reservation.ends_at)::BIGINT AS ends_at,
+                reservation.requested_duration_minutes, reservation.reserved_duration_minutes,
+                reservation.status, reservation.priority, reservation.source, reservation.reason,
+                reservation.capability_requirements, reservation.actor_json,
+                EXTRACT(EPOCH FROM reservation.created_at)::BIGINT AS created_at
+         FROM mini_apparatus_schedule_reservations reservation
+         LEFT JOIN mini_apparatus canonical_by_id
+           ON lower(canonical_by_id.id) = lower(reservation.apparatus_id)
+         LEFT JOIN mini_apparatus canonical_by_name
+           ON canonical_by_id.id IS NULL
+          AND lower(canonical_by_name.name) = lower(reservation.apparatus)
+         WHERE reservation.idempotency_key = $1",
     )
     .bind(idempotency_key.trim())
     .fetch_optional(pool)
@@ -299,15 +404,41 @@ pub(super) async fn update_apparatus_schedule_reservation_status_tx(
     actor: &QueueActionActor,
 ) -> Result<(), ProductionMapError> {
     sqlx::query(
-        "UPDATE mini_apparatus_schedule_reservations
+        "UPDATE mini_apparatus_schedule_reservations AS reservation
          SET status = $1, actor_json = $2
-         WHERE order_id = $3
-           AND (lower(apparatus) = lower($4) OR lower(apparatus_id) = lower($4))
+         WHERE reservation.order_id = $3
            AND (
-                status = $1
-                OR ($1 = 'active' AND status IN ('planned', 'paused'))
-                OR ($1 = 'paused' AND status = 'active')
-                OR ($1 = 'completed' AND status IN ('planned', 'active', 'paused'))
+                EXISTS (
+                    SELECT 1
+                    FROM mini_apparatus target
+                    WHERE lower(target.name) = lower($4)
+                      AND (
+                           lower(reservation.apparatus_id) = lower(target.id)
+                           OR (
+                               NOT EXISTS (
+                                   SELECT 1 FROM mini_apparatus stored
+                                   WHERE lower(stored.id) = lower(reservation.apparatus_id)
+                               )
+                               AND lower(reservation.apparatus) = lower(target.name)
+                           )
+                      )
+                )
+                OR (
+                    NOT EXISTS (
+                        SELECT 1 FROM mini_apparatus target
+                        WHERE lower(target.name) = lower($4)
+                    )
+                    AND (
+                        lower(reservation.apparatus) = lower($4)
+                        OR lower(reservation.apparatus_id) = lower($4)
+                    )
+                )
+           )
+           AND (
+                reservation.status = $1
+                OR ($1 = 'active' AND reservation.status IN ('planned', 'paused'))
+                OR ($1 = 'paused' AND reservation.status = 'active')
+                OR ($1 = 'completed' AND reservation.status IN ('planned', 'active', 'paused'))
            )",
     )
     .bind(status.as_str())

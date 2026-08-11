@@ -37,6 +37,7 @@ impl WarehouseStorePort for MemoryWarehouseStore {
         &self,
         warehouse: AdminWarehouse,
     ) -> Result<AdminWarehouse, WarehouseError> {
+        let _guard = self.mutation_lock.lock().await;
         let mut warehouses = self.warehouses.write().await;
         let key = warehouse.warehouse.to_lowercase();
         if let Some(index) = warehouses
@@ -150,8 +151,51 @@ impl WarehouseStorePort for MemoryWarehouseStore {
         Ok(index.map(|index| assignments.remove(index)))
     }
 
-    async fn delete_warehouse(&self, warehouse: &str) -> Result<(), WarehouseError> {
+    async fn delete_warehouse(
+        &self,
+        warehouse: &str,
+        delete_products: bool,
+    ) -> Result<WarehouseDeleteResult, WarehouseError> {
+        let _guard = self.mutation_lock.lock().await;
         let key = warehouse.trim().to_lowercase();
+        let warehouses = self.warehouses.read().await.clone();
+        let existing = warehouses
+            .iter()
+            .find(|item| item.warehouse.trim().to_lowercase() == key)
+            .cloned()
+            .ok_or(WarehouseError::NotFound)?;
+        if warehouses
+            .iter()
+            .any(|item| item.parent_warehouse.trim().eq_ignore_ascii_case(&existing.warehouse))
+        {
+            return Err(WarehouseError::HasChildren);
+        }
+        let assignments = self.assignments.read().await.clone();
+        let stock_items = self.stock_items.read().await.clone();
+        let stock_product_count = stock_items
+            .iter()
+            .filter(|item| {
+                item.on_hand_qty > 0.0
+                    && item.warehouse.trim().eq_ignore_ascii_case(&existing.warehouse)
+            })
+            .count();
+        let (product_count, reserved_count) = self
+            .summary_counts
+            .read()
+            .await
+            .get(&key)
+            .copied()
+            .unwrap_or((stock_product_count, 0));
+        if reserved_count > 0 {
+            return Err(WarehouseError::HasActiveReservations(reserved_count));
+        }
+        if product_count > 0 && !delete_products {
+            return Err(WarehouseError::NotEmpty(product_count));
+        }
+        let assignment_count = assignments
+            .iter()
+            .filter(|item| item.warehouse.trim().eq_ignore_ascii_case(&existing.warehouse))
+            .count();
         self.warehouses
             .write()
             .await
@@ -165,7 +209,11 @@ impl WarehouseStorePort for MemoryWarehouseStore {
             .await
             .retain(|item| item.warehouse.trim().to_lowercase() != key);
         self.summary_counts.write().await.remove(&key);
-        Ok(())
+        Ok(WarehouseDeleteResult {
+            warehouse: existing.warehouse,
+            deleted_product_count: product_count,
+            deleted_assignment_count: assignment_count,
+        })
     }
 
     async fn warehouse_summaries(

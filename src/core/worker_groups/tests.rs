@@ -137,3 +137,54 @@ async fn worker_group_can_be_renamed_without_leaving_the_old_group() {
     assert_eq!(groups[0].group_code, "A LAMINATSIYA");
     assert_eq!(groups[0].worker_ids, vec!["w1"]);
 }
+
+#[tokio::test]
+async fn concurrent_edits_of_different_groups_preserve_both_changes() {
+    let service = Arc::new(WorkerGroupService::new(Arc::new(
+        MemoryWorkerGroupStore::new(),
+    )));
+    for (group_code, worker_id) in [("A guruh", "w1"), ("B guruh", "w2")] {
+        service
+            .upsert_group(WorkerGroupUpsert {
+                apparatus: "Laminatsiya 1".to_string(),
+                group_code: group_code.to_string(),
+                shift: "kunduz".to_string(),
+                worker_ids: vec![worker_id.to_string()],
+                ..WorkerGroupUpsert::default()
+            })
+            .await
+            .expect("seed group");
+    }
+
+    let edit_a = service.upsert_group(WorkerGroupUpsert {
+        apparatus: "Laminatsiya 1".to_string(),
+        group_code: "A guruh".to_string(),
+        previous_apparatus: Some("Laminatsiya 1".to_string()),
+        previous_group_code: Some("A guruh".to_string()),
+        shift: "tungi-a".to_string(),
+        worker_ids: vec!["w1".to_string()],
+        ..WorkerGroupUpsert::default()
+    });
+    let edit_b = service.upsert_group(WorkerGroupUpsert {
+        apparatus: "Laminatsiya 1".to_string(),
+        group_code: "B guruh".to_string(),
+        previous_apparatus: Some("Laminatsiya 1".to_string()),
+        previous_group_code: Some("B guruh".to_string()),
+        shift: "tungi-b".to_string(),
+        worker_ids: vec!["w2".to_string()],
+        ..WorkerGroupUpsert::default()
+    });
+    let (saved_a, saved_b) = tokio::join!(edit_a, edit_b);
+    saved_a.expect("edit A group");
+    saved_b.expect("edit B group");
+
+    let groups = service
+        .worker_groups(Some("Laminatsiya 1"))
+        .await
+        .expect("load groups");
+    assert_eq!(groups.len(), 2);
+    assert_eq!(groups[0].group_code, "A GURUH");
+    assert_eq!(groups[0].shift, "tungi-a");
+    assert_eq!(groups[1].group_code, "B GURUH");
+    assert_eq!(groups[1].shift, "tungi-b");
+}

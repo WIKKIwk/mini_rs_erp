@@ -1,7 +1,6 @@
 mod normalize;
 mod store;
 
-use std::collections::BTreeSet;
 use std::sync::Arc;
 
 use async_trait::async_trait;
@@ -56,6 +55,14 @@ pub struct WorkerGroupUpsert {
     pub worker_ids: Vec<String>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct WorkerGroupMutation {
+    pub next: WorkerGroupRecord,
+    pub previous_apparatus: String,
+    pub previous_group_code: String,
+    pub has_previous_identity: bool,
+}
+
 #[derive(Debug, Error, Clone, PartialEq, Eq)]
 pub enum WorkerGroupError {
     #[error("apparatus is required")]
@@ -72,6 +79,8 @@ pub enum WorkerGroupError {
     GroupNotFound,
     #[error("worker group name already exists")]
     DuplicateGroup,
+    #[error("worker was not found or is inactive")]
+    WorkerNotFound,
     #[error("worker group store failed")]
     StoreFailed,
 }
@@ -82,11 +91,11 @@ pub trait WorkerGroupStorePort: Send + Sync {
         &self,
         apparatus: Option<&str>,
     ) -> Result<Vec<WorkerGroupRecord>, WorkerGroupError>;
-    async fn put_apparatus_worker_groups(
+    async fn upsert_group(
         &self,
-        apparatus: &str,
-        groups: Vec<WorkerGroupRecord>,
-    ) -> Result<Vec<WorkerGroupRecord>, WorkerGroupError>;
+        mutation: WorkerGroupMutation,
+    ) -> Result<WorkerGroupRecord, WorkerGroupError>;
+    async fn remove_worker(&self, worker_id: &str) -> Result<(), WorkerGroupError>;
 }
 
 #[derive(Clone)]
@@ -128,124 +137,16 @@ impl WorkerGroupService {
             .map(normalize::normalize_group_code)
             .transpose()?;
         let next = normalize_input(input)?;
-        let all_groups = self.store.worker_groups(None).await?;
-
         let previous_apparatus = previous_apparatus.unwrap_or_else(|| next.apparatus.clone());
         let previous_group_code = previous_group_code.unwrap_or_else(|| next.group_code.clone());
-        if has_previous_identity
-            && !all_groups.iter().any(|group| {
-                group
-                    .apparatus
-                    .eq_ignore_ascii_case(&previous_apparatus)
-                    && group.group_code == previous_group_code
+        self.store
+            .upsert_group(WorkerGroupMutation {
+                next,
+                previous_apparatus,
+                previous_group_code,
+                has_previous_identity,
             })
-        {
-            return Err(WorkerGroupError::GroupNotFound);
-        }
-
-        let source_apparatuses = if has_previous_identity {
-            vec![previous_apparatus.clone()]
-        } else {
-            all_groups
-                .iter()
-                .filter(|group| {
-                    group.group_code == next.group_code
-                        && !group.apparatus.eq_ignore_ascii_case(&next.apparatus)
-                })
-                .map(|group| group.apparatus.clone())
-                .collect::<BTreeSet<_>>()
-                .into_iter()
-                .collect()
-        };
-
-        let mut groups = self
-            .store
-            .worker_groups(Some(&next.apparatus))
-            .await?
-            .into_iter()
-            .filter(|group| group.apparatus.eq_ignore_ascii_case(&next.apparatus))
-            .collect::<Vec<_>>();
-
-        if has_previous_identity
-            && groups.iter().any(|group| {
-                group.group_code == next.group_code
-                    && !(group
-                        .apparatus
-                        .eq_ignore_ascii_case(&previous_apparatus)
-                        && group.group_code == previous_group_code)
-            })
-        {
-            return Err(WorkerGroupError::DuplicateGroup);
-        }
-
-        if groups.iter().any(|group| {
-            group.group_code != next.group_code
-                && !(has_previous_identity
-                    && group
-                        .apparatus
-                        .eq_ignore_ascii_case(&previous_apparatus)
-                    && group.group_code == previous_group_code)
-                && group.worker_ids.iter().any(|worker_id| {
-                    next.worker_ids
-                        .iter()
-                        .any(|next_id| next_id.eq_ignore_ascii_case(worker_id))
-            })
-        }) {
-            return Err(WorkerGroupError::DuplicateWorker);
-        }
-
-        if has_previous_identity {
-            groups.retain(|group| {
-                !(group
-                    .apparatus
-                    .eq_ignore_ascii_case(&previous_apparatus)
-                    && group.group_code == previous_group_code)
-            });
-        }
-
-        if let Some(existing) = groups
-            .iter_mut()
-            .find(|group| group.group_code == next.group_code)
-        {
-            *existing = next.clone();
-        } else {
-            groups.push(next.clone());
-        }
-
-        ensure_workers_not_duplicated(&groups)?;
-
-        for source_apparatus in source_apparatuses {
-            if source_apparatus.eq_ignore_ascii_case(&next.apparatus) {
-                continue;
-            }
-            let remaining = all_groups
-                .iter()
-                .filter(|group| {
-                    if !group.apparatus.eq_ignore_ascii_case(&source_apparatus) {
-                        return false;
-                    }
-                    let code = if has_previous_identity {
-                        &previous_group_code
-                    } else {
-                        &next.group_code
-                    };
-                    group.group_code != code.as_str()
-                })
-                .cloned()
-                .collect::<Vec<_>>();
-            self.store
-                .put_apparatus_worker_groups(&source_apparatus, sort_groups(remaining))
-                .await?;
-        }
-
-        let saved = self
-            .store
-            .put_apparatus_worker_groups(&next.apparatus, sort_groups(groups))
-            .await?;
-        saved
-            .into_iter()
-            .find(|group| group.group_code == next.group_code)
-            .ok_or(WorkerGroupError::StoreFailed)
+            .await
     }
 
     pub async fn remove_worker(&self, worker_id: &str) -> Result<(), WorkerGroupError> {
@@ -253,35 +154,62 @@ impl WorkerGroupService {
         if worker_id.is_empty() {
             return Ok(());
         }
-        let all_groups = self.store.worker_groups(None).await?;
-        let apparatuses = all_groups
-            .iter()
-            .filter(|group| {
-                group
-                    .worker_ids
-                    .iter()
-                    .any(|id| id.trim().eq_ignore_ascii_case(worker_id))
-            })
-            .map(|group| group.apparatus.clone())
-            .collect::<BTreeSet<_>>();
-
-        for apparatus in apparatuses {
-            let mut groups = all_groups
-                .iter()
-                .filter(|group| group.apparatus.eq_ignore_ascii_case(&apparatus))
-                .cloned()
-                .collect::<Vec<_>>();
-            for group in &mut groups {
-                group
-                    .worker_ids
-                    .retain(|id| !id.trim().eq_ignore_ascii_case(worker_id));
-            }
-            self.store
-                .put_apparatus_worker_groups(&apparatus, sort_groups(groups))
-                .await?;
-        }
-        Ok(())
+        self.store.remove_worker(worker_id).await
     }
+}
+
+pub(crate) fn apply_worker_group_mutation(
+    groups: &mut Vec<WorkerGroupRecord>,
+    mutation: &WorkerGroupMutation,
+) -> Result<WorkerGroupRecord, WorkerGroupError> {
+    let next = &mutation.next;
+    if mutation.has_previous_identity
+        && !groups.iter().any(|group| {
+            group
+                .apparatus
+                .eq_ignore_ascii_case(&mutation.previous_apparatus)
+                && group.group_code == mutation.previous_group_code
+        })
+    {
+        return Err(WorkerGroupError::GroupNotFound);
+    }
+
+    if mutation.has_previous_identity
+        && groups.iter().any(|group| {
+            group.apparatus.eq_ignore_ascii_case(&next.apparatus)
+                && group.group_code == next.group_code
+                && !(group
+                    .apparatus
+                    .eq_ignore_ascii_case(&mutation.previous_apparatus)
+                    && group.group_code == mutation.previous_group_code)
+        })
+    {
+        return Err(WorkerGroupError::DuplicateGroup);
+    }
+
+    let mut updated = groups.clone();
+    if mutation.has_previous_identity {
+        updated.retain(|group| {
+            !(group
+                .apparatus
+                .eq_ignore_ascii_case(&mutation.previous_apparatus)
+                && group.group_code == mutation.previous_group_code)
+        });
+    } else {
+        updated.retain(|group| group.group_code != next.group_code);
+    }
+
+    let mut target_groups = updated
+        .iter()
+        .filter(|group| group.apparatus.eq_ignore_ascii_case(&next.apparatus))
+        .cloned()
+        .collect::<Vec<_>>();
+    target_groups.push(next.clone());
+    ensure_workers_not_duplicated(&target_groups)?;
+
+    updated.push(next.clone());
+    *groups = sort_groups(updated);
+    Ok(next.clone())
 }
 
 fn default_work_days_per_week() -> i32 {

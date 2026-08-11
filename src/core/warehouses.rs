@@ -4,7 +4,7 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
-use tokio::sync::RwLock;
+use tokio::sync::{Mutex, RwLock};
 
 use crate::core::admin::models::AdminWarehouse;
 use crate::core::auth::models::{Principal, PrincipalRole};
@@ -147,7 +147,11 @@ pub trait WarehouseStorePort: Send + Sync {
         principal_ref: &str,
     ) -> Result<Option<WarehouseAssignment>, WarehouseError>;
 
-    async fn delete_warehouse(&self, warehouse: &str) -> Result<(), WarehouseError>;
+    async fn delete_warehouse(
+        &self,
+        warehouse: &str,
+        delete_products: bool,
+    ) -> Result<WarehouseDeleteResult, WarehouseError>;
 }
 
 #[derive(Clone)]
@@ -271,43 +275,9 @@ impl WarehouseService {
         if warehouse.is_empty() {
             return Err(WarehouseError::MissingWarehouse);
         }
-        if !self.store.warehouses("", warehouse, 1).await?.is_empty() {
-            return Err(WarehouseError::HasChildren);
-        }
-        let summary = self
-            .store
-            .warehouse_summaries(warehouse, 500)
-            .await?
-            .into_iter()
-            .find(|summary| summary.warehouse.trim().eq_ignore_ascii_case(warehouse));
-        let summary = match summary {
-            Some(summary) => summary,
-            None => {
-                let existing = self
-                    .store
-                    .warehouse(warehouse)
-                    .await?
-                    .ok_or(WarehouseError::NotFound)?;
-                WarehouseSummary {
-                    warehouse: existing.warehouse,
-                    ..WarehouseSummary::default()
-                }
-            }
-        };
-        if summary.reserved_count > 0 {
-            return Err(WarehouseError::HasActiveReservations(
-                summary.reserved_count,
-            ));
-        }
-        if summary.product_count > 0 && !input.delete_products {
-            return Err(WarehouseError::NotEmpty(summary.product_count));
-        }
-        self.store.delete_warehouse(warehouse).await?;
-        Ok(WarehouseDeleteResult {
-            warehouse: summary.warehouse,
-            deleted_product_count: summary.product_count,
-            deleted_assignment_count: summary.assignment_count,
-        })
+        self.store
+            .delete_warehouse(warehouse, input.delete_products)
+            .await
     }
 }
 
@@ -371,6 +341,7 @@ pub fn merge_admin_warehouses(
 
 #[derive(Default)]
 pub struct MemoryWarehouseStore {
+    mutation_lock: Mutex<()>,
     warehouses: RwLock<Vec<AdminWarehouse>>,
     assignments: RwLock<Vec<WarehouseAssignment>>,
     stock_items: RwLock<Vec<WarehouseStockItem>>,

@@ -183,6 +183,19 @@ mod tests {
     }
 
     #[test]
+    fn apparatus_capacity_identity_migration_is_registered_with_the_runner() {
+        let migration = POSTGRES_MIGRATIONS
+            .iter()
+            .find(|(version, _)| *version == "0055_apparatus_capacity_identity")
+            .map(|(_, sql)| sql.to_lowercase())
+            .expect("apparatus capacity identity migration");
+
+        assert!(migration.contains("mini_apparatus_id_name_unique"));
+        assert!(migration.contains("foreign key (apparatus_id, apparatus)"));
+        assert_eq!(migration.matches("not valid;").count(), 3);
+    }
+
+    #[test]
     fn quantity_precision_migration_enforces_one_operational_scale() {
         let migration = POSTGRES_MIGRATIONS
             .iter()

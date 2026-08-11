@@ -8,7 +8,8 @@ use crate::core::production_map::{
     CompletionRequestDecision, CompletionRequestDecisionNotification,
     CompletionRequestNotification, CompletionRequestStateResolution, FinishedGoodsStockEntry,
     ApparatusCapacityProfile, ApparatusDowntime, ApparatusScheduleCancelRequest,
-    ApparatusScheduleReservation, OrderControlRecord, OrderProgressBatch, OrderProgressEvent, OrderRunSession,
+    ApparatusScheduleCandidate, ApparatusScheduleReservation, OrderControlRecord,
+    OrderProgressBatch, OrderProgressEvent, OrderRunSession,
     LaminatsiyaAstatkaReport, RezkaAstatkaReport,
     ProductionMapApparatusTransferRecord, ProductionMapApparatusTransferWrite,
     ProductionMapDefinition, ProductionMapError, ProductionMapStorePort, ProductionOrderLogEntry,
@@ -48,7 +49,7 @@ use self::capacity_helpers::{
     cancel_apparatus_schedule_reservation, load_apparatus_capacity_profiles,
     load_apparatus_downtimes, load_apparatus_schedule_reservation_by_idempotency_key,
     load_apparatus_schedule_reservations, put_apparatus_capacity_profile,
-    put_apparatus_downtime, put_apparatus_schedule_reservation,
+    put_apparatus_downtime, put_apparatus_schedule_reservation, resolve_apparatus_identity,
     update_apparatus_schedule_reservation_status_tx,
 };
 use self::completion_helpers::{
@@ -189,6 +190,14 @@ impl ProductionMapStorePort for PostgresProductionMapStore {
         save_apparatus_sequence(&self.pool, apparatus, order_ids).await
     }
 
+    async fn resolve_apparatus_identity(
+        &self,
+        apparatus_id: &str,
+        apparatus: &str,
+    ) -> Result<Option<ApparatusScheduleCandidate>, ProductionMapError> {
+        resolve_apparatus_identity(&self.pool, apparatus_id, apparatus).await
+    }
+
     async fn apparatus_capacity_profiles(
         &self,
     ) -> Result<Vec<ApparatusCapacityProfile>, ProductionMapError> {
@@ -246,6 +255,27 @@ impl ProductionMapStorePort for PostgresProductionMapStore {
         input: ApparatusScheduleCancelRequest,
     ) -> Result<ApparatusScheduleReservation, ProductionMapError> {
         cancel_apparatus_schedule_reservation(&self.pool, input).await
+    }
+
+    async fn update_apparatus_schedule_reservation_status(
+        &self,
+        order_id: &str,
+        apparatus: &str,
+        status: crate::core::production_map::ApparatusScheduleStatus,
+        actor: &QueueActionActor,
+    ) -> Result<(), ProductionMapError> {
+        let mut tx = self
+            .pool
+            .begin()
+            .await
+            .map_err(|_| ProductionMapError::StoreFailed)?;
+        update_apparatus_schedule_reservation_status_tx(
+            &mut tx, order_id, apparatus, status, actor,
+        )
+        .await?;
+        tx.commit()
+            .await
+            .map_err(|_| ProductionMapError::StoreFailed)
     }
 
     async fn apparatus_queue_states(

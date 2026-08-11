@@ -499,8 +499,31 @@ async fn production_map_save_with_order_rejects_duplicate_cloned_order_code() {
 async fn production_map_sequence_round_trips_on_server() {
     let state = test_state();
     let token = session(&state, PrincipalRole::Admin).await;
+    let router = build_router(state.clone());
 
-    let put = build_router(state.clone())
+    for (id, order_number) in [("zakaz-1111", "1111"), ("zakaz-2222", "2222")] {
+        let saved = router
+            .clone()
+            .oneshot(request_with_body(
+                "PUT",
+                "/v1/mobile/admin/production-maps",
+                &token,
+                &pechat_order_map_json_with_dims(
+                    id,
+                    id,
+                    order_number,
+                    "8 ta rangli pechat",
+                    8,
+                    1250.0,
+                ),
+            ))
+            .await
+            .expect("save map");
+        assert_eq!(saved.status(), StatusCode::OK);
+    }
+
+    let put = router
+        .clone()
         .oneshot(request_with_body(
             "PUT",
             "/v1/mobile/admin/production-maps/sequence",
@@ -514,7 +537,7 @@ async fn production_map_sequence_round_trips_on_server() {
         .expect("put sequence");
     assert_eq!(put.status(), StatusCode::OK);
 
-    let get = build_router(state)
+    let get = router
         .oneshot(request(
             "GET",
             "/v1/mobile/admin/production-maps/sequence",
@@ -531,7 +554,7 @@ async fn production_map_sequence_round_trips_on_server() {
 }
 
 #[tokio::test]
-async fn production_map_sequence_get_reconciles_stale_order_ids() {
+async fn production_map_sequence_rejects_unknown_and_wrong_apparatus_orders() {
     let state = test_state();
     let token = session(&state, PrincipalRole::Admin).await;
     let router = build_router(state.clone());
@@ -550,7 +573,7 @@ async fn production_map_sequence_get_reconciles_stale_order_ids() {
         assert_eq!(saved.status(), StatusCode::OK);
     }
 
-    let stale_sequence = router
+    let unknown = router
         .clone()
         .oneshot(request_with_body(
             "PUT",
@@ -562,30 +585,29 @@ async fn production_map_sequence_get_reconciles_stale_order_ids() {
             }"#,
         ))
         .await
-        .expect("save stale sequence");
-    assert_eq!(stale_sequence.status(), StatusCode::OK);
+        .expect("reject unknown order");
+    assert_eq!(unknown.status(), StatusCode::BAD_REQUEST);
+    assert_eq!(
+        json_body(unknown).await["error"],
+        "queue_sequence_order_not_found"
+    );
 
-    let get = router
-        .oneshot(request(
-            "GET",
+    let wrong_apparatus = router
+        .oneshot(request_with_body(
+            "PUT",
             "/v1/mobile/admin/production-maps/sequence",
             &token,
+            r#"{
+                "apparatus":"Laminatsiya 1",
+                "order_ids":["zakaz-1111"]
+            }"#,
         ))
         .await
-        .expect("get sequence");
-    assert_eq!(get.status(), StatusCode::OK);
-    let body = json_body(get).await;
+        .expect("reject wrong apparatus");
+    assert_eq!(wrong_apparatus.status(), StatusCode::BAD_REQUEST);
     assert_eq!(
-        body["sequences"]["7 ta rangli pechat"],
-        serde_json::json!(["zakaz-1111", "zakaz-2222"])
-    );
-    assert_eq!(
-        body["order_statuses"]["zakaz-1111"]["order_status"],
-        "not_started"
-    );
-    assert_eq!(
-        body["order_statuses"]["zakaz-2222"]["order_status"],
-        "not_started"
+        json_body(wrong_apparatus).await["error"],
+        "queue_sequence_apparatus_mismatch"
     );
 }
 

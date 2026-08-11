@@ -74,6 +74,10 @@ pub enum ProductionMapError {
     StoreFailed,
     #[error("queue action is not allowed")]
     QueueActionNotAllowed,
+    #[error("queue sequence order was not found: {0}")]
+    QueueSequenceOrderNotFound(String),
+    #[error("queue sequence order is not assigned to the apparatus: {0}")]
+    QueueSequenceApparatusMismatch(String),
     #[error("order has not started")]
     OrderNotStarted,
     #[error("order is already completed")]

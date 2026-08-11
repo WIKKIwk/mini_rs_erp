@@ -5,6 +5,7 @@ use super::service_capacity_scheduler::{
     ScheduledCandidate, candidate_allowed_for_order, effective_duration_minutes,
     find_schedule_slot, fits_working_window, profile_for_apparatus,
     reservations_with_active_sessions,
+    same_apparatus_identity,
 };
 use super::store_port::ApparatusQueueStateMap;
 use super::types::*;
@@ -28,8 +29,12 @@ impl ProductionMapService {
         );
         let now = unix_seconds();
         let same_apparatus = |candidate_id: &str, candidate_name: &str| {
-            candidate_id.eq_ignore_ascii_case(&profile.apparatus_id)
-                || queue_state::apparatus_titles_match(candidate_name, apparatus)
+            same_apparatus_identity(
+                candidate_id,
+                candidate_name,
+                &profile.apparatus_id,
+                apparatus,
+            )
         };
         if self
             .store
@@ -101,7 +106,7 @@ impl ProductionMapService {
         &self,
         profile: ApparatusCapacityProfile,
     ) -> Result<ApparatusCapacityProfile, ProductionMapError> {
-        let profile = normalize_capacity_profile(profile)?;
+        let profile = normalize_capacity_profile(self.store.as_ref(), profile).await?;
         self.store
             .put_apparatus_capacity_profile(profile.clone())
             .await?;
@@ -113,7 +118,7 @@ impl ProductionMapService {
         &self,
         downtime: ApparatusDowntime,
     ) -> Result<ApparatusDowntime, ProductionMapError> {
-        let downtime = normalize_downtime(downtime)?;
+        let downtime = normalize_downtime(self.store.as_ref(), downtime).await?;
         self.store.put_apparatus_downtime(downtime.clone()).await?;
         self.notify_live();
         Ok(downtime)
@@ -124,7 +129,7 @@ impl ProductionMapService {
         input: ApparatusScheduleRequest,
     ) -> Result<ApparatusScheduleResult, ProductionMapError> {
         let _guard = self.queue_action_guard().await;
-        let input = normalize_schedule_request(input)?;
+        let input = normalize_schedule_request(self.store.as_ref(), input).await?;
         let map = self
             .store
             .maps()
@@ -278,7 +283,8 @@ impl ProductionMapService {
     }
 }
 
-fn normalize_capacity_profile(
+async fn normalize_capacity_profile(
+    store: &dyn ProductionMapStorePort,
     mut profile: ApparatusCapacityProfile,
 ) -> Result<ApparatusCapacityProfile, ProductionMapError> {
     profile.apparatus_id = profile.apparatus_id.trim().to_string();
@@ -286,6 +292,12 @@ fn normalize_capacity_profile(
     if profile.apparatus_id.is_empty() && profile.apparatus.is_empty() {
         return Err(ProductionMapError::CapacityProfileInvalid);
     }
+    let identity = store
+        .resolve_apparatus_identity(&profile.apparatus_id, &profile.apparatus)
+        .await?
+        .ok_or(ProductionMapError::CapacityProfileInvalid)?;
+    profile.apparatus_id = identity.apparatus_id;
+    profile.apparatus = identity.apparatus;
     if profile.apparatus_id.is_empty() {
         profile.apparatus_id = apparatus_id_for_name(&profile.apparatus);
     }
@@ -345,7 +357,8 @@ fn normalize_capacity_profile(
     Ok(profile)
 }
 
-fn normalize_downtime(
+async fn normalize_downtime(
+    store: &dyn ProductionMapStorePort,
     mut downtime: ApparatusDowntime,
 ) -> Result<ApparatusDowntime, ProductionMapError> {
     downtime.id = downtime.id.trim().to_string();
@@ -362,6 +375,12 @@ fn normalize_downtime(
     {
         return Err(ProductionMapError::CapacityProfileInvalid);
     }
+    let identity = store
+        .resolve_apparatus_identity(&downtime.apparatus_id, &downtime.apparatus)
+        .await?
+        .ok_or(ProductionMapError::CapacityProfileInvalid)?;
+    downtime.apparatus_id = identity.apparatus_id;
+    downtime.apparatus = identity.apparatus;
     if downtime.apparatus_id.is_empty() {
         downtime.apparatus_id = apparatus_id_for_name(&downtime.apparatus);
     }
@@ -374,7 +393,8 @@ fn normalize_downtime(
     Ok(downtime)
 }
 
-fn normalize_schedule_request(
+async fn normalize_schedule_request(
+    store: &dyn ProductionMapStorePort,
     mut input: ApparatusScheduleRequest,
 ) -> Result<ApparatusScheduleRequest, ProductionMapError> {
     input.order_id = input.order_id.trim().to_string();
@@ -393,6 +413,12 @@ fn normalize_schedule_request(
     {
         return Err(ProductionMapError::ScheduleInputInvalid);
     }
+    let identity = store
+        .resolve_apparatus_identity(&input.apparatus_id, &input.apparatus)
+        .await?
+        .ok_or(ProductionMapError::ScheduleInputInvalid)?;
+    input.apparatus_id = identity.apparatus_id;
+    input.apparatus = identity.apparatus;
     if input.apparatus_id.is_empty() {
         input.apparatus_id = apparatus_id_for_name(&input.apparatus);
     }
@@ -417,32 +443,31 @@ fn normalize_schedule_request(
         .collect();
     let primary_id = input.apparatus_id.to_ascii_lowercase();
     let mut seen_candidates = BTreeSet::new();
-    input.candidate_apparatuses = input
-        .candidate_apparatuses
-        .into_iter()
-        .map(|mut candidate| {
-            candidate.apparatus_id = candidate.apparatus_id.trim().to_string();
-            candidate.apparatus = candidate.apparatus.trim().to_string();
-            if candidate.apparatus_id.is_empty() && !candidate.apparatus.is_empty() {
-                candidate.apparatus_id = apparatus_id_for_name(&candidate.apparatus);
-            }
-            if candidate.apparatus.is_empty() && !candidate.apparatus_id.is_empty() {
-                candidate.apparatus = candidate.apparatus_id.clone();
-            }
-            candidate
-        })
-        .filter(|candidate| {
-            let key = if candidate.apparatus_id.is_empty() {
-                candidate.apparatus.to_ascii_lowercase()
-            } else {
-                candidate.apparatus_id.to_ascii_lowercase()
-            };
-            !key.is_empty()
-                && key != primary_id
-                && !seen_candidates.contains(&key)
-                && seen_candidates.insert(key)
-        })
-        .collect();
+    let mut candidates = Vec::new();
+    for mut candidate in input.candidate_apparatuses {
+        candidate.apparatus_id = candidate.apparatus_id.trim().to_string();
+        candidate.apparatus = candidate.apparatus.trim().to_string();
+        if candidate.apparatus_id.is_empty() && candidate.apparatus.is_empty() {
+            continue;
+        }
+        let identity = store
+            .resolve_apparatus_identity(&candidate.apparatus_id, &candidate.apparatus)
+            .await?
+            .ok_or(ProductionMapError::ScheduleInputInvalid)?;
+        candidate.apparatus_id = identity.apparatus_id;
+        candidate.apparatus = identity.apparatus;
+        if candidate.apparatus_id.is_empty() {
+            candidate.apparatus_id = apparatus_id_for_name(&candidate.apparatus);
+        }
+        if candidate.apparatus.is_empty() {
+            candidate.apparatus = candidate.apparatus_id.clone();
+        }
+        let key = candidate.apparatus_id.to_ascii_lowercase();
+        if key != primary_id && seen_candidates.insert(key) {
+            candidates.push(candidate);
+        }
+    }
+    input.candidate_apparatuses = candidates;
     Ok(input)
 }
 

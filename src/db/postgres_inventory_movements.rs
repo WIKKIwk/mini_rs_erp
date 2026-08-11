@@ -1774,6 +1774,8 @@ async fn warehouse_by_id_tx(
 
 fn warehouse_lookup_query<'q>()
 -> sqlx::query::QueryAs<'q, Postgres, WarehouseLookupRow, sqlx::postgres::PgArguments> {
+    // create_transfer executes this query inside its transaction. The row lock
+    // participates in the warehouse delete protocol until that transaction ends.
     sqlx::query_as::<_, WarehouseLookupRow>(
         r#"
         SELECT
@@ -1788,6 +1790,7 @@ fn warehouse_lookup_query<'q>()
             ) AS assignment_count
         FROM mini_warehouses warehouse
         WHERE warehouse.id = $1
+        FOR KEY SHARE OF warehouse
         "#,
     )
 }

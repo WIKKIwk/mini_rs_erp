@@ -1,10 +1,11 @@
 use async_trait::async_trait;
-use sqlx::PgPool;
+use sqlx::{PgPool, Postgres, Transaction};
 
 use crate::core::admin::models::AdminWarehouse;
 use crate::core::auth::models::PrincipalRole;
 use crate::core::warehouses::{
-    WarehouseAssignment, WarehouseError, WarehouseStockItem, WarehouseStorePort, WarehouseSummary,
+    WarehouseAssignment, WarehouseDeleteResult, WarehouseError, WarehouseStockItem,
+    WarehouseStorePort, WarehouseSummary,
 };
 
 #[derive(Clone)]
@@ -435,7 +436,11 @@ impl WarehouseStorePort for PostgresWarehouseStore {
         row.map(row_to_assignment).transpose()
     }
 
-    async fn delete_warehouse(&self, warehouse: &str) -> Result<(), WarehouseError> {
+    async fn delete_warehouse(
+        &self,
+        warehouse: &str,
+        delete_products: bool,
+    ) -> Result<WarehouseDeleteResult, WarehouseError> {
         let warehouse = warehouse.trim();
         if warehouse.is_empty() {
             return Err(WarehouseError::MissingWarehouse);
@@ -445,12 +450,53 @@ impl WarehouseStorePort for PostgresWarehouseStore {
             .begin()
             .await
             .map_err(|_| WarehouseError::StoreFailed)?;
+        // Transfer creation holds FOR KEY SHARE on these same rows until its
+        // transaction commits, so the delete recheck cannot miss a new transfer.
+        let (warehouse_id, warehouse_name) = sqlx::query_as::<_, (String, String)>(
+            "SELECT id, name
+             FROM mini_warehouses
+             WHERE lower(name) = lower($1)
+             FOR UPDATE",
+        )
+        .bind(warehouse)
+        .fetch_optional(&mut *transaction)
+        .await
+        .map_err(|_| WarehouseError::StoreFailed)?
+        .ok_or(WarehouseError::NotFound)?;
+        let has_children = sqlx::query_scalar::<_, bool>(
+            "SELECT EXISTS(
+                 SELECT 1 FROM mini_warehouses
+                 WHERE lower(parent_warehouse) = lower($1)
+             )",
+        )
+        .bind(&warehouse_name)
+        .fetch_one(&mut *transaction)
+        .await
+        .map_err(|_| WarehouseError::StoreFailed)?;
+        if has_children {
+            return Err(WarehouseError::HasChildren);
+        }
+        let snapshot = warehouse_delete_snapshot_tx(
+            &mut transaction,
+            &warehouse_id,
+            &warehouse_name,
+        )
+        .await?;
+        let product_count = count_as_usize(snapshot.product_count);
+        let reserved_count = count_as_usize(snapshot.reserved_count);
+        let assignment_count = count_as_usize(snapshot.assignment_count);
+        if reserved_count > 0 {
+            return Err(WarehouseError::HasActiveReservations(reserved_count));
+        }
+        if product_count > 0 && !delete_products {
+            return Err(WarehouseError::NotEmpty(product_count));
+        }
         for table in ["mini_qolip_cell_qrs", "mini_qolip_locations"] {
             sqlx::query(&format!(
                 "DELETE FROM {table}
                  WHERE lower(warehouse) = lower($1) OR lower(block) = lower($1)"
             ))
-            .bind(warehouse)
+            .bind(&warehouse_name)
             .execute(&mut *transaction)
             .await
             .map_err(|_| WarehouseError::StoreFailed)?;
@@ -459,26 +505,138 @@ impl WarehouseStorePort for PostgresWarehouseStore {
             sqlx::query(&format!(
                 "DELETE FROM {table} WHERE lower(warehouse) = lower($1)"
             ))
-            .bind(warehouse)
+            .bind(&warehouse_name)
             .execute(&mut *transaction)
             .await
             .map_err(|_| WarehouseError::StoreFailed)?;
         }
         sqlx::query("DELETE FROM mini_warehouse_assignments WHERE lower(warehouse) = lower($1)")
-            .bind(warehouse)
+            .bind(&warehouse_name)
             .execute(&mut *transaction)
             .await
             .map_err(|_| WarehouseError::StoreFailed)?;
-        sqlx::query("DELETE FROM mini_warehouses WHERE lower(name) = lower($1)")
-            .bind(warehouse)
+        let deleted = sqlx::query("DELETE FROM mini_warehouses WHERE id = $1")
+            .bind(&warehouse_id)
             .execute(&mut *transaction)
             .await
             .map_err(|_| WarehouseError::StoreFailed)?;
+        if deleted.rows_affected() != 1 {
+            return Err(WarehouseError::NotFound);
+        }
         transaction
             .commit()
             .await
-            .map_err(|_| WarehouseError::StoreFailed)
+            .map_err(|_| WarehouseError::StoreFailed)?;
+        Ok(WarehouseDeleteResult {
+            warehouse: warehouse_name,
+            deleted_product_count: product_count,
+            deleted_assignment_count: assignment_count,
+        })
     }
+}
+
+async fn warehouse_delete_snapshot_tx(
+    tx: &mut Transaction<'_, Postgres>,
+    warehouse_id: &str,
+    warehouse: &str,
+) -> Result<WarehouseDeleteSnapshotRow, WarehouseError> {
+    sqlx::query_as::<_, WarehouseDeleteSnapshotRow>(
+        r#"
+        SELECT
+            (
+                (SELECT count(*)
+                 FROM mini_raw_material_stock stock
+                 LEFT JOIN mini_inventory_placements placement
+                   ON placement.asset_kind = 'raw_material'
+                  AND lower(placement.asset_ref) = lower(stock.id)
+                 LEFT JOIN mini_inventory_locations physical_location
+                   ON physical_location.id = placement.physical_location_id
+                 LEFT JOIN mini_warehouses physical_warehouse
+                   ON physical_warehouse.id = physical_location.warehouse_id
+                 WHERE lower(stock.warehouse) = lower($1)
+                   AND stock.status = 'available'
+                   AND stock.qty > 0
+                   AND (
+                       placement.asset_ref IS NULL
+                       OR (
+                           physical_location.kind = 'warehouse'
+                           AND lower(physical_warehouse.name) = lower(stock.warehouse)
+                       )
+                   ))
+                +
+                (SELECT count(DISTINCT (lower(item_code), lower(uom)))
+                 FROM mini_finished_goods_stock stock
+                 LEFT JOIN mini_inventory_placements placement
+                   ON placement.asset_kind = 'finished_goods'
+                  AND lower(placement.asset_ref) = lower(stock.id)
+                 LEFT JOIN mini_inventory_locations physical_location
+                   ON physical_location.id = placement.physical_location_id
+                 LEFT JOIN mini_warehouses physical_warehouse
+                   ON physical_warehouse.id = physical_location.warehouse_id
+                 WHERE lower(stock.warehouse) = lower($1)
+                   AND stock.status = 'available'
+                   AND stock.qty > 0
+                   AND (
+                       placement.asset_ref IS NULL
+                       OR (
+                           physical_location.kind = 'warehouse'
+                           AND lower(physical_warehouse.name) = lower(stock.warehouse)
+                       )
+                   ))
+                +
+                (SELECT COALESCE(sum(stock.quantity), 0)
+                 FROM mini_qolip_locations stock
+                 LEFT JOIN mini_inventory_placements placement
+                   ON placement.asset_kind = 'qolip'
+                  AND lower(placement.asset_ref) = lower(stock.id)
+                 LEFT JOIN mini_inventory_locations physical_location
+                   ON physical_location.id = placement.physical_location_id
+                 LEFT JOIN mini_warehouses physical_warehouse
+                   ON physical_warehouse.id = physical_location.warehouse_id
+                 WHERE lower(stock.warehouse) = lower($1)
+                   AND (
+                       placement.asset_ref IS NULL
+                       OR (
+                           physical_location.kind = 'warehouse'
+                           AND lower(physical_warehouse.name) = lower(stock.warehouse)
+                       )
+                   ))
+            )::bigint AS product_count,
+            (
+                (SELECT count(*)
+                 FROM mini_raw_material_assignments assignment
+                 JOIN mini_raw_material_stock stock
+                   ON lower(stock.barcode) = lower(assignment.barcode)
+                 WHERE lower(stock.warehouse) = lower($1))
+                +
+                (SELECT COALESCE(sum(GREATEST(quantity, 0)), 0)
+                 FROM mini_qolip_checkouts
+                 WHERE lower(status) = 'open' AND lower(warehouse) = lower($1))
+                +
+                (SELECT count(*)
+                 FROM mini_inventory_transfers
+                 WHERE status IN ('requested', 'approved', 'in_transit')
+                   AND (
+                       source_warehouse_id = $2
+                       OR destination_warehouse_id = $2
+                       OR lower(source_warehouse) = lower($1)
+                       OR lower(destination_warehouse) = lower($1)
+                   ))
+            )::bigint AS reserved_count,
+            (SELECT count(*)
+             FROM mini_warehouse_assignments
+             WHERE lower(warehouse) = lower($1))::bigint AS assignment_count
+        "#,
+    )
+    .bind(warehouse)
+    .bind(warehouse_id)
+    .fetch_one(&mut **tx)
+    .await
+    .map_err(|_| WarehouseError::StoreFailed)
+}
+
+fn count_as_usize(value: i64) -> usize {
+    usize::try_from(value.max(0)).unwrap_or(usize::MAX)
 }
 
 #[derive(sqlx::FromRow)]
@@ -504,6 +662,13 @@ struct WarehouseSummaryRow {
     reserved_count: i64,
     assignment_count: i64,
     assigned_display_names: String,
+}
+
+#[derive(sqlx::FromRow)]
+struct WarehouseDeleteSnapshotRow {
+    product_count: i64,
+    reserved_count: i64,
+    assignment_count: i64,
 }
 
 #[derive(sqlx::FromRow)]

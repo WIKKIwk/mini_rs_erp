@@ -36,6 +36,10 @@ impl PostgresTrainingWorkspaceStore {
                  DELETE FROM mini_training_raw_material_assignments
                  WHERE order_id = $1
                  RETURNING id
+             ), deleted_queue_states AS (
+                 DELETE FROM mini_training_queue_states
+                 WHERE order_id = $1
+                 RETURNING order_id
              )
              DELETE FROM mini_training_production_maps
              WHERE id = $1

@@ -272,6 +272,12 @@ pub(super) fn production_map_error(error: ProductionMapError) -> AdminError {
         }
         ProductionMapError::StoreFailed => server_error("store_failed"),
         ProductionMapError::QueueActionNotAllowed => bad_request("queue_action_not_allowed"),
+        ProductionMapError::QueueSequenceOrderNotFound(_) => {
+            bad_request("queue_sequence_order_not_found")
+        }
+        ProductionMapError::QueueSequenceApparatusMismatch(_) => {
+            bad_request("queue_sequence_apparatus_mismatch")
+        }
         ProductionMapError::OrderNotStarted => conflict("order_not_started"),
         ProductionMapError::OrderAlreadyCompleted => conflict("order_already_completed"),
         ProductionMapError::OrderFreezeRequested => conflict("order_freeze_requested"),
@@ -438,6 +444,14 @@ mod production_map_error_tests {
         assert_code(
             ProductionMapError::InvalidFormulaExpression("x".to_string()),
             "invalid_formula_expression",
+        );
+        assert_code(
+            ProductionMapError::QueueSequenceOrderNotFound("missing".to_string()),
+            "queue_sequence_order_not_found",
+        );
+        assert_code(
+            ProductionMapError::QueueSequenceApparatusMismatch("zakaz-1".to_string()),
+            "queue_sequence_apparatus_mismatch",
         );
         assert_code(ProductionMapError::Cycle, "production_map_cycle");
     }

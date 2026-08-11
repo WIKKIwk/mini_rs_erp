@@ -134,6 +134,21 @@ pub trait ProductionMapStorePort: Send + Sync {
     ) -> StoreResult<()>;
 
     // Finite capacity, working calendars, downtime, and reservations.
+    async fn resolve_apparatus_identity(
+        &self,
+        apparatus_id: &str,
+        apparatus: &str,
+    ) -> StoreResult<Option<ApparatusScheduleCandidate>> {
+        let apparatus_id = apparatus_id.trim();
+        let apparatus = apparatus.trim();
+        if apparatus_id.is_empty() && apparatus.is_empty() {
+            return Ok(None);
+        }
+        Ok(Some(ApparatusScheduleCandidate {
+            apparatus_id: apparatus_id.to_string(),
+            apparatus: apparatus.to_string(),
+        }))
+    }
     async fn apparatus_capacity_profiles(&self) -> StoreResult<Vec<ApparatusCapacityProfile>> {
         Ok(Vec::new())
     }

@@ -2,6 +2,7 @@ use async_trait::async_trait;
 use sqlx::{PgPool, Postgres, Transaction};
 
 use crate::core::workers::{Worker, WorkerError, WorkerStorePort};
+use crate::db::postgres_worker_group::{lock_worker_group_mutations, remove_worker_from_groups};
 
 #[derive(Clone)]
 pub struct PostgresWorkerStore {
@@ -210,6 +211,9 @@ impl WorkerStorePort for PostgresWorkerStore {
             .begin()
             .await
             .map_err(|_| WorkerError::StoreFailed)?;
+        lock_worker_group_mutations(&mut tx)
+            .await
+            .map_err(|_| WorkerError::StoreFailed)?;
         let result = sqlx::query(
             "UPDATE mini_workers
              SET active = FALSE,
@@ -224,6 +228,9 @@ impl WorkerStorePort for PostgresWorkerStore {
         if result.rows_affected() == 0 {
             return Err(WorkerError::NotFound);
         }
+        remove_worker_from_groups(&mut tx, id)
+            .await
+            .map_err(|_| WorkerError::StoreFailed)?;
         sqlx::query(
             "UPDATE mini_worker_identity_aliases
              SET valid_to = now()

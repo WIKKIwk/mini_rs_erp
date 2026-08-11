@@ -370,6 +370,55 @@ async fn free_pick_policy_allows_ready_order_outside_sequence_head() {
 }
 
 #[tokio::test]
+async fn apparatus_sequence_rejects_unknown_and_wrong_apparatus_orders() {
+    let service = ProductionMapService::new(std::sync::Arc::new(
+        MemoryProductionMapStore::new(),
+    ));
+    service
+        .upsert_map(apparatus_stage_map("zakaz-sequence-valid", "Rezka apparat"))
+        .await
+        .expect("map");
+
+    assert_eq!(
+        service
+            .set_apparatus_sequence(
+                "Rezka apparat",
+                vec!["zakaz-sequence-missing".to_string()],
+            )
+            .await,
+        Err(ProductionMapError::QueueSequenceOrderNotFound(
+            "zakaz-sequence-missing".to_string(),
+        ))
+    );
+    assert_eq!(
+        service
+            .set_apparatus_sequence(
+                "Laminatsiya 1",
+                vec!["zakaz-sequence-valid".to_string()],
+            )
+            .await,
+        Err(ProductionMapError::QueueSequenceApparatusMismatch(
+            "zakaz-sequence-valid".to_string(),
+        ))
+    );
+    assert!(
+        service
+            .apparatus_sequences()
+            .await
+            .expect("sequences after rejection")
+            .is_empty()
+    );
+
+    service
+        .set_apparatus_sequence(
+            "Rezka apparat",
+            vec!["zakaz-sequence-valid".to_string()],
+        )
+        .await
+        .expect("valid sequence");
+}
+
+#[tokio::test]
 async fn pechat_queue_policy_is_always_locked_strict() {
     let service = ProductionMapService::new(std::sync::Arc::new(MemoryProductionMapStore::new()));
     let actor = QueueActionActor {
@@ -2936,7 +2985,8 @@ async fn unassigned_alternative_stage_is_claimed_by_first_started_candidate() {
 
 #[tokio::test]
 async fn assigned_alternative_stage_rejects_unselected_candidate_even_with_stale_sequence() {
-    let service = ProductionMapService::new(std::sync::Arc::new(MemoryProductionMapStore::new()));
+    let store = std::sync::Arc::new(MemoryProductionMapStore::new());
+    let service = ProductionMapService::new(store.clone());
     let actor = QueueActionActor {
         role: "aparatchi".to_string(),
         ref_: "worker-alt-assigned".to_string(),
@@ -2953,10 +3003,10 @@ async fn assigned_alternative_stage_rejects_unselected_candidate_even_with_stale
         }
     }
     service.upsert_map(map).await.expect("map");
-    service
-        .set_apparatus_sequence(unselected, vec![order_id.to_string()])
+    store
+        .put_apparatus_sequence(unselected, vec![order_id.to_string()])
         .await
-        .expect("stale sequence");
+        .expect("seed legacy stale sequence");
     let first_batch = pause_first_stage_batch(&service, order_id, first, &actor, 21.0)
         .await
         .expect("first batch");
@@ -3391,18 +3441,18 @@ async fn downstream_start_requires_qr_payload_not_only_progress_batch_id() {
 #[tokio::test]
 async fn upsert_maps_batch_keeps_queue_state_and_sequence_cache() {
     let store = std::sync::Arc::new(MemoryProductionMapStore::new());
-    let service = ProductionMapService::new(store);
-    service
-        .set_apparatus_sequence(
-            "7 ta rangli pechat - A",
+    let service = ProductionMapService::new(store.clone());
+    store
+        .put_apparatus_sequence(
+            "Rezka apparat",
             vec!["zakaz-111".to_string(), "zakaz-222".to_string()],
         )
         .await
-        .expect("sequence");
+        .expect("seed sequence cache");
     service
         .store
         .put_apparatus_queue_states(
-            "7 ta rangli pechat - A",
+            "Rezka apparat",
             BTreeMap::from([("zakaz-111".to_string(), "completed".to_string())]),
         )
         .await
@@ -3428,7 +3478,7 @@ async fn upsert_maps_batch_keeps_queue_state_and_sequence_cache() {
             .apparatus_sequences()
             .await
             .expect("sequences")
-            .get("7 ta rangli pechat - A"),
+            .get("Rezka apparat"),
         Some(&vec!["zakaz-111".to_string(), "zakaz-222".to_string()])
     );
     assert_eq!(
@@ -3436,7 +3486,7 @@ async fn upsert_maps_batch_keeps_queue_state_and_sequence_cache() {
             .apparatus_queue_states()
             .await
             .expect("states")
-            .get("7 ta rangli pechat - A")
+            .get("Rezka apparat")
             .and_then(|states| states.get("zakaz-111")),
         Some(&"completed".to_string())
     );

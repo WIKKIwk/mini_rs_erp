@@ -38,14 +38,32 @@ pub(super) fn candidate_allowed_for_order(
             || move_allowed(map, source, candidate))
 }
 
+pub(super) fn same_apparatus_identity(
+    left_id: &str,
+    left_name: &str,
+    right_id: &str,
+    right_name: &str,
+) -> bool {
+    let left_id = left_id.trim();
+    let right_id = right_id.trim();
+    if !left_id.is_empty() && !right_id.is_empty() {
+        return left_id.eq_ignore_ascii_case(right_id);
+    }
+    queue_state::apparatus_titles_match(left_name, right_name)
+}
+
 pub(super) fn profile_for_apparatus(
     profiles: &[ApparatusCapacityProfile],
     apparatus_id: &str,
     apparatus: &str,
 ) -> ApparatusCapacityProfile {
     if let Some(profile) = profiles.iter().find(|profile| {
-        profile.apparatus_id.eq_ignore_ascii_case(apparatus_id)
-            || (!apparatus.is_empty() && profile.apparatus.eq_ignore_ascii_case(apparatus))
+        same_apparatus_identity(
+            &profile.apparatus_id,
+            &profile.apparatus,
+            apparatus_id,
+            apparatus,
+        )
     }) {
         return profile.clone();
     }
@@ -146,8 +164,12 @@ pub(super) fn find_schedule_slot(
         }
         if downtimes.iter().any(|downtime| {
             downtime.active
-                && (downtime.apparatus_id.eq_ignore_ascii_case(apparatus_id)
-                    || queue_state::apparatus_titles_match(&downtime.apparatus, apparatus))
+                && same_apparatus_identity(
+                    &downtime.apparatus_id,
+                    &downtime.apparatus,
+                    apparatus_id,
+                    apparatus,
+                )
                 && intervals_overlap(cursor, end, downtime.starts_at_unix, downtime.ends_at_unix)
         }) {
             cursor += 60;
@@ -157,11 +179,12 @@ pub(super) fn find_schedule_slot(
             .iter()
             .filter(|reservation| {
                 reservation.status.reserves_capacity()
-                    && (reservation.apparatus_id.eq_ignore_ascii_case(apparatus_id)
-                        || queue_state::apparatus_titles_match(
-                            &reservation.apparatus,
-                            apparatus,
-                        ))
+                    && same_apparatus_identity(
+                        &reservation.apparatus_id,
+                        &reservation.apparatus,
+                        apparatus_id,
+                        apparatus,
+                    )
                     && intervals_overlap(
                         cursor,
                         end,
@@ -216,4 +239,35 @@ fn unix_seconds() -> i64 {
         .duration_since(std::time::UNIX_EPOCH)
         .map(|duration| duration.as_secs() as i64)
         .unwrap_or_default()
+}
+
+#[cfg(test)]
+mod identity_tests {
+    use super::same_apparatus_identity;
+
+    #[test]
+    fn nonempty_ids_are_authoritative_over_a_mismatched_name() {
+        assert!(same_apparatus_identity(
+            "apparatus:a",
+            "Apparatus B",
+            "apparatus:a",
+            "Apparatus A",
+        ));
+        assert!(!same_apparatus_identity(
+            "apparatus:a",
+            "Apparatus B",
+            "apparatus:b",
+            "Apparatus B",
+        ));
+    }
+
+    #[test]
+    fn name_fallback_remains_available_for_legacy_missing_ids() {
+        assert!(same_apparatus_identity(
+            "",
+            "Laminatsiya 1",
+            "apparatus:default:laminatsiya_1",
+            "Laminatsiya 1",
+        ));
+    }
 }

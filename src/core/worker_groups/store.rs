@@ -1,8 +1,8 @@
 use async_trait::async_trait;
 
+use super::{WorkerGroupError, WorkerGroupMutation, WorkerGroupRecord, WorkerGroupStorePort};
 #[cfg(test)]
-use super::normalize::sort_groups;
-use super::{WorkerGroupError, WorkerGroupRecord, WorkerGroupStorePort};
+use super::{apply_worker_group_mutation, normalize::sort_groups};
 
 pub(super) struct UnavailableWorkerGroupStore;
 
@@ -15,11 +15,14 @@ impl WorkerGroupStorePort for UnavailableWorkerGroupStore {
         Err(WorkerGroupError::StoreFailed)
     }
 
-    async fn put_apparatus_worker_groups(
+    async fn upsert_group(
         &self,
-        _apparatus: &str,
-        _groups: Vec<WorkerGroupRecord>,
-    ) -> Result<Vec<WorkerGroupRecord>, WorkerGroupError> {
+        _mutation: WorkerGroupMutation,
+    ) -> Result<WorkerGroupRecord, WorkerGroupError> {
+        Err(WorkerGroupError::StoreFailed)
+    }
+
+    async fn remove_worker(&self, _worker_id: &str) -> Result<(), WorkerGroupError> {
         Err(WorkerGroupError::StoreFailed)
     }
 }
@@ -57,16 +60,22 @@ impl WorkerGroupStorePort for MemoryWorkerGroupStore {
         Ok(groups)
     }
 
-    async fn put_apparatus_worker_groups(
+    async fn upsert_group(
         &self,
-        apparatus: &str,
-        groups: Vec<WorkerGroupRecord>,
-    ) -> Result<Vec<WorkerGroupRecord>, WorkerGroupError> {
-        let key = apparatus.trim().to_lowercase();
+        mutation: WorkerGroupMutation,
+    ) -> Result<WorkerGroupRecord, WorkerGroupError> {
         let mut stored = self.groups.write().await;
-        stored.retain(|group| group.apparatus.to_lowercase() != key);
-        stored.extend(groups.clone());
-        *stored = sort_groups(stored.clone());
-        Ok(sort_groups(groups))
+        apply_worker_group_mutation(&mut stored, &mutation)
+    }
+
+    async fn remove_worker(&self, worker_id: &str) -> Result<(), WorkerGroupError> {
+        let mut stored = self.groups.write().await;
+        for group in stored.iter_mut() {
+            group
+                .worker_ids
+                .retain(|id| !id.trim().eq_ignore_ascii_case(worker_id.trim()));
+        }
+        *stored = sort_groups(std::mem::take(&mut *stored));
+        Ok(())
     }
 }

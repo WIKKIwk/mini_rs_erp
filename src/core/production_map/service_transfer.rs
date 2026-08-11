@@ -9,6 +9,7 @@ use super::compiler::compile_map;
 use super::pechat;
 use super::queue_state;
 use super::service::ProductionMapService;
+use super::service_capacity_scheduler::same_apparatus_identity;
 use super::store_port::ProductionMapApparatusTransferWrite;
 use super::types::*;
 
@@ -70,8 +71,23 @@ impl ProductionMapService {
             .map(str::to_string)
             .collect::<Vec<_>>();
         let from_key = queue_state::resolve_apparatus_storage_key(from, &known_keys);
-        let to_key = queue_state::resolve_apparatus_storage_key(to, &known_keys);
-        let target_apparatus_id = apparatus_id_for_name(&to_key);
+        let requested_to_key = queue_state::resolve_apparatus_storage_key(to, &known_keys);
+        let mut target_identity = self
+            .store
+            .resolve_apparatus_identity("", &requested_to_key)
+            .await?
+            .ok_or(ProductionMapError::MoveNotAllowed)?;
+        if target_identity.apparatus_id.trim().is_empty() {
+            target_identity.apparatus_id = apparatus_id_for_name(&target_identity.apparatus);
+        }
+        if target_identity.apparatus.trim().is_empty() {
+            target_identity.apparatus = requested_to_key;
+        }
+        let to_key = queue_state::resolve_apparatus_storage_key(
+            &target_identity.apparatus,
+            &known_keys,
+        );
+        let target_apparatus_id = target_identity.apparatus_id;
         if from_key == to_key {
             return Err(ProductionMapError::MoveNotAllowed);
         }
@@ -279,8 +295,12 @@ impl ProductionMapService {
         let levels = profiles
             .iter()
             .find(|profile| {
-                profile.apparatus_id.eq_ignore_ascii_case(&target_id)
-                    || profile.apparatus.eq_ignore_ascii_case(target_apparatus)
+                same_apparatus_identity(
+                    &profile.apparatus_id,
+                    &profile.apparatus,
+                    &target_id,
+                    target_apparatus,
+                )
             })
             .map(|profile| {
                 requirements
