@@ -142,6 +142,12 @@ pub async fn production_map_queue_action(
         input.action,
         &input.material_barcode,
         &input.material_barcodes,
+        &input.progress_batch_id,
+        if input.qr_payload.trim().is_empty() {
+            &input.progress_qr
+        } else {
+            &input.qr_payload
+        },
         super::super::training::TrainingQueuePrintInput {
             driver_url: input.driver_url.clone(),
             printer: input.printer.clone(),

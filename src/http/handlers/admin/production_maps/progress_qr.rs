@@ -18,7 +18,7 @@ pub async fn production_map_progress_qr_lookup(
     headers: HeaderMap,
     body: Bytes,
 ) -> Result<Response, AdminError> {
-    authorize_any_capability(
+    let principal = authorize_any_capability(
         &state,
         &headers,
         &[
@@ -37,6 +37,20 @@ pub async fn production_map_progress_qr_lookup(
     } else {
         input.qr_payload
     };
+    if let Some(batch) = super::super::training::training_input_progress_batch_for_qr(
+        &state,
+        &principal,
+        &qr_payload,
+    )
+    .await
+    .map_err(super::super::training::training_workspace_error)?
+    {
+        return Ok(json_response(serde_json::json!({
+            "ok": true,
+            "can_resume": false,
+            "batch": batch,
+        })));
+    }
     let batch = state
         .production_maps
         .progress_batch_for_qr(&input.progress_batch_id, &qr_payload)

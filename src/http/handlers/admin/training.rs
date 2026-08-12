@@ -13,9 +13,11 @@ use crate::core::calculate_orders::{
     owner_key, validate_template, CalculateOrderError, CalculateOrderTemplate,
 };
 use crate::core::production_map::{
-    queue_state, ApparatusQueueOrderActionControl, ApparatusQueuePolicy,
-    ApparatusQueuePolicyRecord, ProductionMapDefinition, ProductionMapLiveSnapshot,
-    ProductionMapNodeKind, ProductionMapSaved, ProductionOrderStatusDetail,
+    chain, queue_state, ApparatusQueueOrderActionControl, ApparatusQueuePolicy,
+    ApparatusQueuePolicyRecord, OrderProgressBatch, OrderProgressBatchStatus,
+    OrderProgressBatchStatusDetail, OrderProgressBatchWipStatus, ProductionMapDefinition,
+    ProductionMapEdge, ProductionMapLiveSnapshot, ProductionMapNode, ProductionMapNodeKind,
+    ProductionMapSaved, ProductionOrderStatusDetail,
 };
 use crate::core::production_map::pechat;
 use crate::core::returned_paint::{
@@ -97,6 +99,287 @@ pub(super) struct TrainingQueuePrintInput {
     pub print_count: u32,
 }
 
+const TRAINING_INPUT_NODE_ROLE: &str = "training_input";
+const TRAINING_INPUT_APPARATUS: &str = "Bosma aparat";
+const TRAINING_INPUT_QR_PREFIX: &str = "TRAINING-INPUT:";
+
+fn is_laminatsiya_apparatus(apparatus: &str) -> bool {
+    apparatus.trim().to_ascii_lowercase().contains("laminatsiya")
+}
+
+fn is_training_input_node(node: &ProductionMapNode) -> bool {
+    node.kind == ProductionMapNodeKind::Apparatus
+        && node.role_code.trim().eq_ignore_ascii_case(TRAINING_INPUT_NODE_ROLE)
+}
+
+fn training_laminatsiya_apparatus(map: &ProductionMapDefinition) -> Option<String> {
+    map.nodes
+        .iter()
+        .find(|node| {
+            node.kind == ProductionMapNodeKind::Apparatus
+                && !is_training_input_node(node)
+                && is_laminatsiya_apparatus(&node.title)
+        })
+        .map(|node| node.title.trim().to_string())
+        .filter(|title| !title.is_empty())
+}
+
+fn training_input_stage_for_map(
+    map: &ProductionMapDefinition,
+    apparatus: &str,
+) -> Option<String> {
+    if !is_laminatsiya_apparatus(apparatus) {
+        return None;
+    }
+    if let Some(previous) = chain::previous_work_stage_station(map, apparatus) {
+        return map
+            .nodes
+            .iter()
+            .any(|node| {
+                is_training_input_node(node)
+                    && queue_state::apparatus_titles_match(&node.title, &previous)
+            })
+            .then_some(previous);
+    }
+    Some(TRAINING_INPUT_APPARATUS.to_string())
+}
+
+fn training_worker_map(mut map: ProductionMapDefinition) -> ProductionMapDefinition {
+    let Some(target_index) = map.nodes.iter().position(|node| {
+        node.kind == ProductionMapNodeKind::Apparatus
+            && !is_training_input_node(node)
+            && is_laminatsiya_apparatus(&node.title)
+    }) else {
+        return map;
+    };
+    let target = map.nodes[target_index].clone();
+    if chain::previous_work_stage_station(&map, &target.title).is_some()
+        || map.nodes.iter().any(is_training_input_node)
+    {
+        return map;
+    }
+
+    let mut input_id = "training-input-apparatus".to_string();
+    let mut suffix = 2;
+    while map.nodes.iter().any(|node| node.id == input_id) {
+        input_id = format!("training-input-apparatus-{suffix}");
+        suffix += 1;
+    }
+    let input_node = ProductionMapNode {
+        id: input_id.clone(),
+        kind: ProductionMapNodeKind::Apparatus,
+        title: TRAINING_INPUT_APPARATUS.to_string(),
+        formula: None,
+        role_code: TRAINING_INPUT_NODE_ROLE.to_string(),
+        item_code: String::new(),
+        qty_formula: String::new(),
+        from_location: String::new(),
+        to_location: String::new(),
+        alternative_group_id: String::new(),
+        alternative_group_label: String::new(),
+        alternative_assigned_title: String::new(),
+        rezka_kadr_count: None,
+        rezka_label_length: None,
+        x: target.x,
+        y: target.y - 132.0,
+    };
+    let mut edges = Vec::with_capacity(map.edges.len() + 1);
+    let mut had_incoming_edge = false;
+    for edge in &map.edges {
+        if edge.to == target.id {
+            had_incoming_edge = true;
+            edges.push(ProductionMapEdge {
+                from: edge.from.clone(),
+                to: input_id.clone(),
+                branch: edge.branch.clone(),
+            });
+        } else {
+            edges.push(edge.clone());
+        }
+    }
+    if had_incoming_edge {
+        edges.push(ProductionMapEdge {
+            from: input_id,
+            to: target.id,
+            branch: String::new(),
+        });
+        map.nodes.insert(target_index, input_node);
+        map.edges = edges;
+    }
+    map
+}
+
+fn training_input_progress_batch(
+    map: &ProductionMapDefinition,
+    apparatus: &str,
+) -> Option<OrderProgressBatch> {
+    let order_id = map.id.trim();
+    let previous_stage = training_input_stage_for_map(map, apparatus)?;
+    if order_id.is_empty()
+        || !previous_stage.eq_ignore_ascii_case(TRAINING_INPUT_APPARATUS)
+    {
+        return None;
+    }
+    let item_code = if map.product_code.trim().is_empty() {
+        if map.order_number.trim().is_empty() {
+            order_id.to_string()
+        } else {
+            map.order_number.trim().to_string()
+        }
+    } else {
+        map.product_code.trim().to_string()
+    };
+    let title = if map.title.trim().is_empty() {
+        item_code.clone()
+    } else {
+        map.title.trim().to_string()
+    };
+    let produced_qty = map
+        .order_kg
+        .filter(|value| value.is_finite() && *value > 0.0)
+        .unwrap_or(1.0);
+    let mut batch = OrderProgressBatch {
+        batch_id: format!("training-input-batch-{order_id}"),
+        revision: 1,
+        session_id: format!("training-input-session-{order_id}"),
+        started_at_unix: 0,
+        completed_at_unix: 0,
+        apparatus: previous_stage.clone(),
+        order_id: order_id.to_string(),
+        action: queue_state::ApparatusQueueAction::Complete,
+        status: OrderProgressBatchStatus::Completed,
+        produced_qty,
+        uom: "kg".to_string(),
+        qr_payload: format!("{TRAINING_INPUT_QR_PREFIX}{order_id}"),
+        label_item_code: item_code,
+        label_item_name: format!("{title}, apparat: {previous_stage}, training input"),
+        executor_name: "Training bosma".to_string(),
+        worker_role: "training".to_string(),
+        worker_ref: "training-input".to_string(),
+        worker_display_name: "Training bosma".to_string(),
+        wip_status: OrderProgressBatchWipStatus::Waiting,
+        status_detail: OrderProgressBatchStatusDetail::default(),
+        current_apparatus: previous_stage.clone(),
+        current_apparatus_key: queue_state::apparatus_search_key(&previous_stage),
+        current_location: format!("{previous_stage} chiqim"),
+        next_apparatus: apparatus.trim().to_string(),
+        parent_batch_id: String::new(),
+        used_by_session_id: String::new(),
+        used_by_apparatus: String::new(),
+        processed_by_session_id: String::new(),
+        processed_by_apparatus: String::new(),
+        return_ink_kg: None,
+        lamination_print_leftover_rolls: None,
+        lamination_film_leftover_rolls: None,
+        rezka_bosma_waste: None,
+        rezka_lamination_waste: None,
+        rezka_edge_waste: None,
+        total_waste: None,
+        finished_goods_kg: Some(produced_qty),
+        bobina_kg: None,
+        finished_goods_meter: None,
+        diameter: None,
+        description: "Training uchun avtomatik Bosma input batch".to_string(),
+        payload_json: serde_json::json!({
+            "training": true,
+            "training_input": true,
+            "source": "automatic_training_order_batch",
+        }),
+    };
+    batch.refresh_status_detail();
+    Some(batch)
+}
+
+pub(super) async fn training_input_progress_batch_for_principal(
+    state: &AppState,
+    principal: &Principal,
+    order_id: &str,
+    previous_apparatus: &str,
+    next_apparatus: &str,
+) -> Result<Option<OrderProgressBatch>, TrainingWorkspaceError> {
+    let order_id = order_id.trim();
+    if !order_id.starts_with("training-") {
+        return Ok(None);
+    }
+    let requested_next = next_apparatus.trim();
+    let saved = if matches!(&principal.role, PrincipalRole::Aparatchi) {
+        worker_training_overlay(state, principal)
+            .await?
+            .maps
+            .into_iter()
+            .find(|saved| {
+                saved.map.id.trim() == order_id
+                    && (requested_next.is_empty()
+                        || training_map_has_apparatus(saved, requested_next))
+            })
+    } else {
+        state
+            .training_workspace
+            .as_ref()
+            .ok_or(TrainingWorkspaceError::StoreFailed)?
+            .map(order_id)
+            .await?
+    };
+    let Some(saved) = saved else {
+        return Ok(None);
+    };
+    let target = if requested_next.is_empty() {
+        training_laminatsiya_apparatus(&saved.map).unwrap_or_default()
+    } else {
+        requested_next.to_string()
+    };
+    let Some(batch) = training_input_progress_batch(&saved.map, &target) else {
+        return Ok(None);
+    };
+    if !previous_apparatus.trim().is_empty()
+        && !queue_state::apparatus_titles_match(&batch.apparatus, previous_apparatus)
+    {
+        return Ok(None);
+    }
+    Ok(Some(batch))
+}
+
+pub(super) async fn training_input_progress_batch_for_qr(
+    state: &AppState,
+    principal: &Principal,
+    qr_payload: &str,
+) -> Result<Option<OrderProgressBatch>, TrainingWorkspaceError> {
+    let qr_payload = qr_payload.trim();
+    let Some(order_id) = qr_payload
+        .strip_prefix(TRAINING_INPUT_QR_PREFIX)
+        .filter(|value| value.starts_with("training-"))
+    else {
+        return Ok(None);
+    };
+    let saved = if matches!(&principal.role, PrincipalRole::Aparatchi) {
+        worker_training_overlay(state, principal)
+            .await?
+            .maps
+            .into_iter()
+            .find(|saved| saved.map.id.trim() == order_id)
+    } else {
+        state
+            .training_workspace
+            .as_ref()
+            .ok_or(TrainingWorkspaceError::StoreFailed)?
+            .map(order_id)
+            .await?
+    };
+    let Some(saved) = saved else {
+        return Ok(None);
+    };
+    let Some(apparatus) = training_laminatsiya_apparatus(&saved.map) else {
+        return Ok(None);
+    };
+    let Some(batch) = training_input_progress_batch(&saved.map, &apparatus) else {
+        return Ok(None);
+    };
+    Ok(batch
+        .qr_payload
+        .eq_ignore_ascii_case(qr_payload)
+        .then_some(batch))
+}
+
 pub(super) async fn worker_training_overlay(
     state: &AppState,
     principal: &Principal,
@@ -131,6 +414,10 @@ pub(super) async fn worker_training_overlay(
                 .iter()
                 .any(|apparatus| training_map_has_apparatus(saved, apparatus))
         })
+        .map(|mut saved| {
+            saved.map = training_worker_map(saved.map);
+            saved
+        })
         .collect::<Vec<_>>();
     let stored_states = store.queue_states().await?;
     let mut overlay = WorkerTrainingOverlay {
@@ -160,7 +447,7 @@ pub(super) async fn worker_training_overlay(
                 }
             }
         }
-        let controls = training_queue_action_controls(apparatus, &sequence, &states);
+        let controls = training_queue_action_controls(apparatus, &sequence, &states, &overlay.maps);
         let statuses = sequence
             .iter()
             .map(|order_id| {
@@ -408,6 +695,8 @@ pub(super) async fn training_queue_action(
     action: queue_state::ApparatusQueueAction,
     material_barcode: &str,
     material_barcodes: &[String],
+    progress_batch_id: &str,
+    progress_qr: &str,
     print_input: TrainingQueuePrintInput,
 ) -> Result<Option<serde_json::Value>, TrainingWorkspaceError> {
     let order_id = order_id.trim();
@@ -523,6 +812,25 @@ pub(super) async fn training_queue_action(
     };
 
     if matches!(action, queue_state::ApparatusQueueAction::Start) {
+        if let Some(expected_batch) = training_input_progress_batch(&training_map, &apparatus) {
+            let scanned_qr = if progress_qr.trim().is_empty() {
+                progress_batch_id.trim()
+            } else {
+                progress_qr.trim()
+            };
+            if scanned_qr.is_empty() {
+                return Err(TrainingWorkspaceError::InvalidInput(
+                    "progress_qr_required".to_string(),
+                ));
+            }
+            if !expected_batch.qr_payload.eq_ignore_ascii_case(scanned_qr)
+                && !expected_batch.batch_id.eq_ignore_ascii_case(scanned_qr)
+            {
+                return Err(TrainingWorkspaceError::InvalidInput(
+                    "progress_batch_not_accepted".to_string(),
+                ));
+            }
+        }
         let assigned = store
             .raw_material_barcodes_for_order_apparatus(order_id, &apparatus)
             .await?;
@@ -618,6 +926,7 @@ pub(super) async fn training_queue_action(
 fn training_map_has_apparatus(saved: &ProductionMapSaved, apparatus: &str) -> bool {
     saved.map.nodes.iter().any(|node| {
         node.kind == ProductionMapNodeKind::Apparatus
+            && !is_training_input_node(node)
             && queue_state::apparatus_titles_match(&node.title, apparatus)
     })
 }
@@ -854,6 +1163,7 @@ fn training_queue_action_controls(
     apparatus: &str,
     sequence: &[String],
     states: &BTreeMap<String, String>,
+    maps: &[ProductionMapSaved],
 ) -> BTreeMap<String, ApparatusQueueOrderActionControl> {
     let parsed_states = sequence
         .iter()
@@ -901,12 +1211,17 @@ fn training_queue_action_controls(
                     queue_state::ApparatusQueueOrderState::Completed => Vec::new(),
                 }
             };
+            let previous_stage = maps
+                .iter()
+                .find(|saved| saved.map.id.trim() == order_id.trim())
+                .and_then(|saved| training_input_stage_for_map(&saved.map, apparatus))
+                .unwrap_or_default();
             (
                 order_id.clone(),
                 ApparatusQueueOrderActionControl {
                     state,
                     allowed_actions,
-                    previous_stage: String::new(),
+                    previous_stage,
                     previous_stage_ready: true,
                     complete_requires_full_report: training_complete_requires_full_report(apparatus),
                 },
@@ -1513,6 +1828,59 @@ fn unix_micros() -> u128 {
 mod tests {
     use super::*;
 
+    fn node(id: &str, kind: ProductionMapNodeKind, title: &str) -> ProductionMapNode {
+        ProductionMapNode {
+            id: id.to_string(),
+            kind,
+            title: title.to_string(),
+            formula: None,
+            role_code: String::new(),
+            item_code: String::new(),
+            qty_formula: String::new(),
+            from_location: String::new(),
+            to_location: String::new(),
+            alternative_group_id: String::new(),
+            alternative_group_label: String::new(),
+            alternative_assigned_title: String::new(),
+            rezka_kadr_count: None,
+            rezka_label_length: None,
+            x: 0.0,
+            y: 0.0,
+        }
+    }
+
+    fn laminatsiya_training_map() -> ProductionMapDefinition {
+        ProductionMapDefinition {
+            id: "training-laminatsiya-1".to_string(),
+            product_code: "TRAINING-1".to_string(),
+            title: "Training laminatsiya".to_string(),
+            code: String::new(),
+            order_number: String::new(),
+            customer_name: String::new(),
+            roll_count: None,
+            width_mm: None,
+            order_kg: Some(12.0),
+            base_length: None,
+            nodes: vec![
+                node("start", ProductionMapNodeKind::Start, "Boshlanish"),
+                node("lam", ProductionMapNodeKind::Apparatus, "Laminatsiya aparat"),
+                node("end", ProductionMapNodeKind::End, "Tugash"),
+            ],
+            edges: vec![
+                ProductionMapEdge {
+                    from: "start".to_string(),
+                    to: "lam".to_string(),
+                    branch: String::new(),
+                },
+                ProductionMapEdge {
+                    from: "lam".to_string(),
+                    to: "end".to_string(),
+                    branch: String::new(),
+                },
+            ],
+        }
+    }
+
     #[test]
     fn training_order_request_accepts_mobile_decimal_roll_count() {
         let input: TrainingMapSaveWithOrderRequest = serde_json::from_value(serde_json::json!({
@@ -1534,5 +1902,47 @@ mod tests {
 
         assert_eq!(input.map.roll_count, Some(7));
         assert_eq!(input.template.roll_count, Some(7));
+    }
+
+    #[test]
+    fn laminatsiya_training_map_gets_virtual_bosma_input() {
+        let map = laminatsiya_training_map();
+
+        assert_eq!(
+            training_input_stage_for_map(&map, "Laminatsiya aparat").as_deref(),
+            Some(TRAINING_INPUT_APPARATUS)
+        );
+
+        let worker_map = training_worker_map(map.clone());
+        let input = worker_map
+            .nodes
+            .iter()
+            .find(|item| is_training_input_node(item))
+            .expect("virtual training input node");
+        assert_eq!(input.title, TRAINING_INPUT_APPARATUS);
+        assert!(worker_map.edges.iter().any(|edge| {
+            edge.from == "start" && edge.to == input.id
+        }));
+        assert!(worker_map.edges.iter().any(|edge| {
+            edge.from == input.id && edge.to == "lam"
+        }));
+
+        let batch = training_input_progress_batch(&worker_map, "Laminatsiya aparat")
+            .expect("virtual training input batch");
+        assert_eq!(batch.qr_payload, "TRAINING-INPUT:training-laminatsiya-1");
+        assert_eq!(batch.batch_id, "training-input-batch-training-laminatsiya-1");
+        assert_eq!(batch.apparatus, TRAINING_INPUT_APPARATUS);
+        assert_eq!(batch.next_apparatus, "Laminatsiya aparat");
+        assert_eq!(batch.wip_status, OrderProgressBatchWipStatus::Waiting);
+    }
+
+    #[test]
+    fn non_laminatsiya_training_map_does_not_get_virtual_input() {
+        let mut map = laminatsiya_training_map();
+        map.nodes[1].title = "Bosma aparat".to_string();
+
+        let worker_map = training_worker_map(map.clone());
+        assert!(!worker_map.nodes.iter().any(is_training_input_node));
+        assert!(training_input_progress_batch(&worker_map, "Bosma aparat").is_none());
     }
 }

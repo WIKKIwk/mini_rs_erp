@@ -53,6 +53,44 @@ pub async fn production_map_wip_batches(
             return Err(forbidden());
         }
     }
+    if query.order_id.trim().starts_with("training-") {
+        let batch = super::super::training::training_input_progress_batch_for_principal(
+            &state,
+            &principal,
+            &query.order_id,
+            &query.apparatus,
+            &query.next_apparatus,
+        )
+        .await
+        .map_err(super::super::training::training_workspace_error)?;
+        let batches = batch
+            .into_iter()
+            .filter(|batch| {
+                (query.apparatus.trim().is_empty()
+                    || queue_state::apparatus_titles_match(
+                        &batch.apparatus,
+                        &query.apparatus,
+                    ))
+                    && (query.next_apparatus.trim().is_empty()
+                        || queue_state::apparatus_titles_match(
+                            &batch.next_apparatus,
+                            &query.next_apparatus,
+                        ))
+                    && (query.current_location.trim().is_empty()
+                        || batch.current_location.trim() == query.current_location.trim())
+                    && (query.status.trim().is_empty()
+                        || query.status.trim().eq_ignore_ascii_case("all")
+                        || query
+                            .status
+                            .trim()
+                            .eq_ignore_ascii_case(batch.wip_status.as_str()))
+            })
+            .take(positive_int(query.limit.as_deref(), 100))
+            .collect::<Vec<_>>();
+        return Ok(json_response(serde_json::json!({
+            "batches": batches,
+        })));
+    }
     let include_processed = query.status.trim().eq_ignore_ascii_case("all");
     let status = if query.status.trim().is_empty() || include_processed {
         None
