@@ -323,6 +323,20 @@ impl PostgresTrainingWorkspaceStore {
         apparatus: &str,
         input_apparatus: &str,
     ) -> Result<TrainingInputBatchIdentity, TrainingWorkspaceError> {
+        self.generate_training_input_batches(order_id, apparatus, input_apparatus, 1)
+            .await?
+            .into_iter()
+            .next()
+            .ok_or(TrainingWorkspaceError::StoreFailed)
+    }
+
+    pub async fn generate_training_input_batches(
+        &self,
+        order_id: &str,
+        apparatus: &str,
+        input_apparatus: &str,
+        count: usize,
+    ) -> Result<Vec<TrainingInputBatchIdentity>, TrainingWorkspaceError> {
         let order_id = order_id.trim();
         let apparatus = apparatus.trim();
         let input_apparatus = input_apparatus.trim();
@@ -330,60 +344,47 @@ impl PostgresTrainingWorkspaceStore {
             || !order_id.starts_with("training-")
             || apparatus.is_empty()
             || input_apparatus.is_empty()
+            || count == 0
         {
             return Err(TrainingWorkspaceError::InvalidInput(
                 "training order, target va input apparati kerak".to_string(),
             ));
         }
-        let batch_id = progress_batch_id(
-            input_apparatus,
-            order_id,
-            queue_state::ApparatusQueueAction::Complete,
-            0,
-        );
-        let session_id = format!("training-input-session:{batch_id}");
-        let qr_payload = progress_qr_payload(&batch_id);
-        let row = sqlx::query_as::<_, (String, String, String, String, String)>(
-            "INSERT INTO mini_training_input_batches
-                (order_id, apparatus, batch_id, session_id, qr_payload, generated_at)
-             VALUES ($1, $2, $3, $4, $5, now())
-             ON CONFLICT (order_id) DO UPDATE SET
-                 apparatus = excluded.apparatus,
-                 batch_id = CASE
-                     WHEN lower(mini_training_input_batches.apparatus) = lower(excluded.apparatus)
-                      AND mini_training_input_batches.qr_payload ~* '^4001[0-9A-F]{20}$'
-                     THEN mini_training_input_batches.batch_id
-                     ELSE excluded.batch_id
-                 END,
-                 session_id = CASE
-                     WHEN lower(mini_training_input_batches.apparatus) = lower(excluded.apparatus)
-                      AND mini_training_input_batches.qr_payload ~* '^4001[0-9A-F]{20}$'
-                     THEN mini_training_input_batches.session_id
-                     ELSE excluded.session_id
-                 END,
-                 qr_payload = CASE
-                     WHEN lower(mini_training_input_batches.apparatus) = lower(excluded.apparatus)
-                      AND mini_training_input_batches.qr_payload ~* '^4001[0-9A-F]{20}$'
-                     THEN mini_training_input_batches.qr_payload
-                     ELSE excluded.qr_payload
-                 END,
-                 generated_at = CASE
-                     WHEN lower(mini_training_input_batches.apparatus) = lower(excluded.apparatus)
-                      AND mini_training_input_batches.qr_payload ~* '^4001[0-9A-F]{20}$'
-                     THEN mini_training_input_batches.generated_at
-                     ELSE now()
-                 END
-             RETURNING order_id, apparatus, batch_id, session_id, qr_payload",
-        )
-        .bind(order_id)
-        .bind(apparatus)
-        .bind(batch_id)
-        .bind(session_id)
-        .bind(qr_payload)
-        .fetch_one(&self.pool)
-        .await
-        .map_err(|_| TrainingWorkspaceError::StoreFailed)?;
-        Ok(training_input_batch_identity_from_row(row))
+        let mut tx = self
+            .pool
+            .begin()
+            .await
+            .map_err(|_| TrainingWorkspaceError::StoreFailed)?;
+        let mut identities = Vec::with_capacity(count);
+        for _ in 0..count {
+            let batch_id = progress_batch_id(
+                input_apparatus,
+                order_id,
+                queue_state::ApparatusQueueAction::Complete,
+                0,
+            );
+            let session_id = format!("training-input-session:{batch_id}");
+            let qr_payload = progress_qr_payload(&batch_id);
+            let row = sqlx::query_as::<_, (String, String, String, String, String)>(
+                "INSERT INTO mini_training_input_batches
+                    (order_id, apparatus, batch_id, session_id, qr_payload, generated_at)
+                 VALUES ($1, $2, $3, $4, $5, now())
+                 RETURNING order_id, apparatus, batch_id, session_id, qr_payload",
+            )
+            .bind(order_id)
+            .bind(apparatus)
+            .bind(batch_id)
+            .bind(session_id)
+            .bind(qr_payload)
+            .fetch_one(&mut *tx)
+            .await
+            .map_err(|_| TrainingWorkspaceError::StoreFailed)?;
+            identities.push(training_input_batch_identity_from_row(row));
+        }
+        tx.commit()
+            .await
+            .map_err(|_| TrainingWorkspaceError::StoreFailed)?;
+        Ok(identities)
     }
 
     pub async fn training_input_batch(
@@ -392,25 +393,51 @@ impl PostgresTrainingWorkspaceStore {
         apparatus: &str,
         input_apparatus: &str,
     ) -> Result<Option<TrainingInputBatchIdentity>, TrainingWorkspaceError> {
-        let row = sqlx::query_as::<_, (String, String, String, String, String)>(
-            "SELECT order_id, apparatus, batch_id, session_id, qr_payload
-             FROM mini_training_input_batches
+        let identities = self.training_input_batches(order_id, apparatus).await?;
+        if identities.len() != 1 {
+            return Ok(None);
+        }
+        let identity = identities
+            .into_iter()
+            .next()
+            .ok_or(TrainingWorkspaceError::StoreFailed)?;
+        if is_production_progress_qr(&identity.qr_payload) {
+            return Ok(Some(identity));
+        }
+        sqlx::query(
+            "DELETE FROM mini_training_input_batches
              WHERE order_id = $1 AND lower(apparatus) = lower($2)",
         )
         .bind(order_id.trim())
         .bind(apparatus.trim())
-        .fetch_optional(&self.pool)
+        .execute(&self.pool)
         .await
         .map_err(|_| TrainingWorkspaceError::StoreFailed)?;
-        let Some(identity) = row.map(training_input_batch_identity_from_row) else {
-            return Ok(None);
-        };
-        if is_production_progress_qr(&identity.qr_payload) {
-            return Ok(Some(identity));
-        }
         self.generate_training_input_batch(order_id, apparatus, input_apparatus)
             .await
             .map(Some)
+    }
+
+    pub async fn training_input_batches(
+        &self,
+        order_id: &str,
+        apparatus: &str,
+    ) -> Result<Vec<TrainingInputBatchIdentity>, TrainingWorkspaceError> {
+        let rows = sqlx::query_as::<_, (String, String, String, String, String)>(
+            "SELECT order_id, apparatus, batch_id, session_id, qr_payload
+             FROM mini_training_input_batches
+             WHERE order_id = $1 AND lower(apparatus) = lower($2)
+             ORDER BY generated_at ASC, batch_id ASC",
+        )
+        .bind(order_id.trim())
+        .bind(apparatus.trim())
+        .fetch_all(&self.pool)
+        .await
+        .map_err(|_| TrainingWorkspaceError::StoreFailed)?;
+        Ok(rows
+            .into_iter()
+            .map(training_input_batch_identity_from_row)
+            .collect())
     }
 
     pub async fn training_input_batch_for_qr(
@@ -434,7 +461,7 @@ impl PostgresTrainingWorkspaceStore {
         order_id: &str,
         apparatus: &str,
         qr_payload: &str,
-    ) -> Result<bool, TrainingWorkspaceError> {
+    ) -> Result<Vec<String>, TrainingWorkspaceError> {
         let order_id = order_id.trim();
         let apparatus = apparatus.trim();
         let qr_payload = qr_payload.trim();
@@ -443,20 +470,35 @@ impl PostgresTrainingWorkspaceStore {
                 "training order id kerak".to_string(),
             ));
         }
-        let deleted = sqlx::query_scalar::<_, String>(
+        let mut tx = self
+            .pool
+            .begin()
+            .await
+            .map_err(|_| TrainingWorkspaceError::StoreFailed)?;
+        let deleted_batch_ids = sqlx::query_scalar::<_, String>(
             "DELETE FROM mini_training_input_batches
              WHERE order_id = $1
                AND ($2 = '' OR lower(apparatus) = lower($2))
                AND ($3 = '' OR lower(qr_payload) = lower($3))
-             RETURNING order_id",
+             RETURNING batch_id",
         )
         .bind(order_id)
         .bind(apparatus)
         .bind(qr_payload)
-        .fetch_optional(&self.pool)
+        .fetch_all(&mut *tx)
         .await
         .map_err(|_| TrainingWorkspaceError::StoreFailed)?;
-        Ok(deleted.is_some())
+        for batch_id in &deleted_batch_ids {
+            sqlx::query("DELETE FROM mini_training_progress_batches WHERE batch_id = $1")
+                .bind(batch_id)
+                .execute(&mut *tx)
+                .await
+                .map_err(|_| TrainingWorkspaceError::StoreFailed)?;
+        }
+        tx.commit()
+            .await
+            .map_err(|_| TrainingWorkspaceError::StoreFailed)?;
+        Ok(deleted_batch_ids)
     }
 
     pub async fn training_input_batch_generated(
@@ -479,6 +521,27 @@ impl PostgresTrainingWorkspaceStore {
         Ok(generated)
     }
 
+    pub async fn training_input_batch_set_started(
+        &self,
+        order_id: &str,
+        apparatus: &str,
+    ) -> Result<bool, TrainingWorkspaceError> {
+        sqlx::query_scalar::<_, bool>(
+            "SELECT EXISTS(
+                 SELECT 1
+                 FROM mini_training_queue_events
+                 WHERE order_id = $1
+                   AND lower(apparatus) = lower($2)
+                   AND action = 'start'
+             )",
+        )
+        .bind(order_id.trim())
+        .bind(apparatus.trim())
+        .fetch_one(&self.pool)
+        .await
+        .map_err(|_| TrainingWorkspaceError::StoreFailed)
+    }
+
     pub async fn training_input_batch_orders(
         &self,
     ) -> Result<Vec<(String, String)>, TrainingWorkspaceError> {
@@ -490,6 +553,44 @@ impl PostgresTrainingWorkspaceStore {
         .fetch_all(&self.pool)
         .await
         .map_err(|_| TrainingWorkspaceError::StoreFailed)
+    }
+
+    pub async fn put_training_progress_batches(
+        &self,
+        progress_batches: &[OrderProgressBatch],
+    ) -> Result<(), TrainingWorkspaceError> {
+        let mut tx = self
+            .pool
+            .begin()
+            .await
+            .map_err(|_| TrainingWorkspaceError::StoreFailed)?;
+        for batch in progress_batches {
+            let payload =
+                serde_json::to_value(batch).map_err(|_| TrainingWorkspaceError::StoreFailed)?;
+            sqlx::query(
+                "INSERT INTO mini_training_progress_batches
+                    (batch_id, order_id, apparatus, qr_payload, payload_json, generated_at)
+                 VALUES ($1, $2, $3, $4, $5, now())
+                 ON CONFLICT (batch_id) DO UPDATE SET
+                     order_id = excluded.order_id,
+                     apparatus = excluded.apparatus,
+                     qr_payload = excluded.qr_payload,
+                     payload_json = excluded.payload_json,
+                     generated_at = now()",
+            )
+            .bind(batch.batch_id.trim())
+            .bind(batch.order_id.trim())
+            .bind(batch.apparatus.trim())
+            .bind(batch.qr_payload.trim())
+            .bind(payload)
+            .execute(&mut *tx)
+            .await
+            .map_err(|_| TrainingWorkspaceError::StoreFailed)?;
+        }
+        tx.commit()
+            .await
+            .map_err(|_| TrainingWorkspaceError::StoreFailed)?;
+        Ok(())
     }
 
     pub async fn training_progress_batch_for_key(

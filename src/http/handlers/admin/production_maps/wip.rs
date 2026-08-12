@@ -54,7 +54,7 @@ pub async fn production_map_wip_batches(
         }
     }
     if query.order_id.trim().starts_with("training-") {
-        let batch = super::super::training::training_input_progress_batch_for_principal(
+        let batches = super::super::training::training_input_progress_batch_for_principal(
             &state,
             &principal,
             &query.order_id,
@@ -63,14 +63,11 @@ pub async fn production_map_wip_batches(
         )
         .await
         .map_err(super::super::training::training_workspace_error)?;
-        let batches = batch
+        let batches = batches
             .into_iter()
             .filter(|batch| {
                 (query.apparatus.trim().is_empty()
-                    || queue_state::apparatus_titles_match(
-                        &batch.apparatus,
-                        &query.apparatus,
-                    ))
+                    || queue_state::apparatus_titles_match(&batch.apparatus, &query.apparatus))
                     && (query.next_apparatus.trim().is_empty()
                         || queue_state::apparatus_titles_match(
                             &batch.next_apparatus,

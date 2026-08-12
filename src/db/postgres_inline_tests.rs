@@ -184,6 +184,19 @@ mod tests {
     }
 
     #[test]
+    fn training_input_batch_set_migration_is_registered_with_the_runner() {
+        let migration = POSTGRES_MIGRATIONS
+            .iter()
+            .find(|(version, _)| *version == "0059_training_input_batch_sets")
+            .map(|(_, sql)| sql.to_lowercase())
+            .expect("training input batch set migration");
+
+        assert!(migration.contains("drop constraint if exists mini_training_input_batches_pkey"));
+        assert!(migration.contains("add primary key using index"));
+        assert!(migration.contains("idx_mini_training_input_batches_order_apparatus"));
+    }
+
+    #[test]
     fn roll_detached_status_migration_is_registered_with_the_runner() {
         let migration = POSTGRES_MIGRATIONS
             .iter()
