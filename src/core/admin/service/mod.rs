@@ -30,14 +30,17 @@ use crate::core::authz::{
     has_capability, normalize_custom_role, normalize_role_assignment, role_assignment_key,
     system_role_definitions,
 };
-use crate::core::profile::identity::{ProfileIdentity, load_profile_prefs};
-use crate::core::profile::ports::ProfileStorePort;
+use crate::core::profile::identity::{
+    ProfileIdentity, load_profile_prefs, load_profile_prefs_batch,
+};
+use crate::core::profile::ports::{ProfilePrefs, ProfileStorePort};
 use crate::core::system_users::SystemUser;
 use crate::core::werka::models::{CustomerDirectoryEntry, SupplierItem};
 use crate::core::workers::Worker;
 
 const CODE_REGEN_WINDOW_SECONDS: i64 = 60;
 const MAX_CODE_REGENS_PER_WINDOW: i32 = 3;
+const USER_AVATAR_FALLBACK_CONCURRENCY: usize = 8;
 
 #[derive(Clone)]
 pub struct AdminService {
@@ -129,15 +132,47 @@ impl AdminService {
         let Some(identity) = ProfileIdentity::new(role_key, ref_) else {
             return String::new();
         };
-        let Ok(prefs) = load_profile_prefs(store.as_ref(), &identity).await else {
-            return String::new();
+        profile_avatar_url_from_store(store.as_ref(), &identity).await
+    }
+
+    pub async fn enrich_user_list_avatars(&self, entries: &mut [AdminUserListEntry]) {
+        let Some(store) = &self.profile_store else {
+            return;
         };
-        if !prefs.avatar_url.trim().is_empty() {
-            prefs.avatar_url.trim().to_string()
-        } else if !prefs.avatar_object_key.trim().is_empty() {
-            format!("local://{}", prefs.avatar_object_key.trim())
-        } else {
-            String::new()
+        let identities = entries
+            .iter()
+            .enumerate()
+            .filter_map(|(index, entry)| {
+                ProfileIdentity::from_principal(&entry.principal_role, &entry.entity_ref)
+                    .map(|identity| (index, identity))
+            })
+            .collect::<Vec<_>>();
+        let batch_identities = identities
+            .iter()
+            .map(|(_, identity)| identity.clone())
+            .collect::<Vec<_>>();
+        if let Ok(prefs) = load_profile_prefs_batch(store.as_ref(), &batch_identities).await {
+            for ((index, _), prefs) in identities.iter().zip(prefs) {
+                entries[*index].avatar_url = profile_avatar_url_from_prefs(&prefs);
+            }
+            return;
+        }
+
+        let mut pending = identities.into_iter();
+        let mut tasks = tokio::task::JoinSet::new();
+        for _ in 0..USER_AVATAR_FALLBACK_CONCURRENCY {
+            let Some((index, identity)) = pending.next() else {
+                break;
+            };
+            spawn_profile_avatar_lookup(&mut tasks, Arc::clone(store), index, identity);
+        }
+        while let Some(result) = tasks.join_next().await {
+            if let Ok((index, avatar_url)) = result {
+                entries[index].avatar_url = avatar_url;
+            }
+            if let Some((index, identity)) = pending.next() {
+                spawn_profile_avatar_lookup(&mut tasks, Arc::clone(store), index, identity);
+            }
         }
     }
 
@@ -168,6 +203,11 @@ impl AdminService {
             admin_phone: config.admin_phone.clone(),
             admin_name: config.admin_name.clone(),
         })
+    }
+
+    async fn werka_directory_identity(&self) -> (String, String) {
+        let config = self.config.read().await;
+        (config.werka_name.clone(), config.werka_phone.clone())
     }
 
     pub async fn update_settings(
@@ -378,6 +418,38 @@ impl AdminService {
         })
         .map_err(|_| AdminPortError::LookupFailed)
     }
+}
+
+async fn profile_avatar_url_from_store(
+    store: &dyn ProfileStorePort,
+    identity: &ProfileIdentity,
+) -> String {
+    load_profile_prefs(store, identity)
+        .await
+        .map(|prefs| profile_avatar_url_from_prefs(&prefs))
+        .unwrap_or_default()
+}
+
+fn profile_avatar_url_from_prefs(prefs: &ProfilePrefs) -> String {
+    if !prefs.avatar_url.trim().is_empty() {
+        prefs.avatar_url.trim().to_string()
+    } else if !prefs.avatar_object_key.trim().is_empty() {
+        format!("local://{}", prefs.avatar_object_key.trim())
+    } else {
+        String::new()
+    }
+}
+
+fn spawn_profile_avatar_lookup(
+    tasks: &mut tokio::task::JoinSet<(usize, String)>,
+    store: Arc<dyn ProfileStorePort>,
+    index: usize,
+    identity: ProfileIdentity,
+) {
+    tasks.spawn(async move {
+        let avatar_url = profile_avatar_url_from_store(store.as_ref(), &identity).await;
+        (index, avatar_url)
+    });
 }
 
 #[cfg(test)]

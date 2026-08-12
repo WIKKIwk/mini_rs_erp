@@ -9,4 +9,5 @@ mod mini_order;
 mod production_map;
 mod training_workspace;
 mod warehouse;
+mod worker;
 mod worker_group;

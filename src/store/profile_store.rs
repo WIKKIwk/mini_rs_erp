@@ -51,6 +51,29 @@ impl ProfileStorePort for ProfileStore {
             .map_err(|_| ProfileStoreError::StoreFailed)?;
         Ok(())
     }
+
+    async fn get_many(&self, keys: &[String]) -> Result<Vec<ProfilePrefs>, ProfileStoreError> {
+        let mut state = self.state.lock().await;
+        load_if_needed(&self.path, &mut state).await?;
+        Ok(keys
+            .iter()
+            .map(|key| state.cache.get(key).cloned().unwrap_or_default())
+            .collect())
+    }
+
+    async fn put_many(&self, entries: &[(String, ProfilePrefs)]) -> Result<(), ProfileStoreError> {
+        if entries.is_empty() {
+            return Ok(());
+        }
+        let mut state = self.state.lock().await;
+        load_if_needed(&self.path, &mut state).await?;
+        for (key, prefs) in entries {
+            state.cache.insert(key.clone(), prefs.clone());
+        }
+        write_pretty(&self.path, &state.cache)
+            .await
+            .map_err(|_| ProfileStoreError::StoreFailed)
+    }
 }
 
 async fn load_if_needed(
@@ -200,6 +223,61 @@ impl ProfileStorePort for LmdbProfileStore {
             .map_err(lmdb_store_error)?;
         wtxn.commit().map_err(lmdb_store_error)
     }
+
+    async fn get_many(&self, keys: &[String]) -> Result<Vec<ProfilePrefs>, ProfileStoreError> {
+        let mut result = vec![ProfilePrefs::default(); keys.len()];
+        let mut missing = Vec::new();
+        {
+            let rtxn = self.env.read_txn().map_err(lmdb_store_error)?;
+            for (index, key) in keys.iter().enumerate() {
+                match self
+                    .db
+                    .get(&rtxn, key.as_bytes())
+                    .map_err(lmdb_store_error)?
+                {
+                    Some(prefs) => result[index] = prefs,
+                    None => missing.push((index, key)),
+                }
+            }
+        }
+
+        let Some(path) = &self.legacy_json_path else {
+            return Ok(result);
+        };
+        if missing.is_empty() {
+            return Ok(result);
+        }
+
+        let migrations = {
+            let mut state = self.legacy_state.lock().await;
+            load_if_needed(path, &mut state).await?;
+            missing
+                .into_iter()
+                .filter_map(|(index, key)| {
+                    state.cache.get(key).cloned().map(|prefs| {
+                        result[index] = prefs.clone();
+                        (key.clone(), prefs)
+                    })
+                })
+                .collect::<Vec<_>>()
+        };
+        self.put_many(&migrations).await?;
+        Ok(result)
+    }
+
+    async fn put_many(&self, entries: &[(String, ProfilePrefs)]) -> Result<(), ProfileStoreError> {
+        if entries.is_empty() {
+            return Ok(());
+        }
+        let _guard = self.write_lock.lock().await;
+        let mut wtxn = self.env.write_txn().map_err(lmdb_store_error)?;
+        for (key, prefs) in entries {
+            self.db
+                .put(&mut wtxn, key.as_bytes(), prefs)
+                .map_err(lmdb_store_error)?;
+        }
+        wtxn.commit().map_err(lmdb_store_error)
+    }
 }
 
 fn lmdb_app_error(error: heed::Error) -> AppError {
@@ -268,5 +346,76 @@ mod tests {
             .expect("get migrated prefs");
         assert_eq!(prefs.nickname, "Ali");
         assert_eq!(prefs.avatar_url, "https://example.test/a.png");
+    }
+
+    #[tokio::test]
+    async fn lmdb_profile_store_batches_reads_writes_and_legacy_migration() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let json_path = dir.path().join("profiles.json");
+        tokio::fs::write(
+            &json_path,
+            r#"{
+                "supplier:SUP-A":{"nickname":"A","avatar_url":"https://example.test/a.png"},
+                "supplier:SUP-B":{"nickname":"B","avatar_url":"https://example.test/b.png"}
+            }"#,
+        )
+        .await
+        .expect("write legacy json");
+
+        let lmdb_path = dir.path().join("profiles.lmdb");
+        let store = LmdbProfileStore::open(lmdb_path.clone(), 1024 * 1024, Some(json_path.clone()))
+            .expect("lmdb profile store");
+        let keys = vec![
+            "supplier:SUP-B".to_string(),
+            "supplier:MISSING".to_string(),
+            "supplier:SUP-A".to_string(),
+        ];
+        let prefs = store.get_many(&keys).await.expect("batch get");
+        assert_eq!(prefs[0].nickname, "B");
+        assert_eq!(prefs[1], ProfilePrefs::default());
+        assert_eq!(prefs[2].nickname, "A");
+
+        store
+            .put_many(&[
+                (
+                    "supplier:SUP-C".to_string(),
+                    ProfilePrefs {
+                        nickname: "C".to_string(),
+                        ..ProfilePrefs::default()
+                    },
+                ),
+                (
+                    "supplier:SUP-D".to_string(),
+                    ProfilePrefs {
+                        nickname: "D".to_string(),
+                        ..ProfilePrefs::default()
+                    },
+                ),
+            ])
+            .await
+            .expect("batch put");
+        drop(store);
+
+        tokio::fs::remove_file(json_path)
+            .await
+            .expect("remove legacy json");
+        let reloaded = LmdbProfileStore::open(lmdb_path, 1024 * 1024, None)
+            .expect("reload lmdb profile store");
+        let prefs = reloaded
+            .get_many(&[
+                "supplier:SUP-A".to_string(),
+                "supplier:SUP-B".to_string(),
+                "supplier:SUP-C".to_string(),
+                "supplier:SUP-D".to_string(),
+            ])
+            .await
+            .expect("reloaded batch get");
+        assert_eq!(
+            prefs
+                .into_iter()
+                .map(|prefs| prefs.nickname)
+                .collect::<Vec<_>>(),
+            ["A", "B", "C", "D"]
+        );
     }
 }

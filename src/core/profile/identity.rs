@@ -1,5 +1,7 @@
 use crate::core::auth::models::PrincipalRole;
 
+use std::collections::BTreeMap;
+
 use super::ports::{ProfilePrefs, ProfileStoreError, ProfileStorePort};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -67,6 +69,53 @@ pub async fn load_profile_prefs(
         return Ok(prefs);
     }
     Ok(ProfilePrefs::default())
+}
+
+pub async fn load_profile_prefs_batch(
+    store: &dyn ProfileStorePort,
+    identities: &[ProfileIdentity],
+) -> Result<Vec<ProfilePrefs>, ProfileStoreError> {
+    if identities.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    let mut keys = Vec::with_capacity(identities.len());
+    let mut identity_key_ranges = Vec::with_capacity(identities.len());
+    for identity in identities {
+        let start = keys.len();
+        keys.extend(identity.lookup_keys());
+        identity_key_ranges.push(start..keys.len());
+    }
+
+    let stored = store.get_many(&keys).await?;
+    if stored.len() != keys.len() {
+        return Err(ProfileStoreError::StoreFailed);
+    }
+
+    let mut result = Vec::with_capacity(identities.len());
+    let mut migrations = BTreeMap::<String, ProfilePrefs>::new();
+    for positions in identity_key_ranges {
+        let canonical_position = positions.start;
+        let selected = positions.into_iter().find_map(|position| {
+            let prefs = &stored[position];
+            profile_prefs_has_data(prefs).then(|| (position, prefs.clone()))
+        });
+        match selected {
+            Some((position, prefs)) => {
+                if position != canonical_position {
+                    migrations.insert(keys[canonical_position].clone(), prefs.clone());
+                }
+                result.push(prefs);
+            }
+            None => result.push(ProfilePrefs::default()),
+        }
+    }
+    if !migrations.is_empty() {
+        store
+            .put_many(&migrations.into_iter().collect::<Vec<_>>())
+            .await?;
+    }
+    Ok(result)
 }
 
 pub fn profile_prefs_has_data(prefs: &ProfilePrefs) -> bool {

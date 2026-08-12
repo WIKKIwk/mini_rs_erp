@@ -91,26 +91,11 @@ pub(super) async fn worker_user_list_page(
         .await
         .map_err(worker_error)?;
     let has_more = workers.len() > offset.saturating_add(limit);
-    let mut items = Vec::new();
-    for worker in workers.into_iter().skip(offset).take(limit) {
-        let detail = state
-            .admin
-            .worker_detail(worker)
-            .await
-            .map_err(|_| server_error("worker detail failed"))?;
-        items.push(AdminUserListEntry {
-            id: format!("worker:{}", detail.id),
-            source: "worker".to_string(),
-            entity_ref: detail.id,
-            principal_role: PrincipalRole::Aparatchi,
-            name: detail.name,
-            phone: detail.phone,
-            avatar_url: detail.avatar_url,
-            role_label: detail.level,
-            blocked: false,
-            status: "active".to_string(),
-        });
-    }
+    let items = state
+        .admin
+        .worker_user_list_entries(workers.into_iter().skip(offset).take(limit).collect())
+        .await
+        .map_err(|_| server_error("worker detail failed"))?;
     Ok(AdminUserListPage { items, has_more })
 }
 

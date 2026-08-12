@@ -6,9 +6,10 @@ use serde::Deserialize;
 use super::auth::authorize;
 use super::{ChatHttpError, http_error};
 use crate::app::AppState;
+use crate::core::admin::ports::AdminPortError;
 use crate::core::auth::models::{Principal, PrincipalRole};
 use crate::core::chat::{
-    can_participate_in_chat, ChatDirectoryEntry, ChatDirectoryPage, ChatPrincipalInput,
+    ChatDirectoryEntry, ChatDirectoryPage, ChatPrincipalInput, can_participate_in_chat,
 };
 use crate::core::profile::identity::ProfileIdentity;
 use crate::http::handlers::auth::profile_avatar_proxy_url;
@@ -61,17 +62,115 @@ pub(super) async fn resolve_target(
     role: &PrincipalRole,
     ref_: &str,
 ) -> Result<ChatPrincipalInput, ChatHttpError> {
-    let items = load_directory_entries(state, "", None).await?;
-    let item = items
-        .into_iter()
-        .find(|item| item.role == *role && item.ref_.trim() == ref_.trim())
-        .ok_or_else(|| http_error(axum::http::StatusCode::NOT_FOUND, "chat_user_not_found"))?;
-    Ok(ChatPrincipalInput {
-        role: item.role,
-        ref_: item.ref_,
-        display_name: item.display_name,
-        avatar_url: item.avatar_url,
-    })
+    let ref_ = ref_.trim();
+    if ref_.is_empty() || !can_participate_in_chat(role) {
+        return Err(chat_target_not_found());
+    }
+
+    match role {
+        PrincipalRole::Admin => {
+            if ref_ != "admin" {
+                return Err(chat_target_not_found());
+            }
+            let avatar_url = state
+                .admin
+                .profile_avatar_url_for_principal(role, ref_)
+                .await;
+            Ok(ChatPrincipalInput {
+                role: role.clone(),
+                ref_: ref_.to_string(),
+                display_name: state.config.admin_name.clone(),
+                avatar_url,
+            })
+        }
+        PrincipalRole::Aparatchi => {
+            let worker = state
+                .workers
+                .workers_by_ids(&[ref_.to_string()])
+                .await
+                .map_err(|_| chat_directory_failed())?
+                .into_iter()
+                .find(|worker| worker.id.trim() == ref_)
+                .ok_or_else(chat_target_not_found)?;
+            let detail = state
+                .admin
+                .worker_detail(worker)
+                .await
+                .map_err(map_exact_admin_error)?;
+            Ok(ChatPrincipalInput {
+                role: role.clone(),
+                ref_: detail.id,
+                display_name: detail.name,
+                avatar_url: detail.avatar_url,
+            })
+        }
+        PrincipalRole::Qolipchi | PrincipalRole::Boyoqchi => {
+            let user = state
+                .system_users
+                .users_by_ids(&[ref_.to_string()])
+                .await
+                .map_err(|_| chat_directory_failed())?
+                .into_iter()
+                .find(|user| user.id.trim() == ref_ && user.role == *role)
+                .ok_or_else(chat_target_not_found)?;
+            let detail = state
+                .admin
+                .system_user_detail(user)
+                .await
+                .map_err(map_exact_admin_error)?;
+            if detail.blocked {
+                return Err(chat_target_not_found());
+            }
+            Ok(ChatPrincipalInput {
+                role: detail.role,
+                ref_: detail.id,
+                display_name: detail.name,
+                avatar_url: detail.avatar_url,
+            })
+        }
+        PrincipalRole::Supplier
+        | PrincipalRole::Werka
+        | PrincipalRole::Customer
+        | PrincipalRole::MaterialTaminotchi => {
+            let item = state
+                .admin
+                .user_list_entry_for_principal(role, ref_)
+                .await
+                .map_err(|_| chat_directory_failed())?
+                .filter(|item| {
+                    !item.blocked
+                        && item.status != "removed"
+                        && item.principal_role == *role
+                        && item.entity_ref.trim() == ref_
+                })
+                .ok_or_else(chat_target_not_found)?;
+            Ok(ChatPrincipalInput {
+                role: item.principal_role,
+                ref_: item.entity_ref,
+                display_name: item.name,
+                avatar_url: item.avatar_url,
+            })
+        }
+    }
+}
+
+fn map_exact_admin_error(error: AdminPortError) -> ChatHttpError {
+    if matches!(error, AdminPortError::NotFound) {
+        chat_target_not_found()
+    } else {
+        chat_directory_failed()
+    }
+}
+
+fn chat_target_not_found() -> ChatHttpError {
+    http_error(axum::http::StatusCode::NOT_FOUND, "chat_user_not_found")
+}
+
+fn chat_directory_failed() -> ChatHttpError {
+    http_error(
+        axum::http::StatusCode::INTERNAL_SERVER_ERROR,
+        "chat_directory_failed",
+    )
 }
 
 pub(super) fn proxied_avatar_url(
@@ -185,4 +284,196 @@ async fn load_directory_entries(
     });
     items.dedup_by(|left, right| left.role == right.role && left.ref_ == right.ref_);
     Ok(items)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::collections::BTreeMap;
+    use std::sync::Arc;
+
+    use async_trait::async_trait;
+    use tokio::sync::Mutex;
+
+    use crate::config::AppConfig;
+    use crate::core::admin::models::AdminState;
+    use crate::core::admin::ports::AdminStatePort;
+    use crate::core::admin::service::AdminService;
+    use crate::core::system_users::{MemorySystemUserStore, SystemUserService, SystemUserUpsert};
+    use crate::core::workers::{MemoryWorkerStore, WorkerService, WorkerUpsert};
+
+    #[derive(Default)]
+    struct TestAdminStatePort {
+        states: Mutex<BTreeMap<String, AdminState>>,
+    }
+
+    #[async_trait]
+    impl AdminStatePort for TestAdminStatePort {
+        async fn states(&self) -> Result<BTreeMap<String, AdminState>, AdminPortError> {
+            Ok(self.states.lock().await.clone())
+        }
+
+        async fn put_state(&self, ref_: &str, state: AdminState) -> Result<(), AdminPortError> {
+            self.states.lock().await.insert(ref_.to_string(), state);
+            Ok(())
+        }
+    }
+
+    fn test_state() -> AppState {
+        let mut state = AppState::new(AppConfig {
+            bind_addr: "127.0.0.1:8081".parse().expect("addr"),
+            default_target_warehouse: String::new(),
+            http_timeout: std::time::Duration::from_secs(15),
+            session_store_path: "data/mobile_sessions.json".into(),
+            profile_store_path: "data/mobile_profiles.json".into(),
+            push_token_store_path: "data/mobile_push_tokens.json".into(),
+            session_ttl_seconds: Some(3600),
+            supplier_prefix: "10".to_string(),
+            werka_prefix: "20".to_string(),
+            werka_code: "20ABCDEF1234".to_string(),
+            werka_name: "Werka".to_string(),
+            werka_phone: "+99888862440".to_string(),
+            material_taminotchi_code: String::new(),
+            material_taminotchi_name: "Material taminotchisi".to_string(),
+            material_taminotchi_phone: String::new(),
+            admin_phone: "+998880000000".to_string(),
+            admin_name: "Admin".to_string(),
+            admin_code: "19621978".to_string(),
+        });
+        state.workers = WorkerService::new(Arc::new(MemoryWorkerStore::new()));
+        state.system_users = SystemUserService::new(Arc::new(MemorySystemUserStore::new()));
+        state.admin = AdminService::new(&state.config)
+            .with_state_port(Arc::new(TestAdminStatePort::default()));
+        state
+    }
+
+    #[tokio::test]
+    async fn exact_target_resolution_finds_worker_beyond_directory_cap() {
+        let state = test_state();
+        for index in 0..=500 {
+            state
+                .workers
+                .upsert_worker(WorkerUpsert {
+                    id: format!("worker_{index:04}"),
+                    name: format!("Worker {index:04}"),
+                    phone: String::new(),
+                    level: "Master".to_string(),
+                })
+                .await
+                .expect("worker");
+        }
+
+        let capped = state.workers.workers("", 500).await.expect("workers");
+        assert_eq!(capped.len(), 500);
+        assert!(capped.iter().all(|worker| worker.id != "worker_0500"));
+        assert_eq!(
+            state
+                .workers
+                .workers("Worker 0500", 500)
+                .await
+                .expect("searched workers")
+                .len(),
+            1
+        );
+
+        let target = resolve_target(&state, &PrincipalRole::Aparatchi, "worker_0500")
+            .await
+            .expect("exact target");
+
+        assert_eq!(target.role, PrincipalRole::Aparatchi);
+        assert_eq!(target.ref_, "worker_0500");
+        assert_eq!(target.display_name, "Worker 0500");
+    }
+
+    #[tokio::test]
+    async fn exact_target_resolution_validates_system_user_role_beyond_cap() {
+        let state = test_state();
+        for index in 0..=500 {
+            state
+                .system_users
+                .upsert_user(SystemUserUpsert {
+                    id: format!("qolipchi_{index:04}"),
+                    role: PrincipalRole::Qolipchi,
+                    name: format!("Qolipchi {index:04}"),
+                    phone: format!("+99890{index:07}"),
+                })
+                .await
+                .expect("system user");
+        }
+
+        let capped = state
+            .system_users
+            .users(&PrincipalRole::Qolipchi, "", 500)
+            .await
+            .expect("system users");
+        assert_eq!(capped.len(), 500);
+        assert!(capped.iter().all(|user| user.id != "qolipchi_0500"));
+
+        let target = resolve_target(&state, &PrincipalRole::Qolipchi, "qolipchi_0500")
+            .await
+            .expect("exact target");
+        assert_eq!(target.role, PrincipalRole::Qolipchi);
+        assert_eq!(target.ref_, "qolipchi_0500");
+
+        assert!(
+            resolve_target(&state, &PrincipalRole::Boyoqchi, "qolipchi_0500")
+                .await
+                .is_err()
+        );
+    }
+
+    #[tokio::test]
+    async fn exact_target_resolution_rejects_blocked_and_deactivated_users() {
+        let mut state = test_state();
+        state
+            .system_users
+            .upsert_user(SystemUserUpsert {
+                id: "qolipchi_blocked".to_string(),
+                role: PrincipalRole::Qolipchi,
+                name: "Blocked qolipchi".to_string(),
+                phone: "+998901234567".to_string(),
+            })
+            .await
+            .expect("system user");
+        let state_port = Arc::new(TestAdminStatePort::default());
+        state_port
+            .put_state(
+                "qolipchi_blocked",
+                AdminState {
+                    blocked: true,
+                    ..AdminState::default()
+                },
+            )
+            .await
+            .expect("blocked state");
+        state.admin = AdminService::new(&state.config).with_state_port(state_port);
+
+        assert!(
+            resolve_target(&state, &PrincipalRole::Qolipchi, "qolipchi_blocked",)
+                .await
+                .is_err()
+        );
+
+        state
+            .workers
+            .upsert_worker(WorkerUpsert {
+                id: "worker_deactivated".to_string(),
+                name: "Deactivated worker".to_string(),
+                phone: String::new(),
+                level: "Master".to_string(),
+            })
+            .await
+            .expect("worker");
+        state
+            .workers
+            .deactivate_worker("worker_deactivated")
+            .await
+            .expect("deactivate worker");
+
+        assert!(
+            resolve_target(&state, &PrincipalRole::Aparatchi, "worker_deactivated",)
+                .await
+                .is_err()
+        );
+    }
 }
