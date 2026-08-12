@@ -170,6 +170,20 @@ mod tests {
     }
 
     #[test]
+    fn training_progress_batch_migration_persists_each_printable_qr() {
+        let migration = POSTGRES_MIGRATIONS
+            .iter()
+            .find(|(version, _)| *version == "0058_training_progress_batches")
+            .map(|(_, sql)| sql.to_lowercase())
+            .expect("training progress batch migration");
+
+        assert!(migration.contains("create table if not exists mini_training_progress_batches"));
+        assert!(migration.contains("batch_id text primary key"));
+        assert!(migration.contains("qr_payload text not null unique"));
+        assert!(migration.contains("payload_json jsonb not null"));
+    }
+
+    #[test]
     fn roll_detached_status_migration_is_registered_with_the_runner() {
         let migration = POSTGRES_MIGRATIONS
             .iter()

@@ -118,16 +118,11 @@ pub async fn production_map_queue_action(
         &input.freeze_request_id,
         &principal,
     );
-    if input.worker_handoff
-        && !matches!(input.action, queue_state::ApparatusQueueAction::Pause)
-    {
+    if input.worker_handoff && !matches!(input.action, queue_state::ApparatusQueueAction::Pause) {
         return Err(bad_request("worker_handoff_only_on_pause"));
     }
     if input.remove_roll_from_apparatus
-        && !matches!(
-            input.action,
-            queue_state::ApparatusQueueAction::DetachRoll
-        )
+        && !matches!(input.action, queue_state::ApparatusQueueAction::DetachRoll)
     {
         return Err(bad_request("roll_removal_only_on_detach_roll"));
     }
@@ -158,8 +153,14 @@ pub async fn production_map_queue_action(
             finished_goods_kg: input.finished_goods_kg,
             bobina_kg: input.bobina_kg,
             return_ink_kg: input.return_ink_kg,
+            lamination_print_leftover_rolls: input.lamination_print_leftover_rolls,
+            lamination_film_leftover_rolls: input.lamination_film_leftover_rolls,
+            rezka_bosma_waste: input.rezka_bosma_waste,
+            rezka_lamination_waste: input.rezka_lamination_waste,
+            rezka_edge_waste: input.rezka_edge_waste,
             total_waste: input.total_waste,
             finished_goods_meter: input.finished_goods_meter,
+            diameter: input.diameter,
             returned_paint_items: input.returned_paint_items.clone(),
             returned_paint_image_id: input.returned_paint_image_id.clone(),
             description: if input.completion_request_note.trim().is_empty() {

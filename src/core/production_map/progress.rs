@@ -9,10 +9,10 @@ pub(super) use closed_orders::{
     latest_required_complete_event, order_completed_on_apparatus,
     required_apparatus_for_closed_order,
 };
+pub(crate) use ids::{progress_batch_id, progress_qr_payload};
 pub(super) use ids::{
-    completion_request_decision_event_id, progress_batch_id, progress_event_id,
-    progress_qr_payload, progress_session_id, queue_action_event_id, queue_action_str,
-    unix_seconds,
+    completion_request_decision_event_id, progress_event_id, progress_session_id,
+    queue_action_event_id, queue_action_str, unix_seconds,
 };
 pub(super) use labels::{
     actor_display_name, legacy_order_run_session, non_empty_or, valid_progress_qty,

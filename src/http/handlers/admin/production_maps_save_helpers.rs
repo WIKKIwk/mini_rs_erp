@@ -74,7 +74,7 @@ fn template_source_map_id_for_save(
     }
 }
 
-fn apply_order_rezka_kadr_count(
+pub(super) fn apply_order_rezka_kadr_count(
     map: &mut ProductionMapDefinition,
     template: &CalculateOrderTemplate,
 ) {
@@ -102,47 +102,50 @@ pub(super) fn apply_authoritative_calculation(
     template: &CalculateOrderTemplate,
     material_catalog: &[crate::core::calculate_materials::CalculateMaterial],
 ) -> Result<(), AdminError> {
-    let response = calculate_with_material_catalog(CalculateRequest {
-        order_number: if template.order_number.trim().is_empty() {
-            None
-        } else {
-            Some(template.order_number.trim().to_string())
+    let response = calculate_with_material_catalog(
+        CalculateRequest {
+            order_number: if template.order_number.trim().is_empty() {
+                None
+            } else {
+                Some(template.order_number.trim().to_string())
+            },
+            customer: if template.customer.trim().is_empty() {
+                None
+            } else {
+                Some(template.customer.trim().to_string())
+            },
+            product: Some(template.product.trim().to_string()),
+            status: if template.status.trim().is_empty() {
+                None
+            } else {
+                Some(template.status.trim().to_string())
+            },
+            material_display: if template.material_display.trim().is_empty() {
+                None
+            } else {
+                Some(template.material_display.trim().to_string())
+            },
+            color: if template.color.trim().is_empty() {
+                None
+            } else {
+                Some(template.color.trim().to_string())
+            },
+            kg: Some(template.kg),
+            frame_product_size_mm: Some(template.frame_product_size_mm),
+            frame_count: Some(template.frame_count),
+            edge_allowance_mm: Some(template.edge_allowance_mm),
+            waste_percent: Some(template.waste_percent),
+            roll_count: template.roll_count,
+            layers: template.effective_layers(),
+            note: if template.note.trim().is_empty() {
+                None
+            } else {
+                Some(template.note.trim().to_string())
+            },
+            ..CalculateRequest::default()
         },
-        customer: if template.customer.trim().is_empty() {
-            None
-        } else {
-            Some(template.customer.trim().to_string())
-        },
-        product: Some(template.product.trim().to_string()),
-        status: if template.status.trim().is_empty() {
-            None
-        } else {
-            Some(template.status.trim().to_string())
-        },
-        material_display: if template.material_display.trim().is_empty() {
-            None
-        } else {
-            Some(template.material_display.trim().to_string())
-        },
-        color: if template.color.trim().is_empty() {
-            None
-        } else {
-            Some(template.color.trim().to_string())
-        },
-        kg: Some(template.kg),
-        frame_product_size_mm: Some(template.frame_product_size_mm),
-        frame_count: Some(template.frame_count),
-        edge_allowance_mm: Some(template.edge_allowance_mm),
-        waste_percent: Some(template.waste_percent),
-        roll_count: template.roll_count,
-        layers: template.effective_layers(),
-        note: if template.note.trim().is_empty() {
-            None
-        } else {
-            Some(template.note.trim().to_string())
-        },
-        ..CalculateRequest::default()
-    }, material_catalog)
+        material_catalog,
+    )
     .map_err(|error| bad_request(&error))?;
 
     let base_length = response

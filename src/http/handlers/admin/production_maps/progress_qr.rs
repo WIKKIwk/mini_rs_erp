@@ -37,9 +37,10 @@ pub async fn production_map_progress_qr_lookup(
     } else {
         input.qr_payload
     };
-    if let Some(batch) = super::super::training::training_input_progress_batch_for_qr(
+    if let Some(batch) = super::super::training::training_progress_batch_for_qr(
         &state,
         &principal,
+        &input.progress_batch_id,
         &qr_payload,
     )
     .await
@@ -47,7 +48,11 @@ pub async fn production_map_progress_qr_lookup(
     {
         return Ok(json_response(serde_json::json!({
             "ok": true,
-            "can_resume": false,
+            "can_resume": matches!(
+                batch.status,
+                crate::core::production_map::OrderProgressBatchStatus::Paused
+                    | crate::core::production_map::OrderProgressBatchStatus::RollDetached
+            ),
             "batch": batch,
         })));
     }
@@ -73,7 +78,7 @@ pub async fn production_map_progress_qr_report(
     headers: HeaderMap,
     body: Bytes,
 ) -> Result<Response, AdminError> {
-    authorize_any_capability(
+    let principal = authorize_any_capability(
         &state,
         &headers,
         &[
@@ -93,6 +98,39 @@ pub async fn production_map_progress_qr_report(
     } else {
         input.qr_payload
     };
+    if let Some(batch) = super::super::training::training_progress_batch_for_qr(
+        &state,
+        &principal,
+        &input.progress_batch_id,
+        &qr_payload,
+    )
+    .await
+    .map_err(super::super::training::training_workspace_error)?
+    {
+        let mut progress_batches =
+            super::super::training::training_progress_batches_for_order(&state, &batch.order_id)
+                .await
+                .map_err(super::super::training::training_workspace_error)?;
+        if !progress_batches
+            .iter()
+            .any(|item| item.batch_id.eq_ignore_ascii_case(&batch.batch_id))
+        {
+            progress_batches.insert(0, batch.clone());
+        }
+        return Ok(json_response(serde_json::json!({
+            "ok": true,
+            "scanned_batch": batch.clone(),
+            "current_batch": batch.clone(),
+            "is_stale": false,
+            "stale_reason": "",
+            "queue_states": {},
+            "logs": [],
+            "corrections": [],
+            "progress_batches": progress_batches,
+            "run_sessions": [],
+            "active_sessions": [],
+        })));
+    }
     let report = state
         .production_maps
         .progress_qr_report(&input.progress_batch_id, &qr_payload)
@@ -235,11 +273,22 @@ pub async fn production_map_progress_qr_reprint(
     } else {
         input.qr_payload.clone()
     };
-    let batch = state
-        .production_maps
-        .progress_batch_for_qr(&input.progress_batch_id, &qr_payload)
-        .await
-        .map_err(production_map_error)?;
+    let batch = match super::super::training::training_progress_batch_for_qr(
+        &state,
+        &principal,
+        &input.progress_batch_id,
+        &qr_payload,
+    )
+    .await
+    .map_err(super::super::training::training_workspace_error)?
+    {
+        Some(batch) => batch,
+        None => state
+            .production_maps
+            .progress_batch_for_qr(&input.progress_batch_id, &qr_payload)
+            .await
+            .map_err(production_map_error)?,
+    };
     if !principal_can_reprint_progress_batch(&principal, &batch) {
         return Err(forbidden());
     }
@@ -312,6 +361,12 @@ fn principal_can_reprint_progress_batch(
     let principal_ref = principal.ref_.trim();
     principal.role == PrincipalRole::Admin
         || (!principal_ref.is_empty() && batch.worker_ref.trim() == principal_ref)
+        || (batch.order_id.trim().starts_with("training-")
+            && batch
+                .payload_json
+                .get("training")
+                .and_then(serde_json::Value::as_bool)
+                .unwrap_or(false))
 }
 
 fn progress_reprint_request(

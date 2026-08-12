@@ -85,7 +85,7 @@ pub(in crate::core::production_map) fn progress_event_id(
     )
 }
 
-pub(in crate::core::production_map) fn progress_batch_id(
+pub(crate) fn progress_batch_id(
     apparatus: &str,
     order_id: &str,
     action: queue_state::ApparatusQueueAction,
@@ -100,7 +100,7 @@ pub(in crate::core::production_map) fn progress_batch_id(
     )
 }
 
-pub(in crate::core::production_map) fn progress_qr_payload(batch_id: &str) -> String {
+pub(crate) fn progress_qr_payload(batch_id: &str) -> String {
     let stamp = batch_id
         .split(':')
         .nth(1)

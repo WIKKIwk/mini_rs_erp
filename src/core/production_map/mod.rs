@@ -49,6 +49,7 @@ pub use store_port::{
 };
 pub use types::*;
 pub(crate) use progress::progress_label_item_name;
+pub(crate) use progress::{progress_batch_id, progress_qr_payload};
 
 #[cfg(test)]
 mod tests;

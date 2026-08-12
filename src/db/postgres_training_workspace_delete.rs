@@ -40,6 +40,10 @@ impl PostgresTrainingWorkspaceStore {
                  DELETE FROM mini_training_input_batches
                  WHERE order_id = $1
                  RETURNING order_id
+             ), deleted_progress_batches AS (
+                 DELETE FROM mini_training_progress_batches
+                 WHERE order_id = $1
+                 RETURNING batch_id
              ), deleted_queue_events AS (
                  DELETE FROM mini_training_queue_events
                  WHERE order_id = $1
