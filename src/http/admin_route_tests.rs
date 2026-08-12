@@ -42,6 +42,7 @@ use crate::core::inventory_movements::{
 };
 use crate::core::mini_orders::{MiniOrderError, MiniOrderSink, NoopMiniOrderSink};
 use crate::core::production_map::{MemoryProductionMapStore, ProductionMapService};
+use crate::core::profile::ports::{ProfilePrefs, ProfileStoreError, ProfileStorePort};
 use crate::core::returned_paint::{MemoryReturnedPaintStore, ReturnedPaintService};
 use crate::core::session::manager::SessionManager;
 use crate::core::system_users::{MemorySystemUserStore, SystemUserService};

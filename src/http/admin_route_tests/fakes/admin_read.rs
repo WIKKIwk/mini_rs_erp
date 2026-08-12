@@ -193,10 +193,23 @@ impl AdminReadPort for LocalPhoneDuplicateReadPort {
 impl AdminReadPort for FakeAdminReadPort {
     async fn suppliers_page(
         &self,
-        _query: &str,
-        _limit: usize,
-        _offset: usize,
+        query: &str,
+        limit: usize,
+        offset: usize,
     ) -> Result<Vec<AdminDirectoryEntry>, AdminPortError> {
+        if query.trim() == "deep-user" {
+            return Ok((0..53)
+                .map(|index| {
+                    entry(
+                        &format!("DEEP-SUP-{index:03}"),
+                        &format!("deep-user {index:03}"),
+                        &format!("+99890{index:07}"),
+                    )
+                })
+                .skip(offset)
+                .take(limit)
+                .collect());
+        }
         Ok(vec![
             entry("SUP-001", "Supplier One", "+998901111111"),
             entry("SUP-002", "Supplier Two", "+998902222222"),
@@ -210,10 +223,23 @@ impl AdminReadPort for FakeAdminReadPort {
 
     async fn customers_page(
         &self,
-        _query: &str,
-        _limit: usize,
-        _offset: usize,
+        query: &str,
+        limit: usize,
+        offset: usize,
     ) -> Result<Vec<AdminDirectoryEntry>, AdminPortError> {
+        if query.trim() == "deep-customer" {
+            return Ok((0..53)
+                .map(|index| {
+                    entry(
+                        &format!("DEEP-CUST-{index:03}"),
+                        &format!("deep-customer {index:03}"),
+                        &format!("+99891{index:07}"),
+                    )
+                })
+                .skip(offset)
+                .take(limit)
+                .collect());
+        }
         Ok(vec![entry("CUST-001", "Customer One", "+998904444444")])
     }
 

@@ -92,7 +92,7 @@ use crate::core::admin::models::{
     AdminMoveItemGroupRequest, AdminPhoneUpdateRequest, AdminSettings, AdminSupplier,
     AdminSupplierDetail, AdminSupplierItemMutationRequest, AdminSupplierItemsUpdateRequest,
     AdminSupplierStatusUpdateRequest, AdminSupplierSummary, AdminSuppliersPage,
-    AdminUpdateItemRequest, AdminUserListEntry, AdminUserListPage,
+    AdminUpdateItemRequest, AdminUserListPage,
 };
 use crate::core::admin::ports::AdminPortError;
 use crate::core::apparatus_groups::{ApparatusGroupError, ApparatusGroupUpsert, ApparatusUpsert};

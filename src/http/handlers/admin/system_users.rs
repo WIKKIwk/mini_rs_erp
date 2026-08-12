@@ -1,6 +1,6 @@
 use super::*;
 
-use crate::core::admin::models::{AdminSystemUserDetail, AdminUserListEntry, AdminUserListPage};
+use crate::core::admin::models::AdminUserListPage;
 use crate::core::system_users::{SystemUser, SystemUserError, SystemUserUpsert};
 
 #[derive(Debug, Deserialize)]
@@ -104,36 +104,12 @@ pub(super) async fn system_user_list_page(
         .await
         .map_err(system_user_error)?;
     let has_more = users.len() > offset.saturating_add(limit);
-    let mut items = Vec::new();
-    for user in users.into_iter().skip(offset).take(limit) {
-        let detail = state
-            .admin
-            .system_user_detail(user)
-            .await
-            .map_err(|_| server_error("system user detail failed"))?;
-        items.push(system_user_list_entry(detail));
-    }
+    let items = state
+        .admin
+        .system_user_list_entries(users.into_iter().skip(offset).take(limit).collect())
+        .await
+        .map_err(|_| server_error("system user detail failed"))?;
     Ok(AdminUserListPage { items, has_more })
-}
-
-fn system_user_list_entry(detail: AdminSystemUserDetail) -> AdminUserListEntry {
-    let role_label = match detail.role {
-        PrincipalRole::Qolipchi => "Qolipchi",
-        PrincipalRole::Boyoqchi => "Bo‘yoqchi",
-        _ => "System user",
-    };
-    AdminUserListEntry {
-        id: format!("system_user:{}", detail.id),
-        source: "system_user".to_string(),
-        entity_ref: detail.id,
-        principal_role: detail.role,
-        name: detail.name,
-        phone: detail.phone,
-        avatar_url: detail.avatar_url,
-        role_label: role_label.to_string(),
-        blocked: detail.blocked,
-        status: if detail.blocked { "blocked" } else { "active" }.to_string(),
-    }
 }
 
 fn required_system_role(value: Option<&str>) -> Result<PrincipalRole, AdminError> {

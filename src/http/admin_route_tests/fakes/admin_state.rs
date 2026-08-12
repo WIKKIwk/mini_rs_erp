@@ -40,6 +40,24 @@ impl FakeAdminStatePort {
             ])),
         }
     }
+
+    pub(crate) fn with_removed_refs(refs: impl IntoIterator<Item = String>) -> Self {
+        Self {
+            states: Mutex::new(
+                refs.into_iter()
+                    .map(|ref_| {
+                        (
+                            ref_,
+                            AdminState {
+                                removed: true,
+                                ..AdminState::default()
+                            },
+                        )
+                    })
+                    .collect(),
+            ),
+        }
+    }
 }
 
 #[async_trait]

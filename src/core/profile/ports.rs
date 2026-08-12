@@ -59,6 +59,21 @@ pub trait ProfileLookup: Send + Sync {
 pub trait ProfileStorePort: Send + Sync {
     async fn get(&self, key: &str) -> Result<ProfilePrefs, ProfileStoreError>;
     async fn put(&self, key: &str, prefs: ProfilePrefs) -> Result<(), ProfileStoreError>;
+
+    async fn get_many(&self, keys: &[String]) -> Result<Vec<ProfilePrefs>, ProfileStoreError> {
+        let mut result = Vec::with_capacity(keys.len());
+        for key in keys {
+            result.push(self.get(key).await?);
+        }
+        Ok(result)
+    }
+
+    async fn put_many(&self, entries: &[(String, ProfilePrefs)]) -> Result<(), ProfileStoreError> {
+        for (key, prefs) in entries {
+            self.put(key, prefs.clone()).await?;
+        }
+        Ok(())
+    }
 }
 
 #[async_trait]
