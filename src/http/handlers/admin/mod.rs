@@ -68,7 +68,8 @@ pub use telegram::{invite as telegram_invite, settings as telegram_settings};
 pub use training::{
     training_apparatus_modes, training_completed_orders, training_order_image_upload,
     training_order_image_view, training_order_statuses, training_production_map_save_with_order,
-    training_production_maps, training_raw_material_assignments, training_restart,
+    training_input_batches, training_production_maps, training_raw_material_assignments,
+    training_restart,
 };
 pub use warehouse_live::warehouse_live;
 pub use workers::{

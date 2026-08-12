@@ -103,6 +103,10 @@ pub(super) fn routes() -> Router<AppState> {
             any(admin::training_production_map_save_with_order),
         )
         .route(
+            "/v1/mobile/admin/training/input-batches",
+            any(admin::training_input_batches),
+        )
+        .route(
             "/v1/mobile/admin/training/raw-material-assignments",
             any(admin::training_raw_material_assignments),
         )

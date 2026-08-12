@@ -277,6 +277,76 @@ impl PostgresTrainingWorkspaceStore {
         Ok(result.rows_affected() > 0)
     }
 
+    pub async fn generate_training_input_batch(
+        &self,
+        order_id: &str,
+        apparatus: &str,
+    ) -> Result<(), TrainingWorkspaceError> {
+        let order_id = order_id.trim();
+        let apparatus = apparatus.trim();
+        if order_id.is_empty() || !order_id.starts_with("training-") || apparatus.is_empty() {
+            return Err(TrainingWorkspaceError::InvalidInput(
+                "training order va laminatsiya apparati kerak".to_string(),
+            ));
+        }
+        let batch_id = format!("training-input-batch-{order_id}");
+        let session_id = format!("training-input-session-{order_id}");
+        let qr_payload = format!("TRAINING-INPUT:{order_id}");
+        sqlx::query(
+            "INSERT INTO mini_training_input_batches
+                (order_id, apparatus, batch_id, session_id, qr_payload, generated_at)
+             VALUES ($1, $2, $3, $4, $5, now())
+             ON CONFLICT (order_id) DO UPDATE SET
+                 apparatus = excluded.apparatus,
+                 batch_id = excluded.batch_id,
+                 session_id = excluded.session_id,
+                 qr_payload = excluded.qr_payload,
+                 generated_at = now()",
+        )
+        .bind(order_id)
+        .bind(apparatus)
+        .bind(batch_id)
+        .bind(session_id)
+        .bind(qr_payload)
+        .execute(&self.pool)
+        .await
+        .map_err(|_| TrainingWorkspaceError::StoreFailed)?;
+        Ok(())
+    }
+
+    pub async fn training_input_batch_generated(
+        &self,
+        order_id: &str,
+        apparatus: &str,
+    ) -> Result<bool, TrainingWorkspaceError> {
+        let generated = sqlx::query_scalar::<_, bool>(
+            "SELECT EXISTS(
+                 SELECT 1
+                 FROM mini_training_input_batches
+                 WHERE order_id = $1 AND lower(apparatus) = lower($2)
+             )",
+        )
+        .bind(order_id.trim())
+        .bind(apparatus.trim())
+        .fetch_one(&self.pool)
+        .await
+        .map_err(|_| TrainingWorkspaceError::StoreFailed)?;
+        Ok(generated)
+    }
+
+    pub async fn training_input_batch_orders(
+        &self,
+    ) -> Result<Vec<(String, String)>, TrainingWorkspaceError> {
+        sqlx::query_as::<_, (String, String)>(
+            "SELECT order_id, apparatus
+             FROM mini_training_input_batches
+             ORDER BY generated_at DESC",
+        )
+        .fetch_all(&self.pool)
+        .await
+        .map_err(|_| TrainingWorkspaceError::StoreFailed)
+    }
+
     pub async fn apparatus_modes(&self) -> Result<BTreeMap<String, bool>, TrainingWorkspaceError> {
         let rows = sqlx::query_as::<_, (String, bool)>(
             "SELECT apparatus, enabled

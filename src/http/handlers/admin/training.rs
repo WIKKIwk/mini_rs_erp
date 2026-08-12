@@ -64,6 +64,22 @@ pub struct TrainingRawMaterialAssignmentsQuery {
     barcode: String,
 }
 
+#[derive(Default, Deserialize)]
+pub struct TrainingInputBatchesQuery {
+    #[serde(default)]
+    order_id: String,
+    #[serde(default)]
+    apparatus: String,
+}
+
+#[derive(Default, Deserialize)]
+struct TrainingInputBatchRequest {
+    #[serde(default)]
+    order_id: String,
+    #[serde(default)]
+    apparatus: String,
+}
+
 #[derive(Default)]
 pub(super) struct WorkerTrainingOverlay {
     pub active_apparatuses: Vec<String>,
@@ -279,11 +295,11 @@ fn training_input_progress_batch(
         bobina_kg: None,
         finished_goods_meter: None,
         diameter: None,
-        description: "Training uchun avtomatik Bosma input batch".to_string(),
+        description: "Training uchun generatsiya qilingan Bosma input batch".to_string(),
         payload_json: serde_json::json!({
             "training": true,
             "training_input": true,
-            "source": "automatic_training_order_batch",
+            "source": "generated_training_order_batch",
         }),
     };
     batch.refresh_status_detail();
@@ -328,6 +344,16 @@ pub(super) async fn training_input_progress_batch_for_principal(
     } else {
         requested_next.to_string()
     };
+    let store = state
+        .training_workspace
+        .as_ref()
+        .ok_or(TrainingWorkspaceError::StoreFailed)?;
+    if !store
+        .training_input_batch_generated(order_id, &target)
+        .await?
+    {
+        return Ok(None);
+    }
     let Some(batch) = training_input_progress_batch(&saved.map, &target) else {
         return Ok(None);
     };
@@ -371,6 +397,16 @@ pub(super) async fn training_input_progress_batch_for_qr(
     let Some(apparatus) = training_laminatsiya_apparatus(&saved.map) else {
         return Ok(None);
     };
+    let store = state
+        .training_workspace
+        .as_ref()
+        .ok_or(TrainingWorkspaceError::StoreFailed)?;
+    if !store
+        .training_input_batch_generated(order_id, &apparatus)
+        .await?
+    {
+        return Ok(None);
+    }
     let Some(batch) = training_input_progress_batch(&saved.map, &apparatus) else {
         return Ok(None);
     };
@@ -420,6 +456,7 @@ pub(super) async fn worker_training_overlay(
         })
         .collect::<Vec<_>>();
     let stored_states = store.queue_states().await?;
+    let generated_input_batches = store.training_input_batch_orders().await?;
     let mut overlay = WorkerTrainingOverlay {
         active_apparatuses,
         maps,
@@ -447,7 +484,13 @@ pub(super) async fn worker_training_overlay(
                 }
             }
         }
-        let controls = training_queue_action_controls(apparatus, &sequence, &states, &overlay.maps);
+        let controls = training_queue_action_controls(
+            apparatus,
+            &sequence,
+            &states,
+            &overlay.maps,
+            &generated_input_batches,
+        );
         let statuses = sequence
             .iter()
             .map(|order_id| {
@@ -812,7 +855,27 @@ pub(super) async fn training_queue_action(
     };
 
     if matches!(action, queue_state::ApparatusQueueAction::Start) {
-        if let Some(expected_batch) = training_input_progress_batch(&training_map, &apparatus) {
+        let expected_batch = if training_input_stage_for_map(&training_map, &apparatus).is_some()
+        {
+            if store
+                .training_input_batch_generated(order_id, &apparatus)
+                .await?
+            {
+                training_input_progress_batch(&training_map, &apparatus)
+            } else {
+                None
+            }
+        } else {
+            None
+        };
+        if training_input_stage_for_map(&training_map, &apparatus).is_some()
+            && expected_batch.is_none()
+        {
+            return Err(TrainingWorkspaceError::InvalidInput(
+                "training_input_batch_required".to_string(),
+            ));
+        }
+        if let Some(expected_batch) = expected_batch {
             let scanned_qr = if progress_qr.trim().is_empty() {
                 progress_batch_id.trim()
             } else {
@@ -1164,6 +1227,7 @@ fn training_queue_action_controls(
     sequence: &[String],
     states: &BTreeMap<String, String>,
     maps: &[ProductionMapSaved],
+    generated_input_batches: &[(String, String)],
 ) -> BTreeMap<String, ApparatusQueueOrderActionControl> {
     let parsed_states = sequence
         .iter()
@@ -1216,13 +1280,18 @@ fn training_queue_action_controls(
                 .find(|saved| saved.map.id.trim() == order_id.trim())
                 .and_then(|saved| training_input_stage_for_map(&saved.map, apparatus))
                 .unwrap_or_default();
+            let previous_stage_ready = previous_stage.is_empty()
+                || generated_input_batches.iter().any(|(generated_order_id, generated_apparatus)| {
+                    generated_order_id == order_id
+                        && queue_state::apparatus_titles_match(generated_apparatus, apparatus)
+                });
             (
                 order_id.clone(),
                 ApparatusQueueOrderActionControl {
                     state,
                     allowed_actions,
                     previous_stage,
-                    previous_stage_ready: true,
+                    previous_stage_ready,
                     complete_requires_full_report: training_complete_requires_full_report(apparatus),
                 },
             )
@@ -1294,6 +1363,86 @@ pub async fn training_production_maps(
                 .await
                 .map_err(training_workspace_error)?;
             Ok(json_response(saved))
+        }
+        _ => Err(method_not_allowed()),
+    }
+}
+
+pub async fn training_input_batches(
+    State(state): State<AppState>,
+    Query(query): Query<TrainingInputBatchesQuery>,
+    method: Method,
+    headers: HeaderMap,
+    body: Bytes,
+) -> Result<Response, AdminError> {
+    authorize_any_capability(
+        &state,
+        &headers,
+        &[Capability::AdminAccess, Capability::ProductionMapManage],
+    )
+    .await?;
+    let store = training_store(&state)?;
+    match method {
+        Method::GET => {
+            let maps = if query.order_id.trim().is_empty() {
+                store.maps().await.map_err(training_workspace_error)?
+            } else {
+                store
+                    .map(query.order_id.trim())
+                    .await
+                    .map_err(training_workspace_error)?
+                    .into_iter()
+                    .collect()
+            };
+            let mut batches = Vec::new();
+            for saved in maps {
+                let apparatus = if query.apparatus.trim().is_empty() {
+                    training_laminatsiya_apparatus(&saved.map).unwrap_or_default()
+                } else {
+                    query.apparatus.trim().to_string()
+                };
+                if apparatus.is_empty()
+                    || !store
+                        .training_input_batch_generated(&saved.map.id, &apparatus)
+                        .await
+                        .map_err(training_workspace_error)?
+                {
+                    continue;
+                }
+                if let Some(batch) = training_input_progress_batch(&saved.map, &apparatus) {
+                    batches.push(batch);
+                }
+            }
+            Ok(json_response(serde_json::json!({"batches": batches})))
+        }
+        Method::POST => {
+            let input: TrainingInputBatchRequest = parse_json(&body)?;
+            let order_id = input.order_id.trim();
+            if order_id.is_empty() || !order_id.starts_with("training-") {
+                return Err(bad_request("training order id kerak"));
+            }
+            let saved = store
+                .map(order_id)
+                .await
+                .map_err(training_workspace_error)?
+                .ok_or_else(|| not_found("training_map_not_found"))?;
+            let apparatus = if input.apparatus.trim().is_empty() {
+                training_laminatsiya_apparatus(&saved.map).unwrap_or_default()
+            } else {
+                input.apparatus.trim().to_string()
+            };
+            let Some(batch) = training_input_progress_batch(&saved.map, &apparatus) else {
+                return Err(bad_request("training_input_batch_not_applicable"));
+            };
+            store
+                .generate_training_input_batch(order_id, &apparatus)
+                .await
+                .map_err(training_workspace_error)?;
+            state.production_maps.notify_live();
+            Ok(json_response(serde_json::json!({
+                "ok": true,
+                "batch": batch,
+            })))
         }
         _ => Err(method_not_allowed()),
     }
