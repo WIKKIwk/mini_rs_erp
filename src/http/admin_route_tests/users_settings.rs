@@ -272,6 +272,72 @@ async fn admin_worker_user_list_uses_one_state_snapshot_and_batch_profiles() {
 }
 
 #[tokio::test]
+async fn admin_worker_user_pages_keep_duplicate_names_in_total_id_order() {
+    let state = test_state();
+    for (id, name, phone) in [
+        ("worker-page-c", "Duplicate Ali", "+998901110003"),
+        ("worker-page-a", "DUPLICATE ALI", "+998901110001"),
+        ("worker-page-d", "duplicate ali", "+998901110004"),
+        ("worker-page-b", "Duplicate Ali", "+998901110002"),
+    ] {
+        state
+            .workers
+            .upsert_worker(WorkerUpsert {
+                id: id.to_string(),
+                name: name.to_string(),
+                phone: phone.to_string(),
+                level: "Master".to_string(),
+            })
+            .await
+            .expect("worker");
+    }
+    let token = session(&state, PrincipalRole::Admin).await;
+    let app = build_router(state);
+
+    let first_response = app
+        .clone()
+        .oneshot(request(
+            "GET",
+            "/v1/mobile/admin/users/list?role=worker&q=duplicate%20ali&limit=2&offset=0",
+            &token,
+        ))
+        .await
+        .expect("first page response");
+    assert_eq!(first_response.status(), StatusCode::OK);
+    let first_page = json_body(first_response).await;
+    assert_eq!(first_page["has_more"], true);
+
+    let second_response = app
+        .oneshot(request(
+            "GET",
+            "/v1/mobile/admin/users/list?role=worker&q=duplicate%20ali&limit=2&offset=2",
+            &token,
+        ))
+        .await
+        .expect("second page response");
+    assert_eq!(second_response.status(), StatusCode::OK);
+    let second_page = json_body(second_response).await;
+    assert_eq!(second_page["has_more"], false);
+
+    let ids = first_page["items"]
+        .as_array()
+        .expect("first page items")
+        .iter()
+        .chain(second_page["items"].as_array().expect("second page items"))
+        .map(|item| item["id"].as_str().expect("worker id"))
+        .collect::<Vec<_>>();
+    assert_eq!(
+        ids,
+        [
+            "worker:worker-page-a",
+            "worker:worker-page-b",
+            "worker:worker-page-c",
+            "worker:worker-page-d",
+        ]
+    );
+}
+
+#[tokio::test]
 async fn admin_system_user_list_preserves_blocked_state_with_one_snapshot() {
     let mut state = test_state();
     for (id, name, phone) in [

@@ -25,7 +25,7 @@ impl WorkerStorePort for PostgresWorkerStore {
              FROM mini_workers
              WHERE active
                AND ($1 = '' OR lower(name) LIKE $2 OR lower(phone) LIKE $2 OR lower(level) LIKE $2)
-             ORDER BY lower(name) ASC
+             ORDER BY lower(name) ASC, id ASC
              LIMIT $3",
         )
         .bind(needle)

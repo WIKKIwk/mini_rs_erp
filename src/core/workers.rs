@@ -242,7 +242,7 @@ impl WorkerStorePort for MemoryWorkerStore {
             .filter(|entry| entry.active)
             .map(|entry| entry.worker.clone())
             .collect::<Vec<_>>();
-        workers.sort_by_key(|worker| worker.name.to_lowercase());
+        workers.sort_by_cached_key(|worker| (worker.name.to_lowercase(), worker.id.clone()));
         Ok(workers
             .into_iter()
             .filter(|worker| {
@@ -393,7 +393,13 @@ mod tests {
 
         let workers = store.workers("Ali", 10).await.expect("workers");
         assert_eq!(workers.len(), 2);
-        assert_ne!(workers[0].id, workers[1].id);
+        assert_eq!(
+            workers
+                .iter()
+                .map(|worker| worker.id.as_str())
+                .collect::<Vec<_>>(),
+            ["worker-new", "worker-old"]
+        );
     }
 
     #[tokio::test]
