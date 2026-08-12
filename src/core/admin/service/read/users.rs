@@ -153,6 +153,107 @@ impl AdminService {
         Ok(page)
     }
 
+    pub async fn user_list_entry_for_principal(
+        &self,
+        role: &PrincipalRole,
+        ref_: &str,
+    ) -> Result<Option<AdminUserListEntry>, AdminPortError> {
+        let ref_ = ref_.trim();
+        if ref_.is_empty()
+            || !matches!(
+                role,
+                PrincipalRole::Supplier
+                    | PrincipalRole::Werka
+                    | PrincipalRole::Customer
+                    | PrincipalRole::MaterialTaminotchi
+            )
+        {
+            return Ok(None);
+        }
+
+        let roles = self.role_definitions().await?;
+        let assignments = self.role_assignments().await?;
+        let role_labels = role_label_lookup(&roles, &assignments);
+        let states = self.states().await?;
+        let entry = match role {
+            PrincipalRole::Werka => {
+                if ref_ != "werka" {
+                    return Ok(None);
+                }
+                let (werka_name, werka_phone) = self.werka_directory_identity().await;
+                werka_user_list_entry(&werka_name, &werka_phone, &role_labels)
+            }
+            PrincipalRole::Supplier => {
+                let supplier = match self.read_port()?.supplier_by_ref(ref_).await {
+                    Ok(supplier) => supplier,
+                    Err(AdminPortError::NotFound) => return Ok(None),
+                    Err(error) => return Err(error),
+                };
+                let state = states
+                    .get(supplier.ref_.trim())
+                    .cloned()
+                    .unwrap_or_default();
+                if state.removed {
+                    return Ok(None);
+                }
+                let role_label = role_labels
+                    .get(&role_assignment_key(
+                        &PrincipalRole::Supplier,
+                        &supplier.ref_,
+                    ))
+                    .cloned()
+                    .unwrap_or_else(|| "Supplier".to_string());
+                Some(AdminUserListEntry {
+                    id: format!("supplier:{}", supplier.ref_),
+                    source: "supplier".to_string(),
+                    entity_ref: supplier.ref_,
+                    principal_role: PrincipalRole::Supplier,
+                    name: supplier.name,
+                    phone: supplier.phone,
+                    avatar_url: String::new(),
+                    role_label,
+                    blocked: state.blocked,
+                    status: if state.blocked { "blocked" } else { "active" }.to_string(),
+                })
+            }
+            PrincipalRole::Customer => {
+                let customer = match self.read_port()?.customer_by_ref(ref_).await {
+                    Ok(customer) => customer,
+                    Err(AdminPortError::NotFound) => return Ok(None),
+                    Err(error) => return Err(error),
+                };
+                if material_assignment_for_ref(&assignments, &customer.ref_) {
+                    return Ok(None);
+                }
+                customer_user_list_entry(
+                    customer_directory_entry(customer),
+                    PrincipalRole::Customer,
+                    &role_labels,
+                    &states,
+                )
+            }
+            PrincipalRole::MaterialTaminotchi => {
+                let material = match self.read_port()?.material_taminotchi_by_ref(ref_).await {
+                    Ok(material) => material,
+                    Err(AdminPortError::NotFound) => return Ok(None),
+                    Err(error) => return Err(error),
+                };
+                material_taminotchi_user_list_entry(
+                    customer_directory_entry(material),
+                    &role_labels,
+                    &states,
+                )
+            }
+            _ => None,
+        };
+        let Some(entry) = entry else {
+            return Ok(None);
+        };
+        let mut entries = vec![entry];
+        self.enrich_user_list_avatars(&mut entries).await;
+        Ok(entries.pop())
+    }
+
     pub async fn worker_user_list_entries(
         &self,
         workers: Vec<Worker>,
