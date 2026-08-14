@@ -486,19 +486,30 @@ async fn admin_worker_groups_save_custom_codes_schedule_and_reject_duplicate_wor
     let assignment_body = json_body(assignments).await;
     let assignments = assignment_body.as_array().expect("assignments");
     for worker_id in [&first_id, &second_id] {
-        let assignment = assignments
-            .iter()
-            .find(|assignment| {
-                assignment["principal_role"] == "aparatchi"
-                    && assignment["principal_ref"] == worker_id.as_str()
-            })
-            .expect("worker aparatchi assignment");
-        assert_eq!(assignment["role_id"], "aparatchi");
-        assert_eq!(
-            assignment["assigned_apparatus"],
-            serde_json::json!(["Laminatsiya 1"])
-        );
+        assert!(!assignments.iter().any(|assignment| {
+            assignment["principal_role"] == "aparatchi"
+                && assignment["principal_ref"] == worker_id.as_str()
+        }));
     }
+
+    let role_assignment = build_router(state.clone())
+        .oneshot(request_with_body(
+            "PUT",
+            "/v1/mobile/admin/role-assignments",
+            &token,
+            &format!(
+                r#"{{
+                    "principal_role":"aparatchi",
+                    "principal_ref":"{}",
+                    "role_id":"aparatchi",
+                    "assigned_apparatus":["Rezka"]
+                }}"#,
+                first_id
+            ),
+        ))
+        .await
+        .expect("assign apparatus directly to worker");
+    assert_eq!(role_assignment.status(), StatusCode::OK);
 
     let saved = build_router(state.clone())
         .oneshot(request_with_body(
@@ -533,7 +544,7 @@ async fn admin_worker_groups_save_custom_codes_schedule_and_reject_duplicate_wor
     assert!(assignments.iter().any(|assignment| {
         assignment["principal_role"] == "aparatchi"
             && assignment["principal_ref"] == first_id
-            && assignment["assigned_apparatus"] == serde_json::json!(["Laminatsiya 1"])
+            && assignment["assigned_apparatus"] == serde_json::json!(["Rezka"])
     }));
     assert!(!assignments.iter().any(|assignment| {
         assignment["principal_role"] == "aparatchi" && assignment["principal_ref"] == second_id
@@ -558,7 +569,7 @@ async fn admin_worker_groups_save_custom_codes_schedule_and_reject_duplicate_wor
     assert_eq!(duplicate.status(), StatusCode::BAD_REQUEST);
     assert_eq!(
         json_body(duplicate).await["error"],
-        "worker is duplicated in apparatus groups"
+        "worker is duplicated in worker groups"
     );
 
     let second_group = build_router(state.clone())
@@ -666,7 +677,7 @@ async fn admin_worker_group_can_be_renamed_without_leaving_the_old_group() {
 }
 
 #[tokio::test]
-async fn worker_login_receives_group_assigned_apparatus() {
+async fn worker_login_receives_worker_assigned_apparatus() {
     let state = test_state();
     let token = session(&state, PrincipalRole::Admin).await;
 
@@ -696,6 +707,22 @@ async fn worker_login_receives_group_assigned_apparatus() {
         .await
         .expect("save worker group");
     assert_eq!(saved.status(), StatusCode::OK);
+
+    let role_assignment = build_router(state.clone())
+        .oneshot(request_with_body(
+            "PUT",
+            "/v1/mobile/admin/role-assignments",
+            &token,
+            r#"{
+                "principal_role":"aparatchi",
+                "principal_ref":"worker_001",
+                "role_id":"aparatchi",
+                "assigned_apparatus":["Laminatsiya 1"]
+            }"#,
+        ))
+        .await
+        .expect("assign worker apparatus");
+    assert_eq!(role_assignment.status(), StatusCode::OK);
 
     let response = build_router(state)
         .oneshot(request_with_body(

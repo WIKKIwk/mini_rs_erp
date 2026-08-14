@@ -41,6 +41,20 @@ async fn worker_group_accepts_custom_codes_schedule_and_rejects_duplicate_worker
         .await;
     assert_eq!(duplicate, Err(WorkerGroupError::DuplicateWorker));
 
+    let duplicate_across_apparatus = service
+        .upsert_group(WorkerGroupUpsert {
+            apparatus: "Laminatsiya 2".to_string(),
+            group_code: "cross apparatus".to_string(),
+            shift: "kunduz".to_string(),
+            worker_ids: vec!["w1".to_string()],
+            ..WorkerGroupUpsert::default()
+        })
+        .await;
+    assert_eq!(
+        duplicate_across_apparatus,
+        Err(WorkerGroupError::DuplicateWorker)
+    );
+
     service
         .upsert_group(WorkerGroupUpsert {
             apparatus: "Laminatsiya 1".to_string(),

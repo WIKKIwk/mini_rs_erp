@@ -73,7 +73,7 @@ pub enum WorkerGroupError {
     InvalidShift,
     #[error("worker schedule is invalid")]
     InvalidSchedule,
-    #[error("worker is duplicated in apparatus groups")]
+    #[error("worker is duplicated in worker groups")]
     DuplicateWorker,
     #[error("worker group was not found")]
     GroupNotFound,
@@ -199,13 +199,9 @@ pub(crate) fn apply_worker_group_mutation(
         updated.retain(|group| group.group_code != next.group_code);
     }
 
-    let mut target_groups = updated
-        .iter()
-        .filter(|group| group.apparatus.eq_ignore_ascii_case(&next.apparatus))
-        .cloned()
-        .collect::<Vec<_>>();
-    target_groups.push(next.clone());
-    ensure_workers_not_duplicated(&target_groups)?;
+    let mut all_groups = updated.clone();
+    all_groups.push(next.clone());
+    ensure_workers_not_duplicated(&all_groups)?;
 
     updated.push(next.clone());
     *groups = sort_groups(updated);
