@@ -12,11 +12,9 @@ use super::progress::{
     required_apparatus_for_closed_order,
 };
 use super::service::ClaimedAlternativeMapUpdate;
-use super::service_progress_support::{
-    session_progress_links, wip_batch_was_consumed_by_producer,
-};
+use super::service_progress_support::{session_progress_links, wip_batch_was_consumed_by_producer};
 use super::service_queue_support::*;
-use super::store_port::ApparatusQueueStateMap;
+use super::store_port::{ApparatusQueuePolicyMap, ApparatusQueueStateMap, OrderControlMap};
 
 impl ProductionMapService {
     pub async fn apparatus_sequences(
@@ -30,13 +28,22 @@ impl ProductionMapService {
     ) -> Result<BTreeMap<String, Vec<String>>, ProductionMapError> {
         let maps = self.store.maps().await?;
         let sequences = self.store.apparatus_sequences().await?;
-        let visible_by_apparatus = visible_order_ids_by_apparatus(&maps);
+        Ok(Self::effective_apparatus_sequences_for_maps(
+            &maps, &sequences,
+        ))
+    }
+
+    pub(super) fn effective_apparatus_sequences_for_maps(
+        maps: &[ProductionMapDefinition],
+        sequences: &BTreeMap<String, Vec<String>>,
+    ) -> BTreeMap<String, Vec<String>> {
+        let visible_by_apparatus = visible_order_ids_by_apparatus(maps);
         let apparatuses = sequences
             .keys()
             .chain(visible_by_apparatus.keys())
             .cloned()
             .collect::<BTreeSet<_>>();
-        Ok(apparatuses
+        apparatuses
             .into_iter()
             .map(|apparatus| {
                 let stored_sequence = sequences.get(&apparatus).cloned().unwrap_or_default();
@@ -51,7 +58,7 @@ impl ProductionMapService {
                 };
                 (apparatus, sequence)
             })
-            .collect())
+            .collect()
     }
 
     pub async fn visible_order_ids_by_apparatus(
@@ -250,22 +257,30 @@ impl ProductionMapService {
     pub async fn order_status_details(
         &self,
     ) -> Result<BTreeMap<String, ProductionOrderStatusDetail>, ProductionMapError> {
-        let order_ids = self
-            .maps()
-            .await?
-            .into_iter()
+        let maps = self.maps().await?;
+        let queue_states = self.store.apparatus_queue_states().await?;
+        self.order_status_details_for_snapshot(&maps, &queue_states)
+            .await
+    }
+
+    pub(super) async fn order_status_details_for_snapshot(
+        &self,
+        maps: &[ProductionMapSaved],
+        queue_states: &ApparatusQueueStateMap,
+    ) -> Result<BTreeMap<String, ProductionOrderStatusDetail>, ProductionMapError> {
+        let order_ids = maps
+            .iter()
             .filter_map(|saved| {
                 let order_id = saved.map.id.trim();
                 (!order_id.is_empty()).then(|| order_id.to_string())
             })
             .collect::<Vec<_>>();
-        let queue_states = self.store.apparatus_queue_states().await?;
         let progress_batches = self.store.progress_batches_for_orders(&order_ids).await?;
         let run_sessions = self.store.order_run_sessions_for_orders(&order_ids).await?;
         let logs_by_order = self.store.queue_action_logs_for_orders(&order_ids).await?;
         let mut statuses = BTreeMap::new();
         for order_id in order_ids {
-            let order_queue_states = queue_states_for_order(&queue_states, &order_id);
+            let order_queue_states = queue_states_for_order(queue_states, &order_id);
             let order_progress_batches =
                 progress_batches.get(&order_id).cloned().unwrap_or_default();
             let order_run_sessions = run_sessions.get(&order_id).cloned().unwrap_or_default();
@@ -334,7 +349,28 @@ impl ProductionMapService {
         let all_states = self.store.apparatus_queue_states().await?;
         let policies = self.store.apparatus_queue_policies().await?;
         let order_controls = self.order_control_states().await?;
-        let visible_by_apparatus = visible_order_ids_by_apparatus(&maps);
+        self.queue_action_controls_for_snapshot(
+            &maps,
+            &sequences,
+            &all_states,
+            &policies,
+            &order_controls,
+        )
+        .await
+    }
+
+    pub(super) async fn queue_action_controls_for_snapshot(
+        &self,
+        maps: &[ProductionMapDefinition],
+        sequences: &BTreeMap<String, Vec<String>>,
+        all_states: &ApparatusQueueStateMap,
+        policies: &ApparatusQueuePolicyMap,
+        order_controls: &OrderControlMap,
+    ) -> Result<
+        BTreeMap<String, BTreeMap<String, ApparatusQueueOrderActionControl>>,
+        ProductionMapError,
+    > {
+        let visible_by_apparatus = visible_order_ids_by_apparatus(maps);
         let known_keys = sequences
             .keys()
             .chain(all_states.keys())
@@ -356,7 +392,7 @@ impl ProductionMapService {
                 .or_else(|| sequences.get(&apparatus))
                 .cloned()
                 .unwrap_or_default();
-            let visible_order_ids = visible_order_ids_for_apparatus(&maps, &storage_key);
+            let visible_order_ids = visible_order_ids_for_apparatus(maps, &storage_key);
             let sequence = queue_state::effective_apparatus_sequence(
                 &stored_sequence,
                 &visible_order_ids,
@@ -372,7 +408,7 @@ impl ProductionMapService {
                     .get(order_id)
                     .is_none_or(|control| control.state != OrderControlState::Frozen)
             });
-            let policy = queue_policy_for_apparatus(&apparatus, &storage_key, &policies);
+            let policy = queue_policy_for_apparatus(&apparatus, &storage_key, policies);
             let active_order_id = effective_states
                 .iter()
                 .find_map(|(order_id, state)| {
@@ -401,7 +437,7 @@ impl ProductionMapService {
                     order_map,
                     order_id.trim(),
                     &apparatus,
-                    &all_states,
+                    all_states,
                     &known_keys,
                 );
                 let active_order_is_this = active_order_id

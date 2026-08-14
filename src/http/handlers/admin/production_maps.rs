@@ -520,56 +520,12 @@ pub async fn production_map_sequence(
     .await?;
     match method {
         Method::GET => {
-            let maps = state
+            let mut snapshot: ProductionMapLiveSnapshot = state
                 .production_maps
-                .maps()
+                .production_snapshot_context()
                 .await
-                .map_err(production_map_error)?;
-            let sequences = state
-                .production_maps
-                .effective_apparatus_sequences()
-                .await
-                .map_err(production_map_error)?;
-            let visible_order_ids = state
-                .production_maps
-                .visible_order_ids_by_apparatus()
-                .await
-                .map_err(production_map_error)?;
-            let queue_states = state
-                .production_maps
-                .apparatus_queue_states()
-                .await
-                .map_err(production_map_error)?;
-            let queue_policies = state
-                .production_maps
-                .apparatus_queue_policy_records()
-                .await
-                .map_err(production_map_error)?;
-            let queue_action_controls = state
-                .production_maps
-                .queue_action_controls()
-                .await
-                .map_err(production_map_error)?;
-            let order_statuses = state
-                .production_maps
-                .order_status_details()
-                .await
-                .map_err(production_map_error)?;
-            let order_controls = state
-                .production_maps
-                .order_control_states()
-                .await
-                .map_err(production_map_error)?;
-            let mut snapshot = ProductionMapLiveSnapshot {
-                maps,
-                sequences,
-                visible_order_ids,
-                queue_states,
-                queue_policies,
-                queue_action_controls,
-                order_statuses,
-                order_controls,
-            };
+                .map_err(production_map_error)?
+                .into();
             super::training::merge_worker_training_snapshot(&state, &principal, &mut snapshot)
                 .await
                 .map_err(super::training::training_workspace_error)?;
