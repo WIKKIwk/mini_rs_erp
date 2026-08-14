@@ -1,14 +1,27 @@
 use super::*;
 
 use std::collections::BTreeMap;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use super::apparatus::visible_order_ids_by_apparatus;
 use super::progress::effective_apparatus_queue_policy_record;
 use super::service_maps::compile_saved_maps;
 use serde::Serialize;
-use tokio::sync::{Mutex, OwnedMutexGuard, broadcast};
+use tokio::sync::{Mutex, OwnedMutexGuard, RwLock, broadcast};
 
 const LIVE_NOTIFY_CAPACITY: usize = 256;
+
+#[derive(Default)]
+struct ProductionSnapshotCache {
+    revision: AtomicU64,
+    snapshot: RwLock<Option<CachedProductionSnapshot>>,
+    rebuild_lock: Mutex<()>,
+}
+
+struct CachedProductionSnapshot {
+    revision: u64,
+    snapshot: std::sync::Arc<ProductionMapLiveSnapshot>,
+}
 
 #[derive(Debug, Clone, Serialize)]
 pub struct ProductionMapLiveSnapshot {
@@ -55,6 +68,7 @@ pub struct ProductionMapService {
     pub(super) store: std::sync::Arc<dyn ProductionMapStorePort>,
     live_notify: broadcast::Sender<()>,
     queue_action_lock: std::sync::Arc<Mutex<()>>,
+    snapshot_cache: std::sync::Arc<ProductionSnapshotCache>,
 }
 
 pub(super) struct QueueProgressRecords {
@@ -132,6 +146,7 @@ impl ProductionMapService {
             store,
             live_notify,
             queue_action_lock: std::sync::Arc::new(Mutex::new(())),
+            snapshot_cache: std::sync::Arc::new(ProductionSnapshotCache::default()),
         }
     }
 
@@ -144,14 +159,53 @@ impl ProductionMapService {
     }
 
     pub fn notify_live(&self) {
+        self.snapshot_cache
+            .revision
+            .fetch_add(1, Ordering::AcqRel);
         let _ = self.live_notify.send(());
     }
 
     pub async fn live_snapshot(&self) -> Result<ProductionMapLiveSnapshot, ProductionMapError> {
-        Ok(self.production_snapshot_context().await?.into())
+        loop {
+            let revision = self.snapshot_cache.revision.load(Ordering::Acquire);
+            {
+                let cached = self.snapshot_cache.snapshot.read().await;
+                if let Some(entry) = cached.as_ref()
+                    && entry.revision == revision
+                {
+                    return Ok(entry.snapshot.as_ref().clone());
+                }
+            }
+
+            let _rebuild_guard = self.snapshot_cache.rebuild_lock.lock().await;
+            let revision = self.snapshot_cache.revision.load(Ordering::Acquire);
+            {
+                let cached = self.snapshot_cache.snapshot.read().await;
+                if let Some(entry) = cached.as_ref()
+                    && entry.revision == revision
+                {
+                    return Ok(entry.snapshot.as_ref().clone());
+                }
+            }
+
+            let snapshot: ProductionMapLiveSnapshot = self
+                .build_production_snapshot_context()
+                .await?
+                .into();
+            let latest_revision = self.snapshot_cache.revision.load(Ordering::Acquire);
+            if latest_revision != revision {
+                continue;
+            }
+
+            let snapshot = std::sync::Arc::new(snapshot);
+            let result = snapshot.as_ref().clone();
+            *self.snapshot_cache.snapshot.write().await =
+                Some(CachedProductionSnapshot { revision, snapshot });
+            return Ok(result);
+        }
     }
 
-    pub(crate) async fn production_snapshot_context(
+    async fn build_production_snapshot_context(
         &self,
     ) -> Result<ProductionSnapshotContext, ProductionMapError> {
         let raw_maps = self.store.maps().await?;
@@ -189,5 +243,47 @@ impl ProductionMapService {
             order_statuses,
             order_controls,
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::core::production_map::MemoryProductionMapStore;
+
+    async fn cached_snapshot(
+        service: &ProductionMapService,
+    ) -> std::sync::Arc<ProductionMapLiveSnapshot> {
+        service
+            .snapshot_cache
+            .snapshot
+            .read()
+            .await
+            .as_ref()
+            .expect("snapshot cache entry")
+            .snapshot
+            .clone()
+    }
+
+    #[tokio::test]
+    async fn live_snapshot_cache_reuses_until_notification() {
+        let service = ProductionMapService::new(std::sync::Arc::new(
+            MemoryProductionMapStore::new(),
+        ));
+
+        service.live_snapshot().await.expect("initial snapshot");
+        let initial = cached_snapshot(&service).await;
+
+        service.live_snapshot().await.expect("cached snapshot");
+        let reused = cached_snapshot(&service).await;
+        assert!(std::sync::Arc::ptr_eq(&initial, &reused));
+
+        service.notify_live();
+        service
+            .live_snapshot()
+            .await
+            .expect("invalidated snapshot");
+        let refreshed = cached_snapshot(&service).await;
+        assert!(!std::sync::Arc::ptr_eq(&initial, &refreshed));
     }
 }

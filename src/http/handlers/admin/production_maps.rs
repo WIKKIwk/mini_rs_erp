@@ -12,7 +12,7 @@ use crate::core::production_map::{
     ApparatusQueuePolicy, ApparatusScheduleCancelRequest, ApparatusScheduleRequest,
     CompletionRequestDecision, MaterialScanProgressAction, OrderProgressBatchWipStatus,
     ProductionMapApparatusTransferRequest, ProductionMapBatchMoveRequest,
-    ProductionMapDefinition, ProductionMapError, ProductionMapLiveSnapshot,
+    ProductionMapDefinition, ProductionMapError,
     ProductionMapMoveRequest, ProductionMapNodeKind, ProductionMapRunRequest,
     QueueActionActor, QueueProgressInput, RawMaterialAssignment, RawMaterialAssignmentDeleteInput,
     RawMaterialAssignmentInput, RawMaterialStockTransition, RawMaterialStockTransitionKind,
@@ -520,12 +520,11 @@ pub async fn production_map_sequence(
     .await?;
     match method {
         Method::GET => {
-            let mut snapshot: ProductionMapLiveSnapshot = state
+            let mut snapshot = state
                 .production_maps
-                .production_snapshot_context()
+                .live_snapshot()
                 .await
-                .map_err(production_map_error)?
-                .into();
+                .map_err(production_map_error)?;
             super::training::merge_worker_training_snapshot(&state, &principal, &mut snapshot)
                 .await
                 .map_err(super::training::training_workspace_error)?;
