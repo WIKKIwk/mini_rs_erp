@@ -78,8 +78,9 @@ use self::order_query_helpers::{
     load_active_order_run_session, load_active_order_run_session_for_qolip,
     load_active_order_run_sessions_for_worker, load_completed_queue_orders_for_actor,
     load_order_run_session, load_order_run_sessions_for_audit, load_order_run_sessions_for_order,
-    load_progress_batch, load_progress_batch_by_qr, load_progress_batches_for_audit,
-    load_progress_batches_for_order, load_progress_batches_for_worker,
+    load_order_run_sessions_for_orders, load_progress_batch, load_progress_batch_by_qr,
+    load_progress_batches_for_audit, load_progress_batches_for_order,
+    load_progress_batches_for_orders, load_progress_batches_for_worker,
     load_queue_action_logs_for_orders, load_queue_action_logs_for_worker,
 };
 use self::progress_helpers::{
@@ -459,6 +460,13 @@ impl ProductionMapStorePort for PostgresProductionMapStore {
         load_order_run_sessions_for_order(&self.pool, order_id).await
     }
 
+    async fn order_run_sessions_for_orders(
+        &self,
+        order_ids: &[String],
+    ) -> Result<BTreeMap<String, Vec<OrderRunSession>>, ProductionMapError> {
+        load_order_run_sessions_for_orders(&self.pool, order_ids).await
+    }
+
     async fn laminatsiya_astatka_reports_for_order(
         &self,
         order_id: &str,
@@ -521,6 +529,13 @@ impl ProductionMapStorePort for PostgresProductionMapStore {
         order_id: &str,
     ) -> Result<Vec<OrderProgressBatch>, ProductionMapError> {
         load_progress_batches_for_order(&self.pool, order_id).await
+    }
+
+    async fn progress_batches_for_orders(
+        &self,
+        order_ids: &[String],
+    ) -> Result<BTreeMap<String, Vec<OrderProgressBatch>>, ProductionMapError> {
+        load_progress_batches_for_orders(&self.pool, order_ids).await
     }
 
     async fn progress_batch_corrections_for_order(

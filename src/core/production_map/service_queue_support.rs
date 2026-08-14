@@ -364,16 +364,16 @@ fn progress_batch_order_key(batch: &OrderProgressBatch) -> (u128, String) {
 }
 
 pub(super) fn queue_states_for_order(
-    queue_states: BTreeMap<String, BTreeMap<String, String>>,
+    queue_states: &BTreeMap<String, BTreeMap<String, String>>,
     order_id: &str,
 ) -> BTreeMap<String, BTreeMap<String, String>> {
     let order_id = order_id.trim();
     queue_states
-        .into_iter()
+        .iter()
         .filter_map(|(apparatus, states)| {
             states.get(order_id).map(|state| {
                 (
-                    apparatus,
+                    apparatus.clone(),
                     BTreeMap::from([(order_id.to_string(), state.clone())]),
                 )
             })

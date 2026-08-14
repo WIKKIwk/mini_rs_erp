@@ -38,7 +38,7 @@ impl ProductionMapService {
             "superseded_by_new_qr".to_string()
         };
         let queue_states =
-            queue_states_for_order(self.store.apparatus_queue_states().await?, &order_id);
+            queue_states_for_order(&self.store.apparatus_queue_states().await?, &order_id);
         let logs_by_order = self
             .store
             .queue_action_logs_for_orders(std::slice::from_ref(&order_id))

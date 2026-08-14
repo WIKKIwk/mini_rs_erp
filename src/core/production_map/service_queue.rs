@@ -231,7 +231,7 @@ impl ProductionMapService {
             return Err(ProductionMapError::MissingId);
         }
         let queue_states =
-            queue_states_for_order(self.store.apparatus_queue_states().await?, order_id);
+            queue_states_for_order(&self.store.apparatus_queue_states().await?, order_id);
         let progress_batches = self.store.progress_batches_for_order(order_id).await?;
         let run_sessions = self.store.order_run_sessions_for_order(order_id).await?;
         let logs_by_order = self
@@ -250,15 +250,34 @@ impl ProductionMapService {
     pub async fn order_status_details(
         &self,
     ) -> Result<BTreeMap<String, ProductionOrderStatusDetail>, ProductionMapError> {
+        let order_ids = self
+            .maps()
+            .await?
+            .into_iter()
+            .filter_map(|saved| {
+                let order_id = saved.map.id.trim();
+                (!order_id.is_empty()).then(|| order_id.to_string())
+            })
+            .collect::<Vec<_>>();
+        let queue_states = self.store.apparatus_queue_states().await?;
+        let progress_batches = self.store.progress_batches_for_orders(&order_ids).await?;
+        let run_sessions = self.store.order_run_sessions_for_orders(&order_ids).await?;
+        let logs_by_order = self.store.queue_action_logs_for_orders(&order_ids).await?;
         let mut statuses = BTreeMap::new();
-        for saved in self.maps().await? {
-            let order_id = saved.map.id.trim();
-            if order_id.is_empty() {
-                continue;
-            }
+        for order_id in order_ids {
+            let order_queue_states = queue_states_for_order(&queue_states, &order_id);
+            let order_progress_batches =
+                progress_batches.get(&order_id).cloned().unwrap_or_default();
+            let order_run_sessions = run_sessions.get(&order_id).cloned().unwrap_or_default();
+            let order_logs = logs_by_order.get(&order_id).cloned().unwrap_or_default();
             statuses.insert(
                 order_id.to_string(),
-                self.order_status_detail(order_id).await?,
+                ProductionOrderStatusDetail::from_order_flow(
+                    &order_progress_batches,
+                    &order_run_sessions,
+                    &order_queue_states,
+                    &order_logs,
+                ),
             );
         }
         Ok(statuses)

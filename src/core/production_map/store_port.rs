@@ -310,6 +310,23 @@ pub trait ProductionMapStorePort: Send + Sync {
     ) -> StoreResult<Vec<OrderRunSession>> {
         Ok(Vec::new())
     }
+    async fn order_run_sessions_for_orders(
+        &self,
+        order_ids: &[String],
+    ) -> StoreResult<BTreeMap<String, Vec<OrderRunSession>>> {
+        let mut sessions = BTreeMap::new();
+        for order_id in order_ids {
+            let order_id = order_id.trim();
+            if order_id.is_empty() {
+                continue;
+            }
+            sessions.insert(
+                order_id.to_string(),
+                self.order_run_sessions_for_order(order_id).await?,
+            );
+        }
+        Ok(sessions)
+    }
     async fn order_run_sessions_for_audit(&self) -> StoreResult<Vec<OrderRunSession>> {
         Ok(Vec::new())
     }
@@ -356,6 +373,23 @@ pub trait ProductionMapStorePort: Send + Sync {
         _order_id: &str,
     ) -> StoreResult<Vec<OrderProgressBatch>> {
         Ok(Vec::new())
+    }
+    async fn progress_batches_for_orders(
+        &self,
+        order_ids: &[String],
+    ) -> StoreResult<BTreeMap<String, Vec<OrderProgressBatch>>> {
+        let mut batches = BTreeMap::new();
+        for order_id in order_ids {
+            let order_id = order_id.trim();
+            if order_id.is_empty() {
+                continue;
+            }
+            batches.insert(
+                order_id.to_string(),
+                self.progress_batches_for_order(order_id).await?,
+            );
+        }
+        Ok(batches)
     }
     async fn progress_batch_corrections_for_order(
         &self,

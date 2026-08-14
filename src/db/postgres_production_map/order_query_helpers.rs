@@ -278,6 +278,23 @@ pub(super) async fn load_order_run_sessions_for_order(
     if order_id.is_empty() {
         return Ok(Vec::new());
     }
+    let order_ids = vec![order_id.to_string()];
+    let mut sessions = load_order_run_sessions_for_orders(pool, &order_ids).await?;
+    Ok(sessions.remove(order_id).unwrap_or_default())
+}
+
+pub(super) async fn load_order_run_sessions_for_orders(
+    pool: &PgPool,
+    order_ids: &[String],
+) -> Result<BTreeMap<String, Vec<OrderRunSession>>, ProductionMapError> {
+    let order_ids = order_ids
+        .iter()
+        .map(|order_id| order_id.trim().to_string())
+        .filter(|order_id| !order_id.is_empty())
+        .collect::<Vec<_>>();
+    if order_ids.is_empty() {
+        return Ok(BTreeMap::new());
+    }
     let rows = sqlx::query_as::<_, ProgressSessionRow>(
         "SELECT session_id, apparatus, order_id, status,
                 worker_role, worker_ref, worker_display_name,
@@ -285,14 +302,22 @@ pub(super) async fn load_order_run_sessions_for_order(
                 EXTRACT(EPOCH FROM updated_at)::bigint AS updated_at_unix,
                 payload_json
          FROM mini_order_run_sessions
-         WHERE order_id = $1
-         ORDER BY started_at ASC, session_id ASC",
+         WHERE order_id = ANY($1)
+         ORDER BY order_id ASC, started_at ASC, session_id ASC",
     )
-    .bind(order_id)
+    .bind(&order_ids)
     .fetch_all(pool)
     .await
     .map_err(|_| ProductionMapError::StoreFailed)?;
-    rows.into_iter().map(progress_session_from_row).collect()
+    let mut sessions = BTreeMap::new();
+    for row in rows {
+        let session = progress_session_from_row(row)?;
+        sessions
+            .entry(session.order_id.clone())
+            .or_insert_with(Vec::new)
+            .push(session);
+    }
+    Ok(sessions)
 }
 
 pub(super) async fn load_order_run_sessions_for_audit(
@@ -431,6 +456,23 @@ pub(super) async fn load_progress_batches_for_order(
     if order_id.is_empty() {
         return Ok(Vec::new());
     }
+    let order_ids = vec![order_id.to_string()];
+    let mut batches = load_progress_batches_for_orders(pool, &order_ids).await?;
+    Ok(batches.remove(order_id).unwrap_or_default())
+}
+
+pub(super) async fn load_progress_batches_for_orders(
+    pool: &PgPool,
+    order_ids: &[String],
+) -> Result<BTreeMap<String, Vec<OrderProgressBatch>>, ProductionMapError> {
+    let order_ids = order_ids
+        .iter()
+        .map(|order_id| order_id.trim().to_string())
+        .filter(|order_id| !order_id.is_empty())
+        .collect::<Vec<_>>();
+    if order_ids.is_empty() {
+        return Ok(BTreeMap::new());
+    }
     let rows = sqlx::query_as::<_, ProgressBatchRow>(
         "SELECT batch.batch_id, batch.revision, batch.session_id,
                 COALESCE(EXTRACT(EPOCH FROM session.started_at)::bigint,
@@ -463,14 +505,22 @@ pub(super) async fn load_progress_batches_for_order(
              SELECT session_id, started_at, updated_at AS session_updated_at
              FROM mini_order_run_sessions
          ) AS session ON session.session_id = batch.session_id
-         WHERE batch.order_id = $1
-         ORDER BY updated_at DESC, created_at DESC, batch_id DESC",
+         WHERE batch.order_id = ANY($1)
+         ORDER BY batch.order_id ASC, updated_at DESC, created_at DESC, batch_id DESC",
     )
-    .bind(order_id)
+    .bind(&order_ids)
     .fetch_all(pool)
     .await
     .map_err(|_| ProductionMapError::StoreFailed)?;
-    rows.into_iter().map(progress_batch_from_row).collect()
+    let mut batches = BTreeMap::new();
+    for row in rows {
+        let batch = progress_batch_from_row(row)?;
+        batches
+            .entry(batch.order_id.clone())
+            .or_insert_with(Vec::new)
+            .push(batch);
+    }
+    Ok(batches)
 }
 
 pub(super) async fn load_progress_batches_for_audit(
