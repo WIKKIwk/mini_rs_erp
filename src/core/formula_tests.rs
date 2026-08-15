@@ -219,6 +219,24 @@ fn catalog_resolves_pe_oq_as_a_separate_material() {
 }
 
 #[test]
+fn catalog_density_calculates_an_unlisted_micron() {
+    let value = calculate_with_material_catalog(
+        CalculateRequest {
+            kg: Some(1000.0),
+            frame_product_size_mm: Some(250.0),
+            frame_count: Some(3.0),
+            first_layer: LayerInput::new("PET", "19"),
+            ..CalculateRequest::default()
+        },
+        &default_calculate_materials(),
+    )
+    .expect("density should calculate an unlisted micron");
+
+    assert_eq!(value.results.len(), 1);
+    assert!((value.results[0].film_gsm - 26.6).abs() < 0.001);
+}
+
+#[test]
 fn catalog_still_rejects_an_unknown_material_name() {
     let error = calculate_with_material_catalog(
         CalculateRequest {

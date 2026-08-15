@@ -145,9 +145,9 @@ pub fn normalize_material(
     }
 
     let mut variants = input.variants;
-    if variants.is_empty() {
+    if variants.is_empty() && density_g_cm3 <= 0.0 {
         return Err(CalculateMaterialError::InvalidInput(
-            "kamida bitta mikron kerak".to_string(),
+            "zichlik yoki kamida bitta mikron kerak".to_string(),
         ));
     }
     for variant in &mut variants {
@@ -474,6 +474,20 @@ mod tests {
         assert_eq!(material.name, "BOPP metal");
         assert_eq!(material.variants[0].micron, 20);
         assert!((material.variants[0].coefficient - 1.092).abs() < 0.001);
+    }
+
+    #[test]
+    fn allows_density_only_material_without_micron_variants() {
+        let material = normalize_material(CalculateMaterialUpsert {
+            name: "PET custom".to_string(),
+            density_g_cm3: 1.4,
+            variants: Vec::new(),
+            ..CalculateMaterialUpsert::default()
+        })
+        .expect("density-only material should be valid");
+
+        assert!(material.variants.is_empty());
+        assert_eq!(material.density_g_cm3, 1.4);
     }
 
     #[test]

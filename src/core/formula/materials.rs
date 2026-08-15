@@ -35,23 +35,25 @@ pub(super) fn gsm_cell_with_catalog(
             "material/mikron mos emas: {material} / {micron_text}"
         ));
     }
-    let variant = catalog_material
+    if let Some(variant) = catalog_material
         .variants
         .iter()
         .find(|variant| variant.micron == micron)
-        .ok_or_else(|| {
-            let available = catalog_material
-                .variants
-                .iter()
-                .map(|variant| variant.micron.to_string())
-                .collect::<Vec<_>>()
-                .join(", ");
-            format!(
-                "'{}' uchun {} mikron topilmadi. Bor mikronlar: {}",
-                catalog_material.name, micron, available
-            )
-        })?;
-    variant_gsm(catalog_material, variant)
+    {
+        return variant_gsm(catalog_material, variant);
+    }
+
+    // A material's density is sufficient to calculate any positive micron.
+    // Catalog variants are optional overrides for grades whose actual GSM
+    // differs from the nominal density formula.
+    if catalog_material.density_g_cm3.is_finite() && catalog_material.density_g_cm3 > 0.0 {
+        return Ok(f64::from(micron) * catalog_material.density_g_cm3);
+    }
+
+    Err(format!(
+        "'{}' uchun zichlik yoki {} mikronning actual GSM qiymati kiritilmagan",
+        catalog_material.name, micron
+    ))
 }
 
 fn variant_gsm(
