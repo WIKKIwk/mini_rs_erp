@@ -12,6 +12,44 @@ impl ProductionMapService {
         let order_id = order_id.trim();
         validate_queue_action_request(apparatus, order_id, assigned_apparatus)?;
         let control = self.order_control_state(order_id).await?;
+        let requested_action = action;
+        let admin_freeze_finalization = control.state == OrderControlState::FreezeRequested
+            && matches!(
+                requested_action,
+                queue_state::ApparatusQueueAction::Pause
+                    | queue_state::ApparatusQueueAction::Freeze
+            );
+        let freeze_with_issue = progress.freeze_with_issue
+            || (requested_action == queue_state::ApparatusQueueAction::Freeze
+                && control.state == OrderControlState::Active);
+        let action = if freeze_with_issue || admin_freeze_finalization {
+            queue_state::ApparatusQueueAction::Freeze
+        } else {
+            requested_action
+        };
+        let mut progress = progress;
+        progress.freeze_with_issue = freeze_with_issue;
+        if freeze_with_issue {
+            if action != queue_state::ApparatusQueueAction::Freeze
+                || !actor.role.trim().eq_ignore_ascii_case("aparatchi")
+            {
+                return Err(ProductionMapError::OrderControlActionNotAllowed);
+            }
+            if progress.description.trim().is_empty()
+                || !progress.freeze_request_id.trim().is_empty()
+                || progress.worker_handoff
+                || progress.remove_roll_from_apparatus
+            {
+                return Err(ProductionMapError::ProgressInputInvalid);
+            }
+            match control.state {
+                OrderControlState::Active => {}
+                OrderControlState::FreezeRequested => {
+                    return Err(ProductionMapError::OrderFreezeRequested);
+                }
+                OrderControlState::Frozen => return Err(ProductionMapError::OrderFrozen),
+            }
+        }
         validate_freeze_request_pause(
             &control,
             apparatus,
@@ -22,7 +60,7 @@ impl ProductionMapService {
         match control.state {
             OrderControlState::Active => {}
             OrderControlState::FreezeRequested
-                if action == queue_state::ApparatusQueueAction::Pause => {}
+                if action == queue_state::ApparatusQueueAction::Freeze => {}
             OrderControlState::FreezeRequested => {
                 return Err(ProductionMapError::OrderFreezeRequested);
             }
@@ -31,6 +69,12 @@ impl ProductionMapService {
         let sequences = self.store.apparatus_sequences().await?;
         let all_states = self.store.apparatus_queue_states().await?;
         let policies = self.store.apparatus_queue_policies().await?;
+        if action == queue_state::ApparatusQueueAction::Freeze
+            && control.state == OrderControlState::Active
+            && order_has_frozen_queue_state(&all_states, order_id)
+        {
+            return Err(ProductionMapError::OrderFrozen);
+        }
         let known_keys = known_apparatus_storage_keys(&sequences, &all_states);
         let storage_key = queue_state::resolve_apparatus_storage_key(apparatus, &known_keys);
         let policy = queue_policy_for_apparatus(apparatus, &storage_key, &policies);
@@ -70,20 +114,17 @@ impl ProductionMapService {
             .get(order_id)
             .copied()
             .unwrap_or(queue_state::ApparatusQueueOrderState::Pending);
-        let frozen_queue_states = self
-            .store
-            .order_control_states()
-            .await?
-            .into_iter()
-            .filter_map(|(frozen_order_id, control)| {
-                if control.state != OrderControlState::Frozen {
-                    return None;
-                }
-                parsed
-                    .remove(&frozen_order_id)
-                    .map(|state| (frozen_order_id, state))
-            })
-            .collect::<Vec<_>>();
+        // Keep frozen orders in the durable queue map as `frozen`. Removing
+        // them here would make the serializer silently recreate them as
+        // pending on the next write.
+        for (frozen_order_id, frozen_control) in self.store.order_control_states().await? {
+            if frozen_control.state == OrderControlState::Frozen {
+                parsed.insert(
+                    frozen_order_id,
+                    queue_state::ApparatusQueueOrderState::Frozen,
+                );
+            }
+        }
         let remove_roll_from_apparatus =
             action == queue_state::ApparatusQueueAction::DetachRoll
                 && progress.remove_roll_from_apparatus;
@@ -113,7 +154,6 @@ impl ProductionMapService {
                 action,
             )?;
         }
-        parsed.extend(frozen_queue_states);
         if matches!(
             action,
             queue_state::ApparatusQueueAction::Start
@@ -140,12 +180,20 @@ impl ProductionMapService {
             sequence: &sequence,
             visible_order_ids: &visible_order_ids,
         });
-        let mut progress = progress;
         if progress.worker_handoff {
             event.payload_json["worker_handoff"] = serde_json::json!(true);
         }
         if progress.remove_roll_from_apparatus {
             event.payload_json["roll_removed_from_apparatus"] = serde_json::json!(true);
+        }
+        if freeze_with_issue {
+            let issue_note = progress.description.trim();
+            event.payload_json["freeze_with_issue"] = serde_json::json!(true);
+            event.payload_json["issue_note"] = serde_json::json!(issue_note);
+            event.payload_json["description"] = serde_json::json!(issue_note);
+        }
+        if admin_freeze_finalization {
+            event.payload_json["admin_freeze_finalization"] = serde_json::json!(true);
         }
         if action == queue_state::ApparatusQueueAction::Complete
             && (apparatus::is_laminatsiya_title(&storage_key)
@@ -184,8 +232,32 @@ impl ProductionMapService {
         if has_unprocessed_previous_wips {
             downgrade_completed_state_to_pending(order_id, &mut saved, &mut event);
         }
-        let order_control_update = if control.state == OrderControlState::FreezeRequested
-            && action == queue_state::ApparatusQueueAction::Pause
+        let order_control_update = if freeze_with_issue {
+            let session = progress
+                .session
+                .as_ref()
+                .ok_or(ProductionMapError::OrderFreezeTargetNotFound)?;
+            let now = progress::unix_seconds();
+            Some(OrderControlRecord {
+                order_id: order_id.to_string(),
+                state: OrderControlState::Frozen,
+                actor: actor.clone(),
+                requested_at_unix: now,
+                frozen_at_unix: Some(now),
+                freeze_request: Some(OrderFreezeRequest {
+                    request_id: format!("order-freeze-issue:{}", event.event_id),
+                    status: OrderFreezeRequestStatus::Frozen,
+                    target_session_id: session.session_id.clone(),
+                    target_apparatus: storage_key.clone(),
+                    target_worker_role: actor.role.trim().to_string(),
+                    target_worker_ref: actor.ref_.trim().to_string(),
+                    target_worker_display_name: actor.display_name.trim().to_string(),
+                    requested_at_unix: now,
+                    transitioned_at_unix: now,
+                }),
+            })
+        } else if control.state == OrderControlState::FreezeRequested
+            && action == queue_state::ApparatusQueueAction::Freeze
         {
             let now = progress::unix_seconds();
             let mut freeze_request = control
@@ -348,6 +420,7 @@ impl ProductionMapService {
         }
         let schedule_reservation_status =
             schedule_reservation_status_for_action(prepared.event.action);
+        let order_control = prepared.order_control_update.clone();
         let write_result = self
             .store
             .put_apparatus_queue_states_with_event_and_progress(QueueActionProgressWrite {
@@ -380,6 +453,7 @@ impl ProductionMapService {
         Ok(ApparatusQueueActionResult {
             states: prepared.states,
             order_status,
+            order_control,
             session: prepared.session,
             progress_event: prepared.progress_event,
             progress_batch: prepared.progress_batch,
@@ -398,6 +472,7 @@ fn schedule_reservation_status_for_action(
             ApparatusScheduleStatus::Active
         }
         queue_state::ApparatusQueueAction::Pause
+        | queue_state::ApparatusQueueAction::Freeze
         | queue_state::ApparatusQueueAction::DetachRoll => ApparatusScheduleStatus::Paused,
         queue_state::ApparatusQueueAction::RollComplete => ApparatusScheduleStatus::Active,
         queue_state::ApparatusQueueAction::Complete => ApparatusScheduleStatus::Completed,
@@ -418,7 +493,11 @@ fn validate_freeze_request_pause(
         }
         return Err(ProductionMapError::OrderFreezeRequestMismatch);
     }
-    if action != queue_state::ApparatusQueueAction::Pause {
+    if !matches!(
+        action,
+        queue_state::ApparatusQueueAction::Pause
+            | queue_state::ApparatusQueueAction::Freeze
+    ) {
         return Ok(());
     }
     let request = control

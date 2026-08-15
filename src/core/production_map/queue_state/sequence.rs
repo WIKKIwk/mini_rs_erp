@@ -72,6 +72,7 @@ pub fn first_actionable_order_id(
             ApparatusQueueOrderState::Completed => continue,
             ApparatusQueueOrderState::InProgress => continue,
             ApparatusQueueOrderState::Paused => continue,
+            ApparatusQueueOrderState::Frozen => continue,
             ApparatusQueueOrderState::Pending => return Some(id.to_string()),
         }
     }

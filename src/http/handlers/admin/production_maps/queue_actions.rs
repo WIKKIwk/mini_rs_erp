@@ -85,6 +85,12 @@ struct ApparatusQueueActionRequest {
     returned_paint_image_id: String,
     #[serde(default)]
     freeze_request_id: String,
+    #[serde(default)]
+    freeze_with_issue: bool,
+    #[serde(default)]
+    issue_note: String,
+    #[serde(default)]
+    rezka_frames: Vec<RezkaFrameProgressInput>,
     action: queue_state::ApparatusQueueAction,
 }
 
@@ -116,8 +122,37 @@ pub async fn production_map_queue_action(
         input.worker_handoff,
         input.remove_roll_from_apparatus,
         &input.freeze_request_id,
+        input.freeze_with_issue,
         &principal,
     );
+    let explicit_worker_freeze = input.action == queue_state::ApparatusQueueAction::Freeze
+        && input.freeze_request_id.trim().is_empty();
+    if input.freeze_with_issue || explicit_worker_freeze {
+        if principal.role != PrincipalRole::Aparatchi {
+            return Err(forbidden());
+        }
+        if input.action != queue_state::ApparatusQueueAction::Freeze {
+            return Err(bad_request("freeze_with_issue_only_on_freeze"));
+        }
+        if input.issue_note.trim().is_empty() && !input.description.trim().is_empty() {
+            input.issue_note = input.description.clone();
+        }
+        if input.issue_note.trim().is_empty() {
+            return Err(bad_request("issue_note_required"));
+        }
+        if !input.freeze_request_id.trim().is_empty() {
+            return Err(bad_request("freeze_with_issue_cannot_use_freeze_request_id"));
+        }
+        if input.worker_handoff || input.remove_roll_from_apparatus {
+            return Err(bad_request("freeze_with_issue_actions_conflict"));
+        }
+        if input.order_id.trim().starts_with("training-") {
+            return Err(bad_request("freeze_with_issue_not_supported_for_training"));
+        }
+        // `freeze_with_issue` remains accepted for old clients, but the
+        // persisted intent is always the explicit frozen transition.
+        input.freeze_with_issue = true;
+    }
     if input.worker_handoff && !matches!(input.action, queue_state::ApparatusQueueAction::Pause) {
         return Err(bad_request("worker_handoff_only_on_pause"));
     }
@@ -128,6 +163,18 @@ pub async fn production_map_queue_action(
     }
     if input.worker_handoff && input.remove_roll_from_apparatus {
         return Err(bad_request("worker_handoff_actions_conflict"));
+    }
+    if !input.rezka_frames.is_empty()
+        && (!input.apparatus.trim().to_ascii_lowercase().contains("rezka")
+            || !matches!(
+                input.action,
+                queue_state::ApparatusQueueAction::Pause
+                    | queue_state::ApparatusQueueAction::DetachRoll
+                    | queue_state::ApparatusQueueAction::RollComplete
+                    | queue_state::ApparatusQueueAction::Complete
+            ))
+    {
+        return Err(bad_request("rezka_frames_only_on_rezka_progress"));
     }
     if let Some(training_result) = super::super::training::training_queue_action(
         &state,
@@ -201,7 +248,9 @@ pub async fn production_map_queue_action(
             Vec::new()
         };
     let produced_qty = input.produced_qty.or(input.qty);
-    let completion_request_note = if input.completion_request_note.trim().is_empty() {
+    let completion_request_note = if input.freeze_with_issue {
+        input.issue_note.clone()
+    } else if input.completion_request_note.trim().is_empty() {
         input.description.clone()
     } else {
         input.completion_request_note.clone()
@@ -276,6 +325,8 @@ pub async fn production_map_queue_action(
     };
     let progress = QueueProgressInput {
         freeze_request_id: input.freeze_request_id.clone(),
+        freeze_with_issue: input.freeze_with_issue,
+        rezka_frames: input.rezka_frames.clone(),
         produced_qty,
         gross_qty: input.gross_qty,
         uom: if input.uom.trim().is_empty() {
@@ -323,6 +374,7 @@ pub async fn production_map_queue_action(
         .contains("rezka");
     let has_rezka_progress_metrics =
         is_rezka && rezka_queue_quantity_metrics_are_complete(&input, produced_qty);
+    let has_rezka_frame_metrics = is_rezka && !input.rezka_frames.is_empty();
     if matches!(
         input.action,
         queue_state::ApparatusQueueAction::Pause
@@ -330,11 +382,17 @@ pub async fn production_map_queue_action(
             | queue_state::ApparatusQueueAction::RollComplete
             | queue_state::ApparatusQueueAction::Complete
     ) && is_rezka
+        && !input.freeze_with_issue
+        && !has_rezka_frame_metrics
         && !has_rezka_progress_metrics
     {
         return Err(bad_request("rezka_progress_metrics_required"));
     }
-    let zero_metric_codes = zero_completion_metric_codes(&input, return_ink_kg);
+    let zero_metric_codes = if has_rezka_frame_metrics {
+        Vec::new()
+    } else {
+        zero_completion_metric_codes(&input, return_ink_kg)
+    };
     if matches!(input.action, queue_state::ApparatusQueueAction::Complete)
         && !zero_metric_codes.is_empty()
         && completion_request_note.trim().is_empty()
@@ -343,6 +401,7 @@ pub async fn production_map_queue_action(
     }
     let missing_output_with_explanation = !has_complete_bosma_metrics
         && !has_complete_laminatsiya_metrics
+        && !has_rezka_frame_metrics
         && !has_rezka_progress_metrics
         && input.gross_qty.is_none()
         && !completion_request_note.trim().is_empty();
@@ -450,6 +509,7 @@ pub async fn production_map_queue_action(
             | queue_state::ApparatusQueueAction::RollComplete
             | queue_state::ApparatusQueueAction::Complete
     ) {
+        let frame_specific_metrics = !input.rezka_frames.is_empty();
         print_batches
             .iter()
             .map(|batch| ProgressLabelPrintRequest {
@@ -462,13 +522,34 @@ pub async fn production_map_queue_action(
                 executor_name: batch.executor_name.clone(),
                 printer: input.printer.clone(),
                 print_mode: input.print_mode.clone(),
-                gross_qty: input
-                    .gross_qty
-                    .or(input.finished_goods_kg)
-                    .unwrap_or(batch.produced_qty),
-                tare_enabled: input.bobina_kg.is_some_and(|value| value > 0.0),
-                tare_kg: input.bobina_kg.unwrap_or(0.0),
-                progress_qty: batch.produced_qty,
+                gross_qty: if frame_specific_metrics {
+                    batch
+                        .payload_json
+                        .get("gross_qty")
+                        .and_then(serde_json::Value::as_f64)
+                        .or(batch.finished_goods_kg)
+                        .unwrap_or(batch.produced_qty)
+                } else {
+                    input
+                        .gross_qty
+                        .or(input.finished_goods_kg)
+                        .unwrap_or(batch.produced_qty)
+                },
+                tare_enabled: if frame_specific_metrics {
+                    batch.bobina_kg.is_some_and(|value| value > 0.0)
+                } else {
+                    input.bobina_kg.is_some_and(|value| value > 0.0)
+                },
+                tare_kg: if frame_specific_metrics {
+                    batch.bobina_kg.unwrap_or(0.0)
+                } else {
+                    input.bobina_kg.unwrap_or(0.0)
+                },
+                progress_qty: if frame_specific_metrics {
+                    batch.finished_goods_meter.unwrap_or(batch.produced_qty)
+                } else {
+                    batch.produced_qty
+                },
                 unit: "kg".to_string(),
                 progress_unit: if batch.uom.trim().is_empty() {
                     "m".to_string()
@@ -476,7 +557,11 @@ pub async fn production_map_queue_action(
                     batch.uom.clone()
                 },
                 label_kind: "progress".to_string(),
-                print_count: input.print_count,
+                print_count: if frame_specific_metrics {
+                    1
+                } else {
+                    input.print_count
+                },
             })
             .collect::<Vec<_>>()
     } else {
@@ -545,7 +630,8 @@ pub async fn production_map_queue_action(
         input.action,
     );
     let print = prints.first().cloned().unwrap_or(serde_json::Value::Null);
-    Ok(json_response(serde_json::json!({
+    let order_control = result.order_control;
+    let mut response = serde_json::json!({
         "ok": true,
         "states": result.states,
         "order_status": result.order_status,
@@ -555,7 +641,11 @@ pub async fn production_map_queue_action(
         "progress_batches": result.progress_batches,
         "print": print,
         "prints": prints,
-    })))
+    });
+    if let Some(order_control) = order_control {
+        response["order_control"] = serde_json::json!(order_control);
+    }
+    Ok(json_response(response))
 }
 
 fn canonical_queue_action(
@@ -563,14 +653,23 @@ fn canonical_queue_action(
     worker_handoff: bool,
     remove_roll_from_apparatus: bool,
     freeze_request_id: &str,
+    freeze_with_issue: bool,
     principal: &Principal,
 ) -> queue_state::ApparatusQueueAction {
     if action != queue_state::ApparatusQueueAction::Pause {
-        return action;
+        return if freeze_with_issue {
+            queue_state::ApparatusQueueAction::Freeze
+        } else {
+            action
+        };
+    }
+    if freeze_with_issue {
+        return queue_state::ApparatusQueueAction::Freeze;
     }
     let legacy_roll_removal = remove_roll_from_apparatus;
     let legacy_worker_detach = principal.role == PrincipalRole::Aparatchi
         && freeze_request_id.trim().is_empty()
+        && !freeze_with_issue
         && !worker_handoff;
     if legacy_roll_removal || legacy_worker_detach {
         queue_state::ApparatusQueueAction::DetachRoll
@@ -607,7 +706,7 @@ mod tests {
         let admin = principal(PrincipalRole::Admin);
 
         assert_eq!(
-            canonical_queue_action(ApparatusQueueAction::Pause, false, false, "", &worker),
+            canonical_queue_action(ApparatusQueueAction::Pause, false, false, "", false, &worker),
             ApparatusQueueAction::DetachRoll
         );
         assert_eq!(
@@ -616,17 +715,22 @@ mod tests {
                 false,
                 false,
                 "freeze-request",
+                false,
                 &worker,
             ),
             ApparatusQueueAction::Pause
         );
         assert_eq!(
-            canonical_queue_action(ApparatusQueueAction::Pause, true, false, "", &worker),
+            canonical_queue_action(ApparatusQueueAction::Pause, true, false, "", false, &worker),
             ApparatusQueueAction::Pause
         );
         assert_eq!(
-            canonical_queue_action(ApparatusQueueAction::Pause, false, false, "", &admin),
+            canonical_queue_action(ApparatusQueueAction::Pause, false, false, "", false, &admin),
             ApparatusQueueAction::Pause
+        );
+        assert_eq!(
+            canonical_queue_action(ApparatusQueueAction::Pause, false, false, "", true, &worker),
+            ApparatusQueueAction::Freeze
         );
     }
 

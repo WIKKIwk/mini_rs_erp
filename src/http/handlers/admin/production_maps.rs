@@ -16,7 +16,7 @@ use crate::core::production_map::{
     ProductionMapMoveRequest, ProductionMapNodeKind, ProductionMapRunRequest,
     QueueActionActor, QueueProgressInput, RawMaterialAssignment, RawMaterialAssignmentDeleteInput,
     RawMaterialAssignmentInput, RawMaterialStockTransition, RawMaterialStockTransitionKind,
-    WipProgressBatchQuery, queue_state,
+    RezkaFrameProgressInput, WipProgressBatchQuery, queue_state,
 };
 use crate::google_sheets::is_sheet_order_map;
 

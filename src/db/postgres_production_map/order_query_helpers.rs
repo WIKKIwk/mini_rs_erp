@@ -22,25 +22,23 @@ pub(super) async fn load_completed_queue_orders_for_actor(
         return Ok(Vec::new());
     }
     let limit = i64::try_from(limit.min(500)).unwrap_or(500);
-    let rows = sqlx::query_as::<_, (String, String, String, i64)>(
-        "SELECT order_id, apparatus, completion_status, completed_at_unix
+    let rows = sqlx::query_as::<_, (String, String, i64)>(
+        "SELECT order_id, apparatus, EXTRACT(EPOCH FROM created_at)::bigint AS completed_at_unix
          FROM (
             SELECT DISTINCT ON (order_id)
                 order_id,
                 apparatus,
                 created_at,
-                CASE
-                    WHEN action = 'complete' AND to_state = 'completed'
-                        THEN 'completed'
-                    ELSE 'in_progress'
-                END AS completion_status,
-                EXTRACT(EPOCH FROM created_at)::bigint AS completed_at_unix
+                action,
+                to_state
             FROM mini_queue_action_events
             WHERE actor_ref = $1
-              AND action IN ('pause', 'detach_roll', 'roll_complete', 'complete')
+              AND action IN ('pause', 'freeze', 'detach_roll', 'roll_complete', 'complete')
               AND COALESCE(payload_json->>'completion_request', 'false') <> 'true'
             ORDER BY order_id, created_at DESC
          ) latest
+         WHERE action = 'complete'
+           AND to_state = 'completed'
          ORDER BY created_at DESC
          LIMIT $2",
     )
@@ -53,15 +51,12 @@ pub(super) async fn load_completed_queue_orders_for_actor(
     Ok(rows
         .into_iter()
         .map(
-            |(order_id, apparatus, completion_status, completed_at_unix)| CompletedQueueOrder {
+            |(order_id, apparatus, completed_at_unix)| CompletedQueueOrder {
                 apparatus,
                 order_id,
                 completed_at_unix,
-                status: if completion_status == "completed" {
-                    CompletedQueueOrderStatus::Completed
-                } else {
-                    CompletedQueueOrderStatus::InProgress
-                },
+                status: CompletedQueueOrderStatus::Completed,
+                issue_note: String::new(),
             },
         )
         .collect())
@@ -155,7 +150,7 @@ pub(super) async fn load_active_order_run_session(
          FROM mini_order_run_sessions
          WHERE order_id = $1
            AND lower(apparatus) = lower($2)
-           AND status IN ('active', 'paused', 'roll_detached')
+           AND status IN ('active', 'paused', 'frozen', 'roll_detached')
          ORDER BY updated_at DESC
          LIMIT 1",
     )

@@ -226,7 +226,7 @@ fn audit_queue_states(
                     "invalid_queue_state",
                     order_id,
                     apparatus,
-                    "queue state must be pending, in_progress, paused, or completed",
+                    "queue state must be pending, in_progress, paused, frozen, or completed",
                 ));
                 continue;
             };
@@ -334,7 +334,10 @@ fn audit_session(
     }
     if matches!(
         session.status,
-        OrderRunStatus::Active | OrderRunStatus::Paused | OrderRunStatus::RollDetached
+        OrderRunStatus::Active
+            | OrderRunStatus::Paused
+            | OrderRunStatus::Frozen
+            | OrderRunStatus::RollDetached
     ) {
         active_sessions
             .entry((apparatus.to_ascii_lowercase(), order_id.to_string()))
@@ -347,7 +350,10 @@ fn audit_session(
     if !chain::map_has_work_stage_for_station(map, apparatus)
         && matches!(
             session.status,
-            OrderRunStatus::Active | OrderRunStatus::Paused | OrderRunStatus::RollDetached
+            OrderRunStatus::Active
+                | OrderRunStatus::Paused
+                | OrderRunStatus::Frozen
+                | OrderRunStatus::RollDetached
         )
     {
         violations.push(ProductionWorkflowAuditViolation::new(
@@ -363,6 +369,7 @@ fn audit_session(
         OrderRunStatus::Paused | OrderRunStatus::RollDetached => {
             Some(ApparatusQueueOrderState::Paused)
         }
+        OrderRunStatus::Frozen => Some(ApparatusQueueOrderState::Frozen),
         OrderRunStatus::Completed => None,
     };
     if let Some(expected) = expected {

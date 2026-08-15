@@ -197,6 +197,19 @@ mod tests {
     }
 
     #[test]
+    fn frozen_order_queue_state_migration_is_registered_with_the_runner() {
+        let migration = POSTGRES_MIGRATIONS
+            .iter()
+            .find(|(version, _)| *version == "0060_frozen_order_queue_state")
+            .map(|(_, sql)| sql.to_lowercase())
+            .expect("frozen order queue state migration");
+
+        assert!(migration.contains("'frozen'"));
+        assert!(migration.contains("'freeze'"));
+        assert!(migration.contains("idx_mini_order_run_sessions_one_open"));
+    }
+
+    #[test]
     fn roll_detached_status_migration_is_registered_with_the_runner() {
         let migration = POSTGRES_MIGRATIONS
             .iter()

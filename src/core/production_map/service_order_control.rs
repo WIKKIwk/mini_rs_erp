@@ -1,6 +1,12 @@
 use std::collections::{BTreeMap, BTreeSet};
 
-use super::progress::unix_seconds;
+use super::progress::{queue_action_event_id, unix_seconds};
+use super::apparatus::visible_order_ids_for_apparatus;
+use super::service_queue_support::{
+    known_apparatus_storage_keys, parsed_queue_states, queue_action_event,
+    order_has_frozen_queue_state, queue_policy_for_apparatus, serialized_queue_states,
+    QueueActionEventInput,
+};
 use super::*;
 
 impl ProductionMapService {
@@ -33,6 +39,10 @@ impl ProductionMapService {
         let current = current_order_control(self, &order_id).await?;
         if current.state != OrderControlState::Active {
             return Err(ProductionMapError::OrderControlActionNotAllowed);
+        }
+        let queue_states = self.store.apparatus_queue_states().await?;
+        if order_has_frozen_queue_state(&queue_states, &order_id) {
+            return Err(ProductionMapError::OrderFrozen);
         }
 
         let evidence = order_flow_evidence(self, &order_id).await?;
@@ -95,7 +105,19 @@ impl ProductionMapService {
             frozen_at_unix: (state == OrderControlState::Frozen).then_some(now),
             freeze_request: Some(freeze_request),
         };
-        self.store.put_order_control_state(record.clone()).await?;
+        if let Some(write) = prepare_direct_freeze_queue_write(
+            self,
+            &record,
+            target_session,
+        )
+        .await?
+        {
+            self.store
+                .put_apparatus_queue_states_with_event_and_progress(write)
+                .await?;
+        } else {
+            self.store.put_order_control_state(record.clone()).await?;
+        }
         self.notify_live();
         Ok(record)
     }
@@ -163,7 +185,11 @@ impl ProductionMapService {
             frozen_at_unix: None,
             freeze_request: Some(freeze_request),
         };
-        self.store.put_order_control_state(record.clone()).await?;
+        if expected == OrderControlState::Frozen && next == OrderControlState::Active {
+            restore_frozen_queue_after_unfreeze(self, &record).await?;
+        } else {
+            self.store.put_order_control_state(record.clone()).await?;
+        }
         self.notify_live();
         Ok(record)
     }
@@ -349,4 +375,243 @@ fn new_freeze_request_id() -> String {
         "order-freeze-request_{}",
         data_encoding::HEXLOWER.encode(&bytes)
     )
+}
+
+async fn prepare_direct_freeze_queue_write(
+    service: &ProductionMapService,
+    record: &OrderControlRecord,
+    target_session: Option<&OrderRunSession>,
+) -> Result<Option<QueueActionProgressWrite>, ProductionMapError> {
+    let all_states = service.store.apparatus_queue_states().await?;
+    let sequences = service.store.apparatus_sequences().await?;
+    let policies = service.store.apparatus_queue_policies().await?;
+    let known_keys = known_apparatus_storage_keys(&sequences, &all_states);
+    let target_apparatus = target_session
+        .map(|session| session.apparatus.trim().to_string())
+        .or_else(|| {
+            all_states.iter().find_map(|(apparatus, states)| {
+                (states
+                    .get(record.order_id.trim())
+                    .and_then(|state| queue_state::ApparatusQueueOrderState::parse(state))
+                    == Some(queue_state::ApparatusQueueOrderState::Paused))
+                .then(|| apparatus.clone())
+            })
+        });
+    let Some(target_apparatus) = target_apparatus else {
+        return Ok(None);
+    };
+    let storage_key = queue_state::resolve_apparatus_storage_key(&target_apparatus, &known_keys);
+    let mut parsed = parsed_queue_states(
+        all_states
+            .get(&storage_key)
+            .or_else(|| all_states.get(&target_apparatus))
+            .cloned()
+            .unwrap_or_default(),
+    );
+    let from_state = parsed
+        .get(record.order_id.trim())
+        .copied()
+        .unwrap_or(queue_state::ApparatusQueueOrderState::Paused);
+    if !matches!(
+        from_state,
+        queue_state::ApparatusQueueOrderState::Paused
+            | queue_state::ApparatusQueueOrderState::Frozen
+    ) {
+        return Ok(None);
+    }
+    parsed.insert(
+        record.order_id.clone(),
+        queue_state::ApparatusQueueOrderState::Frozen,
+    );
+    let visible_order_ids = visible_order_ids_for_apparatus(
+        &service.store.maps().await?,
+        &target_apparatus,
+    );
+    let stored_sequence = sequences.get(&storage_key).cloned().unwrap_or_default();
+    let sequence =
+        queue_state::effective_apparatus_sequence(&stored_sequence, &visible_order_ids);
+    let policy = queue_policy_for_apparatus(&target_apparatus, &storage_key, &policies);
+    let actor = record.actor.clone();
+    let mut event = queue_action_event(QueueActionEventInput {
+        requested_apparatus: &target_apparatus,
+        storage_key: &storage_key,
+        order_id: &record.order_id,
+        action: queue_state::ApparatusQueueAction::Freeze,
+        from_state,
+        to_state: queue_state::ApparatusQueueOrderState::Frozen,
+        policy,
+        actor: &actor,
+        assigned_apparatus: &[],
+        sequence: &sequence,
+        visible_order_ids: &visible_order_ids,
+    });
+    event.event_id = queue_action_event_id(
+        &storage_key,
+        &record.order_id,
+        queue_state::ApparatusQueueAction::Freeze,
+    );
+    event.payload_json["admin_freeze"] = serde_json::json!(true);
+    event.payload_json["order_control_state"] = serde_json::json!(record.state.as_str());
+    let session = target_session.map(|session| {
+        let mut payload_json = session.payload_json.clone();
+        if !payload_json.is_object() {
+            payload_json = serde_json::json!({});
+        }
+        payload_json["frozen_order"] = serde_json::json!(true);
+        payload_json["admin_freeze"] = serde_json::json!(true);
+        OrderRunSession {
+            status: OrderRunStatus::Frozen,
+            updated_at_unix: unix_seconds(),
+            payload_json,
+            ..session.clone()
+        }
+    });
+    Ok(Some(QueueActionProgressWrite {
+        apparatus: storage_key,
+        states: serialized_queue_states(parsed),
+        event,
+        session,
+        progress_event: None,
+        progress_batch: None,
+        progress_batches: Vec::new(),
+        progress_batch_updates: Vec::new(),
+        raw_material_stock_transitions: Vec::new(),
+        qolip_checkouts: Vec::new(),
+        returned_paint_report: None,
+        order_control_update: Some(record.clone()),
+        schedule_reservation_status: Some(ApparatusScheduleStatus::Paused),
+    }))
+}
+
+async fn restore_frozen_queue_after_unfreeze(
+    service: &ProductionMapService,
+    record: &OrderControlRecord,
+) -> Result<(), ProductionMapError> {
+    let all_states = service.store.apparatus_queue_states().await?;
+    let sequences = service.store.apparatus_sequences().await?;
+    let policies = service.store.apparatus_queue_policies().await?;
+    let sessions = service
+        .store
+        .order_run_sessions_for_order(&record.order_id)
+        .await?;
+    let known_keys = known_apparatus_storage_keys(&sequences, &all_states);
+    let maps = service.store.maps().await?;
+    let mut states_by_storage_key = BTreeMap::<String, BTreeMap<String, String>>::new();
+    let mut requested_apparatus_by_storage_key = BTreeMap::<String, String>::new();
+    for (requested_apparatus, stored_states) in &all_states {
+        let storage_key =
+            queue_state::resolve_apparatus_storage_key(requested_apparatus, &known_keys);
+        states_by_storage_key
+            .entry(storage_key.clone())
+            .or_default()
+            .extend(stored_states.clone());
+        requested_apparatus_by_storage_key
+            .entry(storage_key)
+            .or_insert_with(|| requested_apparatus.clone());
+    }
+    let mut updated_session_ids = BTreeSet::new();
+
+    for (storage_key, stored_states) in states_by_storage_key {
+        let requested_apparatus = requested_apparatus_by_storage_key
+            .get(&storage_key)
+            .map(String::as_str)
+            .unwrap_or(storage_key.as_str());
+        let mut parsed = parsed_queue_states(stored_states);
+        if parsed.get(record.order_id.trim()).copied()
+            != Some(queue_state::ApparatusQueueOrderState::Frozen)
+        {
+            continue;
+        }
+        parsed.insert(
+            record.order_id.clone(),
+            queue_state::ApparatusQueueOrderState::Paused,
+        );
+
+        let visible_order_ids = visible_order_ids_for_apparatus(
+            &maps,
+            requested_apparatus,
+        );
+        let stored_sequence = sequences.get(&storage_key).cloned().unwrap_or_default();
+        let sequence =
+            queue_state::effective_apparatus_sequence(&stored_sequence, &visible_order_ids);
+        let policy = queue_policy_for_apparatus(requested_apparatus, &storage_key, &policies);
+        let actor = record.actor.clone();
+        let mut event = queue_action_event(QueueActionEventInput {
+            requested_apparatus,
+            storage_key: &storage_key,
+            order_id: &record.order_id,
+            action: queue_state::ApparatusQueueAction::Pause,
+            from_state: queue_state::ApparatusQueueOrderState::Frozen,
+            to_state: queue_state::ApparatusQueueOrderState::Paused,
+            policy,
+            actor: &actor,
+            assigned_apparatus: &[],
+            sequence: &sequence,
+            visible_order_ids: &visible_order_ids,
+        });
+        event.payload_json["admin_unfreeze"] = serde_json::json!(true);
+        event.payload_json["order_control_state"] = serde_json::json!(record.state.as_str());
+
+        let session = sessions.iter().find(|session| {
+            session.status == OrderRunStatus::Frozen
+                && !updated_session_ids.contains(session.session_id.trim())
+                && queue_state::apparatus_titles_match(&session.apparatus, &storage_key)
+        });
+        let session = session.map(|session| {
+            updated_session_ids.insert(session.session_id.trim().to_string());
+            unfrozen_order_run_session(session)
+        });
+
+        service
+            .store
+            .put_apparatus_queue_states_with_event_and_progress(QueueActionProgressWrite {
+                apparatus: storage_key,
+                states: serialized_queue_states(parsed),
+                event,
+                session,
+                progress_event: None,
+                progress_batch: None,
+                progress_batches: Vec::new(),
+                progress_batch_updates: Vec::new(),
+                raw_material_stock_transitions: Vec::new(),
+                qolip_checkouts: Vec::new(),
+                returned_paint_report: None,
+                order_control_update: Some(record.clone()),
+                schedule_reservation_status: Some(ApparatusScheduleStatus::Paused),
+            })
+            .await?;
+    }
+
+    // A frozen session can exist even when an older or partially migrated
+    // queue snapshot has no matching `frozen` entry. Do not leave that
+    // session capable of reasserting the stale frozen status.
+    for session in sessions.iter().filter(|session| {
+        session.status == OrderRunStatus::Frozen
+            && !updated_session_ids.contains(session.session_id.trim())
+    }) {
+        service
+            .store
+            .put_order_run_session(unfrozen_order_run_session(session))
+            .await?;
+    }
+
+    service
+        .store
+        .put_order_control_state(record.clone())
+        .await?;
+    Ok(())
+}
+
+fn unfrozen_order_run_session(session: &OrderRunSession) -> OrderRunSession {
+    let mut payload_json = session.payload_json.clone();
+    if let Some(payload) = payload_json.as_object_mut() {
+        payload.remove("frozen_order");
+        payload.remove("admin_freeze");
+    }
+    OrderRunSession {
+        status: OrderRunStatus::Paused,
+        updated_at_unix: unix_seconds(),
+        payload_json,
+        ..session.clone()
+    }
 }

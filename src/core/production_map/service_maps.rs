@@ -480,6 +480,7 @@ fn closed_order_log_rank(log: &ProductionOrderLogEntry) -> u8 {
     match log.action {
         queue_state::ApparatusQueueAction::Start => 0,
         queue_state::ApparatusQueueAction::Pause => 1,
+        queue_state::ApparatusQueueAction::Freeze => 2,
         queue_state::ApparatusQueueAction::DetachRoll => 1,
         queue_state::ApparatusQueueAction::Resume => 4,
         queue_state::ApparatusQueueAction::RollComplete => 3,
@@ -496,9 +497,13 @@ fn closed_order_freeze_log_entry(
         event_id: format!("order-freeze:{}:{}", request.request_id, status),
         apparatus: request.target_apparatus.clone(),
         order_id: freeze.order_id.clone(),
-        action: queue_state::ApparatusQueueAction::Pause,
-        from_state: queue_state::ApparatusQueueOrderState::Paused,
-        to_state: queue_state::ApparatusQueueOrderState::Paused,
+        action: queue_state::ApparatusQueueAction::Freeze,
+        from_state: queue_state::ApparatusQueueOrderState::InProgress,
+        to_state: if status == "frozen" {
+            queue_state::ApparatusQueueOrderState::Frozen
+        } else {
+            queue_state::ApparatusQueueOrderState::InProgress
+        },
         actor_role: freeze.actor.role.clone(),
         actor_ref: freeze.actor.ref_.clone(),
         actor_display_name: freeze.actor.display_name.clone(),

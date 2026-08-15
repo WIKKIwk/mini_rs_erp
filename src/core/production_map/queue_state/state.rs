@@ -8,6 +8,7 @@ pub enum ApparatusQueueOrderState {
     Pending,
     InProgress,
     Paused,
+    Frozen,
     Completed,
 }
 
@@ -17,6 +18,7 @@ impl ApparatusQueueOrderState {
             "pending" => Some(Self::Pending),
             "in_progress" => Some(Self::InProgress),
             "paused" => Some(Self::Paused),
+            "frozen" => Some(Self::Frozen),
             "completed" => Some(Self::Completed),
             _ => None,
         }
@@ -27,6 +29,7 @@ impl ApparatusQueueOrderState {
             Self::Pending => "pending",
             Self::InProgress => "in_progress",
             Self::Paused => "paused",
+            Self::Frozen => "frozen",
             Self::Completed => "completed",
         }
     }
@@ -41,6 +44,7 @@ impl ApparatusQueueOrderState {
 pub enum ApparatusQueueAction {
     Start,
     Pause,
+    Freeze,
     DetachRoll,
     Resume,
     RollComplete,
@@ -73,6 +77,13 @@ pub fn next_queue_state(
                 Err(ProductionMapError::QueueActionNotAllowed)
             }
         }
+        ApparatusQueueAction::Freeze => {
+            if current == ApparatusQueueOrderState::InProgress {
+                Ok(ApparatusQueueOrderState::Frozen)
+            } else {
+                Err(ProductionMapError::QueueActionNotAllowed)
+            }
+        }
         ApparatusQueueAction::DetachRoll => {
             if current == ApparatusQueueOrderState::InProgress {
                 // `paused` remains the compatibility queue slot state. The
@@ -84,7 +95,10 @@ pub fn next_queue_state(
             }
         }
         ApparatusQueueAction::Resume => {
-            if current == ApparatusQueueOrderState::Paused {
+            if matches!(
+                current,
+                ApparatusQueueOrderState::Paused | ApparatusQueueOrderState::Frozen
+            ) {
                 Ok(ApparatusQueueOrderState::InProgress)
             } else {
                 Err(ProductionMapError::QueueActionNotAllowed)

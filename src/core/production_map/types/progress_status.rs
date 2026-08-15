@@ -92,6 +92,10 @@ impl ProductionOrderStatusDetail {
             .values()
             .flat_map(|states| states.values())
             .any(|state| state == "in_progress");
+        let has_frozen_queue = queue_states
+            .values()
+            .flat_map(|states| states.values())
+            .any(|state| state == "frozen");
         let has_paused_final_output_queue = progress_batches.iter().any(|batch| {
             batch.action == queue_state::ApparatusQueueAction::Pause
                 && batch.is_finished_goods_output()
@@ -116,6 +120,7 @@ impl ProductionOrderStatusDetail {
             has_pending_queue,
             has_in_progress_queue,
             has_paused_final_output_queue,
+            has_frozen_queue,
         );
         detail.order_status = order_status.to_string();
         detail.work_status = work_status_for_order(order_status).to_string();
@@ -129,6 +134,7 @@ impl ProductionOrderStatusDetail {
             match session.status {
                 OrderRunStatus::Active => self.active_session_count += 1,
                 OrderRunStatus::Paused => self.paused_session_count += 1,
+                OrderRunStatus::Frozen => {}
                 OrderRunStatus::RollDetached => self.roll_detached_session_count += 1,
                 OrderRunStatus::Completed => {}
             }
@@ -161,8 +167,11 @@ impl ProductionOrderStatusDetail {
         has_pending_queue: bool,
         has_in_progress_queue: bool,
         has_paused_final_output_queue: bool,
+        has_frozen_queue: bool,
     ) -> &'static str {
-        if self.active_session_count > 0
+        if has_frozen_queue {
+            "frozen"
+        } else if self.active_session_count > 0
             || self.roll_detached_session_count > 0
             || self.in_use_wip_count > 0
             || has_in_progress_queue
@@ -234,6 +243,7 @@ fn work_status_for_order(order_status: &str) -> &'static str {
     match order_status {
         "in_progress" => "in_progress",
         "paused" => "paused",
+        "frozen" => "frozen",
         "completed" | "completed_with_issue" => "completed",
         "partially_completed" => "partially_completed",
         "waiting_next_stage" | "ready" => "waiting",
@@ -248,6 +258,7 @@ fn flow_status_for_order(order_status: &str) -> &'static str {
         "partially_completed" => "partially_completed",
         "in_progress" => "in_progress",
         "paused" => "paused",
+        "frozen" => "frozen",
         "waiting_next_stage" => "waiting_next_stage",
         "ready" => "ready",
         _ => "not_started",

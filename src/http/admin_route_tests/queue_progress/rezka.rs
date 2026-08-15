@@ -153,6 +153,235 @@ async fn rezka_complete_requires_or_persists_progress_metrics() {
 }
 
 #[tokio::test]
+async fn rezka_explicit_frame_metrics_are_persisted_and_printed_individually() {
+    let print_requests = Arc::new(Mutex::new(Vec::<ScaleDriverPrintRequest>::new()));
+    let mut state = test_state();
+    state.gscale = GscaleService::new().with_driver(Arc::new(FakeProgressDriver {
+        requests: print_requests.clone(),
+        fail: false,
+    }));
+    state
+        .admin
+        .upsert_role_assignment(crate::core::authz::RoleAssignmentUpsert {
+            principal_role: PrincipalRole::Aparatchi,
+            principal_ref: "worker-rezka-frame-values".to_string(),
+            role_id: "aparatchi".to_string(),
+            assigned_apparatus: vec!["Rezka".to_string()],
+            assigned_item_groups: Vec::new(),
+        })
+        .await
+        .expect("assignment");
+    let admin_token = session(&state, PrincipalRole::Admin).await;
+    let worker_token = session_for(
+        &state,
+        PrincipalRole::Aparatchi,
+        "worker-rezka-frame-values",
+    )
+    .await;
+    let router = build_router(state);
+
+    let saved = router
+        .clone()
+        .oneshot(request_with_body(
+            "PUT",
+            "/v1/mobile/admin/production-maps",
+            &admin_token,
+            &pechat_order_map_json(
+                "zakaz-rezka-frame-values",
+                "Rezka frame values",
+                "9328",
+                "Rezka",
+            ),
+        ))
+        .await
+        .expect("save map");
+    assert_eq!(saved.status(), StatusCode::OK);
+
+    let started = router
+        .clone()
+        .oneshot(request_with_body(
+            "POST",
+            "/v1/mobile/admin/production-maps/queue-action",
+            &worker_token,
+            r#"{
+                "apparatus":"Rezka",
+                "order_id":"zakaz-rezka-frame-values",
+                "action":"start"
+            }"#,
+        ))
+        .await
+        .expect("start");
+    assert_eq!(started.status(), StatusCode::OK);
+
+    let mismatched_frames = serde_json::json!({
+        "apparatus": "Rezka",
+        "order_id": "zakaz-rezka-frame-values",
+        "action": "complete",
+        "rezka_frames": [
+            {"produced_qty": 90.0, "gross_qty": 11.0, "diameter": 45.1},
+            {"produced_qty": 80.0, "gross_qty": 10.0, "diameter": 44.8},
+            {"produced_qty": 70.0, "gross_qty": 9.0, "diameter": 44.2}
+        ]
+    })
+    .to_string();
+    let mismatch = router
+        .clone()
+        .oneshot(request_with_body(
+            "POST",
+            "/v1/mobile/admin/production-maps/queue-action",
+            &worker_token,
+            &mismatched_frames,
+        ))
+        .await
+        .expect("reject mismatched frame count");
+    assert_eq!(mismatch.status(), StatusCode::BAD_REQUEST);
+    assert_eq!(
+        json_body(mismatch).await["error"],
+        "rezka_frame_count_mismatch"
+    );
+
+    let frame_request = serde_json::json!({
+        "apparatus": "Rezka",
+        "order_id": "zakaz-rezka-frame-values",
+        "action": "complete",
+        "printer": "zebra",
+        "print_mode": "rfid",
+        "description": "Kadrlar bo'yicha yakuniy o'lchovlar",
+        "rezka_bosma_waste": 5.4,
+        "total_waste": 5.4,
+        "rezka_frames": [
+            {
+                "produced_qty": 90.0,
+                "gross_qty": 11.0,
+                "finished_goods_kg": 10.6,
+                "finished_goods_meter": 89.0,
+                "bobina_kg": 0.3,
+                "diameter": 45.1
+            },
+            {
+                "produced_qty": 80.0,
+                "gross_qty": 10.0,
+                "finished_goods_kg": 9.2,
+                "finished_goods_meter": 78.0,
+                "bobina_kg": 0.2,
+                "diameter": 44.8
+            },
+            {
+                "produced_qty": 70.0,
+                "gross_qty": 9.0,
+                "finished_goods_kg": 8.1,
+                "finished_goods_meter": 68.0,
+                "bobina_kg": 0.4,
+                "diameter": 44.2
+            },
+            {
+                "produced_qty": 60.0,
+                "gross_qty": 8.0,
+                "finished_goods_kg": 7.1,
+                "finished_goods_meter": 57.0,
+                "bobina_kg": 0.1,
+                "diameter": 43.9
+            }
+        ]
+    })
+    .to_string();
+    let completed = router
+        .clone()
+        .oneshot(request_with_body(
+            "POST",
+            "/v1/mobile/admin/production-maps/queue-action",
+            &worker_token,
+            &frame_request,
+        ))
+        .await
+        .expect("complete with explicit frame metrics");
+    let completed_status = completed.status();
+    let completed_body = json_body(completed).await;
+    assert_eq!(completed_status, StatusCode::OK, "{completed_body:?}");
+    assert!(completed_body["completion_request"].is_null());
+
+    let expected = [
+        (90.0, 11.0, 10.6, 89.0, 0.3, 45.1),
+        (80.0, 10.0, 9.2, 78.0, 0.2, 44.8),
+        (70.0, 9.0, 8.1, 68.0, 0.4, 44.2),
+        (60.0, 8.0, 7.1, 57.0, 0.1, 43.9),
+    ];
+    let batches = completed_body["progress_batches"]
+        .as_array()
+        .expect("frame batches");
+    assert_eq!(batches.len(), expected.len());
+    assert_eq!(
+        completed_body["prints"].as_array().unwrap().len(),
+        expected.len()
+    );
+    for (index, batch) in batches.iter().enumerate() {
+        let (produced_qty, gross_qty, finished_goods_kg, finished_goods_meter, bobina_kg, diameter) =
+            expected[index];
+        assert_eq!(batch["payload_json"]["rezka_frame_index"], index as u64 + 1);
+        assert_eq!(batch["payload_json"]["rezka_frame_count"], 4);
+        assert_eq!(batch["payload_json"]["rezka_metrics_owner"], true);
+        assert_eq!(batch["produced_qty"], produced_qty);
+        assert_eq!(batch["finished_goods_kg"], finished_goods_kg);
+        assert_eq!(batch["finished_goods_meter"], finished_goods_meter);
+        assert_eq!(batch["bobina_kg"], bobina_kg);
+        assert_eq!(batch["diameter"], diameter);
+        if index == 0 {
+            assert_eq!(batch["rezka_bosma_waste"], 5.4);
+            assert_eq!(batch["total_waste"], 5.4);
+        } else {
+            assert!(batch["rezka_bosma_waste"].is_null());
+            assert!(batch["total_waste"].is_null());
+        }
+        assert_eq!(batch["payload_json"]["gross_qty"], gross_qty);
+    }
+
+    wait_for_progress_print_request_count(&print_requests, expected.len()).await;
+    let printed = print_requests.lock().await;
+    assert_eq!(printed.len(), expected.len());
+    for batch in batches {
+        let qr_payload = batch["qr_payload"].as_str().expect("frame qr");
+        let request = printed
+            .iter()
+            .find(|request| request.epc == qr_payload)
+            .expect("print request for frame qr");
+        let index = batches
+            .iter()
+            .position(|candidate| candidate["qr_payload"] == batch["qr_payload"])
+            .expect("frame index");
+        assert_eq!(request.gross_qty, expected[index].1);
+        assert_eq!(request.qty, Some(expected[index].3));
+        assert_eq!(request.progress_unit, "m");
+        assert_eq!(request.print_count, 1);
+    }
+
+    drop(printed);
+
+    let persisted = router
+        .oneshot(request(
+            "GET",
+            "/v1/mobile/admin/production-maps/wip-batches?apparatus=Rezka&status=all&order_id=zakaz-rezka-frame-values",
+            &admin_token,
+        ))
+        .await
+        .expect("read persisted frame batches");
+    assert_eq!(persisted.status(), StatusCode::OK);
+    let persisted_body = json_body(persisted).await;
+    let persisted_batches = persisted_body["batches"]
+        .as_array()
+        .expect("persisted batches");
+    for batch in batches {
+        let batch_id = batch["batch_id"].as_str().expect("batch id");
+        let stored = persisted_batches
+            .iter()
+            .find(|candidate| candidate["batch_id"] == batch_id)
+            .expect("stored frame batch");
+        assert_eq!(stored["diameter"], batch["diameter"]);
+        assert_eq!(stored["bobina_kg"], batch["bobina_kg"]);
+        assert_eq!(stored["produced_qty"], batch["produced_qty"]);
+    }
+}
+
+#[tokio::test]
 async fn rezka_pause_records_quantities_without_waste_and_fans_out_frames() {
     let print_requests = Arc::new(Mutex::new(Vec::<ScaleDriverPrintRequest>::new()));
     let mut state = test_state();

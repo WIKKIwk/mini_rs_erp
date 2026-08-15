@@ -267,6 +267,214 @@ async fn bosma_pause_does_not_persist_completion_metrics() {
 }
 
 #[tokio::test]
+async fn bosma_worker_issue_freezes_order_without_paint_report_or_completion_metrics() {
+    let mut state = test_state();
+    state
+        .admin
+        .upsert_role_assignment(crate::core::authz::RoleAssignmentUpsert {
+            principal_role: PrincipalRole::Aparatchi,
+            principal_ref: "worker-bosma-freeze-issue".to_string(),
+            role_id: "aparatchi".to_string(),
+            assigned_apparatus: vec!["7 ta rangli bosma".to_string()],
+            assigned_item_groups: Vec::new(),
+        })
+        .await
+        .expect("assignment");
+    let admin_token = session(&state, PrincipalRole::Admin).await;
+    let worker_token =
+        session_for(&state, PrincipalRole::Aparatchi, "worker-bosma-freeze-issue").await;
+    let router = build_router(state);
+
+    let saved = router
+        .clone()
+        .oneshot(request_with_body(
+            "PUT",
+            "/v1/mobile/admin/production-maps",
+            &admin_token,
+            &pechat_order_map_json(
+                "zakaz-bosma-freeze-issue",
+                "Bosma issue order",
+                "9323",
+                "7 ta rangli bosma",
+            ),
+        ))
+        .await
+        .expect("save map");
+    assert_eq!(saved.status(), StatusCode::OK);
+    provision_test_qolip(&router, &admin_token, "zakaz-bosma-freeze-issue").await;
+
+    let started = router
+        .clone()
+        .oneshot(request_with_body(
+            "POST",
+            "/v1/mobile/admin/production-maps/queue-action",
+            &worker_token,
+            &with_test_qolip(
+                r#"{
+                    "apparatus":"7 ta rangli bosma",
+                    "order_id":"zakaz-bosma-freeze-issue",
+                    "action":"start"
+                }"#,
+                "zakaz-bosma-freeze-issue",
+            ),
+        ))
+        .await
+        .expect("start");
+    assert_eq!(started.status(), StatusCode::OK);
+
+    let admin_issue = router
+        .clone()
+        .oneshot(request_with_body(
+            "POST",
+            "/v1/mobile/admin/production-maps/queue-action",
+            &admin_token,
+            r#"{
+                "apparatus":"7 ta rangli bosma",
+                "order_id":"zakaz-bosma-freeze-issue",
+                "action":"freeze",
+                "freeze_with_issue":true,
+                "issue_note":"Admin must not issue a worker freeze"
+            }"#,
+        ))
+        .await
+        .expect("admin issue attempt");
+    assert_eq!(admin_issue.status(), StatusCode::FORBIDDEN);
+    assert_eq!(json_body(admin_issue).await["error"], "forbidden");
+
+    let issue = router
+        .clone()
+        .oneshot(request_with_body(
+            "POST",
+            "/v1/mobile/admin/production-maps/queue-action",
+            &worker_token,
+            r#"{
+                "apparatus":"7 ta rangli bosma",
+                "order_id":"zakaz-bosma-freeze-issue",
+                "action":"freeze",
+                "freeze_with_issue":true,
+                "issue_note":"Bosma rang chiqishi notekis"
+            }"#,
+        ))
+        .await
+        .expect("issue pause");
+    let issue_status = issue.status();
+    let issue_body = json_body(issue).await;
+    assert_eq!(issue_status, StatusCode::OK, "{issue_body:?}");
+    assert_eq!(issue_body["states"]["zakaz-bosma-freeze-issue"], "frozen");
+    assert_eq!(issue_body["order_status"]["order_status"], "frozen");
+    assert_eq!(issue_body["order_control"]["state"], "frozen");
+    assert_eq!(issue_body["order_control"]["freeze_request"]["status"], "frozen");
+    assert!(issue_body["completion_request"].is_null());
+    assert!(issue_body["progress_batch"].is_null());
+    assert!(issue_body["print"].is_null());
+    assert_eq!(issue_body["prints"].as_array().map(Vec::len), Some(0));
+
+    let resume_while_frozen = router
+        .clone()
+        .oneshot(request_with_body(
+            "POST",
+            "/v1/mobile/admin/production-maps/queue-action",
+            &worker_token,
+            r#"{
+                "apparatus":"7 ta rangli bosma",
+                "order_id":"zakaz-bosma-freeze-issue",
+                "action":"resume"
+            }"#,
+        ))
+        .await
+        .expect("resume while frozen");
+    assert_eq!(resume_while_frozen.status(), StatusCode::CONFLICT);
+    assert_eq!(
+        json_body(resume_while_frozen).await["error"],
+        "order_frozen"
+    );
+
+    let complete_while_frozen = router
+        .clone()
+        .oneshot(request_with_body(
+            "POST",
+            "/v1/mobile/admin/production-maps/queue-action",
+            &worker_token,
+            r#"{
+                "apparatus":"7 ta rangli bosma",
+                "order_id":"zakaz-bosma-freeze-issue",
+                "action":"complete",
+                "returned_paint_items":[
+                    {"usage":"rasxot","category":"colors","name":"Oq","values":{"Mix":3,"Oq":1,"Qora":0}},
+                    {"usage":"astatka","category":"colors","name":"Oq","values":{"Mix":1,"Oq":0,"Qora":0}}
+                ],
+                "return_ink_kg":1,
+                "total_waste":1,
+                "finished_goods_kg":1,
+                "finished_goods_meter":1
+            }"#,
+        ))
+        .await
+        .expect("complete while frozen");
+    assert_eq!(complete_while_frozen.status(), StatusCode::CONFLICT);
+    assert_eq!(
+        json_body(complete_while_frozen).await["error"],
+        "order_frozen"
+    );
+
+    let unfreeze = router
+        .clone()
+        .oneshot(request_with_body(
+            "POST",
+            "/v1/mobile/admin/production-maps/order-control",
+            &admin_token,
+            r#"{
+                "order_id":"zakaz-bosma-freeze-issue",
+                "action":"unfreeze"
+            }"#,
+        ))
+        .await
+        .expect("unfreeze");
+    let unfreeze_status = unfreeze.status();
+    let unfreeze_body = json_body(unfreeze).await;
+    assert_eq!(unfreeze_status, StatusCode::OK, "{unfreeze_body:?}");
+    assert_eq!(unfreeze_body["control"]["state"], "active");
+
+    let resumed = router
+        .clone()
+        .oneshot(request_with_body(
+            "POST",
+            "/v1/mobile/admin/production-maps/queue-action",
+            &worker_token,
+            r#"{
+                "apparatus":"7 ta rangli bosma",
+                "order_id":"zakaz-bosma-freeze-issue",
+                "action":"resume"
+            }"#,
+        ))
+        .await
+        .expect("resume after unfreeze");
+    let resumed_status = resumed.status();
+    let resumed_body = json_body(resumed).await;
+    assert_eq!(resumed_status, StatusCode::OK, "{resumed_body:?}");
+    assert_eq!(resumed_body["states"]["zakaz-bosma-freeze-issue"], "in_progress");
+
+    let ordinary_complete_without_report = router
+        .oneshot(request_with_body(
+            "POST",
+            "/v1/mobile/admin/production-maps/queue-action",
+            &worker_token,
+            r#"{
+                "apparatus":"7 ta rangli bosma",
+                "order_id":"zakaz-bosma-freeze-issue",
+                "action":"complete"
+            }"#,
+        ))
+        .await
+        .expect("ordinary completion validation");
+    assert_eq!(ordinary_complete_without_report.status(), StatusCode::BAD_REQUEST);
+    assert_eq!(
+        json_body(ordinary_complete_without_report).await["error"],
+        "returned_paint_minimum_three_fields_or_image_only"
+    );
+}
+
+#[tokio::test]
 async fn bosma_can_complete_with_an_image_only_returned_paint_report() {
     let state = test_state();
     state

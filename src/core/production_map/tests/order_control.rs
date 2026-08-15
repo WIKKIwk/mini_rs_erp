@@ -1,5 +1,7 @@
 use crate::core::production_map::*;
 
+use std::collections::BTreeMap;
+
 use super::fixtures::apparatus_stage_map;
 
 fn actor(role: &str) -> QueueActionActor {
@@ -47,7 +49,7 @@ async fn freeze_request_requires_worker_pause_then_blocks_worker_actions() {
         .apply_apparatus_queue_action_with_progress(
             apparatus,
             order_id,
-            queue_state::ApparatusQueueAction::Pause,
+            queue_state::ApparatusQueueAction::Freeze,
             &[apparatus.to_string()],
             actor("other-worker"),
             QueueProgressInput {
@@ -137,6 +139,206 @@ async fn freeze_request_requires_worker_pause_then_blocks_worker_actions() {
         )
         .await;
     assert_eq!(resume_while_frozen, Err(ProductionMapError::OrderFrozen));
+}
+
+#[tokio::test]
+async fn freeze_request_rejects_an_order_frozen_on_another_apparatus() {
+    let store = std::sync::Arc::new(MemoryProductionMapStore::new());
+    let service = ProductionMapService::new(store.clone());
+    let apparatus = "7 ta rangli pechat";
+    let other_apparatus = "Laminatsiya 1";
+    let order_id = "zakaz-freeze-other-apparatus";
+
+    service
+        .upsert_map(apparatus_stage_map(order_id, apparatus))
+        .await
+        .expect("map");
+    service
+        .set_apparatus_sequence(apparatus, vec![order_id.to_string()])
+        .await
+        .expect("sequence");
+    service
+        .apply_apparatus_queue_action(
+            apparatus,
+            order_id,
+            queue_state::ApparatusQueueAction::Start,
+            &[apparatus.to_string()],
+            actor("worker"),
+        )
+        .await
+        .expect("start");
+    store
+        .put_apparatus_queue_states(
+            other_apparatus,
+            BTreeMap::from([(order_id.to_string(), "frozen".to_string())]),
+        )
+        .await
+        .expect("other apparatus frozen state");
+
+    assert_eq!(
+        service.request_order_freeze(order_id, actor("admin")).await,
+        Err(ProductionMapError::OrderFrozen)
+    );
+}
+
+#[tokio::test]
+async fn worker_issue_freezes_bosma_without_completion_metrics_and_unfreeze_restores_validation() {
+    let service = ProductionMapService::new(std::sync::Arc::new(MemoryProductionMapStore::new()));
+    let apparatus = "7 ta rangli bosma";
+    let order_id = "zakaz-bosma-freeze-issue";
+    let issue_note = "Bosma apparatida muammo: rang chiqishi notekis";
+    service
+        .upsert_map(apparatus_stage_map(order_id, apparatus))
+        .await
+        .expect("map");
+    service
+        .apply_apparatus_queue_action(
+            apparatus,
+            order_id,
+            queue_state::ApparatusQueueAction::Start,
+            &[apparatus.to_string()],
+            actor("aparatchi"),
+        )
+        .await
+        .expect("start");
+
+    let issue = service
+        .apply_apparatus_queue_action_with_progress(
+            apparatus,
+            order_id,
+            queue_state::ApparatusQueueAction::Freeze,
+            &[apparatus.to_string()],
+            actor("aparatchi"),
+            QueueProgressInput {
+                freeze_with_issue: true,
+                description: issue_note.to_string(),
+                ..QueueProgressInput::default()
+            },
+        )
+        .await
+        .expect("worker issue");
+    assert_eq!(issue.states[order_id], "frozen");
+    assert_eq!(issue.order_status.order_status, "frozen");
+    assert_eq!(
+        issue
+            .order_control
+            .as_ref()
+            .expect("resulting order control")
+            .state,
+        OrderControlState::Frozen
+    );
+    assert!(issue.progress_batch.is_none());
+
+    let logs = service
+        .queue_action_logs_for_order(order_id)
+        .await
+        .expect("history");
+    let issue_log = logs
+        .iter()
+        .find(|log| log.issue_note == issue_note)
+        .expect("issue history entry");
+    assert_eq!(issue_log.action, queue_state::ApparatusQueueAction::Freeze);
+    assert!(!issue_log.completed_with_issue);
+    assert!(service.completion_requests(10).await.expect("requests").is_empty());
+    let completed_history = service
+        .completed_queue_orders_for_actor("aparatchi-1", 10)
+        .await
+        .expect("completed orders");
+    assert!(completed_history.is_empty());
+
+    assert_eq!(
+        service
+            .apply_apparatus_queue_action(
+                apparatus,
+                order_id,
+                queue_state::ApparatusQueueAction::Resume,
+                &[apparatus.to_string()],
+                actor("aparatchi"),
+            )
+            .await,
+        Err(ProductionMapError::OrderFrozen)
+    );
+    assert_eq!(
+        service
+            .apply_apparatus_queue_action_with_progress(
+                apparatus,
+                order_id,
+                queue_state::ApparatusQueueAction::Complete,
+                &[apparatus.to_string()],
+                actor("aparatchi"),
+                QueueProgressInput::default(),
+            )
+            .await,
+        Err(ProductionMapError::OrderFrozen)
+    );
+
+    service
+        .unfreeze_order(order_id, actor("admin"))
+        .await
+        .expect("unfreeze");
+    assert_eq!(
+        service
+            .apparatus_queue_states()
+            .await
+            .expect("queue states")
+            .get(apparatus)
+            .and_then(|states| states.get(order_id))
+            .map(String::as_str),
+        Some("paused")
+    );
+    let history_after_unfreeze = service
+        .completed_queue_orders_for_actor("aparatchi-1", 10)
+        .await
+        .expect("completed orders after unfreeze");
+    assert!(history_after_unfreeze.is_empty());
+    service
+        .apply_apparatus_queue_action(
+            apparatus,
+            order_id,
+            queue_state::ApparatusQueueAction::Resume,
+            &[apparatus.to_string()],
+            actor("aparatchi"),
+        )
+        .await
+        .expect("resume after unfreeze");
+
+    assert_eq!(
+        service
+            .apply_apparatus_queue_action_with_progress(
+                apparatus,
+                order_id,
+                queue_state::ApparatusQueueAction::Complete,
+                &[apparatus.to_string()],
+                actor("aparatchi"),
+                QueueProgressInput::default(),
+            )
+            .await,
+        Err(ProductionMapError::BosmaCompletionMetricsRequired)
+    );
+    let completed = service
+        .apply_apparatus_queue_action_with_progress(
+            apparatus,
+            order_id,
+            queue_state::ApparatusQueueAction::Complete,
+            &[apparatus.to_string()],
+            actor("aparatchi"),
+            QueueProgressInput {
+                return_ink_kg: Some(1.0),
+                total_waste: Some(1.0),
+                finished_goods_kg: Some(1.0),
+                finished_goods_meter: Some(1.0),
+                ..QueueProgressInput::default()
+            },
+        )
+    .await
+        .expect("ordinary completion after unfreeze");
+    assert_eq!(completed.states[order_id], "completed");
+    let completed_orders = service
+        .completed_queue_orders_for_actor("aparatchi-1", 10)
+        .await
+        .expect("completed orders after completion");
+    assert_eq!(completed_orders.len(), 1);
+    assert_eq!(completed_orders[0].status, CompletedQueueOrderStatus::Completed);
 }
 
 #[tokio::test]
@@ -364,7 +566,7 @@ async fn already_paused_order_freezes_immediately_and_frozen_order_can_reorder()
             actor("worker"),
         )
         .await
-        .expect("next order starts while frozen order remains paused");
+        .expect("next order starts while frozen order remains frozen");
 
     service
         .unfreeze_order(frozen_id, actor("admin"))

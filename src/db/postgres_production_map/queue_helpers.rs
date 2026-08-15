@@ -45,6 +45,7 @@ pub(super) async fn insert_queue_action_event_tx(
     .bind(match event.action {
         crate::core::production_map::queue_state::ApparatusQueueAction::Start => "start",
         crate::core::production_map::queue_state::ApparatusQueueAction::Pause => "pause",
+        crate::core::production_map::queue_state::ApparatusQueueAction::Freeze => "freeze",
         crate::core::production_map::queue_state::ApparatusQueueAction::DetachRoll => {
             "detach_roll"
         }
@@ -77,6 +78,7 @@ pub(super) fn queue_action_from_str(
     match value.trim().to_ascii_lowercase().as_str() {
         "start" => Some(crate::core::production_map::queue_state::ApparatusQueueAction::Start),
         "pause" => Some(crate::core::production_map::queue_state::ApparatusQueueAction::Pause),
+        "freeze" => Some(crate::core::production_map::queue_state::ApparatusQueueAction::Freeze),
         "detach_roll" => Some(
             crate::core::production_map::queue_state::ApparatusQueueAction::DetachRoll,
         ),
@@ -97,6 +99,7 @@ pub(super) fn queue_action_as_str(
     match action {
         crate::core::production_map::queue_state::ApparatusQueueAction::Start => "start",
         crate::core::production_map::queue_state::ApparatusQueueAction::Pause => "pause",
+        crate::core::production_map::queue_state::ApparatusQueueAction::Freeze => "freeze",
         crate::core::production_map::queue_state::ApparatusQueueAction::DetachRoll => {
             "detach_roll"
         }

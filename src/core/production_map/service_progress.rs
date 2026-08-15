@@ -1,16 +1,52 @@
 use super::*;
 
-use super::progress::{legacy_order_run_session, progress_session_id, unix_seconds};
+use super::progress::{legacy_order_run_session, non_empty_or, progress_session_id, unix_seconds};
 use super::service::QueueProgressRecords;
 use super::service_progress_metrics::{
-    validated_laminatsiya_removed_roll_metrics, validated_laminatsiya_worker_handoff_metrics,
-    validated_progress_metrics,
+    ProgressMetrics, validated_laminatsiya_removed_roll_metrics,
+    validated_laminatsiya_worker_handoff_metrics, validated_progress_metrics,
 };
 use super::service_progress_support::*;
 
 struct RecoveredSessionInputBatch {
     input_batch: OrderProgressBatch,
     output_update: OrderProgressBatch,
+}
+
+fn progress_values_for_outputs(
+    apparatus: &str,
+    action: queue_state::ApparatusQueueAction,
+    progress: &QueueProgressInput,
+    output_identities: &[ProgressOutputIdentity],
+) -> Result<Vec<(ProgressQuantity, ProgressMetrics)>, ProductionMapError> {
+    if apparatus::is_rezka_title(apparatus) && !progress.rezka_frames.is_empty() {
+        if progress.rezka_frames.len() != output_identities.len() {
+            return Err(ProductionMapError::RezkaFrameCountMismatch);
+        }
+        return progress
+            .rezka_frames
+            .iter()
+            .enumerate()
+            .map(|(index, frame)| {
+                let has_explicit_waste = frame.has_explicit_waste();
+                let frame_progress =
+                    frame.to_queue_progress(progress, !has_explicit_waste);
+                let mut metrics = validated_progress_metrics(apparatus, action, &frame_progress)?;
+                if index > 0 && !has_explicit_waste {
+                    metrics.rezka_bosma_waste = None;
+                    metrics.rezka_lamination_waste = None;
+                    metrics.rezka_edge_waste = None;
+                    metrics.total_waste = None;
+                }
+                let quantity = progress_quantity(&frame_progress, metrics)?;
+                Ok((quantity, metrics))
+            })
+            .collect();
+    }
+
+    let metrics = validated_progress_metrics(apparatus, action, progress)?;
+    let quantity = progress_quantity(progress, metrics)?;
+    Ok(vec![(quantity, metrics)])
 }
 
 impl ProductionMapService {
@@ -250,6 +286,11 @@ impl ProductionMapService {
         progress: QueueProgressInput,
     ) -> Result<QueueProgressRecords, ProductionMapError> {
         let now = unix_seconds();
+        if action == queue_state::ApparatusQueueAction::Freeze {
+            return self
+                .build_frozen_progress(apparatus, order_id, actor, progress, now)
+                .await;
+        }
         if (action == queue_state::ApparatusQueueAction::Pause && progress.worker_handoff)
             || (action == queue_state::ApparatusQueueAction::DetachRoll
                 && progress.remove_roll_from_apparatus)
@@ -329,8 +370,6 @@ impl ProductionMapService {
                 {
                     return Err(ProductionMapError::ProgressInputInvalid);
                 }
-                let metrics = validated_progress_metrics(apparatus, action, &progress)?;
-                let quantity = progress_quantity(&progress, metrics)?;
                 let description = progress.description.trim().to_string();
                 let session = self
                     .store
@@ -425,6 +464,22 @@ impl ProductionMapService {
                     .as_ref()
                     .map(progress_links_from_batch)
                     .unwrap_or(session_input_progress);
+                let output_identities = if apparatus::is_rezka_title(apparatus) {
+                    rezka_output_identities(apparatus, order_id, action, now, order_map)?
+                } else {
+                    vec![progress_output_identity(
+                        apparatus,
+                        order_id,
+                        action,
+                        now,
+                        &progress,
+                        &input_progress,
+                    )]
+                };
+                let frame_values =
+                    progress_values_for_outputs(apparatus, action, &progress, &output_identities)?;
+                let quantity = &frame_values[0].0;
+                let metrics = frame_values[0].1;
                 let payload_json = preserve_qolip_code(
                     &session,
                     progress_session_payload(
@@ -445,18 +500,6 @@ impl ProductionMapService {
                     payload_json,
                     ..session
                 };
-                let output_identities = if apparatus::is_rezka_title(apparatus) {
-                    rezka_output_identities(apparatus, order_id, action, now, order_map)?
-                } else {
-                    vec![progress_output_identity(
-                        apparatus,
-                        order_id,
-                        action,
-                        now,
-                        &progress,
-                        &input_progress,
-                    )]
-                };
                 let context = ProgressRecordContext {
                     session: &session,
                     apparatus,
@@ -467,18 +510,24 @@ impl ProductionMapService {
                 };
                 let mut batches = Vec::with_capacity(output_identities.len());
                 for (index, identity) in output_identities.iter().enumerate() {
+                    let (frame_quantity, frame_metrics) =
+                        frame_values.get(index).unwrap_or(&frame_values[0]);
                     let mut batch = progress_batch_record(ProgressBatchRecordInput {
                         order_map,
                         context,
-                        quantity: &quantity,
+                        quantity: frame_quantity,
                         output_identity: identity,
                         input_progress: &input_progress,
-                        metrics,
+                        metrics: *frame_metrics,
+                        frame_gross_qty: progress
+                            .rezka_frames
+                            .get(index)
+                            .and_then(|frame| frame.gross_qty),
                         description: &description,
                     })?;
                     if apparatus::is_rezka_title(apparatus) {
                         apply_rezka_frame_metadata(&mut batch, identity, order_map, apparatus);
-                        if index > 0 {
+                        if index > 0 && progress.rezka_frames.is_empty() {
                             clear_rezka_duplicate_metrics(&mut batch);
                         }
                     }
@@ -512,7 +561,7 @@ impl ProductionMapService {
                     .ok_or(ProductionMapError::ProgressInputInvalid)?;
                 let mut event = progress_event_record(ProgressEventRecordInput {
                     context,
-                    quantity,
+                    quantity: quantity.clone(),
                     output_identity: ProgressOutputIdentity {
                         batch_id: output_identity.batch_id.clone(),
                         qr_payload: output_identity.qr_payload.clone(),
@@ -552,6 +601,9 @@ impl ProductionMapService {
                     progress_batch_updates,
                 })
             }
+            queue_state::ApparatusQueueAction::Freeze => {
+                unreachable!("freeze is handled before progress action dispatch")
+            }
             queue_state::ApparatusQueueAction::Resume => {
                 if progress.progress_batch_id.trim().is_empty()
                     && progress.qr_payload.trim().is_empty()
@@ -563,11 +615,62 @@ impl ProductionMapService {
                         .ok_or(ProductionMapError::ProgressBatchNotResumable)?;
                     if !matches!(
                         session.status,
-                        OrderRunStatus::Paused | OrderRunStatus::RollDetached
+                        OrderRunStatus::Paused
+                            | OrderRunStatus::Frozen
+                            | OrderRunStatus::RollDetached
                     ) {
                         return Err(ProductionMapError::ProgressBatchNotResumable);
                     }
                     let session_input_progress = session_progress_links(&session);
+                    let is_frozen = session.status == OrderRunStatus::Frozen
+                        || session
+                            .payload_json
+                            .get("frozen_order")
+                            .and_then(serde_json::Value::as_bool)
+                            == Some(true)
+                        || session
+                            .payload_json
+                            .get("freeze_with_issue")
+                            .and_then(serde_json::Value::as_bool)
+                            == Some(true);
+                    if is_frozen {
+                        let mut payload_json = session.payload_json.clone();
+                        if !payload_json.is_object() {
+                            payload_json = serde_json::json!({});
+                        }
+                        payload_json["resumed_after_freeze"] = serde_json::json!(true);
+                        payload_json["resumed_without_progress_qr"] = serde_json::json!(true);
+                        let session = OrderRunSession {
+                            status: OrderRunStatus::Active,
+                            worker_role: actor.role.trim().to_string(),
+                            worker_ref: actor.ref_.trim().to_string(),
+                            worker_display_name: actor.display_name.trim().to_string(),
+                            updated_at_unix: now,
+                            payload_json: preserve_qolip_code(&session, payload_json),
+                            ..session
+                        };
+                        let context = ProgressRecordContext {
+                            session: &session,
+                            apparatus,
+                            order_id,
+                            action,
+                            actor,
+                            now,
+                        };
+                        let event = zero_quantity_event(
+                            context,
+                            String::new(),
+                            String::new(),
+                            resume_event_payload(),
+                        );
+                        return Ok(QueueProgressRecords {
+                            session: Some(session),
+                            progress_event: Some(event),
+                            progress_batch: None,
+                            progress_batches: Vec::new(),
+                            progress_batch_updates: Vec::new(),
+                        });
+                    }
                     let handoff_batch = if !session_input_progress.batch_id.trim().is_empty() {
                         self.store
                             .progress_batch(&session_input_progress.batch_id)
@@ -766,6 +869,81 @@ impl ProductionMapService {
                 })
             }
         }
+    }
+
+    async fn build_frozen_progress(
+        &self,
+        apparatus: &str,
+        order_id: &str,
+        actor: &QueueActionActor,
+        progress: QueueProgressInput,
+        now: i64,
+    ) -> Result<QueueProgressRecords, ProductionMapError> {
+        let description = progress.description.trim().to_string();
+        let session = self
+            .store
+            .active_order_run_session(apparatus, order_id)
+            .await?
+            .unwrap_or_else(|| legacy_order_run_session(apparatus, order_id, actor, now));
+        let input_progress = session_progress_links(&session);
+        let metrics = ProgressMetrics::default();
+        let mut session_payload = preserve_qolip_code(
+            &session,
+            progress_session_payload(
+                queue_state::ApparatusQueueAction::Freeze,
+                0.0,
+                &non_empty_or(&progress.uom, "kg"),
+                metrics,
+                &description,
+                &input_progress,
+            ),
+        );
+        session_payload["frozen_order"] = serde_json::json!(true);
+        if progress.freeze_with_issue {
+            session_payload["freeze_with_issue"] = serde_json::json!(true);
+            session_payload["issue_note"] = serde_json::json!(&description);
+        }
+        let session = OrderRunSession {
+            status: OrderRunStatus::Frozen,
+            worker_role: actor.role.trim().to_string(),
+            worker_ref: actor.ref_.trim().to_string(),
+            worker_display_name: actor.display_name.trim().to_string(),
+            updated_at_unix: now,
+            payload_json: session_payload,
+            ..session
+        };
+        let context = ProgressRecordContext {
+            session: &session,
+            apparatus,
+            order_id,
+            action: queue_state::ApparatusQueueAction::Freeze,
+            actor,
+            now,
+        };
+        let mut progress_event = zero_quantity_event(
+            context,
+            String::new(),
+            String::new(),
+            progress_event_payload(
+                queue_state::ApparatusQueueAction::Freeze,
+                metrics,
+                &description,
+            ),
+        );
+        progress_event.description = description;
+        progress_event.payload_json["frozen_order"] = serde_json::json!(true);
+        if progress.freeze_with_issue {
+            progress_event.payload_json["freeze_with_issue"] = serde_json::json!(true);
+            let issue_note = progress_event.description.clone();
+            progress_event.payload_json["issue_note"] = serde_json::json!(issue_note);
+        }
+        Ok(QueueProgressRecords {
+            session: Some(session),
+            progress_event: Some(progress_event),
+            progress_batch: None,
+            progress_batches: Vec::new(),
+            progress_batch_updates: Vec::new(),
+        })
     }
 
     async fn build_laminatsiya_worker_transition(

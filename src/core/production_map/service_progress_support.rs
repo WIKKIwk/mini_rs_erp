@@ -117,6 +117,7 @@ pub(super) fn progress_links_from_batch(batch: &OrderProgressBatch) -> SessionPr
     }
 }
 
+#[derive(Clone)]
 pub(super) struct ProgressQuantity {
     pub(super) produced_qty: f64,
     pub(super) uom: String,
@@ -229,6 +230,7 @@ pub(super) fn run_status_for_progress_action(
 ) -> OrderRunStatus {
     match action {
         queue_state::ApparatusQueueAction::Pause => OrderRunStatus::Paused,
+        queue_state::ApparatusQueueAction::Freeze => OrderRunStatus::Frozen,
         queue_state::ApparatusQueueAction::DetachRoll => OrderRunStatus::RollDetached,
         queue_state::ApparatusQueueAction::Complete => OrderRunStatus::Completed,
         queue_state::ApparatusQueueAction::RollComplete => OrderRunStatus::Active,
@@ -259,6 +261,7 @@ pub(super) struct ProgressBatchRecordInput<'a> {
     pub(super) output_identity: &'a ProgressOutputIdentity,
     pub(super) input_progress: &'a SessionProgressLinks,
     pub(super) metrics: ProgressMetrics,
+    pub(super) frame_gross_qty: Option<f64>,
     pub(super) description: &'a str,
 }
 
@@ -321,6 +324,12 @@ pub(super) fn progress_batch_record(
             input.description,
         ),
     };
+    if let Some(gross_qty) = input.frame_gross_qty {
+        if !batch.payload_json.is_object() {
+            batch.payload_json = serde_json::json!({});
+        }
+        batch.payload_json["gross_qty"] = serde_json::json!(gross_qty);
+    }
     sync_wip_payload_fields(&mut batch);
     Ok(batch)
 }
@@ -374,6 +383,10 @@ pub(super) fn clear_rezka_duplicate_metrics(batch: &mut OrderProgressBatch) {
     if let Some(payload) = batch.payload_json.as_object_mut() {
         payload.remove("bobina_kg");
         payload.remove("diameter");
+        payload.remove("rezka_bosma_waste");
+        payload.remove("rezka_lamination_waste");
+        payload.remove("rezka_edge_waste");
+        payload.remove("total_waste");
     }
     batch.payload_json["rezka_metrics_owner"] = serde_json::json!(false);
     sync_wip_payload_fields(batch);

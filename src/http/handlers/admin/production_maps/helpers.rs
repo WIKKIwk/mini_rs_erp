@@ -375,6 +375,9 @@ pub(super) fn production_map_error(error: ProductionMapError) -> AdminError {
         ProductionMapError::RezkaKadrCountRequired => {
             bad_request("rezka_kadr_count_required")
         }
+        ProductionMapError::RezkaFrameCountMismatch => {
+            bad_request("rezka_frame_count_mismatch")
+        }
         ProductionMapError::RezkaFinalRollRequired => {
             bad_request("rezka_final_roll_required")
         }

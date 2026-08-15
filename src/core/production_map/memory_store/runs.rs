@@ -36,7 +36,10 @@ pub(super) async fn active_order_run_session_for_qolip(
         .await
         .values()
         .find(|session| {
-            session.status.is_open() && session_qolip_codes(session)
+            matches!(
+                session.status,
+                OrderRunStatus::Active | OrderRunStatus::Paused | OrderRunStatus::RollDetached
+            ) && session_qolip_codes(session)
                 .iter()
                 .any(|value| value.eq_ignore_ascii_case(qolip_code))
         })
@@ -93,7 +96,10 @@ pub(super) async fn active_order_run_sessions_for_worker(
         .await
         .values()
         .filter(|session| {
-            session.status.is_open() && refs.contains(session.worker_ref.trim())
+            matches!(
+                session.status,
+                OrderRunStatus::Active | OrderRunStatus::Paused | OrderRunStatus::RollDetached
+            ) && refs.contains(session.worker_ref.trim())
         })
         .cloned()
         .collect::<Vec<_>>();

@@ -10,6 +10,7 @@ use super::{ProductionMapDefinition, ProductionOrderLogEntry, QueueActionActor};
 pub enum OrderRunStatus {
     Active,
     Paused,
+    Frozen,
     RollDetached,
     Completed,
 }
@@ -19,6 +20,7 @@ impl OrderRunStatus {
         match value.trim().to_ascii_lowercase().as_str() {
             "active" => Some(Self::Active),
             "paused" => Some(Self::Paused),
+            "frozen" => Some(Self::Frozen),
             "roll_detached" => Some(Self::RollDetached),
             "completed" => Some(Self::Completed),
             _ => None,
@@ -29,13 +31,17 @@ impl OrderRunStatus {
         match self {
             Self::Active => "active",
             Self::Paused => "paused",
+            Self::Frozen => "frozen",
             Self::RollDetached => "roll_detached",
             Self::Completed => "completed",
         }
     }
 
     pub fn is_open(self) -> bool {
-        matches!(self, Self::Active | Self::Paused | Self::RollDetached)
+        matches!(
+            self,
+            Self::Active | Self::Paused | Self::Frozen | Self::RollDetached
+        )
     }
 }
 
@@ -498,9 +504,86 @@ pub struct FinishedGoodsReceipt {
     pub order_status: ProductionOrderStatusDetail,
 }
 
+/// Per-frame Rezka measurements supplied with a queue progress action.
+///
+/// The field names intentionally match the existing queue-action contract so a
+/// mobile client can move the same measurements into a per-frame array without
+/// introducing a second vocabulary.
+#[derive(Debug, Clone, Default, PartialEq, Deserialize)]
+pub struct RezkaFrameProgressInput {
+    #[serde(default)]
+    pub produced_qty: Option<f64>,
+    #[serde(default)]
+    pub gross_qty: Option<f64>,
+    #[serde(default)]
+    pub finished_goods_kg: Option<f64>,
+    #[serde(default)]
+    pub finished_goods_meter: Option<f64>,
+    #[serde(default)]
+    pub diameter: Option<f64>,
+    #[serde(default)]
+    pub bobina_kg: Option<f64>,
+    #[serde(default)]
+    pub rezka_bosma_waste: Option<f64>,
+    #[serde(default)]
+    pub rezka_lamination_waste: Option<f64>,
+    #[serde(default)]
+    pub rezka_edge_waste: Option<f64>,
+    #[serde(default)]
+    pub total_waste: Option<f64>,
+}
+
+impl RezkaFrameProgressInput {
+    pub fn to_queue_progress(
+        &self,
+        base: &QueueProgressInput,
+        inherit_global_waste: bool,
+    ) -> QueueProgressInput {
+        let mut frame = base.clone();
+        frame.rezka_frames.clear();
+        frame.produced_qty = self.produced_qty;
+        frame.gross_qty = self.gross_qty;
+        frame.uom = if self.produced_qty.is_some() || self.finished_goods_meter.is_some() {
+            "m".to_string()
+        } else {
+            base.uom.clone()
+        };
+        frame.rezka_bosma_waste = self
+            .rezka_bosma_waste
+            .or_else(|| inherit_global_waste.then_some(base.rezka_bosma_waste).flatten());
+        frame.rezka_lamination_waste = self.rezka_lamination_waste.or_else(|| {
+            inherit_global_waste
+                .then_some(base.rezka_lamination_waste)
+                .flatten()
+        });
+        frame.rezka_edge_waste = self
+            .rezka_edge_waste
+            .or_else(|| inherit_global_waste.then_some(base.rezka_edge_waste).flatten());
+        frame.total_waste = self
+            .total_waste
+            .or_else(|| inherit_global_waste.then_some(base.total_waste).flatten());
+        frame.finished_goods_kg = self.finished_goods_kg;
+        frame.bobina_kg = self.bobina_kg;
+        frame.finished_goods_meter = self.finished_goods_meter;
+        frame.diameter = self.diameter;
+        frame
+    }
+
+    pub fn has_explicit_waste(&self) -> bool {
+        self.rezka_bosma_waste.is_some()
+            || self.rezka_lamination_waste.is_some()
+            || self.rezka_edge_waste.is_some()
+            || self.total_waste.is_some()
+    }
+}
+
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct QueueProgressInput {
     pub freeze_request_id: String,
+    /// Backward-compatible marker for the legacy pause-plus-issue request.
+    /// The queue action is canonicalized to `Freeze` before persistence.
+    pub freeze_with_issue: bool,
+    pub rezka_frames: Vec<RezkaFrameProgressInput>,
     pub produced_qty: Option<f64>,
     pub gross_qty: Option<f64>,
     pub uom: String,

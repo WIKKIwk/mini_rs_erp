@@ -1351,6 +1351,7 @@ fn training_print_action(action: queue_state::ApparatusQueueAction) -> bool {
 fn training_action_label(action: queue_state::ApparatusQueueAction) -> &'static str {
     match action {
         queue_state::ApparatusQueueAction::Pause => "pauza",
+        queue_state::ApparatusQueueAction::Freeze => "muzlatildi",
         queue_state::ApparatusQueueAction::DetachRoll => "rulon yechildi",
         queue_state::ApparatusQueueAction::RollComplete => "rulon tugatildi",
         queue_state::ApparatusQueueAction::Complete => "ish tugatildi",
@@ -1362,6 +1363,7 @@ fn training_action_label(action: queue_state::ApparatusQueueAction) -> &'static 
 fn training_action_value(action: queue_state::ApparatusQueueAction) -> &'static str {
     match action {
         queue_state::ApparatusQueueAction::Pause => "pause",
+        queue_state::ApparatusQueueAction::Freeze => "freeze",
         queue_state::ApparatusQueueAction::DetachRoll => "detach_roll",
         queue_state::ApparatusQueueAction::RollComplete => "roll_complete",
         queue_state::ApparatusQueueAction::Complete => "complete",
@@ -1500,6 +1502,7 @@ fn training_progress_batches(
     let timestamp = (stamp / 1_000_000) as i64;
     let status = match action {
         queue_state::ApparatusQueueAction::Pause => OrderProgressBatchStatus::Paused,
+        queue_state::ApparatusQueueAction::Freeze => OrderProgressBatchStatus::Completed,
         queue_state::ApparatusQueueAction::DetachRoll => OrderProgressBatchStatus::RollDetached,
         _ => OrderProgressBatchStatus::Completed,
     };
@@ -1804,6 +1807,7 @@ fn training_queue_action_controls(
                     queue_state::ApparatusQueueOrderState::Paused => {
                         vec![queue_state::ApparatusQueueAction::Resume]
                     }
+                    queue_state::ApparatusQueueOrderState::Frozen => Vec::new(),
                     queue_state::ApparatusQueueOrderState::Completed => Vec::new(),
                 }
             };

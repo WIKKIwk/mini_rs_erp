@@ -112,7 +112,12 @@ pub(super) async fn commit_apparatus_transfer(
         let sessions = store.order_run_sessions.read().await;
         for session in sessions.values().filter(|session| {
             session.session_id != write.session.session_id
-                && session.status.is_open()
+                && matches!(
+                    session.status,
+                    OrderRunStatus::Active
+                        | OrderRunStatus::Paused
+                        | OrderRunStatus::RollDetached
+                )
         }) {
             if qolip_codes.iter().any(|code| {
                 session_qolip_codes(session)

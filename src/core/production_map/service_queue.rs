@@ -169,11 +169,13 @@ impl ProductionMapService {
             .map(|map| (map.id.trim().to_string(), map))
             .collect::<BTreeMap<_, _>>();
 
-        for completed_order in &mut completed_orders {
+        let mut fully_completed_orders = Vec::with_capacity(completed_orders.len());
+        for completed_order in completed_orders.drain(..) {
             if completed_order.status != CompletedQueueOrderStatus::Completed {
                 continue;
             }
             let Some(map) = maps_by_id.get(completed_order.order_id.trim()) else {
+                fully_completed_orders.push(completed_order);
                 continue;
             };
             let required_apparatus = required_apparatus_for_closed_order(map);
@@ -185,11 +187,11 @@ impl ProductionMapService {
                         apparatus,
                     )
                 });
-            if !order_is_fully_completed {
-                completed_order.status = CompletedQueueOrderStatus::InProgress;
+            if order_is_fully_completed {
+                fully_completed_orders.push(completed_order);
             }
         }
-        Ok(completed_orders)
+        Ok(fully_completed_orders)
     }
 
     pub async fn queue_action_logs_for_order(
@@ -403,11 +405,18 @@ impl ProductionMapService {
                 .cloned()
                 .unwrap_or_default();
             let mut effective_states = parsed_queue_states(stored_states);
-            effective_states.retain(|order_id, _| {
-                order_controls
-                    .get(order_id)
-                    .is_none_or(|control| control.state != OrderControlState::Frozen)
-            });
+            // A frozen control is projected onto the queue as a real frozen
+            // state. Do not remove the entry: a missing entry is interpreted
+            // as pending by downstream queue code and would make a frozen
+            // order actionable again on the next snapshot/write.
+            for (order_id, control) in order_controls {
+                if control.state == OrderControlState::Frozen {
+                    effective_states.insert(
+                        order_id.clone(),
+                        queue_state::ApparatusQueueOrderState::Frozen,
+                    );
+                }
+            }
             let policy = queue_policy_for_apparatus(&apparatus, &storage_key, policies);
             let active_order_id = effective_states
                 .iter()
@@ -443,6 +452,8 @@ impl ProductionMapService {
                 let active_order_is_this = active_order_id
                     .is_none_or(|active_order_id| active_order_id == order_id.trim());
                 let queue_actionable = state.is_active()
+                    || (state == queue_state::ApparatusQueueOrderState::Frozen
+                        && control == OrderControlState::Active)
                     || actionable_order_id.as_deref() == Some(order_id.trim())
                     || (state == queue_state::ApparatusQueueOrderState::Pending
                         && previous_stage.is_some()
@@ -493,6 +504,10 @@ impl ProductionMapService {
                             }
                         }
                         queue_state::ApparatusQueueOrderState::Paused
+                            if control == OrderControlState::Active => {
+                            allowed_actions.push(queue_state::ApparatusQueueAction::Resume);
+                        }
+                        queue_state::ApparatusQueueOrderState::Frozen
                             if control == OrderControlState::Active => {
                             allowed_actions.push(queue_state::ApparatusQueueAction::Resume);
                         }

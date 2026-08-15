@@ -1,7 +1,7 @@
 use super::*;
 use crate::core::quantity::positive_erp_quantity;
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Default)]
 pub(super) struct ProgressMetrics {
     pub(super) return_ink_kg: Option<f64>,
     pub(super) lamination_print_leftover_rolls: Option<f64>,
@@ -22,6 +22,11 @@ pub(super) fn validated_progress_metrics(
     progress: &QueueProgressInput,
 ) -> Result<ProgressMetrics, ProductionMapError> {
     let is_complete = action == queue_state::ApparatusQueueAction::Complete;
+    let is_rezka_completion = matches!(
+        action,
+        queue_state::ApparatusQueueAction::Complete
+            | queue_state::ApparatusQueueAction::RollComplete
+    );
     let rezka_gross_qty = if apparatus::is_rezka_title(apparatus) {
         valid_optional_progress_qty(progress.gross_qty.or(progress.finished_goods_kg))?
     } else {
@@ -49,23 +54,24 @@ pub(super) fn validated_progress_metrics(
         } else {
             None
         },
-        rezka_bosma_waste: if is_complete && !allow_partial_station_completion {
+        rezka_bosma_waste: if is_rezka_completion && !allow_partial_station_completion {
             valid_optional_progress_qty(progress.rezka_bosma_waste)?
         } else {
             None
         },
-        rezka_lamination_waste: if is_complete && !allow_partial_station_completion {
+        rezka_lamination_waste: if is_rezka_completion && !allow_partial_station_completion {
             valid_optional_progress_qty(progress.rezka_lamination_waste)?
         } else {
             None
         },
-        rezka_edge_waste: if is_complete && !allow_partial_station_completion {
+        rezka_edge_waste: if is_rezka_completion && !allow_partial_station_completion {
             valid_optional_progress_qty(progress.rezka_edge_waste)?
         } else {
             None
         },
-        total_waste: if (is_rezka || is_laminatsiya || is_pechat)
-            && (!is_complete || allow_partial_station_completion)
+        total_waste: if (is_rezka && !is_rezka_completion)
+            || ((is_laminatsiya || is_pechat)
+                && (!is_complete || allow_partial_station_completion))
         {
             None
         } else {

@@ -3,6 +3,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use super::*;
 
 use super::progress::{effective_apparatus_queue_policy, queue_action_event_id};
+use super::store_port::ApparatusQueueStateMap;
 
 pub(super) fn current_progress_batch_for_report(
     scanned_batch: &OrderProgressBatch,
@@ -88,6 +89,20 @@ pub(super) fn parsed_queue_states(
             queue_state::ApparatusQueueOrderState::parse(&value).map(|state| (id, state))
         })
         .collect()
+}
+
+pub(super) fn order_has_frozen_queue_state(
+    states: &ApparatusQueueStateMap,
+    order_id: &str,
+) -> bool {
+    let order_id = order_id.trim();
+    !order_id.is_empty()
+        && states.values().any(|apparatus_states| {
+            apparatus_states
+                .get(order_id)
+                .and_then(|raw| queue_state::ApparatusQueueOrderState::parse(raw))
+                == Some(queue_state::ApparatusQueueOrderState::Frozen)
+        })
 }
 
 /// A malformed persisted state must never be treated as an absent state.

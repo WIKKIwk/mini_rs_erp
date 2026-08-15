@@ -77,34 +77,21 @@ pub(super) async fn completed_queue_orders_for_actor(
         {
             continue;
         }
-        let status = match event.action {
-            queue_state::ApparatusQueueAction::Pause => {
-                CompletedQueueOrderStatus::InProgress
-            }
-            queue_state::ApparatusQueueAction::DetachRoll => {
-                CompletedQueueOrderStatus::InProgress
-            }
-            queue_state::ApparatusQueueAction::RollComplete => {
-                CompletedQueueOrderStatus::InProgress
-            }
-            queue_state::ApparatusQueueAction::Complete => {
-                if event.to_state == queue_state::ApparatusQueueOrderState::Completed {
-                    CompletedQueueOrderStatus::Completed
-                } else {
-                    CompletedQueueOrderStatus::InProgress
-                }
-            }
-            _ => continue,
-        };
         let order_id = event.order_id.trim();
         if order_id.is_empty() || !seen.insert(order_id.to_string()) {
+            continue;
+        }
+        if event.action != queue_state::ApparatusQueueAction::Complete
+            || event.to_state != queue_state::ApparatusQueueOrderState::Completed
+        {
             continue;
         }
         completed.push(CompletedQueueOrder {
             apparatus: event.apparatus.trim().to_string(),
             order_id: order_id.to_string(),
             completed_at_unix: index as i64 + 1,
-            status,
+            status: CompletedQueueOrderStatus::Completed,
+            issue_note: String::new(),
         });
         if completed.len() >= limit {
             break;

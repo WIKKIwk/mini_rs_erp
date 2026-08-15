@@ -104,6 +104,22 @@ fn progress_actions_pause_resume_and_complete_active_order() {
 }
 
 #[test]
+fn frozen_order_can_resume_after_unfreeze_without_reentering_queue_head() {
+    let sequence = vec!["frozen".to_string(), "next".to_string()];
+    let mut states = BTreeMap::from([
+        ("frozen".to_string(), ApparatusQueueOrderState::Frozen),
+        ("next".to_string(), ApparatusQueueOrderState::Pending),
+    ]);
+
+    apply_queue_action(&sequence, &mut states, "frozen", ApparatusQueueAction::Resume)
+        .expect("resume frozen order");
+    assert_eq!(
+        states.get("frozen"),
+        Some(&ApparatusQueueOrderState::InProgress)
+    );
+}
+
+#[test]
 fn unordered_action_allows_any_pending_order() {
     let mut states = BTreeMap::new();
     apply_unordered_queue_action(&mut states, "b", ApparatusQueueAction::Start)

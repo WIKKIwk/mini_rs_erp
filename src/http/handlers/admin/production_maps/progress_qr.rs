@@ -390,10 +390,15 @@ fn progress_reprint_request(
         executor_name: batch.executor_name.clone(),
         printer: input.printer.clone(),
         print_mode: input.print_mode.clone(),
-        gross_qty: batch.finished_goods_kg.unwrap_or(batch.produced_qty),
+        gross_qty: batch
+            .payload_json
+            .get("gross_qty")
+            .and_then(serde_json::Value::as_f64)
+            .or(batch.finished_goods_kg)
+            .unwrap_or(batch.produced_qty),
         tare_enabled: batch.bobina_kg.is_some_and(|value| value > 0.0),
         tare_kg: batch.bobina_kg.unwrap_or(0.0),
-        progress_qty: batch.produced_qty,
+        progress_qty: batch.finished_goods_meter.unwrap_or(batch.produced_qty),
         unit: "kg".to_string(),
         progress_unit: if batch.uom.trim().is_empty() {
             "m".to_string()
