@@ -68,6 +68,7 @@ impl ProductionMapService {
         }
         let sequences = self.store.apparatus_sequences().await?;
         let all_states = self.store.apparatus_queue_states().await?;
+        let order_controls = self.store.order_control_states().await?;
         let policies = self.store.apparatus_queue_policies().await?;
         if action == queue_state::ApparatusQueueAction::Freeze
             && control.state == OrderControlState::Active
@@ -81,8 +82,17 @@ impl ProductionMapService {
         let stored_sequence = sequences.get(&storage_key).cloned().unwrap_or_default();
         let all_maps = self.store.maps().await?;
         let visible_order_ids = visible_order_ids_for_apparatus(&all_maps, apparatus);
-        let sequence =
-            queue_state::effective_apparatus_sequence(&stored_sequence, &visible_order_ids);
+        let frozen_order_ids = order_controls
+            .iter()
+            .filter_map(|(id, control)| {
+                (control.state == OrderControlState::Frozen).then_some(id.clone())
+            })
+            .collect::<BTreeSet<_>>();
+        let sequence = queue_state::effective_apparatus_sequence_excluding(
+            &stored_sequence,
+            &visible_order_ids,
+            &frozen_order_ids,
+        );
         if !sequence.iter().any(|id| id.trim() == order_id) {
             return Err(ProductionMapError::QueueActionNotAllowed);
         }
@@ -114,20 +124,19 @@ impl ProductionMapService {
             .get(order_id)
             .copied()
             .unwrap_or(queue_state::ApparatusQueueOrderState::Pending);
-        // Keep frozen orders in the durable queue map as `frozen`. Removing
-        // them here would make the serializer silently recreate them as
-        // pending on the next write.
-        for (frozen_order_id, frozen_control) in self.store.order_control_states().await? {
-            if frozen_control.state == OrderControlState::Frozen {
-                parsed.insert(
-                    frozen_order_id,
-                    queue_state::ApparatusQueueOrderState::Frozen,
-                );
-            }
+        let requeued_session = self
+            .store
+            .active_order_run_session(&storage_key, order_id)
+            .await?
+            .is_some_and(|session| order_run_session_was_requeued(&session));
+        if requeued_session && action == queue_state::ApparatusQueueAction::Start {
+            return Err(ProductionMapError::QueueActionNotAllowed);
         }
-        let remove_roll_from_apparatus =
-            action == queue_state::ApparatusQueueAction::DetachRoll
-                && progress.remove_roll_from_apparatus;
+        let requeued_resume = requeued_session
+            && action == queue_state::ApparatusQueueAction::Resume
+            && from_state == queue_state::ApparatusQueueOrderState::Pending;
+        let remove_roll_from_apparatus = action == queue_state::ApparatusQueueAction::DetachRoll
+            && progress.remove_roll_from_apparatus;
         if remove_roll_from_apparatus {
             if !apparatus::is_laminatsiya_title(&storage_key)
                 || from_state != queue_state::ApparatusQueueOrderState::Paused
@@ -145,19 +154,22 @@ impl ProductionMapService {
                 queue_state::ApparatusQueueOrderState::Paused,
             );
         } else {
-            apply_queue_policy(
-                policy,
-                previous_progress_ready,
-                &sequence,
-                &mut parsed,
-                order_id,
-                action,
-            )?;
+            if requeued_resume {
+                apply_requeued_resume(policy, &sequence, &mut parsed, order_id)?;
+            } else {
+                apply_queue_policy(
+                    policy,
+                    previous_progress_ready,
+                    &sequence,
+                    &mut parsed,
+                    order_id,
+                    action,
+                )?;
+            }
         }
         if matches!(
             action,
-            queue_state::ApparatusQueueAction::Start
-                | queue_state::ApparatusQueueAction::Resume
+            queue_state::ApparatusQueueAction::Start | queue_state::ApparatusQueueAction::Resume
         ) {
             self.ensure_apparatus_execution_capacity(&storage_key, order_id, &all_states)
                 .await?;
@@ -276,9 +288,17 @@ impl ProductionMapService {
         } else {
             None
         };
+        let sequence_updates = if action == queue_state::ApparatusQueueAction::Freeze {
+            let mut excluded_order_ids = frozen_order_ids;
+            excluded_order_ids.insert(order_id.to_string());
+            sequence_updates_for_frozen_transition(&all_maps, &sequences, &excluded_order_ids, None)
+        } else {
+            BTreeMap::new()
+        };
         Ok(PreparedApparatusQueueAction {
             apparatus: storage_key,
             states: saved,
+            sequence_updates,
             event,
             session: progress.session,
             progress_event: progress.progress_event,
@@ -321,8 +341,8 @@ impl ProductionMapService {
         else {
             return Ok(false);
         };
-        let requires_previous_stage_completion = apparatus::is_laminatsiya_title(apparatus)
-            || apparatus::is_rezka_title(apparatus);
+        let requires_previous_stage_completion =
+            apparatus::is_laminatsiya_title(apparatus) || apparatus::is_rezka_title(apparatus);
         let previous_stage_completed = all_states.iter().any(|(candidate, states)| {
             queue_state::apparatus_titles_match(candidate, &previous_apparatus)
                 && states
@@ -403,7 +423,7 @@ impl ProductionMapService {
             Vec::new(),
             None,
         )
-            .await
+        .await
     }
 
     pub(crate) async fn commit_prepared_queue_action_with_raw_material_stock(
@@ -426,6 +446,7 @@ impl ProductionMapService {
             .put_apparatus_queue_states_with_event_and_progress(QueueActionProgressWrite {
                 apparatus: prepared.apparatus.clone(),
                 states: prepared.states.clone(),
+                sequence_updates: prepared.sequence_updates.clone(),
                 event: prepared.event,
                 session: prepared.session.clone(),
                 progress_event: prepared.progress_event.clone(),
@@ -495,8 +516,7 @@ fn validate_freeze_request_pause(
     }
     if !matches!(
         action,
-        queue_state::ApparatusQueueAction::Pause
-            | queue_state::ApparatusQueueAction::Freeze
+        queue_state::ApparatusQueueAction::Pause | queue_state::ApparatusQueueAction::Freeze
     ) {
         return Ok(());
     }

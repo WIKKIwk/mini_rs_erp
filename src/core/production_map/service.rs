@@ -1,6 +1,6 @@
 use super::*;
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use super::apparatus::visible_order_ids_by_apparatus;
@@ -30,10 +30,10 @@ pub struct ProductionMapLiveSnapshot {
     pub visible_order_ids: BTreeMap<String, Vec<String>>,
     pub queue_states: BTreeMap<String, BTreeMap<String, String>>,
     pub queue_policies: Vec<ApparatusQueuePolicyRecord>,
-    pub queue_action_controls:
-        BTreeMap<String, BTreeMap<String, ApparatusQueueOrderActionControl>>,
+    pub queue_action_controls: BTreeMap<String, BTreeMap<String, ApparatusQueueOrderActionControl>>,
     pub order_statuses: BTreeMap<String, ProductionOrderStatusDetail>,
     pub order_controls: BTreeMap<String, OrderControlRecord>,
+    pub frozen_orders_by_apparatus: BTreeMap<String, Vec<FrozenOrderSnapshot>>,
 }
 
 #[derive(Clone)]
@@ -43,9 +43,11 @@ pub(crate) struct ProductionSnapshotContext {
     pub(crate) visible_order_ids: BTreeMap<String, Vec<String>>,
     pub(crate) queue_states: BTreeMap<String, BTreeMap<String, String>>,
     pub(crate) queue_policies: Vec<ApparatusQueuePolicyRecord>,
-    pub(crate) queue_action_controls: BTreeMap<String, BTreeMap<String, ApparatusQueueOrderActionControl>>,
+    pub(crate) queue_action_controls:
+        BTreeMap<String, BTreeMap<String, ApparatusQueueOrderActionControl>>,
     pub(crate) order_statuses: BTreeMap<String, ProductionOrderStatusDetail>,
     pub(crate) order_controls: BTreeMap<String, OrderControlRecord>,
+    pub(crate) frozen_orders_by_apparatus: BTreeMap<String, Vec<FrozenOrderSnapshot>>,
 }
 
 impl From<ProductionSnapshotContext> for ProductionMapLiveSnapshot {
@@ -59,6 +61,7 @@ impl From<ProductionSnapshotContext> for ProductionMapLiveSnapshot {
             queue_action_controls: context.queue_action_controls,
             order_statuses: context.order_statuses,
             order_controls: context.order_controls,
+            frozen_orders_by_apparatus: context.frozen_orders_by_apparatus,
         }
     }
 }
@@ -82,6 +85,7 @@ pub(super) struct QueueProgressRecords {
 pub struct PreparedApparatusQueueAction {
     pub(super) apparatus: String,
     pub(super) states: BTreeMap<String, String>,
+    pub(super) sequence_updates: BTreeMap<String, Vec<String>>,
     pub(super) event: ApparatusQueueActionEvent,
     pub(super) session: Option<OrderRunSession>,
     pub(super) progress_event: Option<OrderProgressEvent>,
@@ -136,7 +140,6 @@ impl PreparedApparatusQueueAction {
             session.payload_json["qolip_codes"] = serde_json::json!(normalized);
         }
     }
-
 }
 
 impl ProductionMapService {
@@ -159,9 +162,7 @@ impl ProductionMapService {
     }
 
     pub fn notify_live(&self) {
-        self.snapshot_cache
-            .revision
-            .fetch_add(1, Ordering::AcqRel);
+        self.snapshot_cache.revision.fetch_add(1, Ordering::AcqRel);
         let _ = self.live_notify.send(());
     }
 
@@ -188,10 +189,8 @@ impl ProductionMapService {
                 }
             }
 
-            let snapshot: ProductionMapLiveSnapshot = self
-                .build_production_snapshot_context()
-                .await?
-                .into();
+            let snapshot: ProductionMapLiveSnapshot =
+                self.build_production_snapshot_context().await?.into();
             let latest_revision = self.snapshot_cache.revision.load(Ordering::Acquire);
             if latest_revision != revision {
                 continue;
@@ -215,7 +214,17 @@ impl ProductionMapService {
         let queue_states = self.store.apparatus_queue_states().await?;
         let policies = self.store.apparatus_queue_policies().await?;
         let order_controls = self.store.order_control_states().await?;
-        let sequences = Self::effective_apparatus_sequences_for_maps(&raw_maps, &stored_sequences);
+        let frozen_order_ids = order_controls
+            .iter()
+            .filter_map(|(id, control)| {
+                (control.state == OrderControlState::Frozen).then_some(id.clone())
+            })
+            .collect::<BTreeSet<_>>();
+        let sequences = Self::effective_apparatus_sequences_for_maps(
+            &raw_maps,
+            &stored_sequences,
+            &frozen_order_ids,
+        );
         let queue_policies = policies
             .iter()
             .map(|(apparatus, policy)| effective_apparatus_queue_policy_record(apparatus, *policy))
@@ -230,8 +239,9 @@ impl ProductionMapService {
             )
             .await?;
         let order_statuses = self
-            .order_status_details_for_snapshot(&maps, &queue_states)
+            .order_status_details_for_snapshot(&maps, &queue_states, &order_controls)
             .await?;
+        let frozen_orders_by_apparatus = self.frozen_orders_by_apparatus(&order_controls).await?;
 
         Ok(ProductionSnapshotContext {
             maps,
@@ -242,7 +252,67 @@ impl ProductionMapService {
             queue_action_controls,
             order_statuses,
             order_controls,
+            frozen_orders_by_apparatus,
         })
+    }
+
+    async fn frozen_orders_by_apparatus(
+        &self,
+        order_controls: &BTreeMap<String, OrderControlRecord>,
+    ) -> Result<BTreeMap<String, Vec<FrozenOrderSnapshot>>, ProductionMapError> {
+        let frozen_order_ids = order_controls
+            .iter()
+            .filter_map(|(order_id, control)| {
+                (control.state == OrderControlState::Frozen).then_some(order_id.clone())
+            })
+            .collect::<Vec<_>>();
+        let logs_by_order = self
+            .store
+            .queue_action_logs_for_orders(&frozen_order_ids)
+            .await?;
+        let mut result = BTreeMap::new();
+        for order_id in frozen_order_ids {
+            let Some(control) = order_controls.get(&order_id) else {
+                continue;
+            };
+            let logs = logs_by_order.get(&order_id).cloned().unwrap_or_default();
+            let freeze_log = logs.iter().rev().find(|log| {
+                log.action == queue_state::ApparatusQueueAction::Freeze
+                    && log.to_state == queue_state::ApparatusQueueOrderState::Frozen
+            });
+            let apparatus = control
+                .freeze_request
+                .as_ref()
+                .map(|request| request.target_apparatus.trim())
+                .filter(|apparatus| !apparatus.is_empty())
+                .or_else(|| freeze_log.map(|log| log.apparatus.trim()))
+                .unwrap_or_default();
+            if apparatus.is_empty() {
+                continue;
+            }
+            let frozen_at_unix = control
+                .frozen_at_unix
+                .or_else(|| freeze_log.map(|log| log.created_at_unix))
+                .unwrap_or_default();
+            let frozen_by = if control.actor.display_name.trim().is_empty() {
+                control.actor.ref_.trim().to_string()
+            } else {
+                control.actor.display_name.trim().to_string()
+            };
+            result
+                .entry(apparatus.to_string())
+                .or_insert_with(Vec::new)
+                .push(FrozenOrderSnapshot {
+                    order_id,
+                    apparatus: apparatus.to_string(),
+                    issue_note: freeze_log
+                        .map(|log| log.issue_note.trim().to_string())
+                        .unwrap_or_default(),
+                    frozen_at_unix,
+                    frozen_by,
+                });
+        }
+        Ok(result)
     }
 }
 
@@ -267,9 +337,8 @@ mod tests {
 
     #[tokio::test]
     async fn live_snapshot_cache_reuses_until_notification() {
-        let service = ProductionMapService::new(std::sync::Arc::new(
-            MemoryProductionMapStore::new(),
-        ));
+        let service =
+            ProductionMapService::new(std::sync::Arc::new(MemoryProductionMapStore::new()));
 
         service.live_snapshot().await.expect("initial snapshot");
         let initial = cached_snapshot(&service).await;
@@ -279,10 +348,7 @@ mod tests {
         assert!(std::sync::Arc::ptr_eq(&initial, &reused));
 
         service.notify_live();
-        service
-            .live_snapshot()
-            .await
-            .expect("invalidated snapshot");
+        service.live_snapshot().await.expect("invalidated snapshot");
         let refreshed = cached_snapshot(&service).await;
         assert!(!std::sync::Arc::ptr_eq(&initial, &refreshed));
     }

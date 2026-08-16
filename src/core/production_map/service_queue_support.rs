@@ -2,6 +2,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use super::*;
 
+use super::apparatus::{visible_order_ids_by_apparatus, visible_order_ids_for_apparatus};
 use super::progress::{effective_apparatus_queue_policy, queue_action_event_id};
 use super::store_port::ApparatusQueueStateMap;
 
@@ -91,6 +92,14 @@ pub(super) fn parsed_queue_states(
         .collect()
 }
 
+pub(super) fn order_run_session_was_requeued(session: &OrderRunSession) -> bool {
+    session
+        .payload_json
+        .get("requeued_at_tail")
+        .and_then(serde_json::Value::as_bool)
+        == Some(true)
+}
+
 pub(super) fn order_has_frozen_queue_state(
     states: &ApparatusQueueStateMap,
     order_id: &str,
@@ -103,6 +112,56 @@ pub(super) fn order_has_frozen_queue_state(
                 .and_then(|raw| queue_state::ApparatusQueueOrderState::parse(raw))
                 == Some(queue_state::ApparatusQueueOrderState::Frozen)
         })
+}
+
+pub(super) fn sequence_updates_for_frozen_transition(
+    maps: &[ProductionMapDefinition],
+    sequences: &BTreeMap<String, Vec<String>>,
+    excluded_order_ids: &BTreeSet<String>,
+    appended_order_id: Option<&str>,
+) -> BTreeMap<String, Vec<String>> {
+    let visible_by_apparatus = visible_order_ids_by_apparatus(maps);
+    let known_apparatus = sequences
+        .keys()
+        .chain(visible_by_apparatus.keys())
+        .cloned()
+        .collect::<BTreeSet<_>>();
+    let known_keys = known_apparatus.iter().cloned().collect::<Vec<_>>();
+    let mut updates = BTreeMap::new();
+    let mut seen_storage_keys = BTreeSet::new();
+
+    for requested_apparatus in known_apparatus {
+        let storage_key =
+            queue_state::resolve_apparatus_storage_key(&requested_apparatus, &known_keys);
+        if !seen_storage_keys.insert(storage_key.clone()) {
+            continue;
+        }
+        let visible_order_ids = visible_order_ids_for_apparatus(maps, &requested_apparatus);
+        if visible_order_ids.is_empty() {
+            continue;
+        }
+        let stored_sequence = sequences
+            .get(&storage_key)
+            .or_else(|| sequences.get(&requested_apparatus))
+            .cloned()
+            .unwrap_or_default();
+        let mut sequence = queue_state::effective_apparatus_sequence_excluding(
+            &stored_sequence,
+            &visible_order_ids,
+            excluded_order_ids,
+        );
+        if let Some(order_id) = appended_order_id.map(str::trim).filter(|id| !id.is_empty()) {
+            sequence.retain(|candidate| candidate.trim() != order_id);
+            if visible_order_ids
+                .iter()
+                .any(|candidate| candidate.trim() == order_id)
+            {
+                sequence.push(order_id.to_string());
+            }
+        }
+        updates.insert(storage_key, sequence);
+    }
+    updates
 }
 
 /// A malformed persisted state must never be treated as an absent state.
@@ -137,6 +196,32 @@ pub(super) fn apply_queue_policy(
             queue_state::apply_unordered_queue_action(parsed, order_id, action)
         }
     }
+}
+
+pub(super) fn apply_requeued_resume(
+    policy: ApparatusQueuePolicy,
+    sequence: &[String],
+    parsed: &mut BTreeMap<String, queue_state::ApparatusQueueOrderState>,
+    order_id: &str,
+) -> Result<(), ProductionMapError> {
+    if policy == ApparatusQueuePolicy::StrictSequence
+        && queue_state::first_actionable_order_id(sequence, parsed).as_deref() != Some(order_id)
+    {
+        return Err(ProductionMapError::QueueActionNotAllowed);
+    }
+    if parsed
+        .get(order_id)
+        .copied()
+        .unwrap_or(queue_state::ApparatusQueueOrderState::Pending)
+        != queue_state::ApparatusQueueOrderState::Pending
+    {
+        return Err(ProductionMapError::QueueActionNotAllowed);
+    }
+    parsed.insert(
+        order_id.to_string(),
+        queue_state::ApparatusQueueOrderState::InProgress,
+    );
+    Ok(())
 }
 
 pub(super) fn serialized_queue_states(

@@ -95,10 +95,7 @@ pub fn next_queue_state(
             }
         }
         ApparatusQueueAction::Resume => {
-            if matches!(
-                current,
-                ApparatusQueueOrderState::Paused | ApparatusQueueOrderState::Frozen
-            ) {
+            if current == ApparatusQueueOrderState::Paused {
                 Ok(ApparatusQueueOrderState::InProgress)
             } else {
                 Err(ProductionMapError::QueueActionNotAllowed)

@@ -178,6 +178,7 @@ pub(super) async fn load_active_order_run_session_for_qolip(
                 payload_json
          FROM mini_order_run_sessions
          WHERE status IN ('active', 'paused', 'roll_detached')
+           AND (payload_json->>'requeued_at_tail') IS DISTINCT FROM 'true'
            AND (
              lower(payload_json->>'qolip_code') = lower($1)
              OR EXISTS (
@@ -221,6 +222,7 @@ pub(super) async fn load_active_order_run_sessions_for_worker(
                 payload_json
          FROM mini_order_run_sessions AS session
          WHERE session.status IN ('active', 'paused', 'roll_detached')
+           AND (session.payload_json->>'requeued_at_tail') IS DISTINCT FROM 'true'
            AND (
                session.worker_ref = ANY($1)
                OR EXISTS (

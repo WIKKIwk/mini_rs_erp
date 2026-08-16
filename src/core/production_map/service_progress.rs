@@ -29,8 +29,7 @@ fn progress_values_for_outputs(
             .enumerate()
             .map(|(index, frame)| {
                 let has_explicit_waste = frame.has_explicit_waste();
-                let frame_progress =
-                    frame.to_queue_progress(progress, !has_explicit_waste);
+                let frame_progress = frame.to_queue_progress(progress, !has_explicit_waste);
                 let mut metrics = validated_progress_metrics(apparatus, action, &frame_progress)?;
                 if index > 0 && !has_explicit_waste {
                     metrics.rezka_bosma_waste = None;
@@ -203,10 +202,8 @@ impl ProductionMapService {
                 let unlinked_candidate = linked_batch_id.trim().is_empty()
                     && (matches!(
                         batch.status,
-                        OrderProgressBatchStatus::Paused
-                            | OrderProgressBatchStatus::RollDetached
-                    )
-                        || batch.wip_status == OrderProgressBatchWipStatus::InUse);
+                        OrderProgressBatchStatus::Paused | OrderProgressBatchStatus::RollDetached
+                    ) || batch.wip_status == OrderProgressBatchWipStatus::InUse);
                 batch.order_id.trim() == order_id.trim()
                     && batch.session_id.trim() == session.session_id.trim()
                     && matches!(
@@ -249,10 +246,7 @@ impl ProductionMapService {
                 || parent_batch.used_by_session_id.trim() == session.session_id.trim());
         let prematurely_processed = parent_batch.wip_status
             == OrderProgressBatchWipStatus::Processed
-            && queue_state::apparatus_titles_match(
-                &parent_batch.processed_by_apparatus,
-                apparatus,
-            )
+            && queue_state::apparatus_titles_match(&parent_batch.processed_by_apparatus, apparatus)
             && (parent_batch.processed_by_session_id.trim().is_empty()
                 || parent_batch.processed_by_session_id.trim() == session.session_id.trim());
         if parent_batch.wip_status != OrderProgressBatchWipStatus::Waiting
@@ -261,12 +255,7 @@ impl ProductionMapService {
         {
             return Ok(None);
         }
-        let mut input_batch = wip_batch_in_use(
-            parent_batch,
-            apparatus,
-            &session.session_id,
-            now,
-        );
+        let mut input_batch = wip_batch_in_use(parent_batch, apparatus, &session.session_id, now);
         input_batch.payload_json["recovered_original_input_link"] = serde_json::json!(true);
         input_batch.payload_json["recovered_at_unix"] = serde_json::json!(now);
         sync_wip_payload_fields(&mut input_batch);
@@ -398,8 +387,7 @@ impl ProductionMapService {
                 } else {
                     None
                 };
-                let previous_apparatus =
-                    chain::previous_work_stage_station(order_map, apparatus);
+                let previous_apparatus = chain::previous_work_stage_station(order_map, apparatus);
                 let linked_input_batch = session_input_batch
                     .as_ref()
                     .filter(|batch| {
@@ -410,40 +398,28 @@ impl ProductionMapService {
                         };
                         previous_apparatus.as_ref().is_some_and(|previous| {
                             batch.order_id.trim() == order_id.trim()
-                                && queue_state::apparatus_titles_match(
-                                    &batch.apparatus,
-                                    previous,
-                                )
+                                && queue_state::apparatus_titles_match(&batch.apparatus, previous)
                                 && (batch.next_apparatus.trim().is_empty()
                                     || queue_state::next_stage_title_matches_apparatus(
                                         &batch.next_apparatus,
                                         apparatus,
                                     ))
                                 && batch.wip_status == OrderProgressBatchWipStatus::InUse
-                                && queue_state::apparatus_titles_match(
-                                    used_by_apparatus,
-                                    apparatus,
-                                )
+                                && queue_state::apparatus_titles_match(used_by_apparatus, apparatus)
                                 && (batch.used_by_session_id.trim().is_empty()
-                                    || batch.used_by_session_id.trim()
-                                        == session.session_id.trim())
+                                    || batch.used_by_session_id.trim() == session.session_id.trim())
                         })
                     })
                     .cloned();
-                let recovered_input = if explicit_input_batch.is_none()
-                    && linked_input_batch.is_none()
-                {
-                    self.recoverable_session_input_batch(
-                        apparatus,
-                        order_id,
-                        order_map,
-                        &session,
-                        now,
-                    )
-                    .await?
-                } else {
-                    None
-                };
+                let recovered_input =
+                    if explicit_input_batch.is_none() && linked_input_batch.is_none() {
+                        self.recoverable_session_input_batch(
+                            apparatus, order_id, order_map, &session, now,
+                        )
+                        .await?
+                    } else {
+                        None
+                    };
                 let input_batch = if let Some(batch) = explicit_input_batch {
                     if linked_input_batch.as_ref().is_some_and(|session_batch| {
                         session_batch.batch_id.trim() != batch.batch_id.trim()
@@ -622,6 +598,11 @@ impl ProductionMapService {
                         return Err(ProductionMapError::ProgressBatchNotResumable);
                     }
                     let session_input_progress = session_progress_links(&session);
+                    let is_requeued = session
+                        .payload_json
+                        .get("requeued_at_tail")
+                        .and_then(serde_json::Value::as_bool)
+                        == Some(true);
                     let is_frozen = session.status == OrderRunStatus::Frozen
                         || session
                             .payload_json
@@ -632,14 +613,24 @@ impl ProductionMapService {
                             .payload_json
                             .get("freeze_with_issue")
                             .and_then(serde_json::Value::as_bool)
-                            == Some(true);
+                            == Some(true)
+                        || is_requeued;
                     if is_frozen {
                         let mut payload_json = session.payload_json.clone();
                         if !payload_json.is_object() {
                             payload_json = serde_json::json!({});
                         }
-                        payload_json["resumed_after_freeze"] = serde_json::json!(true);
-                        payload_json["resumed_without_progress_qr"] = serde_json::json!(true);
+                        if let Some(payload) = payload_json.as_object_mut() {
+                            payload.remove("requeued_at_tail");
+                            payload.insert(
+                                "resumed_after_freeze".to_string(),
+                                serde_json::json!(true),
+                            );
+                            payload.insert(
+                                "resumed_without_progress_qr".to_string(),
+                                serde_json::json!(true),
+                            );
+                        }
                         let session = OrderRunSession {
                             status: OrderRunStatus::Active,
                             worker_role: actor.role.trim().to_string(),
@@ -785,9 +776,7 @@ impl ProductionMapService {
                         resumed_batch.qr_payload.clone(),
                         resume_event_payload(),
                     );
-                    let progress_batches = if !is_handoff
-                        && apparatus::is_rezka_title(apparatus)
-                    {
+                    let progress_batches = if !is_handoff && apparatus::is_rezka_title(apparatus) {
                         resumed_batches.clone()
                     } else {
                         Vec::new()
@@ -809,14 +798,12 @@ impl ProductionMapService {
                     .await?;
                 if !matches!(
                     batch.status,
-                    OrderProgressBatchStatus::Paused
-                        | OrderProgressBatchStatus::RollDetached
+                    OrderProgressBatchStatus::Paused | OrderProgressBatchStatus::RollDetached
                 ) || !matches!(
                     batch.action,
                     queue_state::ApparatusQueueAction::Pause
                         | queue_state::ApparatusQueueAction::DetachRoll
-                )
-                    || batch.wip_status != OrderProgressBatchWipStatus::Waiting
+                ) || batch.wip_status != OrderProgressBatchWipStatus::Waiting
                 {
                     return Err(ProductionMapError::ProgressBatchNotResumable);
                 }
@@ -1032,12 +1019,7 @@ impl ProductionMapService {
                 now,
             )
         } else {
-            wip_batch_worker_handoff(
-                input_batch.clone(),
-                apparatus,
-                &session.session_id,
-                now,
-            )
+            wip_batch_worker_handoff(input_batch.clone(), apparatus, &session.session_id, now)
         };
         let session_payload = if remove_roll {
             removed_roll_session_payload(metrics, &description, &input_progress)

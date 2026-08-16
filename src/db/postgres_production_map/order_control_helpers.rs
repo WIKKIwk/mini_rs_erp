@@ -152,10 +152,9 @@ pub(super) async fn load_order_freeze_requests_for_audit(
 
     rows.into_iter()
         .map(|row| {
-            let status = OrderFreezeRequestStatus::parse(
-                row.event_status.as_deref().unwrap_or(&row.status),
-            )
-                .ok_or(ProductionMapError::StoreFailed)?;
+            let status =
+                OrderFreezeRequestStatus::parse(row.event_status.as_deref().unwrap_or(&row.status))
+                    .ok_or(ProductionMapError::StoreFailed)?;
             let occurred_at_unix = row.event_at_unix.unwrap_or_else(|| {
                 if status == OrderFreezeRequestStatus::Pending {
                     row.requested_at_unix
@@ -307,7 +306,12 @@ async fn save_freeze_request_tx(
     .await
     .map_err(|_| ProductionMapError::StoreFailed)?;
     let status_allowed = match (previous_status.as_deref(), request.status) {
-        (None, OrderFreezeRequestStatus::Pending | OrderFreezeRequestStatus::Frozen)
+        (
+            None,
+            OrderFreezeRequestStatus::Pending
+            | OrderFreezeRequestStatus::Frozen
+            | OrderFreezeRequestStatus::Unfrozen,
+        )
         | (Some("pending"), OrderFreezeRequestStatus::Pending)
         | (Some("pending"), OrderFreezeRequestStatus::Frozen)
         | (Some("pending"), OrderFreezeRequestStatus::Cancelled)

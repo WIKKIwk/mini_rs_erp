@@ -18,16 +18,6 @@ pub fn apply_queue_action(
         .get(order_id)
         .copied()
         .unwrap_or(ApparatusQueueOrderState::Pending);
-    // A frozen order is intentionally absent from the normal actionable
-    // queue. Once an admin unfreezes it, the worker must still be able to
-    // resume that exact order without waiting for it to become the next
-    // pending item in the sequence.
-    if action == ApparatusQueueAction::Resume
-        && current == ApparatusQueueOrderState::Frozen
-    {
-        states.insert(order_id.to_string(), next_queue_state(current, action)?);
-        return Ok(());
-    }
     let actionable = first_actionable_order_id(sequence, states)
         .ok_or(ProductionMapError::QueueActionNotAllowed)?;
     if actionable != order_id {

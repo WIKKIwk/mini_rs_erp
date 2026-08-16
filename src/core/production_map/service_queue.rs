@@ -28,14 +28,24 @@ impl ProductionMapService {
     ) -> Result<BTreeMap<String, Vec<String>>, ProductionMapError> {
         let maps = self.store.maps().await?;
         let sequences = self.store.apparatus_sequences().await?;
+        let frozen_order_ids = self
+            .store
+            .order_control_states()
+            .await?
+            .into_iter()
+            .filter_map(|(id, control)| (control.state == OrderControlState::Frozen).then_some(id))
+            .collect::<BTreeSet<_>>();
         Ok(Self::effective_apparatus_sequences_for_maps(
-            &maps, &sequences,
+            &maps,
+            &sequences,
+            &frozen_order_ids,
         ))
     }
 
     pub(super) fn effective_apparatus_sequences_for_maps(
         maps: &[ProductionMapDefinition],
         sequences: &BTreeMap<String, Vec<String>>,
+        frozen_order_ids: &BTreeSet<String>,
     ) -> BTreeMap<String, Vec<String>> {
         let visible_by_apparatus = visible_order_ids_by_apparatus(maps);
         let apparatuses = sequences
@@ -54,7 +64,11 @@ impl ProductionMapService {
                 let sequence = if visible_order_ids.is_empty() {
                     stored_sequence
                 } else {
-                    queue_state::effective_apparatus_sequence(&stored_sequence, &visible_order_ids)
+                    queue_state::effective_apparatus_sequence_excluding(
+                        &stored_sequence,
+                        &visible_order_ids,
+                        frozen_order_ids,
+                    )
                 };
                 (apparatus, sequence)
             })
@@ -248,12 +262,22 @@ impl ProductionMapService {
             .queue_action_logs_for_orders(&[order_id.to_string()])
             .await?;
         let logs = logs_by_order.get(order_id).cloned().unwrap_or_default();
-        Ok(ProductionOrderStatusDetail::from_order_flow(
+        let mut status = ProductionOrderStatusDetail::from_order_flow(
             &progress_batches,
             &run_sessions,
             &queue_states,
             &logs,
-        ))
+        );
+        if self
+            .store
+            .order_control_states()
+            .await?
+            .get(order_id)
+            .is_some_and(|control| control.state == OrderControlState::Frozen)
+        {
+            status.force_frozen();
+        }
+        Ok(status)
     }
 
     pub async fn order_status_details(
@@ -261,7 +285,8 @@ impl ProductionMapService {
     ) -> Result<BTreeMap<String, ProductionOrderStatusDetail>, ProductionMapError> {
         let maps = self.maps().await?;
         let queue_states = self.store.apparatus_queue_states().await?;
-        self.order_status_details_for_snapshot(&maps, &queue_states)
+        let order_controls = self.store.order_control_states().await?;
+        self.order_status_details_for_snapshot(&maps, &queue_states, &order_controls)
             .await
     }
 
@@ -269,6 +294,7 @@ impl ProductionMapService {
         &self,
         maps: &[ProductionMapSaved],
         queue_states: &ApparatusQueueStateMap,
+        order_controls: &OrderControlMap,
     ) -> Result<BTreeMap<String, ProductionOrderStatusDetail>, ProductionMapError> {
         let order_ids = maps
             .iter()
@@ -287,15 +313,19 @@ impl ProductionMapService {
                 progress_batches.get(&order_id).cloned().unwrap_or_default();
             let order_run_sessions = run_sessions.get(&order_id).cloned().unwrap_or_default();
             let order_logs = logs_by_order.get(&order_id).cloned().unwrap_or_default();
-            statuses.insert(
-                order_id.to_string(),
-                ProductionOrderStatusDetail::from_order_flow(
-                    &order_progress_batches,
-                    &order_run_sessions,
-                    &order_queue_states,
-                    &order_logs,
-                ),
+            let mut status = ProductionOrderStatusDetail::from_order_flow(
+                &order_progress_batches,
+                &order_run_sessions,
+                &order_queue_states,
+                &order_logs,
             );
+            if order_controls
+                .get(&order_id)
+                .is_some_and(|control| control.state == OrderControlState::Frozen)
+            {
+                status.force_frozen();
+            }
+            statuses.insert(order_id.to_string(), status);
         }
         Ok(statuses)
     }
@@ -373,6 +403,12 @@ impl ProductionMapService {
         ProductionMapError,
     > {
         let visible_by_apparatus = visible_order_ids_by_apparatus(maps);
+        let frozen_order_ids = order_controls
+            .iter()
+            .filter_map(|(order_id, control)| {
+                (control.state == OrderControlState::Frozen).then_some(order_id.clone())
+            })
+            .collect::<BTreeSet<_>>();
         let known_keys = sequences
             .keys()
             .chain(all_states.keys())
@@ -387,43 +423,29 @@ impl ProductionMapService {
         let mut result = BTreeMap::new();
 
         for apparatus in apparatuses {
-            let storage_key =
-                queue_state::resolve_apparatus_storage_key(&apparatus, &known_keys);
+            let storage_key = queue_state::resolve_apparatus_storage_key(&apparatus, &known_keys);
             let stored_sequence = sequences
                 .get(&storage_key)
                 .or_else(|| sequences.get(&apparatus))
                 .cloned()
                 .unwrap_or_default();
             let visible_order_ids = visible_order_ids_for_apparatus(maps, &storage_key);
-            let sequence = queue_state::effective_apparatus_sequence(
+            let sequence = queue_state::effective_apparatus_sequence_excluding(
                 &stored_sequence,
                 &visible_order_ids,
+                &frozen_order_ids,
             );
             let stored_states = all_states
                 .get(&storage_key)
                 .or_else(|| all_states.get(&apparatus))
                 .cloned()
                 .unwrap_or_default();
-            let mut effective_states = parsed_queue_states(stored_states);
-            // A frozen control is projected onto the queue as a real frozen
-            // state. Do not remove the entry: a missing entry is interpreted
-            // as pending by downstream queue code and would make a frozen
-            // order actionable again on the next snapshot/write.
-            for (order_id, control) in order_controls {
-                if control.state == OrderControlState::Frozen {
-                    effective_states.insert(
-                        order_id.clone(),
-                        queue_state::ApparatusQueueOrderState::Frozen,
-                    );
-                }
-            }
+            let effective_states = parsed_queue_states(stored_states);
             let policy = queue_policy_for_apparatus(&apparatus, &storage_key, policies);
-            let active_order_id = effective_states
-                .iter()
-                .find_map(|(order_id, state)| {
-                    (*state == queue_state::ApparatusQueueOrderState::InProgress)
-                        .then_some(order_id.as_str())
-                });
+            let active_order_id = effective_states.iter().find_map(|(order_id, state)| {
+                (*state == queue_state::ApparatusQueueOrderState::InProgress)
+                    .then_some(order_id.as_str())
+            });
             let actionable_order_id =
                 queue_state::first_actionable_order_id(&sequence, &effective_states);
             let mut apparatus_controls = BTreeMap::new();
@@ -451,9 +473,12 @@ impl ProductionMapService {
                 );
                 let active_order_is_this = active_order_id
                     .is_none_or(|active_order_id| active_order_id == order_id.trim());
+                let requeued_session = self
+                    .store
+                    .active_order_run_session(&storage_key, order_id.trim())
+                    .await?
+                    .is_some_and(|session| order_run_session_was_requeued(&session));
                 let queue_actionable = state.is_active()
-                    || (state == queue_state::ApparatusQueueOrderState::Frozen
-                        && control == OrderControlState::Active)
                     || actionable_order_id.as_deref() == Some(order_id.trim())
                     || (state == queue_state::ApparatusQueueOrderState::Pending
                         && previous_stage.is_some()
@@ -467,8 +492,13 @@ impl ProductionMapService {
                         queue_state::ApparatusQueueOrderState::Pending
                             if control == OrderControlState::Active
                                 && (policy == ApparatusQueuePolicy::FreePick
-                                    || active_order_is_this) => {
-                            allowed_actions.push(queue_state::ApparatusQueueAction::Start);
+                                    || active_order_is_this) =>
+                        {
+                            allowed_actions.push(if requeued_session {
+                                queue_state::ApparatusQueueAction::Resume
+                            } else {
+                                queue_state::ApparatusQueueAction::Start
+                            });
                         }
                         queue_state::ApparatusQueueOrderState::InProgress => {
                             if matches!(
@@ -485,8 +515,8 @@ impl ProductionMapService {
                                         &QueueProgressInput::default(),
                                     )
                                     .await?;
-                                let has_unprocessed_previous_wips =
-                                    self.has_unprocessed_previous_wips(
+                                let has_unprocessed_previous_wips = self
+                                    .has_unprocessed_previous_wips(
                                         order_id.trim(),
                                         order_map,
                                         &storage_key,
@@ -495,8 +525,7 @@ impl ProductionMapService {
                                         &current_input_batch_id,
                                     )
                                     .await?;
-                                allowed_actions
-                                    .push(queue_state::ApparatusQueueAction::Complete);
+                                allowed_actions.push(queue_state::ApparatusQueueAction::Complete);
                                 complete_requires_full_report =
                                     !(apparatus::is_laminatsiya_title(&storage_key)
                                         || apparatus::is_rezka_title(&storage_key))
@@ -504,11 +533,8 @@ impl ProductionMapService {
                             }
                         }
                         queue_state::ApparatusQueueOrderState::Paused
-                            if control == OrderControlState::Active => {
-                            allowed_actions.push(queue_state::ApparatusQueueAction::Resume);
-                        }
-                        queue_state::ApparatusQueueOrderState::Frozen
-                            if control == OrderControlState::Active => {
+                            if control == OrderControlState::Active =>
+                        {
                             allowed_actions.push(queue_state::ApparatusQueueAction::Resume);
                         }
                         queue_state::ApparatusQueueOrderState::Completed => {}

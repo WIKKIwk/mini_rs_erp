@@ -6,10 +6,25 @@ pub fn effective_apparatus_sequence(
     stored_sequence: &[String],
     visible_order_ids: &[String],
 ) -> Vec<String> {
+    effective_apparatus_sequence_excluding(stored_sequence, visible_order_ids, &BTreeSet::new())
+}
+
+pub fn effective_apparatus_sequence_excluding(
+    stored_sequence: &[String],
+    visible_order_ids: &[String],
+    excluded_order_ids: &BTreeSet<String>,
+) -> Vec<String> {
+    let excluded: BTreeSet<String> = excluded_order_ids
+        .iter()
+        .map(|id| id.trim())
+        .filter(|id| !id.is_empty())
+        .map(str::to_string)
+        .collect();
     let visible: BTreeSet<String> = visible_order_ids
         .iter()
         .map(|id| id.trim())
         .filter(|id| !id.is_empty())
+        .filter(|id| !excluded.contains(*id))
         .map(|id| id.to_string())
         .collect();
     if visible.is_empty() {
@@ -31,7 +46,7 @@ pub fn effective_apparatus_sequence(
     let visible_order_ids = visible_order_ids.iter().rev();
     for id in visible_order_ids {
         let id = id.trim();
-        if id.is_empty() {
+        if id.is_empty() || excluded.contains(id) {
             continue;
         }
         if !result.iter().any(|existing| existing == id) {

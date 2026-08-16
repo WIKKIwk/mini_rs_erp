@@ -1,6 +1,6 @@
+mod capacity;
 mod maps;
 mod materials;
-mod capacity;
 mod queue;
 mod runs;
 mod state;
@@ -528,11 +528,15 @@ impl ProductionMapStorePort for MemoryProductionMapStore {
             }
         }
         let schedule_reservation_status = write.schedule_reservation_status;
+        let sequence_updates = write.sequence_updates;
         let event_order_id = write.event.order_id.clone();
         let event_actor = write.event.actor.clone();
         let event_apparatus = write.apparatus.clone();
         self.put_apparatus_queue_states_with_event(&write.apparatus, write.states, write.event)
             .await?;
+        for (apparatus, order_ids) in sequence_updates {
+            self.put_apparatus_sequence(&apparatus, order_ids).await?;
+        }
         if let Some(session) = write.session {
             self.put_order_run_session(session).await?;
         }

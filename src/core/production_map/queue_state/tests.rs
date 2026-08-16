@@ -69,6 +69,18 @@ fn effective_sequence_skips_missing_orders() {
 }
 
 #[test]
+fn effective_sequence_excludes_frozen_orders_without_readding_them() {
+    let stored = vec!["order-1".to_string(), "order-2".to_string()];
+    let visible = vec!["order-2".to_string(), "order-1".to_string()];
+    let excluded = BTreeSet::from(["order-1".to_string()]);
+
+    assert_eq!(
+        effective_apparatus_sequence_excluding(&stored, &visible, &excluded),
+        vec!["order-2".to_string()],
+    );
+}
+
+#[test]
 fn start_and_complete_flow() {
     let sequence = vec!["a".to_string(), "b".to_string()];
     let mut states = BTreeMap::new();
@@ -104,18 +116,23 @@ fn progress_actions_pause_resume_and_complete_active_order() {
 }
 
 #[test]
-fn frozen_order_can_resume_after_unfreeze_without_reentering_queue_head() {
+fn frozen_order_cannot_resume_until_admin_unfreezes_it() {
     let sequence = vec!["frozen".to_string(), "next".to_string()];
     let mut states = BTreeMap::from([
         ("frozen".to_string(), ApparatusQueueOrderState::Frozen),
         ("next".to_string(), ApparatusQueueOrderState::Pending),
     ]);
 
-    apply_queue_action(&sequence, &mut states, "frozen", ApparatusQueueAction::Resume)
-        .expect("resume frozen order");
+    apply_queue_action(
+        &sequence,
+        &mut states,
+        "frozen",
+        ApparatusQueueAction::Resume,
+    )
+    .expect_err("frozen order must wait for admin unfreeze");
     assert_eq!(
         states.get("frozen"),
-        Some(&ApparatusQueueOrderState::InProgress)
+        Some(&ApparatusQueueOrderState::Frozen)
     );
 }
 

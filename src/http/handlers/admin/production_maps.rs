@@ -8,20 +8,19 @@ use crate::core::gscale::models::{
     ProgressLabelPrintRequest, RawMaterialStockEntry, RawMaterialStockUpdateInput,
 };
 use crate::core::production_map::{
-    ApparatusCapacityProfile, ApparatusDowntime, ApparatusMaterialRuleUpsert,
-    ApparatusQueuePolicy, ApparatusScheduleCancelRequest, ApparatusScheduleRequest,
-    CompletionRequestDecision, MaterialScanProgressAction, OrderProgressBatchWipStatus,
-    ProductionMapApparatusTransferRequest, ProductionMapBatchMoveRequest,
-    ProductionMapDefinition, ProductionMapError,
-    ProductionMapMoveRequest, ProductionMapNodeKind, ProductionMapRunRequest,
-    QueueActionActor, QueueProgressInput, RawMaterialAssignment, RawMaterialAssignmentDeleteInput,
+    ApparatusCapacityProfile, ApparatusDowntime, ApparatusMaterialRuleUpsert, ApparatusQueuePolicy,
+    ApparatusScheduleCancelRequest, ApparatusScheduleRequest, CompletionRequestDecision,
+    MaterialScanProgressAction, OrderProgressBatchWipStatus, ProductionMapApparatusTransferRequest,
+    ProductionMapBatchMoveRequest, ProductionMapDefinition, ProductionMapError,
+    ProductionMapMoveRequest, ProductionMapNodeKind, ProductionMapRunRequest, QueueActionActor,
+    QueueProgressInput, RawMaterialAssignment, RawMaterialAssignmentDeleteInput,
     RawMaterialAssignmentInput, RawMaterialStockTransition, RawMaterialStockTransitionKind,
     RezkaFrameProgressInput, WipProgressBatchQuery, queue_state,
 };
 use crate::google_sheets::is_sheet_order_map;
 
-mod completion;
 mod astatka;
+mod completion;
 mod helpers;
 mod move_run;
 mod order_control;
@@ -35,13 +34,11 @@ mod raw_material_reprint;
 mod raw_materials;
 mod wip;
 
+pub use self::astatka::{production_map_laminatsiya_astatka, production_map_rezka_astatka};
 pub use self::completion::{
     production_map_closed_orders, production_map_completed_orders,
     production_map_completion_request_decision, production_map_completion_request_decisions,
     production_map_completion_requests, production_map_live,
-};
-pub use self::astatka::{
-    production_map_laminatsiya_astatka, production_map_rezka_astatka,
 };
 use self::helpers::*;
 pub use self::move_run::{
@@ -50,15 +47,15 @@ pub use self::move_run::{
 };
 pub use self::order_control::production_map_order_control;
 pub use self::paddons::{
-    production_map_paddon_create, production_map_paddon_detail,
-    production_map_paddon_item_add, production_map_paddon_item_remove,
-    production_map_paddon_items_add, production_map_paddon_items_remove,
-    production_map_paddon_qr_print, production_map_paddon_qr_report, production_map_paddons,
+    production_map_paddon_create, production_map_paddon_detail, production_map_paddon_item_add,
+    production_map_paddon_item_remove, production_map_paddon_items_add,
+    production_map_paddon_items_remove, production_map_paddon_qr_print,
+    production_map_paddon_qr_report, production_map_paddons,
 };
 pub use self::progress_qr::{
     production_map_progress_batch_correct, production_map_progress_qr_history,
-    production_map_progress_qr_lookup,
-    production_map_progress_qr_report, production_map_progress_qr_reprint,
+    production_map_progress_qr_lookup, production_map_progress_qr_report,
+    production_map_progress_qr_reprint,
 };
 pub use self::qolip_order_notes::production_map_qolip_order_notes;
 pub use self::qolip_validation::production_map_qolip_validate;
@@ -69,8 +66,8 @@ pub use self::raw_material_reprint::{
 pub use self::raw_materials::{
     raw_material_assignment_candidate_orders, raw_material_assignment_candidates,
     raw_material_assignment_lookup, raw_material_assignment_orders, raw_material_assignments,
-    raw_material_history, raw_material_intake, raw_material_intake_candidates,
-    raw_material_rules, raw_material_start_requirements, raw_material_stock,
+    raw_material_history, raw_material_intake, raw_material_intake_candidates, raw_material_rules,
+    raw_material_start_requirements, raw_material_stock,
 };
 pub use self::wip::{production_map_finished_goods_receive, production_map_wip_batches};
 
@@ -551,6 +548,7 @@ pub async fn production_map_sequence(
                 "queue_action_controls": snapshot.queue_action_controls,
                 "order_statuses": snapshot.order_statuses,
                 "order_controls": snapshot.order_controls,
+                "frozen_orders_by_apparatus": snapshot.frozen_orders_by_apparatus,
                 "order_customers": order_customers,
                 "qolip_order_notes": qolip_order_notes,
             })))

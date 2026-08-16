@@ -62,6 +62,10 @@ pub struct QueueActionProgressWriteResult {
 pub struct QueueActionProgressWrite {
     pub apparatus: String,
     pub states: QueueStateMap,
+    /// Persisted sequence replacements that belong to the same queue write.
+    /// PostgreSQL applies these in the same transaction as the queue state,
+    /// event, session, and control transition.
+    pub sequence_updates: BTreeMap<String, Vec<String>>,
     pub event: ApparatusQueueActionEvent,
     pub session: Option<OrderRunSession>,
     pub progress_event: Option<OrderProgressEvent>,
@@ -105,8 +109,8 @@ pub trait ProductionMapStorePort: Send + Sync {
                 (value.len() <= 4
                     && !value.is_empty()
                     && value.chars().all(|ch| ch.is_ascii_digit()))
-                    .then(|| value.parse::<u32>().ok())
-                    .flatten()
+                .then(|| value.parse::<u32>().ok())
+                .flatten()
             })
             .max()
             .unwrap_or_default();
@@ -428,10 +432,7 @@ pub trait ProductionMapStorePort: Send + Sync {
     async fn paddon_summary(&self, _code: &str) -> StoreResult<Option<PaddonSummary>> {
         Ok(None)
     }
-    async fn create_paddon(
-        &self,
-        _input: PaddonCreateInput,
-    ) -> StoreResult<PaddonSummary> {
+    async fn create_paddon(&self, _input: PaddonCreateInput) -> StoreResult<PaddonSummary> {
         Err(ProductionMapError::StoreFailed)
     }
     async fn paddon_snapshot(&self, _code: &str) -> StoreResult<Option<PaddonSnapshot>> {
@@ -505,11 +506,15 @@ pub trait ProductionMapStorePort: Send + Sync {
         write: QueueActionProgressWrite,
     ) -> StoreResult<QueueActionProgressWriteResult> {
         let schedule_reservation_status = write.schedule_reservation_status;
+        let sequence_updates = write.sequence_updates;
         let event_order_id = write.event.order_id.clone();
         let event_actor = write.event.actor.clone();
         let event_apparatus = write.apparatus.clone();
         self.put_apparatus_queue_states_with_event(&write.apparatus, write.states, write.event)
             .await?;
+        for (apparatus, order_ids) in sequence_updates {
+            self.put_apparatus_sequence(&apparatus, order_ids).await?;
+        }
         if let Some(session) = write.session {
             self.put_order_run_session(session).await?;
         }

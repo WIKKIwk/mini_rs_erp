@@ -112,11 +112,7 @@ impl ProductionMapService {
             }
         }
 
-        audit_paused_session_progress(
-            &sessions,
-            &batches_by_id,
-            &mut violations,
-        );
+        audit_paused_session_progress(&sessions, &batches_by_id, &mut violations);
 
         for (qr_payload, owners) in qr_owners.values() {
             if owners.len() <= 1 {
@@ -332,13 +328,21 @@ fn audit_session(
             "run session references an order that is not present in production maps",
         ));
     }
-    if matches!(
-        session.status,
-        OrderRunStatus::Active
-            | OrderRunStatus::Paused
-            | OrderRunStatus::Frozen
-            | OrderRunStatus::RollDetached
-    ) {
+    let is_requeued = session.status == OrderRunStatus::Paused
+        && session
+            .payload_json
+            .get("requeued_at_tail")
+            .and_then(serde_json::Value::as_bool)
+            == Some(true);
+    if !is_requeued
+        && matches!(
+            session.status,
+            OrderRunStatus::Active
+                | OrderRunStatus::Paused
+                | OrderRunStatus::Frozen
+                | OrderRunStatus::RollDetached
+        )
+    {
         active_sessions
             .entry((apparatus.to_ascii_lowercase(), order_id.to_string()))
             .or_default()
@@ -347,7 +351,8 @@ fn audit_session(
     let Some(map) = maps_by_id.get(order_id) else {
         return;
     };
-    if !chain::map_has_work_stage_for_station(map, apparatus)
+    if !is_requeued
+        && !chain::map_has_work_stage_for_station(map, apparatus)
         && matches!(
             session.status,
             OrderRunStatus::Active
@@ -366,6 +371,7 @@ fn audit_session(
     let state = queue_state_for_apparatus_order(queue_states, apparatus, order_id);
     let expected = match session.status {
         OrderRunStatus::Active => Some(ApparatusQueueOrderState::InProgress),
+        OrderRunStatus::Paused if is_requeued => None,
         OrderRunStatus::Paused | OrderRunStatus::RollDetached => {
             Some(ApparatusQueueOrderState::Paused)
         }
@@ -459,9 +465,7 @@ fn audit_progress_batch(
 
     let expected_action = match batch.status {
         OrderProgressBatchStatus::Paused => queue_state::ApparatusQueueAction::Pause,
-        OrderProgressBatchStatus::RollDetached => {
-            queue_state::ApparatusQueueAction::DetachRoll
-        }
+        OrderProgressBatchStatus::RollDetached => queue_state::ApparatusQueueAction::DetachRoll,
         OrderProgressBatchStatus::Resumed
             if batch.action == queue_state::ApparatusQueueAction::DetachRoll =>
         {
@@ -634,6 +638,14 @@ fn audit_paused_session_progress(
     violations: &mut Vec<ProductionWorkflowAuditViolation>,
 ) {
     for session in sessions {
+        if session
+            .payload_json
+            .get("requeued_at_tail")
+            .and_then(serde_json::Value::as_bool)
+            == Some(true)
+        {
+            continue;
+        }
         let is_laminatsiya_handoff = session
             .payload_json
             .get("worker_handoff")
@@ -707,10 +719,7 @@ fn audit_transfers(
         }
         if transfer.from_apparatus.trim().is_empty()
             || transfer.to_apparatus.trim().is_empty()
-            || queue_state::apparatus_titles_match(
-                &transfer.from_apparatus,
-                &transfer.to_apparatus,
-            )
+            || queue_state::apparatus_titles_match(&transfer.from_apparatus, &transfer.to_apparatus)
         {
             violations.push(ProductionWorkflowAuditViolation::new(
                 "invalid_apparatus_transfer_route",
@@ -768,16 +777,10 @@ fn audit_transfers(
                 "transfer receipt progress batch must be the paused batch on the target apparatus",
             ));
         }
-        let source_state = queue_state_for_apparatus_order(
-            queue_states,
-            &transfer.from_apparatus,
-            order_id,
-        );
-        let target_state = queue_state_for_apparatus_order(
-            queue_states,
-            &transfer.to_apparatus,
-            order_id,
-        );
+        let source_state =
+            queue_state_for_apparatus_order(queue_states, &transfer.from_apparatus, order_id);
+        let target_state =
+            queue_state_for_apparatus_order(queue_states, &transfer.to_apparatus, order_id);
         if source_state.is_some_and(ApparatusQueueOrderState::is_active)
             || target_state != Some(ApparatusQueueOrderState::Paused)
         {
@@ -876,12 +879,15 @@ fn audit_capacity(
         }
     }
 
-    for reservation in reservations.iter().filter(|reservation| {
-        reservation.status.reserves_capacity()
-    }) {
+    for reservation in reservations
+        .iter()
+        .filter(|reservation| reservation.status.reserves_capacity())
+    {
         let same_apparatus = reservations.iter().filter(|other| {
             other.status.reserves_capacity()
-                && (other.apparatus_id.eq_ignore_ascii_case(&reservation.apparatus_id)
+                && (other
+                    .apparatus_id
+                    .eq_ignore_ascii_case(&reservation.apparatus_id)
                     || other.apparatus.eq_ignore_ascii_case(&reservation.apparatus))
                 && other.starts_at_unix < reservation.ends_at_unix
                 && reservation.starts_at_unix < other.ends_at_unix
@@ -890,8 +896,12 @@ fn audit_capacity(
         let capacity_slots = profiles
             .iter()
             .find(|profile| {
-                profile.apparatus_id.eq_ignore_ascii_case(&reservation.apparatus_id)
-                    || profile.apparatus.eq_ignore_ascii_case(&reservation.apparatus)
+                profile
+                    .apparatus_id
+                    .eq_ignore_ascii_case(&reservation.apparatus_id)
+                    || profile
+                        .apparatus
+                        .eq_ignore_ascii_case(&reservation.apparatus)
             })
             .map(|profile| profile.capacity_slots)
             .unwrap_or(1);

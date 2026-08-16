@@ -4,26 +4,24 @@ use async_trait::async_trait;
 use sqlx::PgPool;
 
 use crate::core::production_map::{
-    ApparatusMaterialRule, ApparatusQueueActionEvent, ApparatusQueuePolicy, CompletedQueueOrder,
-    CompletionRequestDecision, CompletionRequestDecisionNotification,
-    CompletionRequestNotification, CompletionRequestStateResolution, FinishedGoodsStockEntry,
-    ApparatusCapacityProfile, ApparatusDowntime, ApparatusScheduleCancelRequest,
-    ApparatusScheduleCandidate, ApparatusScheduleReservation, OrderControlRecord,
-    OrderProgressBatch, OrderProgressEvent, OrderRunSession,
-    LaminatsiyaAstatkaReport, RezkaAstatkaReport,
-    ProductionMapApparatusTransferRecord, ProductionMapApparatusTransferWrite,
-    ProductionMapDefinition, ProductionMapError, ProductionMapStorePort, ProductionOrderLogEntry,
-    PaddonCreateInput, PaddonSnapshot, PaddonSummary, ProgressBatchCorrectionInput,
-    ProgressBatchCorrectionRecord, QueueActionActor,
-    QueueActionProgressWrite, QueueActionProgressWriteResult,
-    RawMaterialAssignment, RawMaterialStockTransition, RawMaterialStockTransitionKind,
-    WipProgressBatchQuery,
+    ApparatusCapacityProfile, ApparatusDowntime, ApparatusMaterialRule, ApparatusQueueActionEvent,
+    ApparatusQueuePolicy, ApparatusScheduleCancelRequest, ApparatusScheduleCandidate,
+    ApparatusScheduleReservation, CompletedQueueOrder, CompletionRequestDecision,
+    CompletionRequestDecisionNotification, CompletionRequestNotification,
+    CompletionRequestStateResolution, FinishedGoodsStockEntry, LaminatsiyaAstatkaReport,
+    OrderControlRecord, OrderProgressBatch, OrderProgressEvent, OrderRunSession, PaddonCreateInput,
+    PaddonSnapshot, PaddonSummary, ProductionMapApparatusTransferRecord,
+    ProductionMapApparatusTransferWrite, ProductionMapDefinition, ProductionMapError,
+    ProductionMapStorePort, ProductionOrderLogEntry, ProgressBatchCorrectionInput,
+    ProgressBatchCorrectionRecord, QueueActionActor, QueueActionProgressWrite,
+    QueueActionProgressWriteResult, RawMaterialAssignment, RawMaterialStockTransition,
+    RawMaterialStockTransitionKind, RezkaAstatkaReport, WipProgressBatchQuery,
 };
 use crate::core::qolip::QolipError;
 
-mod catalog_helpers;
 mod astatka_helpers;
 mod capacity_helpers;
+mod catalog_helpers;
 mod completion_helpers;
 mod map_helpers;
 mod material_helpers;
@@ -37,10 +35,6 @@ mod raw_material_stock_helpers;
 mod transfer_helpers;
 mod wip_query_helpers;
 
-use self::catalog_helpers::{
-    delete_map_by_id, load_apparatus_queue_policies, load_apparatus_queue_states,
-    load_apparatus_sequences, load_maps, save_apparatus_queue_policy, save_apparatus_sequence,
-};
 use self::astatka_helpers::{
     load_laminatsiya_astatka_reports_for_order, load_rezka_astatka_reports_for_order,
     put_laminatsiya_astatka_report, put_rezka_astatka_report,
@@ -48,9 +42,14 @@ use self::astatka_helpers::{
 use self::capacity_helpers::{
     cancel_apparatus_schedule_reservation, load_apparatus_capacity_profiles,
     load_apparatus_downtimes, load_apparatus_schedule_reservation_by_idempotency_key,
-    load_apparatus_schedule_reservations, put_apparatus_capacity_profile,
-    put_apparatus_downtime, put_apparatus_schedule_reservation, resolve_apparatus_identity,
+    load_apparatus_schedule_reservations, put_apparatus_capacity_profile, put_apparatus_downtime,
+    put_apparatus_schedule_reservation, resolve_apparatus_identity,
     update_apparatus_schedule_reservation_status_tx,
+};
+use self::catalog_helpers::{
+    delete_map_by_id, load_apparatus_queue_policies, load_apparatus_queue_states,
+    load_apparatus_sequences, load_maps, save_apparatus_queue_policy, save_apparatus_sequence,
+    save_apparatus_sequence_tx,
 };
 use self::completion_helpers::{
     load_completion_request_by_event_id, load_completion_request_decisions_for_actor,
@@ -69,11 +68,6 @@ use self::order_control_helpers::{
     load_order_control_states, load_order_freeze_requests_for_audit, save_order_control_state,
     save_order_control_state_tx,
 };
-use self::paddon_helpers::{
-    add_paddon_item, add_paddon_items, create_paddon, load_paddon_scan_snapshot,
-    load_paddon_snapshot, load_paddon_summary, load_paddons, remove_paddon_item,
-    remove_paddon_items,
-};
 use self::order_query_helpers::{
     load_active_order_run_session, load_active_order_run_session_for_qolip,
     load_active_order_run_sessions_for_worker, load_completed_queue_orders_for_actor,
@@ -82,6 +76,11 @@ use self::order_query_helpers::{
     load_progress_batches_for_audit, load_progress_batches_for_order,
     load_progress_batches_for_orders, load_progress_batches_for_worker,
     load_queue_action_logs_for_orders, load_queue_action_logs_for_worker,
+};
+use self::paddon_helpers::{
+    add_paddon_item, add_paddon_items, create_paddon, load_paddon_scan_snapshot,
+    load_paddon_snapshot, load_paddon_summary, load_paddons, remove_paddon_item,
+    remove_paddon_items,
 };
 use self::progress_helpers::{
     correct_progress_batch, load_progress_batch_corrections_for_order, put_order_progress_batch,
@@ -93,8 +92,7 @@ use self::queue_helpers::{insert_queue_action_event_tx, put_queue_states_tx};
 use self::raw_material_stock_helpers::apply_raw_material_stock_transitions_tx;
 use self::transfer_helpers::{
     commit_apparatus_transfer as commit_apparatus_transfer_record,
-    load_apparatus_transfer_by_idempotency_key,
-    load_apparatus_transfers_for_audit,
+    load_apparatus_transfer_by_idempotency_key, load_apparatus_transfers_for_audit,
 };
 use self::wip_query_helpers::load_wip_progress_batches;
 
@@ -242,13 +240,8 @@ impl ProductionMapStorePort for PostgresProductionMapStore {
         capacity_slots: u16,
         finite_capacity: bool,
     ) -> Result<ApparatusScheduleReservation, ProductionMapError> {
-        put_apparatus_schedule_reservation(
-            &self.pool,
-            reservation,
-            capacity_slots,
-            finite_capacity,
-        )
-        .await
+        put_apparatus_schedule_reservation(&self.pool, reservation, capacity_slots, finite_capacity)
+            .await
     }
 
     async fn cancel_apparatus_schedule_reservation(
@@ -708,10 +701,14 @@ impl ProductionMapStorePort for PostgresProductionMapStore {
             .map(|session| session.session_id.trim())
             .filter(|session_id| !session_id.is_empty())
             .map(str::to_string);
+        let sequence_updates = write.sequence_updates;
         if let Some(session) = &write.session {
             reject_qolip_in_use_tx(&mut tx, session).await?;
         }
         put_queue_states_tx(&mut tx, apparatus, write.states).await?;
+        for (sequence_apparatus, order_ids) in &sequence_updates {
+            save_apparatus_sequence_tx(&mut tx, sequence_apparatus, order_ids).await?;
+        }
         insert_queue_action_event_tx(&mut tx, &write.event).await?;
         if let Some(status) = write.schedule_reservation_status {
             update_apparatus_schedule_reservation_status_tx(
@@ -723,7 +720,7 @@ impl ProductionMapStorePort for PostgresProductionMapStore {
             )
             .await?;
         }
-        if let Some(mut session) = write.session {
+        if let Some(session) = write.session {
             put_order_run_session_tx(&mut tx, &session).await?;
         }
         if let Some(event) = write.progress_event {
@@ -752,8 +749,8 @@ impl ProductionMapStorePort for PostgresProductionMapStore {
                 checkout,
                 current_session_id.as_deref(),
             )
-                .await
-                .map_err(production_map_qolip_checkout_error)?;
+            .await
+            .map_err(production_map_qolip_checkout_error)?;
         }
         let raw_material_stock_warehouses = apply_raw_material_stock_transitions_tx(
             &mut tx,
@@ -824,7 +821,9 @@ impl ProductionMapStorePort for PostgresProductionMapStore {
         .fetch_optional(&mut *tx)
         .await
         .map_err(|_| ProductionMapError::StoreFailed)?
-        .and_then(|state| crate::core::production_map::queue_state::ApparatusQueueOrderState::parse(&state))
+        .and_then(|state| {
+            crate::core::production_map::queue_state::ApparatusQueueOrderState::parse(&state)
+        })
         .is_some_and(crate::core::production_map::queue_state::ApparatusQueueOrderState::is_active);
         if !active_state {
             return Err(ProductionMapError::RawMaterialOrderNotActive);

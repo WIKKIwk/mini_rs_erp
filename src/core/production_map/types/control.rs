@@ -84,6 +84,17 @@ pub struct OrderControlRecord {
     pub freeze_request: Option<OrderFreezeRequest>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct FrozenOrderSnapshot {
+    pub order_id: String,
+    pub apparatus: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub issue_note: String,
+    pub frozen_at_unix: i64,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub frozen_by: String,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct OrderFreezeAuditRecord {
     pub order_id: String,

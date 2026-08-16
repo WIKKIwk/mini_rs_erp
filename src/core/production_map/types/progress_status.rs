@@ -74,6 +74,12 @@ impl OrderProgressBatchStatusDetail {
 }
 
 impl ProductionOrderStatusDetail {
+    pub fn force_frozen(&mut self) {
+        self.order_status = "frozen".to_string();
+        self.work_status = "frozen".to_string();
+        self.flow_status = "frozen".to_string();
+    }
+
     pub fn from_order_flow(
         progress_batches: &[OrderProgressBatch],
         run_sessions: &[OrderRunSession],
@@ -133,7 +139,16 @@ impl ProductionOrderStatusDetail {
         for session in run_sessions {
             match session.status {
                 OrderRunStatus::Active => self.active_session_count += 1,
-                OrderRunStatus::Paused => self.paused_session_count += 1,
+                OrderRunStatus::Paused
+                    if session
+                        .payload_json
+                        .get("requeued_at_tail")
+                        .and_then(serde_json::Value::as_bool)
+                        != Some(true) =>
+                {
+                    self.paused_session_count += 1;
+                }
+                OrderRunStatus::Paused => {}
                 OrderRunStatus::Frozen => {}
                 OrderRunStatus::RollDetached => self.roll_detached_session_count += 1,
                 OrderRunStatus::Completed => {}

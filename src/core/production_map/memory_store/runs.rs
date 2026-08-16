@@ -39,9 +39,15 @@ pub(super) async fn active_order_run_session_for_qolip(
             matches!(
                 session.status,
                 OrderRunStatus::Active | OrderRunStatus::Paused | OrderRunStatus::RollDetached
-            ) && session_qolip_codes(session)
-                .iter()
-                .any(|value| value.eq_ignore_ascii_case(qolip_code))
+            ) && !(session.status == OrderRunStatus::Paused
+                && session
+                    .payload_json
+                    .get("requeued_at_tail")
+                    .and_then(serde_json::Value::as_bool)
+                    == Some(true))
+                && session_qolip_codes(session)
+                    .iter()
+                    .any(|value| value.eq_ignore_ascii_case(qolip_code))
         })
         .cloned())
 }
@@ -54,7 +60,11 @@ pub(super) fn session_qolip_codes(session: &OrderRunSession) -> Vec<String> {
         .and_then(serde_json::Value::as_array)
     {
         for value in values {
-            let Some(code) = value.as_str().map(str::trim).filter(|code| !code.is_empty()) else {
+            let Some(code) = value
+                .as_str()
+                .map(str::trim)
+                .filter(|code| !code.is_empty())
+            else {
                 continue;
             };
             if !result
@@ -99,7 +109,13 @@ pub(super) async fn active_order_run_sessions_for_worker(
             matches!(
                 session.status,
                 OrderRunStatus::Active | OrderRunStatus::Paused | OrderRunStatus::RollDetached
-            ) && refs.contains(session.worker_ref.trim())
+            ) && !(session.status == OrderRunStatus::Paused
+                && session
+                    .payload_json
+                    .get("requeued_at_tail")
+                    .and_then(serde_json::Value::as_bool)
+                    == Some(true))
+                && refs.contains(session.worker_ref.trim())
         })
         .cloned()
         .collect::<Vec<_>>();

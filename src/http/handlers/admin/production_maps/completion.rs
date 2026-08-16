@@ -30,12 +30,7 @@ pub async fn production_map_live(
     let include_completion_requests = matches!(principal.role, PrincipalRole::Admin);
     Ok(ws
         .on_upgrade(move |socket| {
-            production_map_live_socket(
-                state,
-                socket,
-                principal,
-                include_completion_requests,
-            )
+            production_map_live_socket(state, socket, principal, include_completion_requests)
         })
         .into_response())
 }
@@ -154,9 +149,12 @@ async fn send_production_map_live_snapshot(
     let actor_ref = queue_action_actor(principal).ref_;
     let snapshot = match service.live_snapshot().await {
         Ok(mut snapshot) => {
-            if let Err(error) =
-                super::super::training::merge_worker_training_snapshot(state, principal, &mut snapshot)
-                    .await
+            if let Err(error) = super::super::training::merge_worker_training_snapshot(
+                state,
+                principal,
+                &mut snapshot,
+            )
+            .await
             {
                 let payload = serde_json::json!({
                     "ok": false,
@@ -207,6 +205,7 @@ async fn send_production_map_live_snapshot(
                 "queue_action_controls": snapshot.queue_action_controls,
                 "order_statuses": snapshot.order_statuses,
                 "order_controls": snapshot.order_controls,
+                "frozen_orders_by_apparatus": snapshot.frozen_orders_by_apparatus,
                 "order_customers": order_customers,
                 "completed_orders": completed_orders,
                 "completion_requests": completion_requests,

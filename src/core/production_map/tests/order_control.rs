@@ -133,7 +133,7 @@ async fn freeze_request_requires_worker_pause_then_blocks_worker_actions() {
         .apply_apparatus_queue_action(
             apparatus,
             order_id,
-            queue_state::ApparatusQueueAction::Resume,
+            queue_state::ApparatusQueueAction::Start,
             &[apparatus.to_string()],
             actor("worker"),
         )
@@ -228,6 +228,25 @@ async fn worker_issue_freezes_bosma_without_completion_metrics_and_unfreeze_rest
         OrderControlState::Frozen
     );
     assert!(issue.progress_batch.is_none());
+    let frozen_snapshot = service.live_snapshot().await.expect("frozen snapshot");
+    assert_eq!(
+        frozen_snapshot.sequences.get(apparatus).cloned(),
+        Some(Vec::new())
+    );
+    assert_eq!(
+        frozen_snapshot
+            .frozen_orders_by_apparatus
+            .get(apparatus)
+            .and_then(|orders| orders.first())
+            .map(|order| order.issue_note.as_str()),
+        Some(issue_note)
+    );
+    assert!(
+        !frozen_snapshot
+            .queue_action_controls
+            .get(apparatus)
+            .is_some_and(|controls| controls.contains_key(order_id))
+    );
 
     let logs = service
         .queue_action_logs_for_order(order_id)
@@ -239,7 +258,13 @@ async fn worker_issue_freezes_bosma_without_completion_metrics_and_unfreeze_rest
         .expect("issue history entry");
     assert_eq!(issue_log.action, queue_state::ApparatusQueueAction::Freeze);
     assert!(!issue_log.completed_with_issue);
-    assert!(service.completion_requests(10).await.expect("requests").is_empty());
+    assert!(
+        service
+            .completion_requests(10)
+            .await
+            .expect("requests")
+            .is_empty()
+    );
     let completed_history = service
         .completed_queue_orders_for_actor("aparatchi-1", 10)
         .await
@@ -276,6 +301,26 @@ async fn worker_issue_freezes_bosma_without_completion_metrics_and_unfreeze_rest
         .unfreeze_order(order_id, actor("admin"))
         .await
         .expect("unfreeze");
+    let unfrozen_snapshot = service.live_snapshot().await.expect("unfrozen snapshot");
+    assert_eq!(
+        unfrozen_snapshot.sequences.get(apparatus).cloned(),
+        Some(vec![order_id.to_string()])
+    );
+    assert_eq!(
+        unfrozen_snapshot
+            .queue_action_controls
+            .get(apparatus)
+            .and_then(|controls| controls.get(order_id))
+            .map(|control| control.allowed_actions.clone()),
+        Some(vec![queue_state::ApparatusQueueAction::Resume])
+    );
+    assert_eq!(
+        unfrozen_snapshot
+            .order_statuses
+            .get(order_id)
+            .map(|status| status.order_status.as_str()),
+        Some("ready")
+    );
     assert_eq!(
         service
             .apparatus_queue_states()
@@ -284,7 +329,7 @@ async fn worker_issue_freezes_bosma_without_completion_metrics_and_unfreeze_rest
             .get(apparatus)
             .and_then(|states| states.get(order_id))
             .map(String::as_str),
-        Some("paused")
+        Some("pending")
     );
     let history_after_unfreeze = service
         .completed_queue_orders_for_actor("aparatchi-1", 10)
@@ -330,7 +375,7 @@ async fn worker_issue_freezes_bosma_without_completion_metrics_and_unfreeze_rest
                 ..QueueProgressInput::default()
             },
         )
-    .await
+        .await
         .expect("ordinary completion after unfreeze");
     assert_eq!(completed.states[order_id], "completed");
     let completed_orders = service
@@ -338,13 +383,15 @@ async fn worker_issue_freezes_bosma_without_completion_metrics_and_unfreeze_rest
         .await
         .expect("completed orders after completion");
     assert_eq!(completed_orders.len(), 1);
-    assert_eq!(completed_orders[0].status, CompletedQueueOrderStatus::Completed);
+    assert_eq!(
+        completed_orders[0].status,
+        CompletedQueueOrderStatus::Completed
+    );
 }
 
 #[tokio::test]
 async fn closed_order_logs_include_freeze_lifecycle_events() {
-    let service =
-        ProductionMapService::new(std::sync::Arc::new(MemoryProductionMapStore::new()));
+    let service = ProductionMapService::new(std::sync::Arc::new(MemoryProductionMapStore::new()));
     let apparatus = "7 ta rangli pechat";
     let order_id = "zakaz-freeze-history";
     service
@@ -393,7 +440,7 @@ async fn closed_order_logs_include_freeze_lifecycle_events() {
             actor("worker"),
         )
         .await
-        .expect("resume");
+        .expect("resume after unfreeze");
     service
         .apply_apparatus_queue_action_with_progress(
             apparatus,
@@ -418,10 +465,7 @@ async fn closed_order_logs_include_freeze_lifecycle_events() {
         .fully_completed_orders(10)
         .await
         .expect("closed orders");
-    let logs = &closed
-        .first()
-        .expect("closed order")
-        .logs;
+    let logs = &closed.first().expect("closed order").logs;
     let freeze_statuses = logs
         .iter()
         .filter_map(|log| log.freeze.as_ref().map(|freeze| freeze.status.as_str()))
@@ -505,7 +549,7 @@ async fn cancelled_freeze_request_rejects_a_late_card_pause() {
 }
 
 #[tokio::test]
-async fn already_paused_order_freezes_immediately_and_frozen_order_can_reorder() {
+async fn already_paused_order_leaves_queue_and_unfreeze_appends_at_tail() {
     let service = ProductionMapService::new(std::sync::Arc::new(MemoryProductionMapStore::new()));
     let apparatus = "Laminatsiya";
     let frozen_id = "zakaz-freeze-paused";
@@ -553,10 +597,14 @@ async fn already_paused_order_freezes_immediately_and_frozen_order_can_reorder()
         .await
         .expect("direct freeze");
     assert_eq!(frozen.state, OrderControlState::Frozen);
-    service
-        .set_apparatus_sequence(apparatus, vec![next_id.to_string(), frozen_id.to_string()])
-        .await
-        .expect("frozen order can move later");
+    assert_eq!(
+        service
+            .apparatus_sequences()
+            .await
+            .expect("sequence after freeze")
+            .get(apparatus),
+        Some(&vec![next_id.to_string()])
+    );
     service
         .apply_apparatus_queue_action(
             apparatus,
@@ -572,6 +620,14 @@ async fn already_paused_order_freezes_immediately_and_frozen_order_can_reorder()
         .unfreeze_order(frozen_id, actor("admin"))
         .await
         .expect("unfreeze");
+    assert_eq!(
+        service
+            .apparatus_sequences()
+            .await
+            .expect("sequence after unfreeze")
+            .get(apparatus),
+        Some(&vec![next_id.to_string(), frozen_id.to_string()])
+    );
     let resume_while_second = service
         .apply_apparatus_queue_action(
             apparatus,
@@ -584,6 +640,105 @@ async fn already_paused_order_freezes_immediately_and_frozen_order_can_reorder()
     assert_eq!(
         resume_while_second,
         Err(ProductionMapError::QueueActionNotAllowed)
+    );
+}
+
+#[tokio::test]
+async fn freeze_and_unfreeze_only_update_target_apparatus_and_append_tail() {
+    let service = ProductionMapService::new(std::sync::Arc::new(MemoryProductionMapStore::new()));
+    let target_apparatus = "Laminatsiya";
+    let other_apparatus = "Rezka apparat";
+    let frozen_id = "zakaz-freeze-independent";
+    let next_id = "zakaz-freeze-independent-next";
+    let other_id = "zakaz-freeze-independent-other";
+    for (order_id, apparatus) in [
+        (frozen_id, target_apparatus),
+        (next_id, target_apparatus),
+        (other_id, other_apparatus),
+    ] {
+        service
+            .upsert_map(apparatus_stage_map(order_id, apparatus))
+            .await
+            .expect("map");
+    }
+    service
+        .set_apparatus_sequence(
+            target_apparatus,
+            vec![frozen_id.to_string(), next_id.to_string()],
+        )
+        .await
+        .expect("target sequence");
+    service
+        .set_apparatus_sequence(other_apparatus, vec![other_id.to_string()])
+        .await
+        .expect("other sequence");
+    service
+        .apply_apparatus_queue_action(
+            target_apparatus,
+            frozen_id,
+            queue_state::ApparatusQueueAction::Start,
+            &[target_apparatus.to_string()],
+            actor("worker"),
+        )
+        .await
+        .expect("start target order");
+    service
+        .apply_apparatus_queue_action_with_progress(
+            target_apparatus,
+            frozen_id,
+            queue_state::ApparatusQueueAction::Pause,
+            &[target_apparatus.to_string()],
+            actor("worker"),
+            QueueProgressInput {
+                produced_qty: Some(1.0),
+                uom: "kg".to_string(),
+                ..QueueProgressInput::default()
+            },
+        )
+        .await
+        .expect("pause target order");
+
+    service
+        .request_order_freeze(frozen_id, actor("admin"))
+        .await
+        .expect("freeze target order");
+    assert_eq!(
+        service
+            .apparatus_sequences()
+            .await
+            .expect("sequences after freeze"),
+        BTreeMap::from([
+            (target_apparatus.to_string(), vec![next_id.to_string()],),
+            (other_apparatus.to_string(), vec![other_id.to_string()]),
+        ])
+    );
+
+    service
+        .unfreeze_order(frozen_id, actor("admin"))
+        .await
+        .expect("unfreeze target order");
+    assert_eq!(
+        service
+            .apparatus_sequences()
+            .await
+            .expect("sequences after unfreeze"),
+        BTreeMap::from([
+            (
+                target_apparatus.to_string(),
+                vec![next_id.to_string(), frozen_id.to_string()],
+            ),
+            (other_apparatus.to_string(), vec![other_id.to_string()]),
+        ])
+    );
+    assert_eq!(
+        service
+            .apparatus_queue_states()
+            .await
+            .expect("queue states")
+            .get(target_apparatus)
+            .and_then(|states| states.get(frozen_id))
+            .map(String::as_str),
+        Some("pending")
     );
 }
 
