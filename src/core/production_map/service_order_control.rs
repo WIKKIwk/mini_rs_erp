@@ -111,8 +111,10 @@ impl ProductionMapService {
             self.store
                 .put_apparatus_queue_states_with_event_and_progress(write)
                 .await?;
-        } else {
+        } else if state == OrderControlState::FreezeRequested {
             self.store.put_order_control_state(record.clone()).await?;
+        } else {
+            return Err(ProductionMapError::OrderFreezeTargetNotFound);
         }
         self.notify_live();
         Ok(record)
@@ -381,7 +383,12 @@ async fn order_flow_evidence(
         .collect::<Vec<_>>();
     let paused_sessions = sessions
         .iter()
-        .filter(|session| session.status == OrderRunStatus::Paused)
+        .filter(|session| {
+            matches!(
+                session.status,
+                OrderRunStatus::Paused | OrderRunStatus::RollDetached
+            )
+        })
         .cloned()
         .collect::<Vec<_>>();
     for session in &sessions {
@@ -460,11 +467,19 @@ async fn prepare_direct_freeze_queue_write(
         .get(record.order_id.trim())
         .copied()
         .unwrap_or(queue_state::ApparatusQueueOrderState::Paused);
+    let requeued_paused_session = from_state == queue_state::ApparatusQueueOrderState::Pending
+        && target_session.is_some_and(|session| {
+            matches!(
+                session.status,
+                OrderRunStatus::Paused | OrderRunStatus::RollDetached
+            )
+        });
     if !matches!(
         from_state,
         queue_state::ApparatusQueueOrderState::Paused
             | queue_state::ApparatusQueueOrderState::Frozen
-    ) {
+    ) && !requeued_paused_session
+    {
         return Ok(None);
     }
     parsed.insert(
@@ -587,7 +602,19 @@ async fn restore_frozen_queue_after_unfreeze(
         .get(record.order_id.trim())
         .copied()
         .unwrap_or(queue_state::ApparatusQueueOrderState::Frozen);
-    if from_state != queue_state::ApparatusQueueOrderState::Frozen {
+    let requested_session = record.freeze_request.as_ref().and_then(|request| {
+        let target_session_id = request.target_session_id.trim();
+        if target_session_id.is_empty() {
+            return None;
+        }
+        sessions.iter().find(|session| {
+            session.session_id.trim() == target_session_id
+                && queue_state::apparatus_titles_match(&session.apparatus, &storage_key)
+        })
+    });
+    let already_requeued_recovery = from_state == queue_state::ApparatusQueueOrderState::Pending
+        && requested_session.is_some_and(|session| session.status == OrderRunStatus::Paused);
+    if from_state != queue_state::ApparatusQueueOrderState::Frozen && !already_requeued_recovery {
         return Err(ProductionMapError::OrderControlActionNotAllowed);
     }
     parsed.insert(
@@ -635,22 +662,24 @@ async fn restore_frozen_queue_after_unfreeze(
     event.payload_json["admin_unfreeze"] = serde_json::json!(true);
     event.payload_json["requeued_at_tail"] = serde_json::json!(true);
     event.payload_json["order_control_state"] = serde_json::json!(record.state.as_str());
+    if already_requeued_recovery {
+        event.payload_json["recovered_control_only_freeze"] = serde_json::json!(true);
+    }
 
-    let session = record
-        .freeze_request
-        .as_ref()
-        .and_then(|request| {
-            sessions.iter().find(|session| {
-                session.status == OrderRunStatus::Frozen
-                    && !request.target_session_id.trim().is_empty()
-                    && session.session_id.trim() == request.target_session_id.trim()
-            })
+    let session = requested_session
+        .filter(|session| {
+            session.status == OrderRunStatus::Frozen
+                || (already_requeued_recovery && session.status == OrderRunStatus::Paused)
         })
         .or_else(|| {
-            sessions.iter().find(|session| {
-                session.status == OrderRunStatus::Frozen
-                    && queue_state::apparatus_titles_match(&session.apparatus, &storage_key)
-            })
+            if already_requeued_recovery {
+                None
+            } else {
+                sessions.iter().find(|session| {
+                    session.status == OrderRunStatus::Frozen
+                        && queue_state::apparatus_titles_match(&session.apparatus, &storage_key)
+                })
+            }
         })
         .map(unfrozen_order_run_session);
 

@@ -830,6 +830,261 @@ async fn already_paused_order_leaves_queue_and_unfreeze_appends_at_tail() {
         resume_while_second,
         Err(ProductionMapError::QueueActionNotAllowed)
     );
+
+    let refrozen = service
+        .request_order_freeze(frozen_id, actor("admin"))
+        .await
+        .expect("refreeze requeued paused order");
+    assert_eq!(refrozen.state, OrderControlState::Frozen);
+    assert_eq!(
+        service
+            .apparatus_queue_states()
+            .await
+            .expect("queue states after refreeze")
+            .get(apparatus)
+            .and_then(|states| states.get(frozen_id))
+            .map(String::as_str),
+        Some("frozen")
+    );
+    assert_eq!(
+        service
+            .order_run_sessions_for_order(frozen_id)
+            .await
+            .expect("session after refreeze")
+            .first()
+            .map(|session| session.status),
+        Some(OrderRunStatus::Frozen)
+    );
+    assert_eq!(
+        service
+            .apparatus_sequences()
+            .await
+            .expect("sequence after refreeze")
+            .get(apparatus),
+        Some(&vec![next_id.to_string()])
+    );
+
+    let second_unfreeze = service
+        .unfreeze_order(frozen_id, actor("admin"))
+        .await
+        .expect("unfreeze refrozen order");
+    assert_eq!(second_unfreeze.state, OrderControlState::Active);
+    assert_eq!(
+        service
+            .apparatus_queue_states()
+            .await
+            .expect("queue states after second unfreeze")
+            .get(apparatus)
+            .and_then(|states| states.get(frozen_id))
+            .map(String::as_str),
+        Some("pending")
+    );
+    assert_eq!(
+        service
+            .order_run_sessions_for_order(frozen_id)
+            .await
+            .expect("session after second unfreeze")
+            .first()
+            .map(|session| session.status),
+        Some(OrderRunStatus::Paused)
+    );
+    assert_eq!(
+        service
+            .apparatus_sequences()
+            .await
+            .expect("sequence after second unfreeze")
+            .get(apparatus),
+        Some(&vec![next_id.to_string(), frozen_id.to_string()])
+    );
+}
+
+#[tokio::test]
+async fn unfreeze_recovers_control_only_refreeze_after_order_was_requeued() {
+    let store = std::sync::Arc::new(MemoryProductionMapStore::new());
+    let service = ProductionMapService::new(store.clone());
+    let apparatus = "Laminatsiya";
+    let order_id = "zakaz-refreeze-recovery";
+    service
+        .upsert_map(apparatus_stage_map(order_id, apparatus))
+        .await
+        .expect("map");
+    service
+        .set_apparatus_sequence(apparatus, vec![order_id.to_string()])
+        .await
+        .expect("sequence");
+    service
+        .apply_apparatus_queue_action(
+            apparatus,
+            order_id,
+            queue_state::ApparatusQueueAction::Start,
+            &[apparatus.to_string()],
+            actor("worker"),
+        )
+        .await
+        .expect("start");
+    service
+        .apply_apparatus_queue_action_with_progress(
+            apparatus,
+            order_id,
+            queue_state::ApparatusQueueAction::Pause,
+            &[apparatus.to_string()],
+            actor("worker"),
+            QueueProgressInput {
+                produced_qty: Some(1.0),
+                uom: "kg".to_string(),
+                ..QueueProgressInput::default()
+            },
+        )
+        .await
+        .expect("pause");
+    let first_frozen = service
+        .request_order_freeze(order_id, actor("admin"))
+        .await
+        .expect("first freeze");
+    service
+        .unfreeze_order(order_id, actor("admin"))
+        .await
+        .expect("first unfreeze");
+
+    let mut stuck_request = first_frozen.freeze_request.expect("first freeze request");
+    stuck_request.request_id = "order-freeze-request_stuck-refreeze".to_string();
+    stuck_request.status = OrderFreezeRequestStatus::Frozen;
+    stuck_request.transitioned_at_unix += 1;
+    store
+        .put_order_control_state(OrderControlRecord {
+            order_id: order_id.to_string(),
+            state: OrderControlState::Frozen,
+            actor: actor("admin"),
+            requested_at_unix: stuck_request.requested_at_unix,
+            frozen_at_unix: Some(stuck_request.transitioned_at_unix),
+            freeze_request: Some(stuck_request),
+        })
+        .await
+        .expect("controlled control-only refreeze");
+
+    let recovered = service
+        .unfreeze_order(order_id, actor("admin"))
+        .await
+        .expect("recover stuck refreeze");
+    assert_eq!(recovered.state, OrderControlState::Active);
+    assert_eq!(
+        recovered
+            .freeze_request
+            .as_ref()
+            .map(|request| request.status),
+        Some(OrderFreezeRequestStatus::Unfrozen)
+    );
+    assert_eq!(
+        service
+            .apparatus_queue_states()
+            .await
+            .expect("recovered queue state")
+            .get(apparatus)
+            .and_then(|states| states.get(order_id))
+            .map(String::as_str),
+        Some("pending")
+    );
+    assert_eq!(
+        service
+            .order_run_sessions_for_order(order_id)
+            .await
+            .expect("recovered session")
+            .first()
+            .map(|session| session.status),
+        Some(OrderRunStatus::Paused)
+    );
+    assert_eq!(
+        service
+            .apparatus_sequences()
+            .await
+            .expect("recovered sequence")
+            .get(apparatus),
+        Some(&vec![order_id.to_string()])
+    );
+}
+
+#[tokio::test]
+async fn roll_detached_order_can_freeze_unfreeze_and_refreeze() {
+    let service = ProductionMapService::new(std::sync::Arc::new(MemoryProductionMapStore::new()));
+    let apparatus = "Laminatsiya";
+    let order_id = "zakaz-refreeze-roll-detached";
+    service
+        .upsert_map(apparatus_stage_map(order_id, apparatus))
+        .await
+        .expect("map");
+    service
+        .set_apparatus_sequence(apparatus, vec![order_id.to_string()])
+        .await
+        .expect("sequence");
+    service
+        .apply_apparatus_queue_action(
+            apparatus,
+            order_id,
+            queue_state::ApparatusQueueAction::Start,
+            &[apparatus.to_string()],
+            actor("worker"),
+        )
+        .await
+        .expect("start");
+    service
+        .apply_apparatus_queue_action_with_progress(
+            apparatus,
+            order_id,
+            queue_state::ApparatusQueueAction::DetachRoll,
+            &[apparatus.to_string()],
+            actor("worker"),
+            QueueProgressInput {
+                produced_qty: Some(1.0),
+                uom: "kg".to_string(),
+                ..QueueProgressInput::default()
+            },
+        )
+        .await
+        .expect("detach roll");
+
+    let first_freeze = service
+        .request_order_freeze(order_id, actor("admin"))
+        .await
+        .expect("freeze detached roll");
+    assert_eq!(first_freeze.state, OrderControlState::Frozen);
+    assert!(
+        first_freeze
+            .freeze_request
+            .as_ref()
+            .is_some_and(|request| !request.target_session_id.is_empty())
+    );
+    service
+        .unfreeze_order(order_id, actor("admin"))
+        .await
+        .expect("first unfreeze");
+    let refrozen = service
+        .request_order_freeze(order_id, actor("admin"))
+        .await
+        .expect("refreeze detached roll");
+    assert_eq!(refrozen.state, OrderControlState::Frozen);
+    let second_unfreeze = service
+        .unfreeze_order(order_id, actor("admin"))
+        .await
+        .expect("second unfreeze");
+    assert_eq!(second_unfreeze.state, OrderControlState::Active);
+    assert_eq!(
+        service
+            .apparatus_queue_states()
+            .await
+            .expect("queue states")
+            .get(apparatus)
+            .and_then(|states| states.get(order_id))
+            .map(String::as_str),
+        Some("pending")
+    );
+    assert_eq!(
+        service
+            .apparatus_sequences()
+            .await
+            .expect("sequence")
+            .get(apparatus),
+        Some(&vec![order_id.to_string()])
+    );
 }
 
 #[tokio::test]

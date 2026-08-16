@@ -382,6 +382,78 @@ async fn admin_freeze_request_is_finalized_by_linked_worker_safe_stop() {
         Some(1)
     );
 
+    let refrozen = router
+        .clone()
+        .oneshot(request_with_body(
+            "POST",
+            "/v1/mobile/admin/production-maps/order-control",
+            &admin_token,
+            &format!(r#"{{"order_id":"{order_id}","action":"freeze"}}"#),
+        ))
+        .await
+        .expect("refreeze requeued paused order");
+    let refrozen_status = refrozen.status();
+    let refrozen_body = json_body(refrozen).await;
+    assert_eq!(refrozen_status, StatusCode::OK, "{refrozen_body:?}");
+    assert_eq!(refrozen_body["control"]["state"], "frozen");
+
+    let refrozen_snapshot = router
+        .clone()
+        .oneshot(request(
+            "GET",
+            "/v1/mobile/admin/production-maps/sequence",
+            &worker_token,
+        ))
+        .await
+        .expect("snapshot after refreeze");
+    let refrozen_snapshot_body = json_body(refrozen_snapshot).await;
+    assert_eq!(
+        refrozen_snapshot_body["queue_states"]["Laminatsiya 1"][order_id],
+        "frozen"
+    );
+    assert_eq!(
+        refrozen_snapshot_body["sequences"]["Laminatsiya 1"],
+        serde_json::json!([])
+    );
+
+    let second_unfreeze = router
+        .clone()
+        .oneshot(request_with_body(
+            "POST",
+            "/v1/mobile/admin/production-maps/order-control",
+            &admin_token,
+            &format!(r#"{{"order_id":"{order_id}","action":"unfreeze"}}"#),
+        ))
+        .await
+        .expect("second unfreeze");
+    let second_unfreeze_status = second_unfreeze.status();
+    let second_unfreeze_body = json_body(second_unfreeze).await;
+    assert_eq!(
+        second_unfreeze_status,
+        StatusCode::OK,
+        "{second_unfreeze_body:?}"
+    );
+    assert_eq!(second_unfreeze_body["control"]["state"], "active");
+
+    let second_unfreeze_snapshot = router
+        .clone()
+        .oneshot(request(
+            "GET",
+            "/v1/mobile/admin/production-maps/sequence",
+            &worker_token,
+        ))
+        .await
+        .expect("snapshot after second unfreeze");
+    let second_unfreeze_snapshot_body = json_body(second_unfreeze_snapshot).await;
+    assert_eq!(
+        second_unfreeze_snapshot_body["queue_states"]["Laminatsiya 1"][order_id],
+        "pending"
+    );
+    assert_eq!(
+        second_unfreeze_snapshot_body["sequences"]["Laminatsiya 1"],
+        serde_json::json!([order_id])
+    );
+
     let start_again = router
         .clone()
         .oneshot(request_with_body(
