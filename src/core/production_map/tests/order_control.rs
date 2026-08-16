@@ -13,6 +13,42 @@ fn actor(role: &str) -> QueueActionActor {
 }
 
 #[tokio::test]
+async fn fresh_pending_actionable_contract_uses_start_semantics() {
+    let service = ProductionMapService::new(std::sync::Arc::new(MemoryProductionMapStore::new()));
+    let apparatus = "Godex";
+    let order_id = "zakaz-fresh-contract";
+    service
+        .upsert_map(apparatus_stage_map(order_id, apparatus))
+        .await
+        .expect("map");
+
+    let snapshot = service.live_snapshot().await.expect("snapshot");
+    let control = snapshot
+        .queue_action_controls
+        .get(apparatus)
+        .and_then(|controls| controls.get(order_id))
+        .expect("fresh control");
+    assert_eq!(
+        control.state,
+        queue_state::ApparatusQueueOrderState::Pending
+    );
+    assert_eq!(
+        control.allowed_actions,
+        vec![queue_state::ApparatusQueueAction::Start]
+    );
+    assert_eq!(
+        control.interaction.mode,
+        ApparatusQueueInteractionMode::FreshStart
+    );
+    assert_eq!(
+        control.interaction.start_materials_mode,
+        ApparatusQueueStartMaterialsMode::Hidden
+    );
+    assert!(!control.interaction.material_scan_required);
+    assert!(!control.interaction.assigned_materials_display_only);
+}
+
+#[tokio::test]
 async fn freeze_request_requires_worker_pause_then_blocks_worker_actions() {
     let service = ProductionMapService::new(std::sync::Arc::new(MemoryProductionMapStore::new()));
     let apparatus = "7 ta rangli pechat";
@@ -31,7 +67,6 @@ async fn freeze_request_requires_worker_pause_then_blocks_worker_actions() {
         )
         .await
         .expect("start");
-
     let requested = service
         .request_order_freeze(order_id, actor("admin"))
         .await
@@ -383,6 +418,14 @@ async fn worker_issue_freezes_bosma_without_completion_metrics_and_unfreeze_rest
         )
         .await
         .expect("start");
+    let original_session_id = service
+        .order_run_sessions_for_order(order_id)
+        .await
+        .expect("session after start")
+        .into_iter()
+        .next()
+        .expect("started session")
+        .session_id;
 
     let issue = service
         .apply_apparatus_queue_action_with_progress(
@@ -498,6 +541,14 @@ async fn worker_issue_freezes_bosma_without_completion_metrics_and_unfreeze_rest
     );
     assert_eq!(
         unfrozen_snapshot
+            .queue_action_controls
+            .get(apparatus)
+            .and_then(|controls| controls.get(order_id))
+            .map(|control| control.interaction.mode),
+        Some(ApparatusQueueInteractionMode::RequeuedReady)
+    );
+    assert_eq!(
+        unfrozen_snapshot
             .order_statuses
             .get(order_id)
             .map(|status| status.order_status.as_str()),
@@ -528,6 +579,13 @@ async fn worker_issue_freezes_bosma_without_completion_metrics_and_unfreeze_rest
         )
         .await
         .expect("resume after unfreeze");
+    let resumed_sessions = service
+        .order_run_sessions_for_order(order_id)
+        .await
+        .expect("sessions after resume");
+    assert_eq!(resumed_sessions.len(), 1);
+    assert_eq!(resumed_sessions[0].session_id, original_session_id);
+    assert_eq!(resumed_sessions[0].status, OrderRunStatus::Active);
 
     assert_eq!(
         service
@@ -817,6 +875,20 @@ async fn already_paused_order_leaves_queue_and_unfreeze_appends_at_tail() {
             .get(apparatus),
         Some(&vec![next_id.to_string(), frozen_id.to_string()])
     );
+    let waiting_snapshot = service
+        .live_snapshot()
+        .await
+        .expect("requeued waiting snapshot");
+    let waiting_control = waiting_snapshot
+        .queue_action_controls
+        .get(apparatus)
+        .and_then(|controls| controls.get(frozen_id))
+        .expect("requeued waiting control");
+    assert_eq!(
+        waiting_control.interaction.mode,
+        ApparatusQueueInteractionMode::RequeuedWaiting
+    );
+    assert!(waiting_control.allowed_actions.is_empty());
     let resume_while_second = service
         .apply_apparatus_queue_action(
             apparatus,

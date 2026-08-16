@@ -638,7 +638,7 @@ fn is_laminatsiya_apparatus(apparatus: &str) -> bool {
         .contains("laminatsiya")
 }
 
-fn build_raw_material_start_requirements(
+pub(super) fn build_raw_material_start_requirements(
     rule: Option<&ApparatusMaterialRule>,
     assignments: &[RawMaterialAssignment],
     state_material_barcodes: &[String],

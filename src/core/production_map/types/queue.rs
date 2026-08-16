@@ -44,6 +44,63 @@ pub struct ApparatusQueuePolicyRecord {
     pub reason: String,
 }
 
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ApparatusQueueInteractionMode {
+    FreshStart,
+    #[default]
+    FreshStartBlocked,
+    RequeuedWaiting,
+    RequeuedReady,
+    InProgress,
+    FreezeRequested,
+    Paused,
+    Frozen,
+    Completed,
+    WaitingPreviousStage,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ApparatusQueueStartMaterialsMode {
+    #[default]
+    Hidden,
+    ScanRequired,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ApparatusQueuePreviousWipMode {
+    #[default]
+    NotRequired,
+    ScanRequired,
+    Waiting,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ApparatusQueueQolipMode {
+    #[default]
+    NotRequired,
+    ScanRequired,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ApparatusQueueWorkerInteraction {
+    pub mode: ApparatusQueueInteractionMode,
+    pub start_materials_mode: ApparatusQueueStartMaterialsMode,
+    #[serde(default)]
+    pub material_scan_required: bool,
+    #[serde(default)]
+    pub assigned_materials_display_only: bool,
+    #[serde(default)]
+    pub material_intake_allowed: bool,
+    pub previous_wip_mode: ApparatusQueuePreviousWipMode,
+    pub qolip_mode: ApparatusQueueQolipMode,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub blocking_reason_code: String,
+}
+
 /// Backend-owned presentation contract for an order at one apparatus.
 ///
 /// The mobile client may render these actions, but it must not derive them
@@ -54,6 +111,7 @@ pub struct ApparatusQueueOrderActionControl {
     pub state: queue_state::ApparatusQueueOrderState,
     #[serde(default)]
     pub allowed_actions: Vec<queue_state::ApparatusQueueAction>,
+    pub interaction: ApparatusQueueWorkerInteraction,
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub previous_stage: String,
     #[serde(default)]

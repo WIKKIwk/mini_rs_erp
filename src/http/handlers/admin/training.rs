@@ -14,11 +14,13 @@ use crate::core::calculate_orders::{
 };
 use crate::core::production_map::pechat;
 use crate::core::production_map::{
-    ApparatusQueueOrderActionControl, ApparatusQueuePolicy, ApparatusQueuePolicyRecord,
-    OrderProgressBatch, OrderProgressBatchStatus, OrderProgressBatchStatusDetail,
-    OrderProgressBatchWipStatus, ProductionMapDefinition, ProductionMapEdge,
-    ProductionMapLiveSnapshot, ProductionMapNode, ProductionMapNodeKind, ProductionMapSaved,
-    ProductionOrderStatusDetail, chain, progress_batch_id, progress_qr_payload, queue_state,
+    ApparatusQueueInteractionMode, ApparatusQueueOrderActionControl, ApparatusQueuePolicy,
+    ApparatusQueuePolicyRecord, ApparatusQueuePreviousWipMode, ApparatusQueueQolipMode,
+    ApparatusQueueWorkerInteraction, OrderProgressBatch, OrderProgressBatchStatus,
+    OrderProgressBatchStatusDetail, OrderProgressBatchWipStatus, ProductionMapDefinition,
+    ProductionMapEdge, ProductionMapLiveSnapshot, ProductionMapNode, ProductionMapNodeKind,
+    ProductionMapSaved, ProductionOrderStatusDetail, chain, progress_batch_id, progress_qr_payload,
+    queue_state,
 };
 use crate::core::returned_paint::{
     ReturnedPaintItem, calculate_returned_paint, returned_paint_astatka_total,
@@ -1786,12 +1788,29 @@ fn training_queue_action_controls(
                     apparatus,
                     current_input_batch_id,
                 );
+            let previous_stage_ready = previous_stage.is_empty()
+                || input_batches.iter().any(|batch| {
+                    training_input_batch_matches(batch, order_id, &previous_stage, apparatus)
+                });
+            let previous_wip_mode = if previous_stage.is_empty() {
+                ApparatusQueuePreviousWipMode::NotRequired
+            } else if previous_stage_ready {
+                ApparatusQueuePreviousWipMode::ScanRequired
+            } else {
+                ApparatusQueuePreviousWipMode::Waiting
+            };
+            let pending_actionable =
+                queue_actionable && previous_wip_mode != ApparatusQueuePreviousWipMode::Waiting;
             let allowed_actions = if !queue_actionable {
                 Vec::new()
             } else {
                 match state {
                     queue_state::ApparatusQueueOrderState::Pending => {
-                        vec![queue_state::ApparatusQueueAction::Start]
+                        if pending_actionable {
+                            vec![queue_state::ApparatusQueueAction::Start]
+                        } else {
+                            Vec::new()
+                        }
                     }
                     queue_state::ApparatusQueueOrderState::InProgress => {
                         let mut actions = vec![
@@ -1811,15 +1830,69 @@ fn training_queue_action_controls(
                     queue_state::ApparatusQueueOrderState::Completed => Vec::new(),
                 }
             };
-            let previous_stage_ready = previous_stage.is_empty()
-                || input_batches.iter().any(|batch| {
-                    training_input_batch_matches(batch, order_id, &previous_stage, apparatus)
-                });
+            let interaction = match state {
+                queue_state::ApparatusQueueOrderState::Pending if !queue_actionable => {
+                    ApparatusQueueWorkerInteraction {
+                        mode: ApparatusQueueInteractionMode::FreshStartBlocked,
+                        assigned_materials_display_only: true,
+                        blocking_reason_code: "waiting_sequence".to_string(),
+                        ..ApparatusQueueWorkerInteraction::default()
+                    }
+                }
+                queue_state::ApparatusQueueOrderState::Pending
+                    if previous_wip_mode == ApparatusQueuePreviousWipMode::Waiting =>
+                {
+                    ApparatusQueueWorkerInteraction {
+                        mode: ApparatusQueueInteractionMode::WaitingPreviousStage,
+                        assigned_materials_display_only: true,
+                        previous_wip_mode,
+                        blocking_reason_code: "waiting_previous_stage".to_string(),
+                        ..ApparatusQueueWorkerInteraction::default()
+                    }
+                }
+                queue_state::ApparatusQueueOrderState::Pending => ApparatusQueueWorkerInteraction {
+                    mode: ApparatusQueueInteractionMode::FreshStart,
+                    assigned_materials_display_only: false,
+                    previous_wip_mode,
+                    qolip_mode: if pechat::is_pechat_apparatus(apparatus) {
+                        ApparatusQueueQolipMode::ScanRequired
+                    } else {
+                        ApparatusQueueQolipMode::NotRequired
+                    },
+                    ..ApparatusQueueWorkerInteraction::default()
+                },
+                queue_state::ApparatusQueueOrderState::InProgress => {
+                    ApparatusQueueWorkerInteraction {
+                        mode: ApparatusQueueInteractionMode::InProgress,
+                        material_intake_allowed: true,
+                        ..ApparatusQueueWorkerInteraction::default()
+                    }
+                }
+                queue_state::ApparatusQueueOrderState::Paused => ApparatusQueueWorkerInteraction {
+                    mode: ApparatusQueueInteractionMode::Paused,
+                    material_intake_allowed: true,
+                    ..ApparatusQueueWorkerInteraction::default()
+                },
+                queue_state::ApparatusQueueOrderState::Frozen => ApparatusQueueWorkerInteraction {
+                    mode: ApparatusQueueInteractionMode::Frozen,
+                    assigned_materials_display_only: true,
+                    blocking_reason_code: "order_frozen".to_string(),
+                    ..ApparatusQueueWorkerInteraction::default()
+                },
+                queue_state::ApparatusQueueOrderState::Completed => {
+                    ApparatusQueueWorkerInteraction {
+                        mode: ApparatusQueueInteractionMode::Completed,
+                        assigned_materials_display_only: true,
+                        ..ApparatusQueueWorkerInteraction::default()
+                    }
+                }
+            };
             (
                 order_id.clone(),
                 ApparatusQueueOrderActionControl {
                     state,
                     allowed_actions,
+                    interaction,
                     previous_stage,
                     previous_stage_ready,
                     complete_requires_full_report: training_complete_requires_full_report(

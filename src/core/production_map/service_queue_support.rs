@@ -100,6 +100,38 @@ pub(super) fn order_run_session_was_requeued(session: &OrderRunSession) -> bool 
         == Some(true)
 }
 
+pub(super) fn has_waiting_previous_stage_wip(
+    batches: &[OrderProgressBatch],
+    order_id: &str,
+    previous_stage: &str,
+    apparatus: &str,
+) -> bool {
+    batches.iter().any(|batch| {
+        batch.order_id.trim() == order_id.trim()
+            && queue_state::apparatus_titles_match(&batch.apparatus, previous_stage)
+            && matches!(
+                batch.action,
+                queue_state::ApparatusQueueAction::Pause
+                    | queue_state::ApparatusQueueAction::DetachRoll
+                    | queue_state::ApparatusQueueAction::RollComplete
+                    | queue_state::ApparatusQueueAction::Complete
+            )
+            && matches!(
+                batch.status,
+                OrderProgressBatchStatus::Paused
+                    | OrderProgressBatchStatus::RollDetached
+                    | OrderProgressBatchStatus::Completed
+                    | OrderProgressBatchStatus::Resumed
+            )
+            && (batch.next_apparatus.trim().is_empty()
+                || queue_state::next_stage_title_matches_apparatus(
+                    &batch.next_apparatus,
+                    apparatus,
+                ))
+            && batch.wip_status == OrderProgressBatchWipStatus::Waiting
+    })
+}
+
 pub(super) fn order_has_frozen_queue_state(
     states: &ApparatusQueueStateMap,
     order_id: &str,
