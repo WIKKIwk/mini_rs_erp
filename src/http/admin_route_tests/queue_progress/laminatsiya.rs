@@ -1,6 +1,432 @@
 use super::*;
 
 #[tokio::test]
+async fn admin_freeze_request_is_finalized_by_linked_worker_safe_stop() {
+    let production_store = Arc::new(MemoryProductionMapStore::new());
+    let mut state = test_state();
+    state.production_maps = ProductionMapService::new(production_store.clone());
+    state
+        .admin
+        .upsert_role_assignment(crate::core::authz::RoleAssignmentUpsert {
+            principal_role: PrincipalRole::Aparatchi,
+            principal_ref: "worker-laminatsiya-freeze-request".to_string(),
+            role_id: "aparatchi".to_string(),
+            assigned_apparatus: vec!["Laminatsiya 1".to_string()],
+            assigned_item_groups: Vec::new(),
+        })
+        .await
+        .expect("assignment");
+    let admin_token = session(&state, PrincipalRole::Admin).await;
+    let worker_token = session_for(
+        &state,
+        PrincipalRole::Aparatchi,
+        "worker-laminatsiya-freeze-request",
+    )
+    .await;
+    let router = build_router(state);
+    let order_id = "zakaz-laminatsiya-freeze-request";
+
+    let saved = router
+        .clone()
+        .oneshot(request_with_body(
+            "PUT",
+            "/v1/mobile/admin/production-maps",
+            &admin_token,
+            &pechat_order_map_json_with_dims(
+                order_id,
+                "Laminatsiya admin freeze request",
+                "9320",
+                "Laminatsiya 1",
+                2,
+                950.0,
+            ),
+        ))
+        .await
+        .expect("save map");
+    let saved_status = saved.status();
+    let saved_body = json_body(saved).await;
+    assert_eq!(saved_status, StatusCode::OK, "{saved_body:?}");
+
+    let started = router
+        .clone()
+        .oneshot(request_with_body(
+            "POST",
+            "/v1/mobile/admin/production-maps/queue-action",
+            &worker_token,
+            &format!(
+                r#"{{
+                    "apparatus":"Laminatsiya 1",
+                    "order_id":"{order_id}",
+                    "action":"start"
+                }}"#
+            ),
+        ))
+        .await
+        .expect("start");
+    let started_status = started.status();
+    let started_body = json_body(started).await;
+    assert_eq!(started_status, StatusCode::OK, "{started_body:?}");
+    let session_id = started_body["session"]["session_id"]
+        .as_str()
+        .expect("started session id")
+        .to_string();
+
+    let requested = router
+        .clone()
+        .oneshot(request_with_body(
+            "POST",
+            "/v1/mobile/admin/production-maps/order-control",
+            &admin_token,
+            &format!(r#"{{"order_id":"{order_id}","action":"freeze"}}"#),
+        ))
+        .await
+        .expect("request freeze");
+    let requested_status = requested.status();
+    let requested_body = json_body(requested).await;
+    assert_eq!(requested_status, StatusCode::OK, "{requested_body:?}");
+    assert_eq!(requested_body["control"]["state"], "freeze_requested");
+    assert_eq!(
+        requested_body["control"]["freeze_request"]["target_session_id"],
+        session_id
+    );
+
+    let snapshot = router
+        .clone()
+        .oneshot(request(
+            "GET",
+            "/v1/mobile/admin/production-maps/sequence",
+            &worker_token,
+        ))
+        .await
+        .expect("freeze requested snapshot");
+    let snapshot_status = snapshot.status();
+    let snapshot_body = json_body(snapshot).await;
+    assert_eq!(snapshot_status, StatusCode::OK, "{snapshot_body:?}");
+    assert_eq!(
+        snapshot_body["sequences"]["Laminatsiya 1"],
+        serde_json::json!([order_id])
+    );
+    assert_eq!(
+        snapshot_body["queue_states"]["Laminatsiya 1"][order_id],
+        "in_progress"
+    );
+    assert_eq!(
+        snapshot_body["queue_action_controls"]["Laminatsiya 1"][order_id]["freeze_request"]
+            ["target_session_id"],
+        session_id
+    );
+    let freeze_request_id = snapshot_body["queue_action_controls"]["Laminatsiya 1"][order_id]
+        ["freeze_request"]["request_id"]
+        .as_str()
+        .expect("linked freeze request id")
+        .to_string();
+
+    let missing_request_id = router
+        .clone()
+        .oneshot(request_with_body(
+            "POST",
+            "/v1/mobile/admin/production-maps/queue-action",
+            &worker_token,
+            &format!(
+                r#"{{
+                    "apparatus":"Laminatsiya 1",
+                    "order_id":"{order_id}",
+                    "action":"detach_roll",
+                    "finished_goods_meter":100,
+                    "finished_goods_kg":20,
+                    "bobina_kg":2
+                }}"#
+            ),
+        ))
+        .await
+        .expect("missing freeze request id");
+    assert_eq!(missing_request_id.status(), StatusCode::CONFLICT);
+    assert_eq!(
+        json_body(missing_request_id).await["error"],
+        "order_freeze_request_mismatch"
+    );
+
+    let partial_output = router
+        .clone()
+        .oneshot(request_with_body(
+            "POST",
+            "/v1/mobile/admin/production-maps/queue-action",
+            &worker_token,
+            &format!(
+                r#"{{
+                    "apparatus":"Laminatsiya 1",
+                    "order_id":"{order_id}",
+                    "action":"detach_roll",
+                    "freeze_request_id":"{freeze_request_id}",
+                    "finished_goods_meter":100,
+                    "description":"partial output must roll back"
+                }}"#
+            ),
+        ))
+        .await
+        .expect("partial safe-stop output");
+    assert_eq!(partial_output.status(), StatusCode::BAD_REQUEST);
+    assert_eq!(
+        json_body(partial_output).await["error"],
+        "freeze_safe_stop_output_incomplete"
+    );
+
+    let unchanged = router
+        .clone()
+        .oneshot(request(
+            "GET",
+            "/v1/mobile/admin/production-maps/sequence",
+            &worker_token,
+        ))
+        .await
+        .expect("unchanged snapshot");
+    let unchanged_body = json_body(unchanged).await;
+    assert_eq!(
+        unchanged_body["sequences"]["Laminatsiya 1"],
+        serde_json::json!([order_id])
+    );
+    assert_eq!(
+        unchanged_body["queue_states"]["Laminatsiya 1"][order_id],
+        "in_progress"
+    );
+    assert_eq!(
+        unchanged_body["order_controls"][order_id]["state"],
+        "freeze_requested"
+    );
+
+    production_store.fail_next_queue_progress_commit();
+    let failed_commit = router
+        .clone()
+        .oneshot(request_with_body(
+            "POST",
+            "/v1/mobile/admin/production-maps/queue-action",
+            &worker_token,
+            &format!(
+                r#"{{
+                    "apparatus":"Laminatsiya 1",
+                    "order_id":"{order_id}",
+                    "action":"detach_roll",
+                    "freeze_request_id":"{freeze_request_id}",
+                    "finished_goods_meter":100,
+                    "finished_goods_kg":20,
+                    "bobina_kg":2,
+                    "description":"controlled commit failure",
+                    "print_transport":"offline"
+                }}"#
+            ),
+        ))
+        .await
+        .expect("controlled failed commit");
+    assert_eq!(failed_commit.status(), StatusCode::INTERNAL_SERVER_ERROR);
+
+    let after_failed_commit = router
+        .clone()
+        .oneshot(request(
+            "GET",
+            "/v1/mobile/admin/production-maps/sequence",
+            &worker_token,
+        ))
+        .await
+        .expect("snapshot after failed commit");
+    let after_failed_commit_body = json_body(after_failed_commit).await;
+    assert_eq!(
+        after_failed_commit_body["sequences"]["Laminatsiya 1"],
+        serde_json::json!([order_id])
+    );
+    assert_eq!(
+        after_failed_commit_body["queue_states"]["Laminatsiya 1"][order_id],
+        "in_progress"
+    );
+    assert_eq!(
+        after_failed_commit_body["order_controls"][order_id]["state"],
+        "freeze_requested"
+    );
+    assert_eq!(
+        after_failed_commit_body["queue_action_controls"]["Laminatsiya 1"][order_id]
+            ["freeze_request"]["target_session_id"],
+        session_id
+    );
+
+    let no_rolled_back_batch = router
+        .clone()
+        .oneshot(request(
+            "GET",
+            &format!("/v1/mobile/admin/production-maps/wip-batches?status=all&order_id={order_id}"),
+            &admin_token,
+        ))
+        .await
+        .expect("no batch after failed commit");
+    assert!(json_body(no_rolled_back_batch).await["batches"]
+        .as_array()
+        .is_some_and(Vec::is_empty));
+
+    let safe_stop = router
+        .clone()
+        .oneshot(request_with_body(
+            "POST",
+            "/v1/mobile/admin/production-maps/queue-action",
+            &worker_token,
+            &format!(
+                r#"{{
+                    "apparatus":"Laminatsiya 1",
+                    "order_id":"{order_id}",
+                    "action":"detach_roll",
+                    "freeze_request_id":"{freeze_request_id}",
+                    "finished_goods_meter":100,
+                    "finished_goods_kg":20,
+                    "bobina_kg":2,
+                    "description":"healthy linked safe stop",
+                    "print_transport":"offline"
+                }}"#
+            ),
+        ))
+        .await
+        .expect("linked safe-stop");
+    let safe_stop_status = safe_stop.status();
+    let safe_stop_body = json_body(safe_stop).await;
+    assert_eq!(safe_stop_status, StatusCode::OK, "{safe_stop_body:?}");
+    assert_eq!(safe_stop_body["states"][order_id], "frozen");
+    assert_eq!(safe_stop_body["order_control"]["state"], "frozen");
+    assert_eq!(safe_stop_body["session"]["status"], "frozen");
+    assert_eq!(safe_stop_body["progress_event"]["action"], "detach_roll");
+    assert_eq!(
+        safe_stop_body["progress_batch"]["finished_goods_meter"],
+        100.0
+    );
+    assert!(safe_stop_body["progress_batch"]["qr_payload"]
+        .as_str()
+        .is_some_and(|value| !value.is_empty()));
+    assert_eq!(safe_stop_body["prints"].as_array().map(Vec::len), Some(1));
+
+    let frozen_snapshot = router
+        .clone()
+        .oneshot(request(
+            "GET",
+            "/v1/mobile/admin/production-maps/sequence",
+            &worker_token,
+        ))
+        .await
+        .expect("frozen snapshot");
+    let frozen_snapshot_body = json_body(frozen_snapshot).await;
+    assert_eq!(
+        frozen_snapshot_body["sequences"]["Laminatsiya 1"],
+        serde_json::json!([])
+    );
+    assert_eq!(
+        frozen_snapshot_body["queue_states"]["Laminatsiya 1"][order_id],
+        "frozen"
+    );
+    assert_eq!(
+        frozen_snapshot_body["frozen_orders_by_apparatus"]["Laminatsiya 1"][0]["order_id"],
+        order_id
+    );
+
+    let completed = router
+        .clone()
+        .oneshot(request(
+            "GET",
+            "/v1/mobile/admin/production-maps/completed-orders",
+            &admin_token,
+        ))
+        .await
+        .expect("completed orders");
+    assert!(json_body(completed).await["completed_orders"]
+        .as_array()
+        .is_some_and(Vec::is_empty));
+
+    let hidden_wip = router
+        .clone()
+        .oneshot(request(
+            "GET",
+            &format!(
+                "/v1/mobile/admin/production-maps/wip-batches?status=waiting&order_id={order_id}"
+            ),
+            &admin_token,
+        ))
+        .await
+        .expect("hidden frozen WIP");
+    assert!(json_body(hidden_wip).await["batches"]
+        .as_array()
+        .is_some_and(Vec::is_empty));
+
+    let unfrozen = router
+        .clone()
+        .oneshot(request_with_body(
+            "POST",
+            "/v1/mobile/admin/production-maps/order-control",
+            &admin_token,
+            &format!(r#"{{"order_id":"{order_id}","action":"unfreeze"}}"#),
+        ))
+        .await
+        .expect("unfreeze");
+    let unfrozen_status = unfrozen.status();
+    let unfrozen_body = json_body(unfrozen).await;
+    assert_eq!(unfrozen_status, StatusCode::OK, "{unfrozen_body:?}");
+    assert_eq!(unfrozen_body["control"]["state"], "active");
+
+    let visible_wip = router
+        .clone()
+        .oneshot(request(
+            "GET",
+            &format!(
+                "/v1/mobile/admin/production-maps/wip-batches?status=waiting&order_id={order_id}"
+            ),
+            &admin_token,
+        ))
+        .await
+        .expect("visible unfrozen WIP");
+    assert_eq!(
+        json_body(visible_wip).await["batches"]
+            .as_array()
+            .map(Vec::len),
+        Some(1)
+    );
+
+    let start_again = router
+        .clone()
+        .oneshot(request_with_body(
+            "POST",
+            "/v1/mobile/admin/production-maps/queue-action",
+            &worker_token,
+            &format!(
+                r#"{{
+                    "apparatus":"Laminatsiya 1",
+                    "order_id":"{order_id}",
+                    "action":"start"
+                }}"#
+            ),
+        ))
+        .await
+        .expect("start existing session");
+    assert_eq!(start_again.status(), StatusCode::BAD_REQUEST);
+    assert_eq!(
+        json_body(start_again).await["error"],
+        "queue_action_not_allowed"
+    );
+
+    let resumed = router
+        .oneshot(request_with_body(
+            "POST",
+            "/v1/mobile/admin/production-maps/queue-action",
+            &worker_token,
+            &format!(
+                r#"{{
+                    "apparatus":"Laminatsiya 1",
+                    "order_id":"{order_id}",
+                    "action":"resume"
+                }}"#
+            ),
+        ))
+        .await
+        .expect("resume existing session");
+    let resumed_status = resumed.status();
+    let resumed_body = json_body(resumed).await;
+    assert_eq!(resumed_status, StatusCode::OK, "{resumed_body:?}");
+    assert_eq!(resumed_body["session"]["session_id"], session_id);
+    assert_eq!(resumed_body["session"]["status"], "active");
+}
+
+#[tokio::test]
 async fn laminatsiya_complete_requires_or_persists_completion_metrics() {
     let print_requests = Arc::new(Mutex::new(Vec::<ScaleDriverPrintRequest>::new()));
     let mut state = test_state();
@@ -232,11 +658,9 @@ async fn finished_goods_stays_free_wip_until_assigned_warehouse_accepts() {
         completed_body["progress_batch"]["status_detail"]["flow_status"],
         "free_wip"
     );
-    assert!(
-        completed_body["progress_batch"]["status_detail"]
-            .get("stock_status")
-            .is_none()
-    );
+    assert!(completed_body["progress_batch"]["status_detail"]
+        .get("stock_status")
+        .is_none());
     assert_eq!(completed_body["order_status"]["order_status"], "completed");
     assert_eq!(completed_body["order_status"]["flow_status"], "free_wip");
     assert_eq!(completed_body["order_status"]["free_wip_count"], 1);

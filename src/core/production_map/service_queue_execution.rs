@@ -13,16 +13,27 @@ impl ProductionMapService {
         validate_queue_action_request(apparatus, order_id, assigned_apparatus)?;
         let control = self.order_control_state(order_id).await?;
         let requested_action = action;
-        let admin_freeze_finalization = control.state == OrderControlState::FreezeRequested
+        let freeze_request_finalization = control.state == OrderControlState::FreezeRequested
             && matches!(
                 requested_action,
                 queue_state::ApparatusQueueAction::Pause
+                    | queue_state::ApparatusQueueAction::DetachRoll
                     | queue_state::ApparatusQueueAction::Freeze
             );
+        let freeze_request_safe_stop = control.state == OrderControlState::FreezeRequested
+            && matches!(
+                requested_action,
+                queue_state::ApparatusQueueAction::Pause
+                    | queue_state::ApparatusQueueAction::DetachRoll
+            );
+        let freeze_request_safe_stop_has_output = freeze_safe_stop_has_any_output(&progress);
+        let freeze_request_safe_stop_with_issue = freeze_request_safe_stop
+            && !freeze_request_safe_stop_has_output
+            && !progress.description.trim().is_empty();
         let freeze_with_issue = progress.freeze_with_issue
             || (requested_action == queue_state::ApparatusQueueAction::Freeze
                 && control.state == OrderControlState::Active);
-        let action = if freeze_with_issue || admin_freeze_finalization {
+        let action = if freeze_with_issue || freeze_request_finalization {
             queue_state::ApparatusQueueAction::Freeze
         } else {
             requested_action
@@ -53,7 +64,7 @@ impl ProductionMapService {
         validate_freeze_request_pause(
             &control,
             apparatus,
-            action,
+            requested_action,
             &actor,
             &progress.freeze_request_id,
         )?;
@@ -124,11 +135,28 @@ impl ProductionMapService {
             .get(order_id)
             .copied()
             .unwrap_or(queue_state::ApparatusQueueOrderState::Pending);
-        let requeued_session = self
+        let active_session = self
             .store
             .active_order_run_session(&storage_key, order_id)
-            .await?
-            .is_some_and(|session| order_run_session_was_requeued(&session));
+            .await?;
+        if freeze_request_finalization {
+            validate_freeze_request_target_session(&control, active_session.as_ref())?;
+        }
+        if freeze_request_safe_stop
+            && !freeze_request_safe_stop_has_output
+            && !freeze_request_safe_stop_with_issue
+        {
+            return Err(ProductionMapError::ProgressInputInvalid);
+        }
+        if freeze_request_safe_stop
+            && freeze_request_safe_stop_has_output
+            && !freeze_safe_stop_output_is_complete(apparatus, &progress)
+        {
+            return Err(ProductionMapError::ProgressInputInvalid);
+        }
+        let requeued_session = active_session
+            .as_ref()
+            .is_some_and(order_run_session_was_requeued);
         if requeued_session && action == queue_state::ApparatusQueueAction::Start {
             return Err(ProductionMapError::QueueActionNotAllowed);
         }
@@ -204,8 +232,19 @@ impl ProductionMapService {
             event.payload_json["issue_note"] = serde_json::json!(issue_note);
             event.payload_json["description"] = serde_json::json!(issue_note);
         }
-        if admin_freeze_finalization {
+        if freeze_request_finalization {
             event.payload_json["admin_freeze_finalization"] = serde_json::json!(true);
+        }
+        if freeze_request_safe_stop {
+            event.payload_json["freeze_request_safe_stop"] = serde_json::json!(true);
+            event.payload_json["freeze_request_id"] =
+                serde_json::json!(progress.freeze_request_id.trim());
+            if freeze_request_safe_stop_with_issue {
+                let issue_note = progress.description.trim();
+                event.payload_json["freeze_with_issue"] = serde_json::json!(true);
+                event.payload_json["issue_note"] = serde_json::json!(issue_note);
+                event.payload_json["description"] = serde_json::json!(issue_note);
+            }
         }
         if action == queue_state::ApparatusQueueAction::Complete
             && (apparatus::is_laminatsiya_title(&storage_key)
@@ -226,9 +265,32 @@ impl ProductionMapService {
                 )
                 .await?;
         }
-        let progress = self
-            .build_progress_records(&storage_key, order_id, order_map, action, &actor, progress)
+        let progress_action = if freeze_request_safe_stop && !freeze_request_safe_stop_with_issue {
+            queue_state::ApparatusQueueAction::DetachRoll
+        } else {
+            action
+        };
+        let mut progress = self
+            .build_progress_records(
+                &storage_key,
+                order_id,
+                order_map,
+                progress_action,
+                &actor,
+                progress,
+            )
             .await?;
+        if freeze_request_safe_stop {
+            mark_freeze_request_safe_stop_progress(
+                &mut progress,
+                control
+                    .freeze_request
+                    .as_ref()
+                    .map(|request| request.request_id.as_str())
+                    .unwrap_or_default(),
+                freeze_request_safe_stop_with_issue,
+            );
+        }
         let has_unprocessed_previous_wips = action == queue_state::ApparatusQueueAction::Complete
             && to_state == queue_state::ApparatusQueueOrderState::Completed
             && self
@@ -516,7 +578,9 @@ fn validate_freeze_request_pause(
     }
     if !matches!(
         action,
-        queue_state::ApparatusQueueAction::Pause | queue_state::ApparatusQueueAction::Freeze
+        queue_state::ApparatusQueueAction::Pause
+            | queue_state::ApparatusQueueAction::DetachRoll
+            | queue_state::ApparatusQueueAction::Freeze
     ) {
         return Ok(());
     }
@@ -524,8 +588,9 @@ fn validate_freeze_request_pause(
         .freeze_request
         .as_ref()
         .ok_or(ProductionMapError::OrderFreezeRequestMismatch)?;
-    let request_id_matches =
-        supplied_request_id.is_empty() || request.request_id.trim() == supplied_request_id;
+    let request_id_matches = !supplied_request_id.is_empty()
+        && request.request_id.trim() == supplied_request_id
+        && request.status == OrderFreezeRequestStatus::Pending;
     let worker_matches = request.target_worker_role.trim() == actor.role.trim()
         && request.target_worker_ref.trim() == actor.ref_.trim();
     let apparatus_matches =
@@ -534,4 +599,104 @@ fn validate_freeze_request_pause(
         return Err(ProductionMapError::OrderFreezeRequestMismatch);
     }
     Ok(())
+}
+
+fn validate_freeze_request_target_session(
+    control: &OrderControlRecord,
+    active_session: Option<&OrderRunSession>,
+) -> Result<(), ProductionMapError> {
+    let request = control
+        .freeze_request
+        .as_ref()
+        .ok_or(ProductionMapError::OrderFreezeRequestMismatch)?;
+    let session = active_session.ok_or(ProductionMapError::OrderFreezeTargetNotFound)?;
+    if request.target_session_id.trim().is_empty()
+        || request.target_session_id.trim() != session.session_id.trim()
+    {
+        return Err(ProductionMapError::OrderFreezeRequestMismatch);
+    }
+    Ok(())
+}
+
+fn freeze_safe_stop_has_any_output(progress: &QueueProgressInput) -> bool {
+    !progress.rezka_frames.is_empty()
+        || progress.produced_qty.is_some()
+        || progress.gross_qty.is_some()
+        || progress.return_ink_kg.is_some()
+        || progress.lamination_print_leftover_rolls.is_some()
+        || progress.lamination_film_leftover_rolls.is_some()
+        || progress.rezka_bosma_waste.is_some()
+        || progress.rezka_lamination_waste.is_some()
+        || progress.rezka_edge_waste.is_some()
+        || progress.total_waste.is_some()
+        || progress.finished_goods_kg.is_some()
+        || progress.bobina_kg.is_some()
+        || progress.finished_goods_meter.is_some()
+        || progress.diameter.is_some()
+}
+
+fn freeze_safe_stop_output_is_complete(apparatus: &str, progress: &QueueProgressInput) -> bool {
+    if apparatus::is_rezka_title(apparatus) {
+        return !progress.rezka_frames.is_empty()
+            || (progress
+                .produced_qty
+                .or(progress.finished_goods_meter)
+                .is_some()
+                && progress.gross_qty.or(progress.finished_goods_kg).is_some()
+                && progress.bobina_kg.is_some()
+                && progress.diameter.is_some());
+    }
+    progress
+        .produced_qty
+        .or(progress.finished_goods_meter)
+        .is_some()
+        && progress.gross_qty.or(progress.finished_goods_kg).is_some()
+        && progress.bobina_kg.is_some()
+}
+
+fn mark_freeze_request_safe_stop_progress(
+    progress: &mut QueueProgressRecords,
+    request_id: &str,
+    with_issue: bool,
+) {
+    let request_id = request_id.trim();
+    if let Some(session) = progress.session.as_mut() {
+        session.status = OrderRunStatus::Frozen;
+        if !session.payload_json.is_object() {
+            session.payload_json = serde_json::json!({});
+        }
+        session.payload_json["frozen_order"] = serde_json::json!(true);
+        session.payload_json["freeze_request_safe_stop"] = serde_json::json!(true);
+        session.payload_json["freeze_request_id"] = serde_json::json!(request_id);
+        if with_issue {
+            session.payload_json["freeze_with_issue"] = serde_json::json!(true);
+            let issue_note = session
+                .payload_json
+                .get("description")
+                .cloned()
+                .unwrap_or_else(|| serde_json::json!(""));
+            session.payload_json["issue_note"] = issue_note;
+        }
+    }
+    if let Some(event) = progress.progress_event.as_mut() {
+        event.payload_json["freeze_request_safe_stop"] = serde_json::json!(true);
+        event.payload_json["freeze_request_id"] = serde_json::json!(request_id);
+        if with_issue {
+            event.payload_json["freeze_with_issue"] = serde_json::json!(true);
+            event.payload_json["issue_note"] = serde_json::json!(event.description.trim());
+        }
+    }
+    let mark_batch = |batch: &mut OrderProgressBatch| {
+        if !batch.payload_json.is_object() {
+            batch.payload_json = serde_json::json!({});
+        }
+        batch.payload_json["freeze_request_safe_stop"] = serde_json::json!(true);
+        batch.payload_json["freeze_request_id"] = serde_json::json!(request_id);
+    };
+    if let Some(batch) = progress.progress_batch.as_mut() {
+        mark_batch(batch);
+    }
+    for batch in &mut progress.progress_batches {
+        mark_batch(batch);
+    }
 }

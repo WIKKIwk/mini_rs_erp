@@ -4,7 +4,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::core::production_map::queue_state;
 
-use super::control::OrderControlRecord;
+use super::control::{OrderControlRecord, OrderFreezeRequest};
 use super::definition::{ProductionMapDefinition, ProductionMapSaved};
 use super::progress::{
     OrderProgressBatch, OrderProgressEvent, OrderRunSession, ProductionOrderStatusDetail,
@@ -60,6 +60,8 @@ pub struct ApparatusQueueOrderActionControl {
     pub previous_stage_ready: bool,
     #[serde(default)]
     pub complete_requires_full_report: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub freeze_request: Option<OrderFreezeRequest>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

@@ -1826,6 +1826,7 @@ fn training_queue_action_controls(
                         apparatus,
                         has_unprocessed_previous_wips,
                     ),
+                    freeze_request: None,
                 },
             )
         })

@@ -141,7 +141,9 @@ pub async fn production_map_queue_action(
             return Err(bad_request("issue_note_required"));
         }
         if !input.freeze_request_id.trim().is_empty() {
-            return Err(bad_request("freeze_with_issue_cannot_use_freeze_request_id"));
+            return Err(bad_request(
+                "freeze_with_issue_cannot_use_freeze_request_id",
+            ));
         }
         if input.worker_handoff || input.remove_roll_from_apparatus {
             return Err(bad_request("freeze_with_issue_actions_conflict"));
@@ -165,7 +167,11 @@ pub async fn production_map_queue_action(
         return Err(bad_request("worker_handoff_actions_conflict"));
     }
     if !input.rezka_frames.is_empty()
-        && (!input.apparatus.trim().to_ascii_lowercase().contains("rezka")
+        && (!input
+            .apparatus
+            .trim()
+            .to_ascii_lowercase()
+            .contains("rezka")
             || !matches!(
                 input.action,
                 queue_state::ApparatusQueueAction::Pause
@@ -255,6 +261,27 @@ pub async fn production_map_queue_action(
     } else {
         input.completion_request_note.clone()
     };
+    let freeze_request_safe_stop = !input.freeze_request_id.trim().is_empty()
+        && matches!(
+            input.action,
+            queue_state::ApparatusQueueAction::Pause
+                | queue_state::ApparatusQueueAction::DetachRoll
+        );
+    let freeze_request_safe_stop_has_output = queue_action_has_any_output(&input);
+    let freeze_request_safe_stop_with_issue = freeze_request_safe_stop
+        && !freeze_request_safe_stop_has_output
+        && !completion_request_note.trim().is_empty();
+    if freeze_request_safe_stop {
+        if !freeze_request_safe_stop_has_output {
+            if completion_request_note.trim().is_empty() {
+                return Err(bad_request(
+                    "freeze_safe_stop_output_or_issue_note_required",
+                ));
+            }
+        } else if !freeze_safe_stop_output_is_complete(&input, produced_qty) {
+            return Err(bad_request("freeze_safe_stop_output_incomplete"));
+        }
+    }
     if !matches!(input.action, queue_state::ApparatusQueueAction::Complete)
         && (!input.returned_paint_items.is_empty()
             || !input.returned_paint_image_id.trim().is_empty())
@@ -383,6 +410,7 @@ pub async fn production_map_queue_action(
             | queue_state::ApparatusQueueAction::Complete
     ) && is_rezka
         && !input.freeze_with_issue
+        && !freeze_request_safe_stop_with_issue
         && !has_rezka_frame_metrics
         && !has_rezka_progress_metrics
     {
@@ -678,6 +706,42 @@ fn canonical_queue_action(
     }
 }
 
+fn queue_action_has_any_output(input: &ApparatusQueueActionRequest) -> bool {
+    !input.rezka_frames.is_empty()
+        || input.produced_qty.is_some()
+        || input.qty.is_some()
+        || input.gross_qty.is_some()
+        || input.return_ink_kg.is_some()
+        || input.lamination_print_leftover_rolls.is_some()
+        || input.lamination_film_leftover_rolls.is_some()
+        || input.rezka_bosma_waste.is_some()
+        || input.rezka_lamination_waste.is_some()
+        || input.rezka_edge_waste.is_some()
+        || input.total_waste.is_some()
+        || input.finished_goods_kg.is_some()
+        || input.bobina_kg.is_some()
+        || input.finished_goods_meter.is_some()
+        || input.diameter.is_some()
+}
+
+fn freeze_safe_stop_output_is_complete(
+    input: &ApparatusQueueActionRequest,
+    produced_qty: Option<f64>,
+) -> bool {
+    if input
+        .apparatus
+        .trim()
+        .to_ascii_lowercase()
+        .contains("rezka")
+    {
+        return !input.rezka_frames.is_empty()
+            || rezka_queue_quantity_metrics_are_complete(input, produced_qty);
+    }
+    produced_qty.or(input.finished_goods_meter).is_some()
+        && input.gross_qty.or(input.finished_goods_kg).is_some()
+        && input.bobina_kg.is_some()
+}
+
 include!("queue_action_completion_support.rs");
 
 #[cfg(test)]
@@ -706,7 +770,14 @@ mod tests {
         let admin = principal(PrincipalRole::Admin);
 
         assert_eq!(
-            canonical_queue_action(ApparatusQueueAction::Pause, false, false, "", false, &worker),
+            canonical_queue_action(
+                ApparatusQueueAction::Pause,
+                false,
+                false,
+                "",
+                false,
+                &worker
+            ),
             ApparatusQueueAction::DetachRoll
         );
         assert_eq!(

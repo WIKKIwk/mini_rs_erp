@@ -44,6 +44,20 @@ async fn freeze_request_requires_worker_pause_then_blocks_worker_actions() {
     assert_eq!(freeze_request.target_apparatus, apparatus);
     assert_eq!(freeze_request.target_worker_role, "worker");
     assert_eq!(freeze_request.target_worker_ref, "worker-1");
+    let freeze_request_id = freeze_request.request_id.clone();
+    let requested_snapshot = service.live_snapshot().await.expect("requested snapshot");
+    let action_control = requested_snapshot
+        .queue_action_controls
+        .get(apparatus)
+        .and_then(|controls| controls.get(order_id))
+        .expect("freeze-request action control");
+    assert_eq!(
+        action_control
+            .freeze_request
+            .as_ref()
+            .map(|request| request.request_id.as_str()),
+        Some(freeze_request_id.as_str())
+    );
 
     let wrong_worker_pause = service
         .apply_apparatus_queue_action_with_progress(
@@ -55,7 +69,7 @@ async fn freeze_request_requires_worker_pause_then_blocks_worker_actions() {
             QueueProgressInput {
                 produced_qty: Some(1.0),
                 uom: "kg".to_string(),
-                freeze_request_id: freeze_request.request_id.clone(),
+                freeze_request_id: freeze_request_id.clone(),
                 ..QueueProgressInput::default()
             },
         )
@@ -95,7 +109,7 @@ async fn freeze_request_requires_worker_pause_then_blocks_worker_actions() {
             QueueProgressInput {
                 produced_qty: Some(1.0),
                 uom: "kg".to_string(),
-                freeze_request_id: freeze_request.request_id.clone(),
+                freeze_request_id: freeze_request_id.clone(),
                 ..QueueProgressInput::default()
             },
         )
@@ -105,21 +119,50 @@ async fn freeze_request_requires_worker_pause_then_blocks_worker_actions() {
         Err(ProductionMapError::OrderFreezeRequested)
     );
 
-    service
+    let missing_request_metadata = service
         .apply_apparatus_queue_action_with_progress(
             apparatus,
             order_id,
-            queue_state::ApparatusQueueAction::Pause,
+            queue_state::ApparatusQueueAction::DetachRoll,
             &[apparatus.to_string()],
             actor("worker"),
             QueueProgressInput {
-                produced_qty: Some(1.0),
-                uom: "kg".to_string(),
+                produced_qty: Some(10.0),
+                gross_qty: Some(2.0),
+                bobina_kg: Some(0.5),
+                uom: "m".to_string(),
+                ..QueueProgressInput::default()
+            },
+        )
+        .await;
+    assert_eq!(
+        missing_request_metadata,
+        Err(ProductionMapError::OrderFreezeRequestMismatch)
+    );
+
+    let frozen = service
+        .apply_apparatus_queue_action_with_progress(
+            apparatus,
+            order_id,
+            queue_state::ApparatusQueueAction::DetachRoll,
+            &[apparatus.to_string()],
+            actor("worker"),
+            QueueProgressInput {
+                produced_qty: Some(10.0),
+                gross_qty: Some(2.0),
+                bobina_kg: Some(0.5),
+                uom: "m".to_string(),
+                freeze_request_id,
                 ..QueueProgressInput::default()
             },
         )
         .await
         .expect("worker pause acknowledgement");
+    assert!(frozen.progress_batch.is_some());
+    assert_eq!(
+        frozen.session.as_ref().map(|session| session.status),
+        Some(OrderRunStatus::Frozen)
+    );
     assert_eq!(
         service
             .order_control_state(order_id)
@@ -127,6 +170,21 @@ async fn freeze_request_requires_worker_pause_then_blocks_worker_actions() {
             .expect("control")
             .state,
         OrderControlState::Frozen
+    );
+    assert!(
+        service
+            .wip_progress_batches(WipProgressBatchQuery::new(
+                apparatus,
+                "",
+                "",
+                Some(OrderProgressBatchWipStatus::Waiting),
+                false,
+                order_id,
+                10,
+            ))
+            .await
+            .expect("frozen WIP query")
+            .is_empty()
     );
 
     let resume_while_frozen = service
@@ -139,6 +197,130 @@ async fn freeze_request_requires_worker_pause_then_blocks_worker_actions() {
         )
         .await;
     assert_eq!(resume_while_frozen, Err(ProductionMapError::OrderFrozen));
+
+    service
+        .unfreeze_order(order_id, actor("admin"))
+        .await
+        .expect("unfreeze");
+    assert_eq!(
+        service
+            .wip_progress_batches(WipProgressBatchQuery::new(
+                apparatus,
+                "",
+                "",
+                Some(OrderProgressBatchWipStatus::Waiting),
+                false,
+                order_id,
+                10,
+            ))
+            .await
+            .expect("unfrozen WIP query")
+            .len(),
+        1
+    );
+}
+
+#[tokio::test]
+async fn freeze_request_issue_safe_stop_rejects_partial_output_without_mutation() {
+    let service = ProductionMapService::new(std::sync::Arc::new(MemoryProductionMapStore::new()));
+    let apparatus = "7 ta rangli pechat";
+    let order_id = "zakaz-freeze-request-issue";
+    let issue_note = "Valdan sog‘lom mahsulot chiqarib bo‘lmaydi";
+    service
+        .upsert_map(apparatus_stage_map(order_id, apparatus))
+        .await
+        .expect("map");
+    service
+        .apply_apparatus_queue_action(
+            apparatus,
+            order_id,
+            queue_state::ApparatusQueueAction::Start,
+            &[apparatus.to_string()],
+            actor("worker"),
+        )
+        .await
+        .expect("start");
+    let requested = service
+        .request_order_freeze(order_id, actor("admin"))
+        .await
+        .expect("freeze request");
+    let freeze_request_id = requested
+        .freeze_request
+        .expect("freeze request metadata")
+        .request_id;
+
+    let partial = service
+        .apply_apparatus_queue_action_with_progress(
+            apparatus,
+            order_id,
+            queue_state::ApparatusQueueAction::DetachRoll,
+            &[apparatus.to_string()],
+            actor("worker"),
+            QueueProgressInput {
+                produced_qty: Some(10.0),
+                freeze_request_id: freeze_request_id.clone(),
+                ..QueueProgressInput::default()
+            },
+        )
+        .await;
+    assert_eq!(partial, Err(ProductionMapError::ProgressInputInvalid));
+    let unchanged = service.live_snapshot().await.expect("unchanged snapshot");
+    assert_eq!(
+        unchanged.order_controls[order_id].state,
+        OrderControlState::FreezeRequested
+    );
+    assert_eq!(unchanged.queue_states[apparatus][order_id], "in_progress");
+    assert_eq!(unchanged.sequences[apparatus], vec![order_id.to_string()]);
+    assert_eq!(
+        service
+            .order_run_sessions_for_order(order_id)
+            .await
+            .expect("sessions")
+            .into_iter()
+            .find(|session| session.apparatus == apparatus)
+            .expect("session")
+            .status,
+        OrderRunStatus::Active
+    );
+
+    let frozen = service
+        .apply_apparatus_queue_action_with_progress(
+            apparatus,
+            order_id,
+            queue_state::ApparatusQueueAction::DetachRoll,
+            &[apparatus.to_string()],
+            actor("worker"),
+            QueueProgressInput {
+                description: issue_note.to_string(),
+                freeze_request_id,
+                ..QueueProgressInput::default()
+            },
+        )
+        .await
+        .expect("issue safe-stop");
+    assert!(frozen.progress_batch.is_none());
+    assert_eq!(
+        frozen.session.as_ref().map(|session| session.status),
+        Some(OrderRunStatus::Frozen)
+    );
+    let snapshot = service.live_snapshot().await.expect("frozen snapshot");
+    assert_eq!(
+        snapshot.order_controls[order_id].state,
+        OrderControlState::Frozen
+    );
+    assert_eq!(snapshot.queue_states[apparatus][order_id], "frozen");
+    assert!(snapshot.sequences[apparatus].is_empty());
+    assert_eq!(
+        snapshot.frozen_orders_by_apparatus[apparatus][0].issue_note,
+        issue_note
+    );
+    assert!(
+        service
+            .completed_queue_orders_for_actor("worker-1", 10)
+            .await
+            .expect("completed history")
+            .is_empty()
+    );
 }
 
 #[tokio::test]
@@ -408,10 +590,14 @@ async fn closed_order_logs_include_freeze_lifecycle_events() {
         )
         .await
         .expect("start");
-    service
+    let requested = service
         .request_order_freeze(order_id, actor("admin"))
         .await
         .expect("freeze request");
+    let freeze_request_id = requested
+        .freeze_request
+        .expect("freeze request metadata")
+        .request_id;
     service
         .apply_apparatus_queue_action_with_progress(
             apparatus,
@@ -420,8 +606,11 @@ async fn closed_order_logs_include_freeze_lifecycle_events() {
             &[apparatus.to_string()],
             actor("worker"),
             QueueProgressInput {
-                produced_qty: Some(1.0),
-                uom: "kg".to_string(),
+                produced_qty: Some(10.0),
+                gross_qty: Some(2.0),
+                bobina_kg: Some(0.5),
+                uom: "m".to_string(),
+                freeze_request_id,
                 ..QueueProgressInput::default()
             },
         )

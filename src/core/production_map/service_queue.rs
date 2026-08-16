@@ -11,7 +11,7 @@ use super::progress::{
     effective_apparatus_queue_policy_record, order_completed_on_apparatus,
     required_apparatus_for_closed_order,
 };
-use super::service::ClaimedAlternativeMapUpdate;
+use super::service::{ClaimedAlternativeMapUpdate, QueueProgressRecords};
 use super::service_progress_support::{session_progress_links, wip_batch_was_consumed_by_producer};
 use super::service_queue_support::*;
 use super::store_port::{ApparatusQueuePolicyMap, ApparatusQueueStateMap, OrderControlMap};
@@ -459,8 +459,8 @@ impl ProductionMapService {
                     .get(order_id.trim())
                     .copied()
                     .unwrap_or(queue_state::ApparatusQueueOrderState::Pending);
-                let control = order_controls
-                    .get(order_id.trim())
+                let order_control = order_controls.get(order_id.trim());
+                let control = order_control
                     .map(|control| control.state)
                     .unwrap_or(OrderControlState::Active);
                 let previous_stage = chain::previous_work_stage_station(order_map, &apparatus);
@@ -550,6 +550,8 @@ impl ProductionMapService {
                         previous_stage: previous_stage.unwrap_or_default(),
                         previous_stage_ready,
                         complete_requires_full_report,
+                        freeze_request: order_control
+                            .and_then(|control| control.freeze_request.clone()),
                     },
                 );
             }

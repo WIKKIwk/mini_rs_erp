@@ -60,9 +60,7 @@ impl ProductionMapService {
             .filter(|session| {
                 matches!(
                     session.status,
-                    OrderRunStatus::Active
-                        | OrderRunStatus::Paused
-                        | OrderRunStatus::RollDetached
+                    OrderRunStatus::Active | OrderRunStatus::Paused | OrderRunStatus::RollDetached
                 )
             })
             .cloned()
@@ -154,9 +152,7 @@ impl ProductionMapService {
         let requested_limit = query.limit;
         let mut store_query = query;
         if !include_processed
-            && requested_status.is_none_or(|status| {
-                status == OrderProgressBatchWipStatus::Waiting
-            })
+            && requested_status.is_none_or(|status| status == OrderProgressBatchWipStatus::Waiting)
         {
             store_query.status = None;
             store_query.include_processed = true;
@@ -170,6 +166,12 @@ impl ProductionMapService {
                     batch.wip_status != OrderProgressBatchWipStatus::Processed,
                     |status| batch.wip_status == status,
                 )
+            });
+            let order_controls = self.store.order_control_states().await?;
+            batches.retain(|batch| {
+                order_controls
+                    .get(batch.order_id.trim())
+                    .is_none_or(|control| control.state != OrderControlState::Frozen)
             });
         }
         if batches.iter().any(progress_batch_needs_location_repair) {
