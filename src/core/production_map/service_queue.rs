@@ -615,6 +615,9 @@ impl ProductionMapService {
                             interaction.blocking_reason_code = "order_freeze_requested".to_string();
                         }
                         if control == OrderControlState::Active {
+                            // A worker may finish with an issue note, which is
+                            // persisted as the explicit frozen transition.
+                            allowed_actions.push(queue_state::ApparatusQueueAction::Freeze);
                             let current_input_batch_id = self
                                 .completion_input_batch_id(
                                     &storage_key,

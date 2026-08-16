@@ -470,6 +470,9 @@ async fn queue_action_controls_are_backend_owned_for_each_order_state() {
     assert!(in_progress
         .allowed_actions
         .contains(&queue_state::ApparatusQueueAction::Complete));
+    assert!(in_progress
+        .allowed_actions
+        .contains(&queue_state::ApparatusQueueAction::Freeze));
     assert!(!in_progress
         .allowed_actions
         .contains(&queue_state::ApparatusQueueAction::Resume));
