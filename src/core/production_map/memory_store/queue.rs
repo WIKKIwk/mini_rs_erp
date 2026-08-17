@@ -77,20 +77,42 @@ pub(super) async fn completed_queue_orders_for_actor(
         {
             continue;
         }
+        if !matches!(
+            event.action,
+            queue_state::ApparatusQueueAction::Pause
+                | queue_state::ApparatusQueueAction::Freeze
+                | queue_state::ApparatusQueueAction::DetachRoll
+                | queue_state::ApparatusQueueAction::RollComplete
+                | queue_state::ApparatusQueueAction::Complete
+        ) {
+            continue;
+        }
         let order_id = event.order_id.trim();
         if order_id.is_empty() || !seen.insert(order_id.to_string()) {
             continue;
         }
-        if event.action != queue_state::ApparatusQueueAction::Complete
-            || event.to_state != queue_state::ApparatusQueueOrderState::Completed
-        {
-            continue;
-        }
+        let status = match event.action {
+            // A freeze is not a successful worker completion. It still
+            // suppresses older history for the same order until the order is
+            // explicitly resumed/unfrozen.
+            queue_state::ApparatusQueueAction::Freeze => continue,
+            queue_state::ApparatusQueueAction::Complete
+                if event.to_state == queue_state::ApparatusQueueOrderState::Completed => {
+                CompletedQueueOrderStatus::Completed
+            }
+            queue_state::ApparatusQueueAction::Pause
+            | queue_state::ApparatusQueueAction::DetachRoll
+            | queue_state::ApparatusQueueAction::RollComplete
+            | queue_state::ApparatusQueueAction::Complete => {
+                CompletedQueueOrderStatus::InProgress
+            }
+            _ => continue,
+        };
         completed.push(CompletedQueueOrder {
             apparatus: event.apparatus.trim().to_string(),
             order_id: order_id.to_string(),
             completed_at_unix: index as i64 + 1,
-            status: CompletedQueueOrderStatus::Completed,
+            status,
             issue_note: String::new(),
         });
         if completed.len() >= limit {

@@ -3188,7 +3188,13 @@ async fn downstream_complete_keeps_order_open_until_all_input_wips_processed() {
         .completed_queue_orders_for_actor(&actor.ref_, 10)
         .await
         .expect("partial completed orders");
-    assert!(partial_history.is_empty());
+    assert_eq!(partial_history.len(), 1);
+    assert_eq!(partial_history[0].order_id, order_id);
+    assert_eq!(partial_history[0].apparatus, second);
+    assert_eq!(
+        partial_history[0].status,
+        CompletedQueueOrderStatus::InProgress
+    );
     let partial_order_status = service
         .order_status_detail(order_id)
         .await

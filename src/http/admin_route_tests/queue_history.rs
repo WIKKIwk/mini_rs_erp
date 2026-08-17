@@ -264,6 +264,26 @@ async fn closed_orders_return_only_fully_completed_maps_with_action_logs() {
         0
     );
 
+    let pechat_history_before_lamin = router
+        .clone()
+        .oneshot(request(
+            "GET",
+            "/v1/mobile/admin/production-maps/completed-orders",
+            &pechat_worker,
+        ))
+        .await
+        .expect("pechat worker history before lamin");
+    let pechat_history_body = json_body(pechat_history_before_lamin).await;
+    let pechat_history = pechat_history_body["completed_orders"]
+        .as_array()
+        .expect("pechat completed_orders");
+    let pechat_stage_entry = pechat_history
+        .iter()
+        .find(|item| item["order_id"] == "zakaz-closed-route")
+        .expect("pechat stage history entry");
+    assert_eq!(pechat_stage_entry["apparatus"], "7 ta rangli pechat");
+    assert_eq!(pechat_stage_entry["status"], "completed");
+
     for qr in [pechat_pause_qr.as_str(), pechat_output_qr.as_str()] {
         for action in ["start", "complete"] {
             let body = if action == "complete" {
@@ -288,6 +308,7 @@ async fn closed_orders_return_only_fully_completed_maps_with_action_logs() {
     }
 
     let closed = router
+        .clone()
         .oneshot(request(
             "GET",
             "/v1/mobile/admin/production-maps/closed-orders",
@@ -313,4 +334,42 @@ async fn closed_orders_return_only_fully_completed_maps_with_action_logs() {
     assert_eq!(logs[7]["action"], "complete");
     assert_eq!(logs[7]["apparatus"], "Laminatsiya 1");
     assert_eq!(logs[7]["actor_ref"], "worker-closed-lamin");
+
+    let pechat_history_after_closed = router
+        .clone()
+        .oneshot(request(
+            "GET",
+            "/v1/mobile/admin/production-maps/completed-orders",
+            &pechat_worker,
+        ))
+        .await
+        .expect("pechat worker history after closed");
+    let pechat_history_body = json_body(pechat_history_after_closed).await;
+    let pechat_history = pechat_history_body["completed_orders"]
+        .as_array()
+        .expect("pechat completed_orders after closed");
+    let pechat_stage_entry = pechat_history
+        .iter()
+        .find(|item| item["order_id"] == "zakaz-closed-route")
+        .expect("pechat history retained after global close");
+    assert_eq!(pechat_stage_entry["apparatus"], "7 ta rangli pechat");
+
+    let lamin_history = router
+        .oneshot(request(
+            "GET",
+            "/v1/mobile/admin/production-maps/completed-orders",
+            &lamin_worker,
+        ))
+        .await
+        .expect("lamin worker history after closed");
+    let lamin_history_body = json_body(lamin_history).await;
+    let lamin_history = lamin_history_body["completed_orders"]
+        .as_array()
+        .expect("lamin completed_orders");
+    let lamin_stage_entry = lamin_history
+        .iter()
+        .find(|item| item["order_id"] == "zakaz-closed-route")
+        .expect("lamin stage history entry");
+    assert_eq!(lamin_stage_entry["apparatus"], "Laminatsiya 1");
+    assert_eq!(lamin_stage_entry["status"], "completed");
 }

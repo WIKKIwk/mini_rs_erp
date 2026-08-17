@@ -8,10 +8,7 @@ use super::apparatus::{
 };
 use super::chain;
 use super::materials::build_raw_material_start_requirements;
-use super::progress::{
-    effective_apparatus_queue_policy_record, order_completed_on_apparatus,
-    required_apparatus_for_closed_order,
-};
+use super::progress::effective_apparatus_queue_policy_record;
 use super::service::{ClaimedAlternativeMapUpdate, QueueProgressRecords};
 use super::service_progress_support::{session_progress_links, wip_batch_was_consumed_by_producer};
 use super::service_queue_support::*;
@@ -173,40 +170,14 @@ impl ProductionMapService {
         actor_ref: &str,
         limit: usize,
     ) -> Result<Vec<CompletedQueueOrder>, ProductionMapError> {
-        let mut completed_orders = self
-            .store
+        // This endpoint is the actor-scoped stage history consumed by the
+        // worker "Tugatish" tab. Global order closure belongs to
+        // `fully_completed_orders`, which is exposed separately through the
+        // closed-orders endpoint. Do not project the global closure invariant
+        // onto this worker history.
+        self.store
             .completed_queue_orders_for_actor(actor_ref, limit)
-            .await?;
-        let maps = self.store.maps().await?;
-        let queue_states = self.store.apparatus_queue_states().await?;
-        let maps_by_id = maps
-            .into_iter()
-            .map(|map| (map.id.trim().to_string(), map))
-            .collect::<BTreeMap<_, _>>();
-
-        let mut fully_completed_orders = Vec::with_capacity(completed_orders.len());
-        for completed_order in completed_orders.drain(..) {
-            if completed_order.status != CompletedQueueOrderStatus::Completed {
-                continue;
-            }
-            let Some(map) = maps_by_id.get(completed_order.order_id.trim()) else {
-                fully_completed_orders.push(completed_order);
-                continue;
-            };
-            let required_apparatus = required_apparatus_for_closed_order(map);
-            let order_is_fully_completed = !required_apparatus.is_empty()
-                && required_apparatus.iter().all(|apparatus| {
-                    order_completed_on_apparatus(
-                        &queue_states,
-                        completed_order.order_id.trim(),
-                        apparatus,
-                    )
-                });
-            if order_is_fully_completed {
-                fully_completed_orders.push(completed_order);
-            }
-        }
-        Ok(fully_completed_orders)
+            .await
     }
 
     pub async fn queue_action_logs_for_order(

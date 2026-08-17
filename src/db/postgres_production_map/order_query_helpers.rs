@@ -22,23 +22,27 @@ pub(super) async fn load_completed_queue_orders_for_actor(
         return Ok(Vec::new());
     }
     let limit = i64::try_from(limit.min(500)).unwrap_or(500);
-    let rows = sqlx::query_as::<_, (String, String, i64)>(
-        "SELECT order_id, apparatus, EXTRACT(EPOCH FROM created_at)::bigint AS completed_at_unix
+    let rows = sqlx::query_as::<_, (String, String, String, i64)>(
+        "SELECT order_id, apparatus, completion_status,
+                EXTRACT(EPOCH FROM created_at)::bigint AS completed_at_unix
          FROM (
             SELECT DISTINCT ON (order_id)
                 order_id,
                 apparatus,
                 created_at,
-                action,
-                to_state
+                CASE
+                    WHEN action = 'freeze' THEN 'frozen'
+                    WHEN action = 'complete' AND to_state = 'completed'
+                        THEN 'completed'
+                    ELSE 'in_progress'
+                END AS completion_status
             FROM mini_queue_action_events
             WHERE actor_ref = $1
               AND action IN ('pause', 'freeze', 'detach_roll', 'roll_complete', 'complete')
               AND COALESCE(payload_json->>'completion_request', 'false') <> 'true'
             ORDER BY order_id, created_at DESC
          ) latest
-         WHERE action = 'complete'
-           AND to_state = 'completed'
+         WHERE completion_status <> 'frozen'
          ORDER BY created_at DESC
          LIMIT $2",
     )
@@ -51,11 +55,15 @@ pub(super) async fn load_completed_queue_orders_for_actor(
     Ok(rows
         .into_iter()
         .map(
-            |(order_id, apparatus, completed_at_unix)| CompletedQueueOrder {
+            |(order_id, apparatus, completion_status, completed_at_unix)| CompletedQueueOrder {
                 apparatus,
                 order_id,
                 completed_at_unix,
-                status: CompletedQueueOrderStatus::Completed,
+                status: if completion_status == "completed" {
+                    CompletedQueueOrderStatus::Completed
+                } else {
+                    CompletedQueueOrderStatus::InProgress
+                },
                 issue_note: String::new(),
             },
         )
