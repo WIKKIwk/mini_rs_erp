@@ -12,6 +12,7 @@ use crate::db::postgres_factory_location::PostgresFactoryLocationStore;
 use crate::db::postgres_gscale_receipt::PostgresGscaleReceiptStore;
 use crate::db::postgres_inventory_movements::PostgresInventoryMovementStore;
 use crate::db::postgres_mini_order::PostgresMiniOrderSink;
+use crate::db::postgres_order_reset::PostgresOrderResetStore;
 use crate::db::postgres_production_map::PostgresProductionMapStore;
 use crate::db::postgres_qolip::PostgresQolipStore;
 use crate::db::postgres_raw_material_events::PostgresRawMaterialEventStore;
@@ -171,6 +172,10 @@ pub(super) fn build_mini_order_sink() -> Arc<dyn MiniOrderSink> {
         }
         None => Arc::new(NoopMiniOrderSink),
     }
+}
+
+pub(super) fn build_order_reset_store() -> Option<PostgresOrderResetStore> {
+    postgres_pool("order reset").map(PostgresOrderResetStore::new)
 }
 
 pub(super) fn build_production_map_service() -> ProductionMapService {

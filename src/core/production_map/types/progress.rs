@@ -531,6 +531,10 @@ pub struct RezkaFrameProgressInput {
     pub rezka_edge_waste: Option<f64>,
     #[serde(default)]
     pub total_waste: Option<f64>,
+    /// A frame may be completed as an issue without producing a QR/WIP
+    /// output. This is accepted by Rezka roll progress actions.
+    #[serde(default)]
+    pub issue_note: String,
 }
 
 impl RezkaFrameProgressInput {

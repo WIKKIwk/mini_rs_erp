@@ -98,7 +98,7 @@ pub(super) fn zero_quantity_event(
 pub(super) struct SessionProgressLinks {
     pub(super) batch_id: String,
     pub(super) qr_payload: String,
-    apparatus: String,
+    pub(super) apparatus: String,
 }
 
 pub(super) fn session_progress_links(session: &OrderRunSession) -> SessionProgressLinks {

@@ -382,6 +382,178 @@ async fn rezka_explicit_frame_metrics_are_persisted_and_printed_individually() {
 }
 
 #[tokio::test]
+async fn rezka_roll_complete_skips_issue_frame_qr_and_persists_issue() {
+    let print_requests = Arc::new(Mutex::new(Vec::<ScaleDriverPrintRequest>::new()));
+    let mut state = test_state();
+    state.gscale = GscaleService::new().with_driver(Arc::new(FakeProgressDriver {
+        requests: print_requests.clone(),
+        fail: false,
+    }));
+    state
+        .admin
+        .upsert_role_assignment(crate::core::authz::RoleAssignmentUpsert {
+            principal_role: PrincipalRole::Aparatchi,
+            principal_ref: "worker-rezka-frame-issue".to_string(),
+            role_id: "aparatchi".to_string(),
+            assigned_apparatus: vec!["Rezka".to_string()],
+            assigned_item_groups: Vec::new(),
+        })
+        .await
+        .expect("assignment");
+    let admin_token = session(&state, PrincipalRole::Admin).await;
+    let worker_token =
+        session_for(&state, PrincipalRole::Aparatchi, "worker-rezka-frame-issue").await;
+    let router = build_router(state);
+
+    let saved = router
+        .clone()
+        .oneshot(request_with_body(
+            "PUT",
+            "/v1/mobile/admin/production-maps",
+            &admin_token,
+            &pechat_order_map_json(
+                "zakaz-rezka-frame-issue",
+                "Rezka frame issue",
+                "9329",
+                "Rezka",
+            ),
+        ))
+        .await
+        .expect("save map");
+    assert_eq!(saved.status(), StatusCode::OK);
+
+    let started = router
+        .clone()
+        .oneshot(request_with_body(
+            "POST",
+            "/v1/mobile/admin/production-maps/queue-action",
+            &worker_token,
+            r#"{
+                "apparatus":"Rezka",
+                "order_id":"zakaz-rezka-frame-issue",
+                "action":"start"
+            }"#,
+        ))
+        .await
+        .expect("start");
+    assert_eq!(started.status(), StatusCode::OK);
+
+    let roll_completed = router
+        .clone()
+        .oneshot(request_with_body(
+            "POST",
+            "/v1/mobile/admin/production-maps/queue-action",
+            &worker_token,
+            r#"{
+                "apparatus":"Rezka",
+                "order_id":"zakaz-rezka-frame-issue",
+                "action":"roll_complete",
+                "rezka_frames":[
+                    {"produced_qty":90,"gross_qty":11,"diameter":45.1},
+                    {"produced_qty":80,"gross_qty":10,"diameter":44.8},
+                    {"issue_note":"Rezka valida muammo, uchinchi kadr chiqarilmadi"},
+                    {"produced_qty":70,"gross_qty":9,"diameter":44.2}
+                ],
+                "printer":"zebra",
+                "print_mode":"rfid"
+            }"#,
+        ))
+        .await
+        .expect("roll complete with one issue frame");
+    let status = roll_completed.status();
+    let body = json_body(roll_completed).await;
+    assert_eq!(status, StatusCode::OK, "{body:?}");
+    assert_eq!(body["states"]["zakaz-rezka-frame-issue"], "in_progress");
+    assert_eq!(body["progress_batches"].as_array().unwrap().len(), 3);
+    assert_eq!(body["prints"].as_array().unwrap().len(), 3);
+    assert_eq!(
+        body["progress_event"]["payload_json"]["rezka_frame_issues"][0]["frame_index"],
+        3
+    );
+    assert_eq!(
+        body["progress_event"]["payload_json"]["rezka_frame_issues"][0]["issue_note"],
+        "Rezka valida muammo, uchinchi kadr chiqarilmadi"
+    );
+    let frame_indexes = body["progress_batches"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|batch| batch["payload_json"]["rezka_frame_index"].as_u64().unwrap())
+        .collect::<Vec<_>>();
+    assert_eq!(frame_indexes, [1, 2, 4]);
+    wait_for_progress_print_request_count(&print_requests, 3).await;
+    assert_eq!(print_requests.lock().await.len(), 3);
+
+    let all_issue = router
+        .clone()
+        .oneshot(request_with_body(
+            "POST",
+            "/v1/mobile/admin/production-maps/queue-action",
+            &worker_token,
+            r#"{
+                "apparatus":"Rezka",
+                "order_id":"zakaz-rezka-frame-issue",
+                "action":"roll_complete",
+                "rezka_frames":[
+                    {"issue_note":"Birinchi kadr ham brak"},
+                    {"issue_note":"Ikkinchi kadr ham brak"},
+                    {"issue_note":"Uchinchi kadr ham brak"},
+                    {"issue_note":"To‘rtinchi kadr ham brak"}
+                ]
+            }"#,
+        ))
+        .await
+        .expect("roll complete with all issue frames");
+    let all_issue_status = all_issue.status();
+    let all_issue_body = json_body(all_issue).await;
+    assert_eq!(all_issue_status, StatusCode::OK, "{all_issue_body:?}");
+    assert_eq!(
+        all_issue_body["states"]["zakaz-rezka-frame-issue"],
+        "in_progress"
+    );
+    assert!(all_issue_body["progress_batch"].is_null());
+    assert_eq!(all_issue_body["progress_batches"].as_array().unwrap().len(), 0);
+    assert_eq!(all_issue_body["prints"].as_array().unwrap().len(), 0);
+    assert_eq!(
+        all_issue_body["progress_event"]["payload_json"]["rezka_frame_issues"]
+            .as_array()
+            .unwrap()
+            .len(),
+        4
+    );
+
+    let final_issue = router
+        .oneshot(request_with_body(
+            "POST",
+            "/v1/mobile/admin/production-maps/queue-action",
+            &worker_token,
+            r#"{
+                "apparatus":"Rezka",
+                "order_id":"zakaz-rezka-frame-issue",
+                "action":"complete",
+                "description":"Rezka rulonini chiqarib bo‘lmadi",
+                "rezka_frames":[
+                    {"issue_note":"Birinchi kadr brak"},
+                    {"issue_note":"Ikkinchi kadr brak"},
+                    {"issue_note":"Uchinchi kadr brak"},
+                    {"issue_note":"To‘rtinchi kadr brak"}
+                ]
+            }"#,
+        ))
+        .await
+        .expect("complete with all issue frames");
+    let final_issue_status = final_issue.status();
+    let final_issue_body = json_body(final_issue).await;
+    assert_eq!(final_issue_status, StatusCode::OK, "{final_issue_body:?}");
+    assert_eq!(
+        final_issue_body["states"]["zakaz-rezka-frame-issue"],
+        "completed"
+    );
+    assert_eq!(final_issue_body["progress_batches"].as_array().unwrap().len(), 0);
+    assert_eq!(final_issue_body["prints"].as_array().unwrap().len(), 0);
+}
+
+#[tokio::test]
 async fn rezka_pause_records_quantities_without_waste_and_fans_out_frames() {
     let print_requests = Arc::new(Mutex::new(Vec::<ScaleDriverPrintRequest>::new()));
     let mut state = test_state();

@@ -182,6 +182,18 @@ pub async fn production_map_queue_action(
     {
         return Err(bad_request("rezka_frames_only_on_rezka_progress"));
     }
+    if input
+        .rezka_frames
+        .iter()
+        .any(|frame| !frame.issue_note.trim().is_empty())
+        && !matches!(
+            input.action,
+            queue_state::ApparatusQueueAction::RollComplete
+                | queue_state::ApparatusQueueAction::Complete
+        )
+    {
+        return Err(bad_request("rezka_frame_issue_only_on_roll_progress"));
+    }
     if let Some(training_result) = super::super::training::training_queue_action(
         &state,
         &principal,

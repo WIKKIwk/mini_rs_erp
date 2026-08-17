@@ -6,7 +6,7 @@ use crate::core::auth::models::Principal;
 
 use super::models::{
     QolipBlock, QolipCellQr, QolipCheckout, QolipError, QolipLocation, QolipOrderNote,
-    QolipProduct, QolipProductSpec,
+    QolipLocationMove, QolipProduct, QolipProductSpec,
 };
 use super::normalize::{
     location_from_checkout, location_from_checkout_target, location_identity_matches,
@@ -984,50 +984,31 @@ impl QolipStorePort for MemoryQolipStore {
         column_number: i32,
         quantity: i32,
     ) -> Result<QolipLocation, QolipError> {
-        let location_id = location_id.trim();
-        let mut locations = self.locations.write().await;
-        let Some(source_index) = locations.iter().position(|item| item.id == location_id) else {
-            return Err(QolipError::LocationNotFound);
-        };
-        let source = locations[source_index].clone();
-        let target = normalize_move_target(
-            &source,
-            block,
-            warehouse,
-            row_letter,
-            column_number,
+        let input = QolipLocationMove {
+            location_id: location_id.to_string(),
+            block: block.to_string(),
+            warehouse: warehouse.to_string(),
             quantity,
-        )?;
-        if let Some(existing) = locations.iter().find(|item| item.id == target.id) {
-            if !location_identity_matches(existing, &target) {
-                return Err(QolipError::LocationIdentityMismatch);
-            }
+            row_letter: row_letter.to_string(),
+            column_number: Some(column_number),
+        };
+        let mut saved = self.move_locations(&[input]).await?;
+        saved.pop().ok_or(QolipError::StoreFailed)
+    }
+
+    async fn move_locations(
+        &self,
+        moves: &[QolipLocationMove],
+    ) -> Result<Vec<QolipLocation>, QolipError> {
+        let mut locations = self.locations.write().await;
+        let mut working = locations.clone();
+        let mut saved = Vec::with_capacity(moves.len());
+        for input in moves {
+            saved.push(apply_memory_location_move(&mut working, input)?);
         }
-        let remaining = source.quantity - quantity;
-        if remaining > 0 {
-            locations[source_index].quantity = remaining;
-        } else {
-            locations.remove(source_index);
-        }
-        if let Some(target_index) = locations.iter().position(|item| item.id == target.id) {
-            locations[target_index].quantity += target.quantity;
-            let saved = locations[target_index].clone();
-            locations.sort_by(|left, right| {
-                left.row_letter
-                    .cmp(&right.row_letter)
-                    .then_with(|| left.column_number.cmp(&right.column_number))
-                    .then_with(|| left.item_name.cmp(&right.item_name))
-            });
-            return Ok(saved);
-        }
-        locations.push(target.clone());
-        locations.sort_by(|left, right| {
-            left.row_letter
-                .cmp(&right.row_letter)
-                .then_with(|| left.column_number.cmp(&right.column_number))
-                .then_with(|| left.item_name.cmp(&right.item_name))
-        });
-        Ok(target)
+        sort_locations(&mut working);
+        *locations = working;
+        Ok(saved)
     }
 
     async fn cell_qr_by_payload(
@@ -1043,6 +1024,53 @@ impl QolipStorePort for MemoryQolipStore {
             .find(|cell| cell.qr_payload.eq_ignore_ascii_case(qr_payload))
             .cloned())
     }
+}
+
+fn apply_memory_location_move(
+    locations: &mut Vec<QolipLocation>,
+    input: &QolipLocationMove,
+) -> Result<QolipLocation, QolipError> {
+    let location_id = input.location_id.trim();
+    let Some(source_index) = locations.iter().position(|item| item.id == location_id) else {
+        return Err(QolipError::LocationNotFound);
+    };
+    let source = locations[source_index].clone();
+    let column_number = input.column_number.ok_or(QolipError::InvalidLocation)?;
+    let target = normalize_move_target(
+        &source,
+        &input.block,
+        &input.warehouse,
+        &input.row_letter,
+        column_number,
+        input.quantity,
+    )?;
+    if let Some(existing) = locations.iter().find(|item| item.id == target.id)
+        && !location_identity_matches(existing, &target)
+    {
+        return Err(QolipError::LocationIdentityMismatch);
+    }
+
+    let remaining = source.quantity - input.quantity;
+    if remaining > 0 {
+        locations[source_index].quantity = remaining;
+    } else {
+        locations.remove(source_index);
+    }
+    if let Some(target_index) = locations.iter().position(|item| item.id == target.id) {
+        locations[target_index].quantity += target.quantity;
+        return Ok(locations[target_index].clone());
+    }
+    locations.push(target.clone());
+    Ok(target)
+}
+
+fn sort_locations(locations: &mut [QolipLocation]) {
+    locations.sort_by(|left, right| {
+        left.row_letter
+            .cmp(&right.row_letter)
+            .then_with(|| left.column_number.cmp(&right.column_number))
+            .then_with(|| left.item_name.cmp(&right.item_name))
+    });
 }
 
 fn order_note_key_prefix(principal: &Principal) -> String {

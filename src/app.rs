@@ -36,6 +36,7 @@ use crate::core::worker_groups::WorkerGroupService;
 use crate::core::workers::WorkerService;
 use crate::db::postgres_customer::PostgresCustomerStore;
 use crate::db::postgres_engine::PostgresEngineStore;
+use crate::db::postgres_order_reset::PostgresOrderResetStore;
 use crate::db::postgres_raw_material_events::PostgresRawMaterialEventStore;
 use crate::db::postgres_training_workspace::PostgresTrainingWorkspaceStore;
 use crate::fcm::discover_push_sender;
@@ -82,6 +83,7 @@ pub struct AppState {
     pub chat_media: ChatMediaService,
     pub order_sheets: Arc<dyn OrderSheetSink>,
     pub production_orders: Arc<dyn MiniOrderSink>,
+    pub order_reset: Option<PostgresOrderResetStore>,
     pub mobile_releases: MobileReleaseStore,
     pub calculate_order_image_dir: Arc<std::path::PathBuf>,
     pub push: PushService,
@@ -138,6 +140,7 @@ impl AppState {
         let training_workspace = build_training_workspace_store();
         let order_sheets = discover_order_sheet_sink();
         let production_orders = build_mini_order_sink();
+        let order_reset = build_order_reset_store();
         let mobile_releases = MobileReleaseStore::from_env();
         spawn_mini_orders_sync_loop_if_enabled(
             production_maps.clone(),
@@ -196,6 +199,7 @@ impl AppState {
             chat_media,
             order_sheets,
             production_orders,
+            order_reset,
             mobile_releases,
             calculate_order_image_dir,
             push,

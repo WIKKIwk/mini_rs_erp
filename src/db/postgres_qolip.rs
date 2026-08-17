@@ -4,7 +4,7 @@ use sqlx::PgPool;
 use crate::core::auth::models::Principal;
 use crate::core::qolip::{
     QolipBlock, QolipCellQr, QolipCheckout, QolipError, QolipLocation, QolipProduct,
-    QolipProductSpec, QolipStorePort,
+    QolipLocationMove, QolipProductSpec, QolipStorePort,
 };
 
 mod catalog;
@@ -27,7 +27,7 @@ use self::checkouts::{
 };
 use self::locations::{
     load_location_by_id, load_location_by_qolip_code, load_locations, move_location_to_cell,
-    save_location,
+    move_locations_to_cells, save_location,
 };
 use self::order_notes::{
     load_order_note, load_order_note_qolip_codes_in_use, load_order_notes, save_order_note,
@@ -233,6 +233,13 @@ impl QolipStorePort for PostgresQolipStore {
             quantity,
         )
         .await
+    }
+
+    async fn move_locations(
+        &self,
+        moves: &[QolipLocationMove],
+    ) -> Result<Vec<QolipLocation>, QolipError> {
+        move_locations_to_cells(&self.pool, moves).await
     }
 
     async fn cell_qr_by_payload(

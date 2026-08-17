@@ -319,3 +319,107 @@ async fn qolip_return_can_restore_to_selected_cell() {
         .expect("original source location");
     assert_eq!(original["quantity"], 1);
 }
+
+#[tokio::test]
+async fn qolip_batch_move_moves_all_selected_locations_to_one_cell_atomically() {
+    let mut state = test_state();
+    let store = Arc::new(crate::core::qolip::MemoryQolipStore::new());
+    store
+        .seed_blocks(vec![
+            crate::core::qolip::QolipBlock {
+                name: "A".to_string(),
+                warehouse: "Qolip ombor".to_string(),
+            },
+            crate::core::qolip::QolipBlock {
+                name: "B".to_string(),
+                warehouse: "Qolip ombor".to_string(),
+            },
+        ])
+        .await;
+    state.qolip = crate::core::qolip::QolipService::new(store);
+    let token = session(&state, PrincipalRole::Admin).await;
+    let mut source_ids = Vec::new();
+
+    for (index, qolip_code) in ["Q-BATCH-1", "Q-BATCH-2"].into_iter().enumerate() {
+        let source = build_router(state.clone())
+            .oneshot(request_with_body(
+                "POST",
+                "/v1/mobile/qolip/locations",
+                &token,
+                &format!(
+                    r#"{{
+                        "block":"A",
+                        "warehouse":"Qolip ombor",
+                        "item_code":"ITEM-BATCH-{index}",
+                        "item_name":"Batch qolip {index}",
+                        "qolip_code":"{qolip_code}",
+                        "size":44,
+                        "quantity":1,
+                        "row_letter":"A",
+                        "column_number":{}
+                    }}"#,
+                    index + 1
+                ),
+            ))
+            .await
+            .expect("create batch source");
+        assert_eq!(source.status(), StatusCode::OK);
+        source_ids.push(
+            json_body(source).await["location"]["id"]
+                .as_str()
+                .expect("source id")
+                .to_string(),
+        );
+    }
+
+    let moves = source_ids
+        .iter()
+        .map(|location_id| {
+            serde_json::json!({
+                "location_id": location_id,
+                "block": "B",
+                "warehouse": "ignored-client-value",
+                "quantity": 1,
+                "row_letter": "C",
+                "column_number": 2,
+            })
+        })
+        .collect::<Vec<_>>();
+    let moved = build_router(state.clone())
+        .oneshot(request_with_body(
+            "POST",
+            "/v1/mobile/qolip/locations/move-batch",
+            &token,
+            &serde_json::json!({"moves": moves}).to_string(),
+        ))
+        .await
+        .expect("batch move");
+    assert_eq!(moved.status(), StatusCode::OK);
+    let moved_body = json_body(moved).await;
+    assert_eq!(moved_body["locations"].as_array().expect("locations").len(), 2);
+    assert!(moved_body["locations"]
+        .as_array()
+        .expect("locations")
+        .iter()
+        .all(|location| {
+            location["block"] == "B" && location["location_label"] == "C2"
+        }));
+
+    let source_locations = build_router(state.clone())
+        .oneshot(request("GET", "/v1/mobile/qolip/locations?block=A", &token))
+        .await
+        .expect("list source locations");
+    assert!(json_body(source_locations).await["locations"]
+        .as_array()
+        .expect("source locations")
+        .is_empty());
+
+    let target_locations = build_router(state)
+        .oneshot(request("GET", "/v1/mobile/qolip/locations?block=B", &token))
+        .await
+        .expect("list target locations");
+    assert_eq!(json_body(target_locations).await["locations"]
+        .as_array()
+        .expect("target locations")
+        .len(), 2);
+}

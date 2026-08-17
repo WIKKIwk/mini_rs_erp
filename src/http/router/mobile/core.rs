@@ -141,6 +141,10 @@ pub(super) fn routes() -> Router<AppState> {
         )
         .route("/v1/mobile/qolip/locations", any(qolip::locations))
         .route("/v1/mobile/qolip/locations/move", any(qolip::location_move))
+        .route(
+            "/v1/mobile/qolip/locations/move-batch",
+            any(qolip::location_move_batch),
+        )
         .route("/v1/mobile/qolip/scan", any(qolip::scan))
         .route("/v1/mobile/qolip/cell-qr", any(qolip::cell_qr))
         .route("/v1/mobile/qolip/cell-qr/print", any(qolip::cell_qr_print))

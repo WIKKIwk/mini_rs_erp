@@ -8,8 +8,8 @@ use crate::core::authz::Capability;
 use crate::core::gscale::ProgressLabelPrintRequest;
 use crate::core::qolip::{
     QolipBlock, QolipCellQrInput, QolipCheckoutCreate, QolipCheckoutReturn, QolipError,
-    QolipLocationMove, QolipLocationUpsert, QolipProductSpecBatchUpsert, QolipProductSpecDelete,
-    QolipProductSpecUpsert,
+    QolipLocationMove, QolipLocationMoveBatch, QolipLocationUpsert,
+    QolipProductSpecBatchUpsert, QolipProductSpecDelete, QolipProductSpecUpsert,
 };
 use crate::core::warehouses::{WarehouseDeleteRequest, WarehouseUpsert};
 
@@ -564,6 +564,68 @@ pub async fn location_move(
     Ok(Json(serde_json::json!({
         "ok": true,
         "location": saved,
+    })))
+}
+
+pub async fn location_move_batch(
+    State(state): State<AppState>,
+    method: Method,
+    headers: HeaderMap,
+    body: Bytes,
+) -> Result<Json<serde_json::Value>, (StatusCode, Json<QolipErrorResponse>)> {
+    if method != Method::POST {
+        return Err(method_not_allowed());
+    }
+    let principal = authenticated_principal(&state, &headers).await?;
+    ensure_qolip_access(&state, &principal).await?;
+    let mut batch: QolipLocationMoveBatch =
+        serde_json::from_slice(&body).map_err(|_| bad_request("invalid_json"))?;
+    if batch.moves.is_empty() {
+        return Err(bad_request("locations_required"));
+    }
+    if batch.moves.len() > 100 {
+        return Err(bad_request("locations_limit_exceeded"));
+    }
+
+    for input in &mut batch.moves {
+        let location = state
+            .qolip
+            .location_by_id(&input.location_id)
+            .await
+            .map_err(qolip_error)?
+            .ok_or_else(|| bad_request("location_not_found"))?;
+        let _ = accessible_qolip_block(&state, &principal, &location.block).await?;
+        let requested_block = input.block.trim();
+        if requested_block.is_empty()
+            || requested_block.eq_ignore_ascii_case(location.block.trim())
+        {
+            input.block = location.block.clone();
+            input.warehouse = location.warehouse.clone();
+        } else {
+            let target = match accessible_qolip_block(&state, &principal, requested_block).await? {
+                Some(block) => block,
+                None => state
+                    .qolip
+                    .blocks_for_principal(&principal, true)
+                    .await
+                    .map_err(qolip_error)?
+                    .into_iter()
+                    .find(|block| block.name.trim().eq_ignore_ascii_case(requested_block))
+                    .ok_or_else(|| bad_request("block_not_found"))?,
+            };
+            input.block = target.name;
+            input.warehouse = target.warehouse;
+        }
+    }
+
+    let locations = state
+        .qolip
+        .move_locations(batch.moves, &principal)
+        .await
+        .map_err(qolip_error)?;
+    Ok(Json(serde_json::json!({
+        "ok": true,
+        "locations": locations,
     })))
 }
 

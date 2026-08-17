@@ -192,6 +192,12 @@ pub struct QolipLocationMove {
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize)]
+pub struct QolipLocationMoveBatch {
+    #[serde(default)]
+    pub moves: Vec<QolipLocationMove>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize)]
 pub struct QolipLocationUpsert {
     #[serde(default)]
     pub block: String,

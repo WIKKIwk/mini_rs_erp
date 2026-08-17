@@ -4,7 +4,7 @@ use crate::core::auth::models::Principal;
 
 use super::models::{
     QolipBlock, QolipCellQr, QolipCheckout, QolipError, QolipLocation, QolipOrderNote,
-    QolipProduct, QolipProductSpec,
+    QolipLocationMove, QolipProduct, QolipProductSpec,
 };
 
 #[async_trait]
@@ -165,6 +165,27 @@ pub trait QolipStorePort: Send + Sync {
         column_number: i32,
         quantity: i32,
     ) -> Result<QolipLocation, QolipError>;
+    async fn move_locations(
+        &self,
+        moves: &[QolipLocationMove],
+    ) -> Result<Vec<QolipLocation>, QolipError> {
+        let mut saved = Vec::with_capacity(moves.len());
+        for input in moves {
+            let column_number = input.column_number.ok_or(QolipError::InvalidLocation)?;
+            saved.push(
+                self.move_location(
+                    &input.location_id,
+                    &input.block,
+                    &input.warehouse,
+                    &input.row_letter,
+                    column_number,
+                    input.quantity,
+                )
+                .await?,
+            );
+        }
+        Ok(saved)
+    }
     async fn cell_qr_by_payload(&self, qr_payload: &str)
         -> Result<Option<QolipCellQr>, QolipError>;
 }

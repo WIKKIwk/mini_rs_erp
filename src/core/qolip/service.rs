@@ -1,3 +1,4 @@
+use std::collections::BTreeSet;
 use std::sync::Arc;
 
 use crate::core::auth::models::Principal;
@@ -610,6 +611,48 @@ impl QolipService {
                 input.quantity,
             )
             .await
+    }
+
+    pub async fn move_locations(
+        &self,
+        inputs: Vec<QolipLocationMove>,
+        _principal: &Principal,
+    ) -> Result<Vec<QolipLocation>, QolipError> {
+        if inputs.is_empty() {
+            return Err(QolipError::InvalidLocation);
+        }
+
+        let mut seen_location_ids = BTreeSet::new();
+        let mut normalized = Vec::with_capacity(inputs.len());
+        for input in inputs {
+            let location_id = input.location_id.trim();
+            if location_id.is_empty() || !seen_location_ids.insert(location_id.to_string()) {
+                return Err(QolipError::InvalidLocation);
+            }
+            let source = self
+                .location_by_id(location_id)
+                .await?
+                .ok_or(QolipError::LocationNotFound)?;
+            let column_number = input.column_number.ok_or(QolipError::InvalidLocation)?;
+            let target = normalize_move_target(
+                &source,
+                &input.block,
+                &input.warehouse,
+                &input.row_letter,
+                column_number,
+                input.quantity,
+            )?;
+            normalized.push(QolipLocationMove {
+                location_id: location_id.to_string(),
+                block: target.block,
+                warehouse: target.warehouse,
+                quantity: input.quantity,
+                row_letter: target.row_letter,
+                column_number: target.column_number,
+            });
+        }
+
+        self.store.move_locations(&normalized).await
     }
 
     pub async fn cell_qr_by_payload(

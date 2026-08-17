@@ -1,7 +1,7 @@
 use sqlx::PgPool;
 
 use crate::core::qolip::normalize::{location_identity_matches, normalize_move_target};
-use crate::core::qolip::{QolipError, QolipLocation};
+use crate::core::qolip::{QolipError, QolipLocation, QolipLocationMove};
 
 use super::rows::{row_to_location, QolipLocationRow};
 
@@ -150,8 +150,39 @@ pub(super) async fn move_location_to_cell(
     column_number: i32,
     quantity: i32,
 ) -> Result<QolipLocation, QolipError> {
-    let location_id = location_id.trim();
+    let moves = [QolipLocationMove {
+        location_id: location_id.to_string(),
+        block: block.to_string(),
+        warehouse: warehouse.to_string(),
+        quantity,
+        row_letter: row_letter.to_string(),
+        column_number: Some(column_number),
+    }];
+    let mut saved = move_locations_to_cells(pool, &moves).await?;
+    saved.pop().ok_or(QolipError::StoreFailed)
+}
+
+pub(super) async fn move_locations_to_cells(
+    pool: &PgPool,
+    moves: &[QolipLocationMove],
+) -> Result<Vec<QolipLocation>, QolipError> {
     let mut tx = pool.begin().await.map_err(|_| QolipError::StoreFailed)?;
+
+    let mut saved = Vec::with_capacity(moves.len());
+    for input in moves {
+        saved.push(move_location_to_cell_in_transaction(&mut tx, input).await?);
+    }
+
+    tx.commit().await.map_err(|_| QolipError::StoreFailed)?;
+    Ok(saved)
+}
+
+async fn move_location_to_cell_in_transaction(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    input: &QolipLocationMove,
+) -> Result<QolipLocation, QolipError> {
+    let location_id = input.location_id.trim();
+    let column_number = input.column_number.ok_or(QolipError::InvalidLocation)?;
 
     let source_row = sqlx::query_as::<_, QolipLocationRow>(
         "SELECT id, block, warehouse, item_code, item_name, qolip_code,
@@ -161,7 +192,7 @@ pub(super) async fn move_location_to_cell(
          WHERE id = $1",
     )
     .bind(location_id)
-    .fetch_optional(&mut *tx)
+    .fetch_optional(&mut **tx)
     .await
     .map_err(|_| QolipError::StoreFailed)?;
 
@@ -171,11 +202,11 @@ pub(super) async fn move_location_to_cell(
     let source = row_to_location(source_row);
     let target = normalize_move_target(
         &source,
-        block,
-        warehouse,
-        row_letter,
+        &input.block,
+        &input.warehouse,
+        &input.row_letter,
         column_number,
-        quantity,
+        input.quantity,
     )?;
 
     let mut lock_ids = vec![source.id.clone(), target.id.clone()];
@@ -184,7 +215,7 @@ pub(super) async fn move_location_to_cell(
     for lock_id in &lock_ids {
         sqlx::query("SELECT id FROM mini_qolip_locations WHERE id = $1 FOR UPDATE")
             .bind(lock_id.trim())
-            .fetch_optional(&mut *tx)
+            .fetch_optional(&mut **tx)
             .await
             .map_err(|_| QolipError::StoreFailed)?;
     }
@@ -197,7 +228,7 @@ pub(super) async fn move_location_to_cell(
          WHERE id = $1",
     )
     .bind(location_id)
-    .fetch_optional(&mut *tx)
+    .fetch_optional(&mut **tx)
     .await
     .map_err(|_| QolipError::StoreFailed)?;
     let Some(source_row) = source_row else {
@@ -206,11 +237,11 @@ pub(super) async fn move_location_to_cell(
     let source = row_to_location(source_row);
     let target = normalize_move_target(
         &source,
-        block,
-        warehouse,
-        row_letter,
+        &input.block,
+        &input.warehouse,
+        &input.row_letter,
         column_number,
-        quantity,
+        input.quantity,
     )?;
 
     let target_row = sqlx::query_as::<_, QolipLocationRow>(
@@ -221,7 +252,7 @@ pub(super) async fn move_location_to_cell(
          WHERE id = $1",
     )
     .bind(target.id.trim())
-    .fetch_optional(&mut *tx)
+    .fetch_optional(&mut **tx)
     .await
     .map_err(|_| QolipError::StoreFailed)?;
     if let Some(existing_row) = &target_row {
@@ -231,7 +262,7 @@ pub(super) async fn move_location_to_cell(
         }
     }
 
-    let remaining = source.quantity - quantity;
+    let remaining = source.quantity - input.quantity;
     if remaining > 0 {
         sqlx::query(
             "UPDATE mini_qolip_locations
@@ -240,13 +271,13 @@ pub(super) async fn move_location_to_cell(
         )
         .bind(source.id.trim())
         .bind(remaining)
-        .execute(&mut *tx)
+        .execute(&mut **tx)
         .await
         .map_err(|_| QolipError::StoreFailed)?;
     } else {
         sqlx::query("DELETE FROM mini_qolip_locations WHERE id = $1")
             .bind(source.id.trim())
-            .execute(&mut *tx)
+            .execute(&mut **tx)
             .await
             .map_err(|_| QolipError::StoreFailed)?;
     }
@@ -263,7 +294,7 @@ pub(super) async fn move_location_to_cell(
         )
         .bind(target.id.trim())
         .bind(merged_qty)
-        .fetch_one(&mut *tx)
+        .fetch_one(&mut **tx)
         .await
         .map_err(|_| QolipError::StoreFailed)?;
         row_to_location(row)
@@ -294,12 +325,11 @@ pub(super) async fn move_location_to_cell(
         .bind(target.created_by_ref.trim())
         .bind(target.created_by_name.trim())
         .bind(serde_json::to_value(&target).map_err(|_| QolipError::StoreFailed)?)
-        .fetch_one(&mut *tx)
+        .fetch_one(&mut **tx)
         .await
         .map_err(|_| QolipError::StoreFailed)?;
         row_to_location(row)
     };
 
-    tx.commit().await.map_err(|_| QolipError::StoreFailed)?;
     Ok(saved)
 }

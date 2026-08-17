@@ -1,6 +1,7 @@
 mod apparatus;
 mod auth;
 mod catalog;
+mod emergency_reset;
 mod factory_locations;
 mod inventory_movements;
 mod monitor;
@@ -13,6 +14,7 @@ use super::*;
 pub use apparatus::{apparatus, apparatus_groups, apparatus_options};
 pub(super) use auth::{authorize_any_capability, authorize_capability, require_capability};
 pub use catalog::items_bulk_move_group;
+pub use emergency_reset::reset_orders;
 pub use factory_locations::{factory_location, factory_location_apparatus, factory_locations};
 pub use inventory_movements::{
     inventory_assets, inventory_locations, inventory_relocations, inventory_relocations_batch,

@@ -490,6 +490,7 @@ handlers.
 | `/v1/mobile/qolip/product-specs` | Upsert Qolip product spec. |
 | `/v1/mobile/qolip/locations` | List/create Qolip locations. |
 | `/v1/mobile/qolip/locations/move` | Move quantity between Qolip cells. |
+| `/v1/mobile/qolip/locations/move-batch` | Atomically move multiple Qolip locations to one cell. |
 | `/v1/mobile/qolip/cell-qr` | Resolve Qolip cell QR. |
 | `/v1/mobile/qolip/cell-qr/print` | Create/print Qolip cell QR label. |
 | `/v1/mobile/qolip/workers` | Search workers for Qolip checkout. |

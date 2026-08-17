@@ -13,12 +13,19 @@ struct RecoveredSessionInputBatch {
     output_update: OrderProgressBatch,
 }
 
+#[derive(Clone)]
+struct ProgressOutputValue {
+    quantity: Option<ProgressQuantity>,
+    metrics: ProgressMetrics,
+    issue_note: String,
+}
+
 fn progress_values_for_outputs(
     apparatus: &str,
     action: queue_state::ApparatusQueueAction,
     progress: &QueueProgressInput,
     output_identities: &[ProgressOutputIdentity],
-) -> Result<Vec<(ProgressQuantity, ProgressMetrics)>, ProductionMapError> {
+) -> Result<Vec<ProgressOutputValue>, ProductionMapError> {
     if apparatus::is_rezka_title(apparatus) && !progress.rezka_frames.is_empty() {
         if progress.rezka_frames.len() != output_identities.len() {
             return Err(ProductionMapError::RezkaFrameCountMismatch);
@@ -28,6 +35,21 @@ fn progress_values_for_outputs(
             .iter()
             .enumerate()
             .map(|(index, frame)| {
+                let issue_note = frame.issue_note.trim();
+                if !issue_note.is_empty() {
+                    if !matches!(
+                        action,
+                        queue_state::ApparatusQueueAction::RollComplete
+                            | queue_state::ApparatusQueueAction::Complete
+                    ) {
+                        return Err(ProductionMapError::ProgressInputInvalid);
+                    }
+                    return Ok(ProgressOutputValue {
+                        quantity: None,
+                        metrics: ProgressMetrics::default(),
+                        issue_note: issue_note.to_string(),
+                    });
+                }
                 let has_explicit_waste = frame.has_explicit_waste();
                 let frame_progress = frame.to_queue_progress(progress, !has_explicit_waste);
                 let mut metrics = validated_progress_metrics(apparatus, action, &frame_progress)?;
@@ -38,14 +60,45 @@ fn progress_values_for_outputs(
                     metrics.total_waste = None;
                 }
                 let quantity = progress_quantity(&frame_progress, metrics)?;
-                Ok((quantity, metrics))
+                Ok(ProgressOutputValue {
+                    quantity: Some(quantity),
+                    metrics,
+                    issue_note: String::new(),
+                })
             })
             .collect();
     }
 
     let metrics = validated_progress_metrics(apparatus, action, progress)?;
     let quantity = progress_quantity(progress, metrics)?;
-    Ok(vec![(quantity, metrics)])
+    Ok(vec![ProgressOutputValue {
+        quantity: Some(quantity),
+        metrics,
+        issue_note: String::new(),
+    }])
+}
+
+fn rezka_frame_issues_json(
+    values: &[ProgressOutputValue],
+    frame_count: usize,
+    input_progress: &SessionProgressLinks,
+) -> serde_json::Value {
+    serde_json::Value::Array(
+        values
+            .iter()
+            .enumerate()
+            .filter(|(_, value)| !value.issue_note.trim().is_empty())
+            .map(|(index, value)| {
+                serde_json::json!({
+                    "frame_index": index + 1,
+                    "frame_count": frame_count,
+                    "issue_note": value.issue_note.trim(),
+                    "input_progress_batch_id": input_progress.batch_id,
+                    "input_progress_apparatus": input_progress.apparatus,
+                })
+            })
+            .collect(),
+    )
 }
 
 impl ProductionMapService {
@@ -454,19 +507,36 @@ impl ProductionMapService {
                 };
                 let frame_values =
                     progress_values_for_outputs(apparatus, action, &progress, &output_identities)?;
-                let quantity = &frame_values[0].0;
-                let metrics = frame_values[0].1;
-                let payload_json = preserve_qolip_code(
+                let frame_issues = if apparatus::is_rezka_title(apparatus) {
+                    rezka_frame_issues_json(&frame_values, output_identities.len(), &input_progress)
+                } else {
+                    serde_json::Value::Array(Vec::new())
+                };
+                let first_healthy_index = frame_values
+                    .iter()
+                    .position(|value| value.quantity.is_some());
+                let (session_qty, session_uom, session_metrics) =
+                    if let Some(index) = first_healthy_index {
+                        let value = &frame_values[index];
+                        let quantity = value.quantity.as_ref().expect("healthy output");
+                        (quantity.produced_qty, quantity.uom.as_str(), value.metrics)
+                    } else {
+                        (0.0, "m", ProgressMetrics::default())
+                    };
+                let mut payload_json = preserve_qolip_code(
                     &session,
                     progress_session_payload(
                         action,
-                        quantity.produced_qty,
-                        &quantity.uom,
-                        metrics,
+                        session_qty,
+                        session_uom,
+                        session_metrics,
                         &description,
                         &input_progress,
                     ),
                 );
+                if frame_issues.as_array().is_some_and(|items| !items.is_empty()) {
+                    payload_json["rezka_frame_issues"] = frame_issues.clone();
+                }
                 let session = OrderRunSession {
                     status: run_status_for_progress_action(action),
                     worker_role: actor.role.trim().to_string(),
@@ -486,15 +556,24 @@ impl ProductionMapService {
                 };
                 let mut batches = Vec::with_capacity(output_identities.len());
                 for (index, identity) in output_identities.iter().enumerate() {
-                    let (frame_quantity, frame_metrics) =
-                        frame_values.get(index).unwrap_or(&frame_values[0]);
+                    let frame_value = if progress.rezka_frames.is_empty() {
+                        frame_values.first()
+                    } else {
+                        frame_values.get(index)
+                    };
+                    let Some(frame_value) = frame_value else {
+                        continue;
+                    };
+                    let Some(frame_quantity) = frame_value.quantity.as_ref() else {
+                        continue;
+                    };
                     let mut batch = progress_batch_record(ProgressBatchRecordInput {
                         order_map,
                         context,
                         quantity: frame_quantity,
                         output_identity: identity,
                         input_progress: &input_progress,
-                        metrics: *frame_metrics,
+                        metrics: frame_value.metrics,
                         frame_gross_qty: progress
                             .rezka_frames
                             .get(index)
@@ -503,6 +582,9 @@ impl ProductionMapService {
                     })?;
                     if apparatus::is_rezka_title(apparatus) {
                         apply_rezka_frame_metadata(&mut batch, identity, order_map, apparatus);
+                        if frame_issues.as_array().is_some_and(|items| !items.is_empty()) {
+                            batch.payload_json["rezka_frame_issues"] = frame_issues.clone();
+                        }
                         if index > 0 && progress.rezka_frames.is_empty() {
                             clear_rezka_duplicate_metrics(&mut batch);
                         }
@@ -524,29 +606,60 @@ impl ProductionMapService {
                             progress_batch_updates.push(input_batch);
                         }
                     } else {
-                        progress_batch_updates.push(wip_batch_processed(
+                        let mut processed_input = wip_batch_processed(
                             input_batch,
                             apparatus,
                             &session.session_id,
                             now,
-                        ));
+                        );
+                        if frame_issues.as_array().is_some_and(|items| !items.is_empty()) {
+                            processed_input.payload_json["rezka_frame_issues"] = frame_issues.clone();
+                            processed_input.payload_json["rezka_issue"] = serde_json::json!(true);
+                            sync_wip_payload_fields(&mut processed_input);
+                        }
+                        progress_batch_updates.push(processed_input);
                     }
                 }
-                let output_identity = output_identities
-                    .first()
-                    .ok_or(ProductionMapError::ProgressInputInvalid)?;
-                let mut event = progress_event_record(ProgressEventRecordInput {
-                    context,
-                    quantity: quantity.clone(),
-                    output_identity: ProgressOutputIdentity {
-                        batch_id: output_identity.batch_id.clone(),
-                        qr_payload: output_identity.qr_payload.clone(),
-                        frame_index: output_identity.frame_index,
-                        frame_count: output_identity.frame_count,
-                    },
-                    metrics,
-                    description: &description,
-                });
+                let mut event = if let Some(index) = first_healthy_index {
+                    let output_identity = output_identities
+                        .get(index)
+                        .ok_or(ProductionMapError::ProgressInputInvalid)?;
+                    let frame_value = frame_values
+                        .get(index)
+                        .ok_or(ProductionMapError::ProgressInputInvalid)?;
+                    let quantity = frame_value
+                        .quantity
+                        .as_ref()
+                        .ok_or(ProductionMapError::ProgressInputInvalid)?;
+                    progress_event_record(ProgressEventRecordInput {
+                        context,
+                        quantity: quantity.clone(),
+                        output_identity: ProgressOutputIdentity {
+                            batch_id: output_identity.batch_id.clone(),
+                            qr_payload: output_identity.qr_payload.clone(),
+                            frame_index: output_identity.frame_index,
+                            frame_count: output_identity.frame_count,
+                        },
+                        metrics: frame_value.metrics,
+                        description: &description,
+                    })
+                } else {
+                    let mut event = zero_quantity_event(
+                        context,
+                        String::new(),
+                        String::new(),
+                        progress_event_payload(
+                            action,
+                            ProgressMetrics::default(),
+                            &description,
+                        ),
+                    );
+                    event.description = description.clone();
+                    event
+                };
+                if frame_issues.as_array().is_some_and(|items| !items.is_empty()) {
+                    event.payload_json["rezka_frame_issues"] = frame_issues;
+                }
                 if batches.len() > 1 {
                     event.payload_json["rezka_output_batches"] = serde_json::Value::Array(
                         batches

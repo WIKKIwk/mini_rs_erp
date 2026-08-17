@@ -495,4 +495,41 @@ mod tests {
 
         assert!(matches!(result, Err(QolipError::LocationIdentityMismatch)));
     }
+
+    #[tokio::test]
+    async fn batch_move_does_not_commit_partial_updates() {
+        let store = MemoryQolipStore::default();
+        store.locations.write().await.extend([
+            location("source-one", "ITEM-A", 5),
+            location("source-two", "ITEM-B", 1),
+        ]);
+
+        let result = store
+            .move_locations(&[
+                QolipLocationMove {
+                    location_id: "source-one".to_string(),
+                    block: "B".to_string(),
+                    warehouse: "Qolip ombor".to_string(),
+                    quantity: 5,
+                    row_letter: "D".to_string(),
+                    column_number: Some(1),
+                },
+                QolipLocationMove {
+                    location_id: "source-two".to_string(),
+                    block: "B".to_string(),
+                    warehouse: "Qolip ombor".to_string(),
+                    quantity: 2,
+                    row_letter: "D".to_string(),
+                    column_number: Some(2),
+                },
+            ])
+            .await;
+
+        assert!(matches!(result, Err(QolipError::InsufficientStock)));
+        let locations = store.locations.read().await;
+        assert_eq!(locations.len(), 2);
+        assert!(locations.iter().any(|item| item.id == "source-one"));
+        assert!(locations.iter().any(|item| item.id == "source-two"));
+        assert!(locations.iter().all(|item| item.block == "A"));
+    }
 }

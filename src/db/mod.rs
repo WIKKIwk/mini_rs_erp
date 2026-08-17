@@ -11,6 +11,7 @@ pub mod postgres_factory_location;
 pub mod postgres_gscale_receipt;
 pub mod postgres_inventory_movements;
 pub mod postgres_mini_order;
+pub mod postgres_order_reset;
 pub mod postgres_production_map;
 pub mod postgres_push_token;
 pub mod postgres_qolip;

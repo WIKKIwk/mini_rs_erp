@@ -508,6 +508,10 @@ pub(super) fn routes() -> Router<AppState> {
             post(admin::system_backup_import),
         )
         .route(
+            "/v1/mobile/admin/emergency-reset/orders",
+            post(admin::reset_orders),
+        )
+        .route(
             "/v1/mobile/admin/werka/code/regenerate",
             any(admin::werka_code_regenerate),
         )
