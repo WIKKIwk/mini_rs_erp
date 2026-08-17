@@ -30,6 +30,25 @@ pub async fn worker_profile_detail(
         })
         .collect::<Vec<_>>();
     let assigned_groups = enrich_worker_groups(&state, assigned_groups).await?;
+    let assigned_apparatus = state
+        .admin
+        .role_assignments()
+        .await
+        .map_err(|_| server_error("admin role assignments failed"))?
+        .into_iter()
+        .filter(|assignment| {
+            assignment.principal_role == PrincipalRole::Aparatchi
+                && assignment
+                    .principal_ref
+                    .trim()
+                    .eq_ignore_ascii_case(worker.id.trim())
+        })
+        .flat_map(|assignment| assignment.assigned_apparatus)
+        .map(|apparatus| apparatus.trim().to_string())
+        .filter(|apparatus| !apparatus.is_empty())
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .collect::<Vec<_>>();
     let refs = worker_activity_refs(&worker);
     let active_sessions = state
         .production_maps
@@ -48,6 +67,7 @@ pub async fn worker_profile_detail(
         .map_err(|_| server_error("worker activity failed"))?;
     Ok(json_response(WorkerProfileDetailResponse {
         worker: detail,
+        assigned_apparatus,
         assigned_groups,
         active_sessions,
         recent_batches,

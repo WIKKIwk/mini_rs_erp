@@ -843,6 +843,22 @@ async fn admin_worker_profile_detail_returns_assignments_and_activity() {
         .expect("save group");
     assert_eq!(group.status(), StatusCode::OK);
 
+    let role_assignment = build_router(state.clone())
+        .oneshot(request_with_body(
+            "PUT",
+            "/v1/mobile/admin/role-assignments",
+            &admin_token,
+            r#"{
+                "principal_role":"aparatchi",
+                "principal_ref":"worker_profile_1",
+                "role_id":"aparatchi",
+                "assigned_apparatus":["7 ta rangli pechat"]
+            }"#,
+        ))
+        .await
+        .expect("save worker role assignment");
+    assert_eq!(role_assignment.status(), StatusCode::OK);
+
     let map = build_router(state.clone())
         .oneshot(request_with_body(
             "PUT",
@@ -907,6 +923,7 @@ async fn admin_worker_profile_detail_returns_assignments_and_activity() {
     assert_eq!(detail.status(), StatusCode::OK);
     let body = json_body(detail).await;
     assert_eq!(body["worker"]["id"], "worker_profile_1");
+    assert_eq!(body["assigned_apparatus"][0], "7 ta rangli pechat");
     assert_eq!(
         body["assigned_groups"][0]["apparatus"],
         "7 ta rangli pechat"

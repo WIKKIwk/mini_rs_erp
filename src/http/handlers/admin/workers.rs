@@ -63,6 +63,7 @@ struct WorkerGroupResponse {
 #[derive(Debug, Serialize)]
 struct WorkerProfileDetailResponse {
     worker: AdminWorkerDetail,
+    assigned_apparatus: Vec<String>,
     assigned_groups: Vec<WorkerGroupResponse>,
     active_sessions: Vec<OrderRunSession>,
     recent_batches: Vec<OrderProgressBatch>,
