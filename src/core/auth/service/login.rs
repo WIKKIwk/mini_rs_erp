@@ -1,6 +1,6 @@
 use crate::core::auth::models::{Principal, PrincipalRole};
 
-use super::helpers::normalize_phone;
+use super::helpers::{is_numeric_access_code, normalize_phone, requires_numeric_access_code};
 use super::{AuthError, AuthIdentity, AuthService};
 
 impl AuthService {
@@ -24,7 +24,12 @@ impl AuthService {
             });
         }
 
-        match self.infer_role(code)? {
+        let role = self.infer_role(code)?;
+        if requires_numeric_access_code(&role) && !is_numeric_access_code(code) {
+            return Err(AuthError::InvalidCredentials);
+        }
+
+        match role {
             PrincipalRole::Supplier => self.login_supplier(&normalized_phone, code).await,
             PrincipalRole::Werka => self.login_werka(normalized_phone, code, &identity),
             PrincipalRole::Customer => self.login_customer(&normalized_phone, code).await,

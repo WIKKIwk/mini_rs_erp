@@ -119,3 +119,20 @@ pub(super) fn random_code(prefix: &str, existing: &mut BTreeMap<String, ()>) -> 
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use std::collections::BTreeMap;
+
+    use super::random_code;
+
+    #[test]
+    fn worker_and_system_codes_are_numeric() {
+        for prefix in ["40", "50", "80"] {
+            let code = random_code(prefix, &mut BTreeMap::new());
+
+            assert!(code.starts_with(prefix));
+            assert!(code.chars().all(|character| character.is_ascii_digit()));
+        }
+    }
+}

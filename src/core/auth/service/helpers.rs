@@ -1,4 +1,5 @@
 use crate::core::auth::access_codes::{SupplierAccessInput, supplier_access_code};
+use crate::core::auth::models::PrincipalRole;
 use crate::core::auth::ports::{
     AdminAccessState, CustomerRecord, MaterialTaminotchiRecord, SupplierRecord, WorkerRecord,
 };
@@ -50,6 +51,17 @@ pub(super) fn blank_default(value: &str, fallback: &str) -> String {
     } else {
         trimmed.to_string()
     }
+}
+
+pub(super) fn requires_numeric_access_code(role: &PrincipalRole) -> bool {
+    matches!(
+        role,
+        PrincipalRole::Aparatchi | PrincipalRole::Qolipchi | PrincipalRole::Boyoqchi
+    )
+}
+
+pub(super) fn is_numeric_access_code(code: &str) -> bool {
+    !code.is_empty() && code.chars().all(|character| character.is_ascii_digit())
 }
 
 pub(super) fn phone_matches_normalized(stored_phone: &str, normalized_login_phone: &str) -> bool {

@@ -344,6 +344,19 @@ async fn aparatchi_login_accepts_worker_phone_and_code() {
 }
 
 #[tokio::test]
+async fn worker_and_system_user_login_rejects_non_numeric_codes() {
+    let auth = AuthService::new(&config());
+
+    for (phone, code) in [
+        ("+998901112233", "40ABCDEF1234"),
+        ("+998901112234", "50ABCDEF1234"),
+        ("+998901112235", "80ABCDEF1234"),
+    ] {
+        assert!(auth.login(phone, code).await.is_err(), "code: {code}");
+    }
+}
+
+#[tokio::test]
 async fn customer_login_merges_local_phone_when_normalized_search_returns_other_matches() {
     let customers = Arc::new(FakeCustomerLookup {
         customers: vec![
