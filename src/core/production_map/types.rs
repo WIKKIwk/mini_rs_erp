@@ -2,8 +2,12 @@ mod audit;
 mod completion;
 mod control;
 mod definition;
-mod progress;
-mod progress_status;
+mod progress {
+    include!("progress_session/progress.rs");
+}
+mod progress_status {
+    include!("progress_session/progress_status.rs");
+}
 mod paddon;
 mod queue;
 

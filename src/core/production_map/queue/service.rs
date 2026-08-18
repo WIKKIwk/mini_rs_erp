@@ -1,18 +1,18 @@
 use std::collections::{BTreeMap, BTreeSet};
 
-use super::*;
+use super::super::*;
 
-use super::apparatus::{
+use super::super::apparatus::{
     claim_unassigned_alternative_apparatus_assignment, visible_order_ids_by_apparatus,
     visible_order_ids_for_apparatus,
 };
-use super::chain;
-use super::materials::build_raw_material_start_requirements;
-use super::progress::effective_apparatus_queue_policy_record;
-use super::service::{ClaimedAlternativeMapUpdate, QueueProgressRecords};
-use super::service_progress_support::{session_progress_links, wip_batch_was_consumed_by_producer};
-use super::service_queue_support::*;
-use super::store_port::{ApparatusQueuePolicyMap, ApparatusQueueStateMap, OrderControlMap};
+use super::super::chain;
+use super::super::materials::build_raw_material_start_requirements;
+use super::super::progress::effective_apparatus_queue_policy_record;
+use super::super::service::{ClaimedAlternativeMapUpdate, QueueProgressRecords};
+use super::super::service_progress_support::{session_progress_links, wip_batch_was_consumed_by_producer};
+use super::super::service_queue_support::*;
+use super::super::store_port::{ApparatusQueuePolicyMap, ApparatusQueueStateMap, OrderControlMap};
 
 impl ProductionMapService {
     pub async fn apparatus_sequences(
@@ -40,7 +40,7 @@ impl ProductionMapService {
         ))
     }
 
-    pub(super) fn effective_apparatus_sequences_for_maps(
+    pub(in crate::core::production_map) fn effective_apparatus_sequences_for_maps(
         maps: &[ProductionMapDefinition],
         sequences: &BTreeMap<String, Vec<String>>,
         frozen_order_ids: &BTreeSet<String>,
@@ -262,7 +262,7 @@ impl ProductionMapService {
             .await
     }
 
-    pub(super) async fn order_status_details_for_snapshot(
+    pub(in crate::core::production_map) async fn order_status_details_for_snapshot(
         &self,
         maps: &[ProductionMapSaved],
         queue_states: &ApparatusQueueStateMap,
@@ -363,7 +363,7 @@ impl ProductionMapService {
         .await
     }
 
-    pub(super) async fn queue_action_controls_for_snapshot(
+    pub(in crate::core::production_map) async fn queue_action_controls_for_snapshot(
         &self,
         maps: &[ProductionMapDefinition],
         sequences: &BTreeMap<String, Vec<String>>,
@@ -726,4 +726,4 @@ impl ProductionMapService {
     }
 }
 
-include!("service_queue_execution.rs");
+include!("execution.rs");

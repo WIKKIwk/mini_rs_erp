@@ -2,6 +2,7 @@ mod capacity;
 mod maps;
 mod materials;
 mod queue;
+#[path = "progress_session/runs.rs"]
 mod runs;
 mod state;
 mod transfers;

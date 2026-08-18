@@ -10,24 +10,35 @@ mod materials_support;
 #[cfg(test)]
 mod memory_store;
 pub mod pechat;
+#[path = "progress_session/mod.rs"]
 mod progress;
+mod queue;
 pub mod queue_state;
 mod service;
 mod service_audit;
 mod service_astatka;
-mod service_completion;
+mod service_completion {
+    include!("progress_session/service_completion.rs");
+}
 mod service_capacity;
 mod service_capacity_scheduler;
 mod service_maps;
 mod service_order_control;
-mod service_progress;
-mod service_progress_correction;
-mod service_progress_metrics;
-mod service_progress_support;
+mod service_progress {
+    include!("progress_session/service_progress.rs");
+}
+mod service_progress_correction {
+    include!("progress_session/service_progress_correction.rs");
+}
+mod service_progress_metrics {
+    include!("progress_session/service_progress_metrics.rs");
+}
+mod service_progress_support {
+    include!("progress_session/service_progress_support.rs");
+}
 mod service_paddon;
 mod service_qolip;
 mod service_transfer;
-mod service_queue;
 mod service_queue_support;
 mod service_wip;
 mod store_port;
