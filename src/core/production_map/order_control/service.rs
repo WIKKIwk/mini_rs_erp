@@ -456,6 +456,9 @@ async fn prepare_direct_freeze_queue_write(
         return Ok(None);
     };
     let storage_key = queue_state::resolve_apparatus_storage_key(&target_apparatus, &known_keys);
+    let canonical = service
+        .resolve_canonical_apparatus_text(&storage_key)
+        .await?;
     let mut parsed = parsed_queue_states(
         all_states
             .get(&storage_key)
@@ -502,7 +505,7 @@ async fn prepare_direct_freeze_queue_write(
     );
     let sequence_updates =
         sequence_updates_for_frozen_transition(&maps, &sequences, &excluded_order_ids, None);
-    let policy = queue_policy_for_apparatus(&target_apparatus, &storage_key, &policies);
+    let policy = queue_policy_for_apparatus(canonical.as_ref(), &policies);
     let actor = record.actor.clone();
     let mut event = queue_action_event(QueueActionEventInput {
         requested_apparatus: &target_apparatus,
@@ -540,6 +543,7 @@ async fn prepare_direct_freeze_queue_write(
     });
     Ok(Some(QueueActionProgressWrite {
         apparatus: storage_key,
+        map_update: None,
         states: serialized_queue_states(parsed),
         sequence_updates,
         event,
@@ -591,6 +595,9 @@ async fn restore_frozen_queue_after_unfreeze(
         })
         .ok_or(ProductionMapError::OrderFreezeTargetNotFound)?;
     let storage_key = queue_state::resolve_apparatus_storage_key(&target_apparatus, &known_keys);
+    let canonical = service
+        .resolve_canonical_apparatus_text(&storage_key)
+        .await?;
     let mut parsed = parsed_queue_states(
         all_states
             .get(&storage_key)
@@ -609,7 +616,7 @@ async fn restore_frozen_queue_after_unfreeze(
         }
         sessions.iter().find(|session| {
             session.session_id.trim() == target_session_id
-                && queue_state::apparatus_titles_match(&session.apparatus, &storage_key)
+                && queue_state::apparatus_ids_match(&session.apparatus, &storage_key)
         })
     });
     let already_requeued_recovery = from_state == queue_state::ApparatusQueueOrderState::Pending
@@ -644,7 +651,7 @@ async fn restore_frozen_queue_after_unfreeze(
         &frozen_order_ids,
         Some(&record.order_id),
     );
-    let policy = queue_policy_for_apparatus(&target_apparatus, &storage_key, &policies);
+    let policy = queue_policy_for_apparatus(canonical.as_ref(), &policies);
     let actor = record.actor.clone();
     let mut event = queue_action_event(QueueActionEventInput {
         requested_apparatus: &target_apparatus,
@@ -677,7 +684,7 @@ async fn restore_frozen_queue_after_unfreeze(
             } else {
                 sessions.iter().find(|session| {
                     session.status == OrderRunStatus::Frozen
-                        && queue_state::apparatus_titles_match(&session.apparatus, &storage_key)
+                        && queue_state::apparatus_ids_match(&session.apparatus, &storage_key)
                 })
             }
         })
@@ -687,6 +694,7 @@ async fn restore_frozen_queue_after_unfreeze(
         .store
         .put_apparatus_queue_states_with_event_and_progress(QueueActionProgressWrite {
             apparatus: storage_key,
+            map_update: None,
             states: serialized_queue_states(parsed),
             sequence_updates,
             event,

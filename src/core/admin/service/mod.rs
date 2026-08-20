@@ -189,7 +189,7 @@ impl AdminService {
 
     pub async fn settings(&self) -> Result<AdminSettings, AdminPortError> {
         let config = self.config.read().await;
-        let state = self.state_for("werka").await.unwrap_or_default();
+        let state = self.state_for("werka").await?;
         let now = OffsetDateTime::now_utc();
         Ok(AdminSettings {
             default_target_warehouse: config.default_target_warehouse.clone(),

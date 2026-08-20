@@ -2,6 +2,7 @@ use std::collections::BTreeMap;
 
 use sqlx::PgPool;
 
+use crate::core::apparatus_standard::ApparatusId;
 use crate::core::production_map::{
     CompletedQueueOrder, CompletedQueueOrderStatus, OrderProgressBatch, OrderRunSession,
     ProductionMapError, ProductionOrderLogEntry,
@@ -23,12 +24,12 @@ pub(super) async fn load_completed_queue_orders_for_actor(
     }
     let limit = i64::try_from(limit.min(500)).unwrap_or(500);
     let rows = sqlx::query_as::<_, (String, String, String, i64)>(
-        "SELECT order_id, apparatus, completion_status,
+        "SELECT order_id, canonical_apparatus_id AS apparatus, completion_status,
                 EXTRACT(EPOCH FROM created_at)::bigint AS completed_at_unix
          FROM (
             SELECT DISTINCT ON (order_id)
                 order_id,
-                apparatus,
+                canonical_apparatus_id AS apparatus,
                 created_at,
                 CASE
                     WHEN action = 'freeze' THEN 'frozen'
@@ -83,7 +84,7 @@ pub(super) async fn load_queue_action_logs_for_orders(
         return Ok(BTreeMap::new());
     }
     let rows = sqlx::query_as::<_, QueueActionLogRow>(
-        "SELECT event_id, apparatus, order_id, action, from_state, to_state,
+        "SELECT event_id, canonical_apparatus_id AS apparatus, order_id, action, from_state, to_state,
                 actor_role, actor_ref, actor_display_name,
                 EXTRACT(EPOCH FROM created_at)::bigint AS created_at_unix,
                 COALESCE((payload_json->>'completed_with_issue')::boolean, false) AS completed_with_issue,
@@ -116,7 +117,7 @@ pub(super) async fn load_queue_action_logs_for_worker(
     }
     let limit = i64::try_from(limit.min(500)).unwrap_or(500);
     let rows = sqlx::query_as::<_, QueueActionLogRow>(
-        "SELECT event_id, apparatus, order_id, action, from_state, to_state,
+        "SELECT event_id, canonical_apparatus_id AS apparatus, order_id, action, from_state, to_state,
                 actor_role, actor_ref, actor_display_name,
                 EXTRACT(EPOCH FROM created_at)::bigint AS created_at_unix,
                 COALESCE((payload_json->>'completed_with_issue')::boolean, false) AS completed_with_issue,
@@ -149,21 +150,23 @@ pub(super) async fn load_active_order_run_session(
     apparatus: &str,
     order_id: &str,
 ) -> Result<Option<OrderRunSession>, ProductionMapError> {
+    let apparatus = ApparatusId::new(apparatus.trim().to_string())
+        .map_err(|_| ProductionMapError::StoreFailed)?;
     let row = sqlx::query_as::<_, ProgressSessionRow>(
-        "SELECT session_id, apparatus, order_id, status,
+        "SELECT session_id, canonical_apparatus_id AS apparatus, order_id, status,
                 worker_role, worker_ref, worker_display_name,
                 EXTRACT(EPOCH FROM started_at)::bigint AS started_at_unix,
                 EXTRACT(EPOCH FROM updated_at)::bigint AS updated_at_unix,
                 payload_json
          FROM mini_order_run_sessions
          WHERE order_id = $1
-           AND lower(apparatus) = lower($2)
+           AND canonical_apparatus_id = $2
            AND status IN ('active', 'paused', 'frozen', 'roll_detached')
          ORDER BY updated_at DESC
          LIMIT 1",
     )
     .bind(order_id.trim())
-    .bind(apparatus.trim())
+    .bind(apparatus.as_str())
     .fetch_optional(pool)
     .await
     .map_err(|_| ProductionMapError::StoreFailed)?;
@@ -179,7 +182,7 @@ pub(super) async fn load_active_order_run_session_for_qolip(
         return Ok(None);
     }
     let row = sqlx::query_as::<_, ProgressSessionRow>(
-        "SELECT session_id, apparatus, order_id, status,
+        "SELECT session_id, canonical_apparatus_id AS apparatus, order_id, status,
                 worker_role, worker_ref, worker_display_name,
                 EXTRACT(EPOCH FROM started_at)::bigint AS started_at_unix,
                 EXTRACT(EPOCH FROM updated_at)::bigint AS updated_at_unix,
@@ -223,7 +226,7 @@ pub(super) async fn load_active_order_run_sessions_for_worker(
     }
     let limit = i64::try_from(limit.min(500)).unwrap_or(500);
     let rows = sqlx::query_as::<_, ProgressSessionRow>(
-        "SELECT session_id, apparatus, order_id, status,
+        "SELECT session_id, canonical_apparatus_id AS apparatus, order_id, status,
                 worker_role, worker_ref, worker_display_name,
                 EXTRACT(EPOCH FROM started_at)::bigint AS started_at_unix,
                 EXTRACT(EPOCH FROM updated_at)::bigint AS updated_at_unix,
@@ -260,7 +263,7 @@ pub(super) async fn load_order_run_session(
     session_id: &str,
 ) -> Result<Option<OrderRunSession>, ProductionMapError> {
     let row = sqlx::query_as::<_, ProgressSessionRow>(
-        "SELECT session_id, apparatus, order_id, status,
+        "SELECT session_id, canonical_apparatus_id AS apparatus, order_id, status,
                 worker_role, worker_ref, worker_display_name,
                 EXTRACT(EPOCH FROM started_at)::bigint AS started_at_unix,
                 EXTRACT(EPOCH FROM updated_at)::bigint AS updated_at_unix,
@@ -301,7 +304,7 @@ pub(super) async fn load_order_run_sessions_for_orders(
         return Ok(BTreeMap::new());
     }
     let rows = sqlx::query_as::<_, ProgressSessionRow>(
-        "SELECT session_id, apparatus, order_id, status,
+        "SELECT session_id, canonical_apparatus_id AS apparatus, order_id, status,
                 worker_role, worker_ref, worker_display_name,
                 EXTRACT(EPOCH FROM started_at)::bigint AS started_at_unix,
                 EXTRACT(EPOCH FROM updated_at)::bigint AS updated_at_unix,
@@ -329,7 +332,7 @@ pub(super) async fn load_order_run_sessions_for_audit(
     pool: &PgPool,
 ) -> Result<Vec<OrderRunSession>, ProductionMapError> {
     let rows = sqlx::query_as::<_, ProgressSessionRow>(
-        "SELECT session_id, apparatus, order_id, status,
+        "SELECT session_id, canonical_apparatus_id AS apparatus, order_id, status,
                 worker_role, worker_ref, worker_display_name,
                 EXTRACT(EPOCH FROM started_at)::bigint AS started_at_unix,
                 EXTRACT(EPOCH FROM updated_at)::bigint AS updated_at_unix,
@@ -353,14 +356,17 @@ pub(super) async fn load_progress_batch(
                          EXTRACT(EPOCH FROM batch.created_at)::bigint) AS started_at_unix,
                 COALESCE(EXTRACT(EPOCH FROM session.session_updated_at)::bigint,
                          EXTRACT(EPOCH FROM batch.updated_at)::bigint) AS completed_at_unix,
-                batch.apparatus, batch.order_id, batch.action, batch.status,
+                batch.canonical_apparatus_id AS apparatus, batch.order_id, batch.action, batch.status,
                 produced_qty::float8 AS produced_qty, uom, qr_payload,
                 label_item_code, label_item_name, executor_name,
                 worker_role, worker_ref, worker_display_name,
-                wip_status, current_apparatus, current_apparatus_key, current_location,
-                next_apparatus, parent_batch_id, used_by_session_id,
-                used_by_apparatus, processed_by_session_id,
-                processed_by_apparatus,
+                wip_status, COALESCE(batch.canonical_current_apparatus_id, '') AS current_apparatus,
+                current_apparatus_key, current_location,
+                COALESCE(batch.canonical_next_apparatus_id, '') AS next_apparatus,
+                parent_batch_id, used_by_session_id,
+                COALESCE(batch.canonical_used_by_apparatus_id, '') AS used_by_apparatus,
+                processed_by_session_id,
+                COALESCE(batch.canonical_processed_by_apparatus_id, '') AS processed_by_apparatus,
                 return_ink_kg::float8 AS return_ink_kg,
                 lamination_print_leftover_rolls::float8 AS lamination_print_leftover_rolls,
                 lamination_film_leftover_rolls::float8 AS lamination_film_leftover_rolls,
@@ -405,14 +411,17 @@ pub(super) async fn load_progress_batches_for_worker(
                          EXTRACT(EPOCH FROM batch.created_at)::bigint) AS started_at_unix,
                 COALESCE(EXTRACT(EPOCH FROM session.session_updated_at)::bigint,
                          EXTRACT(EPOCH FROM batch.updated_at)::bigint) AS completed_at_unix,
-                batch.apparatus, batch.order_id, batch.action, batch.status,
+                batch.canonical_apparatus_id AS apparatus, batch.order_id, batch.action, batch.status,
                 produced_qty::float8 AS produced_qty, uom, qr_payload,
                 label_item_code, label_item_name, executor_name,
                 worker_role, worker_ref, worker_display_name,
-                wip_status, current_apparatus, current_apparatus_key, current_location,
-                next_apparatus, parent_batch_id, used_by_session_id,
-                used_by_apparatus, processed_by_session_id,
-                processed_by_apparatus,
+                wip_status, COALESCE(batch.canonical_current_apparatus_id, '') AS current_apparatus,
+                current_apparatus_key, current_location,
+                COALESCE(batch.canonical_next_apparatus_id, '') AS next_apparatus,
+                parent_batch_id, used_by_session_id,
+                COALESCE(batch.canonical_used_by_apparatus_id, '') AS used_by_apparatus,
+                processed_by_session_id,
+                COALESCE(batch.canonical_processed_by_apparatus_id, '') AS processed_by_apparatus,
                 return_ink_kg::float8 AS return_ink_kg,
                 lamination_print_leftover_rolls::float8 AS lamination_print_leftover_rolls,
                 lamination_film_leftover_rolls::float8 AS lamination_film_leftover_rolls,
@@ -484,14 +493,17 @@ pub(super) async fn load_progress_batches_for_orders(
                          EXTRACT(EPOCH FROM batch.created_at)::bigint) AS started_at_unix,
                 COALESCE(EXTRACT(EPOCH FROM session.session_updated_at)::bigint,
                          EXTRACT(EPOCH FROM batch.updated_at)::bigint) AS completed_at_unix,
-                batch.apparatus, batch.order_id, batch.action, batch.status,
+                batch.canonical_apparatus_id AS apparatus, batch.order_id, batch.action, batch.status,
                 produced_qty::float8 AS produced_qty, uom, qr_payload,
                 label_item_code, label_item_name, executor_name,
                 worker_role, worker_ref, worker_display_name,
-                wip_status, current_apparatus, current_apparatus_key, current_location,
-                next_apparatus, parent_batch_id, used_by_session_id,
-                used_by_apparatus, processed_by_session_id,
-                processed_by_apparatus,
+                wip_status, COALESCE(batch.canonical_current_apparatus_id, '') AS current_apparatus,
+                current_apparatus_key, current_location,
+                COALESCE(batch.canonical_next_apparatus_id, '') AS next_apparatus,
+                parent_batch_id, used_by_session_id,
+                COALESCE(batch.canonical_used_by_apparatus_id, '') AS used_by_apparatus,
+                processed_by_session_id,
+                COALESCE(batch.canonical_processed_by_apparatus_id, '') AS processed_by_apparatus,
                 return_ink_kg::float8 AS return_ink_kg,
                 lamination_print_leftover_rolls::float8 AS lamination_print_leftover_rolls,
                 lamination_film_leftover_rolls::float8 AS lamination_film_leftover_rolls,
@@ -537,14 +549,17 @@ pub(super) async fn load_progress_batches_for_audit(
                          EXTRACT(EPOCH FROM batch.created_at)::bigint) AS started_at_unix,
                 COALESCE(EXTRACT(EPOCH FROM session.session_updated_at)::bigint,
                          EXTRACT(EPOCH FROM batch.updated_at)::bigint) AS completed_at_unix,
-                batch.apparatus, batch.order_id, batch.action, batch.status,
+                batch.canonical_apparatus_id AS apparatus, batch.order_id, batch.action, batch.status,
                 produced_qty::float8 AS produced_qty, uom, qr_payload,
                 label_item_code, label_item_name, executor_name,
                 worker_role, worker_ref, worker_display_name,
-                wip_status, current_apparatus, current_apparatus_key, current_location,
-                next_apparatus, parent_batch_id, used_by_session_id,
-                used_by_apparatus, processed_by_session_id,
-                processed_by_apparatus,
+                wip_status, COALESCE(batch.canonical_current_apparatus_id, '') AS current_apparatus,
+                current_apparatus_key, current_location,
+                COALESCE(batch.canonical_next_apparatus_id, '') AS next_apparatus,
+                parent_batch_id, used_by_session_id,
+                COALESCE(batch.canonical_used_by_apparatus_id, '') AS used_by_apparatus,
+                processed_by_session_id,
+                COALESCE(batch.canonical_processed_by_apparatus_id, '') AS processed_by_apparatus,
                 return_ink_kg::float8 AS return_ink_kg,
                 lamination_print_leftover_rolls::float8 AS lamination_print_leftover_rolls,
                 lamination_film_leftover_rolls::float8 AS lamination_film_leftover_rolls,
@@ -581,14 +596,17 @@ pub(super) async fn load_progress_batch_by_qr(
                          EXTRACT(EPOCH FROM batch.created_at)::bigint) AS started_at_unix,
                 COALESCE(EXTRACT(EPOCH FROM session.session_updated_at)::bigint,
                          EXTRACT(EPOCH FROM batch.updated_at)::bigint) AS completed_at_unix,
-                batch.apparatus, batch.order_id, batch.action, batch.status,
+                batch.canonical_apparatus_id AS apparatus, batch.order_id, batch.action, batch.status,
                 produced_qty::float8 AS produced_qty, uom, qr_payload,
                 label_item_code, label_item_name, executor_name,
                 worker_role, worker_ref, worker_display_name,
-                wip_status, current_apparatus, current_apparatus_key, current_location,
-                next_apparatus, parent_batch_id, used_by_session_id,
-                used_by_apparatus, processed_by_session_id,
-                processed_by_apparatus,
+                wip_status, COALESCE(batch.canonical_current_apparatus_id, '') AS current_apparatus,
+                current_apparatus_key, current_location,
+                COALESCE(batch.canonical_next_apparatus_id, '') AS next_apparatus,
+                parent_batch_id, used_by_session_id,
+                COALESCE(batch.canonical_used_by_apparatus_id, '') AS used_by_apparatus,
+                processed_by_session_id,
+                COALESCE(batch.canonical_processed_by_apparatus_id, '') AS processed_by_apparatus,
                 return_ink_kg::float8 AS return_ink_kg,
                 lamination_print_leftover_rolls::float8 AS lamination_print_leftover_rolls,
                 lamination_film_leftover_rolls::float8 AS lamination_film_leftover_rolls,

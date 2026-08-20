@@ -89,7 +89,8 @@ impl ProductionMapService {
         }
         let known_keys = known_apparatus_storage_keys(&sequences, &all_states);
         let storage_key = queue_state::resolve_apparatus_storage_key(apparatus, &known_keys);
-        let policy = queue_policy_for_apparatus(apparatus, &storage_key, &policies);
+        let canonical = self.resolve_canonical_apparatus_text(&storage_key).await?;
+        let policy = queue_policy_for_apparatus(canonical.as_ref(), &policies);
         let stored_sequence = sequences.get(&storage_key).cloned().unwrap_or_default();
         let all_maps = self.store.maps().await?;
         let visible_order_ids = visible_order_ids_for_apparatus(&all_maps, apparatus);
@@ -120,7 +121,6 @@ impl ProductionMapService {
                 apparatus,
             ) {
             Some(ClaimedAlternativeMapUpdate {
-                previous: order_map.clone(),
                 updated: effective_order_map.clone(),
             })
         } else {
@@ -150,7 +150,7 @@ impl ProductionMapService {
         }
         if freeze_request_safe_stop
             && freeze_request_safe_stop_has_output
-            && !freeze_safe_stop_output_is_complete(apparatus, &progress)
+            && !freeze_safe_stop_output_is_complete(&canonical, &progress)
         {
             return Err(ProductionMapError::ProgressInputInvalid);
         }
@@ -166,7 +166,7 @@ impl ProductionMapService {
         let remove_roll_from_apparatus = action == queue_state::ApparatusQueueAction::DetachRoll
             && progress.remove_roll_from_apparatus;
         if remove_roll_from_apparatus {
-            if !apparatus::is_laminatsiya_title(&storage_key)
+            if !apparatus::is_laminatsiya_apparatus(&canonical)
                 || from_state != queue_state::ApparatusQueueOrderState::Paused
             {
                 return Err(ProductionMapError::QueueActionNotAllowed);
@@ -247,8 +247,8 @@ impl ProductionMapService {
             }
         }
         if action == queue_state::ApparatusQueueAction::Complete
-            && (apparatus::is_laminatsiya_title(&storage_key)
-                || apparatus::is_rezka_title(&storage_key))
+            && (apparatus::is_laminatsiya_apparatus(&canonical)
+                || apparatus::is_rezka_apparatus(&canonical))
             && !progress.force_full_completion_metrics
         {
             let input_batch_id = self
@@ -259,6 +259,7 @@ impl ProductionMapService {
                     order_id,
                     order_map,
                     &storage_key,
+                    canonical.as_ref(),
                     &all_states,
                     &[],
                     &input_batch_id,
@@ -278,6 +279,7 @@ impl ProductionMapService {
                 progress_action,
                 &actor,
                 progress,
+                canonical.as_ref(),
             )
             .await?;
         if freeze_request_safe_stop {
@@ -298,6 +300,7 @@ impl ProductionMapService {
                     order_id,
                     order_map,
                     &storage_key,
+                    canonical.as_ref(),
                     &all_states,
                     &progress.progress_batch_updates,
                     "",
@@ -390,11 +393,13 @@ impl ProductionMapService {
             .is_some())
     }
 
+    #[allow(clippy::too_many_arguments)]
     async fn has_unprocessed_previous_wips(
         &self,
         order_id: &str,
         order_map: &ProductionMapDefinition,
         apparatus: &str,
+        canonical: &crate::core::apparatus_standard::CanonicalApparatus,
         all_states: &ApparatusQueueStateMap,
         progress_batch_updates: &[OrderProgressBatch],
         ignored_batch_id: &str,
@@ -403,10 +408,10 @@ impl ProductionMapService {
         else {
             return Ok(false);
         };
-        let requires_previous_stage_completion =
-            apparatus::is_laminatsiya_title(apparatus) || apparatus::is_rezka_title(apparatus);
+        let requires_previous_stage_completion = apparatus::is_laminatsiya_apparatus(canonical)
+            || apparatus::is_rezka_apparatus(canonical);
         let previous_stage_completed = all_states.iter().any(|(candidate, states)| {
-            queue_state::apparatus_titles_match(candidate, &previous_apparatus)
+            super::super::types::apparatus_ids_match(candidate, &previous_apparatus)
                 && states
                     .get(order_id)
                     .and_then(|state| queue_state::ApparatusQueueOrderState::parse(state))
@@ -429,11 +434,11 @@ impl ProductionMapService {
             .values()
             .filter(|batch| {
                 batch.order_id.trim() == order_id.trim()
-                    && queue_state::apparatus_titles_match(&batch.apparatus, &previous_apparatus)
-                    && queue_state::next_stage_title_matches_apparatus(
-                        &batch.next_apparatus,
-                        apparatus,
+                    && super::super::types::apparatus_ids_match(
+                        &batch.apparatus,
+                        &previous_apparatus,
                     )
+                    && chain::stage_ids_match_for_map(order_map, &batch.next_apparatus, apparatus)
             })
             .any(|batch| {
                 if !ignored_batch_id.trim().is_empty()
@@ -443,7 +448,10 @@ impl ProductionMapService {
                 }
                 batch.wip_status == OrderProgressBatchWipStatus::Waiting
                     || (batch.wip_status == OrderProgressBatchWipStatus::InUse
-                        && queue_state::apparatus_titles_match(&batch.used_by_apparatus, apparatus))
+                        && super::super::types::apparatus_ids_match(
+                            &batch.used_by_apparatus,
+                            apparatus,
+                        ))
                     || wip_batch_was_consumed_by_producer(batch)
             }))
     }
@@ -496,10 +504,10 @@ impl ProductionMapService {
         returned_paint_report: Option<crate::core::returned_paint::ReturnedPaintRequest>,
     ) -> Result<ApparatusQueueActionResult, ProductionMapError> {
         let order_id = prepared.event.order_id.clone();
-        let claimed_alternative_map = prepared.claimed_alternative_map.clone();
-        if let Some(update) = &claimed_alternative_map {
-            self.store.put_map(update.updated.clone()).await?;
-        }
+        let map_update = prepared
+            .claimed_alternative_map
+            .as_ref()
+            .map(|update| update.updated.clone());
         let schedule_reservation_status =
             schedule_reservation_status_for_action(prepared.event.action);
         let order_control = prepared.order_control_update.clone();
@@ -507,6 +515,7 @@ impl ProductionMapService {
             .store
             .put_apparatus_queue_states_with_event_and_progress(QueueActionProgressWrite {
                 apparatus: prepared.apparatus.clone(),
+                map_update,
                 states: prepared.states.clone(),
                 sequence_updates: prepared.sequence_updates.clone(),
                 event: prepared.event,
@@ -521,16 +530,7 @@ impl ProductionMapService {
                 order_control_update: prepared.order_control_update.clone(),
                 schedule_reservation_status,
             })
-            .await;
-        let write_result = match write_result {
-            Ok(result) => result,
-            Err(error) => {
-                if let Some(update) = claimed_alternative_map {
-                    let _ = self.store.put_map(update.previous).await;
-                }
-                return Err(error);
-            }
-        };
+            .await?;
         let order_status = self.order_status_detail(&order_id).await?;
         self.notify_live();
         Ok(ApparatusQueueActionResult {
@@ -594,7 +594,7 @@ fn validate_freeze_request_pause(
     let worker_matches = request.target_worker_role.trim() == actor.role.trim()
         && request.target_worker_ref.trim() == actor.ref_.trim();
     let apparatus_matches =
-        queue_state::apparatus_titles_match(&request.target_apparatus, apparatus);
+        super::super::types::apparatus_ids_match(&request.target_apparatus, apparatus);
     if !request_id_matches || !worker_matches || !apparatus_matches {
         return Err(ProductionMapError::OrderFreezeRequestMismatch);
     }
@@ -635,8 +635,11 @@ fn freeze_safe_stop_has_any_output(progress: &QueueProgressInput) -> bool {
         || progress.diameter.is_some()
 }
 
-fn freeze_safe_stop_output_is_complete(apparatus: &str, progress: &QueueProgressInput) -> bool {
-    if apparatus::is_rezka_title(apparatus) {
+fn freeze_safe_stop_output_is_complete(
+    apparatus: &crate::core::apparatus_standard::CanonicalApparatus,
+    progress: &QueueProgressInput,
+) -> bool {
+    if apparatus::is_rezka_apparatus(apparatus) {
         return !progress.rezka_frames.is_empty()
             || (progress
                 .produced_qty

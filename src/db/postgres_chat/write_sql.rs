@@ -118,11 +118,19 @@ const EXISTING_MESSAGE_SQL: &str = r#"SELECT
      AND m.client_message_id = $3"#;
 
 const CLAIM_ORDER_FREEZE_CHAT_EVENTS_SQL: &str = r#"WITH candidates AS (
-     SELECT event_sequence
-     FROM mini_order_freeze_chat_outbox
-     WHERE delivered_at IS NULL
-       AND (locked_until IS NULL OR locked_until < now())
-     ORDER BY event_sequence ASC
+   SELECT event_sequence
+     FROM mini_order_freeze_chat_outbox event
+     JOIN mini_order_freeze_requests request
+       ON request.request_id = event.request_id
+     WHERE event.delivered_at IS NULL
+       AND request.canonical_target_apparatus_id IS NOT NULL
+       AND EXISTS (
+         SELECT 1
+         FROM mini_apparatus master
+         WHERE master.id = request.canonical_target_apparatus_id
+       )
+       AND (event.locked_until IS NULL OR event.locked_until < now())
+     ORDER BY event.event_sequence ASC
      FOR UPDATE SKIP LOCKED
      LIMIT $1
    ),
@@ -147,7 +155,7 @@ const CLAIM_ORDER_FREEZE_CHAT_EVENTS_SQL: &str = r#"WITH candidates AS (
      request.requester_ref,
      request.requester_display_name,
      request.target_session_id,
-     request.target_apparatus,
+     request.canonical_target_apparatus_id AS target_apparatus,
      request.target_worker_role,
      request.target_worker_ref,
      request.target_worker_display_name,

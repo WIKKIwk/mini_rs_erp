@@ -131,8 +131,8 @@ impl AppState {
             customer_store,
         );
         let customer = CustomerService::new();
-        let production_maps = build_production_map_service();
         let apparatus_groups = build_apparatus_groups_service();
+        let production_maps = build_production_map_service(apparatus_groups.clone());
         let factory_locations = build_factory_location_service(apparatus_groups.clone());
         let inventory_movements = build_inventory_movement_service();
         let calculate_orders = build_calculate_order_store();
@@ -173,7 +173,7 @@ impl AppState {
         let qolip = build_qolip_service();
         let returned_paint = build_returned_paint_service();
         let werka = build_werka_service(&config);
-        let warehouses = build_warehouse_service();
+        let warehouses = build_warehouse_service(apparatus_groups.clone());
         let worker_groups = build_worker_group_service();
         let sessions = build_session_manager(&config);
         let telegram = build_telegram_service().with_order_catalog(

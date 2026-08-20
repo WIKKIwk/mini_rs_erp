@@ -3,6 +3,9 @@ use std::sync::Arc;
 use crate::core::apparatus_groups::{
     ApparatusGroupService, ApparatusGroupUpsert, ApparatusMasterData,
 };
+use crate::core::apparatus_standard::{
+    ApparatusId, MaterialPolicy, QueuePolicy, RawMaterialStartPolicy,
+};
 use crate::db::postgres::apply_foundation_migration;
 use crate::db::postgres_apparatus_group::PostgresApparatusGroupStore;
 
@@ -30,16 +33,16 @@ async fn postgres_apparatus_group_store_round_trips_groups() {
     apply_foundation_migration(&pool)
         .await
         .expect("apply migration");
-    let service =
-        ApparatusGroupService::new(Arc::new(PostgresApparatusGroupStore::new(pool.clone())));
+    let store = Arc::new(PostgresApparatusGroupStore::new(pool.clone()));
+    let service = ApparatusGroupService::new(store.clone());
 
     let saved = service
         .upsert_group(ApparatusGroupUpsert {
             name: " pechat ".to_string(),
             apparatus: vec![
-                "7 ta rangli pechat".to_string(),
-                "8 ta rangli pechat".to_string(),
-                "7 TA RANGLI PECHAT".to_string(),
+                "apparatus:default:bosma_7".to_string(),
+                "apparatus:default:bosma_8".to_string(),
+                "apparatus:default:bosma_7".to_string(),
             ],
         })
         .await
@@ -48,9 +51,10 @@ async fn postgres_apparatus_group_store_round_trips_groups() {
     assert_eq!(
         saved.apparatus,
         vec![
-            "7 ta rangli bosma aparat".to_string(),
-            "8 ta rangli bosma aparat".to_string(),
-            "9 ta rangli bosma aparat".to_string(),
+            "apparatus:default:bosma_7".to_string(),
+            "apparatus:default:bosma_8".to_string(),
+            "apparatus:default:bosma_9".to_string(),
+            "apparatus:default:asset-005".to_string(),
         ]
     );
 
@@ -66,10 +70,120 @@ async fn postgres_apparatus_group_store_round_trips_groups() {
         .await
         .expect("save apparatus");
     assert_eq!(created.name, "Bobst 1");
+    assert!(created.id.starts_with("apparatus:custom:"));
+    let canonical_payload: serde_json::Value = sqlx::query_scalar(
+        "SELECT payload_json->'canonical_apparatus'
+         FROM mini_apparatus
+         WHERE id = $1",
+    )
+    .bind(&created.id)
+    .fetch_one(&pool)
+    .await
+    .expect("canonical sidecar");
+    assert_eq!(canonical_payload["identity"]["id"], created.id);
     assert_eq!(
         service.apparatus("bob", 20).await.expect("list apparatus"),
         vec!["Bobst 1".to_string()]
     );
+
+    store
+        .put_apparatus_with_id(
+            Some(&created.id),
+            "Compatibility rename",
+            &ApparatusMasterData::default(),
+        )
+        .await
+        .expect("legacy projection update");
+    let preserved_name: String = sqlx::query_scalar(
+        "SELECT payload_json #>> '{canonical_apparatus,identity,display,display_name}'
+         FROM mini_apparatus
+         WHERE id = $1",
+    )
+    .bind(&created.id)
+    .fetch_one(&pool)
+    .await
+    .expect("preserved canonical sidecar");
+    assert_eq!(preserved_name, "Bobst 1");
+
+    let apparatus_id = ApparatusId::new(created.id.clone()).expect("canonical apparatus id");
+    let mut canonical = service
+        .canonical_apparatus_by_id(&apparatus_id)
+        .await
+        .expect("canonical lookup before projection sync")
+        .expect("canonical apparatus before projection sync");
+    canonical.identity.display.display_name = "Bobst canonical".to_string();
+    canonical.versioning.revision = 2;
+    canonical.capacity.capacity_slots = 3;
+    canonical.policies.queue = QueuePolicy::FreePick;
+    canonical.policies.material = MaterialPolicy {
+        requires_material: true,
+        start_policy: RawMaterialStartPolicy::StateAll,
+        item_groups: vec!["Kraska".to_string()],
+        requirement_groups: Vec::new(),
+    };
+    service
+        .put_canonical_apparatus(1, canonical)
+        .await
+        .expect("canonical mutation with projection sync");
+
+    let master_fields: (String, String, String) = sqlx::query_as(
+        "SELECT name, base_name, kind
+         FROM mini_apparatus
+         WHERE id = $1",
+    )
+    .bind(&created.id)
+    .fetch_one(&pool)
+    .await
+    .expect("master projection fields");
+    assert_eq!(
+        master_fields,
+        (
+            "Bobst canonical".to_string(),
+            "Bobst canonical".to_string(),
+            "other".to_string()
+        )
+    );
+
+    let queue_projection: (String, String, String, serde_json::Value) = sqlx::query_as(
+        "SELECT apparatus, canonical_apparatus_id, policy, payload_json
+         FROM mini_apparatus_queue_policies
+         WHERE canonical_apparatus_id = $1",
+    )
+    .bind(&created.id)
+    .fetch_one(&pool)
+    .await
+    .expect("queue projection");
+    assert_eq!(queue_projection.0, "Bobst canonical");
+    assert_eq!(queue_projection.1, created.id);
+    assert_eq!(queue_projection.2, "free_pick");
+    assert_eq!(queue_projection.3["policy"], "free_pick");
+
+    let capacity_projection: (String, String, i32) = sqlx::query_as(
+        "SELECT apparatus, canonical_apparatus_id, capacity_slots
+         FROM mini_apparatus_capacity_profiles
+         WHERE canonical_apparatus_id = $1",
+    )
+    .bind(&created.id)
+    .fetch_one(&pool)
+    .await
+    .expect("capacity projection");
+    assert_eq!(capacity_projection.0, "Bobst canonical");
+    assert_eq!(capacity_projection.1, created.id);
+    assert_eq!(capacity_projection.2, 3);
+
+    let material_projection: (String, String, bool, serde_json::Value) = sqlx::query_as(
+        "SELECT apparatus, canonical_apparatus_id, requires_material, item_groups
+         FROM mini_apparatus_material_rules
+         WHERE canonical_apparatus_id = $1",
+    )
+    .bind(&created.id)
+    .fetch_one(&pool)
+    .await
+    .expect("material projection");
+    assert_eq!(material_projection.0, "Bobst canonical");
+    assert_eq!(material_projection.1, created.id);
+    assert!(material_projection.2);
+    assert_eq!(material_projection.3, serde_json::json!(["Kraska"]));
 
     pool.close().await;
     let admin_pool = sqlx::PgPool::connect(&admin_url)

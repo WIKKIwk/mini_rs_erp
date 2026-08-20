@@ -176,9 +176,10 @@ pub async fn worker_groups(
 
     match method {
         Method::GET => {
+            let apparatus_id = parse_apparatus_id(query.apparatus_id.as_deref())?;
             let groups = state
                 .worker_groups
-                .worker_groups(query.apparatus.as_deref())
+                .worker_groups(apparatus_id.as_ref())
                 .await
                 .map_err(worker_group_error)?;
             let responses = enrich_worker_groups(&state, groups).await?;
@@ -188,8 +189,8 @@ pub async fn worker_groups(
             let input: WorkerGroupUpsert = parse_json(&body)?;
             validate_worker_ids(&state, &input.worker_ids).await?;
             // Apparatus access belongs to the worker role assignment. Group writes
-            // only change membership and schedule; the legacy apparatus field is
-            // retained for compatibility with existing group records.
+            // use the canonical apparatus ID; the optional apparatus field is a
+            // display snapshot only.
             let saved = state
                 .worker_groups
                 .upsert_group(input)

@@ -239,10 +239,7 @@ impl RpsBatchStorePort for PostgresRpsBatchStore {
         .fetch_all(&self.pool)
         .await
         .map_err(|error| store_failed("list completed batches", error))?;
-        payloads
-            .into_iter()
-            .map(decode_batch)
-            .collect()
+        payloads.into_iter().map(decode_batch).collect()
     }
 }
 

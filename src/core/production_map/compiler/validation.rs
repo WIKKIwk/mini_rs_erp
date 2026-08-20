@@ -1,15 +1,12 @@
 use std::collections::BTreeSet;
 
-use super::super::apparatus::is_laminatsiya_title;
 use super::super::formula::{
     validate_condition_expression, validate_formula_expression, validate_formula_target,
     validate_location_ref,
 };
-use super::super::pechat;
 use super::super::types::*;
 use super::normalize::normalize_branch;
-
-const MAX_LAMINATSIYA_RUBBER_SIZE_MM: i64 = 1050;
+use crate::core::apparatus_standard::ApparatusId;
 
 pub(super) fn validate_map(map: &ProductionMapDefinition) -> Result<(), ProductionMapError> {
     if map.id.trim().is_empty() {
@@ -21,10 +18,6 @@ pub(super) fn validate_map(map: &ProductionMapDefinition) -> Result<(), Producti
     if map.title.trim().is_empty() {
         return Err(ProductionMapError::MissingTitle);
     }
-    if laminatsiya_rubber_too_large(map) {
-        return Err(ProductionMapError::LaminatsiyaRubberTooLarge);
-    }
-
     let mut ids = BTreeSet::new();
     let mut start_count = 0;
     let mut end_count = 0;
@@ -58,8 +51,13 @@ pub(super) fn validate_map(map: &ProductionMapDefinition) -> Result<(), Producti
                 validate_condition_expression(&formula.expression)?;
             }
             ProductionMapNodeKind::Location => {}
+            ProductionMapNodeKind::Apparatus => {
+                validate_apparatus_identity(map, node)?;
+                if !node.qty_formula.trim().is_empty() {
+                    validate_formula_expression(&node.qty_formula)?;
+                }
+            }
             ProductionMapNodeKind::Material
-            | ProductionMapNodeKind::Apparatus
             | ProductionMapNodeKind::KkProduct
             | ProductionMapNodeKind::Task
             | ProductionMapNodeKind::Wait
@@ -106,17 +104,34 @@ pub(super) fn validate_map(map: &ProductionMapDefinition) -> Result<(), Producti
     Ok(())
 }
 
-fn laminatsiya_rubber_too_large(map: &ProductionMapDefinition) -> bool {
-    let Some(width_mm) = map.width_mm.filter(|value| *value > 0.0) else {
-        return false;
-    };
-    if pechat::rubber_size_from_width(width_mm) <= MAX_LAMINATSIYA_RUBBER_SIZE_MM {
-        return false;
+fn validate_apparatus_identity(
+    map: &ProductionMapDefinition,
+    node: &ProductionMapNode,
+) -> Result<(), ProductionMapError> {
+    let apparatus_id = node.apparatus_id.trim();
+    if apparatus_id.is_empty() || ApparatusId::new(apparatus_id).is_err() {
+        return Err(ProductionMapError::MissingId);
     }
-    map.nodes.iter().any(|node| {
-        matches!(
-            node.kind,
-            ProductionMapNodeKind::Apparatus | ProductionMapNodeKind::Task
-        ) && is_laminatsiya_title(&node.title)
-    })
+
+    let assigned_id = node.alternative_assigned_apparatus_id.trim();
+    if assigned_id.is_empty() {
+        if !node.alternative_assigned_title.trim().is_empty() {
+            return Err(ProductionMapError::MissingId);
+        }
+        return Ok(());
+    }
+    if ApparatusId::new(assigned_id).is_err() {
+        return Err(ProductionMapError::MissingId);
+    }
+    let group_id = node.alternative_group_id.trim();
+    if group_id.is_empty()
+        || !map.nodes.iter().any(|candidate| {
+            candidate.kind == ProductionMapNodeKind::Apparatus
+                && candidate.alternative_group_id.trim() == group_id
+                && candidate.apparatus_id.trim() == assigned_id
+        })
+    {
+        return Err(ProductionMapError::MissingId);
+    }
+    Ok(())
 }

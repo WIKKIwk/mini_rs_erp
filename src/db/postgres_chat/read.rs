@@ -93,6 +93,7 @@ pub(super) async fn conversations(
 }
 
 #[cfg(test)]
+#[allow(clippy::items_after_test_module)]
 mod tests {
     use super::CONVERSATION_SELECT;
 

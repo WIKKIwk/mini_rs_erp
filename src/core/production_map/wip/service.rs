@@ -150,6 +150,7 @@ impl ProductionMapService {
         let requested_status = query.status;
         let include_processed = query.include_processed;
         let requested_limit = query.limit;
+        let requested_next_apparatus = query.next_apparatus.trim().to_string();
         let mut store_query = query;
         if !include_processed
             && requested_status.is_none_or(|status| status == OrderProgressBatchWipStatus::Waiting)
@@ -158,8 +159,35 @@ impl ProductionMapService {
             store_query.include_processed = true;
             store_query.limit = 500;
         }
+        if !requested_next_apparatus.is_empty() {
+            // Alternative topology is resolved with the order map below. Do
+            // not make the store guess that a producer's first candidate is
+            // the only valid canonical consumer.
+            store_query.next_apparatus.clear();
+            store_query.limit = 500;
+        }
         let mut batches = self.store.wip_progress_batches(store_query).await?;
         normalize_self_consumed_wip_history(&mut batches);
+        if !requested_next_apparatus.is_empty() {
+            let maps_by_id = self
+                .store
+                .maps()
+                .await?
+                .into_iter()
+                .map(|map| (map.id.trim().to_string(), map))
+                .collect::<BTreeMap<_, _>>();
+            batches.retain(|batch| {
+                maps_by_id
+                    .get(batch.order_id.trim())
+                    .is_some_and(|map| {
+                        chain::stage_ids_match_for_map(
+                            map,
+                            &batch.next_apparatus,
+                            &requested_next_apparatus,
+                        )
+                    })
+            });
+        }
         if !include_processed {
             batches.retain(|batch| {
                 requested_status.map_or(

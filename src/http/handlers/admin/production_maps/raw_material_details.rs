@@ -1,7 +1,8 @@
 use super::*;
 use crate::core::admin::models::AdminItemGroup;
+use crate::core::apparatus_standard::ApparatusId;
 use crate::core::gscale::models::RawMaterialStockEntry;
-use crate::core::production_map::{ProductionMapDefinition, pechat};
+use crate::core::production_map::ProductionMapDefinition;
 use crate::core::werka::models::SupplierItem;
 
 #[derive(serde::Serialize)]
@@ -73,7 +74,7 @@ pub(super) async fn fill_raw_material_assignment_input(
     let requested_apparatus = input.apparatus.trim();
     if principal.role == PrincipalRole::MaterialTaminotchi
         && !requested_apparatus.is_empty()
-        && !queue_state::apparatus_matches_assigned(requested_apparatus, &assigned_apparatus)
+        && !assigned_apparatus_contains(requested_apparatus, &assigned_apparatus)
     {
         return Err(production_map_error(
             ProductionMapError::ApparatusNotAssigned,
@@ -83,7 +84,7 @@ pub(super) async fn fill_raw_material_assignment_input(
         .iter()
         .filter(|apparatus| {
             principal.role != PrincipalRole::MaterialTaminotchi
-                || queue_state::apparatus_matches_assigned(apparatus, &assigned_apparatus)
+                || assigned_apparatus_contains(apparatus, &assigned_apparatus)
         })
         .cloned()
         .collect::<Vec<_>>();
@@ -109,7 +110,7 @@ pub(super) async fn fill_raw_material_assignment_input(
     } else {
         apparatus_options
             .iter()
-            .find(|apparatus| queue_state::apparatus_titles_match(apparatus, requested_apparatus))
+            .find(|apparatus| apparatus_id_matches_text_value(apparatus, requested_apparatus))
             .cloned()
             .ok_or_else(|| production_map_error(ProductionMapError::RawMaterialGroupNotAllowed))?
     };
@@ -187,7 +188,7 @@ pub(super) fn validate_rulon_size_for_apparatus_map(
     item: &SupplierItem,
     item_group_path: &[String],
 ) -> Result<(), AdminError> {
-    let Some(maximum_leftover_width_mm) = roll_width_allowance_mm(apparatus) else {
+    let Some(maximum_leftover_width_mm) = roll_width_allowance_mm(apparatus)? else {
         return Ok(());
     };
     if !is_rulon_group(item_group_path) {
@@ -220,7 +221,9 @@ pub(super) fn raw_material_rulon_match_metrics(
     item: &SupplierItem,
     item_group_path: &[String],
 ) -> Option<(f64, f64, f64)> {
-    if !is_rulon_group(item_group_path) || roll_width_allowance_mm(apparatus).is_none() {
+    if !is_rulon_group(item_group_path)
+        || roll_width_allowance_mm(apparatus).ok().flatten().is_none()
+    {
         return None;
     }
     let order_width = map
@@ -262,14 +265,36 @@ fn is_rulon_group(item_group_path: &[String]) -> bool {
         .any(|group| group.trim().eq_ignore_ascii_case("Rulon"))
 }
 
-fn roll_width_allowance_mm(apparatus: &str) -> Option<f64> {
-    if pechat::is_pechat_apparatus(apparatus) {
-        return Some(20.0);
+fn roll_width_allowance_mm(apparatus: &str) -> Result<Option<f64>, AdminError> {
+    ApparatusId::new(apparatus.trim().to_string())
+        .map_err(|_| production_map_error(ProductionMapError::RawMaterialInvalidInput))?;
+    // The opaque ID has no family information. The canonical catalog resolver
+    // must provide Pechat (20 mm) or Laminatsiya (30 mm) classification here;
+    // fail closed until that typed boundary is available.
+    Err(production_map_error(
+        ProductionMapError::RawMaterialInvalidInput,
+    ))
+}
+
+pub(super) fn apparatus_id_matches_text(id: &ApparatusId, value: &str) -> bool {
+    ApparatusId::new(value.trim().to_string())
+        .is_ok_and(|candidate| candidate.as_str() == id.as_str())
+}
+
+pub(super) fn apparatus_id_matches_text_value(left: &str, right: &str) -> bool {
+    match (
+        ApparatusId::new(left.trim().to_string()),
+        ApparatusId::new(right.trim().to_string()),
+    ) {
+        (Ok(left), Ok(right)) => left == right,
+        _ => false,
     }
-    if apparatus.trim().to_lowercase().contains("laminatsiya") {
-        return Some(30.0);
-    }
-    None
+}
+
+pub(super) fn assigned_apparatus_contains(candidate: &str, assigned: &[String]) -> bool {
+    assigned
+        .iter()
+        .any(|assigned| apparatus_id_matches_text_value(candidate, assigned))
 }
 
 fn roll_width_mm(stock: &RawMaterialStockEntry, item: &SupplierItem) -> Option<f64> {

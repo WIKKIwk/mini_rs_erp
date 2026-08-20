@@ -1,10 +1,12 @@
 use super::raw_material_details::{
+    apparatus_id_matches_text, apparatus_id_matches_text_value, assigned_apparatus_contains,
     fill_raw_material_assignment_input, item_group_path, lookup_raw_material_detail,
     raw_material_rulon_match_metrics, require_material_item_group_scope,
     require_material_warehouse_scope, resolve_raw_material_stock_item,
     validate_rulon_size_for_apparatus_map,
 };
 use super::*;
+use crate::core::inventory_movements::RawMaterialStatePlacement;
 use crate::db::postgres_raw_material_events::{
     RawMaterialEventDraft, RawMaterialEventQuery, RawMaterialEventScope,
 };
@@ -89,12 +91,9 @@ pub async fn raw_material_start_requirements(
     {
         return Ok(json_response(training_requirements));
     }
-    let staged_barcodes = raw_material_state_barcodes_for_order_apparatus(
-        &state,
-        &query.order_id,
-        &query.apparatus,
-    )
-    .await?;
+    let staged_barcodes =
+        raw_material_state_barcodes_for_order_apparatus(&state, &query.order_id, &query.apparatus)
+            .await?;
     let requirements = state
         .production_maps
         .raw_material_start_requirements(
@@ -119,7 +118,7 @@ pub async fn raw_material_start_requirements(
     let mut start_assignments = assignments
         .iter()
         .filter(|assignment| {
-            queue_state::apparatus_titles_match(&assignment.apparatus, &query.apparatus)
+            apparatus_id_matches_text(&assignment.apparatus_id, &query.apparatus)
                 && eligible_barcodes.contains(&assignment.barcode.trim().to_ascii_uppercase())
         })
         .cloned()
@@ -131,6 +130,7 @@ pub async fn raw_material_start_requirements(
     Ok(json_response(serde_json::json!({
         "policy": requirements.policy,
         "requires_material": requirements.requires_material,
+        "material_scan_required": requirements.material_scan_required,
         "requirement_groups": requirements.requirement_groups,
         "assigned_barcodes": requirements.assigned_barcodes,
         "staged_barcodes": requirements.staged_barcodes,
@@ -157,7 +157,7 @@ pub(super) async fn raw_material_state_barcodes_for_order_apparatus(
         .into_iter()
         .filter(|assignment| {
             assignment.order_id.trim() == order_id.trim()
-                && queue_state::apparatus_titles_match(&assignment.apparatus, apparatus)
+                && apparatus_id_matches_text(&assignment.apparatus_id, apparatus)
         })
         .map(|assignment| assignment.barcode)
         .collect::<Vec<_>>();
@@ -168,14 +168,19 @@ pub(super) async fn raw_material_state_barcodes_for_order_apparatus(
         .map_err(|_| server_error("raw material state placements failed"))?;
     Ok(placements
         .into_iter()
-        .filter(|placement| {
-            placement
-                .apparatus
-                .iter()
-                .any(|candidate| queue_state::apparatus_titles_match(candidate, apparatus))
-        })
+        .filter(|placement| state_placement_matches_apparatus(placement, apparatus))
         .map(|placement| placement.barcode)
         .collect())
+}
+
+fn state_placement_matches_apparatus(
+    placement: &RawMaterialStatePlacement,
+    apparatus: &str,
+) -> bool {
+    placement
+        .apparatus_ids
+        .iter()
+        .any(|candidate| apparatus_id_matches_text_value(candidate, apparatus))
 }
 
 pub async fn raw_material_rules(
@@ -209,7 +214,7 @@ pub async fn raw_material_rules(
             let input: ApparatusMaterialRuleUpsert = parse_json(&body)?;
             state
                 .production_maps
-                .set_apparatus_material_rule(input)
+                .set_apparatus_material_rule(input, &state.apparatus_groups)
                 .await
                 .map(json_response)
                 .map_err(production_map_error)
@@ -254,12 +259,8 @@ pub async fn raw_material_assignments(
             if principal.role == PrincipalRole::MaterialTaminotchi
                 && !query.apparatus.trim().is_empty()
             {
-                let assigned_apparatus =
-                    state.admin.principal_assigned_apparatus(&principal).await;
-                if !queue_state::apparatus_matches_assigned(
-                    &query.apparatus,
-                    &assigned_apparatus,
-                ) {
+                let assigned_apparatus = state.admin.principal_assigned_apparatus(&principal).await;
+                if !assigned_apparatus_contains(&query.apparatus, &assigned_apparatus) {
                     return Err(production_map_error(
                         ProductionMapError::ApparatusNotAssigned,
                     ));
@@ -276,16 +277,12 @@ pub async fn raw_material_assignments(
                         .await?;
             }
             if !query.order_id.trim().is_empty() {
-                assignments.retain(|assignment| {
-                    assignment.order_id.trim() == query.order_id.trim()
-                });
+                assignments
+                    .retain(|assignment| assignment.order_id.trim() == query.order_id.trim());
             }
             if !query.apparatus.trim().is_empty() {
                 assignments.retain(|assignment| {
-                    queue_state::apparatus_titles_match(
-                        &assignment.apparatus,
-                        &query.apparatus,
-                    )
+                    apparatus_id_matches_text(&assignment.apparatus_id, &query.apparatus)
                 });
             }
             sort_raw_material_assignments(&mut assignments);
@@ -455,7 +452,7 @@ pub async fn raw_material_assignment_candidates(
     let requested_apparatus = query.apparatus.trim();
     if assigned_apparatus.as_ref().is_some_and(|assigned| {
         !requested_apparatus.is_empty()
-            && !queue_state::apparatus_matches_assigned(requested_apparatus, assigned)
+            && !assigned_apparatus_contains(requested_apparatus, assigned)
     }) {
         return Err(production_map_error(
             ProductionMapError::ApparatusNotAssigned,
@@ -591,11 +588,11 @@ fn filter_raw_material_apparatus_options(
         .into_iter()
         .filter(|apparatus| {
             assigned_apparatus
-                .is_none_or(|assigned| queue_state::apparatus_matches_assigned(apparatus, assigned))
+                .is_none_or(|assigned| assigned_apparatus_contains(apparatus, assigned))
         })
         .filter(|apparatus| {
             requested_apparatus.is_empty()
-                || queue_state::apparatus_titles_match(apparatus, requested_apparatus)
+                || apparatus_id_matches_text_value(apparatus, requested_apparatus)
         })
         .collect()
 }
@@ -630,9 +627,9 @@ pub async fn raw_material_assignment_candidate_orders(
     if !stock.status.trim().eq_ignore_ascii_case("available")
         || !stock.reserved_order_id.trim().is_empty()
     {
-        return Ok(json_response(
-            Vec::<RawMaterialAssignmentOrderCandidateResponse>::new(),
-        ));
+        return Ok(json_response(Vec::<
+            RawMaterialAssignmentOrderCandidateResponse,
+        >::new()));
     }
     let normalized_barcode = barcode.to_ascii_uppercase();
     if state
@@ -643,9 +640,9 @@ pub async fn raw_material_assignment_candidate_orders(
         .iter()
         .any(|assignment| assignment.barcode.trim().to_ascii_uppercase() == normalized_barcode)
     {
-        return Ok(json_response(
-            Vec::<RawMaterialAssignmentOrderCandidateResponse>::new(),
-        ));
+        return Ok(json_response(Vec::<
+            RawMaterialAssignmentOrderCandidateResponse,
+        >::new()));
     }
 
     let groups = state
@@ -655,9 +652,9 @@ pub async fn raw_material_assignment_candidate_orders(
         .map_err(|_| server_error("item group tree fetch failed"))?;
     let group_path = item_group_path(&groups, &item.item_group);
     if group_path.is_empty() {
-        return Ok(json_response(
-            Vec::<RawMaterialAssignmentOrderCandidateResponse>::new(),
-        ));
+        return Ok(json_response(Vec::<
+            RawMaterialAssignmentOrderCandidateResponse,
+        >::new()));
     }
     let active_orders = state
         .production_maps
@@ -672,7 +669,7 @@ pub async fn raw_material_assignment_candidate_orders(
     let requested_apparatus = query.apparatus.trim();
     if assigned_apparatus.as_ref().is_some_and(|assigned| {
         !requested_apparatus.is_empty()
-            && !queue_state::apparatus_matches_assigned(requested_apparatus, assigned)
+            && !assigned_apparatus_contains(requested_apparatus, assigned)
     }) {
         return Err(production_map_error(
             ProductionMapError::ApparatusNotAssigned,
@@ -761,10 +758,7 @@ pub async fn raw_material_intake_candidates(
     }
     if order_id.starts_with("training-") {
         super::super::training::training_material_assignments_for_principal(
-            &state,
-            &principal,
-            order_id,
-            apparatus,
+            &state, &principal, order_id, apparatus,
         )
         .await
         .map_err(super::super::training::training_workspace_error)?
@@ -773,7 +767,7 @@ pub async fn raw_material_intake_candidates(
     }
     if principal.role == PrincipalRole::Aparatchi {
         let assigned_apparatus = state.admin.principal_assigned_apparatus(&principal).await;
-        if !queue_state::apparatus_matches_assigned(apparatus, &assigned_apparatus) {
+        if !assigned_apparatus_contains(apparatus, &assigned_apparatus) {
             return Err(production_map_error(
                 ProductionMapError::ApparatusNotAssigned,
             ));
@@ -788,15 +782,12 @@ pub async fn raw_material_intake_candidates(
         return Ok(json_response(Vec::<serde_json::Value>::new()));
     }
 
-    let staged_barcodes = raw_material_state_barcodes_for_order_apparatus(
-        &state,
-        order_id,
-        apparatus,
-    )
-    .await?
-    .into_iter()
-    .map(|barcode| barcode.trim().to_ascii_uppercase())
-    .collect::<BTreeSet<_>>();
+    let staged_barcodes =
+        raw_material_state_barcodes_for_order_apparatus(&state, order_id, apparatus)
+            .await?
+            .into_iter()
+            .map(|barcode| barcode.trim().to_ascii_uppercase())
+            .collect::<BTreeSet<_>>();
     let groups = state
         .admin
         .item_group_tree()
@@ -809,7 +800,7 @@ pub async fn raw_material_intake_candidates(
         .map_err(production_map_error)?;
     assignments.retain(|assignment| {
         assignment.order_id.trim() == order_id
-            && queue_state::apparatus_titles_match(&assignment.apparatus, apparatus)
+            && apparatus_id_matches_text(&assignment.apparatus_id, apparatus)
             && staged_barcodes.contains(&assignment.barcode.trim().to_ascii_uppercase())
     });
 
@@ -879,15 +870,13 @@ pub async fn raw_material_intake(
     let assignment = find_raw_material_assignment(&state, &input.order_id, &input.barcode)
         .await?
         .filter(|assignment| {
-            queue_state::apparatus_titles_match(&assignment.apparatus, &requested_apparatus)
+            apparatus_id_matches_text(&assignment.apparatus_id, &requested_apparatus)
         })
-        .ok_or_else(|| {
-            production_map_error(ProductionMapError::RawMaterialAssignmentNotFound)
-        })?;
+        .ok_or_else(|| production_map_error(ProductionMapError::RawMaterialAssignmentNotFound))?;
     let staged_barcodes = raw_material_state_barcodes_for_order_apparatus(
         &state,
         &assignment.order_id,
-        &assignment.apparatus,
+        assignment.apparatus_id.as_str(),
     )
     .await?;
     if !staged_barcodes
@@ -982,7 +971,7 @@ async fn record_raw_material_unassignment_event(
         stock_status_before: Some(stock.status.trim().to_string()),
         stock_status_after: Some(stock.status.trim().to_string()),
         order_id: Some(assignment.order_id.trim().to_string()),
-        apparatus: Some(assignment.apparatus.trim().to_string()),
+        apparatus: Some(assignment.apparatus_id.to_string()),
         actor_role: actor.role.trim().to_string(),
         actor_ref: actor.ref_.trim().to_string(),
         actor_display_name: actor.display_name.trim().to_string(),
@@ -1007,7 +996,7 @@ async fn record_raw_material_unassignment_event(
         correlation_id: None,
         payload_json: serde_json::json!({
             "order_id": assignment.order_id.trim(),
-            "apparatus": assignment.apparatus.trim(),
+            "apparatus_id": assignment.apparatus_id.as_str(),
             "barcode": assignment.barcode.trim(),
             "item_group": assignment.item_group.trim(),
             "source_receipt_id": stock.source_receipt_id.trim(),
@@ -1081,7 +1070,7 @@ async fn record_raw_material_unlink_event(
         idempotency_key: String::new(),
         payload_json: serde_json::json!({
             "order_id": assignment.order_id,
-            "apparatus": assignment.apparatus,
+            "apparatus_id": assignment.apparatus_id,
             "barcode": assignment.barcode,
             "item_code": assignment.item_code,
             "item_name": assignment.item_name,
@@ -1152,10 +1141,7 @@ async fn raw_material_assignment_response(
                     .unwrap_or_default(),
             ),
         );
-        object.insert(
-            "stock_qty".to_string(),
-            serde_json::json!(stock_qty),
-        );
+        object.insert("stock_qty".to_string(), serde_json::json!(stock_qty));
         object.insert(
             "stock_uom".to_string(),
             serde_json::Value::String(
@@ -1213,6 +1199,10 @@ mod raw_material_assignment_quantity_tests {
     fn assignment() -> RawMaterialAssignment {
         RawMaterialAssignment {
             order_id: "zakaz-1".to_string(),
+            apparatus_id: crate::core::apparatus_standard::ApparatusId::new(
+                "apparatus:test:pechat-1",
+            )
+            .unwrap(),
             apparatus: "Pechat".to_string(),
             barcode: "ROLL-1000".to_string(),
             item_code: "RULON".to_string(),
@@ -1238,33 +1228,41 @@ mod raw_material_assignment_quantity_tests {
     fn quantity_ledger_preserves_received_consumed_remaining_invariant() {
         let assignment = assignment();
         assert_eq!(
-            raw_material_assignment_quantities(
-                &assignment,
-                Some(&stock("available", ""))
-            ),
+            raw_material_assignment_quantities(&assignment, Some(&stock("available", ""))),
             (0.0, 0.0, 0.0)
         );
         assert_eq!(
-            raw_material_assignment_quantities(
-                &assignment,
-                Some(&stock("in_use", "zakaz-1"))
-            ),
+            raw_material_assignment_quantities(&assignment, Some(&stock("in_use", "zakaz-1"))),
             (1_000.0, 0.0, 1_000.0)
         );
         assert_eq!(
-            raw_material_assignment_quantities(
-                &assignment,
-                Some(&stock("consumed", "zakaz-1"))
-            ),
+            raw_material_assignment_quantities(&assignment, Some(&stock("consumed", "zakaz-1"))),
             (1_000.0, 1_000.0, 0.0)
         );
         assert_eq!(
-            raw_material_assignment_quantities(
-                &assignment,
-                Some(&stock("in_use", "zakaz-2"))
-            ),
+            raw_material_assignment_quantities(&assignment, Some(&stock("in_use", "zakaz-2"))),
             (0.0, 0.0, 0.0)
         );
+    }
+
+    #[test]
+    fn staged_placement_matches_canonical_id_not_display_name() {
+        let placement = RawMaterialStatePlacement {
+            barcode: "ROLL-1000".to_string(),
+            location_id: "location:state:pechat".to_string(),
+            location_name: "Pechat oldi".to_string(),
+            apparatus_ids: vec!["apparatus:catalog:pechat-001".to_string()],
+            apparatus: vec!["7 ta rangli pechat - A".to_string()],
+        };
+
+        assert!(state_placement_matches_apparatus(
+            &placement,
+            "apparatus:catalog:pechat-001"
+        ));
+        assert!(!state_placement_matches_apparatus(
+            &placement,
+            "7 ta rangli pechat - A"
+        ));
     }
 }
 

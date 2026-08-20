@@ -1,54 +1,145 @@
 use std::collections::BTreeMap;
+use std::sync::Arc;
 
-use crate::core::apparatus_groups::apparatus_id_for_name;
+use crate::core::apparatus_groups::{
+    ApparatusGroupService, ApparatusMasterData, ApparatusUpsert, MemoryApparatusGroupStore,
+};
+use crate::core::apparatus_standard::ApparatusId;
 use crate::core::production_map::*;
+use crate::core::qolip::{QolipOrderStartPreparation, QolipProductSpec};
 
-use super::fixtures::{apparatus_stage_map, sample_map};
+use super::fixtures::{apparatus_stage_map, canonical_apparatus_stage_map, sample_map};
+
+const FLOW_REZKA_ID: &str = "apparatus:test:flow-rezka";
+const FLOW_PECHAT_ID: &str = "apparatus:test:flow-pechat";
+const FLOW_LAMINATION_ID: &str = "apparatus:test:flow-lamination";
+const FLOW_ALT_PECHAT_ID: &str = "apparatus:test:flow-alt-pechat";
+const PECHAT_7_ID: &str = "apparatus:default:bosma_7";
+const PECHAT_8_ID: &str = "apparatus:default:bosma_8";
+const PECHAT_9_ID: &str = "apparatus:default:bosma_9";
+const FLEXO_ID: &str = "apparatus:default:asset-005";
+const LAMINATION_1_ID: &str = "apparatus:default:asset-007";
+const LAMINATION_2_ID: &str = "apparatus:default:asset-008";
+const REZKA_ID: &str = "apparatus:default:asset-010";
+
+async fn service_with_apparatus_store(
+    store: Arc<MemoryProductionMapStore>,
+    apparatus: &[(&str, &str)],
+) -> (ProductionMapService, ApparatusGroupService) {
+    let apparatus_groups = apparatus_groups_for(apparatus).await;
+    let service = ProductionMapService::new(store).with_canonical_apparatus_resolver(Arc::new(
+        ApparatusGroupCanonicalResolver::new(apparatus_groups.clone()),
+    ));
+    (service, apparatus_groups)
+}
+
+async fn service_with_apparatus(
+    apparatus: &[(&str, &str)],
+) -> (ProductionMapService, ApparatusGroupService) {
+    service_with_apparatus_store(Arc::new(MemoryProductionMapStore::new()), apparatus).await
+}
+
+async fn default_service_with_store(store: Arc<MemoryProductionMapStore>) -> ProductionMapService {
+    service_with_apparatus_store(store, &[(FLOW_PECHAT_ID, "Flow pechat test")])
+        .await
+        .0
+}
+
+async fn apparatus_groups_for(apparatus: &[(&str, &str)]) -> ApparatusGroupService {
+    let apparatus_groups = ApparatusGroupService::new(Arc::new(MemoryApparatusGroupStore::new()));
+    let supplied_ids = apparatus
+        .iter()
+        .map(|(id, _)| *id)
+        .collect::<std::collections::BTreeSet<_>>();
+    for (id, name) in [
+        (PECHAT_7_ID, "7 ta rangli bosma aparat"),
+        (PECHAT_8_ID, "8 ta rangli bosma aparat"),
+        (PECHAT_9_ID, "9 ta rangli bosma aparat"),
+        ("apparatus:default:asset-004", "Extruder laminatsiya"),
+        (FLEXO_ID, "Flexo pechat"),
+        ("apparatus:default:holodniy_kley", "Holodniy kley aparat"),
+        (LAMINATION_1_ID, "Laminatsiya 1"),
+        (LAMINATION_2_ID, "Laminatsiya 2"),
+        ("apparatus:default:paket", "Paket aparat"),
+        (REZKA_ID, "Rezka"),
+    ] {
+        if supplied_ids.contains(id) {
+            continue;
+        }
+        apparatus_groups
+            .upsert_apparatus(ApparatusUpsert {
+                id: Some(id.to_string()),
+                name: name.to_string(),
+                master: ApparatusMasterData::default(),
+            })
+            .await
+            .expect("seed default canonical apparatus");
+    }
+    for (id, name) in apparatus {
+        apparatus_groups
+            .upsert_apparatus(ApparatusUpsert {
+                id: Some((*id).to_string()),
+                name: (*name).to_string(),
+                master: ApparatusMasterData::default(),
+            })
+            .await
+            .expect("seed canonical apparatus");
+    }
+    apparatus_groups
+}
 
 #[tokio::test]
 async fn maps_skips_legacy_invalid_map_without_failing_list() {
     let store = std::sync::Arc::new(MemoryProductionMapStore::new());
     let mut valid = sample_map();
     valid.id = "valid-map".to_string();
-    let mut invalid = sample_map();
-    invalid.id = "invalid-laminatsiya".to_string();
-    invalid.width_mm = Some(1070.0);
-    invalid.nodes[2].title = "Laminatsiya".to_string();
+    let mut invalid =
+        canonical_apparatus_stage_map("invalid-laminatsiya", LAMINATION_1_ID, "Laminatsiya");
+    invalid
+        .nodes
+        .iter_mut()
+        .find(|node| node.kind == ProductionMapNodeKind::Apparatus)
+        .expect("invalid apparatus node")
+        .apparatus_id = "Laminatsiya".to_string();
 
     store.put_map(valid).await.expect("valid insert");
     store.put_map(invalid).await.expect("invalid legacy insert");
 
-    let service = ProductionMapService::new(store);
+    let service = default_service_with_store(store).await;
     let maps = service.maps().await.expect("list");
     assert_eq!(maps.len(), 1);
     assert_eq!(maps[0].map.id, "valid-map");
     assert_eq!(
         service.map("invalid-laminatsiya").await,
-        Err(ProductionMapError::LaminatsiyaRubberTooLarge)
+        Err(ProductionMapError::MissingId)
     );
 }
 
 #[tokio::test]
 async fn paused_order_can_transfer_between_compatible_pechat_apparatuses_atomically() {
     let store = std::sync::Arc::new(MemoryProductionMapStore::new());
-    let service = ProductionMapService::new(store.clone());
+    let service = default_service_with_store(store.clone()).await;
     let actor = QueueActionActor {
         role: "aparatchi".to_string(),
         ref_: "worker-transfer".to_string(),
         display_name: "Transfer Worker".to_string(),
     };
     let order_id = "zakaz-transfer-7-to-8";
-    let from = "7 ta rangli pechat";
-    let to = "8 ta rangli pechat";
+    let from = "apparatus:default:bosma_7";
+    let to = "apparatus:default:bosma_8";
     service
-        .upsert_map(apparatus_stage_map(order_id, from))
+        .upsert_map(canonical_apparatus_stage_map(
+            order_id,
+            from,
+            "7 ta rangli bosma aparat",
+        ))
         .await
         .expect("map");
     service
         .schedule_apparatus_order(ApparatusScheduleRequest {
             order_id: order_id.to_string(),
-            apparatus_id: apparatus_id_for_name(from),
-            apparatus: from.to_string(),
+            apparatus_id: from.to_string(),
+            apparatus: "7 ta rangli bosma aparat".to_string(),
             earliest_start_unix: 1_700_000_000,
             latest_end_unix: None,
             duration_minutes: 20,
@@ -65,6 +156,22 @@ async fn paused_order_can_transfer_between_compatible_pechat_apparatuses_atomica
     let batch = pause_first_stage_batch(&service, order_id, from, &actor, 42.5)
         .await
         .expect("pause");
+    store
+        .put_raw_material_assignment(RawMaterialAssignment {
+            order_id: order_id.to_string(),
+            apparatus_id: ApparatusId::new(from).expect("source apparatus id"),
+            apparatus: "7 ta rangli bosma aparat".to_string(),
+            barcode: "TRANSFER-RAW-1".to_string(),
+            item_code: "TRANSFER-ITEM".to_string(),
+            item_name: "Transfer material".to_string(),
+            item_group: "Transfer group".to_string(),
+            assigned_by_role: actor.role.clone(),
+            assigned_by_ref: actor.ref_.clone(),
+            assigned_by_display_name: actor.display_name.clone(),
+            assigned_at: "now".to_string(),
+        })
+        .await
+        .expect("raw material assignment");
     assert_eq!(
         service
             .apparatus_capacity_snapshot()
@@ -104,10 +211,16 @@ async fn paused_order_can_transfer_between_compatible_pechat_apparatuses_atomica
         .expect("reservation");
     assert_eq!(reservation.status, ApparatusScheduleStatus::Paused);
     assert_eq!(reservation.apparatus, to);
-    assert_eq!(reservation.apparatus_id, apparatus_id_for_name(to));
+    assert_eq!(
+        reservation.apparatus_id,
+        ApparatusId::new(to).expect("canonical apparatus id")
+    );
 
     let states = service.apparatus_queue_states().await.expect("states");
-    assert_eq!(states.get(from).and_then(|states| states.get(order_id)), None);
+    assert_eq!(
+        states.get(from).and_then(|states| states.get(order_id)),
+        None
+    );
     assert_eq!(
         states.get(to).and_then(|states| states.get(order_id)),
         Some(&"paused".to_string())
@@ -125,6 +238,15 @@ async fn paused_order_can_transfer_between_compatible_pechat_apparatuses_atomica
         .expect("batch");
     assert_eq!(moved_batch.apparatus, to);
     assert_eq!(moved_batch.produced_qty, 42.5);
+    let moved_assignment = service
+        .raw_material_assignments()
+        .await
+        .expect("moved raw material assignments")
+        .into_iter()
+        .find(|assignment| assignment.barcode == "TRANSFER-RAW-1")
+        .expect("moved raw material assignment");
+    assert_eq!(moved_assignment.apparatus_id, ApparatusId::new(to).expect("target apparatus id"));
+    assert_eq!(moved_assignment.apparatus, "8 ta rangli bosma aparat");
 
     let resumed = service
         .apply_apparatus_queue_action_with_progress(
@@ -140,7 +262,10 @@ async fn paused_order_can_transfer_between_compatible_pechat_apparatuses_atomica
         )
         .await
         .expect("resume on replacement apparatus");
-    assert_eq!(resumed.states.get(order_id), Some(&"in_progress".to_string()));
+    assert_eq!(
+        resumed.states.get(order_id),
+        Some(&"in_progress".to_string())
+    );
     assert_eq!(
         resumed.progress_batch.expect("resumed batch").status,
         OrderProgressBatchStatus::Resumed
@@ -167,7 +292,7 @@ async fn paused_order_can_transfer_between_compatible_pechat_apparatuses_atomica
             ProductionMapApparatusTransferRequest {
                 order_id: order_id.to_string(),
                 from_apparatus: from.to_string(),
-                to_apparatus: "9 ta rangli pechat".to_string(),
+                to_apparatus: "apparatus:default:bosma_9".to_string(),
                 reason: "wrong target reuse".to_string(),
                 idempotency_key: "transfer-test-7-to-8".to_string(),
             },
@@ -185,19 +310,129 @@ async fn paused_order_can_transfer_between_compatible_pechat_apparatuses_atomica
 }
 
 #[tokio::test]
+async fn apparatus_transfer_cannot_bypass_frozen_or_completed_stage_state() {
+    let store = std::sync::Arc::new(MemoryProductionMapStore::new());
+    let service = default_service_with_store(store.clone()).await;
+    let actor = QueueActionActor {
+        role: "aparatchi".to_string(),
+        ref_: "worker-transfer-state-guard".to_string(),
+        display_name: "Transfer State Guard".to_string(),
+    };
+    let order_id = "zakaz-transfer-state-guard";
+    let from = PECHAT_7_ID;
+    let to = PECHAT_8_ID;
+    service
+        .upsert_map(canonical_apparatus_stage_map(
+            order_id,
+            from,
+            "7 ta rangli pechat",
+        ))
+        .await
+        .expect("map");
+    pause_first_stage_batch(&service, order_id, from, &actor, 6.0)
+        .await
+        .expect("pause");
+
+    let mut frozen = OrderControlRecord::active(order_id);
+    frozen.state = OrderControlState::Frozen;
+    store
+        .put_order_control_state(frozen)
+        .await
+        .expect("frozen control");
+    let frozen_result = service
+        .transfer_apparatus_order(
+            ProductionMapApparatusTransferRequest {
+                order_id: order_id.to_string(),
+                from_apparatus: from.to_string(),
+                to_apparatus: to.to_string(),
+                reason: "frozen state guard".to_string(),
+                idempotency_key: "transfer-frozen-state-guard".to_string(),
+            },
+            actor.clone(),
+        )
+        .await;
+    assert_eq!(frozen_result, Err(ProductionMapError::OrderFrozen));
+
+    let mut freeze_requested = OrderControlRecord::active(order_id);
+    freeze_requested.state = OrderControlState::FreezeRequested;
+    store
+        .put_order_control_state(freeze_requested)
+        .await
+        .expect("freeze requested control");
+    let requested_result = service
+        .transfer_apparatus_order(
+            ProductionMapApparatusTransferRequest {
+                order_id: order_id.to_string(),
+                from_apparatus: from.to_string(),
+                to_apparatus: to.to_string(),
+                reason: "freeze request guard".to_string(),
+                idempotency_key: "transfer-freeze-requested-guard".to_string(),
+            },
+            actor.clone(),
+        )
+        .await;
+    assert_eq!(
+        requested_result,
+        Err(ProductionMapError::OrderFreezeRequested)
+    );
+
+    store
+        .put_order_control_state(OrderControlRecord::active(order_id))
+        .await
+        .expect("active control");
+    store
+        .put_apparatus_queue_states(
+            from,
+            BTreeMap::from([(order_id.to_string(), "completed".to_string())]),
+        )
+        .await
+        .expect("completed state");
+    let completed_result = service
+        .transfer_apparatus_order(
+            ProductionMapApparatusTransferRequest {
+                order_id: order_id.to_string(),
+                from_apparatus: from.to_string(),
+                to_apparatus: to.to_string(),
+                reason: "completed state guard".to_string(),
+                idempotency_key: "transfer-completed-state-guard".to_string(),
+            },
+            actor,
+        )
+        .await;
+    assert_eq!(
+        completed_result,
+        Err(ProductionMapError::OrderAlreadyCompleted)
+    );
+
+    let states = service.apparatus_queue_states().await.expect("states");
+    assert_eq!(
+        states.get(from).and_then(|states| states.get(order_id)),
+        Some(&"completed".to_string())
+    );
+    assert_eq!(
+        states.get(to).and_then(|states| states.get(order_id)),
+        None
+    );
+}
+
+#[tokio::test]
 async fn apparatus_transfer_updates_parent_wip_next_apparatus_lineage() {
     let store = std::sync::Arc::new(MemoryProductionMapStore::new());
-    let service = ProductionMapService::new(store.clone());
+    let service = default_service_with_store(store.clone()).await;
     let actor = QueueActionActor {
         role: "aparatchi".to_string(),
         ref_: "worker-transfer-lineage".to_string(),
         display_name: "Transfer Lineage Worker".to_string(),
     };
     let order_id = "zakaz-transfer-lineage";
-    let from = "7 ta rangli pechat";
-    let to = "8 ta rangli pechat";
+    let from = PECHAT_7_ID;
+    let to = PECHAT_8_ID;
     service
-        .upsert_map(apparatus_stage_map(order_id, from))
+        .upsert_map(canonical_apparatus_stage_map(
+            order_id,
+            from,
+            "7 ta rangli pechat",
+        ))
         .await
         .expect("map");
     let child = pause_first_stage_batch(&service, order_id, from, &actor, 12.0)
@@ -247,16 +482,20 @@ async fn apparatus_transfer_updates_parent_wip_next_apparatus_lineage() {
 #[tokio::test]
 async fn flexo_transfer_does_not_cross_into_colour_pechat() {
     let store = std::sync::Arc::new(MemoryProductionMapStore::new());
-    let service = ProductionMapService::new(store.clone());
+    let service = default_service_with_store(store.clone()).await;
     let actor = QueueActionActor {
         role: "aparatchi".to_string(),
         ref_: "worker-flexo-transfer".to_string(),
         display_name: "Flexo Worker".to_string(),
     };
     let order_id = "zakaz-flexo-transfer";
-    let from = "Flexo pechat";
+    let from = FLEXO_ID;
     service
-        .upsert_map(apparatus_stage_map(order_id, from))
+        .upsert_map(canonical_apparatus_stage_map(
+            order_id,
+            from,
+            "Flexo pechat",
+        ))
         .await
         .expect("map");
     pause_first_stage_batch(&service, order_id, from, &actor, 8.0)
@@ -268,7 +507,7 @@ async fn flexo_transfer_does_not_cross_into_colour_pechat() {
             ProductionMapApparatusTransferRequest {
                 order_id: order_id.to_string(),
                 from_apparatus: from.to_string(),
-                to_apparatus: "8 ta rangli pechat".to_string(),
+                to_apparatus: PECHAT_8_ID.to_string(),
                 reason: "flexo apparat avariyasi".to_string(),
                 idempotency_key: "transfer-flexo-cross-family".to_string(),
             },
@@ -280,27 +519,23 @@ async fn flexo_transfer_does_not_cross_into_colour_pechat() {
 
 #[tokio::test]
 async fn normal_move_rejects_started_order_and_requires_pause_transfer() {
-    let service = ProductionMapService::new(std::sync::Arc::new(MemoryProductionMapStore::new()));
+    let service = default_service_with_store(Arc::new(MemoryProductionMapStore::new())).await;
     let actor = QueueActionActor {
         role: "aparatchi".to_string(),
         ref_: "worker-transfer-guard".to_string(),
         display_name: "Transfer Guard".to_string(),
     };
     let order_id = "zakaz-transfer-guard";
-    let from = "7 ta rangli pechat";
+    let from = PECHAT_7_ID;
     service
-        .upsert_map(apparatus_stage_map(order_id, from))
+        .upsert_map(canonical_apparatus_stage_map(
+            order_id,
+            from,
+            "7 ta rangli pechat",
+        ))
         .await
         .expect("map");
-    service
-        .apply_apparatus_queue_action_with_progress(
-            from,
-            order_id,
-            queue_state::ApparatusQueueAction::Start,
-            &[from.to_string()],
-            actor,
-            QueueProgressInput::default(),
-        )
+    start_first_stage(&service, order_id, from, actor)
         .await
         .expect("start");
 
@@ -308,7 +543,7 @@ async fn normal_move_rejects_started_order_and_requires_pause_transfer() {
         .move_apparatus(ProductionMapMoveRequest {
             map_id: order_id.to_string(),
             from_apparatus: from.to_string(),
-            to_apparatus: "8 ta rangli pechat".to_string(),
+            to_apparatus: PECHAT_8_ID.to_string(),
         })
         .await;
     assert_eq!(
@@ -319,20 +554,20 @@ async fn normal_move_rejects_started_order_and_requires_pause_transfer() {
 
 #[tokio::test]
 async fn free_pick_policy_allows_ready_order_outside_sequence_head() {
-    let store = std::sync::Arc::new(MemoryProductionMapStore::new());
-    let service = ProductionMapService::new(store);
+    let (service, apparatus_groups) =
+        service_with_apparatus(&[(FLOW_REZKA_ID, "Rezka apparat")]).await;
     let actor = QueueActionActor {
         role: "admin".to_string(),
         ref_: "admin".to_string(),
         display_name: "Admin".to_string(),
     };
-    let first = apparatus_stage_map("zakaz-1", "Rezka apparat");
-    let second = apparatus_stage_map("zakaz-2", "Rezka apparat");
+    let first = canonical_apparatus_stage_map("zakaz-1", FLOW_REZKA_ID, "Rezka apparat");
+    let second = canonical_apparatus_stage_map("zakaz-2", FLOW_REZKA_ID, "Rezka apparat");
     service.upsert_map(first).await.expect("first map");
     service.upsert_map(second).await.expect("second map");
     service
         .set_apparatus_sequence(
-            "Rezka apparat",
+            FLOW_REZKA_ID,
             vec!["zakaz-1".to_string(), "zakaz-2".to_string()],
         )
         .await
@@ -340,10 +575,10 @@ async fn free_pick_policy_allows_ready_order_outside_sequence_head() {
 
     let strict_result = service
         .apply_apparatus_queue_action(
-            "Rezka apparat",
+            FLOW_REZKA_ID,
             "zakaz-2",
             queue_state::ApparatusQueueAction::Start,
-            &["Rezka apparat".to_string()],
+            &[FLOW_REZKA_ID.to_string()],
             actor.clone(),
         )
         .await;
@@ -352,16 +587,22 @@ async fn free_pick_policy_allows_ready_order_outside_sequence_head() {
         Err(ProductionMapError::QueueActionNotAllowed)
     );
 
+    let apparatus_id = ApparatusId::new(FLOW_REZKA_ID).expect("canonical test apparatus id");
     service
-        .set_apparatus_queue_policy("Rezka apparat", ApparatusQueuePolicy::FreePick, &actor)
+        .set_apparatus_queue_policy(
+            &apparatus_id,
+            ApparatusQueuePolicy::FreePick,
+            &actor,
+            &apparatus_groups,
+        )
         .await
         .expect("free pick policy");
     let states = service
         .apply_apparatus_queue_action(
-            "Rezka apparat",
+            FLOW_REZKA_ID,
             "zakaz-2",
             queue_state::ApparatusQueueAction::Start,
-            &["Rezka apparat".to_string()],
+            &[FLOW_REZKA_ID.to_string()],
             actor.clone(),
         )
         .await
@@ -371,20 +612,19 @@ async fn free_pick_policy_allows_ready_order_outside_sequence_head() {
 
 #[tokio::test]
 async fn apparatus_sequence_rejects_unknown_and_wrong_apparatus_orders() {
-    let service = ProductionMapService::new(std::sync::Arc::new(
-        MemoryProductionMapStore::new(),
-    ));
+    let service = default_service_with_store(Arc::new(MemoryProductionMapStore::new())).await;
     service
-        .upsert_map(apparatus_stage_map("zakaz-sequence-valid", "Rezka apparat"))
+        .upsert_map(canonical_apparatus_stage_map(
+            "zakaz-sequence-valid",
+            REZKA_ID,
+            "Rezka apparat",
+        ))
         .await
         .expect("map");
 
     assert_eq!(
         service
-            .set_apparatus_sequence(
-                "Rezka apparat",
-                vec!["zakaz-sequence-missing".to_string()],
-            )
+            .set_apparatus_sequence(REZKA_ID, vec!["zakaz-sequence-missing".to_string()],)
             .await,
         Err(ProductionMapError::QueueSequenceOrderNotFound(
             "zakaz-sequence-missing".to_string(),
@@ -392,10 +632,7 @@ async fn apparatus_sequence_rejects_unknown_and_wrong_apparatus_orders() {
     );
     assert_eq!(
         service
-            .set_apparatus_sequence(
-                "Laminatsiya 1",
-                vec!["zakaz-sequence-valid".to_string()],
-            )
+            .set_apparatus_sequence(LAMINATION_1_ID, vec!["zakaz-sequence-valid".to_string()],)
             .await,
         Err(ProductionMapError::QueueSequenceApparatusMismatch(
             "zakaz-sequence-valid".to_string(),
@@ -410,37 +647,208 @@ async fn apparatus_sequence_rejects_unknown_and_wrong_apparatus_orders() {
     );
 
     service
-        .set_apparatus_sequence(
-            "Rezka apparat",
-            vec!["zakaz-sequence-valid".to_string()],
-        )
+        .set_apparatus_sequence(REZKA_ID, vec!["zakaz-sequence-valid".to_string()])
         .await
         .expect("valid sequence");
 }
 
 #[tokio::test]
 async fn pechat_queue_policy_is_always_locked_strict() {
-    let service = ProductionMapService::new(std::sync::Arc::new(MemoryProductionMapStore::new()));
+    let (service, apparatus_groups) =
+        service_with_apparatus(&[("apparatus:default:bosma_7", "7 ta rangli bosma aparat")]).await;
     let actor = QueueActionActor {
         role: "admin".to_string(),
         ref_: "admin".to_string(),
         display_name: "Admin".to_string(),
     };
+    let apparatus_id =
+        ApparatusId::new("apparatus:default:bosma_7").expect("canonical pechat apparatus id");
     let result = service
-        .set_apparatus_queue_policy("7 ta rangli pechat", ApparatusQueuePolicy::FreePick, &actor)
+        .set_apparatus_queue_policy(
+            &apparatus_id,
+            ApparatusQueuePolicy::FreePick,
+            &actor,
+            &apparatus_groups,
+        )
         .await;
     assert_eq!(result, Err(ProductionMapError::ApparatusQueuePolicyLocked));
 }
 
 #[tokio::test]
+async fn queue_controls_follow_canonical_material_policy_edits() {
+    let store = Arc::new(MemoryProductionMapStore::new());
+    let (service, apparatus_groups) = service_with_apparatus_store(
+        store.clone(),
+        &[(FLOW_PECHAT_ID, "7 ta rangli pechat - A")],
+    )
+    .await;
+    let order_id = "zakaz-canonical-material-controls";
+    service
+        .upsert_map(canonical_apparatus_stage_map(
+            order_id,
+            FLOW_PECHAT_ID,
+            "7 ta rangli pechat - A",
+        ))
+        .await
+        .expect("map");
+    service
+        .set_apparatus_sequence(FLOW_PECHAT_ID, vec![order_id.to_string()])
+        .await
+        .expect("sequence");
+
+    service
+        .set_apparatus_material_rule(
+            ApparatusMaterialRuleUpsert {
+                apparatus: FLOW_PECHAT_ID.to_string(),
+                requires_material: true,
+                start_policy: RawMaterialStartPolicy::StateAll,
+                item_groups: vec!["Kraska".to_string()],
+                requirement_groups: Vec::new(),
+            },
+            &apparatus_groups,
+        )
+        .await
+        .expect("canonical material policy");
+    store
+        .put_apparatus_material_rule(ApparatusMaterialRule {
+            apparatus_id: ApparatusId::new(FLOW_PECHAT_ID).expect("canonical apparatus id"),
+            apparatus: "stale projection title".to_string(),
+            requires_material: false,
+            start_policy: RawMaterialStartPolicy::StateAll,
+            item_groups: Vec::new(),
+            requirement_groups: Vec::new(),
+        })
+        .await
+        .expect("stale material projection");
+    let controls = service
+        .queue_action_controls()
+        .await
+        .expect("controls after canonical edit");
+    let control = controls
+        .get(FLOW_PECHAT_ID)
+        .and_then(|orders| orders.get(order_id))
+        .expect("canonical material control");
+    assert_eq!(
+        control.interaction.start_materials_mode,
+        ApparatusQueueStartMaterialsMode::ScanRequired
+    );
+    assert_eq!(
+        control.interaction.blocking_reason_code,
+        "raw_material_assignment_required"
+    );
+
+    service
+        .set_apparatus_material_rule(
+            ApparatusMaterialRuleUpsert {
+                apparatus: FLOW_PECHAT_ID.to_string(),
+                requires_material: false,
+                start_policy: RawMaterialStartPolicy::StateAll,
+                item_groups: Vec::new(),
+                requirement_groups: Vec::new(),
+            },
+            &apparatus_groups,
+        )
+        .await
+        .expect("canonical material policy reset");
+    store
+        .put_apparatus_material_rule(ApparatusMaterialRule {
+            apparatus_id: ApparatusId::new(FLOW_PECHAT_ID).expect("canonical apparatus id"),
+            apparatus: "stale projection title".to_string(),
+            requires_material: true,
+            start_policy: RawMaterialStartPolicy::StateAll,
+            item_groups: vec!["stale".to_string()],
+            requirement_groups: Vec::new(),
+        })
+        .await
+        .expect("stale material projection after reset");
+    let controls = service
+        .queue_action_controls()
+        .await
+        .expect("controls after canonical reset");
+    let control = controls
+        .get(FLOW_PECHAT_ID)
+        .and_then(|orders| orders.get(order_id))
+        .expect("reset material control");
+    assert_eq!(
+        control.interaction.start_materials_mode,
+        ApparatusQueueStartMaterialsMode::Hidden
+    );
+}
+
+#[tokio::test]
+async fn queue_policy_decisions_ignore_a_stale_compatibility_projection() {
+    let store = Arc::new(MemoryProductionMapStore::new());
+    let (service, apparatus_groups) =
+        service_with_apparatus_store(store.clone(), &[(FLOW_REZKA_ID, "Rezka apparat")]).await;
+    let first = canonical_apparatus_stage_map("zakaz-canonical-policy-1", FLOW_REZKA_ID, "Rezka");
+    let second = canonical_apparatus_stage_map("zakaz-canonical-policy-2", FLOW_REZKA_ID, "Rezka");
+    service.upsert_map(first).await.expect("first map");
+    service.upsert_map(second).await.expect("second map");
+    service
+        .set_apparatus_sequence(
+            FLOW_REZKA_ID,
+            vec![
+                "zakaz-canonical-policy-1".to_string(),
+                "zakaz-canonical-policy-2".to_string(),
+            ],
+        )
+        .await
+        .expect("sequence");
+
+    let actor = QueueActionActor {
+        role: "admin".to_string(),
+        ref_: "canonical-policy-test".to_string(),
+        display_name: "Canonical policy test".to_string(),
+    };
+    let apparatus_id = ApparatusId::new(FLOW_REZKA_ID).expect("canonical apparatus id");
+    service
+        .set_apparatus_queue_policy(
+            &apparatus_id,
+            ApparatusQueuePolicy::FreePick,
+            &actor,
+            &apparatus_groups,
+        )
+        .await
+        .expect("canonical free-pick policy");
+    store
+        .put_apparatus_queue_policy(
+            &apparatus_id,
+            "stale projection title",
+            ApparatusQueuePolicy::StrictSequence,
+            &actor,
+        )
+        .await
+        .expect("stale queue policy projection");
+
+    let states = service
+        .apply_apparatus_queue_action(
+            FLOW_REZKA_ID,
+            "zakaz-canonical-policy-2",
+            queue_state::ApparatusQueueAction::Start,
+            &[FLOW_REZKA_ID.to_string()],
+            actor,
+        )
+        .await
+        .expect("canonical free-pick decision");
+    assert_eq!(
+        states.get("zakaz-canonical-policy-2"),
+        Some(&"in_progress".to_string())
+    );
+}
+
+#[tokio::test]
 async fn queue_action_controls_are_backend_owned_for_each_order_state() {
     let store = std::sync::Arc::new(MemoryProductionMapStore::new());
-    let service = ProductionMapService::new(store.clone());
-    let apparatus = "7 ta rangli pechat";
+    let service = default_service_with_store(store.clone()).await;
+    let apparatus = LAMINATION_1_ID;
     let order_id = "zakaz-action-controls";
 
     service
-        .upsert_map(apparatus_stage_map(order_id, apparatus))
+        .upsert_map(canonical_apparatus_stage_map(
+            order_id,
+            apparatus,
+            "7 ta rangli pechat",
+        ))
         .await
         .expect("map");
     service
@@ -464,18 +872,26 @@ async fn queue_action_controls_are_backend_owned_for_each_order_state() {
         in_progress.state,
         queue_state::ApparatusQueueOrderState::InProgress
     );
-    assert!(in_progress
-        .allowed_actions
-        .contains(&queue_state::ApparatusQueueAction::Pause));
-    assert!(in_progress
-        .allowed_actions
-        .contains(&queue_state::ApparatusQueueAction::Complete));
-    assert!(in_progress
-        .allowed_actions
-        .contains(&queue_state::ApparatusQueueAction::Freeze));
-    assert!(!in_progress
-        .allowed_actions
-        .contains(&queue_state::ApparatusQueueAction::Resume));
+    assert!(
+        in_progress
+            .allowed_actions
+            .contains(&queue_state::ApparatusQueueAction::Pause)
+    );
+    assert!(
+        in_progress
+            .allowed_actions
+            .contains(&queue_state::ApparatusQueueAction::Complete)
+    );
+    assert!(
+        in_progress
+            .allowed_actions
+            .contains(&queue_state::ApparatusQueueAction::Freeze)
+    );
+    assert!(
+        !in_progress
+            .allowed_actions
+            .contains(&queue_state::ApparatusQueueAction::Resume)
+    );
     assert!(in_progress.complete_requires_full_report);
 
     store
@@ -485,7 +901,10 @@ async fn queue_action_controls_are_backend_owned_for_each_order_state() {
         )
         .await
         .expect("paused state");
-    let controls = service.queue_action_controls().await.expect("paused controls");
+    let controls = service
+        .queue_action_controls()
+        .await
+        .expect("paused controls");
     let paused = controls
         .get(apparatus)
         .and_then(|orders| orders.get(order_id))
@@ -498,32 +917,47 @@ async fn queue_action_controls_are_backend_owned_for_each_order_state() {
 
 #[tokio::test]
 async fn raw_material_state_policy_requires_only_staged_scan_before_start() {
-    let service = ProductionMapService::new(std::sync::Arc::new(MemoryProductionMapStore::new()));
+    let (service, apparatus_groups) = service_with_apparatus(&[
+        (FLOW_PECHAT_ID, "7 ta rangli pechat - A"),
+        (FLOW_REZKA_ID, "Rezka apparat"),
+    ])
+    .await;
     let actor = QueueActionActor {
         role: "aparatchi".to_string(),
         ref_: "worker-1".to_string(),
         display_name: "Worker 1".to_string(),
     };
     service
-        .upsert_map(apparatus_stage_map("zakaz-raw-1", "7 ta rangli pechat - A"))
+        .upsert_map(canonical_apparatus_stage_map(
+            "zakaz-raw-1",
+            FLOW_PECHAT_ID,
+            "7 ta rangli pechat - A",
+        ))
         .await
         .expect("map");
     service
-        .set_apparatus_material_rule(ApparatusMaterialRuleUpsert {
-            apparatus: "7 ta rangli pechat - A".to_string(),
-            requires_material: true,
-            start_policy: RawMaterialStartPolicy::StateAll,
-            item_groups: vec!["Kraska".to_string(), "Kley".to_string()],
-            requirement_groups: Vec::new(),
-        })
+        .set_apparatus_sequence(FLOW_PECHAT_ID, vec!["zakaz-raw-1".to_string()])
+        .await
+        .expect("sequence");
+    service
+        .set_apparatus_material_rule(
+            ApparatusMaterialRuleUpsert {
+                apparatus: FLOW_PECHAT_ID.to_string(),
+                requires_material: true,
+                start_policy: RawMaterialStartPolicy::StateAll,
+                item_groups: vec!["Kraska".to_string(), "Kley".to_string()],
+                requirement_groups: Vec::new(),
+            },
+            &apparatus_groups,
+        )
         .await
         .expect("material rule");
     let missing_assignment = service
         .apply_apparatus_queue_action_with_material_scan(
-            "7 ta rangli pechat - A",
+            FLOW_PECHAT_ID,
             "zakaz-raw-1",
             queue_state::ApparatusQueueAction::Start,
-            &["7 ta rangli pechat - A".to_string()],
+            &[FLOW_PECHAT_ID.to_string()],
             actor.clone(),
             "",
             &[],
@@ -548,7 +982,7 @@ async fn raw_material_state_policy_requires_only_staged_scan_before_start() {
         )
         .await
         .expect("assign material");
-    assert_eq!(assigned.apparatus, "7 ta rangli pechat - A");
+    assert_eq!(assigned.apparatus, FLOW_PECHAT_ID);
     let second_assigned = service
         .assign_raw_material_to_order(
             RawMaterialAssignmentInput {
@@ -564,10 +998,14 @@ async fn raw_material_state_policy_requires_only_staged_scan_before_start() {
         )
         .await
         .expect("assign second material");
-    assert_eq!(second_assigned.apparatus, "7 ta rangli pechat - A");
+    assert_eq!(second_assigned.apparatus, FLOW_PECHAT_ID);
 
     service
-        .upsert_map(apparatus_stage_map("zakaz-raw-2", "7 ta rangli pechat - A"))
+        .upsert_map(canonical_apparatus_stage_map(
+            "zakaz-raw-2",
+            FLOW_PECHAT_ID,
+            "7 ta rangli pechat - A",
+        ))
         .await
         .expect("second map");
     let duplicate = service
@@ -591,10 +1029,10 @@ async fn raw_material_state_policy_requires_only_staged_scan_before_start() {
 
     let not_assigned = service
         .apply_apparatus_queue_action_with_material_scan(
-            "7 ta rangli pechat - A",
+            FLOW_PECHAT_ID,
             "zakaz-raw-1",
             queue_state::ApparatusQueueAction::Start,
-            &["Rezka apparat".to_string()],
+            &[FLOW_REZKA_ID.to_string()],
             actor.clone(),
             "",
             &[],
@@ -604,10 +1042,10 @@ async fn raw_material_state_policy_requires_only_staged_scan_before_start() {
 
     let missing_scan = service
         .apply_apparatus_queue_action_with_material_scan(
-            "7 ta rangli pechat - A",
+            FLOW_PECHAT_ID,
             "zakaz-raw-1",
             queue_state::ApparatusQueueAction::Start,
-            &["7 ta rangli pechat - A".to_string()],
+            &[FLOW_PECHAT_ID.to_string()],
             actor.clone(),
             "",
             &["30AA".to_string()],
@@ -620,10 +1058,10 @@ async fn raw_material_state_policy_requires_only_staged_scan_before_start() {
 
     let wrong_scan = service
         .apply_apparatus_queue_action_with_material_scan(
-            "7 ta rangli pechat - A",
+            FLOW_PECHAT_ID,
             "zakaz-raw-1",
             queue_state::ApparatusQueueAction::Start,
-            &["7 ta rangli pechat - A".to_string()],
+            &[FLOW_PECHAT_ID.to_string()],
             actor.clone(),
             "30BB",
             &["30AA".to_string()],
@@ -633,10 +1071,10 @@ async fn raw_material_state_policy_requires_only_staged_scan_before_start() {
 
     let partial_scan = service
         .apply_apparatus_queue_action_with_material_scan(
-            "7 ta rangli pechat - A",
+            FLOW_PECHAT_ID,
             "zakaz-raw-1",
             queue_state::ApparatusQueueAction::Start,
-            &["7 ta rangli pechat - A".to_string()],
+            &[FLOW_PECHAT_ID.to_string()],
             actor.clone(),
             "30AA",
             &["30AA".to_string(), "30CC".to_string()],
@@ -649,7 +1087,7 @@ async fn raw_material_state_policy_requires_only_staged_scan_before_start() {
 
     let requirements = service
         .raw_material_start_requirements(
-            "7 ta rangli pechat - A",
+            FLOW_PECHAT_ID,
             "zakaz-raw-1",
             &["30AA".to_string()],
             "30AA",
@@ -661,10 +1099,7 @@ async fn raw_material_state_policy_requires_only_staged_scan_before_start() {
         requirements.assigned_barcodes,
         vec!["30AA".to_string(), "30CC".to_string()]
     );
-    assert_eq!(
-        requirements.staged_barcodes,
-        vec!["30AA".to_string()]
-    );
+    assert_eq!(requirements.staged_barcodes, vec!["30AA".to_string()]);
     assert_eq!(requirements.eligible_barcodes, vec!["30AA".to_string()]);
     assert_eq!(requirements.required_scan_count, 1);
     assert_eq!(requirements.matched_scan_count, 1);
@@ -673,10 +1108,10 @@ async fn raw_material_state_policy_requires_only_staged_scan_before_start() {
 
     let states = service
         .apply_apparatus_queue_action_with_material_scan(
-            "7 ta rangli pechat - A",
+            FLOW_PECHAT_ID,
             "zakaz-raw-1",
             queue_state::ApparatusQueueAction::Start,
-            &["7 ta rangli pechat - A".to_string()],
+            &[FLOW_PECHAT_ID.to_string()],
             actor.clone(),
             "30AA",
             &["30AA".to_string()],
@@ -689,8 +1124,16 @@ async fn raw_material_state_policy_requires_only_staged_scan_before_start() {
 #[tokio::test]
 async fn additional_raw_material_is_only_received_by_assigned_worker_while_order_is_active() {
     let store = std::sync::Arc::new(MemoryProductionMapStore::new());
-    let service = ProductionMapService::new(store.clone());
-    let apparatus = "7 ta rangli pechat - A";
+    let apparatus = FLOW_PECHAT_ID;
+    let apparatus_groups = apparatus_groups_for(&[
+        (FLOW_PECHAT_ID, "7 ta rangli pechat - A"),
+        (FLOW_REZKA_ID, "Rezka apparat"),
+    ])
+    .await;
+    let service =
+        ProductionMapService::new(store.clone()).with_canonical_apparatus_resolver(Arc::new(
+            ApparatusGroupCanonicalResolver::new(apparatus_groups.clone()),
+        ));
     let order_id = "zakaz-raw-intake";
     let actor = QueueActionActor {
         role: "aparatchi".to_string(),
@@ -698,17 +1141,24 @@ async fn additional_raw_material_is_only_received_by_assigned_worker_while_order
         display_name: "Worker 1".to_string(),
     };
     service
-        .upsert_map(apparatus_stage_map(order_id, apparatus))
+        .upsert_map(canonical_apparatus_stage_map(
+            order_id,
+            apparatus,
+            "7 ta rangli pechat - A",
+        ))
         .await
         .expect("map");
     service
-        .set_apparatus_material_rule(ApparatusMaterialRuleUpsert {
-            apparatus: apparatus.to_string(),
-            requires_material: true,
-            start_policy: RawMaterialStartPolicy::StateAll,
-            item_groups: vec!["Kraska".to_string()],
-            requirement_groups: Vec::new(),
-        })
+        .set_apparatus_material_rule(
+            ApparatusMaterialRuleUpsert {
+                apparatus: apparatus.to_string(),
+                requires_material: true,
+                start_policy: RawMaterialStartPolicy::StateAll,
+                item_groups: vec!["Kraska".to_string()],
+                requirement_groups: Vec::new(),
+            },
+            &apparatus_groups,
+        )
         .await
         .expect("material rule");
 
@@ -761,20 +1211,23 @@ async fn additional_raw_material_is_only_received_by_assigned_worker_while_order
     let wrong_worker = service
         .receive_raw_material_for_active_order(
             input("ROLL-1000-A"),
-            &["Rezka apparat".to_string()],
+            &[FLOW_REZKA_ID.to_string()],
             &actor,
         )
         .await;
     assert_eq!(wrong_worker, Err(ProductionMapError::ApparatusNotAssigned));
 
     service
-        .set_apparatus_material_rule(ApparatusMaterialRuleUpsert {
-            apparatus: apparatus.to_string(),
-            requires_material: true,
-            start_policy: RawMaterialStartPolicy::StateAll,
-            item_groups: vec!["Kley".to_string()],
-            requirement_groups: Vec::new(),
-        })
+        .set_apparatus_material_rule(
+            ApparatusMaterialRuleUpsert {
+                apparatus: apparatus.to_string(),
+                requires_material: true,
+                start_policy: RawMaterialStartPolicy::StateAll,
+                item_groups: vec!["Kley".to_string()],
+                requirement_groups: Vec::new(),
+            },
+            &apparatus_groups,
+        )
         .await
         .expect("changed material rule");
     let disallowed_by_current_rule = service
@@ -789,13 +1242,16 @@ async fn additional_raw_material_is_only_received_by_assigned_worker_while_order
         Err(ProductionMapError::RawMaterialGroupNotAllowed)
     );
     service
-        .set_apparatus_material_rule(ApparatusMaterialRuleUpsert {
-            apparatus: apparatus.to_string(),
-            requires_material: true,
-            start_policy: RawMaterialStartPolicy::StateAll,
-            item_groups: vec!["Kraska".to_string()],
-            requirement_groups: Vec::new(),
-        })
+        .set_apparatus_material_rule(
+            ApparatusMaterialRuleUpsert {
+                apparatus: apparatus.to_string(),
+                requires_material: true,
+                start_policy: RawMaterialStartPolicy::StateAll,
+                item_groups: vec!["Kraska".to_string()],
+                requirement_groups: Vec::new(),
+            },
+            &apparatus_groups,
+        )
         .await
         .expect("restored material rule");
 
@@ -851,7 +1307,11 @@ async fn additional_raw_material_is_only_received_by_assigned_worker_while_order
         .await
         .expect("receive while paused");
     assert_eq!(
-        service.raw_material_assignments().await.expect("assignments").len(),
+        service
+            .raw_material_assignments()
+            .await
+            .expect("assignments")
+            .len(),
         3
     );
 
@@ -896,17 +1356,21 @@ async fn additional_raw_material_is_only_received_by_assigned_worker_while_order
 
 #[tokio::test]
 async fn raw_material_assignment_returns_choices_and_accepts_selected_apparatus() {
-    let store = std::sync::Arc::new(MemoryProductionMapStore::new());
-    let service = ProductionMapService::new(store);
+    let (service, apparatus_groups) = service_with_apparatus(&[
+        (FLOW_ALT_PECHAT_ID, "Pechat A"),
+        (FLOW_LAMINATION_ID, "Flow laminatsiya 1"),
+    ])
+    .await;
     let actor = QueueActionActor {
         role: "admin".to_string(),
         ref_: "admin".to_string(),
         display_name: "Admin".to_string(),
     };
-    let mut map = apparatus_stage_map("zakaz-raw-choice", "Pechat A");
+    let mut map = canonical_apparatus_stage_map("zakaz-raw-choice", FLOW_ALT_PECHAT_ID, "Pechat A");
     let mut second_apparatus = map.nodes[1].clone();
     second_apparatus.id = "apparatus-2".to_string();
     second_apparatus.title = "Laminatsiya 1".to_string();
+    second_apparatus.apparatus_id = FLOW_LAMINATION_ID.to_string();
     map.nodes.insert(2, second_apparatus);
     map.edges = vec![
         ProductionMapEdge {
@@ -926,15 +1390,18 @@ async fn raw_material_assignment_returns_choices_and_accepts_selected_apparatus(
         },
     ];
     service.upsert_map(map).await.expect("map");
-    for apparatus in ["Pechat A", "Laminatsiya 1"] {
+    for apparatus in [FLOW_ALT_PECHAT_ID, FLOW_LAMINATION_ID] {
         service
-            .set_apparatus_material_rule(ApparatusMaterialRuleUpsert {
-                apparatus: apparatus.to_string(),
-                requires_material: true,
-                start_policy: RawMaterialStartPolicy::StateAll,
-                item_groups: vec!["Kraska".to_string()],
-                requirement_groups: Vec::new(),
-            })
+            .set_apparatus_material_rule(
+                ApparatusMaterialRuleUpsert {
+                    apparatus: apparatus.to_string(),
+                    requires_material: true,
+                    start_policy: RawMaterialStartPolicy::StateAll,
+                    item_groups: vec!["Kraska".to_string()],
+                    requirement_groups: Vec::new(),
+                },
+                &apparatus_groups,
+            )
             .await
             .expect("material rule");
     }
@@ -956,8 +1423,8 @@ async fn raw_material_assignment_returns_choices_and_accepts_selected_apparatus(
     assert_eq!(
         ambiguous,
         Err(ProductionMapError::RawMaterialGroupAmbiguous(vec![
-            "Laminatsiya 1".to_string(),
-            "Pechat A".to_string(),
+            FLOW_ALT_PECHAT_ID.to_string(),
+            FLOW_LAMINATION_ID.to_string(),
         ]))
     );
 
@@ -970,39 +1437,47 @@ async fn raw_material_assignment_returns_choices_and_accepts_selected_apparatus(
                 item_name: "Choice ink".to_string(),
                 item_group: "Kraska".to_string(),
                 item_group_path: Vec::new(),
-                apparatus: "Laminatsiya 1".to_string(),
+                apparatus: FLOW_LAMINATION_ID.to_string(),
             },
             &actor,
         )
         .await
         .expect("assign selected apparatus");
-    assert_eq!(assigned.apparatus, "Laminatsiya 1");
+    assert_eq!(assigned.apparatus, FLOW_LAMINATION_ID);
 }
 
 #[tokio::test]
 async fn raw_material_requirement_group_accepts_alternative_item_group() {
-    let service = ProductionMapService::new(std::sync::Arc::new(MemoryProductionMapStore::new()));
+    let (service, apparatus_groups) =
+        service_with_apparatus(&[(FLOW_LAMINATION_ID, "Flow laminatsiya 1")]).await;
     let actor = QueueActionActor {
         role: "aparatchi".to_string(),
         ref_: "worker-alternative-material".to_string(),
         display_name: "Worker Alternative Material".to_string(),
     };
     service
-        .upsert_map(apparatus_stage_map("zakaz-raw-alt", "Laminatsiya 1"))
+        .upsert_map(canonical_apparatus_stage_map(
+            "zakaz-raw-alt",
+            FLOW_LAMINATION_ID,
+            "Laminatsiya 1",
+        ))
         .await
         .expect("map");
     let rule = service
-        .set_apparatus_material_rule(ApparatusMaterialRuleUpsert {
-            apparatus: "Laminatsiya 1".to_string(),
-            requires_material: true,
-            start_policy: RawMaterialStartPolicy::RequirementGroups,
-            item_groups: vec!["Kley".to_string(), "Kraska".to_string()],
-            requirement_groups: vec![ApparatusMaterialRequirementGroup {
-                name: "Yopishtiruvchi".to_string(),
-                item_groups: vec!["Kley".to_string(), "Kraska".to_string()],
-                min_required_count: 1,
-            }],
-        })
+        .set_apparatus_material_rule(
+            ApparatusMaterialRuleUpsert {
+                apparatus: FLOW_LAMINATION_ID.to_string(),
+                requires_material: true,
+                start_policy: RawMaterialStartPolicy::RequirementGroups,
+                item_groups: Vec::new(),
+                requirement_groups: vec![ApparatusMaterialRequirementGroup {
+                    name: "Yopishtiruvchi".to_string(),
+                    item_groups: vec!["Kley".to_string(), "Kraska".to_string()],
+                    min_required_count: 1,
+                }],
+            },
+            &apparatus_groups,
+        )
         .await
         .expect("material rule");
     assert_eq!(rule.requirement_groups.len(), 1);
@@ -1022,14 +1497,14 @@ async fn raw_material_requirement_group_accepts_alternative_item_group() {
         )
         .await
         .expect("assign alternative material");
-    assert_eq!(assigned.apparatus, "Laminatsiya 1");
+    assert_eq!(assigned.apparatus, FLOW_LAMINATION_ID);
 
     let states = service
         .apply_apparatus_queue_action_with_material_scan(
-            "Laminatsiya 1",
+            FLOW_LAMINATION_ID,
             "zakaz-raw-alt",
             queue_state::ApparatusQueueAction::Start,
-            &["Laminatsiya 1".to_string()],
+            &[FLOW_LAMINATION_ID.to_string()],
             actor,
             "30ALT",
             &[],
@@ -1044,39 +1519,43 @@ async fn raw_material_requirement_group_accepts_alternative_item_group() {
 
 #[tokio::test]
 async fn raw_material_requirement_groups_need_distinct_scanned_materials() {
-    let service = ProductionMapService::new(std::sync::Arc::new(MemoryProductionMapStore::new()));
+    let (service, apparatus_groups) =
+        service_with_apparatus(&[(FLOW_ALT_PECHAT_ID, "Pechat A")]).await;
     let actor = QueueActionActor {
         role: "aparatchi".to_string(),
         ref_: "worker-distinct-material".to_string(),
         display_name: "Worker Distinct Material".to_string(),
     };
     service
-        .upsert_map(apparatus_stage_map("zakaz-raw-distinct", "Pechat A"))
+        .upsert_map(canonical_apparatus_stage_map(
+            "zakaz-raw-distinct",
+            FLOW_ALT_PECHAT_ID,
+            "Pechat A",
+        ))
         .await
         .expect("map");
     service
-        .set_apparatus_material_rule(ApparatusMaterialRuleUpsert {
-            apparatus: "Pechat A".to_string(),
-            requires_material: true,
-            start_policy: RawMaterialStartPolicy::RequirementGroups,
-            item_groups: vec![
-                "Universal".to_string(),
-                "Kraska".to_string(),
-                "Kley".to_string(),
-            ],
-            requirement_groups: vec![
-                ApparatusMaterialRequirementGroup {
-                    name: "Bo'yoq".to_string(),
-                    item_groups: vec!["Kraska".to_string(), "Universal".to_string()],
-                    min_required_count: 1,
-                },
-                ApparatusMaterialRequirementGroup {
-                    name: "Yopishtiruvchi".to_string(),
-                    item_groups: vec!["Kley".to_string(), "Universal".to_string()],
-                    min_required_count: 1,
-                },
-            ],
-        })
+        .set_apparatus_material_rule(
+            ApparatusMaterialRuleUpsert {
+                apparatus: FLOW_ALT_PECHAT_ID.to_string(),
+                requires_material: true,
+                start_policy: RawMaterialStartPolicy::RequirementGroups,
+                item_groups: Vec::new(),
+                requirement_groups: vec![
+                    ApparatusMaterialRequirementGroup {
+                        name: "Bo'yoq".to_string(),
+                        item_groups: vec!["Kraska".to_string(), "Universal".to_string()],
+                        min_required_count: 1,
+                    },
+                    ApparatusMaterialRequirementGroup {
+                        name: "Yopishtiruvchi".to_string(),
+                        item_groups: vec!["Kley".to_string(), "Universal".to_string()],
+                        min_required_count: 1,
+                    },
+                ],
+            },
+            &apparatus_groups,
+        )
         .await
         .expect("material rule");
     for (barcode, item_group) in [("30UNIVERSAL", "Universal"), ("30KLEY", "Kley")] {
@@ -1099,10 +1578,10 @@ async fn raw_material_requirement_groups_need_distinct_scanned_materials() {
 
     let reused_for_two_groups = service
         .apply_apparatus_queue_action_with_material_scan(
-            "Pechat A",
+            FLOW_ALT_PECHAT_ID,
             "zakaz-raw-distinct",
             queue_state::ApparatusQueueAction::Start,
-            &["Pechat A".to_string()],
+            &[FLOW_ALT_PECHAT_ID.to_string()],
             actor.clone(),
             "30UNIVERSAL",
             &[],
@@ -1115,10 +1594,10 @@ async fn raw_material_requirement_groups_need_distinct_scanned_materials() {
 
     let states = service
         .apply_apparatus_queue_action_with_material_scan(
-            "Pechat A",
+            FLOW_ALT_PECHAT_ID,
             "zakaz-raw-distinct",
             queue_state::ApparatusQueueAction::Start,
-            &["Pechat A".to_string()],
+            &[FLOW_ALT_PECHAT_ID.to_string()],
             actor,
             "30UNIVERSAL,30KLEY",
             &[],
@@ -1134,13 +1613,13 @@ async fn raw_material_requirement_groups_need_distinct_scanned_materials() {
 #[tokio::test]
 async fn paused_next_order_resumes_after_previous_order_completed() {
     let store = std::sync::Arc::new(MemoryProductionMapStore::new());
-    let service = ProductionMapService::new(store.clone());
+    let service = default_service_with_store(store.clone()).await;
     let actor = QueueActionActor {
         role: "aparatchi".to_string(),
         ref_: "worker-resume".to_string(),
         display_name: "Worker Resume".to_string(),
     };
-    let apparatus = "7 ta rangli bosma aparat";
+    let apparatus = FLOW_PECHAT_ID;
     let completed_order_id = "zakaz-resume-completed";
     let paused_order_id = "zakaz-resume-paused";
     service
@@ -1214,26 +1693,24 @@ async fn paused_next_order_resumes_after_previous_order_completed() {
 
 #[tokio::test]
 async fn final_stage_pause_output_is_finished_goods_while_work_resumes() {
-    let service = ProductionMapService::new(std::sync::Arc::new(MemoryProductionMapStore::new()));
+    let service = default_service_with_store(Arc::new(MemoryProductionMapStore::new())).await;
+    let apparatus = FLOW_PECHAT_ID;
     let actor = QueueActionActor {
         role: "aparatchi".to_string(),
         ref_: "worker-progress-1".to_string(),
         display_name: "Worker Progress".to_string(),
     };
     service
-        .upsert_map(apparatus_stage_map(
-            "zakaz-progress-1",
-            "7 ta rangli pechat",
-        ))
+        .upsert_map(apparatus_stage_map("zakaz-progress-1", apparatus))
         .await
         .expect("map");
 
     let started = service
         .apply_apparatus_queue_action_with_progress(
-            "7 ta rangli pechat",
+            apparatus,
             "zakaz-progress-1",
             queue_state::ApparatusQueueAction::Start,
-            &["7 ta rangli pechat".to_string()],
+            &[apparatus.to_string()],
             actor.clone(),
             QueueProgressInput::default(),
         )
@@ -1248,10 +1725,10 @@ async fn final_stage_pause_output_is_finished_goods_while_work_resumes() {
 
     let paused = service
         .apply_apparatus_queue_action_with_progress(
-            "7 ta rangli pechat",
+            apparatus,
             "zakaz-progress-1",
             queue_state::ApparatusQueueAction::Pause,
-            &["7 ta rangli pechat".to_string()],
+            &[apparatus.to_string()],
             actor.clone(),
             QueueProgressInput {
                 produced_qty: Some(42.5),
@@ -1293,10 +1770,10 @@ async fn final_stage_pause_output_is_finished_goods_while_work_resumes() {
 
     let resumed = service
         .apply_apparatus_queue_action_with_progress(
-            "7 ta rangli pechat",
+            apparatus,
             "zakaz-progress-1",
             queue_state::ApparatusQueueAction::Resume,
-            &["7 ta rangli pechat".to_string()],
+            &[apparatus.to_string()],
             actor,
             QueueProgressInput {
                 qr_payload: batch.qr_payload.clone(),
@@ -1356,14 +1833,14 @@ async fn final_stage_pause_output_is_finished_goods_while_work_resumes() {
 
 #[tokio::test]
 async fn worker_roll_detach_has_canonical_status_without_pausing_order() {
-    let service = ProductionMapService::new(std::sync::Arc::new(MemoryProductionMapStore::new()));
+    let service = default_service_with_store(Arc::new(MemoryProductionMapStore::new())).await;
     let actor = QueueActionActor {
         role: "aparatchi".to_string(),
         ref_: "worker-roll-detach".to_string(),
         display_name: "Worker Roll Detach".to_string(),
     };
     let order_id = "zakaz-roll-detach";
-    let apparatus = "7 ta rangli pechat";
+    let apparatus = FLOW_PECHAT_ID;
     service
         .upsert_map(apparatus_stage_map(order_id, apparatus))
         .await
@@ -1445,15 +1922,15 @@ async fn worker_roll_detach_has_canonical_status_without_pausing_order() {
 #[tokio::test]
 async fn first_stage_pause_resume_complete_keeps_both_wips_available_for_laminatsiya() {
     let store = std::sync::Arc::new(MemoryProductionMapStore::new());
-    let service = ProductionMapService::new(store.clone());
+    let service = default_service_with_store(store.clone()).await;
     let actor = QueueActionActor {
         role: "aparatchi".to_string(),
         ref_: "worker-first-stage-two-wips".to_string(),
         display_name: "First Stage Two WIPs".to_string(),
     };
     let order_id = "zakaz-first-stage-two-wips";
-    let first = "8 ta rangli bosma aparat";
-    let second = "Laminatsiya 1";
+    let first = FLOW_PECHAT_ID;
+    let second = LAMINATION_1_ID;
     service
         .upsert_map(two_stage_map(order_id, first, second))
         .await
@@ -1545,7 +2022,10 @@ async fn first_stage_pause_resume_complete_keeps_both_wips_available_for_laminat
         )
         .await
         .expect("laminatsiya starts first WIP");
-    let controls = service.queue_action_controls().await.expect("queue controls");
+    let controls = service
+        .queue_action_controls()
+        .await
+        .expect("queue controls");
     let laminatsiya = controls
         .get(second)
         .and_then(|orders| orders.get(order_id))
@@ -1556,15 +2036,15 @@ async fn first_stage_pause_resume_complete_keeps_both_wips_available_for_laminat
 #[tokio::test]
 async fn laminatsiya_worker_handoff_keeps_roll_in_apparatus_until_continue_or_remove() {
     let store = std::sync::Arc::new(MemoryProductionMapStore::new());
-    let service = ProductionMapService::new(store.clone());
+    let service = default_service_with_store(store.clone()).await;
     let actor = QueueActionActor {
         role: "laminatsiyachi".to_string(),
         ref_: "worker-laminatsiya-handoff".to_string(),
         display_name: "Laminatsiya Handoff".to_string(),
     };
     let order_id = "zakaz-laminatsiya-handoff";
-    let first = "Bosma aparat";
-    let second = "Laminatsiya mashinasi";
+    let first = FLOW_PECHAT_ID;
+    let second = LAMINATION_1_ID;
     service
         .upsert_map(two_stage_map(order_id, first, second))
         .await
@@ -1632,7 +2112,11 @@ async fn laminatsiya_worker_handoff_keeps_roll_in_apparatus_until_continue_or_re
     assert_eq!(handoff.states.get(order_id), Some(&"paused".to_string()));
     assert!(handoff.progress_batch.is_none());
     assert_eq!(
-        handoff.progress_event.as_ref().expect("handoff event").payload_json["event"],
+        handoff
+            .progress_event
+            .as_ref()
+            .expect("handoff event")
+            .payload_json["event"],
         "worker_handoff"
     );
 
@@ -1641,7 +2125,10 @@ async fn laminatsiya_worker_handoff_keeps_roll_in_apparatus_until_continue_or_re
         .await
         .expect("handoff source lookup")
         .expect("handoff source");
-    assert_eq!(handed_off_source.wip_status, OrderProgressBatchWipStatus::InUse);
+    assert_eq!(
+        handed_off_source.wip_status,
+        OrderProgressBatchWipStatus::InUse
+    );
     assert_eq!(
         handed_off_source.payload_json["worker_handoff"],
         serde_json::Value::Bool(true)
@@ -1651,12 +2138,13 @@ async fn laminatsiya_worker_handoff_keeps_roll_in_apparatus_until_continue_or_re
         .apply_apparatus_queue_action_with_progress(
             second,
             order_id,
-            queue_state::ApparatusQueueAction::Pause,
+            queue_state::ApparatusQueueAction::DetachRoll,
             &[second.to_string()],
             actor.clone(),
             QueueProgressInput {
                 finished_goods_meter: Some(320.0),
                 finished_goods_kg: Some(12.0),
+                bobina_kg: Some(12.0),
                 remove_roll_from_apparatus: true,
                 ..QueueProgressInput::default()
             },
@@ -1670,7 +2158,10 @@ async fn laminatsiya_worker_handoff_keeps_roll_in_apparatus_until_continue_or_re
         .await
         .expect("removed source lookup")
         .expect("removed source");
-    assert_eq!(removed_source.wip_status, OrderProgressBatchWipStatus::Waiting);
+    assert_eq!(
+        removed_source.wip_status,
+        OrderProgressBatchWipStatus::Waiting
+    );
     assert_eq!(
         removed_source.payload_json["roll_removed_from_apparatus"],
         serde_json::Value::Bool(true)
@@ -1688,13 +2179,19 @@ async fn laminatsiya_worker_handoff_keeps_roll_in_apparatus_until_continue_or_re
         )
         .await
         .expect("resume removed roll");
-    assert_eq!(resumed.states.get(order_id), Some(&"in_progress".to_string()));
+    assert_eq!(
+        resumed.states.get(order_id),
+        Some(&"in_progress".to_string())
+    );
     let resumed_source = store
         .progress_batch(&source_batch.batch_id)
         .await
         .expect("resumed source lookup")
         .expect("resumed source");
-    assert_eq!(resumed_source.wip_status, OrderProgressBatchWipStatus::InUse);
+    assert_eq!(
+        resumed_source.wip_status,
+        OrderProgressBatchWipStatus::InUse
+    );
     assert_eq!(
         resumed_source.payload_json["worker_handoff"],
         serde_json::Value::Bool(false)
@@ -1726,15 +2223,15 @@ async fn laminatsiya_worker_handoff_keeps_roll_in_apparatus_until_continue_or_re
 
 #[tokio::test]
 async fn downstream_start_requires_previous_stage_progress_qr() {
-    let service = ProductionMapService::new(std::sync::Arc::new(MemoryProductionMapStore::new()));
+    let service = default_service_with_store(Arc::new(MemoryProductionMapStore::new())).await;
     let actor = QueueActionActor {
         role: "aparatchi".to_string(),
         ref_: "worker-downstream-1".to_string(),
         display_name: "Worker Downstream".to_string(),
     };
     let order_id = "zakaz-downstream-1";
-    let first = "Bosma aparat";
-    let second = "Laminatsiya mashinasi";
+    let first = FLOW_PECHAT_ID;
+    let second = LAMINATION_1_ID;
     service
         .upsert_map(two_stage_map(order_id, first, second))
         .await
@@ -1813,15 +2310,15 @@ async fn downstream_start_requires_previous_stage_progress_qr() {
 #[tokio::test]
 async fn laminatsiya_complete_requires_previous_stage_qr() {
     let store = std::sync::Arc::new(MemoryProductionMapStore::new());
-    let service = ProductionMapService::new(store.clone());
+    let service = default_service_with_store(store.clone()).await;
     let actor = QueueActionActor {
         role: "aparatchi".to_string(),
         ref_: "worker-laminatsiya-complete-without-input".to_string(),
         display_name: "Laminatsiya Complete Without Input".to_string(),
     };
     let order_id = "zakaz-laminatsiya-complete-without-input";
-    let first = "Bosma aparat";
-    let second = "Laminatsiya mashinasi";
+    let first = FLOW_PECHAT_ID;
+    let second = LAMINATION_1_ID;
     service
         .upsert_map(two_stage_map(order_id, first, second))
         .await
@@ -1860,15 +2357,15 @@ async fn laminatsiya_complete_requires_previous_stage_qr() {
 #[tokio::test]
 async fn downstream_pause_resume_preserves_original_input_until_complete() {
     let store = std::sync::Arc::new(MemoryProductionMapStore::new());
-    let service = ProductionMapService::new(store.clone());
+    let service = default_service_with_store(store.clone()).await;
     let actor = QueueActionActor {
         role: "laminatsiyachi".to_string(),
         ref_: "worker-laminatsiya-pause-resume".to_string(),
         display_name: "Laminatsiya Pause Resume".to_string(),
     };
     let order_id = "zakaz-laminatsiya-pause-resume";
-    let first = "Bosma aparat";
-    let second = "Laminatsiya mashinasi";
+    let first = FLOW_PECHAT_ID;
+    let second = LAMINATION_1_ID;
     service
         .upsert_map(two_stage_map(order_id, first, second))
         .await
@@ -1938,7 +2435,10 @@ async fn downstream_pause_resume_preserves_original_input_until_complete() {
     );
     assert_eq!(resumed_batch.batch_id, pause_batch.batch_id);
     assert_eq!(resumed_batch.status, OrderProgressBatchStatus::Resumed);
-    assert_eq!(resumed_batch.wip_status, OrderProgressBatchWipStatus::Waiting);
+    assert_eq!(
+        resumed_batch.wip_status,
+        OrderProgressBatchWipStatus::Waiting
+    );
     assert!(resumed_batch.used_by_session_id.is_empty());
     assert_eq!(
         resumed_session.payload_json["input_progress_batch_id"].as_str(),
@@ -1995,16 +2495,16 @@ async fn downstream_pause_resume_preserves_original_input_until_complete() {
 #[tokio::test]
 async fn rezka_resume_reopens_all_frames_from_the_scanned_input_wip() {
     let store = std::sync::Arc::new(MemoryProductionMapStore::new());
-    let service = ProductionMapService::new(store.clone());
+    let service = default_service_with_store(store.clone()).await;
     let actor = QueueActionActor {
         role: "rezkachi".to_string(),
         ref_: "worker-rezka-frame-resume".to_string(),
         display_name: "Rezka Frame Resume".to_string(),
     };
     let order_id = "zakaz-rezka-frame-resume";
-    let first = "Bosma aparat";
-    let second = "Laminatsiya 1";
-    let third = "Rezka";
+    let first = FLOW_PECHAT_ID;
+    let second = LAMINATION_1_ID;
+    let third = REZKA_ID;
     service
         .upsert_map(three_stage_map(order_id, first, second, third, 3))
         .await
@@ -2104,7 +2604,10 @@ async fn rezka_resume_reopens_all_frames_from_the_scanned_input_wip() {
         )
         .await
         .expect("rezka resume without a frame QR");
-    assert_eq!(resumed.states.get(order_id), Some(&"in_progress".to_string()));
+    assert_eq!(
+        resumed.states.get(order_id),
+        Some(&"in_progress".to_string())
+    );
     assert_eq!(resumed.progress_batches.len(), 3);
     assert!(resumed.progress_batches.iter().all(|batch| {
         batch.status == OrderProgressBatchStatus::Resumed
@@ -2133,15 +2636,15 @@ async fn rezka_resume_reopens_all_frames_from_the_scanned_input_wip() {
 #[tokio::test]
 async fn complete_repairs_legacy_output_input_confusion() {
     let store = std::sync::Arc::new(MemoryProductionMapStore::new());
-    let service = ProductionMapService::new(store.clone());
+    let service = default_service_with_store(store.clone()).await;
     let actor = QueueActionActor {
         role: "laminatsiyachi".to_string(),
         ref_: "worker-laminatsiya-legacy-resume".to_string(),
         display_name: "Laminatsiya Legacy Resume".to_string(),
     };
     let order_id = "zakaz-laminatsiya-legacy-resume";
-    let apparatus = "Laminatsiya 1";
-    let previous = "7 ta rangli bosma aparat";
+    let apparatus = LAMINATION_1_ID;
+    let previous = FLOW_PECHAT_ID;
     let session_id = "session-laminatsiya-legacy-resume";
     let source_batch_id = "source-bosma-batch";
     let misbound_output_id = "batch-laminatsiya-legacy-pause";
@@ -2281,16 +2784,16 @@ async fn complete_repairs_legacy_output_input_confusion() {
 #[tokio::test]
 async fn resume_without_resumable_wip_keeps_queue_paused() {
     let store = std::sync::Arc::new(MemoryProductionMapStore::new());
-    let service = ProductionMapService::new(store.clone());
+    let service = default_service_with_store(store.clone()).await;
     let actor = QueueActionActor {
         role: "laminatsiyachi".to_string(),
         ref_: "worker-laminatsiya-ghost-resume".to_string(),
         display_name: "Laminatsiya Ghost Resume".to_string(),
     };
     let order_id = "zakaz-laminatsiya-ghost-resume";
-    let apparatus = "Laminatsiya mashinasi";
+    let apparatus = LAMINATION_1_ID;
     service
-        .upsert_map(two_stage_map(order_id, "Bosma aparat", apparatus))
+        .upsert_map(two_stage_map(order_id, FLOW_PECHAT_ID, apparatus))
         .await
         .expect("map");
     store
@@ -2342,16 +2845,16 @@ async fn resume_without_resumable_wip_keeps_queue_paused() {
 #[tokio::test]
 async fn laminatsiya_astatka_uses_order_timeline_and_previous_report_anchor() {
     let store = std::sync::Arc::new(MemoryProductionMapStore::new());
-    let service = ProductionMapService::new(store.clone());
+    let service = default_service_with_store(store.clone()).await;
     let actor = QueueActionActor {
         role: "aparatchi".to_string(),
         ref_: "worker-laminatsiya-astatka".to_string(),
         display_name: "Laminatsiya Astatka Worker".to_string(),
     };
     let order_id = "zakaz-laminatsiya-astatka";
-    let apparatus = "Laminatsiya mashinasi";
+    let apparatus = LAMINATION_1_ID;
     service
-        .upsert_map(two_stage_map(order_id, "Bosma aparat", apparatus))
+        .upsert_map(two_stage_map(order_id, FLOW_PECHAT_ID, apparatus))
         .await
         .expect("map");
     store
@@ -2418,16 +2921,16 @@ async fn laminatsiya_astatka_uses_order_timeline_and_previous_report_anchor() {
 #[tokio::test]
 async fn rezka_astatka_uses_order_timeline_and_accepts_zero_metrics() {
     let store = std::sync::Arc::new(MemoryProductionMapStore::new());
-    let service = ProductionMapService::new(store.clone());
+    let service = default_service_with_store(store.clone()).await;
     let actor = QueueActionActor {
         role: "aparatchi".to_string(),
         ref_: "worker-rezka-astatka".to_string(),
         display_name: "Rezka Astatka Worker".to_string(),
     };
     let order_id = "zakaz-rezka-astatka";
-    let apparatus = "Rezka";
+    let apparatus = REZKA_ID;
     service
-        .upsert_map(two_stage_map(order_id, "Laminatsiya", apparatus))
+        .upsert_map(two_stage_map(order_id, LAMINATION_1_ID, apparatus))
         .await
         .expect("map");
     store
@@ -2495,15 +2998,15 @@ async fn rezka_astatka_uses_order_timeline_and_accepts_zero_metrics() {
 
 #[tokio::test]
 async fn downstream_start_accepts_previous_stage_output_after_producer_resumes() {
-    let service = ProductionMapService::new(std::sync::Arc::new(MemoryProductionMapStore::new()));
+    let service = default_service_with_store(Arc::new(MemoryProductionMapStore::new())).await;
     let actor = QueueActionActor {
         role: "aparatchi".to_string(),
         ref_: "worker-downstream-resume".to_string(),
         display_name: "Worker Downstream Resume".to_string(),
     };
     let order_id = "zakaz-downstream-resume";
-    let first = "Bosma aparat";
-    let second = "Laminatsiya mashinasi";
+    let first = FLOW_PECHAT_ID;
+    let second = LAMINATION_1_ID;
     service
         .upsert_map(two_stage_map(order_id, first, second))
         .await
@@ -2584,14 +3087,14 @@ async fn downstream_start_accepts_previous_stage_output_after_producer_resumes()
 
 #[tokio::test]
 async fn downstream_start_with_previous_qr_can_skip_pending_sequence_head() {
-    let service = ProductionMapService::new(std::sync::Arc::new(MemoryProductionMapStore::new()));
+    let service = default_service_with_store(Arc::new(MemoryProductionMapStore::new())).await;
     let actor = QueueActionActor {
         role: "aparatchi".to_string(),
         ref_: "worker-downstream-free".to_string(),
         display_name: "Worker Downstream Free".to_string(),
     };
-    let first = "Bosma aparat";
-    let second = "Laminatsiya mashinasi";
+    let first = FLOW_PECHAT_ID;
+    let second = LAMINATION_1_ID;
     let waiting_order = "zakaz-downstream-waiting";
     let ready_order = "zakaz-downstream-ready";
     service
@@ -2602,6 +3105,13 @@ async fn downstream_start_with_previous_qr_can_skip_pending_sequence_head() {
         .upsert_map(two_stage_map(ready_order, first, second))
         .await
         .expect("ready map");
+    service
+        .set_apparatus_sequence(
+            first,
+            vec![ready_order.to_string(), waiting_order.to_string()],
+        )
+        .await
+        .expect("first sequence");
     service
         .set_apparatus_sequence(
             second,
@@ -2669,14 +3179,14 @@ async fn downstream_start_with_previous_qr_can_skip_pending_sequence_head() {
 
 #[tokio::test]
 async fn downstream_start_marks_previous_stage_batch_in_use() {
-    let service = ProductionMapService::new(std::sync::Arc::new(MemoryProductionMapStore::new()));
+    let service = default_service_with_store(Arc::new(MemoryProductionMapStore::new())).await;
     let actor = QueueActionActor {
         role: "aparatchi".to_string(),
         ref_: "worker-wip-in-use".to_string(),
         display_name: "Worker WIP In Use".to_string(),
     };
-    let first = "Bosma aparat";
-    let second = "Laminatsiya mashinasi";
+    let first = FLOW_PECHAT_ID;
+    let second = LAMINATION_1_ID;
     let order_id = "zakaz-wip-in-use";
     service
         .upsert_map(two_stage_map(order_id, first, second))
@@ -2685,7 +3195,11 @@ async fn downstream_start_marks_previous_stage_batch_in_use() {
     let first_batch = pause_first_stage_batch(&service, order_id, first, &actor, 21.0)
         .await
         .expect("first batch");
-    assert!(first_batch.label_item_name.contains("yarim tayyor mahsulot"));
+    assert!(
+        first_batch
+            .label_item_name
+            .contains("yarim tayyor mahsulot")
+    );
     assert!(!first_batch.is_finished_goods_output());
     assert_eq!(first_batch.next_apparatus, second);
     assert_eq!(first_batch.status_detail.flow_status, "waiting_next_stage");
@@ -2733,14 +3247,14 @@ async fn downstream_start_marks_previous_stage_batch_in_use() {
 #[tokio::test]
 async fn legacy_self_consumed_pause_wip_is_available_to_the_next_stage() {
     let store = std::sync::Arc::new(MemoryProductionMapStore::new());
-    let service = ProductionMapService::new(store.clone());
+    let service = default_service_with_store(store.clone()).await;
     let actor = QueueActionActor {
         role: "laminatsiyachi".to_string(),
         ref_: "worker-legacy-self-consumed".to_string(),
         display_name: "Legacy Self Consumed".to_string(),
     };
-    let first = "8 ta rangli bosma aparat";
-    let second = "Laminatsiya 1";
+    let first = FLOW_PECHAT_ID;
+    let second = LAMINATION_1_ID;
     let order_id = "zakaz-legacy-self-consumed";
     let batch_id = "legacy-self-consumed-pause-wip";
     service
@@ -2806,14 +3320,20 @@ async fn legacy_self_consumed_pause_wip_is_available_to_the_next_stage() {
         .await
         .expect("available WIP list");
     assert_eq!(available.len(), 1);
-    assert_eq!(available[0].wip_status, OrderProgressBatchWipStatus::Waiting);
+    assert_eq!(
+        available[0].wip_status,
+        OrderProgressBatchWipStatus::Waiting
+    );
     let report = service
         .progress_qr_report("", "legacy-self-consumed-qr")
         .await
         .expect("recovered QR report");
     assert!(!report.is_stale);
     assert_eq!(
-        report.current_batch.expect("current recovered WIP").batch_id,
+        report
+            .current_batch
+            .expect("current recovered WIP")
+            .batch_id,
         batch_id
     );
 
@@ -2853,14 +3373,14 @@ async fn legacy_self_consumed_pause_wip_is_available_to_the_next_stage() {
 #[tokio::test]
 async fn wip_listing_backfills_missing_current_and_next_apparatus_from_map() {
     let store = std::sync::Arc::new(MemoryProductionMapStore::new());
-    let service = ProductionMapService::new(store.clone());
+    let service = default_service_with_store(store.clone()).await;
     let actor = QueueActionActor {
         role: "aparatchi".to_string(),
         ref_: "worker-wip-next".to_string(),
         display_name: "Worker WIP Next".to_string(),
     };
-    let first = "7 ta rangli pechat";
-    let second = "Laminatsiya 1";
+    let first = FLOW_PECHAT_ID;
+    let second = LAMINATION_1_ID;
     let order_id = "zakaz-wip-next";
     service
         .upsert_map(two_stage_map(order_id, first, second))
@@ -2908,15 +3428,15 @@ async fn wip_listing_backfills_missing_current_and_next_apparatus_from_map() {
 
 #[tokio::test]
 async fn unassigned_alternative_stage_is_claimed_by_first_started_candidate() {
-    let service = ProductionMapService::new(std::sync::Arc::new(MemoryProductionMapStore::new()));
+    let service = default_service_with_store(Arc::new(MemoryProductionMapStore::new())).await;
     let actor = QueueActionActor {
         role: "aparatchi".to_string(),
         ref_: "worker-alt-claim".to_string(),
         display_name: "Worker Alt Claim".to_string(),
     };
-    let first = "7 ta rangli bosma aparat";
-    let second = "Laminatsiya 1";
-    let third = "Laminatsiya 2";
+    let first = FLOW_PECHAT_ID;
+    let second = LAMINATION_1_ID;
+    let third = LAMINATION_2_ID;
     let order_id = "zakaz-alt-claim";
     service
         .upsert_map(unassigned_alternative_next_stage_map(
@@ -2934,7 +3454,7 @@ async fn unassigned_alternative_stage_is_claimed_by_first_started_candidate() {
     let first_batch = pause_first_stage_batch(&service, order_id, first, &actor, 21.0)
         .await
         .expect("first batch");
-    assert_eq!(first_batch.next_apparatus, "Laminatsiya");
+    assert_eq!(first_batch.next_apparatus, second);
     let third_wips = service
         .wip_progress_batches(WipProgressBatchQuery::new(
             first,
@@ -2977,7 +3497,7 @@ async fn unassigned_alternative_stage_is_claimed_by_first_started_candidate() {
         .filter(|node| node.alternative_group_id == "alt_laminatsiya")
         .map(|node| node.alternative_assigned_title.as_str())
         .collect::<Vec<_>>();
-    assert_eq!(assigned, vec![third, third]);
+    assert_eq!(assigned, vec!["Laminatsiya 2", "Laminatsiya 2"]);
     let visible = service
         .visible_order_ids_by_apparatus()
         .await
@@ -2989,20 +3509,21 @@ async fn unassigned_alternative_stage_is_claimed_by_first_started_candidate() {
 #[tokio::test]
 async fn assigned_alternative_stage_rejects_unselected_candidate_even_with_stale_sequence() {
     let store = std::sync::Arc::new(MemoryProductionMapStore::new());
-    let service = ProductionMapService::new(store.clone());
+    let service = default_service_with_store(store.clone()).await;
     let actor = QueueActionActor {
         role: "aparatchi".to_string(),
         ref_: "worker-alt-assigned".to_string(),
         display_name: "Worker Alt Assigned".to_string(),
     };
-    let first = "7 ta rangli bosma aparat";
-    let selected = "Laminatsiya 1";
-    let unselected = "Laminatsiya 2";
+    let first = FLOW_PECHAT_ID;
+    let selected = LAMINATION_1_ID;
+    let unselected = LAMINATION_2_ID;
     let order_id = "zakaz-alt-assigned";
     let mut map = unassigned_alternative_next_stage_map(order_id, first, selected, unselected);
     for node in &mut map.nodes {
         if node.alternative_group_id == "alt_laminatsiya" {
-            node.alternative_assigned_title = selected.to_string();
+            node.alternative_assigned_apparatus_id = selected.to_string();
+            node.alternative_assigned_title = "Laminatsiya 1".to_string();
         }
     }
     service.upsert_map(map).await.expect("map");
@@ -3033,14 +3554,14 @@ async fn assigned_alternative_stage_rejects_unselected_candidate_even_with_stale
 
 #[tokio::test]
 async fn downstream_output_processes_input_batch_and_links_new_wip_batch() {
-    let service = ProductionMapService::new(std::sync::Arc::new(MemoryProductionMapStore::new()));
+    let service = default_service_with_store(Arc::new(MemoryProductionMapStore::new())).await;
     let actor = QueueActionActor {
         role: "aparatchi".to_string(),
         ref_: "worker-wip-processed".to_string(),
         display_name: "Worker WIP Processed".to_string(),
     };
-    let first = "Bosma aparat";
-    let second = "Laminatsiya mashinasi";
+    let first = FLOW_PECHAT_ID;
+    let second = LAMINATION_1_ID;
     let order_id = "zakaz-wip-processed";
     service
         .upsert_map(two_stage_map(order_id, first, second))
@@ -3104,14 +3625,14 @@ async fn downstream_output_processes_input_batch_and_links_new_wip_batch() {
 #[tokio::test]
 async fn downstream_complete_keeps_order_open_until_all_input_wips_processed() {
     let store = std::sync::Arc::new(MemoryProductionMapStore::new());
-    let service = ProductionMapService::new(store.clone());
+    let service = default_service_with_store(store.clone()).await;
     let actor = QueueActionActor {
         role: "aparatchi".to_string(),
         ref_: "worker-wip-partial-complete".to_string(),
         display_name: "Worker WIP Partial Complete".to_string(),
     };
-    let first = "Bosma aparat";
-    let second = "Laminatsiya mashinasi";
+    let first = FLOW_PECHAT_ID;
+    let second = LAMINATION_1_ID;
     let order_id = "zakaz-wip-partial-complete";
     service
         .upsert_map(two_stage_map(order_id, first, second))
@@ -3336,14 +3857,14 @@ async fn downstream_complete_keeps_order_open_until_all_input_wips_processed() {
 
 #[tokio::test]
 async fn downstream_start_rejects_mismatched_progress_batch_id_and_qr() {
-    let service = ProductionMapService::new(std::sync::Arc::new(MemoryProductionMapStore::new()));
+    let service = default_service_with_store(Arc::new(MemoryProductionMapStore::new())).await;
     let actor = QueueActionActor {
         role: "aparatchi".to_string(),
         ref_: "worker-downstream-mismatch".to_string(),
         display_name: "Worker Downstream Mismatch".to_string(),
     };
-    let first = "Bosma aparat";
-    let second = "Laminatsiya mashinasi";
+    let first = FLOW_PECHAT_ID;
+    let second = LAMINATION_1_ID;
     let first_order = "zakaz-downstream-match";
     let second_order = "zakaz-downstream-other";
     service
@@ -3354,6 +3875,13 @@ async fn downstream_start_rejects_mismatched_progress_batch_id_and_qr() {
         .upsert_map(two_stage_map(second_order, first, second))
         .await
         .expect("second map");
+    service
+        .set_apparatus_sequence(
+            first,
+            vec![first_order.to_string(), second_order.to_string()],
+        )
+        .await
+        .expect("first sequence");
 
     let first_batch = pause_first_stage_batch(&service, first_order, first, &actor, 11.0)
         .await
@@ -3410,14 +3938,14 @@ async fn downstream_start_rejects_mismatched_progress_batch_id_and_qr() {
 
 #[tokio::test]
 async fn downstream_start_requires_qr_payload_not_only_progress_batch_id() {
-    let service = ProductionMapService::new(std::sync::Arc::new(MemoryProductionMapStore::new()));
+    let service = default_service_with_store(Arc::new(MemoryProductionMapStore::new())).await;
     let actor = QueueActionActor {
         role: "aparatchi".to_string(),
         ref_: "worker-downstream-id-only".to_string(),
         display_name: "Worker Downstream Id Only".to_string(),
     };
-    let first = "Bosma aparat";
-    let second = "Laminatsiya mashinasi";
+    let first = FLOW_PECHAT_ID;
+    let second = LAMINATION_1_ID;
     let order_id = "zakaz-downstream-id-only";
     service
         .upsert_map(two_stage_map(order_id, first, second))
@@ -3446,10 +3974,10 @@ async fn downstream_start_requires_qr_payload_not_only_progress_batch_id() {
 #[tokio::test]
 async fn upsert_maps_batch_keeps_queue_state_and_sequence_cache() {
     let store = std::sync::Arc::new(MemoryProductionMapStore::new());
-    let service = ProductionMapService::new(store.clone());
+    let service = default_service_with_store(store.clone()).await;
     store
         .put_apparatus_sequence(
-            "Rezka apparat",
+            REZKA_ID,
             vec!["zakaz-111".to_string(), "zakaz-222".to_string()],
         )
         .await
@@ -3457,7 +3985,7 @@ async fn upsert_maps_batch_keeps_queue_state_and_sequence_cache() {
     service
         .store
         .put_apparatus_queue_states(
-            "Rezka apparat",
+            REZKA_ID,
             BTreeMap::from([("zakaz-111".to_string(), "completed".to_string())]),
         )
         .await
@@ -3483,7 +4011,7 @@ async fn upsert_maps_batch_keeps_queue_state_and_sequence_cache() {
             .apparatus_sequences()
             .await
             .expect("sequences")
-            .get("Rezka apparat"),
+            .get(REZKA_ID),
         Some(&vec!["zakaz-111".to_string(), "zakaz-222".to_string()])
     );
     assert_eq!(
@@ -3491,7 +4019,7 @@ async fn upsert_maps_batch_keeps_queue_state_and_sequence_cache() {
             .apparatus_queue_states()
             .await
             .expect("states")
-            .get("Rezka apparat")
+            .get(REZKA_ID)
             .and_then(|states| states.get("zakaz-111")),
         Some(&"completed".to_string())
     );
@@ -3500,25 +4028,25 @@ async fn upsert_maps_batch_keeps_queue_state_and_sequence_cache() {
 #[tokio::test]
 async fn progress_qr_report_uses_child_batch_as_current_even_when_scanned_batch_sorts_first() {
     let store = std::sync::Arc::new(MemoryProductionMapStore::new());
-    let service = ProductionMapService::new(store.clone());
+    let service = default_service_with_store(store.clone()).await;
     let order_id = "zakaz-qr-lineage";
     service
-        .upsert_map(two_stage_map(order_id, "Pechat", "Qadoqlash"))
+        .upsert_map(two_stage_map(order_id, FLOW_PECHAT_ID, LAMINATION_1_ID))
         .await
         .expect("map");
 
     let scanned = test_progress_batch(
-        "progress-batch:999:Pechat:zakaz-qr-lineage:pause",
+        "progress-batch:999:flow-pechat:zakaz-qr-lineage:pause",
         order_id,
-        "Pechat",
+        FLOW_PECHAT_ID,
         "QR-OLD",
         OrderProgressBatchWipStatus::Processed,
         "",
     );
     let current = test_progress_batch(
-        "progress-batch:100:Qadoqlash:zakaz-qr-lineage:complete",
+        "progress-batch:100:flow-lamination:zakaz-qr-lineage:complete",
         order_id,
-        "Qadoqlash",
+        LAMINATION_1_ID,
         "QR-NEW",
         OrderProgressBatchWipStatus::Waiting,
         &scanned.batch_id,
@@ -3551,25 +4079,25 @@ async fn progress_qr_report_uses_child_batch_as_current_even_when_scanned_batch_
 #[tokio::test]
 async fn progress_qr_report_keeps_lineage_when_order_has_more_than_500_batches() {
     let store = std::sync::Arc::new(MemoryProductionMapStore::new());
-    let service = ProductionMapService::new(store.clone());
+    let service = default_service_with_store(store.clone()).await;
     let order_id = "zakaz-qr-long-lineage";
     service
-        .upsert_map(two_stage_map(order_id, "Pechat", "Qadoqlash"))
+        .upsert_map(two_stage_map(order_id, FLOW_PECHAT_ID, LAMINATION_1_ID))
         .await
         .expect("map");
 
     let scanned = test_progress_batch(
-        "progress-batch:999:Pechat:zakaz-qr-long-lineage:pause",
+        "progress-batch:999:flow-pechat:zakaz-qr-long-lineage:pause",
         order_id,
-        "Pechat",
+        FLOW_PECHAT_ID,
         "QR-LONG-OLD",
         OrderProgressBatchWipStatus::Processed,
         "",
     );
     let current = test_progress_batch(
-        "progress-batch:001:Qadoqlash:zakaz-qr-long-lineage:complete",
+        "progress-batch:001:flow-lamination:zakaz-qr-long-lineage:complete",
         order_id,
-        "Qadoqlash",
+        LAMINATION_1_ID,
         "QR-LONG-NEW",
         OrderProgressBatchWipStatus::Waiting,
         &scanned.batch_id,
@@ -3586,11 +4114,11 @@ async fn progress_qr_report_keeps_lineage_when_order_has_more_than_500_batches()
         store
             .put_order_progress_batch(test_progress_batch(
                 &format!(
-                    "progress-batch:{:03}:Pechat:zakaz-qr-long-lineage:filler",
+                    "progress-batch:{:03}:flow-pechat:zakaz-qr-long-lineage:filler",
                     index + 100
                 ),
                 order_id,
-                "Pechat",
+                FLOW_PECHAT_ID,
                 &format!("QR-LONG-FILLER-{index}"),
                 OrderProgressBatchWipStatus::Waiting,
                 "",
@@ -3617,24 +4145,21 @@ async fn progress_qr_report_keeps_lineage_when_order_has_more_than_500_batches()
 #[tokio::test]
 async fn roll_complete_final_output_can_be_received_as_finished_goods() {
     let store = std::sync::Arc::new(MemoryProductionMapStore::new());
-    let service = ProductionMapService::new(store.clone());
+    let service = default_service_with_store(store.clone()).await;
     let worker = QueueActionActor {
         role: "aparatchi".to_string(),
         ref_: "worker-roll-complete-receipt".to_string(),
         display_name: "Roll Complete Worker".to_string(),
     };
     let order_id = "zakaz-roll-complete-receipt";
-    let apparatus = "Rezka";
+    let apparatus = REZKA_ID;
     let mut map = apparatus_stage_map(order_id, apparatus);
     map.nodes
         .iter_mut()
         .find(|node| node.kind == ProductionMapNodeKind::Apparatus)
         .expect("rezka node")
         .rezka_kadr_count = Some(1);
-    service
-        .upsert_map(map)
-        .await
-        .expect("map");
+    service.upsert_map(map).await.expect("map");
 
     service
         .apply_apparatus_queue_action_with_progress(
@@ -3651,7 +4176,7 @@ async fn roll_complete_final_output_can_be_received_as_finished_goods() {
         .apply_apparatus_queue_action_with_progress(
             apparatus,
             order_id,
-            queue_state::ApparatusQueueAction::Pause,
+            queue_state::ApparatusQueueAction::DetachRoll,
             &[apparatus.to_string()],
             worker.clone(),
             QueueProgressInput {
@@ -3695,32 +4220,30 @@ async fn roll_complete_final_output_can_be_received_as_finished_goods() {
         receipt.batch.action,
         queue_state::ApparatusQueueAction::RollComplete
     );
-    assert_eq!(receipt.batch.wip_status, OrderProgressBatchWipStatus::Processed);
+    assert_eq!(
+        receipt.batch.wip_status,
+        OrderProgressBatchWipStatus::Processed
+    );
     assert_eq!(receipt.batch.status_detail.flow_status, "accepted_to_stock");
 }
 
 #[tokio::test]
 async fn pause_final_output_can_be_received_as_finished_goods() {
-    let service = ProductionMapService::new(std::sync::Arc::new(
-        MemoryProductionMapStore::new(),
-    ));
+    let service = default_service_with_store(Arc::new(MemoryProductionMapStore::new())).await;
     let worker = QueueActionActor {
         role: "aparatchi".to_string(),
         ref_: "worker-pause-receipt".to_string(),
         display_name: "Pause Worker".to_string(),
     };
     let order_id = "zakaz-pause-receipt";
-    let apparatus = "Rezka";
+    let apparatus = REZKA_ID;
     let mut map = apparatus_stage_map(order_id, apparatus);
     map.nodes
         .iter_mut()
         .find(|node| node.kind == ProductionMapNodeKind::Apparatus)
         .expect("rezka node")
         .rezka_kadr_count = Some(1);
-    service
-        .upsert_map(map)
-        .await
-        .expect("map");
+    service.upsert_map(map).await.expect("map");
     service
         .apply_apparatus_queue_action_with_progress(
             apparatus,
@@ -3777,7 +4300,10 @@ async fn pause_final_output_can_be_received_as_finished_goods() {
         )
         .await
         .expect("receive pause output");
-    assert_eq!(receipt.batch.wip_status, OrderProgressBatchWipStatus::Processed);
+    assert_eq!(
+        receipt.batch.wip_status,
+        OrderProgressBatchWipStatus::Processed
+    );
     assert_eq!(receipt.batch.status_detail.flow_status, "accepted_to_stock");
     assert_eq!(receipt.stock.qty, 11.0);
     assert_eq!(receipt.stock.uom, "kg");
@@ -3792,15 +4318,31 @@ async fn pause_first_stage_batch(
     actor: &QueueActionActor,
     qty: f64,
 ) -> Result<OrderProgressBatch, ProductionMapError> {
+    let assigned_apparatus = [first.to_string()];
     service
-        .apply_apparatus_queue_action_with_progress(
-            first,
+        .apply_apparatus_queue_action_with_material_scan_and_progress(MaterialScanProgressAction {
+            apparatus: first,
             order_id,
-            queue_state::ApparatusQueueAction::Start,
-            &[first.to_string()],
-            actor.clone(),
-            QueueProgressInput::default(),
-        )
+            action: queue_state::ApparatusQueueAction::Start,
+            assigned_apparatus: &assigned_apparatus,
+            actor: actor.clone(),
+            material_barcode: "",
+            state_material_barcodes: &[],
+            progress: QueueProgressInput::default(),
+            qolip_validation: ApparatusId::new(first.to_string()).ok().and_then(|id| {
+                TrustedQolipStartValidation::from_preparations(
+                    &id,
+                    order_id,
+                    &[QolipOrderStartPreparation {
+                        spec: QolipProductSpec {
+                            qolip_code: "QOLIP-FLOW-TEST".to_string(),
+                            ..QolipProductSpec::default()
+                        },
+                        checkout: None,
+                    }],
+                )
+            }),
+        })
         .await?;
     let paused = service
         .apply_apparatus_queue_action_with_progress(
@@ -3819,6 +4361,41 @@ async fn pause_first_stage_batch(
     paused
         .progress_batch
         .ok_or(ProductionMapError::ProgressBatchNotFound)
+}
+
+async fn start_first_stage(
+    service: &ProductionMapService,
+    order_id: &str,
+    apparatus: &str,
+    actor: QueueActionActor,
+) -> Result<ApparatusQueueActionResult, ProductionMapError> {
+    let assigned_apparatus = [apparatus.to_string()];
+    let apparatus_id =
+        ApparatusId::new(apparatus.to_string()).map_err(|_| ProductionMapError::MissingId)?;
+    let qolip_validation = TrustedQolipStartValidation::from_preparations(
+        &apparatus_id,
+        order_id,
+        &[QolipOrderStartPreparation {
+            spec: QolipProductSpec {
+                qolip_code: "QOLIP-FLOW-TEST".to_string(),
+                ..QolipProductSpec::default()
+            },
+            checkout: None,
+        }],
+    );
+    service
+        .apply_apparatus_queue_action_with_material_scan_and_progress(MaterialScanProgressAction {
+            apparatus,
+            order_id,
+            action: queue_state::ApparatusQueueAction::Start,
+            assigned_apparatus: &assigned_apparatus,
+            actor,
+            material_barcode: "",
+            state_material_barcodes: &[],
+            progress: QueueProgressInput::default(),
+            qolip_validation,
+        })
+        .await
 }
 
 fn test_progress_batch(
@@ -3878,7 +4455,7 @@ fn test_progress_batch(
 #[tokio::test]
 async fn progress_batch_correction_updates_owned_waiting_batch_with_revision() {
     let store = std::sync::Arc::new(MemoryProductionMapStore::new());
-    let service = ProductionMapService::new(store.clone());
+    let service = default_service_with_store(store.clone()).await;
     let actor = QueueActionActor {
         role: "aparatchi".to_string(),
         ref_: "worker-correction".to_string(),
@@ -3887,7 +4464,7 @@ async fn progress_batch_correction_updates_owned_waiting_batch_with_revision() {
     let mut waiting = test_progress_batch(
         "batch-correction",
         "order-correction",
-        "Rezka 1",
+        REZKA_ID,
         "qr-correction",
         OrderProgressBatchWipStatus::Waiting,
         "",
@@ -3959,13 +4536,16 @@ async fn progress_batch_correction_updates_owned_waiting_batch_with_revision() {
             &actor,
         )
         .await;
-    assert_eq!(stale, Err(ProductionMapError::ProgressBatchCorrectionConflict));
+    assert_eq!(
+        stale,
+        Err(ProductionMapError::ProgressBatchCorrectionConflict)
+    );
 }
 
 #[tokio::test]
 async fn progress_batch_correction_rejects_in_use_or_other_workers_batch() {
     let store = std::sync::Arc::new(MemoryProductionMapStore::new());
-    let service = ProductionMapService::new(store.clone());
+    let service = default_service_with_store(store.clone()).await;
     let owner = QueueActionActor {
         role: "aparatchi".to_string(),
         ref_: "worker-owner".to_string(),
@@ -3974,7 +4554,7 @@ async fn progress_batch_correction_rejects_in_use_or_other_workers_batch() {
     let mut in_use = test_progress_batch(
         "batch-in-use-correction",
         "order-correction",
-        "Laminatsiya 1",
+        LAMINATION_1_ID,
         "qr-in-use-correction",
         OrderProgressBatchWipStatus::InUse,
         "",
@@ -4026,6 +4606,7 @@ fn two_stage_map(id: &str, first: &str, second: &str) -> ProductionMapDefinition
             id: "second".to_string(),
             kind: ProductionMapNodeKind::Apparatus,
             title: second.to_string(),
+            apparatus_id: second.to_string(),
             formula: None,
             role_code: String::new(),
             item_code: String::new(),
@@ -4035,6 +4616,7 @@ fn two_stage_map(id: &str, first: &str, second: &str) -> ProductionMapDefinition
             alternative_group_id: String::new(),
             alternative_group_label: String::new(),
             alternative_assigned_title: String::new(),
+            alternative_assigned_apparatus_id: String::new(),
             rezka_kadr_count: None,
             rezka_label_length: None,
             x: 0.0,
@@ -4078,6 +4660,7 @@ fn three_stage_map(
             id: "third".to_string(),
             kind: ProductionMapNodeKind::Apparatus,
             title: third.to_string(),
+            apparatus_id: third.to_string(),
             formula: None,
             role_code: String::new(),
             item_code: String::new(),
@@ -4087,6 +4670,7 @@ fn three_stage_map(
             alternative_group_id: String::new(),
             alternative_group_label: String::new(),
             alternative_assigned_title: String::new(),
+            alternative_assigned_apparatus_id: String::new(),
             rezka_kadr_count: Some(rezka_kadr_count),
             rezka_label_length: None,
             x: 0.0,
@@ -4133,7 +4717,12 @@ fn unassigned_alternative_next_stage_map(
         ProductionMapNode {
             id: "second".to_string(),
             kind: ProductionMapNodeKind::Apparatus,
-            title: second.to_string(),
+            title: if second == LAMINATION_1_ID {
+                "Laminatsiya 1".to_string()
+            } else {
+                second.to_string()
+            },
+            apparatus_id: second.to_string(),
             formula: None,
             role_code: String::new(),
             item_code: String::new(),
@@ -4143,6 +4732,7 @@ fn unassigned_alternative_next_stage_map(
             alternative_group_id: "alt_laminatsiya".to_string(),
             alternative_group_label: "Laminatsiya".to_string(),
             alternative_assigned_title: String::new(),
+            alternative_assigned_apparatus_id: String::new(),
             rezka_kadr_count: None,
             rezka_label_length: None,
             x: 0.0,
@@ -4154,7 +4744,12 @@ fn unassigned_alternative_next_stage_map(
         ProductionMapNode {
             id: "third".to_string(),
             kind: ProductionMapNodeKind::Apparatus,
-            title: third.to_string(),
+            title: if third == LAMINATION_2_ID {
+                "Laminatsiya 2".to_string()
+            } else {
+                third.to_string()
+            },
+            apparatus_id: third.to_string(),
             formula: None,
             role_code: String::new(),
             item_code: String::new(),
@@ -4164,6 +4759,7 @@ fn unassigned_alternative_next_stage_map(
             alternative_group_id: "alt_laminatsiya".to_string(),
             alternative_group_label: "Laminatsiya".to_string(),
             alternative_assigned_title: String::new(),
+            alternative_assigned_apparatus_id: String::new(),
             rezka_kadr_count: None,
             rezka_label_length: None,
             x: 180.0,

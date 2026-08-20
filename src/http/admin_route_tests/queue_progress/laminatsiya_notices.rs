@@ -14,7 +14,7 @@ async fn laminatsiya_complete_with_both_leftovers_stays_in_history() {
             principal_role: PrincipalRole::Aparatchi,
             principal_ref: "worker-laminatsiya-notice".to_string(),
             role_id: "aparatchi".to_string(),
-            assigned_apparatus: vec!["Laminatsiya 1".to_string()],
+            assigned_apparatus: vec!["apparatus:default:asset-007".to_string()],
             assigned_item_groups: Vec::new(),
         })
         .await
@@ -38,7 +38,7 @@ async fn laminatsiya_complete_with_both_leftovers_stays_in_history() {
                 "zakaz-laminatsiya-notice",
                 "Laminatsiya notice order",
                 "9325",
-                "Laminatsiya 1",
+                "apparatus:default:asset-007",
                 2,
                 950.0,
             ),
@@ -54,7 +54,7 @@ async fn laminatsiya_complete_with_both_leftovers_stays_in_history() {
             "/v1/mobile/admin/production-maps/queue-action",
             &worker_token,
             r#"{
-                "apparatus":"Laminatsiya 1",
+                "apparatus":"apparatus:default:asset-007",
                 "order_id":"zakaz-laminatsiya-notice",
                 "action":"start"
             }"#,
@@ -70,7 +70,7 @@ async fn laminatsiya_complete_with_both_leftovers_stays_in_history() {
             "/v1/mobile/admin/production-maps/queue-action",
             &worker_token,
             r#"{
-                "apparatus":"Laminatsiya 1",
+                "apparatus":"apparatus:default:asset-007",
                 "order_id":"zakaz-laminatsiya-notice",
                 "action":"complete",
                 "lamination_print_leftover_rolls":1.5,

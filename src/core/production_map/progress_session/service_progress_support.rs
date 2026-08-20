@@ -2,7 +2,8 @@ use super::*;
 
 use super::progress::{
     actor_display_name, non_empty_or, progress_batch_id, progress_event_id,
-    progress_label_item_name, progress_qr_payload, queue_action_str, valid_progress_qty,
+    progress_label_item_name, progress_qr_payload, qolip_lineage_from_batch, queue_action_str,
+    valid_progress_qty, QolipLineage,
 };
 use super::service_progress_metrics::ProgressMetrics;
 
@@ -11,24 +12,32 @@ pub(super) fn start_session_payload(
     input_progress_batch: Option<&OrderProgressBatch>,
 ) -> serde_json::Value {
     let (batch_id, qr_payload, apparatus) = input_progress_batch_fields(input_progress_batch);
-    serde_json::json!({
+    let mut payload = serde_json::json!({
         "started_by": actor,
         "input_progress_batch_id": batch_id,
         "input_progress_qr_payload": qr_payload,
         "input_progress_apparatus": apparatus,
-    })
+    });
+    if let Some(lineage) = input_progress_batch.and_then(qolip_lineage_from_batch) {
+        lineage.write_to_payload(&mut payload);
+    }
+    payload
 }
 
 pub(super) fn start_event_payload(
     input_progress_batch: Option<&OrderProgressBatch>,
 ) -> serde_json::Value {
     let (batch_id, qr_payload, apparatus) = input_progress_batch_fields(input_progress_batch);
-    serde_json::json!({
+    let mut payload = serde_json::json!({
         "event": "start",
         "input_progress_batch_id": batch_id,
         "input_progress_qr_payload": qr_payload,
         "input_progress_apparatus": apparatus,
-    })
+    });
+    if let Some(lineage) = input_progress_batch.and_then(qolip_lineage_from_batch) {
+        lineage.write_to_payload(&mut payload);
+    }
+    payload
 }
 
 fn input_progress_batch_fields(
@@ -243,12 +252,8 @@ fn batch_status_for_progress_action(
 ) -> Result<OrderProgressBatchStatus, ProductionMapError> {
     match action {
         queue_state::ApparatusQueueAction::Pause => Ok(OrderProgressBatchStatus::Paused),
-        queue_state::ApparatusQueueAction::DetachRoll => {
-            Ok(OrderProgressBatchStatus::RollDetached)
-        }
-        queue_state::ApparatusQueueAction::RollComplete => {
-            Ok(OrderProgressBatchStatus::Completed)
-        }
+        queue_state::ApparatusQueueAction::DetachRoll => Ok(OrderProgressBatchStatus::RollDetached),
+        queue_state::ApparatusQueueAction::RollComplete => Ok(OrderProgressBatchStatus::Completed),
         queue_state::ApparatusQueueAction::Complete => Ok(OrderProgressBatchStatus::Completed),
         _ => Err(ProductionMapError::ProgressInputInvalid),
     }
@@ -295,7 +300,7 @@ pub(super) fn progress_batch_record(
         wip_status: OrderProgressBatchWipStatus::Waiting,
         status_detail: OrderProgressBatchStatusDetail::default(),
         current_apparatus: context.apparatus.to_string(),
-        current_apparatus_key: queue_state::apparatus_search_key(context.apparatus),
+        current_apparatus_key: super::types::canonical_apparatus_key(context.apparatus),
         current_location: wip_waiting_location(context.apparatus),
         next_apparatus: chain::next_work_stage_station(input.order_map, context.apparatus)
             .unwrap_or_default(),
@@ -324,6 +329,9 @@ pub(super) fn progress_batch_record(
             input.description,
         ),
     };
+    if let Some(lineage) = QolipLineage::from_payload(&context.session.payload_json) {
+        lineage.write_to_payload(&mut batch.payload_json);
+    }
     if let Some(gross_qty) = input.frame_gross_qty {
         if !batch.payload_json.is_object() {
             batch.payload_json = serde_json::json!({});
@@ -365,10 +373,10 @@ pub(super) fn apply_rezka_frame_metadata(
 }
 
 fn progress_apparatus_node_matches(node: &ProductionMapNode, apparatus: &str) -> bool {
-    queue_state::apparatus_titles_match(&node.title, apparatus)
-        || (!node.alternative_assigned_title.trim().is_empty()
-            && queue_state::apparatus_titles_match(
-                &node.alternative_assigned_title,
+    super::types::apparatus_ids_match(&node.apparatus_id, apparatus)
+        || (!node.alternative_assigned_apparatus_id.trim().is_empty()
+            && super::types::apparatus_ids_match(
+                &node.alternative_assigned_apparatus_id,
                 apparatus,
             ))
 }
@@ -493,33 +501,12 @@ pub(super) fn progress_session_payload(
     })
 }
 
-pub(super) fn preserve_qolip_code(
+pub(super) fn preserve_qolip_lineage(
     current: &OrderRunSession,
     mut replacement: serde_json::Value,
 ) -> serde_json::Value {
-    let qolip_code = current
-        .payload_json
-        .get("qolip_code")
-        .and_then(serde_json::Value::as_str)
-        .map(str::trim)
-        .filter(|value| !value.is_empty());
-    let qolip_codes = current
-        .payload_json
-        .get("qolip_codes")
-        .and_then(serde_json::Value::as_array)
-        .filter(|values| !values.is_empty())
-        .cloned();
-    if qolip_code.is_none() && qolip_codes.is_none() {
-        return replacement;
-    }
-    if !replacement.is_object() {
-        replacement = serde_json::json!({});
-    }
-    if let Some(qolip_code) = qolip_code {
-        replacement["qolip_code"] = serde_json::json!(qolip_code);
-    }
-    if let Some(qolip_codes) = qolip_codes {
-        replacement["qolip_codes"] = serde_json::Value::Array(qolip_codes);
+    if let Some(lineage) = QolipLineage::from_payload(&current.payload_json) {
+        lineage.write_to_payload(&mut replacement);
     }
     replacement
 }
@@ -626,7 +613,7 @@ pub(super) fn resumed_handoff_session_payload(
     payload["input_progress_apparatus"] = serde_json::json!(input_progress.apparatus);
     payload["worker_handoff"] = serde_json::json!(false);
     payload["roll_removed_from_apparatus"] = serde_json::json!(false);
-    preserve_qolip_code(current, payload)
+    preserve_qolip_lineage(current, payload)
 }
 
 pub(super) fn resumed_batch_payload(
@@ -655,7 +642,7 @@ pub(super) fn resumed_session_payload(
     payload["resumed_batch_id"] = serde_json::json!(output_batch.batch_id);
     payload["resumed_qr_payload"] = serde_json::json!(output_batch.qr_payload);
     payload["resumed_without_progress_qr"] = serde_json::json!(resumed_without_progress_qr);
-    preserve_qolip_code(current, payload)
+    preserve_qolip_lineage(current, payload)
 }
 
 pub(super) fn resume_event_payload() -> serde_json::Value {
@@ -671,7 +658,7 @@ pub(super) fn wip_batch_in_use(
     clear_wip_processing_fields(&mut batch);
     batch.wip_status = OrderProgressBatchWipStatus::InUse;
     batch.current_apparatus = apparatus.trim().to_string();
-    batch.current_apparatus_key = queue_state::apparatus_search_key(apparatus);
+    batch.current_apparatus_key = super::types::canonical_apparatus_key(apparatus);
     batch.current_location = apparatus.trim().to_string();
     batch.used_by_session_id = session_id.trim().to_string();
     batch.used_by_apparatus = apparatus.trim().to_string();
@@ -683,13 +670,11 @@ pub(super) fn wip_batch_in_use(
 pub(super) fn wip_batch_was_consumed_by_producer(batch: &OrderProgressBatch) -> bool {
     matches!(
         batch.action,
-        queue_state::ApparatusQueueAction::Pause
-            | queue_state::ApparatusQueueAction::DetachRoll
-    )
-        && batch.wip_status == OrderProgressBatchWipStatus::Processed
-        && queue_state::apparatus_titles_match(&batch.processed_by_apparatus, &batch.apparatus)
+        queue_state::ApparatusQueueAction::Pause | queue_state::ApparatusQueueAction::DetachRoll
+    ) && batch.wip_status == OrderProgressBatchWipStatus::Processed
+        && super::types::apparatus_ids_match(&batch.processed_by_apparatus, &batch.apparatus)
         && (batch.used_by_apparatus.trim().is_empty()
-            || queue_state::apparatus_titles_match(&batch.used_by_apparatus, &batch.apparatus))
+            || super::types::apparatus_ids_match(&batch.used_by_apparatus, &batch.apparatus))
         && (batch.processed_by_session_id.trim().is_empty()
             || batch.processed_by_session_id.trim() == batch.session_id.trim())
 }
@@ -701,7 +686,7 @@ pub(super) fn restore_self_consumed_wip(batch: &mut OrderProgressBatch) -> bool 
     clear_wip_usage_fields(batch);
     batch.wip_status = OrderProgressBatchWipStatus::Waiting;
     batch.current_apparatus = batch.apparatus.trim().to_string();
-    batch.current_apparatus_key = queue_state::apparatus_search_key(&batch.apparatus);
+    batch.current_apparatus_key = super::types::canonical_apparatus_key(&batch.apparatus);
     batch.current_location = wip_waiting_location(&batch.apparatus);
     if !batch.payload_json.is_object() {
         batch.payload_json = serde_json::json!({});
@@ -735,7 +720,7 @@ pub(super) fn repair_self_consumed_sibling_lineage(
 ) -> bool {
     if batch.parent_batch_id.trim() != recovered_parent.batch_id.trim()
         || batch.session_id.trim() != recovered_parent.session_id.trim()
-        || !queue_state::apparatus_titles_match(&batch.apparatus, &recovered_parent.apparatus)
+        || !super::types::apparatus_ids_match(&batch.apparatus, &recovered_parent.apparatus)
     {
         return false;
     }
@@ -755,7 +740,7 @@ pub(super) fn restore_misbound_output_wip(
     clear_wip_usage_fields(&mut batch);
     batch.wip_status = OrderProgressBatchWipStatus::Waiting;
     batch.current_apparatus = batch.apparatus.trim().to_string();
-    batch.current_apparatus_key = queue_state::apparatus_search_key(&batch.apparatus);
+    batch.current_apparatus_key = super::types::canonical_apparatus_key(&batch.apparatus);
     batch.current_location = wip_waiting_location(&batch.apparatus);
     if !batch.payload_json.is_object() {
         batch.payload_json = serde_json::json!({});
@@ -804,7 +789,7 @@ pub(super) fn wip_batch_removed_from_apparatus(
 ) -> OrderProgressBatch {
     batch.wip_status = OrderProgressBatchWipStatus::Waiting;
     batch.current_apparatus = apparatus.trim().to_string();
-    batch.current_apparatus_key = queue_state::apparatus_search_key(apparatus);
+    batch.current_apparatus_key = super::types::canonical_apparatus_key(apparatus);
     batch.current_location = format!("{} olib tashlandi", apparatus.trim());
     batch.used_by_session_id.clear();
     batch.used_by_apparatus.clear();
@@ -828,7 +813,7 @@ pub(super) fn wip_batch_processed(
 ) -> OrderProgressBatch {
     batch.wip_status = OrderProgressBatchWipStatus::Processed;
     batch.current_apparatus = apparatus.trim().to_string();
-    batch.current_apparatus_key = queue_state::apparatus_search_key(apparatus);
+    batch.current_apparatus_key = super::types::canonical_apparatus_key(apparatus);
     batch.current_location = apparatus.trim().to_string();
     batch.processed_by_session_id = session_id.trim().to_string();
     batch.processed_by_apparatus = apparatus.trim().to_string();
@@ -843,7 +828,11 @@ pub(super) fn sync_wip_payload_fields(batch: &mut OrderProgressBatch) {
     }
     batch.refresh_status_detail();
     if batch.current_apparatus_key.trim().is_empty() {
-        batch.current_apparatus_key = queue_state::apparatus_search_key(&batch.current_apparatus);
+        batch.current_apparatus_key =
+            super::types::canonical_apparatus_key(&batch.current_apparatus);
+    }
+    if let Some(lineage) = QolipLineage::from_payload(&batch.payload_json) {
+        lineage.write_to_payload(&mut batch.payload_json);
     }
     batch.payload_json["status_detail"] = serde_json::json!(batch.status_detail);
     batch.payload_json["wip_status"] = serde_json::json!(batch.wip_status.as_str());

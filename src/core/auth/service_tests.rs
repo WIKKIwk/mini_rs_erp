@@ -8,7 +8,7 @@ use super::ports::{
     AdminAccessState, AdminAccessStateLookup, AuthPortError, CustomerLookup, CustomerRecord,
     SupplierLookup, SupplierRecord, WorkerLookup, WorkerRecord,
 };
-use super::service::{AuthService, normalize_phone};
+use super::service::{AuthError, AuthService, normalize_phone};
 use crate::config::AppConfig;
 
 fn config() -> AppConfig {
@@ -134,7 +134,9 @@ async fn supplier_login_uses_deterministic_code() {
             phone: "+998901234567".to_string(),
         }],
     });
-    let states = Arc::new(FakeStateLookup::default());
+    let states = Arc::new(FakeStateLookup {
+        states: BTreeMap::from([("SUP-001".to_string(), AdminAccessState::default())]),
+    });
     let auth = AuthService::new(&config()).with_supplier_dependencies(suppliers, states);
 
     let principal = auth
@@ -144,6 +146,24 @@ async fn supplier_login_uses_deterministic_code() {
 
     assert_eq!(principal.role, PrincipalRole::Supplier);
     assert_eq!(principal.ref_, "SUP-001");
+}
+
+#[tokio::test]
+async fn supplier_login_rejects_missing_access_state_as_internal_error() {
+    let suppliers = Arc::new(FakeSupplierLookup {
+        suppliers: vec![SupplierRecord {
+            id: "SUP-MISSING-STATE".to_string(),
+            name: "Missing state".to_string(),
+            phone: "+998901234567".to_string(),
+        }],
+    });
+    let auth = AuthService::new(&config())
+        .with_supplier_dependencies(suppliers, Arc::new(FakeStateLookup::default()));
+
+    assert_eq!(
+        auth.login("+998901234567", "104LJINSVVO5").await,
+        Err(AuthError::Internal)
+    );
 }
 
 #[tokio::test]

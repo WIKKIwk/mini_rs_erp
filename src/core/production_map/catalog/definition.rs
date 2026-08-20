@@ -2,6 +2,7 @@ use std::collections::BTreeMap;
 
 use serde::{Deserialize, Serialize};
 
+use crate::core::apparatus_standard::ApparatusId;
 use crate::core::quantity::deserialize_optional_integer_count;
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -38,6 +39,10 @@ pub struct ProductionMapNode {
     pub id: String,
     pub kind: ProductionMapNodeKind,
     pub title: String,
+    /// Immutable canonical apparatus identity. It is required when `kind` is
+    /// `Apparatus`; `title` is a display/history snapshot only.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub apparatus_id: String,
     #[serde(default)]
     pub formula: Option<ProductionFormula>,
     #[serde(default)]
@@ -56,6 +61,10 @@ pub struct ProductionMapNode {
     pub alternative_group_label: String,
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub alternative_assigned_title: String,
+    /// Canonical identity selected for an alternative group. The title above
+    /// remains display/history metadata and is never used for selection.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub alternative_assigned_apparatus_id: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub rezka_kadr_count: Option<i64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -64,6 +73,35 @@ pub struct ProductionMapNode {
     pub x: f64,
     #[serde(default)]
     pub y: f64,
+}
+
+impl ProductionMapNode {
+    /// Resolve the effective apparatus reference without consulting the
+    /// display title. The string field is retained only for serde/API
+    /// compatibility; live map logic must use this validated ID.
+    pub fn canonical_apparatus_id(&self) -> Option<ApparatusId> {
+        let assigned = self.alternative_assigned_apparatus_id.trim();
+        let value = if assigned.is_empty() {
+            self.apparatus_id.trim()
+        } else {
+            assigned
+        };
+        ApparatusId::new(value.to_string()).ok()
+    }
+
+    /// Resolve the unassigned/base apparatus reference for alternative-group
+    /// topology checks.
+    pub fn base_apparatus_id(&self) -> Option<ApparatusId> {
+        ApparatusId::new(self.apparatus_id.trim().to_string()).ok()
+    }
+
+    pub fn set_apparatus_id(&mut self, apparatus_id: &ApparatusId) {
+        self.apparatus_id = apparatus_id.to_string();
+    }
+
+    pub fn set_alternative_assigned_apparatus_id(&mut self, apparatus_id: &ApparatusId) {
+        self.alternative_assigned_apparatus_id = apparatus_id.to_string();
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

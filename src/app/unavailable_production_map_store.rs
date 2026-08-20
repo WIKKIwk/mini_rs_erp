@@ -2,6 +2,7 @@ use std::collections::BTreeMap;
 
 use async_trait::async_trait;
 
+use crate::core::apparatus_standard::ApparatusId;
 use crate::core::production_map::{
     ApparatusMaterialRule, ApparatusQueueActionEvent, ApparatusQueuePolicy,
     ProductionMapDefinition, ProductionMapError, ProductionMapStorePort, QueueActionActor,
@@ -61,13 +62,14 @@ impl ProductionMapStorePort for UnavailableProductionMapStore {
 
     async fn apparatus_queue_policies(
         &self,
-    ) -> Result<BTreeMap<String, ApparatusQueuePolicy>, ProductionMapError> {
+    ) -> Result<crate::core::production_map::ApparatusQueuePolicyMap, ProductionMapError> {
         Err(ProductionMapError::StoreFailed)
     }
 
     async fn put_apparatus_queue_policy(
         &self,
-        _apparatus: &str,
+        _apparatus_id: &ApparatusId,
+        _apparatus_display: &str,
         _policy: ApparatusQueuePolicy,
         _actor: &QueueActionActor,
     ) -> Result<(), ProductionMapError> {

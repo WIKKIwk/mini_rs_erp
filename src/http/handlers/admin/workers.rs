@@ -1,6 +1,7 @@
 use super::*;
 
 use crate::core::admin::models::AdminWorkerDetail;
+use crate::core::apparatus_standard::ApparatusId;
 use crate::core::production_map::{OrderProgressBatch, OrderRunSession, ProductionOrderLogEntry};
 use crate::core::worker_groups::{WorkerGroupError, WorkerGroupRecord, WorkerGroupUpsert};
 use crate::core::workers::Worker;
@@ -9,7 +10,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 #[derive(Debug, Deserialize)]
 pub struct WorkerGroupQuery {
-    apparatus: Option<String>,
+    apparatus_id: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -48,6 +49,7 @@ struct WorkerDeletionCheck {
 
 #[derive(Debug, Serialize)]
 struct WorkerGroupResponse {
+    apparatus_id: ApparatusId,
     apparatus: String,
     group_code: String,
     shift: String,
@@ -410,6 +412,7 @@ async fn enrich_worker_groups(
                 .filter_map(|id| workers.get(id).cloned())
                 .collect::<Vec<_>>();
             WorkerGroupResponse {
+                apparatus_id: group.apparatus_id,
                 apparatus: group.apparatus,
                 group_code: group.group_code,
                 shift: group.shift,
@@ -428,6 +431,7 @@ async fn enrich_worker_groups(
 fn worker_group_error(error: WorkerGroupError) -> AdminError {
     match error {
         WorkerGroupError::MissingApparatus => bad_request("apparatus is required"),
+        WorkerGroupError::InvalidApparatusId => bad_request("apparatus id is invalid"),
         WorkerGroupError::InvalidGroup => bad_request("worker group is invalid"),
         WorkerGroupError::InvalidShift => bad_request("worker shift is invalid"),
         WorkerGroupError::InvalidSchedule => bad_request("worker schedule is invalid"),
@@ -437,4 +441,13 @@ fn worker_group_error(error: WorkerGroupError) -> AdminError {
         WorkerGroupError::WorkerNotFound => bad_request("worker not found"),
         WorkerGroupError::StoreFailed => server_error("worker group store failed"),
     }
+}
+
+fn parse_apparatus_id(value: Option<&str>) -> Result<Option<ApparatusId>, AdminError> {
+    value
+        .map(|value| {
+            ApparatusId::new(value.trim().to_string())
+                .map_err(|_| bad_request("apparatus id is invalid"))
+        })
+        .transpose()
 }

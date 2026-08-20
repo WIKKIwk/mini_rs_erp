@@ -453,6 +453,11 @@ fn test_node(
         id: id.to_string(),
         kind,
         title: title.to_string(),
+        apparatus_id: if id == "apparatus-1" {
+            "apparatus:default:bosma_7".to_string()
+        } else {
+            String::new()
+        },
         formula: None,
         role_code: String::new(),
         item_code: String::new(),
@@ -462,6 +467,7 @@ fn test_node(
         alternative_group_id: String::new(),
         alternative_group_label: String::new(),
         alternative_assigned_title: String::new(),
+        alternative_assigned_apparatus_id: String::new(),
         rezka_kadr_count: None,
         rezka_label_length: None,
         x,

@@ -14,7 +14,7 @@ async fn rezka_complete_requires_or_persists_progress_metrics() {
             principal_role: PrincipalRole::Aparatchi,
             principal_ref: "worker-rezka-complete".to_string(),
             role_id: "aparatchi".to_string(),
-            assigned_apparatus: vec!["Rezka".to_string()],
+            assigned_apparatus: vec!["apparatus:default:asset-010".to_string()],
             assigned_item_groups: Vec::new(),
         })
         .await
@@ -33,7 +33,7 @@ async fn rezka_complete_requires_or_persists_progress_metrics() {
                 "zakaz-rezka-complete",
                 "Rezka complete order",
                 "9325",
-                "Rezka",
+                "apparatus:default:asset-010",
             ),
         ))
         .await
@@ -47,7 +47,7 @@ async fn rezka_complete_requires_or_persists_progress_metrics() {
             "/v1/mobile/admin/production-maps/queue-action",
             &worker_token,
             r#"{
-                "apparatus":"Rezka",
+                "apparatus":"apparatus:default:asset-010",
                 "order_id":"zakaz-rezka-complete",
                 "action":"start"
             }"#,
@@ -63,7 +63,7 @@ async fn rezka_complete_requires_or_persists_progress_metrics() {
             "/v1/mobile/admin/production-maps/queue-action",
             &worker_token,
             r#"{
-                "apparatus":"Rezka",
+                "apparatus":"apparatus:default:asset-010",
                 "order_id":"zakaz-rezka-complete",
                 "action":"complete",
                 "produced_qty":32,
@@ -86,7 +86,7 @@ async fn rezka_complete_requires_or_persists_progress_metrics() {
             "/v1/mobile/admin/production-maps/queue-action",
             &worker_token,
             r#"{
-                "apparatus":"Rezka",
+                "apparatus":"apparatus:default:asset-010",
                 "order_id":"zakaz-rezka-complete",
                 "action":"complete",
                 "produced_qty":32,
@@ -109,7 +109,7 @@ async fn rezka_complete_requires_or_persists_progress_metrics() {
             "/v1/mobile/admin/production-maps/queue-action",
             &worker_token,
             r#"{
-                "apparatus":"Rezka",
+                "apparatus":"apparatus:default:asset-010",
                 "order_id":"zakaz-rezka-complete",
                 "action":"complete",
                 "produced_qty":32,
@@ -166,7 +166,7 @@ async fn rezka_explicit_frame_metrics_are_persisted_and_printed_individually() {
             principal_role: PrincipalRole::Aparatchi,
             principal_ref: "worker-rezka-frame-values".to_string(),
             role_id: "aparatchi".to_string(),
-            assigned_apparatus: vec!["Rezka".to_string()],
+            assigned_apparatus: vec!["apparatus:default:asset-010".to_string()],
             assigned_item_groups: Vec::new(),
         })
         .await
@@ -190,7 +190,7 @@ async fn rezka_explicit_frame_metrics_are_persisted_and_printed_individually() {
                 "zakaz-rezka-frame-values",
                 "Rezka frame values",
                 "9328",
-                "Rezka",
+                "apparatus:default:asset-010",
             ),
         ))
         .await
@@ -204,7 +204,7 @@ async fn rezka_explicit_frame_metrics_are_persisted_and_printed_individually() {
             "/v1/mobile/admin/production-maps/queue-action",
             &worker_token,
             r#"{
-                "apparatus":"Rezka",
+                "apparatus":"apparatus:default:asset-010",
                 "order_id":"zakaz-rezka-frame-values",
                 "action":"start"
             }"#,
@@ -214,7 +214,7 @@ async fn rezka_explicit_frame_metrics_are_persisted_and_printed_individually() {
     assert_eq!(started.status(), StatusCode::OK);
 
     let mismatched_frames = serde_json::json!({
-        "apparatus": "Rezka",
+        "apparatus": "apparatus:default:asset-010",
         "order_id": "zakaz-rezka-frame-values",
         "action": "complete",
         "rezka_frames": [
@@ -241,7 +241,7 @@ async fn rezka_explicit_frame_metrics_are_persisted_and_printed_individually() {
     );
 
     let frame_request = serde_json::json!({
-        "apparatus": "Rezka",
+        "apparatus": "apparatus:default:asset-010",
         "order_id": "zakaz-rezka-frame-values",
         "action": "complete",
         "printer": "zebra",
@@ -359,7 +359,7 @@ async fn rezka_explicit_frame_metrics_are_persisted_and_printed_individually() {
     let persisted = router
         .oneshot(request(
             "GET",
-            "/v1/mobile/admin/production-maps/wip-batches?apparatus=Rezka&status=all&order_id=zakaz-rezka-frame-values",
+            "/v1/mobile/admin/production-maps/wip-batches?apparatus=apparatus%3Adefault%3Aasset-010&status=all&order_id=zakaz-rezka-frame-values",
             &admin_token,
         ))
         .await
@@ -395,7 +395,7 @@ async fn rezka_roll_complete_skips_issue_frame_qr_and_persists_issue() {
             principal_role: PrincipalRole::Aparatchi,
             principal_ref: "worker-rezka-frame-issue".to_string(),
             role_id: "aparatchi".to_string(),
-            assigned_apparatus: vec!["Rezka".to_string()],
+            assigned_apparatus: vec!["apparatus:default:asset-010".to_string()],
             assigned_item_groups: Vec::new(),
         })
         .await
@@ -415,7 +415,7 @@ async fn rezka_roll_complete_skips_issue_frame_qr_and_persists_issue() {
                 "zakaz-rezka-frame-issue",
                 "Rezka frame issue",
                 "9329",
-                "Rezka",
+                "apparatus:default:asset-010",
             ),
         ))
         .await
@@ -429,7 +429,7 @@ async fn rezka_roll_complete_skips_issue_frame_qr_and_persists_issue() {
             "/v1/mobile/admin/production-maps/queue-action",
             &worker_token,
             r#"{
-                "apparatus":"Rezka",
+                "apparatus":"apparatus:default:asset-010",
                 "order_id":"zakaz-rezka-frame-issue",
                 "action":"start"
             }"#,
@@ -445,7 +445,7 @@ async fn rezka_roll_complete_skips_issue_frame_qr_and_persists_issue() {
             "/v1/mobile/admin/production-maps/queue-action",
             &worker_token,
             r#"{
-                "apparatus":"Rezka",
+                "apparatus":"apparatus:default:asset-010",
                 "order_id":"zakaz-rezka-frame-issue",
                 "action":"roll_complete",
                 "rezka_frames":[
@@ -491,7 +491,7 @@ async fn rezka_roll_complete_skips_issue_frame_qr_and_persists_issue() {
             "/v1/mobile/admin/production-maps/queue-action",
             &worker_token,
             r#"{
-                "apparatus":"Rezka",
+                "apparatus":"apparatus:default:asset-010",
                 "order_id":"zakaz-rezka-frame-issue",
                 "action":"roll_complete",
                 "rezka_frames":[
@@ -512,7 +512,10 @@ async fn rezka_roll_complete_skips_issue_frame_qr_and_persists_issue() {
         "in_progress"
     );
     assert!(all_issue_body["progress_batch"].is_null());
-    assert_eq!(all_issue_body["progress_batches"].as_array().unwrap().len(), 0);
+    assert_eq!(
+        all_issue_body["progress_batches"].as_array().unwrap().len(),
+        0
+    );
     assert_eq!(all_issue_body["prints"].as_array().unwrap().len(), 0);
     assert_eq!(
         all_issue_body["progress_event"]["payload_json"]["rezka_frame_issues"]
@@ -528,7 +531,7 @@ async fn rezka_roll_complete_skips_issue_frame_qr_and_persists_issue() {
             "/v1/mobile/admin/production-maps/queue-action",
             &worker_token,
             r#"{
-                "apparatus":"Rezka",
+                "apparatus":"apparatus:default:asset-010",
                 "order_id":"zakaz-rezka-frame-issue",
                 "action":"complete",
                 "description":"Rezka rulonini chiqarib bo‘lmadi",
@@ -549,7 +552,13 @@ async fn rezka_roll_complete_skips_issue_frame_qr_and_persists_issue() {
         final_issue_body["states"]["zakaz-rezka-frame-issue"],
         "completed"
     );
-    assert_eq!(final_issue_body["progress_batches"].as_array().unwrap().len(), 0);
+    assert_eq!(
+        final_issue_body["progress_batches"]
+            .as_array()
+            .unwrap()
+            .len(),
+        0
+    );
     assert_eq!(final_issue_body["prints"].as_array().unwrap().len(), 0);
 }
 
@@ -567,7 +576,7 @@ async fn rezka_pause_records_quantities_without_waste_and_fans_out_frames() {
             principal_role: PrincipalRole::Aparatchi,
             principal_ref: "worker-rezka-pause".to_string(),
             role_id: "aparatchi".to_string(),
-            assigned_apparatus: vec!["Rezka".to_string()],
+            assigned_apparatus: vec!["apparatus:default:asset-010".to_string()],
             assigned_item_groups: Vec::new(),
         })
         .await
@@ -582,7 +591,7 @@ async fn rezka_pause_records_quantities_without_waste_and_fans_out_frames() {
             "PUT",
             "/v1/mobile/admin/production-maps",
             &admin_token,
-            &pechat_order_map_json("zakaz-rezka-pause", "Rezka pause order", "9326", "Rezka"),
+            &pechat_order_map_json("zakaz-rezka-pause", "Rezka pause order", "9326", "apparatus:default:asset-010"),
         ))
         .await
         .expect("save map");
@@ -595,7 +604,7 @@ async fn rezka_pause_records_quantities_without_waste_and_fans_out_frames() {
             "/v1/mobile/admin/production-maps/queue-action",
             &worker_token,
             r#"{
-                "apparatus":"Rezka",
+                "apparatus":"apparatus:default:asset-010",
                 "order_id":"zakaz-rezka-pause",
                 "action":"start"
             }"#,
@@ -611,7 +620,7 @@ async fn rezka_pause_records_quantities_without_waste_and_fans_out_frames() {
             "/v1/mobile/admin/production-maps/queue-action",
             &worker_token,
             r#"{
-                "apparatus":"Rezka",
+                "apparatus":"apparatus:default:asset-010",
                 "order_id":"zakaz-rezka-pause",
                 "action":"pause",
                 "produced_qty":18,
@@ -633,7 +642,7 @@ async fn rezka_pause_records_quantities_without_waste_and_fans_out_frames() {
             "/v1/mobile/admin/production-maps/queue-action",
             &worker_token,
             r#"{
-                "apparatus":"Rezka",
+                "apparatus":"apparatus:default:asset-010",
                 "order_id":"zakaz-rezka-pause",
                 "action":"pause",
                 "produced_qty":18,
@@ -656,7 +665,7 @@ async fn rezka_pause_records_quantities_without_waste_and_fans_out_frames() {
             "/v1/mobile/admin/production-maps/queue-action",
             &worker_token,
             r#"{
-                "apparatus":"Rezka",
+                "apparatus":"apparatus:default:asset-010",
                 "order_id":"zakaz-rezka-pause",
                 "action":"pause",
                 "produced_qty":18,
@@ -680,7 +689,7 @@ async fn rezka_pause_records_quantities_without_waste_and_fans_out_frames() {
             "/v1/mobile/admin/production-maps/queue-action",
             &worker_token,
             r#"{
-                "apparatus":"Rezka",
+                "apparatus":"apparatus:default:asset-010",
                 "order_id":"zakaz-rezka-pause",
                 "action":"pause",
                 "produced_qty":18,
@@ -710,7 +719,7 @@ async fn rezka_pause_records_quantities_without_waste_and_fans_out_frames() {
             "/v1/mobile/admin/production-maps/queue-action",
             &worker_token,
             r#"{
-                "apparatus":"Rezka",
+                "apparatus":"apparatus:default:asset-010",
                 "order_id":"zakaz-rezka-pause",
                 "action":"resume"
             }"#,
@@ -726,7 +735,7 @@ async fn rezka_pause_records_quantities_without_waste_and_fans_out_frames() {
             "/v1/mobile/admin/production-maps/queue-action",
             &worker_token,
             r#"{
-                "apparatus":"Rezka",
+                "apparatus":"apparatus:default:asset-010",
                 "order_id":"zakaz-rezka-pause",
                 "action":"roll_complete",
                 "produced_qty":18,
@@ -783,7 +792,7 @@ async fn rezka_consumes_laminatsiya_wip_and_creates_distinct_frame_wips() {
             principal_role: PrincipalRole::Aparatchi,
             principal_ref: "worker-rezka-wip-fanout".to_string(),
             role_id: "aparatchi".to_string(),
-            assigned_apparatus: vec!["Laminatsiya".to_string(), "Rezka".to_string()],
+            assigned_apparatus: vec!["apparatus:default:asset-007".to_string(), "apparatus:default:asset-010".to_string()],
             assigned_item_groups: Vec::new(),
         })
         .await
@@ -800,11 +809,12 @@ async fn rezka_consumes_laminatsiya_wip_and_creates_distinct_frame_wips() {
         "order_number": "9327",
         "nodes": [
             {"id": "start", "kind": "start", "title": "Start"},
-            {"id": "laminatsiya", "kind": "apparatus", "title": "Laminatsiya"},
+            {"id": "laminatsiya", "kind": "apparatus", "title": "Laminatsiya", "apparatus_id": "apparatus:default:asset-007"},
             {
                 "id": "rezka",
                 "kind": "apparatus",
                 "title": "Rezka",
+                "apparatus_id": "apparatus:default:asset-010",
                 "rezka_kadr_count": 4,
                 "rezka_label_length": 100
             },
@@ -836,7 +846,7 @@ async fn rezka_consumes_laminatsiya_wip_and_creates_distinct_frame_wips() {
             "/v1/mobile/admin/production-maps/queue-action",
             &worker_token,
             r#"{
-                "apparatus":"Laminatsiya",
+                "apparatus":"apparatus:default:asset-007",
                 "order_id":"zakaz-rezka-wip-fanout",
                 "action":"start"
             }"#,
@@ -852,7 +862,7 @@ async fn rezka_consumes_laminatsiya_wip_and_creates_distinct_frame_wips() {
             "/v1/mobile/admin/production-maps/queue-action",
             &worker_token,
             r#"{
-                "apparatus":"Laminatsiya",
+                "apparatus":"apparatus:default:asset-007",
                 "order_id":"zakaz-rezka-wip-fanout",
                 "action":"pause",
                 "produced_qty":120,
@@ -879,7 +889,7 @@ async fn rezka_consumes_laminatsiya_wip_and_creates_distinct_frame_wips() {
             "/v1/mobile/admin/production-maps/queue-action",
             &worker_token,
             r#"{
-                "apparatus":"Laminatsiya",
+                "apparatus":"apparatus:default:asset-007",
                 "order_id":"zakaz-rezka-wip-fanout",
                 "action":"resume"
             }"#,
@@ -895,7 +905,7 @@ async fn rezka_consumes_laminatsiya_wip_and_creates_distinct_frame_wips() {
             "/v1/mobile/admin/production-maps/queue-action",
             &worker_token,
             r#"{
-                "apparatus":"Laminatsiya",
+                "apparatus":"apparatus:default:asset-007",
                 "order_id":"zakaz-rezka-wip-fanout",
                 "action":"complete",
                 "finished_goods_meter":80,
@@ -928,7 +938,7 @@ async fn rezka_consumes_laminatsiya_wip_and_creates_distinct_frame_wips() {
             &worker_token,
             &format!(
                 r#"{{
-                    "apparatus":"Rezka",
+                    "apparatus":"apparatus:default:asset-010",
                     "order_id":"zakaz-rezka-wip-fanout",
                     "action":"start",
                     "qr_payload":"{source_qr}"
@@ -950,7 +960,7 @@ async fn rezka_consumes_laminatsiya_wip_and_creates_distinct_frame_wips() {
         .expect("rezka queue controls");
     let queue_snapshot_body = json_body(queue_snapshot).await;
     let action_control =
-        &queue_snapshot_body["queue_action_controls"]["Rezka"]["zakaz-rezka-wip-fanout"];
+        &queue_snapshot_body["queue_action_controls"]["apparatus:default:asset-010"]["zakaz-rezka-wip-fanout"];
     let allowed_actions = action_control["allowed_actions"]
         .as_array()
         .expect("allowed rezka actions");
@@ -970,7 +980,7 @@ async fn rezka_consumes_laminatsiya_wip_and_creates_distinct_frame_wips() {
             &worker_token,
             &format!(
                 r#"{{
-                    "apparatus":"Rezka",
+                    "apparatus":"apparatus:default:asset-010",
                     "order_id":"zakaz-rezka-wip-fanout",
                     "action":"complete",
                     "produced_qty":90,
@@ -997,7 +1007,7 @@ async fn rezka_consumes_laminatsiya_wip_and_creates_distinct_frame_wips() {
             &worker_token,
             &format!(
                 r#"{{
-                    "apparatus":"Rezka",
+                    "apparatus":"apparatus:default:asset-010",
                     "order_id":"zakaz-rezka-wip-fanout",
                     "action":"complete",
                     "produced_qty":90,
@@ -1069,7 +1079,7 @@ async fn rezka_consumes_laminatsiya_wip_and_creates_distinct_frame_wips() {
             &worker_token,
             &format!(
                 r#"{{
-                    "apparatus":"Rezka",
+                    "apparatus":"apparatus:default:asset-010",
                     "order_id":"zakaz-rezka-wip-fanout",
                     "action":"start",
                     "qr_payload":"{second_source_qr}"
@@ -1088,7 +1098,7 @@ async fn rezka_consumes_laminatsiya_wip_and_creates_distinct_frame_wips() {
             &worker_token,
             &format!(
                 r#"{{
-                    "apparatus":"Rezka",
+                    "apparatus":"apparatus:default:asset-010",
                     "order_id":"zakaz-rezka-wip-fanout",
                     "action":"complete",
                     "produced_qty":80,
@@ -1137,7 +1147,7 @@ async fn rezka_consumes_laminatsiya_wip_and_creates_distinct_frame_wips() {
     let source_status = router
         .oneshot(request(
             "GET",
-            "/v1/mobile/admin/production-maps/wip-batches?apparatus=Rezka&status=all&order_id=zakaz-rezka-wip-fanout",
+            "/v1/mobile/admin/production-maps/wip-batches?apparatus=apparatus%3Adefault%3Aasset-010&status=all&order_id=zakaz-rezka-wip-fanout",
             &admin_token,
         ))
         .await

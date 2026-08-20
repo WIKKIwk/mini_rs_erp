@@ -1,13 +1,21 @@
 use std::collections::BTreeMap;
 
 use super::*;
-use crate::core::production_map::{ProductionMapEdge, ProductionMapNode, ProductionMapNodeKind};
+use crate::core::production_map::{
+    OrderRunSession, OrderRunStatus, ProductionMapEdge, ProductionMapNode, ProductionMapNodeKind,
+};
 
 fn node(id: &str, kind: ProductionMapNodeKind, title: &str) -> ProductionMapNode {
+    let is_apparatus = matches!(kind, ProductionMapNodeKind::Apparatus);
     ProductionMapNode {
         id: id.to_string(),
         kind,
         title: title.to_string(),
+        apparatus_id: if is_apparatus {
+            format!("apparatus:test:{id}")
+        } else {
+            String::new()
+        },
         formula: None,
         role_code: String::new(),
         item_code: String::new(),
@@ -17,6 +25,7 @@ fn node(id: &str, kind: ProductionMapNodeKind, title: &str) -> ProductionMapNode
         alternative_group_id: String::new(),
         alternative_group_label: String::new(),
         alternative_assigned_title: String::new(),
+        alternative_assigned_apparatus_id: String::new(),
         rezka_kadr_count: None,
         rezka_label_length: None,
         x: 0.0,
@@ -29,9 +38,11 @@ fn assigned_node(
     kind: ProductionMapNodeKind,
     title: &str,
     assigned_title: &str,
+    assigned_id: &str,
 ) -> ProductionMapNode {
     ProductionMapNode {
         alternative_assigned_title: assigned_title.to_string(),
+        alternative_assigned_apparatus_id: assigned_id.to_string(),
         ..node(id, kind, title)
     }
 }
@@ -112,10 +123,14 @@ fn hotlunch_map() -> ProductionMapDefinition {
 }
 
 #[test]
-fn map_has_work_stage_matches_warehouse_suffixes() {
+fn map_has_work_stage_matches_canonical_and_virtual_ids() {
     let map = hotlunch_map();
-    assert!(map_has_work_stage_for_station(&map, "Laminatsiya - A"));
-    assert!(map_has_work_stage_for_station(&map, "9 ta rangli pechat"));
+    assert!(map_has_work_stage_for_station(&map, "task:lamin"));
+    assert!(map_has_work_stage_for_station(
+        &map,
+        "apparatus:test:pechat"
+    ));
+    assert!(!map_has_work_stage_for_station(&map, "Laminatsiya"));
     assert!(!map_has_work_stage_for_station(&map, "Hotlunch mahsulot"));
 }
 
@@ -129,18 +144,120 @@ fn linear_work_stages_follows_production_chain() {
             .collect::<Vec<_>>(),
         vec!["9 ta rangli pechat - A", "Laminatsiya", "Rezka aparat - A"]
     );
+    assert_eq!(stages[1].node_id, "lamin");
+    assert_eq!(stages[1].apparatus_id, None);
+    assert_eq!(
+        next_work_stage_station(&hotlunch_map(), "apparatus:test:pechat"),
+        Some("apparatus:test:rezka".to_string())
+    );
+    assert_eq!(
+        previous_work_stage_station(&hotlunch_map(), "apparatus:test:rezka"),
+        Some("apparatus:test:pechat".to_string())
+    );
+    assert_eq!(
+        next_work_stage_station(&hotlunch_map(), "task:lamin"),
+        Some("apparatus:test:rezka".to_string())
+    );
+    assert_eq!(
+        previous_work_stage_station(&hotlunch_map(), "task:lamin"),
+        Some("apparatus:test:pechat".to_string())
+    );
     assert!(!is_final_work_stage_station(
         &hotlunch_map(),
-        "9 ta rangli pechat - A"
+        "apparatus:test:pechat"
     ));
     assert!(is_final_work_stage_station(
         &hotlunch_map(),
-        "Rezka aparat - A"
+        "apparatus:test:rezka"
     ));
     assert!(!is_final_work_stage_station(
         &hotlunch_map(),
         "Noma'lum aparat"
     ));
+}
+
+#[test]
+fn qolip_bearing_canonical_chain_preserves_identity_through_laminatsiya_task() {
+    const PECHAT_ID: &str = "apparatus:default:bosma_7";
+    const LAMINATSIYA_TASK_ID: &str = "task:laminatsiya";
+    const REZKA_ID: &str = "apparatus:default:asset-010";
+
+    let mut map = hotlunch_map();
+    map.id = "zakaz-qolip-chain".to_string();
+    map.nodes
+        .iter_mut()
+        .find(|node| node.id == "pechat")
+        .expect("pechat stage")
+        .apparatus_id = PECHAT_ID.to_string();
+    map.nodes
+        .iter_mut()
+        .find(|node| node.id == "rezka")
+        .expect("rezka stage")
+        .apparatus_id = REZKA_ID.to_string();
+
+    let stages = linear_work_stages(&map);
+    assert_eq!(
+        stages
+            .iter()
+            .map(|stage| stage.apparatus_id.as_deref())
+            .collect::<Vec<_>>(),
+        vec![Some(PECHAT_ID), None, Some(REZKA_ID)]
+    );
+    assert_eq!(stages[1].node_id, "lamin");
+    assert_eq!(stages[0].apparatus_id.as_deref(), Some(PECHAT_ID));
+    assert!(map_has_work_stage_for_station(&map, LAMINATSIYA_TASK_ID));
+
+    assert_eq!(
+        next_work_stage_station(&map, PECHAT_ID),
+        Some(REZKA_ID.to_string())
+    );
+    assert_eq!(
+        previous_work_stage_station(&map, REZKA_ID),
+        Some(PECHAT_ID.to_string())
+    );
+    assert_eq!(
+        next_work_stage_station(&map, LAMINATSIYA_TASK_ID),
+        Some(REZKA_ID.to_string())
+    );
+    assert_eq!(
+        previous_work_stage_station(&map, LAMINATSIYA_TASK_ID),
+        Some(PECHAT_ID.to_string())
+    );
+
+    let session = OrderRunSession {
+        session_id: "session-qolip-chain".to_string(),
+        apparatus: PECHAT_ID.to_string(),
+        order_id: map.id.clone(),
+        status: OrderRunStatus::Active,
+        worker_role: "operator".to_string(),
+        worker_ref: "worker-qolip-chain".to_string(),
+        worker_display_name: "Qolip operator".to_string(),
+        started_at_unix: 1,
+        updated_at_unix: 1,
+        payload_json: serde_json::json!({
+            "qolip_code": "QOLIP-CHAIN-001",
+            "qolip_codes": ["QOLIP-CHAIN-001"],
+        }),
+    };
+    let downstream_payload =
+        crate::core::production_map::service_progress_support::preserve_qolip_lineage(
+            &session,
+            serde_json::json!({
+                "next_apparatus": REZKA_ID,
+            }),
+        );
+    assert_eq!(
+        downstream_payload["next_apparatus"],
+        serde_json::json!(REZKA_ID)
+    );
+    assert_eq!(
+        downstream_payload["qolip_code"],
+        serde_json::json!("QOLIP-CHAIN-001")
+    );
+    assert_eq!(
+        downstream_payload["qolip_codes"],
+        serde_json::json!(["QOLIP-CHAIN-001"])
+    );
 }
 
 #[test]
@@ -190,14 +307,14 @@ fn unassigned_bosma_alternative_group_exposes_each_candidate_as_work_stage() {
     );
     assert!(map_has_work_stage_for_station(
         &map,
-        "7 ta rangli bosma aparat"
+        "apparatus:test:pechat_7"
     ));
     assert!(map_has_work_stage_for_station(
         &map,
-        "8 ta rangli bosma aparat"
+        "apparatus:test:pechat_8"
     ));
     assert_eq!(
-        next_work_stage_station(&map, "7 ta rangli bosma aparat"),
+        next_work_stage_station(&map, "apparatus:test:pechat_7"),
         None
     );
 }
@@ -251,24 +368,30 @@ fn unassigned_laminatsiya_alternative_group_exposes_candidates_after_previous_st
             .collect::<Vec<_>>(),
         vec!["7 ta rangli bosma aparat", "Laminatsiya 1", "Laminatsiya 2"]
     );
-    assert!(map_has_work_stage_for_station(&map, "Laminatsiya 1"));
-    assert!(map_has_work_stage_for_station(&map, "Laminatsiya 2"));
+    assert!(map_has_work_stage_for_station(
+        &map,
+        "apparatus:test:lamin_1"
+    ));
+    assert!(map_has_work_stage_for_station(
+        &map,
+        "apparatus:test:lamin_2"
+    ));
     assert_eq!(
-        previous_work_stage_station(&map, "Laminatsiya 1"),
-        Some("7 ta rangli bosma aparat".to_string())
+        previous_work_stage_station(&map, "apparatus:test:lamin_1"),
+        Some("apparatus:test:pechat".to_string())
     );
     assert_eq!(
-        previous_work_stage_station(&map, "Laminatsiya 2"),
-        Some("7 ta rangli bosma aparat".to_string())
+        previous_work_stage_station(&map, "apparatus:test:lamin_2"),
+        Some("apparatus:test:pechat".to_string())
     );
     assert_eq!(
-        next_work_stage_station(&map, "7 ta rangli bosma aparat"),
-        Some("Laminatsiya".to_string())
+        next_work_stage_station(&map, "apparatus:test:pechat"),
+        Some("apparatus:test:lamin_1".to_string())
     );
 }
 
 #[test]
-fn next_work_stage_uses_assigned_titles_across_branch_alternatives() {
+fn next_work_stage_uses_assigned_apparatus_ids_across_branch_alternatives() {
     let mut map = hotlunch_map();
     map.nodes = vec![
         node("start", ProductionMapNodeKind::Start, "Start"),
@@ -278,24 +401,28 @@ fn next_work_stage_uses_assigned_titles_across_branch_alternatives() {
             ProductionMapNodeKind::Apparatus,
             "7 ta rangli pechat",
             "8 ta rangli pechat",
+            "apparatus:test:bosma_8",
         ),
         assigned_node(
             "pechat_8",
             ProductionMapNodeKind::Apparatus,
             "8 ta rangli pechat",
             "8 ta rangli pechat",
+            "apparatus:test:bosma_8",
         ),
         assigned_node(
             "lamin_1",
             ProductionMapNodeKind::Apparatus,
             "Laminatsiya 1",
             "Laminatsiya 1",
+            "apparatus:test:lamin_1",
         ),
         assigned_node(
             "lamin_2",
             ProductionMapNodeKind::Apparatus,
             "Laminatsiya 2",
             "Laminatsiya 1",
+            "apparatus:test:lamin_1",
         ),
         node("end", ProductionMapNodeKind::End, "End"),
     ];
@@ -337,10 +464,9 @@ fn next_work_stage_uses_assigned_titles_across_branch_alternatives() {
         },
     ];
 
-    assert_eq!(next_work_stage_station(&map, "7 ta rangli pechat"), None);
     assert_eq!(
-        next_work_stage_station(&map, "8 ta rangli pechat"),
-        Some("Laminatsiya 1".to_string())
+        next_work_stage_station(&map, "apparatus:test:bosma_8"),
+        Some("apparatus:test:lamin_1".to_string())
     );
 }
 
@@ -351,33 +477,124 @@ fn later_stage_waits_for_previous_completion() {
     assert!(order_ready_for_station(
         &map,
         "zakaz-hot",
-        "9 ta rangli pechat",
+        "apparatus:test:pechat",
         &states,
         &[],
     ));
     assert!(!order_ready_for_station(
         &map,
         "zakaz-hot",
-        "Laminatsiya",
+        "task:lamin",
         &states,
         &[],
     ));
     states.insert(
-        "9 ta rangli pechat".to_string(),
+        "apparatus:test:pechat".to_string(),
         BTreeMap::from([("zakaz-hot".to_string(), "completed".to_string())]),
     );
     assert!(order_ready_for_station(
         &map,
         "zakaz-hot",
-        "Laminatsiya",
+        "task:lamin",
         &states,
         &[],
     ));
-    assert!(!order_ready_for_station(
+    assert!(order_ready_for_station(
         &map,
         "zakaz-hot",
-        "Rezka aparat",
+        "apparatus:test:rezka",
         &states,
         &[],
     ));
+}
+
+#[test]
+fn branch_true_false_and_join_share_one_stage_traversal() {
+    let mut map = hotlunch_map();
+    map.nodes = vec![
+        node("start", ProductionMapNodeKind::Start, "Start"),
+        node("pechat", ProductionMapNodeKind::Apparatus, "Pechat"),
+        node("condition", ProductionMapNodeKind::Condition, "Condition"),
+        node("true_task", ProductionMapNodeKind::Task, "True task"),
+        node("false_task", ProductionMapNodeKind::Task, "False task"),
+        node("true_stage", ProductionMapNodeKind::Apparatus, "True stage"),
+        node("false_stage", ProductionMapNodeKind::Apparatus, "False stage"),
+        node("join", ProductionMapNodeKind::Apparatus, "Join"),
+        node("end", ProductionMapNodeKind::End, "End"),
+    ];
+    map.edges = vec![
+        ProductionMapEdge {
+            from: "start".to_string(),
+            to: "pechat".to_string(),
+            branch: String::new(),
+        },
+        ProductionMapEdge {
+            from: "pechat".to_string(),
+            to: "condition".to_string(),
+            branch: String::new(),
+        },
+        ProductionMapEdge {
+            from: "condition".to_string(),
+            to: "true_task".to_string(),
+            branch: "ha".to_string(),
+        },
+        ProductionMapEdge {
+            from: "condition".to_string(),
+            to: "false_task".to_string(),
+            branch: "no".to_string(),
+        },
+        ProductionMapEdge {
+            from: "true_task".to_string(),
+            to: "true_stage".to_string(),
+            branch: String::new(),
+        },
+        ProductionMapEdge {
+            from: "false_task".to_string(),
+            to: "false_stage".to_string(),
+            branch: String::new(),
+        },
+        ProductionMapEdge {
+            from: "true_stage".to_string(),
+            to: "join".to_string(),
+            branch: String::new(),
+        },
+        ProductionMapEdge {
+            from: "false_stage".to_string(),
+            to: "join".to_string(),
+            branch: String::new(),
+        },
+        ProductionMapEdge {
+            from: "join".to_string(),
+            to: "end".to_string(),
+            branch: String::new(),
+        },
+    ];
+
+    let pechat_id = "apparatus:test:pechat".to_string();
+    let true_id = "apparatus:test:true_stage".to_string();
+    let false_id = "apparatus:test:false_stage".to_string();
+    let join_id = "apparatus:test:join".to_string();
+    assert_eq!(
+        next_work_stage_stations(&map, &pechat_id),
+        vec![true_id.clone(), false_id.clone()]
+    );
+    assert_eq!(
+        previous_work_stage_stations(&map, &join_id),
+        vec![true_id.clone(), false_id.clone()]
+    );
+    assert_eq!(next_work_stage_stations(&map, &true_id), vec![join_id.clone()]);
+    assert_eq!(
+        next_work_stage_stations(&map, &false_id),
+        vec![join_id.clone()]
+    );
+    assert_eq!(
+        previous_work_stage_stations(&map, &join_id),
+        next_work_stage_stations(&map, &pechat_id)
+    );
+    assert_eq!(
+        physical_work_stage_ids(&map),
+        Some(vec![pechat_id, true_id, false_id, join_id.clone()])
+    );
+    assert!(!is_final_work_stage_station(&map, "task:true_task"));
+    assert!(is_final_work_stage_station(&map, &join_id));
 }

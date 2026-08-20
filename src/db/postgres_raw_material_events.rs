@@ -3,6 +3,8 @@ use std::collections::BTreeSet;
 use serde::Serialize;
 use sqlx::{PgPool, Postgres, Transaction};
 
+use crate::core::apparatus_standard::ApparatusId;
+
 #[derive(Debug, Clone)]
 pub struct RawMaterialEventDraft {
     pub idempotency_key: String,
@@ -105,7 +107,7 @@ impl PostgresRawMaterialEventStore {
                     COALESCE(stock_status_before, '') AS stock_status_before,
                     COALESCE(stock_status_after, '') AS stock_status_after,
                     COALESCE(order_id, '') AS order_id,
-                    COALESCE(apparatus, '') AS apparatus,
+                    COALESCE(canonical_apparatus_id, '') AS apparatus,
                     actor_role, actor_ref, actor_display_name,
                     owner_role, owner_ref, owner_display_name,
                     source_type, source_id,
@@ -191,19 +193,20 @@ pub async fn insert_raw_material_event_tx(
     tx: &mut Transaction<'_, Postgres>,
     draft: RawMaterialEventDraft,
 ) -> Result<Option<String>, sqlx::Error> {
-    let draft = normalize_draft(draft);
+    let draft = normalize_draft(draft)?;
     sqlx::query_scalar::<_, String>(
         "INSERT INTO mini_raw_material_events (
              event_id, idempotency_key, event_type, warehouse, barcode, item_code, item_name,
              qty_delta, uom, stock_status_before, stock_status_after, order_id, apparatus,
+             canonical_apparatus_id,
              actor_role, actor_ref, actor_display_name,
              owner_role, owner_ref, owner_display_name,
              source_type, source_id,
              source_line_ref, correlation_id, payload_json
          )
          VALUES (
-             $1, $2, $3, $4, $5, $6, $7, ($8::double precision)::numeric(18,6), $9,
-             $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24
+             $1, $2, $3, $4, $5, $6, $7, ($8::double precision)::numeric(24,9), $9,
+             $10, $11, $12, $13, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24
          )
          ON CONFLICT (idempotency_key) DO NOTHING
          RETURNING event_id",
@@ -236,7 +239,7 @@ pub async fn insert_raw_material_event_tx(
     .await
 }
 
-fn normalize_draft(mut draft: RawMaterialEventDraft) -> RawMaterialEventDraft {
+fn normalize_draft(mut draft: RawMaterialEventDraft) -> Result<RawMaterialEventDraft, sqlx::Error> {
     draft.idempotency_key = blank_default(&draft.idempotency_key, "raw_material_event").to_string();
     draft.event_type = draft.event_type.trim().to_string();
     draft.warehouse = draft.warehouse.trim().to_string();
@@ -247,7 +250,17 @@ fn normalize_draft(mut draft: RawMaterialEventDraft) -> RawMaterialEventDraft {
     draft.stock_status_before = clean_optional(draft.stock_status_before);
     draft.stock_status_after = clean_optional(draft.stock_status_after);
     draft.order_id = clean_optional(draft.order_id);
-    draft.apparatus = clean_optional(draft.apparatus);
+    draft.apparatus = clean_optional(draft.apparatus)
+        .map(|apparatus| {
+            ApparatusId::new(apparatus)
+                .map(|id| id.to_string())
+                .map_err(|_| {
+                    sqlx::Error::Protocol(
+                        "raw-material event requires canonical apparatus id".into(),
+                    )
+                })
+        })
+        .transpose()?;
     draft.actor_role = blank_default(&draft.actor_role, "system").to_string();
     draft.actor_ref = blank_default(&draft.actor_ref, "system").to_string();
     draft.actor_display_name = draft.actor_display_name.trim().to_string();
@@ -258,7 +271,7 @@ fn normalize_draft(mut draft: RawMaterialEventDraft) -> RawMaterialEventDraft {
     draft.source_id = blank_default(&draft.source_id, &draft.idempotency_key).to_string();
     draft.source_line_ref = clean_optional(draft.source_line_ref);
     draft.correlation_id = clean_optional(draft.correlation_id);
-    draft
+    Ok(draft)
 }
 
 fn row_to_entry(row: RawMaterialEventRow) -> RawMaterialEventEntry {

@@ -1,6 +1,7 @@
 use rusqlite::{OptionalExtension, params};
 
 use super::ProductionMapStore;
+use crate::core::apparatus_standard::ApparatusId;
 use crate::core::production_map::*;
 
 pub(super) async fn apparatus_capacity_profiles(
@@ -22,11 +23,12 @@ pub(super) async fn apparatus_capacity_profiles(
         .map_err(|_| ProductionMapError::StoreFailed)?;
     let rows = stmt
         .query_map([], |row| {
+            let apparatus_id = apparatus_id_from_row(row.get(0)?)?;
             let working_windows = decode::<Vec<ApparatusWorkingWindow>>(row.get(7)?)?;
             let capabilities = decode::<Vec<String>>(row.get(8)?)?;
             let capability_levels = decode::<std::collections::BTreeMap<String, u16>>(row.get(9)?)?;
             Ok(ApparatusCapacityProfile {
-                apparatus_id: row.get(0)?,
+                apparatus_id,
                 apparatus: row.get(1)?,
                 capacity_slots: row.get::<_, i64>(2)?.clamp(1, 64) as u16,
                 setup_minutes: row.get::<_, i64>(3)?.max(0) as u32,
@@ -72,7 +74,7 @@ pub(super) async fn put_apparatus_capacity_profile(
             notes = excluded.notes,
             updated_at = excluded.updated_at",
         params![
-            profile.apparatus_id,
+            profile.apparatus_id.as_str(),
             profile.apparatus,
             i64::from(profile.capacity_slots),
             i64::from(profile.setup_minutes),
@@ -107,9 +109,10 @@ pub(super) async fn apparatus_downtimes(
         .map_err(|_| ProductionMapError::StoreFailed)?;
     let rows = stmt
         .query_map([], |row| {
+            let apparatus_id = apparatus_id_from_row(row.get(1)?)?;
             Ok(ApparatusDowntime {
                 id: row.get(0)?,
-                apparatus_id: row.get(1)?,
+                apparatus_id,
                 apparatus: row.get(2)?,
                 starts_at_unix: row.get(3)?,
                 ends_at_unix: row.get(4)?,
@@ -147,7 +150,7 @@ pub(super) async fn put_apparatus_downtime(
             actor_json = excluded.actor_json",
         params![
             downtime.id,
-            downtime.apparatus_id,
+            downtime.apparatus_id.as_str(),
             downtime.apparatus,
             downtime.starts_at_unix,
             downtime.ends_at_unix,
@@ -180,11 +183,12 @@ pub(super) async fn apparatus_schedule_reservations(
         .map_err(|_| ProductionMapError::StoreFailed)?;
     let rows = stmt
         .query_map([], |row| {
+            let apparatus_id = apparatus_id_from_row(row.get(3)?)?;
             Ok(ApparatusScheduleReservation {
                 reservation_id: row.get(0)?,
                 idempotency_key: row.get(1)?,
                 order_id: row.get(2)?,
-                apparatus_id: row.get(3)?,
+                apparatus_id,
                 apparatus: row.get(4)?,
                 starts_at_unix: row.get(5)?,
                 ends_at_unix: row.get(6)?,
@@ -272,7 +276,7 @@ pub(super) async fn put_apparatus_schedule_reservation(
                    AND starts_at_unix < ?2
                    AND ?3 < ends_at_unix",
                 params![
-                    reservation.apparatus_id.trim(),
+                    reservation.apparatus_id.as_str(),
                     reservation.ends_at_unix,
                     reservation.starts_at_unix
                 ],
@@ -293,7 +297,7 @@ pub(super) async fn put_apparatus_schedule_reservation(
                 reservation.reservation_id,
                 reservation.idempotency_key,
                 reservation.order_id,
-                reservation.apparatus_id,
+                reservation.apparatus_id.as_str(),
                 reservation.apparatus,
                 reservation.starts_at_unix,
                 reservation.ends_at_unix,
@@ -368,10 +372,13 @@ pub(super) async fn cancel_apparatus_schedule_reservation(
 pub(super) async fn update_apparatus_schedule_reservation_status(
     store: &ProductionMapStore,
     order_id: &str,
-    apparatus: &str,
+    apparatus_id: &str,
     status: ApparatusScheduleStatus,
     actor: &QueueActionActor,
 ) -> Result<(), ProductionMapError> {
+    let Ok(apparatus_id) = ApparatusId::new(apparatus_id.trim().to_string()) else {
+        return Ok(());
+    };
     let conn = store
         .conn
         .lock()
@@ -382,25 +389,26 @@ pub(super) async fn update_apparatus_schedule_reservation_status(
         "UPDATE apparatus_schedule_reservations
          SET status = ?1, actor_json = ?2
          WHERE order_id = ?3
-           AND (lower(apparatus) = lower(?4) OR lower(apparatus_id) = lower(?4))
+           AND lower(apparatus_id) = lower(?4)
            AND (
                 status = ?1
                 OR (?1 = 'active' AND status IN ('planned', 'paused'))
                 OR (?1 = 'paused' AND status = 'active')
                 OR (?1 = 'completed' AND status IN ('planned', 'active', 'paused'))
            )",
-        params![status, actor_json, order_id.trim(), apparatus.trim()],
+        params![status, actor_json, order_id.trim(), apparatus_id.as_str()],
     )
     .map_err(|_| ProductionMapError::StoreFailed)?;
     Ok(())
 }
 
 fn reservation_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<ApparatusScheduleReservation> {
+    let apparatus_id = apparatus_id_from_row(row.get(3)?)?;
     Ok(ApparatusScheduleReservation {
         reservation_id: row.get(0)?,
         idempotency_key: row.get(1)?,
         order_id: row.get(2)?,
-        apparatus_id: row.get(3)?,
+        apparatus_id,
         apparatus: row.get(4)?,
         starts_at_unix: row.get(5)?,
         ends_at_unix: row.get(6)?,
@@ -417,16 +425,18 @@ fn reservation_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<ApparatusSc
     })
 }
 
+fn apparatus_id_from_row(value: String) -> rusqlite::Result<ApparatusId> {
+    ApparatusId::new(value).map_err(|error| {
+        rusqlite::Error::FromSqlConversionFailure(0, rusqlite::types::Type::Text, Box::new(error))
+    })
+}
+
 fn encode<T: serde::Serialize>(value: &T) -> Result<String, ProductionMapError> {
     serde_json::to_string(value).map_err(|_| ProductionMapError::StoreFailed)
 }
 
 fn decode<T: serde::de::DeserializeOwned>(value: String) -> rusqlite::Result<T> {
     serde_json::from_str(&value).map_err(|error| {
-        rusqlite::Error::FromSqlConversionFailure(
-            0,
-            rusqlite::types::Type::Text,
-            Box::new(error),
-        )
+        rusqlite::Error::FromSqlConversionFailure(0, rusqlite::types::Type::Text, Box::new(error))
     })
 }

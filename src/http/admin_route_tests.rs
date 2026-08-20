@@ -18,6 +18,7 @@ use crate::core::admin::models::{
 use crate::core::admin::ports::{AdminPortError, AdminReadPort, AdminStatePort, AdminWritePort};
 use crate::core::admin::service::AdminService;
 use crate::core::apparatus_groups::{ApparatusGroupService, MemoryApparatusGroupStore};
+use crate::core::apparatus_standard::{ApparatusId, CanonicalApparatus};
 use crate::core::auth::models::{Principal, PrincipalRole};
 use crate::core::auth::ports::{
     AdminAccessState, AdminAccessStateLookup, AuthPortError, CustomerLookup, CustomerRecord,
@@ -41,7 +42,9 @@ use crate::core::inventory_movements::{
     MemoryInventoryMovementStore,
 };
 use crate::core::mini_orders::{MiniOrderError, MiniOrderSink, NoopMiniOrderSink};
-use crate::core::production_map::{MemoryProductionMapStore, ProductionMapService};
+use crate::core::production_map::{
+    ApparatusGroupCanonicalResolver, MemoryProductionMapStore, ProductionMapService,
+};
 use crate::core::profile::ports::{ProfilePrefs, ProfileStoreError, ProfileStorePort};
 use crate::core::returned_paint::{MemoryReturnedPaintStore, ReturnedPaintService};
 use crate::core::session::manager::SessionManager;
@@ -58,6 +61,7 @@ use crate::core::workers::{MemoryWorkerStore, WorkerService, WorkerUpsert};
 use crate::store::calculate_order_store::CalculateOrderStore;
 
 mod admin_edge_cases;
+mod apparatus_aasx;
 mod auth_roles;
 mod batch_move_advanced;
 mod batch_move_basic;
@@ -175,6 +179,28 @@ fn pechat_order_map_json(id: &str, title: &str, order_number: &str, apparatus: &
     pechat_order_map_json_with_dims(id, title, order_number, apparatus, 7, 1250.0)
 }
 
+fn canonical_test_apparatus_id(apparatus: &str) -> String {
+    if ApparatusId::new(apparatus.trim().to_string()).is_ok() {
+        return apparatus.trim().to_string();
+    }
+    let value = apparatus.trim().to_ascii_lowercase();
+    if value.contains("8 ta") {
+        "apparatus:default:bosma_8".to_string()
+    } else if value.contains("9 ta") {
+        "apparatus:default:bosma_9".to_string()
+    } else if value.contains("lamin") {
+        "apparatus:default:asset-007".to_string()
+    } else if value.contains("rezka") {
+        "apparatus:default:asset-010".to_string()
+    } else if value.contains("qadoqlash") {
+        "apparatus:test:qadoqlash-stol".to_string()
+    } else if value.contains("yordamchi") {
+        "apparatus:test:yordamchi-aparat".to_string()
+    } else {
+        "apparatus:default:bosma_7".to_string()
+    }
+}
+
 fn two_apparatus_order_map_json(
     id: &str,
     title: &str,
@@ -182,6 +208,8 @@ fn two_apparatus_order_map_json(
     first_apparatus: &str,
     second_apparatus: &str,
 ) -> String {
+    let first_id = canonical_test_apparatus_id(first_apparatus);
+    let second_id = canonical_test_apparatus_id(second_apparatus);
     format!(
         r#"{{
             "id":"{id}",
@@ -190,8 +218,8 @@ fn two_apparatus_order_map_json(
             "order_number":"{order_number}",
             "nodes":[
                 {{"id":"start","kind":"start","title":"Start"}},
-                {{"id":"first","kind":"apparatus","title":"{first_apparatus}"}},
-                {{"id":"second","kind":"apparatus","title":"{second_apparatus}"}},
+                {{"id":"first","kind":"apparatus","title":"{first_apparatus}","apparatus_id":"{first_id}"}},
+                {{"id":"second","kind":"apparatus","title":"{second_apparatus}","apparatus_id":"{second_id}"}},
                 {{"id":"end","kind":"end","title":"End"}}
             ],
             "edges":[
@@ -231,11 +259,14 @@ fn production_order_map_json_with_product(
     roll_count: i64,
     width_mm: f64,
 ) -> String {
-    let rezka_config = if apparatus.to_ascii_lowercase().contains("rezka") {
+    let rezka_config = if apparatus.to_ascii_lowercase().contains("rezka")
+        || apparatus.to_ascii_lowercase().contains("asset-010")
+    {
         r#", "rezka_kadr_count": 4, "rezka_label_length": 100"#
     } else {
         ""
     };
+    let apparatus_id = canonical_test_apparatus_id(apparatus);
     format!(
         r#"{{
             "id":"{id}",
@@ -246,7 +277,7 @@ fn production_order_map_json_with_product(
             "width_mm":{width_mm},
             "nodes":[
                 {{"id":"start","kind":"start","title":"Start"}},
-                {{"id":"apparatus","kind":"apparatus","title":"{apparatus}"{rezka_config}}},
+                {{"id":"apparatus","kind":"apparatus","title":"{apparatus}","apparatus_id":"{apparatus_id}"{rezka_config}}},
                 {{"id":"end","kind":"end","title":"End"}}
             ],
             "edges":[
@@ -255,6 +286,39 @@ fn production_order_map_json_with_product(
             ]
         }}"#
     )
+}
+
+fn pechat_task_rezka_order_map_json(
+    id: &str,
+    title: &str,
+    order_number: &str,
+) -> String {
+    r#"{{
+        "id":"{id}",
+        "product_code":"PECHAT-REZKA-{order_number}",
+        "title":"{title}",
+        "order_number":"{order_number}",
+        "roll_count":7,
+        "width_mm":1250,
+        "nodes":[
+            {{"id":"start","kind":"start","title":"Start"}},
+            {{"id":"pechat","kind":"apparatus","title":"Pechat","apparatus_id":"apparatus:default:bosma_7"}},
+            {{"id":"laminatsiya_task","kind":"task","title":"Laminatsiya"}},
+            {{"id":"rezka","kind":"apparatus","title":"Rezka","apparatus_id":"apparatus:default:asset-010","rezka_kadr_count":4,"rezka_label_length":100}},
+            {{"id":"end","kind":"end","title":"End"}}
+        ],
+        "edges":[
+            {{"from":"start","to":"pechat"}},
+            {{"from":"pechat","to":"laminatsiya_task"}},
+            {{"from":"laminatsiya_task","to":"rezka"}},
+            {{"from":"rezka","to":"end"}}
+        ]
+    }}"#
+    .replace("{id}", id)
+    .replace("{title}", title)
+    .replace("{order_number}", order_number)
+    .replace("{{", "{")
+    .replace("}}", "}")
 }
 
 fn laminatsiya_order_map_json(id: &str, width_mm: f64) -> String {
@@ -277,6 +341,106 @@ fn laminatsiya_order_map_json(id: &str, width_mm: f64) -> String {
             ]
         }}"#
     )
+}
+
+#[derive(Clone, Default)]
+struct TestCanonicalApparatusResolver;
+
+#[async_trait]
+impl crate::core::production_map::CanonicalApparatusResolver
+    for TestCanonicalApparatusResolver
+{
+    async fn resolve(
+        &self,
+        apparatus_id: &ApparatusId,
+    ) -> Result<Option<Arc<CanonicalApparatus>>, crate::core::production_map::ProductionMapError>
+    {
+        let id = apparatus_id.as_str();
+        let value = id.to_ascii_lowercase();
+        let (family, kind, capabilities, tooling, color_stations, display_name) =
+            if value.contains("bosma") || value.contains("pechat") {
+                let stations = value
+                    .rsplit_once("bosma_")
+                    .and_then(|(_, count)| count.parse::<u8>().ok());
+                (
+                    "pechat",
+                    "color_pechat",
+                    serde_json::json!(["apparatus", "print", "pechat"]),
+                    "qolip_scan_required",
+                    stations.map_or(serde_json::Value::Null, |stations| {
+                        serde_json::json!(stations)
+                    }),
+                    "Test pechat",
+                )
+            } else if value.contains("flexo") {
+                (
+                    "pechat",
+                    "flexo",
+                    serde_json::json!(["apparatus", "print", "pechat", "flexo"]),
+                    "qolip_scan_required",
+                    serde_json::Value::Null,
+                    "Test flexo",
+                )
+            } else if value.contains("lamin")
+                || value.contains("asset-007")
+                || value.contains("asset-008")
+            {
+                (
+                    "laminatsiya",
+                    "laminatsiya",
+                    serde_json::json!(["apparatus", "laminate"]),
+                    "qolip_scan_not_required",
+                    serde_json::Value::Null,
+                    "Test laminatsiya",
+                )
+            } else if value.contains("rezka") || value.contains("asset-010") {
+                (
+                    "rezka",
+                    "rezka",
+                    serde_json::json!(["apparatus", "cut"]),
+                    "qolip_scan_not_required",
+                    serde_json::Value::Null,
+                    "Test rezka",
+                )
+            } else {
+                (
+                    "other",
+                    "other",
+                    serde_json::json!(["apparatus"]),
+                    "qolip_scan_not_required",
+                    serde_json::Value::Null,
+                    "Test apparatus",
+                )
+            };
+        let canonical = serde_json::from_value(serde_json::json!({
+            "identity": {
+                "id": id,
+                "display": { "display_name": display_name }
+            },
+            "classification": {
+                "family": family,
+                "kind": kind,
+                "color_stations": color_stations
+            },
+            "capabilities": capabilities,
+            "policies": {
+                "queue": "strict_sequence",
+                "tooling": tooling
+            },
+            "capacity": {},
+            "training": {},
+            "provenance": { "source": "default" },
+            "versioning": {},
+            "aas": {
+                "submodel_id": format!(
+                    "urn:mini-rs-erp:submodel:{}",
+                    id
+                )
+            }
+        }))
+        .map_err(|_| crate::core::production_map::ProductionMapError::StoreFailed)?;
+        Ok(Some(Arc::new(canonical)))
+    }
 }
 
 fn test_state() -> AppState {
@@ -308,10 +472,15 @@ fn test_state() -> AppState {
         .with_read_port(admin_port.clone())
         .with_write_port(admin_port.clone())
         .with_state_port(admin_state_port.clone());
-    state.production_maps = ProductionMapService::new(Arc::new(MemoryProductionMapStore::new()));
     state.returned_paint = ReturnedPaintService::new(Arc::new(MemoryReturnedPaintStore::new()));
-    state.apparatus_groups = ApparatusGroupService::new(Arc::new(MemoryApparatusGroupStore::new()));
-    state.warehouses = WarehouseService::new(Arc::new(MemoryWarehouseStore::new()));
+    state.apparatus_groups =
+        ApparatusGroupService::new(Arc::new(MemoryApparatusGroupStore::with_canonical_defaults()));
+    state.production_maps = ProductionMapService::new(Arc::new(MemoryProductionMapStore::new()))
+        .with_canonical_apparatus_resolver(Arc::new(TestCanonicalApparatusResolver));
+    state.warehouses = WarehouseService::new(Arc::new(MemoryWarehouseStore::new()))
+        .with_canonical_apparatus_resolver(Arc::new(ApparatusGroupCanonicalResolver::new(
+            state.apparatus_groups.clone(),
+        )));
     state.workers = WorkerService::new(Arc::new(MemoryWorkerStore::new()));
     state.system_users = SystemUserService::new(Arc::new(MemorySystemUserStore::new()));
     state.auth = crate::core::auth::service::AuthService::new(&state.config)
@@ -371,7 +540,10 @@ async fn assign_warehouse_to_principal(
     state
         .warehouses
         .assign_warehouse(WarehouseAssignmentUpsert {
+            assignment_kind: "warehouse".to_string(),
             warehouse: warehouse.to_string(),
+            warehouse_name: None,
+            apparatus_id: None,
             principal_role: role,
             principal_ref: ref_.to_string(),
             display_name: "Materialchi".to_string(),

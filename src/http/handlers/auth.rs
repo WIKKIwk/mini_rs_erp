@@ -9,6 +9,7 @@ use crate::app::AppState;
 use crate::core::auth::models::{LoginRequest, LoginResponse, Principal, PrincipalRole};
 use crate::core::auth::service::AuthError;
 use crate::core::authz::Capability;
+use crate::error::AppError;
 
 pub async fn login(
     State(state): State<AppState>,
@@ -42,21 +43,11 @@ pub async fn login(
     {
         return Err(login_error(AuthError::InvalidCredentials));
     }
-    let token = state
-        .sessions
-        .create(principal.clone())
-        .await
-        .map_err(|_| {
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(ErrorResponse {
-                    error: "session create failed",
-                }),
-            )
-        })?;
-
     let werka_home = if principal.role == PrincipalRole::Werka {
-        state.werka.home(20).await.ok().flatten()
+        state.werka.home(20).await.map_err(|error| {
+            tracing::error!(%error, "werka home lookup failed during login");
+            internal_error("werka home lookup failed")
+        })?
     } else {
         None
     };
@@ -67,7 +58,20 @@ pub async fn login(
         .warehouses
         .assigned_warehouse_names(&principal)
         .await
-        .unwrap_or_default();
+        .map_err(|error| {
+            tracing::error!(
+                %error,
+                role = ?principal.role,
+                principal_ref = %principal.ref_,
+                "warehouse scope lookup failed during login"
+            );
+            internal_error("warehouse scope lookup failed")
+        })?;
+    let token = state
+        .sessions
+        .create(principal.clone())
+        .await
+        .map_err(session_error)?;
 
     Ok(Json(LoginResponse {
         profile: with_avatar_proxy(&headers, principal, &token),
@@ -89,7 +93,7 @@ pub async fn logout(
         return Err(method_not_allowed());
     }
     let token = bearer_token(&headers).ok_or_else(unauthorized)?;
-    state.sessions.delete(&token).await;
+    state.sessions.delete(&token).await.map_err(session_error)?;
 
     Ok(Json(OkResponse { ok: true }))
 }
@@ -103,9 +107,13 @@ pub async fn me(
         .sessions
         .get(&token)
         .await
-        .map_err(|_| unauthorized())?;
+        .map_err(session_error)?;
     principal = state.profiles.refresh(principal).await;
-    state.sessions.update(&token, principal.clone()).await;
+    state
+        .sessions
+        .update(&token, principal.clone())
+        .await
+        .map_err(session_error)?;
 
     Ok(Json(with_avatar_proxy(&headers, principal, &token)))
 }
@@ -246,6 +254,24 @@ fn unauthorized() -> (StatusCode, Json<ErrorResponse>) {
             error: "unauthorized",
         }),
     )
+}
+
+pub(crate) fn internal_error(error: &'static str) -> (StatusCode, Json<ErrorResponse>) {
+    tracing::error!(error = %error, "request failed at HTTP boundary");
+    (
+        StatusCode::INTERNAL_SERVER_ERROR,
+        Json(ErrorResponse { error }),
+    )
+}
+
+pub(crate) fn session_error(error: AppError) -> (StatusCode, Json<ErrorResponse>) {
+    match error {
+        AppError::Unauthorized => unauthorized(),
+        error => {
+            tracing::error!(%error, "session dependency failed at HTTP boundary");
+            internal_error("session store failed")
+        }
+    }
 }
 
 fn method_not_allowed() -> (StatusCode, Json<ErrorResponse>) {

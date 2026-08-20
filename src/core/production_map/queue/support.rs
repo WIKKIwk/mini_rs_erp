@@ -1,10 +1,12 @@
 use std::collections::{BTreeMap, BTreeSet};
 
+use crate::core::apparatus_standard::CanonicalApparatus;
+
 use super::*;
 
 use super::apparatus::{visible_order_ids_by_apparatus, visible_order_ids_for_apparatus};
 use super::progress::{effective_apparatus_queue_policy, queue_action_event_id};
-use super::store_port::ApparatusQueueStateMap;
+use super::store_port::{ApparatusQueuePolicyMap, ApparatusQueueStateMap};
 
 pub(super) fn current_progress_batch_for_report(
     scanned_batch: &OrderProgressBatch,
@@ -42,6 +44,9 @@ pub(super) fn validate_queue_action_request(
     if order_id.is_empty() {
         return Err(ProductionMapError::MissingId);
     }
+    if queue_state::apparatus_search_key(apparatus).is_empty() {
+        return Err(ProductionMapError::ApparatusNotAssigned);
+    }
     if !queue_state::apparatus_matches_assigned(apparatus, assigned_apparatus) {
         return Err(ProductionMapError::ApparatusNotAssigned);
     }
@@ -56,6 +61,7 @@ pub(super) fn known_apparatus_storage_keys(
         .keys()
         .chain(all_states.keys())
         .map(|key| key.as_str())
+        .filter(|key| !queue_state::apparatus_search_key(key).is_empty())
         .collect::<BTreeSet<_>>()
         .into_iter()
         .map(|key| key.to_string())
@@ -63,22 +69,10 @@ pub(super) fn known_apparatus_storage_keys(
 }
 
 pub(super) fn queue_policy_for_apparatus(
-    apparatus: &str,
-    storage_key: &str,
-    policies: &BTreeMap<String, ApparatusQueuePolicy>,
+    canonical: &CanonicalApparatus,
+    policies: &ApparatusQueuePolicyMap,
 ) -> ApparatusQueuePolicy {
-    effective_apparatus_queue_policy(
-        apparatus,
-        policies
-            .get(storage_key)
-            .copied()
-            .or_else(|| policies.get(apparatus).copied())
-            .or_else(|| {
-                policies.iter().find_map(|(key, policy)| {
-                    queue_state::apparatus_titles_match(key, apparatus).then_some(*policy)
-                })
-            }),
-    )
+    effective_apparatus_queue_policy(canonical, policies.get(&canonical.identity.id).copied())
 }
 
 pub(super) fn parsed_queue_states(
@@ -108,7 +102,7 @@ pub(super) fn has_waiting_previous_stage_wip(
 ) -> bool {
     batches.iter().any(|batch| {
         batch.order_id.trim() == order_id.trim()
-            && queue_state::apparatus_titles_match(&batch.apparatus, previous_stage)
+            && super::types::apparatus_ids_match(&batch.apparatus, previous_stage)
             && matches!(
                 batch.action,
                 queue_state::ApparatusQueueAction::Pause
@@ -124,10 +118,7 @@ pub(super) fn has_waiting_previous_stage_wip(
                     | OrderProgressBatchStatus::Resumed
             )
             && (batch.next_apparatus.trim().is_empty()
-                || queue_state::next_stage_title_matches_apparatus(
-                    &batch.next_apparatus,
-                    apparatus,
-                ))
+                || super::types::stage_ids_match(&batch.next_apparatus, apparatus))
             && batch.wip_status == OrderProgressBatchWipStatus::Waiting
     })
 }
@@ -156,6 +147,7 @@ pub(super) fn sequence_updates_for_frozen_transition(
     let known_apparatus = sequences
         .keys()
         .chain(visible_by_apparatus.keys())
+        .filter(|key| !queue_state::apparatus_search_key(key).is_empty())
         .cloned()
         .collect::<BTreeSet<_>>();
     let known_keys = known_apparatus.iter().cloned().collect::<Vec<_>>();
@@ -380,7 +372,7 @@ fn repair_current_apparatus_fields(batch: &mut OrderProgressBatch) {
         return;
     }
     batch.current_apparatus = batch.apparatus.trim().to_string();
-    batch.current_apparatus_key = queue_state::apparatus_search_key(&batch.current_apparatus);
+    batch.current_apparatus_key = super::types::canonical_apparatus_key(&batch.current_apparatus);
     if batch.current_location.trim().is_empty() {
         batch.current_location = batch.current_apparatus.clone();
     }
@@ -405,6 +397,7 @@ fn repair_next_apparatus_field(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 pub(super) fn finished_goods_stock_entry(
     batch: &OrderProgressBatch,
     warehouse: &str,

@@ -1,5 +1,6 @@
 use std::collections::BTreeSet;
 
+use crate::core::apparatus_standard::ApparatusId;
 use crate::core::auth::models::PrincipalRole;
 
 use super::models::{
@@ -92,7 +93,7 @@ pub fn normalize_role_assignment(
         principal_role: input.principal_role,
         principal_ref,
         role_id,
-        assigned_apparatus: normalize_assigned_apparatus(input.assigned_apparatus),
+        assigned_apparatus: normalize_assigned_apparatus(input.assigned_apparatus)?,
         assigned_item_groups,
     })
 }
@@ -129,14 +130,27 @@ fn system_role_ids() -> BTreeSet<&'static str> {
     .collect()
 }
 
-fn normalize_assigned_apparatus(values: Vec<String>) -> Vec<String> {
+fn normalize_assigned_apparatus(values: Vec<String>) -> Result<Vec<String>, RoleAssignmentError> {
     values
         .into_iter()
-        .map(|value| value.trim().to_string())
-        .filter(|value| !value.is_empty())
-        .collect::<BTreeSet<_>>()
-        .into_iter()
-        .collect()
+        .map(|value| {
+            let value = value.trim().to_string();
+            if value.is_empty() {
+                return Ok(None);
+            }
+            let id = ApparatusId::new(value.clone())
+                .map_err(|_| RoleAssignmentError::InvalidAssignedApparatus(value))?;
+            Ok(Some(id.as_str().to_string()))
+        })
+        .collect::<Result<Vec<_>, RoleAssignmentError>>()
+        .map(|values| {
+            values
+                .into_iter()
+                .flatten()
+                .collect::<BTreeSet<_>>()
+                .into_iter()
+                .collect()
+        })
 }
 
 fn normalize_assigned_item_groups(values: Vec<String>) -> Vec<String> {

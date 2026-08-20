@@ -4,14 +4,21 @@ use std::collections::BTreeMap;
 
 use crate::core::production_map::*;
 
-use super::fixtures::apparatus_stage_map;
+use super::fixtures::service_with_default_apparatus;
+
+const PECHAT_ID: &str = "apparatus:default:bosma_7";
+const LAMINATION_ID: &str = "apparatus:default:asset-007";
 
 #[tokio::test]
 async fn production_workflow_audit_reports_duplicate_qr_and_unknown_order_batch() {
     let store = Arc::new(MemoryProductionMapStore::new());
-    let service = ProductionMapService::new(store.clone());
+    let service = service_with_default_apparatus(store.clone()).await;
     store
-        .put_map(apparatus_stage_map("zakaz-audit-ok", "7 ta rangli pechat"))
+        .put_map(super::fixtures::canonical_apparatus_stage_map(
+            "zakaz-audit-ok",
+            PECHAT_ID,
+            "7 ta rangli pechat",
+        ))
         .await
         .expect("map");
 
@@ -54,11 +61,15 @@ async fn production_workflow_audit_reports_duplicate_qr_and_unknown_order_batch(
 #[tokio::test]
 async fn production_workflow_audit_reports_queue_and_lineage_invariants() {
     let store = Arc::new(MemoryProductionMapStore::new());
-    let service = ProductionMapService::new(store.clone());
+    let service = service_with_default_apparatus(store.clone()).await;
     let order_id = "zakaz-audit-invariants";
-    let apparatus = "7 ta rangli pechat";
+    let apparatus = PECHAT_ID;
     store
-        .put_map(apparatus_stage_map(order_id, apparatus))
+        .put_map(super::fixtures::canonical_apparatus_stage_map(
+            order_id,
+            apparatus,
+            "7 ta rangli pechat",
+        ))
         .await
         .expect("map");
     store
@@ -71,7 +82,11 @@ async fn production_workflow_audit_reports_queue_and_lineage_invariants() {
     store
         .put_apparatus_sequence(
             apparatus,
-            vec![order_id.to_string(), order_id.to_string(), "missing-order".to_string()],
+            vec![
+                order_id.to_string(),
+                order_id.to_string(),
+                "missing-order".to_string(),
+            ],
         )
         .await
         .expect("sequence");
@@ -96,7 +111,7 @@ fn audit_test_batch(batch_id: &str, order_id: &str, qr_payload: &str) -> OrderPr
         session_id: format!("session-{batch_id}"),
         started_at_unix: 0,
         completed_at_unix: 0,
-        apparatus: "7 ta rangli pechat".to_string(),
+        apparatus: PECHAT_ID.to_string(),
         order_id: order_id.to_string(),
         action: queue_state::ApparatusQueueAction::Pause,
         status: OrderProgressBatchStatus::Paused,
@@ -111,10 +126,10 @@ fn audit_test_batch(batch_id: &str, order_id: &str, qr_payload: &str) -> OrderPr
         worker_display_name: "Worker Audit".to_string(),
         wip_status: OrderProgressBatchWipStatus::Waiting,
         status_detail: OrderProgressBatchStatusDetail::default(),
-        current_apparatus: "7 ta rangli pechat".to_string(),
-        current_apparatus_key: queue_state::apparatus_search_key("7 ta rangli pechat"),
-        current_location: "7 ta rangli pechat".to_string(),
-        next_apparatus: "Laminatsiya 1".to_string(),
+        current_apparatus: PECHAT_ID.to_string(),
+        current_apparatus_key: queue_state::apparatus_search_key(PECHAT_ID),
+        current_location: PECHAT_ID.to_string(),
+        next_apparatus: LAMINATION_ID.to_string(),
         parent_batch_id: String::new(),
         used_by_session_id: String::new(),
         used_by_apparatus: String::new(),

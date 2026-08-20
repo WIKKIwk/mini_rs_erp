@@ -7,7 +7,11 @@ use thiserror::Error;
 use tokio::sync::{Mutex, RwLock};
 
 use crate::core::admin::models::AdminWarehouse;
+use crate::core::apparatus_standard::ApparatusId;
 use crate::core::auth::models::{Principal, PrincipalRole};
+use crate::core::production_map::{
+    CanonicalApparatusResolver, UnavailableCanonicalApparatusResolver,
+};
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct WarehouseUpsert {
@@ -23,7 +27,13 @@ pub struct WarehouseUpsert {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct WarehouseAssignment {
+    #[serde(default = "default_assignment_kind")]
+    pub assignment_kind: String,
     pub warehouse: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub warehouse_name: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub apparatus_id: Option<String>,
     pub principal_role: PrincipalRole,
     pub principal_ref: String,
     pub display_name: String,
@@ -52,7 +62,13 @@ pub struct WarehouseStockItem {
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 pub struct WarehouseAssignmentUpsert {
+    #[serde(default = "default_assignment_kind")]
+    pub assignment_kind: String,
     pub warehouse: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub warehouse_name: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub apparatus_id: Option<String>,
     pub principal_role: PrincipalRole,
     pub principal_ref: String,
     #[serde(default)]
@@ -61,9 +77,25 @@ pub struct WarehouseAssignmentUpsert {
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 pub struct WarehouseAssignmentDeleteRequest {
+    #[serde(default = "default_assignment_kind")]
+    pub assignment_kind: String,
     pub warehouse: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub warehouse_name: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub apparatus_id: Option<String>,
     pub principal_role: PrincipalRole,
     pub principal_ref: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum WarehouseAssignmentIdentity {
+    WarehouseName(String),
+    ApparatusId(ApparatusId),
+}
+
+fn default_assignment_kind() -> String {
+    "warehouse".to_string()
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
@@ -86,6 +118,8 @@ pub enum WarehouseError {
     MissingWarehouse,
     #[error("principal ref is required")]
     MissingPrincipalRef,
+    #[error("apparatus is invalid")]
+    InvalidApparatus,
     #[error("warehouse not found")]
     NotFound,
     #[error("warehouse assignment not found")]
@@ -121,6 +155,10 @@ pub trait WarehouseStorePort: Send + Sync {
         warehouse: &str,
     ) -> Result<Vec<WarehouseAssignment>, WarehouseError>;
 
+    async fn all_warehouse_assignments(
+        &self,
+    ) -> Result<Vec<WarehouseAssignment>, WarehouseError>;
+
     async fn warehouse_summaries(
         &self,
         query: &str,
@@ -142,7 +180,7 @@ pub trait WarehouseStorePort: Send + Sync {
 
     async fn delete_warehouse_assignment(
         &self,
-        warehouse: &str,
+        identity: &WarehouseAssignmentIdentity,
         principal_role: &PrincipalRole,
         principal_ref: &str,
     ) -> Result<Option<WarehouseAssignment>, WarehouseError>;
@@ -157,11 +195,23 @@ pub trait WarehouseStorePort: Send + Sync {
 #[derive(Clone)]
 pub struct WarehouseService {
     store: Arc<dyn WarehouseStorePort>,
+    canonical_apparatus_resolver: Arc<dyn CanonicalApparatusResolver>,
 }
 
 impl WarehouseService {
     pub fn new(store: Arc<dyn WarehouseStorePort>) -> Self {
-        Self { store }
+        Self {
+            store,
+            canonical_apparatus_resolver: Arc::new(UnavailableCanonicalApparatusResolver),
+        }
+    }
+
+    pub fn with_canonical_apparatus_resolver(
+        mut self,
+        resolver: Arc<dyn CanonicalApparatusResolver>,
+    ) -> Self {
+        self.canonical_apparatus_resolver = resolver;
+        self
     }
 
     pub async fn warehouses(
@@ -194,27 +244,34 @@ impl WarehouseService {
     ) -> Result<Vec<WarehouseAssignment>, WarehouseError> {
         Ok(self
             .store
-            .warehouse_assignments("")
+            .all_warehouse_assignments()
             .await?
             .into_iter()
             .filter(|assignment| assignment_matches_principal(assignment, principal))
             .collect())
     }
 
-    pub async fn assigned_warehouse_names(
+    pub async fn assigned_warehouse_keys(
         &self,
         principal: &Principal,
     ) -> Result<Vec<String>, WarehouseError> {
         let mut seen = BTreeSet::new();
         let mut out = Vec::new();
         for assignment in self.warehouse_assignments_for_principal(principal).await? {
-            let warehouse = assignment.warehouse.trim();
-            if warehouse.is_empty() || !seen.insert(warehouse.to_lowercase()) {
+            let key = assignment_identity_key(&assignment);
+            if key.is_empty() || !seen.insert(key.to_lowercase()) {
                 continue;
             }
-            out.push(warehouse.to_string());
+            out.push(key);
         }
         Ok(out)
+    }
+
+    pub async fn assigned_warehouse_names(
+        &self,
+        principal: &Principal,
+    ) -> Result<Vec<String>, WarehouseError> {
+        self.assigned_warehouse_keys(principal).await
     }
 
     pub async fn warehouse_summaries(
@@ -246,6 +303,24 @@ impl WarehouseService {
         input: WarehouseAssignmentUpsert,
     ) -> Result<WarehouseAssignment, WarehouseError> {
         let assignment = normalize_assignment(input)?;
+        if assignment.assignment_kind == "apparatus" {
+            let apparatus_id = assignment
+                .apparatus_id
+                .as_deref()
+                .ok_or(WarehouseError::InvalidApparatus)
+                .and_then(canonical_apparatus_id)?;
+            let Some(canonical) = self
+                .canonical_apparatus_resolver
+                .resolve(&apparatus_id)
+                .await
+                .map_err(|_| WarehouseError::StoreFailed)?
+            else {
+                return Err(WarehouseError::InvalidApparatus);
+            };
+            if canonical.identity.id != apparatus_id || canonical.validate().is_err() {
+                return Err(WarehouseError::InvalidApparatus);
+            }
+        }
         self.store.put_warehouse_assignment(assignment).await
     }
 
@@ -253,16 +328,13 @@ impl WarehouseService {
         &self,
         input: WarehouseAssignmentDeleteRequest,
     ) -> Result<WarehouseAssignment, WarehouseError> {
-        let warehouse = input.warehouse.trim();
-        if warehouse.is_empty() {
-            return Err(WarehouseError::MissingWarehouse);
-        }
+        let identity = normalize_assignment_delete_key(&input)?;
         let principal_ref = input.principal_ref.trim();
         if principal_ref.is_empty() {
             return Err(WarehouseError::MissingPrincipalRef);
         }
         self.store
-            .delete_warehouse_assignment(warehouse, &input.principal_role, principal_ref)
+            .delete_warehouse_assignment(&identity, &input.principal_role, principal_ref)
             .await?
             .ok_or(WarehouseError::AssignmentNotFound)
     }
@@ -297,20 +369,129 @@ fn normalize_warehouse(input: WarehouseUpsert) -> Result<AdminWarehouse, Warehou
 fn normalize_assignment(
     input: WarehouseAssignmentUpsert,
 ) -> Result<WarehouseAssignment, WarehouseError> {
+    let assignment_kind = normalize_assignment_kind(&input.assignment_kind)?;
     let warehouse = input.warehouse.trim().to_string();
-    if warehouse.is_empty() {
-        return Err(WarehouseError::MissingWarehouse);
-    }
+    let warehouse_name = input
+        .warehouse_name
+        .as_deref()
+        .map(str::trim)
+        .filter(|v| !v.is_empty())
+        .map(ToString::to_string);
+    let apparatus_id = input
+        .apparatus_id
+        .as_deref()
+        .map(str::trim)
+        .filter(|v| !v.is_empty())
+        .map(canonical_apparatus_id)
+        .transpose()?;
+    let (warehouse_name, apparatus_id) = match assignment_kind.as_str() {
+        "warehouse" => {
+            let name =
+                warehouse_name.or_else(|| (!warehouse.is_empty()).then(|| warehouse.clone()));
+            if name.is_none() {
+                return Err(WarehouseError::MissingWarehouse);
+            }
+            (name, None)
+        }
+        "apparatus" => {
+            if apparatus_id.is_none() {
+                return Err(WarehouseError::MissingWarehouse);
+            }
+            (None, apparatus_id)
+        }
+        _ => unreachable!(),
+    };
     let principal_ref = input.principal_ref.trim().to_string();
     if principal_ref.is_empty() {
         return Err(WarehouseError::MissingPrincipalRef);
     }
     Ok(WarehouseAssignment {
+        assignment_kind,
         warehouse,
+        warehouse_name,
+        apparatus_id: apparatus_id.map(|id| id.as_str().to_string()),
         principal_role: input.principal_role,
         principal_ref,
         display_name: input.display_name.trim().to_string(),
     })
+}
+
+fn normalize_assignment_kind(value: &str) -> Result<String, WarehouseError> {
+    match value.trim().to_lowercase().as_str() {
+        "warehouse" | "apparatus" => Ok(value.trim().to_lowercase()),
+        _ => Err(WarehouseError::StoreFailed),
+    }
+}
+
+fn canonical_apparatus_id(value: &str) -> Result<ApparatusId, WarehouseError> {
+    ApparatusId::new(value.to_string()).map_err(|_| WarehouseError::StoreFailed)
+}
+
+fn assignment_identity_key(assignment: &WarehouseAssignment) -> String {
+    if assignment.assignment_kind.eq_ignore_ascii_case("apparatus") {
+        assignment
+            .apparatus_id
+            .as_deref()
+            .and_then(|value| canonical_apparatus_id(value).ok())
+            .map(|id| id.as_str().to_string())
+            .unwrap_or_default()
+    } else {
+        assignment
+            .warehouse_name
+            .as_deref()
+            .unwrap_or(&assignment.warehouse)
+            .trim()
+            .to_string()
+    }
+}
+
+fn assignment_matches_identity(
+    assignment: &WarehouseAssignment,
+    identity: &WarehouseAssignmentIdentity,
+) -> bool {
+    match identity {
+        WarehouseAssignmentIdentity::WarehouseName(warehouse) => {
+            assignment.assignment_kind.eq_ignore_ascii_case("warehouse")
+                && assignment_identity_key(assignment).eq_ignore_ascii_case(warehouse)
+        }
+        WarehouseAssignmentIdentity::ApparatusId(apparatus_id) => {
+            assignment.assignment_kind.eq_ignore_ascii_case("apparatus")
+                && assignment
+                    .apparatus_id
+                    .as_deref()
+                    .is_some_and(|value| value.eq_ignore_ascii_case(apparatus_id.as_str()))
+        }
+    }
+}
+
+fn normalize_assignment_delete_key(
+    input: &WarehouseAssignmentDeleteRequest,
+) -> Result<WarehouseAssignmentIdentity, WarehouseError> {
+    match normalize_assignment_kind(&input.assignment_kind)?.as_str() {
+        "apparatus" => input
+            .apparatus_id
+            .as_deref()
+            .map(str::trim)
+            .filter(|v| !v.is_empty())
+            .map(canonical_apparatus_id)
+            .transpose()?
+            .map(WarehouseAssignmentIdentity::ApparatusId)
+            .ok_or(WarehouseError::MissingWarehouse),
+        _ => {
+            let warehouse = input
+                .warehouse_name
+                .as_deref()
+                .unwrap_or(&input.warehouse)
+                .trim();
+            if warehouse.is_empty() {
+                Err(WarehouseError::MissingWarehouse)
+            } else {
+                Ok(WarehouseAssignmentIdentity::WarehouseName(
+                    warehouse.to_string(),
+                ))
+            }
+        }
+    }
 }
 
 pub fn merge_admin_warehouses(
@@ -375,6 +556,7 @@ impl MemoryWarehouseStore {
 include!("warehouses_memory_store.rs");
 
 #[cfg(test)]
+#[allow(clippy::items_after_test_module)]
 mod tests {
     use super::*;
 
@@ -407,18 +589,128 @@ mod tests {
             .expect("empty child warehouse should be deleted");
 
         assert_eq!(deleted.warehouse, "A blok");
-        assert!(service
-            .warehouses("A blok", "", 10)
+        assert!(
+            service
+                .warehouses("A blok", "", 10)
+                .await
+                .expect("warehouses should load")
+                .is_empty()
+        );
+    }
+
+    #[tokio::test]
+    async fn typed_assignments_keep_memory_reads_and_deletes_disjoint() {
+        let store = Arc::new(MemoryWarehouseStore::new());
+        let service = WarehouseService::new(store.clone());
+        let principal = Principal {
+            role: PrincipalRole::Admin,
+            display_name: "Typed principal".to_string(),
+            legal_name: String::new(),
+            ref_: "typed-principal".to_string(),
+            phone: String::new(),
+            avatar_url: String::new(),
+        };
+
+        store
+            .put_warehouse_assignment(WarehouseAssignment {
+                assignment_kind: "warehouse".to_string(),
+                warehouse: "Shared warehouse".to_string(),
+                warehouse_name: Some("Shared warehouse".to_string()),
+                apparatus_id: None,
+                principal_role: principal.role.clone(),
+                principal_ref: principal.ref_.clone(),
+                display_name: "Warehouse assignment".to_string(),
+            })
             .await
-            .expect("warehouses should load")
-            .is_empty());
+            .expect("warehouse assignment");
+        store
+            .put_warehouse_assignment(WarehouseAssignment {
+                assignment_kind: "apparatus".to_string(),
+                warehouse: "Apparatus snapshot".to_string(),
+                warehouse_name: None,
+                apparatus_id: Some("apparatus:test:one".to_string()),
+                principal_role: principal.role.clone(),
+                principal_ref: principal.ref_.clone(),
+                display_name: "Apparatus assignment".to_string(),
+            })
+            .await
+            .expect("apparatus assignment");
+
+        assert_eq!(service.warehouse_assignments("").await.unwrap().len(), 1);
+        assert_eq!(
+            service
+                .warehouse_assignments_for_principal(&principal)
+                .await
+                .unwrap()
+                .len(),
+            2
+        );
+        assert_eq!(
+            service
+                .assigned_warehouse_keys(&principal)
+                .await
+                .unwrap()
+                .into_iter()
+                .collect::<BTreeSet<_>>(),
+            BTreeSet::from([
+                "Shared warehouse".to_string(),
+                "apparatus:test:one".to_string(),
+            ])
+        );
+        assert_eq!(
+            service
+                .assigned_warehouse_names(&principal)
+                .await
+                .unwrap()
+                .into_iter()
+                .collect::<BTreeSet<_>>(),
+            BTreeSet::from([
+                "Shared warehouse".to_string(),
+                "apparatus:test:one".to_string(),
+            ])
+        );
+
+        let removed_apparatus = service
+            .unassign_warehouse(WarehouseAssignmentDeleteRequest {
+                assignment_kind: "apparatus".to_string(),
+                warehouse: "Apparatus snapshot".to_string(),
+                warehouse_name: None,
+                apparatus_id: Some("apparatus:test:one".to_string()),
+                principal_role: principal.role.clone(),
+                principal_ref: principal.ref_.clone(),
+            })
+            .await
+            .expect("delete apparatus assignment");
+        assert_eq!(removed_apparatus.assignment_kind, "apparatus");
+        assert_eq!(service.warehouse_assignments("").await.unwrap().len(), 1);
+
+        let removed_warehouse = service
+            .unassign_warehouse(WarehouseAssignmentDeleteRequest {
+                assignment_kind: "warehouse".to_string(),
+                warehouse: "Shared warehouse".to_string(),
+                warehouse_name: Some("Shared warehouse".to_string()),
+                apparatus_id: None,
+                principal_role: principal.role.clone(),
+                principal_ref: principal.ref_.clone(),
+            })
+            .await
+            .expect("delete warehouse assignment");
+        assert_eq!(removed_warehouse.assignment_kind, "warehouse");
+        assert!(
+            service
+                .warehouse_assignments_for_principal(&principal)
+                .await
+                .unwrap()
+                .is_empty()
+        );
     }
 }
 
 fn assignment_key(assignment: &WarehouseAssignment) -> String {
     format!(
-        "{}::{:?}::{}",
-        assignment.warehouse.trim().to_lowercase(),
+        "{}::{}::{:?}::{}",
+        assignment.assignment_kind.trim().to_lowercase(),
+        assignment_identity_key(assignment).to_lowercase(),
         assignment.principal_role,
         assignment.principal_ref.trim().to_lowercase()
     )

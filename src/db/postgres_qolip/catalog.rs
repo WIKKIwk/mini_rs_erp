@@ -2,9 +2,9 @@ use sqlx::{PgPool, Postgres, Transaction};
 
 use crate::core::auth::models::Principal;
 use crate::core::qolip::normalize::qolip_location_id;
-use crate::core::qolip::{role_code, QolipBlock, QolipError, QolipProduct, QolipProductSpec};
+use crate::core::qolip::{QolipBlock, QolipError, QolipProduct, QolipProductSpec, role_code};
 
-use super::rows::{row_to_product_spec, QolipBlockRow, QolipProductRow, QolipProductSpecRow};
+use super::rows::{QolipBlockRow, QolipProductRow, QolipProductSpecRow, row_to_product_spec};
 
 const QOLIP_PANTON_MAX_NUMBER: i32 = 100;
 
@@ -14,12 +14,13 @@ pub(super) async fn load_assigned_warehouses(
 ) -> Result<Vec<String>, QolipError> {
     let rows = sqlx::query_scalar::<_, String>(
         r#"
-        SELECT warehouse
+        SELECT warehouse_name
         FROM mini_warehouse_assignments
         WHERE principal_ref = $1
           AND lower(principal_role) = lower($2)
-          AND btrim(warehouse) <> ''
-        ORDER BY lower(warehouse)
+          AND assignment_kind = 'warehouse'
+          AND btrim(warehouse_name) <> ''
+        ORDER BY lower(warehouse_name)
         "#,
     )
     .bind(principal.ref_.trim())
@@ -38,16 +39,17 @@ pub(super) async fn load_assigned_blocks(
     let rows = sqlx::query_as::<_, QolipBlockRow>(
         r#"
         WITH assigned AS (
-            SELECT warehouse
+            SELECT warehouse_name
             FROM mini_warehouse_assignments
             WHERE principal_ref = $1
               AND lower(principal_role) = lower($2)
+              AND assignment_kind = 'warehouse'
         ),
         child_blocks AS (
-            SELECT child.name AS block, assigned.warehouse AS warehouse
+            SELECT child.name AS block, assigned.warehouse_name AS warehouse
             FROM assigned
             JOIN mini_warehouses child
-              ON lower(child.parent_warehouse) = lower(assigned.warehouse)
+              ON lower(child.parent_warehouse) = lower(assigned.warehouse_name)
         )
         SELECT block, warehouse
         FROM child_blocks
@@ -182,7 +184,8 @@ pub(super) async fn rename_block(
 
     sqlx::query(
         "UPDATE mini_warehouse_assignments
-         SET warehouse = $2,
+         SET warehouse_name = $2,
+             warehouse = $2,
              payload_json = jsonb_set(
                  COALESCE(payload_json, '{}'::jsonb),
                  '{warehouse}',
@@ -190,7 +193,8 @@ pub(super) async fn rename_block(
                  true
              ),
              updated_at = now()
-         WHERE lower(warehouse) = lower($1)",
+         WHERE assignment_kind = 'warehouse'
+           AND lower(warehouse_name) = lower($1)",
     )
     .bind(&current.block)
     .bind(new_block)

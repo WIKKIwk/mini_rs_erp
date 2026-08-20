@@ -2,11 +2,12 @@ use super::*;
 
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use super::apparatus::{is_laminatsiya_title, is_rezka_title};
 use super::progress::unix_seconds;
+use crate::core::apparatus_standard::ApparatusId;
 use crate::core::quantity::positive_erp_quantity;
 
 impl ProductionMapService {
+    #[allow(clippy::too_many_arguments)]
     pub async fn record_laminatsiya_astatka(
         &self,
         apparatus: &str,
@@ -25,7 +26,12 @@ impl ProductionMapService {
         if apparatus.is_empty() || order_id.is_empty() {
             return Err(ProductionMapError::MissingId);
         }
-        if !is_laminatsiya_title(apparatus) {
+        let apparatus_id = ApparatusId::new(apparatus.to_string())
+            .map_err(|_| ProductionMapError::ProgressInputInvalid)?;
+        let canonical = self.resolve_canonical_apparatus(&apparatus_id).await?;
+        if canonical.identity.id != apparatus_id
+            || !super::apparatus::is_laminatsiya_apparatus(&canonical)
+        {
             return Err(ProductionMapError::ProgressInputInvalid);
         }
         for metric in [
@@ -52,7 +58,10 @@ impl ProductionMapService {
             .store
             .laminatsiya_astatka_reports_for_order(&order_id)
             .await?;
-        let previous_to = previous_reports.iter().map(|report| report.to_at_unix).max();
+        let previous_to = previous_reports
+            .iter()
+            .map(|report| report.to_at_unix)
+            .max();
         let from_at_unix = if let Some(previous_to) = previous_to {
             Some(previous_to)
         } else {
@@ -97,6 +106,7 @@ impl ProductionMapService {
         Ok(report)
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub async fn record_rezka_astatka(
         &self,
         apparatus: &str,
@@ -116,7 +126,12 @@ impl ProductionMapService {
         if apparatus.is_empty() || order_id.is_empty() {
             return Err(ProductionMapError::MissingId);
         }
-        if !is_rezka_title(apparatus) {
+        let apparatus_id = ApparatusId::new(apparatus.to_string())
+            .map_err(|_| ProductionMapError::ProgressInputInvalid)?;
+        let canonical = self.resolve_canonical_apparatus(&apparatus_id).await?;
+        if canonical.identity.id != apparatus_id
+            || !super::apparatus::is_rezka_apparatus(&canonical)
+        {
             return Err(ProductionMapError::ProgressInputInvalid);
         }
         for metric in [
@@ -137,8 +152,14 @@ impl ProductionMapService {
 
         let order_id = self.astatka_order_id(order_id).await?;
         let _guard = self.queue_action_guard().await;
-        let previous_reports = self.store.rezka_astatka_reports_for_order(&order_id).await?;
-        let previous_to = previous_reports.iter().map(|report| report.to_at_unix).max();
+        let previous_reports = self
+            .store
+            .rezka_astatka_reports_for_order(&order_id)
+            .await?;
+        let previous_to = previous_reports
+            .iter()
+            .map(|report| report.to_at_unix)
+            .max();
         let from_at_unix = if let Some(previous_to) = previous_to {
             Some(previous_to)
         } else {
@@ -163,8 +184,7 @@ impl ProductionMapService {
             to_at_unix,
             total_waste: total_waste.expect("validated rezka astatka metric"),
             rezka_bosma_waste: rezka_bosma_waste.expect("validated rezka astatka metric"),
-            rezka_lamination_waste: rezka_lamination_waste
-                .expect("validated rezka astatka metric"),
+            rezka_lamination_waste: rezka_lamination_waste.expect("validated rezka astatka metric"),
             rezka_edge_waste: rezka_edge_waste.expect("validated rezka astatka metric"),
             finished_goods_meter,
             finished_goods_kg,

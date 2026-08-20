@@ -25,6 +25,7 @@ fn order_sheet_row_matches_legacy_excel_columns() {
             id: "apparatus".to_string(),
             kind: ProductionMapNodeKind::Apparatus,
             title: "7 ta rangli pechat".to_string(),
+            apparatus_id: "apparatus:default:bosma_7".to_string(),
             formula: None,
             role_code: String::new(),
             item_code: String::new(),
@@ -34,6 +35,7 @@ fn order_sheet_row_matches_legacy_excel_columns() {
             alternative_group_id: String::new(),
             alternative_group_label: String::new(),
             alternative_assigned_title: "8 ta rangli pechat".to_string(),
+            alternative_assigned_apparatus_id: "apparatus:default:bosma_8".to_string(),
             rezka_kadr_count: None,
             rezka_label_length: None,
             x: 0.0,
@@ -117,8 +119,18 @@ fn order_sheet_row_marks_flexo_orders_with_f() {
 #[test]
 fn missing_order_rows_skips_existing_sheet_codes() {
     let maps = vec![
-        test_map("zakaz-7775", "7775", "8 ta rangli pechat"),
-        test_map("zakaz-7776", "7776", "7 ta rangli pechat"),
+        test_map(
+            "zakaz-7775",
+            "7775",
+            "8 ta rangli pechat",
+            "apparatus:default:bosma_8",
+        ),
+        test_map(
+            "zakaz-7776",
+            "7776",
+            "7 ta rangli pechat",
+            "apparatus:default:bosma_7",
+        ),
     ];
     let templates = vec![
         test_template("zakaz-7775", "7775"),
@@ -132,7 +144,12 @@ fn missing_order_rows_skips_existing_sheet_codes() {
     assert_eq!(rows[0][3], Value::String("/7776".to_string()));
 }
 
-fn test_map(id: &str, order_number: &str, apparatus: &str) -> ProductionMapDefinition {
+fn test_map(
+    id: &str,
+    order_number: &str,
+    apparatus: &str,
+    apparatus_id: &str,
+) -> ProductionMapDefinition {
     ProductionMapDefinition {
         id: id.to_string(),
         product_code: "ITEM-1".to_string(),
@@ -148,6 +165,7 @@ fn test_map(id: &str, order_number: &str, apparatus: &str) -> ProductionMapDefin
             id: "apparatus".to_string(),
             kind: ProductionMapNodeKind::Apparatus,
             title: apparatus.to_string(),
+            apparatus_id: apparatus_id.to_string(),
             formula: None,
             role_code: String::new(),
             item_code: String::new(),
@@ -157,6 +175,7 @@ fn test_map(id: &str, order_number: &str, apparatus: &str) -> ProductionMapDefin
             alternative_group_id: String::new(),
             alternative_group_label: String::new(),
             alternative_assigned_title: String::new(),
+            alternative_assigned_apparatus_id: String::new(),
             rezka_kadr_count: None,
             rezka_label_length: None,
             x: 0.0,

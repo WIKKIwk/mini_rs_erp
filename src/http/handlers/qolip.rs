@@ -1,15 +1,15 @@
+use axum::Json;
 use axum::body::Bytes;
 use axum::extract::{Query, State};
 use axum::http::{HeaderMap, Method, StatusCode};
-use axum::Json;
 
 use crate::app::AppState;
 use crate::core::authz::Capability;
 use crate::core::gscale::ProgressLabelPrintRequest;
 use crate::core::qolip::{
     QolipBlock, QolipCellQrInput, QolipCheckoutCreate, QolipCheckoutReturn, QolipError,
-    QolipLocationMove, QolipLocationMoveBatch, QolipLocationUpsert,
-    QolipProductSpecBatchUpsert, QolipProductSpecDelete, QolipProductSpecUpsert,
+    QolipLocationMove, QolipLocationMoveBatch, QolipLocationUpsert, QolipProductSpecBatchUpsert,
+    QolipProductSpecDelete, QolipProductSpecUpsert,
 };
 use crate::core::warehouses::{WarehouseDeleteRequest, WarehouseUpsert};
 
@@ -596,8 +596,7 @@ pub async fn location_move_batch(
             .ok_or_else(|| bad_request("location_not_found"))?;
         let _ = accessible_qolip_block(&state, &principal, &location.block).await?;
         let requested_block = input.block.trim();
-        if requested_block.is_empty()
-            || requested_block.eq_ignore_ascii_case(location.block.trim())
+        if requested_block.is_empty() || requested_block.eq_ignore_ascii_case(location.block.trim())
         {
             input.block = location.block.clone();
             input.warehouse = location.warehouse.clone();

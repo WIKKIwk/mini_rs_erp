@@ -90,6 +90,12 @@ impl MemoryCalculateMaterialStore {
     }
 }
 
+impl Default for MemoryCalculateMaterialStore {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 #[async_trait]
 impl CalculateMaterialStorePort for MemoryCalculateMaterialStore {
     async fn list(&self) -> Result<Vec<CalculateMaterial>, CalculateMaterialError> {
@@ -390,10 +396,10 @@ fn upgrade_stored_material(
     mut material: CalculateMaterial,
     defaults: &[CalculateMaterial],
 ) -> CalculateMaterial {
-    if material.density_g_cm3 <= 0.0 {
-        if let Some(default) = defaults.iter().find(|default| default.id == material.id) {
-            material.density_g_cm3 = default.density_g_cm3;
-        }
+    if material.density_g_cm3 <= 0.0
+        && let Some(default) = defaults.iter().find(|default| default.id == material.id)
+    {
+        material.density_g_cm3 = default.density_g_cm3;
     }
     for variant in &mut material.variants {
         if material.density_g_cm3 <= 0.0

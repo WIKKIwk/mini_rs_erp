@@ -2,6 +2,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use sqlx::{Postgres, Transaction};
 
+use crate::core::apparatus_standard::ApparatusId;
 use crate::core::production_map::{
     ProductionMapError, QueueActionActor, RawMaterialStockTransition,
     RawMaterialStockTransitionKind,
@@ -16,6 +17,8 @@ pub(super) async fn apply_raw_material_stock_transitions_tx(
     actor: &QueueActionActor,
     apparatus: &str,
 ) -> Result<Vec<String>, ProductionMapError> {
+    let apparatus_id = ApparatusId::new(apparatus.trim().to_string())
+        .map_err(|_| ProductionMapError::RawMaterialInvalidInput)?;
     let mut warehouses = BTreeSet::new();
     for transition in transitions {
         if transition.is_empty() {
@@ -29,10 +32,22 @@ pub(super) async fn apply_raw_material_stock_transitions_tx(
         let owners = raw_material_assignment_owners_tx(tx, &barcodes, &transition.order_id).await?;
         let rows = match transition.kind {
             RawMaterialStockTransitionKind::InUse => {
-                mark_raw_material_stock_in_use_tx(tx, &barcodes, &transition.order_id).await
+                mark_raw_material_stock_in_use_tx(
+                    tx,
+                    &barcodes,
+                    &transition.order_id,
+                    apparatus_id.as_str(),
+                )
+                .await
             }
             RawMaterialStockTransitionKind::Consumed => {
-                mark_raw_material_stock_consumed_tx(tx, &barcodes, &transition.order_id).await
+                mark_raw_material_stock_consumed_tx(
+                    tx,
+                    &barcodes,
+                    &transition.order_id,
+                    apparatus_id.as_str(),
+                )
+                .await
             }
         }
         .map_err(|error| {
@@ -43,11 +58,7 @@ pub(super) async fn apply_raw_material_stock_transitions_tx(
             );
             ProductionMapError::StoreFailed
         })?;
-        if matches!(transition.kind, RawMaterialStockTransitionKind::InUse)
-            && rows.len() != barcodes.len()
-        {
-            return Err(ProductionMapError::RawMaterialStockUnavailable);
-        }
+        ensure_stock_transition_rows_affected(transition.kind, barcodes.len(), rows.len())?;
         for row in &rows {
             let previous = before.get(&stock_key(&row.barcode));
             let owner = owners.get(&stock_key(&row.barcode));
@@ -59,7 +70,7 @@ pub(super) async fn apply_raw_material_stock_transitions_tx(
                     previous.map(|row| row.status.clone()),
                     &transition.order_id,
                     actor,
-                    apparatus,
+                    apparatus_id.as_str(),
                     owner,
                 ),
             )
@@ -79,21 +90,30 @@ async fn mark_raw_material_stock_in_use_tx(
     tx: &mut Transaction<'_, Postgres>,
     barcodes: &[String],
     order_id: &str,
+    apparatus_id: &str,
 ) -> Result<Vec<RawMaterialStockTransitionRow>, sqlx::Error> {
     sqlx::query_as::<_, RawMaterialStockTransitionRow>(
-        "UPDATE mini_raw_material_stock
+        "UPDATE mini_raw_material_stock AS stock
          SET status = 'in_use',
              reserved_order_id = $2,
-             payload_json = jsonb_set(payload_json, '{in_use_order_id}', to_jsonb($2::text), true),
+             payload_json = jsonb_set(stock.payload_json, '{in_use_order_id}', to_jsonb($2::text), true),
              updated_at = now()
-         WHERE lower(barcode) = ANY($1)
-           AND (status = 'available' OR (status = 'in_use' AND reserved_order_id = $2))
+         WHERE lower(stock.barcode) = ANY($1)
+           AND (stock.status = 'available' OR (stock.status = 'in_use' AND stock.reserved_order_id = $2))
+           AND EXISTS (
+               SELECT 1
+               FROM mini_raw_material_assignments AS assignment
+               WHERE lower(assignment.barcode) = lower(stock.barcode)
+                 AND assignment.order_id = $2
+                 AND assignment.canonical_apparatus_id = $3
+           )
          RETURNING id, warehouse, item_code, item_name, barcode,
                    qty::float8 AS qty, uom,
                    status, reserved_order_id, source_receipt_id",
     )
     .bind(barcodes)
     .bind(order_id.trim())
+    .bind(apparatus_id.trim())
     .fetch_all(&mut **tx)
     .await
 }
@@ -102,21 +122,30 @@ async fn mark_raw_material_stock_consumed_tx(
     tx: &mut Transaction<'_, Postgres>,
     barcodes: &[String],
     order_id: &str,
+    apparatus_id: &str,
 ) -> Result<Vec<RawMaterialStockTransitionRow>, sqlx::Error> {
     sqlx::query_as::<_, RawMaterialStockTransitionRow>(
-        "UPDATE mini_raw_material_stock
+        "UPDATE mini_raw_material_stock AS stock
          SET status = 'consumed',
-             payload_json = jsonb_set(payload_json, '{consumed_order_id}', to_jsonb($2::text), true),
+             payload_json = jsonb_set(stock.payload_json, '{consumed_order_id}', to_jsonb($2::text), true),
              updated_at = now()
-         WHERE lower(barcode) = ANY($1)
-           AND reserved_order_id = $2
-           AND status IN ('in_use', 'consumed')
+         WHERE lower(stock.barcode) = ANY($1)
+           AND stock.reserved_order_id = $2
+           AND stock.status IN ('in_use', 'consumed')
+           AND EXISTS (
+               SELECT 1
+               FROM mini_raw_material_assignments AS assignment
+               WHERE lower(assignment.barcode) = lower(stock.barcode)
+                 AND assignment.order_id = $2
+                 AND assignment.canonical_apparatus_id = $3
+           )
          RETURNING id, warehouse, item_code, item_name, barcode,
                    qty::float8 AS qty, uom,
                    status, reserved_order_id, source_receipt_id",
     )
     .bind(barcodes)
     .bind(order_id.trim())
+    .bind(apparatus_id.trim())
     .fetch_all(&mut **tx)
     .await
 }
@@ -260,7 +289,7 @@ fn stock_transition_event_draft(
             "stock_id": row.id.trim(),
             "barcode": row.barcode.trim(),
             "order_id": order_id.trim(),
-            "apparatus": apparatus.trim(),
+            "apparatus_id": apparatus.trim(),
             "reserved_order_id": row.reserved_order_id.trim(),
             "source_receipt_id": row.source_receipt_id.trim(),
         }),
@@ -279,4 +308,92 @@ fn normalized_barcodes(barcodes: &[String]) -> Vec<String> {
         .collect::<BTreeSet<_>>()
         .into_iter()
         .collect()
+}
+
+fn ensure_stock_transition_rows_affected(
+    kind: RawMaterialStockTransitionKind,
+    requested_rows: usize,
+    affected_rows: usize,
+) -> Result<(), ProductionMapError> {
+    if matches!(
+        kind,
+        RawMaterialStockTransitionKind::InUse | RawMaterialStockTransitionKind::Consumed
+    ) && requested_rows != affected_rows
+    {
+        return Err(ProductionMapError::RawMaterialStockUnavailable);
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{
+        ensure_stock_transition_rows_affected, stock_transition_event_draft,
+        RawMaterialStockTransitionRow,
+    };
+    use crate::core::production_map::{
+        ProductionMapError, QueueActionActor, RawMaterialStockTransitionKind,
+    };
+
+    #[test]
+    fn consumed_transition_rejects_a_silent_zero_row_update() {
+        assert_eq!(
+            ensure_stock_transition_rows_affected(RawMaterialStockTransitionKind::Consumed, 1, 0,),
+            Err(ProductionMapError::RawMaterialStockUnavailable)
+        );
+        assert_eq!(
+            ensure_stock_transition_rows_affected(RawMaterialStockTransitionKind::Consumed, 2, 2,),
+            Ok(())
+        );
+        assert_eq!(
+            ensure_stock_transition_rows_affected(RawMaterialStockTransitionKind::InUse, 2, 1,),
+            Err(ProductionMapError::RawMaterialStockUnavailable)
+        );
+    }
+
+    #[test]
+    fn consumption_event_identity_is_scoped_to_canonical_apparatus() {
+        let row = RawMaterialStockTransitionRow {
+            id: "raw:001".to_string(),
+            warehouse: "Raw warehouse".to_string(),
+            item_code: "FILM-001".to_string(),
+            item_name: "Film".to_string(),
+            barcode: "RM-001".to_string(),
+            qty: 4.5,
+            uom: "kg".to_string(),
+            status: "consumed".to_string(),
+            reserved_order_id: "ORDER-001".to_string(),
+            source_receipt_id: "receipt-001".to_string(),
+        };
+        let actor = QueueActionActor {
+            role: "admin".to_string(),
+            ref_: "admin-001".to_string(),
+            display_name: "Admin".to_string(),
+        };
+        let first = stock_transition_event_draft(
+            RawMaterialStockTransitionKind::Consumed,
+            &row,
+            Some("in_use".to_string()),
+            "ORDER-001",
+            &actor,
+            "apparatus:catalog:first",
+            None,
+        );
+        let second = stock_transition_event_draft(
+            RawMaterialStockTransitionKind::Consumed,
+            &row,
+            Some("in_use".to_string()),
+            "ORDER-001",
+            &actor,
+            "apparatus:catalog:second",
+            None,
+        );
+
+        assert_ne!(first.idempotency_key, second.idempotency_key);
+        assert_eq!(first.qty_delta, -4.5);
+        assert_eq!(
+            first.payload_json["apparatus_id"],
+            serde_json::json!("apparatus:catalog:first")
+        );
+    }
 }

@@ -9,7 +9,7 @@ const DEFAULT_MAX_CONNECTIONS: u32 = 16;
 const DEFAULT_ACQUIRE_TIMEOUT_MS: u64 = 500;
 const MIGRATION_LOCK_KEY: i64 = 6_514_811_918_052_026_001;
 
-const POSTGRES_MIGRATIONS: [(&str, &str); 61] = [
+const POSTGRES_MIGRATIONS: [(&str, &str); 67] = [
     (
         "0001_mini_erp_foundation",
         include_str!("../../migrations/postgres/0001_mini_erp_foundation.sql"),
@@ -253,6 +253,30 @@ const POSTGRES_MIGRATIONS: [(&str, &str); 61] = [
     (
         "0061_order_reset_append_only_override",
         include_str!("../../migrations/postgres/0061_order_reset_append_only_override.sql"),
+    ),
+    (
+        "0062_canonical_apparatus_reference_ids",
+        include_str!("../../migrations/postgres/0062_canonical_apparatus_reference_ids.sql"),
+    ),
+    (
+        "0063_canonical_material_rule_apparatus_id",
+        include_str!("../../migrations/postgres/0063_canonical_material_rule_apparatus_id.sql"),
+    ),
+    (
+        "0064_canonical_apparatus_cutover",
+        include_str!("../../migrations/postgres/0064_canonical_apparatus_cutover.sql"),
+    ),
+    (
+        "0065_canonical_authority_remainder",
+        include_str!("../../migrations/postgres/0065_canonical_authority_remainder.sql"),
+    ),
+    (
+        "0066_canonical_apparatus_payload_invariant",
+        include_str!("../../migrations/postgres/0066_canonical_apparatus_payload_invariant.sql"),
+    ),
+    (
+        "0067_canonical_apparatus_fk_indexes",
+        include_str!("../../migrations/postgres/0067_canonical_apparatus_fk_indexes.sql"),
     ),
 ];
 

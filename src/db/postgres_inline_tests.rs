@@ -164,9 +164,58 @@ mod tests {
             .collect::<std::collections::BTreeSet<_>>();
 
         assert_eq!(versions.len(), POSTGRES_MIGRATIONS.len());
+        assert!(versions.contains("0065_canonical_authority_remainder"));
+        assert!(versions.contains("0066_canonical_apparatus_payload_invariant"));
+        assert!(versions.contains("0067_canonical_apparatus_fk_indexes"));
         assert!(POSTGRES_MIGRATIONS.iter().all(|(version, sql)| {
             !version.trim().is_empty() && migration_checksum(sql).len() == 64
         }));
+    }
+
+    #[test]
+    fn canonical_payload_invariant_migration_is_registered_with_the_runner() {
+        let migration = POSTGRES_MIGRATIONS
+            .iter()
+            .find(|(version, _)| *version == "0066_canonical_apparatus_payload_invariant")
+            .map(|(_, sql)| sql.to_lowercase())
+            .expect("canonical payload invariant migration");
+
+        assert!(migration.contains(
+            "add constraint mini_apparatus_canonical_payload_contract_check"
+        ));
+        assert!(migration.contains("0066 canonical apparatus payload invariant preflight failed"));
+        assert!(migration.contains(") is true"));
+    }
+
+    #[test]
+    fn canonical_authority_remainder_migration_is_registered_and_types_warehouse_assignments() {
+        let migration = POSTGRES_MIGRATIONS
+            .iter()
+            .find(|(version, _)| *version == "0065_canonical_authority_remainder")
+            .map(|(_, sql)| sql.to_lowercase())
+            .expect("canonical authority remainder migration");
+        let compact = migration.split_whitespace().collect::<String>();
+
+        for expected in [
+            "altertablemini_warehouse_assignmentsaddcolumnifnotexistsassignment_kindtext",
+            "addcolumnifnotexistswarehouse_nametext",
+            "addcolumnifnotexistsapparatus_idtext",
+            "altertablemini_warehouse_assignmentsaltercolumnassignment_kindsetnotnull",
+            "assignment_kind='warehouse'",
+            "assignment_kind='apparatus'",
+            "foreignkey(warehouse_name)referencesmini_warehouses(name)",
+            "foreignkey(apparatus_id)referencesmini_apparatus(id)",
+            "createindexifnotexistsidx_mini_warehouse_assignments_warehouse_name",
+            "createindexifnotexistsidx_mini_warehouse_assignments_apparatus_id",
+            "createuniqueindexifnotexistsidx_mini_warehouse_assignments_warehouse_identity_unique",
+            "createuniqueindexifnotexistsidx_mini_warehouse_assignments_apparatus_identity_unique",
+            "raiseexception'0065warehouseassignmentlegacyvaluematchesbothwarehouseandapparatusidentities'",
+            "raiseexception'0065warehouseassignmentlegacyvaluematchesneitherwarehousenorcanonicalapparatusidentity'",
+            "raiseexception'0065virtualtraininginputnodecannotcarryproductionapparatusidentity'",
+        ] {
+            assert!(compact.contains(expected), "missing {expected}");
+        }
+        assert!(migration.contains("apparatus_id ~ '^apparatus:[a-z0-9._-]+:[a-z0-9._-]+$'"));
     }
 
     #[test]
@@ -421,7 +470,7 @@ mod tests {
             "mini_factory_locations",
             "mini_factory_location_apparatus_links",
             "apparatus:default:bosma_7",
-            "apparatus:default:rezka",
+            "apparatus:default:asset-010",
             "on delete cascade",
             "on delete restrict",
         ] {

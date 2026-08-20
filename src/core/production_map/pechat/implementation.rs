@@ -3,68 +3,148 @@
 // Mirror of the mobile client rules in
 // `accord_mobile/lib/src/features/admin/logic/production_map_pechat_rules.dart`.
 // The server is the source of truth: moves are validated here before any
-// apparatus change is persisted.
+// apparatus change is persisted. Apparatus classification and tooling policy
+// come from the canonical apparatus configuration; display names are never
+// interpreted as live policy input.
+
+use crate::core::apparatus_standard::{
+    ApparatusClassification, ApparatusFamily, ApparatusId, ApparatusKind, CanonicalApparatus,
+    ToolingPolicy,
+};
+
+/// Canonical pechat policy projected from one immutable apparatus identity.
+///
+/// Queue and handler owners should resolve their apparatus ID to a validated
+/// [`CanonicalApparatus`] before asking this module for a policy. The display
+/// metadata is intentionally not part of the projection.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PechatPolicy<'a> {
+    apparatus_id: &'a ApparatusId,
+    classification: &'a ApparatusClassification,
+    tooling: ToolingPolicy,
+}
+
+impl<'a> PechatPolicy<'a> {
+    pub fn apparatus_id(self) -> &'a ApparatusId {
+        self.apparatus_id
+    }
+
+    pub fn classification(self) -> &'a ApparatusClassification {
+        self.classification
+    }
+
+    pub fn is_flexo(self) -> bool {
+        self.classification.kind == ApparatusKind::Flexo
+    }
+
+    pub fn color_stations(self) -> Option<u8> {
+        (self.classification.kind == ApparatusKind::ColorPechat)
+            .then_some(self.classification.color_stations)
+            .flatten()
+    }
+
+    pub fn requires_qolip_scan(self) -> bool {
+        self.tooling == ToolingPolicy::QolipScanRequired
+    }
+}
+
+/// Returns whether the canonical classification is a supported pechat type.
+pub fn is_pechat_classification(classification: &ApparatusClassification) -> bool {
+    classification.family == ApparatusFamily::Pechat
+        && matches!(
+            classification.kind,
+            ApparatusKind::ColorPechat | ApparatusKind::Flexo
+        )
+}
+
+/// Returns whether the canonical classification is Flexo.
+pub fn is_flexo_classification(classification: &ApparatusClassification) -> bool {
+    is_pechat_classification(classification) && classification.kind == ApparatusKind::Flexo
+}
+
+/// Returns a pechat policy for a canonical apparatus, keyed by its immutable ID.
+pub fn policy_for(apparatus: &CanonicalApparatus) -> Option<PechatPolicy<'_>> {
+    is_pechat_classification(&apparatus.classification).then_some(PechatPolicy {
+        apparatus_id: &apparatus.identity.id,
+        classification: &apparatus.classification,
+        tooling: apparatus.policies.tooling,
+    })
+}
+
+/// Returns whether a canonical apparatus is pechat.
+pub fn is_pechat_apparatus(apparatus: &CanonicalApparatus) -> bool {
+    policy_for(apparatus).is_some()
+}
+
+/// Returns whether a canonical apparatus is Flexo.
+pub fn is_flexo_apparatus(apparatus: &CanonicalApparatus) -> bool {
+    policy_for(apparatus).is_some_and(|policy| policy.is_flexo())
+}
+
+/// Check whether a configured apparatus replacement preserves the operation
+/// represented by the source. Queue moves and transfers must resolve both
+/// sides from canonical master data before calling this helper; display
+/// snapshots are deliberately not part of the decision.
+pub fn reroute_compatible(source: &CanonicalApparatus, target: &CanonicalApparatus) -> bool {
+    if source.classification.family != target.classification.family {
+        return false;
+    }
+    // Flexo and colour pechat share the broad pechat capability but are not
+    // interchangeable process families. In particular, a Flexo order must
+    // never be silently rerouted onto a colour-count station (or vice versa).
+    if source.classification.family == ApparatusFamily::Pechat
+        && source.classification.kind != target.classification.kind
+    {
+        return false;
+    }
+    source
+        .capabilities
+        .iter()
+        .any(|capability| target.capabilities.contains(capability))
+}
+
+/// Check whether an order may be rerouted between two canonical apparatuses.
+///
+/// The broad apparatus compatibility check is not enough for colour pechat:
+/// the target station must also satisfy the order's roll and rubber-width
+/// limits. Non-colour pechat uses the broad compatibility result unchanged.
+pub fn reroute_order_compatible(
+    source: &CanonicalApparatus,
+    target: &CanonicalApparatus,
+    roll_count: Option<i64>,
+    width_mm: Option<f64>,
+) -> bool {
+    if !reroute_compatible(source, target) {
+        return false;
+    }
+    let Some(target_color_stations) = pechat_color_stations(target) else {
+        return true;
+    };
+    pechat_can_move_order(
+        target_color_stations,
+        roll_count,
+        width_mm,
+        pechat_color_stations(source),
+    )
+}
+
+/// Returns the configured ColorPechat station count, or `None` for Flexo and
+/// non-pechat apparatuses.
+pub fn pechat_color_stations(apparatus: &CanonicalApparatus) -> Option<u8> {
+    policy_for(apparatus).and_then(PechatPolicy::color_stations)
+}
+
+/// Returns the explicit canonical Qolip tooling policy for supported pechat
+/// apparatuses. Runtime checkout, custody, in-use, and QR state remain outside
+/// this configuration helper.
+pub fn requires_qolip_scan(apparatus: &CanonicalApparatus) -> bool {
+    policy_for(apparatus).is_some_and(|policy| policy.requires_qolip_scan())
+}
 
 /// Rubber plate size derived from order width, in 50mm steps (50..=1350).
 pub fn rubber_size_from_width(width_mm: f64) -> i64 {
     let steps = (width_mm / 50.0).ceil() as i64;
     steps.clamp(1, 27) * 50
-}
-
-/// Parses the pechat color count (7/8/9) out of an apparatus title such as
-/// "7 ta rangli pechat - A", "8 rangli val" or "9ta rangli".
-pub fn pechat_color_count(title: &str) -> Option<u8> {
-    let lower = title.trim().to_lowercase();
-    let bytes = lower.as_bytes();
-    let mut search_from = 0;
-    while let Some(found) = lower[search_from..].find("rangli") {
-        let index = search_from + found;
-        if let Some(count) = color_count_before(bytes, index) {
-            return Some(count);
-        }
-        search_from = index + "rangli".len();
-    }
-    None
-}
-
-/// Whether an apparatus is part of the printing/pechat family.
-///
-/// Color-count machines use the 7/8/9 parser above. Flexo is a printing
-/// apparatus too, but its process is not expressed as a color count, so it
-/// must be classified separately from color-specific compatibility rules.
-pub fn is_flexo_apparatus(title: &str) -> bool {
-    let lower = title.trim().to_lowercase();
-    ["fleksa", "fleska", "flex", "flexe", "flexo"]
-        .iter()
-        .any(|keyword| lower.contains(keyword))
-}
-
-pub fn is_pechat_apparatus(title: &str) -> bool {
-    pechat_color_count(title).is_some() || is_flexo_apparatus(title)
-}
-
-fn color_count_before(bytes: &[u8], rangli_start: usize) -> Option<u8> {
-    let mut i = rangli_start;
-    while i > 0 && bytes[i - 1].is_ascii_whitespace() {
-        i -= 1;
-    }
-    if i >= 2 && &bytes[i - 2..i] == b"ta" {
-        i -= 2;
-        while i > 0 && bytes[i - 1].is_ascii_whitespace() {
-            i -= 1;
-        }
-    }
-    if i == 0 {
-        return None;
-    }
-    let digit = bytes[i - 1];
-    if !matches!(digit, b'7' | b'8' | b'9') {
-        return None;
-    }
-    if i >= 2 && bytes[i - 2].is_ascii_alphanumeric() {
-        return None;
-    }
-    Some(digit - b'0')
 }
 
 /// Minimal pechat color count required by the order, or `None` when the
@@ -132,25 +212,6 @@ pub fn pechat_can_handle_order(
     }
 }
 
-/// Highest pechat color count among the order's apparatus titles.
-pub fn order_pechat_color_count<'a>(titles: impl IntoIterator<Item = &'a str>) -> Option<u8> {
-    titles.into_iter().filter_map(pechat_color_count).max()
-}
-
-/// Whether an apparatus node belongs to the source warehouse/pechat being moved
-/// from. Pechat nodes match by color count so minor title suffixes still work.
-pub fn apparatus_node_matches_from(node_title: &str, from_apparatus: &str) -> bool {
-    let from = from_apparatus.trim();
-    let title = node_title.trim();
-    if title == from {
-        return true;
-    }
-    let Some(from_color) = pechat_color_count(from) else {
-        return false;
-    };
-    pechat_color_count(title) == Some(from_color)
-}
-
 /// Whether the order may be moved onto a pechat with the given color count.
 pub fn pechat_can_move_order(
     apparatus_color_count: u8,
@@ -183,23 +244,194 @@ pub fn pechat_can_move_order(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::core::apparatus_standard::{
+        ApparatusDisplayMetadata, ApparatusIdentity, CapabilityCode, CapacityConfiguration,
+        CatalogSource, MaterialPolicy, OperationalPolicies, Provenance, QueuePolicy,
+        TrainingReference, Versioning, aas_package_metadata_for_apparatus,
+    };
 
-    #[test]
-    fn pechat_color_count_parses_apparatus_titles() {
-        assert_eq!(pechat_color_count("7 ta rangli pechat - A"), Some(7));
-        assert_eq!(pechat_color_count("8 ta rangli pechat"), Some(8));
-        assert_eq!(pechat_color_count("9 rangli val"), Some(9));
-        assert_eq!(pechat_color_count("7ta rangli"), Some(7));
-        assert_eq!(pechat_color_count("Paket aparat"), None);
-        assert_eq!(pechat_color_count("17 rangli"), None);
-        assert_eq!(pechat_color_count("rangli pechat"), None);
+    fn canonical_apparatus(
+        id: &str,
+        display_name: &str,
+        family: ApparatusFamily,
+        kind: ApparatusKind,
+        color_stations: Option<u8>,
+        tooling: ToolingPolicy,
+    ) -> CanonicalApparatus {
+        let capabilities = match kind {
+            ApparatusKind::ColorPechat => vec![CapabilityCode::Print, CapabilityCode::Pechat],
+            ApparatusKind::Flexo => {
+                vec![
+                    CapabilityCode::Print,
+                    CapabilityCode::Pechat,
+                    CapabilityCode::Flexo,
+                ]
+            }
+            ApparatusKind::Laminatsiya => vec![CapabilityCode::Laminate],
+            _ => vec![CapabilityCode::Apparatus],
+        };
+        let id = ApparatusId::new(id).unwrap();
+        CanonicalApparatus {
+            identity: ApparatusIdentity {
+                id: id.clone(),
+                display: ApparatusDisplayMetadata {
+                    display_name: display_name.to_string(),
+                    description: String::new(),
+                    catalog_order: 1,
+                },
+            },
+            classification: ApparatusClassification {
+                family,
+                kind,
+                color_stations,
+            },
+            capabilities,
+            capability_profiles: Vec::new(),
+            policies: OperationalPolicies {
+                queue: QueuePolicy::StrictSequence,
+                material: MaterialPolicy::default(),
+                tooling,
+            },
+            capacity: CapacityConfiguration {
+                capacity_slots: 1,
+                setup_minutes: 0,
+                cleanup_minutes: 0,
+                efficiency_percent: 100,
+                finite_capacity: true,
+                working_windows: Vec::new(),
+            },
+            placement: None,
+            training: TrainingReference { enabled: true },
+            provenance: Provenance {
+                source: CatalogSource::Default,
+                source_ref: None,
+            },
+            versioning: Versioning { revision: 1 },
+            aas: aas_package_metadata_for_apparatus(&id),
+        }
     }
 
     #[test]
-    fn flexo_apparatus_belongs_to_pechat_family_without_color_count() {
-        assert!(is_flexo_apparatus("Flexo pechat - A"));
-        assert!(is_pechat_apparatus("Flexo bosma aparat"));
-        assert!(!is_pechat_apparatus("Paket aparat"));
+    fn canonical_color_pechat_7_8_9_is_pechat_and_qolip_enabled() {
+        for stations in 7..=9 {
+            let apparatus = canonical_apparatus(
+                &format!("apparatus:test:color-{stations}"),
+                &format!("renamed color machine {stations}"),
+                ApparatusFamily::Pechat,
+                ApparatusKind::ColorPechat,
+                Some(stations),
+                ToolingPolicy::QolipScanRequired,
+            );
+            let policy = policy_for(&apparatus).expect("ColorPechat policy");
+            assert!(is_pechat_apparatus(&apparatus));
+            assert!(!is_flexo_apparatus(&apparatus));
+            assert_eq!(policy.color_stations(), Some(stations));
+            assert_eq!(pechat_color_stations(&apparatus), Some(stations));
+            assert!(requires_qolip_scan(&apparatus));
+        }
+    }
+
+    #[test]
+    fn canonical_flexo_is_pechat_and_uses_explicit_qolip_policy() {
+        let apparatus = canonical_apparatus(
+            "apparatus:test:flexo-001",
+            "any display name",
+            ApparatusFamily::Pechat,
+            ApparatusKind::Flexo,
+            None,
+            ToolingPolicy::QolipScanRequired,
+        );
+        assert!(is_pechat_apparatus(&apparatus));
+        assert!(is_flexo_apparatus(&apparatus));
+        assert_eq!(pechat_color_stations(&apparatus), None);
+        assert!(requires_qolip_scan(&apparatus));
+    }
+
+    #[test]
+    fn reroute_order_applies_colour_station_capacity() {
+        let source = canonical_apparatus(
+            "apparatus:test:color-source",
+            "source",
+            ApparatusFamily::Pechat,
+            ApparatusKind::ColorPechat,
+            Some(8),
+            ToolingPolicy::QolipScanRequired,
+        );
+        let seven_color_target = canonical_apparatus(
+            "apparatus:test:color-target-7",
+            "target 7",
+            ApparatusFamily::Pechat,
+            ApparatusKind::ColorPechat,
+            Some(7),
+            ToolingPolicy::QolipScanRequired,
+        );
+        let nine_color_target = canonical_apparatus(
+            "apparatus:test:color-target-9",
+            "target 9",
+            ApparatusFamily::Pechat,
+            ApparatusKind::ColorPechat,
+            Some(9),
+            ToolingPolicy::QolipScanRequired,
+        );
+
+        assert!(!reroute_order_compatible(
+            &source,
+            &seven_color_target,
+            Some(7),
+            Some(900.0)
+        ));
+        assert!(reroute_order_compatible(
+            &source,
+            &nine_color_target,
+            Some(7),
+            Some(1250.0)
+        ));
+    }
+
+    #[test]
+    fn non_pechat_never_inherits_qolip_requirement() {
+        let apparatus = canonical_apparatus(
+            "apparatus:test:lam-001",
+            "7 ta rangli pechat",
+            ApparatusFamily::Laminatsiya,
+            ApparatusKind::Laminatsiya,
+            None,
+            ToolingPolicy::QolipScanRequired,
+        );
+        assert!(!is_pechat_apparatus(&apparatus));
+        assert!(!is_flexo_apparatus(&apparatus));
+        assert_eq!(pechat_color_stations(&apparatus), None);
+        assert!(!requires_qolip_scan(&apparatus));
+    }
+
+    #[test]
+    fn canonical_policy_is_independent_of_display_name() {
+        let mut apparatus = canonical_apparatus(
+            "apparatus:test:stable-001",
+            "7 ta rangli pechat",
+            ApparatusFamily::Pechat,
+            ApparatusKind::ColorPechat,
+            Some(7),
+            ToolingPolicy::QolipScanRequired,
+        );
+        let original_id = apparatus.identity.id.clone();
+        let (original_classification, original_color_stations, original_requires_qolip_scan) = {
+            let original_policy = policy_for(&apparatus).expect("ColorPechat policy");
+            (
+                original_policy.classification().clone(),
+                original_policy.color_stations(),
+                original_policy.requires_qolip_scan(),
+            )
+        };
+        apparatus.identity.display.display_name = "Laminatsiya renamed".to_string();
+        let renamed_policy = policy_for(&apparatus).expect("ColorPechat policy");
+        assert_eq!(original_id.as_str(), renamed_policy.apparatus_id().as_str());
+        assert_eq!(&original_classification, renamed_policy.classification());
+        assert_eq!(original_color_stations, renamed_policy.color_stations());
+        assert_eq!(
+            original_requires_qolip_scan,
+            renamed_policy.requires_qolip_scan()
+        );
     }
 
     #[test]
@@ -225,18 +457,6 @@ mod tests {
     #[test]
     fn move_allows_compatible_order_from_seven_to_eight_color_pechat() {
         assert!(pechat_can_move_order(8, Some(7), Some(650.0), Some(7)));
-    }
-
-    #[test]
-    fn apparatus_node_matches_from_uses_pechat_color_count() {
-        assert!(apparatus_node_matches_from(
-            "7 ta rangli pechat - A",
-            "7 ta rangli pechat",
-        ));
-        assert!(!apparatus_node_matches_from(
-            "8 ta rangli pechat",
-            "7 ta rangli pechat",
-        ));
     }
 
     #[test]

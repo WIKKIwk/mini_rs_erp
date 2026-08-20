@@ -422,10 +422,16 @@ fn test_map(id: &str, order_number: &str, product_code: &str) -> ProductionMapDe
 }
 
 fn test_node(id: &str, kind: ProductionMapNodeKind, title: &str, y: f64) -> ProductionMapNode {
+    let is_apparatus = kind == ProductionMapNodeKind::Apparatus;
     ProductionMapNode {
         id: id.to_string(),
         kind,
         title: title.to_string(),
+        apparatus_id: if is_apparatus {
+            "apparatus:test:db".to_string()
+        } else {
+            String::new()
+        },
         formula: None,
         role_code: String::new(),
         item_code: String::new(),
@@ -435,6 +441,7 @@ fn test_node(id: &str, kind: ProductionMapNodeKind, title: &str, y: f64) -> Prod
         alternative_group_id: String::new(),
         alternative_group_label: String::new(),
         alternative_assigned_title: String::new(),
+        alternative_assigned_apparatus_id: String::new(),
         rezka_kadr_count: None,
         rezka_label_length: None,
         x: 0.0,

@@ -505,10 +505,10 @@ impl TelegramService {
                 }
             }
         }
-        if delivered == 0 {
-            if let Some(error) = last_error {
-                return Err(error);
-            }
+        if delivered == 0
+            && let Some(error) = last_error
+        {
+            return Err(error);
         }
         Ok(delivered)
     }

@@ -91,7 +91,16 @@ impl AdminService {
                 .map(|code| role.capability_codes.iter().any(|item| item == code))
                 .unwrap_or(false),
             Ok(None) => has_capability(principal, capability),
-            Err(_) => false,
+            Err(error) => {
+                tracing::error!(
+                    %error,
+                    role = ?principal.role,
+                    principal_ref = %principal.ref_,
+                    capability = ?capability,
+                    "authorization dependency failed; denying capability"
+                );
+                false
+            }
         }
     }
 
@@ -99,21 +108,47 @@ impl AdminService {
         match self.principal_assigned_role(principal).await {
             Ok(Some(role)) => role.capability_codes,
             Ok(None) => capability_codes_for_role(principal.role.clone()),
-            Err(_) => Vec::new(),
+            Err(error) => {
+                tracing::error!(
+                    %error,
+                    role = ?principal.role,
+                    principal_ref = %principal.ref_,
+                    "authorization dependency failed; returning no capabilities"
+                );
+                Vec::new()
+            }
         }
     }
 
     pub async fn principal_assigned_apparatus(&self, principal: &Principal) -> Vec<String> {
         match self.principal_assignment(principal).await {
             Ok(Some(assignment)) => assignment.assigned_apparatus,
-            _ => Vec::new(),
+            Ok(None) => Vec::new(),
+            Err(error) => {
+                tracing::error!(
+                    %error,
+                    role = ?principal.role,
+                    principal_ref = %principal.ref_,
+                    "authorization dependency failed; returning no apparatus scope"
+                );
+                Vec::new()
+            }
         }
     }
 
     pub async fn principal_assigned_item_groups(&self, principal: &Principal) -> Vec<String> {
         match self.principal_assignment(principal).await {
             Ok(Some(assignment)) => assignment.assigned_item_groups,
-            _ => Vec::new(),
+            Ok(None) => Vec::new(),
+            Err(error) => {
+                tracing::error!(
+                    %error,
+                    role = ?principal.role,
+                    principal_ref = %principal.ref_,
+                    "authorization dependency failed; returning no item-group scope"
+                );
+                Vec::new()
+            }
         }
     }
 

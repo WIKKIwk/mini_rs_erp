@@ -814,13 +814,13 @@ impl ChatMediaRepository for MemoryRepository {
     ) -> Result<ChatMediaCreateResult, ChatMediaError> {
         self.authorize(principal, &upload.conversation_id, true)?;
         let mut stored = self.record.lock().unwrap();
-        if let Some(record) = stored.as_ref() {
-            if record.client_upload_id == upload.client_upload_id {
-                return Ok(ChatMediaCreateResult {
-                    record: record.clone(),
-                    created: false,
-                });
-            }
+        if let Some(record) = stored.as_ref()
+            && record.client_upload_id == upload.client_upload_id
+        {
+            return Ok(ChatMediaCreateResult {
+                record: record.clone(),
+                created: false,
+            });
         }
         let now = time::OffsetDateTime::now_utc().unix_timestamp();
         let record = ChatMediaUploadRecord {

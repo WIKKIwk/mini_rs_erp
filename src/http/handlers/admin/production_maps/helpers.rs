@@ -107,16 +107,14 @@ fn resolve_production_map_customer(
         return None;
     }
     unique_template_customer(templates.iter().filter(|template| {
-        let product_matches = product_keys.contains(&normalized_customer_match_key(
-            &template.product,
-        )) || product_keys.contains(&normalized_customer_match_key(&template.item_code));
+        let product_matches = product_keys
+            .contains(&normalized_customer_match_key(&template.product))
+            || product_keys.contains(&normalized_customer_match_key(&template.item_code));
         if !product_matches {
             return false;
         }
         match (map.width_mm, template.width_mm) {
-            (Some(map_width), template_width)
-                if map_width > 0.0 && template_width > 0.0 =>
-            {
+            (Some(map_width), template_width) if map_width > 0.0 && template_width > 0.0 => {
                 (map_width - template_width).abs() <= 0.5
             }
             _ => true,
@@ -190,7 +188,10 @@ mod customer_resolution_tests {
             },
         ];
 
-        assert_eq!(resolve_production_map_customer(&test_map(), &templates), None);
+        assert_eq!(
+            resolve_production_map_customer(&test_map(), &templates),
+            None
+        );
     }
 }
 
@@ -328,9 +329,7 @@ pub(super) fn production_map_error(error: ProductionMapError) -> AdminError {
         ProductionMapError::RawMaterialStockUnavailable => {
             bad_request("raw_material_stock_unavailable")
         }
-        ProductionMapError::RawMaterialOrderNotActive => {
-            conflict("raw_material_order_not_active")
-        }
+        ProductionMapError::RawMaterialOrderNotActive => conflict("raw_material_order_not_active"),
         ProductionMapError::QolipLocationNotFound => bad_request("qolip_location_not_found"),
         ProductionMapError::QolipCodeMismatch => bad_request("qolip_code_mismatch"),
         ProductionMapError::QolipAlreadyInUse => bad_request("qolip_already_in_use"),
@@ -340,9 +339,7 @@ pub(super) fn production_map_error(error: ProductionMapError) -> AdminError {
         }
         ProductionMapError::RawMaterialScanRequired => bad_request("raw_material_scan_required"),
         ProductionMapError::RawMaterialMismatch => bad_request("raw_material_mismatch"),
-        ProductionMapError::RawMaterialStateNotReady => {
-            bad_request("raw_material_state_not_ready")
-        }
+        ProductionMapError::RawMaterialStateNotReady => bad_request("raw_material_state_not_ready"),
         ProductionMapError::RawMaterialScanIncomplete => {
             bad_request("raw_material_scan_incomplete")
         }
@@ -372,15 +369,9 @@ pub(super) fn production_map_error(error: ProductionMapError) -> AdminError {
         ProductionMapError::RezkaProgressMetricsRequired => {
             bad_request("rezka_progress_metrics_required")
         }
-        ProductionMapError::RezkaKadrCountRequired => {
-            bad_request("rezka_kadr_count_required")
-        }
-        ProductionMapError::RezkaFrameCountMismatch => {
-            bad_request("rezka_frame_count_mismatch")
-        }
-        ProductionMapError::RezkaFinalRollRequired => {
-            bad_request("rezka_final_roll_required")
-        }
+        ProductionMapError::RezkaKadrCountRequired => bad_request("rezka_kadr_count_required"),
+        ProductionMapError::RezkaFrameCountMismatch => bad_request("rezka_frame_count_mismatch"),
+        ProductionMapError::RezkaFinalRollRequired => bad_request("rezka_final_roll_required"),
         ProductionMapError::ProgressBatchNotFound => not_found("progress_batch_not_found"),
         ProductionMapError::ProgressBatchNotAccepted => bad_request("progress_batch_not_accepted"),
         ProductionMapError::ProgressBatchNotResumable => {
@@ -402,12 +393,8 @@ pub(super) fn production_map_error(error: ProductionMapError) -> AdminError {
         ProductionMapError::PaddonInvalidInput => bad_request("paddon_invalid_input"),
         ProductionMapError::PaddonCodeExhausted => conflict("paddon_code_exhausted"),
         ProductionMapError::PaddonNotFound => not_found("paddon_not_found"),
-        ProductionMapError::PaddonItemAlreadyAssigned => {
-            conflict("paddon_item_already_assigned")
-        }
-        ProductionMapError::PaddonItemNotAssigned => {
-            bad_request("paddon_item_not_assigned")
-        }
+        ProductionMapError::PaddonItemAlreadyAssigned => conflict("paddon_item_already_assigned"),
+        ProductionMapError::PaddonItemNotAssigned => bad_request("paddon_item_not_assigned"),
         ProductionMapError::CapacityProfileInvalid => bad_request("capacity_profile_invalid"),
         ProductionMapError::CapacityProfileNotFound => not_found("capacity_profile_not_found"),
         ProductionMapError::CapabilityNotSupported => bad_request("capability_not_supported"),
@@ -488,6 +475,7 @@ fn ambiguous_raw_material_apparatuses(apparatuses: Vec<String>) -> AdminError {
 pub(super) fn warehouse_error(error: WarehouseError) -> AdminError {
     match error {
         WarehouseError::MissingWarehouse => bad_request("warehouse is required"),
+        WarehouseError::InvalidApparatus => bad_request("apparatus is invalid"),
         WarehouseError::MissingPrincipalRef => bad_request("principal ref is required"),
         WarehouseError::NotFound => not_found("warehouse not found"),
         WarehouseError::AssignmentNotFound => not_found("warehouse assignment not found"),

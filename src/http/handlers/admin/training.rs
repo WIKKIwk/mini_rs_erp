@@ -7,6 +7,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use super::*;
 use crate::app::AppState;
+use crate::core::apparatus_standard::{ApparatusId, CanonicalApparatus};
 use crate::core::auth::models::{Principal, PrincipalRole};
 use crate::core::authz::Capability;
 use crate::core::calculate_orders::{
@@ -27,7 +28,8 @@ use crate::core::returned_paint::{
     returned_paint_report_can_close,
 };
 use crate::db::postgres_training_workspace::{
-    PostgresTrainingWorkspaceStore, TrainingImage, TrainingInputBatchIdentity,
+    PostgresTrainingWorkspaceStore, TRAINING_VIRTUAL_INPUT_BOSMA,
+    TRAINING_VIRTUAL_INPUT_LAMINATSIYA, TrainingImage, TrainingInputBatchIdentity,
     TrainingWorkspaceError,
 };
 
@@ -142,6 +144,14 @@ const TRAINING_LAMINATSIYA_INPUT_APPARATUS: &str = "Bosma aparat";
 const TRAINING_REZKA_INPUT_APPARATUS: &str = "Laminatsiya aparat";
 const TRAINING_INPUT_QR_PREFIX: &str = "TRAINING-INPUT:";
 
+fn canonical_training_apparatus(value: &str) -> Result<String, TrainingWorkspaceError> {
+    ApparatusId::new(value.trim().to_string())
+        .map(|id| id.to_string())
+        .map_err(|_| {
+            TrainingWorkspaceError::InvalidInput("canonical apparatus id kerak".to_string())
+        })
+}
+
 fn training_input_order_id_from_qr(qr_payload: &str) -> Option<String> {
     let (prefix, order_id) = qr_payload.trim().split_once(':')?;
     if !prefix.eq_ignore_ascii_case(TRAINING_INPUT_QR_PREFIX.trim_end_matches(':')) {
@@ -151,15 +161,38 @@ fn training_input_order_id_from_qr(qr_payload: &str) -> Option<String> {
     order_id.starts_with("training-").then_some(order_id)
 }
 
-fn is_laminatsiya_apparatus(apparatus: &str) -> bool {
-    apparatus
-        .trim()
-        .to_ascii_lowercase()
-        .contains("laminatsiya")
+const TRAINING_LAMINATSIYA_ROLE: &str = "laminatsiya";
+const TRAINING_REZKA_ROLE: &str = "rezka";
+
+fn canonical_apparatus_matches(left: &str, right: &str) -> bool {
+    let (Ok(left), Ok(right)) = (
+        ApparatusId::new(left.trim()),
+        ApparatusId::new(right.trim()),
+    ) else {
+        return false;
+    };
+    left == right
 }
 
-fn is_rezka_apparatus(apparatus: &str) -> bool {
-    apparatus.trim().to_ascii_lowercase().contains("rezka")
+fn training_apparatus_role<'a>(
+    map: &'a ProductionMapDefinition,
+    apparatus_id: &str,
+) -> Option<&'a str> {
+    map.nodes.iter().find_map(|node| {
+        (node.kind == ProductionMapNodeKind::Apparatus
+            && canonical_apparatus_matches(&node.apparatus_id, apparatus_id))
+        .then_some(node.role_code.trim())
+    })
+}
+
+fn is_laminatsiya_apparatus(map: &ProductionMapDefinition, apparatus_id: &str) -> bool {
+    training_apparatus_role(map, apparatus_id)
+        .is_some_and(|role| role.eq_ignore_ascii_case(TRAINING_LAMINATSIYA_ROLE))
+}
+
+fn is_rezka_apparatus(map: &ProductionMapDefinition, apparatus_id: &str) -> bool {
+    training_apparatus_role(map, apparatus_id)
+        .is_some_and(|role| role.eq_ignore_ascii_case(TRAINING_REZKA_ROLE))
 }
 
 fn is_training_input_node(node: &ProductionMapNode) -> bool {
@@ -170,28 +203,48 @@ fn is_training_input_node(node: &ProductionMapNode) -> bool {
             .eq_ignore_ascii_case(TRAINING_INPUT_NODE_ROLE)
 }
 
-fn virtual_training_input_apparatus(apparatus: &str) -> Option<&'static str> {
-    if is_laminatsiya_apparatus(apparatus) {
-        Some(TRAINING_LAMINATSIYA_INPUT_APPARATUS)
-    } else if is_rezka_apparatus(apparatus) {
-        Some(TRAINING_REZKA_INPUT_APPARATUS)
+fn virtual_training_input_id_for_role(role: &str) -> Option<&'static str> {
+    if role.eq_ignore_ascii_case(TRAINING_LAMINATSIYA_ROLE) {
+        Some(TRAINING_VIRTUAL_INPUT_BOSMA)
+    } else if role.eq_ignore_ascii_case(TRAINING_REZKA_ROLE) {
+        Some(TRAINING_VIRTUAL_INPUT_LAMINATSIYA)
     } else {
         None
     }
 }
 
-fn training_input_stage_for_map(map: &ProductionMapDefinition, apparatus: &str) -> Option<String> {
-    if let Some(previous) = chain::previous_work_stage_station(map, apparatus) {
-        return map
-            .nodes
-            .iter()
-            .any(|node| {
-                is_training_input_node(node)
-                    && queue_state::apparatus_titles_match(&node.title, &previous)
-            })
-            .then_some(previous);
+fn virtual_training_input_display(input_id: &str) -> Option<&'static str> {
+    match input_id {
+        TRAINING_VIRTUAL_INPUT_BOSMA => Some(TRAINING_LAMINATSIYA_INPUT_APPARATUS),
+        TRAINING_VIRTUAL_INPUT_LAMINATSIYA => Some(TRAINING_REZKA_INPUT_APPARATUS),
+        _ => None,
     }
-    virtual_training_input_apparatus(apparatus).map(str::to_string)
+}
+
+fn training_input_stage_for_map(map: &ProductionMapDefinition, apparatus: &str) -> Option<String> {
+    let target_node_id = map.nodes.iter().find_map(|node| {
+        (node.kind == ProductionMapNodeKind::Apparatus
+            && canonical_apparatus_matches(&node.apparatus_id, apparatus))
+        .then_some(node.id.as_str())
+    });
+    if let Some(target_node_id) = target_node_id
+        && let Some(input) = map.nodes.iter().find(|node| {
+            is_training_input_node(node)
+                && !node.item_code.trim().is_empty()
+                && map
+                    .edges
+                    .iter()
+                    .any(|edge| edge.from == node.id && edge.to == target_node_id)
+        })
+    {
+        return Some(input.item_code.trim().to_string());
+    }
+    if chain::previous_work_stage_station(map, apparatus).is_some() {
+        return None;
+    }
+    training_apparatus_role(map, apparatus)
+        .and_then(virtual_training_input_id_for_role)
+        .map(str::to_string)
 }
 
 fn training_input_target_apparatus(map: &ProductionMapDefinition) -> Option<String> {
@@ -200,29 +253,30 @@ fn training_input_target_apparatus(map: &ProductionMapDefinition) -> Option<Stri
         .find(|node| {
             node.kind == ProductionMapNodeKind::Apparatus
                 && !is_training_input_node(node)
-                && virtual_training_input_apparatus(&node.title).is_some()
-                && training_input_stage_for_map(map, &node.title).is_some()
+                && !node.apparatus_id.trim().is_empty()
+                && virtual_training_input_id_for_role(&node.role_code).is_some()
+                && training_input_stage_for_map(map, &node.apparatus_id).is_some()
         })
-        .map(|node| node.title.trim().to_string())
-        .filter(|title| !title.is_empty())
+        .map(|node| node.apparatus_id.trim().to_string())
+        .filter(|id| !id.is_empty())
 }
 
 fn training_worker_map(mut map: ProductionMapDefinition) -> ProductionMapDefinition {
-    let Some(target_title) = training_input_target_apparatus(&map) else {
+    let Some(target_id) = training_input_target_apparatus(&map) else {
         return map;
     };
     let Some(target_index) = map.nodes.iter().position(|node| {
         node.kind == ProductionMapNodeKind::Apparatus
             && !is_training_input_node(node)
-            && queue_state::apparatus_titles_match(&node.title, &target_title)
+            && canonical_apparatus_matches(&node.apparatus_id, &target_id)
     }) else {
         return map;
     };
     let target = map.nodes[target_index].clone();
-    let Some(input_apparatus) = virtual_training_input_apparatus(&target.title) else {
+    let Some(input_apparatus) = virtual_training_input_id_for_role(&target.role_code) else {
         return map;
     };
-    if chain::previous_work_stage_station(&map, &target.title).is_some()
+    if chain::previous_work_stage_station(&map, &target_id).is_some()
         || map.nodes.iter().any(is_training_input_node)
     {
         return map;
@@ -237,16 +291,20 @@ fn training_worker_map(mut map: ProductionMapDefinition) -> ProductionMapDefinit
     let input_node = ProductionMapNode {
         id: input_id.clone(),
         kind: ProductionMapNodeKind::Apparatus,
-        title: input_apparatus.to_string(),
+        title: virtual_training_input_display(input_apparatus)
+            .unwrap_or(input_apparatus)
+            .to_string(),
+        apparatus_id: String::new(),
         formula: None,
         role_code: TRAINING_INPUT_NODE_ROLE.to_string(),
-        item_code: String::new(),
+        item_code: input_apparatus.to_string(),
         qty_formula: String::new(),
         from_location: String::new(),
         to_location: String::new(),
         alternative_group_id: String::new(),
         alternative_group_label: String::new(),
         alternative_assigned_title: String::new(),
+        alternative_assigned_apparatus_id: String::new(),
         rezka_kadr_count: None,
         rezka_label_length: None,
         x: target.x,
@@ -287,7 +345,7 @@ fn training_input_progress_batch(
     let previous_stage = training_input_stage_for_map(map, apparatus)?;
     if order_id.is_empty()
         || !identity.order_id.eq_ignore_ascii_case(order_id)
-        || !queue_state::apparatus_titles_match(&identity.apparatus, apparatus)
+        || !canonical_apparatus_matches(&identity.apparatus, apparatus)
     {
         return None;
     }
@@ -315,7 +373,7 @@ fn training_input_progress_batch(
         session_id: identity.session_id.clone(),
         started_at_unix: 0,
         completed_at_unix: 0,
-        apparatus: previous_stage.clone(),
+        apparatus: apparatus.trim().to_string(),
         order_id: order_id.to_string(),
         action: queue_state::ApparatusQueueAction::Complete,
         status: OrderProgressBatchStatus::Completed,
@@ -330,7 +388,7 @@ fn training_input_progress_batch(
         worker_display_name: format!("Training {previous_stage}"),
         wip_status: OrderProgressBatchWipStatus::Waiting,
         status_detail: OrderProgressBatchStatusDetail::default(),
-        current_apparatus: previous_stage.clone(),
+        current_apparatus: apparatus.trim().to_string(),
         current_apparatus_key: queue_state::apparatus_search_key(&previous_stage),
         current_location: format!("{previous_stage} chiqim"),
         next_apparatus: apparatus.trim().to_string(),
@@ -356,6 +414,7 @@ fn training_input_progress_batch(
             "training_input": true,
             "source": "generated_training_order_batch",
             "source_apparatus": previous_stage,
+            "training_virtual_apparatus": previous_stage,
         }),
     };
     batch.refresh_status_detail();
@@ -369,9 +428,13 @@ fn training_input_batch_matches(
     apparatus: &str,
 ) -> bool {
     batch.order_id.trim().eq_ignore_ascii_case(order_id.trim())
-        && queue_state::apparatus_titles_match(&batch.apparatus, previous_stage)
+        && batch
+            .payload_json
+            .get("training_virtual_apparatus")
+            .and_then(serde_json::Value::as_str)
+            .is_some_and(|value| value.eq_ignore_ascii_case(previous_stage))
         && (batch.next_apparatus.trim().is_empty()
-            || queue_state::next_stage_title_matches_apparatus(&batch.next_apparatus, apparatus))
+            || canonical_apparatus_matches(&batch.next_apparatus, apparatus))
 }
 
 fn training_input_batch_is_available(
@@ -383,7 +446,7 @@ fn training_input_batch_is_available(
     training_input_batch_matches(batch, order_id, previous_stage, apparatus)
         && (batch.wip_status == OrderProgressBatchWipStatus::Waiting
             || (batch.wip_status == OrderProgressBatchWipStatus::InUse
-                && queue_state::apparatus_titles_match(&batch.used_by_apparatus, apparatus)))
+                && canonical_apparatus_matches(&batch.used_by_apparatus, apparatus)))
 }
 
 fn training_claim_input_batch(
@@ -509,7 +572,11 @@ pub(super) async fn training_input_progress_batch_for_principal(
     if !order_id.starts_with("training-") {
         return Ok(Vec::new());
     }
-    let requested_next = next_apparatus.trim();
+    let requested_next = if next_apparatus.trim().is_empty() {
+        String::new()
+    } else {
+        canonical_training_apparatus(next_apparatus)?
+    };
     let saved = if matches!(&principal.role, PrincipalRole::Aparatchi) {
         worker_training_overlay(state, principal)
             .await?
@@ -518,7 +585,7 @@ pub(super) async fn training_input_progress_batch_for_principal(
             .find(|saved| {
                 saved.map.id.trim() == order_id
                     && (requested_next.is_empty()
-                        || training_map_has_apparatus(saved, requested_next))
+                        || training_map_has_apparatus(saved, &requested_next))
             })
     } else {
         state
@@ -534,7 +601,7 @@ pub(super) async fn training_input_progress_batch_for_principal(
     let target = if requested_next.is_empty() {
         training_input_target_apparatus(&saved.map).unwrap_or_default()
     } else {
-        requested_next.to_string()
+        requested_next.clone()
     };
     let Some(_) = training_input_stage_for_map(&saved.map, &target) else {
         return Ok(Vec::new());
@@ -548,7 +615,7 @@ pub(super) async fn training_input_progress_batch_for_principal(
             .into_iter()
             .filter(|batch| {
                 previous_apparatus.trim().is_empty()
-                    || queue_state::apparatus_titles_match(&batch.apparatus, previous_apparatus)
+                    || canonical_apparatus_matches(&batch.apparatus, previous_apparatus)
             })
             .collect(),
     )
@@ -626,7 +693,7 @@ pub(super) async fn training_progress_batch_for_qr(
                 .into_iter()
                 .next()
                 .ok_or(TrainingWorkspaceError::StoreFailed)?;
-            if !queue_state::apparatus_titles_match(&identity.apparatus, &apparatus)
+            if !canonical_apparatus_matches(&identity.apparatus, &apparatus)
                 || previous_stage.trim().is_empty()
             {
                 return Ok(None);
@@ -670,13 +737,12 @@ pub(super) async fn worker_training_overlay(
     let modes = store.apparatus_modes().await?;
     let active_apparatuses = assigned_apparatus
         .into_iter()
+        .filter_map(|apparatus| canonical_training_apparatus(&apparatus).ok())
         .filter(|apparatus| {
             modes.iter().any(|(configured, enabled)| {
-                *enabled && queue_state::apparatus_titles_match(configured, apparatus)
+                *enabled && canonical_apparatus_matches(configured, apparatus)
             })
         })
-        .map(|apparatus| apparatus.trim().to_string())
-        .filter(|apparatus| !apparatus.is_empty())
         .collect::<Vec<_>>();
     if active_apparatuses.is_empty() {
         return Ok(WorkerTrainingOverlay::default());
@@ -734,7 +800,7 @@ pub(super) async fn worker_training_overlay(
         let visible_set = visible_order_ids.iter().cloned().collect::<BTreeSet<_>>();
         let mut states = BTreeMap::new();
         for (stored_apparatus, stored) in &stored_states {
-            if !queue_state::apparatus_titles_match(stored_apparatus, apparatus) {
+            if !canonical_apparatus_matches(stored_apparatus, apparatus) {
                 continue;
             }
             for (order_id, state) in stored {
@@ -745,6 +811,11 @@ pub(super) async fn worker_training_overlay(
         }
         let controls = training_queue_action_controls(
             apparatus,
+            &*state
+                .production_maps
+                .resolve_canonical_apparatus_text(apparatus)
+                .await
+                .map_err(|_| TrainingWorkspaceError::StoreFailed)?,
             &sequence,
             &states,
             &overlay.maps,
@@ -770,7 +841,10 @@ pub(super) async fn worker_training_overlay(
         overlay
             .queue_action_controls
             .insert(apparatus.clone(), controls);
+        let apparatus_id = crate::core::apparatus_standard::ApparatusId::new(apparatus.clone())
+            .map_err(|_| TrainingWorkspaceError::StoreFailed)?;
         overlay.queue_policies.push(ApparatusQueuePolicyRecord {
+            apparatus_id,
             apparatus: apparatus.clone(),
             policy: ApparatusQueuePolicy::StrictSequence,
             locked: true,
@@ -805,11 +879,17 @@ pub(super) async fn training_map_for_principal(
         .training_workspace
         .as_ref()
         .ok_or(TrainingWorkspaceError::StoreFailed)?;
-    let apparatus = apparatus.trim();
+    let apparatus = if apparatus.trim().is_empty() {
+        None
+    } else {
+        Some(canonical_training_apparatus(apparatus)?)
+    };
     if matches!(&principal.role, PrincipalRole::Aparatchi) {
         let overlay = worker_training_overlay(state, principal).await?;
         let Some(active_apparatus) = overlay.active_apparatuses.iter().find(|candidate| {
-            !apparatus.is_empty() && queue_state::apparatus_titles_match(candidate, apparatus)
+            apparatus
+                .as_ref()
+                .is_some_and(|id| canonical_apparatus_matches(candidate, id))
         }) else {
             return Err(TrainingWorkspaceError::MapNotFound);
         };
@@ -823,7 +903,10 @@ pub(super) async fn training_map_for_principal(
         let Some(saved) = store.map(order_id).await? else {
             return Err(TrainingWorkspaceError::MapNotFound);
         };
-        if !apparatus.is_empty() && !training_map_has_apparatus(&saved, apparatus) {
+        if apparatus
+            .as_ref()
+            .is_some_and(|id| !training_map_has_apparatus(&saved, id))
+        {
             return Err(TrainingWorkspaceError::MapNotFound);
         }
         Ok(Some(saved))
@@ -844,9 +927,9 @@ pub(super) async fn training_material_assignments_for_principal(
         .as_ref()
         .ok_or(TrainingWorkspaceError::StoreFailed)?;
     let order_id = order_id.trim();
-    let apparatus = apparatus.trim();
+    let apparatus = canonical_training_apparatus(apparatus)?;
     Ok(Some(
-        store.raw_material_assignments(order_id, apparatus).await?,
+        store.raw_material_assignments(order_id, &apparatus).await?,
     ))
 }
 
@@ -957,9 +1040,9 @@ pub(super) async fn merge_worker_training_snapshot(
     snapshot
         .queue_action_controls
         .retain(|apparatus, _| !is_training_apparatus(apparatus, &overlay.active_apparatuses));
-    snapshot
-        .queue_policies
-        .retain(|policy| !is_training_apparatus(&policy.apparatus, &overlay.active_apparatuses));
+    snapshot.queue_policies.retain(|policy| {
+        !is_training_apparatus(policy.apparatus_id.as_str(), &overlay.active_apparatuses)
+    });
     snapshot
         .order_statuses
         .retain(|order_id, _| !hidden_order_ids.contains(order_id));
@@ -977,6 +1060,7 @@ pub(super) async fn merge_worker_training_snapshot(
     Ok(())
 }
 
+#[allow(clippy::too_many_arguments)]
 pub(super) async fn training_queue_action(
     state: &AppState,
     principal: &Principal,
@@ -993,15 +1077,21 @@ pub(super) async fn training_queue_action(
     if !order_id.starts_with("training-") {
         return Ok(None);
     }
+    let requested_apparatus = canonical_training_apparatus(apparatus)?;
     let overlay = worker_training_overlay(state, principal).await?;
     let Some(apparatus) = overlay
         .active_apparatuses
         .iter()
-        .find(|candidate| queue_state::apparatus_titles_match(candidate, apparatus))
+        .find(|candidate| canonical_apparatus_matches(candidate, &requested_apparatus))
         .cloned()
     else {
         return Err(TrainingWorkspaceError::MapNotFound);
     };
+    let canonical = state
+        .production_maps
+        .resolve_canonical_apparatus_text(&apparatus)
+        .await
+        .map_err(|_| TrainingWorkspaceError::StoreFailed)?;
     let mut training_map = overlay
         .maps
         .iter()
@@ -1024,7 +1114,7 @@ pub(super) async fn training_queue_action(
         .training_workspace
         .as_ref()
         .ok_or(TrainingWorkspaceError::StoreFailed)?;
-    if is_rezka_apparatus(&apparatus)
+    if is_rezka_apparatus(&training_map, &apparatus)
         && training_print_action(action)
         && training_rezka_frame_count(&training_map, &apparatus).is_err()
         && let Some(template) = store
@@ -1058,7 +1148,7 @@ pub(super) async fn training_queue_action(
             .find(|batch| {
                 batch.wip_status == OrderProgressBatchWipStatus::InUse
                     && training_input_batch_matches(batch, order_id, stage, &apparatus)
-                    && queue_state::apparatus_titles_match(&batch.used_by_apparatus, &apparatus)
+                    && canonical_apparatus_matches(&batch.used_by_apparatus, &apparatus)
             })
             .cloned()
     });
@@ -1075,8 +1165,11 @@ pub(super) async fn training_queue_action(
             current_input_batch_id,
         )
     });
-    let full_completion_report_required =
-        training_complete_requires_full_report(&apparatus, has_unprocessed_previous_wips);
+    let full_completion_report_required = training_complete_requires_full_report(
+        &training_map,
+        &apparatus,
+        has_unprocessed_previous_wips,
+    );
 
     let is_complete = matches!(action, queue_state::ApparatusQueueAction::Complete);
     let has_returned_paint_items = !print_input.returned_paint_items.is_empty();
@@ -1087,7 +1180,7 @@ pub(super) async fn training_queue_action(
         ));
     }
     if is_complete
-        && pechat::is_pechat_apparatus(&apparatus)
+        && pechat::is_pechat_apparatus(canonical.as_ref())
         && !returned_paint_report_can_close(
             &print_input.returned_paint_items,
             has_returned_paint_image,
@@ -1124,7 +1217,7 @@ pub(super) async fn training_queue_action(
             .return_ink_kg
             .filter(|value| value.is_finite() && *value >= 0.0)
     });
-    if is_rezka_apparatus(&apparatus) && training_print_action(action) {
+    if is_rezka_apparatus(&training_map, &apparatus) && training_print_action(action) {
         if !training_rezka_progress_metrics_are_complete(&print_input) {
             return Err(TrainingWorkspaceError::InvalidInput(
                 "rezka_progress_metrics_required".to_string(),
@@ -1132,7 +1225,7 @@ pub(super) async fn training_queue_action(
         }
         training_rezka_frame_count(&training_map, &apparatus)?;
     }
-    if is_complete && is_laminatsiya_apparatus(&apparatus) {
+    if is_complete && is_laminatsiya_apparatus(&training_map, &apparatus) {
         let metrics_ready = if full_completion_report_required {
             training_laminatsiya_full_metrics_are_complete(&print_input)
         } else {
@@ -1145,7 +1238,7 @@ pub(super) async fn training_queue_action(
         }
     }
     if is_complete
-        && is_rezka_apparatus(&apparatus)
+        && is_rezka_apparatus(&training_map, &apparatus)
         && full_completion_report_required
         && !training_rezka_waste_metrics_are_complete(&print_input)
     {
@@ -1336,7 +1429,7 @@ fn training_map_has_apparatus(saved: &ProductionMapSaved, apparatus: &str) -> bo
     saved.map.nodes.iter().any(|node| {
         node.kind == ProductionMapNodeKind::Apparatus
             && !is_training_input_node(node)
-            && queue_state::apparatus_titles_match(&node.title, apparatus)
+            && canonical_apparatus_matches(&node.apparatus_id, apparatus)
     })
 }
 
@@ -1433,12 +1526,8 @@ fn training_apparatus_node<'a>(
 ) -> Option<&'a ProductionMapNode> {
     map.nodes.iter().find(|node| {
         node.kind == ProductionMapNodeKind::Apparatus
-            && (queue_state::apparatus_titles_match(&node.title, apparatus)
-                || (!node.alternative_assigned_title.trim().is_empty()
-                    && queue_state::apparatus_titles_match(
-                        &node.alternative_assigned_title,
-                        apparatus,
-                    )))
+            && (canonical_apparatus_matches(&node.apparatus_id, apparatus)
+                || canonical_apparatus_matches(&node.alternative_assigned_apparatus_id, apparatus))
     })
 }
 
@@ -1455,6 +1544,7 @@ fn training_rezka_frame_count(
         })
 }
 
+#[allow(clippy::too_many_arguments)]
 fn training_progress_batches(
     map: &ProductionMapDefinition,
     apparatus: &str,
@@ -1469,7 +1559,7 @@ fn training_progress_batches(
     let stamp = unix_micros();
     let base_batch_id = progress_batch_id(apparatus, order_id, action, 0);
     let rezka_node = training_apparatus_node(map, apparatus);
-    let frame_count = if is_rezka_apparatus(apparatus) {
+    let frame_count = if is_rezka_apparatus(map, apparatus) {
         training_rezka_frame_count(map, apparatus)?
     } else {
         1
@@ -1522,7 +1612,7 @@ fn training_progress_batches(
     let session_id = format!("training-session:{base_batch_id}");
     let mut batches = Vec::with_capacity(frame_count);
     for index in 0..frame_count {
-        let is_rezka = is_rezka_apparatus(apparatus);
+        let is_rezka = is_rezka_apparatus(map, apparatus);
         let owns_metrics = !is_rezka || index == 0;
         let batch_id = if is_rezka {
             format!("{base_batch_id}:frame:{}", index + 1)
@@ -1724,11 +1814,12 @@ fn training_progress_print_failure() -> serde_json::Value {
 fn is_training_apparatus(apparatus: &str, active_apparatuses: &[String]) -> bool {
     active_apparatuses
         .iter()
-        .any(|active| queue_state::apparatus_titles_match(active, apparatus))
+        .any(|active| canonical_apparatus_matches(active, apparatus))
 }
 
 fn training_queue_action_controls(
     apparatus: &str,
+    canonical: &CanonicalApparatus,
     sequence: &[String],
     states: &BTreeMap<String, String>,
     maps: &[ProductionMapSaved],
@@ -1776,7 +1867,7 @@ fn training_queue_action_controls(
                 .find(|batch| {
                     batch.wip_status == OrderProgressBatchWipStatus::InUse
                         && training_input_batch_matches(batch, order_id, &previous_stage, apparatus)
-                        && queue_state::apparatus_titles_match(&batch.used_by_apparatus, apparatus)
+                        && canonical_apparatus_matches(&batch.used_by_apparatus, apparatus)
                 })
                 .map(|batch| batch.batch_id.as_str())
                 .unwrap_or_default();
@@ -1818,7 +1909,11 @@ fn training_queue_action_controls(
                             queue_state::ApparatusQueueAction::DetachRoll,
                             queue_state::ApparatusQueueAction::Complete,
                         ];
-                        if is_rezka_apparatus(apparatus) {
+                        if maps
+                            .iter()
+                            .find(|saved| saved.map.id.trim() == order_id)
+                            .is_some_and(|saved| is_rezka_apparatus(&saved.map, apparatus))
+                        {
                             actions.push(queue_state::ApparatusQueueAction::RollComplete);
                         }
                         actions
@@ -1854,7 +1949,7 @@ fn training_queue_action_controls(
                     mode: ApparatusQueueInteractionMode::FreshStart,
                     assigned_materials_display_only: false,
                     previous_wip_mode,
-                    qolip_mode: if pechat::is_pechat_apparatus(apparatus) {
+                    qolip_mode: if pechat::is_pechat_apparatus(canonical) {
                         ApparatusQueueQolipMode::ScanRequired
                     } else {
                         ApparatusQueueQolipMode::NotRequired
@@ -1895,10 +1990,16 @@ fn training_queue_action_controls(
                     interaction,
                     previous_stage,
                     previous_stage_ready,
-                    complete_requires_full_report: training_complete_requires_full_report(
-                        apparatus,
-                        has_unprocessed_previous_wips,
-                    ),
+                    complete_requires_full_report: maps
+                        .iter()
+                        .find(|saved| saved.map.id.trim() == order_id)
+                        .is_some_and(|saved| {
+                            training_complete_requires_full_report(
+                                &saved.map,
+                                apparatus,
+                                has_unprocessed_previous_wips,
+                            )
+                        }),
                     freeze_request: None,
                 },
             )
@@ -1907,10 +2008,11 @@ fn training_queue_action_controls(
 }
 
 fn training_complete_requires_full_report(
+    map: &ProductionMapDefinition,
     apparatus: &str,
     has_unprocessed_previous_wips: bool,
 ) -> bool {
-    !(is_laminatsiya_apparatus(apparatus) || is_rezka_apparatus(apparatus))
+    !(is_laminatsiya_apparatus(map, apparatus) || is_rezka_apparatus(map, apparatus))
         || !has_unprocessed_previous_wips
 }
 
@@ -2064,7 +2166,7 @@ pub async fn training_input_batches(
                 .map_err(training_workspace_error)?
                 .iter()
                 .any(|(configured_apparatus, states)| {
-                    queue_state::apparatus_titles_match(configured_apparatus, &apparatus)
+                    canonical_apparatus_matches(configured_apparatus, &apparatus)
                         && states
                             .get(order_id)
                             .and_then(|state| queue_state::ApparatusQueueOrderState::parse(state))
@@ -2317,14 +2419,14 @@ pub async fn training_order_statuses(
             .nodes
             .iter()
             .find(|node| node.kind == ProductionMapNodeKind::Apparatus)
-            .map(|node| node.title.trim().to_string())
+            .map(|node| node.apparatus_id.trim().to_string())
             .unwrap_or_default();
         let state_record = state_records
             .iter()
             .filter(|record| {
                 record.order_id == order_id
                     && (map_apparatus.is_empty()
-                        || queue_state::apparatus_titles_match(&record.apparatus, &map_apparatus))
+                        || canonical_apparatus_matches(&record.apparatus, &map_apparatus))
             })
             .max_by_key(|record| record.updated_at_unix);
         let event = latest_events
@@ -2332,7 +2434,7 @@ pub async fn training_order_statuses(
             .filter(|event| {
                 event.order_id == order_id
                     && (map_apparatus.is_empty()
-                        || queue_state::apparatus_titles_match(&event.apparatus, &map_apparatus))
+                        || canonical_apparatus_matches(&event.apparatus, &map_apparatus))
             })
             .max_by_key(|event| event.created_at_unix);
         let state = state_record
@@ -2659,12 +2761,24 @@ mod tests {
     }
 
     fn node(id: &str, kind: ProductionMapNodeKind, title: &str) -> ProductionMapNode {
+        let (apparatus_id, role_code) = match (kind.clone(), title) {
+            (ProductionMapNodeKind::Apparatus, "Laminatsiya aparat") => (
+                "apparatus:test:laminatsiya-1".to_string(),
+                TRAINING_LAMINATSIYA_ROLE.to_string(),
+            ),
+            (ProductionMapNodeKind::Apparatus, "Rezka aparat") => (
+                "apparatus:test:rezka-1".to_string(),
+                TRAINING_REZKA_ROLE.to_string(),
+            ),
+            _ => (String::new(), String::new()),
+        };
         ProductionMapNode {
             id: id.to_string(),
             kind,
             title: title.to_string(),
+            apparatus_id,
             formula: None,
-            role_code: String::new(),
+            role_code,
             item_code: String::new(),
             qty_formula: String::new(),
             from_location: String::new(),
@@ -2672,6 +2786,7 @@ mod tests {
             alternative_group_id: String::new(),
             alternative_group_label: String::new(),
             alternative_assigned_title: String::new(),
+            alternative_assigned_apparatus_id: String::new(),
             rezka_kadr_count: None,
             rezka_label_length: None,
             x: 0.0,
@@ -2718,10 +2833,10 @@ mod tests {
     fn training_input_identity() -> TrainingInputBatchIdentity {
         TrainingInputBatchIdentity {
             order_id: "training-laminatsiya-1".to_string(),
-            apparatus: "Laminatsiya aparat".to_string(),
-            batch_id: "progress-batch:1770000000000000000:bosma-aparat:training-laminatsiya-1:complete"
+            apparatus: "apparatus:test:laminatsiya-1".to_string(),
+            batch_id: "progress-batch:1770000000000000000:training-input:bosma:training-laminatsiya-1:complete"
                 .to_string(),
-            session_id: "training-input-session:progress-batch:1770000000000000000:bosma-aparat:training-laminatsiya-1:complete"
+            session_id: "training-input-session:progress-batch:1770000000000000000:training-input:bosma:training-laminatsiya-1:complete"
                 .to_string(),
             qr_payload: "400118904D9F447100000F96".to_string(),
         }
@@ -2733,6 +2848,8 @@ mod tests {
         map.title = "Training rezka".to_string();
         map.nodes[1].id = "rezka".to_string();
         map.nodes[1].title = "Rezka aparat".to_string();
+        map.nodes[1].apparatus_id = "apparatus:test:rezka-1".to_string();
+        map.nodes[1].role_code = TRAINING_REZKA_ROLE.to_string();
         map.edges[0].to = "rezka".to_string();
         map.edges[1].from = "rezka".to_string();
         map
@@ -2741,10 +2858,10 @@ mod tests {
     fn rezka_training_input_identity() -> TrainingInputBatchIdentity {
         TrainingInputBatchIdentity {
             order_id: "training-rezka-1".to_string(),
-            apparatus: "Rezka aparat".to_string(),
-            batch_id: "progress-batch:1770000000000000000:laminatsiya-aparat:training-rezka-1:complete"
+            apparatus: "apparatus:test:rezka-1".to_string(),
+            batch_id: "progress-batch:1770000000000000000:training-input:laminatsiya:training-rezka-1:complete"
                 .to_string(),
-            session_id: "training-input-session:progress-batch:1770000000000000000:laminatsiya-aparat:training-rezka-1:complete"
+            session_id: "training-input-session:progress-batch:1770000000000000000:training-input:laminatsiya:training-rezka-1:complete"
                 .to_string(),
             qr_payload: "400118904D9F447100000F97".to_string(),
         }
@@ -2800,8 +2917,8 @@ mod tests {
         let map = laminatsiya_training_map();
 
         assert_eq!(
-            training_input_stage_for_map(&map, "Laminatsiya aparat").as_deref(),
-            Some(TRAINING_LAMINATSIYA_INPUT_APPARATUS)
+            training_input_stage_for_map(&map, "apparatus:test:laminatsiya-1").as_deref(),
+            Some(TRAINING_VIRTUAL_INPUT_BOSMA)
         );
 
         let worker_map = training_worker_map(map.clone());
@@ -2825,16 +2942,17 @@ mod tests {
         );
 
         let identity = training_input_identity();
-        let batch = training_input_progress_batch(&worker_map, "Laminatsiya aparat", &identity)
-            .expect("virtual training input batch");
+        let batch =
+            training_input_progress_batch(&worker_map, "apparatus:test:laminatsiya-1", &identity)
+                .expect("virtual training input batch");
         assert_eq!(batch.qr_payload, identity.qr_payload);
         assert_eq!(batch.batch_id, identity.batch_id);
         assert_eq!(
             crate::core::production_map::progress_qr_payload(&batch.batch_id),
             batch.qr_payload,
         );
-        assert_eq!(batch.apparatus, TRAINING_LAMINATSIYA_INPUT_APPARATUS);
-        assert_eq!(batch.next_apparatus, "Laminatsiya aparat");
+        assert_eq!(batch.apparatus, "apparatus:test:laminatsiya-1");
+        assert_eq!(batch.next_apparatus, "apparatus:test:laminatsiya-1");
         assert_eq!(batch.wip_status, OrderProgressBatchWipStatus::Waiting);
     }
 
@@ -2843,8 +2961,8 @@ mod tests {
         let map = rezka_training_map();
 
         assert_eq!(
-            training_input_stage_for_map(&map, "Rezka aparat").as_deref(),
-            Some(TRAINING_REZKA_INPUT_APPARATUS)
+            training_input_stage_for_map(&map, "apparatus:test:rezka-1").as_deref(),
+            Some(TRAINING_VIRTUAL_INPUT_LAMINATSIYA)
         );
 
         let worker_map = training_worker_map(map);
@@ -2868,12 +2986,12 @@ mod tests {
         );
 
         let identity = rezka_training_input_identity();
-        let batch = training_input_progress_batch(&worker_map, "Rezka aparat", &identity)
+        let batch = training_input_progress_batch(&worker_map, "apparatus:test:rezka-1", &identity)
             .expect("virtual rezka input batch");
         assert_eq!(batch.qr_payload, identity.qr_payload);
         assert_eq!(batch.batch_id, identity.batch_id);
-        assert_eq!(batch.apparatus, TRAINING_REZKA_INPUT_APPARATUS);
-        assert_eq!(batch.next_apparatus, "Rezka aparat");
+        assert_eq!(batch.apparatus, "apparatus:test:rezka-1");
+        assert_eq!(batch.next_apparatus, "apparatus:test:rezka-1");
         assert_eq!(batch.wip_status, OrderProgressBatchWipStatus::Waiting);
     }
 
@@ -2885,51 +3003,67 @@ mod tests {
         second_identity.batch_id = "training-input-batch-2".to_string();
         second_identity.session_id = "training-input-session-2".to_string();
         second_identity.qr_payload = progress_qr_payload(&second_identity.batch_id);
-        let first =
-            training_input_progress_batch(&worker_map, "Laminatsiya aparat", &first_identity)
-                .expect("first training input");
-        let second =
-            training_input_progress_batch(&worker_map, "Laminatsiya aparat", &second_identity)
-                .expect("second training input");
-        let claimed_first =
-            training_claim_input_batch(&first, "Laminatsiya aparat", "training-laminatsiya-1");
+        let first = training_input_progress_batch(
+            &worker_map,
+            "apparatus:test:laminatsiya-1",
+            &first_identity,
+        )
+        .expect("first training input");
+        let second = training_input_progress_batch(
+            &worker_map,
+            "apparatus:test:laminatsiya-1",
+            &second_identity,
+        )
+        .expect("second training input");
+        let claimed_first = training_claim_input_batch(
+            &first,
+            "apparatus:test:laminatsiya-1",
+            "training-laminatsiya-1",
+        );
 
         assert!(training_has_unprocessed_previous_wips(
             &[claimed_first.clone(), second.clone()],
             "training-laminatsiya-1",
-            TRAINING_LAMINATSIYA_INPUT_APPARATUS,
-            "Laminatsiya aparat",
+            TRAINING_VIRTUAL_INPUT_BOSMA,
+            "apparatus:test:laminatsiya-1",
             &claimed_first.batch_id,
         ));
         assert!(!training_complete_requires_full_report(
-            "Laminatsiya aparat",
+            &laminatsiya_training_map(),
+            "apparatus:test:laminatsiya-1",
             true,
         ));
         assert!(!training_complete_requires_full_report(
-            "Rezka aparat",
+            &rezka_training_map(),
+            "apparatus:test:rezka-1",
             true
         ));
 
         let processed_first = training_process_input_batch(
             &claimed_first,
-            "Laminatsiya aparat",
+            "apparatus:test:laminatsiya-1",
             "training-laminatsiya-1",
         );
-        let claimed_second =
-            training_claim_input_batch(&second, "Laminatsiya aparat", "training-laminatsiya-1");
+        let claimed_second = training_claim_input_batch(
+            &second,
+            "apparatus:test:laminatsiya-1",
+            "training-laminatsiya-1",
+        );
         assert!(!training_has_unprocessed_previous_wips(
             &[processed_first, claimed_second.clone()],
             "training-laminatsiya-1",
-            TRAINING_LAMINATSIYA_INPUT_APPARATUS,
-            "Laminatsiya aparat",
+            TRAINING_VIRTUAL_INPUT_BOSMA,
+            "apparatus:test:laminatsiya-1",
             &claimed_second.batch_id,
         ));
         assert!(training_complete_requires_full_report(
-            "Laminatsiya aparat",
+            &laminatsiya_training_map(),
+            "apparatus:test:laminatsiya-1",
             false,
         ));
         assert!(training_complete_requires_full_report(
-            "Rezka aparat",
+            &rezka_training_map(),
+            "apparatus:test:rezka-1",
             false
         ));
     }
@@ -2948,15 +3082,64 @@ mod tests {
     }
 
     #[test]
+    fn training_selection_is_independent_of_display_rename() {
+        let mut map = laminatsiya_training_map();
+        let saved = ProductionMapSaved {
+            program: crate::core::production_map::ProductionMapProgram {
+                map_id: map.id.clone(),
+                product_code: map.product_code.clone(),
+                operations: Vec::new(),
+            },
+            map: map.clone(),
+        };
+        assert!(training_map_has_apparatus(
+            &saved,
+            "apparatus:test:laminatsiya-1"
+        ));
+        map.nodes[1].title = "Renamed display only".to_string();
+        let renamed = ProductionMapSaved { map, ..saved };
+        assert!(training_map_has_apparatus(
+            &renamed,
+            "apparatus:test:laminatsiya-1"
+        ));
+        assert!(!training_map_has_apparatus(
+            &renamed,
+            "Renamed display only"
+        ));
+    }
+
+    #[test]
+    fn training_virtual_input_cannot_be_a_production_apparatus_id() {
+        assert!(ApparatusId::new(TRAINING_VIRTUAL_INPUT_BOSMA).is_err());
+        assert!(ApparatusId::new(TRAINING_VIRTUAL_INPUT_LAMINATSIYA).is_err());
+        let batch = training_input_progress_batch(
+            &training_worker_map(laminatsiya_training_map()),
+            "apparatus:test:laminatsiya-1",
+            &training_input_identity(),
+        )
+        .expect("training virtual input batch");
+        assert_eq!(batch.apparatus, "apparatus:test:laminatsiya-1");
+        assert_eq!(
+            batch.payload_json["training_virtual_apparatus"],
+            TRAINING_VIRTUAL_INPUT_BOSMA
+        );
+    }
+
+    #[test]
     fn unsupported_training_map_does_not_get_virtual_input() {
         let mut map = laminatsiya_training_map();
         map.nodes[1].title = "Bosma aparat".to_string();
+        map.nodes[1].role_code = "other".to_string();
 
         let worker_map = training_worker_map(map.clone());
         assert!(!worker_map.nodes.iter().any(is_training_input_node));
         assert!(
-            training_input_progress_batch(&worker_map, "Bosma aparat", &training_input_identity(),)
-                .is_none()
+            training_input_progress_batch(
+                &worker_map,
+                "apparatus:test:unsupported-1",
+                &training_input_identity(),
+            )
+            .is_none()
         );
     }
 
@@ -2972,7 +3155,7 @@ mod tests {
         };
         let batches = training_progress_batches(
             &laminatsiya_training_map(),
-            "Laminatsiya aparat",
+            "apparatus:test:laminatsiya-1",
             "training-laminatsiya-1",
             queue_state::ApparatusQueueAction::Complete,
             &principal(),
@@ -3013,7 +3196,7 @@ mod tests {
 
         let batches = training_progress_batches(
             &map,
-            "Rezka aparat",
+            "apparatus:test:rezka-1",
             "training-rezka-1",
             queue_state::ApparatusQueueAction::Complete,
             &principal(),
@@ -3069,7 +3252,7 @@ mod tests {
         ] {
             let action_batches = training_progress_batches(
                 &map,
-                "Rezka aparat",
+                "apparatus:test:rezka-1",
                 "training-rezka-1",
                 action,
                 &principal(),
@@ -3091,7 +3274,7 @@ mod tests {
     fn rezka_training_output_requires_kadr_count_before_state_change() {
         let error = training_progress_batches(
             &rezka_training_map(),
-            "Rezka aparat",
+            "apparatus:test:rezka-1",
             "training-rezka-1",
             queue_state::ApparatusQueueAction::DetachRoll,
             &principal(),

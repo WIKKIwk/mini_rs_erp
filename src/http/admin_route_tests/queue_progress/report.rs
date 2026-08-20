@@ -15,9 +15,9 @@ async fn progress_qr_report_marks_processed_qr_as_stale_and_returns_order_flow()
             principal_ref: "worker-qr-report".to_string(),
             role_id: "aparatchi".to_string(),
             assigned_apparatus: vec![
-                "Pechat sexi".to_string(),
-                "Qadoqlash stol".to_string(),
-                "Yordamchi aparat".to_string(),
+                "apparatus:test:pechat-sexi".to_string(),
+                "apparatus:test:qadoqlash-stol".to_string(),
+                "apparatus:test:yordamchi-aparat".to_string(),
             ],
             assigned_item_groups: Vec::new(),
         })
@@ -37,8 +37,8 @@ async fn progress_qr_report_marks_processed_qr_as_stale_and_returns_order_flow()
                 "zakaz-qr-report",
                 "QR report order",
                 "9501",
-                "Pechat sexi",
-                "Qadoqlash stol",
+                "apparatus:test:pechat-sexi",
+                "apparatus:test:qadoqlash-stol",
             ),
         ))
         .await
@@ -52,7 +52,7 @@ async fn progress_qr_report_marks_processed_qr_as_stale_and_returns_order_flow()
             "/v1/mobile/admin/production-maps/queue-action",
             &worker_token,
             r#"{
-                "apparatus":"Pechat sexi",
+                "apparatus":"apparatus:test:pechat-sexi",
                 "order_id":"zakaz-qr-report",
                 "action":"start"
             }"#,
@@ -68,7 +68,7 @@ async fn progress_qr_report_marks_processed_qr_as_stale_and_returns_order_flow()
             "/v1/mobile/admin/production-maps/queue-action",
             &worker_token,
             r#"{
-                "apparatus":"Pechat sexi",
+                "apparatus":"apparatus:test:pechat-sexi",
                 "order_id":"zakaz-qr-report",
                 "action":"pause",
                 "produced_qty":100,
@@ -94,7 +94,7 @@ async fn progress_qr_report_marks_processed_qr_as_stale_and_returns_order_flow()
             &worker_token,
             &format!(
                 r#"{{
-                    "apparatus":"Qadoqlash stol",
+                    "apparatus":"apparatus:test:qadoqlash-stol",
                     "order_id":"zakaz-qr-report",
                     "action":"start",
                     "qr_payload":"{old_qr_payload}"
@@ -112,7 +112,7 @@ async fn progress_qr_report_marks_processed_qr_as_stale_and_returns_order_flow()
             "/v1/mobile/admin/production-maps/queue-action",
             &worker_token,
             r#"{
-                "apparatus":"Qadoqlash stol",
+                "apparatus":"apparatus:test:qadoqlash-stol",
                 "order_id":"zakaz-qr-report",
                 "action":"complete",
                 "produced_qty":96,
@@ -141,8 +141,8 @@ async fn progress_qr_report_marks_processed_qr_as_stale_and_returns_order_flow()
                 "zakaz-qr-unrelated",
                 "Unrelated QR report order",
                 "9502",
-                "Yordamchi aparat",
-                "Qadoqlash stol",
+                "apparatus:test:yordamchi-aparat",
+                "apparatus:test:qadoqlash-stol",
             ),
         ))
         .await
@@ -155,7 +155,7 @@ async fn progress_qr_report_marks_processed_qr_as_stale_and_returns_order_flow()
             "/v1/mobile/admin/production-maps/queue-action",
             &worker_token,
             r#"{
-                "apparatus":"Yordamchi aparat",
+                "apparatus":"apparatus:test:yordamchi-aparat",
                 "order_id":"zakaz-qr-unrelated",
                 "action":"start"
             }"#,
@@ -230,11 +230,11 @@ async fn progress_qr_report_marks_processed_qr_as_stale_and_returns_order_flow()
     assert_eq!(report_body["order"]["id"], "zakaz-qr-report");
     assert_eq!(report_body["order"]["title"], "QR report order");
     assert_eq!(
-        report_body["queue_states"]["Qadoqlash stol"]["zakaz-qr-report"],
+        report_body["queue_states"]["apparatus:test:qadoqlash-stol"]["zakaz-qr-report"],
         "completed"
     );
     assert!(
-        report_body["queue_states"]["Yordamchi aparat"]
+        report_body["queue_states"]["apparatus:test:yordamchi-aparat"]
             .get("zakaz-qr-unrelated")
             .is_none()
     );
@@ -271,8 +271,8 @@ async fn progress_qr_history_lists_own_batches_and_reprints_existing_qr() {
         fail: false,
     }));
     for (worker_ref, apparatus) in [
-        ("worker-qr-history-a", "7 ta rangli pechat"),
-        ("worker-qr-history-b", "8 ta rangli pechat"),
+        ("worker-qr-history-a", "apparatus:default:bosma_7"),
+        ("worker-qr-history-b", "apparatus:default:bosma_8"),
     ] {
         state
             .admin
@@ -297,13 +297,13 @@ async fn progress_qr_history_lists_own_batches_and_reprints_existing_qr() {
         (
             "zakaz-qr-history-a",
             "9503",
-            "7 ta rangli pechat",
+            "apparatus:default:bosma_7",
             &worker_a_token,
         ),
         (
             "zakaz-qr-history-b",
             "9504",
-            "8 ta rangli pechat",
+            "apparatus:default:bosma_8",
             &worker_b_token,
         ),
     ] {

@@ -14,7 +14,11 @@ use std::sync::atomic::Ordering;
 
 use async_trait::async_trait;
 
+use crate::core::apparatus_standard::ApparatusId;
+
 pub use state::MemoryProductionMapStore;
+
+use super::store_port::ApparatusQueuePolicyMap;
 
 #[async_trait]
 #[cfg(test)]
@@ -164,12 +168,16 @@ impl ProductionMapStorePort for MemoryProductionMapStore {
     async fn update_apparatus_schedule_reservation_status(
         &self,
         order_id: &str,
-        apparatus: &str,
+        apparatus_id: &ApparatusId,
         status: ApparatusScheduleStatus,
         actor: &QueueActionActor,
     ) -> Result<(), ProductionMapError> {
         capacity::update_apparatus_schedule_reservation_status(
-            self, order_id, apparatus, status, actor,
+            self,
+            order_id,
+            apparatus_id,
+            status,
+            actor,
         )
         .await
     }
@@ -190,17 +198,19 @@ impl ProductionMapStorePort for MemoryProductionMapStore {
 
     async fn apparatus_queue_policies(
         &self,
-    ) -> Result<BTreeMap<String, ApparatusQueuePolicy>, ProductionMapError> {
+    ) -> Result<ApparatusQueuePolicyMap, ProductionMapError> {
         queue::apparatus_queue_policies(self).await
     }
 
     async fn put_apparatus_queue_policy(
         &self,
-        apparatus: &str,
+        apparatus_id: &crate::core::apparatus_standard::ApparatusId,
+        apparatus_display: &str,
         policy: ApparatusQueuePolicy,
         actor: &QueueActionActor,
     ) -> Result<(), ProductionMapError> {
-        queue::put_apparatus_queue_policy(self, apparatus, policy, actor).await
+        queue::put_apparatus_queue_policy(self, apparatus_id, apparatus_display, policy, actor)
+            .await
     }
 
     async fn append_apparatus_queue_action_event(
@@ -506,6 +516,7 @@ impl ProductionMapStorePort for MemoryProductionMapStore {
         &self,
         write: QueueActionProgressWrite,
     ) -> Result<QueueActionProgressWriteResult, ProductionMapError> {
+        validate_queue_progress_write(&write)?;
         if self
             .fail_next_queue_progress_commit
             .swap(false, Ordering::SeqCst)
@@ -527,6 +538,9 @@ impl ProductionMapStorePort for MemoryProductionMapStore {
                     return Err(ProductionMapError::QolipAlreadyInUse);
                 }
             }
+        }
+        if let Some(map) = write.map_update.clone() {
+            maps::put_map(self, map).await?;
         }
         let schedule_reservation_status = write.schedule_reservation_status;
         let sequence_updates = write.sequence_updates;
@@ -561,9 +575,11 @@ impl ProductionMapStorePort for MemoryProductionMapStore {
             self.put_order_control_state(record).await?;
         }
         if let Some(status) = schedule_reservation_status {
+            let event_apparatus_id = ApparatusId::new(event_apparatus.trim().to_string())
+                .map_err(|_| ProductionMapError::ScheduleInputInvalid)?;
             self.update_apparatus_schedule_reservation_status(
                 &event_order_id,
-                &event_apparatus,
+                &event_apparatus_id,
                 status,
                 &event_actor,
             )

@@ -5,7 +5,7 @@ use crate::core::qolip::normalize::{
 };
 use crate::core::qolip::{QolipCheckout, QolipError};
 
-use super::rows::{row_to_checkout, row_to_location, QolipCheckoutRow, QolipLocationRow};
+use super::rows::{QolipCheckoutRow, QolipLocationRow, row_to_checkout, row_to_location};
 
 pub(super) async fn save_checkout(
     pool: &PgPool,

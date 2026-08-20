@@ -1,4 +1,6 @@
-use super::queue_actions::{apparatus_requires_qolip_scan, qolip_queue_error, reject_qolip_in_use};
+use super::queue_actions::{
+    QueueApparatusMetadata, qolip_queue_error, reject_qolip_in_use, resolve_queue_apparatus,
+};
 use super::*;
 
 #[derive(serde::Deserialize)]
@@ -36,15 +38,17 @@ pub async fn production_map_qolip_validate(
     if apparatus.is_empty() || order_id.is_empty() {
         return Err(bad_request("apparatus and order_id are required"));
     }
-    if !apparatus_requires_qolip_scan(apparatus) {
+    let apparatus: QueueApparatusMetadata = resolve_queue_apparatus(&state, apparatus).await?;
+    if !apparatus.requires_qolip_scan() {
         return Err(bad_request("qolip_scan_not_required"));
     }
+    let apparatus_id = apparatus.id.to_string();
     let is_admin = state
         .admin
         .principal_has_capability(&principal, Capability::AdminAccess)
         .await;
     let assigned_apparatus = state.admin.principal_assigned_apparatus(&principal).await;
-    if !is_admin && !queue_state::apparatus_matches_assigned(apparatus, &assigned_apparatus) {
+    if !is_admin && !queue_state::apparatus_matches_assigned(&apparatus_id, &assigned_apparatus) {
         return Err(bad_request("apparatus_not_assigned"));
     }
     if order_id.starts_with("training-") {
@@ -52,7 +56,7 @@ pub async fn production_map_qolip_validate(
             &state,
             &principal,
             order_id,
-            apparatus,
+            &apparatus_id,
         )
         .await
         .map_err(super::super::training::training_workspace_error)?
@@ -61,10 +65,7 @@ pub async fn production_map_qolip_validate(
         };
         let required_qolips = state
             .qolip
-            .required_qolips_for_order(
-                &training_map.map.product_code,
-                &training_map.map.title,
-            )
+            .required_qolips_for_order(&training_map.map.product_code, &training_map.map.title)
             .await
             .map_err(qolip_queue_error)?;
         let required_qolip_codes = required_qolips
@@ -92,9 +93,7 @@ pub async fn production_map_qolip_validate(
             .product_spec_by_qolip_code(&input.qolip_code)
             .await
             .map_err(qolip_queue_error)?
-            .ok_or_else(|| {
-                qolip_queue_error(crate::core::qolip::QolipError::QolipCodeNotFound)
-            })?;
+            .ok_or_else(|| qolip_queue_error(crate::core::qolip::QolipError::QolipCodeNotFound))?;
         if !required_qolips.iter().any(|required| {
             required
                 .qolip_code
@@ -149,7 +148,7 @@ pub async fn production_map_qolip_validate(
             }
         })));
     }
-    reject_qolip_in_use(&state, apparatus, order_id, &input.qolip_code).await?;
+    reject_qolip_in_use(&state, &apparatus, order_id, &input.qolip_code).await?;
     let preparation = state
         .qolip
         .prepare_qolip_code_for_order_start(

@@ -2,6 +2,14 @@ use std::collections::BTreeSet;
 
 use serde::{Deserialize, Serialize};
 
+use crate::core::apparatus_groups::ApparatusGroupService;
+use crate::core::apparatus_standard::{
+    ApparatusId, CanonicalApparatus, MaterialPolicy, MaterialRequirementGroup,
+};
+use crate::core::qolip::QolipOrderStartPreparation;
+
+pub use crate::core::apparatus_standard::RawMaterialStartPolicy;
+
 use super::materials_support::*;
 use super::queue_state;
 use super::{
@@ -10,25 +18,13 @@ use super::{
     QueueProgressInput, chain,
 };
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct ApparatusMaterialRequirementGroup {
-    pub name: String,
-    #[serde(default)]
-    pub item_groups: Vec<String>,
-    #[serde(default = "default_min_required_count")]
-    pub min_required_count: usize,
-}
-
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum RawMaterialStartPolicy {
-    #[default]
-    StateAll,
-    RequirementGroups,
-}
+pub type ApparatusMaterialRequirementGroup = MaterialRequirementGroup;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ApparatusMaterialRule {
+    pub apparatus_id: ApparatusId,
+    /// Historical/display snapshot only. Never use this for live identity.
+    #[serde(default)]
     pub apparatus: String,
     #[serde(default)]
     pub requires_material: bool,
@@ -78,6 +74,9 @@ pub struct RawMaterialAssignmentDeleteInput {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct RawMaterialAssignment {
     pub order_id: String,
+    pub apparatus_id: ApparatusId,
+    /// Historical/display snapshot only. Never use this for live identity.
+    #[serde(default)]
     pub apparatus: String,
     pub barcode: String,
     pub item_code: String,
@@ -93,6 +92,7 @@ pub struct RawMaterialAssignment {
 pub struct RawMaterialStartRequirements {
     pub policy: RawMaterialStartPolicy,
     pub requires_material: bool,
+    pub material_scan_required: bool,
     pub requirement_groups: Vec<ApparatusMaterialRequirementGroup>,
     pub assigned_barcodes: Vec<String>,
     pub staged_barcodes: Vec<String>,
@@ -101,6 +101,47 @@ pub struct RawMaterialStartRequirements {
     pub matched_scan_count: usize,
     pub assignments_satisfied: bool,
     pub scan_satisfied: bool,
+}
+
+/// Validation produced by the trusted admin Qolip boundary for one queue
+/// start. Core queue callers cannot manufacture the private identity fields;
+/// callers without this token remain fail-closed for Qolip-protected starts.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TrustedQolipStartValidation {
+    apparatus_id: ApparatusId,
+    order_id: String,
+    qolip_codes: Vec<String>,
+}
+
+impl TrustedQolipStartValidation {
+    pub(crate) fn from_preparations(
+        apparatus_id: &ApparatusId,
+        order_id: &str,
+        preparations: &[QolipOrderStartPreparation],
+    ) -> Option<Self> {
+        let mut qolip_codes = preparations
+            .iter()
+            .map(|preparation| preparation.spec.qolip_code.trim().to_lowercase())
+            .filter(|code| !code.is_empty())
+            .collect::<Vec<_>>();
+        qolip_codes.sort();
+        qolip_codes.dedup();
+        let order_id = order_id.trim();
+        if order_id.is_empty() || qolip_codes.is_empty() {
+            return None;
+        }
+        Some(Self {
+            apparatus_id: apparatus_id.clone(),
+            order_id: order_id.to_string(),
+            qolip_codes,
+        })
+    }
+
+    pub(crate) fn matches(&self, apparatus_id: &ApparatusId, order_id: &str) -> bool {
+        self.apparatus_id == *apparatus_id
+            && self.order_id.eq_ignore_ascii_case(order_id.trim())
+            && !self.qolip_codes.is_empty()
+    }
 }
 
 pub struct MaterialScanProgressAction<'a> {
@@ -112,6 +153,7 @@ pub struct MaterialScanProgressAction<'a> {
     pub material_barcode: &'a str,
     pub state_material_barcodes: &'a [String],
     pub progress: QueueProgressInput,
+    pub qolip_validation: Option<TrustedQolipStartValidation>,
 }
 
 impl ProductionMapService {
@@ -130,7 +172,10 @@ impl ProductionMapService {
                 continue;
             }
             let status = self.order_status_detail(order_id).await?;
-            if !matches!(status.order_status.as_str(), "completed" | "completed_with_issue") {
+            if !matches!(
+                status.order_status.as_str(),
+                "completed" | "completed_with_issue"
+            ) {
                 active_orders.push(saved);
             }
         }
@@ -140,17 +185,56 @@ impl ProductionMapService {
     pub async fn apparatus_material_rules(
         &self,
     ) -> Result<Vec<ApparatusMaterialRule>, ProductionMapError> {
-        self.store.apparatus_material_rules().await
+        let mut apparatus_ids = BTreeSet::new();
+        for map in self.store.maps().await? {
+            for stage in chain::linear_work_stages(&map) {
+                let Some(apparatus) = stage.apparatus_id.as_deref() else {
+                    continue;
+                };
+                let apparatus_id =
+                    parse_apparatus_id(apparatus).map_err(|_| ProductionMapError::StoreFailed)?;
+                apparatus_ids.insert(apparatus_id);
+            }
+        }
+
+        let mut rules = Vec::new();
+        for apparatus_id in apparatus_ids {
+            let canonical = self.validated_material_apparatus(&apparatus_id).await?;
+            if let Some(rule) = live_material_rule(&canonical) {
+                rules.push(rule);
+            }
+        }
+        Ok(rules)
     }
 
     pub async fn set_apparatus_material_rule(
         &self,
         input: ApparatusMaterialRuleUpsert,
+        apparatus_groups: &ApparatusGroupService,
     ) -> Result<ApparatusMaterialRule, ProductionMapError> {
-        let rule = normalize_rule(input)?;
-        self.store.put_apparatus_material_rule(rule.clone()).await?;
+        let requested = normalize_rule(input)?;
+        let current = self
+            .validated_material_apparatus(&requested.apparatus_id)
+            .await?;
+        let canonical = apparatus_groups
+            .mutate_canonical_apparatus(
+                &requested.apparatus_id,
+                current.versioning.revision,
+                |canonical| {
+                    canonical.policies.material = MaterialPolicy {
+                        requires_material: requested.requires_material,
+                        start_policy: requested.start_policy,
+                        item_groups: requested.item_groups.clone(),
+                        requirement_groups: requested.requirement_groups.clone(),
+                    };
+                    Ok(())
+                },
+            )
+            .await
+            .map_err(|_| ProductionMapError::StoreFailed)?;
+        let effective = material_rule_record(&canonical);
         self.notify_live();
-        Ok(rule)
+        Ok(effective)
     }
 
     pub async fn raw_material_assignments(
@@ -164,9 +248,11 @@ impl ProductionMapService {
         order_id: &str,
         apparatus: &str,
     ) -> Result<bool, ProductionMapError> {
+        let apparatus_id = parse_apparatus_id(apparatus)?;
+        self.validated_material_apparatus(&apparatus_id).await?;
         let queue_states = self.store.apparatus_queue_states().await?;
         let is_active = queue_states.iter().any(|(candidate, states)| {
-            queue_state::apparatus_titles_match(candidate, apparatus)
+            canonical_apparatuses_match(candidate, &apparatus_id)
                 && states
                     .get(order_id.trim())
                     .and_then(|state| queue_state::ApparatusQueueOrderState::parse(state))
@@ -189,11 +275,12 @@ impl ProductionMapService {
         item_group: &str,
         item_group_path: Vec<String>,
     ) -> Result<bool, ProductionMapError> {
+        let apparatus_id = parse_apparatus_id(apparatus)?;
         let path = normalize_group_path(item_group, item_group_path);
         Ok(self
-            .material_rule_for_apparatus(apparatus)
+            .material_rule_for_apparatus(&apparatus_id)
             .await?
-            .is_none_or(|rule| rule_matches(&rule, apparatus, &path)))
+            .is_none_or(|rule| rule_matches(&rule, &apparatus_id, &path)))
     }
 
     pub async fn raw_material_start_requirements(
@@ -203,13 +290,16 @@ impl ProductionMapService {
         state_material_barcodes: &[String],
         material_barcodes: &str,
     ) -> Result<RawMaterialStartRequirements, ProductionMapError> {
+        let apparatus_id = parse_apparatus_id(apparatus)?;
         let assignments = self
-            .raw_material_assignments_for_order_apparatus(order_id, apparatus)
+            .raw_material_assignments_for_order_apparatus(order_id, &apparatus_id)
             .await?;
-        let rule = self.material_rule_for_apparatus(apparatus).await?;
+        let rule = self.material_rule_for_apparatus(&apparatus_id).await?;
+        let assignments_for_policy: &[RawMaterialAssignment] =
+            if rule.is_some() { &assignments } else { &[] };
         Ok(build_raw_material_start_requirements(
             rule.as_ref(),
-            &assignments,
+            assignments_for_policy,
             state_material_barcodes,
             material_barcodes,
         ))
@@ -272,7 +362,7 @@ impl ProductionMapService {
     ) -> Result<(RawMaterialAssignment, Vec<String>), ProductionMapError> {
         let _guard = self.queue_action_guard().await;
         let normalized_barcode = normalize_barcode(&input.barcode);
-        let requested_apparatus = input.apparatus.trim().to_string();
+        let requested_apparatus = parse_optional_apparatus_id(&input.apparatus)?;
         let item_group_path =
             normalize_group_path(&input.item_group, input.item_group_path.clone());
         let existing = self
@@ -284,23 +374,21 @@ impl ProductionMapService {
         let assignment = match existing {
             Some(assignment)
                 if assignment.order_id.trim() == input.order_id.trim()
-                    && (requested_apparatus.is_empty()
-                        || queue_state::apparatus_titles_match(
-                            &assignment.apparatus,
-                            &requested_apparatus,
-                        )) =>
+                    && requested_apparatus
+                        .as_ref()
+                        .is_none_or(|id| id == &assignment.apparatus_id) =>
             {
                 assignment
             }
             Some(_) => return Err(ProductionMapError::RawMaterialAlreadyAssigned),
             None => return Err(ProductionMapError::RawMaterialAssignmentNotFound),
         };
-        if !queue_state::apparatus_matches_assigned(&assignment.apparatus, assigned_apparatus) {
+        if !assigned_apparatus_contains(&assignment.apparatus_id, assigned_apparatus) {
             return Err(ProductionMapError::ApparatusNotAssigned);
         }
         let queue_states = self.store.apparatus_queue_states().await?;
         let is_active = queue_states.iter().any(|(apparatus, states)| {
-            queue_state::apparatus_titles_match(apparatus, &assignment.apparatus)
+            canonical_apparatuses_match(apparatus, &assignment.apparatus_id)
                 && states
                     .get(&assignment.order_id)
                     .and_then(|state| queue_state::ApparatusQueueOrderState::parse(state))
@@ -323,16 +411,12 @@ impl ProductionMapService {
                 OrderControlState::Frozen => return Err(ProductionMapError::OrderFrozen),
             }
         }
-        if self
-            .material_rule_for_apparatus(&assignment.apparatus)
-            .await?
-            .is_some_and(|rule| {
-                !rule_matches(
-                    &rule,
-                    &assignment.apparatus,
-                    &item_group_path,
-                )
-            })
+        let material_rule = self
+            .material_rule_for_apparatus(&assignment.apparatus_id)
+            .await?;
+        if material_rule
+            .as_ref()
+            .is_none_or(|rule| !rule_matches(rule, &assignment.apparatus_id, &item_group_path))
         {
             return Err(ProductionMapError::RawMaterialGroupNotAllowed);
         }
@@ -364,31 +448,30 @@ impl ProductionMapService {
         let apparatus_options = self
             .raw_material_assignment_apparatus_options(&order_id, &item_group_path)
             .await?;
-        let requested_apparatus = input.apparatus.trim();
-        let apparatus = if requested_apparatus.is_empty() {
+        let requested_apparatus = parse_optional_apparatus_id(&input.apparatus)?;
+        let apparatus_id = if let Some(requested_apparatus) = requested_apparatus {
+            apparatus_options
+                .iter()
+                .find_map(|candidate| {
+                    parse_apparatus_id(candidate)
+                        .ok()
+                        .filter(|candidate_id| candidate_id == &requested_apparatus)
+                })
+                .ok_or(ProductionMapError::RawMaterialGroupNotAllowed)?
+        } else {
             match apparatus_options.len() {
                 0 => return Err(ProductionMapError::RawMaterialGroupNotAllowed),
-                1 => apparatus_options[0].clone(),
+                1 => parse_apparatus_id(&apparatus_options[0])?,
                 _ => {
                     return Err(ProductionMapError::RawMaterialGroupAmbiguous(
                         apparatus_options,
                     ));
                 }
             }
-        } else {
-            apparatus_options
-                .iter()
-                .find(|candidate| {
-                    queue_state::apparatus_titles_match(candidate, requested_apparatus)
-                })
-                .cloned()
-                .ok_or(ProductionMapError::RawMaterialGroupNotAllowed)?
         };
         for existing in self.store.raw_material_assignments().await? {
             if same_barcode(&existing.barcode, &barcode) {
-                if existing.order_id.trim() == order_id
-                    && queue_state::apparatus_titles_match(&existing.apparatus, &apparatus)
-                {
+                if existing.order_id.trim() == order_id && existing.apparatus_id == apparatus_id {
                     return Err(ProductionMapError::RawMaterialAlreadyAssignedToOrder);
                 }
                 return Err(ProductionMapError::RawMaterialAlreadyAssigned);
@@ -396,7 +479,8 @@ impl ProductionMapService {
         }
         Ok(RawMaterialAssignment {
             order_id,
-            apparatus,
+            apparatus: apparatus_id.to_string(),
+            apparatus_id,
             barcode,
             item_code,
             item_name: blank_default(&input.item_name, &input.item_code),
@@ -408,6 +492,7 @@ impl ProductionMapService {
         })
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub async fn apply_apparatus_queue_action_with_material_scan(
         &self,
         apparatus: &str,
@@ -418,7 +503,8 @@ impl ProductionMapService {
         material_barcode: &str,
         state_material_barcodes: &[String],
     ) -> Result<std::collections::BTreeMap<String, String>, ProductionMapError> {
-        if !queue_state::apparatus_matches_assigned(apparatus, assigned_apparatus) {
+        let apparatus_id = parse_apparatus_id(apparatus)?;
+        if !assigned_apparatus_contains(&apparatus_id, assigned_apparatus) {
             return Err(ProductionMapError::ApparatusNotAssigned);
         }
         self.validate_material_scan(
@@ -457,13 +543,26 @@ impl ProductionMapService {
             material_barcode,
             state_material_barcodes,
             progress,
+            qolip_validation,
         } = request;
-        if !queue_state::apparatus_matches_assigned(apparatus, assigned_apparatus) {
+        let apparatus_id = parse_apparatus_id(apparatus)?;
+        if !assigned_apparatus_contains(&apparatus_id, assigned_apparatus) {
             return Err(ProductionMapError::ApparatusNotAssigned);
         }
+        self.enforce_qolip_start_boundary(
+            apparatus_id.as_str(),
+            order_id,
+            action,
+            qolip_validation.as_ref(),
+        )
+        .await?;
         let skip_material_scan = matches!(action, queue_state::ApparatusQueueAction::Start)
             && self
-                .laminatsiya_material_scan_can_be_skipped_for_wip(apparatus, order_id, &progress)
+                .laminatsiya_material_scan_can_be_skipped_for_wip(
+                    &apparatus_id,
+                    order_id,
+                    &progress,
+                )
                 .await?;
         if !skip_material_scan {
             self.validate_material_scan(
@@ -477,14 +576,14 @@ impl ProductionMapService {
         }
         let mut prepared = self
             .prepare_apparatus_queue_action_with_progress(
-            apparatus,
-            order_id,
-            action,
-            assigned_apparatus,
-            actor,
-            progress,
-        )
-        .await?;
+                apparatus_id.as_str(),
+                order_id,
+                action,
+                assigned_apparatus,
+                actor,
+                progress,
+            )
+            .await?;
         prepared.material_scan_skipped = skip_material_scan;
         Ok(prepared)
     }
@@ -494,14 +593,18 @@ impl ProductionMapService {
         map: &super::ProductionMapDefinition,
         item_group_path: &[String],
     ) -> Result<Vec<String>, ProductionMapError> {
-        let rules = self.store.apparatus_material_rules().await?;
         let mut matches = BTreeSet::new();
         for stage in chain::linear_work_stages(map) {
-            if rules
-                .iter()
-                .any(|rule| rule_matches(rule, &stage.station_title, item_group_path))
+            let Some(stage_apparatus_id) = stage.apparatus_id.as_deref() else {
+                continue;
+            };
+            let stage_apparatus_id = parse_apparatus_id(stage_apparatus_id)?;
+            if self
+                .material_rule_for_apparatus(&stage_apparatus_id)
+                .await?
+                .is_some_and(|rule| rule_matches(&rule, &stage_apparatus_id, item_group_path))
             {
-                matches.insert(stage.station_title);
+                matches.insert(stage_apparatus_id.to_string());
             }
         }
         Ok(matches.into_iter().collect())
@@ -518,22 +621,32 @@ impl ProductionMapService {
         if !matches!(action, queue_state::ApparatusQueueAction::Start) {
             return Ok(());
         }
+        let apparatus_id = parse_apparatus_id(apparatus)?;
+        let canonical = self.validated_material_apparatus(&apparatus_id).await?;
+        let rule = live_material_rule(&canonical);
+        let scanned = normalized_barcodes(material_barcode);
+        if rule.is_none() {
+            if !scanned.is_empty() {
+                return Err(ProductionMapError::RawMaterialMismatch);
+            }
+            return Ok(());
+        }
         let assignments = self
-            .raw_material_assignments_for_order_apparatus(order_id, apparatus)
+            .raw_material_assignments_for_order_apparatus(order_id, &apparatus_id)
             .await?;
-        let rule = self.material_rule_for_apparatus(apparatus).await?;
         let requirements = build_raw_material_start_requirements(
             rule.as_ref(),
             &assignments,
             state_material_barcodes,
             material_barcode,
         );
-        let scanned = normalized_barcodes(material_barcode);
         if assignments.is_empty() {
             if !scanned.is_empty() {
                 return Err(ProductionMapError::RawMaterialMismatch);
             }
-            if !is_laminatsiya_apparatus(apparatus) && !requirements.assignments_satisfied {
+            if !super::apparatus::is_laminatsiya_apparatus(&canonical)
+                && !requirements.assignments_satisfied
+            {
                 return Err(ProductionMapError::RawMaterialAssignmentNotFound);
             }
             return Ok(());
@@ -580,11 +693,12 @@ impl ProductionMapService {
 
     async fn laminatsiya_material_scan_can_be_skipped_for_wip(
         &self,
-        apparatus: &str,
+        apparatus: &ApparatusId,
         order_id: &str,
         progress: &QueueProgressInput,
     ) -> Result<bool, ProductionMapError> {
-        if !is_laminatsiya_apparatus(apparatus)
+        let canonical = self.validated_material_apparatus(apparatus).await?;
+        if !super::apparatus::is_laminatsiya_apparatus(&canonical)
             || (progress.qr_payload.trim().is_empty()
                 && progress.progress_batch_id.trim().is_empty())
         {
@@ -594,7 +708,7 @@ impl ProductionMapService {
             return Ok(false);
         };
         Ok(self
-            .previous_stage_start_progress_batch(order_id, &order_map, apparatus, progress)
+            .previous_stage_start_progress_batch(order_id, &order_map, apparatus.as_str(), progress)
             .await
             .ok()
             .flatten()
@@ -604,7 +718,7 @@ impl ProductionMapService {
     async fn raw_material_assignments_for_order_apparatus(
         &self,
         order_id: &str,
-        apparatus: &str,
+        apparatus: &ApparatusId,
     ) -> Result<Vec<RawMaterialAssignment>, ProductionMapError> {
         Ok(self
             .store
@@ -613,29 +727,49 @@ impl ProductionMapService {
             .into_iter()
             .filter(|assignment| {
                 assignment.order_id.trim() == order_id.trim()
-                    && queue_state::apparatus_titles_match(&assignment.apparatus, apparatus)
+                    && assignment.apparatus_id.as_str() == apparatus.as_str()
             })
             .collect())
     }
 
     async fn material_rule_for_apparatus(
         &self,
-        apparatus: &str,
+        apparatus: &ApparatusId,
     ) -> Result<Option<ApparatusMaterialRule>, ProductionMapError> {
-        Ok(self
-            .store
-            .apparatus_material_rules()
-            .await?
-            .into_iter()
-            .find(|rule| queue_state::apparatus_titles_match(&rule.apparatus, apparatus)))
+        let canonical = self.validated_material_apparatus(apparatus).await?;
+        Ok(live_material_rule(&canonical))
+    }
+
+    async fn validated_material_apparatus(
+        &self,
+        apparatus: &ApparatusId,
+    ) -> Result<std::sync::Arc<CanonicalApparatus>, ProductionMapError> {
+        let canonical = self.resolve_canonical_apparatus(apparatus).await?;
+        if canonical.identity.id != *apparatus || canonical.validate().is_err() {
+            return Err(ProductionMapError::StoreFailed);
+        }
+        Ok(canonical)
     }
 }
 
-fn is_laminatsiya_apparatus(apparatus: &str) -> bool {
-    apparatus
-        .trim()
-        .to_ascii_lowercase()
-        .contains("laminatsiya")
+fn material_rule_record(canonical: &CanonicalApparatus) -> ApparatusMaterialRule {
+    let material = &canonical.policies.material;
+    ApparatusMaterialRule {
+        apparatus_id: canonical.identity.id.clone(),
+        apparatus: canonical.identity.display.display_name.clone(),
+        requires_material: material.requires_material,
+        start_policy: material.start_policy,
+        item_groups: material.item_groups.clone(),
+        requirement_groups: material.requirement_groups.clone(),
+    }
+}
+
+pub(crate) fn live_material_rule(canonical: &CanonicalApparatus) -> Option<ApparatusMaterialRule> {
+    canonical
+        .policies
+        .material
+        .requires_material
+        .then(|| material_rule_record(canonical))
 }
 
 pub(super) fn build_raw_material_start_requirements(
@@ -685,7 +819,9 @@ pub(super) fn build_raw_material_start_requirements(
                 .filter(|assignment| scanned.contains(&normalize_barcode(&assignment.barcode)))
                 .cloned()
                 .collect::<Vec<_>>();
-            let required = rule.map(material_requirement_slot_count).unwrap_or_default();
+            let required = rule
+                .map(material_requirement_slot_count)
+                .unwrap_or_default();
             let matched = rule
                 .map(|rule| material_requirement_match_count(rule, &scanned_assignments))
                 .unwrap_or_default();
@@ -704,6 +840,7 @@ pub(super) fn build_raw_material_start_requirements(
     RawMaterialStartRequirements {
         policy,
         requires_material,
+        material_scan_required: requires_material && !assignments.is_empty(),
         requirement_groups,
         assigned_barcodes: assigned.into_iter().collect(),
         staged_barcodes: staged.into_iter().collect(),

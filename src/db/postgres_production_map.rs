@@ -3,6 +3,7 @@ use std::collections::BTreeMap;
 use async_trait::async_trait;
 use sqlx::PgPool;
 
+use crate::core::apparatus_standard::ApparatusId;
 use crate::core::production_map::{
     ApparatusCapacityProfile, ApparatusDowntime, ApparatusMaterialRule, ApparatusQueueActionEvent,
     ApparatusQueuePolicy, ApparatusScheduleCancelRequest, ApparatusScheduleCandidate,
@@ -16,6 +17,7 @@ use crate::core::production_map::{
     ProgressBatchCorrectionRecord, QueueActionActor, QueueActionProgressWrite,
     QueueActionProgressWriteResult, RawMaterialAssignment, RawMaterialStockTransition,
     RawMaterialStockTransitionKind, RezkaAstatkaReport, WipProgressBatchQuery,
+    validate_queue_progress_write,
 };
 use crate::core::qolip::QolipError;
 
@@ -32,6 +34,7 @@ mod progress_helpers;
 mod qolip_session_helpers;
 mod queue_helpers;
 mod raw_material_stock_helpers;
+mod transaction_locks;
 mod transfer_helpers;
 mod wip_query_helpers;
 
@@ -47,9 +50,9 @@ use self::capacity_helpers::{
     update_apparatus_schedule_reservation_status_tx,
 };
 use self::catalog_helpers::{
-    delete_map_by_id, load_apparatus_queue_policies, load_apparatus_queue_states,
-    load_apparatus_sequences, load_maps, save_apparatus_queue_policy, save_apparatus_sequence,
-    save_apparatus_sequence_tx,
+    apply_apparatus_sequence_delta_tx, delete_map_by_id, load_apparatus_queue_policies,
+    load_apparatus_queue_states, load_apparatus_sequences, load_maps,
+    save_apparatus_queue_policy, save_apparatus_sequence, save_apparatus_sequence_tx,
 };
 use self::completion_helpers::{
     load_completion_request_by_event_id, load_completion_request_decisions_for_actor,
@@ -88,8 +91,14 @@ use self::progress_helpers::{
     put_order_run_session, put_order_run_session_tx, receive_finished_goods_batch_tx,
 };
 use self::qolip_session_helpers::reject_qolip_in_use_tx;
-use self::queue_helpers::{insert_queue_action_event_tx, put_queue_states_tx};
+use self::queue_helpers::{
+    insert_queue_action_event_tx, put_queue_action_state_tx, queue_action_event_replay_tx,
+    put_queue_states_tx, validate_queue_action_event_transition_tx,
+};
 use self::raw_material_stock_helpers::apply_raw_material_stock_transitions_tx;
+use self::transaction_locks::{
+    lock_order_and_apparatuses_tx, lock_orders_and_apparatuses_tx,
+};
 use self::transfer_helpers::{
     commit_apparatus_transfer as commit_apparatus_transfer_record,
     load_apparatus_transfer_by_idempotency_key, load_apparatus_transfers_for_audit,
@@ -191,10 +200,9 @@ impl ProductionMapStorePort for PostgresProductionMapStore {
 
     async fn resolve_apparatus_identity(
         &self,
-        apparatus_id: &str,
-        apparatus: &str,
+        apparatus_id: &ApparatusId,
     ) -> Result<Option<ApparatusScheduleCandidate>, ProductionMapError> {
-        resolve_apparatus_identity(&self.pool, apparatus_id, apparatus).await
+        resolve_apparatus_identity(&self.pool, apparatus_id).await
     }
 
     async fn apparatus_capacity_profiles(
@@ -254,7 +262,7 @@ impl ProductionMapStorePort for PostgresProductionMapStore {
     async fn update_apparatus_schedule_reservation_status(
         &self,
         order_id: &str,
-        apparatus: &str,
+        apparatus_id: &ApparatusId,
         status: crate::core::production_map::ApparatusScheduleStatus,
         actor: &QueueActionActor,
     ) -> Result<(), ProductionMapError> {
@@ -264,7 +272,11 @@ impl ProductionMapStorePort for PostgresProductionMapStore {
             .await
             .map_err(|_| ProductionMapError::StoreFailed)?;
         update_apparatus_schedule_reservation_status_tx(
-            &mut tx, order_id, apparatus, status, actor,
+            &mut tx,
+            order_id,
+            apparatus_id,
+            status,
+            actor,
         )
         .await?;
         tx.commit()
@@ -297,23 +309,25 @@ impl ProductionMapStorePort for PostgresProductionMapStore {
 
     async fn apparatus_queue_policies(
         &self,
-    ) -> Result<BTreeMap<String, ApparatusQueuePolicy>, ProductionMapError> {
+    ) -> Result<crate::core::production_map::ApparatusQueuePolicyMap, ProductionMapError> {
         load_apparatus_queue_policies(&self.pool).await
     }
 
     async fn put_apparatus_queue_policy(
         &self,
-        apparatus: &str,
+        apparatus_id: &ApparatusId,
+        apparatus_display: &str,
         policy: ApparatusQueuePolicy,
         actor: &QueueActionActor,
     ) -> Result<(), ProductionMapError> {
-        save_apparatus_queue_policy(&self.pool, apparatus, policy, actor).await
+        save_apparatus_queue_policy(&self.pool, apparatus_id, apparatus_display, policy, actor)
+            .await
     }
 
     async fn put_apparatus_queue_states_with_event(
         &self,
         apparatus: &str,
-        states: BTreeMap<String, String>,
+        _states: BTreeMap<String, String>,
         event: ApparatusQueueActionEvent,
     ) -> Result<(), ProductionMapError> {
         let apparatus = apparatus.trim();
@@ -322,7 +336,16 @@ impl ProductionMapStorePort for PostgresProductionMapStore {
             .begin()
             .await
             .map_err(|_| ProductionMapError::StoreFailed)?;
-        put_queue_states_tx(&mut tx, apparatus, states).await?;
+        lock_order_and_apparatuses_tx(&mut tx, &event.order_id, &[apparatus, &event.apparatus])
+            .await?;
+        if queue_action_event_replay_tx(&mut tx, &event).await? {
+            tx.commit()
+                .await
+                .map_err(|_| ProductionMapError::StoreFailed)?;
+            return Ok(());
+        }
+        validate_queue_action_event_transition_tx(&mut tx, &event).await?;
+        put_queue_action_state_tx(&mut tx, &event).await?;
         insert_queue_action_event_tx(&mut tx, &event).await?;
         tx.commit()
             .await
@@ -338,6 +361,13 @@ impl ProductionMapStorePort for PostgresProductionMapStore {
             .begin()
             .await
             .map_err(|_| ProductionMapError::StoreFailed)?;
+        lock_order_and_apparatuses_tx(&mut tx, &event.order_id, &[&event.apparatus]).await?;
+        if queue_action_event_replay_tx(&mut tx, &event).await? {
+            tx.commit()
+                .await
+                .map_err(|_| ProductionMapError::StoreFailed)?;
+            return Ok(());
+        }
         insert_queue_action_event_tx(&mut tx, &event).await?;
         tx.commit()
             .await
@@ -689,12 +719,82 @@ impl ProductionMapStorePort for PostgresProductionMapStore {
         &self,
         write: QueueActionProgressWrite,
     ) -> Result<QueueActionProgressWriteResult, ProductionMapError> {
+        validate_queue_progress_write(&write)?;
         let apparatus = write.apparatus.trim();
         let mut tx = self
             .pool
             .begin()
             .await
             .map_err(|_| ProductionMapError::StoreFailed)?;
+        {
+            let mut locked_orders = vec![write.event.order_id.as_str()];
+            locked_orders.extend(
+                write
+                    .raw_material_stock_transitions
+                    .iter()
+                    .filter(|transition| !transition.order_id.trim().is_empty())
+                    .map(|transition| transition.order_id.as_str()),
+            );
+            locked_orders.extend(
+                write
+                    .progress_batch
+                    .iter()
+                    .chain(write.progress_batches.iter())
+                    .chain(write.progress_batch_updates.iter())
+                    .map(|batch| batch.order_id.as_str()),
+            );
+            if let Some(record) = &write.order_control_update {
+                locked_orders.push(record.order_id.as_str());
+            }
+            let mut locked_apparatuses = vec![write.apparatus.as_str(), write.event.apparatus.as_str()];
+            locked_apparatuses.extend(write.event.assigned_apparatus.iter().map(String::as_str));
+            locked_apparatuses.extend(write.sequence_updates.keys().map(String::as_str));
+            if let Some(session) = &write.session {
+                locked_apparatuses.push(session.apparatus.as_str());
+            }
+            if let Some(event) = &write.progress_event {
+                locked_apparatuses.push(event.apparatus.as_str());
+            }
+            for batch in write
+                .progress_batch
+                .iter()
+                .chain(write.progress_batches.iter())
+                .chain(write.progress_batch_updates.iter())
+            {
+                locked_apparatuses.push(batch.apparatus.as_str());
+                for value in [
+                    batch.current_apparatus.as_str(),
+                    batch.next_apparatus.as_str(),
+                    batch.used_by_apparatus.as_str(),
+                    batch.processed_by_apparatus.as_str(),
+                ] {
+                    if !value.trim().is_empty()
+                        && !value.trim().to_ascii_lowercase().starts_with("warehouse:")
+                    {
+                        locked_apparatuses.push(value);
+                    }
+                }
+            }
+            if let Some(report) = &write.returned_paint_report {
+                locked_apparatuses.push(report.apparatus.as_str());
+            }
+            if let Some(record) = &write.order_control_update {
+                if let Some(request) = &record.freeze_request {
+                    if !request.target_apparatus.trim().is_empty() {
+                        locked_apparatuses.push(request.target_apparatus.as_str());
+                    }
+                }
+            }
+            lock_orders_and_apparatuses_tx(&mut tx, &locked_orders, &locked_apparatuses)
+                .await?;
+        }
+        if queue_action_event_replay_tx(&mut tx, &write.event).await? {
+            tx.commit()
+                .await
+                .map_err(|_| ProductionMapError::StoreFailed)?;
+            return Ok(QueueActionProgressWriteResult::default());
+        }
+        validate_queue_action_event_transition_tx(&mut tx, &write.event).await?;
         let current_session_id = write
             .session
             .as_ref()
@@ -702,19 +802,47 @@ impl ProductionMapStorePort for PostgresProductionMapStore {
             .filter(|session_id| !session_id.is_empty())
             .map(str::to_string);
         let sequence_updates = write.sequence_updates;
+        if let Some(map) = &write.map_update {
+            put_map_inner_tx(&mut tx, map).await?;
+        }
         if let Some(session) = &write.session {
             reject_qolip_in_use_tx(&mut tx, session).await?;
         }
-        put_queue_states_tx(&mut tx, apparatus, write.states).await?;
+        put_queue_action_state_tx(&mut tx, &write.event).await?;
+        let remove_order_from_sequence = matches!(
+            write.event.action,
+            crate::core::production_map::queue_state::ApparatusQueueAction::Freeze
+        ) || write
+            .event
+            .payload_json
+            .get("admin_unfreeze")
+            .and_then(serde_json::Value::as_bool)
+            .unwrap_or(false);
+        let append_order_to_sequence = write
+            .event
+            .payload_json
+            .get("admin_unfreeze")
+            .and_then(serde_json::Value::as_bool)
+            .unwrap_or(false);
         for (sequence_apparatus, order_ids) in &sequence_updates {
-            save_apparatus_sequence_tx(&mut tx, sequence_apparatus, order_ids).await?;
+            apply_apparatus_sequence_delta_tx(
+                &mut tx,
+                sequence_apparatus,
+                &write.event.order_id,
+                order_ids,
+                remove_order_from_sequence,
+                append_order_to_sequence,
+            )
+            .await?;
         }
         insert_queue_action_event_tx(&mut tx, &write.event).await?;
         if let Some(status) = write.schedule_reservation_status {
+            let apparatus_id = ApparatusId::new(apparatus.to_string())
+                .map_err(|_| ProductionMapError::ScheduleInputInvalid)?;
             update_apparatus_schedule_reservation_status_tx(
                 &mut tx,
                 &write.event.order_id,
-                apparatus,
+                &apparatus_id,
                 status,
                 &write.event.actor,
             )
@@ -809,14 +937,20 @@ impl ProductionMapStorePort for PostgresProductionMapStore {
             .begin()
             .await
             .map_err(|_| ProductionMapError::StoreFailed)?;
+        lock_order_and_apparatuses_tx(
+            &mut tx,
+            &assignment.order_id,
+            &[assignment.apparatus_id.as_str()],
+        )
+        .await?;
         let active_state = sqlx::query_scalar::<_, String>(
             "SELECT state
              FROM mini_queue_states
-             WHERE lower(apparatus) = lower($1)
+             WHERE canonical_apparatus_id = $1
                AND order_id = $2
              FOR UPDATE",
         )
-        .bind(assignment.apparatus.trim())
+        .bind(assignment.apparatus_id.as_str())
         .bind(assignment.order_id.trim())
         .fetch_optional(&mut *tx)
         .await
@@ -851,8 +985,8 @@ impl ProductionMapStorePort for PostgresProductionMapStore {
                 }
             }
         }
-        let existing_assignment = sqlx::query_scalar::<_, serde_json::Value>(
-            "SELECT payload_json
+        let existing_assignment = sqlx::query_as::<_, (String, String)>(
+            "SELECT canonical_apparatus_id, order_id
              FROM mini_raw_material_assignments
              WHERE lower(barcode) = lower($1)
              FOR UPDATE",
@@ -861,18 +995,16 @@ impl ProductionMapStorePort for PostgresProductionMapStore {
         .fetch_optional(&mut *tx)
         .await
         .map_err(|_| ProductionMapError::StoreFailed)?
-        .map(|payload| {
-            serde_json::from_value::<RawMaterialAssignment>(payload)
-                .map_err(|_| ProductionMapError::StoreFailed)
+        .map(|(apparatus_id, order_id)| {
+            let apparatus_id = crate::core::apparatus_standard::ApparatusId::new(apparatus_id)
+                .map_err(|_| ProductionMapError::StoreFailed)?;
+            Ok((apparatus_id, order_id))
         })
         .transpose()?;
         match existing_assignment {
-            Some(existing)
-                if existing.order_id.trim() == assignment.order_id.trim()
-                    && crate::core::production_map::queue_state::apparatus_titles_match(
-                        &existing.apparatus,
-                        &assignment.apparatus,
-                    ) => {}
+            Some((existing_apparatus, existing_order_id))
+                if existing_order_id.trim() == assignment.order_id.trim()
+                    && existing_apparatus == assignment.apparatus_id => {}
             Some(_) => return Err(ProductionMapError::RawMaterialAlreadyAssigned),
             None => return Err(ProductionMapError::RawMaterialAssignmentNotFound),
         }

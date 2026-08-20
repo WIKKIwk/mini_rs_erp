@@ -8,6 +8,7 @@ use serde::{Deserialize, Serialize};
 use thiserror::Error;
 use tokio::sync::RwLock;
 
+use crate::core::apparatus_standard::ApparatusId;
 use crate::core::auth::models::{Principal, PrincipalRole};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
@@ -156,6 +157,9 @@ pub struct RawMaterialStatePlacement {
     pub barcode: String,
     pub location_id: String,
     pub location_name: String,
+    /// Canonical apparatus IDs used by runtime placement validation.
+    pub apparatus_ids: Vec<String>,
+    /// Display snapshots retained for UI/audit only.
     pub apparatus: Vec<String>,
 }
 
@@ -564,7 +568,10 @@ impl InventoryMovementService {
             input.destination_warehouse_id,
             InventoryMovementError::MissingWarehouse,
         )?;
-        if input.source_warehouse_id == input.destination_warehouse_id {
+        if input
+            .source_warehouse_id
+            .eq_ignore_ascii_case(&input.destination_warehouse_id)
+        {
             return Err(InventoryMovementError::SameWarehouse);
         }
         input.idempotency_key = normalize_idempotency(input.idempotency_key)?;
@@ -694,8 +701,7 @@ struct MemoryInventoryState {
     transfers: BTreeMap<String, InventoryTransfer>,
     idempotency: BTreeMap<String, String>,
     relocation_idempotency: BTreeMap<String, (InventoryAssetKind, String, String)>,
-    relocation_batch_idempotency:
-        BTreeMap<String, (Vec<(InventoryAssetKind, String)>, String)>,
+    relocation_batch_idempotency: BTreeMap<String, (Vec<(InventoryAssetKind, String)>, String)>,
     return_batch_idempotency: BTreeMap<String, Vec<(InventoryAssetKind, String)>>,
     action_idempotency: BTreeMap<String, (String, InventoryTransferActionKind)>,
 }
@@ -758,29 +764,38 @@ impl InventoryMovementStorePort for MemoryInventoryMovementStore {
             .map(|barcode| barcode.trim().to_ascii_uppercase())
             .collect::<BTreeSet<_>>();
         let state = self.state.read().await;
-        Ok(state
-            .assets
-            .values()
-            .filter(|asset| {
-                asset.kind == InventoryAssetKind::RawMaterial
-                    && asset.physical_location.kind == InventoryLocationKind::State
-                    && requested.contains(&asset.identifier.trim().to_ascii_uppercase())
-                    && asset.status != "consumed"
-            })
-            .filter_map(|asset| {
-                let location = state.locations.get(&asset.physical_location.id)?;
-                Some(RawMaterialStatePlacement {
-                    barcode: asset.identifier.trim().to_string(),
-                    location_id: location.id.clone(),
-                    location_name: location.name.clone(),
-                    apparatus: location
-                        .apparatus
-                        .iter()
-                        .map(|apparatus| apparatus.name.clone())
-                        .collect(),
+        let mut placements = Vec::new();
+        for asset in state.assets.values().filter(|asset| {
+            asset.kind == InventoryAssetKind::RawMaterial
+                && asset.physical_location.kind == InventoryLocationKind::State
+                && requested.contains(&asset.identifier.trim().to_ascii_uppercase())
+                && asset.status != "consumed"
+        }) {
+            let Some(location) = state.locations.get(&asset.physical_location.id) else {
+                continue;
+            };
+            let apparatus_ids = location
+                .apparatus
+                .iter()
+                .map(|apparatus| {
+                    ApparatusId::new(apparatus.id.trim().to_string())
+                        .map(|id| id.to_string())
+                        .map_err(|_| InventoryMovementError::StoreFailed)
                 })
-            })
-            .collect())
+                .collect::<Result<Vec<_>, _>>()?;
+            placements.push(RawMaterialStatePlacement {
+                barcode: asset.identifier.trim().to_string(),
+                location_id: location.id.clone(),
+                location_name: location.name.clone(),
+                apparatus_ids,
+                apparatus: location
+                    .apparatus
+                    .iter()
+                    .map(|apparatus| apparatus.name.clone())
+                    .collect(),
+            });
+        }
+        Ok(placements)
     }
 
     async fn assets(
@@ -802,10 +817,10 @@ impl InventoryMovementStorePort for MemoryInventoryMovementStore {
         if !query.warehouse_id.trim().is_empty() && requested_warehouse.is_none() {
             return Err(InventoryMovementError::WarehouseNotFound);
         }
-        if let Some(warehouse) = requested_warehouse.as_ref() {
-            if !actor.can_manage_warehouse(&warehouse.name) {
-                return Err(InventoryMovementError::WarehouseForbidden);
-            }
+        if let Some(warehouse) = requested_warehouse.as_ref()
+            && !actor.can_manage_warehouse(&warehouse.name)
+        {
+            return Err(InventoryMovementError::WarehouseForbidden);
         }
         let needle = query.query.to_ascii_lowercase();
         let mut assets = state
@@ -913,10 +928,9 @@ impl InventoryMovementStorePort for MemoryInventoryMovementStore {
         asset.physical_location = InventoryLocationRef::from(&location);
         asset.placement_version += 1;
         let saved = asset.clone();
-        state.placement_updated_by_ref.insert(
-            key,
-            actor.principal.ref_.trim().to_string(),
-        );
+        state
+            .placement_updated_by_ref
+            .insert(key, actor.principal.ref_.trim().to_string());
         state.relocation_idempotency.insert(
             input.idempotency_key.clone(),
             (
@@ -937,15 +951,11 @@ impl InventoryMovementStorePort for MemoryInventoryMovementStore {
         let selectors = input
             .assets
             .iter()
-            .map(|asset| {
-                (
-                    asset.asset_kind,
-                    asset.asset_ref.to_ascii_lowercase(),
-                )
-            })
+            .map(|asset| (asset.asset_kind, asset.asset_ref.to_ascii_lowercase()))
             .collect::<Vec<_>>();
-        if let Some((existing, location_id)) =
-            state.relocation_batch_idempotency.get(&input.idempotency_key)
+        if let Some((existing, location_id)) = state
+            .relocation_batch_idempotency
+            .get(&input.idempotency_key)
         {
             if existing != &selectors || location_id != &input.physical_location_id {
                 return Err(InventoryMovementError::IdempotencyConflict);
@@ -999,10 +1009,9 @@ impl InventoryMovementStorePort for MemoryInventoryMovementStore {
             saved.push(asset.clone());
         }
         for key in &selectors {
-            state.placement_updated_by_ref.insert(
-                key.clone(),
-                actor.principal.ref_.trim().to_string(),
-            );
+            state
+                .placement_updated_by_ref
+                .insert(key.clone(), actor.principal.ref_.trim().to_string());
         }
         state.relocation_batch_idempotency.insert(
             input.idempotency_key.clone(),
@@ -1020,17 +1029,9 @@ impl InventoryMovementStorePort for MemoryInventoryMovementStore {
         let selectors = input
             .assets
             .iter()
-            .map(|asset| {
-                (
-                    asset.asset_kind,
-                    asset.asset_ref.to_ascii_lowercase(),
-                )
-            })
+            .map(|asset| (asset.asset_kind, asset.asset_ref.to_ascii_lowercase()))
             .collect::<Vec<_>>();
-        if let Some(existing) = state
-            .return_batch_idempotency
-            .get(&input.idempotency_key)
-        {
+        if let Some(existing) = state.return_batch_idempotency.get(&input.idempotency_key) {
             if existing != &selectors {
                 return Err(InventoryMovementError::IdempotencyConflict);
             }
@@ -1088,10 +1089,9 @@ impl InventoryMovementStorePort for MemoryInventoryMovementStore {
             saved.push(asset.clone());
         }
         for key in &selectors {
-            state.placement_updated_by_ref.insert(
-                key.clone(),
-                actor.principal.ref_.trim().to_string(),
-            );
+            state
+                .placement_updated_by_ref
+                .insert(key.clone(), actor.principal.ref_.trim().to_string());
         }
         state
             .return_batch_idempotency
@@ -1119,6 +1119,9 @@ impl InventoryMovementStorePort for MemoryInventoryMovementStore {
         }
         let source = warehouse_location(&state, &input.source_warehouse_id)?;
         let destination = warehouse_location(&state, &input.destination_warehouse_id)?;
+        if source.warehouse_id.eq_ignore_ascii_case(&destination.warehouse_id) {
+            return Err(InventoryMovementError::SameWarehouse);
+        }
         if !actor.can_manage_warehouse(&source.name) {
             return Err(InventoryMovementError::WarehouseForbidden);
         }
@@ -1169,8 +1172,7 @@ impl InventoryMovementStorePort for MemoryInventoryMovementStore {
             asset.transfer_id = transfer_id.to_string();
             asset.status = "transfer_reserved".to_string();
         }
-        let internal_transfer =
-            actor.manages_transfer_internally(&source.name, &destination.name);
+        let internal_transfer = actor.manages_transfer_internally(&source.name, &destination.name);
         let mut transfer = InventoryTransfer {
             id: transfer_id.to_string(),
             source_warehouse_id: source.warehouse_id,
@@ -1291,6 +1293,7 @@ impl InventoryMovementStorePort for MemoryInventoryMovementStore {
                 if updated.status != InventoryTransferStatus::Requested {
                     return Err(InventoryMovementError::InvalidTransition);
                 }
+                ensure_memory_transfer_assets(&state, &updated)?;
                 updated.status = InventoryTransferStatus::Approved;
                 updated.approved_by_name = actor.principal.display_name.clone();
                 updated.approved_at_unix = Some(now);
@@ -1302,6 +1305,7 @@ impl InventoryMovementStorePort for MemoryInventoryMovementStore {
                 if updated.status != InventoryTransferStatus::Requested {
                     return Err(InventoryMovementError::InvalidTransition);
                 }
+                ensure_memory_transfer_assets(&state, &updated)?;
                 updated.status = InventoryTransferStatus::Rejected;
                 updated.rejected_by_name = actor.principal.display_name.clone();
                 updated.rejected_at_unix = Some(now);
@@ -1317,6 +1321,7 @@ impl InventoryMovementStorePort for MemoryInventoryMovementStore {
                 if internal_transfer {
                     complete_memory_transfer(&mut state, &mut updated, actor, now)?;
                 } else {
+                    ensure_memory_transfer_assets(&state, &updated)?;
                     for line in &updated.lines {
                         if let Some(asset) = state
                             .assets
@@ -1331,6 +1336,7 @@ impl InventoryMovementStorePort for MemoryInventoryMovementStore {
                 if updated.status != InventoryTransferStatus::InTransit {
                     return Err(InventoryMovementError::InvalidTransition);
                 }
+                ensure_memory_transfer_assets(&state, &updated)?;
                 let destination = warehouse_location(&state, &updated.destination_warehouse_id)?;
                 for line in &updated.lines {
                     let asset = state
@@ -1358,6 +1364,7 @@ impl InventoryMovementStorePort for MemoryInventoryMovementStore {
                 ) {
                     return Err(InventoryMovementError::InvalidTransition);
                 }
+                ensure_memory_transfer_assets(&state, &updated)?;
                 updated.status = InventoryTransferStatus::Cancelled;
                 updated.cancelled_by_name = actor.principal.display_name.clone();
                 updated.cancelled_at_unix = Some(now);
@@ -1446,13 +1453,30 @@ fn release_memory_assets(state: &mut MemoryInventoryState, transfer: &InventoryT
         if let Some(asset) = state
             .assets
             .get_mut(&(line.asset_kind, line.asset_ref.to_ascii_lowercase()))
+            && asset.transfer_id == transfer.id
         {
-            if asset.transfer_id == transfer.id {
-                asset.transfer_id.clear();
-                asset.status = "available".to_string();
-            }
+            asset.transfer_id.clear();
+            asset.status = "available".to_string();
         }
     }
+}
+
+fn ensure_memory_transfer_assets(
+    state: &MemoryInventoryState,
+    transfer: &InventoryTransfer,
+) -> Result<(), InventoryMovementError> {
+    for line in &transfer.lines {
+        let asset = state
+            .assets
+            .get(&(line.asset_kind, line.asset_ref.to_ascii_lowercase()))
+            .ok_or(InventoryMovementError::AssetNotFound)?;
+        if asset.transfer_id != transfer.id
+            || matches!(asset.status.as_str(), "available" | "consumed" | "dispatched")
+        {
+            return Err(InventoryMovementError::AssetUnavailable);
+        }
+    }
+    Ok(())
 }
 
 fn complete_memory_transfer(
@@ -1461,6 +1485,7 @@ fn complete_memory_transfer(
     actor: &InventoryActor,
     now: i64,
 ) -> Result<(), InventoryMovementError> {
+    ensure_memory_transfer_assets(state, transfer)?;
     let destination = warehouse_location(state, &transfer.destination_warehouse_id)?;
     for line in &transfer.lines {
         let asset = state
@@ -1539,7 +1564,7 @@ mod tests {
             factory_location_id: "factory:pechat".to_string(),
             active: true,
             apparatus: vec![InventoryLocationApparatus {
-                id: "apparatus:pechat".to_string(),
+                id: "apparatus:catalog:pechat-001".to_string(),
                 name: "7 ta rangli pechat - A".to_string(),
             }],
         };
@@ -1594,6 +1619,10 @@ mod tests {
         assert_eq!(placements.len(), 1);
         assert_eq!(placements[0].barcode, "RM-STATE");
         assert_eq!(placements[0].location_id, state_location.id);
+        assert_eq!(
+            placements[0].apparatus_ids,
+            vec!["apparatus:catalog:pechat-001".to_string()]
+        );
         assert_eq!(
             placements[0].apparatus,
             vec!["7 ta rangli pechat - A".to_string()]
@@ -1725,10 +1754,37 @@ mod tests {
             .await
             .expect_err("state asset must return to a warehouse before transfer");
 
-        assert_eq!(
-            error,
-            InventoryMovementError::AssetNotInSourceWarehouse
+        assert_eq!(error, InventoryMovementError::AssetNotInSourceWarehouse);
+    }
+
+    #[tokio::test]
+    async fn transfer_rejects_same_warehouse_id_case_insensitively() {
+        let store = Arc::new(MemoryInventoryMovementStore::new());
+        store
+            .seed_locations(vec![warehouse_location_fixture("warehouse:a", "A ombor")])
+            .await;
+        let service = InventoryMovementService::new(store);
+        let actor = InventoryActor::new(
+            principal(PrincipalRole::MaterialTaminotchi, "m1", "Materialchi"),
+            false,
+            ["A ombor".to_string()],
         );
+
+        let error = service
+            .create_transfer(
+                &actor,
+                InventoryTransferCreate {
+                    source_warehouse_id: "warehouse:a".to_string(),
+                    destination_warehouse_id: "WAREHOUSE:A".to_string(),
+                    assets: Vec::new(),
+                    note: String::new(),
+                    idempotency_key: "same-warehouse-case".to_string(),
+                },
+            )
+            .await
+            .expect_err("same warehouse must not become an internal transfer");
+
+        assert_eq!(error, InventoryMovementError::SameWarehouse);
     }
 
     #[tokio::test]
@@ -2078,6 +2134,146 @@ mod tests {
         assert_eq!(destination_assets.len(), 1);
         assert_eq!(destination_assets[0].qty, 4.0);
         assert_eq!(destination_assets[0].custody_warehouse, "B ombor");
+    }
+
+    #[tokio::test]
+    async fn transfer_approval_is_atomic_when_a_reserved_asset_identity_is_lost() {
+        let store = Arc::new(MemoryInventoryMovementStore::new());
+        let source = warehouse_location_fixture("warehouse:a", "A ombor");
+        let destination = warehouse_location_fixture("warehouse:b", "B ombor");
+        store
+            .seed_locations(vec![source.clone(), destination.clone()])
+            .await;
+        store
+            .seed_assets(vec![
+                InventoryAsset {
+                    kind: InventoryAssetKind::RawMaterial,
+                    asset_ref: "raw:1".to_string(),
+                    custody_warehouse_id: source.warehouse_id.clone(),
+                    custody_warehouse: source.name.clone(),
+                    item_code: "M-1".to_string(),
+                    item_name: "Material 1".to_string(),
+                    identifier: "RAW-1".to_string(),
+                    qty: 8.0,
+                    uom: "kg".to_string(),
+                    status: "available".to_string(),
+                    physical_location: InventoryLocationRef::from(&source),
+                    transfer_id: String::new(),
+                    placement_version: 1,
+                },
+                InventoryAsset {
+                    kind: InventoryAssetKind::RawMaterial,
+                    asset_ref: "raw:2".to_string(),
+                    custody_warehouse_id: source.warehouse_id.clone(),
+                    custody_warehouse: source.name.clone(),
+                    item_code: "M-2".to_string(),
+                    item_name: "Material 2".to_string(),
+                    identifier: "RAW-2".to_string(),
+                    qty: 9.0,
+                    uom: "kg".to_string(),
+                    status: "available".to_string(),
+                    physical_location: InventoryLocationRef::from(&source),
+                    transfer_id: String::new(),
+                    placement_version: 1,
+                },
+            ])
+            .await;
+        let service = InventoryMovementService::new(store.clone());
+        let source_actor = InventoryActor::new(
+            principal(PrincipalRole::Werka, "w1", "Werka"),
+            false,
+            [source.name.clone()],
+        );
+        let destination_actor = InventoryActor::new(
+            principal(PrincipalRole::Qolipchi, "q1", "Qolipchi"),
+            false,
+            [destination.name.clone()],
+        );
+
+        let transfer = service
+            .create_transfer(
+                &source_actor,
+                InventoryTransferCreate {
+                    source_warehouse_id: source.warehouse_id.clone(),
+                    destination_warehouse_id: destination.warehouse_id.clone(),
+                    assets: vec![
+                        InventoryAssetSelector {
+                            asset_kind: InventoryAssetKind::RawMaterial,
+                            asset_ref: "raw:1".to_string(),
+                        },
+                        InventoryAssetSelector {
+                            asset_kind: InventoryAssetKind::RawMaterial,
+                            asset_ref: "raw:2".to_string(),
+                        },
+                    ],
+                    note: String::new(),
+                    idempotency_key: "transfer-approval-atomic".to_string(),
+                },
+            )
+            .await
+            .expect("request");
+
+        store
+            .seed_assets(vec![InventoryAsset {
+                kind: InventoryAssetKind::RawMaterial,
+                asset_ref: "raw:2".to_string(),
+                custody_warehouse_id: source.warehouse_id.clone(),
+                custody_warehouse: source.name.clone(),
+                item_code: "M-2".to_string(),
+                item_name: "Material 2".to_string(),
+                identifier: "RAW-2".to_string(),
+                qty: 9.0,
+                uom: "kg".to_string(),
+                status: "reserved".to_string(),
+                physical_location: InventoryLocationRef::from(&source),
+                transfer_id: "other-transfer".to_string(),
+                placement_version: 1,
+            }])
+            .await;
+
+        let error = service
+            .transfer_action(
+                &destination_actor,
+                &transfer.id,
+                InventoryTransferActionKind::Approve,
+                InventoryTransferAction {
+                    note: String::new(),
+                    idempotency_key: "approve-atomic".to_string(),
+                },
+            )
+            .await
+            .expect_err("approval must reject a torn reservation");
+        assert_eq!(error, InventoryMovementError::AssetUnavailable);
+
+        let transfers = service
+            .transfers(
+                &destination_actor,
+                InventoryTransferQuery {
+                    direction: "incoming".to_string(),
+                    ..InventoryTransferQuery::default()
+                },
+            )
+            .await
+            .expect("transfers");
+        assert_eq!(transfers.len(), 1);
+        assert_eq!(transfers[0].status, InventoryTransferStatus::Requested);
+
+        let source_assets = service
+            .assets(
+                &source_actor,
+                InventoryAssetQuery {
+                    warehouse_id: source.warehouse_id,
+                    ..InventoryAssetQuery::default()
+                },
+            )
+            .await
+            .expect("source assets");
+        let first = source_assets
+            .iter()
+            .find(|asset| asset.asset_ref == "raw:1")
+            .expect("first reserved asset");
+        assert_eq!(first.status, "transfer_reserved");
+        assert_eq!(first.transfer_id, transfer.id);
     }
 
     #[tokio::test]

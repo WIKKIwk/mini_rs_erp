@@ -4,21 +4,22 @@ use std::sync::atomic::AtomicBool;
 
 use tokio::sync::RwLock;
 
+use crate::core::apparatus_standard::ApparatusId;
+
 use super::super::*;
 
 #[cfg(test)]
 pub struct MemoryProductionMapStore {
     pub(super) maps: RwLock<BTreeMap<String, ProductionMapDefinition>>,
     pub(super) sequences: RwLock<BTreeMap<String, Vec<String>>>,
-    pub(super) apparatus_capacity_profiles:
-        RwLock<BTreeMap<String, ApparatusCapacityProfile>>,
+    pub(super) apparatus_capacity_profiles: RwLock<BTreeMap<String, ApparatusCapacityProfile>>,
     pub(super) apparatus_downtimes: RwLock<BTreeMap<String, ApparatusDowntime>>,
     pub(super) apparatus_schedule_reservations:
         RwLock<BTreeMap<String, ApparatusScheduleReservation>>,
     pub(super) queue_states: RwLock<BTreeMap<String, BTreeMap<String, String>>>,
     pub(super) order_controls: RwLock<BTreeMap<String, OrderControlRecord>>,
     pub(super) order_freeze_requests: RwLock<BTreeMap<String, OrderFreezeAuditRecord>>,
-    pub(super) queue_policies: RwLock<BTreeMap<String, ApparatusQueuePolicy>>,
+    pub(super) queue_policies: RwLock<BTreeMap<ApparatusId, ApparatusQueuePolicy>>,
     pub(super) queue_events: RwLock<Vec<ApparatusQueueActionEvent>>,
     pub(super) order_run_sessions: RwLock<BTreeMap<String, OrderRunSession>>,
     pub(super) order_progress_events: RwLock<Vec<OrderProgressEvent>>,
@@ -31,8 +32,7 @@ pub struct MemoryProductionMapStore {
     pub(super) material_assignments: RwLock<BTreeMap<String, RawMaterialAssignment>>,
     pub(super) returned_paint_requests:
         RwLock<BTreeMap<String, crate::core::returned_paint::ReturnedPaintRequest>>,
-    pub(super) apparatus_transfers:
-        RwLock<BTreeMap<String, ProductionMapApparatusTransferRecord>>,
+    pub(super) apparatus_transfers: RwLock<BTreeMap<String, ProductionMapApparatusTransferRecord>>,
     pub(super) fail_next_queue_progress_commit: AtomicBool,
 }
 
@@ -81,9 +81,7 @@ impl MemoryProductionMapStore {
             .cloned()
     }
 
-    pub async fn progress_batch_correction_records(
-        &self,
-    ) -> Vec<ProgressBatchCorrectionRecord> {
+    pub async fn progress_batch_correction_records(&self) -> Vec<ProgressBatchCorrectionRecord> {
         self.progress_batch_corrections.read().await.clone()
     }
 }

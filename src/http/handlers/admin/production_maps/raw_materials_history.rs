@@ -112,8 +112,8 @@ async fn material_scoped_raw_material_assignments(
     }
     let mut out = Vec::new();
     for assignment in assignments {
-        if !queue_state::apparatus_matches_assigned(
-            &assignment.apparatus,
+        if !super::raw_material_details::assigned_apparatus_contains(
+            assignment.apparatus_id.as_ref(),
             &assigned_apparatus,
         ) {
             continue;

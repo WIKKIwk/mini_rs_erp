@@ -5,8 +5,8 @@ use tokio::sync::RwLock;
 use crate::core::auth::models::Principal;
 
 use super::models::{
-    QolipBlock, QolipCellQr, QolipCheckout, QolipError, QolipLocation, QolipOrderNote,
-    QolipLocationMove, QolipProduct, QolipProductSpec,
+    QolipBlock, QolipCellQr, QolipCheckout, QolipError, QolipLocation, QolipLocationMove,
+    QolipOrderNote, QolipProduct, QolipProductSpec,
 };
 use super::normalize::{
     location_from_checkout, location_from_checkout_target, location_identity_matches,

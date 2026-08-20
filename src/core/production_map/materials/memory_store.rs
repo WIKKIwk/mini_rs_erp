@@ -20,7 +20,7 @@ pub(super) async fn put_apparatus_material_rule(
         .material_rules
         .write()
         .await
-        .insert(rule.apparatus.to_lowercase(), rule);
+        .insert(rule.apparatus_id.to_string(), rule);
     Ok(())
 }
 

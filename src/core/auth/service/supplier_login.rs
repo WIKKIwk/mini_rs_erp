@@ -43,7 +43,10 @@ impl AuthService {
             .map_err(|_| AuthError::Internal)?;
 
         for supplier in suppliers {
-            let state = states.get(supplier.id.trim()).cloned().unwrap_or_default();
+            let state = states
+                .get(supplier.id.trim())
+                .cloned()
+                .ok_or(AuthError::Internal)?;
             if state.removed || state.blocked {
                 continue;
             }

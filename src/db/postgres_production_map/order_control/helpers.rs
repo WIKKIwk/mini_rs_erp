@@ -2,10 +2,13 @@ use std::collections::BTreeMap;
 
 use sqlx::{PgPool, Postgres, Transaction};
 
+use crate::core::apparatus_standard::ApparatusId;
 use crate::core::production_map::{
     OrderControlRecord, OrderControlState, OrderFreezeAuditRecord, OrderFreezeRequest,
     OrderFreezeRequestStatus, ProductionMapError, QueueActionActor,
 };
+
+use super::transaction_locks::lock_order_tx;
 
 #[derive(sqlx::FromRow)]
 struct OrderControlRow {
@@ -20,6 +23,7 @@ struct OrderControlRow {
     request_status: Option<String>,
     target_session_id: Option<String>,
     target_apparatus: Option<String>,
+    target_apparatus_snapshot: Option<String>,
     target_worker_role: Option<String>,
     target_worker_ref: Option<String>,
     target_worker_display_name: Option<String>,
@@ -35,7 +39,8 @@ struct OrderFreezeAuditRow {
     requester_ref: String,
     requester_display_name: String,
     target_session_id: String,
-    target_apparatus: String,
+    target_apparatus: Option<String>,
+    target_apparatus_snapshot: String,
     target_worker_role: String,
     target_worker_ref: String,
     target_worker_display_name: String,
@@ -60,7 +65,8 @@ pub(super) async fn load_order_control_states(
              request.request_id,
              request.status AS request_status,
              request.target_session_id,
-             request.target_apparatus,
+             request.canonical_target_apparatus_id AS target_apparatus,
+             request.target_apparatus AS target_apparatus_snapshot,
              request.target_worker_role,
              request.target_worker_ref,
              request.target_worker_display_name,
@@ -84,7 +90,10 @@ pub(super) async fn load_order_control_states(
                     status: OrderFreezeRequestStatus::parse(&status)
                         .ok_or(ProductionMapError::StoreFailed)?,
                     target_session_id: row.target_session_id.unwrap_or_default(),
-                    target_apparatus: row.target_apparatus.unwrap_or_default(),
+                    target_apparatus: canonical_freeze_target_apparatus(
+                        row.target_apparatus,
+                        row.target_apparatus_snapshot.as_deref(),
+                    )?,
                     target_worker_role: row.target_worker_role.unwrap_or_default(),
                     target_worker_ref: row.target_worker_ref.unwrap_or_default(),
                     target_worker_display_name: row.target_worker_display_name.unwrap_or_default(),
@@ -125,7 +134,8 @@ pub(super) async fn load_order_freeze_requests_for_audit(
              request.requester_ref,
              request.requester_display_name,
              request.target_session_id,
-             request.target_apparatus,
+             request.canonical_target_apparatus_id AS target_apparatus,
+             request.target_apparatus AS target_apparatus_snapshot,
              request.target_worker_role,
              request.target_worker_ref,
              request.target_worker_display_name,
@@ -173,7 +183,10 @@ pub(super) async fn load_order_freeze_requests_for_audit(
                     request_id: row.request_id,
                     status,
                     target_session_id: row.target_session_id,
-                    target_apparatus: row.target_apparatus,
+                    target_apparatus: canonical_freeze_target_apparatus(
+                        row.target_apparatus,
+                        Some(&row.target_apparatus_snapshot),
+                    )?,
                     target_worker_role: row.target_worker_role,
                     target_worker_ref: row.target_worker_ref,
                     target_worker_display_name: row.target_worker_display_name,
@@ -204,6 +217,7 @@ pub(super) async fn save_order_control_state_tx(
     tx: &mut Transaction<'_, Postgres>,
     record: &OrderControlRecord,
 ) -> Result<(), ProductionMapError> {
+    lock_order_tx(tx, &record.order_id).await?;
     let current = sqlx::query_as::<_, (String, Option<String>)>(
         r#"SELECT state, freeze_request_id
            FROM mini_order_control_states
@@ -268,11 +282,15 @@ fn validate_freeze_transition(
     let current_request_id = current
         .and_then(|(_, request_id)| request_id.as_deref())
         .unwrap_or_default();
-    let same_request =
-        current_request_id.is_empty() || current_request_id == request.request_id.trim();
+    let same_request = current_request_id.is_empty() || current_request_id == request.request_id.trim();
+    let replaying_same_request = !current_request_id.is_empty()
+        && current_request_id == request.request_id.trim();
     let allowed = match request.status {
         OrderFreezeRequestStatus::Pending => {
-            current_state == "active" && next_state == OrderControlState::FreezeRequested
+            (current_state == "active" && next_state == OrderControlState::FreezeRequested)
+                || (replaying_same_request
+                    && current_state == "freeze_requested"
+                    && next_state == OrderControlState::FreezeRequested)
         }
         OrderFreezeRequestStatus::Frozen => {
             next_state == OrderControlState::Frozen
@@ -280,12 +298,16 @@ fn validate_freeze_transition(
                     || (same_request && matches!(current_state, "freeze_requested" | "frozen")))
         }
         OrderFreezeRequestStatus::Cancelled => {
-            same_request
-                && current_state == "freeze_requested"
+            replaying_same_request
                 && next_state == OrderControlState::Active
+                && matches!(current_state, "freeze_requested" | "active")
         }
         OrderFreezeRequestStatus::Unfrozen => {
-            same_request && current_state == "frozen" && next_state == OrderControlState::Active
+            same_request
+                && ((current_state == "frozen" && next_state == OrderControlState::Active)
+                    || (replaying_same_request
+                        && current_state == "active"
+                        && next_state == OrderControlState::Active))
         }
     };
     allowed
@@ -298,6 +320,14 @@ async fn save_freeze_request_tx(
     control: &OrderControlRecord,
     request: &OrderFreezeRequest,
 ) -> Result<(), ProductionMapError> {
+    let canonical_target_apparatus = if request.target_apparatus.trim().is_empty() {
+        None
+    } else {
+        Some(
+            ApparatusId::new(request.target_apparatus.trim().to_string())
+                .map_err(|_| ProductionMapError::OrderControlActionNotAllowed)?,
+        )
+    };
     let previous_status = sqlx::query_scalar::<_, String>(
         "SELECT status FROM mini_order_freeze_requests WHERE request_id = $1 FOR UPDATE",
     )
@@ -305,22 +335,21 @@ async fn save_freeze_request_tx(
     .fetch_optional(&mut **tx)
     .await
     .map_err(|_| ProductionMapError::StoreFailed)?;
-    let status_allowed = match (previous_status.as_deref(), request.status) {
+    let status_allowed = matches!(
+        (previous_status.as_deref(), request.status),
         (
             None,
             OrderFreezeRequestStatus::Pending
-            | OrderFreezeRequestStatus::Frozen
-            | OrderFreezeRequestStatus::Unfrozen,
-        )
-        | (Some("pending"), OrderFreezeRequestStatus::Pending)
-        | (Some("pending"), OrderFreezeRequestStatus::Frozen)
-        | (Some("pending"), OrderFreezeRequestStatus::Cancelled)
-        | (Some("frozen"), OrderFreezeRequestStatus::Frozen)
-        | (Some("frozen"), OrderFreezeRequestStatus::Unfrozen)
-        | (Some("cancelled"), OrderFreezeRequestStatus::Cancelled)
-        | (Some("unfrozen"), OrderFreezeRequestStatus::Unfrozen) => true,
-        _ => false,
-    };
+                | OrderFreezeRequestStatus::Frozen
+                | OrderFreezeRequestStatus::Unfrozen,
+        ) | (Some("pending"), OrderFreezeRequestStatus::Pending)
+            | (Some("pending"), OrderFreezeRequestStatus::Frozen)
+            | (Some("pending"), OrderFreezeRequestStatus::Cancelled)
+            | (Some("frozen"), OrderFreezeRequestStatus::Frozen)
+            | (Some("frozen"), OrderFreezeRequestStatus::Unfrozen)
+            | (Some("cancelled"), OrderFreezeRequestStatus::Cancelled)
+            | (Some("unfrozen"), OrderFreezeRequestStatus::Unfrozen)
+    );
     if !status_allowed {
         return Err(ProductionMapError::OrderControlActionNotAllowed);
     }
@@ -329,10 +358,13 @@ async fn save_freeze_request_tx(
         r#"INSERT INTO mini_order_freeze_requests
              (request_id, order_id, status,
               requester_role, requester_ref, requester_display_name,
-              target_session_id, target_apparatus, target_worker_role,
+              target_session_id, target_apparatus, canonical_target_apparatus_id,
+              target_worker_role,
               target_worker_ref, target_worker_display_name,
               requested_at_unix, transitioned_at_unix, updated_at)
-           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, now())
+           VALUES ($1, $2, $3, $4, $5, $6, $7,
+                   COALESCE((SELECT name FROM mini_apparatus WHERE id = $8), $8),
+                   NULLIF($8, ''), $9, $10, $11, $12, $13, now())
            ON CONFLICT (request_id) DO UPDATE SET
               status = excluded.status,
               transitioned_at_unix = excluded.transitioned_at_unix,
@@ -345,7 +377,12 @@ async fn save_freeze_request_tx(
     .bind(control.actor.ref_.trim())
     .bind(control.actor.display_name.trim())
     .bind(request.target_session_id.trim())
-    .bind(request.target_apparatus.trim())
+    .bind(
+        canonical_target_apparatus
+            .as_ref()
+            .map(ApparatusId::as_str)
+            .unwrap_or_default(),
+    )
     .bind(request.target_worker_role.trim())
     .bind(request.target_worker_ref.trim())
     .bind(request.target_worker_display_name.trim())
@@ -375,4 +412,55 @@ async fn save_freeze_request_tx(
         .map_err(|_| ProductionMapError::StoreFailed)?;
     }
     Ok(())
+}
+
+fn canonical_freeze_target_apparatus(
+    canonical: Option<String>,
+    legacy_snapshot: Option<&str>,
+) -> Result<String, ProductionMapError> {
+    match canonical {
+        Some(value) => ApparatusId::new(value.trim().to_string())
+            .map(|id| id.to_string())
+            .map_err(|_| ProductionMapError::StoreFailed),
+        None if legacy_snapshot.unwrap_or_default().trim().is_empty() => Ok(String::new()),
+        None => Err(ProductionMapError::StoreFailed),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn request(status: OrderFreezeRequestStatus) -> OrderFreezeRequest {
+        OrderFreezeRequest {
+            request_id: "freeze-1".to_string(),
+            status,
+            target_session_id: "session-1".to_string(),
+            target_apparatus: "apparatus:test:one".to_string(),
+            target_worker_role: "worker".to_string(),
+            target_worker_ref: "worker-1".to_string(),
+            target_worker_display_name: "Worker".to_string(),
+            requested_at_unix: 1,
+            transitioned_at_unix: 2,
+        }
+    }
+
+    #[test]
+    fn repeated_freeze_control_writes_are_idempotent() {
+        let pending_current = ("freeze_requested".to_string(), Some("freeze-1".to_string()));
+        assert!(validate_freeze_transition(
+            Some(&pending_current),
+            OrderControlState::FreezeRequested,
+            &request(OrderFreezeRequestStatus::Pending),
+        )
+        .is_ok());
+
+        let unfrozen_current = ("active".to_string(), Some("freeze-1".to_string()));
+        assert!(validate_freeze_transition(
+            Some(&unfrozen_current),
+            OrderControlState::Active,
+            &request(OrderFreezeRequestStatus::Unfrozen),
+        )
+        .is_ok());
+    }
 }

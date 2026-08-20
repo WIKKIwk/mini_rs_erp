@@ -78,7 +78,9 @@ pub async fn production_map_laminatsiya_astatka(
     if !is_admin {
         let assigned_apparatus = state.admin.principal_assigned_apparatus(&principal).await;
         if !queue_state::apparatus_matches_assigned(&input.apparatus, &assigned_apparatus) {
-            return Err(production_map_error(ProductionMapError::ApparatusNotAssigned));
+            return Err(production_map_error(
+                ProductionMapError::ApparatusNotAssigned,
+            ));
         }
     }
     let report = state
@@ -133,7 +135,9 @@ pub async fn production_map_rezka_astatka(
     if !is_admin {
         let assigned_apparatus = state.admin.principal_assigned_apparatus(&principal).await;
         if !queue_state::apparatus_matches_assigned(&input.apparatus, &assigned_apparatus) {
-            return Err(production_map_error(ProductionMapError::ApparatusNotAssigned));
+            return Err(production_map_error(
+                ProductionMapError::ApparatusNotAssigned,
+            ));
         }
     }
     let report = state

@@ -6,6 +6,7 @@ use super::map_helpers::{
     put_map_inner, reject_duplicate_order_number, reject_order_number_immutable,
 };
 use super::{ProductionMapStore, unix_micros};
+use crate::core::apparatus_standard::ApparatusId;
 use crate::core::production_map::{ProductionMapDefinition, ProductionMapError};
 
 pub(super) async fn maps(
@@ -109,8 +110,15 @@ pub(super) async fn apparatus_sequences(
             Ok((apparatus, order_ids))
         })
         .map_err(|_| ProductionMapError::StoreFailed)?;
-    rows.collect::<Result<BTreeMap<_, _>, _>>()
-        .map_err(|_| ProductionMapError::StoreFailed)
+    let mut result = BTreeMap::new();
+    for row in rows {
+        let (apparatus, order_ids) = row.map_err(|_| ProductionMapError::StoreFailed)?;
+        let apparatus = ApparatusId::new(apparatus).map_err(|_| ProductionMapError::StoreFailed)?;
+        if result.insert(apparatus.to_string(), order_ids).is_some() {
+            return Err(ProductionMapError::StoreFailed);
+        }
+    }
+    Ok(result)
 }
 
 pub(super) async fn put_apparatus_sequence(
@@ -118,6 +126,8 @@ pub(super) async fn put_apparatus_sequence(
     apparatus: &str,
     order_ids: Vec<String>,
 ) -> Result<(), ProductionMapError> {
+    let apparatus = ApparatusId::new(apparatus.trim().to_string())
+        .map_err(|_| ProductionMapError::StoreFailed)?;
     let conn = store
         .conn
         .lock()
@@ -129,7 +139,7 @@ pub(super) async fn put_apparatus_sequence(
          ON CONFLICT(apparatus) DO UPDATE SET
             order_ids_json = excluded.order_ids_json,
             saved_at = excluded.saved_at",
-        params![apparatus.trim(), payload, unix_micros().to_string()],
+        params![apparatus.as_str(), payload, unix_micros().to_string()],
     )
     .map_err(|_| ProductionMapError::StoreFailed)?;
     Ok(())

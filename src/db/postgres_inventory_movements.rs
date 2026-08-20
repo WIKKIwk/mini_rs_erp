@@ -5,6 +5,7 @@ use data_encoding::HEXLOWER;
 use serde_json::Value;
 use sqlx::{PgPool, Postgres, Transaction};
 
+use crate::core::apparatus_standard::ApparatusId;
 use crate::core::inventory_movements::{
     InventoryActor, InventoryAsset, InventoryAssetKind, InventoryAssetQuery, InventoryLocation,
     InventoryLocationApparatus, InventoryLocationKind, InventoryLocationRef,
@@ -99,7 +100,10 @@ impl InventoryMovementStorePort for PostgresInventoryMovementStore {
                 location.id AS location_id,
                 location.name AS location_name,
                 COALESCE(
-                    jsonb_agg(apparatus.name ORDER BY lower(apparatus.name))
+                    jsonb_agg(
+                        jsonb_build_object('id', apparatus.id, 'name', apparatus.name)
+                        ORDER BY lower(apparatus.name)
+                    )
                         FILTER (WHERE apparatus.id IS NOT NULL),
                     '[]'::jsonb
                 ) AS apparatus_json
@@ -128,12 +132,26 @@ impl InventoryMovementStorePort for PostgresInventoryMovementStore {
         .map_err(store_error)?;
         rows.into_iter()
             .map(|row| {
-                let apparatus = serde_json::from_value::<Vec<String>>(row.apparatus_json)
-                    .map_err(|_| InventoryMovementError::StoreFailed)?;
+                let apparatus =
+                    serde_json::from_value::<Vec<InventoryLocationApparatus>>(row.apparatus_json)
+                        .map_err(|_| InventoryMovementError::StoreFailed)?;
+                let apparatus_ids = apparatus
+                    .iter()
+                    .map(|apparatus| {
+                        ApparatusId::new(apparatus.id.trim().to_string())
+                            .map(|id| id.to_string())
+                            .map_err(|_| InventoryMovementError::StoreFailed)
+                    })
+                    .collect::<Result<Vec<_>, _>>()?;
+                let apparatus = apparatus
+                    .into_iter()
+                    .map(|apparatus| apparatus.name)
+                    .collect();
                 Ok(RawMaterialStatePlacement {
                     barcode: row.barcode,
                     location_id: row.location_id,
                     location_name: row.location_name,
+                    apparatus_ids,
                     apparatus,
                 })
             })
@@ -798,6 +816,7 @@ impl InventoryMovementStorePort for PostgresInventoryMovementStore {
                 }
             }
         }
+        ensure_transfer_assets_tx(&mut tx, transfer_id, &lines).await?;
         insert_transfer_action_identity_tx(
             &mut tx,
             &input.idempotency_key,
@@ -954,9 +973,15 @@ WITH assets AS (
         stock.id,
         (stock.qty * 1000000)::bigint,
         stock.uom,
-        stock.status,
+        CASE
+            WHEN btrim(COALESCE(stock.payload_json->>'inventory_transfer_id', '')) <> ''
+                THEN COALESCE(transfer.status, 'transfer_reserved')
+            ELSE stock.status
+        END,
         COALESCE(stock.payload_json->>'inventory_transfer_id', '')
     FROM mini_finished_goods_stock stock
+    LEFT JOIN mini_inventory_transfers transfer
+      ON transfer.id = stock.payload_json->>'inventory_transfer_id'
     WHERE stock.qty > 0 AND stock.status <> 'dispatched'
 
     UNION ALL
@@ -1334,6 +1359,24 @@ fn ensure_asset_available(asset: &AssetLockRow) -> Result<(), InventoryMovementE
     } else {
         Ok(())
     }
+}
+
+async fn ensure_transfer_assets_tx(
+    tx: &mut Transaction<'_, Postgres>,
+    transfer_id: &str,
+    lines: &[InventoryTransferLineRow],
+) -> Result<(), InventoryMovementError> {
+    for line in lines {
+        let kind = InventoryAssetKind::parse(&line.asset_kind)?;
+        let asset = lock_asset_tx(tx, kind, &line.asset_ref).await?;
+        if asset.transfer_id != transfer_id
+            || asset.qty_units != line.qty_units
+            || matches!(asset.status.as_str(), "available" | "consumed" | "dispatched")
+        {
+            return Err(InventoryMovementError::AssetUnavailable);
+        }
+    }
+    Ok(())
 }
 
 async fn reserve_asset_tx(
@@ -1786,7 +1829,8 @@ fn warehouse_lookup_query<'q>()
             (
                 SELECT count(*)::bigint
                 FROM mini_warehouse_assignments assignment
-                WHERE lower(assignment.warehouse) = lower(warehouse.name)
+                WHERE assignment.assignment_kind = 'warehouse'
+                  AND lower(assignment.warehouse_name) = lower(warehouse.name)
             ) AS assignment_count
         FROM mini_warehouses warehouse
         WHERE warehouse.id = $1
@@ -1844,7 +1888,8 @@ async fn enqueue_transfer_chat_events_tx(
             r#"
         SELECT principal_role, principal_ref, display_name
         FROM mini_warehouse_assignments
-        WHERE lower(warehouse) = lower($1)
+        WHERE assignment_kind = 'warehouse'
+          AND lower(warehouse_name) = lower($1)
           AND principal_role <> 'customer'
         ORDER BY lower(display_name), lower(principal_ref)
         "#,
@@ -2070,6 +2115,7 @@ async fn update_transfer_actor_tx(
     Ok(())
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn insert_transfer_stage_events_tx(
     tx: &mut Transaction<'_, Postgres>,
     transfer: &InventoryTransferRow,

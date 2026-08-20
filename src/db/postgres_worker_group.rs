@@ -3,6 +3,7 @@ use std::collections::BTreeSet;
 use async_trait::async_trait;
 use sqlx::{Executor, PgPool, Postgres, Transaction};
 
+use crate::core::apparatus_standard::ApparatusId;
 use crate::core::worker_groups::{
     WorkerGroupError, WorkerGroupMutation, WorkerGroupRecord, WorkerGroupStorePort,
     apply_worker_group_mutation,
@@ -27,9 +28,9 @@ impl PostgresWorkerGroupStore {
 impl WorkerGroupStorePort for PostgresWorkerGroupStore {
     async fn worker_groups(
         &self,
-        apparatus: Option<&str>,
+        apparatus_id: Option<&ApparatusId>,
     ) -> Result<Vec<WorkerGroupRecord>, WorkerGroupError> {
-        load_worker_groups(&self.pool, apparatus).await
+        load_worker_groups(&self.pool, apparatus_id).await
     }
 
     async fn upsert_group(
@@ -149,7 +150,7 @@ async fn persist_group_delta(
 
     for next in after {
         let previous = before.iter().find(|candidate| {
-            candidate.apparatus == next.apparatus && candidate.group_code == next.group_code
+            candidate.apparatus_id == next.apparatus_id && candidate.group_code == next.group_code
         });
         if previous != Some(next) {
             save_group(tx, next).await?;
@@ -159,19 +160,22 @@ async fn persist_group_delta(
 }
 
 fn same_group_identity(left: &WorkerGroupRecord, right: &WorkerGroupRecord) -> bool {
-    left.apparatus.eq_ignore_ascii_case(&right.apparatus) && left.group_code == right.group_code
+    left.apparatus_id == right.apparatus_id && left.group_code == right.group_code
 }
 
 async fn delete_group(
     tx: &mut Transaction<'_, Postgres>,
     group: &WorkerGroupRecord,
 ) -> Result<(), WorkerGroupError> {
-    sqlx::query("DELETE FROM mini_worker_groups WHERE apparatus = $1 AND group_code = $2")
-        .bind(&group.apparatus)
-        .bind(&group.group_code)
-        .execute(&mut **tx)
-        .await
-        .map_err(|_| WorkerGroupError::StoreFailed)?;
+    sqlx::query(
+        "DELETE FROM mini_worker_groups
+         WHERE canonical_apparatus_id = $1 AND group_code = $2",
+    )
+    .bind(group.apparatus_id.as_str())
+    .bind(&group.group_code)
+    .execute(&mut **tx)
+    .await
+    .map_err(|_| WorkerGroupError::StoreFailed)?;
     Ok(())
 }
 
@@ -184,10 +188,12 @@ async fn save_group(
     let payload = serde_json::to_value(group).map_err(|_| WorkerGroupError::StoreFailed)?;
     sqlx::query(
         "INSERT INTO mini_worker_groups
-            (apparatus, group_code, shift, start_time, end_time,
+            (apparatus, canonical_apparatus_id, group_code, shift, start_time, end_time,
              work_days_per_week, start_day, accounting_enabled, worker_ids, payload_json)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
-         ON CONFLICT (apparatus, group_code) DO UPDATE SET
+         VALUES (COALESCE(NULLIF($1, ''), (SELECT name FROM mini_apparatus WHERE id = $2)),
+                 $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+         ON CONFLICT (canonical_apparatus_id, group_code) DO UPDATE SET
+            apparatus = EXCLUDED.apparatus,
             shift = EXCLUDED.shift,
             start_time = EXCLUDED.start_time,
             end_time = EXCLUDED.end_time,
@@ -198,7 +204,8 @@ async fn save_group(
             payload_json = EXCLUDED.payload_json,
             updated_at = now()",
     )
-    .bind(&group.apparatus)
+    .bind(group.apparatus.trim())
+    .bind(group.apparatus_id.as_str())
     .bind(&group.group_code)
     .bind(&group.shift)
     .bind(&group.start_time)
@@ -216,15 +223,15 @@ async fn save_group(
 
 async fn load_worker_groups<'e, E>(
     executor: E,
-    apparatus: Option<&str>,
+    apparatus_id: Option<&ApparatusId>,
 ) -> Result<Vec<WorkerGroupRecord>, WorkerGroupError>
 where
     E: Executor<'e, Database = Postgres>,
 {
-    let apparatus = apparatus.unwrap_or("").trim().to_lowercase();
     let rows = sqlx::query_as::<
         _,
         (
+            String,
             String,
             String,
             String,
@@ -234,15 +241,17 @@ where
             String,
             bool,
             serde_json::Value,
+            serde_json::Value,
         ),
     >(
-        "SELECT apparatus, group_code, shift, start_time, end_time, work_days_per_week,
-                start_day, accounting_enabled, worker_ids
+        "SELECT canonical_apparatus_id, apparatus, group_code, shift, start_time, end_time,
+                work_days_per_week,
+                start_day, accounting_enabled, worker_ids, payload_json
          FROM mini_worker_groups
-         WHERE ($1 = '' OR lower(apparatus) = $1)
-         ORDER BY lower(apparatus) ASC, group_code ASC",
+         WHERE ($1::text IS NULL OR canonical_apparatus_id = $1)
+         ORDER BY canonical_apparatus_id ASC, group_code ASC",
     )
-    .bind(apparatus)
+    .bind(apparatus_id.map(ApparatusId::as_str))
     .fetch_all(executor)
     .await
     .map_err(|_| WorkerGroupError::StoreFailed)?;
@@ -250,6 +259,7 @@ where
     rows.into_iter()
         .map(
             |(
+                canonical_apparatus,
                 apparatus,
                 group_code,
                 shift,
@@ -259,10 +269,14 @@ where
                 start_day,
                 accounting_enabled,
                 worker_ids,
+                _payload_json,
             )| {
+                let apparatus_id = ApparatusId::new(canonical_apparatus)
+                    .map_err(|_| WorkerGroupError::InvalidApparatusId)?;
                 let worker_ids = serde_json::from_value::<Vec<String>>(worker_ids)
                     .map_err(|_| WorkerGroupError::StoreFailed)?;
                 Ok(WorkerGroupRecord {
+                    apparatus_id,
                     apparatus,
                     group_code,
                     shift,

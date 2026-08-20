@@ -3,6 +3,7 @@ use super::*;
 use std::collections::BTreeMap;
 
 use super::super::compiler::reject_order_number_immutable;
+use crate::core::apparatus_standard::ApparatusId;
 
 pub(super) async fn maps(
     store: &MemoryProductionMapStore,
@@ -71,7 +72,19 @@ pub(super) async fn delete_map(
 pub(super) async fn apparatus_sequences(
     store: &MemoryProductionMapStore,
 ) -> Result<BTreeMap<String, Vec<String>>, ProductionMapError> {
-    Ok(store.sequences.read().await.clone())
+    let sequences = store.sequences.read().await;
+    let mut result = BTreeMap::new();
+    for (apparatus, order_ids) in sequences.iter() {
+        let apparatus = ApparatusId::new(apparatus.trim().to_string())
+            .map_err(|_| ProductionMapError::StoreFailed)?;
+        if result
+            .insert(apparatus.to_string(), order_ids.clone())
+            .is_some()
+        {
+            return Err(ProductionMapError::StoreFailed);
+        }
+    }
+    Ok(result)
 }
 
 pub(super) async fn put_apparatus_sequence(
@@ -79,10 +92,12 @@ pub(super) async fn put_apparatus_sequence(
     apparatus: &str,
     order_ids: Vec<String>,
 ) -> Result<(), ProductionMapError> {
+    let apparatus = ApparatusId::new(apparatus.trim().to_string())
+        .map_err(|_| ProductionMapError::StoreFailed)?;
     store
         .sequences
         .write()
         .await
-        .insert(apparatus.trim().to_string(), order_ids);
+        .insert(apparatus.to_string(), order_ids);
     Ok(())
 }

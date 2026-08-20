@@ -44,6 +44,7 @@ pub(in crate::core::production_map) fn normalize_map(map: &mut ProductionMapDefi
     for node in &mut map.nodes {
         node.id = node.id.trim().to_ascii_lowercase();
         node.title = node.title.trim().to_string();
+        node.apparatus_id = node.apparatus_id.trim().to_string();
         node.role_code = node.role_code.trim().to_string();
         node.item_code = node.item_code.trim().to_string();
         node.qty_formula = node.qty_formula.trim().to_string();
@@ -52,6 +53,8 @@ pub(in crate::core::production_map) fn normalize_map(map: &mut ProductionMapDefi
         node.alternative_group_id = node.alternative_group_id.trim().to_string();
         node.alternative_group_label = node.alternative_group_label.trim().to_string();
         node.alternative_assigned_title = node.alternative_assigned_title.trim().to_string();
+        node.alternative_assigned_apparatus_id =
+            node.alternative_assigned_apparatus_id.trim().to_string();
         if !node.x.is_finite() {
             node.x = 0.0;
         }

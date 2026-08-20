@@ -503,7 +503,10 @@ pub(super) async fn upsert_inventory_transfer_card(
 ) -> Result<ChatSendResult, ChatError> {
     let mut tx = pool.begin().await.map_err(|_| ChatError::StoreFailed)?;
     let sender = sender_for_conversation(&mut tx, principal, conversation_id).await?;
-    let client_message_id = format!("inventory-transfer-request:{}", card_event.transfer_id.trim());
+    let client_message_id = format!(
+        "inventory-transfer-request:{}",
+        card_event.transfer_id.trim()
+    );
     let body = card_event.message_body();
     let metadata = card_event.metadata();
     let existing = existing_message(

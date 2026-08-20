@@ -1,4 +1,8 @@
-use super::{DotEnvPersister, parse_bind_addr};
+use super::{
+    DotEnvPersister, parse_bind_addr, positive_u64_from_raw, validate_backend_value,
+    validate_positive_usize_raw,
+};
+use crate::error::AppError;
 use crate::core::admin::ports::AdminEnvPersister;
 
 #[test]
@@ -6,6 +10,27 @@ fn parses_go_style_bind_addr() {
     let addr = parse_bind_addr(":8081").expect("addr");
 
     assert_eq!(addr.to_string(), "0.0.0.0:8081");
+}
+
+#[test]
+fn rejects_invalid_positive_runtime_values_instead_of_defaulting() {
+    assert_eq!(positive_u64_from_raw("TEST", "720").expect("valid value"), 720);
+    assert!(matches!(
+        positive_u64_from_raw("MOBILE_API_SESSION_TTL_HOURS", "not-a-number"),
+        Err(AppError::InvalidConfig { key, .. }) if key == "MOBILE_API_SESSION_TTL_HOURS"
+    ));
+    assert!(matches!(
+        positive_u64_from_raw("MINI_ERP_HTTP_TIMEOUT_SECONDS", "0"),
+        Err(AppError::InvalidConfig { key, .. }) if key == "MINI_ERP_HTTP_TIMEOUT_SECONDS"
+    ));
+    assert!(matches!(
+        validate_backend_value("MOBILE_API_SESSION_STORE_BACKEND", "oracle"),
+        Err(AppError::InvalidConfig { key, .. }) if key == "MOBILE_API_SESSION_STORE_BACKEND"
+    ));
+    assert!(matches!(
+        validate_positive_usize_raw("MOBILE_API_SESSION_LMDB_MAP_SIZE_MB", "0"),
+        Err(AppError::InvalidConfig { key, .. }) if key == "MOBILE_API_SESSION_LMDB_MAP_SIZE_MB"
+    ));
 }
 
 #[test]

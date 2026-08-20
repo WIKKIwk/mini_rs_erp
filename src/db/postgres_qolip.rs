@@ -3,8 +3,8 @@ use sqlx::PgPool;
 
 use crate::core::auth::models::Principal;
 use crate::core::qolip::{
-    QolipBlock, QolipCellQr, QolipCheckout, QolipError, QolipLocation, QolipProduct,
-    QolipLocationMove, QolipProductSpec, QolipStorePort,
+    QolipBlock, QolipCellQr, QolipCheckout, QolipError, QolipLocation, QolipLocationMove,
+    QolipProduct, QolipProductSpec, QolipStorePort,
 };
 
 mod catalog;

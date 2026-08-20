@@ -1,4 +1,5 @@
 use super::*;
+use crate::core::apparatus_standard::CanonicalApparatus;
 use crate::core::quantity::positive_erp_quantity;
 
 #[derive(Clone, Copy, Default)]
@@ -18,6 +19,7 @@ pub(super) struct ProgressMetrics {
 
 pub(super) fn validated_progress_metrics(
     apparatus: &str,
+    canonical: &CanonicalApparatus,
     action: queue_state::ApparatusQueueAction,
     progress: &QueueProgressInput,
 ) -> Result<ProgressMetrics, ProductionMapError> {
@@ -27,17 +29,16 @@ pub(super) fn validated_progress_metrics(
         queue_state::ApparatusQueueAction::Complete
             | queue_state::ApparatusQueueAction::RollComplete
     );
-    let rezka_gross_qty = if apparatus::is_rezka_title(apparatus) {
+    let rezka_gross_qty = if apparatus::is_rezka_apparatus(canonical) {
         valid_optional_progress_qty(progress.gross_qty.or(progress.finished_goods_kg))?
     } else {
         None
     };
-    let is_rezka = apparatus::is_rezka_title(apparatus);
-    let is_laminatsiya = apparatus::is_laminatsiya_title(apparatus);
-    let is_pechat = pechat::is_pechat_apparatus(apparatus);
-    let allow_partial_station_completion = (is_laminatsiya || is_rezka)
-        && is_complete
-        && progress.allow_partial_station_completion;
+    let is_rezka = apparatus::is_rezka_apparatus(canonical);
+    let is_laminatsiya = apparatus::is_laminatsiya_apparatus(canonical);
+    let is_pechat = pechat::is_pechat_apparatus(canonical);
+    let allow_partial_station_completion =
+        (is_laminatsiya || is_rezka) && is_complete && progress.allow_partial_station_completion;
     let metrics = ProgressMetrics {
         return_ink_kg: if is_complete {
             valid_optional_progress_qty(progress.return_ink_kg)?
@@ -70,8 +71,7 @@ pub(super) fn validated_progress_metrics(
             None
         },
         total_waste: if (is_rezka && !is_rezka_completion)
-            || ((is_laminatsiya || is_pechat)
-                && (!is_complete || allow_partial_station_completion))
+            || ((is_laminatsiya || is_pechat) && (!is_complete || allow_partial_station_completion))
         {
             None
         } else {
@@ -84,9 +84,7 @@ pub(super) fn validated_progress_metrics(
         },
         bobina_kg: valid_optional_progress_qty(progress.bobina_kg)?,
         finished_goods_meter: if is_rezka {
-            valid_optional_progress_qty(
-                progress.finished_goods_meter.or(progress.produced_qty),
-            )?
+            valid_optional_progress_qty(progress.finished_goods_meter.or(progress.produced_qty))?
         } else {
             valid_optional_progress_qty(progress.finished_goods_meter)?
         },
@@ -98,6 +96,7 @@ pub(super) fn validated_progress_metrics(
     };
     validate_progress_metrics(
         apparatus,
+        canonical,
         action,
         progress,
         rezka_gross_qty,
@@ -109,18 +108,21 @@ pub(super) fn validated_progress_metrics(
 }
 
 pub(super) fn validated_laminatsiya_worker_handoff_metrics(
-    apparatus: &str,
+    _apparatus: &str,
+    canonical: &CanonicalApparatus,
     progress: &QueueProgressInput,
 ) -> Result<ProgressMetrics, ProductionMapError> {
-    if !apparatus::is_laminatsiya_title(apparatus) {
+    if !apparatus::is_laminatsiya_apparatus(canonical) {
         return Err(ProductionMapError::ProgressInputInvalid);
     }
     let metrics = ProgressMetrics {
         return_ink_kg: None,
-        lamination_print_leftover_rolls:
-            valid_non_negative_optional_progress_qty(progress.lamination_print_leftover_rolls)?,
-        lamination_film_leftover_rolls:
-            valid_non_negative_optional_progress_qty(progress.lamination_film_leftover_rolls)?,
+        lamination_print_leftover_rolls: valid_non_negative_optional_progress_qty(
+            progress.lamination_print_leftover_rolls,
+        )?,
+        lamination_film_leftover_rolls: valid_non_negative_optional_progress_qty(
+            progress.lamination_film_leftover_rolls,
+        )?,
         rezka_bosma_waste: None,
         rezka_lamination_waste: None,
         rezka_edge_waste: None,
@@ -140,18 +142,17 @@ pub(super) fn validated_laminatsiya_worker_handoff_metrics(
 }
 
 pub(super) fn validated_laminatsiya_removed_roll_metrics(
-    apparatus: &str,
+    _apparatus: &str,
+    canonical: &CanonicalApparatus,
     progress: &QueueProgressInput,
 ) -> Result<ProgressMetrics, ProductionMapError> {
-    if !apparatus::is_laminatsiya_title(apparatus) {
+    if !apparatus::is_laminatsiya_apparatus(canonical) {
         return Err(ProductionMapError::ProgressInputInvalid);
     }
-    let finished_goods_meter = valid_optional_progress_qty(
-        progress.finished_goods_meter.or(progress.produced_qty),
-    )?;
-    let finished_goods_kg = valid_optional_progress_qty(
-        progress.finished_goods_kg.or(progress.gross_qty),
-    )?;
+    let finished_goods_meter =
+        valid_optional_progress_qty(progress.finished_goods_meter.or(progress.produced_qty))?;
+    let finished_goods_kg =
+        valid_optional_progress_qty(progress.finished_goods_kg.or(progress.gross_qty))?;
     if finished_goods_meter.is_none() || finished_goods_kg.is_none() {
         return Err(ProductionMapError::LaminatsiyaCompletionMetricsRequired);
     }
@@ -170,8 +171,10 @@ pub(super) fn validated_laminatsiya_removed_roll_metrics(
     })
 }
 
+#[allow(clippy::too_many_arguments)]
 fn validate_progress_metrics(
-    apparatus: &str,
+    _apparatus: &str,
+    canonical: &CanonicalApparatus,
     action: queue_state::ApparatusQueueAction,
     progress: &QueueProgressInput,
     rezka_gross_qty: Option<f64>,
@@ -180,9 +183,9 @@ fn validate_progress_metrics(
     allow_partial_station_completion: bool,
 ) -> Result<(), ProductionMapError> {
     let is_complete = action == queue_state::ApparatusQueueAction::Complete;
-    let is_rezka = apparatus::is_rezka_title(apparatus);
+    let is_rezka = apparatus::is_rezka_apparatus(canonical);
     if is_complete
-        && pechat::is_pechat_apparatus(apparatus)
+        && pechat::is_pechat_apparatus(canonical)
         && !(returned_paint_report_attached
             && metrics.total_waste.is_some()
             && metrics.finished_goods_kg.is_some()
@@ -197,7 +200,7 @@ fn validate_progress_metrics(
         return Err(ProductionMapError::BosmaCompletionMetricsRequired);
     }
     if is_complete
-        && apparatus::is_laminatsiya_title(apparatus)
+        && apparatus::is_laminatsiya_apparatus(canonical)
         && !allow_partial_station_completion
         && !laminatsiya_completion_metrics_are_complete(
             metrics.lamination_print_leftover_rolls,
@@ -210,7 +213,7 @@ fn validate_progress_metrics(
         return Err(ProductionMapError::LaminatsiyaCompletionMetricsRequired);
     }
     if is_complete
-        && apparatus::is_laminatsiya_title(apparatus)
+        && apparatus::is_laminatsiya_apparatus(canonical)
         && allow_partial_station_completion
         && (metrics.finished_goods_kg.is_none() || metrics.finished_goods_meter.is_none())
     {
@@ -303,7 +306,6 @@ fn rezka_quantity_metrics_are_complete(
         && (gross_qty.is_some() || finished_goods_kg.is_some())
 }
 
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -317,10 +319,32 @@ mod tests {
         }
     }
 
+    fn rezka_canonical() -> CanonicalApparatus {
+        serde_json::from_value(serde_json::json!({
+            "identity": {
+                "id": "apparatus:default:asset-010",
+                "display": { "display_name": "Renamed rezka" }
+            },
+            "classification": { "family": "rezka", "kind": "rezka" },
+            "capabilities": ["apparatus"],
+            "policies": { "queue": "strict_sequence" },
+            "capacity": {},
+            "training": {},
+            "provenance": { "source": "default" },
+            "versioning": {},
+            "aas": {
+                "submodel_id": "urn:mini-rs-erp:submodel:apparatus:default:asset-010"
+            }
+        }))
+        .expect("canonical rezka fixture")
+    }
+
     #[test]
     fn rezka_pause_requires_positive_finite_diameter() {
+        let canonical = rezka_canonical();
         let valid = validated_progress_metrics(
             "Rezka",
+            &canonical,
             queue_state::ApparatusQueueAction::Pause,
             &rezka_pause_progress(Some(45.5)),
         )
@@ -331,6 +355,7 @@ mod tests {
             assert!(matches!(
                 validated_progress_metrics(
                     "Rezka",
+                    &canonical,
                     queue_state::ApparatusQueueAction::Pause,
                     &rezka_pause_progress(diameter),
                 ),
@@ -340,6 +365,7 @@ mod tests {
         assert!(matches!(
             validated_progress_metrics(
                 "Rezka",
+                &canonical,
                 queue_state::ApparatusQueueAction::Pause,
                 &rezka_pause_progress(None),
             ),

@@ -162,7 +162,7 @@ impl DecimalAmount {
         if value.is_empty() || matches!(value.as_bytes().first(), Some(b'-' | b'+')) {
             return Err(ReturnedPaintError::InvalidValue);
         }
-        let mut scientific_parts = value.split(|character| matches!(character, 'e' | 'E'));
+        let mut scientific_parts = value.split(['e', 'E']);
         let mantissa = scientific_parts.next().unwrap_or_default();
         let exponent = match scientific_parts.next() {
             Some(value) => value
@@ -370,4 +370,3 @@ fn normalize_items(
         })
         .collect()
 }
-

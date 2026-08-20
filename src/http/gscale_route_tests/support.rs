@@ -88,7 +88,10 @@ pub(super) async fn assign_warehouse_to_principal(
     state
         .warehouses
         .assign_warehouse(WarehouseAssignmentUpsert {
+            assignment_kind: "warehouse".to_string(),
             warehouse: warehouse.to_string(),
+            warehouse_name: None,
+            apparatus_id: None,
             principal_role: role,
             principal_ref: ref_.to_string(),
             display_name: "Materialchi".to_string(),
@@ -145,13 +148,10 @@ impl RpsBatchStorePort for MemoryRpsBatchStore {
             .lock()
             .unwrap()
             .insert(batch.owner_key.trim().to_string(), batch.clone());
-        self.history
-            .lock()
-            .unwrap()
-            .insert(
-                format!("{}:{}", batch.owner_key.trim(), batch.id.trim()),
-                batch,
-            );
+        self.history.lock().unwrap().insert(
+            format!("{}:{}", batch.owner_key.trim(), batch.id.trim()),
+            batch,
+        );
         Ok(())
     }
 

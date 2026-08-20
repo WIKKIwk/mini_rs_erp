@@ -1,15 +1,8 @@
-use std::collections::BTreeSet;
+use crate::core::apparatus_standard::ApparatusId;
 
-use crate::core::apparatus_groups::{apparatus_id_for_name, apparatus_master_data_for_name};
-
-use super::apparatus::{
-    move_allowed, reassign_alternative_apparatus_assignment, reassign_apparatus_nodes,
-};
 use super::compiler::compile_map;
-use super::pechat;
 use super::queue_state;
 use super::service::ProductionMapService;
-use super::service_capacity_scheduler::same_apparatus_identity;
 use super::store_port::ProductionMapApparatusTransferWrite;
 use super::types::*;
 
@@ -21,11 +14,15 @@ impl ProductionMapService {
     ) -> Result<ProductionMapApparatusTransferResult, ProductionMapError> {
         let _guard = self.queue_action_guard().await;
         let order_id = input.order_id.trim().to_ascii_lowercase();
-        let from = input.from_apparatus.trim();
-        let to = input.to_apparatus.trim();
         let reason = input.reason.trim();
         let idempotency_key = input.idempotency_key.trim();
-        if order_id.is_empty() || from.is_empty() || to.is_empty() || from == to {
+        let Some(from_id) = canonical_transfer_id(&input.from_apparatus) else {
+            return Err(ProductionMapError::MoveNotAllowed);
+        };
+        let Some(to_id) = canonical_transfer_id(&input.to_apparatus) else {
+            return Err(ProductionMapError::MoveNotAllowed);
+        };
+        if order_id.is_empty() || from_id == to_id {
             return Err(ProductionMapError::MoveNotAllowed);
         }
         if reason.is_empty() {
@@ -40,10 +37,7 @@ impl ProductionMapService {
             .apparatus_transfer_by_idempotency_key(idempotency_key)
             .await?
         {
-            if record.order_id.trim() != order_id
-                || !queue_state::apparatus_titles_match(&record.from_apparatus, from)
-                || !queue_state::apparatus_titles_match(&record.to_apparatus, to)
-            {
+            if !transfer_record_matches_request(&record, &order_id, &from_id, &to_id) {
                 return Err(ProductionMapError::ApparatusTransferIdempotencyConflict);
             }
             return self.transfer_result(record).await;
@@ -55,62 +49,74 @@ impl ProductionMapService {
             .find(|map| map.id.trim() == order_id)
             .cloned()
             .ok_or(ProductionMapError::MapNotFound)?;
-        if !move_allowed(&map, from, to) {
+        let order_controls = self.store.order_control_states().await?;
+        if let Some(control) = order_controls.values().find(|control| {
+            control.order_id.trim().eq_ignore_ascii_case(&order_id)
+        }) {
+            match control.state {
+                OrderControlState::Active => {}
+                OrderControlState::FreezeRequested => {
+                    return Err(ProductionMapError::OrderFreezeRequested);
+                }
+                OrderControlState::Frozen => return Err(ProductionMapError::OrderFrozen),
+            }
+        }
+        let from_apparatus_id =
+            ApparatusId::new(from_id.clone()).map_err(|_| ProductionMapError::MoveNotAllowed)?;
+        let to_apparatus_id =
+            ApparatusId::new(to_id.clone()).map_err(|_| ProductionMapError::MoveNotAllowed)?;
+        let source = self.resolve_canonical_apparatus(&from_apparatus_id).await?;
+        let target = self.resolve_canonical_apparatus(&to_apparatus_id).await?;
+        if !crate::core::production_map::pechat::reroute_order_compatible(
+            &source,
+            &target,
+            map.roll_count,
+            map.width_mm,
+        ) {
             return Err(ProductionMapError::MoveNotAllowed);
         }
-        self.ensure_transfer_target_capabilities(to).await?;
+        let target_display = target.identity.display.display_name.clone();
+        if !transfer_move_allowed_by_id(&map, &from_id, &to_id) {
+            return Err(ProductionMapError::MoveNotAllowed);
+        }
 
         let sequences = self.store.apparatus_sequences().await?;
         let all_states = self.store.apparatus_queue_states().await?;
-        let known_keys = sequences
-            .keys()
-            .chain(all_states.keys())
-            .map(|key| key.as_str())
-            .collect::<BTreeSet<_>>()
-            .into_iter()
-            .map(str::to_string)
-            .collect::<Vec<_>>();
-        let from_key = queue_state::resolve_apparatus_storage_key(from, &known_keys);
-        let requested_to_key = queue_state::resolve_apparatus_storage_key(to, &known_keys);
-        let mut target_identity = self
-            .store
-            .resolve_apparatus_identity("", &requested_to_key)
-            .await?
-            .ok_or(ProductionMapError::MoveNotAllowed)?;
-        if target_identity.apparatus_id.trim().is_empty() {
-            target_identity.apparatus_id = apparatus_id_for_name(&target_identity.apparatus);
-        }
-        if target_identity.apparatus.trim().is_empty() {
-            target_identity.apparatus = requested_to_key;
-        }
-        let to_key = queue_state::resolve_apparatus_storage_key(
-            &target_identity.apparatus,
-            &known_keys,
-        );
-        let target_apparatus_id = target_identity.apparatus_id;
-        if from_key == to_key {
-            return Err(ProductionMapError::MoveNotAllowed);
-        }
-        let mut from_states = all_states.get(&from_key).cloned().unwrap_or_default();
-        let mut to_states = all_states.get(&to_key).cloned().unwrap_or_default();
+        let mut from_states = all_states.get(&from_id).cloned().unwrap_or_default();
+        let mut to_states = all_states.get(&to_id).cloned().unwrap_or_default();
         let source_state = from_states
             .get(&order_id)
             .and_then(|state| queue_state::ApparatusQueueOrderState::parse(state));
-        if source_state != Some(queue_state::ApparatusQueueOrderState::Paused) {
-            return Err(ProductionMapError::ApparatusTransferOrderNotPaused);
+        match source_state {
+            Some(queue_state::ApparatusQueueOrderState::Paused) => {}
+            Some(queue_state::ApparatusQueueOrderState::Frozen) => {
+                return Err(ProductionMapError::OrderFrozen);
+            }
+            Some(queue_state::ApparatusQueueOrderState::Completed) => {
+                return Err(ProductionMapError::OrderAlreadyCompleted);
+            }
+            _ => return Err(ProductionMapError::ApparatusTransferOrderNotPaused),
         }
         if to_states.contains_key(&order_id) {
+            return Err(ProductionMapError::ApparatusTransferTargetConflict);
+        }
+        if self
+            .store
+            .active_order_run_session(&to_id, &order_id)
+            .await?
+            .is_some()
+        {
             return Err(ProductionMapError::ApparatusTransferTargetConflict);
         }
 
         let source_session = self
             .store
-            .active_order_run_session(&from_key, &order_id)
+            .active_order_run_session(&from_id, &order_id)
             .await?
             .ok_or(ProductionMapError::ApparatusTransferSessionNotFound)?;
         if source_session.status != OrderRunStatus::Paused
             || source_session.order_id.trim() != order_id
-            || !queue_state::apparatus_titles_match(&source_session.apparatus, &from_key)
+            || source_session.apparatus.trim() != from_id
         {
             return Err(ProductionMapError::ApparatusTransferSessionMismatch);
         }
@@ -122,7 +128,7 @@ impl ProductionMapService {
                 batch.session_id.trim() == source_session.session_id.trim()
                     && batch.action == queue_state::ApparatusQueueAction::Pause
                     && batch.status == OrderProgressBatchStatus::Paused
-                    && queue_state::apparatus_titles_match(&batch.apparatus, &from_key)
+                    && batch.apparatus.trim() == from_id
             })
             .collect::<Vec<_>>();
         if paused_batches.len() != 1 {
@@ -138,30 +144,35 @@ impl ProductionMapService {
         let now = unix_seconds();
         let transfer_payload = serde_json::json!({
             "transfer_id": transfer_id,
-            "from_apparatus": from_key,
-            "to_apparatus": to_key,
+            "from_apparatus": from_id,
+            "to_apparatus": to_id,
+            "to_apparatus_display": target_display,
             "reason": reason,
             "actor": actor,
             "created_at_unix": now,
         });
 
         let mut session = source_session;
-        session.apparatus = to_key.clone();
+        session.apparatus = to_id.clone();
         session.updated_at_unix = now;
         if !session.payload_json.is_object() {
             session.payload_json = serde_json::json!({});
         }
         session.payload_json["last_apparatus_transfer"] = transfer_payload.clone();
 
-        progress_batch.apparatus = to_key.clone();
-        progress_batch.current_apparatus = to_key.clone();
-        progress_batch.current_apparatus_key = queue_state::apparatus_search_key(&to_key);
-        progress_batch.current_location = format!("{to_key} chiqim");
-        if queue_state::apparatus_titles_match(&progress_batch.used_by_apparatus, from) {
-            progress_batch.used_by_apparatus = to_key.clone();
+        progress_batch.apparatus = to_id.clone();
+        progress_batch.current_apparatus = to_id.clone();
+        progress_batch.current_apparatus_key = to_id.clone();
+        progress_batch.current_location = if target_display.is_empty() {
+            String::new()
+        } else {
+            format!("{target_display} chiqim")
+        };
+        if apparatus_ids_match(&progress_batch.used_by_apparatus, &from_id) {
+            progress_batch.used_by_apparatus = to_id.clone();
         }
-        if queue_state::apparatus_titles_match(&progress_batch.processed_by_apparatus, from) {
-            progress_batch.processed_by_apparatus = to_key.clone();
+        if apparatus_ids_match(&progress_batch.processed_by_apparatus, &from_id) {
+            progress_batch.processed_by_apparatus = to_id.clone();
         }
         if !progress_batch.payload_json.is_object() {
             progress_batch.payload_json = serde_json::json!({});
@@ -191,7 +202,7 @@ impl ProductionMapService {
             if parent_batch.order_id.trim() != order_id {
                 return Err(ProductionMapError::ApparatusTransferProgressMismatch);
             }
-            parent_batch.next_apparatus = to_key.clone();
+            parent_batch.next_apparatus = to_id.clone();
             if !parent_batch.payload_json.is_object() {
                 parent_batch.payload_json = serde_json::json!({});
             }
@@ -204,8 +215,12 @@ impl ProductionMapService {
         }
 
         let mut updated_map = map;
-        if !reassign_alternative_apparatus_assignment(&mut updated_map, from, to)
-            && !reassign_apparatus_nodes(&mut updated_map, from, to)
+        if !reassign_alternative_apparatus_assignment_by_id(
+            &mut updated_map,
+            &from_id,
+            &to_id,
+            &target_display,
+        ) && !reassign_apparatus_nodes_by_id(&mut updated_map, &from_id, &to_id, &target_display)
         {
             return Err(ProductionMapError::MoveNotAllowed);
         }
@@ -217,9 +232,9 @@ impl ProductionMapService {
                 .as_str()
                 .to_string(),
         );
-        let mut from_sequence = sequences.get(&from_key).cloned().unwrap_or_default();
+        let mut from_sequence = sequences.get(&from_id).cloned().unwrap_or_default();
         from_sequence.retain(|id| id.trim() != order_id);
-        let mut to_sequence = sequences.get(&to_key).cloned().unwrap_or_default();
+        let mut to_sequence = sequences.get(&to_id).cloned().unwrap_or_default();
         to_sequence.retain(|id| id.trim() != order_id);
         to_sequence.push(order_id.clone());
 
@@ -230,10 +245,12 @@ impl ProductionMapService {
             .into_iter()
             .filter(|assignment| {
                 assignment.order_id.trim() == order_id
-                    && queue_state::apparatus_titles_match(&assignment.apparatus, from)
+                    && assignment.apparatus_id.as_str() == from_id
             })
             .map(|mut assignment| {
-                assignment.apparatus = to_key.clone();
+                assignment.apparatus_id = ApparatusId::new(to_id.clone())
+                    .expect("validated transfer target apparatus id");
+                assignment.apparatus = target_display.clone();
                 assignment
             })
             .collect::<Vec<_>>();
@@ -246,8 +263,8 @@ impl ProductionMapService {
             transfer_id,
             idempotency_key: idempotency_key.to_string(),
             order_id: order_id.clone(),
-            from_apparatus: from_key,
-            to_apparatus: to_key,
+            from_apparatus: from_id.clone(),
+            to_apparatus: to_id.clone(),
             reason: reason.to_string(),
             actor,
             session_id: session.session_id.clone(),
@@ -268,67 +285,18 @@ impl ProductionMapService {
                 to_sequence,
                 from_states,
                 to_states,
-                target_apparatus_id,
+                target_apparatus_id: to_id.clone(),
                 session,
                 progress_batch,
                 progress_batch_updates,
                 raw_material_assignments,
             })
             .await?;
+        if !transfer_record_matches_request(&record, &order_id, &from_id, &to_id) {
+            return Err(ProductionMapError::ApparatusTransferIdempotencyConflict);
+        }
         self.notify_live();
         self.transfer_result(record).await
-    }
-
-    async fn ensure_transfer_target_capabilities(
-        &self,
-        target_apparatus: &str,
-    ) -> Result<(), ProductionMapError> {
-        let requirements = if pechat::is_flexo_apparatus(target_apparatus) {
-            ["print", "pechat", "flexo"].as_slice()
-        } else if pechat::is_pechat_apparatus(target_apparatus) {
-            ["print", "pechat"].as_slice()
-        } else {
-            return Ok(());
-        };
-        let target_id = apparatus_id_for_name(target_apparatus);
-        let profiles = self.store.apparatus_capacity_profiles().await?;
-        let levels = profiles
-            .iter()
-            .find(|profile| {
-                same_apparatus_identity(
-                    &profile.apparatus_id,
-                    &profile.apparatus,
-                    &target_id,
-                    target_apparatus,
-                )
-            })
-            .map(|profile| {
-                requirements
-                    .iter()
-                    .map(|code| profile.capability_level(code))
-                    .collect::<Vec<_>>()
-            })
-            .unwrap_or_else(|| {
-                let master = apparatus_master_data_for_name(target_apparatus);
-                requirements
-                    .iter()
-                    .map(|code| {
-                        master
-                            .capability_profiles
-                            .iter()
-                            .find(|profile| {
-                                profile.code.eq_ignore_ascii_case(code)
-                                    && profile.is_valid_at(unix_seconds())
-                            })
-                            .map(|profile| profile.level)
-                            .unwrap_or_default()
-                    })
-                    .collect::<Vec<_>>()
-            });
-        if levels.iter().any(|level| *level == 0) {
-            return Err(ProductionMapError::CapabilityNotSupported);
-        }
-        Ok(())
     }
 
     async fn transfer_result(
@@ -354,7 +322,7 @@ impl ProductionMapService {
         let order_id = order_id.trim();
         let states = self.store.apparatus_queue_states().await?;
         if states.iter().any(|(stored_apparatus, values)| {
-            queue_state::apparatus_titles_match(stored_apparatus, apparatus)
+            apparatus_ids_match(stored_apparatus, apparatus)
                 && values
                     .get(order_id)
                     .and_then(|value| queue_state::ApparatusQueueOrderState::parse(value))
@@ -364,13 +332,216 @@ impl ProductionMapService {
         }
         if self
             .store
-            .active_order_run_session(apparatus, order_id)
+            .active_order_run_session(apparatus.trim(), order_id)
             .await?
             .is_some()
         {
             return Err(ProductionMapError::StartedOrderMoveRequiresTransfer);
         }
         Ok(())
+    }
+}
+
+fn transfer_record_matches_request(
+    record: &ProductionMapApparatusTransferRecord,
+    order_id: &str,
+    from_id: &str,
+    to_id: &str,
+) -> bool {
+    record.order_id.trim() == order_id
+        && record.from_apparatus.trim() == from_id
+        && record.to_apparatus.trim() == to_id
+}
+
+fn canonical_transfer_id(value: &str) -> Option<String> {
+    ApparatusId::new(value.trim().to_string())
+        .ok()
+        .map(|id| id.to_string())
+}
+
+fn apparatus_ids_match(left: &str, right: &str) -> bool {
+    canonical_transfer_id(left)
+        .is_some_and(|left| canonical_transfer_id(right).is_some_and(|right| left == right))
+}
+
+fn effective_transfer_apparatus_id(node: &ProductionMapNode) -> &str {
+    let assigned = node.alternative_assigned_apparatus_id.trim();
+    if assigned.is_empty() {
+        node.apparatus_id.trim()
+    } else {
+        assigned
+    }
+}
+
+fn transfer_move_allowed_by_id(map: &ProductionMapDefinition, from_id: &str, to_id: &str) -> bool {
+    let (Some(from_id), Some(to_id)) =
+        (canonical_transfer_id(from_id), canonical_transfer_id(to_id))
+    else {
+        return false;
+    };
+    if from_id == to_id {
+        return false;
+    }
+    let source_nodes = map
+        .nodes
+        .iter()
+        .filter(|node| {
+            node.kind == ProductionMapNodeKind::Apparatus
+                && effective_transfer_apparatus_id(node) == from_id
+        })
+        .collect::<Vec<_>>();
+    if source_nodes.is_empty() {
+        return false;
+    }
+    let source_groups = source_nodes
+        .iter()
+        .map(|node| node.alternative_group_id.trim())
+        .filter(|group_id| !group_id.is_empty())
+        .collect::<std::collections::BTreeSet<_>>();
+    if source_groups.is_empty() {
+        return true;
+    }
+    map.nodes.iter().any(|node| {
+        node.kind == ProductionMapNodeKind::Apparatus
+            && source_groups.contains(node.alternative_group_id.trim())
+            && effective_transfer_apparatus_id(node) == to_id
+    })
+}
+
+fn reassign_alternative_apparatus_assignment_by_id(
+    map: &mut ProductionMapDefinition,
+    from_id: &str,
+    to_id: &str,
+    target_display: &str,
+) -> bool {
+    let groups = map
+        .nodes
+        .iter()
+        .filter(|node| {
+            node.kind == ProductionMapNodeKind::Apparatus
+                && !node.alternative_group_id.trim().is_empty()
+                && effective_transfer_apparatus_id(node) == from_id
+        })
+        .map(|node| node.alternative_group_id.trim().to_string())
+        .collect::<std::collections::BTreeSet<_>>();
+    if groups.is_empty()
+        || !map.nodes.iter().any(|node| {
+            node.kind == ProductionMapNodeKind::Apparatus
+                && groups.contains(node.alternative_group_id.trim())
+                && node.apparatus_id.trim() == to_id
+        })
+    {
+        return false;
+    }
+    for node in &mut map.nodes {
+        if node.kind == ProductionMapNodeKind::Apparatus
+            && groups.contains(node.alternative_group_id.trim())
+        {
+            node.alternative_assigned_apparatus_id = to_id.to_string();
+            node.alternative_assigned_title = target_display.to_string();
+        }
+    }
+    true
+}
+
+fn reassign_apparatus_nodes_by_id(
+    map: &mut ProductionMapDefinition,
+    from_id: &str,
+    to_id: &str,
+    target_display: &str,
+) -> bool {
+    let mut changed = false;
+    for node in &mut map.nodes {
+        if node.kind == ProductionMapNodeKind::Apparatus
+            && node.alternative_group_id.trim().is_empty()
+            && effective_transfer_apparatus_id(node) == from_id
+        {
+            node.apparatus_id = to_id.to_string();
+            node.title = target_display.to_string();
+            changed = true;
+        }
+    }
+    changed
+}
+
+#[cfg(test)]
+#[allow(clippy::items_after_test_module)]
+mod tests {
+    use super::*;
+
+    fn transfer_map(source_title: &str, target_title: &str) -> ProductionMapDefinition {
+        serde_json::from_value(serde_json::json!({
+            "id": "order-transfer-test",
+            "product_code": "TRANSFER-TEST",
+            "title": "Transfer test",
+            "nodes": [
+                {"id": "start", "kind": "start", "title": "Start"},
+                {
+                    "id": "source", "kind": "apparatus", "title": source_title,
+                    "apparatus_id": "apparatus:test:source"
+                },
+                {
+                    "id": "target", "kind": "apparatus", "title": target_title,
+                    "apparatus_id": "apparatus:test:target"
+                },
+                {"id": "end", "kind": "end", "title": "End"}
+            ],
+            "edges": [
+                {"from": "start", "to": "source"},
+                {"from": "source", "to": "end"}
+            ]
+        }))
+        .expect("transfer map")
+    }
+
+    #[test]
+    fn exact_id_transfer_reassigns_identity_and_keeps_target_display_snapshot() {
+        let mut map = transfer_map("Old title", "New title");
+        assert!(transfer_move_allowed_by_id(
+            &map,
+            "apparatus:test:source",
+            "apparatus:test:target"
+        ));
+        assert!(reassign_apparatus_nodes_by_id(
+            &mut map,
+            "apparatus:test:source",
+            "apparatus:test:target",
+            "Renamed target"
+        ));
+        let node = &map.nodes[1];
+        assert_eq!(node.apparatus_id, "apparatus:test:target");
+        assert_eq!(node.title, "Renamed target");
+    }
+
+    #[test]
+    fn transfer_identity_is_independent_of_display_rename() {
+        let map = transfer_map("Renamed source", "Renamed target");
+        assert!(transfer_move_allowed_by_id(
+            &map,
+            "apparatus:test:source",
+            "apparatus:test:target"
+        ));
+        assert!(!transfer_move_allowed_by_id(
+            &map,
+            "apparatus:legacy:renamed-source",
+            "apparatus:test:target"
+        ));
+    }
+
+    #[test]
+    fn transfer_rejects_title_only_and_mismatched_identity() {
+        assert!(canonical_transfer_id("apparatus:test:source").is_some());
+        assert!(canonical_transfer_id("Renamed source").is_none());
+        assert!(!apparatus_ids_match(
+            "apparatus:test:source",
+            "Renamed source"
+        ));
+        let map = transfer_map("Renamed source", "Renamed target");
+        assert!(!transfer_move_allowed_by_id(
+            &map,
+            "apparatus:test:other",
+            "apparatus:test:target"
+        ));
     }
 }
 

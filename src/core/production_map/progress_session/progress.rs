@@ -1,9 +1,126 @@
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
+use crate::core::apparatus_standard::ApparatusId;
 use crate::core::production_map::queue_state;
 
 use super::{ProductionMapDefinition, ProductionOrderLogEntry, QueueActionActor};
+
+/// Parse a live apparatus reference at the progress boundary.
+///
+/// Progress records may retain display snapshots in their existing string
+/// fields, but identity matching is only valid for canonical IDs. In
+/// particular, this intentionally does not resolve a title or warehouse
+/// instance to an ID.
+pub fn canonical_apparatus_id(value: &str) -> Option<ApparatusId> {
+    ApparatusId::new(value.trim().to_string()).ok()
+}
+
+pub fn canonical_apparatus_key(value: &str) -> String {
+    canonical_apparatus_id(value)
+        .map(|id| id.as_str().to_string())
+        .unwrap_or_default()
+}
+
+pub fn apparatus_ids_match(left: &str, right: &str) -> bool {
+    match (canonical_apparatus_id(left), canonical_apparatus_id(right)) {
+        (Some(left), Some(right)) => left == right,
+        _ => false,
+    }
+}
+
+/// Compare a topology stage identity. Apparatus stages use canonical
+/// `ApparatusId`; non-apparatus task stages use their stable graph identity.
+/// This is an exact identity comparison and never resolves display titles.
+pub fn stage_ids_match(left: &str, right: &str) -> bool {
+    if apparatus_ids_match(left, right) {
+        return true;
+    }
+    let left = left.trim();
+    let right = right.trim();
+    is_stable_task_stage_id(left) && is_stable_task_stage_id(right) && left == right
+}
+
+/// Validated Qolip lineage carried by a progress/session payload.
+///
+/// The payload remains backward-compatible with the existing JSON fields, but
+/// every producer/consumer crosses this typed boundary so a malformed or
+/// title-derived value cannot become lineage state.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub(crate) struct QolipLineage {
+    pub(crate) qolip_code: String,
+    #[serde(default)]
+    pub(crate) qolip_codes: Vec<String>,
+}
+
+impl QolipLineage {
+    pub(crate) fn from_codes(codes: &[String]) -> Option<Self> {
+        let mut normalized = Vec::new();
+        for code in codes {
+            let code = code.trim();
+            if code.is_empty()
+                || normalized
+                    .iter()
+                    .any(|existing: &String| existing.eq_ignore_ascii_case(code))
+            {
+                continue;
+            }
+            normalized.push(code.to_string());
+        }
+        normalized.first().cloned().map(|qolip_code| Self {
+            qolip_code,
+            qolip_codes: normalized,
+        })
+    }
+
+    pub(crate) fn from_payload(payload: &serde_json::Value) -> Option<Self> {
+        let primary = payload
+            .get("qolip_code")
+            .and_then(serde_json::Value::as_str)
+            .map(str::trim)
+            .filter(|code| !code.is_empty())
+            .map(str::to_string);
+        let mut codes = Vec::new();
+        if let Some(values) = payload.get("qolip_codes") {
+            for value in values.as_array()? {
+                let code = value.as_str()?.trim();
+                if code.is_empty() {
+                    return None;
+                }
+                codes.push(code.to_string());
+            }
+        }
+        if let Some(primary) = primary {
+            codes.insert(0, primary);
+        }
+        Self::from_codes(&codes)
+    }
+
+    pub(crate) fn write_to_payload(&self, payload: &mut serde_json::Value) {
+        if !payload.is_object() {
+            *payload = serde_json::json!({});
+        }
+        payload["qolip_code"] = serde_json::json!(self.qolip_code);
+        payload["qolip_codes"] = serde_json::json!(self.qolip_codes);
+    }
+}
+
+pub(crate) fn qolip_lineage_from_batch(batch: &OrderProgressBatch) -> Option<QolipLineage> {
+    QolipLineage::from_payload(&batch.payload_json)
+}
+
+fn is_stable_task_stage_id(value: &str) -> bool {
+    let Some(task_id) = value.strip_prefix("task:") else {
+        return false;
+    };
+    !task_id.is_empty()
+        && canonical_apparatus_id(value).is_none()
+        && task_id.chars().all(|character| {
+            character.is_ascii_lowercase()
+                || character.is_ascii_digit()
+                || matches!(character, '-' | '_' | ':' | '.')
+        })
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -435,8 +552,7 @@ impl OrderProgressBatch {
             serde_json::json!(corrected.rezka_bosma_waste);
         corrected.payload_json["rezka_lamination_waste"] =
             serde_json::json!(corrected.rezka_lamination_waste);
-        corrected.payload_json["rezka_edge_waste"] =
-            serde_json::json!(corrected.rezka_edge_waste);
+        corrected.payload_json["rezka_edge_waste"] = serde_json::json!(corrected.rezka_edge_waste);
         corrected.payload_json["total_waste"] = serde_json::json!(corrected.total_waste);
         corrected.payload_json["finished_goods_kg"] =
             serde_json::json!(corrected.finished_goods_kg);
@@ -504,6 +620,67 @@ pub struct FinishedGoodsReceipt {
     pub order_status: ProductionOrderStatusDetail,
 }
 
+#[cfg(test)]
+mod apparatus_identity_tests {
+    use super::{
+        apparatus_ids_match, canonical_apparatus_id, canonical_apparatus_key, stage_ids_match,
+    };
+
+    #[test]
+    fn progress_identity_requires_canonical_ids_and_ignores_display_titles() {
+        assert!(apparatus_ids_match(
+            "apparatus:catalog:press-001",
+            "apparatus:catalog:press-001"
+        ));
+        assert!(!apparatus_ids_match(
+            "apparatus:catalog:press-001",
+            "apparatus:catalog:press-002"
+        ));
+        assert!(!apparatus_ids_match(
+            "apparatus:press-001",
+            "apparatus:catalog:press-001"
+        ));
+        assert!(!apparatus_ids_match(
+            "8 ta rangli pechat",
+            "apparatus:catalog:press-001"
+        ));
+        assert!(!apparatus_ids_match(
+            "task:lamination-1",
+            "task:lamination-1"
+        ));
+        assert!(stage_ids_match("task:lamination-1", "task:lamination-1"));
+        assert!(!stage_ids_match("task:", "task:"));
+        assert!(!stage_ids_match("Laminatsiya", "laminatsiya"));
+        assert!(!stage_ids_match("laminatsiya", "laminatsiya"));
+    }
+
+    #[test]
+    fn progress_key_preserves_id_across_display_rename() {
+        let id = canonical_apparatus_id("apparatus:catalog:press-001").unwrap();
+        assert_eq!(
+            canonical_apparatus_key(id.as_str()),
+            "apparatus:catalog:press-001"
+        );
+        assert_eq!(canonical_apparatus_key("8 ta rangli pechat"), "");
+    }
+
+    #[test]
+    fn progress_qr_remains_owned_by_the_batch_identity() {
+        let batch_id = "progress-batch:123:apparatus:catalog:press-001:order-7";
+        let renamed_display_batch_id = batch_id;
+        assert_eq!(
+            crate::core::production_map::progress_qr_payload(batch_id),
+            crate::core::production_map::progress_qr_payload(renamed_display_batch_id)
+        );
+        assert_ne!(
+            crate::core::production_map::progress_qr_payload(batch_id),
+            crate::core::production_map::progress_qr_payload(
+                "progress-batch:123:apparatus:catalog:press-002:order-7"
+            )
+        );
+    }
+}
+
 /// Per-frame Rezka measurements supplied with a queue progress action.
 ///
 /// The field names intentionally match the existing queue-action contract so a
@@ -552,17 +729,21 @@ impl RezkaFrameProgressInput {
         } else {
             base.uom.clone()
         };
-        frame.rezka_bosma_waste = self
-            .rezka_bosma_waste
-            .or_else(|| inherit_global_waste.then_some(base.rezka_bosma_waste).flatten());
+        frame.rezka_bosma_waste = self.rezka_bosma_waste.or_else(|| {
+            inherit_global_waste
+                .then_some(base.rezka_bosma_waste)
+                .flatten()
+        });
         frame.rezka_lamination_waste = self.rezka_lamination_waste.or_else(|| {
             inherit_global_waste
                 .then_some(base.rezka_lamination_waste)
                 .flatten()
         });
-        frame.rezka_edge_waste = self
-            .rezka_edge_waste
-            .or_else(|| inherit_global_waste.then_some(base.rezka_edge_waste).flatten());
+        frame.rezka_edge_waste = self.rezka_edge_waste.or_else(|| {
+            inherit_global_waste
+                .then_some(base.rezka_edge_waste)
+                .flatten()
+        });
         frame.total_waste = self
             .total_waste
             .or_else(|| inherit_global_waste.then_some(base.total_waste).flatten());

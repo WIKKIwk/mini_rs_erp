@@ -260,7 +260,10 @@ async fn profile_get_returns_material_scope_and_capabilities() {
     state
         .warehouses
         .assign_warehouse(WarehouseAssignmentUpsert {
+            assignment_kind: "warehouse".to_string(),
             warehouse: "Kalidor".to_string(),
+            warehouse_name: None,
+            apparatus_id: None,
             principal_role: PrincipalRole::MaterialTaminotchi,
             principal_ref: "material_taminotchi".to_string(),
             display_name: "Material taminotchisi".to_string(),

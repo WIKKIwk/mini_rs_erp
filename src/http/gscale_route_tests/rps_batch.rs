@@ -563,7 +563,10 @@ async fn rps_batch_print_waits_for_receipt_submit_before_success() {
     let elapsed = started_at.elapsed();
     let body = json_body(printed).await;
 
-    assert!(elapsed >= Duration::from_millis(750), "RPS print returned early: {elapsed:?}");
+    assert!(
+        elapsed >= Duration::from_millis(750),
+        "RPS print returned early: {elapsed:?}"
+    );
     assert_eq!(body["ok"], true);
     assert_eq!(body["status"], "printed");
     assert_eq!(body["epc"], "FAST-EPC-1");

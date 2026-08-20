@@ -112,8 +112,7 @@ pub(super) fn routes() -> Router<AppState> {
         )
         .route(
             "/v1/mobile/admin/training/images",
-            any(admin::training_order_image_upload)
-                .layer(DefaultBodyLimit::max(6 * 1024 * 1024)),
+            any(admin::training_order_image_upload).layer(DefaultBodyLimit::max(6 * 1024 * 1024)),
         )
         .route(
             "/v1/mobile/admin/training/images/view",
@@ -420,6 +419,10 @@ pub(super) fn routes() -> Router<AppState> {
             any(admin::apparatus_options),
         )
         .route("/v1/mobile/admin/apparatus", any(admin::apparatus))
+        .route(
+            "/v1/mobile/admin/apparatus/{id}/aasx",
+            any(admin::apparatus_aasx).layer(DefaultBodyLimit::max(admin::MAX_AASX_UPLOAD_BYTES)),
+        )
         .route(
             "/v1/mobile/admin/factory-locations",
             any(admin::factory_locations),

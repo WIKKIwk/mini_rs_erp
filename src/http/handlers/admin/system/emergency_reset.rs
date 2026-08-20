@@ -69,10 +69,7 @@ pub async fn reset_orders(
 async fn verified_order_reset_backup(
     doctor: &crate::core::backup_doctor::BackupDoctor,
     requested_by: String,
-) -> Result<
-    crate::core::admin::models::AdminServerMonitorBackupSnapshot,
-    OrderResetBackupError,
-> {
+) -> Result<crate::core::admin::models::AdminServerMonitorBackupSnapshot, OrderResetBackupError> {
     let job = doctor.start_manual_backup(requested_by)?;
     let deadline = Instant::now() + ORDER_RESET_BACKUP_TIMEOUT;
 
@@ -117,9 +114,7 @@ fn backup_error(error: OrderResetBackupError) -> AdminError {
         ),
         OrderResetBackupError::Backup(
             BackupDoctorError::RuntimeUnavailable | BackupDoctorError::Storage,
-        ) => {
-            server_error("backup_service_failed")
-        }
+        ) => server_error("backup_service_failed"),
         OrderResetBackupError::Backup(
             BackupDoctorError::NotFound
             | BackupDoctorError::NotReady

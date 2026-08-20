@@ -2,6 +2,8 @@ use std::collections::BTreeMap;
 
 use serde::{Deserialize, Serialize};
 
+use crate::core::apparatus_standard::ApparatusId;
+
 use super::types::QueueActionActor;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -16,7 +18,11 @@ pub struct ApparatusWorkingWindow {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ApparatusCapacityProfile {
-    pub apparatus_id: String,
+    /// Canonical catalog identity. Persisted as `canonical_apparatus_id` in
+    /// PostgreSQL; the legacy `apparatus_id` column is only synchronized for
+    /// compatibility.
+    pub apparatus_id: ApparatusId,
+    /// Historical/display snapshot only. Never use this for identity.
     pub apparatus: String,
     #[serde(default = "default_capacity_slots")]
     pub capacity_slots: u16,
@@ -41,23 +47,6 @@ pub struct ApparatusCapacityProfile {
 }
 
 impl ApparatusCapacityProfile {
-    pub fn default_for(apparatus_id: &str, apparatus: &str) -> Self {
-        Self {
-            apparatus_id: apparatus_id.trim().to_string(),
-            apparatus: apparatus.trim().to_string(),
-            capacity_slots: default_capacity_slots(),
-            setup_minutes: 0,
-            cleanup_minutes: 0,
-            efficiency_percent: default_efficiency_percent(),
-            finite_capacity: default_finite_capacity(),
-            working_windows: Vec::new(),
-            capabilities: Vec::new(),
-            capability_levels: BTreeMap::new(),
-            notes: String::new(),
-            updated_at_unix: 0,
-        }
-    }
-
     pub fn capability_level(&self, code: &str) -> u16 {
         let normalized = normalize_code(code);
         self.capability_levels
@@ -74,16 +63,18 @@ impl ApparatusCapacityProfile {
     }
 
     pub fn supports(&self, requirements: &[ApparatusCapabilityRequirement]) -> bool {
-        requirements.iter().all(|requirement| {
-            self.capability_level(&requirement.code) >= requirement.min_level
-        })
+        requirements
+            .iter()
+            .all(|requirement| self.capability_level(&requirement.code) >= requirement.min_level)
     }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ApparatusDowntime {
     pub id: String,
-    pub apparatus_id: String,
+    /// Canonical catalog identity. The `apparatus` field is a display
+    /// snapshot only.
+    pub apparatus_id: ApparatusId,
     pub apparatus: String,
     pub starts_at_unix: i64,
     pub ends_at_unix: i64,
@@ -143,7 +134,9 @@ pub struct ApparatusScheduleReservation {
     pub reservation_id: String,
     pub idempotency_key: String,
     pub order_id: String,
-    pub apparatus_id: String,
+    /// Canonical catalog identity. The `apparatus` field is a display
+    /// snapshot only.
+    pub apparatus_id: ApparatusId,
     pub apparatus: String,
     pub starts_at_unix: i64,
     pub ends_at_unix: i64,
@@ -165,7 +158,7 @@ pub struct ApparatusScheduleReservation {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ApparatusScheduleCandidate {
-    pub apparatus_id: String,
+    pub apparatus_id: ApparatusId,
     pub apparatus: String,
 }
 
@@ -225,6 +218,10 @@ pub struct ApparatusScheduleCancelRequest {
     pub actor: QueueActionActor,
 }
 
+fn default_active() -> bool {
+    true
+}
+
 fn default_capacity_slots() -> u16 {
     1
 }
@@ -234,10 +231,6 @@ fn default_efficiency_percent() -> u16 {
 }
 
 fn default_finite_capacity() -> bool {
-    true
-}
-
-fn default_active() -> bool {
     true
 }
 

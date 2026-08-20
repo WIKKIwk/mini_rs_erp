@@ -1,3 +1,4 @@
+mod apparatus_resolver;
 mod audit;
 mod capacity;
 mod compile_run;

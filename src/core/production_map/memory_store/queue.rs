@@ -7,11 +7,25 @@ use super::super::progress::{
     completion_request_notification_from_event, json_string_field,
 };
 use super::super::queue_state;
+use super::super::store_port::ApparatusQueuePolicyMap;
+use crate::core::apparatus_standard::ApparatusId;
 
 pub(super) async fn apparatus_queue_states(
     store: &MemoryProductionMapStore,
 ) -> Result<BTreeMap<String, BTreeMap<String, String>>, ProductionMapError> {
-    Ok(store.queue_states.read().await.clone())
+    let queue_states = store.queue_states.read().await;
+    let mut result = BTreeMap::new();
+    for (apparatus, states) in queue_states.iter() {
+        let apparatus = ApparatusId::new(apparatus.trim().to_string())
+            .map_err(|_| ProductionMapError::StoreFailed)?;
+        if result
+            .insert(apparatus.to_string(), states.clone())
+            .is_some()
+        {
+            return Err(ProductionMapError::StoreFailed);
+        }
+    }
+    Ok(result)
 }
 
 pub(super) async fn put_apparatus_queue_states(
@@ -19,23 +33,26 @@ pub(super) async fn put_apparatus_queue_states(
     apparatus: &str,
     states: BTreeMap<String, String>,
 ) -> Result<(), ProductionMapError> {
+    let apparatus = ApparatusId::new(apparatus.trim().to_string())
+        .map_err(|_| ProductionMapError::StoreFailed)?;
     store
         .queue_states
         .write()
         .await
-        .insert(apparatus.trim().to_string(), states);
+        .insert(apparatus.to_string(), states);
     Ok(())
 }
 
 pub(super) async fn apparatus_queue_policies(
     store: &MemoryProductionMapStore,
-) -> Result<BTreeMap<String, ApparatusQueuePolicy>, ProductionMapError> {
+) -> Result<ApparatusQueuePolicyMap, ProductionMapError> {
     Ok(store.queue_policies.read().await.clone())
 }
 
 pub(super) async fn put_apparatus_queue_policy(
     store: &MemoryProductionMapStore,
-    apparatus: &str,
+    apparatus_id: &ApparatusId,
+    _apparatus_display: &str,
     policy: ApparatusQueuePolicy,
     _actor: &QueueActionActor,
 ) -> Result<(), ProductionMapError> {
@@ -43,7 +60,7 @@ pub(super) async fn put_apparatus_queue_policy(
         .queue_policies
         .write()
         .await
-        .insert(apparatus.trim().to_string(), policy);
+        .insert(apparatus_id.clone(), policy);
     Ok(())
 }
 
@@ -51,7 +68,18 @@ pub(super) async fn append_apparatus_queue_action_event(
     store: &MemoryProductionMapStore,
     event: ApparatusQueueActionEvent,
 ) -> Result<(), ProductionMapError> {
+    validate_queue_event(&event)?;
     store.queue_events.write().await.push(event);
+    Ok(())
+}
+
+fn validate_queue_event(event: &ApparatusQueueActionEvent) -> Result<(), ProductionMapError> {
+    ApparatusId::new(event.apparatus.trim().to_string())
+        .map_err(|_| ProductionMapError::StoreFailed)?;
+    for apparatus in &event.assigned_apparatus {
+        ApparatusId::new(apparatus.trim().to_string())
+            .map_err(|_| ProductionMapError::StoreFailed)?;
+    }
     Ok(())
 }
 
@@ -97,15 +125,14 @@ pub(super) async fn completed_queue_orders_for_actor(
             // explicitly resumed/unfrozen.
             queue_state::ApparatusQueueAction::Freeze => continue,
             queue_state::ApparatusQueueAction::Complete
-                if event.to_state == queue_state::ApparatusQueueOrderState::Completed => {
+                if event.to_state == queue_state::ApparatusQueueOrderState::Completed =>
+            {
                 CompletedQueueOrderStatus::Completed
             }
             queue_state::ApparatusQueueAction::Pause
             | queue_state::ApparatusQueueAction::DetachRoll
             | queue_state::ApparatusQueueAction::RollComplete
-            | queue_state::ApparatusQueueAction::Complete => {
-                CompletedQueueOrderStatus::InProgress
-            }
+            | queue_state::ApparatusQueueAction::Complete => CompletedQueueOrderStatus::InProgress,
             _ => continue,
         };
         completed.push(CompletedQueueOrder {
@@ -200,11 +227,23 @@ pub(super) async fn resolve_completion_request_decision(
         return Err(ProductionMapError::MissingId);
     }
     if let Some(resolution) = state_resolution {
+        let apparatus = ApparatusId::new(resolution.apparatus.trim().to_string())
+            .map_err(|_| ProductionMapError::StoreFailed)?;
+        validate_queue_event(&resolution.event)?;
+        let event_apparatus = ApparatusId::new(resolution.event.apparatus.trim().to_string())
+            .map_err(|_| ProductionMapError::StoreFailed)?;
+        if event_apparatus != apparatus {
+            return Err(ProductionMapError::StoreFailed);
+        }
+        if let Some(session) = resolution.session.as_ref() {
+            ApparatusId::new(session.apparatus.trim().to_string())
+                .map_err(|_| ProductionMapError::StoreFailed)?;
+        }
         store
             .queue_states
             .write()
             .await
-            .insert(resolution.apparatus.trim().to_string(), resolution.states);
+            .insert(apparatus.to_string(), resolution.states);
         store.queue_events.write().await.push(resolution.event);
         if let Some(session) = resolution.session {
             store

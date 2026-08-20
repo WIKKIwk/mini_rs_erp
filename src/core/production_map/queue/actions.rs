@@ -2,7 +2,7 @@ use std::collections::BTreeMap;
 
 use super::super::ProductionMapError;
 use super::sequence::first_actionable_order_id;
-use super::state::{next_queue_state, ApparatusQueueAction, ApparatusQueueOrderState};
+use super::state::{ApparatusQueueAction, ApparatusQueueOrderState, next_queue_state};
 
 pub fn apply_queue_action(
     sequence: &[String],

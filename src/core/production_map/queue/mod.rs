@@ -1,6 +1,6 @@
 mod actions;
-mod service;
 mod sequence;
+mod service;
 mod state;
 
 pub use actions::{apply_queue_action, apply_unordered_queue_action};

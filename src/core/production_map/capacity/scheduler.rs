@@ -1,9 +1,7 @@
-use crate::core::apparatus_groups::{apparatus_id_for_name, apparatus_master_data_for_name};
-
-use super::apparatus::move_allowed;
 use super::capacity::*;
 use super::types::*;
 use super::*;
+use crate::core::apparatus_standard::ApparatusId;
 
 const MAX_SCHEDULE_HORIZON_MINUTES: u64 = 366 * 24 * 60;
 
@@ -19,75 +17,48 @@ pub(super) struct ScheduledCandidate {
 
 pub(super) fn candidate_allowed_for_order(
     map: &ProductionMapDefinition,
-    source: &str,
-    candidate: &str,
+    source_id: &ApparatusId,
+    candidate_id: &ApparatusId,
 ) -> bool {
-    let source = source.trim();
-    if source.is_empty() {
-        return false;
-    }
     let source_is_in_route = map
         .nodes
         .iter()
         .filter(|node| node.kind == ProductionMapNodeKind::Apparatus)
-        .map(|node| node.title.trim())
-        .filter(|title| !title.is_empty())
-        .any(|title| queue_state::apparatus_titles_match(title, source));
-    source_is_in_route
-        && (queue_state::apparatus_titles_match(source, candidate)
-            || move_allowed(map, source, candidate))
+        .any(|node| canonical_apparatus_id(&node.apparatus_id).is_some_and(|id| id == *source_id));
+    let candidate_is_in_route = map
+        .nodes
+        .iter()
+        .filter(|node| node.kind == ProductionMapNodeKind::Apparatus)
+        .any(|node| {
+            canonical_apparatus_id(&node.apparatus_id).is_some_and(|id| id == *candidate_id)
+        });
+    source_is_in_route && candidate_is_in_route
 }
 
-pub(super) fn same_apparatus_identity(
-    left_id: &str,
-    left_name: &str,
-    right_id: &str,
-    right_name: &str,
-) -> bool {
-    let left_id = left_id.trim();
-    let right_id = right_id.trim();
-    if !left_id.is_empty() && !right_id.is_empty() {
-        return left_id.eq_ignore_ascii_case(right_id);
-    }
-    queue_state::apparatus_titles_match(left_name, right_name)
+pub(super) fn same_apparatus_id(left_id: &ApparatusId, right_id: &ApparatusId) -> bool {
+    left_id == right_id
 }
 
+pub(super) fn canonical_apparatus_id(value: &str) -> Option<ApparatusId> {
+    ApparatusId::new(value.trim().to_string()).ok()
+}
+
+#[cfg(test)]
 pub(super) fn profile_for_apparatus(
     profiles: &[ApparatusCapacityProfile],
-    apparatus_id: &str,
-    apparatus: &str,
-) -> ApparatusCapacityProfile {
-    if let Some(profile) = profiles.iter().find(|profile| {
-        same_apparatus_identity(
-            &profile.apparatus_id,
-            &profile.apparatus,
-            apparatus_id,
-            apparatus,
-        )
-    }) {
-        return profile.clone();
-    }
-    let mut profile = ApparatusCapacityProfile::default_for(apparatus_id, apparatus);
-    let inferred = apparatus_master_data_for_name(apparatus);
-    profile.capabilities = inferred.capabilities.clone();
-    profile.capability_levels = inferred
-        .capability_profiles
+    apparatus_id: &ApparatusId,
+) -> Option<ApparatusCapacityProfile> {
+    profiles
         .iter()
-        .filter(|capability| capability.is_valid_at(unix_seconds()))
-        .map(|capability| (capability.code.clone(), capability.level))
-        .collect();
-    for capability in inferred.capabilities {
-        profile.capability_levels.entry(capability).or_insert(1);
-    }
-    profile
+        .find(|profile| same_apparatus_id(&profile.apparatus_id, apparatus_id))
+        .cloned()
 }
 
 pub(super) fn effective_duration_minutes(
     profile: &ApparatusCapacityProfile,
     duration_minutes: u32,
 ) -> Result<u32, ProductionMapError> {
-    let run = (u64::from(duration_minutes) * 100 + u64::from(profile.efficiency_percent) - 1)
-        / u64::from(profile.efficiency_percent);
+    let run = (u64::from(duration_minutes) * 100).div_ceil(u64::from(profile.efficiency_percent));
     let total = run
         .saturating_add(u64::from(profile.setup_minutes))
         .saturating_add(u64::from(profile.cleanup_minutes));
@@ -103,13 +74,13 @@ pub(super) fn reservations_with_active_sessions(
         .iter()
         .filter(|session| session.status == OrderRunStatus::Active)
     {
+        let Some(apparatus_id) = canonical_apparatus_id(&session.apparatus) else {
+            continue;
+        };
         if result.iter().any(|reservation| {
             reservation.status == ApparatusScheduleStatus::Active
                 && reservation.order_id.trim() == session.order_id.trim()
-                && queue_state::apparatus_titles_match(
-                    &reservation.apparatus,
-                    &session.apparatus,
-                )
+                && same_apparatus_id(&reservation.apparatus_id, &apparatus_id)
         }) {
             continue;
         }
@@ -117,7 +88,7 @@ pub(super) fn reservations_with_active_sessions(
             reservation_id: format!("active-session:{}", session.session_id.trim()),
             idempotency_key: format!("active-session:{}", session.session_id.trim()),
             order_id: session.order_id.trim().to_string(),
-            apparatus_id: apparatus_id_for_name(&session.apparatus),
+            apparatus_id,
             apparatus: session.apparatus.trim().to_string(),
             starts_at_unix: session.started_at_unix.max(60),
             ends_at_unix: i64::MAX,
@@ -142,8 +113,7 @@ pub(super) fn reservations_with_active_sessions(
 pub(super) fn find_schedule_slot(
     profile: &ApparatusCapacityProfile,
     input: &ApparatusScheduleRequest,
-    apparatus_id: &str,
-    apparatus: &str,
+    apparatus_id: &ApparatusId,
     duration_minutes: u32,
     downtimes: &[ApparatusDowntime],
     reservations: &[ApparatusScheduleReservation],
@@ -164,12 +134,7 @@ pub(super) fn find_schedule_slot(
         }
         if downtimes.iter().any(|downtime| {
             downtime.active
-                && same_apparatus_identity(
-                    &downtime.apparatus_id,
-                    &downtime.apparatus,
-                    apparatus_id,
-                    apparatus,
-                )
+                && same_apparatus_id(&downtime.apparatus_id, apparatus_id)
                 && intervals_overlap(cursor, end, downtime.starts_at_unix, downtime.ends_at_unix)
         }) {
             cursor += 60;
@@ -179,12 +144,7 @@ pub(super) fn find_schedule_slot(
             .iter()
             .filter(|reservation| {
                 reservation.status.reserves_capacity()
-                    && same_apparatus_identity(
-                        &reservation.apparatus_id,
-                        &reservation.apparatus,
-                        apparatus_id,
-                        apparatus,
-                    )
+                    && same_apparatus_id(&reservation.apparatus_id, apparatus_id)
                     && intervals_overlap(
                         cursor,
                         end,
@@ -234,40 +194,153 @@ fn intervals_overlap(left_start: i64, left_end: i64, right_start: i64, right_end
     left_start < right_end && right_start < left_end
 }
 
-fn unix_seconds() -> i64 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|duration| duration.as_secs() as i64)
-        .unwrap_or_default()
-}
-
 #[cfg(test)]
 mod identity_tests {
-    use super::same_apparatus_identity;
+    use std::collections::BTreeMap;
 
-    #[test]
-    fn nonempty_ids_are_authoritative_over_a_mismatched_name() {
-        assert!(same_apparatus_identity(
-            "apparatus:a",
-            "Apparatus B",
-            "apparatus:a",
-            "Apparatus A",
-        ));
-        assert!(!same_apparatus_identity(
-            "apparatus:a",
-            "Apparatus B",
-            "apparatus:b",
-            "Apparatus B",
-        ));
+    use super::{profile_for_apparatus, same_apparatus_id};
+    use crate::core::apparatus_standard::ApparatusId;
+    use crate::core::production_map::{
+        ApparatusCapacityProfile, ApparatusDowntime, ApparatusScheduleRequest,
+        ApparatusScheduleReservation, ApparatusScheduleStatus, ApparatusWorkingWindow,
+        QueueActionActor,
+    };
+
+    fn apparatus_id(value: &str) -> ApparatusId {
+        ApparatusId::new(value).expect("canonical apparatus id")
     }
 
     #[test]
-    fn name_fallback_remains_available_for_legacy_missing_ids() {
-        assert!(same_apparatus_identity(
-            "",
-            "Laminatsiya 1",
-            "apparatus:default:laminatsiya_1",
-            "Laminatsiya 1",
-        ));
+    fn canonical_ids_are_authoritative_over_display_text() {
+        let left = apparatus_id("apparatus:catalog:a");
+        let right = apparatus_id("apparatus:catalog:a");
+        assert!(same_apparatus_id(&left, &right));
+        let other = apparatus_id("apparatus:catalog:b");
+        assert!(!same_apparatus_id(&left, &other));
+    }
+
+    #[test]
+    fn missing_ids_never_match_by_display_name() {
+        assert!(super::canonical_apparatus_id("").is_none());
+        assert!(super::canonical_apparatus_id("Laminatsiya 1").is_none());
+    }
+
+    #[test]
+    fn capacity_profile_lookup_requires_the_canonical_id() {
+        let profile = ApparatusCapacityProfile {
+            apparatus_id: apparatus_id("apparatus:catalog:flexo-001"),
+            apparatus: "Renamed Flexo".to_string(),
+            capacity_slots: 2,
+            setup_minutes: 3,
+            cleanup_minutes: 4,
+            efficiency_percent: 100,
+            finite_capacity: true,
+            working_windows: vec![ApparatusWorkingWindow {
+                weekday: 1,
+                start_minute: 0,
+                end_minute: 1_440,
+            }],
+            capabilities: vec!["flexo".to_string()],
+            capability_levels: BTreeMap::new(),
+            notes: String::new(),
+            updated_at_unix: 1,
+        };
+        assert!(
+            profile_for_apparatus(
+                std::slice::from_ref(&profile),
+                &apparatus_id("apparatus:catalog:flexo-001")
+            )
+            .is_some()
+        );
+        assert!(
+            profile_for_apparatus(&[profile], &apparatus_id("apparatus:catalog:renamed-flexo"))
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn downtime_and_reservation_matching_ignores_display_snapshots() {
+        let profile = ApparatusCapacityProfile {
+            apparatus_id: apparatus_id("apparatus:catalog:flexo-001"),
+            apparatus: "Current Flexo name".to_string(),
+            capacity_slots: 1,
+            setup_minutes: 0,
+            cleanup_minutes: 0,
+            efficiency_percent: 100,
+            finite_capacity: true,
+            working_windows: Vec::new(),
+            capabilities: Vec::new(),
+            capability_levels: BTreeMap::new(),
+            notes: String::new(),
+            updated_at_unix: 1,
+        };
+        let input = ApparatusScheduleRequest {
+            order_id: "order-1".to_string(),
+            apparatus_id: profile.apparatus_id.as_str().to_string(),
+            apparatus: "Renamed Flexo".to_string(),
+            earliest_start_unix: 1_700_000_040,
+            latest_end_unix: None,
+            duration_minutes: 10,
+            priority: 0,
+            source: String::new(),
+            reason: String::new(),
+            idempotency_key: "key-1".to_string(),
+            capability_requirements: Vec::new(),
+            candidate_apparatuses: Vec::new(),
+            actor: QueueActionActor {
+                role: String::new(),
+                ref_: String::new(),
+                display_name: String::new(),
+            },
+        };
+        let downtime = ApparatusDowntime {
+            id: "downtime-1".to_string(),
+            apparatus_id: profile.apparatus_id.clone(),
+            apparatus: "Historical Flexo name".to_string(),
+            starts_at_unix: input.earliest_start_unix,
+            ends_at_unix: input.earliest_start_unix + 600,
+            reason: "maintenance".to_string(),
+            active: true,
+            actor: input.actor.clone(),
+            created_at_unix: input.earliest_start_unix,
+        };
+        let reservation = ApparatusScheduleReservation {
+            reservation_id: "reservation-1".to_string(),
+            idempotency_key: "reservation-key-1".to_string(),
+            order_id: "other-order".to_string(),
+            apparatus_id: apparatus_id("apparatus:catalog:other-001"),
+            apparatus: "Renamed Flexo".to_string(),
+            starts_at_unix: input.earliest_start_unix,
+            ends_at_unix: input.earliest_start_unix + 600,
+            requested_duration_minutes: 10,
+            reserved_duration_minutes: 10,
+            status: ApparatusScheduleStatus::Planned,
+            priority: 0,
+            source: String::new(),
+            reason: String::new(),
+            capability_requirements: Vec::new(),
+            actor: input.actor.clone(),
+            created_at_unix: input.earliest_start_unix,
+        };
+        let delayed = super::find_schedule_slot(
+            &profile,
+            &input,
+            &profile.apparatus_id,
+            10,
+            &[downtime],
+            &[],
+        )
+        .expect("slot after downtime");
+        assert_eq!(delayed.0, input.earliest_start_unix + 600);
+        let not_delayed_by_same_name = super::find_schedule_slot(
+            &profile,
+            &input,
+            &profile.apparatus_id,
+            10,
+            &[],
+            &[reservation],
+        )
+        .expect("different ID is not a conflict");
+        assert_eq!(not_delayed_by_same_name.0, input.earliest_start_unix);
     }
 }

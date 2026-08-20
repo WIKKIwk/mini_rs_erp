@@ -180,8 +180,16 @@ async fn duplicate_count_creates_one_unique_epc_and_receipt_per_product() {
     wait_for_event_count(&events, "submit:MAT-STE-001", 5).await;
     let events = events.lock().unwrap();
     for index in 1..=5 {
-        assert!(events.iter().any(|event| event == &format!("print:EPC-DUP-{index}:1")));
-        assert!(events.iter().any(|event| event == &format!("create:EPC-DUP-{index}:1.720")));
+        assert!(
+            events
+                .iter()
+                .any(|event| event == &format!("print:EPC-DUP-{index}:1"))
+        );
+        assert!(
+            events
+                .iter()
+                .any(|event| event == &format!("create:EPC-DUP-{index}:1.720"))
+        );
     }
     assert_eq!(
         events
@@ -207,9 +215,13 @@ async fn forwards_material_product_label_kind_to_driver() {
         .await
         .expect("material product print");
 
-    assert!(events.lock().unwrap().iter().any(|event| {
-        event == "print:material_product:EPC-LABEL::1"
-    }));
+    assert!(
+        events
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|event| { event == "print:material_product:EPC-LABEL::1" })
+    );
 }
 
 #[tokio::test]
@@ -308,8 +320,8 @@ async fn material_receipt_client_print_records_only_after_usb_confirmation() {
 
 #[test]
 fn client_print_rejects_multiple_products_with_one_prepared_epc() {
-    let service = GscaleService::new()
-        .with_epc_source(Arc::new(QueueEpc::new(["303132333435363738394142"])));
+    let service =
+        GscaleService::new().with_epc_source(Arc::new(QueueEpc::new(["303132333435363738394142"])));
     let mut input = request();
     input.print_count = 2;
 
@@ -336,11 +348,7 @@ async fn wait_for_event(events: &Arc<Mutex<Vec<String>>>, needle: &str) {
     );
 }
 
-async fn wait_for_event_count(
-    events: &Arc<Mutex<Vec<String>>>,
-    needle: &str,
-    expected: usize,
-) {
+async fn wait_for_event_count(events: &Arc<Mutex<Vec<String>>>, needle: &str, expected: usize) {
     for _ in 0..50 {
         if events
             .lock()

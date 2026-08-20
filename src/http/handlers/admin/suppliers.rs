@@ -78,13 +78,26 @@ pub async fn suppliers(
                 .admin
                 .suppliers(100)
                 .await
-                .map_err(|_| server_error("suppliers fetch failed"))?;
-            let customers = state.admin.customers(500).await.unwrap_or_default();
+                .map_err(|error| {
+                    tracing::error!(%error, "suppliers dependency failed at admin boundary");
+                    server_error("suppliers fetch failed")
+                })?;
+            let customers = state
+                .admin
+                .customers(500)
+                .await
+                .map_err(|error| {
+                    tracing::error!(%error, "customers dependency failed at admin boundary");
+                    server_error("customers fetch failed")
+                })?;
             let mut settings = state
                 .admin
                 .settings()
                 .await
-                .map_err(|_| server_error("suppliers fetch failed"))?;
+                .map_err(|error| {
+                    tracing::error!(%error, "admin settings dependency failed at admin boundary");
+                    server_error("suppliers fetch failed")
+                })?;
             settings.werka_avatar_url = with_admin_profile_avatar_proxy(
                 &headers,
                 settings.werka_avatar_url,

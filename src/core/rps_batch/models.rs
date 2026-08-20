@@ -252,8 +252,14 @@ mod tests {
         assert!(is_valid_batch_code(&generated));
 
         let legacy = legacy_batch_code("material_taminotchi:M-1", "batch-1");
-        assert_eq!(legacy, legacy_batch_code("material_taminotchi:M-1", "batch-1"));
+        assert_eq!(
+            legacy,
+            legacy_batch_code("material_taminotchi:M-1", "batch-1")
+        );
         assert!(is_valid_batch_code(&legacy));
-        assert_ne!(legacy, legacy_batch_code("material_taminotchi:M-1", "batch-2"));
+        assert_ne!(
+            legacy,
+            legacy_batch_code("material_taminotchi:M-1", "batch-2")
+        );
     }
 }

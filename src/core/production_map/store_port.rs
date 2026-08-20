@@ -2,6 +2,7 @@ use std::collections::BTreeMap;
 
 use async_trait::async_trait;
 
+use crate::core::apparatus_standard::ApparatusId;
 use crate::core::qolip::QolipCheckout;
 use crate::core::returned_paint::ReturnedPaintRequest;
 
@@ -13,7 +14,7 @@ pub type StoreResult<T> = Result<T, ProductionMapError>;
 pub type ApparatusSequenceMap = BTreeMap<String, Vec<String>>;
 pub type QueueStateMap = BTreeMap<String, String>;
 pub type ApparatusQueueStateMap = BTreeMap<String, QueueStateMap>;
-pub type ApparatusQueuePolicyMap = BTreeMap<String, ApparatusQueuePolicy>;
+pub type ApparatusQueuePolicyMap = BTreeMap<ApparatusId, ApparatusQueuePolicy>;
 pub type OrderLogMap = BTreeMap<String, Vec<ProductionOrderLogEntry>>;
 pub type OrderControlMap = BTreeMap<String, OrderControlRecord>;
 
@@ -61,6 +62,11 @@ pub struct QueueActionProgressWriteResult {
 #[derive(Debug, Clone)]
 pub struct QueueActionProgressWrite {
     pub apparatus: String,
+    /// An alternative-assignment map replacement that must commit with the
+    /// queue/session/progress/material write. PostgreSQL applies this through
+    /// the same database transaction; test stores apply it at the same store
+    /// boundary rather than exposing a caller-managed rollback.
+    pub map_update: Option<ProductionMapDefinition>,
     pub states: QueueStateMap,
     /// Persisted sequence replacements that belong to the same queue write.
     /// PostgreSQL applies these in the same transaction as the queue state,
@@ -91,6 +97,72 @@ pub struct ProductionMapApparatusTransferWrite {
     pub progress_batch: OrderProgressBatch,
     pub progress_batch_updates: Vec<OrderProgressBatch>,
     pub raw_material_assignments: Vec<RawMaterialAssignment>,
+}
+
+pub(crate) fn validate_queue_progress_write(write: &QueueActionProgressWrite) -> StoreResult<()> {
+    require_live_apparatus(&write.apparatus)?;
+    require_queue_event_apparatus(&write.event)?;
+    for apparatus in write.sequence_updates.keys() {
+        require_live_apparatus(apparatus)?;
+    }
+    if let Some(session) = &write.session {
+        require_live_apparatus(&session.apparatus)?;
+    }
+    if let Some(event) = &write.progress_event {
+        require_live_apparatus(&event.apparatus)?;
+    }
+    for batch in write
+        .progress_batch
+        .iter()
+        .chain(write.progress_batches.iter())
+        .chain(write.progress_batch_updates.iter())
+    {
+        require_progress_batch_apparatus(batch)?;
+    }
+    if let Some(report) = &write.returned_paint_report {
+        require_live_apparatus(&report.apparatus)?;
+    }
+    if let Some(record) = &write.order_control_update
+        && let Some(request) = &record.freeze_request
+        && !request.target_apparatus.trim().is_empty()
+    {
+        require_live_apparatus(&request.target_apparatus)?;
+    }
+    Ok(())
+}
+
+fn require_live_apparatus(value: &str) -> StoreResult<ApparatusId> {
+    ApparatusId::new(value.trim().to_string()).map_err(|_| ProductionMapError::StoreFailed)
+}
+
+fn require_queue_event_apparatus(event: &ApparatusQueueActionEvent) -> StoreResult<()> {
+    require_live_apparatus(&event.apparatus)?;
+    for apparatus in &event.assigned_apparatus {
+        require_live_apparatus(apparatus)?;
+    }
+    Ok(())
+}
+
+fn require_progress_batch_apparatus(batch: &OrderProgressBatch) -> StoreResult<()> {
+    require_live_apparatus(&batch.apparatus)?;
+    if !batch.current_apparatus_key.trim().is_empty() {
+        require_live_apparatus(&batch.current_apparatus_key)?;
+    }
+    for apparatus in [
+        batch.current_apparatus.as_str(),
+        batch.next_apparatus.as_str(),
+        batch.used_by_apparatus.as_str(),
+        batch.processed_by_apparatus.as_str(),
+    ] {
+        if !apparatus.trim().is_empty() && !is_warehouse_processing_marker(apparatus) {
+            require_live_apparatus(apparatus)?;
+        }
+    }
+    Ok(())
+}
+
+fn is_warehouse_processing_marker(value: &str) -> bool {
+    value.trim().to_ascii_lowercase().starts_with("warehouse:")
 }
 
 #[async_trait]
@@ -140,18 +212,11 @@ pub trait ProductionMapStorePort: Send + Sync {
     // Finite capacity, working calendars, downtime, and reservations.
     async fn resolve_apparatus_identity(
         &self,
-        apparatus_id: &str,
-        apparatus: &str,
+        _apparatus_id: &ApparatusId,
     ) -> StoreResult<Option<ApparatusScheduleCandidate>> {
-        let apparatus_id = apparatus_id.trim();
-        let apparatus = apparatus.trim();
-        if apparatus_id.is_empty() && apparatus.is_empty() {
-            return Ok(None);
-        }
-        Ok(Some(ApparatusScheduleCandidate {
-            apparatus_id: apparatus_id.to_string(),
-            apparatus: apparatus.to_string(),
-        }))
+        // A store without an explicit canonical catalog implementation must
+        // not manufacture an identity from a runtime string or snapshot.
+        Ok(None)
     }
     async fn apparatus_capacity_profiles(&self) -> StoreResult<Vec<ApparatusCapacityProfile>> {
         Ok(Vec::new())
@@ -166,7 +231,7 @@ pub trait ProductionMapStorePort: Send + Sync {
         Ok(Vec::new())
     }
     async fn put_apparatus_downtime(&self, _downtime: ApparatusDowntime) -> StoreResult<()> {
-        Ok(())
+        Err(ProductionMapError::StoreFailed)
     }
     async fn apparatus_schedule_reservations(
         &self,
@@ -196,7 +261,7 @@ pub trait ProductionMapStorePort: Send + Sync {
     async fn update_apparatus_schedule_reservation_status(
         &self,
         _order_id: &str,
-        _apparatus: &str,
+        _apparatus_id: &ApparatusId,
         _status: ApparatusScheduleStatus,
         _actor: &QueueActionActor,
     ) -> StoreResult<()> {
@@ -213,7 +278,8 @@ pub trait ProductionMapStorePort: Send + Sync {
     async fn apparatus_queue_policies(&self) -> StoreResult<ApparatusQueuePolicyMap>;
     async fn put_apparatus_queue_policy(
         &self,
-        apparatus: &str,
+        apparatus_id: &ApparatusId,
+        apparatus_display: &str,
         policy: ApparatusQueuePolicy,
         actor: &QueueActionActor,
     ) -> StoreResult<()>;
@@ -505,6 +571,10 @@ pub trait ProductionMapStorePort: Send + Sync {
         &self,
         write: QueueActionProgressWrite,
     ) -> StoreResult<QueueActionProgressWriteResult> {
+        validate_queue_progress_write(&write)?;
+        if let Some(map) = write.map_update.clone() {
+            self.put_map(map).await?;
+        }
         let schedule_reservation_status = write.schedule_reservation_status;
         let sequence_updates = write.sequence_updates;
         let event_order_id = write.event.order_id.clone();
@@ -538,9 +608,11 @@ pub trait ProductionMapStorePort: Send + Sync {
             self.put_order_control_state(record).await?;
         }
         if let Some(status) = schedule_reservation_status {
+            let event_apparatus_id = ApparatusId::new(event_apparatus.trim().to_string())
+                .map_err(|_| ProductionMapError::ScheduleInputInvalid)?;
             self.update_apparatus_schedule_reservation_status(
                 &event_order_id,
-                &event_apparatus,
+                &event_apparatus_id,
                 status,
                 &event_actor,
             )
@@ -570,4 +642,120 @@ pub trait ProductionMapStorePort: Send + Sync {
         order_id: &str,
         barcode: &str,
     ) -> StoreResult<Option<RawMaterialAssignment>>;
+}
+
+#[cfg(test)]
+mod tests {
+    use async_trait::async_trait;
+
+    use super::*;
+
+    struct DefaultDowntimeStore;
+
+    #[async_trait]
+    impl ProductionMapStorePort for DefaultDowntimeStore {
+        async fn maps(&self) -> StoreResult<Vec<ProductionMapDefinition>> {
+            unimplemented!()
+        }
+
+        async fn put_map(&self, _map: ProductionMapDefinition) -> StoreResult<()> {
+            unimplemented!()
+        }
+
+        async fn put_maps_batch(&self, _maps: &[ProductionMapDefinition]) -> StoreResult<()> {
+            unimplemented!()
+        }
+
+        async fn delete_map(&self, _map_id: &str) -> StoreResult<()> {
+            unimplemented!()
+        }
+
+        async fn apparatus_sequences(&self) -> StoreResult<ApparatusSequenceMap> {
+            unimplemented!()
+        }
+
+        async fn put_apparatus_sequence(
+            &self,
+            _apparatus: &str,
+            _order_ids: Vec<String>,
+        ) -> StoreResult<()> {
+            unimplemented!()
+        }
+
+        async fn apparatus_queue_states(&self) -> StoreResult<ApparatusQueueStateMap> {
+            unimplemented!()
+        }
+
+        async fn put_apparatus_queue_states(
+            &self,
+            _apparatus: &str,
+            _states: QueueStateMap,
+        ) -> StoreResult<()> {
+            unimplemented!()
+        }
+
+        async fn apparatus_queue_policies(&self) -> StoreResult<ApparatusQueuePolicyMap> {
+            unimplemented!()
+        }
+
+        async fn put_apparatus_queue_policy(
+            &self,
+            _apparatus_id: &ApparatusId,
+            _apparatus_display: &str,
+            _policy: ApparatusQueuePolicy,
+            _actor: &QueueActionActor,
+        ) -> StoreResult<()> {
+            unimplemented!()
+        }
+
+        async fn apparatus_material_rules(&self) -> StoreResult<Vec<ApparatusMaterialRule>> {
+            unimplemented!()
+        }
+
+        async fn put_apparatus_material_rule(
+            &self,
+            _rule: ApparatusMaterialRule,
+        ) -> StoreResult<()> {
+            unimplemented!()
+        }
+
+        async fn raw_material_assignments(&self) -> StoreResult<Vec<RawMaterialAssignment>> {
+            unimplemented!()
+        }
+
+        async fn put_raw_material_assignment(
+            &self,
+            _assignment: RawMaterialAssignment,
+        ) -> StoreResult<()> {
+            unimplemented!()
+        }
+
+        async fn delete_raw_material_assignment(
+            &self,
+            _order_id: &str,
+            _barcode: &str,
+        ) -> StoreResult<Option<RawMaterialAssignment>> {
+            unimplemented!()
+        }
+    }
+
+    #[tokio::test]
+    async fn default_downtime_write_fails_closed() {
+        let downtime = ApparatusDowntime {
+            id: "downtime-1".to_string(),
+            apparatus_id: ApparatusId::new("apparatus:catalog:flexo-001").unwrap(),
+            apparatus: "Flexo pechat".to_string(),
+            starts_at_unix: 1,
+            ends_at_unix: 2,
+            reason: "maintenance".to_string(),
+            active: true,
+            actor: QueueActionActor::default(),
+            created_at_unix: 1,
+        };
+
+        assert_eq!(
+            DefaultDowntimeStore.put_apparatus_downtime(downtime).await,
+            Err(ProductionMapError::StoreFailed)
+        );
+    }
 }

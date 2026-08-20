@@ -2,19 +2,25 @@ use std::collections::BTreeMap;
 use std::sync::Arc;
 
 use sqlx::postgres::PgConnectOptions;
+use sqlx::PgPool;
 
+use crate::core::apparatus_groups::ApparatusGroupService;
+use crate::core::apparatus_standard::ApparatusId;
 use crate::core::production_map::{
     ApparatusCapacityProfile, ApparatusDowntime, ApparatusScheduleRequest, ApparatusScheduleStatus,
     ProductionMapError, ProductionMapService, ProductionMapStorePort, QueueActionActor,
 };
 use crate::db::postgres::{apply_foundation_migration, apply_postgres_migrations_through};
+use crate::db::postgres_apparatus_group::PostgresApparatusGroupStore;
 use crate::db::postgres_production_map::PostgresProductionMapStore;
 
-const LAMINATION_1_ID: &str = "apparatus:default:laminatsiya_1";
+const LAMINATION_1_ID: &str = "apparatus:default:asset-007";
 const LAMINATION_1_NAME: &str = "Laminatsiya 1";
 const LAMINATION_2_NAME: &str = "Laminatsiya 2";
-const FLEXO_ID: &str = "apparatus:default:flexo_pechat";
+const FLEXO_ID: &str = "apparatus:default:asset-005";
 const FLEXO_NAME: &str = "Flexo pechat";
+const LEGACY_LAMINATION_1_ID: &str = "apparatus:default:laminatsiya_1";
+const LEGACY_LAMINATION_2_ID: &str = "apparatus:default:laminatsiya_2";
 
 #[tokio::test]
 #[ignore = "requires local PostgreSQL and creates/drops mini_rs_erp_test_apparatus_identity"]
@@ -104,6 +110,8 @@ async fn postgres_capacity_writes_enforce_canonical_apparatus_identity_without_b
         .expect("identity migration preserves legacy rows");
     let store = Arc::new(PostgresProductionMapStore::new(pool.clone()));
     let service = ProductionMapService::new(store.clone());
+    let apparatus_groups =
+        ApparatusGroupService::new(Arc::new(PostgresApparatusGroupStore::new(pool.clone())));
 
     let snapshot = service
         .apparatus_capacity_snapshot()
@@ -113,26 +121,29 @@ async fn postgres_capacity_writes_enforce_canonical_apparatus_identity_without_b
     let legacy_lamination_profile = snapshot
         .profiles
         .iter()
-        .find(|profile| profile.apparatus_id == LAMINATION_1_ID)
+        .find(|profile| profile.apparatus_id.as_str() == LAMINATION_1_ID)
         .expect("canonicalized lamination profile");
     assert_eq!(legacy_lamination_profile.apparatus, LAMINATION_1_NAME);
     let legacy_flexo_profile = snapshot
         .profiles
         .iter()
-        .find(|profile| profile.apparatus_id == FLEXO_ID)
+        .find(|profile| profile.apparatus_id.as_str() == FLEXO_ID)
         .expect("canonicalized legacy flexo profile");
     assert_eq!(legacy_flexo_profile.apparatus, FLEXO_NAME);
     assert_eq!(snapshot.downtimes.len(), 1);
-    assert_eq!(snapshot.downtimes[0].apparatus_id, LAMINATION_1_ID);
+    assert_eq!(snapshot.downtimes[0].apparatus_id.as_str(), LAMINATION_1_ID);
     assert_eq!(snapshot.downtimes[0].apparatus, LAMINATION_1_NAME);
     assert_eq!(snapshot.reservations.len(), 1);
-    assert_eq!(snapshot.reservations[0].apparatus_id, LAMINATION_1_ID);
+    assert_eq!(
+        snapshot.reservations[0].apparatus_id.as_str(),
+        LAMINATION_1_ID
+    );
     assert_eq!(snapshot.reservations[0].apparatus, LAMINATION_1_NAME);
 
     store
         .update_apparatus_schedule_reservation_status(
             "legacy-identity-order",
-            LAMINATION_2_NAME,
+            &ApparatusId::new(FLEXO_ID.to_string()).expect("flexo id"),
             ApparatusScheduleStatus::Active,
             &actor(),
         )
@@ -149,7 +160,7 @@ async fn postgres_capacity_writes_enforce_canonical_apparatus_identity_without_b
     store
         .update_apparatus_schedule_reservation_status(
             "legacy-identity-order",
-            LAMINATION_1_NAME,
+            &ApparatusId::new(LAMINATION_1_ID.to_string()).expect("lamination id"),
             ApparatusScheduleStatus::Active,
             &actor(),
         )
@@ -165,15 +176,21 @@ async fn postgres_capacity_writes_enforce_canonical_apparatus_identity_without_b
     assert_eq!(status_after_canonical_apparatus, "active");
 
     let saved = service
-        .put_apparatus_capacity_profile(capacity_profile(LAMINATION_1_ID, LAMINATION_1_NAME, 2))
+        .put_apparatus_capacity_profile(
+            capacity_profile(LAMINATION_1_ID, LAMINATION_1_NAME, 2),
+            &apparatus_groups,
+        )
         .await
         .expect("save canonical profile");
-    assert_eq!(saved.apparatus_id, LAMINATION_1_ID);
+    assert_eq!(saved.apparatus_id.as_str(), LAMINATION_1_ID);
     assert_eq!(saved.apparatus, LAMINATION_1_NAME);
     assert_eq!(saved.capacity_slots, 2);
 
     let mismatched_profile = service
-        .put_apparatus_capacity_profile(capacity_profile(LAMINATION_1_ID, LAMINATION_2_NAME, 7))
+        .put_apparatus_capacity_profile(
+            capacity_profile(LAMINATION_1_ID, LAMINATION_2_NAME, 7),
+            &apparatus_groups,
+        )
         .await;
     assert_eq!(
         mismatched_profile,
@@ -190,7 +207,10 @@ async fn postgres_capacity_writes_enforce_canonical_apparatus_identity_without_b
     assert_eq!(persisted_profile, (LAMINATION_1_NAME.to_string(), 2));
 
     service
-        .put_apparatus_capacity_profile(capacity_profile(FLEXO_ID, FLEXO_NAME, 4))
+        .put_apparatus_capacity_profile(
+            capacity_profile(FLEXO_ID, FLEXO_NAME, 4),
+            &apparatus_groups,
+        )
         .await
         .expect("replace legacy alias with canonical flexo profile");
     let legacy_flexo_count: i64 = sqlx::query_scalar(
@@ -205,7 +225,7 @@ async fn postgres_capacity_writes_enforce_canonical_apparatus_identity_without_b
     let mismatched_downtime = service
         .put_apparatus_downtime(ApparatusDowntime {
             id: "new-mismatched-downtime".to_string(),
-            apparatus_id: LAMINATION_1_ID.to_string(),
+            apparatus_id: ApparatusId::new(LAMINATION_1_ID).expect("canonical apparatus id"),
             apparatus: LAMINATION_2_NAME.to_string(),
             starts_at_unix: 1_800_000_000,
             ends_at_unix: 1_800_003_600,
@@ -270,11 +290,10 @@ async fn postgres_capacity_writes_enforce_canonical_apparatus_identity_without_b
     .await
     .expect("seed custom apparatus");
     service
-        .put_apparatus_capacity_profile(capacity_profile(
-            "apparatus:custom:stable",
-            "Custom Original",
-            3,
-        ))
+        .put_apparatus_capacity_profile(
+            capacity_profile("apparatus:custom:stable", "Custom Original", 3),
+            &apparatus_groups,
+        )
         .await
         .expect("save custom stable identity");
     sqlx::query(
@@ -312,7 +331,7 @@ fn capacity_profile(
     capacity_slots: u16,
 ) -> ApparatusCapacityProfile {
     ApparatusCapacityProfile {
-        apparatus_id: apparatus_id.to_string(),
+        apparatus_id: ApparatusId::new(apparatus_id.to_string()).expect("canonical apparatus id"),
         apparatus: apparatus.to_string(),
         capacity_slots,
         setup_minutes: 0,
@@ -333,4 +352,949 @@ fn actor() -> QueueActionActor {
         ref_: "apparatus-identity-test".to_string(),
         display_name: "Identity Test".to_string(),
     }
+}
+
+const MIGRATIONS_BEFORE_CANONICAL_CUTOVER: usize = 63;
+const MIGRATIONS_THROUGH_CANONICAL_CUTOVER: usize = 65;
+
+#[tokio::test]
+#[ignore = "requires local PostgreSQL and creates/drops mini_rs_erp_test_canonical_cutover_acceptance"]
+async fn postgres_canonical_migration_acceptance_fixture() {
+    let db_name = "mini_rs_erp_test_canonical_cutover_acceptance";
+    let (admin_url, pool) = create_isolated_test_database(db_name).await;
+
+    apply_postgres_migrations_through(&pool, MIGRATIONS_BEFORE_CANONICAL_CUTOVER)
+        .await
+        .expect("apply migrations immediately before 0064");
+    seed_valid_legacy_cutover_rows(&pool).await;
+
+    apply_postgres_migrations_through(&pool, MIGRATIONS_THROUGH_CANONICAL_CUTOVER)
+        .await
+        .expect("execute 0064 and 0065 through the migration registry");
+
+    let canonical_apparatus_count: i64 =
+        sqlx::query_scalar("SELECT count(*) FROM mini_apparatus WHERE id LIKE 'apparatus:%:%'")
+            .fetch_one(&pool)
+            .await
+            .expect("canonical apparatus count");
+    assert_eq!(canonical_apparatus_count, 10);
+
+    let worker_groups: Vec<(String, String, String)> = sqlx::query_as(
+        "SELECT apparatus, group_code, canonical_apparatus_id
+         FROM mini_worker_groups ORDER BY group_code",
+    )
+    .fetch_all(&pool)
+    .await
+    .expect("canonical worker groups");
+    assert_eq!(
+        worker_groups,
+        vec![
+            (
+                LEGACY_LAMINATION_1_ID.to_string(),
+                "legacy-workers".to_string(),
+                LAMINATION_1_ID.to_string(),
+            ),
+            (
+                LEGACY_LAMINATION_2_ID.to_string(),
+                "prepopulated-authority".to_string(),
+                "apparatus:default:bosma_7".to_string(),
+            ),
+        ]
+    );
+
+    let profile: (String, String, String, i32) = sqlx::query_as(
+        "SELECT apparatus_id, canonical_apparatus_id, apparatus, capacity_slots
+         FROM mini_apparatus_capacity_profiles
+         WHERE canonical_apparatus_id = $1",
+    )
+    .bind(LAMINATION_1_ID)
+    .fetch_one(&pool)
+    .await
+    .expect("canonical capacity profile");
+    assert_eq!(
+        profile,
+        (
+            LAMINATION_1_ID.to_string(),
+            LAMINATION_1_ID.to_string(),
+            LAMINATION_1_NAME.to_string(),
+            3,
+        )
+    );
+
+    let downtime: (String, String, String) = sqlx::query_as(
+        "SELECT apparatus_id, canonical_apparatus_id, apparatus
+         FROM mini_apparatus_downtimes WHERE id = 'migration-legacy-downtime'",
+    )
+    .fetch_one(&pool)
+    .await
+    .expect("canonical downtime");
+    assert_eq!(
+        downtime,
+        (
+            LAMINATION_1_ID.to_string(),
+            LAMINATION_1_ID.to_string(),
+            LAMINATION_1_NAME.to_string(),
+        )
+    );
+
+    let reservation: (String, String, String) = sqlx::query_as(
+        "SELECT apparatus_id, canonical_apparatus_id, apparatus
+         FROM mini_apparatus_schedule_reservations
+         WHERE reservation_id = 'migration-legacy-reservation'",
+    )
+    .fetch_one(&pool)
+    .await
+    .expect("canonical schedule reservation");
+    assert_eq!(
+        reservation,
+        (
+            LAMINATION_1_ID.to_string(),
+            LAMINATION_1_ID.to_string(),
+            LAMINATION_1_NAME.to_string(),
+        )
+    );
+
+    let transfer: (String, String, String, String) = sqlx::query_as(
+        "SELECT from_apparatus, to_apparatus,
+                canonical_from_apparatus_id, canonical_to_apparatus_id
+         FROM mini_apparatus_order_transfers
+         WHERE transfer_id = 'migration-legacy-transfer'",
+    )
+    .fetch_one(&pool)
+    .await
+    .expect("canonical apparatus transfer");
+    assert_eq!(
+        transfer,
+        (
+            LEGACY_LAMINATION_1_ID.to_string(),
+            LEGACY_LAMINATION_2_ID.to_string(),
+            "apparatus:default:bosma_7".to_string(),
+            FLEXO_ID.to_string(),
+        )
+    );
+
+    let freeze_request: (String, String, String) = sqlx::query_as(
+        "SELECT target_apparatus, canonical_target_apparatus_id, status
+         FROM mini_order_freeze_requests
+         WHERE request_id = 'migration-legacy-freeze'",
+    )
+    .fetch_one(&pool)
+    .await
+    .expect("canonical freeze request");
+    assert_eq!(
+        freeze_request,
+        (
+            LEGACY_LAMINATION_1_ID.to_string(),
+            "apparatus:default:bosma_8".to_string(),
+            "pending".to_string(),
+        )
+    );
+
+    let training_queue_state: (String, String, String) = sqlx::query_as(
+        "SELECT apparatus, canonical_apparatus_id, state
+         FROM mini_training_queue_states
+         WHERE order_id = 'training-migration-order'",
+    )
+    .fetch_one(&pool)
+    .await
+    .expect("canonical training queue state");
+    assert_eq!(
+        training_queue_state,
+        (
+            LEGACY_LAMINATION_1_ID.to_string(),
+            LAMINATION_1_ID.to_string(),
+            "paused".to_string(),
+        )
+    );
+
+    let training_queue_event: (String, String, String) = sqlx::query_as(
+        "SELECT apparatus, canonical_apparatus_id, action
+         FROM mini_training_queue_events
+         WHERE event_id = 'migration-training-event'",
+    )
+    .fetch_one(&pool)
+    .await
+    .expect("canonical training queue event");
+    assert_eq!(
+        training_queue_event,
+        (
+            LEGACY_LAMINATION_1_ID.to_string(),
+            LAMINATION_1_ID.to_string(),
+            "pause".to_string(),
+        )
+    );
+
+    let training_progress: (String, String, String, String) = sqlx::query_as(
+        "SELECT apparatus, canonical_apparatus_id,
+                payload_json->>'apparatus', payload_json->>'preserved_marker'
+         FROM mini_training_progress_batches
+         WHERE batch_id = 'migration-training-progress'",
+    )
+    .fetch_one(&pool)
+    .await
+    .expect("canonical training progress batch");
+    assert_eq!(
+        training_progress,
+        (
+            LEGACY_LAMINATION_1_ID.to_string(),
+            LAMINATION_1_ID.to_string(),
+            LAMINATION_1_ID.to_string(),
+            "training-progress-preserved".to_string(),
+        )
+    );
+
+    let training_material: (String, String, String, String) = sqlx::query_as(
+        "SELECT apparatus, canonical_apparatus_id,
+                payload_json->>'apparatus', payload_json->>'preserved_marker'
+         FROM mini_training_raw_material_assignments
+         WHERE id = 'migration-training-material'",
+    )
+    .fetch_one(&pool)
+    .await
+    .expect("canonical training material assignment");
+    assert_eq!(
+        training_material,
+        (
+            LEGACY_LAMINATION_1_ID.to_string(),
+            LAMINATION_1_ID.to_string(),
+            LAMINATION_1_ID.to_string(),
+            "training-material-preserved".to_string(),
+        )
+    );
+
+    let material_rule: (String, String, bool, String) = sqlx::query_as(
+        "SELECT apparatus, canonical_apparatus_id, requires_material,
+                payload_json->>'preserved_marker'
+         FROM mini_apparatus_material_rules
+         WHERE apparatus = $1",
+    )
+    .bind(LEGACY_LAMINATION_1_ID)
+    .fetch_one(&pool)
+    .await
+    .expect("canonical material rule");
+    assert_eq!(
+        material_rule,
+        (
+            LEGACY_LAMINATION_1_ID.to_string(),
+            LAMINATION_1_ID.to_string(),
+            true,
+            "material-rule-preserved".to_string(),
+        )
+    );
+
+    let completion: (String, String, String, String, i32, String) = sqlx::query_as(
+        "SELECT apparatus, canonical_apparatus_id, action, status,
+                produced_qty::integer, payload_json->>'preserved_marker'
+         FROM mini_progress_batches
+         WHERE batch_id = 'migration-completion-batch'",
+    )
+    .fetch_one(&pool)
+    .await
+    .expect("canonical completion batch");
+    assert_eq!(
+        completion,
+        (
+            LEGACY_LAMINATION_1_ID.to_string(),
+            LAMINATION_1_ID.to_string(),
+            "complete".to_string(),
+            "completed".to_string(),
+            1,
+            "completion-preserved".to_string(),
+        )
+    );
+
+    let future_json_apparatus: String = sqlx::query_scalar(
+        "SELECT map_json #>> '{nodes,0,apparatus_id}'
+         FROM mini_production_maps
+         WHERE id = 'migration-future-json'",
+    )
+    .fetch_one(&pool)
+    .await
+    .expect("future canonical JSON identity");
+    assert_eq!(future_json_apparatus, LAMINATION_1_ID);
+
+    let warehouse_assignment: (String, String, Option<String>, Option<String>) = sqlx::query_as(
+        "SELECT assignment_kind, warehouse, warehouse_name, apparatus_id
+         FROM mini_warehouse_assignments
+         WHERE principal_ref = 'legacy-warehouse-principal'",
+    )
+    .fetch_one(&pool)
+    .await
+    .expect("typed warehouse assignment");
+    assert_eq!(
+        warehouse_assignment,
+        (
+            "warehouse".to_string(),
+            "Acceptance Warehouse".to_string(),
+            Some("Acceptance Warehouse".to_string()),
+            None,
+        )
+    );
+
+    let typed_identity_count: i64 = sqlx::query_scalar(
+        "SELECT count(*)
+         FROM mini_warehouse_assignments
+         WHERE principal_ref = 'legacy-warehouse-principal'
+           AND ((warehouse_name IS NOT NULL)::int + (apparatus_id IS NOT NULL)::int) = 1",
+    )
+    .fetch_one(&pool)
+    .await
+    .expect("exactly one typed warehouse identity");
+    assert_eq!(typed_identity_count, 1);
+
+    sqlx::query(
+        "INSERT INTO mini_warehouse_assignments (
+             warehouse, assignment_kind, warehouse_name, apparatus_id,
+             principal_role, principal_ref, display_name
+         ) VALUES (
+             'Laminatsiya 1 apparatus snapshot', 'apparatus', NULL, $1,
+             'admin', 'canonical-apparatus-principal', 'Canonical Apparatus'
+         )",
+    )
+    .bind(LAMINATION_1_ID)
+    .execute(&pool)
+    .await
+    .expect("insert typed apparatus assignment");
+
+    let apparatus_assignment: (String, Option<String>, Option<String>) = sqlx::query_as(
+        "SELECT assignment_kind, warehouse_name, apparatus_id
+         FROM mini_warehouse_assignments
+         WHERE principal_ref = 'canonical-apparatus-principal'",
+    )
+    .fetch_one(&pool)
+    .await
+    .expect("typed apparatus assignment");
+    assert_eq!(
+        apparatus_assignment,
+        (
+            "apparatus".to_string(),
+            None,
+            Some(LAMINATION_1_ID.to_string()),
+        )
+    );
+
+    let assignments_without_exactly_one_identity: i64 = sqlx::query_scalar(
+        "SELECT count(*)
+         FROM mini_warehouse_assignments
+         WHERE ((warehouse_name IS NOT NULL)::int + (apparatus_id IS NOT NULL)::int) <> 1",
+    )
+    .fetch_one(&pool)
+    .await
+    .expect("all warehouse assignments have one typed identity");
+    assert_eq!(assignments_without_exactly_one_identity, 0);
+
+    let duplicate_assignment = sqlx::query(
+        "INSERT INTO mini_warehouse_assignments (
+             warehouse, assignment_kind, warehouse_name, apparatus_id,
+             principal_role, principal_ref, display_name
+         ) VALUES (
+             'Different legacy snapshot', 'apparatus', NULL, $1,
+             'admin', 'canonical-apparatus-principal', 'Duplicate Apparatus'
+         )",
+    )
+    .bind(LAMINATION_1_ID)
+    .execute(&pool)
+    .await
+    .expect_err("canonical apparatus assignment uniqueness");
+    assert!(duplicate_assignment
+        .to_string()
+        .contains("idx_mini_warehouse_assignments_apparatus_identity_unique"));
+
+    let orphan_assignment = sqlx::query(
+        "INSERT INTO mini_warehouse_assignments (
+             warehouse, assignment_kind, warehouse_name, apparatus_id,
+             principal_role, principal_ref, display_name
+         ) VALUES (
+             'Orphan apparatus snapshot', 'apparatus', NULL,
+             'apparatus:default:orphan', 'admin', 'orphan-apparatus-principal',
+             'Orphan Apparatus'
+         )",
+    )
+    .execute(&pool)
+    .await
+    .expect_err("apparatus assignment must reject orphan apparatus_id");
+    assert!(orphan_assignment
+        .to_string()
+        .contains("mini_warehouse_assignments_apparatus_id_fk"));
+
+    let before_rerun = capture_canonical_cutover_state(&pool).await;
+    apply_postgres_migrations_through(&pool, MIGRATIONS_THROUGH_CANONICAL_CUTOVER)
+        .await
+        .expect("rerun 0064 and 0065 through the migration registry");
+    let after_rerun = capture_canonical_cutover_state(&pool).await;
+    assert_eq!(after_rerun, before_rerun);
+
+    let migration_count: i64 = sqlx::query_scalar("SELECT count(*) FROM mini_schema_migrations")
+        .fetch_one(&pool)
+        .await
+        .expect("migration history count");
+    assert_eq!(migration_count, MIGRATIONS_THROUGH_CANONICAL_CUTOVER as i64);
+
+    pool.close().await;
+    drop_isolated_test_database(&admin_url, db_name).await;
+}
+
+#[tokio::test]
+#[ignore = "requires local PostgreSQL and creates/drops mini_rs_erp_test_canonical_assignment_malformed"]
+async fn postgres_canonical_migration_rejects_malformed_typed_assignment() {
+    let db_name = "mini_rs_erp_test_canonical_assignment_malformed";
+    let (admin_url, pool) = create_isolated_test_database(db_name).await;
+    apply_postgres_migrations_through(&pool, MIGRATIONS_BEFORE_CANONICAL_CUTOVER)
+        .await
+        .expect("apply migrations immediately before 0064");
+    stage_warehouse_assignment_columns(&pool).await;
+    seed_legacy_assignment_snapshot(&pool).await;
+    sqlx::query(
+        "INSERT INTO mini_warehouse_assignments (
+             warehouse, assignment_kind, warehouse_name, apparatus_id,
+             principal_role, principal_ref, display_name
+         ) VALUES (
+             'Legacy Assignment Warehouse', 'apparatus', NULL,
+             'not-an-apparatus-id', 'admin', 'malformed-assignment', 'Malformed'
+         )",
+    )
+    .execute(&pool)
+    .await
+    .expect("seed malformed typed assignment");
+
+    assert_cutover_rejected(&pool, "mini_warehouse_assignments_assignment_kind_check").await;
+    pool.close().await;
+    drop_isolated_test_database(&admin_url, db_name).await;
+}
+
+#[tokio::test]
+#[ignore = "requires local PostgreSQL and creates/drops mini_rs_erp_test_canonical_assignment_mixed"]
+async fn postgres_canonical_migration_rejects_mixed_typed_assignment() {
+    let db_name = "mini_rs_erp_test_canonical_assignment_mixed";
+    let (admin_url, pool) = create_isolated_test_database(db_name).await;
+    apply_postgres_migrations_through(&pool, MIGRATIONS_BEFORE_CANONICAL_CUTOVER)
+        .await
+        .expect("apply migrations immediately before 0064");
+    stage_warehouse_assignment_columns(&pool).await;
+    seed_legacy_assignment_snapshot(&pool).await;
+    sqlx::query(
+        "INSERT INTO mini_warehouse_assignments (
+             warehouse, assignment_kind, warehouse_name, apparatus_id,
+             principal_role, principal_ref, display_name
+         ) VALUES (
+             'Legacy Assignment Warehouse', NULL, 'Legacy Assignment Warehouse',
+             $1, 'admin', 'mixed-assignment', 'Mixed'
+         )",
+    )
+    .bind(LEGACY_LAMINATION_1_ID)
+    .execute(&pool)
+    .await
+    .expect("seed mixed typed assignment");
+
+    assert_cutover_rejected(
+        &pool,
+        "0065 warehouse assignment has both canonical identity columns populated before backfill",
+    )
+    .await;
+    pool.close().await;
+    drop_isolated_test_database(&admin_url, db_name).await;
+}
+
+#[tokio::test]
+#[ignore = "requires local PostgreSQL and creates/drops mini_rs_erp_test_canonical_assignment_incomplete"]
+async fn postgres_canonical_migration_rejects_incomplete_typed_assignment() {
+    let db_name = "mini_rs_erp_test_canonical_assignment_incomplete";
+    let (admin_url, pool) = create_isolated_test_database(db_name).await;
+    apply_postgres_migrations_through(&pool, MIGRATIONS_BEFORE_CANONICAL_CUTOVER)
+        .await
+        .expect("apply migrations immediately before 0064");
+    stage_warehouse_assignment_columns(&pool).await;
+    seed_legacy_assignment_snapshot(&pool).await;
+    sqlx::query(
+        "INSERT INTO mini_warehouse_assignments (
+             warehouse, assignment_kind, warehouse_name, apparatus_id,
+             principal_role, principal_ref, display_name
+         ) VALUES (
+             'Legacy Assignment Warehouse', 'apparatus', NULL, NULL,
+             'admin', 'incomplete-assignment', 'Incomplete'
+         )",
+    )
+    .execute(&pool)
+    .await
+    .expect("seed incomplete typed assignment");
+
+    assert_cutover_rejected(
+        &pool,
+        "0065 warehouse assignment does not have exactly one typed canonical identity",
+    )
+    .await;
+    pool.close().await;
+    drop_isolated_test_database(&admin_url, db_name).await;
+}
+
+#[tokio::test]
+#[ignore = "requires local PostgreSQL and creates/drops mini_rs_erp_test_canonical_apparatus_unresolved"]
+async fn postgres_canonical_migration_rejects_unresolved_legacy_apparatus_mapping() {
+    let db_name = "mini_rs_erp_test_canonical_apparatus_unresolved";
+    let (admin_url, pool) = create_isolated_test_database(db_name).await;
+    apply_postgres_migrations_through(&pool, MIGRATIONS_BEFORE_CANONICAL_CUTOVER)
+        .await
+        .expect("apply migrations immediately before 0064");
+    sqlx::query(
+        "INSERT INTO mini_worker_groups (apparatus, group_code, shift)
+         VALUES ('legacy-apparatus-never-mapped', 'unresolved-group', 'day')",
+    )
+    .execute(&pool)
+    .await
+    .expect("seed unresolved legacy apparatus reference");
+
+    assert_cutover_rejected(
+        &pool,
+        "0064 unresolved legacy apparatus reference in mini_worker_groups.apparatus",
+    )
+    .await;
+    pool.close().await;
+    drop_isolated_test_database(&admin_url, db_name).await;
+}
+
+#[tokio::test]
+#[ignore = "requires local PostgreSQL and creates/drops mini_rs_erp_test_canonical_virtual_training_queue"]
+async fn postgres_canonical_migration_rejects_virtual_training_queue_identity() {
+    let db_name = "mini_rs_erp_test_canonical_virtual_training_queue";
+    let (admin_url, pool) = create_isolated_test_database(db_name).await;
+    apply_postgres_migrations_through(&pool, MIGRATIONS_BEFORE_CANONICAL_CUTOVER)
+        .await
+        .expect("apply migrations immediately before 0064");
+    sqlx::query(
+        "INSERT INTO mini_training_queue_states (apparatus, order_id, state)
+         VALUES ('training-input:bosma', 'training-virtual-order', 'pending')",
+    )
+    .execute(&pool)
+    .await
+    .expect("seed virtual training queue identity");
+
+    assert_cutover_rejected(
+        &pool,
+        "0064 unresolved legacy apparatus reference in mini_training_queue_states.apparatus",
+    )
+    .await;
+    pool.close().await;
+    drop_isolated_test_database(&admin_url, db_name).await;
+}
+
+#[tokio::test]
+#[ignore = "requires local PostgreSQL and creates/drops mini_rs_erp_test_canonical_apparatus_ambiguous"]
+async fn postgres_canonical_migration_rejects_ambiguous_legacy_apparatus_mapping() {
+    let db_name = "mini_rs_erp_test_canonical_apparatus_ambiguous";
+    let (admin_url, pool) = create_isolated_test_database(db_name).await;
+    apply_postgres_migrations_through(&pool, MIGRATIONS_BEFORE_CANONICAL_CUTOVER)
+        .await
+        .expect("apply migrations immediately before 0064");
+    sqlx::query(
+        "INSERT INTO mini_apparatus (id, name, base_name, kind, payload_json)
+         VALUES
+             ('apparatus:custom:ambiguous-a', 'Ambiguous A', 'Shared Legacy Apparatus',
+              'custom', '{}'::jsonb),
+             ('apparatus:custom:ambiguous-b', 'Ambiguous B', 'Shared Legacy Apparatus',
+              'custom', '{}'::jsonb)",
+    )
+    .execute(&pool)
+    .await
+    .expect("seed ambiguous legacy apparatus candidates");
+
+    assert_cutover_rejected(
+        &pool,
+        "0064 ambiguous legacy apparatus identity shared legacy apparatus",
+    )
+    .await;
+    pool.close().await;
+    drop_isolated_test_database(&admin_url, db_name).await;
+}
+
+async fn create_isolated_test_database(db_name: &str) -> (String, PgPool) {
+    assert!(db_name.starts_with("mini_rs_erp_test_"));
+    assert_ne!(db_name, "mini_rs_erp");
+    let admin_url = std::env::var("MINI_ERP_TEST_ADMIN_DATABASE_URL")
+        .unwrap_or_else(|_| "postgres://wikki@127.0.0.1:5432/postgres".to_string());
+    let admin_pool = PgPool::connect(&admin_url).await.expect("admin db");
+    sqlx::query(&format!(
+        r#"DROP DATABASE IF EXISTS "{db_name}" WITH (FORCE)"#
+    ))
+    .execute(&admin_pool)
+    .await
+    .expect("drop test db");
+    sqlx::query(&format!(r#"CREATE DATABASE "{db_name}""#))
+        .execute(&admin_pool)
+        .await
+        .expect("create test db");
+    admin_pool.close().await;
+
+    let test_options = admin_url
+        .parse::<PgConnectOptions>()
+        .expect("valid admin database url")
+        .database(db_name);
+    let pool = PgPool::connect_with(test_options)
+        .await
+        .expect("test db");
+    (admin_url, pool)
+}
+
+async fn drop_isolated_test_database(admin_url: &str, db_name: &str) {
+    let admin_pool = PgPool::connect(admin_url).await.expect("admin cleanup");
+    sqlx::query(&format!(
+        r#"DROP DATABASE IF EXISTS "{db_name}" WITH (FORCE)"#
+    ))
+    .execute(&admin_pool)
+    .await
+    .expect("cleanup test db");
+    admin_pool.close().await;
+}
+
+async fn seed_valid_legacy_cutover_rows(pool: &PgPool) {
+    sqlx::query(
+        "ALTER TABLE mini_order_freeze_requests
+             ADD COLUMN IF NOT EXISTS canonical_target_apparatus_id TEXT",
+    )
+    .execute(pool)
+    .await
+    .expect("stage freeze canonical column");
+
+    sqlx::query(
+        "INSERT INTO mini_warehouses (id, name)
+         VALUES ('warehouse:canonical-acceptance', 'Acceptance Warehouse')",
+    )
+    .execute(pool)
+    .await
+    .expect("seed acceptance warehouse");
+    sqlx::query(
+        "INSERT INTO mini_warehouse_assignments (
+             warehouse, principal_role, principal_ref, display_name, payload_json
+         ) VALUES (
+             'Acceptance Warehouse', 'admin', 'legacy-warehouse-principal',
+             'Legacy Warehouse Principal', '{}'::jsonb
+         )",
+    )
+    .execute(pool)
+    .await
+    .expect("seed legacy warehouse assignment");
+
+    sqlx::query(
+        "INSERT INTO mini_worker_groups (
+             apparatus, group_code, shift, canonical_apparatus_id
+         ) VALUES
+             ($1, 'legacy-workers', 'day', NULL),
+             ($2, 'prepopulated-authority', 'day', 'apparatus:default:bosma_7')",
+    )
+    .bind(LEGACY_LAMINATION_1_ID)
+    .bind(LEGACY_LAMINATION_2_ID)
+    .execute(pool)
+    .await
+    .expect("seed legacy worker groups");
+
+    sqlx::query(
+        "INSERT INTO mini_apparatus_capacity_profiles (
+             apparatus_id, apparatus, capacity_slots, setup_minutes,
+             cleanup_minutes, efficiency_percent, finite_capacity,
+             working_windows, capabilities, capability_levels, notes,
+             canonical_apparatus_id
+         ) VALUES (
+             $1, $2, 3, 5, 6, 95, TRUE, '[]'::jsonb, '[]'::jsonb,
+             '{}'::jsonb, 'legacy profile', NULL
+         )",
+    )
+    .bind(LEGACY_LAMINATION_1_ID)
+    .bind(LAMINATION_1_NAME)
+    .execute(pool)
+    .await
+    .expect("seed legacy capacity profile");
+
+    sqlx::query(
+        "INSERT INTO mini_apparatus_downtimes (
+             id, apparatus_id, apparatus, starts_at, ends_at, reason,
+             canonical_apparatus_id
+         ) VALUES (
+             'migration-legacy-downtime', $1, $2,
+             to_timestamp(1700000000), to_timestamp(1700003600),
+             'legacy maintenance', NULL
+         )",
+    )
+    .bind(LEGACY_LAMINATION_1_ID)
+    .bind(LAMINATION_1_NAME)
+    .execute(pool)
+    .await
+    .expect("seed legacy downtime");
+
+    sqlx::query(
+        "INSERT INTO mini_production_maps (id, product_code, title, map_json)
+         VALUES ('migration-legacy-order', 'MIGRATION-ITEM', 'Migration order', '{}'::jsonb)",
+    )
+    .execute(pool)
+    .await
+    .expect("seed legacy migration order");
+    sqlx::query(
+        "INSERT INTO mini_production_maps (id, product_code, title, map_json)
+         VALUES (
+             'migration-future-json', 'MIGRATION-FUTURE', 'Future canonical JSON',
+             '{\"nodes\":[{\"kind\":\"apparatus\",\"apparatus_id\":\"apparatus:default:asset-007\"}]}'::jsonb
+         )",
+    )
+    .execute(pool)
+    .await
+    .expect("seed future canonical JSON identity");
+    sqlx::query(
+        "INSERT INTO mini_apparatus_schedule_reservations (
+             reservation_id, idempotency_key, order_id, apparatus_id, apparatus,
+             starts_at, ends_at, requested_duration_minutes,
+             reserved_duration_minutes, status, capability_requirements,
+             canonical_apparatus_id
+         ) VALUES (
+             'migration-legacy-reservation', 'migration-legacy-reservation',
+             'migration-legacy-order', $1, $2,
+             to_timestamp(1700000000), to_timestamp(1700003600), 60, 60,
+             'planned', '[]'::jsonb, NULL
+         )",
+    )
+    .bind(LEGACY_LAMINATION_1_ID)
+    .bind(LAMINATION_1_NAME)
+    .execute(pool)
+    .await
+    .expect("seed legacy schedule reservation");
+
+    sqlx::query(
+        "INSERT INTO mini_apparatus_order_transfers (
+             transfer_id, idempotency_key, order_id, from_apparatus, to_apparatus,
+             reason, actor_role, actor_ref, actor_display_name, session_id,
+             progress_batch_id, material_barcodes, payload_json,
+             canonical_from_apparatus_id, canonical_to_apparatus_id
+         ) VALUES (
+             'migration-legacy-transfer', 'migration-legacy-transfer',
+             'migration-legacy-order', $1, $2, 'migration preservation',
+             'admin', 'migration-test', 'Migration Test', 'migration-session',
+             'migration-progress', '[]'::jsonb, '{\"preserved_marker\":\"transfer-preserved\"}'::jsonb,
+             'apparatus:default:bosma_7', $3
+         )",
+    )
+    .bind(LEGACY_LAMINATION_1_ID)
+    .bind(LEGACY_LAMINATION_2_ID)
+    .bind(FLEXO_ID)
+    .execute(pool)
+    .await
+    .expect("seed transfer preservation row");
+
+    sqlx::query(
+        "INSERT INTO mini_order_freeze_requests (
+             request_id, order_id, status, requester_role, requester_ref,
+             requester_display_name, target_session_id, target_apparatus,
+             target_worker_role, target_worker_ref, target_worker_display_name,
+             requested_at_unix, transitioned_at_unix, canonical_target_apparatus_id
+         ) VALUES (
+             'migration-legacy-freeze', 'migration-legacy-order', 'pending',
+             'admin', 'migration-requester', 'Migration Requester',
+             'migration-freeze-session', $1, 'operator', 'migration-worker',
+             'Migration Worker', 1700000000, 1700000000,
+             'apparatus:default:bosma_8'
+         )",
+    )
+    .bind(LEGACY_LAMINATION_1_ID)
+    .execute(pool)
+    .await
+    .expect("seed freeze preservation row");
+
+    sqlx::query(
+        "INSERT INTO mini_training_queue_states (
+             apparatus, order_id, state, canonical_apparatus_id
+         ) VALUES ($1, 'training-migration-order', 'paused', NULL)",
+    )
+    .bind(LEGACY_LAMINATION_1_ID)
+    .execute(pool)
+    .await
+    .expect("seed training queue state");
+    sqlx::query(
+        "INSERT INTO mini_training_queue_events (
+             event_id, apparatus, order_id, action, from_state, to_state,
+             actor_ref, actor_display_name
+         ) VALUES (
+             'migration-training-event', $1, 'training-migration-order',
+             'pause', 'in_progress', 'migration-worker', 'Migration Worker'
+         )",
+    )
+    .bind(LEGACY_LAMINATION_1_ID)
+    .execute(pool)
+    .await
+    .expect("seed training queue event");
+    sqlx::query(
+        "INSERT INTO mini_training_progress_batches (
+             batch_id, order_id, apparatus, qr_payload, payload_json,
+             canonical_apparatus_id
+         ) VALUES (
+             'migration-training-progress', 'training-migration-order', $1,
+             'migration-training-progress-qr',
+             jsonb_build_object(
+                 'apparatus', $1, 'preserved_marker', 'training-progress-preserved'
+             ), NULL
+         )",
+    )
+    .bind(LEGACY_LAMINATION_1_ID)
+    .execute(pool)
+    .await
+    .expect("seed training progress batch");
+    sqlx::query(
+        "INSERT INTO mini_training_raw_material_assignments (
+             id, order_id, apparatus, barcode, payload_json
+         ) VALUES (
+             'migration-training-material', 'training-migration-order', $1,
+             'migration-training-barcode',
+             jsonb_build_object(
+                 'apparatus', $1, 'preserved_marker', 'training-material-preserved'
+             )
+         )",
+    )
+    .bind(LEGACY_LAMINATION_1_ID)
+    .execute(pool)
+    .await
+    .expect("seed training material assignment");
+    sqlx::query(
+        "INSERT INTO mini_training_apparatus_modes (apparatus, enabled)
+         VALUES ($1, TRUE)",
+    )
+    .bind(LEGACY_LAMINATION_1_ID)
+    .execute(pool)
+    .await
+    .expect("seed training apparatus mode");
+    sqlx::query(
+        "INSERT INTO mini_training_input_batches (
+             order_id, apparatus, batch_id, session_id, qr_payload
+         ) VALUES (
+             'training-input-preservation-order', $1,
+             'migration-training-input-batch', 'migration-training-input-session',
+             'migration-training-input-qr'
+         )",
+    )
+    .bind(LEGACY_LAMINATION_1_ID)
+    .execute(pool)
+    .await
+    .expect("seed training input batch");
+
+    sqlx::query(
+        "INSERT INTO mini_apparatus_material_rules (
+             apparatus, item_groups, requirement_groups, requires_material, payload_json
+         ) VALUES (
+             $1, '[\"film\"]'::jsonb, '[\"film\"]'::jsonb, TRUE,
+             '{\"preserved_marker\":\"material-rule-preserved\"}'::jsonb
+         )",
+    )
+    .bind(LEGACY_LAMINATION_1_ID)
+    .execute(pool)
+    .await
+    .expect("seed material rule");
+
+    sqlx::query(
+        "INSERT INTO mini_progress_batches (
+             batch_id, session_id, apparatus, order_id, action, status,
+             produced_qty, uom, qr_payload, label_item_code, label_item_name,
+             payload_json
+         ) VALUES (
+             'migration-completion-batch', 'migration-completion-session', $1,
+             'migration-legacy-order', 'complete', 'completed', 1, 'kg',
+             'migration-completion-qr', 'MIGRATION-ITEM', 'Migration Item',
+             '{\"preserved_marker\":\"completion-preserved\"}'::jsonb
+         )",
+    )
+    .bind(LEGACY_LAMINATION_1_ID)
+    .execute(pool)
+    .await
+    .expect("seed completion batch");
+}
+
+async fn stage_warehouse_assignment_columns(pool: &PgPool) {
+    sqlx::query(
+        "ALTER TABLE mini_warehouse_assignments
+             ADD COLUMN assignment_kind TEXT,
+             ADD COLUMN warehouse_name TEXT,
+             ADD COLUMN apparatus_id TEXT",
+    )
+    .execute(pool)
+    .await
+    .expect("stage warehouse assignment columns");
+}
+
+async fn seed_legacy_assignment_snapshot(pool: &PgPool) {
+    sqlx::query(
+        "INSERT INTO mini_warehouses (id, name)
+         VALUES ('warehouse:legacy-assignment', 'Legacy Assignment Warehouse')",
+    )
+    .execute(pool)
+    .await
+    .expect("seed legacy assignment warehouse");
+}
+
+async fn assert_cutover_rejected(pool: &PgPool, expected_message: &str) {
+    let error = apply_postgres_migrations_through(pool, MIGRATIONS_THROUGH_CANONICAL_CUTOVER)
+        .await
+        .expect_err("invalid legacy state must fail closed");
+    assert!(
+        error.to_string().contains(expected_message),
+        "migration error did not contain {expected_message:?}: {error}"
+    );
+
+    let applied_migrations: i64 = sqlx::query_scalar("SELECT count(*) FROM mini_schema_migrations")
+        .fetch_one(pool)
+        .await
+        .expect("migration history after rollback");
+    assert_eq!(applied_migrations, MIGRATIONS_BEFORE_CANONICAL_CUTOVER as i64);
+}
+
+async fn capture_canonical_cutover_state(
+    pool: &PgPool,
+) -> (
+    Vec<(String, String)>,
+    Vec<(String, String, String)>,
+    Vec<(String, String, String, i32)>,
+    Vec<(String, String, String)>,
+    Vec<(String, String, String)>,
+    Vec<(String, String, Option<String>, Option<String>)>,
+) {
+    let apparatus: Vec<(String, String)> =
+        sqlx::query_as("SELECT id, name FROM mini_apparatus ORDER BY id")
+            .fetch_all(pool)
+            .await
+            .expect("apparatus state");
+    let worker_groups: Vec<(String, String, String)> = sqlx::query_as(
+        "SELECT apparatus, group_code, canonical_apparatus_id
+         FROM mini_worker_groups ORDER BY group_code",
+    )
+    .fetch_all(pool)
+    .await
+    .expect("worker group state");
+    let profiles: Vec<(String, String, String, i32)> = sqlx::query_as(
+        "SELECT apparatus_id, canonical_apparatus_id, apparatus, capacity_slots
+         FROM mini_apparatus_capacity_profiles ORDER BY canonical_apparatus_id",
+    )
+    .fetch_all(pool)
+    .await
+    .expect("capacity profile state");
+    let downtimes: Vec<(String, String, String)> = sqlx::query_as(
+        "SELECT id, apparatus_id, canonical_apparatus_id
+         FROM mini_apparatus_downtimes ORDER BY id",
+    )
+    .fetch_all(pool)
+    .await
+    .expect("downtime state");
+    let reservations: Vec<(String, String, String)> = sqlx::query_as(
+        "SELECT reservation_id, apparatus_id, canonical_apparatus_id
+         FROM mini_apparatus_schedule_reservations ORDER BY reservation_id",
+    )
+    .fetch_all(pool)
+    .await
+    .expect("reservation state");
+    let assignments: Vec<(String, String, Option<String>, Option<String>)> = sqlx::query_as(
+        "SELECT assignment_kind, warehouse, warehouse_name, apparatus_id
+         FROM mini_warehouse_assignments ORDER BY principal_ref",
+    )
+    .fetch_all(pool)
+    .await
+    .expect("warehouse assignment state");
+    (
+        apparatus,
+        worker_groups,
+        profiles,
+        downtimes,
+        reservations,
+        assignments,
+    )
 }

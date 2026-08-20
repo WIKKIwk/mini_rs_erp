@@ -175,44 +175,49 @@ fn unordered_action_allows_start_when_other_order_is_paused() {
 }
 
 #[test]
-fn resolve_apparatus_storage_key_matches_pechat_suffixes() {
+fn resolve_apparatus_storage_key_requires_exact_canonical_id() {
     let keys = vec![
-        "7 ta rangli pechat".to_string(),
-        "Godex aparat - DEMO".to_string(),
+        "apparatus:catalog:press-007".to_string(),
+        "apparatus:catalog:godex-demo".to_string(),
     ];
     assert_eq!(
-        resolve_apparatus_storage_key("7 ta rangli pechat - A", &keys),
-        "7 ta rangli pechat"
+        resolve_apparatus_storage_key("apparatus:catalog:press-007", &keys),
+        "apparatus:catalog:press-007"
     );
-}
-
-#[test]
-fn apparatus_titles_match_warehouse_instance_suffixes() {
-    assert!(apparatus_titles_match("Laminatsiya - A", "Laminatsiya"));
-    assert!(apparatus_titles_match("Paket aparat - A", "Paket aparat"));
-}
-
-#[test]
-fn next_stage_title_matches_numbered_alternative_apparatus() {
-    assert!(next_stage_title_matches_apparatus(
-        "Laminatsiya",
-        "Laminatsiya 2"
-    ));
-    assert!(!next_stage_title_matches_apparatus(
-        "Laminatsiya",
-        "Laminatsiya maxsus"
-    ));
-}
-
-#[test]
-fn apparatus_search_key_normalizes_instance_suffixes_and_pechat_aliases() {
-    assert_eq!(apparatus_search_key("Laminatsiya - A"), "laminatsiya");
     assert_eq!(
-        apparatus_search_key("  Paket   aparat - DEMO  "),
-        "paket aparat"
+        resolve_apparatus_storage_key("7 ta rangli pechat - A", &keys),
+        ""
     );
-    assert_eq!(apparatus_search_key("7 ta rangli pechat - A"), "pechat:7");
-    assert_eq!(apparatus_search_key("7 rangli val"), "pechat:7");
+}
+
+#[test]
+fn apparatus_ids_match_requires_canonical_id() {
+    assert!(!apparatus_ids_match("Laminatsiya - A", "Laminatsiya"));
+    assert!(apparatus_ids_match(
+        "apparatus:catalog:lam-001",
+        "apparatus:catalog:lam-001"
+    ));
+}
+
+#[test]
+fn next_stage_identity_match_requires_canonical_id() {
+    assert!(next_stage_apparatus_matches(
+        "apparatus:catalog:lam-001",
+        "apparatus:catalog:lam-001"
+    ));
+    assert!(!next_stage_apparatus_matches(
+        "apparatus:catalog:lam-001",
+        "apparatus:catalog:lam-002"
+    ));
+}
+
+#[test]
+fn apparatus_search_key_accepts_canonical_id_only() {
+    assert_eq!(
+        apparatus_search_key("apparatus:catalog:press-007"),
+        "apparatus:catalog:press-007"
+    );
+    assert_eq!(apparatus_search_key("Laminatsiya - A"), "");
 }
 
 proptest! {

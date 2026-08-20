@@ -7,6 +7,7 @@ use super::service_progress_metrics::{
     validated_laminatsiya_worker_handoff_metrics, validated_progress_metrics,
 };
 use super::service_progress_support::*;
+use crate::core::apparatus_standard::CanonicalApparatus;
 
 struct RecoveredSessionInputBatch {
     input_batch: OrderProgressBatch,
@@ -22,11 +23,12 @@ struct ProgressOutputValue {
 
 fn progress_values_for_outputs(
     apparatus: &str,
+    canonical: &CanonicalApparatus,
     action: queue_state::ApparatusQueueAction,
     progress: &QueueProgressInput,
     output_identities: &[ProgressOutputIdentity],
 ) -> Result<Vec<ProgressOutputValue>, ProductionMapError> {
-    if apparatus::is_rezka_title(apparatus) && !progress.rezka_frames.is_empty() {
+    if apparatus::is_rezka_apparatus(canonical) && !progress.rezka_frames.is_empty() {
         if progress.rezka_frames.len() != output_identities.len() {
             return Err(ProductionMapError::RezkaFrameCountMismatch);
         }
@@ -52,7 +54,8 @@ fn progress_values_for_outputs(
                 }
                 let has_explicit_waste = frame.has_explicit_waste();
                 let frame_progress = frame.to_queue_progress(progress, !has_explicit_waste);
-                let mut metrics = validated_progress_metrics(apparatus, action, &frame_progress)?;
+                let mut metrics =
+                    validated_progress_metrics(apparatus, canonical, action, &frame_progress)?;
                 if index > 0 && !has_explicit_waste {
                     metrics.rezka_bosma_waste = None;
                     metrics.rezka_lamination_waste = None;
@@ -69,7 +72,7 @@ fn progress_values_for_outputs(
             .collect();
     }
 
-    let metrics = validated_progress_metrics(apparatus, action, progress)?;
+    let metrics = validated_progress_metrics(apparatus, canonical, action, progress)?;
     let quantity = progress_quantity(progress, metrics)?;
     Ok(vec![ProgressOutputValue {
         quantity: Some(quantity),
@@ -150,7 +153,7 @@ impl ProductionMapService {
             .progress_batch_for_qr(&progress.progress_batch_id, &progress.qr_payload)
             .await?;
         if batch.order_id.trim() != order_id
-            || !queue_state::apparatus_titles_match(&batch.apparatus, &previous_apparatus)
+            || !super::types::apparatus_ids_match(&batch.apparatus, &previous_apparatus)
             || !matches!(
                 batch.action,
                 queue_state::ApparatusQueueAction::Pause
@@ -166,10 +169,7 @@ impl ProductionMapService {
                     | OrderProgressBatchStatus::Resumed
             )
             || (!batch.next_apparatus.trim().is_empty()
-                && !queue_state::next_stage_title_matches_apparatus(
-                    &batch.next_apparatus,
-                    apparatus,
-                ))
+                && !chain::stage_ids_match_for_map(order_map, &batch.next_apparatus, apparatus))
             || batch.wip_status != OrderProgressBatchWipStatus::Waiting
         {
             return Err(ProductionMapError::ProgressBatchNotAccepted);
@@ -202,11 +202,11 @@ impl ProductionMapService {
         };
         let source_wip_is_usable = batch.wip_status == OrderProgressBatchWipStatus::Waiting
             || (batch.wip_status == OrderProgressBatchWipStatus::InUse
-                && queue_state::apparatus_titles_match(used_by_apparatus, apparatus)
+                && super::types::apparatus_ids_match(used_by_apparatus, apparatus)
                 && (batch.used_by_session_id.trim().is_empty()
                     || batch.used_by_session_id.trim() == session_id.trim()));
         if batch.order_id.trim() != order_id
-            || !queue_state::apparatus_titles_match(&batch.apparatus, &previous_apparatus)
+            || !super::types::apparatus_ids_match(&batch.apparatus, &previous_apparatus)
             || !matches!(
                 batch.action,
                 queue_state::ApparatusQueueAction::Pause
@@ -223,10 +223,7 @@ impl ProductionMapService {
             )
             || !source_wip_is_usable
             || (!batch.next_apparatus.trim().is_empty()
-                && !queue_state::next_stage_title_matches_apparatus(
-                    &batch.next_apparatus,
-                    apparatus,
-                ))
+                && !chain::stage_ids_match_for_map(order_map, &batch.next_apparatus, apparatus))
         {
             return Err(ProductionMapError::ProgressBatchNotAccepted);
         }
@@ -264,7 +261,7 @@ impl ProductionMapService {
                         queue_state::ApparatusQueueAction::Pause
                             | queue_state::ApparatusQueueAction::DetachRoll
                     )
-                    && queue_state::apparatus_titles_match(&batch.apparatus, apparatus)
+                    && super::types::apparatus_ids_match(&batch.apparatus, apparatus)
                     && !batch.parent_batch_id.trim().is_empty()
                     && (linked_candidate || unlinked_candidate)
             })
@@ -279,12 +276,9 @@ impl ProductionMapService {
         let Some(parent_batch) = batches.into_iter().find(|batch| {
             batch.batch_id.trim() == output_batch.parent_batch_id.trim()
                 && batch.order_id.trim() == order_id.trim()
-                && queue_state::apparatus_titles_match(&batch.apparatus, &previous_apparatus)
+                && super::types::apparatus_ids_match(&batch.apparatus, &previous_apparatus)
                 && (batch.next_apparatus.trim().is_empty()
-                    || queue_state::next_stage_title_matches_apparatus(
-                        &batch.next_apparatus,
-                        apparatus,
-                    ))
+                    || chain::stage_ids_match_for_map(order_map, &batch.next_apparatus, apparatus))
         }) else {
             return Ok(None);
         };
@@ -294,12 +288,12 @@ impl ProductionMapService {
             parent_batch.used_by_apparatus.as_str()
         };
         let owned_in_use = parent_batch.wip_status == OrderProgressBatchWipStatus::InUse
-            && queue_state::apparatus_titles_match(used_by_apparatus, apparatus)
+            && super::types::apparatus_ids_match(used_by_apparatus, apparatus)
             && (parent_batch.used_by_session_id.trim().is_empty()
                 || parent_batch.used_by_session_id.trim() == session.session_id.trim());
         let prematurely_processed = parent_batch.wip_status
             == OrderProgressBatchWipStatus::Processed
-            && queue_state::apparatus_titles_match(&parent_batch.processed_by_apparatus, apparatus)
+            && super::types::apparatus_ids_match(&parent_batch.processed_by_apparatus, apparatus)
             && (parent_batch.processed_by_session_id.trim().is_empty()
                 || parent_batch.processed_by_session_id.trim() == session.session_id.trim());
         if parent_batch.wip_status != OrderProgressBatchWipStatus::Waiting
@@ -318,6 +312,7 @@ impl ProductionMapService {
         }))
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub(super) async fn build_progress_records(
         &self,
         apparatus: &str,
@@ -326,6 +321,7 @@ impl ProductionMapService {
         action: queue_state::ApparatusQueueAction,
         actor: &QueueActionActor,
         progress: QueueProgressInput,
+        canonical: &CanonicalApparatus,
     ) -> Result<QueueProgressRecords, ProductionMapError> {
         let now = unix_seconds();
         if action == queue_state::ApparatusQueueAction::Freeze {
@@ -339,7 +335,7 @@ impl ProductionMapService {
         {
             return self
                 .build_laminatsiya_worker_transition(
-                    apparatus, order_id, order_map, action, actor, progress, now,
+                    apparatus, order_id, order_map, action, actor, progress, now, canonical,
                 )
                 .await;
         }
@@ -408,7 +404,7 @@ impl ProductionMapService {
             | queue_state::ApparatusQueueAction::RollComplete
             | queue_state::ApparatusQueueAction::Complete => {
                 if action == queue_state::ApparatusQueueAction::RollComplete
-                    && !apparatus::is_rezka_title(apparatus)
+                    && !apparatus::is_rezka_apparatus(canonical)
                 {
                     return Err(ProductionMapError::ProgressInputInvalid);
                 }
@@ -451,14 +447,15 @@ impl ProductionMapService {
                         };
                         previous_apparatus.as_ref().is_some_and(|previous| {
                             batch.order_id.trim() == order_id.trim()
-                                && queue_state::apparatus_titles_match(&batch.apparatus, previous)
+                                && super::types::apparatus_ids_match(&batch.apparatus, previous)
                                 && (batch.next_apparatus.trim().is_empty()
-                                    || queue_state::next_stage_title_matches_apparatus(
+                                    || chain::stage_ids_match_for_map(
+                                        order_map,
                                         &batch.next_apparatus,
                                         apparatus,
                                     ))
                                 && batch.wip_status == OrderProgressBatchWipStatus::InUse
-                                && queue_state::apparatus_titles_match(used_by_apparatus, apparatus)
+                                && super::types::apparatus_ids_match(used_by_apparatus, apparatus)
                                 && (batch.used_by_session_id.trim().is_empty()
                                     || batch.used_by_session_id.trim() == session.session_id.trim())
                         })
@@ -493,7 +490,7 @@ impl ProductionMapService {
                     .as_ref()
                     .map(progress_links_from_batch)
                     .unwrap_or(session_input_progress);
-                let output_identities = if apparatus::is_rezka_title(apparatus) {
+                let output_identities = if apparatus::is_rezka_apparatus(canonical) {
                     rezka_output_identities(apparatus, order_id, action, now, order_map)?
                 } else {
                     vec![progress_output_identity(
@@ -505,9 +502,14 @@ impl ProductionMapService {
                         &input_progress,
                     )]
                 };
-                let frame_values =
-                    progress_values_for_outputs(apparatus, action, &progress, &output_identities)?;
-                let frame_issues = if apparatus::is_rezka_title(apparatus) {
+                let frame_values = progress_values_for_outputs(
+                    apparatus,
+                    canonical,
+                    action,
+                    &progress,
+                    &output_identities,
+                )?;
+                let frame_issues = if apparatus::is_rezka_apparatus(canonical) {
                     rezka_frame_issues_json(&frame_values, output_identities.len(), &input_progress)
                 } else {
                     serde_json::Value::Array(Vec::new())
@@ -523,7 +525,7 @@ impl ProductionMapService {
                     } else {
                         (0.0, "m", ProgressMetrics::default())
                     };
-                let mut payload_json = preserve_qolip_code(
+                let mut payload_json = preserve_qolip_lineage(
                     &session,
                     progress_session_payload(
                         action,
@@ -534,7 +536,10 @@ impl ProductionMapService {
                         &input_progress,
                     ),
                 );
-                if frame_issues.as_array().is_some_and(|items| !items.is_empty()) {
+                if frame_issues
+                    .as_array()
+                    .is_some_and(|items| !items.is_empty())
+                {
                     payload_json["rezka_frame_issues"] = frame_issues.clone();
                 }
                 let session = OrderRunSession {
@@ -580,9 +585,12 @@ impl ProductionMapService {
                             .and_then(|frame| frame.gross_qty),
                         description: &description,
                     })?;
-                    if apparatus::is_rezka_title(apparatus) {
+                    if apparatus::is_rezka_apparatus(canonical) {
                         apply_rezka_frame_metadata(&mut batch, identity, order_map, apparatus);
-                        if frame_issues.as_array().is_some_and(|items| !items.is_empty()) {
+                        if frame_issues
+                            .as_array()
+                            .is_some_and(|items| !items.is_empty())
+                        {
                             batch.payload_json["rezka_frame_issues"] = frame_issues.clone();
                         }
                         if index > 0 && progress.rezka_frames.is_empty() {
@@ -606,14 +614,14 @@ impl ProductionMapService {
                             progress_batch_updates.push(input_batch);
                         }
                     } else {
-                        let mut processed_input = wip_batch_processed(
-                            input_batch,
-                            apparatus,
-                            &session.session_id,
-                            now,
-                        );
-                        if frame_issues.as_array().is_some_and(|items| !items.is_empty()) {
-                            processed_input.payload_json["rezka_frame_issues"] = frame_issues.clone();
+                        let mut processed_input =
+                            wip_batch_processed(input_batch, apparatus, &session.session_id, now);
+                        if frame_issues
+                            .as_array()
+                            .is_some_and(|items| !items.is_empty())
+                        {
+                            processed_input.payload_json["rezka_frame_issues"] =
+                                frame_issues.clone();
                             processed_input.payload_json["rezka_issue"] = serde_json::json!(true);
                             sync_wip_payload_fields(&mut processed_input);
                         }
@@ -648,16 +656,15 @@ impl ProductionMapService {
                         context,
                         String::new(),
                         String::new(),
-                        progress_event_payload(
-                            action,
-                            ProgressMetrics::default(),
-                            &description,
-                        ),
+                        progress_event_payload(action, ProgressMetrics::default(), &description),
                     );
                     event.description = description.clone();
                     event
                 };
-                if frame_issues.as_array().is_some_and(|items| !items.is_empty()) {
+                if frame_issues
+                    .as_array()
+                    .is_some_and(|items| !items.is_empty())
+                {
                     event.payload_json["rezka_frame_issues"] = frame_issues;
                 }
                 if batches.len() > 1 {
@@ -750,7 +757,7 @@ impl ProductionMapService {
                             worker_ref: actor.ref_.trim().to_string(),
                             worker_display_name: actor.display_name.trim().to_string(),
                             updated_at_unix: now,
-                            payload_json: preserve_qolip_code(&session, payload_json),
+                            payload_json: preserve_qolip_lineage(&session, payload_json),
                             ..session
                         };
                         let context = ProgressRecordContext {
@@ -828,13 +835,13 @@ impl ProductionMapService {
                                             | OrderProgressBatchStatus::RollDetached
                                     )
                                     && batch.wip_status == OrderProgressBatchWipStatus::Waiting
-                                    && queue_state::apparatus_titles_match(
+                                    && super::types::apparatus_ids_match(
                                         &batch.apparatus,
                                         apparatus,
                                     )
                             })
                             .collect::<Vec<_>>();
-                        if apparatus::is_rezka_title(apparatus) {
+                        if apparatus::is_rezka_apparatus(canonical) {
                             let source_batch_id = session_input_progress.batch_id.trim();
                             if !source_batch_id.is_empty() {
                                 paused_batches.retain(|batch| {
@@ -889,11 +896,12 @@ impl ProductionMapService {
                         resumed_batch.qr_payload.clone(),
                         resume_event_payload(),
                     );
-                    let progress_batches = if !is_handoff && apparatus::is_rezka_title(apparatus) {
-                        resumed_batches.clone()
-                    } else {
-                        Vec::new()
-                    };
+                    let progress_batches =
+                        if !is_handoff && apparatus::is_rezka_apparatus(canonical) {
+                            resumed_batches.clone()
+                        } else {
+                            Vec::new()
+                        };
                     return Ok(QueueProgressRecords {
                         session: Some(session),
                         progress_event: Some(event),
@@ -921,7 +929,7 @@ impl ProductionMapService {
                     return Err(ProductionMapError::ProgressBatchNotResumable);
                 }
                 if batch.order_id.trim() != order_id
-                    || !queue_state::apparatus_titles_match(&batch.apparatus, apparatus)
+                    || !super::types::apparatus_ids_match(&batch.apparatus, apparatus)
                 {
                     return Err(ProductionMapError::ProgressBatchNotResumable);
                 }
@@ -987,7 +995,7 @@ impl ProductionMapService {
             .unwrap_or_else(|| legacy_order_run_session(apparatus, order_id, actor, now));
         let input_progress = session_progress_links(&session);
         let metrics = ProgressMetrics::default();
-        let mut session_payload = preserve_qolip_code(
+        let mut session_payload = preserve_qolip_lineage(
             &session,
             progress_session_payload(
                 queue_state::ApparatusQueueAction::Freeze,
@@ -1046,6 +1054,7 @@ impl ProductionMapService {
         })
     }
 
+    #[allow(clippy::too_many_arguments)]
     async fn build_laminatsiya_worker_transition(
         &self,
         apparatus: &str,
@@ -1055,8 +1064,9 @@ impl ProductionMapService {
         actor: &QueueActionActor,
         progress: QueueProgressInput,
         now: i64,
+        canonical: &CanonicalApparatus,
     ) -> Result<QueueProgressRecords, ProductionMapError> {
-        if !apparatus::is_laminatsiya_title(apparatus)
+        if !apparatus::is_laminatsiya_apparatus(canonical)
             || (progress.worker_handoff && progress.remove_roll_from_apparatus)
         {
             return Err(ProductionMapError::ProgressInputInvalid);
@@ -1089,12 +1099,13 @@ impl ProductionMapService {
         };
         if input_batch.order_id.trim() != order_id.trim()
             || input_batch.wip_status != OrderProgressBatchWipStatus::InUse
-            || !queue_state::apparatus_titles_match(used_by_apparatus, apparatus)
+            || !super::types::apparatus_ids_match(used_by_apparatus, apparatus)
             || previous_apparatus.as_ref().is_some_and(|previous| {
-                !queue_state::apparatus_titles_match(&input_batch.apparatus, previous)
+                !super::types::apparatus_ids_match(&input_batch.apparatus, previous)
             })
             || (!input_batch.next_apparatus.trim().is_empty()
-                && !queue_state::next_stage_title_matches_apparatus(
+                && !chain::stage_ids_match_for_map(
+                    order_map,
                     &input_batch.next_apparatus,
                     apparatus,
                 ))
@@ -1111,9 +1122,9 @@ impl ProductionMapService {
             return Err(ProductionMapError::ProgressBatchNotAccepted);
         }
         let metrics = if remove_roll {
-            validated_laminatsiya_removed_roll_metrics(apparatus, &progress)?
+            validated_laminatsiya_removed_roll_metrics(apparatus, canonical, &progress)?
         } else {
-            validated_laminatsiya_worker_handoff_metrics(apparatus, &progress)?
+            validated_laminatsiya_worker_handoff_metrics(apparatus, canonical, &progress)?
         };
         let description = progress.description.trim().to_string();
         let updated_input_batch = if remove_roll {
@@ -1149,7 +1160,7 @@ impl ProductionMapService {
             worker_ref: actor.ref_.trim().to_string(),
             worker_display_name: actor.display_name.trim().to_string(),
             updated_at_unix: now,
-            payload_json: preserve_qolip_code(&session, session_payload),
+            payload_json: preserve_qolip_lineage(&session, session_payload),
             ..session
         };
         let context = ProgressRecordContext {

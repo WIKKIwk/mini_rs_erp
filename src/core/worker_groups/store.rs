@@ -1,5 +1,7 @@
 use async_trait::async_trait;
 
+use crate::core::apparatus_standard::ApparatusId;
+
 use super::{WorkerGroupError, WorkerGroupMutation, WorkerGroupRecord, WorkerGroupStorePort};
 #[cfg(test)]
 use super::{apply_worker_group_mutation, normalize::sort_groups};
@@ -10,7 +12,7 @@ pub(super) struct UnavailableWorkerGroupStore;
 impl WorkerGroupStorePort for UnavailableWorkerGroupStore {
     async fn worker_groups(
         &self,
-        _apparatus: Option<&str>,
+        _apparatus_id: Option<&ApparatusId>,
     ) -> Result<Vec<WorkerGroupRecord>, WorkerGroupError> {
         Err(WorkerGroupError::StoreFailed)
     }
@@ -45,15 +47,14 @@ impl MemoryWorkerGroupStore {
 impl WorkerGroupStorePort for MemoryWorkerGroupStore {
     async fn worker_groups(
         &self,
-        apparatus: Option<&str>,
+        apparatus_id: Option<&ApparatusId>,
     ) -> Result<Vec<WorkerGroupRecord>, WorkerGroupError> {
-        let apparatus = apparatus.unwrap_or("").trim().to_lowercase();
         let mut groups = self
             .groups
             .read()
             .await
             .iter()
-            .filter(|group| apparatus.is_empty() || group.apparatus.to_lowercase() == apparatus)
+            .filter(|group| apparatus_id.is_none_or(|id| group.apparatus_id == *id))
             .cloned()
             .collect::<Vec<_>>();
         groups = sort_groups(groups);

@@ -2,6 +2,7 @@ use std::sync::Arc;
 
 use sqlx::postgres::PgConnectOptions;
 
+use crate::core::apparatus_standard::ApparatusId;
 use crate::core::worker_groups::{WorkerGroupError, WorkerGroupService, WorkerGroupUpsert};
 use crate::core::workers::{WorkerService, WorkerUpsert};
 use crate::db::postgres::apply_foundation_migration;
@@ -73,7 +74,7 @@ async fn postgres_worker_group_mutations_are_serialized_with_worker_deactivation
     saved_a.expect("edit A group");
     saved_b.expect("edit B group");
     let saved = groups
-        .worker_groups(Some("Laminatsiya 1"))
+        .worker_groups(Some(&apparatus_id()))
         .await
         .expect("load edited groups");
     assert_eq!(saved.len(), 2);
@@ -107,7 +108,7 @@ async fn postgres_worker_group_mutations_are_serialized_with_worker_deactivation
     ));
 
     let saved = groups
-        .worker_groups(Some("Laminatsiya 1"))
+        .worker_groups(Some(&apparatus_id()))
         .await
         .expect("load groups after race");
     assert!(saved.iter().all(|group| {
@@ -144,6 +145,7 @@ async fn postgres_worker_group_mutations_are_serialized_with_worker_deactivation
 
 fn group_input(group_code: &str, worker_id: &str, shift: &str) -> WorkerGroupUpsert {
     WorkerGroupUpsert {
+        apparatus_id: Some(apparatus_id()),
         apparatus: "Laminatsiya 1".to_string(),
         group_code: group_code.to_string(),
         shift: shift.to_string(),
@@ -154,8 +156,13 @@ fn group_input(group_code: &str, worker_id: &str, shift: &str) -> WorkerGroupUps
 
 fn group_edit(group_code: &str, worker_id: &str, shift: &str) -> WorkerGroupUpsert {
     WorkerGroupUpsert {
+        previous_apparatus_id: Some(apparatus_id()),
         previous_apparatus: Some("Laminatsiya 1".to_string()),
         previous_group_code: Some(group_code.to_string()),
         ..group_input(group_code, worker_id, shift)
     }
+}
+
+fn apparatus_id() -> ApparatusId {
+    ApparatusId::new("apparatus:catalog:laminatsiya-001").expect("canonical apparatus id")
 }

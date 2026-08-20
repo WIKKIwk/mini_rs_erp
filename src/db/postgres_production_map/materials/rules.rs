@@ -1,46 +1,58 @@
 use sqlx::{PgPool, Postgres, Transaction};
 
+use crate::core::apparatus_standard::{CanonicalApparatus, MaterialPolicy};
 use crate::core::production_map::{
-    ApparatusMaterialRule, ProductionMapError, RawMaterialAssignment,
+    ApparatusMaterialRule, ProductionMapError, QueueActionActor, RawMaterialAssignment,
 };
 use crate::db::postgres_raw_material_events::{
     RawMaterialEventDraft, insert_raw_material_event_tx,
 };
 
+use super::catalog_helpers::{load_canonical_apparatuses, mutate_canonical_apparatus_tx};
+
 pub(super) async fn load_apparatus_material_rules(
     pool: &PgPool,
 ) -> Result<Vec<ApparatusMaterialRule>, ProductionMapError> {
-    let rows = sqlx::query_scalar::<_, serde_json::Value>(
-        "SELECT payload_json
-         FROM mini_apparatus_material_rules
-         ORDER BY lower(apparatus) ASC",
-    )
-    .fetch_all(pool)
-    .await
-    .map_err(|_| ProductionMapError::StoreFailed)?;
-
-    rows.into_iter()
-        .map(|payload| {
-            serde_json::from_value::<ApparatusMaterialRule>(payload)
-                .map_err(|_| ProductionMapError::StoreFailed)
-        })
-        .collect()
+    load_canonical_apparatuses(pool).await.map(|apparatuses| {
+        apparatuses
+            .iter()
+            .map(material_rule_from_canonical)
+            .collect()
+    })
 }
 
 pub(super) async fn save_apparatus_material_rule(
     pool: &PgPool,
     rule: ApparatusMaterialRule,
 ) -> Result<(), ProductionMapError> {
+    let mut tx = pool
+        .begin()
+        .await
+        .map_err(|_| ProductionMapError::StoreFailed)?;
+    let updated = mutate_canonical_apparatus_tx(&mut tx, &rule.apparatus_id, |canonical| {
+        canonical.policies.material = MaterialPolicy {
+            requires_material: rule.requires_material,
+            start_policy: rule.start_policy,
+            item_groups: rule.item_groups.clone(),
+            requirement_groups: rule.requirement_groups.clone(),
+        };
+        Ok(())
+    })
+    .await?;
+    let rule = material_rule_from_canonical(&updated);
     let item_groups =
         serde_json::to_value(&rule.item_groups).map_err(|_| ProductionMapError::StoreFailed)?;
     let requirement_groups = serde_json::to_value(&rule.requirement_groups)
         .map_err(|_| ProductionMapError::StoreFailed)?;
     let payload = serde_json::to_value(&rule).map_err(|_| ProductionMapError::StoreFailed)?;
+    let canonical_apparatus_id = rule.apparatus_id.to_string();
     sqlx::query(
         "INSERT INTO mini_apparatus_material_rules
-            (apparatus, item_groups, requirement_groups, requires_material, payload_json, updated_at)
-         VALUES ($1, $2, $3, $4, $5, now())
-         ON CONFLICT (apparatus) DO UPDATE SET
+            (apparatus, canonical_apparatus_id, item_groups, requirement_groups,
+             requires_material, payload_json, updated_at)
+         VALUES ($1, $2, $3, $4, $5, $6, now())
+         ON CONFLICT (canonical_apparatus_id) DO UPDATE SET
+           apparatus = excluded.apparatus,
            item_groups = excluded.item_groups,
            requirement_groups = excluded.requirement_groups,
            requires_material = excluded.requires_material,
@@ -48,22 +60,43 @@ pub(super) async fn save_apparatus_material_rule(
            updated_at = excluded.updated_at",
     )
     .bind(rule.apparatus.trim())
+    .bind(canonical_apparatus_id)
     .bind(item_groups)
     .bind(requirement_groups)
     .bind(rule.requires_material)
     .bind(payload)
-    .execute(pool)
+    .execute(&mut *tx)
     .await
     .map_err(|_| ProductionMapError::StoreFailed)?;
-    Ok(())
+    tx.commit()
+        .await
+        .map_err(|_| ProductionMapError::StoreFailed)
+}
+
+fn material_rule_from_canonical(canonical: &CanonicalApparatus) -> ApparatusMaterialRule {
+    let material = &canonical.policies.material;
+    ApparatusMaterialRule {
+        apparatus_id: canonical.identity.id.clone(),
+        apparatus: canonical.identity.display.display_name.clone(),
+        requires_material: material.requires_material,
+        start_policy: material.start_policy,
+        item_groups: material.item_groups.clone(),
+        requirement_groups: material.requirement_groups.clone(),
+    }
 }
 
 pub(super) async fn load_raw_material_assignments(
     pool: &PgPool,
 ) -> Result<Vec<RawMaterialAssignment>, ProductionMapError> {
-    let rows = sqlx::query_scalar::<_, serde_json::Value>(
-        "SELECT payload_json
+    let rows = sqlx::query_as::<_, (String, serde_json::Value)>(
+        "SELECT canonical_apparatus_id, payload_json
          FROM mini_raw_material_assignments
+         WHERE canonical_apparatus_id IS NOT NULL
+           AND EXISTS (
+               SELECT 1
+               FROM mini_apparatus master
+               WHERE master.id = mini_raw_material_assignments.canonical_apparatus_id
+           )
          ORDER BY updated_at DESC",
     )
     .fetch_all(pool)
@@ -71,9 +104,8 @@ pub(super) async fn load_raw_material_assignments(
     .map_err(|_| ProductionMapError::StoreFailed)?;
 
     rows.into_iter()
-        .map(|payload| {
-            serde_json::from_value::<RawMaterialAssignment>(payload)
-                .map_err(|_| ProductionMapError::StoreFailed)
+        .map(|(canonical_apparatus_id, payload)| {
+            raw_material_assignment_from_payload(canonical_apparatus_id, payload)
         })
         .collect()
 }
@@ -98,16 +130,18 @@ pub(super) async fn save_raw_material_assignment_tx(
     assignment: &RawMaterialAssignment,
 ) -> Result<(), ProductionMapError> {
     let stock = raw_material_stock_for_assignment_tx(tx, &assignment.barcode).await?;
-    let payload = serde_json::to_value(&assignment).map_err(|_| ProductionMapError::StoreFailed)?;
+    ensure_assignment_stock_available(&stock.status, &stock.reserved_order_id)?;
+    let payload = serde_json::to_value(assignment).map_err(|_| ProductionMapError::StoreFailed)?;
     let result = sqlx::query(
         "INSERT INTO mini_raw_material_assignments
-            (barcode, order_id, apparatus, item_code, item_group, payload_json, updated_at)
-         VALUES ($1, $2, $3, $4, $5, $6, now())
+            (barcode, order_id, apparatus, canonical_apparatus_id, item_code, item_group, payload_json, updated_at)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, now())
          ON CONFLICT (barcode) DO NOTHING",
     )
     .bind(assignment.barcode.trim())
     .bind(assignment.order_id.trim())
     .bind(assignment.apparatus.trim())
+    .bind(assignment.apparatus_id.as_str())
     .bind(assignment.item_code.trim())
     .bind(assignment.item_group.trim())
     .bind(payload)
@@ -128,49 +162,147 @@ pub(super) async fn delete_raw_material_assignment(
     order_id: &str,
     barcode: &str,
 ) -> Result<Option<RawMaterialAssignment>, ProductionMapError> {
-    let row = sqlx::query_scalar::<_, serde_json::Value>(
-        "DELETE FROM mini_raw_material_assignments
-         WHERE order_id = $1
-           AND lower(barcode) = lower($2)
-         RETURNING payload_json",
+    let mut tx = pool
+        .begin()
+        .await
+        .map_err(|_| ProductionMapError::StoreFailed)?;
+    let assignment_exists = sqlx::query_scalar::<_, bool>(
+        "SELECT EXISTS (
+             SELECT 1
+             FROM mini_raw_material_assignments
+             WHERE order_id = $1 AND lower(barcode) = lower($2)
+         )",
     )
     .bind(order_id.trim())
     .bind(barcode.trim())
-    .fetch_optional(pool)
+    .fetch_one(&mut *tx)
     .await
     .map_err(|_| ProductionMapError::StoreFailed)?;
-    row.map(|payload| {
-        serde_json::from_value::<RawMaterialAssignment>(payload)
-            .map_err(|_| ProductionMapError::StoreFailed)
-    })
-    .transpose()
+    if !assignment_exists {
+        tx.commit()
+            .await
+            .map_err(|_| ProductionMapError::StoreFailed)?;
+        return Ok(None);
+    }
+    let stock_status = sqlx::query_scalar::<_, String>(
+        "SELECT status
+         FROM mini_raw_material_stock
+         WHERE lower(barcode) = lower($1)
+         FOR UPDATE",
+    )
+    .bind(barcode.trim())
+    .fetch_optional(&mut *tx)
+    .await
+    .map_err(|_| ProductionMapError::StoreFailed)?;
+    if stock_status
+        .as_deref()
+        .is_some_and(|status| !status.trim().eq_ignore_ascii_case("available"))
+    {
+        return Err(ProductionMapError::RawMaterialAssignmentLocked);
+    }
+    let row = sqlx::query_as::<_, (String, serde_json::Value)>(
+        "DELETE FROM mini_raw_material_assignments
+         WHERE order_id = $1
+           AND lower(barcode) = lower($2)
+           AND canonical_apparatus_id IS NOT NULL
+           AND EXISTS (
+               SELECT 1
+               FROM mini_apparatus master
+               WHERE master.id = mini_raw_material_assignments.canonical_apparatus_id
+           )
+         RETURNING canonical_apparatus_id, payload_json",
+    )
+    .bind(order_id.trim())
+    .bind(barcode.trim())
+    .fetch_optional(&mut *tx)
+    .await
+    .map_err(|_| ProductionMapError::StoreFailed)?;
+    let result = row
+        .map(|(canonical_apparatus_id, payload)| {
+            raw_material_assignment_from_payload(canonical_apparatus_id, payload)
+        })
+        .transpose()?;
+    tx.commit()
+        .await
+        .map_err(|_| ProductionMapError::StoreFailed)?;
+    Ok(result)
+}
+
+fn raw_material_assignment_from_payload(
+    canonical_apparatus_id: String,
+    mut payload: serde_json::Value,
+) -> Result<RawMaterialAssignment, ProductionMapError> {
+    let object = payload
+        .as_object_mut()
+        .ok_or(ProductionMapError::StoreFailed)?;
+    object.insert(
+        "apparatus_id".to_string(),
+        serde_json::Value::String(canonical_apparatus_id),
+    );
+    serde_json::from_value::<RawMaterialAssignment>(payload)
+        .map_err(|_| ProductionMapError::StoreFailed)
 }
 
 pub(super) async fn transfer_raw_material_assignments_tx(
     tx: &mut Transaction<'_, Postgres>,
     assignments: &[RawMaterialAssignment],
+    from_apparatus: &str,
+    transfer_id: &str,
+    actor: &QueueActionActor,
 ) -> Result<(), ProductionMapError> {
     for assignment in assignments {
+        let stock = raw_material_stock_for_assignment_tx(tx, &assignment.barcode).await?;
+        ensure_assignment_transferable(&stock, &assignment.order_id)?;
         let payload =
             serde_json::to_value(assignment).map_err(|_| ProductionMapError::StoreFailed)?;
         let result = sqlx::query(
             "UPDATE mini_raw_material_assignments
              SET apparatus = $3,
-                 payload_json = $4,
+                 canonical_apparatus_id = $4,
+                 payload_json = $5,
                  updated_at = now()
              WHERE order_id = $1
-               AND lower(barcode) = lower($2)",
+               AND lower(barcode) = lower($2)
+               AND canonical_apparatus_id = $6",
         )
         .bind(assignment.order_id.trim())
         .bind(assignment.barcode.trim())
         .bind(assignment.apparatus.trim())
+        .bind(assignment.apparatus_id.as_str())
         .bind(payload)
+        .bind(from_apparatus.trim())
         .execute(&mut **tx)
         .await
         .map_err(|_| ProductionMapError::StoreFailed)?;
         if result.rows_affected() != 1 {
             return Err(ProductionMapError::RawMaterialAssignmentNotFound);
         }
+        insert_raw_material_event_tx(
+            tx,
+            assignment_transfer_event_draft(
+                assignment,
+                &stock,
+                "order_unreserved",
+                from_apparatus,
+                transfer_id,
+                actor,
+            ),
+        )
+        .await
+        .map_err(|_| ProductionMapError::StoreFailed)?;
+        insert_raw_material_event_tx(
+            tx,
+            assignment_transfer_event_draft(
+                assignment,
+                &stock,
+                "order_reserved",
+                assignment.apparatus_id.as_str(),
+                transfer_id,
+                actor,
+            ),
+        )
+        .await
+        .map_err(|_| ProductionMapError::StoreFailed)?;
     }
     Ok(())
 }
@@ -184,6 +316,7 @@ struct AssignmentStockRow {
     qty: f64,
     uom: String,
     status: String,
+    reserved_order_id: String,
     source_receipt_id: String,
 }
 
@@ -193,7 +326,7 @@ async fn raw_material_stock_for_assignment_tx(
 ) -> Result<AssignmentStockRow, ProductionMapError> {
     sqlx::query_as::<_, AssignmentStockRow>(
         "SELECT warehouse, item_code, item_name, barcode,
-                qty::float8 AS qty, uom, status, source_receipt_id
+                qty::float8 AS qty, uom, status, reserved_order_id, source_receipt_id
          FROM mini_raw_material_stock
          WHERE lower(barcode) = lower($1)
          FOR UPDATE",
@@ -205,18 +338,65 @@ async fn raw_material_stock_for_assignment_tx(
     .ok_or(ProductionMapError::RawMaterialStockUnavailable)
 }
 
+fn ensure_assignment_stock_available(
+    status: &str,
+    reserved_order_id: &str,
+) -> Result<(), ProductionMapError> {
+    if !status.trim().eq_ignore_ascii_case("available") || !reserved_order_id.trim().is_empty() {
+        return Err(ProductionMapError::RawMaterialStockUnavailable);
+    }
+    Ok(())
+}
+
+fn ensure_assignment_transferable(
+    stock: &AssignmentStockRow,
+    order_id: &str,
+) -> Result<(), ProductionMapError> {
+    if stock.status.trim().eq_ignore_ascii_case("consumed") {
+        return Err(ProductionMapError::RawMaterialAssignmentLocked);
+    }
+    if stock.status.trim().eq_ignore_ascii_case("in_use")
+        && stock.reserved_order_id.trim() != order_id.trim()
+    {
+        return Err(ProductionMapError::RawMaterialStockUnavailable);
+    }
+    Ok(())
+}
+
 fn assignment_event_draft(
     assignment: &RawMaterialAssignment,
     stock: &AssignmentStockRow,
 ) -> RawMaterialEventDraft {
+    let actor = QueueActionActor {
+        role: assignment.assigned_by_role.clone(),
+        ref_: assignment.assigned_by_ref.clone(),
+        display_name: assignment.assigned_by_display_name.clone(),
+    };
+    assignment_event_draft_for(
+        assignment,
+        stock,
+        "order_reserved",
+        assignment.apparatus_id.as_str(),
+        &actor,
+    )
+}
+
+fn assignment_event_draft_for(
+    assignment: &RawMaterialAssignment,
+    stock: &AssignmentStockRow,
+    event_type: &str,
+    apparatus_id: &str,
+    actor: &QueueActionActor,
+) -> RawMaterialEventDraft {
     RawMaterialEventDraft {
         idempotency_key: format!(
-            "order_reserved:{}:{}:{}",
+            "{}:{}:{}:{}",
+            event_type,
             assignment.barcode.trim().to_ascii_uppercase(),
             assignment.order_id.trim(),
-            assignment.apparatus.trim()
+            apparatus_id.trim()
         ),
-        event_type: "order_reserved".to_string(),
+        event_type: event_type.to_string(),
         warehouse: stock.warehouse.trim().to_string(),
         barcode: stock.barcode.trim().to_string(),
         item_code: stock.item_code.trim().to_string(),
@@ -226,10 +406,10 @@ fn assignment_event_draft(
         stock_status_before: Some(stock.status.trim().to_string()),
         stock_status_after: Some(stock.status.trim().to_string()),
         order_id: Some(assignment.order_id.trim().to_string()),
-        apparatus: Some(assignment.apparatus.trim().to_string()),
-        actor_role: assignment.assigned_by_role.trim().to_string(),
-        actor_ref: assignment.assigned_by_ref.trim().to_string(),
-        actor_display_name: assignment.assigned_by_display_name.trim().to_string(),
+        apparatus: Some(apparatus_id.trim().to_string()),
+        actor_role: actor.role.trim().to_string(),
+        actor_ref: actor.ref_.trim().to_string(),
+        actor_display_name: actor.display_name.trim().to_string(),
         owner_role: if assignment.assigned_by_role.trim() == "material_taminotchi" {
             "material_taminotchi".to_string()
         } else {
@@ -251,7 +431,7 @@ fn assignment_event_draft(
         correlation_id: None,
         payload_json: serde_json::json!({
             "order_id": assignment.order_id.trim(),
-            "apparatus": assignment.apparatus.trim(),
+            "apparatus_id": apparatus_id.trim(),
             "barcode": assignment.barcode.trim(),
             "item_group": assignment.item_group.trim(),
             "source_receipt_id": stock.source_receipt_id.trim(),
@@ -260,11 +440,176 @@ fn assignment_event_draft(
     }
 }
 
+fn assignment_transfer_event_draft(
+    assignment: &RawMaterialAssignment,
+    stock: &AssignmentStockRow,
+    event_type: &str,
+    apparatus_id: &str,
+    transfer_id: &str,
+    actor: &QueueActionActor,
+) -> RawMaterialEventDraft {
+    let mut draft = assignment_event_draft_for(
+        assignment,
+        stock,
+        event_type,
+        apparatus_id,
+        actor,
+    );
+    let transfer_id = transfer_id.trim();
+    if !transfer_id.is_empty() {
+        draft.idempotency_key = format!(
+            "apparatus_transfer:{}:{}",
+            transfer_id, draft.idempotency_key
+        );
+        draft.correlation_id = Some(transfer_id.to_string());
+    }
+    draft
+}
+
 fn blank_default<'a>(value: &'a str, fallback: &'a str) -> &'a str {
     let value = value.trim();
     if value.is_empty() {
         fallback.trim()
     } else {
         value
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn new_assignment_requires_available_unreserved_stock() {
+        assert_eq!(
+            ensure_assignment_stock_available("available", ""),
+            Ok(())
+        );
+        assert_eq!(
+            ensure_assignment_stock_available("in_use", ""),
+            Err(ProductionMapError::RawMaterialStockUnavailable)
+        );
+        assert_eq!(
+            ensure_assignment_stock_available("available", "order-001"),
+            Err(ProductionMapError::RawMaterialStockUnavailable)
+        );
+    }
+
+    #[test]
+    fn consumed_stock_cannot_follow_an_apparatus_transfer() {
+        let stock = AssignmentStockRow {
+            warehouse: "Raw warehouse".to_string(),
+            item_code: "FILM-001".to_string(),
+            item_name: "Film".to_string(),
+            barcode: "RM-001".to_string(),
+            qty: 4.5,
+            uom: "kg".to_string(),
+            status: "consumed".to_string(),
+            reserved_order_id: "ORDER-001".to_string(),
+            source_receipt_id: "receipt-001".to_string(),
+        };
+
+        assert_eq!(
+            ensure_assignment_transferable(&stock, "ORDER-001"),
+            Err(ProductionMapError::RawMaterialAssignmentLocked)
+        );
+    }
+
+    #[test]
+    fn apparatus_transfer_events_keep_old_and_new_canonical_ids() {
+        let assignment = raw_material_assignment_from_payload(
+            "apparatus:catalog:new-stage".to_string(),
+            serde_json::json!({
+                "order_id": "ORDER-001",
+                "apparatus": "New stage",
+                "barcode": "RM-001",
+                "item_code": "FILM-001",
+                "item_name": "Film",
+                "item_group": "Rulon",
+                "assigned_by_role": "material_taminotchi",
+                "assigned_by_ref": "worker-001",
+                "assigned_by_display_name": "Worker",
+                "assigned_at": "2026-08-19T00:00:00Z"
+            }),
+        )
+        .expect("assignment payload");
+        let stock = AssignmentStockRow {
+            warehouse: "Raw warehouse".to_string(),
+            item_code: "FILM-001".to_string(),
+            item_name: "Film".to_string(),
+            barcode: "RM-001".to_string(),
+            qty: 4.5,
+            uom: "kg".to_string(),
+            status: "in_use".to_string(),
+            reserved_order_id: "ORDER-001".to_string(),
+            source_receipt_id: "receipt-001".to_string(),
+        };
+        let actor = QueueActionActor {
+            role: "admin".to_string(),
+            ref_: "admin-001".to_string(),
+            display_name: "Admin".to_string(),
+        };
+
+        let unreserved = assignment_transfer_event_draft(
+            &assignment,
+            &stock,
+            "order_unreserved",
+            "apparatus:catalog:old-stage",
+            "apparatus-transfer:001",
+            &actor,
+        );
+        let reserved = assignment_transfer_event_draft(
+            &assignment,
+            &stock,
+            "order_reserved",
+            assignment.apparatus_id.as_str(),
+            "apparatus-transfer:001",
+            &actor,
+        );
+
+        assert_eq!(
+            unreserved.apparatus.as_deref(),
+            Some("apparatus:catalog:old-stage")
+        );
+        assert_eq!(
+            unreserved.payload_json["apparatus_id"],
+            serde_json::json!("apparatus:catalog:old-stage")
+        );
+        assert_eq!(
+            reserved.apparatus.as_deref(),
+            Some("apparatus:catalog:new-stage")
+        );
+        assert_ne!(unreserved.idempotency_key, reserved.idempotency_key);
+        assert_eq!(
+            reserved.correlation_id.as_deref(),
+            Some("apparatus-transfer:001")
+        );
+    }
+
+    #[test]
+    fn loaded_assignment_backfills_canonical_id_without_replacing_display_snapshot() {
+        let assignment = raw_material_assignment_from_payload(
+            "apparatus:catalog:lam-001".to_string(),
+            serde_json::json!({
+                "order_id": "zakaz-001",
+                "apparatus_id": "Laminatsiya (legacy)",
+                "apparatus": "Laminatsiya (legacy)",
+                "barcode": "RM-001",
+                "item_code": "FILM-001",
+                "item_name": "Film",
+                "item_group": "Rulon",
+                "assigned_by_role": "material_taminotchi",
+                "assigned_by_ref": "worker-001",
+                "assigned_by_display_name": "Worker",
+                "assigned_at": "2026-08-19T00:00:00Z"
+            }),
+        )
+        .expect("legacy payload should load with the storage identity");
+
+        assert_eq!(
+            assignment.apparatus_id.as_str(),
+            "apparatus:catalog:lam-001"
+        );
+        assert_eq!(assignment.apparatus, "Laminatsiya (legacy)");
     }
 }

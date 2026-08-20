@@ -8,6 +8,20 @@ fn test_store_path() -> PathBuf {
     std::env::temp_dir().join(format!("mini-rs-erp-item-update-{suffix}.json"))
 }
 
+#[test]
+#[should_panic(expected = "admin store load failed")]
+fn invalid_admin_store_snapshot_fails_closed_at_startup() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let path = dir.path().join("admin.json");
+    std::fs::write(&path, b"not-json").expect("write malformed snapshot");
+
+    assert!(matches!(
+        JsonAdminStore::try_new(path.clone()),
+        Err(AdminPortError::LookupFailed)
+    ));
+    let _ = JsonAdminStore::new(path);
+}
+
 #[tokio::test]
 async fn item_update_preserves_assignments_and_creation_time() {
     let path = test_store_path();

@@ -555,11 +555,13 @@ async fn given_order_note_reserves_qolip_until_it_is_returned() {
         .await
         .expect("return first note");
 
-    assert!(service
-        .order_note_qolip_codes_in_use(&second_principal, "ORDER-2")
-        .await
-        .expect("reload in-use qolips")
-        .is_empty());
+    assert!(
+        service
+            .order_note_qolip_codes_in_use(&second_principal, "ORDER-2")
+            .await
+            .expect("reload in-use qolips")
+            .is_empty()
+    );
     service
         .save_order_note(
             QolipOrderNote {

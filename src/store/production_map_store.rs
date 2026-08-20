@@ -1,6 +1,6 @@
+mod capacity;
 mod map_helpers;
 mod maps;
-mod capacity;
 mod migration;
 mod queue;
 mod unsupported_materials;
@@ -15,6 +15,7 @@ use std::sync::{Arc, Mutex};
 use async_trait::async_trait;
 use rusqlite::Connection;
 
+use crate::core::apparatus_standard::ApparatusId;
 use crate::core::production_map::{
     ApparatusCapacityProfile, ApparatusDowntime, ApparatusMaterialRule, ApparatusQueueActionEvent,
     ApparatusQueuePolicy, ApparatusScheduleCancelRequest, ApparatusScheduleReservation,
@@ -150,12 +151,16 @@ impl ProductionMapStorePort for ProductionMapStore {
     async fn update_apparatus_schedule_reservation_status(
         &self,
         order_id: &str,
-        apparatus: &str,
+        apparatus_id: &ApparatusId,
         status: crate::core::production_map::ApparatusScheduleStatus,
         actor: &QueueActionActor,
     ) -> Result<(), ProductionMapError> {
         capacity::update_apparatus_schedule_reservation_status(
-            self, order_id, apparatus, status, actor,
+            self,
+            order_id,
+            apparatus_id.as_str(),
+            status,
+            actor,
         )
         .await
     }
@@ -176,17 +181,19 @@ impl ProductionMapStorePort for ProductionMapStore {
 
     async fn apparatus_queue_policies(
         &self,
-    ) -> Result<BTreeMap<String, ApparatusQueuePolicy>, ProductionMapError> {
+    ) -> Result<crate::core::production_map::ApparatusQueuePolicyMap, ProductionMapError> {
         queue::apparatus_queue_policies(self).await
     }
 
     async fn put_apparatus_queue_policy(
         &self,
-        apparatus: &str,
+        apparatus_id: &ApparatusId,
+        apparatus_display: &str,
         policy: ApparatusQueuePolicy,
         actor: &QueueActionActor,
     ) -> Result<(), ProductionMapError> {
-        queue::put_apparatus_queue_policy(self, apparatus, policy, actor).await
+        queue::put_apparatus_queue_policy(self, apparatus_id, apparatus_display, policy, actor)
+            .await
     }
 
     async fn put_apparatus_queue_states_with_event(

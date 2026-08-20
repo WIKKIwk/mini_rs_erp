@@ -8,7 +8,11 @@ use crate::core::production_map::{
 use crate::db::postgres_returned_paint::insert_returned_paint_request_tx;
 
 use super::progress_helpers::put_order_run_session_tx;
-use super::queue_helpers::{insert_queue_action_event_tx, put_queue_states_tx};
+use super::queue_helpers::{
+    insert_queue_action_event_tx, put_queue_action_state_tx, queue_action_event_replay_tx,
+    validate_queue_action_event_transition_tx,
+};
+use super::transaction_locks::lock_order_and_apparatuses_tx;
 
 #[derive(sqlx::FromRow)]
 struct CompletionRequestRow {
@@ -60,7 +64,7 @@ pub(super) async fn load_completion_requests(
     let limit = i64::try_from(limit.min(500)).unwrap_or(500);
     let rows = sqlx::query_as::<_, CompletionRequestRow>(
         "SELECT event_id,
-                apparatus,
+                canonical_apparatus_id AS apparatus,
                 order_id,
                 COALESCE(payload_json->>'order_number', '') AS order_number,
                 COALESCE(payload_json->>'order_title', '') AS order_title,
@@ -77,6 +81,7 @@ pub(super) async fn load_completion_requests(
                     AS returned_paint_report
          FROM mini_queue_action_events
          WHERE action = 'complete'
+           AND canonical_apparatus_id IS NOT NULL
            AND payload_json->>'completion_request' = 'true'
            AND COALESCE(payload_json->>'completion_request_status', 'pending') = 'pending'
          ORDER BY created_at DESC, id DESC
@@ -104,7 +109,7 @@ pub(super) async fn load_completion_request_by_event_id(
     }
     let row = sqlx::query_as::<_, CompletionRequestRow>(
         "SELECT event_id,
-                apparatus,
+                canonical_apparatus_id AS apparatus,
                 order_id,
                 COALESCE(payload_json->>'order_number', '') AS order_number,
                 COALESCE(payload_json->>'order_title', '') AS order_title,
@@ -122,6 +127,7 @@ pub(super) async fn load_completion_request_by_event_id(
          FROM mini_queue_action_events
          WHERE event_id = $1
            AND action = 'complete'
+           AND canonical_apparatus_id IS NOT NULL
            AND payload_json->>'completion_request' = 'true'
            AND COALESCE(payload_json->>'completion_request_status', 'pending') = 'pending'
          LIMIT 1",
@@ -151,7 +157,7 @@ pub(super) async fn load_completion_request_decisions_for_actor(
                 COALESCE(payload_json->>'decision_event_id', '') AS event_id,
                 event_id AS request_event_id,
                 COALESCE(payload_json->>'completion_request_status', '') AS decision,
-                apparatus,
+                canonical_apparatus_id AS apparatus,
                 order_id,
                 COALESCE(payload_json->>'order_number', '') AS order_number,
                 COALESCE(payload_json->>'order_title', '') AS order_title,
@@ -167,6 +173,7 @@ pub(super) async fn load_completion_request_decisions_for_actor(
                 COALESCE((payload_json->>'decision_at_unix')::bigint, EXTRACT(EPOCH FROM created_at)::bigint) AS created_at_unix
          FROM mini_queue_action_events
          WHERE action = 'complete'
+           AND canonical_apparatus_id IS NOT NULL
            AND payload_json->>'completion_request' = 'true'
            AND payload_json->>'completion_request_status' IN ('approved', 'rejected')
            AND actor_ref = $1
@@ -220,34 +227,58 @@ pub(super) async fn resolve_completion_request_decision(
         .await
         .map_err(|_| ProductionMapError::StoreFailed)?;
     let mut raw_material_stock_warehouses = Vec::new();
-    if let Some(resolution) = state_resolution {
-        put_queue_states_tx(&mut tx, &resolution.apparatus, resolution.states).await?;
-        insert_queue_action_event_tx(&mut tx, &resolution.event).await?;
-        if let Some(session) = resolution.session {
-            put_order_run_session_tx(&mut tx, &session).await?;
+    let mut resolution_replayed = false;
+    if let Some(resolution) = state_resolution.as_ref() {
+        let mut apparatuses = vec![resolution.apparatus.as_str(), resolution.event.apparatus.as_str()];
+        if let Some(session) = &resolution.session {
+            apparatuses.push(session.apparatus.as_str());
         }
-        raw_material_stock_warehouses =
-            super::raw_material_stock_helpers::apply_raw_material_stock_transitions_tx(
-                &mut tx,
-                &resolution.raw_material_stock_transitions,
-                actor,
-                &resolution.apparatus,
-            )
+        lock_order_and_apparatuses_tx(&mut tx, &resolution.event.order_id, &apparatuses)
             .await?;
-        if let Some(report) = resolution.returned_paint_report {
-            insert_returned_paint_request_tx(&mut tx, &report)
-                .await
-                .map_err(|_| ProductionMapError::StoreFailed)?;
+        resolution_replayed = queue_action_event_replay_tx(&mut tx, &resolution.event).await?;
+        if !resolution_replayed {
+            validate_queue_action_event_transition_tx(&mut tx, &resolution.event).await?;
+        }
+    }
+    if let Some(resolution) = state_resolution {
+        if !resolution_replayed {
+            put_queue_action_state_tx(&mut tx, &resolution.event).await?;
+            insert_queue_action_event_tx(&mut tx, &resolution.event).await?;
+            if let Some(session) = resolution.session {
+                put_order_run_session_tx(&mut tx, &session).await?;
+            }
+            raw_material_stock_warehouses =
+                super::raw_material_stock_helpers::apply_raw_material_stock_transitions_tx(
+                    &mut tx,
+                    &resolution.raw_material_stock_transitions,
+                    actor,
+                    &resolution.apparatus,
+                )
+                .await?;
+            if let Some(report) = resolution.returned_paint_report {
+                insert_returned_paint_request_tx(&mut tx, &report)
+                    .await
+                    .map_err(|_| ProductionMapError::StoreFailed)?;
+            }
         }
     }
     let result = sqlx::query(
         "UPDATE mini_queue_action_events
-         SET payload_json = payload_json || $2::jsonb
+         SET payload_json = payload_json || $4::jsonb
          WHERE event_id = $1
+           AND canonical_apparatus_id IS NOT NULL
            AND payload_json->>'completion_request' = 'true'
-           AND COALESCE(payload_json->>'completion_request_status', 'pending') = 'pending'",
+           AND (
+                COALESCE(payload_json->>'completion_request_status', 'pending') = 'pending'
+                OR (
+                    payload_json->>'completion_request_status' = $2
+                    AND payload_json->>'decision_event_id' = $3
+               )
+           )",
     )
     .bind(request_event_id)
+    .bind(decision.as_str())
+    .bind(notification.event_id.trim())
     .bind(serde_json::json!({
         "completion_request_status": decision.as_str(),
         "decision_event_id": notification.event_id,

@@ -44,7 +44,7 @@ impl ReturnedPaintStorePort for PostgresReturnedPaintStore {
     ) -> Result<Vec<ReturnedPaintRequest>, ReturnedPaintError> {
         let rows = sqlx::query_as::<_, ReturnedPaintRow>(
             "SELECT request.id, request.order_id, request.order_code,
-                request.order_name, request.apparatus, request.sender_role,
+                request.order_name, request.canonical_apparatus_id AS apparatus, request.sender_role,
                 request.sender_ref, request.sender_display_name,
                 request.items_json, request.status,
                 request.rasxot_mix_total::TEXT AS rasxot_mix_total,
@@ -128,9 +128,9 @@ impl ReturnedPaintStorePort for PostgresReturnedPaintStore {
     ) -> Result<ReturnedPaintStoredImage, ReturnedPaintError> {
         sqlx::query(
             "INSERT INTO mini_returned_paint_images (
-                image_id, order_id, apparatus, owner_ref, image_name,
+                image_id, order_id, apparatus, canonical_apparatus_id, owner_ref, image_name,
                 image_mime, image_size_bytes, body
-             ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)",
+             ) VALUES ($1, $2, $3, $3, $4, $5, $6, $7, $8)",
         )
         .bind(&image.image.image_id)
         .bind(&image.order_id)
@@ -151,7 +151,7 @@ impl ReturnedPaintStorePort for PostgresReturnedPaintStore {
         image_id: &str,
     ) -> Result<Option<ReturnedPaintStoredImage>, ReturnedPaintError> {
         let row = sqlx::query_as::<_, ReturnedPaintImageRow>(
-            "SELECT image_id, order_id, apparatus, owner_ref, image_name,
+            "SELECT image_id, order_id, canonical_apparatus_id AS apparatus, owner_ref, image_name,
                 image_mime, image_size_bytes, body
              FROM mini_returned_paint_images
              WHERE image_id = $1",
@@ -299,14 +299,14 @@ pub(crate) async fn insert_returned_paint_request_tx(
     let image_id = request.image.as_ref().map(|image| image.image_id.as_str());
     sqlx::query(
         "INSERT INTO mini_returned_paint_requests (
-            id, target_role, order_id, order_code, order_name, apparatus,
+            id, target_role, order_id, order_code, order_name, apparatus, canonical_apparatus_id,
             sender_role, sender_ref, sender_display_name, items_json, status,
             image_id,
             rasxot_mix_total, astatka_mix_total, rasxot_alcohol, astatka_alcohol,
             final_used_alcohol, rasxot_pure_paint, astatka_pure_paint,
             final_used_paint, created_at
          ) VALUES (
-            $1, 'boyoqchi', $2, $3, $4, $5, $6, $7, $8, $9,
+            $1, 'boyoqchi', $2, $3, $4, $5, $5, $6, $7, $8, $9,
             $10, $11,
             $12::NUMERIC, $13::NUMERIC, $14::NUMERIC, $15::NUMERIC,
             $16::NUMERIC, $17::NUMERIC, $18::NUMERIC, $19::NUMERIC,
@@ -348,7 +348,7 @@ async fn fetch_returned_paint_request_tx(
 ) -> Result<Option<ReturnedPaintRequest>, ReturnedPaintError> {
     let row = sqlx::query_as::<_, ReturnedPaintRow>(
         "SELECT request.id, request.order_id, request.order_code,
-            request.order_name, request.apparatus, request.sender_role,
+            request.order_name, request.canonical_apparatus_id AS apparatus, request.sender_role,
             request.sender_ref, request.sender_display_name,
             request.items_json, request.status,
             request.rasxot_mix_total::TEXT AS rasxot_mix_total,

@@ -1,4 +1,5 @@
 use super::*;
+use crate::core::apparatus_standard::{ApparatusFamily, ApparatusId, ApparatusKind};
 use crate::core::production_map::pechat;
 use crate::core::returned_paint::{
     ReturnedPaintError, ReturnedPaintItem, ReturnedPaintRequestCreate, ReturnedPaintStatus,
@@ -94,6 +95,52 @@ struct ApparatusQueueActionRequest {
     action: queue_state::ApparatusQueueAction,
 }
 
+#[derive(Debug, Clone)]
+pub(super) struct QueueApparatusMetadata {
+    pub(super) id: ApparatusId,
+    family: ApparatusFamily,
+    kind: ApparatusKind,
+    qolip_scan_required: bool,
+}
+
+impl QueueApparatusMetadata {
+    fn is_pechat(&self) -> bool {
+        self.family == ApparatusFamily::Pechat
+            && matches!(self.kind, ApparatusKind::ColorPechat | ApparatusKind::Flexo)
+    }
+
+    fn is_rezka(&self) -> bool {
+        self.family == ApparatusFamily::Rezka && self.kind == ApparatusKind::Rezka
+    }
+
+    pub(super) fn requires_qolip_scan(&self) -> bool {
+        self.qolip_scan_required
+    }
+}
+
+pub(super) async fn resolve_queue_apparatus(
+    state: &AppState,
+    requested: &str,
+) -> Result<QueueApparatusMetadata, AdminError> {
+    let requested_id = parse_canonical_queue_apparatus_id(requested)?;
+    let canonical = state
+        .production_maps
+        .resolve_canonical_apparatus(&requested_id)
+        .await
+        .map_err(production_map_error)?;
+    Ok(QueueApparatusMetadata {
+        id: canonical.identity.id.clone(),
+        family: canonical.classification.family,
+        kind: canonical.classification.kind,
+        qolip_scan_required: pechat::requires_qolip_scan(canonical.as_ref()),
+    })
+}
+
+fn parse_canonical_queue_apparatus_id(requested: &str) -> Result<ApparatusId, AdminError> {
+    ApparatusId::new(requested.trim().to_string())
+        .map_err(|_| bad_request("canonical_apparatus_id_required"))
+}
+
 pub async fn production_map_queue_action(
     State(state): State<AppState>,
     method: Method,
@@ -117,6 +164,8 @@ pub async fn production_map_queue_action(
     if input.apparatus.trim().is_empty() || input.order_id.trim().is_empty() {
         return Err(bad_request("apparatus and order_id are required"));
     }
+    let apparatus = resolve_queue_apparatus(&state, &input.apparatus).await?;
+    input.apparatus = apparatus.id.to_string();
     input.action = canonical_queue_action(
         input.action,
         input.worker_handoff,
@@ -167,11 +216,7 @@ pub async fn production_map_queue_action(
         return Err(bad_request("worker_handoff_actions_conflict"));
     }
     if !input.rezka_frames.is_empty()
-        && (!input
-            .apparatus
-            .trim()
-            .to_ascii_lowercase()
-            .contains("rezka")
+        && (!apparatus.is_rezka()
             || !matches!(
                 input.action,
                 queue_state::ApparatusQueueAction::Pause
@@ -266,6 +311,17 @@ pub async fn production_map_queue_action(
             Vec::new()
         };
     let produced_qty = input.produced_qty.or(input.qty);
+    let progress_uom = if !input.uom.trim().is_empty() {
+        input.uom.clone()
+    } else if !input.unit.trim().is_empty() {
+        input.unit.clone()
+    } else if apparatus.is_pechat()
+        && (produced_qty.is_some() || input.finished_goods_meter.is_some())
+    {
+        "m".to_string()
+    } else {
+        String::new()
+    };
     let completion_request_note = if input.freeze_with_issue {
         input.issue_note.clone()
     } else if input.completion_request_note.trim().is_empty() {
@@ -290,7 +346,7 @@ pub async fn production_map_queue_action(
                     "freeze_safe_stop_output_or_issue_note_required",
                 ));
             }
-        } else if !freeze_safe_stop_output_is_complete(&input, produced_qty) {
+        } else if !freeze_safe_stop_output_is_complete(&input, produced_qty, &apparatus) {
             return Err(bad_request("freeze_safe_stop_output_incomplete"));
         }
     }
@@ -303,7 +359,7 @@ pub async fn production_map_queue_action(
     let returned_paint_field_count = returned_paint_value_count(&input.returned_paint_items);
     let has_returned_paint_image = !input.returned_paint_image_id.trim().is_empty();
     let is_bosma_complete = matches!(input.action, queue_state::ApparatusQueueAction::Complete)
-        && pechat::is_pechat_apparatus(&input.apparatus);
+        && apparatus.is_pechat();
     if is_bosma_complete
         && !returned_paint_report_can_close(&input.returned_paint_items, has_returned_paint_image)
     {
@@ -368,11 +424,7 @@ pub async fn production_map_queue_action(
         rezka_frames: input.rezka_frames.clone(),
         produced_qty,
         gross_qty: input.gross_qty,
-        uom: if input.uom.trim().is_empty() {
-            input.unit.clone()
-        } else {
-            input.uom.clone()
-        },
+        uom: progress_uom,
         progress_batch_id: input.progress_batch_id.clone(),
         qr_payload: if input.qr_payload.trim().is_empty() {
             input.progress_qr.clone()
@@ -406,11 +458,7 @@ pub async fn production_map_queue_action(
         && input.total_waste.is_some()
         && input.finished_goods_kg.is_some()
         && input.finished_goods_meter.is_some();
-    let is_rezka = input
-        .apparatus
-        .trim()
-        .to_ascii_lowercase()
-        .contains("rezka");
+    let is_rezka = apparatus.is_rezka();
     let has_rezka_progress_metrics =
         is_rezka && rezka_queue_quantity_metrics_are_complete(&input, produced_qty);
     let has_rezka_frame_metrics = is_rezka && !input.rezka_frames.is_empty();
@@ -471,6 +519,16 @@ pub async fn production_map_queue_action(
             "completion_request": result.completion_request,
         })));
     }
+    let qolip_preparations = if matches!(input.action, queue_state::ApparatusQueueAction::Start) {
+        prepare_qolips_for_bosma_start(&state, &principal, &input, &apparatus).await?
+    } else {
+        Vec::new()
+    };
+    let qolip_validation = TrustedQolipStartValidation::from_preparations(
+        &apparatus.id,
+        &input.order_id,
+        &qolip_preparations,
+    );
     let mut prepared = state
         .production_maps
         .prepare_apparatus_queue_action_with_material_scan_and_progress(
@@ -483,15 +541,11 @@ pub async fn production_map_queue_action(
                 material_barcode: &material_barcode,
                 state_material_barcodes: &state_material_barcodes,
                 progress,
+                qolip_validation,
             },
         )
         .await
         .map_err(production_map_error)?;
-    let qolip_preparations = if matches!(input.action, queue_state::ApparatusQueueAction::Start) {
-        prepare_qolips_for_bosma_start(&state, &principal, &input).await?
-    } else {
-        Vec::new()
-    };
     if !qolip_preparations.is_empty() {
         prepared.attach_qolip_codes(
             &qolip_preparations
@@ -607,7 +661,6 @@ pub async fn production_map_queue_action(
     } else {
         Vec::new()
     };
-    let fallback_qolip_checkouts = qolip_checkouts.clone();
     let result = state
         .production_maps
         .commit_prepared_queue_action_with_raw_material_stock(
@@ -618,15 +671,6 @@ pub async fn production_map_queue_action(
         )
         .await
         .map_err(production_map_error)?;
-    if !result.qolip_checkout_committed && !fallback_qolip_checkouts.is_empty() {
-        for checkout in fallback_qolip_checkouts {
-            state
-                .qolip
-                .issue_prepared_checkout(checkout)
-                .await
-                .map_err(qolip_queue_error)?;
-        }
-    }
     let mut warehouse_stock_update_warehouses = result.raw_material_stock_warehouses.clone();
     if !raw_material_stock_transitions.is_empty() && warehouse_stock_update_warehouses.is_empty() {
         for transition in &raw_material_stock_transitions {
@@ -739,13 +783,9 @@ fn queue_action_has_any_output(input: &ApparatusQueueActionRequest) -> bool {
 fn freeze_safe_stop_output_is_complete(
     input: &ApparatusQueueActionRequest,
     produced_qty: Option<f64>,
+    apparatus: &QueueApparatusMetadata,
 ) -> bool {
-    if input
-        .apparatus
-        .trim()
-        .to_ascii_lowercase()
-        .contains("rezka")
-    {
+    if apparatus.is_rezka() {
         return !input.rezka_frames.is_empty()
             || rezka_queue_quantity_metrics_are_complete(input, produced_qty);
     }
@@ -759,8 +799,10 @@ include!("queue_action_completion_support.rs");
 #[cfg(test)]
 mod tests {
     use super::{
-        apparatus_requires_qolip_scan, canonical_queue_action, returned_paint_queue_error,
+        QueueApparatusMetadata, canonical_queue_action, parse_canonical_queue_apparatus_id,
+        returned_paint_queue_error,
     };
+    use crate::core::apparatus_standard::{ApparatusFamily, ApparatusId, ApparatusKind};
     use crate::core::auth::models::{Principal, PrincipalRole};
     use crate::core::production_map::queue_state::ApparatusQueueAction;
     use crate::core::returned_paint::ReturnedPaintError;
@@ -818,13 +860,54 @@ mod tests {
     }
 
     #[test]
-    fn qolip_scan_is_required_only_for_seven_eight_and_nine_color_bosma_family() {
-        assert!(apparatus_requires_qolip_scan("7 ta rangli pechat - A"));
-        assert!(apparatus_requires_qolip_scan("8 ta rangli bosma aparat"));
-        assert!(apparatus_requires_qolip_scan("9 rangli val"));
-        assert!(!apparatus_requires_qolip_scan("Laminatsiya"));
-        assert!(!apparatus_requires_qolip_scan("Rezka aparat"));
-        assert!(!apparatus_requires_qolip_scan("Pechat"));
+    fn qolip_scan_uses_canonical_tooling_policy_not_pechat_classification() {
+        let pechat = QueueApparatusMetadata {
+            id: ApparatusId::new("apparatus:catalog:pechat-001").unwrap(),
+            family: ApparatusFamily::Pechat,
+            kind: ApparatusKind::ColorPechat,
+            qolip_scan_required: false,
+        };
+        let scan_required_pechat = QueueApparatusMetadata {
+            id: ApparatusId::new("apparatus:catalog:pechat-002").unwrap(),
+            family: ApparatusFamily::Pechat,
+            kind: ApparatusKind::ColorPechat,
+            qolip_scan_required: true,
+        };
+        let flexo = QueueApparatusMetadata {
+            id: ApparatusId::new("apparatus:catalog:flexo-001").unwrap(),
+            family: ApparatusFamily::Pechat,
+            kind: ApparatusKind::Flexo,
+            qolip_scan_required: false,
+        };
+        let laminatsiya = QueueApparatusMetadata {
+            id: ApparatusId::new("apparatus:catalog:laminatsiya-001").unwrap(),
+            family: ApparatusFamily::Laminatsiya,
+            kind: ApparatusKind::Laminatsiya,
+            qolip_scan_required: false,
+        };
+        let rezka = QueueApparatusMetadata {
+            id: ApparatusId::new("apparatus:catalog:rezka-001").unwrap(),
+            family: ApparatusFamily::Rezka,
+            kind: ApparatusKind::Rezka,
+            qolip_scan_required: false,
+        };
+
+        assert!(!pechat.requires_qolip_scan());
+        assert!(scan_required_pechat.requires_qolip_scan());
+        assert!(!flexo.requires_qolip_scan());
+        assert!(!laminatsiya.requires_qolip_scan());
+        assert!(!rezka.requires_qolip_scan());
+    }
+
+    #[test]
+    fn queue_apparatus_identity_rejects_legacy_display_title() {
+        assert!(parse_canonical_queue_apparatus_id("7 ta rangli pechat - A").is_err());
+        assert_eq!(
+            parse_canonical_queue_apparatus_id("apparatus:catalog:pechat-001")
+                .ok()
+                .map(|id| id.as_str().to_string()),
+            Some("apparatus:catalog:pechat-001".to_string())
+        );
     }
 
     #[test]

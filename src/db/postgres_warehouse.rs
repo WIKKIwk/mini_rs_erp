@@ -4,8 +4,8 @@ use sqlx::{PgPool, Postgres, Transaction};
 use crate::core::admin::models::AdminWarehouse;
 use crate::core::auth::models::PrincipalRole;
 use crate::core::warehouses::{
-    WarehouseAssignment, WarehouseDeleteResult, WarehouseError, WarehouseStockItem,
-    WarehouseStorePort, WarehouseSummary,
+    WarehouseAssignment, WarehouseAssignmentIdentity, WarehouseDeleteResult, WarehouseError,
+    WarehouseStockItem, WarehouseStorePort, WarehouseSummary,
 };
 
 #[derive(Clone)]
@@ -129,12 +129,32 @@ impl WarehouseStorePort for PostgresWarehouseStore {
     ) -> Result<Vec<WarehouseAssignment>, WarehouseError> {
         let warehouse = warehouse.trim().to_lowercase();
         let rows = sqlx::query_as::<_, WarehouseAssignmentRow>(
-            "SELECT warehouse, principal_role, principal_ref, display_name
+            "SELECT assignment_kind, warehouse, warehouse_name, apparatus_id,
+                    principal_role, principal_ref, display_name
              FROM mini_warehouse_assignments
-             WHERE $1 = '' OR lower(warehouse) = $1
-             ORDER BY lower(warehouse), lower(display_name), lower(principal_ref)",
+             WHERE assignment_kind = 'warehouse'
+               AND ($1 = '' OR lower(warehouse_name) = $1)
+             ORDER BY lower(warehouse_name), lower(display_name), lower(principal_ref)",
         )
         .bind(warehouse)
+        .fetch_all(&self.pool)
+        .await
+        .map_err(|_| WarehouseError::StoreFailed)?;
+
+        rows.into_iter().map(row_to_assignment).collect()
+    }
+
+    async fn all_warehouse_assignments(
+        &self,
+    ) -> Result<Vec<WarehouseAssignment>, WarehouseError> {
+        let rows = sqlx::query_as::<_, WarehouseAssignmentRow>(
+            "SELECT assignment_kind, warehouse, warehouse_name, apparatus_id,
+                    principal_role, principal_ref, display_name
+             FROM mini_warehouse_assignments
+             ORDER BY lower(assignment_kind),
+                      lower(COALESCE(warehouse_name, apparatus_id)),
+                      lower(display_name), lower(principal_ref)",
+        )
         .fetch_all(&self.pool)
         .await
         .map_err(|_| WarehouseError::StoreFailed)?;
@@ -204,6 +224,7 @@ impl WarehouseStorePort for PostgresWarehouseStore {
                 LEFT JOIN mini_warehouses physical_warehouse
                   ON physical_warehouse.id = physical_location.warehouse_id
                 WHERE btrim(stock.warehouse) <> ''
+                  AND btrim(COALESCE(stock.inventory_transfer_id, '')) = ''
                   AND (
                         placement.asset_ref IS NULL
                         OR (
@@ -244,12 +265,13 @@ impl WarehouseStorePort for PostgresWarehouseStore {
             ),
             assignment_counts AS (
                 SELECT
-                    warehouse,
+                    warehouse_name AS warehouse,
                     count(*)::bigint AS assignment_count,
                     string_agg(COALESCE(NULLIF(btrim(display_name), ''), principal_ref), E'\n'
                         ORDER BY lower(COALESCE(NULLIF(btrim(display_name), ''), principal_ref))) AS assigned_display_names
                 FROM mini_warehouse_assignments
-                GROUP BY warehouse
+                WHERE assignment_kind = 'warehouse'
+                GROUP BY warehouse_name
             ),
             warehouse_names AS (
                 SELECT name AS warehouse
@@ -386,23 +408,53 @@ impl WarehouseStorePort for PostgresWarehouseStore {
         if principal_ref.is_empty() {
             return Err(WarehouseError::MissingPrincipalRef);
         }
-        sqlx::query_as::<_, WarehouseAssignmentRow>(
+        let assignment_kind = assignment.assignment_kind.trim();
+        let conflict_target = match assignment_kind {
+            "warehouse" => {
+                "(warehouse_name, principal_role, principal_ref) WHERE assignment_kind = 'warehouse'"
+            }
+            "apparatus" => {
+                "(apparatus_id, principal_role, principal_ref) WHERE assignment_kind = 'apparatus'"
+            }
+            _ => return Err(WarehouseError::StoreFailed),
+        };
+        let query = format!(
             "INSERT INTO mini_warehouse_assignments (
-                 warehouse, principal_role, principal_ref, display_name, payload_json
+                 assignment_kind, warehouse, warehouse_name, apparatus_id,
+                 principal_role, principal_ref, display_name, payload_json
              )
-             VALUES ($1, $2, $3, $4, $5)
-             ON CONFLICT (warehouse, principal_role, principal_ref) DO UPDATE SET
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+             ON CONFLICT {conflict_target} DO UPDATE SET
+               warehouse = excluded.warehouse,
+               warehouse_name = excluded.warehouse_name,
+               apparatus_id = excluded.apparatus_id,
                display_name = excluded.display_name,
                payload_json = excluded.payload_json,
                updated_at = now()
-             RETURNING warehouse, principal_role, principal_ref, display_name",
-        )
+             WHERE mini_warehouse_assignments.assignment_kind = excluded.assignment_kind
+               AND (
+                    (excluded.assignment_kind = 'warehouse'
+                     AND mini_warehouse_assignments.warehouse_name = excluded.warehouse_name)
+                    OR
+                    (excluded.assignment_kind = 'apparatus'
+                     AND mini_warehouse_assignments.apparatus_id = excluded.apparatus_id)
+               )
+             RETURNING assignment_kind, warehouse, warehouse_name, apparatus_id,
+                       principal_role, principal_ref, display_name"
+        );
+        sqlx::query_as::<_, WarehouseAssignmentRow>(&query)
+        .bind(assignment_kind)
         .bind(warehouse)
+        .bind(assignment.warehouse_name.as_deref().map(str::trim))
+        .bind(assignment.apparatus_id.as_deref().map(str::trim))
         .bind(role_as_str(&assignment.principal_role))
         .bind(principal_ref)
         .bind(assignment.display_name.trim())
         .bind(serde_json::json!({
+            "assignment_kind": assignment_kind,
             "warehouse": warehouse,
+            "warehouse_name": assignment.warehouse_name.as_deref().map(str::trim),
+            "apparatus_id": assignment.apparatus_id.as_deref().map(str::trim),
             "principal_role": role_as_str(&assignment.principal_role),
             "principal_ref": principal_ref,
             "display_name": assignment.display_name.trim(),
@@ -415,18 +467,36 @@ impl WarehouseStorePort for PostgresWarehouseStore {
 
     async fn delete_warehouse_assignment(
         &self,
-        warehouse: &str,
+        identity: &WarehouseAssignmentIdentity,
         principal_role: &PrincipalRole,
         principal_ref: &str,
     ) -> Result<Option<WarehouseAssignment>, WarehouseError> {
+        let (query, identity_value) = match identity {
+            WarehouseAssignmentIdentity::WarehouseName(warehouse) => (
+                "DELETE FROM mini_warehouse_assignments
+                 WHERE assignment_kind = 'warehouse'
+                   AND lower(warehouse_name) = lower($1)
+                   AND principal_role = $2
+                   AND principal_ref = $3
+                 RETURNING assignment_kind, warehouse, warehouse_name, apparatus_id,
+                           principal_role, principal_ref, display_name",
+                warehouse.as_str(),
+            ),
+            WarehouseAssignmentIdentity::ApparatusId(apparatus_id) => (
+                "DELETE FROM mini_warehouse_assignments
+                 WHERE assignment_kind = 'apparatus'
+                   AND apparatus_id = $1
+                   AND principal_role = $2
+                   AND principal_ref = $3
+                 RETURNING assignment_kind, warehouse, warehouse_name, apparatus_id,
+                           principal_role, principal_ref, display_name",
+                apparatus_id.as_str(),
+            ),
+        };
         let row = sqlx::query_as::<_, WarehouseAssignmentRow>(
-            "DELETE FROM mini_warehouse_assignments
-             WHERE warehouse = $1
-               AND principal_role = $2
-               AND principal_ref = $3
-             RETURNING warehouse, principal_role, principal_ref, display_name",
+            query,
         )
-        .bind(warehouse.trim())
+        .bind(identity_value)
         .bind(role_as_str(principal_role))
         .bind(principal_ref.trim())
         .fetch_optional(&self.pool)
@@ -476,12 +546,8 @@ impl WarehouseStorePort for PostgresWarehouseStore {
         if has_children {
             return Err(WarehouseError::HasChildren);
         }
-        let snapshot = warehouse_delete_snapshot_tx(
-            &mut transaction,
-            &warehouse_id,
-            &warehouse_name,
-        )
-        .await?;
+        let snapshot =
+            warehouse_delete_snapshot_tx(&mut transaction, &warehouse_id, &warehouse_name).await?;
         let product_count = count_as_usize(snapshot.product_count);
         let reserved_count = count_as_usize(snapshot.reserved_count);
         let assignment_count = count_as_usize(snapshot.assignment_count);
@@ -510,11 +576,15 @@ impl WarehouseStorePort for PostgresWarehouseStore {
             .await
             .map_err(|_| WarehouseError::StoreFailed)?;
         }
-        sqlx::query("DELETE FROM mini_warehouse_assignments WHERE lower(warehouse) = lower($1)")
-            .bind(&warehouse_name)
-            .execute(&mut *transaction)
-            .await
-            .map_err(|_| WarehouseError::StoreFailed)?;
+        sqlx::query(
+            "DELETE FROM mini_warehouse_assignments
+                     WHERE assignment_kind = 'warehouse'
+                       AND lower(warehouse_name) = lower($1)",
+        )
+        .bind(&warehouse_name)
+        .execute(&mut *transaction)
+        .await
+        .map_err(|_| WarehouseError::StoreFailed)?;
         let deleted = sqlx::query("DELETE FROM mini_warehouses WHERE id = $1")
             .bind(&warehouse_id)
             .execute(&mut *transaction)
@@ -625,7 +695,8 @@ async fn warehouse_delete_snapshot_tx(
             )::bigint AS reserved_count,
             (SELECT count(*)
              FROM mini_warehouse_assignments
-             WHERE lower(warehouse) = lower($1))::bigint AS assignment_count
+             WHERE assignment_kind = 'warehouse'
+               AND lower(warehouse_name) = lower($1))::bigint AS assignment_count
         "#,
     )
     .bind(warehouse)
@@ -649,7 +720,10 @@ struct WarehouseRow {
 
 #[derive(sqlx::FromRow)]
 struct WarehouseAssignmentRow {
+    assignment_kind: String,
     warehouse: String,
+    warehouse_name: Option<String>,
+    apparatus_id: Option<String>,
     principal_role: String,
     principal_ref: String,
     display_name: String,
@@ -715,7 +789,10 @@ fn role_from_str(raw: &str) -> Result<PrincipalRole, WarehouseError> {
 
 fn row_to_assignment(row: WarehouseAssignmentRow) -> Result<WarehouseAssignment, WarehouseError> {
     Ok(WarehouseAssignment {
+        assignment_kind: row.assignment_kind,
         warehouse: row.warehouse,
+        warehouse_name: row.warehouse_name,
+        apparatus_id: row.apparatus_id,
         principal_role: role_from_str(&row.principal_role)?,
         principal_ref: row.principal_ref,
         display_name: row.display_name,

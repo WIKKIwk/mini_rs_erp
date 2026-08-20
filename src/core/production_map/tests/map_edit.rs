@@ -2,15 +2,28 @@ use std::collections::BTreeMap;
 
 use crate::core::production_map::*;
 
-use super::fixtures::apparatus_stage_map;
+use super::fixtures::{
+    canonical_apparatus_stage_map, canonical_two_stage_map, service_with_default_apparatus,
+};
+
+const PECHAT_7_ID: &str = "apparatus:default:bosma_7";
+const PECHAT_8_ID: &str = "apparatus:default:bosma_8";
+const LAMINATION_ID: &str = "apparatus:default:asset-007";
+const REZKA_ID: &str = "apparatus:default:asset-010";
 
 #[tokio::test]
 async fn started_stage_is_immutable_but_future_stage_can_be_replaced() {
     let store = std::sync::Arc::new(MemoryProductionMapStore::new());
-    let service = ProductionMapService::new(store.clone());
+    let service = service_with_default_apparatus(store.clone()).await;
     let order_id = "zakaz-map-edit-locked";
-    let first = "7 ta rangli bosma aparat";
-    let original = two_stage_map(order_id, first, "Laminatsiya");
+    let first = PECHAT_7_ID;
+    let original = canonical_two_stage_map(
+        order_id,
+        PECHAT_7_ID,
+        "7 ta rangli bosma aparat",
+        LAMINATION_ID,
+        "Laminatsiya",
+    );
     service
         .upsert_map(original.clone())
         .await
@@ -66,10 +79,10 @@ async fn started_stage_is_immutable_but_future_stage_can_be_replaced() {
 #[tokio::test]
 async fn completed_session_locks_stage_even_without_queue_state() {
     let store = std::sync::Arc::new(MemoryProductionMapStore::new());
-    let service = ProductionMapService::new(store.clone());
+    let service = service_with_default_apparatus(store.clone()).await;
     let order_id = "zakaz-map-edit-history";
-    let apparatus = "Rezka";
-    let original = apparatus_stage_map(order_id, apparatus);
+    let apparatus = REZKA_ID;
+    let original = canonical_apparatus_stage_map(order_id, apparatus, "Rezka");
     service
         .upsert_map(original.clone())
         .await
@@ -100,13 +113,13 @@ async fn completed_session_locks_stage_even_without_queue_state() {
 
 #[tokio::test]
 async fn pending_apparatus_move_still_uses_the_guarded_map_save() {
-    let service = ProductionMapService::new(std::sync::Arc::new(
-        MemoryProductionMapStore::new(),
-    ));
+    let service =
+        service_with_default_apparatus(std::sync::Arc::new(MemoryProductionMapStore::new())).await;
     let order_id = "zakaz-map-edit-pending-move";
     service
-        .upsert_map(apparatus_stage_map(
+        .upsert_map(canonical_apparatus_stage_map(
             order_id,
+            PECHAT_7_ID,
             "7 ta rangli bosma aparat",
         ))
         .await
@@ -116,22 +129,46 @@ async fn pending_apparatus_move_still_uses_the_guarded_map_save() {
         std::time::Duration::from_secs(1),
         service.move_apparatus(ProductionMapMoveRequest {
             map_id: order_id.to_string(),
-            from_apparatus: "7 ta rangli bosma aparat".to_string(),
-            to_apparatus: "8 ta rangli bosma aparat".to_string(),
+            from_apparatus: PECHAT_7_ID.to_string(),
+            to_apparatus: PECHAT_8_ID.to_string(),
         }),
     )
     .await
     .expect("move must not deadlock")
     .expect("pending move");
 
-    assert_eq!(moved.map.nodes[1].title, "8 ta rangli bosma aparat");
+    assert_eq!(moved.map.nodes[1].apparatus_id, PECHAT_8_ID);
+}
+
+#[tokio::test]
+async fn pending_pechat_move_rejects_incompatible_order_dimensions() {
+    let service =
+        service_with_default_apparatus(std::sync::Arc::new(MemoryProductionMapStore::new())).await;
+    let order_id = "zakaz-map-edit-pechat-capacity";
+    let mut map = canonical_apparatus_stage_map(
+        order_id,
+        PECHAT_8_ID,
+        "8 ta rangli bosma aparat",
+    );
+    map.roll_count = Some(7);
+    map.width_mm = Some(900.0);
+    service.upsert_map(map).await.expect("initial map");
+
+    let result = service
+        .move_apparatus(ProductionMapMoveRequest {
+            map_id: order_id.to_string(),
+            from_apparatus: PECHAT_8_ID.to_string(),
+            to_apparatus: PECHAT_7_ID.to_string(),
+        })
+        .await;
+
+    assert_eq!(result, Err(ProductionMapError::MoveNotAllowed));
 }
 
 #[tokio::test]
 async fn pending_unassigned_alternative_move_claims_target_apparatus() {
-    let service = ProductionMapService::new(std::sync::Arc::new(
-        MemoryProductionMapStore::new(),
-    ));
+    let service =
+        service_with_default_apparatus(std::sync::Arc::new(MemoryProductionMapStore::new())).await;
     let order_id = "zakaz-map-edit-unassigned-alternative";
     service
         .upsert_map(unassigned_alternative_map(order_id))
@@ -141,8 +178,8 @@ async fn pending_unassigned_alternative_move_claims_target_apparatus() {
     let moved = service
         .move_apparatus(ProductionMapMoveRequest {
             map_id: order_id.to_string(),
-            from_apparatus: "7 ta rangli bosma aparat".to_string(),
-            to_apparatus: "8 ta rangli bosma aparat".to_string(),
+            from_apparatus: PECHAT_7_ID.to_string(),
+            to_apparatus: PECHAT_8_ID.to_string(),
         })
         .await
         .expect("unassigned alternative move");
@@ -170,10 +207,12 @@ async fn pending_unassigned_alternative_move_claims_target_apparatus() {
 }
 
 fn unassigned_alternative_map(id: &str) -> ProductionMapDefinition {
-    let mut map = apparatus_stage_map(id, "7 ta rangli bosma aparat");
-    for node in map.nodes.iter_mut().filter(|node| {
-        node.kind == ProductionMapNodeKind::Apparatus
-    }) {
+    let mut map = canonical_apparatus_stage_map(id, PECHAT_7_ID, "7 ta rangli bosma aparat");
+    for node in map
+        .nodes
+        .iter_mut()
+        .filter(|node| node.kind == ProductionMapNodeKind::Apparatus)
+    {
         node.alternative_group_id = "alt-pechat".to_string();
         node.alternative_group_label = "pechat".to_string();
         node.alternative_assigned_title.clear();
@@ -184,6 +223,7 @@ fn unassigned_alternative_map(id: &str) -> ProductionMapDefinition {
             id: "apparatus-8".to_string(),
             kind: ProductionMapNodeKind::Apparatus,
             title: "8 ta rangli bosma aparat".to_string(),
+            apparatus_id: PECHAT_8_ID.to_string(),
             formula: None,
             role_code: String::new(),
             item_code: String::new(),
@@ -193,6 +233,7 @@ fn unassigned_alternative_map(id: &str) -> ProductionMapDefinition {
             alternative_group_id: "alt-pechat".to_string(),
             alternative_group_label: "pechat".to_string(),
             alternative_assigned_title: String::new(),
+            alternative_assigned_apparatus_id: String::new(),
             rezka_kadr_count: None,
             rezka_label_length: None,
             x: 0.0,
@@ -222,54 +263,6 @@ fn unassigned_alternative_map(id: &str) -> ProductionMapDefinition {
         },
         ProductionMapEdge {
             from: "apparatus-8".to_string(),
-            to: "end".to_string(),
-            branch: String::new(),
-        },
-    ];
-    map
-}
-
-fn two_stage_map(id: &str, first: &str, second: &str) -> ProductionMapDefinition {
-    let mut map = apparatus_stage_map(id, first);
-    map.nodes.insert(
-        2,
-        ProductionMapNode {
-            id: "second".to_string(),
-            kind: ProductionMapNodeKind::Apparatus,
-            title: second.to_string(),
-            formula: None,
-            role_code: String::new(),
-            item_code: String::new(),
-            qty_formula: String::new(),
-            from_location: String::new(),
-            to_location: String::new(),
-            alternative_group_id: String::new(),
-            alternative_group_label: String::new(),
-            alternative_assigned_title: String::new(),
-            rezka_kadr_count: None,
-            rezka_label_length: None,
-            x: 0.0,
-            y: 264.0,
-        },
-    );
-    map.nodes
-        .iter_mut()
-        .find(|node| node.id == "end")
-        .expect("end node")
-        .y = 396.0;
-    map.edges = vec![
-        ProductionMapEdge {
-            from: "start".to_string(),
-            to: "apparatus".to_string(),
-            branch: String::new(),
-        },
-        ProductionMapEdge {
-            from: "apparatus".to_string(),
-            to: "second".to_string(),
-            branch: String::new(),
-        },
-        ProductionMapEdge {
-            from: "second".to_string(),
             to: "end".to_string(),
             branch: String::new(),
         },

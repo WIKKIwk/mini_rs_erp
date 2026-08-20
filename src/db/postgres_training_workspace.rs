@@ -1,14 +1,16 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use serde::Serialize;
 use sqlx::{PgPool, Postgres, Transaction};
 use thiserror::Error;
 
+use crate::core::apparatus_standard::ApparatusId;
 use crate::core::calculate_orders::{
     CalculateOrderError, CalculateOrderTemplate, hydrate_template_layers, validate_template,
 };
 use crate::core::production_map::{
-    OrderProgressBatch, ProductionMapDefinition, ProductionMapSaved, compile_map,
+    OrderProgressBatch, ProductionMapDefinition, ProductionMapNodeKind, ProductionMapProgram,
+    ProductionMapSaved, compile_map,
 };
 use crate::core::production_map::{progress_batch_id, progress_qr_payload, queue_state};
 use crate::core::returned_paint::{ReturnedPaintCalculation, ReturnedPaintItem};
@@ -76,6 +78,9 @@ pub struct TrainingInputBatchIdentity {
     pub session_id: String,
     pub qr_payload: String,
 }
+
+pub const TRAINING_VIRTUAL_INPUT_BOSMA: &str = "training-input:bosma";
+pub const TRAINING_VIRTUAL_INPUT_LAMINATSIYA: &str = "training-input:laminatsiya";
 
 #[derive(Clone)]
 pub struct PostgresTrainingWorkspaceStore {
@@ -206,7 +211,7 @@ impl PostgresTrainingWorkspaceStore {
         apparatus: &str,
     ) -> Result<Vec<serde_json::Value>, TrainingWorkspaceError> {
         let rows = sqlx::query_as::<_, TrainingRawMaterialRow>(
-            "SELECT order_id, apparatus, barcode, payload_json
+            "SELECT order_id, canonical_apparatus_id AS apparatus, barcode, payload_json
              FROM mini_training_raw_material_assignments
              ORDER BY updated_at DESC",
         )
@@ -215,12 +220,23 @@ impl PostgresTrainingWorkspaceStore {
         .map_err(|_| TrainingWorkspaceError::StoreFailed)?;
 
         let order_id = order_id.trim();
-        let apparatus = apparatus.trim();
+        let apparatus = if apparatus.trim().is_empty() {
+            None
+        } else {
+            Some(canonical_training_apparatus(apparatus)?)
+        };
+        let rows = rows.into_iter().filter_map(|mut row| {
+            row.apparatus = canonical_training_apparatus(&row.apparatus)
+                .ok()?
+                .to_string();
+            Some(row)
+        });
         Ok(rows
-            .into_iter()
             .filter(|row| {
                 (order_id.is_empty() || row.order_id == order_id)
-                    && (apparatus.is_empty() || row.apparatus.eq_ignore_ascii_case(apparatus))
+                    && apparatus
+                        .as_ref()
+                        .is_none_or(|id| row.apparatus.eq_ignore_ascii_case(id.as_str()))
             })
             .map(|row| {
                 let mut payload = match row.payload_json {
@@ -241,8 +257,9 @@ impl PostgresTrainingWorkspaceStore {
     ) -> Result<serde_json::Value, TrainingWorkspaceError> {
         let order_id = payload_string(&payload, "order_id");
         let apparatus = payload_string(&payload, "apparatus");
+        let apparatus = canonical_training_apparatus(&apparatus)?;
         let barcode = payload_string(&payload, "barcode");
-        if order_id.is_empty() || apparatus.is_empty() || barcode.is_empty() {
+        if order_id.is_empty() || barcode.is_empty() {
             return Err(TrainingWorkspaceError::InvalidInput(
                 "order_id, apparatus va barcode kerak".to_string(),
             ));
@@ -252,12 +269,12 @@ impl PostgresTrainingWorkspaceStore {
             "SELECT id
              FROM mini_training_raw_material_assignments
              WHERE order_id = $1
-               AND lower(apparatus) = lower($2)
+               AND canonical_apparatus_id = $2
                AND lower(barcode) = lower($3)
              LIMIT 1",
         )
         .bind(&order_id)
-        .bind(&apparatus)
+        .bind(apparatus.as_str())
         .bind(&barcode)
         .fetch_optional(&self.pool)
         .await
@@ -267,20 +284,27 @@ impl PostgresTrainingWorkspaceStore {
         }
 
         let id = format!("training-assignment-{}", unix_micros());
+        let mut normalized_payload = payload;
+        if let serde_json::Value::Object(object) = &mut normalized_payload {
+            object.insert(
+                "apparatus".to_string(),
+                serde_json::json!(apparatus.as_str()),
+            );
+        }
         sqlx::query(
             "INSERT INTO mini_training_raw_material_assignments
-                (id, order_id, apparatus, barcode, payload_json, updated_at)
-             VALUES ($1, $2, $3, $4, $5, now())",
+                (id, order_id, apparatus, canonical_apparatus_id, barcode, payload_json, updated_at)
+             VALUES ($1, $2, COALESCE((SELECT name FROM mini_apparatus WHERE id = $3), $3), $3, $4, $5, now())",
         )
         .bind(id)
         .bind(order_id)
-        .bind(apparatus)
+        .bind(apparatus.as_str())
         .bind(barcode)
-        .bind(&payload)
+        .bind(&normalized_payload)
         .execute(&self.pool)
         .await
         .map_err(|_| TrainingWorkspaceError::StoreFailed)?;
-        Ok(payload)
+        Ok(normalized_payload)
     }
 
     pub async fn delete_raw_material_assignment(
@@ -290,13 +314,9 @@ impl PostgresTrainingWorkspaceStore {
         barcode: &str,
     ) -> Result<bool, TrainingWorkspaceError> {
         let order_id = order_id.trim();
-        let apparatus = apparatus.trim();
+        let apparatus = canonical_training_apparatus(apparatus)?;
         let barcode = barcode.trim();
-        if order_id.is_empty()
-            || !order_id.starts_with("training-")
-            || apparatus.is_empty()
-            || barcode.is_empty()
-        {
+        if order_id.is_empty() || !order_id.starts_with("training-") || barcode.is_empty() {
             return Err(TrainingWorkspaceError::InvalidInput(
                 "order_id, apparatus va barcode kerak".to_string(),
             ));
@@ -305,11 +325,11 @@ impl PostgresTrainingWorkspaceStore {
         let result = sqlx::query(
             "DELETE FROM mini_training_raw_material_assignments
              WHERE order_id = $1
-               AND lower(apparatus) = lower($2)
+               AND canonical_apparatus_id = $2
                AND lower(barcode) = lower($3)",
         )
         .bind(order_id)
-        .bind(apparatus)
+        .bind(apparatus.as_str())
         .bind(barcode)
         .execute(&self.pool)
         .await
@@ -338,11 +358,11 @@ impl PostgresTrainingWorkspaceStore {
         count: usize,
     ) -> Result<Vec<TrainingInputBatchIdentity>, TrainingWorkspaceError> {
         let order_id = order_id.trim();
-        let apparatus = apparatus.trim();
-        let input_apparatus = input_apparatus.trim();
+        let apparatus = canonical_training_apparatus(apparatus)?;
+        let input_apparatus = training_virtual_input_id(input_apparatus)?;
         if order_id.is_empty()
             || !order_id.starts_with("training-")
-            || apparatus.is_empty()
+            || apparatus.as_str().is_empty()
             || input_apparatus.is_empty()
             || count == 0
         {
@@ -358,7 +378,7 @@ impl PostgresTrainingWorkspaceStore {
         let mut identities = Vec::with_capacity(count);
         for _ in 0..count {
             let batch_id = progress_batch_id(
-                input_apparatus,
+                &input_apparatus,
                 order_id,
                 queue_state::ApparatusQueueAction::Complete,
                 0,
@@ -367,19 +387,19 @@ impl PostgresTrainingWorkspaceStore {
             let qr_payload = progress_qr_payload(&batch_id);
             let row = sqlx::query_as::<_, (String, String, String, String, String)>(
                 "INSERT INTO mini_training_input_batches
-                    (order_id, apparatus, batch_id, session_id, qr_payload, generated_at)
-                 VALUES ($1, $2, $3, $4, $5, now())
-                 RETURNING order_id, apparatus, batch_id, session_id, qr_payload",
+                    (order_id, apparatus, canonical_apparatus_id, batch_id, session_id, qr_payload, generated_at)
+                 VALUES ($1, COALESCE((SELECT name FROM mini_apparatus WHERE id = $2), $2), $2, $3, $4, $5, now())
+                 RETURNING order_id, canonical_apparatus_id AS apparatus, batch_id, session_id, qr_payload",
             )
             .bind(order_id)
-            .bind(apparatus)
+            .bind(apparatus.as_str())
             .bind(batch_id)
             .bind(session_id)
             .bind(qr_payload)
             .fetch_one(&mut *tx)
             .await
             .map_err(|_| TrainingWorkspaceError::StoreFailed)?;
-            identities.push(training_input_batch_identity_from_row(row));
+            identities.push(training_input_batch_identity_from_row(row)?);
         }
         tx.commit()
             .await
@@ -394,6 +414,7 @@ impl PostgresTrainingWorkspaceStore {
         input_apparatus: &str,
     ) -> Result<Option<TrainingInputBatchIdentity>, TrainingWorkspaceError> {
         let identities = self.training_input_batches(order_id, apparatus).await?;
+        let apparatus = canonical_training_apparatus(apparatus)?;
         if identities.len() != 1 {
             return Ok(None);
         }
@@ -406,14 +427,14 @@ impl PostgresTrainingWorkspaceStore {
         }
         sqlx::query(
             "DELETE FROM mini_training_input_batches
-             WHERE order_id = $1 AND lower(apparatus) = lower($2)",
+             WHERE order_id = $1 AND canonical_apparatus_id = $2",
         )
         .bind(order_id.trim())
-        .bind(apparatus.trim())
+        .bind(apparatus.as_str())
         .execute(&self.pool)
         .await
         .map_err(|_| TrainingWorkspaceError::StoreFailed)?;
-        self.generate_training_input_batch(order_id, apparatus, input_apparatus)
+        self.generate_training_input_batch(order_id, apparatus.as_str(), input_apparatus)
             .await
             .map(Some)
     }
@@ -423,21 +444,21 @@ impl PostgresTrainingWorkspaceStore {
         order_id: &str,
         apparatus: &str,
     ) -> Result<Vec<TrainingInputBatchIdentity>, TrainingWorkspaceError> {
+        let apparatus = canonical_training_apparatus(apparatus)?;
         let rows = sqlx::query_as::<_, (String, String, String, String, String)>(
-            "SELECT order_id, apparatus, batch_id, session_id, qr_payload
+            "SELECT order_id, canonical_apparatus_id AS apparatus, batch_id, session_id, qr_payload
              FROM mini_training_input_batches
-             WHERE order_id = $1 AND lower(apparatus) = lower($2)
+             WHERE order_id = $1 AND canonical_apparatus_id = $2
              ORDER BY generated_at ASC, batch_id ASC",
         )
         .bind(order_id.trim())
-        .bind(apparatus.trim())
+        .bind(apparatus.as_str())
         .fetch_all(&self.pool)
         .await
         .map_err(|_| TrainingWorkspaceError::StoreFailed)?;
-        Ok(rows
-            .into_iter()
+        rows.into_iter()
             .map(training_input_batch_identity_from_row)
-            .collect())
+            .collect()
     }
 
     pub async fn training_input_batch_for_qr(
@@ -445,7 +466,7 @@ impl PostgresTrainingWorkspaceStore {
         qr_payload: &str,
     ) -> Result<Option<TrainingInputBatchIdentity>, TrainingWorkspaceError> {
         let row = sqlx::query_as::<_, (String, String, String, String, String)>(
-            "SELECT order_id, apparatus, batch_id, session_id, qr_payload
+            "SELECT order_id, canonical_apparatus_id AS apparatus, batch_id, session_id, qr_payload
              FROM mini_training_input_batches
              WHERE lower(qr_payload) = lower($1)",
         )
@@ -453,7 +474,7 @@ impl PostgresTrainingWorkspaceStore {
         .fetch_optional(&self.pool)
         .await
         .map_err(|_| TrainingWorkspaceError::StoreFailed)?;
-        Ok(row.map(training_input_batch_identity_from_row))
+        row.map(training_input_batch_identity_from_row).transpose()
     }
 
     pub async fn delete_training_input_batch(
@@ -463,7 +484,11 @@ impl PostgresTrainingWorkspaceStore {
         qr_payload: &str,
     ) -> Result<Vec<String>, TrainingWorkspaceError> {
         let order_id = order_id.trim();
-        let apparatus = apparatus.trim();
+        let apparatus = if apparatus.trim().is_empty() {
+            None
+        } else {
+            Some(canonical_training_apparatus(apparatus)?)
+        };
         let qr_payload = qr_payload.trim();
         if order_id.is_empty() || !order_id.starts_with("training-") {
             return Err(TrainingWorkspaceError::InvalidInput(
@@ -478,12 +503,17 @@ impl PostgresTrainingWorkspaceStore {
         let deleted_batch_ids = sqlx::query_scalar::<_, String>(
             "DELETE FROM mini_training_input_batches
              WHERE order_id = $1
-               AND ($2 = '' OR lower(apparatus) = lower($2))
+               AND ($2 = '' OR canonical_apparatus_id = $2)
                AND ($3 = '' OR lower(qr_payload) = lower($3))
              RETURNING batch_id",
         )
         .bind(order_id)
-        .bind(apparatus)
+        .bind(
+            apparatus
+                .as_ref()
+                .map(ApparatusId::as_str)
+                .unwrap_or_default(),
+        )
         .bind(qr_payload)
         .fetch_all(&mut *tx)
         .await
@@ -506,15 +536,16 @@ impl PostgresTrainingWorkspaceStore {
         order_id: &str,
         apparatus: &str,
     ) -> Result<bool, TrainingWorkspaceError> {
+        let apparatus = canonical_training_apparatus(apparatus)?;
         let generated = sqlx::query_scalar::<_, bool>(
             "SELECT EXISTS(
                  SELECT 1
                  FROM mini_training_input_batches
-                 WHERE order_id = $1 AND lower(apparatus) = lower($2)
+                 WHERE order_id = $1 AND canonical_apparatus_id = $2
              )",
         )
         .bind(order_id.trim())
-        .bind(apparatus.trim())
+        .bind(apparatus.as_str())
         .fetch_one(&self.pool)
         .await
         .map_err(|_| TrainingWorkspaceError::StoreFailed)?;
@@ -526,17 +557,18 @@ impl PostgresTrainingWorkspaceStore {
         order_id: &str,
         apparatus: &str,
     ) -> Result<bool, TrainingWorkspaceError> {
+        let apparatus = canonical_training_apparatus(apparatus)?;
         sqlx::query_scalar::<_, bool>(
             "SELECT EXISTS(
                  SELECT 1
                  FROM mini_training_queue_events
                  WHERE order_id = $1
-                   AND lower(apparatus) = lower($2)
+                   AND canonical_apparatus_id = $2
                    AND action = 'start'
              )",
         )
         .bind(order_id.trim())
-        .bind(apparatus.trim())
+        .bind(apparatus.as_str())
         .fetch_one(&self.pool)
         .await
         .map_err(|_| TrainingWorkspaceError::StoreFailed)
@@ -545,14 +577,22 @@ impl PostgresTrainingWorkspaceStore {
     pub async fn training_input_batch_orders(
         &self,
     ) -> Result<Vec<(String, String)>, TrainingWorkspaceError> {
-        sqlx::query_as::<_, (String, String)>(
-            "SELECT order_id, apparatus
+        let rows = sqlx::query_as::<_, (String, String)>(
+            "SELECT order_id, canonical_apparatus_id AS apparatus
              FROM mini_training_input_batches
              ORDER BY generated_at DESC",
         )
         .fetch_all(&self.pool)
         .await
-        .map_err(|_| TrainingWorkspaceError::StoreFailed)
+        .map_err(|_| TrainingWorkspaceError::StoreFailed)?;
+        Ok(rows
+            .into_iter()
+            .filter_map(|(order_id, apparatus)| {
+                canonical_training_apparatus(&apparatus)
+                    .ok()
+                    .map(|id| (order_id, id.to_string()))
+            })
+            .collect())
     }
 
     pub async fn put_training_progress_batches(
@@ -565,22 +605,23 @@ impl PostgresTrainingWorkspaceStore {
             .await
             .map_err(|_| TrainingWorkspaceError::StoreFailed)?;
         for batch in progress_batches {
-            let payload =
-                serde_json::to_value(batch).map_err(|_| TrainingWorkspaceError::StoreFailed)?;
+            let apparatus = canonical_training_apparatus(&batch.apparatus)?;
+            let payload = training_progress_payload(batch)?;
             sqlx::query(
                 "INSERT INTO mini_training_progress_batches
-                    (batch_id, order_id, apparatus, qr_payload, payload_json, generated_at)
-                 VALUES ($1, $2, $3, $4, $5, now())
+                    (batch_id, order_id, apparatus, canonical_apparatus_id, qr_payload, payload_json, generated_at)
+                 VALUES ($1, $2, COALESCE((SELECT name FROM mini_apparatus WHERE id = $3), $3), $3, $4, $5, now())
                  ON CONFLICT (batch_id) DO UPDATE SET
                      order_id = excluded.order_id,
                      apparatus = excluded.apparatus,
+                     canonical_apparatus_id = excluded.canonical_apparatus_id,
                      qr_payload = excluded.qr_payload,
                      payload_json = excluded.payload_json,
                      generated_at = now()",
             )
             .bind(batch.batch_id.trim())
             .bind(batch.order_id.trim())
-            .bind(batch.apparatus.trim())
+            .bind(apparatus.as_str())
             .bind(batch.qr_payload.trim())
             .bind(payload)
             .execute(&mut *tx)
@@ -598,8 +639,8 @@ impl PostgresTrainingWorkspaceStore {
         batch_id: &str,
         qr_payload: &str,
     ) -> Result<Option<OrderProgressBatch>, TrainingWorkspaceError> {
-        let payload = sqlx::query_scalar::<_, serde_json::Value>(
-            "SELECT payload_json
+        let row = sqlx::query_as::<_, (String, serde_json::Value)>(
+            "SELECT canonical_apparatus_id, payload_json
              FROM mini_training_progress_batches
              WHERE ($1 <> '' AND lower(batch_id) = lower($1))
                 OR ($2 <> '' AND lower(qr_payload) = lower($2))
@@ -610,17 +651,15 @@ impl PostgresTrainingWorkspaceStore {
         .fetch_optional(&self.pool)
         .await
         .map_err(|_| TrainingWorkspaceError::StoreFailed)?;
-        payload
-            .map(training_progress_batch_from_payload)
-            .transpose()
+        row.map(training_progress_batch_from_row).transpose()
     }
 
     pub async fn training_progress_batches_for_order(
         &self,
         order_id: &str,
     ) -> Result<Vec<OrderProgressBatch>, TrainingWorkspaceError> {
-        let payloads = sqlx::query_scalar::<_, serde_json::Value>(
-            "SELECT payload_json
+        let rows = sqlx::query_as::<_, (String, serde_json::Value)>(
+            "SELECT canonical_apparatus_id, payload_json
              FROM mini_training_progress_batches
              WHERE order_id = $1
              ORDER BY generated_at ASC, batch_id ASC",
@@ -629,22 +668,32 @@ impl PostgresTrainingWorkspaceStore {
         .fetch_all(&self.pool)
         .await
         .map_err(|_| TrainingWorkspaceError::StoreFailed)?;
-        payloads
-            .into_iter()
-            .map(training_progress_batch_from_payload)
+        rows.into_iter()
+            .map(training_progress_batch_from_row)
             .collect()
     }
 
     pub async fn apparatus_modes(&self) -> Result<BTreeMap<String, bool>, TrainingWorkspaceError> {
         let rows = sqlx::query_as::<_, (String, bool)>(
-            "SELECT apparatus, enabled
+            "SELECT canonical_apparatus_id AS apparatus, enabled
              FROM mini_training_apparatus_modes
-             ORDER BY lower(apparatus)",
+             ORDER BY canonical_apparatus_id",
         )
         .fetch_all(&self.pool)
         .await
         .map_err(|_| TrainingWorkspaceError::StoreFailed)?;
-        Ok(rows.into_iter().collect())
+        Ok(rows
+            .into_iter()
+            .filter_map(|(apparatus, enabled)| {
+                canonical_training_apparatus(&apparatus)
+                    .map(|id| (id.to_string(), enabled))
+                    .map_err(|error| {
+                        tracing::warn!(%error, apparatus, "skipping invalid training apparatus mode");
+                        error
+                    })
+                    .ok()
+            })
+            .collect())
     }
 
     pub async fn set_apparatus_mode(
@@ -652,20 +701,17 @@ impl PostgresTrainingWorkspaceStore {
         apparatus: &str,
         enabled: bool,
     ) -> Result<(), TrainingWorkspaceError> {
-        let apparatus = apparatus.trim();
-        if apparatus.is_empty() {
-            return Err(TrainingWorkspaceError::InvalidInput(
-                "apparatus kerak".to_string(),
-            ));
-        }
+        let apparatus = canonical_training_apparatus(apparatus)?;
         sqlx::query(
-            "INSERT INTO mini_training_apparatus_modes (apparatus, enabled, updated_at)
-             VALUES ($1, $2, now())
-             ON CONFLICT (apparatus) DO UPDATE SET
+            "INSERT INTO mini_training_apparatus_modes
+                (apparatus, canonical_apparatus_id, enabled, updated_at)
+             VALUES (COALESCE((SELECT name FROM mini_apparatus WHERE id = $1), $1), $1, $2, now())
+             ON CONFLICT (canonical_apparatus_id) DO UPDATE SET
+                 apparatus = excluded.apparatus,
                  enabled = excluded.enabled,
                  updated_at = now()",
         )
-        .bind(apparatus)
+        .bind(apparatus.as_str())
         .bind(enabled)
         .execute(&self.pool)
         .await
@@ -677,7 +723,7 @@ impl PostgresTrainingWorkspaceStore {
         &self,
     ) -> Result<BTreeMap<String, BTreeMap<String, String>>, TrainingWorkspaceError> {
         let rows = sqlx::query_as::<_, (String, String, String)>(
-            "SELECT apparatus, order_id, state
+            "SELECT canonical_apparatus_id AS apparatus, order_id, state
              FROM mini_training_queue_states
              ORDER BY updated_at ASC",
         )
@@ -687,9 +733,11 @@ impl PostgresTrainingWorkspaceStore {
 
         let mut states = BTreeMap::new();
         for (apparatus, order_id, state) in rows {
-            let apparatus = apparatus.trim();
+            let Ok(apparatus) = canonical_training_apparatus(&apparatus) else {
+                continue;
+            };
             let order_id = order_id.trim();
-            if apparatus.is_empty() || order_id.is_empty() {
+            if apparatus.as_str().is_empty() || order_id.is_empty() {
                 continue;
             }
             states
@@ -704,7 +752,7 @@ impl PostgresTrainingWorkspaceStore {
         &self,
     ) -> Result<Vec<TrainingQueueStateRecord>, TrainingWorkspaceError> {
         let rows = sqlx::query_as::<_, (String, String, String, i64)>(
-            "SELECT apparatus, order_id, state,
+            "SELECT canonical_apparatus_id AS apparatus, order_id, state,
                     EXTRACT(EPOCH FROM updated_at)::bigint AS updated_at_unix
              FROM mini_training_queue_states
              ORDER BY updated_at DESC",
@@ -716,7 +764,7 @@ impl PostgresTrainingWorkspaceStore {
         Ok(rows
             .into_iter()
             .filter_map(|(apparatus, order_id, state, updated_at_unix)| {
-                let apparatus = apparatus.trim().to_string();
+                let apparatus = canonical_training_apparatus(&apparatus).ok()?.to_string();
                 let order_id = order_id.trim().to_string();
                 let state = state.trim().to_string();
                 (!apparatus.is_empty() && !order_id.is_empty() && !state.is_empty()).then_some(
@@ -737,22 +785,24 @@ impl PostgresTrainingWorkspaceStore {
         order_id: &str,
         state: &str,
     ) -> Result<(), TrainingWorkspaceError> {
-        let apparatus = apparatus.trim();
+        let apparatus = canonical_training_apparatus(apparatus)?;
         let order_id = order_id.trim();
         let state = state.trim();
-        if apparatus.is_empty() || order_id.is_empty() || state.is_empty() {
+        if apparatus.as_str().is_empty() || order_id.is_empty() || state.is_empty() {
             return Err(TrainingWorkspaceError::InvalidInput(
                 "apparatus, order_id va state kerak".to_string(),
             ));
         }
         sqlx::query(
-            "INSERT INTO mini_training_queue_states (apparatus, order_id, state, updated_at)
-             VALUES ($1, $2, $3, now())
-             ON CONFLICT (apparatus, order_id) DO UPDATE SET
+            "INSERT INTO mini_training_queue_states
+                (apparatus, canonical_apparatus_id, order_id, state, updated_at)
+             VALUES (COALESCE((SELECT name FROM mini_apparatus WHERE id = $1), $1), $1, $2, $3, now())
+             ON CONFLICT (canonical_apparatus_id, order_id) DO UPDATE SET
+                 apparatus = excluded.apparatus,
                  state = excluded.state,
                  updated_at = now()",
         )
-        .bind(apparatus)
+        .bind(apparatus.as_str())
         .bind(order_id)
         .bind(state)
         .execute(&self.pool)
@@ -761,6 +811,7 @@ impl PostgresTrainingWorkspaceStore {
         Ok(())
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub async fn put_queue_state_with_event(
         &self,
         apparatus: &str,
@@ -773,13 +824,13 @@ impl PostgresTrainingWorkspaceStore {
         actor_display_name: &str,
         progress_batches: &[OrderProgressBatch],
     ) -> Result<(), TrainingWorkspaceError> {
-        let apparatus = apparatus.trim();
+        let apparatus = canonical_training_apparatus(apparatus)?;
         let order_id = order_id.trim();
         let state = state.trim();
         let event_id = event_id.trim();
         let action = action.trim();
         let from_state = from_state.trim();
-        if apparatus.is_empty()
+        if apparatus.as_str().is_empty()
             || order_id.is_empty()
             || state.is_empty()
             || event_id.is_empty()
@@ -797,13 +848,15 @@ impl PostgresTrainingWorkspaceStore {
             .await
             .map_err(|_| TrainingWorkspaceError::StoreFailed)?;
         sqlx::query(
-            "INSERT INTO mini_training_queue_states (apparatus, order_id, state, updated_at)
-             VALUES ($1, $2, $3, now())
-             ON CONFLICT (apparatus, order_id) DO UPDATE SET
+            "INSERT INTO mini_training_queue_states
+                (apparatus, canonical_apparatus_id, order_id, state, updated_at)
+             VALUES (COALESCE((SELECT name FROM mini_apparatus WHERE id = $1), $1), $1, $2, $3, now())
+             ON CONFLICT (canonical_apparatus_id, order_id) DO UPDATE SET
+                 apparatus = excluded.apparatus,
                  state = excluded.state,
                  updated_at = now()",
         )
-        .bind(apparatus)
+        .bind(apparatus.as_str())
         .bind(order_id)
         .bind(state)
         .execute(&mut *tx)
@@ -811,12 +864,13 @@ impl PostgresTrainingWorkspaceStore {
         .map_err(|_| TrainingWorkspaceError::StoreFailed)?;
         sqlx::query(
             "INSERT INTO mini_training_queue_events
-                (event_id, apparatus, order_id, action, from_state, to_state,
+                (event_id, apparatus, canonical_apparatus_id, order_id, action, from_state, to_state,
                  actor_ref, actor_display_name, created_at)
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, now())",
+             VALUES ($1, COALESCE((SELECT name FROM mini_apparatus WHERE id = $2), $2), $2,
+                     $3, $4, $5, $6, $7, $8, now())",
         )
         .bind(event_id)
-        .bind(apparatus)
+        .bind(apparatus.as_str())
         .bind(order_id)
         .bind(action)
         .bind(from_state)
@@ -827,22 +881,23 @@ impl PostgresTrainingWorkspaceStore {
         .await
         .map_err(|_| TrainingWorkspaceError::StoreFailed)?;
         for batch in progress_batches {
-            let payload =
-                serde_json::to_value(batch).map_err(|_| TrainingWorkspaceError::StoreFailed)?;
+            let apparatus = canonical_training_apparatus(&batch.apparatus)?;
+            let payload = training_progress_payload(batch)?;
             sqlx::query(
                 "INSERT INTO mini_training_progress_batches
-                    (batch_id, order_id, apparatus, qr_payload, payload_json, generated_at)
-                 VALUES ($1, $2, $3, $4, $5, now())
+                    (batch_id, order_id, apparatus, canonical_apparatus_id, qr_payload, payload_json, generated_at)
+                 VALUES ($1, $2, COALESCE((SELECT name FROM mini_apparatus WHERE id = $3), $3), $3, $4, $5, now())
                  ON CONFLICT (batch_id) DO UPDATE SET
                      order_id = excluded.order_id,
                      apparatus = excluded.apparatus,
+                     canonical_apparatus_id = excluded.canonical_apparatus_id,
                      qr_payload = excluded.qr_payload,
                      payload_json = excluded.payload_json,
                      generated_at = now()",
             )
             .bind(batch.batch_id.trim())
             .bind(batch.order_id.trim())
-            .bind(batch.apparatus.trim())
+            .bind(apparatus.as_str())
             .bind(batch.qr_payload.trim())
             .bind(payload)
             .execute(&mut *tx)
@@ -872,25 +927,24 @@ impl PostgresTrainingWorkspaceStore {
                 i64,
             ),
         >(
-            "SELECT event_id, apparatus, order_id, action, from_state, to_state,
+            "SELECT event_id, canonical_apparatus_id AS apparatus, order_id, action, from_state, to_state,
                     actor_ref, actor_display_name,
                     EXTRACT(EPOCH FROM created_at)::bigint AS created_at_unix
              FROM (
-                SELECT DISTINCT ON (apparatus, order_id)
-                    event_id, apparatus, order_id, action, from_state, to_state,
+                SELECT DISTINCT ON (canonical_apparatus_id, order_id)
+                    event_id, canonical_apparatus_id, order_id, action, from_state, to_state,
                     actor_ref, actor_display_name, created_at
                 FROM mini_training_queue_events
-                ORDER BY apparatus, order_id, created_at DESC, event_id DESC
+                ORDER BY canonical_apparatus_id, order_id, created_at DESC, event_id DESC
              ) latest
              ORDER BY created_at DESC, event_id DESC",
         )
         .fetch_all(&self.pool)
         .await
         .map_err(|_| TrainingWorkspaceError::StoreFailed)?;
-        Ok(rows
-            .into_iter()
+        rows.into_iter()
             .map(training_queue_event_from_row)
-            .collect())
+            .collect()
     }
 
     pub async fn completed_queue_events_for_actor(
@@ -917,17 +971,17 @@ impl PostgresTrainingWorkspaceStore {
                 i64,
             ),
         >(
-            "SELECT event_id, apparatus, order_id, action, from_state, to_state,
+            "SELECT event_id, canonical_apparatus_id AS apparatus, order_id, action, from_state, to_state,
                     actor_ref, actor_display_name,
                     EXTRACT(EPOCH FROM created_at)::bigint AS created_at_unix
              FROM (
-                SELECT DISTINCT ON (order_id, apparatus)
-                    event_id, apparatus, order_id, action, from_state, to_state,
+                SELECT DISTINCT ON (order_id, canonical_apparatus_id)
+                    event_id, canonical_apparatus_id, order_id, action, from_state, to_state,
                     actor_ref, actor_display_name, created_at
                 FROM mini_training_queue_events
                 WHERE actor_ref = $1
                   AND action IN ('pause', 'detach_roll', 'roll_complete', 'complete')
-                ORDER BY order_id, apparatus, created_at DESC, event_id DESC
+                ORDER BY order_id, canonical_apparatus_id, created_at DESC, event_id DESC
              ) latest
              ORDER BY created_at DESC, event_id DESC
              LIMIT $2",
@@ -937,34 +991,42 @@ impl PostgresTrainingWorkspaceStore {
         .fetch_all(&self.pool)
         .await
         .map_err(|_| TrainingWorkspaceError::StoreFailed)?;
-        Ok(rows
-            .into_iter()
+        rows.into_iter()
             .map(training_queue_event_from_row)
-            .collect())
+            .collect()
     }
 
     pub async fn reset_queue_states(&self, apparatus: &str) -> Result<u64, TrainingWorkspaceError> {
-        let apparatus = apparatus.trim();
+        let apparatus = if apparatus.trim().is_empty() {
+            None
+        } else {
+            Some(canonical_training_apparatus(apparatus)?)
+        };
         let mut tx = self
             .pool
             .begin()
             .await
             .map_err(|_| TrainingWorkspaceError::StoreFailed)?;
-        let result = (if apparatus.is_empty() {
+        let result = (if apparatus.is_none() {
             sqlx::query("DELETE FROM mini_training_queue_states")
                 .execute(&mut *tx)
                 .await
         } else {
             sqlx::query(
                 "DELETE FROM mini_training_queue_states
-                 WHERE lower(apparatus) = lower($1)",
+                 WHERE canonical_apparatus_id = $1",
             )
-            .bind(apparatus)
+            .bind(
+                apparatus
+                    .as_ref()
+                    .map(ApparatusId::as_str)
+                    .unwrap_or_default(),
+            )
             .execute(&mut *tx)
             .await
         })
         .map_err(|_| TrainingWorkspaceError::StoreFailed)?;
-        if apparatus.is_empty() {
+        if apparatus.is_none() {
             sqlx::query("DELETE FROM mini_training_queue_events")
                 .execute(&mut *tx)
                 .await
@@ -972,9 +1034,14 @@ impl PostgresTrainingWorkspaceStore {
         } else {
             sqlx::query(
                 "DELETE FROM mini_training_queue_events
-                 WHERE lower(apparatus) = lower($1)",
+                 WHERE canonical_apparatus_id = $1",
             )
-            .bind(apparatus)
+            .bind(
+                apparatus
+                    .as_ref()
+                    .map(ApparatusId::as_str)
+                    .unwrap_or_default(),
+            )
             .execute(&mut *tx)
             .await
             .map_err(|_| TrainingWorkspaceError::StoreFailed)?;
@@ -985,6 +1052,7 @@ impl PostgresTrainingWorkspaceStore {
         Ok(result.rows_affected())
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub async fn save_returned_paint_report(
         &self,
         order_id: &str,
@@ -996,10 +1064,10 @@ impl PostgresTrainingWorkspaceStore {
         calculation: Option<&ReturnedPaintCalculation>,
     ) -> Result<serde_json::Value, TrainingWorkspaceError> {
         let order_id = order_id.trim();
-        let apparatus = apparatus.trim();
+        let apparatus = canonical_training_apparatus(apparatus)?;
         let action = action.trim();
         let image_id = image_id.trim();
-        if order_id.is_empty() || apparatus.is_empty() || action.is_empty() {
+        if order_id.is_empty() || action.is_empty() {
             return Err(TrainingWorkspaceError::InvalidInput(
                 "training qaytarilgan bo‘yoq hisoboti uchun order, aparat va amal kerak"
                     .to_string(),
@@ -1017,13 +1085,13 @@ impl PostgresTrainingWorkspaceStore {
 
         sqlx::query(
             "INSERT INTO mini_training_returned_paint_reports
-                (id, order_id, apparatus, action, items_json, image_id,
+                (id, order_id, apparatus, canonical_apparatus_id, action, items_json, image_id,
                  return_ink_kg, calculation_json, created_at)
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, to_timestamp($9))",
+             VALUES ($1, $2, $3, $3, $4, $5, $6, $7, $8, to_timestamp($9))",
         )
         .bind(&id)
         .bind(order_id)
-        .bind(apparatus)
+        .bind(apparatus.as_str())
         .bind(action)
         .bind(&items_json)
         .bind(image_id)
@@ -1052,15 +1120,16 @@ impl PostgresTrainingWorkspaceStore {
         order_id: &str,
         apparatus: &str,
     ) -> Result<Vec<String>, TrainingWorkspaceError> {
+        let apparatus = canonical_training_apparatus(apparatus)?;
         let rows = sqlx::query_as::<_, (String,)>(
             "SELECT barcode
              FROM mini_training_raw_material_assignments
              WHERE order_id = $1
-               AND lower(apparatus) = lower($2)
+               AND canonical_apparatus_id = $2
              ORDER BY updated_at ASC",
         )
         .bind(order_id.trim())
-        .bind(apparatus.trim())
+        .bind(apparatus.as_str())
         .fetch_all(&self.pool)
         .await
         .map_err(|_| TrainingWorkspaceError::StoreFailed)?;
@@ -1185,6 +1254,7 @@ async fn prepare_map_for_save(
     if map.code.trim().is_empty() {
         map.code = map.order_number.trim().to_string();
     }
+    normalize_training_map_apparatus_ids(&mut map)?;
 
     let duplicate = sqlx::query_scalar::<_, String>(
         "SELECT id
@@ -1208,7 +1278,9 @@ async fn save_map_tx(
     map: &ProductionMapDefinition,
 ) -> Result<(), TrainingWorkspaceError> {
     let payload = serde_json::to_value(map).map_err(|_| TrainingWorkspaceError::StoreFailed)?;
-    compile_map(map).map_err(|error| TrainingWorkspaceError::InvalidMap(error.to_string()))?;
+    let program =
+        compile_map(map).map_err(|error| TrainingWorkspaceError::InvalidMap(error.to_string()))?;
+    validate_training_apparatus_ids(tx, &program).await?;
     sqlx::query(
         "INSERT INTO mini_training_production_maps
             (id, order_number, map_json, updated_at)
@@ -1224,6 +1296,64 @@ async fn save_map_tx(
     .execute(&mut **tx)
     .await
     .map_err(|_| TrainingWorkspaceError::StoreFailed)?;
+    Ok(())
+}
+
+async fn validate_training_apparatus_ids(
+    tx: &mut Transaction<'_, Postgres>,
+    program: &ProductionMapProgram,
+) -> Result<(), TrainingWorkspaceError> {
+    let mut requested = BTreeSet::new();
+    for operation in program
+        .operations
+        .iter()
+        .filter(|operation| operation.op_code == "apparatus")
+    {
+        for key in ["apparatus_id", "alternative_assigned_apparatus_id"] {
+            let Some(value) = operation.args.get(key) else {
+                continue;
+            };
+            if value.is_empty() {
+                continue;
+            }
+            let id = ApparatusId::new(value.clone()).map_err(|_| {
+                TrainingWorkspaceError::InvalidMap(format!(
+                    "{key} must be an exact canonical apparatus id"
+                ))
+            })?;
+            if id.as_str() != value {
+                return Err(TrainingWorkspaceError::InvalidMap(format!(
+                    "{key} must be an exact canonical apparatus id"
+                )));
+            }
+            requested.insert(id.to_string());
+        }
+    }
+    if requested.is_empty() {
+        return Ok(());
+    }
+
+    let requested_ids = requested.iter().cloned().collect::<Vec<_>>();
+    let existing = sqlx::query_scalar::<_, String>(
+        "SELECT id
+         FROM mini_apparatus
+         WHERE id = ANY($1)
+         FOR KEY SHARE",
+    )
+    .bind(&requested_ids)
+    .fetch_all(&mut **tx)
+    .await
+    .map_err(|_| TrainingWorkspaceError::StoreFailed)?
+    .into_iter()
+    .collect::<BTreeSet<_>>();
+
+    if existing != requested {
+        let missing = requested.difference(&existing).cloned().collect::<Vec<_>>();
+        return Err(TrainingWorkspaceError::InvalidMap(format!(
+            "apparatus id(s) missing from mini_apparatus: {}",
+            missing.join(", ")
+        )));
+    }
     Ok(())
 }
 
@@ -1284,12 +1414,49 @@ fn saved_map_from_payload(
 fn saved_map_from_definition(
     mut map: ProductionMapDefinition,
 ) -> Result<ProductionMapSaved, TrainingWorkspaceError> {
+    normalize_training_map_apparatus_ids(&mut map)?;
     if map.code.trim().is_empty() && !map.order_number.trim().is_empty() {
         map.code = map.order_number.trim().to_string();
     }
     let program =
         compile_map(&map).map_err(|error| TrainingWorkspaceError::InvalidMap(error.to_string()))?;
     Ok(ProductionMapSaved { map, program })
+}
+
+fn normalize_training_map_apparatus_ids(
+    map: &mut ProductionMapDefinition,
+) -> Result<(), TrainingWorkspaceError> {
+    for node in &mut map.nodes {
+        if node.kind != ProductionMapNodeKind::Apparatus {
+            continue;
+        }
+
+        node.apparatus_id = normalize_training_map_apparatus_id(
+            &node.apparatus_id,
+            "apparatus_id",
+        )?;
+        node.alternative_assigned_apparatus_id = normalize_training_map_apparatus_id(
+            &node.alternative_assigned_apparatus_id,
+            "alternative_assigned_apparatus_id",
+        )?;
+    }
+    Ok(())
+}
+
+fn normalize_training_map_apparatus_id(
+    value: &str,
+    field: &str,
+) -> Result<String, TrainingWorkspaceError> {
+    if value.trim().is_empty() {
+        return Ok(String::new());
+    }
+    canonical_training_apparatus(value)
+        .map(|id| id.to_string())
+        .map_err(|_| {
+            TrainingWorkspaceError::InvalidMap(format!(
+                "{field} must be an exact canonical apparatus id"
+            ))
+        })
 }
 
 fn payload_string(payload: &serde_json::Value, key: &str) -> String {
@@ -1299,6 +1466,22 @@ fn payload_string(payload: &serde_json::Value, key: &str) -> String {
         .unwrap_or_default()
         .trim()
         .to_string()
+}
+
+fn canonical_training_apparatus(value: &str) -> Result<ApparatusId, TrainingWorkspaceError> {
+    ApparatusId::new(value.trim().to_string()).map_err(|_| {
+        TrainingWorkspaceError::InvalidInput("canonical apparatus id kerak".to_string())
+    })
+}
+
+fn training_virtual_input_id(value: &str) -> Result<String, TrainingWorkspaceError> {
+    match value.trim().to_ascii_lowercase().as_str() {
+        TRAINING_VIRTUAL_INPUT_BOSMA => Ok(TRAINING_VIRTUAL_INPUT_BOSMA.to_string()),
+        TRAINING_VIRTUAL_INPUT_LAMINATSIYA => Ok(TRAINING_VIRTUAL_INPUT_LAMINATSIYA.to_string()),
+        _ => Err(TrainingWorkspaceError::InvalidInput(
+            "training virtual input kerak".to_string(),
+        )),
+    }
 }
 
 fn training_queue_event_from_row(
@@ -1323,10 +1506,10 @@ fn training_queue_event_from_row(
         String,
         i64,
     ),
-) -> TrainingQueueEvent {
-    TrainingQueueEvent {
+) -> Result<TrainingQueueEvent, TrainingWorkspaceError> {
+    Ok(TrainingQueueEvent {
         event_id,
-        apparatus,
+        apparatus: canonical_training_apparatus(&apparatus)?.to_string(),
         order_id,
         action,
         from_state,
@@ -1334,7 +1517,7 @@ fn training_queue_event_from_row(
         actor_ref,
         actor_display_name,
         created_at_unix,
-    }
+    })
 }
 
 fn training_input_batch_identity_from_row(
@@ -1345,23 +1528,83 @@ fn training_input_batch_identity_from_row(
         String,
         String,
     ),
-) -> TrainingInputBatchIdentity {
-    TrainingInputBatchIdentity {
+) -> Result<TrainingInputBatchIdentity, TrainingWorkspaceError> {
+    Ok(TrainingInputBatchIdentity {
         order_id,
-        apparatus,
+        apparatus: canonical_training_apparatus(&apparatus)?.to_string(),
         batch_id,
         session_id,
         qr_payload,
+    })
+}
+
+fn training_progress_payload(
+    batch: &OrderProgressBatch,
+) -> Result<serde_json::Value, TrainingWorkspaceError> {
+    let apparatus = canonical_training_apparatus(&batch.apparatus)?;
+    let mut payload =
+        serde_json::to_value(batch).map_err(|_| TrainingWorkspaceError::StoreFailed)?;
+    let object = payload
+        .as_object_mut()
+        .ok_or(TrainingWorkspaceError::StoreFailed)?;
+    object.insert(
+        "apparatus".to_string(),
+        serde_json::Value::String(apparatus.to_string()),
+    );
+    for (field, value) in [
+        ("current_apparatus_key", batch.current_apparatus_key.as_str()),
+        ("current_apparatus", batch.current_apparatus.as_str()),
+        ("next_apparatus", batch.next_apparatus.as_str()),
+        ("used_by_apparatus", batch.used_by_apparatus.as_str()),
+        (
+            "processed_by_apparatus",
+            batch.processed_by_apparatus.as_str(),
+        ),
+    ] {
+        let value = if value.trim().is_empty() {
+            String::new()
+        } else {
+            canonical_training_apparatus(value)?.to_string()
+        };
+        object.insert(field.to_string(), serde_json::Value::String(value));
     }
+    Ok(payload)
+}
+
+fn training_progress_batch_from_row(
+    (canonical_apparatus_id, mut payload): (String, serde_json::Value),
+) -> Result<OrderProgressBatch, TrainingWorkspaceError> {
+    let canonical_apparatus_id = canonical_training_apparatus(&canonical_apparatus_id)?;
+    let object = payload
+        .as_object_mut()
+        .ok_or(TrainingWorkspaceError::StoreFailed)?;
+    object.insert(
+        "apparatus".to_string(),
+        serde_json::Value::String(canonical_apparatus_id.to_string()),
+    );
+    training_progress_batch_from_payload(payload)
 }
 
 fn training_progress_batch_from_payload(
     payload: serde_json::Value,
 ) -> Result<OrderProgressBatch, TrainingWorkspaceError> {
-    serde_json::from_value(payload).map_err(|error| {
+    let batch = serde_json::from_value::<OrderProgressBatch>(payload).map_err(|error| {
         tracing::warn!(%error, "invalid persisted training progress batch");
         TrainingWorkspaceError::StoreFailed
-    })
+    })?;
+    for apparatus in [
+        batch.apparatus.as_str(),
+        batch.current_apparatus_key.as_str(),
+        batch.current_apparatus.as_str(),
+        batch.next_apparatus.as_str(),
+        batch.used_by_apparatus.as_str(),
+        batch.processed_by_apparatus.as_str(),
+    ] {
+        if !apparatus.trim().is_empty() && canonical_training_apparatus(apparatus).is_err() {
+            return Err(TrainingWorkspaceError::StoreFailed);
+        }
+    }
+    Ok(batch)
 }
 
 fn is_production_progress_qr(value: &str) -> bool {
@@ -1387,7 +1630,10 @@ fn unix_micros() -> u128 {
 
 #[cfg(test)]
 mod tests {
-    use super::is_production_progress_qr;
+    use super::{
+        TRAINING_VIRTUAL_INPUT_BOSMA, canonical_training_apparatus, is_production_progress_qr,
+        training_virtual_input_id,
+    };
 
     #[test]
     fn recognizes_only_production_progress_qr_payloads() {
@@ -1397,5 +1643,23 @@ mod tests {
             "TRAINING-INPUT:training-zakaz-0005"
         ));
         assert!(!is_production_progress_qr("4001🚫000000000000000"));
+    }
+
+    #[test]
+    fn training_store_accepts_canonical_ids_but_not_renamed_titles() {
+        let id = canonical_training_apparatus("apparatus:training:lam-001")
+            .expect("canonical training apparatus");
+        assert_eq!(id.as_str(), "apparatus:training:lam-001");
+        assert!(canonical_training_apparatus("Renamed laminatsiya").is_err());
+    }
+
+    #[test]
+    fn virtual_training_input_is_not_canonical_or_production_fallback() {
+        assert!(canonical_training_apparatus(TRAINING_VIRTUAL_INPUT_BOSMA).is_err());
+        assert_eq!(
+            training_virtual_input_id(TRAINING_VIRTUAL_INPUT_BOSMA).expect("virtual input"),
+            TRAINING_VIRTUAL_INPUT_BOSMA
+        );
+        assert!(!is_production_progress_qr("TRAINING-INPUT:training-1001"));
     }
 }

@@ -40,7 +40,7 @@ async fn postgres_inventory_transfer_preserves_six_decimal_quantity_end_to_end()
         .fetch_one(&pool)
         .await
         .expect("migration count");
-    assert_eq!(migration_count, 51);
+    assert_eq!(migration_count, 67);
 
     let quantity_columns: Vec<(String, String, Option<i32>, Option<i32>)> = sqlx::query_as(
         r#"
@@ -74,11 +74,16 @@ async fn postgres_inventory_transfer_preserves_six_decimal_quantity_end_to_end()
             ('warehouse-destination', 'Sklad Destination');
 
         INSERT INTO mini_warehouse_assignments (
-            warehouse, principal_role, principal_ref, display_name
+            warehouse, assignment_kind, warehouse_name, apparatus_id,
+            principal_role, principal_ref, display_name
         )
         VALUES
-            ('Sklad Source', 'admin', 'ADMIN-1', 'Admin'),
-            ('Sklad Destination', 'admin', 'ADMIN-1', 'Admin');
+            ('Sklad Source', 'warehouse', 'Sklad Source', NULL,
+                'admin', 'ADMIN-1', 'Admin'),
+            ('Sklad Destination', 'warehouse', 'Sklad Destination', NULL,
+                'admin', 'ADMIN-1', 'Admin'),
+            ('Sklad Destination', 'apparatus', NULL, 'apparatus:precision:press',
+                'admin', 'ADMIN-APPARATUS', 'Apparatus Admin');
 
         INSERT INTO mini_raw_material_stock (
             id, warehouse, item_code, item_name, barcode,
@@ -129,6 +134,15 @@ async fn postgres_inventory_transfer_preserves_six_decimal_quantity_end_to_end()
     assert_eq!(transfer.status, InventoryTransferStatus::Received);
     assert_eq!(transfer.lines.len(), 1);
     assert_eq!(transfer.lines[0].qty, 13.00003);
+
+    let recipient_refs: Vec<String> = sqlx::query_scalar(
+        "SELECT target_ref FROM mini_inventory_transfer_chat_outbox
+         WHERE transfer_id = 'transfer-precision-0001' ORDER BY target_ref",
+    )
+    .fetch_all(&pool)
+    .await
+    .expect("transfer chat recipients");
+    assert_eq!(recipient_refs, vec!["ADMIN-1"]);
 
     let (stock_warehouse, stock_status, stock_qty): (String, String, String) = sqlx::query_as(
         "SELECT warehouse, status, qty::text

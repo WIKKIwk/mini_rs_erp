@@ -57,9 +57,7 @@ fn start_error(error: TelegramError) -> (StatusCode, Json<ErrorResponse>) {
         TelegramError::UserAccountNotAuthorized => "telegram user account is not connected",
         TelegramError::UserAccountInvalidCode => "telegram login code is invalid",
         TelegramError::UserAccountSignUpRequired => "telegram account registration is required",
-        TelegramError::UserAccountAccountMismatch => {
-            "telegram account does not match the bot user"
-        }
+        TelegramError::UserAccountAccountMismatch => "telegram account does not match the bot user",
         TelegramError::UserAccountGroupNotWritable => "telegram selected group is not writable",
         TelegramError::UserAccount(_) => "telegram user account operation failed",
         TelegramError::Store => "telegram store failed",

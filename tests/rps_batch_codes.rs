@@ -9,8 +9,7 @@ use mini_rs_erp::core::rps_batch::models::{
 use mini_rs_erp::core::rps_batch::ports::{RpsBatchStoreError, RpsBatchStorePort};
 use mini_rs_erp::core::rps_batch::{RpsBatchLmdbStore, RpsBatchService};
 
-const BATCH_CODE_MIGRATION: &str =
-    include_str!("../migrations/postgres/0022_rps_batch_codes.sql");
+const BATCH_CODE_MIGRATION: &str = include_str!("../migrations/postgres/0022_rps_batch_codes.sql");
 
 #[test]
 fn batch_code_is_24_hex_and_serialized_without_replacing_internal_id() {

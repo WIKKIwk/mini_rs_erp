@@ -67,9 +67,9 @@ pub async fn production_map_wip_batches(
             .into_iter()
             .filter(|batch| {
                 (query.apparatus.trim().is_empty()
-                    || queue_state::apparatus_titles_match(&batch.apparatus, &query.apparatus))
+                    || queue_state::apparatus_ids_match(&batch.apparatus, &query.apparatus))
                     && (query.next_apparatus.trim().is_empty()
-                        || queue_state::apparatus_titles_match(
+                        || queue_state::apparatus_ids_match(
                             &batch.next_apparatus,
                             &query.next_apparatus,
                         ))

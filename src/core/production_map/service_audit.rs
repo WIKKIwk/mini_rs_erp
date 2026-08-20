@@ -160,11 +160,12 @@ impl ProductionMapService {
             &self.store.apparatus_transfers_for_audit().await?,
             &mut violations,
         );
+        let capacity_snapshot = self.apparatus_capacity_snapshot().await?;
         audit_capacity(
             &known_orders,
-            &self.store.apparatus_capacity_profiles().await?,
-            &self.store.apparatus_downtimes().await?,
-            &self.store.apparatus_schedule_reservations().await?,
+            &capacity_snapshot.profiles,
+            &capacity_snapshot.downtimes,
+            &capacity_snapshot.reservations,
             &mut violations,
         );
 
@@ -524,7 +525,7 @@ fn audit_progress_batch(
                 ));
             }
             if !batch.current_apparatus.trim().is_empty()
-                && !queue_state::apparatus_titles_match(
+                && !queue_state::apparatus_ids_match(
                     &batch.current_apparatus,
                     &batch.used_by_apparatus,
                 )
@@ -612,7 +613,7 @@ fn audit_progress_batch(
                 ));
             }
             if !parent.next_apparatus.trim().is_empty()
-                && !queue_state::apparatus_titles_match(&parent.next_apparatus, apparatus)
+                && !queue_state::apparatus_ids_match(&parent.next_apparatus, apparatus)
             {
                 violations.push(ProductionWorkflowAuditViolation::new(
                     "progress_batch_parent_apparatus_mismatch",
@@ -677,7 +678,7 @@ fn audit_paused_session_progress(
                     && batch.order_id.trim() == session.order_id.trim()
                     && batch.action == expected_action
                     && batch.status == expected_status
-                    && queue_state::apparatus_titles_match(&batch.apparatus, &session.apparatus)
+                    && queue_state::apparatus_ids_match(&batch.apparatus, &session.apparatus)
             })
             .count();
         if matching == 0 {
@@ -719,7 +720,7 @@ fn audit_transfers(
         }
         if transfer.from_apparatus.trim().is_empty()
             || transfer.to_apparatus.trim().is_empty()
-            || queue_state::apparatus_titles_match(&transfer.from_apparatus, &transfer.to_apparatus)
+            || queue_state::apparatus_ids_match(&transfer.from_apparatus, &transfer.to_apparatus)
         {
             violations.push(ProductionWorkflowAuditViolation::new(
                 "invalid_apparatus_transfer_route",
@@ -736,21 +737,20 @@ fn audit_transfers(
                 "emergency transfer must retain an operational reason",
             ));
         }
-        if let Some(map) = maps_by_id.get(order_id) {
-            if map.id.trim() != transfer.map.id.trim()
-                || !chain::map_has_work_stage_for_station(map, &transfer.to_apparatus)
-            {
-                violations.push(ProductionWorkflowAuditViolation::new(
-                    "apparatus_transfer_map_mismatch",
-                    order_id,
-                    transfer_id,
-                    "transfer receipt map must be the order map and contain the target apparatus",
-                ));
-            }
+        if let Some(map) = maps_by_id.get(order_id)
+            && (map.id.trim() != transfer.map.id.trim()
+                || !chain::map_has_work_stage_for_station(map, &transfer.to_apparatus))
+        {
+            violations.push(ProductionWorkflowAuditViolation::new(
+                "apparatus_transfer_map_mismatch",
+                order_id,
+                transfer_id,
+                "transfer receipt map must be the order map and contain the target apparatus",
+            ));
         }
         if transfer.session.order_id.trim() != order_id
             || transfer.session.status != OrderRunStatus::Paused
-            || !queue_state::apparatus_titles_match(
+            || !queue_state::apparatus_ids_match(
                 &transfer.session.apparatus,
                 &transfer.to_apparatus,
             )
@@ -764,7 +764,7 @@ fn audit_transfers(
         }
         if transfer.progress_batch.order_id.trim() != order_id
             || transfer.progress_batch.status != OrderProgressBatchStatus::Paused
-            || !queue_state::apparatus_titles_match(
+            || !queue_state::apparatus_ids_match(
                 &transfer.progress_batch.apparatus,
                 &transfer.to_apparatus,
             )
@@ -803,12 +803,8 @@ fn audit_capacity(
 ) {
     let mut profile_keys = BTreeSet::new();
     for profile in profiles {
-        let key = if !profile.apparatus_id.trim().is_empty() {
-            profile.apparatus_id.trim().to_ascii_lowercase()
-        } else {
-            profile.apparatus.trim().to_ascii_lowercase()
-        };
-        if key.is_empty() || !profile_keys.insert(key) {
+        let key = profile.apparatus_id.as_str().to_string();
+        if !profile_keys.insert(key) {
             violations.push(ProductionWorkflowAuditViolation::new(
                 "duplicate_capacity_profile",
                 "",
@@ -830,7 +826,7 @@ fn audit_capacity(
     }
     for downtime in downtimes {
         if downtime.id.trim().is_empty()
-            || downtime.apparatus.trim().is_empty()
+            || downtime.apparatus_id.as_str().trim().is_empty()
             || downtime.starts_at_unix <= 0
             || downtime.ends_at_unix <= downtime.starts_at_unix
         {
@@ -857,7 +853,7 @@ fn audit_capacity(
         }
         if reservation_id.is_empty()
             || reservation.idempotency_key.trim().is_empty()
-            || reservation.apparatus.trim().is_empty()
+            || reservation.apparatus_id.as_str().trim().is_empty()
             || reservation.starts_at_unix <= 0
             || reservation.ends_at_unix <= reservation.starts_at_unix
             || reservation.reserved_duration_minutes == 0
@@ -885,24 +881,14 @@ fn audit_capacity(
     {
         let same_apparatus = reservations.iter().filter(|other| {
             other.status.reserves_capacity()
-                && (other
-                    .apparatus_id
-                    .eq_ignore_ascii_case(&reservation.apparatus_id)
-                    || other.apparatus.eq_ignore_ascii_case(&reservation.apparatus))
+                && other.apparatus_id == reservation.apparatus_id
                 && other.starts_at_unix < reservation.ends_at_unix
                 && reservation.starts_at_unix < other.ends_at_unix
         });
         let overlap_count = same_apparatus.count();
         let capacity_slots = profiles
             .iter()
-            .find(|profile| {
-                profile
-                    .apparatus_id
-                    .eq_ignore_ascii_case(&reservation.apparatus_id)
-                    || profile
-                        .apparatus
-                        .eq_ignore_ascii_case(&reservation.apparatus)
-            })
+            .find(|profile| profile.apparatus_id == reservation.apparatus_id)
             .map(|profile| profile.capacity_slots)
             .unwrap_or(1);
         if overlap_count > usize::from(capacity_slots) {
@@ -923,9 +909,7 @@ fn queue_state_for_apparatus_order(
 ) -> Option<ApparatusQueueOrderState> {
     queue_states
         .iter()
-        .find(|(stored_apparatus, _)| {
-            queue_state::apparatus_titles_match(stored_apparatus, apparatus)
-        })
+        .find(|(stored_apparatus, _)| queue_state::apparatus_ids_match(stored_apparatus, apparatus))
         .and_then(|(_, states)| states.get(order_id.trim()))
         .and_then(|state| ApparatusQueueOrderState::parse(state))
 }

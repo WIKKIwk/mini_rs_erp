@@ -1,5 +1,8 @@
 use std::collections::{BTreeMap, BTreeSet};
 
+use crate::core::apparatus_groups::ApparatusGroupService;
+use crate::core::apparatus_standard::QueuePolicy;
+
 use super::super::*;
 
 use super::super::apparatus::{
@@ -7,10 +10,14 @@ use super::super::apparatus::{
     visible_order_ids_for_apparatus,
 };
 use super::super::chain;
-use super::super::materials::build_raw_material_start_requirements;
+use super::super::materials::{
+    TrustedQolipStartValidation, build_raw_material_start_requirements, live_material_rule,
+};
 use super::super::progress::effective_apparatus_queue_policy_record;
 use super::super::service::{ClaimedAlternativeMapUpdate, QueueProgressRecords};
-use super::super::service_progress_support::{session_progress_links, wip_batch_was_consumed_by_producer};
+use super::super::service_progress_support::{
+    session_progress_links, wip_batch_was_consumed_by_producer,
+};
 use super::super::service_queue_support::*;
 use super::super::store_port::{ApparatusQueuePolicyMap, ApparatusQueueStateMap, OrderControlMap};
 
@@ -49,6 +56,7 @@ impl ProductionMapService {
         let apparatuses = sequences
             .keys()
             .chain(visible_by_apparatus.keys())
+            .filter(|key| !queue_state::apparatus_search_key(key).is_empty())
             .cloned()
             .collect::<BTreeSet<_>>();
         apparatuses
@@ -87,7 +95,7 @@ impl ProductionMapService {
     ) -> Result<(), ProductionMapError> {
         let _guard = self.queue_action_guard().await;
         let apparatus = apparatus.trim();
-        if apparatus.is_empty() {
+        if queue_state::apparatus_search_key(apparatus).is_empty() {
             return Err(ProductionMapError::MissingId);
         }
         let order_ids = order_ids
@@ -122,6 +130,7 @@ impl ProductionMapService {
             .keys()
             .chain(all_states.keys())
             .map(|key| key.as_str())
+            .filter(|key| !queue_state::apparatus_search_key(key).is_empty())
             .collect::<BTreeSet<_>>()
             .into_iter()
             .map(|key| key.to_string())
@@ -333,13 +342,12 @@ impl ProductionMapService {
     pub async fn apparatus_queue_policy_records(
         &self,
     ) -> Result<Vec<ApparatusQueuePolicyRecord>, ProductionMapError> {
-        Ok(self
-            .store
-            .apparatus_queue_policies()
-            .await?
-            .into_iter()
-            .map(|(apparatus, policy)| effective_apparatus_queue_policy_record(&apparatus, policy))
-            .collect())
+        let mut records = Vec::new();
+        for (apparatus_id, policy) in self.store.apparatus_queue_policies().await? {
+            let canonical = self.resolve_canonical_apparatus(&apparatus_id).await?;
+            records.push(effective_apparatus_queue_policy_record(&canonical, policy));
+        }
+        Ok(records)
     }
 
     pub async fn queue_action_controls(
@@ -374,7 +382,6 @@ impl ProductionMapService {
         BTreeMap<String, BTreeMap<String, ApparatusQueueOrderActionControl>>,
         ProductionMapError,
     > {
-        let material_rules = self.store.apparatus_material_rules().await?;
         let material_assignments = self.store.raw_material_assignments().await?;
         let order_ids = maps
             .iter()
@@ -392,10 +399,15 @@ impl ProductionMapService {
             .collect::<BTreeSet<_>>();
         let known_keys = sequences
             .keys()
-            .chain(all_states.keys())
-            .chain(policies.keys())
-            .chain(visible_by_apparatus.keys())
-            .map(|key| key.as_str())
+            .map(String::as_str)
+            .chain(all_states.keys().map(String::as_str))
+            .chain(
+                policies
+                    .keys()
+                    .map(crate::core::apparatus_standard::ApparatusId::as_str),
+            )
+            .chain(visible_by_apparatus.keys().map(String::as_str))
+            .filter(|key| !queue_state::apparatus_search_key(key).is_empty())
             .collect::<BTreeSet<_>>()
             .into_iter()
             .map(str::to_string)
@@ -405,6 +417,7 @@ impl ProductionMapService {
 
         for apparatus in apparatuses {
             let storage_key = queue_state::resolve_apparatus_storage_key(&apparatus, &known_keys);
+            let canonical = self.resolve_canonical_apparatus_text(&storage_key).await?;
             let stored_sequence = sequences
                 .get(&storage_key)
                 .or_else(|| sequences.get(&apparatus))
@@ -422,7 +435,7 @@ impl ProductionMapService {
                 .cloned()
                 .unwrap_or_default();
             let effective_states = parsed_queue_states(stored_states);
-            let policy = queue_policy_for_apparatus(&apparatus, &storage_key, policies);
+            let policy = queue_policy_for_apparatus(canonical.as_ref(), policies);
             let active_order_id = effective_states.iter().find_map(|(order_id, state)| {
                 (*state == queue_state::ApparatusQueueOrderState::InProgress)
                     .then_some(order_id.as_str())
@@ -452,6 +465,25 @@ impl ProductionMapService {
                     all_states,
                     &known_keys,
                 );
+                let previous_wip_mode = previous_stage
+                    .as_deref()
+                    .map(|previous_stage| {
+                        let batches = progress_batches_by_order
+                            .get(order_id.trim())
+                            .map(Vec::as_slice)
+                            .unwrap_or_default();
+                        if has_waiting_previous_stage_wip(
+                            batches,
+                            order_id.trim(),
+                            previous_stage,
+                            &storage_key,
+                        ) {
+                            ApparatusQueuePreviousWipMode::ScanRequired
+                        } else {
+                            ApparatusQueuePreviousWipMode::Waiting
+                        }
+                    })
+                    .unwrap_or(ApparatusQueuePreviousWipMode::NotRequired);
                 let active_order_is_this = active_order_id
                     .is_none_or(|active_order_id| active_order_id == order_id.trim());
                 let active_session = self
@@ -465,7 +497,10 @@ impl ProductionMapService {
                     || actionable_order_id.as_deref() == Some(order_id.trim())
                     || (state == queue_state::ApparatusQueueOrderState::Pending
                         && previous_stage.is_some()
-                        && previous_stage_ready
+                        && (previous_stage_ready
+                            || (apparatus::is_laminatsiya_apparatus(&canonical)
+                                && previous_wip_mode
+                                    == ApparatusQueuePreviousWipMode::ScanRequired))
                         && active_order_is_this);
                 let mut allowed_actions = Vec::new();
                 let mut complete_requires_full_report = false;
@@ -492,52 +527,33 @@ impl ProductionMapService {
                         }
                     }
                     queue_state::ApparatusQueueOrderState::Pending => {
-                        let previous_wip_mode = previous_stage
-                            .as_deref()
-                            .map(|previous_stage| {
-                                let batches = progress_batches_by_order
-                                    .get(order_id.trim())
-                                    .map(Vec::as_slice)
-                                    .unwrap_or_default();
-                                if has_waiting_previous_stage_wip(
-                                    batches,
-                                    order_id.trim(),
-                                    previous_stage,
-                                    &storage_key,
-                                ) {
-                                    ApparatusQueuePreviousWipMode::ScanRequired
-                                } else {
-                                    ApparatusQueuePreviousWipMode::Waiting
-                                }
-                            })
-                            .unwrap_or(ApparatusQueuePreviousWipMode::NotRequired);
                         let assignments = material_assignments
                             .iter()
                             .filter(|assignment| {
                                 assignment.order_id.trim() == order_id.trim()
-                                    && queue_state::apparatus_titles_match(
-                                        &assignment.apparatus,
-                                        &storage_key,
-                                    )
+                                    && assignment.apparatus_id == canonical.identity.id
                             })
                             .cloned()
                             .collect::<Vec<_>>();
-                        let rule = material_rules.iter().find(|rule| {
-                            queue_state::apparatus_titles_match(&rule.apparatus, &storage_key)
-                        });
-                        let material_requirements =
-                            build_raw_material_start_requirements(rule, &assignments, &[], "");
+                        let rule = live_material_rule(canonical.as_ref());
+                        let material_requirements = build_raw_material_start_requirements(
+                            rule.as_ref(),
+                            &assignments,
+                            &[],
+                            "",
+                        );
                         let material_scan_required = material_requirements.requires_material
                             || !material_requirements.assigned_barcodes.is_empty();
-                        let start_materials_mode = if apparatus::is_laminatsiya_title(&storage_key)
-                            && previous_wip_mode == ApparatusQueuePreviousWipMode::ScanRequired
-                        {
-                            ApparatusQueueStartMaterialsMode::Hidden
-                        } else if material_scan_required {
-                            ApparatusQueueStartMaterialsMode::ScanRequired
-                        } else {
-                            ApparatusQueueStartMaterialsMode::Hidden
-                        };
+                        let start_materials_mode =
+                            if apparatus::is_laminatsiya_apparatus(&canonical)
+                                && previous_wip_mode == ApparatusQueuePreviousWipMode::ScanRequired
+                            {
+                                ApparatusQueueStartMaterialsMode::Hidden
+                            } else if material_scan_required {
+                                ApparatusQueueStartMaterialsMode::ScanRequired
+                            } else {
+                                ApparatusQueueStartMaterialsMode::Hidden
+                            };
 
                         if previous_wip_mode == ApparatusQueuePreviousWipMode::Waiting {
                             interaction.mode = ApparatusQueueInteractionMode::WaitingPreviousStage;
@@ -552,7 +568,7 @@ impl ProductionMapService {
                                 == ApparatusQueueStartMaterialsMode::ScanRequired;
                             interaction.assigned_materials_display_only = false;
                             interaction.previous_wip_mode = previous_wip_mode;
-                            interaction.qolip_mode = if pechat::is_pechat_apparatus(&storage_key) {
+                            interaction.qolip_mode = if apparatus::requires_qolip_scan(&canonical) {
                                 ApparatusQueueQolipMode::ScanRequired
                             } else {
                                 ApparatusQueueQolipMode::NotRequired
@@ -601,19 +617,20 @@ impl ProductionMapService {
                                     order_id.trim(),
                                     order_map,
                                     &storage_key,
-                                    &all_states,
+                                    canonical.as_ref(),
+                                    all_states,
                                     &[],
                                     &current_input_batch_id,
                                 )
                                 .await?;
-                            if apparatus::is_rezka_title(&storage_key) {
+                            if apparatus::is_rezka_apparatus(&canonical) {
                                 allowed_actions
                                     .push(queue_state::ApparatusQueueAction::RollComplete);
                             }
                             allowed_actions.push(queue_state::ApparatusQueueAction::Complete);
                             complete_requires_full_report =
-                                !(apparatus::is_laminatsiya_title(&storage_key)
-                                    || apparatus::is_rezka_title(&storage_key))
+                                !(apparatus::is_laminatsiya_apparatus(&canonical)
+                                    || apparatus::is_rezka_apparatus(&canonical))
                                     || !has_unprocessed_previous_wips;
                         }
                     }
@@ -662,21 +679,27 @@ impl ProductionMapService {
 
     pub async fn set_apparatus_queue_policy(
         &self,
-        apparatus: &str,
+        apparatus_id: &crate::core::apparatus_standard::ApparatusId,
         policy: ApparatusQueuePolicy,
-        actor: &QueueActionActor,
+        _actor: &QueueActionActor,
+        apparatus_groups: &ApparatusGroupService,
     ) -> Result<ApparatusQueuePolicyRecord, ProductionMapError> {
-        let apparatus = apparatus.trim();
-        if apparatus.is_empty() {
-            return Err(ProductionMapError::MissingId);
-        }
-        let record = effective_apparatus_queue_policy_record(apparatus, policy);
+        let canonical = self.resolve_canonical_apparatus(apparatus_id).await?;
+        let record = effective_apparatus_queue_policy_record(&canonical, policy);
         if record.locked && record.policy != policy {
             return Err(ProductionMapError::ApparatusQueuePolicyLocked);
         }
-        self.store
-            .put_apparatus_queue_policy(apparatus, record.policy, actor)
-            .await?;
+        let canonical = apparatus_groups
+            .mutate_canonical_apparatus(apparatus_id, canonical.versioning.revision, |canonical| {
+                canonical.policies.queue = match policy {
+                    ApparatusQueuePolicy::StrictSequence => QueuePolicy::StrictSequence,
+                    ApparatusQueuePolicy::FreePick => QueuePolicy::FreePick,
+                };
+                Ok(())
+            })
+            .await
+            .map_err(|_| ProductionMapError::StoreFailed)?;
+        let record = effective_apparatus_queue_policy_record(&canonical, policy);
         self.notify_live();
         Ok(record)
     }
@@ -712,6 +735,8 @@ impl ProductionMapService {
         progress: QueueProgressInput,
     ) -> Result<ApparatusQueueActionResult, ProductionMapError> {
         let _guard = self.queue_action_guard().await;
+        self.enforce_qolip_start_boundary(apparatus, order_id, action, None)
+            .await?;
         let prepared = self
             .prepare_apparatus_queue_action_with_progress(
                 apparatus,
@@ -723,6 +748,30 @@ impl ProductionMapService {
             )
             .await?;
         self.commit_prepared_queue_action(prepared).await
+    }
+
+    /// Core queue callers must not be able to enter a Qolip-protected start
+    /// without the trusted handler validation bound to the same canonical
+    /// apparatus and order. Untrusted core callers therefore remain
+    /// fail-closed.
+    pub(crate) async fn enforce_qolip_start_boundary(
+        &self,
+        apparatus: &str,
+        order_id: &str,
+        action: queue_state::ApparatusQueueAction,
+        qolip_validation: Option<&TrustedQolipStartValidation>,
+    ) -> Result<(), ProductionMapError> {
+        if action != queue_state::ApparatusQueueAction::Start {
+            return Ok(());
+        }
+        let canonical = self.resolve_canonical_apparatus_text(apparatus).await?;
+        if apparatus::requires_qolip_scan(&canonical)
+            && !qolip_validation
+                .is_some_and(|validation| validation.matches(&canonical.identity.id, order_id))
+        {
+            return Err(ProductionMapError::QolipCodeMismatch);
+        }
+        Ok(())
     }
 }
 

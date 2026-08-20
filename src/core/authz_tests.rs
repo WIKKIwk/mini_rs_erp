@@ -1,4 +1,5 @@
 use super::*;
+use crate::core::apparatus_standard::ApparatusId;
 use crate::core::auth::models::PrincipalRole;
 
 #[test]
@@ -20,7 +21,7 @@ fn aparatchi_system_role_assigns_to_customer_principal() {
             principal_role: PrincipalRole::Customer,
             principal_ref: "CUS-1".to_string(),
             role_id: "aparatchi".to_string(),
-            assigned_apparatus: vec![" Godex aparat ".to_string()],
+            assigned_apparatus: vec!["apparatus:catalog:godex-001".to_string()],
             assigned_item_groups: Vec::new(),
         },
         &roles,
@@ -30,7 +31,10 @@ fn aparatchi_system_role_assigns_to_customer_principal() {
     assert_eq!(assignment.principal_role, PrincipalRole::Customer);
     assert_eq!(assignment.principal_ref, "CUS-1");
     assert_eq!(assignment.role_id, "aparatchi");
-    assert_eq!(assignment.assigned_apparatus, vec!["Godex aparat"]);
+    assert_eq!(
+        assignment.assigned_apparatus,
+        vec!["apparatus:catalog:godex-001"]
+    );
 }
 
 #[test]
@@ -41,7 +45,7 @@ fn aparatchi_system_role_assigns_to_aparatchi_principal() {
             principal_role: PrincipalRole::Aparatchi,
             principal_ref: "aparatchi - 4".to_string(),
             role_id: "aparatchi".to_string(),
-            assigned_apparatus: vec!["7 ta rangli pechat - A".to_string()],
+            assigned_apparatus: vec!["apparatus:catalog:pechat-7-a".to_string()],
             assigned_item_groups: Vec::new(),
         },
         &roles,
@@ -50,6 +54,44 @@ fn aparatchi_system_role_assigns_to_aparatchi_principal() {
 
     assert_eq!(assignment.principal_role, PrincipalRole::Aparatchi);
     assert_eq!(assignment.principal_ref, "aparatchi - 4");
+}
+
+#[test]
+fn apparatus_scope_is_exact_id_and_rejects_titles() {
+    let roles = system_role_definitions();
+    let assignment = normalize_role_assignment(
+        RoleAssignmentUpsert {
+            principal_role: PrincipalRole::Aparatchi,
+            principal_ref: "worker-1".to_string(),
+            role_id: "aparatchi".to_string(),
+            assigned_apparatus: vec!["apparatus:catalog:shared-001".to_string()],
+            assigned_item_groups: Vec::new(),
+        },
+        &roles,
+    )
+    .expect("canonical apparatus assignment");
+    let scope = assignment.apparatus_scope().expect("typed apparatus scope");
+    assert_eq!(scope.len(), 1);
+    assert_eq!(scope[0].as_str(), "apparatus:catalog:shared-001");
+    assert!(assignment.allows_apparatus(&scope[0]));
+    assert!(
+        !assignment.allows_apparatus(&ApparatusId::new("apparatus:catalog:shared-0010").unwrap())
+    );
+
+    let title = normalize_role_assignment(
+        RoleAssignmentUpsert {
+            principal_role: PrincipalRole::Aparatchi,
+            principal_ref: "worker-1".to_string(),
+            role_id: "aparatchi".to_string(),
+            assigned_apparatus: vec!["Shared apparatus".to_string()],
+            assigned_item_groups: Vec::new(),
+        },
+        &roles,
+    );
+    assert!(matches!(
+        title,
+        Err(RoleAssignmentError::InvalidAssignedApparatus(_))
+    ));
 }
 
 #[test]

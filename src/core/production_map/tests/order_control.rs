@@ -1,8 +1,13 @@
 use crate::core::production_map::*;
+use crate::core::qolip::{QolipOrderStartPreparation, QolipProductSpec};
 
 use std::collections::BTreeMap;
 
-use super::fixtures::apparatus_stage_map;
+use super::fixtures::{canonical_apparatus_stage_map, service_with_default_apparatus};
+
+const PECHAT_ID: &str = "apparatus:default:bosma_7";
+const LAMINATION_ID: &str = "apparatus:default:asset-007";
+const REZKA_ID: &str = "apparatus:default:asset-010";
 
 fn actor(role: &str) -> QueueActionActor {
     QueueActionActor {
@@ -12,13 +17,49 @@ fn actor(role: &str) -> QueueActionActor {
     }
 }
 
+async fn start_with_qolip(
+    service: &ProductionMapService,
+    apparatus: &str,
+    order_id: &str,
+    actor: QueueActionActor,
+) -> Result<ApparatusQueueActionResult, ProductionMapError> {
+    let assigned_apparatus = [apparatus.to_string()];
+    let apparatus_id = crate::core::apparatus_standard::ApparatusId::new(apparatus.to_string())
+        .map_err(|_| ProductionMapError::MissingId)?;
+    let qolip_validation = TrustedQolipStartValidation::from_preparations(
+        &apparatus_id,
+        order_id,
+        &[QolipOrderStartPreparation {
+            spec: QolipProductSpec {
+                qolip_code: "QOLIP-ORDER-CONTROL-TEST".to_string(),
+                ..QolipProductSpec::default()
+            },
+            checkout: None,
+        }],
+    );
+    service
+        .apply_apparatus_queue_action_with_material_scan_and_progress(MaterialScanProgressAction {
+            apparatus,
+            order_id,
+            action: queue_state::ApparatusQueueAction::Start,
+            assigned_apparatus: &assigned_apparatus,
+            actor,
+            material_barcode: "",
+            state_material_barcodes: &[],
+            progress: QueueProgressInput::default(),
+            qolip_validation,
+        })
+        .await
+}
+
 #[tokio::test]
 async fn fresh_pending_actionable_contract_uses_start_semantics() {
-    let service = ProductionMapService::new(std::sync::Arc::new(MemoryProductionMapStore::new()));
-    let apparatus = "Godex";
+    let service =
+        service_with_default_apparatus(std::sync::Arc::new(MemoryProductionMapStore::new())).await;
+    let apparatus = REZKA_ID;
     let order_id = "zakaz-fresh-contract";
     service
-        .upsert_map(apparatus_stage_map(order_id, apparatus))
+        .upsert_map(canonical_apparatus_stage_map(order_id, apparatus, "Godex"))
         .await
         .expect("map");
 
@@ -50,21 +91,19 @@ async fn fresh_pending_actionable_contract_uses_start_semantics() {
 
 #[tokio::test]
 async fn freeze_request_requires_worker_pause_then_blocks_worker_actions() {
-    let service = ProductionMapService::new(std::sync::Arc::new(MemoryProductionMapStore::new()));
-    let apparatus = "7 ta rangli pechat";
+    let service =
+        service_with_default_apparatus(std::sync::Arc::new(MemoryProductionMapStore::new())).await;
+    let apparatus = PECHAT_ID;
     let order_id = "zakaz-freeze-1";
     service
-        .upsert_map(apparatus_stage_map(order_id, apparatus))
+        .upsert_map(canonical_apparatus_stage_map(
+            order_id,
+            apparatus,
+            "7 ta rangli pechat",
+        ))
         .await
         .expect("map");
-    service
-        .apply_apparatus_queue_action(
-            apparatus,
-            order_id,
-            queue_state::ApparatusQueueAction::Start,
-            &[apparatus.to_string()],
-            actor("worker"),
-        )
+    start_with_qolip(&service, apparatus, order_id, actor("worker"))
         .await
         .expect("start");
     let requested = service
@@ -222,15 +261,8 @@ async fn freeze_request_requires_worker_pause_then_blocks_worker_actions() {
             .is_empty()
     );
 
-    let resume_while_frozen = service
-        .apply_apparatus_queue_action(
-            apparatus,
-            order_id,
-            queue_state::ApparatusQueueAction::Start,
-            &[apparatus.to_string()],
-            actor("worker"),
-        )
-        .await;
+    let resume_while_frozen =
+        start_with_qolip(&service, apparatus, order_id, actor("worker")).await;
     assert_eq!(resume_while_frozen, Err(ProductionMapError::OrderFrozen));
 
     service
@@ -257,22 +289,20 @@ async fn freeze_request_requires_worker_pause_then_blocks_worker_actions() {
 
 #[tokio::test]
 async fn freeze_request_issue_safe_stop_rejects_partial_output_without_mutation() {
-    let service = ProductionMapService::new(std::sync::Arc::new(MemoryProductionMapStore::new()));
-    let apparatus = "7 ta rangli pechat";
+    let service =
+        service_with_default_apparatus(std::sync::Arc::new(MemoryProductionMapStore::new())).await;
+    let apparatus = PECHAT_ID;
     let order_id = "zakaz-freeze-request-issue";
     let issue_note = "Valdan sog‘lom mahsulot chiqarib bo‘lmaydi";
     service
-        .upsert_map(apparatus_stage_map(order_id, apparatus))
+        .upsert_map(canonical_apparatus_stage_map(
+            order_id,
+            apparatus,
+            "7 ta rangli pechat",
+        ))
         .await
         .expect("map");
-    service
-        .apply_apparatus_queue_action(
-            apparatus,
-            order_id,
-            queue_state::ApparatusQueueAction::Start,
-            &[apparatus.to_string()],
-            actor("worker"),
-        )
+    start_with_qolip(&service, apparatus, order_id, actor("worker"))
         .await
         .expect("start");
     let requested = service
@@ -361,13 +391,17 @@ async fn freeze_request_issue_safe_stop_rejects_partial_output_without_mutation(
 #[tokio::test]
 async fn freeze_request_rejects_an_order_frozen_on_another_apparatus() {
     let store = std::sync::Arc::new(MemoryProductionMapStore::new());
-    let service = ProductionMapService::new(store.clone());
-    let apparatus = "7 ta rangli pechat";
-    let other_apparatus = "Laminatsiya 1";
+    let service = service_with_default_apparatus(store.clone()).await;
+    let apparatus = LAMINATION_ID;
+    let other_apparatus = REZKA_ID;
     let order_id = "zakaz-freeze-other-apparatus";
 
     service
-        .upsert_map(apparatus_stage_map(order_id, apparatus))
+        .upsert_map(canonical_apparatus_stage_map(
+            order_id,
+            apparatus,
+            "7 ta rangli pechat",
+        ))
         .await
         .expect("map");
     service
@@ -400,22 +434,20 @@ async fn freeze_request_rejects_an_order_frozen_on_another_apparatus() {
 
 #[tokio::test]
 async fn worker_issue_freezes_bosma_without_completion_metrics_and_unfreeze_restores_validation() {
-    let service = ProductionMapService::new(std::sync::Arc::new(MemoryProductionMapStore::new()));
-    let apparatus = "7 ta rangli bosma";
+    let service =
+        service_with_default_apparatus(std::sync::Arc::new(MemoryProductionMapStore::new())).await;
+    let apparatus = PECHAT_ID;
     let order_id = "zakaz-bosma-freeze-issue";
     let issue_note = "Bosma apparatida muammo: rang chiqishi notekis";
     service
-        .upsert_map(apparatus_stage_map(order_id, apparatus))
+        .upsert_map(canonical_apparatus_stage_map(
+            order_id,
+            apparatus,
+            "7 ta rangli bosma",
+        ))
         .await
         .expect("map");
-    service
-        .apply_apparatus_queue_action(
-            apparatus,
-            order_id,
-            queue_state::ApparatusQueueAction::Start,
-            &[apparatus.to_string()],
-            actor("aparatchi"),
-        )
+    start_with_qolip(&service, apparatus, order_id, actor("aparatchi"))
         .await
         .expect("start");
     let original_session_id = service
@@ -631,21 +663,19 @@ async fn worker_issue_freezes_bosma_without_completion_metrics_and_unfreeze_rest
 
 #[tokio::test]
 async fn closed_order_logs_include_freeze_lifecycle_events() {
-    let service = ProductionMapService::new(std::sync::Arc::new(MemoryProductionMapStore::new()));
-    let apparatus = "7 ta rangli pechat";
+    let service =
+        service_with_default_apparatus(std::sync::Arc::new(MemoryProductionMapStore::new())).await;
+    let apparatus = PECHAT_ID;
     let order_id = "zakaz-freeze-history";
     service
-        .upsert_map(apparatus_stage_map(order_id, apparatus))
+        .upsert_map(canonical_apparatus_stage_map(
+            order_id,
+            apparatus,
+            "7 ta rangli pechat",
+        ))
         .await
         .expect("map");
-    service
-        .apply_apparatus_queue_action(
-            apparatus,
-            order_id,
-            queue_state::ApparatusQueueAction::Start,
-            &[apparatus.to_string()],
-            actor("worker"),
-        )
+    start_with_qolip(&service, apparatus, order_id, actor("worker"))
         .await
         .expect("start");
     let requested = service
@@ -725,11 +755,16 @@ async fn closed_order_logs_include_freeze_lifecycle_events() {
 
 #[tokio::test]
 async fn cancelled_freeze_request_rejects_a_late_card_pause() {
-    let service = ProductionMapService::new(std::sync::Arc::new(MemoryProductionMapStore::new()));
-    let apparatus = "7 ta rangli pechat";
+    let service =
+        service_with_default_apparatus(std::sync::Arc::new(MemoryProductionMapStore::new())).await;
+    let apparatus = LAMINATION_ID;
     let order_id = "zakaz-freeze-cancel-race";
     service
-        .upsert_map(apparatus_stage_map(order_id, apparatus))
+        .upsert_map(canonical_apparatus_stage_map(
+            order_id,
+            apparatus,
+            "7 ta rangli pechat",
+        ))
         .await
         .expect("map");
     service
@@ -797,16 +832,25 @@ async fn cancelled_freeze_request_rejects_a_late_card_pause() {
 
 #[tokio::test]
 async fn already_paused_order_leaves_queue_and_unfreeze_appends_at_tail() {
-    let service = ProductionMapService::new(std::sync::Arc::new(MemoryProductionMapStore::new()));
-    let apparatus = "Laminatsiya";
+    let service =
+        service_with_default_apparatus(std::sync::Arc::new(MemoryProductionMapStore::new())).await;
+    let apparatus = LAMINATION_ID;
     let frozen_id = "zakaz-freeze-paused";
     let next_id = "zakaz-after-frozen";
     service
-        .upsert_map(apparatus_stage_map(frozen_id, apparatus))
+        .upsert_map(canonical_apparatus_stage_map(
+            frozen_id,
+            apparatus,
+            "Laminatsiya",
+        ))
         .await
         .expect("frozen map");
     service
-        .upsert_map(apparatus_stage_map(next_id, apparatus))
+        .upsert_map(canonical_apparatus_stage_map(
+            next_id,
+            apparatus,
+            "Laminatsiya",
+        ))
         .await
         .expect("next map");
     service
@@ -973,11 +1017,15 @@ async fn already_paused_order_leaves_queue_and_unfreeze_appends_at_tail() {
 #[tokio::test]
 async fn unfreeze_recovers_control_only_refreeze_after_order_was_requeued() {
     let store = std::sync::Arc::new(MemoryProductionMapStore::new());
-    let service = ProductionMapService::new(store.clone());
-    let apparatus = "Laminatsiya";
+    let service = service_with_default_apparatus(store.clone()).await;
+    let apparatus = LAMINATION_ID;
     let order_id = "zakaz-refreeze-recovery";
     service
-        .upsert_map(apparatus_stage_map(order_id, apparatus))
+        .upsert_map(canonical_apparatus_stage_map(
+            order_id,
+            apparatus,
+            "Laminatsiya",
+        ))
         .await
         .expect("map");
     service
@@ -1077,11 +1125,16 @@ async fn unfreeze_recovers_control_only_refreeze_after_order_was_requeued() {
 
 #[tokio::test]
 async fn roll_detached_order_can_freeze_unfreeze_and_refreeze() {
-    let service = ProductionMapService::new(std::sync::Arc::new(MemoryProductionMapStore::new()));
-    let apparatus = "Laminatsiya";
+    let service =
+        service_with_default_apparatus(std::sync::Arc::new(MemoryProductionMapStore::new())).await;
+    let apparatus = LAMINATION_ID;
     let order_id = "zakaz-refreeze-roll-detached";
     service
-        .upsert_map(apparatus_stage_map(order_id, apparatus))
+        .upsert_map(canonical_apparatus_stage_map(
+            order_id,
+            apparatus,
+            "Laminatsiya",
+        ))
         .await
         .expect("map");
     service
@@ -1161,9 +1214,10 @@ async fn roll_detached_order_can_freeze_unfreeze_and_refreeze() {
 
 #[tokio::test]
 async fn freeze_and_unfreeze_only_update_target_apparatus_and_append_tail() {
-    let service = ProductionMapService::new(std::sync::Arc::new(MemoryProductionMapStore::new()));
-    let target_apparatus = "Laminatsiya";
-    let other_apparatus = "Rezka apparat";
+    let service =
+        service_with_default_apparatus(std::sync::Arc::new(MemoryProductionMapStore::new())).await;
+    let target_apparatus = LAMINATION_ID;
+    let other_apparatus = REZKA_ID;
     let frozen_id = "zakaz-freeze-independent";
     let next_id = "zakaz-freeze-independent-next";
     let other_id = "zakaz-freeze-independent-other";
@@ -1173,7 +1227,9 @@ async fn freeze_and_unfreeze_only_update_target_apparatus_and_append_tail() {
         (other_id, other_apparatus),
     ] {
         service
-            .upsert_map(apparatus_stage_map(order_id, apparatus))
+            .upsert_map(canonical_apparatus_stage_map(
+                order_id, apparatus, apparatus,
+            ))
             .await
             .expect("map");
     }
@@ -1261,16 +1317,24 @@ async fn freeze_and_unfreeze_only_update_target_apparatus_and_append_tail() {
 #[tokio::test]
 async fn delete_uses_current_three_conditions_and_returns_all_blockers() {
     let store = std::sync::Arc::new(MemoryProductionMapStore::new());
-    let service = ProductionMapService::new(store.clone());
-    let apparatus = "7 ta rangli pechat";
+    let service = service_with_default_apparatus(store.clone()).await;
+    let apparatus = LAMINATION_ID;
     let blocked_id = "zakaz-delete-blocked";
     let removable_id = "zakaz-delete-removable";
     service
-        .upsert_map(apparatus_stage_map(blocked_id, apparatus))
+        .upsert_map(canonical_apparatus_stage_map(
+            blocked_id,
+            apparatus,
+            "7 ta rangli pechat",
+        ))
         .await
         .expect("blocked map");
     service
-        .upsert_map(apparatus_stage_map(removable_id, apparatus))
+        .upsert_map(canonical_apparatus_stage_map(
+            removable_id,
+            apparatus,
+            "7 ta rangli pechat",
+        ))
         .await
         .expect("removable map");
     service
@@ -1293,6 +1357,8 @@ async fn delete_uses_current_three_conditions_and_returns_all_blockers() {
     store
         .put_raw_material_assignment(RawMaterialAssignment {
             order_id: blocked_id.to_string(),
+            apparatus_id: crate::core::apparatus_standard::ApparatusId::new(LAMINATION_ID)
+                .expect("canonical apparatus id"),
             apparatus: apparatus.to_string(),
             barcode: "RAW-DELETE-1".to_string(),
             item_code: "RAW".to_string(),
@@ -1326,6 +1392,8 @@ async fn delete_uses_current_three_conditions_and_returns_all_blockers() {
     store
         .put_raw_material_assignment(RawMaterialAssignment {
             order_id: removable_id.to_string(),
+            apparatus_id: crate::core::apparatus_standard::ApparatusId::new(LAMINATION_ID)
+                .expect("canonical apparatus id"),
             apparatus: apparatus.to_string(),
             barcode: "RAW-DELETE-2".to_string(),
             item_code: "RAW".to_string(),

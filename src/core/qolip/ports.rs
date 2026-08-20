@@ -3,8 +3,8 @@ use async_trait::async_trait;
 use crate::core::auth::models::Principal;
 
 use super::models::{
-    QolipBlock, QolipCellQr, QolipCheckout, QolipError, QolipLocation, QolipOrderNote,
-    QolipLocationMove, QolipProduct, QolipProductSpec,
+    QolipBlock, QolipCellQr, QolipCheckout, QolipError, QolipLocation, QolipLocationMove,
+    QolipOrderNote, QolipProduct, QolipProductSpec,
 };
 
 #[async_trait]
@@ -187,5 +187,5 @@ pub trait QolipStorePort: Send + Sync {
         Ok(saved)
     }
     async fn cell_qr_by_payload(&self, qr_payload: &str)
-        -> Result<Option<QolipCellQr>, QolipError>;
+    -> Result<Option<QolipCellQr>, QolipError>;
 }

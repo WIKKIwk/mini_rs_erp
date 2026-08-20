@@ -106,7 +106,7 @@ impl ProductionOrderStatusDetail {
             batch.action == queue_state::ApparatusQueueAction::Pause
                 && batch.is_finished_goods_output()
                 && queue_states.iter().any(|(apparatus, states)| {
-                    queue_state::apparatus_titles_match(apparatus, &batch.apparatus)
+                    super::super::types::apparatus_ids_match(apparatus, &batch.apparatus)
                         && states
                             .get(batch.order_id.trim())
                             .is_some_and(|state| state == "paused")

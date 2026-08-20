@@ -108,6 +108,7 @@ pub async fn apparatus(
                 .upsert_apparatus(input)
                 .await
                 .map_err(apparatus_group_error)?;
+            state.production_maps.notify_live();
             Ok(json_response(AdminApparatusMutationResponse::new(entry)))
         }
         _ => Err(method_not_allowed()),
@@ -145,7 +146,7 @@ impl AdminApparatusMutationResponse {
     }
 }
 
-fn apparatus_group_error(error: ApparatusGroupError) -> AdminError {
+pub(super) fn apparatus_group_error(error: ApparatusGroupError) -> AdminError {
     match error {
         ApparatusGroupError::MissingName => bad_request("group name is required"),
         ApparatusGroupError::MissingApparatus => bad_request("apparatus is required"),
@@ -156,6 +157,10 @@ fn apparatus_group_error(error: ApparatusGroupError) -> AdminError {
         ApparatusGroupError::InvalidColorStations => {
             bad_request("apparatus color stations are invalid")
         }
+        ApparatusGroupError::Conflict => (
+            StatusCode::CONFLICT,
+            Json(AdminErrorResponse::new("apparatus group conflict")),
+        ),
         ApparatusGroupError::StoreFailed => server_error("apparatus group store failed"),
     }
 }
@@ -167,13 +172,23 @@ pub(super) fn is_legacy_apparatus_parent(parent: &str) -> bool {
     )
 }
 
-pub(super) fn legacy_apparatus_warehouse(
-    name: String,
-) -> crate::core::admin::models::AdminWarehouse {
-    crate::core::admin::models::AdminWarehouse {
-        warehouse: name,
+#[derive(Serialize)]
+pub(super) struct LegacyApparatusWarehouse {
+    pub warehouse: String,
+    pub company: String,
+    pub is_group: bool,
+    pub parent_warehouse: String,
+    /// Released warehouse clients receive this additive field so the
+    /// compatibility projection cannot make a display title the identity.
+    pub id: String,
+}
+
+pub(super) fn legacy_apparatus_warehouse(entry: ApparatusCatalogEntry) -> LegacyApparatusWarehouse {
+    LegacyApparatusWarehouse {
+        warehouse: entry.name,
         company: String::new(),
         is_group: false,
         parent_warehouse: "aparat - A".to_string(),
+        id: entry.id,
     }
 }

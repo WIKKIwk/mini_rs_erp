@@ -459,7 +459,7 @@ async fn raw_material_routes_assign_and_require_scan_for_queue_start() {
         factory_location_id: "factory:pechat".to_string(),
         active: true,
         apparatus: vec![InventoryLocationApparatus {
-            id: "apparatus:pechat-a".to_string(),
+            id: "apparatus:catalog:pechat-001".to_string(),
             name: "7 ta rangli pechat - A".to_string(),
         }],
     };

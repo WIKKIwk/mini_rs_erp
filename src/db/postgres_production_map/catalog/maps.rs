@@ -1,9 +1,12 @@
 use sqlx::{PgPool, Postgres, Transaction};
 
+use crate::core::apparatus_standard::ApparatusId;
 use crate::core::production_map::{
     ProductionMapDefinition, ProductionMapError, ProductionMapNodeKind,
 };
 use crate::core::quantity::positive_erp_quantity;
+
+use super::transaction_locks::lock_order_tx;
 
 pub(super) async fn put_map_inner(
     pool: &PgPool,
@@ -23,6 +26,7 @@ pub(super) async fn put_map_inner_tx(
     tx: &mut Transaction<'_, Postgres>,
     map: &ProductionMapDefinition,
 ) -> Result<(), ProductionMapError> {
+    lock_order_tx(tx, &map.id).await?;
     let mut stored_map = map.clone();
     stored_map.roll_count = map.roll_count.filter(|value| *value > 0);
     stored_map.width_mm = map.width_mm.and_then(positive_erp_quantity);
@@ -76,15 +80,37 @@ async fn mirror_map_graph_tx(
 
     for node in &map.nodes {
         let payload = serde_json::to_value(node).map_err(|_| ProductionMapError::StoreFailed)?;
+        let canonical_apparatus_id = if node.kind == ProductionMapNodeKind::Apparatus {
+            Some(
+                ApparatusId::new(node.apparatus_id.trim().to_string())
+                    .map_err(|_| ProductionMapError::MissingId)?
+                    .to_string(),
+            )
+        } else {
+            None
+        };
+        let canonical_alternative_apparatus_id =
+            if node.alternative_assigned_apparatus_id.trim().is_empty() {
+                None
+            } else {
+                Some(
+                    ApparatusId::new(node.alternative_assigned_apparatus_id.trim().to_string())
+                        .map_err(|_| ProductionMapError::MissingId)?
+                        .to_string(),
+                )
+            };
         sqlx::query(
             "INSERT INTO mini_production_map_nodes
-                (map_id, node_id, kind, title, payload_json)
-             VALUES ($1, $2, $3, $4, $5)",
+                (map_id, node_id, kind, title, canonical_apparatus_id,
+                 canonical_alternative_apparatus_id, payload_json)
+             VALUES ($1, $2, $3, $4, $5, $6, $7)",
         )
         .bind(map_id)
         .bind(node.id.trim())
         .bind(node_kind(&node.kind))
         .bind(node.title.trim())
+        .bind(canonical_apparatus_id)
+        .bind(canonical_alternative_apparatus_id)
         .bind(payload)
         .execute(&mut **tx)
         .await

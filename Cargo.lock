@@ -2194,6 +2194,7 @@ dependencies = [
  "data-encoding",
  "dotenvy",
  "ferogram",
+ "flate2",
  "futures-core",
  "heed",
  "hmac 0.12.1",

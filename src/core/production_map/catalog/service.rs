@@ -2,14 +2,12 @@ use super::*;
 
 use std::collections::BTreeSet;
 
-use super::apparatus::{
-    move_allowed, reassign_alternative_apparatus_assignment, reassign_apparatus_nodes,
-};
 use super::compiler::{compile_map, normalize_map, run_map_with_variables};
 use super::progress::{
     latest_required_complete_event, order_completed_on_apparatus,
     required_apparatus_for_closed_order,
 };
+use crate::core::apparatus_standard::ApparatusId;
 
 pub(super) fn compile_saved_maps(
     maps: impl IntoIterator<Item = ProductionMapDefinition>,
@@ -56,7 +54,21 @@ impl ProductionMapService {
             if order_id.is_empty() || !order_id.starts_with("zakaz-") {
                 continue;
             }
-            let required_apparatus = required_apparatus_for_closed_order(&map);
+            if let Err(error) = compile_map(&map) {
+                tracing::warn!(
+                    map_id = %map.id,
+                    error = ?error,
+                    "skipping invalid production map in closed-order evaluation"
+                );
+                continue;
+            }
+            let Some(required_apparatus) = required_apparatus_for_closed_order(&map) else {
+                tracing::warn!(
+                    map_id = %map.id,
+                    "skipping production map with invalid closed-order apparatus identity"
+                );
+                continue;
+            };
             if required_apparatus.is_empty() {
                 continue;
             }
@@ -106,9 +118,10 @@ impl ProductionMapService {
                 continue;
             };
             let mut logs = queue_logs;
-            for transfer in transfers.iter().filter(|transfer| {
-                transfer.order_id.trim().eq_ignore_ascii_case(&order_id)
-            }) {
+            for transfer in transfers
+                .iter()
+                .filter(|transfer| transfer.order_id.trim().eq_ignore_ascii_case(&order_id))
+            {
                 logs.push(ProductionOrderLogEntry {
                     event_id: transfer.transfer_id.clone(),
                     apparatus: transfer.to_apparatus.clone(),
@@ -134,18 +147,16 @@ impl ProductionMapService {
                     freeze: None,
                 });
             }
-            for freeze in freeze_requests.iter().filter(|freeze| {
-                freeze.order_id.trim().eq_ignore_ascii_case(&order_id)
-            }) {
+            for freeze in freeze_requests
+                .iter()
+                .filter(|freeze| freeze.order_id.trim().eq_ignore_ascii_case(&order_id))
+            {
                 logs.push(closed_order_freeze_log_entry(freeze));
             }
             logs.sort_by(|left, right| {
                 left.created_at_unix
                     .cmp(&right.created_at_unix)
-                    .then_with(|| {
-                        closed_order_log_rank(left)
-                            .cmp(&closed_order_log_rank(right))
-                    })
+                    .then_with(|| closed_order_log_rank(left).cmp(&closed_order_log_rank(right)))
                     .then_with(|| left.event_id.cmp(&right.event_id))
             });
             let progress_batches = self.store.progress_batches_for_order(&order_id).await?;
@@ -198,7 +209,7 @@ impl ProductionMapService {
             return Ok(());
         };
         let order_id = previous.id.trim();
-        let mut started_apparatus = BTreeSet::new();
+        let mut started_apparatus = BTreeSet::<ApparatusId>::new();
 
         for (apparatus, states) in self.store.apparatus_queue_states().await? {
             let Some(state) = states.get(order_id) else {
@@ -207,17 +218,17 @@ impl ProductionMapService {
             if queue_state::ApparatusQueueOrderState::parse(state)
                 != Some(queue_state::ApparatusQueueOrderState::Pending)
             {
-                insert_non_empty(&mut started_apparatus, &apparatus);
+                insert_apparatus_id(&mut started_apparatus, &apparatus);
             }
         }
         for session in self.store.order_run_sessions_for_order(order_id).await? {
-            insert_non_empty(&mut started_apparatus, &session.apparatus);
+            insert_apparatus_id(&mut started_apparatus, &session.apparatus);
         }
         for batch in self.store.progress_batches_for_order(order_id).await? {
-            insert_non_empty(&mut started_apparatus, &batch.apparatus);
-            insert_non_empty(&mut started_apparatus, &batch.current_apparatus);
-            insert_non_empty(&mut started_apparatus, &batch.used_by_apparatus);
-            insert_non_empty(&mut started_apparatus, &batch.processed_by_apparatus);
+            insert_apparatus_id(&mut started_apparatus, &batch.apparatus);
+            insert_apparatus_id(&mut started_apparatus, &batch.current_apparatus);
+            insert_apparatus_id(&mut started_apparatus, &batch.used_by_apparatus);
+            insert_apparatus_id(&mut started_apparatus, &batch.processed_by_apparatus);
         }
         if started_apparatus.is_empty() {
             return Ok(());
@@ -228,10 +239,8 @@ impl ProductionMapService {
             .iter()
             .filter(|node| node.kind == ProductionMapNodeKind::Apparatus)
             .filter(|node| {
-                let title = effective_apparatus_title(node);
-                started_apparatus
-                    .iter()
-                    .any(|apparatus| queue_state::apparatus_titles_match(title, apparatus))
+                node.canonical_apparatus_id()
+                    .is_some_and(|apparatus_id| started_apparatus.contains(&apparatus_id))
             })
             .map(|node| node.id.clone())
             .collect::<BTreeSet<_>>();
@@ -248,9 +257,7 @@ impl ProductionMapService {
                 previous
                     .nodes
                     .iter()
-                    .filter(|node| {
-                        locked_group_ids.contains(node.alternative_group_id.trim())
-                    })
+                    .filter(|node| locked_group_ids.contains(node.alternative_group_id.trim()))
                     .map(|node| node.id.clone()),
             );
         }
@@ -369,7 +376,7 @@ impl ProductionMapService {
         let _guard = self.queue_action_guard().await;
         let from = input.from_apparatus.trim();
         let to = input.to_apparatus.trim();
-        if from.is_empty() || to.is_empty() || from == to {
+        if from.is_empty() || to.is_empty() || from.eq_ignore_ascii_case(to) {
             return Err(ProductionMapError::MoveNotAllowed);
         }
         let map_ids: Vec<String> = input
@@ -381,6 +388,15 @@ impl ProductionMapService {
         if map_ids.is_empty() {
             return Err(ProductionMapError::MissingId);
         }
+        let from_id =
+            ApparatusId::new(from.to_string()).map_err(|_| ProductionMapError::MoveNotAllowed)?;
+        let to_id =
+            ApparatusId::new(to.to_string()).map_err(|_| ProductionMapError::MoveNotAllowed)?;
+        let source = self.resolve_canonical_apparatus(&from_id).await?;
+        let target = self.resolve_canonical_apparatus(&to_id).await?;
+        if !crate::core::production_map::pechat::reroute_compatible(&source, &target) {
+            return Err(ProductionMapError::MoveNotAllowed);
+        }
 
         let maps = self.store.maps().await?;
         let mut updated = Vec::with_capacity(map_ids.len());
@@ -388,14 +404,21 @@ impl ProductionMapService {
             let Some(map) = maps.iter().find(|item| item.id.trim() == map_id).cloned() else {
                 return Err(ProductionMapError::MapNotFound);
             };
-            if !move_allowed(&map, from, to) {
+            if !move_allowed_by_id(&map, &from_id, &to_id)
+                || !crate::core::production_map::pechat::reroute_order_compatible(
+                    &source,
+                    &target,
+                    map.roll_count,
+                    map.width_mm,
+                )
+            {
                 return Err(ProductionMapError::MoveNotAllowed);
             }
-            self.ensure_normal_map_move_is_pending(&map_id, from)
+            self.ensure_normal_map_move_is_pending(map_id, from_id.as_str())
                 .await?;
             let mut next = map;
-            if !reassign_alternative_apparatus_assignment(&mut next, from, to)
-                && !reassign_apparatus_nodes(&mut next, from, to)
+            if !reassign_alternative_apparatus_assignment_by_id(&mut next, &from_id, &to_id)
+                && !reassign_apparatus_nodes_by_id(&mut next, &from_id, &to_id)
             {
                 return Err(ProductionMapError::MoveNotAllowed);
             }
@@ -425,21 +448,37 @@ impl ProductionMapService {
         if map_id.is_empty() {
             return Err(ProductionMapError::MissingId);
         }
-        if to.is_empty() || from == to {
+        if to.is_empty() || from.eq_ignore_ascii_case(to) {
+            return Err(ProductionMapError::MoveNotAllowed);
+        }
+        let from_id =
+            ApparatusId::new(from.to_string()).map_err(|_| ProductionMapError::MoveNotAllowed)?;
+        let to_id =
+            ApparatusId::new(to.to_string()).map_err(|_| ProductionMapError::MoveNotAllowed)?;
+        let source = self.resolve_canonical_apparatus(&from_id).await?;
+        let target = self.resolve_canonical_apparatus(&to_id).await?;
+        if !crate::core::production_map::pechat::reroute_compatible(&source, &target) {
             return Err(ProductionMapError::MoveNotAllowed);
         }
         let maps = self.store.maps().await?;
         let Some(map) = maps.into_iter().find(|map| map.id.trim() == map_id) else {
             return Err(ProductionMapError::MapNotFound);
         };
-        if !move_allowed(&map, from, to) {
+        if !move_allowed_by_id(&map, &from_id, &to_id)
+            || !crate::core::production_map::pechat::reroute_order_compatible(
+                &source,
+                &target,
+                map.roll_count,
+                map.width_mm,
+            )
+        {
             return Err(ProductionMapError::MoveNotAllowed);
         }
-        self.ensure_normal_map_move_is_pending(&map_id, from)
+        self.ensure_normal_map_move_is_pending(&map_id, from_id.as_str())
             .await?;
         let mut next = map;
-        if !reassign_alternative_apparatus_assignment(&mut next, from, to)
-            && !reassign_apparatus_nodes(&mut next, from, to)
+        if !reassign_alternative_apparatus_assignment_by_id(&mut next, &from_id, &to_id)
+            && !reassign_apparatus_nodes_by_id(&mut next, &from_id, &to_id)
         {
             return Err(ProductionMapError::MoveNotAllowed);
         }
@@ -488,9 +527,7 @@ fn closed_order_log_rank(log: &ProductionOrderLogEntry) -> u8 {
     }
 }
 
-fn closed_order_freeze_log_entry(
-    freeze: &OrderFreezeAuditRecord,
-) -> ProductionOrderLogEntry {
+fn closed_order_freeze_log_entry(freeze: &OrderFreezeAuditRecord) -> ProductionOrderLogEntry {
     let request = &freeze.request;
     let status = request.status.as_str();
     ProductionOrderLogEntry {
@@ -525,18 +562,106 @@ fn closed_order_freeze_log_entry(
     }
 }
 
-fn insert_non_empty(target: &mut BTreeSet<String>, value: &str) {
-    let value = value.trim();
-    if !value.is_empty() {
-        target.insert(value.to_string());
+fn insert_apparatus_id(target: &mut BTreeSet<ApparatusId>, value: &str) {
+    if let Ok(apparatus_id) = ApparatusId::new(value.trim().to_string()) {
+        target.insert(apparatus_id);
     }
 }
 
-fn effective_apparatus_title(node: &ProductionMapNode) -> &str {
-    let assigned = node.alternative_assigned_title.trim();
-    if assigned.is_empty() {
-        node.title.trim()
-    } else {
-        assigned
+fn effective_apparatus_id(node: &ProductionMapNode) -> Option<ApparatusId> {
+    node.canonical_apparatus_id()
+}
+
+fn move_allowed_by_id(
+    map: &ProductionMapDefinition,
+    from_id: &ApparatusId,
+    to_id: &ApparatusId,
+) -> bool {
+    if from_id == to_id {
+        return false;
     }
+    let source_nodes = map
+        .nodes
+        .iter()
+        .filter(|node| {
+            node.kind == ProductionMapNodeKind::Apparatus
+                && effective_apparatus_id(node).is_some_and(|id| id == *from_id)
+        })
+        .collect::<Vec<_>>();
+    if source_nodes.is_empty() {
+        return false;
+    }
+    let source_groups = source_nodes
+        .iter()
+        .map(|node| node.alternative_group_id.trim())
+        .filter(|group_id| !group_id.is_empty())
+        .collect::<BTreeSet<_>>();
+    if source_groups.is_empty() {
+        return true;
+    }
+    map.nodes.iter().any(|node| {
+        node.kind == ProductionMapNodeKind::Apparatus
+            && source_groups.contains(node.alternative_group_id.trim())
+            && node.base_apparatus_id().is_some_and(|id| id == *to_id)
+    })
+}
+
+fn reassign_alternative_apparatus_assignment_by_id(
+    map: &mut ProductionMapDefinition,
+    from: &ApparatusId,
+    to: &ApparatusId,
+) -> bool {
+    let groups = map
+        .nodes
+        .iter()
+        .filter(|node| {
+            node.kind == ProductionMapNodeKind::Apparatus
+                && !node.alternative_group_id.trim().is_empty()
+                && effective_apparatus_id(node).is_some_and(|id| id == *from)
+        })
+        .map(|node| node.alternative_group_id.trim().to_string())
+        .collect::<BTreeSet<_>>();
+    if groups.is_empty() {
+        return false;
+    }
+    let target_title = map
+        .nodes
+        .iter()
+        .find(|node| {
+            node.kind == ProductionMapNodeKind::Apparatus
+                && groups.contains(node.alternative_group_id.trim())
+                && node.base_apparatus_id().is_some_and(|id| id == *to)
+        })
+        .map(|node| node.title.trim().to_string());
+    let mut changed = false;
+    for node in &mut map.nodes {
+        if node.kind == ProductionMapNodeKind::Apparatus
+            && groups.contains(node.alternative_group_id.trim())
+        {
+            node.set_alternative_assigned_apparatus_id(to);
+            if let Some(title) = &target_title {
+                node.alternative_assigned_title = title.clone();
+            }
+            changed = true;
+        }
+    }
+    changed
+}
+
+fn reassign_apparatus_nodes_by_id(
+    map: &mut ProductionMapDefinition,
+    from: &ApparatusId,
+    to: &ApparatusId,
+) -> bool {
+    let mut changed = false;
+    for node in &mut map.nodes {
+        if node.kind == ProductionMapNodeKind::Apparatus
+            && node.alternative_group_id.trim().is_empty()
+            && effective_apparatus_id(node).is_some_and(|id| id == *from)
+        {
+            node.set_apparatus_id(to);
+            changed = true;
+        }
+    }
+    changed
 }
