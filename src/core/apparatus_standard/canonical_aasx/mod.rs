@@ -14,7 +14,7 @@ pub struct CanonicalAasxArtifact {
 }
 
 impl CanonicalAasxArtifact {
-    pub fn new(bytes: Vec<u8>) -> Self {
+    fn new(bytes: Vec<u8>) -> Self {
         let sha256 = AasxSha256::digest(&bytes);
         Self { bytes, sha256 }
     }
@@ -29,6 +29,17 @@ impl CanonicalAasxArtifact {
 
     pub fn sha256(&self) -> AasxSha256 {
         self.sha256
+    }
+
+    pub(crate) fn from_stored(
+        bytes: Vec<u8>,
+        expected_sha256: AasxSha256,
+    ) -> Result<Self, CanonicalAasxImportError> {
+        let artifact = Self::new(bytes);
+        if artifact.sha256 != expected_sha256 {
+            return Err(CanonicalAasxImportError::SemanticMismatch);
+        }
+        Ok(artifact)
     }
 }
 

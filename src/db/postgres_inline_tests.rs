@@ -190,9 +190,39 @@ mod tests {
         assert!(versions.contains("0066_canonical_authority_remainder"));
         assert!(versions.contains("0067_canonical_apparatus_payload_invariant"));
         assert!(versions.contains("0068_canonical_apparatus_fk_indexes"));
+        assert!(versions.contains("0069_canonical_apparatus_revision_authority"));
         assert!(POSTGRES_MIGRATIONS.iter().all(|(version, sql)| {
             !version.trim().is_empty() && migration_checksum(sql).len() == 64
         }));
+    }
+
+    #[test]
+    fn canonical_revision_authority_migration_is_registered_and_guarded() {
+        let migration = POSTGRES_MIGRATIONS
+            .iter()
+            .find(|(version, _)| *version == "0069_canonical_apparatus_revision_authority")
+            .map(|(_, sql)| sql.to_lowercase())
+            .expect("canonical revision authority migration");
+
+        for invariant in [
+            "create table mini_canonical_apparatus_identities",
+            "create table mini_canonical_apparatus_revisions",
+            "create table mini_canonical_apparatus_heads",
+            "create table mini_canonical_apparatus_change_outbox",
+            "mini_reject_canonical_identity_or_revision_mutation",
+            "mini_require_canonical_apparatus_writer",
+            "mini_validate_canonical_apparatus_alignment",
+            "drop constraint if exists mini_apparatus_name_unique",
+            "drop constraint if exists mini_apparatus_canonical_payload_contract_check",
+            "drop index if exists idx_mini_apparatus_lower_name",
+            "drop index if exists idx_mini_apparatus_material_rules_lower_apparatus",
+            "create view mini_canonical_apparatus_projection_drift",
+        ] {
+            assert!(
+                migration.contains(invariant),
+                "missing 0069 invariant: {invariant}"
+            );
+        }
     }
 
     #[test]
@@ -203,9 +233,9 @@ mod tests {
             .map(|(_, sql)| sql.to_lowercase())
             .expect("canonical payload invariant migration");
 
-        assert!(migration.contains(
-            "add constraint mini_apparatus_canonical_payload_contract_check"
-        ));
+        assert!(
+            migration.contains("add constraint mini_apparatus_canonical_payload_contract_check")
+        );
         assert!(migration.contains("0067 canonical apparatus payload invariant preflight failed"));
         assert!(migration.contains(") is true"));
     }
@@ -1099,7 +1129,7 @@ mod tests {
             .expect("apply foundation migration");
         let migration_history = postgres_0062_migration_history(&pool).await;
         assert_eq!(migration_history.len(), POSTGRES_MIGRATIONS.len());
-        assert_eq!(migration_history.len(), 68);
+        assert_eq!(migration_history.len(), 69);
         assert_postgres_0062_indexes(&pool).await;
 
         let table_count: i64 = sqlx::query_scalar(
@@ -1768,9 +1798,7 @@ mod tests {
     }
 
     async fn assert_postgres_0062_source_behaviors(database_url: &str, pool: &PgPool) {
-        use crate::core::apparatus_groups::{
-            ApparatusGroupError, ApparatusMasterData,
-        };
+        use crate::core::apparatus_groups::{ApparatusGroupError, ApparatusMasterData};
         use crate::core::apparatus_standard::ApparatusId;
         use crate::core::production_map::{
             ApparatusMaterialRule, ApparatusQueueActionEvent, ApparatusQueuePolicy,
@@ -1807,10 +1835,12 @@ mod tests {
             "apparatus 23505 must map to a domain error"
         );
 
-        sqlx::query("DELETE FROM mini_apparatus WHERE id LIKE 'apparatus:fixture:source-apparatus-%'")
-            .execute(pool)
-            .await
-            .expect("remove pre-canonical source apparatus fixture");
+        sqlx::query(
+            "DELETE FROM mini_apparatus WHERE id LIKE 'apparatus:fixture:source-apparatus-%'",
+        )
+        .execute(pool)
+        .await
+        .expect("remove pre-canonical source apparatus fixture");
         apply_postgres_migrations_through(pool, 68)
             .await
             .expect("upgrade source behavior fixture through canonical 0068");

@@ -8,6 +8,7 @@ pub mod aasx;
 pub mod canonical_aasx;
 pub mod isa95;
 pub mod projector;
+pub mod service;
 
 pub use isa95::{
     AasIdentity, ApparatusCapacity, ApparatusDisplay, ApparatusLifecycle,
@@ -28,6 +29,10 @@ pub use projector::{
     AdminApparatusSummary, ApparatusCapacityProjection, ApparatusMaterialProjection,
     ApparatusProjectionSet, ApparatusQueueProjection, AasxSha256, RuntimeApparatusProjection,
     project_apparatus_revision,
+};
+pub use service::{
+    CanonicalApparatusError, CanonicalApparatusPatch, CanonicalApparatusService,
+    CanonicalCommandMetadata, CommittedCanonicalApparatus, StoredCanonicalAasx,
 };
 
 use std::fmt;
