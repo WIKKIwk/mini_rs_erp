@@ -1,133 +1,184 @@
 # Canonical Apparatus Contract
 
-Status: frozen target contract for the one-shot apparatus migration.
+Status: normative target contract for the apparatus clean cutover.
 
-Pinned standards: IDTA Release 26-01, AAS Part 1 metamodel v3.2.0, and AASX
-Part 5 IDTA-01005 v3.2 using Open Packaging Conventions.
+This contract is intentionally stricter than the legacy implementation. Code,
+database schema, migrations, APIs, fixtures, and operational tooling must all
+converge on the authority model below. Existing behavior has no precedence
+when it conflicts with this contract.
 
-## Scope and source of truth
+## Architecture
 
-`src/core/apparatus_standard` is the canonical apparatus configuration domain.
-`CanonicalApparatus` is the only live configuration source of truth after
-migration. Its `ApparatusId` is immutable, opaque, non-empty, and independent
-of display text. The accepted shape is
-`apparatus:<namespace>:<opaque-key>`; the old `apparatus:<title>` shape is not
-canonical.
+The only supported configuration flow is:
 
-The canonical configuration contains only durable apparatus master data:
+```text
+ISA-95 / IEC 62264 apparatus profile
+    -> CanonicalApparatusRevision
+    -> deterministic project-canonical AASX + SHA-256
+    -> PostgreSQL materialized runtime projections
+```
 
-- identity and display metadata;
-- display-only catalog ordering hints; these are non-semantic and never encode
-  apparatus topology, routing, or identity;
-- current catalog classification and supported capability codes/profiles;
-- queue, raw-material, tooling/qolip-scan policies that are currently supported;
-- finite capacity, efficiency, setup/cleanup, and working-window configuration;
-- factory-map placement and training-enabled references where they are actual
-  configuration;
-- provenance, revision, and AAS/AASX package metadata.
+`CanonicalApparatusRevision` is the single authoritative apparatus
+configuration entity. A revision is immutable and append-only. Its deterministic
+AASX is the portable canonical artifact for that exact revision. PostgreSQL
+projections are materialized read models and never independent configuration
+authorities.
 
-It does not contain current order assignment, queue entries or states, WIP,
-active run sessions, progress, downtime instances, schedule reservations,
-material assignments/barcodes, scans, worker actions, or other order-specific
-state. Those are runtime or order contracts and must reference the canonical
-apparatus by `ApparatusId`.
+## Canonical revision aggregate
 
-## Precedence and migration deletion targets
+Every revision contains a complete, validated apparatus configuration:
 
-After integration, the canonical contract has precedence over every legacy
-apparatus representation. Integrators must remove live reads and writes that
-derive identity from titles or maintain a competing apparatus catalog,
-including the legacy apparatus identity paths in `src/core/apparatus_groups.rs`,
-`src/store/apparatus_group_store.rs`, `src/db/postgres_apparatus_group.rs`,
-title matching used as identity in production-map queue/state code, and any
-duplicate apparatus master payload. Production-map queue, material, capacity, training,
-DB, and HTTP references are canonical-ID-only in this integrated candidate; legacy text
-is retained only as an audit/display snapshot and is never a lookup key.
+- immutable opaque `ApparatusId`;
+- monotonically increasing revision and explicit schema version;
+- lifecycle state (`active` or `retired`);
+- ISA-95 hierarchy scope: enterprise, site, area, work center, and work unit;
+- `EquipmentClassId` and unique `PhysicalAssetId`;
+- AAS identity and pinned project semantic profile;
+- display metadata, which is informational only;
+- semantic equipment capabilities;
+- explicit execution profile;
+- queue, material, and tooling policies;
+- capacity and working-calendar configuration;
+- immutable provenance and revision audit metadata.
 
-The old implementations are deletion targets for the integrator after all
-cross-scope consumers are migrated. No permanent legacy fallback, alternate
-source of truth, title-derived lookup, or compatibility identity is permitted.
-Historical rows may retain a display-name snapshot for audit/history only.
-That snapshot must never be used as live identity, matching, routing, or
-configuration lookup.
+A create or replacement command must supply every required semantic field. No
+`Other` default, apparatus-specific catalog template, family/kind guess, role
+guess, title inference, or ID-literal behavior may complete an incomplete
+draft.
 
-Where rules conflict, the precedence is:
+## Identity invariants
 
-1. canonical `ApparatusId` and `CanonicalApparatus` configuration;
-2. explicit canonical policy and capability configuration;
-3. runtime state and order-specific records, which cannot rewrite master data;
-4. historical display snapshots, which are informational only.
+`ApparatusId` is generated by the canonical service, stable for the full
+lifecycle of the apparatus, and cannot be changed or reused. Identity is never
+derived from a title, display name, alias, role, family, kind, map label, or
+physical location.
 
-## Validation invariants
+Two apparatuses may have identical display names when their `ApparatusId` and
+`PhysicalAssetId` values differ. Rename changes display metadata only and must
+not change queue, WIP, history, authorization, joins, routing, or AAS identity.
 
-The Rust module rejects blank/control/whitespace IDs, legacy one-segment IDs,
-IDs derived from the live display name, invalid family/kind combinations,
-duplicate or unsupported capability profiles, invalid capacity windows or
-bounds, invalid references, and conflicting queue/material/tooling policies. A
-Pechat apparatus (including `ColorPechat` and `Flexo`) must use
-`StrictSequence`; `FreePick` is rejected. `ColorPechat` requires an explicit
-7–9 station count. A material rule selects either all-state item groups or
-requirement groups; it cannot silently mix both modes. Qolip scanning is
-represented for the currently supported pechat behavior: 7–9 color
-`ColorPechat` and `Flexo`. Non-pechat families cannot carry the required Qolip
-policy.
+Retired apparatuses remain resolvable for history but cannot receive new work.
+A retired `ApparatusId` or `PhysicalAssetId` cannot be reused.
 
-The module is serde-compatible for contract transport and provides bounded
-`apparatus_standard::aasx::export_aasx` and
-`apparatus_standard::aasx::import_aasx` engineering paths. Export validates
-the canonical record before writing an OPC ZIP/AAS 3.2 XML package; import
-validates the bounded ZIP relationship graph and parses only that canonical
-contract. The package is exchange input/output only; PostgreSQL typed domain
-data remains the runtime source of truth.
+## ISA-95 profile boundary
 
-## AAS/AASX target mapping
+The project uses an apparatus-focused ISA-95 / IEC 62264 profile. It models
+equipment hierarchy, equipment class, physical asset, capabilities, execution
+profile, lifecycle, and configuration policies. It does not claim to implement
+the complete standards.
 
-The canonical apparatus maps to one project-owned AAS submodel target,
-`urn:mini-rs-erp:semantic-id:submodel:apparatus:1`. The submodel contains the
-identity, display, classification, capability, policy, capacity, placement,
-training, provenance, versioning, and pinned package metadata properties listed
-above. `export_aasx` emits these five package entries:
+The canonical revision excludes runtime/order state: queue entries, WIP,
+current assignments, active sessions, progress events, downtime occurrences,
+schedule reservations, material barcodes, worker actions, and training runs.
+Those records reference `ApparatusId` and may retain display snapshots for
+audit only.
 
-- `[Content_Types].xml` and `_rels/.rels` for OPC package typing and root
-  relationship;
-- `aasx/aasx-origin` and `aasx/_rels/aasx-origin.rels` for the AASX origin and
-  AAS-spec relationship;
-- `aasx/data.xml` containing the AAS 3.2 XML environment, one AAS, and one
-  apparatus configuration submodel.
+## AAS and AASX contract
 
-The package uses uncompressed ZIP storage, which is valid OPC packaging, and
-has the standard `application/asset-administration-shell-package` MIME
-metadata. The semantic ID and property model are project-owned and are not
-presented as IDTA-issued semantic identifiers. The exporter intentionally does
-not include queue positions, current workers, live WIP, assigned order
-barcodes, pause/freeze state, or any other order/runtime record.
+Pinned interoperability profile:
 
-The authenticated admin HTTP runtime boundary is:
+- IDTA Release 26-01;
+- AAS Part 1 metamodel 3.2.0;
+- AASX Part 5 IDTA-01005 v3.2;
+- Open Packaging Conventions.
 
-- `GET /v1/mobile/admin/apparatus/{id}/aasx` loads the persisted canonical
-  apparatus by `ApparatusId`, exports it as the binary AASX package, and
-  returns `Content-Type: application/asset-administration-shell-package` with
-  an attachment `.aasx` filename.
-- `POST /v1/mobile/admin/apparatus/{id}/aasx` accepts one bounded package up to
-  16 MiB, parses it with `import_aasx`, requires the package identity to match
-  `{id}` and its revision to match the current canonical revision, then calls
-  `ApparatusGroupService::mutate_canonical_apparatus`. The service preserves
-  the immutable ID and advances the revision exactly once.
+IDTA defines the metamodel and package interoperability requirements. The
+following are project invariants, not IDTA normative requirements:
 
-Both routes require the existing authenticated admin/production-map capability
-gate. They fail closed for missing canonical records, malformed or oversized
-packages, invalid canonical configuration, identity conflicts, and revision
-conflicts. They do not promote legacy-only rows, write a competing store, or
-bypass `ApparatusGroupService`.
+- canonical ZIP entry order and metadata;
+- canonical XML ordering and serialization;
+- byte-identical output for identical revisions;
+- SHA-256 over the exact stored AASX bytes;
+- the project semantic model and validation profile.
 
-## Integrator requirements
+The artifact semantically represents hierarchy, equipment class, physical
+asset, capabilities, execution profile, policies, capacity, lifecycle,
+provenance, schema version, and revision. Runtime state is forbidden.
 
-The integrator must register the module if needed, migrate all live apparatus
-consumers to `ApparatusId`, remove the legacy identity/source-of-truth paths,
-keep runtime/order state out of this configuration, coordinate schema and
-migration changes with the assigned owners, and add end-to-end coverage for
-the canonical ID across catalog, map, queue, materials, capacity, training,
-DB, and HTTP boundaries. The exporter/importer remain one-apparatus, in-memory
-byte operations; the authenticated admin routes above provide the runtime file
-download/upload boundary and canonical service persistence without turning
-AASX into a second runtime source of truth.
+Imported AASX is untrusted input. It is bounded, parsed into a candidate
+canonical model, validated, and regenerated by the project codec. Uploaded
+bytes never become authority. Stored historical artifact bytes are immutable
+and are never silently regenerated or replaced.
+
+For every stored revision:
+
+```text
+parse(stored_aasx) == authoritative canonical payload
+sha256(stored_aasx) == stored artifact hash
+```
+
+## PostgreSQL runtime projections
+
+`mini_apparatus` is the current materialized runtime projection. Queue,
+material, and capacity tables may remain only as derived read projections when
+query performance justifies them. Every retained derived row identifies its
+`apparatus_id`, source revision, and source artifact hash.
+
+Runtime requests read PostgreSQL projections. They do not open, parse, or
+regenerate AASX. A projection is valid only when its source revision/hash
+matches the current head and authoritative revision.
+
+Display columns are snapshots only. SQL joins, conflict targets, filters,
+authorization, and behavior decisions use canonical IDs and explicit profile
+fields.
+
+## Behavior contract
+
+Apparatus behavior is defined only by explicit semantic capabilities,
+execution profile, policies, capacity, hierarchy, and lifecycle. Print,
+laminate, cut, tooling, queue, material, training, and reroute behavior cannot
+be inferred from display text, ID literals, family/kind guesses, role strings,
+or hardcoded defaults.
+
+## Mutation and CAS semantics
+
+`CanonicalApparatusService` is the sole writer. Each successful create,
+update, AASX replacement, or retirement executes one PostgreSQL transaction:
+
+1. lock the current head;
+2. validate the expected revision;
+3. build and validate a complete candidate model;
+4. advance the revision exactly once;
+5. generate deterministic AASX and SHA-256;
+6. run the side-effect-free projector;
+7. append the immutable revision and artifact;
+8. CAS/update the current head;
+9. replace current and optional derived projections;
+10. append exactly one outbox event;
+11. commit;
+12. invalidate live cache only after commit.
+
+Any failure leaves no partial artifact, revision, head, projection, outbox
+event, or cache transition.
+
+## API boundary
+
+- Create accepts a complete canonical draft; the server generates the stable
+  opaque ID.
+- Update and AASX replacement require an expected revision.
+- AASX download returns the exact stored bytes for the requested revision or
+  current head.
+- List/detail endpoints read runtime projections.
+- Options endpoints expose only versioned vocabulary/schema metadata.
+- Capacity, queue, and material endpoints may exist only as canonical patch
+  adapters and create exactly one new revision.
+- Legacy apparatus upsert payloads are rejected.
+
+## Clean cutover and rollback
+
+The new release has no dual-read, dual-write, title fallback, optional
+canonical resolver, SQLite production authority, runtime default catalog, or
+parallel projection writer. Production startup fails closed when PostgreSQL
+canonical persistence is unavailable.
+
+Cutover requires an operator-reviewed exact mapping manifest and transactional
+reference migration. Ambiguous or incomplete source data aborts. Rollback uses
+a verified pre-cutover database backup plus the old binary; the new binary does
+not contain a legacy fallback.
+
+## Acceptance
+
+Architecture acceptance requires executable proof of deterministic artifacts,
+append-only revisions, CAS/fault atomicity, projection equivalence and zero
+drift, canonical-ID-only downstream behavior, complete data reconciliation,
+zero forbidden legacy authority symbols, and all final Rust/PostgreSQL gates.
