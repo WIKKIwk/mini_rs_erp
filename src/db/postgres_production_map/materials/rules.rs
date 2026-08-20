@@ -36,11 +36,23 @@ pub(super) async fn save_apparatus_material_rule(
     let requirement_groups = serde_json::to_value(&rule.requirement_groups)
         .map_err(|_| ProductionMapError::StoreFailed)?;
     let payload = serde_json::to_value(&rule).map_err(|_| ProductionMapError::StoreFailed)?;
+    let mut tx = pool
+        .begin()
+        .await
+        .map_err(|_| ProductionMapError::StoreFailed)?;
+    sqlx::query("SELECT pg_advisory_xact_lock(hashtextextended($1, 0))")
+        .bind(format!(
+            "mini-rs-erp:material-rule:{}",
+            rule.apparatus.trim().to_lowercase()
+        ))
+        .execute(&mut *tx)
+        .await
+        .map_err(|_| ProductionMapError::StoreFailed)?;
     sqlx::query(
         "INSERT INTO mini_apparatus_material_rules
             (apparatus, item_groups, requirement_groups, requires_material, payload_json, updated_at)
          VALUES ($1, $2, $3, $4, $5, now())
-         ON CONFLICT (apparatus) DO UPDATE SET
+         ON CONFLICT ((lower(apparatus))) DO UPDATE SET
            item_groups = excluded.item_groups,
            requirement_groups = excluded.requirement_groups,
            requires_material = excluded.requires_material,
@@ -52,9 +64,12 @@ pub(super) async fn save_apparatus_material_rule(
     .bind(requirement_groups)
     .bind(rule.requires_material)
     .bind(payload)
-    .execute(pool)
+    .execute(&mut *tx)
     .await
     .map_err(|_| ProductionMapError::StoreFailed)?;
+    tx.commit()
+        .await
+        .map_err(|_| ProductionMapError::StoreFailed)?;
     Ok(())
 }
 
@@ -98,12 +113,12 @@ pub(super) async fn save_raw_material_assignment_tx(
     assignment: &RawMaterialAssignment,
 ) -> Result<(), ProductionMapError> {
     let stock = raw_material_stock_for_assignment_tx(tx, &assignment.barcode).await?;
-    let payload = serde_json::to_value(&assignment).map_err(|_| ProductionMapError::StoreFailed)?;
+    let payload = serde_json::to_value(assignment).map_err(|_| ProductionMapError::StoreFailed)?;
     let result = sqlx::query(
         "INSERT INTO mini_raw_material_assignments
             (barcode, order_id, apparatus, item_code, item_group, payload_json, updated_at)
          VALUES ($1, $2, $3, $4, $5, $6, now())
-         ON CONFLICT (barcode) DO NOTHING",
+         ON CONFLICT DO NOTHING",
     )
     .bind(assignment.barcode.trim())
     .bind(assignment.order_id.trim())

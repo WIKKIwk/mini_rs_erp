@@ -160,31 +160,57 @@ impl PostgresApparatusGroupStore {
         let mut payload =
             serde_json::to_value(master).map_err(|_| ApparatusGroupError::StoreFailed)?;
         payload["warehouse"] = serde_json::Value::String(name.to_string());
-        let existing_id = if let Some(requested_id) = requested_id {
+        let requested_id = requested_id
+            .map(str::trim)
+            .filter(|id| !id.is_empty())
+            .map(str::to_string);
+        let mut tx = self
+            .pool
+            .begin()
+            .await
+            .map_err(|_| ApparatusGroupError::StoreFailed)?;
+        sqlx::query("SELECT pg_advisory_xact_lock(hashtextextended($1, 0))")
+            .bind(format!(
+                "mini-rs-erp:apparatus-name:{}",
+                name.to_lowercase()
+            ))
+            .execute(&mut *tx)
+            .await
+            .map_err(|_| ApparatusGroupError::StoreFailed)?;
+        if let Some(requested_id) = &requested_id {
+            sqlx::query("SELECT pg_advisory_xact_lock(hashtextextended($1, 0))")
+                .bind(format!("mini-rs-erp:apparatus-id:{requested_id}"))
+                .execute(&mut *tx)
+                .await
+                .map_err(|_| ApparatusGroupError::StoreFailed)?;
+        }
+        let existing_id = if let Some(requested_id) = &requested_id {
             sqlx::query_scalar::<_, String>(
                 "SELECT id
                  FROM mini_apparatus
                  WHERE id = $1
-                 LIMIT 1",
+                 LIMIT 1
+                 FOR UPDATE",
             )
             .bind(requested_id)
-            .fetch_optional(&self.pool)
+            .fetch_optional(&mut *tx)
             .await
         } else {
             sqlx::query_scalar::<_, String>(
                 "SELECT id
                  FROM mini_apparatus
                  WHERE lower(name) = lower($1)
-                 LIMIT 1",
+                 LIMIT 1
+                 FOR UPDATE",
             )
             .bind(name)
-            .fetch_optional(&self.pool)
+            .fetch_optional(&mut *tx)
             .await
         }
-        .map_err(|_| ApparatusGroupError::StoreFailed)?;
+        .map_err(map_apparatus_sql_error)?;
 
-        if let Some(id) = existing_id {
-            return sqlx::query_scalar::<_, String>(
+        let id = if let Some(id) = existing_id {
+            sqlx::query_scalar::<_, String>(
                 "UPDATE mini_apparatus
                  SET name = $2, payload_json = $3, updated_at = now()
                  WHERE id = $1
@@ -193,26 +219,37 @@ impl PostgresApparatusGroupStore {
             .bind(id)
             .bind(name)
             .bind(payload.clone())
-            .fetch_one(&self.pool)
+            .fetch_one(&mut *tx)
             .await
-            .map_err(|_| ApparatusGroupError::StoreFailed);
-        }
+            .map_err(map_apparatus_sql_error)?
+        } else {
+            let id = requested_id.unwrap_or_else(|| apparatus_id(name));
+            sqlx::query_scalar::<_, String>(
+                "INSERT INTO mini_apparatus (id, name, base_name, kind, payload_json)
+                 VALUES ($1, $2, $2, 'custom', $3)
+                 RETURNING id",
+            )
+            .bind(id)
+            .bind(name)
+            .bind(payload)
+            .fetch_one(&mut *tx)
+            .await
+            .map_err(map_apparatus_sql_error)?
+        };
+        tx.commit()
+            .await
+            .map_err(|_| ApparatusGroupError::StoreFailed)?;
+        Ok(id)
+    }
+}
 
-        let id = requested_id
-            .filter(|id| !id.trim().is_empty())
-            .map(str::to_string)
-            .unwrap_or_else(|| apparatus_id(name));
-        sqlx::query_scalar::<_, String>(
-            "INSERT INTO mini_apparatus (id, name, base_name, kind, payload_json)
-             VALUES ($1, $2, $2, 'custom', $3)
-             RETURNING name",
-        )
-        .bind(id)
-        .bind(name)
-        .bind(payload)
-        .fetch_one(&self.pool)
-        .await
-        .map_err(|_| ApparatusGroupError::StoreFailed)
+fn map_apparatus_sql_error(error: sqlx::Error) -> ApparatusGroupError {
+    let sqlx::Error::Database(database) = &error else {
+        return ApparatusGroupError::StoreFailed;
+    };
+    match database.code().as_deref() {
+        Some("23505") => ApparatusGroupError::InvalidApparatus,
+        _ => ApparatusGroupError::StoreFailed,
     }
 }
 

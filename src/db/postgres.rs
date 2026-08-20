@@ -9,7 +9,7 @@ const DEFAULT_MAX_CONNECTIONS: u32 = 16;
 const DEFAULT_ACQUIRE_TIMEOUT_MS: u64 = 500;
 const MIGRATION_LOCK_KEY: i64 = 6_514_811_918_052_026_001;
 
-const POSTGRES_MIGRATIONS: [(&str, &str); 61] = [
+const POSTGRES_MIGRATIONS: [(&str, &str); 62] = [
     (
         "0001_mini_erp_foundation",
         include_str!("../../migrations/postgres/0001_mini_erp_foundation.sql"),
@@ -254,6 +254,10 @@ const POSTGRES_MIGRATIONS: [(&str, &str); 61] = [
         "0061_order_reset_append_only_override",
         include_str!("../../migrations/postgres/0061_order_reset_append_only_override.sql"),
     ),
+    (
+        "0062_concurrency_idempotency_constraints",
+        include_str!("../../migrations/postgres/0062_concurrency_idempotency_constraints.sql"),
+    ),
 ];
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -391,12 +395,14 @@ async fn apply_postgres_migrations(
     pool: &PgPool,
     migrations: &[(&str, &str)],
 ) -> Result<(), sqlx::Error> {
+    validate_migration_registry(migrations)?;
     let mut tx = pool.begin().await?;
     sqlx::query("SELECT pg_advisory_xact_lock($1)")
         .bind(MIGRATION_LOCK_KEY)
         .execute(&mut *tx)
         .await?;
     ensure_migration_history(&mut tx).await?;
+    validate_migration_history(&mut tx, migrations).await?;
     for &(version, sql) in migrations {
         apply_migration(&mut tx, version, sql).await?;
     }
@@ -429,6 +435,76 @@ async fn ensure_migration_history(tx: &mut Transaction<'_, Postgres>) -> Result<
     )
     .execute(&mut **tx)
     .await?;
+    Ok(())
+}
+
+fn validate_migration_registry(migrations: &[(&str, &str)]) -> Result<(), sqlx::Error> {
+    let mut previous_number = 0_usize;
+    for &(version, sql) in migrations {
+        let number = version
+            .split_once('_')
+            .and_then(|(prefix, _)| prefix.parse::<usize>().ok())
+            .ok_or_else(|| {
+                sqlx::Error::Protocol(format!("invalid postgres migration version: {version}"))
+            })?;
+        if number != previous_number + 1 {
+            return Err(sqlx::Error::Protocol(format!(
+                "postgres migration registry is not contiguous at {version}"
+            )));
+        }
+        if sql.trim().is_empty() {
+            return Err(sqlx::Error::Protocol(format!(
+                "postgres migration is empty: {version}"
+            )));
+        }
+        previous_number = number;
+    }
+    Ok(())
+}
+
+async fn validate_migration_history(
+    tx: &mut Transaction<'_, Postgres>,
+    migrations: &[(&str, &str)],
+) -> Result<(), sqlx::Error> {
+    let applied_versions = sqlx::query_scalar::<_, String>(
+        "SELECT version FROM mini_schema_migrations ORDER BY version",
+    )
+    .fetch_all(&mut **tx)
+    .await?;
+
+    validate_applied_migration_versions(&applied_versions, migrations)
+}
+
+fn validate_applied_migration_versions(
+    applied_versions: &[String],
+    migrations: &[(&str, &str)],
+) -> Result<(), sqlx::Error> {
+    for applied_version in applied_versions {
+        if !migrations
+            .iter()
+            .any(|(version, _)| *version == applied_version.as_str())
+        {
+            return Err(sqlx::Error::Protocol(format!(
+                "unknown postgres migration in history: {applied_version}"
+            )));
+        }
+    }
+
+    let mut first_missing = None;
+    for &(version, _) in migrations {
+        let applied = applied_versions
+            .iter()
+            .any(|applied_version| applied_version.as_str() == version);
+        if applied {
+            if let Some(missing_version) = first_missing {
+                return Err(sqlx::Error::Protocol(format!(
+                    "postgres migration history is out of order: {version} is applied after missing {missing_version}"
+                )));
+            }
+        } else if first_missing.is_none() {
+            first_missing = Some(version);
+        }
+    }
     Ok(())
 }
 
