@@ -2,6 +2,29 @@
 mod tests {
     use super::*;
 
+    const CONCURRENCY_IDEMPOTENCY_INDEXES: [(&str, &str); 5] = [
+        (
+            "idx_mini_apparatus_factory_map_object_id_unique",
+            "mini_apparatus",
+        ),
+        (
+            "idx_mini_apparatus_material_rules_lower_apparatus",
+            "mini_apparatus_material_rules",
+        ),
+        (
+            "idx_mini_raw_material_stock_lower_barcode",
+            "mini_raw_material_stock",
+        ),
+        (
+            "idx_mini_raw_material_assignments_lower_barcode",
+            "mini_raw_material_assignments",
+        ),
+        (
+            "idx_mini_queue_action_events_pending_completion",
+            "mini_queue_action_events",
+        ),
+    ];
+
     #[test]
     fn postgres_config_uses_mini_erp_database_url() {
         let config = PostgresConfig::from_env_with(|key| match key {
@@ -216,6 +239,80 @@ mod tests {
             assert!(compact.contains(expected), "missing {expected}");
         }
         assert!(migration.contains("apparatus_id ~ '^apparatus:[a-z0-9._-]+:[a-z0-9._-]+$'"));
+    }
+
+    #[test]
+    fn postgres_migration_registry_matches_every_file_in_contiguous_order() {
+        let migration_dir = concat!(env!("CARGO_MANIFEST_DIR"), "/migrations/postgres");
+        let mut files = std::fs::read_dir(migration_dir)
+            .expect("postgres migrations directory")
+            .map(|entry| {
+                entry
+                    .expect("postgres migration directory entry")
+                    .file_name()
+                    .into_string()
+                    .expect("postgres migration filename")
+            })
+            .filter(|name| name.ends_with(".sql"))
+            .collect::<Vec<_>>();
+        files.sort();
+
+        let registered_files = POSTGRES_MIGRATIONS
+            .iter()
+            .map(|(version, _)| format!("{version}.sql"))
+            .collect::<Vec<_>>();
+
+        assert_eq!(registered_files, files);
+        validate_migration_registry(&POSTGRES_MIGRATIONS)
+            .expect("production migration registry must be contiguous");
+    }
+
+    #[test]
+    fn postgres_migration_validation_rejects_duplicate_skip_empty_and_unknown_history() {
+        let duplicate_registry = [("0001_first", "SELECT 1"), ("0001_duplicate", "SELECT 1")];
+        assert!(validate_migration_registry(&duplicate_registry).is_err());
+
+        let skipped_registry = [("0001_first", "SELECT 1"), ("0003_third", "SELECT 1")];
+        assert!(validate_migration_registry(&skipped_registry).is_err());
+
+        let empty_registry = [("0001_first", "   ")];
+        assert!(validate_migration_registry(&empty_registry).is_err());
+
+        let registry = [
+            ("0001_first", "SELECT 1"),
+            ("0002_second", "SELECT 1"),
+            ("0003_third", "SELECT 1"),
+        ];
+        let unknown_history = vec!["0001_first".to_string(), "0004_future".to_string()];
+        assert!(validate_applied_migration_versions(&unknown_history, &registry).is_err());
+
+        let out_of_order_history = vec!["0001_first".to_string(), "0003_third".to_string()];
+        assert!(validate_applied_migration_versions(&out_of_order_history, &registry).is_err());
+    }
+
+    #[test]
+    fn concurrency_idempotency_migration_registers_exactly_five_non_destructive_invariants() {
+        let migration = POSTGRES_MIGRATIONS
+            .iter()
+            .find(|(version, _)| *version == "0062_concurrency_idempotency_constraints")
+            .map(|(_, sql)| sql.to_lowercase())
+            .expect("concurrency idempotency migration");
+
+        for (index_name, _) in CONCURRENCY_IDEMPOTENCY_INDEXES {
+            assert!(migration.contains(index_name), "missing {index_name}");
+        }
+        assert_eq!(
+            migration
+                .matches("create unique index if not exists")
+                .count(),
+            5
+        );
+        for destructive in ["delete from", "drop table", "truncate"] {
+            assert!(
+                !migration.contains(destructive),
+                "0062 must not contain {destructive}"
+            );
+        }
     }
 
     #[test]
@@ -1202,5 +1299,626 @@ mod tests {
         .await
         .expect("cleanup test db");
         admin_pool.close().await;
+    }
+
+    #[derive(Clone, Copy)]
+    struct Postgres0062NegativeCase {
+        suffix: &'static str,
+        expected_index: &'static str,
+        seed_sql: &'static str,
+    }
+
+    #[tokio::test]
+    #[ignore = "requires local PostgreSQL and creates/drops mini_rs_erp_test_0062_* databases"]
+    async fn postgres_live_0062_concurrency_idempotency_constraints() {
+        let admin_url = std::env::var("MINI_ERP_TEST_ADMIN_DATABASE_URL")
+            .unwrap_or_else(|_| "postgres://wikki@127.0.0.1:5432/postgres".to_string());
+        let runtime_role_created = ensure_postgres_0062_runtime_role(&admin_url).await;
+        let database_prefix = format!("mini_rs_erp_test_0062_{}", std::process::id());
+        let positive_database = format!("{database_prefix}_positive");
+        let positive_url = recreate_postgres_0062_database(&admin_url, &positive_database).await;
+        let pool = connect_postgres_0062_database(&positive_url).await;
+
+        apply_postgres_migrations_through(&pool, 61)
+            .await
+            .expect("apply production migrations through 0061");
+        let history_through_0061 = postgres_0062_migration_history(&pool).await;
+        assert_eq!(history_through_0061.len(), 61);
+
+        seed_postgres_0062_valid_rows(&pool).await;
+        let rows_before = postgres_0062_target_rows_snapshot(&pool).await;
+        apply_postgres_migrations_through(&pool, 62)
+            .await
+            .expect("apply 0062 on valid production rows");
+        let rows_after = postgres_0062_target_rows_snapshot(&pool).await;
+        assert_eq!(rows_after, rows_before, "0062 changed existing valid rows");
+
+        assert_postgres_0062_indexes(&pool).await;
+        let history_after_0062 = postgres_0062_migration_history(&pool).await;
+        assert_eq!(history_after_0062.len(), 62);
+        assert_eq!(&history_after_0062[..61], history_through_0061.as_slice());
+        for ((version, checksum, _), (expected_version, sql)) in
+            history_after_0062.iter().zip(POSTGRES_MIGRATIONS.iter())
+        {
+            assert_eq!(version, expected_version);
+            assert_eq!(checksum, &migration_checksum(sql));
+        }
+
+        pool.close().await;
+        let restarted_pool = connect_postgres_0062_database(&positive_url).await;
+        apply_foundation_migration(&restarted_pool)
+            .await
+            .expect("restart must keep migration history stable");
+        let history_after_restart = postgres_0062_migration_history(&restarted_pool).await;
+        assert_eq!(history_after_restart, history_after_0062);
+        assert_eq!(
+            postgres_0062_target_rows_snapshot(&restarted_pool).await,
+            rows_after,
+            "restart changed rows protected by 0062"
+        );
+        assert_postgres_0062_source_behaviors(&positive_url, &restarted_pool).await;
+        restarted_pool.close().await;
+        drop_postgres_0062_database(&admin_url, &positive_database).await;
+        eprintln!("0062 positive fixture: PASS");
+
+        let negative_cases = [
+            Postgres0062NegativeCase {
+                suffix: "apparatus",
+                expected_index: "idx_mini_apparatus_factory_map_object_id_unique",
+                seed_sql: r#"
+                    INSERT INTO mini_apparatus
+                        (id, name, base_name, kind, payload_json)
+                    VALUES
+                        ('fixture:0062:negative:apparatus:1', '0062 Negative Apparatus 1', '', 'fixture',
+                         '{"fixture":"0062-negative","factory_map_object_id":"duplicate-map-object"}'::jsonb),
+                        ('fixture:0062:negative:apparatus:2', '0062 Negative Apparatus 2', '', 'fixture',
+                         '{"fixture":"0062-negative","factory_map_object_id":" duplicate-map-object "}'::jsonb)
+                "#,
+            },
+            Postgres0062NegativeCase {
+                suffix: "material_rule",
+                expected_index: "idx_mini_apparatus_material_rules_lower_apparatus",
+                seed_sql: r#"
+                    INSERT INTO mini_apparatus_material_rules
+                        (apparatus, payload_json)
+                    VALUES
+                        ('0062 Negative Material Rule', '{"fixture":"0062-negative"}'::jsonb),
+                        ('0062 negative material rule', '{"fixture":"0062-negative"}'::jsonb)
+                "#,
+            },
+            Postgres0062NegativeCase {
+                suffix: "stock",
+                expected_index: "idx_mini_raw_material_stock_lower_barcode",
+                seed_sql: r#"
+                    INSERT INTO mini_raw_material_stock
+                        (id, warehouse, item_code, item_name, barcode, qty, payload_json)
+                    VALUES
+                        ('fixture:0062:negative:stock:1', 'Fixture Warehouse', 'fixture-item',
+                         'Fixture Item', '0062-NEGATIVE-STOCK', 1,
+                         '{"fixture":"0062-negative"}'::jsonb),
+                        ('fixture:0062:negative:stock:2', 'Fixture Warehouse', 'fixture-item',
+                         'Fixture Item', '0062-negative-stock', 1,
+                         '{"fixture":"0062-negative"}'::jsonb)
+                "#,
+            },
+            Postgres0062NegativeCase {
+                suffix: "assignment",
+                expected_index: "idx_mini_raw_material_assignments_lower_barcode",
+                seed_sql: r#"
+                    INSERT INTO mini_items
+                        (code, name, item_group, payload_json)
+                    VALUES
+                        ('fixture:0062:negative:item', '0062 Negative Item', 'All Item Groups',
+                         '{"fixture":"0062-negative"}'::jsonb);
+                    INSERT INTO mini_production_maps
+                        (id, product_code, title, map_json)
+                    VALUES
+                        ('fixture:0062:negative:order', 'fixture-product', '0062 Negative Order',
+                         '{"fixture":"0062-negative"}'::jsonb);
+                    ALTER TABLE mini_raw_material_assignments
+                        DROP CONSTRAINT mini_raw_material_assignments_stock_fkey;
+                    INSERT INTO mini_raw_material_assignments
+                        (barcode, order_id, apparatus, item_code, item_group, payload_json)
+                    VALUES
+                        ('0062-NEGATIVE-ASSIGNMENT', 'fixture:0062:negative:order',
+                         '0062 Negative Apparatus', 'fixture:0062:negative:item', 'All Item Groups',
+                         '{"fixture":"0062-negative"}'::jsonb),
+                        ('0062-negative-assignment', 'fixture:0062:negative:order',
+                         '0062 Negative Apparatus', 'fixture:0062:negative:item', 'All Item Groups',
+                         '{"fixture":"0062-negative"}'::jsonb)
+                "#,
+            },
+            Postgres0062NegativeCase {
+                suffix: "pending_completion",
+                expected_index: "idx_mini_queue_action_events_pending_completion",
+                seed_sql: r#"
+                    INSERT INTO mini_queue_action_events
+                        (event_id, apparatus, order_id, action, from_state, to_state, policy,
+                         assigned_apparatus, payload_json)
+                    VALUES
+                        ('fixture:0062:negative:completion:1', '0062 Negative Queue',
+                         'fixture:0062:negative:queue-order', 'complete', 'in_progress', 'completed',
+                         'free_pick', '[]'::jsonb,
+                         '{"fixture":"0062-negative","completion_request":true}'::jsonb),
+                        ('fixture:0062:negative:completion:2', '0062 negative queue',
+                         'fixture:0062:negative:queue-order', 'complete', 'in_progress', 'completed',
+                         'free_pick', '[]'::jsonb,
+                         '{"fixture":"0062-negative","completion_request":true,"completion_request_status":"pending"}'::jsonb)
+                "#,
+            },
+        ];
+
+        for case in negative_cases {
+            let database_name = format!("{database_prefix}_{}", case.suffix);
+            let database_url = recreate_postgres_0062_database(&admin_url, &database_name).await;
+            let pool = connect_postgres_0062_database(&database_url).await;
+            apply_postgres_migrations_through(&pool, 61)
+                .await
+                .unwrap_or_else(|error| panic!("{}: apply through 0061: {error}", case.suffix));
+            sqlx::raw_sql(case.seed_sql)
+                .execute(&pool)
+                .await
+                .unwrap_or_else(|error| panic!("{}: seed duplicates: {error}", case.suffix));
+            let rows_before = postgres_0062_target_rows_snapshot(&pool).await;
+            let history_before = postgres_0062_migration_history(&pool).await;
+
+            let error = apply_postgres_migrations_through(&pool, 62)
+                .await
+                .expect_err("0062 must reject duplicate data");
+            match &error {
+                sqlx::Error::Database(database) => {
+                    assert_eq!(
+                        database.code().as_deref(),
+                        Some("23505"),
+                        "{}: unexpected SQLSTATE for {error}",
+                        case.suffix
+                    );
+                    assert!(
+                        database.constraint() == Some(case.expected_index)
+                            || database.message().contains(case.expected_index),
+                        "{}: failure did not identify {}: {error}",
+                        case.suffix,
+                        case.expected_index
+                    );
+                }
+                _ => panic!(
+                    "{}: expected PostgreSQL duplicate error: {error}",
+                    case.suffix
+                ),
+            }
+
+            assert_eq!(
+                postgres_0062_target_rows_snapshot(&pool).await,
+                rows_before,
+                "{}: failed migration changed existing rows",
+                case.suffix
+            );
+            assert_eq!(
+                postgres_0062_migration_history(&pool).await,
+                history_before,
+                "{}: failed migration changed history",
+                case.suffix
+            );
+            assert_eq!(
+                postgres_0062_index_count(&pool).await,
+                0,
+                "{}: failed migration left partial indexes",
+                case.suffix
+            );
+            pool.close().await;
+            drop_postgres_0062_database(&admin_url, &database_name).await;
+            eprintln!("0062 negative fixture {}: PASS", case.suffix);
+        }
+        if runtime_role_created {
+            drop_postgres_0062_runtime_role(&admin_url).await;
+        }
+    }
+
+    async fn ensure_postgres_0062_runtime_role(admin_url: &str) -> bool {
+        let admin_pool = sqlx::PgPool::connect(admin_url)
+            .await
+            .expect("connect to PostgreSQL admin database for runtime role");
+        let exists: bool = sqlx::query_scalar(
+            "SELECT EXISTS(SELECT 1 FROM pg_roles WHERE rolname = 'mini_rs_erp')",
+        )
+        .fetch_one(&admin_pool)
+        .await
+        .expect("check runtime role");
+        if !exists {
+            sqlx::query("CREATE ROLE mini_rs_erp NOLOGIN")
+                .execute(&admin_pool)
+                .await
+                .expect("create fixture runtime role");
+        }
+        admin_pool.close().await;
+        !exists
+    }
+
+    async fn drop_postgres_0062_runtime_role(admin_url: &str) {
+        let admin_pool = sqlx::PgPool::connect(admin_url)
+            .await
+            .expect("connect to PostgreSQL admin database for runtime role cleanup");
+        sqlx::query("DROP ROLE mini_rs_erp")
+            .execute(&admin_pool)
+            .await
+            .expect("drop fixture runtime role");
+        admin_pool.close().await;
+    }
+
+    async fn recreate_postgres_0062_database(admin_url: &str, database_name: &str) -> String {
+        assert!(database_name.starts_with("mini_rs_erp_test_0062_"));
+        assert!(
+            database_name
+                .chars()
+                .all(|ch| ch.is_ascii_alphanumeric() || ch == '_')
+        );
+        let admin_pool = sqlx::PgPool::connect(admin_url)
+            .await
+            .expect("connect to PostgreSQL admin database");
+        sqlx::query(&format!(
+            r#"DROP DATABASE IF EXISTS "{database_name}" WITH (FORCE)"#
+        ))
+        .execute(&admin_pool)
+        .await
+        .expect("drop stale 0062 test database");
+        sqlx::query(&format!(r#"CREATE DATABASE "{database_name}""#))
+            .execute(&admin_pool)
+            .await
+            .expect("create 0062 test database");
+        admin_pool.close().await;
+
+        let (admin_base_url, _) = admin_url
+            .rsplit_once('/')
+            .expect("admin database URL must include a database name");
+        format!("{admin_base_url}/{database_name}")
+    }
+
+    async fn drop_postgres_0062_database(admin_url: &str, database_name: &str) {
+        let admin_pool = sqlx::PgPool::connect(admin_url)
+            .await
+            .expect("connect to PostgreSQL admin database for cleanup");
+        sqlx::query(&format!(
+            r#"DROP DATABASE IF EXISTS "{database_name}" WITH (FORCE)"#
+        ))
+        .execute(&admin_pool)
+        .await
+        .expect("drop 0062 test database");
+        admin_pool.close().await;
+    }
+
+    async fn connect_postgres_0062_database(database_url: &str) -> PgPool {
+        PgPoolOptions::new()
+            .max_connections(2)
+            .connect(database_url)
+            .await
+            .expect("connect to 0062 test database")
+    }
+
+    async fn postgres_0062_migration_history(pool: &PgPool) -> Vec<(String, String, String)> {
+        sqlx::query_as(
+            "SELECT version, checksum, applied_at::text
+             FROM mini_schema_migrations
+             ORDER BY version",
+        )
+        .fetch_all(pool)
+        .await
+        .expect("load migration history")
+    }
+
+    async fn seed_postgres_0062_valid_rows(pool: &PgPool) {
+        sqlx::raw_sql(
+            r#"
+                INSERT INTO mini_items
+                    (code, name, item_group, payload_json)
+                VALUES
+                    ('fixture:0062:item:1', '0062 Fixture Item', 'All Item Groups',
+                     '{"fixture":"0062-positive"}'::jsonb);
+                INSERT INTO mini_production_maps
+                    (id, product_code, title, map_json)
+                VALUES
+                    ('fixture:0062:order:1', 'fixture-product', '0062 Fixture Order',
+                     '{"fixture":"0062-positive"}'::jsonb);
+                INSERT INTO mini_apparatus
+                    (id, name, base_name, kind, payload_json)
+                VALUES
+                    ('fixture:0062:apparatus:1', '0062 Fixture Apparatus 1', '', 'fixture',
+                     '{"fixture":"0062-positive","factory_map_object_id":"fixture-map-object-1"}'::jsonb),
+                    ('fixture:0062:apparatus:2', '0062 Fixture Apparatus 2', '', 'fixture',
+                     '{"fixture":"0062-positive","factory_map_object_id":"fixture-map-object-2"}'::jsonb);
+                INSERT INTO mini_apparatus_material_rules
+                    (apparatus, payload_json)
+                VALUES
+                    ('0062 Fixture Material Rule 1', '{"fixture":"0062-positive"}'::jsonb),
+                    ('0062 Fixture Material Rule 2', '{"fixture":"0062-positive"}'::jsonb);
+                INSERT INTO mini_raw_material_stock
+                    (id, warehouse, item_code, item_name, barcode, qty, payload_json)
+                VALUES
+                    ('fixture:0062:stock:1', 'Fixture Warehouse', 'fixture:0062:item:1',
+                     '0062 Fixture Item', '0062-FIXTURE-STOCK-1', 2,
+                     '{"fixture":"0062-positive"}'::jsonb),
+                    ('fixture:0062:stock:2', 'Fixture Warehouse', 'fixture:0062:item:1',
+                     '0062 Fixture Item', '0062-FIXTURE-STOCK-2', 3,
+                     '{"fixture":"0062-positive"}'::jsonb);
+                INSERT INTO mini_raw_material_assignments
+                    (barcode, order_id, apparatus, item_code, item_group, payload_json)
+                VALUES
+                    ('0062-FIXTURE-STOCK-1', 'fixture:0062:order:1', '0062 Fixture Apparatus 1',
+                     'fixture:0062:item:1', 'All Item Groups',
+                     '{"fixture":"0062-positive"}'::jsonb),
+                    ('0062-FIXTURE-STOCK-2', 'fixture:0062:order:1', '0062 Fixture Apparatus 2',
+                     'fixture:0062:item:1', 'All Item Groups',
+                     '{"fixture":"0062-positive"}'::jsonb);
+                INSERT INTO mini_queue_action_events
+                    (event_id, apparatus, order_id, action, from_state, to_state, policy,
+                     assigned_apparatus, payload_json)
+                VALUES
+                    ('fixture:0062:completion:pending', '0062 Fixture Queue',
+                     'fixture:0062:queue-order', 'complete', 'in_progress', 'completed',
+                     'free_pick', '[]'::jsonb,
+                     '{"fixture":"0062-positive","completion_request":true}'::jsonb),
+                    ('fixture:0062:completion:approved', '0062 fixture queue',
+                     'fixture:0062:queue-order', 'complete', 'in_progress', 'completed',
+                     'free_pick', '[]'::jsonb,
+                     '{"fixture":"0062-positive","completion_request":true,"completion_request_status":"approved"}'::jsonb)
+            "#,
+        )
+        .execute(pool)
+        .await
+        .expect("seed valid 0062 rows");
+    }
+
+    async fn postgres_0062_target_rows_snapshot(pool: &PgPool) -> serde_json::Value {
+        sqlx::query_scalar(
+            r#"
+                SELECT jsonb_build_object(
+                    'apparatus', COALESCE((
+                        SELECT jsonb_agg(to_jsonb(rows) ORDER BY rows.id)
+                        FROM (SELECT * FROM mini_apparatus) rows
+                    ), '[]'::jsonb),
+                    'material_rules', COALESCE((
+                        SELECT jsonb_agg(to_jsonb(rows) ORDER BY rows.apparatus)
+                        FROM (SELECT * FROM mini_apparatus_material_rules) rows
+                    ), '[]'::jsonb),
+                    'raw_material_stock', COALESCE((
+                        SELECT jsonb_agg(to_jsonb(rows) ORDER BY rows.id)
+                        FROM (SELECT * FROM mini_raw_material_stock) rows
+                    ), '[]'::jsonb),
+                    'raw_material_assignments', COALESCE((
+                        SELECT jsonb_agg(to_jsonb(rows) ORDER BY rows.barcode)
+                        FROM (SELECT * FROM mini_raw_material_assignments) rows
+                    ), '[]'::jsonb),
+                    'queue_action_events', COALESCE((
+                        SELECT jsonb_agg(to_jsonb(rows) ORDER BY rows.id)
+                        FROM (SELECT * FROM mini_queue_action_events) rows
+                    ), '[]'::jsonb)
+                )
+            "#,
+        )
+        .fetch_one(pool)
+        .await
+        .expect("snapshot rows protected by 0062")
+    }
+
+    async fn assert_postgres_0062_indexes(pool: &PgPool) {
+        for (index_name, expected_table) in CONCURRENCY_IDEMPOTENCY_INDEXES {
+            let (table_name, is_unique, is_valid, is_ready, definition): (
+                String,
+                bool,
+                bool,
+                bool,
+                String,
+            ) = sqlx::query_as(
+                "SELECT table_class.relname,
+                        index_meta.indisunique,
+                        index_meta.indisvalid,
+                        index_meta.indisready,
+                        pg_get_indexdef(index_meta.indexrelid)
+                 FROM pg_index index_meta
+                 JOIN pg_class index_class ON index_class.oid = index_meta.indexrelid
+                 JOIN pg_class table_class ON table_class.oid = index_meta.indrelid
+                 JOIN pg_namespace namespace ON namespace.oid = index_class.relnamespace
+                 WHERE namespace.nspname = 'public'
+                   AND index_class.relname = $1",
+            )
+            .bind(index_name)
+            .fetch_one(pool)
+            .await
+            .unwrap_or_else(|error| panic!("catalog entry for {index_name}: {error}"));
+            assert_eq!(table_name, expected_table);
+            assert!(is_unique, "{index_name} is not unique");
+            assert!(is_valid, "{index_name} is not valid");
+            assert!(is_ready, "{index_name} is not ready");
+            assert!(definition.contains("CREATE UNIQUE INDEX"));
+            assert!(definition.contains(index_name));
+        }
+        assert_eq!(postgres_0062_index_count(pool).await, 5);
+    }
+
+    async fn postgres_0062_index_count(pool: &PgPool) -> i64 {
+        sqlx::query_scalar(
+            "SELECT COUNT(*)
+             FROM pg_class index_class
+             JOIN pg_namespace namespace ON namespace.oid = index_class.relnamespace
+             WHERE namespace.nspname = 'public'
+               AND index_class.relname IN (
+                   'idx_mini_apparatus_factory_map_object_id_unique',
+                   'idx_mini_apparatus_material_rules_lower_apparatus',
+                   'idx_mini_raw_material_stock_lower_barcode',
+                   'idx_mini_raw_material_assignments_lower_barcode',
+                   'idx_mini_queue_action_events_pending_completion'
+               )",
+        )
+        .fetch_one(pool)
+        .await
+        .expect("count 0062 indexes")
+    }
+
+    async fn assert_postgres_0062_source_behaviors(database_url: &str, pool: &PgPool) {
+        use crate::core::apparatus_groups::{
+            ApparatusGroupError, ApparatusGroupStorePort, ApparatusMasterData,
+        };
+        use crate::core::production_map::{
+            ApparatusMaterialRule, ApparatusQueueActionEvent, ApparatusQueuePolicy,
+            ProductionMapError, ProductionMapStorePort, QueueActionActor, RawMaterialAssignment,
+            RawMaterialStartPolicy,
+            queue_state::{ApparatusQueueAction, ApparatusQueueOrderState},
+        };
+        use crate::db::postgres_apparatus_group::PostgresApparatusGroupStore;
+        use crate::db::postgres_production_map::PostgresProductionMapStore;
+
+        let apparatus_store = PostgresApparatusGroupStore::new(pool.clone());
+        let master = ApparatusMasterData {
+            factory_map_object_id: Some("fixture-source-map-object".to_string()),
+            ..ApparatusMasterData::default()
+        };
+        apparatus_store
+            .put_apparatus_with_id(
+                Some("fixture:0062:source-apparatus:1"),
+                "0062 Source Apparatus 1",
+                &master,
+            )
+            .await
+            .expect("insert apparatus with unique factory map object");
+        let duplicate_factory_object = apparatus_store
+            .put_apparatus_with_id(
+                Some("fixture:0062:source-apparatus:2"),
+                "0062 Source Apparatus 2",
+                &master,
+            )
+            .await;
+        assert_eq!(
+            duplicate_factory_object,
+            Err(ApparatusGroupError::InvalidApparatus),
+            "apparatus 23505 must map to a domain error"
+        );
+
+        let production_store = PostgresProductionMapStore::new(pool.clone());
+        production_store
+            .put_apparatus_material_rule(ApparatusMaterialRule {
+                apparatus: "0062 Source Material Rule".to_string(),
+                requires_material: false,
+                start_policy: RawMaterialStartPolicy::StateAll,
+                item_groups: Vec::new(),
+                requirement_groups: Vec::new(),
+            })
+            .await
+            .expect("insert source material rule");
+        production_store
+            .put_apparatus_material_rule(ApparatusMaterialRule {
+                apparatus: "0062 source material rule".to_string(),
+                requires_material: true,
+                start_policy: RawMaterialStartPolicy::StateAll,
+                item_groups: vec!["All Item Groups".to_string()],
+                requirement_groups: Vec::new(),
+            })
+            .await
+            .expect("case-insensitive material rule upsert");
+        let material_rule_rows: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*)
+             FROM mini_apparatus_material_rules
+             WHERE lower(apparatus) = lower('0062 Source Material Rule')
+               AND requires_material",
+        )
+        .fetch_one(pool)
+        .await
+        .expect("verify source material rule");
+        assert_eq!(material_rule_rows, 1);
+
+        sqlx::query(
+            "INSERT INTO mini_raw_material_stock
+                (id, warehouse, item_code, item_name, barcode, qty, payload_json)
+             VALUES
+                ('fixture:0062:source-stock', 'Fixture Warehouse', 'fixture:0062:item:1',
+                 '0062 Fixture Item', '0062-SOURCE-BARCODE', 1,
+                 '{\"fixture\":\"0062-source\"}'::jsonb)",
+        )
+        .execute(pool)
+        .await
+        .expect("insert source assignment stock");
+        let assignment = RawMaterialAssignment {
+            order_id: "fixture:0062:order:1".to_string(),
+            apparatus: "0062 Source Apparatus 1".to_string(),
+            barcode: "0062-SOURCE-BARCODE".to_string(),
+            item_code: "fixture:0062:item:1".to_string(),
+            item_name: "0062 Fixture Item".to_string(),
+            item_group: "All Item Groups".to_string(),
+            assigned_by_role: "fixture".to_string(),
+            assigned_by_ref: "fixture".to_string(),
+            assigned_by_display_name: "0062 Fixture".to_string(),
+            assigned_at: "2026-01-01T00:00:00Z".to_string(),
+        };
+        production_store
+            .put_raw_material_assignment(assignment.clone())
+            .await
+            .expect("insert source raw material assignment");
+        let mut duplicate_assignment = assignment;
+        duplicate_assignment.barcode = "0062-source-barcode".to_string();
+        assert_eq!(
+            production_store
+                .put_raw_material_assignment(duplicate_assignment)
+                .await,
+            Err(ProductionMapError::RawMaterialAlreadyAssigned)
+        );
+
+        let blocker_pool = PgPoolOptions::new()
+            .max_connections(1)
+            .connect(database_url)
+            .await
+            .expect("connect queue blocker pool");
+        let mut blocker = blocker_pool.begin().await.expect("begin queue blocker");
+        sqlx::query(
+            "INSERT INTO mini_queue_action_events
+                (event_id, apparatus, order_id, action, from_state, to_state, policy,
+                 assigned_apparatus, payload_json)
+             VALUES
+                ('fixture:0062:source-race:blocker', '0062 Source Queue',
+                 'fixture:0062:source-race:order', 'complete', 'in_progress', 'completed',
+                 'free_pick', '[]'::jsonb,
+                 '{\"completion_request\":true}'::jsonb)",
+        )
+        .execute(&mut *blocker)
+        .await
+        .expect("insert uncommitted pending completion");
+
+        let race_pool = PgPoolOptions::new()
+            .max_connections(1)
+            .connect(database_url)
+            .await
+            .expect("connect queue race pool");
+        let race_store = PostgresProductionMapStore::new(race_pool.clone());
+        let race_event = ApparatusQueueActionEvent {
+            event_id: "fixture:0062:source-race:contender".to_string(),
+            apparatus: "0062 source queue".to_string(),
+            order_id: "fixture:0062:source-race:order".to_string(),
+            action: ApparatusQueueAction::Complete,
+            from_state: ApparatusQueueOrderState::InProgress,
+            to_state: ApparatusQueueOrderState::Completed,
+            policy: ApparatusQueuePolicy::FreePick,
+            actor: QueueActionActor::default(),
+            assigned_apparatus: Vec::new(),
+            payload_json: serde_json::json!({"completion_request": true}),
+        };
+        let contender = tokio::spawn(async move {
+            race_store
+                .append_apparatus_queue_action_event(race_event)
+                .await
+        });
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+        assert!(
+            !contender.is_finished(),
+            "queue contender must wait on the uncommitted unique key"
+        );
+        blocker.commit().await.expect("commit queue blocker");
+        let contender_result = tokio::time::timeout(std::time::Duration::from_secs(5), contender)
+            .await
+            .expect("queue contender did not unblock")
+            .expect("queue contender task failed");
+        assert_eq!(
+            contender_result,
+            Err(ProductionMapError::QueueActionNotAllowed),
+            "queue 23505 must map to a domain error"
+        );
+        race_pool.close().await;
+        blocker_pool.close().await;
     }
 }

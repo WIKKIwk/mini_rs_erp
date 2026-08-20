@@ -136,7 +136,7 @@ pub(super) async fn save_raw_material_assignment_tx(
         "INSERT INTO mini_raw_material_assignments
             (barcode, order_id, apparatus, canonical_apparatus_id, item_code, item_group, payload_json, updated_at)
          VALUES ($1, $2, $3, $4, $5, $6, $7, now())
-         ON CONFLICT (barcode) DO NOTHING",
+         ON CONFLICT DO NOTHING",
     )
     .bind(assignment.barcode.trim())
     .bind(assignment.order_id.trim())

@@ -4,7 +4,7 @@ use sqlx::{Postgres, Transaction};
 
 use crate::core::apparatus_standard::ApparatusId;
 use crate::core::production_map::{
-    ApparatusQueueActionEvent, ProductionMapError,
+    ApparatusQueueActionEvent, ProductionMapError, queue_state::ApparatusQueueAction,
 };
 
 use super::transaction_locks::lock_apparatus_tx;
@@ -13,6 +13,15 @@ pub(super) async fn queue_action_event_replay_tx(
     tx: &mut Transaction<'_, Postgres>,
     event: &ApparatusQueueActionEvent,
 ) -> Result<bool, ProductionMapError> {
+    let event_id = event.event_id.trim();
+    if event_id.is_empty() {
+        return Err(ProductionMapError::QueueActionNotAllowed);
+    }
+    sqlx::query("SELECT pg_advisory_xact_lock(hashtextextended($1, 0))")
+        .bind(format!("mini-rs-erp:queue-event:{event_id}"))
+        .execute(&mut **tx)
+        .await
+        .map_err(|_| ProductionMapError::StoreFailed)?;
     let apparatus_id = ApparatusId::new(event.apparatus.trim().to_string())
         .map_err(|_| ProductionMapError::ScheduleInputInvalid)?;
     let assigned_apparatus = normalized_assigned_apparatus(event)?;
@@ -38,7 +47,7 @@ pub(super) async fn queue_action_event_replay_tx(
          WHERE event_id = $1
          FOR UPDATE",
     )
-    .bind(event.event_id.trim())
+    .bind(event_id)
     .fetch_optional(&mut **tx)
     .await
     .map_err(|_| ProductionMapError::StoreFailed)?;
@@ -171,6 +180,35 @@ pub(super) async fn insert_queue_action_event_tx(
     let apparatus_id = ApparatusId::new(event.apparatus.trim().to_string())
         .map_err(|_| ProductionMapError::ScheduleInputInvalid)?;
     let assigned_apparatus = normalized_assigned_apparatus(event)?;
+    if event.action == ApparatusQueueAction::Complete
+        && event
+            .payload_json
+            .get("completion_request")
+            .and_then(serde_json::Value::as_bool)
+            == Some(true)
+    {
+        let pending_exists = sqlx::query_scalar::<_, bool>(
+            "SELECT EXISTS(
+                 SELECT 1
+                 FROM mini_queue_action_events
+                 WHERE canonical_apparatus_id = $1
+                   AND order_id = $2
+                   AND event_id <> $3
+                   AND action = 'complete'
+                   AND payload_json->>'completion_request' = 'true'
+                   AND COALESCE(payload_json->>'completion_request_status', 'pending') = 'pending'
+             )",
+        )
+        .bind(apparatus_id.as_str())
+        .bind(event.order_id.trim())
+        .bind(event.event_id.trim())
+        .fetch_one(&mut **tx)
+        .await
+        .map_err(|_| ProductionMapError::StoreFailed)?;
+        if pending_exists {
+            return Err(ProductionMapError::QueueActionNotAllowed);
+        }
+    }
     sqlx::query(
         "INSERT INTO mini_queue_action_events
             (event_id, apparatus, canonical_apparatus_id, order_id, action, from_state, to_state, policy,
@@ -195,7 +233,17 @@ pub(super) async fn insert_queue_action_event_tx(
     .bind(&event.payload_json)
     .execute(&mut **tx)
     .await
-    .map_err(|_| ProductionMapError::StoreFailed)?;
+    .map_err(|error| {
+        let is_unique_violation = matches!(
+            &error,
+            sqlx::Error::Database(database) if database.code().as_deref() == Some("23505")
+        );
+        if is_unique_violation {
+            ProductionMapError::QueueActionNotAllowed
+        } else {
+            ProductionMapError::StoreFailed
+        }
+    })?;
     Ok(())
 }
 
