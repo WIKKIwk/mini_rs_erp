@@ -5,6 +5,30 @@
 //! by [`ApparatusId`] and remain separate contracts.
 
 pub mod aasx;
+pub mod canonical_aasx;
+pub mod isa95;
+pub mod projector;
+
+pub use isa95::{
+    AasIdentity, ApparatusCapacity, ApparatusDisplay, ApparatusLifecycle,
+    ApparatusOperationalPolicies, CanonicalApparatusDraft, CanonicalApparatusRevision,
+    CapacityAvailability, EquipmentCapability, EquipmentCapabilityCode, EquipmentClassId,
+    EquipmentHierarchyScope, ExecutionOperation, ExecutionProfile, FactoryMapPlacement,
+    HierarchyLevelId, LifecycleState, MaterialExecutionPolicy, MaterialRequirementSet,
+    PhysicalAssetId, ProcessTechnology, QueueDiscipline, RevisionMetadata, RevisionSource,
+    ToolingExecutionPolicy, TrainingProfile, VirtualTaskPolicy, WorkingWindowV1,
+    CANONICAL_APPARATUS_SCHEMA_VERSION,
+};
+pub use canonical_aasx::{
+    CanonicalAasxArtifact, CanonicalAasxExportError, CanonicalAasxImportError,
+    CanonicalizedAasxUpload, canonicalize_uploaded_aasx, export_canonical_aasx,
+    parse_canonical_aasx,
+};
+pub use projector::{
+    AdminApparatusSummary, ApparatusCapacityProjection, ApparatusMaterialProjection,
+    ApparatusProjectionSet, ApparatusQueueProjection, AasxSha256, RuntimeApparatusProjection,
+    project_apparatus_revision,
+};
 
 use std::fmt;
 

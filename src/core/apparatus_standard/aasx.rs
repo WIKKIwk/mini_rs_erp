@@ -94,6 +94,18 @@ pub enum AasxImportError {
 /// accepted. The importer never derives identity from display metadata and it
 /// does not import runtime, order, queue, or scheduling state.
 pub fn import_aasx(package: &[u8]) -> Result<CanonicalApparatus, AasxImportError> {
+    let specification = validated_aas_spec(package)?;
+    let apparatus = parse_aas_environment(&specification)?;
+    apparatus.validate()?;
+    Ok(apparatus)
+}
+
+/// Validate the bounded OPC graph and return the exact AAS specification part.
+///
+/// The canonical revision codec reuses this package boundary so both legacy
+/// and revision packages have identical ZIP, traversal, relationship, content
+/// type, duplicate-entry, decompression, and size protections.
+pub(crate) fn validated_aas_spec(package: &[u8]) -> Result<Vec<u8>, AasxImportError> {
     let parts = read_zip_parts(package)?;
     let content_types = required_part(&parts, CONTENT_TYPES_PATH)?;
     validate_content_types(content_types)?;
@@ -153,9 +165,7 @@ pub fn import_aasx(package: &[u8]) -> Result<CanonicalApparatus, AasxImportError
         ));
     }
 
-    let apparatus = parse_aas_environment(required_part(&parts, AAS_SPEC_PATH)?)?;
-    apparatus.validate()?;
-    Ok(apparatus)
+    Ok(required_part(&parts, AAS_SPEC_PATH)?.to_vec())
 }
 
 fn read_zip_parts(package: &[u8]) -> Result<BTreeMap<String, Vec<u8>>, AasxImportError> {
@@ -2046,6 +2056,16 @@ pub fn export_aasx(apparatus: &CanonicalApparatus) -> Result<Vec<u8>, AasxExport
         return Err(AasxExportError::XmlTooLarge);
     }
 
+    package_from_aas_xml(aas_xml)
+}
+
+/// Build deterministic project AASX bytes around an already validated AAS XML
+/// part. ZIP entry order, timestamps, flags, attributes, and compression are
+/// fixed by [`write_zip`].
+pub(crate) fn package_from_aas_xml(aas_xml: Vec<u8>) -> Result<Vec<u8>, AasxExportError> {
+    if aas_xml.len() > MAX_AASX_PART_SIZE as usize || aas_xml.len() > MAX_AASX_XML_MEMORY_BYTES {
+        return Err(AasxExportError::XmlTooLarge);
+    }
     let entries = vec![
         ZipEntry {
             name: CONTENT_TYPES_PATH,
