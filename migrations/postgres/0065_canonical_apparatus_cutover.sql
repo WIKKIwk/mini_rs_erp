@@ -1,6 +1,6 @@
 -- Final canonical-apparatus cutover.
 --
--- 0062 and 0063 intentionally staged nullable columns.  This migration is
+-- 0063 and 0064 intentionally staged nullable columns.  This migration is
 -- the only point at which legacy apparatus text is resolved.  Resolution is
 -- deterministic and exact (trimmed, case-insensitive equality only): an
 -- explicit legacy mapping or exactly one mini_apparatus id/name match is
@@ -65,7 +65,7 @@ BEGIN
             INTO row_count USING mapping.old_id, mapping.display_name;
         IF row_count <> 1 THEN
             RAISE EXCEPTION
-                '0064 legacy apparatus mapping requires exactly one master row for id % with expected name %, found %',
+                '0065 legacy apparatus mapping requires exactly one master row for id % with expected name %, found %',
                 mapping.old_id, mapping.display_name, row_count;
         END IF;
 
@@ -73,7 +73,7 @@ BEGIN
             INTO row_count USING mapping.new_id;
         IF row_count <> 0 THEN
             RAISE EXCEPTION
-                '0064 opaque canonical target % already exists while legacy id % is present',
+                '0065 opaque canonical target % already exists while legacy id % is present',
                 mapping.new_id, mapping.old_id;
         END IF;
     END LOOP;
@@ -131,7 +131,7 @@ BEGIN
     LIMIT 1;
     IF duplicate_id IS NOT NULL THEN
         RAISE EXCEPTION
-            '0064 deterministic canonical apparatus mapping collides at %, add an explicit mapping',
+            '0065 deterministic canonical apparatus mapping collides at %, add an explicit mapping',
             duplicate_id;
     END IF;
 
@@ -144,7 +144,7 @@ BEGIN
            OR canonical_id !~ '^apparatus:[a-z0-9._-]+:[a-z0-9._-]+$'
     ) THEN
         RAISE EXCEPTION
-            '0064 legacy apparatus ID needs an explicit safe migration mapping';
+            '0065 legacy apparatus ID needs an explicit safe migration mapping';
     END IF;
 END
 $$;
@@ -210,7 +210,7 @@ BEGIN
     LIMIT 1;
     IF ambiguous_key IS NOT NULL THEN
         RAISE EXCEPTION
-            '0064 ambiguous legacy apparatus identity %, mapping must match exactly one master',
+            '0065 ambiguous legacy apparatus identity %, mapping must match exactly one master',
             ambiguous_key;
     END IF;
 END
@@ -226,7 +226,7 @@ SELECT legacy_key, min(canonical_id)
 FROM _canonical_apparatus_candidates
 GROUP BY legacy_key;
 
--- 0062/0063 staged foreign keys point at the pre-cutover master ids.  They
+-- 0063/0064 staged foreign keys point at the pre-cutover master ids.  They
 -- must not prevent this transaction from moving references and the master
 -- primary keys together.  Recreate them below after the deterministic
 -- backfill and rename have completed.  The old composite identity checks are
@@ -377,7 +377,7 @@ BEGIN
 
         IF unresolved <> 0 THEN
             RAISE EXCEPTION
-                '0064 unresolved legacy apparatus reference in %.%: % row(s)',
+                '0065 unresolved legacy apparatus reference in %.%: % row(s)',
                 table_name, source_column, unresolved;
         END IF;
     END LOOP;
@@ -407,7 +407,7 @@ BEGIN
         WHERE canonical_from_apparatus_id IS NULL
            OR canonical_to_apparatus_id IS NULL
     ) THEN
-        RAISE EXCEPTION '0064 unresolved apparatus transfer endpoint';
+        RAISE EXCEPTION '0065 unresolved apparatus transfer endpoint';
     END IF;
 END
 $$;
@@ -424,7 +424,7 @@ BEGIN
           AND jsonb_typeof(map_json->'nodes') <> 'array'
     ) THEN
         RAISE EXCEPTION
-            '0064 malformed production-map nodes payload; expected array';
+            '0065 malformed production-map nodes payload; expected array';
     END IF;
     IF EXISTS (
         SELECT 1
@@ -447,7 +447,7 @@ BEGIN
           )
     ) THEN
         RAISE EXCEPTION
-            '0064 unresolved production-map JSON apparatus identity';
+            '0065 unresolved production-map JSON apparatus identity';
     END IF;
 END
 $$;
@@ -531,7 +531,7 @@ BEGIN
           AND jsonb_typeof(payload_json->'apparatus') <> 'array'
     ) THEN
         RAISE EXCEPTION
-            '0064 malformed mini_apparatus_groups apparatus payload; expected array';
+            '0065 malformed mini_apparatus_groups apparatus payload; expected array';
     END IF;
     IF EXISTS (
         SELECT 1
@@ -544,7 +544,7 @@ BEGIN
         WHERE btrim(values.value) = '' OR mapping.canonical_id IS NULL
     ) THEN
         RAISE EXCEPTION
-            '0064 unresolved or blank apparatus identity in mini_apparatus_groups payload';
+            '0065 unresolved or blank apparatus identity in mini_apparatus_groups payload';
     END IF;
 END
 $$;
@@ -556,7 +556,7 @@ BEGIN
         WHERE kind = 'apparatus'
           AND (canonical_apparatus_id IS NULL OR btrim(canonical_apparatus_id) = '')
     ) THEN
-        RAISE EXCEPTION '0064 unresolved production-map apparatus node identity';
+        RAISE EXCEPTION '0065 unresolved production-map apparatus node identity';
     END IF;
     IF EXISTS (
         SELECT 1 FROM mini_production_map_nodes
@@ -564,7 +564,7 @@ BEGIN
           AND (canonical_alternative_apparatus_id IS NULL
                OR btrim(canonical_alternative_apparatus_id) = '')
     ) THEN
-        RAISE EXCEPTION '0064 unresolved production-map alternative apparatus identity';
+        RAISE EXCEPTION '0065 unresolved production-map alternative apparatus identity';
     END IF;
 END
 $$;
@@ -717,7 +717,7 @@ BEGIN
             OR (family = 'other' AND kind = 'other')
         ) THEN
             RAISE EXCEPTION
-                '0064 apparatus % has invalid family/kind metadata %, %; add an explicit safe mapping',
+                '0065 apparatus % has invalid family/kind metadata %, %; add an explicit safe mapping',
                 apparatus_row.legacy_id, family, kind;
         END IF;
 
@@ -758,7 +758,7 @@ BEGIN
             SELECT count(DISTINCT value) FROM jsonb_array_elements_text(capabilities)
         ) THEN
             RAISE EXCEPTION
-                '0064 apparatus % has invalid or duplicate capability metadata',
+                '0065 apparatus % has invalid or duplicate capability metadata',
                 apparatus_row.legacy_id;
         END IF;
 
@@ -867,29 +867,37 @@ BEGIN
         END IF;
         IF jsonb_typeof(capacity) <> 'object'
            OR (capacity->>'capacity_slots') !~ '^[0-9]+$'
-           OR CASE
-               WHEN (capacity->>'capacity_slots') ~ '^[0-9]+$'
-                   THEN (capacity->>'capacity_slots')::NUMERIC NOT BETWEEN 1 AND 64
-               ELSE TRUE
-           END
+           OR (
+               CASE
+                   WHEN (capacity->>'capacity_slots') ~ '^[0-9]+$'
+                       THEN (capacity->>'capacity_slots')::NUMERIC NOT BETWEEN 1 AND 64
+                   ELSE TRUE
+               END
+           )
            OR (capacity->>'setup_minutes') !~ '^[0-9]+$'
-           OR CASE
-               WHEN (capacity->>'setup_minutes') ~ '^[0-9]+$'
-                   THEN (capacity->>'setup_minutes')::NUMERIC > 2147483647
-               ELSE TRUE
-           END
+           OR (
+               CASE
+                   WHEN (capacity->>'setup_minutes') ~ '^[0-9]+$'
+                       THEN (capacity->>'setup_minutes')::NUMERIC > 2147483647
+                   ELSE TRUE
+               END
+           )
            OR (capacity->>'cleanup_minutes') !~ '^[0-9]+$'
-           OR CASE
-               WHEN (capacity->>'cleanup_minutes') ~ '^[0-9]+$'
-                   THEN (capacity->>'cleanup_minutes')::NUMERIC > 2147483647
-               ELSE TRUE
-           END
+           OR (
+               CASE
+                   WHEN (capacity->>'cleanup_minutes') ~ '^[0-9]+$'
+                       THEN (capacity->>'cleanup_minutes')::NUMERIC > 2147483647
+                   ELSE TRUE
+               END
+           )
            OR (capacity->>'efficiency_percent') !~ '^[0-9]+$'
-           OR CASE
-               WHEN (capacity->>'efficiency_percent') ~ '^[0-9]+$'
-                   THEN (capacity->>'efficiency_percent')::NUMERIC NOT BETWEEN 1 AND 200
-               ELSE TRUE
-           END
+           OR (
+               CASE
+                   WHEN (capacity->>'efficiency_percent') ~ '^[0-9]+$'
+                       THEN (capacity->>'efficiency_percent')::NUMERIC NOT BETWEEN 1 AND 200
+                   ELSE TRUE
+               END
+           )
            OR capacity->>'finite_capacity' NOT IN ('true', 'false')
            OR jsonb_typeof(capacity->'working_windows') <> 'array'
            OR EXISTS (
@@ -900,22 +908,22 @@ BEGIN
                            THEN capacity->'working_windows'
                        ELSE '[]'::jsonb
                    END
-               ) AS window
-               WHERE jsonb_typeof(window) <> 'object'
-                  OR (window->>'weekday') !~ '^[0-9]+$'
+               ) AS working_window
+               WHERE jsonb_typeof(working_window) <> 'object'
+                  OR (working_window->>'weekday') !~ '^[0-9]+$'
                   OR CASE
-                      WHEN (window->>'weekday') ~ '^[0-9]+$'
-                          THEN (window->>'weekday')::NUMERIC NOT BETWEEN 1 AND 7
+                      WHEN (working_window->>'weekday') ~ '^[0-9]+$'
+                          THEN (working_window->>'weekday')::NUMERIC NOT BETWEEN 1 AND 7
                       ELSE TRUE
                   END
-                  OR (window->>'start_minute') !~ '^[0-9]+$'
-                  OR (window->>'end_minute') !~ '^[0-9]+$'
+                  OR (working_window->>'start_minute') !~ '^[0-9]+$'
+                  OR (working_window->>'end_minute') !~ '^[0-9]+$'
                   OR CASE
-                      WHEN (window->>'start_minute') ~ '^[0-9]+$'
-                           AND (window->>'end_minute') ~ '^[0-9]+$'
-                          THEN (window->>'start_minute')::NUMERIC
-                               >= (window->>'end_minute')::NUMERIC
-                               OR (window->>'end_minute')::NUMERIC > 1440
+                      WHEN (working_window->>'start_minute') ~ '^[0-9]+$'
+                           AND (working_window->>'end_minute') ~ '^[0-9]+$'
+                          THEN (working_window->>'start_minute')::NUMERIC
+                               >= (working_window->>'end_minute')::NUMERIC
+                               OR (working_window->>'end_minute')::NUMERIC > 1440
                       ELSE TRUE
                   END
            ) THEN
@@ -946,7 +954,7 @@ BEGIN
             END IF;
             IF color_stations IS NULL OR color_stations NOT BETWEEN 7 AND 9 THEN
                 RAISE EXCEPTION
-                    '0064 color apparatus % has no valid color_stations metadata',
+                    '0065 color apparatus % has no valid color_stations metadata',
                     apparatus_row.legacy_id;
             END IF;
         END IF;
@@ -1009,7 +1017,8 @@ BEGIN
             ),
             'versioning', jsonb_build_object('revision', 1),
             'aas', jsonb_build_object(
-                'submodel_id', 'urn:mini-rs-erp:submodel:apparatus:canonical',
+                'submodel_id', 'urn:mini-rs-erp:submodel:apparatus:' ||
+                    substr(canonical_id, length('apparatus:') + 1),
                 'semantic_id', 'urn:mini-rs-erp:semantic-id:submodel:apparatus:1',
                 'idta_release', '26-01',
                 'aas_metamodel_version', '3.2.0',
@@ -1071,11 +1080,13 @@ BEGIN
         IF jsonb_typeof(canonical->'classification') <> 'object'
            OR NOT (canonical->'classification' ?& ARRAY['family', 'kind'])
            OR jsonb_typeof(canonical->'capabilities') <> 'array'
-           OR CASE
-               WHEN jsonb_typeof(canonical->'capabilities') = 'array'
-                   THEN jsonb_array_length(canonical->'capabilities') = 0
-               ELSE TRUE
-           END
+           OR (
+               CASE
+                   WHEN jsonb_typeof(canonical->'capabilities') = 'array'
+                       THEN jsonb_array_length(canonical->'capabilities') = 0
+                   ELSE TRUE
+               END
+           )
            OR jsonb_typeof(canonical->'policies') <> 'object'
            OR NOT (canonical->'policies' ? 'queue')
            OR jsonb_typeof(canonical->'capacity') <> 'object'
@@ -1098,16 +1109,20 @@ BEGIN
                canonical #>> '{policies,material,requires_material}' = 'false'
                AND (
                    canonical #>> '{policies,material,start_policy}' <> 'state_all'
-                   OR CASE
-                       WHEN jsonb_typeof(canonical #> '{policies,material,item_groups}') = 'array'
-                           THEN jsonb_array_length(canonical #> '{policies,material,item_groups}') <> 0
-                       ELSE TRUE
-                   END
-                   OR CASE
-                       WHEN jsonb_typeof(canonical #> '{policies,material,requirement_groups}') = 'array'
-                           THEN jsonb_array_length(canonical #> '{policies,material,requirement_groups}') <> 0
-                       ELSE TRUE
-                   END
+                   OR (
+                       CASE
+                           WHEN jsonb_typeof(canonical #> '{policies,material,item_groups}') = 'array'
+                               THEN jsonb_array_length(canonical #> '{policies,material,item_groups}') <> 0
+                           ELSE TRUE
+                       END
+                   )
+                   OR (
+                       CASE
+                           WHEN jsonb_typeof(canonical #> '{policies,material,requirement_groups}') = 'array'
+                               THEN jsonb_array_length(canonical #> '{policies,material,requirement_groups}') <> 0
+                           ELSE TRUE
+                       END
+                   )
                )
            )
            OR (
@@ -1160,7 +1175,7 @@ BEGIN
            )) = ''
     ) THEN
         RAISE EXCEPTION
-            '0064 canonical apparatus payload materialization is incomplete';
+            '0065 canonical apparatus payload materialization is incomplete';
     END IF;
 END
 $$;
@@ -1343,7 +1358,8 @@ BEGIN
             END
             AND jsonb_typeof(payload.canonical->'aas') = 'object'
             AND payload.canonical #>> '{aas,submodel_id}' =
-                'urn:mini-rs-erp:submodel:apparatus:canonical'
+                'urn:mini-rs-erp:submodel:apparatus:' ||
+                substr(master_map.canonical_id, length('apparatus:') + 1)
             AND payload.canonical #>> '{aas,semantic_id}' =
                 'urn:mini-rs-erp:semantic-id:submodel:apparatus:1'
             AND payload.canonical #>> '{aas,idta_release}' = '26-01'
@@ -1355,7 +1371,7 @@ BEGIN
         )
     ) THEN
         RAISE EXCEPTION
-            '0064 canonical apparatus payload failed nested contract validation';
+            '0065 canonical apparatus payload failed nested contract validation';
     END IF;
 END
 $$;
@@ -1403,7 +1419,7 @@ BEGIN
         'apparatus:default:paket', 'apparatus:default:asset-010'
     );
     IF expected_defaults <> 10 THEN
-        RAISE EXCEPTION '0064 canonical default apparatus cutover expected 10 rows, found %', expected_defaults;
+        RAISE EXCEPTION '0065 canonical default apparatus cutover expected 10 rows, found %', expected_defaults;
     END IF;
 END
 $$;
@@ -1445,7 +1461,7 @@ BEGIN
           ON profile.canonical_apparatus_id = master.id
         WHERE profile.canonical_apparatus_id IS NULL
     ) THEN
-        RAISE EXCEPTION '0064 every canonical apparatus must have one capacity profile';
+        RAISE EXCEPTION '0065 every canonical apparatus must have one capacity profile';
     END IF;
     IF EXISTS (
         SELECT canonical_apparatus_id
@@ -1453,7 +1469,7 @@ BEGIN
         GROUP BY canonical_apparatus_id
         HAVING count(*) <> 1
     ) THEN
-        RAISE EXCEPTION '0064 duplicate canonical capacity profile';
+        RAISE EXCEPTION '0065 duplicate canonical capacity profile';
     END IF;
 END
 $$;
@@ -1906,7 +1922,7 @@ BEGIN
         WHERE unresolved_rows <> 0 OR orphan_rows <> 0
     ) THEN
         RAISE EXCEPTION
-            '0064 canonical apparatus cutover diagnostics are not zero';
+            '0065 canonical apparatus cutover diagnostics are not zero';
     END IF;
 END
 $$;

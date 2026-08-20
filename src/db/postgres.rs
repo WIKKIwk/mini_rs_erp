@@ -259,28 +259,28 @@ const POSTGRES_MIGRATIONS: [(&str, &str); 68] = [
         include_str!("../../migrations/postgres/0062_concurrency_idempotency_constraints.sql"),
     ),
     (
-        "0062_canonical_apparatus_reference_ids",
-        include_str!("../../migrations/postgres/0062_canonical_apparatus_reference_ids.sql"),
+        "0063_canonical_apparatus_reference_ids",
+        include_str!("../../migrations/postgres/0063_canonical_apparatus_reference_ids.sql"),
     ),
     (
-        "0063_canonical_material_rule_apparatus_id",
-        include_str!("../../migrations/postgres/0063_canonical_material_rule_apparatus_id.sql"),
+        "0064_canonical_material_rule_apparatus_id",
+        include_str!("../../migrations/postgres/0064_canonical_material_rule_apparatus_id.sql"),
     ),
     (
-        "0064_canonical_apparatus_cutover",
-        include_str!("../../migrations/postgres/0064_canonical_apparatus_cutover.sql"),
+        "0065_canonical_apparatus_cutover",
+        include_str!("../../migrations/postgres/0065_canonical_apparatus_cutover.sql"),
     ),
     (
-        "0065_canonical_authority_remainder",
-        include_str!("../../migrations/postgres/0065_canonical_authority_remainder.sql"),
+        "0066_canonical_authority_remainder",
+        include_str!("../../migrations/postgres/0066_canonical_authority_remainder.sql"),
     ),
     (
-        "0066_canonical_apparatus_payload_invariant",
-        include_str!("../../migrations/postgres/0066_canonical_apparatus_payload_invariant.sql"),
+        "0067_canonical_apparatus_payload_invariant",
+        include_str!("../../migrations/postgres/0067_canonical_apparatus_payload_invariant.sql"),
     ),
     (
-        "0067_canonical_apparatus_fk_indexes",
-        include_str!("../../migrations/postgres/0067_canonical_apparatus_fk_indexes.sql"),
+        "0068_canonical_apparatus_fk_indexes",
+        include_str!("../../migrations/postgres/0068_canonical_apparatus_fk_indexes.sql"),
     ),
 ];
 

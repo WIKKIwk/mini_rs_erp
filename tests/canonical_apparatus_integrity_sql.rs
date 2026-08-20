@@ -1,5 +1,5 @@
 const FOLLOW_UP_MIGRATION: &str =
-    include_str!("../migrations/postgres/0067_canonical_apparatus_fk_indexes.sql");
+    include_str!("../migrations/postgres/0068_canonical_apparatus_fk_indexes.sql");
 
 const EXPECTED_INDEXES: &[&str] = &[
     "idx_mini_apparatus_order_transfers_canonical_to",

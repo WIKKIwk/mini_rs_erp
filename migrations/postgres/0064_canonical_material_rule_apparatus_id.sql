@@ -77,7 +77,7 @@ BEGIN
 
     IF duplicate_id IS NOT NULL THEN
         RAISE EXCEPTION
-            '0063 canonical unique preflight failed for mini_apparatus_material_rules: duplicate canonical_apparatus_id=%; inspect mini_canonical_apparatus_upsert_duplicate_diagnostics',
+            '0064 canonical unique preflight failed for mini_apparatus_material_rules: duplicate canonical_apparatus_id=%; inspect mini_canonical_apparatus_upsert_duplicate_diagnostics',
             duplicate_id;
     END IF;
 END
@@ -98,7 +98,7 @@ BEGIN
 
     IF duplicate_id IS NOT NULL THEN
         RAISE EXCEPTION
-            '0063 canonical unique preflight failed for mini_apparatus_queue_policies: duplicate canonical_apparatus_id=%; inspect mini_canonical_apparatus_upsert_duplicate_diagnostics',
+            '0064 canonical unique preflight failed for mini_apparatus_queue_policies: duplicate canonical_apparatus_id=%; inspect mini_canonical_apparatus_upsert_duplicate_diagnostics',
             duplicate_id;
     END IF;
 END
@@ -119,7 +119,7 @@ BEGIN
 
     IF duplicate_id IS NOT NULL THEN
         RAISE EXCEPTION
-            '0063 canonical unique preflight failed for mini_apparatus_capacity_profiles: duplicate canonical_apparatus_id=%; inspect mini_canonical_apparatus_upsert_duplicate_diagnostics',
+            '0064 canonical unique preflight failed for mini_apparatus_capacity_profiles: duplicate canonical_apparatus_id=%; inspect mini_canonical_apparatus_upsert_duplicate_diagnostics',
             duplicate_id;
     END IF;
 END

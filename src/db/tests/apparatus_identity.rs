@@ -16,6 +16,7 @@ use crate::db::postgres_production_map::PostgresProductionMapStore;
 
 const LAMINATION_1_ID: &str = "apparatus:default:asset-007";
 const LAMINATION_1_NAME: &str = "Laminatsiya 1";
+const LAMINATION_2_ID: &str = "apparatus:default:asset-008";
 const LAMINATION_2_NAME: &str = "Laminatsiya 2";
 const FLEXO_ID: &str = "apparatus:default:asset-005";
 const FLEXO_NAME: &str = "Flexo pechat";
@@ -354,8 +355,30 @@ fn actor() -> QueueActionActor {
     }
 }
 
-const MIGRATIONS_BEFORE_CANONICAL_CUTOVER: usize = 63;
-const MIGRATIONS_THROUGH_CANONICAL_CUTOVER: usize = 65;
+const MIGRATIONS_BEFORE_CANONICAL_CUTOVER: usize = 64;
+const MIGRATIONS_THROUGH_CANONICAL_CHAIN: usize = 68;
+const PRODUCTION_0062_INDEXES: [(&str, &str); 5] = [
+    (
+        "idx_mini_apparatus_factory_map_object_id_unique",
+        "mini_apparatus",
+    ),
+    (
+        "idx_mini_apparatus_material_rules_lower_apparatus",
+        "mini_apparatus_material_rules",
+    ),
+    (
+        "idx_mini_raw_material_stock_lower_barcode",
+        "mini_raw_material_stock",
+    ),
+    (
+        "idx_mini_raw_material_assignments_lower_barcode",
+        "mini_raw_material_assignments",
+    ),
+    (
+        "idx_mini_queue_action_events_pending_completion",
+        "mini_queue_action_events",
+    ),
+];
 
 #[tokio::test]
 #[ignore = "requires local PostgreSQL and creates/drops mini_rs_erp_test_canonical_cutover_acceptance"]
@@ -363,14 +386,29 @@ async fn postgres_canonical_migration_acceptance_fixture() {
     let db_name = "mini_rs_erp_test_canonical_cutover_acceptance";
     let (admin_url, pool) = create_isolated_test_database(db_name).await;
 
+    apply_postgres_migrations_through(&pool, 61)
+        .await
+        .expect("apply production migrations through 0061");
+    let history_through_0061 = canonical_migration_history(&pool).await;
+    assert_eq!(history_through_0061.len(), 61);
+
+    apply_postgres_migrations_through(&pool, 62)
+        .await
+        .expect("apply authoritative production 0062");
+    let history_through_0062 = canonical_migration_history(&pool).await;
+    assert_eq!(history_through_0062.len(), 62);
+    assert_eq!(&history_through_0062[..61], history_through_0061.as_slice());
+    assert_production_0062_indexes(&pool).await;
+
     apply_postgres_migrations_through(&pool, MIGRATIONS_BEFORE_CANONICAL_CUTOVER)
         .await
-        .expect("apply migrations immediately before 0064");
+        .expect("apply canonical staging migrations 0063 and 0064");
     seed_valid_legacy_cutover_rows(&pool).await;
 
-    apply_postgres_migrations_through(&pool, MIGRATIONS_THROUGH_CANONICAL_CUTOVER)
+    apply_postgres_migrations_through(&pool, MIGRATIONS_THROUGH_CANONICAL_CHAIN)
         .await
-        .expect("execute 0064 and 0065 through the migration registry");
+        .expect("execute canonical migrations 0065 through 0068");
+    assert_production_0062_indexes(&pool).await;
 
     let canonical_apparatus_count: i64 =
         sqlx::query_scalar("SELECT count(*) FROM mini_apparatus WHERE id LIKE 'apparatus:%:%'")
@@ -468,8 +506,8 @@ async fn postgres_canonical_migration_acceptance_fixture() {
         (
             LEGACY_LAMINATION_1_ID.to_string(),
             LEGACY_LAMINATION_2_ID.to_string(),
-            "apparatus:default:bosma_7".to_string(),
-            FLEXO_ID.to_string(),
+            LAMINATION_1_ID.to_string(),
+            LAMINATION_2_ID.to_string(),
         )
     );
 
@@ -717,20 +755,36 @@ async fn postgres_canonical_migration_acceptance_fixture() {
         .to_string()
         .contains("mini_warehouse_assignments_apparatus_id_fk"));
 
-    let before_rerun = capture_canonical_cutover_state(&pool).await;
-    apply_postgres_migrations_through(&pool, MIGRATIONS_THROUGH_CANONICAL_CUTOVER)
-        .await
-        .expect("rerun 0064 and 0065 through the migration registry");
-    let after_rerun = capture_canonical_cutover_state(&pool).await;
-    assert_eq!(after_rerun, before_rerun);
-
-    let migration_count: i64 = sqlx::query_scalar("SELECT count(*) FROM mini_schema_migrations")
-        .fetch_one(&pool)
-        .await
-        .expect("migration history count");
-    assert_eq!(migration_count, MIGRATIONS_THROUGH_CANONICAL_CUTOVER as i64);
-
+    let state_before_restart = capture_canonical_cutover_state(&pool).await;
+    let history_before_restart = canonical_migration_history(&pool).await;
+    assert_eq!(
+        history_before_restart.len(),
+        MIGRATIONS_THROUGH_CANONICAL_CHAIN
+    );
     pool.close().await;
+
+    let restart_options = admin_url
+        .parse::<PgConnectOptions>()
+        .expect("valid admin database url")
+        .database(db_name);
+    let restarted_pool = PgPool::connect_with(restart_options)
+        .await
+        .expect("reconnect canonical migration fixture");
+    apply_foundation_migration(&restarted_pool)
+        .await
+        .expect("restart canonical migration chain");
+    assert_eq!(
+        canonical_migration_history(&restarted_pool).await,
+        history_before_restart,
+        "restart changed version/checksum/applied_at history"
+    );
+    assert_eq!(
+        capture_canonical_cutover_state(&restarted_pool).await,
+        state_before_restart,
+        "restart changed canonical projection rows"
+    );
+    assert_production_0062_indexes(&restarted_pool).await;
+    restarted_pool.close().await;
     drop_isolated_test_database(&admin_url, db_name).await;
 }
 
@@ -741,7 +795,7 @@ async fn postgres_canonical_migration_rejects_malformed_typed_assignment() {
     let (admin_url, pool) = create_isolated_test_database(db_name).await;
     apply_postgres_migrations_through(&pool, MIGRATIONS_BEFORE_CANONICAL_CUTOVER)
         .await
-        .expect("apply migrations immediately before 0064");
+        .expect("apply migrations immediately before 0065");
     stage_warehouse_assignment_columns(&pool).await;
     seed_legacy_assignment_snapshot(&pool).await;
     sqlx::query(
@@ -769,7 +823,7 @@ async fn postgres_canonical_migration_rejects_mixed_typed_assignment() {
     let (admin_url, pool) = create_isolated_test_database(db_name).await;
     apply_postgres_migrations_through(&pool, MIGRATIONS_BEFORE_CANONICAL_CUTOVER)
         .await
-        .expect("apply migrations immediately before 0064");
+        .expect("apply migrations immediately before 0065");
     stage_warehouse_assignment_columns(&pool).await;
     seed_legacy_assignment_snapshot(&pool).await;
     sqlx::query(
@@ -788,7 +842,7 @@ async fn postgres_canonical_migration_rejects_mixed_typed_assignment() {
 
     assert_cutover_rejected(
         &pool,
-        "0065 warehouse assignment has both canonical identity columns populated before backfill",
+        "0066 warehouse assignment has both canonical identity columns populated before backfill",
     )
     .await;
     pool.close().await;
@@ -802,7 +856,7 @@ async fn postgres_canonical_migration_rejects_incomplete_typed_assignment() {
     let (admin_url, pool) = create_isolated_test_database(db_name).await;
     apply_postgres_migrations_through(&pool, MIGRATIONS_BEFORE_CANONICAL_CUTOVER)
         .await
-        .expect("apply migrations immediately before 0064");
+        .expect("apply migrations immediately before 0065");
     stage_warehouse_assignment_columns(&pool).await;
     seed_legacy_assignment_snapshot(&pool).await;
     sqlx::query(
@@ -820,7 +874,7 @@ async fn postgres_canonical_migration_rejects_incomplete_typed_assignment() {
 
     assert_cutover_rejected(
         &pool,
-        "0065 warehouse assignment does not have exactly one typed canonical identity",
+        "0066 warehouse assignment does not have exactly one typed canonical identity",
     )
     .await;
     pool.close().await;
@@ -834,7 +888,7 @@ async fn postgres_canonical_migration_rejects_unresolved_legacy_apparatus_mappin
     let (admin_url, pool) = create_isolated_test_database(db_name).await;
     apply_postgres_migrations_through(&pool, MIGRATIONS_BEFORE_CANONICAL_CUTOVER)
         .await
-        .expect("apply migrations immediately before 0064");
+        .expect("apply migrations immediately before 0065");
     sqlx::query(
         "INSERT INTO mini_worker_groups (apparatus, group_code, shift)
          VALUES ('legacy-apparatus-never-mapped', 'unresolved-group', 'day')",
@@ -845,7 +899,7 @@ async fn postgres_canonical_migration_rejects_unresolved_legacy_apparatus_mappin
 
     assert_cutover_rejected(
         &pool,
-        "0064 unresolved legacy apparatus reference in mini_worker_groups.apparatus",
+        "0065 unresolved legacy apparatus reference in mini_worker_groups.apparatus",
     )
     .await;
     pool.close().await;
@@ -859,7 +913,7 @@ async fn postgres_canonical_migration_rejects_virtual_training_queue_identity() 
     let (admin_url, pool) = create_isolated_test_database(db_name).await;
     apply_postgres_migrations_through(&pool, MIGRATIONS_BEFORE_CANONICAL_CUTOVER)
         .await
-        .expect("apply migrations immediately before 0064");
+        .expect("apply migrations immediately before 0065");
     sqlx::query(
         "INSERT INTO mini_training_queue_states (apparatus, order_id, state)
          VALUES ('training-input:bosma', 'training-virtual-order', 'pending')",
@@ -870,7 +924,7 @@ async fn postgres_canonical_migration_rejects_virtual_training_queue_identity() 
 
     assert_cutover_rejected(
         &pool,
-        "0064 unresolved legacy apparatus reference in mini_training_queue_states.apparatus",
+        "0065 unresolved legacy apparatus reference in mini_training_queue_states.apparatus",
     )
     .await;
     pool.close().await;
@@ -884,13 +938,13 @@ async fn postgres_canonical_migration_rejects_ambiguous_legacy_apparatus_mapping
     let (admin_url, pool) = create_isolated_test_database(db_name).await;
     apply_postgres_migrations_through(&pool, MIGRATIONS_BEFORE_CANONICAL_CUTOVER)
         .await
-        .expect("apply migrations immediately before 0064");
+        .expect("apply migrations immediately before 0065");
     sqlx::query(
         "INSERT INTO mini_apparatus (id, name, base_name, kind, payload_json)
          VALUES
-             ('apparatus:custom:ambiguous-a', 'Ambiguous A', 'Shared Legacy Apparatus',
+             ('apparatus:custom:asset-a', 'Ambiguous A', 'Shared Legacy Apparatus',
               'custom', '{}'::jsonb),
-             ('apparatus:custom:ambiguous-b', 'Ambiguous B', 'Shared Legacy Apparatus',
+             ('apparatus:custom:asset-b', 'Ambiguous B', 'Shared Legacy Apparatus',
               'custom', '{}'::jsonb)",
     )
     .execute(&pool)
@@ -899,7 +953,7 @@ async fn postgres_canonical_migration_rejects_ambiguous_legacy_apparatus_mapping
 
     assert_cutover_rejected(
         &pool,
-        "0064 ambiguous legacy apparatus identity shared legacy apparatus",
+        "0065 ambiguous legacy apparatus identity shared legacy apparatus",
     )
     .await;
     pool.close().await;
@@ -1066,12 +1120,11 @@ async fn seed_valid_legacy_cutover_rows(pool: &PgPool) {
              'migration-legacy-order', $1, $2, 'migration preservation',
              'admin', 'migration-test', 'Migration Test', 'migration-session',
              'migration-progress', '[]'::jsonb, '{\"preserved_marker\":\"transfer-preserved\"}'::jsonb,
-             'apparatus:default:bosma_7', $3
+             NULL, NULL
          )",
     )
     .bind(LEGACY_LAMINATION_1_ID)
     .bind(LEGACY_LAMINATION_2_ID)
-    .bind(FLEXO_ID)
     .execute(pool)
     .await
     .expect("seed transfer preservation row");
@@ -1110,7 +1163,8 @@ async fn seed_valid_legacy_cutover_rows(pool: &PgPool) {
              actor_ref, actor_display_name
          ) VALUES (
              'migration-training-event', $1, 'training-migration-order',
-             'pause', 'in_progress', 'migration-worker', 'Migration Worker'
+             'pause', 'in_progress', 'paused',
+             'migration-worker', 'Migration Worker'
          )",
     )
     .bind(LEGACY_LAMINATION_1_ID)
@@ -1223,8 +1277,45 @@ async fn seed_legacy_assignment_snapshot(pool: &PgPool) {
     .expect("seed legacy assignment warehouse");
 }
 
+async fn canonical_migration_history(pool: &PgPool) -> Vec<(String, String, String)> {
+    sqlx::query_as(
+        "SELECT version, checksum, applied_at::text
+         FROM mini_schema_migrations
+         ORDER BY version",
+    )
+    .fetch_all(pool)
+    .await
+    .expect("canonical migration history")
+}
+
+async fn assert_production_0062_indexes(pool: &PgPool) {
+    for (index_name, expected_table) in PRODUCTION_0062_INDEXES {
+        let (table_name, is_unique, is_valid, is_ready): (String, bool, bool, bool) =
+            sqlx::query_as(
+                "SELECT table_class.relname,
+                        index_meta.indisunique,
+                        index_meta.indisvalid,
+                        index_meta.indisready
+                 FROM pg_index index_meta
+                 JOIN pg_class index_class ON index_class.oid = index_meta.indexrelid
+                 JOIN pg_class table_class ON table_class.oid = index_meta.indrelid
+                 JOIN pg_namespace namespace ON namespace.oid = index_class.relnamespace
+                 WHERE namespace.nspname = 'public'
+                   AND index_class.relname = $1",
+            )
+            .bind(index_name)
+            .fetch_one(pool)
+            .await
+            .unwrap_or_else(|error| panic!("catalog entry for {index_name}: {error}"));
+        assert_eq!(table_name, expected_table);
+        assert!(is_unique, "{index_name} is not unique");
+        assert!(is_valid, "{index_name} is not valid");
+        assert!(is_ready, "{index_name} is not ready");
+    }
+}
+
 async fn assert_cutover_rejected(pool: &PgPool, expected_message: &str) {
-    let error = apply_postgres_migrations_through(pool, MIGRATIONS_THROUGH_CANONICAL_CUTOVER)
+    let error = apply_postgres_migrations_through(pool, MIGRATIONS_THROUGH_CANONICAL_CHAIN)
         .await
         .expect_err("invalid legacy state must fail closed");
     assert!(

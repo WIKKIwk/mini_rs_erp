@@ -1,14 +1,14 @@
--- Complete the canonical-apparatus cutover without rewriting migrations 0062
--- through 0064.  Legacy apparatus columns remain display/audit snapshots;
+-- Complete the canonical-apparatus cutover without rewriting migrations 0063
+-- through 0065.  Legacy apparatus columns remain display/audit snapshots;
 -- every live identity constraint and runtime projection below uses the
 -- canonical apparatus id instead.
 
-CREATE TEMP TABLE _canonical_apparatus_aliases (
+CREATE TEMP TABLE _canonical_authority_aliases (
     legacy_key TEXT PRIMARY KEY,
     canonical_id TEXT NOT NULL
 ) ON COMMIT DROP;
 
-INSERT INTO _canonical_apparatus_aliases (legacy_key, canonical_id)
+INSERT INTO _canonical_authority_aliases (legacy_key, canonical_id)
 VALUES
     ('apparatus:default:extruder_laminatsiya', 'apparatus:default:asset-004'),
     ('extruder laminatsiya', 'apparatus:default:asset-004'),
@@ -40,36 +40,36 @@ VALUES
     ('paket', 'apparatus:default:paket'),
     ('rezka apparat', 'apparatus:default:asset-010');
 
-CREATE TEMP TABLE _canonical_apparatus_candidates (
+CREATE TEMP TABLE _canonical_authority_candidates (
     legacy_key TEXT NOT NULL,
     canonical_id TEXT NOT NULL
 ) ON COMMIT DROP;
 
-INSERT INTO _canonical_apparatus_candidates (legacy_key, canonical_id)
+INSERT INTO _canonical_authority_candidates (legacy_key, canonical_id)
 SELECT legacy_key, canonical_id
-FROM _canonical_apparatus_aliases;
+FROM _canonical_authority_aliases;
 
-INSERT INTO _canonical_apparatus_candidates (legacy_key, canonical_id)
+INSERT INTO _canonical_authority_candidates (legacy_key, canonical_id)
 SELECT lower(btrim(master.id)),
        COALESCE(alias.canonical_id, master.id)
 FROM mini_apparatus master
-LEFT JOIN _canonical_apparatus_aliases alias
+LEFT JOIN _canonical_authority_aliases alias
   ON alias.legacy_key = lower(btrim(master.id))
 WHERE btrim(master.id) <> '';
 
-INSERT INTO _canonical_apparatus_candidates (legacy_key, canonical_id)
+INSERT INTO _canonical_authority_candidates (legacy_key, canonical_id)
 SELECT lower(btrim(master.name)),
        COALESCE(alias.canonical_id, master.id)
 FROM mini_apparatus master
-LEFT JOIN _canonical_apparatus_aliases alias
+LEFT JOIN _canonical_authority_aliases alias
   ON alias.legacy_key = lower(btrim(master.name))
 WHERE btrim(master.name) <> '';
 
-INSERT INTO _canonical_apparatus_candidates (legacy_key, canonical_id)
+INSERT INTO _canonical_authority_candidates (legacy_key, canonical_id)
 SELECT lower(btrim(master.base_name)),
        COALESCE(alias.canonical_id, master.id)
 FROM mini_apparatus master
-LEFT JOIN _canonical_apparatus_aliases alias
+LEFT JOIN _canonical_authority_aliases alias
   ON alias.legacy_key = lower(btrim(master.base_name))
 WHERE btrim(master.base_name) <> '';
 
@@ -78,41 +78,41 @@ DECLARE ambiguous_key TEXT;
 BEGIN
     SELECT legacy_key
     INTO ambiguous_key
-    FROM _canonical_apparatus_candidates
+    FROM _canonical_authority_candidates
     GROUP BY legacy_key
     HAVING count(DISTINCT canonical_id) <> 1
     ORDER BY legacy_key
     LIMIT 1;
     IF ambiguous_key IS NOT NULL THEN
         RAISE EXCEPTION
-            '0065 ambiguous legacy apparatus identity %, mapping must match exactly one master',
+            '0066 ambiguous legacy apparatus identity %, mapping must match exactly one master',
             ambiguous_key;
     END IF;
 END
 $$;
 
-CREATE TEMP TABLE _canonical_apparatus_legacy_map (
+CREATE TEMP TABLE _canonical_authority_legacy_map (
     legacy_key TEXT PRIMARY KEY,
     canonical_id TEXT NOT NULL
 ) ON COMMIT DROP;
 
-INSERT INTO _canonical_apparatus_legacy_map (legacy_key, canonical_id)
+INSERT INTO _canonical_authority_legacy_map (legacy_key, canonical_id)
 SELECT legacy_key, min(canonical_id)
-FROM _canonical_apparatus_candidates
+FROM _canonical_authority_candidates
 GROUP BY legacy_key;
 
 DO $$
 BEGIN
     IF EXISTS (
         SELECT 1
-        FROM _canonical_apparatus_aliases alias
+        FROM _canonical_authority_aliases alias
         WHERE NOT EXISTS (
             SELECT 1
             FROM mini_apparatus master
             WHERE master.id = alias.canonical_id
         )
     ) THEN
-        RAISE EXCEPTION '0065 canonical apparatus alias points to a missing master row';
+        RAISE EXCEPTION '0066 canonical apparatus alias points to a missing master row';
     END IF;
 END
 $$;
@@ -128,7 +128,7 @@ BEGIN
                 (nodes.node->>'apparatus_id'),
                 (nodes.node->>'alternative_assigned_apparatus_id')
         ) AS identity(identity_value)
-        LEFT JOIN _canonical_apparatus_legacy_map mapping
+        LEFT JOIN _canonical_authority_legacy_map mapping
           ON mapping.legacy_key = lower(btrim(identity.identity_value))
         WHERE nodes.node->>'kind' = 'apparatus'
           AND btrim(COALESCE(identity.identity_value, '')) <> ''
@@ -142,7 +142,7 @@ BEGIN
           )
     ) THEN
         RAISE EXCEPTION
-            '0065 training production-map apparatus identity is not a canonical master row';
+            '0066 training production-map apparatus identity is not a canonical master row';
     END IF;
 END
 $$;
@@ -160,7 +160,7 @@ BEGIN
                 (batch.payload_json->>'used_by_apparatus'),
                 (batch.payload_json->>'processed_by_apparatus')
         ) AS identity(identity_value)
-        LEFT JOIN _canonical_apparatus_legacy_map mapping
+        LEFT JOIN _canonical_authority_legacy_map mapping
           ON mapping.legacy_key = lower(btrim(identity.identity_value))
         WHERE btrim(COALESCE(identity.identity_value, '')) <> ''
           AND NOT EXISTS (
@@ -173,13 +173,13 @@ BEGIN
           )
     ) THEN
         RAISE EXCEPTION
-            '0065 training progress JSON apparatus identity is not a canonical master row';
+            '0066 training progress JSON apparatus identity is not a canonical master row';
     END IF;
 
     IF EXISTS (
         SELECT 1
         FROM mini_training_raw_material_assignments assignment
-        LEFT JOIN _canonical_apparatus_legacy_map mapping
+        LEFT JOIN _canonical_authority_legacy_map mapping
           ON mapping.legacy_key = lower(btrim(assignment.payload_json->>'apparatus'))
         WHERE btrim(COALESCE(assignment.payload_json->>'apparatus', '')) <> ''
           AND NOT EXISTS (
@@ -192,7 +192,7 @@ BEGIN
           )
     ) THEN
         RAISE EXCEPTION
-            '0065 training material JSON apparatus identity is not a canonical master row';
+            '0066 training material JSON apparatus identity is not a canonical master row';
     END IF;
 END
 $$;
@@ -220,7 +220,7 @@ SET canonical_target_apparatus_id = COALESCE(
         NULLIF(btrim(request.canonical_target_apparatus_id), ''),
         mapping.canonical_id
     )
-FROM _canonical_apparatus_legacy_map mapping
+FROM _canonical_authority_legacy_map mapping
 WHERE btrim(request.target_apparatus) <> ''
   AND lower(btrim(request.target_apparatus)) = mapping.legacy_key;
 
@@ -238,7 +238,7 @@ BEGIN
           )
     ) THEN
         RAISE EXCEPTION
-            '0065 unresolved or orphan freeze target apparatus identity';
+            '0066 unresolved or orphan freeze target apparatus identity';
     END IF;
 END
 $$;
@@ -296,7 +296,7 @@ BEGIN
           )
     ) THEN
         RAISE EXCEPTION
-            '0065 warehouse assignment legacy value matches both warehouse and apparatus identities';
+            '0066 warehouse assignment legacy value matches both warehouse and apparatus identities';
     END IF;
 
     IF EXISTS (
@@ -321,7 +321,7 @@ BEGIN
           )
     ) THEN
         RAISE EXCEPTION
-            '0065 warehouse assignment legacy value matches neither warehouse nor canonical apparatus identity';
+            '0066 warehouse assignment legacy value matches neither warehouse nor canonical apparatus identity';
     END IF;
 END
 $$;
@@ -336,7 +336,7 @@ BEGIN
           AND assignment.apparatus_id IS NOT NULL
     ) THEN
         RAISE EXCEPTION
-            '0065 warehouse assignment has both canonical identity columns populated before backfill';
+            '0066 warehouse assignment has both canonical identity columns populated before backfill';
     END IF;
 END
 $$;
@@ -397,7 +397,7 @@ BEGIN
            )
     ) THEN
         RAISE EXCEPTION
-            '0065 warehouse assignment does not have exactly one typed canonical identity';
+            '0066 warehouse assignment does not have exactly one typed canonical identity';
     END IF;
 END
 $$;
@@ -447,7 +447,7 @@ BEGIN
           )
     ) THEN
         RAISE EXCEPTION
-            '0065 warehouse assignment apparatus identity is unresolved';
+            '0066 warehouse assignment apparatus identity is unresolved';
     END IF;
 END
 $$;
@@ -493,7 +493,7 @@ BEGIN
           AND jsonb_typeof(map_row.map_json->'nodes') <> 'array'
     ) THEN
         RAISE EXCEPTION
-            '0065 malformed training map nodes payload; expected array';
+            '0066 malformed training map nodes payload; expected array';
     END IF;
 
     IF EXISTS (
@@ -506,7 +506,7 @@ BEGIN
                 ('alternative_assigned_apparatus_id',
                     nodes.node->>'alternative_assigned_apparatus_id')
         ) AS identity(field_name, identity_value)
-        LEFT JOIN _canonical_apparatus_legacy_map mapping
+        LEFT JOIN _canonical_authority_legacy_map mapping
           ON mapping.legacy_key = lower(btrim(identity.identity_value))
         WHERE btrim(COALESCE(identity.identity_value, '')) <> ''
           AND mapping.canonical_id IS NULL
@@ -518,7 +518,7 @@ BEGIN
           )
     ) THEN
         RAISE EXCEPTION
-            '0065 unresolved or malformed training map JSON apparatus identity';
+            '0066 unresolved or malformed training map JSON apparatus identity';
     END IF;
 
     IF EXISTS (
@@ -536,7 +536,7 @@ BEGIN
           )
     ) THEN
         RAISE EXCEPTION
-            '0065 training apparatus node has no apparatus identity';
+            '0066 training apparatus node has no apparatus identity';
     END IF;
 
     IF EXISTS (
@@ -551,7 +551,7 @@ BEGIN
           )
     ) THEN
         RAISE EXCEPTION
-            '0065 virtual training input node cannot carry production apparatus identity';
+            '0066 virtual training input node cannot carry production apparatus identity';
     END IF;
 END
 $$;
@@ -596,9 +596,9 @@ SET map_json = jsonb_set(
         )
         FROM jsonb_array_elements(map_row.map_json->'nodes')
              WITH ORDINALITY AS nodes(node, ordinality)
-        LEFT JOIN _canonical_apparatus_legacy_map main_mapping
+        LEFT JOIN _canonical_authority_legacy_map main_mapping
           ON main_mapping.legacy_key = lower(btrim(nodes.node->>'apparatus_id'))
-        LEFT JOIN _canonical_apparatus_legacy_map alternative_mapping
+        LEFT JOIN _canonical_authority_legacy_map alternative_mapping
           ON alternative_mapping.legacy_key = lower(btrim(
               nodes.node->>'alternative_assigned_apparatus_id'
           ))
@@ -623,7 +623,7 @@ BEGIN
                 ('used_by_apparatus', batch.payload_json->>'used_by_apparatus'),
                 ('processed_by_apparatus', batch.payload_json->>'processed_by_apparatus')
         ) AS identity(field_name, identity_value)
-        LEFT JOIN _canonical_apparatus_legacy_map mapping
+        LEFT JOIN _canonical_authority_legacy_map mapping
           ON mapping.legacy_key = lower(btrim(identity.identity_value))
         WHERE jsonb_typeof(batch.payload_json) <> 'object'
            OR (
@@ -638,7 +638,7 @@ BEGIN
            )
     ) THEN
         RAISE EXCEPTION
-            '0065 unresolved or malformed training progress JSON apparatus identity';
+            '0066 unresolved or malformed training progress JSON apparatus identity';
     END IF;
 
     IF EXISTS (
@@ -648,7 +648,7 @@ BEGIN
            OR btrim(COALESCE(batch.payload_json->>'apparatus', '')) = ''
     ) THEN
         RAISE EXCEPTION
-            '0065 training progress batch has no canonical apparatus identity';
+            '0066 training progress batch has no canonical apparatus identity';
     END IF;
 
     IF EXISTS (
@@ -659,7 +659,7 @@ BEGIN
                btrim(COALESCE(assignment.payload_json->>'apparatus', '')) <> ''
                AND NOT EXISTS (
                    SELECT 1
-                   FROM _canonical_apparatus_legacy_map mapping
+                   FROM _canonical_authority_legacy_map mapping
                    WHERE mapping.legacy_key = lower(btrim(assignment.payload_json->>'apparatus'))
                )
                AND NOT (
@@ -671,7 +671,7 @@ BEGIN
            )
     ) THEN
         RAISE EXCEPTION
-            '0065 unresolved or malformed training material JSON apparatus identity';
+            '0066 unresolved or malformed training material JSON apparatus identity';
     END IF;
 END
 $$;
@@ -690,7 +690,7 @@ SET payload_json = jsonb_set(
                 '{current_apparatus}',
                 to_jsonb(COALESCE(
                     (SELECT mapping.canonical_id
-                     FROM _canonical_apparatus_legacy_map mapping
+                     FROM _canonical_authority_legacy_map mapping
                      WHERE mapping.legacy_key = lower(btrim(batch.payload_json->>'current_apparatus'))),
                     NULLIF(btrim(batch.payload_json->>'current_apparatus'), ''),
                     ''
@@ -700,7 +700,7 @@ SET payload_json = jsonb_set(
             '{next_apparatus}',
             to_jsonb(COALESCE(
                 (SELECT mapping.canonical_id
-                 FROM _canonical_apparatus_legacy_map mapping
+                 FROM _canonical_authority_legacy_map mapping
                  WHERE mapping.legacy_key = lower(btrim(batch.payload_json->>'next_apparatus'))),
                 NULLIF(btrim(batch.payload_json->>'next_apparatus'), ''),
                 ''
@@ -710,7 +710,7 @@ SET payload_json = jsonb_set(
         '{used_by_apparatus}',
         to_jsonb(COALESCE(
             (SELECT mapping.canonical_id
-             FROM _canonical_apparatus_legacy_map mapping
+             FROM _canonical_authority_legacy_map mapping
              WHERE mapping.legacy_key = lower(btrim(batch.payload_json->>'used_by_apparatus'))),
             NULLIF(btrim(batch.payload_json->>'used_by_apparatus'), ''),
             ''
@@ -720,7 +720,7 @@ SET payload_json = jsonb_set(
     '{processed_by_apparatus}',
     to_jsonb(COALESCE(
         (SELECT mapping.canonical_id
-         FROM _canonical_apparatus_legacy_map mapping
+         FROM _canonical_authority_legacy_map mapping
          WHERE mapping.legacy_key = lower(btrim(batch.payload_json->>'processed_by_apparatus'))),
         NULLIF(btrim(batch.payload_json->>'processed_by_apparatus'), ''),
         ''
@@ -739,7 +739,7 @@ SET payload_json = jsonb_set(
 WHERE jsonb_typeof(assignment.payload_json) = 'object';
 
 -- A canonical unique key must replace every live apparatus identity key.  The
--- canonical indexes were staged by 0062 through 0064; the training queue and
+-- canonical indexes were staged by 0063 through 0065; the training queue and
 -- open-session indexes are added here before their legacy counterparts are
 -- retired.  Any duplicate canonical identity aborts the transaction.
 DO $$
@@ -751,7 +751,7 @@ BEGIN
         GROUP BY canonical_apparatus_id, order_id
         HAVING count(*) > 1
     ) THEN
-        RAISE EXCEPTION '0065 duplicate canonical training queue state identity';
+        RAISE EXCEPTION '0066 duplicate canonical training queue state identity';
     END IF;
     IF EXISTS (
         SELECT canonical_apparatus_id, order_id
@@ -760,7 +760,7 @@ BEGIN
         GROUP BY canonical_apparatus_id, order_id
         HAVING count(*) > 1
     ) THEN
-        RAISE EXCEPTION '0065 duplicate open canonical order-run session identity';
+        RAISE EXCEPTION '0066 duplicate open canonical order-run session identity';
     END IF;
 END
 $$;
@@ -802,7 +802,7 @@ BEGIN
         GROUP BY canonical_apparatus_id, order_id
         HAVING count(*) > 1
     ) THEN
-        RAISE EXCEPTION '0065 duplicate canonical training queue state identity';
+        RAISE EXCEPTION '0066 duplicate canonical training queue state identity';
     END IF;
 END
 $$;
@@ -841,14 +841,14 @@ BEGIN
         WHERE unresolved_rows <> 0 OR orphan_rows <> 0
     ) THEN
         RAISE EXCEPTION
-            '0065 canonical authority cutover diagnostics are not zero';
+            '0066 canonical authority cutover diagnostics are not zero';
     END IF;
 END
 $$;
 
 -- Re-establish relational primary keys on the canonical identity columns after
 -- the legacy apparatus keys are retired. The unique indexes were staged by
--- 0063/0064 and are consumed as constraints here so writes, conflict targets,
+-- 0064/0065 and are consumed as constraints here so writes, conflict targets,
 -- and foreign-key references all converge on ApparatusId.
 DO $$
 BEGIN
@@ -858,7 +858,7 @@ BEGIN
         GROUP BY canonical_apparatus_id, group_code
         HAVING count(*) > 1
     ) THEN
-        RAISE EXCEPTION '0065 duplicate canonical worker-group identity';
+        RAISE EXCEPTION '0066 duplicate canonical worker-group identity';
     END IF;
     IF EXISTS (
         SELECT 1
@@ -866,7 +866,7 @@ BEGIN
         GROUP BY canonical_apparatus_id
         HAVING count(*) > 1
     ) THEN
-        RAISE EXCEPTION '0065 duplicate canonical queue-sequence identity';
+        RAISE EXCEPTION '0066 duplicate canonical queue-sequence identity';
     END IF;
     IF EXISTS (
         SELECT 1
@@ -874,7 +874,7 @@ BEGIN
         GROUP BY canonical_apparatus_id, order_id
         HAVING count(*) > 1
     ) THEN
-        RAISE EXCEPTION '0065 duplicate canonical queue-state identity';
+        RAISE EXCEPTION '0066 duplicate canonical queue-state identity';
     END IF;
     IF EXISTS (
         SELECT 1
@@ -882,7 +882,7 @@ BEGIN
         GROUP BY canonical_apparatus_id
         HAVING count(*) > 1
     ) THEN
-        RAISE EXCEPTION '0065 duplicate canonical queue-policy identity';
+        RAISE EXCEPTION '0066 duplicate canonical queue-policy identity';
     END IF;
     IF EXISTS (
         SELECT 1
@@ -890,7 +890,7 @@ BEGIN
         GROUP BY canonical_apparatus_id
         HAVING count(*) > 1
     ) THEN
-        RAISE EXCEPTION '0065 duplicate canonical training-mode identity';
+        RAISE EXCEPTION '0066 duplicate canonical training-mode identity';
     END IF;
     IF EXISTS (
         SELECT 1
@@ -898,7 +898,7 @@ BEGIN
         GROUP BY canonical_apparatus_id
         HAVING count(*) > 1
     ) THEN
-        RAISE EXCEPTION '0065 duplicate canonical material-rule identity';
+        RAISE EXCEPTION '0066 duplicate canonical material-rule identity';
     END IF;
     IF EXISTS (
         SELECT 1
@@ -906,7 +906,7 @@ BEGIN
         GROUP BY canonical_apparatus_id
         HAVING count(*) > 1
     ) THEN
-        RAISE EXCEPTION '0065 duplicate canonical capacity-profile identity';
+        RAISE EXCEPTION '0066 duplicate canonical capacity-profile identity';
     END IF;
 END
 $$;

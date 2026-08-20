@@ -1,7 +1,7 @@
 -- Canonical apparatus FK support indexes.
 --
--- Migrations 0062-0066 add and validate the typed canonical references.  The
--- references introduced by 0064 below did not all receive child-side indexes;
+-- Migrations 0063-0067 add and validate the typed canonical references.  The
+-- references introduced by 0065 below did not all receive child-side indexes;
 -- without these indexes, deleting or updating a master row requires a scan of
 -- the referencing table.  This follow-up is schema-only and does not rewrite
 -- or remove data.

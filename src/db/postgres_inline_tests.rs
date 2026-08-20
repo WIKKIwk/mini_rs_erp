@@ -187,9 +187,9 @@ mod tests {
             .collect::<std::collections::BTreeSet<_>>();
 
         assert_eq!(versions.len(), POSTGRES_MIGRATIONS.len());
-        assert!(versions.contains("0065_canonical_authority_remainder"));
-        assert!(versions.contains("0066_canonical_apparatus_payload_invariant"));
-        assert!(versions.contains("0067_canonical_apparatus_fk_indexes"));
+        assert!(versions.contains("0066_canonical_authority_remainder"));
+        assert!(versions.contains("0067_canonical_apparatus_payload_invariant"));
+        assert!(versions.contains("0068_canonical_apparatus_fk_indexes"));
         assert!(POSTGRES_MIGRATIONS.iter().all(|(version, sql)| {
             !version.trim().is_empty() && migration_checksum(sql).len() == 64
         }));
@@ -199,14 +199,14 @@ mod tests {
     fn canonical_payload_invariant_migration_is_registered_with_the_runner() {
         let migration = POSTGRES_MIGRATIONS
             .iter()
-            .find(|(version, _)| *version == "0066_canonical_apparatus_payload_invariant")
+            .find(|(version, _)| *version == "0067_canonical_apparatus_payload_invariant")
             .map(|(_, sql)| sql.to_lowercase())
             .expect("canonical payload invariant migration");
 
         assert!(migration.contains(
             "add constraint mini_apparatus_canonical_payload_contract_check"
         ));
-        assert!(migration.contains("0066 canonical apparatus payload invariant preflight failed"));
+        assert!(migration.contains("0067 canonical apparatus payload invariant preflight failed"));
         assert!(migration.contains(") is true"));
     }
 
@@ -214,7 +214,7 @@ mod tests {
     fn canonical_authority_remainder_migration_is_registered_and_types_warehouse_assignments() {
         let migration = POSTGRES_MIGRATIONS
             .iter()
-            .find(|(version, _)| *version == "0065_canonical_authority_remainder")
+            .find(|(version, _)| *version == "0066_canonical_authority_remainder")
             .map(|(_, sql)| sql.to_lowercase())
             .expect("canonical authority remainder migration");
         let compact = migration.split_whitespace().collect::<String>();
@@ -232,9 +232,9 @@ mod tests {
             "createindexifnotexistsidx_mini_warehouse_assignments_apparatus_id",
             "createuniqueindexifnotexistsidx_mini_warehouse_assignments_warehouse_identity_unique",
             "createuniqueindexifnotexistsidx_mini_warehouse_assignments_apparatus_identity_unique",
-            "raiseexception'0065warehouseassignmentlegacyvaluematchesbothwarehouseandapparatusidentities'",
-            "raiseexception'0065warehouseassignmentlegacyvaluematchesneitherwarehousenorcanonicalapparatusidentity'",
-            "raiseexception'0065virtualtraininginputnodecannotcarryproductionapparatusidentity'",
+            "raiseexception'0066warehouseassignmentlegacyvaluematchesbothwarehouseandapparatusidentities'",
+            "raiseexception'0066warehouseassignmentlegacyvaluematchesneitherwarehousenorcanonicalapparatusidentity'",
+            "raiseexception'0066virtualtraininginputnodecannotcarryproductionapparatusidentity'",
         ] {
             assert!(compact.contains(expected), "missing {expected}");
         }
@@ -1097,6 +1097,10 @@ mod tests {
         apply_foundation_migration(&pool)
             .await
             .expect("apply foundation migration");
+        let migration_history = postgres_0062_migration_history(&pool).await;
+        assert_eq!(migration_history.len(), POSTGRES_MIGRATIONS.len());
+        assert_eq!(migration_history.len(), 68);
+        assert_postgres_0062_indexes(&pool).await;
 
         let table_count: i64 = sqlx::query_scalar(
             "SELECT COUNT(*)
@@ -1346,9 +1350,9 @@ mod tests {
 
         pool.close().await;
         let restarted_pool = connect_postgres_0062_database(&positive_url).await;
-        apply_foundation_migration(&restarted_pool)
+        apply_postgres_migrations_through(&restarted_pool, 62)
             .await
-            .expect("restart must keep migration history stable");
+            .expect("0062 restart must keep migration history stable");
         let history_after_restart = postgres_0062_migration_history(&restarted_pool).await;
         assert_eq!(history_after_restart, history_after_0062);
         assert_eq!(
@@ -1356,10 +1360,20 @@ mod tests {
             rows_after,
             "restart changed rows protected by 0062"
         );
-        assert_postgres_0062_source_behaviors(&positive_url, &restarted_pool).await;
         restarted_pool.close().await;
         drop_postgres_0062_database(&admin_url, &positive_database).await;
         eprintln!("0062 positive fixture: PASS");
+
+        let source_database = format!("{database_prefix}_source");
+        let source_url = recreate_postgres_0062_database(&admin_url, &source_database).await;
+        let source_pool = connect_postgres_0062_database(&source_url).await;
+        apply_postgres_migrations_through(&source_pool, 62)
+            .await
+            .expect("apply through 0062 for source behavior fixture");
+        assert_postgres_0062_source_behaviors(&source_url, &source_pool).await;
+        source_pool.close().await;
+        drop_postgres_0062_database(&admin_url, &source_database).await;
+        eprintln!("0062 source behavior fixture: PASS");
 
         let negative_cases = [
             Postgres0062NegativeCase {
@@ -1755,8 +1769,9 @@ mod tests {
 
     async fn assert_postgres_0062_source_behaviors(database_url: &str, pool: &PgPool) {
         use crate::core::apparatus_groups::{
-            ApparatusGroupError, ApparatusGroupStorePort, ApparatusMasterData,
+            ApparatusGroupError, ApparatusMasterData,
         };
+        use crate::core::apparatus_standard::ApparatusId;
         use crate::core::production_map::{
             ApparatusMaterialRule, ApparatusQueueActionEvent, ApparatusQueuePolicy,
             ProductionMapError, ProductionMapStorePort, QueueActionActor, RawMaterialAssignment,
@@ -1773,7 +1788,7 @@ mod tests {
         };
         apparatus_store
             .put_apparatus_with_id(
-                Some("fixture:0062:source-apparatus:1"),
+                Some("apparatus:fixture:source-apparatus-1"),
                 "0062 Source Apparatus 1",
                 &master,
             )
@@ -1781,7 +1796,7 @@ mod tests {
             .expect("insert apparatus with unique factory map object");
         let duplicate_factory_object = apparatus_store
             .put_apparatus_with_id(
-                Some("fixture:0062:source-apparatus:2"),
+                Some("apparatus:fixture:source-apparatus-2"),
                 "0062 Source Apparatus 2",
                 &master,
             )
@@ -1792,10 +1807,29 @@ mod tests {
             "apparatus 23505 must map to a domain error"
         );
 
+        sqlx::query("DELETE FROM mini_apparatus WHERE id LIKE 'apparatus:fixture:source-apparatus-%'")
+            .execute(pool)
+            .await
+            .expect("remove pre-canonical source apparatus fixture");
+        apply_postgres_migrations_through(pool, 68)
+            .await
+            .expect("upgrade source behavior fixture through canonical 0068");
+        assert_postgres_0062_indexes(pool).await;
+
+        let apparatus_id = ApparatusId::new("apparatus:default:asset-007".to_string())
+            .expect("canonical source apparatus id");
+        let apparatus_display: String =
+            sqlx::query_scalar("SELECT name FROM mini_apparatus WHERE id = $1")
+                .bind(apparatus_id.as_str())
+                .fetch_one(pool)
+                .await
+                .expect("canonical source apparatus display");
+
         let production_store = PostgresProductionMapStore::new(pool.clone());
         production_store
             .put_apparatus_material_rule(ApparatusMaterialRule {
-                apparatus: "0062 Source Material Rule".to_string(),
+                apparatus_id: apparatus_id.clone(),
+                apparatus: apparatus_display.clone(),
                 requires_material: false,
                 start_policy: RawMaterialStartPolicy::StateAll,
                 item_groups: Vec::new(),
@@ -1805,7 +1839,8 @@ mod tests {
             .expect("insert source material rule");
         production_store
             .put_apparatus_material_rule(ApparatusMaterialRule {
-                apparatus: "0062 source material rule".to_string(),
+                apparatus_id: apparatus_id.clone(),
+                apparatus: apparatus_display.to_lowercase(),
                 requires_material: true,
                 start_policy: RawMaterialStartPolicy::StateAll,
                 item_groups: vec!["All Item Groups".to_string()],
@@ -1816,16 +1851,23 @@ mod tests {
         let material_rule_rows: i64 = sqlx::query_scalar(
             "SELECT COUNT(*)
              FROM mini_apparatus_material_rules
-             WHERE lower(apparatus) = lower('0062 Source Material Rule')
+             WHERE canonical_apparatus_id = $1
                AND requires_material",
         )
+        .bind(apparatus_id.as_str())
         .fetch_one(pool)
         .await
         .expect("verify source material rule");
         assert_eq!(material_rule_rows, 1);
 
-        sqlx::query(
-            "INSERT INTO mini_raw_material_stock
+        sqlx::raw_sql(
+            "INSERT INTO mini_items (code, name, item_group, payload_json)
+             VALUES ('fixture:0062:item:1', '0062 Fixture Item', 'All Item Groups',
+                     '{\"fixture\":\"0062-source\"}'::jsonb);
+             INSERT INTO mini_production_maps (id, product_code, title, map_json)
+             VALUES ('fixture:0062:order:1', 'fixture-product', '0062 Source Order',
+                     '{\"fixture\":\"0062-source\"}'::jsonb);
+             INSERT INTO mini_raw_material_stock
                 (id, warehouse, item_code, item_name, barcode, qty, payload_json)
              VALUES
                 ('fixture:0062:source-stock', 'Fixture Warehouse', 'fixture:0062:item:1',
@@ -1837,7 +1879,8 @@ mod tests {
         .expect("insert source assignment stock");
         let assignment = RawMaterialAssignment {
             order_id: "fixture:0062:order:1".to_string(),
-            apparatus: "0062 Source Apparatus 1".to_string(),
+            apparatus_id: apparatus_id.clone(),
+            apparatus: apparatus_display.clone(),
             barcode: "0062-SOURCE-BARCODE".to_string(),
             item_code: "fixture:0062:item:1".to_string(),
             item_name: "0062 Fixture Item".to_string(),
@@ -1868,14 +1911,16 @@ mod tests {
         let mut blocker = blocker_pool.begin().await.expect("begin queue blocker");
         sqlx::query(
             "INSERT INTO mini_queue_action_events
-                (event_id, apparatus, order_id, action, from_state, to_state, policy,
+                (event_id, apparatus, canonical_apparatus_id, order_id, action, from_state, to_state, policy,
                  assigned_apparatus, payload_json)
              VALUES
-                ('fixture:0062:source-race:blocker', '0062 Source Queue',
+                ('fixture:0062:source-race:blocker', $1, $2,
                  'fixture:0062:source-race:order', 'complete', 'in_progress', 'completed',
                  'free_pick', '[]'::jsonb,
                  '{\"completion_request\":true}'::jsonb)",
         )
+        .bind(&apparatus_display)
+        .bind(apparatus_id.as_str())
         .execute(&mut *blocker)
         .await
         .expect("insert uncommitted pending completion");
@@ -1888,7 +1933,7 @@ mod tests {
         let race_store = PostgresProductionMapStore::new(race_pool.clone());
         let race_event = ApparatusQueueActionEvent {
             event_id: "fixture:0062:source-race:contender".to_string(),
-            apparatus: "0062 source queue".to_string(),
+            apparatus: apparatus_id.to_string(),
             order_id: "fixture:0062:source-race:order".to_string(),
             action: ApparatusQueueAction::Complete,
             from_state: ApparatusQueueOrderState::InProgress,

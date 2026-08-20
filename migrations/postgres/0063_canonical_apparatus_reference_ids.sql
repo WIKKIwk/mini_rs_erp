@@ -334,7 +334,7 @@ BEGIN
 
     IF duplicate_id IS NOT NULL THEN
         RAISE EXCEPTION
-            '0062 canonical unique preflight failed for mini_apparatus_queue_policies: duplicate canonical_apparatus_id=%; inspect mini_canonical_apparatus_queue_policy_duplicate_diagnostics',
+            '0063 canonical unique preflight failed for mini_apparatus_queue_policies: duplicate canonical_apparatus_id=%; inspect mini_canonical_apparatus_queue_policy_duplicate_diagnostics',
             duplicate_id;
     END IF;
 END

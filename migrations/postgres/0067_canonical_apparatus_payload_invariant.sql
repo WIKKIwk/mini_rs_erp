@@ -1,5 +1,5 @@
 -- Close the post-cutover write gap left by the one-time payload validation in
--- 0064.  The canonical payload is a persisted projection of the master row:
+-- 0065.  The canonical payload is a persisted projection of the master row:
 -- its immutable identity must match id and its display projection must match
 -- name.  No identity is inferred from the display title.
 
@@ -131,7 +131,8 @@ BEGIN
             AND jsonb_typeof(payload.canonical->'aas') = 'object'
             AND jsonb_typeof(payload.canonical #> '{aas,submodel_id}') = 'string'
             AND payload.canonical #>> '{aas,submodel_id}' =
-                'urn:mini-rs-erp:submodel:apparatus:canonical'
+                'urn:mini-rs-erp:submodel:apparatus:' ||
+                substr(master.id, length('apparatus:') + 1)
             AND jsonb_typeof(payload.canonical #> '{aas,semantic_id}') = 'string'
             AND payload.canonical #>> '{aas,semantic_id}' =
                 'urn:mini-rs-erp:semantic-id:submodel:apparatus:1'
@@ -173,7 +174,7 @@ BEGIN
 
     IF invalid_id IS NOT NULL THEN
         RAISE EXCEPTION
-            '0066 canonical apparatus payload invariant preflight failed for id %',
+            '0067 canonical apparatus payload invariant preflight failed for id %',
             invalid_id;
     END IF;
 END
@@ -367,7 +368,8 @@ ALTER TABLE mini_apparatus
                 payload_json #> '{canonical_apparatus,aas,submodel_id}'
             ) = 'string'
             AND payload_json #>> '{canonical_apparatus,aas,submodel_id}' =
-                'urn:mini-rs-erp:submodel:apparatus:canonical'
+                'urn:mini-rs-erp:submodel:apparatus:' ||
+                substr(id, length('apparatus:') + 1)
             AND jsonb_typeof(
                 payload_json #> '{canonical_apparatus,aas,semantic_id}'
             ) = 'string'
