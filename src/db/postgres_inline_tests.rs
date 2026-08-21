@@ -191,6 +191,7 @@ mod tests {
         assert!(versions.contains("0067_canonical_apparatus_payload_invariant"));
         assert!(versions.contains("0068_canonical_apparatus_fk_indexes"));
         assert!(versions.contains("0069_canonical_apparatus_revision_authority"));
+        assert!(versions.contains("0070_canonical_apparatus_clean_cutover"));
         assert!(POSTGRES_MIGRATIONS.iter().all(|(version, sql)| {
             !version.trim().is_empty() && migration_checksum(sql).len() == 64
         }));
@@ -1129,7 +1130,7 @@ mod tests {
             .expect("apply foundation migration");
         let migration_history = postgres_0062_migration_history(&pool).await;
         assert_eq!(migration_history.len(), POSTGRES_MIGRATIONS.len());
-        assert_eq!(migration_history.len(), 69);
+        assert_eq!(migration_history.len(), 70);
         assert_postgres_0062_indexes(&pool).await;
 
         let table_count: i64 = sqlx::query_scalar(
@@ -1147,7 +1148,6 @@ mod tests {
                  'mini_production_map_nodes',
                  'mini_production_map_edges',
                  'mini_apparatus',
-                 'mini_apparatus_groups',
                  'mini_workers',
                  'mini_worker_groups',
                  'mini_qolip_locations',
@@ -1165,7 +1165,7 @@ mod tests {
         .fetch_one(&pool)
         .await
         .expect("count tables");
-        assert_eq!(table_count, 23);
+        assert_eq!(table_count, 22);
 
         sqlx::query(
             "INSERT INTO mini_idempotency_keys (key, domain, action, entity_id)

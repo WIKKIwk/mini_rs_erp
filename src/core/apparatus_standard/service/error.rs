@@ -22,6 +22,8 @@ pub enum CanonicalApparatusError {
     ArtifactIntegrity,
     #[error("canonical apparatus persistence failed")]
     Persistence,
+    #[error("canonical apparatus cutover is blocked: {0}")]
+    CutoverBlocked(String),
     #[error("system clock cannot produce canonical revision provenance")]
     Clock,
     #[error("canonical apparatus transaction fault was injected at {0}")]

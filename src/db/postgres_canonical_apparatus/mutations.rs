@@ -12,6 +12,21 @@ use crate::core::apparatus_standard::{
 
 #[async_trait]
 impl CanonicalApparatusRepository for PostgresCanonicalApparatusRepository {
+    async fn cutover_preflight(
+        &self,
+    ) -> Result<crate::core::apparatus_standard::CutoverPreflightReport, CanonicalApparatusError>
+    {
+        super::cutover::collect_from_pool(&self.pool).await
+    }
+
+    async fn commit_cutover(
+        &self,
+        _permit: &CanonicalWritePermit,
+        plan: crate::core::apparatus_standard::cutover::PreparedCutoverPlan,
+    ) -> Result<(), CanonicalApparatusError> {
+        super::cutover::commit_plan(&self.pool, plan).await
+    }
+
     async fn commit(
         &self,
         _permit: &CanonicalWritePermit,
@@ -188,7 +203,7 @@ async fn identity_exists(
     .map_err(|_| CanonicalApparatusError::Persistence)
 }
 
-async fn insert_identity(
+pub(super) async fn insert_identity(
     tx: &mut Transaction<'_, Postgres>,
     revision: &CanonicalApparatusRevision,
 ) -> Result<(), CanonicalApparatusError> {
@@ -207,7 +222,7 @@ async fn insert_identity(
     Ok(())
 }
 
-async fn insert_revision(
+pub(super) async fn insert_revision(
     tx: &mut Transaction<'_, Postgres>,
     revision: &CanonicalApparatusRevision,
     aasx_package: &[u8],
@@ -255,7 +270,7 @@ async fn insert_revision(
     Ok(())
 }
 
-async fn cas_head(
+pub(super) async fn cas_head(
     tx: &mut Transaction<'_, Postgres>,
     revision: &CanonicalApparatusRevision,
     expected_revision: Option<u64>,
@@ -297,7 +312,7 @@ async fn cas_head(
     Ok(())
 }
 
-async fn insert_outbox(
+pub(super) async fn insert_outbox(
     tx: &mut Transaction<'_, Postgres>,
     revision: &CanonicalApparatusRevision,
     event_type: &str,

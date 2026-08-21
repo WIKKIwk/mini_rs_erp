@@ -9,7 +9,7 @@ const DEFAULT_MAX_CONNECTIONS: u32 = 16;
 const DEFAULT_ACQUIRE_TIMEOUT_MS: u64 = 500;
 const MIGRATION_LOCK_KEY: i64 = 6_514_811_918_052_026_001;
 
-const POSTGRES_MIGRATIONS: [(&str, &str); 69] = [
+const POSTGRES_MIGRATIONS: [(&str, &str); 70] = [
     (
         "0001_mini_erp_foundation",
         include_str!("../../migrations/postgres/0001_mini_erp_foundation.sql"),
@@ -286,6 +286,10 @@ const POSTGRES_MIGRATIONS: [(&str, &str); 69] = [
         "0069_canonical_apparatus_revision_authority",
         include_str!("../../migrations/postgres/0069_canonical_apparatus_revision_authority.sql"),
     ),
+    (
+        "0070_canonical_apparatus_clean_cutover",
+        include_str!("../../migrations/postgres/0070_canonical_apparatus_clean_cutover.sql"),
+    ),
 ];
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -383,6 +387,14 @@ pub async fn connect_and_migrate_required() -> Result<PgPool, PostgresBootstrapE
     Ok(pool)
 }
 
+pub fn canonical_apparatus_service(
+    pool: PgPool,
+) -> crate::core::apparatus_standard::CanonicalApparatusService {
+    crate::core::apparatus_standard::CanonicalApparatusService::new(std::sync::Arc::new(
+        super::postgres_canonical_apparatus::PostgresCanonicalApparatusRepository::new(pool),
+    ))
+}
+
 /// Apply the complete versioned migration set after an external database
 /// restore. The restore flow uses this entry point so it does not depend on a
 /// separate `mini_rs_migrate` process being available in the runtime image.
@@ -431,6 +443,13 @@ async fn apply_postgres_migrations(
         .await?;
     ensure_migration_history(&mut tx).await?;
     validate_migration_history(&mut tx, migrations).await?;
+    let applied_count: i64 = sqlx::query_scalar("SELECT count(*) FROM mini_schema_migrations")
+        .fetch_one(&mut *tx)
+        .await?;
+    sqlx::query("SELECT set_config('mini_rs_erp.fresh_database_bootstrap', $1, true)")
+        .bind(if applied_count == 0 { "on" } else { "off" })
+        .execute(&mut *tx)
+        .await?;
     for &(version, sql) in migrations {
         apply_migration(&mut tx, version, sql).await?;
     }

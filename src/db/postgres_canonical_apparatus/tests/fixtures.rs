@@ -21,7 +21,7 @@ pub(super) struct TestDatabase {
 
 impl TestDatabase {
     pub async fn create(label: &str) -> Self {
-        Self::create_through(label, 69).await
+        Self::create_through(label, 70).await
     }
 
     pub async fn create_through(label: &str, migration_count: usize) -> Self {
@@ -72,6 +72,12 @@ impl TestDatabase {
         apply_foundation_migration(&self.pool)
             .await
             .expect("apply current PostgreSQL migration registry");
+    }
+
+    pub async fn migrate_through(&self, migration_count: usize) {
+        apply_postgres_migrations_through(&self.pool, migration_count)
+            .await
+            .expect("apply PostgreSQL migration prefix");
     }
 
     pub fn service(&self) -> CanonicalApparatusService {

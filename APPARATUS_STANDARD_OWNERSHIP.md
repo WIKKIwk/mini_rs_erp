@@ -140,6 +140,9 @@ Production startup requires PostgreSQL canonical repository availability.
 Rollback means restore the verified pre-cutover backup and deploy the old
 binary. New code never rolls back by consulting legacy configuration.
 
+The executable operator sequence is defined in
+`docs/architecture/apparatus-clean-cutover-runbook.md`.
+
 ## Repository boundaries
 
 - Migrations `0001` through `0068` are immutable history.

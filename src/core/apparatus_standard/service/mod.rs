@@ -22,7 +22,9 @@ pub use repository::{CommittedCanonicalApparatus, StoredCanonicalAasx};
 
 use super::{
     ApparatusId, CanonicalAasxImportError, CanonicalApparatusDraft, CanonicalizedAasxUpload,
+    CutoverPreflightReport, LegacyCutoverManifest, ResolvedCutoverManifest,
     RuntimeApparatusConfiguration, RuntimeApparatusProjection, canonicalize_uploaded_aasx,
+    cutover::prepare_cutover,
 };
 
 #[derive(Clone)]
@@ -220,6 +222,43 @@ impl CanonicalApparatusService {
         &self,
     ) -> Result<Vec<RuntimeApparatusProjection>, CanonicalApparatusError> {
         self.repository.list_runtime_projections().await
+    }
+
+    pub async fn cutover_preflight(
+        &self,
+    ) -> Result<CutoverPreflightReport, CanonicalApparatusError> {
+        self.repository.cutover_preflight().await
+    }
+
+    pub async fn preview_legacy_cutover(
+        &self,
+        report: &CutoverPreflightReport,
+        manifest: LegacyCutoverManifest,
+    ) -> Result<ResolvedCutoverManifest, CanonicalApparatusError> {
+        let (_, resolved) = prepare_cutover(report, manifest)?;
+        Ok(resolved)
+    }
+
+    pub async fn apply_legacy_cutover(
+        &self,
+        manifest: LegacyCutoverManifest,
+    ) -> Result<ResolvedCutoverManifest, CanonicalApparatusError> {
+        let report = self.repository.cutover_preflight().await?;
+        let (plan, resolved) = prepare_cutover(&report, manifest)?;
+        let ids = plan
+            .entries
+            .iter()
+            .map(|entry| entry.revision.apparatus_id.clone())
+            .collect::<Vec<_>>();
+        let permit = CanonicalWritePermit::new();
+        self.repository.commit_cutover(&permit, plan).await?;
+        let mut runtime_cache = self.runtime_cache.write().await;
+        let mut configuration_cache = self.configuration_cache.write().await;
+        for apparatus_id in ids {
+            runtime_cache.remove(&apparatus_id);
+            configuration_cache.remove(&apparatus_id);
+        }
+        Ok(resolved)
     }
 
     async fn commit(

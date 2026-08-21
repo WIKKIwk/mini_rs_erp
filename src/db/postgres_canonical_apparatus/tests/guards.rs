@@ -18,11 +18,11 @@ async fn append_only_authority_and_derived_projection_guards_reject_direct_write
 
     let direct_projection_writes = [
         "UPDATE mini_apparatus SET name = 'forbidden' WHERE id = $1",
-        "UPDATE mini_apparatus_queue_policies SET policy = 'free_pick' \
+        "UPDATE mini_apparatus_queue_policies SET updated_at = now() \
          WHERE canonical_apparatus_id = $1",
-        "UPDATE mini_apparatus_material_rules SET requires_material = false \
+        "UPDATE mini_apparatus_material_rules SET updated_at = now() \
          WHERE canonical_apparatus_id = $1",
-        "UPDATE mini_apparatus_capacity_profiles SET capacity_slots = 2 \
+        "UPDATE mini_apparatus_capacity_profiles SET updated_at = now() \
          WHERE canonical_apparatus_id = $1",
     ];
     for statement in direct_projection_writes {

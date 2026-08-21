@@ -10,8 +10,8 @@ use super::{
 use crate::core::apparatus_standard::{
     ApparatusCapacityProjection, ApparatusId, ApparatusMaterialProjection,
     ApparatusQueueProjection, CanonicalAasxArtifact, CanonicalApparatusRevision, PhysicalAssetId,
-    RuntimeApparatusConfiguration, RuntimeApparatusProjection, export_canonical_aasx,
-    parse_canonical_aasx, project_apparatus_revision,
+    RuntimeApparatusConfiguration, RuntimeApparatusProjection, cutover::PreparedCutoverPlan,
+    export_canonical_aasx, parse_canonical_aasx, project_apparatus_revision,
 };
 
 pub(super) struct MemoryCanonicalApparatusRepository {
@@ -44,6 +44,25 @@ impl MemoryCanonicalApparatusRepository {
 
 #[async_trait]
 impl CanonicalApparatusRepository for MemoryCanonicalApparatusRepository {
+    async fn cutover_preflight(
+        &self,
+    ) -> Result<crate::core::apparatus_standard::CutoverPreflightReport, CanonicalApparatusError>
+    {
+        Err(CanonicalApparatusError::CutoverBlocked(
+            "legacy cutover requires the PostgreSQL repository".to_string(),
+        ))
+    }
+
+    async fn commit_cutover(
+        &self,
+        _permit: &CanonicalWritePermit,
+        _plan: PreparedCutoverPlan,
+    ) -> Result<(), CanonicalApparatusError> {
+        Err(CanonicalApparatusError::CutoverBlocked(
+            "legacy cutover requires the PostgreSQL repository".to_string(),
+        ))
+    }
+
     async fn commit(
         &self,
         _permit: &CanonicalWritePermit,

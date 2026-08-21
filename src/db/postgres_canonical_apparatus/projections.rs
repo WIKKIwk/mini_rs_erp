@@ -1,10 +1,8 @@
-use std::collections::BTreeMap;
-
 use sqlx::{Postgres, Transaction};
 
 use crate::core::apparatus_standard::{
     ApparatusProjectionSet, CanonicalApparatusError, CanonicalApparatusRevision,
-    MaterialExecutionPolicy, RuntimeApparatusProjection,
+    RuntimeApparatusProjection,
 };
 
 pub(super) async fn write_runtime_projection(
@@ -27,19 +25,17 @@ pub(super) async fn write_runtime_projection(
     let source_revision = to_i64(runtime.source_revision)?;
     sqlx::query(
         "INSERT INTO mini_apparatus (
-             id, name, base_name, kind, payload_json, source_revision,
+             id, name, payload_json, source_revision,
              source_aasx_sha256, schema_version, physical_asset_id,
              equipment_class_id, hierarchy_json, capabilities_json,
              execution_profile_json, policies_json, capacity_json,
              lifecycle_state
          ) VALUES (
-             $1, $2, $2, 'canonical_projection', $3, $4, $5, $6, $7, $8,
+             $1, $2, $3, $4, $5, $6, $7, $8,
              $9, $10, $11, $12, $13, $14
          )
          ON CONFLICT (id) DO UPDATE SET
              name = EXCLUDED.name,
-             base_name = EXCLUDED.base_name,
-             kind = EXCLUDED.kind,
              payload_json = EXCLUDED.payload_json,
              source_revision = EXCLUDED.source_revision,
              source_aasx_sha256 = EXCLUDED.source_aasx_sha256,
@@ -76,39 +72,32 @@ pub(super) async fn write_runtime_projection(
 
 pub(super) async fn write_derived_projections(
     tx: &mut Transaction<'_, Postgres>,
-    revision: &CanonicalApparatusRevision,
+    _revision: &CanonicalApparatusRevision,
     projections: &ApparatusProjectionSet,
 ) -> Result<(), CanonicalApparatusError> {
-    write_queue(tx, revision, projections).await?;
-    write_material(tx, revision, projections).await?;
-    write_capacity(tx, revision, projections).await
+    write_queue(tx, projections).await?;
+    write_material(tx, projections).await?;
+    write_capacity(tx, projections).await
 }
 
 async fn write_queue(
     tx: &mut Transaction<'_, Postgres>,
-    revision: &CanonicalApparatusRevision,
     projections: &ApparatusProjectionSet,
 ) -> Result<(), CanonicalApparatusError> {
     let queue = &projections.queue;
     let payload = serde_json::to_value(queue).map_err(|_| CanonicalApparatusError::Persistence)?;
     sqlx::query(
         "INSERT INTO mini_apparatus_queue_policies (
-             apparatus, canonical_apparatus_id, policy, actor_role, actor_ref,
-             actor_display_name, payload_json, source_revision,
+             canonical_apparatus_id, payload_json, source_revision,
              source_aasx_sha256, updated_at
-         ) VALUES ($1, $2, $3, '', '', '', $4, $5, $6, now())
+         ) VALUES ($1, $2, $3, $4, now())
          ON CONFLICT (canonical_apparatus_id) DO UPDATE SET
-             apparatus = EXCLUDED.apparatus,
-             policy = EXCLUDED.policy,
-             actor_role = '', actor_ref = '', actor_display_name = '',
              payload_json = EXCLUDED.payload_json,
              source_revision = EXCLUDED.source_revision,
              source_aasx_sha256 = EXCLUDED.source_aasx_sha256,
              updated_at = now()",
     )
-    .bind(&revision.display.display_name)
-    .bind(revision.apparatus_id.as_str())
-    .bind(enum_name(&queue.discipline)?)
+    .bind(queue.apparatus_id.as_str())
     .bind(payload)
     .bind(to_i64(queue.source_revision)?)
     .bind(queue.source_aasx_sha256.to_hex())
@@ -120,43 +109,23 @@ async fn write_queue(
 
 async fn write_material(
     tx: &mut Transaction<'_, Postgres>,
-    revision: &CanonicalApparatusRevision,
     projections: &ApparatusProjectionSet,
 ) -> Result<(), CanonicalApparatusError> {
     let material = &projections.material;
-    let (requires_material, item_groups, requirement_groups) = match &material.policy {
-        MaterialExecutionPolicy::NotRequired => (false, Vec::new(), Vec::new()),
-        MaterialExecutionPolicy::AllRequired { item_group_ids } => {
-            (true, item_group_ids.clone(), Vec::new())
-        }
-        MaterialExecutionPolicy::RequirementSets { sets } => (true, Vec::new(), sets.clone()),
-    };
     let payload =
         serde_json::to_value(material).map_err(|_| CanonicalApparatusError::Persistence)?;
     sqlx::query(
         "INSERT INTO mini_apparatus_material_rules (
-             apparatus, canonical_apparatus_id, item_groups, requirement_groups,
-             requires_material, payload_json, source_revision,
+             canonical_apparatus_id, payload_json, source_revision,
              source_aasx_sha256, updated_at
-         ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, now())
+         ) VALUES ($1, $2, $3, $4, now())
          ON CONFLICT (canonical_apparatus_id) DO UPDATE SET
-             apparatus = EXCLUDED.apparatus,
-             item_groups = EXCLUDED.item_groups,
-             requirement_groups = EXCLUDED.requirement_groups,
-             requires_material = EXCLUDED.requires_material,
              payload_json = EXCLUDED.payload_json,
              source_revision = EXCLUDED.source_revision,
              source_aasx_sha256 = EXCLUDED.source_aasx_sha256,
              updated_at = now()",
     )
-    .bind(&revision.display.display_name)
-    .bind(revision.apparatus_id.as_str())
-    .bind(serde_json::to_value(item_groups).map_err(|_| CanonicalApparatusError::Persistence)?)
-    .bind(
-        serde_json::to_value(requirement_groups)
-            .map_err(|_| CanonicalApparatusError::Persistence)?,
-    )
-    .bind(requires_material)
+    .bind(material.apparatus_id.as_str())
     .bind(payload)
     .bind(to_i64(material.source_revision)?)
     .bind(material.source_aasx_sha256.to_hex())
@@ -168,64 +137,22 @@ async fn write_material(
 
 async fn write_capacity(
     tx: &mut Transaction<'_, Postgres>,
-    revision: &CanonicalApparatusRevision,
     projections: &ApparatusProjectionSet,
 ) -> Result<(), CanonicalApparatusError> {
     let capacity = &projections.capacity;
-    let capability_names = revision
-        .capabilities
-        .iter()
-        .map(|capability| enum_name(&capability.code))
-        .collect::<Result<Vec<_>, _>>()?;
-    let capability_levels = revision
-        .capabilities
-        .iter()
-        .map(|capability| Ok((enum_name(&capability.code)?, capability.level)))
-        .collect::<Result<BTreeMap<_, _>, CanonicalApparatusError>>()?;
     sqlx::query(
         "INSERT INTO mini_apparatus_capacity_profiles (
-             canonical_apparatus_id, apparatus_id, apparatus, capacity_slots,
-             setup_minutes, cleanup_minutes, efficiency_percent, finite_capacity,
-             working_windows, capabilities, capability_levels, notes,
-             source_revision, source_aasx_sha256, updated_at
-         ) VALUES (
-             $1, $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, '', $11, $12, now()
-         )
+             canonical_apparatus_id, payload_json, source_revision,
+             source_aasx_sha256, updated_at
+         ) VALUES ($1, $2, $3, $4, now())
          ON CONFLICT (canonical_apparatus_id) DO UPDATE SET
-             apparatus_id = EXCLUDED.apparatus_id,
-             apparatus = EXCLUDED.apparatus,
-             capacity_slots = EXCLUDED.capacity_slots,
-             setup_minutes = EXCLUDED.setup_minutes,
-             cleanup_minutes = EXCLUDED.cleanup_minutes,
-             efficiency_percent = EXCLUDED.efficiency_percent,
-             finite_capacity = EXCLUDED.finite_capacity,
-             working_windows = EXCLUDED.working_windows,
-             capabilities = EXCLUDED.capabilities,
-             capability_levels = EXCLUDED.capability_levels,
-             notes = '',
+             payload_json = EXCLUDED.payload_json,
              source_revision = EXCLUDED.source_revision,
              source_aasx_sha256 = EXCLUDED.source_aasx_sha256,
              updated_at = now()",
     )
-    .bind(revision.apparatus_id.as_str())
-    .bind(&revision.display.display_name)
-    .bind(i32::from(capacity.capacity_slots))
-    .bind(i32::try_from(capacity.setup_minutes).map_err(|_| CanonicalApparatusError::Persistence)?)
-    .bind(
-        i32::try_from(capacity.cleanup_minutes)
-            .map_err(|_| CanonicalApparatusError::Persistence)?,
-    )
-    .bind(i32::from(capacity.efficiency_percent))
-    .bind(capacity.finite_capacity)
-    .bind(
-        serde_json::to_value(&capacity.working_windows)
-            .map_err(|_| CanonicalApparatusError::Persistence)?,
-    )
-    .bind(serde_json::to_value(capability_names).map_err(|_| CanonicalApparatusError::Persistence)?)
-    .bind(
-        serde_json::to_value(capability_levels)
-            .map_err(|_| CanonicalApparatusError::Persistence)?,
-    )
+    .bind(capacity.apparatus_id.as_str())
+    .bind(serde_json::to_value(capacity).map_err(|_| CanonicalApparatusError::Persistence)?)
     .bind(to_i64(capacity.source_revision)?)
     .bind(capacity.source_aasx_sha256.to_hex())
     .execute(&mut **tx)

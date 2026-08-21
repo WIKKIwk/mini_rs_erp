@@ -3,12 +3,9 @@ use std::collections::BTreeSet;
 use serde::{Deserialize, Serialize};
 
 use crate::core::apparatus_standard::{
-    ApparatusId, MaterialExecutionPolicy, MaterialRequirementGroup,
-    RuntimeApparatusConfiguration,
+    ApparatusId, MaterialExecutionPolicy, RuntimeApparatusConfiguration,
 };
 use crate::core::qolip::QolipOrderStartPreparation;
-
-pub use crate::core::apparatus_standard::RawMaterialStartPolicy;
 
 use super::materials_support::*;
 use super::queue_state;
@@ -18,7 +15,25 @@ use super::{
     QueueProgressInput, chain,
 };
 
-pub type ApparatusMaterialRequirementGroup = MaterialRequirementGroup;
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RawMaterialStartPolicy {
+    #[default]
+    StateAll,
+    RequirementGroups,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ApparatusMaterialRequirementGroup {
+    pub name: String,
+    pub item_groups: Vec<String>,
+    #[serde(default = "default_min_required_count")]
+    pub min_required_count: u16,
+}
+
+fn default_min_required_count() -> u16 {
+    1
+}
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ApparatusMaterialRule {
@@ -725,9 +740,12 @@ impl ProductionMapService {
 fn material_rule_record(canonical: &RuntimeApparatusConfiguration) -> ApparatusMaterialRule {
     let (requires_material, start_policy, item_groups, requirement_groups) =
         match &canonical.material.policy {
-            MaterialExecutionPolicy::NotRequired => {
-                (false, RawMaterialStartPolicy::StateAll, Vec::new(), Vec::new())
-            }
+            MaterialExecutionPolicy::NotRequired => (
+                false,
+                RawMaterialStartPolicy::StateAll,
+                Vec::new(),
+                Vec::new(),
+            ),
             MaterialExecutionPolicy::AllRequired { item_group_ids } => (
                 true,
                 RawMaterialStartPolicy::StateAll,
@@ -739,7 +757,7 @@ fn material_rule_record(canonical: &RuntimeApparatusConfiguration) -> ApparatusM
                 RawMaterialStartPolicy::RequirementGroups,
                 Vec::new(),
                 sets.iter()
-                    .map(|set| MaterialRequirementGroup {
+                    .map(|set| ApparatusMaterialRequirementGroup {
                         name: set.requirement_id.clone(),
                         item_groups: set.item_group_ids.clone(),
                         min_required_count: set.minimum_required_count,

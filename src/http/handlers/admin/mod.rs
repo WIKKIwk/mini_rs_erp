@@ -52,13 +52,12 @@ pub use suppliers::{
 };
 pub use system::{
     MAX_AASX_UPLOAD_BYTES, apparatus, apparatus_aasx, apparatus_detail, apparatus_options,
-    capabilities, factory_location, factory_location_apparatus,
-    factory_locations, inventory_assets, inventory_locations, inventory_relocations,
-    inventory_relocations_batch, inventory_returns_batch, inventory_transfer_action,
-    inventory_transfers, items_bulk_move_group, reset_orders, role_assignments, roles,
-    system_backup_create, system_backup_download, system_backup_import, system_monitor,
-    system_monitor_live, warehouse_assignments, warehouse_items, warehouse_summaries, warehouses,
-    werka_code_regenerate,
+    capabilities, factory_location, factory_location_apparatus, factory_locations,
+    inventory_assets, inventory_locations, inventory_relocations, inventory_relocations_batch,
+    inventory_returns_batch, inventory_transfer_action, inventory_transfers, items_bulk_move_group,
+    reset_orders, role_assignments, roles, system_backup_create, system_backup_download,
+    system_backup_import, system_monitor, system_monitor_live, warehouse_assignments,
+    warehouse_items, warehouse_summaries, warehouses, werka_code_regenerate,
 };
 use system::{authorize_any_capability, authorize_capability, require_capability};
 pub use system_users::{system_user_code_regenerate, system_user_detail, system_users};
@@ -150,6 +149,7 @@ fn canonical_apparatus_error(error: CanonicalApparatusError) -> AdminError {
         CanonicalApparatusError::InvalidAasx => bad_request("aasx_import_invalid"),
         CanonicalApparatusError::ArtifactIntegrity => server_error("aasx_integrity_failed"),
         CanonicalApparatusError::Persistence => server_error("apparatus_persistence_failed"),
+        CanonicalApparatusError::CutoverBlocked(_) => server_error("apparatus_cutover_blocked"),
         CanonicalApparatusError::Clock => server_error("apparatus_clock_failed"),
         CanonicalApparatusError::InjectedFault(_) => server_error("apparatus_commit_failed"),
     }

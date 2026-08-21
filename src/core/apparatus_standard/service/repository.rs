@@ -3,8 +3,8 @@ use async_trait::async_trait;
 use super::{CanonicalApparatusError, CanonicalApparatusPatch, CanonicalCommandMetadata};
 use crate::core::apparatus_standard::{
     ApparatusId, CanonicalAasxArtifact, CanonicalApparatusDraft, CanonicalApparatusRevision,
-    LifecycleState, RevisionMetadata, RevisionSource, RuntimeApparatusConfiguration,
-    RuntimeApparatusProjection,
+    CutoverPreflightReport, LifecycleState, RevisionMetadata, RevisionSource,
+    RuntimeApparatusConfiguration, RuntimeApparatusProjection, cutover::PreparedCutoverPlan,
 };
 
 pub(crate) struct CanonicalWritePermit {
@@ -96,6 +96,14 @@ pub struct StoredCanonicalAasx {
 
 #[async_trait]
 pub(crate) trait CanonicalApparatusRepository: Send + Sync {
+    async fn cutover_preflight(&self) -> Result<CutoverPreflightReport, CanonicalApparatusError>;
+
+    async fn commit_cutover(
+        &self,
+        permit: &CanonicalWritePermit,
+        plan: PreparedCutoverPlan,
+    ) -> Result<(), CanonicalApparatusError>;
+
     async fn commit(
         &self,
         permit: &CanonicalWritePermit,
