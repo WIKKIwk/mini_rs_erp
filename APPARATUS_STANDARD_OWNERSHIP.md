@@ -158,7 +158,7 @@ The executable operator sequence is defined in
 
 Final static and executable acceptance must prove absence of:
 
-- `ApparatusUpsert`, `ApparatusMasterData`, and `ApparatusGroupStorePort`;
+- former legacy apparatus upsert, master-data, and group-store contracts;
 - SQLite or default-catalog apparatus authority;
 - unavailable/optional canonical resolvers;
 - independent queue/material/capacity projection writers;

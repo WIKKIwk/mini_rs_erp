@@ -11,7 +11,7 @@ async fn queue_start_rejects_raw_material_stock_reserved_for_other_order() {
             principal_role: PrincipalRole::Aparatchi,
             principal_ref: "worker-raw-reserved".to_string(),
             role_id: "aparatchi".to_string(),
-            assigned_apparatus: vec!["7 ta rangli pechat - A".to_string()],
+            assigned_apparatus: vec!["apparatus:default:bosma_7".to_string()],
             assigned_item_groups: Vec::new(),
         })
         .await
@@ -30,7 +30,7 @@ async fn queue_start_rejects_raw_material_stock_reserved_for_other_order() {
                 "zakaz-raw-reserved",
                 "Raw reserved",
                 "8812",
-                "7 ta rangli pechat - A",
+                "apparatus:default:bosma_7",
             ),
         ))
         .await
@@ -44,11 +44,18 @@ async fn queue_start_rejects_raw_material_stock_reserved_for_other_order() {
             "PUT",
             "/v1/mobile/admin/raw-material-rules",
             &token,
-            r#"{"apparatus":"7 ta rangli pechat - A","requires_material":true,"start_policy":"requirement_groups","item_groups":["Kraska"]}"#,
+            &canonical_requirement_set_material_policy_body(
+                "apparatus:default:bosma_7",
+                1,
+                &["Kraska"],
+                true,
+            ),
         ))
         .await
         .expect("rule save");
-    assert_eq!(rule.status(), StatusCode::OK);
+    let rule_status = rule.status();
+    let rule_body = json_body(rule).await;
+    assert_eq!(rule_status, StatusCode::OK, "{rule_body:?}");
 
     let assigned = router
         .clone()
@@ -63,7 +70,9 @@ async fn queue_start_rejects_raw_material_stock_reserved_for_other_order() {
         ))
         .await
         .expect("assign");
-    assert_eq!(assigned.status(), StatusCode::OK);
+    let assigned_status = assigned.status();
+    let assigned_body = json_body(assigned).await;
+    assert_eq!(assigned_status, StatusCode::OK, "{assigned_body:?}");
     material_store
         .set_stock_status("30AA", "in_use", "zakaz-other")
         .await;
@@ -76,7 +85,7 @@ async fn queue_start_rejects_raw_material_stock_reserved_for_other_order() {
             &worker_token,
             &with_test_qolip(
                 r#"{
-                "apparatus":"7 ta rangli pechat - A",
+                "apparatus":"apparatus:default:bosma_7",
                 "order_id":"zakaz-raw-reserved",
                 "action":"start",
                 "material_barcodes":["30AA"]
@@ -105,7 +114,7 @@ async fn queue_start_commit_failure_does_not_reserve_raw_material_stock() {
     let material_store = Arc::new(RawMaterialStockLookup::default());
     let production_store = Arc::new(MemoryProductionMapStore::new());
     let mut state = test_state();
-    state.production_maps = ProductionMapService::new_for_test(production_store.clone());
+    state.production_maps = production_map_service_with_store(&state, production_store.clone());
     state.gscale = GscaleService::new().with_receipt_store(material_store.clone());
     state
         .admin
@@ -113,7 +122,7 @@ async fn queue_start_commit_failure_does_not_reserve_raw_material_stock() {
             principal_role: PrincipalRole::Aparatchi,
             principal_ref: "worker-raw-rollback".to_string(),
             role_id: "aparatchi".to_string(),
-            assigned_apparatus: vec!["7 ta rangli pechat - A".to_string()],
+            assigned_apparatus: vec!["apparatus:default:bosma_7".to_string()],
             assigned_item_groups: Vec::new(),
         })
         .await
@@ -132,7 +141,7 @@ async fn queue_start_commit_failure_does_not_reserve_raw_material_stock() {
                 "zakaz-raw-rollback",
                 "Raw rollback",
                 "8813",
-                "7 ta rangli pechat - A",
+                "apparatus:default:bosma_7",
             ),
         ))
         .await
@@ -146,7 +155,12 @@ async fn queue_start_commit_failure_does_not_reserve_raw_material_stock() {
             "PUT",
             "/v1/mobile/admin/raw-material-rules",
             &token,
-            r#"{"apparatus":"7 ta rangli pechat - A","requires_material":true,"start_policy":"requirement_groups","item_groups":["Kraska"]}"#,
+            &canonical_requirement_set_material_policy_body(
+                "apparatus:default:bosma_7",
+                1,
+                &["Kraska"],
+                true,
+            ),
         ))
         .await
         .expect("rule save");
@@ -165,7 +179,9 @@ async fn queue_start_commit_failure_does_not_reserve_raw_material_stock() {
         ))
         .await
         .expect("assign");
-    assert_eq!(assigned.status(), StatusCode::OK);
+    let assigned_status = assigned.status();
+    let assigned_body = json_body(assigned).await;
+    assert_eq!(assigned_status, StatusCode::OK, "{assigned_body:?}");
 
     production_store.fail_next_queue_progress_commit();
     let start = router
@@ -175,7 +191,7 @@ async fn queue_start_commit_failure_does_not_reserve_raw_material_stock() {
             &worker_token,
             &with_test_qolip(
                 r#"{
-                "apparatus":"7 ta rangli pechat - A",
+                "apparatus":"apparatus:default:bosma_7",
                 "order_id":"zakaz-raw-rollback",
                 "action":"start",
                 "material_barcodes":["30AA"]
@@ -223,7 +239,7 @@ async fn raw_material_assignment_checks_rulon_size_for_pechat_orders() {
                 "zakaz-rulon-size",
                 "Rulon size",
                 "8813",
-                "7 ta rangli pechat - A",
+                "apparatus:default:bosma_7",
                 7,
                 985.0,
             ),
@@ -238,7 +254,12 @@ async fn raw_material_assignment_checks_rulon_size_for_pechat_orders() {
             "PUT",
             "/v1/mobile/admin/raw-material-rules",
             &token,
-            r#"{"apparatus":"7 ta rangli pechat - A","requires_material":true,"start_policy":"requirement_groups","item_groups":["Rulon"]}"#,
+            &canonical_requirement_set_material_policy_body(
+                "apparatus:default:bosma_7",
+                1,
+                &["Rulon"],
+                true,
+            ),
         ))
         .await
         .expect("rule save");
@@ -325,7 +346,7 @@ async fn raw_material_assignment_limits_laminatsiya_roll_width_to_thirty_mm() {
             principal_role: PrincipalRole::MaterialTaminotchi,
             principal_ref: "material-laminatsiya-width".to_string(),
             role_id: "material_taminotchi".to_string(),
-            assigned_apparatus: vec!["Laminatsiya - A".to_string()],
+            assigned_apparatus: vec!["apparatus:default:asset-007".to_string()],
             assigned_item_groups: vec!["Rulon".to_string()],
         })
         .await
@@ -356,7 +377,7 @@ async fn raw_material_assignment_limits_laminatsiya_roll_width_to_thirty_mm() {
                 "zakaz-laminatsiya-rulon-size",
                 "Laminatsiya rulon size",
                 "8817",
-                "Laminatsiya - A",
+                "apparatus:default:asset-007",
                 7,
                 660.0,
             ),
@@ -371,7 +392,12 @@ async fn raw_material_assignment_limits_laminatsiya_roll_width_to_thirty_mm() {
             "PUT",
             "/v1/mobile/admin/raw-material-rules",
             &token,
-            r#"{"apparatus":"Laminatsiya - A","requires_material":true,"start_policy":"requirement_groups","item_groups":["Rulon"]}"#,
+            &canonical_requirement_set_material_policy_body(
+                "apparatus:default:asset-007",
+                1,
+                &["Rulon"],
+                false,
+            ),
         ))
         .await
         .expect("laminatsiya rule save");
@@ -381,7 +407,7 @@ async fn raw_material_assignment_limits_laminatsiya_roll_width_to_thirty_mm() {
         .clone()
         .oneshot(request(
             "GET",
-            "/v1/mobile/admin/raw-material-assignments/candidates?order_id=zakaz-laminatsiya-rulon-size&apparatus=Laminatsiya%20-%20A",
+            "/v1/mobile/admin/raw-material-assignments/candidates?order_id=zakaz-laminatsiya-rulon-size&apparatus=apparatus%3Adefault%3Aasset-007",
             &material_token,
         ))
         .await
@@ -402,7 +428,7 @@ async fn raw_material_assignment_limits_laminatsiya_roll_width_to_thirty_mm() {
             r#"{
                 "order_id":"zakaz-laminatsiya-rulon-size",
                 "barcode":"30L690",
-                "apparatus":"Laminatsiya - A"
+                "apparatus":"apparatus:default:asset-007"
             }"#,
         ))
         .await
@@ -419,7 +445,7 @@ async fn raw_material_assignment_limits_laminatsiya_roll_width_to_thirty_mm() {
             r#"{
                 "order_id":"zakaz-laminatsiya-rulon-size",
                 "barcode":"30L691",
-                "apparatus":"Laminatsiya - A"
+                "apparatus":"apparatus:default:asset-007"
             }"#,
         ))
         .await
@@ -445,7 +471,7 @@ async fn material_taminotchi_raw_material_assignment_allows_child_group_from_ass
             principal_role: PrincipalRole::MaterialTaminotchi,
             principal_ref: "material-rulon-parent".to_string(),
             role_id: "material_taminotchi".to_string(),
-            assigned_apparatus: vec!["7 ta rangli pechat - A".to_string()],
+            assigned_apparatus: vec!["apparatus:default:bosma_7".to_string()],
             assigned_item_groups: vec!["Rulon".to_string()],
         })
         .await
@@ -476,7 +502,7 @@ async fn material_taminotchi_raw_material_assignment_allows_child_group_from_ass
                 "zakaz-rulon-parent-scope",
                 "Rulon parent scope",
                 "8821",
-                "7 ta rangli pechat - A",
+                "apparatus:default:bosma_7",
                 7,
                 985.0,
             ),
@@ -491,7 +517,12 @@ async fn material_taminotchi_raw_material_assignment_allows_child_group_from_ass
             "PUT",
             "/v1/mobile/admin/raw-material-rules",
             &admin_token,
-            r#"{"apparatus":"7 ta rangli pechat - A","requires_material":true,"start_policy":"requirement_groups","item_groups":["Rulon"]}"#,
+            &canonical_requirement_set_material_policy_body(
+                "apparatus:default:bosma_7",
+                1,
+                &["Rulon"],
+                true,
+            ),
         ))
         .await
         .expect("rule save");

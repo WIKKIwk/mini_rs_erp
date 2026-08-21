@@ -20,6 +20,7 @@ const MAX_CAPACITY_SLOTS: u16 = 64;
 const MAX_EFFICIENCY_PERCENT: u16 = 200;
 const MAX_CAPABILITY_LEVEL: u16 = 100;
 const MAX_COLOR_STATIONS: u16 = 32;
+const MAX_WEB_WIDTH_MM: u32 = 100_000;
 
 #[derive(Debug, Error, Clone, PartialEq, Eq)]
 pub enum CanonicalApparatusValidationError {
@@ -150,10 +151,14 @@ fn validate_execution_profile(
     };
     let virtual_tasks_match = profile.virtual_tasks == VirtualTaskPolicy::Disabled
         || revision.supports(EquipmentCapabilityCode::VirtualTask);
+    let web_width_match = profile
+        .max_web_width_mm
+        .is_none_or(|value| value > 0 && value <= MAX_WEB_WIDTH_MM);
     if !revision.supports(expected_capability)
         || !technology_matches
         || !color_stations_match
         || !virtual_tasks_match
+        || !web_width_match
     {
         return Err(CanonicalApparatusValidationError::InvalidExecutionProfile);
     }
@@ -215,18 +220,17 @@ fn validate_capacity(
     {
         return Err(CanonicalApparatusValidationError::InvalidCapacity);
     }
-    if let CapacityAvailability::Scheduled { working_windows } = &capacity.availability {
-        if working_windows.is_empty()
+    if let CapacityAvailability::Scheduled { working_windows } = &capacity.availability
+        && (working_windows.is_empty()
             || !working_windows.windows(2).all(|pair| pair[0] < pair[1])
             || working_windows.iter().any(|window| {
                 window.weekday == 0
                     || window.weekday > 7
                     || window.start_minute >= window.end_minute
                     || window.end_minute > 24 * 60
-            })
-        {
-            return Err(CanonicalApparatusValidationError::InvalidCapacity);
-        }
+            }))
+    {
+        return Err(CanonicalApparatusValidationError::InvalidCapacity);
     }
     Ok(())
 }

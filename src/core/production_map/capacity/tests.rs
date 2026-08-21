@@ -231,23 +231,14 @@ async fn start_with_qolip(
 }
 
 #[tokio::test]
-async fn schedule_requires_canonical_capacity_profile() {
+async fn map_save_requires_a_canonical_runtime_projection() {
     let service = ProductionMapService::new(
         Arc::new(MemoryProductionMapStore::new()),
         Arc::new(TestCanonicalApparatusResolver::default()),
     );
-    service
-        .upsert_map(capacity_map("capacity-order-missing-profile", FLEXO_NAME))
-        .await
-        .expect("map");
-
     assert_eq!(
         service
-            .schedule_apparatus_order(schedule(
-                "capacity-order-missing-profile",
-                "capacity-key-missing-profile",
-                10,
-            ))
+            .upsert_map(capacity_map("capacity-order-missing-profile", FLEXO_NAME))
             .await,
         Err(ProductionMapError::StoreFailed)
     );

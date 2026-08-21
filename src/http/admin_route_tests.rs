@@ -18,6 +18,7 @@ use crate::core::admin::models::{
 use crate::core::admin::ports::{AdminPortError, AdminReadPort, AdminStatePort, AdminWritePort};
 use crate::core::admin::service::AdminService;
 use crate::core::apparatus_standard::ApparatusId;
+use crate::core::apparatus_standard::test_support::{TestApparatusSpec, canonical_draft};
 use crate::core::auth::models::{Principal, PrincipalRole};
 use crate::core::auth::ports::{
     AdminAccessState, AdminAccessStateLookup, AuthPortError, CustomerLookup, CustomerRecord,
@@ -42,7 +43,7 @@ use crate::core::inventory_movements::{
 };
 use crate::core::mini_orders::{MiniOrderError, MiniOrderSink, NoopMiniOrderSink};
 use crate::core::production_map::{
-    MemoryProductionMapStore, ProductionMapService, TestCanonicalApparatusResolver,
+    CanonicalServiceApparatusResolver, MemoryProductionMapStore, ProductionMapService,
 };
 use crate::core::profile::ports::{ProfilePrefs, ProfileStoreError, ProfileStorePort};
 use crate::core::returned_paint::{MemoryReturnedPaintStore, ReturnedPaintService};
@@ -179,25 +180,80 @@ fn pechat_order_map_json(id: &str, title: &str, order_number: &str, apparatus: &
 }
 
 fn canonical_test_apparatus_id(apparatus: &str) -> String {
-    if ApparatusId::new(apparatus.trim().to_string()).is_ok() {
-        return apparatus.trim().to_string();
-    }
-    let value = apparatus.trim().to_ascii_lowercase();
-    if value.contains("8 ta") {
-        "apparatus:default:bosma_8".to_string()
-    } else if value.contains("9 ta") {
-        "apparatus:default:bosma_9".to_string()
-    } else if value.contains("lamin") {
-        "apparatus:default:asset-007".to_string()
-    } else if value.contains("rezka") {
-        "apparatus:default:asset-010".to_string()
-    } else if value.contains("qadoqlash") {
-        "apparatus:test:qadoqlash-stol".to_string()
-    } else if value.contains("yordamchi") {
-        "apparatus:test:yordamchi-aparat".to_string()
+    ApparatusId::new(apparatus.trim().to_string())
+        .expect("test production-map fixtures must use a canonical apparatus id")
+        .to_string()
+}
+
+fn canonical_material_policy_body(
+    apparatus_id: &str,
+    expected_revision: u64,
+    material: serde_json::Value,
+    tooling_required: bool,
+) -> String {
+    let tooling = if tooling_required {
+        serde_json::json!({
+            "mode": "qolip_scan_required",
+            "tooling_class_id": "tooling-class:qolip"
+        })
     } else {
-        "apparatus:default:bosma_7".to_string()
-    }
+        serde_json::json!({"mode": "not_required"})
+    };
+    serde_json::json!({
+        "apparatus_id": apparatus_id,
+        "expected_revision": expected_revision,
+        "material": material,
+        "tooling": tooling
+    })
+    .to_string()
+}
+
+fn canonical_requirement_set_material_policy_body(
+    apparatus_id: &str,
+    expected_revision: u64,
+    item_group_ids: &[&str],
+    tooling_required: bool,
+) -> String {
+    canonical_material_policy_body(
+        apparatus_id,
+        expected_revision,
+        serde_json::json!({
+            "mode": "requirement_sets",
+            "sets": [{
+                "requirement_id": "test-material",
+                "item_group_ids": item_group_ids,
+                "minimum_required_count": 1
+            }]
+        }),
+        tooling_required,
+    )
+}
+
+fn canonical_apparatus_draft_body(seed: &str, display_name: &str) -> String {
+    let apparatus_id = format!("apparatus:test:{seed}");
+    serde_json::to_string(&canonical_draft(&TestApparatusSpec::print(
+        &apparatus_id,
+        display_name,
+        crate::core::apparatus_standard::ProcessTechnology::Flexographic,
+        None,
+    )))
+    .expect("canonical apparatus test draft")
+}
+
+fn canonical_apparatus_update_body(
+    seed: &str,
+    display_name: &str,
+    expected_revision: u64,
+) -> String {
+    serde_json::json!({
+        "expected_revision": expected_revision,
+        "draft": serde_json::from_str::<serde_json::Value>(&canonical_apparatus_draft_body(
+            seed,
+            display_name,
+        ))
+        .expect("canonical apparatus draft JSON")
+    })
+    .to_string()
 }
 
 fn two_apparatus_order_map_json(
@@ -327,7 +383,12 @@ fn laminatsiya_order_map_json(id: &str, width_mm: f64) -> String {
             "width_mm":{width_mm},
             "nodes":[
                 {{"id":"start","kind":"start","title":"Start"}},
-                {{"id":"laminatsiya","kind":"task","title":"Laminatsiya - A"}},
+                {{
+                    "id":"laminatsiya",
+                    "kind":"apparatus",
+                    "title":"Laminatsiya 1",
+                    "apparatus_id":"apparatus:default:asset-007"
+                }},
                 {{"id":"end","kind":"end","title":"End"}}
             ],
             "edges":[
@@ -368,7 +429,9 @@ fn test_state() -> AppState {
         .with_write_port(admin_port.clone())
         .with_state_port(admin_state_port.clone());
     state.returned_paint = ReturnedPaintService::new(Arc::new(MemoryReturnedPaintStore::new()));
-    let resolver = Arc::new(TestCanonicalApparatusResolver::standard());
+    let resolver = Arc::new(CanonicalServiceApparatusResolver::new(
+        state.apparatus.clone(),
+    ));
     state.production_maps =
         ProductionMapService::new(Arc::new(MemoryProductionMapStore::new()), resolver.clone());
     state.warehouses = WarehouseService::new(Arc::new(MemoryWarehouseStore::new()), resolver);
@@ -383,6 +446,18 @@ fn test_state() -> AppState {
     state.worker_groups = WorkerGroupService::new(Arc::new(MemoryWorkerGroupStore::new()));
     state.production_orders = Arc::new(NoopMiniOrderSink);
     state
+}
+
+fn production_map_service_with_store(
+    state: &AppState,
+    store: Arc<MemoryProductionMapStore>,
+) -> ProductionMapService {
+    ProductionMapService::new(
+        store,
+        Arc::new(CanonicalServiceApparatusResolver::new(
+            state.apparatus.clone(),
+        )),
+    )
 }
 
 fn test_calculate_order_store_path() -> std::path::PathBuf {
@@ -448,11 +523,19 @@ fn request(method: &str, uri: &str, token: &str) -> Request<Body> {
 }
 
 fn request_with_body(method: &str, uri: &str, token: &str, body: &str) -> Request<Body> {
+    static IDEMPOTENCY_SEQUENCE: AtomicUsize = AtomicUsize::new(1);
     Request::builder()
         .method(method)
         .uri(uri)
         .header(header::AUTHORIZATION, format!("Bearer {token}"))
         .header(header::CONTENT_TYPE, "application/json")
+        .header(
+            "idempotency-key",
+            format!(
+                "admin-route-test-{}",
+                IDEMPOTENCY_SEQUENCE.fetch_add(1, Ordering::Relaxed)
+            ),
+        )
         .body(Body::from(body.to_string()))
         .expect("request")
 }

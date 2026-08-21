@@ -107,11 +107,10 @@ fn new_hex_id() -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::db::postgres::apply_foundation_migration;
+    use crate::db::postgres::{apply_foundation_migration, postgres_test_database_options};
     use crate::engine::{EngineCommandContext, EngineEventDraft};
 
     #[tokio::test]
-    #[ignore = "requires local PostgreSQL and creates/drops mini_rs_erp_test_engine"]
     async fn postgres_engine_store_reserves_idempotency_and_records_events() {
         let admin_url = std::env::var("MINI_ERP_TEST_ADMIN_DATABASE_URL")
             .unwrap_or_else(|_| "postgres://wikki@127.0.0.1:5432/postgres".to_string());
@@ -129,8 +128,9 @@ mod tests {
             .expect("create test db");
         admin_pool.close().await;
 
-        let test_url = format!("postgres://wikki@127.0.0.1:5432/{db_name}");
-        let pool = sqlx::PgPool::connect(&test_url).await.expect("test db");
+        let pool = sqlx::PgPool::connect_with(postgres_test_database_options(&admin_url, db_name))
+            .await
+            .expect("test db");
         apply_foundation_migration(&pool)
             .await
             .expect("apply migration");

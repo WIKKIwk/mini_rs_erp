@@ -124,6 +124,7 @@ impl PreparedApparatusQueueAction {
         };
         if let Some(session) = &mut self.session {
             lineage.write_to_payload(&mut session.payload_json);
+            session.payload_json["qolip_lock_owner"] = serde_json::Value::Bool(true);
         }
         lineage.write_to_payload(&mut self.event.payload_json);
         if let Some(progress_event) = &mut self.progress_event {

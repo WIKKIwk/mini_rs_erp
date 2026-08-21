@@ -180,14 +180,14 @@ fn env_path_with_legacy(
             Ok(value)
         };
     }
-    if let Some(legacy_key) = legacy_key {
-        if let Some(value) = read_env(legacy_key)? {
-            return if value.is_empty() {
-                Err(invalid_config(legacy_key, "path must not be empty"))
-            } else {
-                Ok(value)
-            };
-        }
+    if let Some(legacy_key) = legacy_key
+        && let Some(value) = read_env(legacy_key)?
+    {
+        return if value.is_empty() {
+            Err(invalid_config(legacy_key, "path must not be empty"))
+        } else {
+            Ok(value)
+        };
     }
     Ok(fallback.to_string())
 }

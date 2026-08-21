@@ -2,7 +2,7 @@ use super::*;
 
 #[tokio::test]
 async fn pechat_task_rezka_persists_qolip_lineage_into_downstream_start() {
-    let mut state = test_state();
+    let state = test_state();
     state
         .admin
         .upsert_role_assignment(crate::core::authz::RoleAssignmentUpsert {

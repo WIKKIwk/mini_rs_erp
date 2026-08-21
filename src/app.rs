@@ -112,11 +112,9 @@ pub struct AppState {
 impl AppState {
     #[cfg(test)]
     pub fn new(config: AppConfig) -> Self {
-        let apparatus = CanonicalApparatusService::memory();
+        let apparatus = CanonicalApparatusService::memory_with_standard_test_apparatus();
         let resolver = Arc::new(
-            crate::core::production_map::CanonicalServiceApparatusResolver::new(
-                apparatus.clone(),
-            ),
+            crate::core::production_map::CanonicalServiceApparatusResolver::new(apparatus.clone()),
         );
         Self::build(
             config,
@@ -126,9 +124,7 @@ impl AppState {
                     resolver.clone(),
                 ),
                 factory_locations: FactoryLocationService::new(
-                    Arc::new(
-                        crate::core::factory_locations::MemoryFactoryLocationStore::new(),
-                    ),
+                    Arc::new(crate::core::factory_locations::MemoryFactoryLocationStore::new()),
                     apparatus.clone(),
                 ),
                 warehouses: WarehouseService::new(
@@ -148,10 +144,7 @@ impl AppState {
             config,
             ApparatusRuntimeServices {
                 production_maps: build_production_map_service(apparatus.clone(), pool.clone()),
-                factory_locations: build_factory_location_service(
-                    apparatus.clone(),
-                    pool.clone(),
-                ),
+                factory_locations: build_factory_location_service(apparatus.clone(), pool.clone()),
                 warehouses: build_warehouse_service(apparatus.clone(), pool),
                 apparatus,
             },

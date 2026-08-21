@@ -1,6 +1,6 @@
 use super::*;
 use crate::core::admin::models::AdminItemGroup;
-use crate::core::apparatus_standard::ApparatusId;
+use crate::core::apparatus_standard::{ApparatusId, ExecutionOperation};
 use crate::core::gscale::models::RawMaterialStockEntry;
 use crate::core::production_map::ProductionMapDefinition;
 use crate::core::werka::models::SupplierItem;
@@ -114,7 +114,8 @@ pub(super) async fn fill_raw_material_assignment_input(
             .cloned()
             .ok_or_else(|| production_map_error(ProductionMapError::RawMaterialGroupNotAllowed))?
     };
-    validate_rulon_size_for_apparatus_map(&map, &apparatus, &stock, &item, &item_group_path)?;
+    validate_rulon_size_for_apparatus_map(state, &map, &apparatus, &stock, &item, &item_group_path)
+        .await?;
     input.item_code = item_code;
     input.item_name = item.name.trim().to_string();
     input.item_group = item.item_group.trim().to_string();
@@ -181,14 +182,15 @@ pub(super) async fn require_material_warehouse_scope(
     ))
 }
 
-pub(super) fn validate_rulon_size_for_apparatus_map(
+pub(super) async fn validate_rulon_size_for_apparatus_map(
+    state: &AppState,
     map: &ProductionMapDefinition,
     apparatus: &str,
     stock: &RawMaterialStockEntry,
     item: &SupplierItem,
     item_group_path: &[String],
 ) -> Result<(), AdminError> {
-    let Some(maximum_leftover_width_mm) = roll_width_allowance_mm(apparatus)? else {
+    let Some(maximum_leftover_width_mm) = roll_width_allowance_mm(state, apparatus).await? else {
         return Ok(());
     };
     if !is_rulon_group(item_group_path) {
@@ -216,14 +218,12 @@ pub(super) fn validate_rulon_size_for_apparatus_map(
 
 pub(super) fn raw_material_rulon_match_metrics(
     map: &ProductionMapDefinition,
-    apparatus: &str,
+    _apparatus: &str,
     stock: &RawMaterialStockEntry,
     item: &SupplierItem,
     item_group_path: &[String],
 ) -> Option<(f64, f64, f64)> {
-    if !is_rulon_group(item_group_path)
-        || roll_width_allowance_mm(apparatus).ok().flatten().is_none()
-    {
+    if !is_rulon_group(item_group_path) {
         return None;
     }
     let order_width = map
@@ -265,15 +265,28 @@ fn is_rulon_group(item_group_path: &[String]) -> bool {
         .any(|group| group.trim().eq_ignore_ascii_case("Rulon"))
 }
 
-fn roll_width_allowance_mm(apparatus: &str) -> Result<Option<f64>, AdminError> {
-    ApparatusId::new(apparatus.trim().to_string())
+async fn roll_width_allowance_mm(
+    state: &AppState,
+    apparatus: &str,
+) -> Result<Option<f64>, AdminError> {
+    let apparatus_id = ApparatusId::new(apparatus.trim().to_string())
         .map_err(|_| production_map_error(ProductionMapError::RawMaterialInvalidInput))?;
-    // The opaque ID has no family information. The canonical catalog resolver
-    // must provide Pechat (20 mm) or Laminatsiya (30 mm) classification here;
-    // fail closed until that typed boundary is available.
-    Err(production_map_error(
-        ProductionMapError::RawMaterialInvalidInput,
-    ))
+    let configuration = state
+        .apparatus
+        .current_configuration(&apparatus_id)
+        .await
+        .map_err(canonical_apparatus_error)?
+        .ok_or_else(|| not_found("apparatus_not_found"))?;
+    if !configuration.has_coherent_source() || !configuration.is_active() {
+        return Err(production_map_error(
+            ProductionMapError::RawMaterialInvalidInput,
+        ));
+    }
+    Ok(match configuration.runtime.execution_profile.operation {
+        ExecutionOperation::Print => Some(20.0),
+        ExecutionOperation::Laminate => Some(30.0),
+        ExecutionOperation::Cut | ExecutionOperation::Package | ExecutionOperation::Glue => None,
+    })
 }
 
 pub(super) fn apparatus_id_matches_text(id: &ApparatusId, value: &str) -> bool {

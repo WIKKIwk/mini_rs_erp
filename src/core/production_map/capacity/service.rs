@@ -382,47 +382,6 @@ fn capability_code_name(code: EquipmentCapabilityCode) -> &'static str {
     }
 }
 
-async fn normalize_capacity_profile(
-    _store: &dyn ProductionMapStorePort,
-    mut profile: ApparatusCapacityProfile,
-) -> Result<ApparatusCapacityProfile, ProductionMapError> {
-    profile.apparatus = profile.apparatus.trim().to_string();
-    if profile.capacity_slots == 0
-        || profile.capacity_slots > 64
-        || profile.efficiency_percent == 0
-        || profile.efficiency_percent > 200
-    {
-        return Err(ProductionMapError::CapacityProfileInvalid);
-    }
-    for window in &profile.working_windows {
-        if !(1..=7).contains(&window.weekday)
-            || window.start_minute >= window.end_minute
-            || window.end_minute > 1_440
-        {
-            return Err(ProductionMapError::CapacityProfileInvalid);
-        }
-    }
-    let mut capabilities = BTreeSet::new();
-    profile.capabilities = profile
-        .capabilities
-        .into_iter()
-        .map(|value| value.trim().to_ascii_lowercase())
-        .filter(|value| !value.is_empty() && capabilities.insert(value.clone()))
-        .collect();
-    let mut levels = profile
-        .capability_levels
-        .into_iter()
-        .map(|(code, level)| (code.trim().to_ascii_lowercase(), level.max(1)))
-        .filter(|(code, _)| !code.is_empty())
-        .collect::<std::collections::BTreeMap<_, _>>();
-    for code in &profile.capabilities {
-        levels.entry(code.clone()).or_insert(1);
-    }
-    profile.capability_levels = levels;
-    profile.updated_at_unix = unix_seconds();
-    Ok(profile)
-}
-
 async fn normalize_downtime(
     _store: &dyn ProductionMapStorePort,
     mut downtime: ApparatusDowntime,

@@ -68,18 +68,21 @@ pub(super) async fn queue_action_event_replay_tx(
         return Ok(false);
     };
 
+    let existing = StoredQueueEventIdentity {
+        apparatus: existing_apparatus.as_deref(),
+        order_id: &existing_order_id,
+        action: &existing_action,
+        from_state: &existing_from_state,
+        to_state: &existing_to_state,
+        policy: &existing_policy,
+        actor_role: &existing_actor_role,
+        actor_ref: &existing_actor_ref,
+        actor_display_name: &existing_actor_display_name,
+        assigned_apparatus: &existing_assigned_apparatus,
+        payload: &existing_payload,
+    };
     let same_request = queue_event_identity_matches(
-        existing_apparatus.as_deref(),
-        &existing_order_id,
-        &existing_action,
-        &existing_from_state,
-        &existing_to_state,
-        &existing_policy,
-        &existing_actor_role,
-        &existing_actor_ref,
-        &existing_actor_display_name,
-        &existing_assigned_apparatus,
-        &existing_payload,
+        &existing,
         &apparatus_id,
         event,
         &assigned_apparatus,
@@ -261,35 +264,39 @@ fn normalized_assigned_apparatus(
         .collect::<Result<Vec<_>, _>>()
 }
 
+struct StoredQueueEventIdentity<'a> {
+    apparatus: Option<&'a str>,
+    order_id: &'a str,
+    action: &'a str,
+    from_state: &'a str,
+    to_state: &'a str,
+    policy: &'a str,
+    actor_role: &'a str,
+    actor_ref: &'a str,
+    actor_display_name: &'a str,
+    assigned_apparatus: &'a serde_json::Value,
+    payload: &'a serde_json::Value,
+}
+
 fn queue_event_identity_matches(
-    existing_apparatus: Option<&str>,
-    existing_order_id: &str,
-    existing_action: &str,
-    existing_from_state: &str,
-    existing_to_state: &str,
-    existing_policy: &str,
-    existing_actor_role: &str,
-    existing_actor_ref: &str,
-    existing_actor_display_name: &str,
-    existing_assigned_apparatus: &serde_json::Value,
-    existing_payload: &serde_json::Value,
+    existing: &StoredQueueEventIdentity<'_>,
     apparatus_id: &ApparatusId,
     event: &ApparatusQueueActionEvent,
     assigned_apparatus: &[String],
 ) -> Result<bool, ProductionMapError> {
     let assigned_apparatus =
         serde_json::to_value(assigned_apparatus).map_err(|_| ProductionMapError::StoreFailed)?;
-    Ok(existing_apparatus == Some(apparatus_id.as_str())
-        && existing_order_id.trim() == event.order_id.trim()
-        && existing_action == queue_action_as_str(event.action)
-        && existing_from_state == event.from_state.as_str()
-        && existing_to_state == event.to_state.as_str()
-        && existing_policy == event.policy.as_str()
-        && existing_actor_role.trim() == event.actor.role.trim()
-        && existing_actor_ref.trim() == event.actor.ref_.trim()
-        && existing_actor_display_name.trim() == event.actor.display_name.trim()
-        && existing_assigned_apparatus == &assigned_apparatus
-        && existing_payload == &event.payload_json)
+    Ok(existing.apparatus == Some(apparatus_id.as_str())
+        && existing.order_id.trim() == event.order_id.trim()
+        && existing.action == queue_action_as_str(event.action)
+        && existing.from_state == event.from_state.as_str()
+        && existing.to_state == event.to_state.as_str()
+        && existing.policy == event.policy.as_str()
+        && existing.actor_role.trim() == event.actor.role.trim()
+        && existing.actor_ref.trim() == event.actor.ref_.trim()
+        && existing.actor_display_name.trim() == event.actor.display_name.trim()
+        && existing.assigned_apparatus == &assigned_apparatus
+        && existing.payload == &event.payload_json)
 }
 
 pub(super) fn queue_action_from_str(
@@ -331,7 +338,7 @@ pub(super) fn queue_action_as_str(
 
 #[cfg(test)]
 mod tests {
-    use super::queue_event_identity_matches;
+    use super::{StoredQueueEventIdentity, queue_event_identity_matches};
     use crate::core::apparatus_standard::ApparatusId;
     use crate::core::production_map::{
         ApparatusQueueActionEvent, ApparatusQueuePolicy, QueueActionActor,
@@ -360,42 +367,31 @@ mod tests {
         };
         let apparatus_id = ApparatusId::new("apparatus:test:a".to_string()).unwrap();
         let assigned = vec!["apparatus:test:a".to_string()];
-        let matching = queue_event_identity_matches(
-            Some("apparatus:test:a"),
-            "zakaz-1",
-            "start",
-            "pending",
-            "in_progress",
-            "free_pick",
-            "operator",
-            "worker-1",
-            "Worker",
-            &serde_json::json!(["apparatus:test:a"]),
-            &event.payload_json,
-            &apparatus_id,
-            &event,
-            &assigned,
-        )
-        .unwrap();
+        let existing_assigned = serde_json::json!(["apparatus:test:a"]);
+        let existing = StoredQueueEventIdentity {
+            apparatus: Some("apparatus:test:a"),
+            order_id: "zakaz-1",
+            action: "start",
+            from_state: "pending",
+            to_state: "in_progress",
+            policy: "free_pick",
+            actor_role: "operator",
+            actor_ref: "worker-1",
+            actor_display_name: "Worker",
+            assigned_apparatus: &existing_assigned,
+            payload: &event.payload_json,
+        };
+        let matching =
+            queue_event_identity_matches(&existing, &apparatus_id, &event, &assigned).unwrap();
         assert!(matching);
 
-        let changed = queue_event_identity_matches(
-            Some("apparatus:test:a"),
-            "zakaz-1",
-            "start",
-            "pending",
-            "in_progress",
-            "free_pick",
-            "operator",
-            "worker-1",
-            "Worker",
-            &serde_json::json!(["apparatus:test:a"]),
-            &serde_json::json!({"request": "two"}),
-            &apparatus_id,
-            &event,
-            &assigned,
-        )
-        .unwrap();
+        let changed_payload = serde_json::json!({"request": "two"});
+        let changed = StoredQueueEventIdentity {
+            payload: &changed_payload,
+            ..existing
+        };
+        let changed =
+            queue_event_identity_matches(&changed, &apparatus_id, &event, &assigned).unwrap();
         assert!(!changed);
     }
 }

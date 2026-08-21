@@ -366,11 +366,6 @@ impl WarehouseListScope {
         self.warehouse_names
             .contains(&warehouse.trim().to_lowercase())
     }
-
-    fn contains_apparatus_id(&self, apparatus_id: &str) -> bool {
-        self.apparatus_ids
-            .contains(&apparatus_id.trim().to_lowercase())
-    }
 }
 
 fn scoped_warehouses(

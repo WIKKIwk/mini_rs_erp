@@ -135,6 +135,14 @@ fn push_execution(xml: &mut String, revision: &CanonicalApparatusRevision) {
             &stations.to_string(),
         );
     }
+    if let Some(max_web_width_mm) = profile.max_web_width_mm {
+        property(
+            xml,
+            "MaxWebWidthMm",
+            "xs:unsignedInt",
+            &max_web_width_mm.to_string(),
+        );
+    }
     property(
         xml,
         "VirtualTasks",

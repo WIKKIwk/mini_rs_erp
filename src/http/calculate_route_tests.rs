@@ -92,7 +92,7 @@ async fn calculate_endpoint_accepts_arbitrary_layer_count() {
                     {"material":"pe oq","micron":"30"},
                     {"material":"pe pr","micron":"40"},
                     {"material":"mcp","micron":"25"},
-                    {"material":"jem","micron":"20"},
+                    {"material":"jem","micron":"25"},
                     {"material":"opp","micron":"18"}
                 ]
             }"#,

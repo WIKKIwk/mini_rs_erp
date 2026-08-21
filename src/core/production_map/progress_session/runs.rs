@@ -53,6 +53,14 @@ pub(super) async fn active_order_run_session_for_qolip(
 }
 
 pub(super) fn session_qolip_codes(session: &OrderRunSession) -> Vec<String> {
+    if session
+        .payload_json
+        .get("qolip_lock_owner")
+        .and_then(serde_json::Value::as_bool)
+        != Some(true)
+    {
+        return Vec::new();
+    }
     QolipLineage::from_payload(&session.payload_json)
         .map(|lineage| lineage.qolip_codes)
         .unwrap_or_default()

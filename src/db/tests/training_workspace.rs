@@ -2,6 +2,7 @@ use std::str::FromStr;
 
 use sqlx::postgres::PgConnectOptions;
 
+use crate::core::apparatus_standard::test_support::TestApparatusSpec;
 use crate::core::production_map::{
     ProductionMapDefinition, ProductionMapEdge, ProductionMapNode, ProductionMapNodeKind,
 };
@@ -10,13 +11,14 @@ use crate::db::postgres_training_workspace::{
     PostgresTrainingWorkspaceStore, TrainingWorkspaceError,
 };
 
+use super::{seed_canonical_apparatus, seed_standard_canonical_apparatus};
+
 const TRAINING_PRIMARY_ID: &str = "apparatus:test:training-primary";
 const TRAINING_ALTERNATIVE_ID: &str = "apparatus:test:training-alternative";
 const MISSING_PRIMARY_ID: &str = "apparatus:test:missing-primary";
 const MISSING_ALTERNATIVE_ID: &str = "apparatus:test:missing-alternative";
 
 #[tokio::test]
-#[ignore = "requires local PostgreSQL and creates/drops mini_rs_erp_test_training_workspace"]
 async fn deleting_training_order_removes_only_its_queue_states() {
     let admin_url = std::env::var("MINI_ERP_TEST_ADMIN_DATABASE_URL")
         .unwrap_or_else(|_| "postgres://wikki@127.0.0.1:5432/postgres".to_string());
@@ -43,6 +45,7 @@ async fn deleting_training_order_removes_only_its_queue_states() {
     apply_foundation_migration(&pool)
         .await
         .expect("apply migration");
+    seed_standard_canonical_apparatus(&pool).await;
     sqlx::query(
         "INSERT INTO mini_training_production_maps (id, order_number, map_json)
          VALUES ($1, $2, $3)",
@@ -56,9 +59,9 @@ async fn deleting_training_order_removes_only_its_queue_states() {
     sqlx::query(
         "INSERT INTO mini_training_queue_states
             (apparatus, canonical_apparatus_id, order_id, state)
-         VALUES ('Flexo', 'apparatus:default:asset-005', 'training-1001', 'paused'),
-                ('Laminatsiya 1', 'apparatus:default:asset-007', 'training-1001', 'pending'),
-                ('Flexo', 'apparatus:default:asset-005', 'training-keep', 'pending')",
+         VALUES ('Flexo', 'apparatus:default:flexo_pechat', 'training-1001', 'paused'),
+                ('apparatus:default:asset-007', 'apparatus:default:asset-007', 'training-1001', 'pending'),
+                ('Flexo', 'apparatus:default:flexo_pechat', 'training-keep', 'pending')",
     )
     .execute(&pool)
     .await
@@ -68,8 +71,8 @@ async fn deleting_training_order_removes_only_its_queue_states() {
             (event_id, apparatus, canonical_apparatus_id, order_id, action, from_state, to_state,
              actor_ref, actor_display_name)
          VALUES
-            ('training-event-delete', 'Flexo', 'apparatus:default:asset-005', 'training-1001', 'complete', 'pending', 'completed', 'worker-1', 'Worker 1'),
-            ('training-event-keep', 'Flexo', 'apparatus:default:asset-005', 'training-keep', 'start', 'pending', 'in_progress', 'worker-2', 'Worker 2')",
+            ('training-event-delete', 'Flexo', 'apparatus:default:flexo_pechat', 'training-1001', 'complete', 'pending', 'completed', 'worker-1', 'Worker 1'),
+            ('training-event-keep', 'Flexo', 'apparatus:default:flexo_pechat', 'training-keep', 'start', 'pending', 'in_progress', 'worker-2', 'Worker 2')",
     )
     .execute(&pool)
     .await
@@ -130,7 +133,6 @@ async fn deleting_training_order_removes_only_its_queue_states() {
 }
 
 #[tokio::test]
-#[ignore = "requires local PostgreSQL and creates/drops mini_rs_erp_test_training_apparatus_refs"]
 async fn training_map_save_requires_existing_primary_and_alternative_apparatus_ids() {
     let admin_url = std::env::var("MINI_ERP_TEST_ADMIN_DATABASE_URL")
         .unwrap_or_else(|_| "postgres://wikki@127.0.0.1:5432/postgres".to_string());
@@ -161,15 +163,7 @@ async fn training_map_save_requires_existing_primary_and_alternative_apparatus_i
         (TRAINING_PRIMARY_ID, "Training primary"),
         (TRAINING_ALTERNATIVE_ID, "Training alternative"),
     ] {
-        sqlx::query(
-            "INSERT INTO mini_apparatus (id, name, base_name, kind, payload_json)
-             VALUES ($1, $2, $2, 'test', '{}'::jsonb)",
-        )
-        .bind(id)
-        .bind(name)
-        .execute(&pool)
-        .await
-        .expect("insert canonical training apparatus");
+        seed_canonical_apparatus(&pool, TestApparatusSpec::laminate(id, name)).await;
     }
 
     let store = PostgresTrainingWorkspaceStore::new(pool.clone());

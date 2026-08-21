@@ -31,7 +31,7 @@ impl PostgresCanonicalApparatusRepository {
 
     fn fault_at(
         &self,
-        #[cfg_attr(not(test), allow(unused_variables))] point: CommitFaultPoint,
+        point: CommitFaultPoint,
     ) -> Result<(), crate::core::apparatus_standard::CanonicalApparatusError> {
         #[cfg(test)]
         if self.fault.lock().expect("fault lock").as_ref() == Some(&point) {
@@ -41,39 +41,42 @@ impl PostgresCanonicalApparatusRepository {
                 ),
             );
         }
+        #[cfg(not(test))]
+        let _ = point;
         Ok(())
     }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum CommitFaultPoint {
-    AfterHeadLock,
-    AfterExpectedRevision,
-    AfterCandidateValidation,
-    AfterArtifactGeneration,
-    AfterProjection,
-    AfterIdentityInsert,
-    AfterRevisionInsert,
-    AfterHeadCas,
-    AfterRuntimeProjection,
-    AfterDerivedProjections,
-    AfterOutbox,
+    HeadLock,
+    ExpectedRevision,
+    CandidateValidation,
+    ArtifactGeneration,
+    Projection,
+    IdentityInsert,
+    RevisionInsert,
+    HeadCas,
+    RuntimeProjection,
+    DerivedProjections,
+    Outbox,
 }
 
 impl CommitFaultPoint {
+    #[cfg(test)]
     fn name(self) -> &'static str {
         match self {
-            Self::AfterHeadLock => "after_head_lock",
-            Self::AfterExpectedRevision => "after_expected_revision",
-            Self::AfterCandidateValidation => "after_candidate_validation",
-            Self::AfterArtifactGeneration => "after_artifact_generation",
-            Self::AfterProjection => "after_projection",
-            Self::AfterIdentityInsert => "after_identity_insert",
-            Self::AfterRevisionInsert => "after_revision_insert",
-            Self::AfterHeadCas => "after_head_cas",
-            Self::AfterRuntimeProjection => "after_runtime_projection",
-            Self::AfterDerivedProjections => "after_derived_projections",
-            Self::AfterOutbox => "after_outbox",
+            Self::HeadLock => "after_head_lock",
+            Self::ExpectedRevision => "after_expected_revision",
+            Self::CandidateValidation => "after_candidate_validation",
+            Self::ArtifactGeneration => "after_artifact_generation",
+            Self::Projection => "after_projection",
+            Self::IdentityInsert => "after_identity_insert",
+            Self::RevisionInsert => "after_revision_insert",
+            Self::HeadCas => "after_head_cas",
+            Self::RuntimeProjection => "after_runtime_projection",
+            Self::DerivedProjections => "after_derived_projections",
+            Self::Outbox => "after_outbox",
         }
     }
 }

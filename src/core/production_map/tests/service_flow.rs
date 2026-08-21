@@ -2417,6 +2417,44 @@ async fn laminatsiya_complete_requires_previous_stage_qr() {
         )
         .await
         .expect("in-progress state");
+    let missing_session = service
+        .apply_apparatus_queue_action_with_progress(
+            second,
+            order_id,
+            queue_state::ApparatusQueueAction::Complete,
+            &[second.to_string()],
+            actor.clone(),
+            QueueProgressInput {
+                produced_qty: Some(10.0),
+                uom: "kg".to_string(),
+                lamination_print_leftover_rolls: Some(0.0),
+                lamination_film_leftover_rolls: Some(0.0),
+                total_waste: Some(0.0),
+                finished_goods_kg: Some(10.0),
+                finished_goods_meter: Some(100.0),
+                ..QueueProgressInput::default()
+            },
+        )
+        .await;
+    assert_eq!(
+        missing_session,
+        Err(ProductionMapError::QueueActionNotAllowed)
+    );
+    store
+        .put_order_run_session(OrderRunSession {
+            session_id: "session-laminatsiya-complete-without-input".to_string(),
+            apparatus: second.to_string(),
+            order_id: order_id.to_string(),
+            status: OrderRunStatus::Active,
+            worker_role: actor.role.clone(),
+            worker_ref: actor.ref_.clone(),
+            worker_display_name: actor.display_name.clone(),
+            started_at_unix: 100,
+            updated_at_unix: 100,
+            payload_json: serde_json::json!({}),
+        })
+        .await
+        .expect("active session without previous-stage input");
 
     let result = service
         .apply_apparatus_queue_action_with_progress(

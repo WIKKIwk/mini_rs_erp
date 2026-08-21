@@ -4,10 +4,12 @@ use crate::core::apparatus_standard::ApparatusId;
 
 use super::ProductionMapError;
 use super::materials::{
-    ApparatusMaterialRequirementGroup, ApparatusMaterialRule, ApparatusMaterialRuleUpsert,
-    RawMaterialAssignment,
+    ApparatusMaterialRequirementGroup, ApparatusMaterialRule, RawMaterialAssignment,
 };
+#[cfg(test)]
+use super::materials::ApparatusMaterialRuleUpsert;
 
+#[cfg(test)]
 pub(super) fn normalize_rule(
     input: ApparatusMaterialRuleUpsert,
 ) -> Result<ApparatusMaterialRule, ProductionMapError> {
@@ -150,6 +152,7 @@ fn item_groups_match(groups: &[String], item_group_path: &[String]) -> bool {
     })
 }
 
+#[cfg(test)]
 fn normalize_requirement_groups(
     groups: Vec<ApparatusMaterialRequirementGroup>,
 ) -> Vec<ApparatusMaterialRequirementGroup> {
@@ -169,6 +172,7 @@ fn normalize_requirement_groups(
         .collect()
 }
 
+#[cfg(test)]
 fn normalize_group_names(groups: Vec<String>) -> Vec<String> {
     let mut seen = BTreeSet::new();
     groups

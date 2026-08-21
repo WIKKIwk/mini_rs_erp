@@ -5,8 +5,7 @@ use crate::config::AppConfig;
 use crate::core::auth::models::{Principal, PrincipalRole};
 use crate::core::calculate_orders::{CalculateOrderError, CalculateOrderTemplate};
 use crate::core::production_map::{
-    ProductionMapDefinition, ProductionMapEdge, ProductionMapError, ProductionMapNode,
-    ProductionMapNodeKind,
+    ProductionMapDefinition, ProductionMapEdge, ProductionMapNode, ProductionMapNodeKind,
 };
 use crate::core::push::ports::PushServiceError;
 use crate::core::rps_batch::{RpsBatchServiceError, RpsBatchStartRequest};
@@ -68,7 +67,7 @@ async fn app_state_leaves_mini_engine_disabled_without_database_url() {
 }
 
 #[tokio::test]
-async fn app_state_does_not_fallback_production_maps_to_sqlite_without_database_url() {
+async fn explicit_test_app_state_uses_only_its_in_memory_runtime_fixture() {
     let _guard = MINI_ENGINE_ENV_LOCK.lock().await;
     unsafe {
         std::env::remove_var("MINI_ERP_DATABASE_URL");
@@ -77,7 +76,7 @@ async fn app_state_does_not_fallback_production_maps_to_sqlite_without_database_
     let state = super::AppState::new(test_app_config());
     let result = state.production_maps.maps().await;
 
-    assert_eq!(result, Err(ProductionMapError::StoreFailed));
+    assert_eq!(result, Ok(Vec::new()));
 }
 
 #[tokio::test]
@@ -135,7 +134,7 @@ async fn app_state_uses_postgres_calculate_orders_when_database_url_is_configure
 }
 
 #[tokio::test]
-async fn app_state_uses_postgres_production_maps_when_database_url_is_configured() {
+async fn database_url_does_not_replace_the_explicit_test_runtime_fixture() {
     let _guard = MINI_ENGINE_ENV_LOCK.lock().await;
     unsafe {
         std::env::set_var(
@@ -151,7 +150,7 @@ async fn app_state_uses_postgres_production_maps_when_database_url_is_configured
         .upsert_map(test_production_map("zakaz-404", "404"))
         .await;
 
-    assert_eq!(result, Err(ProductionMapError::StoreFailed));
+    assert!(result.is_ok());
 
     unsafe {
         std::env::remove_var("MINI_ERP_DATABASE_URL");
@@ -334,7 +333,7 @@ fn test_production_map(id: &str, order_number: &str) -> ProductionMapDefinition 
             test_node(
                 "apparatus-1",
                 ProductionMapNodeKind::Apparatus,
-                "7 ta rangli pechat - A",
+                "apparatus:default:bosma_7",
                 0.0,
                 240.0,
             ),

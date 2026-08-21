@@ -16,9 +16,7 @@ pub(super) use ids::{
 };
 pub(crate) use ids::{progress_batch_id, progress_qr_payload};
 pub(crate) use labels::progress_label_item_name;
-pub(super) use labels::{
-    actor_display_name, legacy_order_run_session, non_empty_or, valid_progress_qty,
-};
+pub(super) use labels::{actor_display_name, non_empty_or, valid_progress_qty};
 #[cfg(test)]
 pub(super) use notifications::{
     completion_request_decision_notification_from_event,

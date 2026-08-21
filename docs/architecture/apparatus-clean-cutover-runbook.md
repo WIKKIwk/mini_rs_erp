@@ -22,7 +22,15 @@ old binary identifier, and new binary identifier in the change ticket.
 
 ## 1. Install canonical authority schema
 
-Run the standard migration command only through migration 0069. Confirm that
+Run the migration binary with the explicit operator gate; do not start the
+application binary yet:
+
+```sh
+mini_rs_migrate --through 0069
+```
+
+The command uses the normal advisory lock, checksum validation and one
+transaction, but cannot advance into the clean-cutover migration. Confirm that
 `mini_schema_migrations` ends at
 `0069_canonical_apparatus_revision_authority` and that migrations 0001-0068
 retain their recorded checksums and `applied_at` values.
@@ -86,6 +94,10 @@ an upgraded database unless the exact P11 manifest transaction has populated
 all canonical provenance. It then makes provenance mandatory, makes every
 retained projection fully read-only outside the canonical writer, and removes
 legacy groups and configuration columns.
+
+Apply migration `0071_qolip_lock_ownership`. It marks only canonical
+Qolip-tooling apparatus sessions as physical lock owners; downstream progress
+sessions retain Qolip lineage without becoming a second lock authority.
 
 Restart migration once and prove `(version, checksum, applied_at)` history is
 unchanged. Start the new binary only after its startup canonical repository

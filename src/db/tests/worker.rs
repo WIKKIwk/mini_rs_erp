@@ -5,7 +5,6 @@ use crate::db::postgres::apply_foundation_migration;
 use crate::db::postgres_worker::PostgresWorkerStore;
 
 #[tokio::test]
-#[ignore = "requires local PostgreSQL and creates/drops mini_rs_erp_test_worker_pagination"]
 async fn postgres_worker_pagination_is_stable_for_duplicate_names() {
     let admin_url = std::env::var("MINI_ERP_TEST_ADMIN_DATABASE_URL")
         .unwrap_or_else(|_| "postgres://wikki@127.0.0.1:5432/postgres".to_string());

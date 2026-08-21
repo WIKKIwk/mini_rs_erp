@@ -249,11 +249,7 @@ async fn worker_deletion_check(
         .collect::<Vec<_>>();
     let mut apparatuses = assigned_groups
         .iter()
-        .map(|group| group.apparatus.trim())
-        .filter(|apparatus| {
-            !apparatus.is_empty() && !apparatus.eq_ignore_ascii_case("worker-settings")
-        })
-        .map(ToString::to_string)
+        .map(|group| group.apparatus_id.to_string())
         .collect::<BTreeSet<_>>();
 
     let assignments = state

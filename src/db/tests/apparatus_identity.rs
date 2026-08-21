@@ -15,6 +15,6 @@ fn canonical_projection_tables_are_guarded_by_the_single_writer_transaction() {
             "0069 must govern the {table} projection"
         );
     }
-    assert!(migration.contains("mini_canonical_apparatus_writer_enabled"));
-    assert!(migration.contains("canonical apparatus projections are read-only"));
+    assert!(migration.contains("mini_rs_erp.canonical_writer"));
+    assert!(migration.contains("canonical apparatus projections are derived and read-only"));
 }

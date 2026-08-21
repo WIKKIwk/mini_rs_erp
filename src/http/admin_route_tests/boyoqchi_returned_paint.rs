@@ -70,7 +70,7 @@ async fn aparatchi_sends_returned_paint_and_only_boyoqchi_can_read_it() {
                 "order_id":"order-1",
                 "order_code":"1212",
                 "order_name":"Estello",
-                "apparatus":"7 ta rangli bosma",
+                "apparatus":"apparatus:default:bosma_7",
                 "items":[
                     {"usage":"rasxot","category":"colors","name":"Oq","values":{"Mix":10,"Oq":2,"Spirt":1}},
                     {"usage":"rasxot","category":"colors","name":"Qora","values":{"Mix":2.5,"Qora":0.5}},
@@ -141,7 +141,7 @@ async fn image_only_report_waits_for_boyoqchi_and_completes_same_record_once() {
         .oneshot(
             Request::builder()
                 .method("POST")
-                .uri("/v1/mobile/returned-paint/images?order_id=order-image&apparatus=7%20ta%20rangli%20bosma")
+                .uri("/v1/mobile/returned-paint/images?order_id=order-image&apparatus=apparatus%3Adefault%3Abosma_7")
                 .header(header::AUTHORIZATION, format!("Bearer {aparatchi_token}"))
                 .header(header::CONTENT_TYPE, "image/jpeg")
                 .header("x-file-name", "qoldiq.jpg")
@@ -169,7 +169,7 @@ async fn image_only_report_waits_for_boyoqchi_and_completes_same_record_once() {
                     "order_id":"another-order",
                     "order_code":"8964",
                     "order_name":"Boshqa order",
-                    "apparatus":"7 ta rangli bosma",
+                    "apparatus":"apparatus:default:bosma_7",
                     "image_id":"{image_id}",
                     "items":[]
                 }}"#
@@ -190,7 +190,7 @@ async fn image_only_report_waits_for_boyoqchi_and_completes_same_record_once() {
                     "order_id":"order-image",
                     "order_code":"8963",
                     "order_name":"Rasmli order",
-                    "apparatus":"7 ta rangli bosma",
+                    "apparatus":"apparatus:default:bosma_7",
                     "image_id":"{image_id}",
                     "items":[
                         {{"usage":"rasxot","category":"colors","name":"Oq","values":{{"Mix":10,"Oq":2}}}}
@@ -213,7 +213,7 @@ async fn image_only_report_waits_for_boyoqchi_and_completes_same_record_once() {
                     "order_id":"order-image",
                     "order_code":"8963",
                     "order_name":"Rasmli order",
-                    "apparatus":"7 ta rangli bosma",
+                    "apparatus":"apparatus:default:bosma_7",
                     "image_id":"{image_id}",
                     "items":[]
                 }}"#

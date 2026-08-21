@@ -15,9 +15,9 @@ async fn progress_qr_report_marks_processed_qr_as_stale_and_returns_order_flow()
             principal_ref: "worker-qr-report".to_string(),
             role_id: "aparatchi".to_string(),
             assigned_apparatus: vec![
-                "apparatus:test:pechat-sexi".to_string(),
-                "apparatus:test:qadoqlash-stol".to_string(),
-                "apparatus:test:yordamchi-aparat".to_string(),
+                "apparatus:default:asset-007".to_string(),
+                "apparatus:default:paket".to_string(),
+                "apparatus:default:asset-010".to_string(),
             ],
             assigned_item_groups: Vec::new(),
         })
@@ -37,8 +37,8 @@ async fn progress_qr_report_marks_processed_qr_as_stale_and_returns_order_flow()
                 "zakaz-qr-report",
                 "QR report order",
                 "9501",
-                "apparatus:test:pechat-sexi",
-                "apparatus:test:qadoqlash-stol",
+                "apparatus:default:asset-007",
+                "apparatus:default:paket",
             ),
         ))
         .await
@@ -52,7 +52,7 @@ async fn progress_qr_report_marks_processed_qr_as_stale_and_returns_order_flow()
             "/v1/mobile/admin/production-maps/queue-action",
             &worker_token,
             r#"{
-                "apparatus":"apparatus:test:pechat-sexi",
+                "apparatus":"apparatus:default:asset-007",
                 "order_id":"zakaz-qr-report",
                 "action":"start"
             }"#,
@@ -61,27 +61,29 @@ async fn progress_qr_report_marks_processed_qr_as_stale_and_returns_order_flow()
         .expect("start first");
     assert_eq!(started.status(), StatusCode::OK);
 
-    let paused = router
+    let first_completed = router
         .clone()
         .oneshot(request_with_body(
             "POST",
             "/v1/mobile/admin/production-maps/queue-action",
             &worker_token,
             r#"{
-                "apparatus":"apparatus:test:pechat-sexi",
+                "apparatus":"apparatus:default:asset-007",
                 "order_id":"zakaz-qr-report",
-                "action":"pause",
-                "produced_qty":100,
-                "uom":"kg",
+                "action":"complete",
+                "lamination_film_leftover_rolls":1,
+                "total_waste":1,
+                "finished_goods_kg":100,
+                "finished_goods_meter":1000,
                 "printer":"zebra",
                 "print_mode":"rfid"
             }"#,
         ))
         .await
-        .expect("pause first");
-    assert_eq!(paused.status(), StatusCode::OK);
-    let paused_body = json_body(paused).await;
-    let old_qr_payload = paused_body["progress_batch"]["qr_payload"]
+        .expect("complete first");
+    assert_eq!(first_completed.status(), StatusCode::OK);
+    let first_completed_body = json_body(first_completed).await;
+    let old_qr_payload = first_completed_body["progress_batch"]["qr_payload"]
         .as_str()
         .expect("old qr payload")
         .to_string();
@@ -94,7 +96,7 @@ async fn progress_qr_report_marks_processed_qr_as_stale_and_returns_order_flow()
             &worker_token,
             &format!(
                 r#"{{
-                    "apparatus":"apparatus:test:qadoqlash-stol",
+                    "apparatus":"apparatus:default:paket",
                     "order_id":"zakaz-qr-report",
                     "action":"start",
                     "qr_payload":"{old_qr_payload}"
@@ -112,7 +114,7 @@ async fn progress_qr_report_marks_processed_qr_as_stale_and_returns_order_flow()
             "/v1/mobile/admin/production-maps/queue-action",
             &worker_token,
             r#"{
-                "apparatus":"apparatus:test:qadoqlash-stol",
+                "apparatus":"apparatus:default:paket",
                 "order_id":"zakaz-qr-report",
                 "action":"complete",
                 "produced_qty":96,
@@ -141,8 +143,8 @@ async fn progress_qr_report_marks_processed_qr_as_stale_and_returns_order_flow()
                 "zakaz-qr-unrelated",
                 "Unrelated QR report order",
                 "9502",
-                "apparatus:test:yordamchi-aparat",
-                "apparatus:test:qadoqlash-stol",
+                "apparatus:default:asset-010",
+                "apparatus:default:paket",
             ),
         ))
         .await
@@ -155,7 +157,7 @@ async fn progress_qr_report_marks_processed_qr_as_stale_and_returns_order_flow()
             "/v1/mobile/admin/production-maps/queue-action",
             &worker_token,
             r#"{
-                "apparatus":"apparatus:test:yordamchi-aparat",
+                "apparatus":"apparatus:default:asset-010",
                 "order_id":"zakaz-qr-unrelated",
                 "action":"start"
             }"#,
@@ -210,8 +212,8 @@ async fn progress_qr_report_marks_processed_qr_as_stale_and_returns_order_flow()
         latest_qr_payload
     );
     assert_eq!(
-        report_body["current_batch"]["status_detail"]["work_status"],
-        "completed"
+        report_body["current_batch"]["status_detail"]["work_status"], "completed",
+        "{report_body:?}"
     );
     assert_eq!(
         report_body["current_batch"]["status_detail"]["flow_status"],
@@ -230,11 +232,11 @@ async fn progress_qr_report_marks_processed_qr_as_stale_and_returns_order_flow()
     assert_eq!(report_body["order"]["id"], "zakaz-qr-report");
     assert_eq!(report_body["order"]["title"], "QR report order");
     assert_eq!(
-        report_body["queue_states"]["apparatus:test:qadoqlash-stol"]["zakaz-qr-report"],
+        report_body["queue_states"]["apparatus:default:paket"]["zakaz-qr-report"],
         "completed"
     );
     assert!(
-        report_body["queue_states"]["apparatus:test:yordamchi-aparat"]
+        report_body["queue_states"]["apparatus:default:asset-010"]
             .get("zakaz-qr-unrelated")
             .is_none()
     );

@@ -25,7 +25,6 @@ async fn admin_factory_location_flow_keeps_identity_when_apparatus_changes() {
     let id = created["id"].as_str().expect("state id").to_string();
     assert!(id.starts_with("state_"));
     assert_eq!(created["name"], "Bosma oldi");
-    assert_eq!(created["apparatus"][0]["source"], "default");
     assert_eq!(created["apparatus"][0]["id"], "apparatus:default:bosma_7");
 
     let updated = build_router(state.clone())

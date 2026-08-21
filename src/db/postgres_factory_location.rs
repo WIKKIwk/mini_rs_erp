@@ -193,10 +193,9 @@ async fn load_locations(
 
     let mut apparatus_by_location = BTreeMap::<String, Vec<FactoryLocationApparatus>>::new();
     for row in link_rows {
-        let runtime = serde_json::from_value::<RuntimeApparatusProjection>(
-            row.get("runtime_payload"),
-        )
-            .map_err(|_| FactoryLocationError::InvalidApparatus)?;
+        let runtime =
+            serde_json::from_value::<RuntimeApparatusProjection>(row.get("runtime_payload"))
+                .map_err(|_| FactoryLocationError::InvalidApparatus)?;
         apparatus_by_location
             .entry(row.get("location_id"))
             .or_default()

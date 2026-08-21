@@ -179,7 +179,7 @@ fn linear_work_stages_follows_production_chain() {
 #[test]
 fn qolip_bearing_canonical_chain_preserves_identity_through_laminatsiya_task() {
     const PECHAT_ID: &str = "apparatus:default:bosma_7";
-    const LAMINATSIYA_TASK_ID: &str = "task:laminatsiya";
+    const LAMINATSIYA_TASK_ID: &str = "task:lamin";
     const REZKA_ID: &str = "apparatus:default:asset-010";
 
     let mut map = hotlunch_map();

@@ -14,7 +14,6 @@ use mini_rs_erp::db::postgres_chat_media::PostgresChatMediaRepository;
 use mini_rs_erp::store::chat_media_local::LocalChatMediaStorage;
 
 #[tokio::test]
-#[ignore = "requires local PostgreSQL and creates/drops a mini_rs_erp_test_* database"]
 async fn chat_delivery_is_idempotent_resumable_and_cross_process() {
     let admin_url = std::env::var("MINI_ERP_TEST_ADMIN_DATABASE_URL")
         .unwrap_or_else(|_| "postgres://wikki@127.0.0.1:5432/postgres".to_string());
@@ -157,7 +156,7 @@ async fn chat_delivery_is_idempotent_resumable_and_cross_process() {
         .await
         .expect("claim push deliveries");
     assert_eq!(deliveries.len(), 1);
-    assert_eq!(deliveries[0].recipient_key, "customer:peer");
+    assert_eq!(deliveries[0].recipient_key, "admin:peer");
     first_store
         .mark_push_delivered(&deliveries[0].event_id, &deliveries[0].recipient_key)
         .await
@@ -406,7 +405,7 @@ async fn chat_delivery_is_idempotent_resumable_and_cross_process() {
 
 fn principal(reference: &str) -> Principal {
     Principal {
-        role: PrincipalRole::Customer,
+        role: PrincipalRole::Admin,
         display_name: reference.to_string(),
         legal_name: reference.to_string(),
         ref_: reference.to_string(),
@@ -417,7 +416,7 @@ fn principal(reference: &str) -> Principal {
 
 fn principal_input(reference: &str) -> ChatPrincipalInput {
     ChatPrincipalInput {
-        role: PrincipalRole::Customer,
+        role: PrincipalRole::Admin,
         ref_: reference.to_string(),
         display_name: reference.to_string(),
         avatar_url: String::new(),

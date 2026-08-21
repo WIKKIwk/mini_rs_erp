@@ -1,0 +1,379 @@
+impl ProductionMapService {
+
+    pub(in crate::core::production_map) async fn queue_action_controls_for_snapshot(
+        &self,
+        maps: &[ProductionMapDefinition],
+        sequences: &BTreeMap<String, Vec<String>>,
+        all_states: &ApparatusQueueStateMap,
+        order_controls: &OrderControlMap,
+    ) -> Result<
+        BTreeMap<String, BTreeMap<String, ApparatusQueueOrderActionControl>>,
+        ProductionMapError,
+    > {
+        let material_assignments = self.store.raw_material_assignments().await?;
+        let order_ids = maps
+            .iter()
+            .map(|map| map.id.trim())
+            .filter(|order_id| !order_id.is_empty())
+            .map(str::to_string)
+            .collect::<Vec<_>>();
+        let progress_batches_by_order = self.store.progress_batches_for_orders(&order_ids).await?;
+        let visible_by_apparatus = visible_order_ids_by_apparatus(maps);
+        let frozen_order_ids = order_controls
+            .iter()
+            .filter_map(|(order_id, control)| {
+                (control.state == OrderControlState::Frozen).then_some(order_id.clone())
+            })
+            .collect::<BTreeSet<_>>();
+        let canonical_apparatuses = self.active_canonical_apparatuses().await?;
+        let known_keys = sequences
+            .keys()
+            .map(String::as_str)
+            .chain(all_states.keys().map(String::as_str))
+            .chain(
+                canonical_apparatuses
+                    .iter()
+                    .map(|configuration| configuration.runtime.apparatus_id.as_str()),
+            )
+            .chain(visible_by_apparatus.keys().map(String::as_str))
+            .filter(|key| !queue_state::apparatus_search_key(key).is_empty())
+            .collect::<BTreeSet<_>>()
+            .into_iter()
+            .map(str::to_string)
+            .collect::<Vec<_>>();
+        let apparatuses = known_keys.iter().cloned().collect::<BTreeSet<_>>();
+        let mut result = BTreeMap::new();
+
+        for apparatus in apparatuses {
+            let storage_key = queue_state::resolve_apparatus_storage_key(&apparatus, &known_keys);
+            let canonical = self.resolve_canonical_apparatus_text(&storage_key).await?;
+            let stored_sequence = sequences
+                .get(&storage_key)
+                .or_else(|| sequences.get(&apparatus))
+                .cloned()
+                .unwrap_or_default();
+            let visible_order_ids = visible_order_ids_for_apparatus(maps, &storage_key);
+            let sequence = queue_state::effective_apparatus_sequence_excluding(
+                &stored_sequence,
+                &visible_order_ids,
+                &frozen_order_ids,
+            );
+            let stored_states = all_states
+                .get(&storage_key)
+                .or_else(|| all_states.get(&apparatus))
+                .cloned()
+                .unwrap_or_default();
+            let effective_states = parsed_queue_states(stored_states);
+            let policy = queue_policy_for_apparatus(canonical.as_ref());
+            let active_order_id = effective_states.iter().find_map(|(order_id, state)| {
+                (*state == queue_state::ApparatusQueueOrderState::InProgress)
+                    .then_some(order_id.as_str())
+            });
+            let actionable_order_id =
+                queue_state::first_actionable_order_id(&sequence, &effective_states);
+            let mut apparatus_controls = BTreeMap::new();
+
+            for order_id in sequence {
+                let Some(order_map) = maps.iter().find(|map| map.id.trim() == order_id.trim())
+                else {
+                    continue;
+                };
+                let state = effective_states
+                    .get(order_id.trim())
+                    .copied()
+                    .unwrap_or(queue_state::ApparatusQueueOrderState::Pending);
+                let order_control = order_controls.get(order_id.trim());
+                let control = order_control
+                    .map(|control| control.state)
+                    .unwrap_or(OrderControlState::Active);
+                let previous_stage = chain::previous_work_stage_station(order_map, &apparatus);
+                let previous_stage_ready = chain::order_ready_for_station(
+                    order_map,
+                    order_id.trim(),
+                    &apparatus,
+                    all_states,
+                    &known_keys,
+                );
+                let previous_wip_mode = previous_stage
+                    .as_deref()
+                    .map(|previous_stage| {
+                        let batches = progress_batches_by_order
+                            .get(order_id.trim())
+                            .map(Vec::as_slice)
+                            .unwrap_or_default();
+                        if has_waiting_previous_stage_wip(
+                            batches,
+                            order_id.trim(),
+                            previous_stage,
+                            &storage_key,
+                        ) {
+                            ApparatusQueuePreviousWipMode::ScanRequired
+                        } else {
+                            ApparatusQueuePreviousWipMode::Waiting
+                        }
+                    })
+                    .unwrap_or(ApparatusQueuePreviousWipMode::NotRequired);
+                let active_order_is_this = active_order_id
+                    .is_none_or(|active_order_id| active_order_id == order_id.trim());
+                let active_session = self
+                    .store
+                    .active_order_run_session(&storage_key, order_id.trim())
+                    .await?;
+                let requeued_session = active_session
+                    .as_ref()
+                    .is_some_and(order_run_session_was_requeued);
+                let queue_actionable = state.is_active()
+                    || actionable_order_id.as_deref() == Some(order_id.trim())
+                    || (state == queue_state::ApparatusQueueOrderState::Pending
+                        && previous_stage.is_some()
+                        && (previous_stage_ready
+                            || (apparatus::is_laminatsiya_apparatus(&canonical)
+                                && previous_wip_mode
+                                    == ApparatusQueuePreviousWipMode::ScanRequired))
+                        && active_order_is_this);
+                let mut allowed_actions = Vec::new();
+                let mut complete_requires_full_report = false;
+                let mut interaction = ApparatusQueueWorkerInteraction {
+                    assigned_materials_display_only: !matches!(
+                        state,
+                        queue_state::ApparatusQueueOrderState::InProgress
+                            | queue_state::ApparatusQueueOrderState::Paused
+                    ),
+                    ..ApparatusQueueWorkerInteraction::default()
+                };
+                let pending_actionable = queue_actionable
+                    && control == OrderControlState::Active
+                    && (policy == ApparatusQueuePolicy::FreePick || active_order_is_this);
+
+                match state {
+                    queue_state::ApparatusQueueOrderState::Pending if requeued_session => {
+                        if pending_actionable {
+                            interaction.mode = ApparatusQueueInteractionMode::RequeuedReady;
+                            allowed_actions.push(queue_state::ApparatusQueueAction::Resume);
+                        } else {
+                            interaction.mode = ApparatusQueueInteractionMode::RequeuedWaiting;
+                            interaction.blocking_reason_code = "waiting_sequence".to_string();
+                        }
+                    }
+                    queue_state::ApparatusQueueOrderState::Pending => {
+                        let assignments = material_assignments
+                            .iter()
+                            .filter(|assignment| {
+                                assignment.order_id.trim() == order_id.trim()
+                                    && assignment.apparatus_id == canonical.runtime.apparatus_id
+                            })
+                            .cloned()
+                            .collect::<Vec<_>>();
+                        let rule = live_material_rule(canonical.as_ref());
+                        let material_requirements = build_raw_material_start_requirements(
+                            rule.as_ref(),
+                            &assignments,
+                            &[],
+                            "",
+                        );
+                        let material_scan_required = material_requirements.requires_material
+                            || !material_requirements.assigned_barcodes.is_empty();
+                        let start_materials_mode =
+                            if apparatus::is_laminatsiya_apparatus(&canonical)
+                                && previous_wip_mode == ApparatusQueuePreviousWipMode::ScanRequired
+                            {
+                                ApparatusQueueStartMaterialsMode::Hidden
+                            } else if material_scan_required {
+                                ApparatusQueueStartMaterialsMode::ScanRequired
+                            } else {
+                                ApparatusQueueStartMaterialsMode::Hidden
+                            };
+
+                        if previous_wip_mode == ApparatusQueuePreviousWipMode::Waiting {
+                            interaction.mode = ApparatusQueueInteractionMode::WaitingPreviousStage;
+                            interaction.previous_wip_mode = previous_wip_mode;
+                            interaction.blocking_reason_code = "waiting_previous_stage".to_string();
+                        } else if !pending_actionable {
+                            interaction.mode = ApparatusQueueInteractionMode::FreshStartBlocked;
+                            interaction.blocking_reason_code = "waiting_sequence".to_string();
+                        } else {
+                            interaction.start_materials_mode = start_materials_mode;
+                            interaction.material_scan_required = start_materials_mode
+                                == ApparatusQueueStartMaterialsMode::ScanRequired;
+                            interaction.assigned_materials_display_only = false;
+                            interaction.previous_wip_mode = previous_wip_mode;
+                            interaction.qolip_mode = if apparatus::requires_qolip_scan(&canonical) {
+                                ApparatusQueueQolipMode::ScanRequired
+                            } else {
+                                ApparatusQueueQolipMode::NotRequired
+                            };
+                            if material_requirements.assignments_satisfied {
+                                interaction.mode = ApparatusQueueInteractionMode::FreshStart;
+                                allowed_actions.push(queue_state::ApparatusQueueAction::Start);
+                            } else {
+                                interaction.mode = ApparatusQueueInteractionMode::FreshStartBlocked;
+                                interaction.blocking_reason_code =
+                                    "raw_material_assignment_required".to_string();
+                            }
+                        }
+                    }
+                    queue_state::ApparatusQueueOrderState::InProgress => {
+                        interaction.mode = if control == OrderControlState::FreezeRequested {
+                            ApparatusQueueInteractionMode::FreezeRequested
+                        } else {
+                            ApparatusQueueInteractionMode::InProgress
+                        };
+                        interaction.material_intake_allowed = control == OrderControlState::Active;
+                        interaction.assigned_materials_display_only =
+                            control != OrderControlState::Active;
+                        if matches!(
+                            control,
+                            OrderControlState::Active | OrderControlState::FreezeRequested
+                        ) {
+                            allowed_actions.push(queue_state::ApparatusQueueAction::Pause);
+                        }
+                        if control == OrderControlState::FreezeRequested {
+                            interaction.blocking_reason_code = "order_freeze_requested".to_string();
+                        }
+                        if control == OrderControlState::Active {
+                            // A worker may finish with an issue note, which is
+                            // persisted as the explicit frozen transition.
+                            allowed_actions.push(queue_state::ApparatusQueueAction::Freeze);
+                            let current_input_batch_id = self
+                                .completion_input_batch_id(
+                                    &storage_key,
+                                    order_id.trim(),
+                                    &QueueProgressInput::default(),
+                                )
+                                .await?;
+                            let has_unprocessed_previous_wips = self
+                                .has_unprocessed_previous_wips(
+                                    order_id.trim(),
+                                    order_map,
+                                    &storage_key,
+                                    canonical.as_ref(),
+                                    all_states,
+                                    &[],
+                                    &current_input_batch_id,
+                                )
+                                .await?;
+                            if apparatus::is_rezka_apparatus(&canonical) {
+                                allowed_actions
+                                    .push(queue_state::ApparatusQueueAction::RollComplete);
+                            }
+                            allowed_actions.push(queue_state::ApparatusQueueAction::Complete);
+                            complete_requires_full_report =
+                                !(apparatus::is_laminatsiya_apparatus(&canonical)
+                                    || apparatus::is_rezka_apparatus(&canonical))
+                                    || !has_unprocessed_previous_wips;
+                        }
+                    }
+                    queue_state::ApparatusQueueOrderState::Paused => {
+                        interaction.mode = if control == OrderControlState::FreezeRequested {
+                            ApparatusQueueInteractionMode::FreezeRequested
+                        } else {
+                            ApparatusQueueInteractionMode::Paused
+                        };
+                        interaction.material_intake_allowed = control == OrderControlState::Active;
+                        interaction.assigned_materials_display_only =
+                            control != OrderControlState::Active;
+                        if queue_actionable && control == OrderControlState::Active {
+                            allowed_actions.push(queue_state::ApparatusQueueAction::Resume);
+                        }
+                    }
+                    queue_state::ApparatusQueueOrderState::Frozen => {
+                        interaction.mode = ApparatusQueueInteractionMode::Frozen;
+                        interaction.blocking_reason_code = "order_frozen".to_string();
+                    }
+                    queue_state::ApparatusQueueOrderState::Completed => {
+                        interaction.mode = ApparatusQueueInteractionMode::Completed;
+                    }
+                }
+
+                apparatus_controls.insert(
+                    order_id.trim().to_string(),
+                    ApparatusQueueOrderActionControl {
+                        state,
+                        allowed_actions,
+                        interaction,
+                        previous_stage: previous_stage.unwrap_or_default(),
+                        previous_stage_ready,
+                        complete_requires_full_report,
+                        freeze_request: order_control
+                            .and_then(|control| control.freeze_request.clone()),
+                    },
+                );
+            }
+            if !apparatus_controls.is_empty() {
+                result.insert(storage_key, apparatus_controls);
+            }
+        }
+        Ok(result)
+    }
+
+    pub async fn apply_apparatus_queue_action(
+        &self,
+        apparatus: &str,
+        order_id: &str,
+        action: queue_state::ApparatusQueueAction,
+        assigned_apparatus: &[String],
+        actor: QueueActionActor,
+    ) -> Result<BTreeMap<String, String>, ProductionMapError> {
+        Ok(self
+            .apply_apparatus_queue_action_with_progress(
+                apparatus,
+                order_id,
+                action,
+                assigned_apparatus,
+                actor,
+                QueueProgressInput::default(),
+            )
+            .await?
+            .states)
+    }
+
+    pub async fn apply_apparatus_queue_action_with_progress(
+        &self,
+        apparatus: &str,
+        order_id: &str,
+        action: queue_state::ApparatusQueueAction,
+        assigned_apparatus: &[String],
+        actor: QueueActionActor,
+        progress: QueueProgressInput,
+    ) -> Result<ApparatusQueueActionResult, ProductionMapError> {
+        let _guard = self.queue_action_guard().await;
+        self.enforce_qolip_start_boundary(apparatus, order_id, action, None)
+            .await?;
+        let prepared = self
+            .prepare_apparatus_queue_action_with_progress(
+                apparatus,
+                order_id,
+                action,
+                assigned_apparatus,
+                actor,
+                progress,
+            )
+            .await?;
+        self.commit_prepared_queue_action(prepared).await
+    }
+
+    /// Core queue callers must not be able to enter a Qolip-protected start
+    /// without the trusted handler validation bound to the same canonical
+    /// apparatus and order. Untrusted core callers therefore remain
+    /// fail-closed.
+    pub(crate) async fn enforce_qolip_start_boundary(
+        &self,
+        apparatus: &str,
+        order_id: &str,
+        action: queue_state::ApparatusQueueAction,
+        qolip_validation: Option<&TrustedQolipStartValidation>,
+    ) -> Result<(), ProductionMapError> {
+        if action != queue_state::ApparatusQueueAction::Start {
+            return Ok(());
+        }
+        let canonical = self.resolve_canonical_apparatus_text(apparatus).await?;
+        if apparatus::requires_qolip_scan(&canonical)
+            && !qolip_validation.is_some_and(|validation| {
+                validation.matches(&canonical.runtime.apparatus_id, order_id)
+            })
+        {
+            return Err(ProductionMapError::QolipCodeMismatch);
+        }
+        Ok(())
+    }
+}

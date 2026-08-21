@@ -49,7 +49,7 @@ impl CanonicalApparatusRepository for PostgresCanonicalApparatusRepository {
             .await
             .map_err(|_| CanonicalApparatusError::Persistence)?;
         let current = lock_current_revision(&mut tx, &apparatus_id).await?;
-        self.fault_at(CommitFaultPoint::AfterHeadLock)?;
+        self.fault_at(CommitFaultPoint::HeadLock)?;
         match (expected_revision, current.as_ref()) {
             (None, Some(_)) => return Err(CanonicalApparatusError::AlreadyExists),
             (Some(_), None) => return Err(CanonicalApparatusError::NotFound),
@@ -58,7 +58,7 @@ impl CanonicalApparatusRepository for PostgresCanonicalApparatusRepository {
             }
             _ => {}
         }
-        self.fault_at(CommitFaultPoint::AfterExpectedRevision)?;
+        self.fault_at(CommitFaultPoint::ExpectedRevision)?;
 
         let is_create = current.is_none();
         if is_create && identity_exists(&mut tx, &apparatus_id).await? {
@@ -70,7 +70,7 @@ impl CanonicalApparatusRepository for PostgresCanonicalApparatusRepository {
                 intent,
             )?;
         revision.validate()?;
-        self.fault_at(CommitFaultPoint::AfterCandidateValidation)?;
+        self.fault_at(CommitFaultPoint::CandidateValidation)?;
         let artifact = export_canonical_aasx(&revision)
             .map_err(|_| CanonicalApparatusError::ArtifactIntegrity)?;
         if parse_canonical_aasx(artifact.bytes())
@@ -79,14 +79,14 @@ impl CanonicalApparatusRepository for PostgresCanonicalApparatusRepository {
         {
             return Err(CanonicalApparatusError::ArtifactIntegrity);
         }
-        self.fault_at(CommitFaultPoint::AfterArtifactGeneration)?;
+        self.fault_at(CommitFaultPoint::ArtifactGeneration)?;
         let projection = project_apparatus_revision(&revision, artifact.sha256());
-        self.fault_at(CommitFaultPoint::AfterProjection)?;
+        self.fault_at(CommitFaultPoint::Projection)?;
 
         if is_create {
             insert_identity(&mut tx, &revision).await?;
         }
-        self.fault_at(CommitFaultPoint::AfterIdentityInsert)?;
+        self.fault_at(CommitFaultPoint::IdentityInsert)?;
         insert_revision(
             &mut tx,
             &revision,
@@ -94,7 +94,7 @@ impl CanonicalApparatusRepository for PostgresCanonicalApparatusRepository {
             artifact.sha256().to_hex(),
         )
         .await?;
-        self.fault_at(CommitFaultPoint::AfterRevisionInsert)?;
+        self.fault_at(CommitFaultPoint::RevisionInsert)?;
         cas_head(
             &mut tx,
             &revision,
@@ -102,13 +102,13 @@ impl CanonicalApparatusRepository for PostgresCanonicalApparatusRepository {
             artifact.sha256().to_hex(),
         )
         .await?;
-        self.fault_at(CommitFaultPoint::AfterHeadCas)?;
+        self.fault_at(CommitFaultPoint::HeadCas)?;
         projections::write_runtime_projection(&mut tx, &revision, &projection.runtime).await?;
-        self.fault_at(CommitFaultPoint::AfterRuntimeProjection)?;
+        self.fault_at(CommitFaultPoint::RuntimeProjection)?;
         projections::write_derived_projections(&mut tx, &revision, &projection).await?;
-        self.fault_at(CommitFaultPoint::AfterDerivedProjections)?;
+        self.fault_at(CommitFaultPoint::DerivedProjections)?;
         insert_outbox(&mut tx, &revision, event_type, &projection.runtime).await?;
-        self.fault_at(CommitFaultPoint::AfterOutbox)?;
+        self.fault_at(CommitFaultPoint::Outbox)?;
         tx.commit()
             .await
             .map_err(|_| CanonicalApparatusError::Persistence)?;

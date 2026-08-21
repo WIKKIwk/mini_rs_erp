@@ -51,6 +51,15 @@ impl CanonicalApparatusService {
     }
 
     #[cfg(test)]
+    pub(crate) fn memory_with_standard_test_apparatus() -> Self {
+        Self::new(Arc::new(
+            memory_repository::MemoryCanonicalApparatusRepository::with_revisions(
+                super::test_support::standard_revisions(),
+            ),
+        ))
+    }
+
+    #[cfg(test)]
     pub(crate) async fn seed_for_test(
         &self,
         apparatus_id: ApparatusId,

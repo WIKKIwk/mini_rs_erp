@@ -99,6 +99,8 @@ async fn worker_group_accepts_custom_codes_schedule_and_rejects_duplicate_worker
             apparatus_id: Some(apparatus_id(LAMINATSIYA_2_ID)),
             apparatus: "Laminatsiya 2".to_string(),
             group_code: "b guruh".to_string(),
+            previous_apparatus_id: Some(apparatus_id(LAMINATSIYA_1_ID)),
+            previous_group_code: Some("b guruh".to_string()),
             shift: "kechki".to_string(),
             worker_ids: vec!["w1".to_string()],
             ..WorkerGroupUpsert::default()

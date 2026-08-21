@@ -240,26 +240,26 @@ pub(super) async fn resolve_completion_request_decision(
             validate_queue_action_event_transition_tx(&mut tx, &resolution.event).await?;
         }
     }
-    if let Some(resolution) = state_resolution {
-        if !resolution_replayed {
-            put_queue_action_state_tx(&mut tx, &resolution.event).await?;
-            insert_queue_action_event_tx(&mut tx, &resolution.event).await?;
-            if let Some(session) = resolution.session {
-                put_order_run_session_tx(&mut tx, &session).await?;
-            }
-            raw_material_stock_warehouses =
-                super::raw_material_stock_helpers::apply_raw_material_stock_transitions_tx(
-                    &mut tx,
-                    &resolution.raw_material_stock_transitions,
-                    actor,
-                    &resolution.apparatus,
-                )
-                .await?;
-            if let Some(report) = resolution.returned_paint_report {
-                insert_returned_paint_request_tx(&mut tx, &report)
-                    .await
-                    .map_err(|_| ProductionMapError::StoreFailed)?;
-            }
+    if let Some(resolution) = state_resolution
+        && !resolution_replayed
+    {
+        put_queue_action_state_tx(&mut tx, &resolution.event).await?;
+        insert_queue_action_event_tx(&mut tx, &resolution.event).await?;
+        if let Some(session) = resolution.session {
+            put_order_run_session_tx(&mut tx, &session).await?;
+        }
+        raw_material_stock_warehouses =
+            super::raw_material_stock_helpers::apply_raw_material_stock_transitions_tx(
+                &mut tx,
+                &resolution.raw_material_stock_transitions,
+                actor,
+                &resolution.apparatus,
+            )
+            .await?;
+        if let Some(report) = resolution.returned_paint_report {
+            insert_returned_paint_request_tx(&mut tx, &report)
+                .await
+                .map_err(|_| ProductionMapError::StoreFailed)?;
         }
     }
     let result = sqlx::query(

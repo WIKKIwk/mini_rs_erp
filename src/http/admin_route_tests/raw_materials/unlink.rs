@@ -19,7 +19,7 @@ async fn raw_material_assignment_can_be_unlinked_before_start() {
                 "zakaz-raw-unlink",
                 "Raw unlink",
                 "8822",
-                "7 ta rangli pechat - A",
+                "apparatus:default:bosma_7",
             ),
         ))
         .await
@@ -31,7 +31,12 @@ async fn raw_material_assignment_can_be_unlinked_before_start() {
             "PUT",
             "/v1/mobile/admin/raw-material-rules",
             &token,
-            r#"{"apparatus":"7 ta rangli pechat - A","requires_material":true,"start_policy":"requirement_groups","item_groups":["Kraska"]}"#,
+            &canonical_requirement_set_material_policy_body(
+                "apparatus:default:bosma_7",
+                1,
+                &["Kraska"],
+                true,
+            ),
         ))
         .await
         .expect("rule save");
@@ -117,7 +122,7 @@ async fn raw_material_assignment_unlink_rejects_started_stock() {
             principal_role: PrincipalRole::Aparatchi,
             principal_ref: "worker-raw-unlink-locked".to_string(),
             role_id: "aparatchi".to_string(),
-            assigned_apparatus: vec!["7 ta rangli pechat - A".to_string()],
+            assigned_apparatus: vec!["apparatus:default:bosma_7".to_string()],
             assigned_item_groups: Vec::new(),
         })
         .await
@@ -137,7 +142,7 @@ async fn raw_material_assignment_unlink_rejects_started_stock() {
                 "zakaz-raw-unlink-locked",
                 "Raw unlink locked",
                 "8833",
-                "7 ta rangli pechat - A",
+                "apparatus:default:bosma_7",
             ),
         ))
         .await
@@ -151,7 +156,12 @@ async fn raw_material_assignment_unlink_rejects_started_stock() {
             "PUT",
             "/v1/mobile/admin/raw-material-rules",
             &token,
-            r#"{"apparatus":"7 ta rangli pechat - A","requires_material":true,"start_policy":"requirement_groups","item_groups":["Kraska"]}"#,
+            &canonical_requirement_set_material_policy_body(
+                "apparatus:default:bosma_7",
+                1,
+                &["Kraska"],
+                true,
+            ),
         ))
         .await
         .expect("rule save");
@@ -177,7 +187,7 @@ async fn raw_material_assignment_unlink_rejects_started_stock() {
             &worker_token,
             &with_test_qolip(
                 r#"{
-                "apparatus":"7 ta rangli pechat - A",
+                "apparatus":"apparatus:default:bosma_7",
                 "order_id":"zakaz-raw-unlink-locked",
                 "action":"start",
                 "material_barcodes":["30AA"]

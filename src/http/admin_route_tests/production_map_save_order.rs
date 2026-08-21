@@ -5,8 +5,12 @@ async fn production_map_save_with_order_saves_map_and_template() {
     let state = test_state();
     let token = session(&state, PrincipalRole::Admin).await;
 
-    let map_json =
-        pechat_order_map_json("zakaz-7777", "Atomic zakaz", "7777", "8 ta rangli pechat");
+    let map_json = pechat_order_map_json(
+        "zakaz-7777",
+        "Atomic zakaz",
+        "7777",
+        "apparatus:default:bosma_8",
+    );
     let body = format!(
         r#"{{
             "map":{map_json},
@@ -123,7 +127,7 @@ async fn production_map_save_with_order_accepts_mobile_decimal_roll_count() {
         "zakaz-decimal-roll-count",
         "Decimal roll count",
         "7701",
-        "8 ta rangli pechat",
+        "apparatus:default:bosma_8",
     ))
     .expect("map json");
     map["roll_count"] = serde_json::json!(7.0);
@@ -169,7 +173,7 @@ async fn production_map_save_allocates_order_number_for_direct_and_atomic_saves(
         "zakaz-draft-direct",
         "Direct auto zakaz",
         "",
-        "8 ta rangli pechat",
+        "apparatus:default:bosma_8",
     ))
     .expect("direct map json");
     let direct = build_router(state.clone())
@@ -191,7 +195,7 @@ async fn production_map_save_allocates_order_number_for_direct_and_atomic_saves(
         "zakaz-draft-with-order",
         "Atomic auto zakaz",
         "",
-        "8 ta rangli pechat",
+        "apparatus:default:bosma_8",
     ))
     .expect("with-order map json");
     let body = serde_json::json!({
@@ -234,7 +238,7 @@ async fn production_map_save_with_order_snapshots_rezka_frame_count_on_new_order
         "Rezka snapshot order",
         "REZKA-7799",
         "7799",
-        "Rezka",
+        "apparatus:default:asset-010",
         7,
         1250.0,
     ))
@@ -265,7 +269,7 @@ async fn production_map_save_with_order_snapshots_rezka_frame_count_on_new_order
         .as_array()
         .expect("nodes")
         .iter()
-        .find(|node| node["title"] == "Rezka")
+        .find(|node| node["apparatus_id"] == "apparatus:default:asset-010")
         .expect("rezka node");
     assert_eq!(rezka_node["rezka_kadr_count"], 7);
 
@@ -299,7 +303,7 @@ async fn production_map_save_with_order_snapshots_rezka_frame_count_on_new_order
         .as_array()
         .expect("nodes")
         .iter()
-        .find(|node| node["title"] == "Rezka")
+        .find(|node| node["apparatus_id"] == "apparatus:default:asset-010")
         .expect("rezka node");
     assert_eq!(edited_rezka_node["rezka_kadr_count"], 7);
 }
@@ -313,8 +317,12 @@ async fn production_map_save_with_order_records_mini_order_without_blocking_resp
     state.production_orders = sink.clone();
     let token = session(&state, PrincipalRole::Admin).await;
 
-    let map_json =
-        pechat_order_map_json("zakaz-7799", "Catalog zakaz", "7799", "8 ta rangli pechat");
+    let map_json = pechat_order_map_json(
+        "zakaz-7799",
+        "Catalog zakaz",
+        "7799",
+        "apparatus:default:bosma_8",
+    );
     let body = format!(
         r#"{{
             "map":{map_json},
@@ -362,7 +370,7 @@ async fn production_map_save_with_order_recalculates_map_fields_from_template() 
         "zakaz-7801",
         "Calculated zakaz",
         "7801",
-        "8 ta rangli pechat",
+        "apparatus:default:bosma_8",
     ))
     .expect("map json");
     map["width_mm"] = serde_json::json!(9999.0);
@@ -430,7 +438,12 @@ async fn production_map_save_with_order_does_not_store_cloned_order_as_quick_tem
     let state = test_state();
     let token = session(&state, PrincipalRole::Admin).await;
 
-    let map_json = pechat_order_map_json("zakaz-5555", "Dolce order", "5555", "8 ta rangli pechat");
+    let map_json = pechat_order_map_json(
+        "zakaz-5555",
+        "Dolce order",
+        "5555",
+        "apparatus:default:bosma_8",
+    );
     let body = format!(
         r#"{{
             "map":{map_json},
@@ -486,8 +499,12 @@ async fn production_map_save_with_order_rejects_duplicate_cloned_order_code() {
     let state = test_state();
     let token = session(&state, PrincipalRole::Admin).await;
 
-    let first_map_json =
-        pechat_order_map_json("zakaz-5555", "Dolce order", "5555", "8 ta rangli pechat");
+    let first_map_json = pechat_order_map_json(
+        "zakaz-5555",
+        "Dolce order",
+        "5555",
+        "apparatus:default:bosma_8",
+    );
     let first_body = format!(
         r#"{{
             "map":{first_map_json},
@@ -557,7 +574,7 @@ async fn production_map_sequence_round_trips_on_server() {
                     id,
                     id,
                     order_number,
-                    "8 ta rangli pechat",
+                    "apparatus:default:bosma_8",
                     8,
                     1250.0,
                 ),
@@ -574,7 +591,7 @@ async fn production_map_sequence_round_trips_on_server() {
             "/v1/mobile/admin/production-maps/sequence",
             &token,
             r#"{
-                "apparatus":"8 ta rangli pechat",
+                "apparatus":"apparatus:default:bosma_8",
                 "order_ids":["zakaz-1111","zakaz-2222"," "]
             }"#,
         ))
@@ -593,7 +610,7 @@ async fn production_map_sequence_round_trips_on_server() {
     assert_eq!(get.status(), StatusCode::OK);
     let body = json_body(get).await;
     assert_eq!(
-        body["sequences"]["8 ta rangli pechat"],
+        body["sequences"]["apparatus:default:bosma_8"],
         serde_json::json!(["zakaz-1111", "zakaz-2222"])
     );
 }
@@ -611,7 +628,12 @@ async fn production_map_sequence_rejects_unknown_and_wrong_apparatus_orders() {
                 "PUT",
                 "/v1/mobile/admin/production-maps",
                 &token,
-                &pechat_order_map_json(id, "ABCD Family", order_number, "7 ta rangli pechat"),
+                &pechat_order_map_json(
+                    id,
+                    "ABCD Family",
+                    order_number,
+                    "apparatus:default:bosma_7",
+                ),
             ))
             .await
             .expect("save current map");
@@ -625,7 +647,7 @@ async fn production_map_sequence_rejects_unknown_and_wrong_apparatus_orders() {
             "/v1/mobile/admin/production-maps/sequence",
             &token,
             r#"{
-                "apparatus":"7 ta rangli pechat",
+                "apparatus":"apparatus:default:bosma_7",
                 "order_ids":["e2e-zakaz-old"]
             }"#,
         ))
@@ -643,7 +665,7 @@ async fn production_map_sequence_rejects_unknown_and_wrong_apparatus_orders() {
             "/v1/mobile/admin/production-maps/sequence",
             &token,
             r#"{
-                "apparatus":"Laminatsiya 1",
+                "apparatus":"apparatus:default:asset-007",
                 "order_ids":["zakaz-1111"]
             }"#,
         ))
@@ -665,7 +687,7 @@ async fn production_map_sequence_blocks_reorder_before_active_order() {
             principal_role: PrincipalRole::Aparatchi,
             principal_ref: "worker-sequence-active".to_string(),
             role_id: "aparatchi".to_string(),
-            assigned_apparatus: vec!["7 ta rangli pechat".to_string()],
+            assigned_apparatus: vec!["apparatus:default:bosma_7".to_string()],
             assigned_item_groups: Vec::new(),
         })
         .await
@@ -682,7 +704,7 @@ async fn production_map_sequence_blocks_reorder_before_active_order() {
                 "PUT",
                 "/v1/mobile/admin/production-maps",
                 &token,
-                &pechat_order_map_json(id, id, order_number, "7 ta rangli pechat"),
+                &pechat_order_map_json(id, id, order_number, "apparatus:default:bosma_7"),
             ))
             .await
             .expect("save map");
@@ -698,7 +720,7 @@ async fn production_map_sequence_blocks_reorder_before_active_order() {
             "/v1/mobile/admin/production-maps/sequence",
             &token,
             r#"{
-                "apparatus":"7 ta rangli pechat",
+                "apparatus":"apparatus:default:bosma_7",
                 "order_ids":["zakaz-active-a","zakaz-active-b"]
             }"#,
         ))
@@ -714,7 +736,7 @@ async fn production_map_sequence_blocks_reorder_before_active_order() {
             &worker_token,
             &with_test_qolip(
                 r#"{
-                "apparatus":"7 ta rangli pechat",
+                "apparatus":"apparatus:default:bosma_7",
                 "order_id":"zakaz-active-a",
                 "action":"start"
             }"#,
@@ -731,7 +753,7 @@ async fn production_map_sequence_blocks_reorder_before_active_order() {
             "/v1/mobile/admin/production-maps/sequence",
             &token,
             r#"{
-                "apparatus":"7 ta rangli pechat",
+                "apparatus":"apparatus:default:bosma_7",
                 "order_ids":["zakaz-active-b","zakaz-active-a"]
             }"#,
         ))
@@ -771,7 +793,7 @@ async fn production_map_save_with_order_rejects_invalid_template_before_saving_m
         "zakaz-5555",
         "Invalid template zakaz",
         "5555",
-        "8 ta rangli pechat",
+        "apparatus:default:bosma_8",
     );
     let body = format!(r#"{{"map":{map_json},"template":{{"name":"x","product":""}}}}"#);
     let response = build_router(state.clone())
@@ -806,7 +828,12 @@ async fn production_maps_list_falls_back_to_order_number_as_code() {
             "PUT",
             "/v1/mobile/admin/production-maps",
             &token,
-            &pechat_order_map_json("zakaz-3333", "Legacy zakaz", "3333", "8 ta rangli pechat"),
+            &pechat_order_map_json(
+                "zakaz-3333",
+                "Legacy zakaz",
+                "3333",
+                "apparatus:default:bosma_8",
+            ),
         ))
         .await
         .expect("save");
@@ -830,13 +857,23 @@ async fn production_map_order_number_is_immutable_on_update() {
             "PUT",
             "/v1/mobile/admin/production-maps",
             &token,
-            &pechat_order_map_json("zakaz-1234", "Locked zakaz", "1234", "Paket aparat"),
+            &pechat_order_map_json(
+                "zakaz-1234",
+                "Locked zakaz",
+                "1234",
+                "apparatus:default:paket",
+            ),
         ))
         .await
         .expect("save");
     assert_eq!(save.status(), StatusCode::OK);
 
-    let changed = pechat_order_map_json("zakaz-1234", "Locked zakaz", "5678", "Paket aparat");
+    let changed = pechat_order_map_json(
+        "zakaz-1234",
+        "Locked zakaz",
+        "5678",
+        "apparatus:default:paket",
+    );
     let response = build_router(state.clone())
         .oneshot(request_with_body(
             "PUT",
@@ -862,7 +899,12 @@ async fn production_map_save_with_order_rolls_back_map_when_template_store_fails
     let state = test_state_with_failing_calculate();
     let token = session(&state, PrincipalRole::Admin).await;
 
-    let map_json = pechat_order_map_json("zakaz-8888", "Rollback zakaz", "8888", "Paket aparat");
+    let map_json = pechat_order_map_json(
+        "zakaz-8888",
+        "Rollback zakaz",
+        "8888",
+        "apparatus:default:paket",
+    );
     let body = format!(
         r#"{{"map":{map_json},"template":{{
             "name":"rollback mahsulot",

@@ -100,8 +100,8 @@ pub enum ProductionMapError {
     PreviousStageNotCompleted,
     #[error("apparatus is not assigned to this operator")]
     ApparatusNotAssigned,
-    #[error("laminatsiya is not allowed when rubber size is above 1050")]
-    LaminatsiyaRubberTooLarge,
+    #[error("order width exceeds the canonical apparatus capability")]
+    ApparatusWidthExceedsCapability,
     #[error("apparatus queue policy is locked")]
     ApparatusQueuePolicyLocked,
     #[error("raw material input is invalid")]

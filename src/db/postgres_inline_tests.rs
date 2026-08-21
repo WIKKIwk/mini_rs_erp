@@ -192,6 +192,7 @@ mod tests {
         assert!(versions.contains("0068_canonical_apparatus_fk_indexes"));
         assert!(versions.contains("0069_canonical_apparatus_revision_authority"));
         assert!(versions.contains("0070_canonical_apparatus_clean_cutover"));
+        assert!(versions.contains("0071_qolip_lock_ownership"));
         assert!(POSTGRES_MIGRATIONS.iter().all(|(version, sql)| {
             !version.trim().is_empty() && migration_checksum(sql).len() == 64
         }));
@@ -450,7 +451,14 @@ mod tests {
 
     #[test]
     fn inventory_transfer_flow_keeps_quantities_as_exact_micro_units() {
-        let source = include_str!("postgres_inventory_movements.rs");
+        let source = [
+            include_str!("postgres_inventory_movements.rs"),
+            include_str!("postgres_inventory_movements_parts/part_01.rs"),
+            include_str!("postgres_inventory_movements_parts/part_02.rs"),
+            include_str!("postgres_inventory_movements_parts/part_03.rs"),
+            include_str!("postgres_inventory_movements_parts/part_04.rs"),
+        ]
+        .join("\n");
 
         assert!(source.contains("(stock.qty * 1000000)::bigint AS qty_units"));
         assert!(source.contains("asset.qty_units != line.qty_units"));
@@ -598,7 +606,7 @@ mod tests {
             "mini_factory_locations",
             "mini_factory_location_apparatus_links",
             "apparatus:default:bosma_7",
-            "apparatus:default:asset-010",
+            "apparatus:default:rezka",
             "on delete cascade",
             "on delete restrict",
         ] {
@@ -606,6 +614,13 @@ mod tests {
         }
         assert!(migration.contains("grant select, insert, update, delete"));
         assert!(migration.contains("raise exception"));
+
+        let cutover = POSTGRES_MIGRATIONS
+            .iter()
+            .find(|(version, _)| *version == "0065_canonical_apparatus_cutover")
+            .map(|(_, sql)| sql.to_lowercase())
+            .expect("canonical apparatus cutover migration");
+        assert!(cutover.contains("'apparatus:default:rezka', 'apparatus:default:asset-010'"));
     }
 
     #[test]
@@ -1096,7 +1111,6 @@ mod tests {
     }
 
     #[tokio::test]
-    #[ignore = "requires local PostgreSQL and creates/drops mini_rs_erp_test"]
     async fn postgres_live_foundation_migration_applies_to_clean_database() {
         let admin_url = std::env::var("MINI_ERP_TEST_ADMIN_DATABASE_URL")
             .unwrap_or_else(|_| "postgres://wikki@127.0.0.1:5432/postgres".to_string());
@@ -1130,8 +1144,28 @@ mod tests {
             .expect("apply foundation migration");
         let migration_history = postgres_0062_migration_history(&pool).await;
         assert_eq!(migration_history.len(), POSTGRES_MIGRATIONS.len());
-        assert_eq!(migration_history.len(), 70);
-        assert_postgres_0062_indexes(&pool).await;
+        assert_eq!(migration_history.len(), 71);
+        let obsolete_material_index_exists: bool = sqlx::query_scalar(
+            "SELECT EXISTS (
+                 SELECT 1 FROM pg_indexes
+                 WHERE schemaname = 'public'
+                   AND indexname = 'idx_mini_apparatus_material_rules_lower_apparatus'
+             )",
+        )
+        .fetch_one(&pool)
+        .await
+        .expect("query obsolete material-rule index");
+        assert!(!obsolete_material_index_exists);
+        let canonical_material_identity_index: (bool, bool, bool) = sqlx::query_as(
+            "SELECT index_meta.indisunique, index_meta.indisvalid, index_meta.indisready
+             FROM pg_index index_meta
+             JOIN pg_class index_class ON index_class.oid = index_meta.indexrelid
+             WHERE index_class.relname = 'mini_apparatus_material_rules_pkey'",
+        )
+        .fetch_one(&pool)
+        .await
+        .expect("canonical material-rule identity index");
+        assert_eq!(canonical_material_identity_index, (true, true, true));
 
         let table_count: i64 = sqlx::query_scalar(
             "SELECT COUNT(*)
@@ -1198,7 +1232,6 @@ mod tests {
     }
 
     #[tokio::test]
-    #[ignore = "requires local PostgreSQL and creates/drops mini_rs_erp_test_chat_followup"]
     async fn postgres_live_chat_delivery_followup_upgrades_applied_0016() {
         let admin_url = std::env::var("MINI_ERP_TEST_ADMIN_DATABASE_URL")
             .unwrap_or_else(|_| "postgres://wikki@127.0.0.1:5432/postgres".to_string());
@@ -1277,7 +1310,7 @@ mod tests {
         .expect("old delivery count");
         assert_eq!(delivery_count, 2);
 
-        apply_foundation_migration(&pool)
+        apply_postgres_migrations_through(&pool, 17)
             .await
             .expect("apply 0017 followup");
         let recipient_keys: serde_json::Value = sqlx::query_scalar(
@@ -1343,7 +1376,6 @@ mod tests {
     }
 
     #[tokio::test]
-    #[ignore = "requires local PostgreSQL and creates/drops mini_rs_erp_test_0062_* databases"]
     async fn postgres_live_0062_concurrency_idempotency_constraints() {
         let admin_url = std::env::var("MINI_ERP_TEST_ADMIN_DATABASE_URL")
             .unwrap_or_else(|_| "postgres://wikki@127.0.0.1:5432/postgres".to_string());

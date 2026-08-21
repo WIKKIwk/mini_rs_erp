@@ -4,17 +4,17 @@ use super::super::{CommitFaultPoint, PostgresCanonicalApparatusRepository};
 use super::fixtures::{TestDatabase, apparatus_state, draft, metadata};
 
 const FAULT_POINTS: [CommitFaultPoint; 11] = [
-    CommitFaultPoint::AfterHeadLock,
-    CommitFaultPoint::AfterExpectedRevision,
-    CommitFaultPoint::AfterCandidateValidation,
-    CommitFaultPoint::AfterArtifactGeneration,
-    CommitFaultPoint::AfterProjection,
-    CommitFaultPoint::AfterIdentityInsert,
-    CommitFaultPoint::AfterRevisionInsert,
-    CommitFaultPoint::AfterHeadCas,
-    CommitFaultPoint::AfterRuntimeProjection,
-    CommitFaultPoint::AfterDerivedProjections,
-    CommitFaultPoint::AfterOutbox,
+    CommitFaultPoint::HeadLock,
+    CommitFaultPoint::ExpectedRevision,
+    CommitFaultPoint::CandidateValidation,
+    CommitFaultPoint::ArtifactGeneration,
+    CommitFaultPoint::Projection,
+    CommitFaultPoint::IdentityInsert,
+    CommitFaultPoint::RevisionInsert,
+    CommitFaultPoint::HeadCas,
+    CommitFaultPoint::RuntimeProjection,
+    CommitFaultPoint::DerivedProjections,
+    CommitFaultPoint::Outbox,
 ];
 
 #[tokio::test]

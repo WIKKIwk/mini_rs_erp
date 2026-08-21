@@ -4,7 +4,7 @@ use super::*;
 async fn admin_freeze_request_is_finalized_by_linked_worker_safe_stop() {
     let production_store = Arc::new(MemoryProductionMapStore::new());
     let mut state = test_state();
-    state.production_maps = ProductionMapService::new_for_test(production_store.clone());
+    state.production_maps = production_map_service_with_store(&state, production_store.clone());
     state
         .admin
         .upsert_role_assignment(crate::core::authz::RoleAssignmentUpsert {
@@ -1043,7 +1043,7 @@ async fn laminatsiya_pause_does_not_persist_leftover_or_order_waste_metrics() {
     let paused_status = paused.status();
     let paused_body = json_body(paused).await;
     assert_eq!(paused_status, StatusCode::OK, "{paused_body:?}");
-    assert_eq!(paused_body["progress_batch"]["status"], "paused");
+    assert_eq!(paused_body["progress_batch"]["status"], "roll_detached");
     assert!(paused_body["progress_batch"]["lamination_print_leftover_rolls"].is_null());
     assert!(paused_body["progress_batch"]["lamination_film_leftover_rolls"].is_null());
     assert!(paused_body["progress_batch"]["total_waste"].is_null());

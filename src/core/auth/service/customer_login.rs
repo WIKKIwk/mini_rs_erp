@@ -39,10 +39,9 @@ impl AuthService {
             .map_err(|_| AuthError::Internal)?;
 
         for customer in customers {
-            let state = states
-                .get(customer.id.trim())
-                .cloned()
-                .ok_or(AuthError::Internal)?;
+            let Some(state) = states.get(customer.id.trim()).cloned() else {
+                continue;
+            };
             let code_value = state.custom_code.trim();
             if code_value.is_empty() {
                 continue;

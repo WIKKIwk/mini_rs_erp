@@ -7,6 +7,7 @@ pub(crate) struct TestApparatusSpec<'a> {
     pub(crate) operation: ExecutionOperation,
     pub(crate) technology: ProcessTechnology,
     pub(crate) color_station_count: Option<u16>,
+    pub(crate) max_web_width_mm: Option<u32>,
     pub(crate) tooling_required: bool,
     pub(crate) capability_level: u16,
     pub(crate) capacity_slots: u16,
@@ -28,6 +29,7 @@ impl<'a> TestApparatusSpec<'a> {
             operation: ExecutionOperation::Print,
             technology,
             color_station_count,
+            max_web_width_mm: None,
             tooling_required: false,
             capability_level: 1,
             capacity_slots: 1,
@@ -38,12 +40,14 @@ impl<'a> TestApparatusSpec<'a> {
     }
 
     pub(crate) fn laminate(apparatus_id: &'a str, display_name: &'a str) -> Self {
-        Self::operation(
+        let mut spec = Self::operation(
             apparatus_id,
             display_name,
             ExecutionOperation::Laminate,
             ProcessTechnology::AdhesiveLamination,
-        )
+        );
+        spec.max_web_width_mm = Some(1_050);
+        spec
     }
 
     pub(crate) fn cut(apparatus_id: &'a str, display_name: &'a str) -> Self {
@@ -76,6 +80,7 @@ impl<'a> TestApparatusSpec<'a> {
             operation,
             technology,
             color_station_count: None,
+            max_web_width_mm: None,
             tooling_required: false,
             capability_level: 1,
             capacity_slots: 1,
@@ -83,6 +88,11 @@ impl<'a> TestApparatusSpec<'a> {
             cleanup_minutes: 0,
             finite_capacity: true,
         }
+    }
+
+    pub(crate) fn requiring_tooling(mut self) -> Self {
+        self.tooling_required = true;
+        self
     }
 }
 
@@ -143,6 +153,7 @@ pub(crate) fn canonical_draft(spec: &TestApparatusSpec<'_>) -> CanonicalApparatu
             operation: spec.operation,
             technology: spec.technology,
             color_station_count: spec.color_station_count,
+            max_web_width_mm: spec.max_web_width_mm,
             virtual_tasks: VirtualTaskPolicy::Disabled,
             capability_compatible_reroute: true,
         },
@@ -178,9 +189,9 @@ pub(crate) fn canonical_draft(spec: &TestApparatusSpec<'_>) -> CanonicalApparatu
     }
 }
 
-pub(crate) fn runtime_configuration(spec: TestApparatusSpec<'_>) -> RuntimeApparatusConfiguration {
+pub(crate) fn canonical_revision(spec: TestApparatusSpec<'_>) -> CanonicalApparatusRevision {
     let apparatus_id = ApparatusId::new(spec.apparatus_id).expect("test apparatus id");
-    let revision = CanonicalApparatusRevision::from_draft(
+    CanonicalApparatusRevision::from_draft(
         apparatus_id,
         canonical_draft(&spec),
         RevisionMetadata {
@@ -192,54 +203,49 @@ pub(crate) fn runtime_configuration(spec: TestApparatusSpec<'_>) -> RuntimeAppar
             source_reference: None,
         },
     )
-    .expect("valid canonical test revision");
+    .expect("valid canonical test revision")
+}
+
+pub(crate) fn runtime_configuration(spec: TestApparatusSpec<'_>) -> RuntimeApparatusConfiguration {
+    let revision = canonical_revision(spec);
     let artifact = export_canonical_aasx(&revision).expect("canonical test AASX");
     project_apparatus_revision(&revision, artifact.sha256()).into()
 }
 
-pub(crate) fn standard_runtime_configurations() -> Vec<RuntimeApparatusConfiguration> {
+fn standard_specs() -> Vec<TestApparatusSpec<'static>> {
     use ProcessTechnology::{Flexographic, Rotogravure};
 
     vec![
-        runtime_configuration(TestApparatusSpec::print(
-            "apparatus:default:bosma_7",
-            "Bosma 7",
-            Rotogravure,
-            Some(7),
-        )),
-        runtime_configuration(TestApparatusSpec::print(
-            "apparatus:default:bosma_8",
-            "Bosma 8",
-            Rotogravure,
-            Some(8),
-        )),
-        runtime_configuration(TestApparatusSpec::print(
-            "apparatus:default:bosma_9",
-            "Bosma 9",
-            Rotogravure,
-            Some(9),
-        )),
-        runtime_configuration(TestApparatusSpec::print(
+        TestApparatusSpec::print("apparatus:default:bosma_7", "Bosma 7", Rotogravure, Some(7))
+            .requiring_tooling(),
+        TestApparatusSpec::print("apparatus:default:bosma_8", "Bosma 8", Rotogravure, Some(8))
+            .requiring_tooling(),
+        TestApparatusSpec::print("apparatus:default:bosma_9", "Bosma 9", Rotogravure, Some(9))
+            .requiring_tooling(),
+        TestApparatusSpec::print(
             "apparatus:default:flexo_pechat",
             "Flexo",
             Flexographic,
             None,
-        )),
-        runtime_configuration(TestApparatusSpec::laminate(
-            "apparatus:default:asset-007",
-            "Laminatsiya 1",
-        )),
-        runtime_configuration(TestApparatusSpec::laminate(
-            "apparatus:default:asset-008",
-            "Laminatsiya 2",
-        )),
-        runtime_configuration(TestApparatusSpec::cut(
-            "apparatus:default:asset-010",
-            "Rezka",
-        )),
-        runtime_configuration(TestApparatusSpec::package(
-            "apparatus:default:paket",
-            "Paket",
-        )),
+        )
+        .requiring_tooling(),
+        TestApparatusSpec::laminate("apparatus:default:asset-007", "Laminatsiya 1"),
+        TestApparatusSpec::laminate("apparatus:default:asset-008", "Laminatsiya 2"),
+        TestApparatusSpec::cut("apparatus:default:asset-010", "Rezka"),
+        TestApparatusSpec::package("apparatus:default:paket", "Paket"),
     ]
+}
+
+pub(crate) fn standard_revisions() -> Vec<CanonicalApparatusRevision> {
+    standard_specs()
+        .into_iter()
+        .map(canonical_revision)
+        .collect()
+}
+
+pub(crate) fn standard_runtime_configurations() -> Vec<RuntimeApparatusConfiguration> {
+    standard_specs()
+        .into_iter()
+        .map(runtime_configuration)
+        .collect()
 }

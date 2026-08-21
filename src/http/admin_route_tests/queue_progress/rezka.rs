@@ -710,7 +710,7 @@ async fn rezka_pause_records_quantities_without_waste_and_fans_out_frames() {
     let paused_status = paused.status();
     let paused_body = json_body(paused).await;
     assert_eq!(paused_status, StatusCode::OK, "{paused_body:?}");
-    assert_eq!(paused_body["progress_batch"]["status"], "paused");
+    assert_eq!(paused_body["progress_batch"]["status"], "roll_detached");
     assert!(paused_body["progress_batch"]["total_waste"].is_null());
     assert_eq!(paused_body["progress_batch"]["diameter"], 45.5);
     assert_eq!(paused_body["progress_event"]["diameter"], 45.5);
@@ -974,7 +974,7 @@ async fn rezka_consumes_laminatsiya_wip_and_creates_distinct_frame_wips() {
         .expect("allowed rezka actions");
     assert!(allowed_actions.iter().any(|action| action == "complete"));
     assert!(
-        !allowed_actions
+        allowed_actions
             .iter()
             .any(|action| action == "roll_complete")
     );

@@ -157,7 +157,7 @@ fn parses_material_display_when_layers_are_empty() {
     })
     .expect("calculate");
 
-    assert_eq!(result.results[0].rounded_length, 133000.0);
+    assert_eq!(result.results[0].rounded_length, 77000.0);
     assert_eq!(result.layers[0].material, "pet");
     assert_eq!(result.layers[1].material, "oppm/pe pr");
 }

@@ -40,6 +40,37 @@ impl MemoryCanonicalApparatusRepository {
             state: Mutex::new(MemoryState::default()),
         }
     }
+
+    pub(super) fn with_revisions(
+        revisions: impl IntoIterator<Item = CanonicalApparatusRevision>,
+    ) -> Self {
+        let mut state = MemoryState::default();
+        for revision in revisions {
+            let apparatus_id = revision.apparatus_id.clone();
+            let artifact = export_canonical_aasx(&revision).expect("valid test AASX");
+            let projections = project_apparatus_revision(&revision, artifact.sha256());
+            state
+                .physical_assets
+                .insert(revision.physical_asset_id.clone(), apparatus_id.clone());
+            state
+                .command_ids
+                .insert(revision.revision_metadata.command_id.clone());
+            state.entries.insert(
+                apparatus_id,
+                MemoryEntry {
+                    revision,
+                    artifact,
+                    runtime: projections.runtime,
+                    queue: projections.queue,
+                    material: projections.material,
+                    capacity: projections.capacity,
+                },
+            );
+        }
+        Self {
+            state: Mutex::new(state),
+        }
+    }
 }
 
 #[async_trait]
@@ -90,10 +121,10 @@ impl CanonicalApparatusRepository for MemoryCanonicalApparatusRepository {
         {
             return Err(CanonicalApparatusError::AlreadyExists);
         }
-        if let Some(owner) = state.physical_assets.get(&revision.physical_asset_id) {
-            if owner != &apparatus_id {
-                return Err(CanonicalApparatusError::AlreadyExists);
-            }
+        if let Some(owner) = state.physical_assets.get(&revision.physical_asset_id)
+            && owner != &apparatus_id
+        {
+            return Err(CanonicalApparatusError::AlreadyExists);
         }
         let artifact = export_canonical_aasx(&revision)
             .map_err(|_| CanonicalApparatusError::ArtifactIntegrity)?;

@@ -84,6 +84,8 @@ pub struct ExecutionProfile {
     pub operation: ExecutionOperation,
     pub technology: ProcessTechnology,
     pub color_station_count: Option<u16>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_web_width_mm: Option<u32>,
     pub virtual_tasks: VirtualTaskPolicy,
     pub capability_compatible_reroute: bool,
 }

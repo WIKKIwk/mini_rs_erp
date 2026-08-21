@@ -21,7 +21,7 @@ pub(super) struct TestDatabase {
 
 impl TestDatabase {
     pub async fn create(label: &str) -> Self {
-        Self::create_through(label, 70).await
+        Self::create_through(label, 71).await
     }
 
     pub async fn create_through(label: &str, migration_count: usize) -> Self {

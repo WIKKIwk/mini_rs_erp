@@ -224,7 +224,7 @@ async fn admin_creates_material_taminotchi_with_seventy_prefix_code() {
                     "principal_role":"material_taminotchi",
                     "principal_ref":"{}",
                     "role_id":"material_taminotchi",
-                    "assigned_apparatus":["Laminatsiya - A"],
+                    "assigned_apparatus":["apparatus:default:asset-007"],
                     "assigned_item_groups":["Kraska"]
                 }}"#,
                 material["ref"].as_str().expect("ref")
@@ -311,7 +311,7 @@ async fn admin_creates_material_taminotchi_with_seventy_prefix_code() {
     assert_eq!(login["profile"]["role"], "material_taminotchi");
     assert_eq!(
         login["assigned_apparatus"],
-        serde_json::json!(["Laminatsiya - A"])
+        serde_json::json!(["apparatus:default:asset-007"])
     );
     assert_eq!(
         login["assigned_item_groups"],
@@ -447,7 +447,7 @@ async fn login_returns_effective_capabilities_for_assigned_custom_role() {
                 "principal_role":"werka",
                 "principal_ref":"werka",
                 "role_id":"scale_only",
-                "assigned_apparatus":["Paket aparat"]
+                "assigned_apparatus":["apparatus:default:paket"]
             }"#,
         ))
         .await
@@ -471,6 +471,6 @@ async fn login_returns_effective_capabilities_for_assigned_custom_role() {
     );
     assert_eq!(
         value["assigned_apparatus"],
-        serde_json::json!(["Paket aparat"])
+        serde_json::json!(["apparatus:default:paket"])
     );
 }

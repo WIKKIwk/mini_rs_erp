@@ -46,8 +46,8 @@ async fn production_map_store_persists_maps_in_sqlite() {
                 ProductionMapNode {
                     id: "apparatus".to_string(),
                     kind: ProductionMapNodeKind::Apparatus,
-                    title: "Extrujen aparat - A".to_string(),
-                    apparatus_id: "apparatus:test:extrujen".to_string(),
+                    title: "Flexo display snapshot".to_string(),
+                    apparatus_id: "apparatus:default:flexo_pechat".to_string(),
                     formula: None,
                     role_code: String::new(),
                     item_code: String::new(),
@@ -115,7 +115,10 @@ async fn production_map_store_persists_maps_in_sqlite() {
     assert_eq!(maps[0].map.order_number, "1234");
     assert_eq!(maps[0].map.roll_count, Some(7));
     assert_eq!(maps[0].map.width_mm, Some(650.0));
-    assert_eq!(maps[0].map.nodes[1].apparatus_id, "apparatus:test:extrujen");
+    assert_eq!(
+        maps[0].map.nodes[1].apparatus_id,
+        "apparatus:default:flexo_pechat"
+    );
     assert_eq!(maps[0].program.operations.len(), 3);
     assert_eq!(maps[0].program.operations[1].op_code, "apparatus");
 

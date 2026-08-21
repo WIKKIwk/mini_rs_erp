@@ -19,7 +19,7 @@ mod tests {
                     order_id: "order-1".to_string(),
                     order_code: "1212".to_string(),
                     order_name: "Mahsulot".to_string(),
-                    apparatus: "7 ta rangli bosma".to_string(),
+                    apparatus: "apparatus:default:bosma_7".to_string(),
                     image_id: String::new(),
                     items: vec![
                         ReturnedPaintItem {

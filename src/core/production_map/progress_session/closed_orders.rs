@@ -157,8 +157,8 @@ mod tests {
             required_apparatus_for_closed_order(&map),
             Some(vec![
                 "apparatus:catalog:press-001".to_string(),
-                "apparatus:catalog:true-001".to_string(),
                 "apparatus:catalog:false-001".to_string(),
+                "apparatus:catalog:true-001".to_string(),
                 "apparatus:catalog:join-001".to_string(),
             ])
         );

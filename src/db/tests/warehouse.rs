@@ -2,6 +2,7 @@ use std::sync::Arc;
 
 use sqlx::postgres::PgConnectOptions;
 
+use crate::core::apparatus_standard::test_support::TestApparatusSpec;
 use crate::core::auth::models::{Principal, PrincipalRole};
 use crate::core::inventory_movements::{
     InventoryActor, InventoryAssetKind, InventoryAssetSelector, InventoryMovementError,
@@ -15,8 +16,9 @@ use crate::db::postgres::apply_foundation_migration;
 use crate::db::postgres_inventory_movements::PostgresInventoryMovementStore;
 use crate::db::postgres_warehouse::PostgresWarehouseStore;
 
+use super::seed_canonical_apparatus;
+
 #[tokio::test]
-#[ignore = "requires local PostgreSQL and creates/drops mini_rs_erp_test_warehouse_delete_race"]
 async fn postgres_warehouse_delete_is_serialized_with_transfer_creation() {
     let admin_url = std::env::var("MINI_ERP_TEST_ADMIN_DATABASE_URL")
         .unwrap_or_else(|_| "postgres:///postgres".to_string());
@@ -46,15 +48,14 @@ async fn postgres_warehouse_delete_is_serialized_with_transfer_creation() {
     apply_foundation_migration(&pool)
         .await
         .expect("apply migrations");
+    seed_canonical_apparatus(
+        &pool,
+        TestApparatusSpec::laminate("apparatus:test:one", "Warehouse Race Apparatus"),
+    )
+    .await;
 
     sqlx::raw_sql(
         r#"
-        INSERT INTO mini_apparatus (id, name, base_name, kind, payload_json)
-        VALUES (
-            'apparatus:test:one', 'Warehouse Race Apparatus',
-            'Warehouse Race Apparatus', 'test', '{}'::jsonb
-        );
-
         INSERT INTO mini_warehouses (id, name)
         VALUES
             ('warehouse-race-source', 'Race Source'),
@@ -228,7 +229,6 @@ async fn postgres_warehouse_delete_is_serialized_with_transfer_creation() {
 }
 
 #[tokio::test]
-#[ignore = "requires local PostgreSQL and creates/drops mini_rs_erp_test_warehouse_canonical_identity"]
 async fn postgres_warehouse_assignments_use_typed_canonical_identity() {
     let admin_url = std::env::var("MINI_ERP_TEST_ADMIN_DATABASE_URL")
         .unwrap_or_else(|_| "postgres:///postgres".to_string());
@@ -258,15 +258,14 @@ async fn postgres_warehouse_assignments_use_typed_canonical_identity() {
     apply_foundation_migration(&pool)
         .await
         .expect("apply migrations");
+    seed_canonical_apparatus(
+        &pool,
+        TestApparatusSpec::laminate("apparatus:test:canonical", "Warehouse Canonical Apparatus"),
+    )
+    .await;
 
     sqlx::raw_sql(
         r#"
-        INSERT INTO mini_apparatus (id, name, base_name, kind, payload_json)
-        VALUES (
-            'apparatus:test:canonical', 'Warehouse Canonical Apparatus',
-            'Warehouse Canonical Apparatus', 'test', '{}'::jsonb
-        );
-
         INSERT INTO mini_warehouses (id, name)
         VALUES ('warehouse-canonical', 'Canonical Warehouse');
         "#,

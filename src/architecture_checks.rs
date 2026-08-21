@@ -52,6 +52,7 @@ fn should_skip_file_size_check(path: &Path) -> bool {
     let path_text = relative.to_string_lossy();
     path_text.contains("/tests/")
         || path_text.contains("_tests/")
+        || path_text.ends_with("/tests.rs")
         || path_text.ends_with("_tests.rs")
         || path_text.ends_with("_test.rs")
         || path_text.ends_with("_bench.rs")

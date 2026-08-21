@@ -50,11 +50,12 @@ pub(crate) use apparatus_resolver::TestCanonicalApparatusResolver;
 pub use apparatus_resolver::{CanonicalApparatusResolver, CanonicalServiceApparatusResolver};
 pub use capacity::*;
 pub use compiler::{compile_map, run_map_with_variables};
+#[cfg(test)]
+pub use materials::ApparatusMaterialRuleUpsert;
 pub use materials::{
-    ApparatusMaterialRequirementGroup, ApparatusMaterialRule, ApparatusMaterialRuleUpsert,
-    MaterialScanProgressAction, RawMaterialAssignment, RawMaterialAssignmentDeleteInput,
-    RawMaterialAssignmentInput, RawMaterialStartPolicy, RawMaterialStartRequirements,
-    TrustedQolipStartValidation,
+    ApparatusMaterialRequirementGroup, ApparatusMaterialRule, MaterialScanProgressAction,
+    RawMaterialAssignment, RawMaterialAssignmentDeleteInput, RawMaterialAssignmentInput,
+    RawMaterialStartPolicy, RawMaterialStartRequirements, TrustedQolipStartValidation,
 };
 #[cfg(test)]
 pub use memory_store::MemoryProductionMapStore;
@@ -63,9 +64,8 @@ pub(crate) use progress::{progress_batch_id, progress_qr_payload};
 pub use service::{PreparedApparatusQueueAction, ProductionMapLiveSnapshot, ProductionMapService};
 pub(crate) use store_port::validate_queue_progress_write;
 pub use store_port::{
-    ProductionMapApparatusTransferWrite, ProductionMapStorePort,
-    QueueActionProgressWrite, QueueActionProgressWriteResult, RawMaterialStockTransition,
-    RawMaterialStockTransitionKind,
+    ProductionMapApparatusTransferWrite, ProductionMapStorePort, QueueActionProgressWrite,
+    QueueActionProgressWriteResult, RawMaterialStockTransition, RawMaterialStockTransitionKind,
 };
 pub use types::*;
 

@@ -101,10 +101,12 @@ async fn production_map_nodes_preserve_alternative_group_metadata() {
                     {
                         "id":"apparatus",
                         "kind":"apparatus",
-                        "title":"7 ta rangli pechat",
+                        "title":"apparatus:default:bosma_7",
+                        "apparatus_id":"apparatus:default:bosma_7",
                         "alternative_group_id":"alt-pechat-1",
                         "alternative_group_label":"pechat",
-                        "alternative_assigned_title":"7 ta rangli pechat"
+                        "alternative_assigned_title":"apparatus:default:bosma_7",
+                        "alternative_assigned_apparatus_id":"apparatus:default:bosma_7"
                     },
                     {"id":"end","kind":"end","title":"End"}
                 ],
@@ -129,7 +131,7 @@ async fn production_map_nodes_preserve_alternative_group_metadata() {
     );
     assert_eq!(
         value["map"]["nodes"][1]["alternative_assigned_title"],
-        "7 ta rangli pechat"
+        "apparatus:default:bosma_7"
     );
 
     let list = build_router(state)
@@ -148,7 +150,7 @@ async fn production_map_nodes_preserve_alternative_group_metadata() {
     );
     assert_eq!(
         listed[0]["map"]["nodes"][1]["alternative_assigned_title"],
-        "7 ta rangli pechat"
+        "apparatus:default:bosma_7"
     );
 }
 
@@ -172,6 +174,7 @@ async fn production_map_nodes_preserve_rezka_setup_metadata() {
                         "id":"rezka",
                         "kind":"apparatus",
                         "title":"Rezka",
+                        "apparatus_id":"apparatus:default:asset-010",
                         "rezka_kadr_count":4,
                         "rezka_label_length":125.5
                     },
@@ -226,24 +229,28 @@ async fn production_map_sequence_returns_backend_visible_order_ids() {
                 "nodes":[
                     {"id":"start","kind":"start","title":"Start"},
                     {"id":"order","kind":"task","title":"Visible product"},
-                    {"id":"pechat","kind":"apparatus","title":"7 ta rangli pechat"},
+                    {"id":"pechat","kind":"apparatus","title":"apparatus:default:bosma_7","apparatus_id":"apparatus:default:bosma_7"},
                     {
                         "id":"lamin1",
                         "kind":"apparatus",
-                        "title":"Laminatsiya 1",
+                        "title":"apparatus:default:asset-007",
+                        "apparatus_id":"apparatus:default:asset-007",
                         "alternative_group_id":"alt-laminatsiya",
                         "alternative_group_label":"Laminatsiya",
-                        "alternative_assigned_title":"Laminatsiya 1"
+                        "alternative_assigned_title":"apparatus:default:asset-007",
+                        "alternative_assigned_apparatus_id":"apparatus:default:asset-007"
                     },
                     {
                         "id":"lamin2",
                         "kind":"apparatus",
-                        "title":"Laminatsiya 2",
+                        "title":"apparatus:default:asset-008",
+                        "apparatus_id":"apparatus:default:asset-008",
                         "alternative_group_id":"alt-laminatsiya",
                         "alternative_group_label":"Laminatsiya",
-                        "alternative_assigned_title":"Laminatsiya 1"
+                        "alternative_assigned_title":"apparatus:default:asset-007",
+                        "alternative_assigned_apparatus_id":"apparatus:default:asset-007"
                     },
-                    {"id":"rezka","kind":"apparatus","title":"Rezka"},
+                    {"id":"rezka","kind":"apparatus","title":"Rezka","apparatus_id":"apparatus:default:asset-010"},
                     {"id":"end","kind":"end","title":"End"}
                 ],
                 "edges":[
@@ -271,18 +278,18 @@ async fn production_map_sequence_returns_backend_visible_order_ids() {
     let body = json_body(response).await;
 
     assert_eq!(
-        body["visible_order_ids"]["7 ta rangli pechat"],
+        body["visible_order_ids"]["apparatus:default:bosma_7"],
         serde_json::json!(["zakaz-visible-alt"])
     );
     assert_eq!(
-        body["visible_order_ids"]["Laminatsiya 1"],
+        body["visible_order_ids"]["apparatus:default:asset-007"],
         serde_json::json!(["zakaz-visible-alt"])
     );
     assert_eq!(
-        body["visible_order_ids"]["Rezka"],
+        body["visible_order_ids"]["apparatus:default:asset-010"],
         serde_json::json!(["zakaz-visible-alt"])
     );
-    assert!(body["visible_order_ids"]["Laminatsiya 2"].is_null());
+    assert!(body["visible_order_ids"]["apparatus:default:asset-008"].is_null());
 }
 
 #[tokio::test]
@@ -304,9 +311,9 @@ async fn production_map_sequence_accepts_numeric_order_id() {
                 "nodes":[
                     {"id":"start","kind":"start","title":"Start"},
                     {"id":"order","kind":"task","title":"Funchuza 300 gr kok"},
-                    {"id":"pechat","kind":"apparatus","title":"7 ta rangli pechat"},
-                    {"id":"lamin","kind":"apparatus","title":"Laminatsiya 1"},
-                    {"id":"rezka","kind":"apparatus","title":"Rezka"},
+                    {"id":"pechat","kind":"apparatus","title":"apparatus:default:bosma_7","apparatus_id":"apparatus:default:bosma_7"},
+                    {"id":"lamin","kind":"apparatus","title":"apparatus:default:asset-007","apparatus_id":"apparatus:default:asset-007"},
+                    {"id":"rezka","kind":"apparatus","title":"Rezka","apparatus_id":"apparatus:default:asset-010"},
                     {"id":"end","kind":"end","title":"End"}
                 ],
                 "edges":[
@@ -333,7 +340,7 @@ async fn production_map_sequence_accepts_numeric_order_id() {
                 "title":"Funchuza template",
                 "nodes":[
                     {"id":"start","kind":"start","title":"Start"},
-                    {"id":"pechat","kind":"apparatus","title":"7 ta rangli pechat"},
+                    {"id":"pechat","kind":"apparatus","title":"apparatus:default:bosma_7","apparatus_id":"apparatus:default:bosma_7"},
                     {"id":"end","kind":"end","title":"End"}
                 ],
                 "edges":[
@@ -358,15 +365,15 @@ async fn production_map_sequence_accepts_numeric_order_id() {
     let body = json_body(response).await;
 
     assert_eq!(
-        body["visible_order_ids"]["7 ta rangli pechat"],
+        body["visible_order_ids"]["apparatus:default:bosma_7"],
         serde_json::json!(["1111"])
     );
     assert_eq!(
-        body["visible_order_ids"]["Laminatsiya 1"],
+        body["visible_order_ids"]["apparatus:default:asset-007"],
         serde_json::json!(["1111"])
     );
     assert_eq!(
-        body["visible_order_ids"]["Rezka"],
+        body["visible_order_ids"]["apparatus:default:asset-010"],
         serde_json::json!(["1111"])
     );
 }

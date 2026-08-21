@@ -20,9 +20,7 @@ pub trait CanonicalApparatusResolver: Send + Sync {
         apparatus_id: &ApparatusId,
     ) -> Result<Option<Arc<RuntimeApparatusConfiguration>>, ProductionMapError>;
 
-    async fn list(
-        &self,
-    ) -> Result<Vec<Arc<RuntimeApparatusConfiguration>>, ProductionMapError>;
+    async fn list(&self) -> Result<Vec<Arc<RuntimeApparatusConfiguration>>, ProductionMapError>;
 }
 
 #[derive(Clone)]
@@ -56,9 +54,7 @@ impl CanonicalApparatusResolver for CanonicalServiceApparatusResolver {
         Ok(configuration)
     }
 
-    async fn list(
-        &self,
-    ) -> Result<Vec<Arc<RuntimeApparatusConfiguration>>, ProductionMapError> {
+    async fn list(&self) -> Result<Vec<Arc<RuntimeApparatusConfiguration>>, ProductionMapError> {
         self.service
             .list_runtime_configurations()
             .await
@@ -116,9 +112,7 @@ impl CanonicalApparatusResolver for TestCanonicalApparatusResolver {
         Ok(self.configurations.get(apparatus_id).cloned())
     }
 
-    async fn list(
-        &self,
-    ) -> Result<Vec<Arc<RuntimeApparatusConfiguration>>, ProductionMapError> {
+    async fn list(&self) -> Result<Vec<Arc<RuntimeApparatusConfiguration>>, ProductionMapError> {
         Ok(self.configurations.values().cloned().collect())
     }
 }

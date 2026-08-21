@@ -21,18 +21,22 @@ async fn production_map_batch_move_keeps_laminatsiya_alternatives_in_group() {
                     {
                         "id":"lamin-1",
                         "kind":"apparatus",
-                        "title":"Laminatsiya 1 - A",
+                        "title":"apparatus:default:asset-007 - A",
+                        "apparatus_id":"apparatus:default:asset-007",
                         "alternative_group_id":"alt-lamin",
                         "alternative_group_label":"laminatsiya",
-                        "alternative_assigned_title":"Laminatsiya 1 - A"
+                        "alternative_assigned_title":"apparatus:default:asset-007 - A",
+                        "alternative_assigned_apparatus_id":"apparatus:default:asset-007"
                     },
                     {
                         "id":"lamin-2",
                         "kind":"apparatus",
-                        "title":"Laminatsiya 2 - A",
+                        "title":"apparatus:default:asset-008 - A",
+                        "apparatus_id":"apparatus:default:asset-008",
                         "alternative_group_id":"alt-lamin",
                         "alternative_group_label":"laminatsiya",
-                        "alternative_assigned_title":"Laminatsiya 1 - A"
+                        "alternative_assigned_title":"apparatus:default:asset-007 - A",
+                        "alternative_assigned_apparatus_id":"apparatus:default:asset-007"
                     },
                     {"id":"end","kind":"end","title":"End"}
                 ],
@@ -54,8 +58,8 @@ async fn production_map_batch_move_keeps_laminatsiya_alternatives_in_group() {
             "/v1/mobile/admin/production-maps/move-batch",
             &token,
             r#"{
-                "from_apparatus":"Laminatsiya 1 - A",
-                "to_apparatus":"Laminatsiya 2 - A",
+                "from_apparatus":"apparatus:default:asset-007",
+                "to_apparatus":"apparatus:default:asset-008",
                 "map_ids":["zakaz-lamin-alt-move"]
             }"#,
         ))
@@ -72,7 +76,10 @@ async fn production_map_batch_move_keeps_laminatsiya_alternatives_in_group() {
         .collect();
     assert_eq!(
         assigned_titles,
-        vec!["Laminatsiya 2 - A", "Laminatsiya 2 - A"]
+        vec![
+            "apparatus:default:asset-008 - A",
+            "apparatus:default:asset-008 - A"
+        ]
     );
 
     let blocked = build_router(state.clone())
@@ -81,8 +88,8 @@ async fn production_map_batch_move_keeps_laminatsiya_alternatives_in_group() {
             "/v1/mobile/admin/production-maps/move-batch",
             &token,
             r#"{
-                "from_apparatus":"Laminatsiya 2 - A",
-                "to_apparatus":"Paket aparat - A",
+                "from_apparatus":"apparatus:default:asset-008",
+                "to_apparatus":"apparatus:default:paket",
                 "map_ids":["zakaz-lamin-alt-move"]
             }"#,
         ))
@@ -105,7 +112,10 @@ async fn production_map_batch_move_keeps_laminatsiya_alternatives_in_group() {
         .collect();
     assert_eq!(
         assigned_after_block,
-        vec!["Laminatsiya 2 - A", "Laminatsiya 2 - A"]
+        vec![
+            "apparatus:default:asset-008 - A",
+            "apparatus:default:asset-008 - A"
+        ]
     );
 }
 
@@ -124,7 +134,7 @@ async fn production_map_batch_move_is_all_or_nothing() {
                     &format!("zakaz-{number}"),
                     &format!("Batch {number}"),
                     number,
-                    "7 ta rangli pechat",
+                    "apparatus:default:bosma_7",
                     7,
                     650.0,
                 ),
@@ -140,8 +150,8 @@ async fn production_map_batch_move_is_all_or_nothing() {
             "/v1/mobile/admin/production-maps/move-batch",
             &token,
             r#"{
-                "from_apparatus":"7 ta rangli pechat",
-                "to_apparatus":"8 ta rangli pechat",
+                "from_apparatus":"apparatus:default:bosma_7",
+                "to_apparatus":"apparatus:default:bosma_8",
                 "map_ids":["zakaz-1010","zakaz-missing"]
             }"#,
         ))
@@ -163,7 +173,7 @@ async fn production_map_batch_move_is_all_or_nothing() {
             })
             .flatten()
             .unwrap_or("");
-        assert_eq!(apparatus, "7 ta rangli pechat");
+        assert_eq!(apparatus, "apparatus:default:bosma_7");
     }
 
     let ok_batch = build_router(state.clone())
@@ -172,8 +182,8 @@ async fn production_map_batch_move_is_all_or_nothing() {
             "/v1/mobile/admin/production-maps/move-batch",
             &token,
             r#"{
-                "from_apparatus":"7 ta rangli pechat",
-                "to_apparatus":"8 ta rangli pechat",
+                "from_apparatus":"apparatus:default:bosma_7",
+                "to_apparatus":"apparatus:default:bosma_8",
                 "map_ids":["zakaz-1010","zakaz-2020"]
             }"#,
         ))
@@ -204,7 +214,7 @@ async fn production_map_batch_move_stress_moves_many_orders_atomically() {
                     &format!("zakaz-{number}"),
                     &format!("Stress {number}"),
                     &number,
-                    "7 ta rangli pechat",
+                    "apparatus:default:bosma_7",
                     7,
                     650.0,
                 ),
@@ -218,7 +228,7 @@ async fn production_map_batch_move_stress_moves_many_orders_atomically() {
         .map(|index| format!("\"zakaz-{index:04}\""))
         .collect();
     let body = format!(
-        r#"{{"from_apparatus":"7 ta rangli pechat","to_apparatus":"8 ta rangli pechat","map_ids":[{}]}}"#,
+        r#"{{"from_apparatus":"apparatus:default:bosma_7","to_apparatus":"apparatus:default:bosma_8","map_ids":[{}]}}"#,
         map_ids.join(",")
     );
     let response = build_router(state.clone())
@@ -249,13 +259,27 @@ async fn paused_order_transfer_route_moves_state_and_is_idempotent() {
             principal_ref: "worker-apparatus-transfer".to_string(),
             role_id: "aparatchi".to_string(),
             assigned_apparatus: vec![
-                "7 ta rangli pechat".to_string(),
-                "8 ta rangli pechat".to_string(),
+                "apparatus:default:bosma_7".to_string(),
+                "apparatus:default:bosma_8".to_string(),
             ],
             assigned_item_groups: Vec::new(),
         })
         .await
         .expect("assignment");
+    state
+        .admin
+        .upsert_role_assignment(crate::core::authz::RoleAssignmentUpsert {
+            principal_role: PrincipalRole::Admin,
+            principal_ref: "admin".to_string(),
+            role_id: "admin".to_string(),
+            assigned_apparatus: vec![
+                "apparatus:default:bosma_7".to_string(),
+                "apparatus:default:bosma_8".to_string(),
+            ],
+            assigned_item_groups: Vec::new(),
+        })
+        .await
+        .expect("admin apparatus assignment");
     let admin_token = session(&state, PrincipalRole::Admin).await;
     let worker_token = session_for(
         &state,
@@ -276,7 +300,7 @@ async fn paused_order_transfer_route_moves_state_and_is_idempotent() {
                 order_id,
                 "Apparatus transfer route",
                 "7601",
-                "7 ta rangli pechat",
+                "apparatus:default:bosma_7",
                 7,
                 650.0,
             ),
@@ -292,7 +316,7 @@ async fn paused_order_transfer_route_moves_state_and_is_idempotent() {
             "PUT",
             "/v1/mobile/admin/production-maps/sequence",
             &admin_token,
-            &format!(r#"{{"apparatus":"7 ta rangli pechat","order_ids":["{order_id}"]}}"#),
+            &format!(r#"{{"apparatus":"apparatus:default:bosma_7","order_ids":["{order_id}"]}}"#),
         ))
         .await
         .expect("save sequence");
@@ -306,7 +330,7 @@ async fn paused_order_transfer_route_moves_state_and_is_idempotent() {
             &worker_token,
             &with_test_qolip(
                 &format!(
-                    r#"{{"apparatus":"7 ta rangli pechat","order_id":"{order_id}","action":"start"}}"#
+                    r#"{{"apparatus":"apparatus:default:bosma_7","order_id":"{order_id}","action":"start"}}"#
                 ),
                 order_id,
             ),
@@ -322,7 +346,7 @@ async fn paused_order_transfer_route_moves_state_and_is_idempotent() {
             "/v1/mobile/admin/production-maps/move-batch",
             &admin_token,
             &format!(
-                r#"{{"from_apparatus":"7 ta rangli pechat","to_apparatus":"8 ta rangli pechat","map_ids":["{order_id}"]}}"#
+                r#"{{"from_apparatus":"apparatus:default:bosma_7","to_apparatus":"apparatus:default:bosma_8","map_ids":["{order_id}"]}}"#
             ),
         ))
         .await
@@ -338,17 +362,19 @@ async fn paused_order_transfer_route_moves_state_and_is_idempotent() {
         .oneshot(request_with_body(
             "POST",
             "/v1/mobile/admin/production-maps/queue-action",
-            &worker_token,
+            &admin_token,
             &format!(
-                r#"{{"apparatus":"7 ta rangli pechat","order_id":"{order_id}","action":"pause","produced_qty":11}}"#
+                r#"{{"apparatus":"apparatus:default:bosma_7","order_id":"{order_id}","action":"pause","produced_qty":11}}"#
             ),
         ))
         .await
         .expect("pause order");
-    assert_eq!(paused.status(), StatusCode::OK);
+    let paused_status = paused.status();
+    let paused_body = json_body(paused).await;
+    assert_eq!(paused_status, StatusCode::OK, "{paused_body:?}");
 
     let transfer_body = format!(
-        r#"{{"order_id":"{order_id}","from_apparatus":"7 ta rangli pechat","to_apparatus":"8 ta rangli pechat","reason":"7 rangli pechat apparati buzildi","idempotency_key":"route-transfer-{order_id}"}}"#
+        r#"{{"order_id":"{order_id}","from_apparatus":"apparatus:default:bosma_7","to_apparatus":"apparatus:default:bosma_8","reason":"7 rangli pechat apparati buzildi","idempotency_key":"route-transfer-{order_id}"}}"#
     );
     let transferred = router
         .clone()
@@ -369,8 +395,8 @@ async fn paused_order_transfer_route_moves_state_and_is_idempotent() {
             .expect("nodes")
             .iter()
             .find(|node| node["kind"] == "apparatus")
-            .expect("apparatus")["title"],
-        "8 ta rangli pechat"
+            .expect("apparatus")["apparatus_id"],
+        "apparatus:default:bosma_8"
     );
 
     let resumed = router
@@ -380,7 +406,7 @@ async fn paused_order_transfer_route_moves_state_and_is_idempotent() {
             "/v1/mobile/admin/production-maps/queue-action",
             &worker_token,
             &format!(
-                r#"{{"apparatus":"8 ta rangli pechat","order_id":"{order_id}","action":"resume","progress_batch_id":"{}"}}"#,
+                r#"{{"apparatus":"apparatus:default:bosma_8","order_id":"{order_id}","action":"resume","progress_batch_id":"{}"}}"#,
                 transferred_body["progress_batch_id"]
                     .as_str()
                     .expect("progress batch id")

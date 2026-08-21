@@ -1,0 +1,135 @@
+impl MemoryProductionMapStore {
+
+    async fn put_order_progress_batch(
+        &self,
+        batch: OrderProgressBatch,
+    ) -> Result<(), ProductionMapError> {
+        runs::put_order_progress_batch(self, batch).await
+    }
+
+    async fn apparatus_transfer_by_idempotency_key(
+        &self,
+        idempotency_key: &str,
+    ) -> Result<Option<ProductionMapApparatusTransferRecord>, ProductionMapError> {
+        transfers::apparatus_transfer_by_idempotency_key(self, idempotency_key).await
+    }
+
+    async fn commit_apparatus_transfer(
+        &self,
+        write: ProductionMapApparatusTransferWrite,
+    ) -> Result<ProductionMapApparatusTransferRecord, ProductionMapError> {
+        transfers::commit_apparatus_transfer(self, write).await
+    }
+
+    async fn put_apparatus_queue_states_with_event_and_progress(
+        &self,
+        write: QueueActionProgressWrite,
+    ) -> Result<QueueActionProgressWriteResult, ProductionMapError> {
+        validate_queue_progress_write(&write)?;
+        if self
+            .fail_next_queue_progress_commit
+            .swap(false, Ordering::SeqCst)
+        {
+            return Err(ProductionMapError::StoreFailed);
+        }
+        if let Some(session) = &write.session
+            && matches!(
+                session.status,
+                OrderRunStatus::Active | OrderRunStatus::Paused | OrderRunStatus::RollDetached
+            )
+        {
+            for qolip_code in runs::session_qolip_codes(session) {
+                if self
+                    .active_order_run_session_for_qolip(&qolip_code)
+                    .await?
+                    .is_some_and(|active| active.session_id != session.session_id)
+                {
+                    return Err(ProductionMapError::QolipAlreadyInUse);
+                }
+            }
+        }
+        if let Some(map) = write.map_update.clone() {
+            maps::put_map(self, map).await?;
+        }
+        let schedule_reservation_status = write.schedule_reservation_status;
+        let sequence_updates = write.sequence_updates;
+        let event_order_id = write.event.order_id.clone();
+        let event_actor = write.event.actor.clone();
+        let event_apparatus = write.apparatus.clone();
+        self.put_apparatus_queue_states_with_event(&write.apparatus, write.states, write.event)
+            .await?;
+        for (apparatus, order_ids) in sequence_updates {
+            self.put_apparatus_sequence(&apparatus, order_ids).await?;
+        }
+        if let Some(session) = write.session {
+            self.put_order_run_session(session).await?;
+        }
+        if let Some(event) = write.progress_event {
+            self.put_order_progress_event(event).await?;
+        }
+        let progress_batches = write.progress_batches;
+        if progress_batches.is_empty() {
+            if let Some(batch) = write.progress_batch {
+                self.put_order_progress_batch(batch).await?;
+            }
+        } else {
+            for batch in progress_batches {
+                self.put_order_progress_batch(batch).await?;
+            }
+        }
+        for batch in write.progress_batch_updates {
+            self.put_order_progress_batch(batch).await?;
+        }
+        if let Some(record) = write.order_control_update {
+            self.put_order_control_state(record).await?;
+        }
+        if let Some(status) = schedule_reservation_status {
+            let event_apparatus_id = ApparatusId::new(event_apparatus.trim().to_string())
+                .map_err(|_| ProductionMapError::ScheduleInputInvalid)?;
+            self.update_apparatus_schedule_reservation_status(
+                &event_order_id,
+                &event_apparatus_id,
+                status,
+                &event_actor,
+            )
+            .await?;
+        }
+        if let Some(report) = write.returned_paint_report {
+            self.returned_paint_requests
+                .write()
+                .await
+                .entry(report.id.clone())
+                .or_insert(report);
+        }
+        Ok(QueueActionProgressWriteResult::default())
+    }
+
+    async fn receive_finished_goods_batch(
+        &self,
+        batch: OrderProgressBatch,
+        stock: FinishedGoodsStockEntry,
+    ) -> Result<(), ProductionMapError> {
+        runs::receive_finished_goods_batch(self, batch, stock).await
+    }
+
+    async fn raw_material_assignments(
+        &self,
+    ) -> Result<Vec<RawMaterialAssignment>, ProductionMapError> {
+        materials::raw_material_assignments(self).await
+    }
+
+    async fn put_raw_material_assignment(
+        &self,
+        assignment: RawMaterialAssignment,
+    ) -> Result<(), ProductionMapError> {
+        materials::put_raw_material_assignment(self, assignment).await
+    }
+
+    async fn delete_raw_material_assignment(
+        &self,
+        order_id: &str,
+        barcode: &str,
+    ) -> Result<Option<RawMaterialAssignment>, ProductionMapError> {
+        materials::delete_raw_material_assignment(self, order_id, barcode).await
+    }
+}

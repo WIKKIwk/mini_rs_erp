@@ -42,6 +42,7 @@ pub(crate) fn revision_with(
                 operation: ExecutionOperation::Print,
                 technology: ProcessTechnology::Rotogravure,
                 color_station_count: Some(7),
+                max_web_width_mm: Some(1_050),
                 virtual_tasks: VirtualTaskPolicy::Disabled,
                 capability_compatible_reroute: true,
             },
