@@ -193,6 +193,7 @@ mod tests {
         assert!(versions.contains("0069_canonical_apparatus_revision_authority"));
         assert!(versions.contains("0070_canonical_apparatus_clean_cutover"));
         assert!(versions.contains("0071_qolip_lock_ownership"));
+        assert!(versions.contains("0072_canonical_identity_indexes"));
         assert!(POSTGRES_MIGRATIONS.iter().all(|(version, sql)| {
             !version.trim().is_empty() && migration_checksum(sql).len() == 64
         }));
@@ -225,6 +226,26 @@ mod tests {
                 "missing 0069 invariant: {invariant}"
             );
         }
+    }
+
+    #[test]
+    fn canonical_identity_index_migration_replaces_display_keys() {
+        let migration = POSTGRES_MIGRATIONS
+            .iter()
+            .find(|(version, _)| *version == "0072_canonical_identity_indexes")
+            .map(|(_, sql)| sql.to_lowercase())
+            .expect("canonical identity index migration");
+        let compact = migration.split_whitespace().collect::<String>();
+
+        for invariant in [
+            "dropindexifexistsidx_mini_apparatus_factory_map_object_id_unique",
+            "payload_json#>>'{placement,factory_map_object_id}'",
+            "dropindexifexistsidx_mini_queue_action_events_pending_completion",
+            "onmini_queue_action_events(canonical_apparatus_id,order_id)",
+        ] {
+            assert!(compact.contains(invariant), "missing 0072 invariant: {invariant}");
+        }
+        assert!(!compact.contains("lower(apparatus)"));
     }
 
     #[test]
@@ -1144,7 +1165,7 @@ mod tests {
             .expect("apply foundation migration");
         let migration_history = postgres_0062_migration_history(&pool).await;
         assert_eq!(migration_history.len(), POSTGRES_MIGRATIONS.len());
-        assert_eq!(migration_history.len(), 71);
+        assert_eq!(migration_history.len(), 72);
         let obsolete_material_index_exists: bool = sqlx::query_scalar(
             "SELECT EXISTS (
                  SELECT 1 FROM pg_indexes

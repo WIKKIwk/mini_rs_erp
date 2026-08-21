@@ -79,7 +79,7 @@ async fn postgres_gscale_receipt_preserves_precision_and_supports_stock_correcti
         .fetch_one(&pool)
         .await
         .expect("migration count");
-    assert_eq!(migration_count, 71);
+    assert_eq!(migration_count, 72);
 
     let increased = store
         .update_raw_material_stock(RawMaterialStockUpdateInput {

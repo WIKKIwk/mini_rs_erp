@@ -1,6 +1,6 @@
 # Canonical Apparatus Clean-Cutover Runbook
 
-Status: operator procedure for migrations 0069 and 0070.
+Status: operator procedure for migrations 0069-0072.
 
 This procedure performs a clean cutover. It has no dual-read, dual-write, or
 legacy fallback interval. Never run it against a live database without the
@@ -14,11 +14,36 @@ normal production change approval, maintenance window, and verified backup.
   isolated restore rehearsal.
 - The new binary and `mini_rs_apparatus_cutover` binary come from the same
   reviewed release commit.
-- `MINI_ERP_MIGRATION_DATABASE_URL` identifies the intended maintenance
-  database. The command does not run migrations automatically.
+- `MINI_ERP_DATABASE_URL` is set because the migration binary requires the
+  runtime database anchor. `MINI_ERP_MIGRATION_DATABASE_URL` identifies the
+  schema-owner connection; both URLs must resolve to the same intended
+  maintenance database. The cutover binary does not run migrations
+  automatically.
 
 Record the current row counts, migration history, backup path, backup SHA-256,
 old binary identifier, and new binary identifier in the change ticket.
+
+### Audited Accord 0061 snapshot preparation
+
+The audited Accord production snapshot has an owner-approved, one-time data
+resolution before migrations 0062-0068. Run
+`tools/apparatus_cutover/accord-owner-resolution-v1.sql` only when migration
+history ends at `0061_order_reset_append_only_override`. The script locks every
+touched table, verifies the exact audited source rows, applies all mappings in
+one transaction, verifies its postconditions, and leaves migration history
+unchanged. Any source drift aborts the transaction and requires a new owner
+review; do not edit the script or bypass a failed assertion during cutover.
+
+Record the reviewed script SHA-256 and its psql output in the change ticket:
+
+```sh
+shasum -a 256 tools/apparatus_cutover/accord-owner-resolution-v1.sql
+psql "$MINI_ERP_MIGRATION_DATABASE_URL" -v ON_ERROR_STOP=1 \
+  -f tools/apparatus_cutover/accord-owner-resolution-v1.sql
+```
+
+After this transaction, run migrations through 0068, verify migration history,
+then continue with step 1 below.
 
 ## 1. Install canonical authority schema
 
@@ -98,6 +123,11 @@ legacy groups and configuration columns.
 Apply migration `0071_qolip_lock_ownership`. It marks only canonical
 Qolip-tooling apparatus sessions as physical lock owners; downstream progress
 sessions retain Qolip lineage without becoming a second lock authority.
+
+Apply migration `0072_canonical_identity_indexes`. It preserves the production
+0062 concurrency invariants while replacing the inherited pending-completion
+display-name key with `canonical_apparatus_id` and moving the factory placement
+uniqueness key to the canonical nested projection path.
 
 Restart migration once and prove `(version, checksum, applied_at)` history is
 unchanged. Start the new binary only after its startup canonical repository

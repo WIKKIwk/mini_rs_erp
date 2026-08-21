@@ -43,7 +43,7 @@ async fn postgres_inventory_transfer_preserves_six_decimal_quantity_end_to_end()
         .fetch_one(&pool)
         .await
         .expect("migration count");
-    assert_eq!(migration_count, 71);
+    assert_eq!(migration_count, 72);
 
     let quantity_columns: Vec<(String, String, Option<i32>, Option<i32>)> = sqlx::query_as(
         r#"

@@ -97,7 +97,7 @@ async fn postgres_mini_order_sink_saves_order_and_product_rows() {
     assert_eq!(order_count, 1);
     assert_eq!(product_count, 1);
     assert_eq!(linked_order_id.as_deref(), Some("zakaz-9001"));
-    assert_eq!(migration_count, 71);
+    assert_eq!(migration_count, 72);
     assert_eq!(order_status, "draft");
     assert_eq!(product_form, "rulon");
     assert_eq!(kg, "500.123457");

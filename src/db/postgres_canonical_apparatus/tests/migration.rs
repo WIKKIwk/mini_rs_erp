@@ -8,7 +8,7 @@ use crate::db::postgres::{
 use super::fixtures::TestDatabase;
 
 #[tokio::test]
-async fn migration_0068_to_0071_uses_exact_cutover_and_is_restart_stable() {
+async fn migration_0068_to_0072_uses_exact_cutover_and_is_restart_stable() {
     let database = TestDatabase::create_through("upgrade", 68).await;
     let before = migration_history(&database).await;
     assert_eq!(before.len(), 68);
@@ -35,9 +35,12 @@ async fn migration_0068_to_0071_uses_exact_cutover_and_is_restart_stable() {
     service.apply_legacy_cutover(manifest).await.unwrap();
     database.migrate_current().await;
     let after_upgrade = migration_history(&database).await;
-    assert_eq!(after_upgrade.len(), 71);
+    assert_eq!(after_upgrade.len(), 72);
     assert_eq!(&after_upgrade[..69], through_authority.as_slice());
-    assert_eq!(after_upgrade.last().unwrap().0, "0071_qolip_lock_ownership");
+    assert_eq!(
+        after_upgrade.last().unwrap().0,
+        "0072_canonical_identity_indexes"
+    );
 
     database.migrate_current().await;
     assert_eq!(migration_history(&database).await, after_upgrade);
