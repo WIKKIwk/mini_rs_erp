@@ -17,8 +17,7 @@ use crate::core::admin::models::{
 };
 use crate::core::admin::ports::{AdminPortError, AdminReadPort, AdminStatePort, AdminWritePort};
 use crate::core::admin::service::AdminService;
-use crate::core::apparatus_groups::{ApparatusGroupService, MemoryApparatusGroupStore};
-use crate::core::apparatus_standard::{ApparatusId, CanonicalApparatus};
+use crate::core::apparatus_standard::ApparatusId;
 use crate::core::auth::models::{Principal, PrincipalRole};
 use crate::core::auth::ports::{
     AdminAccessState, AdminAccessStateLookup, AuthPortError, CustomerLookup, CustomerRecord,
@@ -43,7 +42,7 @@ use crate::core::inventory_movements::{
 };
 use crate::core::mini_orders::{MiniOrderError, MiniOrderSink, NoopMiniOrderSink};
 use crate::core::production_map::{
-    ApparatusGroupCanonicalResolver, MemoryProductionMapStore, ProductionMapService,
+    MemoryProductionMapStore, ProductionMapService, TestCanonicalApparatusResolver,
 };
 use crate::core::profile::ports::{ProfilePrefs, ProfileStoreError, ProfileStorePort};
 use crate::core::returned_paint::{MemoryReturnedPaintStore, ReturnedPaintService};
@@ -288,11 +287,7 @@ fn production_order_map_json_with_product(
     )
 }
 
-fn pechat_task_rezka_order_map_json(
-    id: &str,
-    title: &str,
-    order_number: &str,
-) -> String {
+fn pechat_task_rezka_order_map_json(id: &str, title: &str, order_number: &str) -> String {
     r#"{{
         "id":"{id}",
         "product_code":"PECHAT-REZKA-{order_number}",
@@ -343,106 +338,6 @@ fn laminatsiya_order_map_json(id: &str, width_mm: f64) -> String {
     )
 }
 
-#[derive(Clone, Default)]
-struct TestCanonicalApparatusResolver;
-
-#[async_trait]
-impl crate::core::production_map::CanonicalApparatusResolver
-    for TestCanonicalApparatusResolver
-{
-    async fn resolve(
-        &self,
-        apparatus_id: &ApparatusId,
-    ) -> Result<Option<Arc<CanonicalApparatus>>, crate::core::production_map::ProductionMapError>
-    {
-        let id = apparatus_id.as_str();
-        let value = id.to_ascii_lowercase();
-        let (family, kind, capabilities, tooling, color_stations, display_name) =
-            if value.contains("bosma") || value.contains("pechat") {
-                let stations = value
-                    .rsplit_once("bosma_")
-                    .and_then(|(_, count)| count.parse::<u8>().ok());
-                (
-                    "pechat",
-                    "color_pechat",
-                    serde_json::json!(["apparatus", "print", "pechat"]),
-                    "qolip_scan_required",
-                    stations.map_or(serde_json::Value::Null, |stations| {
-                        serde_json::json!(stations)
-                    }),
-                    "Test pechat",
-                )
-            } else if value.contains("flexo") {
-                (
-                    "pechat",
-                    "flexo",
-                    serde_json::json!(["apparatus", "print", "pechat", "flexo"]),
-                    "qolip_scan_required",
-                    serde_json::Value::Null,
-                    "Test flexo",
-                )
-            } else if value.contains("lamin")
-                || value.contains("asset-007")
-                || value.contains("asset-008")
-            {
-                (
-                    "laminatsiya",
-                    "laminatsiya",
-                    serde_json::json!(["apparatus", "laminate"]),
-                    "qolip_scan_not_required",
-                    serde_json::Value::Null,
-                    "Test laminatsiya",
-                )
-            } else if value.contains("rezka") || value.contains("asset-010") {
-                (
-                    "rezka",
-                    "rezka",
-                    serde_json::json!(["apparatus", "cut"]),
-                    "qolip_scan_not_required",
-                    serde_json::Value::Null,
-                    "Test rezka",
-                )
-            } else {
-                (
-                    "other",
-                    "other",
-                    serde_json::json!(["apparatus"]),
-                    "qolip_scan_not_required",
-                    serde_json::Value::Null,
-                    "Test apparatus",
-                )
-            };
-        let canonical = serde_json::from_value(serde_json::json!({
-            "identity": {
-                "id": id,
-                "display": { "display_name": display_name }
-            },
-            "classification": {
-                "family": family,
-                "kind": kind,
-                "color_stations": color_stations
-            },
-            "capabilities": capabilities,
-            "policies": {
-                "queue": "strict_sequence",
-                "tooling": tooling
-            },
-            "capacity": {},
-            "training": {},
-            "provenance": { "source": "default" },
-            "versioning": {},
-            "aas": {
-                "submodel_id": format!(
-                    "urn:mini-rs-erp:submodel:{}",
-                    id
-                )
-            }
-        }))
-        .map_err(|_| crate::core::production_map::ProductionMapError::StoreFailed)?;
-        Ok(Some(Arc::new(canonical)))
-    }
-}
-
 fn test_state() -> AppState {
     let mut state = AppState::new(AppConfig {
         bind_addr: "127.0.0.1:8081".parse().expect("addr"),
@@ -473,14 +368,10 @@ fn test_state() -> AppState {
         .with_write_port(admin_port.clone())
         .with_state_port(admin_state_port.clone());
     state.returned_paint = ReturnedPaintService::new(Arc::new(MemoryReturnedPaintStore::new()));
-    state.apparatus_groups =
-        ApparatusGroupService::new(Arc::new(MemoryApparatusGroupStore::with_canonical_defaults()));
-    state.production_maps = ProductionMapService::new(Arc::new(MemoryProductionMapStore::new()))
-        .with_canonical_apparatus_resolver(Arc::new(TestCanonicalApparatusResolver));
-    state.warehouses = WarehouseService::new(Arc::new(MemoryWarehouseStore::new()))
-        .with_canonical_apparatus_resolver(Arc::new(ApparatusGroupCanonicalResolver::new(
-            state.apparatus_groups.clone(),
-        )));
+    let resolver = Arc::new(TestCanonicalApparatusResolver::standard());
+    state.production_maps =
+        ProductionMapService::new(Arc::new(MemoryProductionMapStore::new()), resolver.clone());
+    state.warehouses = WarehouseService::new(Arc::new(MemoryWarehouseStore::new()), resolver);
     state.workers = WorkerService::new(Arc::new(MemoryWorkerStore::new()));
     state.system_users = SystemUserService::new(Arc::new(MemorySystemUserStore::new()));
     state.auth = crate::core::auth::service::AuthService::new(&state.config)

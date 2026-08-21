@@ -1,5 +1,5 @@
 use super::*;
-use crate::core::apparatus_standard::{ApparatusFamily, ApparatusId, ApparatusKind};
+use crate::core::apparatus_standard::{ApparatusId, ExecutionOperation};
 use crate::core::production_map::pechat;
 use crate::core::returned_paint::{
     ReturnedPaintError, ReturnedPaintItem, ReturnedPaintRequestCreate, ReturnedPaintStatus,
@@ -98,19 +98,17 @@ struct ApparatusQueueActionRequest {
 #[derive(Debug, Clone)]
 pub(super) struct QueueApparatusMetadata {
     pub(super) id: ApparatusId,
-    family: ApparatusFamily,
-    kind: ApparatusKind,
+    operation: ExecutionOperation,
     qolip_scan_required: bool,
 }
 
 impl QueueApparatusMetadata {
     fn is_pechat(&self) -> bool {
-        self.family == ApparatusFamily::Pechat
-            && matches!(self.kind, ApparatusKind::ColorPechat | ApparatusKind::Flexo)
+        self.operation == ExecutionOperation::Print
     }
 
     fn is_rezka(&self) -> bool {
-        self.family == ApparatusFamily::Rezka && self.kind == ApparatusKind::Rezka
+        self.operation == ExecutionOperation::Cut
     }
 
     pub(super) fn requires_qolip_scan(&self) -> bool {
@@ -129,9 +127,8 @@ pub(super) async fn resolve_queue_apparatus(
         .await
         .map_err(production_map_error)?;
     Ok(QueueApparatusMetadata {
-        id: canonical.identity.id.clone(),
-        family: canonical.classification.family,
-        kind: canonical.classification.kind,
+        id: canonical.runtime.apparatus_id.clone(),
+        operation: canonical.runtime.execution_profile.operation,
         qolip_scan_required: pechat::requires_qolip_scan(canonical.as_ref()),
     })
 }
@@ -802,7 +799,7 @@ mod tests {
         QueueApparatusMetadata, canonical_queue_action, parse_canonical_queue_apparatus_id,
         returned_paint_queue_error,
     };
-    use crate::core::apparatus_standard::{ApparatusFamily, ApparatusId, ApparatusKind};
+    use crate::core::apparatus_standard::{ApparatusId, ExecutionOperation};
     use crate::core::auth::models::{Principal, PrincipalRole};
     use crate::core::production_map::queue_state::ApparatusQueueAction;
     use crate::core::returned_paint::ReturnedPaintError;
@@ -863,32 +860,27 @@ mod tests {
     fn qolip_scan_uses_canonical_tooling_policy_not_pechat_classification() {
         let pechat = QueueApparatusMetadata {
             id: ApparatusId::new("apparatus:catalog:pechat-001").unwrap(),
-            family: ApparatusFamily::Pechat,
-            kind: ApparatusKind::ColorPechat,
+            operation: ExecutionOperation::Print,
             qolip_scan_required: false,
         };
         let scan_required_pechat = QueueApparatusMetadata {
             id: ApparatusId::new("apparatus:catalog:pechat-002").unwrap(),
-            family: ApparatusFamily::Pechat,
-            kind: ApparatusKind::ColorPechat,
+            operation: ExecutionOperation::Print,
             qolip_scan_required: true,
         };
         let flexo = QueueApparatusMetadata {
             id: ApparatusId::new("apparatus:catalog:flexo-001").unwrap(),
-            family: ApparatusFamily::Pechat,
-            kind: ApparatusKind::Flexo,
+            operation: ExecutionOperation::Print,
             qolip_scan_required: false,
         };
         let laminatsiya = QueueApparatusMetadata {
             id: ApparatusId::new("apparatus:catalog:laminatsiya-001").unwrap(),
-            family: ApparatusFamily::Laminatsiya,
-            kind: ApparatusKind::Laminatsiya,
+            operation: ExecutionOperation::Laminate,
             qolip_scan_required: false,
         };
         let rezka = QueueApparatusMetadata {
             id: ApparatusId::new("apparatus:catalog:rezka-001").unwrap(),
-            family: ApparatusFamily::Rezka,
-            kind: ApparatusKind::Rezka,
+            operation: ExecutionOperation::Cut,
             qolip_scan_required: false,
         };
 

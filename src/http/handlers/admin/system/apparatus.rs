@@ -1,46 +1,8 @@
 use super::*;
-use crate::core::apparatus_groups::{
-    ApparatusCatalogEntry, ApparatusMasterData, ApparatusSource, apparatus_master_options,
+use crate::core::apparatus_standard::{
+    AAS_METAMODEL_VERSION, AASX_PART_5_VERSION, ApparatusId, CANONICAL_APPARATUS_SCHEMA_VERSION,
+    CanonicalApparatusDraft, CanonicalApparatusPatch, IDTA_RELEASE,
 };
-
-pub async fn apparatus_groups(
-    State(state): State<AppState>,
-    method: Method,
-    headers: HeaderMap,
-    body: Bytes,
-) -> Result<Response, AdminError> {
-    let principal = authorize_any_capability(
-        &state,
-        &headers,
-        &[Capability::AdminAccess, Capability::ProductionMapManage],
-    )
-    .await?;
-    if !matches!(method, Method::GET | Method::PUT) {
-        return Err(method_not_allowed());
-    }
-    match method {
-        Method::GET => {
-            require_capability(&state, &principal, Capability::ProductionMapManage).await?;
-            state
-                .apparatus_groups
-                .groups()
-                .await
-                .map(json_response)
-                .map_err(apparatus_group_error)
-        }
-        Method::PUT => {
-            require_capability(&state, &principal, Capability::ProductionMapManage).await?;
-            let input: ApparatusGroupUpsert = parse_json(&body)?;
-            state
-                .apparatus_groups
-                .upsert_group(input)
-                .await
-                .map(json_response)
-                .map_err(apparatus_group_error)
-        }
-        _ => Err(method_not_allowed()),
-    }
-}
 
 pub async fn apparatus_options(
     State(state): State<AppState>,
@@ -64,7 +26,31 @@ pub async fn apparatus_options(
         return Err(method_not_allowed());
     }
     require_capability(&state, &principal, Capability::ProductionMapManage).await?;
-    Ok(json_response(apparatus_master_options()))
+    Ok(json_response(serde_json::json!({
+        "contract": "canonical_apparatus_revision",
+        "schema_version": CANONICAL_APPARATUS_SCHEMA_VERSION,
+        "aas_profile": {
+            "idta_release": IDTA_RELEASE,
+            "aas_metamodel_version": AAS_METAMODEL_VERSION,
+            "aasx_part_5_version": AASX_PART_5_VERSION,
+        },
+        "vocabulary": {
+            "equipment_capabilities": [
+                "print", "laminate", "cut", "package", "glue", "tooling",
+                "virtual_task", "training"
+            ],
+            "execution_operations": ["print", "laminate", "cut", "package", "glue"],
+            "process_technologies": [
+                "rotogravure", "flexographic", "adhesive_lamination",
+                "extrusion_lamination", "slitting", "bag_making", "cold_glue"
+            ],
+            "queue_disciplines": ["strict_sequence", "free_pick"],
+            "material_policy_modes": ["not_required", "all_required", "requirement_sets"],
+            "tooling_policy_modes": ["not_required", "qolip_scan_required"],
+            "virtual_task_policies": ["disabled", "input_bridge"],
+            "lifecycle_states": ["active", "retired"]
+        }
+    })))
 }
 
 pub async fn apparatus(
@@ -74,9 +60,134 @@ pub async fn apparatus(
     Query(query): Query<ItemQuery>,
     body: Bytes,
 ) -> Result<Response, AdminError> {
-    let principal = authorize_any_capability(
-        &state,
-        &headers,
+    let principal = authorize_apparatus(&state, &headers).await?;
+    match method {
+        Method::GET => {
+            let limit = optional_search_limit(query.limit.as_deref(), 50, 500);
+            let search = query.q.as_deref().unwrap_or("").trim().to_lowercase();
+            let mut rows = state
+                .apparatus
+                .list_runtime_projections()
+                .await
+                .map_err(canonical_apparatus_error)?;
+            if !search.is_empty() {
+                rows.retain(|row| row.display.display_name.to_lowercase().contains(&search));
+            }
+            rows.truncate(limit);
+            Ok(json_response(rows))
+        }
+        Method::POST => {
+            require_capability(&state, &principal, Capability::ProductionMapManage).await?;
+            let draft: CanonicalApparatusDraft = parse_json(&body)?;
+            let committed = state
+                .apparatus
+                .create(draft, canonical_command_metadata(&principal, &headers)?)
+                .await
+                .map_err(canonical_apparatus_error)?;
+            state.production_maps.notify_live();
+            Ok(json_response(committed))
+        }
+        _ => Err(method_not_allowed()),
+    }
+}
+
+pub async fn apparatus_detail(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    method: Method,
+    headers: HeaderMap,
+    body: Bytes,
+) -> Result<Response, AdminError> {
+    let principal = authorize_apparatus(&state, &headers).await?;
+    let apparatus_id = parse_apparatus_id(id)?;
+    match method {
+        Method::GET => state
+            .apparatus
+            .current_projection(&apparatus_id)
+            .await
+            .map_err(canonical_apparatus_error)?
+            .map(|projection| json_response(projection.as_ref().clone()))
+            .ok_or_else(|| not_found("apparatus_not_found")),
+        Method::PUT => {
+            require_capability(&state, &principal, Capability::ProductionMapManage).await?;
+            let request: CanonicalUpdateRequest = parse_json(&body)?;
+            let committed = state
+                .apparatus
+                .update(
+                    apparatus_id,
+                    request.expected_revision,
+                    request.draft,
+                    canonical_command_metadata(&principal, &headers)?,
+                )
+                .await
+                .map_err(canonical_apparatus_error)?;
+            state.production_maps.notify_live();
+            Ok(json_response(committed))
+        }
+        Method::PATCH => {
+            require_capability(&state, &principal, Capability::ProductionMapManage).await?;
+            let request: CanonicalPatchRequest = parse_json(&body)?;
+            let committed = state
+                .apparatus
+                .patch(
+                    apparatus_id,
+                    request.expected_revision,
+                    request.patch,
+                    canonical_command_metadata(&principal, &headers)?,
+                )
+                .await
+                .map_err(canonical_apparatus_error)?;
+            state.production_maps.notify_live();
+            Ok(json_response(committed))
+        }
+        Method::DELETE => {
+            require_capability(&state, &principal, Capability::ProductionMapManage).await?;
+            let request: CanonicalRetireRequest = parse_json(&body)?;
+            let committed = state
+                .apparatus
+                .retire(
+                    apparatus_id,
+                    request.expected_revision,
+                    request.retirement_reason,
+                    canonical_command_metadata(&principal, &headers)?,
+                )
+                .await
+                .map_err(canonical_apparatus_error)?;
+            state.production_maps.notify_live();
+            Ok(json_response(committed))
+        }
+        _ => Err(method_not_allowed()),
+    }
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct CanonicalUpdateRequest {
+    expected_revision: u64,
+    draft: CanonicalApparatusDraft,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct CanonicalPatchRequest {
+    expected_revision: u64,
+    patch: CanonicalApparatusPatch,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct CanonicalRetireRequest {
+    expected_revision: u64,
+    retirement_reason: String,
+}
+
+pub(super) async fn authorize_apparatus(
+    state: &AppState,
+    headers: &HeaderMap,
+) -> Result<Principal, AdminError> {
+    authorize_any_capability(
+        state,
+        headers,
         &[
             Capability::AdminAccess,
             Capability::ProductionMapManage,
@@ -86,109 +197,9 @@ pub async fn apparatus(
             Capability::QolipManage,
         ],
     )
-    .await?;
-    if !matches!(method, Method::GET | Method::POST) {
-        return Err(method_not_allowed());
-    }
-    match method {
-        Method::GET => {
-            let limit = optional_search_limit(query.limit.as_deref(), 50, 500);
-            state
-                .apparatus_groups
-                .apparatus_catalog(query.q.as_deref().unwrap_or(""), limit)
-                .await
-                .map(json_response)
-                .map_err(apparatus_group_error)
-        }
-        Method::POST => {
-            require_capability(&state, &principal, Capability::ProductionMapManage).await?;
-            let input: ApparatusUpsert = parse_json(&body)?;
-            let entry = state
-                .apparatus_groups
-                .upsert_apparatus(input)
-                .await
-                .map_err(apparatus_group_error)?;
-            state.production_maps.notify_live();
-            Ok(json_response(AdminApparatusMutationResponse::new(entry)))
-        }
-        _ => Err(method_not_allowed()),
-    }
+    .await
 }
 
-#[derive(Serialize)]
-struct AdminApparatusMutationResponse {
-    name: String,
-    // Compatibility fields for already released clients.
-    warehouse: String,
-    company: String,
-    is_group: bool,
-    parent_warehouse: String,
-    id: String,
-    source: ApparatusSource,
-    sort_order: usize,
-    #[serde(flatten)]
-    master: ApparatusMasterData,
-}
-
-impl AdminApparatusMutationResponse {
-    fn new(entry: ApparatusCatalogEntry) -> Self {
-        Self {
-            warehouse: entry.name.clone(),
-            name: entry.name,
-            company: String::new(),
-            is_group: false,
-            parent_warehouse: "aparat - A".to_string(),
-            id: entry.id,
-            source: entry.source,
-            sort_order: entry.sort_order,
-            master: entry.master,
-        }
-    }
-}
-
-pub(super) fn apparatus_group_error(error: ApparatusGroupError) -> AdminError {
-    match error {
-        ApparatusGroupError::MissingName => bad_request("group name is required"),
-        ApparatusGroupError::MissingApparatus => bad_request("apparatus is required"),
-        ApparatusGroupError::InvalidApparatus => bad_request("apparatus is invalid"),
-        ApparatusGroupError::InvalidFamily => bad_request("apparatus family is invalid"),
-        ApparatusGroupError::InvalidKind => bad_request("apparatus kind is invalid"),
-        ApparatusGroupError::InvalidCapability => bad_request("apparatus capability is invalid"),
-        ApparatusGroupError::InvalidColorStations => {
-            bad_request("apparatus color stations are invalid")
-        }
-        ApparatusGroupError::Conflict => (
-            StatusCode::CONFLICT,
-            Json(AdminErrorResponse::new("apparatus group conflict")),
-        ),
-        ApparatusGroupError::StoreFailed => server_error("apparatus group store failed"),
-    }
-}
-
-pub(super) fn is_legacy_apparatus_parent(parent: &str) -> bool {
-    matches!(
-        parent.trim().to_lowercase().as_str(),
-        "aparat" | "aparat - a" | "apparat" | "apparat - a"
-    )
-}
-
-#[derive(Serialize)]
-pub(super) struct LegacyApparatusWarehouse {
-    pub warehouse: String,
-    pub company: String,
-    pub is_group: bool,
-    pub parent_warehouse: String,
-    /// Released warehouse clients receive this additive field so the
-    /// compatibility projection cannot make a display title the identity.
-    pub id: String,
-}
-
-pub(super) fn legacy_apparatus_warehouse(entry: ApparatusCatalogEntry) -> LegacyApparatusWarehouse {
-    LegacyApparatusWarehouse {
-        warehouse: entry.name,
-        company: String::new(),
-        is_group: false,
-        parent_warehouse: "aparat - A".to_string(),
-        id: entry.id,
-    }
+pub(super) fn parse_apparatus_id(id: String) -> Result<ApparatusId, AdminError> {
+    ApparatusId::new(id).map_err(|_| bad_request("apparatus_id_invalid"))
 }

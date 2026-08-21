@@ -1,10 +1,12 @@
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
-use crate::core::apparatus_groups::{
-    ApparatusGroupService, ApparatusMasterData, ApparatusUpsert, MemoryApparatusGroupStore,
+use crate::core::apparatus_standard::test_support::{TestApparatusSpec, canonical_draft};
+use crate::core::apparatus_standard::{
+    ApparatusId, ApparatusOperationalPolicies, CanonicalApparatusPatch, CanonicalApparatusService,
+    CanonicalCommandMetadata, ExecutionOperation, MaterialExecutionPolicy, MaterialRequirementSet,
+    ProcessTechnology, QueueDiscipline,
 };
-use crate::core::apparatus_standard::ApparatusId;
 use crate::core::production_map::*;
 use crate::core::qolip::{QolipOrderStartPreparation, QolipProductSpec};
 
@@ -25,17 +27,20 @@ const REZKA_ID: &str = "apparatus:default:asset-010";
 async fn service_with_apparatus_store(
     store: Arc<MemoryProductionMapStore>,
     apparatus: &[(&str, &str)],
-) -> (ProductionMapService, ApparatusGroupService) {
-    let apparatus_groups = apparatus_groups_for(apparatus).await;
-    let service = ProductionMapService::new(store).with_canonical_apparatus_resolver(Arc::new(
-        ApparatusGroupCanonicalResolver::new(apparatus_groups.clone()),
-    ));
-    (service, apparatus_groups)
+) -> (ProductionMapService, CanonicalApparatusService) {
+    let apparatus_service = apparatus_service_for(apparatus).await;
+    let service = ProductionMapService::new(
+        store,
+        Arc::new(CanonicalServiceApparatusResolver::new(
+            apparatus_service.clone(),
+        )),
+    );
+    (service, apparatus_service)
 }
 
 async fn service_with_apparatus(
     apparatus: &[(&str, &str)],
-) -> (ProductionMapService, ApparatusGroupService) {
+) -> (ProductionMapService, CanonicalApparatusService) {
     service_with_apparatus_store(Arc::new(MemoryProductionMapStore::new()), apparatus).await
 }
 
@@ -45,8 +50,8 @@ async fn default_service_with_store(store: Arc<MemoryProductionMapStore>) -> Pro
         .0
 }
 
-async fn apparatus_groups_for(apparatus: &[(&str, &str)]) -> ApparatusGroupService {
-    let apparatus_groups = ApparatusGroupService::new(Arc::new(MemoryApparatusGroupStore::new()));
+async fn apparatus_service_for(apparatus: &[(&str, &str)]) -> CanonicalApparatusService {
+    let service = CanonicalApparatusService::memory();
     let supplied_ids = apparatus
         .iter()
         .map(|(id, _)| *id)
@@ -66,26 +71,155 @@ async fn apparatus_groups_for(apparatus: &[(&str, &str)]) -> ApparatusGroupServi
         if supplied_ids.contains(id) {
             continue;
         }
-        apparatus_groups
-            .upsert_apparatus(ApparatusUpsert {
-                id: Some(id.to_string()),
-                name: name.to_string(),
-                master: ApparatusMasterData::default(),
-            })
+        seed_apparatus(&service, apparatus_spec(id, name))
             .await
             .expect("seed default canonical apparatus");
     }
     for (id, name) in apparatus {
-        apparatus_groups
-            .upsert_apparatus(ApparatusUpsert {
-                id: Some((*id).to_string()),
-                name: (*name).to_string(),
-                master: ApparatusMasterData::default(),
-            })
+        seed_apparatus(&service, apparatus_spec(id, name))
             .await
             .expect("seed canonical apparatus");
     }
-    apparatus_groups
+    service
+}
+
+async fn seed_apparatus(
+    service: &CanonicalApparatusService,
+    spec: TestApparatusSpec<'_>,
+) -> Result<(), crate::core::apparatus_standard::CanonicalApparatusError> {
+    let apparatus_id = ApparatusId::new(spec.apparatus_id).expect("canonical test apparatus id");
+    service
+        .seed_for_test(apparatus_id, canonical_draft(&spec))
+        .await?;
+    Ok(())
+}
+
+fn apparatus_spec<'a>(id: &'a str, name: &'a str) -> TestApparatusSpec<'a> {
+    match id {
+        PECHAT_7_ID => TestApparatusSpec::print(id, name, ProcessTechnology::Rotogravure, Some(7)),
+        PECHAT_8_ID => TestApparatusSpec::print(id, name, ProcessTechnology::Rotogravure, Some(8)),
+        PECHAT_9_ID => TestApparatusSpec::print(id, name, ProcessTechnology::Rotogravure, Some(9)),
+        FLEXO_ID => TestApparatusSpec::print(id, name, ProcessTechnology::Flexographic, None),
+        FLOW_PECHAT_ID | FLOW_ALT_PECHAT_ID => {
+            TestApparatusSpec::print(id, name, ProcessTechnology::Rotogravure, Some(7))
+        }
+        LAMINATION_1_ID | LAMINATION_2_ID | FLOW_LAMINATION_ID => {
+            TestApparatusSpec::laminate(id, name)
+        }
+        FLOW_REZKA_ID | REZKA_ID => TestApparatusSpec::cut(id, name),
+        "apparatus:default:asset-004" => TestApparatusSpec::operation(
+            id,
+            name,
+            ExecutionOperation::Laminate,
+            ProcessTechnology::ExtrusionLamination,
+        ),
+        "apparatus:default:holodniy_kley" => TestApparatusSpec::operation(
+            id,
+            name,
+            ExecutionOperation::Glue,
+            ProcessTechnology::ColdGlue,
+        ),
+        "apparatus:default:paket" => TestApparatusSpec::package(id, name),
+        _ => panic!("test apparatus requires an explicit ISA-95 profile: {id}"),
+    }
+}
+
+async fn set_test_queue_policy(
+    service: &CanonicalApparatusService,
+    apparatus_id: &ApparatusId,
+    policy: ApparatusQueuePolicy,
+) {
+    let current = service
+        .current_configuration(apparatus_id)
+        .await
+        .expect("current canonical configuration")
+        .expect("seeded canonical configuration");
+    let policies = ApparatusOperationalPolicies {
+        queue: match policy {
+            ApparatusQueuePolicy::StrictSequence => QueueDiscipline::StrictSequence,
+            ApparatusQueuePolicy::FreePick => QueueDiscipline::FreePick,
+        },
+        material: current.material.policy.clone(),
+        tooling: current.material.tooling.clone(),
+    };
+    service
+        .patch(
+            apparatus_id.clone(),
+            current.runtime.source_revision,
+            CanonicalApparatusPatch {
+                policies: Some(policies),
+                ..CanonicalApparatusPatch::default()
+            },
+            CanonicalCommandMetadata::new(
+                "user:test",
+                format!(
+                    "command:test-queue:{apparatus_id}:{}",
+                    current.runtime.source_revision
+                ),
+            ),
+        )
+        .await
+        .expect("canonical queue policy patch");
+}
+
+async fn set_test_material_rule(
+    service: &CanonicalApparatusService,
+    input: ApparatusMaterialRuleUpsert,
+) -> Option<ApparatusMaterialRule> {
+    let apparatus_id = ApparatusId::new(input.apparatus).expect("canonical apparatus id");
+    let current = service
+        .current_configuration(&apparatus_id)
+        .await
+        .expect("current canonical configuration")
+        .expect("seeded canonical configuration");
+    let material = if !input.requires_material {
+        MaterialExecutionPolicy::NotRequired
+    } else {
+        match input.start_policy {
+            RawMaterialStartPolicy::StateAll => MaterialExecutionPolicy::AllRequired {
+                item_group_ids: input.item_groups,
+            },
+            RawMaterialStartPolicy::RequirementGroups => MaterialExecutionPolicy::RequirementSets {
+                sets: input
+                    .requirement_groups
+                    .into_iter()
+                    .map(|group| MaterialRequirementSet {
+                        requirement_id: group.name,
+                        item_group_ids: group.item_groups,
+                        minimum_required_count: group.min_required_count,
+                    })
+                    .collect(),
+            },
+        }
+    };
+    service
+        .patch(
+            apparatus_id.clone(),
+            current.runtime.source_revision,
+            CanonicalApparatusPatch {
+                policies: Some(ApparatusOperationalPolicies {
+                    queue: current.queue.discipline,
+                    material,
+                    tooling: current.material.tooling.clone(),
+                }),
+                ..CanonicalApparatusPatch::default()
+            },
+            CanonicalCommandMetadata::new(
+                "user:test",
+                format!(
+                    "command:test-material:{apparatus_id}:{}",
+                    current.runtime.source_revision
+                ),
+            ),
+        )
+        .await
+        .expect("canonical material policy patch");
+    let updated = service
+        .current_configuration(&apparatus_id)
+        .await
+        .expect("updated canonical configuration")
+        .expect("updated projection");
+    super::super::materials::live_material_rule(&updated)
 }
 
 #[tokio::test]
@@ -245,7 +379,10 @@ async fn paused_order_can_transfer_between_compatible_pechat_apparatuses_atomica
         .into_iter()
         .find(|assignment| assignment.barcode == "TRANSFER-RAW-1")
         .expect("moved raw material assignment");
-    assert_eq!(moved_assignment.apparatus_id, ApparatusId::new(to).expect("target apparatus id"));
+    assert_eq!(
+        moved_assignment.apparatus_id,
+        ApparatusId::new(to).expect("target apparatus id")
+    );
     assert_eq!(moved_assignment.apparatus, "8 ta rangli bosma aparat");
 
     let resumed = service
@@ -409,10 +546,7 @@ async fn apparatus_transfer_cannot_bypass_frozen_or_completed_stage_state() {
         states.get(from).and_then(|states| states.get(order_id)),
         Some(&"completed".to_string())
     );
-    assert_eq!(
-        states.get(to).and_then(|states| states.get(order_id)),
-        None
-    );
+    assert_eq!(states.get(to).and_then(|states| states.get(order_id)), None);
 }
 
 #[tokio::test]
@@ -554,7 +688,7 @@ async fn normal_move_rejects_started_order_and_requires_pause_transfer() {
 
 #[tokio::test]
 async fn free_pick_policy_allows_ready_order_outside_sequence_head() {
-    let (service, apparatus_groups) =
+    let (service, apparatus_service) =
         service_with_apparatus(&[(FLOW_REZKA_ID, "Rezka apparat")]).await;
     let actor = QueueActionActor {
         role: "admin".to_string(),
@@ -588,15 +722,12 @@ async fn free_pick_policy_allows_ready_order_outside_sequence_head() {
     );
 
     let apparatus_id = ApparatusId::new(FLOW_REZKA_ID).expect("canonical test apparatus id");
-    service
-        .set_apparatus_queue_policy(
-            &apparatus_id,
-            ApparatusQueuePolicy::FreePick,
-            &actor,
-            &apparatus_groups,
-        )
-        .await
-        .expect("free pick policy");
+    set_test_queue_policy(
+        &apparatus_service,
+        &apparatus_id,
+        ApparatusQueuePolicy::FreePick,
+    )
+    .await;
     let states = service
         .apply_apparatus_queue_action(
             FLOW_REZKA_ID,
@@ -653,35 +784,30 @@ async fn apparatus_sequence_rejects_unknown_and_wrong_apparatus_orders() {
 }
 
 #[tokio::test]
-async fn pechat_queue_policy_is_always_locked_strict() {
-    let (service, apparatus_groups) =
+async fn pechat_queue_policy_is_an_explicit_canonical_policy() {
+    let (_service, apparatus_service) =
         service_with_apparatus(&[("apparatus:default:bosma_7", "7 ta rangli bosma aparat")]).await;
-    let actor = QueueActionActor {
-        role: "admin".to_string(),
-        ref_: "admin".to_string(),
-        display_name: "Admin".to_string(),
-    };
     let apparatus_id =
         ApparatusId::new("apparatus:default:bosma_7").expect("canonical pechat apparatus id");
-    let result = service
-        .set_apparatus_queue_policy(
-            &apparatus_id,
-            ApparatusQueuePolicy::FreePick,
-            &actor,
-            &apparatus_groups,
-        )
-        .await;
-    assert_eq!(result, Err(ProductionMapError::ApparatusQueuePolicyLocked));
+    set_test_queue_policy(
+        &apparatus_service,
+        &apparatus_id,
+        ApparatusQueuePolicy::FreePick,
+    )
+    .await;
+    let current = apparatus_service.current_configuration(&apparatus_id).await;
+    assert_eq!(
+        current.unwrap().unwrap().queue.discipline,
+        QueueDiscipline::FreePick
+    );
 }
 
 #[tokio::test]
 async fn queue_controls_follow_canonical_material_policy_edits() {
     let store = Arc::new(MemoryProductionMapStore::new());
-    let (service, apparatus_groups) = service_with_apparatus_store(
-        store.clone(),
-        &[(FLOW_PECHAT_ID, "7 ta rangli pechat - A")],
-    )
-    .await;
+    let (service, apparatus_service) =
+        service_with_apparatus_store(store.clone(), &[(FLOW_PECHAT_ID, "7 ta rangli pechat - A")])
+            .await;
     let order_id = "zakaz-canonical-material-controls";
     service
         .upsert_map(canonical_apparatus_stage_map(
@@ -696,30 +822,18 @@ async fn queue_controls_follow_canonical_material_policy_edits() {
         .await
         .expect("sequence");
 
-    service
-        .set_apparatus_material_rule(
-            ApparatusMaterialRuleUpsert {
-                apparatus: FLOW_PECHAT_ID.to_string(),
-                requires_material: true,
-                start_policy: RawMaterialStartPolicy::StateAll,
-                item_groups: vec!["Kraska".to_string()],
-                requirement_groups: Vec::new(),
-            },
-            &apparatus_groups,
-        )
-        .await
-        .expect("canonical material policy");
-    store
-        .put_apparatus_material_rule(ApparatusMaterialRule {
-            apparatus_id: ApparatusId::new(FLOW_PECHAT_ID).expect("canonical apparatus id"),
-            apparatus: "stale projection title".to_string(),
-            requires_material: false,
+    set_test_material_rule(
+        &apparatus_service,
+        ApparatusMaterialRuleUpsert {
+            apparatus: FLOW_PECHAT_ID.to_string(),
+            requires_material: true,
             start_policy: RawMaterialStartPolicy::StateAll,
-            item_groups: Vec::new(),
+            item_groups: vec!["Kraska".to_string()],
             requirement_groups: Vec::new(),
-        })
-        .await
-        .expect("stale material projection");
+        },
+    )
+    .await
+    .expect("canonical material policy");
     let controls = service
         .queue_action_controls()
         .await
@@ -737,8 +851,9 @@ async fn queue_controls_follow_canonical_material_policy_edits() {
         "raw_material_assignment_required"
     );
 
-    service
-        .set_apparatus_material_rule(
+    assert!(
+        set_test_material_rule(
+            &apparatus_service,
             ApparatusMaterialRuleUpsert {
                 apparatus: FLOW_PECHAT_ID.to_string(),
                 requires_material: false,
@@ -746,21 +861,10 @@ async fn queue_controls_follow_canonical_material_policy_edits() {
                 item_groups: Vec::new(),
                 requirement_groups: Vec::new(),
             },
-            &apparatus_groups,
         )
         .await
-        .expect("canonical material policy reset");
-    store
-        .put_apparatus_material_rule(ApparatusMaterialRule {
-            apparatus_id: ApparatusId::new(FLOW_PECHAT_ID).expect("canonical apparatus id"),
-            apparatus: "stale projection title".to_string(),
-            requires_material: true,
-            start_policy: RawMaterialStartPolicy::StateAll,
-            item_groups: vec!["stale".to_string()],
-            requirement_groups: Vec::new(),
-        })
-        .await
-        .expect("stale material projection after reset");
+        .is_none()
+    );
     let controls = service
         .queue_action_controls()
         .await
@@ -776,9 +880,9 @@ async fn queue_controls_follow_canonical_material_policy_edits() {
 }
 
 #[tokio::test]
-async fn queue_policy_decisions_ignore_a_stale_compatibility_projection() {
+async fn queue_policy_decisions_follow_the_canonical_projection() {
     let store = Arc::new(MemoryProductionMapStore::new());
-    let (service, apparatus_groups) =
+    let (service, apparatus_service) =
         service_with_apparatus_store(store.clone(), &[(FLOW_REZKA_ID, "Rezka apparat")]).await;
     let first = canonical_apparatus_stage_map("zakaz-canonical-policy-1", FLOW_REZKA_ID, "Rezka");
     let second = canonical_apparatus_stage_map("zakaz-canonical-policy-2", FLOW_REZKA_ID, "Rezka");
@@ -801,24 +905,12 @@ async fn queue_policy_decisions_ignore_a_stale_compatibility_projection() {
         display_name: "Canonical policy test".to_string(),
     };
     let apparatus_id = ApparatusId::new(FLOW_REZKA_ID).expect("canonical apparatus id");
-    service
-        .set_apparatus_queue_policy(
-            &apparatus_id,
-            ApparatusQueuePolicy::FreePick,
-            &actor,
-            &apparatus_groups,
-        )
-        .await
-        .expect("canonical free-pick policy");
-    store
-        .put_apparatus_queue_policy(
-            &apparatus_id,
-            "stale projection title",
-            ApparatusQueuePolicy::StrictSequence,
-            &actor,
-        )
-        .await
-        .expect("stale queue policy projection");
+    set_test_queue_policy(
+        &apparatus_service,
+        &apparatus_id,
+        ApparatusQueuePolicy::FreePick,
+    )
+    .await;
 
     let states = service
         .apply_apparatus_queue_action(
@@ -917,7 +1009,7 @@ async fn queue_action_controls_are_backend_owned_for_each_order_state() {
 
 #[tokio::test]
 async fn raw_material_state_policy_requires_only_staged_scan_before_start() {
-    let (service, apparatus_groups) = service_with_apparatus(&[
+    let (service, apparatus_service) = service_with_apparatus(&[
         (FLOW_PECHAT_ID, "7 ta rangli pechat - A"),
         (FLOW_REZKA_ID, "Rezka apparat"),
     ])
@@ -939,19 +1031,18 @@ async fn raw_material_state_policy_requires_only_staged_scan_before_start() {
         .set_apparatus_sequence(FLOW_PECHAT_ID, vec!["zakaz-raw-1".to_string()])
         .await
         .expect("sequence");
-    service
-        .set_apparatus_material_rule(
-            ApparatusMaterialRuleUpsert {
-                apparatus: FLOW_PECHAT_ID.to_string(),
-                requires_material: true,
-                start_policy: RawMaterialStartPolicy::StateAll,
-                item_groups: vec!["Kraska".to_string(), "Kley".to_string()],
-                requirement_groups: Vec::new(),
-            },
-            &apparatus_groups,
-        )
-        .await
-        .expect("material rule");
+    set_test_material_rule(
+        &apparatus_service,
+        ApparatusMaterialRuleUpsert {
+            apparatus: FLOW_PECHAT_ID.to_string(),
+            requires_material: true,
+            start_policy: RawMaterialStartPolicy::StateAll,
+            item_groups: vec!["Kraska".to_string(), "Kley".to_string()],
+            requirement_groups: Vec::new(),
+        },
+    )
+    .await
+    .expect("material rule");
     let missing_assignment = service
         .apply_apparatus_queue_action_with_material_scan(
             FLOW_PECHAT_ID,
@@ -1125,15 +1216,17 @@ async fn raw_material_state_policy_requires_only_staged_scan_before_start() {
 async fn additional_raw_material_is_only_received_by_assigned_worker_while_order_is_active() {
     let store = std::sync::Arc::new(MemoryProductionMapStore::new());
     let apparatus = FLOW_PECHAT_ID;
-    let apparatus_groups = apparatus_groups_for(&[
+    let apparatus_service = apparatus_service_for(&[
         (FLOW_PECHAT_ID, "7 ta rangli pechat - A"),
         (FLOW_REZKA_ID, "Rezka apparat"),
     ])
     .await;
-    let service =
-        ProductionMapService::new(store.clone()).with_canonical_apparatus_resolver(Arc::new(
-            ApparatusGroupCanonicalResolver::new(apparatus_groups.clone()),
-        ));
+    let service = ProductionMapService::new(
+        store.clone(),
+        Arc::new(CanonicalServiceApparatusResolver::new(
+            apparatus_service.clone(),
+        )),
+    );
     let order_id = "zakaz-raw-intake";
     let actor = QueueActionActor {
         role: "aparatchi".to_string(),
@@ -1148,19 +1241,18 @@ async fn additional_raw_material_is_only_received_by_assigned_worker_while_order
         ))
         .await
         .expect("map");
-    service
-        .set_apparatus_material_rule(
-            ApparatusMaterialRuleUpsert {
-                apparatus: apparatus.to_string(),
-                requires_material: true,
-                start_policy: RawMaterialStartPolicy::StateAll,
-                item_groups: vec!["Kraska".to_string()],
-                requirement_groups: Vec::new(),
-            },
-            &apparatus_groups,
-        )
-        .await
-        .expect("material rule");
+    set_test_material_rule(
+        &apparatus_service,
+        ApparatusMaterialRuleUpsert {
+            apparatus: apparatus.to_string(),
+            requires_material: true,
+            start_policy: RawMaterialStartPolicy::StateAll,
+            item_groups: vec!["Kraska".to_string()],
+            requirement_groups: Vec::new(),
+        },
+    )
+    .await
+    .expect("material rule");
 
     let input = |barcode: &str| RawMaterialAssignmentInput {
         order_id: order_id.to_string(),
@@ -1217,19 +1309,18 @@ async fn additional_raw_material_is_only_received_by_assigned_worker_while_order
         .await;
     assert_eq!(wrong_worker, Err(ProductionMapError::ApparatusNotAssigned));
 
-    service
-        .set_apparatus_material_rule(
-            ApparatusMaterialRuleUpsert {
-                apparatus: apparatus.to_string(),
-                requires_material: true,
-                start_policy: RawMaterialStartPolicy::StateAll,
-                item_groups: vec!["Kley".to_string()],
-                requirement_groups: Vec::new(),
-            },
-            &apparatus_groups,
-        )
-        .await
-        .expect("changed material rule");
+    set_test_material_rule(
+        &apparatus_service,
+        ApparatusMaterialRuleUpsert {
+            apparatus: apparatus.to_string(),
+            requires_material: true,
+            start_policy: RawMaterialStartPolicy::StateAll,
+            item_groups: vec!["Kley".to_string()],
+            requirement_groups: Vec::new(),
+        },
+    )
+    .await
+    .expect("changed material rule");
     let disallowed_by_current_rule = service
         .receive_raw_material_for_active_order(
             input("ROLL-1000-A"),
@@ -1241,19 +1332,18 @@ async fn additional_raw_material_is_only_received_by_assigned_worker_while_order
         disallowed_by_current_rule,
         Err(ProductionMapError::RawMaterialGroupNotAllowed)
     );
-    service
-        .set_apparatus_material_rule(
-            ApparatusMaterialRuleUpsert {
-                apparatus: apparatus.to_string(),
-                requires_material: true,
-                start_policy: RawMaterialStartPolicy::StateAll,
-                item_groups: vec!["Kraska".to_string()],
-                requirement_groups: Vec::new(),
-            },
-            &apparatus_groups,
-        )
-        .await
-        .expect("restored material rule");
+    set_test_material_rule(
+        &apparatus_service,
+        ApparatusMaterialRuleUpsert {
+            apparatus: apparatus.to_string(),
+            requires_material: true,
+            start_policy: RawMaterialStartPolicy::StateAll,
+            item_groups: vec!["Kraska".to_string()],
+            requirement_groups: Vec::new(),
+        },
+    )
+    .await
+    .expect("restored material rule");
 
     let assignment_count = service
         .raw_material_assignments()
@@ -1356,7 +1446,7 @@ async fn additional_raw_material_is_only_received_by_assigned_worker_while_order
 
 #[tokio::test]
 async fn raw_material_assignment_returns_choices_and_accepts_selected_apparatus() {
-    let (service, apparatus_groups) = service_with_apparatus(&[
+    let (service, apparatus_service) = service_with_apparatus(&[
         (FLOW_ALT_PECHAT_ID, "Pechat A"),
         (FLOW_LAMINATION_ID, "Flow laminatsiya 1"),
     ])
@@ -1391,19 +1481,18 @@ async fn raw_material_assignment_returns_choices_and_accepts_selected_apparatus(
     ];
     service.upsert_map(map).await.expect("map");
     for apparatus in [FLOW_ALT_PECHAT_ID, FLOW_LAMINATION_ID] {
-        service
-            .set_apparatus_material_rule(
-                ApparatusMaterialRuleUpsert {
-                    apparatus: apparatus.to_string(),
-                    requires_material: true,
-                    start_policy: RawMaterialStartPolicy::StateAll,
-                    item_groups: vec!["Kraska".to_string()],
-                    requirement_groups: Vec::new(),
-                },
-                &apparatus_groups,
-            )
-            .await
-            .expect("material rule");
+        set_test_material_rule(
+            &apparatus_service,
+            ApparatusMaterialRuleUpsert {
+                apparatus: apparatus.to_string(),
+                requires_material: true,
+                start_policy: RawMaterialStartPolicy::StateAll,
+                item_groups: vec!["Kraska".to_string()],
+                requirement_groups: Vec::new(),
+            },
+        )
+        .await
+        .expect("material rule");
     }
 
     let ambiguous = service
@@ -1448,7 +1537,7 @@ async fn raw_material_assignment_returns_choices_and_accepts_selected_apparatus(
 
 #[tokio::test]
 async fn raw_material_requirement_group_accepts_alternative_item_group() {
-    let (service, apparatus_groups) =
+    let (service, apparatus_service) =
         service_with_apparatus(&[(FLOW_LAMINATION_ID, "Flow laminatsiya 1")]).await;
     let actor = QueueActionActor {
         role: "aparatchi".to_string(),
@@ -1463,23 +1552,22 @@ async fn raw_material_requirement_group_accepts_alternative_item_group() {
         ))
         .await
         .expect("map");
-    let rule = service
-        .set_apparatus_material_rule(
-            ApparatusMaterialRuleUpsert {
-                apparatus: FLOW_LAMINATION_ID.to_string(),
-                requires_material: true,
-                start_policy: RawMaterialStartPolicy::RequirementGroups,
-                item_groups: Vec::new(),
-                requirement_groups: vec![ApparatusMaterialRequirementGroup {
-                    name: "Yopishtiruvchi".to_string(),
-                    item_groups: vec!["Kley".to_string(), "Kraska".to_string()],
-                    min_required_count: 1,
-                }],
-            },
-            &apparatus_groups,
-        )
-        .await
-        .expect("material rule");
+    let rule = set_test_material_rule(
+        &apparatus_service,
+        ApparatusMaterialRuleUpsert {
+            apparatus: FLOW_LAMINATION_ID.to_string(),
+            requires_material: true,
+            start_policy: RawMaterialStartPolicy::RequirementGroups,
+            item_groups: Vec::new(),
+            requirement_groups: vec![ApparatusMaterialRequirementGroup {
+                name: "Yopishtiruvchi".to_string(),
+                item_groups: vec!["Kley".to_string(), "Kraska".to_string()],
+                min_required_count: 1,
+            }],
+        },
+    )
+    .await
+    .expect("material rule");
     assert_eq!(rule.requirement_groups.len(), 1);
 
     let assigned = service
@@ -1519,7 +1607,7 @@ async fn raw_material_requirement_group_accepts_alternative_item_group() {
 
 #[tokio::test]
 async fn raw_material_requirement_groups_need_distinct_scanned_materials() {
-    let (service, apparatus_groups) =
+    let (service, apparatus_service) =
         service_with_apparatus(&[(FLOW_ALT_PECHAT_ID, "Pechat A")]).await;
     let actor = QueueActionActor {
         role: "aparatchi".to_string(),
@@ -1534,30 +1622,29 @@ async fn raw_material_requirement_groups_need_distinct_scanned_materials() {
         ))
         .await
         .expect("map");
-    service
-        .set_apparatus_material_rule(
-            ApparatusMaterialRuleUpsert {
-                apparatus: FLOW_ALT_PECHAT_ID.to_string(),
-                requires_material: true,
-                start_policy: RawMaterialStartPolicy::RequirementGroups,
-                item_groups: Vec::new(),
-                requirement_groups: vec![
-                    ApparatusMaterialRequirementGroup {
-                        name: "Bo'yoq".to_string(),
-                        item_groups: vec!["Kraska".to_string(), "Universal".to_string()],
-                        min_required_count: 1,
-                    },
-                    ApparatusMaterialRequirementGroup {
-                        name: "Yopishtiruvchi".to_string(),
-                        item_groups: vec!["Kley".to_string(), "Universal".to_string()],
-                        min_required_count: 1,
-                    },
-                ],
-            },
-            &apparatus_groups,
-        )
-        .await
-        .expect("material rule");
+    set_test_material_rule(
+        &apparatus_service,
+        ApparatusMaterialRuleUpsert {
+            apparatus: FLOW_ALT_PECHAT_ID.to_string(),
+            requires_material: true,
+            start_policy: RawMaterialStartPolicy::RequirementGroups,
+            item_groups: Vec::new(),
+            requirement_groups: vec![
+                ApparatusMaterialRequirementGroup {
+                    name: "Bo'yoq".to_string(),
+                    item_groups: vec!["Kraska".to_string(), "Universal".to_string()],
+                    min_required_count: 1,
+                },
+                ApparatusMaterialRequirementGroup {
+                    name: "Yopishtiruvchi".to_string(),
+                    item_groups: vec!["Kley".to_string(), "Universal".to_string()],
+                    min_required_count: 1,
+                },
+            ],
+        },
+    )
+    .await
+    .expect("material rule");
     for (barcode, item_group) in [("30UNIVERSAL", "Universal"), ("30KLEY", "Kley")] {
         service
             .assign_raw_material_to_order(
@@ -3910,6 +3997,10 @@ async fn downstream_start_rejects_mismatched_progress_batch_id_and_qr() {
             QueueProgressInput {
                 produced_qty: Some(11.0),
                 uom: "kg".to_string(),
+                return_ink_kg: Some(0.1),
+                total_waste: Some(0.1),
+                finished_goods_kg: Some(11.0),
+                finished_goods_meter: Some(110.0),
                 ..QueueProgressInput::default()
             },
         )

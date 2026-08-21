@@ -2,8 +2,8 @@ use super::{
     DotEnvPersister, parse_bind_addr, positive_u64_from_raw, validate_backend_value,
     validate_positive_usize_raw,
 };
-use crate::error::AppError;
 use crate::core::admin::ports::AdminEnvPersister;
+use crate::error::AppError;
 
 #[test]
 fn parses_go_style_bind_addr() {
@@ -14,7 +14,10 @@ fn parses_go_style_bind_addr() {
 
 #[test]
 fn rejects_invalid_positive_runtime_values_instead_of_defaulting() {
-    assert_eq!(positive_u64_from_raw("TEST", "720").expect("valid value"), 720);
+    assert_eq!(
+        positive_u64_from_raw("TEST", "720").expect("valid value"),
+        720
+    );
     assert!(matches!(
         positive_u64_from_raw("MOBILE_API_SESSION_TTL_HOURS", "not-a-number"),
         Err(AppError::InvalidConfig { key, .. }) if key == "MOBILE_API_SESSION_TTL_HOURS"

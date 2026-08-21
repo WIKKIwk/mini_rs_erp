@@ -1,12 +1,12 @@
 use std::collections::{BTreeMap, BTreeSet};
 
-use crate::core::apparatus_standard::CanonicalApparatus;
+use crate::core::apparatus_standard::RuntimeApparatusConfiguration;
 
 use super::*;
 
 use super::apparatus::{visible_order_ids_by_apparatus, visible_order_ids_for_apparatus};
 use super::progress::{effective_apparatus_queue_policy, queue_action_event_id};
-use super::store_port::{ApparatusQueuePolicyMap, ApparatusQueueStateMap};
+use super::store_port::ApparatusQueueStateMap;
 
 pub(super) fn current_progress_batch_for_report(
     scanned_batch: &OrderProgressBatch,
@@ -69,10 +69,9 @@ pub(super) fn known_apparatus_storage_keys(
 }
 
 pub(super) fn queue_policy_for_apparatus(
-    canonical: &CanonicalApparatus,
-    policies: &ApparatusQueuePolicyMap,
+    canonical: &RuntimeApparatusConfiguration,
 ) -> ApparatusQueuePolicy {
-    effective_apparatus_queue_policy(canonical, policies.get(&canonical.identity.id).copied())
+    effective_apparatus_queue_policy(canonical)
 }
 
 pub(super) fn parsed_queue_states(

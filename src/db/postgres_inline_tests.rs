@@ -1798,41 +1798,39 @@ mod tests {
     }
 
     async fn assert_postgres_0062_source_behaviors(database_url: &str, pool: &PgPool) {
-        use crate::core::apparatus_groups::{ApparatusGroupError, ApparatusMasterData};
         use crate::core::apparatus_standard::ApparatusId;
         use crate::core::production_map::{
-            ApparatusMaterialRule, ApparatusQueueActionEvent, ApparatusQueuePolicy,
-            ProductionMapError, ProductionMapStorePort, QueueActionActor, RawMaterialAssignment,
-            RawMaterialStartPolicy,
+            ApparatusQueueActionEvent, ApparatusQueuePolicy, ProductionMapError,
+            ProductionMapStorePort, QueueActionActor, RawMaterialAssignment,
             queue_state::{ApparatusQueueAction, ApparatusQueueOrderState},
         };
-        use crate::db::postgres_apparatus_group::PostgresApparatusGroupStore;
         use crate::db::postgres_production_map::PostgresProductionMapStore;
 
-        let apparatus_store = PostgresApparatusGroupStore::new(pool.clone());
-        let master = ApparatusMasterData {
-            factory_map_object_id: Some("fixture-source-map-object".to_string()),
-            ..ApparatusMasterData::default()
-        };
-        apparatus_store
-            .put_apparatus_with_id(
-                Some("apparatus:fixture:source-apparatus-1"),
-                "0062 Source Apparatus 1",
-                &master,
-            )
-            .await
-            .expect("insert apparatus with unique factory map object");
-        let duplicate_factory_object = apparatus_store
-            .put_apparatus_with_id(
-                Some("apparatus:fixture:source-apparatus-2"),
-                "0062 Source Apparatus 2",
-                &master,
-            )
-            .await;
+        sqlx::query(
+            "INSERT INTO mini_apparatus (id, name, base_name, kind, payload_json)
+             VALUES ($1, $2, '', 'fixture', $3)",
+        )
+        .bind("apparatus:fixture:source-apparatus-1")
+        .bind("0062 Source Apparatus 1")
+        .bind(serde_json::json!({"factory_map_object_id":"fixture-source-map-object"}))
+        .execute(pool)
+        .await
+        .expect("insert apparatus with unique factory map object");
+        let duplicate_factory_object = sqlx::query(
+            "INSERT INTO mini_apparatus (id, name, base_name, kind, payload_json)
+             VALUES ($1, $2, '', 'fixture', $3)",
+        )
+        .bind("apparatus:fixture:source-apparatus-2")
+        .bind("0062 Source Apparatus 2")
+        .bind(serde_json::json!({"factory_map_object_id":"fixture-source-map-object"}))
+        .execute(pool)
+        .await
+        .expect_err("duplicate factory map object must fail");
         assert_eq!(
-            duplicate_factory_object,
-            Err(ApparatusGroupError::InvalidApparatus),
-            "apparatus 23505 must map to a domain error"
+            duplicate_factory_object
+                .as_database_error()
+                .and_then(|error| error.code().map(|code| code.into_owned())),
+            Some("23505".to_string())
         );
 
         sqlx::query(
@@ -1856,40 +1854,6 @@ mod tests {
                 .expect("canonical source apparatus display");
 
         let production_store = PostgresProductionMapStore::new(pool.clone());
-        production_store
-            .put_apparatus_material_rule(ApparatusMaterialRule {
-                apparatus_id: apparatus_id.clone(),
-                apparatus: apparatus_display.clone(),
-                requires_material: false,
-                start_policy: RawMaterialStartPolicy::StateAll,
-                item_groups: Vec::new(),
-                requirement_groups: Vec::new(),
-            })
-            .await
-            .expect("insert source material rule");
-        production_store
-            .put_apparatus_material_rule(ApparatusMaterialRule {
-                apparatus_id: apparatus_id.clone(),
-                apparatus: apparatus_display.to_lowercase(),
-                requires_material: true,
-                start_policy: RawMaterialStartPolicy::StateAll,
-                item_groups: vec!["All Item Groups".to_string()],
-                requirement_groups: Vec::new(),
-            })
-            .await
-            .expect("case-insensitive material rule upsert");
-        let material_rule_rows: i64 = sqlx::query_scalar(
-            "SELECT COUNT(*)
-             FROM mini_apparatus_material_rules
-             WHERE canonical_apparatus_id = $1
-               AND requires_material",
-        )
-        .bind(apparatus_id.as_str())
-        .fetch_one(pool)
-        .await
-        .expect("verify source material rule");
-        assert_eq!(material_rule_rows, 1);
-
         sqlx::raw_sql(
             "INSERT INTO mini_items (code, name, item_group, payload_json)
              VALUES ('fixture:0062:item:1', '0062 Fixture Item', 'All Item Groups',

@@ -9,8 +9,9 @@ use sha2::{Digest, Sha256};
 use super::{
     ApparatusCapacity, ApparatusDisplay, ApparatusId, ApparatusLifecycle,
     CanonicalApparatusRevision, CapacityAvailability, EquipmentCapabilityCode, EquipmentClassId,
-    EquipmentHierarchyScope, ExecutionProfile, FactoryMapPlacement, MaterialExecutionPolicy,
-    PhysicalAssetId, QueueDiscipline, ToolingExecutionPolicy, TrainingProfile, WorkingWindowV1,
+    EquipmentHierarchyScope, ExecutionProfile, FactoryMapPlacement, LifecycleState,
+    MaterialExecutionPolicy, PhysicalAssetId, QueueDiscipline, ToolingExecutionPolicy,
+    TrainingProfile, WorkingWindowV1,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -148,6 +149,55 @@ pub struct ApparatusProjectionSet {
     pub material: ApparatusMaterialProjection,
     pub capacity: ApparatusCapacityProjection,
     pub admin: AdminApparatusSummary,
+}
+
+/// Complete PostgreSQL runtime configuration assembled exclusively from
+/// materialized projection rows. It never requires canonical payload or AASX
+/// access during normal execution.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RuntimeApparatusConfiguration {
+    pub runtime: RuntimeApparatusProjection,
+    pub queue: ApparatusQueueProjection,
+    pub material: ApparatusMaterialProjection,
+    pub capacity: ApparatusCapacityProjection,
+}
+
+impl From<ApparatusProjectionSet> for RuntimeApparatusConfiguration {
+    fn from(value: ApparatusProjectionSet) -> Self {
+        Self {
+            runtime: value.runtime,
+            queue: value.queue,
+            material: value.material,
+            capacity: value.capacity,
+        }
+    }
+}
+
+impl RuntimeApparatusConfiguration {
+    /// Proves that every row in the assembled runtime configuration came from
+    /// the same canonical apparatus revision and exact AASX artifact.
+    pub fn has_coherent_source(&self) -> bool {
+        let id = &self.runtime.apparatus_id;
+        let revision = self.runtime.source_revision;
+        let hash = self.runtime.source_aasx_sha256;
+        self.queue.apparatus_id == *id
+            && self.material.apparatus_id == *id
+            && self.capacity.apparatus_id == *id
+            && self.queue.source_revision == revision
+            && self.material.source_revision == revision
+            && self.capacity.source_revision == revision
+            && self.queue.source_aasx_sha256 == hash
+            && self.material.source_aasx_sha256 == hash
+            && self.capacity.source_aasx_sha256 == hash
+    }
+
+    pub fn is_active(&self) -> bool {
+        self.runtime.lifecycle.state == LifecycleState::Active
+    }
+
+    pub fn supports(&self, capability: EquipmentCapabilityCode) -> bool {
+        self.runtime.capabilities.contains_key(&capability)
+    }
 }
 
 pub fn project_apparatus_revision(

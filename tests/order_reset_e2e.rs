@@ -68,7 +68,7 @@ async fn order_reset_restores_a_real_database_to_the_pre_order_snapshot() {
 
     let backup_dir = tempfile::tempdir().expect("backup directory");
     let backup_doctor = real_backup_doctor(&test_url, &admin_url, &backup_dir);
-    let mut state = test_state();
+    let mut state = test_state(pool.clone());
     state.sessions = SessionManager::memory(Some(3600));
     state.backup_doctor = backup_doctor;
     state.order_reset = Some(PostgresOrderResetStore::new(pool.clone()));
@@ -117,27 +117,30 @@ async fn order_reset_restores_a_real_database_to_the_pre_order_snapshot() {
     admin_pool.close().await;
 }
 
-fn test_state() -> AppState {
-    AppState::new(AppConfig {
-        bind_addr: "127.0.0.1:0".parse().expect("bind address"),
-        default_target_warehouse: "E2E Warehouse".to_string(),
-        http_timeout: Duration::from_secs(15),
-        session_store_path: "target/order-reset-e2e-sessions.json".into(),
-        profile_store_path: "target/order-reset-e2e-profile.json".into(),
-        push_token_store_path: "target/order-reset-e2e-push.json".into(),
-        session_ttl_seconds: Some(3600),
-        supplier_prefix: "10".to_string(),
-        werka_prefix: "20".to_string(),
-        werka_code: "".to_string(),
-        werka_name: "Werka".to_string(),
-        werka_phone: "+99888862440".to_string(),
-        material_taminotchi_code: String::new(),
-        material_taminotchi_name: "Material taminotchi".to_string(),
-        material_taminotchi_phone: String::new(),
-        admin_phone: "+998880000000".to_string(),
-        admin_name: "Admin".to_string(),
-        admin_code: "19621978".to_string(),
-    })
+fn test_state(pool: PgPool) -> AppState {
+    AppState::from_postgres(
+        AppConfig {
+            bind_addr: "127.0.0.1:0".parse().expect("bind address"),
+            default_target_warehouse: "E2E Warehouse".to_string(),
+            http_timeout: Duration::from_secs(15),
+            session_store_path: "target/order-reset-e2e-sessions.json".into(),
+            profile_store_path: "target/order-reset-e2e-profile.json".into(),
+            push_token_store_path: "target/order-reset-e2e-push.json".into(),
+            session_ttl_seconds: Some(3600),
+            supplier_prefix: "10".to_string(),
+            werka_prefix: "20".to_string(),
+            werka_code: "".to_string(),
+            werka_name: "Werka".to_string(),
+            werka_phone: "+99888862440".to_string(),
+            material_taminotchi_code: String::new(),
+            material_taminotchi_name: "Material taminotchi".to_string(),
+            material_taminotchi_phone: String::new(),
+            admin_phone: "+998880000000".to_string(),
+            admin_name: "Admin".to_string(),
+            admin_code: "19621978".to_string(),
+        },
+        pool,
+    )
 }
 
 fn real_backup_doctor(test_url: &str, admin_url: &str, backup_dir: &TempDir) -> BackupDoctor {

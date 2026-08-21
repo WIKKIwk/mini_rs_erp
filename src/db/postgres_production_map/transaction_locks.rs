@@ -117,7 +117,11 @@ async fn lock_named_tx(
 }
 
 fn advisory_lock_key(scope: &str, value: &str) -> String {
-    format!("mini-rs-erp:production-map:{}:{}", scope.trim(), value.trim())
+    format!(
+        "mini-rs-erp:production-map:{}:{}",
+        scope.trim(),
+        value.trim()
+    )
 }
 
 #[cfg(test)]

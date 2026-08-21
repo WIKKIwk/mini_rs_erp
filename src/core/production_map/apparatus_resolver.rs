@@ -2,69 +2,123 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 
-use crate::core::apparatus_groups::{ApparatusGroupError, ApparatusGroupService};
-use crate::core::apparatus_standard::{ApparatusId, CanonicalApparatus};
+use crate::core::apparatus_standard::{
+    ApparatusId, CanonicalApparatusService, RuntimeApparatusConfiguration,
+};
 
 use super::errors::ProductionMapError;
 
-/// The only runtime lookup contract for apparatus configuration.
-///
-/// Callers must already hold an [`ApparatusId`]. This interface intentionally
-/// has no name/title argument, so display snapshots cannot become identity or
-/// configuration fallbacks.
+#[cfg(test)]
+use std::collections::BTreeMap;
+
+/// Required runtime lookup by immutable canonical identity. Implementations
+/// return PostgreSQL projections and have no AASX or legacy-catalog path.
 #[async_trait]
 pub trait CanonicalApparatusResolver: Send + Sync {
     async fn resolve(
         &self,
         apparatus_id: &ApparatusId,
-    ) -> Result<Option<Arc<CanonicalApparatus>>, ProductionMapError>;
-}
+    ) -> Result<Option<Arc<RuntimeApparatusConfiguration>>, ProductionMapError>;
 
-#[derive(Clone, Default)]
-pub struct UnavailableCanonicalApparatusResolver;
-
-#[async_trait]
-impl CanonicalApparatusResolver for UnavailableCanonicalApparatusResolver {
-    async fn resolve(
+    async fn list(
         &self,
-        _apparatus_id: &ApparatusId,
-    ) -> Result<Option<Arc<CanonicalApparatus>>, ProductionMapError> {
-        Ok(None)
-    }
+    ) -> Result<Vec<Arc<RuntimeApparatusConfiguration>>, ProductionMapError>;
 }
 
-/// Adapter from the canonical catalog service to the production-map runtime.
-/// The catalog service remains the master-data owner; this adapter performs an
-/// exact ID lookup and rejects malformed or conflicting canonical data.
 #[derive(Clone)]
-pub struct ApparatusGroupCanonicalResolver {
-    catalog: ApparatusGroupService,
+pub struct CanonicalServiceApparatusResolver {
+    service: CanonicalApparatusService,
 }
 
-impl ApparatusGroupCanonicalResolver {
-    pub fn new(catalog: ApparatusGroupService) -> Self {
-        Self { catalog }
+impl CanonicalServiceApparatusResolver {
+    pub fn new(service: CanonicalApparatusService) -> Self {
+        Self { service }
     }
 }
 
 #[async_trait]
-impl CanonicalApparatusResolver for ApparatusGroupCanonicalResolver {
+impl CanonicalApparatusResolver for CanonicalServiceApparatusResolver {
     async fn resolve(
         &self,
         apparatus_id: &ApparatusId,
-    ) -> Result<Option<Arc<CanonicalApparatus>>, ProductionMapError> {
-        let Some(canonical) = self
-            .catalog
-            .canonical_apparatus_by_id(apparatus_id)
+    ) -> Result<Option<Arc<RuntimeApparatusConfiguration>>, ProductionMapError> {
+        let configuration = self
+            .service
+            .current_configuration(apparatus_id)
             .await
-            .map_err(map_catalog_error)?
-        else {
-            return Ok(None);
-        };
-        Ok(Some(Arc::new(canonical)))
+            .map_err(|_| ProductionMapError::StoreFailed)?;
+        if configuration
+            .as_deref()
+            .is_some_and(|value| !value.has_coherent_source())
+        {
+            return Err(ProductionMapError::StoreFailed);
+        }
+        Ok(configuration)
+    }
+
+    async fn list(
+        &self,
+    ) -> Result<Vec<Arc<RuntimeApparatusConfiguration>>, ProductionMapError> {
+        self.service
+            .list_runtime_configurations()
+            .await
+            .map_err(|_| ProductionMapError::StoreFailed)?
+            .into_iter()
+            .map(|configuration| {
+                if configuration.has_coherent_source() {
+                    Ok(Arc::new(configuration))
+                } else {
+                    Err(ProductionMapError::StoreFailed)
+                }
+            })
+            .collect()
     }
 }
 
-fn map_catalog_error(_error: ApparatusGroupError) -> ProductionMapError {
-    ProductionMapError::StoreFailed
+#[cfg(test)]
+#[derive(Clone, Default)]
+pub(crate) struct TestCanonicalApparatusResolver {
+    configurations: Arc<BTreeMap<ApparatusId, Arc<RuntimeApparatusConfiguration>>>,
+}
+
+#[cfg(test)]
+impl TestCanonicalApparatusResolver {
+    pub(crate) fn new(
+        configurations: impl IntoIterator<Item = RuntimeApparatusConfiguration>,
+    ) -> Self {
+        Self {
+            configurations: Arc::new(
+                configurations
+                    .into_iter()
+                    .map(|configuration| {
+                        (
+                            configuration.runtime.apparatus_id.clone(),
+                            Arc::new(configuration),
+                        )
+                    })
+                    .collect(),
+            ),
+        }
+    }
+
+    pub(crate) fn standard() -> Self {
+        Self::new(crate::core::apparatus_standard::test_support::standard_runtime_configurations())
+    }
+}
+
+#[cfg(test)]
+#[async_trait]
+impl CanonicalApparatusResolver for TestCanonicalApparatusResolver {
+    async fn resolve(
+        &self,
+        apparatus_id: &ApparatusId,
+    ) -> Result<Option<Arc<RuntimeApparatusConfiguration>>, ProductionMapError> {
+        Ok(self.configurations.get(apparatus_id).cloned())
+    }
+
+    async fn list(
+        &self,
+    ) -> Result<Vec<Arc<RuntimeApparatusConfiguration>>, ProductionMapError> {
+        Ok(self.configurations.values().cloned().collect())
+    }
 }

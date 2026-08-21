@@ -5,8 +5,7 @@ use rusqlite::params;
 use super::{ProductionMapStore, unix_micros};
 use crate::core::apparatus_standard::ApparatusId;
 use crate::core::production_map::{
-    ApparatusQueueActionEvent, ApparatusQueuePolicy, ApparatusQueuePolicyMap, ProductionMapError,
-    ProductionMapStorePort, QueueActionActor,
+    ApparatusQueueActionEvent, ProductionMapError, ProductionMapStorePort,
 };
 
 pub(super) async fn apparatus_queue_states(
@@ -69,79 +68,6 @@ pub(super) async fn put_apparatus_queue_states(
         )
         .map_err(|_| ProductionMapError::StoreFailed)?;
     }
-    Ok(())
-}
-
-pub(super) async fn apparatus_queue_policies(
-    store: &ProductionMapStore,
-) -> Result<ApparatusQueuePolicyMap, ProductionMapError> {
-    let conn = store
-        .conn
-        .lock()
-        .map_err(|_| ProductionMapError::StoreFailed)?;
-    let mut stmt = conn
-        .prepare("SELECT canonical_apparatus_id, policy FROM apparatus_queue_policies")
-        .map_err(|_| ProductionMapError::StoreFailed)?;
-    let rows = stmt
-        .query_map([], |row| {
-            Ok((row.get::<_, Option<String>>(0)?, row.get::<_, String>(1)?))
-        })
-        .map_err(|_| ProductionMapError::StoreFailed)?;
-    let mut result = BTreeMap::new();
-    for row in rows {
-        let (apparatus_id, policy) = row.map_err(|_| ProductionMapError::StoreFailed)?;
-        let apparatus_id = apparatus_id
-            .ok_or(ProductionMapError::StoreFailed)
-            .and_then(|value| {
-                ApparatusId::new(value).map_err(|_| ProductionMapError::StoreFailed)
-            })?;
-        let policy = ApparatusQueuePolicy::parse(&policy).ok_or(ProductionMapError::StoreFailed)?;
-        if result.insert(apparatus_id, policy).is_some() {
-            return Err(ProductionMapError::StoreFailed);
-        }
-    }
-    Ok(result)
-}
-
-pub(super) async fn put_apparatus_queue_policy(
-    store: &ProductionMapStore,
-    apparatus_id: &ApparatusId,
-    apparatus_display: &str,
-    policy: ApparatusQueuePolicy,
-    actor: &QueueActionActor,
-) -> Result<(), ProductionMapError> {
-    let conn = store
-        .conn
-        .lock()
-        .map_err(|_| ProductionMapError::StoreFailed)?;
-    let payload = serde_json::json!({
-        "actor": actor,
-        "policy": policy.as_str(),
-    });
-    conn.execute(
-        "INSERT INTO apparatus_queue_policies
-            (apparatus, canonical_apparatus_id, policy, actor_role, actor_ref, actor_display_name, payload_json, saved_at)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
-         ON CONFLICT(canonical_apparatus_id) DO UPDATE SET
-            apparatus = excluded.apparatus,
-            policy = excluded.policy,
-            actor_role = excluded.actor_role,
-            actor_ref = excluded.actor_ref,
-            actor_display_name = excluded.actor_display_name,
-            payload_json = excluded.payload_json,
-            saved_at = excluded.saved_at",
-        params![
-            apparatus_display.trim(),
-            apparatus_id.as_str(),
-            policy.as_str(),
-            actor.role.trim(),
-            actor.ref_.trim(),
-            actor.display_name.trim(),
-            payload.to_string(),
-            unix_micros().to_string(),
-        ],
-    )
-    .map_err(|_| ProductionMapError::StoreFailed)?;
     Ok(())
 }
 

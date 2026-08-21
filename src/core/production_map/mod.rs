@@ -45,10 +45,9 @@ mod service_wip;
 mod store_port;
 mod types;
 
-pub use apparatus_resolver::{
-    ApparatusGroupCanonicalResolver, CanonicalApparatusResolver,
-    UnavailableCanonicalApparatusResolver,
-};
+#[cfg(test)]
+pub(crate) use apparatus_resolver::TestCanonicalApparatusResolver;
+pub use apparatus_resolver::{CanonicalApparatusResolver, CanonicalServiceApparatusResolver};
 pub use capacity::*;
 pub use compiler::{compile_map, run_map_with_variables};
 pub use materials::{
@@ -64,7 +63,7 @@ pub(crate) use progress::{progress_batch_id, progress_qr_payload};
 pub use service::{PreparedApparatusQueueAction, ProductionMapLiveSnapshot, ProductionMapService};
 pub(crate) use store_port::validate_queue_progress_write;
 pub use store_port::{
-    ApparatusQueuePolicyMap, ProductionMapApparatusTransferWrite, ProductionMapStorePort,
+    ProductionMapApparatusTransferWrite, ProductionMapStorePort,
     QueueActionProgressWrite, QueueActionProgressWriteResult, RawMaterialStockTransition,
     RawMaterialStockTransitionKind,
 };

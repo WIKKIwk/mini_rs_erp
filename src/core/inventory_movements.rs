@@ -1119,7 +1119,10 @@ impl InventoryMovementStorePort for MemoryInventoryMovementStore {
         }
         let source = warehouse_location(&state, &input.source_warehouse_id)?;
         let destination = warehouse_location(&state, &input.destination_warehouse_id)?;
-        if source.warehouse_id.eq_ignore_ascii_case(&destination.warehouse_id) {
+        if source
+            .warehouse_id
+            .eq_ignore_ascii_case(&destination.warehouse_id)
+        {
             return Err(InventoryMovementError::SameWarehouse);
         }
         if !actor.can_manage_warehouse(&source.name) {
@@ -1471,7 +1474,10 @@ fn ensure_memory_transfer_assets(
             .get(&(line.asset_kind, line.asset_ref.to_ascii_lowercase()))
             .ok_or(InventoryMovementError::AssetNotFound)?;
         if asset.transfer_id != transfer.id
-            || matches!(asset.status.as_str(), "available" | "consumed" | "dispatched")
+            || matches!(
+                asset.status.as_str(),
+                "available" | "consumed" | "dispatched"
+            )
         {
             return Err(InventoryMovementError::AssetUnavailable);
         }

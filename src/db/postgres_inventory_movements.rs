@@ -1371,7 +1371,10 @@ async fn ensure_transfer_assets_tx(
         let asset = lock_asset_tx(tx, kind, &line.asset_ref).await?;
         if asset.transfer_id != transfer_id
             || asset.qty_units != line.qty_units
-            || matches!(asset.status.as_str(), "available" | "consumed" | "dispatched")
+            || matches!(
+                asset.status.as_str(),
+                "available" | "consumed" | "dispatched"
+            )
         {
             return Err(InventoryMovementError::AssetUnavailable);
         }

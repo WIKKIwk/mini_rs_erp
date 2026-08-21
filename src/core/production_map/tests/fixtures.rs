@@ -1,8 +1,5 @@
 use std::sync::Arc;
 
-use crate::core::apparatus_groups::{
-    ApparatusGroupService, ApparatusMasterData, ApparatusUpsert, MemoryApparatusGroupStore,
-};
 use crate::core::production_map::*;
 
 pub(super) fn sample_map() -> ProductionMapDefinition {
@@ -228,25 +225,7 @@ pub(super) fn canonical_apparatus_stage_map(
 pub(super) async fn service_with_default_apparatus(
     store: Arc<MemoryProductionMapStore>,
 ) -> ProductionMapService {
-    let apparatus_groups = ApparatusGroupService::new(Arc::new(MemoryApparatusGroupStore::new()));
-    for (id, name) in [
-        ("apparatus:default:bosma_7", "7 ta rangli bosma aparat"),
-        ("apparatus:default:bosma_8", "8 ta rangli bosma aparat"),
-        ("apparatus:default:asset-007", "Laminatsiya 1"),
-        ("apparatus:default:asset-010", "Rezka"),
-    ] {
-        apparatus_groups
-            .upsert_apparatus(ApparatusUpsert {
-                id: Some(id.to_string()),
-                name: name.to_string(),
-                master: ApparatusMasterData::default(),
-            })
-            .await
-            .expect("seed default canonical apparatus");
-    }
-    ProductionMapService::new(store).with_canonical_apparatus_resolver(Arc::new(
-        ApparatusGroupCanonicalResolver::new(apparatus_groups),
-    ))
+    ProductionMapService::new(store, Arc::new(TestCanonicalApparatusResolver::standard()))
 }
 
 pub(super) fn canonical_two_stage_map(

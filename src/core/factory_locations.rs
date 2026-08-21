@@ -7,20 +7,19 @@ use serde::{Deserialize, Serialize};
 use thiserror::Error;
 use tokio::sync::RwLock;
 
-use crate::core::apparatus_groups::{
-    ApparatusCatalogEntry, ApparatusGroupError, ApparatusGroupService, ApparatusMasterData,
-    ApparatusSource,
+use crate::core::apparatus_standard::{
+    ApparatusId, CanonicalApparatusService, EquipmentClassId, LifecycleState, PhysicalAssetId,
+    RuntimeApparatusProjection,
 };
-use crate::core::apparatus_standard::ApparatusId;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct FactoryLocationApparatus {
     pub id: ApparatusId,
     pub name: String,
-    pub source: ApparatusSource,
-    pub sort_order: usize,
-    #[serde(flatten, default)]
-    pub master: ApparatusMasterData,
+    pub source_revision: u64,
+    pub equipment_class_id: EquipmentClassId,
+    pub physical_asset_id: PhysicalAssetId,
+    pub active: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -94,18 +93,15 @@ pub trait FactoryLocationStorePort: Send + Sync {
 #[derive(Clone)]
 pub struct FactoryLocationService {
     store: Arc<dyn FactoryLocationStorePort>,
-    apparatus_groups: ApparatusGroupService,
+    apparatus: CanonicalApparatusService,
 }
 
 impl FactoryLocationService {
     pub fn new(
         store: Arc<dyn FactoryLocationStorePort>,
-        apparatus_groups: ApparatusGroupService,
+        apparatus: CanonicalApparatusService,
     ) -> Self {
-        Self {
-            store,
-            apparatus_groups,
-        }
+        Self { store, apparatus }
     }
 
     pub async fn list(&self) -> Result<Vec<FactoryLocation>, FactoryLocationError> {
@@ -163,28 +159,15 @@ impl FactoryLocationService {
         {
             return Ok(());
         }
-        let catalog = self
-            .apparatus_groups
-            .apparatus_catalog("", 10_000)
-            .await
-            .map_err(map_apparatus_error)?;
-        let catalog_by_id = catalog
-            .into_iter()
-            .map(|entry| {
-                let id = ApparatusId::new(entry.id.clone())
-                    .map_err(|_| FactoryLocationError::InvalidApparatus)?;
-                Ok((id, entry))
-            })
-            .collect::<Result<BTreeMap<_, _>, FactoryLocationError>>()?;
         for location in locations {
             for apparatus in &mut location.apparatus {
-                let Some(entry) = catalog_by_id.get(&apparatus.id) else {
-                    return Err(FactoryLocationError::InvalidApparatus);
-                };
-                apparatus.name = entry.name.clone();
-                apparatus.source = entry.source;
-                apparatus.sort_order = entry.sort_order;
-                apparatus.master = entry.master.clone();
+                let projection = self
+                    .apparatus
+                    .current_projection(&apparatus.id)
+                    .await
+                    .map_err(|_| FactoryLocationError::StoreFailed)?
+                    .ok_or(FactoryLocationError::InvalidApparatus)?;
+                *apparatus = factory_location_apparatus(&projection);
             }
         }
         Ok(())
@@ -203,55 +186,34 @@ impl FactoryLocationService {
         if requested.is_empty() {
             return Ok(Vec::new());
         }
+        let mut selected = Vec::new();
         for apparatus_id in &requested {
-            if self
-                .apparatus_groups
-                .canonical_apparatus_by_id(apparatus_id)
+            let projection = self
+                .apparatus
+                .current_projection(apparatus_id)
                 .await
-                .map_err(map_apparatus_error)?
-                .is_none()
-            {
-                // Catalog/master projections and display snapshots are not
-                // sufficient to create live placement configuration.
+                .map_err(|_| FactoryLocationError::StoreFailed)?
+                .ok_or(FactoryLocationError::InvalidApparatus)?;
+            if projection.lifecycle.state != LifecycleState::Active {
                 return Err(FactoryLocationError::InvalidApparatus);
             }
+            selected.push(factory_location_apparatus(&projection));
         }
-        let catalog = self
-            .apparatus_groups
-            .apparatus_catalog("", 10_000)
-            .await
-            .map_err(map_apparatus_error)?;
-        let mut selected = Vec::new();
-        for item in catalog {
-            let Ok(id) = ApparatusId::new(item.id.trim().to_string()) else {
-                continue;
-            };
-            if requested.remove(&id) {
-                selected.push(factory_location_apparatus(item, id));
-            }
-        }
-        if !requested.is_empty() {
-            return Err(FactoryLocationError::InvalidApparatus);
-        }
-        selected.sort_by(|left, right| {
-            left.sort_order
-                .cmp(&right.sort_order)
-                .then_with(|| left.id.cmp(&right.id))
-        });
+        selected.sort_by(|left, right| left.id.cmp(&right.id));
         Ok(selected)
     }
 }
 
 fn factory_location_apparatus(
-    item: ApparatusCatalogEntry,
-    id: ApparatusId,
+    projection: &RuntimeApparatusProjection,
 ) -> FactoryLocationApparatus {
     FactoryLocationApparatus {
-        id,
-        name: item.name,
-        source: item.source,
-        sort_order: item.sort_order,
-        master: item.master,
+        id: projection.apparatus_id.clone(),
+        name: projection.display.display_name.clone(),
+        source_revision: projection.source_revision,
+        equipment_class_id: projection.equipment_class_id.clone(),
+        physical_asset_id: projection.physical_asset_id.clone(),
+        active: projection.lifecycle.state == LifecycleState::Active,
     }
 }
 
@@ -271,10 +233,6 @@ fn required_id(value: &str) -> Result<&str, FactoryLocationError> {
     } else {
         Ok(value)
     }
-}
-
-fn map_apparatus_error(_: ApparatusGroupError) -> FactoryLocationError {
-    FactoryLocationError::StoreFailed
 }
 
 #[derive(Default)]
@@ -373,24 +331,42 @@ impl FactoryLocationStorePort for MemoryFactoryLocationStore {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::apparatus_groups::{ApparatusUpsert, MemoryApparatusGroupStore};
+    use crate::core::apparatus_standard::{
+        ApparatusDisplay, CanonicalApparatusPatch, CanonicalCommandMetadata,
+        ProcessTechnology,
+        test_support::{TestApparatusSpec, canonical_draft},
+    };
 
-    async fn service() -> FactoryLocationService {
-        let apparatus_groups = ApparatusGroupService::new(Arc::new(MemoryApparatusGroupStore::new()));
-        for (id, name) in [
-            ("apparatus:default:bosma_7", "7 ta rangli bosma aparat"),
-            ("apparatus:default:asset-010", "Rezka"),
-        ] {
-            apparatus_groups
-                .upsert_apparatus(ApparatusUpsert {
-                    id: Some(id.to_string()),
-                    name: name.to_string(),
-                    master: ApparatusMasterData::default(),
-                })
+    async fn seeded_apparatus(
+        entries: &[(&str, &str)],
+    ) -> CanonicalApparatusService {
+        let apparatus = CanonicalApparatusService::memory();
+        for (id, name) in entries {
+            apparatus
+                .seed_for_test(
+                    ApparatusId::new((*id).to_string()).expect("test apparatus id"),
+                    canonical_draft(&TestApparatusSpec::print(
+                        id,
+                        name,
+                        ProcessTechnology::Rotogravure,
+                        Some(7),
+                    )),
+                )
                 .await
                 .expect("seed canonical apparatus");
         }
-        FactoryLocationService::new(Arc::new(MemoryFactoryLocationStore::new()), apparatus_groups)
+        apparatus
+    }
+
+    async fn service() -> FactoryLocationService {
+        FactoryLocationService::new(
+            Arc::new(MemoryFactoryLocationStore::new()),
+            seeded_apparatus(&[
+                ("apparatus:default:bosma_7", "7 ta rangli bosma aparat"),
+                ("apparatus:default:asset-010", "Rezka"),
+            ])
+            .await,
+        )
     }
 
     #[tokio::test]
@@ -441,19 +417,14 @@ mod tests {
 
     #[tokio::test]
     async fn renaming_apparatus_display_name_does_not_change_placement_id() {
-        let apparatus_store = Arc::new(MemoryApparatusGroupStore::new());
-        let apparatus_groups = ApparatusGroupService::new(apparatus_store);
-        apparatus_groups
-            .upsert_apparatus(ApparatusUpsert {
-                id: Some("apparatus:custom:placement-rename-proof".to_string()),
-                name: "Original display".to_string(),
-                master: ApparatusMasterData::default(),
-            })
-            .await
-            .expect("seed canonical apparatus");
+        let apparatus = seeded_apparatus(&[(
+            "apparatus:custom:placement-rename-proof",
+            "Original display",
+        )])
+        .await;
         let service = FactoryLocationService::new(
             Arc::new(MemoryFactoryLocationStore::new()),
-            apparatus_groups.clone(),
+            apparatus.clone(),
         );
         let created = service
             .create(FactoryLocationCreate {
@@ -463,12 +434,20 @@ mod tests {
             .await
             .expect("create placement");
 
-        apparatus_groups
-            .upsert_apparatus(ApparatusUpsert {
-                id: Some("apparatus:custom:placement-rename-proof".to_string()),
-                name: "Renamed display".to_string(),
-                master: Default::default(),
-            })
+        apparatus
+            .patch(
+                ApparatusId::new("apparatus:custom:placement-rename-proof".to_string()).unwrap(),
+                1,
+                CanonicalApparatusPatch {
+                    display: Some(ApparatusDisplay {
+                        display_name: "Renamed display".to_string(),
+                        description: "Renamed canonical fixture".to_string(),
+                        catalog_order: 1,
+                    }),
+                    ..Default::default()
+                },
+                CanonicalCommandMetadata::new("user:test", "command:test:rename-placement"),
+            )
             .await
             .expect("rename apparatus");
         let updated = service
@@ -538,26 +517,31 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn legacy_only_apparatus_cannot_be_used_for_placement() {
-        let store = Arc::new(MemoryApparatusGroupStore::new());
-        store
-            .put_apparatus_with_id(
-                Some("apparatus:custom:legacy-placement"),
-                "Legacy placement display",
-                &ApparatusMasterData::default(),
+    async fn retired_apparatus_cannot_receive_new_placement() {
+        let apparatus = seeded_apparatus(&[(
+            "apparatus:custom:retired-placement",
+            "Retired placement display",
+        )])
+        .await;
+        apparatus
+            .retire(
+                ApparatusId::new("apparatus:custom:retired-placement".to_string()).unwrap(),
+                1,
+                "decommissioned".to_string(),
+                CanonicalCommandMetadata::new("user:test", "command:test:retire-placement"),
             )
             .await
-            .expect("seed legacy projection");
+            .expect("retire canonical apparatus");
         let service = FactoryLocationService::new(
             Arc::new(MemoryFactoryLocationStore::new()),
-            ApparatusGroupService::new(store),
+            apparatus,
         );
 
         assert_eq!(
             service
                 .create(FactoryLocationCreate {
-                    name: "Legacy placement".to_string(),
-                    apparatus_ids: vec!["apparatus:custom:legacy-placement".to_string()],
+                    name: "Retired placement".to_string(),
+                    apparatus_ids: vec!["apparatus:custom:retired-placement".to_string()],
                 })
                 .await,
             Err(FactoryLocationError::InvalidApparatus)

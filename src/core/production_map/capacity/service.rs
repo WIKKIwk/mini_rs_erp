@@ -9,8 +9,9 @@ use super::service_capacity_scheduler::{
 use super::store_port::ApparatusQueueStateMap;
 use super::types::*;
 use super::*;
-use crate::core::apparatus_groups::ApparatusGroupService;
-use crate::core::apparatus_standard::{CanonicalApparatus, CapabilityCode, WorkingWindow};
+use crate::core::apparatus_standard::{
+    EquipmentCapabilityCode, RuntimeApparatusConfiguration,
+};
 
 impl ProductionMapService {
     pub(super) async fn ensure_apparatus_execution_capacity(
@@ -121,58 +122,6 @@ impl ProductionMapService {
         })
     }
 
-    pub async fn put_apparatus_capacity_profile(
-        &self,
-        profile: ApparatusCapacityProfile,
-        apparatus_groups: &ApparatusGroupService,
-    ) -> Result<ApparatusCapacityProfile, ProductionMapError> {
-        let profile = normalize_capacity_profile(self.store.as_ref(), profile).await?;
-        let canonical_profile = self
-            .canonical_capacity_profile_for(&profile.apparatus_id)
-            .await?;
-        let current = apparatus_groups
-            .canonical_apparatus_by_id(&profile.apparatus_id)
-            .await
-            .map_err(|_| ProductionMapError::StoreFailed)?
-            .ok_or(ProductionMapError::StoreFailed)?;
-        if profile.capabilities.iter().collect::<BTreeSet<_>>()
-            != canonical_profile
-                .capabilities
-                .iter()
-                .collect::<BTreeSet<_>>()
-            || profile.capability_levels != canonical_profile.capability_levels
-        {
-            return Err(ProductionMapError::CapacityProfileInvalid);
-        }
-        let updated = apparatus_groups
-            .mutate_canonical_apparatus(
-                &profile.apparatus_id,
-                current.versioning.revision,
-                |canonical| {
-                    canonical.capacity.capacity_slots = profile.capacity_slots;
-                    canonical.capacity.setup_minutes = profile.setup_minutes;
-                    canonical.capacity.cleanup_minutes = profile.cleanup_minutes;
-                    canonical.capacity.efficiency_percent = profile.efficiency_percent;
-                    canonical.capacity.finite_capacity = profile.finite_capacity;
-                    canonical.capacity.working_windows = profile
-                        .working_windows
-                        .iter()
-                        .map(|window| WorkingWindow {
-                            weekday: window.weekday,
-                            start_minute: window.start_minute,
-                            end_minute: window.end_minute,
-                        })
-                        .collect();
-                    Ok(())
-                },
-            )
-            .await
-            .map_err(|_| ProductionMapError::StoreFailed)?;
-        let profile = canonical_capacity_profile(&updated, unix_seconds())?;
-        self.notify_live();
-        Ok(profile)
-    }
-
     pub async fn put_apparatus_downtime(
         &self,
         mut downtime: ApparatusDowntime,
@@ -180,7 +129,7 @@ impl ProductionMapService {
         let canonical = self
             .validated_canonical_apparatus(&downtime.apparatus_id)
             .await?;
-        downtime.apparatus = canonical.identity.display.display_name.clone();
+        downtime.apparatus = canonical.runtime.display.display_name.clone();
         let downtime = normalize_downtime(self.store.as_ref(), downtime).await?;
         self.store.put_apparatus_downtime(downtime.clone()).await?;
         self.notify_live();
@@ -253,7 +202,7 @@ impl ProductionMapService {
             let profile = canonical_capacity_profile(&canonical, unix_seconds())?;
             let candidate = ApparatusScheduleCandidate {
                 apparatus_id: candidate.apparatus_id.clone(),
-                apparatus: canonical.identity.display.display_name.clone(),
+                apparatus: canonical.runtime.display.display_name.clone(),
             };
             if !profile.supports(&input.capability_requirements) {
                 let missing = input
@@ -362,9 +311,9 @@ impl ProductionMapService {
     async fn validated_canonical_apparatus(
         &self,
         apparatus_id: &crate::core::apparatus_standard::ApparatusId,
-    ) -> Result<std::sync::Arc<CanonicalApparatus>, ProductionMapError> {
+    ) -> Result<std::sync::Arc<RuntimeApparatusConfiguration>, ProductionMapError> {
         let canonical = self.resolve_canonical_apparatus(apparatus_id).await?;
-        if canonical.identity.id != *apparatus_id || canonical.validate().is_err() {
+        if canonical.runtime.apparatus_id != *apparatus_id || !canonical.has_coherent_source() {
             return Err(ProductionMapError::StoreFailed);
         }
         Ok(canonical)
@@ -380,52 +329,24 @@ impl ProductionMapService {
 }
 
 fn canonical_capacity_profile(
-    canonical: &CanonicalApparatus,
+    canonical: &RuntimeApparatusConfiguration,
     now_unix: i64,
 ) -> Result<ApparatusCapacityProfile, ProductionMapError> {
-    if canonical.validate().is_err() {
+    if !canonical.has_coherent_source() || !canonical.is_active() {
         return Err(ProductionMapError::StoreFailed);
     }
 
-    let mut capabilities = Vec::new();
-    let mut capability_levels = BTreeMap::new();
-    for capability in &canonical.capabilities {
-        let code = capability_code_name(*capability);
-        let profiles = canonical
-            .capability_profiles
-            .iter()
-            .filter(|profile| profile.code == *capability)
-            .collect::<Vec<_>>();
-        if profiles.is_empty() {
-            capabilities.push(code.to_string());
-            capability_levels.insert(code.to_string(), 1);
-            continue;
-        }
-
-        let active = profiles
-            .into_iter()
-            .filter(|profile| {
-                profile.enabled
-                    && profile
-                        .valid_from_unix
-                        .is_none_or(|starts_at| now_unix >= starts_at)
-                    && profile
-                        .valid_to_unix
-                        .is_none_or(|ends_at| now_unix < ends_at)
-            })
-            .collect::<Vec<_>>();
-        if active.len() > 1 {
-            return Err(ProductionMapError::StoreFailed);
-        }
-        if let Some(profile) = active.first() {
-            capabilities.push(code.to_string());
-            capability_levels.insert(code.to_string(), profile.level);
-        }
-    }
+    let capability_levels = canonical
+        .runtime
+        .capabilities
+        .iter()
+        .map(|(code, level)| (capability_code_name(*code).to_string(), *level))
+        .collect::<BTreeMap<_, _>>();
+    let capabilities = capability_levels.keys().cloned().collect();
 
     Ok(ApparatusCapacityProfile {
-        apparatus_id: canonical.identity.id.clone(),
-        apparatus: canonical.identity.display.display_name.clone(),
+        apparatus_id: canonical.runtime.apparatus_id.clone(),
+        apparatus: canonical.runtime.display.display_name.clone(),
         capacity_slots: canonical.capacity.capacity_slots,
         setup_minutes: canonical.capacity.setup_minutes,
         cleanup_minutes: canonical.capacity.cleanup_minutes,
@@ -448,16 +369,16 @@ fn canonical_capacity_profile(
     })
 }
 
-fn capability_code_name(code: CapabilityCode) -> &'static str {
+fn capability_code_name(code: EquipmentCapabilityCode) -> &'static str {
     match code {
-        CapabilityCode::Print => "print",
-        CapabilityCode::Pechat => "pechat",
-        CapabilityCode::Flexo => "flexo",
-        CapabilityCode::Laminate => "laminate",
-        CapabilityCode::Cut => "cut",
-        CapabilityCode::Package => "package",
-        CapabilityCode::Glue => "glue",
-        CapabilityCode::Apparatus => "apparatus",
+        EquipmentCapabilityCode::Print => "print",
+        EquipmentCapabilityCode::Laminate => "laminate",
+        EquipmentCapabilityCode::Cut => "cut",
+        EquipmentCapabilityCode::Package => "package",
+        EquipmentCapabilityCode::Glue => "glue",
+        EquipmentCapabilityCode::Tooling => "tooling",
+        EquipmentCapabilityCode::VirtualTask => "virtual_task",
+        EquipmentCapabilityCode::Training => "training",
     }
 }
 

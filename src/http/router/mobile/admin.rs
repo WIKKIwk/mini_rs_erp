@@ -16,10 +16,6 @@ pub(super) fn routes() -> Router<AppState> {
             "/v1/mobile/admin/telegram/invites",
             any(admin::telegram_invite),
         )
-        .route(
-            "/v1/mobile/admin/apparatus-groups",
-            any(admin::apparatus_groups),
-        )
         .route("/v1/mobile/admin/capabilities", any(admin::capabilities))
         .route("/v1/mobile/admin/roles", any(admin::roles))
         .route("/v1/mobile/admin/workers", any(admin::workers))
@@ -419,6 +415,10 @@ pub(super) fn routes() -> Router<AppState> {
             any(admin::apparatus_options),
         )
         .route("/v1/mobile/admin/apparatus", any(admin::apparatus))
+        .route(
+            "/v1/mobile/admin/apparatus/{id}",
+            any(admin::apparatus_detail),
+        )
         .route(
             "/v1/mobile/admin/apparatus/{id}/aasx",
             any(admin::apparatus_aasx).layer(DefaultBodyLimit::max(admin::MAX_AASX_UPLOAD_BYTES)),

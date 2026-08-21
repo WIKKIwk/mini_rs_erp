@@ -5,8 +5,7 @@ use sqlx::PgPool;
 
 use crate::core::apparatus_standard::ApparatusId;
 use crate::core::production_map::{
-    ApparatusCapacityProfile, ApparatusDowntime, ApparatusMaterialRule, ApparatusQueueActionEvent,
-    ApparatusQueuePolicy, ApparatusScheduleCancelRequest, ApparatusScheduleCandidate,
+    ApparatusDowntime, ApparatusQueueActionEvent, ApparatusScheduleCancelRequest,
     ApparatusScheduleReservation, CompletedQueueOrder, CompletionRequestDecision,
     CompletionRequestDecisionNotification, CompletionRequestNotification,
     CompletionRequestStateResolution, FinishedGoodsStockEntry, LaminatsiyaAstatkaReport,
@@ -43,16 +42,14 @@ use self::astatka_helpers::{
     put_laminatsiya_astatka_report, put_rezka_astatka_report,
 };
 use self::capacity_helpers::{
-    cancel_apparatus_schedule_reservation, load_apparatus_capacity_profiles,
-    load_apparatus_downtimes, load_apparatus_schedule_reservation_by_idempotency_key,
-    load_apparatus_schedule_reservations, put_apparatus_capacity_profile, put_apparatus_downtime,
-    put_apparatus_schedule_reservation, resolve_apparatus_identity,
+    cancel_apparatus_schedule_reservation, load_apparatus_downtimes,
+    load_apparatus_schedule_reservation_by_idempotency_key, load_apparatus_schedule_reservations,
+    put_apparatus_downtime, put_apparatus_schedule_reservation,
     update_apparatus_schedule_reservation_status_tx,
 };
 use self::catalog_helpers::{
-    apply_apparatus_sequence_delta_tx, delete_map_by_id, load_apparatus_queue_policies,
-    load_apparatus_queue_states, load_apparatus_sequences, load_maps,
-    save_apparatus_queue_policy, save_apparatus_sequence, save_apparatus_sequence_tx,
+    apply_apparatus_sequence_delta_tx, delete_map_by_id, load_apparatus_queue_states,
+    load_apparatus_sequences, load_maps, save_apparatus_sequence, save_apparatus_sequence_tx,
 };
 use self::completion_helpers::{
     load_completion_request_by_event_id, load_completion_request_decisions_for_actor,
@@ -64,8 +61,7 @@ use self::map_helpers::{
     reject_order_number_immutable_tx,
 };
 use self::material_helpers::{
-    delete_raw_material_assignment, load_apparatus_material_rules, load_raw_material_assignments,
-    save_apparatus_material_rule, save_raw_material_assignment,
+    delete_raw_material_assignment, load_raw_material_assignments, save_raw_material_assignment,
 };
 use self::order_control_helpers::{
     load_order_control_states, load_order_freeze_requests_for_audit, save_order_control_state,
@@ -92,13 +88,11 @@ use self::progress_helpers::{
 };
 use self::qolip_session_helpers::reject_qolip_in_use_tx;
 use self::queue_helpers::{
-    insert_queue_action_event_tx, put_queue_action_state_tx, queue_action_event_replay_tx,
-    put_queue_states_tx, validate_queue_action_event_transition_tx,
+    insert_queue_action_event_tx, put_queue_action_state_tx, put_queue_states_tx,
+    queue_action_event_replay_tx, validate_queue_action_event_transition_tx,
 };
 use self::raw_material_stock_helpers::apply_raw_material_stock_transitions_tx;
-use self::transaction_locks::{
-    lock_order_and_apparatuses_tx, lock_orders_and_apparatuses_tx,
-};
+use self::transaction_locks::{lock_order_and_apparatuses_tx, lock_orders_and_apparatuses_tx};
 use self::transfer_helpers::{
     commit_apparatus_transfer as commit_apparatus_transfer_record,
     load_apparatus_transfer_by_idempotency_key, load_apparatus_transfers_for_audit,
@@ -198,26 +192,6 @@ impl ProductionMapStorePort for PostgresProductionMapStore {
         save_apparatus_sequence(&self.pool, apparatus, order_ids).await
     }
 
-    async fn resolve_apparatus_identity(
-        &self,
-        apparatus_id: &ApparatusId,
-    ) -> Result<Option<ApparatusScheduleCandidate>, ProductionMapError> {
-        resolve_apparatus_identity(&self.pool, apparatus_id).await
-    }
-
-    async fn apparatus_capacity_profiles(
-        &self,
-    ) -> Result<Vec<ApparatusCapacityProfile>, ProductionMapError> {
-        load_apparatus_capacity_profiles(&self.pool).await
-    }
-
-    async fn put_apparatus_capacity_profile(
-        &self,
-        profile: ApparatusCapacityProfile,
-    ) -> Result<(), ProductionMapError> {
-        put_apparatus_capacity_profile(&self.pool, profile).await
-    }
-
     async fn apparatus_downtimes(&self) -> Result<Vec<ApparatusDowntime>, ProductionMapError> {
         load_apparatus_downtimes(&self.pool).await
     }
@@ -305,23 +279,6 @@ impl ProductionMapStorePort for PostgresProductionMapStore {
         tx.commit()
             .await
             .map_err(|_| ProductionMapError::StoreFailed)
-    }
-
-    async fn apparatus_queue_policies(
-        &self,
-    ) -> Result<crate::core::production_map::ApparatusQueuePolicyMap, ProductionMapError> {
-        load_apparatus_queue_policies(&self.pool).await
-    }
-
-    async fn put_apparatus_queue_policy(
-        &self,
-        apparatus_id: &ApparatusId,
-        apparatus_display: &str,
-        policy: ApparatusQueuePolicy,
-        actor: &QueueActionActor,
-    ) -> Result<(), ProductionMapError> {
-        save_apparatus_queue_policy(&self.pool, apparatus_id, apparatus_display, policy, actor)
-            .await
     }
 
     async fn put_apparatus_queue_states_with_event(
@@ -746,7 +703,8 @@ impl ProductionMapStorePort for PostgresProductionMapStore {
             if let Some(record) = &write.order_control_update {
                 locked_orders.push(record.order_id.as_str());
             }
-            let mut locked_apparatuses = vec![write.apparatus.as_str(), write.event.apparatus.as_str()];
+            let mut locked_apparatuses =
+                vec![write.apparatus.as_str(), write.event.apparatus.as_str()];
             locked_apparatuses.extend(write.event.assigned_apparatus.iter().map(String::as_str));
             locked_apparatuses.extend(write.sequence_updates.keys().map(String::as_str));
             if let Some(session) = &write.session {
@@ -785,8 +743,7 @@ impl ProductionMapStorePort for PostgresProductionMapStore {
                     }
                 }
             }
-            lock_orders_and_apparatuses_tx(&mut tx, &locked_orders, &locked_apparatuses)
-                .await?;
+            lock_orders_and_apparatuses_tx(&mut tx, &locked_orders, &locked_apparatuses).await?;
         }
         if queue_action_event_replay_tx(&mut tx, &write.event).await? {
             tx.commit()
@@ -899,19 +856,6 @@ impl ProductionMapStorePort for PostgresProductionMapStore {
             raw_material_stock_warehouses,
             qolip_checkout_committed,
         })
-    }
-
-    async fn apparatus_material_rules(
-        &self,
-    ) -> Result<Vec<ApparatusMaterialRule>, ProductionMapError> {
-        load_apparatus_material_rules(&self.pool).await
-    }
-
-    async fn put_apparatus_material_rule(
-        &self,
-        rule: ApparatusMaterialRule,
-    ) -> Result<(), ProductionMapError> {
-        save_apparatus_material_rule(&self.pool, rule).await
     }
 
     async fn raw_material_assignments(

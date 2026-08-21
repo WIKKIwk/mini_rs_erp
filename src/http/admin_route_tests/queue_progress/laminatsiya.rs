@@ -4,7 +4,7 @@ use super::*;
 async fn admin_freeze_request_is_finalized_by_linked_worker_safe_stop() {
     let production_store = Arc::new(MemoryProductionMapStore::new());
     let mut state = test_state();
-    state.production_maps = ProductionMapService::new(production_store.clone());
+    state.production_maps = ProductionMapService::new_for_test(production_store.clone());
     state
         .admin
         .upsert_role_assignment(crate::core::authz::RoleAssignmentUpsert {
@@ -111,11 +111,12 @@ async fn admin_freeze_request_is_finalized_by_linked_worker_safe_stop() {
         "in_progress"
     );
     assert_eq!(
-        snapshot_body["queue_action_controls"]["apparatus:default:asset-007"][order_id]["freeze_request"]["target_session_id"],
+        snapshot_body["queue_action_controls"]["apparatus:default:asset-007"][order_id]["freeze_request"]
+            ["target_session_id"],
         session_id
     );
-    let freeze_request_id = snapshot_body["queue_action_controls"]["apparatus:default:asset-007"][order_id]
-        ["freeze_request"]["request_id"]
+    let freeze_request_id = snapshot_body["queue_action_controls"]["apparatus:default:asset-007"]
+        [order_id]["freeze_request"]["request_id"]
         .as_str()
         .expect("linked freeze request id")
         .to_string();
@@ -241,8 +242,8 @@ async fn admin_freeze_request_is_finalized_by_linked_worker_safe_stop() {
         "freeze_requested"
     );
     assert_eq!(
-        after_failed_commit_body["queue_action_controls"]["apparatus:default:asset-007"][order_id]["freeze_request"]
-            ["target_session_id"],
+        after_failed_commit_body["queue_action_controls"]["apparatus:default:asset-007"][order_id]
+            ["freeze_request"]["target_session_id"],
         session_id
     );
 

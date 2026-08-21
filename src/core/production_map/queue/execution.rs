@@ -80,7 +80,6 @@ impl ProductionMapService {
         let sequences = self.store.apparatus_sequences().await?;
         let all_states = self.store.apparatus_queue_states().await?;
         let order_controls = self.store.order_control_states().await?;
-        let policies = self.store.apparatus_queue_policies().await?;
         if action == queue_state::ApparatusQueueAction::Freeze
             && control.state == OrderControlState::Active
             && order_has_frozen_queue_state(&all_states, order_id)
@@ -90,7 +89,7 @@ impl ProductionMapService {
         let known_keys = known_apparatus_storage_keys(&sequences, &all_states);
         let storage_key = queue_state::resolve_apparatus_storage_key(apparatus, &known_keys);
         let canonical = self.resolve_canonical_apparatus_text(&storage_key).await?;
-        let policy = queue_policy_for_apparatus(canonical.as_ref(), &policies);
+        let policy = queue_policy_for_apparatus(canonical.as_ref());
         let stored_sequence = sequences.get(&storage_key).cloned().unwrap_or_default();
         let all_maps = self.store.maps().await?;
         let visible_order_ids = visible_order_ids_for_apparatus(&all_maps, apparatus);
@@ -399,7 +398,7 @@ impl ProductionMapService {
         order_id: &str,
         order_map: &ProductionMapDefinition,
         apparatus: &str,
-        canonical: &crate::core::apparatus_standard::CanonicalApparatus,
+        canonical: &crate::core::apparatus_standard::RuntimeApparatusConfiguration,
         all_states: &ApparatusQueueStateMap,
         progress_batch_updates: &[OrderProgressBatch],
         ignored_batch_id: &str,
@@ -636,7 +635,7 @@ fn freeze_safe_stop_has_any_output(progress: &QueueProgressInput) -> bool {
 }
 
 fn freeze_safe_stop_output_is_complete(
-    apparatus: &crate::core::apparatus_standard::CanonicalApparatus,
+    apparatus: &crate::core::apparatus_standard::RuntimeApparatusConfiguration,
     progress: &QueueProgressInput,
 ) -> bool {
     if apparatus::is_rezka_apparatus(apparatus) {

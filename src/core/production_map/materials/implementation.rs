@@ -2,9 +2,9 @@ use std::collections::BTreeSet;
 
 use serde::{Deserialize, Serialize};
 
-use crate::core::apparatus_groups::ApparatusGroupService;
 use crate::core::apparatus_standard::{
-    ApparatusId, CanonicalApparatus, MaterialPolicy, MaterialRequirementGroup,
+    ApparatusId, MaterialExecutionPolicy, MaterialRequirementGroup,
+    RuntimeApparatusConfiguration,
 };
 use crate::core::qolip::QolipOrderStartPreparation;
 
@@ -205,36 +205,6 @@ impl ProductionMapService {
             }
         }
         Ok(rules)
-    }
-
-    pub async fn set_apparatus_material_rule(
-        &self,
-        input: ApparatusMaterialRuleUpsert,
-        apparatus_groups: &ApparatusGroupService,
-    ) -> Result<ApparatusMaterialRule, ProductionMapError> {
-        let requested = normalize_rule(input)?;
-        let current = self
-            .validated_material_apparatus(&requested.apparatus_id)
-            .await?;
-        let canonical = apparatus_groups
-            .mutate_canonical_apparatus(
-                &requested.apparatus_id,
-                current.versioning.revision,
-                |canonical| {
-                    canonical.policies.material = MaterialPolicy {
-                        requires_material: requested.requires_material,
-                        start_policy: requested.start_policy,
-                        item_groups: requested.item_groups.clone(),
-                        requirement_groups: requested.requirement_groups.clone(),
-                    };
-                    Ok(())
-                },
-            )
-            .await
-            .map_err(|_| ProductionMapError::StoreFailed)?;
-        let effective = material_rule_record(&canonical);
-        self.notify_live();
-        Ok(effective)
     }
 
     pub async fn raw_material_assignments(
@@ -743,33 +713,58 @@ impl ProductionMapService {
     async fn validated_material_apparatus(
         &self,
         apparatus: &ApparatusId,
-    ) -> Result<std::sync::Arc<CanonicalApparatus>, ProductionMapError> {
+    ) -> Result<std::sync::Arc<RuntimeApparatusConfiguration>, ProductionMapError> {
         let canonical = self.resolve_canonical_apparatus(apparatus).await?;
-        if canonical.identity.id != *apparatus || canonical.validate().is_err() {
+        if canonical.runtime.apparatus_id != *apparatus || !canonical.has_coherent_source() {
             return Err(ProductionMapError::StoreFailed);
         }
         Ok(canonical)
     }
 }
 
-fn material_rule_record(canonical: &CanonicalApparatus) -> ApparatusMaterialRule {
-    let material = &canonical.policies.material;
+fn material_rule_record(canonical: &RuntimeApparatusConfiguration) -> ApparatusMaterialRule {
+    let (requires_material, start_policy, item_groups, requirement_groups) =
+        match &canonical.material.policy {
+            MaterialExecutionPolicy::NotRequired => {
+                (false, RawMaterialStartPolicy::StateAll, Vec::new(), Vec::new())
+            }
+            MaterialExecutionPolicy::AllRequired { item_group_ids } => (
+                true,
+                RawMaterialStartPolicy::StateAll,
+                item_group_ids.clone(),
+                Vec::new(),
+            ),
+            MaterialExecutionPolicy::RequirementSets { sets } => (
+                true,
+                RawMaterialStartPolicy::RequirementGroups,
+                Vec::new(),
+                sets.iter()
+                    .map(|set| MaterialRequirementGroup {
+                        name: set.requirement_id.clone(),
+                        item_groups: set.item_group_ids.clone(),
+                        min_required_count: set.minimum_required_count,
+                    })
+                    .collect(),
+            ),
+        };
     ApparatusMaterialRule {
-        apparatus_id: canonical.identity.id.clone(),
-        apparatus: canonical.identity.display.display_name.clone(),
-        requires_material: material.requires_material,
-        start_policy: material.start_policy,
-        item_groups: material.item_groups.clone(),
-        requirement_groups: material.requirement_groups.clone(),
+        apparatus_id: canonical.runtime.apparatus_id.clone(),
+        apparatus: canonical.runtime.display.display_name.clone(),
+        requires_material,
+        start_policy,
+        item_groups,
+        requirement_groups,
     }
 }
 
-pub(crate) fn live_material_rule(canonical: &CanonicalApparatus) -> Option<ApparatusMaterialRule> {
-    canonical
-        .policies
-        .material
-        .requires_material
-        .then(|| material_rule_record(canonical))
+pub(crate) fn live_material_rule(
+    canonical: &RuntimeApparatusConfiguration,
+) -> Option<ApparatusMaterialRule> {
+    (!matches!(
+        canonical.material.policy,
+        MaterialExecutionPolicy::NotRequired
+    ))
+    .then(|| material_rule_record(canonical))
 }
 
 pub(super) fn build_raw_material_start_requirements(

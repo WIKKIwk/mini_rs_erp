@@ -9,9 +9,7 @@ use tokio::sync::{Mutex, RwLock};
 use crate::core::admin::models::AdminWarehouse;
 use crate::core::apparatus_standard::ApparatusId;
 use crate::core::auth::models::{Principal, PrincipalRole};
-use crate::core::production_map::{
-    CanonicalApparatusResolver, UnavailableCanonicalApparatusResolver,
-};
+use crate::core::production_map::CanonicalApparatusResolver;
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct WarehouseUpsert {
@@ -155,9 +153,7 @@ pub trait WarehouseStorePort: Send + Sync {
         warehouse: &str,
     ) -> Result<Vec<WarehouseAssignment>, WarehouseError>;
 
-    async fn all_warehouse_assignments(
-        &self,
-    ) -> Result<Vec<WarehouseAssignment>, WarehouseError>;
+    async fn all_warehouse_assignments(&self) -> Result<Vec<WarehouseAssignment>, WarehouseError>;
 
     async fn warehouse_summaries(
         &self,
@@ -199,19 +195,22 @@ pub struct WarehouseService {
 }
 
 impl WarehouseService {
-    pub fn new(store: Arc<dyn WarehouseStorePort>) -> Self {
+    pub fn new(
+        store: Arc<dyn WarehouseStorePort>,
+        canonical_apparatus_resolver: Arc<dyn CanonicalApparatusResolver>,
+    ) -> Self {
         Self {
             store,
-            canonical_apparatus_resolver: Arc::new(UnavailableCanonicalApparatusResolver),
+            canonical_apparatus_resolver,
         }
     }
 
-    pub fn with_canonical_apparatus_resolver(
-        mut self,
-        resolver: Arc<dyn CanonicalApparatusResolver>,
-    ) -> Self {
-        self.canonical_apparatus_resolver = resolver;
-        self
+    #[cfg(test)]
+    pub(crate) fn new_for_test(store: Arc<dyn WarehouseStorePort>) -> Self {
+        Self::new(
+            store,
+            Arc::new(crate::core::production_map::TestCanonicalApparatusResolver::standard()),
+        )
     }
 
     pub async fn warehouses(
@@ -317,7 +316,10 @@ impl WarehouseService {
             else {
                 return Err(WarehouseError::InvalidApparatus);
             };
-            if canonical.identity.id != apparatus_id || canonical.validate().is_err() {
+            if canonical.runtime.apparatus_id != apparatus_id
+                || !canonical.has_coherent_source()
+                || !canonical.is_active()
+            {
                 return Err(WarehouseError::InvalidApparatus);
             }
         }
@@ -563,7 +565,7 @@ mod tests {
     #[tokio::test]
     async fn delete_warehouse_allows_an_empty_child_warehouse() {
         let store = Arc::new(MemoryWarehouseStore::new());
-        let service = WarehouseService::new(store);
+        let service = WarehouseService::new_for_test(store);
         service
             .upsert_warehouse(WarehouseUpsert {
                 warehouse: "Qolip ombori".to_string(),
@@ -601,7 +603,7 @@ mod tests {
     #[tokio::test]
     async fn typed_assignments_keep_memory_reads_and_deletes_disjoint() {
         let store = Arc::new(MemoryWarehouseStore::new());
-        let service = WarehouseService::new(store.clone());
+        let service = WarehouseService::new_for_test(store.clone());
         let principal = Principal {
             role: PrincipalRole::Admin,
             display_name: "Typed principal".to_string(),

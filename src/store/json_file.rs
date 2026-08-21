@@ -68,7 +68,9 @@ mod tests {
     async fn empty_json_store_is_an_error() {
         let dir = tempfile::tempdir().expect("tempdir");
         let path = dir.path().join("empty.json");
-        tokio::fs::write(&path, b"").await.expect("write empty store");
+        tokio::fs::write(&path, b"")
+            .await
+            .expect("write empty store");
 
         assert!(matches!(
             read_map::<serde_json::Value>(&path).await,

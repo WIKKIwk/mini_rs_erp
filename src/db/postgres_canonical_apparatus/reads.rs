@@ -1,9 +1,10 @@
 use sqlx::{PgPool, Row};
 
 use crate::core::apparatus_standard::{
-    AasxSha256, ApparatusId, CanonicalAasxArtifact, CanonicalApparatusError,
-    CanonicalApparatusRevision, RuntimeApparatusProjection, StoredCanonicalAasx,
-    parse_canonical_aasx,
+    AasxSha256, ApparatusCapacityProjection, ApparatusId, ApparatusMaterialProjection,
+    ApparatusQueueProjection, CanonicalAasxArtifact, CanonicalApparatusError,
+    CanonicalApparatusRevision, RuntimeApparatusConfiguration, RuntimeApparatusProjection,
+    StoredCanonicalAasx, parse_canonical_aasx,
 };
 
 pub(super) async fn current_projection(
@@ -88,8 +89,53 @@ pub(super) async fn current_aasx(
     }))
 }
 
+pub(super) async fn current_configuration(
+    pool: &PgPool,
+    apparatus_id: &ApparatusId,
+) -> Result<Option<RuntimeApparatusConfiguration>, CanonicalApparatusError> {
+    let row = sqlx::query(
+        "SELECT runtime.payload_json AS runtime_payload,
+                queue.payload_json AS queue_payload,
+                material.payload_json AS material_payload,
+                capacity.payload_json AS capacity_payload
+         FROM mini_apparatus runtime
+         JOIN mini_apparatus_queue_policies queue
+           ON queue.canonical_apparatus_id = runtime.id
+          AND (queue.source_revision, queue.source_aasx_sha256)
+              = (runtime.source_revision, runtime.source_aasx_sha256)
+         JOIN mini_apparatus_material_rules material
+           ON material.canonical_apparatus_id = runtime.id
+          AND (material.source_revision, material.source_aasx_sha256)
+              = (runtime.source_revision, runtime.source_aasx_sha256)
+         JOIN mini_apparatus_capacity_profiles capacity
+           ON capacity.canonical_apparatus_id = runtime.id
+          AND (capacity.source_revision, capacity.source_aasx_sha256)
+              = (runtime.source_revision, runtime.source_aasx_sha256)
+         WHERE runtime.id = $1 AND runtime.source_revision IS NOT NULL",
+    )
+    .bind(apparatus_id.as_str())
+    .fetch_optional(pool)
+    .await
+    .map_err(|_| CanonicalApparatusError::Persistence)?;
+    row.map(|row| {
+        Ok(RuntimeApparatusConfiguration {
+            runtime: parse_json(row.get("runtime_payload"))?,
+            queue: parse_json::<ApparatusQueueProjection>(row.get("queue_payload"))?,
+            material: parse_json::<ApparatusMaterialProjection>(row.get("material_payload"))?,
+            capacity: parse_json::<ApparatusCapacityProjection>(row.get("capacity_payload"))?,
+        })
+    })
+    .transpose()
+}
+
 fn parse_projection(
     payload: serde_json::Value,
 ) -> Result<RuntimeApparatusProjection, CanonicalApparatusError> {
+    serde_json::from_value(payload).map_err(|_| CanonicalApparatusError::ArtifactIntegrity)
+}
+
+fn parse_json<T: serde::de::DeserializeOwned>(
+    payload: serde_json::Value,
+) -> Result<T, CanonicalApparatusError> {
     serde_json::from_value(payload).map_err(|_| CanonicalApparatusError::ArtifactIntegrity)
 }

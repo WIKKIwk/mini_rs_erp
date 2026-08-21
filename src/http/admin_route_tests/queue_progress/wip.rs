@@ -291,7 +291,10 @@ async fn wip_batches_endpoint_lists_batches_for_assigned_next_apparatus() {
     let listed_body = json_body(listed).await;
     assert_eq!(listed_status, StatusCode::OK, "{listed_body:?}");
     assert_eq!(listed_body["batches"][0]["qr_payload"], qr_payload);
-    assert_eq!(listed_body["batches"][0]["next_apparatus"], "apparatus:default:asset-007");
+    assert_eq!(
+        listed_body["batches"][0]["next_apparatus"],
+        "apparatus:default:asset-007"
+    );
 }
 
 #[tokio::test]

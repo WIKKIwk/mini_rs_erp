@@ -86,9 +86,7 @@ pub fn previous_work_stage_stations(
 /// not become canonical production apparatus stages. Display titles are not
 /// accepted as identity.
 pub fn next_work_stage_station(map: &ProductionMapDefinition, station_id: &str) -> Option<String> {
-    next_work_stage_stations(map, station_id)
-        .into_iter()
-        .next()
+    next_work_stage_stations(map, station_id).into_iter().next()
 }
 
 /// Return all physical successors reached through the same branch-aware

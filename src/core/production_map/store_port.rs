@@ -7,14 +7,13 @@ use crate::core::qolip::QolipCheckout;
 use crate::core::returned_paint::ReturnedPaintRequest;
 
 use super::capacity::*;
-use super::materials::{ApparatusMaterialRule, RawMaterialAssignment};
+use super::materials::RawMaterialAssignment;
 use super::types::*;
 
 pub type StoreResult<T> = Result<T, ProductionMapError>;
 pub type ApparatusSequenceMap = BTreeMap<String, Vec<String>>;
 pub type QueueStateMap = BTreeMap<String, String>;
 pub type ApparatusQueueStateMap = BTreeMap<String, QueueStateMap>;
-pub type ApparatusQueuePolicyMap = BTreeMap<ApparatusId, ApparatusQueuePolicy>;
 pub type OrderLogMap = BTreeMap<String, Vec<ProductionOrderLogEntry>>;
 pub type OrderControlMap = BTreeMap<String, OrderControlRecord>;
 
@@ -210,23 +209,6 @@ pub trait ProductionMapStorePort: Send + Sync {
     ) -> StoreResult<()>;
 
     // Finite capacity, working calendars, downtime, and reservations.
-    async fn resolve_apparatus_identity(
-        &self,
-        _apparatus_id: &ApparatusId,
-    ) -> StoreResult<Option<ApparatusScheduleCandidate>> {
-        // A store without an explicit canonical catalog implementation must
-        // not manufacture an identity from a runtime string or snapshot.
-        Ok(None)
-    }
-    async fn apparatus_capacity_profiles(&self) -> StoreResult<Vec<ApparatusCapacityProfile>> {
-        Ok(Vec::new())
-    }
-    async fn put_apparatus_capacity_profile(
-        &self,
-        _profile: ApparatusCapacityProfile,
-    ) -> StoreResult<()> {
-        Ok(())
-    }
     async fn apparatus_downtimes(&self) -> StoreResult<Vec<ApparatusDowntime>> {
         Ok(Vec::new())
     }
@@ -274,14 +256,6 @@ pub trait ProductionMapStorePort: Send + Sync {
         &self,
         apparatus: &str,
         states: QueueStateMap,
-    ) -> StoreResult<()>;
-    async fn apparatus_queue_policies(&self) -> StoreResult<ApparatusQueuePolicyMap>;
-    async fn put_apparatus_queue_policy(
-        &self,
-        apparatus_id: &ApparatusId,
-        apparatus_display: &str,
-        policy: ApparatusQueuePolicy,
-        actor: &QueueActionActor,
     ) -> StoreResult<()>;
     async fn put_apparatus_queue_states_with_event(
         &self,
@@ -621,9 +595,8 @@ pub trait ProductionMapStorePort: Send + Sync {
         Ok(QueueActionProgressWriteResult::default())
     }
 
-    // Raw material rule and assignment persistence.
-    async fn apparatus_material_rules(&self) -> StoreResult<Vec<ApparatusMaterialRule>>;
-    async fn put_apparatus_material_rule(&self, rule: ApparatusMaterialRule) -> StoreResult<()>;
+    // Raw material assignment persistence. Apparatus material rules are
+    // canonical runtime projections and have no independent store API.
     async fn raw_material_assignments(&self) -> StoreResult<Vec<RawMaterialAssignment>>;
     async fn put_raw_material_assignment(
         &self,
@@ -690,31 +663,6 @@ mod tests {
             &self,
             _apparatus: &str,
             _states: QueueStateMap,
-        ) -> StoreResult<()> {
-            unimplemented!()
-        }
-
-        async fn apparatus_queue_policies(&self) -> StoreResult<ApparatusQueuePolicyMap> {
-            unimplemented!()
-        }
-
-        async fn put_apparatus_queue_policy(
-            &self,
-            _apparatus_id: &ApparatusId,
-            _apparatus_display: &str,
-            _policy: ApparatusQueuePolicy,
-            _actor: &QueueActionActor,
-        ) -> StoreResult<()> {
-            unimplemented!()
-        }
-
-        async fn apparatus_material_rules(&self) -> StoreResult<Vec<ApparatusMaterialRule>> {
-            unimplemented!()
-        }
-
-        async fn put_apparatus_material_rule(
-            &self,
-            _rule: ApparatusMaterialRule,
         ) -> StoreResult<()> {
             unimplemented!()
         }

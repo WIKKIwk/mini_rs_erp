@@ -3,7 +3,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use super::types::{ProductionMapDefinition, ProductionMapNodeKind};
 use super::{chain, queue_state};
 use crate::core::apparatus_standard::{
-    ApparatusFamily, ApparatusId, ApparatusKind, CanonicalApparatus,
+    ApparatusId, EquipmentCapabilityCode, ExecutionOperation, RuntimeApparatusConfiguration,
 };
 
 pub(super) fn visible_order_ids_for_apparatus(
@@ -69,20 +69,19 @@ fn is_template_map(map: &ProductionMapDefinition) -> bool {
 /// Queue-owned stage-specific helpers cannot classify an opaque ID without a
 /// canonical apparatus lookup. They fail closed for operations that require a
 /// specific family; callers use these only as conservative guards.
-pub(super) fn is_laminatsiya_apparatus(apparatus: &CanonicalApparatus) -> bool {
-    apparatus.classification.family == ApparatusFamily::Laminatsiya
-        && matches!(
-            apparatus.classification.kind,
-            ApparatusKind::Laminatsiya | ApparatusKind::ExtruderLaminatsiya
-        )
+pub(super) fn is_laminatsiya_apparatus(apparatus: &RuntimeApparatusConfiguration) -> bool {
+    apparatus.is_active()
+        && apparatus.runtime.execution_profile.operation == ExecutionOperation::Laminate
+        && apparatus.supports(EquipmentCapabilityCode::Laminate)
 }
 
-pub(super) fn is_rezka_apparatus(apparatus: &CanonicalApparatus) -> bool {
-    apparatus.classification.family == ApparatusFamily::Rezka
-        && apparatus.classification.kind == ApparatusKind::Rezka
+pub(super) fn is_rezka_apparatus(apparatus: &RuntimeApparatusConfiguration) -> bool {
+    apparatus.is_active()
+        && apparatus.runtime.execution_profile.operation == ExecutionOperation::Cut
+        && apparatus.supports(EquipmentCapabilityCode::Cut)
 }
 
-pub(super) fn requires_qolip_scan(apparatus: &CanonicalApparatus) -> bool {
+pub(super) fn requires_qolip_scan(apparatus: &RuntimeApparatusConfiguration) -> bool {
     crate::core::production_map::pechat::requires_qolip_scan(apparatus)
 }
 

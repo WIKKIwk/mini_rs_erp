@@ -131,7 +131,7 @@ async fn postgres_warehouse_delete_is_serialized_with_transfer_creation() {
         ["Race Source".to_string()],
     );
     let movement_store = Arc::new(PostgresInventoryMovementStore::new(pool.clone()));
-    let warehouse_service = Arc::new(WarehouseService::new(Arc::new(
+    let warehouse_service = Arc::new(WarehouseService::new_for_test(Arc::new(
         PostgresWarehouseStore::new(pool.clone()),
     )));
     let barrier = Arc::new(tokio::sync::Barrier::new(2));
@@ -355,7 +355,8 @@ async fn postgres_warehouse_assignments_use_typed_canonical_identity() {
     .expect("typed identity counts");
     assert_eq!((warehouse_count, apparatus_count), (1, 1));
 
-    let service = WarehouseService::new(Arc::new(PostgresWarehouseStore::new(pool.clone())));
+    let service =
+        WarehouseService::new_for_test(Arc::new(PostgresWarehouseStore::new(pool.clone())));
     let principal = Principal {
         role: PrincipalRole::Admin,
         display_name: "Disjoint Admin".to_string(),
@@ -426,7 +427,10 @@ async fn postgres_warehouse_assignments_use_typed_canonical_identity() {
     )
     .execute(&pool)
     .await;
-    assert!(orphan.is_err(), "orphan apparatus assignment must be rejected");
+    assert!(
+        orphan.is_err(),
+        "orphan apparatus assignment must be rejected"
+    );
 
     pool.close().await;
     let admin_pool = sqlx::PgPool::connect(&admin_url)

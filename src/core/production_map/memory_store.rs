@@ -18,8 +18,6 @@ use crate::core::apparatus_standard::ApparatusId;
 
 pub use state::MemoryProductionMapStore;
 
-use super::store_port::ApparatusQueuePolicyMap;
-
 #[async_trait]
 #[cfg(test)]
 impl ProductionMapStorePort for MemoryProductionMapStore {
@@ -106,19 +104,6 @@ impl ProductionMapStorePort for MemoryProductionMapStore {
         maps::put_apparatus_sequence(self, apparatus, order_ids).await
     }
 
-    async fn apparatus_capacity_profiles(
-        &self,
-    ) -> Result<Vec<ApparatusCapacityProfile>, ProductionMapError> {
-        capacity::apparatus_capacity_profiles(self).await
-    }
-
-    async fn put_apparatus_capacity_profile(
-        &self,
-        profile: ApparatusCapacityProfile,
-    ) -> Result<(), ProductionMapError> {
-        capacity::put_apparatus_capacity_profile(self, profile).await
-    }
-
     async fn apparatus_downtimes(&self) -> Result<Vec<ApparatusDowntime>, ProductionMapError> {
         capacity::apparatus_downtimes(self).await
     }
@@ -194,23 +179,6 @@ impl ProductionMapStorePort for MemoryProductionMapStore {
         states: BTreeMap<String, String>,
     ) -> Result<(), ProductionMapError> {
         queue::put_apparatus_queue_states(self, apparatus, states).await
-    }
-
-    async fn apparatus_queue_policies(
-        &self,
-    ) -> Result<ApparatusQueuePolicyMap, ProductionMapError> {
-        queue::apparatus_queue_policies(self).await
-    }
-
-    async fn put_apparatus_queue_policy(
-        &self,
-        apparatus_id: &crate::core::apparatus_standard::ApparatusId,
-        apparatus_display: &str,
-        policy: ApparatusQueuePolicy,
-        actor: &QueueActionActor,
-    ) -> Result<(), ProductionMapError> {
-        queue::put_apparatus_queue_policy(self, apparatus_id, apparatus_display, policy, actor)
-            .await
     }
 
     async fn append_apparatus_queue_action_event(
@@ -601,19 +569,6 @@ impl ProductionMapStorePort for MemoryProductionMapStore {
         stock: FinishedGoodsStockEntry,
     ) -> Result<(), ProductionMapError> {
         runs::receive_finished_goods_batch(self, batch, stock).await
-    }
-
-    async fn apparatus_material_rules(
-        &self,
-    ) -> Result<Vec<ApparatusMaterialRule>, ProductionMapError> {
-        materials::apparatus_material_rules(self).await
-    }
-
-    async fn put_apparatus_material_rule(
-        &self,
-        rule: ApparatusMaterialRule,
-    ) -> Result<(), ProductionMapError> {
-        materials::put_apparatus_material_rule(self, rule).await
     }
 
     async fn raw_material_assignments(

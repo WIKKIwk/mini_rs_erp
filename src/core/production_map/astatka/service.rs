@@ -29,7 +29,7 @@ impl ProductionMapService {
         let apparatus_id = ApparatusId::new(apparatus.to_string())
             .map_err(|_| ProductionMapError::ProgressInputInvalid)?;
         let canonical = self.resolve_canonical_apparatus(&apparatus_id).await?;
-        if canonical.identity.id != apparatus_id
+        if canonical.runtime.apparatus_id != apparatus_id
             || !super::apparatus::is_laminatsiya_apparatus(&canonical)
         {
             return Err(ProductionMapError::ProgressInputInvalid);
@@ -129,7 +129,7 @@ impl ProductionMapService {
         let apparatus_id = ApparatusId::new(apparatus.to_string())
             .map_err(|_| ProductionMapError::ProgressInputInvalid)?;
         let canonical = self.resolve_canonical_apparatus(&apparatus_id).await?;
-        if canonical.identity.id != apparatus_id
+        if canonical.runtime.apparatus_id != apparatus_id
             || !super::apparatus::is_rezka_apparatus(&canonical)
         {
             return Err(ProductionMapError::ProgressInputInvalid);

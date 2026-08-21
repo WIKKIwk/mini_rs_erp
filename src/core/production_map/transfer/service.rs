@@ -75,7 +75,7 @@ impl ProductionMapService {
         ) {
             return Err(ProductionMapError::MoveNotAllowed);
         }
-        let target_display = target.identity.display.display_name.clone();
+        let target_display = target.runtime.display.display_name.clone();
         if !transfer_move_allowed_by_id(&map, &from_id, &to_id) {
             return Err(ProductionMapError::MoveNotAllowed);
         }

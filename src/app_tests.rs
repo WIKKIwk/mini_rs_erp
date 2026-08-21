@@ -2,7 +2,6 @@ use std::path::{Path, PathBuf};
 
 use super::app_local_store::{LocalStoreBackend, derive_lmdb_path, local_store_backend_from};
 use crate::config::AppConfig;
-use crate::core::apparatus_groups::ApparatusGroupUpsert;
 use crate::core::auth::models::{Principal, PrincipalRole};
 use crate::core::calculate_orders::{CalculateOrderError, CalculateOrderTemplate};
 use crate::core::production_map::{
@@ -11,7 +10,6 @@ use crate::core::production_map::{
 };
 use crate::core::push::ports::PushServiceError;
 use crate::core::rps_batch::{RpsBatchServiceError, RpsBatchStartRequest};
-use crate::db::postgres::apply_foundation_migration;
 
 static MINI_ENGINE_ENV_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 
@@ -101,65 +99,14 @@ async fn app_state_builds_lazy_mini_engine_when_database_url_is_configured() {
     }
 }
 
-#[tokio::test]
-#[ignore = "requires local PostgreSQL and creates/drops mini_rs_erp_test_app_apparatus_groups"]
-async fn app_state_routes_apparatus_groups_to_postgres_when_database_url_is_configured() {
-    let _guard = MINI_ENGINE_ENV_LOCK.lock().await;
-    let admin_url = std::env::var("MINI_ERP_TEST_ADMIN_DATABASE_URL")
-        .unwrap_or_else(|_| "postgres://wikki@127.0.0.1:5432/postgres".to_string());
-    let db_name = "mini_rs_erp_test_app_apparatus_groups";
-    let admin_pool = sqlx::PgPool::connect(&admin_url).await.expect("admin db");
-    sqlx::query(&format!(
-        r#"DROP DATABASE IF EXISTS "{db_name}" WITH (FORCE)"#
-    ))
-    .execute(&admin_pool)
-    .await
-    .expect("drop test db");
-    sqlx::query(&format!(r#"CREATE DATABASE "{db_name}""#))
-        .execute(&admin_pool)
-        .await
-        .expect("create test db");
-    admin_pool.close().await;
-
-    let test_url = format!("postgres://wikki@127.0.0.1:5432/{db_name}");
-    let pool = sqlx::PgPool::connect(&test_url).await.expect("test db");
-    apply_foundation_migration(&pool)
-        .await
-        .expect("apply migration");
-    unsafe {
-        std::env::set_var("MINI_ERP_DATABASE_URL", &test_url);
-    }
-
-    let state = super::AppState::new(test_app_config());
-    state
-        .apparatus_groups
-        .upsert_group(ApparatusGroupUpsert {
-            name: "pechat".to_string(),
-            apparatus: vec!["7 ta rangli pechat".to_string()],
-        })
-        .await
-        .expect("save group through app state");
-
-    let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM mini_apparatus_groups")
-        .fetch_one(&pool)
-        .await
-        .expect("count postgres groups");
-    assert_eq!(count, 1);
-
-    unsafe {
-        std::env::remove_var("MINI_ERP_DATABASE_URL");
-    }
-    pool.close().await;
-    let admin_pool = sqlx::PgPool::connect(&admin_url)
-        .await
-        .expect("admin cleanup");
-    sqlx::query(&format!(
-        r#"DROP DATABASE IF EXISTS "{db_name}" WITH (FORCE)"#
-    ))
-    .execute(&admin_pool)
-    .await
-    .expect("cleanup test db");
-    admin_pool.close().await;
+#[test]
+fn production_app_state_requires_one_explicit_postgres_pool_for_apparatus_runtime() {
+    let source = include_str!("app.rs");
+    assert!(source.contains("pub fn from_postgres(config: AppConfig, pool: sqlx::PgPool)"));
+    assert!(source.contains("build_production_map_service(apparatus.clone(), pool.clone())"));
+    assert!(source.contains("build_warehouse_service(apparatus.clone(), pool)"));
+    assert!(!source.contains("apparatus_groups"));
+    assert!(!source.contains("UnavailableProductionMapStore"));
 }
 
 #[tokio::test]

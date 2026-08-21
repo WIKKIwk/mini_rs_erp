@@ -51,13 +51,14 @@ pub use suppliers::{
     supplier_detail, supplier_list, supplier_summary, suppliers, user_list,
 };
 pub use system::{
-    MAX_AASX_UPLOAD_BYTES, apparatus, apparatus_aasx, apparatus_groups, apparatus_options,
-    capabilities, factory_location, factory_location_apparatus, factory_locations,
-    inventory_assets, inventory_locations, inventory_relocations, inventory_relocations_batch,
-    inventory_returns_batch, inventory_transfer_action, inventory_transfers, items_bulk_move_group,
-    reset_orders, role_assignments, roles, system_backup_create, system_backup_download,
-    system_backup_import, system_monitor, system_monitor_live, warehouse_assignments,
-    warehouse_items, warehouse_summaries, warehouses, werka_code_regenerate,
+    MAX_AASX_UPLOAD_BYTES, apparatus, apparatus_aasx, apparatus_detail, apparatus_options,
+    capabilities, factory_location, factory_location_apparatus,
+    factory_locations, inventory_assets, inventory_locations, inventory_relocations,
+    inventory_relocations_batch, inventory_returns_batch, inventory_transfer_action,
+    inventory_transfers, items_bulk_move_group, reset_orders, role_assignments, roles,
+    system_backup_create, system_backup_download, system_backup_import, system_monitor,
+    system_monitor_live, warehouse_assignments, warehouse_items, warehouse_summaries, warehouses,
+    werka_code_regenerate,
 };
 use system::{authorize_any_capability, authorize_capability, require_capability};
 pub use system_users::{system_user_code_regenerate, system_user_detail, system_users};
@@ -93,7 +94,7 @@ use crate::core::admin::models::{
     AdminUpdateItemRequest, AdminUserListPage,
 };
 use crate::core::admin::ports::AdminPortError;
-use crate::core::apparatus_groups::{ApparatusGroupError, ApparatusGroupUpsert, ApparatusUpsert};
+use crate::core::apparatus_standard::{CanonicalApparatusError, CanonicalCommandMetadata};
 use crate::core::auth::models::{Principal, PrincipalRole};
 use crate::core::authz::{
     Capability, RoleAssignmentUpsert, RoleDefinitionUpsert, capability_catalog_entries,
@@ -109,6 +110,50 @@ use crate::core::werka::models::{CustomerDirectoryEntry, DispatchRecord, Supplie
 use crate::http::handlers::auth::{bearer_token, profile_avatar_proxy_url};
 
 type AdminError = (StatusCode, Json<AdminErrorResponse>);
+
+fn canonical_command_metadata(
+    principal: &Principal,
+    headers: &HeaderMap,
+) -> Result<CanonicalCommandMetadata, AdminError> {
+    let key = headers
+        .get("idempotency-key")
+        .and_then(|value| value.to_str().ok())
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| bad_request("idempotency_key_required"))?;
+    if key.len() > 128
+        || !key
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || b"._:-".contains(&byte))
+    {
+        return Err(bad_request("idempotency_key_invalid"));
+    }
+    let actor_ref = if principal.ref_.trim().is_empty() {
+        principal.phone.trim()
+    } else {
+        principal.ref_.trim()
+    };
+    Ok(CanonicalCommandMetadata::new(
+        format!("principal:{actor_ref}"),
+        format!("apparatus-command:{key}"),
+    ))
+}
+
+fn canonical_apparatus_error(error: CanonicalApparatusError) -> AdminError {
+    match error {
+        CanonicalApparatusError::NotFound => not_found("apparatus_not_found"),
+        CanonicalApparatusError::AlreadyExists => conflict("apparatus_already_exists"),
+        CanonicalApparatusError::RevisionConflict => conflict("apparatus_revision_conflict"),
+        CanonicalApparatusError::IdentityConflict => conflict("apparatus_identity_conflict"),
+        CanonicalApparatusError::Retired => conflict("apparatus_retired"),
+        CanonicalApparatusError::InvalidRevision(_) => bad_request("apparatus_revision_invalid"),
+        CanonicalApparatusError::InvalidAasx => bad_request("aasx_import_invalid"),
+        CanonicalApparatusError::ArtifactIntegrity => server_error("aasx_integrity_failed"),
+        CanonicalApparatusError::Persistence => server_error("apparatus_persistence_failed"),
+        CanonicalApparatusError::Clock => server_error("apparatus_clock_failed"),
+        CanonicalApparatusError::InjectedFault(_) => server_error("apparatus_commit_failed"),
+    }
+}
 
 fn required_ref(value: Option<&str>) -> Result<&str, AdminError> {
     let ref_ = value.unwrap_or("").trim();

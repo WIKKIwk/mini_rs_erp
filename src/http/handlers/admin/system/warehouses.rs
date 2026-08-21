@@ -1,6 +1,3 @@
-use super::apparatus::{
-    LegacyApparatusWarehouse, is_legacy_apparatus_parent, legacy_apparatus_warehouse,
-};
 use super::*;
 use crate::core::admin::models::AdminWarehouse;
 use crate::core::apparatus_standard::ApparatusId;
@@ -85,37 +82,13 @@ pub async fn warehouses(
         .map_err(warehouse_error)?;
     warehouses =
         crate::core::warehouses::merge_admin_warehouses(warehouses, mini_warehouses, fetch_limit);
-    let mut legacy_apparatus = Vec::<LegacyApparatusWarehouse>::new();
-    // Compatibility for released clients. New clients use GET /admin/apparatus.
-    if is_legacy_apparatus_parent(query.parent.as_deref().unwrap_or("")) {
-        let mut seen_apparatus_ids = BTreeSet::new();
-        for entry in state
-            .apparatus_groups
-            .apparatus_catalog(query.q.as_deref().unwrap_or(""), fetch_limit)
-            .await
-            .map_err(apparatus_group_error)?
-        {
-            if seen_apparatus_ids.insert(entry.id.trim().to_lowercase()) {
-                legacy_apparatus.push(legacy_apparatus_warehouse(entry));
-            }
-            if legacy_apparatus.len() >= fetch_limit {
-                break;
-            }
-        }
-    }
     if let Some(scope) = warehouse_scope.as_ref() {
         warehouses = scoped_warehouses(warehouses, scope);
-        legacy_apparatus.retain(|item| scope.contains_apparatus_id(&item.id));
     }
     let mut response = warehouses
         .into_iter()
         .map(AdminWarehouseResponse::from)
         .collect::<Vec<_>>();
-    response.extend(
-        legacy_apparatus
-            .into_iter()
-            .map(AdminWarehouseResponse::from),
-    );
     response.sort_by(|left, right| {
         left.warehouse
             .to_lowercase()
@@ -144,18 +117,6 @@ impl From<AdminWarehouse> for AdminWarehouseResponse {
             is_group: warehouse.is_group,
             parent_warehouse: warehouse.parent_warehouse,
             id: None,
-        }
-    }
-}
-
-impl From<LegacyApparatusWarehouse> for AdminWarehouseResponse {
-    fn from(warehouse: LegacyApparatusWarehouse) -> Self {
-        Self {
-            warehouse: warehouse.warehouse,
-            company: warehouse.company,
-            is_group: warehouse.is_group,
-            parent_warehouse: warehouse.parent_warehouse,
-            id: Some(warehouse.id),
         }
     }
 }
@@ -468,24 +429,5 @@ fn warehouse_error(error: WarehouseError) -> AdminError {
             Json(AdminErrorResponse::new("warehouse_has_children")),
         ),
         WarehouseError::StoreFailed => server_error("warehouse store failed"),
-    }
-}
-
-fn apparatus_group_error(error: ApparatusGroupError) -> AdminError {
-    match error {
-        ApparatusGroupError::MissingName => bad_request("group name is required"),
-        ApparatusGroupError::MissingApparatus => bad_request("apparatus is required"),
-        ApparatusGroupError::InvalidApparatus => bad_request("apparatus is invalid"),
-        ApparatusGroupError::InvalidFamily => bad_request("apparatus family is invalid"),
-        ApparatusGroupError::InvalidKind => bad_request("apparatus kind is invalid"),
-        ApparatusGroupError::InvalidCapability => bad_request("apparatus capability is invalid"),
-        ApparatusGroupError::InvalidColorStations => {
-            bad_request("apparatus color stations are invalid")
-        }
-        ApparatusGroupError::Conflict => (
-            StatusCode::CONFLICT,
-            Json(AdminErrorResponse::new("apparatus group conflict")),
-        ),
-        ApparatusGroupError::StoreFailed => server_error("apparatus group store failed"),
     }
 }

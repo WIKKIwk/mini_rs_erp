@@ -1,30 +1,6 @@
 use super::*;
 use crate::core::apparatus_standard::ApparatusId;
 
-pub(super) async fn apparatus_capacity_profiles(
-    store: &MemoryProductionMapStore,
-) -> Result<Vec<ApparatusCapacityProfile>, ProductionMapError> {
-    Ok(store
-        .apparatus_capacity_profiles
-        .read()
-        .await
-        .values()
-        .cloned()
-        .collect())
-}
-
-pub(super) async fn put_apparatus_capacity_profile(
-    store: &MemoryProductionMapStore,
-    profile: ApparatusCapacityProfile,
-) -> Result<(), ProductionMapError> {
-    store
-        .apparatus_capacity_profiles
-        .write()
-        .await
-        .insert(profile.apparatus_id.as_str().to_string(), profile);
-    Ok(())
-}
-
 pub(super) async fn apparatus_downtimes(
     store: &MemoryProductionMapStore,
 ) -> Result<Vec<ApparatusDowntime>, ProductionMapError> {

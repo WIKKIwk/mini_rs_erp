@@ -1,5 +1,5 @@
 use super::*;
-use crate::core::apparatus_standard::CanonicalApparatus;
+use crate::core::apparatus_standard::RuntimeApparatusConfiguration;
 use crate::core::quantity::positive_erp_quantity;
 
 #[derive(Clone, Copy, Default)]
@@ -19,7 +19,7 @@ pub(super) struct ProgressMetrics {
 
 pub(super) fn validated_progress_metrics(
     apparatus: &str,
-    canonical: &CanonicalApparatus,
+    canonical: &RuntimeApparatusConfiguration,
     action: queue_state::ApparatusQueueAction,
     progress: &QueueProgressInput,
 ) -> Result<ProgressMetrics, ProductionMapError> {
@@ -109,7 +109,7 @@ pub(super) fn validated_progress_metrics(
 
 pub(super) fn validated_laminatsiya_worker_handoff_metrics(
     _apparatus: &str,
-    canonical: &CanonicalApparatus,
+    canonical: &RuntimeApparatusConfiguration,
     progress: &QueueProgressInput,
 ) -> Result<ProgressMetrics, ProductionMapError> {
     if !apparatus::is_laminatsiya_apparatus(canonical) {
@@ -143,7 +143,7 @@ pub(super) fn validated_laminatsiya_worker_handoff_metrics(
 
 pub(super) fn validated_laminatsiya_removed_roll_metrics(
     _apparatus: &str,
-    canonical: &CanonicalApparatus,
+    canonical: &RuntimeApparatusConfiguration,
     progress: &QueueProgressInput,
 ) -> Result<ProgressMetrics, ProductionMapError> {
     if !apparatus::is_laminatsiya_apparatus(canonical) {
@@ -174,7 +174,7 @@ pub(super) fn validated_laminatsiya_removed_roll_metrics(
 #[allow(clippy::too_many_arguments)]
 fn validate_progress_metrics(
     _apparatus: &str,
-    canonical: &CanonicalApparatus,
+    canonical: &RuntimeApparatusConfiguration,
     action: queue_state::ApparatusQueueAction,
     progress: &QueueProgressInput,
     rezka_gross_qty: Option<f64>,
@@ -309,6 +309,9 @@ fn rezka_quantity_metrics_are_complete(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::core::apparatus_standard::test_support::{
+        TestApparatusSpec, runtime_configuration,
+    };
 
     fn rezka_pause_progress(diameter: Option<f64>) -> QueueProgressInput {
         QueueProgressInput {
@@ -319,24 +322,11 @@ mod tests {
         }
     }
 
-    fn rezka_canonical() -> CanonicalApparatus {
-        serde_json::from_value(serde_json::json!({
-            "identity": {
-                "id": "apparatus:default:asset-010",
-                "display": { "display_name": "Renamed rezka" }
-            },
-            "classification": { "family": "rezka", "kind": "rezka" },
-            "capabilities": ["apparatus"],
-            "policies": { "queue": "strict_sequence" },
-            "capacity": {},
-            "training": {},
-            "provenance": { "source": "default" },
-            "versioning": {},
-            "aas": {
-                "submodel_id": "urn:mini-rs-erp:submodel:apparatus:default:asset-010"
-            }
-        }))
-        .expect("canonical rezka fixture")
+    fn rezka_canonical() -> RuntimeApparatusConfiguration {
+        runtime_configuration(TestApparatusSpec::cut(
+            "apparatus:default:asset-010",
+            "Renamed rezka",
+        ))
     }
 
     #[test]

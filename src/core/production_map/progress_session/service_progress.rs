@@ -7,7 +7,7 @@ use super::service_progress_metrics::{
     validated_laminatsiya_worker_handoff_metrics, validated_progress_metrics,
 };
 use super::service_progress_support::*;
-use crate::core::apparatus_standard::CanonicalApparatus;
+use crate::core::apparatus_standard::RuntimeApparatusConfiguration;
 
 struct RecoveredSessionInputBatch {
     input_batch: OrderProgressBatch,
@@ -23,7 +23,7 @@ struct ProgressOutputValue {
 
 fn progress_values_for_outputs(
     apparatus: &str,
-    canonical: &CanonicalApparatus,
+    canonical: &RuntimeApparatusConfiguration,
     action: queue_state::ApparatusQueueAction,
     progress: &QueueProgressInput,
     output_identities: &[ProgressOutputIdentity],
@@ -321,7 +321,7 @@ impl ProductionMapService {
         action: queue_state::ApparatusQueueAction,
         actor: &QueueActionActor,
         progress: QueueProgressInput,
-        canonical: &CanonicalApparatus,
+        canonical: &RuntimeApparatusConfiguration,
     ) -> Result<QueueProgressRecords, ProductionMapError> {
         let now = unix_seconds();
         if action == queue_state::ApparatusQueueAction::Freeze {
@@ -1064,7 +1064,7 @@ impl ProductionMapService {
         actor: &QueueActionActor,
         progress: QueueProgressInput,
         now: i64,
-        canonical: &CanonicalApparatus,
+        canonical: &RuntimeApparatusConfiguration,
     ) -> Result<QueueProgressRecords, ProductionMapError> {
         if !apparatus::is_laminatsiya_apparatus(canonical)
             || (progress.worker_handoff && progress.remove_roll_from_apparatus)

@@ -3,11 +3,7 @@ use std::collections::BTreeMap;
 use async_trait::async_trait;
 use sqlx::{PgPool, Row};
 
-use crate::core::apparatus_groups::{
-    ApparatusGroupError, ApparatusSource,
-    apparatus_master_data_from_canonical,
-};
-use crate::core::apparatus_standard::{CanonicalApparatus, CatalogSource, ApparatusId};
+use crate::core::apparatus_standard::{LifecycleState, RuntimeApparatusProjection};
 use crate::core::factory_locations::{
     FactoryLocation, FactoryLocationApparatus, FactoryLocationError, FactoryLocationStorePort,
 };
@@ -182,22 +178,12 @@ async fn load_locations(
     .map_err(map_sql_error)?;
 
     let link_rows = sqlx::query(
-        "SELECT links.location_id, links.apparatus_id AS apparatus_id,
-                apparatus.payload_json -> 'canonical_apparatus' AS canonical_payload,
-                CASE
-                    WHEN apparatus.payload_json #>>
-                        '{canonical_apparatus,provenance,source}' = 'default'
-                    THEN 0 ELSE 1
-                END AS source_order,
-                COALESCE((apparatus.payload_json #>>
-                    '{canonical_apparatus,identity,display,catalog_order}')::BIGINT, 10000)
-                    AS sort_order
+        "SELECT links.location_id, apparatus.payload_json AS runtime_payload
          FROM mini_factory_location_apparatus_links links
          JOIN mini_apparatus apparatus ON apparatus.id = links.apparatus_id
+          AND apparatus.source_revision IS NOT NULL
          WHERE ($1::TEXT IS NULL OR links.location_id = $1)
          ORDER BY links.location_id,
-                  source_order,
-                  sort_order,
                   links.apparatus_id ASC",
     )
     .bind(id)
@@ -207,33 +193,20 @@ async fn load_locations(
 
     let mut apparatus_by_location = BTreeMap::<String, Vec<FactoryLocationApparatus>>::new();
     for row in link_rows {
-        let apparatus_id = ApparatusId::new(row.get::<String, _>("apparatus_id"))
+        let runtime = serde_json::from_value::<RuntimeApparatusProjection>(
+            row.get("runtime_payload"),
+        )
             .map_err(|_| FactoryLocationError::InvalidApparatus)?;
-        let canonical_payload: serde_json::Value = row.get("canonical_payload");
-        let canonical = serde_json::from_value::<CanonicalApparatus>(canonical_payload)
-            .map_err(|_| FactoryLocationError::InvalidApparatus)?;
-        if canonical.identity.id != apparatus_id || canonical.validate().is_err() {
-            return Err(FactoryLocationError::InvalidApparatus);
-        }
-        let master = apparatus_master_data_from_canonical(&canonical).map_err(|error| {
-            if matches!(error, ApparatusGroupError::StoreFailed) {
-                FactoryLocationError::StoreFailed
-            } else {
-                FactoryLocationError::InvalidApparatus
-            }
-        })?;
         apparatus_by_location
             .entry(row.get("location_id"))
             .or_default()
             .push(FactoryLocationApparatus {
-                id: apparatus_id,
-                name: canonical.identity.display.display_name,
-                source: match canonical.provenance.source {
-                    CatalogSource::Default => ApparatusSource::Default,
-                    CatalogSource::Custom => ApparatusSource::Custom,
-                },
-                sort_order: row.get::<i64, _>("sort_order").max(0) as usize,
-                master,
+                id: runtime.apparatus_id,
+                name: runtime.display.display_name,
+                source_revision: runtime.source_revision,
+                equipment_class_id: runtime.equipment_class_id,
+                physical_asset_id: runtime.physical_asset_id,
+                active: runtime.lifecycle.state == LifecycleState::Active,
             });
     }
 

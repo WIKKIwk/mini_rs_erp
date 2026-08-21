@@ -7,7 +7,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use super::*;
 use crate::app::AppState;
-use crate::core::apparatus_standard::{ApparatusId, CanonicalApparatus};
+use crate::core::apparatus_standard::{ApparatusId, RuntimeApparatusConfiguration};
 use crate::core::auth::models::{Principal, PrincipalRole};
 use crate::core::authz::Capability;
 use crate::core::calculate_orders::{
@@ -1819,7 +1819,7 @@ fn is_training_apparatus(apparatus: &str, active_apparatuses: &[String]) -> bool
 
 fn training_queue_action_controls(
     apparatus: &str,
-    canonical: &CanonicalApparatus,
+    canonical: &RuntimeApparatusConfiguration,
     sequence: &[String],
     states: &BTreeMap<String, String>,
     maps: &[ProductionMapSaved],

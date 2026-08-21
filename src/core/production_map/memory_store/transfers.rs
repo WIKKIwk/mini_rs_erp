@@ -21,10 +21,7 @@ pub(super) async fn commit_apparatus_transfer(
     write: ProductionMapApparatusTransferWrite,
 ) -> Result<ProductionMapApparatusTransferRecord, ProductionMapError> {
     let mut transfers = store.apparatus_transfers.write().await;
-    if let Some(existing) = transfers
-        .get(write.record.idempotency_key.trim())
-        .cloned()
-    {
+    if let Some(existing) = transfers.get(write.record.idempotency_key.trim()).cloned() {
         if !transfer_record_matches_identity(&existing, &write.record) {
             return Err(ProductionMapError::ApparatusTransferIdempotencyConflict);
         }
@@ -73,9 +70,10 @@ pub(super) async fn commit_apparatus_transfer(
         return Err(ProductionMapError::ApparatusTransferTargetConflict);
     }
     let order_controls = store.order_controls.read().await;
-    if let Some(control) = order_controls.values().find(|control| {
-        control.order_id.trim().eq_ignore_ascii_case(order_id)
-    }) {
+    if let Some(control) = order_controls
+        .values()
+        .find(|control| control.order_id.trim().eq_ignore_ascii_case(order_id))
+    {
         match control.state {
             OrderControlState::Active => {}
             OrderControlState::FreezeRequested => {

@@ -307,7 +307,10 @@ fn validate_positive_map_size(key: &'static str) -> Result<(), AppError> {
         .parse::<usize>()
         .map_err(|_| invalid_config(key, "must be a positive integer"))?;
     if value == 0 || value.checked_mul(1024 * 1024).is_none() {
-        return Err(invalid_config(key, "must be a positive value within size limits"));
+        return Err(invalid_config(
+            key,
+            "must be a positive value within size limits",
+        ));
     }
     Ok(())
 }

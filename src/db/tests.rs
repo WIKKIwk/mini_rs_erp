@@ -1,5 +1,4 @@
 mod admin_item;
-mod apparatus_group;
 mod apparatus_identity;
 mod calculate_order;
 mod customer;

@@ -5,6 +5,7 @@ mod labels;
 mod notifications;
 mod policy;
 
+pub(crate) use super::{QolipLineage, qolip_lineage_from_batch};
 pub(super) use closed_orders::{
     latest_required_complete_event, order_completed_on_apparatus,
     required_apparatus_for_closed_order,
@@ -15,7 +16,6 @@ pub(super) use ids::{
 };
 pub(crate) use ids::{progress_batch_id, progress_qr_payload};
 pub(crate) use labels::progress_label_item_name;
-pub(crate) use super::{qolip_lineage_from_batch, QolipLineage};
 pub(super) use labels::{
     actor_display_name, legacy_order_run_session, non_empty_or, valid_progress_qty,
 };

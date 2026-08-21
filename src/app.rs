@@ -5,7 +5,7 @@ use crate::ai::werka_search::WerkaAiSearchService;
 use crate::config::{AppConfig, DotEnvPersister};
 use crate::core::admin::monitor_hub::SystemMonitorHub;
 use crate::core::admin::service::AdminService;
-use crate::core::apparatus_groups::ApparatusGroupService;
+use crate::core::apparatus_standard::CanonicalApparatusService;
 use crate::core::auth::ports::CustomerLookup;
 use crate::core::auth::service::AuthService;
 use crate::core::backup_doctor::BackupDoctor;
@@ -34,6 +34,7 @@ use crate::core::warehouses::WarehouseService;
 use crate::core::werka::service::WerkaService;
 use crate::core::worker_groups::WorkerGroupService;
 use crate::core::workers::WorkerService;
+use crate::db::postgres_canonical_apparatus::PostgresCanonicalApparatusRepository;
 use crate::db::postgres_customer::PostgresCustomerStore;
 use crate::db::postgres_engine::PostgresEngineStore;
 use crate::db::postgres_order_reset::PostgresOrderResetStore;
@@ -58,7 +59,6 @@ mod admin_catalog_overlay;
 mod builders;
 mod order_sheets;
 mod postgres_pool;
-mod unavailable_production_map_store;
 
 use self::admin_catalog_overlay::build_admin_catalog_ports;
 use self::builders::*;
@@ -73,7 +73,7 @@ pub struct AppState {
     pub customer: CustomerService,
     pub profiles: ProfileService,
     pub production_maps: ProductionMapService,
-    pub apparatus_groups: ApparatusGroupService,
+    pub apparatus: CanonicalApparatusService,
     pub factory_locations: FactoryLocationService,
     pub inventory_movements: InventoryMovementService,
     pub calculate_orders: Arc<dyn CalculateOrderStorePort>,
@@ -110,7 +110,61 @@ pub struct AppState {
 }
 
 impl AppState {
+    #[cfg(test)]
     pub fn new(config: AppConfig) -> Self {
+        let apparatus = CanonicalApparatusService::memory();
+        let resolver = Arc::new(
+            crate::core::production_map::CanonicalServiceApparatusResolver::new(
+                apparatus.clone(),
+            ),
+        );
+        Self::build(
+            config,
+            ApparatusRuntimeServices {
+                production_maps: ProductionMapService::new(
+                    Arc::new(crate::core::production_map::MemoryProductionMapStore::new()),
+                    resolver.clone(),
+                ),
+                factory_locations: FactoryLocationService::new(
+                    Arc::new(
+                        crate::core::factory_locations::MemoryFactoryLocationStore::new(),
+                    ),
+                    apparatus.clone(),
+                ),
+                warehouses: WarehouseService::new(
+                    Arc::new(crate::core::warehouses::MemoryWarehouseStore::new()),
+                    resolver,
+                ),
+                apparatus,
+            },
+        )
+    }
+
+    pub fn from_postgres(config: AppConfig, pool: sqlx::PgPool) -> Self {
+        let apparatus = CanonicalApparatusService::new(Arc::new(
+            PostgresCanonicalApparatusRepository::new(pool.clone()),
+        ));
+        Self::build(
+            config,
+            ApparatusRuntimeServices {
+                production_maps: build_production_map_service(apparatus.clone(), pool.clone()),
+                factory_locations: build_factory_location_service(
+                    apparatus.clone(),
+                    pool.clone(),
+                ),
+                warehouses: build_warehouse_service(apparatus.clone(), pool),
+                apparatus,
+            },
+        )
+    }
+
+    fn build(config: AppConfig, runtime: ApparatusRuntimeServices) -> Self {
+        let ApparatusRuntimeServices {
+            apparatus,
+            production_maps,
+            factory_locations,
+            warehouses,
+        } = runtime;
         let admin_store = Arc::new(JsonAdminStore::new(admin_store_path()));
         let customer_store = build_customer_store();
         let workers = build_worker_service();
@@ -131,9 +185,6 @@ impl AppState {
             customer_store,
         );
         let customer = CustomerService::new();
-        let apparatus_groups = build_apparatus_groups_service();
-        let production_maps = build_production_map_service(apparatus_groups.clone());
-        let factory_locations = build_factory_location_service(apparatus_groups.clone());
         let inventory_movements = build_inventory_movement_service();
         let calculate_orders = build_calculate_order_store();
         let calculate_materials = build_calculate_material_store();
@@ -173,7 +224,6 @@ impl AppState {
         let qolip = build_qolip_service();
         let returned_paint = build_returned_paint_service();
         let werka = build_werka_service(&config);
-        let warehouses = build_warehouse_service(apparatus_groups.clone());
         let worker_groups = build_worker_group_service();
         let sessions = build_session_manager(&config);
         let telegram = build_telegram_service().with_order_catalog(
@@ -189,7 +239,7 @@ impl AppState {
             customer,
             profiles,
             production_maps,
-            apparatus_groups,
+            apparatus,
             factory_locations,
             inventory_movements,
             calculate_orders,
@@ -224,6 +274,13 @@ impl AppState {
             started_at_unix: time::OffsetDateTime::now_utc().unix_timestamp(),
         }
     }
+}
+
+struct ApparatusRuntimeServices {
+    apparatus: CanonicalApparatusService,
+    production_maps: ProductionMapService,
+    factory_locations: FactoryLocationService,
+    warehouses: WarehouseService,
 }
 
 fn build_auth_service(

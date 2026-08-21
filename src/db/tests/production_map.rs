@@ -35,7 +35,7 @@ async fn postgres_production_map_store_persists_maps_sequences_and_queue_states(
         .await
         .expect("apply migration");
     let store = Arc::new(PostgresProductionMapStore::new(pool.clone()));
-    let service = ProductionMapService::new(store.clone());
+    let service = ProductionMapService::new_for_test(store.clone());
 
     let saved = service
         .upsert_map(test_map("zakaz-1001", "1001", "HOT"))
@@ -248,7 +248,7 @@ async fn postgres_wip_batches_match_apparatus_instance_suffixes() {
         .await
         .expect("apply migration");
     let store = Arc::new(PostgresProductionMapStore::new(pool.clone()));
-    let service = ProductionMapService::new(store.clone());
+    let service = ProductionMapService::new_for_test(store.clone());
     store
         .put_order_progress_batch(wip_batch("Laminatsiya - A"))
         .await
@@ -307,7 +307,7 @@ async fn postgres_wip_batches_scan_past_first_page_for_matching_apparatus() {
         .await
         .expect("apply migration");
     let store = Arc::new(PostgresProductionMapStore::new(pool.clone()));
-    let service = ProductionMapService::new(store.clone());
+    let service = ProductionMapService::new_for_test(store.clone());
     store
         .put_order_progress_batch(wip_batch("Laminatsiya - A"))
         .await

@@ -144,9 +144,7 @@ impl WarehouseStorePort for PostgresWarehouseStore {
         rows.into_iter().map(row_to_assignment).collect()
     }
 
-    async fn all_warehouse_assignments(
-        &self,
-    ) -> Result<Vec<WarehouseAssignment>, WarehouseError> {
+    async fn all_warehouse_assignments(&self) -> Result<Vec<WarehouseAssignment>, WarehouseError> {
         let rows = sqlx::query_as::<_, WarehouseAssignmentRow>(
             "SELECT assignment_kind, warehouse, warehouse_name, apparatus_id,
                     principal_role, principal_ref, display_name
@@ -443,26 +441,26 @@ impl WarehouseStorePort for PostgresWarehouseStore {
                        principal_role, principal_ref, display_name"
         );
         sqlx::query_as::<_, WarehouseAssignmentRow>(&query)
-        .bind(assignment_kind)
-        .bind(warehouse)
-        .bind(assignment.warehouse_name.as_deref().map(str::trim))
-        .bind(assignment.apparatus_id.as_deref().map(str::trim))
-        .bind(role_as_str(&assignment.principal_role))
-        .bind(principal_ref)
-        .bind(assignment.display_name.trim())
-        .bind(serde_json::json!({
-            "assignment_kind": assignment_kind,
-            "warehouse": warehouse,
-            "warehouse_name": assignment.warehouse_name.as_deref().map(str::trim),
-            "apparatus_id": assignment.apparatus_id.as_deref().map(str::trim),
-            "principal_role": role_as_str(&assignment.principal_role),
-            "principal_ref": principal_ref,
-            "display_name": assignment.display_name.trim(),
-        }))
-        .fetch_one(&self.pool)
-        .await
-        .map_err(|_| WarehouseError::StoreFailed)
-        .and_then(row_to_assignment)
+            .bind(assignment_kind)
+            .bind(warehouse)
+            .bind(assignment.warehouse_name.as_deref().map(str::trim))
+            .bind(assignment.apparatus_id.as_deref().map(str::trim))
+            .bind(role_as_str(&assignment.principal_role))
+            .bind(principal_ref)
+            .bind(assignment.display_name.trim())
+            .bind(serde_json::json!({
+                "assignment_kind": assignment_kind,
+                "warehouse": warehouse,
+                "warehouse_name": assignment.warehouse_name.as_deref().map(str::trim),
+                "apparatus_id": assignment.apparatus_id.as_deref().map(str::trim),
+                "principal_role": role_as_str(&assignment.principal_role),
+                "principal_ref": principal_ref,
+                "display_name": assignment.display_name.trim(),
+            }))
+            .fetch_one(&self.pool)
+            .await
+            .map_err(|_| WarehouseError::StoreFailed)
+            .and_then(row_to_assignment)
     }
 
     async fn delete_warehouse_assignment(
@@ -493,15 +491,13 @@ impl WarehouseStorePort for PostgresWarehouseStore {
                 apparatus_id.as_str(),
             ),
         };
-        let row = sqlx::query_as::<_, WarehouseAssignmentRow>(
-            query,
-        )
-        .bind(identity_value)
-        .bind(role_as_str(principal_role))
-        .bind(principal_ref.trim())
-        .fetch_optional(&self.pool)
-        .await
-        .map_err(|_| WarehouseError::StoreFailed)?;
+        let row = sqlx::query_as::<_, WarehouseAssignmentRow>(query)
+            .bind(identity_value)
+            .bind(role_as_str(principal_role))
+            .bind(principal_ref.trim())
+            .fetch_optional(&self.pool)
+            .await
+            .map_err(|_| WarehouseError::StoreFailed)?;
 
         row.map(row_to_assignment).transpose()
     }

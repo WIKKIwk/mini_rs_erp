@@ -145,11 +145,7 @@ async fn pending_pechat_move_rejects_incompatible_order_dimensions() {
     let service =
         service_with_default_apparatus(std::sync::Arc::new(MemoryProductionMapStore::new())).await;
     let order_id = "zakaz-map-edit-pechat-capacity";
-    let mut map = canonical_apparatus_stage_map(
-        order_id,
-        PECHAT_8_ID,
-        "8 ta rangli bosma aparat",
-    );
+    let mut map = canonical_apparatus_stage_map(order_id, PECHAT_8_ID, "8 ta rangli bosma aparat");
     map.roll_count = Some(7);
     map.width_mm = Some(900.0);
     service.upsert_map(map).await.expect("initial map");

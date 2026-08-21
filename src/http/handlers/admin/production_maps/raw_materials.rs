@@ -6,6 +6,7 @@ use super::raw_material_details::{
     validate_rulon_size_for_apparatus_map,
 };
 use super::*;
+use crate::core::apparatus_standard::{MaterialExecutionPolicy, ToolingExecutionPolicy};
 use crate::core::inventory_movements::RawMaterialStatePlacement;
 use crate::db::postgres_raw_material_events::{
     RawMaterialEventDraft, RawMaterialEventQuery, RawMaterialEventScope,
@@ -202,25 +203,56 @@ pub async fn raw_material_rules(
     match method {
         Method::GET => {
             require_capability(&state, &principal, Capability::RawMaterialRuleManage).await?;
-            state
-                .production_maps
-                .apparatus_material_rules()
+            let rules = state
+                .apparatus
+                .list_runtime_configurations()
                 .await
-                .map(json_response)
-                .map_err(production_map_error)
+                .map_err(canonical_apparatus_error)?
+                .into_iter()
+                .map(|configuration| configuration.material)
+                .collect::<Vec<_>>();
+            Ok(json_response(rules))
         }
         Method::PUT => {
             require_capability(&state, &principal, Capability::RawMaterialRuleManage).await?;
-            let input: ApparatusMaterialRuleUpsert = parse_json(&body)?;
-            state
-                .production_maps
-                .set_apparatus_material_rule(input, &state.apparatus_groups)
+            let input: CanonicalMaterialPatchRequest = parse_json(&body)?;
+            let current = state
+                .apparatus
+                .current_configuration(&input.apparatus_id)
                 .await
-                .map(json_response)
-                .map_err(production_map_error)
+                .map_err(canonical_apparatus_error)?
+                .ok_or_else(|| not_found("apparatus_not_found"))?;
+            let committed = state
+                .apparatus
+                .patch(
+                    input.apparatus_id,
+                    input.expected_revision,
+                    CanonicalApparatusPatch {
+                        policies: Some(ApparatusOperationalPolicies {
+                            queue: current.queue.discipline,
+                            material: input.material,
+                            tooling: input.tooling,
+                        }),
+                        ..CanonicalApparatusPatch::default()
+                    },
+                    canonical_command_metadata(&principal, &headers)?,
+                )
+                .await
+                .map_err(canonical_apparatus_error)?;
+            state.production_maps.notify_live();
+            Ok(json_response(committed))
         }
         _ => Err(method_not_allowed()),
     }
+}
+
+#[derive(Debug, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+struct CanonicalMaterialPatchRequest {
+    apparatus_id: ApparatusId,
+    expected_revision: u64,
+    material: MaterialExecutionPolicy,
+    tooling: ToolingExecutionPolicy,
 }
 
 /// Assigns a printed raw-material QR to the order apparatus selected by rules.

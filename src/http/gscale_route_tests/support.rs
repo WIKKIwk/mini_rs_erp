@@ -49,7 +49,7 @@ pub(super) fn test_state() -> AppState {
         admin_code: "19621978".to_string(),
     });
     state.sessions = SessionManager::memory(Some(30 * 24 * 60 * 60));
-    state.warehouses = WarehouseService::new(Arc::new(MemoryWarehouseStore::new()));
+    state.warehouses = WarehouseService::new_for_test(Arc::new(MemoryWarehouseStore::new()));
     state.rps_batch = RpsBatchService::new(Arc::new(MemoryRpsBatchStore::default()));
     state
 }

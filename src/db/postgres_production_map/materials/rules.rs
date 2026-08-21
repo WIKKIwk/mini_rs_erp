@@ -1,89 +1,12 @@
 use sqlx::{PgPool, Postgres, Transaction};
 
-use crate::core::apparatus_standard::{CanonicalApparatus, MaterialPolicy};
 use crate::core::production_map::{
-    ApparatusMaterialRule, ProductionMapError, QueueActionActor, RawMaterialAssignment,
+    ProductionMapError, QueueActionActor, RawMaterialAssignment,
 };
 use crate::db::postgres_raw_material_events::{
     RawMaterialEventDraft, insert_raw_material_event_tx,
 };
 
-use super::catalog_helpers::{load_canonical_apparatuses, mutate_canonical_apparatus_tx};
-
-pub(super) async fn load_apparatus_material_rules(
-    pool: &PgPool,
-) -> Result<Vec<ApparatusMaterialRule>, ProductionMapError> {
-    load_canonical_apparatuses(pool).await.map(|apparatuses| {
-        apparatuses
-            .iter()
-            .map(material_rule_from_canonical)
-            .collect()
-    })
-}
-
-pub(super) async fn save_apparatus_material_rule(
-    pool: &PgPool,
-    rule: ApparatusMaterialRule,
-) -> Result<(), ProductionMapError> {
-    let mut tx = pool
-        .begin()
-        .await
-        .map_err(|_| ProductionMapError::StoreFailed)?;
-    let updated = mutate_canonical_apparatus_tx(&mut tx, &rule.apparatus_id, |canonical| {
-        canonical.policies.material = MaterialPolicy {
-            requires_material: rule.requires_material,
-            start_policy: rule.start_policy,
-            item_groups: rule.item_groups.clone(),
-            requirement_groups: rule.requirement_groups.clone(),
-        };
-        Ok(())
-    })
-    .await?;
-    let rule = material_rule_from_canonical(&updated);
-    let item_groups =
-        serde_json::to_value(&rule.item_groups).map_err(|_| ProductionMapError::StoreFailed)?;
-    let requirement_groups = serde_json::to_value(&rule.requirement_groups)
-        .map_err(|_| ProductionMapError::StoreFailed)?;
-    let payload = serde_json::to_value(&rule).map_err(|_| ProductionMapError::StoreFailed)?;
-    let canonical_apparatus_id = rule.apparatus_id.to_string();
-    sqlx::query(
-        "INSERT INTO mini_apparatus_material_rules
-            (apparatus, canonical_apparatus_id, item_groups, requirement_groups,
-             requires_material, payload_json, updated_at)
-         VALUES ($1, $2, $3, $4, $5, $6, now())
-         ON CONFLICT (canonical_apparatus_id) DO UPDATE SET
-           apparatus = excluded.apparatus,
-           item_groups = excluded.item_groups,
-           requirement_groups = excluded.requirement_groups,
-           requires_material = excluded.requires_material,
-           payload_json = excluded.payload_json,
-           updated_at = excluded.updated_at",
-    )
-    .bind(rule.apparatus.trim())
-    .bind(canonical_apparatus_id)
-    .bind(item_groups)
-    .bind(requirement_groups)
-    .bind(rule.requires_material)
-    .bind(payload)
-    .execute(&mut *tx)
-    .await
-    .map_err(|_| ProductionMapError::StoreFailed)?;
-    tx.commit()
-        .await
-        .map_err(|_| ProductionMapError::StoreFailed)
-}
-
-fn material_rule_from_canonical(canonical: &CanonicalApparatus) -> ApparatusMaterialRule {
-    let material = &canonical.policies.material;
-    ApparatusMaterialRule {
-        apparatus_id: canonical.identity.id.clone(),
-        apparatus: canonical.identity.display.display_name.clone(),
-        requires_material: material.requires_material,
-        start_policy: material.start_policy,
-        item_groups: material.item_groups.clone(),
-        requirement_groups: material.requirement_groups.clone(),
-    }
-}
 
 pub(super) async fn load_raw_material_assignments(
     pool: &PgPool,

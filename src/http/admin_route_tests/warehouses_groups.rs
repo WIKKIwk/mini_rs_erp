@@ -67,7 +67,7 @@ async fn warehouse_items_are_filtered_searched_and_paginated_on_the_backend() {
             },
         ])
         .await;
-    state.warehouses = WarehouseService::new(store);
+    state.warehouses = WarehouseService::new_for_test(store);
     let token = session(&state, PrincipalRole::Admin).await;
 
     let first = build_router(state.clone())
@@ -111,7 +111,7 @@ async fn warehouse_items_are_filtered_searched_and_paginated_on_the_backend() {
 }
 
 #[tokio::test]
-async fn admin_apparatus_defaults_are_available_on_empty_store() {
+async fn legacy_apparatus_groups_and_warehouse_catalog_are_not_runtime_authorities() {
     let state = test_state();
     let token = session(&state, PrincipalRole::Admin).await;
 
@@ -119,28 +119,7 @@ async fn admin_apparatus_defaults_are_available_on_empty_store() {
         .oneshot(request("GET", "/v1/mobile/admin/apparatus-groups", &token))
         .await
         .expect("groups response");
-    assert_eq!(groups.status(), StatusCode::OK);
-    let group_body = json_body(groups).await;
-    assert_eq!(group_body[0]["name"], "Bosma aparat");
-    assert_eq!(
-        group_body[0]["apparatus"],
-        serde_json::json!([
-            "apparatus:default:bosma_7",
-            "apparatus:default:bosma_8",
-            "apparatus:default:bosma_9",
-            "apparatus:default:asset-005"
-        ])
-    );
-    assert_eq!(group_body[1]["name"], "Laminatsiya");
-    assert_eq!(
-        group_body[1]["apparatus"],
-        serde_json::json!(["apparatus:default:asset-007", "apparatus:default:asset-008"])
-    );
-    assert_eq!(group_body[2]["name"], "Rezka");
-    assert_eq!(
-        group_body[2]["apparatus"],
-        serde_json::json!(["apparatus:default:asset-010"])
-    );
+    assert_eq!(groups.status(), StatusCode::NOT_FOUND);
 
     let apparatus = build_router(state)
         .oneshot(request(
@@ -152,31 +131,18 @@ async fn admin_apparatus_defaults_are_available_on_empty_store() {
         .expect("apparatus response");
     assert_eq!(apparatus.status(), StatusCode::OK);
     let apparatus_body = json_body(apparatus).await;
-    for expected in [
-        "7 ta rangli bosma aparat",
-        "8 ta rangli bosma aparat",
-        "9 ta rangli bosma aparat",
-        "Extruder laminatsiya",
-        "Flexo pechat",
-        "Holodniy kley aparat",
-        "Laminatsiya 1",
-        "Laminatsiya 2",
-        "Paket aparat",
-        "Rezka",
-    ] {
-        assert!(
-            apparatus_body
-                .as_array()
-                .expect("array")
-                .iter()
-                .any(|item| item["warehouse"] == expected),
-            "missing default apparatus {expected}"
-        );
-    }
+    assert!(
+        apparatus_body
+            .as_array()
+            .expect("array")
+            .iter()
+            .all(|item| item["id"].is_null()),
+        "warehouse lookup must not inject an apparatus catalog"
+    );
 }
 
 #[tokio::test]
-async fn admin_apparatus_catalog_rejects_legacy_pechat_names() {
+async fn legacy_apparatus_upsert_payload_is_rejected() {
     let state = test_state();
     let token = session(&state, PrincipalRole::Admin).await;
 
@@ -190,7 +156,7 @@ async fn admin_apparatus_catalog_rejects_legacy_pechat_names() {
         .await
         .expect("create legacy apparatus name");
     assert_eq!(created.status(), StatusCode::BAD_REQUEST);
-    assert_eq!(json_body(created).await["error"], "apparatus is invalid");
+    assert_eq!(json_body(created).await["error"], "invalid json");
 
     let listed = build_router(state)
         .oneshot(request(
@@ -202,26 +168,11 @@ async fn admin_apparatus_catalog_rejects_legacy_pechat_names() {
         .expect("apparatus list");
     assert_eq!(listed.status(), StatusCode::OK);
     let listed_body = json_body(listed).await;
-    assert_eq!(
-        listed_body
-            .as_array()
-            .expect("apparatus array")
-            .iter()
-            .filter(|item| item["name"] == "7 ta rangli bosma aparat")
-            .count(),
-        1
-    );
-    assert!(
-        listed_body
-            .as_array()
-            .expect("apparatus array")
-            .iter()
-            .all(|item| item["name"] != "7 ta rangli pechat")
-    );
+    assert!(listed_body.as_array().expect("apparatus array").is_empty());
 }
 
 #[tokio::test]
-async fn admin_apparatus_groups_round_trip_on_server() {
+async fn legacy_apparatus_group_write_route_is_deleted() {
     let state = test_state();
     let token = session(&state, PrincipalRole::Admin).await;
 
@@ -234,39 +185,17 @@ async fn admin_apparatus_groups_round_trip_on_server() {
         ))
         .await
         .expect("response");
-    assert_eq!(saved.status(), StatusCode::OK);
-    let saved_body = json_body(saved).await;
-    assert_eq!(saved_body["name"], "Bosma aparat");
-    assert_eq!(
-        saved_body["apparatus"],
-        serde_json::json!([
-            "apparatus:default:bosma_7",
-            "apparatus:default:bosma_8",
-            "apparatus:default:bosma_9",
-            "apparatus:default:asset-005"
-        ])
-    );
+    assert_eq!(saved.status(), StatusCode::NOT_FOUND);
 
     let listed = build_router(state)
         .oneshot(request("GET", "/v1/mobile/admin/apparatus-groups", &token))
         .await
         .expect("response");
-    assert_eq!(listed.status(), StatusCode::OK);
-    let listed_body = json_body(listed).await;
-    assert_eq!(listed_body[0]["name"], "Bosma aparat");
-    assert_eq!(
-        listed_body[0]["apparatus"],
-        serde_json::json!([
-            "7 ta rangli bosma aparat",
-            "8 ta rangli bosma aparat",
-            "9 ta rangli bosma aparat",
-            "Flexo pechat"
-        ])
-    );
+    assert_eq!(listed.status(), StatusCode::NOT_FOUND);
 }
 
 #[tokio::test]
-async fn admin_apparatus_group_keeps_laminatsiya_apparatus_manual() {
+async fn legacy_apparatus_group_payload_cannot_mutate_canonical_configuration() {
     let state = test_state();
     let token = session(&state, PrincipalRole::Admin).await;
 
@@ -279,25 +208,13 @@ async fn admin_apparatus_group_keeps_laminatsiya_apparatus_manual() {
         ))
         .await
         .expect("response");
-    assert_eq!(saved.status(), StatusCode::OK);
-    let saved_body = json_body(saved).await;
-    assert_eq!(saved_body["name"], "Laminatsiya");
-    assert_eq!(
-        saved_body["apparatus"],
-        serde_json::json!(["apparatus:default:asset-007", "apparatus:default:asset-008"])
-    );
+    assert_eq!(saved.status(), StatusCode::NOT_FOUND);
 
     let listed = build_router(state)
         .oneshot(request("GET", "/v1/mobile/admin/apparatus-groups", &token))
         .await
         .expect("response");
-    assert_eq!(listed.status(), StatusCode::OK);
-    let listed_body = json_body(listed).await;
-    assert_eq!(listed_body[0]["name"], "Laminatsiya");
-    assert_eq!(
-        listed_body[0]["apparatus"],
-        serde_json::json!(["apparatus:default:asset-007", "apparatus:default:asset-008"])
-    );
+    assert_eq!(listed.status(), StatusCode::NOT_FOUND);
 }
 
 #[tokio::test]
@@ -1036,7 +953,7 @@ async fn admin_deletes_empty_warehouse_and_its_assignments() {
 async fn warehouse_products_require_confirmation_and_active_reservations_block_delete() {
     let mut state = test_state();
     let store = Arc::new(MemoryWarehouseStore::new());
-    state.warehouses = WarehouseService::new(store.clone());
+    state.warehouses = WarehouseService::new_for_test(store.clone());
     let token = session(&state, PrincipalRole::Admin).await;
 
     build_router(state.clone())

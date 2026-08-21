@@ -518,7 +518,11 @@ fn branch_true_false_and_join_share_one_stage_traversal() {
         node("true_task", ProductionMapNodeKind::Task, "True task"),
         node("false_task", ProductionMapNodeKind::Task, "False task"),
         node("true_stage", ProductionMapNodeKind::Apparatus, "True stage"),
-        node("false_stage", ProductionMapNodeKind::Apparatus, "False stage"),
+        node(
+            "false_stage",
+            ProductionMapNodeKind::Apparatus,
+            "False stage",
+        ),
         node("join", ProductionMapNodeKind::Apparatus, "Join"),
         node("end", ProductionMapNodeKind::End, "End"),
     ];
@@ -582,7 +586,10 @@ fn branch_true_false_and_join_share_one_stage_traversal() {
         previous_work_stage_stations(&map, &join_id),
         vec![true_id.clone(), false_id.clone()]
     );
-    assert_eq!(next_work_stage_stations(&map, &true_id), vec![join_id.clone()]);
+    assert_eq!(
+        next_work_stage_stations(&map, &true_id),
+        vec![join_id.clone()]
+    );
     assert_eq!(
         next_work_stage_stations(&map, &false_id),
         vec![join_id.clone()]

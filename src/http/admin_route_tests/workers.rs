@@ -269,7 +269,7 @@ async fn admin_worker_delete_requires_connection_confirmation_and_cleans_assignm
 async fn admin_worker_delete_is_blocked_by_active_work_even_when_confirmed() {
     let mut state = test_state();
     let production_store = Arc::new(MemoryProductionMapStore::new());
-    state.production_maps = ProductionMapService::new(production_store.clone());
+    state.production_maps = ProductionMapService::new_for_test(production_store.clone());
     let token = session(&state, PrincipalRole::Admin).await;
 
     let created = build_router(state.clone())
@@ -939,7 +939,7 @@ async fn admin_worker_profile_detail_returns_assignments_and_activity() {
 async fn replacement_worker_with_same_name_does_not_inherit_old_history() {
     let mut state = test_state();
     let production_store = Arc::new(MemoryProductionMapStore::new());
-    state.production_maps = ProductionMapService::new(production_store.clone());
+    state.production_maps = ProductionMapService::new_for_test(production_store.clone());
     let admin_token = session(&state, PrincipalRole::Admin).await;
 
     let old_worker = build_router(state.clone())

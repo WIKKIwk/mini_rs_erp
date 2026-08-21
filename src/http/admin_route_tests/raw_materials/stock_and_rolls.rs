@@ -105,7 +105,7 @@ async fn queue_start_commit_failure_does_not_reserve_raw_material_stock() {
     let material_store = Arc::new(RawMaterialStockLookup::default());
     let production_store = Arc::new(MemoryProductionMapStore::new());
     let mut state = test_state();
-    state.production_maps = ProductionMapService::new(production_store.clone());
+    state.production_maps = ProductionMapService::new_for_test(production_store.clone());
     state.gscale = GscaleService::new().with_receipt_store(material_store.clone());
     state
         .admin

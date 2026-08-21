@@ -4,9 +4,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use super::apparatus::visible_order_ids_by_apparatus;
-use super::apparatus_resolver::{
-    CanonicalApparatusResolver, UnavailableCanonicalApparatusResolver,
-};
+use super::apparatus_resolver::CanonicalApparatusResolver;
 use super::progress::QolipLineage;
 use super::progress::effective_apparatus_queue_policy_record;
 use super::service_maps::compile_saved_maps;
@@ -144,23 +142,26 @@ impl PreparedApparatusQueueAction {
 }
 
 impl ProductionMapService {
-    pub fn new(store: std::sync::Arc<dyn ProductionMapStorePort>) -> Self {
+    pub fn new(
+        store: std::sync::Arc<dyn ProductionMapStorePort>,
+        apparatus_resolver: std::sync::Arc<dyn CanonicalApparatusResolver>,
+    ) -> Self {
         let (live_notify, _) = broadcast::channel(LIVE_NOTIFY_CAPACITY);
         Self {
             store,
-            apparatus_resolver: std::sync::Arc::new(UnavailableCanonicalApparatusResolver),
+            apparatus_resolver,
             live_notify,
             queue_action_lock: std::sync::Arc::new(Mutex::new(())),
             snapshot_cache: std::sync::Arc::new(ProductionSnapshotCache::default()),
         }
     }
 
-    pub fn with_canonical_apparatus_resolver(
-        mut self,
-        resolver: std::sync::Arc<dyn CanonicalApparatusResolver>,
-    ) -> Self {
-        self.apparatus_resolver = resolver;
-        self
+    #[cfg(test)]
+    pub(crate) fn new_for_test(store: std::sync::Arc<dyn ProductionMapStorePort>) -> Self {
+        Self::new(
+            store,
+            std::sync::Arc::new(super::TestCanonicalApparatusResolver::standard()),
+        )
     }
 
     /// Resolve live apparatus configuration by immutable canonical identity.
@@ -170,25 +171,52 @@ impl ProductionMapService {
         &self,
         apparatus_id: &crate::core::apparatus_standard::ApparatusId,
     ) -> Result<
-        std::sync::Arc<crate::core::apparatus_standard::CanonicalApparatus>,
+        std::sync::Arc<crate::core::apparatus_standard::RuntimeApparatusConfiguration>,
         ProductionMapError,
     > {
-        self.apparatus_resolver
+        let configuration = self
+            .apparatus_resolver
             .resolve(apparatus_id)
             .await?
-            .ok_or(ProductionMapError::StoreFailed)
+            .ok_or(ProductionMapError::StoreFailed)?;
+        if configuration.runtime.apparatus_id != *apparatus_id
+            || !configuration.has_coherent_source()
+            || !configuration.is_active()
+        {
+            return Err(ProductionMapError::StoreFailed);
+        }
+        Ok(configuration)
     }
 
     pub(crate) async fn resolve_canonical_apparatus_text(
         &self,
         value: &str,
     ) -> Result<
-        std::sync::Arc<crate::core::apparatus_standard::CanonicalApparatus>,
+        std::sync::Arc<crate::core::apparatus_standard::RuntimeApparatusConfiguration>,
         ProductionMapError,
     > {
         let id = crate::core::apparatus_standard::ApparatusId::new(value.trim().to_string())
             .map_err(|_| ProductionMapError::StoreFailed)?;
         self.resolve_canonical_apparatus(&id).await
+    }
+
+    pub(crate) async fn active_canonical_apparatuses(
+        &self,
+    ) -> Result<
+        Vec<std::sync::Arc<crate::core::apparatus_standard::RuntimeApparatusConfiguration>>,
+        ProductionMapError,
+    > {
+        let mut configurations = Vec::new();
+        for configuration in self.apparatus_resolver.list().await? {
+            if !configuration.has_coherent_source() {
+                return Err(ProductionMapError::StoreFailed);
+            }
+            if !configuration.is_active() {
+                continue;
+            }
+            configurations.push(configuration);
+        }
+        Ok(configurations)
     }
 
     pub(crate) async fn queue_action_guard(&self) -> OwnedMutexGuard<()> {
@@ -250,7 +278,6 @@ impl ProductionMapService {
         let stored_sequences = self.store.apparatus_sequences().await?;
         let visible_order_ids = visible_order_ids_by_apparatus(&raw_maps);
         let queue_states = self.store.apparatus_queue_states().await?;
-        let policies = self.store.apparatus_queue_policies().await?;
         let order_controls = self.store.order_control_states().await?;
         let frozen_order_ids = order_controls
             .iter()
@@ -264,16 +291,14 @@ impl ProductionMapService {
             &frozen_order_ids,
         );
         let mut queue_policies = Vec::new();
-        for (apparatus_id, policy) in &policies {
-            let canonical = self.resolve_canonical_apparatus(apparatus_id).await?;
-            queue_policies.push(effective_apparatus_queue_policy_record(&canonical, *policy));
+        for canonical in self.active_canonical_apparatuses().await? {
+            queue_policies.push(effective_apparatus_queue_policy_record(&canonical));
         }
         let queue_action_controls = self
             .queue_action_controls_for_snapshot(
                 &raw_maps,
                 &stored_sequences,
                 &queue_states,
-                &policies,
                 &order_controls,
             )
             .await?;
@@ -376,8 +401,9 @@ mod tests {
 
     #[tokio::test]
     async fn live_snapshot_cache_reuses_until_notification() {
-        let service =
-            ProductionMapService::new(std::sync::Arc::new(MemoryProductionMapStore::new()));
+        let service = ProductionMapService::new_for_test(std::sync::Arc::new(
+            MemoryProductionMapStore::new(),
+        ));
 
         service.live_snapshot().await.expect("initial snapshot");
         let initial = cached_snapshot(&service).await;

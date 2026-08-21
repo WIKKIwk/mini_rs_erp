@@ -3,7 +3,8 @@ use async_trait::async_trait;
 use super::{CanonicalApparatusError, CanonicalApparatusPatch, CanonicalCommandMetadata};
 use crate::core::apparatus_standard::{
     ApparatusId, CanonicalAasxArtifact, CanonicalApparatusDraft, CanonicalApparatusRevision,
-    LifecycleState, RevisionMetadata, RevisionSource, RuntimeApparatusProjection,
+    LifecycleState, RevisionMetadata, RevisionSource, RuntimeApparatusConfiguration,
+    RuntimeApparatusProjection,
 };
 
 pub(crate) struct CanonicalWritePermit {
@@ -79,7 +80,7 @@ impl CanonicalRevisionIntent {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
 pub struct CommittedCanonicalApparatus {
     pub revision: CanonicalApparatusRevision,
     pub runtime_projection: RuntimeApparatusProjection,
@@ -110,6 +111,11 @@ pub(crate) trait CanonicalApparatusRepository: Send + Sync {
         &self,
         apparatus_id: &ApparatusId,
     ) -> Result<Option<StoredCanonicalAasx>, CanonicalApparatusError>;
+
+    async fn current_configuration(
+        &self,
+        apparatus_id: &ApparatusId,
+    ) -> Result<Option<RuntimeApparatusConfiguration>, CanonicalApparatusError>;
 
     async fn list_runtime_projections(
         &self,

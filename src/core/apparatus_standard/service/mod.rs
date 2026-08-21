@@ -2,6 +2,8 @@
 
 mod commands;
 mod error;
+#[cfg(test)]
+mod memory_repository;
 mod repository;
 
 use std::collections::BTreeMap;
@@ -20,13 +22,14 @@ pub use repository::{CommittedCanonicalApparatus, StoredCanonicalAasx};
 
 use super::{
     ApparatusId, CanonicalAasxImportError, CanonicalApparatusDraft, CanonicalizedAasxUpload,
-    RuntimeApparatusProjection, canonicalize_uploaded_aasx,
+    RuntimeApparatusConfiguration, RuntimeApparatusProjection, canonicalize_uploaded_aasx,
 };
 
 #[derive(Clone)]
 pub struct CanonicalApparatusService {
     repository: Arc<dyn CanonicalApparatusRepository>,
     runtime_cache: Arc<RwLock<BTreeMap<ApparatusId, Arc<RuntimeApparatusProjection>>>>,
+    configuration_cache: Arc<RwLock<BTreeMap<ApparatusId, Arc<RuntimeApparatusConfiguration>>>>,
 }
 
 impl CanonicalApparatusService {
@@ -34,7 +37,31 @@ impl CanonicalApparatusService {
         Self {
             repository,
             runtime_cache: Arc::new(RwLock::new(BTreeMap::new())),
+            configuration_cache: Arc::new(RwLock::new(BTreeMap::new())),
         }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn memory() -> Self {
+        Self::new(Arc::new(
+            memory_repository::MemoryCanonicalApparatusRepository::new(),
+        ))
+    }
+
+    #[cfg(test)]
+    pub(crate) async fn seed_for_test(
+        &self,
+        apparatus_id: ApparatusId,
+        draft: CanonicalApparatusDraft,
+    ) -> Result<CommittedCanonicalApparatus, CanonicalApparatusError> {
+        let command_id = format!("command:test-seed:{}", apparatus_id.as_str());
+        self.commit(CanonicalRevisionIntent::Create {
+            apparatus_id,
+            draft,
+            metadata: CanonicalCommandMetadata::new("user:test", command_id)
+                .with_timestamp(1_800_000_000_000),
+        })
+        .await
     }
 
     pub async fn create(
@@ -150,6 +177,45 @@ impl CanonicalApparatusService {
         self.repository.current_aasx(apparatus_id).await
     }
 
+    pub async fn current_configuration(
+        &self,
+        apparatus_id: &ApparatusId,
+    ) -> Result<Option<Arc<RuntimeApparatusConfiguration>>, CanonicalApparatusError> {
+        if let Some(cached) = self
+            .configuration_cache
+            .read()
+            .await
+            .get(apparatus_id)
+            .cloned()
+        {
+            return Ok(Some(cached));
+        }
+        let Some(configuration) = self.repository.current_configuration(apparatus_id).await? else {
+            return Ok(None);
+        };
+        let configuration = Arc::new(configuration);
+        self.configuration_cache
+            .write()
+            .await
+            .insert(apparatus_id.clone(), configuration.clone());
+        Ok(Some(configuration))
+    }
+
+    pub async fn list_runtime_configurations(
+        &self,
+    ) -> Result<Vec<RuntimeApparatusConfiguration>, CanonicalApparatusError> {
+        let runtimes = self.repository.list_runtime_projections().await?;
+        let mut configurations = Vec::with_capacity(runtimes.len());
+        for runtime in runtimes {
+            let configuration = self
+                .current_configuration(&runtime.apparatus_id)
+                .await?
+                .ok_or(CanonicalApparatusError::ArtifactIntegrity)?;
+            configurations.push(configuration.as_ref().clone());
+        }
+        Ok(configurations)
+    }
+
     pub async fn list_runtime_projections(
         &self,
     ) -> Result<Vec<RuntimeApparatusProjection>, CanonicalApparatusError> {
@@ -166,6 +232,7 @@ impl CanonicalApparatusService {
         // The repository returns only after COMMIT. Cache mutation before this
         // point would expose a projection whose transaction may still roll back.
         self.runtime_cache.write().await.remove(&apparatus_id);
+        self.configuration_cache.write().await.remove(&apparatus_id);
         Ok(committed)
     }
 }

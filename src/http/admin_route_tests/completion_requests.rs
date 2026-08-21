@@ -248,7 +248,7 @@ async fn admin_approves_zero_output_completion_request_and_closes_order_with_iss
     let production_store = Arc::new(MemoryProductionMapStore::new());
     let mut state = test_state();
     state.gscale = GscaleService::new().with_receipt_store(material_store);
-    state.production_maps = ProductionMapService::new(production_store.clone());
+    state.production_maps = ProductionMapService::new_for_test(production_store.clone());
     state
         .admin
         .upsert_role_assignment(crate::core::authz::RoleAssignmentUpsert {

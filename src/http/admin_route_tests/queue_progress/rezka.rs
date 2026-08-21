@@ -591,7 +591,12 @@ async fn rezka_pause_records_quantities_without_waste_and_fans_out_frames() {
             "PUT",
             "/v1/mobile/admin/production-maps",
             &admin_token,
-            &pechat_order_map_json("zakaz-rezka-pause", "Rezka pause order", "9326", "apparatus:default:asset-010"),
+            &pechat_order_map_json(
+                "zakaz-rezka-pause",
+                "Rezka pause order",
+                "9326",
+                "apparatus:default:asset-010",
+            ),
         ))
         .await
         .expect("save map");
@@ -792,7 +797,10 @@ async fn rezka_consumes_laminatsiya_wip_and_creates_distinct_frame_wips() {
             principal_role: PrincipalRole::Aparatchi,
             principal_ref: "worker-rezka-wip-fanout".to_string(),
             role_id: "aparatchi".to_string(),
-            assigned_apparatus: vec!["apparatus:default:asset-007".to_string(), "apparatus:default:asset-010".to_string()],
+            assigned_apparatus: vec![
+                "apparatus:default:asset-007".to_string(),
+                "apparatus:default:asset-010".to_string(),
+            ],
             assigned_item_groups: Vec::new(),
         })
         .await
@@ -959,8 +967,8 @@ async fn rezka_consumes_laminatsiya_wip_and_creates_distinct_frame_wips() {
         .await
         .expect("rezka queue controls");
     let queue_snapshot_body = json_body(queue_snapshot).await;
-    let action_control =
-        &queue_snapshot_body["queue_action_controls"]["apparatus:default:asset-010"]["zakaz-rezka-wip-fanout"];
+    let action_control = &queue_snapshot_body["queue_action_controls"]["apparatus:default:asset-010"]
+        ["zakaz-rezka-wip-fanout"];
     let allowed_actions = action_control["allowed_actions"]
         .as_array()
         .expect("allowed rezka actions");

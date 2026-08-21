@@ -48,25 +48,23 @@ impl ProfileService {
         };
 
         match principal.role {
-            PrincipalRole::Supplier => {
-                match lookup.get_supplier_profile(&principal.ref_).await {
-                    Ok(profile) => {
-                        principal.phone = profile.phone;
-                        if !profile.image.trim().is_empty() {
-                            principal.avatar_url =
-                                absolute_file_url(&self.file_base_url, &profile.image);
-                        }
-                    }
-                    Err(error) => {
-                        tracing::warn!(
-                            %error,
-                            role = ?principal.role,
-                            principal_ref = %principal.ref_,
-                            "profile lookup failed; retaining authenticated identity"
-                        );
+            PrincipalRole::Supplier => match lookup.get_supplier_profile(&principal.ref_).await {
+                Ok(profile) => {
+                    principal.phone = profile.phone;
+                    if !profile.image.trim().is_empty() {
+                        principal.avatar_url =
+                            absolute_file_url(&self.file_base_url, &profile.image);
                     }
                 }
-            }
+                Err(error) => {
+                    tracing::warn!(
+                        %error,
+                        role = ?principal.role,
+                        principal_ref = %principal.ref_,
+                        "profile lookup failed; retaining authenticated identity"
+                    );
+                }
+            },
             PrincipalRole::Customer | PrincipalRole::Aparatchi => {
                 match lookup.get_customer_profile(&principal.ref_).await {
                     Ok(profile) => principal.phone = profile.phone,
@@ -333,5 +331,6 @@ fn merge_profile_prefs(mut principal: Principal, prefs: ProfilePrefs) -> Princip
 }
 
 fn profile_key(principal: &Principal) -> Option<String> {
-    ProfileIdentity::from_principal(&principal.role, &principal.ref_).map(|identity| identity.vault_key())
+    ProfileIdentity::from_principal(&principal.role, &principal.ref_)
+        .map(|identity| identity.vault_key())
 }

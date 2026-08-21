@@ -694,7 +694,7 @@ async fn catalog_qolip_starts_without_checkout_and_is_locked_by_active_order() {
 async fn failed_queue_commit_does_not_checkout_qolip() {
     let production_store = Arc::new(MemoryProductionMapStore::new());
     let mut state = test_state();
-    state.production_maps = ProductionMapService::new(production_store.clone());
+    state.production_maps = ProductionMapService::new_for_test(production_store.clone());
     state
         .admin
         .upsert_role_assignment(crate::core::authz::RoleAssignmentUpsert {

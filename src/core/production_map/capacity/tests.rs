@@ -1,14 +1,10 @@
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
-use crate::core::apparatus_groups::{
-    ApparatusGroupService, ApparatusMasterData, ApparatusUpsert, MemoryApparatusGroupStore,
-};
+use crate::core::apparatus_standard::test_support::{TestApparatusSpec, canonical_draft};
 use crate::core::apparatus_standard::{
-    ApparatusClassification, ApparatusDisplayMetadata, ApparatusFamily, ApparatusId,
-    ApparatusIdentity, ApparatusKind, CanonicalApparatus, CapabilityCode, CapabilityProfile,
-    CapacityConfiguration, CatalogSource, OperationalPolicies, QueuePolicy, ToolingPolicy,
-    TrainingReference, Versioning, aas_package_metadata_for_apparatus,
+    ApparatusCapacity, ApparatusId, CanonicalApparatusPatch, CanonicalApparatusService,
+    CanonicalCommandMetadata, CapacityAvailability, ProcessTechnology, WorkingWindowV1,
 };
 use crate::core::production_map::*;
 use crate::core::qolip::{QolipOrderStartPreparation, QolipProductSpec};
@@ -27,148 +23,69 @@ fn apparatus_id(value: &str) -> ApparatusId {
     ApparatusId::new(value).expect("canonical apparatus id")
 }
 
-fn canonical_apparatus(
-    id: &str,
-    display_name: &str,
+fn apparatus_spec<'a>(
+    id: &'a str,
+    display_name: &'a str,
     setup_minutes: u32,
     cleanup_minutes: u32,
     finite_capacity: bool,
-) -> Arc<CanonicalApparatus> {
-    let is_rezka = id == REZKA_ID;
-    let id = apparatus_id(id);
-    let (family, kind, capabilities, capability_profiles, tooling) = if is_rezka {
-        (
-            ApparatusFamily::Rezka,
-            ApparatusKind::Rezka,
-            vec![CapabilityCode::Cut],
-            Vec::new(),
-            ToolingPolicy::QolipScanNotRequired,
-        )
+) -> TestApparatusSpec<'a> {
+    let mut spec = if id == REZKA_ID {
+        TestApparatusSpec::cut(id, display_name)
     } else {
-        (
-            ApparatusFamily::Pechat,
-            ApparatusKind::Flexo,
-            vec![
-                CapabilityCode::Print,
-                CapabilityCode::Pechat,
-                CapabilityCode::Flexo,
-            ],
-            vec![CapabilityProfile {
-                code: CapabilityCode::Flexo,
-                level: 3,
-                valid_from_unix: None,
-                valid_to_unix: None,
-                enabled: true,
-            }],
-            ToolingPolicy::QolipScanRequired,
-        )
+        let mut spec =
+            TestApparatusSpec::print(id, display_name, ProcessTechnology::Flexographic, None);
+        spec.capability_level = 3;
+        spec
     };
-    Arc::new(CanonicalApparatus {
-        identity: ApparatusIdentity {
-            id: id.clone(),
-            display: ApparatusDisplayMetadata {
-                display_name: display_name.to_string(),
-                description: String::new(),
-                catalog_order: 1,
-            },
-        },
-        classification: ApparatusClassification {
-            family,
-            kind,
-            color_stations: None,
-        },
-        capabilities,
-        capability_profiles,
-        policies: OperationalPolicies {
-            queue: QueuePolicy::StrictSequence,
-            material: Default::default(),
-            tooling,
-        },
-        capacity: CapacityConfiguration {
-            capacity_slots: 1,
-            setup_minutes,
-            cleanup_minutes,
-            efficiency_percent: 100,
-            finite_capacity,
-            working_windows: Vec::new(),
-        },
-        placement: None,
-        training: TrainingReference { enabled: true },
-        provenance: crate::core::apparatus_standard::Provenance {
-            source: CatalogSource::Custom,
-            source_ref: None,
-        },
-        versioning: Versioning { revision: 1 },
-        aas: aas_package_metadata_for_apparatus(&id),
-    })
+    spec.setup_minutes = setup_minutes;
+    spec.cleanup_minutes = cleanup_minutes;
+    spec.finite_capacity = finite_capacity;
+    spec
 }
 
-async fn test_service() -> (ProductionMapService, ApparatusGroupService) {
+async fn test_service() -> (ProductionMapService, CanonicalApparatusService) {
     test_service_with_store(Arc::new(MemoryProductionMapStore::new())).await
 }
 
 async fn test_service_with_store(
     store: Arc<MemoryProductionMapStore>,
-) -> (ProductionMapService, ApparatusGroupService) {
-    let mut apparatus = BTreeMap::new();
+) -> (ProductionMapService, CanonicalApparatusService) {
+    let apparatus_service = CanonicalApparatusService::memory();
     for (id, name, setup, cleanup) in [
         (FLEXO_ID, FLEXO_NAME, 5, 5),
         (RESERVE_ID, RESERVE_NAME, 0, 0),
         (REZKA_ID, REZKA_NAME, 0, 0),
     ] {
-        let canonical = canonical_apparatus(id, name, setup, cleanup, true);
-        apparatus.insert(canonical.identity.id.clone(), canonical);
-    }
-    let apparatus_groups = ApparatusGroupService::new(Arc::new(MemoryApparatusGroupStore::new()));
-    for canonical in apparatus.values() {
-        apparatus_groups
-            .upsert_apparatus(ApparatusUpsert {
-                id: Some(canonical.identity.id.to_string()),
-                name: canonical.identity.display.display_name.clone(),
-                master: ApparatusMasterData::default(),
-            })
-            .await
-            .expect("seed apparatus catalog");
-        let mut canonical = (**canonical).clone();
-        canonical.versioning.revision = 2;
-        apparatus_groups
-            .put_canonical_apparatus(1, canonical)
+        let spec = apparatus_spec(id, name, setup, cleanup, true);
+        apparatus_service
+            .seed_for_test(apparatus_id(id), canonical_draft(&spec))
             .await
             .expect("seed canonical apparatus");
     }
-    let service = ProductionMapService::new(store)
-        .with_canonical_apparatus_resolver(Arc::new(ApparatusGroupCanonicalResolver::new(
-            apparatus_groups.clone(),
-        )));
-    (service, apparatus_groups)
+    let service = ProductionMapService::new(
+        store,
+        Arc::new(CanonicalServiceApparatusResolver::new(
+            apparatus_service.clone(),
+        )),
+    );
+    (service, apparatus_service)
 }
 
-async fn unlimited_test_service() -> (ProductionMapService, ApparatusGroupService) {
-    let mut apparatus = BTreeMap::new();
-    let canonical = canonical_apparatus(FLEXO_ID, FLEXO_NAME, 5, 5, false);
-    apparatus.insert(canonical.identity.id.clone(), canonical);
-    let apparatus_groups = ApparatusGroupService::new(Arc::new(MemoryApparatusGroupStore::new()));
-    for canonical in apparatus.values() {
-        apparatus_groups
-            .upsert_apparatus(ApparatusUpsert {
-                id: Some(canonical.identity.id.to_string()),
-                name: canonical.identity.display.display_name.clone(),
-                master: ApparatusMasterData::default(),
-            })
-            .await
-            .expect("seed apparatus catalog");
-        let mut canonical = (**canonical).clone();
-        canonical.versioning.revision = 2;
-        apparatus_groups
-            .put_canonical_apparatus(1, canonical)
-            .await
-            .expect("seed canonical apparatus");
-    }
-    let service = ProductionMapService::new(Arc::new(MemoryProductionMapStore::new()))
-        .with_canonical_apparatus_resolver(Arc::new(ApparatusGroupCanonicalResolver::new(
-            apparatus_groups.clone(),
-        )));
-    (service, apparatus_groups)
+async fn unlimited_test_service() -> (ProductionMapService, CanonicalApparatusService) {
+    let apparatus_service = CanonicalApparatusService::memory();
+    let spec = apparatus_spec(FLEXO_ID, FLEXO_NAME, 5, 5, false);
+    apparatus_service
+        .seed_for_test(apparatus_id(FLEXO_ID), canonical_draft(&spec))
+        .await
+        .expect("seed canonical apparatus");
+    let service = ProductionMapService::new(
+        Arc::new(MemoryProductionMapStore::new()),
+        Arc::new(CanonicalServiceApparatusResolver::new(
+            apparatus_service.clone(),
+        )),
+    );
+    (service, apparatus_service)
 }
 
 fn capacity_map(id: &str, apparatus: &str) -> ProductionMapDefinition {
@@ -220,6 +137,59 @@ fn profile_for(
     }
 }
 
+async fn set_test_capacity_profile(
+    service: &CanonicalApparatusService,
+    mut profile: ApparatusCapacityProfile,
+) -> Result<ApparatusCapacityProfile, ProductionMapError> {
+    let current = service
+        .current_configuration(&profile.apparatus_id)
+        .await
+        .map_err(|_| ProductionMapError::StoreFailed)?
+        .ok_or(ProductionMapError::CapacityProfileNotFound)?;
+    let availability = if profile.working_windows.is_empty() {
+        CapacityAvailability::Always
+    } else {
+        CapacityAvailability::Scheduled {
+            working_windows: profile
+                .working_windows
+                .iter()
+                .map(|window| WorkingWindowV1 {
+                    weekday: window.weekday,
+                    start_minute: window.start_minute,
+                    end_minute: window.end_minute,
+                })
+                .collect(),
+        }
+    };
+    service
+        .patch(
+            profile.apparatus_id.clone(),
+            current.runtime.source_revision,
+            CanonicalApparatusPatch {
+                capacity: Some(ApparatusCapacity {
+                    capacity_slots: profile.capacity_slots,
+                    setup_minutes: profile.setup_minutes,
+                    cleanup_minutes: profile.cleanup_minutes,
+                    efficiency_percent: profile.efficiency_percent,
+                    finite_capacity: profile.finite_capacity,
+                    availability,
+                }),
+                ..CanonicalApparatusPatch::default()
+            },
+            CanonicalCommandMetadata::new(
+                "user:test",
+                format!(
+                    "command:test-capacity:{}:{}",
+                    profile.apparatus_id, current.runtime.source_revision
+                ),
+            ),
+        )
+        .await
+        .map_err(|_| ProductionMapError::CapacityProfileInvalid)?;
+    profile.apparatus = current.runtime.display.display_name.clone();
+    Ok(profile)
+}
+
 fn profile() -> ApparatusCapacityProfile {
     profile_for(FLEXO_ID, FLEXO_NAME, 5, 5, true)
 }
@@ -262,7 +232,10 @@ async fn start_with_qolip(
 
 #[tokio::test]
 async fn schedule_requires_canonical_capacity_profile() {
-    let service = ProductionMapService::new(Arc::new(MemoryProductionMapStore::new()));
+    let service = ProductionMapService::new(
+        Arc::new(MemoryProductionMapStore::new()),
+        Arc::new(TestCanonicalApparatusResolver::default()),
+    );
     service
         .upsert_map(capacity_map("capacity-order-missing-profile", FLEXO_NAME))
         .await
@@ -282,15 +255,14 @@ async fn schedule_requires_canonical_capacity_profile() {
 
 #[tokio::test]
 async fn schedule_identity_survives_a_display_name_change() {
-    let (service, apparatus_groups) = test_service().await;
+    let (service, apparatus_service) = test_service().await;
     service
         .upsert_map(capacity_map("capacity-order-renamed", FLEXO_NAME))
         .await
         .expect("map");
     let mut renamed_profile = profile();
     renamed_profile.apparatus = "Renamed Flexo".to_string();
-    let effective_profile = service
-        .put_apparatus_capacity_profile(renamed_profile, &apparatus_groups)
+    let effective_profile = set_test_capacity_profile(&apparatus_service, renamed_profile)
         .await
         .expect("profile");
     assert_eq!(effective_profile.apparatus, FLEXO_NAME);
@@ -309,7 +281,7 @@ async fn schedule_identity_survives_a_display_name_change() {
 #[tokio::test]
 async fn capacity_profile_update_changes_canonical_capacity() {
     let store = Arc::new(MemoryProductionMapStore::new());
-    let (service, apparatus_groups) = test_service_with_store(store.clone()).await;
+    let (service, apparatus_service) = test_service_with_store(store.clone()).await;
     let mut override_profile = profile();
     override_profile.capacity_slots = 2;
     service
@@ -321,13 +293,12 @@ async fn capacity_profile_update_changes_canonical_capacity() {
         .await
         .expect("second map");
 
-    let updated = service
-        .put_apparatus_capacity_profile(override_profile, &apparatus_groups)
+    let updated = set_test_capacity_profile(&apparatus_service, override_profile)
         .await
         .expect("canonical capacity update");
     assert_eq!(updated.capacity_slots, 2);
-    let canonical = apparatus_groups
-        .canonical_apparatus_by_id(&apparatus_id(FLEXO_ID))
+    let canonical = apparatus_service
+        .current_configuration(&apparatus_id(FLEXO_ID))
         .await
         .expect("canonical apparatus lookup")
         .expect("canonical apparatus");
@@ -338,12 +309,6 @@ async fn capacity_profile_update_changes_canonical_capacity() {
         .expect("canonical capacity snapshot");
     assert_eq!(snapshot.profiles[0].capacity_slots, 2);
 
-    let mut stale_projection = profile();
-    stale_projection.capacity_slots = 1;
-    store
-        .put_apparatus_capacity_profile(stale_projection)
-        .await
-        .expect("stale capacity projection");
     let first = service
         .schedule_apparatus_order(schedule(
             "capacity-canonical-authority",
@@ -379,7 +344,7 @@ fn schedule(order_id: &str, key: &str, duration_minutes: u32) -> ApparatusSchedu
         reason: String::new(),
         idempotency_key: key.to_string(),
         capability_requirements: vec![ApparatusCapabilityRequirement {
-            code: "flexo".to_string(),
+            code: "print".to_string(),
             min_level: 2,
         }],
         candidate_apparatuses: Vec::new(),
@@ -389,7 +354,7 @@ fn schedule(order_id: &str, key: &str, duration_minutes: u32) -> ApparatusSchedu
 
 #[tokio::test]
 async fn scheduler_respects_setup_cleanup_finite_capacity_and_idempotency() {
-    let (service, apparatus_groups) = test_service().await;
+    let (service, apparatus_service) = test_service().await;
     service
         .upsert_map(capacity_map("capacity-order-1", FLEXO_NAME))
         .await
@@ -398,8 +363,7 @@ async fn scheduler_respects_setup_cleanup_finite_capacity_and_idempotency() {
         .upsert_map(capacity_map("capacity-order-2", FLEXO_NAME))
         .await
         .expect("second map");
-    service
-        .put_apparatus_capacity_profile(profile(), &apparatus_groups)
+    set_test_capacity_profile(&apparatus_service, profile())
         .await
         .expect("profile");
 
@@ -429,14 +393,13 @@ async fn scheduler_respects_setup_cleanup_finite_capacity_and_idempotency() {
 
 #[tokio::test]
 async fn queue_execution_keeps_schedule_reservation_in_sync_with_run_status() {
-    let (service, apparatus_groups) = test_service().await;
+    let (service, apparatus_service) = test_service().await;
     let order_id = "zakaz-capacity-order-lifecycle";
     service
         .upsert_map(capacity_map(order_id, FLEXO_NAME))
         .await
         .expect("map");
-    service
-        .put_apparatus_capacity_profile(profile(), &apparatus_groups)
+    set_test_capacity_profile(&apparatus_service, profile())
         .await
         .expect("profile");
     let reservation = service
@@ -545,7 +508,7 @@ async fn queue_execution_keeps_schedule_reservation_in_sync_with_run_status() {
 
 #[tokio::test]
 async fn active_unscheduled_execution_blocks_capacity_until_pause() {
-    let (service, apparatus_groups) = test_service().await;
+    let (service, apparatus_service) = test_service().await;
     let first_order = "zakaz-capacity-active-1";
     let second_order = "zakaz-capacity-active-2";
     for order_id in [first_order, second_order] {
@@ -554,8 +517,7 @@ async fn active_unscheduled_execution_blocks_capacity_until_pause() {
             .await
             .expect("map");
     }
-    service
-        .put_apparatus_capacity_profile(profile(), &apparatus_groups)
+    set_test_capacity_profile(&apparatus_service, profile())
         .await
         .expect("profile");
     service
@@ -631,14 +593,13 @@ async fn active_unscheduled_execution_blocks_capacity_until_pause() {
 
 #[tokio::test]
 async fn queue_start_rejects_an_apparatus_during_active_downtime() {
-    let (service, apparatus_groups) = test_service().await;
+    let (service, apparatus_service) = test_service().await;
     let order_id = "zakaz-capacity-downtime";
     service
         .upsert_map(capacity_map(order_id, FLEXO_NAME))
         .await
         .expect("map");
-    service
-        .put_apparatus_capacity_profile(profile(), &apparatus_groups)
+    set_test_capacity_profile(&apparatus_service, profile())
         .await
         .expect("profile");
     let now = std::time::SystemTime::now()
@@ -665,7 +626,7 @@ async fn queue_start_rejects_an_apparatus_during_active_downtime() {
 
 #[tokio::test]
 async fn scheduler_allows_parallel_reservations_when_capacity_is_unlimited() {
-    let (service, apparatus_groups) = unlimited_test_service().await;
+    let (service, apparatus_service) = unlimited_test_service().await;
     service
         .upsert_map(capacity_map("capacity-order-unlimited-1", FLEXO_NAME))
         .await
@@ -675,8 +636,7 @@ async fn scheduler_allows_parallel_reservations_when_capacity_is_unlimited() {
         .await
         .expect("second map");
     let unlimited = profile_for(FLEXO_ID, FLEXO_NAME, 5, 5, false);
-    service
-        .put_apparatus_capacity_profile(unlimited, &apparatus_groups)
+    set_test_capacity_profile(&apparatus_service, unlimited)
         .await
         .expect("unlimited profile");
 
@@ -705,7 +665,7 @@ async fn scheduler_allows_parallel_reservations_when_capacity_is_unlimited() {
 
 #[tokio::test]
 async fn scheduler_selects_the_earliest_compatible_alternative_apparatus() {
-    let (service, apparatus_groups) = test_service().await;
+    let (service, apparatus_service) = test_service().await;
     let mut map = capacity_map("capacity-order-alternative", FLEXO_NAME);
     let mut alternative_node = map
         .nodes
@@ -718,15 +678,13 @@ async fn scheduler_selects_the_earliest_compatible_alternative_apparatus() {
     alternative_node.apparatus_id = RESERVE_ID.to_string();
     map.nodes.push(alternative_node);
     service.upsert_map(map).await.expect("map");
-    service
-        .put_apparatus_capacity_profile(profile(), &apparatus_groups)
+    set_test_capacity_profile(&apparatus_service, profile())
         .await
         .expect("primary profile");
-    service
-        .put_apparatus_capacity_profile(
-            profile_for(RESERVE_ID, RESERVE_NAME, 0, 0, true),
-            &apparatus_groups,
-        )
+    set_test_capacity_profile(
+        &apparatus_service,
+        profile_for(RESERVE_ID, RESERVE_NAME, 0, 0, true),
+    )
         .await
         .expect("alternative profile");
     service
@@ -762,7 +720,7 @@ async fn scheduler_selects_the_earliest_compatible_alternative_apparatus() {
 
 #[tokio::test]
 async fn scheduler_rejects_an_apparatus_outside_the_order_route() {
-    let (service, _apparatus_groups) = test_service().await;
+    let (service, _apparatus_service) = test_service().await;
     service
         .upsert_map(capacity_map("capacity-order-route", FLEXO_NAME))
         .await
@@ -779,13 +737,12 @@ async fn scheduler_rejects_an_apparatus_outside_the_order_route() {
 
 #[tokio::test]
 async fn scheduler_skips_downtime_and_rejects_missing_capability() {
-    let (service, apparatus_groups) = test_service().await;
+    let (service, apparatus_service) = test_service().await;
     service
         .upsert_map(capacity_map("capacity-order-3", FLEXO_NAME))
         .await
         .expect("map");
-    service
-        .put_apparatus_capacity_profile(profile(), &apparatus_groups)
+    set_test_capacity_profile(&apparatus_service, profile())
         .await
         .expect("profile");
     service
@@ -823,13 +780,12 @@ async fn scheduler_skips_downtime_and_rejects_missing_capability() {
 
 #[tokio::test]
 async fn cancelled_reservation_releases_capacity() {
-    let (service, apparatus_groups) = test_service().await;
+    let (service, apparatus_service) = test_service().await;
     service
         .upsert_map(capacity_map("capacity-order-4", FLEXO_NAME))
         .await
         .expect("map");
-    service
-        .put_apparatus_capacity_profile(profile(), &apparatus_groups)
+    set_test_capacity_profile(&apparatus_service, profile())
         .await
         .expect("profile");
     let first = service

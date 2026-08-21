@@ -1,5 +1,8 @@
 use super::*;
-use crate::core::apparatus_standard::ApparatusId;
+use crate::core::apparatus_standard::{
+    ApparatusCapacity, ApparatusId, ApparatusOperationalPolicies, CanonicalApparatusPatch,
+    QueueDiscipline,
+};
 use crate::core::auth::models::{Principal, PrincipalRole};
 use crate::core::calculate_orders::{
     CalculateOrderError, CalculateOrderTemplate, owner_key, validate_template,
@@ -9,12 +12,11 @@ use crate::core::gscale::models::{
     ProgressLabelPrintRequest, RawMaterialStockEntry, RawMaterialStockUpdateInput,
 };
 use crate::core::production_map::{
-    ApparatusCapacityProfile, ApparatusDowntime, ApparatusMaterialRuleUpsert, ApparatusQueuePolicy,
-    ApparatusScheduleCancelRequest, ApparatusScheduleRequest, CompletionRequestDecision,
-    MaterialScanProgressAction, OrderProgressBatchWipStatus, ProductionMapApparatusTransferRequest,
-    ProductionMapBatchMoveRequest, ProductionMapDefinition, ProductionMapError,
-    ProductionMapMoveRequest, ProductionMapNodeKind, ProductionMapRunRequest, QueueActionActor,
-    QueueProgressInput, RawMaterialAssignment, RawMaterialAssignmentDeleteInput,
+    ApparatusDowntime, ApparatusScheduleCancelRequest, ApparatusScheduleRequest,
+    CompletionRequestDecision, MaterialScanProgressAction, OrderProgressBatchWipStatus,
+    ProductionMapApparatusTransferRequest, ProductionMapBatchMoveRequest, ProductionMapDefinition,
+    ProductionMapError, ProductionMapMoveRequest, ProductionMapNodeKind, ProductionMapRunRequest,
+    QueueActionActor, QueueProgressInput, RawMaterialAssignment, RawMaterialAssignmentDeleteInput,
     RawMaterialAssignmentInput, RawMaterialStockTransition, RawMaterialStockTransitionKind,
     RezkaFrameProgressInput, TrustedQolipStartValidation, WipProgressBatchQuery, queue_state,
 };
@@ -115,14 +117,17 @@ pub async fn production_map_capacity(
     .await?;
     match method {
         Method::GET => {
-            let snapshot = state
-                .production_maps
-                .apparatus_capacity_snapshot()
+            let capacity = state
+                .apparatus
+                .list_runtime_configurations()
                 .await
-                .map_err(production_map_error)?;
+                .map_err(canonical_apparatus_error)?
+                .into_iter()
+                .map(|configuration| configuration.capacity)
+                .collect::<Vec<_>>();
             Ok(json_response(serde_json::json!({
                 "ok": true,
-                "capacity": snapshot,
+                "capacity": capacity,
             })))
         }
         Method::PUT => {
@@ -132,15 +137,24 @@ pub async fn production_map_capacity(
                 &[Capability::AdminAccess, Capability::ProductionMapManage],
             )
             .await?;
-            let input: ApparatusCapacityProfile = parse_json(&body)?;
-            let profile = state
-                .production_maps
-                .put_apparatus_capacity_profile(input, &state.apparatus_groups)
+            let input: CanonicalCapacityPatchRequest = parse_json(&body)?;
+            let committed = state
+                .apparatus
+                .patch(
+                    input.apparatus_id,
+                    input.expected_revision,
+                    CanonicalApparatusPatch {
+                        capacity: Some(input.capacity),
+                        ..CanonicalApparatusPatch::default()
+                    },
+                    canonical_command_metadata(&principal, &headers)?,
+                )
                 .await
-                .map_err(production_map_error)?;
+                .map_err(canonical_apparatus_error)?;
+            state.production_maps.notify_live();
             Ok(json_response(serde_json::json!({
                 "ok": true,
-                "profile": profile,
+                "revision": committed,
             })))
         }
         _ => {
@@ -148,6 +162,14 @@ pub async fn production_map_capacity(
             Err(method_not_allowed())
         }
     }
+}
+
+#[derive(serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+struct CanonicalCapacityPatchRequest {
+    apparatus_id: ApparatusId,
+    expected_revision: u64,
+    capacity: ApparatusCapacity,
 }
 
 pub async fn production_map_capacity_downtime(
@@ -577,12 +599,11 @@ pub async fn production_map_sequence(
 }
 
 #[derive(serde::Deserialize)]
+#[serde(deny_unknown_fields)]
 struct ApparatusQueuePolicyPutRequest {
-    #[serde(default)]
-    apparatus_id: Option<ApparatusId>,
-    #[serde(default)]
-    apparatus: String,
-    policy: ApparatusQueuePolicy,
+    apparatus_id: ApparatusId,
+    expected_revision: u64,
+    discipline: QueueDiscipline,
 }
 
 /// Apparatus queue policy controls whether a worker must follow the saved
@@ -606,10 +627,13 @@ pub async fn production_map_queue_policies(
     match method {
         Method::GET => {
             let policies = state
-                .production_maps
-                .apparatus_queue_policy_records()
+                .apparatus
+                .list_runtime_configurations()
                 .await
-                .map_err(production_map_error)?;
+                .map_err(canonical_apparatus_error)?
+                .into_iter()
+                .map(|configuration| configuration.queue)
+                .collect::<Vec<_>>();
             Ok(json_response(serde_json::json!({
                 "ok": true,
                 "policies": policies,
@@ -623,24 +647,33 @@ pub async fn production_map_queue_policies(
             )
             .await?;
             let input: ApparatusQueuePolicyPutRequest = parse_json(&body)?;
-            let apparatus_id = match (input.apparatus_id, input.apparatus.trim()) {
-                (Some(apparatus_id), _) => apparatus_id,
-                (None, legacy) => ApparatusId::new(legacy.to_string())
-                    .map_err(|_| bad_request("apparatus_id is required"))?,
-            };
-            let record = state
-                .production_maps
-                .set_apparatus_queue_policy(
-                    &apparatus_id,
-                    input.policy,
-                    &queue_action_actor(&principal),
-                    &state.apparatus_groups,
+            let current = state
+                .apparatus
+                .current_configuration(&input.apparatus_id)
+                .await
+                .map_err(canonical_apparatus_error)?
+                .ok_or_else(|| not_found("apparatus_not_found"))?;
+            let committed = state
+                .apparatus
+                .patch(
+                    input.apparatus_id,
+                    input.expected_revision,
+                    CanonicalApparatusPatch {
+                        policies: Some(ApparatusOperationalPolicies {
+                            queue: input.discipline,
+                            material: current.material.policy.clone(),
+                            tooling: current.material.tooling.clone(),
+                        }),
+                        ..CanonicalApparatusPatch::default()
+                    },
+                    canonical_command_metadata(&principal, &headers)?,
                 )
                 .await
-                .map_err(production_map_error)?;
+                .map_err(canonical_apparatus_error)?;
+            state.production_maps.notify_live();
             Ok(json_response(serde_json::json!({
                 "ok": true,
-                "policy": record,
+                "revision": committed,
             })))
         }
         _ => Err(method_not_allowed()),

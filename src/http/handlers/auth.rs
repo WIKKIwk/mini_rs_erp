@@ -103,11 +103,7 @@ pub async fn me(
     headers: HeaderMap,
 ) -> Result<Json<Principal>, (StatusCode, Json<ErrorResponse>)> {
     let token = bearer_token(&headers).ok_or_else(unauthorized)?;
-    let mut principal = state
-        .sessions
-        .get(&token)
-        .await
-        .map_err(session_error)?;
+    let mut principal = state.sessions.get(&token).await.map_err(session_error)?;
     principal = state.profiles.refresh(principal).await;
     state
         .sessions

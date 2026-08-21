@@ -7,7 +7,6 @@ use super::super::progress::{
     completion_request_notification_from_event, json_string_field,
 };
 use super::super::queue_state;
-use super::super::store_port::ApparatusQueuePolicyMap;
 use crate::core::apparatus_standard::ApparatusId;
 
 pub(super) async fn apparatus_queue_states(
@@ -40,27 +39,6 @@ pub(super) async fn put_apparatus_queue_states(
         .write()
         .await
         .insert(apparatus.to_string(), states);
-    Ok(())
-}
-
-pub(super) async fn apparatus_queue_policies(
-    store: &MemoryProductionMapStore,
-) -> Result<ApparatusQueuePolicyMap, ProductionMapError> {
-    Ok(store.queue_policies.read().await.clone())
-}
-
-pub(super) async fn put_apparatus_queue_policy(
-    store: &MemoryProductionMapStore,
-    apparatus_id: &ApparatusId,
-    _apparatus_display: &str,
-    policy: ApparatusQueuePolicy,
-    _actor: &QueueActionActor,
-) -> Result<(), ProductionMapError> {
-    store
-        .queue_policies
-        .write()
-        .await
-        .insert(apparatus_id.clone(), policy);
     Ok(())
 }
 

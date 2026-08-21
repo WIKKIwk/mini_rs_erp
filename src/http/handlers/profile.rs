@@ -30,11 +30,7 @@ pub async fn profile(
     body: Bytes,
 ) -> Result<Json<Value>, (StatusCode, Json<ErrorResponse>)> {
     let token = bearer_token(&headers).ok_or_else(unauthorized)?;
-    let principal = state
-        .sessions
-        .get(&token)
-        .await
-        .map_err(session_error)?;
+    let principal = state.sessions.get(&token).await.map_err(session_error)?;
 
     match method {
         Method::GET => {
@@ -44,7 +40,9 @@ pub async fn profile(
                 .update(&token, current.clone())
                 .await
                 .map_err(session_error)?;
-            Ok(Json(profile_payload(&state, &headers, current, &token).await?))
+            Ok(Json(
+                profile_payload(&state, &headers, current, &token).await?,
+            ))
         }
         Method::PUT => {
             let request: ProfileUpdateRequest = serde_json::from_slice(&body).map_err(|_| {
@@ -68,7 +66,9 @@ pub async fn profile(
                 .update(&token, current.clone())
                 .await
                 .map_err(session_error)?;
-            Ok(Json(profile_payload(&state, &headers, current, &token).await?))
+            Ok(Json(
+                profile_payload(&state, &headers, current, &token).await?,
+            ))
         }
         _ => Err((
             StatusCode::METHOD_NOT_ALLOWED,
@@ -94,11 +94,7 @@ pub async fn avatar_upload(
         ));
     }
     let token = bearer_token(&headers).ok_or_else(unauthorized)?;
-    let principal = state
-        .sessions
-        .get(&token)
-        .await
-        .map_err(session_error)?;
+    let principal = state.sessions.get(&token).await.map_err(session_error)?;
     if body.len() > AVATAR_BODY_LIMIT {
         return Err((
             StatusCode::BAD_REQUEST,
@@ -147,7 +143,9 @@ pub async fn avatar_upload(
         .update(&token, current.clone())
         .await
         .map_err(session_error)?;
-    Ok(Json(profile_payload(&state, &headers, current, &token).await?))
+    Ok(Json(
+        profile_payload(&state, &headers, current, &token).await?,
+    ))
 }
 
 async fn profile_payload(
@@ -172,12 +170,11 @@ async fn profile_payload(
             );
             internal_error("warehouse scope lookup failed")
         })?;
-    let mut value = serde_json::to_value(with_avatar_proxy(headers, principal, token)).map_err(
-        |error| {
+    let mut value =
+        serde_json::to_value(with_avatar_proxy(headers, principal, token)).map_err(|error| {
             tracing::error!(%error, "profile serialization failed at HTTP boundary");
             internal_error("profile serialization failed")
-        },
-    )?;
+        })?;
     let Value::Object(object) = &mut value else {
         tracing::error!("profile serialization returned a non-object value");
         return Err(internal_error("profile serialization failed"));
@@ -188,7 +185,10 @@ async fn profile_payload(
         "assigned_item_groups".to_string(),
         json!(assigned_item_groups),
     );
-    object.insert("assigned_warehouses".to_string(), json!(assigned_warehouses));
+    object.insert(
+        "assigned_warehouses".to_string(),
+        json!(assigned_warehouses),
+    );
     Ok(value)
 }
 

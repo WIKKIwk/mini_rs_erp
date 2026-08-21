@@ -53,7 +53,8 @@ async fn customer_refresh_updates_phone() {
 
 #[tokio::test]
 async fn profile_mutation_rejects_missing_canonical_identity() {
-    let service = ProfileService::new(String::new()).with_store(Arc::new(FakeProfileStore::default()));
+    let service =
+        ProfileService::new(String::new()).with_store(Arc::new(FakeProfileStore::default()));
     let error = service
         .update_nickname(
             Principal {

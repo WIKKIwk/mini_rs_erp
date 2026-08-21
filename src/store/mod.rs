@@ -1,5 +1,4 @@
 pub mod admin_store;
-pub mod apparatus_group_store;
 pub mod calculate_material_store;
 pub mod calculate_order_store;
 pub mod chat_media_local;

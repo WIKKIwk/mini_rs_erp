@@ -437,7 +437,6 @@ async fn prepare_direct_freeze_queue_write(
 ) -> Result<Option<QueueActionProgressWrite>, ProductionMapError> {
     let all_states = service.store.apparatus_queue_states().await?;
     let sequences = service.store.apparatus_sequences().await?;
-    let policies = service.store.apparatus_queue_policies().await?;
     let order_controls = service.store.order_control_states().await?;
     let maps = service.store.maps().await?;
     let known_keys = known_apparatus_storage_keys(&sequences, &all_states);
@@ -505,7 +504,7 @@ async fn prepare_direct_freeze_queue_write(
     );
     let sequence_updates =
         sequence_updates_for_frozen_transition(&maps, &sequences, &excluded_order_ids, None);
-    let policy = queue_policy_for_apparatus(canonical.as_ref(), &policies);
+    let policy = queue_policy_for_apparatus(canonical.as_ref());
     let actor = record.actor.clone();
     let mut event = queue_action_event(QueueActionEventInput {
         requested_apparatus: &target_apparatus,
@@ -566,7 +565,6 @@ async fn restore_frozen_queue_after_unfreeze(
 ) -> Result<(), ProductionMapError> {
     let all_states = service.store.apparatus_queue_states().await?;
     let sequences = service.store.apparatus_sequences().await?;
-    let policies = service.store.apparatus_queue_policies().await?;
     let sessions = service
         .store
         .order_run_sessions_for_order(&record.order_id)
@@ -651,7 +649,7 @@ async fn restore_frozen_queue_after_unfreeze(
         &frozen_order_ids,
         Some(&record.order_id),
     );
-    let policy = queue_policy_for_apparatus(canonical.as_ref(), &policies);
+    let policy = queue_policy_for_apparatus(canonical.as_ref());
     let actor = record.actor.clone();
     let mut event = queue_action_event(QueueActionEventInput {
         requested_apparatus: &target_apparatus,

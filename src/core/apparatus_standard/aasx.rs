@@ -325,9 +325,7 @@ fn read_zip_parts(package: &[u8]) -> Result<BTreeMap<String, Vec<u8>>, AasxImpor
             .iter()
             .any(|(start, end)| local_offset < *end && *start < local_data_end)
         {
-            return Err(AasxImportError::UnsupportedZip(
-                "ZIP local entries overlap",
-            ));
+            return Err(AasxImportError::UnsupportedZip("ZIP local entries overlap"));
         }
         local_ranges.push((local_offset, local_data_end));
         let compressed = &package[local_data_start..local_data_end];
@@ -382,10 +380,7 @@ fn zip_u32(bytes: &[u8], offset: usize) -> Result<u32, AasxImportError> {
     Ok(u32::from_le_bytes([value[0], value[1], value[2], value[3]]))
 }
 
-fn inflate_zip_entry(
-    compressed: &[u8],
-    expected_size: usize,
-) -> Result<Vec<u8>, AasxImportError> {
+fn inflate_zip_entry(compressed: &[u8], expected_size: usize) -> Result<Vec<u8>, AasxImportError> {
     let mut decompressor = Decompress::new(false);
     let mut contents = Vec::with_capacity(expected_size);
     let mut input_offset = 0usize;
@@ -405,23 +400,21 @@ fn inflate_zip_entry(
             .map_err(|_| AasxImportError::UnsupportedZip("deflated ZIP entry is too large"))?;
         let output_produced = usize::try_from(decompressor.total_out() - output_before)
             .map_err(|_| AasxImportError::UnsupportedZip("deflated ZIP entry is too large"))?;
-        input_offset = input_offset
-            .checked_add(input_consumed)
-            .ok_or(AasxImportError::UnsupportedZip(
-                "deflated ZIP entry input range overflows",
-            ))?;
+        input_offset =
+            input_offset
+                .checked_add(input_consumed)
+                .ok_or(AasxImportError::UnsupportedZip(
+                    "deflated ZIP entry input range overflows",
+                ))?;
         if input_offset > compressed.len() {
             return Err(AasxImportError::UnsupportedZip(
                 "deflated ZIP entry input range is invalid",
             ));
         }
         if output_produced > 0 {
-            let new_len = contents
-                .len()
-                .checked_add(output_produced)
-                .ok_or(AasxImportError::UnsupportedZip(
-                    "deflated ZIP entry is too large",
-                ))?;
+            let new_len = contents.len().checked_add(output_produced).ok_or(
+                AasxImportError::UnsupportedZip("deflated ZIP entry is too large"),
+            )?;
             if new_len > expected_size {
                 return Err(AasxImportError::UnsupportedZip(
                     "deflated ZIP entry exceeds its declared size",
@@ -758,9 +751,7 @@ fn parse_xml_document(bytes: &[u8]) -> Result<XmlNode, AasxImportError> {
                     || !stack.is_empty()
                     || instruction != b"xml version=\"1.0\" encoding=\"UTF-8\"")
             {
-                return Err(AasxImportError::InvalidXml(
-                    "malformed XML declaration",
-                ));
+                return Err(AasxImportError::InvalidXml("malformed XML declaration"));
             }
             cursor = instruction_end + 2;
             continue;
@@ -2782,9 +2773,7 @@ mod tests {
         let spec = String::from_utf8(entries[AAS_SPEC_PATH].clone()).unwrap();
         assert!(spec.starts_with("<?xml version=\"1.0\" encoding=\"UTF-8\"?>"));
         assert!(spec.contains("<id>apparatus:catalog:stable-001</id>"));
-        assert!(spec.contains(
-            "<id>urn:mini-rs-erp:submodel:apparatus:catalog:stable-001</id>"
-        ));
+        assert!(spec.contains("<id>urn:mini-rs-erp:submodel:apparatus:catalog:stable-001</id>"));
         assert!(spec.contains("<idShort>CapacitySlots</idShort>"));
         assert!(spec.contains("<value>7</value>"));
         assert!(spec.contains("<idShort>WorkingWindow1</idShort>"));
@@ -2939,9 +2928,11 @@ mod tests {
             contents: b"root".to_vec(),
         }])
         .expect("nested ZIP entry");
-        let nested_central_offset =
-            u32::from_le_bytes(nested[nested.len() - 6..nested.len() - 2].try_into().unwrap())
-                as usize;
+        let nested_central_offset = u32::from_le_bytes(
+            nested[nested.len() - 6..nested.len() - 2]
+                .try_into()
+                .unwrap(),
+        ) as usize;
         let nested_local = nested[..nested_central_offset].to_vec();
         let mut package = write_zip(&[
             ZipEntry {
@@ -2955,9 +2946,11 @@ mod tests {
         ])
         .expect("outer ZIP package");
 
-        let central_offset =
-            u32::from_le_bytes(package[package.len() - 6..package.len() - 2].try_into().unwrap())
-                as usize;
+        let central_offset = u32::from_le_bytes(
+            package[package.len() - 6..package.len() - 2]
+                .try_into()
+                .unwrap(),
+        ) as usize;
         let second_central_entry = central_offset + 46 + CONTENT_TYPES_PATH.len();
         let nested_offset = 30 + CONTENT_TYPES_PATH.len();
         package[second_central_entry + 42..second_central_entry + 46]
@@ -2976,19 +2969,22 @@ mod tests {
             contents: b"root".to_vec(),
         }])
         .expect("ZIP entry");
-        let central_offset =
-            u32::from_le_bytes(package[package.len() - 6..package.len() - 2].try_into().unwrap())
-                as usize;
+        let central_offset = u32::from_le_bytes(
+            package[package.len() - 6..package.len() - 2]
+                .try_into()
+                .unwrap(),
+        ) as usize;
         let central_entry_end = central_offset + 46 + ROOT_RELATIONSHIPS_PATH.len();
 
         package[central_offset + 30..central_offset + 32].copy_from_slice(&1u16.to_le_bytes());
         package.insert(central_entry_end, 0);
         let eocd_offset = package.len() - 22;
-        let central_size =
-            u32::from_le_bytes(package[eocd_offset + 12..eocd_offset + 16].try_into().unwrap())
-                + 1;
-        package[eocd_offset + 12..eocd_offset + 16]
-            .copy_from_slice(&central_size.to_le_bytes());
+        let central_size = u32::from_le_bytes(
+            package[eocd_offset + 12..eocd_offset + 16]
+                .try_into()
+                .unwrap(),
+        ) + 1;
+        package[eocd_offset + 12..eocd_offset + 16].copy_from_slice(&central_size.to_le_bytes());
 
         assert!(matches!(
             read_zip_parts(&package),

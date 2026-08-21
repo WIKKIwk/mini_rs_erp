@@ -9,26 +9,27 @@ pub mod canonical_aasx;
 pub mod isa95;
 pub mod projector;
 pub mod service;
+#[cfg(test)]
+pub(crate) mod test_support;
 
-pub use isa95::{
-    AasIdentity, ApparatusCapacity, ApparatusDisplay, ApparatusLifecycle,
-    ApparatusOperationalPolicies, CanonicalApparatusDraft, CanonicalApparatusRevision,
-    CapacityAvailability, EquipmentCapability, EquipmentCapabilityCode, EquipmentClassId,
-    EquipmentHierarchyScope, ExecutionOperation, ExecutionProfile, FactoryMapPlacement,
-    HierarchyLevelId, LifecycleState, MaterialExecutionPolicy, MaterialRequirementSet,
-    PhysicalAssetId, ProcessTechnology, QueueDiscipline, RevisionMetadata, RevisionSource,
-    ToolingExecutionPolicy, TrainingProfile, VirtualTaskPolicy, WorkingWindowV1,
-    CANONICAL_APPARATUS_SCHEMA_VERSION,
-};
 pub use canonical_aasx::{
     CanonicalAasxArtifact, CanonicalAasxExportError, CanonicalAasxImportError,
     CanonicalizedAasxUpload, canonicalize_uploaded_aasx, export_canonical_aasx,
     parse_canonical_aasx,
 };
+pub use isa95::{
+    AasIdentity, ApparatusCapacity, ApparatusDisplay, ApparatusLifecycle,
+    ApparatusOperationalPolicies, CANONICAL_APPARATUS_SCHEMA_VERSION, CanonicalApparatusDraft,
+    CanonicalApparatusRevision, CapacityAvailability, EquipmentCapability, EquipmentCapabilityCode,
+    EquipmentClassId, EquipmentHierarchyScope, ExecutionOperation, ExecutionProfile,
+    FactoryMapPlacement, HierarchyLevelId, LifecycleState, MaterialExecutionPolicy,
+    MaterialRequirementSet, PhysicalAssetId, ProcessTechnology, QueueDiscipline, RevisionMetadata,
+    RevisionSource, ToolingExecutionPolicy, TrainingProfile, VirtualTaskPolicy, WorkingWindowV1,
+};
 pub use projector::{
-    AdminApparatusSummary, ApparatusCapacityProjection, ApparatusMaterialProjection,
-    ApparatusProjectionSet, ApparatusQueueProjection, AasxSha256, RuntimeApparatusProjection,
-    project_apparatus_revision,
+    AasxSha256, AdminApparatusSummary, ApparatusCapacityProjection, ApparatusMaterialProjection,
+    ApparatusProjectionSet, ApparatusQueueProjection, RuntimeApparatusConfiguration,
+    RuntimeApparatusProjection, project_apparatus_revision,
 };
 pub use service::{
     CanonicalApparatusError, CanonicalApparatusPatch, CanonicalApparatusService,
@@ -657,9 +658,7 @@ pub fn default_aas_package_metadata() -> AasPackageMetadata {
 /// The submodel identifier is derived from the opaque apparatus ID, never
 /// from display metadata, so two apparatus identities cannot share the
 /// canonical submodel reference.
-pub fn aas_package_metadata_for_apparatus(
-    apparatus_id: &ApparatusId,
-) -> AasPackageMetadata {
+pub fn aas_package_metadata_for_apparatus(apparatus_id: &ApparatusId) -> AasPackageMetadata {
     let mut metadata = default_aas_package_metadata();
     metadata.submodel_id = aas_submodel_id_for_apparatus(apparatus_id);
     metadata

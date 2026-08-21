@@ -1,8 +1,5 @@
 use std::collections::{BTreeMap, BTreeSet};
 
-use crate::core::apparatus_groups::ApparatusGroupService;
-use crate::core::apparatus_standard::QueuePolicy;
-
 use super::super::*;
 
 use super::super::apparatus::{
@@ -19,7 +16,7 @@ use super::super::service_progress_support::{
     session_progress_links, wip_batch_was_consumed_by_producer,
 };
 use super::super::service_queue_support::*;
-use super::super::store_port::{ApparatusQueuePolicyMap, ApparatusQueueStateMap, OrderControlMap};
+use super::super::store_port::{ApparatusQueueStateMap, OrderControlMap};
 
 impl ProductionMapService {
     pub async fn apparatus_sequences(
@@ -343,9 +340,8 @@ impl ProductionMapService {
         &self,
     ) -> Result<Vec<ApparatusQueuePolicyRecord>, ProductionMapError> {
         let mut records = Vec::new();
-        for (apparatus_id, policy) in self.store.apparatus_queue_policies().await? {
-            let canonical = self.resolve_canonical_apparatus(&apparatus_id).await?;
-            records.push(effective_apparatus_queue_policy_record(&canonical, policy));
+        for canonical in self.active_canonical_apparatuses().await? {
+            records.push(effective_apparatus_queue_policy_record(&canonical));
         }
         Ok(records)
     }
@@ -359,13 +355,11 @@ impl ProductionMapService {
         let maps = self.store.maps().await?;
         let sequences = self.store.apparatus_sequences().await?;
         let all_states = self.store.apparatus_queue_states().await?;
-        let policies = self.store.apparatus_queue_policies().await?;
         let order_controls = self.order_control_states().await?;
         self.queue_action_controls_for_snapshot(
             &maps,
             &sequences,
             &all_states,
-            &policies,
             &order_controls,
         )
         .await
@@ -376,7 +370,6 @@ impl ProductionMapService {
         maps: &[ProductionMapDefinition],
         sequences: &BTreeMap<String, Vec<String>>,
         all_states: &ApparatusQueueStateMap,
-        policies: &ApparatusQueuePolicyMap,
         order_controls: &OrderControlMap,
     ) -> Result<
         BTreeMap<String, BTreeMap<String, ApparatusQueueOrderActionControl>>,
@@ -397,14 +390,15 @@ impl ProductionMapService {
                 (control.state == OrderControlState::Frozen).then_some(order_id.clone())
             })
             .collect::<BTreeSet<_>>();
+        let canonical_apparatuses = self.active_canonical_apparatuses().await?;
         let known_keys = sequences
             .keys()
             .map(String::as_str)
             .chain(all_states.keys().map(String::as_str))
             .chain(
-                policies
-                    .keys()
-                    .map(crate::core::apparatus_standard::ApparatusId::as_str),
+                canonical_apparatuses
+                    .iter()
+                    .map(|configuration| configuration.runtime.apparatus_id.as_str()),
             )
             .chain(visible_by_apparatus.keys().map(String::as_str))
             .filter(|key| !queue_state::apparatus_search_key(key).is_empty())
@@ -435,7 +429,7 @@ impl ProductionMapService {
                 .cloned()
                 .unwrap_or_default();
             let effective_states = parsed_queue_states(stored_states);
-            let policy = queue_policy_for_apparatus(canonical.as_ref(), policies);
+            let policy = queue_policy_for_apparatus(canonical.as_ref());
             let active_order_id = effective_states.iter().find_map(|(order_id, state)| {
                 (*state == queue_state::ApparatusQueueOrderState::InProgress)
                     .then_some(order_id.as_str())
@@ -531,7 +525,7 @@ impl ProductionMapService {
                             .iter()
                             .filter(|assignment| {
                                 assignment.order_id.trim() == order_id.trim()
-                                    && assignment.apparatus_id == canonical.identity.id
+                                    && assignment.apparatus_id == canonical.runtime.apparatus_id
                             })
                             .cloned()
                             .collect::<Vec<_>>();
@@ -677,33 +671,6 @@ impl ProductionMapService {
         Ok(result)
     }
 
-    pub async fn set_apparatus_queue_policy(
-        &self,
-        apparatus_id: &crate::core::apparatus_standard::ApparatusId,
-        policy: ApparatusQueuePolicy,
-        _actor: &QueueActionActor,
-        apparatus_groups: &ApparatusGroupService,
-    ) -> Result<ApparatusQueuePolicyRecord, ProductionMapError> {
-        let canonical = self.resolve_canonical_apparatus(apparatus_id).await?;
-        let record = effective_apparatus_queue_policy_record(&canonical, policy);
-        if record.locked && record.policy != policy {
-            return Err(ProductionMapError::ApparatusQueuePolicyLocked);
-        }
-        let canonical = apparatus_groups
-            .mutate_canonical_apparatus(apparatus_id, canonical.versioning.revision, |canonical| {
-                canonical.policies.queue = match policy {
-                    ApparatusQueuePolicy::StrictSequence => QueuePolicy::StrictSequence,
-                    ApparatusQueuePolicy::FreePick => QueuePolicy::FreePick,
-                };
-                Ok(())
-            })
-            .await
-            .map_err(|_| ProductionMapError::StoreFailed)?;
-        let record = effective_apparatus_queue_policy_record(&canonical, policy);
-        self.notify_live();
-        Ok(record)
-    }
-
     pub async fn apply_apparatus_queue_action(
         &self,
         apparatus: &str,
@@ -766,8 +733,9 @@ impl ProductionMapService {
         }
         let canonical = self.resolve_canonical_apparatus_text(apparatus).await?;
         if apparatus::requires_qolip_scan(&canonical)
-            && !qolip_validation
-                .is_some_and(|validation| validation.matches(&canonical.identity.id, order_id))
+            && !qolip_validation.is_some_and(|validation| {
+                validation.matches(&canonical.runtime.apparatus_id, order_id)
+            })
         {
             return Err(ProductionMapError::QolipCodeMismatch);
         }

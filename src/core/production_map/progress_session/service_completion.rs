@@ -39,12 +39,8 @@ impl ProductionMapService {
 
         let sequences = self.store.apparatus_sequences().await?;
         let all_states = self.store.apparatus_queue_states().await?;
-        let policies = self.store.apparatus_queue_policies().await?;
         let canonical = self.resolve_canonical_apparatus_text(apparatus).await?;
-        let policy = effective_apparatus_queue_policy(
-            &canonical,
-            policies.get(&canonical.identity.id).copied(),
-        );
+        let policy = effective_apparatus_queue_policy(&canonical);
         let known_keys = sequences
             .keys()
             .chain(all_states.keys())

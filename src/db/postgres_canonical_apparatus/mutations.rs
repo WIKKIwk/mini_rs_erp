@@ -125,6 +125,16 @@ impl CanonicalApparatusRepository for PostgresCanonicalApparatusRepository {
         super::reads::current_aasx(&self.pool, apparatus_id).await
     }
 
+    async fn current_configuration(
+        &self,
+        apparatus_id: &crate::core::apparatus_standard::ApparatusId,
+    ) -> Result<
+        Option<crate::core::apparatus_standard::RuntimeApparatusConfiguration>,
+        CanonicalApparatusError,
+    > {
+        super::reads::current_configuration(&self.pool, apparatus_id).await
+    }
+
     async fn list_runtime_projections(
         &self,
     ) -> Result<

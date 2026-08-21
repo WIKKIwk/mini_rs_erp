@@ -1,9 +1,8 @@
 pub mod postgres;
 pub mod postgres_admin_catalog;
-pub mod postgres_apparatus_group;
-pub(crate) mod postgres_canonical_apparatus;
 pub mod postgres_calculate_material;
 pub mod postgres_calculate_order;
+pub(crate) mod postgres_canonical_apparatus;
 pub mod postgres_chat;
 pub mod postgres_chat_media;
 pub mod postgres_customer;

@@ -7,7 +7,8 @@ use crate::core::production_map::{ProductionMapNode, ProductionMapNodeKind, Prod
 async fn production_map_store_persists_maps_in_sqlite() {
     let dir = tempfile::tempdir().expect("tempdir");
     let path = dir.path().join("mobile_production_maps.sqlite");
-    let service = ProductionMapService::new(Arc::new(ProductionMapStore::new(path.clone())));
+    let service =
+        ProductionMapService::new_for_test(Arc::new(ProductionMapStore::new(path.clone())));
 
     service
         .upsert_map(ProductionMapDefinition {
@@ -107,7 +108,7 @@ async fn production_map_store_persists_maps_in_sqlite() {
     assert_eq!(count, 1);
     drop(conn);
 
-    let reloaded = ProductionMapService::new(Arc::new(ProductionMapStore::new(path)));
+    let reloaded = ProductionMapService::new_for_test(Arc::new(ProductionMapStore::new(path)));
     let maps = reloaded.maps().await.expect("maps");
     assert_eq!(maps.len(), 1);
     assert_eq!(maps[0].map.product_code, "HOT");

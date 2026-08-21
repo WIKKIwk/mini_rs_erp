@@ -112,11 +112,10 @@ async fn load_if_needed(
         tracing::error!(path = %path.display(), %error, "failed to read role store snapshot");
         RoleStoreError::StoreFailed
     })?;
-    let value = serde_json::from_slice::<serde_json::Value>(&raw)
-        .map_err(|error| {
-            tracing::error!(path = %path.display(), %error, "invalid role store snapshot");
-            RoleStoreError::StoreFailed
-        })?;
+    let value = serde_json::from_slice::<serde_json::Value>(&raw).map_err(|error| {
+        tracing::error!(path = %path.display(), %error, "invalid role store snapshot");
+        RoleStoreError::StoreFailed
+    })?;
     let current_shape = value
         .as_object()
         .map(|object| object.contains_key("roles") || object.contains_key("assignments"))
@@ -145,7 +144,9 @@ async fn load_if_needed(
     Ok(())
 }
 
-fn canonicalize_assignment(mut assignment: RoleAssignment) -> Result<RoleAssignment, RoleStoreError> {
+fn canonicalize_assignment(
+    mut assignment: RoleAssignment,
+) -> Result<RoleAssignment, RoleStoreError> {
     let mut canonical = Vec::with_capacity(assignment.assigned_apparatus.len());
     for value in std::mem::take(&mut assignment.assigned_apparatus) {
         let value = value.trim();
@@ -181,7 +182,9 @@ async fn save(path: &Path, state: &RoleDefinitionStoreState) -> Result<(), RoleS
 #[cfg(test)]
 mod tests {
     use crate::core::auth::models::PrincipalRole;
-    use crate::core::authz::{RoleAssignment, RoleDefinition, RoleDefinitionStorePort, RoleStoreError};
+    use crate::core::authz::{
+        RoleAssignment, RoleDefinition, RoleDefinitionStorePort, RoleStoreError,
+    };
 
     use super::RoleDefinitionStore;
 
