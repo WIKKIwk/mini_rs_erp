@@ -3,12 +3,15 @@ use sqlx::PgPool;
 use crate::core::production_map::{
     CompletionRequestDecision, CompletionRequestDecisionNotification,
     CompletionRequestNotification, CompletionRequestStateResolution, ProductionMapError,
-    QueueActionActor, QueueActionProgressWriteResult,
+    QueueActionActor, QueueActionProgressWriteResult, reject_training_order_id,
 };
 use crate::db::postgres_returned_paint::insert_returned_paint_request_tx;
 
 use super::progress_helpers::put_order_run_session_tx;
-use super::queue_helpers::{insert_queue_action_event_tx, put_queue_states_tx};
+use super::queue_helpers::{
+    insert_queue_action_event_tx, lock_apparatus_queue_tx, lock_order_control_tx,
+    put_queue_state_for_event_tx, queue_event_already_applied_tx,
+};
 
 #[derive(sqlx::FromRow)]
 struct CompletionRequestRow {
@@ -87,11 +90,14 @@ pub(super) async fn load_completion_requests(
     .await
     .map_err(|_| ProductionMapError::StoreFailed)?;
 
-    Ok(rows
-        .into_iter()
-        .filter(|row| !row.description.trim().is_empty())
-        .map(completion_request_from_row)
-        .collect())
+    let mut requests = Vec::with_capacity(rows.len());
+    for row in rows {
+        reject_training_order_id(&row.order_id)?;
+        if !row.description.trim().is_empty() {
+            requests.push(completion_request_from_row(row));
+        }
+    }
+    Ok(requests)
 }
 
 pub(super) async fn load_completion_request_by_event_id(
@@ -131,9 +137,14 @@ pub(super) async fn load_completion_request_by_event_id(
     .await
     .map_err(|_| ProductionMapError::StoreFailed)?;
 
-    Ok(row
-        .filter(|row| !row.description.trim().is_empty())
-        .map(completion_request_from_row))
+    row.map(|row| {
+        reject_training_order_id(&row.order_id)?;
+        Ok::<_, ProductionMapError>(
+            (!row.description.trim().is_empty()).then(|| completion_request_from_row(row)),
+        )
+    })
+    .transpose()
+    .map(|value| value.flatten())
 }
 
 pub(super) async fn load_completion_request_decisions_for_actor(
@@ -179,9 +190,10 @@ pub(super) async fn load_completion_request_decisions_for_actor(
     .await
     .map_err(|_| ProductionMapError::StoreFailed)?;
 
-    Ok(rows
-        .into_iter()
-        .map(|row| CompletionRequestDecisionNotification {
+    let mut decisions = Vec::with_capacity(rows.len());
+    for row in rows {
+        reject_training_order_id(&row.order_id)?;
+        decisions.push(CompletionRequestDecisionNotification {
             event_id: row.event_id,
             request_event_id: row.request_event_id,
             decision: row.decision,
@@ -199,8 +211,9 @@ pub(super) async fn load_completion_request_decisions_for_actor(
             description: row.description,
             message: row.message,
             created_at_unix: row.created_at_unix,
-        })
-        .collect())
+        });
+    }
+    Ok(decisions)
 }
 
 pub(super) async fn resolve_completion_request_decision(
@@ -215,13 +228,60 @@ pub(super) async fn resolve_completion_request_decision(
     if request_event_id.is_empty() {
         return Err(ProductionMapError::MissingId);
     }
+    reject_training_order_id(&notification.order_id)?;
     let mut tx = pool
         .begin()
         .await
         .map_err(|_| ProductionMapError::StoreFailed)?;
+    let control_state = lock_order_control_tx(&mut tx, &notification.order_id).await?;
+    let resolution_event_already_applied = if let Some(resolution) = state_resolution.as_ref() {
+        lock_apparatus_queue_tx(&mut tx, &resolution.apparatus).await?;
+        let already_applied = queue_event_already_applied_tx(&mut tx, &resolution.event).await?;
+        match control_state.as_ref().map(|(state, _)| state.as_str()) {
+            Some("freeze_requested") => return Err(ProductionMapError::OrderFreezeRequested),
+            Some("frozen") => return Err(ProductionMapError::OrderFrozen),
+            _ => {}
+        }
+        already_applied
+    } else {
+        false
+    };
+    let request_payload = sqlx::query_scalar::<_, serde_json::Value>(
+        "SELECT payload_json
+         FROM mini_queue_action_events
+         WHERE event_id = $1
+         FOR UPDATE",
+    )
+    .bind(request_event_id)
+    .fetch_optional(&mut *tx)
+    .await
+    .map_err(|_| ProductionMapError::StoreFailed)?
+    .ok_or(ProductionMapError::QueueActionNotAllowed)?;
+    if let Some(existing_decision) = request_payload
+        .get("completion_request_status")
+        .and_then(serde_json::Value::as_str)
+        .filter(|status| matches!(*status, "approved" | "rejected"))
+    {
+        if existing_decision == decision.as_str() {
+            tx.commit()
+                .await
+                .map_err(|_| ProductionMapError::StoreFailed)?;
+            return Ok(QueueActionProgressWriteResult::default());
+        }
+        return Err(ProductionMapError::QueueActionNotAllowed);
+    }
+    if resolution_event_already_applied {
+        return Err(ProductionMapError::QueueActionNotAllowed);
+    }
     let mut raw_material_stock_warehouses = Vec::new();
     if let Some(resolution) = state_resolution {
-        put_queue_states_tx(&mut tx, &resolution.apparatus, resolution.states).await?;
+        put_queue_state_for_event_tx(
+            &mut tx,
+            &resolution.apparatus,
+            &resolution.states,
+            &resolution.event,
+        )
+        .await?;
         insert_queue_action_event_tx(&mut tx, &resolution.event).await?;
         if let Some(session) = resolution.session {
             put_order_run_session_tx(&mut tx, &session).await?;

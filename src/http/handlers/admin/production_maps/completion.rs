@@ -145,6 +145,9 @@ async fn send_production_map_live_snapshot(
     include_completion_requests: bool,
     last_payload: &mut String,
 ) -> bool {
+    if !live_principal_is_still_authorized(state, principal).await {
+        return false;
+    }
     let service = &state.production_maps;
     let actor_ref = queue_action_actor(principal).ref_;
     let snapshot = match service.live_snapshot().await {
@@ -195,6 +198,26 @@ async fn send_production_map_live_snapshot(
             Ok(completion_request_decisions),
         ) => {
             let order_customers = production_map_order_customers(state, &snapshot.maps).await;
+            let assigned_apparatus = state.admin.principal_assigned_apparatus(principal).await;
+            let snapshot_revision = match super::mobile_production_snapshot_revision(
+                &snapshot,
+                &assigned_apparatus,
+            ) {
+                Ok(revision) => revision,
+                Err(error) => {
+                    let payload = serde_json::json!({
+                        "ok": false,
+                        "error": error,
+                    });
+                    return match serde_json::to_string(&payload) {
+                        Ok(json) => {
+                            send_production_map_live_message(socket, Message::Text(json.into()))
+                                .await
+                        }
+                        Err(_) => true,
+                    };
+                }
+            };
             let payload = serde_json::json!({
                 "ok": true,
                 "maps": snapshot.maps,
@@ -210,6 +233,8 @@ async fn send_production_map_live_snapshot(
                 "completed_orders": completed_orders,
                 "completion_requests": completion_requests,
                 "completion_request_decisions": completion_request_decisions,
+                "assigned_apparatus": assigned_apparatus,
+                "snapshot_revision": snapshot_revision,
             });
             match serde_json::to_string(&payload) {
                 Ok(json) => {
@@ -241,6 +266,19 @@ async fn send_production_map_live_snapshot(
             }
         }
     }
+}
+
+async fn live_principal_is_still_authorized(state: &AppState, principal: &Principal) -> bool {
+    if principal.role == PrincipalRole::Aparatchi
+        && state
+            .admin
+            .principal_assigned_apparatus(principal)
+            .await
+            .is_empty()
+    {
+        return false;
+    }
+    require_any_live_capability(state, principal).await.is_ok()
 }
 
 async fn send_production_map_live_message(socket: &mut WebSocket, message: Message) -> bool {

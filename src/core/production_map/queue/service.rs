@@ -95,6 +95,9 @@ impl ProductionMapService {
             .map(|id| id.trim().to_string())
             .filter(|id| !id.is_empty())
             .collect::<Vec<_>>();
+        for order_id in &order_ids {
+            reject_training_order_id(order_id)?;
+        }
         let maps = self.store.maps().await?;
         let known_order_ids = maps
             .iter()
@@ -143,9 +146,16 @@ impl ProductionMapService {
             .await?
             .into_iter()
             .filter_map(|(order_id, control)| {
-                (control.state == OrderControlState::Frozen).then_some(order_id)
+                (control.state == OrderControlState::Frozen).then(|| order_id.trim().to_string())
             })
+            .filter(|order_id| !order_id.is_empty())
             .collect::<BTreeSet<_>>();
+        if order_ids
+            .iter()
+            .any(|order_id| frozen_order_ids.contains(order_id.as_str()))
+        {
+            return Err(ProductionMapError::QueueActionNotAllowed);
+        }
         validate_active_sequence_barrier(
             &current_sequence,
             &order_ids,
@@ -225,6 +235,7 @@ impl ProductionMapService {
         if order_id.is_empty() {
             return Err(ProductionMapError::MissingId);
         }
+        reject_training_order_id(order_id)?;
         let queue_states =
             queue_states_for_order(&self.store.apparatus_queue_states().await?, order_id);
         let progress_batches = self.store.progress_batches_for_order(order_id).await?;
@@ -454,6 +465,27 @@ impl ProductionMapService {
                 );
                 let active_order_is_this = active_order_id
                     .is_none_or(|active_order_id| active_order_id == order_id.trim());
+                let previous_wip_mode = previous_stage
+                    .as_deref()
+                    .map(|previous_stage| {
+                        let batches = progress_batches_by_order
+                            .get(order_id.trim())
+                            .map(Vec::as_slice)
+                            .unwrap_or_default();
+                        if has_waiting_previous_stage_wip(
+                            batches,
+                            order_id.trim(),
+                            previous_stage,
+                            &storage_key,
+                        ) {
+                            ApparatusQueuePreviousWipMode::ScanRequired
+                        } else {
+                            ApparatusQueuePreviousWipMode::Waiting
+                        }
+                    })
+                    .unwrap_or(ApparatusQueuePreviousWipMode::NotRequired);
+                let rezka_previous_wip_ready = apparatus::is_rezka_title(&storage_key)
+                    && previous_wip_mode == ApparatusQueuePreviousWipMode::ScanRequired;
                 let active_session = self
                     .store
                     .active_order_run_session(&storage_key, order_id.trim())
@@ -461,12 +493,20 @@ impl ProductionMapService {
                 let requeued_session = active_session
                     .as_ref()
                     .is_some_and(order_run_session_was_requeued);
-                let queue_actionable = state.is_active()
-                    || actionable_order_id.as_deref() == Some(order_id.trim())
-                    || (state == queue_state::ApparatusQueueOrderState::Pending
-                        && previous_stage.is_some()
-                        && previous_stage_ready
-                        && active_order_is_this);
+                let sequence_actionable = actionable_order_id.as_deref() == Some(order_id.trim())
+                    && (previous_stage.is_none() || previous_stage_ready);
+                let queue_actionable = if policy == ApparatusQueuePolicy::StrictSequence
+                    && state == queue_state::ApparatusQueueOrderState::Paused
+                {
+                    actionable_order_id.as_deref() == Some(order_id.trim())
+                } else {
+                    state.is_active()
+                        || sequence_actionable
+                        || (state == queue_state::ApparatusQueueOrderState::Pending
+                            && previous_stage.is_some()
+                            && (previous_stage_ready || rezka_previous_wip_ready)
+                            && active_order_is_this)
+                };
                 let mut allowed_actions = Vec::new();
                 let mut complete_requires_full_report = false;
                 let mut interaction = ApparatusQueueWorkerInteraction {
@@ -492,25 +532,6 @@ impl ProductionMapService {
                         }
                     }
                     queue_state::ApparatusQueueOrderState::Pending => {
-                        let previous_wip_mode = previous_stage
-                            .as_deref()
-                            .map(|previous_stage| {
-                                let batches = progress_batches_by_order
-                                    .get(order_id.trim())
-                                    .map(Vec::as_slice)
-                                    .unwrap_or_default();
-                                if has_waiting_previous_stage_wip(
-                                    batches,
-                                    order_id.trim(),
-                                    previous_stage,
-                                    &storage_key,
-                                ) {
-                                    ApparatusQueuePreviousWipMode::ScanRequired
-                                } else {
-                                    ApparatusQueuePreviousWipMode::Waiting
-                                }
-                            })
-                            .unwrap_or(ApparatusQueuePreviousWipMode::NotRequired);
                         let assignments = material_assignments
                             .iter()
                             .filter(|assignment| {

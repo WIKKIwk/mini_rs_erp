@@ -286,6 +286,231 @@ async fn production_map_sequence_returns_backend_visible_order_ids() {
 }
 
 #[tokio::test]
+async fn production_map_sequence_exposes_backend_worker_contract_revision() {
+    let state = test_state();
+    state
+        .admin
+        .upsert_role_assignment(crate::core::authz::RoleAssignmentUpsert {
+            principal_role: PrincipalRole::Aparatchi,
+            principal_ref: "worker-mobile-contract".to_string(),
+            role_id: "aparatchi".to_string(),
+            assigned_apparatus: vec!["7 ta rangli pechat".to_string()],
+            assigned_item_groups: Vec::new(),
+        })
+        .await
+        .expect("assignment");
+    let admin_token = session(&state, PrincipalRole::Admin).await;
+    let worker_token = session_for(
+        &state,
+        PrincipalRole::Aparatchi,
+        "worker-mobile-contract",
+    )
+    .await;
+    let router = build_router(state);
+
+    let saved = router
+        .clone()
+        .oneshot(request_with_body(
+            "PUT",
+            "/v1/mobile/admin/production-maps",
+            &admin_token,
+            &pechat_order_map_json(
+                "zakaz-mobile-contract",
+                "Mobile contract order",
+                "9901",
+                "7 ta rangli pechat",
+            ),
+        ))
+        .await
+        .expect("save map");
+    assert_eq!(saved.status(), StatusCode::OK);
+
+    let sequence = router
+        .clone()
+        .oneshot(request_with_body(
+            "PUT",
+            "/v1/mobile/admin/production-maps/sequence",
+            &admin_token,
+            r#"{
+                "apparatus":"7 ta rangli pechat",
+                "order_ids":["zakaz-mobile-contract"]
+            }"#,
+        ))
+        .await
+        .expect("save sequence");
+    assert_eq!(sequence.status(), StatusCode::OK);
+
+    let response = router
+        .oneshot(request(
+            "GET",
+            "/v1/mobile/admin/production-maps/sequence",
+            &worker_token,
+        ))
+        .await
+        .expect("sequence");
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = json_body(response).await;
+
+    assert_eq!(
+        body["assigned_apparatus"],
+        serde_json::json!(["7 ta rangli pechat"])
+    );
+    let revision = body["snapshot_revision"].as_str().expect("snapshot revision");
+    assert_eq!(revision.len(), 64);
+    assert!(revision.bytes().all(|byte| byte.is_ascii_hexdigit()));
+
+    let interaction = &body["queue_action_controls"]["7 ta rangli pechat"]
+        ["zakaz-mobile-contract"]["interaction"];
+    for field in [
+        "mode",
+        "start_materials_mode",
+        "previous_wip_mode",
+        "qolip_mode",
+        "blocking_reason_code",
+    ] {
+        assert!(interaction[field].is_string(), "missing interaction.{field}");
+    }
+    for field in [
+        "material_scan_required",
+        "assigned_materials_display_only",
+        "material_intake_allowed",
+    ] {
+        assert!(interaction[field].is_boolean(), "missing interaction.{field}");
+    }
+    assert!(body["queue_action_controls"]["7 ta rangli pechat"]
+        ["zakaz-mobile-contract"]["freeze_request"]
+        .is_null());
+}
+
+#[tokio::test]
+async fn production_map_queue_action_rejects_stale_snapshot_with_refresh_contract() {
+    let state = test_state();
+    state
+        .admin
+        .upsert_role_assignment(crate::core::authz::RoleAssignmentUpsert {
+            principal_role: PrincipalRole::Aparatchi,
+            principal_ref: "worker-mobile-stale".to_string(),
+            role_id: "aparatchi".to_string(),
+            assigned_apparatus: vec!["7 ta rangli pechat".to_string()],
+            assigned_item_groups: Vec::new(),
+        })
+        .await
+        .expect("assignment");
+    let admin_token = session(&state, PrincipalRole::Admin).await;
+    let worker_token = session_for(&state, PrincipalRole::Aparatchi, "worker-mobile-stale").await;
+    let router = build_router(state);
+
+    let saved = router
+        .clone()
+        .oneshot(request_with_body(
+            "PUT",
+            "/v1/mobile/admin/production-maps",
+            &admin_token,
+            &pechat_order_map_json(
+                "zakaz-mobile-stale",
+                "Mobile stale order",
+                "9902",
+                "7 ta rangli pechat",
+            ),
+        ))
+        .await
+        .expect("save map");
+    assert_eq!(saved.status(), StatusCode::OK);
+
+    let sequence = router
+        .clone()
+        .oneshot(request_with_body(
+            "PUT",
+            "/v1/mobile/admin/production-maps/sequence",
+            &admin_token,
+            r#"{
+                "apparatus":"7 ta rangli pechat",
+                "order_ids":["zakaz-mobile-stale"]
+            }"#,
+        ))
+        .await
+        .expect("save sequence");
+    assert_eq!(sequence.status(), StatusCode::OK);
+
+    let snapshot = router
+        .clone()
+        .oneshot(request(
+            "GET",
+            "/v1/mobile/admin/production-maps/sequence",
+            &worker_token,
+        ))
+        .await
+        .expect("snapshot");
+    assert_eq!(snapshot.status(), StatusCode::OK);
+    let snapshot_body = json_body(snapshot).await;
+    let old_revision = snapshot_body["snapshot_revision"]
+        .as_str()
+        .expect("old snapshot revision")
+        .to_string();
+
+    let second_saved = router
+        .clone()
+        .oneshot(request_with_body(
+            "PUT",
+            "/v1/mobile/admin/production-maps",
+            &admin_token,
+            &pechat_order_map_json(
+                "zakaz-mobile-stale-2",
+                "Mobile stale order 2",
+                "9903",
+                "7 ta rangli pechat",
+            ),
+        ))
+        .await
+        .expect("save concurrent map");
+    assert_eq!(second_saved.status(), StatusCode::OK);
+
+    let action = router
+        .clone()
+        .oneshot(request_with_body(
+            "POST",
+            "/v1/mobile/admin/production-maps/queue-action",
+            &worker_token,
+            &format!(
+                r#"{{
+                    "apparatus":"7 ta rangli pechat",
+                    "order_id":"zakaz-mobile-stale",
+                    "action":"start",
+                    "expected_snapshot_revision":"{old_revision}"
+                }}"#
+            ),
+        ))
+        .await
+        .expect("stale action");
+    assert_eq!(action.status(), StatusCode::CONFLICT);
+    let action_body = json_body(action).await;
+    assert_eq!(action_body["error"], "stale_production_snapshot");
+    assert_eq!(action_body["refresh_required"], true);
+    assert_eq!(
+        action_body["refresh_endpoint"],
+        "/v1/mobile/admin/production-maps/sequence"
+    );
+    let current_revision = action_body["snapshot_revision"]
+        .as_str()
+        .expect("current snapshot revision");
+    assert_ne!(current_revision, old_revision);
+
+    let refreshed = router
+        .oneshot(request(
+            "GET",
+            "/v1/mobile/admin/production-maps/sequence",
+            &worker_token,
+        ))
+        .await
+        .expect("refresh snapshot");
+    assert_eq!(refreshed.status(), StatusCode::OK);
+    assert_eq!(
+        json_body(refreshed).await["snapshot_revision"],
+        current_revision
+    );
+}
+
+#[tokio::test]
 async fn production_map_sequence_accepts_numeric_order_id() {
     let state = test_state();
     let token = session(&state, PrincipalRole::Admin).await;

@@ -5,7 +5,10 @@ use sqlx::{PgPool, Postgres, Transaction};
 use crate::core::production_map::{
     OrderControlRecord, OrderControlState, OrderFreezeAuditRecord, OrderFreezeRequest,
     OrderFreezeRequestStatus, ProductionMapError, QueueActionActor,
+    reject_training_order_id,
 };
+
+use super::queue_helpers::lock_order_control_tx;
 
 #[derive(sqlx::FromRow)]
 struct OrderControlRow {
@@ -76,6 +79,7 @@ pub(super) async fn load_order_control_states(
 
     rows.into_iter()
         .map(|row| {
+            reject_training_order_id(&row.order_id)?;
             let state =
                 OrderControlState::parse(&row.state).ok_or(ProductionMapError::StoreFailed)?;
             let freeze_request = match (row.request_id, row.request_status) {
@@ -152,6 +156,7 @@ pub(super) async fn load_order_freeze_requests_for_audit(
 
     rows.into_iter()
         .map(|row| {
+            reject_training_order_id(&row.order_id)?;
             let status =
                 OrderFreezeRequestStatus::parse(row.event_status.as_deref().unwrap_or(&row.status))
                     .ok_or(ProductionMapError::StoreFailed)?;
@@ -204,6 +209,8 @@ pub(super) async fn save_order_control_state_tx(
     tx: &mut Transaction<'_, Postgres>,
     record: &OrderControlRecord,
 ) -> Result<(), ProductionMapError> {
+    reject_training_order_id(&record.order_id)?;
+    lock_order_control_tx(tx, &record.order_id).await?;
     let current = sqlx::query_as::<_, (String, Option<String>)>(
         r#"SELECT state, freeze_request_id
            FROM mini_order_control_states

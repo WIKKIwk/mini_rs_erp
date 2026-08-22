@@ -445,7 +445,9 @@ fn validate_migration_registry(migrations: &[(&str, &str)]) -> Result<(), sqlx::
             .split_once('_')
             .and_then(|(prefix, _)| prefix.parse::<usize>().ok())
             .ok_or_else(|| {
-                sqlx::Error::Protocol(format!("invalid postgres migration version: {version}"))
+                sqlx::Error::Protocol(format!(
+                    "invalid postgres migration version: {version}"
+                ))
             })?;
         if number != previous_number + 1 {
             return Err(sqlx::Error::Protocol(format!(

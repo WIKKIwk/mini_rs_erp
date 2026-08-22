@@ -488,6 +488,78 @@ impl ProductionMapStorePort for MemoryProductionMapStore {
         runs::put_order_progress_batch(self, batch).await
     }
 
+    async fn put_mixed_stage_backfill(
+        &self,
+        session: OrderRunSession,
+        event: OrderProgressEvent,
+        batch: OrderProgressBatch,
+    ) -> Result<MixedStageBackfillWriteResult, ProductionMapError> {
+        let existing = self
+            .order_progress_batches
+            .read()
+            .await
+            .values()
+            .filter(|current| {
+                current.batch_id == batch.batch_id || current.qr_payload == batch.qr_payload
+            })
+            .cloned()
+            .collect::<Vec<_>>();
+        if !existing.is_empty() {
+            let fingerprint = batch
+                .payload_json
+                .get("backfill_fingerprint")
+                .and_then(serde_json::Value::as_str);
+            let matching = existing.len() == 1
+                && existing[0].batch_id == batch.batch_id
+                && existing[0].qr_payload == batch.qr_payload
+                && existing[0].session_id == session.session_id
+                && existing[0]
+                    .payload_json
+                    .get("backfill_fingerprint")
+                    .and_then(serde_json::Value::as_str)
+                    == fingerprint;
+            let session_exists = self
+                .order_run_sessions
+                .read()
+                .await
+                .contains_key(&session.session_id);
+            let event_exists = self
+                .order_progress_events
+                .read()
+                .await
+                .iter()
+                .any(|current| current.event_id == event.event_id);
+            if matching && session_exists && event_exists {
+                return Ok(MixedStageBackfillWriteResult::AlreadyPresent);
+            }
+            return Err(ProductionMapError::MixedStageBackfillConflict(format!(
+                "batch_id '{}' or qr_payload '{}' is already used by another record",
+                batch.batch_id, batch.qr_payload
+            )));
+        }
+        if self
+            .order_run_sessions
+            .read()
+            .await
+            .contains_key(&session.session_id)
+            || self
+                .order_progress_events
+                .read()
+                .await
+                .iter()
+                .any(|current| current.event_id == event.event_id)
+        {
+            return Err(ProductionMapError::MixedStageBackfillConflict(format!(
+                "session_id '{}' or event_id '{}' is already used",
+                session.session_id, event.event_id
+            )));
+        }
+        runs::put_order_run_session(self, session).await?;
+        runs::put_order_progress_event(self, event).await?;
+        runs::put_order_progress_batch(self, batch).await?;
+        Ok(MixedStageBackfillWriteResult::Applied)
+    }
+
     async fn apparatus_transfer_by_idempotency_key(
         &self,
         idempotency_key: &str,

@@ -85,6 +85,8 @@ struct ApparatusQueueActionRequest {
     returned_paint_image_id: String,
     #[serde(default)]
     freeze_request_id: String,
+    #[serde(default, alias = "snapshot_revision", alias = "expected_revision")]
+    expected_snapshot_revision: String,
     #[serde(default)]
     freeze_with_issue: bool,
     #[serde(default)]
@@ -117,6 +119,9 @@ pub async fn production_map_queue_action(
     if input.apparatus.trim().is_empty() || input.order_id.trim().is_empty() {
         return Err(bad_request("apparatus and order_id are required"));
     }
+    if !principal_can_use_apparatus(&state, &principal, &input.apparatus).await {
+        return Err(production_map_error(ProductionMapError::ApparatusNotAssigned));
+    }
     input.action = canonical_queue_action(
         input.action,
         input.worker_handoff,
@@ -148,7 +153,7 @@ pub async fn production_map_queue_action(
         if input.worker_handoff || input.remove_roll_from_apparatus {
             return Err(bad_request("freeze_with_issue_actions_conflict"));
         }
-        if input.order_id.trim().starts_with("training-") {
+        if is_training_order_namespace(&input.order_id) {
             return Err(bad_request("freeze_with_issue_not_supported_for_training"));
         }
         // `freeze_with_issue` remains accepted for old clients, but the
@@ -194,6 +199,7 @@ pub async fn production_map_queue_action(
     {
         return Err(bad_request("rezka_frame_issue_only_on_roll_progress"));
     }
+    let training_namespace = is_training_order_namespace(&input.order_id);
     if let Some(training_result) = super::super::training::training_queue_action(
         &state,
         &principal,
@@ -247,7 +253,9 @@ pub async fn production_map_queue_action(
     {
         return Ok(json_response(training_result));
     }
-    let assigned_apparatus = state.admin.principal_assigned_apparatus(&principal).await;
+    if training_namespace {
+        return Err(bad_request("training_order_not_found"));
+    }
     let material_barcodes = input.material_barcodes.clone();
     let material_barcode = if material_barcodes.is_empty() {
         input.material_barcode.clone()
@@ -312,6 +320,27 @@ pub async fn production_map_queue_action(
         ));
     }
     let _queue_action_guard = state.production_maps.queue_action_guard().await;
+    let assigned_apparatus = state.admin.principal_assigned_apparatus(&principal).await;
+    if !input.expected_snapshot_revision.trim().is_empty() {
+        let mut snapshot = state
+            .production_maps
+            .live_snapshot()
+            .await
+            .map_err(production_map_error)?;
+        super::super::training::merge_worker_training_snapshot(
+            &state,
+            &principal,
+            &mut snapshot,
+        )
+        .await
+        .map_err(super::super::training::training_workspace_error)?;
+        let current_revision =
+            super::mobile_production_snapshot_revision(&snapshot, &assigned_apparatus)
+                .map_err(server_error)?;
+        if current_revision != input.expected_snapshot_revision.trim() {
+            return Err(stale_production_snapshot(current_revision));
+        }
+    }
     let returned_paint_report =
         if matches!(input.action, queue_state::ApparatusQueueAction::Complete)
             && (returned_paint_field_count > 0 || has_returned_paint_image)

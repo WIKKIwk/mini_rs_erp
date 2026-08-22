@@ -47,7 +47,9 @@ async fn deleting_training_order_removes_only_its_queue_states() {
         "INSERT INTO mini_training_queue_states (apparatus, order_id, state)
          VALUES ('Flexo', 'training-1001', 'paused'),
                 ('Laminatsiya', 'training-1001', 'pending'),
-                ('Flexo', 'training-keep', 'pending')",
+                ('Flexo', 'training-keep', 'pending'),
+                ('Rezka', 'training-reset', 'paused'),
+                ('Rezka', 'zakaz-in-training-table', 'paused')",
     )
     .execute(&pool)
     .await
@@ -58,13 +60,89 @@ async fn deleting_training_order_removes_only_its_queue_states() {
              actor_ref, actor_display_name)
          VALUES
             ('training-event-delete', 'Flexo', 'training-1001', 'complete', 'pending', 'completed', 'worker-1', 'Worker 1'),
-            ('training-event-keep', 'Flexo', 'training-keep', 'start', 'pending', 'in_progress', 'worker-2', 'Worker 2')",
+            ('training-event-keep', 'Flexo', 'training-keep', 'start', 'pending', 'in_progress', 'worker-2', 'Worker 2'),
+            ('training-event-reset', 'Rezka', 'training-reset', 'start', 'pending', 'in_progress', 'worker-3', 'Worker 3'),
+            ('training-event-invalid', 'Rezka', 'zakaz-in-training-table', 'start', 'pending', 'in_progress', 'worker-4', 'Worker 4')",
     )
     .execute(&pool)
     .await
     .expect("insert queue events");
 
-    PostgresTrainingWorkspaceStore::new(pool.clone())
+    sqlx::query(
+        "INSERT INTO mini_queue_states (apparatus, order_id, state)
+         VALUES ('Rezka', 'zakaz-production-sentinel', 'paused')",
+    )
+    .execute(&pool)
+    .await
+    .expect("insert production queue state");
+    sqlx::query(
+        "INSERT INTO mini_queue_action_events
+            (event_id, apparatus, order_id, action, from_state, to_state,
+             policy, actor_ref, actor_display_name)
+         VALUES
+            ('production-event-sentinel', 'Rezka', 'zakaz-production-sentinel',
+             'start', 'pending', 'in_progress', 'free_pick',
+             'worker-production', 'Production worker')",
+    )
+    .execute(&pool)
+    .await
+    .expect("insert production queue event");
+
+    let training_store = PostgresTrainingWorkspaceStore::new(pool.clone());
+    training_store
+        .reset_queue_states("Rezka")
+        .await
+        .expect("reset training queue states");
+    let reset_training_state: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM mini_training_queue_states WHERE order_id = $1",
+    )
+    .bind("training-reset")
+    .fetch_one(&pool)
+    .await
+    .expect("count reset training state");
+    let invalid_training_state: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM mini_training_queue_states WHERE order_id = $1",
+    )
+    .bind("zakaz-in-training-table")
+    .fetch_one(&pool)
+    .await
+    .expect("count invalid training state");
+    let production_state: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM mini_queue_states WHERE order_id = $1",
+    )
+    .bind("zakaz-production-sentinel")
+    .fetch_one(&pool)
+    .await
+    .expect("count production state");
+    let reset_training_event: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM mini_training_queue_events WHERE event_id = $1",
+    )
+    .bind("training-event-reset")
+    .fetch_one(&pool)
+    .await
+    .expect("count reset training event");
+    let invalid_training_event: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM mini_training_queue_events WHERE event_id = $1",
+    )
+    .bind("training-event-invalid")
+    .fetch_one(&pool)
+    .await
+    .expect("count invalid training event");
+    let production_event: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM mini_queue_action_events WHERE event_id = $1",
+    )
+    .bind("production-event-sentinel")
+    .fetch_one(&pool)
+    .await
+    .expect("count production event");
+    assert_eq!(reset_training_state, 0);
+    assert_eq!(invalid_training_state, 1);
+    assert_eq!(production_state, 1);
+    assert_eq!(reset_training_event, 0);
+    assert_eq!(invalid_training_event, 1);
+    assert_eq!(production_event, 1);
+
+    training_store
         .delete_order("training-1001")
         .await
         .expect("delete training order");

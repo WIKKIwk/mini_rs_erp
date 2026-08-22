@@ -1,3 +1,5 @@
+use crate::core::production_map::reject_training_order_id;
+
 #[derive(sqlx::FromRow)]
 pub(super) struct ProgressSessionRow {
     pub(super) session_id: String,
@@ -111,6 +113,7 @@ pub(super) fn progress_batch_correction_from_row(
 pub(super) fn queue_action_log_from_row(
     row: QueueActionLogRow,
 ) -> Result<ProductionOrderLogEntry, ProductionMapError> {
+    reject_training_order_id(&row.order_id)?;
     Ok(ProductionOrderLogEntry {
         event_id: row.event_id,
         apparatus: row.apparatus,
@@ -134,6 +137,7 @@ pub(super) fn queue_action_log_from_row(
 pub(super) fn progress_session_from_row(
     row: ProgressSessionRow,
 ) -> Result<OrderRunSession, ProductionMapError> {
+    reject_training_order_id(&row.order_id)?;
     Ok(OrderRunSession {
         session_id: row.session_id,
         apparatus: row.apparatus,
@@ -202,6 +206,7 @@ pub(super) fn progress_batch_from_row(
         description: row.description,
         payload_json: row.payload_json,
     };
+    reject_training_order_id(&batch.order_id)?;
     batch.refresh_status_detail();
     Ok(batch)
 }

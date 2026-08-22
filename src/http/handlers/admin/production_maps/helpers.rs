@@ -210,9 +210,33 @@ pub(super) fn calculate_order_error(error: CalculateOrderError) -> AdminError {
     }
 }
 
+pub(super) fn stale_production_snapshot(current_revision: String) -> AdminError {
+    (
+        StatusCode::CONFLICT,
+        Json(AdminErrorResponse::stale_production_snapshot(current_revision)),
+    )
+}
+
+pub(super) fn refresh_required_bad_request(error: impl Into<String>) -> AdminError {
+    (
+        StatusCode::BAD_REQUEST,
+        Json(AdminErrorResponse::new(error).with_refresh_required()),
+    )
+}
+
+fn refresh_required_conflict(error: impl Into<String>) -> AdminError {
+    (
+        StatusCode::CONFLICT,
+        Json(AdminErrorResponse::new(error).with_refresh_required()),
+    )
+}
+
 pub(super) fn production_map_error(error: ProductionMapError) -> AdminError {
     match error {
         ProductionMapError::MissingId => bad_request("map_id_required"),
+        ProductionMapError::TrainingOrderIdReserved => {
+            bad_request("training_order_requires_training_endpoint")
+        }
         ProductionMapError::MissingProductCode => bad_request("map_product_code_required"),
         ProductionMapError::MissingTitle => bad_request("map_title_required"),
         ProductionMapError::MissingStart => bad_request("map_start_required"),
@@ -271,23 +295,35 @@ pub(super) fn production_map_error(error: ProductionMapError) -> AdminError {
             conflict("apparatus_transfer_target_conflict")
         }
         ProductionMapError::StoreFailed => server_error("store_failed"),
-        ProductionMapError::QueueActionNotAllowed => bad_request("queue_action_not_allowed"),
+        ProductionMapError::QueueActionNotAllowed => {
+            refresh_required_bad_request("queue_action_not_allowed")
+        }
         ProductionMapError::QueueSequenceOrderNotFound(_) => {
             bad_request("queue_sequence_order_not_found")
         }
         ProductionMapError::QueueSequenceApparatusMismatch(_) => {
             bad_request("queue_sequence_apparatus_mismatch")
         }
-        ProductionMapError::OrderNotStarted => conflict("order_not_started"),
-        ProductionMapError::OrderAlreadyCompleted => conflict("order_already_completed"),
-        ProductionMapError::OrderFreezeRequested => conflict("order_freeze_requested"),
-        ProductionMapError::OrderFrozen => conflict("order_frozen"),
-        ProductionMapError::OrderControlActionNotAllowed => {
-            conflict("order_control_action_not_allowed")
+        ProductionMapError::OrderNotStarted => refresh_required_conflict("order_not_started"),
+        ProductionMapError::OrderAlreadyCompleted => {
+            refresh_required_conflict("order_already_completed")
         }
-        ProductionMapError::OrderFreezeTargetNotFound => conflict("order_freeze_target_not_found"),
-        ProductionMapError::OrderFreezeTargetAmbiguous => conflict("order_freeze_target_ambiguous"),
-        ProductionMapError::OrderFreezeRequestMismatch => conflict("order_freeze_request_mismatch"),
+        ProductionMapError::OrderFreezeRequested => {
+            refresh_required_conflict("order_freeze_requested")
+        }
+        ProductionMapError::OrderFrozen => refresh_required_conflict("order_frozen"),
+        ProductionMapError::OrderControlActionNotAllowed => {
+            refresh_required_conflict("order_control_action_not_allowed")
+        }
+        ProductionMapError::OrderFreezeTargetNotFound => {
+            refresh_required_conflict("order_freeze_target_not_found")
+        }
+        ProductionMapError::OrderFreezeTargetAmbiguous => {
+            refresh_required_conflict("order_freeze_target_ambiguous")
+        }
+        ProductionMapError::OrderFreezeRequestMismatch => {
+            refresh_required_conflict("order_freeze_request_mismatch")
+        }
         ProductionMapError::OrderDeleteBlocked(blockers) => (
             StatusCode::CONFLICT,
             Json(AdminErrorResponse {
@@ -296,12 +332,19 @@ pub(super) fn production_map_error(error: ProductionMapError) -> AdminError {
                 apparatus_options: None,
                 order_width_mm: None,
                 roll_width_mm: None,
+                snapshot_revision: None,
+                refresh_required: Some(true),
+                refresh_endpoint: Some(
+                    super::super::MOBILE_PRODUCTION_SNAPSHOT_ENDPOINT.to_string(),
+                ),
             }),
         ),
         ProductionMapError::PreviousStageNotCompleted => {
-            bad_request("previous_stage_not_completed")
+            refresh_required_bad_request("previous_stage_not_completed")
         }
-        ProductionMapError::ApparatusNotAssigned => bad_request("apparatus_not_assigned"),
+        ProductionMapError::ApparatusNotAssigned => {
+            refresh_required_bad_request("apparatus_not_assigned")
+        }
         ProductionMapError::LaminatsiyaRubberTooLarge => {
             bad_request("laminatsiya_rubber_too_large")
         }
@@ -329,25 +372,35 @@ pub(super) fn production_map_error(error: ProductionMapError) -> AdminError {
             bad_request("raw_material_stock_unavailable")
         }
         ProductionMapError::RawMaterialOrderNotActive => {
-            conflict("raw_material_order_not_active")
+            refresh_required_conflict("raw_material_order_not_active")
         }
-        ProductionMapError::QolipLocationNotFound => bad_request("qolip_location_not_found"),
+        ProductionMapError::QolipLocationNotFound => {
+            refresh_required_bad_request("qolip_location_not_found")
+        }
         ProductionMapError::QolipCodeMismatch => bad_request("qolip_code_mismatch"),
-        ProductionMapError::QolipAlreadyInUse => bad_request("qolip_already_in_use"),
-        ProductionMapError::QolipInsufficientStock => bad_request("insufficient_stock"),
-        ProductionMapError::QolipLocationIdentityMismatch => {
-            bad_request("location_identity_mismatch")
+        ProductionMapError::QolipAlreadyInUse => {
+            refresh_required_bad_request("qolip_already_in_use")
         }
-        ProductionMapError::RawMaterialScanRequired => bad_request("raw_material_scan_required"),
-        ProductionMapError::RawMaterialMismatch => bad_request("raw_material_mismatch"),
+        ProductionMapError::QolipInsufficientStock => {
+            refresh_required_bad_request("insufficient_stock")
+        }
+        ProductionMapError::QolipLocationIdentityMismatch => {
+            refresh_required_bad_request("location_identity_mismatch")
+        }
+        ProductionMapError::RawMaterialScanRequired => {
+            refresh_required_bad_request("raw_material_scan_required")
+        }
+        ProductionMapError::RawMaterialMismatch => {
+            refresh_required_bad_request("raw_material_mismatch")
+        }
         ProductionMapError::RawMaterialStateNotReady => {
-            bad_request("raw_material_state_not_ready")
+            refresh_required_bad_request("raw_material_state_not_ready")
         }
         ProductionMapError::RawMaterialScanIncomplete => {
-            bad_request("raw_material_scan_incomplete")
+            refresh_required_bad_request("raw_material_scan_incomplete")
         }
         ProductionMapError::RawMaterialRequirementNotMet => {
-            bad_request("raw_material_requirement_not_met")
+            refresh_required_bad_request("raw_material_requirement_not_met")
         }
         ProductionMapError::RawMaterialRollSizeMissing => {
             bad_request("raw_material_roll_size_missing")
@@ -382,9 +435,11 @@ pub(super) fn production_map_error(error: ProductionMapError) -> AdminError {
             bad_request("rezka_final_roll_required")
         }
         ProductionMapError::ProgressBatchNotFound => not_found("progress_batch_not_found"),
-        ProductionMapError::ProgressBatchNotAccepted => bad_request("progress_batch_not_accepted"),
+        ProductionMapError::ProgressBatchNotAccepted => {
+            refresh_required_bad_request("progress_batch_not_accepted")
+        }
         ProductionMapError::ProgressBatchNotResumable => {
-            bad_request("progress_batch_not_resumable")
+            refresh_required_bad_request("progress_batch_not_resumable")
         }
         ProductionMapError::ProgressBatchCorrectionReasonRequired => {
             bad_request("progress_batch_correction_reason_required")
@@ -481,6 +536,9 @@ fn ambiguous_raw_material_apparatuses(apparatuses: Vec<String>) -> AdminError {
             apparatus_options: Some(apparatuses),
             order_width_mm: None,
             roll_width_mm: None,
+            snapshot_revision: None,
+            refresh_required: None,
+            refresh_endpoint: None,
         }),
     )
 }

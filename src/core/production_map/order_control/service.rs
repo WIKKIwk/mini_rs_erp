@@ -271,6 +271,7 @@ async fn required_existing_order_id(
     if order_id.is_empty() {
         return Err(ProductionMapError::MissingId);
     }
+    reject_training_order_id(order_id)?;
     if !order_id.starts_with("zakaz-") {
         return Err(ProductionMapError::MapNotFound);
     }

@@ -43,17 +43,17 @@ pub async fn production_map_wip_batches(
             .admin
             .principal_has_capability(&principal, Capability::ProductionMapManage)
             .await;
+    let assigned_apparatus = state.admin.principal_assigned_apparatus(&principal).await;
     if !can_view_all {
-        let assigned_apparatus = state.admin.principal_assigned_apparatus(&principal).await;
-        let scoped_to_current =
-            queue_state::apparatus_matches_assigned(&query.apparatus, &assigned_apparatus);
-        let scoped_to_next =
-            queue_state::apparatus_matches_assigned(&query.next_apparatus, &assigned_apparatus);
+        let scoped_to_current = !query.apparatus.trim().is_empty()
+            && principal_can_use_apparatus(&state, &principal, &query.apparatus).await;
+        let scoped_to_next = !query.next_apparatus.trim().is_empty()
+            && principal_can_use_apparatus(&state, &principal, &query.next_apparatus).await;
         if !scoped_to_current && !scoped_to_next {
             return Err(forbidden());
         }
     }
-    if query.order_id.trim().starts_with("training-") {
+    if is_training_order_namespace(&query.order_id) {
         let batches = super::super::training::training_input_progress_batch_for_principal(
             &state,
             &principal,
@@ -86,6 +86,12 @@ pub async fn production_map_wip_batches(
             .collect::<Vec<_>>();
         return Ok(json_response(serde_json::json!({
             "batches": batches,
+            "assigned_apparatus": assigned_apparatus,
+            "snapshot_revision": super::mobile_production_snapshot_revision_for(
+                &state,
+                &principal,
+            )
+            .await?,
         })));
     }
     let include_processed = query.status.trim().eq_ignore_ascii_case("all");
@@ -112,6 +118,9 @@ pub async fn production_map_wip_batches(
         .map_err(production_map_error)?;
     Ok(json_response(serde_json::json!({
         "batches": batches,
+        "assigned_apparatus": assigned_apparatus,
+        "snapshot_revision": super::mobile_production_snapshot_revision_for(&state, &principal)
+            .await?,
     })))
 }
 
@@ -147,6 +156,18 @@ pub async fn production_map_finished_goods_receive(
     } else {
         input.qr_payload.clone()
     };
+    if super::super::training::training_progress_batch_for_qr(
+        &state,
+        &principal,
+        &input.progress_batch_id,
+        &qr_payload,
+    )
+    .await
+    .map_err(super::super::training::training_workspace_error)?
+    .is_some()
+    {
+        return Err(bad_request("training_order_requires_training_endpoint"));
+    }
     let receipt = state
         .production_maps
         .receive_finished_goods(

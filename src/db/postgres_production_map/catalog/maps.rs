@@ -1,7 +1,7 @@
 use sqlx::{PgPool, Postgres, Transaction};
 
 use crate::core::production_map::{
-    ProductionMapDefinition, ProductionMapError, ProductionMapNodeKind,
+    reject_training_order_id, ProductionMapDefinition, ProductionMapError, ProductionMapNodeKind,
 };
 use crate::core::quantity::positive_erp_quantity;
 
@@ -23,6 +23,7 @@ pub(super) async fn put_map_inner_tx(
     tx: &mut Transaction<'_, Postgres>,
     map: &ProductionMapDefinition,
 ) -> Result<(), ProductionMapError> {
+    reject_training_order_id(&map.id)?;
     let mut stored_map = map.clone();
     stored_map.roll_count = map.roll_count.filter(|value| *value > 0);
     stored_map.width_mm = map.width_mm.and_then(positive_erp_quantity);
@@ -166,6 +167,7 @@ pub(super) async fn reject_order_number_immutable_tx(
     };
     let existing_map = serde_json::from_value::<ProductionMapDefinition>(payload)
         .map_err(|_| ProductionMapError::StoreFailed)?;
+    reject_training_order_id(&existing_map.id)?;
     let existing_number = existing_map.order_number.trim();
     if !existing_number.is_empty() && existing_number != order_number {
         return Err(ProductionMapError::OrderNumberImmutable);
@@ -209,6 +211,7 @@ pub(super) async fn reject_duplicate_order_number_tx(
     for payload in rows {
         let existing = serde_json::from_value::<ProductionMapDefinition>(payload)
             .map_err(|_| ProductionMapError::StoreFailed)?;
+        reject_training_order_id(&existing.id)?;
         if existing.order_number.trim() == order_number && !is_same_zakaz(&existing, map) {
             return Err(ProductionMapError::DuplicateOrderNumber);
         }

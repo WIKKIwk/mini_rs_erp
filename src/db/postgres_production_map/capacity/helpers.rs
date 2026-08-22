@@ -259,6 +259,7 @@ pub(super) async fn put_apparatus_schedule_reservation(
     capacity_slots: u16,
     finite_capacity: bool,
 ) -> Result<ApparatusScheduleReservation, ProductionMapError> {
+    reject_training_order_id(&reservation.order_id)?;
     let mut tx = pool
         .begin()
         .await
@@ -403,6 +404,7 @@ pub(super) async fn update_apparatus_schedule_reservation_status_tx(
     status: ApparatusScheduleStatus,
     actor: &QueueActionActor,
 ) -> Result<(), ProductionMapError> {
+    reject_training_order_id(order_id)?;
     sqlx::query(
         "UPDATE mini_apparatus_schedule_reservations AS reservation
          SET status = $1, actor_json = $2
@@ -483,7 +485,7 @@ fn downtime_from_row(row: sqlx::postgres::PgRow) -> Result<ApparatusDowntime, Pr
 }
 
 fn reservation_from_row(row: sqlx::postgres::PgRow) -> Result<ApparatusScheduleReservation, ProductionMapError> {
-    Ok(ApparatusScheduleReservation {
+    let reservation = ApparatusScheduleReservation {
         reservation_id: row.try_get("reservation_id").map_err(|_| ProductionMapError::StoreFailed)?,
         idempotency_key: row.try_get("idempotency_key").map_err(|_| ProductionMapError::StoreFailed)?,
         order_id: row.try_get("order_id").map_err(|_| ProductionMapError::StoreFailed)?,
@@ -501,7 +503,9 @@ fn reservation_from_row(row: sqlx::postgres::PgRow) -> Result<ApparatusScheduleR
         capability_requirements: json_field(&row, "capability_requirements")?,
         actor: json_field(&row, "actor_json")?,
         created_at_unix: row.try_get("created_at").map_err(|_| ProductionMapError::StoreFailed)?,
-    })
+    };
+    reject_training_order_id(&reservation.order_id)?;
+    Ok(reservation)
 }
 
 fn json_field<T: serde::de::DeserializeOwned>(

@@ -11,7 +11,10 @@ pub use models::{
     RoleAssignmentUpsert, RoleDefinition, RoleDefinitionError, RoleDefinitionUpsert,
     RoleStoreError,
 };
-pub use normalize::{normalize_custom_role, normalize_role_assignment, role_assignment_key};
+pub use normalize::{
+    assigned_apparatus_contains, canonical_apparatus_id, normalize_custom_role,
+    normalize_role_assignment, role_assignment_key,
+};
 pub use queries::{
     capability_by_code, capability_catalog, capability_catalog_entries, capability_code,
     capability_codes_for_role, has_capability, system_role_definitions,

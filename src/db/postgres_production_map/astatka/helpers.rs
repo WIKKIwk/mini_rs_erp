@@ -1,7 +1,7 @@
 use sqlx::{FromRow, PgPool};
 
 use crate::core::production_map::{
-    LaminatsiyaAstatkaReport, ProductionMapError, RezkaAstatkaReport,
+    LaminatsiyaAstatkaReport, ProductionMapError, RezkaAstatkaReport, reject_training_order_id,
 };
 
 #[derive(Debug, FromRow)]
@@ -49,6 +49,7 @@ pub(super) async fn load_laminatsiya_astatka_reports_for_order(
     pool: &PgPool,
     order_id: &str,
 ) -> Result<Vec<LaminatsiyaAstatkaReport>, ProductionMapError> {
+    reject_training_order_id(order_id)?;
     let rows = sqlx::query_as::<_, LaminatsiyaAstatkaReportRow>(
         r#"SELECT
              report_id,
@@ -103,6 +104,7 @@ pub(super) async fn put_laminatsiya_astatka_report(
     pool: &PgPool,
     report: &LaminatsiyaAstatkaReport,
 ) -> Result<(), ProductionMapError> {
+    reject_training_order_id(&report.order_id)?;
     sqlx::query(
         r#"INSERT INTO mini_laminatsiya_astatka_reports (
              report_id,
@@ -167,6 +169,7 @@ pub(super) async fn load_rezka_astatka_reports_for_order(
     pool: &PgPool,
     order_id: &str,
 ) -> Result<Vec<RezkaAstatkaReport>, ProductionMapError> {
+    reject_training_order_id(order_id)?;
     let rows = sqlx::query_as::<_, RezkaAstatkaReportRow>(
         r#"SELECT
              report_id,
@@ -223,6 +226,7 @@ pub(super) async fn put_rezka_astatka_report(
     pool: &PgPool,
     report: &RezkaAstatkaReport,
 ) -> Result<(), ProductionMapError> {
+    reject_training_order_id(&report.order_id)?;
     sqlx::query(
         r#"INSERT INTO mini_rezka_astatka_reports (
              report_id,

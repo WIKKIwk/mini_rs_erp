@@ -87,7 +87,7 @@ pub async fn production_map_paddon_detail(
     method: Method,
     headers: HeaderMap,
 ) -> Result<Response, AdminError> {
-    authorize_any_capability(
+    let principal = authorize_any_capability(
         &state,
         &headers,
         &[
@@ -106,6 +106,7 @@ pub async fn production_map_paddon_detail(
         .paddon_snapshot(&query.code)
         .await
         .map_err(production_map_error)?;
+    let snapshot = filter_paddon_snapshot_for_principal(&state, &principal, snapshot).await?;
     Ok(json_response(serde_json::json!({
         "ok": true,
         "paddon": snapshot.paddon,
@@ -120,7 +121,7 @@ pub async fn production_map_paddon_qr_report(
     method: Method,
     headers: HeaderMap,
 ) -> Result<Response, AdminError> {
-    authorize_any_capability(
+    let principal = authorize_any_capability(
         &state,
         &headers,
         &[
@@ -139,6 +140,7 @@ pub async fn production_map_paddon_qr_report(
         .paddon_scan_snapshot(&query.code)
         .await
         .map_err(production_map_error)?;
+    let snapshot = filter_paddon_snapshot_for_principal(&state, &principal, snapshot).await?;
     Ok(json_response(serde_json::json!({
         "ok": true,
         "paddon": snapshot.paddon,
@@ -286,6 +288,7 @@ pub async fn production_map_paddon_item_add(
     }
     let input: PaddonItemRequest = parse_json(&body)?;
     let progress_batch_id = resolve_progress_batch_id(&state, &input).await?;
+    require_paddon_progress_batch(&state, &principal, &progress_batch_id).await?;
     let snapshot = state
         .production_maps
         .add_paddon_item(
@@ -323,6 +326,9 @@ pub async fn production_map_paddon_items_add(
         return Err(method_not_allowed());
     }
     let input: PaddonItemsRequest = parse_json(&body)?;
+    for progress_batch_id in &input.progress_batch_ids {
+        require_paddon_progress_batch(&state, &principal, progress_batch_id).await?;
+    }
     let snapshot = state
         .production_maps
         .add_paddon_items(
@@ -364,6 +370,7 @@ pub async fn production_map_paddon_item_remove(
     if progress_batch_id.is_empty() {
         return Err(bad_request("progress_batch_id_required"));
     }
+    require_paddon_progress_batch(&state, &principal, progress_batch_id).await?;
     let snapshot = state
         .production_maps
         .remove_paddon_item(
@@ -401,6 +408,9 @@ pub async fn production_map_paddon_items_remove(
         return Err(method_not_allowed());
     }
     let input: PaddonItemsRequest = parse_json(&body)?;
+    for progress_batch_id in &input.progress_batch_ids {
+        require_paddon_progress_batch(&state, &principal, progress_batch_id).await?;
+    }
     let snapshot = state
         .production_maps
         .remove_paddon_items(
@@ -436,4 +446,44 @@ async fn resolve_progress_batch_id(
         .await
         .map_err(production_map_error)?;
     Ok(batch.batch_id)
+}
+
+async fn require_paddon_progress_batch(
+    state: &AppState,
+    principal: &Principal,
+    progress_batch_id: &str,
+) -> Result<(), AdminError> {
+    let batch = state
+        .production_maps
+        .progress_batch_for_qr(progress_batch_id, "")
+        .await
+        .map_err(production_map_error)?;
+    if principal_can_use_apparatus(state, principal, &batch.apparatus).await {
+        Ok(())
+    } else {
+        Err(production_map_error(ProductionMapError::ApparatusNotAssigned))
+    }
+}
+
+async fn filter_paddon_snapshot_for_principal(
+    state: &AppState,
+    principal: &Principal,
+    mut snapshot: crate::core::production_map::PaddonSnapshot,
+) -> Result<crate::core::production_map::PaddonSnapshot, AdminError> {
+    let mut visible_items = Vec::with_capacity(snapshot.items.len());
+    for item in snapshot.items {
+        if principal_can_use_apparatus(state, principal, &item.apparatus).await {
+            visible_items.push(item);
+        }
+    }
+    snapshot.items = visible_items;
+
+    let mut visible_available_items = Vec::with_capacity(snapshot.available_items.len());
+    for item in snapshot.available_items {
+        if principal_can_use_apparatus(state, principal, &item.apparatus).await {
+            visible_available_items.push(item);
+        }
+    }
+    snapshot.available_items = visible_available_items;
+    Ok(snapshot)
 }

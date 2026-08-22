@@ -130,12 +130,18 @@ pub async fn worker_code_regenerate(
         return Err(method_not_allowed());
     }
     let worker = required_worker(&state, query.id.as_deref()).await?;
-    state
+    let worker_ref = worker.id.clone();
+    let detail = state
         .admin
         .regenerate_worker_code(worker)
         .await
-        .map(json_response)
-        .map_err(|_| server_error("worker code regenerate failed"))
+        .map_err(|_| server_error("worker code regenerate failed"))?;
+    state
+        .sessions
+        .delete_for_principal(&PrincipalRole::Aparatchi, &worker_ref)
+        .await
+        .map_err(|_| server_error("worker session revoke failed"))?;
+    Ok(json_response(detail))
 }
 
 fn worker_activity_refs(worker: &Worker) -> Vec<String> {

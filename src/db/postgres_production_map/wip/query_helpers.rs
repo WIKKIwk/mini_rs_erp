@@ -2,6 +2,7 @@ use sqlx::PgPool;
 
 use crate::core::production_map::{
     OrderProgressBatch, ProductionMapError, WipProgressBatchQuery, queue_state,
+    reject_training_order_id,
 };
 
 use super::progress_helpers::{ProgressBatchRow, progress_batch_from_row};
@@ -37,9 +38,10 @@ async fn load_wip_progress_batches_inner(
     if limit == 0 {
         return Ok(Vec::new());
     }
+    reject_training_order_id(&order_id)?;
     let apparatus = apparatus.trim();
     let apparatus_key = queue_state::apparatus_search_key(apparatus);
-    let query_apparatus_key = if include_processed && !next_apparatus.trim().is_empty() {
+    let query_apparatus_key = if !next_apparatus.trim().is_empty() {
         ""
     } else {
         apparatus_key.as_str()
@@ -123,7 +125,12 @@ async fn load_wip_progress_batches_inner(
         .filter(|batch| {
             (apparatus.is_empty()
                 || queue_state::apparatus_titles_match(&batch.current_apparatus, apparatus)
-                || queue_state::apparatus_titles_match(&batch.apparatus, apparatus))
+                || queue_state::apparatus_titles_match(&batch.apparatus, apparatus)
+                || (!next_apparatus.trim().is_empty()
+                    && queue_state::next_stage_title_matches_apparatus(
+                        &batch.next_apparatus,
+                        apparatus,
+                    )))
                 && (next_apparatus.trim().is_empty()
                     || queue_state::next_stage_title_matches_apparatus(
                         &batch.next_apparatus,

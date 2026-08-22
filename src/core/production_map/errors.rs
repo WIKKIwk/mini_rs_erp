@@ -4,6 +4,8 @@ use thiserror::Error;
 pub enum ProductionMapError {
     #[error("map id is required")]
     MissingId,
+    #[error("training order ids are reserved for the training workspace")]
+    TrainingOrderIdReserved,
     #[error("product code is required")]
     MissingProductCode,
     #[error("map title is required")]
@@ -182,6 +184,10 @@ pub enum ProductionMapError {
     ProgressBatchCorrectionConflict,
     #[error("progress batch correction has no changes")]
     ProgressBatchCorrectionUnchanged,
+    #[error("mixed-stage backfill input is invalid: {0}")]
+    MixedStageBackfillInput(String),
+    #[error("mixed-stage backfill conflicts with existing progress data: {0}")]
+    MixedStageBackfillConflict(String),
     #[error("paddon input is invalid")]
     PaddonInvalidInput,
     #[error("paddon code sequence is exhausted")]

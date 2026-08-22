@@ -2,6 +2,7 @@ use std::collections::BTreeSet;
 use std::sync::Arc;
 
 use crate::core::auth::models::Principal;
+use crate::core::production_map::is_training_order_namespace;
 
 use super::models::{
     QolipBlock, QolipCellQr, QolipCellQrInput, QolipCheckout, QolipCheckoutCreate,
@@ -236,6 +237,7 @@ impl QolipService {
         principal: &Principal,
         order_id: &str,
     ) -> Result<Vec<String>, QolipError> {
+        reject_training_order_id(order_id)?;
         self.store
             .order_note_qolip_codes_in_use(principal, order_id)
             .await
@@ -246,6 +248,7 @@ impl QolipService {
         principal: &Principal,
         order_id: &str,
     ) -> Result<Option<QolipOrderNote>, QolipError> {
+        reject_training_order_id(order_id)?;
         self.store.order_note(principal, order_id).await
     }
 
@@ -255,6 +258,7 @@ impl QolipService {
         principal: &Principal,
     ) -> Result<QolipOrderNote, QolipError> {
         note.order_id = note.order_id.trim().to_string();
+        reject_training_order_id(&note.order_id)?;
         note.item_code = note.item_code.trim().to_string();
         note.item_name = note.item_name.trim().to_string();
         note.status = note.status.trim().to_ascii_lowercase();
@@ -686,6 +690,14 @@ impl QolipService {
             return Ok(None);
         };
         Ok(Some(self.store.get_or_create_cell_qr(cell).await?))
+    }
+}
+
+fn reject_training_order_id(order_id: &str) -> Result<(), QolipError> {
+    if is_training_order_namespace(order_id) {
+        Err(QolipError::TrainingOrderIdReserved)
+    } else {
+        Ok(())
     }
 }
 

@@ -193,6 +193,21 @@ fn apparatus_titles_match_warehouse_instance_suffixes() {
 }
 
 #[test]
+fn assigned_apparatus_scope_does_not_cross_named_instances() {
+    let assigned = vec!["Laminatsiya - A".to_string()];
+    assert!(apparatus_matches_assigned("Laminatsiya - A", &assigned));
+    assert!(!apparatus_matches_assigned("Laminatsiya - B", &assigned));
+    assert!(!apparatus_matches_assigned("Laminatsiya", &assigned));
+}
+
+#[test]
+fn base_apparatus_scope_covers_configured_instances() {
+    let assigned = vec!["Laminatsiya".to_string()];
+    assert!(apparatus_matches_assigned("Laminatsiya - A", &assigned));
+    assert!(apparatus_matches_assigned("Laminatsiya - B", &assigned));
+}
+
+#[test]
 fn next_stage_title_matches_numbered_alternative_apparatus() {
     assert!(next_stage_title_matches_apparatus(
         "Laminatsiya",

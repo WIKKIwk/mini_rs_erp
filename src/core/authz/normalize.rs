@@ -1,6 +1,7 @@
 use std::collections::BTreeSet;
 
 use crate::core::auth::models::PrincipalRole;
+use crate::core::apparatus_groups::apparatus_id_for_name;
 
 use super::models::{
     RoleAssignment, RoleAssignmentError, RoleAssignmentUpsert, RoleDefinition, RoleDefinitionError,
@@ -99,6 +100,33 @@ pub fn normalize_role_assignment(
 
 pub fn role_assignment_key(role: &PrincipalRole, ref_: &str) -> String {
     format!("{}:{}", role_key(role), ref_.trim())
+}
+
+/// Returns the canonical apparatus identity used by authorization checks.
+///
+/// Legacy role assignments may still contain display names, so names are
+/// resolved through the same deterministic identity function used by the
+/// apparatus catalog. A value that is already an apparatus id is accepted as
+/// an id and normalized without treating display-name aliases as equivalent.
+pub fn canonical_apparatus_id(value: &str) -> Option<String> {
+    let value = value.trim();
+    if value.is_empty() || value.chars().any(char::is_control) {
+        return None;
+    }
+    if value.starts_with("apparatus:") {
+        return Some(value.to_ascii_lowercase());
+    }
+    Some(apparatus_id_for_name(value))
+}
+
+pub fn assigned_apparatus_contains(requested: &str, assigned: &[String]) -> bool {
+    let Some(requested_id) = canonical_apparatus_id(requested) else {
+        return false;
+    };
+    assigned
+        .iter()
+        .filter_map(|value| canonical_apparatus_id(value))
+        .any(|id| id == requested_id)
 }
 
 fn role_key(role: &PrincipalRole) -> &'static str {

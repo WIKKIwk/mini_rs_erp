@@ -1,3 +1,5 @@
+use crate::core::authz::assigned_apparatus_contains;
+
 pub async fn raw_material_history(
     State(state): State<AppState>,
     Query(query): Query<RawMaterialHistoryQuery>,
@@ -112,10 +114,7 @@ async fn material_scoped_raw_material_assignments(
     }
     let mut out = Vec::new();
     for assignment in assignments {
-        if !queue_state::apparatus_matches_assigned(
-            &assignment.apparatus,
-            &assigned_apparatus,
-        ) {
+        if !assigned_apparatus_contains(&assignment.apparatus, &assigned_apparatus) {
             continue;
         }
         let stock = state
@@ -186,6 +185,9 @@ pub async fn raw_material_assignment_lookup(
         .find(|assignment| assignment.barcode.trim().to_ascii_uppercase() == normalized);
     if let Some(object) = value.as_object_mut() {
         if let Some(assignment) = assignment {
+            if !principal_can_use_apparatus(&state, &principal, &assignment.apparatus).await {
+                return Err(production_map_error(ProductionMapError::ApparatusNotAssigned));
+            }
             let order_id = assignment.order_id.trim().to_string();
             object.insert(
                 "assignment".to_string(),

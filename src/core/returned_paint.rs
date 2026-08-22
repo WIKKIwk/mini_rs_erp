@@ -8,6 +8,7 @@ use serde::{Deserialize, Serialize};
 use tokio::sync::RwLock;
 
 use crate::core::auth::models::{Principal, PrincipalRole};
+use crate::core::production_map::is_training_order_namespace;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ReturnedPaintItem {
@@ -116,6 +117,8 @@ pub struct ReturnedPaintRequest {
 
 #[derive(Debug, thiserror::Error, PartialEq)]
 pub enum ReturnedPaintError {
+    #[error("training order ids are reserved for the training workspace")]
+    TrainingOrderIdReserved,
     #[error("order id is required")]
     MissingOrderId,
     #[error("apparatus is required")]
@@ -222,6 +225,7 @@ impl ReturnedPaintService {
         id: String,
     ) -> Result<ReturnedPaintRequest, ReturnedPaintError> {
         let order_id = required_text(input.order_id, ReturnedPaintError::MissingOrderId)?;
+        reject_training_order_id(&order_id)?;
         let apparatus = required_text(input.apparatus, ReturnedPaintError::MissingApparatus)?;
         let sender_ref = sender.ref_.trim();
         let sender_display_name = sender.display_name.trim();
@@ -315,6 +319,7 @@ impl ReturnedPaintService {
         owner: &Principal,
     ) -> Result<ReturnedPaintImage, ReturnedPaintError> {
         let order_id = required_text(order_id, ReturnedPaintError::MissingOrderId)?;
+        reject_training_order_id(&order_id)?;
         let apparatus = required_text(apparatus, ReturnedPaintError::MissingApparatus)?;
         let owner_ref = owner.ref_.trim();
         let image_name = image_name.trim();
@@ -375,6 +380,14 @@ impl ReturnedPaintService {
         } else {
             Err(ReturnedPaintError::ImageDeleteNotAllowed)
         }
+    }
+}
+
+fn reject_training_order_id(order_id: &str) -> Result<(), ReturnedPaintError> {
+    if is_training_order_namespace(order_id) {
+        Err(ReturnedPaintError::TrainingOrderIdReserved)
+    } else {
+        Ok(())
     }
 }
 

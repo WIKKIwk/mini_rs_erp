@@ -64,6 +64,16 @@ pub(super) async fn completed_queue_orders_for_actor(
     if actor_ref.is_empty() || limit == 0 {
         return Ok(Vec::new());
     }
+    let frozen_order_ids = store
+        .order_controls
+        .read()
+        .await
+        .iter()
+        .filter_map(|(order_id, control)| {
+            (control.state == OrderControlState::Frozen).then(|| order_id.trim().to_string())
+        })
+        .filter(|order_id| !order_id.is_empty())
+        .collect::<BTreeSet<_>>();
     let events = store.queue_events.read().await;
     let mut seen = BTreeSet::new();
     let mut completed = Vec::new();
@@ -88,7 +98,10 @@ pub(super) async fn completed_queue_orders_for_actor(
             continue;
         }
         let order_id = event.order_id.trim();
-        if order_id.is_empty() || !seen.insert(order_id.to_string()) {
+        if order_id.is_empty()
+            || frozen_order_ids.contains(order_id)
+            || !seen.insert(order_id.to_string())
+        {
             continue;
         }
         let status = match event.action {

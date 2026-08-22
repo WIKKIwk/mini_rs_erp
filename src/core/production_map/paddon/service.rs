@@ -97,6 +97,8 @@ impl ProductionMapService {
         if code.is_empty() || progress_batch_id.is_empty() {
             return Err(ProductionMapError::PaddonInvalidInput);
         }
+        self.reject_training_paddon_batches(&[progress_batch_id.to_string()])
+            .await?;
         self.store
             .add_paddon_item(code, progress_batch_id, actor)
             .await
@@ -113,6 +115,7 @@ impl ProductionMapService {
             return Err(ProductionMapError::PaddonInvalidInput);
         }
         let progress_batch_ids = normalize_paddon_batch_ids(progress_batch_ids)?;
+        self.reject_training_paddon_batches(&progress_batch_ids).await?;
         self.store
             .add_paddon_items(code, &progress_batch_ids, actor)
             .await
@@ -129,6 +132,8 @@ impl ProductionMapService {
         if code.is_empty() || progress_batch_id.is_empty() {
             return Err(ProductionMapError::PaddonInvalidInput);
         }
+        self.reject_training_paddon_batches(&[progress_batch_id.to_string()])
+            .await?;
         self.store
             .remove_paddon_item(code, progress_batch_id, actor)
             .await
@@ -145,9 +150,22 @@ impl ProductionMapService {
             return Err(ProductionMapError::PaddonInvalidInput);
         }
         let progress_batch_ids = normalize_paddon_batch_ids(progress_batch_ids)?;
+        self.reject_training_paddon_batches(&progress_batch_ids).await?;
         self.store
             .remove_paddon_items(code, &progress_batch_ids, actor)
             .await
+    }
+
+    async fn reject_training_paddon_batches(
+        &self,
+        progress_batch_ids: &[String],
+    ) -> Result<(), ProductionMapError> {
+        for progress_batch_id in progress_batch_ids {
+            if let Some(batch) = self.store.progress_batch(progress_batch_id).await? {
+                reject_training_order_id(&batch.order_id)?;
+            }
+        }
+        Ok(())
     }
 }
 

@@ -3,7 +3,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use sqlx::{Postgres, Transaction};
 
 use crate::core::production_map::{
-    ProductionMapError, QueueActionActor, RawMaterialStockTransition,
+    reject_training_order_id, ProductionMapError, QueueActionActor, RawMaterialStockTransition,
     RawMaterialStockTransitionKind,
 };
 use crate::db::postgres_raw_material_events::{
@@ -21,6 +21,7 @@ pub(super) async fn apply_raw_material_stock_transitions_tx(
         if transition.is_empty() {
             continue;
         }
+        reject_training_order_id(&transition.order_id)?;
         let barcodes = normalized_barcodes(&transition.barcodes);
         if barcodes.is_empty() || transition.order_id.trim().is_empty() {
             continue;

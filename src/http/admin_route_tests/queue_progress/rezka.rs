@@ -1023,6 +1023,19 @@ async fn rezka_consumes_laminatsiya_wip_and_creates_distinct_frame_wips() {
         partially_completed_body["states"]["zakaz-rezka-wip-fanout"],
         "pending"
     );
+    let open_closed_orders = router
+        .clone()
+        .oneshot(request(
+            "GET",
+            "/v1/mobile/admin/production-maps/closed-orders",
+            &admin_token,
+        ))
+        .await
+        .expect("closed orders after partial rezka completion");
+    let open_closed_orders_body = json_body(open_closed_orders).await;
+    assert!(open_closed_orders_body["closed_orders"]
+        .as_array()
+        .is_some_and(Vec::is_empty));
 
     let output_batches = partially_completed_body["progress_batches"]
         .as_array()
@@ -1117,6 +1130,23 @@ async fn rezka_consumes_laminatsiya_wip_and_creates_distinct_frame_wips() {
         final_completed_body["states"]["zakaz-rezka-wip-fanout"],
         "completed"
     );
+    let closed_orders = router
+        .clone()
+        .oneshot(request(
+            "GET",
+            "/v1/mobile/admin/production-maps/closed-orders",
+            &admin_token,
+        ))
+        .await
+        .expect("closed orders after final rezka completion");
+    let closed_orders_body = json_body(closed_orders).await;
+    assert!(closed_orders_body["closed_orders"]
+        .as_array()
+        .is_some_and(|orders| {
+            orders
+                .iter()
+                .any(|order| order["order_id"] == "zakaz-rezka-wip-fanout")
+        }));
     let final_output_batches = final_completed_body["progress_batches"]
         .as_array()
         .expect("final frame batches");
@@ -1167,4 +1197,270 @@ async fn rezka_consumes_laminatsiya_wip_and_creates_distinct_frame_wips() {
         print_requests.lock().await.len(),
         print_request_count_before_rezka + 8
     );
+}
+
+#[tokio::test]
+async fn rezka_queue_controls_allow_start_from_waiting_upstream_wip() {
+    let mut state = test_state();
+    state
+        .admin
+        .upsert_role_assignment(crate::core::authz::RoleAssignmentUpsert {
+            principal_role: PrincipalRole::Aparatchi,
+            principal_ref: "worker-rezka-upstream-wip-control".to_string(),
+            role_id: "aparatchi".to_string(),
+            assigned_apparatus: vec!["Laminatsiya".to_string(), "Rezka".to_string()],
+            assigned_item_groups: Vec::new(),
+        })
+        .await
+        .expect("assignment");
+    let admin_token = session(&state, PrincipalRole::Admin).await;
+    let worker_token =
+        session_for(&state, PrincipalRole::Aparatchi, "worker-rezka-upstream-wip-control").await;
+    let router = build_router(state);
+    let order_id = "zakaz-rezka-upstream-wip-control";
+    let map = serde_json::json!({
+        "id": order_id,
+        "product_code": "REZKA-UPSTREAM-WIP-CONTROL",
+        "title": "Rezka upstream WIP control order",
+        "order_number": "9330",
+        "nodes": [
+            {"id": "start", "kind": "start", "title": "Start"},
+            {"id": "laminatsiya", "kind": "apparatus", "title": "Laminatsiya"},
+            {
+                "id": "rezka",
+                "kind": "apparatus",
+                "title": "Rezka",
+                "rezka_kadr_count": 4,
+                "rezka_label_length": 100
+            },
+            {"id": "end", "kind": "end", "title": "End"}
+        ],
+        "edges": [
+            {"from": "start", "to": "laminatsiya"},
+            {"from": "laminatsiya", "to": "rezka"},
+            {"from": "rezka", "to": "end"}
+        ]
+    })
+    .to_string();
+    let saved = router
+        .clone()
+        .oneshot(request_with_body(
+            "PUT",
+            "/v1/mobile/admin/production-maps",
+            &admin_token,
+            &map,
+        ))
+        .await
+        .expect("save map");
+    assert_eq!(saved.status(), StatusCode::OK);
+
+    let laminatsiya_started = router
+        .clone()
+        .oneshot(request_with_body(
+            "POST",
+            "/v1/mobile/admin/production-maps/queue-action",
+            &worker_token,
+            &format!(
+                r#"{{
+                    "apparatus":"Laminatsiya",
+                    "order_id":"{order_id}",
+                    "action":"start"
+                }}"#
+            ),
+        ))
+        .await
+        .expect("start laminatsiya");
+    assert_eq!(laminatsiya_started.status(), StatusCode::OK);
+
+    let laminatsiya_paused = router
+        .clone()
+        .oneshot(request_with_body(
+            "POST",
+            "/v1/mobile/admin/production-maps/queue-action",
+            &worker_token,
+            &format!(
+                r#"{{
+                    "apparatus":"Laminatsiya",
+                    "order_id":"{order_id}",
+                    "action":"pause",
+                    "produced_qty":120,
+                    "uom":"m"
+                }}"#
+            ),
+        ))
+        .await
+        .expect("roll complete laminatsiya");
+    let laminatsiya_paused_status = laminatsiya_paused.status();
+    let laminatsiya_paused_body = json_body(laminatsiya_paused).await;
+    assert_eq!(
+        laminatsiya_paused_status,
+        StatusCode::OK,
+        "{laminatsiya_paused_body:?}"
+    );
+    assert_eq!(laminatsiya_paused_body["states"][order_id], "paused");
+    let source_qr = laminatsiya_paused_body["progress_batch"]["qr_payload"]
+        .as_str()
+        .expect("upstream WIP QR")
+        .to_string();
+
+    let snapshot = router
+        .clone()
+        .oneshot(request(
+            "GET",
+            "/v1/mobile/admin/production-maps/sequence",
+            &admin_token,
+        ))
+        .await
+        .expect("Rezka queue controls");
+    let snapshot_status = snapshot.status();
+    let snapshot_body = json_body(snapshot).await;
+    assert_eq!(snapshot_status, StatusCode::OK, "{snapshot_body:?}");
+    let control = &snapshot_body["queue_action_controls"]["Rezka"][order_id];
+    assert_eq!(control["previous_stage_ready"], false);
+    assert_eq!(control["interaction"]["previous_wip_mode"], "scan_required");
+    assert_eq!(control["interaction"]["mode"], "fresh_start");
+    assert!(control["allowed_actions"]
+        .as_array()
+        .is_some_and(|actions| actions.iter().any(|action| action == "start")));
+
+    let rezka_started = router
+        .oneshot(request_with_body(
+            "POST",
+            "/v1/mobile/admin/production-maps/queue-action",
+            &worker_token,
+            &format!(
+                r#"{{
+                    "apparatus":"Rezka",
+                    "order_id":"{order_id}",
+                    "action":"start",
+                    "qr_payload":"{source_qr}"
+                }}"#
+            ),
+        ))
+        .await
+        .expect("start Rezka from upstream WIP");
+    let rezka_started_status = rezka_started.status();
+    let rezka_started_body = json_body(rezka_started).await;
+    assert_eq!(rezka_started_status, StatusCode::OK, "{rezka_started_body:?}");
+    assert_eq!(rezka_started_body["states"][order_id], "in_progress");
+}
+
+#[tokio::test]
+async fn rezka_freeze_safe_stop_accepts_quantity_report_without_bobina() {
+    let mut state = test_state();
+    state
+        .admin
+        .upsert_role_assignment(crate::core::authz::RoleAssignmentUpsert {
+            principal_role: PrincipalRole::Aparatchi,
+            principal_ref: "worker-rezka-freeze-safe-stop".to_string(),
+            role_id: "aparatchi".to_string(),
+            assigned_apparatus: vec!["Rezka".to_string()],
+            assigned_item_groups: Vec::new(),
+        })
+        .await
+        .expect("assignment");
+    let admin_token = session(&state, PrincipalRole::Admin).await;
+    let worker_token = session_for(
+        &state,
+        PrincipalRole::Aparatchi,
+        "worker-rezka-freeze-safe-stop",
+    )
+    .await;
+    let router = build_router(state);
+    let order_id = "zakaz-rezka-freeze-safe-stop";
+
+    let saved = router
+        .clone()
+        .oneshot(request_with_body(
+            "PUT",
+            "/v1/mobile/admin/production-maps",
+            &admin_token,
+            &pechat_order_map_json(order_id, "Rezka freeze safe stop", "9331", "Rezka"),
+        ))
+        .await
+        .expect("save map");
+    assert_eq!(saved.status(), StatusCode::OK);
+
+    let started = router
+        .clone()
+        .oneshot(request_with_body(
+            "POST",
+            "/v1/mobile/admin/production-maps/queue-action",
+            &worker_token,
+            &format!(
+                r#"{{
+                    "apparatus":"Rezka",
+                    "order_id":"{order_id}",
+                    "action":"start"
+                }}"#
+            ),
+        ))
+        .await
+        .expect("start Rezka");
+    let started_status = started.status();
+    let started_body = json_body(started).await;
+    assert_eq!(started_status, StatusCode::OK, "{started_body:?}");
+
+    let requested = router
+        .clone()
+        .oneshot(request_with_body(
+            "POST",
+            "/v1/mobile/admin/production-maps/order-control",
+            &admin_token,
+            &format!(r#"{{"order_id":"{order_id}","action":"freeze"}}"#),
+        ))
+        .await
+        .expect("request freeze");
+    let requested_status = requested.status();
+    let requested_body = json_body(requested).await;
+    assert_eq!(requested_status, StatusCode::OK, "{requested_body:?}");
+
+    let snapshot = router
+        .clone()
+        .oneshot(request(
+            "GET",
+            "/v1/mobile/admin/production-maps/sequence",
+            &worker_token,
+        ))
+        .await
+        .expect("freeze request snapshot");
+    let snapshot_status = snapshot.status();
+    let snapshot_body = json_body(snapshot).await;
+    assert_eq!(snapshot_status, StatusCode::OK, "{snapshot_body:?}");
+    let freeze_request_id = snapshot_body["queue_action_controls"]["Rezka"][order_id]
+        ["freeze_request"]["request_id"]
+        .as_str()
+        .expect("freeze request id")
+        .to_string();
+
+    let safe_stop = router
+        .oneshot(request_with_body(
+            "POST",
+            "/v1/mobile/admin/production-maps/queue-action",
+            &worker_token,
+            &format!(
+                r#"{{
+                    "apparatus":"Rezka",
+                    "order_id":"{order_id}",
+                    "action":"detach_roll",
+                    "freeze_request_id":"{freeze_request_id}",
+                    "produced_qty":90,
+                    "gross_qty":11,
+                    "diameter":45.5,
+                    "uom":"m"
+                }}"#
+            ),
+        ))
+        .await
+        .expect("Rezka linked safe stop");
+    let safe_stop_status = safe_stop.status();
+    let safe_stop_body = json_body(safe_stop).await;
+    assert_eq!(safe_stop_status, StatusCode::OK, "{safe_stop_body:?}");
+    assert_eq!(safe_stop_body["states"][order_id], "frozen");
+    assert_eq!(safe_stop_body["order_control"]["state"], "frozen");
+    assert_eq!(safe_stop_body["session"]["status"], "frozen");
+    assert_eq!(safe_stop_body["progress_batch"]["action"], "detach_roll");
+    assert_eq!(safe_stop_body["progress_batch"]["produced_qty"], 90.0);
+    assert_eq!(safe_stop_body["progress_batch"]["diameter"], 45.5);
+    assert!(safe_stop_body["progress_batch"]["bobina_kg"].is_null());
 }

@@ -1,10 +1,13 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use sqlx::{PgPool, Postgres, Transaction};
 
 use crate::core::production_map::{
-    ApparatusQueuePolicy, ProductionMapDefinition, ProductionMapError, QueueActionActor,
+    is_training_order_namespace, reject_training_order_id, ApparatusQueuePolicy,
+    ProductionMapDefinition, ProductionMapError, QueueActionActor,
 };
+
+use super::queue_helpers::lock_order_control_tx;
 
 pub(super) async fn load_maps(
     pool: &PgPool,
@@ -12,6 +15,7 @@ pub(super) async fn load_maps(
     let rows = sqlx::query_scalar::<_, serde_json::Value>(
         "SELECT map_json
          FROM mini_production_maps
+         WHERE lower(id) NOT LIKE 'training-%'
          ORDER BY updated_at DESC",
     )
     .fetch_all(pool)
@@ -20,8 +24,10 @@ pub(super) async fn load_maps(
 
     rows.into_iter()
         .map(|payload| {
-            serde_json::from_value::<ProductionMapDefinition>(payload)
-                .map_err(|_| ProductionMapError::StoreFailed)
+            let map = serde_json::from_value::<ProductionMapDefinition>(payload)
+                .map_err(|_| ProductionMapError::StoreFailed)?;
+            reject_training_order_id(&map.id)?;
+            Ok(map)
         })
         .collect()
 }
@@ -31,6 +37,7 @@ pub(super) async fn delete_map_by_id(
     map_id: &str,
 ) -> Result<(), ProductionMapError> {
     let map_id = map_id.trim();
+    reject_training_order_id(map_id)?;
     let mut tx = pool
         .begin()
         .await
@@ -43,6 +50,9 @@ pub(super) async fn delete_map_by_id(
     .await
     .map_err(|_| ProductionMapError::StoreFailed)?
     .flatten();
+    if let Some(order_id) = mini_order_id.as_deref() {
+        reject_training_order_id(order_id)?;
+    }
     sqlx::query("DELETE FROM mini_queue_states WHERE order_id = $1")
         .bind(map_id)
         .execute(&mut *tx)
@@ -99,7 +109,13 @@ pub(super) async fn load_apparatus_sequences(
         .map(|(apparatus, payload)| {
             let order_ids = serde_json::from_value::<Vec<String>>(payload)
                 .map_err(|_| ProductionMapError::StoreFailed)?;
-            Ok((apparatus, order_ids))
+            Ok((
+                apparatus,
+                order_ids
+                    .into_iter()
+                    .filter(|order_id| !is_training_order_namespace(order_id))
+                    .collect(),
+            ))
         })
         .collect()
 }
@@ -114,20 +130,35 @@ pub(super) async fn save_apparatus_sequence(
         .map(|id| id.trim().to_string())
         .filter(|id| !id.is_empty())
         .collect::<Vec<_>>();
-    let payload = serde_json::to_value(order_ids).map_err(|_| ProductionMapError::StoreFailed)?;
-    sqlx::query(
-        "INSERT INTO mini_queue_sequences (apparatus, order_ids, updated_at)
-         VALUES ($1, $2, now())
-         ON CONFLICT (apparatus) DO UPDATE SET
-           order_ids = excluded.order_ids,
-           updated_at = excluded.updated_at",
-    )
-    .bind(apparatus.trim())
-    .bind(payload)
-    .execute(pool)
-    .await
-    .map_err(|_| ProductionMapError::StoreFailed)?;
-    Ok(())
+    for order_id in &order_ids {
+        reject_training_order_id(order_id)?;
+    }
+    let mut tx = pool
+        .begin()
+        .await
+        .map_err(|_| ProductionMapError::StoreFailed)?;
+    let order_control_ids = order_ids.iter().cloned().collect::<BTreeSet<_>>();
+    for order_id in order_control_ids {
+        let control_state = lock_order_control_tx(&mut tx, &order_id).await?;
+        if control_state
+            .as_ref()
+            .is_some_and(|(state, _)| state == "frozen")
+        {
+            return Err(ProductionMapError::OrderFrozen);
+        }
+    }
+    sqlx::query("SELECT pg_advisory_xact_lock(hashtextextended($1, 0))")
+        .bind(format!(
+            "mini-rs-erp:queue-apparatus:{}",
+            apparatus.trim().to_lowercase()
+        ))
+        .execute(&mut *tx)
+        .await
+        .map_err(|_| ProductionMapError::StoreFailed)?;
+    save_apparatus_sequence_tx(&mut tx, apparatus, &order_ids).await?;
+    tx.commit()
+        .await
+        .map_err(|_| ProductionMapError::StoreFailed)
 }
 
 pub(super) async fn save_apparatus_sequence_tx(
@@ -140,6 +171,9 @@ pub(super) async fn save_apparatus_sequence_tx(
         .map(|id| id.trim().to_string())
         .filter(|id| !id.is_empty())
         .collect::<Vec<_>>();
+    for order_id in &order_ids {
+        reject_training_order_id(order_id)?;
+    }
     let payload = serde_json::to_value(order_ids).map_err(|_| ProductionMapError::StoreFailed)?;
     sqlx::query(
         "INSERT INTO mini_queue_sequences (apparatus, order_ids, updated_at)
@@ -170,6 +204,9 @@ pub(super) async fn load_apparatus_queue_states(
 
     let mut grouped = BTreeMap::<String, BTreeMap<String, String>>::new();
     for (apparatus, order_id, state) in rows {
+        if is_training_order_namespace(&order_id) {
+            continue;
+        }
         grouped
             .entry(apparatus)
             .or_default()

@@ -4,7 +4,7 @@ use sqlx::PgPool;
 
 use crate::core::production_map::{
     CompletedQueueOrder, CompletedQueueOrderStatus, OrderProgressBatch, OrderRunSession,
-    ProductionMapError, ProductionOrderLogEntry,
+    ProductionMapError, ProductionOrderLogEntry, reject_training_order_id,
 };
 
 use super::progress_helpers::{
@@ -36,11 +36,17 @@ pub(super) async fn load_completed_queue_orders_for_actor(
                         THEN 'completed'
                     ELSE 'in_progress'
                 END AS completion_status
-            FROM mini_queue_action_events
-            WHERE actor_ref = $1
-              AND action IN ('pause', 'freeze', 'detach_roll', 'roll_complete', 'complete')
-              AND COALESCE(payload_json->>'completion_request', 'false') <> 'true'
-            ORDER BY order_id, created_at DESC
+            FROM mini_queue_action_events AS event
+            WHERE event.actor_ref = $1
+              AND event.action IN ('pause', 'freeze', 'detach_roll', 'roll_complete', 'complete')
+              AND COALESCE(event.payload_json->>'completion_request', 'false') <> 'true'
+              AND NOT EXISTS (
+                  SELECT 1
+                  FROM mini_order_control_states AS control
+                  WHERE control.order_id = event.order_id
+                    AND control.state = 'frozen'
+              )
+            ORDER BY event.order_id, event.created_at DESC
          ) latest
          WHERE completion_status <> 'frozen'
          ORDER BY created_at DESC
@@ -52,22 +58,22 @@ pub(super) async fn load_completed_queue_orders_for_actor(
     .await
     .map_err(|_| ProductionMapError::StoreFailed)?;
 
-    Ok(rows
-        .into_iter()
-        .map(
-            |(order_id, apparatus, completion_status, completed_at_unix)| CompletedQueueOrder {
-                apparatus,
-                order_id,
-                completed_at_unix,
-                status: if completion_status == "completed" {
-                    CompletedQueueOrderStatus::Completed
-                } else {
-                    CompletedQueueOrderStatus::InProgress
-                },
-                issue_note: String::new(),
+    let mut completed = Vec::with_capacity(rows.len());
+    for (order_id, apparatus, completion_status, completed_at_unix) in rows {
+        reject_training_order_id(&order_id)?;
+        completed.push(CompletedQueueOrder {
+            apparatus,
+            order_id,
+            completed_at_unix,
+            status: if completion_status == "completed" {
+                CompletedQueueOrderStatus::Completed
+            } else {
+                CompletedQueueOrderStatus::InProgress
             },
-        )
-        .collect())
+            issue_note: String::new(),
+        });
+    }
+    Ok(completed)
 }
 
 pub(super) async fn load_queue_action_logs_for_orders(
@@ -81,6 +87,9 @@ pub(super) async fn load_queue_action_logs_for_orders(
         .collect::<Vec<_>>();
     if order_ids.is_empty() {
         return Ok(BTreeMap::new());
+    }
+    for order_id in &order_ids {
+        reject_training_order_id(order_id)?;
     }
     let rows = sqlx::query_as::<_, QueueActionLogRow>(
         "SELECT event_id, apparatus, order_id, action, from_state, to_state,
@@ -149,6 +158,7 @@ pub(super) async fn load_active_order_run_session(
     apparatus: &str,
     order_id: &str,
 ) -> Result<Option<OrderRunSession>, ProductionMapError> {
+    reject_training_order_id(order_id)?;
     let row = sqlx::query_as::<_, ProgressSessionRow>(
         "SELECT session_id, apparatus, order_id, status,
                 worker_role, worker_ref, worker_display_name,
@@ -299,6 +309,9 @@ pub(super) async fn load_order_run_sessions_for_orders(
         .collect::<Vec<_>>();
     if order_ids.is_empty() {
         return Ok(BTreeMap::new());
+    }
+    for order_id in &order_ids {
+        reject_training_order_id(order_id)?;
     }
     let rows = sqlx::query_as::<_, ProgressSessionRow>(
         "SELECT session_id, apparatus, order_id, status,
@@ -461,6 +474,7 @@ pub(super) async fn load_progress_batches_for_order(
     if order_id.is_empty() {
         return Ok(Vec::new());
     }
+    reject_training_order_id(order_id)?;
     let order_ids = vec![order_id.to_string()];
     let mut batches = load_progress_batches_for_orders(pool, &order_ids).await?;
     Ok(batches.remove(order_id).unwrap_or_default())
@@ -477,6 +491,9 @@ pub(super) async fn load_progress_batches_for_orders(
         .collect::<Vec<_>>();
     if order_ids.is_empty() {
         return Ok(BTreeMap::new());
+    }
+    for order_id in &order_ids {
+        reject_training_order_id(order_id)?;
     }
     let rows = sqlx::query_as::<_, ProgressBatchRow>(
         "SELECT batch.batch_id, batch.revision, batch.session_id,

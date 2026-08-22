@@ -127,6 +127,7 @@ impl ProductionMapService {
             return Err(ProductionMapError::ProgressInputInvalid);
         };
         let mut batch = batch.ok_or(ProductionMapError::ProgressBatchNotFound)?;
+        reject_training_order_id(&batch.order_id)?;
         restore_self_consumed_wip(&mut batch);
         batch.refresh_status_detail();
         Ok(batch)

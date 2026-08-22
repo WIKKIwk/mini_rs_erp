@@ -5,6 +5,7 @@ use sqlx::PgPool;
 use crate::core::auth::models::Principal;
 use crate::core::qolip::normalize::role_code;
 use crate::core::qolip::{QolipError, QolipOrderNote};
+use crate::core::production_map::is_training_order_namespace;
 
 use super::rows::QolipOrderNoteRow;
 
@@ -18,6 +19,7 @@ pub(super) async fn load_order_notes(
                to_char(updated_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS"Z"') AS updated_at
         FROM mini_qolip_order_notes
         WHERE principal_role = $1 AND principal_ref = $2
+          AND lower(btrim(order_id)) NOT LIKE 'training-%'
         ORDER BY updated_at DESC, order_id
         "#,
     )
@@ -35,6 +37,9 @@ pub(super) async fn load_order_note(
     principal: &Principal,
     order_id: &str,
 ) -> Result<Option<QolipOrderNote>, QolipError> {
+    if is_training_order_namespace(order_id) {
+        return Err(QolipError::TrainingOrderIdReserved);
+    }
     let row = sqlx::query_as::<_, QolipOrderNoteRow>(
         r#"
         SELECT order_id, item_code, item_name, qolip_codes, status,
@@ -58,6 +63,9 @@ pub(super) async fn load_order_note_qolip_codes_in_use(
     principal: &Principal,
     order_id: &str,
 ) -> Result<Vec<String>, QolipError> {
+    if is_training_order_namespace(order_id) {
+        return Err(QolipError::TrainingOrderIdReserved);
+    }
     sqlx::query_scalar::<_, String>(
         r#"
         SELECT DISTINCT lower(code.value)
@@ -85,6 +93,9 @@ pub(super) async fn save_order_note(
     principal: &Principal,
     note: QolipOrderNote,
 ) -> Result<QolipOrderNote, QolipError> {
+    if is_training_order_namespace(&note.order_id) {
+        return Err(QolipError::TrainingOrderIdReserved);
+    }
     let mut tx = pool.begin().await.map_err(|_| QolipError::StoreFailed)?;
     let code_keys = note
         .qolip_codes
@@ -107,6 +118,7 @@ pub(super) async fn save_order_note(
                 FROM mini_qolip_order_notes AS existing
                 CROSS JOIN LATERAL unnest(existing.qolip_codes) AS code(value)
                 WHERE lower(existing.status) = 'given'
+                  AND lower(btrim(existing.order_id)) NOT LIKE 'training-%'
                   AND NOT (
                       existing.order_id = $1
                       AND existing.principal_role = $2

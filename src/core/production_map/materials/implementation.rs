@@ -164,6 +164,7 @@ impl ProductionMapService {
         order_id: &str,
         apparatus: &str,
     ) -> Result<bool, ProductionMapError> {
+        reject_training_order_id(order_id)?;
         let queue_states = self.store.apparatus_queue_states().await?;
         let is_active = queue_states.iter().any(|(candidate, states)| {
             queue_state::apparatus_titles_match(candidate, apparatus)
@@ -203,6 +204,7 @@ impl ProductionMapService {
         state_material_barcodes: &[String],
         material_barcodes: &str,
     ) -> Result<RawMaterialStartRequirements, ProductionMapError> {
+        reject_training_order_id(order_id)?;
         let assignments = self
             .raw_material_assignments_for_order_apparatus(order_id, apparatus)
             .await?;
@@ -225,6 +227,7 @@ impl ProductionMapService {
         if order_id.is_empty() || barcode.is_empty() {
             return Err(ProductionMapError::RawMaterialInvalidInput);
         }
+        reject_training_order_id(&order_id)?;
         let removed = self
             .store
             .delete_raw_material_assignment(&order_id, &barcode)
@@ -257,6 +260,7 @@ impl ProductionMapService {
         if order_id.is_empty() || item_group_path.is_empty() {
             return Err(ProductionMapError::RawMaterialInvalidInput);
         }
+        reject_training_order_id(order_id)?;
         let Some(map) = self.raw_map(order_id).await? else {
             return Err(ProductionMapError::MapNotFound);
         };
@@ -271,6 +275,7 @@ impl ProductionMapService {
         actor: &QueueActionActor,
     ) -> Result<(RawMaterialAssignment, Vec<String>), ProductionMapError> {
         let _guard = self.queue_action_guard().await;
+        reject_training_order_id(&input.order_id)?;
         let normalized_barcode = normalize_barcode(&input.barcode);
         let requested_apparatus = input.apparatus.trim().to_string();
         let item_group_path =
@@ -361,6 +366,7 @@ impl ProductionMapService {
         {
             return Err(ProductionMapError::RawMaterialInvalidInput);
         }
+        reject_training_order_id(&order_id)?;
         let apparatus_options = self
             .raw_material_assignment_apparatus_options(&order_id, &item_group_path)
             .await?;

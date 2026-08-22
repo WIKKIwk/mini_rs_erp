@@ -42,6 +42,6 @@ impl SessionRecord {
     }
 
     pub fn is_expired(&self, now: OffsetDateTime) -> bool {
-        self.expires_at.is_some_and(|expires_at| now > expires_at)
+        self.expires_at.is_some_and(|expires_at| now >= expires_at)
     }
 }

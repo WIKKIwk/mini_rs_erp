@@ -8,6 +8,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use super::*;
 use crate::app::AppState;
 use crate::core::auth::models::{Principal, PrincipalRole};
+use crate::core::authz::assigned_apparatus_contains;
 use crate::core::authz::Capability;
 use crate::core::calculate_orders::{
     CalculateOrderError, CalculateOrderTemplate, owner_key, validate_template,
@@ -19,8 +20,8 @@ use crate::core::production_map::{
     ApparatusQueueWorkerInteraction, OrderProgressBatch, OrderProgressBatchStatus,
     OrderProgressBatchStatusDetail, OrderProgressBatchWipStatus, ProductionMapDefinition,
     ProductionMapEdge, ProductionMapLiveSnapshot, ProductionMapNode, ProductionMapNodeKind,
-    ProductionMapSaved, ProductionOrderStatusDetail, chain, progress_batch_id, progress_qr_payload,
-    queue_state,
+    ProductionMapSaved, ProductionOrderStatusDetail, chain, is_training_order_id,
+    progress_batch_id, progress_qr_payload, queue_state,
 };
 use crate::core::returned_paint::{
     ReturnedPaintItem, calculate_returned_paint, returned_paint_astatka_total,
@@ -148,7 +149,7 @@ fn training_input_order_id_from_qr(qr_payload: &str) -> Option<String> {
         return None;
     }
     let order_id = order_id.trim().to_ascii_lowercase();
-    order_id.starts_with("training-").then_some(order_id)
+    is_training_order_id(&order_id).then_some(order_id)
 }
 
 fn is_laminatsiya_apparatus(apparatus: &str) -> bool {
@@ -506,20 +507,19 @@ pub(super) async fn training_input_progress_batch_for_principal(
     next_apparatus: &str,
 ) -> Result<Vec<OrderProgressBatch>, TrainingWorkspaceError> {
     let order_id = order_id.trim();
-    if !order_id.starts_with("training-") {
+    if !is_training_order_id(order_id) {
         return Ok(Vec::new());
     }
     let requested_next = next_apparatus.trim();
     let saved = if matches!(&principal.role, PrincipalRole::Aparatchi) {
-        worker_training_overlay(state, principal)
-            .await?
-            .maps
-            .into_iter()
-            .find(|saved| {
-                saved.map.id.trim() == order_id
-                    && (requested_next.is_empty()
-                        || training_map_has_apparatus(saved, requested_next))
-            })
+        let overlay = worker_training_overlay(state, principal).await?;
+        let active_apparatuses = overlay.active_apparatuses.clone();
+        overlay.maps.into_iter().find(|saved| {
+            saved.map.id.trim() == order_id
+                && (requested_next.is_empty()
+                    || (assigned_apparatus_contains(requested_next, &active_apparatuses)
+                        && training_map_has_apparatus(saved, requested_next)))
+        })
     } else {
         state
             .training_workspace
@@ -536,6 +536,14 @@ pub(super) async fn training_input_progress_batch_for_principal(
     } else {
         requested_next.to_string()
     };
+    if principal.role == PrincipalRole::Aparatchi
+        && !state
+            .admin
+            .principal_allows_apparatus(principal, &target)
+            .await
+    {
+        return Ok(Vec::new());
+    }
     let Some(_) = training_input_stage_for_map(&saved.map, &target) else {
         return Ok(Vec::new());
     };
@@ -577,7 +585,13 @@ pub(super) async fn training_progress_batch_for_qr(
         } else {
             store.map(&batch.order_id).await?.is_some()
         };
-        return Ok(is_visible.then_some(batch));
+        let apparatus = training_batch_scope_apparatus(&batch);
+        let is_assigned = principal.role != PrincipalRole::Aparatchi
+            || state
+                .admin
+                .principal_allows_apparatus(principal, apparatus)
+                .await;
+        return Ok((is_visible && is_assigned).then_some(batch));
     }
     let identity_for_qr = store.training_input_batch_for_qr(qr_payload).await?;
     let legacy_order_id = training_input_order_id_from_qr(qr_payload);
@@ -612,6 +626,14 @@ pub(super) async fn training_progress_batch_for_qr(
     let Some(apparatus) = apparatus else {
         return Ok(None);
     };
+    if principal.role == PrincipalRole::Aparatchi
+        && !state
+            .admin
+            .principal_allows_apparatus(principal, &apparatus)
+            .await
+    {
+        return Ok(None);
+    }
     let identity = match identity_for_qr {
         Some(identity) => identity,
         None => {
@@ -672,7 +694,8 @@ pub(super) async fn worker_training_overlay(
         .into_iter()
         .filter(|apparatus| {
             modes.iter().any(|(configured, enabled)| {
-                *enabled && queue_state::apparatus_titles_match(configured, apparatus)
+                *enabled
+                    && assigned_apparatus_contains(configured, std::slice::from_ref(apparatus))
             })
         })
         .map(|apparatus| apparatus.trim().to_string())
@@ -798,7 +821,7 @@ pub(super) async fn training_map_for_principal(
     apparatus: &str,
 ) -> Result<Option<ProductionMapSaved>, TrainingWorkspaceError> {
     let order_id = order_id.trim();
-    if !order_id.starts_with("training-") {
+    if !is_training_order_id(order_id) {
         return Ok(None);
     }
     let store = state
@@ -809,7 +832,8 @@ pub(super) async fn training_map_for_principal(
     if matches!(&principal.role, PrincipalRole::Aparatchi) {
         let overlay = worker_training_overlay(state, principal).await?;
         let Some(active_apparatus) = overlay.active_apparatuses.iter().find(|candidate| {
-            !apparatus.is_empty() && queue_state::apparatus_titles_match(candidate, apparatus)
+            !apparatus.is_empty()
+                && assigned_apparatus_contains(apparatus, std::slice::from_ref(*candidate))
         }) else {
             return Err(TrainingWorkspaceError::MapNotFound);
         };
@@ -990,14 +1014,16 @@ pub(super) async fn training_queue_action(
     print_input: TrainingQueuePrintInput,
 ) -> Result<Option<serde_json::Value>, TrainingWorkspaceError> {
     let order_id = order_id.trim();
-    if !order_id.starts_with("training-") {
+    if !is_training_order_id(order_id) {
         return Ok(None);
     }
     let overlay = worker_training_overlay(state, principal).await?;
     let Some(apparatus) = overlay
         .active_apparatuses
         .iter()
-        .find(|candidate| queue_state::apparatus_titles_match(candidate, apparatus))
+        .find(|candidate| {
+            assigned_apparatus_contains(apparatus, std::slice::from_ref(*candidate))
+        })
         .cloned()
     else {
         return Err(TrainingWorkspaceError::MapNotFound);
@@ -1338,6 +1364,20 @@ fn training_map_has_apparatus(saved: &ProductionMapSaved, apparatus: &str) -> bo
             && !is_training_input_node(node)
             && queue_state::apparatus_titles_match(&node.title, apparatus)
     })
+}
+
+fn training_batch_scope_apparatus(batch: &OrderProgressBatch) -> &str {
+    if batch
+        .payload_json
+        .get("training_input")
+        .and_then(serde_json::Value::as_bool)
+        .unwrap_or(false)
+        && !batch.next_apparatus.trim().is_empty()
+    {
+        &batch.next_apparatus
+    } else {
+        &batch.apparatus
+    }
 }
 
 fn training_print_action(action: queue_state::ApparatusQueueAction) -> bool {
@@ -2038,7 +2078,7 @@ pub async fn training_input_batches(
         Method::POST => {
             let input: TrainingInputBatchRequest = parse_json(&body)?;
             let order_id = input.order_id.trim();
-            if order_id.is_empty() || !order_id.starts_with("training-") {
+            if !is_training_order_id(order_id) {
                 return Err(bad_request("training order id kerak"));
             }
             let saved = store
@@ -2105,7 +2145,7 @@ pub async fn training_input_batches(
         }
         Method::DELETE => {
             let order_id = query.order_id.trim();
-            if order_id.is_empty() || !order_id.starts_with("training-") {
+            if !is_training_order_id(order_id) {
                 return Err(bad_request("training order id kerak"));
             }
             let deleted = store
@@ -2383,7 +2423,7 @@ pub async fn training_raw_material_assignments(
     headers: HeaderMap,
     body: Bytes,
 ) -> Result<Response, AdminError> {
-    authorize_any_capability(
+    let principal = authorize_any_capability(
         &state,
         &headers,
         &[
@@ -2393,13 +2433,48 @@ pub async fn training_raw_material_assignments(
         ],
     )
     .await?;
+    let assigned_apparatus = if principal.role == PrincipalRole::MaterialTaminotchi {
+        Some(state.admin.principal_assigned_apparatus(&principal).await)
+    } else {
+        None
+    };
+    let require_apparatus_scope = |apparatus: &str| {
+        if assigned_apparatus
+            .as_ref()
+            .is_some_and(|assigned| !assigned_apparatus_contains(apparatus, assigned))
+        {
+            Err(bad_request("apparatus_not_assigned"))
+        } else {
+            Ok(())
+        }
+    };
     let store = training_store(&state)?;
     match method {
         Method::GET => {
+            let order_id = query.order_id.trim();
+            let apparatus = query.apparatus.trim();
+            if !order_id.is_empty() && !is_training_order_id(order_id) {
+                return Err(bad_request("training order id kerak"));
+            }
+            if !apparatus.is_empty() {
+                require_apparatus_scope(apparatus)?;
+            }
             let assignments = store
-                .raw_material_assignments(&query.order_id, &query.apparatus)
+                .raw_material_assignments(order_id, apparatus)
                 .await
                 .map_err(training_workspace_error)?;
+            let assignments = match assigned_apparatus.as_deref() {
+                Some(assigned) => assignments
+                    .into_iter()
+                    .filter(|assignment| {
+                        assignment
+                            .get("apparatus")
+                            .and_then(serde_json::Value::as_str)
+                            .is_some_and(|apparatus| assigned_apparatus_contains(apparatus, assigned))
+                    })
+                    .collect::<Vec<_>>(),
+                None => assignments,
+            };
             Ok(json_response(assignments))
         }
         Method::POST => {
@@ -2409,16 +2484,33 @@ pub async fn training_raw_material_assignments(
                 .and_then(serde_json::Value::as_str)
                 .unwrap_or_default()
                 .trim();
-            if order_id.is_empty() {
-                return Err(bad_request("order_id kerak"));
+            if !is_training_order_id(order_id) {
+                return Err(bad_request("training order id kerak"));
             }
-            if store
+            let apparatus = payload
+                .get("apparatus")
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or_default()
+                .trim();
+            if apparatus.is_empty() {
+                return Err(bad_request("apparatus kerak"));
+            }
+            require_apparatus_scope(apparatus)?;
+            let saved = store
                 .map(order_id)
                 .await
                 .map_err(training_workspace_error)?
-                .is_none()
-            {
-                return Err(not_found("training_order_not_found"));
+                .ok_or_else(|| not_found("training_order_not_found"))?;
+            let configured_apparatus = saved
+                .map
+                .nodes
+                .iter()
+                .filter(|node| node.kind == ProductionMapNodeKind::Apparatus)
+                .map(|node| node.title.trim().to_string())
+                .filter(|title| !title.is_empty())
+                .collect::<Vec<_>>();
+            if !queue_state::apparatus_matches_assigned(apparatus, &configured_apparatus) {
+                return Err(bad_request("training_apparatus_not_configured"));
             }
             let assignment = store
                 .save_raw_material_assignment(payload)
@@ -2430,9 +2522,10 @@ pub async fn training_raw_material_assignments(
             let order_id = query.order_id.trim();
             let apparatus = query.apparatus.trim();
             let barcode = query.barcode.trim();
-            if order_id.is_empty() || apparatus.is_empty() || barcode.is_empty() {
+            if !is_training_order_id(order_id) || apparatus.is_empty() || barcode.is_empty() {
                 return Err(bad_request("order_id, apparatus va barcode kerak"));
             }
+            require_apparatus_scope(apparatus)?;
             let deleted = store
                 .delete_raw_material_assignment(order_id, apparatus, barcode)
                 .await

@@ -179,6 +179,14 @@ async fn wip_batches_endpoint_lists_waiting_and_in_use_batches() {
     let all_for_next_body = json_body(all_for_next).await;
     assert_eq!(all_for_next_body["batches"][0]["qr_payload"], qr_payload);
     assert_eq!(all_for_next_body["batches"][0]["wip_status"], "in_use");
+    assert_eq!(
+        all_for_next_body["assigned_apparatus"],
+        serde_json::json!(["7 ta rangli pechat", "Laminatsiya mashinasi"])
+    );
+    let revision = all_for_next_body["snapshot_revision"]
+        .as_str()
+        .expect("wip snapshot revision");
+    assert_eq!(revision.len(), 64);
 }
 
 #[tokio::test]

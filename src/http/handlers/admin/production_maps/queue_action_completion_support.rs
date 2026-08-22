@@ -163,13 +163,19 @@ pub(super) fn qolip_queue_error(error: crate::core::qolip::QolipError) -> AdminE
         crate::core::qolip::QolipError::QolipCodeMismatch => bad_request("qolip_code_mismatch"),
         crate::core::qolip::QolipError::CheckoutRequired => bad_request("qolip_checkout_required"),
         crate::core::qolip::QolipError::CheckoutAssignedToAnotherWorker => {
-            bad_request("qolip_checkout_assigned_to_another_worker")
+            refresh_required_bad_request("qolip_checkout_assigned_to_another_worker")
         }
-        crate::core::qolip::QolipError::QolipInUse => bad_request("qolip_already_in_use"),
-        crate::core::qolip::QolipError::LocationNotFound => bad_request("qolip_location_not_found"),
-        crate::core::qolip::QolipError::InsufficientStock => bad_request("insufficient_stock"),
+        crate::core::qolip::QolipError::QolipInUse => {
+            refresh_required_bad_request("qolip_already_in_use")
+        }
+        crate::core::qolip::QolipError::LocationNotFound => {
+            refresh_required_bad_request("qolip_location_not_found")
+        }
+        crate::core::qolip::QolipError::InsufficientStock => {
+            refresh_required_bad_request("insufficient_stock")
+        }
         crate::core::qolip::QolipError::LocationIdentityMismatch => {
-            bad_request("location_identity_mismatch")
+            refresh_required_bad_request("location_identity_mismatch")
         }
         crate::core::qolip::QolipError::StoreFailed => server_error("qolip store failed"),
         other => bad_request(other.to_string()),

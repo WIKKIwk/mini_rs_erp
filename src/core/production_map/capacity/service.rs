@@ -21,6 +21,7 @@ impl ProductionMapService {
     ) -> Result<(), ProductionMapError> {
         let apparatus = apparatus.trim();
         let order_id = order_id.trim();
+        reject_training_order_id(order_id)?;
         let profiles = self.store.apparatus_capacity_profiles().await?;
         let profile = profile_for_apparatus(
             &profiles,
@@ -130,6 +131,7 @@ impl ProductionMapService {
     ) -> Result<ApparatusScheduleResult, ProductionMapError> {
         let _guard = self.queue_action_guard().await;
         let input = normalize_schedule_request(self.store.as_ref(), input).await?;
+        reject_training_order_id(&input.order_id)?;
         let map = self
             .store
             .maps()

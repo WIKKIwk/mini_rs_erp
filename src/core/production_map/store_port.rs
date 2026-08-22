@@ -58,6 +58,12 @@ pub struct QueueActionProgressWriteResult {
     pub qolip_checkout_committed: bool,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MixedStageBackfillWriteResult {
+    Applied,
+    AlreadyPresent,
+}
+
 #[derive(Debug, Clone)]
 pub struct QueueActionProgressWrite {
     pub apparatus: String,
@@ -481,6 +487,20 @@ pub trait ProductionMapStorePort: Send + Sync {
     }
     async fn put_order_progress_batch(&self, _batch: OrderProgressBatch) -> StoreResult<()> {
         Ok(())
+    }
+    /// Persist a historical prior-stage WIP record without changing queue
+    /// state, sequence order, control state, or queue-action history.
+    ///
+    /// Production stores override this with one transaction and an
+    /// idempotency check. The default deliberately fails so a store that does
+    /// not implement the cutover path cannot report a successful import.
+    async fn put_mixed_stage_backfill(
+        &self,
+        _session: OrderRunSession,
+        _event: OrderProgressEvent,
+        _batch: OrderProgressBatch,
+    ) -> StoreResult<MixedStageBackfillWriteResult> {
+        Err(ProductionMapError::StoreFailed)
     }
     async fn apparatus_transfer_by_idempotency_key(
         &self,

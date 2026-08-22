@@ -1,24 +1,19 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use super::super::queue_state;
-use super::super::types::{
-    ProductionMapDefinition, ProductionMapNodeKind, ProductionOrderLogEntry,
-};
+use super::super::types::{ProductionMapDefinition, ProductionOrderLogEntry};
+use super::super::chain;
 
 pub(in crate::core::production_map) fn required_apparatus_for_closed_order(
     map: &ProductionMapDefinition,
 ) -> Vec<String> {
     let mut seen = BTreeSet::new();
     let mut apparatus = Vec::new();
-    for node in &map.nodes {
-        if node.kind != ProductionMapNodeKind::Apparatus {
-            continue;
-        }
-        let title = if node.alternative_assigned_title.trim().is_empty() {
-            node.title.trim()
-        } else {
-            node.alternative_assigned_title.trim()
-        };
+    // A production stage can be an Apparatus or a downstream Task node. Use
+    // the same linear work-stage projection as queue transitions so a worker
+    // completing one stage cannot close an order before later work exists.
+    for stage in chain::linear_work_stages(map) {
+        let title = stage.station_title.trim();
         if title.is_empty() || !seen.insert(title.to_ascii_lowercase()) {
             continue;
         }

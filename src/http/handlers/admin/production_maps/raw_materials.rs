@@ -5,6 +5,7 @@ use super::raw_material_details::{
     validate_rulon_size_for_apparatus_map,
 };
 use super::*;
+use crate::core::authz::assigned_apparatus_contains;
 use crate::db::postgres_raw_material_events::{
     RawMaterialEventDraft, RawMaterialEventQuery, RawMaterialEventScope,
 };
@@ -76,6 +77,10 @@ pub async fn raw_material_start_requirements(
     if query.order_id.trim().is_empty() || query.apparatus.trim().is_empty() {
         return Err(bad_request("apparatus and order_id are required"));
     }
+    if !principal_can_use_apparatus(&state, &principal, &query.apparatus).await {
+        return Err(production_map_error(ProductionMapError::ApparatusNotAssigned));
+    }
+    reject_training_order_id_for_production(&query.order_id)?;
     if let Some(training_requirements) =
         super::super::training::training_raw_material_start_requirements(
             &state,
@@ -251,19 +256,12 @@ pub async fn raw_material_assignments(
             {
                 return Ok(json_response(training_assignments));
             }
-            if principal.role == PrincipalRole::MaterialTaminotchi
-                && !query.apparatus.trim().is_empty()
+            if !query.apparatus.trim().is_empty()
+                && !principal_can_use_apparatus(&state, &principal, &query.apparatus).await
             {
-                let assigned_apparatus =
-                    state.admin.principal_assigned_apparatus(&principal).await;
-                if !queue_state::apparatus_matches_assigned(
-                    &query.apparatus,
-                    &assigned_apparatus,
-                ) {
                     return Err(production_map_error(
                         ProductionMapError::ApparatusNotAssigned,
                     ));
-                }
             }
             let mut assignments = state
                 .production_maps
@@ -296,8 +294,12 @@ pub async fn raw_material_assignments(
         Method::POST => {
             require_capability(&state, &principal, Capability::RawMaterialAssign).await?;
             let input: RawMaterialAssignmentInput = parse_json(&body)?;
+            reject_training_order_id_for_production(&input.order_id)?;
             let (input, warehouse) =
                 fill_raw_material_assignment_input(&state, &principal, input).await?;
+            if !principal_can_use_apparatus(&state, &principal, &input.apparatus).await {
+                return Err(production_map_error(ProductionMapError::ApparatusNotAssigned));
+            }
             let assigned = state
                 .production_maps
                 .assign_raw_material_to_order(input, &queue_action_actor(&principal))
@@ -313,11 +315,15 @@ pub async fn raw_material_assignments(
         Method::DELETE => {
             require_capability(&state, &principal, Capability::RawMaterialAssign).await?;
             let input: RawMaterialAssignmentDeleteInput = parse_json(&body)?;
+            reject_training_order_id_for_production(&input.order_id)?;
             let existing = find_raw_material_assignment(&state, &input.order_id, &input.barcode)
                 .await?
                 .ok_or_else(|| {
                     production_map_error(ProductionMapError::RawMaterialAssignmentNotFound)
                 })?;
+            if !principal_can_use_apparatus(&state, &principal, &existing.apparatus).await {
+                return Err(production_map_error(ProductionMapError::ApparatusNotAssigned));
+            }
             let stock = raw_material_unlink_stock_guard(&state, &existing.barcode).await?;
             let removed = state
                 .production_maps
@@ -455,7 +461,7 @@ pub async fn raw_material_assignment_candidates(
     let requested_apparatus = query.apparatus.trim();
     if assigned_apparatus.as_ref().is_some_and(|assigned| {
         !requested_apparatus.is_empty()
-            && !queue_state::apparatus_matches_assigned(requested_apparatus, assigned)
+            && !assigned_apparatus_contains(requested_apparatus, assigned)
     }) {
         return Err(production_map_error(
             ProductionMapError::ApparatusNotAssigned,
@@ -591,7 +597,7 @@ fn filter_raw_material_apparatus_options(
         .into_iter()
         .filter(|apparatus| {
             assigned_apparatus
-                .is_none_or(|assigned| queue_state::apparatus_matches_assigned(apparatus, assigned))
+                .is_none_or(|assigned| assigned_apparatus_contains(apparatus, assigned))
         })
         .filter(|apparatus| {
             requested_apparatus.is_empty()
@@ -672,7 +678,7 @@ pub async fn raw_material_assignment_candidate_orders(
     let requested_apparatus = query.apparatus.trim();
     if assigned_apparatus.as_ref().is_some_and(|assigned| {
         !requested_apparatus.is_empty()
-            && !queue_state::apparatus_matches_assigned(requested_apparatus, assigned)
+            && !assigned_apparatus_contains(requested_apparatus, assigned)
     }) {
         return Err(production_map_error(
             ProductionMapError::ApparatusNotAssigned,
@@ -759,7 +765,7 @@ pub async fn raw_material_intake_candidates(
     if order_id.is_empty() || apparatus.is_empty() {
         return Err(bad_request("apparatus and order_id are required"));
     }
-    if order_id.starts_with("training-") {
+    if is_training_order_namespace(order_id) {
         super::super::training::training_material_assignments_for_principal(
             &state,
             &principal,
@@ -772,8 +778,7 @@ pub async fn raw_material_intake_candidates(
         return Ok(json_response(Vec::<serde_json::Value>::new()));
     }
     if principal.role == PrincipalRole::Aparatchi {
-        let assigned_apparatus = state.admin.principal_assigned_apparatus(&principal).await;
-        if !queue_state::apparatus_matches_assigned(apparatus, &assigned_apparatus) {
+        if !principal_can_use_apparatus(&state, &principal, apparatus).await {
             return Err(production_map_error(
                 ProductionMapError::ApparatusNotAssigned,
             ));
@@ -870,11 +875,15 @@ pub async fn raw_material_intake(
     }
     require_capability(&state, &principal, Capability::ApparatusQueueManage).await?;
     let input: RawMaterialAssignmentInput = parse_json(&body)?;
+    reject_training_order_id_for_production(&input.order_id)?;
     let requested_apparatus = input.apparatus.trim().to_string();
     if requested_apparatus.is_empty() {
         return Err(production_map_error(
             ProductionMapError::RawMaterialInvalidInput,
         ));
+    }
+    if !principal_can_use_apparatus(&state, &principal, &requested_apparatus).await {
+        return Err(production_map_error(ProductionMapError::ApparatusNotAssigned));
     }
     let assignment = find_raw_material_assignment(&state, &input.order_id, &input.barcode)
         .await?

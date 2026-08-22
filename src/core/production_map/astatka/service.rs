@@ -25,6 +25,7 @@ impl ProductionMapService {
         if apparatus.is_empty() || order_id.is_empty() {
             return Err(ProductionMapError::MissingId);
         }
+        reject_training_order_id(order_id)?;
         if !is_laminatsiya_title(apparatus) {
             return Err(ProductionMapError::ProgressInputInvalid);
         }
@@ -116,6 +117,7 @@ impl ProductionMapService {
         if apparatus.is_empty() || order_id.is_empty() {
             return Err(ProductionMapError::MissingId);
         }
+        reject_training_order_id(order_id)?;
         if !is_rezka_title(apparatus) {
             return Err(ProductionMapError::ProgressInputInvalid);
         }

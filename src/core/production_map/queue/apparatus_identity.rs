@@ -7,7 +7,39 @@ pub fn apparatus_matches_assigned(apparatus: &str, assigned: &[String]) -> bool 
     }
     assigned
         .iter()
-        .any(|item| apparatus_titles_match(apparatus, item.trim()))
+        .any(|item| assigned_apparatus_titles_match(apparatus, item.trim()))
+}
+
+/// Checks authorization identity, which is stricter than process/config
+/// compatibility. A base assignment covers its configured instances, but an
+/// assignment to one named instance must not authorize a different instance.
+fn assigned_apparatus_titles_match(requested: &str, assigned: &str) -> bool {
+    let requested = requested.trim();
+    let assigned = assigned.trim();
+    if requested.is_empty() || assigned.is_empty() {
+        return false;
+    }
+    if requested.eq_ignore_ascii_case(assigned) {
+        return true;
+    }
+
+    let requested_base = warehouse_base_title(requested);
+    let assigned_base = warehouse_base_title(assigned);
+    if !requested_base.eq_ignore_ascii_case(assigned_base) {
+        return false;
+    }
+
+    match (
+        warehouse_instance_suffix(requested),
+        warehouse_instance_suffix(assigned),
+    ) {
+        (Some(requested_instance), Some(assigned_instance)) => {
+            requested_instance.eq_ignore_ascii_case(assigned_instance)
+        }
+        (Some(_), None) => true,
+        (None, Some(_)) => false,
+        (None, None) => true,
+    }
 }
 
 pub fn apparatus_titles_match(left: &str, right: &str) -> bool {
@@ -85,6 +117,20 @@ pub fn warehouse_base_title(title: &str) -> &str {
         }
     }
     title
+}
+
+fn warehouse_instance_suffix(title: &str) -> Option<&str> {
+    let title = title.trim();
+    let base = warehouse_base_title(title);
+    if base.len() >= title.len() {
+        return None;
+    }
+    let suffix = title[base.len()..]
+        .trim()
+        .strip_prefix('-')
+        .map(str::trim)
+        .unwrap_or_else(|| title[base.len()..].trim());
+    (!suffix.is_empty()).then_some(suffix)
 }
 
 /// Maps a warehouse title to the persisted sequence/state key when suffixes differ.

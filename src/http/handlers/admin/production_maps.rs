@@ -1,4 +1,5 @@
 use super::*;
+use sha2::{Digest, Sha256};
 use crate::core::auth::models::{Principal, PrincipalRole};
 use crate::core::calculate_orders::{
     CalculateOrderError, CalculateOrderTemplate, owner_key, validate_template,
@@ -12,10 +13,11 @@ use crate::core::production_map::{
     ApparatusScheduleCancelRequest, ApparatusScheduleRequest, CompletionRequestDecision,
     MaterialScanProgressAction, OrderProgressBatchWipStatus, ProductionMapApparatusTransferRequest,
     ProductionMapBatchMoveRequest, ProductionMapDefinition, ProductionMapError,
-    ProductionMapMoveRequest, ProductionMapNodeKind, ProductionMapRunRequest, QueueActionActor,
+    ProductionMapLiveSnapshot, ProductionMapMoveRequest, ProductionMapNodeKind,
+    ProductionMapRunRequest, QueueActionActor,
     QueueProgressInput, RawMaterialAssignment, RawMaterialAssignmentDeleteInput,
     RawMaterialAssignmentInput, RawMaterialStockTransition, RawMaterialStockTransitionKind,
-    RezkaFrameProgressInput, WipProgressBatchQuery, queue_state,
+    RezkaFrameProgressInput, WipProgressBatchQuery, is_training_order_namespace, queue_state,
 };
 use crate::google_sheets::is_sheet_order_map;
 
@@ -70,6 +72,42 @@ pub use self::raw_materials::{
     raw_material_start_requirements, raw_material_stock,
 };
 pub use self::wip::{production_map_finished_goods_receive, production_map_wip_batches};
+
+fn mobile_production_snapshot_revision(
+    snapshot: &ProductionMapLiveSnapshot,
+    assigned_apparatus: &[String],
+) -> Result<String, String> {
+    let mut assigned_apparatus = assigned_apparatus
+        .iter()
+        .map(|apparatus| apparatus.trim().to_string())
+        .filter(|apparatus| !apparatus.is_empty())
+        .collect::<Vec<_>>();
+    assigned_apparatus.sort();
+    assigned_apparatus.dedup();
+    let payload = serde_json::json!({
+        "snapshot": snapshot,
+        "assigned_apparatus": assigned_apparatus,
+    });
+    let encoded = serde_json::to_vec(&payload)
+        .map_err(|_| "production_snapshot_revision_failed".to_string())?;
+    Ok(format!("{:x}", Sha256::digest(encoded)))
+}
+
+async fn mobile_production_snapshot_revision_for(
+    state: &AppState,
+    principal: &Principal,
+) -> Result<String, AdminError> {
+    let mut snapshot = state
+        .production_maps
+        .live_snapshot()
+        .await
+        .map_err(production_map_error)?;
+    super::training::merge_worker_training_snapshot(state, principal, &mut snapshot)
+        .await
+        .map_err(super::training::training_workspace_error)?;
+    let assigned_apparatus = state.admin.principal_assigned_apparatus(principal).await;
+    mobile_production_snapshot_revision(&snapshot, &assigned_apparatus).map_err(server_error)
+}
 
 pub async fn production_map_audit(
     State(state): State<AppState>,
@@ -259,7 +297,7 @@ pub async fn production_maps(
     match method {
         Method::GET => {
             if !query.id.trim().is_empty() {
-                if query.id.trim().starts_with("training-") {
+                if is_training_order_namespace(&query.id) {
                     let overlay = super::training::worker_training_overlay(&state, &principal)
                         .await
                         .map_err(super::training::training_workspace_error)?;
@@ -525,6 +563,12 @@ pub async fn production_map_sequence(
             super::training::merge_worker_training_snapshot(&state, &principal, &mut snapshot)
                 .await
                 .map_err(super::training::training_workspace_error)?;
+            let assigned_apparatus = state.admin.principal_assigned_apparatus(&principal).await;
+            let snapshot_revision = mobile_production_snapshot_revision(
+                &snapshot,
+                &assigned_apparatus,
+            )
+            .map_err(server_error)?;
             let order_customers = production_map_order_customers(&state, &snapshot.maps).await;
             let qolip_order_notes = if state
                 .admin
@@ -551,6 +595,8 @@ pub async fn production_map_sequence(
                 "frozen_orders_by_apparatus": snapshot.frozen_orders_by_apparatus,
                 "order_customers": order_customers,
                 "qolip_order_notes": qolip_order_notes,
+                "assigned_apparatus": assigned_apparatus,
+                "snapshot_revision": snapshot_revision,
             })))
         }
         Method::PUT => {
@@ -563,6 +609,9 @@ pub async fn production_map_sequence(
             let input: ApparatusSequencePutRequest = parse_json(&body)?;
             if input.apparatus.trim().is_empty() {
                 return Err(bad_request("apparatus is required"));
+            }
+            for order_id in &input.order_ids {
+                reject_training_order_id_for_production(order_id)?;
             }
             state
                 .production_maps
@@ -638,6 +687,16 @@ pub async fn production_map_queue_policies(
             })))
         }
         _ => Err(method_not_allowed()),
+    }
+}
+
+pub(super) fn reject_training_order_id_for_production(
+    order_id: &str,
+) -> Result<(), AdminError> {
+    if is_training_order_namespace(order_id) {
+        Err(bad_request("training_order_requires_training_endpoint"))
+    } else {
+        Ok(())
     }
 }
 

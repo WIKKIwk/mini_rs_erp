@@ -5,8 +5,10 @@ mod compiler;
 mod errors;
 mod formula;
 mod formula_parser;
+mod isolation;
 pub mod materials;
 mod materials_support;
+mod mixed_stage_backfill;
 #[cfg(test)]
 mod memory_store;
 pub mod pechat;
@@ -57,10 +59,18 @@ pub use service::{PreparedApparatusQueueAction, ProductionMapLiveSnapshot, Produ
 pub use store_port::{
     ProductionMapApparatusTransferWrite, ProductionMapStorePort, QueueActionProgressWrite,
     QueueActionProgressWriteResult, RawMaterialStockTransition, RawMaterialStockTransitionKind,
+    MixedStageBackfillWriteResult,
+};
+pub use mixed_stage_backfill::{
+    MixedStageBackfillManifest, MixedStageBackfillPlan, MixedStageBackfillPlanRow,
+    MixedStageBackfillPlanStatus, MixedStageBackfillRecord, MixedStageBackfillReport,
 };
 pub use types::*;
 pub(crate) use progress::progress_label_item_name;
 pub(crate) use progress::{progress_batch_id, progress_qr_payload};
+pub(crate) use isolation::{
+    is_training_order_id, is_training_order_namespace, reject_training_order_id,
+};
 
 #[cfg(test)]
 mod tests;

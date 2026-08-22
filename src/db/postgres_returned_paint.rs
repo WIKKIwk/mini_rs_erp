@@ -7,6 +7,7 @@ use crate::core::returned_paint::{
     ReturnedPaintRequest, ReturnedPaintStatus, ReturnedPaintStorePort, ReturnedPaintStoredImage,
     completion_report_message, normalize_returned_paint_stored_decimal, returned_paint_image_url,
 };
+use crate::core::production_map::is_training_order_namespace;
 
 #[derive(Clone)]
 pub struct PostgresReturnedPaintStore {
@@ -216,6 +217,7 @@ struct ReturnedPaintRow {
 
 impl ReturnedPaintRow {
     fn into_model(self) -> Result<ReturnedPaintRequest, ReturnedPaintError> {
+        reject_training_order_id(&self.order_id)?;
         let calculation = calculation_from_columns([
             self.rasxot_mix_total,
             self.astatka_mix_total,
@@ -268,6 +270,7 @@ struct ReturnedPaintImageRow {
 
 impl ReturnedPaintImageRow {
     fn into_model(self) -> Result<ReturnedPaintStoredImage, ReturnedPaintError> {
+        reject_training_order_id(&self.order_id)?;
         let image_size_bytes =
             u64::try_from(self.image_size_bytes).map_err(|_| ReturnedPaintError::StoreFailed)?;
         if image_size_bytes != self.body.len() as u64 {
@@ -293,6 +296,7 @@ pub(crate) async fn insert_returned_paint_request_tx(
     tx: &mut Transaction<'_, Postgres>,
     request: &ReturnedPaintRequest,
 ) -> Result<ReturnedPaintRequest, ReturnedPaintError> {
+    reject_training_order_id(&request.order_id)?;
     let items_json =
         serde_json::to_value(&request.items).map_err(|_| ReturnedPaintError::StoreFailed)?;
     let calculation = request.calculation.as_ref();
@@ -446,6 +450,14 @@ fn image_from_columns(
 
 fn parse_decimal(value: &str) -> Result<String, ReturnedPaintError> {
     normalize_returned_paint_stored_decimal(value).map_err(|_| ReturnedPaintError::StoreFailed)
+}
+
+fn reject_training_order_id(order_id: &str) -> Result<(), ReturnedPaintError> {
+    if is_training_order_namespace(order_id) {
+        Err(ReturnedPaintError::TrainingOrderIdReserved)
+    } else {
+        Ok(())
+    }
 }
 
 fn status_key(status: ReturnedPaintStatus) -> &'static str {

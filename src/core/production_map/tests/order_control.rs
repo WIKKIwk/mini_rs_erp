@@ -256,6 +256,71 @@ async fn freeze_request_requires_worker_pause_then_blocks_worker_actions() {
 }
 
 #[tokio::test]
+async fn frozen_control_forces_qr_report_status_over_stale_queue_projection() {
+    let store = std::sync::Arc::new(MemoryProductionMapStore::new());
+    let service = ProductionMapService::new(store.clone());
+    let apparatus = "Laminatsiya";
+    let order_id = "zakaz-frozen-qr-status";
+    service
+        .upsert_map(apparatus_stage_map(order_id, apparatus))
+        .await
+        .expect("map");
+    service
+        .apply_apparatus_queue_action(
+            apparatus,
+            order_id,
+            queue_state::ApparatusQueueAction::Start,
+            &[apparatus.to_string()],
+            actor("worker"),
+        )
+        .await
+        .expect("start");
+    let paused = service
+        .apply_apparatus_queue_action_with_progress(
+            apparatus,
+            order_id,
+            queue_state::ApparatusQueueAction::Pause,
+            &[apparatus.to_string()],
+            actor("worker"),
+            QueueProgressInput {
+                produced_qty: Some(2.0),
+                uom: "kg".to_string(),
+                ..QueueProgressInput::default()
+            },
+        )
+        .await
+        .expect("pause with WIP");
+    let qr_payload = paused
+        .progress_batch
+        .as_ref()
+        .expect("paused WIP")
+        .qr_payload
+        .clone();
+    service
+        .request_order_freeze(order_id, actor("admin"))
+        .await
+        .expect("freeze");
+    store
+        .put_apparatus_queue_states(
+            apparatus,
+            BTreeMap::from([(order_id.to_string(), "paused".to_string())]),
+        )
+        .await
+        .expect("stale queue projection");
+
+    let report = service
+        .progress_qr_report("", &qr_payload)
+        .await
+        .expect("QR report");
+    assert_eq!(report.order_status.order_status, "frozen");
+    assert_eq!(report.progress_batches.len(), 1);
+    assert_eq!(
+        report.progress_batches[0].wip_status,
+        OrderProgressBatchWipStatus::Waiting
+    );
+}
+
+#[tokio::test]
 async fn freeze_request_issue_safe_stop_rejects_partial_output_without_mutation() {
     let service = ProductionMapService::new(std::sync::Arc::new(MemoryProductionMapStore::new()));
     let apparatus = "7 ta rangli pechat";
@@ -851,6 +916,27 @@ async fn already_paused_order_leaves_queue_and_unfreeze_appends_at_tail() {
             .expect("sequence after freeze")
             .get(apparatus),
         Some(&vec![next_id.to_string()])
+    );
+    assert_eq!(
+        service
+            .set_apparatus_sequence(apparatus, vec![next_id.to_string(), frozen_id.to_string()])
+            .await,
+        Err(ProductionMapError::QueueActionNotAllowed)
+    );
+    assert_eq!(
+        service
+            .apparatus_sequences()
+            .await
+            .expect("sequence after rejected frozen reorder")
+            .get(apparatus),
+        Some(&vec![next_id.to_string()])
+    );
+    assert!(
+        service
+            .completed_queue_orders_for_actor("worker-1", 10)
+            .await
+            .expect("frozen worker history")
+            .is_empty()
     );
     service
         .apply_apparatus_queue_action(

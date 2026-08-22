@@ -1,7 +1,10 @@
+use std::collections::BTreeSet;
+
 use sqlx::{PgPool, Postgres, Transaction};
 
 use crate::core::production_map::{
-    ProductionMapApparatusTransferRecord, ProductionMapApparatusTransferWrite, ProductionMapError,
+    queue_state, reject_training_order_id, ProductionMapApparatusTransferRecord,
+    ProductionMapApparatusTransferWrite, ProductionMapError,
 };
 
 use super::catalog_helpers::save_apparatus_sequence_tx;
@@ -9,7 +12,9 @@ use super::map_helpers::put_map_inner_tx;
 use super::material_helpers::transfer_raw_material_assignments_tx;
 use super::progress_helpers::{put_order_progress_batch_tx, put_order_run_session_tx};
 use super::qolip_session_helpers::reject_qolip_in_use_tx;
-use super::queue_helpers::put_queue_states_tx;
+use super::queue_helpers::{
+    lock_apparatus_queue_tx, lock_order_control_tx, put_queue_states_tx,
+};
 
 pub(super) async fn load_apparatus_transfer_by_idempotency_key(
     pool: &PgPool,
@@ -25,7 +30,12 @@ pub(super) async fn load_apparatus_transfer_by_idempotency_key(
     .await
     .map_err(|_| ProductionMapError::StoreFailed)?;
     payload
-        .map(|payload| serde_json::from_value(payload).map_err(|_| ProductionMapError::StoreFailed))
+        .map(|payload| {
+            let record = serde_json::from_value(payload)
+                .map_err(|_| ProductionMapError::StoreFailed)?;
+            reject_training_order_id(&record.order_id)?;
+            Ok(record)
+        })
         .transpose()
 }
 
@@ -42,7 +52,12 @@ pub(super) async fn load_apparatus_transfers_for_audit(
     .map_err(|_| ProductionMapError::StoreFailed)?;
     payloads
         .into_iter()
-        .map(|payload| serde_json::from_value(payload).map_err(|_| ProductionMapError::StoreFailed))
+        .map(|payload| {
+            let record = serde_json::from_value(payload)
+                .map_err(|_| ProductionMapError::StoreFailed)?;
+            reject_training_order_id(&record.order_id)?;
+            Ok(record)
+        })
         .collect()
 }
 
@@ -50,6 +65,8 @@ pub(super) async fn commit_apparatus_transfer(
     pool: &PgPool,
     write: ProductionMapApparatusTransferWrite,
 ) -> Result<ProductionMapApparatusTransferRecord, ProductionMapError> {
+    reject_training_order_id(&write.record.order_id)?;
+    reject_training_order_id(&write.updated_map.id)?;
     let mut tx = pool
         .begin()
         .await
@@ -91,10 +108,23 @@ pub(super) async fn commit_apparatus_transfer(
 
     let Some(_) = inserted else {
         let existing = transfer_payload_tx(&mut tx, &write.record.idempotency_key).await?;
+        let existing = existing.ok_or(ProductionMapError::StoreFailed)?;
+        if existing.order_id.trim() != write.record.order_id.trim()
+            || !queue_state::apparatus_titles_match(
+                &existing.from_apparatus,
+                &write.record.from_apparatus,
+            )
+            || !queue_state::apparatus_titles_match(
+                &existing.to_apparatus,
+                &write.record.to_apparatus,
+            )
+        {
+            return Err(ProductionMapError::ApparatusTransferIdempotencyConflict);
+        }
         tx.commit()
             .await
             .map_err(|_| ProductionMapError::StoreFailed)?;
-        return existing.ok_or(ProductionMapError::StoreFailed);
+        return Ok(existing);
     };
 
     lock_transfer_rows(&mut tx, &write).await?;
@@ -175,7 +205,12 @@ async fn transfer_payload_tx(
     .await
     .map_err(|_| ProductionMapError::StoreFailed)?;
     payload
-        .map(|payload| serde_json::from_value(payload).map_err(|_| ProductionMapError::StoreFailed))
+        .map(|payload| {
+            let record = serde_json::from_value(payload)
+                .map_err(|_| ProductionMapError::StoreFailed)?;
+            reject_training_order_id(&record.order_id)?;
+            Ok(record)
+        })
         .transpose()
 }
 
@@ -183,6 +218,36 @@ async fn lock_transfer_rows(
     tx: &mut Transaction<'_, Postgres>,
     write: &ProductionMapApparatusTransferWrite,
 ) -> Result<(), ProductionMapError> {
+    let mut snapshot_order_ids = BTreeSet::new();
+    snapshot_order_ids.extend(
+        write
+            .from_sequence
+            .iter()
+            .chain(write.to_sequence.iter())
+            .chain(write.from_states.keys())
+            .chain(write.to_states.keys())
+            .map(|order_id| order_id.trim().to_string())
+            .filter(|order_id| !order_id.is_empty()),
+    );
+    snapshot_order_ids.insert(write.record.order_id.trim().to_string());
+
+    let mut control_state = None;
+    for order_id in snapshot_order_ids {
+        let state = lock_order_control_tx(tx, &order_id).await?;
+        if order_id == write.record.order_id.trim() {
+            control_state = state;
+        } else if matches!(
+            state.as_ref().map(|(state, _)| state.as_str()),
+            Some("freeze_requested" | "frozen")
+        ) {
+            return Err(ProductionMapError::QueueActionNotAllowed);
+        }
+    }
+    match control_state.as_ref().map(|(state, _)| state.as_str()) {
+        Some("freeze_requested") => return Err(ProductionMapError::OrderFreezeRequested),
+        Some("frozen") => return Err(ProductionMapError::OrderFrozen),
+        _ => {}
+    }
     sqlx::query(
         "SELECT id
          FROM mini_production_maps
@@ -195,17 +260,28 @@ async fn lock_transfer_rows(
     .map_err(|_| ProductionMapError::StoreFailed)?
     .ok_or(ProductionMapError::MapNotFound)?;
 
-    for apparatus in [
-        write.record.from_apparatus.trim(),
-        write.record.to_apparatus.trim(),
-    ] {
+    let mut apparatuses = vec![
+        write.record.from_apparatus.trim().to_string(),
+        write.record.to_apparatus.trim().to_string(),
+    ];
+    apparatuses.sort_by(|left, right| {
+        left.to_lowercase()
+            .cmp(&right.to_lowercase())
+            .then_with(|| left.cmp(right))
+    });
+    apparatuses.dedup_by(|left, right| {
+        left.eq_ignore_ascii_case(right)
+            || (left.trim().is_empty() && right.trim().is_empty())
+    });
+    for apparatus in apparatuses {
+        lock_apparatus_queue_tx(tx, &apparatus).await?;
         sqlx::query(
             "SELECT apparatus
              FROM mini_queue_sequences
              WHERE apparatus = $1
              FOR UPDATE",
         )
-        .bind(apparatus)
+        .bind(&apparatus)
         .fetch_optional(&mut **tx)
         .await
         .map_err(|_| ProductionMapError::StoreFailed)?;
@@ -215,7 +291,7 @@ async fn lock_transfer_rows(
              WHERE apparatus = $1
              FOR UPDATE",
         )
-        .bind(apparatus)
+        .bind(&apparatus)
         .fetch_all(&mut **tx)
         .await
         .map_err(|_| ProductionMapError::StoreFailed)?;

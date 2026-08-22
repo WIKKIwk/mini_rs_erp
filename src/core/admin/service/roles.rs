@@ -2,6 +2,7 @@ use std::collections::{BTreeSet, VecDeque};
 
 use super::*;
 use crate::core::admin::service::helpers::dedupe_strings;
+use crate::core::authz::assigned_apparatus_contains;
 
 impl AdminService {
     pub fn with_role_store(mut self, role_store: Arc<dyn RoleDefinitionStorePort>) -> Self {
@@ -90,6 +91,13 @@ impl AdminService {
             Ok(Some(role)) => capability_code(capability)
                 .map(|code| role.capability_codes.iter().any(|item| item == code))
                 .unwrap_or(false),
+            // Aparatchi authority is assignment-scoped. In particular,
+            // ReturnedPaintRequestCreate is a legacy default capability for
+            // the role, but must not survive removal of the worker's live
+            // apparatus assignment.
+            Ok(None)
+                if principal.role == PrincipalRole::Aparatchi
+                    && capability == Capability::ReturnedPaintRequestCreate => false,
             Ok(None) => has_capability(principal, capability),
             Err(_) => false,
         }
@@ -108,6 +116,18 @@ impl AdminService {
             Ok(Some(assignment)) => assignment.assigned_apparatus,
             _ => Vec::new(),
         }
+    }
+
+    pub async fn principal_allows_apparatus(
+        &self,
+        principal: &Principal,
+        apparatus: &str,
+    ) -> bool {
+        let assigned = match self.principal_assignment(principal).await {
+            Ok(Some(assignment)) => assignment.assigned_apparatus,
+            _ => return false,
+        };
+        assigned_apparatus_contains(apparatus, &assigned)
     }
 
     pub async fn principal_assigned_item_groups(&self, principal: &Principal) -> Vec<String> {

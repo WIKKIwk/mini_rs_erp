@@ -497,6 +497,63 @@ async fn queue_action_controls_are_backend_owned_for_each_order_state() {
 }
 
 #[tokio::test]
+async fn strict_resume_controls_hide_paused_order_behind_active_order() {
+    let store = std::sync::Arc::new(MemoryProductionMapStore::new());
+    let service = ProductionMapService::new(store.clone());
+    let apparatus = "7 ta rangli pechat";
+    let active_id = "zakaz-strict-resume-active";
+    let paused_id = "zakaz-strict-resume-paused";
+    service
+        .upsert_map(apparatus_stage_map(active_id, apparatus))
+        .await
+        .expect("active map");
+    service
+        .upsert_map(apparatus_stage_map(paused_id, apparatus))
+        .await
+        .expect("paused map");
+    service
+        .set_apparatus_sequence(
+            apparatus,
+            vec![active_id.to_string(), paused_id.to_string()],
+        )
+        .await
+        .expect("sequence");
+    store
+        .put_apparatus_queue_states(
+            apparatus,
+            BTreeMap::from([
+                (active_id.to_string(), "in_progress".to_string()),
+                (paused_id.to_string(), "paused".to_string()),
+            ]),
+        )
+        .await
+        .expect("queue states");
+
+    let controls = service.queue_action_controls().await.expect("controls");
+    let paused = controls
+        .get(apparatus)
+        .and_then(|orders| orders.get(paused_id))
+        .expect("paused control");
+    assert!(paused.allowed_actions.is_empty());
+
+    let result = service
+        .apply_apparatus_queue_action_with_progress(
+            apparatus,
+            paused_id,
+            queue_state::ApparatusQueueAction::Resume,
+            &[apparatus.to_string()],
+            QueueActionActor {
+                role: "aparatchi".to_string(),
+                ref_: "worker-strict-resume".to_string(),
+                display_name: "Strict Resume Worker".to_string(),
+            },
+            QueueProgressInput::default(),
+        )
+        .await;
+    assert_eq!(result, Err(ProductionMapError::QueueActionNotAllowed));
+}
+
+#[tokio::test]
 async fn raw_material_state_policy_requires_only_staged_scan_before_start() {
     let service = ProductionMapService::new(std::sync::Arc::new(MemoryProductionMapStore::new()));
     let actor = QueueActionActor {
@@ -2340,6 +2397,103 @@ async fn resume_without_resumable_wip_keeps_queue_paused() {
 }
 
 #[tokio::test]
+async fn requeued_resume_cannot_bypass_previous_stage_blocker() {
+    let store = std::sync::Arc::new(MemoryProductionMapStore::new());
+    let service = ProductionMapService::new(store.clone());
+    let actor = QueueActionActor {
+        role: "laminatsiyachi".to_string(),
+        ref_: "worker-requeued-blocker".to_string(),
+        display_name: "Requeued Blocker Worker".to_string(),
+    };
+    let order_id = "zakaz-requeued-previous-blocker";
+    let previous = "Bosma aparat";
+    let apparatus = "Laminatsiya mashinasi";
+    service
+        .upsert_map(two_stage_map(order_id, previous, apparatus))
+        .await
+        .expect("map");
+    service
+        .set_apparatus_sequence(apparatus, vec![order_id.to_string()])
+        .await
+        .expect("sequence");
+    store
+        .put_apparatus_queue_states(
+            previous,
+            BTreeMap::from([(order_id.to_string(), "paused".to_string())]),
+        )
+        .await
+        .expect("blocked previous stage");
+    store
+        .put_apparatus_queue_states(
+            apparatus,
+            BTreeMap::from([(order_id.to_string(), "paused".to_string())]),
+        )
+        .await
+        .expect("paused target stage");
+    store
+        .put_order_run_session(OrderRunSession {
+            session_id: "session-requeued-previous-blocker".to_string(),
+            apparatus: apparatus.to_string(),
+            order_id: order_id.to_string(),
+            status: OrderRunStatus::Paused,
+            worker_role: actor.role.clone(),
+            worker_ref: actor.ref_.clone(),
+            worker_display_name: actor.display_name.clone(),
+            started_at_unix: 100,
+            updated_at_unix: 100,
+            payload_json: serde_json::json!({}),
+        })
+        .await
+        .expect("paused session");
+    let admin = QueueActionActor {
+        role: "admin".to_string(),
+        ref_: "admin-requeued-blocker".to_string(),
+        display_name: "Admin".to_string(),
+    };
+
+    service
+        .request_order_freeze(order_id, admin.clone())
+        .await
+        .expect("freeze");
+    service
+        .unfreeze_order(order_id, admin)
+        .await
+        .expect("unfreeze");
+    let snapshot = service.live_snapshot().await.expect("requeued snapshot");
+    let control = snapshot
+        .queue_action_controls
+        .get(apparatus)
+        .and_then(|controls| controls.get(order_id))
+        .expect("requeued action control");
+    assert_eq!(
+        control.interaction.mode,
+        ApparatusQueueInteractionMode::RequeuedWaiting
+    );
+    assert!(control.allowed_actions.is_empty());
+    let result = service
+        .apply_apparatus_queue_action_with_progress(
+            apparatus,
+            order_id,
+            queue_state::ApparatusQueueAction::Resume,
+            &[apparatus.to_string()],
+            actor,
+            QueueProgressInput::default(),
+        )
+        .await;
+
+    assert_eq!(result, Err(ProductionMapError::QueueActionNotAllowed));
+    assert_eq!(
+        service
+            .apparatus_queue_states()
+            .await
+            .expect("queue states")
+            .get(apparatus)
+            .and_then(|states| states.get(order_id)),
+        Some(&"pending".to_string())
+    );
+}
+
+#[tokio::test]
 async fn laminatsiya_astatka_uses_order_timeline_and_previous_report_anchor() {
     let store = std::sync::Arc::new(MemoryProductionMapStore::new());
     let service = ProductionMapService::new(store.clone());
@@ -3335,6 +3489,138 @@ async fn downstream_complete_keeps_order_open_until_all_input_wips_processed() {
 }
 
 #[tokio::test]
+async fn generic_stage_completion_keeps_history_and_exposes_next_stage_without_closing_order() {
+    let store = std::sync::Arc::new(MemoryProductionMapStore::new());
+    let service = ProductionMapService::new(store);
+    let first_actor = QueueActionActor {
+        role: "aparatchi".to_string(),
+        ref_: "worker-generic-first".to_string(),
+        display_name: "Generic First Worker".to_string(),
+    };
+    let second_actor = QueueActionActor {
+        role: "aparatchi".to_string(),
+        ref_: "worker-generic-second".to_string(),
+        display_name: "Generic Second Worker".to_string(),
+    };
+    let first = "Generic stage A";
+    let second = "Generic stage B";
+    let order_id = "zakaz-generic-stage-closure";
+    service
+        .upsert_map(generic_task_stage_map(order_id, first, second))
+        .await
+        .expect("map");
+
+    service
+        .apply_apparatus_queue_action_with_progress(
+            first,
+            order_id,
+            queue_state::ApparatusQueueAction::Start,
+            &[first.to_string()],
+            first_actor.clone(),
+            QueueProgressInput::default(),
+        )
+        .await
+        .expect("first start");
+    let first_complete = service
+        .apply_apparatus_queue_action_with_progress(
+            first,
+            order_id,
+            queue_state::ApparatusQueueAction::Complete,
+            &[first.to_string()],
+            first_actor.clone(),
+            QueueProgressInput {
+                produced_qty: Some(10.0),
+                uom: "kg".to_string(),
+                ..QueueProgressInput::default()
+            },
+        )
+        .await
+        .expect("first complete");
+    let first_output = first_complete
+        .progress_batch
+        .clone()
+        .expect("first stage output");
+    assert_eq!(first_output.next_apparatus, second);
+
+    let first_history = service
+        .completed_queue_orders_for_actor(&first_actor.ref_, 10)
+        .await
+        .expect("first worker history");
+    assert_eq!(first_history.len(), 1);
+    assert_eq!(first_history[0].apparatus, first);
+    assert_eq!(first_history[0].order_id, order_id);
+    assert_eq!(first_history[0].status, CompletedQueueOrderStatus::Completed);
+    assert!(service
+        .fully_completed_orders(10)
+        .await
+        .expect("open order check")
+        .is_empty());
+
+    let downstream_wip = service
+        .wip_progress_batches(WipProgressBatchQuery::new(
+            second,
+            second,
+            "",
+            Some(OrderProgressBatchWipStatus::Waiting),
+            false,
+            order_id,
+            10,
+        ))
+        .await
+        .expect("downstream WIP visibility");
+    assert_eq!(downstream_wip.len(), 1);
+    assert_eq!(downstream_wip[0].batch_id, first_output.batch_id);
+
+    service
+        .apply_apparatus_queue_action_with_progress(
+            second,
+            order_id,
+            queue_state::ApparatusQueueAction::Start,
+            &[second.to_string()],
+            second_actor.clone(),
+            QueueProgressInput {
+                qr_payload: first_output.qr_payload.clone(),
+                ..QueueProgressInput::default()
+            },
+        )
+        .await
+        .expect("second start");
+    let second_complete = service
+        .apply_apparatus_queue_action_with_progress(
+            second,
+            order_id,
+            queue_state::ApparatusQueueAction::Complete,
+            &[second.to_string()],
+            second_actor,
+            QueueProgressInput {
+                produced_qty: Some(10.0),
+                uom: "kg".to_string(),
+                ..QueueProgressInput::default()
+            },
+        )
+        .await
+        .expect("second complete");
+    assert_eq!(
+        second_complete.states.get(order_id),
+        Some(&"completed".to_string())
+    );
+    assert_eq!(
+        service
+            .fully_completed_orders(10)
+            .await
+            .expect("closed order check")
+            .len(),
+        1
+    );
+    let first_history_after_close = service
+        .completed_queue_orders_for_actor(&first_actor.ref_, 10)
+        .await
+        .expect("first worker history after close");
+    assert_eq!(first_history_after_close.len(), 1);
+    assert_eq!(first_history_after_close[0].apparatus, first);
+}
+
+#[tokio::test]
 async fn downstream_start_rejects_mismatched_progress_batch_id_and_qr() {
     let service = ProductionMapService::new(std::sync::Arc::new(MemoryProductionMapStore::new()));
     let actor = QueueActionActor {
@@ -4061,6 +4347,15 @@ fn two_stage_map(id: &str, first: &str, second: &str) -> ProductionMapDefinition
             branch: String::new(),
         },
     ];
+    map
+}
+
+fn generic_task_stage_map(id: &str, first: &str, second: &str) -> ProductionMapDefinition {
+    let mut map = two_stage_map(id, first, second);
+    if let Some(node) = map.nodes.iter_mut().find(|node| node.id == "second") {
+        node.kind = ProductionMapNodeKind::Task;
+        node.role_code = "operator".to_string();
+    }
     map
 }
 

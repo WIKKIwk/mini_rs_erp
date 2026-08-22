@@ -4,7 +4,8 @@ use crate::core::production_map::{
     FinishedGoodsStockEntry, OrderProgressBatch, OrderProgressBatchStatus,
     OrderProgressBatchStatusDetail, OrderProgressBatchWipStatus, OrderProgressEvent,
     OrderRunSession, OrderRunStatus, ProductionMapError, ProductionOrderLogEntry,
-    ProgressBatchCorrectionInput, ProgressBatchCorrectionRecord, QueueActionActor, queue_state,
+    ProgressBatchCorrectionInput, ProgressBatchCorrectionRecord, QueueActionActor,
+    MixedStageBackfillWriteResult, queue_state, reject_training_order_id,
 };
 
 use super::queue_helpers::{queue_action_as_str, queue_action_from_str};
@@ -27,6 +28,7 @@ pub(super) async fn put_order_run_session_tx(
     tx: &mut Transaction<'_, Postgres>,
     session: &OrderRunSession,
 ) -> Result<(), ProductionMapError> {
+    reject_training_order_id(&session.order_id)?;
     sqlx::query(
         "INSERT INTO mini_order_run_sessions (
             session_id, apparatus, order_id, status,
@@ -59,6 +61,128 @@ pub(super) async fn put_order_run_session_tx(
     Ok(())
 }
 
+#[derive(Debug, sqlx::FromRow)]
+struct ExistingHistoricalWip {
+    batch_id: String,
+    session_id: String,
+    qr_payload: String,
+    payload_json: serde_json::Value,
+}
+
+/// Insert the historical WIP triple in one transaction. The advisory lock
+/// serializes retries for the deterministic batch id, while the fingerprint
+/// prevents a changed manifest from overwriting an existing record.
+pub(super) async fn put_mixed_stage_backfill(
+    pool: &PgPool,
+    session: &OrderRunSession,
+    event: &OrderProgressEvent,
+    batch: &OrderProgressBatch,
+) -> Result<MixedStageBackfillWriteResult, ProductionMapError> {
+    reject_training_order_id(&session.order_id)?;
+    reject_training_order_id(&event.order_id)?;
+    reject_training_order_id(&batch.order_id)?;
+    let mut tx = pool
+        .begin()
+        .await
+        .map_err(|_| ProductionMapError::StoreFailed)?;
+    sqlx::query("SELECT pg_advisory_xact_lock(hashtext($1))")
+        .bind(batch.batch_id.trim())
+        .execute(&mut *tx)
+        .await
+        .map_err(|_| ProductionMapError::StoreFailed)?;
+
+    let existing = sqlx::query_as::<_, ExistingHistoricalWip>(
+        "SELECT batch_id, session_id, qr_payload, payload_json
+         FROM mini_progress_batches
+         WHERE batch_id = $1 OR qr_payload = $2
+         FOR UPDATE",
+    )
+    .bind(batch.batch_id.trim())
+    .bind(batch.qr_payload.trim())
+    .fetch_all(&mut *tx)
+    .await
+    .map_err(|_| ProductionMapError::StoreFailed)?;
+
+    if !existing.is_empty() {
+        let requested_fingerprint = batch
+            .payload_json
+            .get("backfill_fingerprint")
+            .and_then(serde_json::Value::as_str);
+        let matching = existing.len() == 1
+            && existing[0].batch_id == batch.batch_id
+            && existing[0].session_id == session.session_id
+            && existing[0].qr_payload == batch.qr_payload
+            && existing[0]
+                .payload_json
+                .get("backfill_fingerprint")
+                .and_then(serde_json::Value::as_str)
+                == requested_fingerprint;
+        if matching {
+            let session_exists: bool = sqlx::query_scalar(
+                "SELECT EXISTS(
+                    SELECT 1 FROM mini_order_run_sessions WHERE session_id = $1
+                )",
+            )
+            .bind(session.session_id.trim())
+            .fetch_one(&mut *tx)
+            .await
+            .map_err(|_| ProductionMapError::StoreFailed)?;
+            let event_exists: bool = sqlx::query_scalar(
+                "SELECT EXISTS(
+                    SELECT 1 FROM mini_order_progress_events WHERE event_id = $1
+                )",
+            )
+            .bind(event.event_id.trim())
+            .fetch_one(&mut *tx)
+            .await
+            .map_err(|_| ProductionMapError::StoreFailed)?;
+            if session_exists && event_exists {
+                tx.commit()
+                    .await
+                    .map_err(|_| ProductionMapError::StoreFailed)?;
+                return Ok(MixedStageBackfillWriteResult::AlreadyPresent);
+            }
+        }
+        return Err(ProductionMapError::MixedStageBackfillConflict(format!(
+            "batch_id '{}' or qr_payload '{}' is already used by another record",
+            batch.batch_id, batch.qr_payload
+        )));
+    }
+
+    let session_exists: bool = sqlx::query_scalar(
+        "SELECT EXISTS(
+            SELECT 1 FROM mini_order_run_sessions WHERE session_id = $1
+        )",
+    )
+    .bind(session.session_id.trim())
+    .fetch_one(&mut *tx)
+    .await
+    .map_err(|_| ProductionMapError::StoreFailed)?;
+    let event_exists: bool = sqlx::query_scalar(
+        "SELECT EXISTS(
+            SELECT 1 FROM mini_order_progress_events WHERE event_id = $1
+        )",
+    )
+    .bind(event.event_id.trim())
+    .fetch_one(&mut *tx)
+    .await
+    .map_err(|_| ProductionMapError::StoreFailed)?;
+    if session_exists || event_exists {
+        return Err(ProductionMapError::MixedStageBackfillConflict(format!(
+            "session_id '{}' or event_id '{}' is already used",
+            session.session_id, event.event_id
+        )));
+    }
+
+    put_order_run_session_tx(&mut tx, session).await?;
+    put_order_progress_event_tx(&mut tx, event).await?;
+    put_order_progress_batch_tx(&mut tx, batch).await?;
+    tx.commit()
+        .await
+        .map_err(|_| ProductionMapError::StoreFailed)?;
+    Ok(MixedStageBackfillWriteResult::Applied)
+}
+
 pub(super) async fn put_order_progress_event(
     pool: &PgPool,
     event: &OrderProgressEvent,
@@ -77,6 +201,7 @@ pub(super) async fn put_order_progress_event_tx(
     tx: &mut Transaction<'_, Postgres>,
     event: &OrderProgressEvent,
 ) -> Result<(), ProductionMapError> {
+    reject_training_order_id(&event.order_id)?;
     sqlx::query(
         "INSERT INTO mini_order_progress_events (
             event_id, session_id, batch_id, apparatus, order_id, action,
@@ -102,29 +227,7 @@ pub(super) async fn put_order_progress_event_tx(
                  ($22::double precision)::numeric(18,6),
                  ($23::double precision)::numeric(18,6),
                  $24, $25, now())
-         ON CONFLICT (event_id) DO UPDATE SET
-            session_id = excluded.session_id,
-            batch_id = excluded.batch_id,
-            action = excluded.action,
-            produced_qty = excluded.produced_qty,
-            uom = excluded.uom,
-            worker_role = excluded.worker_role,
-            worker_ref = excluded.worker_ref,
-            worker_display_name = excluded.worker_display_name,
-            qr_payload = excluded.qr_payload,
-            return_ink_kg = excluded.return_ink_kg,
-            lamination_print_leftover_rolls = excluded.lamination_print_leftover_rolls,
-            lamination_film_leftover_rolls = excluded.lamination_film_leftover_rolls,
-            rezka_bosma_waste = excluded.rezka_bosma_waste,
-            rezka_lamination_waste = excluded.rezka_lamination_waste,
-            rezka_edge_waste = excluded.rezka_edge_waste,
-            total_waste = excluded.total_waste,
-            finished_goods_kg = excluded.finished_goods_kg,
-            bobina_kg = excluded.bobina_kg,
-            finished_goods_meter = excluded.finished_goods_meter,
-            diameter = excluded.diameter,
-            description = excluded.description,
-            payload_json = excluded.payload_json",
+         ON CONFLICT (event_id) DO NOTHING",
     )
     .bind(event.event_id.trim())
     .bind(event.session_id.trim())
@@ -185,7 +288,9 @@ pub(super) async fn put_order_progress_batch_tx(
     tx: &mut Transaction<'_, Postgres>,
     batch: &OrderProgressBatch,
 ) -> Result<(), ProductionMapError> {
-    sqlx::query(
+    reject_training_order_id(&batch.order_id)?;
+    let revision = i64::try_from(batch.revision).map_err(|_| ProductionMapError::StoreFailed)?;
+    let result = sqlx::query(
         "INSERT INTO mini_progress_batches (
             batch_id, session_id, apparatus, order_id, action, status,
             produced_qty, uom, qr_payload, label_item_code, label_item_name,
@@ -197,7 +302,7 @@ pub(super) async fn put_order_progress_batch_tx(
             lamination_film_leftover_rolls, rezka_bosma_waste,
             rezka_lamination_waste, rezka_edge_waste, total_waste,
             finished_goods_kg, bobina_kg, finished_goods_meter, diameter, description,
-            payload_json, created_at, updated_at
+            payload_json, created_at, updated_at, revision
          )
          VALUES ($1, $2, $3, $4, $5, $6,
                  ($7::double precision)::numeric(18,6),
@@ -214,7 +319,7 @@ pub(super) async fn put_order_progress_batch_tx(
                  ($34::double precision)::numeric(18,6),
                  ($35::double precision)::numeric(18,6),
                  ($36::double precision)::numeric(18,6),
-                 $37, $38, now(), now())
+                 $37, $38, now(), now(), $39)
          ON CONFLICT (batch_id) DO UPDATE SET
             session_id = excluded.session_id,
             apparatus = excluded.apparatus,
@@ -251,7 +356,10 @@ pub(super) async fn put_order_progress_batch_tx(
             diameter = excluded.diameter,
             description = excluded.description,
             payload_json = excluded.payload_json,
-            updated_at = now()",
+            revision = mini_progress_batches.revision + 1,
+            updated_at = now()
+         WHERE mini_progress_batches.revision = excluded.revision
+           AND mini_progress_batches.payload_json IS DISTINCT FROM excluded.payload_json",
     )
     .bind(batch.batch_id.trim())
     .bind(batch.session_id.trim())
@@ -291,6 +399,7 @@ pub(super) async fn put_order_progress_batch_tx(
     .bind(batch.diameter)
     .bind(batch.description.trim())
     .bind(&batch.payload_json)
+    .bind(revision)
     .execute(&mut **tx)
     .await
     .map_err(|error| {
@@ -305,6 +414,24 @@ pub(super) async fn put_order_progress_batch_tx(
         );
         ProductionMapError::StoreFailed
     })?;
+    if result.rows_affected() == 0 {
+        let existing = sqlx::query_as::<_, (i64, serde_json::Value)>(
+            "SELECT revision, payload_json
+             FROM mini_progress_batches
+             WHERE batch_id = $1
+             FOR UPDATE",
+        )
+        .bind(batch.batch_id.trim())
+        .fetch_optional(&mut **tx)
+        .await
+        .map_err(|_| ProductionMapError::StoreFailed)?;
+        if existing.as_ref().is_some_and(|(current_revision, payload)| {
+            *current_revision == revision && payload == &batch.payload_json
+        }) {
+            return Ok(());
+        }
+        return Err(ProductionMapError::ProgressBatchNotAccepted);
+    }
     Ok(())
 }
 
@@ -314,6 +441,7 @@ pub(super) async fn correct_progress_batch(
     input: &ProgressBatchCorrectionInput,
     actor: &QueueActionActor,
 ) -> Result<OrderProgressBatch, ProductionMapError> {
+    reject_training_order_id(&current.order_id)?;
     let expected_revision = i64::try_from(input.expected_revision)
         .map_err(|_| ProductionMapError::ProgressBatchCorrectionConflict)?;
     let corrected = current.corrected(input);
@@ -480,6 +608,7 @@ pub(super) async fn load_progress_batch_corrections_for_order(
     if order_id.is_empty() {
         return Ok(Vec::new());
     }
+    reject_training_order_id(order_id)?;
     let rows = sqlx::query_as::<_, ProgressBatchCorrectionRow>(
         "SELECT correction.batch_id,
                 correction.previous_revision,
@@ -518,6 +647,8 @@ pub(super) async fn receive_finished_goods_batch_tx(
     batch: &OrderProgressBatch,
     stock: &FinishedGoodsStockEntry,
 ) -> Result<(), ProductionMapError> {
+    reject_training_order_id(&batch.order_id)?;
+    reject_training_order_id(&stock.order_id)?;
     put_order_progress_batch_tx(tx, batch).await?;
     sqlx::query(
         "INSERT INTO mini_finished_goods_stock (

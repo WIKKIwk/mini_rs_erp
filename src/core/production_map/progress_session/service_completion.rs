@@ -25,6 +25,7 @@ impl ProductionMapService {
         if apparatus.is_empty() || order_id.is_empty() || description.is_empty() {
             return Err(ProductionMapError::ProgressInputInvalid);
         }
+        reject_training_order_id(order_id)?;
         if !queue_state::apparatus_matches_assigned(apparatus, assigned_apparatus) {
             return Err(ProductionMapError::ApparatusNotAssigned);
         }
@@ -173,6 +174,7 @@ impl ProductionMapService {
             .completion_request_by_event_id(request_event_id)
             .await?
             .ok_or(ProductionMapError::QueueActionNotAllowed)?;
+        reject_training_order_id(&request.order_id)?;
         if decision == CompletionRequestDecision::Approved {
             match self.order_control_state(&request.order_id).await?.state {
                 OrderControlState::Active => {}

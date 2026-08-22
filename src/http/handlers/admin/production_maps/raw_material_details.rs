@@ -1,4 +1,5 @@
 use super::*;
+use crate::core::authz::assigned_apparatus_contains;
 use crate::core::admin::models::AdminItemGroup;
 use crate::core::gscale::models::RawMaterialStockEntry;
 use crate::core::production_map::{ProductionMapDefinition, pechat};
@@ -73,7 +74,7 @@ pub(super) async fn fill_raw_material_assignment_input(
     let requested_apparatus = input.apparatus.trim();
     if principal.role == PrincipalRole::MaterialTaminotchi
         && !requested_apparatus.is_empty()
-        && !queue_state::apparatus_matches_assigned(requested_apparatus, &assigned_apparatus)
+        && !assigned_apparatus_contains(requested_apparatus, &assigned_apparatus)
     {
         return Err(production_map_error(
             ProductionMapError::ApparatusNotAssigned,
@@ -83,7 +84,7 @@ pub(super) async fn fill_raw_material_assignment_input(
         .iter()
         .filter(|apparatus| {
             principal.role != PrincipalRole::MaterialTaminotchi
-                || queue_state::apparatus_matches_assigned(apparatus, &assigned_apparatus)
+                || assigned_apparatus_contains(apparatus, &assigned_apparatus)
         })
         .cloned()
         .collect::<Vec<_>>();

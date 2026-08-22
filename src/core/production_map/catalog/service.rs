@@ -302,6 +302,7 @@ impl ProductionMapService {
         mut map: ProductionMapDefinition,
     ) -> Result<ProductionMapSaved, ProductionMapError> {
         normalize_map(&mut map);
+        reject_training_order_id(&map.id)?;
         let program = compile_map(&map)?;
         self.reject_started_stage_changes(&map).await?;
         self.store.put_map(map.clone()).await?;
@@ -319,6 +320,7 @@ impl ProductionMapService {
         let mut saved = Vec::with_capacity(maps.len());
         for mut map in maps {
             normalize_map(&mut map);
+            reject_training_order_id(&map.id)?;
             let program = compile_map(&map)?;
             self.reject_started_stage_changes(&map).await?;
             saved.push(ProductionMapSaved {
@@ -337,6 +339,7 @@ impl ProductionMapService {
         map_id: &str,
     ) -> Result<Option<ProductionMapDefinition>, ProductionMapError> {
         let map_id = map_id.trim().to_ascii_lowercase();
+        reject_training_order_id(&map_id)?;
         Ok(self
             .store
             .maps()
@@ -350,6 +353,10 @@ impl ProductionMapService {
         previous: Option<&ProductionMapDefinition>,
         map_id: &str,
     ) -> Result<(), ProductionMapError> {
+        reject_training_order_id(map_id)?;
+        if let Some(map) = previous {
+            reject_training_order_id(&map.id)?;
+        }
         let result = match previous {
             Some(map) => self.store.put_map(map.clone()).await,
             None => self.store.delete_map(map_id).await,
@@ -378,6 +385,9 @@ impl ProductionMapService {
             .map(|id| id.trim().to_ascii_lowercase())
             .filter(|id| !id.is_empty())
             .collect();
+        for map_id in &map_ids {
+            reject_training_order_id(map_id)?;
+        }
         if map_ids.is_empty() {
             return Err(ProductionMapError::MissingId);
         }
@@ -420,6 +430,7 @@ impl ProductionMapService {
     ) -> Result<ProductionMapSaved, ProductionMapError> {
         let _guard = self.queue_action_guard().await;
         let map_id = input.map_id.trim().to_ascii_lowercase();
+        reject_training_order_id(&map_id)?;
         let from = input.from_apparatus.trim();
         let to = input.to_apparatus.trim();
         if map_id.is_empty() {
@@ -454,6 +465,7 @@ impl ProductionMapService {
             return Err(ProductionMapError::InvalidOrderQty);
         }
         let map_id = input.map_id.trim().to_ascii_lowercase();
+        reject_training_order_id(&map_id)?;
         let product_code = input.product_code.trim();
         let maps = self.store.maps().await?;
         let Some(map) = maps.into_iter().find(|map| {

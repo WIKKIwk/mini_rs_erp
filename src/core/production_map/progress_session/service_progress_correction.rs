@@ -12,6 +12,7 @@ impl ProductionMapService {
             .progress_batch(&input.batch_id)
             .await?
             .ok_or(ProductionMapError::ProgressBatchNotFound)?;
+        reject_training_order_id(&current.order_id)?;
         if actor.ref_.trim().is_empty() {
             return Err(ProductionMapError::ProgressBatchCorrectionForbidden);
         }

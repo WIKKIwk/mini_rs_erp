@@ -44,6 +44,24 @@ pub(in crate::http::handlers::admin) async fn require_capability(
     }
 }
 
+pub(in crate::http::handlers::admin) async fn principal_can_use_apparatus(
+    state: &AppState,
+    principal: &Principal,
+    apparatus: &str,
+) -> bool {
+    if state
+        .admin
+        .principal_has_capability(principal, Capability::AdminAccess)
+        .await
+    {
+        return true;
+    }
+    state
+        .admin
+        .principal_allows_apparatus(principal, apparatus)
+        .await
+}
+
 async fn authenticated_principal(
     state: &AppState,
     headers: &HeaderMap,

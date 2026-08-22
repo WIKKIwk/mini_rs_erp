@@ -1,11 +1,13 @@
 use sqlx::{PgPool, Postgres, Transaction};
 
 use crate::core::production_map::{
-    ApparatusMaterialRule, ProductionMapError, RawMaterialAssignment,
+    reject_training_order_id, ApparatusMaterialRule, ProductionMapError, RawMaterialAssignment,
 };
 use crate::db::postgres_raw_material_events::{
     RawMaterialEventDraft, insert_raw_material_event_tx,
 };
+
+use super::queue_helpers::{lock_apparatus_queue_tx, lock_order_control_tx};
 
 pub(super) async fn load_apparatus_material_rules(
     pool: &PgPool,
@@ -87,8 +89,10 @@ pub(super) async fn load_raw_material_assignments(
 
     rows.into_iter()
         .map(|payload| {
-            serde_json::from_value::<RawMaterialAssignment>(payload)
-                .map_err(|_| ProductionMapError::StoreFailed)
+            let assignment = serde_json::from_value::<RawMaterialAssignment>(payload)
+                .map_err(|_| ProductionMapError::StoreFailed)?;
+            reject_training_order_id(&assignment.order_id)?;
+            Ok(assignment)
         })
         .collect()
 }
@@ -112,8 +116,9 @@ pub(super) async fn save_raw_material_assignment_tx(
     tx: &mut Transaction<'_, Postgres>,
     assignment: &RawMaterialAssignment,
 ) -> Result<(), ProductionMapError> {
+    reject_training_order_id(&assignment.order_id)?;
     let stock = raw_material_stock_for_assignment_tx(tx, &assignment.barcode).await?;
-    let payload = serde_json::to_value(assignment).map_err(|_| ProductionMapError::StoreFailed)?;
+    let payload = serde_json::to_value(&assignment).map_err(|_| ProductionMapError::StoreFailed)?;
     let result = sqlx::query(
         "INSERT INTO mini_raw_material_assignments
             (barcode, order_id, apparatus, item_code, item_group, payload_json, updated_at)
@@ -143,22 +148,64 @@ pub(super) async fn delete_raw_material_assignment(
     order_id: &str,
     barcode: &str,
 ) -> Result<Option<RawMaterialAssignment>, ProductionMapError> {
-    let row = sqlx::query_scalar::<_, serde_json::Value>(
-        "DELETE FROM mini_raw_material_assignments
+    reject_training_order_id(order_id)?;
+    let mut tx = pool
+        .begin()
+        .await
+        .map_err(|_| ProductionMapError::StoreFailed)?;
+    lock_order_control_tx(&mut tx, order_id).await?;
+    let assignment_payload = sqlx::query_scalar::<_, serde_json::Value>(
+        "SELECT payload_json
+         FROM mini_raw_material_assignments
          WHERE order_id = $1
-           AND lower(barcode) = lower($2)
-         RETURNING payload_json",
+           AND lower(barcode) = lower($2)",
     )
     .bind(order_id.trim())
     .bind(barcode.trim())
-    .fetch_optional(pool)
+    .fetch_optional(&mut *tx)
     .await
     .map_err(|_| ProductionMapError::StoreFailed)?;
-    row.map(|payload| {
-        serde_json::from_value::<RawMaterialAssignment>(payload)
-            .map_err(|_| ProductionMapError::StoreFailed)
-    })
-    .transpose()
+    let Some(assignment_payload) = assignment_payload else {
+        tx.commit()
+            .await
+            .map_err(|_| ProductionMapError::StoreFailed)?;
+        return Ok(None);
+    };
+    let assignment = serde_json::from_value::<RawMaterialAssignment>(assignment_payload)
+        .map_err(|_| ProductionMapError::StoreFailed)?;
+    lock_apparatus_queue_tx(&mut tx, &assignment.apparatus).await?;
+    let stock = sqlx::query_as::<_, (String, String)>(
+        "SELECT status, reserved_order_id
+         FROM mini_raw_material_stock
+         WHERE lower(barcode) = lower($1)
+         FOR UPDATE",
+    )
+    .bind(barcode.trim())
+    .fetch_optional(&mut *tx)
+    .await
+    .map_err(|_| ProductionMapError::StoreFailed)?;
+    if stock.as_ref().is_some_and(|(status, reserved_order_id)| {
+        !status.trim().eq_ignore_ascii_case("available") || !reserved_order_id.trim().is_empty()
+    }) {
+        return Err(ProductionMapError::RawMaterialAssignmentLocked);
+    }
+    let deleted = sqlx::query(
+        "DELETE FROM mini_raw_material_assignments
+         WHERE order_id = $1
+           AND lower(barcode) = lower($2)",
+    )
+    .bind(order_id.trim())
+    .bind(barcode.trim())
+    .execute(&mut *tx)
+    .await
+    .map_err(|_| ProductionMapError::StoreFailed)?;
+    if deleted.rows_affected() != 1 {
+        return Err(ProductionMapError::RawMaterialAssignmentNotFound);
+    }
+    tx.commit()
+        .await
+        .map_err(|_| ProductionMapError::StoreFailed)?;
+    Ok(Some(assignment))
 }
 
 pub(super) async fn transfer_raw_material_assignments_tx(
@@ -166,6 +213,7 @@ pub(super) async fn transfer_raw_material_assignments_tx(
     assignments: &[RawMaterialAssignment],
 ) -> Result<(), ProductionMapError> {
     for assignment in assignments {
+        reject_training_order_id(&assignment.order_id)?;
         let payload =
             serde_json::to_value(assignment).map_err(|_| ProductionMapError::StoreFailed)?;
         let result = sqlx::query(

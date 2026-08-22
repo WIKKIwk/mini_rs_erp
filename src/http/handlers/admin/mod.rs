@@ -64,6 +64,7 @@ pub use system::{
     warehouse_assignments, warehouse_items, warehouse_summaries, warehouses, werka_code_regenerate,
 };
 use system::{authorize_any_capability, authorize_capability, require_capability};
+pub(crate) use system::principal_can_use_apparatus;
 pub use system_users::{system_user_code_regenerate, system_user_detail, system_users};
 pub use telegram::{invite as telegram_invite, settings as telegram_settings};
 pub use training::{
@@ -113,6 +114,9 @@ use crate::core::werka::models::{CustomerDirectoryEntry, DispatchRecord, Supplie
 use crate::http::handlers::auth::{bearer_token, profile_avatar_proxy_url};
 
 type AdminError = (StatusCode, Json<AdminErrorResponse>);
+
+pub(crate) const MOBILE_PRODUCTION_SNAPSHOT_ENDPOINT: &str =
+    "/v1/mobile/admin/production-maps/sequence";
 
 fn required_ref(value: Option<&str>) -> Result<&str, AdminError> {
     let ref_ = value.unwrap_or("").trim();
@@ -284,6 +288,12 @@ pub struct AdminErrorResponse {
     pub order_width_mm: Option<f64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub roll_width_mm: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub snapshot_revision: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub refresh_required: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub refresh_endpoint: Option<String>,
 }
 
 impl AdminErrorResponse {
@@ -294,7 +304,22 @@ impl AdminErrorResponse {
             apparatus_options: None,
             order_width_mm: None,
             roll_width_mm: None,
+            snapshot_revision: None,
+            refresh_required: None,
+            refresh_endpoint: None,
         }
+    }
+
+    fn with_refresh_required(mut self) -> Self {
+        self.refresh_required = Some(true);
+        self.refresh_endpoint = Some(MOBILE_PRODUCTION_SNAPSHOT_ENDPOINT.to_string());
+        self
+    }
+
+    fn stale_production_snapshot(current_revision: String) -> Self {
+        let mut response = Self::new("stale_production_snapshot").with_refresh_required();
+        response.snapshot_revision = Some(current_revision);
+        response
     }
 
     fn roll_size_mismatch(order_width_mm: f64, roll_width_mm: f64) -> Self {
@@ -304,6 +329,9 @@ impl AdminErrorResponse {
             apparatus_options: None,
             order_width_mm: Some(order_width_mm),
             roll_width_mm: Some(roll_width_mm),
+            snapshot_revision: None,
+            refresh_required: None,
+            refresh_endpoint: None,
         }
     }
 }

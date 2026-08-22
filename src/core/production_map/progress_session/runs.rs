@@ -337,7 +337,12 @@ pub(super) async fn wip_progress_batches(
                 || (!apparatus_key.is_empty()
                     && batch.current_apparatus_key.trim() == apparatus_key)
                 || queue_state::apparatus_titles_match(&batch.current_apparatus, apparatus)
-                || queue_state::apparatus_titles_match(&batch.apparatus, apparatus))
+                || queue_state::apparatus_titles_match(&batch.apparatus, apparatus)
+                || (!next_apparatus.is_empty()
+                    && queue_state::next_stage_title_matches_apparatus(
+                        &batch.next_apparatus,
+                        apparatus,
+                    )))
                 && (current_location.is_empty()
                     || batch.current_location.trim() == current_location)
                 && (next_apparatus.is_empty()

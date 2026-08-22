@@ -135,6 +135,18 @@ impl ProductionMapService {
             .get(order_id)
             .copied()
             .unwrap_or(queue_state::ApparatusQueueOrderState::Pending);
+        let active_order_id = parsed.iter().find_map(|(candidate, state)| {
+            (*state == queue_state::ApparatusQueueOrderState::InProgress)
+                .then_some(candidate.as_str())
+        });
+        let active_order_is_this = active_order_id.is_none_or(|candidate| candidate == order_id);
+        let previous_stage_ready_for_resume = chain::order_ready_for_station(
+            order_map,
+            order_id,
+            apparatus,
+            &all_states,
+            &known_keys,
+        );
         let active_session = self
             .store
             .active_order_run_session(&storage_key, order_id)
@@ -183,7 +195,14 @@ impl ProductionMapService {
             );
         } else {
             if requeued_resume {
-                apply_requeued_resume(policy, &sequence, &mut parsed, order_id)?;
+                apply_requeued_resume(
+                    policy,
+                    &sequence,
+                    &mut parsed,
+                    order_id,
+                    previous_stage_ready_for_resume,
+                    active_order_is_this,
+                )?;
             } else {
                 apply_queue_policy(
                     policy,
@@ -643,7 +662,6 @@ fn freeze_safe_stop_output_is_complete(apparatus: &str, progress: &QueueProgress
                 .or(progress.finished_goods_meter)
                 .is_some()
                 && progress.gross_qty.or(progress.finished_goods_kg).is_some()
-                && progress.bobina_kg.is_some()
                 && progress.diameter.is_some());
     }
     progress

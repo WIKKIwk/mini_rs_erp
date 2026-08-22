@@ -122,6 +122,8 @@ impl PostgresRawMaterialEventStore {
                AND ($6 = '' OR actor_ref = $6)
                AND ($7 = '' OR owner_role = $7)
                AND ($8 = '' OR owner_ref = $8)
+               AND (COALESCE(order_id, '') = ''
+                    OR lower(btrim(order_id)) NOT LIKE 'training-%')
              ORDER BY occurred_at DESC, id DESC
              LIMIT $9",
         )

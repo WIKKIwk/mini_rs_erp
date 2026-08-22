@@ -42,6 +42,7 @@ pub(super) fn validate_queue_action_request(
     if order_id.is_empty() {
         return Err(ProductionMapError::MissingId);
     }
+    reject_training_order_id(order_id)?;
     if !queue_state::apparatus_matches_assigned(apparatus, assigned_apparatus) {
         return Err(ProductionMapError::ApparatusNotAssigned);
     }
@@ -235,7 +236,14 @@ pub(super) fn apply_requeued_resume(
     sequence: &[String],
     parsed: &mut BTreeMap<String, queue_state::ApparatusQueueOrderState>,
     order_id: &str,
+    previous_stage_ready: bool,
+    active_order_is_this: bool,
 ) -> Result<(), ProductionMapError> {
+    if !previous_stage_ready
+        || (policy == ApparatusQueuePolicy::StrictSequence && !active_order_is_this)
+    {
+        return Err(ProductionMapError::QueueActionNotAllowed);
+    }
     if policy == ApparatusQueuePolicy::StrictSequence
         && queue_state::first_actionable_order_id(sequence, parsed).as_deref() != Some(order_id)
     {

@@ -1,7 +1,5 @@
 use super::*;
 
-use crate::core::production_map::queue_state;
-
 #[derive(Default, serde::Deserialize)]
 struct LaminatsiyaAstatkaRequest {
     #[serde(default)]
@@ -71,13 +69,13 @@ pub async fn production_map_laminatsiya_astatka(
     if input.apparatus.trim().is_empty() || input.order_id.trim().is_empty() {
         return Err(bad_request("apparatus and order_id are required"));
     }
+    reject_training_order_id_for_production(&input.order_id)?;
     let is_admin = state
         .admin
         .principal_has_capability(&principal, Capability::AdminAccess)
         .await;
     if !is_admin {
-        let assigned_apparatus = state.admin.principal_assigned_apparatus(&principal).await;
-        if !queue_state::apparatus_matches_assigned(&input.apparatus, &assigned_apparatus) {
+        if !principal_can_use_apparatus(&state, &principal, &input.apparatus).await {
             return Err(production_map_error(ProductionMapError::ApparatusNotAssigned));
         }
     }
@@ -126,13 +124,13 @@ pub async fn production_map_rezka_astatka(
     if input.apparatus.trim().is_empty() || input.order_id.trim().is_empty() {
         return Err(bad_request("apparatus and order_id are required"));
     }
+    reject_training_order_id_for_production(&input.order_id)?;
     let is_admin = state
         .admin
         .principal_has_capability(&principal, Capability::AdminAccess)
         .await;
     if !is_admin {
-        let assigned_apparatus = state.admin.principal_assigned_apparatus(&principal).await;
-        if !queue_state::apparatus_matches_assigned(&input.apparatus, &assigned_apparatus) {
+        if !principal_can_use_apparatus(&state, &principal, &input.apparatus).await {
             return Err(production_map_error(ProductionMapError::ApparatusNotAssigned));
         }
     }

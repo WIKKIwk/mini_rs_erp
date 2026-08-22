@@ -43,11 +43,10 @@ pub async fn production_map_qolip_validate(
         .admin
         .principal_has_capability(&principal, Capability::AdminAccess)
         .await;
-    let assigned_apparatus = state.admin.principal_assigned_apparatus(&principal).await;
-    if !is_admin && !queue_state::apparatus_matches_assigned(apparatus, &assigned_apparatus) {
+    if !is_admin && !principal_can_use_apparatus(&state, &principal, apparatus).await {
         return Err(bad_request("apparatus_not_assigned"));
     }
-    if order_id.starts_with("training-") {
+    if is_training_order_namespace(order_id) {
         let Some(training_map) = super::super::training::training_map_for_principal(
             &state,
             &principal,

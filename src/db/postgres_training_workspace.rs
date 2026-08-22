@@ -8,7 +8,8 @@ use crate::core::calculate_orders::{
     CalculateOrderError, CalculateOrderTemplate, hydrate_template_layers, validate_template,
 };
 use crate::core::production_map::{
-    OrderProgressBatch, ProductionMapDefinition, ProductionMapSaved, compile_map,
+    is_training_order_id, OrderProgressBatch, ProductionMapDefinition, ProductionMapSaved,
+    compile_map,
 };
 use crate::core::production_map::{progress_batch_id, progress_qr_payload, queue_state};
 use crate::core::returned_paint::{ReturnedPaintCalculation, ReturnedPaintItem};
@@ -113,6 +114,7 @@ impl PostgresTrainingWorkspaceStore {
         &self,
         map_id: &str,
     ) -> Result<Option<ProductionMapSaved>, TrainingWorkspaceError> {
+        require_training_order_id(map_id)?;
         let payload = sqlx::query_scalar::<_, serde_json::Value>(
             "SELECT map_json
              FROM mini_training_production_maps
@@ -131,6 +133,7 @@ impl PostgresTrainingWorkspaceStore {
         map_id: &str,
         order_number: &str,
     ) -> Result<Option<CalculateOrderTemplate>, TrainingWorkspaceError> {
+        require_training_order_id(map_id)?;
         let payload = sqlx::query_scalar::<_, serde_json::Value>(
             "SELECT payload_json
              FROM mini_training_quick_order_templates
@@ -147,11 +150,7 @@ impl PostgresTrainingWorkspaceStore {
         .await
         .map_err(|_| TrainingWorkspaceError::StoreFailed)?;
 
-        payload
-            .map(|payload| {
-                serde_json::from_value(payload).map_err(|_| TrainingWorkspaceError::StoreFailed)
-            })
-            .transpose()
+        payload.map(training_template_from_payload).transpose()
     }
 
     pub async fn save_map(
@@ -219,7 +218,8 @@ impl PostgresTrainingWorkspaceStore {
         Ok(rows
             .into_iter()
             .filter(|row| {
-                (order_id.is_empty() || row.order_id == order_id)
+                is_training_order_id(&row.order_id)
+                    && (order_id.is_empty() || row.order_id == order_id)
                     && (apparatus.is_empty() || row.apparatus.eq_ignore_ascii_case(apparatus))
             })
             .map(|row| {
@@ -242,7 +242,7 @@ impl PostgresTrainingWorkspaceStore {
         let order_id = payload_string(&payload, "order_id");
         let apparatus = payload_string(&payload, "apparatus");
         let barcode = payload_string(&payload, "barcode");
-        if order_id.is_empty() || apparatus.is_empty() || barcode.is_empty() {
+        if !is_training_order_id(&order_id) || apparatus.is_empty() || barcode.is_empty() {
             return Err(TrainingWorkspaceError::InvalidInput(
                 "order_id, apparatus va barcode kerak".to_string(),
             ));
@@ -292,11 +292,7 @@ impl PostgresTrainingWorkspaceStore {
         let order_id = order_id.trim();
         let apparatus = apparatus.trim();
         let barcode = barcode.trim();
-        if order_id.is_empty()
-            || !order_id.starts_with("training-")
-            || apparatus.is_empty()
-            || barcode.is_empty()
-        {
+        if !is_training_order_id(order_id) || apparatus.is_empty() || barcode.is_empty() {
             return Err(TrainingWorkspaceError::InvalidInput(
                 "order_id, apparatus va barcode kerak".to_string(),
             ));
@@ -340,8 +336,7 @@ impl PostgresTrainingWorkspaceStore {
         let order_id = order_id.trim();
         let apparatus = apparatus.trim();
         let input_apparatus = input_apparatus.trim();
-        if order_id.is_empty()
-            || !order_id.starts_with("training-")
+        if !is_training_order_id(order_id)
             || apparatus.is_empty()
             || input_apparatus.is_empty()
             || count == 0
@@ -423,6 +418,7 @@ impl PostgresTrainingWorkspaceStore {
         order_id: &str,
         apparatus: &str,
     ) -> Result<Vec<TrainingInputBatchIdentity>, TrainingWorkspaceError> {
+        require_training_order_id(order_id)?;
         let rows = sqlx::query_as::<_, (String, String, String, String, String)>(
             "SELECT order_id, apparatus, batch_id, session_id, qr_payload
              FROM mini_training_input_batches
@@ -453,7 +449,9 @@ impl PostgresTrainingWorkspaceStore {
         .fetch_optional(&self.pool)
         .await
         .map_err(|_| TrainingWorkspaceError::StoreFailed)?;
-        Ok(row.map(training_input_batch_identity_from_row))
+        Ok(row
+            .map(training_input_batch_identity_from_row)
+            .filter(|identity| is_training_order_id(&identity.order_id)))
     }
 
     pub async fn delete_training_input_batch(
@@ -465,7 +463,7 @@ impl PostgresTrainingWorkspaceStore {
         let order_id = order_id.trim();
         let apparatus = apparatus.trim();
         let qr_payload = qr_payload.trim();
-        if order_id.is_empty() || !order_id.starts_with("training-") {
+        if !is_training_order_id(order_id) {
             return Err(TrainingWorkspaceError::InvalidInput(
                 "training order id kerak".to_string(),
             ));
@@ -506,6 +504,7 @@ impl PostgresTrainingWorkspaceStore {
         order_id: &str,
         apparatus: &str,
     ) -> Result<bool, TrainingWorkspaceError> {
+        require_training_order_id(order_id)?;
         let generated = sqlx::query_scalar::<_, bool>(
             "SELECT EXISTS(
                  SELECT 1
@@ -526,6 +525,7 @@ impl PostgresTrainingWorkspaceStore {
         order_id: &str,
         apparatus: &str,
     ) -> Result<bool, TrainingWorkspaceError> {
+        require_training_order_id(order_id)?;
         sqlx::query_scalar::<_, bool>(
             "SELECT EXISTS(
                  SELECT 1
@@ -545,14 +545,18 @@ impl PostgresTrainingWorkspaceStore {
     pub async fn training_input_batch_orders(
         &self,
     ) -> Result<Vec<(String, String)>, TrainingWorkspaceError> {
-        sqlx::query_as::<_, (String, String)>(
+        let rows = sqlx::query_as::<_, (String, String)>(
             "SELECT order_id, apparatus
              FROM mini_training_input_batches
              ORDER BY generated_at DESC",
         )
         .fetch_all(&self.pool)
         .await
-        .map_err(|_| TrainingWorkspaceError::StoreFailed)
+        .map_err(|_| TrainingWorkspaceError::StoreFailed)?;
+        Ok(rows
+            .into_iter()
+            .filter(|(order_id, _)| is_training_order_id(order_id))
+            .collect())
     }
 
     pub async fn put_training_progress_batches(
@@ -565,6 +569,7 @@ impl PostgresTrainingWorkspaceStore {
             .await
             .map_err(|_| TrainingWorkspaceError::StoreFailed)?;
         for batch in progress_batches {
+            require_training_order_id(&batch.order_id)?;
             let payload =
                 serde_json::to_value(batch).map_err(|_| TrainingWorkspaceError::StoreFailed)?;
             sqlx::query(
@@ -619,6 +624,7 @@ impl PostgresTrainingWorkspaceStore {
         &self,
         order_id: &str,
     ) -> Result<Vec<OrderProgressBatch>, TrainingWorkspaceError> {
+        require_training_order_id(order_id)?;
         let payloads = sqlx::query_scalar::<_, serde_json::Value>(
             "SELECT payload_json
              FROM mini_training_progress_batches
@@ -689,7 +695,7 @@ impl PostgresTrainingWorkspaceStore {
         for (apparatus, order_id, state) in rows {
             let apparatus = apparatus.trim();
             let order_id = order_id.trim();
-            if apparatus.is_empty() || order_id.is_empty() {
+            if apparatus.is_empty() || !is_training_order_id(order_id) {
                 continue;
             }
             states
@@ -719,7 +725,10 @@ impl PostgresTrainingWorkspaceStore {
                 let apparatus = apparatus.trim().to_string();
                 let order_id = order_id.trim().to_string();
                 let state = state.trim().to_string();
-                (!apparatus.is_empty() && !order_id.is_empty() && !state.is_empty()).then_some(
+                (!apparatus.is_empty()
+                    && is_training_order_id(&order_id)
+                    && !state.is_empty())
+                    .then_some(
                     TrainingQueueStateRecord {
                         apparatus,
                         order_id,
@@ -740,7 +749,7 @@ impl PostgresTrainingWorkspaceStore {
         let apparatus = apparatus.trim();
         let order_id = order_id.trim();
         let state = state.trim();
-        if apparatus.is_empty() || order_id.is_empty() || state.is_empty() {
+        if apparatus.is_empty() || !is_training_order_id(order_id) || state.is_empty() {
             return Err(TrainingWorkspaceError::InvalidInput(
                 "apparatus, order_id va state kerak".to_string(),
             ));
@@ -780,7 +789,7 @@ impl PostgresTrainingWorkspaceStore {
         let action = action.trim();
         let from_state = from_state.trim();
         if apparatus.is_empty()
-            || order_id.is_empty()
+            || !is_training_order_id(order_id)
             || state.is_empty()
             || event_id.is_empty()
             || action.is_empty()
@@ -788,6 +797,14 @@ impl PostgresTrainingWorkspaceStore {
         {
             return Err(TrainingWorkspaceError::InvalidInput(
                 "training queue event uchun aparat, order, state va amal kerak".to_string(),
+            ));
+        }
+        if progress_batches.iter().any(|batch| {
+            !is_training_order_id(&batch.order_id)
+                || !batch.order_id.trim().eq_ignore_ascii_case(order_id)
+        }) {
+            return Err(TrainingWorkspaceError::InvalidInput(
+                "training progress batch order id mos emas".to_string(),
             ));
         }
 
@@ -889,6 +906,7 @@ impl PostgresTrainingWorkspaceStore {
         .map_err(|_| TrainingWorkspaceError::StoreFailed)?;
         Ok(rows
             .into_iter()
+            .filter(|row| is_training_order_id(&row.2))
             .map(training_queue_event_from_row)
             .collect())
     }
@@ -939,6 +957,7 @@ impl PostgresTrainingWorkspaceStore {
         .map_err(|_| TrainingWorkspaceError::StoreFailed)?;
         Ok(rows
             .into_iter()
+            .filter(|row| is_training_order_id(&row.2))
             .map(training_queue_event_from_row)
             .collect())
     }
@@ -951,13 +970,17 @@ impl PostgresTrainingWorkspaceStore {
             .await
             .map_err(|_| TrainingWorkspaceError::StoreFailed)?;
         let result = (if apparatus.is_empty() {
-            sqlx::query("DELETE FROM mini_training_queue_states")
+            sqlx::query(
+                "DELETE FROM mini_training_queue_states
+                 WHERE lower(btrim(order_id)) LIKE 'training-%'",
+            )
                 .execute(&mut *tx)
                 .await
         } else {
             sqlx::query(
                 "DELETE FROM mini_training_queue_states
-                 WHERE lower(apparatus) = lower($1)",
+                 WHERE lower(apparatus) = lower($1)
+                   AND lower(btrim(order_id)) LIKE 'training-%'",
             )
             .bind(apparatus)
             .execute(&mut *tx)
@@ -965,14 +988,18 @@ impl PostgresTrainingWorkspaceStore {
         })
         .map_err(|_| TrainingWorkspaceError::StoreFailed)?;
         if apparatus.is_empty() {
-            sqlx::query("DELETE FROM mini_training_queue_events")
+            sqlx::query(
+                "DELETE FROM mini_training_queue_events
+                 WHERE lower(btrim(order_id)) LIKE 'training-%'",
+            )
                 .execute(&mut *tx)
                 .await
                 .map_err(|_| TrainingWorkspaceError::StoreFailed)?;
         } else {
             sqlx::query(
                 "DELETE FROM mini_training_queue_events
-                 WHERE lower(apparatus) = lower($1)",
+                 WHERE lower(apparatus) = lower($1)
+                   AND lower(btrim(order_id)) LIKE 'training-%'",
             )
             .bind(apparatus)
             .execute(&mut *tx)
@@ -999,7 +1026,7 @@ impl PostgresTrainingWorkspaceStore {
         let apparatus = apparatus.trim();
         let action = action.trim();
         let image_id = image_id.trim();
-        if order_id.is_empty() || apparatus.is_empty() || action.is_empty() {
+        if !is_training_order_id(order_id) || apparatus.is_empty() || action.is_empty() {
             return Err(TrainingWorkspaceError::InvalidInput(
                 "training qaytarilgan bo‘yoq hisoboti uchun order, aparat va amal kerak"
                     .to_string(),
@@ -1052,6 +1079,7 @@ impl PostgresTrainingWorkspaceStore {
         order_id: &str,
         apparatus: &str,
     ) -> Result<Vec<String>, TrainingWorkspaceError> {
+        require_training_order_id(order_id)?;
         let rows = sqlx::query_as::<_, (String,)>(
             "SELECT barcode
              FROM mini_training_raw_material_assignments
@@ -1165,6 +1193,7 @@ async fn prepare_map_for_save(
     tx: &mut Transaction<'_, Postgres>,
     mut map: ProductionMapDefinition,
 ) -> Result<ProductionMapDefinition, TrainingWorkspaceError> {
+    map.id = map.id.trim().to_ascii_lowercase();
     if map.order_number.trim().is_empty() {
         let next = sqlx::query_scalar::<_, i64>("SELECT nextval('mini_training_order_number_seq')")
             .fetch_one(&mut **tx)
@@ -1185,6 +1214,7 @@ async fn prepare_map_for_save(
     if map.code.trim().is_empty() {
         map.code = map.order_number.trim().to_string();
     }
+    require_training_order_id(&map.id)?;
 
     let duplicate = sqlx::query_scalar::<_, String>(
         "SELECT id
@@ -1207,6 +1237,7 @@ async fn save_map_tx(
     tx: &mut Transaction<'_, Postgres>,
     map: &ProductionMapDefinition,
 ) -> Result<(), TrainingWorkspaceError> {
+    require_training_order_id(&map.id)?;
     let payload = serde_json::to_value(map).map_err(|_| TrainingWorkspaceError::StoreFailed)?;
     compile_map(map).map_err(|error| TrainingWorkspaceError::InvalidMap(error.to_string()))?;
     sqlx::query(
@@ -1232,18 +1263,30 @@ fn prepare_template_for_save(
     map: &ProductionMapDefinition,
 ) -> CalculateOrderTemplate {
     template = hydrate_template_layers(template);
-    if template.id.trim().is_empty() || !template.id.starts_with("training-") {
+    if template.id.trim().is_empty() || !is_training_order_id(&template.id) {
         template.id = format!("training-template-{}", unix_micros());
     }
     if template.code.trim().is_empty() {
         template.code = format!("TR-{}", map.order_number.trim());
     }
     template.order_number = map.order_number.trim().to_string();
-    if template.source_map_id.trim().is_empty() {
-        template.source_map_id = map.id.trim().to_string();
-    }
+    template.source_map_id = map.id.trim().to_string();
     template.saved_at = unix_micros().to_string();
     template
+}
+
+fn training_template_from_payload(
+    payload: serde_json::Value,
+) -> Result<CalculateOrderTemplate, TrainingWorkspaceError> {
+    let template = serde_json::from_value::<CalculateOrderTemplate>(payload)
+        .map_err(|_| TrainingWorkspaceError::StoreFailed)?;
+    if (!template.id.trim().is_empty() && !is_training_order_id(&template.id))
+        || (!template.source_map_id.trim().is_empty()
+            && !is_training_order_id(&template.source_map_id))
+    {
+        return Err(TrainingWorkspaceError::StoreFailed);
+    }
+    Ok(template)
 }
 
 async fn save_template_tx(
@@ -1284,6 +1327,7 @@ fn saved_map_from_payload(
 fn saved_map_from_definition(
     mut map: ProductionMapDefinition,
 ) -> Result<ProductionMapSaved, TrainingWorkspaceError> {
+    require_training_order_id(&map.id)?;
     if map.code.trim().is_empty() && !map.order_number.trim().is_empty() {
         map.code = map.order_number.trim().to_string();
     }
@@ -1358,10 +1402,22 @@ fn training_input_batch_identity_from_row(
 fn training_progress_batch_from_payload(
     payload: serde_json::Value,
 ) -> Result<OrderProgressBatch, TrainingWorkspaceError> {
-    serde_json::from_value(payload).map_err(|error| {
+    let batch = serde_json::from_value::<OrderProgressBatch>(payload).map_err(|error| {
         tracing::warn!(%error, "invalid persisted training progress batch");
         TrainingWorkspaceError::StoreFailed
-    })
+    })?;
+    require_training_order_id(&batch.order_id)?;
+    Ok(batch)
+}
+
+fn require_training_order_id(value: &str) -> Result<(), TrainingWorkspaceError> {
+    if is_training_order_id(value) {
+        Ok(())
+    } else {
+        Err(TrainingWorkspaceError::InvalidInput(
+            "training order id kerak".to_string(),
+        ))
+    }
 }
 
 fn is_production_progress_qr(value: &str) -> bool {

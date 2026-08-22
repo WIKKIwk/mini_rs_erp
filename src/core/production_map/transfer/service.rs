@@ -28,6 +28,7 @@ impl ProductionMapService {
         if order_id.is_empty() || from.is_empty() || to.is_empty() || from == to {
             return Err(ProductionMapError::MoveNotAllowed);
         }
+        reject_training_order_id(&order_id)?;
         if reason.is_empty() {
             return Err(ProductionMapError::ApparatusTransferReasonRequired);
         }
