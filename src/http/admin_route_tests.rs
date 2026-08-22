@@ -17,7 +17,8 @@ use crate::core::admin::models::{
 };
 use crate::core::admin::ports::{AdminPortError, AdminReadPort, AdminStatePort, AdminWritePort};
 use crate::core::admin::service::AdminService;
-use crate::core::apparatus_groups::{ApparatusGroupService, MemoryApparatusGroupStore};
+use crate::core::apparatus_standard::ApparatusId;
+use crate::core::apparatus_standard::test_support::{TestApparatusSpec, canonical_draft};
 use crate::core::auth::models::{Principal, PrincipalRole};
 use crate::core::auth::ports::{
     AdminAccessState, AdminAccessStateLookup, AuthPortError, CustomerLookup, CustomerRecord,
@@ -41,7 +42,9 @@ use crate::core::inventory_movements::{
     MemoryInventoryMovementStore,
 };
 use crate::core::mini_orders::{MiniOrderError, MiniOrderSink, NoopMiniOrderSink};
-use crate::core::production_map::{MemoryProductionMapStore, ProductionMapService};
+use crate::core::production_map::{
+    CanonicalServiceApparatusResolver, MemoryProductionMapStore, ProductionMapService,
+};
 use crate::core::profile::ports::{ProfilePrefs, ProfileStoreError, ProfileStorePort};
 use crate::core::returned_paint::{MemoryReturnedPaintStore, ReturnedPaintService};
 use crate::core::session::manager::SessionManager;
@@ -58,6 +61,7 @@ use crate::core::workers::{MemoryWorkerStore, WorkerService, WorkerUpsert};
 use crate::store::calculate_order_store::CalculateOrderStore;
 
 mod admin_edge_cases;
+mod apparatus_aasx;
 mod auth_roles;
 mod batch_move_advanced;
 mod batch_move_basic;
@@ -175,6 +179,83 @@ fn pechat_order_map_json(id: &str, title: &str, order_number: &str, apparatus: &
     pechat_order_map_json_with_dims(id, title, order_number, apparatus, 7, 1250.0)
 }
 
+fn canonical_test_apparatus_id(apparatus: &str) -> String {
+    ApparatusId::new(apparatus.trim().to_string())
+        .expect("test production-map fixtures must use a canonical apparatus id")
+        .to_string()
+}
+
+fn canonical_material_policy_body(
+    apparatus_id: &str,
+    expected_revision: u64,
+    material: serde_json::Value,
+    tooling_required: bool,
+) -> String {
+    let tooling = if tooling_required {
+        serde_json::json!({
+            "mode": "qolip_scan_required",
+            "tooling_class_id": "tooling-class:qolip"
+        })
+    } else {
+        serde_json::json!({"mode": "not_required"})
+    };
+    serde_json::json!({
+        "apparatus_id": apparatus_id,
+        "expected_revision": expected_revision,
+        "material": material,
+        "tooling": tooling
+    })
+    .to_string()
+}
+
+fn canonical_requirement_set_material_policy_body(
+    apparatus_id: &str,
+    expected_revision: u64,
+    item_group_ids: &[&str],
+    tooling_required: bool,
+) -> String {
+    canonical_material_policy_body(
+        apparatus_id,
+        expected_revision,
+        serde_json::json!({
+            "mode": "requirement_sets",
+            "sets": [{
+                "requirement_id": "test-material",
+                "item_group_ids": item_group_ids,
+                "minimum_required_count": 1
+            }]
+        }),
+        tooling_required,
+    )
+}
+
+fn canonical_apparatus_draft_body(seed: &str, display_name: &str) -> String {
+    let apparatus_id = format!("apparatus:test:{seed}");
+    serde_json::to_string(&canonical_draft(&TestApparatusSpec::print(
+        &apparatus_id,
+        display_name,
+        crate::core::apparatus_standard::ProcessTechnology::Flexographic,
+        None,
+    )))
+    .expect("canonical apparatus test draft")
+}
+
+fn canonical_apparatus_update_body(
+    seed: &str,
+    display_name: &str,
+    expected_revision: u64,
+) -> String {
+    serde_json::json!({
+        "expected_revision": expected_revision,
+        "draft": serde_json::from_str::<serde_json::Value>(&canonical_apparatus_draft_body(
+            seed,
+            display_name,
+        ))
+        .expect("canonical apparatus draft JSON")
+    })
+    .to_string()
+}
+
 fn two_apparatus_order_map_json(
     id: &str,
     title: &str,
@@ -182,6 +263,8 @@ fn two_apparatus_order_map_json(
     first_apparatus: &str,
     second_apparatus: &str,
 ) -> String {
+    let first_id = canonical_test_apparatus_id(first_apparatus);
+    let second_id = canonical_test_apparatus_id(second_apparatus);
     format!(
         r#"{{
             "id":"{id}",
@@ -190,8 +273,8 @@ fn two_apparatus_order_map_json(
             "order_number":"{order_number}",
             "nodes":[
                 {{"id":"start","kind":"start","title":"Start"}},
-                {{"id":"first","kind":"apparatus","title":"{first_apparatus}"}},
-                {{"id":"second","kind":"apparatus","title":"{second_apparatus}"}},
+                {{"id":"first","kind":"apparatus","title":"{first_apparatus}","apparatus_id":"{first_id}"}},
+                {{"id":"second","kind":"apparatus","title":"{second_apparatus}","apparatus_id":"{second_id}"}},
                 {{"id":"end","kind":"end","title":"End"}}
             ],
             "edges":[
@@ -231,11 +314,14 @@ fn production_order_map_json_with_product(
     roll_count: i64,
     width_mm: f64,
 ) -> String {
-    let rezka_config = if apparatus.to_ascii_lowercase().contains("rezka") {
+    let rezka_config = if apparatus.to_ascii_lowercase().contains("rezka")
+        || apparatus.to_ascii_lowercase().contains("asset-010")
+    {
         r#", "rezka_kadr_count": 4, "rezka_label_length": 100"#
     } else {
         ""
     };
+    let apparatus_id = canonical_test_apparatus_id(apparatus);
     format!(
         r#"{{
             "id":"{id}",
@@ -246,7 +332,7 @@ fn production_order_map_json_with_product(
             "width_mm":{width_mm},
             "nodes":[
                 {{"id":"start","kind":"start","title":"Start"}},
-                {{"id":"apparatus","kind":"apparatus","title":"{apparatus}"{rezka_config}}},
+                {{"id":"apparatus","kind":"apparatus","title":"{apparatus}","apparatus_id":"{apparatus_id}"{rezka_config}}},
                 {{"id":"end","kind":"end","title":"End"}}
             ],
             "edges":[
@@ -255,6 +341,35 @@ fn production_order_map_json_with_product(
             ]
         }}"#
     )
+}
+
+fn pechat_task_rezka_order_map_json(id: &str, title: &str, order_number: &str) -> String {
+    r#"{{
+        "id":"{id}",
+        "product_code":"PECHAT-REZKA-{order_number}",
+        "title":"{title}",
+        "order_number":"{order_number}",
+        "roll_count":7,
+        "width_mm":1250,
+        "nodes":[
+            {{"id":"start","kind":"start","title":"Start"}},
+            {{"id":"pechat","kind":"apparatus","title":"Pechat","apparatus_id":"apparatus:default:bosma_7"}},
+            {{"id":"laminatsiya_task","kind":"task","title":"Laminatsiya"}},
+            {{"id":"rezka","kind":"apparatus","title":"Rezka","apparatus_id":"apparatus:default:asset-010","rezka_kadr_count":4,"rezka_label_length":100}},
+            {{"id":"end","kind":"end","title":"End"}}
+        ],
+        "edges":[
+            {{"from":"start","to":"pechat"}},
+            {{"from":"pechat","to":"laminatsiya_task"}},
+            {{"from":"laminatsiya_task","to":"rezka"}},
+            {{"from":"rezka","to":"end"}}
+        ]
+    }}"#
+    .replace("{id}", id)
+    .replace("{title}", title)
+    .replace("{order_number}", order_number)
+    .replace("{{", "{")
+    .replace("}}", "}")
 }
 
 fn laminatsiya_order_map_json(id: &str, width_mm: f64) -> String {
@@ -268,7 +383,12 @@ fn laminatsiya_order_map_json(id: &str, width_mm: f64) -> String {
             "width_mm":{width_mm},
             "nodes":[
                 {{"id":"start","kind":"start","title":"Start"}},
-                {{"id":"laminatsiya","kind":"task","title":"Laminatsiya - A"}},
+                {{
+                    "id":"laminatsiya",
+                    "kind":"apparatus",
+                    "title":"Laminatsiya 1",
+                    "apparatus_id":"apparatus:default:asset-007"
+                }},
                 {{"id":"end","kind":"end","title":"End"}}
             ],
             "edges":[
@@ -308,10 +428,13 @@ fn test_state() -> AppState {
         .with_read_port(admin_port.clone())
         .with_write_port(admin_port.clone())
         .with_state_port(admin_state_port.clone());
-    state.production_maps = ProductionMapService::new(Arc::new(MemoryProductionMapStore::new()));
     state.returned_paint = ReturnedPaintService::new(Arc::new(MemoryReturnedPaintStore::new()));
-    state.apparatus_groups = ApparatusGroupService::new(Arc::new(MemoryApparatusGroupStore::new()));
-    state.warehouses = WarehouseService::new(Arc::new(MemoryWarehouseStore::new()));
+    let resolver = Arc::new(CanonicalServiceApparatusResolver::new(
+        state.apparatus.clone(),
+    ));
+    state.production_maps =
+        ProductionMapService::new(Arc::new(MemoryProductionMapStore::new()), resolver.clone());
+    state.warehouses = WarehouseService::new(Arc::new(MemoryWarehouseStore::new()), resolver);
     state.workers = WorkerService::new(Arc::new(MemoryWorkerStore::new()));
     state.system_users = SystemUserService::new(Arc::new(MemorySystemUserStore::new()));
     state.auth = crate::core::auth::service::AuthService::new(&state.config)
@@ -323,6 +446,18 @@ fn test_state() -> AppState {
     state.worker_groups = WorkerGroupService::new(Arc::new(MemoryWorkerGroupStore::new()));
     state.production_orders = Arc::new(NoopMiniOrderSink);
     state
+}
+
+fn production_map_service_with_store(
+    state: &AppState,
+    store: Arc<MemoryProductionMapStore>,
+) -> ProductionMapService {
+    ProductionMapService::new(
+        store,
+        Arc::new(CanonicalServiceApparatusResolver::new(
+            state.apparatus.clone(),
+        )),
+    )
 }
 
 fn test_calculate_order_store_path() -> std::path::PathBuf {
@@ -371,7 +506,10 @@ async fn assign_warehouse_to_principal(
     state
         .warehouses
         .assign_warehouse(WarehouseAssignmentUpsert {
+            assignment_kind: "warehouse".to_string(),
             warehouse: warehouse.to_string(),
+            warehouse_name: None,
+            apparatus_id: None,
             principal_role: role,
             principal_ref: ref_.to_string(),
             display_name: "Materialchi".to_string(),
@@ -385,11 +523,19 @@ fn request(method: &str, uri: &str, token: &str) -> Request<Body> {
 }
 
 fn request_with_body(method: &str, uri: &str, token: &str, body: &str) -> Request<Body> {
+    static IDEMPOTENCY_SEQUENCE: AtomicUsize = AtomicUsize::new(1);
     Request::builder()
         .method(method)
         .uri(uri)
         .header(header::AUTHORIZATION, format!("Bearer {token}"))
         .header(header::CONTENT_TYPE, "application/json")
+        .header(
+            "idempotency-key",
+            format!(
+                "admin-route-test-{}",
+                IDEMPOTENCY_SEQUENCE.fetch_add(1, Ordering::Relaxed)
+            ),
+        )
         .body(Body::from(body.to_string()))
         .expect("request")
 }

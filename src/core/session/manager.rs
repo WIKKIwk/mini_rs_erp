@@ -61,7 +61,7 @@ impl SessionManager {
     pub async fn get(&self, token: &str) -> Result<Principal, AppError> {
         if let Some(record) = self.cache.read().await.get(token).cloned() {
             if record.is_expired(time::OffsetDateTime::now_utc()) {
-                self.delete(token).await;
+                self.delete(token).await?;
                 return Err(AppError::Unauthorized);
             }
             return Ok(record.principal);
@@ -81,9 +81,10 @@ impl SessionManager {
         Ok(principal)
     }
 
-    pub async fn delete(&self, token: &str) {
-        let _ = self.store.delete(token).await;
+    pub async fn delete(&self, token: &str) -> Result<(), AppError> {
+        self.store.delete(token).await?;
         self.cache.write().await.remove(token);
+        Ok(())
     }
 
     pub async fn delete_for_principal(
@@ -102,21 +103,26 @@ impl SessionManager {
         Ok(deleted)
     }
 
-    pub async fn update(&self, token: &str, principal: Principal) {
+    pub async fn update(&self, token: &str, principal: Principal) -> Result<(), AppError> {
         let existing = if let Some(record) = self.cache.read().await.get(token).cloned() {
             Some(record)
         } else {
-            self.store.get(token).await.ok().flatten()
+            self.store.get(token).await?
         };
         let Some(existing) = existing else {
-            return;
+            return Err(AppError::Unauthorized);
         };
+
+        if existing.is_expired(time::OffsetDateTime::now_utc()) {
+            self.delete(token).await?;
+            return Err(AppError::Unauthorized);
+        }
 
         let now = time::OffsetDateTime::now_utc();
         let record = SessionRecord::new(principal, now, existing.created_at, self.ttl_seconds);
-        if self.store.put(token, record.clone()).await.is_ok() {
-            self.cache.write().await.insert(token.to_string(), record);
-        }
+        self.store.put(token, record.clone()).await?;
+        self.cache.write().await.insert(token.to_string(), record);
+        Ok(())
     }
 }
 
@@ -128,8 +134,40 @@ fn generate_token() -> String {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Arc;
+
+    use async_trait::async_trait;
+
     use super::{SessionManager, generate_token};
     use crate::core::auth::models::{Principal, PrincipalRole};
+    use crate::core::session::models::SessionRecord;
+    use crate::core::session::store::SessionStore;
+    use crate::error::AppError;
+
+    struct FailingSessionStore;
+
+    #[async_trait]
+    impl SessionStore for FailingSessionStore {
+        async fn get(&self, _token: &str) -> Result<Option<SessionRecord>, AppError> {
+            Err(AppError::Storage("session get failed".to_string()))
+        }
+
+        async fn put(&self, _token: &str, _record: SessionRecord) -> Result<(), AppError> {
+            Err(AppError::Storage("session put failed".to_string()))
+        }
+
+        async fn delete(&self, _token: &str) -> Result<(), AppError> {
+            Err(AppError::Storage("session delete failed".to_string()))
+        }
+
+        async fn delete_for_principal(
+            &self,
+            _role: &PrincipalRole,
+            _principal_ref: &str,
+        ) -> Result<usize, AppError> {
+            Err(AppError::Storage("session revoke failed".to_string()))
+        }
+    }
 
     #[test]
     fn token_matches_go_length() {
@@ -163,7 +201,8 @@ mod tests {
                     avatar_url: String::new(),
                 },
             )
-            .await;
+            .await
+            .expect("update session");
 
         let principal = sessions.get(&token).await.expect("get session");
         assert_eq!(principal.display_name, "Alias");
@@ -193,8 +232,22 @@ mod tests {
         let data_file = std::fs::read(lmdb_path.join("data.mdb")).expect("read lmdb data file");
         assert!(!contains_bytes(&data_file, token.as_bytes()));
 
-        sessions.delete(&token).await;
+        sessions.delete(&token).await.expect("delete session");
         assert!(sessions.get(&token).await.is_err());
+    }
+
+    #[tokio::test]
+    async fn session_store_failures_are_returned_to_callers() {
+        let sessions = SessionManager::with_store(Arc::new(FailingSessionStore), Some(60));
+
+        assert!(matches!(
+            sessions.update("token", worker_principal("worker")).await,
+            Err(AppError::Storage(message)) if message == "session get failed"
+        ));
+        assert!(matches!(
+            sessions.delete("token").await,
+            Err(AppError::Storage(message)) if message == "session delete failed"
+        ));
     }
 
     #[tokio::test]

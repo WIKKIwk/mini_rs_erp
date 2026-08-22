@@ -116,12 +116,10 @@ async fn active_order_uses_item(
                             FROM mini_queue_states states
                             WHERE states.order_id = maps.id
                               AND states.state = 'completed'
-                              AND lower(btrim(states.apparatus)) = lower(btrim(
-                                    COALESCE(
-                                        NULLIF(node->>'alternative_assigned_title', ''),
-                                        node->>'title'
-                                    )
-                              ))
+                            AND states.canonical_apparatus_id = COALESCE(
+                                    NULLIF(node->>'alternative_assigned_apparatus_id', ''),
+                                    node->>'apparatus_id'
+                              )
                       )
                   )
         )

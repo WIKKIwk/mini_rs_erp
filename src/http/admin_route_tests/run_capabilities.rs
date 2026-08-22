@@ -152,7 +152,7 @@ async fn apparatus_queue_read_capability_can_only_read_production_maps() {
                 "title":"Queue test",
                 "nodes":[
                     {"id":"start","kind":"start","title":"Start"},
-                    {"id":"apparatus","kind":"apparatus","title":"Godex aparat - DEMO"},
+                    {"id":"apparatus","kind":"apparatus","title":"Godex aparat - DEMO","apparatus_id":"apparatus:default:bosma_7"},
                     {"id":"end","kind":"end","title":"End"}
                 ],
                 "edges":[
@@ -189,7 +189,7 @@ async fn apparatus_queue_read_capability_can_only_read_production_maps() {
                 "principal_role":"werka",
                 "principal_ref":"werka",
                 "role_id":"aparatchi",
-                "assigned_apparatus":["Godex aparat - DEMO"]
+                "assigned_apparatus":["apparatus:default:bosma_7"]
             }"#,
         ))
         .await
@@ -199,7 +199,7 @@ async fn apparatus_queue_read_capability_can_only_read_production_maps() {
     assert_eq!(status, StatusCode::OK, "{body}");
     assert_eq!(
         body["assigned_apparatus"],
-        serde_json::json!(["Godex aparat - DEMO"])
+        serde_json::json!(["apparatus:default:bosma_7"])
     );
 
     let queue_token = session_for(&state, PrincipalRole::Werka, "werka").await;

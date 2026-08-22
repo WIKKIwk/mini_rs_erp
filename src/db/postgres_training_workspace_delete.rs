@@ -1,10 +1,9 @@
 use super::{PostgresTrainingWorkspaceStore, TrainingWorkspaceError};
-use crate::core::production_map::is_training_order_id;
 
 impl PostgresTrainingWorkspaceStore {
     pub async fn delete_order(&self, order_id: &str) -> Result<(), TrainingWorkspaceError> {
         let order_id = order_id.trim();
-        if !is_training_order_id(order_id) {
+        if order_id.is_empty() || !order_id.starts_with("training-") {
             return Err(TrainingWorkspaceError::InvalidInput(
                 "training order id kerak".to_string(),
             ));

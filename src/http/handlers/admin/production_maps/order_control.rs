@@ -28,7 +28,6 @@ pub async fn production_map_order_control(
     if order_id.is_empty() {
         return Err(bad_request("order_id is required"));
     }
-    reject_training_order_id_for_production(order_id)?;
     let actor = queue_action_actor(&principal);
     match input.action.trim() {
         "freeze" => {

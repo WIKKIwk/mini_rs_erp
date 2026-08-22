@@ -1,29 +1,29 @@
 use super::super::pechat;
 use super::super::types::{ApparatusQueuePolicy, ApparatusQueuePolicyRecord};
+use crate::core::apparatus_standard::{QueueDiscipline, RuntimeApparatusConfiguration};
 
-pub(in crate::core::production_map) fn effective_apparatus_queue_policy(
-    apparatus: &str,
-    stored: Option<ApparatusQueuePolicy>,
-) -> ApparatusQueuePolicy {
-    if pechat::is_pechat_apparatus(apparatus) {
-        ApparatusQueuePolicy::StrictSequence
-    } else {
-        stored.unwrap_or(ApparatusQueuePolicy::StrictSequence)
+fn canonical_queue_policy(apparatus: &RuntimeApparatusConfiguration) -> ApparatusQueuePolicy {
+    match apparatus.queue.discipline {
+        QueueDiscipline::StrictSequence => ApparatusQueuePolicy::StrictSequence,
+        QueueDiscipline::FreePick => ApparatusQueuePolicy::FreePick,
     }
 }
 
+pub(in crate::core::production_map) fn effective_apparatus_queue_policy(
+    apparatus: &RuntimeApparatusConfiguration,
+) -> ApparatusQueuePolicy {
+    canonical_queue_policy(apparatus)
+}
+
 pub(in crate::core::production_map) fn effective_apparatus_queue_policy_record(
-    apparatus: &str,
-    stored: ApparatusQueuePolicy,
+    apparatus: &RuntimeApparatusConfiguration,
 ) -> ApparatusQueuePolicyRecord {
+    let canonical_policy = canonical_queue_policy(apparatus);
     let locked = pechat::is_pechat_apparatus(apparatus);
     ApparatusQueuePolicyRecord {
-        apparatus: apparatus.trim().to_string(),
-        policy: if locked {
-            ApparatusQueuePolicy::StrictSequence
-        } else {
-            stored
-        },
+        apparatus_id: apparatus.runtime.apparatus_id.clone(),
+        apparatus: apparatus.runtime.display.display_name.clone(),
+        policy: canonical_policy,
         locked,
         reason: if locked {
             "pechat_always_strict".to_string()

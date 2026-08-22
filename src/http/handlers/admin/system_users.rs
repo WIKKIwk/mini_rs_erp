@@ -79,19 +79,12 @@ pub async fn system_user_code_regenerate(
         return Err(method_not_allowed());
     }
     let user = required_system_user(&state, query.id.as_deref()).await?;
-    let user_ref = user.id.clone();
-    let user_role = user.role.clone();
-    let detail = state
+    state
         .admin
         .regenerate_system_user_code(user)
         .await
-        .map_err(|_| server_error("system user code regenerate failed"))?;
-    state
-        .sessions
-        .delete_for_principal(&user_role, &user_ref)
-        .await
-        .map_err(|_| server_error("system user session revoke failed"))?;
-    Ok(json_response(detail))
+        .map(json_response)
+        .map_err(|_| server_error("system user code regenerate failed"))
 }
 
 pub(super) async fn system_user_list_page(

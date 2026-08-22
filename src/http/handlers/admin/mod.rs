@@ -1,5 +1,5 @@
-mod customers;
 mod calculate_materials;
+mod customers;
 mod items;
 mod production_maps;
 mod supplier_mutations;
@@ -11,37 +11,34 @@ mod training;
 mod warehouse_live;
 mod workers;
 
+pub use calculate_materials::calculate_materials;
 pub use customers::{
     activity, customer_code_regenerate, customer_detail, customer_item_add, customer_item_remove,
     customer_list, customer_phone, customer_remove, customers, item_group_tree, item_groups, items,
     material_taminotchi_code_regenerate, material_taminotchi_detail,
     material_taminotchi_item_groups, material_taminotchi_phone, material_taminotchilar,
 };
-pub use calculate_materials::calculate_materials;
 pub use items::{item_detail, item_uoms};
 pub use production_maps::{
-    production_map_audit, production_map_closed_orders, production_map_completed_orders,
-    production_map_capacity, production_map_capacity_downtime,
-    production_map_completion_request_decision, production_map_completion_request_decisions,
-    production_map_completion_requests, production_map_finished_goods_receive, production_map_live,
-    production_map_laminatsiya_astatka, production_map_rezka_astatka,
-    production_map_apparatus_transfer, production_map_move, production_map_move_batch,
-    production_map_order_control,
-    production_map_paddon_create, production_map_paddon_detail,
-    production_map_paddon_item_add, production_map_paddon_item_remove,
-    production_map_paddon_items_add, production_map_paddon_items_remove,
-    production_map_paddon_qr_print, production_map_paddon_qr_report, production_map_paddons,
-    production_map_progress_batch_correct, production_map_progress_qr_history,
-    production_map_progress_qr_lookup,
+    production_map_apparatus_transfer, production_map_audit, production_map_capacity,
+    production_map_capacity_downtime, production_map_closed_orders,
+    production_map_completed_orders, production_map_completion_request_decision,
+    production_map_completion_request_decisions, production_map_completion_requests,
+    production_map_finished_goods_receive, production_map_laminatsiya_astatka, production_map_live,
+    production_map_move, production_map_move_batch, production_map_order_control,
+    production_map_paddon_create, production_map_paddon_detail, production_map_paddon_item_add,
+    production_map_paddon_item_remove, production_map_paddon_items_add,
+    production_map_paddon_items_remove, production_map_paddon_qr_print,
+    production_map_paddon_qr_report, production_map_paddons, production_map_progress_batch_correct,
+    production_map_progress_qr_history, production_map_progress_qr_lookup,
     production_map_progress_qr_report, production_map_progress_qr_reprint,
     production_map_qolip_order_notes, production_map_qolip_validate, production_map_queue_action,
-    production_map_queue_policies,
-    production_map_run, production_map_save_with_order, production_map_schedule,
-    production_map_schedule_cancel, production_map_sequence,
-    production_map_wip_batches, production_maps, raw_material_assignment_candidate_orders,
-    raw_material_assignment_candidates, raw_material_assignment_lookup,
-    raw_material_assignment_orders, raw_material_assignments, raw_material_history,
-    raw_material_intake, raw_material_intake_candidates, raw_material_rules,
+    production_map_queue_policies, production_map_rezka_astatka, production_map_run,
+    production_map_save_with_order, production_map_schedule, production_map_schedule_cancel,
+    production_map_sequence, production_map_wip_batches, production_maps,
+    raw_material_assignment_candidate_orders, raw_material_assignment_candidates,
+    raw_material_assignment_lookup, raw_material_assignment_orders, raw_material_assignments,
+    raw_material_history, raw_material_intake, raw_material_intake_candidates, raw_material_rules,
     raw_material_start_requirements, raw_material_stock, raw_material_stock_reprint_confirm,
     raw_material_stock_reprint_prepare,
 };
@@ -54,24 +51,22 @@ pub use suppliers::{
     supplier_detail, supplier_list, supplier_summary, suppliers, user_list,
 };
 pub use system::{
-    apparatus, apparatus_groups, apparatus_options, capabilities, factory_location,
-    factory_location_apparatus,
-    factory_locations, inventory_assets, inventory_locations, inventory_relocations,
-    inventory_relocations_batch, inventory_returns_batch, inventory_transfer_action,
-    inventory_transfers, items_bulk_move_group, reset_orders, role_assignments, roles,
-    system_backup_create,
-    system_backup_download, system_backup_import, system_monitor, system_monitor_live,
-    warehouse_assignments, warehouse_items, warehouse_summaries, warehouses, werka_code_regenerate,
+    MAX_AASX_UPLOAD_BYTES, apparatus, apparatus_aasx, apparatus_detail, apparatus_options,
+    capabilities, factory_location, factory_location_apparatus, factory_locations,
+    inventory_assets, inventory_locations, inventory_relocations, inventory_relocations_batch,
+    inventory_returns_batch, inventory_transfer_action, inventory_transfers, items_bulk_move_group,
+    reset_orders, role_assignments, roles, system_backup_create, system_backup_download,
+    system_backup_import, system_monitor, system_monitor_live, warehouse_assignments,
+    warehouse_items, warehouse_summaries, warehouses, werka_code_regenerate,
 };
 use system::{authorize_any_capability, authorize_capability, require_capability};
-pub(crate) use system::principal_can_use_apparatus;
 pub use system_users::{system_user_code_regenerate, system_user_detail, system_users};
 pub use telegram::{invite as telegram_invite, settings as telegram_settings};
 pub use training::{
-    training_apparatus_modes, training_completed_orders, training_order_image_upload,
-    training_order_image_view, training_order_statuses, training_production_map_save_with_order,
-    training_input_batches, training_production_maps, training_raw_material_assignments,
-    training_restart,
+    training_apparatus_modes, training_completed_orders, training_input_batches,
+    training_order_image_upload, training_order_image_view, training_order_statuses,
+    training_production_map_save_with_order, training_production_maps,
+    training_raw_material_assignments, training_restart,
 };
 pub use warehouse_live::warehouse_live;
 pub use workers::{
@@ -98,7 +93,7 @@ use crate::core::admin::models::{
     AdminUpdateItemRequest, AdminUserListPage,
 };
 use crate::core::admin::ports::AdminPortError;
-use crate::core::apparatus_groups::{ApparatusGroupError, ApparatusGroupUpsert, ApparatusUpsert};
+use crate::core::apparatus_standard::{CanonicalApparatusError, CanonicalCommandMetadata};
 use crate::core::auth::models::{Principal, PrincipalRole};
 use crate::core::authz::{
     Capability, RoleAssignmentUpsert, RoleDefinitionUpsert, capability_catalog_entries,
@@ -115,8 +110,50 @@ use crate::http::handlers::auth::{bearer_token, profile_avatar_proxy_url};
 
 type AdminError = (StatusCode, Json<AdminErrorResponse>);
 
-pub(crate) const MOBILE_PRODUCTION_SNAPSHOT_ENDPOINT: &str =
-    "/v1/mobile/admin/production-maps/sequence";
+fn canonical_command_metadata(
+    principal: &Principal,
+    headers: &HeaderMap,
+) -> Result<CanonicalCommandMetadata, AdminError> {
+    let key = headers
+        .get("idempotency-key")
+        .and_then(|value| value.to_str().ok())
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| bad_request("idempotency_key_required"))?;
+    if key.len() > 128
+        || !key
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || b"._:-".contains(&byte))
+    {
+        return Err(bad_request("idempotency_key_invalid"));
+    }
+    let actor_ref = if principal.ref_.trim().is_empty() {
+        principal.phone.trim()
+    } else {
+        principal.ref_.trim()
+    };
+    Ok(CanonicalCommandMetadata::new(
+        format!("principal:{actor_ref}"),
+        format!("apparatus-command:{key}"),
+    ))
+}
+
+fn canonical_apparatus_error(error: CanonicalApparatusError) -> AdminError {
+    match error {
+        CanonicalApparatusError::NotFound => not_found("apparatus_not_found"),
+        CanonicalApparatusError::AlreadyExists => conflict("apparatus_already_exists"),
+        CanonicalApparatusError::RevisionConflict => conflict("apparatus_revision_conflict"),
+        CanonicalApparatusError::IdentityConflict => conflict("apparatus_identity_conflict"),
+        CanonicalApparatusError::Retired => conflict("apparatus_retired"),
+        CanonicalApparatusError::InvalidRevision(_) => bad_request("apparatus_revision_invalid"),
+        CanonicalApparatusError::InvalidAasx => bad_request("aasx_import_invalid"),
+        CanonicalApparatusError::ArtifactIntegrity => server_error("aasx_integrity_failed"),
+        CanonicalApparatusError::Persistence => server_error("apparatus_persistence_failed"),
+        CanonicalApparatusError::CutoverBlocked(_) => server_error("apparatus_cutover_blocked"),
+        CanonicalApparatusError::Clock => server_error("apparatus_clock_failed"),
+        CanonicalApparatusError::InjectedFault(_) => server_error("apparatus_commit_failed"),
+    }
+}
 
 fn required_ref(value: Option<&str>) -> Result<&str, AdminError> {
     let ref_ = value.unwrap_or("").trim();
@@ -277,7 +314,7 @@ fn too_many_requests(error: impl Into<String>) -> AdminError {
     )
 }
 
-#[derive(Serialize)]
+#[derive(Debug, Serialize)]
 pub struct AdminErrorResponse {
     pub error: String,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -288,12 +325,6 @@ pub struct AdminErrorResponse {
     pub order_width_mm: Option<f64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub roll_width_mm: Option<f64>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub snapshot_revision: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub refresh_required: Option<bool>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub refresh_endpoint: Option<String>,
 }
 
 impl AdminErrorResponse {
@@ -304,22 +335,7 @@ impl AdminErrorResponse {
             apparatus_options: None,
             order_width_mm: None,
             roll_width_mm: None,
-            snapshot_revision: None,
-            refresh_required: None,
-            refresh_endpoint: None,
         }
-    }
-
-    fn with_refresh_required(mut self) -> Self {
-        self.refresh_required = Some(true);
-        self.refresh_endpoint = Some(MOBILE_PRODUCTION_SNAPSHOT_ENDPOINT.to_string());
-        self
-    }
-
-    fn stale_production_snapshot(current_revision: String) -> Self {
-        let mut response = Self::new("stale_production_snapshot").with_refresh_required();
-        response.snapshot_revision = Some(current_revision);
-        response
     }
 
     fn roll_size_mismatch(order_width_mm: f64, roll_width_mm: f64) -> Self {
@@ -329,9 +345,6 @@ impl AdminErrorResponse {
             apparatus_options: None,
             order_width_mm: Some(order_width_mm),
             roll_width_mm: Some(roll_width_mm),
-            snapshot_revision: None,
-            refresh_required: None,
-            refresh_endpoint: None,
         }
     }
 }

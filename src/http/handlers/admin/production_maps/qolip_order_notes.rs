@@ -52,7 +52,6 @@ pub async fn production_map_qolip_order_notes(
                     "notes": notes,
                 })));
             }
-            reject_training_order_id_for_production(order_id)?;
 
             let (map, required_qolips) = load_order_qolips(&state, order_id).await?;
             let in_use_codes = state
@@ -87,7 +86,6 @@ pub async fn production_map_qolip_order_notes(
             if order_id.is_empty() {
                 return Err(bad_request("order_id is required"));
             }
-            reject_training_order_id_for_production(order_id)?;
             let (map, required_qolips) = load_order_qolips(&state, order_id).await?;
             let status = input.status.trim().to_ascii_lowercase();
             match status.as_str() {

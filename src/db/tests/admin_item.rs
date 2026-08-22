@@ -4,16 +4,17 @@ use sqlx::postgres::{PgConnectOptions, PgPoolOptions};
 
 use crate::core::admin::item_customer_policy::FINISHED_GOODS_CUSTOMER_REQUIRED;
 use crate::core::admin::ports::{AdminPortError, AdminReadPort, AdminWritePort};
-use crate::db::postgres::apply_postgres_migrations_through;
+use crate::db::postgres::{apply_foundation_migration, apply_postgres_migrations_through};
 use crate::db::postgres_admin_catalog::PostgresAdminCatalogStore;
 use crate::db::postgres_customer::PostgresCustomerStore;
 
+use super::seed_standard_canonical_apparatus;
+
 #[tokio::test]
-#[ignore = "requires local PostgreSQL and creates/drops mini_rs_erp_test_admin_item_update"]
-async fn postgres_admin_item_update_preserves_details_and_live_references() {
+async fn postgres_item_master_migration_removes_legacy_warehouse_ownership() {
     let admin_url = std::env::var("MINI_ERP_TEST_ADMIN_DATABASE_URL")
         .unwrap_or_else(|_| "postgres:///postgres".to_string());
-    let db_name = "mini_rs_erp_test_admin_item_update";
+    let db_name = "mini_rs_erp_test_admin_item_warehouse_migration";
     let admin_options = PgConnectOptions::from_str(&admin_url).expect("admin database url");
     let admin_pool = PgPoolOptions::new()
         .connect_with(admin_options.clone())
@@ -51,6 +52,73 @@ async fn postgres_admin_item_update_preserves_details_and_live_references() {
     apply_postgres_migrations_through(&pool, 18)
         .await
         .expect("remove item warehouse ownership");
+    apply_postgres_migrations_through(&pool, 18)
+        .await
+        .expect("item warehouse migration restart");
+
+    let warehouse_column_exists: bool = sqlx::query_scalar(
+        "SELECT EXISTS (
+             SELECT 1 FROM information_schema.columns
+             WHERE table_schema = 'public'
+               AND table_name = 'mini_items'
+               AND column_name = 'warehouse'
+         )",
+    )
+    .fetch_one(&pool)
+    .await
+    .expect("item warehouse column lookup");
+    assert!(!warehouse_column_exists);
+    let payload_has_warehouse: bool = sqlx::query_scalar(
+        "SELECT payload_json ? 'warehouse'
+         FROM mini_items WHERE code = 'LEGACY-WAREHOUSE-ITEM'",
+    )
+    .fetch_one(&pool)
+    .await
+    .expect("legacy item payload");
+    assert!(!payload_has_warehouse);
+    let migration_count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM mini_schema_migrations")
+        .fetch_one(&pool)
+        .await
+        .expect("migration count");
+    assert_eq!(migration_count, 18);
+
+    pool.close().await;
+    sqlx::query(&format!(r#"DROP DATABASE "{db_name}" WITH (FORCE)"#))
+        .execute(&admin_pool)
+        .await
+        .expect("drop test db");
+    admin_pool.close().await;
+}
+
+#[tokio::test]
+async fn postgres_admin_item_update_preserves_details_and_live_references() {
+    let admin_url = std::env::var("MINI_ERP_TEST_ADMIN_DATABASE_URL")
+        .unwrap_or_else(|_| "postgres:///postgres".to_string());
+    let db_name = "mini_rs_erp_test_admin_item_update";
+    let admin_options = PgConnectOptions::from_str(&admin_url).expect("admin database url");
+    let admin_pool = PgPoolOptions::new()
+        .connect_with(admin_options.clone())
+        .await
+        .expect("admin db");
+    sqlx::query(&format!(
+        r#"DROP DATABASE IF EXISTS "{db_name}" WITH (FORCE)"#
+    ))
+    .execute(&admin_pool)
+    .await
+    .expect("drop stale test db");
+    sqlx::query(&format!(r#"CREATE DATABASE "{db_name}""#))
+        .execute(&admin_pool)
+        .await
+        .expect("create test db");
+
+    let pool = PgPoolOptions::new()
+        .connect_with(admin_options.database(db_name))
+        .await
+        .expect("test db");
+    apply_foundation_migration(&pool)
+        .await
+        .expect("apply migrations");
+    seed_standard_canonical_apparatus(&pool).await;
     let warehouse_column_exists: bool = sqlx::query_scalar(
         "SELECT EXISTS (
              SELECT 1
@@ -64,15 +132,6 @@ async fn postgres_admin_item_update_preserves_details_and_live_references() {
     .await
     .expect("item warehouse column lookup");
     assert!(!warehouse_column_exists);
-    let payload_has_warehouse: bool = sqlx::query_scalar(
-        "SELECT payload_json ? 'warehouse'
-         FROM mini_items
-         WHERE code = 'LEGACY-WAREHOUSE-ITEM'",
-    )
-    .fetch_one(&pool)
-    .await
-    .expect("legacy item payload");
-    assert!(!payload_has_warehouse);
     let store = PostgresAdminCatalogStore::new(pool.clone());
     store
         .create_item_group("Tayyor mahsulot", "All Item Groups", true)
@@ -169,9 +228,10 @@ async fn postgres_admin_item_update_preserves_details_and_live_references() {
          INSERT INTO mini_production_maps (id, product_code, title, map_json)
          VALUES ('ORDER-001', 'PRODUCT-001', 'Order One', '{}'::jsonb);
          INSERT INTO mini_raw_material_assignments
-             (barcode, order_id, apparatus, item_code, item_group, payload_json)
+             (barcode, order_id, apparatus, canonical_apparatus_id,
+              item_code, item_group, payload_json)
          VALUES
-             ('BARCODE-001', 'ORDER-001', 'Apparatus One', 'ITEM-OLD',
+             ('BARCODE-001', 'ORDER-001', 'Bosma 7', 'apparatus:default:bosma_7', 'ITEM-OLD',
               'Tayyor mahsulot / Paket',
               '{\"item_code\":\"ITEM-OLD\",\"item_name\":\"Old item name\"}'::jsonb);
          INSERT INTO mini_finished_goods_stock
@@ -392,7 +452,6 @@ async fn postgres_admin_item_update_preserves_details_and_live_references() {
 }
 
 #[tokio::test]
-#[ignore = "requires local PostgreSQL and creates/drops mini_rs_erp_test_admin_item_safety"]
 async fn postgres_admin_item_create_and_delete_safety_guards() {
     let admin_url = std::env::var("MINI_ERP_TEST_ADMIN_DATABASE_URL")
         .unwrap_or_else(|_| "postgres:///postgres".to_string());
@@ -417,9 +476,9 @@ async fn postgres_admin_item_create_and_delete_safety_guards() {
         .connect_with(admin_options.database(db_name))
         .await
         .expect("test db");
-    apply_postgres_migrations_through(&pool, 18)
+    apply_foundation_migration(&pool)
         .await
-        .expect("apply item migrations");
+        .expect("apply migrations");
     let store = PostgresAdminCatalogStore::new(pool.clone());
 
     store

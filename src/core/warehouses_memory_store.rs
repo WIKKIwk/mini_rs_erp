@@ -60,15 +60,26 @@ impl WarehouseStorePort for MemoryWarehouseStore {
         &self,
         warehouse: &str,
     ) -> Result<Vec<WarehouseAssignment>, WarehouseError> {
-        let warehouse = warehouse.trim().to_lowercase();
+        let warehouse = warehouse.trim();
+        let warehouse = warehouse.to_lowercase();
         Ok(self
             .assignments
             .read()
             .await
             .iter()
-            .filter(|item| warehouse.is_empty() || item.warehouse.to_lowercase() == warehouse)
+            .filter(|item| {
+                item.assignment_kind.eq_ignore_ascii_case("warehouse")
+                    && (warehouse.is_empty()
+                        || assignment_identity_key(item).to_lowercase() == warehouse)
+            })
             .cloned()
             .collect())
+    }
+
+    async fn all_warehouse_assignments(
+        &self,
+    ) -> Result<Vec<WarehouseAssignment>, WarehouseError> {
+        Ok(self.assignments.read().await.clone())
     }
 
     async fn warehouse_stock_items(
@@ -122,9 +133,9 @@ impl WarehouseStorePort for MemoryWarehouseStore {
             assignments.push(assignment.clone());
         }
         assignments.sort_by(|left, right| {
-            left.warehouse
+            assignment_identity_key(left)
                 .to_lowercase()
-                .cmp(&right.warehouse.to_lowercase())
+                .cmp(&assignment_identity_key(right).to_lowercase())
                 .then_with(|| left.display_name.cmp(&right.display_name))
         });
         Ok(assignment)
@@ -132,16 +143,13 @@ impl WarehouseStorePort for MemoryWarehouseStore {
 
     async fn delete_warehouse_assignment(
         &self,
-        warehouse: &str,
+        identity: &WarehouseAssignmentIdentity,
         principal_role: &PrincipalRole,
         principal_ref: &str,
     ) -> Result<Option<WarehouseAssignment>, WarehouseError> {
         let mut assignments = self.assignments.write().await;
         let index = assignments.iter().position(|assignment| {
-            assignment
-                .warehouse
-                .trim()
-                .eq_ignore_ascii_case(warehouse.trim())
+            assignment_matches_identity(assignment, identity)
                 && assignment.principal_role == *principal_role
                 && assignment
                     .principal_ref
@@ -164,10 +172,11 @@ impl WarehouseStorePort for MemoryWarehouseStore {
             .find(|item| item.warehouse.trim().to_lowercase() == key)
             .cloned()
             .ok_or(WarehouseError::NotFound)?;
-        if warehouses
-            .iter()
-            .any(|item| item.parent_warehouse.trim().eq_ignore_ascii_case(&existing.warehouse))
-        {
+        if warehouses.iter().any(|item| {
+            item.parent_warehouse
+                .trim()
+                .eq_ignore_ascii_case(&existing.warehouse)
+        }) {
             return Err(WarehouseError::HasChildren);
         }
         let assignments = self.assignments.read().await.clone();
@@ -176,7 +185,10 @@ impl WarehouseStorePort for MemoryWarehouseStore {
             .iter()
             .filter(|item| {
                 item.on_hand_qty > 0.0
-                    && item.warehouse.trim().eq_ignore_ascii_case(&existing.warehouse)
+                    && item
+                        .warehouse
+                        .trim()
+                        .eq_ignore_ascii_case(&existing.warehouse)
             })
             .count();
         let (product_count, reserved_count) = self
@@ -194,16 +206,21 @@ impl WarehouseStorePort for MemoryWarehouseStore {
         }
         let assignment_count = assignments
             .iter()
-            .filter(|item| item.warehouse.trim().eq_ignore_ascii_case(&existing.warehouse))
+            .filter(|item| {
+                item.assignment_kind.eq_ignore_ascii_case("warehouse")
+                    && assignment_identity_key(item).eq_ignore_ascii_case(&existing.warehouse)
+            })
             .count();
         self.warehouses
             .write()
             .await
             .retain(|item| item.warehouse.trim().to_lowercase() != key);
-        self.assignments
-            .write()
-            .await
-            .retain(|item| item.warehouse.trim().to_lowercase() != key);
+        self.assignments.write().await.retain(|item| {
+            !(item.assignment_kind.eq_ignore_ascii_case("warehouse")
+                && assignment_identity_key(item)
+                    .trim()
+                    .eq_ignore_ascii_case(&key))
+        });
         self.stock_items
             .write()
             .await
@@ -235,7 +252,11 @@ impl WarehouseStorePort for MemoryWarehouseStore {
             .map(|warehouse| {
                 let assigned = assignments
                     .iter()
-                    .filter(|item| item.warehouse.eq_ignore_ascii_case(&warehouse.warehouse))
+                    .filter(|item| {
+                        item.assignment_kind.eq_ignore_ascii_case("warehouse")
+                            && assignment_identity_key(item)
+                                .eq_ignore_ascii_case(&warehouse.warehouse)
+                    })
                     .collect::<Vec<_>>();
                 let stock_product_count = stock_items
                     .iter()

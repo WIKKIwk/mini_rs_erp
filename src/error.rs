@@ -26,7 +26,7 @@ struct ErrorBody<'a> {
 
 impl IntoResponse for AppError {
     fn into_response(self) -> Response {
-        let status = match self {
+        let status = match &self {
             AppError::Unauthorized => StatusCode::UNAUTHORIZED,
             AppError::InvalidConfig { .. } => StatusCode::INTERNAL_SERVER_ERROR,
             AppError::Io(_) => StatusCode::INTERNAL_SERVER_ERROR,
@@ -34,6 +34,12 @@ impl IntoResponse for AppError {
             AppError::Storage(_) => StatusCode::INTERNAL_SERVER_ERROR,
             AppError::TimeParse(_) => StatusCode::BAD_REQUEST,
         };
+
+        if status.is_server_error() {
+            tracing::error!(error = %self, %status, "request failed at application boundary");
+        } else {
+            tracing::debug!(error = %self, %status, "request rejected at application boundary");
+        }
 
         (
             status,

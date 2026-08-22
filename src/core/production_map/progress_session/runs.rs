@@ -2,20 +2,20 @@ use super::*;
 
 use std::collections::BTreeSet;
 
-use super::super::queue_state;
-
 pub(super) async fn active_order_run_session(
     store: &MemoryProductionMapStore,
     apparatus: &str,
     order_id: &str,
 ) -> Result<Option<OrderRunSession>, ProductionMapError> {
+    let apparatus = ApparatusId::new(apparatus.trim().to_string())
+        .map_err(|_| ProductionMapError::StoreFailed)?;
     Ok(store
         .order_run_sessions
         .read()
         .await
         .values()
         .find(|session| {
-            queue_state::apparatus_titles_match(&session.apparatus, apparatus)
+            super::super::types::apparatus_ids_match(&session.apparatus, apparatus.as_str())
                 && session.order_id.trim() == order_id.trim()
                 && session.status.is_open()
         })
@@ -53,41 +53,17 @@ pub(super) async fn active_order_run_session_for_qolip(
 }
 
 pub(super) fn session_qolip_codes(session: &OrderRunSession) -> Vec<String> {
-    let mut result = Vec::new();
-    if let Some(values) = session
+    if session
         .payload_json
-        .get("qolip_codes")
-        .and_then(serde_json::Value::as_array)
+        .get("qolip_lock_owner")
+        .and_then(serde_json::Value::as_bool)
+        != Some(true)
     {
-        for value in values {
-            let Some(code) = value
-                .as_str()
-                .map(str::trim)
-                .filter(|code| !code.is_empty())
-            else {
-                continue;
-            };
-            if !result
-                .iter()
-                .any(|existing: &String| existing.eq_ignore_ascii_case(code))
-            {
-                result.push(code.to_string());
-            }
-        }
+        return Vec::new();
     }
-    if let Some(code) = session
-        .payload_json
-        .get("qolip_code")
-        .and_then(serde_json::Value::as_str)
-        .map(str::trim)
-        .filter(|code| !code.is_empty())
-        && !result
-            .iter()
-            .any(|existing| existing.eq_ignore_ascii_case(code))
-    {
-        result.push(code.to_string());
-    }
-    result
+    QolipLineage::from_payload(&session.payload_json)
+        .map(|lineage| lineage.qolip_codes)
+        .unwrap_or_default()
 }
 
 pub(super) async fn active_order_run_sessions_for_worker(
@@ -323,8 +299,15 @@ pub(super) async fn wip_progress_batches(
         return Ok(Vec::new());
     }
     let apparatus = apparatus.trim();
-    let apparatus_key = queue_state::apparatus_search_key(apparatus);
+    if !apparatus.is_empty() {
+        ApparatusId::new(apparatus.to_string()).map_err(|_| ProductionMapError::StoreFailed)?;
+    }
+    let apparatus_key = super::super::types::canonical_apparatus_key(apparatus);
     let next_apparatus = next_apparatus.trim();
+    if !next_apparatus.is_empty() {
+        ApparatusId::new(next_apparatus.to_string())
+            .map_err(|_| ProductionMapError::StoreFailed)?;
+    }
     let current_location = current_location.trim();
     let order_id = order_id.trim();
     let mut batches = store
@@ -336,20 +319,12 @@ pub(super) async fn wip_progress_batches(
             (apparatus.is_empty()
                 || (!apparatus_key.is_empty()
                     && batch.current_apparatus_key.trim() == apparatus_key)
-                || queue_state::apparatus_titles_match(&batch.current_apparatus, apparatus)
-                || queue_state::apparatus_titles_match(&batch.apparatus, apparatus)
-                || (!next_apparatus.is_empty()
-                    && queue_state::next_stage_title_matches_apparatus(
-                        &batch.next_apparatus,
-                        apparatus,
-                    )))
+                || super::super::types::apparatus_ids_match(&batch.current_apparatus, apparatus)
+                || super::super::types::apparatus_ids_match(&batch.apparatus, apparatus))
                 && (current_location.is_empty()
                     || batch.current_location.trim() == current_location)
                 && (next_apparatus.is_empty()
-                    || queue_state::next_stage_title_matches_apparatus(
-                        &batch.next_apparatus,
-                        next_apparatus,
-                    ))
+                    || super::super::types::stage_ids_match(&batch.next_apparatus, next_apparatus))
                 && (order_id.is_empty() || batch.order_id.trim() == order_id)
                 && (include_processed
                     || status.map_or(
@@ -368,6 +343,7 @@ pub(super) async fn put_order_run_session(
     store: &MemoryProductionMapStore,
     session: OrderRunSession,
 ) -> Result<(), ProductionMapError> {
+    validate_session_apparatus(&session)?;
     store
         .order_run_sessions
         .write()
@@ -388,6 +364,7 @@ pub(super) async fn put_order_progress_event(
     store: &MemoryProductionMapStore,
     event: OrderProgressEvent,
 ) -> Result<(), ProductionMapError> {
+    require_apparatus_id(&event.apparatus)?;
     store.order_progress_events.write().await.push(event);
     Ok(())
 }
@@ -396,6 +373,7 @@ pub(super) async fn put_order_progress_batch(
     store: &MemoryProductionMapStore,
     batch: OrderProgressBatch,
 ) -> Result<(), ProductionMapError> {
+    validate_progress_batch_apparatus(&batch)?;
     store
         .order_progress_batches
         .write()
@@ -409,6 +387,7 @@ pub(super) async fn receive_finished_goods_batch(
     batch: OrderProgressBatch,
     stock: FinishedGoodsStockEntry,
 ) -> Result<(), ProductionMapError> {
+    validate_progress_batch_apparatus(&batch)?;
     store
         .order_progress_batches
         .write()
@@ -420,4 +399,37 @@ pub(super) async fn receive_finished_goods_batch(
         .await
         .insert(stock.id.trim().to_string(), stock);
     Ok(())
+}
+
+fn require_apparatus_id(value: &str) -> Result<ApparatusId, ProductionMapError> {
+    ApparatusId::new(value.trim().to_string()).map_err(|_| ProductionMapError::StoreFailed)
+}
+
+fn validate_session_apparatus(session: &OrderRunSession) -> Result<(), ProductionMapError> {
+    require_apparatus_id(&session.apparatus).map(|_| ())
+}
+
+fn validate_progress_batch_apparatus(batch: &OrderProgressBatch) -> Result<(), ProductionMapError> {
+    require_apparatus_id(&batch.apparatus)?;
+    if !batch.current_apparatus_key.trim().is_empty() {
+        require_apparatus_id(&batch.current_apparatus_key)?;
+    }
+    for apparatus in [
+        batch.current_apparatus.as_str(),
+        batch.next_apparatus.as_str(),
+        batch.used_by_apparatus.as_str(),
+        batch.processed_by_apparatus.as_str(),
+    ] {
+        // Finished-goods receipt records the warehouse processing marker in
+        // this legacy-shaped field. It is location metadata, not apparatus
+        // identity; every other populated value remains canonical-only.
+        if !apparatus.trim().is_empty() && !is_warehouse_processing_marker(apparatus) {
+            require_apparatus_id(apparatus)?;
+        }
+    }
+    Ok(())
+}
+
+fn is_warehouse_processing_marker(value: &str) -> bool {
+    value.trim().to_ascii_lowercase().starts_with("warehouse:")
 }

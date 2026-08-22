@@ -2,7 +2,6 @@ use std::collections::{BTreeSet, VecDeque};
 
 use super::*;
 use crate::core::admin::service::helpers::dedupe_strings;
-use crate::core::authz::assigned_apparatus_contains;
 
 impl AdminService {
     pub fn with_role_store(mut self, role_store: Arc<dyn RoleDefinitionStorePort>) -> Self {
@@ -91,15 +90,17 @@ impl AdminService {
             Ok(Some(role)) => capability_code(capability)
                 .map(|code| role.capability_codes.iter().any(|item| item == code))
                 .unwrap_or(false),
-            // Aparatchi authority is assignment-scoped. In particular,
-            // ReturnedPaintRequestCreate is a legacy default capability for
-            // the role, but must not survive removal of the worker's live
-            // apparatus assignment.
-            Ok(None)
-                if principal.role == PrincipalRole::Aparatchi
-                    && capability == Capability::ReturnedPaintRequestCreate => false,
             Ok(None) => has_capability(principal, capability),
-            Err(_) => false,
+            Err(error) => {
+                tracing::error!(
+                    %error,
+                    role = ?principal.role,
+                    principal_ref = %principal.ref_,
+                    capability = ?capability,
+                    "authorization dependency failed; denying capability"
+                );
+                false
+            }
         }
     }
 
@@ -107,33 +108,47 @@ impl AdminService {
         match self.principal_assigned_role(principal).await {
             Ok(Some(role)) => role.capability_codes,
             Ok(None) => capability_codes_for_role(principal.role.clone()),
-            Err(_) => Vec::new(),
+            Err(error) => {
+                tracing::error!(
+                    %error,
+                    role = ?principal.role,
+                    principal_ref = %principal.ref_,
+                    "authorization dependency failed; returning no capabilities"
+                );
+                Vec::new()
+            }
         }
     }
 
     pub async fn principal_assigned_apparatus(&self, principal: &Principal) -> Vec<String> {
         match self.principal_assignment(principal).await {
             Ok(Some(assignment)) => assignment.assigned_apparatus,
-            _ => Vec::new(),
+            Ok(None) => Vec::new(),
+            Err(error) => {
+                tracing::error!(
+                    %error,
+                    role = ?principal.role,
+                    principal_ref = %principal.ref_,
+                    "authorization dependency failed; returning no apparatus scope"
+                );
+                Vec::new()
+            }
         }
-    }
-
-    pub async fn principal_allows_apparatus(
-        &self,
-        principal: &Principal,
-        apparatus: &str,
-    ) -> bool {
-        let assigned = match self.principal_assignment(principal).await {
-            Ok(Some(assignment)) => assignment.assigned_apparatus,
-            _ => return false,
-        };
-        assigned_apparatus_contains(apparatus, &assigned)
     }
 
     pub async fn principal_assigned_item_groups(&self, principal: &Principal) -> Vec<String> {
         match self.principal_assignment(principal).await {
             Ok(Some(assignment)) => assignment.assigned_item_groups,
-            _ => Vec::new(),
+            Ok(None) => Vec::new(),
+            Err(error) => {
+                tracing::error!(
+                    %error,
+                    role = ?principal.role,
+                    principal_ref = %principal.ref_,
+                    "authorization dependency failed; returning no item-group scope"
+                );
+                Vec::new()
+            }
         }
     }
 

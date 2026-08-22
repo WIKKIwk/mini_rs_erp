@@ -2,16 +2,17 @@ use std::collections::BTreeMap;
 use std::sync::Arc;
 
 use crate::core::production_map::{
-    OrderProgressBatch, OrderProgressBatchStatus, OrderProgressBatchStatusDetail,
-    OrderProgressBatchWipStatus, ProductionMapDefinition, ProductionMapEdge, ProductionMapError,
-    ProductionMapNode, ProductionMapNodeKind, ProductionMapService, ProductionMapStorePort,
-    WipProgressBatchQuery, queue_state,
+    CompletedQueueOrderStatus, OrderProgressBatch, OrderProgressBatchStatus,
+    OrderProgressBatchStatusDetail, OrderProgressBatchWipStatus, ProductionMapDefinition,
+    ProductionMapEdge, ProductionMapError, ProductionMapNode, ProductionMapNodeKind,
+    ProductionMapService, ProductionMapStorePort, WipProgressBatchQuery, queue_state,
 };
-use crate::db::postgres::apply_foundation_migration;
+use crate::db::postgres::{apply_foundation_migration, postgres_test_database_options};
 use crate::db::postgres_production_map::PostgresProductionMapStore;
 
+use super::seed_standard_canonical_apparatus;
+
 #[tokio::test]
-#[ignore = "requires local PostgreSQL and creates/drops mini_rs_erp_test_production_maps"]
 async fn postgres_production_map_store_persists_maps_sequences_and_queue_states() {
     let admin_url = std::env::var("MINI_ERP_TEST_ADMIN_DATABASE_URL")
         .unwrap_or_else(|_| "postgres://wikki@127.0.0.1:5432/postgres".to_string());
@@ -29,13 +30,15 @@ async fn postgres_production_map_store_persists_maps_sequences_and_queue_states(
         .expect("create test db");
     admin_pool.close().await;
 
-    let test_url = format!("postgres://wikki@127.0.0.1:5432/{db_name}");
-    let pool = sqlx::PgPool::connect(&test_url).await.expect("test db");
+    let pool = sqlx::PgPool::connect_with(postgres_test_database_options(&admin_url, db_name))
+        .await
+        .expect("test db");
     apply_foundation_migration(&pool)
         .await
         .expect("apply migration");
+    seed_standard_canonical_apparatus(&pool).await;
     let store = Arc::new(PostgresProductionMapStore::new(pool.clone()));
-    let service = ProductionMapService::new(store.clone());
+    let service = ProductionMapService::new_for_test(store.clone());
 
     let saved = service
         .upsert_map(test_map("zakaz-1001", "1001", "HOT"))
@@ -74,7 +77,7 @@ async fn postgres_production_map_store_persists_maps_sequences_and_queue_states(
             (
                 "apparatus".to_string(),
                 "apparatus".to_string(),
-                "7 ta rangli pechat".to_string(),
+                "apparatus:default:bosma_7".to_string(),
             ),
             ("end".to_string(), "end".to_string(), "End".to_string()),
             (
@@ -109,7 +112,7 @@ async fn postgres_production_map_store_persists_maps_sequences_and_queue_states(
 
     service
         .set_apparatus_sequence(
-            "7 ta rangli pechat",
+            "apparatus:default:bosma_7",
             vec!["zakaz-1001".to_string(), " ".to_string()],
         )
         .await
@@ -118,10 +121,10 @@ async fn postgres_production_map_store_persists_maps_sequences_and_queue_states(
     states.insert("zakaz-1001".to_string(), "in_progress".to_string());
     service
         .apply_apparatus_queue_action(
-            "7 ta rangli pechat",
+            "apparatus:default:bosma_7",
             "zakaz-1001",
             crate::core::production_map::queue_state::ApparatusQueueAction::Complete,
-            &["7 ta rangli pechat".to_string()],
+            &["apparatus:default:bosma_7".to_string()],
             crate::core::production_map::QueueActionActor {
                 role: "admin".to_string(),
                 ref_: "test".to_string(),
@@ -132,32 +135,32 @@ async fn postgres_production_map_store_persists_maps_sequences_and_queue_states(
         .expect_err("cannot complete before state exists through service");
 
     store
-        .put_apparatus_queue_states("7 ta rangli pechat", states)
+        .put_apparatus_queue_states("apparatus:default:bosma_7", states)
         .await
         .expect("save queue states");
     let snapshot = service.live_snapshot().await.expect("snapshot");
     assert_eq!(
         snapshot
             .sequences
-            .get("7 ta rangli pechat")
+            .get("apparatus:default:bosma_7")
             .expect("sequence"),
         &vec!["zakaz-1001".to_string()]
     );
     assert_eq!(
         snapshot
             .queue_states
-            .get("7 ta rangli pechat")
+            .get("apparatus:default:bosma_7")
             .and_then(|items| items.get("zakaz-1001")),
         Some(&"in_progress".to_string())
     );
 
     sqlx::query(
         "INSERT INTO mini_order_run_sessions
-            (session_id, apparatus, order_id, status)
-         VALUES ($1, $2, $3, 'active')",
+            (session_id, apparatus, canonical_apparatus_id, order_id, status)
+         VALUES ($1, $2, $2, $3, 'active')",
     )
     .bind("session-delete-protection")
-    .bind("7 ta rangli pechat")
+    .bind("apparatus:default:bosma_7")
     .bind("zakaz-1001")
     .execute(&pool)
     .await
@@ -201,14 +204,14 @@ async fn postgres_production_map_store_persists_maps_sequences_and_queue_states(
             .fetch_one(&pool)
             .await
             .expect("count deleted queue states");
-    let sequence_order_ids: serde_json::Value =
+    let sequence_order_ids: Option<serde_json::Value> =
         sqlx::query_scalar("SELECT order_ids FROM mini_queue_sequences WHERE apparatus = $1")
-            .bind("7 ta rangli pechat")
-            .fetch_one(&pool)
+            .bind("apparatus:default:bosma_7")
+            .fetch_optional(&pool)
             .await
             .expect("read cleaned sequence");
     assert_eq!(queue_state_count, 0);
-    assert_eq!(sequence_order_ids, serde_json::json!([]));
+    assert!(sequence_order_ids.is_none());
 
     pool.close().await;
     let admin_pool = sqlx::PgPool::connect(&admin_url)
@@ -224,8 +227,82 @@ async fn postgres_production_map_store_persists_maps_sequences_and_queue_states(
 }
 
 #[tokio::test]
-#[ignore = "requires local PostgreSQL and creates/drops mini_rs_erp_test_wip_batches"]
-async fn postgres_wip_batches_match_apparatus_instance_suffixes() {
+async fn postgres_completed_queue_history_returns_actor_stage_completion() {
+    let admin_url = std::env::var("MINI_ERP_TEST_ADMIN_DATABASE_URL")
+        .unwrap_or_else(|_| "postgres://wikki@127.0.0.1:5432/postgres".to_string());
+    let db_name = "mini_rs_erp_test_completed_queue_history";
+    let admin_pool = sqlx::PgPool::connect(&admin_url).await.expect("admin db");
+    sqlx::query(&format!(
+        r#"DROP DATABASE IF EXISTS "{db_name}" WITH (FORCE)"#
+    ))
+    .execute(&admin_pool)
+    .await
+    .expect("drop test db");
+    sqlx::query(&format!(r#"CREATE DATABASE "{db_name}""#))
+        .execute(&admin_pool)
+        .await
+        .expect("create test db");
+    admin_pool.close().await;
+
+    let pool = sqlx::PgPool::connect_with(postgres_test_database_options(&admin_url, db_name))
+        .await
+        .expect("test db");
+    apply_foundation_migration(&pool)
+        .await
+        .expect("apply migration");
+    seed_standard_canonical_apparatus(&pool).await;
+    let store = PostgresProductionMapStore::new(pool.clone());
+    let service = ProductionMapService::new_for_test(Arc::new(store.clone()));
+    service
+        .upsert_map(test_map("zakaz-history-1", "9901", "HISTORY"))
+        .await
+        .expect("save map");
+
+    sqlx::query(
+        "INSERT INTO mini_queue_action_events
+            (event_id, apparatus, canonical_apparatus_id, order_id, action,
+             from_state, to_state, policy, actor_role, actor_ref,
+             actor_display_name, assigned_apparatus, payload_json, created_at)
+         VALUES
+            ($1, $2, $2, $3, 'complete', 'in_progress', 'completed',
+             'strict_sequence', 'aparatchi', $4, 'History Worker',
+             jsonb_build_array($2::text), '{}'::jsonb,
+             to_timestamp(1787402980))",
+    )
+    .bind("queue-history-complete-1")
+    .bind("apparatus:default:bosma_7")
+    .bind("zakaz-history-1")
+    .bind("worker-history-1")
+    .execute(&pool)
+    .await
+    .expect("insert completed queue event");
+
+    let history = store
+        .completed_queue_orders_for_actor("worker-history-1", 10)
+        .await
+        .expect("load actor stage completion history");
+
+    assert_eq!(history.len(), 1);
+    assert_eq!(history[0].order_id, "zakaz-history-1");
+    assert_eq!(history[0].apparatus, "apparatus:default:bosma_7");
+    assert_eq!(history[0].status, CompletedQueueOrderStatus::Completed);
+    assert_eq!(history[0].completed_at_unix, 1_787_402_980);
+
+    pool.close().await;
+    let admin_pool = sqlx::PgPool::connect(&admin_url)
+        .await
+        .expect("admin cleanup");
+    sqlx::query(&format!(
+        r#"DROP DATABASE IF EXISTS "{db_name}" WITH (FORCE)"#
+    ))
+    .execute(&admin_pool)
+    .await
+    .expect("cleanup test db");
+    admin_pool.close().await;
+}
+
+#[tokio::test]
+async fn postgres_wip_batches_match_exact_canonical_apparatus_id() {
     let admin_url = std::env::var("MINI_ERP_TEST_ADMIN_DATABASE_URL")
         .unwrap_or_else(|_| "postgres://wikki@127.0.0.1:5432/postgres".to_string());
     let db_name = "mini_rs_erp_test_wip_batches";
@@ -242,21 +319,30 @@ async fn postgres_wip_batches_match_apparatus_instance_suffixes() {
         .expect("create test db");
     admin_pool.close().await;
 
-    let test_url = format!("postgres://wikki@127.0.0.1:5432/{db_name}");
-    let pool = sqlx::PgPool::connect(&test_url).await.expect("test db");
+    let pool = sqlx::PgPool::connect_with(postgres_test_database_options(&admin_url, db_name))
+        .await
+        .expect("test db");
     apply_foundation_migration(&pool)
         .await
         .expect("apply migration");
+    seed_standard_canonical_apparatus(&pool).await;
     let store = Arc::new(PostgresProductionMapStore::new(pool.clone()));
-    let service = ProductionMapService::new(store.clone());
+    let service = ProductionMapService::new_for_test(store.clone());
+    sqlx::query(
+        "INSERT INTO mini_production_maps (id, product_code, title, map_json)
+         VALUES ('order-wip-suffix', 'WIP-SUFFIX', 'WIP suffix', '{}'::jsonb)",
+    )
+    .execute(&pool)
+    .await
+    .expect("seed WIP production map");
     store
-        .put_order_progress_batch(wip_batch("Laminatsiya - A"))
+        .put_order_progress_batch(wip_batch("apparatus:default:asset-007"))
         .await
         .expect("put wip batch");
 
     let batches = service
         .wip_progress_batches(WipProgressBatchQuery::new(
-            "Laminatsiya",
+            "apparatus:default:asset-007",
             "",
             "",
             Some(OrderProgressBatchWipStatus::Waiting),
@@ -283,7 +369,6 @@ async fn postgres_wip_batches_match_apparatus_instance_suffixes() {
 }
 
 #[tokio::test]
-#[ignore = "requires local PostgreSQL and creates/drops mini_rs_erp_test_wip_batches_paging"]
 async fn postgres_wip_batches_scan_past_first_page_for_matching_apparatus() {
     let admin_url = std::env::var("MINI_ERP_TEST_ADMIN_DATABASE_URL")
         .unwrap_or_else(|_| "postgres://wikki@127.0.0.1:5432/postgres".to_string());
@@ -301,15 +386,24 @@ async fn postgres_wip_batches_scan_past_first_page_for_matching_apparatus() {
         .expect("create test db");
     admin_pool.close().await;
 
-    let test_url = format!("postgres://wikki@127.0.0.1:5432/{db_name}");
-    let pool = sqlx::PgPool::connect(&test_url).await.expect("test db");
+    let pool = sqlx::PgPool::connect_with(postgres_test_database_options(&admin_url, db_name))
+        .await
+        .expect("test db");
     apply_foundation_migration(&pool)
         .await
         .expect("apply migration");
+    seed_standard_canonical_apparatus(&pool).await;
     let store = Arc::new(PostgresProductionMapStore::new(pool.clone()));
-    let service = ProductionMapService::new(store.clone());
+    let service = ProductionMapService::new_for_test(store.clone());
+    sqlx::query(
+        "INSERT INTO mini_production_maps (id, product_code, title, map_json)
+         VALUES ('order-wip-suffix', 'WIP-SUFFIX', 'WIP suffix', '{}'::jsonb)",
+    )
+    .execute(&pool)
+    .await
+    .expect("seed target WIP production map");
     store
-        .put_order_progress_batch(wip_batch("Laminatsiya - A"))
+        .put_order_progress_batch(wip_batch("apparatus:default:asset-007"))
         .await
         .expect("put target wip batch");
     sqlx::query(
@@ -321,16 +415,31 @@ async fn postgres_wip_batches_scan_past_first_page_for_matching_apparatus() {
     .await
     .expect("age target batch");
     sqlx::query(
+        "INSERT INTO mini_production_maps (id, product_code, title, map_json)
+         SELECT 'noise-order-' || item,
+                'NOISE-' || item,
+                'Noise ' || item,
+                '{}'::jsonb
+         FROM generate_series(1, 5001) AS item",
+    )
+    .execute(&pool)
+    .await
+    .expect("insert noise production maps");
+    sqlx::query(
         "INSERT INTO mini_progress_batches (
-            batch_id, session_id, apparatus, order_id, action, status,
+            batch_id, session_id, apparatus, canonical_apparatus_id,
+            order_id, action, status,
             produced_qty, uom, qr_payload, label_item_code, label_item_name,
             executor_name, worker_role, worker_ref, worker_display_name,
-            wip_status, current_apparatus, current_apparatus_key, current_location, payload_json,
+            wip_status, current_apparatus, canonical_current_apparatus_id,
+            current_apparatus_key, current_location,
+            next_apparatus, canonical_next_apparatus_id, payload_json,
             created_at, updated_at
          )
          SELECT 'noise-batch-' || item,
                 'noise-session-' || item,
-                'Paket aparat',
+                'apparatus:default:paket',
+                'apparatus:default:paket',
                 'noise-order-' || item,
                 'pause',
                 'paused',
@@ -344,9 +453,12 @@ async fn postgres_wip_batches_scan_past_first_page_for_matching_apparatus() {
                 'worker-noise',
                 'Worker Noise',
                 'waiting',
-                'Paket aparat',
-                'paket aparat',
-                'Paket aparat',
+                'apparatus:default:paket',
+                'apparatus:default:paket',
+                'apparatus:default:paket',
+                'apparatus:default:paket',
+                'apparatus:default:bosma_7',
+                'apparatus:default:bosma_7',
                 '{}'::jsonb,
                 now(),
                 now() + (item || ' seconds')::interval
@@ -358,7 +470,7 @@ async fn postgres_wip_batches_scan_past_first_page_for_matching_apparatus() {
 
     let batches = service
         .wip_progress_batches(WipProgressBatchQuery::new(
-            "Laminatsiya",
+            "apparatus:default:asset-007",
             "",
             "",
             Some(OrderProgressBatchWipStatus::Waiting),
@@ -401,7 +513,7 @@ fn test_map(id: &str, order_number: &str, product_code: &str) -> ProductionMapDe
             test_node(
                 "apparatus",
                 ProductionMapNodeKind::Apparatus,
-                "7 ta rangli pechat",
+                "apparatus:default:bosma_7",
                 120.0,
             ),
             test_node("end", ProductionMapNodeKind::End, "End", 240.0),
@@ -422,10 +534,16 @@ fn test_map(id: &str, order_number: &str, product_code: &str) -> ProductionMapDe
 }
 
 fn test_node(id: &str, kind: ProductionMapNodeKind, title: &str, y: f64) -> ProductionMapNode {
+    let is_apparatus = kind == ProductionMapNodeKind::Apparatus;
     ProductionMapNode {
         id: id.to_string(),
         kind,
         title: title.to_string(),
+        apparatus_id: if is_apparatus {
+            title.to_string()
+        } else {
+            String::new()
+        },
         formula: None,
         role_code: String::new(),
         item_code: String::new(),
@@ -435,6 +553,7 @@ fn test_node(id: &str, kind: ProductionMapNodeKind, title: &str, y: f64) -> Prod
         alternative_group_id: String::new(),
         alternative_group_label: String::new(),
         alternative_assigned_title: String::new(),
+        alternative_assigned_apparatus_id: String::new(),
         rezka_kadr_count: None,
         rezka_label_length: None,
         x: 0.0,
@@ -449,7 +568,7 @@ fn wip_batch(current_apparatus: &str) -> OrderProgressBatch {
         session_id: "session-wip-suffix".to_string(),
         started_at_unix: 0,
         completed_at_unix: 0,
-        apparatus: "Laminatsiya - A".to_string(),
+        apparatus: "apparatus:default:asset-007".to_string(),
         order_id: "order-wip-suffix".to_string(),
         action: queue_state::ApparatusQueueAction::Pause,
         status: OrderProgressBatchStatus::Paused,
@@ -467,7 +586,7 @@ fn wip_batch(current_apparatus: &str) -> OrderProgressBatch {
         current_apparatus: current_apparatus.to_string(),
         current_apparatus_key: queue_state::apparatus_search_key(current_apparatus),
         current_location: current_apparatus.to_string(),
-        next_apparatus: String::new(),
+        next_apparatus: "apparatus:default:paket".to_string(),
         parent_batch_id: String::new(),
         used_by_session_id: String::new(),
         used_by_apparatus: String::new(),

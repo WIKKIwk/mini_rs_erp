@@ -14,7 +14,6 @@ use crate::db::postgres_chat::PostgresChatStore;
 use crate::store::chat_media_local::LocalChatMediaStorage;
 
 #[tokio::test]
-#[ignore = "requires local PostgreSQL and creates/drops a mini_rs_erp_test_* database"]
 async fn postgres_chat_media_enforces_authorization_idempotency_and_completion() {
     let admin_url = std::env::var("MINI_ERP_TEST_ADMIN_DATABASE_URL")
         .unwrap_or_else(|_| "postgres://wikki@127.0.0.1:5432/postgres".to_string());
@@ -181,7 +180,7 @@ async fn seed_conversation(pool: &sqlx::PgPool) {
         sqlx::query(
             r#"INSERT INTO mini_chat_principals
                  (principal_id, principal_role, principal_ref, display_name)
-               VALUES ($1, 'customer', $2, $2)"#,
+               VALUES ($1, 'admin', $2, $2)"#,
         )
         .bind(id)
         .bind(reference)
@@ -217,7 +216,7 @@ fn intruder() -> Principal {
 
 fn principal(reference: &str) -> Principal {
     Principal {
-        role: PrincipalRole::Customer,
+        role: PrincipalRole::Admin,
         display_name: reference.to_string(),
         legal_name: reference.to_string(),
         ref_: reference.to_string(),

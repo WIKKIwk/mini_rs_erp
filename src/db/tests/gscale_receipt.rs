@@ -1,10 +1,9 @@
 use crate::core::gscale::models::{CreateMaterialReceiptDraftInput, RawMaterialStockUpdateInput};
-use crate::core::gscale::ports::MaterialReceiptStorePort;
-use crate::db::postgres::{apply_foundation_migration, apply_postgres_migrations_through};
+use crate::core::gscale::ports::{GscalePortError, MaterialReceiptStorePort};
+use crate::db::postgres::{apply_foundation_migration, postgres_test_database_options};
 use crate::db::postgres_gscale_receipt::PostgresGscaleReceiptStore;
 
 #[tokio::test]
-#[ignore = "requires local PostgreSQL and creates/drops mini_rs_erp_test_gscale_precision"]
 async fn postgres_gscale_receipt_preserves_precision_and_supports_stock_corrections() {
     let admin_url = std::env::var("MINI_ERP_TEST_ADMIN_DATABASE_URL")
         .unwrap_or_else(|_| "postgres://wikki@127.0.0.1:5432/postgres".to_string());
@@ -22,11 +21,12 @@ async fn postgres_gscale_receipt_preserves_precision_and_supports_stock_correcti
         .expect("create test db");
     admin_pool.close().await;
 
-    let test_url = format!("postgres://wikki@127.0.0.1:5432/{db_name}");
-    let pool = sqlx::PgPool::connect(&test_url).await.expect("test db");
-    apply_postgres_migrations_through(&pool, 13)
+    let pool = sqlx::PgPool::connect_with(postgres_test_database_options(&admin_url, db_name))
         .await
-        .expect("apply pre-correction migrations");
+        .expect("test db");
+    apply_foundation_migration(&pool)
+        .await
+        .expect("apply migrations");
     let store = PostgresGscaleReceiptStore::new(pool.clone());
     let draft = store
         .create_material_receipt_draft(CreateMaterialReceiptDraftInput {
@@ -65,13 +65,13 @@ async fn postgres_gscale_receipt_preserves_precision_and_supports_stock_correcti
     .fetch_one(&pool)
     .await
     .expect("event qty");
-    assert_eq!(receipt_qty, "13.000030000");
+    assert_eq!(receipt_qty, "13.000030");
     assert_eq!(stock_qty, receipt_qty);
     assert_eq!(event_qty, receipt_qty);
 
     apply_foundation_migration(&pool)
         .await
-        .expect("upgrade existing stock ledger with correction migration");
+        .expect("restart migrations with existing stock ledger");
     apply_foundation_migration(&pool)
         .await
         .expect("migrations remain idempotent");
@@ -79,7 +79,7 @@ async fn postgres_gscale_receipt_preserves_precision_and_supports_stock_correcti
         .fetch_one(&pool)
         .await
         .expect("migration count");
-    assert_eq!(migration_count, 51);
+    assert_eq!(migration_count, 72);
 
     let increased = store
         .update_raw_material_stock(RawMaterialStockUpdateInput {
@@ -211,6 +211,129 @@ async fn postgres_gscale_receipt_preserves_precision_and_supports_stock_correcti
         })
         .await;
     assert!(invalid.is_err());
+
+    pool.close().await;
+    let admin_pool = sqlx::PgPool::connect(&admin_url)
+        .await
+        .expect("admin cleanup");
+    sqlx::query(&format!(
+        r#"DROP DATABASE IF EXISTS "{db_name}" WITH (FORCE)"#
+    ))
+    .execute(&admin_pool)
+    .await
+    .expect("cleanup test db");
+    admin_pool.close().await;
+}
+
+#[tokio::test]
+async fn postgres_gscale_consumed_transition_rejects_zero_or_mismatch_and_commits_expected_row() {
+    let admin_url = std::env::var("MINI_ERP_TEST_ADMIN_DATABASE_URL")
+        .unwrap_or_else(|_| "postgres://wikki@127.0.0.1:5432/postgres".to_string());
+    let db_name = "mini_rs_erp_test_gscale_consumed";
+    let admin_pool = sqlx::PgPool::connect(&admin_url).await.expect("admin db");
+    sqlx::query(&format!(
+        r#"DROP DATABASE IF EXISTS "{db_name}" WITH (FORCE)"#
+    ))
+    .execute(&admin_pool)
+    .await
+    .expect("drop test db");
+    sqlx::query(&format!(r#"CREATE DATABASE "{db_name}""#))
+        .execute(&admin_pool)
+        .await
+        .expect("create test db");
+    admin_pool.close().await;
+
+    let pool = sqlx::PgPool::connect_with(postgres_test_database_options(&admin_url, db_name))
+        .await
+        .expect("test db");
+    apply_foundation_migration(&pool)
+        .await
+        .expect("apply migrations");
+    let store = PostgresGscaleReceiptStore::new(pool.clone());
+    let draft = store
+        .create_material_receipt_draft(CreateMaterialReceiptDraftInput {
+            item_code: "ITEM-CONSUMED".to_string(),
+            item_name: "Consumed transition material".to_string(),
+            warehouse: "Sklad U".to_string(),
+            qty: 3.5,
+            barcode: "CONSUMED-0001".to_string(),
+            ..CreateMaterialReceiptDraftInput::default()
+        })
+        .await
+        .expect("create receipt draft");
+    store
+        .submit_stock_entry_draft(&draft.name)
+        .await
+        .expect("submit receipt");
+    store
+        .mark_raw_material_stock_in_use(std::slice::from_ref(&draft.barcode), "ORDER-CONSUMED")
+        .await
+        .expect("mark stock in use");
+
+    let zero_row_error = store
+        .mark_raw_material_stock_consumed(std::slice::from_ref(&draft.barcode), "ORDER-WRONG")
+        .await
+        .expect_err("zero-row consumed transition must fail");
+    assert_eq!(
+        zero_row_error,
+        GscalePortError::InvalidInput("raw_material_stock_unavailable".to_string())
+    );
+
+    let mismatch_barcodes = [draft.barcode.clone(), "CONSUMED-MISSING".to_string()];
+    let mismatch_error = store
+        .mark_raw_material_stock_consumed(&mismatch_barcodes, "ORDER-CONSUMED")
+        .await
+        .expect_err("partial consumed transition must fail");
+    assert_eq!(
+        mismatch_error,
+        GscalePortError::InvalidInput("raw_material_stock_unavailable".to_string())
+    );
+
+    let status_after_rejection: String =
+        sqlx::query_scalar("SELECT status FROM mini_raw_material_stock WHERE barcode = $1")
+            .bind(&draft.barcode)
+            .fetch_one(&pool)
+            .await
+            .expect("stock status after rejected transitions");
+    assert_eq!(status_after_rejection, "in_use");
+    let consumption_events_after_rejection: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM mini_raw_material_events
+         WHERE barcode = $1 AND event_type = 'consumption_posted'",
+    )
+    .bind(&draft.barcode)
+    .fetch_one(&pool)
+    .await
+    .expect("consumption event count after rejected transitions");
+    assert_eq!(consumption_events_after_rejection, 0);
+
+    let consumed = store
+        .mark_raw_material_stock_consumed(std::slice::from_ref(&draft.barcode), "ORDER-CONSUMED")
+        .await
+        .expect("expected consumed transition");
+    assert_eq!(consumed.len(), 1);
+    assert_eq!(consumed[0].barcode, draft.barcode);
+    assert_eq!(consumed[0].status, "consumed");
+
+    let retry = store
+        .mark_raw_material_stock_consumed(std::slice::from_ref(&draft.barcode), "ORDER-CONSUMED")
+        .await
+        .expect("idempotent consumed retry");
+    assert_eq!(retry.len(), 1);
+    assert_eq!(retry[0].status, "consumed");
+
+    let (status, consumption_events): (String, i64) = sqlx::query_as(
+        "SELECT stock.status,
+                (SELECT COUNT(*) FROM mini_raw_material_events
+                 WHERE barcode = $1 AND event_type = 'consumption_posted')
+         FROM mini_raw_material_stock stock
+         WHERE stock.barcode = $1",
+    )
+    .bind(&draft.barcode)
+    .fetch_one(&pool)
+    .await
+    .expect("committed consumed transition");
+    assert_eq!(status, "consumed");
+    assert_eq!(consumption_events, 1);
 
     pool.close().await;
     let admin_pool = sqlx::PgPool::connect(&admin_url)

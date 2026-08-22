@@ -7,6 +7,8 @@ use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
+use crate::core::apparatus_standard::ApparatusId;
+
 use normalize::{ensure_workers_not_duplicated, normalize_input, sort_groups};
 #[cfg(test)]
 pub use store::MemoryWorkerGroupStore;
@@ -14,6 +16,9 @@ use store::UnavailableWorkerGroupStore;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct WorkerGroupRecord {
+    pub apparatus_id: ApparatusId,
+    /// Historical/display-only label. Authorization and identity use `apparatus_id`.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
     pub apparatus: String,
     pub group_code: String,
     pub shift: String,
@@ -33,10 +38,16 @@ pub struct WorkerGroupRecord {
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct WorkerGroupUpsert {
+    #[serde(default)]
+    pub apparatus_id: Option<ApparatusId>,
+    /// Historical/display-only label. It is never used to locate a group.
+    #[serde(default)]
     pub apparatus: String,
     pub group_code: String,
     #[serde(default)]
     pub previous_apparatus: Option<String>,
+    #[serde(default)]
+    pub previous_apparatus_id: Option<ApparatusId>,
     #[serde(default)]
     pub previous_group_code: Option<String>,
     #[serde(default)]
@@ -58,15 +69,17 @@ pub struct WorkerGroupUpsert {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct WorkerGroupMutation {
     pub next: WorkerGroupRecord,
-    pub previous_apparatus: String,
+    pub previous_apparatus_id: ApparatusId,
     pub previous_group_code: String,
     pub has_previous_identity: bool,
 }
 
 #[derive(Debug, Error, Clone, PartialEq, Eq)]
 pub enum WorkerGroupError {
-    #[error("apparatus is required")]
+    #[error("apparatus id is required")]
     MissingApparatus,
+    #[error("apparatus id is invalid")]
+    InvalidApparatusId,
     #[error("worker group is invalid")]
     InvalidGroup,
     #[error("worker shift is invalid")]
@@ -89,7 +102,7 @@ pub enum WorkerGroupError {
 pub trait WorkerGroupStorePort: Send + Sync {
     async fn worker_groups(
         &self,
-        apparatus: Option<&str>,
+        apparatus_id: Option<&ApparatusId>,
     ) -> Result<Vec<WorkerGroupRecord>, WorkerGroupError>;
     async fn upsert_group(
         &self,
@@ -114,9 +127,9 @@ impl WorkerGroupService {
 
     pub async fn worker_groups(
         &self,
-        apparatus: Option<&str>,
+        apparatus_id: Option<&ApparatusId>,
     ) -> Result<Vec<WorkerGroupRecord>, WorkerGroupError> {
-        self.store.worker_groups(apparatus).await
+        self.store.worker_groups(apparatus_id).await
     }
 
     pub async fn upsert_group(
@@ -124,25 +137,23 @@ impl WorkerGroupService {
         input: WorkerGroupUpsert,
     ) -> Result<WorkerGroupRecord, WorkerGroupError> {
         let has_previous_identity =
-            input.previous_apparatus.is_some() || input.previous_group_code.is_some();
-        let previous_apparatus = input
-            .previous_apparatus
-            .as_deref()
-            .map(str::trim)
-            .filter(|value| !value.is_empty())
-            .map(str::to_string);
+            input.previous_apparatus_id.is_some() || input.previous_group_code.is_some();
+        let previous_apparatus_id = input.previous_apparatus_id.clone();
         let previous_group_code = input
             .previous_group_code
             .as_deref()
             .map(normalize::normalize_group_code)
             .transpose()?;
         let next = normalize_input(input)?;
-        let previous_apparatus = previous_apparatus.unwrap_or_else(|| next.apparatus.clone());
+        // A missing previous ID means an edit within the current immutable
+        // apparatus scope. The legacy display label is deliberately ignored.
+        let previous_apparatus_id =
+            previous_apparatus_id.unwrap_or_else(|| next.apparatus_id.clone());
         let previous_group_code = previous_group_code.unwrap_or_else(|| next.group_code.clone());
         self.store
             .upsert_group(WorkerGroupMutation {
                 next,
-                previous_apparatus,
+                previous_apparatus_id,
                 previous_group_code,
                 has_previous_identity,
             })
@@ -165,9 +176,7 @@ pub(crate) fn apply_worker_group_mutation(
     let next = &mutation.next;
     if mutation.has_previous_identity
         && !groups.iter().any(|group| {
-            group
-                .apparatus
-                .eq_ignore_ascii_case(&mutation.previous_apparatus)
+            group.apparatus_id == mutation.previous_apparatus_id
                 && group.group_code == mutation.previous_group_code
         })
     {
@@ -176,11 +185,9 @@ pub(crate) fn apply_worker_group_mutation(
 
     if mutation.has_previous_identity
         && groups.iter().any(|group| {
-            group.apparatus.eq_ignore_ascii_case(&next.apparatus)
+            group.apparatus_id == next.apparatus_id
                 && group.group_code == next.group_code
-                && !(group
-                    .apparatus
-                    .eq_ignore_ascii_case(&mutation.previous_apparatus)
+                && !(group.apparatus_id == mutation.previous_apparatus_id
                     && group.group_code == mutation.previous_group_code)
         })
     {
@@ -190,13 +197,13 @@ pub(crate) fn apply_worker_group_mutation(
     let mut updated = groups.clone();
     if mutation.has_previous_identity {
         updated.retain(|group| {
-            !(group
-                .apparatus
-                .eq_ignore_ascii_case(&mutation.previous_apparatus)
+            !(group.apparatus_id == mutation.previous_apparatus_id
                 && group.group_code == mutation.previous_group_code)
         });
     } else {
-        updated.retain(|group| group.group_code != next.group_code);
+        updated.retain(|group| {
+            !(group.apparatus_id == next.apparatus_id && group.group_code == next.group_code)
+        });
     }
 
     let mut all_groups = updated.clone();

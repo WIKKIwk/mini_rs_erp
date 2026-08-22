@@ -1,4 +1,5 @@
 mod apparatus;
+mod apparatus_aasx;
 mod auth;
 mod catalog;
 mod emergency_reset;
@@ -11,11 +12,9 @@ mod werka;
 
 use super::*;
 
-pub use apparatus::{apparatus, apparatus_groups, apparatus_options};
-pub(super) use auth::{
-    authorize_any_capability, authorize_capability, principal_can_use_apparatus,
-    require_capability,
-};
+pub use apparatus::{apparatus, apparatus_detail, apparatus_options};
+pub use apparatus_aasx::{MAX_AASX_UPLOAD_BYTES, apparatus_aasx};
+pub(super) use auth::{authorize_any_capability, authorize_capability, require_capability};
 pub use catalog::items_bulk_move_group;
 pub use emergency_reset::reset_orders;
 pub use factory_locations::{factory_location, factory_location_apparatus, factory_locations};

@@ -3,15 +3,16 @@ use sqlx::PgPool;
 use crate::core::production_map::{
     CompletionRequestDecision, CompletionRequestDecisionNotification,
     CompletionRequestNotification, CompletionRequestStateResolution, ProductionMapError,
-    QueueActionActor, QueueActionProgressWriteResult, reject_training_order_id,
+    QueueActionActor, QueueActionProgressWriteResult,
 };
 use crate::db::postgres_returned_paint::insert_returned_paint_request_tx;
 
 use super::progress_helpers::put_order_run_session_tx;
 use super::queue_helpers::{
-    insert_queue_action_event_tx, lock_apparatus_queue_tx, lock_order_control_tx,
-    put_queue_state_for_event_tx, queue_event_already_applied_tx,
+    insert_queue_action_event_tx, put_queue_action_state_tx, queue_action_event_replay_tx,
+    validate_queue_action_event_transition_tx,
 };
+use super::transaction_locks::lock_order_and_apparatuses_tx;
 
 #[derive(sqlx::FromRow)]
 struct CompletionRequestRow {
@@ -63,7 +64,7 @@ pub(super) async fn load_completion_requests(
     let limit = i64::try_from(limit.min(500)).unwrap_or(500);
     let rows = sqlx::query_as::<_, CompletionRequestRow>(
         "SELECT event_id,
-                apparatus,
+                canonical_apparatus_id AS apparatus,
                 order_id,
                 COALESCE(payload_json->>'order_number', '') AS order_number,
                 COALESCE(payload_json->>'order_title', '') AS order_title,
@@ -80,6 +81,7 @@ pub(super) async fn load_completion_requests(
                     AS returned_paint_report
          FROM mini_queue_action_events
          WHERE action = 'complete'
+           AND canonical_apparatus_id IS NOT NULL
            AND payload_json->>'completion_request' = 'true'
            AND COALESCE(payload_json->>'completion_request_status', 'pending') = 'pending'
          ORDER BY created_at DESC, id DESC
@@ -90,14 +92,11 @@ pub(super) async fn load_completion_requests(
     .await
     .map_err(|_| ProductionMapError::StoreFailed)?;
 
-    let mut requests = Vec::with_capacity(rows.len());
-    for row in rows {
-        reject_training_order_id(&row.order_id)?;
-        if !row.description.trim().is_empty() {
-            requests.push(completion_request_from_row(row));
-        }
-    }
-    Ok(requests)
+    Ok(rows
+        .into_iter()
+        .filter(|row| !row.description.trim().is_empty())
+        .map(completion_request_from_row)
+        .collect())
 }
 
 pub(super) async fn load_completion_request_by_event_id(
@@ -110,7 +109,7 @@ pub(super) async fn load_completion_request_by_event_id(
     }
     let row = sqlx::query_as::<_, CompletionRequestRow>(
         "SELECT event_id,
-                apparatus,
+                canonical_apparatus_id AS apparatus,
                 order_id,
                 COALESCE(payload_json->>'order_number', '') AS order_number,
                 COALESCE(payload_json->>'order_title', '') AS order_title,
@@ -128,6 +127,7 @@ pub(super) async fn load_completion_request_by_event_id(
          FROM mini_queue_action_events
          WHERE event_id = $1
            AND action = 'complete'
+           AND canonical_apparatus_id IS NOT NULL
            AND payload_json->>'completion_request' = 'true'
            AND COALESCE(payload_json->>'completion_request_status', 'pending') = 'pending'
          LIMIT 1",
@@ -137,14 +137,9 @@ pub(super) async fn load_completion_request_by_event_id(
     .await
     .map_err(|_| ProductionMapError::StoreFailed)?;
 
-    row.map(|row| {
-        reject_training_order_id(&row.order_id)?;
-        Ok::<_, ProductionMapError>(
-            (!row.description.trim().is_empty()).then(|| completion_request_from_row(row)),
-        )
-    })
-    .transpose()
-    .map(|value| value.flatten())
+    Ok(row
+        .filter(|row| !row.description.trim().is_empty())
+        .map(completion_request_from_row))
 }
 
 pub(super) async fn load_completion_request_decisions_for_actor(
@@ -162,7 +157,7 @@ pub(super) async fn load_completion_request_decisions_for_actor(
                 COALESCE(payload_json->>'decision_event_id', '') AS event_id,
                 event_id AS request_event_id,
                 COALESCE(payload_json->>'completion_request_status', '') AS decision,
-                apparatus,
+                canonical_apparatus_id AS apparatus,
                 order_id,
                 COALESCE(payload_json->>'order_number', '') AS order_number,
                 COALESCE(payload_json->>'order_title', '') AS order_title,
@@ -178,6 +173,7 @@ pub(super) async fn load_completion_request_decisions_for_actor(
                 COALESCE((payload_json->>'decision_at_unix')::bigint, EXTRACT(EPOCH FROM created_at)::bigint) AS created_at_unix
          FROM mini_queue_action_events
          WHERE action = 'complete'
+           AND canonical_apparatus_id IS NOT NULL
            AND payload_json->>'completion_request' = 'true'
            AND payload_json->>'completion_request_status' IN ('approved', 'rejected')
            AND actor_ref = $1
@@ -190,10 +186,9 @@ pub(super) async fn load_completion_request_decisions_for_actor(
     .await
     .map_err(|_| ProductionMapError::StoreFailed)?;
 
-    let mut decisions = Vec::with_capacity(rows.len());
-    for row in rows {
-        reject_training_order_id(&row.order_id)?;
-        decisions.push(CompletionRequestDecisionNotification {
+    Ok(rows
+        .into_iter()
+        .map(|row| CompletionRequestDecisionNotification {
             event_id: row.event_id,
             request_event_id: row.request_event_id,
             decision: row.decision,
@@ -211,9 +206,8 @@ pub(super) async fn load_completion_request_decisions_for_actor(
             description: row.description,
             message: row.message,
             created_at_unix: row.created_at_unix,
-        });
-    }
-    Ok(decisions)
+        })
+        .collect())
 }
 
 pub(super) async fn resolve_completion_request_decision(
@@ -228,60 +222,28 @@ pub(super) async fn resolve_completion_request_decision(
     if request_event_id.is_empty() {
         return Err(ProductionMapError::MissingId);
     }
-    reject_training_order_id(&notification.order_id)?;
     let mut tx = pool
         .begin()
         .await
         .map_err(|_| ProductionMapError::StoreFailed)?;
-    let control_state = lock_order_control_tx(&mut tx, &notification.order_id).await?;
-    let resolution_event_already_applied = if let Some(resolution) = state_resolution.as_ref() {
-        lock_apparatus_queue_tx(&mut tx, &resolution.apparatus).await?;
-        let already_applied = queue_event_already_applied_tx(&mut tx, &resolution.event).await?;
-        match control_state.as_ref().map(|(state, _)| state.as_str()) {
-            Some("freeze_requested") => return Err(ProductionMapError::OrderFreezeRequested),
-            Some("frozen") => return Err(ProductionMapError::OrderFrozen),
-            _ => {}
-        }
-        already_applied
-    } else {
-        false
-    };
-    let request_payload = sqlx::query_scalar::<_, serde_json::Value>(
-        "SELECT payload_json
-         FROM mini_queue_action_events
-         WHERE event_id = $1
-         FOR UPDATE",
-    )
-    .bind(request_event_id)
-    .fetch_optional(&mut *tx)
-    .await
-    .map_err(|_| ProductionMapError::StoreFailed)?
-    .ok_or(ProductionMapError::QueueActionNotAllowed)?;
-    if let Some(existing_decision) = request_payload
-        .get("completion_request_status")
-        .and_then(serde_json::Value::as_str)
-        .filter(|status| matches!(*status, "approved" | "rejected"))
-    {
-        if existing_decision == decision.as_str() {
-            tx.commit()
-                .await
-                .map_err(|_| ProductionMapError::StoreFailed)?;
-            return Ok(QueueActionProgressWriteResult::default());
-        }
-        return Err(ProductionMapError::QueueActionNotAllowed);
-    }
-    if resolution_event_already_applied {
-        return Err(ProductionMapError::QueueActionNotAllowed);
-    }
     let mut raw_material_stock_warehouses = Vec::new();
-    if let Some(resolution) = state_resolution {
-        put_queue_state_for_event_tx(
-            &mut tx,
-            &resolution.apparatus,
-            &resolution.states,
-            &resolution.event,
-        )
-        .await?;
+    let mut resolution_replayed = false;
+    if let Some(resolution) = state_resolution.as_ref() {
+        let mut apparatuses = vec![resolution.apparatus.as_str(), resolution.event.apparatus.as_str()];
+        if let Some(session) = &resolution.session {
+            apparatuses.push(session.apparatus.as_str());
+        }
+        lock_order_and_apparatuses_tx(&mut tx, &resolution.event.order_id, &apparatuses)
+            .await?;
+        resolution_replayed = queue_action_event_replay_tx(&mut tx, &resolution.event).await?;
+        if !resolution_replayed {
+            validate_queue_action_event_transition_tx(&mut tx, &resolution.event).await?;
+        }
+    }
+    if let Some(resolution) = state_resolution
+        && !resolution_replayed
+    {
+        put_queue_action_state_tx(&mut tx, &resolution.event).await?;
         insert_queue_action_event_tx(&mut tx, &resolution.event).await?;
         if let Some(session) = resolution.session {
             put_order_run_session_tx(&mut tx, &session).await?;
@@ -302,12 +264,21 @@ pub(super) async fn resolve_completion_request_decision(
     }
     let result = sqlx::query(
         "UPDATE mini_queue_action_events
-         SET payload_json = payload_json || $2::jsonb
+         SET payload_json = payload_json || $4::jsonb
          WHERE event_id = $1
+           AND canonical_apparatus_id IS NOT NULL
            AND payload_json->>'completion_request' = 'true'
-           AND COALESCE(payload_json->>'completion_request_status', 'pending') = 'pending'",
+           AND (
+                COALESCE(payload_json->>'completion_request_status', 'pending') = 'pending'
+                OR (
+                    payload_json->>'completion_request_status' = $2
+                    AND payload_json->>'decision_event_id' = $3
+               )
+           )",
     )
     .bind(request_event_id)
+    .bind(decision.as_str())
+    .bind(notification.event_id.trim())
     .bind(serde_json::json!({
         "completion_request_status": decision.as_str(),
         "decision_event_id": notification.event_id,

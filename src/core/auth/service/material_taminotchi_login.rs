@@ -30,7 +30,10 @@ impl AuthService {
             .map_err(|_| AuthError::Internal)?;
 
         for material in materials {
-            let state = states.get(material.id.trim()).cloned().unwrap_or_default();
+            let state = states
+                .get(material.id.trim())
+                .cloned()
+                .ok_or(AuthError::Internal)?;
             if state.removed || state.blocked {
                 continue;
             }

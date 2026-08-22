@@ -2,53 +2,14 @@ use std::collections::BTreeMap;
 
 use sqlx::{Postgres, Transaction};
 
+use crate::core::apparatus_standard::ApparatusId;
 use crate::core::production_map::{
-    reject_training_order_id, queue_state::ApparatusQueueAction,
-    ApparatusQueueActionEvent, ProductionMapError,
+    ApparatusQueueActionEvent, ProductionMapError, queue_state::ApparatusQueueAction,
 };
 
-pub(super) async fn lock_apparatus_queue_tx(
-    tx: &mut Transaction<'_, Postgres>,
-    apparatus: &str,
-) -> Result<(), ProductionMapError> {
-    sqlx::query("SELECT pg_advisory_xact_lock(hashtextextended($1, 0))")
-        .bind(format!(
-            "mini-rs-erp:queue-apparatus:{}",
-            apparatus.trim().to_lowercase()
-        ))
-        .execute(&mut **tx)
-        .await
-        .map_err(|_| ProductionMapError::StoreFailed)?;
-    Ok(())
-}
+use super::transaction_locks::lock_apparatus_tx;
 
-pub(super) async fn lock_order_control_tx(
-    tx: &mut Transaction<'_, Postgres>,
-    order_id: &str,
-) -> Result<Option<(String, Option<String>)>, ProductionMapError> {
-    let order_id = order_id.trim();
-    if order_id.is_empty() {
-        return Err(ProductionMapError::QueueActionNotAllowed);
-    }
-    reject_training_order_id(order_id)?;
-    sqlx::query("SELECT pg_advisory_xact_lock(hashtextextended($1, 0))")
-        .bind(format!("mini-rs-erp:order-control:{order_id}"))
-        .execute(&mut **tx)
-        .await
-        .map_err(|_| ProductionMapError::StoreFailed)?;
-    sqlx::query_as::<_, (String, Option<String>)>(
-        "SELECT state, freeze_request_id
-         FROM mini_order_control_states
-         WHERE order_id = $1
-         FOR UPDATE",
-    )
-    .bind(order_id)
-    .fetch_optional(&mut **tx)
-    .await
-    .map_err(|_| ProductionMapError::StoreFailed)
-}
-
-pub(super) async fn queue_event_already_applied_tx(
+pub(super) async fn queue_action_event_replay_tx(
     tx: &mut Transaction<'_, Postgres>,
     event: &ApparatusQueueActionEvent,
 ) -> Result<bool, ProductionMapError> {
@@ -61,146 +22,97 @@ pub(super) async fn queue_event_already_applied_tx(
         .execute(&mut **tx)
         .await
         .map_err(|_| ProductionMapError::StoreFailed)?;
-    let existing = sqlx::query_as::<_, (String, String, String, String, String)>(
-        "SELECT apparatus, order_id, action, from_state, to_state
+    let apparatus_id = ApparatusId::new(event.apparatus.trim().to_string())
+        .map_err(|_| ProductionMapError::ScheduleInputInvalid)?;
+    let assigned_apparatus = normalized_assigned_apparatus(event)?;
+    let existing = sqlx::query_as::<
+        _,
+        (
+            Option<String>,
+            String,
+            String,
+            String,
+            String,
+            String,
+            String,
+            String,
+            String,
+            serde_json::Value,
+            serde_json::Value,
+        ),
+    >(
+        "SELECT canonical_apparatus_id, order_id, action, from_state, to_state, policy,
+                actor_role, actor_ref, actor_display_name, assigned_apparatus, payload_json
          FROM mini_queue_action_events
          WHERE event_id = $1
          FOR UPDATE",
     )
-    .bind(event.event_id.trim())
+    .bind(event_id)
     .fetch_optional(&mut **tx)
     .await
     .map_err(|_| ProductionMapError::StoreFailed)?;
-    let Some((apparatus, order_id, action, from_state, to_state)) = existing else {
+    let Some((
+        existing_apparatus,
+        existing_order_id,
+        existing_action,
+        existing_from_state,
+        existing_to_state,
+        existing_policy,
+        existing_actor_role,
+        existing_actor_ref,
+        existing_actor_display_name,
+        existing_assigned_apparatus,
+        existing_payload,
+    )) = existing
+    else {
         return Ok(false);
     };
-    let matches = apparatus.trim() == event.apparatus.trim()
-        && order_id.trim() == event.order_id.trim()
-        && action == queue_action_as_str(event.action)
-        && from_state == event.from_state.as_str()
-        && to_state == event.to_state.as_str();
-    if !matches {
+
+    let existing = StoredQueueEventIdentity {
+        apparatus: existing_apparatus.as_deref(),
+        order_id: &existing_order_id,
+        action: &existing_action,
+        from_state: &existing_from_state,
+        to_state: &existing_to_state,
+        policy: &existing_policy,
+        actor_role: &existing_actor_role,
+        actor_ref: &existing_actor_ref,
+        actor_display_name: &existing_actor_display_name,
+        assigned_apparatus: &existing_assigned_apparatus,
+        payload: &existing_payload,
+    };
+    let same_request = queue_event_identity_matches(
+        &existing,
+        &apparatus_id,
+        event,
+        &assigned_apparatus,
+    )?;
+    if !same_request {
         return Err(ProductionMapError::QueueActionNotAllowed);
     }
     Ok(true)
 }
 
-pub(super) async fn put_queue_state_for_event_tx(
+pub(super) async fn validate_queue_action_event_transition_tx(
     tx: &mut Transaction<'_, Postgres>,
-    apparatus: &str,
-    states: &BTreeMap<String, String>,
     event: &ApparatusQueueActionEvent,
 ) -> Result<(), ProductionMapError> {
-    ensure_queue_state_for_event_tx(tx, apparatus, event).await?;
-    let desired = states
-        .get(event.order_id.trim())
-        .map(|state| state.trim())
-        .ok_or(ProductionMapError::QueueActionNotAllowed)?;
-    if desired != event.to_state.as_str() {
-        return Err(ProductionMapError::QueueActionNotAllowed);
-    }
-    sqlx::query(
-        "INSERT INTO mini_queue_states (apparatus, order_id, state, updated_at)
-         VALUES ($1, $2, $3, now())
-         ON CONFLICT (apparatus, order_id) DO UPDATE SET
-           state = excluded.state,
-           updated_at = excluded.updated_at",
-    )
-    .bind(apparatus.trim())
-    .bind(event.order_id.trim())
-    .bind(desired)
-    .execute(&mut **tx)
-    .await
-    .map_err(|_| ProductionMapError::StoreFailed)?;
-    Ok(())
-}
-
-pub(super) async fn ensure_queue_state_for_event_tx(
-    tx: &mut Transaction<'_, Postgres>,
-    apparatus: &str,
-    event: &ApparatusQueueActionEvent,
-) -> Result<(), ProductionMapError> {
-    let current = sqlx::query_scalar::<_, String>(
+    let apparatus_id = ApparatusId::new(event.apparatus.trim().to_string())
+        .map_err(|_| ProductionMapError::ScheduleInputInvalid)?;
+    let current_state = sqlx::query_scalar::<_, String>(
         "SELECT state
          FROM mini_queue_states
-         WHERE apparatus = $1 AND order_id = $2
+         WHERE canonical_apparatus_id = $1 AND order_id = $2
          FOR UPDATE",
     )
-    .bind(apparatus.trim())
+    .bind(apparatus_id.as_str())
     .bind(event.order_id.trim())
     .fetch_optional(&mut **tx)
     .await
     .map_err(|_| ProductionMapError::StoreFailed)?
     .unwrap_or_else(|| "pending".to_string());
-    reject_training_order_id(&event.order_id)?;
-    if current.trim() != event.from_state.as_str() {
+    if current_state.trim() != event.from_state.as_str() {
         return Err(ProductionMapError::QueueActionNotAllowed);
-    }
-    Ok(())
-}
-
-pub(super) async fn save_sequence_updates_for_event_tx(
-    tx: &mut Transaction<'_, Postgres>,
-    sequence_updates: &BTreeMap<String, Vec<String>>,
-    event: &ApparatusQueueActionEvent,
-) -> Result<(), ProductionMapError> {
-    if sequence_updates.is_empty() {
-        return Ok(());
-    }
-    let is_freeze = event.action == ApparatusQueueAction::Freeze;
-    let is_unfreeze = event
-        .payload_json
-        .get("admin_unfreeze")
-        .and_then(serde_json::Value::as_bool)
-        == Some(true);
-    let mut frozen_order_ids = if is_freeze {
-        sqlx::query_scalar::<_, String>(
-            "SELECT order_id
-             FROM mini_order_control_states
-             WHERE state = 'frozen'",
-        )
-        .fetch_all(&mut **tx)
-        .await
-        .map_err(|_| ProductionMapError::StoreFailed)?
-    } else {
-        Vec::new()
-    };
-    if is_freeze {
-        frozen_order_ids.push(event.order_id.trim().to_string());
-    }
-    let current_frozen = |order_id: &str| {
-        frozen_order_ids
-            .iter()
-            .any(|frozen| frozen.trim() == order_id.trim())
-    };
-
-    for (apparatus, incoming_order_ids) in sequence_updates {
-        let current = sqlx::query_scalar::<_, serde_json::Value>(
-            "SELECT order_ids
-             FROM mini_queue_sequences
-             WHERE apparatus = $1
-             FOR UPDATE",
-        )
-        .bind(apparatus.trim())
-        .fetch_optional(&mut **tx)
-        .await
-        .map_err(|_| ProductionMapError::StoreFailed)?;
-        let mut order_ids = current
-            .map(|payload| {
-                serde_json::from_value::<Vec<String>>(payload)
-                    .map_err(|_| ProductionMapError::StoreFailed)
-            })
-            .transpose()?
-            .unwrap_or_else(|| incoming_order_ids.clone());
-        if is_freeze {
-            order_ids.retain(|order_id| !current_frozen(order_id));
-        } else if is_unfreeze {
-            order_ids.retain(|order_id| order_id.trim() != event.order_id.trim());
-            if apparatus.trim().eq_ignore_ascii_case(event.apparatus.trim()) {
-                order_ids.push(event.order_id.trim().to_string());
-            }
-        }
-        super::catalog_helpers::save_apparatus_sequence_tx(tx, apparatus, &order_ids).await?;
     }
     Ok(())
 }
@@ -210,20 +122,53 @@ pub(super) async fn put_queue_states_tx(
     apparatus: &str,
     states: BTreeMap<String, String>,
 ) -> Result<(), ProductionMapError> {
-    sqlx::query("DELETE FROM mini_queue_states WHERE apparatus = $1")
-        .bind(apparatus)
+    let apparatus_id = lock_apparatus_tx(tx, apparatus).await?;
+    sqlx::query("DELETE FROM mini_queue_states WHERE canonical_apparatus_id = $1")
+        .bind(apparatus_id.as_str())
         .execute(&mut **tx)
         .await
         .map_err(|_| ProductionMapError::StoreFailed)?;
     for (order_id, state) in states {
-        reject_training_order_id(&order_id)?;
         sqlx::query(
-            "INSERT INTO mini_queue_states (apparatus, order_id, state, updated_at)
-             VALUES ($1, $2, $3, now())",
+            "INSERT INTO mini_queue_states
+                (apparatus, canonical_apparatus_id, order_id, state, updated_at)
+             VALUES (COALESCE((SELECT name FROM mini_apparatus WHERE id = $1), $1), $1, $2, $3, now())",
         )
-        .bind(apparatus)
+        .bind(apparatus_id.as_str())
         .bind(order_id.trim())
         .bind(state.trim())
+        .execute(&mut **tx)
+        .await
+        .map_err(|_| ProductionMapError::StoreFailed)?;
+    }
+    Ok(())
+}
+
+pub(super) async fn put_queue_action_state_tx(
+    tx: &mut Transaction<'_, Postgres>,
+    event: &ApparatusQueueActionEvent,
+) -> Result<(), ProductionMapError> {
+    let apparatus_id = lock_apparatus_tx(tx, &event.apparatus).await?;
+    let updated = sqlx::query(
+        "UPDATE mini_queue_states
+         SET state = $3, updated_at = now()
+         WHERE canonical_apparatus_id = $1 AND order_id = $2",
+    )
+    .bind(apparatus_id.as_str())
+    .bind(event.order_id.trim())
+    .bind(event.to_state.as_str())
+    .execute(&mut **tx)
+    .await
+    .map_err(|_| ProductionMapError::StoreFailed)?;
+    if updated.rows_affected() == 0 {
+        sqlx::query(
+            "INSERT INTO mini_queue_states
+                (apparatus, canonical_apparatus_id, order_id, state, updated_at)
+             VALUES (COALESCE((SELECT name FROM mini_apparatus WHERE id = $1), $1), $1, $2, $3, now())",
+        )
+        .bind(apparatus_id.as_str())
+        .bind(event.order_id.trim())
+        .bind(event.to_state.as_str())
         .execute(&mut **tx)
         .await
         .map_err(|_| ProductionMapError::StoreFailed)?;
@@ -235,10 +180,9 @@ pub(super) async fn insert_queue_action_event_tx(
     tx: &mut Transaction<'_, Postgres>,
     event: &ApparatusQueueActionEvent,
 ) -> Result<(), ProductionMapError> {
-    reject_training_order_id(&event.order_id)?;
-    if queue_event_already_applied_tx(tx, event).await? {
-        return Ok(());
-    }
+    let apparatus_id = ApparatusId::new(event.apparatus.trim().to_string())
+        .map_err(|_| ProductionMapError::ScheduleInputInvalid)?;
+    let assigned_apparatus = normalized_assigned_apparatus(event)?;
     if event.action == ApparatusQueueAction::Complete
         && event
             .payload_json
@@ -250,7 +194,7 @@ pub(super) async fn insert_queue_action_event_tx(
             "SELECT EXISTS(
                  SELECT 1
                  FROM mini_queue_action_events
-                 WHERE lower(apparatus) = lower($1)
+                 WHERE canonical_apparatus_id = $1
                    AND order_id = $2
                    AND event_id <> $3
                    AND action = 'complete'
@@ -258,7 +202,7 @@ pub(super) async fn insert_queue_action_event_tx(
                    AND COALESCE(payload_json->>'completion_request_status', 'pending') = 'pending'
              )",
         )
-        .bind(event.apparatus.trim())
+        .bind(apparatus_id.as_str())
         .bind(event.order_id.trim())
         .bind(event.event_id.trim())
         .fetch_one(&mut **tx)
@@ -270,27 +214,15 @@ pub(super) async fn insert_queue_action_event_tx(
     }
     sqlx::query(
         "INSERT INTO mini_queue_action_events
-            (event_id, apparatus, order_id, action, from_state, to_state, policy,
+            (event_id, apparatus, canonical_apparatus_id, order_id, action, from_state, to_state, policy,
              actor_role, actor_ref, actor_display_name, assigned_apparatus, payload_json, created_at)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, now())
-         ON CONFLICT (event_id) DO NOTHING",
+         VALUES ($1, COALESCE((SELECT name FROM mini_apparatus WHERE id = $2), $2), $2, $3, $4, $5, $6, $7,
+                 $8, $9, $10, $11, $12, now())",
     )
     .bind(event.event_id.trim())
-    .bind(event.apparatus.trim())
+    .bind(apparatus_id.as_str())
     .bind(event.order_id.trim())
-    .bind(match event.action {
-        crate::core::production_map::queue_state::ApparatusQueueAction::Start => "start",
-        crate::core::production_map::queue_state::ApparatusQueueAction::Pause => "pause",
-        crate::core::production_map::queue_state::ApparatusQueueAction::Freeze => "freeze",
-        crate::core::production_map::queue_state::ApparatusQueueAction::DetachRoll => {
-            "detach_roll"
-        }
-        crate::core::production_map::queue_state::ApparatusQueueAction::Resume => "resume",
-        crate::core::production_map::queue_state::ApparatusQueueAction::RollComplete => {
-            "roll_complete"
-        }
-        crate::core::production_map::queue_state::ApparatusQueueAction::Complete => "complete",
-    })
+    .bind(queue_action_as_str(event.action))
     .bind(event.from_state.as_str())
     .bind(event.to_state.as_str())
     .bind(event.policy.as_str())
@@ -298,7 +230,7 @@ pub(super) async fn insert_queue_action_event_tx(
     .bind(event.actor.ref_.trim())
     .bind(event.actor.display_name.trim())
     .bind(
-        serde_json::to_value(&event.assigned_apparatus)
+        serde_json::to_value(assigned_apparatus)
             .map_err(|_| ProductionMapError::StoreFailed)?,
     )
     .bind(&event.payload_json)
@@ -318,6 +250,55 @@ pub(super) async fn insert_queue_action_event_tx(
     Ok(())
 }
 
+fn normalized_assigned_apparatus(
+    event: &ApparatusQueueActionEvent,
+) -> Result<Vec<String>, ProductionMapError> {
+    event
+        .assigned_apparatus
+        .iter()
+        .map(|value| {
+            ApparatusId::new(value.trim().to_string())
+                .map(|id| id.to_string())
+                .map_err(|_| ProductionMapError::ScheduleInputInvalid)
+        })
+        .collect::<Result<Vec<_>, _>>()
+}
+
+struct StoredQueueEventIdentity<'a> {
+    apparatus: Option<&'a str>,
+    order_id: &'a str,
+    action: &'a str,
+    from_state: &'a str,
+    to_state: &'a str,
+    policy: &'a str,
+    actor_role: &'a str,
+    actor_ref: &'a str,
+    actor_display_name: &'a str,
+    assigned_apparatus: &'a serde_json::Value,
+    payload: &'a serde_json::Value,
+}
+
+fn queue_event_identity_matches(
+    existing: &StoredQueueEventIdentity<'_>,
+    apparatus_id: &ApparatusId,
+    event: &ApparatusQueueActionEvent,
+    assigned_apparatus: &[String],
+) -> Result<bool, ProductionMapError> {
+    let assigned_apparatus =
+        serde_json::to_value(assigned_apparatus).map_err(|_| ProductionMapError::StoreFailed)?;
+    Ok(existing.apparatus == Some(apparatus_id.as_str())
+        && existing.order_id.trim() == event.order_id.trim()
+        && existing.action == queue_action_as_str(event.action)
+        && existing.from_state == event.from_state.as_str()
+        && existing.to_state == event.to_state.as_str()
+        && existing.policy == event.policy.as_str()
+        && existing.actor_role.trim() == event.actor.role.trim()
+        && existing.actor_ref.trim() == event.actor.ref_.trim()
+        && existing.actor_display_name.trim() == event.actor.display_name.trim()
+        && existing.assigned_apparatus == &assigned_apparatus
+        && existing.payload == &event.payload_json)
+}
+
 pub(super) fn queue_action_from_str(
     value: &str,
 ) -> Option<crate::core::production_map::queue_state::ApparatusQueueAction> {
@@ -325,13 +306,13 @@ pub(super) fn queue_action_from_str(
         "start" => Some(crate::core::production_map::queue_state::ApparatusQueueAction::Start),
         "pause" => Some(crate::core::production_map::queue_state::ApparatusQueueAction::Pause),
         "freeze" => Some(crate::core::production_map::queue_state::ApparatusQueueAction::Freeze),
-        "detach_roll" => Some(
-            crate::core::production_map::queue_state::ApparatusQueueAction::DetachRoll,
-        ),
+        "detach_roll" => {
+            Some(crate::core::production_map::queue_state::ApparatusQueueAction::DetachRoll)
+        }
         "resume" => Some(crate::core::production_map::queue_state::ApparatusQueueAction::Resume),
-        "roll_complete" => Some(
-            crate::core::production_map::queue_state::ApparatusQueueAction::RollComplete,
-        ),
+        "roll_complete" => {
+            Some(crate::core::production_map::queue_state::ApparatusQueueAction::RollComplete)
+        }
         "complete" => {
             Some(crate::core::production_map::queue_state::ApparatusQueueAction::Complete)
         }
@@ -346,13 +327,71 @@ pub(super) fn queue_action_as_str(
         crate::core::production_map::queue_state::ApparatusQueueAction::Start => "start",
         crate::core::production_map::queue_state::ApparatusQueueAction::Pause => "pause",
         crate::core::production_map::queue_state::ApparatusQueueAction::Freeze => "freeze",
-        crate::core::production_map::queue_state::ApparatusQueueAction::DetachRoll => {
-            "detach_roll"
-        }
+        crate::core::production_map::queue_state::ApparatusQueueAction::DetachRoll => "detach_roll",
         crate::core::production_map::queue_state::ApparatusQueueAction::Resume => "resume",
         crate::core::production_map::queue_state::ApparatusQueueAction::RollComplete => {
             "roll_complete"
         }
         crate::core::production_map::queue_state::ApparatusQueueAction::Complete => "complete",
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{StoredQueueEventIdentity, queue_event_identity_matches};
+    use crate::core::apparatus_standard::ApparatusId;
+    use crate::core::production_map::{
+        ApparatusQueueActionEvent, ApparatusQueuePolicy, QueueActionActor,
+    };
+    use crate::core::production_map::queue_state::{
+        ApparatusQueueAction, ApparatusQueueOrderState,
+    };
+
+    #[test]
+    fn queue_event_replay_requires_the_original_payload() {
+        let event = ApparatusQueueActionEvent {
+            event_id: "event-1".to_string(),
+            apparatus: "apparatus:test:a".to_string(),
+            order_id: "zakaz-1".to_string(),
+            action: ApparatusQueueAction::Start,
+            from_state: ApparatusQueueOrderState::Pending,
+            to_state: ApparatusQueueOrderState::InProgress,
+            policy: ApparatusQueuePolicy::FreePick,
+            actor: QueueActionActor {
+                role: "operator".to_string(),
+                ref_: "worker-1".to_string(),
+                display_name: "Worker".to_string(),
+            },
+            assigned_apparatus: vec!["apparatus:test:a".to_string()],
+            payload_json: serde_json::json!({"request": "one"}),
+        };
+        let apparatus_id = ApparatusId::new("apparatus:test:a".to_string()).unwrap();
+        let assigned = vec!["apparatus:test:a".to_string()];
+        let existing_assigned = serde_json::json!(["apparatus:test:a"]);
+        let existing = StoredQueueEventIdentity {
+            apparatus: Some("apparatus:test:a"),
+            order_id: "zakaz-1",
+            action: "start",
+            from_state: "pending",
+            to_state: "in_progress",
+            policy: "free_pick",
+            actor_role: "operator",
+            actor_ref: "worker-1",
+            actor_display_name: "Worker",
+            assigned_apparatus: &existing_assigned,
+            payload: &event.payload_json,
+        };
+        let matching =
+            queue_event_identity_matches(&existing, &apparatus_id, &event, &assigned).unwrap();
+        assert!(matching);
+
+        let changed_payload = serde_json::json!({"request": "two"});
+        let changed = StoredQueueEventIdentity {
+            payload: &changed_payload,
+            ..existing
+        };
+        let changed =
+            queue_event_identity_matches(&changed, &apparatus_id, &event, &assigned).unwrap();
+        assert!(!changed);
     }
 }

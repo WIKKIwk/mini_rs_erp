@@ -1,6 +1,6 @@
+mod capacity;
 mod map_helpers;
 mod maps;
-mod capacity;
 mod migration;
 mod queue;
 mod unsupported_materials;
@@ -15,11 +15,11 @@ use std::sync::{Arc, Mutex};
 use async_trait::async_trait;
 use rusqlite::Connection;
 
+use crate::core::apparatus_standard::ApparatusId;
 use crate::core::production_map::{
-    ApparatusCapacityProfile, ApparatusDowntime, ApparatusMaterialRule, ApparatusQueueActionEvent,
-    ApparatusQueuePolicy, ApparatusScheduleCancelRequest, ApparatusScheduleReservation,
-    ProductionMapDefinition, ProductionMapError, ProductionMapStorePort, QueueActionActor,
-    RawMaterialAssignment,
+    ApparatusDowntime, ApparatusQueueActionEvent, ApparatusScheduleCancelRequest,
+    ApparatusScheduleReservation, ProductionMapDefinition, ProductionMapError,
+    ProductionMapStorePort, QueueActionActor, RawMaterialAssignment,
 };
 
 use self::migration::{configure_connection, migrate};
@@ -88,19 +88,6 @@ impl ProductionMapStorePort for ProductionMapStore {
         maps::put_apparatus_sequence(self, apparatus, order_ids).await
     }
 
-    async fn apparatus_capacity_profiles(
-        &self,
-    ) -> Result<Vec<ApparatusCapacityProfile>, ProductionMapError> {
-        capacity::apparatus_capacity_profiles(self).await
-    }
-
-    async fn put_apparatus_capacity_profile(
-        &self,
-        profile: ApparatusCapacityProfile,
-    ) -> Result<(), ProductionMapError> {
-        capacity::put_apparatus_capacity_profile(self, profile).await
-    }
-
     async fn apparatus_downtimes(&self) -> Result<Vec<ApparatusDowntime>, ProductionMapError> {
         capacity::apparatus_downtimes(self).await
     }
@@ -150,12 +137,16 @@ impl ProductionMapStorePort for ProductionMapStore {
     async fn update_apparatus_schedule_reservation_status(
         &self,
         order_id: &str,
-        apparatus: &str,
+        apparatus_id: &ApparatusId,
         status: crate::core::production_map::ApparatusScheduleStatus,
         actor: &QueueActionActor,
     ) -> Result<(), ProductionMapError> {
         capacity::update_apparatus_schedule_reservation_status(
-            self, order_id, apparatus, status, actor,
+            self,
+            order_id,
+            apparatus_id.as_str(),
+            status,
+            actor,
         )
         .await
     }
@@ -174,21 +165,6 @@ impl ProductionMapStorePort for ProductionMapStore {
         queue::put_apparatus_queue_states(self, apparatus, states).await
     }
 
-    async fn apparatus_queue_policies(
-        &self,
-    ) -> Result<BTreeMap<String, ApparatusQueuePolicy>, ProductionMapError> {
-        queue::apparatus_queue_policies(self).await
-    }
-
-    async fn put_apparatus_queue_policy(
-        &self,
-        apparatus: &str,
-        policy: ApparatusQueuePolicy,
-        actor: &QueueActionActor,
-    ) -> Result<(), ProductionMapError> {
-        queue::put_apparatus_queue_policy(self, apparatus, policy, actor).await
-    }
-
     async fn put_apparatus_queue_states_with_event(
         &self,
         apparatus: &str,
@@ -203,19 +179,6 @@ impl ProductionMapStorePort for ProductionMapStore {
         event: ApparatusQueueActionEvent,
     ) -> Result<(), ProductionMapError> {
         queue::append_apparatus_queue_action_event(self, event).await
-    }
-
-    async fn apparatus_material_rules(
-        &self,
-    ) -> Result<Vec<ApparatusMaterialRule>, ProductionMapError> {
-        unsupported_materials::apparatus_material_rules().await
-    }
-
-    async fn put_apparatus_material_rule(
-        &self,
-        rule: ApparatusMaterialRule,
-    ) -> Result<(), ProductionMapError> {
-        unsupported_materials::put_apparatus_material_rule(rule).await
     }
 
     async fn raw_material_assignments(

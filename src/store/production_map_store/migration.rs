@@ -2,6 +2,8 @@ use std::time::Duration;
 
 use rusqlite::Connection;
 
+use crate::core::apparatus_standard::ApparatusId;
+
 pub(super) fn configure_connection(conn: &Connection) -> rusqlite::Result<()> {
     conn.busy_timeout(Duration::from_secs(5))?;
     conn.pragma_update(None, "journal_mode", "WAL")?;
@@ -36,6 +38,7 @@ pub(super) fn migrate(conn: &Connection) -> rusqlite::Result<()> {
         );
         CREATE TABLE IF NOT EXISTS apparatus_queue_policies (
             apparatus TEXT PRIMARY KEY,
+            canonical_apparatus_id TEXT,
             policy TEXT NOT NULL,
             actor_role TEXT NOT NULL DEFAULT '',
             actor_ref TEXT NOT NULL DEFAULT '',
@@ -101,5 +104,59 @@ pub(super) fn migrate(conn: &Connection) -> rusqlite::Result<()> {
             actor_json TEXT NOT NULL,
             created_at_unix INTEGER NOT NULL
         );",
-    )
+    )?;
+
+    let has_canonical_apparatus_id = {
+        let mut statement = conn.prepare("PRAGMA table_info(apparatus_queue_policies)")?;
+        statement
+            .query_map([], |row| row.get::<_, String>(1))?
+            .collect::<rusqlite::Result<Vec<_>>>()?
+            .into_iter()
+            .any(|name| name == "canonical_apparatus_id")
+    };
+    if !has_canonical_apparatus_id {
+        conn.execute(
+            "ALTER TABLE apparatus_queue_policies ADD COLUMN canonical_apparatus_id TEXT",
+            [],
+        )?;
+    }
+    let legacy_rows = {
+        let mut statement = conn.prepare(
+            "SELECT rowid, apparatus FROM apparatus_queue_policies
+             WHERE canonical_apparatus_id IS NULL",
+        )?;
+        statement
+            .query_map([], |row| {
+                Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?))
+            })?
+            .collect::<rusqlite::Result<Vec<_>>>()?
+    };
+    for (row_id, apparatus) in legacy_rows {
+        let Ok(apparatus_id) = ApparatusId::new(apparatus) else {
+            continue;
+        };
+        let already_present = conn.query_row(
+            "SELECT EXISTS(
+                 SELECT 1 FROM apparatus_queue_policies
+                 WHERE canonical_apparatus_id = ?1
+             )",
+            rusqlite::params![apparatus_id.as_str()],
+            |row| row.get::<_, bool>(0),
+        )?;
+        if already_present {
+            continue;
+        }
+        conn.execute(
+            "UPDATE apparatus_queue_policies
+             SET canonical_apparatus_id = ?1
+             WHERE rowid = ?2 AND canonical_apparatus_id IS NULL",
+            rusqlite::params![apparatus_id.as_str(), row_id],
+        )?;
+    }
+    conn.execute(
+        "CREATE UNIQUE INDEX IF NOT EXISTS idx_apparatus_queue_policies_canonical_id
+         ON apparatus_queue_policies(canonical_apparatus_id)",
+        [],
+    )?;
+    Ok(())
 }

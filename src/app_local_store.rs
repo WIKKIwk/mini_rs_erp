@@ -102,21 +102,6 @@ pub(super) fn profile_lmdb_path(config: &AppConfig) -> std::path::PathBuf {
     )
 }
 
-pub(super) fn apparatus_group_store_path() -> std::path::PathBuf {
-    std::env::var("MOBILE_API_APPARATUS_GROUP_STORE_PATH")
-        .map(std::path::PathBuf::from)
-        .unwrap_or_else(|_| {
-            #[cfg(test)]
-            {
-                test_sqlite_path("mobile_apparatus_groups")
-            }
-            #[cfg(not(test))]
-            {
-                std::path::PathBuf::from("data/mobile_apparatus_groups.sqlite")
-            }
-        })
-}
-
 pub(super) fn calculate_order_store_path() -> std::path::PathBuf {
     std::env::var("MOBILE_API_CALCULATE_ORDER_STORE_PATH")
         .map(std::path::PathBuf::from)

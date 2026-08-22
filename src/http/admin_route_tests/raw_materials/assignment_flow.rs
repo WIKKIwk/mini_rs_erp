@@ -37,7 +37,7 @@ async fn raw_material_assignment_orders_only_return_active_orders() {
                 "PUT",
                 "/v1/mobile/admin/production-maps",
                 &token,
-                &pechat_order_map_json(id, title, code, "7 ta rangli pechat - A"),
+                &pechat_order_map_json(id, title, code, "apparatus:default:bosma_7"),
             ))
             .await
             .expect("production map save");
@@ -72,7 +72,7 @@ async fn raw_material_assignment_candidates_only_return_assignable_stock() {
             principal_role: PrincipalRole::MaterialTaminotchi,
             principal_ref: "material-candidates".to_string(),
             role_id: "material_taminotchi".to_string(),
-            assigned_apparatus: vec!["7 ta rangli pechat - A".to_string()],
+            assigned_apparatus: vec!["apparatus:default:bosma_7".to_string()],
             assigned_item_groups: vec!["Kraska".to_string()],
         })
         .await
@@ -103,7 +103,7 @@ async fn raw_material_assignment_candidates_only_return_assignable_stock() {
                 "zakaz-candidates",
                 "Candidate order",
                 "8813",
-                "7 ta rangli pechat - A",
+                "apparatus:default:bosma_7",
             ),
         ))
         .await
@@ -115,12 +115,12 @@ async fn raw_material_assignment_candidates_only_return_assignable_stock() {
             "PUT",
             "/v1/mobile/admin/raw-material-rules",
             &admin_token,
-            r#"{
-                "apparatus":"7 ta rangli pechat - A",
-                "requires_material":true,
-                "start_policy":"requirement_groups",
-                "item_groups":["Kraska"]
-            }"#,
+            &canonical_requirement_set_material_policy_body(
+                "apparatus:default:bosma_7",
+                1,
+                &["Kraska"],
+                true,
+            ),
         ))
         .await
         .expect("rule save");
@@ -141,13 +141,13 @@ async fn raw_material_assignment_candidates_only_return_assignable_stock() {
     assert_eq!(body[0]["barcode"], "30AA");
     assert_eq!(body[0]["warehouse"], "Kalidor");
     assert_eq!(body[0]["item_group"], "Kraska");
-    assert_eq!(body[0]["apparatus_options"][0], "7 ta rangli pechat - A");
+    assert_eq!(body[0]["apparatus_options"][0], "apparatus:default:bosma_7");
 
     let forbidden_apparatus = router
         .clone()
         .oneshot(request(
             "GET",
-            "/v1/mobile/admin/raw-material-assignments/candidates?order_id=zakaz-candidates&apparatus=Laminatsiya%20-%20A",
+            "/v1/mobile/admin/raw-material-assignments/candidates?order_id=zakaz-candidates&apparatus=apparatus%3Adefault%3Aasset-007",
             &material_token,
         ))
         .await
@@ -170,7 +170,7 @@ async fn raw_material_assignment_candidates_only_return_assignable_stock() {
             r#"{
                 "order_id":"zakaz-candidates",
                 "barcode":"30AA",
-                "apparatus":"7 ta rangli pechat - A"
+                "apparatus":"apparatus:default:bosma_7"
             }"#,
         ))
         .await
@@ -193,7 +193,7 @@ async fn raw_material_assignment_candidates_only_return_assignable_stock() {
             r#"{
                 "order_id":"zakaz-candidates",
                 "barcode":"30AA",
-                "apparatus":"7 ta rangli pechat - A"
+                "apparatus":"apparatus:default:bosma_7"
             }"#,
         ))
         .await
@@ -233,7 +233,7 @@ async fn raw_material_assignment_candidates_rank_rulons_by_smallest_leftover() {
             principal_role: PrincipalRole::MaterialTaminotchi,
             principal_ref: "material-ranked-rulons".to_string(),
             role_id: "material_taminotchi".to_string(),
-            assigned_apparatus: vec!["7 ta rangli pechat - A".to_string()],
+            assigned_apparatus: vec!["apparatus:default:bosma_7".to_string()],
             assigned_item_groups: vec!["Rulon".to_string()],
         })
         .await
@@ -264,7 +264,7 @@ async fn raw_material_assignment_candidates_rank_rulons_by_smallest_leftover() {
                 "zakaz-ranked-rulons",
                 "Ranked rulons",
                 "8816",
-                "7 ta rangli pechat - A",
+                "apparatus:default:bosma_7",
                 7,
                 985.0,
             ),
@@ -279,12 +279,12 @@ async fn raw_material_assignment_candidates_rank_rulons_by_smallest_leftover() {
             "PUT",
             "/v1/mobile/admin/raw-material-rules",
             &token,
-            r#"{
-                "apparatus":"7 ta rangli pechat - A",
-                "requires_material":true,
-                "start_policy":"requirement_groups",
-                "item_groups":["Rulon"]
-            }"#,
+            &canonical_requirement_set_material_policy_body(
+                "apparatus:default:bosma_7",
+                1,
+                &["Rulon"],
+                true,
+            ),
         ))
         .await
         .expect("rule save");
@@ -322,7 +322,7 @@ async fn raw_material_assignment_candidate_orders_only_return_compatible_orders(
             principal_role: PrincipalRole::MaterialTaminotchi,
             principal_ref: "material-candidate-orders".to_string(),
             role_id: "material_taminotchi".to_string(),
-            assigned_apparatus: vec!["7 ta rangli pechat - A".to_string()],
+            assigned_apparatus: vec!["apparatus:default:bosma_7".to_string()],
             assigned_item_groups: vec!["Kraska".to_string()],
         })
         .await
@@ -348,13 +348,13 @@ async fn raw_material_assignment_candidate_orders_only_return_compatible_orders(
             "zakaz-compatible",
             "Compatible order",
             "8814",
-            "7 ta rangli pechat - A",
+            "apparatus:default:bosma_7",
         ),
         (
             "zakaz-incompatible",
             "Incompatible order",
             "8815",
-            "7 ta rangli pechat - B",
+            "apparatus:default:bosma_8",
         ),
     ] {
         let response = router
@@ -370,8 +370,8 @@ async fn raw_material_assignment_candidate_orders_only_return_compatible_orders(
         assert_eq!(response.status(), StatusCode::OK);
     }
     for (apparatus, item_group) in [
-        ("7 ta rangli pechat - A", "Kraska"),
-        ("7 ta rangli pechat - B", "Rulon"),
+        ("apparatus:default:bosma_7", "Kraska"),
+        ("apparatus:default:bosma_8", "Rulon"),
     ] {
         let response = router
             .clone()
@@ -379,14 +379,7 @@ async fn raw_material_assignment_candidate_orders_only_return_compatible_orders(
                 "PUT",
                 "/v1/mobile/admin/raw-material-rules",
                 &admin_token,
-                &format!(
-                    r#"{{
-                        "apparatus":"{apparatus}",
-                        "requires_material":true,
-                        "start_policy":"requirement_groups",
-                        "item_groups":["{item_group}"]
-                    }}"#
-                ),
+                &canonical_requirement_set_material_policy_body(apparatus, 1, &[item_group], true),
             ))
             .await
             .expect("rule save");
@@ -406,7 +399,7 @@ async fn raw_material_assignment_candidate_orders_only_return_compatible_orders(
     let body = json_body(candidates).await;
     assert_eq!(body.as_array().map(Vec::len), Some(1));
     assert_eq!(body[0]["order"]["map"]["id"], "zakaz-compatible");
-    assert_eq!(body[0]["apparatus_options"][0], "7 ta rangli pechat - A");
+    assert_eq!(body[0]["apparatus_options"][0], "apparatus:default:bosma_7");
 
     let assigned = router
         .clone()
@@ -417,7 +410,7 @@ async fn raw_material_assignment_candidate_orders_only_return_compatible_orders(
             r#"{
                 "order_id":"zakaz-compatible",
                 "barcode":"30AA",
-                "apparatus":"7 ta rangli pechat - A"
+                "apparatus":"apparatus:default:bosma_7"
             }"#,
         ))
         .await
@@ -459,8 +452,8 @@ async fn raw_material_routes_assign_and_require_scan_for_queue_start() {
         factory_location_id: "factory:pechat".to_string(),
         active: true,
         apparatus: vec![InventoryLocationApparatus {
-            id: "apparatus:pechat-a".to_string(),
-            name: "7 ta rangli pechat - A".to_string(),
+            id: "apparatus:default:bosma_7".to_string(),
+            name: "Bosma 7".to_string(),
         }],
     };
     inventory_store
@@ -501,7 +494,7 @@ async fn raw_material_routes_assign_and_require_scan_for_queue_start() {
             principal_role: PrincipalRole::Aparatchi,
             principal_ref: "worker-raw-route".to_string(),
             role_id: "aparatchi".to_string(),
-            assigned_apparatus: vec!["7 ta rangli pechat - A".to_string()],
+            assigned_apparatus: vec!["apparatus:default:bosma_7".to_string()],
             assigned_item_groups: Vec::new(),
         })
         .await
@@ -512,7 +505,7 @@ async fn raw_material_routes_assign_and_require_scan_for_queue_start() {
             principal_role: PrincipalRole::MaterialTaminotchi,
             principal_ref: "material-raw-route".to_string(),
             role_id: "material_taminotchi".to_string(),
-            assigned_apparatus: vec!["7 ta rangli pechat - A".to_string()],
+            assigned_apparatus: vec!["apparatus:default:bosma_7".to_string()],
             assigned_item_groups: vec!["Kraska".to_string()],
         })
         .await
@@ -545,7 +538,7 @@ async fn raw_material_routes_assign_and_require_scan_for_queue_start() {
                 "zakaz-raw-route",
                 "Raw route",
                 "8811",
-                "7 ta rangli pechat - A",
+                "apparatus:default:bosma_7",
             ),
         ))
         .await
@@ -559,30 +552,35 @@ async fn raw_material_routes_assign_and_require_scan_for_queue_start() {
             "PUT",
             "/v1/mobile/admin/raw-material-rules",
             &token,
-            r#"{
-                "apparatus":"7 ta rangli pechat - A",
-                "requires_material":true,
-                "start_policy":"requirement_groups",
-                "item_groups":["Kraska","Kley"],
-                "requirement_groups":[
-                    {
-                        "name":"Yopishtiruvchi",
-                        "item_groups":["Kraska","Kley"],
-                        "min_required_count":1
-                    }
-                ]
-            }"#,
+            &canonical_material_policy_body(
+                "apparatus:default:bosma_7",
+                1,
+                serde_json::json!({
+                    "mode": "requirement_sets",
+                    "sets": [{
+                        "requirement_id": "Yopishtiruvchi",
+                        "item_group_ids": ["Kraska", "Kley"],
+                        "minimum_required_count": 1
+                    }]
+                }),
+                true,
+            ),
         ))
         .await
         .expect("rule save");
     assert_eq!(rule.status(), StatusCode::OK);
     let rule_body = json_body(rule).await;
-    assert_eq!(rule_body["apparatus"], "7 ta rangli pechat - A");
-    assert_eq!(rule_body["requires_material"], true);
-    assert_eq!(rule_body["requirement_groups"][0]["name"], "Yopishtiruvchi");
     assert_eq!(
-        rule_body["requirement_groups"][0]["item_groups"][0],
-        "Kraska"
+        rule_body["revision"]["apparatus_id"],
+        "apparatus:default:bosma_7"
+    );
+    assert_eq!(
+        rule_body["revision"]["policies"]["material"]["mode"],
+        "requirement_sets"
+    );
+    assert_eq!(
+        rule_body["revision"]["policies"]["material"]["sets"][0]["item_group_ids"],
+        serde_json::json!(["Kley", "Kraska"])
     );
 
     let missing_assignment = router
@@ -593,7 +591,7 @@ async fn raw_material_routes_assign_and_require_scan_for_queue_start() {
             &worker_token,
             &with_test_qolip(
                 r#"{
-                "apparatus":"7 ta rangli pechat - A",
+                "apparatus":"apparatus:default:bosma_7",
                 "order_id":"zakaz-raw-route",
                 "action":"start"
             }"#,
@@ -624,7 +622,7 @@ async fn raw_material_routes_assign_and_require_scan_for_queue_start() {
     let assigned_status = assigned.status();
     let assigned_body = json_body(assigned).await;
     assert_eq!(assigned_status, StatusCode::OK, "{assigned_body:?}");
-    assert_eq!(assigned_body["apparatus"], "7 ta rangli pechat - A");
+    assert_eq!(assigned_body["apparatus"], "apparatus:default:bosma_7");
     assert_eq!(assigned_body["item_code"], "INK-BLACK");
     assert_eq!(assigned_body["item_name"], "Black ink");
     assert_eq!(assigned_body["item_group"], "Kraska");
@@ -637,7 +635,7 @@ async fn raw_material_routes_assign_and_require_scan_for_queue_start() {
         .clone()
         .oneshot(request(
             "GET",
-            "/v1/mobile/admin/raw-material-assignments?order_id=zakaz-raw-route&apparatus=7%20ta%20rangli%20pechat%20-%20A",
+            "/v1/mobile/admin/raw-material-assignments?order_id=zakaz-raw-route&apparatus=apparatus%3Adefault%3Abosma_7",
             &material_token,
         ))
         .await
@@ -698,7 +696,7 @@ async fn raw_material_routes_assign_and_require_scan_for_queue_start() {
     let second_status = second_assigned.status();
     let second_body = json_body(second_assigned).await;
     assert_eq!(second_status, StatusCode::OK, "{second_body:?}");
-    assert_eq!(second_body["apparatus"], "7 ta rangli pechat - A");
+    assert_eq!(second_body["apparatus"], "apparatus:default:bosma_7");
     assert_eq!(second_body["item_code"], "INK-WHITE");
     let _second_warehouse_event = warehouse_events
         .recv()
@@ -748,7 +746,7 @@ async fn raw_material_routes_assign_and_require_scan_for_queue_start() {
     assert_eq!(lookup_body["assignment"]["order_id"], "zakaz-raw-route");
     assert_eq!(
         lookup_body["assignment"]["apparatus"],
-        "7 ta rangli pechat - A"
+        "apparatus:default:bosma_7"
     );
     assert_eq!(lookup_body["order"]["id"], "zakaz-raw-route");
     assert!(lookup_body["queue_states"].is_object());
@@ -758,7 +756,7 @@ async fn raw_material_routes_assign_and_require_scan_for_queue_start() {
         .clone()
         .oneshot(request(
             "GET",
-            "/v1/mobile/admin/raw-material-assignments?order_id=zakaz-raw-route&apparatus=7%20ta%20rangli%20pechat%20-%20A",
+            "/v1/mobile/admin/raw-material-assignments?order_id=zakaz-raw-route&apparatus=apparatus%3Adefault%3Abosma_7",
             &worker_token,
         ))
         .await
@@ -768,7 +766,8 @@ async fn raw_material_routes_assign_and_require_scan_for_queue_start() {
     assert_eq!(scoped_assignments_body.as_array().map(Vec::len), Some(3));
     assert!(scoped_assignments_body.as_array().is_some_and(|items| {
         items.iter().all(|item| {
-            item["order_id"] == "zakaz-raw-route" && item["apparatus"] == "7 ta rangli pechat - A"
+            item["order_id"] == "zakaz-raw-route"
+                && item["apparatus"] == "apparatus:default:bosma_7"
         })
     }));
 
@@ -776,7 +775,7 @@ async fn raw_material_routes_assign_and_require_scan_for_queue_start() {
         .clone()
         .oneshot(request(
             "GET",
-            "/v1/mobile/admin/raw-material-start-requirements?order_id=zakaz-raw-route&apparatus=7%20ta%20rangli%20pechat%20-%20A&material_barcodes=30AA",
+            "/v1/mobile/admin/raw-material-start-requirements?order_id=zakaz-raw-route&apparatus=apparatus%3Adefault%3Abosma_7&material_barcodes=30AA",
             &worker_token,
         ))
         .await
@@ -809,15 +808,21 @@ async fn raw_material_routes_assign_and_require_scan_for_queue_start() {
             &worker_token,
             r#"{
                 "order_id":"zakaz-raw-route",
-                "apparatus":"7 ta rangli pechat - A",
+                "apparatus":"apparatus:default:bosma_7",
                 "barcode":"30CC"
             }"#,
         ))
         .await
         .expect("intake before start");
-    assert_eq!(intake_before_start.status(), StatusCode::CONFLICT);
+    let intake_before_start_status = intake_before_start.status();
+    let intake_before_start_body = json_body(intake_before_start).await;
     assert_eq!(
-        json_body(intake_before_start).await["error"],
+        intake_before_start_status,
+        StatusCode::CONFLICT,
+        "{intake_before_start_body:?}"
+    );
+    assert_eq!(
+        intake_before_start_body["error"],
         "raw_material_order_not_active"
     );
 
@@ -829,7 +834,7 @@ async fn raw_material_routes_assign_and_require_scan_for_queue_start() {
             &worker_token,
             &with_test_qolip(
                 r#"{
-                "apparatus":"7 ta rangli pechat - A",
+                "apparatus":"apparatus:default:bosma_7",
                 "order_id":"zakaz-raw-route",
                 "action":"start"
             }"#,
@@ -852,7 +857,7 @@ async fn raw_material_routes_assign_and_require_scan_for_queue_start() {
             &worker_token,
             &with_test_qolip(
                 r#"{
-                "apparatus":"7 ta rangli pechat - A",
+                "apparatus":"apparatus:default:bosma_7",
                 "order_id":"zakaz-raw-route",
                 "action":"start",
                 "material_barcodes":["30AA"]
@@ -912,7 +917,7 @@ async fn raw_material_routes_assign_and_require_scan_for_queue_start() {
         .clone()
         .oneshot(request(
             "GET",
-            "/v1/mobile/admin/raw-material-intake-candidates?order_id=zakaz-raw-route&apparatus=7%20ta%20rangli%20pechat%20-%20A",
+            "/v1/mobile/admin/raw-material-intake-candidates?order_id=zakaz-raw-route&apparatus=apparatus%3Adefault%3Abosma_7",
             &worker_token,
         ))
         .await
@@ -931,7 +936,7 @@ async fn raw_material_routes_assign_and_require_scan_for_queue_start() {
             &worker_token,
             r#"{
                 "order_id":"zakaz-raw-route",
-                "apparatus":"7 ta rangli pechat - A",
+                "apparatus":"apparatus:default:bosma_7",
                 "barcode":"30EE"
             }"#,
         ))
@@ -951,7 +956,7 @@ async fn raw_material_routes_assign_and_require_scan_for_queue_start() {
             &worker_token,
             r#"{
                 "order_id":"zakaz-raw-route",
-                "apparatus":"7 ta rangli pechat - A",
+                "apparatus":"apparatus:default:bosma_7",
                 "barcode":"30DD"
             }"#,
         ))
@@ -971,7 +976,7 @@ async fn raw_material_routes_assign_and_require_scan_for_queue_start() {
             &worker_token,
             r#"{
                 "order_id":"zakaz-raw-route",
-                "apparatus":"7 ta rangli pechat - A",
+                "apparatus":"apparatus:default:bosma_7",
                 "barcode":"30CC"
             }"#,
         ))
@@ -992,7 +997,7 @@ async fn raw_material_routes_assign_and_require_scan_for_queue_start() {
         .clone()
         .oneshot(request(
             "GET",
-            "/v1/mobile/admin/raw-material-intake-candidates?order_id=zakaz-raw-route&apparatus=7%20ta%20rangli%20pechat%20-%20A",
+            "/v1/mobile/admin/raw-material-intake-candidates?order_id=zakaz-raw-route&apparatus=apparatus%3Adefault%3Abosma_7",
             &worker_token,
         ))
         .await
@@ -1014,7 +1019,7 @@ async fn raw_material_routes_assign_and_require_scan_for_queue_start() {
             &worker_token,
             r#"{
                 "order_id":"zakaz-raw-route",
-                "apparatus":"7 ta rangli pechat - A",
+                "apparatus":"apparatus:default:bosma_7",
                 "barcode":"30CC"
             }"#,
         ))
@@ -1026,6 +1031,71 @@ async fn raw_material_routes_assign_and_require_scan_for_queue_start() {
         "raw_material_stock_unavailable"
     );
 
+    let detached = router
+        .clone()
+        .oneshot(request_with_body(
+            "POST",
+            "/v1/mobile/admin/production-maps/queue-action",
+            &worker_token,
+            r#"{
+                "apparatus":"apparatus:default:bosma_7",
+                "order_id":"zakaz-raw-route",
+                "action":"detach_roll",
+                "produced_qty":48,
+                "uom":"m",
+                "finished_goods_kg":21,
+                "finished_goods_meter":48,
+                "bobina_kg":7,
+                "print_transport":"offline"
+            }"#,
+        ))
+        .await
+        .expect("detach roll after raw material scan");
+    let detached_status = detached.status();
+    let detached_body = json_body(detached).await;
+    assert_eq!(detached_status, StatusCode::OK, "{detached_body:?}");
+    assert_eq!(detached_body["states"]["zakaz-raw-route"], "paused");
+
+    let assignments_after_detach = router
+        .clone()
+        .oneshot(request(
+            "GET",
+            "/v1/mobile/admin/raw-material-assignments?order_id=zakaz-raw-route&apparatus=apparatus%3Adefault%3Abosma_7",
+            &worker_token,
+        ))
+        .await
+        .expect("assignments after roll detach");
+    assert_eq!(assignments_after_detach.status(), StatusCode::OK);
+    assert_eq!(
+        json_body(assignments_after_detach)
+            .await
+            .as_array()
+            .expect("assignments array")
+            .iter()
+            .filter(|item| item["stock_status"] == "in_use")
+            .count(),
+        2
+    );
+
+    let resumed = router
+        .clone()
+        .oneshot(request_with_body(
+            "POST",
+            "/v1/mobile/admin/production-maps/queue-action",
+            &worker_token,
+            r#"{
+                "apparatus":"apparatus:default:bosma_7",
+                "order_id":"zakaz-raw-route",
+                "action":"resume"
+            }"#,
+        ))
+        .await
+        .expect("resume after roll detach");
+    let resumed_status = resumed.status();
+    let resumed_body = json_body(resumed).await;
+    assert_eq!(resumed_status, StatusCode::OK, "{resumed_body:?}");
+    assert_eq!(resumed_body["states"]["zakaz-raw-route"], "in_progress");
+
     let completed = router
         .clone()
         .oneshot(request_with_body(
@@ -1034,7 +1104,7 @@ async fn raw_material_routes_assign_and_require_scan_for_queue_start() {
             &worker_token,
             &with_test_returned_paint(
                 r#"{
-                "apparatus":"7 ta rangli pechat - A",
+                "apparatus":"apparatus:default:bosma_7",
                 "order_id":"zakaz-raw-route",
                 "action":"complete",
                 "produced_qty":3,
@@ -1128,7 +1198,7 @@ async fn material_taminotchi_raw_material_assignment_rejects_unassigned_item_gro
             principal_role: PrincipalRole::MaterialTaminotchi,
             principal_ref: "material-raw-route".to_string(),
             role_id: "material_taminotchi".to_string(),
-            assigned_apparatus: vec!["7 ta rangli pechat - A".to_string()],
+            assigned_apparatus: vec!["apparatus:default:bosma_7".to_string()],
             assigned_item_groups: vec!["Kley".to_string()],
         })
         .await
@@ -1152,7 +1222,7 @@ async fn material_taminotchi_raw_material_assignment_rejects_unassigned_item_gro
                 "zakaz-material-scope",
                 "Raw material scope",
                 "8812",
-                "7 ta rangli pechat - A",
+                "apparatus:default:bosma_7",
             ),
         ))
         .await
@@ -1165,12 +1235,12 @@ async fn material_taminotchi_raw_material_assignment_rejects_unassigned_item_gro
             "PUT",
             "/v1/mobile/admin/raw-material-rules",
             &admin_token,
-            r#"{
-                "apparatus":"7 ta rangli pechat - A",
-                "requires_material":true,
-                "start_policy":"requirement_groups",
-                "item_groups":["Kraska"]
-            }"#,
+            &canonical_requirement_set_material_policy_body(
+                "apparatus:default:bosma_7",
+                1,
+                &["Kraska"],
+                true,
+            ),
         ))
         .await
         .expect("rule save");

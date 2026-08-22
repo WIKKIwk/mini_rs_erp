@@ -1,5 +1,5 @@
 pub mod admin;
-pub mod apparatus_groups;
+pub mod apparatus_standard;
 pub mod auth;
 pub mod authz;
 pub mod backup_doctor;

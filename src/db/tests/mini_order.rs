@@ -3,11 +3,10 @@ use crate::core::mini_orders::MiniOrderSink;
 use crate::core::production_map::{
     ProductionMapDefinition, ProductionMapEdge, ProductionMapNode, ProductionMapNodeKind,
 };
-use crate::db::postgres::apply_foundation_migration;
+use crate::db::postgres::{apply_foundation_migration, postgres_test_database_options};
 use crate::db::postgres_mini_order::PostgresMiniOrderSink;
 
 #[tokio::test]
-#[ignore = "requires local PostgreSQL and creates/drops mini_rs_erp_test_mini_orders"]
 async fn postgres_mini_order_sink_saves_order_and_product_rows() {
     let admin_url = std::env::var("MINI_ERP_TEST_ADMIN_DATABASE_URL")
         .unwrap_or_else(|_| "postgres://wikki@127.0.0.1:5432/postgres".to_string());
@@ -25,8 +24,9 @@ async fn postgres_mini_order_sink_saves_order_and_product_rows() {
         .expect("create test db");
     admin_pool.close().await;
 
-    let test_url = format!("postgres://wikki@127.0.0.1:5432/{db_name}");
-    let pool = sqlx::PgPool::connect(&test_url).await.expect("test db");
+    let pool = sqlx::PgPool::connect_with(postgres_test_database_options(&admin_url, db_name))
+        .await
+        .expect("test db");
     apply_foundation_migration(&pool)
         .await
         .expect("apply migration");
@@ -97,7 +97,7 @@ async fn postgres_mini_order_sink_saves_order_and_product_rows() {
     assert_eq!(order_count, 1);
     assert_eq!(product_count, 1);
     assert_eq!(linked_order_id.as_deref(), Some("zakaz-9001"));
-    assert_eq!(migration_count, 51);
+    assert_eq!(migration_count, 72);
     assert_eq!(order_status, "draft");
     assert_eq!(product_form, "rulon");
     assert_eq!(kg, "500.123457");
@@ -146,6 +146,7 @@ fn test_node(id: &str, kind: ProductionMapNodeKind, title: &str, y: f64) -> Prod
         id: id.to_string(),
         kind,
         title: title.to_string(),
+        apparatus_id: String::new(),
         formula: None,
         role_code: String::new(),
         item_code: String::new(),
@@ -155,6 +156,7 @@ fn test_node(id: &str, kind: ProductionMapNodeKind, title: &str, y: f64) -> Prod
         alternative_group_id: String::new(),
         alternative_group_label: String::new(),
         alternative_assigned_title: String::new(),
+        alternative_assigned_apparatus_id: String::new(),
         rezka_kadr_count: None,
         rezka_label_length: None,
         x: 0.0,

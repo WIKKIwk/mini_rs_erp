@@ -14,7 +14,7 @@ async fn queue_pause_prints_progress_qr_and_resume_uses_lookup() {
             principal_role: PrincipalRole::Aparatchi,
             principal_ref: "worker-progress-route".to_string(),
             role_id: "aparatchi".to_string(),
-            assigned_apparatus: vec!["7 ta rangli pechat".to_string()],
+            assigned_apparatus: vec!["apparatus:default:bosma_7".to_string()],
             assigned_item_groups: Vec::new(),
         })
         .await
@@ -33,7 +33,7 @@ async fn queue_pause_prints_progress_qr_and_resume_uses_lookup() {
                 "zakaz-progress-route",
                 "Progress order",
                 "9301",
-                "7 ta rangli pechat",
+                "apparatus:default:bosma_7",
             ),
         ))
         .await
@@ -50,7 +50,7 @@ async fn queue_pause_prints_progress_qr_and_resume_uses_lookup() {
             &worker_token,
             &with_test_qolip(
                 r#"{
-                "apparatus":"7 ta rangli pechat",
+                "apparatus":"apparatus:default:bosma_7",
                 "order_id":"zakaz-progress-route",
                 "action":"start"
             }"#,
@@ -68,7 +68,7 @@ async fn queue_pause_prints_progress_qr_and_resume_uses_lookup() {
             "/v1/mobile/admin/production-maps/queue-action",
             &worker_token,
             r#"{
-                "apparatus":"7 ta rangli pechat",
+                "apparatus":"apparatus:default:bosma_7",
                 "order_id":"zakaz-progress-route",
                 "action":"pause",
                 "produced_qty":15.5,
@@ -84,7 +84,7 @@ async fn queue_pause_prints_progress_qr_and_resume_uses_lookup() {
     let paused_body = json_body(paused).await;
     assert_eq!(paused_status, StatusCode::OK, "{paused_body:?}");
     assert_eq!(paused_body["states"]["zakaz-progress-route"], "paused");
-    assert_eq!(paused_body["progress_batch"]["status"], "paused");
+    assert_eq!(paused_body["progress_batch"]["status"], "roll_detached");
     assert_eq!(paused_body["print"]["status"], "queued");
     let qr_payload = paused_body["progress_batch"]["qr_payload"]
         .as_str()
@@ -95,7 +95,7 @@ async fn queue_pause_prints_progress_qr_and_resume_uses_lookup() {
     assert_eq!(printed.len(), 1);
     assert_eq!(printed[0].epc, qr_payload);
     assert!(printed[0].item_name.contains("tayyor mahsulot"));
-    assert!(printed[0].item_name.contains("chiqarildi"));
+    assert!(printed[0].item_name.contains("rulon yechildi"));
     assert!(!printed[0].item_name.contains("yarim tayyor mahsulot"));
     assert_eq!(printed[0].executor_name, "Admin");
     assert_eq!(printed[0].gross_qty, 17.0);
@@ -122,7 +122,7 @@ async fn queue_pause_prints_progress_qr_and_resume_uses_lookup() {
             "/v1/mobile/admin/production-maps/queue-action",
             &worker_token,
             r#"{
-                "apparatus":"7 ta rangli pechat",
+                "apparatus":"apparatus:default:bosma_7",
                 "order_id":"zakaz-progress-route",
                 "action":"resume"
             }"#,
@@ -157,7 +157,7 @@ async fn queue_pause_keeps_state_successful_when_progress_print_fails() {
             principal_role: PrincipalRole::Aparatchi,
             principal_ref: "worker-progress-print-fail".to_string(),
             role_id: "aparatchi".to_string(),
-            assigned_apparatus: vec!["7 ta rangli pechat".to_string()],
+            assigned_apparatus: vec!["apparatus:default:bosma_7".to_string()],
             assigned_item_groups: Vec::new(),
         })
         .await
@@ -181,7 +181,7 @@ async fn queue_pause_keeps_state_successful_when_progress_print_fails() {
                 "zakaz-progress-print-fail",
                 "Progress print fail",
                 "9305",
-                "7 ta rangli pechat",
+                "apparatus:default:bosma_7",
             ),
         ))
         .await
@@ -198,7 +198,7 @@ async fn queue_pause_keeps_state_successful_when_progress_print_fails() {
             &worker_token,
             &with_test_qolip(
                 r#"{
-                "apparatus":"7 ta rangli pechat",
+                "apparatus":"apparatus:default:bosma_7",
                 "order_id":"zakaz-progress-print-fail",
                 "action":"start"
             }"#,
@@ -216,7 +216,7 @@ async fn queue_pause_keeps_state_successful_when_progress_print_fails() {
             "/v1/mobile/admin/production-maps/queue-action",
             &worker_token,
             r#"{
-                "apparatus":"7 ta rangli pechat",
+                "apparatus":"apparatus:default:bosma_7",
                 "order_id":"zakaz-progress-print-fail",
                 "action":"pause",
                 "produced_qty":12,
@@ -231,7 +231,7 @@ async fn queue_pause_keeps_state_successful_when_progress_print_fails() {
     let paused_body = json_body(paused).await;
     assert_eq!(paused_status, StatusCode::OK, "{paused_body:?}");
     assert_eq!(paused_body["states"]["zakaz-progress-print-fail"], "paused");
-    assert_eq!(paused_body["progress_batch"]["status"], "paused");
+    assert_eq!(paused_body["progress_batch"]["status"], "roll_detached");
     assert_eq!(paused_body["print"]["ok"], true);
     assert_eq!(paused_body["print"]["status"], "queued");
     assert_eq!(

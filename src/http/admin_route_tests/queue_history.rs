@@ -15,7 +15,7 @@ async fn worker_completed_orders_are_actor_scoped_and_latest_first() {
                 principal_role: PrincipalRole::Aparatchi,
                 principal_ref: worker_ref.to_string(),
                 role_id: "aparatchi".to_string(),
-                assigned_apparatus: vec!["7 ta rangli pechat".to_string()],
+                assigned_apparatus: vec!["apparatus:default:bosma_7".to_string()],
                 assigned_item_groups: Vec::new(),
             })
             .await
@@ -38,7 +38,7 @@ async fn worker_completed_orders_are_actor_scoped_and_latest_first() {
                 "PUT",
                 "/v1/mobile/admin/production-maps",
                 &admin_token,
-                &pechat_order_map_json(id, "Completed route", number, "7 ta rangli pechat"),
+                &pechat_order_map_json(id, "Completed route", number, "apparatus:default:bosma_7"),
             ))
             .await
             .expect("save map");
@@ -53,7 +53,7 @@ async fn worker_completed_orders_are_actor_scoped_and_latest_first() {
             "/v1/mobile/admin/production-maps/sequence",
             &admin_token,
             r#"{
-                "apparatus":"7 ta rangli pechat",
+                "apparatus":"apparatus:default:bosma_7",
                 "order_ids":["zakaz-complete-1","zakaz-complete-2","zakaz-complete-3","zakaz-partial-pause"]
             }"#,
         ))
@@ -68,7 +68,7 @@ async fn worker_completed_orders_are_actor_scoped_and_latest_first() {
     ] {
         for action in ["start", "complete"] {
             let body = format!(
-                r#"{{"apparatus":"7 ta rangli pechat","order_id":"{order_id}","action":"{action}","produced_qty":1,"uom":"kg","return_ink_kg":1,"total_waste":1,"finished_goods_kg":1,"finished_goods_meter":1}}"#
+                r#"{{"apparatus":"apparatus:default:bosma_7","order_id":"{order_id}","action":"{action}","produced_qty":1,"uom":"kg","return_ink_kg":1,"total_waste":1,"finished_goods_kg":1,"finished_goods_meter":1}}"#
             );
             let body = if action == "start" {
                 with_test_qolip(&body, order_id)
@@ -92,7 +92,7 @@ async fn worker_completed_orders_are_actor_scoped_and_latest_first() {
     }
 
     let start_body = with_test_qolip(
-        r#"{"apparatus":"7 ta rangli pechat","order_id":"zakaz-partial-pause","action":"start"}"#,
+        r#"{"apparatus":"apparatus:default:bosma_7","order_id":"zakaz-partial-pause","action":"start"}"#,
         "zakaz-partial-pause",
     );
     let start_response = router
@@ -112,7 +112,7 @@ async fn worker_completed_orders_are_actor_scoped_and_latest_first() {
             "POST",
             "/v1/mobile/admin/production-maps/queue-action",
             &worker_one,
-            r#"{"apparatus":"7 ta rangli pechat","order_id":"zakaz-partial-pause","action":"pause","produced_qty":1,"uom":"kg","return_ink_kg":1,"total_waste":1,"finished_goods_kg":1,"finished_goods_meter":1}"#,
+            r#"{"apparatus":"apparatus:default:bosma_7","order_id":"zakaz-partial-pause","action":"pause","produced_qty":1,"uom":"kg","return_ink_kg":1,"total_waste":1,"finished_goods_kg":1,"finished_goods_meter":1}"#,
         ))
         .await
         .expect("partial pause");
@@ -167,8 +167,8 @@ async fn closed_orders_return_only_fully_completed_maps_with_action_logs() {
         fail: false,
     }));
     for (worker_ref, apparatus) in [
-        ("worker-closed-pechat", "7 ta rangli pechat"),
-        ("worker-closed-lamin", "Laminatsiya 1"),
+        ("worker-closed-pechat", "apparatus:default:bosma_7"),
+        ("worker-closed-lamin", "apparatus:default:asset-007"),
     ] {
         state
             .admin
@@ -197,8 +197,8 @@ async fn closed_orders_return_only_fully_completed_maps_with_action_logs() {
                 "zakaz-closed-route",
                 "Closed route",
                 "9401",
-                "7 ta rangli pechat",
-                "Laminatsiya 1",
+                "apparatus:default:bosma_7",
+                "apparatus:default:asset-007",
             ),
         ))
         .await
@@ -210,7 +210,7 @@ async fn closed_orders_return_only_fully_completed_maps_with_action_logs() {
     let mut pechat_output_qr = String::new();
     for action in ["start", "pause", "resume", "complete"] {
         let body = format!(
-            r#"{{"apparatus":"7 ta rangli pechat","order_id":"zakaz-closed-route","action":"{action}","produced_qty":1,"gross_qty":1,"uom":"kg","return_ink_kg":1,"total_waste":1,"finished_goods_kg":1,"finished_goods_meter":1,"printer":"zebra","print_mode":"rfid"}}"#
+            r#"{{"apparatus":"apparatus:default:bosma_7","order_id":"zakaz-closed-route","action":"{action}","produced_qty":1,"gross_qty":1,"uom":"kg","return_ink_kg":1,"total_waste":1,"finished_goods_kg":1,"finished_goods_meter":1,"printer":"zebra","print_mode":"rfid"}}"#
         );
         let body = if action == "start" {
             with_test_qolip(&body, "zakaz-closed-route")
@@ -281,16 +281,16 @@ async fn closed_orders_return_only_fully_completed_maps_with_action_logs() {
         .iter()
         .find(|item| item["order_id"] == "zakaz-closed-route")
         .expect("pechat stage history entry");
-    assert_eq!(pechat_stage_entry["apparatus"], "7 ta rangli pechat");
+    assert_eq!(pechat_stage_entry["apparatus"], "apparatus:default:bosma_7");
     assert_eq!(pechat_stage_entry["status"], "completed");
 
     for qr in [pechat_pause_qr.as_str(), pechat_output_qr.as_str()] {
         for action in ["start", "complete"] {
             let body = if action == "complete" {
-                r#"{"apparatus":"Laminatsiya 1","order_id":"zakaz-closed-route","action":"complete","lamination_film_leftover_rolls":1,"total_waste":1,"finished_goods_kg":1,"finished_goods_meter":1,"produced_qty":1,"gross_qty":1,"uom":"kg","printer":"zebra","print_mode":"rfid"}"#.to_string()
+                r#"{"apparatus":"apparatus:default:asset-007","order_id":"zakaz-closed-route","action":"complete","lamination_film_leftover_rolls":1,"total_waste":1,"finished_goods_kg":1,"finished_goods_meter":1,"produced_qty":1,"gross_qty":1,"uom":"kg","printer":"zebra","print_mode":"rfid"}"#.to_string()
             } else {
                 format!(
-                    r#"{{"apparatus":"Laminatsiya 1","order_id":"zakaz-closed-route","action":"start","produced_qty":1,"gross_qty":1,"uom":"kg","printer":"zebra","print_mode":"rfid","qr_payload":"{qr}"}}"#
+                    r#"{{"apparatus":"apparatus:default:asset-007","order_id":"zakaz-closed-route","action":"start","produced_qty":1,"gross_qty":1,"uom":"kg","printer":"zebra","print_mode":"rfid","qr_payload":"{qr}"}}"#
                 )
             };
             let response = router
@@ -330,9 +330,9 @@ async fn closed_orders_return_only_fully_completed_maps_with_action_logs() {
     assert_eq!(logs[0]["action"], "start");
     assert_eq!(logs[0]["actor_ref"], "worker-closed-pechat");
     assert_eq!(logs[3]["action"], "complete");
-    assert_eq!(logs[3]["apparatus"], "7 ta rangli pechat");
+    assert_eq!(logs[3]["apparatus"], "apparatus:default:bosma_7");
     assert_eq!(logs[7]["action"], "complete");
-    assert_eq!(logs[7]["apparatus"], "Laminatsiya 1");
+    assert_eq!(logs[7]["apparatus"], "apparatus:default:asset-007");
     assert_eq!(logs[7]["actor_ref"], "worker-closed-lamin");
 
     let pechat_history_after_closed = router
@@ -352,7 +352,7 @@ async fn closed_orders_return_only_fully_completed_maps_with_action_logs() {
         .iter()
         .find(|item| item["order_id"] == "zakaz-closed-route")
         .expect("pechat history retained after global close");
-    assert_eq!(pechat_stage_entry["apparatus"], "7 ta rangli pechat");
+    assert_eq!(pechat_stage_entry["apparatus"], "apparatus:default:bosma_7");
 
     let lamin_history = router
         .oneshot(request(
@@ -370,6 +370,9 @@ async fn closed_orders_return_only_fully_completed_maps_with_action_logs() {
         .iter()
         .find(|item| item["order_id"] == "zakaz-closed-route")
         .expect("lamin stage history entry");
-    assert_eq!(lamin_stage_entry["apparatus"], "Laminatsiya 1");
+    assert_eq!(
+        lamin_stage_entry["apparatus"],
+        "apparatus:default:asset-007"
+    );
     assert_eq!(lamin_stage_entry["status"], "completed");
 }

@@ -478,11 +478,7 @@ async fn admin_item_uoms_returns_catalog_values_and_is_admin_only() {
 
     let response = router
         .clone()
-        .oneshot(request(
-            "GET",
-            "/v1/mobile/admin/items/uoms",
-            &admin_token,
-        ))
+        .oneshot(request("GET", "/v1/mobile/admin/items/uoms", &admin_token))
         .await
         .expect("UOM response");
     assert_eq!(response.status(), StatusCode::OK);

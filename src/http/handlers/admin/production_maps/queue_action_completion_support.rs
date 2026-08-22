@@ -59,8 +59,9 @@ async fn prepare_qolips_for_bosma_start(
     state: &AppState,
     principal: &Principal,
     input: &ApparatusQueueActionRequest,
+    apparatus: &QueueApparatusMetadata,
 ) -> Result<Vec<crate::core::qolip::QolipOrderStartPreparation>, AdminError> {
-    if !apparatus_requires_qolip_scan(&input.apparatus) {
+    if !apparatus.requires_qolip_scan() {
         return Ok(Vec::new());
     }
     let Some(map) = state
@@ -82,11 +83,11 @@ async fn prepare_qolips_for_bosma_start(
         .map_err(qolip_queue_error)?;
     let mut preparations = Vec::with_capacity(qolip_codes.len());
     for qolip_code in &qolip_codes {
-        reject_qolip_in_use(state, &input.apparatus, &input.order_id, &qolip_code).await?;
+        reject_qolip_in_use(state, apparatus, &input.order_id, qolip_code).await?;
         let preparation = state
             .qolip
             .prepare_qolip_code_for_order_start(
-                &qolip_code,
+                qolip_code,
                 &map.product_code,
                 &map.title,
                 &principal.ref_,
@@ -134,7 +135,7 @@ fn qolip_codes_for_start(input: &ApparatusQueueActionRequest) -> Vec<String> {
 
 pub(super) async fn reject_qolip_in_use(
     state: &AppState,
-    apparatus: &str,
+    apparatus: &QueueApparatusMetadata,
     order_id: &str,
     qolip_code: &str,
 ) -> Result<(), AdminError> {
@@ -145,15 +146,13 @@ pub(super) async fn reject_qolip_in_use(
         .map_err(production_map_error)?;
     if active.is_some_and(|session| {
         session.order_id.trim() != order_id.trim()
-            || !queue_state::apparatus_titles_match(&session.apparatus, apparatus)
+            || ApparatusId::new(session.apparatus.trim().to_string())
+                .ok()
+                .is_none_or(|session_id| session_id != apparatus.id)
     }) {
         return Err(production_map_error(ProductionMapError::QolipAlreadyInUse));
     }
     Ok(())
-}
-
-pub(super) fn apparatus_requires_qolip_scan(apparatus: &str) -> bool {
-    pechat::is_pechat_apparatus(apparatus)
 }
 
 pub(super) fn qolip_queue_error(error: crate::core::qolip::QolipError) -> AdminError {
@@ -163,19 +162,13 @@ pub(super) fn qolip_queue_error(error: crate::core::qolip::QolipError) -> AdminE
         crate::core::qolip::QolipError::QolipCodeMismatch => bad_request("qolip_code_mismatch"),
         crate::core::qolip::QolipError::CheckoutRequired => bad_request("qolip_checkout_required"),
         crate::core::qolip::QolipError::CheckoutAssignedToAnotherWorker => {
-            refresh_required_bad_request("qolip_checkout_assigned_to_another_worker")
+            bad_request("qolip_checkout_assigned_to_another_worker")
         }
-        crate::core::qolip::QolipError::QolipInUse => {
-            refresh_required_bad_request("qolip_already_in_use")
-        }
-        crate::core::qolip::QolipError::LocationNotFound => {
-            refresh_required_bad_request("qolip_location_not_found")
-        }
-        crate::core::qolip::QolipError::InsufficientStock => {
-            refresh_required_bad_request("insufficient_stock")
-        }
+        crate::core::qolip::QolipError::QolipInUse => bad_request("qolip_already_in_use"),
+        crate::core::qolip::QolipError::LocationNotFound => bad_request("qolip_location_not_found"),
+        crate::core::qolip::QolipError::InsufficientStock => bad_request("insufficient_stock"),
         crate::core::qolip::QolipError::LocationIdentityMismatch => {
-            refresh_required_bad_request("location_identity_mismatch")
+            bad_request("location_identity_mismatch")
         }
         crate::core::qolip::QolipError::StoreFailed => server_error("qolip store failed"),
         other => bad_request(other.to_string()),

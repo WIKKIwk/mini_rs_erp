@@ -14,7 +14,7 @@ async fn bosma_complete_requires_or_persists_completion_metrics() {
             principal_role: PrincipalRole::Aparatchi,
             principal_ref: "worker-bosma-complete".to_string(),
             role_id: "aparatchi".to_string(),
-            assigned_apparatus: vec!["7 ta rangli bosma".to_string()],
+            assigned_apparatus: vec!["apparatus:default:bosma_7".to_string()],
             assigned_item_groups: Vec::new(),
         })
         .await
@@ -33,7 +33,7 @@ async fn bosma_complete_requires_or_persists_completion_metrics() {
                 "zakaz-bosma-complete",
                 "Bosma complete order",
                 "9321",
-                "7 ta rangli bosma",
+                "apparatus:default:bosma_7",
             ),
         ))
         .await
@@ -50,7 +50,7 @@ async fn bosma_complete_requires_or_persists_completion_metrics() {
             &worker_token,
             &with_test_qolip(
                 r#"{
-                "apparatus":"7 ta rangli bosma",
+                "apparatus":"apparatus:default:bosma_7",
                 "order_id":"zakaz-bosma-complete",
                 "action":"start"
             }"#,
@@ -68,7 +68,7 @@ async fn bosma_complete_requires_or_persists_completion_metrics() {
             "/v1/mobile/admin/production-maps/queue-action",
             &worker_token,
             r#"{
-                "apparatus":"7 ta rangli bosma",
+                "apparatus":"apparatus:default:bosma_7",
                 "order_id":"zakaz-bosma-complete",
                 "action":"complete",
                 "returned_paint_items":[
@@ -92,7 +92,7 @@ async fn bosma_complete_requires_or_persists_completion_metrics() {
             "/v1/mobile/admin/production-maps/queue-action",
             &worker_token,
             r#"{
-                "apparatus":"7 ta rangli bosma",
+                "apparatus":"apparatus:default:bosma_7",
                 "order_id":"zakaz-bosma-complete",
                 "action":"complete",
                 "returned_paint_items":[
@@ -121,9 +121,10 @@ async fn bosma_complete_requires_or_persists_completion_metrics() {
             "/v1/mobile/admin/production-maps/queue-action",
             &worker_token,
             r#"{
-                "apparatus":"7 ta rangli bosma",
+                "apparatus":"apparatus:default:bosma_7",
                 "order_id":"zakaz-bosma-complete",
                 "action":"complete",
+                "produced_qty":125.5,
                 "returned_paint_items":[
                     {"usage":"rasxot","category":"colors","name":"Oq","values":{"Mix":9,"Oq":0,"Qora":0}},
                     {"usage":"astatka","category":"colors","name":"Oq","values":{"Mix":0.75,"Oq":0.25}},
@@ -162,6 +163,7 @@ async fn bosma_complete_requires_or_persists_completion_metrics() {
         completed_body["progress_event"]["finished_goods_meter"],
         125.5
     );
+    assert_eq!(completed_body["progress_event"]["uom"], "m");
     assert_eq!(
         completed_body["progress_event"]["payload_json"]["total_waste_uom"],
         "kg"
@@ -189,7 +191,7 @@ async fn bosma_pause_does_not_persist_completion_metrics() {
             principal_role: PrincipalRole::Aparatchi,
             principal_ref: "worker-bosma-pause".to_string(),
             role_id: "aparatchi".to_string(),
-            assigned_apparatus: vec!["8 ta rangli bosma".to_string()],
+            assigned_apparatus: vec!["apparatus:default:bosma_8".to_string()],
             assigned_item_groups: Vec::new(),
         })
         .await
@@ -208,7 +210,7 @@ async fn bosma_pause_does_not_persist_completion_metrics() {
                 "zakaz-bosma-pause",
                 "Bosma pause order",
                 "9322",
-                "8 ta rangli bosma",
+                "apparatus:default:bosma_8",
             ),
         ))
         .await
@@ -225,7 +227,7 @@ async fn bosma_pause_does_not_persist_completion_metrics() {
             &worker_token,
             &with_test_qolip(
                 r#"{
-                "apparatus":"8 ta rangli bosma",
+                "apparatus":"apparatus:default:bosma_8",
                 "order_id":"zakaz-bosma-pause",
                 "action":"start"
             }"#,
@@ -243,7 +245,7 @@ async fn bosma_pause_does_not_persist_completion_metrics() {
             "/v1/mobile/admin/production-maps/queue-action",
             &worker_token,
             r#"{
-                "apparatus":"8 ta rangli bosma",
+                "apparatus":"apparatus:default:bosma_8",
                 "order_id":"zakaz-bosma-pause",
                 "action":"pause",
                 "finished_goods_kg":12,
@@ -259,7 +261,7 @@ async fn bosma_pause_does_not_persist_completion_metrics() {
     let paused_status = paused.status();
     let paused_body = json_body(paused).await;
     assert_eq!(paused_status, StatusCode::OK, "{paused_body:?}");
-    assert_eq!(paused_body["progress_batch"]["status"], "paused");
+    assert_eq!(paused_body["progress_batch"]["status"], "roll_detached");
     assert!(paused_body["progress_batch"]["return_ink_kg"].is_null());
     assert!(paused_body["progress_batch"]["total_waste"].is_null());
     assert_eq!(paused_body["progress_batch"]["finished_goods_kg"], 12.0);
@@ -268,21 +270,25 @@ async fn bosma_pause_does_not_persist_completion_metrics() {
 
 #[tokio::test]
 async fn bosma_worker_issue_freezes_order_without_paint_report_or_completion_metrics() {
-    let mut state = test_state();
+    let state = test_state();
     state
         .admin
         .upsert_role_assignment(crate::core::authz::RoleAssignmentUpsert {
             principal_role: PrincipalRole::Aparatchi,
             principal_ref: "worker-bosma-freeze-issue".to_string(),
             role_id: "aparatchi".to_string(),
-            assigned_apparatus: vec!["7 ta rangli bosma".to_string()],
+            assigned_apparatus: vec!["apparatus:default:bosma_7".to_string()],
             assigned_item_groups: Vec::new(),
         })
         .await
         .expect("assignment");
     let admin_token = session(&state, PrincipalRole::Admin).await;
-    let worker_token =
-        session_for(&state, PrincipalRole::Aparatchi, "worker-bosma-freeze-issue").await;
+    let worker_token = session_for(
+        &state,
+        PrincipalRole::Aparatchi,
+        "worker-bosma-freeze-issue",
+    )
+    .await;
     let router = build_router(state);
 
     let saved = router
@@ -295,7 +301,7 @@ async fn bosma_worker_issue_freezes_order_without_paint_report_or_completion_met
                 "zakaz-bosma-freeze-issue",
                 "Bosma issue order",
                 "9323",
-                "7 ta rangli bosma",
+                "apparatus:default:bosma_7",
             ),
         ))
         .await
@@ -311,7 +317,7 @@ async fn bosma_worker_issue_freezes_order_without_paint_report_or_completion_met
             &worker_token,
             &with_test_qolip(
                 r#"{
-                    "apparatus":"7 ta rangli bosma",
+                    "apparatus":"apparatus:default:bosma_7",
                     "order_id":"zakaz-bosma-freeze-issue",
                     "action":"start"
                 }"#,
@@ -329,7 +335,7 @@ async fn bosma_worker_issue_freezes_order_without_paint_report_or_completion_met
             "/v1/mobile/admin/production-maps/queue-action",
             &admin_token,
             r#"{
-                "apparatus":"7 ta rangli bosma",
+                "apparatus":"apparatus:default:bosma_7",
                 "order_id":"zakaz-bosma-freeze-issue",
                 "action":"freeze",
                 "freeze_with_issue":true,
@@ -348,7 +354,7 @@ async fn bosma_worker_issue_freezes_order_without_paint_report_or_completion_met
             "/v1/mobile/admin/production-maps/queue-action",
             &worker_token,
             r#"{
-                "apparatus":"7 ta rangli bosma",
+                "apparatus":"apparatus:default:bosma_7",
                 "order_id":"zakaz-bosma-freeze-issue",
                 "action":"freeze",
                 "freeze_with_issue":true,
@@ -363,7 +369,10 @@ async fn bosma_worker_issue_freezes_order_without_paint_report_or_completion_met
     assert_eq!(issue_body["states"]["zakaz-bosma-freeze-issue"], "frozen");
     assert_eq!(issue_body["order_status"]["order_status"], "frozen");
     assert_eq!(issue_body["order_control"]["state"], "frozen");
-    assert_eq!(issue_body["order_control"]["freeze_request"]["status"], "frozen");
+    assert_eq!(
+        issue_body["order_control"]["freeze_request"]["status"],
+        "frozen"
+    );
     assert!(issue_body["completion_request"].is_null());
     assert!(issue_body["progress_batch"].is_null());
     assert!(issue_body["print"].is_null());
@@ -376,7 +385,7 @@ async fn bosma_worker_issue_freezes_order_without_paint_report_or_completion_met
             "/v1/mobile/admin/production-maps/queue-action",
             &worker_token,
             r#"{
-                "apparatus":"7 ta rangli bosma",
+                "apparatus":"apparatus:default:bosma_7",
                 "order_id":"zakaz-bosma-freeze-issue",
                 "action":"resume"
             }"#,
@@ -396,7 +405,7 @@ async fn bosma_worker_issue_freezes_order_without_paint_report_or_completion_met
             "/v1/mobile/admin/production-maps/queue-action",
             &worker_token,
             r#"{
-                "apparatus":"7 ta rangli bosma",
+                "apparatus":"apparatus:default:bosma_7",
                 "order_id":"zakaz-bosma-freeze-issue",
                 "action":"complete",
                 "returned_paint_items":[
@@ -442,7 +451,7 @@ async fn bosma_worker_issue_freezes_order_without_paint_report_or_completion_met
             "/v1/mobile/admin/production-maps/queue-action",
             &worker_token,
             r#"{
-                "apparatus":"7 ta rangli bosma",
+                "apparatus":"apparatus:default:bosma_7",
                 "order_id":"zakaz-bosma-freeze-issue",
                 "action":"resume"
             }"#,
@@ -452,7 +461,10 @@ async fn bosma_worker_issue_freezes_order_without_paint_report_or_completion_met
     let resumed_status = resumed.status();
     let resumed_body = json_body(resumed).await;
     assert_eq!(resumed_status, StatusCode::OK, "{resumed_body:?}");
-    assert_eq!(resumed_body["states"]["zakaz-bosma-freeze-issue"], "in_progress");
+    assert_eq!(
+        resumed_body["states"]["zakaz-bosma-freeze-issue"],
+        "in_progress"
+    );
 
     let ordinary_complete_without_report = router
         .oneshot(request_with_body(
@@ -460,14 +472,17 @@ async fn bosma_worker_issue_freezes_order_without_paint_report_or_completion_met
             "/v1/mobile/admin/production-maps/queue-action",
             &worker_token,
             r#"{
-                "apparatus":"7 ta rangli bosma",
+                "apparatus":"apparatus:default:bosma_7",
                 "order_id":"zakaz-bosma-freeze-issue",
                 "action":"complete"
             }"#,
         ))
         .await
         .expect("ordinary completion validation");
-    assert_eq!(ordinary_complete_without_report.status(), StatusCode::BAD_REQUEST);
+    assert_eq!(
+        ordinary_complete_without_report.status(),
+        StatusCode::BAD_REQUEST
+    );
     assert_eq!(
         json_body(ordinary_complete_without_report).await["error"],
         "returned_paint_minimum_three_fields_or_image_only"
@@ -483,7 +498,7 @@ async fn bosma_can_complete_with_an_image_only_returned_paint_report() {
             principal_role: PrincipalRole::Aparatchi,
             principal_ref: "worker-bosma-image-only".to_string(),
             role_id: "aparatchi".to_string(),
-            assigned_apparatus: vec!["7 ta rangli bosma".to_string()],
+            assigned_apparatus: vec!["apparatus:default:bosma_7".to_string()],
             assigned_item_groups: Vec::new(),
         })
         .await
@@ -503,7 +518,7 @@ async fn bosma_can_complete_with_an_image_only_returned_paint_report() {
                 "zakaz-bosma-image-only",
                 "Rasmli Bosma order",
                 "8963",
-                "7 ta rangli bosma",
+                "apparatus:default:bosma_7",
             ),
         ))
         .await
@@ -520,7 +535,7 @@ async fn bosma_can_complete_with_an_image_only_returned_paint_report() {
             &worker_token,
             &with_test_qolip(
                 r#"{
-                    "apparatus":"7 ta rangli bosma",
+                    "apparatus":"apparatus:default:bosma_7",
                     "order_id":"zakaz-bosma-image-only",
                     "action":"start"
                 }"#,
@@ -537,7 +552,7 @@ async fn bosma_can_complete_with_an_image_only_returned_paint_report() {
             Request::builder()
                 .method("POST")
                 .uri(
-                    "/v1/mobile/returned-paint/images?order_id=zakaz-bosma-image-only&apparatus=7%20ta%20rangli%20bosma",
+                    "/v1/mobile/returned-paint/images?order_id=zakaz-bosma-image-only&apparatus=apparatus%3Adefault%3Abosma_7",
                 )
                 .header(header::AUTHORIZATION, format!("Bearer {worker_token}"))
                 .header(header::CONTENT_TYPE, "image/jpeg")
@@ -559,7 +574,7 @@ async fn bosma_can_complete_with_an_image_only_returned_paint_report() {
             &worker_token,
             &format!(
                 r#"{{
-                    "apparatus":"7 ta rangli bosma",
+                    "apparatus":"apparatus:default:bosma_7",
                     "order_id":"zakaz-bosma-image-only",
                     "action":"complete",
                     "returned_paint_image_id":"{image_id}",

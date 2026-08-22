@@ -5,6 +5,13 @@ use axum::body::Body;
 use axum::http::{Request, StatusCode, header};
 use mini_rs_erp::app::AppState;
 use mini_rs_erp::config::AppConfig;
+use mini_rs_erp::core::apparatus_standard::{
+    ApparatusCapacity, ApparatusDisplay, ApparatusLifecycle, ApparatusOperationalPolicies,
+    CanonicalApparatusDraft, CanonicalCommandMetadata, CapacityAvailability, EquipmentCapability,
+    EquipmentCapabilityCode, EquipmentClassId, EquipmentHierarchyScope, ExecutionOperation,
+    ExecutionProfile, HierarchyLevelId, LifecycleState, MaterialExecutionPolicy, PhysicalAssetId,
+    ProcessTechnology, QueueDiscipline, ToolingExecutionPolicy, TrainingProfile, VirtualTaskPolicy,
+};
 use mini_rs_erp::core::auth::models::{Principal, PrincipalRole};
 use mini_rs_erp::core::backup_doctor::{BackupDoctor, BackupDoctorConfig};
 use mini_rs_erp::core::session::manager::SessionManager;
@@ -58,8 +65,25 @@ async fn order_reset_restores_a_real_database_to_the_pre_order_snapshot() {
         .expect("apply full migration set");
 
     seed_pre_order_state(&pool).await;
+    let mut state = test_state(pool.clone());
+    let apparatus_id = seed_canonical_apparatus(
+        &state,
+        "E2E apparatus",
+        "physical-asset:e2e:apparatus",
+        "work-unit:e2e:apparatus",
+        "command:e2e:apparatus",
+    )
+    .await;
+    let transfer_apparatus_id = seed_canonical_apparatus(
+        &state,
+        "E2E apparatus 2",
+        "physical-asset:e2e:apparatus-2",
+        "work-unit:e2e:apparatus-2",
+        "command:e2e:apparatus-2",
+    )
+    .await;
     let before = snapshot(&pool).await;
-    seed_order_lifecycle(&pool).await;
+    seed_order_lifecycle(&pool, &apparatus_id, &transfer_apparatus_id).await;
     let during_order = snapshot(&pool).await;
     assert_ne!(
         during_order, before,
@@ -68,7 +92,6 @@ async fn order_reset_restores_a_real_database_to_the_pre_order_snapshot() {
 
     let backup_dir = tempfile::tempdir().expect("backup directory");
     let backup_doctor = real_backup_doctor(&test_url, &admin_url, &backup_dir);
-    let mut state = test_state();
     state.sessions = SessionManager::memory(Some(3600));
     state.backup_doctor = backup_doctor;
     state.order_reset = Some(PostgresOrderResetStore::new(pool.clone()));
@@ -117,27 +140,30 @@ async fn order_reset_restores_a_real_database_to_the_pre_order_snapshot() {
     admin_pool.close().await;
 }
 
-fn test_state() -> AppState {
-    AppState::new(AppConfig {
-        bind_addr: "127.0.0.1:0".parse().expect("bind address"),
-        default_target_warehouse: "E2E Warehouse".to_string(),
-        http_timeout: Duration::from_secs(15),
-        session_store_path: "target/order-reset-e2e-sessions.json".into(),
-        profile_store_path: "target/order-reset-e2e-profile.json".into(),
-        push_token_store_path: "target/order-reset-e2e-push.json".into(),
-        session_ttl_seconds: Some(3600),
-        supplier_prefix: "10".to_string(),
-        werka_prefix: "20".to_string(),
-        werka_code: "".to_string(),
-        werka_name: "Werka".to_string(),
-        werka_phone: "+99888862440".to_string(),
-        material_taminotchi_code: String::new(),
-        material_taminotchi_name: "Material taminotchi".to_string(),
-        material_taminotchi_phone: String::new(),
-        admin_phone: "+998880000000".to_string(),
-        admin_name: "Admin".to_string(),
-        admin_code: "19621978".to_string(),
-    })
+fn test_state(pool: PgPool) -> AppState {
+    AppState::from_postgres(
+        AppConfig {
+            bind_addr: "127.0.0.1:0".parse().expect("bind address"),
+            default_target_warehouse: "E2E Warehouse".to_string(),
+            http_timeout: Duration::from_secs(15),
+            session_store_path: "target/order-reset-e2e-sessions.json".into(),
+            profile_store_path: "target/order-reset-e2e-profile.json".into(),
+            push_token_store_path: "target/order-reset-e2e-push.json".into(),
+            session_ttl_seconds: Some(3600),
+            supplier_prefix: "10".to_string(),
+            werka_prefix: "20".to_string(),
+            werka_code: "".to_string(),
+            werka_name: "Werka".to_string(),
+            werka_phone: "+99888862440".to_string(),
+            material_taminotchi_code: String::new(),
+            material_taminotchi_name: "Material taminotchi".to_string(),
+            material_taminotchi_phone: String::new(),
+            admin_phone: "+998880000000".to_string(),
+            admin_name: "Admin".to_string(),
+            admin_code: "19621978".to_string(),
+        },
+        pool,
+    )
 }
 
 fn real_backup_doctor(test_url: &str, admin_url: &str, backup_dir: &TempDir) -> BackupDoctor {
@@ -159,6 +185,79 @@ fn real_backup_doctor(test_url: &str, admin_url: &str, backup_dir: &TempDir) -> 
         min_available_mb: 0,
         retention_enabled: false,
     })
+}
+
+async fn seed_canonical_apparatus(
+    state: &AppState,
+    display_name: &str,
+    physical_asset_id: &str,
+    work_unit_id: &str,
+    command_id: &str,
+) -> String {
+    let committed = state
+        .apparatus
+        .create(
+            CanonicalApparatusDraft {
+                display: ApparatusDisplay {
+                    display_name: display_name.to_string(),
+                    description: "Order reset integration fixture".to_string(),
+                    catalog_order: 1,
+                },
+                equipment_class_id: EquipmentClassId::new("equipment-class:e2e:package")
+                    .expect("equipment class id"),
+                physical_asset_id: PhysicalAssetId::new(physical_asset_id)
+                    .expect("physical asset id"),
+                hierarchy: EquipmentHierarchyScope {
+                    enterprise_id: HierarchyLevelId::new("enterprise:e2e").expect("enterprise id"),
+                    site_id: HierarchyLevelId::new("site:e2e").expect("site id"),
+                    area_id: HierarchyLevelId::new("area:e2e").expect("area id"),
+                    work_center_id: HierarchyLevelId::new("work-center:e2e")
+                        .expect("work center id"),
+                    work_unit_id: HierarchyLevelId::new(work_unit_id).expect("work unit id"),
+                },
+                capabilities: vec![EquipmentCapability {
+                    code: EquipmentCapabilityCode::Package,
+                    level: 1,
+                }],
+                execution_profile: ExecutionProfile {
+                    operation: ExecutionOperation::Package,
+                    technology: ProcessTechnology::BagMaking,
+                    color_station_count: None,
+                    max_web_width_mm: None,
+                    virtual_tasks: VirtualTaskPolicy::Disabled,
+                    capability_compatible_reroute: true,
+                },
+                policies: ApparatusOperationalPolicies {
+                    queue: QueueDiscipline::StrictSequence,
+                    material: MaterialExecutionPolicy::NotRequired {
+                        item_group_ids: Vec::new(),
+                    },
+                    tooling: ToolingExecutionPolicy::NotRequired,
+                },
+                capacity: ApparatusCapacity {
+                    capacity_slots: 1,
+                    setup_minutes: 0,
+                    cleanup_minutes: 0,
+                    efficiency_percent: 100,
+                    finite_capacity: true,
+                    availability: CapacityAvailability::Always,
+                },
+                placement: None,
+                training: TrainingProfile {
+                    enabled: false,
+                    queue_enabled: false,
+                    material_tracking_enabled: false,
+                },
+                lifecycle: ApparatusLifecycle {
+                    state: LifecycleState::Active,
+                    retirement_reason: None,
+                },
+            },
+            CanonicalCommandMetadata::new("user:e2e-admin", command_id),
+        )
+        .await
+        .expect("baseline canonical apparatus");
+    committed.revision.apparatus_id.to_string()
 }
 
 async fn seed_pre_order_state(pool: &PgPool) {
@@ -188,14 +287,6 @@ async fn seed_pre_order_state(pool: &PgPool) {
     .execute(&mut *tx)
     .await
     .expect("baseline warehouse");
-    sqlx::query(
-        "INSERT INTO mini_apparatus (id, name, payload_json)
-         VALUES ('e2e-apparatus', 'E2E apparatus', '{}'::jsonb)
-         ON CONFLICT (id) DO NOTHING",
-    )
-    .execute(&mut *tx)
-    .await
-    .expect("baseline apparatus");
     sqlx::query(
         "INSERT INTO mini_gscale_receipts
             (name, status, item_code, warehouse, qty, uom, barcode)
@@ -254,7 +345,7 @@ async fn seed_pre_order_state(pool: &PgPool) {
     tx.commit().await.expect("commit baseline state");
 }
 
-async fn seed_order_lifecycle(pool: &PgPool) {
+async fn seed_order_lifecycle(pool: &PgPool, apparatus_id: &str, transfer_apparatus_id: &str) {
     let mut tx = pool.begin().await.expect("lifecycle transaction");
     sqlx::query(
         "INSERT INTO mini_orders
@@ -308,70 +399,76 @@ async fn seed_order_lifecycle(pool: &PgPool) {
     .await
     .expect("order product");
     sqlx::query(
-        "INSERT INTO mini_queue_sequences (apparatus, order_ids)
-         VALUES ('E2E apparatus', jsonb_build_array($1))",
+        "INSERT INTO mini_queue_sequences (apparatus, canonical_apparatus_id, order_ids)
+         VALUES ('E2E apparatus', $2, jsonb_build_array($1))",
     )
     .bind(ORDER_ID)
+    .bind(apparatus_id)
     .execute(&mut *tx)
     .await
     .expect("queue sequence");
     sqlx::query(
-        "INSERT INTO mini_queue_states (apparatus, order_id, state)
-         VALUES ('E2E apparatus', $1, 'in_progress')",
+        "INSERT INTO mini_queue_states (apparatus, canonical_apparatus_id, order_id, state)
+         VALUES ('E2E apparatus', $2, $1, 'in_progress')",
     )
     .bind(ORDER_ID)
+    .bind(apparatus_id)
     .execute(&mut *tx)
     .await
     .expect("queue state");
     sqlx::query(
         "INSERT INTO mini_queue_action_events
-            (event_id, apparatus, order_id, action, from_state, to_state, policy,
+            (event_id, apparatus, canonical_apparatus_id, order_id, action, from_state, to_state, policy,
              assigned_apparatus, actor_role, actor_ref, actor_display_name)
-         VALUES ('e2e-queue-event', 'E2E apparatus', $1, 'start', 'pending',
+         VALUES ('e2e-queue-event', 'E2E apparatus', $2, $1, 'start', 'pending',
                  'in_progress', 'free_pick', '[]'::jsonb, 'admin', 'e2e-admin', 'E2E')",
     )
     .bind(ORDER_ID)
+    .bind(apparatus_id)
     .execute(&mut *tx)
     .await
     .expect("queue event");
     sqlx::query(
         "INSERT INTO mini_order_run_sessions
-            (session_id, apparatus, order_id, status, worker_role, worker_ref,
+            (session_id, apparatus, canonical_apparatus_id, order_id, status, worker_role, worker_ref,
              worker_display_name, payload_json)
-         VALUES ($1, 'E2E apparatus', $2, 'active', 'aparatchi', 'e2e-worker',
-                 'E2E worker', $3)",
+         VALUES ($1, 'E2E apparatus', $3, $2, 'active', 'aparatchi', 'e2e-worker',
+                 'E2E worker', $4)",
     )
     .bind(SESSION_ID)
     .bind(ORDER_ID)
+    .bind(apparatus_id)
     .bind(json!({"qolip_code": QOLIP_CODE, "qolip_codes": [QOLIP_CODE]}))
     .execute(&mut *tx)
     .await
     .expect("order session");
     sqlx::query(
         "INSERT INTO mini_order_progress_events
-            (event_id, session_id, batch_id, apparatus, order_id, action,
+            (event_id, session_id, batch_id, apparatus, canonical_apparatus_id, order_id, action,
              produced_qty, uom, worker_role, worker_ref, worker_display_name)
-         VALUES ('e2e-progress-event', $1, $2, 'E2E apparatus', $3, 'complete',
+         VALUES ('e2e-progress-event', $1, $2, 'E2E apparatus', $4, $3, 'complete',
                  5, 'kg', 'aparatchi', 'e2e-worker', 'E2E worker')",
     )
     .bind(SESSION_ID)
     .bind(PROGRESS_BATCH_ID)
     .bind(ORDER_ID)
+    .bind(apparatus_id)
     .execute(&mut *tx)
     .await
     .expect("progress event");
     sqlx::query(
         "INSERT INTO mini_progress_batches
-            (batch_id, session_id, apparatus, order_id, action, status, produced_qty,
+            (batch_id, session_id, apparatus, canonical_apparatus_id, order_id, action, status, produced_qty,
              uom, qr_payload, label_item_code, label_item_name, wip_status,
-             current_apparatus, current_location)
-         VALUES ($1, $2, 'E2E apparatus', $3, 'complete', 'completed', 5, 'kg',
-                 'E2E-QR-1', $4, 'E2E product', 'processed', 'E2E apparatus', 'E2E')",
+             current_apparatus, canonical_current_apparatus_id, current_location)
+         VALUES ($1, $2, 'E2E apparatus', $5, $3, 'complete', 'completed', 5, 'kg',
+                 'E2E-QR-1', $4, 'E2E product', 'processed', 'E2E apparatus', $5, 'E2E')",
     )
     .bind(PROGRESS_BATCH_ID)
     .bind(SESSION_ID)
     .bind(ORDER_ID)
     .bind(ITEM_CODE)
+    .bind(apparatus_id)
     .execute(&mut *tx)
     .await
     .expect("progress batch");
@@ -403,12 +500,13 @@ async fn seed_order_lifecycle(pool: &PgPool) {
     .expect("paddon item");
     sqlx::query(
         "INSERT INTO mini_raw_material_assignments
-            (barcode, order_id, apparatus, item_code, item_group, payload_json)
-         VALUES ($1, $2, 'E2E apparatus', $3, 'E2E Materials', '{}')",
+            (barcode, order_id, apparatus, canonical_apparatus_id, item_code, item_group, payload_json)
+         VALUES ($1, $2, 'E2E apparatus', $4, $3, 'E2E Materials', '{}')",
     )
     .bind(RAW_BARCODE)
     .bind(ORDER_ID)
     .bind(ITEM_CODE)
+    .bind(apparatus_id)
     .execute(&mut *tx)
     .await
     .expect("raw assignment");
@@ -431,16 +529,17 @@ async fn seed_order_lifecycle(pool: &PgPool) {
         "INSERT INTO mini_raw_material_events
             (event_id, idempotency_key, event_type, warehouse, barcode, item_code,
              item_name, qty_delta, uom, stock_status_before, stock_status_after,
-             order_id, apparatus, actor_role, actor_ref, actor_display_name,
+             order_id, apparatus, canonical_apparatus_id, actor_role, actor_ref, actor_display_name,
              source_type, source_id, payload_json)
          VALUES ('e2e-raw-event', 'e2e-raw-event-key', 'consumption_posted',
                  'E2E Warehouse', $1, $2, 'E2E raw material', -10, 'kg',
-                 'in_use', 'consumed', $3, 'E2E apparatus', 'system', 'system',
+                 'in_use', 'consumed', $3, 'E2E apparatus', $4, 'system', 'system',
                  'System', 'consumption', $3, '{}')",
     )
     .bind(RAW_BARCODE)
     .bind(ITEM_CODE)
     .bind(ORDER_ID)
+    .bind(apparatus_id)
     .execute(&mut *tx)
     .await
     .expect("raw event");
@@ -482,74 +581,83 @@ async fn seed_order_lifecycle(pool: &PgPool) {
     .expect("qolip order note");
     sqlx::query(
         "INSERT INTO mini_returned_paint_images
-            (image_id, order_id, apparatus, owner_ref, image_name, image_mime,
+            (image_id, order_id, apparatus, canonical_apparatus_id, owner_ref, image_name, image_mime,
              image_size_bytes, body)
-         VALUES ('e2e-paint-image', $1, 'E2E apparatus', 'e2e-worker',
+         VALUES ('e2e-paint-image', $1, 'E2E apparatus', $3, 'e2e-worker',
                  'e2e.jpg', 'image/jpeg', 1, $2)",
     )
     .bind(ORDER_ID)
     .bind(vec![1_u8])
+    .bind(apparatus_id)
     .execute(&mut *tx)
     .await
     .expect("returned paint image");
     sqlx::query(
         r#"INSERT INTO mini_returned_paint_requests
-            (id, order_id, order_code, order_name, apparatus, sender_role, sender_ref,
+            (id, order_id, order_code, order_name, apparatus, canonical_apparatus_id, sender_role, sender_ref,
              sender_display_name, items_json, status, image_id,
              rasxot_mix_total, astatka_mix_total, rasxot_alcohol, astatka_alcohol,
              final_used_alcohol, rasxot_pure_paint, astatka_pure_paint, final_used_paint)
-         VALUES ('e2e-paint-request', $1, 'E2E-ORDER', 'E2E product', 'E2E apparatus',
+         VALUES ('e2e-paint-request', $1, 'E2E-ORDER', 'E2E product', 'E2E apparatus', $2,
                  'aparatchi', 'e2e-worker', 'E2E worker',
                  '[{"category":"colors","usage":"rasxot","values":{"mix":1}}]',
                  'completed', 'e2e-paint-image', 1, 0, 0.3, 0, 0.3, 0.7, 0, 0.7)"#,
     )
     .bind(ORDER_ID)
+    .bind(apparatus_id)
     .execute(&mut *tx)
     .await
     .expect("returned paint request");
     sqlx::query(
         "INSERT INTO mini_laminatsiya_astatka_reports
-            (report_id, order_id, apparatus, from_at, to_at,
+            (report_id, order_id, apparatus, canonical_apparatus_id, from_at, to_at,
              lamination_print_leftover_rolls, lamination_film_leftover_rolls, total_waste)
-         VALUES ('e2e-laminatsiya-report', $1, 'E2E apparatus', now(), now(), 1, 1, 1)",
+         VALUES ('e2e-laminatsiya-report', $1, 'E2E apparatus', $2, now(), now(), 1, 1, 1)",
     )
     .bind(ORDER_ID)
+    .bind(apparatus_id)
     .execute(&mut *tx)
     .await
     .expect("laminatsiya report");
     sqlx::query(
         "INSERT INTO mini_rezka_astatka_reports
-            (report_id, order_id, apparatus, from_at, to_at, total_waste,
+            (report_id, order_id, apparatus, canonical_apparatus_id, from_at, to_at, total_waste,
              rezka_bosma_waste, rezka_lamination_waste, rezka_edge_waste)
-         VALUES ('e2e-rezka-report', $1, 'E2E apparatus', now(), now(), 1, 1, 0, 0)",
+         VALUES ('e2e-rezka-report', $1, 'E2E apparatus', $2, now(), now(), 1, 1, 0, 0)",
     )
     .bind(ORDER_ID)
+    .bind(apparatus_id)
     .execute(&mut *tx)
     .await
     .expect("rezka report");
     sqlx::query(
         "INSERT INTO mini_apparatus_order_transfers
             (transfer_id, idempotency_key, order_id, from_apparatus, to_apparatus,
+             canonical_from_apparatus_id, canonical_to_apparatus_id,
              reason, actor_role, session_id, progress_batch_id, payload_json)
          VALUES ('e2e-transfer', 'e2e-transfer-key', $1, 'E2E apparatus',
-                 'E2E apparatus 2', 'E2E', 'admin', $2, $3, '{}')",
+                 'E2E apparatus 2', $4, $5, 'E2E', 'admin', $2, $3, '{}')",
     )
     .bind(ORDER_ID)
     .bind(SESSION_ID)
     .bind(PROGRESS_BATCH_ID)
+    .bind(apparatus_id)
+    .bind(transfer_apparatus_id)
     .execute(&mut *tx)
     .await
     .expect("apparatus transfer");
     sqlx::query(
         "INSERT INTO mini_apparatus_schedule_reservations
-            (reservation_id, idempotency_key, order_id, apparatus_id, apparatus,
+            (reservation_id, idempotency_key, order_id, canonical_apparatus_id,
+             apparatus_id, apparatus,
              starts_at, ends_at, requested_duration_minutes, reserved_duration_minutes,
              status, capability_requirements, actor_json)
-         VALUES ('e2e-reservation', 'e2e-reservation-key', $1, 'e2e-apparatus',
+         VALUES ('e2e-reservation', 'e2e-reservation-key', $1, $2, $2,
                  'E2E apparatus', now(), now() + interval '1 hour', 60, 60,
                  'planned', '[]', '{}')",
     )
     .bind(ORDER_ID)
+    .bind(apparatus_id)
     .execute(&mut *tx)
     .await
     .expect("schedule reservation");

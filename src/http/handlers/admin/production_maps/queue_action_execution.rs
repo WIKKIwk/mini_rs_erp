@@ -1,0 +1,238 @@
+struct QueueActionExecution<'a> {
+    state: &'a AppState,
+    principal: &'a Principal,
+    input: &'a ApparatusQueueActionRequest,
+    apparatus: &'a QueueApparatusMetadata,
+    assigned_apparatus: Vec<String>,
+    material_barcode: String,
+    state_material_barcodes: Vec<String>,
+    progress: QueueProgressInput,
+    returned_paint_report: Option<crate::core::returned_paint::ReturnedPaintRequest>,
+}
+
+async fn execute_queue_action(
+    execution: QueueActionExecution<'_>,
+) -> Result<Response, AdminError> {
+    let QueueActionExecution {
+        state,
+        principal,
+        input,
+        apparatus,
+        assigned_apparatus,
+        material_barcode,
+        state_material_barcodes,
+        progress,
+        returned_paint_report,
+    } = execution;
+    let qolip_preparations = if matches!(input.action, queue_state::ApparatusQueueAction::Start) {
+        prepare_qolips_for_bosma_start(state, principal, input, apparatus).await?
+    } else {
+        Vec::new()
+    };
+    let qolip_validation = TrustedQolipStartValidation::from_preparations(
+        &apparatus.id,
+        &input.order_id,
+        &qolip_preparations,
+    );
+    let mut prepared = state
+        .production_maps
+        .prepare_apparatus_queue_action_with_material_scan_and_progress(
+            MaterialScanProgressAction {
+                apparatus: &input.apparatus,
+                order_id: &input.order_id,
+                action: input.action,
+                assigned_apparatus: &assigned_apparatus,
+                actor: queue_action_actor(principal),
+                material_barcode: &material_barcode,
+                state_material_barcodes: &state_material_barcodes,
+                progress,
+                qolip_validation,
+            },
+        )
+        .await
+        .map_err(production_map_error)?;
+    if !qolip_preparations.is_empty() {
+        prepared.attach_qolip_codes(
+            &qolip_preparations
+                .iter()
+                .map(|preparation| preparation.spec.qolip_code.clone())
+                .collect::<Vec<_>>(),
+        );
+    }
+    let qolip_checkouts = qolip_preparations
+        .into_iter()
+        .filter_map(|preparation| preparation.checkout)
+        .collect::<Vec<_>>();
+    let mut raw_material_stock_transitions = Vec::new();
+    if matches!(input.action, queue_state::ApparatusQueueAction::Start) {
+        let material_stock_barcodes = material_barcode
+            .split(',')
+            .map(|barcode| barcode.trim().to_string())
+            .filter(|barcode| !barcode.is_empty())
+            .collect::<Vec<_>>();
+        if !prepared.material_scan_skipped() && !material_stock_barcodes.is_empty() {
+            raw_material_stock_transitions.push(RawMaterialStockTransition::new(
+                RawMaterialStockTransitionKind::InUse,
+                material_stock_barcodes,
+                &input.order_id,
+            ));
+        }
+    }
+    let completed_material_barcodes =
+        if matches!(input.action, queue_state::ApparatusQueueAction::Complete) {
+            raw_material_barcodes_for_order_apparatus(state, &input.order_id, &input.apparatus)
+                .await?
+        } else {
+            Vec::new()
+        };
+    if !completed_material_barcodes.is_empty() {
+        raw_material_stock_transitions.push(RawMaterialStockTransition::new(
+            RawMaterialStockTransitionKind::Consumed,
+            completed_material_barcodes,
+            &input.order_id,
+        ));
+    }
+    let print_batches = if prepared.progress_batches().is_empty() {
+        prepared
+            .progress_batch()
+            .into_iter()
+            .cloned()
+            .collect::<Vec<_>>()
+    } else {
+        prepared.progress_batches().to_vec()
+    };
+    let print_requests = if matches!(
+        input.action,
+        queue_state::ApparatusQueueAction::Pause
+            | queue_state::ApparatusQueueAction::DetachRoll
+            | queue_state::ApparatusQueueAction::RollComplete
+            | queue_state::ApparatusQueueAction::Complete
+    ) {
+        let frame_specific_metrics = !input.rezka_frames.is_empty();
+        print_batches
+            .iter()
+            .map(|batch| ProgressLabelPrintRequest {
+                driver_url: input.driver_url.clone(),
+                qr_payload: batch.qr_payload.clone(),
+                item_code: batch.label_item_code.clone(),
+                item_name: batch.label_item_name.clone(),
+                apparatus: batch.apparatus.clone(),
+                customer_name: input.customer_name.trim().to_string(),
+                executor_name: batch.executor_name.clone(),
+                printer: input.printer.clone(),
+                print_mode: input.print_mode.clone(),
+                gross_qty: if frame_specific_metrics {
+                    batch
+                        .payload_json
+                        .get("gross_qty")
+                        .and_then(serde_json::Value::as_f64)
+                        .or(batch.finished_goods_kg)
+                        .unwrap_or(batch.produced_qty)
+                } else {
+                    input
+                        .gross_qty
+                        .or(input.finished_goods_kg)
+                        .unwrap_or(batch.produced_qty)
+                },
+                tare_enabled: if frame_specific_metrics {
+                    batch.bobina_kg.is_some_and(|value| value > 0.0)
+                } else {
+                    input.bobina_kg.is_some_and(|value| value > 0.0)
+                },
+                tare_kg: if frame_specific_metrics {
+                    batch.bobina_kg.unwrap_or(0.0)
+                } else {
+                    input.bobina_kg.unwrap_or(0.0)
+                },
+                progress_qty: if frame_specific_metrics {
+                    batch.finished_goods_meter.unwrap_or(batch.produced_qty)
+                } else {
+                    batch.produced_qty
+                },
+                unit: "kg".to_string(),
+                progress_unit: if batch.uom.trim().is_empty() {
+                    "m".to_string()
+                } else {
+                    batch.uom.clone()
+                },
+                label_kind: "progress".to_string(),
+                print_count: if frame_specific_metrics {
+                    1
+                } else {
+                    input.print_count
+                },
+            })
+            .collect::<Vec<_>>()
+    } else {
+        Vec::new()
+    };
+    let result = state
+        .production_maps
+        .commit_prepared_queue_action_with_raw_material_stock(
+            prepared,
+            raw_material_stock_transitions.clone(),
+            qolip_checkouts,
+            returned_paint_report,
+        )
+        .await
+        .map_err(production_map_error)?;
+    let mut warehouse_stock_update_warehouses = result.raw_material_stock_warehouses.clone();
+    if !raw_material_stock_transitions.is_empty() && warehouse_stock_update_warehouses.is_empty() {
+        for transition in &raw_material_stock_transitions {
+            let updates = match transition.kind {
+                RawMaterialStockTransitionKind::InUse => {
+                    state
+                        .gscale
+                        .mark_raw_material_stock_in_use(&transition.barcodes, &transition.order_id)
+                        .await
+                }
+                RawMaterialStockTransitionKind::Consumed => {
+                    state
+                        .gscale
+                        .mark_raw_material_stock_consumed(
+                            &transition.barcodes,
+                            &transition.order_id,
+                        )
+                        .await
+                }
+            }
+            .map_err(raw_material_stock_status_error)?;
+            warehouse_stock_update_warehouses.extend(
+                updates
+                    .into_iter()
+                    .map(|stock| stock.warehouse)
+                    .filter(|warehouse| !warehouse.trim().is_empty()),
+            );
+        }
+    }
+    for warehouse in warehouse_stock_update_warehouses {
+        state
+            .warehouse_events
+            .notify_updated(&warehouse, "raw_material_stock");
+    }
+    let prints = dispatch_progress_label_prints(
+        state.gscale.clone(),
+        print_requests,
+        &input.print_transport,
+        &input.apparatus,
+        &input.order_id,
+        input.action,
+    );
+    let print = prints.first().cloned().unwrap_or(serde_json::Value::Null);
+    let order_control = result.order_control;
+    let mut response = serde_json::json!({
+        "ok": true,
+        "states": result.states,
+        "order_status": result.order_status,
+        "session": result.session,
+        "progress_event": result.progress_event,
+        "progress_batch": result.progress_batch,
+        "progress_batches": result.progress_batches,
+        "print": print,
+        "prints": prints,
+    });
+    if let Some(order_control) = order_control {
+        response["order_control"] = serde_json::json!(order_control);
+    }
+    Ok(json_response(response))
+}

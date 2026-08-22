@@ -179,7 +179,7 @@ async fn admin_worker_delete_requires_connection_confirmation_and_cleans_assignm
             "/v1/mobile/admin/worker-groups",
             &token,
             r#"{
-                "apparatus":"Laminatsiya 1",
+                "apparatus_id":"apparatus:default:asset-007",
                 "group_code":"A",
                 "shift":"kunduz",
                 "worker_ids":["worker_delete_1"]
@@ -269,7 +269,7 @@ async fn admin_worker_delete_requires_connection_confirmation_and_cleans_assignm
 async fn admin_worker_delete_is_blocked_by_active_work_even_when_confirmed() {
     let mut state = test_state();
     let production_store = Arc::new(MemoryProductionMapStore::new());
-    state.production_maps = ProductionMapService::new(production_store.clone());
+    state.production_maps = production_map_service_with_store(&state, production_store.clone());
     let token = session(&state, PrincipalRole::Admin).await;
 
     let created = build_router(state.clone())
@@ -286,7 +286,7 @@ async fn admin_worker_delete_is_blocked_by_active_work_even_when_confirmed() {
     production_store
         .put_order_run_session(OrderRunSession {
             session_id: "session-worker-active-1".to_string(),
-            apparatus: "Pechat 1".to_string(),
+            apparatus: "apparatus:default:bosma_7".to_string(),
             order_id: "zakaz-worker-active-1".to_string(),
             status: OrderRunStatus::Active,
             worker_role: "aparatchi".to_string(),
@@ -314,7 +314,10 @@ async fn admin_worker_delete_is_blocked_by_active_work_even_when_confirmed() {
         rejected_body["active_work"][0]["order_id"],
         "zakaz-worker-active-1"
     );
-    assert_eq!(rejected_body["active_work"][0]["apparatus"], "Pechat 1");
+    assert_eq!(
+        rejected_body["active_work"][0]["apparatus"],
+        "apparatus:default:bosma_7"
+    );
 
     let workers = build_router(state)
         .oneshot(request("GET", "/v1/mobile/admin/workers", &token))
@@ -452,7 +455,7 @@ async fn admin_worker_groups_save_custom_codes_schedule_and_reject_duplicate_wor
             &token,
             &format!(
                 r#"{{
-                    "apparatus":"Laminatsiya 1",
+                    "apparatus_id":"apparatus:default:asset-007",
                     "group_code":"b guruh",
                     "shift":"kechki",
                     "start_time":"08:30",
@@ -468,7 +471,7 @@ async fn admin_worker_groups_save_custom_codes_schedule_and_reject_duplicate_wor
         .expect("save worker group");
     assert_eq!(saved.status(), StatusCode::OK);
     let saved_body = json_body(saved).await;
-    assert_eq!(saved_body["apparatus"], "Laminatsiya 1");
+    assert_eq!(saved_body["apparatus_id"], "apparatus:default:asset-007");
     assert_eq!(saved_body["group_code"], "B GURUH");
     assert_eq!(saved_body["shift"], "kechki");
     assert_eq!(saved_body["start_time"], "08:30");
@@ -502,7 +505,7 @@ async fn admin_worker_groups_save_custom_codes_schedule_and_reject_duplicate_wor
                     "principal_role":"aparatchi",
                     "principal_ref":"{}",
                     "role_id":"aparatchi",
-                    "assigned_apparatus":["Rezka"]
+                    "assigned_apparatus":["apparatus:default:asset-010"]
                 }}"#,
                 first_id
             ),
@@ -518,7 +521,7 @@ async fn admin_worker_groups_save_custom_codes_schedule_and_reject_duplicate_wor
             &token,
             &format!(
                 r#"{{
-                    "apparatus":"Laminatsiya 1",
+                    "apparatus_id":"apparatus:default:asset-007",
                     "group_code":"b guruh",
                     "shift":"kechki",
                     "start_time":"08:30",
@@ -544,7 +547,8 @@ async fn admin_worker_groups_save_custom_codes_schedule_and_reject_duplicate_wor
     assert!(assignments.iter().any(|assignment| {
         assignment["principal_role"] == "aparatchi"
             && assignment["principal_ref"] == first_id
-            && assignment["assigned_apparatus"] == serde_json::json!(["Rezka"])
+            && assignment["assigned_apparatus"]
+                == serde_json::json!(["apparatus:default:asset-010"])
     }));
     assert!(!assignments.iter().any(|assignment| {
         assignment["principal_role"] == "aparatchi" && assignment["principal_ref"] == second_id
@@ -557,7 +561,7 @@ async fn admin_worker_groups_save_custom_codes_schedule_and_reject_duplicate_wor
             &token,
             &format!(
                 r#"{{
-                    "apparatus":"Laminatsiya 1",
+                    "apparatus_id":"apparatus:default:asset-007",
                     "group_code":"ba",
                     "shift":"kunduz",
                     "worker_ids":["{first_id}"]
@@ -579,7 +583,7 @@ async fn admin_worker_groups_save_custom_codes_schedule_and_reject_duplicate_wor
             &token,
             &format!(
                 r#"{{
-                    "apparatus":"Laminatsiya 1",
+                    "apparatus_id":"apparatus:default:asset-007",
                     "group_code":"dd",
                     "shift":"tungi",
                     "worker_ids":["{first_id}"]
@@ -611,7 +615,7 @@ async fn admin_worker_groups_save_custom_codes_schedule_and_reject_duplicate_wor
             "/v1/mobile/admin/worker-groups",
             &token,
             r#"{
-                "apparatus":"Laminatsiya 1",
+                "apparatus_id":"apparatus:default:asset-007",
                 "group_code":"zz",
                 "shift":"night",
                 "worker_ids":["missing-worker"]
@@ -634,7 +638,7 @@ async fn admin_worker_group_can_be_renamed_without_leaving_the_old_group() {
             "/v1/mobile/admin/worker-groups",
             &token,
             r#"{
-                "apparatus":"Laminatsiya 1",
+                "apparatus_id":"apparatus:default:asset-007",
                 "group_code":"A guruh",
                 "shift":"kunduz"
             }"#,
@@ -649,9 +653,9 @@ async fn admin_worker_group_can_be_renamed_without_leaving_the_old_group() {
             "/v1/mobile/admin/worker-groups",
             &token,
             r#"{
-                "apparatus":"Laminatsiya 1",
+                "apparatus_id":"apparatus:default:asset-007",
                 "group_code":"A laminatsiya",
-                "previous_apparatus":"Laminatsiya 1",
+                "previous_apparatus_id":"apparatus:default:asset-007",
                 "previous_group_code":"A guruh",
                 "shift":"kunduz"
             }"#,
@@ -698,7 +702,7 @@ async fn worker_login_receives_worker_assigned_apparatus() {
             "/v1/mobile/admin/worker-groups",
             &token,
             r#"{
-                "apparatus":"Laminatsiya 1",
+                "apparatus_id":"apparatus:default:asset-007",
                 "group_code":"A",
                 "shift":"kunduz",
                 "worker_ids":["worker_001"]
@@ -717,7 +721,7 @@ async fn worker_login_receives_worker_assigned_apparatus() {
                 "principal_role":"aparatchi",
                 "principal_ref":"worker_001",
                 "role_id":"aparatchi",
-                "assigned_apparatus":["Laminatsiya 1"]
+                "assigned_apparatus":["apparatus:default:asset-007"]
             }"#,
         ))
         .await
@@ -739,7 +743,7 @@ async fn worker_login_receives_worker_assigned_apparatus() {
     assert_eq!(value["profile"]["ref"], "worker_001");
     assert_eq!(
         value["assigned_apparatus"],
-        serde_json::json!(["Laminatsiya 1"])
+        serde_json::json!(["apparatus:default:asset-007"])
     );
     assert!(
         value["capabilities"]
@@ -833,7 +837,7 @@ async fn admin_worker_profile_detail_returns_assignments_and_activity() {
             "/v1/mobile/admin/worker-groups",
             &admin_token,
             r#"{
-                "apparatus":"7 ta rangli pechat",
+                "apparatus_id":"apparatus:default:bosma_7",
                 "group_code":"A",
                 "shift":"kunduz",
                 "worker_ids":["worker_profile_1"]
@@ -852,7 +856,7 @@ async fn admin_worker_profile_detail_returns_assignments_and_activity() {
                 "principal_role":"aparatchi",
                 "principal_ref":"worker_profile_1",
                 "role_id":"aparatchi",
-                "assigned_apparatus":["7 ta rangli pechat"]
+                "assigned_apparatus":["apparatus:default:bosma_7"]
             }"#,
         ))
         .await
@@ -868,7 +872,7 @@ async fn admin_worker_profile_detail_returns_assignments_and_activity() {
                 "zakaz-worker-profile",
                 "Profile order",
                 "9911",
-                "7 ta rangli pechat",
+                "apparatus:default:bosma_7",
             ),
         ))
         .await
@@ -885,7 +889,7 @@ async fn admin_worker_profile_detail_returns_assignments_and_activity() {
             "/v1/mobile/admin/production-maps/sequence",
             &admin_token,
             r#"{
-                "apparatus":"7 ta rangli pechat",
+                "apparatus":"apparatus:default:bosma_7",
                 "order_ids":["zakaz-worker-profile"]
             }"#,
         ))
@@ -901,7 +905,7 @@ async fn admin_worker_profile_detail_returns_assignments_and_activity() {
             &worker_token,
             &with_test_qolip(
                 r#"{
-                "apparatus":"7 ta rangli pechat",
+                "apparatus":"apparatus:default:bosma_7",
                 "order_id":"zakaz-worker-profile",
                 "action":"start"
             }"#,
@@ -923,10 +927,10 @@ async fn admin_worker_profile_detail_returns_assignments_and_activity() {
     assert_eq!(detail.status(), StatusCode::OK);
     let body = json_body(detail).await;
     assert_eq!(body["worker"]["id"], "worker_profile_1");
-    assert_eq!(body["assigned_apparatus"][0], "7 ta rangli pechat");
+    assert_eq!(body["assigned_apparatus"][0], "apparatus:default:bosma_7");
     assert_eq!(
-        body["assigned_groups"][0]["apparatus"],
-        "7 ta rangli pechat"
+        body["assigned_groups"][0]["apparatus_id"],
+        "apparatus:default:bosma_7"
     );
     assert_eq!(
         body["active_sessions"][0]["order_id"],
@@ -939,7 +943,7 @@ async fn admin_worker_profile_detail_returns_assignments_and_activity() {
 async fn replacement_worker_with_same_name_does_not_inherit_old_history() {
     let mut state = test_state();
     let production_store = Arc::new(MemoryProductionMapStore::new());
-    state.production_maps = ProductionMapService::new(production_store.clone());
+    state.production_maps = production_map_service_with_store(&state, production_store.clone());
     let admin_token = session(&state, PrincipalRole::Admin).await;
 
     let old_worker = build_router(state.clone())
@@ -956,7 +960,7 @@ async fn replacement_worker_with_same_name_does_not_inherit_old_history() {
     production_store
         .append_apparatus_queue_action_event(ApparatusQueueActionEvent {
             event_id: "event-worker-history-old".to_string(),
-            apparatus: "Pechat 1".to_string(),
+            apparatus: "apparatus:default:bosma_7".to_string(),
             order_id: "zakaz-worker-history-old".to_string(),
             action: ApparatusQueueAction::Start,
             from_state: ApparatusQueueOrderState::Pending,

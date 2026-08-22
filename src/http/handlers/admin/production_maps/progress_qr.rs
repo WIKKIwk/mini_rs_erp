@@ -44,12 +44,8 @@ pub async fn production_map_progress_qr_lookup(
         &qr_payload,
     )
     .await
-        .map_err(super::super::training::training_workspace_error)?
+    .map_err(super::super::training::training_workspace_error)?
     {
-        // The training resolver already applies worker scope. Keep this
-        // endpoint defensive as well so a future resolver cannot turn a QR
-        // lookup into an apparatus authorization bypass.
-        require_progress_batch_apparatus(&state, &principal, &batch).await?;
         return Ok(json_response(serde_json::json!({
             "ok": true,
             "can_resume": matches!(
@@ -65,8 +61,6 @@ pub async fn production_map_progress_qr_lookup(
         .progress_batch_for_qr(&input.progress_batch_id, &qr_payload)
         .await
         .map_err(production_map_error)?;
-    reject_training_order_id_for_production(&batch.order_id)?;
-    require_progress_batch_apparatus(&state, &principal, &batch).await?;
     Ok(json_response(serde_json::json!({
         "ok": true,
         "can_resume": matches!(
@@ -111,9 +105,8 @@ pub async fn production_map_progress_qr_report(
         &qr_payload,
     )
     .await
-        .map_err(super::super::training::training_workspace_error)?
+    .map_err(super::super::training::training_workspace_error)?
     {
-        require_progress_batch_apparatus(&state, &principal, &batch).await?;
         let mut progress_batches =
             super::super::training::training_progress_batches_for_order(&state, &batch.order_id)
                 .await
@@ -143,11 +136,6 @@ pub async fn production_map_progress_qr_report(
         .progress_qr_report(&input.progress_batch_id, &qr_payload)
         .await
         .map_err(production_map_error)?;
-    reject_training_order_id_for_production(&report.scanned_batch.order_id)?;
-    require_progress_batch_apparatus(&state, &principal, &report.scanned_batch).await?;
-    if let Some(current_batch) = report.current_batch.as_ref() {
-        require_progress_batch_apparatus(&state, &principal, current_batch).await?;
-    }
     Ok(json_response(serde_json::json!({
         "ok": true,
         "scanned_batch": report.scanned_batch,
@@ -201,15 +189,9 @@ pub async fn production_map_progress_qr_history(
         .progress_batches_for_worker(&worker_refs, &worker_display_name, limit)
         .await
         .map_err(production_map_error)?;
-    let mut visible_batches = Vec::with_capacity(batches.len());
-    for batch in batches {
-        if principal_can_use_apparatus(&state, &principal, &batch.apparatus).await {
-            visible_batches.push(batch);
-        }
-    }
     Ok(json_response(serde_json::json!({
         "ok": true,
-        "batches": visible_batches,
+        "batches": batches,
     })))
 }
 
@@ -225,6 +207,7 @@ pub async fn production_map_progress_batch_correct(
         &[
             Capability::AdminAccess,
             Capability::ProductionMapManage,
+            Capability::ApparatusQueueRead,
             Capability::ApparatusQueueManage,
         ],
     )
@@ -233,12 +216,6 @@ pub async fn production_map_progress_batch_correct(
         return Err(method_not_allowed());
     }
     let input: ProgressBatchCorrectionInput = parse_json(&body)?;
-    let current_batch = state
-        .production_maps
-        .progress_batch_for_qr(&input.batch_id, "")
-        .await
-        .map_err(production_map_error)?;
-    require_progress_batch_apparatus(&state, &principal, &current_batch).await?;
     let batch = state
         .production_maps
         .correct_progress_batch(input, &queue_action_actor(&principal))
@@ -282,6 +259,7 @@ pub async fn production_map_progress_qr_reprint(
         &[
             Capability::AdminAccess,
             Capability::ProductionMapManage,
+            Capability::ApparatusQueueRead,
             Capability::ApparatusQueueManage,
         ],
     )
@@ -311,10 +289,6 @@ pub async fn production_map_progress_qr_reprint(
             .await
             .map_err(production_map_error)?,
     };
-    if !is_training_order_namespace(&batch.order_id) {
-        reject_training_order_id_for_production(&batch.order_id)?;
-    }
-    require_progress_batch_apparatus(&state, &principal, &batch).await?;
     if !principal_can_reprint_progress_batch(&principal, &batch) {
         return Err(forbidden());
     }
@@ -357,29 +331,6 @@ pub async fn production_map_progress_qr_reprint(
     })))
 }
 
-async fn require_progress_batch_apparatus(
-    state: &AppState,
-    principal: &Principal,
-    batch: &crate::core::production_map::OrderProgressBatch,
-) -> Result<(), AdminError> {
-    let apparatus = if batch
-        .payload_json
-        .get("training_input")
-        .and_then(serde_json::Value::as_bool)
-        .unwrap_or(false)
-        && !batch.next_apparatus.trim().is_empty()
-    {
-        batch.next_apparatus.as_str()
-    } else {
-        batch.apparatus.as_str()
-    };
-    if principal_can_use_apparatus(state, principal, apparatus).await {
-        Ok(())
-    } else {
-        Err(production_map_error(ProductionMapError::ApparatusNotAssigned))
-    }
-}
-
 fn progress_history_scope(
     principal: &Principal,
     query: &ProgressQrHistoryQuery,
@@ -410,7 +361,7 @@ fn principal_can_reprint_progress_batch(
     let principal_ref = principal.ref_.trim();
     principal.role == PrincipalRole::Admin
         || (!principal_ref.is_empty() && batch.worker_ref.trim() == principal_ref)
-        || (is_training_order_namespace(&batch.order_id)
+        || (batch.order_id.trim().starts_with("training-")
             && batch
                 .payload_json
                 .get("training")

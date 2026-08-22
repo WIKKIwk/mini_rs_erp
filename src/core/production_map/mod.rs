@@ -1,14 +1,13 @@
 mod apparatus;
-pub mod chain;
+mod apparatus_resolver;
 mod capacity;
+pub mod chain;
 mod compiler;
 mod errors;
 mod formula;
 mod formula_parser;
-mod isolation;
 pub mod materials;
 mod materials_support;
-mod mixed_stage_backfill;
 #[cfg(test)]
 mod memory_store;
 pub mod pechat;
@@ -17,8 +16,8 @@ mod progress;
 mod queue;
 pub mod queue_state;
 mod service;
-mod service_audit;
 mod service_astatka;
+mod service_audit;
 mod service_completion {
     include!("progress_session/service_completion.rs");
 }
@@ -40,37 +39,35 @@ mod service_progress_support {
 }
 mod service_paddon;
 mod service_qolip;
-mod service_transfer;
 mod service_queue_support;
+mod service_transfer;
 mod service_wip;
 mod store_port;
 mod types;
 
-pub use compiler::{compile_map, run_map_with_variables};
-pub use materials::{
-    ApparatusMaterialRequirementGroup, ApparatusMaterialRule, ApparatusMaterialRuleUpsert,
-    MaterialScanProgressAction, RawMaterialAssignment, RawMaterialAssignmentDeleteInput,
-    RawMaterialAssignmentInput, RawMaterialStartPolicy, RawMaterialStartRequirements,
-};
+#[cfg(test)]
+pub(crate) use apparatus_resolver::TestCanonicalApparatusResolver;
+pub use apparatus_resolver::{CanonicalApparatusResolver, CanonicalServiceApparatusResolver};
 pub use capacity::*;
+pub use compiler::{compile_map, run_map_with_variables};
+#[cfg(test)]
+pub use materials::ApparatusMaterialRuleUpsert;
+pub use materials::{
+    ApparatusMaterialRequirementGroup, ApparatusMaterialRule, MaterialScanProgressAction,
+    RawMaterialAssignment, RawMaterialAssignmentDeleteInput, RawMaterialAssignmentInput,
+    RawMaterialStartPolicy, RawMaterialStartRequirements, TrustedQolipStartValidation,
+};
 #[cfg(test)]
 pub use memory_store::MemoryProductionMapStore;
+pub(crate) use progress::progress_label_item_name;
+pub(crate) use progress::{progress_batch_id, progress_qr_payload};
 pub use service::{PreparedApparatusQueueAction, ProductionMapLiveSnapshot, ProductionMapService};
+pub(crate) use store_port::validate_queue_progress_write;
 pub use store_port::{
     ProductionMapApparatusTransferWrite, ProductionMapStorePort, QueueActionProgressWrite,
     QueueActionProgressWriteResult, RawMaterialStockTransition, RawMaterialStockTransitionKind,
-    MixedStageBackfillWriteResult,
-};
-pub use mixed_stage_backfill::{
-    MixedStageBackfillManifest, MixedStageBackfillPlan, MixedStageBackfillPlanRow,
-    MixedStageBackfillPlanStatus, MixedStageBackfillRecord, MixedStageBackfillReport,
 };
 pub use types::*;
-pub(crate) use progress::progress_label_item_name;
-pub(crate) use progress::{progress_batch_id, progress_qr_payload};
-pub(crate) use isolation::{
-    is_training_order_id, is_training_order_namespace, reject_training_order_id,
-};
 
 #[cfg(test)]
 mod tests;

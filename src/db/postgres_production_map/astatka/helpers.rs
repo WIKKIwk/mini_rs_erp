@@ -1,7 +1,8 @@
 use sqlx::{FromRow, PgPool};
 
+use crate::core::apparatus_standard::ApparatusId;
 use crate::core::production_map::{
-    LaminatsiyaAstatkaReport, ProductionMapError, RezkaAstatkaReport, reject_training_order_id,
+    LaminatsiyaAstatkaReport, ProductionMapError, RezkaAstatkaReport,
 };
 
 #[derive(Debug, FromRow)]
@@ -49,12 +50,11 @@ pub(super) async fn load_laminatsiya_astatka_reports_for_order(
     pool: &PgPool,
     order_id: &str,
 ) -> Result<Vec<LaminatsiyaAstatkaReport>, ProductionMapError> {
-    reject_training_order_id(order_id)?;
     let rows = sqlx::query_as::<_, LaminatsiyaAstatkaReportRow>(
         r#"SELECT
              report_id,
              order_id,
-             apparatus,
+             canonical_apparatus_id AS apparatus,
              EXTRACT(EPOCH FROM from_at)::bigint AS from_at_unix,
              EXTRACT(EPOCH FROM to_at)::bigint AS to_at_unix,
              lamination_print_leftover_rolls::double precision AS lamination_print_leftover_rolls,
@@ -104,12 +104,14 @@ pub(super) async fn put_laminatsiya_astatka_report(
     pool: &PgPool,
     report: &LaminatsiyaAstatkaReport,
 ) -> Result<(), ProductionMapError> {
-    reject_training_order_id(&report.order_id)?;
+    let apparatus_id = ApparatusId::new(report.apparatus.trim().to_string())
+        .map_err(|_| ProductionMapError::ProgressInputInvalid)?;
     sqlx::query(
         r#"INSERT INTO mini_laminatsiya_astatka_reports (
              report_id,
              order_id,
              apparatus,
+             canonical_apparatus_id,
              from_at,
              to_at,
              lamination_print_leftover_rolls,
@@ -124,7 +126,8 @@ pub(super) async fn put_laminatsiya_astatka_report(
              description,
              created_at
          )
-         VALUES ($1, $2, $3, to_timestamp($4), to_timestamp($5), $6, $7, $8,
+         VALUES ($1, $2, COALESCE((SELECT name FROM mini_apparatus WHERE id = $3), $3), $3,
+                 to_timestamp($4), to_timestamp($5), $6, $7, $8,
                  $9, $10, $11, $12, $13, $14, $15, to_timestamp($16))
          ON CONFLICT (report_id) DO UPDATE SET
              order_id = EXCLUDED.order_id,
@@ -145,7 +148,7 @@ pub(super) async fn put_laminatsiya_astatka_report(
     )
     .bind(report.report_id.trim())
     .bind(report.order_id.trim())
-    .bind(report.apparatus.trim())
+    .bind(apparatus_id.as_str())
     .bind(report.from_at_unix as f64)
     .bind(report.to_at_unix as f64)
     .bind(report.lamination_print_leftover_rolls)
@@ -169,12 +172,11 @@ pub(super) async fn load_rezka_astatka_reports_for_order(
     pool: &PgPool,
     order_id: &str,
 ) -> Result<Vec<RezkaAstatkaReport>, ProductionMapError> {
-    reject_training_order_id(order_id)?;
     let rows = sqlx::query_as::<_, RezkaAstatkaReportRow>(
         r#"SELECT
              report_id,
              order_id,
-             apparatus,
+             canonical_apparatus_id AS apparatus,
              EXTRACT(EPOCH FROM from_at)::bigint AS from_at_unix,
              EXTRACT(EPOCH FROM to_at)::bigint AS to_at_unix,
              total_waste::double precision AS total_waste,
@@ -226,12 +228,14 @@ pub(super) async fn put_rezka_astatka_report(
     pool: &PgPool,
     report: &RezkaAstatkaReport,
 ) -> Result<(), ProductionMapError> {
-    reject_training_order_id(&report.order_id)?;
+    let apparatus_id = ApparatusId::new(report.apparatus.trim().to_string())
+        .map_err(|_| ProductionMapError::ProgressInputInvalid)?;
     sqlx::query(
         r#"INSERT INTO mini_rezka_astatka_reports (
              report_id,
              order_id,
              apparatus,
+             canonical_apparatus_id,
              from_at,
              to_at,
              total_waste,
@@ -247,7 +251,8 @@ pub(super) async fn put_rezka_astatka_report(
              description,
              created_at
          )
-         VALUES ($1, $2, $3, to_timestamp($4), to_timestamp($5), $6, $7, $8,
+         VALUES ($1, $2, COALESCE((SELECT name FROM mini_apparatus WHERE id = $3), $3), $3,
+                 to_timestamp($4), to_timestamp($5), $6, $7, $8,
                  $9, $10, $11, $12, $13, $14, $15, $16, to_timestamp($17))
          ON CONFLICT (report_id) DO UPDATE SET
              order_id = EXCLUDED.order_id,
@@ -269,7 +274,7 @@ pub(super) async fn put_rezka_astatka_report(
     )
     .bind(report.report_id.trim())
     .bind(report.order_id.trim())
-    .bind(report.apparatus.trim())
+    .bind(apparatus_id.as_str())
     .bind(report.from_at_unix as f64)
     .bind(report.to_at_unix as f64)
     .bind(report.total_waste)

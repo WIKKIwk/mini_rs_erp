@@ -7,8 +7,8 @@ use serde::de::Error as _;
 use serde::{Deserialize, Serialize};
 use tokio::sync::RwLock;
 
+use crate::core::apparatus_standard::ApparatusId;
 use crate::core::auth::models::{Principal, PrincipalRole};
-use crate::core::production_map::is_training_order_namespace;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ReturnedPaintItem {
@@ -117,8 +117,6 @@ pub struct ReturnedPaintRequest {
 
 #[derive(Debug, thiserror::Error, PartialEq)]
 pub enum ReturnedPaintError {
-    #[error("training order ids are reserved for the training workspace")]
-    TrainingOrderIdReserved,
     #[error("order id is required")]
     MissingOrderId,
     #[error("apparatus is required")]
@@ -225,8 +223,7 @@ impl ReturnedPaintService {
         id: String,
     ) -> Result<ReturnedPaintRequest, ReturnedPaintError> {
         let order_id = required_text(input.order_id, ReturnedPaintError::MissingOrderId)?;
-        reject_training_order_id(&order_id)?;
-        let apparatus = required_text(input.apparatus, ReturnedPaintError::MissingApparatus)?;
+        let apparatus = canonical_apparatus(input.apparatus)?;
         let sender_ref = sender.ref_.trim();
         let sender_display_name = sender.display_name.trim();
         if sender_ref.is_empty() || sender_display_name.is_empty() || id.trim().is_empty() {
@@ -242,7 +239,7 @@ impl ReturnedPaintService {
                 .ok_or(ReturnedPaintError::ImageNotFound)?;
             if stored.owner_ref.trim() != sender_ref
                 || stored.order_id.trim() != order_id
-                || !stored.apparatus.trim().eq_ignore_ascii_case(&apparatus)
+                || stored.apparatus.trim() != apparatus
             {
                 return Err(ReturnedPaintError::ImageMismatch);
             }
@@ -319,8 +316,7 @@ impl ReturnedPaintService {
         owner: &Principal,
     ) -> Result<ReturnedPaintImage, ReturnedPaintError> {
         let order_id = required_text(order_id, ReturnedPaintError::MissingOrderId)?;
-        reject_training_order_id(&order_id)?;
-        let apparatus = required_text(apparatus, ReturnedPaintError::MissingApparatus)?;
+        let apparatus = canonical_apparatus(apparatus)?;
         let owner_ref = owner.ref_.trim();
         let image_name = image_name.trim();
         let image_mime = image_mime.trim().to_ascii_lowercase();
@@ -383,12 +379,11 @@ impl ReturnedPaintService {
     }
 }
 
-fn reject_training_order_id(order_id: &str) -> Result<(), ReturnedPaintError> {
-    if is_training_order_namespace(order_id) {
-        Err(ReturnedPaintError::TrainingOrderIdReserved)
-    } else {
-        Ok(())
-    }
+fn canonical_apparatus(value: String) -> Result<String, ReturnedPaintError> {
+    let value = required_text(value, ReturnedPaintError::MissingApparatus)?;
+    ApparatusId::new(value)
+        .map(|id| id.to_string())
+        .map_err(|_| ReturnedPaintError::MissingApparatus)
 }
 
 include!("returned_paint_calculations.rs");

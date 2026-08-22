@@ -67,7 +67,7 @@ async fn warehouse_items_are_filtered_searched_and_paginated_on_the_backend() {
             },
         ])
         .await;
-    state.warehouses = WarehouseService::new(store);
+    state.warehouses = WarehouseService::new_for_test(store);
     let token = session(&state, PrincipalRole::Admin).await;
 
     let first = build_router(state.clone())
@@ -111,7 +111,7 @@ async fn warehouse_items_are_filtered_searched_and_paginated_on_the_backend() {
 }
 
 #[tokio::test]
-async fn admin_apparatus_defaults_are_available_on_empty_store() {
+async fn legacy_apparatus_groups_and_warehouse_catalog_are_not_runtime_authorities() {
     let state = test_state();
     let token = session(&state, PrincipalRole::Admin).await;
 
@@ -119,25 +119,7 @@ async fn admin_apparatus_defaults_are_available_on_empty_store() {
         .oneshot(request("GET", "/v1/mobile/admin/apparatus-groups", &token))
         .await
         .expect("groups response");
-    assert_eq!(groups.status(), StatusCode::OK);
-    let group_body = json_body(groups).await;
-    assert_eq!(group_body[0]["name"], "Bosma aparat");
-    assert_eq!(
-        group_body[0]["apparatus"],
-        serde_json::json!([
-            "7 ta rangli bosma aparat",
-            "8 ta rangli bosma aparat",
-            "9 ta rangli bosma aparat",
-            "Flexo pechat"
-        ])
-    );
-    assert_eq!(group_body[1]["name"], "Laminatsiya");
-    assert_eq!(
-        group_body[1]["apparatus"],
-        serde_json::json!(["Laminatsiya 1", "Laminatsiya 2"])
-    );
-    assert_eq!(group_body[2]["name"], "Rezka");
-    assert_eq!(group_body[2]["apparatus"], serde_json::json!(["Rezka"]));
+    assert_eq!(groups.status(), StatusCode::NOT_FOUND);
 
     let apparatus = build_router(state)
         .oneshot(request(
@@ -149,47 +131,48 @@ async fn admin_apparatus_defaults_are_available_on_empty_store() {
         .expect("apparatus response");
     assert_eq!(apparatus.status(), StatusCode::OK);
     let apparatus_body = json_body(apparatus).await;
-    for expected in [
-        "7 ta rangli bosma aparat",
-        "8 ta rangli bosma aparat",
-        "9 ta rangli bosma aparat",
-        "Extruder laminatsiya",
-        "Flexo pechat",
-        "Holodniy kley aparat",
-        "Laminatsiya 1",
-        "Laminatsiya 2",
-        "Paket aparat",
-        "Rezka",
-    ] {
-        assert!(
-            apparatus_body
-                .as_array()
-                .expect("array")
-                .iter()
-                .any(|item| item["warehouse"] == expected),
-            "missing default apparatus {expected}"
-        );
-    }
+    assert!(
+        apparatus_body
+            .as_array()
+            .expect("array")
+            .iter()
+            .all(|item| item["id"].is_null()),
+        "warehouse lookup must not inject an apparatus catalog"
+    );
 }
 
 #[tokio::test]
-async fn admin_apparatus_catalog_rejects_legacy_pechat_names() {
+async fn legacy_apparatus_upsert_payload_is_rejected() {
     let state = test_state();
     let token = session(&state, PrincipalRole::Admin).await;
+
+    let initial = build_router(state.clone())
+        .oneshot(request(
+            "GET",
+            "/v1/mobile/admin/apparatus?limit=50",
+            &token,
+        ))
+        .await
+        .expect("initial apparatus list");
+    let initial_count = json_body(initial)
+        .await
+        .as_array()
+        .expect("apparatus array")
+        .len();
 
     let created = build_router(state.clone())
         .oneshot(request_with_body(
             "POST",
             "/v1/mobile/admin/apparatus",
             &token,
-            r#"{"name":"7 ta rangli pechat"}"#,
+            r#"{"name":"apparatus:default:bosma_7"}"#,
         ))
         .await
         .expect("create legacy apparatus name");
     assert_eq!(created.status(), StatusCode::BAD_REQUEST);
-    assert_eq!(json_body(created).await["error"], "apparatus is invalid");
+    assert_eq!(json_body(created).await["error"], "invalid json");
 
-    let listed = build_router(state)
+    let listed = build_router(state.clone())
         .oneshot(request(
             "GET",
             "/v1/mobile/admin/apparatus?limit=50",
@@ -200,25 +183,13 @@ async fn admin_apparatus_catalog_rejects_legacy_pechat_names() {
     assert_eq!(listed.status(), StatusCode::OK);
     let listed_body = json_body(listed).await;
     assert_eq!(
-        listed_body
-            .as_array()
-            .expect("apparatus array")
-            .iter()
-            .filter(|item| item["name"] == "7 ta rangli bosma aparat")
-            .count(),
-        1
-    );
-    assert!(
-        listed_body
-            .as_array()
-            .expect("apparatus array")
-            .iter()
-            .all(|item| item["name"] != "7 ta rangli pechat")
+        listed_body.as_array().expect("apparatus array").len(),
+        initial_count
     );
 }
 
 #[tokio::test]
-async fn admin_apparatus_groups_round_trip_on_server() {
+async fn legacy_apparatus_group_write_route_is_deleted() {
     let state = test_state();
     let token = session(&state, PrincipalRole::Admin).await;
 
@@ -227,43 +198,21 @@ async fn admin_apparatus_groups_round_trip_on_server() {
             "PUT",
             "/v1/mobile/admin/apparatus-groups",
             &token,
-            r#"{"name":" pechat ","apparatus":[" 7 ta rangli pechat ","8 ta rangli pechat","7 ta rangli pechat"]}"#,
+            r#"{"name":" pechat ","apparatus":[" apparatus:default:bosma_7 ","apparatus:default:bosma_8","apparatus:default:bosma_7"]}"#,
         ))
         .await
         .expect("response");
-    assert_eq!(saved.status(), StatusCode::OK);
-    let saved_body = json_body(saved).await;
-    assert_eq!(saved_body["name"], "Bosma aparat");
-    assert_eq!(
-        saved_body["apparatus"],
-        serde_json::json!([
-            "7 ta rangli bosma aparat",
-            "8 ta rangli bosma aparat",
-            "9 ta rangli bosma aparat",
-            "Flexo pechat"
-        ])
-    );
+    assert_eq!(saved.status(), StatusCode::NOT_FOUND);
 
     let listed = build_router(state)
         .oneshot(request("GET", "/v1/mobile/admin/apparatus-groups", &token))
         .await
         .expect("response");
-    assert_eq!(listed.status(), StatusCode::OK);
-    let listed_body = json_body(listed).await;
-    assert_eq!(listed_body[0]["name"], "Bosma aparat");
-    assert_eq!(
-        listed_body[0]["apparatus"],
-        serde_json::json!([
-            "7 ta rangli bosma aparat",
-            "8 ta rangli bosma aparat",
-            "9 ta rangli bosma aparat",
-            "Flexo pechat"
-        ])
-    );
+    assert_eq!(listed.status(), StatusCode::NOT_FOUND);
 }
 
 #[tokio::test]
-async fn admin_apparatus_group_keeps_laminatsiya_apparatus_manual() {
+async fn legacy_apparatus_group_payload_cannot_mutate_canonical_configuration() {
     let state = test_state();
     let token = session(&state, PrincipalRole::Admin).await;
 
@@ -272,29 +221,17 @@ async fn admin_apparatus_group_keeps_laminatsiya_apparatus_manual() {
             "PUT",
             "/v1/mobile/admin/apparatus-groups",
             &token,
-            r#"{"name":" laminatsiya apparatlar ","apparatus":[" Laminatsiya 1 ","Laminatsiya kley"]}"#,
+            r#"{"name":" laminatsiya apparatlar ","apparatus":[" apparatus:default:asset-007 ","apparatus:default:asset-008"]}"#,
         ))
         .await
         .expect("response");
-    assert_eq!(saved.status(), StatusCode::OK);
-    let saved_body = json_body(saved).await;
-    assert_eq!(saved_body["name"], "Laminatsiya");
-    assert_eq!(
-        saved_body["apparatus"],
-        serde_json::json!(["Laminatsiya 1", "Laminatsiya kley"])
-    );
+    assert_eq!(saved.status(), StatusCode::NOT_FOUND);
 
     let listed = build_router(state)
         .oneshot(request("GET", "/v1/mobile/admin/apparatus-groups", &token))
         .await
         .expect("response");
-    assert_eq!(listed.status(), StatusCode::OK);
-    let listed_body = json_body(listed).await;
-    assert_eq!(listed_body[0]["name"], "Laminatsiya");
-    assert_eq!(
-        listed_body[0]["apparatus"],
-        serde_json::json!(["Laminatsiya 1", "Laminatsiya kley"])
-    );
+    assert_eq!(listed.status(), StatusCode::NOT_FOUND);
 }
 
 #[tokio::test]
@@ -308,15 +245,14 @@ async fn admin_apparatus_options_and_metadata_validation_are_enforced() {
         .expect("apparatus options");
     assert_eq!(options.status(), StatusCode::OK);
     let options_body = json_body(options).await;
+    assert_eq!(options_body["contract"], "canonical_apparatus_revision");
     assert!(
-        options_body["families"]
+        options_body["vocabulary"]["execution_operations"]
             .as_array()
-            .expect("families")
+            .expect("execution operations")
             .iter()
-            .any(|item| item == "pechat")
+            .any(|item| item == "print")
     );
-    assert_eq!(options_body["color_stations_min"], 1);
-    assert_eq!(options_body["color_stations_max"], 24);
 
     let invalid_family = build_router(state.clone())
         .oneshot(request_with_body(
@@ -328,10 +264,7 @@ async fn admin_apparatus_options_and_metadata_validation_are_enforced() {
         .await
         .expect("invalid family");
     assert_eq!(invalid_family.status(), StatusCode::BAD_REQUEST);
-    assert_eq!(
-        json_body(invalid_family).await["error"],
-        "apparatus family is invalid"
-    );
+    assert_eq!(json_body(invalid_family).await["error"], "invalid json");
 
     let invalid_kind = build_router(state.clone())
         .oneshot(request_with_body(
@@ -343,10 +276,7 @@ async fn admin_apparatus_options_and_metadata_validation_are_enforced() {
         .await
         .expect("invalid kind");
     assert_eq!(invalid_kind.status(), StatusCode::BAD_REQUEST);
-    assert_eq!(
-        json_body(invalid_kind).await["error"],
-        "apparatus kind is invalid"
-    );
+    assert_eq!(json_body(invalid_kind).await["error"], "invalid json");
 
     let invalid_capability = build_router(state.clone())
         .oneshot(request_with_body(
@@ -358,10 +288,7 @@ async fn admin_apparatus_options_and_metadata_validation_are_enforced() {
         .await
         .expect("invalid capability");
     assert_eq!(invalid_capability.status(), StatusCode::BAD_REQUEST);
-    assert_eq!(
-        json_body(invalid_capability).await["error"],
-        "apparatus capability is invalid"
-    );
+    assert_eq!(json_body(invalid_capability).await["error"], "invalid json");
 
     let invalid_color_stations = build_router(state)
         .oneshot(request_with_body(
@@ -375,12 +302,12 @@ async fn admin_apparatus_options_and_metadata_validation_are_enforced() {
     assert_eq!(invalid_color_stations.status(), StatusCode::BAD_REQUEST);
     assert_eq!(
         json_body(invalid_color_stations).await["error"],
-        "apparatus color stations are invalid"
+        "invalid json"
     );
 }
 
 #[tokio::test]
-async fn admin_can_create_and_list_typed_apparatus_without_breaking_legacy_clients() {
+async fn admin_can_create_list_and_rename_canonical_apparatus() {
     let state = test_state();
     let token = session(&state, PrincipalRole::Admin).await;
 
@@ -389,17 +316,20 @@ async fn admin_can_create_and_list_typed_apparatus_without_breaking_legacy_clien
             "POST",
             "/v1/mobile/admin/apparatus",
             &token,
-            r#"{"name":" Bobst 1 "}"#,
+            &canonical_apparatus_draft_body("bobst-1", "Bobst 1"),
         ))
         .await
         .expect("create apparatus");
     assert_eq!(created.status(), StatusCode::OK);
     let created_body = json_body(created).await;
-    assert_eq!(created_body["name"], "Bobst 1");
-    assert_eq!(created_body["warehouse"], "Bobst 1");
-    assert_eq!(created_body["parent_warehouse"], "aparat - A");
-    assert_eq!(created_body["family"], "other");
-    assert_eq!(created_body["kind"], "other");
+    assert_eq!(
+        created_body["revision"]["display"]["display_name"],
+        "Bobst 1"
+    );
+    let apparatus_id = created_body["revision"]["apparatus_id"]
+        .as_str()
+        .expect("generated apparatus id")
+        .to_string();
 
     let typed_list = build_router(state.clone())
         .oneshot(request(
@@ -411,30 +341,25 @@ async fn admin_can_create_and_list_typed_apparatus_without_breaking_legacy_clien
         .expect("typed apparatus list");
     assert_eq!(typed_list.status(), StatusCode::OK);
     let typed_body = json_body(typed_list).await;
-    assert_eq!(typed_body[0]["name"], "Bobst 1");
-    assert_eq!(typed_body[0]["id"], "apparatus:bobst 1");
-    assert_eq!(typed_body[0]["source"], "custom");
-    assert_eq!(typed_body[0]["sort_order"], 0);
-    assert_eq!(typed_body[0]["family"], "other");
-    assert_eq!(typed_body[0]["kind"], "other");
-    assert_eq!(
-        typed_body[0]["capabilities"],
-        serde_json::json!(["apparatus"])
-    );
+    assert_eq!(typed_body[0]["display"]["display_name"], "Bobst 1");
+    assert_eq!(typed_body[0]["apparatus_id"], apparatus_id);
 
     let renamed = build_router(state.clone())
         .oneshot(request_with_body(
-            "POST",
-            "/v1/mobile/admin/apparatus",
+            "PUT",
+            &format!("/v1/mobile/admin/apparatus/{apparatus_id}"),
             &token,
-            r#"{"id":"apparatus:bobst 1","name":"Bobst 2","family":"pechat","kind":"flexo","capabilities":["print","pechat","flexo"]}"#,
+            &canonical_apparatus_update_body("bobst-1", "Bobst 2", 1),
         ))
         .await
         .expect("rename semantic apparatus");
     assert_eq!(renamed.status(), StatusCode::OK);
     let renamed_body = json_body(renamed).await;
-    assert_eq!(renamed_body["id"], "apparatus:bobst 1");
-    assert_eq!(renamed_body["name"], "Bobst 2");
+    assert_eq!(renamed_body["revision"]["apparatus_id"], apparatus_id);
+    assert_eq!(
+        renamed_body["revision"]["display"]["display_name"],
+        "Bobst 2"
+    );
 
     let renamed_list = build_router(state.clone())
         .oneshot(request(
@@ -445,49 +370,19 @@ async fn admin_can_create_and_list_typed_apparatus_without_breaking_legacy_clien
         .await
         .expect("list renamed apparatus");
     let renamed_list_body = json_body(renamed_list).await;
-    assert_eq!(renamed_list_body[0]["id"], "apparatus:bobst 1");
-    assert_eq!(renamed_list_body[0]["name"], "Bobst 2");
+    assert_eq!(renamed_list_body[0]["apparatus_id"], apparatus_id);
+    assert_eq!(renamed_list_body[0]["display"]["display_name"], "Bobst 2");
 
     let default_update = build_router(state.clone())
         .oneshot(request_with_body(
             "POST",
             "/v1/mobile/admin/apparatus",
             &token,
-            r#"{"id":"apparatus:default:flexo_pechat","name":"Flexo pechat"}"#,
+            r#"{"id":"apparatus:default:asset-005","name":"Flexo pechat"}"#,
         ))
         .await
         .expect("reject default apparatus update");
     assert_eq!(default_update.status(), StatusCode::BAD_REQUEST);
-
-    let semantic_created = build_router(state.clone())
-        .oneshot(request_with_body(
-            "POST",
-            "/v1/mobile/admin/apparatus",
-            &token,
-            r#"{"name":"Flexo liniya 1","family":"pechat","kind":"flexo","capabilities":["print","pechat","flexo"]}"#,
-        ))
-        .await
-        .expect("create semantic apparatus");
-    assert_eq!(semantic_created.status(), StatusCode::OK);
-    let semantic_body = json_body(semantic_created).await;
-    assert_eq!(semantic_body["family"], "pechat");
-    assert_eq!(semantic_body["kind"], "flexo");
-    assert_eq!(
-        semantic_body["capabilities"],
-        serde_json::json!(["print", "pechat", "flexo"])
-    );
-
-    let semantic_list = build_router(state.clone())
-        .oneshot(request(
-            "GET",
-            "/v1/mobile/admin/apparatus?q=Flexo%20liniya%201&limit=50",
-            &token,
-        ))
-        .await
-        .expect("list semantic apparatus");
-    let semantic_list_body = json_body(semantic_list).await;
-    assert_eq!(semantic_list_body[0]["family"], "pechat");
-    assert_eq!(semantic_list_body[0]["kind"], "flexo");
 
     let legacy_created = build_router(state.clone())
         .oneshot(request_with_body(
@@ -498,24 +393,179 @@ async fn admin_can_create_and_list_typed_apparatus_without_breaking_legacy_clien
         ))
         .await
         .expect("legacy create apparatus");
-    assert_eq!(legacy_created.status(), StatusCode::OK);
-    let legacy_created_body = json_body(legacy_created).await;
-    assert_eq!(legacy_created_body["name"], "Legacy Bobst");
-    assert_eq!(legacy_created_body["warehouse"], "Legacy Bobst");
+    assert_eq!(legacy_created.status(), StatusCode::BAD_REQUEST);
+}
 
-    let listed = build_router(state)
+#[tokio::test]
+async fn canonical_apparatus_does_not_duplicate_the_true_warehouse_catalog() {
+    let state = test_state();
+    let token = session(&state, PrincipalRole::Admin).await;
+
+    let created_apparatus = build_router(state.clone())
+        .oneshot(request_with_body(
+            "POST",
+            "/v1/mobile/admin/apparatus",
+            &token,
+            &canonical_apparatus_draft_body("shared-name", "Shared name"),
+        ))
+        .await
+        .expect("create apparatus");
+    assert_eq!(created_apparatus.status(), StatusCode::OK);
+    let created_apparatus_id = json_body(created_apparatus).await["revision"]["apparatus_id"]
+        .as_str()
+        .expect("generated apparatus id")
+        .to_string();
+
+    let created_warehouse = build_router(state.clone())
+        .oneshot(request_with_body(
+            "POST",
+            "/v1/mobile/admin/warehouses",
+            &token,
+            r#"{"warehouse":"Shared name","parent_warehouse":"aparat - A"}"#,
+        ))
+        .await
+        .expect("create same-name warehouse");
+    assert_eq!(created_warehouse.status(), StatusCode::OK);
+
+    let listed = build_router(state.clone())
         .oneshot(request(
             "GET",
             "/v1/mobile/admin/warehouses?parent=aparat%20-%20A&limit=50",
             &token,
         ))
         .await
-        .expect("list apparatus");
+        .expect("list apparatus compatibility entries");
     assert_eq!(listed.status(), StatusCode::OK);
-    let listed_body = json_body(listed).await;
-    assert!(listed_body.as_array().expect("array").iter().any(|item| {
-        item["warehouse"] == "Bobst 2" && item["parent_warehouse"] == "aparat - A"
+    let matching = json_body(listed)
+        .await
+        .as_array()
+        .expect("warehouse array")
+        .iter()
+        .filter(|entry| entry["warehouse"] == "Shared name")
+        .cloned()
+        .collect::<Vec<_>>();
+    assert_eq!(matching.len(), 1);
+    assert!(matching[0].get("id").is_none());
+
+    let canonical = build_router(state)
+        .oneshot(request(
+            "GET",
+            "/v1/mobile/admin/apparatus?q=Shared%20name&limit=50",
+            &token,
+        ))
+        .await
+        .expect("canonical apparatus list");
+    assert_eq!(
+        json_body(canonical).await[0]["apparatus_id"],
+        created_apparatus_id
+    );
+}
+
+#[tokio::test]
+async fn apparatus_compatibility_scope_survives_display_name_rename() {
+    let state = test_state();
+    let admin_token = session(&state, PrincipalRole::Admin).await;
+    let created = build_router(state.clone())
+        .oneshot(request_with_body(
+            "POST",
+            "/v1/mobile/admin/apparatus",
+            &admin_token,
+            &canonical_apparatus_draft_body("rename-scope", "Before rename"),
+        ))
+        .await
+        .expect("create apparatus");
+    assert_eq!(created.status(), StatusCode::OK);
+    let apparatus_id = json_body(created).await["revision"]["apparatus_id"]
+        .as_str()
+        .expect("generated apparatus id")
+        .to_string();
+
+    state
+        .warehouses
+        .assign_warehouse(WarehouseAssignmentUpsert {
+            assignment_kind: "apparatus".to_string(),
+            warehouse: apparatus_id.clone(),
+            warehouse_name: None,
+            apparatus_id: Some(apparatus_id.clone()),
+            principal_role: PrincipalRole::Werka,
+            principal_ref: "werka-apparatus-scope".to_string(),
+            display_name: "Werka".to_string(),
+        })
+        .await
+        .expect("assign canonical apparatus");
+
+    let renamed = build_router(state.clone())
+        .oneshot(request_with_body(
+            "PUT",
+            &format!("/v1/mobile/admin/apparatus/{apparatus_id}"),
+            &admin_token,
+            &canonical_apparatus_update_body("rename-scope", "After rename", 1),
+        ))
+        .await
+        .expect("rename apparatus");
+    assert_eq!(renamed.status(), StatusCode::OK);
+
+    let listed = build_router(state.clone())
+        .oneshot(request(
+            "GET",
+            "/v1/mobile/admin/apparatus?q=After%20rename&limit=50",
+            &admin_token,
+        ))
+        .await
+        .expect("list canonical apparatus");
+    assert_eq!(listed.status(), StatusCode::OK);
+    let body = json_body(listed).await;
+    let entries = body.as_array().expect("apparatus array");
+    assert!(entries.iter().any(|entry| {
+        entry["apparatus_id"] == apparatus_id && entry["display"]["display_name"] == "After rename"
     }));
+    assert!(
+        !entries
+            .iter()
+            .any(|entry| entry["display"]["display_name"] == "Before rename")
+    );
+
+    let assignments = state
+        .warehouses
+        .assigned_warehouse_keys(&Principal {
+            role: PrincipalRole::Werka,
+            display_name: "Werka".to_string(),
+            legal_name: "Werka".to_string(),
+            ref_: "werka-apparatus-scope".to_string(),
+            phone: String::new(),
+            avatar_url: String::new(),
+        })
+        .await
+        .expect("assigned warehouse keys");
+    assert_eq!(assignments, vec![apparatus_id]);
+}
+
+#[tokio::test]
+async fn legacy_true_warehouse_scope_remains_name_keyed() {
+    let state = test_state();
+    assign_warehouse_to_principal(
+        &state,
+        PrincipalRole::Werka,
+        "werka-legacy-warehouse",
+        "Legacy warehouse",
+    )
+    .await;
+    let token = session_for(&state, PrincipalRole::Werka, "werka-legacy-warehouse").await;
+
+    let listed = build_router(state)
+        .oneshot(request(
+            "GET",
+            "/v1/mobile/admin/warehouses?limit=50",
+            &token,
+        ))
+        .await
+        .expect("list legacy warehouse");
+    assert_eq!(listed.status(), StatusCode::OK);
+    let body = json_body(listed).await;
+    let entries = body.as_array().expect("warehouse array");
+    assert_eq!(entries.len(), 1, "legacy scope should remain name-keyed");
+    assert_eq!(entries[0]["warehouse"], "Legacy warehouse");
+    assert!(entries[0].get("id").is_none());
 }
 
 #[tokio::test]
@@ -527,7 +577,7 @@ async fn apparatus_queue_reader_can_list_but_cannot_create_apparatus() {
             principal_role: PrincipalRole::Aparatchi,
             principal_ref: "apparatus-reader".to_string(),
             role_id: "aparatchi".to_string(),
-            assigned_apparatus: vec!["Godex aparat - DEMO".to_string()],
+            assigned_apparatus: vec!["apparatus:default:bosma_7".to_string()],
             assigned_item_groups: Vec::new(),
         })
         .await
@@ -652,6 +702,39 @@ async fn admin_can_assign_warehouse_to_user_and_list_assignments() {
     let listed_body = json_body(listed).await;
     assert_eq!(listed_body[0]["warehouse"], "Ombor");
     assert_eq!(listed_body[0]["principal_ref"], "werka");
+}
+
+#[tokio::test]
+async fn apparatus_assignment_rejects_syntactically_valid_nonexistent_id() {
+    let state = test_state();
+    let token = session(&state, PrincipalRole::Admin).await;
+
+    let response = build_router(state.clone())
+        .oneshot(request_with_body(
+            "POST",
+            "/v1/mobile/admin/warehouses/assignments",
+            &token,
+            r#"{
+                "assignment_kind":"apparatus",
+                "warehouse":"apparatus:custom:does-not-exist",
+                "apparatus_id":"apparatus:custom:does-not-exist",
+                "principal_role":"werka",
+                "principal_ref":"werka-missing-apparatus",
+                "display_name":"Werka"
+            }"#,
+        ))
+        .await
+        .expect("reject missing apparatus assignment");
+
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    assert_eq!(json_body(response).await["error"], "apparatus is invalid");
+
+    let assignments = state
+        .warehouses
+        .warehouse_assignments("")
+        .await
+        .expect("load assignments");
+    assert!(assignments.is_empty());
 }
 
 #[tokio::test]
@@ -841,7 +924,7 @@ async fn admin_deletes_empty_warehouse_and_its_assignments() {
 async fn warehouse_products_require_confirmation_and_active_reservations_block_delete() {
     let mut state = test_state();
     let store = Arc::new(MemoryWarehouseStore::new());
-    state.warehouses = WarehouseService::new(store.clone());
+    state.warehouses = WarehouseService::new_for_test(store.clone());
     let token = session(&state, PrincipalRole::Admin).await;
 
     build_router(state.clone())

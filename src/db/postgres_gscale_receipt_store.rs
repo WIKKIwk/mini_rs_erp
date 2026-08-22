@@ -396,6 +396,11 @@ impl MaterialReceiptStorePort for PostgresGscaleReceiptStore {
         .fetch_all(&mut *tx)
         .await
         .map_err(|error| GscalePortError::StoreWrite(error.to_string()))?;
+        if rows.len() != barcodes.len() {
+            return Err(GscalePortError::InvalidInput(
+                "raw_material_stock_unavailable".to_string(),
+            ));
+        }
         for row in &rows {
             let previous = before.get(&stock_key(&row.barcode));
             insert_raw_material_event_tx(

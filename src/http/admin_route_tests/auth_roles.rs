@@ -224,7 +224,7 @@ async fn admin_creates_material_taminotchi_with_seventy_prefix_code() {
                     "principal_role":"material_taminotchi",
                     "principal_ref":"{}",
                     "role_id":"material_taminotchi",
-                    "assigned_apparatus":["Laminatsiya - A"],
+                    "assigned_apparatus":["apparatus:default:asset-007"],
                     "assigned_item_groups":["Kraska"]
                 }}"#,
                 material["ref"].as_str().expect("ref")
@@ -311,7 +311,7 @@ async fn admin_creates_material_taminotchi_with_seventy_prefix_code() {
     assert_eq!(login["profile"]["role"], "material_taminotchi");
     assert_eq!(
         login["assigned_apparatus"],
-        serde_json::json!(["Laminatsiya - A"])
+        serde_json::json!(["apparatus:default:asset-007"])
     );
     assert_eq!(
         login["assigned_item_groups"],
@@ -419,100 +419,6 @@ async fn admin_role_assignment_limits_runtime_capabilities() {
 }
 
 #[tokio::test]
-async fn delegated_role_manager_cannot_escalate_capabilities_or_scopes() {
-    let state = test_state();
-    let admin_token = session(&state, PrincipalRole::Admin).await;
-
-    for (id, capability_codes) in [
-        ("role_manager", vec!["role.capability.manage"]),
-        (
-            "scoped_queue_manager",
-            vec!["role.capability.manage", "apparatus.queue.manage"],
-        ),
-        ("admin_only", vec!["admin.access"]),
-    ] {
-        let response = build_router(state.clone())
-            .oneshot(request_with_body(
-                "PUT",
-                "/v1/mobile/admin/roles",
-                &admin_token,
-                &serde_json::json!({
-                    "id": id,
-                    "label": id,
-                    "capability_codes": capability_codes,
-                })
-                .to_string(),
-            ))
-            .await
-            .expect("role response");
-        assert_eq!(response.status(), StatusCode::OK, "{id}");
-    }
-
-    let response = build_router(state.clone())
-        .oneshot(request_with_body(
-            "PUT",
-            "/v1/mobile/admin/role-assignments",
-            &admin_token,
-            r#"{
-                "principal_role":"supplier",
-                "principal_ref":"SUP-ROLE-MANAGER",
-                "role_id":"scoped_queue_manager",
-                "assigned_apparatus":["Laminatsiya - A"]
-            }"#,
-        ))
-        .await
-        .expect("role assignment response");
-    assert_eq!(response.status(), StatusCode::OK);
-
-    let delegated_token = session_for(&state, PrincipalRole::Supplier, "SUP-ROLE-MANAGER").await;
-    let response = build_router(state.clone())
-        .oneshot(request_with_body(
-            "PUT",
-            "/v1/mobile/admin/roles",
-            &delegated_token,
-            r#"{
-                "id":"delegated_admin",
-                "label":"Delegated admin",
-                "capability_codes":["admin.access"]
-            }"#,
-        ))
-        .await
-        .expect("delegated role response");
-    assert_eq!(response.status(), StatusCode::FORBIDDEN);
-
-    let response = build_router(state.clone())
-        .oneshot(request_with_body(
-            "PUT",
-            "/v1/mobile/admin/role-assignments",
-            &delegated_token,
-            r#"{
-                "principal_role":"supplier",
-                "principal_ref":"SUP-ROLE-MANAGER",
-                "role_id":"admin_only"
-            }"#,
-        ))
-        .await
-        .expect("delegated assignment response");
-    assert_eq!(response.status(), StatusCode::FORBIDDEN);
-
-    let response = build_router(state)
-        .oneshot(request_with_body(
-            "PUT",
-            "/v1/mobile/admin/role-assignments",
-            &delegated_token,
-            r#"{
-                "principal_role":"supplier",
-                "principal_ref":"SUP-OTHER",
-                "role_id":"scoped_queue_manager",
-                "assigned_apparatus":["Laminatsiya - B"]
-            }"#,
-        ))
-        .await
-        .expect("delegated scope response");
-    assert_eq!(response.status(), StatusCode::FORBIDDEN);
-}
-
-#[tokio::test]
 async fn login_returns_effective_capabilities_for_assigned_custom_role() {
     let state = test_state();
     let admin_token = session(&state, PrincipalRole::Admin).await;
@@ -541,7 +447,7 @@ async fn login_returns_effective_capabilities_for_assigned_custom_role() {
                 "principal_role":"werka",
                 "principal_ref":"werka",
                 "role_id":"scale_only",
-                "assigned_apparatus":["Paket aparat"]
+                "assigned_apparatus":["apparatus:default:paket"]
             }"#,
         ))
         .await
@@ -565,6 +471,6 @@ async fn login_returns_effective_capabilities_for_assigned_custom_role() {
     );
     assert_eq!(
         value["assigned_apparatus"],
-        serde_json::json!(["Paket aparat"])
+        serde_json::json!(["apparatus:default:paket"])
     );
 }

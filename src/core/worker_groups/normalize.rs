@@ -1,14 +1,19 @@
 use std::collections::BTreeSet;
 
+use crate::core::apparatus_standard::ApparatusId;
+
 use super::{WorkerGroupError, WorkerGroupRecord, WorkerGroupUpsert, default_work_days_per_week};
 
 pub(super) fn normalize_input(
     input: WorkerGroupUpsert,
 ) -> Result<WorkerGroupRecord, WorkerGroupError> {
-    let apparatus = input.apparatus.trim().to_string();
-    if apparatus.is_empty() {
+    let Some(apparatus_id) = input.apparatus_id else {
         return Err(WorkerGroupError::MissingApparatus);
+    };
+    if ApparatusId::new(apparatus_id.as_str()).is_err() {
+        return Err(WorkerGroupError::InvalidApparatusId);
     }
+    let apparatus = input.apparatus.trim().to_string();
     let group_code = normalize_group_code(&input.group_code)?;
     let shift = normalize_shift(&input.shift)?;
     let start_time = normalize_time(&input.start_time, "08:00")?;
@@ -25,6 +30,7 @@ pub(super) fn normalize_input(
         .collect();
 
     Ok(WorkerGroupRecord {
+        apparatus_id,
         apparatus,
         group_code,
         shift,
@@ -120,9 +126,9 @@ pub(super) fn ensure_workers_not_duplicated(
 
 pub(super) fn sort_groups(mut groups: Vec<WorkerGroupRecord>) -> Vec<WorkerGroupRecord> {
     groups.sort_by(|left, right| {
-        left.apparatus
-            .to_lowercase()
-            .cmp(&right.apparatus.to_lowercase())
+        left.apparatus_id
+            .as_str()
+            .cmp(right.apparatus_id.as_str())
             .then(left.group_code.cmp(&right.group_code))
     });
     groups

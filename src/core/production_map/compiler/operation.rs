@@ -8,6 +8,9 @@ pub(super) fn compile_node(
 ) -> Result<ProductionMapOperation, ProductionMapError> {
     let mut args = BTreeMap::new();
     args.insert("title".to_string(), node.title.clone());
+    if node.kind == ProductionMapNodeKind::Apparatus {
+        args.insert("apparatus_id".to_string(), node.apparatus_id.clone());
+    }
     if !node.role_code.is_empty() {
         args.insert("role_code".to_string(), node.role_code.clone());
     }
@@ -39,6 +42,12 @@ pub(super) fn compile_node(
         args.insert(
             "alternative_assigned_title".to_string(),
             node.alternative_assigned_title.clone(),
+        );
+    }
+    if !node.alternative_assigned_apparatus_id.is_empty() {
+        args.insert(
+            "alternative_assigned_apparatus_id".to_string(),
+            node.alternative_assigned_apparatus_id.clone(),
         );
     }
     if let Some(value) = node.rezka_kadr_count {

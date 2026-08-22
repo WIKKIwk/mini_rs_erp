@@ -2,9 +2,8 @@ use async_trait::async_trait;
 use sqlx::{PgPool, Row};
 
 use crate::core::calculate_materials::{
-    CalculateMaterial, CalculateMaterialError, CalculateMaterialStorePort,
-    CalculateMaterialUpsert, ensure_unique_name, merge_default_calculate_materials,
-    normalize_material,
+    CalculateMaterial, CalculateMaterialError, CalculateMaterialStorePort, CalculateMaterialUpsert,
+    ensure_unique_name, merge_default_calculate_materials, normalize_material,
 };
 
 #[derive(Clone)]
@@ -50,8 +49,8 @@ impl CalculateMaterialStorePort for PostgresCalculateMaterialStore {
         let material = normalize_material(input)?;
         let current = self.list().await?;
         ensure_unique_name(&current, &material)?;
-        let payload = serde_json::to_value(&material)
-            .map_err(|_| CalculateMaterialError::StoreFailed)?;
+        let payload =
+            serde_json::to_value(&material).map_err(|_| CalculateMaterialError::StoreFailed)?;
         sqlx::query(
             "INSERT INTO mini_calculate_materials
                 (id, lower_name, payload_json, updated_at)

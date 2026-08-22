@@ -204,11 +204,6 @@ pub async fn material_taminotchi_code_regenerate(
         Err(AdminPortError::NotFound) => return Err(not_found("material taminotchi not found")),
         Err(_) => return Err(server_error("material taminotchi code regenerate failed")),
     };
-    state
-        .sessions
-        .delete_for_principal(&PrincipalRole::MaterialTaminotchi, &detail.ref_)
-        .await
-        .map_err(|_| server_error("material taminotchi session revoke failed"))?;
     Ok(Json(
         hydrate_material_taminotchi_detail(&state, &headers, detail).await?,
     ))
@@ -236,11 +231,6 @@ pub async fn material_taminotchi_item_groups(
             AdminPortError::NotFound => not_found("material taminotchi not found"),
             _ => server_error("material taminotchi item groups update failed"),
         })?;
-    state
-        .sessions
-        .delete_for_principal(&PrincipalRole::MaterialTaminotchi, ref_)
-        .await
-        .map_err(|_| server_error("material taminotchi session revoke failed"))?;
     Ok(Json(
         hydrate_material_taminotchi_detail(&state, &headers, detail).await?,
     ))

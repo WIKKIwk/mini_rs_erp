@@ -166,10 +166,7 @@ impl RpsBatchService {
             return Ok(false);
         }
         if !response.epc.trim().is_empty()
-            && batch
-                .prints
-                .iter()
-                .any(|entry| entry.epc == response.epc)
+            && batch.prints.iter().any(|entry| entry.epc == response.epc)
         {
             return Ok(true);
         }

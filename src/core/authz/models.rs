@@ -1,5 +1,6 @@
 use serde::{Deserialize, Serialize};
 
+use crate::core::apparatus_standard::ApparatusId;
 use crate::core::auth::models::PrincipalRole;
 
 #[derive(Debug, Clone, Copy, Eq, PartialEq)]
@@ -86,6 +87,9 @@ pub struct RoleAssignment {
     pub principal_ref: String,
     pub role_id: String,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    /// Canonical apparatus IDs serialized as strings at the shared API boundary.
+    /// Values are validated by `normalize_role_assignment`; display titles are
+    /// never accepted as authorization scopes.
     pub assigned_apparatus: Vec<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub assigned_item_groups: Vec<String>,
@@ -130,10 +134,30 @@ pub enum RoleAssignmentError {
     RoleBaseMismatch,
     #[error("material taminotchi needs at least one item group")]
     MissingAssignedItemGroups,
+    #[error("assigned apparatus is not a canonical apparatus id: {0}")]
+    InvalidAssignedApparatus(String),
 }
 
 #[derive(Debug, thiserror::Error)]
 pub enum RoleStoreError {
     #[error("role store failed")]
     StoreFailed,
+}
+
+impl RoleAssignment {
+    pub fn allows_apparatus(&self, apparatus_id: &ApparatusId) -> bool {
+        self.assigned_apparatus
+            .iter()
+            .any(|assigned| assigned == apparatus_id.as_str())
+    }
+
+    pub fn apparatus_scope(&self) -> Result<Vec<ApparatusId>, RoleAssignmentError> {
+        self.assigned_apparatus
+            .iter()
+            .map(|value| {
+                ApparatusId::new(value.clone())
+                    .map_err(|_| RoleAssignmentError::InvalidAssignedApparatus(value.clone()))
+            })
+            .collect()
+    }
 }

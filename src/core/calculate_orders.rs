@@ -223,6 +223,7 @@ pub fn hydrate_template_layers(mut template: CalculateOrderTemplate) -> Calculat
 }
 
 #[cfg(test)]
+#[allow(clippy::items_after_test_module)]
 mod tests {
     use super::*;
 

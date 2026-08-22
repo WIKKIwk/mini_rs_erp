@@ -11,7 +11,6 @@ use crate::core::returned_paint::{
     ReturnedPaintError, ReturnedPaintRequest, ReturnedPaintRequestComplete,
     ReturnedPaintRequestCreate,
 };
-use crate::http::handlers::admin::principal_can_use_apparatus;
 use crate::http::handlers::auth::{ErrorResponse, bearer_token};
 
 #[derive(Debug, Deserialize)]
@@ -49,11 +48,6 @@ pub async fn requests(
             require_capability(&state, &principal, Capability::ReturnedPaintRequestCreate).await?;
             let input = serde_json::from_slice::<ReturnedPaintRequestCreate>(&body)
                 .map_err(|_| bad_request("invalid json"))?;
-            if !input.apparatus.trim().is_empty()
-                && !principal_can_use_apparatus(&state, &principal, &input.apparatus).await
-            {
-                return Err(forbidden());
-            }
             let request = state
                 .returned_paint
                 .create(input, &principal)
@@ -117,11 +111,6 @@ pub async fn images(
     require_capability(&state, &principal, Capability::ReturnedPaintRequestCreate).await?;
     match method {
         Method::POST => {
-            if !query.apparatus.trim().is_empty()
-                && !principal_can_use_apparatus(&state, &principal, &query.apparatus).await
-            {
-                return Err(forbidden());
-            }
             if body.is_empty() {
                 return Err(bad_request("returned paint image is required"));
             }
@@ -245,8 +234,7 @@ fn returned_paint_error(error: ReturnedPaintError) -> (StatusCode, Json<ErrorRes
                 error: "Qaytarilgan bo‘yoq rasmi topilmadi",
             }),
         ),
-        ReturnedPaintError::TrainingOrderIdReserved
-        | ReturnedPaintError::MissingOrderId
+        ReturnedPaintError::MissingOrderId
         | ReturnedPaintError::MissingApparatus
         | ReturnedPaintError::MissingItems
         | ReturnedPaintError::InsufficientValues
@@ -269,9 +257,6 @@ fn returned_paint_error(error: ReturnedPaintError) -> (StatusCode, Json<ErrorRes
 
 fn returned_paint_error_message(error: &ReturnedPaintError) -> &'static str {
     match error {
-        ReturnedPaintError::TrainingOrderIdReserved => {
-            "training_order_requires_training_endpoint"
-        }
         ReturnedPaintError::MissingOrderId => "Buyurtma IDsi kiritilmagan",
         ReturnedPaintError::MissingApparatus => "Apparat kiritilmagan",
         ReturnedPaintError::MissingItems => "Kamida bitta qaytarilgan bo‘yoq qiymati kerak",

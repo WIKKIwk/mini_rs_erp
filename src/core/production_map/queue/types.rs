@@ -2,6 +2,7 @@ use std::collections::BTreeMap;
 
 use serde::{Deserialize, Serialize};
 
+use crate::core::apparatus_standard::ApparatusId;
 use crate::core::production_map::queue_state;
 
 use super::control::{OrderControlRecord, OrderFreezeRequest};
@@ -36,6 +37,10 @@ impl ApparatusQueuePolicy {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ApparatusQueuePolicyRecord {
+    pub apparatus_id: ApparatusId,
+    /// Historical/display snapshot retained for compatibility. Queue policy
+    /// identity is always read from `apparatus_id`.
+    #[serde(default)]
     pub apparatus: String,
     pub policy: ApparatusQueuePolicy,
     #[serde(default)]
@@ -122,23 +127,13 @@ pub struct ApparatusQueueOrderActionControl {
     pub freeze_request: Option<OrderFreezeRequest>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct QueueActionActor {
     pub role: String,
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub ref_: String,
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub display_name: String,
-}
-
-impl Default for QueueActionActor {
-    fn default() -> Self {
-        Self {
-            role: String::new(),
-            ref_: String::new(),
-            display_name: String::new(),
-        }
-    }
 }
 
 /// Durable receipt of an emergency apparatus transfer. The full post-transfer

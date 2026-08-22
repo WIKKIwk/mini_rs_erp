@@ -3,7 +3,7 @@ use sqlx::PgPool;
 use crate::core::qolip::normalize::{location_identity_matches, normalize_move_target};
 use crate::core::qolip::{QolipError, QolipLocation, QolipLocationMove};
 
-use super::rows::{row_to_location, QolipLocationRow};
+use super::rows::{QolipLocationRow, row_to_location};
 
 pub(super) async fn load_locations(
     pool: &PgPool,

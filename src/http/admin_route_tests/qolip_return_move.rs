@@ -161,9 +161,7 @@ async fn qolip_move_changes_only_the_location_across_existing_blocks() {
         .expect("create source location");
     assert_eq!(source.status(), StatusCode::OK);
     let source_body = json_body(source).await;
-    let source_id = source_body["location"]["id"]
-        .as_str()
-        .expect("source id");
+    let source_id = source_body["location"]["id"].as_str().expect("source id");
 
     let moved = build_router(state.clone())
         .oneshot(request_with_body(
@@ -184,11 +182,7 @@ async fn qolip_move_changes_only_the_location_across_existing_blocks() {
     assert_eq!(moved_body["location"]["qolip_code"], "Q-CROSS-BLOCK");
 
     let source_locations = build_router(state.clone())
-        .oneshot(request(
-            "GET",
-            "/v1/mobile/qolip/locations?block=A",
-            &token,
-        ))
+        .oneshot(request("GET", "/v1/mobile/qolip/locations?block=A", &token))
         .await
         .expect("list source block");
     assert_eq!(source_locations.status(), StatusCode::OK);
@@ -201,11 +195,7 @@ async fn qolip_move_changes_only_the_location_across_existing_blocks() {
     );
 
     let target_locations = build_router(state.clone())
-        .oneshot(request(
-            "GET",
-            "/v1/mobile/qolip/locations?block=B",
-            &token,
-        ))
+        .oneshot(request("GET", "/v1/mobile/qolip/locations?block=B", &token))
         .await
         .expect("list target block");
     assert_eq!(target_locations.status(), StatusCode::OK);
@@ -219,13 +209,7 @@ async fn qolip_move_changes_only_the_location_across_existing_blocks() {
     assert_eq!(blocks.status(), StatusCode::OK);
     let blocks_body = json_body(blocks).await;
     assert_eq!(blocks_body["supports_cross_block_move"], true);
-    assert_eq!(
-        blocks_body["blocks"]
-            .as_array()
-            .expect("blocks")
-            .len(),
-        2
-    );
+    assert_eq!(blocks_body["blocks"].as_array().expect("blocks").len(), 2);
 }
 
 #[tokio::test]
@@ -396,30 +380,38 @@ async fn qolip_batch_move_moves_all_selected_locations_to_one_cell_atomically() 
         .expect("batch move");
     assert_eq!(moved.status(), StatusCode::OK);
     let moved_body = json_body(moved).await;
-    assert_eq!(moved_body["locations"].as_array().expect("locations").len(), 2);
-    assert!(moved_body["locations"]
-        .as_array()
-        .expect("locations")
-        .iter()
-        .all(|location| {
-            location["block"] == "B" && location["location_label"] == "C2"
-        }));
+    assert_eq!(
+        moved_body["locations"].as_array().expect("locations").len(),
+        2
+    );
+    assert!(
+        moved_body["locations"]
+            .as_array()
+            .expect("locations")
+            .iter()
+            .all(|location| { location["block"] == "B" && location["location_label"] == "C2" })
+    );
 
     let source_locations = build_router(state.clone())
         .oneshot(request("GET", "/v1/mobile/qolip/locations?block=A", &token))
         .await
         .expect("list source locations");
-    assert!(json_body(source_locations).await["locations"]
-        .as_array()
-        .expect("source locations")
-        .is_empty());
+    assert!(
+        json_body(source_locations).await["locations"]
+            .as_array()
+            .expect("source locations")
+            .is_empty()
+    );
 
     let target_locations = build_router(state)
         .oneshot(request("GET", "/v1/mobile/qolip/locations?block=B", &token))
         .await
         .expect("list target locations");
-    assert_eq!(json_body(target_locations).await["locations"]
-        .as_array()
-        .expect("target locations")
-        .len(), 2);
+    assert_eq!(
+        json_body(target_locations).await["locations"]
+            .as_array()
+            .expect("target locations")
+            .len(),
+        2
+    );
 }

@@ -52,6 +52,28 @@ async fn customer_refresh_updates_phone() {
 }
 
 #[tokio::test]
+async fn profile_mutation_rejects_missing_canonical_identity() {
+    let service =
+        ProfileService::new(String::new()).with_store(Arc::new(FakeProfileStore::default()));
+    let error = service
+        .update_nickname(
+            Principal {
+                role: PrincipalRole::Admin,
+                display_name: "Admin".to_string(),
+                legal_name: "Admin".to_string(),
+                ref_: String::new(),
+                phone: "+998880000000".to_string(),
+                avatar_url: String::new(),
+            },
+            "Alias",
+        )
+        .await
+        .expect_err("missing profile identity must fail");
+
+    assert!(matches!(error, ProfileStoreError::StoreFailed));
+}
+
+#[tokio::test]
 async fn supplier_avatar_download_uses_refreshed_avatar_url() {
     let service = ProfileService::new("http://files.test".to_string())
         .with_profile_lookup(Arc::new(FakeProfileLookup));

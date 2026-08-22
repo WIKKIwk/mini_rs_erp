@@ -152,9 +152,8 @@ impl GscaleService {
                 .await?,
             );
         }
-        let mut response = last_response.ok_or_else(|| {
-            GscaleServiceError::InvalidInput("print_count_required".to_string())
-        })?;
+        let mut response = last_response
+            .ok_or_else(|| GscaleServiceError::InvalidInput("print_count_required".to_string()))?;
         response.print_count = print_count;
         Ok(response)
     }

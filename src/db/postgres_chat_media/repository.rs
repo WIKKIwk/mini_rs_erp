@@ -390,6 +390,7 @@ pub(super) async fn authorized_principal_id(
 }
 
 #[cfg(test)]
+#[allow(clippy::items_after_test_module)]
 mod tests {
     use super::{AUTHORIZED_PRINCIPAL_SQL, prefixed_columns};
 

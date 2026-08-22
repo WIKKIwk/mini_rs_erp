@@ -10,7 +10,12 @@ async fn production_map_duplicate_order_number_returns_structured_error() {
             "PUT",
             "/v1/mobile/admin/production-maps",
             &token,
-            &pechat_order_map_json("zakaz-1234", "Old zakaz", "1234", "8 ta rangli pechat"),
+            &pechat_order_map_json(
+                "zakaz-1234",
+                "Old zakaz",
+                "1234",
+                "apparatus:default:bosma_8",
+            ),
         ))
         .await
         .expect("first save");
@@ -21,7 +26,12 @@ async fn production_map_duplicate_order_number_returns_structured_error() {
             "PUT",
             "/v1/mobile/admin/production-maps",
             &token,
-            &pechat_order_map_json("zakaz-new", "New zakaz", "1234", "8 ta rangli pechat"),
+            &pechat_order_map_json(
+                "zakaz-new",
+                "New zakaz",
+                "1234",
+                "apparatus:default:bosma_8",
+            ),
         ))
         .await
         .expect("duplicate save");
@@ -33,7 +43,7 @@ async fn production_map_duplicate_order_number_returns_structured_error() {
 }
 
 #[tokio::test]
-async fn production_map_rejects_laminatsiya_when_rubber_above_1050() {
+async fn production_map_rejects_width_above_canonical_apparatus_limit() {
     let state = test_state();
     let token = session(&state, PrincipalRole::Admin).await;
 
@@ -50,7 +60,7 @@ async fn production_map_rejects_laminatsiya_when_rubber_above_1050() {
     assert_eq!(response.status(), StatusCode::BAD_REQUEST);
     assert_eq!(
         json_body(response).await["error"],
-        "laminatsiya_rubber_too_large"
+        "apparatus_width_exceeds_capability"
     );
 }
 
@@ -86,7 +96,7 @@ async fn production_map_move_validates_pechat_rules_on_server() {
                 "zakaz-9001",
                 "Nine color rubber order",
                 "9001",
-                "8 ta rangli pechat",
+                "apparatus:default:bosma_8",
             ),
         ))
         .await
@@ -100,8 +110,8 @@ async fn production_map_move_validates_pechat_rules_on_server() {
             &token,
             r#"{
                 "map_id":"zakaz-9001",
-                "from_apparatus":"8 ta rangli pechat",
-                "to_apparatus":"7 ta rangli pechat"
+                "from_apparatus":"apparatus:default:bosma_8",
+                "to_apparatus":"apparatus:default:bosma_7"
             }"#,
         ))
         .await
@@ -116,8 +126,8 @@ async fn production_map_move_validates_pechat_rules_on_server() {
             &token,
             r#"{
                 "map_id":"zakaz-9001",
-                "from_apparatus":"8 ta rangli pechat",
-                "to_apparatus":"9 ta rangli pechat"
+                "from_apparatus":"apparatus:default:bosma_8",
+                "to_apparatus":"apparatus:default:bosma_9"
             }"#,
         ))
         .await
@@ -126,8 +136,12 @@ async fn production_map_move_validates_pechat_rules_on_server() {
     let body = json_body(allowed).await;
     assert_eq!(body["ok"], true);
     assert_eq!(
+        body["saved"]["map"]["nodes"][1]["apparatus_id"],
+        "apparatus:default:bosma_9"
+    );
+    assert_eq!(
         body["saved"]["map"]["nodes"][1]["title"],
-        "9 ta rangli pechat"
+        "apparatus:default:bosma_8"
     );
 
     let list = build_router(state)
@@ -135,5 +149,8 @@ async fn production_map_move_validates_pechat_rules_on_server() {
         .await
         .expect("list");
     let maps = json_body(list).await;
-    assert_eq!(maps[0]["map"]["nodes"][1]["title"], "9 ta rangli pechat");
+    assert_eq!(
+        maps[0]["map"]["nodes"][1]["apparatus_id"],
+        "apparatus:default:bosma_9"
+    );
 }

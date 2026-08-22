@@ -1,17 +1,4 @@
-use crate::core::production_map::{
-    ApparatusMaterialRule, ProductionMapError, RawMaterialAssignment,
-};
-
-pub(super) async fn apparatus_material_rules()
--> Result<Vec<ApparatusMaterialRule>, ProductionMapError> {
-    Err(ProductionMapError::StoreFailed)
-}
-
-pub(super) async fn put_apparatus_material_rule(
-    _rule: ApparatusMaterialRule,
-) -> Result<(), ProductionMapError> {
-    Err(ProductionMapError::StoreFailed)
-}
+use crate::core::production_map::{ProductionMapError, RawMaterialAssignment};
 
 pub(super) async fn raw_material_assignments()
 -> Result<Vec<RawMaterialAssignment>, ProductionMapError> {

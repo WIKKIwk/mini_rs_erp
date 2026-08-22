@@ -1,11 +1,10 @@
 use crate::core::admin::ports::AdminPortError;
 use crate::core::workers::{Worker, WorkerError, WorkerStorePort};
-use crate::db::postgres::apply_foundation_migration;
+use crate::db::postgres::{apply_foundation_migration, postgres_test_database_options};
 use crate::db::postgres_customer::PostgresCustomerStore;
 use crate::db::postgres_worker::PostgresWorkerStore;
 
 #[tokio::test]
-#[ignore = "requires local PostgreSQL and creates/drops mini_rs_erp_test_phone_uniqueness"]
 async fn postgres_normalized_phones_are_unique_under_database_control() {
     let admin_url = std::env::var("MINI_ERP_TEST_ADMIN_DATABASE_URL")
         .unwrap_or_else(|_| "postgres://wikki@127.0.0.1:5432/postgres".to_string());
@@ -23,8 +22,9 @@ async fn postgres_normalized_phones_are_unique_under_database_control() {
         .expect("create test db");
     admin_pool.close().await;
 
-    let test_url = format!("postgres://wikki@127.0.0.1:5432/{db_name}");
-    let pool = sqlx::PgPool::connect(&test_url).await.expect("test db");
+    let pool = sqlx::PgPool::connect_with(postgres_test_database_options(&admin_url, db_name))
+        .await
+        .expect("test db");
     apply_foundation_migration(&pool)
         .await
         .expect("apply migrations");

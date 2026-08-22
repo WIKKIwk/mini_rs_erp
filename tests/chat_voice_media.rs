@@ -6,7 +6,6 @@ use mini_rs_erp::core::chat_media::{
 };
 
 #[tokio::test]
-#[ignore = "requires ffmpeg and ffprobe on PATH"]
 async fn voice_media_is_canonicalized_to_mono_aac_with_waveform() {
     let directory = tempfile::tempdir().expect("temporary media directory");
     let source = directory.path().join("source.wav");

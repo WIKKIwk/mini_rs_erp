@@ -1,9 +1,9 @@
 use std::sync::Arc;
 
 use crate::core::mini_orders::{MiniOrderSink, NoopMiniOrderSink};
-use crate::db::postgres_apparatus_group::PostgresApparatusGroupStore;
-use crate::db::postgres_calculate_order::PostgresCalculateOrderStore;
+use crate::core::production_map::CanonicalServiceApparatusResolver;
 use crate::db::postgres_calculate_material::PostgresCalculateMaterialStore;
+use crate::db::postgres_calculate_order::PostgresCalculateOrderStore;
 use crate::db::postgres_chat::PostgresChatStore;
 use crate::db::postgres_chat_media::PostgresChatMediaRepository;
 use crate::db::postgres_customer::PostgresCustomerStore;
@@ -23,16 +23,12 @@ use crate::db::postgres_warehouse::PostgresWarehouseStore;
 use crate::db::postgres_worker::PostgresWorkerStore;
 use crate::db::postgres_worker_group::PostgresWorkerGroupStore;
 use crate::rps::RpsDriverClient;
-use crate::store::apparatus_group_store::ApparatusGroupStore;
-use crate::store::calculate_order_store::CalculateOrderStore;
 use crate::store::calculate_material_store::CalculateMaterialStore;
+use crate::store::calculate_order_store::CalculateOrderStore;
 use crate::telegram::TelegramService;
 
-use super::app_local_store::{
-    apparatus_group_store_path, calculate_material_store_path, calculate_order_store_path,
-};
+use super::app_local_store::{calculate_material_store_path, calculate_order_store_path};
 use super::postgres_pool::postgres_pool;
-use super::unavailable_production_map_store::UnavailableProductionMapStore;
 use super::*;
 
 pub(super) fn default_scale_driver_url() -> String {
@@ -66,16 +62,16 @@ pub(super) fn build_gscale_service(
     }
 }
 
-pub(super) fn build_warehouse_service() -> WarehouseService {
-    match postgres_pool("warehouse") {
-        Some(pool) => {
-            tracing::info!("mini ERP postgres warehouse store configured");
-            WarehouseService::new(Arc::new(PostgresWarehouseStore::new(pool)))
-        }
-        None => WarehouseService::new(Arc::new(
-            crate::core::warehouses::MemoryWarehouseStore::new(),
-        )),
-    }
+pub(super) fn build_warehouse_service(
+    apparatus: CanonicalApparatusService,
+    pool: sqlx::PgPool,
+) -> WarehouseService {
+    let canonical_apparatus_resolver = Arc::new(CanonicalServiceApparatusResolver::new(apparatus));
+    tracing::info!("mini ERP postgres warehouse store configured");
+    WarehouseService::new(
+        Arc::new(PostgresWarehouseStore::new(pool)),
+        canonical_apparatus_resolver,
+    )
 }
 
 pub(super) fn build_inventory_movement_service() -> InventoryMovementService {
@@ -178,48 +174,21 @@ pub(super) fn build_order_reset_store() -> Option<PostgresOrderResetStore> {
     postgres_pool("order reset").map(PostgresOrderResetStore::new)
 }
 
-pub(super) fn build_production_map_service() -> ProductionMapService {
-    match postgres_pool("production map") {
-        Some(pool) => {
-            tracing::info!("mini ERP postgres production map store configured");
-            ProductionMapService::new(Arc::new(PostgresProductionMapStore::new(pool)))
-        }
-        None => ProductionMapService::new(Arc::new(UnavailableProductionMapStore)),
-    }
-}
-
-pub(super) fn build_apparatus_groups_service() -> ApparatusGroupService {
-    match postgres_pool("apparatus group") {
-        Some(pool) => {
-            tracing::info!("mini ERP postgres apparatus group store configured");
-            ApparatusGroupService::new(Arc::new(PostgresApparatusGroupStore::new(pool)))
-        }
-        None => build_sqlite_apparatus_groups_service(),
-    }
+pub(super) fn build_production_map_service(
+    apparatus: CanonicalApparatusService,
+    pool: sqlx::PgPool,
+) -> ProductionMapService {
+    let resolver = Arc::new(CanonicalServiceApparatusResolver::new(apparatus));
+    tracing::info!("mini ERP postgres production map store configured");
+    ProductionMapService::new(Arc::new(PostgresProductionMapStore::new(pool)), resolver)
 }
 
 pub(super) fn build_factory_location_service(
-    apparatus_groups: ApparatusGroupService,
+    apparatus: CanonicalApparatusService,
+    pool: sqlx::PgPool,
 ) -> FactoryLocationService {
-    match postgres_pool("factory location") {
-        Some(pool) => {
-            tracing::info!("mini ERP postgres factory location store configured");
-            FactoryLocationService::new(
-                Arc::new(PostgresFactoryLocationStore::new(pool)),
-                apparatus_groups,
-            )
-        }
-        None => FactoryLocationService::new(
-            Arc::new(crate::core::factory_locations::MemoryFactoryLocationStore::new()),
-            apparatus_groups,
-        ),
-    }
-}
-
-fn build_sqlite_apparatus_groups_service() -> ApparatusGroupService {
-    ApparatusGroupService::new(Arc::new(ApparatusGroupStore::new(
-        apparatus_group_store_path(),
-    )))
+    tracing::info!("mini ERP postgres factory location store configured");
+    FactoryLocationService::new(Arc::new(PostgresFactoryLocationStore::new(pool)), apparatus)
 }
 
 pub(super) fn build_calculate_order_store() -> Arc<dyn CalculateOrderStorePort> {

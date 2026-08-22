@@ -3,12 +3,9 @@ use std::collections::BTreeMap;
 use async_trait::async_trait;
 use sqlx::{PgPool, Row};
 
-use crate::core::apparatus_groups::{
-    ApparatusCatalogEntry, ApparatusMasterData, ApparatusSource, apparatus_master_data_for_name,
-    normalize_apparatus_master_data,
-};
+use crate::core::apparatus_standard::{LifecycleState, RuntimeApparatusProjection};
 use crate::core::factory_locations::{
-    FactoryLocation, FactoryLocationError, FactoryLocationStorePort,
+    FactoryLocation, FactoryLocationApparatus, FactoryLocationError, FactoryLocationStorePort,
 };
 
 #[derive(Clone)]
@@ -32,7 +29,7 @@ impl FactoryLocationStorePort for PostgresFactoryLocationStore {
         &self,
         id: &str,
         name: &str,
-        apparatus: &[ApparatusCatalogEntry],
+        apparatus: &[FactoryLocationApparatus],
     ) -> Result<FactoryLocation, FactoryLocationError> {
         let mut tx = self
             .pool
@@ -93,7 +90,7 @@ impl FactoryLocationStorePort for PostgresFactoryLocationStore {
     async fn replace_apparatus(
         &self,
         id: &str,
-        apparatus: &[ApparatusCatalogEntry],
+        apparatus: &[FactoryLocationApparatus],
     ) -> Result<FactoryLocation, FactoryLocationError> {
         let mut tx = self
             .pool
@@ -139,7 +136,7 @@ impl FactoryLocationStorePort for PostgresFactoryLocationStore {
 async fn insert_links(
     tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
     location_id: &str,
-    apparatus: &[ApparatusCatalogEntry],
+    apparatus: &[FactoryLocationApparatus],
 ) -> Result<(), FactoryLocationError> {
     for item in apparatus {
         sqlx::query(
@@ -147,7 +144,7 @@ async fn insert_links(
              VALUES ($1, $2)",
         )
         .bind(location_id)
-        .bind(&item.id)
+        .bind(item.id.as_str())
         .execute(&mut **tx)
         .await
         .map_err(map_sql_error)?;
@@ -181,43 +178,34 @@ async fn load_locations(
     .map_err(map_sql_error)?;
 
     let link_rows = sqlx::query(
-        "SELECT links.location_id, apparatus.id, apparatus.name, apparatus.kind,
-                apparatus.payload_json,
-                COALESCE((apparatus.payload_json ->> 'sort_order')::BIGINT, 10000)
-                    AS sort_order
+        "SELECT links.location_id, apparatus.payload_json AS runtime_payload
          FROM mini_factory_location_apparatus_links links
          JOIN mini_apparatus apparatus ON apparatus.id = links.apparatus_id
+          AND apparatus.source_revision IS NOT NULL
          WHERE ($1::TEXT IS NULL OR links.location_id = $1)
          ORDER BY links.location_id,
-                  CASE WHEN apparatus.kind = 'default' THEN 0 ELSE 1 END,
-                  COALESCE((apparatus.payload_json ->> 'sort_order')::BIGINT, 10000),
-                  lower(apparatus.name) ASC",
+                  links.apparatus_id ASC",
     )
     .bind(id)
     .fetch_all(pool)
     .await
     .map_err(map_sql_error)?;
 
-    let mut apparatus_by_location = BTreeMap::<String, Vec<ApparatusCatalogEntry>>::new();
+    let mut apparatus_by_location = BTreeMap::<String, Vec<FactoryLocationApparatus>>::new();
     for row in link_rows {
-        let kind: String = row.get("kind");
-        let name: String = row.get("name");
-        let payload: serde_json::Value = row.get("payload_json");
-        let master = serde_json::from_value::<ApparatusMasterData>(payload)
-            .unwrap_or_else(|_| apparatus_master_data_for_name(&name));
+        let runtime =
+            serde_json::from_value::<RuntimeApparatusProjection>(row.get("runtime_payload"))
+                .map_err(|_| FactoryLocationError::InvalidApparatus)?;
         apparatus_by_location
             .entry(row.get("location_id"))
             .or_default()
-            .push(ApparatusCatalogEntry {
-                id: row.get("id"),
-                name: name.clone(),
-                source: if kind == "default" {
-                    ApparatusSource::Default
-                } else {
-                    ApparatusSource::Custom
-                },
-                sort_order: row.get::<i64, _>("sort_order").max(0) as usize,
-                master: normalize_apparatus_master_data(master, &name),
+            .push(FactoryLocationApparatus {
+                id: runtime.apparatus_id,
+                name: runtime.display.display_name,
+                source_revision: runtime.source_revision,
+                equipment_class_id: runtime.equipment_class_id,
+                physical_asset_id: runtime.physical_asset_id,
+                active: runtime.lifecycle.state == LifecycleState::Active,
             });
     }
 

@@ -63,7 +63,10 @@ impl AuthService {
             .await?;
 
         for user in users {
-            let state = states.get(user.id.trim()).cloned().unwrap_or_default();
+            let state = states
+                .get(user.id.trim())
+                .cloned()
+                .ok_or(AuthError::Internal)?;
             if state.removed || state.blocked || user.role != role {
                 continue;
             }
@@ -109,7 +112,10 @@ impl AuthService {
             .map_err(|_| AuthError::Internal)?;
 
         for worker in workers {
-            let state = states.get(worker.id.trim()).cloned().unwrap_or_default();
+            let state = states
+                .get(worker.id.trim())
+                .cloned()
+                .ok_or(AuthError::Internal)?;
             if state.removed || state.blocked {
                 continue;
             }

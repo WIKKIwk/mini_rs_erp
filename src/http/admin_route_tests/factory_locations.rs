@@ -25,14 +25,14 @@ async fn admin_factory_location_flow_keeps_identity_when_apparatus_changes() {
     let id = created["id"].as_str().expect("state id").to_string();
     assert!(id.starts_with("state_"));
     assert_eq!(created["name"], "Bosma oldi");
-    assert_eq!(created["apparatus"][0]["source"], "default");
+    assert_eq!(created["apparatus"][0]["id"], "apparatus:default:bosma_7");
 
     let updated = build_router(state.clone())
         .oneshot(request_with_body(
             "PUT",
             &format!("/v1/mobile/admin/factory-locations/{id}/apparatus"),
             &token,
-            r#"{"apparatus_ids":["apparatus:default:rezka"]}"#,
+            r#"{"apparatus_ids":["apparatus:default:asset-010"]}"#,
         ))
         .await
         .expect("apparatus update response");
@@ -40,6 +40,7 @@ async fn admin_factory_location_flow_keeps_identity_when_apparatus_changes() {
     let updated = json_body(updated).await;
     assert_eq!(updated["id"], id);
     assert_eq!(updated["name"], "Bosma oldi");
+    assert_eq!(updated["apparatus"][0]["id"], "apparatus:default:asset-010");
     assert_eq!(updated["apparatus"][0]["name"], "Rezka");
 
     let listed = build_router(state)
@@ -91,6 +92,25 @@ async fn factory_location_rejects_duplicate_name_and_unknown_apparatus() {
         .await
         .expect("invalid apparatus response");
     assert_eq!(invalid.status(), StatusCode::BAD_REQUEST);
+}
+
+#[tokio::test]
+async fn factory_location_rejects_display_title_as_apparatus_key() {
+    let _guard = FACTORY_LOCATION_ROUTE_TEST_LOCK.lock().await;
+    let state = test_state();
+    let token = session(&state, PrincipalRole::Admin).await;
+
+    let response = build_router(state)
+        .oneshot(request_with_body(
+            "POST",
+            "/v1/mobile/admin/factory-locations",
+            &token,
+            r#"{"name":"Title key","apparatus_ids":["Rezka"]}"#,
+        ))
+        .await
+        .expect("invalid title key response");
+
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
 }
 
 #[tokio::test]

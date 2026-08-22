@@ -1,9 +1,10 @@
-use super::apparatus::{is_legacy_apparatus_parent, legacy_apparatus_warehouse};
 use super::*;
 use crate::core::admin::models::AdminWarehouse;
+use crate::core::apparatus_standard::ApparatusId;
 use crate::core::warehouses::{
     WarehouseAssignment, WarehouseAssignmentDeleteRequest, WarehouseSummary,
 };
+use std::collections::BTreeSet;
 
 pub async fn warehouses(
     State(state): State<AppState>,
@@ -81,37 +82,43 @@ pub async fn warehouses(
         .map_err(warehouse_error)?;
     warehouses =
         crate::core::warehouses::merge_admin_warehouses(warehouses, mini_warehouses, fetch_limit);
-    // Compatibility for released clients. New clients use GET /admin/apparatus.
-    if is_legacy_apparatus_parent(query.parent.as_deref().unwrap_or("")) {
-        let remaining = fetch_limit.saturating_sub(warehouses.len()).max(1);
-        let mut seen = warehouses
-            .iter()
-            .map(|item| item.warehouse.to_lowercase())
-            .collect::<std::collections::BTreeSet<_>>();
-        for name in state
-            .apparatus_groups
-            .apparatus(query.q.as_deref().unwrap_or(""), remaining)
-            .await
-            .map_err(apparatus_group_error)?
-        {
-            if seen.insert(name.to_lowercase()) {
-                warehouses.push(legacy_apparatus_warehouse(name));
-            }
-            if warehouses.len() >= fetch_limit {
-                break;
-            }
-        }
-        warehouses.sort_by(|left, right| {
-            left.warehouse
-                .to_lowercase()
-                .cmp(&right.warehouse.to_lowercase())
-        });
-    }
     if let Some(scope) = warehouse_scope.as_ref() {
         warehouses = scoped_warehouses(warehouses, scope);
     }
-    warehouses.truncate(limit);
-    Ok(json_response(warehouses))
+    let mut response = warehouses
+        .into_iter()
+        .map(AdminWarehouseResponse::from)
+        .collect::<Vec<_>>();
+    response.sort_by(|left, right| {
+        left.warehouse
+            .to_lowercase()
+            .cmp(&right.warehouse.to_lowercase())
+            .then_with(|| left.id.cmp(&right.id))
+    });
+    response.truncate(limit);
+    Ok(json_response(response))
+}
+
+#[derive(Serialize)]
+struct AdminWarehouseResponse {
+    warehouse: String,
+    company: String,
+    is_group: bool,
+    parent_warehouse: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    id: Option<String>,
+}
+
+impl From<AdminWarehouse> for AdminWarehouseResponse {
+    fn from(warehouse: AdminWarehouse) -> Self {
+        Self {
+            warehouse: warehouse.warehouse,
+            company: warehouse.company,
+            is_group: warehouse.is_group,
+            parent_warehouse: warehouse.parent_warehouse,
+            id: None,
+        }
+    }
 }
 
 pub async fn warehouse_summaries(
@@ -185,7 +192,7 @@ pub async fn warehouse_items(
         return Err(bad_request("warehouse is required"));
     }
     if let Some(scope) = material_warehouse_scope(&state, &principal).await?
-        && !scope.contains(&warehouse.to_lowercase())
+        && !scope.contains_warehouse_name(warehouse)
     {
         return Err(forbidden());
     }
@@ -304,7 +311,7 @@ async fn validate_warehouse_assignee(
 async fn material_warehouse_scope(
     state: &AppState,
     principal: &Principal,
-) -> Result<Option<std::collections::BTreeSet<String>>, AdminError> {
+) -> Result<Option<WarehouseListScope>, AdminError> {
     if principal.role != PrincipalRole::MaterialTaminotchi {
         return Ok(None);
     }
@@ -314,7 +321,7 @@ async fn material_warehouse_scope(
 async fn warehouse_list_scope(
     state: &AppState,
     principal: &Principal,
-) -> Result<Option<std::collections::BTreeSet<String>>, AdminError> {
+) -> Result<Option<WarehouseListScope>, AdminError> {
     if !matches!(
         principal.role,
         PrincipalRole::Werka | PrincipalRole::MaterialTaminotchi
@@ -327,36 +334,57 @@ async fn warehouse_list_scope(
 async fn assigned_warehouse_scope(
     state: &AppState,
     principal: &Principal,
-) -> Result<std::collections::BTreeSet<String>, AdminError> {
+) -> Result<WarehouseListScope, AdminError> {
     let assigned = state
         .warehouses
-        .assigned_warehouse_names(principal)
+        .assigned_warehouse_keys(principal)
         .await
         .map_err(warehouse_error)?;
-    Ok(assigned
-        .into_iter()
-        .map(|warehouse| warehouse.trim().to_lowercase())
-        .filter(|warehouse| !warehouse.is_empty())
-        .collect())
+    let mut scope = WarehouseListScope::default();
+    for warehouse in assigned {
+        let warehouse = warehouse.trim().to_lowercase();
+        if warehouse.is_empty() {
+            continue;
+        }
+        if ApparatusId::new(warehouse.clone()).is_ok() {
+            scope.apparatus_ids.insert(warehouse);
+        } else {
+            scope.warehouse_names.insert(warehouse);
+        }
+    }
+    Ok(scope)
+}
+
+#[derive(Debug, Default)]
+struct WarehouseListScope {
+    warehouse_names: BTreeSet<String>,
+    apparatus_ids: BTreeSet<String>,
+}
+
+impl WarehouseListScope {
+    fn contains_warehouse_name(&self, warehouse: &str) -> bool {
+        self.warehouse_names
+            .contains(&warehouse.trim().to_lowercase())
+    }
 }
 
 fn scoped_warehouses(
     warehouses: Vec<AdminWarehouse>,
-    scope: &std::collections::BTreeSet<String>,
+    scope: &WarehouseListScope,
 ) -> Vec<AdminWarehouse> {
     warehouses
         .into_iter()
-        .filter(|warehouse| scope.contains(&warehouse.warehouse.trim().to_lowercase()))
+        .filter(|warehouse| scope.contains_warehouse_name(&warehouse.warehouse))
         .collect()
 }
 
 fn scoped_summaries(
     summaries: Vec<WarehouseSummary>,
-    scope: &std::collections::BTreeSet<String>,
+    scope: &WarehouseListScope,
 ) -> Vec<WarehouseSummary> {
     summaries
         .into_iter()
-        .filter(|summary| scope.contains(&summary.warehouse.trim().to_lowercase()))
+        .filter(|summary| scope.contains_warehouse_name(&summary.warehouse))
         .collect()
 }
 
@@ -380,6 +408,7 @@ fn warehouse_error(error: WarehouseError) -> AdminError {
     match error {
         WarehouseError::MissingWarehouse => bad_request("warehouse is required"),
         WarehouseError::MissingPrincipalRef => bad_request("principal ref is required"),
+        WarehouseError::InvalidApparatus => bad_request("apparatus is invalid"),
         WarehouseError::NotFound => not_found("warehouse_not_found"),
         WarehouseError::AssignmentNotFound => not_found("warehouse_assignment_not_found"),
         WarehouseError::NotEmpty(_) => (
@@ -395,20 +424,5 @@ fn warehouse_error(error: WarehouseError) -> AdminError {
             Json(AdminErrorResponse::new("warehouse_has_children")),
         ),
         WarehouseError::StoreFailed => server_error("warehouse store failed"),
-    }
-}
-
-fn apparatus_group_error(error: ApparatusGroupError) -> AdminError {
-    match error {
-        ApparatusGroupError::MissingName => bad_request("group name is required"),
-        ApparatusGroupError::MissingApparatus => bad_request("apparatus is required"),
-        ApparatusGroupError::InvalidApparatus => bad_request("apparatus is invalid"),
-        ApparatusGroupError::InvalidFamily => bad_request("apparatus family is invalid"),
-        ApparatusGroupError::InvalidKind => bad_request("apparatus kind is invalid"),
-        ApparatusGroupError::InvalidCapability => bad_request("apparatus capability is invalid"),
-        ApparatusGroupError::InvalidColorStations => {
-            bad_request("apparatus color stations are invalid")
-        }
-        ApparatusGroupError::StoreFailed => server_error("apparatus group store failed"),
     }
 }

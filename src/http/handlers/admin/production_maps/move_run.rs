@@ -16,9 +16,6 @@ pub async fn production_map_move_batch(
         return Err(method_not_allowed());
     }
     let input: ProductionMapBatchMoveRequest = parse_json(&body)?;
-    for map_id in &input.map_ids {
-        reject_training_order_id_for_production(map_id)?;
-    }
     match state.production_maps.move_apparatus_batch(input).await {
         Ok(saved) => Ok(json_response(serde_json::json!({
             "ok": true,
@@ -46,7 +43,6 @@ pub async fn production_map_apparatus_transfer(
         return Err(method_not_allowed());
     }
     let input: ProductionMapApparatusTransferRequest = parse_json(&body)?;
-    reject_training_order_id_for_production(&input.order_id)?;
     if input.order_id.trim().is_empty()
         || input.from_apparatus.trim().is_empty()
         || input.to_apparatus.trim().is_empty()
@@ -90,7 +86,6 @@ pub async fn production_map_move(
         return Err(method_not_allowed());
     }
     let input: ProductionMapMoveRequest = parse_json(&body)?;
-    reject_training_order_id_for_production(&input.map_id)?;
     match state.production_maps.move_apparatus(input).await {
         Ok(saved) => Ok(json_response(serde_json::json!({
             "ok": true,
@@ -116,7 +111,6 @@ pub async fn production_map_run(
         return Err(method_not_allowed());
     }
     let input: ProductionMapRunRequest = parse_json(&body)?;
-    reject_training_order_id_for_production(&input.map_id)?;
     match state.production_maps.run_map(input).await {
         Ok(result) => Ok(json_response(result)),
         Err(error) => Err(bad_request(error.to_string())),

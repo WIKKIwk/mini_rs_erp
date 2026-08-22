@@ -1,11 +1,10 @@
 use crate::core::calculate_orders::{
     CalculateOrderImage, CalculateOrderStorePort, CalculateOrderTemplate,
 };
-use crate::db::postgres::apply_foundation_migration;
+use crate::db::postgres::{apply_foundation_migration, postgres_test_database_options};
 use crate::db::postgres_calculate_order::PostgresCalculateOrderStore;
 
 #[tokio::test]
-#[ignore = "requires local PostgreSQL and creates/drops mini_rs_erp_test_calculate_orders"]
 async fn postgres_calculate_order_store_round_trips_and_dedupes_quick_templates() {
     let admin_url = std::env::var("MINI_ERP_TEST_ADMIN_DATABASE_URL")
         .unwrap_or_else(|_| "postgres://wikki@127.0.0.1:5432/postgres".to_string());
@@ -23,8 +22,9 @@ async fn postgres_calculate_order_store_round_trips_and_dedupes_quick_templates(
         .expect("create test db");
     admin_pool.close().await;
 
-    let test_url = format!("postgres://wikki@127.0.0.1:5432/{db_name}");
-    let pool = sqlx::PgPool::connect(&test_url).await.expect("test db");
+    let pool = sqlx::PgPool::connect_with(postgres_test_database_options(&admin_url, db_name))
+        .await
+        .expect("test db");
     apply_foundation_migration(&pool)
         .await
         .expect("apply migration");

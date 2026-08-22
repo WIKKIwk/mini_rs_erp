@@ -29,8 +29,7 @@ async fn main() -> Result<(), error::AppError> {
     let postgres_pool = connect_and_migrate_required()
         .await
         .map_err(|error| error::AppError::Storage(error.to_string()))?;
-    postgres_pool.close().await;
-    let state = AppState::new(config);
+    let state = AppState::from_postgres(config, postgres_pool);
     state.telegram.start_bot_worker_if_configured().await;
     let app = http::router::build_router(state);
 

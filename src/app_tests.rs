@@ -2,16 +2,13 @@ use std::path::{Path, PathBuf};
 
 use super::app_local_store::{LocalStoreBackend, derive_lmdb_path, local_store_backend_from};
 use crate::config::AppConfig;
-use crate::core::apparatus_groups::ApparatusGroupUpsert;
 use crate::core::auth::models::{Principal, PrincipalRole};
 use crate::core::calculate_orders::{CalculateOrderError, CalculateOrderTemplate};
 use crate::core::production_map::{
-    ProductionMapDefinition, ProductionMapEdge, ProductionMapError, ProductionMapNode,
-    ProductionMapNodeKind,
+    ProductionMapDefinition, ProductionMapEdge, ProductionMapNode, ProductionMapNodeKind,
 };
 use crate::core::push::ports::PushServiceError;
 use crate::core::rps_batch::{RpsBatchServiceError, RpsBatchStartRequest};
-use crate::db::postgres::apply_foundation_migration;
 
 static MINI_ENGINE_ENV_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 
@@ -70,7 +67,7 @@ async fn app_state_leaves_mini_engine_disabled_without_database_url() {
 }
 
 #[tokio::test]
-async fn app_state_does_not_fallback_production_maps_to_sqlite_without_database_url() {
+async fn explicit_test_app_state_uses_only_its_in_memory_runtime_fixture() {
     let _guard = MINI_ENGINE_ENV_LOCK.lock().await;
     unsafe {
         std::env::remove_var("MINI_ERP_DATABASE_URL");
@@ -79,7 +76,7 @@ async fn app_state_does_not_fallback_production_maps_to_sqlite_without_database_
     let state = super::AppState::new(test_app_config());
     let result = state.production_maps.maps().await;
 
-    assert_eq!(result, Err(ProductionMapError::StoreFailed));
+    assert_eq!(result, Ok(Vec::new()));
 }
 
 #[tokio::test]
@@ -101,65 +98,14 @@ async fn app_state_builds_lazy_mini_engine_when_database_url_is_configured() {
     }
 }
 
-#[tokio::test]
-#[ignore = "requires local PostgreSQL and creates/drops mini_rs_erp_test_app_apparatus_groups"]
-async fn app_state_routes_apparatus_groups_to_postgres_when_database_url_is_configured() {
-    let _guard = MINI_ENGINE_ENV_LOCK.lock().await;
-    let admin_url = std::env::var("MINI_ERP_TEST_ADMIN_DATABASE_URL")
-        .unwrap_or_else(|_| "postgres://wikki@127.0.0.1:5432/postgres".to_string());
-    let db_name = "mini_rs_erp_test_app_apparatus_groups";
-    let admin_pool = sqlx::PgPool::connect(&admin_url).await.expect("admin db");
-    sqlx::query(&format!(
-        r#"DROP DATABASE IF EXISTS "{db_name}" WITH (FORCE)"#
-    ))
-    .execute(&admin_pool)
-    .await
-    .expect("drop test db");
-    sqlx::query(&format!(r#"CREATE DATABASE "{db_name}""#))
-        .execute(&admin_pool)
-        .await
-        .expect("create test db");
-    admin_pool.close().await;
-
-    let test_url = format!("postgres://wikki@127.0.0.1:5432/{db_name}");
-    let pool = sqlx::PgPool::connect(&test_url).await.expect("test db");
-    apply_foundation_migration(&pool)
-        .await
-        .expect("apply migration");
-    unsafe {
-        std::env::set_var("MINI_ERP_DATABASE_URL", &test_url);
-    }
-
-    let state = super::AppState::new(test_app_config());
-    state
-        .apparatus_groups
-        .upsert_group(ApparatusGroupUpsert {
-            name: "pechat".to_string(),
-            apparatus: vec!["7 ta rangli pechat".to_string()],
-        })
-        .await
-        .expect("save group through app state");
-
-    let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM mini_apparatus_groups")
-        .fetch_one(&pool)
-        .await
-        .expect("count postgres groups");
-    assert_eq!(count, 1);
-
-    unsafe {
-        std::env::remove_var("MINI_ERP_DATABASE_URL");
-    }
-    pool.close().await;
-    let admin_pool = sqlx::PgPool::connect(&admin_url)
-        .await
-        .expect("admin cleanup");
-    sqlx::query(&format!(
-        r#"DROP DATABASE IF EXISTS "{db_name}" WITH (FORCE)"#
-    ))
-    .execute(&admin_pool)
-    .await
-    .expect("cleanup test db");
-    admin_pool.close().await;
+#[test]
+fn production_app_state_requires_one_explicit_postgres_pool_for_apparatus_runtime() {
+    let source = include_str!("app.rs");
+    assert!(source.contains("pub fn from_postgres(config: AppConfig, pool: sqlx::PgPool)"));
+    assert!(source.contains("build_production_map_service(apparatus.clone(), pool.clone())"));
+    assert!(source.contains("build_warehouse_service(apparatus.clone(), pool)"));
+    assert!(!source.contains("apparatus_groups"));
+    assert!(!source.contains("UnavailableProductionMapStore"));
 }
 
 #[tokio::test]
@@ -188,7 +134,7 @@ async fn app_state_uses_postgres_calculate_orders_when_database_url_is_configure
 }
 
 #[tokio::test]
-async fn app_state_uses_postgres_production_maps_when_database_url_is_configured() {
+async fn database_url_does_not_replace_the_explicit_test_runtime_fixture() {
     let _guard = MINI_ENGINE_ENV_LOCK.lock().await;
     unsafe {
         std::env::set_var(
@@ -204,7 +150,7 @@ async fn app_state_uses_postgres_production_maps_when_database_url_is_configured
         .upsert_map(test_production_map("zakaz-404", "404"))
         .await;
 
-    assert_eq!(result, Err(ProductionMapError::StoreFailed));
+    assert!(result.is_ok());
 
     unsafe {
         std::env::remove_var("MINI_ERP_DATABASE_URL");
@@ -387,7 +333,7 @@ fn test_production_map(id: &str, order_number: &str) -> ProductionMapDefinition 
             test_node(
                 "apparatus-1",
                 ProductionMapNodeKind::Apparatus,
-                "7 ta rangli pechat - A",
+                "apparatus:default:bosma_7",
                 0.0,
                 240.0,
             ),
@@ -453,6 +399,11 @@ fn test_node(
         id: id.to_string(),
         kind,
         title: title.to_string(),
+        apparatus_id: if id == "apparatus-1" {
+            "apparatus:default:bosma_7".to_string()
+        } else {
+            String::new()
+        },
         formula: None,
         role_code: String::new(),
         item_code: String::new(),
@@ -462,6 +413,7 @@ fn test_node(
         alternative_group_id: String::new(),
         alternative_group_label: String::new(),
         alternative_assigned_title: String::new(),
+        alternative_assigned_apparatus_id: String::new(),
         rezka_kadr_count: None,
         rezka_label_length: None,
         x,

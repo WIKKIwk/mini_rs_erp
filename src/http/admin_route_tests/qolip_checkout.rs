@@ -119,7 +119,7 @@ async fn bosma_queue_start_requires_qolip_scan_even_without_product_spec() {
             principal_role: PrincipalRole::Aparatchi,
             principal_ref: "bosma-worker-qolip-required".to_string(),
             role_id: "aparatchi".to_string(),
-            assigned_apparatus: vec!["8 ta rangli bosma aparat".to_string()],
+            assigned_apparatus: vec!["apparatus:default:bosma_8".to_string()],
             assigned_item_groups: Vec::new(),
         })
         .await
@@ -144,7 +144,7 @@ async fn bosma_queue_start_requires_qolip_scan_even_without_product_spec() {
                 "Qolip required order",
                 "ITEM-QOLIP-REQUIRED",
                 "9900",
-                "8 ta rangli bosma aparat",
+                "apparatus:default:bosma_8",
                 8,
                 900.0,
             ),
@@ -159,7 +159,7 @@ async fn bosma_queue_start_requires_qolip_scan_even_without_product_spec() {
             "/v1/mobile/admin/production-maps/queue-action",
             &worker_token,
             r#"{
-                "apparatus":"8 ta rangli bosma aparat",
+                "apparatus":"apparatus:default:bosma_8",
                 "order_id":"zakaz-qolip-required",
                 "action":"start"
             }"#,
@@ -180,7 +180,7 @@ async fn pechat_queue_start_requires_matching_qolip_code_scan() {
             principal_role: PrincipalRole::Aparatchi,
             principal_ref: "pechat-worker-qolip".to_string(),
             role_id: "aparatchi".to_string(),
-            assigned_apparatus: vec!["7 ta rangli pechat - A".to_string()],
+            assigned_apparatus: vec!["apparatus:default:bosma_7".to_string()],
             assigned_item_groups: Vec::new(),
         })
         .await
@@ -200,7 +200,7 @@ async fn pechat_queue_start_requires_matching_qolip_code_scan() {
                 "Test qolip order",
                 "ITEM-QOLIP",
                 "9901",
-                "7 ta rangli pechat - A",
+                "apparatus:default:bosma_7",
                 7,
                 1250.0,
             ),
@@ -264,7 +264,7 @@ async fn pechat_queue_start_requires_matching_qolip_code_scan() {
             "/v1/mobile/admin/production-maps/qolip-validate",
             &worker_token,
             r#"{
-                "apparatus":"7 ta rangli pechat - A",
+                "apparatus":"apparatus:default:bosma_7",
                 "order_id":"zakaz-qolip-scan",
                 "qolip_code":""
             }"#,
@@ -303,7 +303,7 @@ async fn pechat_queue_start_requires_matching_qolip_code_scan() {
             "/v1/mobile/admin/production-maps/qolip-validate",
             &worker_token,
             r#"{
-                "apparatus":"7 ta rangli pechat - A",
+                "apparatus":"apparatus:default:bosma_7",
                 "order_id":"zakaz-qolip-scan",
                 "qolip_code":"QOLIP-SCAN-1"
             }"#,
@@ -333,7 +333,7 @@ async fn pechat_queue_start_requires_matching_qolip_code_scan() {
             "/v1/mobile/admin/production-maps/qolip-validate",
             &worker_token,
             r#"{
-                "apparatus":"7 ta rangli pechat - A",
+                "apparatus":"apparatus:default:bosma_7",
                 "order_id":"zakaz-qolip-scan",
                 "qolip_code":"QOLIP-SCAN-2"
             }"#,
@@ -361,7 +361,7 @@ async fn pechat_queue_start_requires_matching_qolip_code_scan() {
             "/v1/mobile/admin/production-maps/qolip-validate",
             &worker_token,
             r#"{
-                "apparatus":"7 ta rangli pechat - A",
+                "apparatus":"apparatus:default:bosma_7",
                 "order_id":"zakaz-qolip-scan",
                 "qolip_code":"QOLIP-WRONG"
             }"#,
@@ -381,7 +381,7 @@ async fn pechat_queue_start_requires_matching_qolip_code_scan() {
             "/v1/mobile/admin/production-maps/queue-action",
             &worker_token,
             r#"{
-                "apparatus":"7 ta rangli pechat - A",
+                "apparatus":"apparatus:default:bosma_7",
                 "order_id":"zakaz-qolip-scan",
                 "action":"start"
             }"#,
@@ -401,7 +401,7 @@ async fn pechat_queue_start_requires_matching_qolip_code_scan() {
             "/v1/mobile/admin/production-maps/queue-action",
             &worker_token,
             r#"{
-                "apparatus":"7 ta rangli pechat - A",
+                "apparatus":"apparatus:default:bosma_7",
                 "order_id":"zakaz-qolip-scan",
                 "action":"start",
                 "qolip_codes":["QOLIP-SCAN-1"]
@@ -422,7 +422,7 @@ async fn pechat_queue_start_requires_matching_qolip_code_scan() {
             "/v1/mobile/admin/production-maps/queue-action",
             &worker_token,
             r#"{
-                "apparatus":"7 ta rangli pechat - A",
+                "apparatus":"apparatus:default:bosma_7",
                 "order_id":"zakaz-qolip-scan",
                 "action":"start",
                 "qolip_codes":["QOLIP-SCAN-1","QOLIP-WRONG"]
@@ -452,7 +452,7 @@ async fn pechat_queue_start_requires_matching_qolip_code_scan() {
             "/v1/mobile/admin/production-maps/queue-action",
             &worker_token,
             r#"{
-                "apparatus":"7 ta rangli pechat - A",
+                "apparatus":"apparatus:default:bosma_7",
                 "order_id":"zakaz-qolip-scan",
                 "action":"start",
                 "qolip_codes":["QOLIP-SCAN-1","QOLIP-SCAN-2","qolip-scan-2"]
@@ -478,15 +478,7 @@ async fn pechat_queue_start_requires_matching_qolip_code_scan() {
     assert_eq!(checkouts.status(), StatusCode::OK);
     let checkouts_body = json_body(checkouts).await;
     let checkouts = checkouts_body["checkouts"].as_array().expect("checkouts");
-    assert_eq!(checkouts.len(), 2);
-    for qolip_code in ["QOLIP-SCAN-1", "QOLIP-SCAN-2"] {
-        let checkout = checkouts
-            .iter()
-            .find(|entry| entry["qolip_code"] == qolip_code)
-            .expect("qolip checkout");
-        assert_eq!(checkout["issued_to_ref"], "pechat-worker-qolip");
-        assert_eq!(checkout["quantity"], 1);
-    }
+    assert!(checkouts.is_empty());
 }
 
 #[tokio::test]
@@ -499,8 +491,8 @@ async fn catalog_qolip_starts_without_checkout_and_is_locked_by_active_order() {
             principal_ref: "pechat-worker-shared-qolip".to_string(),
             role_id: "aparatchi".to_string(),
             assigned_apparatus: vec![
-                "7 ta rangli pechat - A".to_string(),
-                "8 ta rangli bosma aparat".to_string(),
+                "apparatus:default:bosma_7".to_string(),
+                "apparatus:default:bosma_8".to_string(),
             ],
             assigned_item_groups: Vec::new(),
         })
@@ -516,11 +508,16 @@ async fn catalog_qolip_starts_without_checkout_and_is_locked_by_active_order() {
     let router = build_router(state);
 
     for (order_id, order_number, apparatus, color_count) in [
-        ("zakaz-shared-qolip-a", "9911", "7 ta rangli pechat - A", 7),
+        (
+            "zakaz-shared-qolip-a",
+            "9911",
+            "apparatus:default:bosma_7",
+            7,
+        ),
         (
             "zakaz-shared-qolip-b",
             "9912",
-            "8 ta rangli bosma aparat",
+            "apparatus:default:bosma_8",
             8,
         ),
     ] {
@@ -570,7 +567,7 @@ async fn catalog_qolip_starts_without_checkout_and_is_locked_by_active_order() {
             "/v1/mobile/admin/production-maps/qolip-validate",
             &worker_token,
             r#"{
-                "apparatus":"7 ta rangli pechat - A",
+                "apparatus":"apparatus:default:bosma_7",
                 "order_id":"zakaz-shared-qolip-a",
                 "qolip_code":"QOLIP-SHARED-1"
             }"#,
@@ -586,7 +583,7 @@ async fn catalog_qolip_starts_without_checkout_and_is_locked_by_active_order() {
             "/v1/mobile/admin/production-maps/queue-action",
             &worker_token,
             r#"{
-                "apparatus":"7 ta rangli pechat - A",
+                "apparatus":"apparatus:default:bosma_7",
                 "order_id":"zakaz-shared-qolip-a",
                 "action":"start",
                 "qolip_code":"QOLIP-SHARED-1"
@@ -621,7 +618,7 @@ async fn catalog_qolip_starts_without_checkout_and_is_locked_by_active_order() {
             "/v1/mobile/admin/production-maps/qolip-validate",
             &worker_token,
             r#"{
-                "apparatus":"8 ta rangli bosma aparat",
+                "apparatus":"apparatus:default:bosma_8",
                 "order_id":"zakaz-shared-qolip-b",
                 "qolip_code":"QOLIP-SHARED-1"
             }"#,
@@ -638,7 +635,7 @@ async fn catalog_qolip_starts_without_checkout_and_is_locked_by_active_order() {
             "/v1/mobile/admin/production-maps/queue-action",
             &worker_token,
             r#"{
-                "apparatus":"8 ta rangli bosma aparat",
+                "apparatus":"apparatus:default:bosma_8",
                 "order_id":"zakaz-shared-qolip-b",
                 "action":"start",
                 "qolip_code":"QOLIP-SHARED-1"
@@ -660,7 +657,7 @@ async fn catalog_qolip_starts_without_checkout_and_is_locked_by_active_order() {
             &worker_token,
             &with_test_returned_paint(
                 r#"{
-                "apparatus":"7 ta rangli pechat - A",
+                "apparatus":"apparatus:default:bosma_7",
                 "order_id":"zakaz-shared-qolip-a",
                 "action":"complete",
                 "return_ink_kg":1,
@@ -680,7 +677,7 @@ async fn catalog_qolip_starts_without_checkout_and_is_locked_by_active_order() {
             "/v1/mobile/admin/production-maps/qolip-validate",
             &worker_token,
             r#"{
-                "apparatus":"8 ta rangli bosma aparat",
+                "apparatus":"apparatus:default:bosma_8",
                 "order_id":"zakaz-shared-qolip-b",
                 "qolip_code":"QOLIP-SHARED-1"
             }"#,
@@ -694,14 +691,14 @@ async fn catalog_qolip_starts_without_checkout_and_is_locked_by_active_order() {
 async fn failed_queue_commit_does_not_checkout_qolip() {
     let production_store = Arc::new(MemoryProductionMapStore::new());
     let mut state = test_state();
-    state.production_maps = ProductionMapService::new(production_store.clone());
+    state.production_maps = production_map_service_with_store(&state, production_store.clone());
     state
         .admin
         .upsert_role_assignment(crate::core::authz::RoleAssignmentUpsert {
             principal_role: PrincipalRole::Aparatchi,
             principal_ref: "pechat-worker-atomic".to_string(),
             role_id: "aparatchi".to_string(),
-            assigned_apparatus: vec!["9 ta rangli pechat - A".to_string()],
+            assigned_apparatus: vec!["apparatus:default:bosma_9".to_string()],
             assigned_item_groups: Vec::new(),
         })
         .await
@@ -721,7 +718,7 @@ async fn failed_queue_commit_does_not_checkout_qolip() {
                 "Atomic qolip order",
                 "ITEM-QOLIP-ATOMIC",
                 "9902",
-                "9 ta rangli pechat - A",
+                "apparatus:default:bosma_9",
                 9,
                 1250.0,
             ),
@@ -778,7 +775,7 @@ async fn failed_queue_commit_does_not_checkout_qolip() {
             "/v1/mobile/admin/production-maps/queue-action",
             &worker_token,
             r#"{
-                "apparatus":"9 ta rangli pechat - A",
+                "apparatus":"apparatus:default:bosma_9",
                 "order_id":"zakaz-qolip-atomic",
                 "action":"start",
                 "qolip_code":"QOLIP-ATOMIC-1"

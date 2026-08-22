@@ -1,5 +1,3 @@
-use crate::core::production_map::reject_training_order_id;
-
 #[derive(sqlx::FromRow)]
 pub(super) struct ProgressSessionRow {
     pub(super) session_id: String,
@@ -113,7 +111,7 @@ pub(super) fn progress_batch_correction_from_row(
 pub(super) fn queue_action_log_from_row(
     row: QueueActionLogRow,
 ) -> Result<ProductionOrderLogEntry, ProductionMapError> {
-    reject_training_order_id(&row.order_id)?;
+    require_live_apparatus_id(&row.apparatus)?;
     Ok(ProductionOrderLogEntry {
         event_id: row.event_id,
         apparatus: row.apparatus,
@@ -137,7 +135,7 @@ pub(super) fn queue_action_log_from_row(
 pub(super) fn progress_session_from_row(
     row: ProgressSessionRow,
 ) -> Result<OrderRunSession, ProductionMapError> {
-    reject_training_order_id(&row.order_id)?;
+    require_live_apparatus_id(&row.apparatus)?;
     Ok(OrderRunSession {
         session_id: row.session_id,
         apparatus: row.apparatus,
@@ -155,10 +153,24 @@ pub(super) fn progress_session_from_row(
 pub(super) fn progress_batch_from_row(
     row: ProgressBatchRow,
 ) -> Result<OrderProgressBatch, ProductionMapError> {
+    require_live_apparatus_id(&row.apparatus)?;
+    if !row.current_apparatus_key.trim().is_empty() {
+        require_live_apparatus_id(&row.current_apparatus_key)?;
+    }
+    for apparatus in [
+        row.current_apparatus.as_str(),
+        row.next_apparatus.as_str(),
+        row.used_by_apparatus.as_str(),
+        row.processed_by_apparatus.as_str(),
+    ] {
+        if !apparatus.trim().is_empty() && !is_warehouse_processing_marker(apparatus) {
+            require_live_apparatus_id(apparatus)?;
+        }
+    }
     let current_apparatus_key = if row.current_apparatus_key.trim().is_empty() {
-        queue_state::apparatus_search_key(&row.current_apparatus)
+        crate::core::production_map::canonical_apparatus_key(&row.current_apparatus)
     } else {
-        row.current_apparatus_key
+        crate::core::production_map::canonical_apparatus_key(&row.current_apparatus_key)
     };
     let mut batch = OrderProgressBatch {
         batch_id: row.batch_id,
@@ -206,7 +218,6 @@ pub(super) fn progress_batch_from_row(
         description: row.description,
         payload_json: row.payload_json,
     };
-    reject_training_order_id(&batch.order_id)?;
     batch.refresh_status_detail();
     Ok(batch)
 }

@@ -1,8 +1,8 @@
 use super::*;
-use crate::core::authz::assigned_apparatus_contains;
 use crate::core::admin::models::AdminItemGroup;
+use crate::core::apparatus_standard::{ApparatusId, ExecutionOperation};
 use crate::core::gscale::models::RawMaterialStockEntry;
-use crate::core::production_map::{ProductionMapDefinition, pechat};
+use crate::core::production_map::ProductionMapDefinition;
 use crate::core::werka::models::SupplierItem;
 
 #[derive(serde::Serialize)]
@@ -110,11 +110,12 @@ pub(super) async fn fill_raw_material_assignment_input(
     } else {
         apparatus_options
             .iter()
-            .find(|apparatus| queue_state::apparatus_titles_match(apparatus, requested_apparatus))
+            .find(|apparatus| apparatus_id_matches_text_value(apparatus, requested_apparatus))
             .cloned()
             .ok_or_else(|| production_map_error(ProductionMapError::RawMaterialGroupNotAllowed))?
     };
-    validate_rulon_size_for_apparatus_map(&map, &apparatus, &stock, &item, &item_group_path)?;
+    validate_rulon_size_for_apparatus_map(state, &map, &apparatus, &stock, &item, &item_group_path)
+        .await?;
     input.item_code = item_code;
     input.item_name = item.name.trim().to_string();
     input.item_group = item.item_group.trim().to_string();
@@ -181,14 +182,15 @@ pub(super) async fn require_material_warehouse_scope(
     ))
 }
 
-pub(super) fn validate_rulon_size_for_apparatus_map(
+pub(super) async fn validate_rulon_size_for_apparatus_map(
+    state: &AppState,
     map: &ProductionMapDefinition,
     apparatus: &str,
     stock: &RawMaterialStockEntry,
     item: &SupplierItem,
     item_group_path: &[String],
 ) -> Result<(), AdminError> {
-    let Some(maximum_leftover_width_mm) = roll_width_allowance_mm(apparatus) else {
+    let Some(maximum_leftover_width_mm) = roll_width_allowance_mm(state, apparatus).await? else {
         return Ok(());
     };
     if !is_rulon_group(item_group_path) {
@@ -216,12 +218,12 @@ pub(super) fn validate_rulon_size_for_apparatus_map(
 
 pub(super) fn raw_material_rulon_match_metrics(
     map: &ProductionMapDefinition,
-    apparatus: &str,
+    _apparatus: &str,
     stock: &RawMaterialStockEntry,
     item: &SupplierItem,
     item_group_path: &[String],
 ) -> Option<(f64, f64, f64)> {
-    if !is_rulon_group(item_group_path) || roll_width_allowance_mm(apparatus).is_none() {
+    if !is_rulon_group(item_group_path) {
         return None;
     }
     let order_width = map
@@ -263,14 +265,49 @@ fn is_rulon_group(item_group_path: &[String]) -> bool {
         .any(|group| group.trim().eq_ignore_ascii_case("Rulon"))
 }
 
-fn roll_width_allowance_mm(apparatus: &str) -> Option<f64> {
-    if pechat::is_pechat_apparatus(apparatus) {
-        return Some(20.0);
+async fn roll_width_allowance_mm(
+    state: &AppState,
+    apparatus: &str,
+) -> Result<Option<f64>, AdminError> {
+    let apparatus_id = ApparatusId::new(apparatus.trim().to_string())
+        .map_err(|_| production_map_error(ProductionMapError::RawMaterialInvalidInput))?;
+    let configuration = state
+        .apparatus
+        .current_configuration(&apparatus_id)
+        .await
+        .map_err(canonical_apparatus_error)?
+        .ok_or_else(|| not_found("apparatus_not_found"))?;
+    if !configuration.has_coherent_source() || !configuration.is_active() {
+        return Err(production_map_error(
+            ProductionMapError::RawMaterialInvalidInput,
+        ));
     }
-    if apparatus.trim().to_lowercase().contains("laminatsiya") {
-        return Some(30.0);
+    Ok(match configuration.runtime.execution_profile.operation {
+        ExecutionOperation::Print => Some(20.0),
+        ExecutionOperation::Laminate => Some(30.0),
+        ExecutionOperation::Cut | ExecutionOperation::Package | ExecutionOperation::Glue => None,
+    })
+}
+
+pub(super) fn apparatus_id_matches_text(id: &ApparatusId, value: &str) -> bool {
+    ApparatusId::new(value.trim().to_string())
+        .is_ok_and(|candidate| candidate.as_str() == id.as_str())
+}
+
+pub(super) fn apparatus_id_matches_text_value(left: &str, right: &str) -> bool {
+    match (
+        ApparatusId::new(left.trim().to_string()),
+        ApparatusId::new(right.trim().to_string()),
+    ) {
+        (Ok(left), Ok(right)) => left == right,
+        _ => false,
     }
-    None
+}
+
+pub(super) fn assigned_apparatus_contains(candidate: &str, assigned: &[String]) -> bool {
+    assigned
+        .iter()
+        .any(|assigned| apparatus_id_matches_text_value(candidate, assigned))
 }
 
 fn roll_width_mm(stock: &RawMaterialStockEntry, item: &SupplierItem) -> Option<f64> {

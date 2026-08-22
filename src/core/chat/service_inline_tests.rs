@@ -1,8 +1,8 @@
 #[cfg(test)]
+#[allow(clippy::items_after_test_module)]
 mod tests {
     use super::{
-        ChatError, ChatPrincipalInput, ChatService, message_preview_text,
-        push_retry_delay_seconds,
+        ChatError, ChatPrincipalInput, ChatService, message_preview_text, push_retry_delay_seconds,
     };
     use crate::core::auth::models::{Principal, PrincipalRole};
     use crate::core::chat::can_participate_in_chat;

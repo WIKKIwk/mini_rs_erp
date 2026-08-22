@@ -4,14 +4,14 @@ use super::*;
 async fn admin_freeze_request_is_finalized_by_linked_worker_safe_stop() {
     let production_store = Arc::new(MemoryProductionMapStore::new());
     let mut state = test_state();
-    state.production_maps = ProductionMapService::new(production_store.clone());
+    state.production_maps = production_map_service_with_store(&state, production_store.clone());
     state
         .admin
         .upsert_role_assignment(crate::core::authz::RoleAssignmentUpsert {
             principal_role: PrincipalRole::Aparatchi,
             principal_ref: "worker-laminatsiya-freeze-request".to_string(),
             role_id: "aparatchi".to_string(),
-            assigned_apparatus: vec!["Laminatsiya 1".to_string()],
+            assigned_apparatus: vec!["apparatus:default:asset-007".to_string()],
             assigned_item_groups: Vec::new(),
         })
         .await
@@ -36,7 +36,7 @@ async fn admin_freeze_request_is_finalized_by_linked_worker_safe_stop() {
                 order_id,
                 "Laminatsiya admin freeze request",
                 "9320",
-                "Laminatsiya 1",
+                "apparatus:default:asset-007",
                 2,
                 950.0,
             ),
@@ -55,7 +55,7 @@ async fn admin_freeze_request_is_finalized_by_linked_worker_safe_stop() {
             &worker_token,
             &format!(
                 r#"{{
-                    "apparatus":"Laminatsiya 1",
+                    "apparatus":"apparatus:default:asset-007",
                     "order_id":"{order_id}",
                     "action":"start"
                 }}"#
@@ -103,20 +103,20 @@ async fn admin_freeze_request_is_finalized_by_linked_worker_safe_stop() {
     let snapshot_body = json_body(snapshot).await;
     assert_eq!(snapshot_status, StatusCode::OK, "{snapshot_body:?}");
     assert_eq!(
-        snapshot_body["sequences"]["Laminatsiya 1"],
+        snapshot_body["sequences"]["apparatus:default:asset-007"],
         serde_json::json!([order_id])
     );
     assert_eq!(
-        snapshot_body["queue_states"]["Laminatsiya 1"][order_id],
+        snapshot_body["queue_states"]["apparatus:default:asset-007"][order_id],
         "in_progress"
     );
     assert_eq!(
-        snapshot_body["queue_action_controls"]["Laminatsiya 1"][order_id]["freeze_request"]
+        snapshot_body["queue_action_controls"]["apparatus:default:asset-007"][order_id]["freeze_request"]
             ["target_session_id"],
         session_id
     );
-    let freeze_request_id = snapshot_body["queue_action_controls"]["Laminatsiya 1"][order_id]
-        ["freeze_request"]["request_id"]
+    let freeze_request_id = snapshot_body["queue_action_controls"]["apparatus:default:asset-007"]
+        [order_id]["freeze_request"]["request_id"]
         .as_str()
         .expect("linked freeze request id")
         .to_string();
@@ -129,7 +129,7 @@ async fn admin_freeze_request_is_finalized_by_linked_worker_safe_stop() {
             &worker_token,
             &format!(
                 r#"{{
-                    "apparatus":"Laminatsiya 1",
+                    "apparatus":"apparatus:default:asset-007",
                     "order_id":"{order_id}",
                     "action":"detach_roll",
                     "finished_goods_meter":100,
@@ -154,7 +154,7 @@ async fn admin_freeze_request_is_finalized_by_linked_worker_safe_stop() {
             &worker_token,
             &format!(
                 r#"{{
-                    "apparatus":"Laminatsiya 1",
+                    "apparatus":"apparatus:default:asset-007",
                     "order_id":"{order_id}",
                     "action":"detach_roll",
                     "freeze_request_id":"{freeze_request_id}",
@@ -182,11 +182,11 @@ async fn admin_freeze_request_is_finalized_by_linked_worker_safe_stop() {
         .expect("unchanged snapshot");
     let unchanged_body = json_body(unchanged).await;
     assert_eq!(
-        unchanged_body["sequences"]["Laminatsiya 1"],
+        unchanged_body["sequences"]["apparatus:default:asset-007"],
         serde_json::json!([order_id])
     );
     assert_eq!(
-        unchanged_body["queue_states"]["Laminatsiya 1"][order_id],
+        unchanged_body["queue_states"]["apparatus:default:asset-007"][order_id],
         "in_progress"
     );
     assert_eq!(
@@ -203,7 +203,7 @@ async fn admin_freeze_request_is_finalized_by_linked_worker_safe_stop() {
             &worker_token,
             &format!(
                 r#"{{
-                    "apparatus":"Laminatsiya 1",
+                    "apparatus":"apparatus:default:asset-007",
                     "order_id":"{order_id}",
                     "action":"detach_roll",
                     "freeze_request_id":"{freeze_request_id}",
@@ -230,11 +230,11 @@ async fn admin_freeze_request_is_finalized_by_linked_worker_safe_stop() {
         .expect("snapshot after failed commit");
     let after_failed_commit_body = json_body(after_failed_commit).await;
     assert_eq!(
-        after_failed_commit_body["sequences"]["Laminatsiya 1"],
+        after_failed_commit_body["sequences"]["apparatus:default:asset-007"],
         serde_json::json!([order_id])
     );
     assert_eq!(
-        after_failed_commit_body["queue_states"]["Laminatsiya 1"][order_id],
+        after_failed_commit_body["queue_states"]["apparatus:default:asset-007"][order_id],
         "in_progress"
     );
     assert_eq!(
@@ -242,7 +242,7 @@ async fn admin_freeze_request_is_finalized_by_linked_worker_safe_stop() {
         "freeze_requested"
     );
     assert_eq!(
-        after_failed_commit_body["queue_action_controls"]["Laminatsiya 1"][order_id]
+        after_failed_commit_body["queue_action_controls"]["apparatus:default:asset-007"][order_id]
             ["freeze_request"]["target_session_id"],
         session_id
     );
@@ -256,9 +256,11 @@ async fn admin_freeze_request_is_finalized_by_linked_worker_safe_stop() {
         ))
         .await
         .expect("no batch after failed commit");
-    assert!(json_body(no_rolled_back_batch).await["batches"]
-        .as_array()
-        .is_some_and(Vec::is_empty));
+    assert!(
+        json_body(no_rolled_back_batch).await["batches"]
+            .as_array()
+            .is_some_and(Vec::is_empty)
+    );
 
     let safe_stop = router
         .clone()
@@ -268,7 +270,7 @@ async fn admin_freeze_request_is_finalized_by_linked_worker_safe_stop() {
             &worker_token,
             &format!(
                 r#"{{
-                    "apparatus":"Laminatsiya 1",
+                    "apparatus":"apparatus:default:asset-007",
                     "order_id":"{order_id}",
                     "action":"detach_roll",
                     "freeze_request_id":"{freeze_request_id}",
@@ -293,9 +295,11 @@ async fn admin_freeze_request_is_finalized_by_linked_worker_safe_stop() {
         safe_stop_body["progress_batch"]["finished_goods_meter"],
         100.0
     );
-    assert!(safe_stop_body["progress_batch"]["qr_payload"]
-        .as_str()
-        .is_some_and(|value| !value.is_empty()));
+    assert!(
+        safe_stop_body["progress_batch"]["qr_payload"]
+            .as_str()
+            .is_some_and(|value| !value.is_empty())
+    );
     assert_eq!(safe_stop_body["prints"].as_array().map(Vec::len), Some(1));
 
     let frozen_snapshot = router
@@ -309,15 +313,15 @@ async fn admin_freeze_request_is_finalized_by_linked_worker_safe_stop() {
         .expect("frozen snapshot");
     let frozen_snapshot_body = json_body(frozen_snapshot).await;
     assert_eq!(
-        frozen_snapshot_body["sequences"]["Laminatsiya 1"],
+        frozen_snapshot_body["sequences"]["apparatus:default:asset-007"],
         serde_json::json!([])
     );
     assert_eq!(
-        frozen_snapshot_body["queue_states"]["Laminatsiya 1"][order_id],
+        frozen_snapshot_body["queue_states"]["apparatus:default:asset-007"][order_id],
         "frozen"
     );
     assert_eq!(
-        frozen_snapshot_body["frozen_orders_by_apparatus"]["Laminatsiya 1"][0]["order_id"],
+        frozen_snapshot_body["frozen_orders_by_apparatus"]["apparatus:default:asset-007"][0]["order_id"],
         order_id
     );
 
@@ -330,9 +334,11 @@ async fn admin_freeze_request_is_finalized_by_linked_worker_safe_stop() {
         ))
         .await
         .expect("completed orders");
-    assert!(json_body(completed).await["completed_orders"]
-        .as_array()
-        .is_some_and(Vec::is_empty));
+    assert!(
+        json_body(completed).await["completed_orders"]
+            .as_array()
+            .is_some_and(Vec::is_empty)
+    );
 
     let hidden_wip = router
         .clone()
@@ -345,9 +351,11 @@ async fn admin_freeze_request_is_finalized_by_linked_worker_safe_stop() {
         ))
         .await
         .expect("hidden frozen WIP");
-    assert!(json_body(hidden_wip).await["batches"]
-        .as_array()
-        .is_some_and(Vec::is_empty));
+    assert!(
+        json_body(hidden_wip).await["batches"]
+            .as_array()
+            .is_some_and(Vec::is_empty)
+    );
 
     let unfrozen = router
         .clone()
@@ -408,11 +416,11 @@ async fn admin_freeze_request_is_finalized_by_linked_worker_safe_stop() {
         .expect("snapshot after refreeze");
     let refrozen_snapshot_body = json_body(refrozen_snapshot).await;
     assert_eq!(
-        refrozen_snapshot_body["queue_states"]["Laminatsiya 1"][order_id],
+        refrozen_snapshot_body["queue_states"]["apparatus:default:asset-007"][order_id],
         "frozen"
     );
     assert_eq!(
-        refrozen_snapshot_body["sequences"]["Laminatsiya 1"],
+        refrozen_snapshot_body["sequences"]["apparatus:default:asset-007"],
         serde_json::json!([])
     );
 
@@ -446,11 +454,11 @@ async fn admin_freeze_request_is_finalized_by_linked_worker_safe_stop() {
         .expect("snapshot after second unfreeze");
     let second_unfreeze_snapshot_body = json_body(second_unfreeze_snapshot).await;
     assert_eq!(
-        second_unfreeze_snapshot_body["queue_states"]["Laminatsiya 1"][order_id],
+        second_unfreeze_snapshot_body["queue_states"]["apparatus:default:asset-007"][order_id],
         "pending"
     );
     assert_eq!(
-        second_unfreeze_snapshot_body["sequences"]["Laminatsiya 1"],
+        second_unfreeze_snapshot_body["sequences"]["apparatus:default:asset-007"],
         serde_json::json!([order_id])
     );
 
@@ -462,7 +470,7 @@ async fn admin_freeze_request_is_finalized_by_linked_worker_safe_stop() {
             &worker_token,
             &format!(
                 r#"{{
-                    "apparatus":"Laminatsiya 1",
+                    "apparatus":"apparatus:default:asset-007",
                     "order_id":"{order_id}",
                     "action":"start"
                 }}"#
@@ -483,7 +491,7 @@ async fn admin_freeze_request_is_finalized_by_linked_worker_safe_stop() {
             &worker_token,
             &format!(
                 r#"{{
-                    "apparatus":"Laminatsiya 1",
+                    "apparatus":"apparatus:default:asset-007",
                     "order_id":"{order_id}",
                     "action":"resume"
                 }}"#
@@ -512,7 +520,7 @@ async fn laminatsiya_complete_requires_or_persists_completion_metrics() {
             principal_role: PrincipalRole::Aparatchi,
             principal_ref: "worker-laminatsiya-complete".to_string(),
             role_id: "aparatchi".to_string(),
-            assigned_apparatus: vec!["Laminatsiya 1".to_string()],
+            assigned_apparatus: vec!["apparatus:default:asset-007".to_string()],
             assigned_item_groups: Vec::new(),
         })
         .await
@@ -536,7 +544,7 @@ async fn laminatsiya_complete_requires_or_persists_completion_metrics() {
                 "zakaz-laminatsiya-complete",
                 "Laminatsiya complete order",
                 "9323",
-                "Laminatsiya 1",
+                "apparatus:default:asset-007",
                 2,
                 950.0,
             ),
@@ -552,7 +560,7 @@ async fn laminatsiya_complete_requires_or_persists_completion_metrics() {
             "/v1/mobile/admin/production-maps/queue-action",
             &worker_token,
             r#"{
-                "apparatus":"Laminatsiya 1",
+                "apparatus":"apparatus:default:asset-007",
                 "order_id":"zakaz-laminatsiya-complete",
                 "action":"start"
             }"#,
@@ -568,7 +576,7 @@ async fn laminatsiya_complete_requires_or_persists_completion_metrics() {
             "/v1/mobile/admin/production-maps/queue-action",
             &worker_token,
             r#"{
-                "apparatus":"Laminatsiya 1",
+                "apparatus":"apparatus:default:asset-007",
                 "order_id":"zakaz-laminatsiya-complete",
                 "action":"complete"
             }"#,
@@ -588,7 +596,7 @@ async fn laminatsiya_complete_requires_or_persists_completion_metrics() {
             "/v1/mobile/admin/production-maps/queue-action",
             &worker_token,
             r#"{
-                "apparatus":"Laminatsiya 1",
+                "apparatus":"apparatus:default:asset-007",
                 "order_id":"zakaz-laminatsiya-complete",
                 "action":"complete",
                 "lamination_film_leftover_rolls":3.5,
@@ -646,7 +654,7 @@ async fn finished_goods_stays_free_wip_until_assigned_warehouse_accepts() {
             principal_role: PrincipalRole::Aparatchi,
             principal_ref: "worker-fg-receipt".to_string(),
             role_id: "aparatchi".to_string(),
-            assigned_apparatus: vec!["Laminatsiya 1".to_string()],
+            assigned_apparatus: vec!["apparatus:default:asset-007".to_string()],
             assigned_item_groups: Vec::new(),
         })
         .await
@@ -673,7 +681,7 @@ async fn finished_goods_stays_free_wip_until_assigned_warehouse_accepts() {
                 "zakaz-fg-receipt",
                 "Finished goods receipt order",
                 "9407",
-                "Laminatsiya 1",
+                "apparatus:default:asset-007",
                 2,
                 950.0,
             ),
@@ -689,7 +697,7 @@ async fn finished_goods_stays_free_wip_until_assigned_warehouse_accepts() {
             "/v1/mobile/admin/production-maps/queue-action",
             &worker_token,
             r#"{
-                "apparatus":"Laminatsiya 1",
+                "apparatus":"apparatus:default:asset-007",
                 "order_id":"zakaz-fg-receipt",
                 "action":"start"
             }"#,
@@ -705,7 +713,7 @@ async fn finished_goods_stays_free_wip_until_assigned_warehouse_accepts() {
             "/v1/mobile/admin/production-maps/queue-action",
             &worker_token,
             r#"{
-                "apparatus":"Laminatsiya 1",
+                "apparatus":"apparatus:default:asset-007",
                 "order_id":"zakaz-fg-receipt",
                 "action":"complete",
                 "lamination_film_leftover_rolls":1.25,
@@ -730,9 +738,11 @@ async fn finished_goods_stays_free_wip_until_assigned_warehouse_accepts() {
         completed_body["progress_batch"]["status_detail"]["flow_status"],
         "free_wip"
     );
-    assert!(completed_body["progress_batch"]["status_detail"]
-        .get("stock_status")
-        .is_none());
+    assert!(
+        completed_body["progress_batch"]["status_detail"]
+            .get("stock_status")
+            .is_none()
+    );
     assert_eq!(completed_body["order_status"]["order_status"], "completed");
     assert_eq!(completed_body["order_status"]["flow_status"], "free_wip");
     assert_eq!(completed_body["order_status"]["free_wip_count"], 1);
@@ -863,7 +873,7 @@ async fn laminatsiya_complete_keeps_state_successful_when_progress_print_fails()
             principal_role: PrincipalRole::Aparatchi,
             principal_ref: "worker-laminatsiya-print-fail".to_string(),
             role_id: "aparatchi".to_string(),
-            assigned_apparatus: vec!["Laminatsiya 1".to_string()],
+            assigned_apparatus: vec!["apparatus:default:asset-007".to_string()],
             assigned_item_groups: Vec::new(),
         })
         .await
@@ -887,7 +897,7 @@ async fn laminatsiya_complete_keeps_state_successful_when_progress_print_fails()
                 "zakaz-laminatsiya-print-fail",
                 "Laminatsiya print fail",
                 "9328",
-                "Laminatsiya 1",
+                "apparatus:default:asset-007",
                 2,
                 950.0,
             ),
@@ -903,7 +913,7 @@ async fn laminatsiya_complete_keeps_state_successful_when_progress_print_fails()
             "/v1/mobile/admin/production-maps/queue-action",
             &worker_token,
             r#"{
-                "apparatus":"Laminatsiya 1",
+                "apparatus":"apparatus:default:asset-007",
                 "order_id":"zakaz-laminatsiya-print-fail",
                 "action":"start"
             }"#,
@@ -919,7 +929,7 @@ async fn laminatsiya_complete_keeps_state_successful_when_progress_print_fails()
             "/v1/mobile/admin/production-maps/queue-action",
             &worker_token,
             r#"{
-                "apparatus":"Laminatsiya 1",
+                "apparatus":"apparatus:default:asset-007",
                 "order_id":"zakaz-laminatsiya-print-fail",
                 "action":"complete",
                 "lamination_film_leftover_rolls":1,
@@ -964,7 +974,7 @@ async fn laminatsiya_pause_does_not_persist_leftover_or_order_waste_metrics() {
             principal_role: PrincipalRole::Aparatchi,
             principal_ref: "worker-laminatsiya-pause".to_string(),
             role_id: "aparatchi".to_string(),
-            assigned_apparatus: vec!["Laminatsiya 2".to_string()],
+            assigned_apparatus: vec!["apparatus:default:asset-008".to_string()],
             assigned_item_groups: Vec::new(),
         })
         .await
@@ -984,7 +994,7 @@ async fn laminatsiya_pause_does_not_persist_leftover_or_order_waste_metrics() {
                 "zakaz-laminatsiya-pause",
                 "Laminatsiya pause order",
                 "9324",
-                "Laminatsiya 2",
+                "apparatus:default:asset-008",
                 2,
                 950.0,
             ),
@@ -1000,7 +1010,7 @@ async fn laminatsiya_pause_does_not_persist_leftover_or_order_waste_metrics() {
             "/v1/mobile/admin/production-maps/queue-action",
             &worker_token,
             r#"{
-                "apparatus":"Laminatsiya 2",
+                "apparatus":"apparatus:default:asset-008",
                 "order_id":"zakaz-laminatsiya-pause",
                 "action":"start"
             }"#,
@@ -1016,7 +1026,7 @@ async fn laminatsiya_pause_does_not_persist_leftover_or_order_waste_metrics() {
             "/v1/mobile/admin/production-maps/queue-action",
             &worker_token,
             r#"{
-                "apparatus":"Laminatsiya 2",
+                "apparatus":"apparatus:default:asset-008",
                 "order_id":"zakaz-laminatsiya-pause",
                 "action":"pause",
                 "lamination_print_leftover_rolls":8,
@@ -1033,7 +1043,7 @@ async fn laminatsiya_pause_does_not_persist_leftover_or_order_waste_metrics() {
     let paused_status = paused.status();
     let paused_body = json_body(paused).await;
     assert_eq!(paused_status, StatusCode::OK, "{paused_body:?}");
-    assert_eq!(paused_body["progress_batch"]["status"], "paused");
+    assert_eq!(paused_body["progress_batch"]["status"], "roll_detached");
     assert!(paused_body["progress_batch"]["lamination_print_leftover_rolls"].is_null());
     assert!(paused_body["progress_batch"]["lamination_film_leftover_rolls"].is_null());
     assert!(paused_body["progress_batch"]["total_waste"].is_null());
@@ -1041,4 +1051,264 @@ async fn laminatsiya_pause_does_not_persist_leftover_or_order_waste_metrics() {
     assert_eq!(paused_body["progress_batch"]["finished_goods_meter"], 72.0);
     assert!(paused_body["progress_event"]["lamination_film_leftover_rolls"].is_null());
     assert!(paused_body["progress_event"]["total_waste"].is_null());
+}
+
+#[tokio::test]
+async fn laminatsiya_queue_exposes_start_for_waiting_print_wip_behind_unready_queue_head() {
+    let print_requests = Arc::new(Mutex::new(Vec::<ScaleDriverPrintRequest>::new()));
+    let mut state = test_state();
+    state.gscale = GscaleService::new().with_driver(Arc::new(FakeProgressDriver {
+        requests: print_requests,
+        fail: false,
+    }));
+    state
+        .admin
+        .upsert_role_assignment(crate::core::authz::RoleAssignmentUpsert {
+            principal_role: PrincipalRole::Aparatchi,
+            principal_ref: "worker-laminatsiya-print-wip".to_string(),
+            role_id: "aparatchi".to_string(),
+            assigned_apparatus: vec![
+                "apparatus:default:bosma_7".to_string(),
+                "apparatus:default:asset-007".to_string(),
+            ],
+            assigned_item_groups: Vec::new(),
+        })
+        .await
+        .expect("assignment");
+    let admin_token = session(&state, PrincipalRole::Admin).await;
+    let worker_token = session_for(
+        &state,
+        PrincipalRole::Aparatchi,
+        "worker-laminatsiya-print-wip",
+    )
+    .await;
+    let router = build_router(state);
+    let waiting_order_id = "zakaz-laminatsiya-print-wip-waiting";
+    let order_id = "zakaz-laminatsiya-print-wip";
+
+    for (map_order_id, title, order_number) in [
+        (waiting_order_id, "Laminatsiya waiting queue head", "9341"),
+        (order_id, "Laminatsiya print WIP order", "9340"),
+    ] {
+        let saved = router
+            .clone()
+            .oneshot(request_with_body(
+                "PUT",
+                "/v1/mobile/admin/production-maps",
+                &admin_token,
+                &two_apparatus_order_map_json(
+                    map_order_id,
+                    title,
+                    order_number,
+                    "apparatus:default:bosma_7",
+                    "apparatus:default:asset-007",
+                ),
+            ))
+            .await
+            .expect("save map");
+        assert_eq!(saved.status(), StatusCode::OK);
+    }
+
+    let sequence = router
+        .clone()
+        .oneshot(request_with_body(
+            "PUT",
+            "/v1/mobile/admin/production-maps/sequence",
+            &admin_token,
+            &format!(
+                r#"{{
+                    "apparatus":"apparatus:default:asset-007",
+                    "order_ids":["{waiting_order_id}","{order_id}"]
+                }}"#
+            ),
+        ))
+        .await
+        .expect("set lamination sequence");
+    assert_eq!(sequence.status(), StatusCode::OK);
+    let print_sequence = router
+        .clone()
+        .oneshot(request_with_body(
+            "PUT",
+            "/v1/mobile/admin/production-maps/sequence",
+            &admin_token,
+            &format!(
+                r#"{{
+                    "apparatus":"apparatus:default:bosma_7",
+                    "order_ids":["{order_id}","{waiting_order_id}"]
+                }}"#
+            ),
+        ))
+        .await
+        .expect("set print sequence");
+    assert_eq!(print_sequence.status(), StatusCode::OK);
+    provision_test_qolip(&router, &admin_token, order_id).await;
+
+    let started_print = router
+        .clone()
+        .oneshot(request_with_body(
+            "POST",
+            "/v1/mobile/admin/production-maps/queue-action",
+            &worker_token,
+            &with_test_qolip(
+                &format!(
+                    r#"{{
+                        "apparatus":"apparatus:default:bosma_7",
+                        "order_id":"{order_id}",
+                        "action":"start"
+                    }}"#
+                ),
+                order_id,
+            ),
+        ))
+        .await
+        .expect("start print");
+    assert_eq!(started_print.status(), StatusCode::OK);
+
+    let paused_print = router
+        .clone()
+        .oneshot(request_with_body(
+            "POST",
+            "/v1/mobile/admin/production-maps/queue-action",
+            &worker_token,
+            &format!(
+                r#"{{
+                    "apparatus":"apparatus:default:bosma_7",
+                    "order_id":"{order_id}",
+                    "action":"pause",
+                    "produced_qty":100,
+                    "uom":"kg"
+                }}"#
+            ),
+        ))
+        .await
+        .expect("pause print with output WIP");
+    let paused_print_status = paused_print.status();
+    let paused_print_body = json_body(paused_print).await;
+    assert_eq!(paused_print_status, StatusCode::OK, "{paused_print_body:?}");
+    let print_qr = paused_print_body["progress_batch"]["qr_payload"]
+        .as_str()
+        .expect("print WIP QR")
+        .to_string();
+
+    let snapshot = router
+        .clone()
+        .oneshot(request(
+            "GET",
+            "/v1/mobile/admin/production-maps/sequence",
+            &worker_token,
+        ))
+        .await
+        .expect("laminatsiya queue snapshot");
+    let snapshot_status = snapshot.status();
+    let snapshot_body = json_body(snapshot).await;
+    assert_eq!(snapshot_status, StatusCode::OK, "{snapshot_body:?}");
+    let waiting_control =
+        &snapshot_body["queue_action_controls"]["apparatus:default:asset-007"][waiting_order_id];
+    assert_eq!(waiting_control["state"], "pending");
+    assert_eq!(waiting_control["previous_stage_ready"], false);
+    assert_eq!(
+        waiting_control["interaction"]["previous_wip_mode"],
+        "waiting"
+    );
+    assert_eq!(
+        waiting_control["interaction"]["mode"],
+        "waiting_previous_stage"
+    );
+    assert!(
+        waiting_control["allowed_actions"]
+            .as_array()
+            .is_some_and(Vec::is_empty)
+    );
+    let action_control =
+        &snapshot_body["queue_action_controls"]["apparatus:default:asset-007"][order_id];
+    assert_eq!(action_control["state"], "pending");
+    assert_eq!(action_control["previous_stage_ready"], false);
+    assert_eq!(
+        action_control["interaction"]["previous_wip_mode"],
+        "scan_required"
+    );
+    assert_eq!(action_control["interaction"]["mode"], "fresh_start");
+    assert!(
+        action_control["allowed_actions"]
+            .as_array()
+            .expect("allowed actions")
+            .iter()
+            .any(|action| action == "start")
+    );
+
+    let started_without_qr = router
+        .clone()
+        .oneshot(request_with_body(
+            "POST",
+            "/v1/mobile/admin/production-maps/queue-action",
+            &worker_token,
+            &format!(
+                r#"{{
+                    "apparatus":"apparatus:default:asset-007",
+                    "order_id":"{order_id}",
+                    "action":"start"
+                }}"#
+            ),
+        ))
+        .await
+        .expect("reject unscanned laminatsiya WIP start");
+    let started_without_qr_status = started_without_qr.status();
+    let started_without_qr_body = json_body(started_without_qr).await;
+    assert_eq!(
+        started_without_qr_status,
+        StatusCode::BAD_REQUEST,
+        "{started_without_qr_body:?}"
+    );
+    assert_eq!(started_without_qr_body["error"], "progress_qr_required");
+
+    let started_laminatsiya = router
+        .clone()
+        .oneshot(request_with_body(
+            "POST",
+            "/v1/mobile/admin/production-maps/queue-action",
+            &worker_token,
+            &format!(
+                r#"{{
+                    "apparatus":"apparatus:default:asset-007",
+                    "order_id":"{order_id}",
+                    "action":"start",
+                    "qr_payload":"{print_qr}"
+                }}"#
+            ),
+        ))
+        .await
+        .expect("start laminatsiya from print WIP");
+    let started_laminatsiya_status = started_laminatsiya.status();
+    let started_laminatsiya_body = json_body(started_laminatsiya).await;
+    assert_eq!(
+        started_laminatsiya_status,
+        StatusCode::OK,
+        "{started_laminatsiya_body:?}"
+    );
+    assert_eq!(started_laminatsiya_body["states"][order_id], "in_progress");
+
+    let in_use = router
+        .oneshot(request(
+            "GET",
+            &format!(
+                "/v1/mobile/admin/production-maps/wip-batches?apparatus=apparatus%3Adefault%3Aasset-007&status=in_use&order_id={order_id}"
+            ),
+            &admin_token,
+        ))
+        .await
+        .expect("laminatsiya in-use WIP");
+    let in_use_status = in_use.status();
+    let in_use_body = json_body(in_use).await;
+    assert_eq!(in_use_status, StatusCode::OK, "{in_use_body:?}");
+    let in_use_batch = in_use_body["batches"]
+        .as_array()
+        .expect("in-use batches")
+        .iter()
+        .find(|batch| batch["qr_payload"] == print_qr)
+        .expect("print WIP handed to laminatsiya");
+    assert_eq!(in_use_batch["wip_status"], "in_use");
+    assert_eq!(
+        in_use_batch["used_by_apparatus"],
+        "apparatus:default:asset-007"
+    );
 }

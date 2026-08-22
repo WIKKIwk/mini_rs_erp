@@ -4,6 +4,8 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use super::apparatus::visible_order_ids_by_apparatus;
+use super::apparatus_resolver::CanonicalApparatusResolver;
+use super::progress::QolipLineage;
 use super::progress::effective_apparatus_queue_policy_record;
 use super::service_maps::compile_saved_maps;
 use serde::Serialize;
@@ -69,6 +71,7 @@ impl From<ProductionSnapshotContext> for ProductionMapLiveSnapshot {
 #[derive(Clone)]
 pub struct ProductionMapService {
     pub(super) store: std::sync::Arc<dyn ProductionMapStorePort>,
+    pub(super) apparatus_resolver: std::sync::Arc<dyn CanonicalApparatusResolver>,
     live_notify: broadcast::Sender<()>,
     queue_action_lock: std::sync::Arc<Mutex<()>>,
     snapshot_cache: std::sync::Arc<ProductionSnapshotCache>,
@@ -99,7 +102,6 @@ pub struct PreparedApparatusQueueAction {
 
 #[derive(Clone)]
 pub(super) struct ClaimedAlternativeMapUpdate {
-    pub(super) previous: ProductionMapDefinition,
     pub(super) updated: ProductionMapDefinition,
 }
 
@@ -117,40 +119,105 @@ impl PreparedApparatusQueueAction {
     }
 
     pub fn attach_qolip_codes(&mut self, qolip_codes: &[String]) {
-        let mut normalized = Vec::new();
-        for code in qolip_codes {
-            let code = code.trim();
-            if code.is_empty()
-                || normalized
-                    .iter()
-                    .any(|existing: &String| existing.eq_ignore_ascii_case(code))
-            {
-                continue;
-            }
-            normalized.push(code.to_string());
-        }
-        if normalized.is_empty() {
+        let Some(lineage) = QolipLineage::from_codes(qolip_codes) else {
             return;
-        }
+        };
         if let Some(session) = &mut self.session {
-            if !session.payload_json.is_object() {
-                session.payload_json = serde_json::json!({});
-            }
-            session.payload_json["qolip_code"] = serde_json::json!(normalized[0]);
-            session.payload_json["qolip_codes"] = serde_json::json!(normalized);
+            lineage.write_to_payload(&mut session.payload_json);
+            session.payload_json["qolip_lock_owner"] = serde_json::Value::Bool(true);
+        }
+        lineage.write_to_payload(&mut self.event.payload_json);
+        if let Some(progress_event) = &mut self.progress_event {
+            lineage.write_to_payload(&mut progress_event.payload_json);
+        }
+        if let Some(progress_batch) = &mut self.progress_batch {
+            lineage.write_to_payload(&mut progress_batch.payload_json);
+        }
+        for progress_batch in &mut self.progress_batches {
+            lineage.write_to_payload(&mut progress_batch.payload_json);
+        }
+        for progress_batch in &mut self.progress_batch_updates {
+            lineage.write_to_payload(&mut progress_batch.payload_json);
         }
     }
 }
 
 impl ProductionMapService {
-    pub fn new(store: std::sync::Arc<dyn ProductionMapStorePort>) -> Self {
+    pub fn new(
+        store: std::sync::Arc<dyn ProductionMapStorePort>,
+        apparatus_resolver: std::sync::Arc<dyn CanonicalApparatusResolver>,
+    ) -> Self {
         let (live_notify, _) = broadcast::channel(LIVE_NOTIFY_CAPACITY);
         Self {
             store,
+            apparatus_resolver,
             live_notify,
             queue_action_lock: std::sync::Arc::new(Mutex::new(())),
             snapshot_cache: std::sync::Arc::new(ProductionSnapshotCache::default()),
         }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn new_for_test(store: std::sync::Arc<dyn ProductionMapStorePort>) -> Self {
+        Self::new(
+            store,
+            std::sync::Arc::new(super::TestCanonicalApparatusResolver::standard()),
+        )
+    }
+
+    /// Resolve live apparatus configuration by immutable canonical identity.
+    /// Missing or invalid configuration returns `StoreFailed`; callers cannot
+    /// continue with a title/name-derived fallback.
+    pub(crate) async fn resolve_canonical_apparatus(
+        &self,
+        apparatus_id: &crate::core::apparatus_standard::ApparatusId,
+    ) -> Result<
+        std::sync::Arc<crate::core::apparatus_standard::RuntimeApparatusConfiguration>,
+        ProductionMapError,
+    > {
+        let configuration = self
+            .apparatus_resolver
+            .resolve(apparatus_id)
+            .await?
+            .ok_or(ProductionMapError::StoreFailed)?;
+        if configuration.runtime.apparatus_id != *apparatus_id
+            || !configuration.has_coherent_source()
+            || !configuration.is_active()
+        {
+            return Err(ProductionMapError::StoreFailed);
+        }
+        Ok(configuration)
+    }
+
+    pub(crate) async fn resolve_canonical_apparatus_text(
+        &self,
+        value: &str,
+    ) -> Result<
+        std::sync::Arc<crate::core::apparatus_standard::RuntimeApparatusConfiguration>,
+        ProductionMapError,
+    > {
+        let id = crate::core::apparatus_standard::ApparatusId::new(value.trim().to_string())
+            .map_err(|_| ProductionMapError::StoreFailed)?;
+        self.resolve_canonical_apparatus(&id).await
+    }
+
+    pub(crate) async fn active_canonical_apparatuses(
+        &self,
+    ) -> Result<
+        Vec<std::sync::Arc<crate::core::apparatus_standard::RuntimeApparatusConfiguration>>,
+        ProductionMapError,
+    > {
+        let mut configurations = Vec::new();
+        for configuration in self.apparatus_resolver.list().await? {
+            if !configuration.has_coherent_source() {
+                return Err(ProductionMapError::StoreFailed);
+            }
+            if !configuration.is_active() {
+                continue;
+            }
+            configurations.push(configuration);
+        }
+        Ok(configurations)
     }
 
     pub(crate) async fn queue_action_guard(&self) -> OwnedMutexGuard<()> {
@@ -212,7 +279,6 @@ impl ProductionMapService {
         let stored_sequences = self.store.apparatus_sequences().await?;
         let visible_order_ids = visible_order_ids_by_apparatus(&raw_maps);
         let queue_states = self.store.apparatus_queue_states().await?;
-        let policies = self.store.apparatus_queue_policies().await?;
         let order_controls = self.store.order_control_states().await?;
         let frozen_order_ids = order_controls
             .iter()
@@ -225,16 +291,15 @@ impl ProductionMapService {
             &stored_sequences,
             &frozen_order_ids,
         );
-        let queue_policies = policies
-            .iter()
-            .map(|(apparatus, policy)| effective_apparatus_queue_policy_record(apparatus, *policy))
-            .collect();
+        let mut queue_policies = Vec::new();
+        for canonical in self.active_canonical_apparatuses().await? {
+            queue_policies.push(effective_apparatus_queue_policy_record(&canonical));
+        }
         let queue_action_controls = self
             .queue_action_controls_for_snapshot(
                 &raw_maps,
                 &stored_sequences,
                 &queue_states,
-                &policies,
                 &order_controls,
             )
             .await?;
@@ -337,8 +402,9 @@ mod tests {
 
     #[tokio::test]
     async fn live_snapshot_cache_reuses_until_notification() {
-        let service =
-            ProductionMapService::new(std::sync::Arc::new(MemoryProductionMapStore::new()));
+        let service = ProductionMapService::new_for_test(std::sync::Arc::new(
+            MemoryProductionMapStore::new(),
+        ));
 
         service.live_snapshot().await.expect("initial snapshot");
         let initial = cached_snapshot(&service).await;

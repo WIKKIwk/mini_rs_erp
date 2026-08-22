@@ -223,8 +223,6 @@ pub struct QolipLocationUpsert {
 
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum QolipError {
-    #[error("training order ids are reserved for the training workspace")]
-    TrainingOrderIdReserved,
     #[error("block is required")]
     MissingBlock,
     #[error("item is required")]

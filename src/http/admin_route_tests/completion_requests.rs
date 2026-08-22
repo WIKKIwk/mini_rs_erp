@@ -9,7 +9,7 @@ async fn queue_complete_without_output_creates_admin_completion_request() {
             principal_role: PrincipalRole::Aparatchi,
             principal_ref: "worker-zero-complete".to_string(),
             role_id: "aparatchi".to_string(),
-            assigned_apparatus: vec!["7 ta rangli pechat".to_string()],
+            assigned_apparatus: vec!["apparatus:default:bosma_7".to_string()],
             assigned_item_groups: Vec::new(),
         })
         .await
@@ -28,7 +28,7 @@ async fn queue_complete_without_output_creates_admin_completion_request() {
                 "zakaz-zero-complete",
                 "Zero complete order",
                 "9311",
-                "7 ta rangli pechat",
+                "apparatus:default:bosma_7",
             ),
         ))
         .await
@@ -44,7 +44,7 @@ async fn queue_complete_without_output_creates_admin_completion_request() {
             &worker_token,
             &with_test_qolip(
                 r#"{
-                "apparatus":"7 ta rangli pechat",
+                "apparatus":"apparatus:default:bosma_7",
                 "order_id":"zakaz-zero-complete",
                 "action":"start"
             }"#,
@@ -63,7 +63,7 @@ async fn queue_complete_without_output_creates_admin_completion_request() {
             &worker_token,
             &with_test_returned_paint(
                 r#"{
-                "apparatus":"7 ta rangli pechat",
+                "apparatus":"apparatus:default:bosma_7",
                 "order_id":"zakaz-zero-complete",
                 "action":"complete",
                 "completion_request_note":"Metraj va kg yo'q, brigader tekshirsin"
@@ -123,7 +123,7 @@ async fn queue_complete_with_zero_metric_requires_reason_and_creates_admin_reque
             principal_role: PrincipalRole::Aparatchi,
             principal_ref: "worker-zero-metric".to_string(),
             role_id: "aparatchi".to_string(),
-            assigned_apparatus: vec!["7 ta rangli pechat".to_string()],
+            assigned_apparatus: vec!["apparatus:default:bosma_7".to_string()],
             assigned_item_groups: Vec::new(),
         })
         .await
@@ -142,7 +142,7 @@ async fn queue_complete_with_zero_metric_requires_reason_and_creates_admin_reque
                 "zakaz-zero-metric",
                 "Zero metric order",
                 "9312",
-                "7 ta rangli pechat",
+                "apparatus:default:bosma_7",
             ),
         ))
         .await
@@ -158,7 +158,7 @@ async fn queue_complete_with_zero_metric_requires_reason_and_creates_admin_reque
             &worker_token,
             &with_test_qolip(
                 r#"{
-                "apparatus":"7 ta rangli pechat",
+                "apparatus":"apparatus:default:bosma_7",
                 "order_id":"zakaz-zero-metric",
                 "action":"start"
             }"#,
@@ -177,7 +177,7 @@ async fn queue_complete_with_zero_metric_requires_reason_and_creates_admin_reque
             &worker_token,
             &with_test_returned_paint(
                 r#"{
-                "apparatus":"7 ta rangli pechat",
+                "apparatus":"apparatus:default:bosma_7",
                 "order_id":"zakaz-zero-metric",
                 "action":"complete",
                 "total_waste":0,
@@ -204,7 +204,7 @@ async fn queue_complete_with_zero_metric_requires_reason_and_creates_admin_reque
             &worker_token,
             &with_test_returned_paint(
                 r#"{
-                "apparatus":"7 ta rangli pechat",
+                "apparatus":"apparatus:default:bosma_7",
                 "order_id":"zakaz-zero-metric",
                 "action":"complete",
                 "total_waste":0,
@@ -248,14 +248,14 @@ async fn admin_approves_zero_output_completion_request_and_closes_order_with_iss
     let production_store = Arc::new(MemoryProductionMapStore::new());
     let mut state = test_state();
     state.gscale = GscaleService::new().with_receipt_store(material_store);
-    state.production_maps = ProductionMapService::new(production_store.clone());
+    state.production_maps = production_map_service_with_store(&state, production_store.clone());
     state
         .admin
         .upsert_role_assignment(crate::core::authz::RoleAssignmentUpsert {
             principal_role: PrincipalRole::Aparatchi,
             principal_ref: "worker-approve-complete".to_string(),
             role_id: "aparatchi".to_string(),
-            assigned_apparatus: vec!["7 ta rangli pechat".to_string()],
+            assigned_apparatus: vec!["apparatus:default:bosma_7".to_string()],
             assigned_item_groups: Vec::new(),
         })
         .await
@@ -279,7 +279,7 @@ async fn admin_approves_zero_output_completion_request_and_closes_order_with_iss
                     order_id,
                     "Approve zero order",
                     number,
-                    "7 ta rangli pechat",
+                    "apparatus:default:bosma_7",
                 ),
             ))
             .await
@@ -292,7 +292,12 @@ async fn admin_approves_zero_output_completion_request_and_closes_order_with_iss
             "PUT",
             "/v1/mobile/admin/raw-material-rules",
             &admin_token,
-            r#"{"apparatus":"7 ta rangli pechat","requires_material":false,"start_policy":"requirement_groups","item_groups":["Kraska"]}"#,
+            &canonical_requirement_set_material_policy_body(
+                "apparatus:default:bosma_7",
+                1,
+                &["Kraska"],
+                true,
+            ),
         ))
         .await
         .expect("rule save");
@@ -320,7 +325,7 @@ async fn admin_approves_zero_output_completion_request_and_closes_order_with_iss
             "/v1/mobile/admin/production-maps/sequence",
             &admin_token,
             r#"{
-                "apparatus":"7 ta rangli pechat",
+                "apparatus":"apparatus:default:bosma_7",
                 "order_ids":["zakaz-approve-zero","zakaz-approve-next"]
             }"#,
         ))
@@ -338,7 +343,7 @@ async fn admin_approves_zero_output_completion_request_and_closes_order_with_iss
             &worker_token,
             &with_test_qolip(
                 r#"{
-                "apparatus":"7 ta rangli pechat",
+                "apparatus":"apparatus:default:bosma_7",
                 "order_id":"zakaz-approve-zero",
                 "action":"start",
                 "material_barcodes":["30AA"]
@@ -357,7 +362,7 @@ async fn admin_approves_zero_output_completion_request_and_closes_order_with_iss
             "/v1/mobile/admin/production-maps/queue-action",
             &worker_token,
             &with_test_returned_paint(r#"{
-                "apparatus":"7 ta rangli pechat",
+                "apparatus":"apparatus:default:bosma_7",
                 "order_id":"zakaz-approve-zero",
                 "action":"complete",
                 "completion_request_note":"kg va metraj kiritilmagan, buyurtma muammo bilan yopilsin"
@@ -392,7 +397,9 @@ async fn admin_approves_zero_output_completion_request_and_closes_order_with_iss
         "completed_with_issue"
     );
     let returned_paint = production_store
-        .returned_paint_request("returned_paint_complete:zakaz-approve-zero:7 ta rangli pechat")
+        .returned_paint_request(
+            "returned_paint_complete:zakaz-approve-zero:apparatus:default:bosma_7",
+        )
         .await
         .expect("returned paint is committed with approval");
     assert_eq!(
@@ -480,6 +487,29 @@ async fn admin_approves_zero_output_completion_request_and_closes_order_with_iss
         "completed_with_issue"
     );
 
+    let material_not_required = router
+        .clone()
+        .oneshot(request_with_body(
+            "PUT",
+            "/v1/mobile/admin/raw-material-rules",
+            &admin_token,
+            &canonical_material_policy_body(
+                "apparatus:default:bosma_7",
+                2,
+                serde_json::json!({"mode": "not_required"}),
+                true,
+            ),
+        ))
+        .await
+        .expect("remove material requirement before starting next order");
+    let material_not_required_status = material_not_required.status();
+    let material_not_required_body = json_body(material_not_required).await;
+    assert_eq!(
+        material_not_required_status,
+        StatusCode::OK,
+        "{material_not_required_body:?}"
+    );
+
     let next_started = router
         .oneshot(request_with_body(
             "POST",
@@ -487,7 +517,7 @@ async fn admin_approves_zero_output_completion_request_and_closes_order_with_iss
             &worker_token,
             &with_test_qolip(
                 r#"{
-                "apparatus":"7 ta rangli pechat",
+                "apparatus":"apparatus:default:bosma_7",
                 "order_id":"zakaz-approve-next",
                 "action":"start"
             }"#,
@@ -496,5 +526,7 @@ async fn admin_approves_zero_output_completion_request_and_closes_order_with_iss
         ))
         .await
         .expect("start next");
-    assert_eq!(next_started.status(), StatusCode::OK);
+    let next_started_status = next_started.status();
+    let next_started_body = json_body(next_started).await;
+    assert_eq!(next_started_status, StatusCode::OK, "{next_started_body:?}");
 }

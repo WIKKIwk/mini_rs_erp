@@ -145,11 +145,10 @@ impl ReturnedPaintStorePort for MemoryReturnedPaintStore {
         let mut images = self.images.write().await;
         if images
             .get(image_id)
-            .map_or(true, |image| image.owner_ref != owner_ref)
+            .is_none_or(|image| image.owner_ref != owner_ref)
         {
             return Ok(false);
         }
         Ok(images.remove(image_id).is_some())
     }
 }
-

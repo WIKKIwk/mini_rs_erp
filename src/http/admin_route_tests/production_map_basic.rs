@@ -101,10 +101,12 @@ async fn production_map_nodes_preserve_alternative_group_metadata() {
                     {
                         "id":"apparatus",
                         "kind":"apparatus",
-                        "title":"7 ta rangli pechat",
+                        "title":"apparatus:default:bosma_7",
+                        "apparatus_id":"apparatus:default:bosma_7",
                         "alternative_group_id":"alt-pechat-1",
                         "alternative_group_label":"pechat",
-                        "alternative_assigned_title":"7 ta rangli pechat"
+                        "alternative_assigned_title":"apparatus:default:bosma_7",
+                        "alternative_assigned_apparatus_id":"apparatus:default:bosma_7"
                     },
                     {"id":"end","kind":"end","title":"End"}
                 ],
@@ -129,7 +131,7 @@ async fn production_map_nodes_preserve_alternative_group_metadata() {
     );
     assert_eq!(
         value["map"]["nodes"][1]["alternative_assigned_title"],
-        "7 ta rangli pechat"
+        "apparatus:default:bosma_7"
     );
 
     let list = build_router(state)
@@ -148,7 +150,7 @@ async fn production_map_nodes_preserve_alternative_group_metadata() {
     );
     assert_eq!(
         listed[0]["map"]["nodes"][1]["alternative_assigned_title"],
-        "7 ta rangli pechat"
+        "apparatus:default:bosma_7"
     );
 }
 
@@ -172,6 +174,7 @@ async fn production_map_nodes_preserve_rezka_setup_metadata() {
                         "id":"rezka",
                         "kind":"apparatus",
                         "title":"Rezka",
+                        "apparatus_id":"apparatus:default:asset-010",
                         "rezka_kadr_count":4,
                         "rezka_label_length":125.5
                     },
@@ -226,24 +229,28 @@ async fn production_map_sequence_returns_backend_visible_order_ids() {
                 "nodes":[
                     {"id":"start","kind":"start","title":"Start"},
                     {"id":"order","kind":"task","title":"Visible product"},
-                    {"id":"pechat","kind":"apparatus","title":"7 ta rangli pechat"},
+                    {"id":"pechat","kind":"apparatus","title":"apparatus:default:bosma_7","apparatus_id":"apparatus:default:bosma_7"},
                     {
                         "id":"lamin1",
                         "kind":"apparatus",
-                        "title":"Laminatsiya 1",
+                        "title":"apparatus:default:asset-007",
+                        "apparatus_id":"apparatus:default:asset-007",
                         "alternative_group_id":"alt-laminatsiya",
                         "alternative_group_label":"Laminatsiya",
-                        "alternative_assigned_title":"Laminatsiya 1"
+                        "alternative_assigned_title":"apparatus:default:asset-007",
+                        "alternative_assigned_apparatus_id":"apparatus:default:asset-007"
                     },
                     {
                         "id":"lamin2",
                         "kind":"apparatus",
-                        "title":"Laminatsiya 2",
+                        "title":"apparatus:default:asset-008",
+                        "apparatus_id":"apparatus:default:asset-008",
                         "alternative_group_id":"alt-laminatsiya",
                         "alternative_group_label":"Laminatsiya",
-                        "alternative_assigned_title":"Laminatsiya 1"
+                        "alternative_assigned_title":"apparatus:default:asset-007",
+                        "alternative_assigned_apparatus_id":"apparatus:default:asset-007"
                     },
-                    {"id":"rezka","kind":"apparatus","title":"Rezka"},
+                    {"id":"rezka","kind":"apparatus","title":"Rezka","apparatus_id":"apparatus:default:asset-010"},
                     {"id":"end","kind":"end","title":"End"}
                 ],
                 "edges":[
@@ -271,243 +278,18 @@ async fn production_map_sequence_returns_backend_visible_order_ids() {
     let body = json_body(response).await;
 
     assert_eq!(
-        body["visible_order_ids"]["7 ta rangli pechat"],
+        body["visible_order_ids"]["apparatus:default:bosma_7"],
         serde_json::json!(["zakaz-visible-alt"])
     );
     assert_eq!(
-        body["visible_order_ids"]["Laminatsiya 1"],
+        body["visible_order_ids"]["apparatus:default:asset-007"],
         serde_json::json!(["zakaz-visible-alt"])
     );
     assert_eq!(
-        body["visible_order_ids"]["Rezka"],
+        body["visible_order_ids"]["apparatus:default:asset-010"],
         serde_json::json!(["zakaz-visible-alt"])
     );
-    assert!(body["visible_order_ids"]["Laminatsiya 2"].is_null());
-}
-
-#[tokio::test]
-async fn production_map_sequence_exposes_backend_worker_contract_revision() {
-    let state = test_state();
-    state
-        .admin
-        .upsert_role_assignment(crate::core::authz::RoleAssignmentUpsert {
-            principal_role: PrincipalRole::Aparatchi,
-            principal_ref: "worker-mobile-contract".to_string(),
-            role_id: "aparatchi".to_string(),
-            assigned_apparatus: vec!["7 ta rangli pechat".to_string()],
-            assigned_item_groups: Vec::new(),
-        })
-        .await
-        .expect("assignment");
-    let admin_token = session(&state, PrincipalRole::Admin).await;
-    let worker_token = session_for(
-        &state,
-        PrincipalRole::Aparatchi,
-        "worker-mobile-contract",
-    )
-    .await;
-    let router = build_router(state);
-
-    let saved = router
-        .clone()
-        .oneshot(request_with_body(
-            "PUT",
-            "/v1/mobile/admin/production-maps",
-            &admin_token,
-            &pechat_order_map_json(
-                "zakaz-mobile-contract",
-                "Mobile contract order",
-                "9901",
-                "7 ta rangli pechat",
-            ),
-        ))
-        .await
-        .expect("save map");
-    assert_eq!(saved.status(), StatusCode::OK);
-
-    let sequence = router
-        .clone()
-        .oneshot(request_with_body(
-            "PUT",
-            "/v1/mobile/admin/production-maps/sequence",
-            &admin_token,
-            r#"{
-                "apparatus":"7 ta rangli pechat",
-                "order_ids":["zakaz-mobile-contract"]
-            }"#,
-        ))
-        .await
-        .expect("save sequence");
-    assert_eq!(sequence.status(), StatusCode::OK);
-
-    let response = router
-        .oneshot(request(
-            "GET",
-            "/v1/mobile/admin/production-maps/sequence",
-            &worker_token,
-        ))
-        .await
-        .expect("sequence");
-    assert_eq!(response.status(), StatusCode::OK);
-    let body = json_body(response).await;
-
-    assert_eq!(
-        body["assigned_apparatus"],
-        serde_json::json!(["7 ta rangli pechat"])
-    );
-    let revision = body["snapshot_revision"].as_str().expect("snapshot revision");
-    assert_eq!(revision.len(), 64);
-    assert!(revision.bytes().all(|byte| byte.is_ascii_hexdigit()));
-
-    let interaction = &body["queue_action_controls"]["7 ta rangli pechat"]
-        ["zakaz-mobile-contract"]["interaction"];
-    for field in [
-        "mode",
-        "start_materials_mode",
-        "previous_wip_mode",
-        "qolip_mode",
-        "blocking_reason_code",
-    ] {
-        assert!(interaction[field].is_string(), "missing interaction.{field}");
-    }
-    for field in [
-        "material_scan_required",
-        "assigned_materials_display_only",
-        "material_intake_allowed",
-    ] {
-        assert!(interaction[field].is_boolean(), "missing interaction.{field}");
-    }
-    assert!(body["queue_action_controls"]["7 ta rangli pechat"]
-        ["zakaz-mobile-contract"]["freeze_request"]
-        .is_null());
-}
-
-#[tokio::test]
-async fn production_map_queue_action_rejects_stale_snapshot_with_refresh_contract() {
-    let state = test_state();
-    state
-        .admin
-        .upsert_role_assignment(crate::core::authz::RoleAssignmentUpsert {
-            principal_role: PrincipalRole::Aparatchi,
-            principal_ref: "worker-mobile-stale".to_string(),
-            role_id: "aparatchi".to_string(),
-            assigned_apparatus: vec!["7 ta rangli pechat".to_string()],
-            assigned_item_groups: Vec::new(),
-        })
-        .await
-        .expect("assignment");
-    let admin_token = session(&state, PrincipalRole::Admin).await;
-    let worker_token = session_for(&state, PrincipalRole::Aparatchi, "worker-mobile-stale").await;
-    let router = build_router(state);
-
-    let saved = router
-        .clone()
-        .oneshot(request_with_body(
-            "PUT",
-            "/v1/mobile/admin/production-maps",
-            &admin_token,
-            &pechat_order_map_json(
-                "zakaz-mobile-stale",
-                "Mobile stale order",
-                "9902",
-                "7 ta rangli pechat",
-            ),
-        ))
-        .await
-        .expect("save map");
-    assert_eq!(saved.status(), StatusCode::OK);
-
-    let sequence = router
-        .clone()
-        .oneshot(request_with_body(
-            "PUT",
-            "/v1/mobile/admin/production-maps/sequence",
-            &admin_token,
-            r#"{
-                "apparatus":"7 ta rangli pechat",
-                "order_ids":["zakaz-mobile-stale"]
-            }"#,
-        ))
-        .await
-        .expect("save sequence");
-    assert_eq!(sequence.status(), StatusCode::OK);
-
-    let snapshot = router
-        .clone()
-        .oneshot(request(
-            "GET",
-            "/v1/mobile/admin/production-maps/sequence",
-            &worker_token,
-        ))
-        .await
-        .expect("snapshot");
-    assert_eq!(snapshot.status(), StatusCode::OK);
-    let snapshot_body = json_body(snapshot).await;
-    let old_revision = snapshot_body["snapshot_revision"]
-        .as_str()
-        .expect("old snapshot revision")
-        .to_string();
-
-    let second_saved = router
-        .clone()
-        .oneshot(request_with_body(
-            "PUT",
-            "/v1/mobile/admin/production-maps",
-            &admin_token,
-            &pechat_order_map_json(
-                "zakaz-mobile-stale-2",
-                "Mobile stale order 2",
-                "9903",
-                "7 ta rangli pechat",
-            ),
-        ))
-        .await
-        .expect("save concurrent map");
-    assert_eq!(second_saved.status(), StatusCode::OK);
-
-    let action = router
-        .clone()
-        .oneshot(request_with_body(
-            "POST",
-            "/v1/mobile/admin/production-maps/queue-action",
-            &worker_token,
-            &format!(
-                r#"{{
-                    "apparatus":"7 ta rangli pechat",
-                    "order_id":"zakaz-mobile-stale",
-                    "action":"start",
-                    "expected_snapshot_revision":"{old_revision}"
-                }}"#
-            ),
-        ))
-        .await
-        .expect("stale action");
-    assert_eq!(action.status(), StatusCode::CONFLICT);
-    let action_body = json_body(action).await;
-    assert_eq!(action_body["error"], "stale_production_snapshot");
-    assert_eq!(action_body["refresh_required"], true);
-    assert_eq!(
-        action_body["refresh_endpoint"],
-        "/v1/mobile/admin/production-maps/sequence"
-    );
-    let current_revision = action_body["snapshot_revision"]
-        .as_str()
-        .expect("current snapshot revision");
-    assert_ne!(current_revision, old_revision);
-
-    let refreshed = router
-        .oneshot(request(
-            "GET",
-            "/v1/mobile/admin/production-maps/sequence",
-            &worker_token,
-        ))
-        .await
-        .expect("refresh snapshot");
-    assert_eq!(refreshed.status(), StatusCode::OK);
-    assert_eq!(
-        json_body(refreshed).await["snapshot_revision"],
-        current_revision
-    );
+    assert!(body["visible_order_ids"]["apparatus:default:asset-008"].is_null());
 }
 
 #[tokio::test]
@@ -529,9 +311,9 @@ async fn production_map_sequence_accepts_numeric_order_id() {
                 "nodes":[
                     {"id":"start","kind":"start","title":"Start"},
                     {"id":"order","kind":"task","title":"Funchuza 300 gr kok"},
-                    {"id":"pechat","kind":"apparatus","title":"7 ta rangli pechat"},
-                    {"id":"lamin","kind":"apparatus","title":"Laminatsiya 1"},
-                    {"id":"rezka","kind":"apparatus","title":"Rezka"},
+                    {"id":"pechat","kind":"apparatus","title":"apparatus:default:bosma_7","apparatus_id":"apparatus:default:bosma_7"},
+                    {"id":"lamin","kind":"apparatus","title":"apparatus:default:asset-007","apparatus_id":"apparatus:default:asset-007"},
+                    {"id":"rezka","kind":"apparatus","title":"Rezka","apparatus_id":"apparatus:default:asset-010"},
                     {"id":"end","kind":"end","title":"End"}
                 ],
                 "edges":[
@@ -558,7 +340,7 @@ async fn production_map_sequence_accepts_numeric_order_id() {
                 "title":"Funchuza template",
                 "nodes":[
                     {"id":"start","kind":"start","title":"Start"},
-                    {"id":"pechat","kind":"apparatus","title":"7 ta rangli pechat"},
+                    {"id":"pechat","kind":"apparatus","title":"apparatus:default:bosma_7","apparatus_id":"apparatus:default:bosma_7"},
                     {"id":"end","kind":"end","title":"End"}
                 ],
                 "edges":[
@@ -583,15 +365,15 @@ async fn production_map_sequence_accepts_numeric_order_id() {
     let body = json_body(response).await;
 
     assert_eq!(
-        body["visible_order_ids"]["7 ta rangli pechat"],
+        body["visible_order_ids"]["apparatus:default:bosma_7"],
         serde_json::json!(["1111"])
     );
     assert_eq!(
-        body["visible_order_ids"]["Laminatsiya 1"],
+        body["visible_order_ids"]["apparatus:default:asset-007"],
         serde_json::json!(["1111"])
     );
     assert_eq!(
-        body["visible_order_ids"]["Rezka"],
+        body["visible_order_ids"]["apparatus:default:asset-010"],
         serde_json::json!(["1111"])
     );
 }

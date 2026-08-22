@@ -1,16 +1,17 @@
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
 use super::service::ProductionMapService;
 use super::service_capacity_scheduler::{
-    ScheduledCandidate, candidate_allowed_for_order, effective_duration_minutes,
-    find_schedule_slot, fits_working_window, profile_for_apparatus,
-    reservations_with_active_sessions,
-    same_apparatus_identity,
+    ScheduledCandidate, candidate_allowed_for_order, canonical_apparatus_id,
+    effective_duration_minutes, find_schedule_slot, fits_working_window,
+    reservations_with_active_sessions, same_apparatus_id,
 };
 use super::store_port::ApparatusQueueStateMap;
 use super::types::*;
 use super::*;
-use crate::core::apparatus_groups::{apparatus_id_for_name, apparatus_master_data_for_name};
+use crate::core::apparatus_standard::{
+    EquipmentCapabilityCode, RuntimeApparatusConfiguration,
+};
 
 impl ProductionMapService {
     pub(super) async fn ensure_apparatus_execution_capacity(
@@ -19,24 +20,11 @@ impl ProductionMapService {
         order_id: &str,
         all_states: &ApparatusQueueStateMap,
     ) -> Result<(), ProductionMapError> {
-        let apparatus = apparatus.trim();
         let order_id = order_id.trim();
-        reject_training_order_id(order_id)?;
-        let profiles = self.store.apparatus_capacity_profiles().await?;
-        let profile = profile_for_apparatus(
-            &profiles,
-            &apparatus_id_for_name(apparatus),
-            apparatus,
-        );
+        let apparatus_id =
+            canonical_apparatus_id(apparatus).ok_or(ProductionMapError::CapacityProfileNotFound)?;
+        let profile = self.canonical_capacity_profile_for(&apparatus_id).await?;
         let now = unix_seconds();
-        let same_apparatus = |candidate_id: &str, candidate_name: &str| {
-            same_apparatus_identity(
-                candidate_id,
-                candidate_name,
-                &profile.apparatus_id,
-                apparatus,
-            )
-        };
         if self
             .store
             .apparatus_downtimes()
@@ -44,7 +32,7 @@ impl ProductionMapService {
             .iter()
             .any(|downtime| {
                 downtime.active
-                    && same_apparatus(&downtime.apparatus_id, &downtime.apparatus)
+                    && same_apparatus_id(&downtime.apparatus_id, &profile.apparatus_id)
                     && downtime.starts_at_unix <= now
                     && now < downtime.ends_at_unix
             })
@@ -57,7 +45,9 @@ impl ProductionMapService {
 
         let mut occupied_orders = BTreeSet::new();
         for (candidate_apparatus, states) in all_states {
-            if !queue_state::apparatus_titles_match(candidate_apparatus, apparatus) {
+            let candidate_id = canonical_apparatus_id(candidate_apparatus)
+                .ok_or(ProductionMapError::StoreFailed)?;
+            if !same_apparatus_id(&candidate_id, &profile.apparatus_id) {
                 continue;
             }
             for (candidate_order_id, state) in states {
@@ -70,8 +60,10 @@ impl ProductionMapService {
             }
         }
         for session in self.store.order_run_sessions_for_audit().await? {
+            let session_apparatus_id = canonical_apparatus_id(&session.apparatus)
+                .ok_or(ProductionMapError::StoreFailed)?;
             if session.status == OrderRunStatus::Active
-                && same_apparatus(&apparatus_id_for_name(&session.apparatus), &session.apparatus)
+                && same_apparatus_id(&session_apparatus_id, &profile.apparatus_id)
                 && !session.order_id.eq_ignore_ascii_case(order_id)
             {
                 occupied_orders.insert(session.order_id.trim().to_string());
@@ -79,7 +71,7 @@ impl ProductionMapService {
         }
         for reservation in self.store.apparatus_schedule_reservations().await? {
             if reservation.status.reserves_capacity()
-                && same_apparatus(&reservation.apparatus_id, &reservation.apparatus)
+                && same_apparatus_id(&reservation.apparatus_id, &profile.apparatus_id)
                 && reservation.starts_at_unix <= now
                 && now < reservation.ends_at_unix
                 && !reservation.order_id.eq_ignore_ascii_case(order_id)
@@ -96,29 +88,48 @@ impl ProductionMapService {
     pub async fn apparatus_capacity_snapshot(
         &self,
     ) -> Result<ApparatusCapacitySnapshot, ProductionMapError> {
+        let downtimes = self.store.apparatus_downtimes().await?;
+        let reservations = self.store.apparatus_schedule_reservations().await?;
+        let mut apparatus_ids = BTreeSet::new();
+        for map in self.store.maps().await? {
+            for stage in super::chain::linear_work_stages(&map) {
+                let Some(apparatus) = stage.apparatus_id.as_deref() else {
+                    continue;
+                };
+                apparatus_ids.insert(
+                    canonical_apparatus_id(apparatus).ok_or(ProductionMapError::StoreFailed)?,
+                );
+            }
+        }
+        apparatus_ids.extend(
+            downtimes
+                .iter()
+                .map(|downtime| downtime.apparatus_id.clone()),
+        );
+        apparatus_ids.extend(
+            reservations
+                .iter()
+                .map(|reservation| reservation.apparatus_id.clone()),
+        );
+        let mut profiles = Vec::with_capacity(apparatus_ids.len());
+        for apparatus_id in apparatus_ids {
+            profiles.push(self.canonical_capacity_profile_for(&apparatus_id).await?);
+        }
         Ok(ApparatusCapacitySnapshot {
-            profiles: self.store.apparatus_capacity_profiles().await?,
-            downtimes: self.store.apparatus_downtimes().await?,
-            reservations: self.store.apparatus_schedule_reservations().await?,
+            profiles,
+            downtimes,
+            reservations,
         })
-    }
-
-    pub async fn put_apparatus_capacity_profile(
-        &self,
-        profile: ApparatusCapacityProfile,
-    ) -> Result<ApparatusCapacityProfile, ProductionMapError> {
-        let profile = normalize_capacity_profile(self.store.as_ref(), profile).await?;
-        self.store
-            .put_apparatus_capacity_profile(profile.clone())
-            .await?;
-        self.notify_live();
-        Ok(profile)
     }
 
     pub async fn put_apparatus_downtime(
         &self,
-        downtime: ApparatusDowntime,
+        mut downtime: ApparatusDowntime,
     ) -> Result<ApparatusDowntime, ProductionMapError> {
+        let canonical = self
+            .validated_canonical_apparatus(&downtime.apparatus_id)
+            .await?;
+        downtime.apparatus = canonical.runtime.display.display_name.clone();
         let downtime = normalize_downtime(self.store.as_ref(), downtime).await?;
         self.store.put_apparatus_downtime(downtime.clone()).await?;
         self.notify_live();
@@ -131,7 +142,9 @@ impl ProductionMapService {
     ) -> Result<ApparatusScheduleResult, ProductionMapError> {
         let _guard = self.queue_action_guard().await;
         let input = normalize_schedule_request(self.store.as_ref(), input).await?;
-        reject_training_order_id(&input.order_id)?;
+        let apparatus_id = canonical_apparatus_id(&input.apparatus_id)
+            .ok_or(ProductionMapError::ScheduleInputInvalid)?;
+        self.validated_canonical_apparatus(&apparatus_id).await?;
         let map = self
             .store
             .maps()
@@ -145,9 +158,7 @@ impl ProductionMapService {
             .apparatus_schedule_reservation_by_idempotency_key(&input.idempotency_key)
             .await?
         {
-            if existing.order_id.trim() != input.order_id
-                || existing.apparatus_id.trim() != input.apparatus_id
-            {
+            if existing.order_id.trim() != input.order_id || existing.apparatus_id != apparatus_id {
                 return Err(ProductionMapError::ScheduleIdempotencyConflict);
             }
             return Ok(ApparatusScheduleResult {
@@ -156,16 +167,22 @@ impl ProductionMapService {
             });
         }
 
-        let profiles = self.store.apparatus_capacity_profiles().await?;
         let downtimes = self.store.apparatus_downtimes().await?;
+        let audit_sessions = self.store.order_run_sessions_for_audit().await?;
+        for session in &audit_sessions {
+            let session_apparatus_id = canonical_apparatus_id(&session.apparatus)
+                .ok_or(ProductionMapError::StoreFailed)?;
+            self.validated_canonical_apparatus(&session_apparatus_id)
+                .await?;
+        }
         let reservations = reservations_with_active_sessions(
             &self.store.apparatus_schedule_reservations().await?,
-            &self.store.order_run_sessions_for_audit().await?,
+            &audit_sessions,
         );
         let mut candidates = Vec::with_capacity(1 + input.candidate_apparatuses.len());
         candidates.push(ApparatusScheduleCandidate {
-            apparatus_id: input.apparatus_id.clone(),
-            apparatus: input.apparatus.clone(),
+            apparatus_id: apparatus_id.clone(),
+            apparatus: String::new(),
         });
         candidates.extend(input.candidate_apparatuses.clone());
 
@@ -175,12 +192,18 @@ impl ProductionMapService {
         let mut capability_level_insufficient = false;
         let mut best_slot = None;
         for (candidate_index, candidate) in candidates.iter().enumerate() {
-            if !candidate_allowed_for_order(&map, &input.apparatus, &candidate.apparatus) {
+            if !candidate_allowed_for_order(&map, &apparatus_id, &candidate.apparatus_id) {
                 continue;
             }
             route_candidate_count += 1;
-            let profile =
-                profile_for_apparatus(&profiles, &candidate.apparatus_id, &candidate.apparatus);
+            let canonical = self
+                .validated_canonical_apparatus(&candidate.apparatus_id)
+                .await?;
+            let profile = canonical_capacity_profile(&canonical, unix_seconds())?;
+            let candidate = ApparatusScheduleCandidate {
+                apparatus_id: candidate.apparatus_id.clone(),
+                apparatus: canonical.runtime.display.display_name.clone(),
+            };
             if !profile.supports(&input.capability_requirements) {
                 let missing = input
                     .capability_requirements
@@ -200,7 +223,6 @@ impl ProductionMapService {
                 &profile,
                 &input,
                 &candidate.apparatus_id,
-                &candidate.apparatus,
                 reserved_duration_minutes,
                 &downtimes,
                 &reservations,
@@ -285,109 +307,96 @@ impl ProductionMapService {
     }
 }
 
-async fn normalize_capacity_profile(
-    store: &dyn ProductionMapStorePort,
-    mut profile: ApparatusCapacityProfile,
+impl ProductionMapService {
+    async fn validated_canonical_apparatus(
+        &self,
+        apparatus_id: &crate::core::apparatus_standard::ApparatusId,
+    ) -> Result<std::sync::Arc<RuntimeApparatusConfiguration>, ProductionMapError> {
+        let canonical = self.resolve_canonical_apparatus(apparatus_id).await?;
+        if canonical.runtime.apparatus_id != *apparatus_id || !canonical.has_coherent_source() {
+            return Err(ProductionMapError::StoreFailed);
+        }
+        Ok(canonical)
+    }
+
+    async fn canonical_capacity_profile_for(
+        &self,
+        apparatus_id: &crate::core::apparatus_standard::ApparatusId,
+    ) -> Result<ApparatusCapacityProfile, ProductionMapError> {
+        let canonical = self.validated_canonical_apparatus(apparatus_id).await?;
+        canonical_capacity_profile(&canonical, unix_seconds())
+    }
+}
+
+fn canonical_capacity_profile(
+    canonical: &RuntimeApparatusConfiguration,
+    now_unix: i64,
 ) -> Result<ApparatusCapacityProfile, ProductionMapError> {
-    profile.apparatus_id = profile.apparatus_id.trim().to_string();
-    profile.apparatus = profile.apparatus.trim().to_string();
-    if profile.apparatus_id.is_empty() && profile.apparatus.is_empty() {
-        return Err(ProductionMapError::CapacityProfileInvalid);
+    if !canonical.has_coherent_source() || !canonical.is_active() {
+        return Err(ProductionMapError::StoreFailed);
     }
-    let identity = store
-        .resolve_apparatus_identity(&profile.apparatus_id, &profile.apparatus)
-        .await?
-        .ok_or(ProductionMapError::CapacityProfileInvalid)?;
-    profile.apparatus_id = identity.apparatus_id;
-    profile.apparatus = identity.apparatus;
-    if profile.apparatus_id.is_empty() {
-        profile.apparatus_id = apparatus_id_for_name(&profile.apparatus);
-    }
-    if profile.apparatus.is_empty() {
-        profile.apparatus = profile.apparatus_id.clone();
-    }
-    if profile.capacity_slots == 0
-        || profile.capacity_slots > 64
-        || profile.efficiency_percent == 0
-        || profile.efficiency_percent > 200
-    {
-        return Err(ProductionMapError::CapacityProfileInvalid);
-    }
-    for window in &profile.working_windows {
-        if !(1..=7).contains(&window.weekday)
-            || window.start_minute >= window.end_minute
-            || window.end_minute > 1_440
-        {
-            return Err(ProductionMapError::CapacityProfileInvalid);
-        }
-    }
-    let mut capabilities = BTreeSet::new();
-    profile.capabilities = profile
+
+    let capability_levels = canonical
+        .runtime
         .capabilities
-        .into_iter()
-        .map(|value| value.trim().to_ascii_lowercase())
-        .filter(|value| !value.is_empty() && capabilities.insert(value.clone()))
-        .collect();
-    // A capacity record is allowed to override levels and calendars, but an
-    // empty capability list must not erase the apparatus master-data family.
-    // This is especially important for Flexo: it is a printing work centre
-    // even though it has no 7/8/9 colour-count suffix in its name.
-    let inferred = apparatus_master_data_for_name(&profile.apparatus);
-    for capability in inferred.capabilities {
-        if capabilities.insert(capability.clone()) {
-            profile.capabilities.push(capability);
-        }
+        .iter()
+        .map(|(code, level)| (capability_code_name(*code).to_string(), *level))
+        .collect::<BTreeMap<_, _>>();
+    let capabilities = capability_levels.keys().cloned().collect();
+
+    Ok(ApparatusCapacityProfile {
+        apparatus_id: canonical.runtime.apparatus_id.clone(),
+        apparatus: canonical.runtime.display.display_name.clone(),
+        capacity_slots: canonical.capacity.capacity_slots,
+        setup_minutes: canonical.capacity.setup_minutes,
+        cleanup_minutes: canonical.capacity.cleanup_minutes,
+        efficiency_percent: canonical.capacity.efficiency_percent,
+        finite_capacity: canonical.capacity.finite_capacity,
+        working_windows: canonical
+            .capacity
+            .working_windows
+            .iter()
+            .map(|window| ApparatusWorkingWindow {
+                weekday: window.weekday,
+                start_minute: window.start_minute,
+                end_minute: window.end_minute,
+            })
+            .collect(),
+        capabilities,
+        capability_levels,
+        notes: String::new(),
+        updated_at_unix: now_unix,
+    })
+}
+
+fn capability_code_name(code: EquipmentCapabilityCode) -> &'static str {
+    match code {
+        EquipmentCapabilityCode::Print => "print",
+        EquipmentCapabilityCode::Laminate => "laminate",
+        EquipmentCapabilityCode::Cut => "cut",
+        EquipmentCapabilityCode::Package => "package",
+        EquipmentCapabilityCode::Glue => "glue",
+        EquipmentCapabilityCode::Tooling => "tooling",
+        EquipmentCapabilityCode::VirtualTask => "virtual_task",
+        EquipmentCapabilityCode::Training => "training",
     }
-    let mut levels = profile
-        .capability_levels
-        .into_iter()
-        .map(|(code, level)| (code.trim().to_ascii_lowercase(), level.max(1)))
-        .filter(|(code, _)| !code.is_empty())
-        .collect::<std::collections::BTreeMap<_, _>>();
-    for code in &profile.capabilities {
-        levels.entry(code.clone()).or_insert(1);
-    }
-    for capability in inferred.capability_profiles {
-        if capability.is_valid_at(unix_seconds()) {
-            levels
-                .entry(capability.code.trim().to_ascii_lowercase())
-                .or_insert(capability.level.max(1));
-        }
-    }
-    profile.capability_levels = levels;
-    profile.updated_at_unix = unix_seconds();
-    Ok(profile)
 }
 
 async fn normalize_downtime(
-    store: &dyn ProductionMapStorePort,
+    _store: &dyn ProductionMapStorePort,
     mut downtime: ApparatusDowntime,
 ) -> Result<ApparatusDowntime, ProductionMapError> {
     downtime.id = downtime.id.trim().to_string();
-    downtime.apparatus_id = downtime.apparatus_id.trim().to_string();
     downtime.apparatus = downtime.apparatus.trim().to_string();
     downtime.reason = downtime.reason.trim().to_string();
     if downtime.id.is_empty() {
         downtime.id = format!("apparatus-downtime:{}", unix_seconds());
     }
-    if downtime.apparatus_id.is_empty() && downtime.apparatus.is_empty()
-        || downtime.starts_at_unix <= 0
+    if downtime.starts_at_unix <= 0
         || downtime.ends_at_unix <= downtime.starts_at_unix
         || downtime.reason.is_empty()
     {
         return Err(ProductionMapError::CapacityProfileInvalid);
-    }
-    let identity = store
-        .resolve_apparatus_identity(&downtime.apparatus_id, &downtime.apparatus)
-        .await?
-        .ok_or(ProductionMapError::CapacityProfileInvalid)?;
-    downtime.apparatus_id = identity.apparatus_id;
-    downtime.apparatus = identity.apparatus;
-    if downtime.apparatus_id.is_empty() {
-        downtime.apparatus_id = apparatus_id_for_name(&downtime.apparatus);
-    }
-    if downtime.apparatus.is_empty() {
-        downtime.apparatus = downtime.apparatus_id.clone();
     }
     if downtime.created_at_unix <= 0 {
         downtime.created_at_unix = unix_seconds();
@@ -396,7 +405,7 @@ async fn normalize_downtime(
 }
 
 async fn normalize_schedule_request(
-    store: &dyn ProductionMapStorePort,
+    _store: &dyn ProductionMapStorePort,
     mut input: ApparatusScheduleRequest,
 ) -> Result<ApparatusScheduleRequest, ProductionMapError> {
     input.order_id = input.order_id.trim().to_string();
@@ -406,7 +415,7 @@ async fn normalize_schedule_request(
     input.reason = input.reason.trim().to_string();
     input.idempotency_key = input.idempotency_key.trim().to_string();
     if input.order_id.is_empty()
-        || input.apparatus_id.is_empty() && input.apparatus.is_empty()
+        || input.apparatus_id.is_empty()
         || input.duration_minutes == 0
         || input.duration_minutes > 30 * 24 * 60
         || input.earliest_start_unix <= 0
@@ -415,18 +424,8 @@ async fn normalize_schedule_request(
     {
         return Err(ProductionMapError::ScheduleInputInvalid);
     }
-    let identity = store
-        .resolve_apparatus_identity(&input.apparatus_id, &input.apparatus)
-        .await?
+    let primary_id = canonical_apparatus_id(&input.apparatus_id)
         .ok_or(ProductionMapError::ScheduleInputInvalid)?;
-    input.apparatus_id = identity.apparatus_id;
-    input.apparatus = identity.apparatus;
-    if input.apparatus_id.is_empty() {
-        input.apparatus_id = apparatus_id_for_name(&input.apparatus);
-    }
-    if input.apparatus.is_empty() {
-        input.apparatus = input.apparatus_id.clone();
-    }
     if let Some(latest_end) = input.latest_end_unix
         && latest_end <= input.earliest_start_unix
     {
@@ -443,29 +442,12 @@ async fn normalize_schedule_request(
         })
         .filter(|requirement| !requirement.code.is_empty() && seen.insert(requirement.code.clone()))
         .collect();
-    let primary_id = input.apparatus_id.to_ascii_lowercase();
     let mut seen_candidates = BTreeSet::new();
     let mut candidates = Vec::new();
     for mut candidate in input.candidate_apparatuses {
-        candidate.apparatus_id = candidate.apparatus_id.trim().to_string();
         candidate.apparatus = candidate.apparatus.trim().to_string();
-        if candidate.apparatus_id.is_empty() && candidate.apparatus.is_empty() {
-            continue;
-        }
-        let identity = store
-            .resolve_apparatus_identity(&candidate.apparatus_id, &candidate.apparatus)
-            .await?
-            .ok_or(ProductionMapError::ScheduleInputInvalid)?;
-        candidate.apparatus_id = identity.apparatus_id;
-        candidate.apparatus = identity.apparatus;
-        if candidate.apparatus_id.is_empty() {
-            candidate.apparatus_id = apparatus_id_for_name(&candidate.apparatus);
-        }
-        if candidate.apparatus.is_empty() {
-            candidate.apparatus = candidate.apparatus_id.clone();
-        }
-        let key = candidate.apparatus_id.to_ascii_lowercase();
-        if key != primary_id && seen_candidates.insert(key) {
+        let key = candidate.apparatus_id.as_str().to_string();
+        if candidate.apparatus_id != primary_id && seen_candidates.insert(key) {
             candidates.push(candidate);
         }
     }

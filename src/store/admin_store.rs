@@ -141,11 +141,21 @@ impl Default for StoredAdminData {
 
 impl JsonAdminStore {
     pub fn new(path: PathBuf) -> Self {
-        let data = read_data(&path).unwrap_or_default();
-        Self {
+        match Self::try_new(path.clone()) {
+            Ok(store) => store,
+            Err(error) => {
+                tracing::error!(path = %path.display(), %error, "admin store snapshot load failed");
+                panic!("admin store load failed: {error}");
+            }
+        }
+    }
+
+    pub fn try_new(path: PathBuf) -> Result<Self, AdminPortError> {
+        let data = read_data(&path)?;
+        Ok(Self {
             path,
             data: Mutex::new(data),
-        }
+        })
     }
 
     async fn persist(&self, data: &StoredAdminData) -> Result<(), AdminPortError> {
@@ -166,14 +176,28 @@ impl JsonAdminStore {
 }
 
 fn read_data(path: &Path) -> Result<StoredAdminData, AdminPortError> {
-    if !path.exists() {
-        return Ok(StoredAdminData::default());
+    match std::fs::metadata(path) {
+        Ok(metadata) if metadata.is_file() => {}
+        Ok(_) => {
+            tracing::error!(path = %path.display(), "admin store path is not a regular file");
+            return Err(AdminPortError::LookupFailed);
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            return Ok(StoredAdminData::default());
+        }
+        Err(error) => {
+            tracing::error!(path = %path.display(), %error, "failed to inspect admin store snapshot");
+            return Err(AdminPortError::LookupFailed);
+        }
     }
-    let raw = std::fs::read(path).map_err(|_| AdminPortError::LookupFailed)?;
-    if raw.is_empty() {
-        return Ok(StoredAdminData::default());
-    }
-    serde_json::from_slice(&raw).map_err(|_| AdminPortError::LookupFailed)
+    let raw = std::fs::read(path).map_err(|error| {
+        tracing::error!(path = %path.display(), %error, "failed to read admin store snapshot");
+        AdminPortError::LookupFailed
+    })?;
+    serde_json::from_slice(&raw).map_err(|error| {
+        tracing::error!(path = %path.display(), %error, "invalid admin store snapshot");
+        AdminPortError::LookupFailed
+    })
 }
 
 impl AdminDirectoryEntryData {

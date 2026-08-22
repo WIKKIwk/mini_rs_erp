@@ -1,99 +1,54 @@
 use super::*;
+use crate::core::apparatus_standard::{ApparatusId, ExecutionOperation};
 use crate::core::production_map::pechat;
 use crate::core::returned_paint::{
     ReturnedPaintError, ReturnedPaintItem, ReturnedPaintRequestCreate, ReturnedPaintStatus,
     returned_paint_astatka_total, returned_paint_report_can_close, returned_paint_value_count,
 };
 
-#[derive(serde::Deserialize)]
-struct ApparatusQueueActionRequest {
-    #[serde(default)]
-    apparatus: String,
-    #[serde(default)]
-    order_id: String,
-    #[serde(default)]
-    material_barcode: String,
-    #[serde(default)]
-    material_barcodes: Vec<String>,
-    #[serde(default)]
-    qolip_code: String,
-    #[serde(default)]
-    qolip_codes: Vec<String>,
-    #[serde(default)]
-    produced_qty: Option<f64>,
-    #[serde(default)]
-    qty: Option<f64>,
-    #[serde(default)]
-    gross_qty: Option<f64>,
-    #[serde(default)]
-    return_ink_kg: Option<f64>,
-    #[serde(default)]
-    lamination_print_leftover_rolls: Option<f64>,
-    #[serde(default)]
-    lamination_film_leftover_rolls: Option<f64>,
-    #[serde(default)]
-    rezka_bosma_waste: Option<f64>,
-    #[serde(default)]
-    rezka_lamination_waste: Option<f64>,
-    #[serde(default)]
-    rezka_edge_waste: Option<f64>,
-    #[serde(default)]
-    total_waste: Option<f64>,
-    #[serde(default)]
-    finished_goods_kg: Option<f64>,
-    #[serde(default, alias = "babina_kg")]
-    bobina_kg: Option<f64>,
-    #[serde(default)]
-    finished_goods_meter: Option<f64>,
-    #[serde(default)]
-    diameter: Option<f64>,
-    #[serde(default)]
-    uom: String,
-    #[serde(default)]
-    unit: String,
-    #[serde(default)]
-    progress_batch_id: String,
-    #[serde(default)]
-    progress_qr: String,
-    #[serde(default)]
-    qr_payload: String,
-    #[serde(default)]
-    driver_url: String,
-    #[serde(default)]
-    printer: String,
-    #[serde(default)]
-    print_mode: String,
-    #[serde(default)]
-    customer_name: String,
-    #[serde(default)]
-    print_count: u32,
-    #[serde(default)]
-    print_transport: String,
-    #[serde(default)]
-    completion_request_note: String,
-    #[serde(default)]
-    full_completion_report_required: bool,
-    #[serde(default)]
-    worker_handoff: bool,
-    #[serde(default)]
-    remove_roll_from_apparatus: bool,
-    #[serde(default)]
-    description: String,
-    #[serde(default)]
-    returned_paint_items: Vec<ReturnedPaintItem>,
-    #[serde(default)]
-    returned_paint_image_id: String,
-    #[serde(default)]
-    freeze_request_id: String,
-    #[serde(default, alias = "snapshot_revision", alias = "expected_revision")]
-    expected_snapshot_revision: String,
-    #[serde(default)]
-    freeze_with_issue: bool,
-    #[serde(default)]
-    issue_note: String,
-    #[serde(default)]
-    rezka_frames: Vec<RezkaFrameProgressInput>,
-    action: queue_state::ApparatusQueueAction,
+include!("queue_action_request.rs");
+
+#[derive(Debug, Clone)]
+pub(super) struct QueueApparatusMetadata {
+    pub(super) id: ApparatusId,
+    operation: ExecutionOperation,
+    qolip_scan_required: bool,
+}
+
+impl QueueApparatusMetadata {
+    fn is_pechat(&self) -> bool {
+        self.operation == ExecutionOperation::Print
+    }
+
+    fn is_rezka(&self) -> bool {
+        self.operation == ExecutionOperation::Cut
+    }
+
+    pub(super) fn requires_qolip_scan(&self) -> bool {
+        self.qolip_scan_required
+    }
+}
+
+pub(super) async fn resolve_queue_apparatus(
+    state: &AppState,
+    requested: &str,
+) -> Result<QueueApparatusMetadata, AdminError> {
+    let requested_id = parse_canonical_queue_apparatus_id(requested)?;
+    let canonical = state
+        .production_maps
+        .resolve_canonical_apparatus(&requested_id)
+        .await
+        .map_err(production_map_error)?;
+    Ok(QueueApparatusMetadata {
+        id: canonical.runtime.apparatus_id.clone(),
+        operation: canonical.runtime.execution_profile.operation,
+        qolip_scan_required: pechat::requires_qolip_scan(canonical.as_ref()),
+    })
+}
+
+fn parse_canonical_queue_apparatus_id(requested: &str) -> Result<ApparatusId, AdminError> {
+    ApparatusId::new(requested.trim().to_string())
+        .map_err(|_| bad_request("canonical_apparatus_id_required"))
 }
 
 pub async fn production_map_queue_action(
@@ -119,9 +74,8 @@ pub async fn production_map_queue_action(
     if input.apparatus.trim().is_empty() || input.order_id.trim().is_empty() {
         return Err(bad_request("apparatus and order_id are required"));
     }
-    if !principal_can_use_apparatus(&state, &principal, &input.apparatus).await {
-        return Err(production_map_error(ProductionMapError::ApparatusNotAssigned));
-    }
+    let apparatus = resolve_queue_apparatus(&state, &input.apparatus).await?;
+    input.apparatus = apparatus.id.to_string();
     input.action = canonical_queue_action(
         input.action,
         input.worker_handoff,
@@ -153,7 +107,7 @@ pub async fn production_map_queue_action(
         if input.worker_handoff || input.remove_roll_from_apparatus {
             return Err(bad_request("freeze_with_issue_actions_conflict"));
         }
-        if is_training_order_namespace(&input.order_id) {
+        if input.order_id.trim().starts_with("training-") {
             return Err(bad_request("freeze_with_issue_not_supported_for_training"));
         }
         // `freeze_with_issue` remains accepted for old clients, but the
@@ -172,11 +126,7 @@ pub async fn production_map_queue_action(
         return Err(bad_request("worker_handoff_actions_conflict"));
     }
     if !input.rezka_frames.is_empty()
-        && (!input
-            .apparatus
-            .trim()
-            .to_ascii_lowercase()
-            .contains("rezka")
+        && (!apparatus.is_rezka()
             || !matches!(
                 input.action,
                 queue_state::ApparatusQueueAction::Pause
@@ -199,7 +149,6 @@ pub async fn production_map_queue_action(
     {
         return Err(bad_request("rezka_frame_issue_only_on_roll_progress"));
     }
-    let training_namespace = is_training_order_namespace(&input.order_id);
     if let Some(training_result) = super::super::training::training_queue_action(
         &state,
         &principal,
@@ -253,9 +202,7 @@ pub async fn production_map_queue_action(
     {
         return Ok(json_response(training_result));
     }
-    if training_namespace {
-        return Err(bad_request("training_order_not_found"));
-    }
+    let assigned_apparatus = state.admin.principal_assigned_apparatus(&principal).await;
     let material_barcodes = input.material_barcodes.clone();
     let material_barcode = if material_barcodes.is_empty() {
         input.material_barcode.clone()
@@ -274,6 +221,17 @@ pub async fn production_map_queue_action(
             Vec::new()
         };
     let produced_qty = input.produced_qty.or(input.qty);
+    let progress_uom = if !input.uom.trim().is_empty() {
+        input.uom.clone()
+    } else if !input.unit.trim().is_empty() {
+        input.unit.clone()
+    } else if apparatus.is_pechat()
+        && (produced_qty.is_some() || input.finished_goods_meter.is_some())
+    {
+        "m".to_string()
+    } else {
+        String::new()
+    };
     let completion_request_note = if input.freeze_with_issue {
         input.issue_note.clone()
     } else if input.completion_request_note.trim().is_empty() {
@@ -298,7 +256,7 @@ pub async fn production_map_queue_action(
                     "freeze_safe_stop_output_or_issue_note_required",
                 ));
             }
-        } else if !freeze_safe_stop_output_is_complete(&input, produced_qty) {
+        } else if !freeze_safe_stop_output_is_complete(&input, produced_qty, &apparatus) {
             return Err(bad_request("freeze_safe_stop_output_incomplete"));
         }
     }
@@ -311,7 +269,7 @@ pub async fn production_map_queue_action(
     let returned_paint_field_count = returned_paint_value_count(&input.returned_paint_items);
     let has_returned_paint_image = !input.returned_paint_image_id.trim().is_empty();
     let is_bosma_complete = matches!(input.action, queue_state::ApparatusQueueAction::Complete)
-        && pechat::is_pechat_apparatus(&input.apparatus);
+        && apparatus.is_pechat();
     if is_bosma_complete
         && !returned_paint_report_can_close(&input.returned_paint_items, has_returned_paint_image)
     {
@@ -320,27 +278,6 @@ pub async fn production_map_queue_action(
         ));
     }
     let _queue_action_guard = state.production_maps.queue_action_guard().await;
-    let assigned_apparatus = state.admin.principal_assigned_apparatus(&principal).await;
-    if !input.expected_snapshot_revision.trim().is_empty() {
-        let mut snapshot = state
-            .production_maps
-            .live_snapshot()
-            .await
-            .map_err(production_map_error)?;
-        super::super::training::merge_worker_training_snapshot(
-            &state,
-            &principal,
-            &mut snapshot,
-        )
-        .await
-        .map_err(super::super::training::training_workspace_error)?;
-        let current_revision =
-            super::mobile_production_snapshot_revision(&snapshot, &assigned_apparatus)
-                .map_err(server_error)?;
-        if current_revision != input.expected_snapshot_revision.trim() {
-            return Err(stale_production_snapshot(current_revision));
-        }
-    }
     let returned_paint_report =
         if matches!(input.action, queue_state::ApparatusQueueAction::Complete)
             && (returned_paint_field_count > 0 || has_returned_paint_image)
@@ -397,11 +334,7 @@ pub async fn production_map_queue_action(
         rezka_frames: input.rezka_frames.clone(),
         produced_qty,
         gross_qty: input.gross_qty,
-        uom: if input.uom.trim().is_empty() {
-            input.unit.clone()
-        } else {
-            input.uom.clone()
-        },
+        uom: progress_uom,
         progress_batch_id: input.progress_batch_id.clone(),
         qr_payload: if input.qr_payload.trim().is_empty() {
             input.progress_qr.clone()
@@ -435,11 +368,7 @@ pub async fn production_map_queue_action(
         && input.total_waste.is_some()
         && input.finished_goods_kg.is_some()
         && input.finished_goods_meter.is_some();
-    let is_rezka = input
-        .apparatus
-        .trim()
-        .to_ascii_lowercase()
-        .contains("rezka");
+    let is_rezka = apparatus.is_rezka();
     let has_rezka_progress_metrics =
         is_rezka && rezka_queue_quantity_metrics_are_complete(&input, produced_qty);
     let has_rezka_frame_metrics = is_rezka && !input.rezka_frames.is_empty();
@@ -500,368 +429,21 @@ pub async fn production_map_queue_action(
             "completion_request": result.completion_request,
         })));
     }
-    let mut prepared = state
-        .production_maps
-        .prepare_apparatus_queue_action_with_material_scan_and_progress(
-            MaterialScanProgressAction {
-                apparatus: &input.apparatus,
-                order_id: &input.order_id,
-                action: input.action,
-                assigned_apparatus: &assigned_apparatus,
-                actor: queue_action_actor(&principal),
-                material_barcode: &material_barcode,
-                state_material_barcodes: &state_material_barcodes,
-                progress,
-            },
-        )
-        .await
-        .map_err(production_map_error)?;
-    let qolip_preparations = if matches!(input.action, queue_state::ApparatusQueueAction::Start) {
-        prepare_qolips_for_bosma_start(&state, &principal, &input).await?
-    } else {
-        Vec::new()
-    };
-    if !qolip_preparations.is_empty() {
-        prepared.attach_qolip_codes(
-            &qolip_preparations
-                .iter()
-                .map(|preparation| preparation.spec.qolip_code.clone())
-                .collect::<Vec<_>>(),
-        );
-    }
-    let qolip_checkouts = qolip_preparations
-        .into_iter()
-        .filter_map(|preparation| preparation.checkout)
-        .collect::<Vec<_>>();
-    let mut raw_material_stock_transitions = Vec::new();
-    if matches!(input.action, queue_state::ApparatusQueueAction::Start) {
-        let material_stock_barcodes = material_barcode
-            .split(',')
-            .map(|barcode| barcode.trim().to_string())
-            .filter(|barcode| !barcode.is_empty())
-            .collect::<Vec<_>>();
-        if !prepared.material_scan_skipped() && !material_stock_barcodes.is_empty() {
-            raw_material_stock_transitions.push(RawMaterialStockTransition::new(
-                RawMaterialStockTransitionKind::InUse,
-                material_stock_barcodes,
-                &input.order_id,
-            ));
-        }
-    }
-    let completed_material_barcodes =
-        if matches!(input.action, queue_state::ApparatusQueueAction::Complete) {
-            raw_material_barcodes_for_order_apparatus(&state, &input.order_id, &input.apparatus)
-                .await?
-        } else {
-            Vec::new()
-        };
-    if !completed_material_barcodes.is_empty() {
-        raw_material_stock_transitions.push(RawMaterialStockTransition::new(
-            RawMaterialStockTransitionKind::Consumed,
-            completed_material_barcodes,
-            &input.order_id,
-        ));
-    }
-    let print_batches = if prepared.progress_batches().is_empty() {
-        prepared
-            .progress_batch()
-            .into_iter()
-            .cloned()
-            .collect::<Vec<_>>()
-    } else {
-        prepared.progress_batches().to_vec()
-    };
-    let print_requests = if matches!(
-        input.action,
-        queue_state::ApparatusQueueAction::Pause
-            | queue_state::ApparatusQueueAction::DetachRoll
-            | queue_state::ApparatusQueueAction::RollComplete
-            | queue_state::ApparatusQueueAction::Complete
-    ) {
-        let frame_specific_metrics = !input.rezka_frames.is_empty();
-        print_batches
-            .iter()
-            .map(|batch| ProgressLabelPrintRequest {
-                driver_url: input.driver_url.clone(),
-                qr_payload: batch.qr_payload.clone(),
-                item_code: batch.label_item_code.clone(),
-                item_name: batch.label_item_name.clone(),
-                apparatus: batch.apparatus.clone(),
-                customer_name: input.customer_name.trim().to_string(),
-                executor_name: batch.executor_name.clone(),
-                printer: input.printer.clone(),
-                print_mode: input.print_mode.clone(),
-                gross_qty: if frame_specific_metrics {
-                    batch
-                        .payload_json
-                        .get("gross_qty")
-                        .and_then(serde_json::Value::as_f64)
-                        .or(batch.finished_goods_kg)
-                        .unwrap_or(batch.produced_qty)
-                } else {
-                    input
-                        .gross_qty
-                        .or(input.finished_goods_kg)
-                        .unwrap_or(batch.produced_qty)
-                },
-                tare_enabled: if frame_specific_metrics {
-                    batch.bobina_kg.is_some_and(|value| value > 0.0)
-                } else {
-                    input.bobina_kg.is_some_and(|value| value > 0.0)
-                },
-                tare_kg: if frame_specific_metrics {
-                    batch.bobina_kg.unwrap_or(0.0)
-                } else {
-                    input.bobina_kg.unwrap_or(0.0)
-                },
-                progress_qty: if frame_specific_metrics {
-                    batch.finished_goods_meter.unwrap_or(batch.produced_qty)
-                } else {
-                    batch.produced_qty
-                },
-                unit: "kg".to_string(),
-                progress_unit: if batch.uom.trim().is_empty() {
-                    "m".to_string()
-                } else {
-                    batch.uom.clone()
-                },
-                label_kind: "progress".to_string(),
-                print_count: if frame_specific_metrics {
-                    1
-                } else {
-                    input.print_count
-                },
-            })
-            .collect::<Vec<_>>()
-    } else {
-        Vec::new()
-    };
-    let fallback_qolip_checkouts = qolip_checkouts.clone();
-    let result = state
-        .production_maps
-        .commit_prepared_queue_action_with_raw_material_stock(
-            prepared,
-            raw_material_stock_transitions.clone(),
-            qolip_checkouts,
-            returned_paint_report,
-        )
-        .await
-        .map_err(production_map_error)?;
-    if !result.qolip_checkout_committed && !fallback_qolip_checkouts.is_empty() {
-        for checkout in fallback_qolip_checkouts {
-            state
-                .qolip
-                .issue_prepared_checkout(checkout)
-                .await
-                .map_err(qolip_queue_error)?;
-        }
-    }
-    let mut warehouse_stock_update_warehouses = result.raw_material_stock_warehouses.clone();
-    if !raw_material_stock_transitions.is_empty() && warehouse_stock_update_warehouses.is_empty() {
-        for transition in &raw_material_stock_transitions {
-            let updates = match transition.kind {
-                RawMaterialStockTransitionKind::InUse => {
-                    state
-                        .gscale
-                        .mark_raw_material_stock_in_use(&transition.barcodes, &transition.order_id)
-                        .await
-                }
-                RawMaterialStockTransitionKind::Consumed => {
-                    state
-                        .gscale
-                        .mark_raw_material_stock_consumed(
-                            &transition.barcodes,
-                            &transition.order_id,
-                        )
-                        .await
-                }
-            }
-            .map_err(raw_material_stock_status_error)?;
-            warehouse_stock_update_warehouses.extend(
-                updates
-                    .into_iter()
-                    .map(|stock| stock.warehouse)
-                    .filter(|warehouse| !warehouse.trim().is_empty()),
-            );
-        }
-    }
-    for warehouse in warehouse_stock_update_warehouses {
-        state
-            .warehouse_events
-            .notify_updated(&warehouse, "raw_material_stock");
-    }
-    let prints = dispatch_progress_label_prints(
-        state.gscale.clone(),
-        print_requests,
-        &input.print_transport,
-        &input.apparatus,
-        &input.order_id,
-        input.action,
-    );
-    let print = prints.first().cloned().unwrap_or(serde_json::Value::Null);
-    let order_control = result.order_control;
-    let mut response = serde_json::json!({
-        "ok": true,
-        "states": result.states,
-        "order_status": result.order_status,
-        "session": result.session,
-        "progress_event": result.progress_event,
-        "progress_batch": result.progress_batch,
-        "progress_batches": result.progress_batches,
-        "print": print,
-        "prints": prints,
-    });
-    if let Some(order_control) = order_control {
-        response["order_control"] = serde_json::json!(order_control);
-    }
-    Ok(json_response(response))
+    execute_queue_action(QueueActionExecution {
+        state: &state,
+        principal: &principal,
+        input: &input,
+        apparatus: &apparatus,
+        assigned_apparatus,
+        material_barcode,
+        state_material_barcodes,
+        progress,
+        returned_paint_report,
+    })
+    .await
 }
 
-fn canonical_queue_action(
-    action: queue_state::ApparatusQueueAction,
-    worker_handoff: bool,
-    remove_roll_from_apparatus: bool,
-    freeze_request_id: &str,
-    freeze_with_issue: bool,
-    principal: &Principal,
-) -> queue_state::ApparatusQueueAction {
-    if action != queue_state::ApparatusQueueAction::Pause {
-        return if freeze_with_issue {
-            queue_state::ApparatusQueueAction::Freeze
-        } else {
-            action
-        };
-    }
-    if freeze_with_issue {
-        return queue_state::ApparatusQueueAction::Freeze;
-    }
-    let legacy_roll_removal = remove_roll_from_apparatus;
-    let legacy_worker_detach = principal.role == PrincipalRole::Aparatchi
-        && freeze_request_id.trim().is_empty()
-        && !freeze_with_issue
-        && !worker_handoff;
-    if legacy_roll_removal || legacy_worker_detach {
-        queue_state::ApparatusQueueAction::DetachRoll
-    } else {
-        queue_state::ApparatusQueueAction::Pause
-    }
-}
-
-fn queue_action_has_any_output(input: &ApparatusQueueActionRequest) -> bool {
-    !input.rezka_frames.is_empty()
-        || input.produced_qty.is_some()
-        || input.qty.is_some()
-        || input.gross_qty.is_some()
-        || input.return_ink_kg.is_some()
-        || input.lamination_print_leftover_rolls.is_some()
-        || input.lamination_film_leftover_rolls.is_some()
-        || input.rezka_bosma_waste.is_some()
-        || input.rezka_lamination_waste.is_some()
-        || input.rezka_edge_waste.is_some()
-        || input.total_waste.is_some()
-        || input.finished_goods_kg.is_some()
-        || input.bobina_kg.is_some()
-        || input.finished_goods_meter.is_some()
-        || input.diameter.is_some()
-}
-
-fn freeze_safe_stop_output_is_complete(
-    input: &ApparatusQueueActionRequest,
-    produced_qty: Option<f64>,
-) -> bool {
-    if input
-        .apparatus
-        .trim()
-        .to_ascii_lowercase()
-        .contains("rezka")
-    {
-        return !input.rezka_frames.is_empty()
-            || rezka_queue_quantity_metrics_are_complete(input, produced_qty);
-    }
-    produced_qty.or(input.finished_goods_meter).is_some()
-        && input.gross_qty.or(input.finished_goods_kg).is_some()
-        && input.bobina_kg.is_some()
-}
-
+include!("queue_action_execution.rs");
+include!("queue_action_rules.rs");
 include!("queue_action_completion_support.rs");
-
-#[cfg(test)]
-mod tests {
-    use super::{
-        apparatus_requires_qolip_scan, canonical_queue_action, returned_paint_queue_error,
-    };
-    use crate::core::auth::models::{Principal, PrincipalRole};
-    use crate::core::production_map::queue_state::ApparatusQueueAction;
-    use crate::core::returned_paint::ReturnedPaintError;
-
-    fn principal(role: PrincipalRole) -> Principal {
-        Principal {
-            role,
-            display_name: "Test".to_string(),
-            legal_name: String::new(),
-            ref_: "test-ref".to_string(),
-            phone: String::new(),
-            avatar_url: String::new(),
-        }
-    }
-
-    #[test]
-    fn legacy_worker_pause_maps_to_detach_roll_but_admin_and_freeze_pause_do_not() {
-        let worker = principal(PrincipalRole::Aparatchi);
-        let admin = principal(PrincipalRole::Admin);
-
-        assert_eq!(
-            canonical_queue_action(
-                ApparatusQueueAction::Pause,
-                false,
-                false,
-                "",
-                false,
-                &worker
-            ),
-            ApparatusQueueAction::DetachRoll
-        );
-        assert_eq!(
-            canonical_queue_action(
-                ApparatusQueueAction::Pause,
-                false,
-                false,
-                "freeze-request",
-                false,
-                &worker,
-            ),
-            ApparatusQueueAction::Pause
-        );
-        assert_eq!(
-            canonical_queue_action(ApparatusQueueAction::Pause, true, false, "", false, &worker),
-            ApparatusQueueAction::Pause
-        );
-        assert_eq!(
-            canonical_queue_action(ApparatusQueueAction::Pause, false, false, "", false, &admin),
-            ApparatusQueueAction::Pause
-        );
-        assert_eq!(
-            canonical_queue_action(ApparatusQueueAction::Pause, false, false, "", true, &worker),
-            ApparatusQueueAction::Freeze
-        );
-    }
-
-    #[test]
-    fn qolip_scan_is_required_only_for_seven_eight_and_nine_color_bosma_family() {
-        assert!(apparatus_requires_qolip_scan("7 ta rangli pechat - A"));
-        assert!(apparatus_requires_qolip_scan("8 ta rangli bosma aparat"));
-        assert!(apparatus_requires_qolip_scan("9 rangli val"));
-        assert!(!apparatus_requires_qolip_scan("Laminatsiya"));
-        assert!(!apparatus_requires_qolip_scan("Rezka aparat"));
-        assert!(!apparatus_requires_qolip_scan("Pechat"));
-    }
-
-    #[test]
-    fn astatka_exceeding_rasxot_returns_stable_queue_error_code() {
-        let (status, axum::Json(body)) =
-            returned_paint_queue_error(ReturnedPaintError::NegativeFinalValue);
-
-        assert_eq!(status, axum::http::StatusCode::BAD_REQUEST);
-        assert_eq!(body.error, "returned_paint_astatka_exceeds_rasxot");
-    }
-}
+include!("queue_action_tests.rs");

@@ -53,6 +53,7 @@ pub(super) async fn reject_qolip_in_use_tx(
                 FROM mini_order_run_sessions AS session
                 WHERE session.status IN ('active', 'paused', 'roll_detached')
                   AND session.session_id <> $2
+                  AND session.payload_json->>'qolip_lock_owner' = 'true'
                   AND (
                     lower(session.payload_json->>'qolip_code') = lower($1)
                     OR EXISTS (

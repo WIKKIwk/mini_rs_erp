@@ -118,8 +118,8 @@ pub async fn print(
     material_request.actor_role = principal_role_code(&principal.role).to_string();
     material_request.actor_ref = principal.ref_.trim().to_string();
     material_request.actor_display_name = principal.display_name.trim().to_string();
-    let print_count = GscaleService::material_receipt_print_count(&material_request)
-        .map_err(gscale_error)?;
+    let print_count =
+        GscaleService::material_receipt_print_count(&material_request).map_err(gscale_error)?;
     material_request.print_count = 1;
     let mut last_response = None;
     for completed in 0..print_count {
@@ -144,9 +144,8 @@ pub async fn print(
         record_batch_print(&state, &principal, &batch_id, &response).await?;
         last_response = Some(response);
     }
-    let mut response = last_response.ok_or_else(|| {
-        bad_request("print_count_required", "print_count must be at least one")
-    })?;
+    let mut response = last_response
+        .ok_or_else(|| bad_request("print_count_required", "print_count must be at least one"))?;
     response.print_count = print_count;
     Ok(Json(
         serde_json::to_value(response).unwrap_or_else(|_| serde_json::json!({"ok": false})),

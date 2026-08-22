@@ -1,7 +1,7 @@
 use std::collections::BTreeSet;
 
+use crate::core::apparatus_standard::ApparatusId;
 use crate::core::auth::models::PrincipalRole;
-use crate::core::apparatus_groups::apparatus_id_for_name;
 
 use super::models::{
     RoleAssignment, RoleAssignmentError, RoleAssignmentUpsert, RoleDefinition, RoleDefinitionError,
@@ -93,40 +93,13 @@ pub fn normalize_role_assignment(
         principal_role: input.principal_role,
         principal_ref,
         role_id,
-        assigned_apparatus: normalize_assigned_apparatus(input.assigned_apparatus),
+        assigned_apparatus: normalize_assigned_apparatus(input.assigned_apparatus)?,
         assigned_item_groups,
     })
 }
 
 pub fn role_assignment_key(role: &PrincipalRole, ref_: &str) -> String {
     format!("{}:{}", role_key(role), ref_.trim())
-}
-
-/// Returns the canonical apparatus identity used by authorization checks.
-///
-/// Legacy role assignments may still contain display names, so names are
-/// resolved through the same deterministic identity function used by the
-/// apparatus catalog. A value that is already an apparatus id is accepted as
-/// an id and normalized without treating display-name aliases as equivalent.
-pub fn canonical_apparatus_id(value: &str) -> Option<String> {
-    let value = value.trim();
-    if value.is_empty() || value.chars().any(char::is_control) {
-        return None;
-    }
-    if value.starts_with("apparatus:") {
-        return Some(value.to_ascii_lowercase());
-    }
-    Some(apparatus_id_for_name(value))
-}
-
-pub fn assigned_apparatus_contains(requested: &str, assigned: &[String]) -> bool {
-    let Some(requested_id) = canonical_apparatus_id(requested) else {
-        return false;
-    };
-    assigned
-        .iter()
-        .filter_map(|value| canonical_apparatus_id(value))
-        .any(|id| id == requested_id)
 }
 
 fn role_key(role: &PrincipalRole) -> &'static str {
@@ -157,14 +130,27 @@ fn system_role_ids() -> BTreeSet<&'static str> {
     .collect()
 }
 
-fn normalize_assigned_apparatus(values: Vec<String>) -> Vec<String> {
+fn normalize_assigned_apparatus(values: Vec<String>) -> Result<Vec<String>, RoleAssignmentError> {
     values
         .into_iter()
-        .map(|value| value.trim().to_string())
-        .filter(|value| !value.is_empty())
-        .collect::<BTreeSet<_>>()
-        .into_iter()
-        .collect()
+        .map(|value| {
+            let value = value.trim().to_string();
+            if value.is_empty() {
+                return Ok(None);
+            }
+            let id = ApparatusId::new(value.clone())
+                .map_err(|_| RoleAssignmentError::InvalidAssignedApparatus(value))?;
+            Ok(Some(id.as_str().to_string()))
+        })
+        .collect::<Result<Vec<_>, RoleAssignmentError>>()
+        .map(|values| {
+            values
+                .into_iter()
+                .flatten()
+                .collect::<BTreeSet<_>>()
+                .into_iter()
+                .collect()
+        })
 }
 
 fn normalize_assigned_item_groups(values: Vec<String>) -> Vec<String> {

@@ -1,17 +1,22 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use super::types::{ProductionMapDefinition, ProductionMapNodeKind};
-use super::{chain, pechat, queue_state};
+use super::{chain, queue_state};
+use crate::core::apparatus_standard::{
+    ApparatusId, EquipmentCapabilityCode, ExecutionOperation, RuntimeApparatusConfiguration,
+};
 
 pub(super) fn visible_order_ids_for_apparatus(
     maps: &[ProductionMapDefinition],
     apparatus: &str,
 ) -> Vec<String> {
+    let Some(apparatus_id) = ApparatusId::new(apparatus.trim().to_string()).ok() else {
+        return Vec::new();
+    };
+    let apparatus = apparatus_id.as_str();
     maps.iter()
         .filter(|map| {
-            !is_template_map(map)
-                && !flexo_order_blocked_for_color_pechat(map, apparatus)
-                && chain::map_has_work_stage_for_station(map, apparatus)
+            !is_template_map(map) && chain::map_has_work_stage_for_station(map, apparatus)
         })
         .map(|map| map.id.trim().to_string())
         .filter(|id| !id.is_empty())
@@ -27,17 +32,19 @@ pub(super) fn visible_order_ids_by_apparatus(
         if !is_visible_queue_order(map) {
             continue;
         }
-        let mut seen_titles = BTreeSet::<String>::new();
+        let mut seen_apparatus_ids = BTreeSet::<String>::new();
         for stage in chain::linear_work_stages(map) {
-            let title = stage.station_title.trim();
-            if title.is_empty()
-                || flexo_order_blocked_for_color_pechat(map, title)
-                || !seen_titles.insert(title.to_ascii_lowercase())
-            {
+            let Some(apparatus_id) = stage.apparatus_id.as_deref() else {
+                continue;
+            };
+            let Some(apparatus_id) = ApparatusId::new(apparatus_id.trim().to_string()).ok() else {
+                continue;
+            };
+            if !seen_apparatus_ids.insert(apparatus_id.to_string()) {
                 continue;
             }
             visible
-                .entry(title.to_string())
+                .entry(apparatus_id.to_string())
                 .or_default()
                 .push(order_id.to_string());
         }
@@ -59,154 +66,26 @@ fn is_template_map(map: &ProductionMapDefinition) -> bool {
     map.id.trim().starts_with("template-")
 }
 
-pub(super) fn move_allowed(map: &ProductionMapDefinition, from: &str, to: &str) -> bool {
-    let from_is_laminatsiya = is_laminatsiya_title(from);
-    let to_is_laminatsiya = is_laminatsiya_title(to);
-    if from_is_laminatsiya || to_is_laminatsiya {
-        return from_is_laminatsiya
-            && to_is_laminatsiya
-            && (alternative_assigned_group_contains_target(map, from, to)
-                || unassigned_alternative_group_contains_target(map, from, to));
-    }
-    if has_unassigned_alternative_candidate(map, from)
-        && !unassigned_alternative_group_contains_target(map, from, to)
-    {
-        return false;
-    }
-
-    // A queue move is a change of the work-center assignment, not a way to
-    // turn one operation into another. Keep known apparatus families
-    // compatible before applying the more specific pechat rules below. This
-    // also prevents a printing order from being silently moved to rezka or a
-    // packaging station merely because its title has no colour count.
-    if let (Some(from_family), Some(to_family)) =
-        (known_apparatus_family(from), known_apparatus_family(to))
-        && from_family != to_family
-    {
-        return false;
-    }
-
-    let from_is_flexo = pechat::is_flexo_apparatus(from);
-    let to_is_flexo = pechat::is_flexo_apparatus(to);
-    if from_is_flexo != to_is_flexo {
-        return false;
-    }
-    if (from_is_flexo || to_is_flexo) && !is_flexo_order(map) {
-        return false;
-    }
-    let Some(target_color) = pechat::pechat_color_count(to) else {
-        return true;
-    };
-    if is_flexo_order(map) {
-        return false;
-    }
-    let source_color = pechat::pechat_color_count(from).or_else(|| {
-        pechat::order_pechat_color_count(
-            map.nodes
-                .iter()
-                .filter(|node| node.kind == ProductionMapNodeKind::Apparatus)
-                .map(|node| node.title.as_str()),
-        )
-    });
-    pechat::pechat_can_move_order(target_color, map.roll_count, map.width_mm, source_color)
+/// Queue-owned stage-specific helpers cannot classify an opaque ID without a
+/// canonical apparatus lookup. They fail closed for operations that require a
+/// specific family; callers use these only as conservative guards.
+pub(super) fn is_laminatsiya_apparatus(apparatus: &RuntimeApparatusConfiguration) -> bool {
+    apparatus.is_active()
+        && apparatus.runtime.execution_profile.operation == ExecutionOperation::Laminate
+        && apparatus.supports(EquipmentCapabilityCode::Laminate)
 }
 
-fn flexo_order_blocked_for_color_pechat(map: &ProductionMapDefinition, apparatus: &str) -> bool {
-    is_flexo_order(map) && pechat::pechat_color_count(apparatus).is_some()
+pub(super) fn is_rezka_apparatus(apparatus: &RuntimeApparatusConfiguration) -> bool {
+    apparatus.is_active()
+        && apparatus.runtime.execution_profile.operation == ExecutionOperation::Cut
+        && apparatus.supports(EquipmentCapabilityCode::Cut)
 }
 
-fn is_flexo_order(map: &ProductionMapDefinition) -> bool {
-    let mut haystack = format!("{} {} {}", map.title, map.product_code, map.code).to_lowercase();
-    for node in &map.nodes {
-        if node.kind == ProductionMapNodeKind::Apparatus {
-            if pechat::is_flexo_apparatus(&node.title) {
-                return true;
-            }
-            continue;
-        }
-        haystack.push(' ');
-        haystack.push_str(&node.title.to_lowercase());
-        haystack.push(' ');
-        haystack.push_str(&node.item_code.to_lowercase());
-    }
-    ["fleksa", "fleska", "flex", "flexe", "flexo"]
-        .iter()
-        .any(|keyword| haystack.contains(keyword))
+pub(super) fn requires_qolip_scan(apparatus: &RuntimeApparatusConfiguration) -> bool {
+    crate::core::production_map::pechat::requires_qolip_scan(apparatus)
 }
 
-fn known_apparatus_family(title: &str) -> Option<&'static str> {
-    let normalized = title.trim().to_ascii_lowercase();
-    if pechat::is_pechat_apparatus(&normalized) {
-        return Some("pechat");
-    }
-    if normalized.contains("laminatsiya") {
-        return Some("laminatsiya");
-    }
-    if normalized.contains("rezka") {
-        return Some("rezka");
-    }
-    if normalized.contains("paket") {
-        return Some("paket");
-    }
-    if normalized.contains("kley") {
-        return Some("kley");
-    }
-    None
-}
-
-pub(super) fn is_laminatsiya_title(title: &str) -> bool {
-    title.trim().to_lowercase().contains("laminatsiya")
-}
-
-pub(super) fn is_rezka_title(title: &str) -> bool {
-    title.trim().to_lowercase().contains("rezka")
-}
-
-fn alternative_assigned_group_contains_target(
-    map: &ProductionMapDefinition,
-    from: &str,
-    to: &str,
-) -> bool {
-    let candidate_groups: BTreeSet<String> = map
-        .nodes
-        .iter()
-        .filter(|node| {
-            node.kind == ProductionMapNodeKind::Apparatus
-                && !node.alternative_group_id.trim().is_empty()
-                && queue_state::apparatus_titles_match(&node.alternative_assigned_title, from)
-        })
-        .map(|node| node.alternative_group_id.trim().to_string())
-        .collect();
-    if candidate_groups.is_empty() {
-        return true;
-    }
-    map.nodes.iter().any(|node| {
-        node.kind == ProductionMapNodeKind::Apparatus
-            && candidate_groups.contains(node.alternative_group_id.trim())
-            && queue_state::apparatus_titles_match(&node.title, to)
-    })
-}
-
-fn has_unassigned_alternative_candidate(
-    map: &ProductionMapDefinition,
-    apparatus: &str,
-) -> bool {
-    map.nodes.iter().any(|node| {
-        node.kind == ProductionMapNodeKind::Apparatus
-            && !node.alternative_group_id.trim().is_empty()
-            && node.alternative_assigned_title.trim().is_empty()
-            && queue_state::apparatus_titles_match(&node.title, apparatus)
-    })
-}
-
-fn unassigned_alternative_group_contains_target(
-    map: &ProductionMapDefinition,
-    from: &str,
-    to: &str,
-) -> bool {
-    !unassigned_alternative_candidate_groups(map, from, to).is_empty()
-}
-
+#[cfg(test)]
 fn unassigned_alternative_candidate_groups(
     map: &ProductionMapDefinition,
     from: &str,
@@ -218,8 +97,8 @@ fn unassigned_alternative_candidate_groups(
         .filter(|node| {
             node.kind == ProductionMapNodeKind::Apparatus
                 && !node.alternative_group_id.trim().is_empty()
-                && node.alternative_assigned_title.trim().is_empty()
-                && queue_state::apparatus_titles_match(&node.title, from)
+                && node.alternative_assigned_apparatus_id.trim().is_empty()
+                && queue_state::apparatus_ids_match(&node.apparatus_id, from)
         })
         .map(|node| node.alternative_group_id.trim().to_string())
         .collect();
@@ -233,10 +112,10 @@ fn unassigned_alternative_candidate_groups(
             let mut has_target = false;
             let mut all_unassigned = true;
             for node in group_nodes {
-                if !node.alternative_assigned_title.trim().is_empty() {
+                if !node.alternative_assigned_apparatus_id.trim().is_empty() {
                     all_unassigned = false;
                 }
-                if queue_state::apparatus_titles_match(&node.title, to) {
+                if queue_state::apparatus_ids_match(&node.apparatus_id, to) {
                     has_target = true;
                 }
             }
@@ -245,24 +124,7 @@ fn unassigned_alternative_candidate_groups(
         .collect()
 }
 
-pub(super) fn reassign_apparatus_nodes(
-    map: &mut ProductionMapDefinition,
-    from: &str,
-    to: &str,
-) -> bool {
-    let to = to.trim();
-    let mut changed = false;
-    for node in &mut map.nodes {
-        if node.kind == ProductionMapNodeKind::Apparatus
-            && queue_state::apparatus_titles_match(&node.title, from)
-        {
-            node.title = to.to_string();
-            changed = true;
-        }
-    }
-    changed
-}
-
+#[cfg(test)]
 pub(super) fn reassign_alternative_apparatus_assignment(
     map: &mut ProductionMapDefinition,
     from: &str,
@@ -278,7 +140,7 @@ pub(super) fn reassign_alternative_apparatus_assignment(
         .filter(|node| {
             node.kind == ProductionMapNodeKind::Apparatus
                 && !node.alternative_group_id.trim().is_empty()
-                && queue_state::apparatus_titles_match(&node.alternative_assigned_title, from)
+                && queue_state::apparatus_ids_match(&node.alternative_assigned_apparatus_id, from)
         })
         .map(|node| node.alternative_group_id.trim().to_string())
         .collect();
@@ -288,12 +150,24 @@ pub(super) fn reassign_alternative_apparatus_assignment(
     if candidate_groups.is_empty() {
         return false;
     }
+    let target_title = map
+        .nodes
+        .iter()
+        .find(|node| {
+            node.kind == ProductionMapNodeKind::Apparatus
+                && candidate_groups.contains(node.alternative_group_id.trim())
+                && queue_state::apparatus_ids_match(&node.apparatus_id, to)
+        })
+        .map(|node| node.title.trim().to_string());
     let mut changed = false;
     for node in &mut map.nodes {
         if node.kind == ProductionMapNodeKind::Apparatus
             && candidate_groups.contains(node.alternative_group_id.trim())
         {
-            node.alternative_assigned_title = to.to_string();
+            node.alternative_assigned_apparatus_id = to.to_string();
+            if let Some(title) = &target_title {
+                node.alternative_assigned_title = title.clone();
+            }
             changed = true;
         }
     }
@@ -314,27 +188,39 @@ pub(super) fn claim_unassigned_alternative_apparatus_assignment(
         .filter(|node| {
             node.kind == ProductionMapNodeKind::Apparatus
                 && !node.alternative_group_id.trim().is_empty()
-                && node.alternative_assigned_title.trim().is_empty()
-                && queue_state::apparatus_titles_match(&node.title, apparatus)
+                && node.alternative_assigned_apparatus_id.trim().is_empty()
+                && queue_state::apparatus_ids_match(&node.apparatus_id, apparatus)
         })
         .map(|node| node.alternative_group_id.trim().to_string())
         .filter(|group_id| {
             map.nodes.iter().all(|node| {
                 node.kind != ProductionMapNodeKind::Apparatus
                     || node.alternative_group_id.trim() != group_id
-                    || node.alternative_assigned_title.trim().is_empty()
+                    || node.alternative_assigned_apparatus_id.trim().is_empty()
             })
         })
         .collect();
     if candidate_groups.is_empty() {
         return false;
     }
+    let target_title = map
+        .nodes
+        .iter()
+        .find(|node| {
+            node.kind == ProductionMapNodeKind::Apparatus
+                && candidate_groups.contains(node.alternative_group_id.trim())
+                && queue_state::apparatus_ids_match(&node.apparatus_id, apparatus)
+        })
+        .map(|node| node.title.trim().to_string());
     let mut changed = false;
     for node in &mut map.nodes {
         if node.kind == ProductionMapNodeKind::Apparatus
             && candidate_groups.contains(node.alternative_group_id.trim())
         {
-            node.alternative_assigned_title = apparatus.to_string();
+            node.alternative_assigned_apparatus_id = apparatus.to_string();
+            if let Some(title) = &target_title {
+                node.alternative_assigned_title = title.clone();
+            }
             changed = true;
         }
     }
@@ -357,7 +243,8 @@ mod tests {
                 {
                     "id": "apparatus",
                     "kind": "apparatus",
-                    "title": "8 ta rangli pechat"
+                    "title": "Renamed display title",
+                    "apparatus_id": "apparatus:catalog:press-008"
                 },
                 {"id": "end", "kind": "end", "title": "End"}
             ],
@@ -377,8 +264,62 @@ mod tests {
         ];
 
         assert_eq!(
-            visible_order_ids_for_apparatus(&maps, "8 ta rangli bosma aparat"),
+            visible_order_ids_for_apparatus(&maps, "apparatus:catalog:press-008"),
             vec!["zakaz-1234".to_string()]
         );
+    }
+
+    #[test]
+    fn title_snapshot_does_not_identify_queue_apparatus() {
+        let maps = vec![queue_map("zakaz-1234", "1234", "1234")];
+        assert!(visible_order_ids_for_apparatus(&maps, "Renamed display title").is_empty());
+    }
+
+    #[test]
+    fn alternative_assignment_updates_id_and_keeps_display_snapshot() {
+        let mut map: ProductionMapDefinition = serde_json::from_value(serde_json::json!({
+            "id": "zakaz-1234",
+            "product_code": "TEST-PRODUCT",
+            "title": "Test order",
+            "nodes": [
+                {"id": "start", "kind": "start", "title": "Start"},
+                {
+                    "id": "source",
+                    "kind": "apparatus",
+                    "title": "Source display",
+                    "apparatus_id": "apparatus:catalog:press-007",
+                    "alternative_group_id": "print-group"
+                },
+                {
+                    "id": "target",
+                    "kind": "apparatus",
+                    "title": "Target display",
+                    "apparatus_id": "apparatus:catalog:press-008",
+                    "alternative_group_id": "print-group"
+                },
+                {"id": "end", "kind": "end", "title": "End"}
+            ],
+            "edges": [
+                {"from": "start", "to": "source"},
+                {"from": "source", "to": "end"}
+            ]
+        }))
+        .expect("alternative queue map fixture");
+
+        assert!(reassign_alternative_apparatus_assignment(
+            &mut map,
+            "apparatus:catalog:press-007",
+            "apparatus:catalog:press-008"
+        ));
+        let source = map
+            .nodes
+            .iter()
+            .find(|node| node.id == "source")
+            .expect("source node");
+        assert_eq!(
+            source.alternative_assigned_apparatus_id,
+            "apparatus:catalog:press-008"
+        );
+        assert_eq!(source.alternative_assigned_title, "Target display");
     }
 }

@@ -296,10 +296,7 @@ impl RpsBatchStorePort for RpsBatchLmdbStore {
 }
 
 impl RpsBatchLmdbStore {
-    fn ensure_unique_batch_code(
-        &self,
-        batch: &RpsBatchSession,
-    ) -> Result<(), RpsBatchStoreError> {
+    fn ensure_unique_batch_code(&self, batch: &RpsBatchSession) -> Result<(), RpsBatchStoreError> {
         if !is_valid_batch_code(&batch.batch_code) {
             return Err(RpsBatchStoreError::StoreFailed);
         }
@@ -368,7 +365,10 @@ mod tests {
         batch.ensure_context();
 
         store.complete(batch.clone()).await.expect("complete");
-        store.complete(batch.clone()).await.expect("idempotent complete");
+        store
+            .complete(batch.clone())
+            .await
+            .expect("idempotent complete");
 
         assert_eq!(
             store
@@ -419,7 +419,9 @@ mod tests {
         let decoded = RpsBatchSessionCodec::bytes_decode(&bytes).expect("decode legacy batch");
 
         assert_eq!(decoded.id, "batch-v2");
-        assert!(super::super::models::is_valid_batch_code(&decoded.batch_code));
+        assert!(super::super::models::is_valid_batch_code(
+            &decoded.batch_code
+        ));
         assert!(decoded.prints.is_empty());
     }
 }

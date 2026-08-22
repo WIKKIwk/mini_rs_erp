@@ -7,7 +7,8 @@ use crate::core::production_map::{ProductionMapNode, ProductionMapNodeKind, Prod
 async fn production_map_store_persists_maps_in_sqlite() {
     let dir = tempfile::tempdir().expect("tempdir");
     let path = dir.path().join("mobile_production_maps.sqlite");
-    let service = ProductionMapService::new(Arc::new(ProductionMapStore::new(path.clone())));
+    let service =
+        ProductionMapService::new_for_test(Arc::new(ProductionMapStore::new(path.clone())));
 
     service
         .upsert_map(ProductionMapDefinition {
@@ -26,6 +27,7 @@ async fn production_map_store_persists_maps_in_sqlite() {
                     id: "start".to_string(),
                     kind: ProductionMapNodeKind::Start,
                     title: "Start".to_string(),
+                    apparatus_id: String::new(),
                     formula: None,
                     role_code: String::new(),
                     item_code: String::new(),
@@ -35,6 +37,7 @@ async fn production_map_store_persists_maps_in_sqlite() {
                     alternative_group_id: String::new(),
                     alternative_group_label: String::new(),
                     alternative_assigned_title: String::new(),
+                    alternative_assigned_apparatus_id: String::new(),
                     rezka_kadr_count: None,
                     rezka_label_length: None,
                     x: 0.0,
@@ -43,7 +46,8 @@ async fn production_map_store_persists_maps_in_sqlite() {
                 ProductionMapNode {
                     id: "apparatus".to_string(),
                     kind: ProductionMapNodeKind::Apparatus,
-                    title: "Extrujen aparat - A".to_string(),
+                    title: "Flexo display snapshot".to_string(),
+                    apparatus_id: "apparatus:default:flexo_pechat".to_string(),
                     formula: None,
                     role_code: String::new(),
                     item_code: String::new(),
@@ -53,6 +57,7 @@ async fn production_map_store_persists_maps_in_sqlite() {
                     alternative_group_id: String::new(),
                     alternative_group_label: String::new(),
                     alternative_assigned_title: String::new(),
+                    alternative_assigned_apparatus_id: String::new(),
                     rezka_kadr_count: None,
                     rezka_label_length: None,
                     x: 0.0,
@@ -62,6 +67,7 @@ async fn production_map_store_persists_maps_in_sqlite() {
                     id: "end".to_string(),
                     kind: ProductionMapNodeKind::End,
                     title: "End".to_string(),
+                    apparatus_id: String::new(),
                     formula: None,
                     role_code: String::new(),
                     item_code: String::new(),
@@ -71,6 +77,7 @@ async fn production_map_store_persists_maps_in_sqlite() {
                     alternative_group_id: String::new(),
                     alternative_group_label: String::new(),
                     alternative_assigned_title: String::new(),
+                    alternative_assigned_apparatus_id: String::new(),
                     rezka_kadr_count: None,
                     rezka_label_length: None,
                     x: 0.0,
@@ -101,13 +108,17 @@ async fn production_map_store_persists_maps_in_sqlite() {
     assert_eq!(count, 1);
     drop(conn);
 
-    let reloaded = ProductionMapService::new(Arc::new(ProductionMapStore::new(path)));
+    let reloaded = ProductionMapService::new_for_test(Arc::new(ProductionMapStore::new(path)));
     let maps = reloaded.maps().await.expect("maps");
     assert_eq!(maps.len(), 1);
     assert_eq!(maps[0].map.product_code, "HOT");
     assert_eq!(maps[0].map.order_number, "1234");
     assert_eq!(maps[0].map.roll_count, Some(7));
     assert_eq!(maps[0].map.width_mm, Some(650.0));
+    assert_eq!(
+        maps[0].map.nodes[1].apparatus_id,
+        "apparatus:default:flexo_pechat"
+    );
     assert_eq!(maps[0].program.operations.len(), 3);
     assert_eq!(maps[0].program.operations[1].op_code, "apparatus");
 

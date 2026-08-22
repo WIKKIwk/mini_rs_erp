@@ -1,13 +1,15 @@
+use crate::core::apparatus_standard::test_support::TestApparatusSpec;
 use crate::core::auth::models::{Principal, PrincipalRole};
 use crate::core::inventory_movements::{
     InventoryActor, InventoryAssetKind, InventoryAssetSelector, InventoryMovementStorePort,
     InventoryTransferCreate, InventoryTransferStatus,
 };
-use crate::db::postgres::apply_foundation_migration;
+use crate::db::postgres::{apply_foundation_migration, postgres_test_database_options};
 use crate::db::postgres_inventory_movements::PostgresInventoryMovementStore;
 
+use super::seed_canonical_apparatus;
+
 #[tokio::test]
-#[ignore = "requires local PostgreSQL and creates/drops mini_rs_erp_test_inventory_precision"]
 async fn postgres_inventory_transfer_preserves_six_decimal_quantity_end_to_end() {
     let admin_url = std::env::var("MINI_ERP_TEST_ADMIN_DATABASE_URL")
         .unwrap_or_else(|_| "postgres://wikki@127.0.0.1:5432/postgres".to_string());
@@ -27,8 +29,9 @@ async fn postgres_inventory_transfer_preserves_six_decimal_quantity_end_to_end()
         .expect("create test db");
     admin_pool.close().await;
 
-    let test_url = format!("postgres://wikki@127.0.0.1:5432/{db_name}");
-    let pool = sqlx::PgPool::connect(&test_url).await.expect("test db");
+    let pool = sqlx::PgPool::connect_with(postgres_test_database_options(&admin_url, db_name))
+        .await
+        .expect("test db");
     apply_foundation_migration(&pool)
         .await
         .expect("apply all migrations");
@@ -40,7 +43,7 @@ async fn postgres_inventory_transfer_preserves_six_decimal_quantity_end_to_end()
         .fetch_one(&pool)
         .await
         .expect("migration count");
-    assert_eq!(migration_count, 51);
+    assert_eq!(migration_count, 72);
 
     let quantity_columns: Vec<(String, String, Option<i32>, Option<i32>)> = sqlx::query_as(
         r#"
@@ -66,6 +69,12 @@ async fn postgres_inventory_transfer_preserves_six_decimal_quantity_end_to_end()
             })
     );
 
+    seed_canonical_apparatus(
+        &pool,
+        TestApparatusSpec::laminate("apparatus:precision:press", "Precision Press"),
+    )
+    .await;
+
     sqlx::raw_sql(
         r#"
         INSERT INTO mini_warehouses (id, name)
@@ -74,11 +83,16 @@ async fn postgres_inventory_transfer_preserves_six_decimal_quantity_end_to_end()
             ('warehouse-destination', 'Sklad Destination');
 
         INSERT INTO mini_warehouse_assignments (
-            warehouse, principal_role, principal_ref, display_name
+            warehouse, assignment_kind, warehouse_name, apparatus_id,
+            principal_role, principal_ref, display_name
         )
         VALUES
-            ('Sklad Source', 'admin', 'ADMIN-1', 'Admin'),
-            ('Sklad Destination', 'admin', 'ADMIN-1', 'Admin');
+            ('Sklad Source', 'warehouse', 'Sklad Source', NULL,
+                'admin', 'ADMIN-1', 'Admin'),
+            ('Sklad Destination', 'warehouse', 'Sklad Destination', NULL,
+                'admin', 'ADMIN-1', 'Admin'),
+            ('Sklad Destination', 'apparatus', NULL, 'apparatus:precision:press',
+                'admin', 'ADMIN-APPARATUS', 'Apparatus Admin');
 
         INSERT INTO mini_raw_material_stock (
             id, warehouse, item_code, item_name, barcode,
@@ -129,6 +143,18 @@ async fn postgres_inventory_transfer_preserves_six_decimal_quantity_end_to_end()
     assert_eq!(transfer.status, InventoryTransferStatus::Received);
     assert_eq!(transfer.lines.len(), 1);
     assert_eq!(transfer.lines[0].qty, 13.00003);
+
+    let recipient_refs: Vec<String> = sqlx::query_scalar(
+        "SELECT target_ref FROM mini_inventory_transfer_chat_outbox
+         WHERE transfer_id = 'transfer-precision-0001' ORDER BY target_ref",
+    )
+    .fetch_all(&pool)
+    .await
+    .expect("transfer chat recipients");
+    assert!(
+        recipient_refs.is_empty(),
+        "internal transfers must not enqueue warehouse chat notifications"
+    );
 
     let (stock_warehouse, stock_status, stock_qty): (String, String, String) = sqlx::query_as(
         "SELECT warehouse, status, qty::text

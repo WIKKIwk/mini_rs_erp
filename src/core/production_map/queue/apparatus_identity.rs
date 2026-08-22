@@ -1,151 +1,102 @@
-use super::super::pechat;
+use crate::core::apparatus_standard::ApparatusId;
+
+/// Parse the only value that may identify a live apparatus in queue state.
+///
+/// The public compatibility names below are retained because queue state is a
+/// shared transport surface, but they intentionally no longer inspect titles,
+/// warehouse labels, aliases, or instance suffixes.
+pub fn canonical_apparatus_id(value: &str) -> Option<ApparatusId> {
+    ApparatusId::new(value.trim().to_string()).ok()
+}
+
+pub fn apparatus_ids_match(left: &str, right: &str) -> bool {
+    match (canonical_apparatus_id(left), canonical_apparatus_id(right)) {
+        (Some(left), Some(right)) => left == right,
+        _ => false,
+    }
+}
 
 pub fn apparatus_matches_assigned(apparatus: &str, assigned: &[String]) -> bool {
-    let apparatus = apparatus.trim();
-    if apparatus.is_empty() {
-        return false;
-    }
     assigned
         .iter()
-        .any(|item| assigned_apparatus_titles_match(apparatus, item.trim()))
+        .any(|item| apparatus_ids_match(apparatus, item))
 }
 
-/// Checks authorization identity, which is stricter than process/config
-/// compatibility. A base assignment covers its configured instances, but an
-/// assignment to one named instance must not authorize a different instance.
-fn assigned_apparatus_titles_match(requested: &str, assigned: &str) -> bool {
-    let requested = requested.trim();
-    let assigned = assigned.trim();
-    if requested.is_empty() || assigned.is_empty() {
-        return false;
-    }
-    if requested.eq_ignore_ascii_case(assigned) {
-        return true;
-    }
-
-    let requested_base = warehouse_base_title(requested);
-    let assigned_base = warehouse_base_title(assigned);
-    if !requested_base.eq_ignore_ascii_case(assigned_base) {
-        return false;
-    }
-
-    match (
-        warehouse_instance_suffix(requested),
-        warehouse_instance_suffix(assigned),
-    ) {
-        (Some(requested_instance), Some(assigned_instance)) => {
-            requested_instance.eq_ignore_ascii_case(assigned_instance)
-        }
-        (Some(_), None) => true,
-        (None, Some(_)) => false,
-        (None, None) => true,
-    }
+pub fn next_stage_apparatus_matches(next_stage: &str, apparatus: &str) -> bool {
+    apparatus_ids_match(next_stage, apparatus)
 }
 
-pub fn apparatus_titles_match(left: &str, right: &str) -> bool {
-    let left = left.trim();
-    let right = right.trim();
-    if left.is_empty() || right.is_empty() {
-        return false;
-    }
-    if left == right {
-        return true;
-    }
-    if pechat::apparatus_node_matches_from(left, right)
-        || pechat::apparatus_node_matches_from(right, left)
-    {
-        return true;
-    }
-    warehouse_base_title(left).eq_ignore_ascii_case(warehouse_base_title(right))
+/// Return the canonical ID for persisted/search-key consumers.
+pub fn apparatus_search_key(value: &str) -> String {
+    canonical_apparatus_id(value)
+        .map(|id| id.as_str().to_string())
+        .unwrap_or_default()
 }
 
-pub fn next_stage_title_matches_apparatus(next_stage: &str, apparatus: &str) -> bool {
-    if apparatus_titles_match(next_stage, apparatus) {
-        return true;
-    }
-    let next_stage_key = normalized_warehouse_key(next_stage);
-    let apparatus_key = normalized_warehouse_key(apparatus);
-    stage_label_matches_numbered_apparatus(&next_stage_key, &apparatus_key)
-}
-
-pub fn apparatus_search_key(title: &str) -> String {
-    let title = title.trim();
-    if title.is_empty() {
-        return String::new();
-    }
-    if let Some(color_count) = pechat::pechat_color_count(title) {
-        return format!("pechat:{color_count}");
-    }
-    warehouse_base_title(title)
-        .split_whitespace()
-        .collect::<Vec<_>>()
-        .join(" ")
-        .to_lowercase()
-}
-
-fn normalized_warehouse_key(title: &str) -> String {
-    warehouse_base_title(title)
-        .split_whitespace()
-        .collect::<Vec<_>>()
-        .join(" ")
-        .to_lowercase()
-}
-
-fn stage_label_matches_numbered_apparatus(stage_key: &str, apparatus_key: &str) -> bool {
-    if stage_key.is_empty() || apparatus_key.is_empty() || apparatus_key == stage_key {
-        return false;
-    }
-    let Some(suffix) = apparatus_key.strip_prefix(stage_key) else {
-        return false;
-    };
-    let suffix = suffix.trim();
-    !suffix.is_empty() && suffix.chars().all(|ch| ch.is_ascii_digit())
-}
-
-/// Strips trailing instance suffixes such as ` - A` from warehouse titles.
-pub fn warehouse_base_title(title: &str) -> &str {
-    let title = title.trim();
-    if let Some(idx) = title.rfind(" - ") {
-        let suffix = title[idx + 3..].trim();
-        if !suffix.is_empty()
-            && suffix.len() <= 16
-            && suffix
-                .chars()
-                .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '_' | '-'))
-        {
-            return title[..idx].trim();
-        }
-    }
-    title
-}
-
-fn warehouse_instance_suffix(title: &str) -> Option<&str> {
-    let title = title.trim();
-    let base = warehouse_base_title(title);
-    if base.len() >= title.len() {
-        return None;
-    }
-    let suffix = title[base.len()..]
-        .trim()
-        .strip_prefix('-')
-        .map(str::trim)
-        .unwrap_or_else(|| title[base.len()..].trim());
-    (!suffix.is_empty()).then_some(suffix)
-}
-
-/// Maps a warehouse title to the persisted sequence/state key when suffixes differ.
+/// Resolve only an exact canonical ID. Legacy title/warehouse keys are not
+/// aliases and therefore fail closed by returning an empty key.
 pub fn resolve_apparatus_storage_key(apparatus: &str, known_keys: &[String]) -> String {
-    let apparatus = apparatus.trim();
-    if apparatus.is_empty() {
+    let Some(id) = canonical_apparatus_id(apparatus) else {
         return String::new();
+    };
+    known_keys
+        .iter()
+        .find(|key| apparatus_ids_match(key, id.as_str()))
+        .map(|key| key.trim().to_string())
+        .unwrap_or_else(|| id.as_str().to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn id(value: &str) -> String {
+        value.to_string()
     }
-    if known_keys.iter().any(|key| key.trim() == apparatus) {
-        return apparatus.to_string();
+
+    #[test]
+    fn queue_identity_requires_canonical_ids() {
+        let assigned = vec![id("apparatus:catalog:press-001")];
+        assert!(apparatus_matches_assigned(
+            "apparatus:catalog:press-001",
+            &assigned
+        ));
+        assert!(!apparatus_matches_assigned("7 ta rangli pechat", &assigned));
+        assert!(!apparatus_matches_assigned(
+            "apparatus:catalog:press-002",
+            &assigned
+        ));
     }
-    for key in known_keys {
-        if apparatus_titles_match(apparatus, key) {
-            return key.trim().to_string();
-        }
+
+    #[test]
+    fn queue_identity_does_not_match_titles_or_instance_suffixes() {
+        assert!(!apparatus_ids_match("Laminatsiya - A", "Laminatsiya"));
+        assert!(!apparatus_ids_match(
+            "apparatus:catalog:lam-001",
+            "apparatus:catalog:lam-002"
+        ));
+        assert!(apparatus_ids_match(
+            "apparatus:catalog:lam-001",
+            "apparatus:catalog:lam-001"
+        ));
     }
-    apparatus.to_string()
+
+    #[test]
+    fn storage_resolution_is_exact_and_fails_closed_for_legacy_keys() {
+        let keys = vec![id("Laminatsiya - A"), id("apparatus:catalog:lam-001")];
+        assert_eq!(
+            resolve_apparatus_storage_key("apparatus:catalog:lam-001", &keys),
+            "apparatus:catalog:lam-001"
+        );
+        assert_eq!(resolve_apparatus_storage_key("Laminatsiya", &keys), "");
+    }
+
+    #[test]
+    fn search_key_is_canonical_id_only() {
+        assert_eq!(
+            apparatus_search_key("apparatus:catalog:press-001"),
+            "apparatus:catalog:press-001"
+        );
+        assert_eq!(apparatus_search_key("8 ta rangli pechat - A"), "");
+    }
 }

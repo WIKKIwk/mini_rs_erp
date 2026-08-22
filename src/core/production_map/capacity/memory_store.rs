@@ -1,30 +1,5 @@
 use super::*;
-
-use super::super::queue_state;
-
-pub(super) async fn apparatus_capacity_profiles(
-    store: &MemoryProductionMapStore,
-) -> Result<Vec<ApparatusCapacityProfile>, ProductionMapError> {
-    Ok(store
-        .apparatus_capacity_profiles
-        .read()
-        .await
-        .values()
-        .cloned()
-        .collect())
-}
-
-pub(super) async fn put_apparatus_capacity_profile(
-    store: &MemoryProductionMapStore,
-    profile: ApparatusCapacityProfile,
-) -> Result<(), ProductionMapError> {
-    store
-        .apparatus_capacity_profiles
-        .write()
-        .await
-        .insert(profile.apparatus_id.trim().to_string(), profile);
-    Ok(())
-}
+use crate::core::apparatus_standard::ApparatusId;
 
 pub(super) async fn apparatus_downtimes(
     store: &MemoryProductionMapStore,
@@ -98,7 +73,7 @@ pub(super) async fn put_apparatus_schedule_reservation(
         .values()
         .filter(|item| {
             item.status.reserves_capacity()
-                && item.apparatus_id.eq_ignore_ascii_case(&reservation.apparatus_id)
+                && item.apparatus_id == reservation.apparatus_id
                 && item.starts_at_unix < reservation.ends_at_unix
                 && reservation.starts_at_unix < item.ends_at_unix
         })
@@ -133,14 +108,13 @@ pub(super) async fn cancel_apparatus_schedule_reservation(
 pub(super) async fn update_apparatus_schedule_reservation_status(
     store: &MemoryProductionMapStore,
     order_id: &str,
-    apparatus: &str,
+    apparatus_id: &ApparatusId,
     status: ApparatusScheduleStatus,
     actor: &QueueActionActor,
 ) -> Result<(), ProductionMapError> {
     let mut reservations = store.apparatus_schedule_reservations.write().await;
     let Some(reservation) = reservations.values_mut().find(|reservation| {
-        reservation.order_id.trim() == order_id.trim()
-            && queue_state::apparatus_titles_match(&reservation.apparatus, apparatus)
+        reservation.order_id.trim() == order_id.trim() && reservation.apparatus_id == *apparatus_id
     }) else {
         return Ok(());
     };
@@ -149,7 +123,10 @@ pub(super) async fn update_apparatus_schedule_reservation_status(
     }
     let allowed = match status {
         ApparatusScheduleStatus::Active => {
-            matches!(reservation.status, ApparatusScheduleStatus::Planned | ApparatusScheduleStatus::Paused)
+            matches!(
+                reservation.status,
+                ApparatusScheduleStatus::Planned | ApparatusScheduleStatus::Paused
+            )
         }
         ApparatusScheduleStatus::Paused => reservation.status == ApparatusScheduleStatus::Active,
         ApparatusScheduleStatus::Completed => matches!(
@@ -166,10 +143,4 @@ pub(super) async fn update_apparatus_schedule_reservation_status(
     reservation.status = status;
     reservation.actor = actor.clone();
     Ok(())
-}
-
-#[allow(dead_code)]
-fn _queue_state_is_active(value: &str) -> bool {
-    queue_state::ApparatusQueueOrderState::parse(value)
-        .is_some_and(queue_state::ApparatusQueueOrderState::is_active)
 }

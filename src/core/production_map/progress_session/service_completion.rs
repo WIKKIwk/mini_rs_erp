@@ -9,6 +9,7 @@ use super::progress::{
 };
 
 impl ProductionMapService {
+    #[allow(clippy::too_many_arguments)]
     pub async fn request_completion_with_issue(
         &self,
         apparatus: &str,
@@ -25,7 +26,6 @@ impl ProductionMapService {
         if apparatus.is_empty() || order_id.is_empty() || description.is_empty() {
             return Err(ProductionMapError::ProgressInputInvalid);
         }
-        reject_training_order_id(order_id)?;
         if !queue_state::apparatus_matches_assigned(apparatus, assigned_apparatus) {
             return Err(ProductionMapError::ApparatusNotAssigned);
         }
@@ -39,7 +39,8 @@ impl ProductionMapService {
 
         let sequences = self.store.apparatus_sequences().await?;
         let all_states = self.store.apparatus_queue_states().await?;
-        let policies = self.store.apparatus_queue_policies().await?;
+        let canonical = self.resolve_canonical_apparatus_text(apparatus).await?;
+        let policy = effective_apparatus_queue_policy(&canonical);
         let known_keys = sequences
             .keys()
             .chain(all_states.keys())
@@ -49,18 +50,6 @@ impl ProductionMapService {
             .map(|key| key.to_string())
             .collect::<Vec<_>>();
         let storage_key = queue_state::resolve_apparatus_storage_key(apparatus, &known_keys);
-        let policy = effective_apparatus_queue_policy(
-            apparatus,
-            policies
-                .get(&storage_key)
-                .copied()
-                .or_else(|| policies.get(apparatus).copied())
-                .or_else(|| {
-                    policies.iter().find_map(|(key, policy)| {
-                        queue_state::apparatus_titles_match(key, apparatus).then_some(*policy)
-                    })
-                }),
-        );
         let stored_sequence = sequences.get(&storage_key).cloned().unwrap_or_default();
         let all_maps = self.store.maps().await?;
         let visible_order_ids = visible_order_ids_for_apparatus(&all_maps, apparatus);
@@ -174,7 +163,6 @@ impl ProductionMapService {
             .completion_request_by_event_id(request_event_id)
             .await?
             .ok_or(ProductionMapError::QueueActionNotAllowed)?;
-        reject_training_order_id(&request.order_id)?;
         if decision == CompletionRequestDecision::Approved {
             match self.order_control_state(&request.order_id).await?.state {
                 OrderControlState::Active => {}
@@ -202,6 +190,10 @@ impl ProductionMapService {
             CompletionRequestDecision::Rejected => "Sizni so'rovingiz rad etildi",
         };
         let raw_material_stock_transitions = if decision == CompletionRequestDecision::Approved {
+            let request_apparatus_id = crate::core::apparatus_standard::ApparatusId::new(
+                request.apparatus.trim().to_string(),
+            )
+            .map_err(|_| ProductionMapError::StoreFailed)?;
             let material_barcodes = self
                 .store
                 .raw_material_assignments()
@@ -209,10 +201,7 @@ impl ProductionMapService {
                 .into_iter()
                 .filter(|assignment| {
                     assignment.order_id.trim() == request.order_id.trim()
-                        && queue_state::apparatus_titles_match(
-                            &assignment.apparatus,
-                            &request.apparatus,
-                        )
+                        && assignment.apparatus_id == request_apparatus_id
                 })
                 .map(|assignment| assignment.barcode.trim().to_string())
                 .filter(|barcode| !barcode.is_empty())

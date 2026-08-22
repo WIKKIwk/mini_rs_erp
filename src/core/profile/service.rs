@@ -48,18 +48,34 @@ impl ProfileService {
         };
 
         match principal.role {
-            PrincipalRole::Supplier => {
-                if let Ok(profile) = lookup.get_supplier_profile(&principal.ref_).await {
+            PrincipalRole::Supplier => match lookup.get_supplier_profile(&principal.ref_).await {
+                Ok(profile) => {
                     principal.phone = profile.phone;
                     if !profile.image.trim().is_empty() {
                         principal.avatar_url =
                             absolute_file_url(&self.file_base_url, &profile.image);
                     }
                 }
-            }
+                Err(error) => {
+                    tracing::warn!(
+                        %error,
+                        role = ?principal.role,
+                        principal_ref = %principal.ref_,
+                        "profile lookup failed; retaining authenticated identity"
+                    );
+                }
+            },
             PrincipalRole::Customer | PrincipalRole::Aparatchi => {
-                if let Ok(profile) = lookup.get_customer_profile(&principal.ref_).await {
-                    principal.phone = profile.phone;
+                match lookup.get_customer_profile(&principal.ref_).await {
+                    Ok(profile) => principal.phone = profile.phone,
+                    Err(error) => {
+                        tracing::warn!(
+                            %error,
+                            role = ?principal.role,
+                            principal_ref = %principal.ref_,
+                            "profile lookup failed; retaining authenticated identity"
+                        );
+                    }
                 }
             }
             PrincipalRole::Werka
@@ -77,10 +93,10 @@ impl ProfileService {
         principal: Principal,
         nickname: &str,
     ) -> Result<Principal, ProfileStoreError> {
+        let key = profile_key(&principal).ok_or(ProfileStoreError::StoreFailed)?;
         let Some(store) = &self.store else {
             return Ok(principal);
         };
-        let key = profile_key(&principal);
         let mut prefs = store.get(&key).await?;
         prefs.nickname = nickname.trim().to_string();
         store.put(&key, prefs).await?;
@@ -94,6 +110,16 @@ impl ProfileService {
         _content_type: &str,
         content: Vec<u8>,
     ) -> Result<Principal, ProfilePortError> {
+        let Some(profile_identity) =
+            ProfileIdentity::from_principal(&principal.role, &principal.ref_)
+        else {
+            tracing::error!(
+                role = ?principal.role,
+                principal_ref = %principal.ref_,
+                "cannot upload avatar without a canonical profile identity"
+            );
+            return Err(ProfilePortError::LookupFailed);
+        };
         if self.avatar_storage.is_none() && principal.role != PrincipalRole::Supplier {
             return Ok(principal);
         }
@@ -101,9 +127,7 @@ impl ProfileService {
         if let Some(storage) = &self.avatar_storage {
             let avatar = storage
                 .put_profile_avatar(
-                    ProfileIdentity::from_principal(&principal.role, &principal.ref_)
-                        .ok_or(ProfilePortError::LookupFailed)?
-                        .role_key(),
+                    profile_identity.role_key(),
                     &principal.ref_,
                     &prepared.filename,
                     &prepared.content_type,
@@ -113,7 +137,14 @@ impl ProfileService {
             principal.avatar_url = avatar.public_url;
 
             if let Some(store) = &self.store {
-                let key = profile_key(&principal);
+                let Some(key) = profile_key(&principal) else {
+                    tracing::error!(
+                        role = ?principal.role,
+                        principal_ref = %principal.ref_,
+                        "cannot persist avatar without a canonical profile identity"
+                    );
+                    return Err(ProfilePortError::LookupFailed);
+                };
                 let mut prefs = store
                     .get(&key)
                     .await
@@ -143,7 +174,14 @@ impl ProfileService {
         principal.avatar_url = absolute_file_url(&self.file_base_url, &file_url);
 
         if let Some(store) = &self.store {
-            let key = profile_key(&principal);
+            let Some(key) = profile_key(&principal) else {
+                tracing::error!(
+                    role = ?principal.role,
+                    principal_ref = %principal.ref_,
+                    "cannot persist avatar without a canonical profile identity"
+                );
+                return Err(ProfilePortError::LookupFailed);
+            };
             let mut prefs = store
                 .get(&key)
                 .await
@@ -162,15 +200,33 @@ impl ProfileService {
         &self,
         principal: Principal,
     ) -> Result<Option<DownloadedFile>, ProfilePortError> {
-        if let Some(storage) = &self.avatar_storage
-            && let Some(store) = &self.store
-            && let Ok(prefs) = store.get(&profile_key(&principal)).await
-            && !prefs.avatar_object_key.trim().is_empty()
-        {
-            return storage
-                .get_profile_avatar(prefs.avatar_object_key.trim())
-                .await
-                .map(Some);
+        if ProfileIdentity::from_principal(&principal.role, &principal.ref_).is_none() {
+            tracing::error!(
+                role = ?principal.role,
+                principal_ref = %principal.ref_,
+                "cannot download avatar without a canonical profile identity"
+            );
+            return Err(ProfilePortError::LookupFailed);
+        }
+        if let (Some(storage), Some(store)) = (&self.avatar_storage, &self.store) {
+            let Some(key) = profile_key(&principal) else {
+                tracing::error!(
+                    role = ?principal.role,
+                    principal_ref = %principal.ref_,
+                    "cannot load avatar without a canonical profile identity"
+                );
+                return Err(ProfilePortError::LookupFailed);
+            };
+            let prefs = store.get(&key).await.map_err(|error| {
+                tracing::error!(%error, "profile preference lookup failed while downloading avatar");
+                ProfilePortError::LookupFailed
+            })?;
+            if !prefs.avatar_object_key.trim().is_empty() {
+                return storage
+                    .get_profile_avatar(prefs.avatar_object_key.trim())
+                    .await
+                    .map(Some);
+            }
         }
 
         if principal.role != PrincipalRole::Supplier {
@@ -194,18 +250,26 @@ impl ProfileService {
         role_key: &str,
         principal_ref: &str,
     ) -> Result<Option<DownloadedFile>, ProfilePortError> {
+        let Some(identity) = ProfileIdentity::new(role_key, principal_ref) else {
+            tracing::error!(
+                role_key,
+                principal_ref,
+                "cannot load avatar without a canonical profile identity"
+            );
+            return Err(ProfilePortError::LookupFailed);
+        };
         let Some(storage) = &self.avatar_storage else {
             return Ok(None);
         };
         let Some(store) = &self.store else {
             return Ok(None);
         };
-        let Some(identity) = ProfileIdentity::new(role_key, principal_ref) else {
-            return Ok(None);
-        };
-        let Ok(prefs) = load_profile_prefs(store.as_ref(), &identity).await else {
-            return Ok(None);
-        };
+        let prefs = load_profile_prefs(store.as_ref(), &identity)
+            .await
+            .map_err(|error| {
+                tracing::error!(%error, "profile preference lookup failed for avatar view");
+                ProfilePortError::LookupFailed
+            })?;
         if prefs.avatar_object_key.trim().is_empty() {
             return Ok(None);
         }
@@ -219,9 +283,24 @@ impl ProfileService {
         if let Some(store) = &self.store
             && let Some(identity) =
                 ProfileIdentity::from_principal(&principal.role, &principal.ref_)
-            && let Ok(prefs) = load_profile_prefs(store.as_ref(), &identity).await
         {
-            principal = merge_profile_prefs(principal, prefs);
+            match load_profile_prefs(store.as_ref(), &identity).await {
+                Ok(prefs) => principal = merge_profile_prefs(principal, prefs),
+                Err(error) => {
+                    tracing::error!(
+                        %error,
+                        role = ?principal.role,
+                        principal_ref = %principal.ref_,
+                        "profile preference lookup failed; retaining authenticated identity"
+                    );
+                }
+            }
+        } else if self.store.is_some() {
+            tracing::error!(
+                role = ?principal.role,
+                principal_ref = %principal.ref_,
+                "cannot load profile preferences without a canonical profile identity"
+            );
         }
         if principal.display_name.is_empty() {
             principal.display_name = principal.legal_name.clone();
@@ -251,8 +330,7 @@ fn merge_profile_prefs(mut principal: Principal, prefs: ProfilePrefs) -> Princip
     principal
 }
 
-fn profile_key(principal: &Principal) -> String {
+fn profile_key(principal: &Principal) -> Option<String> {
     ProfileIdentity::from_principal(&principal.role, &principal.ref_)
-        .expect("authenticated principal has a profile identity")
-        .vault_key()
+        .map(|identity| identity.vault_key())
 }

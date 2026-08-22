@@ -9,7 +9,7 @@ async fn admin_rejects_zero_output_completion_request_and_notifies_worker() {
             principal_role: PrincipalRole::Aparatchi,
             principal_ref: "worker-reject-complete".to_string(),
             role_id: "aparatchi".to_string(),
-            assigned_apparatus: vec!["7 ta rangli pechat".to_string()],
+            assigned_apparatus: vec!["apparatus:default:bosma_7".to_string()],
             assigned_item_groups: Vec::new(),
         })
         .await
@@ -29,7 +29,7 @@ async fn admin_rejects_zero_output_completion_request_and_notifies_worker() {
                 "zakaz-reject-zero",
                 "Reject zero order",
                 "9421",
-                "7 ta rangli pechat",
+                "apparatus:default:bosma_7",
             ),
         ))
         .await
@@ -45,7 +45,7 @@ async fn admin_rejects_zero_output_completion_request_and_notifies_worker() {
             &worker_token,
             &with_test_qolip(
                 r#"{
-                "apparatus":"7 ta rangli pechat",
+                "apparatus":"apparatus:default:bosma_7",
                 "order_id":"zakaz-reject-zero",
                 "action":"start"
             }"#,
@@ -64,7 +64,7 @@ async fn admin_rejects_zero_output_completion_request_and_notifies_worker() {
             &worker_token,
             &with_test_returned_paint(
                 r#"{
-                "apparatus":"7 ta rangli pechat",
+                "apparatus":"apparatus:default:bosma_7",
                 "order_id":"zakaz-reject-zero",
                 "action":"complete",
                 "completion_request_note":"kg va metraj yo'q"
@@ -152,7 +152,7 @@ async fn queue_pause_print_failure_keeps_committed_pause_log() {
             principal_role: PrincipalRole::Aparatchi,
             principal_ref: "worker-print-fail".to_string(),
             role_id: "aparatchi".to_string(),
-            assigned_apparatus: vec!["7 ta rangli pechat".to_string()],
+            assigned_apparatus: vec!["apparatus:default:bosma_7".to_string()],
             assigned_item_groups: Vec::new(),
         })
         .await
@@ -171,7 +171,7 @@ async fn queue_pause_print_failure_keeps_committed_pause_log() {
                 "zakaz-print-fail",
                 "Print fail order",
                 "9302",
-                "7 ta rangli pechat",
+                "apparatus:default:bosma_7",
             ),
         ))
         .await
@@ -187,7 +187,7 @@ async fn queue_pause_print_failure_keeps_committed_pause_log() {
             &worker_token,
             &with_test_qolip(
                 r#"{
-                "apparatus":"7 ta rangli pechat",
+                "apparatus":"apparatus:default:bosma_7",
                 "order_id":"zakaz-print-fail",
                 "action":"start"
             }"#,
@@ -205,7 +205,7 @@ async fn queue_pause_print_failure_keeps_committed_pause_log() {
             "/v1/mobile/admin/production-maps/queue-action",
             &worker_token,
             r#"{
-                "apparatus":"7 ta rangli pechat",
+                "apparatus":"apparatus:default:bosma_7",
                 "order_id":"zakaz-print-fail",
                 "action":"pause",
                 "produced_qty":9.5,
@@ -232,7 +232,7 @@ async fn queue_pause_print_failure_keeps_committed_pause_log() {
         .expect("sequence");
     let body = json_body(sequence).await;
     assert_eq!(
-        body["queue_states"]["7 ta rangli pechat"]["zakaz-print-fail"],
+        body["queue_states"]["apparatus:default:bosma_7"]["zakaz-print-fail"],
         "paused"
     );
     wait_for_progress_print_request_count(&print_requests, 1).await;

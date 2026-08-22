@@ -51,22 +51,12 @@ pub async fn customer_code_regenerate(
         return Err(method_not_allowed());
     }
     let ref_ = required_ref(query.ref_.as_deref())?;
-    let detail = state
+    state
         .admin
         .regenerate_customer_code(ref_)
         .await
-        .map_err(|_| server_error("customer code regenerate failed"))?;
-    state
-        .sessions
-        .delete_for_principal(&PrincipalRole::Customer, ref_)
-        .await
-        .map_err(|_| server_error("customer session revoke failed"))?;
-    state
-        .sessions
-        .delete_for_principal(&PrincipalRole::Aparatchi, ref_)
-        .await
-        .map_err(|_| server_error("worker session revoke failed"))?;
-    Ok(Json(detail))
+        .map(Json)
+        .map_err(|_| server_error("customer code regenerate failed"))
 }
 
 pub async fn customer_item_add(

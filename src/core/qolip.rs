@@ -11,8 +11,7 @@ pub use models::{
     QolipBlock, QolipCellQr, QolipCellQrInput, QolipCheckout, QolipCheckoutCreate,
     QolipCheckoutReturn, QolipError, QolipLocation, QolipLocationMove, QolipLocationMoveBatch,
     QolipLocationUpsert, QolipOrderNote, QolipOrderStartPreparation, QolipProduct,
-    QolipProductSpec, QolipProductSpecBatchUpsert, QolipProductSpecDelete,
-    QolipProductSpecUpsert,
+    QolipProductSpec, QolipProductSpecBatchUpsert, QolipProductSpecDelete, QolipProductSpecUpsert,
 };
 pub use normalize::role_code;
 pub use ports::QolipStorePort;

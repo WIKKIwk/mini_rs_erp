@@ -1,5 +1,5 @@
-use axum::http::{HeaderMap, StatusCode};
 use axum::Json;
+use axum::http::{HeaderMap, StatusCode};
 use serde::{Deserialize, Serialize};
 
 use crate::app::AppState;
@@ -272,6 +272,7 @@ pub(super) fn qolip_block_delete_error(
 ) -> (StatusCode, Json<QolipErrorResponse>) {
     match error {
         WarehouseError::MissingWarehouse => bad_request("block_required"),
+        WarehouseError::InvalidApparatus => bad_request("block_not_found"),
         WarehouseError::NotFound => bad_request("block_not_found"),
         WarehouseError::NotEmpty(_)
         | WarehouseError::HasActiveReservations(_)

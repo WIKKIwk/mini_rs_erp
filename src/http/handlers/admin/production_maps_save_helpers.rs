@@ -77,6 +77,7 @@ fn template_source_map_id_for_save(
 pub(super) fn apply_order_rezka_kadr_count(
     map: &mut ProductionMapDefinition,
     template: &CalculateOrderTemplate,
+    cut_apparatus_ids: &std::collections::BTreeSet<ApparatusId>,
 ) {
     let frame_count = template.frame_count.round();
     if !template.frame_count.is_finite() || frame_count <= 0.0 {
@@ -85,16 +86,36 @@ pub(super) fn apply_order_rezka_kadr_count(
     let frame_count = frame_count as i64;
     for node in &mut map.nodes {
         if node.kind != ProductionMapNodeKind::Apparatus
-            || (!node.title.to_ascii_lowercase().contains("rezka")
-                && !node
-                    .alternative_assigned_title
-                    .to_ascii_lowercase()
-                    .contains("rezka"))
+            || !node
+                .canonical_apparatus_id()
+                .is_some_and(|apparatus_id| cut_apparatus_ids.contains(&apparatus_id))
         {
             continue;
         }
         node.rezka_kadr_count = Some(frame_count);
     }
+}
+
+pub(super) async fn canonical_cut_apparatus_ids(
+    state: &AppState,
+) -> Result<std::collections::BTreeSet<ApparatusId>, AdminError> {
+    let configurations = state
+        .apparatus
+        .list_runtime_configurations()
+        .await
+        .map_err(canonical_apparatus_error)?;
+    let mut ids = std::collections::BTreeSet::new();
+    for configuration in configurations {
+        if !configuration.has_coherent_source() || !configuration.is_active() {
+            return Err(server_error("canonical apparatus projection is incoherent"));
+        }
+        if configuration.runtime.execution_profile.operation
+            == crate::core::apparatus_standard::ExecutionOperation::Cut
+        {
+            ids.insert(configuration.runtime.apparatus_id);
+        }
+    }
+    Ok(ids)
 }
 
 pub(super) fn apply_authoritative_calculation(

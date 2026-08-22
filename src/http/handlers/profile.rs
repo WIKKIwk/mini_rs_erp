@@ -8,7 +8,10 @@ use serde_json::{Value, json};
 
 use crate::app::AppState;
 use crate::core::auth::models::Principal;
-use crate::http::handlers::auth::{ErrorResponse, bearer_token, with_avatar_proxy};
+use crate::error::AppError;
+use crate::http::handlers::auth::{
+    ErrorResponse, bearer_token, internal_error, session_error, with_avatar_proxy,
+};
 
 const AVATAR_BODY_LIMIT: usize = 5 * 1024 * 1024;
 
@@ -27,18 +30,18 @@ pub async fn profile(
     body: Bytes,
 ) -> Result<Json<Value>, (StatusCode, Json<ErrorResponse>)> {
     let token = bearer_token(&headers).ok_or_else(unauthorized)?;
-    let principal = state
-        .sessions
-        .get(&token)
-        .await
-        .map_err(|_| unauthorized())?;
+    let principal = state.sessions.get(&token).await.map_err(session_error)?;
 
     match method {
         Method::GET => {
             let current = state.profiles.refresh(principal).await;
-            state.sessions.update(&token, current.clone()).await;
+            state
+                .sessions
+                .update(&token, current.clone())
+                .await
+                .map_err(session_error)?;
             Ok(Json(
-                profile_payload(&state, &headers, current, &token).await,
+                profile_payload(&state, &headers, current, &token).await?,
             ))
         }
         Method::PUT => {
@@ -54,17 +57,17 @@ pub async fn profile(
                 .profiles
                 .update_nickname(principal, &request.nickname)
                 .await
-                .map_err(|_| {
-                    (
-                        StatusCode::INTERNAL_SERVER_ERROR,
-                        Json(ErrorResponse {
-                            error: "nickname update failed",
-                        }),
-                    )
+                .map_err(|error| {
+                    tracing::error!(%error, "nickname update failed at profile boundary");
+                    internal_error("nickname update failed")
                 })?;
-            state.sessions.update(&token, current.clone()).await;
+            state
+                .sessions
+                .update(&token, current.clone())
+                .await
+                .map_err(session_error)?;
             Ok(Json(
-                profile_payload(&state, &headers, current, &token).await,
+                profile_payload(&state, &headers, current, &token).await?,
             ))
         }
         _ => Err((
@@ -91,11 +94,7 @@ pub async fn avatar_upload(
         ));
     }
     let token = bearer_token(&headers).ok_or_else(unauthorized)?;
-    let principal = state
-        .sessions
-        .get(&token)
-        .await
-        .map_err(|_| unauthorized())?;
+    let principal = state.sessions.get(&token).await.map_err(session_error)?;
     if body.len() > AVATAR_BODY_LIMIT {
         return Err((
             StatusCode::BAD_REQUEST,
@@ -135,17 +134,17 @@ pub async fn avatar_upload(
             upload.content,
         )
         .await
-        .map_err(|_| {
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(ErrorResponse {
-                    error: "avatar upload failed",
-                }),
-            )
+        .map_err(|error| {
+            tracing::error!(%error, "avatar upload failed at profile boundary");
+            internal_error("avatar upload failed")
         })?;
-    state.sessions.update(&token, current.clone()).await;
+    state
+        .sessions
+        .update(&token, current.clone())
+        .await
+        .map_err(session_error)?;
     Ok(Json(
-        profile_payload(&state, &headers, current, &token).await,
+        profile_payload(&state, &headers, current, &token).await?,
     ))
 }
 
@@ -154,7 +153,7 @@ async fn profile_payload(
     headers: &HeaderMap,
     principal: Principal,
     token: &str,
-) -> Value {
+) -> Result<Value, (StatusCode, Json<ErrorResponse>)> {
     let capabilities = state.admin.principal_capability_codes(&principal).await;
     let assigned_apparatus = state.admin.principal_assigned_apparatus(&principal).await;
     let assigned_item_groups = state.admin.principal_assigned_item_groups(&principal).await;
@@ -162,22 +161,35 @@ async fn profile_payload(
         .warehouses
         .assigned_warehouse_names(&principal)
         .await
-        .unwrap_or_default();
-    let mut value = serde_json::to_value(with_avatar_proxy(headers, principal, token))
-        .unwrap_or_else(|_| json!({}));
-    if let Value::Object(object) = &mut value {
-        object.insert("capabilities".to_string(), json!(capabilities));
-        object.insert("assigned_apparatus".to_string(), json!(assigned_apparatus));
-        object.insert(
-            "assigned_item_groups".to_string(),
-            json!(assigned_item_groups),
-        );
-        object.insert(
-            "assigned_warehouses".to_string(),
-            json!(assigned_warehouses),
-        );
-    }
-    value
+        .map_err(|error| {
+            tracing::error!(
+                %error,
+                role = ?principal.role,
+                principal_ref = %principal.ref_,
+                "warehouse scope lookup failed at profile boundary"
+            );
+            internal_error("warehouse scope lookup failed")
+        })?;
+    let mut value =
+        serde_json::to_value(with_avatar_proxy(headers, principal, token)).map_err(|error| {
+            tracing::error!(%error, "profile serialization failed at HTTP boundary");
+            internal_error("profile serialization failed")
+        })?;
+    let Value::Object(object) = &mut value else {
+        tracing::error!("profile serialization returned a non-object value");
+        return Err(internal_error("profile serialization failed"));
+    };
+    object.insert("capabilities".to_string(), json!(capabilities));
+    object.insert("assigned_apparatus".to_string(), json!(assigned_apparatus));
+    object.insert(
+        "assigned_item_groups".to_string(),
+        json!(assigned_item_groups),
+    );
+    object.insert(
+        "assigned_warehouses".to_string(),
+        json!(assigned_warehouses),
+    );
+    Ok(value)
 }
 
 pub async fn avatar_view(
@@ -198,8 +210,13 @@ pub async fn avatar_view(
         },
     };
 
-    let Ok(principal) = state.sessions.get(&token).await else {
-        return unauthorized().into_response();
+    let principal = match state.sessions.get(&token).await {
+        Ok(principal) => principal,
+        Err(AppError::Unauthorized) => return unauthorized().into_response(),
+        Err(error) => {
+            tracing::error!(%error, "session lookup failed while viewing avatar");
+            return internal_error("session store failed").into_response();
+        }
     };
     let requested_role = query
         .role

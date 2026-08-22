@@ -5,7 +5,7 @@ use crate::core::qolip::normalize::{
 };
 use crate::core::qolip::{QolipCheckout, QolipError};
 
-use super::rows::{row_to_checkout, row_to_location, QolipCheckoutRow, QolipLocationRow};
+use super::rows::{QolipCheckoutRow, QolipLocationRow, row_to_checkout, row_to_location};
 
 pub(super) async fn save_checkout(
     pool: &PgPool,
@@ -34,6 +34,7 @@ pub(crate) async fn save_checkout_tx(
              FROM mini_order_run_sessions session
              WHERE session.status IN ('active', 'paused', 'roll_detached')
                AND ($2::text IS NULL OR session.session_id <> $2)
+               AND session.payload_json->>'qolip_lock_owner' = 'true'
                AND (
                    lower(session.payload_json->>'qolip_code') = lower($1)
                    OR EXISTS (
@@ -411,6 +412,7 @@ pub(super) async fn return_checkout_to_location(
              SELECT 1
              FROM mini_order_run_sessions session
              WHERE session.status IN ('active', 'paused', 'roll_detached')
+               AND session.payload_json->>'qolip_lock_owner' = 'true'
                AND (
                    lower(session.payload_json->>'qolip_code') = lower($1)
                    OR EXISTS (
