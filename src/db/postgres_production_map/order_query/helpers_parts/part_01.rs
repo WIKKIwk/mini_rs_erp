@@ -10,27 +10,29 @@ pub(super) async fn load_completed_queue_orders_for_actor(
     }
     let limit = i64::try_from(limit.min(500)).unwrap_or(500);
     let rows = sqlx::query_as::<_, (String, String, String, i64)>(
-        "SELECT order_id, canonical_apparatus_id AS apparatus, completion_status,
-                EXTRACT(EPOCH FROM created_at)::bigint AS completed_at_unix
-         FROM (
+        "WITH latest_actor_history AS (
             SELECT DISTINCT ON (order_id)
+                id,
                 order_id,
-                canonical_apparatus_id AS apparatus,
+                canonical_apparatus_id AS apparatus_id,
                 created_at,
                 CASE
                     WHEN action = 'freeze' THEN 'frozen'
                     WHEN action = 'complete' AND to_state = 'completed'
                         THEN 'completed'
                     ELSE 'in_progress'
-                END AS completion_status
+                END AS history_status
             FROM mini_queue_action_events
             WHERE actor_ref = $1
               AND action IN ('pause', 'freeze', 'detach_roll', 'roll_complete', 'complete')
               AND COALESCE(payload_json->>'completion_request', 'false') <> 'true'
-            ORDER BY order_id, created_at DESC
-         ) latest
-         WHERE completion_status <> 'frozen'
-         ORDER BY created_at DESC
+            ORDER BY order_id, created_at DESC, id DESC
+         )
+         SELECT order_id, apparatus_id, history_status,
+                EXTRACT(EPOCH FROM created_at)::bigint AS completed_at_unix
+         FROM latest_actor_history
+         WHERE history_status <> 'frozen'
+         ORDER BY created_at DESC, id DESC
          LIMIT $2",
     )
     .bind(actor_ref)

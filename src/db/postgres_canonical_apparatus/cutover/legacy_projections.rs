@@ -92,11 +92,9 @@ async fn write_material(
 ) -> Result<(), CanonicalApparatusError> {
     let material = &projections.material;
     let (required, item_groups, requirement_groups) = match &material.policy {
-        MaterialExecutionPolicy::NotRequired => (
-            false,
-            json(&Vec::<String>::new())?,
-            json(&Vec::<String>::new())?,
-        ),
+        MaterialExecutionPolicy::NotRequired { item_group_ids } => {
+            (false, json(item_group_ids)?, json(&Vec::<String>::new())?)
+        }
         MaterialExecutionPolicy::AllRequired { item_group_ids } => {
             (true, json(item_group_ids)?, json(&Vec::<String>::new())?)
         }

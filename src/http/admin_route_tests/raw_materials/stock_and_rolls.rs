@@ -327,6 +327,202 @@ async fn raw_material_assignment_checks_rulon_size_for_pechat_orders() {
 }
 
 #[tokio::test]
+async fn optional_rulon_policy_requires_scan_once_material_is_assigned() {
+    let material_store = Arc::new(RawMaterialStockLookup::default());
+    material_store
+        .insert_stock("30R765", "ROLL-1000", "JEM 765/25", 244.5)
+        .await;
+    material_store
+        .insert_stock("30R785", "ROLL-1000", "JEM 785/25", 244.5)
+        .await;
+    let mut state = test_state();
+    let inventory_store = Arc::new(MemoryInventoryMovementStore::new());
+    let state_location = InventoryLocation {
+        id: "location:state:optional-rulon".to_string(),
+        kind: InventoryLocationKind::State,
+        name: "Bosma 7 oldi".to_string(),
+        warehouse_id: String::new(),
+        factory_location_id: "factory:pechat".to_string(),
+        active: true,
+        apparatus: vec![InventoryLocationApparatus {
+            id: "apparatus:default:bosma_7".to_string(),
+            name: "Bosma 7".to_string(),
+        }],
+    };
+    inventory_store
+        .seed_locations(vec![state_location.clone()])
+        .await;
+    inventory_store
+        .seed_assets(
+            ["30R765", "30R785"]
+                .into_iter()
+                .map(|barcode| InventoryAsset {
+                    kind: InventoryAssetKind::RawMaterial,
+                    asset_ref: format!("raw:{barcode}"),
+                    custody_warehouse_id: "warehouse:kalidor".to_string(),
+                    custody_warehouse: "Kalidor".to_string(),
+                    item_code: "ROLL-1000".to_string(),
+                    item_name: barcode.to_string(),
+                    identifier: barcode.to_string(),
+                    qty: 244.5,
+                    uom: "Kg".to_string(),
+                    status: "available".to_string(),
+                    physical_location: InventoryLocationRef::from(&state_location),
+                    transfer_id: String::new(),
+                    placement_version: 1,
+                })
+                .collect(),
+        )
+        .await;
+    state.inventory_movements = InventoryMovementService::new(inventory_store);
+    state.gscale = GscaleService::new().with_receipt_store(material_store);
+    state
+        .admin
+        .upsert_role_assignment(crate::core::authz::RoleAssignmentUpsert {
+            principal_role: PrincipalRole::MaterialTaminotchi,
+            principal_ref: "material-optional-rulon".to_string(),
+            role_id: "material_taminotchi".to_string(),
+            assigned_apparatus: vec!["apparatus:default:bosma_7".to_string()],
+            assigned_item_groups: vec!["Rulon eni".to_string()],
+        })
+        .await
+        .expect("material scope");
+    assign_warehouse_to_principal(
+        &state,
+        PrincipalRole::MaterialTaminotchi,
+        "material-optional-rulon",
+        "Kalidor",
+    )
+    .await;
+    let admin_token = session(&state, PrincipalRole::Admin).await;
+    let material_token = session_for(
+        &state,
+        PrincipalRole::MaterialTaminotchi,
+        "material-optional-rulon",
+    )
+    .await;
+    let router = build_router(state);
+
+    let map = router
+        .clone()
+        .oneshot(request_with_body(
+            "PUT",
+            "/v1/mobile/admin/production-maps",
+            &admin_token,
+            &pechat_order_map_json_with_dims(
+                "zakaz-optional-rulon",
+                "Optional rulon",
+                "0001",
+                "apparatus:default:bosma_7",
+                7,
+                765.0,
+            ),
+        ))
+        .await
+        .expect("map save");
+    assert_eq!(map.status(), StatusCode::OK);
+
+    let rule = router
+        .clone()
+        .oneshot(request_with_body(
+            "PUT",
+            "/v1/mobile/admin/raw-material-rules",
+            &admin_token,
+            &canonical_material_policy_body(
+                "apparatus:default:bosma_7",
+                1,
+                serde_json::json!({
+                    "mode": "not_required",
+                    "item_group_ids": ["Rulon"]
+                }),
+                true,
+            ),
+        ))
+        .await
+        .expect("optional material rule save");
+    let rule_status = rule.status();
+    let rule_body = json_body(rule).await;
+    assert_eq!(rule_status, StatusCode::OK, "{rule_body:?}");
+    assert_eq!(
+        rule_body["revision"]["policies"]["material"],
+        serde_json::json!({
+            "mode": "not_required",
+            "item_group_ids": ["Rulon"]
+        })
+    );
+
+    let candidates = router
+        .clone()
+        .oneshot(request(
+            "GET",
+            "/v1/mobile/admin/raw-material-assignments/candidates?order_id=zakaz-optional-rulon&apparatus=apparatus%3Adefault%3Abosma_7",
+            &material_token,
+        ))
+        .await
+        .expect("optional rulon candidates");
+    let candidate_status = candidates.status();
+    let candidate_body = json_body(candidates).await;
+    assert_eq!(candidate_status, StatusCode::OK, "{candidate_body:?}");
+    assert_eq!(candidate_body.as_array().map(Vec::len), Some(2));
+    assert_eq!(candidate_body[0]["barcode"], "30R765");
+    assert_eq!(candidate_body[0]["roll_width_mm"], 765.0);
+    assert_eq!(candidate_body[1]["barcode"], "30R785");
+    assert_eq!(candidate_body[1]["roll_width_mm"], 785.0);
+
+    let assigned = router
+        .clone()
+        .oneshot(request_with_body(
+            "POST",
+            "/v1/mobile/admin/raw-material-assignments",
+            &material_token,
+            r#"{
+                "order_id":"zakaz-optional-rulon",
+                "barcode":"30R765",
+                "apparatus":"apparatus:default:bosma_7"
+            }"#,
+        ))
+        .await
+        .expect("assign optional material");
+    let assigned_status = assigned.status();
+    let assigned_body = json_body(assigned).await;
+    assert_eq!(assigned_status, StatusCode::OK, "{assigned_body:?}");
+
+    let requirements = router
+        .clone()
+        .oneshot(request(
+            "GET",
+            "/v1/mobile/admin/raw-material-start-requirements?order_id=zakaz-optional-rulon&apparatus=apparatus%3Adefault%3Abosma_7",
+            &admin_token,
+        ))
+        .await
+        .expect("optional start requirements");
+    let requirements_status = requirements.status();
+    let requirements_body = json_body(requirements).await;
+    assert_eq!(requirements_status, StatusCode::OK, "{requirements_body:?}");
+    assert_eq!(requirements_body["requires_material"], false);
+    assert_eq!(requirements_body["material_scan_required"], true);
+    assert_eq!(requirements_body["required_scan_count"], 1);
+    assert_eq!(requirements_body["matched_scan_count"], 0);
+    assert_eq!(requirements_body["assignments_satisfied"], true);
+    assert_eq!(requirements_body["scan_satisfied"], false);
+
+    let scanned_requirements = router
+        .oneshot(request(
+            "GET",
+            "/v1/mobile/admin/raw-material-start-requirements?order_id=zakaz-optional-rulon&apparatus=apparatus%3Adefault%3Abosma_7&material_barcodes=30R765",
+            &admin_token,
+        ))
+        .await
+        .expect("optional scanned start requirements");
+    let scanned_status = scanned_requirements.status();
+    let scanned_body = json_body(scanned_requirements).await;
+    assert_eq!(scanned_status, StatusCode::OK, "{scanned_body:?}");
+    assert_eq!(scanned_body["required_scan_count"], 1);
+    assert_eq!(scanned_body["matched_scan_count"], 1);
+    assert_eq!(scanned_body["scan_satisfied"], true);
+}
+
+#[tokio::test]
 async fn raw_material_assignment_limits_laminatsiya_roll_width_to_thirty_mm() {
     let material_store = Arc::new(RawMaterialStockLookup::default());
     material_store

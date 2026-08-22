@@ -178,10 +178,10 @@ include!("implementation_impl_parts/part_02.rs");
 fn material_rule_record(canonical: &RuntimeApparatusConfiguration) -> ApparatusMaterialRule {
     let (requires_material, start_policy, item_groups, requirement_groups) =
         match &canonical.material.policy {
-            MaterialExecutionPolicy::NotRequired => (
+            MaterialExecutionPolicy::NotRequired { item_group_ids } => (
                 false,
                 RawMaterialStartPolicy::StateAll,
-                Vec::new(),
+                item_group_ids.clone(),
                 Vec::new(),
             ),
             MaterialExecutionPolicy::AllRequired { item_group_ids } => (
@@ -216,11 +216,12 @@ fn material_rule_record(canonical: &RuntimeApparatusConfiguration) -> ApparatusM
 pub(crate) fn live_material_rule(
     canonical: &RuntimeApparatusConfiguration,
 ) -> Option<ApparatusMaterialRule> {
-    (!matches!(
-        canonical.material.policy,
-        MaterialExecutionPolicy::NotRequired
-    ))
-    .then(|| material_rule_record(canonical))
+    match &canonical.material.policy {
+        MaterialExecutionPolicy::NotRequired { item_group_ids } if item_group_ids.is_empty() => {
+            None
+        }
+        _ => Some(material_rule_record(canonical)),
+    }
 }
 
 pub(super) fn build_raw_material_start_requirements(
@@ -291,7 +292,7 @@ pub(super) fn build_raw_material_start_requirements(
     RawMaterialStartRequirements {
         policy,
         requires_material,
-        material_scan_required: requires_material && !assignments.is_empty(),
+        material_scan_required: requires_material || !assignments.is_empty(),
         requirement_groups,
         assigned_barcodes: assigned.into_iter().collect(),
         staged_barcodes: staged.into_iter().collect(),

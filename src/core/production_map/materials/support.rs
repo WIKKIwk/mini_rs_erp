@@ -19,7 +19,6 @@ pub(super) fn normalize_rule(
     let requirement_groups = normalize_requirement_groups(input.requirement_groups);
     let valid_policy = if !input.requires_material {
         input.start_policy == super::RawMaterialStartPolicy::StateAll
-            && item_groups.is_empty()
             && requirement_groups.is_empty()
     } else {
         match input.start_policy {
@@ -281,6 +280,26 @@ mod tests {
             assignment("apparatus:catalog:flexo-001", "INK-2", "Kraska"),
         ];
         assert!(material_requirements_met(&rule, &two));
+    }
+
+    #[test]
+    fn optional_rule_normalization_keeps_assignment_groups() {
+        let rule = normalize_rule(ApparatusMaterialRuleUpsert {
+            apparatus: "apparatus:catalog:flexo-001".to_string(),
+            requires_material: false,
+            start_policy: RawMaterialStartPolicy::StateAll,
+            item_groups: vec![" Rulon ".to_string(), "Kraska".to_string()],
+            requirement_groups: Vec::new(),
+        })
+        .expect("optional canonical rule");
+
+        assert!(!rule.requires_material);
+        assert_eq!(rule.item_groups, vec!["Rulon", "Kraska"]);
+        assert!(rule_matches(
+            &rule,
+            &apparatus_id("apparatus:catalog:flexo-001"),
+            &["Rulon".to_string()]
+        ));
     }
 
     #[test]

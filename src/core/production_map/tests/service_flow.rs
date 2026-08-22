@@ -173,7 +173,9 @@ async fn set_test_material_rule(
         .expect("current canonical configuration")
         .expect("seeded canonical configuration");
     let material = if !input.requires_material {
-        MaterialExecutionPolicy::NotRequired
+        MaterialExecutionPolicy::NotRequired {
+            item_group_ids: input.item_groups,
+        }
     } else {
         match input.start_policy {
             RawMaterialStartPolicy::StateAll => MaterialExecutionPolicy::AllRequired {
@@ -1210,6 +1212,120 @@ async fn raw_material_state_policy_requires_only_staged_scan_before_start() {
         .await
         .expect("start with the staged material only");
     assert_eq!(states.get("zakaz-raw-1"), Some(&"in_progress".to_string()));
+}
+
+#[tokio::test]
+async fn optional_material_assignment_requires_scan_before_start() {
+    let (service, apparatus_service) =
+        service_with_apparatus(&[(FLOW_PECHAT_ID, "7 ta rangli pechat - A")]).await;
+    let order_id = "zakaz-raw-optional";
+    let actor = QueueActionActor {
+        role: "aparatchi".to_string(),
+        ref_: "worker-optional".to_string(),
+        display_name: "Optional material worker".to_string(),
+    };
+    service
+        .upsert_map(canonical_apparatus_stage_map(
+            order_id,
+            FLOW_PECHAT_ID,
+            "7 ta rangli pechat - A",
+        ))
+        .await
+        .expect("map");
+    service
+        .set_apparatus_sequence(FLOW_PECHAT_ID, vec![order_id.to_string()])
+        .await
+        .expect("sequence");
+    set_test_material_rule(
+        &apparatus_service,
+        ApparatusMaterialRuleUpsert {
+            apparatus: FLOW_PECHAT_ID.to_string(),
+            requires_material: false,
+            start_policy: RawMaterialStartPolicy::StateAll,
+            item_groups: vec!["Kraska".to_string()],
+            requirement_groups: Vec::new(),
+        },
+    )
+    .await
+    .expect("optional material rule");
+    service
+        .assign_raw_material_to_order(
+            RawMaterialAssignmentInput {
+                order_id: order_id.to_string(),
+                barcode: "OPTIONAL-INK-1".to_string(),
+                item_code: "INK-BLACK".to_string(),
+                item_name: "Black ink".to_string(),
+                item_group: "Kraska".to_string(),
+                item_group_path: Vec::new(),
+                apparatus: FLOW_PECHAT_ID.to_string(),
+            },
+            &actor,
+        )
+        .await
+        .expect("optional material assignment");
+
+    let controls = service
+        .queue_action_controls()
+        .await
+        .expect("optional material controls");
+    let control = controls
+        .get(FLOW_PECHAT_ID)
+        .and_then(|orders| orders.get(order_id))
+        .expect("optional material control");
+    assert_eq!(
+        control.interaction.start_materials_mode,
+        ApparatusQueueStartMaterialsMode::ScanRequired
+    );
+    assert!(control.interaction.material_scan_required);
+    assert!(!control.interaction.assigned_materials_display_only);
+    assert!(
+        control
+            .allowed_actions
+            .contains(&queue_state::ApparatusQueueAction::Start)
+    );
+
+    let requirements = service
+        .raw_material_start_requirements(
+            FLOW_PECHAT_ID,
+            order_id,
+            &["OPTIONAL-INK-1".to_string()],
+            "",
+        )
+        .await
+        .expect("optional material start requirements");
+    assert!(!requirements.requires_material);
+    assert!(requirements.material_scan_required);
+    assert!(requirements.assignments_satisfied);
+    assert!(!requirements.scan_satisfied);
+    assert_eq!(requirements.required_scan_count, 1);
+
+    let error = service
+        .apply_apparatus_queue_action_with_material_scan(
+            FLOW_PECHAT_ID,
+            order_id,
+            queue_state::ApparatusQueueAction::Start,
+            &[FLOW_PECHAT_ID.to_string()],
+            actor.clone(),
+            "",
+            &["OPTIONAL-INK-1".to_string()],
+        )
+        .await
+        .expect_err("assigned material must be scanned before start");
+    assert_eq!(error, ProductionMapError::RawMaterialScanRequired);
+
+    let states = service
+        .apply_apparatus_queue_action_with_material_scan(
+            FLOW_PECHAT_ID,
+            order_id,
+            queue_state::ApparatusQueueAction::Start,
+            &[FLOW_PECHAT_ID.to_string()],
+            actor,
+            "OPTIONAL-INK-1",
+            &["OPTIONAL-INK-1".to_string()],
+        )
+        .await
+        .expect("assigned material scan starts the order");
+    assert_eq!(states.get(order_id), Some(&"in_progress".to_string()));
 }
 
 #[tokio::test]

@@ -1,7 +1,8 @@
 use crate::core::apparatus_standard::{
-    ApparatusDisplay, CanonicalApparatusError, CanonicalApparatusPatch, RevisionSource,
-    export_canonical_aasx, parse_canonical_aasx, project_apparatus_revision,
+    ApparatusDisplay, CanonicalApparatusError, CanonicalApparatusPatch, MaterialExecutionPolicy,
+    RevisionSource, export_canonical_aasx, parse_canonical_aasx, project_apparatus_revision,
 };
+use sqlx::Row;
 
 use super::fixtures::{TestDatabase, apparatus_state, draft, metadata};
 
@@ -57,6 +58,58 @@ async fn canonical_repository_round_trips_artifact_and_all_projections() {
     assert_eq!(state.head_revision, Some(1));
     assert_eq!(state.runtime_revision, Some(1));
     assert_eq!(state.drift, 0);
+    database.close().await;
+}
+
+#[tokio::test]
+async fn optional_material_groups_reach_the_postgres_runtime_projection() {
+    let database = TestDatabase::create("optional_material").await;
+    let service = database.service();
+    let mut apparatus = draft(
+        "physical-asset:optional-material-01",
+        "Optional material apparatus",
+    );
+    apparatus.policies.material = MaterialExecutionPolicy::NotRequired {
+        item_group_ids: vec!["kraska".to_string(), "rulon".to_string()],
+    };
+
+    let created = service
+        .create(apparatus, metadata("command:optional-material-create-01"))
+        .await
+        .expect("create optional material apparatus");
+    let stored = service
+        .current_aasx(&created.revision.apparatus_id)
+        .await
+        .expect("read optional material AASX")
+        .expect("optional material AASX exists");
+    assert_eq!(
+        parse_canonical_aasx(stored.artifact.bytes())
+            .expect("parse optional material canonical AASX"),
+        created.revision
+    );
+
+    let row = sqlx::query(
+        "SELECT payload_json, source_revision, source_aasx_sha256
+           FROM mini_apparatus_material_rules
+          WHERE canonical_apparatus_id = $1",
+    )
+    .bind(created.revision.apparatus_id.as_str())
+    .fetch_one(&database.pool)
+    .await
+    .expect("read optional material projection");
+    let payload = row.get::<serde_json::Value, _>("payload_json");
+    assert_eq!(
+        payload["policy"],
+        serde_json::json!({
+            "mode": "not_required",
+            "item_group_ids": ["kraska", "rulon"]
+        })
+    );
+    assert_eq!(row.get::<i64, _>("source_revision"), 1);
+    assert_eq!(
+        row.get::<String, _>("source_aasx_sha256"),
+        created.aasx_sha256.to_hex()
+    );
     database.close().await;
 }
 

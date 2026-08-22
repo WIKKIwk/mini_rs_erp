@@ -168,8 +168,11 @@ fn push_policies(xml: &mut String, revision: &CanonicalApparatusRevision) {
     );
     collection_start(xml, "MaterialPolicy");
     match &revision.policies.material {
-        MaterialExecutionPolicy::NotRequired => {
+        MaterialExecutionPolicy::NotRequired { item_group_ids } => {
             property(xml, "Mode", "xs:string", "not_required");
+            if !item_group_ids.is_empty() {
+                push_indexed_values(xml, "ItemGroups", "ItemGroup", item_group_ids);
+            }
         }
         MaterialExecutionPolicy::AllRequired { item_group_ids } => {
             property(xml, "Mode", "xs:string", "all_required");

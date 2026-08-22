@@ -108,9 +108,16 @@ pub struct MaterialRequirementSet {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "mode", rename_all = "snake_case", deny_unknown_fields)]
 pub enum MaterialExecutionPolicy {
-    NotRequired,
-    AllRequired { item_group_ids: Vec<String> },
-    RequirementSets { sets: Vec<MaterialRequirementSet> },
+    NotRequired {
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        item_group_ids: Vec<String>,
+    },
+    AllRequired {
+        item_group_ids: Vec<String>,
+    },
+    RequirementSets {
+        sets: Vec<MaterialRequirementSet>,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -320,7 +327,7 @@ impl CanonicalApparatusDraft {
     pub fn normalize(&mut self) {
         self.capabilities.sort_by_key(|capability| capability.code);
         match &mut self.policies.material {
-            MaterialExecutionPolicy::NotRequired => {}
+            MaterialExecutionPolicy::NotRequired { item_group_ids } => item_group_ids.sort(),
             MaterialExecutionPolicy::AllRequired { item_group_ids } => item_group_ids.sort(),
             MaterialExecutionPolicy::RequirementSets { sets } => {
                 for set in sets.iter_mut() {

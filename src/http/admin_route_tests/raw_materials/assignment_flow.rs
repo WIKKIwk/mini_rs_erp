@@ -1031,6 +1031,71 @@ async fn raw_material_routes_assign_and_require_scan_for_queue_start() {
         "raw_material_stock_unavailable"
     );
 
+    let detached = router
+        .clone()
+        .oneshot(request_with_body(
+            "POST",
+            "/v1/mobile/admin/production-maps/queue-action",
+            &worker_token,
+            r#"{
+                "apparatus":"apparatus:default:bosma_7",
+                "order_id":"zakaz-raw-route",
+                "action":"detach_roll",
+                "produced_qty":48,
+                "uom":"m",
+                "finished_goods_kg":21,
+                "finished_goods_meter":48,
+                "bobina_kg":7,
+                "print_transport":"offline"
+            }"#,
+        ))
+        .await
+        .expect("detach roll after raw material scan");
+    let detached_status = detached.status();
+    let detached_body = json_body(detached).await;
+    assert_eq!(detached_status, StatusCode::OK, "{detached_body:?}");
+    assert_eq!(detached_body["states"]["zakaz-raw-route"], "paused");
+
+    let assignments_after_detach = router
+        .clone()
+        .oneshot(request(
+            "GET",
+            "/v1/mobile/admin/raw-material-assignments?order_id=zakaz-raw-route&apparatus=apparatus%3Adefault%3Abosma_7",
+            &worker_token,
+        ))
+        .await
+        .expect("assignments after roll detach");
+    assert_eq!(assignments_after_detach.status(), StatusCode::OK);
+    assert_eq!(
+        json_body(assignments_after_detach)
+            .await
+            .as_array()
+            .expect("assignments array")
+            .iter()
+            .filter(|item| item["stock_status"] == "in_use")
+            .count(),
+        2
+    );
+
+    let resumed = router
+        .clone()
+        .oneshot(request_with_body(
+            "POST",
+            "/v1/mobile/admin/production-maps/queue-action",
+            &worker_token,
+            r#"{
+                "apparatus":"apparatus:default:bosma_7",
+                "order_id":"zakaz-raw-route",
+                "action":"resume"
+            }"#,
+        ))
+        .await
+        .expect("resume after roll detach");
+    let resumed_status = resumed.status();
+    let resumed_body = json_body(resumed).await;
+    assert_eq!(resumed_status, StatusCode::OK, "{resumed_body:?}");
+    assert_eq!(resumed_body["states"]["zakaz-raw-route"], "in_progress");
+
     let completed = router
         .clone()
         .oneshot(request_with_body(

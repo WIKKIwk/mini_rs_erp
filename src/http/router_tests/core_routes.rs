@@ -325,3 +325,37 @@ async fn browser_preview_cors_headers_are_registered() {
             .is_some_and(|value| value.contains("x-file-name"))
     );
 }
+
+#[tokio::test]
+async fn canonical_mutation_preflight_allows_idempotency_key() {
+    let app = build_router(test_state());
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("OPTIONS")
+                .uri("/v1/mobile/admin/raw-material-rules")
+                .header(header::ORIGIN, "http://127.0.0.1:56692")
+                .header(header::ACCESS_CONTROL_REQUEST_METHOD, "PUT")
+                .header(
+                    header::ACCESS_CONTROL_REQUEST_HEADERS,
+                    "authorization,content-type,idempotency-key",
+                )
+                .body(Body::empty())
+                .expect("request"),
+        )
+        .await
+        .expect("response");
+
+    assert_eq!(response.status(), StatusCode::NO_CONTENT);
+    assert!(
+        response
+            .headers()
+            .get(header::ACCESS_CONTROL_ALLOW_HEADERS)
+            .and_then(|value| value.to_str().ok())
+            .is_some_and(|value| {
+                value
+                    .split(',')
+                    .any(|header| header.trim().eq_ignore_ascii_case("idempotency-key"))
+            })
+    );
+}

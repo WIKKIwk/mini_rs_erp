@@ -169,7 +169,11 @@ fn validate_policies(
     revision: &CanonicalApparatusRevision,
 ) -> Result<(), CanonicalApparatusValidationError> {
     match &revision.policies.material {
-        MaterialExecutionPolicy::NotRequired => {}
+        MaterialExecutionPolicy::NotRequired { item_group_ids } => {
+            if !item_group_ids.is_empty() {
+                validate_sorted_unique_references(item_group_ids, "material_item_group")?;
+            }
+        }
         MaterialExecutionPolicy::AllRequired { item_group_ids } => {
             validate_sorted_unique_references(item_group_ids, "material_item_group")?;
         }

@@ -2,10 +2,10 @@ use std::collections::BTreeMap;
 use std::sync::Arc;
 
 use crate::core::production_map::{
-    OrderProgressBatch, OrderProgressBatchStatus, OrderProgressBatchStatusDetail,
-    OrderProgressBatchWipStatus, ProductionMapDefinition, ProductionMapEdge, ProductionMapError,
-    ProductionMapNode, ProductionMapNodeKind, ProductionMapService, ProductionMapStorePort,
-    WipProgressBatchQuery, queue_state,
+    CompletedQueueOrderStatus, OrderProgressBatch, OrderProgressBatchStatus,
+    OrderProgressBatchStatusDetail, OrderProgressBatchWipStatus, ProductionMapDefinition,
+    ProductionMapEdge, ProductionMapError, ProductionMapNode, ProductionMapNodeKind,
+    ProductionMapService, ProductionMapStorePort, WipProgressBatchQuery, queue_state,
 };
 use crate::db::postgres::{apply_foundation_migration, postgres_test_database_options};
 use crate::db::postgres_production_map::PostgresProductionMapStore;
@@ -212,6 +212,81 @@ async fn postgres_production_map_store_persists_maps_sequences_and_queue_states(
             .expect("read cleaned sequence");
     assert_eq!(queue_state_count, 0);
     assert!(sequence_order_ids.is_none());
+
+    pool.close().await;
+    let admin_pool = sqlx::PgPool::connect(&admin_url)
+        .await
+        .expect("admin cleanup");
+    sqlx::query(&format!(
+        r#"DROP DATABASE IF EXISTS "{db_name}" WITH (FORCE)"#
+    ))
+    .execute(&admin_pool)
+    .await
+    .expect("cleanup test db");
+    admin_pool.close().await;
+}
+
+#[tokio::test]
+async fn postgres_completed_queue_history_returns_actor_stage_completion() {
+    let admin_url = std::env::var("MINI_ERP_TEST_ADMIN_DATABASE_URL")
+        .unwrap_or_else(|_| "postgres://wikki@127.0.0.1:5432/postgres".to_string());
+    let db_name = "mini_rs_erp_test_completed_queue_history";
+    let admin_pool = sqlx::PgPool::connect(&admin_url).await.expect("admin db");
+    sqlx::query(&format!(
+        r#"DROP DATABASE IF EXISTS "{db_name}" WITH (FORCE)"#
+    ))
+    .execute(&admin_pool)
+    .await
+    .expect("drop test db");
+    sqlx::query(&format!(r#"CREATE DATABASE "{db_name}""#))
+        .execute(&admin_pool)
+        .await
+        .expect("create test db");
+    admin_pool.close().await;
+
+    let pool = sqlx::PgPool::connect_with(postgres_test_database_options(&admin_url, db_name))
+        .await
+        .expect("test db");
+    apply_foundation_migration(&pool)
+        .await
+        .expect("apply migration");
+    seed_standard_canonical_apparatus(&pool).await;
+    let store = PostgresProductionMapStore::new(pool.clone());
+    let service = ProductionMapService::new_for_test(Arc::new(store.clone()));
+    service
+        .upsert_map(test_map("zakaz-history-1", "9901", "HISTORY"))
+        .await
+        .expect("save map");
+
+    sqlx::query(
+        "INSERT INTO mini_queue_action_events
+            (event_id, apparatus, canonical_apparatus_id, order_id, action,
+             from_state, to_state, policy, actor_role, actor_ref,
+             actor_display_name, assigned_apparatus, payload_json, created_at)
+         VALUES
+            ($1, $2, $2, $3, 'complete', 'in_progress', 'completed',
+             'strict_sequence', 'aparatchi', $4, 'History Worker',
+             jsonb_build_array($2::text), '{}'::jsonb,
+             to_timestamp(1787402980))",
+    )
+    .bind("queue-history-complete-1")
+    .bind("apparatus:default:bosma_7")
+    .bind("zakaz-history-1")
+    .bind("worker-history-1")
+    .execute(&pool)
+    .await
+    .expect("insert completed queue event");
+
+    let history = store
+        .completed_queue_orders_for_actor("worker-history-1", 10)
+        .await
+        .expect("load actor stage completion history");
+
+    assert_eq!(history.len(), 1);
+    assert_eq!(history[0].order_id, "zakaz-history-1");
+    assert_eq!(history[0].apparatus, "apparatus:default:bosma_7");
+    assert_eq!(history[0].status, CompletedQueueOrderStatus::Completed);
+    assert_eq!(history[0].completed_at_unix, 1_787_402_980);
 
     pool.close().await;
     let admin_pool = sqlx::PgPool::connect(&admin_url)

@@ -1,5 +1,6 @@
 use super::*;
 use crate::core::apparatus_standard::{
+    MaterialExecutionPolicy,
     aasx::{AAS_SPEC_PATH, package_from_aas_xml, validated_aas_spec},
     isa95::tests::revision_with,
 };
@@ -20,6 +21,27 @@ fn revision_has_byte_identical_aasx_and_exact_hash() {
 
     assert_eq!(first, second);
     assert_eq!(first.sha256(), AasxSha256::digest(first.bytes()));
+    assert_eq!(parse_canonical_aasx(first.bytes()).unwrap(), revision);
+}
+
+#[test]
+fn optional_material_groups_are_preserved_in_deterministic_aasx() {
+    let mut revision = fixture();
+    revision.policies.material = MaterialExecutionPolicy::NotRequired {
+        item_group_ids: vec!["kraska".to_string(), "rulon".to_string()],
+    };
+    revision.validate().expect("optional material groups");
+
+    let first = export_canonical_aasx(&revision).expect("first export");
+    let second = export_canonical_aasx(&revision).expect("second export");
+    let specification =
+        String::from_utf8(validated_aas_spec(first.bytes()).expect("AAS specification"))
+            .expect("UTF-8 AAS specification");
+
+    assert_eq!(first, second);
+    assert!(specification.contains("<idShort>ItemGroups</idShort>"));
+    assert!(specification.contains("<value>kraska</value>"));
+    assert!(specification.contains("<value>rulon</value>"));
     assert_eq!(parse_canonical_aasx(first.bytes()).unwrap(), revision);
 }
 

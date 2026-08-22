@@ -159,7 +159,9 @@ pub(crate) fn canonical_draft(spec: &TestApparatusSpec<'_>) -> CanonicalApparatu
         },
         policies: ApparatusOperationalPolicies {
             queue: QueueDiscipline::StrictSequence,
-            material: MaterialExecutionPolicy::NotRequired,
+            material: MaterialExecutionPolicy::NotRequired {
+                item_group_ids: Vec::new(),
+            },
             tooling: if spec.tooling_required {
                 ToolingExecutionPolicy::QolipScanRequired {
                     tooling_class_id: "tooling-class:qolip".to_string(),

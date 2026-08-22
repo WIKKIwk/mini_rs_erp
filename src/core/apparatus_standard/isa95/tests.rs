@@ -164,3 +164,17 @@ fn required_fields_have_no_deserialization_defaults() {
     value.as_object_mut().unwrap().remove("capacity");
     assert!(serde_json::from_value::<CanonicalApparatusRevision>(value).is_err());
 }
+
+#[test]
+fn empty_optional_material_policy_keeps_the_existing_canonical_json_shape() {
+    let legacy_shape = serde_json::json!({"mode": "not_required"});
+    let policy: MaterialExecutionPolicy = serde_json::from_value(legacy_shape.clone()).unwrap();
+
+    assert_eq!(
+        policy,
+        MaterialExecutionPolicy::NotRequired {
+            item_group_ids: Vec::new(),
+        }
+    );
+    assert_eq!(serde_json::to_value(policy).unwrap(), legacy_shape);
+}

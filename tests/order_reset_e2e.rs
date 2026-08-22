@@ -229,7 +229,9 @@ async fn seed_canonical_apparatus(
                 },
                 policies: ApparatusOperationalPolicies {
                     queue: QueueDiscipline::StrictSequence,
-                    material: MaterialExecutionPolicy::NotRequired,
+                    material: MaterialExecutionPolicy::NotRequired {
+                        item_group_ids: Vec::new(),
+                    },
                     tooling: ToolingExecutionPolicy::NotRequired,
                 },
                 capacity: ApparatusCapacity {
