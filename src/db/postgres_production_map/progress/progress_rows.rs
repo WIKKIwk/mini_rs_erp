@@ -154,9 +154,6 @@ pub(super) fn progress_batch_from_row(
     row: ProgressBatchRow,
 ) -> Result<OrderProgressBatch, ProductionMapError> {
     require_live_apparatus_id(&row.apparatus)?;
-    if !row.current_apparatus_key.trim().is_empty() {
-        require_live_apparatus_id(&row.current_apparatus_key)?;
-    }
     for apparatus in [
         row.current_apparatus.as_str(),
         row.next_apparatus.as_str(),
@@ -167,10 +164,15 @@ pub(super) fn progress_batch_from_row(
             require_live_apparatus_id(apparatus)?;
         }
     }
-    let current_apparatus_key = if row.current_apparatus_key.trim().is_empty() {
-        crate::core::production_map::canonical_apparatus_key(&row.current_apparatus)
+    // `current_apparatus_key` is a legacy display snapshot in older rows.
+    // The canonical projection is authoritative whenever it is present.
+    let current_apparatus_key = if !row.current_apparatus.trim().is_empty() {
+        row.current_apparatus.trim().to_string()
+    } else if row.current_apparatus_key.trim().is_empty() {
+        String::new()
     } else {
-        crate::core::production_map::canonical_apparatus_key(&row.current_apparatus_key)
+        require_live_apparatus_id(&row.current_apparatus_key)?;
+        row.current_apparatus_key.trim().to_string()
     };
     let mut batch = OrderProgressBatch {
         batch_id: row.batch_id,
@@ -220,4 +222,62 @@ pub(super) fn progress_batch_from_row(
     };
     batch.refresh_status_detail();
     Ok(batch)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{ProgressBatchRow, progress_batch_from_row};
+
+    #[test]
+    fn legacy_display_current_key_uses_canonical_current_apparatus() {
+        let batch = progress_batch_from_row(ProgressBatchRow {
+            batch_id: "legacy-batch".to_string(),
+            revision: 1,
+            session_id: "legacy-session".to_string(),
+            started_at_unix: 1,
+            completed_at_unix: 2,
+            apparatus: "apparatus:default:bosma_7".to_string(),
+            order_id: "legacy-order".to_string(),
+            action: "pause".to_string(),
+            status: "paused".to_string(),
+            produced_qty: 1.0,
+            uom: "kg".to_string(),
+            qr_payload: "legacy-qr".to_string(),
+            label_item_code: "ITEM-1".to_string(),
+            label_item_name: "Item".to_string(),
+            executor_name: "Operator".to_string(),
+            worker_role: "aparatchi".to_string(),
+            worker_ref: "worker-1".to_string(),
+            worker_display_name: "Operator".to_string(),
+            wip_status: "waiting".to_string(),
+            current_apparatus: "apparatus:default:bosma_7".to_string(),
+            current_apparatus_key: "7 ta rangli pechat".to_string(),
+            current_location: String::new(),
+            next_apparatus: "apparatus:default:asset-007".to_string(),
+            parent_batch_id: String::new(),
+            used_by_session_id: String::new(),
+            used_by_apparatus: String::new(),
+            processed_by_session_id: String::new(),
+            processed_by_apparatus: String::new(),
+            return_ink_kg: None,
+            lamination_print_leftover_rolls: None,
+            lamination_film_leftover_rolls: None,
+            rezka_bosma_waste: None,
+            rezka_lamination_waste: None,
+            rezka_edge_waste: None,
+            total_waste: None,
+            finished_goods_kg: None,
+            bobina_kg: None,
+            finished_goods_meter: None,
+            diameter: None,
+            description: String::new(),
+            payload_json: serde_json::json!({}),
+        })
+        .expect("legacy display key should not invalidate canonical progress");
+
+        assert_eq!(
+            batch.current_apparatus_key,
+            "apparatus:default:bosma_7"
+        );
+    }
 }
