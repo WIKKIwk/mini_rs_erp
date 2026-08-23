@@ -81,6 +81,10 @@ pub(super) fn is_rezka_apparatus(apparatus: &RuntimeApparatusConfiguration) -> b
         && apparatus.supports(EquipmentCapabilityCode::Cut)
 }
 
+pub(super) fn requires_previous_stage(apparatus: &RuntimeApparatusConfiguration) -> bool {
+    is_laminatsiya_apparatus(apparatus) || is_rezka_apparatus(apparatus)
+}
+
 pub(super) fn requires_qolip_scan(apparatus: &RuntimeApparatusConfiguration) -> bool {
     crate::core::production_map::pechat::requires_qolip_scan(apparatus)
 }

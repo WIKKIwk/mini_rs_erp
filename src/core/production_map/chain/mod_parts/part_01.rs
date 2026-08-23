@@ -76,6 +76,41 @@ pub fn previous_work_stage_stations(
     found
 }
 
+/// Returns true when the requested downstream station cannot be resolved
+/// against the physical stages present in the order map.
+///
+/// A standalone first-stage apparatus remains valid for legacy/direct flows;
+/// an unresolvable station in a map that has physical stages is not treated as
+/// proof that no predecessor exists.
+pub fn previous_stage_resolution_is_unavailable(
+    map: &ProductionMapDefinition,
+    station_id: &str,
+) -> bool {
+    let physical_stages = linear_work_stages(map)
+        .into_iter()
+        .filter(|stage| stage.apparatus_id.is_some())
+        .collect::<Vec<_>>();
+    let physical_stage_node_ids = physical_stages
+        .iter()
+        .map(|stage| stage.node_id.as_str())
+        .collect::<BTreeSet<_>>();
+    if map.nodes.iter().any(|node| {
+        node.kind == ProductionMapNodeKind::Apparatus
+            && node.alternative_group_id.trim().is_empty()
+            && canonical_apparatus_identity(node).is_some()
+            && !physical_stage_node_ids.contains(node.id.as_str())
+    }) {
+        return true;
+    }
+    let Some(index) = physical_stages
+        .iter()
+        .position(|stage| stage.identity() == station_id.trim())
+    else {
+        return !physical_stages.is_empty();
+    };
+    index > 0 && previous_work_stage_station(map, station_id).is_none()
+}
+
 /// Returns the next physical stage identity for the supplied canonical
 /// apparatus ID (or virtual task ID). Virtual task nodes are traversed but do
 /// not become canonical production apparatus stages. Display titles are not

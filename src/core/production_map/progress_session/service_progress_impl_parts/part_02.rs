@@ -13,6 +13,12 @@ impl ProductionMapService {
             canonical,
             now,
         } = context;
+        if action != queue_state::ApparatusQueueAction::Freeze
+            && apparatus::requires_previous_stage(canonical)
+            && chain::previous_stage_resolution_is_unavailable(order_map, apparatus)
+        {
+            return Err(ProductionMapError::ProgressQrRequired);
+        }
         if action == queue_state::ApparatusQueueAction::RollComplete
             && !apparatus::is_rezka_apparatus(canonical)
         {

@@ -87,6 +87,12 @@ impl ProductionMapService {
                     .map(|control| control.state)
                     .unwrap_or(OrderControlState::Active);
                 let previous_stage = chain::previous_work_stage_station(order_map, &apparatus);
+                let previous_stage_not_configured =
+                    apparatus::requires_previous_stage(&canonical)
+                        && chain::previous_stage_resolution_is_unavailable(
+                            order_map,
+                            &apparatus,
+                        );
                 let previous_stage_ready = chain::order_ready_for_station(
                     order_map,
                     order_id.trim(),
@@ -126,6 +132,7 @@ impl ProductionMapService {
                     || actionable_order_id.as_deref() == Some(order_id.trim())
                     || (state == queue_state::ApparatusQueueOrderState::Pending
                         && previous_stage.is_some()
+                        && !previous_stage_not_configured
                         && (previous_stage_ready
                             || (apparatus::is_laminatsiya_apparatus(&canonical)
                                 && previous_wip_mode
@@ -156,7 +163,12 @@ impl ProductionMapService {
                         }
                     }
                     queue_state::ApparatusQueueOrderState::Pending => {
-                        let assignments = material_assignments
+                        if previous_stage_not_configured {
+                            interaction.mode = ApparatusQueueInteractionMode::FreshStartBlocked;
+                            interaction.blocking_reason_code =
+                                "previous_stage_not_configured".to_string();
+                        } else {
+                            let assignments = material_assignments
                             .iter()
                             .filter(|assignment| {
                                 assignment.order_id.trim() == order_id.trim()
@@ -164,51 +176,57 @@ impl ProductionMapService {
                             })
                             .cloned()
                             .collect::<Vec<_>>();
-                        let rule = live_material_rule(canonical.as_ref());
-                        let material_requirements = build_raw_material_start_requirements(
-                            rule.as_ref(),
-                            &assignments,
-                            &[],
-                            "",
-                        );
-                        let material_scan_required = material_requirements.requires_material
-                            || !material_requirements.assigned_barcodes.is_empty();
-                        let start_materials_mode =
-                            if apparatus::is_laminatsiya_apparatus(&canonical)
-                                && previous_wip_mode == ApparatusQueuePreviousWipMode::ScanRequired
-                            {
-                                ApparatusQueueStartMaterialsMode::Hidden
-                            } else if material_scan_required {
-                                ApparatusQueueStartMaterialsMode::ScanRequired
-                            } else {
-                                ApparatusQueueStartMaterialsMode::Hidden
-                            };
+                            let rule = live_material_rule(canonical.as_ref());
+                            let material_requirements = build_raw_material_start_requirements(
+                                rule.as_ref(),
+                                &assignments,
+                                &[],
+                                "",
+                            );
+                            let material_scan_required = material_requirements.requires_material
+                                || !material_requirements.assigned_barcodes.is_empty();
+                            let start_materials_mode =
+                                if apparatus::is_laminatsiya_apparatus(&canonical)
+                                    && previous_wip_mode
+                                        == ApparatusQueuePreviousWipMode::ScanRequired
+                                {
+                                    ApparatusQueueStartMaterialsMode::Hidden
+                                } else if material_scan_required {
+                                    ApparatusQueueStartMaterialsMode::ScanRequired
+                                } else {
+                                    ApparatusQueueStartMaterialsMode::Hidden
+                                };
 
-                        if previous_wip_mode == ApparatusQueuePreviousWipMode::Waiting {
-                            interaction.mode = ApparatusQueueInteractionMode::WaitingPreviousStage;
-                            interaction.previous_wip_mode = previous_wip_mode;
-                            interaction.blocking_reason_code = "waiting_previous_stage".to_string();
-                        } else if !pending_actionable {
-                            interaction.mode = ApparatusQueueInteractionMode::FreshStartBlocked;
-                            interaction.blocking_reason_code = "waiting_sequence".to_string();
-                        } else {
-                            interaction.start_materials_mode = start_materials_mode;
-                            interaction.material_scan_required = start_materials_mode
-                                == ApparatusQueueStartMaterialsMode::ScanRequired;
-                            interaction.assigned_materials_display_only = false;
-                            interaction.previous_wip_mode = previous_wip_mode;
-                            interaction.qolip_mode = if apparatus::requires_qolip_scan(&canonical) {
-                                ApparatusQueueQolipMode::ScanRequired
-                            } else {
-                                ApparatusQueueQolipMode::NotRequired
-                            };
-                            if material_requirements.assignments_satisfied {
-                                interaction.mode = ApparatusQueueInteractionMode::FreshStart;
-                                allowed_actions.push(queue_state::ApparatusQueueAction::Start);
-                            } else {
-                                interaction.mode = ApparatusQueueInteractionMode::FreshStartBlocked;
+                            if previous_wip_mode == ApparatusQueuePreviousWipMode::Waiting {
+                                interaction.mode =
+                                    ApparatusQueueInteractionMode::WaitingPreviousStage;
+                                interaction.previous_wip_mode = previous_wip_mode;
                                 interaction.blocking_reason_code =
-                                    "raw_material_assignment_required".to_string();
+                                    "waiting_previous_stage".to_string();
+                            } else if !pending_actionable {
+                                interaction.mode = ApparatusQueueInteractionMode::FreshStartBlocked;
+                                interaction.blocking_reason_code = "waiting_sequence".to_string();
+                            } else {
+                                interaction.start_materials_mode = start_materials_mode;
+                                interaction.material_scan_required = start_materials_mode
+                                    == ApparatusQueueStartMaterialsMode::ScanRequired;
+                                interaction.assigned_materials_display_only = false;
+                                interaction.previous_wip_mode = previous_wip_mode;
+                                interaction.qolip_mode =
+                                    if apparatus::requires_qolip_scan(&canonical) {
+                                        ApparatusQueueQolipMode::ScanRequired
+                                    } else {
+                                        ApparatusQueueQolipMode::NotRequired
+                                    };
+                                if material_requirements.assignments_satisfied {
+                                    interaction.mode = ApparatusQueueInteractionMode::FreshStart;
+                                    allowed_actions.push(queue_state::ApparatusQueueAction::Start);
+                                } else {
+                                    interaction.mode =
+                                        ApparatusQueueInteractionMode::FreshStartBlocked;
+                                    interaction.blocking_reason_code =
+                                        "raw_material_assignment_required".to_string();
+                                }
                             }
                         }
                     }

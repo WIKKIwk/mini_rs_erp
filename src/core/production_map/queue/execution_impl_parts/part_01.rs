@@ -126,6 +126,7 @@ impl ProductionMapService {
             None
         };
         let order_map = &effective_order_map;
+        ensure_previous_stage_is_configured(action, order_map, apparatus, canonical.as_ref())?;
         let previous_progress_ready = self
             .previous_progress_ready_for_action(action, order_id, order_map, apparatus, &progress)
             .await?;
@@ -391,4 +392,19 @@ impl ProductionMapService {
             .await?
             .is_some())
     }
+}
+
+fn ensure_previous_stage_is_configured(
+    action: queue_state::ApparatusQueueAction,
+    order_map: &ProductionMapDefinition,
+    apparatus: &str,
+    canonical: &crate::core::apparatus_standard::RuntimeApparatusConfiguration,
+) -> Result<(), ProductionMapError> {
+    if action != queue_state::ApparatusQueueAction::Freeze
+        && apparatus::requires_previous_stage(canonical)
+        && chain::previous_stage_resolution_is_unavailable(order_map, apparatus)
+    {
+        return Err(ProductionMapError::ProgressQrRequired);
+    }
+    Ok(())
 }

@@ -2511,6 +2511,60 @@ async fn downstream_start_requires_previous_stage_progress_qr() {
 }
 
 #[tokio::test]
+async fn laminatsiya_with_unresolvable_previous_stage_cannot_start() {
+    let store = Arc::new(MemoryProductionMapStore::new());
+    let service = default_service_with_store(store.clone()).await;
+    let actor = QueueActionActor {
+        role: "laminatsiyachi".to_string(),
+        ref_: "worker-laminatsiya-missing-previous".to_string(),
+        display_name: "Laminatsiya Missing Previous".to_string(),
+    };
+    let order_id = "zakaz-laminatsiya-missing-previous";
+
+    let mut map = canonical_apparatus_stage_map(order_id, LAMINATION_1_ID, "Laminatsiya 1");
+    let mut orphan_previous = map
+        .nodes
+        .iter()
+        .find(|node| node.kind == ProductionMapNodeKind::Apparatus)
+        .cloned()
+        .expect("laminatsiya stage");
+    orphan_previous.id = "orphan-bosma".to_string();
+    orphan_previous.title = "7 ta rangli bosma aparat".to_string();
+    orphan_previous.apparatus_id = FLOW_PECHAT_ID.to_string();
+    map.nodes.push(orphan_previous);
+
+    service.upsert_map(map).await.expect("map");
+    store
+        .put_apparatus_sequence(LAMINATION_1_ID, vec![order_id.to_string()])
+        .await
+        .expect("stale sequence");
+
+    let controls = service.queue_action_controls().await.expect("controls");
+    let control = controls
+        .get(LAMINATION_1_ID)
+        .and_then(|orders| orders.get(order_id))
+        .expect("laminatsiya control");
+    assert!(control.allowed_actions.is_empty());
+    assert_eq!(
+        control.interaction.blocking_reason_code,
+        "previous_stage_not_configured"
+    );
+
+    let result = service
+        .apply_apparatus_queue_action_with_progress(
+            LAMINATION_1_ID,
+            order_id,
+            queue_state::ApparatusQueueAction::Start,
+            &[LAMINATION_1_ID.to_string()],
+            actor,
+            QueueProgressInput::default(),
+        )
+        .await;
+
+    assert_eq!(result, Err(ProductionMapError::ProgressQrRequired));
+}
+
+#[tokio::test]
 async fn laminatsiya_complete_requires_previous_stage_qr() {
     let store = std::sync::Arc::new(MemoryProductionMapStore::new());
     let service = default_service_with_store(store.clone()).await;
