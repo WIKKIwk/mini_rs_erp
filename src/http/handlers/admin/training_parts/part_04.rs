@@ -345,7 +345,13 @@ pub(super) async fn training_queue_action(
     let order_status = training_order_status(persisted_state);
     let print_requests = progress_batches
         .iter()
-        .map(|batch| training_progress_print_request(batch, &print_input))
+        .map(|batch| {
+            training_progress_print_request(
+                batch,
+                &print_input,
+                &canonical.runtime.display.display_name,
+            )
+        })
         .collect::<Vec<_>>();
     let prints = training_progress_prints(
         state,

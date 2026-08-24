@@ -297,6 +297,8 @@ fn progress_label_can_be_prepared_without_calling_a_driver() {
             qr_payload: "GSP:PROGRESS-2".to_string(),
             item_code: "ORDER-2".to_string(),
             item_name: "Progress label".to_string(),
+            apparatus: "apparatus:default:bosma_7".to_string(),
+            apparatus_display_name: "7 ta rangli bosma".to_string(),
             customer_name: "Customer One".to_string(),
             executor_name: "Ali".to_string(),
             gross_qty: 10.0,
@@ -316,6 +318,8 @@ fn progress_label_can_be_prepared_without_calling_a_driver() {
     assert_eq!(response.label_kind, "progress");
     assert_eq!(response.qty, 125.0);
     assert_eq!(response.customer_name, "Customer One");
+    assert_eq!(response.apparatus, "apparatus:default:bosma_7");
+    assert_eq!(response.apparatus_display_name, "7 ta rangli bosma");
     assert!(response.tare_enabled);
     assert_eq!(response.tare_kg, 1.0);
     assert_eq!(response.print_count, 2);

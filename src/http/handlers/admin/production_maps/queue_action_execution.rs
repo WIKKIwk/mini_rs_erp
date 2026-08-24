@@ -117,6 +117,7 @@ async fn execute_queue_action(
                 item_code: batch.label_item_code.clone(),
                 item_name: batch.label_item_name.clone(),
                 apparatus: batch.apparatus.clone(),
+                apparatus_display_name: apparatus.display_name.clone(),
                 customer_name: input.customer_name.trim().to_string(),
                 executor_name: batch.executor_name.clone(),
                 printer: input.printer.clone(),

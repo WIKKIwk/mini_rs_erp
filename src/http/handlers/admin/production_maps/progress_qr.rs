@@ -292,6 +292,15 @@ pub async fn production_map_progress_qr_reprint(
     if !principal_can_reprint_progress_batch(&principal, &batch) {
         return Err(forbidden());
     }
+    let apparatus_display_name = state
+        .production_maps
+        .resolve_canonical_apparatus_text(&batch.apparatus)
+        .await
+        .map_err(production_map_error)?
+        .runtime
+        .display
+        .display_name
+        .clone();
     let item_name = match state.production_maps.raw_map(&batch.order_id).await {
         Ok(Some(order_map)) => crate::core::production_map::progress_label_item_name(
             &order_map,
@@ -301,7 +310,12 @@ pub async fn production_map_progress_qr_reprint(
         Ok(None) => batch.label_item_name.clone(),
         Err(error) => return Err(production_map_error(error)),
     };
-    let request = progress_reprint_request(&input, &batch, &item_name);
+    let request = progress_reprint_request(
+        &input,
+        &batch,
+        &item_name,
+        &apparatus_display_name,
+    );
     let print_result = if input.print_transport.trim().eq_ignore_ascii_case("offline") {
         state.gscale.prepare_progress_label(request)
     } else {
@@ -373,6 +387,7 @@ fn progress_reprint_request(
     input: &ProgressQrReprintRequest,
     batch: &crate::core::production_map::OrderProgressBatch,
     item_name: &str,
+    apparatus_display_name: &str,
 ) -> ProgressLabelPrintRequest {
     ProgressLabelPrintRequest {
         driver_url: input.driver_url.clone(),
@@ -380,6 +395,7 @@ fn progress_reprint_request(
         item_code: batch.label_item_code.clone(),
         item_name: item_name.to_string(),
         apparatus: batch.apparatus.clone(),
+        apparatus_display_name: apparatus_display_name.trim().to_string(),
         customer_name: batch
             .payload_json
             .get("customer_name")

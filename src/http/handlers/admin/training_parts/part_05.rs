@@ -216,6 +216,7 @@ fn training_progress_batches(
 fn training_progress_print_request(
     batch: &OrderProgressBatch,
     input: &TrainingQueuePrintInput,
+    apparatus_display_name: &str,
 ) -> crate::core::gscale::models::ProgressLabelPrintRequest {
     crate::core::gscale::models::ProgressLabelPrintRequest {
         driver_url: input.driver_url.clone(),
@@ -223,6 +224,7 @@ fn training_progress_print_request(
         item_code: batch.label_item_code.clone(),
         item_name: batch.label_item_name.clone(),
         apparatus: batch.apparatus.clone(),
+        apparatus_display_name: apparatus_display_name.trim().to_string(),
         customer_name: input.customer_name.trim().to_string(),
         executor_name: batch.executor_name.clone(),
         printer: input.printer.clone(),

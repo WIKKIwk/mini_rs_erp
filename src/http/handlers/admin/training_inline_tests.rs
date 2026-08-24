@@ -437,7 +437,7 @@ mod tests {
         let batch = batches.first().expect("training output batch");
         assert_eq!(batch.produced_qty, 6.0);
         assert_eq!(batch.finished_goods_kg, Some(250.0));
-        let print_request = training_progress_print_request(batch, &input);
+        let print_request = training_progress_print_request(batch, &input, "Training apparat");
         assert_eq!(print_request.progress_qty, 6.0);
         assert_eq!(print_request.gross_qty, 250.0);
     }
@@ -499,7 +499,8 @@ mod tests {
                 batch.payload_json["rezka_metrics_owner"],
                 serde_json::json!(index == 0),
             );
-            let print_request = training_progress_print_request(batch, &input);
+            let print_request =
+                training_progress_print_request(batch, &input, "Training apparat");
             assert_eq!(print_request.qr_payload, batch.qr_payload);
             assert_eq!(print_request.progress_qty, batch.produced_qty);
         }
@@ -533,7 +534,8 @@ mod tests {
             assert_eq!(action_batches.len(), 4);
             assert!(action_batches.iter().all(|batch| batch.action == action));
             assert!(action_batches.iter().all(|batch| {
-                training_progress_print_request(batch, &input).qr_payload == batch.qr_payload
+                training_progress_print_request(batch, &input, "Training apparat").qr_payload
+                    == batch.qr_payload
             }));
         }
     }

@@ -11,6 +11,7 @@ include!("queue_action_request.rs");
 #[derive(Debug, Clone)]
 pub(super) struct QueueApparatusMetadata {
     pub(super) id: ApparatusId,
+    pub(super) display_name: String,
     operation: ExecutionOperation,
     qolip_scan_required: bool,
 }
@@ -41,6 +42,7 @@ pub(super) async fn resolve_queue_apparatus(
         .map_err(production_map_error)?;
     Ok(QueueApparatusMetadata {
         id: canonical.runtime.apparatus_id.clone(),
+        display_name: canonical.runtime.display.display_name.clone(),
         operation: canonical.runtime.execution_profile.operation,
         qolip_scan_required: pechat::requires_qolip_scan(canonical.as_ref()),
     })

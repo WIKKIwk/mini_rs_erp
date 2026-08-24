@@ -65,26 +65,31 @@ mod tests {
     fn qolip_scan_uses_canonical_tooling_policy_not_pechat_classification() {
         let pechat = QueueApparatusMetadata {
             id: ApparatusId::new("apparatus:catalog:pechat-001").unwrap(),
+            display_name: "Pechat".to_string(),
             operation: ExecutionOperation::Print,
             qolip_scan_required: false,
         };
         let scan_required_pechat = QueueApparatusMetadata {
             id: ApparatusId::new("apparatus:catalog:pechat-002").unwrap(),
+            display_name: "Pechat 2".to_string(),
             operation: ExecutionOperation::Print,
             qolip_scan_required: true,
         };
         let flexo = QueueApparatusMetadata {
             id: ApparatusId::new("apparatus:catalog:flexo-001").unwrap(),
+            display_name: "Flexo".to_string(),
             operation: ExecutionOperation::Print,
             qolip_scan_required: false,
         };
         let laminatsiya = QueueApparatusMetadata {
             id: ApparatusId::new("apparatus:catalog:laminatsiya-001").unwrap(),
+            display_name: "Laminatsiya".to_string(),
             operation: ExecutionOperation::Laminate,
             qolip_scan_required: false,
         };
         let rezka = QueueApparatusMetadata {
             id: ApparatusId::new("apparatus:catalog:rezka-001").unwrap(),
+            display_name: "Rezka".to_string(),
             operation: ExecutionOperation::Cut,
             qolip_scan_required: false,
         };
