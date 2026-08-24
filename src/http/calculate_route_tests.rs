@@ -6,8 +6,10 @@ use tower::ServiceExt;
 use super::router::build_router;
 use crate::app::AppState;
 use crate::config::AppConfig;
+use crate::core::admin::service::AdminService;
 use crate::core::auth::models::{Principal, PrincipalRole};
 use crate::core::session::manager::SessionManager;
+use crate::store::admin_store::JsonAdminStore;
 use crate::store::calculate_order_store::CalculateOrderStore;
 
 #[tokio::test]
@@ -109,7 +111,14 @@ async fn calculate_endpoint_accepts_arbitrary_layer_count() {
 
 #[tokio::test]
 async fn calculate_material_catalog_drives_selected_layer_gsm() {
-    let state = test_state();
+    let mut state = test_state();
+    let directory = tempfile::tempdir().expect("tempdir");
+    let catalog = Arc::new(JsonAdminStore::new(
+        directory.path().join("admin-catalog.json"),
+    ));
+    state.admin = AdminService::new(&state.config)
+        .with_read_port(catalog.clone())
+        .with_write_port(catalog);
     let token = session(&state, PrincipalRole::Admin).await;
     let saved = build_router(state.clone())
         .oneshot(request(
@@ -152,6 +161,118 @@ async fn calculate_material_catalog_drives_selected_layer_gsm() {
     assert_eq!(body["ok"], true);
     assert!((body["results"][0]["film_gsm"].as_f64().expect("film GSM") - 14.4).abs() < 0.001);
     assert_eq!(body["results"][0]["adhesive_gsm"], 0.0);
+}
+
+#[tokio::test]
+async fn calculate_material_upsert_creates_catalog_item_in_rulon_group() {
+    let mut state = test_state();
+    let directory = tempfile::tempdir().expect("tempdir");
+    let catalog = Arc::new(JsonAdminStore::new(
+        directory.path().join("admin-catalog.json"),
+    ));
+    state.admin = AdminService::new(&state.config)
+        .with_read_port(catalog.clone())
+        .with_write_port(catalog);
+    let token = session(&state, PrincipalRole::Admin).await;
+
+    let response = build_router(state.clone())
+        .oneshot(request(
+            "PUT",
+            "/v1/mobile/admin/calculate-materials",
+            &token,
+            r#"{
+                "name":"TEST RULON FILM",
+                "active":true,
+                "density_g_cm3":0.91,
+                "variants":[{"micron":20}]
+            }"#,
+        ))
+        .await
+        .expect("save material");
+    let status = response.status();
+    let body = json_body(response).await;
+
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let groups = state.admin.item_group_tree().await.expect("item groups");
+    let homashyo = groups
+        .iter()
+        .find(|group| {
+            group.item_group_name.eq_ignore_ascii_case("homashyo")
+                || group.item_group_name.eq_ignore_ascii_case("xomashyo")
+        })
+        .expect("homashyo group");
+    let rulon = groups
+        .iter()
+        .find(|group| group.item_group_name.eq_ignore_ascii_case("rulon"))
+        .expect("rulon group");
+    assert!(
+        rulon
+            .parent_item_group
+            .eq_ignore_ascii_case(&homashyo.item_group_name)
+    );
+
+    let items = state
+        .admin
+        .items_by_codes(&["TEST RULON FILM".to_string()])
+        .await
+        .expect("catalog items");
+    assert_eq!(items.len(), 1);
+    assert_eq!(items[0].name, "TEST RULON FILM");
+    assert!(
+        items[0]
+            .item_group
+            .eq_ignore_ascii_case(&rulon.item_group_name)
+    );
+}
+
+#[tokio::test]
+async fn calculate_material_upsert_reuses_catalog_item_with_matching_name() {
+    let mut state = test_state();
+    let directory = tempfile::tempdir().expect("tempdir");
+    let catalog = Arc::new(JsonAdminStore::new(
+        directory.path().join("admin-catalog.json"),
+    ));
+    state.admin = AdminService::new(&state.config)
+        .with_read_port(catalog.clone())
+        .with_write_port(catalog);
+    state
+        .admin
+        .create_item_group("Homashyo", "All Item Groups", true)
+        .await
+        .expect("homashyo group");
+    state
+        .admin
+        .create_item("LEGACY-ROLL", "LEGACY FILM", "Kg", "Homashyo", "")
+        .await
+        .expect("legacy item");
+    let token = session(&state, PrincipalRole::Admin).await;
+
+    let response = build_router(state.clone())
+        .oneshot(request(
+            "PUT",
+            "/v1/mobile/admin/calculate-materials",
+            &token,
+            r#"{
+                "name":"LEGACY FILM",
+                "active":true,
+                "density_g_cm3":0.91,
+                "variants":[{"micron":20}]
+            }"#,
+        ))
+        .await
+        .expect("save material");
+    let status = response.status();
+    let body = json_body(response).await;
+
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let items = state
+        .admin
+        .items_page_by_group("", "LEGACY FILM", 20, 0)
+        .await
+        .expect("catalog items");
+    assert_eq!(items.len(), 1);
+    assert_eq!(items[0].code, "LEGACY-ROLL");
+    assert!(items[0].item_group.eq_ignore_ascii_case("rulon"));
 }
 
 #[tokio::test]

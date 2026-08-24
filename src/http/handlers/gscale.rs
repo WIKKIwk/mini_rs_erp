@@ -11,6 +11,10 @@ use crate::core::authz::Capability;
 use crate::core::gscale::{GscaleServiceError, MaterialReceiptPrintRequest};
 use crate::core::werka::models::SupplierItem;
 use crate::http::handlers::auth::{ErrorResponse, bearer_token};
+use crate::http::handlers::material_catalog::{
+    MaterialCatalogError, normalize_material_receipt_item, requires_material_dimensions,
+    roll_material_item_group_roots,
+};
 
 pub async fn items(
     State(state): State<AppState>,
@@ -36,9 +40,28 @@ pub async fn items(
     let items = gscale_items_for_principal(&state, &principal, &query)
         .await
         .map_err(admin_read_error)?;
+    let dimension_groups = state
+        .admin
+        .item_group_scope(roll_material_item_group_roots())
+        .await
+        .map_err(admin_read_error)?;
+    let items = items
+        .into_iter()
+        .map(|item| GscaleCatalogItem {
+            requires_dimensions: requires_material_dimensions(&item, &dimension_groups),
+            item,
+        })
+        .collect::<Vec<_>>();
     Ok(Json(
         serde_json::to_value(items).unwrap_or_else(|_| serde_json::json!([])),
     ))
+}
+
+#[derive(Serialize)]
+struct GscaleCatalogItem {
+    #[serde(flatten)]
+    item: SupplierItem,
+    requires_dimensions: bool,
 }
 
 async fn gscale_items_for_principal(
@@ -110,6 +133,9 @@ pub async fn material_receipt_print(
     let mut request: MaterialReceiptPrintRequest =
         serde_json::from_slice(&body).map_err(|_| bad_request("invalid_json", "invalid json"))?;
     require_material_warehouse_access(&state, &principal, &request.warehouse).await?;
+    normalize_material_receipt_item(&state, &principal, &mut request)
+        .await
+        .map_err(material_catalog_error)?;
     request.actor_role = principal_role_code(&principal.role).to_string();
     request.actor_ref = principal.ref_.trim().to_string();
     request.actor_display_name = principal.display_name.trim().to_string();
@@ -184,6 +210,26 @@ fn gscale_error(error: GscaleServiceError) -> (StatusCode, Json<GscaleErrorRespo
             detail: error.to_string(),
         }),
     )
+}
+
+fn material_catalog_error(error: MaterialCatalogError) -> (StatusCode, Json<GscaleErrorResponse>) {
+    match error {
+        MaterialCatalogError::ReadFailed => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(GscaleErrorResponse::new(
+                "catalog_read_failed",
+                "catalog read failed",
+            )),
+        ),
+        MaterialCatalogError::ItemNotFound => {
+            bad_request("catalog_item_not_found", "catalog item not found")
+        }
+        MaterialCatalogError::Forbidden => forbidden(),
+        MaterialCatalogError::DimensionsRequired => bad_request(
+            "material_dimensions_required",
+            "positive width_mm and micron are required",
+        ),
+    }
 }
 
 fn unauthorized() -> (StatusCode, Json<GscaleErrorResponse>) {

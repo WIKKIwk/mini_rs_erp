@@ -103,6 +103,8 @@ impl From<RpsBatchSessionV3> for RpsBatchSession {
             manual_qty_kg: batch.manual_qty_kg,
             tare_enabled: batch.tare_enabled,
             tare_kg: batch.tare_kg,
+            width_mm: None,
+            micron: None,
             last_error: batch.last_error,
             last_error_at: batch.last_error_at,
             prints: batch.prints,

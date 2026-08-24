@@ -311,6 +311,12 @@ pub(super) fn assigned_apparatus_contains(candidate: &str, assigned: &[String]) 
 }
 
 fn roll_width_mm(stock: &RawMaterialStockEntry, item: &SupplierItem) -> Option<f64> {
+    if let Some(width_mm) = stock
+        .width_mm
+        .filter(|value| value.is_finite() && *value > 0.0)
+    {
+        return Some(width_mm);
+    }
     [
         stock.item_code.as_str(),
         stock.item_name.as_str(),
@@ -343,6 +349,39 @@ fn roll_width_from_text(value: &str) -> Option<f64> {
         }
     }
     None
+}
+
+#[cfg(test)]
+mod dimension_tests {
+    use super::*;
+
+    #[test]
+    fn structured_stock_width_wins_over_legacy_item_text() {
+        let stock = RawMaterialStockEntry {
+            item_code: "pet".to_string(),
+            item_name: "PET 615/13".to_string(),
+            width_mm: Some(620.0),
+            micron: Some(13.0),
+            ..RawMaterialStockEntry::default()
+        };
+        let item = SupplierItem {
+            code: "PET 615/12".to_string(),
+            name: "PET 615/12".to_string(),
+            ..SupplierItem::default()
+        };
+
+        assert_eq!(roll_width_mm(&stock, &item), Some(620.0));
+    }
+
+    #[test]
+    fn legacy_stock_still_reads_width_from_text() {
+        let stock = RawMaterialStockEntry {
+            item_name: "PET 615/13".to_string(),
+            ..RawMaterialStockEntry::default()
+        };
+
+        assert_eq!(roll_width_mm(&stock, &SupplierItem::default()), Some(615.0));
+    }
 }
 
 pub(super) async fn lookup_raw_material_detail(

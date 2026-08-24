@@ -96,6 +96,19 @@ async fn material_receipt_print_uses_parallel_driver_first_flow() {
 async fn material_taminotchi_can_print_material_receipt() {
     let events = Arc::new(Mutex::new(Vec::new()));
     let mut state = test_state();
+    state.admin =
+        AdminService::new(&state.config).with_read_port(Arc::new(FakeAdminCatalogReadPort));
+    state
+        .admin
+        .upsert_role_assignment(RoleAssignmentUpsert {
+            principal_role: PrincipalRole::MaterialTaminotchi,
+            principal_ref: "admin".to_string(),
+            role_id: "material_taminotchi".to_string(),
+            assigned_apparatus: Vec::new(),
+            assigned_item_groups: vec!["Products".to_string()],
+        })
+        .await
+        .expect("material item scope");
     state.gscale = GscaleService::new()
         .with_receipt_store(Arc::new(FakeReceiptStore {
             events: events.clone(),
@@ -120,8 +133,8 @@ async fn material_taminotchi_can_print_material_receipt() {
             &token,
             r#"{
                 "driver_url":"http://127.0.0.1:39117",
-                "item_code":"ITEM-1",
-                "item_name":"Green Tea",
+                "item_code":"GSCALE-ITEM-001",
+                "item_name":"GScale Film",
                 "warehouse":"Stores - A",
                 "printer":"zebra",
                 "print_mode":"rfid",
@@ -281,6 +294,7 @@ async fn material_taminotchi_gscale_items_are_limited_to_assigned_item_groups() 
     assert_eq!(items.len(), 1, "{body}");
     assert_eq!(items[0]["code"], "INK-BLACK");
     assert_eq!(items[0]["item_group"], "Kraska");
+    assert_eq!(items[0]["requires_dimensions"], false);
 }
 
 #[tokio::test]
@@ -330,6 +344,65 @@ async fn material_taminotchi_gscale_items_include_child_groups_from_assigned_par
     assert_eq!(items.len(), 1, "{body}");
     assert_eq!(items[0]["code"], "ROLL-1000");
     assert_eq!(items[0]["item_group"], "Rulon eni");
+    assert_eq!(items[0]["requires_dimensions"], true);
+}
+
+#[tokio::test]
+async fn material_taminotchi_direct_receipt_requires_catalog_dimensions() {
+    let mut state = test_state();
+    state.admin =
+        AdminService::new(&state.config).with_read_port(Arc::new(FakeAdminCatalogReadPort));
+    state
+        .admin
+        .upsert_role_assignment(RoleAssignmentUpsert {
+            principal_role: PrincipalRole::MaterialTaminotchi,
+            principal_ref: "material-direct-receipt".to_string(),
+            role_id: "material_taminotchi".to_string(),
+            assigned_apparatus: Vec::new(),
+            assigned_item_groups: vec!["Rulon".to_string()],
+        })
+        .await
+        .expect("material scope");
+    assign_warehouse_to_principal(
+        &state,
+        PrincipalRole::MaterialTaminotchi,
+        "material-direct-receipt",
+        "Stores - A",
+    )
+    .await;
+    let token = state
+        .sessions
+        .create(Principal {
+            role: PrincipalRole::MaterialTaminotchi,
+            display_name: "Materialchi".to_string(),
+            legal_name: "Materialchi".to_string(),
+            ref_: "material-direct-receipt".to_string(),
+            phone: "+998901006060".to_string(),
+            avatar_url: String::new(),
+        })
+        .await
+        .expect("session");
+
+    let response = build_router(state)
+        .oneshot(request(
+            "POST",
+            "/v1/mobile/gscale/material-receipt/print",
+            &token,
+            r#"{
+                "driver_url":"http://127.0.0.1:39117",
+                "item_code":"ROLL-1000",
+                "item_name":"client supplied name",
+                "warehouse":"Stores - A",
+                "gross_qty":2.5
+            }"#,
+        ))
+        .await
+        .expect("response");
+    let status = response.status();
+    let body = json_body(response).await;
+
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+    assert_eq!(body["error"], "material_dimensions_required");
 }
 
 #[tokio::test]

@@ -1165,7 +1165,7 @@ mod tests {
             .expect("apply foundation migration");
         let migration_history = postgres_0062_migration_history(&pool).await;
         assert_eq!(migration_history.len(), POSTGRES_MIGRATIONS.len());
-        assert_eq!(migration_history.len(), 72);
+        assert_eq!(migration_history.len(), 74);
         let obsolete_material_index_exists: bool = sqlx::query_scalar(
             "SELECT EXISTS (
                  SELECT 1 FROM pg_indexes

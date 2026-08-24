@@ -32,6 +32,8 @@ struct MaterialReceiptRow {
     item_code: String,
     warehouse: String,
     qty: f64,
+    width_mm: Option<f64>,
+    micron: Option<f64>,
     uom: String,
     barcode: String,
     payload_json: serde_json::Value,
@@ -49,6 +51,8 @@ struct RawMaterialStockRow {
     status: String,
     reserved_order_id: String,
     source_receipt_id: String,
+    width_mm: Option<f64>,
+    micron: Option<f64>,
 }
 
 async fn raw_material_stock_status_tx(
@@ -73,16 +77,21 @@ async fn upsert_raw_material_stock_tx(
 ) -> Result<(), GscalePortError> {
     sqlx::query(
         "INSERT INTO mini_raw_material_stock (
-             id, warehouse, item_code, item_name, barcode, qty, uom, status,
-             source_receipt_id, payload_json
+             id, warehouse, item_code, item_name, barcode, qty, width_mm, micron,
+             uom, status, source_receipt_id, payload_json
          )
          VALUES ($1, $2, $3, $4, $5,
-                 ($6::double precision)::numeric(18,6), $7, 'available', $8, $9)
+                 ($6::double precision)::numeric(18,6),
+                 ($7::double precision)::numeric(18,6),
+                 ($8::double precision)::numeric(18,6),
+                 $9, 'available', $10, $11)
          ON CONFLICT (barcode) DO UPDATE SET
            warehouse = excluded.warehouse,
            item_code = excluded.item_code,
            item_name = excluded.item_name,
            qty = excluded.qty,
+           width_mm = excluded.width_mm,
+           micron = excluded.micron,
            uom = excluded.uom,
            status = excluded.status,
            reserved_order_id = '',
@@ -96,12 +105,16 @@ async fn upsert_raw_material_stock_tx(
     .bind(row_item_name(row))
     .bind(row.barcode.trim())
     .bind(row.qty)
+    .bind(row.width_mm)
+    .bind(row.micron)
     .bind(row.uom.trim())
     .bind(row.name.trim())
     .bind(serde_json::json!({
         "source_receipt_id": row.name.trim(),
         "source": "mini_gscale_receipts_submit",
-        "item_name": row_item_name(row)
+        "item_name": row_item_name(row),
+        "width_mm": row.width_mm,
+        "micron": row.micron
     }))
     .execute(&mut **tx)
     .await
@@ -155,6 +168,8 @@ fn receipt_event_draft(
         payload_json: serde_json::json!({
             "receipt_id": row.name.trim(),
             "source_receipt_id": row.name.trim(),
+            "width_mm": row.width_mm,
+            "micron": row.micron,
         }),
     }
 }
@@ -188,7 +203,8 @@ async fn raw_material_stock_rows_for_update_tx(
 ) -> Result<BTreeMap<String, RawMaterialStockRow>, GscalePortError> {
     let rows = sqlx::query_as::<_, RawMaterialStockRow>(
         "SELECT id, warehouse, item_code, item_name, barcode,
-                qty::float8 AS qty, uom,
+                qty::float8 AS qty, width_mm::float8 AS width_mm,
+                micron::float8 AS micron, uom,
                 status, reserved_order_id, source_receipt_id
          FROM mini_raw_material_stock
          WHERE lower(barcode) = ANY($1)
@@ -264,6 +280,8 @@ fn row_to_draft(row: MaterialReceiptRow) -> MaterialReceiptDraft {
         item_code: row.item_code,
         warehouse: row.warehouse,
         qty: row.qty,
+        width_mm: row.width_mm,
+        micron: row.micron,
         uom: row.uom,
         barcode: row.barcode,
     }
@@ -277,6 +295,8 @@ fn row_to_stock(row: RawMaterialStockRow) -> RawMaterialStockEntry {
         item_name: row.item_name,
         barcode: row.barcode,
         qty: row.qty,
+        width_mm: row.width_mm,
+        micron: row.micron,
         uom: row.uom,
         status: row.status,
         reserved_order_id: row.reserved_order_id,

@@ -261,9 +261,16 @@ impl AdminReadPort for FakeAdminCatalogReadPort {
 
     async fn items_by_codes(
         &self,
-        _item_codes: &[String],
+        item_codes: &[String],
     ) -> Result<Vec<SupplierItem>, AdminPortError> {
-        Ok(Vec::new())
+        Ok(fake_catalog_items()
+            .into_iter()
+            .filter(|item| {
+                item_codes
+                    .iter()
+                    .any(|code| code.trim().eq_ignore_ascii_case(item.code.trim()))
+            })
+            .collect())
     }
 
     async fn item_groups(
@@ -395,6 +402,8 @@ impl MaterialReceiptStorePort for FakeReceiptStore {
             item_code: input.item_code,
             warehouse: input.warehouse,
             qty: input.qty,
+            width_mm: input.width_mm,
+            micron: input.micron,
             uom: "Kg".to_string(),
             barcode: input.barcode,
         })
@@ -430,6 +439,8 @@ impl MaterialReceiptStorePort for FailingSubmitStore {
             item_code: input.item_code,
             warehouse: input.warehouse,
             qty: input.qty,
+            width_mm: input.width_mm,
+            micron: input.micron,
             uom: "Kg".to_string(),
             barcode: input.barcode,
         })
@@ -469,6 +480,8 @@ impl MaterialReceiptStorePort for SlowReceiptStore {
             item_code: input.item_code,
             warehouse: input.warehouse,
             qty: input.qty,
+            width_mm: input.width_mm,
+            micron: input.micron,
             uom: "Kg".to_string(),
             barcode: input.barcode,
         })

@@ -111,6 +111,8 @@ pub(super) struct NormalizedMaterialReceiptJob {
     pub(super) unit: String,
     pub(super) tare_enabled: bool,
     pub(super) tare_kg: f64,
+    pub(super) width_mm: Option<f64>,
+    pub(super) micron: Option<f64>,
     pub(super) print_count: u32,
     pub(super) actor_role: String,
     pub(super) actor_ref: String,
@@ -161,7 +163,12 @@ impl NormalizedMaterialReceiptJob {
                 "NETTO juda kichik: brutto {gross_qty:.3} kg - babina {tare_kg:.3} kg = {net_qty:.3} kg | min {MIN_BATCH_QTY_KG:.3} kg"
             )));
         }
-        let item_name = blank_default(&request.item_name, &item_code);
+        let (width_mm, micron) = normalize_dimensions(request.width_mm, request.micron)?;
+        let item_name = dimensioned_item_name(
+            &blank_default(&request.item_name, &item_code),
+            width_mm,
+            micron,
+        );
         Ok(Self {
             driver_url: request.driver_url.trim().to_string(),
             item_code,
@@ -175,6 +182,8 @@ impl NormalizedMaterialReceiptJob {
             unit: blank_default(&request.unit, "kg"),
             tare_enabled: tare_kg > 0.0,
             tare_kg,
+            width_mm,
+            micron,
             print_count: normalize_print_count(request.print_count),
             actor_role: request.actor_role.trim().to_string(),
             actor_ref: request.actor_ref.trim().to_string(),
@@ -202,6 +211,46 @@ impl NormalizedMaterialReceiptJob {
             print_count: self.print_count,
         }
     }
+}
+
+fn normalize_dimensions(
+    width_mm: Option<f64>,
+    micron: Option<f64>,
+) -> Result<(Option<f64>, Option<f64>), GscaleServiceError> {
+    match (width_mm, micron) {
+        (None, None) => Ok((None, None)),
+        (Some(width_mm), Some(micron))
+            if width_mm.is_finite() && width_mm > 0.0 && micron.is_finite() && micron > 0.0 =>
+        {
+            Ok((Some(width_mm), Some(micron)))
+        }
+        (Some(_), Some(_)) => Err(GscaleServiceError::InvalidInput(
+            "width_mm_and_micron_must_be_positive".to_string(),
+        )),
+        _ => Err(GscaleServiceError::InvalidInput(
+            "width_mm_and_micron_required_together".to_string(),
+        )),
+    }
+}
+
+fn dimensioned_item_name(item_name: &str, width_mm: Option<f64>, micron: Option<f64>) -> String {
+    match (width_mm, micron) {
+        (Some(width_mm), Some(micron)) => format!(
+            "{} {}/{}",
+            item_name.trim(),
+            compact_dimension(width_mm),
+            compact_dimension(micron)
+        ),
+        _ => item_name.trim().to_string(),
+    }
+}
+
+fn compact_dimension(value: f64) -> String {
+    let value = format!("{value:.6}");
+    value
+        .trim_end_matches('0')
+        .trim_end_matches('.')
+        .to_string()
 }
 
 fn normalize_print_count(value: u32) -> u32 {

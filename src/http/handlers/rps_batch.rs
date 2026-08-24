@@ -13,6 +13,9 @@ use crate::core::rps_batch::{
     RpsBatchStartRequest, RpsBatchStopRequest,
 };
 use crate::http::handlers::auth::bearer_token;
+use crate::http::handlers::material_catalog::{
+    MaterialCatalogError, normalize_material_batch_item,
+};
 
 pub async fn start(
     State(state): State<AppState>,
@@ -24,9 +27,12 @@ pub async fn start(
         return Err(method_not_allowed());
     }
     let principal = authenticated_principal(&state, &headers).await?;
-    let request: RpsBatchStartRequest =
+    let mut request: RpsBatchStartRequest =
         serde_json::from_slice(&body).map_err(|_| bad_request("invalid_json", "invalid json"))?;
     require_material_warehouse_access(&state, &principal, &request.warehouse).await?;
+    normalize_material_batch_item(&state, &principal, &mut request)
+        .await
+        .map_err(material_catalog_error)?;
     let response = state
         .rps_batch
         .start(&principal, request)
@@ -330,6 +336,28 @@ fn batch_error(error: RpsBatchServiceError) -> (StatusCode, Json<RpsBatchErrorRe
             detail: error.to_string(),
         }),
     )
+}
+
+fn material_catalog_error(
+    error: MaterialCatalogError,
+) -> (StatusCode, Json<RpsBatchErrorResponse>) {
+    match error {
+        MaterialCatalogError::ReadFailed => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(RpsBatchErrorResponse::new(
+                "catalog_read_failed",
+                "catalog read failed",
+            )),
+        ),
+        MaterialCatalogError::ItemNotFound => {
+            bad_request("catalog_item_not_found", "catalog item not found")
+        }
+        MaterialCatalogError::Forbidden => forbidden(),
+        MaterialCatalogError::DimensionsRequired => bad_request(
+            "material_dimensions_required",
+            "positive width_mm and micron are required",
+        ),
+    }
 }
 
 fn gscale_error(error: GscaleServiceError) -> (StatusCode, Json<RpsBatchErrorResponse>) {

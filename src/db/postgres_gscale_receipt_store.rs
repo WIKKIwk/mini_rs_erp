@@ -20,33 +20,43 @@ impl MaterialReceiptStorePort for PostgresGscaleReceiptStore {
         let name = receipt_name(barcode);
         sqlx::query_as::<_, MaterialReceiptRow>(
             "INSERT INTO mini_gscale_receipts (
-                 name, status, item_code, warehouse, qty, uom, barcode, payload_json
+                 name, status, item_code, warehouse, qty, width_mm, micron,
+                 uom, barcode, payload_json
              )
              VALUES ($1, 'draft', $2, $3,
-                     ($4::double precision)::numeric(18,6), 'kg', $5, $6)
+                     ($4::double precision)::numeric(18,6),
+                     ($5::double precision)::numeric(18,6),
+                     ($6::double precision)::numeric(18,6), 'kg', $7, $8)
              ON CONFLICT (barcode) DO UPDATE SET
                name = excluded.name,
                status = 'draft',
                item_code = excluded.item_code,
                warehouse = excluded.warehouse,
                qty = excluded.qty,
+               width_mm = excluded.width_mm,
+               micron = excluded.micron,
                uom = excluded.uom,
                payload_json = excluded.payload_json,
                updated_at = now(),
                submitted_at = NULL
              RETURNING name, item_code, warehouse, qty::float8 AS qty,
+                       width_mm::float8 AS width_mm, micron::float8 AS micron,
                        uom, barcode, payload_json",
         )
         .bind(name)
         .bind(item_code)
         .bind(warehouse)
         .bind(qty)
+        .bind(input.width_mm)
+        .bind(input.micron)
         .bind(barcode)
         .bind(serde_json::json!({
             "item_code": item_code,
             "item_name": input.item_name.trim(),
             "warehouse": warehouse,
             "qty": qty,
+            "width_mm": input.width_mm,
+            "micron": input.micron,
             "uom": "kg",
             "barcode": barcode,
             "actor_role": input.actor_role.trim(),
@@ -70,6 +80,7 @@ impl MaterialReceiptStorePort for PostgresGscaleReceiptStore {
              SET status = 'submitted', submitted_at = now(), updated_at = now()
              WHERE name = $1 AND status = 'draft'
              RETURNING name, item_code, warehouse, qty::float8 AS qty,
+                       width_mm::float8 AS width_mm, micron::float8 AS micron,
                        uom, barcode, payload_json",
         )
         .bind(name.trim())
@@ -104,6 +115,7 @@ impl MaterialReceiptStorePort for PostgresGscaleReceiptStore {
         }
         sqlx::query_as::<_, MaterialReceiptRow>(
             "SELECT name, item_code, warehouse, qty::float8 AS qty,
+                    width_mm::float8 AS width_mm, micron::float8 AS micron,
                     uom, barcode, payload_json
              FROM mini_gscale_receipts
              WHERE lower(barcode) = lower($1)
@@ -129,7 +141,8 @@ impl MaterialReceiptStorePort for PostgresGscaleReceiptStore {
         }
         sqlx::query_as::<_, RawMaterialStockRow>(
             "SELECT id, warehouse, item_code, item_name, barcode,
-                    qty::float8 AS qty, uom,
+                    qty::float8 AS qty, width_mm::float8 AS width_mm,
+                    micron::float8 AS micron, uom,
                     status, reserved_order_id, source_receipt_id
              FROM mini_raw_material_stock
              WHERE lower(barcode) = lower($1)
@@ -151,7 +164,8 @@ impl MaterialReceiptStorePort for PostgresGscaleReceiptStore {
         let warehouse = warehouse.trim().to_lowercase();
         sqlx::query_as::<_, RawMaterialStockRow>(
             "SELECT id, warehouse, item_code, item_name, barcode,
-                    qty::float8 AS qty, uom,
+                    qty::float8 AS qty, width_mm::float8 AS width_mm,
+                    micron::float8 AS micron, uom,
                     status, reserved_order_id, source_receipt_id
              FROM mini_raw_material_stock
              WHERE $1 = '' OR lower(warehouse) = $1
@@ -189,7 +203,8 @@ impl MaterialReceiptStorePort for PostgresGscaleReceiptStore {
             .map_err(|error| GscalePortError::StoreWrite(error.to_string()))?;
         let previous = sqlx::query_as::<_, RawMaterialStockRow>(
             "SELECT id, warehouse, item_code, item_name, barcode,
-                    qty::float8 AS qty, uom,
+                    qty::float8 AS qty, width_mm::float8 AS width_mm,
+                    micron::float8 AS micron, uom,
                     status, reserved_order_id, source_receipt_id
              FROM mini_raw_material_stock
              WHERE lower(barcode) = lower($1)
@@ -238,7 +253,8 @@ impl MaterialReceiptStorePort for PostgresGscaleReceiptStore {
                  updated_at = now()
              WHERE lower(barcode) = lower($1)
              RETURNING id, warehouse, item_code, item_name, barcode,
-                       qty::float8 AS qty, uom,
+                       qty::float8 AS qty, width_mm::float8 AS width_mm,
+                       micron::float8 AS micron, uom,
                        status, reserved_order_id, source_receipt_id",
         )
         .bind(barcode)
@@ -323,7 +339,8 @@ impl MaterialReceiptStorePort for PostgresGscaleReceiptStore {
              WHERE lower(barcode) = ANY($1)
                AND (status = 'available' OR (status = 'in_use' AND reserved_order_id = $2))
              RETURNING id, warehouse, item_code, item_name, barcode,
-                       qty::float8 AS qty, uom,
+                       qty::float8 AS qty, width_mm::float8 AS width_mm,
+                       micron::float8 AS micron, uom,
                        status, reserved_order_id, source_receipt_id",
         )
         .bind(&barcodes)
@@ -388,7 +405,8 @@ impl MaterialReceiptStorePort for PostgresGscaleReceiptStore {
                AND reserved_order_id = $2
                AND status IN ('in_use', 'consumed')
              RETURNING id, warehouse, item_code, item_name, barcode,
-                       qty::float8 AS qty, uom,
+                       qty::float8 AS qty, width_mm::float8 AS width_mm,
+                       micron::float8 AS micron, uom,
                        status, reserved_order_id, source_receipt_id",
         )
         .bind(&barcodes)

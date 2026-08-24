@@ -35,11 +35,12 @@ async fn migration_0068_to_0072_uses_exact_cutover_and_is_restart_stable() {
     service.apply_legacy_cutover(manifest).await.unwrap();
     database.migrate_current().await;
     let after_upgrade = migration_history(&database).await;
-    assert_eq!(after_upgrade.len(), 72);
+    assert_eq!(after_upgrade.len(), 74);
     assert_eq!(&after_upgrade[..69], through_authority.as_slice());
+    assert_eq!(after_upgrade[71].0, "0072_canonical_identity_indexes");
     assert_eq!(
         after_upgrade.last().unwrap().0,
-        "0072_canonical_identity_indexes"
+        "0074_calculate_material_roll_catalog"
     );
 
     database.migrate_current().await;
@@ -60,6 +61,68 @@ async fn migration_0068_to_0072_uses_exact_cutover_and_is_restart_stable() {
         );
     }
     assert_clean_cutover_schema(&database).await;
+    database.close().await;
+}
+
+#[tokio::test]
+async fn migration_0074_backfills_calculate_materials_into_rulon_catalog() {
+    let database = TestDatabase::create_through("0074_roll_catalog", 73).await;
+    sqlx::query(
+        "INSERT INTO mini_item_groups
+            (name, parent_item_group, is_group, payload_json)
+         VALUES
+            ('homashyo', 'All Item Groups', true,
+             '{\"name\":\"homashyo\",\"item_group_name\":\"homashyo\",\"parent_item_group\":\"All Item Groups\",\"is_group\":true}'::jsonb),
+            ('rulon', 'homashyo', true,
+             '{\"name\":\"rulon\",\"item_group_name\":\"rulon\",\"parent_item_group\":\"homashyo\",\"is_group\":true}'::jsonb)"
+    )
+    .execute(&database.pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        "INSERT INTO mini_items (code, name, uom, item_group, payload_json)
+         VALUES
+            ('pet', 'PET', 'Kg', 'homashyo',
+             '{\"code\":\"pet\",\"name\":\"PET\",\"uom\":\"Kg\",\"item_group\":\"homashyo\"}'::jsonb),
+            ('Upakovka', 'CPP', 'Kg', 'homashyo',
+             '{\"code\":\"Upakovka\",\"name\":\"CPP\",\"uom\":\"Kg\",\"item_group\":\"homashyo\"}'::jsonb)"
+    )
+    .execute(&database.pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        "INSERT INTO mini_calculate_materials (id, lower_name, payload_json)
+         VALUES (
+            'material-custom-film',
+            'custom film',
+            '{\"id\":\"material-custom-film\",\"name\":\"CUSTOM FILM\",\"active\":true,\"density_g_cm3\":0.91,\"variants\":[]}'::jsonb
+         )"
+    )
+    .execute(&database.pool)
+    .await
+    .unwrap();
+
+    database.migrate_through(74).await;
+
+    assert_eq!(migration_history(&database).await.len(), 74);
+    let rulon_parent: String = sqlx::query_scalar(
+        "SELECT parent_item_group FROM mini_item_groups WHERE lower(name) = 'rulon'",
+    )
+    .fetch_one(&database.pool)
+    .await
+    .unwrap();
+    assert!(rulon_parent.eq_ignore_ascii_case("homashyo"));
+    for material_name in ["PET", "CPP", "BOPP", "CUSTOM FILM"] {
+        let groups: Vec<String> = sqlx::query_scalar(
+            "SELECT item_group FROM mini_items WHERE lower(name) = lower($1)",
+        )
+        .bind(material_name)
+        .fetch_all(&database.pool)
+        .await
+        .unwrap();
+        assert_eq!(groups.len(), 1, "material: {material_name}");
+        assert!(groups[0].eq_ignore_ascii_case("rulon"));
+    }
     database.close().await;
 }
 

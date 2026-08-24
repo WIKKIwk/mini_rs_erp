@@ -5,7 +5,9 @@ use std::time::{Duration, Instant};
 use axum::http::StatusCode;
 use tower::ServiceExt;
 
+use crate::core::admin::service::AdminService;
 use crate::core::auth::models::PrincipalRole;
+use crate::core::authz::RoleAssignmentUpsert;
 use crate::core::gscale::GscaleService;
 use crate::http::router::build_router;
 use crate::rps::RpsDriverClient;
@@ -309,6 +311,19 @@ async fn rps_batch_print_uses_active_rs_batch_and_transaction_flow() {
 async fn rps_batch_duplicate_count_records_distinct_products_and_epcs() {
     let events = Arc::new(Mutex::new(Vec::new()));
     let mut state = test_state();
+    state.admin =
+        AdminService::new(&state.config).with_read_port(Arc::new(FakeAdminCatalogReadPort));
+    state
+        .admin
+        .upsert_role_assignment(RoleAssignmentUpsert {
+            principal_role: PrincipalRole::MaterialTaminotchi,
+            principal_ref: "admin".to_string(),
+            role_id: "material_taminotchi".to_string(),
+            assigned_apparatus: Vec::new(),
+            assigned_item_groups: vec!["Products".to_string()],
+        })
+        .await
+        .expect("material item scope");
     state.gscale = GscaleService::new()
         .with_receipt_store(Arc::new(FakeReceiptStore {
             events: events.clone(),
@@ -336,8 +351,8 @@ async fn rps_batch_duplicate_count_records_distinct_products_and_epcs() {
             r#"{
                 "client_batch_id":"batch-unique-products",
                 "driver_url":"http://127.0.0.1:39117",
-                "item_code":"ITEM-1",
-                "item_name":"Green Tea",
+                "item_code":"GSCALE-ITEM-001",
+                "item_name":"GScale Film",
                 "warehouse":"Stores - A",
                 "printer":"godex",
                 "print_mode":"label"
@@ -353,7 +368,7 @@ async fn rps_batch_duplicate_count_records_distinct_products_and_epcs() {
             "POST",
             "/v1/mobile/rps/batch/print",
             &token,
-            r#"{"batch_id":"batch-unique-products","expected_revision":1,"expected_item_code":"ITEM-1","expected_warehouse":"Stores - A","gross_qty":2.5,"unit":"kg","print_count":3}"#,
+            r#"{"batch_id":"batch-unique-products","expected_revision":1,"expected_item_code":"GSCALE-ITEM-001","expected_warehouse":"Stores - A","gross_qty":2.5,"unit":"kg","print_count":3}"#,
         ))
         .await
         .expect("print response");
@@ -873,7 +888,20 @@ async fn material_taminotchi_rps_batch_start_rejects_unassigned_warehouse() {
 
 #[tokio::test]
 async fn material_taminotchi_rps_batch_start_allows_assigned_warehouse() {
-    let state = test_state();
+    let mut state = test_state();
+    state.admin =
+        AdminService::new(&state.config).with_read_port(Arc::new(FakeAdminCatalogReadPort));
+    state
+        .admin
+        .upsert_role_assignment(RoleAssignmentUpsert {
+            principal_role: PrincipalRole::MaterialTaminotchi,
+            principal_ref: "admin".to_string(),
+            role_id: "material_taminotchi".to_string(),
+            assigned_apparatus: Vec::new(),
+            assigned_item_groups: vec!["Rulon".to_string()],
+        })
+        .await
+        .expect("material item scope");
     assign_warehouse_to_principal(
         &state,
         PrincipalRole::MaterialTaminotchi,
@@ -891,11 +919,13 @@ async fn material_taminotchi_rps_batch_start_allows_assigned_warehouse() {
             r#"{
                 "client_batch_id":"material-assigned",
                 "driver_url":"http://127.0.0.1:39117",
-                "item_code":"ITEM-1",
-                "item_name":"Green Tea",
+                "item_code":"ROLL-1000",
+                "item_name":"client supplied name",
                 "warehouse":"Stores - A",
                 "printer":"godex",
-                "print_mode":"label"
+                "print_mode":"label",
+                "width_mm":615,
+                "micron":13
             }"#,
         ))
         .await
@@ -906,6 +936,59 @@ async fn material_taminotchi_rps_batch_start_allows_assigned_warehouse() {
     assert_eq!(status, StatusCode::OK, "{body}");
     assert_eq!(body["ok"], true);
     assert_eq!(body["batch"]["warehouse"], "Stores - A");
+    assert_eq!(body["batch"]["item_code"], "ROLL-1000");
+    assert_eq!(body["batch"]["item_name"], "CPP 1000/35");
+    assert_eq!(body["batch"]["width_mm"], 615.0);
+    assert_eq!(body["batch"]["micron"], 13.0);
+}
+
+#[tokio::test]
+async fn material_taminotchi_rps_batch_start_requires_roll_dimensions() {
+    let mut state = test_state();
+    state.admin =
+        AdminService::new(&state.config).with_read_port(Arc::new(FakeAdminCatalogReadPort));
+    state
+        .admin
+        .upsert_role_assignment(RoleAssignmentUpsert {
+            principal_role: PrincipalRole::MaterialTaminotchi,
+            principal_ref: "admin".to_string(),
+            role_id: "material_taminotchi".to_string(),
+            assigned_apparatus: Vec::new(),
+            assigned_item_groups: vec!["Rulon".to_string()],
+        })
+        .await
+        .expect("material item scope");
+    assign_warehouse_to_principal(
+        &state,
+        PrincipalRole::MaterialTaminotchi,
+        "admin",
+        "Stores - A",
+    )
+    .await;
+    let token = session(&state, PrincipalRole::MaterialTaminotchi).await;
+
+    let response = build_router(state)
+        .oneshot(request(
+            "POST",
+            "/v1/mobile/rps/batch/start",
+            &token,
+            r#"{
+                "client_batch_id":"material-missing-dimensions",
+                "driver_url":"http://127.0.0.1:39117",
+                "item_code":"ROLL-1000",
+                "item_name":"CPP",
+                "warehouse":"Stores - A",
+                "printer":"godex",
+                "print_mode":"label"
+            }"#,
+        ))
+        .await
+        .expect("response");
+    let status = response.status();
+    let body = json_body(response).await;
+
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+    assert_eq!(body["error"], "material_dimensions_required");
 }
 
 #[tokio::test]

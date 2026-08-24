@@ -22,11 +22,47 @@ fn request() -> MaterialReceiptPrintRequest {
         unit: String::new(),
         tare_enabled: true,
         tare_kg: 0.78,
+        width_mm: None,
+        micron: None,
         print_count: 1,
         actor_role: String::new(),
         actor_ref: String::new(),
         actor_display_name: String::new(),
     }
+}
+
+#[test]
+fn roll_receipt_keeps_canonical_code_and_formats_dimensions_for_the_label() {
+    let mut input = request();
+    input.item_code = "pet".to_string();
+    input.item_name = "PET".to_string();
+    input.width_mm = Some(615.0);
+    input.micron = Some(13.0);
+
+    let response = GscaleService::new()
+        .with_epc_source(Arc::new(QueueEpc::new(["303132333435363738394142"])))
+        .prepare_material_receipt_client_print(input)
+        .expect("prepare roll receipt");
+
+    assert_eq!(response.item_code, "pet");
+    assert_eq!(response.item_name, "PET 615/13");
+    assert_eq!(response.width_mm, Some(615.0));
+    assert_eq!(response.micron, Some(13.0));
+}
+
+#[test]
+fn receipt_rejects_only_one_dimension() {
+    let mut input = request();
+    input.width_mm = Some(615.0);
+
+    let error = GscaleService::new()
+        .prepare_material_receipt_client_print(input)
+        .expect_err("micron must be paired with width");
+
+    assert_eq!(
+        error.to_string(),
+        "invalid input: width_mm_and_micron_required_together"
+    );
 }
 
 #[tokio::test]
@@ -424,6 +460,8 @@ impl MaterialReceiptStorePort for FakeReceiptStore {
             item_code: input.item_code,
             warehouse: input.warehouse,
             qty: input.qty,
+            width_mm: input.width_mm,
+            micron: input.micron,
             uom: "Kg".to_string(),
             barcode: input.barcode,
         })

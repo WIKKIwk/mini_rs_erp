@@ -58,6 +58,8 @@ fn raw_material_stock_entry(
         item_name: item_name.to_string(),
         warehouse: "Kalidor".to_string(),
         qty,
+        width_mm: None,
+        micron: None,
         uom: "Kg".to_string(),
         barcode: barcode.to_string(),
         status: "available".to_string(),

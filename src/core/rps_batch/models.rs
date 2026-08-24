@@ -27,6 +27,10 @@ pub struct RpsBatchStartRequest {
     pub tare_enabled: bool,
     #[serde(default)]
     pub tare_kg: f64,
+    #[serde(default)]
+    pub width_mm: Option<f64>,
+    #[serde(default)]
+    pub micron: Option<f64>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
@@ -50,6 +54,10 @@ pub struct RpsBatchSession {
     pub manual_qty_kg: f64,
     pub tare_enabled: bool,
     pub tare_kg: f64,
+    #[serde(default)]
+    pub width_mm: Option<f64>,
+    #[serde(default)]
+    pub micron: Option<f64>,
     #[serde(default)]
     pub last_error: String,
     #[serde(default)]
@@ -197,6 +205,8 @@ impl RpsBatchSession {
             unit: first_non_empty(&request.unit, "kg"),
             tare_enabled: self.tare_enabled,
             tare_kg: self.tare_kg,
+            width_mm: self.width_mm,
+            micron: self.micron,
             print_count: request.print_count,
             actor_role: String::new(),
             actor_ref: String::new(),
@@ -222,8 +232,10 @@ mod tests {
     fn material_batch_print_uses_large_qr_product_label() {
         let batch = RpsBatchSession {
             driver_url: "http://127.0.0.1:39117".to_string(),
-            item_code: "CPP 1030/25".to_string(),
-            item_name: "CPP 1030/25".to_string(),
+            item_code: "cpp".to_string(),
+            item_name: "CPP".to_string(),
+            width_mm: Some(1030.0),
+            micron: Some(25.0),
             warehouse: "Kalidor".to_string(),
             printer: "zebra".to_string(),
             print_mode: "rfid".to_string(),
@@ -242,7 +254,9 @@ mod tests {
         });
 
         assert_eq!(request.label_kind, "material_product");
-        assert_eq!(request.item_code, "CPP 1030/25");
+        assert_eq!(request.item_code, "cpp");
+        assert_eq!(request.width_mm, Some(1030.0));
+        assert_eq!(request.micron, Some(25.0));
         assert_eq!(request.print_mode, "rfid");
     }
 

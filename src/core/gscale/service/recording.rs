@@ -43,7 +43,14 @@ pub(super) async fn record_confirmed_material_receipt(
         .await
         .map_err(|error| GscaleServiceError::StoreWrite(error.message()))?
     {
-        validate_existing_receipt(&stock.item_code, &stock.warehouse, stock.qty, job)?;
+        validate_existing_receipt(
+            &stock.item_code,
+            &stock.warehouse,
+            stock.qty,
+            stock.width_mm,
+            stock.micron,
+            job,
+        )?;
         return Ok(stock.source_receipt_id);
     }
 
@@ -53,7 +60,14 @@ pub(super) async fn record_confirmed_material_receipt(
         .map_err(|error| GscaleServiceError::StoreWrite(error.message()))?
     {
         Some(draft) => {
-            validate_existing_receipt(&draft.item_code, &draft.warehouse, draft.qty, job)?;
+            validate_existing_receipt(
+                &draft.item_code,
+                &draft.warehouse,
+                draft.qty,
+                draft.width_mm,
+                draft.micron,
+                job,
+            )?;
             draft
         }
         None => create_material_receipt_draft(receipt_store.as_ref(), job, epc).await?,
@@ -73,17 +87,29 @@ fn validate_existing_receipt(
     item_code: &str,
     warehouse: &str,
     qty: f64,
+    width_mm: Option<f64>,
+    micron: Option<f64>,
     job: &NormalizedMaterialReceiptJob,
 ) -> Result<(), GscaleServiceError> {
     if !item_code.trim().eq_ignore_ascii_case(&job.item_code)
         || !warehouse.trim().eq_ignore_ascii_case(&job.warehouse)
         || (qty - job.net_qty).abs() > 0.000_001
+        || !same_optional_number(width_mm, job.width_mm)
+        || !same_optional_number(micron, job.micron)
     {
         return Err(GscaleServiceError::InvalidInput(
             "client_print_epc_already_used".to_string(),
         ));
     }
     Ok(())
+}
+
+fn same_optional_number(left: Option<f64>, right: Option<f64>) -> bool {
+    match (left, right) {
+        (None, None) => true,
+        (Some(left), Some(right)) => (left - right).abs() <= 0.000_001,
+        _ => false,
+    }
 }
 
 async fn record_parallel_material_receipt_inner(
@@ -123,6 +149,8 @@ async fn create_material_receipt_draft(
         warehouse: job.warehouse.clone(),
         qty: job.net_qty,
         barcode: epc,
+        width_mm: job.width_mm,
+        micron: job.micron,
         actor_role: job.actor_role.clone(),
         actor_ref: job.actor_ref.clone(),
         actor_display_name: job.actor_display_name.clone(),

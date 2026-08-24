@@ -584,7 +584,7 @@ async fn admin_item_delete_returns_conflict_while_item_is_in_active_order() {
 }
 
 #[tokio::test]
-async fn material_taminotchi_item_create_is_limited_to_assigned_item_groups() {
+async fn material_taminotchi_cannot_create_catalog_items_during_receipt() {
     let state = test_state();
     state
         .admin
@@ -610,11 +610,7 @@ async fn material_taminotchi_item_create_is_limited_to_assigned_item_groups() {
         ))
         .await
         .expect("blocked response");
-    assert_eq!(blocked.status(), StatusCode::BAD_REQUEST);
-    assert_eq!(
-        json_body(blocked).await["error"],
-        "item group is not assigned to material taminotchi"
-    );
+    assert_eq!(blocked.status(), StatusCode::FORBIDDEN);
 
     let allowed = router
         .oneshot(request_with_body(
@@ -625,8 +621,5 @@ async fn material_taminotchi_item_create_is_limited_to_assigned_item_groups() {
         ))
         .await
         .expect("allowed response");
-    let allowed_status = allowed.status();
-    let allowed_body = json_body(allowed).await;
-    assert_eq!(allowed_status, StatusCode::OK, "{allowed_body}");
-    assert_eq!(allowed_body["item_group"], "Kraska");
+    assert_eq!(allowed.status(), StatusCode::FORBIDDEN);
 }

@@ -264,6 +264,7 @@ fn normalize_start(
             "driver_url_required".to_string(),
         ));
     }
+    let (width_mm, micron) = normalize_dimensions(request.width_mm, request.micron)?;
 
     Ok(RpsBatchSession {
         id: batch_id(&request.client_batch_id, &owner.key),
@@ -283,12 +284,34 @@ fn normalize_start(
         manual_qty_kg: positive_or_zero(request.manual_qty_kg),
         tare_enabled: request.tare_enabled || request.tare_kg > 0.0,
         tare_kg: positive_or_zero(request.tare_kg),
+        width_mm,
+        micron,
         last_error: String::new(),
         last_error_at: String::new(),
         prints: Vec::new(),
         created_at: now.clone(),
         updated_at: now,
     })
+}
+
+fn normalize_dimensions(
+    width_mm: Option<f64>,
+    micron: Option<f64>,
+) -> Result<(Option<f64>, Option<f64>), RpsBatchServiceError> {
+    match (width_mm, micron) {
+        (None, None) => Ok((None, None)),
+        (Some(width_mm), Some(micron))
+            if width_mm.is_finite() && width_mm > 0.0 && micron.is_finite() && micron > 0.0 =>
+        {
+            Ok((Some(width_mm), Some(micron)))
+        }
+        (Some(_), Some(_)) => Err(RpsBatchServiceError::InvalidInput(
+            "width_mm_and_micron_must_be_positive".to_string(),
+        )),
+        _ => Err(RpsBatchServiceError::InvalidInput(
+            "width_mm_and_micron_required_together".to_string(),
+        )),
+    }
 }
 
 fn batch_id(client_batch_id: &str, owner_key: &str) -> String {

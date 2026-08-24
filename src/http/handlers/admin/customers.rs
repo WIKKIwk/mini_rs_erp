@@ -309,6 +309,9 @@ pub async fn items(
             }
         }
         Method::POST => {
+            if principal.role == PrincipalRole::MaterialTaminotchi {
+                return Err(forbidden());
+            }
             require_capability(&state, &principal, Capability::CatalogItemCreate).await?;
             let input: AdminCreateItemRequest = parse_json(&body)?;
             require_material_item_group_scope(&state, &principal, &input.item_group).await?;
