@@ -4,6 +4,7 @@ use axum::extract::State;
 use axum::http::{HeaderMap, Method, StatusCode};
 use serde::Serialize;
 use serde::de::DeserializeOwned;
+use std::collections::BTreeMap;
 
 use crate::app::AppState;
 use crate::core::auth::models::{LoginRequest, LoginResponse, Principal, PrincipalRole};
@@ -53,6 +54,7 @@ pub async fn login(
     };
     let capabilities = state.admin.principal_capability_codes(&principal).await;
     let assigned_apparatus = state.admin.principal_assigned_apparatus(&principal).await;
+    let assigned_apparatus_labels = assigned_apparatus_labels(&state, &assigned_apparatus).await;
     let assigned_item_groups = state.admin.principal_assigned_item_groups(&principal).await;
     let assigned_warehouses = state
         .warehouses
@@ -78,10 +80,44 @@ pub async fn login(
         token,
         capabilities,
         assigned_apparatus,
+        assigned_apparatus_labels,
         assigned_item_groups,
         assigned_warehouses,
         werka_home,
     }))
+}
+
+pub(crate) async fn assigned_apparatus_labels(
+    state: &AppState,
+    assigned_apparatus: &[String],
+) -> Vec<String> {
+    if assigned_apparatus.is_empty() {
+        return Vec::new();
+    }
+    let projections = match state.apparatus.list_runtime_projections().await {
+        Ok(projections) => projections,
+        Err(error) => {
+            tracing::warn!(%error, "apparatus labels lookup failed at auth boundary");
+            return Vec::new();
+        }
+    };
+    let labels_by_id = projections
+        .into_iter()
+        .map(|projection| {
+            (
+                projection.apparatus_id.to_string(),
+                projection.display.display_name,
+            )
+        })
+        .collect::<BTreeMap<_, _>>();
+
+    assigned_apparatus
+        .iter()
+        .filter_map(|id| labels_by_id.get(id))
+        .map(|label| label.trim())
+        .filter(|label| !label.is_empty())
+        .map(ToOwned::to_owned)
+        .collect()
 }
 
 pub async fn logout(

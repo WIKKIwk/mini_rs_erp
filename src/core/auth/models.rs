@@ -44,6 +44,8 @@ pub struct LoginResponse {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub assigned_apparatus: Vec<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub assigned_apparatus_labels: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub assigned_item_groups: Vec<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub assigned_warehouses: Vec<String>,
@@ -76,6 +78,7 @@ mod tests {
             profile: werka_profile(),
             capabilities: Vec::new(),
             assigned_apparatus: Vec::new(),
+            assigned_apparatus_labels: Vec::new(),
             assigned_item_groups: Vec::new(),
             assigned_warehouses: Vec::new(),
             werka_home: None,
@@ -93,6 +96,7 @@ mod tests {
             profile: werka_profile(),
             capabilities: vec!["werka.access".to_string()],
             assigned_apparatus: Vec::new(),
+            assigned_apparatus_labels: Vec::new(),
             assigned_item_groups: Vec::new(),
             assigned_warehouses: Vec::new(),
             werka_home: Some(WerkaHomeData {
@@ -127,6 +131,7 @@ mod tests {
             profile: werka_profile(),
             capabilities: Vec::new(),
             assigned_apparatus: Vec::new(),
+            assigned_apparatus_labels: Vec::new(),
             assigned_item_groups: vec!["Kraska".to_string(), "Kley".to_string()],
             assigned_warehouses: Vec::new(),
             werka_home: None,
@@ -144,6 +149,7 @@ mod tests {
             profile: werka_profile(),
             capabilities: Vec::new(),
             assigned_apparatus: Vec::new(),
+            assigned_apparatus_labels: Vec::new(),
             assigned_item_groups: Vec::new(),
             assigned_warehouses: vec!["Xomashyo".to_string()],
             werka_home: None,

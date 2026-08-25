@@ -242,7 +242,7 @@ async fn profile_get_returns_material_scope_and_capabilities() {
             principal_role: PrincipalRole::MaterialTaminotchi,
             principal_ref: "material_taminotchi".to_string(),
             role_id: "material_taminotchi".to_string(),
-            assigned_apparatus: Vec::new(),
+            assigned_apparatus: vec!["apparatus:default:asset-007".to_string()],
             assigned_item_groups: vec!["Kraska".to_string(), "Kley".to_string()],
         })
         .await
@@ -300,6 +300,10 @@ async fn profile_get_returns_material_scope_and_capabilities() {
     assert_eq!(
         value["assigned_item_groups"],
         serde_json::json!(["Kley", "Kraska"])
+    );
+    assert_eq!(
+        value["assigned_apparatus_labels"],
+        serde_json::json!(["Laminatsiya 1"])
     );
     assert_eq!(value["assigned_warehouses"], serde_json::json!(["Kalidor"]));
     assert!(

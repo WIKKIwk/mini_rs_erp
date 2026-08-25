@@ -10,7 +10,8 @@ use crate::app::AppState;
 use crate::core::auth::models::Principal;
 use crate::error::AppError;
 use crate::http::handlers::auth::{
-    ErrorResponse, bearer_token, internal_error, session_error, with_avatar_proxy,
+    ErrorResponse, assigned_apparatus_labels, bearer_token, internal_error, session_error,
+    with_avatar_proxy,
 };
 
 const AVATAR_BODY_LIMIT: usize = 5 * 1024 * 1024;
@@ -156,6 +157,7 @@ async fn profile_payload(
 ) -> Result<Value, (StatusCode, Json<ErrorResponse>)> {
     let capabilities = state.admin.principal_capability_codes(&principal).await;
     let assigned_apparatus = state.admin.principal_assigned_apparatus(&principal).await;
+    let assigned_apparatus_labels = assigned_apparatus_labels(state, &assigned_apparatus).await;
     let assigned_item_groups = state.admin.principal_assigned_item_groups(&principal).await;
     let assigned_warehouses = state
         .warehouses
@@ -181,6 +183,10 @@ async fn profile_payload(
     };
     object.insert("capabilities".to_string(), json!(capabilities));
     object.insert("assigned_apparatus".to_string(), json!(assigned_apparatus));
+    object.insert(
+        "assigned_apparatus_labels".to_string(),
+        json!(assigned_apparatus_labels),
+    );
     object.insert(
         "assigned_item_groups".to_string(),
         json!(assigned_item_groups),

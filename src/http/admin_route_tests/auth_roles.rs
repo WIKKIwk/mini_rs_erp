@@ -314,6 +314,10 @@ async fn admin_creates_material_taminotchi_with_seventy_prefix_code() {
         serde_json::json!(["apparatus:default:asset-007"])
     );
     assert_eq!(
+        login["assigned_apparatus_labels"],
+        serde_json::json!(["Laminatsiya 1"])
+    );
+    assert_eq!(
         login["assigned_item_groups"],
         serde_json::json!(["Kley", "Rulon"])
     );
