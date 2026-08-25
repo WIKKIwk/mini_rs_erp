@@ -6,6 +6,7 @@
 pub mod aasx;
 pub mod canonical_aasx;
 pub mod cutover;
+mod factory_defaults;
 mod identity;
 pub mod isa95;
 pub mod projector;

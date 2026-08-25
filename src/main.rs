@@ -30,6 +30,17 @@ async fn main() -> Result<(), error::AppError> {
         .await
         .map_err(|error| error::AppError::Storage(error.to_string()))?;
     let state = AppState::from_postgres(config, postgres_pool);
+    let bootstrapped_apparatus = state
+        .apparatus
+        .bootstrap_factory_defaults()
+        .await
+        .map_err(|error| error::AppError::Storage(error.to_string()))?;
+    if bootstrapped_apparatus > 0 {
+        tracing::info!(
+            bootstrapped_apparatus,
+            "bootstrapped canonical factory apparatus"
+        );
+    }
     state.telegram.start_bot_worker_if_configured().await;
     let app = http::router::build_router(state);
 

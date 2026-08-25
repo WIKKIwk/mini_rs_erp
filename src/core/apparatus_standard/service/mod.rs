@@ -5,6 +5,8 @@ mod error;
 #[cfg(test)]
 mod memory_repository;
 mod repository;
+#[cfg(test)]
+mod tests;
 
 use std::collections::BTreeMap;
 use std::sync::Arc;
@@ -25,6 +27,7 @@ use super::{
     CutoverPreflightReport, LegacyCutoverManifest, ResolvedCutoverManifest,
     RuntimeApparatusConfiguration, RuntimeApparatusProjection, canonicalize_uploaded_aasx,
     cutover::prepare_cutover,
+    factory_defaults::{FACTORY_DEFAULT_COMMITTED_AT_UNIX_MS, factory_default_apparatus},
 };
 
 #[derive(Clone)]
@@ -87,6 +90,54 @@ impl CanonicalApparatusService {
             metadata: metadata.with_timestamp(now_unix_ms()?),
         })
         .await
+    }
+
+    pub async fn bootstrap_factory_defaults(&self) -> Result<usize, CanonicalApparatusError> {
+        let defaults = factory_default_apparatus();
+        let current = self.repository.list_runtime_projections().await?;
+        let current_ids = current
+            .iter()
+            .map(|projection| projection.apparatus_id.clone())
+            .collect::<std::collections::BTreeSet<_>>();
+        let default_ids = defaults
+            .iter()
+            .map(|default| default.apparatus_id.clone())
+            .collect::<std::collections::BTreeSet<_>>();
+
+        if !current_ids.is_empty() && current_ids.is_disjoint(&default_ids) {
+            return Ok(0);
+        }
+
+        let mut created = 0;
+        for default in defaults {
+            if current_ids.contains(&default.apparatus_id) {
+                continue;
+            }
+            let command_id = format!(
+                "command:factory-default-bootstrap:{}",
+                default.apparatus_id.as_str().replace(':', "-")
+            );
+            let intent = CanonicalRevisionIntent::Create {
+                apparatus_id: default.apparatus_id.clone(),
+                draft: default.draft,
+                metadata: CanonicalCommandMetadata::new(
+                    "system:factory-default-bootstrap",
+                    command_id,
+                )
+                .with_timestamp(FACTORY_DEFAULT_COMMITTED_AT_UNIX_MS),
+            };
+            match self.commit(intent).await {
+                Ok(_) => created += 1,
+                Err(CanonicalApparatusError::AlreadyExists)
+                    if self
+                        .repository
+                        .current_projection(&default.apparatus_id)
+                        .await?
+                        .is_some() => {}
+                Err(error) => return Err(error),
+            }
+        }
+        Ok(created)
     }
 
     pub async fn update(

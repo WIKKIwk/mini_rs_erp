@@ -8,6 +8,57 @@ use crate::db::postgres::{
 use super::fixtures::TestDatabase;
 
 #[tokio::test]
+async fn fresh_current_schema_bootstraps_factory_defaults_and_is_restart_stable() {
+    let database = TestDatabase::create_through("factory_defaults", 74).await;
+    let before_bootstrap: i64 =
+        sqlx::query_scalar("SELECT COUNT(*) FROM mini_apparatus WHERE source_revision IS NOT NULL")
+            .fetch_one(&database.pool)
+            .await
+            .unwrap();
+    assert_eq!(before_bootstrap, 0);
+
+    let service = database.service();
+    assert_eq!(service.bootstrap_factory_defaults().await.unwrap(), 10);
+    let before_restart = service.list_runtime_projections().await.unwrap();
+    assert_eq!(before_restart.len(), 10);
+    assert!(
+        before_restart
+            .iter()
+            .all(|projection| projection.source_revision == 1)
+    );
+
+    let restarted_service = database.service();
+    assert_eq!(
+        restarted_service
+            .bootstrap_factory_defaults()
+            .await
+            .unwrap(),
+        0
+    );
+    assert_eq!(
+        restarted_service.list_runtime_projections().await.unwrap(),
+        before_restart
+    );
+
+    for table in [
+        "mini_canonical_apparatus_identities",
+        "mini_canonical_apparatus_revisions",
+        "mini_canonical_apparatus_heads",
+        "mini_apparatus",
+        "mini_apparatus_queue_policies",
+        "mini_apparatus_material_rules",
+        "mini_apparatus_capacity_profiles",
+    ] {
+        let count: i64 = sqlx::query_scalar(&format!("SELECT COUNT(*) FROM {table}"))
+            .fetch_one(&database.pool)
+            .await
+            .unwrap();
+        assert_eq!(count, 10, "unexpected row count in {table}");
+    }
+    database.close().await;
+}
+
+#[tokio::test]
 async fn migration_0068_to_0072_uses_exact_cutover_and_is_restart_stable() {
     let database = TestDatabase::create_through("upgrade", 68).await;
     let before = migration_history(&database).await;
