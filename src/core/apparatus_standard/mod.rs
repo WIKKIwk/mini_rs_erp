@@ -25,6 +25,7 @@ pub use cutover::{
     LegacyCutoverDraftManifest, LegacyCutoverManifest, LegacyCutoverManifestEntry,
     ResolvedCutoverEntry, ResolvedCutoverManifest, build_cutover_manifest,
 };
+pub(crate) use factory_defaults::canonical_factory_apparatus_id_for_legacy;
 pub use identity::{ApparatusId, ApparatusIdError};
 pub use isa95::{
     AasIdentity, ApparatusCapacity, ApparatusDisplay, ApparatusLifecycle,

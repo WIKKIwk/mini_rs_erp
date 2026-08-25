@@ -41,6 +41,9 @@ async fn main() -> Result<(), error::AppError> {
             "bootstrapped canonical factory apparatus"
         );
     }
+    state.admin.role_assignments().await.map_err(|error| {
+        error::AppError::Storage(format!("role store migration failed: {error}"))
+    })?;
     state.telegram.start_bot_worker_if_configured().await;
     let app = http::router::build_router(state);
 

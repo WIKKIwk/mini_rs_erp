@@ -36,6 +36,34 @@ pub(super) fn factory_default_apparatus() -> Vec<FactoryDefaultApparatus> {
         .collect()
 }
 
+pub(crate) fn canonical_factory_apparatus_id_for_legacy(value: &str) -> Option<ApparatusId> {
+    let canonical_id = match value.trim().to_lowercase().as_str() {
+        "apparatus:default:extruder_laminatsiya" | "extruder laminatsiya" => {
+            "apparatus:default:asset-004"
+        }
+        "apparatus:default:flexo_pechat" | "flexo pechat" => "apparatus:default:asset-005",
+        "apparatus:default:laminatsiya_1" | "laminatsiya 1" => "apparatus:default:asset-007",
+        "apparatus:default:laminatsiya_2" | "laminatsiya 2" => "apparatus:default:asset-008",
+        "apparatus:default:rezka" | "rezka" | "rezka apparat" => "apparatus:default:asset-010",
+        "7 ta rangli bosma aparat" | "7 ta rangli bosma" | "7 ta rangli pechat" => {
+            "apparatus:default:bosma_7"
+        }
+        "8 ta rangli bosma aparat" | "8 ta rangli bosma" | "8 ta rangli pechat" => {
+            "apparatus:default:bosma_8"
+        }
+        "9 ta rangli bosma aparat" | "9 ta rangli bosma" | "9 ta rangli pechat" => {
+            "apparatus:default:bosma_9"
+        }
+        "holodniy kley aparat" | "holodniy kley" => "apparatus:default:holodniy_kley",
+        "paket aparat" | "paket" => "apparatus:default:paket",
+        _ => return None,
+    };
+    Some(
+        ApparatusId::new(canonical_id)
+            .expect("legacy factory aliases map only to canonical apparatus IDs"),
+    )
+}
+
 fn factory_default_specs() -> [FactoryDefaultSpec; 10] {
     [
         FactoryDefaultSpec {
