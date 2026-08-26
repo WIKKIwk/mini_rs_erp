@@ -231,6 +231,16 @@ pub trait ProductionMapStorePort: Send + Sync {
     ) -> StoreResult<Vec<OrderRunSession>> {
         Ok(Vec::new())
     }
+    async fn active_order_run_sessions_for_orders(
+        &self,
+        order_ids: &[String],
+    ) -> StoreResult<BTreeMap<String, Vec<OrderRunSession>>> {
+        let mut sessions = self.order_run_sessions_for_orders(order_ids).await?;
+        for order_sessions in sessions.values_mut() {
+            order_sessions.retain(|session| session.status.is_open());
+        }
+        Ok(sessions)
+    }
     async fn order_run_session(&self, _session_id: &str) -> StoreResult<Option<OrderRunSession>> {
         Ok(None)
     }

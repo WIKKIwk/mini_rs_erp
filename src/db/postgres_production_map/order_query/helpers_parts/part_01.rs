@@ -161,6 +161,44 @@ pub(super) async fn load_active_order_run_session(
     row.map(progress_session_from_row).transpose()
 }
 
+pub(super) async fn load_active_order_run_sessions_for_orders(
+    pool: &PgPool,
+    order_ids: &[String],
+) -> Result<BTreeMap<String, Vec<OrderRunSession>>, ProductionMapError> {
+    let order_ids = order_ids
+        .iter()
+        .map(|order_id| order_id.trim().to_string())
+        .filter(|order_id| !order_id.is_empty())
+        .collect::<Vec<_>>();
+    if order_ids.is_empty() {
+        return Ok(BTreeMap::new());
+    }
+    let rows = sqlx::query_as::<_, ProgressSessionRow>(
+        "SELECT session_id, canonical_apparatus_id AS apparatus, order_id, status,
+                worker_role, worker_ref, worker_display_name,
+                EXTRACT(EPOCH FROM started_at)::bigint AS started_at_unix,
+                EXTRACT(EPOCH FROM updated_at)::bigint AS updated_at_unix,
+                payload_json
+         FROM mini_order_run_sessions
+         WHERE order_id = ANY($1)
+           AND status IN ('active', 'paused', 'frozen', 'roll_detached')
+         ORDER BY order_id ASC, canonical_apparatus_id ASC, updated_at DESC, session_id ASC",
+    )
+    .bind(&order_ids)
+    .fetch_all(pool)
+    .await
+    .map_err(|_| ProductionMapError::StoreFailed)?;
+    let mut sessions_by_order = BTreeMap::new();
+    for row in rows {
+        let session = progress_session_from_row(row)?;
+        sessions_by_order
+            .entry(session.order_id.clone())
+            .or_insert_with(Vec::new)
+            .push(session);
+    }
+    Ok(sessions_by_order)
+}
+
 pub(super) async fn load_active_order_run_session_for_qolip(
     pool: &PgPool,
     qolip_code: &str,

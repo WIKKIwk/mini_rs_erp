@@ -1,6 +1,8 @@
 use std::collections::BTreeMap;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 
+use async_trait::async_trait;
 use crate::core::apparatus_standard::test_support::{TestApparatusSpec, canonical_draft};
 use crate::core::apparatus_standard::{
     ApparatusId, ApparatusOperationalPolicies, CanonicalApparatusPatch, CanonicalApparatusService,
@@ -8,6 +10,9 @@ use crate::core::apparatus_standard::{
     ProcessTechnology, QueueDiscipline,
 };
 use crate::core::production_map::*;
+use crate::core::production_map::store_port::{
+    ApparatusQueueStateMap, ApparatusSequenceMap, OrderControlMap, QueueStateMap,
+};
 use crate::core::qolip::{QolipOrderStartPreparation, QolipProductSpec};
 
 use super::fixtures::{apparatus_stage_map, canonical_apparatus_stage_map, sample_map};
@@ -23,6 +28,135 @@ const FLEXO_ID: &str = "apparatus:default:asset-005";
 const LAMINATION_1_ID: &str = "apparatus:default:asset-007";
 const LAMINATION_2_ID: &str = "apparatus:default:asset-008";
 const REZKA_ID: &str = "apparatus:default:asset-010";
+
+struct SnapshotSessionReadProbeStore {
+    inner: Arc<dyn ProductionMapStorePort>,
+    singular_active_session_reads: AtomicUsize,
+    batch_session_reads: AtomicUsize,
+}
+
+impl SnapshotSessionReadProbeStore {
+    fn new(inner: Arc<dyn ProductionMapStorePort>) -> Self {
+        Self {
+            inner,
+            singular_active_session_reads: AtomicUsize::new(0),
+            batch_session_reads: AtomicUsize::new(0),
+        }
+    }
+}
+
+#[async_trait]
+impl ProductionMapStorePort for SnapshotSessionReadProbeStore {
+    async fn maps(&self) -> Result<Vec<ProductionMapDefinition>, ProductionMapError> {
+        self.inner.maps().await
+    }
+
+    async fn production_order_lifecycles(
+        &self,
+        order_ids: &[String],
+    ) -> Result<BTreeMap<String, ProductionOrderLifecycleRecord>, ProductionMapError> {
+        self.inner.production_order_lifecycles(order_ids).await
+    }
+
+    async fn put_map(&self, map: ProductionMapDefinition) -> Result<(), ProductionMapError> {
+        self.inner.put_map(map).await
+    }
+
+    async fn put_maps_batch(
+        &self,
+        maps: &[ProductionMapDefinition],
+    ) -> Result<(), ProductionMapError> {
+        self.inner.put_maps_batch(maps).await
+    }
+
+    async fn delete_map(&self, map_id: &str) -> Result<(), ProductionMapError> {
+        self.inner.delete_map(map_id).await
+    }
+
+    async fn order_control_states(&self) -> Result<OrderControlMap, ProductionMapError> {
+        self.inner.order_control_states().await
+    }
+
+    async fn apparatus_sequences(&self) -> Result<ApparatusSequenceMap, ProductionMapError> {
+        self.inner.apparatus_sequences().await
+    }
+
+    async fn put_apparatus_sequence(
+        &self,
+        apparatus: &str,
+        order_ids: Vec<String>,
+    ) -> Result<(), ProductionMapError> {
+        self.inner
+            .put_apparatus_sequence(apparatus, order_ids)
+            .await
+    }
+
+    async fn apparatus_queue_states(&self) -> Result<ApparatusQueueStateMap, ProductionMapError> {
+        self.inner.apparatus_queue_states().await
+    }
+
+    async fn put_apparatus_queue_states(
+        &self,
+        apparatus: &str,
+        states: QueueStateMap,
+    ) -> Result<(), ProductionMapError> {
+        self.inner
+            .put_apparatus_queue_states(apparatus, states)
+            .await
+    }
+
+    async fn active_order_run_session(
+        &self,
+        apparatus: &str,
+        order_id: &str,
+    ) -> Result<Option<OrderRunSession>, ProductionMapError> {
+        self.singular_active_session_reads
+            .fetch_add(1, Ordering::Relaxed);
+        self.inner
+            .active_order_run_session(apparatus, order_id)
+            .await
+    }
+
+    async fn active_order_run_sessions_for_orders(
+        &self,
+        order_ids: &[String],
+    ) -> Result<BTreeMap<String, Vec<OrderRunSession>>, ProductionMapError> {
+        self.batch_session_reads.fetch_add(1, Ordering::Relaxed);
+        self.inner
+            .active_order_run_sessions_for_orders(order_ids)
+            .await
+    }
+
+    async fn progress_batches_for_orders(
+        &self,
+        order_ids: &[String],
+    ) -> Result<BTreeMap<String, Vec<OrderProgressBatch>>, ProductionMapError> {
+        self.inner.progress_batches_for_orders(order_ids).await
+    }
+
+    async fn raw_material_assignments(
+        &self,
+    ) -> Result<Vec<RawMaterialAssignment>, ProductionMapError> {
+        self.inner.raw_material_assignments().await
+    }
+
+    async fn put_raw_material_assignment(
+        &self,
+        assignment: RawMaterialAssignment,
+    ) -> Result<(), ProductionMapError> {
+        self.inner.put_raw_material_assignment(assignment).await
+    }
+
+    async fn delete_raw_material_assignment(
+        &self,
+        order_id: &str,
+        barcode: &str,
+    ) -> Result<Option<RawMaterialAssignment>, ProductionMapError> {
+        self.inner
+            .delete_raw_material_assignment(order_id, barcode)
+            .await
+    }
+}
 
 async fn service_with_apparatus_store(
     store: Arc<MemoryProductionMapStore>,
@@ -48,6 +182,45 @@ async fn default_service_with_store(store: Arc<MemoryProductionMapStore>) -> Pro
     service_with_apparatus_store(store, &[(FLOW_PECHAT_ID, "Flow pechat test")])
         .await
         .0
+}
+
+#[tokio::test]
+async fn live_snapshot_reads_active_sessions_in_one_batch() {
+    let memory = Arc::new(MemoryProductionMapStore::new());
+    let probe = Arc::new(SnapshotSessionReadProbeStore::new(memory));
+    let apparatus_service = apparatus_service_for(&[(FLOW_PECHAT_ID, "Flow pechat test")]).await;
+    let service = ProductionMapService::new(
+        probe.clone(),
+        Arc::new(CanonicalServiceApparatusResolver::new(apparatus_service)),
+    );
+
+    for order_id in ["batch-order-1", "batch-order-2", "batch-order-3"] {
+        service
+            .upsert_map(apparatus_stage_map(order_id, FLOW_PECHAT_ID))
+            .await
+            .expect("production map");
+    }
+
+    let snapshot = service.live_snapshot().await.expect("live snapshot");
+    assert_eq!(
+        snapshot
+            .queue_action_controls
+            .get(FLOW_PECHAT_ID)
+            .map(BTreeMap::len),
+        Some(3)
+    );
+    assert_eq!(
+        probe
+            .singular_active_session_reads
+            .load(Ordering::Relaxed),
+        0,
+        "snapshot must not perform one active-session store read per order"
+    );
+    assert_eq!(
+        probe.batch_session_reads.load(Ordering::Relaxed),
+        1,
+        "snapshot must load order sessions in one batch"
+    );
 }
 
 async fn apparatus_service_for(apparatus: &[(&str, &str)]) -> CanonicalApparatusService {

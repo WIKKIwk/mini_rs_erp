@@ -1,6 +1,6 @@
 use super::*;
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
 pub(super) async fn active_order_run_session(
     store: &MemoryProductionMapStore,
@@ -20,6 +20,31 @@ pub(super) async fn active_order_run_session(
                 && session.status.is_open()
         })
         .cloned())
+}
+
+pub(super) async fn active_order_run_sessions_for_orders(
+    store: &MemoryProductionMapStore,
+    order_ids: &[String],
+) -> Result<BTreeMap<String, Vec<OrderRunSession>>, ProductionMapError> {
+    let requested = order_ids
+        .iter()
+        .map(|order_id| order_id.trim())
+        .filter(|order_id| !order_id.is_empty())
+        .collect::<BTreeSet<_>>();
+    if requested.is_empty() {
+        return Ok(BTreeMap::new());
+    }
+    let mut sessions_by_order = BTreeMap::new();
+    for session in store.order_run_sessions.read().await.values() {
+        let order_id = session.order_id.trim();
+        if session.status.is_open() && requested.contains(order_id) {
+            sessions_by_order
+                .entry(order_id.to_string())
+                .or_insert_with(Vec::new)
+                .push(session.clone());
+        }
+    }
+    Ok(sessions_by_order)
 }
 
 pub(super) async fn active_order_run_session_for_qolip(

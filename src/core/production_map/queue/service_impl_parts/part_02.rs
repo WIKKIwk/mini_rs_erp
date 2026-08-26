@@ -17,6 +17,25 @@ impl ProductionMapService {
             .filter(|order_id| !order_id.is_empty())
             .map(str::to_string)
             .collect::<Vec<_>>();
+        let mut maps_by_order_id = HashMap::new();
+        for map in maps {
+            let order_id = map.id.trim();
+            if !order_id.is_empty() {
+                maps_by_order_id.entry(order_id).or_insert(map);
+            }
+        }
+        let mut material_assignments_by_order =
+            HashMap::<String, Vec<RawMaterialAssignment>>::new();
+        for assignment in material_assignments {
+            material_assignments_by_order
+                .entry(assignment.order_id.trim().to_string())
+                .or_default()
+                .push(assignment);
+        }
+        let active_sessions_by_order = self
+            .store
+            .active_order_run_sessions_for_orders(&order_ids)
+            .await?;
         let progress_batches_by_order = self.store.progress_batches_for_orders(&order_ids).await?;
         let visible_by_apparatus = visible_order_ids_by_apparatus(maps);
         let frozen_order_ids = order_controls
@@ -74,8 +93,7 @@ impl ProductionMapService {
             let mut apparatus_controls = BTreeMap::new();
 
             for order_id in sequence {
-                let Some(order_map) = maps.iter().find(|map| map.id.trim() == order_id.trim())
-                else {
+                let Some(order_map) = maps_by_order_id.get(order_id.trim()).copied() else {
                     continue;
                 };
                 let state = effective_states
@@ -121,12 +139,14 @@ impl ProductionMapService {
                     .unwrap_or(ApparatusQueuePreviousWipMode::NotRequired);
                 let active_order_is_this = active_order_id
                     .is_none_or(|active_order_id| active_order_id == order_id.trim());
-                let active_session = self
-                    .store
-                    .active_order_run_session(&storage_key, order_id.trim())
-                    .await?;
+                let active_session = active_sessions_by_order
+                    .get(order_id.trim())
+                    .and_then(|sessions| {
+                        sessions.iter().find(|session| {
+                            queue_state::apparatus_ids_match(&session.apparatus, &storage_key)
+                        })
+                    });
                 let requeued_session = active_session
-                    .as_ref()
                     .is_some_and(order_run_session_was_requeued);
                 let queue_actionable = state.is_active()
                     || actionable_order_id.as_deref() == Some(order_id.trim())
@@ -168,13 +188,14 @@ impl ProductionMapService {
                             interaction.blocking_reason_code =
                                 "previous_stage_not_configured".to_string();
                         } else {
-                            let assignments = material_assignments
-                            .iter()
-                            .filter(|assignment| {
-                                assignment.order_id.trim() == order_id.trim()
-                                    && assignment.apparatus_id == canonical.runtime.apparatus_id
-                            })
-                            .cloned()
+                            let assignments = material_assignments_by_order
+                                .get(order_id.trim())
+                                .into_iter()
+                                .flatten()
+                                .filter(|assignment| {
+                                    assignment.apparatus_id == canonical.runtime.apparatus_id
+                                })
+                                .cloned()
                             .collect::<Vec<_>>();
                             let rule = live_material_rule(canonical.as_ref());
                             let material_requirements = build_raw_material_start_requirements(

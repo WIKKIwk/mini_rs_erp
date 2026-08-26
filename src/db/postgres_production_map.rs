@@ -71,8 +71,9 @@ use self::order_control_helpers::{
 };
 use self::order_query_helpers::{
     load_active_order_run_session, load_active_order_run_session_for_qolip,
-    load_active_order_run_sessions_for_worker, load_completed_queue_orders_for_actor,
-    load_order_run_session, load_order_run_sessions_for_audit, load_order_run_sessions_for_order,
+    load_active_order_run_sessions_for_orders, load_active_order_run_sessions_for_worker,
+    load_completed_queue_orders_for_actor, load_order_run_session,
+    load_order_run_sessions_for_audit, load_order_run_sessions_for_order,
     load_order_run_sessions_for_orders, load_progress_batch, load_progress_batch_by_qr,
     load_progress_batches_for_audit, load_progress_batches_for_order,
     load_progress_batches_for_orders, load_progress_batches_for_worker,

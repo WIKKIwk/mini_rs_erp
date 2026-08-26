@@ -231,6 +231,13 @@ impl ProductionMapStorePort for PostgresProductionMapStore {
         PostgresProductionMapStore::active_order_run_sessions_for_worker(self, worker_refs, worker_display_name, limit).await
     }
 
+    async fn active_order_run_sessions_for_orders(
+        &self,
+        order_ids: &[String],
+    ) -> Result<BTreeMap<String, Vec<OrderRunSession>>, ProductionMapError> {
+        PostgresProductionMapStore::active_order_run_sessions_for_orders(self, order_ids).await
+    }
+
     async fn order_run_session(
         &self,
         session_id: &str,

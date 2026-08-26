@@ -196,6 +196,13 @@ impl ProductionMapStorePort for MemoryProductionMapStore {
         MemoryProductionMapStore::active_order_run_session(self, apparatus, order_id).await
     }
 
+    async fn active_order_run_sessions_for_orders(
+        &self,
+        order_ids: &[String],
+    ) -> Result<BTreeMap<String, Vec<OrderRunSession>>, ProductionMapError> {
+        MemoryProductionMapStore::active_order_run_sessions_for_orders(self, order_ids).await
+    }
+
     async fn active_order_run_session_for_qolip(
         &self,
         qolip_code: &str,
