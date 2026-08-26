@@ -1,8 +1,9 @@
 use async_trait::async_trait;
 
 use super::models::{
-    CreateMaterialReceiptDraftInput, MaterialReceiptDraft, RawMaterialStockEntry,
-    RawMaterialStockUpdateInput, ScaleDriverPrintRequest, ScaleDriverPrintResponse,
+    CreateMaterialReceiptDraftInput, MaterialReceiptDraft, RawMaterialStockDeleteInput,
+    RawMaterialStockEntry, RawMaterialStockUpdateInput, ScaleDriverPrintRequest,
+    ScaleDriverPrintResponse,
 };
 
 #[async_trait]
@@ -40,6 +41,15 @@ pub trait MaterialReceiptStorePort: Send + Sync {
     ) -> Result<RawMaterialStockEntry, GscalePortError> {
         Err(GscalePortError::NotConfigured(
             "raw material stock update is not configured".to_string(),
+        ))
+    }
+
+    async fn soft_delete_raw_material_stock(
+        &self,
+        _input: RawMaterialStockDeleteInput,
+    ) -> Result<RawMaterialStockEntry, GscalePortError> {
+        Err(GscalePortError::NotConfigured(
+            "raw material stock delete is not configured".to_string(),
         ))
     }
 

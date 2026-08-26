@@ -32,8 +32,9 @@ use crate::core::calculate_orders::{
 };
 use crate::core::gscale::GscaleService;
 use crate::core::gscale::models::{
-    CreateMaterialReceiptDraftInput, MaterialReceiptDraft, RawMaterialStockEntry,
-    RawMaterialStockUpdateInput, ScaleDriverPrintRequest, ScaleDriverPrintResponse,
+    CreateMaterialReceiptDraftInput, MaterialReceiptDraft, RawMaterialStockDeleteInput,
+    RawMaterialStockEntry, RawMaterialStockUpdateInput, ScaleDriverPrintRequest,
+    ScaleDriverPrintResponse,
 };
 use crate::core::gscale::ports::{GscalePortError, MaterialReceiptStorePort, ScaleDriverPort};
 use crate::core::inventory_movements::{

@@ -4,8 +4,8 @@ use async_trait::async_trait;
 use sqlx::{PgPool, Postgres, Transaction};
 
 use crate::core::gscale::models::{
-    CreateMaterialReceiptDraftInput, MaterialReceiptDraft, RawMaterialStockEntry,
-    RawMaterialStockUpdateInput,
+    CreateMaterialReceiptDraftInput, MaterialReceiptDraft, RawMaterialStockDeleteInput,
+    RawMaterialStockEntry, RawMaterialStockUpdateInput,
 };
 use crate::core::gscale::ports::{GscalePortError, MaterialReceiptStorePort};
 use crate::core::quantity::positive_erp_quantity;
@@ -75,7 +75,7 @@ async fn upsert_raw_material_stock_tx(
     tx: &mut Transaction<'_, Postgres>,
     row: &MaterialReceiptRow,
 ) -> Result<(), GscalePortError> {
-    sqlx::query(
+    let result = sqlx::query(
         "INSERT INTO mini_raw_material_stock (
              id, warehouse, item_code, item_name, barcode, qty, width_mm, micron,
              uom, status, source_receipt_id, payload_json
@@ -97,7 +97,8 @@ async fn upsert_raw_material_stock_tx(
            reserved_order_id = '',
            source_receipt_id = excluded.source_receipt_id,
            payload_json = excluded.payload_json,
-           updated_at = now()",
+           updated_at = now()
+         WHERE mini_raw_material_stock.status <> 'deleted'",
     )
     .bind(raw_stock_id(&row.barcode))
     .bind(row.warehouse.trim())
@@ -119,6 +120,11 @@ async fn upsert_raw_material_stock_tx(
     .execute(&mut **tx)
     .await
     .map_err(|error| GscalePortError::StoreWrite(error.to_string()))?;
+    if result.rows_affected() != 1 {
+        return Err(GscalePortError::InvalidInput(
+            "raw_material_stock_deleted".to_string(),
+        ));
+    }
     Ok(())
 }
 
@@ -360,6 +366,62 @@ fn raw_material_stock_correction_event(
             "qty": updated.qty,
             "barcode_unchanged": true,
             "source_receipt_id_unchanged": true,
+        }),
+    }
+}
+
+fn raw_material_stock_delete_event(
+    previous: &RawMaterialStockRow,
+    deleted: &RawMaterialStockRow,
+    input: &RawMaterialStockDeleteInput,
+) -> RawMaterialEventDraft {
+    let random: [u8; 16] = rand::random();
+    let owner_is_material = input.actor_role.trim() == "material_taminotchi";
+    let source_id = if deleted.source_receipt_id.trim().is_empty() {
+        deleted.id.trim()
+    } else {
+        deleted.source_receipt_id.trim()
+    };
+    RawMaterialEventDraft {
+        idempotency_key: format!("stock_deleted:{}", data_encoding::HEXLOWER.encode(&random)),
+        event_type: "stock_deleted".to_string(),
+        warehouse: deleted.warehouse.trim().to_string(),
+        barcode: deleted.barcode.trim().to_string(),
+        item_code: deleted.item_code.trim().to_string(),
+        item_name: deleted.item_name.trim().to_string(),
+        qty_delta: -previous.qty,
+        uom: deleted.uom.trim().to_string(),
+        stock_status_before: Some(previous.status.trim().to_string()),
+        stock_status_after: Some(deleted.status.trim().to_string()),
+        order_id: None,
+        apparatus: None,
+        actor_role: input.actor_role.trim().to_string(),
+        actor_ref: input.actor_ref.trim().to_string(),
+        actor_display_name: input.actor_display_name.trim().to_string(),
+        owner_role: if owner_is_material {
+            input.actor_role.trim().to_string()
+        } else {
+            String::new()
+        },
+        owner_ref: if owner_is_material {
+            input.actor_ref.trim().to_string()
+        } else {
+            String::new()
+        },
+        owner_display_name: if owner_is_material {
+            input.actor_display_name.trim().to_string()
+        } else {
+            String::new()
+        },
+        source_type: "stock_delete".to_string(),
+        source_id: source_id.to_string(),
+        source_line_ref: Some(deleted.barcode.trim().to_string()),
+        correlation_id: None,
+        payload_json: serde_json::json!({
+            "stock_id": deleted.id.trim(),
+            "source_receipt_id": deleted.source_receipt_id.trim(),
+            "previous_qty": previous.qty,
+            "soft_delete": true,
         }),
     }
 }

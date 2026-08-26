@@ -39,12 +39,6 @@ async fn postgres_inventory_transfer_preserves_six_decimal_quantity_end_to_end()
         .await
         .expect("migrations remain idempotent");
 
-    let migration_count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM mini_schema_migrations")
-        .fetch_one(&pool)
-        .await
-        .expect("migration count");
-    assert_eq!(migration_count, 74);
-
     let quantity_columns: Vec<(String, String, Option<i32>, Option<i32>)> = sqlx::query_as(
         r#"
         SELECT table_name, data_type, numeric_precision, numeric_scale

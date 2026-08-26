@@ -1,4 +1,3 @@
-
 fn raw_material_assignment_quantities(
     assignment: &RawMaterialAssignment,
     stock: Option<&RawMaterialStockEntry>,
@@ -138,6 +137,9 @@ pub async fn raw_material_stock(
                 .map_err(|_| server_error("raw material stock fetch failed"))
         }
         Method::PUT => update_material_scoped_raw_material_stock(&state, &principal, &body).await,
+        Method::DELETE => {
+            delete_material_scoped_raw_material_stock(&state, &principal, &body).await
+        }
         _ => Err(method_not_allowed()),
     }
 }
@@ -150,6 +152,92 @@ struct RawMaterialStockUpdateRequest {
     item_code: String,
     #[serde(default)]
     qty: f64,
+}
+
+#[derive(Debug, serde::Deserialize)]
+struct RawMaterialStockDeleteRequest {
+    #[serde(default)]
+    barcode: String,
+}
+
+async fn delete_material_scoped_raw_material_stock(
+    state: &AppState,
+    principal: &Principal,
+    body: &[u8],
+) -> Result<Response, AdminError> {
+    if principal.role != PrincipalRole::MaterialTaminotchi {
+        return Err(forbidden());
+    }
+    require_capability(state, principal, Capability::RawMaterialAssign).await?;
+    let request: RawMaterialStockDeleteRequest = parse_json(body)?;
+    let barcode = request.barcode.trim();
+    if barcode.is_empty() {
+        return Err(bad_request("raw_material_stock_delete_invalid"));
+    }
+    let current = state
+        .gscale
+        .raw_material_stock_by_barcode(barcode)
+        .await
+        .map_err(|_| server_error("raw material stock fetch failed"))?
+        .ok_or_else(|| not_found("raw_material_stock_not_found"))?;
+    let warehouses = material_warehouse_scope(state, principal).await?;
+    if !warehouse_in_scope(&warehouses, &current.warehouse) {
+        return Err(forbidden());
+    }
+    if !current.status.trim().eq_ignore_ascii_case("available")
+        || !current.reserved_order_id.trim().is_empty()
+    {
+        return Err(raw_material_stock_locked_error());
+    }
+
+    let items = state
+        .admin
+        .items_by_codes(std::slice::from_ref(&current.item_code))
+        .await
+        .map_err(|_| server_error("raw material item fetch failed"))?;
+    let selected_item = items
+        .iter()
+        .find(|item| {
+            item.code
+                .trim()
+                .eq_ignore_ascii_case(current.item_code.trim())
+        })
+        .ok_or_else(|| forbidden())?;
+    let assigned_groups = state
+        .admin
+        .principal_assigned_item_group_scope(principal)
+        .await
+        .map_err(|_| server_error("item group scope fetch failed"))?;
+    if selected_item.item_group.trim().is_empty()
+        || !assigned_groups.iter().any(|group| {
+            group
+                .trim()
+                .eq_ignore_ascii_case(selected_item.item_group.trim())
+        })
+    {
+        return Err(forbidden());
+    }
+
+    let actor = queue_action_actor(principal);
+    let deleted = state
+        .gscale
+        .soft_delete_raw_material_stock(RawMaterialStockDeleteInput {
+            barcode: barcode.to_string(),
+            expected_warehouse: current.warehouse.clone(),
+            actor_role: actor.role,
+            actor_ref: actor.ref_,
+            actor_display_name: actor.display_name,
+        })
+        .await
+        .map_err(raw_material_stock_delete_error)?;
+    state
+        .warehouse_events
+        .notify_updated(&deleted.warehouse, "raw_material_stock_deleted");
+    Ok(json_response(serde_json::json!({
+        "ok": true,
+        "barcode": deleted.barcode,
+        "stock_id": deleted.id,
+    })))
 }
 
 async fn update_material_scoped_raw_material_stock(
@@ -263,6 +351,23 @@ fn raw_material_stock_update_error(error: crate::core::gscale::GscaleServiceErro
         }
         crate::core::gscale::GscaleServiceError::InvalidInput(detail) => bad_request(detail),
         _ => server_error("raw material stock update failed"),
+    }
+}
+
+fn raw_material_stock_delete_error(error: crate::core::gscale::GscaleServiceError) -> AdminError {
+    match error {
+        crate::core::gscale::GscaleServiceError::InvalidInput(detail)
+            if detail == "raw_material_stock_not_found" =>
+        {
+            not_found(detail)
+        }
+        crate::core::gscale::GscaleServiceError::InvalidInput(detail)
+            if detail == "raw_material_stock_locked" =>
+        {
+            raw_material_stock_locked_error()
+        }
+        crate::core::gscale::GscaleServiceError::InvalidInput(detail) => bad_request(detail),
+        _ => server_error("raw material stock delete failed"),
     }
 }
 

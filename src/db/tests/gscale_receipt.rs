@@ -1,4 +1,6 @@
-use crate::core::gscale::models::{CreateMaterialReceiptDraftInput, RawMaterialStockUpdateInput};
+use crate::core::gscale::models::{
+    CreateMaterialReceiptDraftInput, RawMaterialStockDeleteInput, RawMaterialStockUpdateInput,
+};
 use crate::core::gscale::ports::{GscalePortError, MaterialReceiptStorePort};
 use crate::db::postgres::{apply_foundation_migration, postgres_test_database_options};
 use crate::db::postgres_gscale_receipt::PostgresGscaleReceiptStore;
@@ -96,11 +98,15 @@ async fn postgres_gscale_receipt_preserves_precision_and_supports_stock_correcti
     apply_foundation_migration(&pool)
         .await
         .expect("migrations remain idempotent");
-    let migration_count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM mini_schema_migrations")
-        .fetch_one(&pool)
-        .await
-        .expect("migration count");
-    assert_eq!(migration_count, 74);
+    let raw_material_delete_migration_count: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*)
+         FROM mini_schema_migrations
+         WHERE version = '0076_raw_material_soft_delete'",
+    )
+    .fetch_one(&pool)
+    .await
+    .expect("raw material delete migration count");
+    assert_eq!(raw_material_delete_migration_count, 1);
 
     let increased = store
         .update_raw_material_stock(RawMaterialStockUpdateInput {
@@ -220,6 +226,165 @@ async fn postgres_gscale_receipt_preserves_precision_and_supports_stock_correcti
             .as_database_error()
             .and_then(|error| error.constraint()),
         Some("mini_rme_stock_correction_consistent")
+    );
+
+    let wrong_warehouse = store
+        .soft_delete_raw_material_stock(RawMaterialStockDeleteInput {
+            barcode: draft.barcode.clone(),
+            expected_warehouse: "Other warehouse".to_string(),
+            actor_role: "material_taminotchi".to_string(),
+            actor_ref: "MAT-001".to_string(),
+            actor_display_name: "Material".to_string(),
+        })
+        .await
+        .expect_err("warehouse scope mismatch must block stock deletion");
+    assert_eq!(
+        wrong_warehouse,
+        GscalePortError::InvalidInput("raw_material_stock_locked".to_string())
+    );
+
+    sqlx::query(
+        "INSERT INTO mini_factory_locations (id, name)
+         VALUES ('state:delete-test', 'Delete test state')",
+    )
+    .execute(&pool)
+    .await
+    .expect("create state location source");
+    sqlx::query(
+        "INSERT INTO mini_inventory_placements (
+             asset_kind, asset_ref, physical_location_id
+         )
+         SELECT 'raw_material', id, 'inventory_location:state:state:delete-test'
+         FROM mini_raw_material_stock
+         WHERE barcode = $1",
+    )
+    .bind(&draft.barcode)
+    .execute(&pool)
+    .await
+    .expect("place stock in state");
+    let state_locked = store
+        .soft_delete_raw_material_stock(RawMaterialStockDeleteInput {
+            barcode: draft.barcode.clone(),
+            expected_warehouse: draft.warehouse.clone(),
+            actor_role: "material_taminotchi".to_string(),
+            actor_ref: "MAT-001".to_string(),
+            actor_display_name: "Material".to_string(),
+        })
+        .await
+        .expect_err("state placement must block stock deletion");
+    assert_eq!(
+        state_locked,
+        GscalePortError::InvalidInput("raw_material_stock_locked".to_string())
+    );
+    sqlx::query(
+        "DELETE FROM mini_inventory_placements
+         WHERE asset_kind = 'raw_material'
+           AND asset_ref = (
+               SELECT id FROM mini_raw_material_stock WHERE barcode = $1
+           )",
+    )
+    .bind(&draft.barcode)
+    .execute(&pool)
+    .await
+    .expect("return stock to implicit warehouse placement");
+
+    sqlx::query(
+        "UPDATE mini_raw_material_stock
+         SET payload_json = payload_json || jsonb_build_object(
+             'inventory_transfer_id', 'transfer-active'
+         )
+         WHERE barcode = $1",
+    )
+    .bind(&draft.barcode)
+    .execute(&pool)
+    .await
+    .expect("mark active transfer");
+    let transfer_locked = store
+        .soft_delete_raw_material_stock(RawMaterialStockDeleteInput {
+            barcode: draft.barcode.clone(),
+            expected_warehouse: draft.warehouse.clone(),
+            actor_role: "material_taminotchi".to_string(),
+            actor_ref: "MAT-001".to_string(),
+            actor_display_name: "Material".to_string(),
+        })
+        .await
+        .expect_err("active transfer must block stock deletion");
+    assert_eq!(
+        transfer_locked,
+        GscalePortError::InvalidInput("raw_material_stock_locked".to_string())
+    );
+    sqlx::query(
+        "UPDATE mini_raw_material_stock
+         SET payload_json = payload_json - 'inventory_transfer_id'
+         WHERE barcode = $1",
+    )
+    .bind(&draft.barcode)
+    .execute(&pool)
+    .await
+    .expect("clear active transfer");
+
+    let deleted = store
+        .soft_delete_raw_material_stock(RawMaterialStockDeleteInput {
+            barcode: draft.barcode.clone(),
+            expected_warehouse: draft.warehouse.clone(),
+            actor_role: "material_taminotchi".to_string(),
+            actor_ref: "MAT-001".to_string(),
+            actor_display_name: "Material".to_string(),
+        })
+        .await
+        .expect("soft delete available stock");
+    assert_eq!(deleted.status, "deleted");
+    assert!(
+        store
+            .raw_material_stock_by_barcode(&draft.barcode)
+            .await
+            .expect("deleted stock lookup")
+            .is_none()
+    );
+    assert!(
+        store
+            .raw_material_stock(&draft.warehouse, 20)
+            .await
+            .expect("deleted stock list")
+            .is_empty()
+    );
+    let deletion: (String, String, String) = sqlx::query_as(
+        "SELECT stock.status, event.event_type, event.qty_delta::text
+         FROM mini_raw_material_stock stock
+         JOIN mini_raw_material_events event
+           ON event.barcode = stock.barcode
+          AND event.event_type = 'stock_deleted'
+         WHERE stock.barcode = $1",
+    )
+    .bind(&draft.barcode)
+    .fetch_one(&pool)
+    .await
+    .expect("stock delete audit");
+    assert_eq!(
+        deletion,
+        (
+            "deleted".to_string(),
+            "stock_deleted".to_string(),
+            "-12.500000".to_string()
+        )
+    );
+    let recreate_deleted = store
+        .create_material_receipt_draft(CreateMaterialReceiptDraftInput {
+            item_code: "ITEM-REUSED".to_string(),
+            item_name: "Reused deleted material".to_string(),
+            warehouse: draft.warehouse.clone(),
+            qty: 1.0,
+            barcode: draft.barcode.clone(),
+            actor_role: "material_taminotchi".to_string(),
+            actor_ref: "MAT-001".to_string(),
+            actor_display_name: "Material".to_string(),
+            ..CreateMaterialReceiptDraftInput::default()
+        })
+        .await
+        .expect_err("soft-deleted QR identity must not be reused");
+    assert_eq!(
+        recreate_deleted,
+        GscalePortError::InvalidInput("raw_material_stock_deleted".to_string())
     );
 
     let invalid = store

@@ -9,7 +9,8 @@ use crate::core::calculate_orders::{
 };
 use crate::core::formula::{CalculateRequest, calculate_with_material_catalog};
 use crate::core::gscale::models::{
-    ProgressLabelPrintRequest, RawMaterialStockEntry, RawMaterialStockUpdateInput,
+    ProgressLabelPrintRequest, RawMaterialStockDeleteInput, RawMaterialStockEntry,
+    RawMaterialStockUpdateInput,
 };
 use crate::core::production_map::{
     ApparatusDowntime, ApparatusScheduleCancelRequest, ApparatusScheduleRequest,

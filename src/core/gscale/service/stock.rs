@@ -1,7 +1,8 @@
 use super::error::map_receipt_store_error;
 use super::{GscaleService, GscaleServiceError};
 use crate::core::gscale::models::{
-    MaterialReceiptDraft, RawMaterialStockEntry, RawMaterialStockUpdateInput,
+    MaterialReceiptDraft, RawMaterialStockDeleteInput, RawMaterialStockEntry,
+    RawMaterialStockUpdateInput,
 };
 use crate::core::quantity::positive_erp_quantity;
 
@@ -86,6 +87,28 @@ impl GscaleService {
         })?;
         receipt_store
             .update_raw_material_stock(input)
+            .await
+            .map_err(map_receipt_store_error)
+    }
+
+    pub async fn soft_delete_raw_material_stock(
+        &self,
+        mut input: RawMaterialStockDeleteInput,
+    ) -> Result<RawMaterialStockEntry, GscaleServiceError> {
+        input.barcode = input.barcode.trim().to_string();
+        input.expected_warehouse = input.expected_warehouse.trim().to_string();
+        if input.barcode.is_empty() || input.expected_warehouse.is_empty() {
+            return Err(GscaleServiceError::InvalidInput(
+                "raw_material_stock_delete_invalid".to_string(),
+            ));
+        }
+        let receipt_store = self.receipt_store.as_ref().ok_or_else(|| {
+            GscaleServiceError::NotConfigured(
+                "material receipt store is not configured".to_string(),
+            )
+        })?;
+        receipt_store
+            .soft_delete_raw_material_stock(input)
             .await
             .map_err(map_receipt_store_error)
     }

@@ -127,6 +127,31 @@ impl MaterialReceiptStorePort for RawMaterialStockLookup {
         Ok(item.clone())
     }
 
+    async fn soft_delete_raw_material_stock(
+        &self,
+        input: RawMaterialStockDeleteInput,
+    ) -> Result<RawMaterialStockEntry, GscalePortError> {
+        let mut stock = self.stock.lock().await;
+        let key = input.barcode.trim().to_ascii_uppercase();
+        let item = stock.get(&key).ok_or_else(|| {
+            GscalePortError::InvalidInput("raw_material_stock_not_found".to_string())
+        })?;
+        if !item
+            .warehouse
+            .trim()
+            .eq_ignore_ascii_case(input.expected_warehouse.trim())
+            || item.status != "available"
+            || !item.reserved_order_id.trim().is_empty()
+        {
+            return Err(GscalePortError::InvalidInput(
+                "raw_material_stock_locked".to_string(),
+            ));
+        }
+        let mut deleted = stock.remove(&key).expect("checked stock item");
+        deleted.status = "deleted".to_string();
+        Ok(deleted)
+    }
+
     async fn mark_raw_material_stock_in_use(
         &self,
         barcodes: &[String],

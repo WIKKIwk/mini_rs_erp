@@ -163,6 +163,15 @@ pub struct RawMaterialStockUpdateInput {
 }
 
 #[derive(Debug, Clone, Default, PartialEq)]
+pub struct RawMaterialStockDeleteInput {
+    pub barcode: String,
+    pub expected_warehouse: String,
+    pub actor_role: String,
+    pub actor_ref: String,
+    pub actor_display_name: String,
+}
+
+#[derive(Debug, Clone, Default, PartialEq)]
 pub struct CreateMaterialReceiptDraftInput {
     pub item_code: String,
     pub item_name: String,

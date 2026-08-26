@@ -894,6 +894,92 @@ async fn material_taminotchi_can_correct_available_raw_material_without_changing
 }
 
 #[tokio::test]
+async fn material_taminotchi_safely_deletes_only_available_raw_material_in_own_scope() {
+    let material_store = Arc::new(RawMaterialStockLookup::default());
+    let mut state = test_state();
+    state.gscale = GscaleService::new().with_receipt_store(material_store.clone());
+    state
+        .admin
+        .upsert_role_assignment(crate::core::authz::RoleAssignmentUpsert {
+            principal_role: PrincipalRole::MaterialTaminotchi,
+            principal_ref: "material-stock-delete".to_string(),
+            role_id: "material_taminotchi".to_string(),
+            assigned_apparatus: Vec::new(),
+            assigned_item_groups: vec!["Kraska".to_string()],
+        })
+        .await
+        .expect("material stock delete role");
+    assign_warehouse_to_principal(
+        &state,
+        PrincipalRole::MaterialTaminotchi,
+        "material-stock-delete",
+        "Kalidor",
+    )
+    .await;
+    let token = session_for(
+        &state,
+        PrincipalRole::MaterialTaminotchi,
+        "material-stock-delete",
+    )
+    .await;
+    let admin_token = session(&state, PrincipalRole::Admin).await;
+    let router = build_router(state);
+
+    let admin_delete = router
+        .clone()
+        .oneshot(request_with_body(
+            "DELETE",
+            "/v1/mobile/admin/raw-material-stock",
+            &admin_token,
+            r#"{"barcode":"30AA"}"#,
+        ))
+        .await
+        .expect("admin raw stock delete");
+    assert_eq!(admin_delete.status(), StatusCode::FORBIDDEN);
+
+    let deleted = router
+        .clone()
+        .oneshot(request_with_body(
+            "DELETE",
+            "/v1/mobile/admin/raw-material-stock",
+            &token,
+            r#"{"barcode":"30AA"}"#,
+        ))
+        .await
+        .expect("raw stock delete");
+    let status = deleted.status();
+    let body = json_body(deleted).await;
+    assert_eq!(status, StatusCode::OK, "{body:?}");
+    assert_eq!(body["ok"], true);
+    assert_eq!(body["barcode"], "30AA");
+    assert!(
+        material_store
+            .raw_material_stock_by_barcode("30AA")
+            .await
+            .expect("deleted stock lookup")
+            .is_none()
+    );
+
+    material_store
+        .set_stock_status("30CC", "reserved", "zakaz-locked")
+        .await;
+    let locked = router
+        .oneshot(request_with_body(
+            "DELETE",
+            "/v1/mobile/admin/raw-material-stock",
+            &token,
+            r#"{"barcode":"30CC"}"#,
+        ))
+        .await
+        .expect("locked raw stock delete");
+    assert_eq!(locked.status(), StatusCode::CONFLICT);
+    assert_eq!(
+        json_body(locked).await["error"],
+        "raw_material_stock_locked"
+    );
+}
+
+#[tokio::test]
 async fn material_taminotchi_reprints_only_the_existing_raw_material_identity() {
     let material_store = Arc::new(RawMaterialStockLookup::default());
     let mut state = test_state();
