@@ -273,24 +273,24 @@ impl ProductionMapService {
                             // A worker may finish with an issue note, which is
                             // persisted as the explicit frozen transition.
                             allowed_actions.push(queue_state::ApparatusQueueAction::Freeze);
-                            let current_input_batch_id = self
-                                .completion_input_batch_id(
-                                    &storage_key,
-                                    order_id.trim(),
-                                    &QueueProgressInput::default(),
-                                )
-                                .await?;
-                            let has_unprocessed_previous_wips = self
-                                .has_unprocessed_previous_wips(
+                            let current_input_batch_id = active_session
+                                .map(session_progress_links)
+                                .map(|links| links.batch_id)
+                                .unwrap_or_default();
+                            let batches = progress_batches_by_order
+                                .get(order_id.trim())
+                                .map(Vec::as_slice)
+                                .unwrap_or_default();
+                            let has_unprocessed_previous_wips =
+                                has_unprocessed_previous_wips_from_batches(
                                     order_id.trim(),
                                     order_map,
                                     &storage_key,
                                     canonical.as_ref(),
                                     all_states,
-                                    &[],
+                                    batches,
                                     &current_input_batch_id,
-                                )
-                                .await?;
+                                );
                             if apparatus::is_rezka_apparatus(&canonical) {
                                 allowed_actions
                                     .push(queue_state::ApparatusQueueAction::RollComplete);

@@ -31,12 +31,13 @@ pub fn effective_apparatus_sequence_excluding(
         return Vec::new();
     }
     let mut result = Vec::new();
+    let mut seen = BTreeSet::new();
     for id in stored_sequence {
         let id = id.trim();
         if id.is_empty() || !visible.contains(id) {
             continue;
         }
-        if !result.iter().any(|existing| existing == id) {
+        if seen.insert(id.to_string()) {
             result.push(id.to_string());
         }
     }
@@ -49,7 +50,7 @@ pub fn effective_apparatus_sequence_excluding(
         if id.is_empty() || excluded.contains(id) {
             continue;
         }
-        if !result.iter().any(|existing| existing == id) {
+        if seen.insert(id.to_string()) {
             result.push(id.to_string());
         }
     }

@@ -33,6 +33,8 @@ struct SnapshotSessionReadProbeStore {
     inner: Arc<dyn ProductionMapStorePort>,
     singular_active_session_reads: AtomicUsize,
     batch_session_reads: AtomicUsize,
+    singular_progress_batch_reads: AtomicUsize,
+    batch_progress_batch_reads: AtomicUsize,
 }
 
 impl SnapshotSessionReadProbeStore {
@@ -41,6 +43,8 @@ impl SnapshotSessionReadProbeStore {
             inner,
             singular_active_session_reads: AtomicUsize::new(0),
             batch_session_reads: AtomicUsize::new(0),
+            singular_progress_batch_reads: AtomicUsize::new(0),
+            batch_progress_batch_reads: AtomicUsize::new(0),
         }
     }
 }
@@ -131,7 +135,18 @@ impl ProductionMapStorePort for SnapshotSessionReadProbeStore {
         &self,
         order_ids: &[String],
     ) -> Result<BTreeMap<String, Vec<OrderProgressBatch>>, ProductionMapError> {
+        self.batch_progress_batch_reads
+            .fetch_add(1, Ordering::Relaxed);
         self.inner.progress_batches_for_orders(order_ids).await
+    }
+
+    async fn progress_batches_for_order(
+        &self,
+        order_id: &str,
+    ) -> Result<Vec<OrderProgressBatch>, ProductionMapError> {
+        self.singular_progress_batch_reads
+            .fetch_add(1, Ordering::Relaxed);
+        self.inner.progress_batches_for_order(order_id).await
     }
 
     async fn raw_material_assignments(
@@ -187,19 +202,45 @@ async fn default_service_with_store(store: Arc<MemoryProductionMapStore>) -> Pro
 #[tokio::test]
 async fn live_snapshot_reads_active_sessions_in_one_batch() {
     let memory = Arc::new(MemoryProductionMapStore::new());
-    let probe = Arc::new(SnapshotSessionReadProbeStore::new(memory));
+    let probe = Arc::new(SnapshotSessionReadProbeStore::new(memory.clone()));
     let apparatus_service = apparatus_service_for(&[(FLOW_PECHAT_ID, "Flow pechat test")]).await;
     let service = ProductionMapService::new(
         probe.clone(),
         Arc::new(CanonicalServiceApparatusResolver::new(apparatus_service)),
     );
 
-    for order_id in ["batch-order-1", "batch-order-2", "batch-order-3"] {
+    let order_ids = ["batch-order-1", "batch-order-2", "batch-order-3"];
+    for order_id in order_ids {
         service
             .upsert_map(apparatus_stage_map(order_id, FLOW_PECHAT_ID))
             .await
             .expect("production map");
+        memory
+            .put_order_run_session(OrderRunSession {
+                session_id: format!("session-{order_id}"),
+                apparatus: FLOW_PECHAT_ID.to_string(),
+                order_id: order_id.to_string(),
+                status: OrderRunStatus::Active,
+                worker_role: "test".to_string(),
+                worker_ref: "worker-1".to_string(),
+                worker_display_name: "Worker".to_string(),
+                started_at_unix: 1,
+                updated_at_unix: 1,
+                payload_json: serde_json::json!({}),
+            })
+            .await
+            .expect("active run session");
     }
+    memory
+        .put_apparatus_queue_states(
+            FLOW_PECHAT_ID,
+            order_ids
+                .into_iter()
+                .map(|order_id| (order_id.to_string(), "in_progress".to_string()))
+                .collect(),
+        )
+        .await
+        .expect("queue states");
 
     let snapshot = service.live_snapshot().await.expect("live snapshot");
     assert_eq!(
@@ -220,6 +261,16 @@ async fn live_snapshot_reads_active_sessions_in_one_batch() {
         probe.batch_session_reads.load(Ordering::Relaxed),
         1,
         "snapshot must load order sessions in one batch"
+    );
+    assert_eq!(
+        probe.singular_progress_batch_reads.load(Ordering::Relaxed),
+        0,
+        "snapshot must not perform one progress-batch read per order"
+    );
+    assert_eq!(
+        probe.batch_progress_batch_reads.load(Ordering::Relaxed),
+        1,
+        "snapshot must load progress batches in one batch"
     );
 }
 
