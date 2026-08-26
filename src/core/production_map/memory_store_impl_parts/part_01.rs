@@ -3,6 +3,13 @@ impl MemoryProductionMapStore {
         maps::maps(self).await
     }
 
+    async fn production_order_lifecycles(
+        &self,
+        order_ids: &[String],
+    ) -> Result<BTreeMap<String, ProductionOrderLifecycleRecord>, ProductionMapError> {
+        maps::production_order_lifecycles(self, order_ids).await
+    }
+
     async fn put_map(&self, map: ProductionMapDefinition) -> Result<(), ProductionMapError> {
         maps::put_map(self, map).await
     }

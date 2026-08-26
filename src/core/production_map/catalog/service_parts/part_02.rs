@@ -8,12 +8,32 @@ impl ProductionMapService {
         Ok(compile_saved_maps(self.store.maps().await?))
     }
 
+    pub async fn production_order_lifecycle(
+        &self,
+        order_id: &str,
+    ) -> Result<ProductionOrderLifecycleRecord, ProductionMapError> {
+        let order_id = order_id.trim();
+        if order_id.is_empty() {
+            return Err(ProductionMapError::MissingId);
+        }
+        self.store
+            .production_order_lifecycles(&[order_id.to_string()])
+            .await?
+            .remove(order_id)
+            .ok_or(ProductionMapError::MapNotFound)
+    }
+
     pub async fn fully_completed_orders(
         &self,
         limit: usize,
     ) -> Result<Vec<FullyCompletedProductionOrder>, ProductionMapError> {
-        let maps = self.store.maps().await?;
-        let queue_states = self.store.apparatus_queue_states().await?;
+        let maps = self
+            .store
+            .maps_by_lifecycle_statuses(&[
+                ProductionOrderLifecycleStatus::ProductionCompleted,
+                ProductionOrderLifecycleStatus::Closed,
+            ])
+            .await?;
         let mut candidates = Vec::new();
         for map in maps {
             let order_id = map.id.trim();
@@ -36,12 +56,6 @@ impl ProductionMapService {
                 continue;
             };
             if required_apparatus.is_empty() {
-                continue;
-            }
-            if !required_apparatus
-                .iter()
-                .all(|apparatus| order_completed_on_apparatus(&queue_states, order_id, apparatus))
-            {
                 continue;
             }
             candidates.push((map, required_apparatus));

@@ -34,11 +34,70 @@ pub(super) async fn put_apparatus_queue_states(
 ) -> Result<(), ProductionMapError> {
     let apparatus = ApparatusId::new(apparatus.trim().to_string())
         .map_err(|_| ProductionMapError::StoreFailed)?;
+    let order_ids = states.keys().cloned().collect::<Vec<_>>();
     store
         .queue_states
         .write()
         .await
         .insert(apparatus.to_string(), states);
+    refresh_production_order_lifecycles(store, &order_ids).await?;
+    Ok(())
+}
+
+pub(super) async fn refresh_production_order_lifecycles(
+    store: &MemoryProductionMapStore,
+    order_ids: &[String],
+) -> Result<(), ProductionMapError> {
+    let maps = store.maps.read().await;
+    let queue_states = store.queue_states.read().await;
+    let mut next_statuses = Vec::new();
+    for order_id in order_ids {
+        let order_id = order_id.trim();
+        let Some(map) = maps.get(order_id) else {
+            continue;
+        };
+        let Some(status) =
+            super::super::progress::derive_production_order_lifecycle(map, &queue_states)
+        else {
+            return Err(ProductionMapError::StoreFailed);
+        };
+        next_statuses.push((order_id.to_string(), status));
+    }
+    drop(queue_states);
+    drop(maps);
+
+    let completed_with_issue_orders = store
+        .queue_events
+        .read()
+        .await
+        .iter()
+        .filter(|event| {
+            event
+                .payload_json
+                .get("completed_with_issue")
+                .and_then(serde_json::Value::as_bool)
+                == Some(true)
+        })
+        .map(|event| event.order_id.trim().to_string())
+        .collect::<BTreeSet<_>>();
+    let mut lifecycles = store.production_order_lifecycles.write().await;
+    for (order_id, status) in next_statuses {
+        let record = lifecycles
+            .entry(order_id.clone())
+            .or_insert_with(|| ProductionOrderLifecycleRecord::released(&order_id));
+        if !record.status.can_automatically_transition_to(status) {
+            continue;
+        }
+        let changed_at_unix = record.lifecycle_version + 1;
+        record.transition_to(status, changed_at_unix);
+        if status == ProductionOrderLifecycleStatus::ProductionCompleted {
+            record.completion_outcome = if completed_with_issue_orders.contains(&order_id) {
+                "with_issue".to_string()
+            } else {
+                "normal".to_string()
+            };
+        }
+    }
     Ok(())
 }
 
@@ -217,12 +276,14 @@ pub(super) async fn resolve_completion_request_decision(
             ApparatusId::new(session.apparatus.trim().to_string())
                 .map_err(|_| ProductionMapError::StoreFailed)?;
         }
+        let order_id = resolution.event.order_id.trim().to_string();
         store
             .queue_states
             .write()
             .await
             .insert(apparatus.to_string(), resolution.states);
         store.queue_events.write().await.push(resolution.event);
+        refresh_production_order_lifecycles(store, &[order_id]).await?;
         if let Some(session) = resolution.session {
             store
                 .order_run_sessions

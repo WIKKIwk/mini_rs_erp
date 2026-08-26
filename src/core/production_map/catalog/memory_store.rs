@@ -15,6 +15,7 @@ pub(super) async fn put_map(
     store: &MemoryProductionMapStore,
     map: ProductionMapDefinition,
 ) -> Result<(), ProductionMapError> {
+    let order_id = map.id.trim().to_string();
     let mut maps = store.maps.write().await;
     reject_order_number_immutable(&maps, &map)?;
     let order_number = map.order_number.trim();
@@ -27,6 +28,13 @@ pub(super) async fn put_map(
         }
     }
     maps.insert(map.id.clone(), map);
+    drop(maps);
+    store
+        .production_order_lifecycles
+        .write()
+        .await
+        .entry(order_id.clone())
+        .or_insert_with(|| ProductionOrderLifecycleRecord::released(&order_id));
     Ok(())
 }
 
@@ -50,6 +58,14 @@ pub(super) async fn put_maps_batch(
     for map in maps {
         existing_maps.insert(map.id.clone(), map.clone());
     }
+    drop(existing_maps);
+    let mut lifecycles = store.production_order_lifecycles.write().await;
+    for map in maps {
+        let order_id = map.id.trim().to_string();
+        lifecycles
+            .entry(order_id.clone())
+            .or_insert_with(|| ProductionOrderLifecycleRecord::released(&order_id));
+    }
     Ok(())
 }
 
@@ -59,6 +75,11 @@ pub(super) async fn delete_map(
 ) -> Result<(), ProductionMapError> {
     let map_id = map_id.trim();
     store.maps.write().await.remove(map_id);
+    store
+        .production_order_lifecycles
+        .write()
+        .await
+        .remove(map_id);
     for order_ids in store.sequences.write().await.values_mut() {
         order_ids.retain(|order_id| order_id.trim() != map_id);
     }
@@ -67,6 +88,25 @@ pub(super) async fn delete_map(
     }
     store.order_controls.write().await.remove(map_id);
     Ok(())
+}
+
+pub(super) async fn production_order_lifecycles(
+    store: &MemoryProductionMapStore,
+    order_ids: &[String],
+) -> Result<BTreeMap<String, ProductionOrderLifecycleRecord>, ProductionMapError> {
+    let requested = order_ids
+        .iter()
+        .map(|order_id| order_id.trim())
+        .filter(|order_id| !order_id.is_empty())
+        .collect::<std::collections::BTreeSet<_>>();
+    Ok(store
+        .production_order_lifecycles
+        .read()
+        .await
+        .iter()
+        .filter(|(order_id, _)| requested.is_empty() || requested.contains(order_id.as_str()))
+        .map(|(order_id, record)| (order_id.clone(), record.clone()))
+        .collect())
 }
 
 pub(super) async fn apparatus_sequences(

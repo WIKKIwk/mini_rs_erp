@@ -3,6 +3,57 @@
 pub trait ProductionMapStorePort: Send + Sync {
     // Maps and apparatus sequence persistence.
     async fn maps(&self) -> StoreResult<Vec<ProductionMapDefinition>>;
+    async fn maps_by_lifecycle_statuses(
+        &self,
+        statuses: &[ProductionOrderLifecycleStatus],
+    ) -> StoreResult<Vec<ProductionMapDefinition>> {
+        if statuses.is_empty() {
+            return Ok(Vec::new());
+        }
+        let maps = self.maps().await?;
+        let order_ids = maps
+            .iter()
+            .map(|map| map.id.trim().to_string())
+            .filter(|order_id| !order_id.is_empty())
+            .collect::<Vec<_>>();
+        let lifecycles = self.production_order_lifecycles(&order_ids).await?;
+        Ok(maps
+            .into_iter()
+            .filter(|map| {
+                lifecycles
+                    .get(map.id.trim())
+                    .is_some_and(|record| statuses.contains(&record.status))
+            })
+            .collect())
+    }
+    async fn production_order_lifecycles(
+        &self,
+        order_ids: &[String],
+    ) -> StoreResult<BTreeMap<String, ProductionOrderLifecycleRecord>> {
+        let requested = order_ids
+            .iter()
+            .map(|order_id| order_id.trim())
+            .filter(|order_id| !order_id.is_empty())
+            .collect::<BTreeSet<_>>();
+        let queue_states = self.apparatus_queue_states().await?;
+        let mut records = BTreeMap::new();
+        for map in self.maps().await? {
+            let order_id = map.id.trim();
+            if !requested.is_empty() && !requested.contains(order_id) {
+                continue;
+            }
+            let Some(status) = super::progress::derive_production_order_lifecycle(
+                &map,
+                &queue_states,
+            ) else {
+                continue;
+            };
+            let mut record = ProductionOrderLifecycleRecord::released(order_id);
+            record.transition_to(status, 0);
+            records.insert(order_id.to_string(), record);
+        }
+        Ok(records)
+    }
     async fn put_map(&self, map: ProductionMapDefinition) -> StoreResult<()>;
     async fn put_maps_batch(&self, maps: &[ProductionMapDefinition]) -> StoreResult<()>;
     async fn next_order_number(&self) -> StoreResult<String> {

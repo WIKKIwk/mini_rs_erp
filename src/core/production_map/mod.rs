@@ -59,6 +59,7 @@ pub use materials::{
 };
 #[cfg(test)]
 pub use memory_store::MemoryProductionMapStore;
+pub(crate) use progress::derive_production_order_lifecycle;
 pub(crate) use progress::progress_label_item_name;
 pub(crate) use progress::{progress_batch_id, progress_qr_payload};
 pub use service::{PreparedApparatusQueueAction, ProductionMapLiveSnapshot, ProductionMapService};

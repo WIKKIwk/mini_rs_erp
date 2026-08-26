@@ -46,6 +46,13 @@ async fn postgres_production_map_store_persists_maps_sequences_and_queue_states(
         .expect("save map");
     assert_eq!(saved.map.id, "zakaz-1001");
     assert_eq!(saved.map.order_number, "1001");
+    let released_lifecycle: String =
+        sqlx::query_scalar("SELECT lifecycle_status FROM mini_production_maps WHERE id = $1")
+            .bind("zakaz-1001")
+            .fetch_one(&pool)
+            .await
+            .expect("released production-order lifecycle");
+    assert_eq!(released_lifecycle, "released");
     sqlx::query(
         "UPDATE mini_production_maps
          SET map_json = jsonb_set(map_json, '{roll_count}', '7.0'::jsonb)
@@ -138,6 +145,34 @@ async fn postgres_production_map_store_persists_maps_sequences_and_queue_states(
         .put_apparatus_queue_states("apparatus:default:bosma_7", states)
         .await
         .expect("save queue states");
+    let in_progress_lifecycle: String =
+        sqlx::query_scalar("SELECT lifecycle_status FROM mini_production_maps WHERE id = $1")
+            .bind("zakaz-1001")
+            .fetch_one(&pool)
+            .await
+            .expect("in-progress production-order lifecycle");
+    assert_eq!(in_progress_lifecycle, "in_progress");
+    store
+        .put_apparatus_queue_states(
+            "apparatus:default:bosma_7",
+            BTreeMap::from([("zakaz-1001".to_string(), "pending".to_string())]),
+        )
+        .await
+        .expect("requeue operation as pending");
+    let lifecycle_after_requeue: String =
+        sqlx::query_scalar("SELECT lifecycle_status FROM mini_production_maps WHERE id = $1")
+            .bind("zakaz-1001")
+            .fetch_one(&pool)
+            .await
+            .expect("monotonic production-order lifecycle");
+    assert_eq!(lifecycle_after_requeue, "in_progress");
+    store
+        .put_apparatus_queue_states(
+            "apparatus:default:bosma_7",
+            BTreeMap::from([("zakaz-1001".to_string(), "in_progress".to_string())]),
+        )
+        .await
+        .expect("restore operation state for snapshot assertion");
     let snapshot = service.live_snapshot().await.expect("snapshot");
     assert_eq!(
         snapshot
@@ -153,6 +188,29 @@ async fn postgres_production_map_store_persists_maps_sequences_and_queue_states(
             .and_then(|items| items.get("zakaz-1001")),
         Some(&"in_progress".to_string())
     );
+
+    store
+        .put_apparatus_queue_states(
+            "apparatus:default:bosma_7",
+            BTreeMap::from([("zakaz-1001".to_string(), "completed".to_string())]),
+        )
+        .await
+        .expect("complete only required operation");
+    let completed_lifecycle: String =
+        sqlx::query_scalar("SELECT lifecycle_status FROM mini_production_maps WHERE id = $1")
+            .bind("zakaz-1001")
+            .fetch_one(&pool)
+            .await
+            .expect("production-completed lifecycle");
+    assert_eq!(completed_lifecycle, "production_completed");
+    let lifecycle_event_count: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM mini_production_order_lifecycle_events WHERE order_id = $1",
+    )
+    .bind("zakaz-1001")
+    .fetch_one(&pool)
+    .await
+    .expect("lifecycle transition events");
+    assert_eq!(lifecycle_event_count, 2);
 
     sqlx::query(
         "INSERT INTO mini_order_run_sessions

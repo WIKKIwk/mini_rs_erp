@@ -2,7 +2,9 @@ use std::collections::BTreeMap;
 
 use super::super::chain;
 use super::super::queue_state;
-use super::super::types::{ProductionMapDefinition, ProductionOrderLogEntry};
+use super::super::types::{
+    ProductionMapDefinition, ProductionOrderLifecycleStatus, ProductionOrderLogEntry,
+};
 
 pub(in crate::core::production_map) fn required_apparatus_for_closed_order(
     map: &ProductionMapDefinition,
@@ -26,6 +28,31 @@ pub(in crate::core::production_map) fn order_completed_on_apparatus(
     })
 }
 
+pub(crate) fn derive_production_order_lifecycle(
+    map: &ProductionMapDefinition,
+    queue_states: &BTreeMap<String, BTreeMap<String, String>>,
+) -> Option<ProductionOrderLifecycleStatus> {
+    let required_apparatus = required_apparatus_for_closed_order(map)?;
+    if !required_apparatus.is_empty()
+        && required_apparatus
+            .iter()
+            .all(|apparatus| order_completed_on_apparatus(queue_states, &map.id, apparatus))
+    {
+        return Some(ProductionOrderLifecycleStatus::ProductionCompleted);
+    }
+
+    let has_started_operation = queue_states.values().any(|states| {
+        states.get(map.id.trim()).is_some_and(|state| {
+            !state.trim().is_empty() && !state.trim().eq_ignore_ascii_case("pending")
+        })
+    });
+    Some(if has_started_operation {
+        ProductionOrderLifecycleStatus::InProgress
+    } else {
+        ProductionOrderLifecycleStatus::Released
+    })
+}
+
 pub(in crate::core::production_map) fn latest_required_complete_event<'a>(
     logs: &'a [ProductionOrderLogEntry],
     required_apparatus: &[String],
@@ -43,8 +70,10 @@ pub(in crate::core::production_map) fn latest_required_complete_event<'a>(
 
 #[cfg(test)]
 mod tests {
-    use super::required_apparatus_for_closed_order;
-    use crate::core::production_map::ProductionMapDefinition;
+    use std::collections::BTreeMap;
+
+    use super::{derive_production_order_lifecycle, required_apparatus_for_closed_order};
+    use crate::core::production_map::{ProductionMapDefinition, ProductionOrderLifecycleStatus};
 
     #[test]
     fn mixed_canonical_and_invalid_stage_fails_closed() {
@@ -161,6 +190,47 @@ mod tests {
                 "apparatus:catalog:true-001".to_string(),
                 "apparatus:catalog:join-001".to_string(),
             ])
+        );
+    }
+
+    #[test]
+    fn lifecycle_completes_only_after_every_required_operation_is_completed() {
+        let map: ProductionMapDefinition = serde_json::from_value(serde_json::json!({
+            "id": "zakaz-lifecycle",
+            "product_code": "PRODUCT",
+            "title": "Order",
+            "nodes": [
+                {"id": "press", "kind": "apparatus", "title": "Press", "apparatus_id": "apparatus:catalog:press-001"},
+                {"id": "lamination", "kind": "apparatus", "title": "Lamination", "apparatus_id": "apparatus:catalog:lam-001"}
+            ]
+        }))
+        .expect("lifecycle map fixture");
+        let first_completed = BTreeMap::from([(
+            "apparatus:catalog:press-001".to_string(),
+            BTreeMap::from([("zakaz-lifecycle".to_string(), "completed".to_string())]),
+        )]);
+        let fully_completed = BTreeMap::from([
+            (
+                "apparatus:catalog:press-001".to_string(),
+                BTreeMap::from([("zakaz-lifecycle".to_string(), "completed".to_string())]),
+            ),
+            (
+                "apparatus:catalog:lam-001".to_string(),
+                BTreeMap::from([("zakaz-lifecycle".to_string(), "completed".to_string())]),
+            ),
+        ]);
+
+        assert_eq!(
+            derive_production_order_lifecycle(&map, &BTreeMap::new()),
+            Some(ProductionOrderLifecycleStatus::Released)
+        );
+        assert_eq!(
+            derive_production_order_lifecycle(&map, &first_completed),
+            Some(ProductionOrderLifecycleStatus::InProgress)
+        );
+        assert_eq!(
+            derive_production_order_lifecycle(&map, &fully_completed),
+            Some(ProductionOrderLifecycleStatus::ProductionCompleted)
         );
     }
 }

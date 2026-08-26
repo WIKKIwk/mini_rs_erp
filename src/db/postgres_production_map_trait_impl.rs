@@ -4,6 +4,20 @@ impl ProductionMapStorePort for PostgresProductionMapStore {
         PostgresProductionMapStore::maps(self).await
     }
 
+    async fn maps_by_lifecycle_statuses(
+        &self,
+        statuses: &[ProductionOrderLifecycleStatus],
+    ) -> Result<Vec<ProductionMapDefinition>, ProductionMapError> {
+        PostgresProductionMapStore::maps_by_lifecycle_statuses(self, statuses).await
+    }
+
+    async fn production_order_lifecycles(
+        &self,
+        order_ids: &[String],
+    ) -> Result<BTreeMap<String, ProductionOrderLifecycleRecord>, ProductionMapError> {
+        PostgresProductionMapStore::production_order_lifecycles(self, order_ids).await
+    }
+
     async fn next_order_number(&self) -> Result<String, ProductionMapError> {
         PostgresProductionMapStore::next_order_number(self).await
     }

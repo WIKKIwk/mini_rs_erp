@@ -12,11 +12,11 @@ use crate::core::production_map::{
     OrderControlRecord, OrderProgressBatch, OrderProgressEvent, OrderRunSession, PaddonCreateInput,
     PaddonSnapshot, PaddonSummary, ProductionMapApparatusTransferRecord,
     ProductionMapApparatusTransferWrite, ProductionMapDefinition, ProductionMapError,
-    ProductionMapStorePort, ProductionOrderLogEntry, ProgressBatchCorrectionInput,
-    ProgressBatchCorrectionRecord, QueueActionActor, QueueActionProgressWrite,
-    QueueActionProgressWriteResult, RawMaterialAssignment, RawMaterialStockTransition,
-    RawMaterialStockTransitionKind, RezkaAstatkaReport, WipProgressBatchQuery,
-    validate_queue_progress_write,
+    ProductionMapStorePort, ProductionOrderLifecycleRecord, ProductionOrderLifecycleStatus,
+    ProductionOrderLogEntry, ProgressBatchCorrectionInput, ProgressBatchCorrectionRecord,
+    QueueActionActor, QueueActionProgressWrite, QueueActionProgressWriteResult,
+    RawMaterialAssignment, RawMaterialStockTransition, RawMaterialStockTransitionKind,
+    RezkaAstatkaReport, WipProgressBatchQuery, validate_queue_progress_write,
 };
 use crate::core::qolip::QolipError;
 
@@ -24,6 +24,7 @@ mod astatka_helpers;
 mod capacity_helpers;
 mod catalog_helpers;
 mod completion_helpers;
+mod lifecycle;
 mod map_helpers;
 mod material_helpers;
 mod order_control_helpers;
@@ -49,12 +50,13 @@ use self::capacity_helpers::{
 };
 use self::catalog_helpers::{
     apply_apparatus_sequence_delta_tx, delete_map_by_id, load_apparatus_queue_states,
-    load_apparatus_sequences, load_maps, save_apparatus_sequence,
+    load_apparatus_sequences, load_maps, load_maps_by_lifecycle_statuses, save_apparatus_sequence,
 };
 use self::completion_helpers::{
     load_completion_request_by_event_id, load_completion_request_decisions_for_actor,
     load_completion_requests, resolve_completion_request_decision as resolve_completion_request,
 };
+use self::lifecycle::{load_production_order_lifecycles, refresh_production_order_lifecycle_tx};
 use self::map_helpers::{
     put_map_inner, put_map_inner_tx, reject_duplicate_order_number,
     reject_duplicate_order_number_tx, reject_order_number_immutable,

@@ -4,8 +4,7 @@ use std::collections::BTreeSet;
 
 use super::compiler::{compile_map, normalize_map, run_map_with_variables};
 use super::progress::{
-    latest_required_complete_event, order_completed_on_apparatus,
-    required_apparatus_for_closed_order,
+    latest_required_complete_event, required_apparatus_for_closed_order,
 };
 use crate::core::apparatus_standard::ApparatusId;
 

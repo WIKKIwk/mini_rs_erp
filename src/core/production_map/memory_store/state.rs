@@ -9,6 +9,8 @@ use super::super::*;
 #[cfg(test)]
 pub struct MemoryProductionMapStore {
     pub(super) maps: RwLock<BTreeMap<String, ProductionMapDefinition>>,
+    pub(super) production_order_lifecycles:
+        RwLock<BTreeMap<String, ProductionOrderLifecycleRecord>>,
     pub(super) sequences: RwLock<BTreeMap<String, Vec<String>>>,
     pub(super) apparatus_downtimes: RwLock<BTreeMap<String, ApparatusDowntime>>,
     pub(super) apparatus_schedule_reservations:
@@ -36,6 +38,7 @@ impl MemoryProductionMapStore {
     pub fn new() -> Self {
         Self {
             maps: RwLock::new(BTreeMap::new()),
+            production_order_lifecycles: RwLock::new(BTreeMap::new()),
             sequences: RwLock::new(BTreeMap::new()),
             apparatus_downtimes: RwLock::new(BTreeMap::new()),
             apparatus_schedule_reservations: RwLock::new(BTreeMap::new()),

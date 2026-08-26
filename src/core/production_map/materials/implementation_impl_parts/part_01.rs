@@ -4,7 +4,15 @@ impl ProductionMapService {
     ) -> Result<Vec<ProductionMapSaved>, ProductionMapError> {
         let mut active_orders = Vec::new();
         let order_controls = self.order_control_states().await?;
-        for saved in self.maps().await? {
+        let maps = compile_saved_maps(
+            self.store
+                .maps_by_lifecycle_statuses(&[
+                    ProductionOrderLifecycleStatus::Released,
+                    ProductionOrderLifecycleStatus::InProgress,
+                ])
+                .await?,
+        );
+        for saved in maps {
             let order_id = saved.map.id.trim();
             if !order_id.starts_with("zakaz-")
                 || order_controls
@@ -13,13 +21,7 @@ impl ProductionMapService {
             {
                 continue;
             }
-            let status = self.order_status_detail(order_id).await?;
-            if !matches!(
-                status.order_status.as_str(),
-                "completed" | "completed_with_issue"
-            ) {
-                active_orders.push(saved);
-            }
+            active_orders.push(saved);
         }
         Ok(active_orders)
     }

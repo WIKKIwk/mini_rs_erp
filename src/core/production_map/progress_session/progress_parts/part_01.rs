@@ -255,6 +255,8 @@ pub struct OrderProgressBatchStatusDetail {
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ProductionOrderStatusDetail {
+    #[serde(default)]
+    pub lifecycle_status: ProductionOrderLifecycleStatus,
     pub order_status: String,
     pub work_status: String,
     pub flow_status: String,

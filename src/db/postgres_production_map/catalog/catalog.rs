@@ -3,7 +3,9 @@ use std::collections::BTreeMap;
 use sqlx::{PgPool, Postgres, Transaction};
 
 use crate::core::apparatus_standard::ApparatusId;
-use crate::core::production_map::{ProductionMapDefinition, ProductionMapError};
+use crate::core::production_map::{
+    ProductionMapDefinition, ProductionMapError, ProductionOrderLifecycleStatus,
+};
 
 use super::transaction_locks::lock_apparatus_tx;
 
@@ -15,6 +17,36 @@ pub(super) async fn load_maps(
          FROM mini_production_maps
          ORDER BY updated_at DESC",
     )
+    .fetch_all(pool)
+    .await
+    .map_err(|_| ProductionMapError::StoreFailed)?;
+
+    rows.into_iter()
+        .map(|payload| {
+            serde_json::from_value::<ProductionMapDefinition>(payload)
+                .map_err(|_| ProductionMapError::StoreFailed)
+        })
+        .collect()
+}
+
+pub(super) async fn load_maps_by_lifecycle_statuses(
+    pool: &PgPool,
+    statuses: &[ProductionOrderLifecycleStatus],
+) -> Result<Vec<ProductionMapDefinition>, ProductionMapError> {
+    if statuses.is_empty() {
+        return Ok(Vec::new());
+    }
+    let statuses = statuses
+        .iter()
+        .map(|status| status.as_str().to_string())
+        .collect::<Vec<_>>();
+    let rows = sqlx::query_scalar::<_, serde_json::Value>(
+        "SELECT map_json
+         FROM mini_production_maps
+         WHERE lifecycle_status = ANY($1::TEXT[])
+         ORDER BY updated_at DESC",
+    )
+    .bind(&statuses)
     .fetch_all(pool)
     .await
     .map_err(|_| ProductionMapError::StoreFailed)?;

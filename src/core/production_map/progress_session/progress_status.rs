@@ -208,7 +208,7 @@ impl ProductionOrderStatusDetail {
         } else if self.completed_with_issue_count > 0 {
             "completed_with_issue"
         } else if self.completed_queue_count > 0 {
-            "completed"
+            "partially_completed"
         } else if self.paused_session_count > 0 {
             "paused"
         } else if self.waiting_next_stage_count > 0 {

@@ -245,6 +245,14 @@ pub(super) async fn resolve_completion_request_decision(
     {
         put_queue_action_state_tx(&mut tx, &resolution.event).await?;
         insert_queue_action_event_tx(&mut tx, &resolution.event).await?;
+        super::lifecycle::refresh_production_order_lifecycle_tx(
+            &mut tx,
+            &resolution.event.order_id,
+            actor,
+            &resolution.event.event_id,
+            "completion_request_approved",
+        )
+        .await?;
         if let Some(session) = resolution.session {
             put_order_run_session_tx(&mut tx, &session).await?;
         }

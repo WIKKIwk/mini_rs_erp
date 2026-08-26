@@ -3,6 +3,20 @@ impl PostgresProductionMapStore {
         load_maps(&self.pool).await
     }
 
+    async fn maps_by_lifecycle_statuses(
+        &self,
+        statuses: &[ProductionOrderLifecycleStatus],
+    ) -> Result<Vec<ProductionMapDefinition>, ProductionMapError> {
+        load_maps_by_lifecycle_statuses(&self.pool, statuses).await
+    }
+
+    async fn production_order_lifecycles(
+        &self,
+        order_ids: &[String],
+    ) -> Result<BTreeMap<String, ProductionOrderLifecycleRecord>, ProductionMapError> {
+        load_production_order_lifecycles(&self.pool, order_ids).await
+    }
+
     async fn next_order_number(&self) -> Result<String, ProductionMapError> {
         sqlx::query_scalar::<_, Option<String>>(
             "SELECT CASE
@@ -157,12 +171,28 @@ impl PostgresProductionMapStore {
         states: BTreeMap<String, String>,
     ) -> Result<(), ProductionMapError> {
         let apparatus = apparatus.trim();
+        let order_ids = states.keys().cloned().collect::<Vec<_>>();
         let mut tx = self
             .pool
             .begin()
             .await
             .map_err(|_| ProductionMapError::StoreFailed)?;
         put_queue_states_tx(&mut tx, apparatus, states).await?;
+        let actor = QueueActionActor {
+            role: "system".to_string(),
+            ref_: "queue-state-sync".to_string(),
+            display_name: "Queue state sync".to_string(),
+        };
+        for order_id in order_ids {
+            refresh_production_order_lifecycle_tx(
+                &mut tx,
+                &order_id,
+                &actor,
+                "",
+                "queue_state_sync",
+            )
+            .await?;
+        }
         tx.commit()
             .await
             .map_err(|_| ProductionMapError::StoreFailed)
@@ -191,6 +221,14 @@ impl PostgresProductionMapStore {
         validate_queue_action_event_transition_tx(&mut tx, &event).await?;
         put_queue_action_state_tx(&mut tx, &event).await?;
         insert_queue_action_event_tx(&mut tx, &event).await?;
+        refresh_production_order_lifecycle_tx(
+            &mut tx,
+            &event.order_id,
+            &event.actor,
+            &event.event_id,
+            "queue_action",
+        )
+        .await?;
         tx.commit()
             .await
             .map_err(|_| ProductionMapError::StoreFailed)

@@ -4,7 +4,10 @@ use std::collections::BTreeMap;
 use crate::core::apparatus_standard::ApparatusId;
 use crate::core::production_map::queue_state;
 
-use super::{ProductionMapDefinition, ProductionOrderLogEntry, QueueActionActor};
+use super::{
+    ProductionMapDefinition, ProductionOrderLifecycleStatus, ProductionOrderLogEntry,
+    QueueActionActor,
+};
 
 include!("progress_parts/part_01.rs");
 include!("progress_parts/part_02.rs");

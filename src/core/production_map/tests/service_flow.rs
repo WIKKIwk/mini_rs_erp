@@ -252,6 +252,85 @@ async fn maps_skips_legacy_invalid_map_without_failing_list() {
 }
 
 #[tokio::test]
+async fn first_stage_completion_keeps_order_available_for_raw_material_assignment() {
+    let store = Arc::new(MemoryProductionMapStore::new());
+    let service = default_service_with_store(store.clone()).await;
+    let order_id = "zakaz-material-after-first-stage";
+    service
+        .upsert_map(two_stage_map(order_id, FLOW_PECHAT_ID, LAMINATION_1_ID))
+        .await
+        .expect("two-stage production map");
+    assert_eq!(
+        service
+            .production_order_lifecycle(order_id)
+            .await
+            .expect("released lifecycle")
+            .status,
+        ProductionOrderLifecycleStatus::Released
+    );
+    store
+        .put_apparatus_queue_states(
+            FLOW_PECHAT_ID,
+            BTreeMap::from([(order_id.to_string(), "completed".to_string())]),
+        )
+        .await
+        .expect("first operation completed");
+    assert_eq!(
+        service
+            .production_order_lifecycle(order_id)
+            .await
+            .expect("in-progress lifecycle")
+            .status,
+        ProductionOrderLifecycleStatus::InProgress
+    );
+    assert_eq!(
+        service
+            .order_status_detail(order_id)
+            .await
+            .expect("order status detail")
+            .lifecycle_status,
+        ProductionOrderLifecycleStatus::InProgress
+    );
+
+    let candidates = service
+        .raw_material_assignment_orders()
+        .await
+        .expect("raw-material assignment candidates");
+
+    assert!(
+        candidates
+            .iter()
+            .any(|candidate| candidate.map.id == order_id),
+        "completing one operation must not complete the production-order header"
+    );
+
+    store
+        .put_apparatus_queue_states(
+            LAMINATION_1_ID,
+            BTreeMap::from([(order_id.to_string(), "completed".to_string())]),
+        )
+        .await
+        .expect("final operation completed");
+    assert_eq!(
+        service
+            .production_order_lifecycle(order_id)
+            .await
+            .expect("completed lifecycle")
+            .status,
+        ProductionOrderLifecycleStatus::ProductionCompleted
+    );
+    assert!(
+        !service
+            .raw_material_assignment_orders()
+            .await
+            .expect("completed raw-material assignment candidates")
+            .iter()
+            .any(|candidate| candidate.map.id == order_id),
+        "a production-completed order must leave material assignment candidates"
+    );
+}
+
+#[tokio::test]
 async fn paused_order_can_transfer_between_compatible_pechat_apparatuses_atomically() {
     let store = std::sync::Arc::new(MemoryProductionMapStore::new());
     let service = default_service_with_store(store.clone()).await;

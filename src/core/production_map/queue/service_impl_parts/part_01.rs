@@ -226,6 +226,7 @@ impl ProductionMapService {
             &queue_states,
             &logs,
         );
+        status.lifecycle_status = self.production_order_lifecycle(order_id).await?.status;
         if self
             .store
             .order_control_states()
@@ -264,6 +265,7 @@ impl ProductionMapService {
         let progress_batches = self.store.progress_batches_for_orders(&order_ids).await?;
         let run_sessions = self.store.order_run_sessions_for_orders(&order_ids).await?;
         let logs_by_order = self.store.queue_action_logs_for_orders(&order_ids).await?;
+        let lifecycles = self.store.production_order_lifecycles(&order_ids).await?;
         let mut statuses = BTreeMap::new();
         for order_id in order_ids {
             let order_queue_states = queue_states_for_order(queue_states, &order_id);
@@ -277,6 +279,10 @@ impl ProductionMapService {
                 &order_queue_states,
                 &order_logs,
             );
+            status.lifecycle_status = lifecycles
+                .get(&order_id)
+                .ok_or(ProductionMapError::StoreFailed)?
+                .status;
             if order_controls
                 .get(&order_id)
                 .is_some_and(|control| control.state == OrderControlState::Frozen)

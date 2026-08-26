@@ -295,6 +295,14 @@ impl PostgresProductionMapStore {
                 .await
                 .map_err(|_| ProductionMapError::StoreFailed)?;
         }
+        refresh_production_order_lifecycle_tx(
+            &mut tx,
+            &write.event.order_id,
+            &write.event.actor,
+            &write.event.event_id,
+            "queue_action_progress",
+        )
+        .await?;
         tx.commit()
             .await
             .map_err(|_| ProductionMapError::StoreFailed)?;
