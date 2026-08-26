@@ -59,6 +59,57 @@ impl ProductionOrderLifecycleStatus {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ProductionOrderOperationalStatus {
+    NotStarted,
+    Ready,
+    InProgress,
+    Paused,
+    Frozen,
+    WaitingNextStage,
+    PartiallyCompleted,
+    Completed,
+    CompletedWithIssue,
+}
+
+impl Default for ProductionOrderOperationalStatus {
+    fn default() -> Self {
+        Self::NotStarted
+    }
+}
+
+impl ProductionOrderOperationalStatus {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::NotStarted => "not_started",
+            Self::Ready => "ready",
+            Self::InProgress => "in_progress",
+            Self::Paused => "paused",
+            Self::Frozen => "frozen",
+            Self::WaitingNextStage => "waiting_next_stage",
+            Self::PartiallyCompleted => "partially_completed",
+            Self::Completed => "completed",
+            Self::CompletedWithIssue => "completed_with_issue",
+        }
+    }
+
+    pub fn parse(value: &str) -> Result<Self, ProductionMapError> {
+        match value.trim().to_ascii_lowercase().as_str() {
+            "not_started" => Ok(Self::NotStarted),
+            "ready" => Ok(Self::Ready),
+            "in_progress" => Ok(Self::InProgress),
+            "paused" => Ok(Self::Paused),
+            "frozen" => Ok(Self::Frozen),
+            "waiting_next_stage" => Ok(Self::WaitingNextStage),
+            "partially_completed" => Ok(Self::PartiallyCompleted),
+            "completed" => Ok(Self::Completed),
+            "completed_with_issue" => Ok(Self::CompletedWithIssue),
+            _ => Err(ProductionMapError::StoreFailed),
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ProductionOrderLifecycleRecord {
     pub order_id: String,
@@ -71,6 +122,12 @@ pub struct ProductionOrderLifecycleRecord {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub closed_at_unix: Option<i64>,
     pub lifecycle_version: i64,
+    #[serde(default)]
+    pub operational_status: ProductionOrderOperationalStatus,
+    #[serde(default)]
+    pub operational_status_changed_at_unix: i64,
+    #[serde(default)]
+    pub completed_with_issue_count: usize,
 }
 
 impl ProductionOrderLifecycleRecord {
@@ -83,6 +140,9 @@ impl ProductionOrderLifecycleRecord {
             production_completed_at_unix: None,
             closed_at_unix: None,
             lifecycle_version: 0,
+            operational_status: ProductionOrderOperationalStatus::NotStarted,
+            operational_status_changed_at_unix: 0,
+            completed_with_issue_count: 0,
         }
     }
 

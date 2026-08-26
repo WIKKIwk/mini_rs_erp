@@ -48,25 +48,7 @@ pub(super) async fn refresh_production_order_lifecycles(
     store: &MemoryProductionMapStore,
     order_ids: &[String],
 ) -> Result<(), ProductionMapError> {
-    let maps = store.maps.read().await;
-    let queue_states = store.queue_states.read().await;
-    let mut next_statuses = Vec::new();
-    for order_id in order_ids {
-        let order_id = order_id.trim();
-        let Some(map) = maps.get(order_id) else {
-            continue;
-        };
-        let Some(status) =
-            super::super::progress::derive_production_order_lifecycle(map, &queue_states)
-        else {
-            return Err(ProductionMapError::StoreFailed);
-        };
-        next_statuses.push((order_id.to_string(), status));
-    }
-    drop(queue_states);
-    drop(maps);
-
-    let completed_with_issue_orders = store
+    let completed_with_issue_counts = store
         .queue_events
         .read()
         .await
@@ -78,24 +60,52 @@ pub(super) async fn refresh_production_order_lifecycles(
                 .and_then(serde_json::Value::as_bool)
                 == Some(true)
         })
-        .map(|event| event.order_id.trim().to_string())
-        .collect::<BTreeSet<_>>();
+        .fold(BTreeMap::<String, usize>::new(), |mut counts, event| {
+            *counts.entry(event.order_id.trim().to_string()).or_default() += 1;
+            counts
+        });
+    let maps = store.maps.read().await;
+    let queue_states = store.queue_states.read().await;
     let mut lifecycles = store.production_order_lifecycles.write().await;
-    for (order_id, status) in next_statuses {
-        let record = lifecycles
-            .entry(order_id.clone())
-            .or_insert_with(|| ProductionOrderLifecycleRecord::released(&order_id));
-        if !record.status.can_automatically_transition_to(status) {
+    for order_id in order_ids {
+        let order_id = order_id.trim();
+        let Some(map) = maps.get(order_id) else {
             continue;
+        };
+        let Some(status) =
+            super::super::progress::derive_production_order_lifecycle(map, &queue_states)
+        else {
+            return Err(ProductionMapError::StoreFailed);
+        };
+        let record = lifecycles
+            .entry(order_id.to_string())
+            .or_insert_with(|| ProductionOrderLifecycleRecord::released(order_id));
+        if record.status.can_automatically_transition_to(status) {
+            let changed_at_unix = record.lifecycle_version + 1;
+            record.transition_to(status, changed_at_unix);
         }
-        let changed_at_unix = record.lifecycle_version + 1;
-        record.transition_to(status, changed_at_unix);
-        if status == ProductionOrderLifecycleStatus::ProductionCompleted {
-            record.completion_outcome = if completed_with_issue_orders.contains(&order_id) {
+        let completed_with_issue_count = completed_with_issue_counts
+            .get(order_id)
+            .copied()
+            .unwrap_or_default();
+        record.completed_with_issue_count = completed_with_issue_count;
+        if record.status == ProductionOrderLifecycleStatus::ProductionCompleted {
+            record.completion_outcome = if completed_with_issue_count > 0 {
                 "with_issue".to_string()
             } else {
                 "normal".to_string()
             };
+        }
+        let operational_status =
+            super::super::progress::derive_production_order_operational_status(
+                record.status,
+                &queue_states,
+                order_id,
+                completed_with_issue_count,
+            );
+        if record.operational_status != operational_status {
+            record.operational_status = operational_status;
+            record.operational_status_changed_at_unix += 1;
         }
     }
     Ok(())
@@ -106,8 +116,9 @@ pub(super) async fn append_apparatus_queue_action_event(
     event: ApparatusQueueActionEvent,
 ) -> Result<(), ProductionMapError> {
     validate_queue_event(&event)?;
+    let order_id = event.order_id.trim().to_string();
     store.queue_events.write().await.push(event);
-    Ok(())
+    refresh_production_order_lifecycles(store, &[order_id]).await
 }
 
 fn validate_queue_event(event: &ApparatusQueueActionEvent) -> Result<(), ProductionMapError> {

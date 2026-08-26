@@ -331,6 +331,77 @@ async fn first_stage_completion_keeps_order_available_for_raw_material_assignmen
 }
 
 #[tokio::test]
+async fn live_snapshot_uses_persisted_operational_projection_instead_of_replaying_history() {
+    let store = Arc::new(MemoryProductionMapStore::new());
+    let service = default_service_with_store(store.clone()).await;
+    let order_id = "zakaz-persisted-operational-status";
+    service
+        .upsert_map(apparatus_stage_map(order_id, FLOW_PECHAT_ID))
+        .await
+        .expect("production map");
+    store
+        .put_apparatus_queue_states(
+            FLOW_PECHAT_ID,
+            BTreeMap::from([(order_id.to_string(), "pending".to_string())]),
+        )
+        .await
+        .expect("persist ready queue projection");
+
+    store
+        .put_order_run_session(OrderRunSession {
+            session_id: "audit-only-session".to_string(),
+            apparatus: FLOW_PECHAT_ID.to_string(),
+            order_id: order_id.to_string(),
+            status: OrderRunStatus::Active,
+            worker_role: "audit".to_string(),
+            worker_ref: "audit-only".to_string(),
+            worker_display_name: "Audit only".to_string(),
+            started_at_unix: 10,
+            updated_at_unix: 10,
+            payload_json: serde_json::json!({}),
+        })
+        .await
+        .expect("append audit history without a state transition");
+
+    let snapshot = service.live_snapshot().await.expect("live snapshot");
+    let status = snapshot
+        .order_statuses
+        .get(order_id)
+        .expect("persisted order status projection");
+
+    assert_eq!(status.order_status, "ready");
+    assert_eq!(status.work_status, "waiting");
+    assert_eq!(status.flow_status, "ready");
+
+    for (queue_state, expected_order_status) in [
+        ("in_progress", "in_progress"),
+        ("paused", "paused"),
+        ("completed", "completed"),
+    ] {
+        store
+            .put_apparatus_queue_states(
+                FLOW_PECHAT_ID,
+                BTreeMap::from([(order_id.to_string(), queue_state.to_string())]),
+            )
+            .await
+            .expect("persist operational status transition");
+        let snapshot_reader = default_service_with_store(store.clone()).await;
+        let snapshot = snapshot_reader
+            .live_snapshot()
+            .await
+            .expect("snapshot after operational transition");
+        assert_eq!(
+            snapshot
+                .order_statuses
+                .get(order_id)
+                .expect("transitioned operational status")
+                .order_status,
+            expected_order_status
+        );
+    }
+}
+
+#[tokio::test]
 async fn paused_order_can_transfer_between_compatible_pechat_apparatuses_atomically() {
     let store = std::sync::Arc::new(MemoryProductionMapStore::new());
     let service = default_service_with_store(store.clone()).await;

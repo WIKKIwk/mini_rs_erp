@@ -304,7 +304,7 @@ impl ProductionMapService {
             )
             .await?;
         let order_statuses = self
-            .order_status_details_for_snapshot(&maps, &queue_states, &order_controls)
+            .order_status_details_for_snapshot(&maps, &order_controls)
             .await?;
         let frozen_orders_by_apparatus = self.frozen_orders_by_apparatus(&order_controls).await?;
 

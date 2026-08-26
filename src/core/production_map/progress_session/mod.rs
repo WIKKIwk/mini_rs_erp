@@ -6,7 +6,9 @@ mod notifications;
 mod policy;
 
 pub(crate) use super::{QolipLineage, qolip_lineage_from_batch};
-pub(crate) use closed_orders::derive_production_order_lifecycle;
+pub(crate) use closed_orders::{
+    derive_production_order_lifecycle, derive_production_order_operational_status,
+};
 pub(super) use closed_orders::{
     latest_required_complete_event, required_apparatus_for_closed_order,
 };

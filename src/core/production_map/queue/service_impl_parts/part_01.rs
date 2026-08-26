@@ -243,16 +243,14 @@ impl ProductionMapService {
         &self,
     ) -> Result<BTreeMap<String, ProductionOrderStatusDetail>, ProductionMapError> {
         let maps = self.maps().await?;
-        let queue_states = self.store.apparatus_queue_states().await?;
         let order_controls = self.store.order_control_states().await?;
-        self.order_status_details_for_snapshot(&maps, &queue_states, &order_controls)
+        self.order_status_details_for_snapshot(&maps, &order_controls)
             .await
     }
 
     pub(in crate::core::production_map) async fn order_status_details_for_snapshot(
         &self,
         maps: &[ProductionMapSaved],
-        queue_states: &ApparatusQueueStateMap,
         order_controls: &OrderControlMap,
     ) -> Result<BTreeMap<String, ProductionOrderStatusDetail>, ProductionMapError> {
         let order_ids = maps
@@ -262,27 +260,13 @@ impl ProductionMapService {
                 (!order_id.is_empty()).then(|| order_id.to_string())
             })
             .collect::<Vec<_>>();
-        let progress_batches = self.store.progress_batches_for_orders(&order_ids).await?;
-        let run_sessions = self.store.order_run_sessions_for_orders(&order_ids).await?;
-        let logs_by_order = self.store.queue_action_logs_for_orders(&order_ids).await?;
         let lifecycles = self.store.production_order_lifecycles(&order_ids).await?;
         let mut statuses = BTreeMap::new();
         for order_id in order_ids {
-            let order_queue_states = queue_states_for_order(queue_states, &order_id);
-            let order_progress_batches =
-                progress_batches.get(&order_id).cloned().unwrap_or_default();
-            let order_run_sessions = run_sessions.get(&order_id).cloned().unwrap_or_default();
-            let order_logs = logs_by_order.get(&order_id).cloned().unwrap_or_default();
-            let mut status = ProductionOrderStatusDetail::from_order_flow(
-                &order_progress_batches,
-                &order_run_sessions,
-                &order_queue_states,
-                &order_logs,
-            );
-            status.lifecycle_status = lifecycles
+            let record = lifecycles
                 .get(&order_id)
-                .ok_or(ProductionMapError::StoreFailed)?
-                .status;
+                .ok_or(ProductionMapError::StoreFailed)?;
+            let mut status = ProductionOrderStatusDetail::from_persisted_projection(record);
             if order_controls
                 .get(&order_id)
                 .is_some_and(|control| control.state == OrderControlState::Frozen)

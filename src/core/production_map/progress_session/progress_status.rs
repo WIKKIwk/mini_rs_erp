@@ -7,6 +7,7 @@ use super::progress::{
     OrderProgressBatch, OrderProgressBatchStatus, OrderProgressBatchStatusDetail,
     OrderProgressBatchWipStatus, OrderRunSession, OrderRunStatus, ProductionOrderStatusDetail,
 };
+use super::ProductionOrderLifecycleRecord;
 
 impl OrderProgressBatch {
     pub fn refresh_status_detail(&mut self) {
@@ -133,6 +134,18 @@ impl ProductionOrderStatusDetail {
         detail.flow_status = detail.derive_flow_status(order_status).to_string();
         detail.stock_status = detail.derive_stock_status().to_string();
         detail
+    }
+
+    pub fn from_persisted_projection(record: &ProductionOrderLifecycleRecord) -> Self {
+        let order_status = record.operational_status.as_str();
+        Self {
+            lifecycle_status: record.status,
+            order_status: order_status.to_string(),
+            work_status: work_status_for_order(order_status).to_string(),
+            flow_status: flow_status_for_order(order_status).to_string(),
+            completed_with_issue_count: record.completed_with_issue_count,
+            ..Self::default()
+        }
     }
 
     fn add_run_session_counts(&mut self, run_sessions: &[OrderRunSession]) {

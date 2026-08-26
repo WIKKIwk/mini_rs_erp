@@ -152,6 +152,13 @@ async fn postgres_production_map_store_persists_maps_sequences_and_queue_states(
             .await
             .expect("in-progress production-order lifecycle");
     assert_eq!(in_progress_lifecycle, "in_progress");
+    let in_progress_operational_status: String =
+        sqlx::query_scalar("SELECT operational_status FROM mini_production_maps WHERE id = $1")
+            .bind("zakaz-1001")
+            .fetch_one(&pool)
+            .await
+            .expect("in-progress operational projection");
+    assert_eq!(in_progress_operational_status, "in_progress");
     store
         .put_apparatus_queue_states(
             "apparatus:default:bosma_7",
@@ -166,6 +173,13 @@ async fn postgres_production_map_store_persists_maps_sequences_and_queue_states(
             .await
             .expect("monotonic production-order lifecycle");
     assert_eq!(lifecycle_after_requeue, "in_progress");
+    let operational_status_after_requeue: String =
+        sqlx::query_scalar("SELECT operational_status FROM mini_production_maps WHERE id = $1")
+            .bind("zakaz-1001")
+            .fetch_one(&pool)
+            .await
+            .expect("ready operational projection after requeue");
+    assert_eq!(operational_status_after_requeue, "ready");
     store
         .put_apparatus_queue_states(
             "apparatus:default:bosma_7",
@@ -203,6 +217,13 @@ async fn postgres_production_map_store_persists_maps_sequences_and_queue_states(
             .await
             .expect("production-completed lifecycle");
     assert_eq!(completed_lifecycle, "production_completed");
+    let completed_operational_status: String =
+        sqlx::query_scalar("SELECT operational_status FROM mini_production_maps WHERE id = $1")
+            .bind("zakaz-1001")
+            .fetch_one(&pool)
+            .await
+            .expect("completed operational projection");
+    assert_eq!(completed_operational_status, "completed");
     let lifecycle_event_count: i64 = sqlx::query_scalar(
         "SELECT COUNT(*) FROM mini_production_order_lifecycle_events WHERE order_id = $1",
     )
