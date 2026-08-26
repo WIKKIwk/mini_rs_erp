@@ -200,6 +200,31 @@ mod tests {
     }
 
     #[test]
+    fn apparatus_collections_migration_is_registered_and_canonical_id_scoped() {
+        let migration = POSTGRES_MIGRATIONS
+            .iter()
+            .find(|(version, _)| *version == "0075_apparatus_collections")
+            .map(|(_, sql)| sql.to_lowercase())
+            .expect("apparatus collections migration");
+
+        for invariant in [
+            "create table mini_apparatus_collections",
+            "create table mini_apparatus_collection_members",
+            "references mini_canonical_apparatus_identities (apparatus_id)",
+            "on update restrict on delete restrict",
+            "unique (collection_id, position)",
+        ] {
+            assert!(
+                migration.contains(invariant),
+                "missing invariant: {invariant}"
+            );
+        }
+        assert!(!migration.contains("mini_production_maps"));
+        assert!(!migration.contains("mini_production_orders"));
+        assert!(!migration.contains("mini_apparatus_queue"));
+    }
+
+    #[test]
     fn canonical_revision_authority_migration_is_registered_and_guarded() {
         let migration = POSTGRES_MIGRATIONS
             .iter()

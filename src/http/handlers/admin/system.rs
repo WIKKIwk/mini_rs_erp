@@ -1,5 +1,6 @@
 mod apparatus;
 mod apparatus_aasx;
+mod apparatus_collections;
 mod auth;
 mod catalog;
 mod emergency_reset;
@@ -14,6 +15,7 @@ use super::*;
 
 pub use apparatus::{apparatus, apparatus_detail, apparatus_options};
 pub use apparatus_aasx::{MAX_AASX_UPLOAD_BYTES, apparatus_aasx};
+pub use apparatus_collections::{apparatus_collection, apparatus_collections};
 pub(super) use auth::{authorize_any_capability, authorize_capability, require_capability};
 pub use catalog::items_bulk_move_group;
 pub use emergency_reset::reset_orders;

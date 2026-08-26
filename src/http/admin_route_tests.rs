@@ -62,6 +62,7 @@ use crate::store::calculate_order_store::CalculateOrderStore;
 
 mod admin_edge_cases;
 mod apparatus_aasx;
+mod apparatus_collections;
 mod auth_roles;
 mod batch_move_advanced;
 mod batch_move_basic;

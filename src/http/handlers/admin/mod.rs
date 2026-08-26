@@ -51,13 +51,14 @@ pub use suppliers::{
     supplier_detail, supplier_list, supplier_summary, suppliers, user_list,
 };
 pub use system::{
-    MAX_AASX_UPLOAD_BYTES, apparatus, apparatus_aasx, apparatus_detail, apparatus_options,
-    capabilities, factory_location, factory_location_apparatus, factory_locations,
-    inventory_assets, inventory_locations, inventory_relocations, inventory_relocations_batch,
-    inventory_returns_batch, inventory_transfer_action, inventory_transfers, items_bulk_move_group,
-    reset_orders, role_assignments, roles, system_backup_create, system_backup_download,
-    system_backup_import, system_monitor, system_monitor_live, warehouse_assignments,
-    warehouse_items, warehouse_summaries, warehouses, werka_code_regenerate,
+    MAX_AASX_UPLOAD_BYTES, apparatus, apparatus_aasx, apparatus_collection, apparatus_collections,
+    apparatus_detail, apparatus_options, capabilities, factory_location,
+    factory_location_apparatus, factory_locations, inventory_assets, inventory_locations,
+    inventory_relocations, inventory_relocations_batch, inventory_returns_batch,
+    inventory_transfer_action, inventory_transfers, items_bulk_move_group, reset_orders,
+    role_assignments, roles, system_backup_create, system_backup_download, system_backup_import,
+    system_monitor, system_monitor_live, warehouse_assignments, warehouse_items,
+    warehouse_summaries, warehouses, werka_code_regenerate,
 };
 use system::{authorize_any_capability, authorize_capability, require_capability};
 pub use system_users::{system_user_code_regenerate, system_user_detail, system_users};
@@ -93,6 +94,10 @@ use crate::core::admin::models::{
     AdminUpdateItemRequest, AdminUserListPage,
 };
 use crate::core::admin::ports::AdminPortError;
+use crate::core::apparatus_collections::{
+    ApparatusCollectionCreate, ApparatusCollectionDelete, ApparatusCollectionError,
+    ApparatusCollectionUpdate,
+};
 use crate::core::apparatus_standard::{CanonicalApparatusError, CanonicalCommandMetadata};
 use crate::core::auth::models::{Principal, PrincipalRole};
 use crate::core::authz::{

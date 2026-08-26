@@ -1,4 +1,5 @@
 pub mod admin;
+pub mod apparatus_collections;
 pub mod apparatus_standard;
 pub mod auth;
 pub mod authz;

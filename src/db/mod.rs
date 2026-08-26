@@ -1,5 +1,6 @@
 pub mod postgres;
 pub mod postgres_admin_catalog;
+pub mod postgres_apparatus_collection;
 pub mod postgres_calculate_material;
 pub mod postgres_calculate_order;
 pub(crate) mod postgres_canonical_apparatus;

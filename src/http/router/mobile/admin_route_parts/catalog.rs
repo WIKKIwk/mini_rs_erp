@@ -114,6 +114,14 @@ fn catalog_routes() -> Router<AppState> {
         )
         .route("/v1/mobile/admin/apparatus", any(admin::apparatus))
         .route(
+            "/v1/mobile/admin/apparatus-collections",
+            any(admin::apparatus_collections),
+        )
+        .route(
+            "/v1/mobile/admin/apparatus-collections/{id}",
+            any(admin::apparatus_collection),
+        )
+        .route(
             "/v1/mobile/admin/apparatus/{id}",
             any(admin::apparatus_detail),
         )

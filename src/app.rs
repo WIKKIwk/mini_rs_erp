@@ -5,6 +5,7 @@ use crate::ai::werka_search::WerkaAiSearchService;
 use crate::config::{AppConfig, DotEnvPersister};
 use crate::core::admin::monitor_hub::SystemMonitorHub;
 use crate::core::admin::service::AdminService;
+use crate::core::apparatus_collections::ApparatusCollectionService;
 use crate::core::apparatus_standard::CanonicalApparatusService;
 use crate::core::auth::ports::CustomerLookup;
 use crate::core::auth::service::AuthService;
@@ -34,6 +35,7 @@ use crate::core::warehouses::WarehouseService;
 use crate::core::werka::service::WerkaService;
 use crate::core::worker_groups::WorkerGroupService;
 use crate::core::workers::WorkerService;
+use crate::db::postgres_apparatus_collection::PostgresApparatusCollectionStore;
 use crate::db::postgres_canonical_apparatus::PostgresCanonicalApparatusRepository;
 use crate::db::postgres_customer::PostgresCustomerStore;
 use crate::db::postgres_engine::PostgresEngineStore;
@@ -74,6 +76,7 @@ pub struct AppState {
     pub profiles: ProfileService,
     pub production_maps: ProductionMapService,
     pub apparatus: CanonicalApparatusService,
+    pub apparatus_collections: ApparatusCollectionService,
     pub factory_locations: FactoryLocationService,
     pub inventory_movements: InventoryMovementService,
     pub calculate_orders: Arc<dyn CalculateOrderStorePort>,
@@ -127,6 +130,12 @@ impl AppState {
                     Arc::new(crate::core::factory_locations::MemoryFactoryLocationStore::new()),
                     apparatus.clone(),
                 ),
+                apparatus_collections: ApparatusCollectionService::new(
+                    Arc::new(
+                        crate::core::apparatus_collections::MemoryApparatusCollectionStore::new(),
+                    ),
+                    apparatus.clone(),
+                ),
                 warehouses: WarehouseService::new(
                     Arc::new(crate::core::warehouses::MemoryWarehouseStore::new()),
                     resolver,
@@ -145,6 +154,10 @@ impl AppState {
             ApparatusRuntimeServices {
                 production_maps: build_production_map_service(apparatus.clone(), pool.clone()),
                 factory_locations: build_factory_location_service(apparatus.clone(), pool.clone()),
+                apparatus_collections: ApparatusCollectionService::new(
+                    Arc::new(PostgresApparatusCollectionStore::new(pool.clone())),
+                    apparatus.clone(),
+                ),
                 warehouses: build_warehouse_service(apparatus.clone(), pool),
                 apparatus,
             },
@@ -156,6 +169,7 @@ impl AppState {
             apparatus,
             production_maps,
             factory_locations,
+            apparatus_collections,
             warehouses,
         } = runtime;
         let admin_store = Arc::new(JsonAdminStore::new(admin_store_path()));
@@ -233,6 +247,7 @@ impl AppState {
             profiles,
             production_maps,
             apparatus,
+            apparatus_collections,
             factory_locations,
             inventory_movements,
             calculate_orders,
@@ -271,6 +286,7 @@ impl AppState {
 
 struct ApparatusRuntimeServices {
     apparatus: CanonicalApparatusService,
+    apparatus_collections: ApparatusCollectionService,
     production_maps: ProductionMapService,
     factory_locations: FactoryLocationService,
     warehouses: WarehouseService,
