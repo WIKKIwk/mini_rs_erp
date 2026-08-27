@@ -1,7 +1,7 @@
 use crate::app::AppState;
 use crate::core::auth::models::{Principal, PrincipalRole};
 use crate::core::gscale::models::MaterialReceiptPrintRequest;
-use crate::core::rps_batch::RpsBatchStartRequest;
+use crate::core::rps_batch::{RpsBatchStartRequest, RpsBatchUpdateRequest};
 use crate::core::werka::models::SupplierItem;
 
 pub(super) const ROLL_MATERIAL_ITEM_GROUP: &str = "Rulon";
@@ -26,6 +26,20 @@ pub(super) async fn normalize_material_batch_item(
     state: &AppState,
     principal: &Principal,
     request: &mut RpsBatchStartRequest,
+) -> Result<(), MaterialCatalogError> {
+    let Some(item) = authorized_material_item(state, principal, &request.item_code).await? else {
+        return Ok(());
+    };
+    require_dimensions(state, &item, request.width_mm, request.micron).await?;
+    request.item_code = item.code;
+    request.item_name = item.name;
+    Ok(())
+}
+
+pub(super) async fn normalize_material_batch_update_item(
+    state: &AppState,
+    principal: &Principal,
+    request: &mut RpsBatchUpdateRequest,
 ) -> Result<(), MaterialCatalogError> {
     let Some(item) = authorized_material_item(state, principal, &request.item_code).await? else {
         return Ok(());

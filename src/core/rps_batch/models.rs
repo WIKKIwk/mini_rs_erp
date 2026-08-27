@@ -33,6 +33,30 @@ pub struct RpsBatchStartRequest {
     pub micron: Option<f64>,
 }
 
+#[derive(Debug, Clone, Default, PartialEq, Deserialize)]
+pub struct RpsBatchUpdateRequest {
+    #[serde(default)]
+    pub batch_id: String,
+    #[serde(default)]
+    pub expected_revision: u64,
+    #[serde(default)]
+    pub item_code: String,
+    #[serde(default)]
+    pub item_name: String,
+    #[serde(default)]
+    pub warehouse: String,
+    #[serde(default)]
+    pub width_mm: Option<f64>,
+    #[serde(default)]
+    pub micron: Option<f64>,
+    #[serde(default)]
+    pub quantity_source: Option<String>,
+    #[serde(default)]
+    pub tare_enabled: Option<bool>,
+    #[serde(default)]
+    pub tare_kg: Option<f64>,
+}
+
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct RpsBatchSession {
     pub id: String,

@@ -10,11 +10,11 @@ use crate::core::authz::Capability;
 use crate::core::gscale::{GscaleService, GscaleServiceError};
 use crate::core::rps_batch::{
     RpsBatchClientPrintConfirmRequest, RpsBatchPrintRequest, RpsBatchServiceError,
-    RpsBatchStartRequest, RpsBatchStopRequest,
+    RpsBatchStartRequest, RpsBatchStopRequest, RpsBatchUpdateRequest,
 };
 use crate::http::handlers::auth::bearer_token;
 use crate::http::handlers::material_catalog::{
-    MaterialCatalogError, normalize_material_batch_item,
+    MaterialCatalogError, normalize_material_batch_item, normalize_material_batch_update_item,
 };
 
 pub async fn start(
@@ -55,6 +55,32 @@ pub async fn state(
     let response = state
         .rps_batch
         .state(&principal)
+        .await
+        .map_err(batch_error)?;
+    Ok(Json(
+        serde_json::to_value(response).unwrap_or_else(|_| serde_json::json!({"ok": false})),
+    ))
+}
+
+pub async fn update(
+    State(state): State<AppState>,
+    method: Method,
+    headers: HeaderMap,
+    body: Bytes,
+) -> Result<Json<serde_json::Value>, (StatusCode, Json<RpsBatchErrorResponse>)> {
+    if method != Method::POST {
+        return Err(method_not_allowed());
+    }
+    let principal = authenticated_principal(&state, &headers).await?;
+    let mut request: RpsBatchUpdateRequest =
+        serde_json::from_slice(&body).map_err(|_| bad_request("invalid_json", "invalid json"))?;
+    require_material_warehouse_access(&state, &principal, &request.warehouse).await?;
+    normalize_material_batch_update_item(&state, &principal, &mut request)
+        .await
+        .map_err(material_catalog_error)?;
+    let response = state
+        .rps_batch
+        .update(&principal, request)
         .await
         .map_err(batch_error)?;
     Ok(Json(

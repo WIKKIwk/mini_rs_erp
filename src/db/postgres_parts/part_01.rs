@@ -1,4 +1,3 @@
-
 const DEFAULT_MIN_CONNECTIONS: u32 = 2;
 const DEFAULT_MAX_CONNECTIONS: u32 = 16;
 const DEFAULT_ACQUIRE_TIMEOUT_MS: u64 = 500;
@@ -279,7 +278,9 @@ const POSTGRES_MIGRATIONS: [(&str, &str); 78] = [
     ),
     (
         "0069_canonical_apparatus_revision_authority",
-        include_str!("../../../migrations/postgres/0069_canonical_apparatus_revision_authority.sql"),
+        include_str!(
+            "../../../migrations/postgres/0069_canonical_apparatus_revision_authority.sql"
+        ),
     ),
     (
         "0070_canonical_apparatus_clean_cutover",

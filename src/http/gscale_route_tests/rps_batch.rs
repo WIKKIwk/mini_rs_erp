@@ -123,6 +123,133 @@ async fn rps_batch_start_state_stop_is_persisted_by_rs() {
 }
 
 #[tokio::test]
+async fn material_taminotchi_updates_active_batch_context_in_place() {
+    let mut state = test_state();
+    state.admin =
+        AdminService::new(&state.config).with_read_port(Arc::new(FakeAdminCatalogReadPort));
+    state
+        .admin
+        .upsert_role_assignment(RoleAssignmentUpsert {
+            principal_role: PrincipalRole::MaterialTaminotchi,
+            principal_ref: "admin".to_string(),
+            role_id: "material_taminotchi".to_string(),
+            assigned_apparatus: Vec::new(),
+            assigned_item_groups: vec!["Rulon".to_string(), "Kraska".to_string()],
+        })
+        .await
+        .expect("material item scope");
+    for warehouse in ["Stores - A", "Stores - B"] {
+        assign_warehouse_to_principal(
+            &state,
+            PrincipalRole::MaterialTaminotchi,
+            "admin",
+            warehouse,
+        )
+        .await;
+    }
+    let token = session(&state, PrincipalRole::MaterialTaminotchi).await;
+    let router = build_router(state);
+
+    let started = router
+        .clone()
+        .oneshot(request(
+            "POST",
+            "/v1/mobile/rps/batch/start",
+            &token,
+            r#"{
+                "client_batch_id":"material-edit",
+                "driver_url":"http://127.0.0.1:39117",
+                "item_code":"ROLL-1000",
+                "item_name":"client supplied name",
+                "warehouse":"Stores - A",
+                "printer":"godex",
+                "print_mode":"label",
+                "width_mm":615,
+                "micron":13
+            }"#,
+        ))
+        .await
+        .expect("start response");
+    assert_eq!(started.status(), StatusCode::OK);
+
+    let updated = router
+        .clone()
+        .oneshot(request(
+            "POST",
+            "/v1/mobile/rps/batch/update",
+            &token,
+            r#"{
+                "batch_id":"material-edit",
+                "expected_revision":1,
+                "item_code":"INK-BLACK",
+                "item_name":"client supplied ink",
+                "warehouse":"Stores - B"
+            }"#,
+        ))
+        .await
+        .expect("update response");
+    let status = updated.status();
+    assert_eq!(status, StatusCode::OK);
+    let body = json_body(updated).await;
+
+    assert_eq!(body["batch"]["id"], "material-edit");
+    assert_eq!(body["batch"]["active"], true);
+    assert_eq!(body["batch"]["revision"], 2);
+    assert_eq!(body["batch"]["item_code"], "INK-BLACK");
+    assert_eq!(body["batch"]["item_name"], "Black ink");
+    assert_eq!(body["batch"]["warehouse"], "Stores - B");
+    assert_eq!(body["batch"]["width_mm"], serde_json::Value::Null);
+    assert_eq!(body["batch"]["micron"], serde_json::Value::Null);
+
+    let updated_roll = router
+        .clone()
+        .oneshot(request(
+            "POST",
+            "/v1/mobile/rps/batch/update",
+            &token,
+            r#"{
+                "batch_id":"material-edit",
+                "expected_revision":2,
+                "item_code":"ROLL-1000",
+                "item_name":"client supplied roll",
+                "warehouse":"Stores - A",
+                "width_mm":783,
+                "micron":18,
+                "quantity_source":"manual",
+                "tare_enabled":true,
+                "tare_kg":0.78
+            }"#,
+        ))
+        .await
+        .expect("roll update response");
+    let updated_roll_body = json_body(updated_roll).await;
+
+    assert_eq!(updated_roll_body["batch"]["revision"], 3);
+    assert_eq!(updated_roll_body["batch"]["item_name"], "CPP 1000/35");
+    assert_eq!(updated_roll_body["batch"]["width_mm"], 783.0);
+    assert_eq!(updated_roll_body["batch"]["micron"], 18.0);
+    assert_eq!(updated_roll_body["batch"]["quantity_source"], "manual");
+    assert_eq!(updated_roll_body["batch"]["tare_enabled"], true);
+    assert_eq!(updated_roll_body["batch"]["tare_kg"], 0.78);
+
+    let current = router
+        .oneshot(request("GET", "/v1/mobile/rps/batch/state", &token, ""))
+        .await
+        .expect("state response");
+    let current_body = json_body(current).await;
+
+    assert_eq!(current_body["batch"]["id"], "material-edit");
+    assert_eq!(current_body["batch"]["revision"], 3);
+    assert_eq!(current_body["batch"]["item_code"], "ROLL-1000");
+    assert_eq!(current_body["batch"]["warehouse"], "Stores - A");
+    assert_eq!(current_body["batch"]["width_mm"], 783.0);
+    assert_eq!(current_body["batch"]["micron"], 18.0);
+    assert_eq!(current_body["batch"]["quantity_source"], "manual");
+    assert_eq!(current_body["batch"]["tare_enabled"], true);
+    assert_eq!(current_body["batch"]["tare_kg"], 0.78);
+}
+
+#[tokio::test]
 async fn rps_batch_rejects_stale_print_context_before_any_side_effect() {
     let events = Arc::new(Mutex::new(Vec::new()));
     let mut state = test_state();

@@ -8,7 +8,8 @@ use crate::core::gscale::models::{MaterialReceiptPrintRequest, MaterialReceiptPr
 
 use super::models::{
     RpsBatchHistoryResponse, RpsBatchPrintEntry, RpsBatchPrintRequest, RpsBatchResponse,
-    RpsBatchSession, RpsBatchStartRequest, RpsBatchStopRequest, new_batch_code,
+    RpsBatchSession, RpsBatchStartRequest, RpsBatchStopRequest, RpsBatchUpdateRequest,
+    new_batch_code,
 };
 use super::ports::{RpsBatchStoreError, RpsBatchStorePort};
 
@@ -60,6 +61,44 @@ impl RpsBatchService {
             .get(&owner.key)
             .await?
             .unwrap_or_else(|| owner.inactive_batch());
+        Ok(RpsBatchResponse::new(batch))
+    }
+
+    pub async fn update(
+        &self,
+        principal: &Principal,
+        request: RpsBatchUpdateRequest,
+    ) -> Result<RpsBatchResponse, RpsBatchServiceError> {
+        let _lifecycle_guard = self.lifecycle_lock.write().await;
+        let _guard = self.mutation_lock.lock().await;
+        let owner = BatchOwner::from_principal(principal);
+        let Some(mut batch) = self.store.get(&owner.key).await? else {
+            return Err(RpsBatchServiceError::BatchNotActive);
+        };
+        batch.ensure_context();
+        if !batch.active {
+            return Err(RpsBatchServiceError::BatchNotActive);
+        }
+        validate_update_context(&batch, &request)?;
+        let (item_code, item_name, warehouse, width_mm, micron) = normalize_update(&request)?;
+        batch.item_code = item_code;
+        batch.item_name = item_name;
+        batch.warehouse = warehouse;
+        batch.width_mm = width_mm;
+        batch.micron = micron;
+        if let Some(quantity_source) = request.quantity_source.as_deref() {
+            batch.quantity_source = normalize_quantity_source(quantity_source);
+        }
+        if request.tare_enabled.is_some() || request.tare_kg.is_some() {
+            let tare_enabled = request.tare_enabled.unwrap_or(batch.tare_enabled);
+            let tare_kg = request
+                .tare_kg
+                .unwrap_or(if tare_enabled { batch.tare_kg } else { 0.0 });
+            (batch.tare_enabled, batch.tare_kg) = normalize_tare(tare_enabled, tare_kg);
+        }
+        batch.revision = next_revision(batch.revision);
+        batch.updated_at = now_string();
+        self.store.put(batch.clone()).await?;
         Ok(RpsBatchResponse::new(batch))
     }
 
@@ -265,6 +304,7 @@ fn normalize_start(
         ));
     }
     let (width_mm, micron) = normalize_dimensions(request.width_mm, request.micron)?;
+    let (tare_enabled, tare_kg) = normalize_tare(request.tare_enabled, request.tare_kg);
 
     Ok(RpsBatchSession {
         id: batch_id(&request.client_batch_id, &owner.key),
@@ -280,10 +320,10 @@ fn normalize_start(
         warehouse,
         printer: fallback(&request.printer.to_ascii_lowercase(), "zebra"),
         print_mode: fallback(&request.print_mode.to_ascii_lowercase(), "rfid"),
-        quantity_source: fallback(&request.quantity_source.to_ascii_lowercase(), "scale"),
+        quantity_source: normalize_quantity_source(&request.quantity_source),
         manual_qty_kg: positive_or_zero(request.manual_qty_kg),
-        tare_enabled: request.tare_enabled || request.tare_kg > 0.0,
-        tare_kg: positive_or_zero(request.tare_kg),
+        tare_enabled,
+        tare_kg,
         width_mm,
         micron,
         last_error: String::new(),
@@ -292,6 +332,19 @@ fn normalize_start(
         created_at: now.clone(),
         updated_at: now,
     })
+}
+
+fn normalize_quantity_source(value: &str) -> String {
+    if value.trim().eq_ignore_ascii_case("manual") {
+        "manual".to_string()
+    } else {
+        "scale".to_string()
+    }
+}
+
+fn normalize_tare(tare_enabled: bool, tare_kg: f64) -> (bool, f64) {
+    let tare_kg = positive_or_zero(tare_kg);
+    (tare_enabled || tare_kg > 0.0, tare_kg)
 }
 
 fn normalize_dimensions(
@@ -312,6 +365,26 @@ fn normalize_dimensions(
             "width_mm_and_micron_required_together".to_string(),
         )),
     }
+}
+
+fn normalize_update(
+    request: &RpsBatchUpdateRequest,
+) -> Result<(String, String, String, Option<f64>, Option<f64>), RpsBatchServiceError> {
+    let item_code = request.item_code.trim().to_string();
+    let warehouse = request.warehouse.trim().to_string();
+    if item_code.is_empty() || warehouse.is_empty() {
+        return Err(RpsBatchServiceError::InvalidInput(
+            "item_code_and_warehouse_required".to_string(),
+        ));
+    }
+    let (width_mm, micron) = normalize_dimensions(request.width_mm, request.micron)?;
+    Ok((
+        item_code.clone(),
+        fallback(&request.item_name, &item_code),
+        warehouse,
+        width_mm,
+        micron,
+    ))
 }
 
 fn batch_id(client_batch_id: &str, owner_key: &str) -> String {
@@ -386,6 +459,21 @@ fn validate_stop_context(
         return Err(RpsBatchServiceError::BatchContextConflict);
     }
     if batch.active && batch.revision != request.expected_revision {
+        return Err(RpsBatchServiceError::BatchContextConflict);
+    }
+    Ok(())
+}
+
+fn validate_update_context(
+    batch: &RpsBatchSession,
+    request: &RpsBatchUpdateRequest,
+) -> Result<(), RpsBatchServiceError> {
+    if request.batch_id.trim().is_empty() || request.expected_revision == 0 {
+        return Err(RpsBatchServiceError::InvalidInput(
+            "batch_context_required".to_string(),
+        ));
+    }
+    if batch.id.trim() != request.batch_id.trim() || batch.revision != request.expected_revision {
         return Err(RpsBatchServiceError::BatchContextConflict);
     }
     Ok(())

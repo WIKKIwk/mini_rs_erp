@@ -396,6 +396,10 @@ async fn admin_approves_zero_output_completion_request_and_closes_order_with_iss
         approved_body["order_status"]["order_status"],
         "completed_with_issue"
     );
+    assert_eq!(
+        approved_body["order_status"]["lifecycle_status"],
+        "production_completed"
+    );
     let returned_paint = production_store
         .returned_paint_request(
             "returned_paint_complete:zakaz-approve-zero:apparatus:default:bosma_7",

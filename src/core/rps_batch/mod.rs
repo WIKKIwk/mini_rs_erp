@@ -5,7 +5,7 @@ pub mod store;
 
 pub use models::{
     RpsBatchClientPrintConfirmRequest, RpsBatchPrintRequest, RpsBatchStartRequest,
-    RpsBatchStopRequest,
+    RpsBatchStopRequest, RpsBatchUpdateRequest,
 };
 pub use service::{RpsBatchService, RpsBatchServiceError};
 pub use store::RpsBatchLmdbStore;
