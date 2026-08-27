@@ -109,20 +109,7 @@ async fn reprintable_material_stock(
     barcode: &str,
 ) -> Result<RawMaterialStockEntry, AdminError> {
     let stock = material_stock_in_scope(state, principal, barcode).await?;
-    let has_assignment = state
-        .production_maps
-        .raw_material_assignments()
-        .await
-        .map_err(production_map_error)?
-        .iter()
-        .any(|assignment| {
-            assignment
-                .barcode
-                .trim()
-                .eq_ignore_ascii_case(stock.barcode.trim())
-        });
-    if has_assignment
-        || !stock.status.trim().eq_ignore_ascii_case("available")
+    if !stock.status.trim().eq_ignore_ascii_case("available")
         || !stock.reserved_order_id.trim().is_empty()
     {
         return Err(raw_material_stock_locked_error());

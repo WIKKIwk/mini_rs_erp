@@ -980,7 +980,7 @@ async fn material_taminotchi_safely_deletes_only_available_raw_material_in_own_s
 }
 
 #[tokio::test]
-async fn material_taminotchi_reprints_only_the_existing_raw_material_identity() {
+async fn material_taminotchi_reprints_existing_assigned_raw_material_identity() {
     let material_store = Arc::new(RawMaterialStockLookup::default());
     let mut state = test_state();
     state.gscale = GscaleService::new().with_receipt_store(material_store.clone());
@@ -1008,7 +1008,58 @@ async fn material_taminotchi_reprints_only_the_existing_raw_material_identity() 
         "material-stock-reprint",
     )
     .await;
+    let admin_token = session(&state, PrincipalRole::Admin).await;
     let router = build_router(state);
+
+    let map = router
+        .clone()
+        .oneshot(request_with_body(
+            "PUT",
+            "/v1/mobile/admin/production-maps",
+            &admin_token,
+            &pechat_order_map_json(
+                "zakaz-raw-reprint",
+                "Raw reprint",
+                "8814",
+                "apparatus:default:bosma_7",
+            ),
+        ))
+        .await
+        .expect("raw reprint map");
+    assert_eq!(map.status(), StatusCode::OK);
+    let rule = router
+        .clone()
+        .oneshot(request_with_body(
+            "PUT",
+            "/v1/mobile/admin/raw-material-rules",
+            &admin_token,
+            &canonical_requirement_set_material_policy_body(
+                "apparatus:default:bosma_7",
+                1,
+                &["Kraska"],
+                true,
+            ),
+        ))
+        .await
+        .expect("raw reprint rule");
+    assert_eq!(rule.status(), StatusCode::OK);
+    let assigned = router
+        .clone()
+        .oneshot(request_with_body(
+            "POST",
+            "/v1/mobile/admin/raw-material-assignments",
+            &admin_token,
+            r#"{
+                "order_id":"zakaz-raw-reprint",
+                "barcode":"30AA",
+                "apparatus":"apparatus:default:bosma_7"
+            }"#,
+        ))
+        .await
+        .expect("assign raw stock before reprint");
+    let assigned_status = assigned.status();
+    let assigned_body = json_body(assigned).await;
+    assert_eq!(assigned_status, StatusCode::OK, "{assigned_body:?}");
 
     let response = router
         .clone()
