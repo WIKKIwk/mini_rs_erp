@@ -1,5 +1,91 @@
 impl MemoryProductionMapStore {
 
+    async fn opening_wip_by_idempotency_key(
+        &self,
+        idempotency_key: &str,
+    ) -> Result<Option<OpeningWipRecord>, ProductionMapError> {
+        Ok(self
+            .opening_wip_records
+            .read()
+            .await
+            .values()
+            .find(|record| record.intake.idempotency_key.trim() == idempotency_key.trim())
+            .cloned())
+    }
+
+    async fn opening_wip_records(
+        &self,
+        query: OpeningWipQuery,
+    ) -> Result<Vec<OpeningWipRecord>, ProductionMapError> {
+        let mut records = self
+            .opening_wip_records
+            .read()
+            .await
+            .values()
+            .filter(|record| {
+                (query.order_id.trim().is_empty()
+                    || record.intake.order_id.trim() == query.order_id.trim())
+                    && query.wip_status.is_none_or(|status| {
+                        record.batches.iter().any(|batch| batch.wip_status == status)
+                    })
+            })
+            .cloned()
+            .collect::<Vec<_>>();
+        records.sort_by(|left, right| {
+            right
+                .intake
+                .created_at_unix
+                .cmp(&left.intake.created_at_unix)
+                .then_with(|| right.intake.intake_id.cmp(&left.intake.intake_id))
+        });
+        records.truncate(query.limit.max(1));
+        Ok(records)
+    }
+
+    async fn create_opening_wip(
+        &self,
+        write: OpeningWipCreateWrite,
+    ) -> Result<OpeningWipRecord, ProductionMapError> {
+        let mut records = self.opening_wip_records.write().await;
+        if let Some(existing) = records.values().find(|record| {
+            record.intake.idempotency_key.trim()
+                == write.record.intake.idempotency_key.trim()
+        }) {
+            return if existing.intake.request_fingerprint
+                == write.record.intake.request_fingerprint
+            {
+                Ok(existing.clone())
+            } else {
+                Err(ProductionMapError::OpeningWipIdempotencyConflict)
+            };
+        }
+        records.insert(
+            write.record.intake.intake_id.trim().to_string(),
+            write.record.clone(),
+        );
+        Ok(write.record)
+    }
+
+    async fn opening_wip_batch(
+        &self,
+        batch_id: &str,
+        qr_payload: &str,
+    ) -> Result<Option<OpeningWipBatchRecord>, ProductionMapError> {
+        for record in self.opening_wip_records.read().await.values() {
+            if let Some(batch) = record.batches.iter().find(|batch| {
+                (!batch_id.trim().is_empty() && batch.batch_id.trim() == batch_id.trim())
+                    || (!qr_payload.trim().is_empty()
+                        && batch.qr_payload.trim() == qr_payload.trim())
+            }) {
+                return Ok(Some(OpeningWipBatchRecord {
+                    intake: record.intake.clone(),
+                    batch: batch.clone(),
+                }));
+            }
+        }
+        Ok(None)
+    }
+
     async fn put_order_progress_batch(
         &self,
         batch: OrderProgressBatch,

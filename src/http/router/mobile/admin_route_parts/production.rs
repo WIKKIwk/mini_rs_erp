@@ -33,6 +33,14 @@ fn production_routes() -> Router<AppState> {
             any(admin::production_map_save_with_order),
         )
         .route(
+            "/v1/mobile/admin/production-maps/opening-wip",
+            any(admin::production_map_opening_wip),
+        )
+        .route(
+            "/v1/mobile/admin/production-maps/opening-wip/print",
+            any(admin::production_map_opening_wip_print),
+        )
+        .route(
             "/v1/mobile/admin/training/apparatus",
             any(admin::training_apparatus_modes),
         )

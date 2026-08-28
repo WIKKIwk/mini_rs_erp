@@ -484,4 +484,26 @@ impl PostgresProductionMapStore {
     ) -> Result<Vec<OrderProgressBatch>, ProductionMapError> {
         load_wip_progress_batches(&self.pool, query).await
     }
+
+    async fn opening_wip_by_idempotency_key(
+        &self,
+        idempotency_key: &str,
+    ) -> Result<Option<OpeningWipRecord>, ProductionMapError> {
+        load_opening_wip_by_idempotency_key(&self.pool, idempotency_key).await
+    }
+
+    async fn opening_wip_records(
+        &self,
+        query: OpeningWipQuery,
+    ) -> Result<Vec<OpeningWipRecord>, ProductionMapError> {
+        load_opening_wip_records(&self.pool, query).await
+    }
+
+    async fn opening_wip_batch(
+        &self,
+        batch_id: &str,
+        qr_payload: &str,
+    ) -> Result<Option<OpeningWipBatchRecord>, ProductionMapError> {
+        load_opening_wip_batch(&self.pool, batch_id, qr_payload).await
+    }
 }

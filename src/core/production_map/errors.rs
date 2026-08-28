@@ -182,6 +182,14 @@ pub enum ProductionMapError {
     ProgressBatchCorrectionConflict,
     #[error("progress batch correction has no changes")]
     ProgressBatchCorrectionUnchanged,
+    #[error("opening WIP input is invalid")]
+    OpeningWipInvalidInput,
+    #[error("opening WIP entry apparatus is not the first production-map apparatus")]
+    OpeningWipEntryMismatch,
+    #[error("opening WIP cannot be added after the order has started")]
+    OpeningWipOrderAlreadyStarted,
+    #[error("opening WIP idempotency key belongs to another request")]
+    OpeningWipIdempotencyConflict,
     #[error("paddon input is invalid")]
     PaddonInvalidInput,
     #[error("paddon code sequence is exhausted")]

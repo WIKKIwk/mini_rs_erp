@@ -8,6 +8,7 @@ mod formula;
 mod formula_parser;
 pub mod materials;
 mod materials_support;
+mod opening_wip;
 #[cfg(test)]
 mod memory_store;
 pub mod pechat;
@@ -25,6 +26,7 @@ mod service_capacity;
 mod service_capacity_scheduler;
 mod service_maps;
 mod service_order_control;
+mod service_opening_wip;
 mod service_progress {
     include!("progress_session/service_progress.rs");
 }
@@ -57,6 +59,7 @@ pub use materials::{
     RawMaterialAssignment, RawMaterialAssignmentDeleteInput, RawMaterialAssignmentInput,
     RawMaterialStartPolicy, RawMaterialStartRequirements, TrustedQolipStartValidation,
 };
+pub use opening_wip::*;
 #[cfg(test)]
 pub use memory_store::MemoryProductionMapStore;
 pub(crate) use progress::{

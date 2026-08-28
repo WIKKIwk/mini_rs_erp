@@ -362,6 +362,31 @@ pub trait ProductionMapStorePort: Send + Sync {
     ) -> StoreResult<Vec<OrderProgressBatch>> {
         Ok(Vec::new())
     }
+    async fn opening_wip_by_idempotency_key(
+        &self,
+        _idempotency_key: &str,
+    ) -> StoreResult<Option<OpeningWipRecord>> {
+        Ok(None)
+    }
+    async fn opening_wip_records(
+        &self,
+        _query: OpeningWipQuery,
+    ) -> StoreResult<Vec<OpeningWipRecord>> {
+        Ok(Vec::new())
+    }
+    async fn opening_wip_batch(
+        &self,
+        _batch_id: &str,
+        _qr_payload: &str,
+    ) -> StoreResult<Option<OpeningWipBatchRecord>> {
+        Ok(None)
+    }
+    async fn create_opening_wip(
+        &self,
+        _write: OpeningWipCreateWrite,
+    ) -> StoreResult<OpeningWipRecord> {
+        Err(ProductionMapError::StoreFailed)
+    }
     async fn paddons(&self, _limit: usize) -> StoreResult<Vec<PaddonSummary>> {
         Ok(Vec::new())
     }

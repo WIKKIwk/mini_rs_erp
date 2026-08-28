@@ -383,6 +383,18 @@ pub(super) fn production_map_error(error: ProductionMapError) -> AdminError {
         ProductionMapError::ProgressBatchCorrectionUnchanged => {
             bad_request("progress_batch_correction_unchanged")
         }
+        ProductionMapError::OpeningWipInvalidInput => {
+            bad_request("opening_wip_invalid_input")
+        }
+        ProductionMapError::OpeningWipEntryMismatch => {
+            bad_request("opening_wip_entry_mismatch")
+        }
+        ProductionMapError::OpeningWipOrderAlreadyStarted => {
+            conflict("opening_wip_order_already_started")
+        }
+        ProductionMapError::OpeningWipIdempotencyConflict => {
+            conflict("opening_wip_idempotency_conflict")
+        }
         ProductionMapError::PaddonInvalidInput => bad_request("paddon_invalid_input"),
         ProductionMapError::PaddonCodeExhausted => conflict("paddon_code_exhausted"),
         ProductionMapError::PaddonNotFound => not_found("paddon_not_found"),

@@ -8,6 +8,7 @@ use crate::core::returned_paint::ReturnedPaintRequest;
 
 use super::capacity::*;
 use super::materials::RawMaterialAssignment;
+use super::opening_wip::*;
 use super::types::*;
 
 include!("store_port_parts/part_01.rs");

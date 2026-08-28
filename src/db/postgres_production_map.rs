@@ -9,8 +9,10 @@ use crate::core::production_map::{
     ApparatusScheduleReservation, CompletedQueueOrder, CompletionRequestDecision,
     CompletionRequestDecisionNotification, CompletionRequestNotification,
     CompletionRequestStateResolution, FinishedGoodsStockEntry, LaminatsiyaAstatkaReport,
-    OrderControlRecord, OrderProgressBatch, OrderProgressEvent, OrderRunSession, PaddonCreateInput,
-    PaddonSnapshot, PaddonSummary, ProductionMapApparatusTransferRecord,
+    OpeningWipBatchRecord, OpeningWipCreateWrite, OpeningWipQuery, OpeningWipRecord,
+    OrderControlRecord,
+    OrderProgressBatch, OrderProgressEvent, OrderRunSession, PaddonCreateInput, PaddonSnapshot,
+    PaddonSummary, ProductionMapApparatusTransferRecord,
     ProductionMapApparatusTransferWrite, ProductionMapDefinition, ProductionMapError,
     ProductionMapStorePort, ProductionOrderLifecycleRecord, ProductionOrderLifecycleStatus,
     ProductionOrderLogEntry, ProgressBatchCorrectionInput, ProgressBatchCorrectionRecord,
@@ -29,6 +31,7 @@ mod map_helpers;
 mod material_helpers;
 mod order_control_helpers;
 mod order_query_helpers;
+mod opening_wip_helpers;
 mod paddon_helpers;
 mod progress_helpers;
 mod qolip_session_helpers;
@@ -78,6 +81,10 @@ use self::order_query_helpers::{
     load_progress_batches_for_audit, load_progress_batches_for_order,
     load_progress_batches_for_orders, load_progress_batches_for_worker,
     load_queue_action_logs_for_orders, load_queue_action_logs_for_worker,
+};
+use self::opening_wip_helpers::{
+    create_opening_wip, load_opening_wip_batch, load_opening_wip_by_idempotency_key,
+    load_opening_wip_records,
 };
 use self::paddon_helpers::{
     add_paddon_item, add_paddon_items, create_paddon, load_paddon_scan_snapshot,

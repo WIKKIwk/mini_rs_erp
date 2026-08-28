@@ -14,7 +14,8 @@ use crate::core::gscale::models::{
 };
 use crate::core::production_map::{
     ApparatusDowntime, ApparatusScheduleCancelRequest, ApparatusScheduleRequest,
-    CompletionRequestDecision, MaterialScanProgressAction, OrderProgressBatchWipStatus,
+    CompletionRequestDecision, MaterialScanProgressAction, OpeningWipBatchStatus,
+    OpeningWipCreateInput, OpeningWipQuery, OrderProgressBatchWipStatus,
     ProductionMapApparatusTransferRequest, ProductionMapBatchMoveRequest, ProductionMapDefinition,
     ProductionMapError, ProductionMapMoveRequest, ProductionMapNodeKind, ProductionMapRunRequest,
     QueueActionActor, QueueProgressInput, RawMaterialAssignment, RawMaterialAssignmentDeleteInput,
@@ -28,6 +29,7 @@ mod completion;
 mod helpers;
 mod move_run;
 mod order_control;
+mod opening_wip;
 mod paddons;
 mod progress_qr;
 mod qolip_order_notes;
@@ -50,6 +52,7 @@ pub use self::move_run::{
     production_map_run,
 };
 pub use self::order_control::production_map_order_control;
+pub use self::opening_wip::{production_map_opening_wip, production_map_opening_wip_print};
 pub use self::paddons::{
     production_map_paddon_create, production_map_paddon_detail, production_map_paddon_item_add,
     production_map_paddon_item_remove, production_map_paddon_items_add,

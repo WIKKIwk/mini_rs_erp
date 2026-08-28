@@ -1,5 +1,12 @@
 impl PostgresProductionMapStore {
 
+    async fn create_opening_wip(
+        &self,
+        write: OpeningWipCreateWrite,
+    ) -> Result<OpeningWipRecord, ProductionMapError> {
+        create_opening_wip(&self.pool, write).await
+    }
+
     async fn paddons(&self, limit: usize) -> Result<Vec<PaddonSummary>, ProductionMapError> {
         load_paddons(&self.pool, limit).await
     }

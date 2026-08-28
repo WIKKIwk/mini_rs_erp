@@ -365,6 +365,35 @@ impl ProductionMapStorePort for PostgresProductionMapStore {
         PostgresProductionMapStore::wip_progress_batches(self, query).await
     }
 
+    async fn opening_wip_by_idempotency_key(
+        &self,
+        idempotency_key: &str,
+    ) -> Result<Option<OpeningWipRecord>, ProductionMapError> {
+        PostgresProductionMapStore::opening_wip_by_idempotency_key(self, idempotency_key).await
+    }
+
+    async fn opening_wip_records(
+        &self,
+        query: OpeningWipQuery,
+    ) -> Result<Vec<OpeningWipRecord>, ProductionMapError> {
+        PostgresProductionMapStore::opening_wip_records(self, query).await
+    }
+
+    async fn opening_wip_batch(
+        &self,
+        batch_id: &str,
+        qr_payload: &str,
+    ) -> Result<Option<OpeningWipBatchRecord>, ProductionMapError> {
+        PostgresProductionMapStore::opening_wip_batch(self, batch_id, qr_payload).await
+    }
+
+    async fn create_opening_wip(
+        &self,
+        write: OpeningWipCreateWrite,
+    ) -> Result<OpeningWipRecord, ProductionMapError> {
+        PostgresProductionMapStore::create_opening_wip(self, write).await
+    }
+
     async fn paddons(&self, limit: usize) -> Result<Vec<PaddonSummary>, ProductionMapError> {
         PostgresProductionMapStore::paddons(self, limit).await
     }
