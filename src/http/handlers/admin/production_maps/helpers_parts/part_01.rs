@@ -1,4 +1,3 @@
-
 pub(super) async fn production_map_order_customers(
     state: &AppState,
     maps: &[ProductionMapSaved],
@@ -383,11 +382,10 @@ pub(super) fn production_map_error(error: ProductionMapError) -> AdminError {
         ProductionMapError::ProgressBatchCorrectionUnchanged => {
             bad_request("progress_batch_correction_unchanged")
         }
-        ProductionMapError::OpeningWipInvalidInput => {
-            bad_request("opening_wip_invalid_input")
-        }
-        ProductionMapError::OpeningWipEntryMismatch => {
-            bad_request("opening_wip_entry_mismatch")
+        ProductionMapError::OpeningWipInvalidInput => bad_request("opening_wip_invalid_input"),
+        ProductionMapError::OpeningWipEntryMismatch => bad_request("opening_wip_entry_mismatch"),
+        ProductionMapError::OpeningWipLocationMismatch => {
+            bad_request("opening_wip_location_mismatch")
         }
         ProductionMapError::OpeningWipOrderAlreadyStarted => {
             conflict("opening_wip_order_already_started")

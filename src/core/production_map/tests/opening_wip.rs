@@ -3,9 +3,11 @@ use std::sync::Arc;
 
 use crate::core::production_map::*;
 
-use super::fixtures::apparatus_stage_map;
+use super::fixtures::{apparatus_stage_map, canonical_two_stage_map};
 
+const PECHAT_ID: &str = "apparatus:default:bosma_7";
 const LAMINATION_ID: &str = "apparatus:default:asset-007";
+const LAMINATION_2_ID: &str = "apparatus:default:asset-008";
 const REZKA_ID: &str = "apparatus:default:asset-010";
 
 fn opening_input(order_id: &str, idempotency_key: &str) -> OpeningWipCreateInput {
@@ -15,7 +17,7 @@ fn opening_input(order_id: &str, idempotency_key: &str) -> OpeningWipCreateInput
         entry_apparatus: LAMINATION_ID.to_string(),
         source_operation: "Bosma".to_string(),
         source_apparatus: String::new(),
-        current_location: "Laminatsiya oldi".to_string(),
+        current_location: LAMINATION_ID.to_string(),
         note: "Day-0 sanoq".to_string(),
         batches: vec![
             OpeningWipBatchInput {
@@ -82,6 +84,7 @@ async fn opening_wip_creates_unique_batches_and_replays_idempotently() {
         .expect("opening WIP created");
     assert_eq!(created.intake.order_id, order_id);
     assert_eq!(created.intake.entry_apparatus, LAMINATION_ID);
+    assert_eq!(created.intake.current_location, LAMINATION_ID);
     assert_eq!(
         created.intake.source_operation,
         "unavailable_before_cutover"
@@ -91,7 +94,10 @@ async fn opening_wip_creates_unique_batches_and_replays_idempotently() {
     assert_eq!(created.batches.len(), 2);
     assert_ne!(created.batches[0].batch_id, created.batches[1].batch_id);
     assert_ne!(created.batches[0].qr_payload, created.batches[1].qr_payload);
-    assert_eq!(created.batches[0].wip_status, OpeningWipBatchStatus::Waiting);
+    assert_eq!(
+        created.batches[0].wip_status,
+        OpeningWipBatchStatus::Waiting
+    );
     assert_eq!(created.batches[0].quantity, Some(100.0));
     assert_eq!(created.batches[1].quantity, Some(125.5));
     assert_eq!(created.batches[1].finished_goods_kg, Some(14.0));
@@ -123,6 +129,7 @@ async fn opening_wip_requires_roll_passport_metrics_for_entry_operation() {
 
     let mut missing_diameter = opening_input(order_id, "opening-wip-rezka-missing");
     missing_diameter.entry_apparatus = REZKA_ID.to_string();
+    missing_diameter.current_location = REZKA_ID.to_string();
     assert_eq!(
         service
             .create_opening_wip(missing_diameter.clone(), admin_actor())
@@ -137,7 +144,115 @@ async fn opening_wip_requires_roll_passport_metrics_for_entry_operation() {
         .create_opening_wip(missing_diameter, admin_actor())
         .await
         .expect("rezka Opening WIP with diameter");
-    assert!(created.batches.iter().all(|batch| batch.diameter == Some(45.0)));
+    assert!(
+        created
+            .batches
+            .iter()
+            .all(|batch| batch.diameter == Some(45.0))
+    );
+}
+
+#[tokio::test]
+async fn opening_wip_location_must_be_a_real_apparatus_in_the_order_map() {
+    let store = Arc::new(MemoryProductionMapStore::new());
+    let service = ProductionMapService::new_for_test(store);
+    let order_id = "zakaz-opening-wip-location-map";
+    service
+        .upsert_map(canonical_two_stage_map(
+            order_id,
+            LAMINATION_ID,
+            "Laminatsiya 1",
+            REZKA_ID,
+            "Rezka",
+        ))
+        .await
+        .expect("two-stage opening order map");
+
+    let mut at_rezka = opening_input(order_id, "opening-wip-location-rezka");
+    at_rezka.current_location = REZKA_ID.to_string();
+    let created = service
+        .create_opening_wip(at_rezka, admin_actor())
+        .await
+        .expect("map apparatus is a valid current location");
+    assert_eq!(created.intake.current_location, "Rezka");
+
+    let mut outside_map = opening_input(order_id, "opening-wip-location-outside");
+    outside_map.current_location = "apparatus:default:asset-008".to_string();
+    assert_eq!(
+        service.create_opening_wip(outside_map, admin_actor()).await,
+        Err(ProductionMapError::OpeningWipLocationMismatch)
+    );
+
+    let alternative_order_id = "zakaz-opening-wip-location-alternative";
+    let mut alternative_map = canonical_two_stage_map(
+        alternative_order_id,
+        PECHAT_ID,
+        "7 ta rangli bosma aparat",
+        LAMINATION_ID,
+        "Laminatsiya 1",
+    );
+    let mut lamination_2 = alternative_map
+        .nodes
+        .iter()
+        .find(|node| node.id == "second")
+        .expect("first laminatsiya alternative")
+        .clone();
+    lamination_2.id = "lamination-2".to_string();
+    lamination_2.title = "Laminatsiya 2".to_string();
+    lamination_2.apparatus_id = LAMINATION_2_ID.to_string();
+    for node in alternative_map
+        .nodes
+        .iter_mut()
+        .filter(|node| node.id == "second")
+    {
+        node.alternative_group_id = "alt-laminatsiya".to_string();
+        node.alternative_group_label = "Laminatsiya".to_string();
+    }
+    lamination_2.alternative_group_id = "alt-laminatsiya".to_string();
+    lamination_2.alternative_group_label = "Laminatsiya".to_string();
+    alternative_map.nodes.insert(3, lamination_2);
+    alternative_map.edges = vec![
+        ProductionMapEdge {
+            from: "start".to_string(),
+            to: "apparatus".to_string(),
+            branch: String::new(),
+        },
+        ProductionMapEdge {
+            from: "apparatus".to_string(),
+            to: "second".to_string(),
+            branch: String::new(),
+        },
+        ProductionMapEdge {
+            from: "apparatus".to_string(),
+            to: "lamination-2".to_string(),
+            branch: String::new(),
+        },
+        ProductionMapEdge {
+            from: "second".to_string(),
+            to: "end".to_string(),
+            branch: String::new(),
+        },
+        ProductionMapEdge {
+            from: "lamination-2".to_string(),
+            to: "end".to_string(),
+            branch: String::new(),
+        },
+    ];
+    service
+        .upsert_map(alternative_map)
+        .await
+        .expect("alternative opening order map");
+    let mut at_second_alternative = opening_input(
+        alternative_order_id,
+        "opening-wip-location-second-alternative",
+    );
+    at_second_alternative.entry_apparatus = PECHAT_ID.to_string();
+    at_second_alternative.current_location = LAMINATION_2_ID.to_string();
+    let created = service
+        .create_opening_wip(at_second_alternative, admin_actor())
+        .await
+        .expect("unassigned map alternative is a valid current location");
+    assert_eq!(created.intake.current_location, "Laminatsiya 2");
 }
 
 #[tokio::test]
@@ -193,7 +308,7 @@ async fn opening_wip_idempotency_conflict_fails_closed() {
         .expect("initial opening WIP");
 
     let mut conflicting = opening_input(order_id, "opening-wip-request-conflict");
-    conflicting.current_location = "Boshqa joy".to_string();
+    conflicting.note = "Boshqa izoh".to_string();
     assert_eq!(
         service.create_opening_wip(conflicting, admin_actor()).await,
         Err(ProductionMapError::OpeningWipIdempotencyConflict)
@@ -305,12 +420,12 @@ async fn opening_wip_batches_drive_entry_stage_until_every_roll_is_processed() {
             .opening_wip_batch(&source.batch_id, "")
             .await
             .expect("processed opening WIP");
-        assert_eq!(
-            processed.batch.wip_status,
-            OpeningWipBatchStatus::Processed
-        );
+        assert_eq!(processed.batch.wip_status, OpeningWipBatchStatus::Processed);
 
-        let states = service.apparatus_queue_states().await.expect("queue states");
+        let states = service
+            .apparatus_queue_states()
+            .await
+            .expect("queue states");
         let state = states
             .get(LAMINATION_ID)
             .and_then(|orders| orders.get(order_id))

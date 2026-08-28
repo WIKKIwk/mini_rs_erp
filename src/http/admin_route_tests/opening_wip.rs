@@ -28,26 +28,9 @@ async fn opening_wip_worker_lookup_is_qr_exact_and_apparatus_scoped() {
         .await
         .expect("other worker assignment");
     let admin_token = session(&state, PrincipalRole::Admin).await;
-    let worker_token = session_for(
-        &state,
-        PrincipalRole::Aparatchi,
-        "opening-wip-worker",
-    )
-    .await;
-    let other_worker_token = session_for(
-        &state,
-        PrincipalRole::Aparatchi,
-        "opening-wip-other-worker",
-    )
-    .await;
-    state
-        .factory_locations
-        .create(crate::core::factory_locations::FactoryLocationCreate {
-            name: "Laminatsiya oldi".to_string(),
-            apparatus_ids: vec![LAMINATION_ID.to_string()],
-        })
-        .await
-        .expect("opening WIP factory location");
+    let worker_token = session_for(&state, PrincipalRole::Aparatchi, "opening-wip-worker").await;
+    let other_worker_token =
+        session_for(&state, PrincipalRole::Aparatchi, "opening-wip-other-worker").await;
     let router = build_router(state);
     let order_id = "zakaz-opening-wip-worker-lookup";
 
@@ -81,7 +64,7 @@ async fn opening_wip_worker_lookup_is_qr_exact_and_apparatus_scoped() {
                     "idempotency_key":"opening-wip-location-mismatch",
                     "order_id":"{order_id}",
                     "entry_apparatus":"{LAMINATION_ID}",
-                    "current_location":"Boshqa aparat oldi",
+                    "current_location":"apparatus:default:asset-008",
                     "batches":[{{
                         "quantity_basis":"measured",
                         "finished_goods_meter":100.0,
@@ -110,7 +93,7 @@ async fn opening_wip_worker_lookup_is_qr_exact_and_apparatus_scoped() {
                     "idempotency_key":"opening-wip-worker-lookup-request",
                     "order_id":"{order_id}",
                     "entry_apparatus":"{LAMINATION_ID}",
-                    "current_location":"Laminatsiya oldi",
+                    "current_location":"{LAMINATION_ID}",
                     "batches":[{{
                         "quantity_basis":"measured",
                         "finished_goods_meter":100.0,

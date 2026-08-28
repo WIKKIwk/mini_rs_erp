@@ -1,5 +1,5 @@
-use super::*;
 use super::queue_actions::resolve_queue_apparatus;
+use super::*;
 use crate::core::production_map::OpeningWipIntakeStatus;
 
 #[derive(Default, serde::Deserialize)]
@@ -57,26 +57,7 @@ pub async fn production_map_opening_wip(
     .await?;
     match method {
         Method::POST => {
-            let mut input: OpeningWipCreateInput = parse_json(&body)?;
-            let locations = state
-                .factory_locations
-                .list()
-                .await
-                .map_err(|_| bad_request("opening_wip_location_unavailable"))?;
-            let requested_location = input.current_location.trim();
-            let entry_apparatus = input.entry_apparatus.trim();
-            let location = locations.into_iter().find(|location| {
-                location.active
-                    && (location.id.trim() == requested_location
-                        || location.name.trim().eq_ignore_ascii_case(requested_location))
-                    && location.apparatus.iter().any(|apparatus| {
-                        apparatus.active && apparatus.id.to_string().trim() == entry_apparatus
-                    })
-            });
-            let Some(location) = location else {
-                return Err(bad_request("opening_wip_location_mismatch"));
-            };
-            input.current_location = location.name.trim().to_string();
+            let input: OpeningWipCreateInput = parse_json(&body)?;
             let record = state
                 .production_maps
                 .create_opening_wip(input, queue_action_actor(&principal))
@@ -236,8 +217,8 @@ pub async fn production_map_opening_wip_lookup(
         }
         Err(error) => return Err(production_map_error(error)),
     };
-    let batch_id_matches = input.batch_id.trim().is_empty()
-        || details.batch.batch_id.trim() == input.batch_id.trim();
+    let batch_id_matches =
+        input.batch_id.trim().is_empty() || details.batch.batch_id.trim() == input.batch_id.trim();
     if details.intake.status != OpeningWipIntakeStatus::Confirmed
         || details.batch.wip_status != OpeningWipBatchStatus::Waiting
         || details.intake.order_id.trim() != input.order_id.trim()

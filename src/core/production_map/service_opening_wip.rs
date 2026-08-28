@@ -27,6 +27,19 @@ impl ProductionMapService {
         if !types::apparatus_ids_match(&first_apparatus, &normalized.entry_apparatus) {
             return Err(ProductionMapError::OpeningWipEntryMismatch);
         }
+        let location_stage = chain::linear_work_stages(&map)
+            .into_iter()
+            .find(|stage| {
+                stage.apparatus_id.as_deref().is_some_and(|apparatus_id| {
+                    types::apparatus_ids_match(apparatus_id, &normalized.current_location)
+                })
+            })
+            .ok_or(ProductionMapError::OpeningWipLocationMismatch)?;
+        normalized.current_location = if location_stage.station_title.trim().is_empty() {
+            location_stage.apparatus_id.unwrap_or_default()
+        } else {
+            location_stage.station_title.trim().to_string()
+        };
         let entry_configuration = self
             .resolve_canonical_apparatus_text(&normalized.entry_apparatus)
             .await?;

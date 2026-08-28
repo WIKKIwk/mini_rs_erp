@@ -186,6 +186,8 @@ pub enum ProductionMapError {
     OpeningWipInvalidInput,
     #[error("opening WIP entry apparatus is not the first production-map apparatus")]
     OpeningWipEntryMismatch,
+    #[error("opening WIP current location is not a production-map apparatus")]
+    OpeningWipLocationMismatch,
     #[error("opening WIP cannot be added after the order has started")]
     OpeningWipOrderAlreadyStarted,
     #[error("opening WIP idempotency key belongs to another request")]
