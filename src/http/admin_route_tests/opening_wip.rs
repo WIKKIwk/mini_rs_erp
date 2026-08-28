@@ -70,6 +70,35 @@ async fn opening_wip_worker_lookup_is_qr_exact_and_apparatus_scoped() {
         .expect("save map");
     assert_eq!(saved.status(), StatusCode::OK);
 
+    let mismatched_location = router
+        .clone()
+        .oneshot(request_with_body(
+            "POST",
+            "/v1/mobile/admin/production-maps/opening-wip",
+            &admin_token,
+            &format!(
+                r#"{{
+                    "idempotency_key":"opening-wip-location-mismatch",
+                    "order_id":"{order_id}",
+                    "entry_apparatus":"{LAMINATION_ID}",
+                    "current_location":"Boshqa aparat oldi",
+                    "batches":[{{
+                        "quantity_basis":"measured",
+                        "finished_goods_meter":100.0,
+                        "finished_goods_kg":12.0,
+                        "bobina_kg":1.0
+                    }}]
+                }}"#
+            ),
+        ))
+        .await
+        .expect("reject mismatched Opening WIP location");
+    assert_eq!(mismatched_location.status(), StatusCode::BAD_REQUEST);
+    assert_eq!(
+        json_body(mismatched_location).await["error"],
+        "opening_wip_location_mismatch"
+    );
+
     let created = router
         .clone()
         .oneshot(request_with_body(
