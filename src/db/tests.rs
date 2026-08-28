@@ -5,6 +5,7 @@ mod customer;
 mod gscale_receipt;
 mod inventory_movements;
 mod mini_order;
+mod opening_wip;
 mod production_map;
 mod training_workspace;
 mod warehouse;

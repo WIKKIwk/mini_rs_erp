@@ -16,7 +16,7 @@ struct OpeningWipIntakeRow {
     source_operation: String,
     source_apparatus: String,
     current_location: String,
-    resume_apparatus: String,
+    resume_apparatus: Option<String>,
     resume_stage_node_id: String,
     history_status: String,
     status: String,
@@ -181,7 +181,7 @@ pub(super) async fn create_opening_wip(
     .bind(intake.source_operation.trim())
     .bind(intake.source_apparatus.trim())
     .bind(intake.current_location.trim())
-    .bind(intake.resume_apparatus.trim())
+    .bind((!intake.resume_apparatus.trim().is_empty()).then_some(intake.resume_apparatus.trim()))
     .bind(intake.resume_stage_node_id.trim())
     .bind(intake.history_status.trim())
     .bind(intake.status.as_str())
@@ -338,7 +338,7 @@ fn opening_wip_intake_from_row(
         source_operation: row.source_operation,
         source_apparatus: row.source_apparatus,
         current_location: row.current_location,
-        resume_apparatus: row.resume_apparatus,
+        resume_apparatus: row.resume_apparatus.unwrap_or_default(),
         resume_stage_node_id: row.resume_stage_node_id,
         history_status: row.history_status,
         status: OpeningWipIntakeStatus::parse(&row.status)
