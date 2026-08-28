@@ -396,6 +396,9 @@ pub(super) fn production_map_error(error: ProductionMapError) -> AdminError {
         ProductionMapError::OpeningWipSourceFinalStage => {
             bad_request("opening_wip_source_final_stage")
         }
+        ProductionMapError::OpeningWipTargetStageAlreadyCompleted => {
+            conflict("opening_wip_target_stage_already_completed")
+        }
         ProductionMapError::OpeningWipOrderAlreadyStarted => {
             conflict("opening_wip_order_already_started")
         }

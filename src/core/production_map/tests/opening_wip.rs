@@ -68,6 +68,60 @@ fn lamination_complete_input() -> QueueProgressInput {
     }
 }
 
+fn print_lamination_rezka_map(order_id: &str) -> ProductionMapDefinition {
+    let mut map = canonical_two_stage_map(
+        order_id,
+        PECHAT_ID,
+        "7 ta rangli bosma aparat",
+        LAMINATION_ID,
+        "Laminatsiya 1",
+    );
+    let mut rezka = map
+        .nodes
+        .iter()
+        .find(|node| node.id == "second")
+        .expect("lamination stage")
+        .clone();
+    rezka.id = "rezka".to_string();
+    rezka.title = "Rezka".to_string();
+    rezka.apparatus_id = REZKA_ID.to_string();
+    rezka.rezka_kadr_count = Some(1);
+    rezka.rezka_frame_groups = vec![1];
+    let end_index = map
+        .nodes
+        .iter()
+        .position(|node| node.id == "end")
+        .expect("end node");
+    map.nodes.insert(end_index, rezka);
+    map.edges
+        .retain(|edge| !(edge.from == "second" && edge.to == "end"));
+    map.edges.push(ProductionMapEdge {
+        from: "second".to_string(),
+        to: "rezka".to_string(),
+        branch: String::new(),
+    });
+    map.edges.push(ProductionMapEdge {
+        from: "rezka".to_string(),
+        to: "end".to_string(),
+        branch: String::new(),
+    });
+    map
+}
+
+fn source_opening_input(
+    order_id: &str,
+    idempotency_key: &str,
+    source_apparatus: &str,
+    source_stage_node_id: &str,
+) -> OpeningWipCreateInput {
+    let mut input = opening_input(order_id, idempotency_key);
+    input.entry_apparatus.clear();
+    input.current_location.clear();
+    input.source_apparatus = source_apparatus.to_string();
+    input.source_stage_node_id = source_stage_node_id.to_string();
+    input
+}
+
 #[tokio::test]
 async fn opening_wip_creates_unique_batches_and_replays_idempotently() {
     let store = Arc::new(MemoryProductionMapStore::new());
@@ -554,4 +608,83 @@ async fn opening_wip_source_allows_each_legal_next_stage_alternative() {
             ApparatusQueuePreviousWipMode::ScanRequired,
         );
     }
+}
+
+#[tokio::test]
+async fn opening_wip_source_advances_after_its_target_stage_is_completed() {
+    let store = Arc::new(MemoryProductionMapStore::new());
+    let service = ProductionMapService::new_for_test(store);
+    let order_id = "zakaz-opening-wip-source-advance";
+    service
+        .upsert_map(print_lamination_rezka_map(order_id))
+        .await
+        .expect("three-stage opening map");
+
+    let mut print_input = source_opening_input(
+        order_id,
+        "opening-wip-source-advance-print",
+        PECHAT_ID,
+        "apparatus",
+    );
+    print_input.batches.truncate(1);
+    let print_opening = service
+        .create_opening_wip(print_input, admin_actor())
+        .await
+        .expect("print-source Opening WIP");
+    let assigned = [LAMINATION_ID.to_string()];
+    service
+        .apply_apparatus_queue_action_with_progress(
+            LAMINATION_ID,
+            order_id,
+            queue_state::ApparatusQueueAction::Start,
+            &assigned,
+            worker_actor(),
+            QueueProgressInput {
+                qr_payload: print_opening.batches[0].qr_payload.clone(),
+                ..QueueProgressInput::default()
+            },
+        )
+        .await
+        .expect("lamination starts from print Opening WIP");
+    service
+        .apply_apparatus_queue_action_with_progress(
+            LAMINATION_ID,
+            order_id,
+            queue_state::ApparatusQueueAction::Complete,
+            &assigned,
+            worker_actor(),
+            lamination_complete_input(),
+        )
+        .await
+        .expect("lamination completes the final Opening WIP roll");
+
+    assert_eq!(
+        service
+            .create_opening_wip(
+                source_opening_input(
+                    order_id,
+                    "opening-wip-source-advance-print-again",
+                    PECHAT_ID,
+                    "apparatus",
+                ),
+                admin_actor(),
+            )
+            .await,
+        Err(ProductionMapError::OpeningWipTargetStageAlreadyCompleted)
+    );
+
+    let next = service
+        .create_opening_wip(
+            source_opening_input(
+                order_id,
+                "opening-wip-source-advance-lamination",
+                LAMINATION_ID,
+                "second",
+            ),
+            admin_actor(),
+        )
+        .await
+        .expect("lamination-source Opening WIP remains available for rezka");
+    assert_eq!(next.intake.source_apparatus, LAMINATION_ID);
+    assert_eq!(next.intake.resume_stage_node_id, "second");
 }

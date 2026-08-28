@@ -404,6 +404,7 @@ async fn opening_wip_from_print_source_opens_lamination_scan_and_starts_with_its
     assert_eq!(started_body["states"][order_id], "in_progress");
 
     let in_use = router
+        .clone()
         .oneshot(request(
             "GET",
             &format!(
@@ -420,5 +421,62 @@ async fn opening_wip_from_print_source_opens_lamination_scan_and_starts_with_its
     assert_eq!(
         in_use_body["records"][0]["batches"][0]["used_by_apparatus"],
         LAMINATION_ID
+    );
+
+    let completed = router
+        .clone()
+        .oneshot(request_with_body(
+            "POST",
+            "/v1/mobile/admin/production-maps/queue-action",
+            &worker_token,
+            &format!(
+                r#"{{
+                    "apparatus":"{LAMINATION_ID}",
+                    "order_id":"{order_id}",
+                    "action":"complete",
+                    "finished_goods_meter":100.0,
+                    "finished_goods_kg":12.0,
+                    "lamination_print_leftover_rolls":0.5,
+                    "lamination_film_leftover_rolls":0.5,
+                    "total_waste":0.5,
+                    "uom":"m"
+                }}"#
+            ),
+        ))
+        .await
+        .expect("complete lamination from Opening WIP QR");
+    let completed_status = completed.status();
+    let completed_body = json_body(completed).await;
+    assert_eq!(completed_status, StatusCode::OK, "{completed_body:?}");
+    assert_eq!(completed_body["states"][order_id], "completed");
+
+    let repeated = router
+        .oneshot(request_with_body(
+            "POST",
+            "/v1/mobile/admin/production-maps/opening-wip",
+            &admin_token,
+            &format!(
+                r#"{{
+                    "idempotency_key":"opening-wip-print-source-request-again",
+                    "order_id":"{order_id}",
+                    "source_apparatus":"apparatus:default:bosma_7",
+                    "source_stage_node_id":"first",
+                    "batches":[{{
+                        "quantity_basis":"measured",
+                        "finished_goods_meter":100.0,
+                        "finished_goods_kg":12.0,
+                        "bobina_kg":1.0
+                    }}]
+                }}"#
+            ),
+        ))
+        .await
+        .expect("reject repeated Opening WIP source");
+    let repeated_status = repeated.status();
+    let repeated_body = json_body(repeated).await;
+    assert_eq!(repeated_status, StatusCode::CONFLICT, "{repeated_body:?}");
+    assert_eq!(
+        repeated_body["error"],
+        "opening_wip_target_stage_already_completed"
     );
 }

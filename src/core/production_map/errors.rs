@@ -194,6 +194,8 @@ pub enum ProductionMapError {
     OpeningWipSourceMismatch,
     #[error("opening WIP source apparatus has no next production-map stage")]
     OpeningWipSourceFinalStage,
+    #[error("opening WIP target production-map stage is already completed")]
+    OpeningWipTargetStageAlreadyCompleted,
     #[error("opening WIP cannot be added after the order has started")]
     OpeningWipOrderAlreadyStarted,
     #[error("opening WIP idempotency key belongs to another request")]

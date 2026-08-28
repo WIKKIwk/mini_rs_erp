@@ -12,6 +12,7 @@ impl ProductionMapService {
         input: OpeningWipCreateInput,
         actor: QueueActionActor,
     ) -> Result<OpeningWipRecord, ProductionMapError> {
+        let _guard = self.queue_action_guard().await;
         let mut normalized = normalize_opening_wip_input(input)?;
         let map = self
             .store
@@ -21,16 +22,27 @@ impl ProductionMapService {
             .find(|map| map.id.trim() == normalized.order_id)
             .ok_or(ProductionMapError::MapNotFound)?;
         let uses_source_contract = !normalized.source_apparatus.is_empty();
-        let (operation, resume_apparatus, resume_stage_node_id) = if uses_source_contract {
+        let (
+            operation,
+            resume_apparatus,
+            resume_stage_node_id,
+            source_target_stage_node_ids,
+        ) = if uses_source_contract {
             let source_stage = chain::work_stage_for_station(
                 &map,
                 &normalized.source_apparatus,
                 &normalized.source_stage_node_id,
             )
             .ok_or(ProductionMapError::OpeningWipSourceMismatch)?;
-            if chain::next_work_stages_for_node(&map, &source_stage.node_id).is_empty() {
+            let target_stages = chain::next_work_stages_for_node(&map, &source_stage.node_id);
+            if target_stages.is_empty() {
                 return Err(ProductionMapError::OpeningWipSourceFinalStage);
             }
+            let source_target_stage_node_ids = target_stages
+                .into_iter()
+                .map(|stage| stage.node_id.trim().to_string())
+                .filter(|node_id| !node_id.is_empty())
+                .collect::<Vec<_>>();
             let source_apparatus = source_stage
                 .apparatus_id
                 .ok_or(ProductionMapError::OpeningWipSourceMismatch)?;
@@ -49,6 +61,7 @@ impl ProductionMapService {
                 source_configuration.runtime.execution_profile.operation,
                 String::new(),
                 source_stage.node_id,
+                source_target_stage_node_ids,
             )
         } else {
             let first_apparatus = chain::linear_work_stages(&map)
@@ -86,6 +99,7 @@ impl ProductionMapService {
                 entry_configuration.runtime.execution_profile.operation,
                 resume_apparatus,
                 resume_stage_node_id,
+                Vec::new(),
             )
         };
         validate_opening_wip_batches(&normalized.batches, operation)?;
@@ -101,14 +115,27 @@ impl ProductionMapService {
             }
             return Err(ProductionMapError::OpeningWipIdempotencyConflict);
         }
-        let queue_states = self.store.apparatus_queue_states().await?;
-        let already_started = queue_states.values().any(|states| {
-            states.get(&normalized.order_id).is_some_and(|state| {
-                !state.trim().is_empty() && !state.trim().eq_ignore_ascii_case("pending")
-            })
-        });
-        if already_started {
-            return Err(ProductionMapError::OpeningWipOrderAlreadyStarted);
+        if uses_source_contract {
+            let snapshot = self.live_snapshot().await?;
+            let stage_states = snapshot.stage_states.get(&normalized.order_id);
+            let target_stage_completed = source_target_stage_node_ids.iter().any(|node_id| {
+                stage_states
+                    .and_then(|states| states.get(node_id))
+                    .is_some_and(|state| state.trim().eq_ignore_ascii_case("completed"))
+            });
+            if target_stage_completed {
+                return Err(ProductionMapError::OpeningWipTargetStageAlreadyCompleted);
+            }
+        } else {
+            let queue_states = self.store.apparatus_queue_states().await?;
+            let already_started = queue_states.values().any(|states| {
+                states.get(&normalized.order_id).is_some_and(|state| {
+                    !state.trim().is_empty() && !state.trim().eq_ignore_ascii_case("pending")
+                })
+            });
+            if already_started {
+                return Err(ProductionMapError::OpeningWipOrderAlreadyStarted);
+            }
         }
 
         let now = opening_wip_unix_seconds();
