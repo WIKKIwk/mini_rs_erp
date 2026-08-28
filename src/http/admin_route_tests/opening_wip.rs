@@ -40,6 +40,14 @@ async fn opening_wip_worker_lookup_is_qr_exact_and_apparatus_scoped() {
         "opening-wip-other-worker",
     )
     .await;
+    state
+        .factory_locations
+        .create(crate::core::factory_locations::FactoryLocationCreate {
+            name: "Laminatsiya oldi".to_string(),
+            apparatus_ids: vec![LAMINATION_ID.to_string()],
+        })
+        .await
+        .expect("opening WIP factory location");
     let router = build_router(state);
     let order_id = "zakaz-opening-wip-worker-lookup";
 
@@ -73,9 +81,13 @@ async fn opening_wip_worker_lookup_is_qr_exact_and_apparatus_scoped() {
                     "idempotency_key":"opening-wip-worker-lookup-request",
                     "order_id":"{order_id}",
                     "entry_apparatus":"{LAMINATION_ID}",
-                    "source_operation":"Bosma",
                     "current_location":"Laminatsiya oldi",
-                    "batches":[{{"quantity_basis":"unknown"}}]
+                    "batches":[{{
+                        "quantity_basis":"measured",
+                        "finished_goods_meter":100.0,
+                        "finished_goods_kg":12.0,
+                        "bobina_kg":1.0
+                    }}]
                 }}"#
             ),
         ))

@@ -35,6 +35,10 @@ struct OpeningWipBatchRow {
     qr_payload: String,
     quantity: Option<f64>,
     uom: String,
+    finished_goods_meter: Option<f64>,
+    finished_goods_kg: Option<f64>,
+    bobina_kg: Option<f64>,
+    diameter: Option<f64>,
     quantity_basis: String,
     wip_status: String,
     used_by_session_id: String,
@@ -104,7 +108,12 @@ pub(super) async fn load_opening_wip_batch(
 ) -> Result<Option<OpeningWipBatchRecord>, ProductionMapError> {
     let batch = sqlx::query_as::<_, OpeningWipBatchRow>(
         "SELECT batch_id, intake_id, order_id, sequence_no, qr_payload,
-                quantity::DOUBLE PRECISION AS quantity, uom, quantity_basis, wip_status,
+                quantity::DOUBLE PRECISION AS quantity, uom,
+                finished_goods_meter::DOUBLE PRECISION AS finished_goods_meter,
+                finished_goods_kg::DOUBLE PRECISION AS finished_goods_kg,
+                bobina_kg::DOUBLE PRECISION AS bobina_kg,
+                diameter::DOUBLE PRECISION AS diameter,
+                quantity_basis, wip_status,
                 used_by_session_id, used_by_apparatus, processed_by_session_id,
                 processed_by_apparatus, label_item_code, label_item_name,
                 EXTRACT(EPOCH FROM created_at)::BIGINT AS created_at_unix,
@@ -210,12 +219,13 @@ async fn insert_opening_wip_batch_tx(
     sqlx::query(
         "INSERT INTO mini_opening_wip_batches (
              batch_id, intake_id, order_id, sequence_no, qr_payload, quantity, uom,
+             finished_goods_meter, finished_goods_kg, bobina_kg, diameter,
              quantity_basis, wip_status, used_by_session_id, used_by_apparatus,
              processed_by_session_id, processed_by_apparatus, label_item_code,
              label_item_name, created_at, updated_at
          ) VALUES (
-             $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15,
-             to_timestamp($16), to_timestamp($17)
+             $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14,
+             $15, $16, $17, $18, $19, to_timestamp($20), to_timestamp($21)
          )",
     )
     .bind(batch.batch_id.trim())
@@ -225,6 +235,10 @@ async fn insert_opening_wip_batch_tx(
     .bind(batch.qr_payload.trim())
     .bind(batch.quantity)
     .bind(batch.uom.trim())
+    .bind(batch.finished_goods_meter)
+    .bind(batch.finished_goods_kg)
+    .bind(batch.bobina_kg)
+    .bind(batch.diameter)
     .bind(batch.quantity_basis.as_str())
     .bind(batch.wip_status.as_str())
     .bind(batch.used_by_session_id.trim())
@@ -344,6 +358,10 @@ fn opening_wip_batch_from_row(
             .ok_or(ProductionMapError::StoreFailed)?,
         quantity: row.quantity,
         uom: row.uom,
+        finished_goods_meter: row.finished_goods_meter,
+        finished_goods_kg: row.finished_goods_kg,
+        bobina_kg: row.bobina_kg,
+        diameter: row.diameter,
         wip_status: OpeningWipBatchStatus::parse(&row.wip_status)
             .ok_or(ProductionMapError::StoreFailed)?,
         used_by_session_id: row.used_by_session_id,
@@ -368,7 +386,12 @@ const OPENING_WIP_INTAKE_SELECT: &str =
 
 const OPENING_WIP_BATCH_SELECT: &str =
     "SELECT batch_id, intake_id, order_id, sequence_no, qr_payload,
-            quantity::DOUBLE PRECISION AS quantity, uom, quantity_basis, wip_status,
+            quantity::DOUBLE PRECISION AS quantity, uom,
+            finished_goods_meter::DOUBLE PRECISION AS finished_goods_meter,
+            finished_goods_kg::DOUBLE PRECISION AS finished_goods_kg,
+            bobina_kg::DOUBLE PRECISION AS bobina_kg,
+            diameter::DOUBLE PRECISION AS diameter,
+            quantity_basis, wip_status,
             used_by_session_id, used_by_apparatus, processed_by_session_id,
             processed_by_apparatus, label_item_code, label_item_name,
             EXTRACT(EPOCH FROM created_at)::BIGINT AS created_at_unix,

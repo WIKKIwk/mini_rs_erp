@@ -19,14 +19,18 @@ fn opening_input(order_id: &str, idempotency_key: &str) -> OpeningWipCreateInput
         note: "Day-0 sanoq".to_string(),
         batches: vec![
             OpeningWipBatchInput {
-                quantity_basis: OpeningWipQuantityBasis::Unknown,
-                quantity: None,
-                uom: String::new(),
+                quantity_basis: OpeningWipQuantityBasis::Estimated,
+                finished_goods_meter: Some(100.0),
+                finished_goods_kg: Some(12.0),
+                bobina_kg: Some(1.0),
+                diameter: None,
             },
             OpeningWipBatchInput {
                 quantity_basis: OpeningWipQuantityBasis::Measured,
-                quantity: Some(125.5),
-                uom: "kg".to_string(),
+                finished_goods_meter: Some(125.5),
+                finished_goods_kg: Some(14.0),
+                bobina_kg: Some(1.1),
+                diameter: None,
             },
         ],
     }
@@ -78,13 +82,20 @@ async fn opening_wip_creates_unique_batches_and_replays_idempotently() {
         .expect("opening WIP created");
     assert_eq!(created.intake.order_id, order_id);
     assert_eq!(created.intake.entry_apparatus, LAMINATION_ID);
+    assert_eq!(
+        created.intake.source_operation,
+        "unavailable_before_cutover"
+    );
+    assert!(created.intake.source_apparatus.is_empty());
     assert_eq!(created.intake.history_status, "unavailable_before_cutover");
     assert_eq!(created.batches.len(), 2);
     assert_ne!(created.batches[0].batch_id, created.batches[1].batch_id);
     assert_ne!(created.batches[0].qr_payload, created.batches[1].qr_payload);
     assert_eq!(created.batches[0].wip_status, OpeningWipBatchStatus::Waiting);
-    assert_eq!(created.batches[0].quantity, None);
+    assert_eq!(created.batches[0].quantity, Some(100.0));
     assert_eq!(created.batches[1].quantity, Some(125.5));
+    assert_eq!(created.batches[1].finished_goods_kg, Some(14.0));
+    assert_eq!(created.batches[1].bobina_kg, Some(1.1));
 
     let replayed = service
         .create_opening_wip(input, admin_actor())
@@ -98,6 +109,35 @@ async fn opening_wip_creates_unique_batches_and_replays_idempotently() {
         .expect("opening WIP lookup");
     assert_eq!(fetched.intake.intake_id, created.intake.intake_id);
     assert_eq!(fetched.batch.batch_id, created.batches[1].batch_id);
+}
+
+#[tokio::test]
+async fn opening_wip_requires_roll_passport_metrics_for_entry_operation() {
+    let store = Arc::new(MemoryProductionMapStore::new());
+    let service = ProductionMapService::new_for_test(store);
+    let order_id = "zakaz-opening-wip-rezka";
+    service
+        .upsert_map(apparatus_stage_map(order_id, REZKA_ID))
+        .await
+        .expect("rezka opening order map");
+
+    let mut missing_diameter = opening_input(order_id, "opening-wip-rezka-missing");
+    missing_diameter.entry_apparatus = REZKA_ID.to_string();
+    assert_eq!(
+        service
+            .create_opening_wip(missing_diameter.clone(), admin_actor())
+            .await,
+        Err(ProductionMapError::OpeningWipInvalidInput)
+    );
+
+    for batch in &mut missing_diameter.batches {
+        batch.diameter = Some(45.0);
+    }
+    let created = service
+        .create_opening_wip(missing_diameter, admin_actor())
+        .await
+        .expect("rezka Opening WIP with diameter");
+    assert!(created.batches.iter().all(|batch| batch.diameter == Some(45.0)));
 }
 
 #[tokio::test]

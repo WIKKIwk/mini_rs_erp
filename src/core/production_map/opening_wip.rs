@@ -87,9 +87,13 @@ impl OpeningWipBatchStatus {
 pub struct OpeningWipBatchInput {
     pub quantity_basis: OpeningWipQuantityBasis,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub quantity: Option<f64>,
-    #[serde(default, skip_serializing_if = "String::is_empty")]
-    pub uom: String,
+    pub finished_goods_meter: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub finished_goods_kg: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bobina_kg: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub diameter: Option<f64>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -97,6 +101,7 @@ pub struct OpeningWipCreateInput {
     pub idempotency_key: String,
     pub order_id: String,
     pub entry_apparatus: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
     pub source_operation: String,
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub source_apparatus: String,
@@ -139,6 +144,14 @@ pub struct OpeningWipBatch {
     pub quantity: Option<f64>,
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub uom: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub finished_goods_meter: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub finished_goods_kg: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bobina_kg: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub diameter: Option<f64>,
     pub wip_status: OpeningWipBatchStatus,
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub used_by_session_id: String,

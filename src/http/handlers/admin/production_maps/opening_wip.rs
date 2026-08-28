@@ -57,7 +57,26 @@ pub async fn production_map_opening_wip(
     .await?;
     match method {
         Method::POST => {
-            let input: OpeningWipCreateInput = parse_json(&body)?;
+            let mut input: OpeningWipCreateInput = parse_json(&body)?;
+            let locations = state
+                .factory_locations
+                .list()
+                .await
+                .map_err(|_| bad_request("opening_wip_location_unavailable"))?;
+            let requested_location = input.current_location.trim();
+            let entry_apparatus = input.entry_apparatus.trim();
+            let location = locations.into_iter().find(|location| {
+                location.active
+                    && (location.id.trim() == requested_location
+                        || location.name.trim().eq_ignore_ascii_case(requested_location))
+                    && location.apparatus.iter().any(|apparatus| {
+                        apparatus.active && apparatus.id.to_string().trim() == entry_apparatus
+                    })
+            });
+            let Some(location) = location else {
+                return Err(bad_request("opening_wip_location_mismatch"));
+            };
+            input.current_location = location.name.trim().to_string();
             let record = state
                 .production_maps
                 .create_opening_wip(input, queue_action_actor(&principal))
@@ -124,7 +143,6 @@ pub async fn production_map_opening_wip_print(
         .map_err(production_map_error)?
         .map(|map| map.customer_name)
         .unwrap_or_default();
-    let quantity = details.batch.quantity.unwrap_or(0.0);
     let print_request = ProgressLabelPrintRequest {
         driver_url: input.driver_url.trim().to_string(),
         qr_payload: details.batch.qr_payload.clone(),
@@ -139,11 +157,13 @@ pub async fn production_map_opening_wip_print(
         executor_name: details.intake.actor.display_name.clone(),
         printer: input.printer.trim().to_string(),
         print_mode: input.print_mode.trim().to_string(),
-        gross_qty: quantity,
-        progress_qty: quantity,
-        unit: details.batch.uom.clone(),
-        progress_unit: details.batch.uom.clone(),
-        label_kind: "opening_wip".to_string(),
+        gross_qty: details.batch.finished_goods_kg.unwrap_or(0.0),
+        progress_qty: details.batch.finished_goods_meter.unwrap_or(0.0),
+        unit: "kg".to_string(),
+        progress_unit: "m".to_string(),
+        tare_enabled: details.batch.bobina_kg.is_some(),
+        tare_kg: details.batch.bobina_kg.unwrap_or(0.0),
+        label_kind: "progress".to_string(),
         print_count: input.print_count.max(1),
         ..ProgressLabelPrintRequest::default()
     };

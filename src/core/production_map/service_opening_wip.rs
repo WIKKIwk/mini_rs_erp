@@ -1,5 +1,7 @@
 use std::time::{SystemTime, UNIX_EPOCH};
 
+use crate::core::apparatus_standard::ExecutionOperation;
+
 use super::*;
 
 const MAX_OPENING_WIP_BATCHES: usize = 500;
@@ -10,19 +12,7 @@ impl ProductionMapService {
         input: OpeningWipCreateInput,
         actor: QueueActionActor,
     ) -> Result<OpeningWipRecord, ProductionMapError> {
-        let normalized = normalize_opening_wip_input(input)?;
-        let fingerprint = opening_wip_fingerprint(&normalized);
-        if let Some(existing) = self
-            .store
-            .opening_wip_by_idempotency_key(&normalized.idempotency_key)
-            .await?
-        {
-            if existing.intake.request_fingerprint == fingerprint {
-                return Ok(existing);
-            }
-            return Err(ProductionMapError::OpeningWipIdempotencyConflict);
-        }
-
+        let mut normalized = normalize_opening_wip_input(input)?;
         let map = self
             .store
             .maps()
@@ -37,11 +27,24 @@ impl ProductionMapService {
         if !types::apparatus_ids_match(&first_apparatus, &normalized.entry_apparatus) {
             return Err(ProductionMapError::OpeningWipEntryMismatch);
         }
-        self.resolve_canonical_apparatus_text(&normalized.entry_apparatus)
+        let entry_configuration = self
+            .resolve_canonical_apparatus_text(&normalized.entry_apparatus)
             .await?;
-        if !normalized.source_apparatus.is_empty() {
-            self.resolve_canonical_apparatus_text(&normalized.source_apparatus)
-                .await?;
+        let operation = entry_configuration.runtime.execution_profile.operation;
+        validate_opening_wip_batches(&normalized.batches, operation)?;
+        normalized.source_operation = "unavailable_before_cutover".to_string();
+        normalized.source_apparatus.clear();
+
+        let fingerprint = opening_wip_fingerprint(&normalized);
+        if let Some(existing) = self
+            .store
+            .opening_wip_by_idempotency_key(&normalized.idempotency_key)
+            .await?
+        {
+            if existing.intake.request_fingerprint == fingerprint {
+                return Ok(existing);
+            }
+            return Err(ProductionMapError::OpeningWipIdempotencyConflict);
         }
         let queue_states = self.store.apparatus_queue_states().await?;
         let already_started = queue_states.values().any(|states| {
@@ -74,8 +77,12 @@ impl ProductionMapService {
                     order_id: normalized.order_id.clone(),
                     sequence_no,
                     quantity_basis: input.quantity_basis,
-                    quantity: input.quantity,
-                    uom: input.uom.clone(),
+                    quantity: input.finished_goods_meter,
+                    uom: "m".to_string(),
+                    finished_goods_meter: input.finished_goods_meter,
+                    finished_goods_kg: input.finished_goods_kg,
+                    bobina_kg: input.bobina_kg,
+                    diameter: input.diameter,
                     wip_status: OpeningWipBatchStatus::Waiting,
                     used_by_session_id: String::new(),
                     used_by_apparatus: String::new(),
@@ -155,15 +162,16 @@ fn normalize_opening_wip_input(
             .into_iter()
             .map(|batch| OpeningWipBatchInput {
                 quantity_basis: batch.quantity_basis,
-                quantity: batch.quantity,
-                uom: batch.uom.trim().to_ascii_lowercase(),
+                finished_goods_meter: batch.finished_goods_meter,
+                finished_goods_kg: batch.finished_goods_kg,
+                bobina_kg: batch.bobina_kg,
+                diameter: batch.diameter,
             })
             .collect(),
     };
     if normalized.idempotency_key.is_empty()
         || normalized.order_id.is_empty()
         || normalized.entry_apparatus.is_empty()
-        || normalized.source_operation.is_empty()
         || normalized.current_location.is_empty()
         || normalized.batches.is_empty()
         || normalized.batches.len() > MAX_OPENING_WIP_BATCHES
@@ -171,22 +179,37 @@ fn normalize_opening_wip_input(
         return Err(ProductionMapError::OpeningWipInvalidInput);
     }
     for batch in &normalized.batches {
-        match batch.quantity_basis {
-            OpeningWipQuantityBasis::Unknown => {
-                if batch.quantity.is_some() || !batch.uom.is_empty() {
-                    return Err(ProductionMapError::OpeningWipInvalidInput);
-                }
-            }
-            OpeningWipQuantityBasis::Measured | OpeningWipQuantityBasis::Estimated => {
-                if !batch.quantity.is_some_and(|value| value.is_finite() && value > 0.0)
-                    || batch.uom.is_empty()
-                {
-                    return Err(ProductionMapError::OpeningWipInvalidInput);
-                }
+        for value in [
+            batch.finished_goods_meter,
+            batch.finished_goods_kg,
+            batch.bobina_kg,
+            batch.diameter,
+        ] {
+            if value.is_some_and(|value| !value.is_finite() || value <= 0.0) {
+                return Err(ProductionMapError::OpeningWipInvalidInput);
             }
         }
     }
     Ok(normalized)
+}
+
+fn validate_opening_wip_batches(
+    batches: &[OpeningWipBatchInput],
+    operation: ExecutionOperation,
+) -> Result<(), ProductionMapError> {
+    let requires_diameter = operation == ExecutionOperation::Cut;
+    for batch in batches {
+        if batch.quantity_basis == OpeningWipQuantityBasis::Unknown
+            || batch.finished_goods_meter.is_none()
+            || batch.finished_goods_kg.is_none()
+            || batch.bobina_kg.is_none()
+            || (requires_diameter && batch.diameter.is_none())
+            || (!requires_diameter && batch.diameter.is_some())
+        {
+            return Err(ProductionMapError::OpeningWipInvalidInput);
+        }
+    }
+    Ok(())
 }
 
 fn opening_wip_fingerprint(input: &OpeningWipCreateInput) -> String {
