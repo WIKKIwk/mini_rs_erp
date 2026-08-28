@@ -13,12 +13,6 @@ impl ProductionMapService {
         ignored_batch_id: &str,
         stage_node_id: &str,
     ) -> Result<bool, ProductionMapError> {
-        let previous_stage = if stage_node_id.trim().is_empty() {
-            chain::previous_work_stage_station(order_map, apparatus)
-        } else {
-            chain::previous_work_stage_for_node(order_map, stage_node_id)
-                .and_then(|stage| stage.apparatus_id)
-        };
         let records = self
             .store
             .opening_wip_records(OpeningWipQuery {
@@ -27,66 +21,17 @@ impl ProductionMapService {
                 limit: 10_000,
             })
             .await?;
-        let mut batches = records
-            .into_iter()
-            .filter(|record| {
-                record.intake.status == OpeningWipIntakeStatus::Confirmed
-                    && Self::opening_wip_target_stage(
-                        order_map,
-                        &record.intake,
-                        apparatus,
-                        stage_node_id,
-                    )
-                    .is_some()
-            })
-            .flat_map(|record| record.batches)
-            .map(|batch| (batch.batch_id.trim().to_string(), batch))
-            .collect::<BTreeMap<_, _>>();
-        for batch in opening_wip_batch_updates {
-            batches.insert(batch.batch_id.trim().to_string(), batch.clone());
-        }
-        if !batches.is_empty() {
-            return Ok(batches.values().any(|batch| {
-                batch.batch_id.trim() != ignored_batch_id.trim()
-                    && matches!(
-                        batch.wip_status,
-                        OpeningWipBatchStatus::Waiting | OpeningWipBatchStatus::InUse
-                    )
-            }));
-        }
-        let Some(previous_apparatus) = previous_stage else {
-            return Ok(false);
-        };
-        let requires_previous_stage_completion = apparatus::is_laminatsiya_apparatus(canonical)
-            || apparatus::is_rezka_apparatus(canonical);
-        let previous_stage_completed = all_states.iter().any(|(candidate, states)| {
-            super::super::types::apparatus_ids_match(candidate, &previous_apparatus)
-                && states
-                    .get(order_id)
-                    .and_then(|state| queue_state::ApparatusQueueOrderState::parse(state))
-                    == Some(queue_state::ApparatusQueueOrderState::Completed)
-        });
-        if requires_previous_stage_completion && !previous_stage_completed {
-            return Ok(true);
-        }
-        let mut batches = self
-            .store
-            .progress_batches_for_order(order_id)
-            .await?
-            .into_iter()
-            .map(|batch| (batch.batch_id.trim().to_string(), batch))
-            .collect::<BTreeMap<_, _>>();
-        for batch in progress_batch_updates {
-            batches.insert(batch.batch_id.trim().to_string(), batch.clone());
-        }
-        let batches = batches.into_values().collect::<Vec<_>>();
-        Ok(has_unprocessed_previous_wips_from_batches(
+        let progress_batches = self.store.progress_batches_for_order(order_id).await?;
+        Ok(has_unprocessed_previous_wips_from_sources(
             order_id,
             order_map,
             apparatus,
             canonical,
             all_states,
-            &batches,
+            &progress_batches,
+            progress_batch_updates,
+            &records,
+            opening_wip_batch_updates,
             ignored_batch_id,
             stage_node_id,
         ))
@@ -189,6 +134,68 @@ impl ProductionMapService {
             qolip_checkout_committed: write_result.qolip_checkout_committed,
         })
     }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn has_unprocessed_previous_wips_from_sources(
+    order_id: &str,
+    order_map: &ProductionMapDefinition,
+    apparatus: &str,
+    canonical: &crate::core::apparatus_standard::RuntimeApparatusConfiguration,
+    all_states: &ApparatusQueueStateMap,
+    progress_batches: &[OrderProgressBatch],
+    progress_batch_updates: &[OrderProgressBatch],
+    opening_wip_records: &[OpeningWipRecord],
+    opening_wip_batch_updates: &[OpeningWipBatch],
+    ignored_batch_id: &str,
+    stage_node_id: &str,
+) -> bool {
+    let mut opening_batches = opening_wip_records
+        .iter()
+        .filter(|record| {
+            record.intake.status == OpeningWipIntakeStatus::Confirmed
+                && ProductionMapService::opening_wip_target_stage(
+                    order_map,
+                    &record.intake,
+                    apparatus,
+                    stage_node_id,
+                )
+                .is_some()
+        })
+        .flat_map(|record| record.batches.iter().cloned())
+        .map(|batch| (batch.batch_id.trim().to_string(), batch))
+        .collect::<BTreeMap<_, _>>();
+    for batch in opening_wip_batch_updates {
+        opening_batches.insert(batch.batch_id.trim().to_string(), batch.clone());
+    }
+    if !opening_batches.is_empty() {
+        return opening_batches.values().any(|batch| {
+            batch.batch_id.trim() != ignored_batch_id.trim()
+                && matches!(
+                    batch.wip_status,
+                    OpeningWipBatchStatus::Waiting | OpeningWipBatchStatus::InUse
+                )
+        });
+    }
+
+    let mut batches = progress_batches
+        .iter()
+        .cloned()
+        .map(|batch| (batch.batch_id.trim().to_string(), batch))
+        .collect::<BTreeMap<_, _>>();
+    for batch in progress_batch_updates {
+        batches.insert(batch.batch_id.trim().to_string(), batch.clone());
+    }
+    has_unprocessed_previous_wips_from_batches(
+        order_id,
+        order_map,
+        apparatus,
+        canonical,
+        all_states,
+        &batches.into_values().collect::<Vec<_>>(),
+        ignored_batch_id,
+        stage_node_id,
+    )
 }
 
 #[allow(clippy::too_many_arguments)]

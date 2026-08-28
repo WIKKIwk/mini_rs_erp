@@ -5380,6 +5380,171 @@ fn three_stage_map(
     map
 }
 
+#[tokio::test]
+async fn opening_wip_snapshot_uses_the_same_final_roll_rule_as_completion() {
+    let store = Arc::new(MemoryProductionMapStore::new());
+    let service = default_service_with_store(store.clone()).await;
+    let order_id = "zakaz-opening-wip-final-report-control";
+    service
+        .upsert_map(three_stage_map(
+            order_id,
+            PECHAT_7_ID,
+            LAMINATION_1_ID,
+            REZKA_ID,
+            1,
+        ))
+        .await
+        .expect("opening WIP production map");
+    let actor = QueueActionActor {
+        role: "laminatsiyachi".to_string(),
+        ref_: "worker-opening-final-report".to_string(),
+        display_name: "Opening final report worker".to_string(),
+    };
+    let opening = service
+        .create_opening_wip(
+            OpeningWipCreateInput {
+                idempotency_key: "opening-final-report-control".to_string(),
+                order_id: order_id.to_string(),
+                entry_apparatus: String::new(),
+                source_operation: "Bosma".to_string(),
+                source_apparatus: PECHAT_7_ID.to_string(),
+                source_stage_node_id: "apparatus".to_string(),
+                current_location: String::new(),
+                note: String::new(),
+                batches: vec![
+                    OpeningWipBatchInput {
+                        quantity_basis: OpeningWipQuantityBasis::Measured,
+                        finished_goods_meter: Some(100.0),
+                        finished_goods_kg: Some(10.0),
+                        bobina_kg: Some(1.0),
+                        diameter: None,
+                    },
+                    OpeningWipBatchInput {
+                        quantity_basis: OpeningWipQuantityBasis::Measured,
+                        finished_goods_meter: Some(120.0),
+                        finished_goods_kg: Some(12.0),
+                        bobina_kg: Some(1.0),
+                        diameter: None,
+                    },
+                ],
+            },
+            actor.clone(),
+        )
+        .await
+        .expect("opening WIP intake");
+    let assigned = [LAMINATION_1_ID.to_string()];
+    let partial_completion = || QueueProgressInput {
+        produced_qty: Some(100.0),
+        uom: "m".to_string(),
+        finished_goods_kg: Some(10.0),
+        finished_goods_meter: Some(100.0),
+        bobina_kg: Some(1.0),
+        ..QueueProgressInput::default()
+    };
+
+    service
+        .apply_apparatus_queue_action_with_progress(
+            LAMINATION_1_ID,
+            order_id,
+            queue_state::ApparatusQueueAction::Start,
+            &assigned,
+            actor.clone(),
+            QueueProgressInput {
+                qr_payload: opening.batches[0].qr_payload.clone(),
+                ..QueueProgressInput::default()
+            },
+        )
+        .await
+        .expect("start first Opening WIP roll");
+    let controls = service
+        .queue_action_controls()
+        .await
+        .expect("first roll controls");
+    assert!(
+        !controls[LAMINATION_1_ID][order_id].complete_requires_full_report,
+        "another Opening WIP roll allows partial station completion"
+    );
+    service
+        .apply_apparatus_queue_action_with_progress(
+            LAMINATION_1_ID,
+            order_id,
+            queue_state::ApparatusQueueAction::Complete,
+            &assigned,
+            actor.clone(),
+            partial_completion(),
+        )
+        .await
+        .expect("complete first Opening WIP roll");
+
+    service
+        .apply_apparatus_queue_action_with_progress(
+            LAMINATION_1_ID,
+            order_id,
+            queue_state::ApparatusQueueAction::Start,
+            &assigned,
+            actor.clone(),
+            QueueProgressInput {
+                qr_payload: opening.batches[1].qr_payload.clone(),
+                ..QueueProgressInput::default()
+            },
+        )
+        .await
+        .expect("start final Opening WIP roll");
+    let controls = service
+        .queue_action_controls()
+        .await
+        .expect("final roll controls");
+    assert!(
+        controls[LAMINATION_1_ID][order_id].complete_requires_full_report,
+        "the final Opening WIP roll must expose the full completion form"
+    );
+    assert_eq!(
+        service
+            .apply_apparatus_queue_action_with_progress(
+                LAMINATION_1_ID,
+                order_id,
+                queue_state::ApparatusQueueAction::Complete,
+                &assigned,
+                actor.clone(),
+                partial_completion(),
+            )
+            .await,
+        Err(ProductionMapError::LaminatsiyaCompletionMetricsRequired),
+        "the snapshot flag and completion validation must describe the same rule"
+    );
+    service
+        .apply_apparatus_queue_action_with_progress(
+            LAMINATION_1_ID,
+            order_id,
+            queue_state::ApparatusQueueAction::Complete,
+            &assigned,
+            actor,
+            QueueProgressInput {
+                lamination_print_leftover_rolls: Some(0.5),
+                lamination_film_leftover_rolls: Some(0.5),
+                total_waste: Some(0.5),
+                ..partial_completion()
+            },
+        )
+        .await
+        .expect("complete final Opening WIP roll with full report");
+    let output = store
+        .progress_batches_for_order(order_id)
+        .await
+        .expect("persisted progress batches")
+        .into_iter()
+        .find(|batch| {
+            batch.parent_batch_id == opening.batches[1].batch_id
+                && batch.apparatus == LAMINATION_1_ID
+        })
+        .expect("completion must persist the normal downstream WIP output");
+    assert_eq!(output.parent_batch_id, opening.batches[1].batch_id);
+    assert_eq!(output.apparatus, LAMINATION_1_ID);
+    assert_eq!(output.next_apparatus, REZKA_ID);
+    assert_eq!(output.wip_status, OrderProgressBatchWipStatus::Waiting);
+    assert_eq!(output.status_detail.flow_status, "waiting_next_stage");
+}
+
 fn unassigned_alternative_next_stage_map(
     id: &str,
     first: &str,

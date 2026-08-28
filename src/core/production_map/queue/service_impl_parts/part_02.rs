@@ -406,13 +406,19 @@ impl ProductionMapService {
                                 .map(Vec::as_slice)
                                 .unwrap_or_default();
                             let has_unprocessed_previous_wips =
-                                has_unprocessed_previous_wips_from_batches(
+                                has_unprocessed_previous_wips_from_sources(
                                     order_id.trim(),
                                     order_map,
                                     &storage_key,
                                     canonical.as_ref(),
                                     all_states,
                                     batches,
+                                    &[],
+                                    opening_wip_by_order
+                                        .get(order_id.trim())
+                                        .map(Vec::as_slice)
+                                        .unwrap_or_default(),
+                                    &[],
                                     &current_input_batch_id,
                                     &stage_node_id,
                                 );
