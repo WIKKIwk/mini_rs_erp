@@ -35,8 +35,13 @@ impl ProductionMapService {
                 })
             })
             .ok_or(ProductionMapError::OpeningWipLocationMismatch)?;
+        let resume_apparatus = location_stage
+            .apparatus_id
+            .clone()
+            .ok_or(ProductionMapError::OpeningWipLocationMismatch)?;
+        let resume_stage_node_id = location_stage.node_id.clone();
         normalized.current_location = if location_stage.station_title.trim().is_empty() {
-            location_stage.apparatus_id.unwrap_or_default()
+            resume_apparatus.clone()
         } else {
             location_stage.station_title.trim().to_string()
         };
@@ -118,6 +123,8 @@ impl ProductionMapService {
                 source_operation: normalized.source_operation,
                 source_apparatus: normalized.source_apparatus,
                 current_location: normalized.current_location,
+                resume_apparatus,
+                resume_stage_node_id,
                 history_status: "unavailable_before_cutover".to_string(),
                 status: OpeningWipIntakeStatus::Confirmed,
                 note: normalized.note,

@@ -223,7 +223,7 @@ pub async fn production_map_opening_wip_lookup(
         || details.batch.wip_status != OpeningWipBatchStatus::Waiting
         || details.intake.order_id.trim() != input.order_id.trim()
         || details.batch.order_id.trim() != input.order_id.trim()
-        || !queue_state::apparatus_ids_match(&details.intake.entry_apparatus, &apparatus_id)
+        || !queue_state::apparatus_ids_match(&details.intake.resume_apparatus, &apparatus_id)
         || !batch_id_matches
         || !details
             .batch

@@ -123,6 +123,8 @@ pub struct OpeningWipIntake {
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub source_apparatus: String,
     pub current_location: String,
+    pub resume_apparatus: String,
+    pub resume_stage_node_id: String,
     pub history_status: String,
     pub status: OpeningWipIntakeStatus,
     #[serde(default, skip_serializing_if = "String::is_empty")]

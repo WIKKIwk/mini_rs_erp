@@ -16,6 +16,8 @@ struct OpeningWipIntakeRow {
     source_operation: String,
     source_apparatus: String,
     current_location: String,
+    resume_apparatus: String,
+    resume_stage_node_id: String,
     history_status: String,
     status: String,
     note: String,
@@ -74,8 +76,9 @@ pub(super) async fn load_opening_wip_records(
     let rows = sqlx::query_as::<_, OpeningWipIntakeRow>(
         "SELECT intake.intake_id, intake.idempotency_key, intake.request_fingerprint,
                 intake.order_id, intake.entry_apparatus, intake.source_operation,
-                intake.source_apparatus, intake.current_location, intake.history_status,
-                intake.status, intake.note, intake.actor_role, intake.actor_ref,
+                intake.source_apparatus, intake.current_location, intake.resume_apparatus,
+                intake.resume_stage_node_id, intake.history_status, intake.status,
+                intake.note, intake.actor_role, intake.actor_ref,
                 intake.actor_display_name,
                 EXTRACT(EPOCH FROM intake.created_at)::BIGINT AS created_at_unix,
                 EXTRACT(EPOCH FROM intake.updated_at)::BIGINT AS updated_at_unix
@@ -132,8 +135,9 @@ pub(super) async fn load_opening_wip_batch(
     };
     let intake = sqlx::query_as::<_, OpeningWipIntakeRow>(
         "SELECT intake_id, idempotency_key, request_fingerprint, order_id, entry_apparatus,
-                source_operation, source_apparatus, current_location, history_status, status,
-                note, actor_role, actor_ref, actor_display_name,
+                source_operation, source_apparatus, current_location, resume_apparatus,
+                resume_stage_node_id, history_status, status, note, actor_role, actor_ref,
+                actor_display_name,
                 EXTRACT(EPOCH FROM created_at)::BIGINT AS created_at_unix,
                 EXTRACT(EPOCH FROM updated_at)::BIGINT AS updated_at_unix
          FROM mini_opening_wip_intakes WHERE intake_id = $1",
@@ -160,11 +164,12 @@ pub(super) async fn create_opening_wip(
     let inserted = sqlx::query(
         "INSERT INTO mini_opening_wip_intakes (
              intake_id, idempotency_key, request_fingerprint, order_id, entry_apparatus,
-             source_operation, source_apparatus, current_location, history_status, status,
-             note, actor_role, actor_ref, actor_display_name, created_at, updated_at
+             source_operation, source_apparatus, current_location, resume_apparatus,
+             resume_stage_node_id, history_status, status, note, actor_role, actor_ref,
+             actor_display_name, created_at, updated_at
          ) VALUES (
              $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14,
-             to_timestamp($15), to_timestamp($16)
+             $15, $16, to_timestamp($17), to_timestamp($18)
          )
          ON CONFLICT (idempotency_key) DO NOTHING",
     )
@@ -176,6 +181,8 @@ pub(super) async fn create_opening_wip(
     .bind(intake.source_operation.trim())
     .bind(intake.source_apparatus.trim())
     .bind(intake.current_location.trim())
+    .bind(intake.resume_apparatus.trim())
+    .bind(intake.resume_stage_node_id.trim())
     .bind(intake.history_status.trim())
     .bind(intake.status.as_str())
     .bind(intake.note.trim())
@@ -331,6 +338,8 @@ fn opening_wip_intake_from_row(
         source_operation: row.source_operation,
         source_apparatus: row.source_apparatus,
         current_location: row.current_location,
+        resume_apparatus: row.resume_apparatus,
+        resume_stage_node_id: row.resume_stage_node_id,
         history_status: row.history_status,
         status: OpeningWipIntakeStatus::parse(&row.status)
             .ok_or(ProductionMapError::StoreFailed)?,
@@ -377,8 +386,9 @@ fn opening_wip_batch_from_row(
 
 const OPENING_WIP_INTAKE_SELECT: &str =
     "SELECT intake_id, idempotency_key, request_fingerprint, order_id, entry_apparatus,
-            source_operation, source_apparatus, current_location, history_status, status,
-            note, actor_role, actor_ref, actor_display_name,
+            source_operation, source_apparatus, current_location, resume_apparatus,
+            resume_stage_node_id, history_status, status, note, actor_role, actor_ref,
+            actor_display_name,
             EXTRACT(EPOCH FROM created_at)::BIGINT AS created_at_unix,
             EXTRACT(EPOCH FROM updated_at)::BIGINT AS updated_at_unix
      FROM mini_opening_wip_intakes
