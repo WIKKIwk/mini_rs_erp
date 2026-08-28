@@ -477,3 +477,81 @@ async fn opening_wip_from_source_stage_is_scannable_only_at_the_next_stage() {
         );
     }
 }
+
+#[tokio::test]
+async fn opening_wip_source_allows_each_legal_next_stage_alternative() {
+    let store = Arc::new(MemoryProductionMapStore::new());
+    let service = ProductionMapService::new_for_test(store);
+    let order_id = "zakaz-opening-wip-source-alternatives";
+    let mut map = canonical_two_stage_map(
+        order_id,
+        PECHAT_ID,
+        "7 ta rangli bosma aparat",
+        LAMINATION_ID,
+        "Laminatsiya 1",
+    );
+    let mut lamination_2 = map
+        .nodes
+        .iter()
+        .find(|node| node.id == "second")
+        .expect("first lamination alternative")
+        .clone();
+    lamination_2.id = "lamination-2".to_string();
+    lamination_2.title = "Laminatsiya 2".to_string();
+    lamination_2.apparatus_id = LAMINATION_2_ID.to_string();
+    map.nodes.insert(3, lamination_2);
+    map.edges = vec![
+        ProductionMapEdge {
+            from: "start".to_string(),
+            to: "apparatus".to_string(),
+            branch: String::new(),
+        },
+        ProductionMapEdge {
+            from: "apparatus".to_string(),
+            to: "second".to_string(),
+            branch: String::new(),
+        },
+        ProductionMapEdge {
+            from: "apparatus".to_string(),
+            to: "lamination-2".to_string(),
+            branch: String::new(),
+        },
+        ProductionMapEdge {
+            from: "second".to_string(),
+            to: "end".to_string(),
+            branch: String::new(),
+        },
+        ProductionMapEdge {
+            from: "lamination-2".to_string(),
+            to: "end".to_string(),
+            branch: String::new(),
+        },
+    ];
+    service.upsert_map(map).await.expect("branched opening map");
+
+    let mut input = opening_input(order_id, "opening-wip-source-alternatives-request");
+    input.entry_apparatus.clear();
+    input.current_location.clear();
+    input.source_apparatus = PECHAT_ID.to_string();
+    input.source_stage_node_id = "apparatus".to_string();
+    service
+        .create_opening_wip(input, admin_actor())
+        .await
+        .expect("opening WIP from branch source");
+
+    let controls = service
+        .queue_action_controls()
+        .await
+        .expect("branch controls");
+    for apparatus in [LAMINATION_ID, LAMINATION_2_ID] {
+        assert_eq!(
+            controls
+                .get(apparatus)
+                .and_then(|orders| orders.get(order_id))
+                .expect("alternative control")
+                .interaction
+                .opening_wip_mode,
+            ApparatusQueuePreviousWipMode::ScanRequired,
+        );
+    }
+}
