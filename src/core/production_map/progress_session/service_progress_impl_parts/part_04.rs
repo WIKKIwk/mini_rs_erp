@@ -252,7 +252,7 @@ impl ProductionMapService {
             || record.batch.order_id.trim() != order_id.trim()
             || record.batch.wip_status != OpeningWipBatchStatus::InUse
             || !super::types::apparatus_ids_match(
-                &record.intake.entry_apparatus,
+                &record.intake.resume_apparatus,
                 apparatus,
             )
             || !super::types::apparatus_ids_match(

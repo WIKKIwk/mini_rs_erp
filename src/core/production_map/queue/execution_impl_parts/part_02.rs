@@ -12,39 +12,37 @@ impl ProductionMapService {
         opening_wip_batch_updates: &[OpeningWipBatch],
         ignored_batch_id: &str,
     ) -> Result<bool, ProductionMapError> {
-        if chain::previous_work_stage_station(order_map, apparatus).is_none() {
-            let records = self
-                .store
-                .opening_wip_records(OpeningWipQuery {
-                    order_id: order_id.trim().to_string(),
-                    wip_status: None,
-                    limit: 10_000,
-                })
-                .await?;
-            let mut batches = records
-                .into_iter()
-                .filter(|record| {
-                    record.intake.status == OpeningWipIntakeStatus::Confirmed
-                        && super::super::types::apparatus_ids_match(
-                            &record.intake.entry_apparatus,
-                            apparatus,
-                        )
-                })
-                .flat_map(|record| record.batches)
-                .map(|batch| (batch.batch_id.trim().to_string(), batch))
-                .collect::<BTreeMap<_, _>>();
-            for batch in opening_wip_batch_updates {
-                batches.insert(batch.batch_id.trim().to_string(), batch.clone());
-            }
-            if !batches.is_empty() {
-                return Ok(batches.values().any(|batch| {
-                    batch.batch_id.trim() != ignored_batch_id.trim()
-                        && matches!(
-                            batch.wip_status,
-                            OpeningWipBatchStatus::Waiting | OpeningWipBatchStatus::InUse
-                        )
-                }));
-            }
+        let records = self
+            .store
+            .opening_wip_records(OpeningWipQuery {
+                order_id: order_id.trim().to_string(),
+                wip_status: None,
+                limit: 10_000,
+            })
+            .await?;
+        let mut batches = records
+            .into_iter()
+            .filter(|record| {
+                record.intake.status == OpeningWipIntakeStatus::Confirmed
+                    && super::super::types::apparatus_ids_match(
+                        &record.intake.resume_apparatus,
+                        apparatus,
+                    )
+            })
+            .flat_map(|record| record.batches)
+            .map(|batch| (batch.batch_id.trim().to_string(), batch))
+            .collect::<BTreeMap<_, _>>();
+        for batch in opening_wip_batch_updates {
+            batches.insert(batch.batch_id.trim().to_string(), batch.clone());
+        }
+        if !batches.is_empty() {
+            return Ok(batches.values().any(|batch| {
+                batch.batch_id.trim() != ignored_batch_id.trim()
+                    && matches!(
+                        batch.wip_status,
+                        OpeningWipBatchStatus::Waiting | OpeningWipBatchStatus::InUse
+                    )
+            }));
         }
         let Some(previous_apparatus) = chain::previous_work_stage_station(order_map, apparatus)
         else {

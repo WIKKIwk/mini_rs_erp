@@ -133,7 +133,7 @@ impl ProductionMapService {
                     all_states,
                     &known_keys,
                 );
-                let previous_wip_mode = previous_stage
+                let mut previous_wip_mode = previous_stage
                     .as_deref()
                     .map(|previous_stage| {
                         let batches = progress_batches_by_order
@@ -152,38 +152,29 @@ impl ProductionMapService {
                         }
                     })
                     .unwrap_or(ApparatusQueuePreviousWipMode::NotRequired);
-                let opening_wip_mode = if previous_stage.is_none() {
-                    let mut has_opening_wip = false;
-                    let mut has_waiting_opening_wip = false;
-                    for record in opening_wip_by_order
-                        .get(order_id.trim())
-                        .into_iter()
-                        .flatten()
-                    {
-                        if record.intake.status != OpeningWipIntakeStatus::Confirmed
-                            || !super::super::types::apparatus_ids_match(
-                                &record.intake.entry_apparatus,
+                let opening_wip_mode = if opening_wip_by_order
+                    .get(order_id.trim())
+                    .into_iter()
+                    .flatten()
+                    .any(|record| {
+                        record.intake.status == OpeningWipIntakeStatus::Confirmed
+                            && super::super::types::apparatus_ids_match(
+                                &record.intake.resume_apparatus,
                                 &storage_key,
                             )
-                        {
-                            continue;
-                        }
-                        has_opening_wip = true;
-                        has_waiting_opening_wip |= record
-                            .batches
-                            .iter()
-                            .any(|batch| batch.wip_status == OpeningWipBatchStatus::Waiting);
-                    }
-                    if has_waiting_opening_wip {
-                        ApparatusQueuePreviousWipMode::ScanRequired
-                    } else if has_opening_wip {
-                        ApparatusQueuePreviousWipMode::Waiting
-                    } else {
-                        ApparatusQueuePreviousWipMode::NotRequired
-                    }
+                            && record
+                                .batches
+                                .iter()
+                                .any(|batch| batch.wip_status == OpeningWipBatchStatus::Waiting)
+                    })
+                {
+                    ApparatusQueuePreviousWipMode::ScanRequired
                 } else {
                     ApparatusQueuePreviousWipMode::NotRequired
                 };
+                if opening_wip_mode == ApparatusQueuePreviousWipMode::ScanRequired {
+                    previous_wip_mode = ApparatusQueuePreviousWipMode::NotRequired;
+                }
                 let active_order_is_this = active_order_id
                     .is_none_or(|active_order_id| active_order_id == order_id.trim());
                 let active_session = active_sessions_by_order
@@ -198,12 +189,13 @@ impl ProductionMapService {
                 let queue_actionable = state.is_active()
                     || actionable_order_id.as_deref() == Some(order_id.trim())
                     || (state == queue_state::ApparatusQueueOrderState::Pending
-                        && previous_stage.is_some()
                         && !previous_stage_not_configured
-                        && (previous_stage_ready
-                            || (apparatus::is_laminatsiya_apparatus(&canonical)
-                                && previous_wip_mode
-                                    == ApparatusQueuePreviousWipMode::ScanRequired))
+                        && (opening_wip_mode == ApparatusQueuePreviousWipMode::ScanRequired
+                            || (previous_stage.is_some()
+                                && (previous_stage_ready
+                                    || (apparatus::is_laminatsiya_apparatus(&canonical)
+                                        && previous_wip_mode
+                                            == ApparatusQueuePreviousWipMode::ScanRequired))))
                         && active_order_is_this);
                 let mut allowed_actions = Vec::new();
                 let mut complete_requires_full_report = false;
@@ -255,10 +247,10 @@ impl ProductionMapService {
                             let material_scan_required = material_requirements.requires_material
                                 || !material_requirements.assigned_barcodes.is_empty();
                             let start_materials_mode =
-                                if apparatus::is_laminatsiya_apparatus(&canonical)
-                                    && (previous_wip_mode
-                                        == ApparatusQueuePreviousWipMode::ScanRequired
-                                        || opening_wip_mode
+                                if opening_wip_mode
+                                    == ApparatusQueuePreviousWipMode::ScanRequired
+                                    || (apparatus::is_laminatsiya_apparatus(&canonical)
+                                        && previous_wip_mode
                                             == ApparatusQueuePreviousWipMode::ScanRequired)
                                 {
                                     ApparatusQueueStartMaterialsMode::Hidden

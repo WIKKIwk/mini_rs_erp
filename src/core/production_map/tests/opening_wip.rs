@@ -85,6 +85,8 @@ async fn opening_wip_creates_unique_batches_and_replays_idempotently() {
     assert_eq!(created.intake.order_id, order_id);
     assert_eq!(created.intake.entry_apparatus, LAMINATION_ID);
     assert_eq!(created.intake.current_location, LAMINATION_ID);
+    assert_eq!(created.intake.resume_apparatus, LAMINATION_ID);
+    assert_eq!(created.intake.resume_stage_node_id, "apparatus");
     assert_eq!(
         created.intake.source_operation,
         "unavailable_before_cutover"
@@ -175,6 +177,8 @@ async fn opening_wip_location_must_be_a_real_apparatus_in_the_order_map() {
         .await
         .expect("map apparatus is a valid current location");
     assert_eq!(created.intake.current_location, "Rezka");
+    assert_eq!(created.intake.resume_apparatus, REZKA_ID);
+    assert_eq!(created.intake.resume_stage_node_id, "second");
 
     let mut outside_map = opening_input(order_id, "opening-wip-location-outside");
     outside_map.current_location = "apparatus:default:asset-008".to_string();
@@ -253,6 +257,8 @@ async fn opening_wip_location_must_be_a_real_apparatus_in_the_order_map() {
         .await
         .expect("unassigned map alternative is a valid current location");
     assert_eq!(created.intake.current_location, "Laminatsiya 2");
+    assert_eq!(created.intake.resume_apparatus, LAMINATION_2_ID);
+    assert_eq!(created.intake.resume_stage_node_id, "lamination-2");
 }
 
 #[tokio::test]
@@ -316,21 +322,29 @@ async fn opening_wip_idempotency_conflict_fails_closed() {
 }
 
 #[tokio::test]
-async fn opening_wip_batches_drive_entry_stage_until_every_roll_is_processed() {
+async fn opening_wip_batches_resume_mid_map_stage_without_completing_source_stage() {
     let store = Arc::new(MemoryProductionMapStore::new());
     let service = ProductionMapService::new_for_test(store.clone());
     let order_id = "zakaz-opening-wip-lifecycle";
     service
-        .upsert_map(apparatus_stage_map(order_id, LAMINATION_ID))
+        .upsert_map(canonical_two_stage_map(
+            order_id,
+            PECHAT_ID,
+            "7 ta rangli bosma aparat",
+            LAMINATION_ID,
+            "Laminatsiya 1",
+        ))
         .await
         .expect("opening order map");
+    let mut input = opening_input(order_id, "opening-wip-lifecycle-request");
+    input.entry_apparatus = PECHAT_ID.to_string();
     let opening = service
-        .create_opening_wip(
-            opening_input(order_id, "opening-wip-lifecycle-request"),
-            admin_actor(),
-        )
+        .create_opening_wip(input, admin_actor())
         .await
         .expect("opening WIP created");
+    assert_eq!(opening.intake.entry_apparatus, PECHAT_ID);
+    assert_eq!(opening.intake.resume_apparatus, LAMINATION_ID);
+    assert_eq!(opening.intake.resume_stage_node_id, "second");
     let assigned = [LAMINATION_ID.to_string()];
 
     let controls = service
@@ -344,6 +358,18 @@ async fn opening_wip_batches_drive_entry_stage_until_every_roll_is_processed() {
     assert_eq!(
         control.interaction.opening_wip_mode,
         ApparatusQueuePreviousWipMode::ScanRequired
+    );
+    assert_eq!(
+        control.interaction.previous_wip_mode,
+        ApparatusQueuePreviousWipMode::NotRequired
+    );
+    let source_control = controls
+        .get(PECHAT_ID)
+        .and_then(|orders| orders.get(order_id))
+        .expect("printing control");
+    assert_eq!(
+        source_control.interaction.opening_wip_mode,
+        ApparatusQueuePreviousWipMode::NotRequired
     );
     assert!(
         control
@@ -397,7 +423,7 @@ async fn opening_wip_batches_drive_entry_stage_until_every_roll_is_processed() {
                 },
             )
             .await
-            .expect("entry stage starts opening WIP");
+            .expect("resume stage starts opening WIP");
         let in_use = service
             .opening_wip_batch(&source.batch_id, "")
             .await
@@ -415,7 +441,7 @@ async fn opening_wip_batches_drive_entry_stage_until_every_roll_is_processed() {
                 lamination_complete_input(),
             )
             .await
-            .expect("entry stage completes opening WIP roll");
+            .expect("resume stage completes opening WIP roll");
         let processed = service
             .opening_wip_batch(&source.batch_id, "")
             .await
@@ -435,5 +461,12 @@ async fn opening_wip_batches_drive_entry_stage_until_every_roll_is_processed() {
         } else {
             assert_eq!(state, Some("completed"));
         }
+        assert_ne!(
+            states
+                .get(PECHAT_ID)
+                .and_then(|orders| orders.get(order_id))
+                .map(String::as_str),
+            Some("completed")
+        );
     }
 }

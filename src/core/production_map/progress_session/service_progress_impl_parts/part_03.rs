@@ -41,7 +41,7 @@ impl ProductionMapService {
                         OrderRunStatus::Paused | OrderRunStatus::RollDetached
                     )
                     || !super::types::apparatus_ids_match(
-                        &record.intake.entry_apparatus,
+                        &record.intake.resume_apparatus,
                         apparatus,
                     )
                 {
@@ -187,6 +187,10 @@ impl ProductionMapService {
                     || record.batch.order_id.trim() != order_id.trim()
                     || record.batch.wip_status != OpeningWipBatchStatus::InUse
                     || record.batch.used_by_session_id.trim() != session.session_id.trim()
+                    || !super::types::apparatus_ids_match(
+                        &record.intake.resume_apparatus,
+                        apparatus,
+                    )
                     || !super::types::apparatus_ids_match(
                         &record.batch.used_by_apparatus,
                         apparatus,

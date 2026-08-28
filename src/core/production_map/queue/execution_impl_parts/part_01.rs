@@ -390,6 +390,13 @@ impl ProductionMapService {
         if action != queue_state::ApparatusQueueAction::Start {
             return Ok(false);
         }
+        if self
+            .opening_wip_start_batch(order_id, order_map, apparatus, progress)
+            .await?
+            .is_some()
+        {
+            return Ok(true);
+        }
         Ok(self
             .previous_stage_start_progress_batch(order_id, order_map, apparatus, progress)
             .await?

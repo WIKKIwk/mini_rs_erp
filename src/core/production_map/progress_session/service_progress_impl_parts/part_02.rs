@@ -13,12 +13,6 @@ impl ProductionMapService {
             canonical,
             now,
         } = context;
-        if action != queue_state::ApparatusQueueAction::Freeze
-            && apparatus::requires_previous_stage(canonical)
-            && chain::previous_stage_resolution_is_unavailable(order_map, apparatus)
-        {
-            return Err(ProductionMapError::ProgressQrRequired);
-        }
         if action == queue_state::ApparatusQueueAction::RollComplete
             && !apparatus::is_rezka_apparatus(canonical)
         {
@@ -32,6 +26,13 @@ impl ProductionMapService {
             .ok_or(ProductionMapError::QueueActionNotAllowed)?;
         let session_input_progress = session_progress_links(&session);
         let session_uses_opening_wip = session_input_progress.source_kind == "opening_wip";
+        if !session_uses_opening_wip
+            && action != queue_state::ApparatusQueueAction::Freeze
+            && apparatus::requires_previous_stage(canonical)
+            && chain::previous_stage_resolution_is_unavailable(order_map, apparatus)
+        {
+            return Err(ProductionMapError::ProgressQrRequired);
+        }
         let opening_input_batch = if session_uses_opening_wip {
             let record = self
                 .store
@@ -53,7 +54,7 @@ impl ProductionMapService {
                 || record.intake.order_id.trim() != order_id.trim()
                 || record.batch.order_id.trim() != order_id.trim()
                 || !super::types::apparatus_ids_match(
-                    &record.intake.entry_apparatus,
+                    &record.intake.resume_apparatus,
                     apparatus,
                 )
                 || record.batch.wip_status != OpeningWipBatchStatus::InUse
@@ -140,7 +141,7 @@ impl ProductionMapService {
             Some(batch)
         } else if let Some(recovered) = recovered_input.as_ref() {
             Some(recovered.input_batch.clone())
-        } else if previous_apparatus.is_some() {
+        } else if previous_apparatus.is_some() && !session_uses_opening_wip {
             return Err(ProductionMapError::ProgressQrRequired);
         } else {
             None
