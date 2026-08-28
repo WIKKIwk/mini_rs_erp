@@ -112,6 +112,7 @@ impl ProductionMapService {
                 .build_opening_wip_laminatsiya_worker_transition(
                     apparatus,
                     order_id,
+                    order_map,
                     action,
                     actor,
                     progress,
@@ -234,6 +235,7 @@ impl ProductionMapService {
         &self,
         apparatus: &str,
         order_id: &str,
+        order_map: &ProductionMapDefinition,
         action: queue_state::ApparatusQueueAction,
         actor: &QueueActionActor,
         progress: QueueProgressInput,
@@ -251,10 +253,7 @@ impl ProductionMapService {
             || record.intake.order_id.trim() != order_id.trim()
             || record.batch.order_id.trim() != order_id.trim()
             || record.batch.wip_status != OpeningWipBatchStatus::InUse
-            || !super::types::apparatus_ids_match(
-                &record.intake.resume_apparatus,
-                apparatus,
-            )
+            || Self::opening_wip_target_stage(order_map, &record.intake, apparatus, "").is_none()
             || !super::types::apparatus_ids_match(
                 &record.batch.used_by_apparatus,
                 apparatus,

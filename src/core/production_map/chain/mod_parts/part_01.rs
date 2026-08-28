@@ -25,7 +25,7 @@ pub fn linear_work_stages(map: &ProductionMapDefinition) -> Vec<ChainStage> {
                 if node.kind == ProductionMapNodeKind::Apparatus {
                     seen_apparatus = true;
                 }
-                if seen_stage_ids.insert(stage.identity()) {
+                if seen_stage_ids.insert(stage.occurrence_identity()) {
                     stages.push(stage);
                 }
             }
@@ -141,6 +141,36 @@ pub fn next_work_stage_stations(map: &ProductionMapDefinition, station_id: &str)
         );
     }
     found
+}
+
+/// Resolve one physical stage occurrence. The node ID is authoritative when
+/// supplied because the same apparatus can occur more than once in one map.
+pub fn work_stage_for_station(
+    map: &ProductionMapDefinition,
+    station_id: &str,
+    preferred_node_id: &str,
+) -> Option<ChainStage> {
+    let stages = linear_work_stages(map);
+    let preferred_node_id = preferred_node_id.trim();
+    if !preferred_node_id.is_empty() {
+        return stages.into_iter().find(|stage| {
+            stage.node_id.trim() == preferred_node_id
+                && chain_stage_matches_station(stage, station_id)
+        });
+    }
+    stages
+        .into_iter()
+        .find(|stage| chain_stage_matches_station(stage, station_id))
+}
+
+/// Return every immediate physical successor of one concrete graph stage.
+/// Transparent task/condition nodes are traversed, while branch alternatives
+/// remain separate candidates.
+pub fn next_work_stages_for_node(
+    map: &ProductionMapDefinition,
+    stage_node_id: &str,
+) -> Vec<ChainStage> {
+    adjacent_physical_stages_for_node(map, stage_node_id)
 }
 
 /// Physical stages reachable from Start. Virtual Task nodes are intentionally
@@ -395,6 +425,59 @@ impl ChainStage {
             .map(str::to_string)
             .unwrap_or_else(|| task_stage_identity(&self.node_id))
     }
+
+    fn occurrence_identity(&self) -> String {
+        self.node_id.trim().to_string()
+    }
+}
+
+fn chain_stage_matches_station(stage: &ChainStage, station_id: &str) -> bool {
+    if let Some(apparatus_id) = stage.apparatus_id.as_deref() {
+        return super::types::apparatus_ids_match(apparatus_id, station_id);
+    }
+    stage.identity() == station_id.trim()
+}
+
+fn adjacent_physical_stages_for_node(
+    map: &ProductionMapDefinition,
+    stage_node_id: &str,
+) -> Vec<ChainStage> {
+    let stages = linear_work_stages(map);
+    if !stages
+        .iter()
+        .any(|stage| stage.node_id.trim() == stage_node_id.trim())
+    {
+        return Vec::new();
+    }
+    let physical_by_node = stages
+        .iter()
+        .filter(|stage| stage.apparatus_id.is_some())
+        .map(|stage| (stage.node_id.as_str(), stage))
+        .collect::<BTreeMap<_, _>>();
+    let mut queue = VecDeque::<&str>::new();
+    let mut visited = BTreeSet::<String>::new();
+    let mut found = Vec::<ChainStage>::new();
+    let mut found_nodes = BTreeSet::<String>::new();
+    queue.extend(route_successors(map, stage_node_id.trim()));
+    while let Some(node_id) = queue.pop_front() {
+        if !visited.insert(node_id.to_string()) {
+            continue;
+        }
+        let Some(node) = map.nodes.iter().find(|node| node.id == node_id) else {
+            continue;
+        };
+        if node.kind == ProductionMapNodeKind::End {
+            continue;
+        }
+        if let Some(stage) = physical_by_node.get(node_id) {
+            if found_nodes.insert(node_id.to_string()) {
+                found.push((*stage).clone());
+            }
+            continue;
+        }
+        queue.extend(route_successors(map, node_id));
+    }
+    found
 }
 
 fn collect_previous_stage_ids(

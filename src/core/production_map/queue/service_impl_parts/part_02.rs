@@ -158,10 +158,13 @@ impl ProductionMapService {
                     .flatten()
                     .any(|record| {
                         record.intake.status == OpeningWipIntakeStatus::Confirmed
-                            && super::super::types::apparatus_ids_match(
-                                &record.intake.resume_apparatus,
+                            && Self::opening_wip_target_stage(
+                                order_map,
+                                &record.intake,
                                 &storage_key,
+                                "",
                             )
+                            .is_some()
                             && record
                                 .batches
                                 .iter()

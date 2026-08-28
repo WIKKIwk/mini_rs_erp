@@ -53,10 +53,13 @@ impl ProductionMapService {
             if record.intake.status != OpeningWipIntakeStatus::Confirmed
                 || record.intake.order_id.trim() != order_id.trim()
                 || record.batch.order_id.trim() != order_id.trim()
-                || !super::types::apparatus_ids_match(
-                    &record.intake.resume_apparatus,
+                || Self::opening_wip_target_stage(
+                    order_map,
+                    &record.intake,
                     apparatus,
+                    "",
                 )
+                .is_none()
                 || record.batch.wip_status != OpeningWipBatchStatus::InUse
                 || !super::types::apparatus_ids_match(
                     &record.batch.used_by_apparatus,

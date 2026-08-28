@@ -100,11 +100,15 @@ pub struct OpeningWipBatchInput {
 pub struct OpeningWipCreateInput {
     pub idempotency_key: String,
     pub order_id: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
     pub entry_apparatus: String,
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub source_operation: String,
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub source_apparatus: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub source_stage_node_id: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
     pub current_location: String,
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub note: String,

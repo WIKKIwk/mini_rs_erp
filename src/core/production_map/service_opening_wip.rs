@@ -20,38 +20,75 @@ impl ProductionMapService {
             .into_iter()
             .find(|map| map.id.trim() == normalized.order_id)
             .ok_or(ProductionMapError::MapNotFound)?;
-        let first_apparatus = chain::linear_work_stages(&map)
-            .into_iter()
-            .find_map(|stage| stage.apparatus_id)
-            .ok_or(ProductionMapError::OpeningWipEntryMismatch)?;
-        if !types::apparatus_ids_match(&first_apparatus, &normalized.entry_apparatus) {
-            return Err(ProductionMapError::OpeningWipEntryMismatch);
-        }
-        let location_stage = chain::linear_work_stages(&map)
-            .into_iter()
-            .find(|stage| {
-                stage.apparatus_id.as_deref().is_some_and(|apparatus_id| {
-                    types::apparatus_ids_match(apparatus_id, &normalized.current_location)
-                })
-            })
-            .ok_or(ProductionMapError::OpeningWipLocationMismatch)?;
-        let resume_apparatus = location_stage
-            .apparatus_id
-            .clone()
-            .ok_or(ProductionMapError::OpeningWipLocationMismatch)?;
-        let resume_stage_node_id = location_stage.node_id.clone();
-        normalized.current_location = if location_stage.station_title.trim().is_empty() {
-            resume_apparatus.clone()
+        let uses_source_contract = !normalized.source_apparatus.is_empty();
+        let (operation, resume_apparatus, resume_stage_node_id) = if uses_source_contract {
+            let source_stage = chain::work_stage_for_station(
+                &map,
+                &normalized.source_apparatus,
+                &normalized.source_stage_node_id,
+            )
+            .ok_or(ProductionMapError::OpeningWipSourceMismatch)?;
+            if chain::next_work_stages_for_node(&map, &source_stage.node_id).is_empty() {
+                return Err(ProductionMapError::OpeningWipSourceFinalStage);
+            }
+            let source_apparatus = source_stage
+                .apparatus_id
+                .ok_or(ProductionMapError::OpeningWipSourceMismatch)?;
+            let source_configuration = self
+                .resolve_canonical_apparatus_text(&source_apparatus)
+                .await?;
+            normalized.entry_apparatus = source_apparatus.clone();
+            normalized.source_apparatus = source_apparatus;
+            normalized.source_stage_node_id = source_stage.node_id.clone();
+            normalized.source_operation = opening_wip_operation_name(
+                source_configuration.runtime.execution_profile.operation,
+            )
+            .to_string();
+            normalized.current_location.clear();
+            (
+                source_configuration.runtime.execution_profile.operation,
+                String::new(),
+                source_stage.node_id,
+            )
         } else {
-            location_stage.station_title.trim().to_string()
+            let first_apparatus = chain::linear_work_stages(&map)
+                .into_iter()
+                .find_map(|stage| stage.apparatus_id)
+                .ok_or(ProductionMapError::OpeningWipEntryMismatch)?;
+            if !types::apparatus_ids_match(&first_apparatus, &normalized.entry_apparatus) {
+                return Err(ProductionMapError::OpeningWipEntryMismatch);
+            }
+            let location_stage = chain::linear_work_stages(&map)
+                .into_iter()
+                .find(|stage| {
+                    stage.apparatus_id.as_deref().is_some_and(|apparatus_id| {
+                        types::apparatus_ids_match(apparatus_id, &normalized.current_location)
+                    })
+                })
+                .ok_or(ProductionMapError::OpeningWipLocationMismatch)?;
+            let resume_apparatus = location_stage
+                .apparatus_id
+                .clone()
+                .ok_or(ProductionMapError::OpeningWipLocationMismatch)?;
+            let resume_stage_node_id = location_stage.node_id.clone();
+            normalized.current_location = if location_stage.station_title.trim().is_empty() {
+                resume_apparatus.clone()
+            } else {
+                location_stage.station_title.trim().to_string()
+            };
+            let entry_configuration = self
+                .resolve_canonical_apparatus_text(&normalized.entry_apparatus)
+                .await?;
+            normalized.source_operation = "unavailable_before_cutover".to_string();
+            normalized.source_apparatus.clear();
+            normalized.source_stage_node_id.clear();
+            (
+                entry_configuration.runtime.execution_profile.operation,
+                resume_apparatus,
+                resume_stage_node_id,
+            )
         };
-        let entry_configuration = self
-            .resolve_canonical_apparatus_text(&normalized.entry_apparatus)
-            .await?;
-        let operation = entry_configuration.runtime.execution_profile.operation;
         validate_opening_wip_batches(&normalized.batches, operation)?;
-        normalized.source_operation = "unavailable_before_cutover".to_string();
-        normalized.source_apparatus.clear();
 
         let fingerprint = opening_wip_fingerprint(&normalized);
         if let Some(existing) = self
@@ -164,6 +201,38 @@ impl ProductionMapService {
             .await?
             .ok_or(ProductionMapError::ProgressBatchNotFound)
     }
+
+    pub(crate) fn opening_wip_target_stage(
+        map: &ProductionMapDefinition,
+        intake: &OpeningWipIntake,
+        target_apparatus: &str,
+        preferred_target_node_id: &str,
+    ) -> Option<chain::ChainStage> {
+        if !intake.source_apparatus.trim().is_empty() {
+            let source_stage = chain::work_stage_for_station(
+                map,
+                &intake.source_apparatus,
+                &intake.resume_stage_node_id,
+            )?;
+            return chain::next_work_stages_for_node(map, &source_stage.node_id)
+                .into_iter()
+                .find(|stage| {
+                    stage.apparatus_id.as_deref().is_some_and(|apparatus_id| {
+                        types::apparatus_ids_match(apparatus_id, target_apparatus)
+                    }) && (preferred_target_node_id.trim().is_empty()
+                        || stage.node_id.trim() == preferred_target_node_id.trim())
+                });
+        }
+        if !types::apparatus_ids_match(&intake.resume_apparatus, target_apparatus) {
+            return None;
+        }
+        let target_node_id = if preferred_target_node_id.trim().is_empty() {
+            &intake.resume_stage_node_id
+        } else {
+            preferred_target_node_id
+        };
+        chain::work_stage_for_station(map, target_apparatus, target_node_id)
+    }
 }
 
 fn normalize_opening_wip_input(
@@ -175,6 +244,7 @@ fn normalize_opening_wip_input(
         entry_apparatus: input.entry_apparatus.trim().to_string(),
         source_operation: input.source_operation.trim().to_ascii_lowercase(),
         source_apparatus: input.source_apparatus.trim().to_string(),
+        source_stage_node_id: input.source_stage_node_id.trim().to_string(),
         current_location: input.current_location.trim().to_string(),
         note: input.note.trim().to_string(),
         batches: input
@@ -189,10 +259,15 @@ fn normalize_opening_wip_input(
             })
             .collect(),
     };
+    let has_source_contract = !normalized.source_apparatus.is_empty()
+        && !normalized.source_stage_node_id.is_empty();
+    let has_partial_source_contract = normalized.source_apparatus.is_empty()
+        != normalized.source_stage_node_id.is_empty();
     if normalized.idempotency_key.is_empty()
         || normalized.order_id.is_empty()
-        || normalized.entry_apparatus.is_empty()
-        || normalized.current_location.is_empty()
+        || has_partial_source_contract
+        || (!has_source_contract
+            && (normalized.entry_apparatus.is_empty() || normalized.current_location.is_empty()))
         || normalized.batches.is_empty()
         || normalized.batches.len() > MAX_OPENING_WIP_BATCHES
     {
@@ -211,6 +286,16 @@ fn normalize_opening_wip_input(
         }
     }
     Ok(normalized)
+}
+
+fn opening_wip_operation_name(operation: ExecutionOperation) -> &'static str {
+    match operation {
+        ExecutionOperation::Print => "print",
+        ExecutionOperation::Laminate => "laminate",
+        ExecutionOperation::Cut => "cut",
+        ExecutionOperation::Package => "package",
+        ExecutionOperation::Glue => "glue",
+    }
 }
 
 fn validate_opening_wip_batches(

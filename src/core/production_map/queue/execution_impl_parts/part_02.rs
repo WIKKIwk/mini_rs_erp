@@ -24,10 +24,13 @@ impl ProductionMapService {
             .into_iter()
             .filter(|record| {
                 record.intake.status == OpeningWipIntakeStatus::Confirmed
-                    && super::super::types::apparatus_ids_match(
-                        &record.intake.resume_apparatus,
+                    && Self::opening_wip_target_stage(
+                        order_map,
+                        &record.intake,
                         apparatus,
+                        "",
                     )
+                    .is_some()
             })
             .flat_map(|record| record.batches)
             .map(|batch| (batch.batch_id.trim().to_string(), batch))

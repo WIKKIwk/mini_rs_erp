@@ -17,6 +17,7 @@ fn opening_input(order_id: &str, idempotency_key: &str) -> OpeningWipCreateInput
         entry_apparatus: LAMINATION_ID.to_string(),
         source_operation: "Bosma".to_string(),
         source_apparatus: String::new(),
+        source_stage_node_id: String::new(),
         current_location: LAMINATION_ID.to_string(),
         note: "Day-0 sanoq".to_string(),
         batches: vec![
@@ -322,7 +323,7 @@ async fn opening_wip_idempotency_conflict_fails_closed() {
 }
 
 #[tokio::test]
-async fn opening_wip_batches_resume_mid_map_stage_without_completing_source_stage() {
+async fn opening_wip_from_source_stage_is_scannable_only_at_the_next_stage() {
     let store = Arc::new(MemoryProductionMapStore::new());
     let service = ProductionMapService::new_for_test(store.clone());
     let order_id = "zakaz-opening-wip-lifecycle";
@@ -337,14 +338,20 @@ async fn opening_wip_batches_resume_mid_map_stage_without_completing_source_stag
         .await
         .expect("opening order map");
     let mut input = opening_input(order_id, "opening-wip-lifecycle-request");
-    input.entry_apparatus = PECHAT_ID.to_string();
+    input.entry_apparatus.clear();
+    input.current_location.clear();
+    input.source_apparatus = PECHAT_ID.to_string();
+    input.source_stage_node_id = "apparatus".to_string();
     let opening = service
         .create_opening_wip(input, admin_actor())
         .await
         .expect("opening WIP created");
     assert_eq!(opening.intake.entry_apparatus, PECHAT_ID);
-    assert_eq!(opening.intake.resume_apparatus, LAMINATION_ID);
-    assert_eq!(opening.intake.resume_stage_node_id, "second");
+    assert_eq!(opening.intake.source_apparatus, PECHAT_ID);
+    assert_eq!(opening.intake.source_operation, "print");
+    assert!(opening.intake.current_location.is_empty());
+    assert!(opening.intake.resume_apparatus.is_empty());
+    assert_eq!(opening.intake.resume_stage_node_id, "apparatus");
     let assigned = [LAMINATION_ID.to_string()];
 
     let controls = service

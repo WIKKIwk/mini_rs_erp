@@ -7,6 +7,7 @@ impl ProductionMapService {
         let ProgressBuildContext {
             apparatus,
             order_id,
+            order_map,
             action,
             actor,
             canonical,
@@ -40,10 +41,13 @@ impl ProductionMapService {
                         current.status,
                         OrderRunStatus::Paused | OrderRunStatus::RollDetached
                     )
-                    || !super::types::apparatus_ids_match(
-                        &record.intake.resume_apparatus,
+                    || Self::opening_wip_target_stage(
+                        order_map,
+                        &record.intake,
                         apparatus,
+                        "",
                     )
+                    .is_none()
                 {
                     return Err(ProductionMapError::ProgressBatchNotResumable);
                 }
@@ -187,10 +191,13 @@ impl ProductionMapService {
                     || record.batch.order_id.trim() != order_id.trim()
                     || record.batch.wip_status != OpeningWipBatchStatus::InUse
                     || record.batch.used_by_session_id.trim() != session.session_id.trim()
-                    || !super::types::apparatus_ids_match(
-                        &record.intake.resume_apparatus,
+                    || Self::opening_wip_target_stage(
+                        order_map,
+                        &record.intake,
                         apparatus,
+                        "",
                     )
+                    .is_none()
                     || !super::types::apparatus_ids_match(
                         &record.batch.used_by_apparatus,
                         apparatus,

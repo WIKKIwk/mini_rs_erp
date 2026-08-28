@@ -387,6 +387,12 @@ pub(super) fn production_map_error(error: ProductionMapError) -> AdminError {
         ProductionMapError::OpeningWipLocationMismatch => {
             bad_request("opening_wip_location_mismatch")
         }
+        ProductionMapError::OpeningWipSourceMismatch => {
+            bad_request("opening_wip_source_mismatch")
+        }
+        ProductionMapError::OpeningWipSourceFinalStage => {
+            bad_request("opening_wip_source_final_stage")
+        }
         ProductionMapError::OpeningWipOrderAlreadyStarted => {
             conflict("opening_wip_order_already_started")
         }

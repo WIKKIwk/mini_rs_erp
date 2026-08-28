@@ -112,9 +112,14 @@ pub async fn production_map_opening_wip_print(
         .opening_wip_batch(&input.batch_id, &input.qr_payload)
         .await
         .map_err(production_map_error)?;
-    let entry_apparatus = state
+    let source_apparatus_id = if details.intake.source_apparatus.trim().is_empty() {
+        details.intake.entry_apparatus.as_str()
+    } else {
+        details.intake.source_apparatus.as_str()
+    };
+    let source_apparatus = state
         .production_maps
-        .resolve_canonical_apparatus_text(&details.intake.entry_apparatus)
+        .resolve_canonical_apparatus_text(source_apparatus_id)
         .await
         .map_err(production_map_error)?;
     let customer_name = state
@@ -129,11 +134,8 @@ pub async fn production_map_opening_wip_print(
         qr_payload: details.batch.qr_payload.clone(),
         item_code: details.batch.label_item_code.clone(),
         item_name: details.batch.label_item_name.clone(),
-        apparatus: details.intake.entry_apparatus.clone(),
-        apparatus_display_name: format!(
-            "Opening WIP → {}",
-            entry_apparatus.runtime.display.display_name.trim()
-        ),
+        apparatus: source_apparatus_id.to_string(),
+        apparatus_display_name: source_apparatus.runtime.display.display_name.trim().to_string(),
         customer_name: customer_name.trim().to_string(),
         executor_name: details.intake.actor.display_name.clone(),
         printer: input.printer.trim().to_string(),
@@ -219,11 +221,23 @@ pub async fn production_map_opening_wip_lookup(
     };
     let batch_id_matches =
         input.batch_id.trim().is_empty() || details.batch.batch_id.trim() == input.batch_id.trim();
+    let order_map = state
+        .production_maps
+        .raw_map(&details.intake.order_id)
+        .await
+        .map_err(production_map_error)?
+        .ok_or_else(|| bad_request("opening_wip_qr_mismatch"))?;
     if details.intake.status != OpeningWipIntakeStatus::Confirmed
         || details.batch.wip_status != OpeningWipBatchStatus::Waiting
         || details.intake.order_id.trim() != input.order_id.trim()
         || details.batch.order_id.trim() != input.order_id.trim()
-        || !queue_state::apparatus_ids_match(&details.intake.resume_apparatus, &apparatus_id)
+        || crate::core::production_map::ProductionMapService::opening_wip_target_stage(
+            &order_map,
+            &details.intake,
+            &apparatus_id,
+            "",
+        )
+        .is_none()
         || !batch_id_matches
         || !details
             .batch

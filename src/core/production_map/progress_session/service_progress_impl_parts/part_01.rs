@@ -88,7 +88,7 @@ impl ProductionMapService {
             .await?;
         let opening_wip_exists = records.iter().any(|record| {
             record.intake.status == OpeningWipIntakeStatus::Confirmed
-                && super::types::apparatus_ids_match(&record.intake.resume_apparatus, apparatus)
+                && Self::opening_wip_target_stage(order_map, &record.intake, apparatus, "").is_some()
                 && record
                     .batches
                     .iter()
@@ -110,18 +110,11 @@ impl ProductionMapService {
         else {
             return Ok(None);
         };
-        let resume_stage_is_valid = chain::linear_work_stages(order_map)
-            .into_iter()
-            .any(|stage| {
-                stage.node_id.trim() == record.intake.resume_stage_node_id.trim()
-                    && stage.apparatus_id.as_deref().is_some_and(|candidate| {
-                        super::types::apparatus_ids_match(candidate, apparatus)
-                    })
-            });
+        let resume_stage_is_valid =
+            Self::opening_wip_target_stage(order_map, &record.intake, apparatus, "").is_some();
         if record.intake.status != OpeningWipIntakeStatus::Confirmed
             || record.intake.order_id.trim() != order_id.trim()
             || record.batch.order_id.trim() != order_id.trim()
-            || !super::types::apparatus_ids_match(&record.intake.resume_apparatus, apparatus)
             || !resume_stage_is_valid
             || record.batch.wip_status != OpeningWipBatchStatus::Waiting
             || (!progress.progress_batch_id.trim().is_empty()
