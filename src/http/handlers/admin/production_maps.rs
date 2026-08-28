@@ -52,7 +52,10 @@ pub use self::move_run::{
     production_map_run,
 };
 pub use self::order_control::production_map_order_control;
-pub use self::opening_wip::{production_map_opening_wip, production_map_opening_wip_print};
+pub use self::opening_wip::{
+    production_map_opening_wip, production_map_opening_wip_lookup,
+    production_map_opening_wip_print,
+};
 pub use self::paddons::{
     production_map_paddon_create, production_map_paddon_detail, production_map_paddon_item_add,
     production_map_paddon_item_remove, production_map_paddon_items_add,

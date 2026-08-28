@@ -41,6 +41,10 @@ fn production_routes() -> Router<AppState> {
             any(admin::production_map_opening_wip_print),
         )
         .route(
+            "/v1/mobile/admin/production-maps/opening-wip/lookup",
+            any(admin::production_map_opening_wip_lookup),
+        )
+        .route(
             "/v1/mobile/admin/training/apparatus",
             any(admin::training_apparatus_modes),
         )

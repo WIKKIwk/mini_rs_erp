@@ -1,4 +1,6 @@
 use super::*;
+use super::queue_actions::resolve_queue_apparatus;
+use crate::core::production_map::OpeningWipIntakeStatus;
 
 #[derive(Default, serde::Deserialize)]
 pub struct OpeningWipHttpQuery {
@@ -26,6 +28,18 @@ pub struct OpeningWipPrintRequest {
     print_transport: String,
     #[serde(default)]
     print_count: u32,
+}
+
+#[derive(Default, serde::Deserialize)]
+pub struct OpeningWipLookupRequest {
+    #[serde(default)]
+    apparatus: String,
+    #[serde(default)]
+    order_id: String,
+    #[serde(default)]
+    batch_id: String,
+    #[serde(default)]
+    qr_payload: String,
 }
 
 pub async fn production_map_opening_wip(
@@ -146,5 +160,80 @@ pub async fn production_map_opening_wip_print(
         "ok": print.get("ok").and_then(serde_json::Value::as_bool).unwrap_or(false),
         "batch": details.batch,
         "print": print,
+    })))
+}
+
+pub async fn production_map_opening_wip_lookup(
+    State(state): State<AppState>,
+    method: Method,
+    headers: HeaderMap,
+    body: Bytes,
+) -> Result<Response, AdminError> {
+    let principal = authorize_any_capability(
+        &state,
+        &headers,
+        &[
+            Capability::AdminAccess,
+            Capability::ProductionMapManage,
+            Capability::ApparatusQueueManage,
+        ],
+    )
+    .await?;
+    if method != Method::POST {
+        return Err(method_not_allowed());
+    }
+    let input: OpeningWipLookupRequest = parse_json(&body)?;
+    if input.apparatus.trim().is_empty()
+        || input.order_id.trim().is_empty()
+        || input.qr_payload.trim().is_empty()
+    {
+        return Err(bad_request("opening_wip_invalid_input"));
+    }
+    let apparatus = resolve_queue_apparatus(&state, &input.apparatus).await?;
+    let apparatus_id = apparatus.id.to_string();
+    let can_view_all = state
+        .admin
+        .principal_has_capability(&principal, Capability::AdminAccess)
+        .await
+        || state
+            .admin
+            .principal_has_capability(&principal, Capability::ProductionMapManage)
+            .await;
+    if !can_view_all {
+        let assigned_apparatus = state.admin.principal_assigned_apparatus(&principal).await;
+        if !queue_state::apparatus_matches_assigned(&apparatus_id, &assigned_apparatus) {
+            return Err(bad_request("apparatus_not_assigned"));
+        }
+    }
+    let details = match state
+        .production_maps
+        .opening_wip_batch(&input.batch_id, &input.qr_payload)
+        .await
+    {
+        Ok(details) => details,
+        Err(ProductionMapError::ProgressBatchNotFound) => {
+            return Err(bad_request("opening_wip_qr_mismatch"));
+        }
+        Err(error) => return Err(production_map_error(error)),
+    };
+    let batch_id_matches = input.batch_id.trim().is_empty()
+        || details.batch.batch_id.trim() == input.batch_id.trim();
+    if details.intake.status != OpeningWipIntakeStatus::Confirmed
+        || details.batch.wip_status != OpeningWipBatchStatus::Waiting
+        || details.intake.order_id.trim() != input.order_id.trim()
+        || details.batch.order_id.trim() != input.order_id.trim()
+        || !queue_state::apparatus_ids_match(&details.intake.entry_apparatus, &apparatus_id)
+        || !batch_id_matches
+        || !details
+            .batch
+            .qr_payload
+            .trim()
+            .eq_ignore_ascii_case(input.qr_payload.trim())
+    {
+        return Err(bad_request("opening_wip_qr_mismatch"));
+    }
+    Ok(json_response(serde_json::json!({
+        "ok": true,
+        "batch": details.batch,
     })))
 }

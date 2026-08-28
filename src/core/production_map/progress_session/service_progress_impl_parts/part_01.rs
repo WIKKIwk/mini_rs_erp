@@ -112,6 +112,8 @@ impl ProductionMapService {
             || record.batch.order_id.trim() != order_id.trim()
             || !super::types::apparatus_ids_match(&record.intake.entry_apparatus, apparatus)
             || record.batch.wip_status != OpeningWipBatchStatus::Waiting
+            || (!progress.progress_batch_id.trim().is_empty()
+                && record.batch.batch_id.trim() != progress.progress_batch_id.trim())
             || !record
                 .batch
                 .qr_payload

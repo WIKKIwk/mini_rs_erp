@@ -210,6 +210,24 @@ async fn opening_wip_batches_drive_entry_stage_until_every_roll_is_processed() {
         Err(ProductionMapError::ProgressQrRequired)
     );
 
+    assert_eq!(
+        service
+            .apply_apparatus_queue_action_with_progress(
+                LAMINATION_ID,
+                order_id,
+                queue_state::ApparatusQueueAction::Start,
+                &assigned,
+                worker_actor(),
+                QueueProgressInput {
+                    progress_batch_id: opening.batches[1].batch_id.clone(),
+                    qr_payload: opening.batches[0].qr_payload.clone(),
+                    ..QueueProgressInput::default()
+                },
+            )
+            .await,
+        Err(ProductionMapError::ProgressBatchNotAccepted)
+    );
+
     for (index, source) in opening.batches.iter().enumerate() {
         service
             .apply_apparatus_queue_action_with_progress(
