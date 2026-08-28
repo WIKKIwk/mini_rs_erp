@@ -183,3 +183,215 @@ async fn opening_wip_worker_lookup_is_qr_exact_and_apparatus_scoped() {
         .expect("worker list denied");
     assert_eq!(list.status(), StatusCode::FORBIDDEN);
 }
+
+#[tokio::test]
+async fn opening_wip_from_print_source_opens_lamination_scan_and_starts_with_its_qr() {
+    let state = test_state();
+    state
+        .admin
+        .upsert_role_assignment(crate::core::authz::RoleAssignmentUpsert {
+            principal_role: PrincipalRole::Aparatchi,
+            principal_ref: "opening-wip-source-worker".to_string(),
+            role_id: "aparatchi".to_string(),
+            assigned_apparatus: vec![LAMINATION_ID.to_string()],
+            assigned_item_groups: Vec::new(),
+        })
+        .await
+        .expect("lamination worker assignment");
+    let admin_token = session(&state, PrincipalRole::Admin).await;
+    let worker_token = session_for(
+        &state,
+        PrincipalRole::Aparatchi,
+        "opening-wip-source-worker",
+    )
+    .await;
+    let router = build_router(state);
+    let order_id = "zakaz-opening-wip-print-source";
+
+    let saved = router
+        .clone()
+        .oneshot(request_with_body(
+            "PUT",
+            "/v1/mobile/admin/production-maps",
+            &admin_token,
+            &two_apparatus_order_map_json(
+                order_id,
+                "Opening WIP print to lamination",
+                "OWIP-SOURCE",
+                "apparatus:default:bosma_7",
+                LAMINATION_ID,
+            ),
+        ))
+        .await
+        .expect("save print to lamination map");
+    assert_eq!(saved.status(), StatusCode::OK);
+
+    let sequence = router
+        .clone()
+        .oneshot(request_with_body(
+            "PUT",
+            "/v1/mobile/admin/production-maps/sequence",
+            &admin_token,
+            &format!(
+                r#"{{
+                    "apparatus":"{LAMINATION_ID}",
+                    "order_ids":["{order_id}"]
+                }}"#
+            ),
+        ))
+        .await
+        .expect("set lamination sequence");
+    assert_eq!(sequence.status(), StatusCode::OK);
+
+    let created = router
+        .clone()
+        .oneshot(request_with_body(
+            "POST",
+            "/v1/mobile/admin/production-maps/opening-wip",
+            &admin_token,
+            &format!(
+                r#"{{
+                    "idempotency_key":"opening-wip-print-source-request",
+                    "order_id":"{order_id}",
+                    "source_apparatus":"apparatus:default:bosma_7",
+                    "source_stage_node_id":"first",
+                    "batches":[{{
+                        "quantity_basis":"measured",
+                        "finished_goods_meter":100.0,
+                        "finished_goods_kg":12.0,
+                        "bobina_kg":1.0
+                    }}]
+                }}"#
+            ),
+        ))
+        .await
+        .expect("create Opening WIP from print source");
+    let created_status = created.status();
+    let created_body = json_body(created).await;
+    assert_eq!(created_status, StatusCode::OK, "{created_body:?}");
+    let intake = &created_body["record"]["intake"];
+    assert_eq!(intake["entry_apparatus"], "apparatus:default:bosma_7");
+    assert_eq!(intake["source_apparatus"], "apparatus:default:bosma_7");
+    assert_eq!(intake["source_operation"], "print");
+    assert_eq!(intake["current_location"], "");
+    assert_eq!(intake["resume_apparatus"], "");
+    assert_eq!(intake["resume_stage_node_id"], "first");
+    let batch_id = created_body["record"]["batches"][0]["batch_id"]
+        .as_str()
+        .expect("Opening WIP batch ID");
+    let qr_payload = created_body["record"]["batches"][0]["qr_payload"]
+        .as_str()
+        .expect("Opening WIP QR");
+
+    let snapshot = router
+        .clone()
+        .oneshot(request(
+            "GET",
+            "/v1/mobile/admin/production-maps/sequence",
+            &worker_token,
+        ))
+        .await
+        .expect("lamination queue snapshot");
+    let snapshot_status = snapshot.status();
+    let snapshot_body = json_body(snapshot).await;
+    assert_eq!(snapshot_status, StatusCode::OK, "{snapshot_body:?}");
+    let control = &snapshot_body["queue_action_controls"][LAMINATION_ID][order_id];
+    assert_eq!(control["interaction"]["opening_wip_mode"], "scan_required");
+    assert_eq!(control["interaction"]["previous_wip_mode"], "not_required");
+    assert!(
+        control["allowed_actions"]
+            .as_array()
+            .expect("allowed actions")
+            .iter()
+            .any(|action| action == "start")
+    );
+
+    let lookup = router
+        .clone()
+        .oneshot(request_with_body(
+            "POST",
+            "/v1/mobile/admin/production-maps/opening-wip/lookup",
+            &worker_token,
+            &format!(
+                r#"{{
+                    "apparatus":"{LAMINATION_ID}",
+                    "order_id":"{order_id}",
+                    "batch_id":"{batch_id}",
+                    "qr_payload":"{qr_payload}"
+                }}"#
+            ),
+        ))
+        .await
+        .expect("lookup print-source QR at lamination");
+    let lookup_status = lookup.status();
+    let lookup_body = json_body(lookup).await;
+    assert_eq!(lookup_status, StatusCode::OK, "{lookup_body:?}");
+    assert_eq!(lookup_body["batch"]["batch_id"], batch_id);
+    assert_eq!(lookup_body["batch"]["qr_payload"], qr_payload);
+
+    let start_without_qr = router
+        .clone()
+        .oneshot(request_with_body(
+            "POST",
+            "/v1/mobile/admin/production-maps/queue-action",
+            &worker_token,
+            &format!(
+                r#"{{
+                    "apparatus":"{LAMINATION_ID}",
+                    "order_id":"{order_id}",
+                    "action":"start"
+                }}"#
+            ),
+        ))
+        .await
+        .expect("reject unscanned Opening WIP start");
+    let start_without_qr_status = start_without_qr.status();
+    let start_without_qr_body = json_body(start_without_qr).await;
+    assert_eq!(
+        start_without_qr_status,
+        StatusCode::BAD_REQUEST,
+        "{start_without_qr_body:?}"
+    );
+    assert_eq!(start_without_qr_body["error"], "progress_qr_required");
+
+    let started = router
+        .clone()
+        .oneshot(request_with_body(
+            "POST",
+            "/v1/mobile/admin/production-maps/queue-action",
+            &worker_token,
+            &format!(
+                r#"{{
+                    "apparatus":"{LAMINATION_ID}",
+                    "order_id":"{order_id}",
+                    "action":"start",
+                    "qr_payload":"{qr_payload}"
+                }}"#
+            ),
+        ))
+        .await
+        .expect("start lamination from Opening WIP QR");
+    let started_status = started.status();
+    let started_body = json_body(started).await;
+    assert_eq!(started_status, StatusCode::OK, "{started_body:?}");
+    assert_eq!(started_body["states"][order_id], "in_progress");
+
+    let in_use = router
+        .oneshot(request(
+            "GET",
+            &format!(
+                "/v1/mobile/admin/production-maps/opening-wip?order_id={order_id}&status=in_use"
+            ),
+            &admin_token,
+        ))
+        .await
+        .expect("Opening WIP in-use state");
+    let in_use_status = in_use.status();
+    let in_use_body = json_body(in_use).await;
+    assert_eq!(in_use_status, StatusCode::OK, "{in_use_body:?}");
+    assert_eq!(in_use_body["records"][0]["batches"][0]["wip_status"], "in_use");
+    assert_eq!(
+        in_use_body["records"][0]["batches"][0]["used_by_apparatus"],
+        LAMINATION_ID
+    );
+}
