@@ -52,9 +52,9 @@ fn lamination_complete_input() -> QueueProgressInput {
     QueueProgressInput {
         produced_qty: Some(10.0),
         uom: "kg".to_string(),
-        lamination_print_leftover_rolls: Some(0.0),
-        lamination_film_leftover_rolls: Some(0.0),
-        total_waste: Some(0.0),
+        lamination_print_leftover_rolls: Some(0.5),
+        lamination_film_leftover_rolls: Some(0.5),
+        total_waste: Some(0.5),
         finished_goods_kg: Some(10.0),
         finished_goods_meter: Some(100.0),
         ..QueueProgressInput::default()
