@@ -66,6 +66,7 @@ pub struct QueueActionProgressWrite {
     pub progress_batch: Option<OrderProgressBatch>,
     pub progress_batches: Vec<OrderProgressBatch>,
     pub progress_batch_updates: Vec<OrderProgressBatch>,
+    pub opening_wip_batch_updates: Vec<OpeningWipBatch>,
     pub raw_material_stock_transitions: Vec<RawMaterialStockTransition>,
     pub qolip_checkouts: Vec<QolipCheckout>,
     pub returned_paint_report: Option<ReturnedPaintRequest>,
@@ -106,6 +107,19 @@ pub(crate) fn validate_queue_progress_write(write: &QueueActionProgressWrite) ->
         .chain(write.progress_batch_updates.iter())
     {
         require_progress_batch_apparatus(batch)?;
+    }
+    for batch in &write.opening_wip_batch_updates {
+        if batch.order_id.trim().is_empty() || batch.batch_id.trim().is_empty() {
+            return Err(ProductionMapError::StoreFailed);
+        }
+        for apparatus in [
+            batch.used_by_apparatus.as_str(),
+            batch.processed_by_apparatus.as_str(),
+        ] {
+            if !apparatus.trim().is_empty() {
+                require_live_apparatus(apparatus)?;
+            }
+        }
     }
     if let Some(report) = &write.returned_paint_report {
         require_live_apparatus(&report.apparatus)?;

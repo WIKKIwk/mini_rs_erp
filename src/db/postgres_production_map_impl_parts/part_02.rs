@@ -154,6 +154,12 @@ impl PostgresProductionMapStore {
                     .chain(write.progress_batch_updates.iter())
                     .map(|batch| batch.order_id.as_str()),
             );
+            locked_orders.extend(
+                write
+                    .opening_wip_batch_updates
+                    .iter()
+                    .map(|batch| batch.order_id.as_str()),
+            );
             if let Some(record) = &write.order_control_update {
                 locked_orders.push(record.order_id.as_str());
             }
@@ -183,6 +189,16 @@ impl PostgresProductionMapStore {
                     if !value.trim().is_empty()
                         && !value.trim().to_ascii_lowercase().starts_with("warehouse:")
                     {
+                        locked_apparatuses.push(value);
+                    }
+                }
+            }
+            for batch in &write.opening_wip_batch_updates {
+                for value in [
+                    batch.used_by_apparatus.as_str(),
+                    batch.processed_by_apparatus.as_str(),
+                ] {
+                    if !value.trim().is_empty() {
                         locked_apparatuses.push(value);
                     }
                 }
@@ -276,6 +292,9 @@ impl PostgresProductionMapStore {
         }
         for batch in write.progress_batch_updates {
             put_order_progress_batch_tx(&mut tx, &batch).await?;
+        }
+        for batch in write.opening_wip_batch_updates {
+            update_opening_wip_batch_tx(&mut tx, &batch).await?;
         }
         if let Some(record) = &write.order_control_update {
             save_order_control_state_tx(&mut tx, record).await?;

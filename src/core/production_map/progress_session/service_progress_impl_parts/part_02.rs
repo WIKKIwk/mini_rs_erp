@@ -31,16 +31,59 @@ impl ProductionMapService {
             .await?
             .ok_or(ProductionMapError::QueueActionNotAllowed)?;
         let session_input_progress = session_progress_links(&session);
-        let session_input_batch = if session_input_progress.batch_id.trim().is_empty() {
+        let session_uses_opening_wip = session_input_progress.source_kind == "opening_wip";
+        let opening_input_batch = if session_uses_opening_wip {
+            let record = self
+                .store
+                .opening_wip_batch(
+                    &session_input_progress.batch_id,
+                    &session_input_progress.qr_payload,
+                )
+                .await?
+                .ok_or(ProductionMapError::ProgressBatchNotFound)?;
+            let explicit_batch_matches = progress.progress_batch_id.trim().is_empty()
+                || record.batch.batch_id.trim() == progress.progress_batch_id.trim();
+            let explicit_qr_matches = progress.qr_payload.trim().is_empty()
+                || record
+                    .batch
+                    .qr_payload
+                    .trim()
+                    .eq_ignore_ascii_case(progress.qr_payload.trim());
+            if record.intake.status != OpeningWipIntakeStatus::Confirmed
+                || record.intake.order_id.trim() != order_id.trim()
+                || record.batch.order_id.trim() != order_id.trim()
+                || !super::types::apparatus_ids_match(
+                    &record.intake.entry_apparatus,
+                    apparatus,
+                )
+                || record.batch.wip_status != OpeningWipBatchStatus::InUse
+                || !super::types::apparatus_ids_match(
+                    &record.batch.used_by_apparatus,
+                    apparatus,
+                )
+                || record.batch.used_by_session_id.trim() != session.session_id.trim()
+                || !explicit_batch_matches
+                || !explicit_qr_matches
+            {
+                return Err(ProductionMapError::ProgressBatchNotAccepted);
+            }
+            Some(record.batch)
+        } else {
+            None
+        };
+        let session_input_batch = if session_uses_opening_wip
+            || session_input_progress.batch_id.trim().is_empty()
+        {
             None
         } else {
             self.store
                 .progress_batch(&session_input_progress.batch_id)
                 .await?
         };
-        let explicit_input_batch = if !progress.progress_batch_id.trim().is_empty()
+        let explicit_input_batch = if !session_uses_opening_wip
+            && (!progress.progress_batch_id.trim().is_empty()
             || !progress.qr_payload.trim().is_empty()
-        {
+            ) {
             self.previous_stage_active_progress_batch(
                 order_id,
                 order_map,
@@ -105,7 +148,7 @@ impl ProductionMapService {
         let input_progress = input_batch
             .as_ref()
             .map(progress_links_from_batch)
-            .unwrap_or(session_input_progress);
+            .unwrap_or_else(|| session_input_progress.clone());
         let output_identities = if apparatus::is_rezka_apparatus(canonical) {
             rezka_output_identities(apparatus, order_id, action, now, order_map)?
         } else {
@@ -244,6 +287,19 @@ impl ProductionMapService {
                 progress_batch_updates.push(processed_input);
             }
         }
+        let opening_wip_batch_updates = opening_input_batch
+            .and_then(|batch| {
+                (!matches!(
+                    action,
+                    queue_state::ApparatusQueueAction::Pause
+                        | queue_state::ApparatusQueueAction::DetachRoll
+                ))
+                .then(|| {
+                    opening_wip_batch_processed(batch, apparatus, &session.session_id, now)
+                })
+            })
+            .into_iter()
+            .collect();
         let mut event = if let Some(index) = first_healthy_index {
             let output_identity = output_identities
                 .get(index)
@@ -311,6 +367,7 @@ impl ProductionMapService {
             progress_batch,
             progress_batches: batches,
             progress_batch_updates,
+            opening_wip_batch_updates,
         })
     }
 }

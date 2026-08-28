@@ -71,6 +71,58 @@ impl ProductionMapService {
         Ok(Some(batch))
     }
 
+    pub(in crate::core::production_map) async fn opening_wip_start_batch(
+        &self,
+        order_id: &str,
+        order_map: &ProductionMapDefinition,
+        apparatus: &str,
+        progress: &QueueProgressInput,
+    ) -> Result<Option<OpeningWipBatchRecord>, ProductionMapError> {
+        if chain::previous_work_stage_station(order_map, apparatus).is_some() {
+            return Ok(None);
+        }
+        let records = self
+            .store
+            .opening_wip_records(OpeningWipQuery {
+                order_id: order_id.trim().to_string(),
+                wip_status: None,
+                limit: 10_000,
+            })
+            .await?;
+        let opening_wip_exists = records.iter().any(|record| {
+            record.intake.status == OpeningWipIntakeStatus::Confirmed
+                && super::types::apparatus_ids_match(&record.intake.entry_apparatus, apparatus)
+        });
+        if !opening_wip_exists {
+            return Ok(None);
+        }
+        if progress.qr_payload.trim().is_empty() {
+            return Err(ProductionMapError::ProgressQrRequired);
+        }
+        let record = self
+            .store
+            .opening_wip_batch(
+                progress.progress_batch_id.trim(),
+                progress.qr_payload.trim(),
+            )
+            .await?
+            .ok_or(ProductionMapError::ProgressBatchNotFound)?;
+        if record.intake.status != OpeningWipIntakeStatus::Confirmed
+            || record.intake.order_id.trim() != order_id.trim()
+            || record.batch.order_id.trim() != order_id.trim()
+            || !super::types::apparatus_ids_match(&record.intake.entry_apparatus, apparatus)
+            || record.batch.wip_status != OpeningWipBatchStatus::Waiting
+            || !record
+                .batch
+                .qr_payload
+                .trim()
+                .eq_ignore_ascii_case(progress.qr_payload.trim())
+        {
+            return Err(ProductionMapError::ProgressBatchNotAccepted);
+        }
+        Ok(Some(record))
+    }
+
     pub(in crate::core::production_map) async fn previous_stage_active_progress_batch(
         &self,
         order_id: &str,
@@ -278,6 +330,21 @@ impl ProductionMapService {
         let input_progress_batch = self
             .previous_stage_start_progress_batch(order_id, order_map, apparatus, &progress)
             .await?;
+        let opening_wip_batch = if input_progress_batch.is_none() {
+            self.opening_wip_start_batch(order_id, order_map, apparatus, &progress)
+                .await?
+        } else {
+            None
+        };
+        let input_progress = input_progress_batch
+            .as_ref()
+            .map(progress_links_from_batch)
+            .or_else(|| {
+                opening_wip_batch
+                    .as_ref()
+                    .map(progress_links_from_opening_wip)
+            })
+            .unwrap_or_default();
         let session = OrderRunSession {
             session_id: progress_session_id(apparatus, order_id, actor, now),
             apparatus: apparatus.to_string(),
@@ -288,7 +355,11 @@ impl ProductionMapService {
             worker_display_name: actor.display_name.trim().to_string(),
             started_at_unix: now,
             updated_at_unix: now,
-            payload_json: start_session_payload(actor, input_progress_batch.as_ref()),
+            payload_json: start_session_payload(
+                actor,
+                &input_progress,
+                input_progress_batch.as_ref(),
+            ),
         };
         let context = ProgressRecordContext {
             session: &session,
@@ -302,7 +373,7 @@ impl ProductionMapService {
             context,
             String::new(),
             String::new(),
-            start_event_payload(input_progress_batch.as_ref()),
+            start_event_payload(&input_progress, input_progress_batch.as_ref()),
         );
         let mut progress_batch_updates = Vec::new();
         if let Some(input_batch) = input_progress_batch {
@@ -325,12 +396,23 @@ impl ProductionMapService {
                 now,
             ));
         }
+        let opening_wip_batch_updates = opening_wip_batch
+            .map(|record| {
+                vec![opening_wip_batch_in_use(
+                    record.batch,
+                    apparatus,
+                    &session.session_id,
+                    now,
+                )]
+            })
+            .unwrap_or_default();
         Ok(QueueProgressRecords {
             session: Some(session),
             progress_event: Some(event),
             progress_batch: None,
             progress_batches: Vec::new(),
             progress_batch_updates,
+            opening_wip_batch_updates,
         })
     }
 }

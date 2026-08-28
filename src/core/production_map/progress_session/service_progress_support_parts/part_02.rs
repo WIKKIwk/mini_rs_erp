@@ -53,6 +53,7 @@ pub(super) fn progress_session_payload(
         "input_progress_batch_id": input_progress.batch_id,
         "input_progress_qr_payload": input_progress.qr_payload,
         "input_progress_apparatus": input_progress.apparatus,
+        "input_wip_source_kind": input_progress.source_kind,
     })
 }
 
@@ -166,6 +167,7 @@ pub(super) fn resumed_handoff_session_payload(
     payload["input_progress_batch_id"] = serde_json::json!(input_progress.batch_id);
     payload["input_progress_qr_payload"] = serde_json::json!(input_progress.qr_payload);
     payload["input_progress_apparatus"] = serde_json::json!(input_progress.apparatus);
+    payload["input_wip_source_kind"] = serde_json::json!(input_progress.source_kind);
     payload["worker_handoff"] = serde_json::json!(false);
     payload["roll_removed_from_apparatus"] = serde_json::json!(false);
     preserve_qolip_lineage(current, payload)
@@ -374,6 +376,47 @@ pub(super) fn wip_batch_processed(
     batch.processed_by_apparatus = apparatus.trim().to_string();
     batch.payload_json["wip_processed_at_unix"] = serde_json::json!(now);
     sync_wip_payload_fields(&mut batch);
+    batch
+}
+
+pub(super) fn opening_wip_batch_in_use(
+    mut batch: OpeningWipBatch,
+    apparatus: &str,
+    session_id: &str,
+    now: i64,
+) -> OpeningWipBatch {
+    batch.wip_status = OpeningWipBatchStatus::InUse;
+    batch.used_by_session_id = session_id.trim().to_string();
+    batch.used_by_apparatus = apparatus.trim().to_string();
+    batch.processed_by_session_id.clear();
+    batch.processed_by_apparatus.clear();
+    batch.updated_at_unix = now;
+    batch
+}
+
+pub(super) fn opening_wip_batch_processed(
+    mut batch: OpeningWipBatch,
+    apparatus: &str,
+    session_id: &str,
+    now: i64,
+) -> OpeningWipBatch {
+    batch.wip_status = OpeningWipBatchStatus::Processed;
+    batch.processed_by_session_id = session_id.trim().to_string();
+    batch.processed_by_apparatus = apparatus.trim().to_string();
+    batch.updated_at_unix = now;
+    batch
+}
+
+pub(super) fn opening_wip_batch_waiting(
+    mut batch: OpeningWipBatch,
+    now: i64,
+) -> OpeningWipBatch {
+    batch.wip_status = OpeningWipBatchStatus::Waiting;
+    batch.used_by_session_id.clear();
+    batch.used_by_apparatus.clear();
+    batch.processed_by_session_id.clear();
+    batch.processed_by_apparatus.clear();
+    batch.updated_at_unix = now;
     batch
 }
 

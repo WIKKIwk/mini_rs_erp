@@ -101,6 +101,8 @@ pub struct ApparatusQueueWorkerInteraction {
     #[serde(default)]
     pub material_intake_allowed: bool,
     pub previous_wip_mode: ApparatusQueuePreviousWipMode,
+    #[serde(default)]
+    pub opening_wip_mode: ApparatusQueuePreviousWipMode,
     pub qolip_mode: ApparatusQueueQolipMode,
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub blocking_reason_code: String,

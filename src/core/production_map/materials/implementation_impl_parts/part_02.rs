@@ -97,8 +97,17 @@ impl ProductionMapService {
         let Some(order_map) = self.raw_map(order_id).await? else {
             return Ok(false);
         };
-        Ok(self
+        if self
             .previous_stage_start_progress_batch(order_id, &order_map, apparatus.as_str(), progress)
+            .await
+            .ok()
+            .flatten()
+            .is_some()
+        {
+            return Ok(true);
+        }
+        Ok(self
+            .opening_wip_start_batch(order_id, &order_map, apparatus.as_str(), progress)
             .await
             .ok()
             .flatten()

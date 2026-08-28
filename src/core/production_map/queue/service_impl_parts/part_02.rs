@@ -37,6 +37,21 @@ impl ProductionMapService {
             .active_order_run_sessions_for_orders(&order_ids)
             .await?;
         let progress_batches_by_order = self.store.progress_batches_for_orders(&order_ids).await?;
+        let mut opening_wip_by_order = HashMap::<String, Vec<OpeningWipRecord>>::new();
+        for record in self
+            .store
+            .opening_wip_records(OpeningWipQuery {
+                order_id: String::new(),
+                wip_status: None,
+                limit: 100_000,
+            })
+            .await?
+        {
+            opening_wip_by_order
+                .entry(record.intake.order_id.trim().to_string())
+                .or_default()
+                .push(record);
+        }
         let visible_by_apparatus = visible_order_ids_by_apparatus(maps);
         let frozen_order_ids = order_controls
             .iter()
@@ -137,6 +152,38 @@ impl ProductionMapService {
                         }
                     })
                     .unwrap_or(ApparatusQueuePreviousWipMode::NotRequired);
+                let opening_wip_mode = if previous_stage.is_none() {
+                    let mut has_opening_wip = false;
+                    let mut has_waiting_opening_wip = false;
+                    for record in opening_wip_by_order
+                        .get(order_id.trim())
+                        .into_iter()
+                        .flatten()
+                    {
+                        if record.intake.status != OpeningWipIntakeStatus::Confirmed
+                            || !super::super::types::apparatus_ids_match(
+                                &record.intake.entry_apparatus,
+                                &storage_key,
+                            )
+                        {
+                            continue;
+                        }
+                        has_opening_wip = true;
+                        has_waiting_opening_wip |= record
+                            .batches
+                            .iter()
+                            .any(|batch| batch.wip_status == OpeningWipBatchStatus::Waiting);
+                    }
+                    if has_waiting_opening_wip {
+                        ApparatusQueuePreviousWipMode::ScanRequired
+                    } else if has_opening_wip {
+                        ApparatusQueuePreviousWipMode::Waiting
+                    } else {
+                        ApparatusQueuePreviousWipMode::NotRequired
+                    }
+                } else {
+                    ApparatusQueuePreviousWipMode::NotRequired
+                };
                 let active_order_is_this = active_order_id
                     .is_none_or(|active_order_id| active_order_id == order_id.trim());
                 let active_session = active_sessions_by_order
@@ -166,6 +213,7 @@ impl ProductionMapService {
                         queue_state::ApparatusQueueOrderState::InProgress
                             | queue_state::ApparatusQueueOrderState::Paused
                     ),
+                    opening_wip_mode,
                     ..ApparatusQueueWorkerInteraction::default()
                 };
                 let pending_actionable = queue_actionable
@@ -208,8 +256,10 @@ impl ProductionMapService {
                                 || !material_requirements.assigned_barcodes.is_empty();
                             let start_materials_mode =
                                 if apparatus::is_laminatsiya_apparatus(&canonical)
-                                    && previous_wip_mode
+                                    && (previous_wip_mode
                                         == ApparatusQueuePreviousWipMode::ScanRequired
+                                        || opening_wip_mode
+                                            == ApparatusQueuePreviousWipMode::ScanRequired)
                                 {
                                     ApparatusQueueStartMaterialsMode::Hidden
                                 } else if material_scan_required {
@@ -218,10 +268,17 @@ impl ProductionMapService {
                                     ApparatusQueueStartMaterialsMode::Hidden
                                 };
 
-                            if previous_wip_mode == ApparatusQueuePreviousWipMode::Waiting {
+                            if opening_wip_mode == ApparatusQueuePreviousWipMode::Waiting {
+                                interaction.mode =
+                                    ApparatusQueueInteractionMode::WaitingPreviousStage;
+                                interaction.opening_wip_mode = opening_wip_mode;
+                                interaction.blocking_reason_code =
+                                    "waiting_opening_wip".to_string();
+                            } else if previous_wip_mode == ApparatusQueuePreviousWipMode::Waiting {
                                 interaction.mode =
                                     ApparatusQueueInteractionMode::WaitingPreviousStage;
                                 interaction.previous_wip_mode = previous_wip_mode;
+                                interaction.opening_wip_mode = opening_wip_mode;
                                 interaction.blocking_reason_code =
                                     "waiting_previous_stage".to_string();
                             } else if !pending_actionable {

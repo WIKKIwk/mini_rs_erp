@@ -40,6 +40,27 @@ fn admin_actor() -> QueueActionActor {
     }
 }
 
+fn worker_actor() -> QueueActionActor {
+    QueueActionActor {
+        role: "aparatchi".to_string(),
+        ref_: "worker:opening-wip".to_string(),
+        display_name: "Opening WIP worker".to_string(),
+    }
+}
+
+fn lamination_complete_input() -> QueueProgressInput {
+    QueueProgressInput {
+        produced_qty: Some(10.0),
+        uom: "kg".to_string(),
+        lamination_print_leftover_rolls: Some(0.0),
+        lamination_film_leftover_rolls: Some(0.0),
+        total_waste: Some(0.0),
+        finished_goods_kg: Some(10.0),
+        finished_goods_meter: Some(100.0),
+        ..QueueProgressInput::default()
+    }
+}
+
 #[tokio::test]
 async fn opening_wip_creates_unique_batches_and_replays_idempotently() {
     let store = Arc::new(MemoryProductionMapStore::new());
@@ -137,4 +158,109 @@ async fn opening_wip_idempotency_conflict_fails_closed() {
         service.create_opening_wip(conflicting, admin_actor()).await,
         Err(ProductionMapError::OpeningWipIdempotencyConflict)
     );
+}
+
+#[tokio::test]
+async fn opening_wip_batches_drive_entry_stage_until_every_roll_is_processed() {
+    let store = Arc::new(MemoryProductionMapStore::new());
+    let service = ProductionMapService::new_for_test(store.clone());
+    let order_id = "zakaz-opening-wip-lifecycle";
+    service
+        .upsert_map(apparatus_stage_map(order_id, LAMINATION_ID))
+        .await
+        .expect("opening order map");
+    let opening = service
+        .create_opening_wip(
+            opening_input(order_id, "opening-wip-lifecycle-request"),
+            admin_actor(),
+        )
+        .await
+        .expect("opening WIP created");
+    let assigned = [LAMINATION_ID.to_string()];
+
+    let controls = service
+        .queue_action_controls()
+        .await
+        .expect("opening WIP controls");
+    let control = controls
+        .get(LAMINATION_ID)
+        .and_then(|orders| orders.get(order_id))
+        .expect("lamination control");
+    assert_eq!(
+        control.interaction.opening_wip_mode,
+        ApparatusQueuePreviousWipMode::ScanRequired
+    );
+    assert!(
+        control
+            .allowed_actions
+            .contains(&queue_state::ApparatusQueueAction::Start)
+    );
+
+    assert_eq!(
+        service
+            .apply_apparatus_queue_action_with_progress(
+                LAMINATION_ID,
+                order_id,
+                queue_state::ApparatusQueueAction::Start,
+                &assigned,
+                worker_actor(),
+                QueueProgressInput::default(),
+            )
+            .await,
+        Err(ProductionMapError::ProgressQrRequired)
+    );
+
+    for (index, source) in opening.batches.iter().enumerate() {
+        service
+            .apply_apparatus_queue_action_with_progress(
+                LAMINATION_ID,
+                order_id,
+                queue_state::ApparatusQueueAction::Start,
+                &assigned,
+                worker_actor(),
+                QueueProgressInput {
+                    qr_payload: source.qr_payload.clone(),
+                    ..QueueProgressInput::default()
+                },
+            )
+            .await
+            .expect("entry stage starts opening WIP");
+        let in_use = service
+            .opening_wip_batch(&source.batch_id, "")
+            .await
+            .expect("in-use opening WIP");
+        assert_eq!(in_use.batch.wip_status, OpeningWipBatchStatus::InUse);
+        assert_eq!(in_use.batch.used_by_apparatus, LAMINATION_ID);
+
+        service
+            .apply_apparatus_queue_action_with_progress(
+                LAMINATION_ID,
+                order_id,
+                queue_state::ApparatusQueueAction::Complete,
+                &assigned,
+                worker_actor(),
+                lamination_complete_input(),
+            )
+            .await
+            .expect("entry stage completes opening WIP roll");
+        let processed = service
+            .opening_wip_batch(&source.batch_id, "")
+            .await
+            .expect("processed opening WIP");
+        assert_eq!(
+            processed.batch.wip_status,
+            OpeningWipBatchStatus::Processed
+        );
+
+        let states = service.apparatus_queue_states().await.expect("queue states");
+        let state = states
+            .get(LAMINATION_ID)
+            .and_then(|orders| orders.get(order_id))
+            .map(String::as_str);
+        if index + 1 < opening.batches.len() {
+            assert_eq!(state, Some("pending"));
+        } else {
+            assert_eq!(state, Some("completed"));
+        }
+    }
 }

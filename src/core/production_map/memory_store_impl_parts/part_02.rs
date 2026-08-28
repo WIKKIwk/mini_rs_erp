@@ -166,6 +166,37 @@ impl MemoryProductionMapStore {
         for batch in write.progress_batch_updates {
             self.put_order_progress_batch(batch).await?;
         }
+        if !write.opening_wip_batch_updates.is_empty() {
+            let mut records = self.opening_wip_records.write().await;
+            for update in write.opening_wip_batch_updates {
+                let record = records
+                    .get_mut(update.intake_id.trim())
+                    .ok_or(ProductionMapError::ProgressBatchNotFound)?;
+                let current = record
+                    .batches
+                    .iter_mut()
+                    .find(|batch| batch.batch_id.trim() == update.batch_id.trim())
+                    .ok_or(ProductionMapError::ProgressBatchNotFound)?;
+                let valid_transition = match update.wip_status {
+                    OpeningWipBatchStatus::InUse => {
+                        current.wip_status == OpeningWipBatchStatus::Waiting
+                    }
+                    OpeningWipBatchStatus::Processed => {
+                        current.wip_status == OpeningWipBatchStatus::InUse
+                            && current.used_by_session_id.trim()
+                                == update.used_by_session_id.trim()
+                    }
+                    OpeningWipBatchStatus::Waiting => {
+                        current.wip_status == OpeningWipBatchStatus::InUse
+                    }
+                    OpeningWipBatchStatus::Void => false,
+                };
+                if !valid_transition {
+                    return Err(ProductionMapError::ProgressBatchNotAccepted);
+                }
+                *current = update;
+            }
+        }
         if let Some(record) = write.order_control_update {
             self.put_order_control_state(record).await?;
         }

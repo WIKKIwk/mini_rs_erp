@@ -241,6 +241,52 @@ async fn insert_opening_wip_batch_tx(
     Ok(())
 }
 
+pub(super) async fn update_opening_wip_batch_tx(
+    tx: &mut Transaction<'_, Postgres>,
+    batch: &OpeningWipBatch,
+) -> Result<(), ProductionMapError> {
+    let expected_status = match batch.wip_status {
+        OpeningWipBatchStatus::InUse => OpeningWipBatchStatus::Waiting,
+        OpeningWipBatchStatus::Processed | OpeningWipBatchStatus::Waiting => {
+            OpeningWipBatchStatus::InUse
+        }
+        OpeningWipBatchStatus::Void => return Err(ProductionMapError::StoreFailed),
+    };
+    let updated = sqlx::query(
+        "UPDATE mini_opening_wip_batches
+         SET wip_status = $3,
+             used_by_session_id = $4,
+             used_by_apparatus = $5,
+             processed_by_session_id = $6,
+             processed_by_apparatus = $7,
+             updated_at = to_timestamp($8)
+         WHERE batch_id = $1
+           AND order_id = $2
+           AND wip_status = $9
+           AND (
+               $9 <> 'in_use'
+               OR used_by_session_id = $4
+               OR $3 = 'waiting'
+           )",
+    )
+    .bind(batch.batch_id.trim())
+    .bind(batch.order_id.trim())
+    .bind(batch.wip_status.as_str())
+    .bind(batch.used_by_session_id.trim())
+    .bind(batch.used_by_apparatus.trim())
+    .bind(batch.processed_by_session_id.trim())
+    .bind(batch.processed_by_apparatus.trim())
+    .bind(batch.updated_at_unix)
+    .bind(expected_status.as_str())
+    .execute(&mut **tx)
+    .await
+    .map_err(|_| ProductionMapError::StoreFailed)?;
+    if updated.rows_affected() != 1 {
+        return Err(ProductionMapError::ProgressBatchNotAccepted);
+    }
+    Ok(())
+}
+
 async fn load_opening_wip_record(
     pool: &PgPool,
     intake_row: OpeningWipIntakeRow,

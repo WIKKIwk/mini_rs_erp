@@ -262,6 +262,7 @@ impl ProductionMapService {
                     canonical.as_ref(),
                     &all_states,
                     &[],
+                    &[],
                     &input_batch_id,
                 )
                 .await?;
@@ -303,6 +304,7 @@ impl ProductionMapService {
                     canonical.as_ref(),
                     &all_states,
                     &progress.progress_batch_updates,
+                    &progress.opening_wip_batch_updates,
                     "",
                 )
                 .await?;
@@ -370,6 +372,7 @@ impl ProductionMapService {
             progress_batch: progress.progress_batch,
             progress_batches: progress.progress_batches,
             progress_batch_updates: progress.progress_batch_updates,
+            opening_wip_batch_updates: progress.opening_wip_batch_updates,
             material_scan_skipped: false,
             claimed_alternative_map,
             order_control_update,

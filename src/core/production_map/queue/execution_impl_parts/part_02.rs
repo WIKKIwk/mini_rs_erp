@@ -9,8 +9,43 @@ impl ProductionMapService {
         canonical: &crate::core::apparatus_standard::RuntimeApparatusConfiguration,
         all_states: &ApparatusQueueStateMap,
         progress_batch_updates: &[OrderProgressBatch],
+        opening_wip_batch_updates: &[OpeningWipBatch],
         ignored_batch_id: &str,
     ) -> Result<bool, ProductionMapError> {
+        if chain::previous_work_stage_station(order_map, apparatus).is_none() {
+            let records = self
+                .store
+                .opening_wip_records(OpeningWipQuery {
+                    order_id: order_id.trim().to_string(),
+                    wip_status: None,
+                    limit: 10_000,
+                })
+                .await?;
+            let mut batches = records
+                .into_iter()
+                .filter(|record| {
+                    record.intake.status == OpeningWipIntakeStatus::Confirmed
+                        && super::super::types::apparatus_ids_match(
+                            &record.intake.entry_apparatus,
+                            apparatus,
+                        )
+                })
+                .flat_map(|record| record.batches)
+                .map(|batch| (batch.batch_id.trim().to_string(), batch))
+                .collect::<BTreeMap<_, _>>();
+            for batch in opening_wip_batch_updates {
+                batches.insert(batch.batch_id.trim().to_string(), batch.clone());
+            }
+            if !batches.is_empty() {
+                return Ok(batches.values().any(|batch| {
+                    batch.batch_id.trim() != ignored_batch_id.trim()
+                        && matches!(
+                            batch.wip_status,
+                            OpeningWipBatchStatus::Waiting | OpeningWipBatchStatus::InUse
+                        )
+                }));
+            }
+        }
         let Some(previous_apparatus) = chain::previous_work_stage_station(order_map, apparatus)
         else {
             return Ok(false);
@@ -59,11 +94,18 @@ impl ProductionMapService {
             return Ok(progress.progress_batch_id.trim().to_string());
         }
         if !progress.qr_payload.trim().is_empty() {
-            return Ok(self
+            if let Some(batch) = self
                 .store
                 .progress_batch_by_qr(progress.qr_payload.trim())
                 .await?
-                .map(|batch| batch.batch_id)
+            {
+                return Ok(batch.batch_id);
+            }
+            return Ok(self
+                .store
+                .opening_wip_batch("", progress.qr_payload.trim())
+                .await?
+                .map(|record| record.batch.batch_id)
                 .unwrap_or_default());
         }
         let Some(session) = self
@@ -117,6 +159,7 @@ impl ProductionMapService {
                 progress_batch: prepared.progress_batch.clone(),
                 progress_batches: prepared.progress_batches.clone(),
                 progress_batch_updates: prepared.progress_batch_updates.clone(),
+                opening_wip_batch_updates: prepared.opening_wip_batch_updates.clone(),
                 raw_material_stock_transitions,
                 qolip_checkouts,
                 returned_paint_report,

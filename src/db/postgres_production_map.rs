@@ -84,7 +84,7 @@ use self::order_query_helpers::{
 };
 use self::opening_wip_helpers::{
     create_opening_wip, load_opening_wip_batch, load_opening_wip_by_idempotency_key,
-    load_opening_wip_records,
+    load_opening_wip_records, update_opening_wip_batch_tx,
 };
 use self::paddon_helpers::{
     add_paddon_item, add_paddon_items, create_paddon, load_paddon_scan_snapshot,

@@ -1,14 +1,15 @@
 
 pub(super) fn start_session_payload(
     actor: &QueueActionActor,
+    input_progress: &SessionProgressLinks,
     input_progress_batch: Option<&OrderProgressBatch>,
 ) -> serde_json::Value {
-    let (batch_id, qr_payload, apparatus) = input_progress_batch_fields(input_progress_batch);
     let mut payload = serde_json::json!({
         "started_by": actor,
-        "input_progress_batch_id": batch_id,
-        "input_progress_qr_payload": qr_payload,
-        "input_progress_apparatus": apparatus,
+        "input_progress_batch_id": input_progress.batch_id,
+        "input_progress_qr_payload": input_progress.qr_payload,
+        "input_progress_apparatus": input_progress.apparatus,
+        "input_wip_source_kind": input_progress.source_kind,
     });
     if let Some(lineage) = input_progress_batch.and_then(qolip_lineage_from_batch) {
         lineage.write_to_payload(&mut payload);
@@ -17,33 +18,20 @@ pub(super) fn start_session_payload(
 }
 
 pub(super) fn start_event_payload(
+    input_progress: &SessionProgressLinks,
     input_progress_batch: Option<&OrderProgressBatch>,
 ) -> serde_json::Value {
-    let (batch_id, qr_payload, apparatus) = input_progress_batch_fields(input_progress_batch);
     let mut payload = serde_json::json!({
         "event": "start",
-        "input_progress_batch_id": batch_id,
-        "input_progress_qr_payload": qr_payload,
-        "input_progress_apparatus": apparatus,
+        "input_progress_batch_id": input_progress.batch_id,
+        "input_progress_qr_payload": input_progress.qr_payload,
+        "input_progress_apparatus": input_progress.apparatus,
+        "input_wip_source_kind": input_progress.source_kind,
     });
     if let Some(lineage) = input_progress_batch.and_then(qolip_lineage_from_batch) {
         lineage.write_to_payload(&mut payload);
     }
     payload
-}
-
-fn input_progress_batch_fields(
-    input_progress_batch: Option<&OrderProgressBatch>,
-) -> (&str, &str, &str) {
-    input_progress_batch
-        .map(|batch| {
-            (
-                batch.batch_id.as_str(),
-                batch.qr_payload.as_str(),
-                batch.apparatus.as_str(),
-            )
-        })
-        .unwrap_or_default()
 }
 
 #[derive(Clone, Copy)]
@@ -96,10 +84,12 @@ pub(super) fn zero_quantity_event(
     }
 }
 
+#[derive(Clone, Default)]
 pub(super) struct SessionProgressLinks {
     pub(super) batch_id: String,
     pub(super) qr_payload: String,
     pub(super) apparatus: String,
+    pub(super) source_kind: String,
 }
 
 pub(super) fn session_progress_links(session: &OrderRunSession) -> SessionProgressLinks {
@@ -107,6 +97,7 @@ pub(super) fn session_progress_links(session: &OrderRunSession) -> SessionProgre
         batch_id: json_string_field(&session.payload_json, "input_progress_batch_id"),
         qr_payload: json_string_field(&session.payload_json, "input_progress_qr_payload"),
         apparatus: json_string_field(&session.payload_json, "input_progress_apparatus"),
+        source_kind: json_string_field(&session.payload_json, "input_wip_source_kind"),
     }
 }
 
@@ -115,6 +106,22 @@ pub(super) fn progress_links_from_batch(batch: &OrderProgressBatch) -> SessionPr
         batch_id: batch.batch_id.clone(),
         qr_payload: batch.qr_payload.clone(),
         apparatus: batch.apparatus.clone(),
+        source_kind: "progress_batch".to_string(),
+    }
+}
+
+pub(super) fn progress_links_from_opening_wip(
+    record: &OpeningWipBatchRecord,
+) -> SessionProgressLinks {
+    SessionProgressLinks {
+        batch_id: record.batch.batch_id.clone(),
+        qr_payload: record.batch.qr_payload.clone(),
+        apparatus: if record.intake.source_apparatus.trim().is_empty() {
+            record.intake.source_operation.clone()
+        } else {
+            record.intake.source_apparatus.clone()
+        },
+        source_kind: "opening_wip".to_string(),
     }
 }
 

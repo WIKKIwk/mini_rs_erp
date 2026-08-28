@@ -83,6 +83,7 @@ pub(super) struct QueueProgressRecords {
     pub(super) progress_batch: Option<OrderProgressBatch>,
     pub(super) progress_batches: Vec<OrderProgressBatch>,
     pub(super) progress_batch_updates: Vec<OrderProgressBatch>,
+    pub(super) opening_wip_batch_updates: Vec<OpeningWipBatch>,
 }
 
 pub struct PreparedApparatusQueueAction {
@@ -95,6 +96,7 @@ pub struct PreparedApparatusQueueAction {
     pub(super) progress_batch: Option<OrderProgressBatch>,
     pub(super) progress_batches: Vec<OrderProgressBatch>,
     pub(super) progress_batch_updates: Vec<OrderProgressBatch>,
+    pub(super) opening_wip_batch_updates: Vec<OpeningWipBatch>,
     pub(super) material_scan_skipped: bool,
     pub(super) claimed_alternative_map: Option<ClaimedAlternativeMapUpdate>,
     pub(super) order_control_update: Option<OrderControlRecord>,
