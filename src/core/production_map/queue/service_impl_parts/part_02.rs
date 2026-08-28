@@ -97,7 +97,34 @@ impl ProductionMapService {
                 .or_else(|| all_states.get(&apparatus))
                 .cloned()
                 .unwrap_or_default();
-            let effective_states = parsed_queue_states(stored_states);
+            let mut effective_states = parsed_queue_states(stored_states);
+            for order_id in &sequence {
+                if effective_states.get(order_id.trim())
+                    != Some(&queue_state::ApparatusQueueOrderState::Completed)
+                {
+                    continue;
+                }
+                let Some(order_map) = maps_by_order_id.get(order_id.trim()).copied() else {
+                    continue;
+                };
+                let batches = progress_batches_by_order
+                    .get(order_id.trim())
+                    .map(Vec::as_slice)
+                    .unwrap_or_default();
+                if waiting_reentry_stage_node_id(
+                    order_map,
+                    batches,
+                    order_id,
+                    &storage_key,
+                )
+                .is_some()
+                {
+                    effective_states.insert(
+                        order_id.trim().to_string(),
+                        queue_state::ApparatusQueueOrderState::Pending,
+                    );
+                }
+            }
             let policy = queue_policy_for_apparatus(canonical.as_ref());
             let active_order_id = effective_states.iter().find_map(|(order_id, state)| {
                 (*state == queue_state::ApparatusQueueOrderState::InProgress)
@@ -111,6 +138,63 @@ impl ProductionMapService {
                 let Some(order_map) = maps_by_order_id.get(order_id.trim()).copied() else {
                     continue;
                 };
+                let batches = progress_batches_by_order
+                    .get(order_id.trim())
+                    .map(Vec::as_slice)
+                    .unwrap_or_default();
+                let active_session = active_sessions_by_order
+                    .get(order_id.trim())
+                    .and_then(|sessions| {
+                        sessions.iter().find(|session| {
+                            queue_state::apparatus_ids_match(&session.apparatus, &storage_key)
+                        })
+                    });
+                let active_stage_node_id = active_session
+                    .and_then(|session| session.payload_json.get("stage_node_id"))
+                    .and_then(serde_json::Value::as_str)
+                    .unwrap_or_default()
+                    .trim();
+                let waiting_reentry_stage_node_id = waiting_reentry_stage_node_id(
+                    order_map,
+                    batches,
+                    order_id.trim(),
+                    &storage_key,
+                );
+                let opening_wip_stage_node_id = opening_wip_by_order
+                    .get(order_id.trim())
+                    .into_iter()
+                    .flatten()
+                    .find_map(|record| {
+                        (record.intake.status == OpeningWipIntakeStatus::Confirmed
+                            && record
+                                .batches
+                                .iter()
+                                .any(|batch| batch.wip_status == OpeningWipBatchStatus::Waiting))
+                        .then(|| {
+                            Self::opening_wip_target_stage(
+                                order_map,
+                                &record.intake,
+                                &storage_key,
+                                "",
+                            )
+                            .map(|stage| stage.node_id.trim().to_string())
+                        })
+                        .flatten()
+                    });
+                let preferred_stage_node_id = if !active_stage_node_id.is_empty() {
+                    active_stage_node_id.to_string()
+                } else if let Some(stage_node_id) = waiting_reentry_stage_node_id {
+                    stage_node_id
+                } else {
+                    opening_wip_stage_node_id.unwrap_or_default()
+                };
+                let stage = chain::work_stage_for_station(
+                    order_map,
+                    &storage_key,
+                    &preferred_stage_node_id,
+                )
+                .ok_or(ProductionMapError::ProgressBatchNotAccepted)?;
+                let stage_node_id = stage.node_id.clone();
                 let state = effective_states
                     .get(order_id.trim())
                     .copied()
@@ -119,32 +203,26 @@ impl ProductionMapService {
                 let control = order_control
                     .map(|control| control.state)
                     .unwrap_or(OrderControlState::Active);
-                let previous_stage = chain::previous_work_stage_station(order_map, &apparatus);
-                let previous_stage_not_configured =
-                    apparatus::requires_previous_stage(&canonical)
-                        && chain::previous_stage_resolution_is_unavailable(
-                            order_map,
-                            &apparatus,
-                        );
-                let previous_stage_ready = chain::order_ready_for_station(
+                let previous_stage = chain::previous_work_stage_for_node(order_map, &stage_node_id)
+                    .and_then(|stage| stage.apparatus_id);
+                let previous_stage_not_configured = apparatus::requires_previous_stage(&canonical)
+                    && previous_stage.is_none()
+                    && chain::previous_stage_resolution_is_unavailable(order_map, &apparatus);
+                let previous_stage_ready = chain::order_ready_for_stage_node(
                     order_map,
                     order_id.trim(),
-                    &apparatus,
+                    &stage_node_id,
                     all_states,
-                    &known_keys,
                 );
                 let mut previous_wip_mode = previous_stage
                     .as_deref()
                     .map(|previous_stage| {
-                        let batches = progress_batches_by_order
-                            .get(order_id.trim())
-                            .map(Vec::as_slice)
-                            .unwrap_or_default();
                         if has_waiting_previous_stage_wip(
                             batches,
                             order_id.trim(),
                             previous_stage,
                             &storage_key,
+                            &stage_node_id,
                         ) {
                             ApparatusQueuePreviousWipMode::ScanRequired
                         } else {
@@ -162,7 +240,7 @@ impl ProductionMapService {
                                 order_map,
                                 &record.intake,
                                 &storage_key,
-                                "",
+                                &stage_node_id,
                             )
                             .is_some()
                             && record
@@ -180,13 +258,6 @@ impl ProductionMapService {
                 }
                 let active_order_is_this = active_order_id
                     .is_none_or(|active_order_id| active_order_id == order_id.trim());
-                let active_session = active_sessions_by_order
-                    .get(order_id.trim())
-                    .and_then(|sessions| {
-                        sessions.iter().find(|session| {
-                            queue_state::apparatus_ids_match(&session.apparatus, &storage_key)
-                        })
-                    });
                 let requeued_session = active_session
                     .is_some_and(order_run_session_was_requeued);
                 let queue_actionable = state.is_active()
@@ -202,6 +273,7 @@ impl ProductionMapService {
                         && active_order_is_this);
                 let mut allowed_actions = Vec::new();
                 let mut complete_requires_full_report = false;
+                let mut complete_requires_rezka_total_waste_only = false;
                 let mut interaction = ApparatusQueueWorkerInteraction {
                     assigned_materials_display_only: !matches!(
                         state,
@@ -342,16 +414,27 @@ impl ProductionMapService {
                                     all_states,
                                     batches,
                                     &current_input_batch_id,
+                                    &stage_node_id,
                                 );
                             if apparatus::is_rezka_apparatus(&canonical) {
                                 allowed_actions
                                     .push(queue_state::ApparatusQueueAction::RollComplete);
                             }
                             allowed_actions.push(queue_state::ApparatusQueueAction::Complete);
-                            complete_requires_full_report =
-                                !(apparatus::is_laminatsiya_apparatus(&canonical)
-                                    || apparatus::is_rezka_apparatus(&canonical))
-                                    || !has_unprocessed_previous_wips;
+                            if apparatus::is_rezka_apparatus(&canonical) {
+                                let is_final_stage = if stage_node_id.trim().is_empty() {
+                                    chain::is_final_work_stage_station(order_map, &storage_key)
+                                } else {
+                                    chain::is_final_work_stage_node(order_map, &stage_node_id)
+                                };
+                                complete_requires_full_report =
+                                    is_final_stage && !has_unprocessed_previous_wips;
+                                complete_requires_rezka_total_waste_only = !is_final_stage;
+                            } else {
+                                complete_requires_full_report =
+                                    !apparatus::is_laminatsiya_apparatus(&canonical)
+                                        || !has_unprocessed_previous_wips;
+                            }
                         }
                     }
                     queue_state::ApparatusQueueOrderState::Paused => {
@@ -376,6 +459,42 @@ impl ProductionMapService {
                     }
                 }
 
+                let input_contained_kadr_count = active_session
+                    .and_then(|session| session.payload_json.get("contained_kadr_count"))
+                    .and_then(serde_json::Value::as_u64)
+                    .and_then(|value| usize::try_from(value).ok())
+                    .filter(|value| *value > 0)
+                    .or_else(|| {
+                        batches.iter().find_map(|batch| {
+                            (progress_batch_next_stage_node_id(batch) == stage_node_id)
+                                .then(|| {
+                                    batch
+                                        .payload_json
+                                        .get("contained_kadr_count")
+                                        .and_then(serde_json::Value::as_u64)
+                                        .and_then(|value| usize::try_from(value).ok())
+                                        .filter(|value| *value > 0)
+                                })
+                                .flatten()
+                        })
+                    });
+                let rezka_output_kadr_counts = if apparatus::is_rezka_apparatus(&canonical) {
+                    service_progress_support::rezka_output_kadr_counts(
+                        order_map,
+                        &storage_key,
+                        &stage_node_id,
+                        input_contained_kadr_count,
+                    )?
+                    .into_iter()
+                    .map(|value| {
+                        i64::try_from(value)
+                            .map_err(|_| ProductionMapError::InvalidRezkaFrameGroups)
+                    })
+                    .collect::<Result<Vec<_>, _>>()?
+                } else {
+                    Vec::new()
+                };
+
                 apparatus_controls.insert(
                     order_id.trim().to_string(),
                     ApparatusQueueOrderActionControl {
@@ -383,8 +502,11 @@ impl ProductionMapService {
                         allowed_actions,
                         interaction,
                         previous_stage: previous_stage.unwrap_or_default(),
+                        stage_node_id,
                         previous_stage_ready,
+                        rezka_output_kadr_counts,
                         complete_requires_full_report,
+                        complete_requires_rezka_total_waste_only,
                         freeze_request: order_control
                             .and_then(|control| control.freeze_request.clone()),
                     },

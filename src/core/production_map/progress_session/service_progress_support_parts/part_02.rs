@@ -33,7 +33,7 @@ pub(super) fn progress_session_payload(
     description: &str,
     input_progress: &SessionProgressLinks,
 ) -> serde_json::Value {
-    serde_json::json!({
+    let mut payload = serde_json::json!({
         "last_action": queue_action_str(action),
         "last_qty": produced_qty,
         "last_uom": uom,
@@ -54,7 +54,12 @@ pub(super) fn progress_session_payload(
         "input_progress_qr_payload": input_progress.qr_payload,
         "input_progress_apparatus": input_progress.apparatus,
         "input_wip_source_kind": input_progress.source_kind,
-    })
+        "stage_node_id": input_progress.stage_node_id,
+    });
+    if let Some(contained_kadr_count) = input_progress.contained_kadr_count {
+        payload["contained_kadr_count"] = serde_json::json!(contained_kadr_count);
+    }
+    payload
 }
 
 pub(super) fn preserve_qolip_lineage(
@@ -474,11 +479,19 @@ fn wip_waiting_location(apparatus: &str) -> String {
     }
 }
 
-fn json_string_field(payload: &serde_json::Value, key: &str) -> String {
+pub(super) fn json_string_field(payload: &serde_json::Value, key: &str) -> String {
     payload
         .get(key)
         .and_then(|value| value.as_str())
         .unwrap_or_default()
         .trim()
         .to_string()
+}
+
+fn json_positive_usize_field(payload: &serde_json::Value, key: &str) -> Option<usize> {
+    payload
+        .get(key)
+        .and_then(serde_json::Value::as_u64)
+        .and_then(|value| usize::try_from(value).ok())
+        .filter(|value| *value > 0)
 }

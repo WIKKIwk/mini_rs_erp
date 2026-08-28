@@ -1,4 +1,4 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use super::super::chain;
 use super::super::queue_state;
@@ -33,12 +33,38 @@ pub(crate) fn derive_production_order_lifecycle(
     map: &ProductionMapDefinition,
     queue_states: &BTreeMap<String, BTreeMap<String, String>>,
 ) -> Option<ProductionOrderLifecycleStatus> {
-    let required_apparatus = required_apparatus_for_closed_order(map)?;
-    if !required_apparatus.is_empty()
-        && required_apparatus
-            .iter()
-            .all(|apparatus| order_completed_on_apparatus(queue_states, &map.id, apparatus))
-    {
+    derive_production_order_lifecycle_with_completed_stage_nodes(
+        map,
+        queue_states,
+        &BTreeSet::new(),
+    )
+}
+
+pub(crate) fn derive_production_order_lifecycle_with_completed_stage_nodes(
+    map: &ProductionMapDefinition,
+    queue_states: &BTreeMap<String, BTreeMap<String, String>>,
+    completed_stage_node_ids: &BTreeSet<String>,
+) -> Option<ProductionOrderLifecycleStatus> {
+    let physical_stages = chain::linear_work_stages(map)
+        .into_iter()
+        .filter(|stage| stage.apparatus_id.is_some())
+        .collect::<Vec<_>>();
+    let mut occurrence_counts = BTreeMap::<String, usize>::new();
+    for stage in &physical_stages {
+        *occurrence_counts
+            .entry(stage.apparatus_id.clone().unwrap_or_default())
+            .or_default() += 1;
+    }
+    let all_occurrences_completed = !physical_stages.is_empty()
+        && physical_stages.iter().all(|stage| {
+            let apparatus = stage.apparatus_id.as_deref().unwrap_or_default();
+            if occurrence_counts.get(apparatus).copied().unwrap_or_default() > 1 {
+                completed_stage_node_ids.contains(stage.node_id.trim())
+            } else {
+                order_completed_on_apparatus(queue_states, &map.id, apparatus)
+            }
+        });
+    if all_occurrences_completed {
         return Some(ProductionOrderLifecycleStatus::ProductionCompleted);
     }
 
@@ -109,11 +135,12 @@ pub(in crate::core::production_map) fn latest_required_complete_event<'a>(
 
 #[cfg(test)]
 mod tests {
-    use std::collections::BTreeMap;
+    use std::collections::{BTreeMap, BTreeSet};
 
     use super::{
-        derive_production_order_lifecycle, derive_production_order_operational_status,
-        required_apparatus_for_closed_order,
+        derive_production_order_lifecycle,
+        derive_production_order_lifecycle_with_completed_stage_nodes,
+        derive_production_order_operational_status, required_apparatus_for_closed_order,
     };
     use crate::core::production_map::{
         ProductionMapDefinition, ProductionOrderLifecycleStatus, ProductionOrderOperationalStatus,
@@ -274,6 +301,66 @@ mod tests {
         );
         assert_eq!(
             derive_production_order_lifecycle(&map, &fully_completed),
+            Some(ProductionOrderLifecycleStatus::ProductionCompleted)
+        );
+    }
+
+    #[test]
+    fn repeated_apparatus_requires_each_graph_occurrence_to_complete() {
+        let order_id = "zakaz-repeated-rezka-lifecycle";
+        let map: ProductionMapDefinition = serde_json::from_value(serde_json::json!({
+            "id": order_id,
+            "product_code": "REZKA-REENTRY",
+            "title": "Repeated Rezka",
+            "nodes": [
+                {"id": "start", "kind": "start", "title": "Start"},
+                {"id": "bosma", "kind": "apparatus", "title": "Bosma", "apparatus_id": "apparatus:catalog:press-001"},
+                {"id": "rezka_before_lamination", "kind": "apparatus", "title": "Rezka", "apparatus_id": "apparatus:default:asset-010"},
+                {"id": "lamination", "kind": "apparatus", "title": "Laminatsiya", "apparatus_id": "apparatus:catalog:lam-001"},
+                {"id": "rezka_final", "kind": "apparatus", "title": "Rezka", "apparatus_id": "apparatus:default:asset-010"},
+                {"id": "end", "kind": "end", "title": "End"}
+            ],
+            "edges": [
+                {"from": "start", "to": "bosma"},
+                {"from": "bosma", "to": "rezka_before_lamination"},
+                {"from": "rezka_before_lamination", "to": "lamination"},
+                {"from": "lamination", "to": "rezka_final"},
+                {"from": "rezka_final", "to": "end"}
+            ]
+        }))
+        .expect("repeated Rezka lifecycle map");
+        let queue_states = BTreeMap::from([
+            (
+                "apparatus:catalog:press-001".to_string(),
+                BTreeMap::from([(order_id.to_string(), "completed".to_string())]),
+            ),
+            (
+                "apparatus:default:asset-010".to_string(),
+                BTreeMap::from([(order_id.to_string(), "completed".to_string())]),
+            ),
+            (
+                "apparatus:catalog:lam-001".to_string(),
+                BTreeMap::from([(order_id.to_string(), "completed".to_string())]),
+            ),
+        ]);
+
+        assert_eq!(
+            derive_production_order_lifecycle_with_completed_stage_nodes(
+                &map,
+                &queue_states,
+                &BTreeSet::from(["rezka_before_lamination".to_string()]),
+            ),
+            Some(ProductionOrderLifecycleStatus::InProgress)
+        );
+        assert_eq!(
+            derive_production_order_lifecycle_with_completed_stage_nodes(
+                &map,
+                &queue_states,
+                &BTreeSet::from([
+                    "rezka_before_lamination".to_string(),
+                    "rezka_final".to_string(),
+                ]),
+            ),
             Some(ProductionOrderLifecycleStatus::ProductionCompleted)
         );
     }

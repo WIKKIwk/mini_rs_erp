@@ -26,6 +26,9 @@ fn training_queue_action_controls(
     sequence
         .iter()
         .map(|order_id| {
+            let saved_map = maps
+                .iter()
+                .find(|saved| saved.map.id.trim() == order_id.trim());
             let state = parsed_states
                 .get(order_id)
                 .copied()
@@ -35,11 +38,22 @@ fn training_queue_action_controls(
                 || (state == queue_state::ApparatusQueueOrderState::Pending
                     && active_order_is_this
                     && actionable_order_id.as_deref() == Some(order_id));
-            let previous_stage = maps
-                .iter()
-                .find(|saved| saved.map.id.trim() == order_id.trim())
+            let previous_stage = saved_map
                 .and_then(|saved| training_input_stage_for_map(&saved.map, apparatus))
                 .unwrap_or_default();
+            let stage_node_id = saved_map
+                .and_then(|saved| chain::work_stage_for_station(&saved.map, apparatus, ""))
+                .map(|stage| stage.node_id)
+                .unwrap_or_default();
+            let rezka_output_kadr_counts = saved_map
+                .filter(|saved| is_rezka_apparatus(&saved.map, apparatus))
+                .and_then(|saved| {
+                    training_rezka_output_kadr_counts(&saved.map, apparatus).ok()
+                })
+                .unwrap_or_default()
+                .into_iter()
+                .filter_map(|value| i64::try_from(value).ok())
+                .collect();
             let input_batches = input_progress_batches
                 .get(order_id.trim())
                 .map(Vec::as_slice)
@@ -91,9 +105,7 @@ fn training_queue_action_controls(
                             queue_state::ApparatusQueueAction::DetachRoll,
                             queue_state::ApparatusQueueAction::Complete,
                         ];
-                        if maps
-                            .iter()
-                            .find(|saved| saved.map.id.trim() == order_id)
+                        if saved_map
                             .is_some_and(|saved| is_rezka_apparatus(&saved.map, apparatus))
                         {
                             actions.push(queue_state::ApparatusQueueAction::RollComplete);
@@ -171,17 +183,22 @@ fn training_queue_action_controls(
                     allowed_actions,
                     interaction,
                     previous_stage,
+                    stage_node_id,
                     previous_stage_ready,
-                    complete_requires_full_report: maps
-                        .iter()
-                        .find(|saved| saved.map.id.trim() == order_id)
-                        .is_some_and(|saved| {
+                    rezka_output_kadr_counts,
+                    complete_requires_full_report: saved_map.is_some_and(|saved| {
                             training_complete_requires_full_report(
                                 &saved.map,
                                 apparatus,
                                 has_unprocessed_previous_wips,
                             )
                         }),
+                    complete_requires_rezka_total_waste_only: saved_map.is_some_and(|saved| {
+                        training_complete_requires_rezka_total_waste_only(
+                            &saved.map,
+                            apparatus,
+                        )
+                    }),
                     freeze_request: None,
                 },
             )
@@ -194,8 +211,22 @@ fn training_complete_requires_full_report(
     apparatus: &str,
     has_unprocessed_previous_wips: bool,
 ) -> bool {
-    !(is_laminatsiya_apparatus(map, apparatus) || is_rezka_apparatus(map, apparatus))
-        || !has_unprocessed_previous_wips
+    if is_rezka_apparatus(map, apparatus) {
+        return !training_complete_requires_rezka_total_waste_only(map, apparatus)
+            && !has_unprocessed_previous_wips;
+    }
+    !is_laminatsiya_apparatus(map, apparatus) || !has_unprocessed_previous_wips
+}
+
+fn training_complete_requires_rezka_total_waste_only(
+    map: &ProductionMapDefinition,
+    apparatus: &str,
+) -> bool {
+    if !is_rezka_apparatus(map, apparatus) {
+        return false;
+    }
+    chain::work_stage_for_station(map, apparatus, "")
+        .is_some_and(|stage| !chain::is_final_work_stage_node(map, &stage.node_id))
 }
 
 fn training_order_status(

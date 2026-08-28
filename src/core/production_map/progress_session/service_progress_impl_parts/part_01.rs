@@ -36,7 +36,10 @@ impl ProductionMapService {
         apparatus: &str,
         progress: &QueueProgressInput,
     ) -> Result<Option<OrderProgressBatch>, ProductionMapError> {
-        let Some(previous_apparatus) = chain::previous_work_stage_station(order_map, apparatus)
+        let default_stage = chain::work_stage_for_station(order_map, apparatus, "")
+            .ok_or(ProductionMapError::ProgressBatchNotAccepted)?;
+        let Some(default_previous) =
+            chain::previous_work_stage_for_node(order_map, &default_stage.node_id)
         else {
             return Ok(None);
         };
@@ -46,6 +49,18 @@ impl ProductionMapService {
         let batch = self
             .progress_batch_for_qr(&progress.progress_batch_id, &progress.qr_payload)
             .await?;
+        let preferred_stage_node_id = json_string_field(&batch.payload_json, "next_stage_node_id");
+        let stage = if preferred_stage_node_id.is_empty() {
+            default_stage
+        } else {
+            chain::work_stage_for_station(order_map, apparatus, &preferred_stage_node_id)
+                .ok_or(ProductionMapError::ProgressBatchNotAccepted)?
+        };
+        let previous = chain::previous_work_stage_for_node(order_map, &stage.node_id)
+            .unwrap_or(default_previous);
+        let previous_apparatus = previous
+            .apparatus_id
+            .ok_or(ProductionMapError::ProgressBatchNotAccepted)?;
         if batch.order_id.trim() != order_id
             || !super::types::apparatus_ids_match(&batch.apparatus, &previous_apparatus)
             || !matches!(
@@ -64,6 +79,8 @@ impl ProductionMapService {
             )
             || (!batch.next_apparatus.trim().is_empty()
                 && !chain::stage_ids_match_for_map(order_map, &batch.next_apparatus, apparatus))
+            || (!preferred_stage_node_id.is_empty()
+                && preferred_stage_node_id.trim() != stage.node_id.trim())
             || batch.wip_status != OrderProgressBatchWipStatus::Waiting
         {
             return Err(ProductionMapError::ProgressBatchNotAccepted);
@@ -110,12 +127,10 @@ impl ProductionMapService {
         else {
             return Ok(None);
         };
-        let resume_stage_is_valid =
-            Self::opening_wip_target_stage(order_map, &record.intake, apparatus, "").is_some();
         if record.intake.status != OpeningWipIntakeStatus::Confirmed
             || record.intake.order_id.trim() != order_id.trim()
             || record.batch.order_id.trim() != order_id.trim()
-            || !resume_stage_is_valid
+            || Self::opening_wip_target_stage(order_map, &record.intake, apparatus, "").is_none()
             || record.batch.wip_status != OpeningWipBatchStatus::Waiting
             || (!progress.progress_batch_id.trim().is_empty()
                 && record.batch.batch_id.trim() != progress.progress_batch_id.trim())
@@ -137,11 +152,16 @@ impl ProductionMapService {
         apparatus: &str,
         progress: &QueueProgressInput,
         session_id: &str,
+        stage_node_id: &str,
     ) -> Result<Option<OrderProgressBatch>, ProductionMapError> {
-        let Some(previous_apparatus) = chain::previous_work_stage_station(order_map, apparatus)
-        else {
+        let stage = chain::work_stage_for_station(order_map, apparatus, stage_node_id)
+            .ok_or(ProductionMapError::ProgressBatchNotAccepted)?;
+        let Some(previous) = chain::previous_work_stage_for_node(order_map, &stage.node_id) else {
             return Ok(None);
         };
+        let previous_apparatus = previous
+            .apparatus_id
+            .ok_or(ProductionMapError::ProgressBatchNotAccepted)?;
         if progress.qr_payload.trim().is_empty() {
             return Err(ProductionMapError::ProgressQrRequired);
         }
@@ -177,6 +197,9 @@ impl ProductionMapService {
             || !source_wip_is_usable
             || (!batch.next_apparatus.trim().is_empty()
                 && !chain::stage_ids_match_for_map(order_map, &batch.next_apparatus, apparatus))
+            || (!json_string_field(&batch.payload_json, "next_stage_node_id").is_empty()
+                && json_string_field(&batch.payload_json, "next_stage_node_id")
+                    != stage.node_id.trim())
         {
             return Err(ProductionMapError::ProgressBatchNotAccepted);
         }
@@ -191,12 +214,21 @@ impl ProductionMapService {
         session: &OrderRunSession,
         now: i64,
     ) -> Result<Option<RecoveredSessionInputBatch>, ProductionMapError> {
-        let Some(previous_apparatus) = chain::previous_work_stage_station(order_map, apparatus)
-        else {
+        let session_links = session_progress_links(session);
+        let stage = chain::work_stage_for_station(
+            order_map,
+            apparatus,
+            &session_links.stage_node_id,
+        )
+        .ok_or(ProductionMapError::ProgressBatchNotAccepted)?;
+        let Some(previous) = chain::previous_work_stage_for_node(order_map, &stage.node_id) else {
             return Ok(None);
         };
+        let previous_apparatus = previous
+            .apparatus_id
+            .ok_or(ProductionMapError::ProgressBatchNotAccepted)?;
         let batches = self.store.progress_batches_for_order(order_id).await?;
-        let linked_batch_id = session_progress_links(session).batch_id;
+        let linked_batch_id = session_links.batch_id;
         let mut output_candidates = batches
             .iter()
             .filter(|batch| {
@@ -343,15 +375,33 @@ impl ProductionMapService {
         } else {
             None
         };
+        let opening_wip_target_stage_node_id = opening_wip_batch
+            .as_ref()
+            .and_then(|record| {
+                Self::opening_wip_target_stage(order_map, &record.intake, apparatus, "")
+            })
+            .map(|stage| stage.node_id)
+            .unwrap_or_default();
         let input_progress = input_progress_batch
             .as_ref()
             .map(progress_links_from_batch)
             .or_else(|| {
                 opening_wip_batch
                     .as_ref()
-                    .map(progress_links_from_opening_wip)
+                    .map(|record| {
+                        progress_links_from_opening_wip(
+                            record,
+                            &opening_wip_target_stage_node_id,
+                        )
+                    })
             })
             .unwrap_or_default();
+        let stage = chain::work_stage_for_station(
+            order_map,
+            apparatus,
+            &input_progress.stage_node_id,
+        )
+        .ok_or(ProductionMapError::ProgressBatchNotAccepted)?;
         let session = OrderRunSession {
             session_id: progress_session_id(apparatus, order_id, actor, now),
             apparatus: apparatus.to_string(),
@@ -366,6 +416,7 @@ impl ProductionMapService {
                 actor,
                 &input_progress,
                 input_progress_batch.as_ref(),
+                &stage.node_id,
             ),
         };
         let context = ProgressRecordContext {
@@ -380,7 +431,11 @@ impl ProductionMapService {
             context,
             String::new(),
             String::new(),
-            start_event_payload(&input_progress, input_progress_batch.as_ref()),
+            start_event_payload(
+                &input_progress,
+                input_progress_batch.as_ref(),
+                &stage.node_id,
+            ),
         );
         let mut progress_batch_updates = Vec::new();
         if let Some(input_batch) = input_progress_batch {

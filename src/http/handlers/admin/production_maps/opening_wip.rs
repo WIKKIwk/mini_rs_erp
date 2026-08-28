@@ -186,10 +186,7 @@ pub async fn production_map_opening_wip_lookup(
         return Err(method_not_allowed());
     }
     let input: OpeningWipLookupRequest = parse_json(&body)?;
-    if input.apparatus.trim().is_empty()
-        || input.order_id.trim().is_empty()
-        || input.qr_payload.trim().is_empty()
-    {
+    if input.apparatus.trim().is_empty() || input.order_id.trim().is_empty() {
         return Err(bad_request("opening_wip_invalid_input"));
     }
     let apparatus = resolve_queue_apparatus(&state, &input.apparatus).await?;
@@ -208,6 +205,49 @@ pub async fn production_map_opening_wip_lookup(
             return Err(bad_request("apparatus_not_assigned"));
         }
     }
+    let order_map = state
+        .production_maps
+        .raw_map(input.order_id.trim())
+        .await
+        .map_err(production_map_error)?
+        .ok_or_else(|| bad_request("opening_wip_qr_mismatch"))?;
+    if input.qr_payload.trim().is_empty() && input.batch_id.trim().is_empty() {
+        let records = state
+            .production_maps
+            .opening_wip_records(OpeningWipQuery {
+                order_id: input.order_id.trim().to_string(),
+                wip_status: Some(OpeningWipBatchStatus::Waiting),
+                limit: 10_000,
+            })
+            .await
+            .map_err(production_map_error)?;
+        let batches = records
+            .into_iter()
+            .filter(|record| {
+                record.intake.status == OpeningWipIntakeStatus::Confirmed
+                    && record.intake.order_id.trim() == input.order_id.trim()
+                    && crate::core::production_map::ProductionMapService::opening_wip_target_stage(
+                        &order_map,
+                        &record.intake,
+                        &apparatus_id,
+                        "",
+                    )
+                    .is_some()
+            })
+            .flat_map(|record| record.batches)
+            .filter(|batch| {
+                batch.wip_status == OpeningWipBatchStatus::Waiting
+                    && batch.order_id.trim() == input.order_id.trim()
+            })
+            .collect::<Vec<_>>();
+        return Ok(json_response(serde_json::json!({
+            "ok": true,
+            "batches": batches,
+        })));
+    }
+    if input.qr_payload.trim().is_empty() {
+        return Err(bad_request("opening_wip_invalid_input"));
+    }
     let details = match state
         .production_maps
         .opening_wip_batch(&input.batch_id, &input.qr_payload)
@@ -221,12 +261,6 @@ pub async fn production_map_opening_wip_lookup(
     };
     let batch_id_matches =
         input.batch_id.trim().is_empty() || details.batch.batch_id.trim() == input.batch_id.trim();
-    let order_map = state
-        .production_maps
-        .raw_map(&details.intake.order_id)
-        .await
-        .map_err(production_map_error)?
-        .ok_or_else(|| bad_request("opening_wip_qr_mismatch"))?;
     if details.intake.status != OpeningWipIntakeStatus::Confirmed
         || details.batch.wip_status != OpeningWipBatchStatus::Waiting
         || details.intake.order_id.trim() != input.order_id.trim()

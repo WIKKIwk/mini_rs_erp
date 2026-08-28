@@ -233,7 +233,7 @@ async fn production_map_save_allocates_order_number_for_direct_and_atomic_saves(
 async fn production_map_save_with_order_snapshots_rezka_frame_count_on_new_order() {
     let state = test_state();
     let token = session(&state, PrincipalRole::Admin).await;
-    let map: serde_json::Value = serde_json::from_str(&production_order_map_json_with_product(
+    let mut map: serde_json::Value = serde_json::from_str(&production_order_map_json_with_product(
         "zakaz-7799",
         "Rezka snapshot order",
         "REZKA-7799",
@@ -243,6 +243,22 @@ async fn production_map_save_with_order_snapshots_rezka_frame_count_on_new_order
         1250.0,
     ))
     .expect("map json");
+    map["nodes"][1]["rezka_frame_groups"] = serde_json::json!([1, 6]);
+    let mut final_rezka = map["nodes"][1].clone();
+    final_rezka["id"] = serde_json::json!("rezka-final");
+    final_rezka
+        .as_object_mut()
+        .expect("final Rezka node")
+        .remove("rezka_frame_groups");
+    map["nodes"]
+        .as_array_mut()
+        .expect("nodes")
+        .insert(2, final_rezka);
+    map["edges"][1]["to"] = serde_json::json!("rezka-final");
+    map["edges"]
+        .as_array_mut()
+        .expect("edges")
+        .push(serde_json::json!({"from": "rezka-final", "to": "end"}));
     let template = serde_json::json!({
         "name": "rezka snapshot mahsulot",
         "product": "rezka snapshot mahsulot",
@@ -263,15 +279,25 @@ async fn production_map_save_with_order_snapshots_rezka_frame_count_on_new_order
         ))
         .await
         .expect("save with order");
-    assert_eq!(response.status(), StatusCode::OK);
+    let response_status = response.status();
     let value = json_body(response).await;
-    let rezka_node = value["saved"]["map"]["nodes"]
+    assert!(
+        response_status == StatusCode::OK,
+        "save with duplicate Rezka failed: {value:?}"
+    );
+    let rezka_nodes = value["saved"]["map"]["nodes"]
         .as_array()
         .expect("nodes")
         .iter()
-        .find(|node| node["apparatus_id"] == "apparatus:default:asset-010")
-        .expect("rezka node");
-    assert_eq!(rezka_node["rezka_kadr_count"], 7);
+        .filter(|node| node["apparatus_id"] == "apparatus:default:asset-010")
+        .collect::<Vec<_>>();
+    assert_eq!(rezka_nodes.len(), 2);
+    assert!(
+        rezka_nodes
+            .iter()
+            .all(|node| node["rezka_kadr_count"] == 7)
+    );
+    assert_eq!(rezka_nodes[0]["rezka_frame_groups"], serde_json::json!([1, 6]));
 
     let second_template = serde_json::json!({
         "name": "rezka snapshot mahsulot",
@@ -299,13 +325,18 @@ async fn production_map_save_with_order_snapshots_rezka_frame_count_on_new_order
         .expect("edit order");
     assert_eq!(response.status(), StatusCode::OK);
     let edited = json_body(response).await;
-    let edited_rezka_node = edited["saved"]["map"]["nodes"]
+    let edited_rezka_nodes = edited["saved"]["map"]["nodes"]
         .as_array()
         .expect("nodes")
         .iter()
-        .find(|node| node["apparatus_id"] == "apparatus:default:asset-010")
-        .expect("rezka node");
-    assert_eq!(edited_rezka_node["rezka_kadr_count"], 7);
+        .filter(|node| node["apparatus_id"] == "apparatus:default:asset-010")
+        .collect::<Vec<_>>();
+    assert_eq!(edited_rezka_nodes.len(), 2);
+    assert!(
+        edited_rezka_nodes
+            .iter()
+            .all(|node| node["rezka_kadr_count"] == 7)
+    );
 }
 
 #[tokio::test]

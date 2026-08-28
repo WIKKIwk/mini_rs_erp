@@ -143,8 +143,9 @@ pub fn next_work_stage_stations(map: &ProductionMapDefinition, station_id: &str)
     found
 }
 
-/// Resolve one physical stage occurrence. The node ID is authoritative when
-/// supplied because the same apparatus can occur more than once in one map.
+/// Resolve one physical stage occurrence. `preferred_node_id` is authoritative
+/// when supplied by WIP/session metadata; the canonical station fallback keeps
+/// legacy maps working when an apparatus occurs only once.
 pub fn work_stage_for_station(
     map: &ProductionMapDefinition,
     station_id: &str,
@@ -163,14 +164,37 @@ pub fn work_stage_for_station(
         .find(|stage| chain_stage_matches_station(stage, station_id))
 }
 
-/// Return every immediate physical successor of one concrete graph stage.
-/// Transparent task/condition nodes are traversed, while branch alternatives
-/// remain separate candidates.
+/// Previous physical stage for one concrete graph occurrence.
+pub fn previous_work_stage_for_node(
+    map: &ProductionMapDefinition,
+    stage_node_id: &str,
+) -> Option<ChainStage> {
+    adjacent_physical_stages_for_node(map, stage_node_id, true)
+        .into_iter()
+        .next()
+}
+
+/// Next physical stage for one concrete graph occurrence.
+pub fn next_work_stage_for_node(
+    map: &ProductionMapDefinition,
+    stage_node_id: &str,
+) -> Option<ChainStage> {
+    next_work_stages_for_node(map, stage_node_id)
+        .into_iter()
+        .next()
+}
+
 pub fn next_work_stages_for_node(
     map: &ProductionMapDefinition,
     stage_node_id: &str,
 ) -> Vec<ChainStage> {
-    adjacent_physical_stages_for_node(map, stage_node_id)
+    adjacent_physical_stages_for_node(map, stage_node_id, false)
+}
+
+pub fn is_final_work_stage_node(map: &ProductionMapDefinition, stage_node_id: &str) -> bool {
+    linear_work_stages(map).iter().any(|stage| {
+        stage.node_id.trim() == stage_node_id.trim() && stage.apparatus_id.is_some()
+    }) && next_work_stage_for_node(map, stage_node_id).is_none()
 }
 
 /// Physical stages reachable from Start. Virtual Task nodes are intentionally
@@ -281,6 +305,22 @@ pub fn order_ready_for_station(
         return true;
     };
     queue_state_for_station(&previous_id, order_id, all_states)
+        == ApparatusQueueOrderState::Completed
+}
+
+pub fn order_ready_for_stage_node(
+    map: &ProductionMapDefinition,
+    order_id: &str,
+    stage_node_id: &str,
+    all_states: &BTreeMap<String, BTreeMap<String, String>>,
+) -> bool {
+    let Some(previous) = previous_work_stage_for_node(map, stage_node_id) else {
+        return true;
+    };
+    let Some(previous_apparatus) = previous.apparatus_id else {
+        return true;
+    };
+    queue_state_for_station(&previous_apparatus, order_id, all_states)
         == ApparatusQueueOrderState::Completed
 }
 
@@ -441,6 +481,7 @@ fn chain_stage_matches_station(stage: &ChainStage, station_id: &str) -> bool {
 fn adjacent_physical_stages_for_node(
     map: &ProductionMapDefinition,
     stage_node_id: &str,
+    previous: bool,
 ) -> Vec<ChainStage> {
     let stages = linear_work_stages(map);
     if !stages
@@ -458,7 +499,11 @@ fn adjacent_physical_stages_for_node(
     let mut visited = BTreeSet::<String>::new();
     let mut found = Vec::<ChainStage>::new();
     let mut found_nodes = BTreeSet::<String>::new();
-    queue.extend(route_successors(map, stage_node_id.trim()));
+    if previous {
+        queue.extend(route_predecessors(map, stage_node_id.trim()));
+    } else {
+        queue.extend(route_successors(map, stage_node_id.trim()));
+    }
     while let Some(node_id) = queue.pop_front() {
         if !visited.insert(node_id.to_string()) {
             continue;
@@ -466,7 +511,7 @@ fn adjacent_physical_stages_for_node(
         let Some(node) = map.nodes.iter().find(|node| node.id == node_id) else {
             continue;
         };
-        if node.kind == ProductionMapNodeKind::End {
+        if matches!(node.kind, ProductionMapNodeKind::Start | ProductionMapNodeKind::End) {
             continue;
         }
         if let Some(stage) = physical_by_node.get(node_id) {
@@ -475,7 +520,11 @@ fn adjacent_physical_stages_for_node(
             }
             continue;
         }
-        queue.extend(route_successors(map, node_id));
+        if previous {
+            queue.extend(route_predecessors(map, node_id));
+        } else {
+            queue.extend(route_successors(map, node_id));
+        }
     }
     found
 }

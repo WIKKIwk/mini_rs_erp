@@ -121,10 +121,16 @@ pub struct ApparatusQueueOrderActionControl {
     pub interaction: ApparatusQueueWorkerInteraction,
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub previous_stage: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub stage_node_id: String,
     #[serde(default)]
     pub previous_stage_ready: bool,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub rezka_output_kadr_counts: Vec<i64>,
     #[serde(default)]
     pub complete_requires_full_report: bool,
+    #[serde(default)]
+    pub complete_requires_rezka_total_waste_only: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub freeze_request: Option<OrderFreezeRequest>,
 }

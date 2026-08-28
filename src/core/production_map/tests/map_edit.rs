@@ -231,6 +231,7 @@ fn unassigned_alternative_map(id: &str) -> ProductionMapDefinition {
             alternative_assigned_title: String::new(),
             alternative_assigned_apparatus_id: String::new(),
             rezka_kadr_count: None,
+            rezka_frame_groups: Vec::new(),
             rezka_label_length: None,
             x: 0.0,
             y: 264.0,

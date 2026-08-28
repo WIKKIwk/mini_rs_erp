@@ -1,11 +1,12 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use sqlx::{PgPool, Postgres, Transaction};
 
 use crate::core::production_map::{
     ProductionMapDefinition, ProductionMapError, ProductionOrderLifecycleRecord,
     ProductionOrderLifecycleStatus, ProductionOrderOperationalStatus, QueueActionActor,
-    derive_production_order_lifecycle, derive_production_order_operational_status,
+    derive_production_order_lifecycle_with_completed_stage_nodes,
+    derive_production_order_operational_status,
 };
 
 pub(super) async fn load_production_order_lifecycles(
@@ -137,7 +138,26 @@ pub(super) async fn refresh_production_order_lifecycle_tx(
             .or_default()
             .insert(order_id.to_string(), state);
     }
-    let derived_status = derive_production_order_lifecycle(&map, &queue_states)
+    let completed_stage_node_ids = sqlx::query_scalar::<_, String>(
+        "SELECT COALESCE(payload_json->>'stage_node_id', '')
+         FROM mini_queue_action_events
+         WHERE order_id = $1
+           AND action = 'complete'
+           AND COALESCE(payload_json->>'stage_node_id', '') <> ''",
+    )
+    .bind(order_id)
+    .fetch_all(&mut **tx)
+    .await
+    .map_err(|_| ProductionMapError::StoreFailed)?
+    .into_iter()
+    .map(|value| value.trim().to_string())
+    .filter(|value| !value.is_empty())
+    .collect::<BTreeSet<_>>();
+    let derived_status = derive_production_order_lifecycle_with_completed_stage_nodes(
+        &map,
+        &queue_states,
+        &completed_stage_node_ids,
+    )
         .ok_or(ProductionMapError::StoreFailed)?;
     let lifecycle_changed = derived_status != current_status
         && current_status.can_automatically_transition_to(derived_status);

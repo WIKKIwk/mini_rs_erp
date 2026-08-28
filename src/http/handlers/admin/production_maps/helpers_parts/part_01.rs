@@ -362,6 +362,9 @@ pub(super) fn production_map_error(error: ProductionMapError) -> AdminError {
             bad_request("rezka_progress_metrics_required")
         }
         ProductionMapError::RezkaKadrCountRequired => bad_request("rezka_kadr_count_required"),
+        ProductionMapError::InvalidRezkaFrameGroups => {
+            bad_request("rezka_frame_groups_invalid")
+        }
         ProductionMapError::RezkaFrameCountMismatch => bad_request("rezka_frame_count_mismatch"),
         ProductionMapError::RezkaFinalRollRequired => bad_request("rezka_final_roll_required"),
         ProductionMapError::ProgressBatchNotFound => not_found("progress_batch_not_found"),

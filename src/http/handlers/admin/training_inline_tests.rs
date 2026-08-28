@@ -41,6 +41,7 @@ mod tests {
             alternative_assigned_title: String::new(),
             alternative_assigned_apparatus_id: String::new(),
             rezka_kadr_count: None,
+            rezka_frame_groups: Vec::new(),
             rezka_label_length: None,
             x: 0.0,
             y: 0.0,
@@ -538,6 +539,66 @@ mod tests {
                     == batch.qr_payload
             }));
         }
+    }
+
+    #[test]
+    fn intermediate_training_rezka_uses_configured_output_groups() {
+        let mut map = rezka_training_map();
+        map.nodes[1].rezka_kadr_count = Some(3);
+        map.nodes[1].rezka_frame_groups = vec![1, 2];
+        map.nodes.insert(
+            2,
+            node(
+                "lamination-after",
+                ProductionMapNodeKind::Apparatus,
+                "Laminatsiya aparat",
+            ),
+        );
+        map.edges = vec![
+            ProductionMapEdge {
+                from: "start".to_string(),
+                to: "rezka".to_string(),
+                branch: String::new(),
+            },
+            ProductionMapEdge {
+                from: "rezka".to_string(),
+                to: "lamination-after".to_string(),
+                branch: String::new(),
+            },
+            ProductionMapEdge {
+                from: "lamination-after".to_string(),
+                to: "end".to_string(),
+                branch: String::new(),
+            },
+        ];
+        let input = TrainingQueuePrintInput {
+            progress_qty: Some(100.0),
+            gross_qty: Some(10.0),
+            diameter: Some(42.0),
+            total_waste: Some(1.0),
+            ..TrainingQueuePrintInput::default()
+        };
+
+        let batches = training_progress_batches(
+            &map,
+            "apparatus:test:rezka-1",
+            "training-rezka-1",
+            queue_state::ApparatusQueueAction::Complete,
+            &principal(),
+            &input,
+            None,
+            None,
+            "input-batch-1",
+        )
+        .expect("grouped training Rezka outputs");
+
+        assert_eq!(batches.len(), 2);
+        assert_eq!(batches[0].payload_json["contained_kadr_count"], 1);
+        assert_eq!(batches[1].payload_json["contained_kadr_count"], 2);
+        assert!(batches.iter().all(|batch| {
+            batch.payload_json["rezka_output_kind"] == "grouped_roll"
+                && batch.payload_json["rezka_frame_count"] == 2
+        }));
     }
 
     #[test]

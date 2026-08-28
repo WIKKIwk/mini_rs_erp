@@ -3,7 +3,7 @@ const DEFAULT_MAX_CONNECTIONS: u32 = 16;
 const DEFAULT_ACQUIRE_TIMEOUT_MS: u64 = 500;
 const MIGRATION_LOCK_KEY: i64 = 6_514_811_918_052_026_001;
 
-const POSTGRES_MIGRATIONS: [(&str, &str); 82] = [
+const POSTGRES_MIGRATIONS: [(&str, &str); 83] = [
     (
         "0001_mini_erp_foundation",
         include_str!("../../../migrations/postgres/0001_mini_erp_foundation.sql"),
@@ -329,6 +329,10 @@ const POSTGRES_MIGRATIONS: [(&str, &str); 82] = [
     (
         "0081_opening_wip_resume_stage",
         include_str!("../../../migrations/postgres/0081_opening_wip_resume_stage.sql"),
+    ),
+    (
+        "0082_qolip_item_code_doctor",
+        include_str!("../../../migrations/postgres/0082_qolip_item_code_doctor.sql"),
     ),
     (
         "0083_opening_wip_source_contract",

@@ -67,6 +67,8 @@ pub struct ProductionMapNode {
     pub alternative_assigned_apparatus_id: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub rezka_kadr_count: Option<i64>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub rezka_frame_groups: Vec<i64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub rezka_label_length: Option<f64>,
     #[serde(default)]

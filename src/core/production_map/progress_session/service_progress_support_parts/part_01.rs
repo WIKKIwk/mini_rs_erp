@@ -3,6 +3,7 @@ pub(super) fn start_session_payload(
     actor: &QueueActionActor,
     input_progress: &SessionProgressLinks,
     input_progress_batch: Option<&OrderProgressBatch>,
+    stage_node_id: &str,
 ) -> serde_json::Value {
     let mut payload = serde_json::json!({
         "started_by": actor,
@@ -10,7 +11,11 @@ pub(super) fn start_session_payload(
         "input_progress_qr_payload": input_progress.qr_payload,
         "input_progress_apparatus": input_progress.apparatus,
         "input_wip_source_kind": input_progress.source_kind,
+        "stage_node_id": stage_node_id.trim(),
     });
+    if let Some(contained_kadr_count) = input_progress.contained_kadr_count {
+        payload["contained_kadr_count"] = serde_json::json!(contained_kadr_count);
+    }
     if let Some(lineage) = input_progress_batch.and_then(qolip_lineage_from_batch) {
         lineage.write_to_payload(&mut payload);
     }
@@ -20,6 +25,7 @@ pub(super) fn start_session_payload(
 pub(super) fn start_event_payload(
     input_progress: &SessionProgressLinks,
     input_progress_batch: Option<&OrderProgressBatch>,
+    stage_node_id: &str,
 ) -> serde_json::Value {
     let mut payload = serde_json::json!({
         "event": "start",
@@ -27,6 +33,7 @@ pub(super) fn start_event_payload(
         "input_progress_qr_payload": input_progress.qr_payload,
         "input_progress_apparatus": input_progress.apparatus,
         "input_wip_source_kind": input_progress.source_kind,
+        "stage_node_id": stage_node_id.trim(),
     });
     if let Some(lineage) = input_progress_batch.and_then(qolip_lineage_from_batch) {
         lineage.write_to_payload(&mut payload);
@@ -90,6 +97,8 @@ pub(super) struct SessionProgressLinks {
     pub(super) qr_payload: String,
     pub(super) apparatus: String,
     pub(super) source_kind: String,
+    pub(super) stage_node_id: String,
+    pub(super) contained_kadr_count: Option<usize>,
 }
 
 pub(super) fn session_progress_links(session: &OrderRunSession) -> SessionProgressLinks {
@@ -98,6 +107,11 @@ pub(super) fn session_progress_links(session: &OrderRunSession) -> SessionProgre
         qr_payload: json_string_field(&session.payload_json, "input_progress_qr_payload"),
         apparatus: json_string_field(&session.payload_json, "input_progress_apparatus"),
         source_kind: json_string_field(&session.payload_json, "input_wip_source_kind"),
+        stage_node_id: json_string_field(&session.payload_json, "stage_node_id"),
+        contained_kadr_count: json_positive_usize_field(
+            &session.payload_json,
+            "contained_kadr_count",
+        ),
     }
 }
 
@@ -107,11 +121,17 @@ pub(super) fn progress_links_from_batch(batch: &OrderProgressBatch) -> SessionPr
         qr_payload: batch.qr_payload.clone(),
         apparatus: batch.apparatus.clone(),
         source_kind: "progress_batch".to_string(),
+        stage_node_id: json_string_field(&batch.payload_json, "next_stage_node_id"),
+        contained_kadr_count: json_positive_usize_field(
+            &batch.payload_json,
+            "contained_kadr_count",
+        ),
     }
 }
 
 pub(super) fn progress_links_from_opening_wip(
     record: &OpeningWipBatchRecord,
+    target_stage_node_id: &str,
 ) -> SessionProgressLinks {
     SessionProgressLinks {
         batch_id: record.batch.batch_id.clone(),
@@ -122,6 +142,8 @@ pub(super) fn progress_links_from_opening_wip(
             record.intake.source_apparatus.clone()
         },
         source_kind: "opening_wip".to_string(),
+        stage_node_id: target_stage_node_id.trim().to_string(),
+        contained_kadr_count: None,
     }
 }
 
@@ -150,6 +172,8 @@ pub(super) struct ProgressOutputIdentity {
     pub(super) qr_payload: String,
     pub(super) frame_index: Option<usize>,
     pub(super) frame_count: Option<usize>,
+    pub(super) contained_kadr_count: Option<usize>,
+    pub(super) rezka_output_kind: Option<&'static str>,
 }
 
 pub(super) fn progress_output_identity(
@@ -199,6 +223,8 @@ pub(super) fn progress_output_identity(
         qr_payload,
         frame_index: None,
         frame_count: None,
+        contained_kadr_count: input_progress.contained_kadr_count,
+        rezka_output_kind: None,
     }
 }
 
@@ -208,29 +234,131 @@ pub(super) fn rezka_output_identities(
     action: queue_state::ApparatusQueueAction,
     now: i64,
     order_map: &ProductionMapDefinition,
+    stage_node_id: &str,
+    input_contained_kadr_count: Option<usize>,
 ) -> Result<Vec<ProgressOutputIdentity>, ProductionMapError> {
-    let frame_count = order_map
-        .nodes
-        .iter()
-        .find(|node| {
-            node.kind == ProductionMapNodeKind::Apparatus
-                && progress_apparatus_node_matches(node, apparatus)
-        })
-        .and_then(|node| node.rezka_kadr_count)
-        .filter(|value| *value > 0)
-        .ok_or(ProductionMapError::RezkaKadrCountRequired)? as usize;
+    let output_kadr_counts = rezka_output_kadr_counts(
+        order_map,
+        apparatus,
+        stage_node_id,
+        input_contained_kadr_count,
+    )?;
+    let output_count = output_kadr_counts.len();
+    let is_final = chain::is_final_work_stage_node(order_map, stage_node_id);
     let base_id = progress_batch_id(apparatus, order_id, action, now);
-    Ok((0..frame_count)
-        .map(|index| {
+    Ok(output_kadr_counts
+        .into_iter()
+        .enumerate()
+        .map(|(index, contained_kadr_count)| {
             let batch_id = format!("{base_id}:frame:{}", index + 1);
             ProgressOutputIdentity {
                 qr_payload: progress_qr_payload(&batch_id),
                 batch_id,
                 frame_index: Some(index + 1),
-                frame_count: Some(frame_count),
+                frame_count: Some(output_count),
+                contained_kadr_count: Some(contained_kadr_count),
+                rezka_output_kind: Some(if is_final { "frame" } else { "grouped_roll" }),
             }
         })
         .collect())
+}
+
+pub(crate) fn rezka_output_kadr_counts(
+    order_map: &ProductionMapDefinition,
+    apparatus: &str,
+    stage_node_id: &str,
+    input_contained_kadr_count: Option<usize>,
+) -> Result<Vec<usize>, ProductionMapError> {
+    let stage = chain::work_stage_for_station(order_map, apparatus, stage_node_id)
+        .ok_or(ProductionMapError::ProgressBatchNotAccepted)?;
+    let node = order_map
+        .nodes
+        .iter()
+        .find(|node| node.id.trim() == stage.node_id.trim())
+        .ok_or(ProductionMapError::ProgressBatchNotAccepted)?;
+    let total_kadr_count = node
+        .rezka_kadr_count
+        .filter(|value| *value > 0)
+        .ok_or(ProductionMapError::RezkaKadrCountRequired)? as usize;
+    if chain::is_final_work_stage_node(order_map, &stage.node_id) {
+        let count = input_contained_kadr_count.unwrap_or(total_kadr_count);
+        if count == 0 {
+            return Err(ProductionMapError::RezkaKadrCountRequired);
+        }
+        return Ok(vec![1; count]);
+    }
+    if node.rezka_frame_groups.is_empty() {
+        return Ok(vec![1; total_kadr_count]);
+    }
+    node.rezka_frame_groups
+        .iter()
+        .map(|value| {
+            usize::try_from(*value)
+                .ok()
+                .filter(|value| *value > 0)
+                .ok_or(ProductionMapError::InvalidRezkaFrameGroups)
+        })
+        .collect()
+}
+
+#[cfg(test)]
+mod rezka_output_kadr_count_tests {
+    use super::*;
+
+    fn repeated_rezka_map() -> ProductionMapDefinition {
+        serde_json::from_value(serde_json::json!({
+            "id": "zakaz-rezka-groups",
+            "product_code": "REZKA-GROUPS",
+            "title": "Rezka groups",
+            "nodes": [
+                {"id": "start", "kind": "start", "title": "Start"},
+                {"id": "rezka_before_lamination", "kind": "apparatus", "title": "Rezka", "apparatus_id": "apparatus:default:asset-010", "rezka_kadr_count": 3, "rezka_frame_groups": [1, 2]},
+                {"id": "lamination", "kind": "apparatus", "title": "Laminatsiya", "apparatus_id": "apparatus:catalog:lam-001"},
+                {"id": "rezka_final", "kind": "apparatus", "title": "Rezka", "apparatus_id": "apparatus:default:asset-010", "rezka_kadr_count": 3},
+                {"id": "end", "kind": "end", "title": "End"}
+            ],
+            "edges": [
+                {"from": "start", "to": "rezka_before_lamination"},
+                {"from": "rezka_before_lamination", "to": "lamination"},
+                {"from": "lamination", "to": "rezka_final"},
+                {"from": "rezka_final", "to": "end"}
+            ]
+        }))
+        .expect("repeated Rezka map")
+    }
+
+    #[test]
+    fn intermediate_rezka_uses_configured_groups_and_final_uses_input_metadata() {
+        let map = repeated_rezka_map();
+
+        assert_eq!(
+            rezka_output_kadr_counts(
+                &map,
+                "apparatus:default:asset-010",
+                "rezka_before_lamination",
+                None,
+            ),
+            Ok(vec![1, 2])
+        );
+        assert_eq!(
+            rezka_output_kadr_counts(
+                &map,
+                "apparatus:default:asset-010",
+                "rezka_final",
+                Some(2),
+            ),
+            Ok(vec![1, 1])
+        );
+        assert_eq!(
+            rezka_output_kadr_counts(
+                &map,
+                "apparatus:default:asset-010",
+                "rezka_final",
+                None,
+            ),
+            Ok(vec![1, 1, 1])
+        );
+    }
 }
 
 pub(super) fn run_status_for_progress_action(
@@ -273,6 +401,13 @@ pub(super) fn progress_batch_record(
     input: ProgressBatchRecordInput<'_>,
 ) -> Result<OrderProgressBatch, ProductionMapError> {
     let context = input.context;
+    let stage = chain::work_stage_for_station(
+        input.order_map,
+        context.apparatus,
+        &input.input_progress.stage_node_id,
+    )
+    .ok_or(ProductionMapError::ProgressBatchNotAccepted)?;
+    let next_stage = chain::next_work_stage_for_node(input.order_map, &stage.node_id);
     let mut batch = OrderProgressBatch {
         batch_id: input.output_identity.batch_id.clone(),
         revision: 1,
@@ -287,10 +422,11 @@ pub(super) fn progress_batch_record(
         uom: input.quantity.uom.clone(),
         qr_payload: input.output_identity.qr_payload.clone(),
         label_item_code: context.order_id.to_string(),
-        label_item_name: progress_label_item_name(
+        label_item_name: super::progress::progress_label_item_name_for_stage(
             input.order_map,
             context.apparatus,
             context.action,
+            &stage.node_id,
         ),
         executor_name: actor_display_name(context.actor),
         worker_role: context.actor.role.trim().to_string(),
@@ -301,7 +437,9 @@ pub(super) fn progress_batch_record(
         current_apparatus: context.apparatus.to_string(),
         current_apparatus_key: super::types::canonical_apparatus_key(context.apparatus),
         current_location: wip_waiting_location(context.apparatus),
-        next_apparatus: chain::next_work_stage_station(input.order_map, context.apparatus)
+        next_apparatus: next_stage
+            .as_ref()
+            .and_then(|stage| stage.apparatus_id.clone())
             .unwrap_or_default(),
         parent_batch_id: input.input_progress.batch_id.clone(),
         used_by_session_id: String::new(),
@@ -331,11 +469,21 @@ pub(super) fn progress_batch_record(
     if let Some(lineage) = QolipLineage::from_payload(&context.session.payload_json) {
         lineage.write_to_payload(&mut batch.payload_json);
     }
+    batch.payload_json["stage_node_id"] = serde_json::json!(stage.node_id);
+    batch.payload_json["next_stage_node_id"] = serde_json::json!(
+        next_stage
+            .as_ref()
+            .map(|stage| stage.node_id.trim())
+            .unwrap_or_default()
+    );
     if let Some(gross_qty) = input.frame_gross_qty {
         if !batch.payload_json.is_object() {
             batch.payload_json = serde_json::json!({});
         }
         batch.payload_json["gross_qty"] = serde_json::json!(gross_qty);
+    }
+    if let Some(contained_kadr_count) = input.output_identity.contained_kadr_count {
+        batch.payload_json["contained_kadr_count"] = serde_json::json!(contained_kadr_count);
     }
     sync_wip_payload_fields(&mut batch);
     Ok(batch)
@@ -357,10 +505,18 @@ pub(super) fn apply_rezka_frame_metadata(
     batch.payload_json["rezka_frame_index"] = serde_json::json!(frame_index);
     batch.payload_json["rezka_frame_count"] = serde_json::json!(frame_count);
     batch.payload_json["rezka_output_kind"] = serde_json::json!("frame");
+    if let Some(output_kind) = identity.rezka_output_kind {
+        batch.payload_json["rezka_output_kind"] = serde_json::json!(output_kind);
+    }
+    if let Some(contained_kadr_count) = identity.contained_kadr_count {
+        batch.payload_json["contained_kadr_count"] = serde_json::json!(contained_kadr_count);
+    }
     batch.payload_json["rezka_metrics_owner"] = serde_json::json!(true);
+    let stage_node_id = json_string_field(&batch.payload_json, "stage_node_id");
     if let Some(node) = order_map.nodes.iter().find(|node| {
         node.kind == ProductionMapNodeKind::Apparatus
-            && progress_apparatus_node_matches(node, apparatus)
+            && ((stage_node_id.is_empty() && progress_apparatus_node_matches(node, apparatus))
+                || (!stage_node_id.is_empty() && node.id.trim() == stage_node_id))
     }) {
         if let Some(kadr_count) = node.rezka_kadr_count {
             batch.payload_json["rezka_kadr_count"] = serde_json::json!(kadr_count);

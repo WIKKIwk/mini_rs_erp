@@ -31,6 +31,7 @@ pub struct ProductionMapLiveSnapshot {
     pub sequences: BTreeMap<String, Vec<String>>,
     pub visible_order_ids: BTreeMap<String, Vec<String>>,
     pub queue_states: BTreeMap<String, BTreeMap<String, String>>,
+    pub stage_states: BTreeMap<String, BTreeMap<String, String>>,
     pub queue_policies: Vec<ApparatusQueuePolicyRecord>,
     pub queue_action_controls: BTreeMap<String, BTreeMap<String, ApparatusQueueOrderActionControl>>,
     pub order_statuses: BTreeMap<String, ProductionOrderStatusDetail>,
@@ -44,6 +45,7 @@ pub(crate) struct ProductionSnapshotContext {
     pub(crate) sequences: BTreeMap<String, Vec<String>>,
     pub(crate) visible_order_ids: BTreeMap<String, Vec<String>>,
     pub(crate) queue_states: BTreeMap<String, BTreeMap<String, String>>,
+    pub(crate) stage_states: BTreeMap<String, BTreeMap<String, String>>,
     pub(crate) queue_policies: Vec<ApparatusQueuePolicyRecord>,
     pub(crate) queue_action_controls:
         BTreeMap<String, BTreeMap<String, ApparatusQueueOrderActionControl>>,
@@ -59,6 +61,7 @@ impl From<ProductionSnapshotContext> for ProductionMapLiveSnapshot {
             sequences: context.sequences,
             visible_order_ids: context.visible_order_ids,
             queue_states: context.queue_states,
+            stage_states: context.stage_states,
             queue_policies: context.queue_policies,
             queue_action_controls: context.queue_action_controls,
             order_statuses: context.order_statuses,
@@ -66,6 +69,97 @@ impl From<ProductionSnapshotContext> for ProductionMapLiveSnapshot {
             frozen_orders_by_apparatus: context.frozen_orders_by_apparatus,
         }
     }
+}
+
+fn stage_states_for_snapshot(
+    maps: &[ProductionMapDefinition],
+    controls: &BTreeMap<String, BTreeMap<String, ApparatusQueueOrderActionControl>>,
+    logs_by_order: &BTreeMap<String, Vec<ProductionOrderLogEntry>>,
+) -> BTreeMap<String, BTreeMap<String, String>> {
+    let mut result = BTreeMap::new();
+    for map in maps {
+        let order_id = map.id.trim();
+        if order_id.is_empty() {
+            continue;
+        }
+        let stages = chain::linear_work_stages(map)
+            .into_iter()
+            .filter(|stage| stage.apparatus_id.is_some())
+            .collect::<Vec<_>>();
+        if stages.is_empty() {
+            continue;
+        }
+        let valid_stage_node_ids = stages
+            .iter()
+            .map(|stage| stage.node_id.trim())
+            .collect::<BTreeSet<_>>();
+        let mut states = BTreeMap::<String, String>::new();
+        for log in logs_by_order.get(order_id).into_iter().flatten() {
+            let stage_node_id = log.stage_node_id.trim();
+            if valid_stage_node_ids.contains(stage_node_id) {
+                states.insert(stage_node_id.to_string(), log.to_state.as_str().to_string());
+            }
+        }
+
+        let apparatuses = stages
+            .iter()
+            .filter_map(|stage| stage.apparatus_id.as_deref())
+            .map(str::trim)
+            .filter(|apparatus| !apparatus.is_empty())
+            .collect::<BTreeSet<_>>();
+        for apparatus in apparatuses {
+            let occurrences = stages
+                .iter()
+                .filter(|stage| {
+                    stage.apparatus_id.as_deref().is_some_and(|candidate| {
+                        super::types::apparatus_ids_match(candidate, apparatus)
+                    })
+                })
+                .collect::<Vec<_>>();
+            let control = controls.iter().find_map(|(candidate, orders)| {
+                super::types::apparatus_ids_match(candidate, apparatus)
+                    .then(|| orders.get(order_id))
+                    .flatten()
+            });
+            let Some(control) = control else {
+                continue;
+            };
+            if occurrences.len() == 1 {
+                states.insert(
+                    occurrences[0].node_id.trim().to_string(),
+                    control.state.as_str().to_string(),
+                );
+                continue;
+            }
+            let current_index = occurrences
+                .iter()
+                .position(|stage| stage.node_id.trim() == control.stage_node_id.trim());
+            let Some(current_index) = current_index else {
+                continue;
+            };
+            for (index, stage) in occurrences.iter().enumerate() {
+                let stage_node_id = stage.node_id.trim().to_string();
+                if index < current_index {
+                    states
+                        .entry(stage_node_id)
+                        .or_insert_with(|| "completed".to_string());
+                } else if index == current_index {
+                    states.insert(stage_node_id, control.state.as_str().to_string());
+                } else {
+                    states
+                        .entry(stage_node_id)
+                        .or_insert_with(|| "pending".to_string());
+                }
+            }
+        }
+        for stage in stages {
+            states
+                .entry(stage.node_id.trim().to_string())
+                .or_insert_with(|| "pending".to_string());
+        }
+        result.insert(order_id.to_string(), states);
+    }
+    result
 }
 
 #[derive(Clone)]
@@ -280,7 +374,7 @@ impl ProductionMapService {
         let maps = compile_saved_maps(raw_maps.clone());
         let stored_sequences = self.store.apparatus_sequences().await?;
         let visible_order_ids = visible_order_ids_by_apparatus(&raw_maps);
-        let queue_states = self.store.apparatus_queue_states().await?;
+        let mut queue_states = self.store.apparatus_queue_states().await?;
         let order_controls = self.store.order_control_states().await?;
         let frozen_order_ids = order_controls
             .iter()
@@ -305,6 +399,20 @@ impl ProductionMapService {
                 &order_controls,
             )
             .await?;
+        for (apparatus, controls) in &queue_action_controls {
+            let states = queue_states.entry(apparatus.clone()).or_default();
+            for (order_id, control) in controls {
+                states.insert(order_id.clone(), control.state.as_str().to_string());
+            }
+        }
+        let order_ids = raw_maps
+            .iter()
+            .map(|map| map.id.trim().to_string())
+            .filter(|order_id| !order_id.is_empty())
+            .collect::<Vec<_>>();
+        let queue_logs_by_order = self.store.queue_action_logs_for_orders(&order_ids).await?;
+        let stage_states =
+            stage_states_for_snapshot(&raw_maps, &queue_action_controls, &queue_logs_by_order);
         let order_statuses = self
             .order_status_details_for_snapshot(&maps, &order_controls)
             .await?;
@@ -315,6 +423,7 @@ impl ProductionMapService {
             sequences,
             visible_order_ids,
             queue_states,
+            stage_states,
             queue_policies,
             queue_action_controls,
             order_statuses,

@@ -44,6 +44,7 @@ fn compile_map_accepts_location_markers_without_task_drafts() {
             alternative_assigned_title: String::new(),
             alternative_assigned_apparatus_id: String::new(),
             rezka_kadr_count: None,
+            rezka_frame_groups: Vec::new(),
             rezka_label_length: None,
             x: 0.0,
             y: 0.0,
@@ -92,6 +93,39 @@ fn compile_map_rejects_invalid_formula_expression() {
         Err(ProductionMapError::InvalidFormulaExpression(
             "order_qty; drop".to_string()
         ))
+    );
+}
+
+#[test]
+fn compile_map_validates_dynamic_rezka_frame_groups() {
+    let mut map: ProductionMapDefinition = serde_json::from_value(serde_json::json!({
+        "id": "zakaz-rezka-frame-groups",
+        "product_code": "REZKA-GROUPS",
+        "title": "Rezka groups",
+        "nodes": [
+            {"id": "start", "kind": "start", "title": "Start"},
+            {"id": "rezka", "kind": "apparatus", "title": "Rezka", "apparatus_id": "apparatus:default:asset-010", "rezka_kadr_count": 3, "rezka_frame_groups": [1, 2]},
+            {"id": "end", "kind": "end", "title": "End"}
+        ],
+        "edges": [
+            {"from": "start", "to": "rezka"},
+            {"from": "rezka", "to": "end"}
+        ]
+    }))
+    .expect("Rezka group map");
+
+    assert!(compile_map(&map).is_ok());
+
+    map.nodes[1].rezka_frame_groups = vec![1, 1];
+    assert_eq!(
+        compile_map(&map),
+        Err(ProductionMapError::InvalidRezkaFrameGroups)
+    );
+
+    map.nodes[1].rezka_frame_groups = vec![1, 0, 2];
+    assert_eq!(
+        compile_map(&map),
+        Err(ProductionMapError::InvalidRezkaFrameGroups)
     );
 }
 

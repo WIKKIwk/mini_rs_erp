@@ -16,6 +16,7 @@ pub mod postgres_order_reset;
 pub mod postgres_production_map;
 pub mod postgres_push_token;
 pub mod postgres_qolip;
+pub mod postgres_qolip_item_code_doctor;
 pub mod postgres_raw_material_events;
 pub mod postgres_returned_paint;
 pub mod postgres_rps_batch;

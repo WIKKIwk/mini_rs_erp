@@ -126,6 +126,9 @@ pub(super) async fn merge_worker_training_snapshot(
     snapshot
         .queue_action_controls
         .retain(|apparatus, _| !is_training_apparatus(apparatus, &overlay.active_apparatuses));
+    snapshot
+        .stage_states
+        .retain(|order_id, _| !hidden_order_ids.contains(order_id));
     snapshot.queue_policies.retain(|policy| {
         !is_training_apparatus(policy.apparatus_id.as_str(), &overlay.active_apparatuses)
     });

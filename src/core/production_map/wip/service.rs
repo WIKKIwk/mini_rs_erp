@@ -110,8 +110,19 @@ impl ProductionMapService {
             .raw_map(&batch.order_id)
             .await?
             .ok_or(ProductionMapError::MapNotFound)?;
+        let stage_node_id = batch
+            .payload_json
+            .get("stage_node_id")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or_default()
+            .trim();
+        let is_final_stage = if stage_node_id.is_empty() {
+            chain::is_final_work_stage_station(&order_map, &batch.apparatus)
+        } else {
+            chain::is_final_work_stage_node(&order_map, stage_node_id)
+        };
         if !batch.is_finished_goods_output()
-            || !chain::is_final_work_stage_station(&order_map, &batch.apparatus)
+            || !is_final_stage
             || batch.wip_status != OrderProgressBatchWipStatus::Waiting
         {
             return Err(ProductionMapError::ProgressBatchNotAccepted);

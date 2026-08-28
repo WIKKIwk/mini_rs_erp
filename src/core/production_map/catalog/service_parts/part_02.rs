@@ -106,6 +106,7 @@ impl ProductionMapService {
                     event_id: transfer.transfer_id.clone(),
                     apparatus: transfer.to_apparatus.clone(),
                     order_id: transfer.order_id.clone(),
+                    stage_node_id: String::new(),
                     action: queue_state::ApparatusQueueAction::Pause,
                     from_state: queue_state::ApparatusQueueOrderState::Paused,
                     to_state: queue_state::ApparatusQueueOrderState::Paused,

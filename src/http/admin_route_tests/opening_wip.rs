@@ -123,6 +123,33 @@ async fn opening_wip_worker_lookup_is_qr_exact_and_apparatus_scoped() {
         }}"#
     );
 
+    let candidates = router
+        .clone()
+        .oneshot(request_with_body(
+            "POST",
+            "/v1/mobile/admin/production-maps/opening-wip/lookup",
+            &worker_token,
+            &format!(
+                r#"{{
+                    "apparatus":"{LAMINATION_ID}",
+                    "order_id":"{order_id}",
+                    "qr_payload":""
+                }}"#
+            ),
+        ))
+        .await
+        .expect("worker candidates");
+    let candidates_status = candidates.status();
+    let candidates_response = json_body(candidates).await;
+    assert_eq!(
+        candidates_status,
+        StatusCode::OK,
+        "{candidates_response:?}"
+    );
+    assert_eq!(candidates_response["batches"].as_array().map(Vec::len), Some(1));
+    assert_eq!(candidates_response["batches"][0]["batch_id"], batch_id);
+    assert_eq!(candidates_response["batches"][0]["qr_payload"], qr_payload);
+
     let lookup = router
         .clone()
         .oneshot(request_with_body(

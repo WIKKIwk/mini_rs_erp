@@ -634,6 +634,7 @@ fn test_node(id: &str, kind: ProductionMapNodeKind, title: &str, y: f64) -> Prod
         alternative_assigned_title: String::new(),
         alternative_assigned_apparatus_id: String::new(),
         rezka_kadr_count: None,
+        rezka_frame_groups: Vec::new(),
         rezka_label_length: None,
         x: 0.0,
         y,

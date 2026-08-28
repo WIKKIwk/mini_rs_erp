@@ -111,6 +111,8 @@ pub struct ProductionOrderLogEntry {
     pub event_id: String,
     pub apparatus: String,
     pub order_id: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub stage_node_id: String,
     pub action: queue_state::ApparatusQueueAction,
     pub from_state: queue_state::ApparatusQueueOrderState,
     pub to_state: queue_state::ApparatusQueueOrderState,

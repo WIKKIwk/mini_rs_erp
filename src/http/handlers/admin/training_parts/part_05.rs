@@ -35,13 +35,46 @@ fn training_rezka_frame_count(
     map: &ProductionMapDefinition,
     apparatus: &str,
 ) -> Result<usize, TrainingWorkspaceError> {
-    training_apparatus_node(map, apparatus)
-        .and_then(|node| node.rezka_kadr_count)
-        .filter(|value| *value > 0)
-        .map(|value| value as usize)
+    training_rezka_output_kadr_counts(map, apparatus).map(|counts| counts.len())
+}
+
+fn training_rezka_output_kadr_counts(
+    map: &ProductionMapDefinition,
+    apparatus: &str,
+) -> Result<Vec<usize>, TrainingWorkspaceError> {
+    let stage = chain::work_stage_for_station(map, apparatus, "").ok_or_else(|| {
+        TrainingWorkspaceError::InvalidInput("rezka_kadr_count_required".to_string())
+    })?;
+    let node = map
+        .nodes
+        .iter()
+        .find(|node| node.id.trim() == stage.node_id.trim())
         .ok_or_else(|| {
             TrainingWorkspaceError::InvalidInput("rezka_kadr_count_required".to_string())
+        })?;
+    let total = node
+        .rezka_kadr_count
+        .filter(|value| *value > 0)
+        .and_then(|value| usize::try_from(value).ok())
+        .ok_or_else(|| {
+            TrainingWorkspaceError::InvalidInput("rezka_kadr_count_required".to_string())
+        })?;
+    if chain::is_final_work_stage_node(map, &stage.node_id) || node.rezka_frame_groups.is_empty() {
+        return Ok(vec![1; total]);
+    }
+    node.rezka_frame_groups
+        .iter()
+        .map(|value| {
+            usize::try_from(*value)
+                .ok()
+                .filter(|value| *value > 0)
+                .ok_or_else(|| {
+                    TrainingWorkspaceError::InvalidInput(
+                        "rezka_frame_groups_invalid".to_string(),
+                    )
+                })
         })
+        .collect()
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -59,11 +92,16 @@ fn training_progress_batches(
     let stamp = unix_micros();
     let base_batch_id = progress_batch_id(apparatus, order_id, action, 0);
     let rezka_node = training_apparatus_node(map, apparatus);
-    let frame_count = if is_rezka_apparatus(map, apparatus) {
-        training_rezka_frame_count(map, apparatus)?
+    let rezka_output_is_grouped = rezka_node.is_some_and(|node| {
+        !node.rezka_frame_groups.is_empty()
+            && !chain::is_final_work_stage_node(map, &node.id)
+    });
+    let output_kadr_counts = if is_rezka_apparatus(map, apparatus) {
+        training_rezka_output_kadr_counts(map, apparatus)?
     } else {
-        1
+        vec![1]
     };
+    let frame_count = output_kadr_counts.len();
     let item_code = if map.product_code.trim().is_empty() {
         if map.order_number.trim().is_empty() {
             order_id.trim().to_string()
@@ -156,8 +194,18 @@ fn training_progress_batches(
         if is_rezka {
             payload_json["rezka_frame_index"] = serde_json::json!(index + 1);
             payload_json["rezka_frame_count"] = serde_json::json!(frame_count);
-            payload_json["rezka_kadr_count"] = serde_json::json!(frame_count);
-            payload_json["rezka_output_kind"] = serde_json::json!("frame");
+            payload_json["rezka_kadr_count"] = serde_json::json!(
+                rezka_node.and_then(|node| node.rezka_kadr_count).unwrap_or_default()
+            );
+            payload_json["contained_kadr_count"] =
+                serde_json::json!(output_kadr_counts[index]);
+            payload_json["rezka_output_kind"] = serde_json::json!(
+                if rezka_output_is_grouped {
+                    "grouped_roll"
+                } else {
+                    "frame"
+                }
+            );
             payload_json["rezka_metrics_owner"] = serde_json::json!(owns_metrics);
             if let Some(label_length) = rezka_node.and_then(|node| node.rezka_label_length) {
                 payload_json["rezka_label_length"] = serde_json::json!(label_length);

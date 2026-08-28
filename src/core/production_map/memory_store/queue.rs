@@ -64,6 +64,30 @@ pub(super) async fn refresh_production_order_lifecycles(
             *counts.entry(event.order_id.trim().to_string()).or_default() += 1;
             counts
         });
+    let completed_stage_nodes_by_order = store
+        .queue_events
+        .read()
+        .await
+        .iter()
+        .filter(|event| event.action == queue_state::ApparatusQueueAction::Complete)
+        .fold(
+            BTreeMap::<String, BTreeSet<String>>::new(),
+            |mut nodes, event| {
+                let stage_node_id = event
+                    .payload_json
+                    .get("stage_node_id")
+                    .and_then(serde_json::Value::as_str)
+                    .unwrap_or_default()
+                    .trim();
+                if !stage_node_id.is_empty() {
+                    nodes
+                        .entry(event.order_id.trim().to_string())
+                        .or_default()
+                        .insert(stage_node_id.to_string());
+                }
+                nodes
+            },
+        );
     let maps = store.maps.read().await;
     let queue_states = store.queue_states.read().await;
     let mut lifecycles = store.production_order_lifecycles.write().await;
@@ -72,8 +96,16 @@ pub(super) async fn refresh_production_order_lifecycles(
         let Some(map) = maps.get(order_id) else {
             continue;
         };
-        let Some(status) =
-            super::super::progress::derive_production_order_lifecycle(map, &queue_states)
+        let completed_stage_nodes = completed_stage_nodes_by_order
+            .get(order_id)
+            .cloned()
+            .unwrap_or_default();
+        let Some(status) = super::super::progress::
+            derive_production_order_lifecycle_with_completed_stage_nodes(
+                map,
+                &queue_states,
+                &completed_stage_nodes,
+            )
         else {
             return Err(ProductionMapError::StoreFailed);
         };
@@ -413,6 +445,7 @@ fn production_order_log_entry(
         event_id: event.event_id.trim().to_string(),
         apparatus: event.apparatus.trim().to_string(),
         order_id: event.order_id.trim().to_string(),
+        stage_node_id: json_string_field(&event.payload_json, "stage_node_id"),
         action: event.action,
         from_state: event.from_state,
         to_state: event.to_state,

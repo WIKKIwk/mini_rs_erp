@@ -62,6 +62,7 @@ pub(super) struct QueueActionLogRow {
     pub(super) event_id: String,
     pub(super) apparatus: String,
     pub(super) order_id: String,
+    pub(super) stage_node_id: String,
     pub(super) action: String,
     pub(super) from_state: String,
     pub(super) to_state: String,
@@ -116,6 +117,7 @@ pub(super) fn queue_action_log_from_row(
         event_id: row.event_id,
         apparatus: row.apparatus,
         order_id: row.order_id,
+        stage_node_id: row.stage_node_id,
         action: queue_action_from_str(&row.action).ok_or(ProductionMapError::StoreFailed)?,
         from_state: queue_state::ApparatusQueueOrderState::parse(&row.from_state)
             .ok_or(ProductionMapError::StoreFailed)?,

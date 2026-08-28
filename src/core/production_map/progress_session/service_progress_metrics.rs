@@ -22,6 +22,7 @@ pub(super) fn validated_progress_metrics(
     canonical: &RuntimeApparatusConfiguration,
     action: queue_state::ApparatusQueueAction,
     progress: &QueueProgressInput,
+    rezka_total_waste_only_completion: bool,
 ) -> Result<ProgressMetrics, ProductionMapError> {
     let is_complete = action == queue_state::ApparatusQueueAction::Complete;
     let is_rezka_completion = matches!(
@@ -55,17 +56,26 @@ pub(super) fn validated_progress_metrics(
         } else {
             None
         },
-        rezka_bosma_waste: if is_rezka_completion && !allow_partial_station_completion {
+        rezka_bosma_waste: if is_rezka_completion
+            && !allow_partial_station_completion
+            && !rezka_total_waste_only_completion
+        {
             valid_optional_progress_qty(progress.rezka_bosma_waste)?
         } else {
             None
         },
-        rezka_lamination_waste: if is_rezka_completion && !allow_partial_station_completion {
+        rezka_lamination_waste: if is_rezka_completion
+            && !allow_partial_station_completion
+            && !rezka_total_waste_only_completion
+        {
             valid_optional_progress_qty(progress.rezka_lamination_waste)?
         } else {
             None
         },
-        rezka_edge_waste: if is_rezka_completion && !allow_partial_station_completion {
+        rezka_edge_waste: if is_rezka_completion
+            && !allow_partial_station_completion
+            && !rezka_total_waste_only_completion
+        {
             valid_optional_progress_qty(progress.rezka_edge_waste)?
         } else {
             None
@@ -103,6 +113,7 @@ pub(super) fn validated_progress_metrics(
         metrics,
         progress.returned_paint_report_attached,
         allow_partial_station_completion,
+        rezka_total_waste_only_completion,
     )?;
     Ok(metrics)
 }
@@ -181,6 +192,7 @@ fn validate_progress_metrics(
     metrics: ProgressMetrics,
     returned_paint_report_attached: bool,
     allow_partial_station_completion: bool,
+    rezka_total_waste_only_completion: bool,
 ) -> Result<(), ProductionMapError> {
     let is_complete = action == queue_state::ApparatusQueueAction::Complete;
     let is_rezka = apparatus::is_rezka_apparatus(canonical);
@@ -220,13 +232,17 @@ fn validate_progress_metrics(
         return Err(ProductionMapError::LaminatsiyaCompletionMetricsRequired);
     }
     let missing_rezka_waste = is_complete
-        && !allow_partial_station_completion
-        && !rezka_progress_metrics_are_complete(
-            metrics.total_waste,
-            metrics.rezka_bosma_waste,
-            metrics.rezka_lamination_waste,
-            metrics.rezka_edge_waste,
-        );
+        && if rezka_total_waste_only_completion {
+            metrics.total_waste.is_none()
+        } else {
+            !allow_partial_station_completion
+                && !rezka_progress_metrics_are_complete(
+                    metrics.total_waste,
+                    metrics.rezka_bosma_waste,
+                    metrics.rezka_lamination_waste,
+                    metrics.rezka_edge_waste,
+                )
+        };
     let missing_rezka_quantity = !rezka_quantity_metrics_are_complete(
         progress.produced_qty,
         rezka_gross_qty,
@@ -337,6 +353,7 @@ mod tests {
             &canonical,
             queue_state::ApparatusQueueAction::Pause,
             &rezka_pause_progress(Some(45.5)),
+            false,
         )
         .expect("positive finite diameter");
         assert_eq!(valid.diameter, Some(45.5));
@@ -348,6 +365,7 @@ mod tests {
                     &canonical,
                     queue_state::ApparatusQueueAction::Pause,
                     &rezka_pause_progress(diameter),
+                    false,
                 ),
                 Err(ProductionMapError::ProgressInputInvalid)
             ));
@@ -358,6 +376,7 @@ mod tests {
                 &canonical,
                 queue_state::ApparatusQueueAction::Pause,
                 &rezka_pause_progress(None),
+                false,
             ),
             Err(ProductionMapError::RezkaProgressMetricsRequired)
         ));

@@ -253,7 +253,13 @@ impl ProductionMapService {
             || record.intake.order_id.trim() != order_id.trim()
             || record.batch.order_id.trim() != order_id.trim()
             || record.batch.wip_status != OpeningWipBatchStatus::InUse
-            || Self::opening_wip_target_stage(order_map, &record.intake, apparatus, "").is_none()
+            || Self::opening_wip_target_stage(
+                order_map,
+                &record.intake,
+                apparatus,
+                &input_progress.stage_node_id,
+            )
+            .is_none()
             || !super::types::apparatus_ids_match(
                 &record.batch.used_by_apparatus,
                 apparatus,

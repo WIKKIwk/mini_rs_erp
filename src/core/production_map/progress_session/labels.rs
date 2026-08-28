@@ -24,6 +24,15 @@ pub(crate) fn progress_label_item_name(
     apparatus: &str,
     action: queue_state::ApparatusQueueAction,
 ) -> String {
+    progress_label_item_name_for_stage(order_map, apparatus, action, "")
+}
+
+pub(crate) fn progress_label_item_name_for_stage(
+    order_map: &ProductionMapDefinition,
+    apparatus: &str,
+    action: queue_state::ApparatusQueueAction,
+    stage_node_id: &str,
+) -> String {
     let order_title = non_empty_or(&order_map.title, &order_map.product_code);
     let state_label = match action {
         queue_state::ApparatusQueueAction::Pause => "chiqarildi",
@@ -33,7 +42,12 @@ pub(crate) fn progress_label_item_name(
         queue_state::ApparatusQueueAction::Complete => "ish tugatildi",
         _ => queue_action_str(action),
     };
-    let product_kind = if super::super::chain::is_final_work_stage_station(order_map, apparatus) {
+    let final_stage = if stage_node_id.trim().is_empty() {
+        super::super::chain::is_final_work_stage_station(order_map, apparatus)
+    } else {
+        super::super::chain::is_final_work_stage_node(order_map, stage_node_id)
+    };
+    let product_kind = if final_stage {
         "tayyor mahsulot"
     } else {
         "yarim tayyor mahsulot"

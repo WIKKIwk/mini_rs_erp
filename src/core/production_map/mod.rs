@@ -63,7 +63,8 @@ pub use opening_wip::*;
 #[cfg(test)]
 pub use memory_store::MemoryProductionMapStore;
 pub(crate) use progress::{
-    derive_production_order_lifecycle, derive_production_order_operational_status,
+    derive_production_order_lifecycle_with_completed_stage_nodes,
+    derive_production_order_operational_status,
 };
 pub(crate) use progress::progress_label_item_name;
 pub(crate) use progress::{progress_batch_id, progress_qr_payload};

@@ -131,6 +131,16 @@ impl ProductionMapService {
             .previous_progress_ready_for_action(action, order_id, order_map, apparatus, &progress)
             .await?;
         let mut parsed = parsed_queue_states(stored_states);
+        let stage_reentry = action == queue_state::ApparatusQueueAction::Start
+            && previous_progress_ready
+            && parsed.get(order_id)
+                == Some(&queue_state::ApparatusQueueOrderState::Completed);
+        if stage_reentry {
+            parsed.insert(
+                order_id.to_string(),
+                queue_state::ApparatusQueueOrderState::Pending,
+            );
+        }
         let from_state = parsed
             .get(order_id)
             .copied()
@@ -139,6 +149,13 @@ impl ProductionMapService {
             .store
             .active_order_run_session(&storage_key, order_id)
             .await?;
+        let active_stage_node_id = active_session
+            .as_ref()
+            .and_then(|session| session.payload_json.get("stage_node_id"))
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or_default()
+            .trim()
+            .to_string();
         if freeze_request_finalization {
             validate_freeze_request_target_session(&control, active_session.as_ref())?;
         }
@@ -220,6 +237,19 @@ impl ProductionMapService {
             sequence: &sequence,
             visible_order_ids: &visible_order_ids,
         });
+        if stage_reentry {
+            event.from_state = queue_state::ApparatusQueueOrderState::Completed;
+            event.payload_json["stage_reentry"] = serde_json::json!(true);
+        }
+        if let Some(stage_node_id) = active_session
+            .as_ref()
+            .and_then(|session| session.payload_json.get("stage_node_id"))
+            .and_then(serde_json::Value::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+        {
+            event.payload_json["stage_node_id"] = serde_json::json!(stage_node_id);
+        }
         if progress.worker_handoff {
             event.payload_json["worker_handoff"] = serde_json::json!(true);
         }
@@ -264,6 +294,7 @@ impl ProductionMapService {
                     &[],
                     &[],
                     &input_batch_id,
+                    &active_stage_node_id,
                 )
                 .await?;
         }
@@ -283,6 +314,21 @@ impl ProductionMapService {
                 canonical.as_ref(),
             )
             .await?;
+        if event
+            .payload_json
+            .get("stage_node_id")
+            .and_then(serde_json::Value::as_str)
+            .is_none_or(|value| value.trim().is_empty())
+            && let Some(stage_node_id) = progress
+                .session
+                .as_ref()
+                .and_then(|session| session.payload_json.get("stage_node_id"))
+                .and_then(serde_json::Value::as_str)
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+        {
+            event.payload_json["stage_node_id"] = serde_json::json!(stage_node_id);
+        }
         if freeze_request_safe_stop {
             mark_freeze_request_safe_stop_progress(
                 &mut progress,
@@ -306,6 +352,7 @@ impl ProductionMapService {
                     &progress.progress_batch_updates,
                     &progress.opening_wip_batch_updates,
                     "",
+                    &active_stage_node_id,
                 )
                 .await?;
         if has_unprocessed_previous_wips {

@@ -115,6 +115,8 @@ pub(super) async fn training_queue_action(
         &apparatus,
         has_unprocessed_previous_wips,
     );
+    let rezka_total_waste_only_completion_required =
+        training_complete_requires_rezka_total_waste_only(&training_map, &apparatus);
 
     let is_complete = matches!(action, queue_state::ApparatusQueueAction::Complete);
     let has_returned_paint_items = !print_input.returned_paint_items.is_empty();
@@ -186,6 +188,16 @@ pub(super) async fn training_queue_action(
         && is_rezka_apparatus(&training_map, &apparatus)
         && full_completion_report_required
         && !training_rezka_waste_metrics_are_complete(&print_input)
+    {
+        return Err(TrainingWorkspaceError::InvalidInput(
+            "rezka_progress_metrics_required".to_string(),
+        ));
+    }
+    if is_complete
+        && rezka_total_waste_only_completion_required
+        && !print_input
+            .total_waste
+            .is_some_and(|value| value.is_finite() && value > 0.0)
     {
         return Err(TrainingWorkspaceError::InvalidInput(
             "rezka_progress_metrics_required".to_string(),

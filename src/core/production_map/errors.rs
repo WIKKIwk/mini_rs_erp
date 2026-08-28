@@ -162,6 +162,8 @@ pub enum ProductionMapError {
     RezkaProgressMetricsRequired,
     #[error("rezka kadr count is required")]
     RezkaKadrCountRequired,
+    #[error("rezka frame groups must be positive and match kadr count")]
+    InvalidRezkaFrameGroups,
     #[error("rezka frame input count does not match kadr count")]
     RezkaFrameCountMismatch,
     #[error("rezka final roll is required")]

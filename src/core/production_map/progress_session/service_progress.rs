@@ -27,6 +27,7 @@ fn progress_values_for_outputs(
     action: queue_state::ApparatusQueueAction,
     progress: &QueueProgressInput,
     output_identities: &[ProgressOutputIdentity],
+    rezka_total_waste_only_completion: bool,
 ) -> Result<Vec<ProgressOutputValue>, ProductionMapError> {
     if apparatus::is_rezka_apparatus(canonical) && !progress.rezka_frames.is_empty() {
         if progress.rezka_frames.len() != output_identities.len() {
@@ -54,8 +55,13 @@ fn progress_values_for_outputs(
                 }
                 let has_explicit_waste = frame.has_explicit_waste();
                 let frame_progress = frame.to_queue_progress(progress, !has_explicit_waste);
-                let mut metrics =
-                    validated_progress_metrics(apparatus, canonical, action, &frame_progress)?;
+                let mut metrics = validated_progress_metrics(
+                    apparatus,
+                    canonical,
+                    action,
+                    &frame_progress,
+                    rezka_total_waste_only_completion,
+                )?;
                 if index > 0 && !has_explicit_waste {
                     metrics.rezka_bosma_waste = None;
                     metrics.rezka_lamination_waste = None;
@@ -72,7 +78,13 @@ fn progress_values_for_outputs(
             .collect();
     }
 
-    let metrics = validated_progress_metrics(apparatus, canonical, action, progress)?;
+    let metrics = validated_progress_metrics(
+        apparatus,
+        canonical,
+        action,
+        progress,
+        rezka_total_waste_only_completion,
+    )?;
     let quantity = progress_quantity(progress, metrics)?;
     Ok(vec![ProgressOutputValue {
         quantity: Some(quantity),

@@ -7,7 +7,9 @@ mod policy;
 
 pub(crate) use super::{QolipLineage, qolip_lineage_from_batch};
 pub(crate) use closed_orders::{
-    derive_production_order_lifecycle, derive_production_order_operational_status,
+    derive_production_order_lifecycle,
+    derive_production_order_lifecycle_with_completed_stage_nodes,
+    derive_production_order_operational_status,
 };
 pub(super) use closed_orders::{
     latest_required_complete_event, required_apparatus_for_closed_order,
@@ -18,6 +20,7 @@ pub(super) use ids::{
 };
 pub(crate) use ids::{progress_batch_id, progress_qr_payload};
 pub(crate) use labels::progress_label_item_name;
+pub(crate) use labels::progress_label_item_name_for_stage;
 pub(super) use labels::{actor_display_name, non_empty_or, valid_progress_qty};
 #[cfg(test)]
 pub(super) use notifications::{

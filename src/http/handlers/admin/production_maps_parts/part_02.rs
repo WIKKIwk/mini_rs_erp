@@ -48,6 +48,7 @@ pub async fn production_map_sequence(
                 "sequences": snapshot.sequences,
                 "visible_order_ids": snapshot.visible_order_ids,
                 "queue_states": snapshot.queue_states,
+                "stage_states": snapshot.stage_states,
                 "queue_policies": snapshot.queue_policies,
                 "queue_action_controls": snapshot.queue_action_controls,
                 "order_statuses": snapshot.order_statuses,

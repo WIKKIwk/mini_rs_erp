@@ -5,6 +5,7 @@ use hyper_util::service::TowerToHyperService;
 use mini_rs_erp::app::AppState;
 use mini_rs_erp::config::AppConfig;
 use mini_rs_erp::db::postgres::connect_and_migrate_required;
+use mini_rs_erp::db::postgres_qolip_item_code_doctor::PostgresQolipItemCodeDoctor;
 use mini_rs_erp::{error, http};
 use socket2::{Domain, Protocol, Socket, Type};
 use std::net::SocketAddr;
@@ -29,7 +30,8 @@ async fn main() -> Result<(), error::AppError> {
     let postgres_pool = connect_and_migrate_required()
         .await
         .map_err(|error| error::AppError::Storage(error.to_string()))?;
-    let state = AppState::from_postgres(config, postgres_pool);
+    let state = AppState::from_postgres(config, postgres_pool.clone());
+    PostgresQolipItemCodeDoctor::from_env(postgres_pool).start_scheduler();
     let bootstrapped_apparatus = state
         .apparatus
         .bootstrap_factory_defaults()

@@ -28,6 +28,7 @@ fn closed_order_freeze_log_entry(freeze: &OrderFreezeAuditRecord) -> ProductionO
         event_id: format!("order-freeze:{}:{}", request.request_id, status),
         apparatus: request.target_apparatus.clone(),
         order_id: freeze.order_id.clone(),
+        stage_node_id: String::new(),
         action: queue_state::ApparatusQueueAction::Freeze,
         from_state: queue_state::ApparatusQueueOrderState::InProgress,
         to_state: if status == "frozen" {

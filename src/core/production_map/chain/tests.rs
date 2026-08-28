@@ -27,6 +27,7 @@ fn node(id: &str, kind: ProductionMapNodeKind, title: &str) -> ProductionMapNode
         alternative_assigned_title: String::new(),
         alternative_assigned_apparatus_id: String::new(),
         rezka_kadr_count: None,
+        rezka_frame_groups: Vec::new(),
         rezka_label_length: None,
         x: 0.0,
         y: 0.0,
@@ -174,6 +175,102 @@ fn linear_work_stages_follows_production_chain() {
         &hotlunch_map(),
         "Noma'lum aparat"
     ));
+}
+
+#[test]
+fn repeated_apparatus_occurrences_remain_distinct_stages() {
+    const REZKA_ID: &str = "apparatus:default:asset-010";
+    let mut map = hotlunch_map();
+    map.nodes = vec![
+        node("start", ProductionMapNodeKind::Start, "Start"),
+        node("bosma", ProductionMapNodeKind::Apparatus, "Bosma"),
+        node(
+            "rezka_before_lamination",
+            ProductionMapNodeKind::Apparatus,
+            "Rezka",
+        ),
+        node(
+            "lamination",
+            ProductionMapNodeKind::Apparatus,
+            "Laminatsiya",
+        ),
+        node(
+            "rezka_final",
+            ProductionMapNodeKind::Apparatus,
+            "Rezka",
+        ),
+        node("end", ProductionMapNodeKind::End, "End"),
+    ];
+    for node in map
+        .nodes
+        .iter_mut()
+        .filter(|node| node.id.starts_with("rezka_"))
+    {
+        node.apparatus_id = REZKA_ID.to_string();
+    }
+    map.edges = vec![
+        ProductionMapEdge {
+            from: "start".to_string(),
+            to: "bosma".to_string(),
+            branch: String::new(),
+        },
+        ProductionMapEdge {
+            from: "bosma".to_string(),
+            to: "rezka_before_lamination".to_string(),
+            branch: String::new(),
+        },
+        ProductionMapEdge {
+            from: "rezka_before_lamination".to_string(),
+            to: "lamination".to_string(),
+            branch: String::new(),
+        },
+        ProductionMapEdge {
+            from: "lamination".to_string(),
+            to: "rezka_final".to_string(),
+            branch: String::new(),
+        },
+        ProductionMapEdge {
+            from: "rezka_final".to_string(),
+            to: "end".to_string(),
+            branch: String::new(),
+        },
+    ];
+
+    let stages = linear_work_stages(&map);
+    assert_eq!(
+        stages
+            .iter()
+            .map(|stage| stage.node_id.as_str())
+            .collect::<Vec<_>>(),
+        vec![
+            "bosma",
+            "rezka_before_lamination",
+            "lamination",
+            "rezka_final",
+        ]
+    );
+    assert_eq!(
+        stages
+            .iter()
+            .filter_map(|stage| stage.apparatus_id.as_deref())
+            .filter(|apparatus| *apparatus == REZKA_ID)
+            .count(),
+        2
+    );
+    assert_eq!(
+        next_work_stage_for_node(&map, "rezka_before_lamination")
+            .map(|stage| stage.node_id),
+        Some("lamination".to_string())
+    );
+    assert_eq!(
+        previous_work_stage_for_node(&map, "rezka_final").map(|stage| stage.node_id),
+        Some("lamination".to_string())
+    );
+    assert!(!is_final_work_stage_node(
+        &map,
+        "rezka_before_lamination"
+    ));
+    assert!(is_final_work_stage_node(&map, "rezka_final"));
 }
 
 #[test]

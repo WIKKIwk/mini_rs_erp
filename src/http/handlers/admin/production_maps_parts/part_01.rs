@@ -314,11 +314,6 @@ pub async fn production_map_save_with_order(
         .is_some_and(|template| is_quick_template_order_clone(&input.map, template));
     let owner_key = principal_owner_key(&principal);
     let map_id = input.map.id.trim().to_string();
-    let template_map = input
-        .template
-        .as_ref()
-        .and_then(|template| template_map_copy_for_save(&input.map, template));
-    let template_map_id = template_map.as_ref().map(|map| map.id.trim().to_string());
     let previous = state
         .production_maps
         .raw_map(&map_id)
@@ -331,6 +326,11 @@ pub async fn production_map_save_with_order(
         let cut_apparatus_ids = canonical_cut_apparatus_ids(&state).await?;
         apply_order_rezka_kadr_count(&mut input.map, template, &cut_apparatus_ids);
     }
+    let template_map = input
+        .template
+        .as_ref()
+        .and_then(|template| template_map_copy_for_save(&input.map, template));
+    let template_map_id = template_map.as_ref().map(|map| map.id.trim().to_string());
     let previous_template_map = match &template_map_id {
         Some(template_map_id) => state
             .production_maps

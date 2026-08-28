@@ -45,7 +45,7 @@ impl ProductionMapService {
                         order_map,
                         &record.intake,
                         apparatus,
-                        "",
+                        &links.stage_node_id,
                     )
                     .is_none()
                 {
@@ -195,7 +195,7 @@ impl ProductionMapService {
                         order_map,
                         &record.intake,
                         apparatus,
-                        "",
+                        &session_input_progress.stage_node_id,
                     )
                     .is_none()
                     || !super::types::apparatus_ids_match(

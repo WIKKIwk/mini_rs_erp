@@ -11,7 +11,14 @@ impl ProductionMapService {
         progress_batch_updates: &[OrderProgressBatch],
         opening_wip_batch_updates: &[OpeningWipBatch],
         ignored_batch_id: &str,
+        stage_node_id: &str,
     ) -> Result<bool, ProductionMapError> {
+        let previous_stage = if stage_node_id.trim().is_empty() {
+            chain::previous_work_stage_station(order_map, apparatus)
+        } else {
+            chain::previous_work_stage_for_node(order_map, stage_node_id)
+                .and_then(|stage| stage.apparatus_id)
+        };
         let records = self
             .store
             .opening_wip_records(OpeningWipQuery {
@@ -28,7 +35,7 @@ impl ProductionMapService {
                         order_map,
                         &record.intake,
                         apparatus,
-                        "",
+                        stage_node_id,
                     )
                     .is_some()
             })
@@ -47,8 +54,7 @@ impl ProductionMapService {
                     )
             }));
         }
-        let Some(previous_apparatus) = chain::previous_work_stage_station(order_map, apparatus)
-        else {
+        let Some(previous_apparatus) = previous_stage else {
             return Ok(false);
         };
         let requires_previous_stage_completion = apparatus::is_laminatsiya_apparatus(canonical)
@@ -82,6 +88,7 @@ impl ProductionMapService {
             all_states,
             &batches,
             ignored_batch_id,
+            stage_node_id,
         ))
     }
 
@@ -193,8 +200,15 @@ fn has_unprocessed_previous_wips_from_batches(
     all_states: &ApparatusQueueStateMap,
     batches: &[OrderProgressBatch],
     ignored_batch_id: &str,
+    stage_node_id: &str,
 ) -> bool {
-    let Some(previous_apparatus) = chain::previous_work_stage_station(order_map, apparatus) else {
+    let previous_apparatus = if stage_node_id.trim().is_empty() {
+        chain::previous_work_stage_station(order_map, apparatus)
+    } else {
+        chain::previous_work_stage_for_node(order_map, stage_node_id)
+            .and_then(|stage| stage.apparatus_id)
+    };
+    let Some(previous_apparatus) = previous_apparatus else {
         return false;
     };
     let requires_previous_stage_completion = apparatus::is_laminatsiya_apparatus(canonical)
@@ -218,6 +232,9 @@ fn has_unprocessed_previous_wips_from_batches(
                     &previous_apparatus,
                 )
                 && chain::stage_ids_match_for_map(order_map, &batch.next_apparatus, apparatus)
+                && (stage_node_id.trim().is_empty()
+                    || progress_batch_next_stage_node_id(batch).is_empty()
+                    || progress_batch_next_stage_node_id(batch) == stage_node_id.trim())
         })
         .any(|batch| {
             if !ignored_batch_id.trim().is_empty()

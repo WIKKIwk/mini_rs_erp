@@ -275,6 +275,7 @@ fn training_worker_map(mut map: ProductionMapDefinition) -> ProductionMapDefinit
         alternative_assigned_title: String::new(),
         alternative_assigned_apparatus_id: String::new(),
         rezka_kadr_count: None,
+        rezka_frame_groups: Vec::new(),
         rezka_label_length: None,
         x: target.x,
         y: target.y - 132.0,

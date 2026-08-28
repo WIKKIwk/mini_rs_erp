@@ -25,6 +25,12 @@ impl ProductionMapService {
             .await?
             .ok_or(ProductionMapError::QueueActionNotAllowed)?;
         let session_input_progress = session_progress_links(&session);
+        let stage = chain::work_stage_for_station(
+            order_map,
+            apparatus,
+            &session_input_progress.stage_node_id,
+        )
+        .ok_or(ProductionMapError::ProgressBatchNotAccepted)?;
         let session_uses_opening_wip = session_input_progress.source_kind == "opening_wip";
         if !session_uses_opening_wip
             && action != queue_state::ApparatusQueueAction::Freeze
@@ -57,7 +63,7 @@ impl ProductionMapService {
                     order_map,
                     &record.intake,
                     apparatus,
-                    "",
+                    &stage.node_id,
                 )
                 .is_none()
                 || record.batch.wip_status != OpeningWipBatchStatus::InUse
@@ -94,12 +100,14 @@ impl ProductionMapService {
                 apparatus,
                 &progress,
                 &session.session_id,
+                &stage.node_id,
             )
             .await?
         } else {
             None
         };
-        let previous_apparatus = chain::previous_work_stage_station(order_map, apparatus);
+        let previous_apparatus = chain::previous_work_stage_for_node(order_map, &stage.node_id)
+            .and_then(|stage| stage.apparatus_id);
         let linked_input_batch = session_input_batch
             .as_ref()
             .filter(|batch| {
@@ -117,6 +125,9 @@ impl ProductionMapService {
                                 &batch.next_apparatus,
                                 apparatus,
                             ))
+                        && (json_string_field(&batch.payload_json, "next_stage_node_id").is_empty()
+                            || json_string_field(&batch.payload_json, "next_stage_node_id")
+                                == stage.node_id.trim())
                         && batch.wip_status == OrderProgressBatchWipStatus::InUse
                         && super::types::apparatus_ids_match(used_by_apparatus, apparatus)
                         && (batch.used_by_session_id.trim().is_empty()
@@ -149,12 +160,26 @@ impl ProductionMapService {
         } else {
             None
         };
-        let input_progress = input_batch
+        let mut input_progress = input_batch
             .as_ref()
             .map(progress_links_from_batch)
             .unwrap_or_else(|| session_input_progress.clone());
+        if input_progress.stage_node_id.trim().is_empty() {
+            input_progress.stage_node_id = stage.node_id.clone();
+        }
+        if input_progress.contained_kadr_count.is_none() {
+            input_progress.contained_kadr_count = session_input_progress.contained_kadr_count;
+        }
         let output_identities = if apparatus::is_rezka_apparatus(canonical) {
-            rezka_output_identities(apparatus, order_id, action, now, order_map)?
+            rezka_output_identities(
+                apparatus,
+                order_id,
+                action,
+                now,
+                order_map,
+                &stage.node_id,
+                input_progress.contained_kadr_count,
+            )?
         } else {
             vec![progress_output_identity(
                 apparatus,
@@ -171,6 +196,9 @@ impl ProductionMapService {
             action,
             &progress,
             &output_identities,
+            apparatus::is_rezka_apparatus(canonical)
+                && action == queue_state::ApparatusQueueAction::Complete
+                && !chain::is_final_work_stage_node(order_map, &stage.node_id),
         )?;
         let frame_issues = if apparatus::is_rezka_apparatus(canonical) {
             rezka_frame_issues_json(&frame_values, output_identities.len(), &input_progress)
@@ -323,6 +351,8 @@ impl ProductionMapService {
                     qr_payload: output_identity.qr_payload.clone(),
                     frame_index: output_identity.frame_index,
                     frame_count: output_identity.frame_count,
+                    contained_kadr_count: output_identity.contained_kadr_count,
+                    rezka_output_kind: output_identity.rezka_output_kind,
                 },
                 metrics: frame_value.metrics,
                 description: &description,

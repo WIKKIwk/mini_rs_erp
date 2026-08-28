@@ -53,6 +53,7 @@ pub(super) fn validate_map(map: &ProductionMapDefinition) -> Result<(), Producti
             ProductionMapNodeKind::Location => {}
             ProductionMapNodeKind::Apparatus => {
                 validate_apparatus_identity(map, node)?;
+                validate_rezka_frame_groups(node)?;
                 if !node.qty_formula.trim().is_empty() {
                     validate_formula_expression(&node.qty_formula)?;
                 }
@@ -100,6 +101,28 @@ pub(super) fn validate_map(map: &ProductionMapDefinition) -> Result<(), Producti
         if !has_true || !has_false {
             return Err(ProductionMapError::MissingConditionBranch);
         }
+    }
+    Ok(())
+}
+
+fn validate_rezka_frame_groups(node: &ProductionMapNode) -> Result<(), ProductionMapError> {
+    if node.rezka_frame_groups.is_empty() {
+        return Ok(());
+    }
+    let Some(expected) = node.rezka_kadr_count.filter(|value| *value > 0) else {
+        return Err(ProductionMapError::InvalidRezkaFrameGroups);
+    };
+    let mut total = 0_i64;
+    for group in &node.rezka_frame_groups {
+        if *group <= 0 {
+            return Err(ProductionMapError::InvalidRezkaFrameGroups);
+        }
+        total = total
+            .checked_add(*group)
+            .ok_or(ProductionMapError::InvalidRezkaFrameGroups)?;
+    }
+    if total != expected {
+        return Err(ProductionMapError::InvalidRezkaFrameGroups);
     }
     Ok(())
 }

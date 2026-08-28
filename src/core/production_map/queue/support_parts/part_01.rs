@@ -89,6 +89,7 @@ pub(super) fn has_waiting_previous_stage_wip(
     order_id: &str,
     previous_stage: &str,
     apparatus: &str,
+    stage_node_id: &str,
 ) -> bool {
     batches.iter().any(|batch| {
         batch.order_id.trim() == order_id.trim()
@@ -109,7 +110,41 @@ pub(super) fn has_waiting_previous_stage_wip(
             )
             && (batch.next_apparatus.trim().is_empty()
                 || super::types::stage_ids_match(&batch.next_apparatus, apparatus))
+            && (progress_batch_next_stage_node_id(batch).is_empty()
+                || progress_batch_next_stage_node_id(batch) == stage_node_id.trim())
             && batch.wip_status == OrderProgressBatchWipStatus::Waiting
+    })
+}
+
+pub(super) fn progress_batch_next_stage_node_id(batch: &OrderProgressBatch) -> String {
+    batch
+        .payload_json
+        .get("next_stage_node_id")
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or_default()
+        .trim()
+        .to_string()
+}
+
+pub(super) fn waiting_reentry_stage_node_id(
+    map: &ProductionMapDefinition,
+    batches: &[OrderProgressBatch],
+    order_id: &str,
+    apparatus: &str,
+) -> Option<String> {
+    batches.iter().find_map(|batch| {
+        if batch.order_id.trim() != order_id.trim()
+            || batch.wip_status != OrderProgressBatchWipStatus::Waiting
+        {
+            return None;
+        }
+        let stage_node_id = progress_batch_next_stage_node_id(batch);
+        if stage_node_id.is_empty()
+            || chain::work_stage_for_station(map, apparatus, &stage_node_id).is_none()
+        {
+            return None;
+        }
+        Some(stage_node_id)
     })
 }
 
