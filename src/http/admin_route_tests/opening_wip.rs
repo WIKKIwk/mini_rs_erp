@@ -76,6 +76,78 @@ async fn opening_wip_admin_delete_accepts_query_without_body() {
 }
 
 #[tokio::test]
+async fn opening_wip_qr_report_finds_batch_without_apparatus_or_order() {
+    let state = test_state();
+    let admin_token = session(&state, PrincipalRole::Admin).await;
+    let router = build_router(state);
+    let order_id = "zakaz-opening-wip-qr-report";
+
+    let saved = router
+        .clone()
+        .oneshot(request_with_body(
+            "PUT",
+            "/v1/mobile/admin/production-maps",
+            &admin_token,
+            &laminatsiya_order_map_json(order_id, 900.0),
+        ))
+        .await
+        .expect("save map");
+    assert_eq!(saved.status(), StatusCode::OK);
+
+    let created = router
+        .clone()
+        .oneshot(request_with_body(
+            "POST",
+            "/v1/mobile/admin/production-maps/opening-wip",
+            &admin_token,
+            &format!(
+                r#"{{
+                    "idempotency_key":"opening-wip-qr-report-request",
+                    "order_id":"{order_id}",
+                    "entry_apparatus":"{LAMINATION_ID}",
+                    "current_location":"{LAMINATION_ID}",
+                    "batches":[{{
+                        "quantity_basis":"measured",
+                        "finished_goods_meter":100.0,
+                        "finished_goods_kg":12.0,
+                        "bobina_kg":1.0
+                    }}]
+                }}"#
+            ),
+        ))
+        .await
+        .expect("create Opening WIP");
+    let created_status = created.status();
+    let created_body = json_body(created).await;
+    assert_eq!(created_status, StatusCode::OK, "{created_body:?}");
+    let qr_payload = created_body["record"]["batches"][0]["qr_payload"]
+        .as_str()
+        .expect("Opening WIP QR")
+        .to_string();
+
+    let report = router
+        .clone()
+        .oneshot(request_with_body(
+            "POST",
+            "/v1/mobile/admin/production-maps/opening-wip/qr/report",
+            &admin_token,
+            &format!(r#"{{"qr_payload":"{qr_payload}"}}"#),
+        ))
+        .await
+        .expect("Opening WIP QR report");
+    let report_status = report.status();
+    let report_body = json_body(report).await;
+    assert_eq!(report_status, StatusCode::OK, "{report_body:?}");
+    assert_eq!(report_body["ok"], true);
+    assert_eq!(report_body["record"]["intake"]["order_id"], order_id);
+    assert_eq!(
+        report_body["record"]["batches"][0]["qr_payload"],
+        qr_payload
+    );
+    assert_eq!(report_body["record"]["batches"][0]["wip_status"], "waiting");
+}
+
+#[tokio::test]
 async fn opening_wip_worker_lookup_is_qr_exact_and_apparatus_scoped() {
     let state = test_state();
     state

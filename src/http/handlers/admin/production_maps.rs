@@ -53,7 +53,7 @@ pub use self::move_run::{
 pub use self::order_control::production_map_order_control;
 pub use self::opening_wip::{
     production_map_opening_wip, production_map_opening_wip_lookup,
-    production_map_opening_wip_print,
+    production_map_opening_wip_print, production_map_opening_wip_qr_report,
 };
 pub use self::paddons::{
     production_map_paddon_create, production_map_paddon_detail, production_map_paddon_item_add,

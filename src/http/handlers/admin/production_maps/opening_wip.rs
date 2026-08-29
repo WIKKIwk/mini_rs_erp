@@ -45,6 +45,12 @@ pub struct OpeningWipLookupRequest {
 }
 
 #[derive(Default, serde::Deserialize)]
+pub struct OpeningWipQrReportRequest {
+    #[serde(default)]
+    qr_payload: String,
+}
+
+#[derive(Default, serde::Deserialize)]
 pub struct OpeningWipDeleteRequest {
     #[serde(default)]
     batch_id: String,
@@ -324,5 +330,54 @@ pub async fn production_map_opening_wip_lookup(
     Ok(json_response(serde_json::json!({
         "ok": true,
         "batch": details.batch,
+    })))
+}
+
+pub async fn production_map_opening_wip_qr_report(
+    State(state): State<AppState>,
+    method: Method,
+    headers: HeaderMap,
+    body: Bytes,
+) -> Result<Response, AdminError> {
+    authorize_any_capability(
+        &state,
+        &headers,
+        &[
+            Capability::AdminAccess,
+            Capability::ProductionMapManage,
+            Capability::ApparatusQueueRead,
+            Capability::ApparatusQueueManage,
+        ],
+    )
+    .await?;
+    if method != Method::POST {
+        return Err(method_not_allowed());
+    }
+    let input: OpeningWipQrReportRequest = parse_json(&body)?;
+    if input.qr_payload.trim().is_empty() {
+        return Err(bad_request("opening_wip_qr_not_found"));
+    }
+    let details = match state
+        .production_maps
+        .opening_wip_batch("", &input.qr_payload)
+        .await
+    {
+        Ok(details) => details,
+        Err(ProductionMapError::ProgressBatchNotFound) => {
+            return Err(not_found("opening_wip_qr_not_found"));
+        }
+        Err(error) => return Err(production_map_error(error)),
+    };
+    if details.intake.status != OpeningWipIntakeStatus::Confirmed
+        || details.batch.wip_status == OpeningWipBatchStatus::Void
+    {
+        return Err(not_found("opening_wip_qr_not_found"));
+    }
+    Ok(json_response(serde_json::json!({
+        "ok": true,
+        "record": {
+            "intake": details.intake,
+            "batches": [details.batch],
+        },
     })))
 }
