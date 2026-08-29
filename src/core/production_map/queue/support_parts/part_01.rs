@@ -85,6 +85,7 @@ pub(super) fn order_run_session_was_requeued(session: &OrderRunSession) -> bool 
 }
 
 pub(super) fn has_waiting_previous_stage_wip(
+    map: &ProductionMapDefinition,
     batches: &[OrderProgressBatch],
     order_id: &str,
     previous_stage: &str,
@@ -109,9 +110,13 @@ pub(super) fn has_waiting_previous_stage_wip(
                     | OrderProgressBatchStatus::Resumed
             )
             && (batch.next_apparatus.trim().is_empty()
-                || super::types::stage_ids_match(&batch.next_apparatus, apparatus))
+                || chain::stage_ids_match_for_map(map, &batch.next_apparatus, apparatus))
             && (progress_batch_next_stage_node_id(batch).is_empty()
-                || progress_batch_next_stage_node_id(batch) == stage_node_id.trim())
+                || chain::stage_node_ids_match_for_map(
+                    map,
+                    &progress_batch_next_stage_node_id(batch),
+                    stage_node_id,
+                ))
             && batch.wip_status == OrderProgressBatchWipStatus::Waiting
     })
 }

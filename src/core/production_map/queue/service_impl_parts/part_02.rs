@@ -236,6 +236,7 @@ impl ProductionMapService {
                     .as_deref()
                     .map(|previous_stage| {
                         if has_waiting_previous_stage_wip(
+                            order_map,
                             batches,
                             order_id.trim(),
                             previous_stage,

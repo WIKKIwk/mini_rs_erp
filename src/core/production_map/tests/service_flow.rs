@@ -4139,6 +4139,42 @@ async fn unassigned_alternative_stage_is_claimed_by_first_started_candidate() {
     assert_eq!(third_wips.len(), 1);
     assert_eq!(third_wips[0].batch_id, first_batch.batch_id);
 
+    let controls = service
+        .queue_action_controls()
+        .await
+        .expect("alternative controls before claim");
+    let third_control = controls
+        .get(third)
+        .and_then(|orders| orders.get(order_id))
+        .expect("third alternative control");
+    let unclaimed_map = service
+        .map(order_id)
+        .await
+        .expect("unclaimed alternative map")
+        .expect("unclaimed map exists")
+        .map;
+    let batch_stage_node_id = first_batch.payload_json["next_stage_node_id"]
+        .as_str()
+        .expect("batch target stage node");
+    assert!(
+        chain::stage_node_ids_match_for_map(
+            &unclaimed_map,
+            batch_stage_node_id,
+            &third_control.stage_node_id,
+        ),
+        "batch node {batch_stage_node_id} must match alternative node {}",
+        third_control.stage_node_id,
+    );
+    assert_eq!(
+        third_control.interaction.previous_wip_mode,
+        ApparatusQueuePreviousWipMode::ScanRequired
+    );
+    assert!(
+        third_control
+            .allowed_actions
+            .contains(&queue_state::ApparatusQueueAction::Start)
+    );
+
     service
         .apply_apparatus_queue_action_with_progress(
             third,

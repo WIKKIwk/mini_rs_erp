@@ -294,6 +294,46 @@ pub fn stage_ids_match_for_map(map: &ProductionMapDefinition, left: &str, right:
         && right_node.alternative_assigned_apparatus_id.trim() == right_id.as_str()
 }
 
+/// Match two concrete topology occurrences without collapsing repeated uses of
+/// the same apparatus. Different node IDs are interchangeable only when they
+/// belong to the same valid alternative group.
+pub fn stage_node_ids_match_for_map(
+    map: &ProductionMapDefinition,
+    left: &str,
+    right: &str,
+) -> bool {
+    let left = left.trim();
+    let right = right.trim();
+    if left.is_empty() || right.is_empty() {
+        return false;
+    }
+    if left == right {
+        return true;
+    }
+    let Some(left_node) = map.nodes.iter().find(|node| node.id.trim() == left) else {
+        return false;
+    };
+    let Some(right_node) = map.nodes.iter().find(|node| node.id.trim() == right) else {
+        return false;
+    };
+    if left_node.kind != ProductionMapNodeKind::Apparatus
+        || right_node.kind != ProductionMapNodeKind::Apparatus
+    {
+        return false;
+    }
+    let group_id = left_node.alternative_group_id.trim();
+    if group_id.is_empty() || group_id != right_node.alternative_group_id.trim() {
+        return false;
+    }
+    let Some(left_apparatus) = canonical_apparatus_identity(left_node) else {
+        return false;
+    };
+    let Some(right_apparatus) = canonical_apparatus_identity(right_node) else {
+        return false;
+    };
+    stage_ids_match_for_map(map, &left_apparatus, &right_apparatus)
+}
+
 pub fn order_ready_for_station(
     map: &ProductionMapDefinition,
     order_id: &str,
