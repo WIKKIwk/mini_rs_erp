@@ -209,11 +209,12 @@ async fn raw_material_assignment_unlink_rejects_started_stock() {
         ))
         .await
         .expect("unlink locked assignment");
-    assert_eq!(locked.status(), StatusCode::BAD_REQUEST);
-    assert_eq!(
-        json_body(locked).await["error"],
-        "raw_material_assignment_locked"
-    );
+    let locked_status = locked.status();
+    let locked_body = json_body(locked).await;
+    assert_eq!(locked_status, StatusCode::BAD_REQUEST, "{locked_body:?}");
+    assert_eq!(locked_body["error"], "raw_material_assignment_locked");
+    assert_eq!(locked_body["order_title"], "Raw unlink locked");
+    assert_eq!(locked_body["raw_material_status"], "in_use");
 
     let assignments_after_reject = router
         .oneshot(request(

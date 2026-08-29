@@ -302,22 +302,43 @@ async fn find_raw_material_assignment(
 
 async fn raw_material_unlink_stock_guard(
     state: &AppState,
-    barcode: &str,
+    principal: &Principal,
+    assignment: &RawMaterialAssignment,
 ) -> Result<Option<RawMaterialStockEntry>, AdminError> {
     let stock = state
         .gscale
-        .raw_material_stock_by_barcode(barcode)
+        .raw_material_stock_by_barcode(&assignment.barcode)
         .await
         .map_err(|_| server_error("raw material stock fetch failed"))?;
-    if let Some(stock) = stock.as_ref() {
-        let status = stock.status.trim();
-        if !status.is_empty() && !status.eq_ignore_ascii_case("available") {
+    if principal.role == PrincipalRole::MaterialTaminotchi {
+        let stock = stock.as_ref().ok_or_else(forbidden)?;
+        require_material_warehouse_scope(state, principal, &stock.warehouse).await?;
+        require_material_item_group_scope(state, principal, &assignment.item_group).await?;
+        let assigned_apparatus = state.admin.principal_assigned_apparatus(principal).await;
+        if !assigned_apparatus_contains(assignment.apparatus_id.as_ref(), &assigned_apparatus) {
             return Err(production_map_error(
-                ProductionMapError::RawMaterialAssignmentLocked,
+                ProductionMapError::ApparatusNotAssigned,
             ));
         }
     }
+    if let Some(stock) = stock.as_ref() {
+        let status = stock.status.trim();
+        if !status.is_empty() && !status.eq_ignore_ascii_case("available") {
+            return Err(raw_material_assignment_locked_error(state, assignment, status).await);
+        }
+    }
     Ok(stock)
+}
+
+async fn raw_material_assignment_locked_error(
+    state: &AppState,
+    assignment: &RawMaterialAssignment,
+    status: &str,
+) -> AdminError {
+    let mut response = AdminErrorResponse::new("raw_material_assignment_locked");
+    response.order_title = Some(raw_material_order_title(state, &assignment.order_id).await);
+    response.raw_material_status = Some(status.trim().to_ascii_lowercase());
+    (StatusCode::BAD_REQUEST, Json(response))
 }
 
 async fn record_raw_material_unlink_event(

@@ -332,6 +332,10 @@ pub struct AdminErrorResponse {
     pub order_width_mm: Option<f64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub roll_width_mm: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub order_title: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub raw_material_status: Option<String>,
 }
 
 impl AdminErrorResponse {
@@ -342,6 +346,8 @@ impl AdminErrorResponse {
             apparatus_options: None,
             order_width_mm: None,
             roll_width_mm: None,
+            order_title: None,
+            raw_material_status: None,
         }
     }
 
@@ -352,6 +358,8 @@ impl AdminErrorResponse {
             apparatus_options: None,
             order_width_mm: Some(order_width_mm),
             roll_width_mm: Some(roll_width_mm),
+            order_title: None,
+            raw_material_status: None,
         }
     }
 }

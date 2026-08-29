@@ -289,6 +289,8 @@ pub(super) fn production_map_error(error: ProductionMapError) -> AdminError {
                 apparatus_options: None,
                 order_width_mm: None,
                 roll_width_mm: None,
+                order_title: None,
+                raw_material_status: None,
             }),
         ),
         ProductionMapError::PreviousStageNotCompleted => {

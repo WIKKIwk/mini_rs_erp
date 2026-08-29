@@ -312,11 +312,18 @@ pub async fn raw_material_assignments(
             let input: RawMaterialAssignmentInput = parse_json(&body)?;
             let (input, warehouse) =
                 fill_raw_material_assignment_input(&state, &principal, input).await?;
-            let assigned = state
+            let barcode = input.barcode.clone();
+            let assigned = match state
                 .production_maps
                 .assign_raw_material_to_order(input, &queue_action_actor(&principal))
                 .await
-                .map_err(production_map_error)?;
+            {
+                Ok(assigned) => assigned,
+                Err(ProductionMapError::RawMaterialAlreadyAssigned) => {
+                    return Err(raw_material_already_assigned_error(&state, &barcode).await);
+                }
+                Err(error) => return Err(production_map_error(error)),
+            };
             state
                 .warehouse_events
                 .notify_updated(&warehouse, "raw_material_assignment");
@@ -332,12 +339,24 @@ pub async fn raw_material_assignments(
                 .ok_or_else(|| {
                     production_map_error(ProductionMapError::RawMaterialAssignmentNotFound)
                 })?;
-            let stock = raw_material_unlink_stock_guard(&state, &existing.barcode).await?;
-            let removed = state
+            let stock = raw_material_unlink_stock_guard(&state, &principal, &existing).await?;
+            let removed = match state
                 .production_maps
                 .unlink_raw_material_assignment(input)
                 .await
-                .map_err(production_map_error)?;
+            {
+                Ok(removed) => removed,
+                Err(ProductionMapError::RawMaterialAssignmentLocked) => {
+                    let status = stock
+                        .as_ref()
+                        .map(|entry| entry.status.as_str())
+                        .unwrap_or("locked");
+                    return Err(
+                        raw_material_assignment_locked_error(&state, &existing, status).await,
+                    );
+                }
+                Err(error) => return Err(production_map_error(error)),
+            };
             record_raw_material_unlink_event(&state, &principal, &removed).await;
             record_raw_material_unassignment_event(&state, &principal, &removed, stock.as_ref())
                 .await;
@@ -353,6 +372,59 @@ pub async fn raw_material_assignments(
         }
         _ => Err(method_not_allowed()),
     }
+}
+
+async fn raw_material_already_assigned_error(state: &AppState, barcode: &str) -> AdminError {
+    let normalized_barcode = barcode.trim().to_ascii_uppercase();
+    let assignment = state
+        .production_maps
+        .raw_material_assignments()
+        .await
+        .ok()
+        .and_then(|assignments| {
+            assignments.into_iter().find(|assignment| {
+                assignment.barcode.trim().to_ascii_uppercase() == normalized_barcode
+            })
+        });
+    let Some(assignment) = assignment else {
+        return bad_request("raw_material_already_assigned");
+    };
+
+    let order_title = raw_material_order_title(state, &assignment.order_id).await;
+
+    let mut response = AdminErrorResponse::new("raw_material_already_assigned");
+    response.order_title = Some(order_title);
+    (StatusCode::BAD_REQUEST, Json(response))
+}
+
+async fn raw_material_order_title(state: &AppState, order_id: &str) -> String {
+    let order_id = order_id.trim().to_string();
+    state
+        .production_maps
+        .raw_map(&order_id)
+        .await
+        .ok()
+        .flatten()
+        .map(|order| {
+            let title = order.title.trim();
+            if title.is_empty() {
+                let code = order.code.trim();
+                if code.is_empty() {
+                    let number = order.order_number.trim();
+                    if number.is_empty() {
+                        order.id.trim()
+                    } else {
+                        number
+                    }
+                } else {
+                    code
+                }
+            } else {
+                title
+            }
+            .to_string()
+        })
+        .unwrap_or(order_id)
 }
 
 pub async fn raw_material_assignment_orders(
