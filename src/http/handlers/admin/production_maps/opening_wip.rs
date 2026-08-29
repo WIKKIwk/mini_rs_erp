@@ -10,6 +10,8 @@ pub struct OpeningWipHttpQuery {
     status: String,
     #[serde(default)]
     limit: Option<String>,
+    #[serde(default)]
+    batch_id: String,
 }
 
 #[derive(Default, serde::Deserialize)]
@@ -40,6 +42,12 @@ pub struct OpeningWipLookupRequest {
     batch_id: String,
     #[serde(default)]
     qr_payload: String,
+}
+
+#[derive(Default, serde::Deserialize)]
+pub struct OpeningWipDeleteRequest {
+    #[serde(default)]
+    batch_id: String,
 }
 
 pub async fn production_map_opening_wip(
@@ -87,6 +95,33 @@ pub async fn production_map_opening_wip(
                 .map_err(production_map_error)?;
             Ok(json_response(serde_json::json!({ "records": records })))
         }
+        Method::DELETE => {
+            if !state
+                .admin
+                .principal_has_capability(&principal, Capability::AdminAccess)
+                .await
+            {
+                return Err(forbidden());
+            }
+            let batch_id = if query.batch_id.trim().is_empty() {
+                parse_json::<OpeningWipDeleteRequest>(&body)?.batch_id
+            } else {
+                query.batch_id
+            };
+            let deleted = state
+                .production_maps
+                .delete_opening_wip_batch(
+                    &batch_id,
+                    queue_action_actor(&principal),
+                )
+                .await
+                .map_err(production_map_error)?;
+            Ok(json_response(serde_json::json!({
+                "ok": true,
+                "batch": deleted.batch,
+                "intake": deleted.intake,
+            })))
+        }
         _ => Err(method_not_allowed()),
     }
 }
@@ -112,6 +147,11 @@ pub async fn production_map_opening_wip_print(
         .opening_wip_batch(&input.batch_id, &input.qr_payload)
         .await
         .map_err(production_map_error)?;
+    if details.intake.status != OpeningWipIntakeStatus::Confirmed
+        || details.batch.wip_status == OpeningWipBatchStatus::Void
+    {
+        return Err(not_found("progress_batch_not_found"));
+    }
     let source_apparatus_id = if details.intake.source_apparatus.trim().is_empty() {
         details.intake.entry_apparatus.as_str()
     } else {

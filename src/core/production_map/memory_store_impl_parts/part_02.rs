@@ -86,6 +86,94 @@ impl MemoryProductionMapStore {
         Ok(None)
     }
 
+    async fn delete_opening_wip_batch(
+        &self,
+        write: OpeningWipDeleteWrite,
+    ) -> Result<OpeningWipBatchRecord, ProductionMapError> {
+        let batch_id = write.batch_id.trim();
+        if batch_id.is_empty() {
+            return Err(ProductionMapError::OpeningWipInvalidInput);
+        }
+        let mut records = self.opening_wip_records.write().await;
+        let record = records
+            .values_mut()
+            .find(|record| {
+                record
+                    .batches
+                    .iter()
+                    .any(|batch| batch.batch_id.trim() == batch_id)
+            })
+            .ok_or(ProductionMapError::ProgressBatchNotFound)?;
+        let batch_index = record
+            .batches
+            .iter()
+            .position(|batch| batch.batch_id.trim() == batch_id)
+            .ok_or(ProductionMapError::ProgressBatchNotFound)?;
+        let current = &record.batches[batch_index];
+        if current.wip_status == OpeningWipBatchStatus::Void {
+            return Ok(OpeningWipBatchRecord {
+                intake: record.intake.clone(),
+                batch: current.clone(),
+            });
+        }
+        if record.intake.status != OpeningWipIntakeStatus::Confirmed
+            || current.wip_status != OpeningWipBatchStatus::Waiting
+            || !current.used_by_session_id.trim().is_empty()
+            || !current.used_by_apparatus.trim().is_empty()
+            || !current.processed_by_session_id.trim().is_empty()
+            || !current.processed_by_apparatus.trim().is_empty()
+        {
+            return Err(ProductionMapError::OpeningWipDeleteLocked);
+        }
+        let payload_uses_batch = |payload: &serde_json::Value| {
+            payload
+                .get("input_wip_source_kind")
+                .and_then(serde_json::Value::as_str)
+                .is_some_and(|source| source.eq_ignore_ascii_case("opening_wip"))
+                && payload
+                    .get("input_progress_batch_id")
+                    .and_then(serde_json::Value::as_str)
+                    .is_some_and(|value| value.trim() == batch_id)
+        };
+        let has_lineage = self
+            .order_run_sessions
+            .read()
+            .await
+            .values()
+            .any(|session| payload_uses_batch(&session.payload_json))
+            || self
+                .order_progress_events
+                .read()
+                .await
+                .iter()
+                .any(|event| payload_uses_batch(&event.payload_json))
+            || self
+                .order_progress_batches
+                .read()
+                .await
+                .values()
+                .any(|batch| batch.parent_batch_id.trim() == batch_id);
+        if has_lineage {
+            return Err(ProductionMapError::OpeningWipDeleteLocked);
+        }
+
+        let batch = &mut record.batches[batch_index];
+        batch.wip_status = OpeningWipBatchStatus::Void;
+        batch.updated_at_unix = write.deleted_at_unix;
+        if record
+            .batches
+            .iter()
+            .all(|batch| batch.wip_status == OpeningWipBatchStatus::Void)
+        {
+            record.intake.status = OpeningWipIntakeStatus::Cancelled;
+            record.intake.updated_at_unix = write.deleted_at_unix;
+        }
+        Ok(OpeningWipBatchRecord {
+            intake: record.intake.clone(),
+            batch: record.batches[batch_index].clone(),
+        })
+    }
+
     async fn put_order_progress_batch(
         &self,
         batch: OrderProgressBatch,

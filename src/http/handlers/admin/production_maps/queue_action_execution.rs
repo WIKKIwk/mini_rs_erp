@@ -87,7 +87,7 @@ async fn execute_queue_action(
         };
     if !completed_material_barcodes.is_empty() {
         raw_material_stock_transitions.push(RawMaterialStockTransition::new(
-            RawMaterialStockTransitionKind::Consumed,
+            RawMaterialStockTransitionKind::Complete,
             completed_material_barcodes,
             &input.order_id,
         ));
@@ -178,7 +178,7 @@ async fn execute_queue_action(
         .await
         .map_err(production_map_error)?;
     let mut warehouse_stock_update_warehouses = result.raw_material_stock_warehouses.clone();
-    if !raw_material_stock_transitions.is_empty() && warehouse_stock_update_warehouses.is_empty() {
+    if !raw_material_stock_transitions.is_empty() && !result.raw_material_stock_committed {
         for transition in &raw_material_stock_transitions {
             let updates = match transition.kind {
                 RawMaterialStockTransitionKind::InUse => {
@@ -195,6 +195,16 @@ async fn execute_queue_action(
                             &transition.order_id,
                         )
                         .await
+                }
+                RawMaterialStockTransitionKind::Complete => {
+                    let warehouses = settle_completion_raw_materials_fallback(
+                        state,
+                        &transition.order_id,
+                        &transition.barcodes,
+                    )
+                    .await?;
+                    warehouse_stock_update_warehouses.extend(warehouses);
+                    continue;
                 }
             }
             .map_err(raw_material_stock_status_error)?;

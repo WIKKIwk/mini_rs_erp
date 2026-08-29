@@ -29,6 +29,10 @@ fn material_routes() -> Router<AppState> {
             any(admin::raw_material_assignment_candidate_orders),
         )
         .route(
+            "/v1/mobile/admin/raw-material-assignments/diagnostics",
+            any(admin::raw_material_assignment_diagnostics),
+        )
+        .route(
             "/v1/mobile/admin/raw-material-assignments",
             any(admin::raw_material_assignments),
         )

@@ -38,18 +38,6 @@ pub struct QolipProductSpec {
     pub created_by_name: String,
 }
 
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
-pub struct QolipOrderNote {
-    pub order_id: String,
-    pub item_code: String,
-    pub item_name: String,
-    #[serde(default)]
-    pub qolip_codes: Vec<String>,
-    pub status: String,
-    #[serde(default)]
-    pub updated_at: String,
-}
-
 #[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize)]
 pub struct QolipProductSpecUpsert {
     #[serde(default)]

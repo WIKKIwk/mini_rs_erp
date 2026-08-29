@@ -3,7 +3,7 @@ const DEFAULT_MAX_CONNECTIONS: u32 = 16;
 const DEFAULT_ACQUIRE_TIMEOUT_MS: u64 = 500;
 const MIGRATION_LOCK_KEY: i64 = 6_514_811_918_052_026_001;
 
-const POSTGRES_MIGRATIONS: [(&str, &str); 83] = [
+const POSTGRES_MIGRATIONS: [(&str, &str); 84] = [
     (
         "0001_mini_erp_foundation",
         include_str!("../../../migrations/postgres/0001_mini_erp_foundation.sql"),
@@ -337,6 +337,10 @@ const POSTGRES_MIGRATIONS: [(&str, &str); 83] = [
     (
         "0083_opening_wip_source_contract",
         include_str!("../../../migrations/postgres/0083_opening_wip_source_contract.sql"),
+    ),
+    (
+        "0084_opening_wip_soft_delete",
+        include_str!("../../../migrations/postgres/0084_opening_wip_soft_delete.sql"),
     ),
 ];
 

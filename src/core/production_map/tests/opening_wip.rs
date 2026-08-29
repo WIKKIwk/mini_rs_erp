@@ -611,7 +611,7 @@ async fn opening_wip_source_allows_each_legal_next_stage_alternative() {
 }
 
 #[tokio::test]
-async fn opening_wip_source_advances_after_its_target_stage_is_completed() {
+async fn opening_wip_source_can_be_reused_after_its_target_stage_is_completed() {
     let store = Arc::new(MemoryProductionMapStore::new());
     let service = ProductionMapService::new_for_test(store);
     let order_id = "zakaz-opening-wip-source-advance";
@@ -658,19 +658,71 @@ async fn opening_wip_source_advances_after_its_target_stage_is_completed() {
         .await
         .expect("lamination completes the final Opening WIP roll");
 
+    let mut second_print_input = source_opening_input(
+        order_id,
+        "opening-wip-source-advance-print-again",
+        PECHAT_ID,
+        "apparatus",
+    );
+    second_print_input.batches.truncate(1);
+    let second_print_opening = service
+        .create_opening_wip(second_print_input, admin_actor())
+        .await
+        .expect("completed lamination accepts another print-source Opening WIP");
+    assert_eq!(second_print_opening.intake.source_apparatus, PECHAT_ID);
+
+    let controls = service
+        .queue_action_controls()
+        .await
+        .expect("completed lamination reentry controls");
+    let lamination_control = &controls[LAMINATION_ID][order_id];
+    assert_eq!(
+        lamination_control.state,
+        queue_state::ApparatusQueueOrderState::Pending
+    );
+    assert_eq!(
+        lamination_control.interaction.opening_wip_mode,
+        ApparatusQueuePreviousWipMode::ScanRequired
+    );
+    assert!(
+        lamination_control
+            .allowed_actions
+            .contains(&queue_state::ApparatusQueueAction::Start)
+    );
+
+    service
+        .apply_apparatus_queue_action_with_progress(
+            LAMINATION_ID,
+            order_id,
+            queue_state::ApparatusQueueAction::Start,
+            &assigned,
+            worker_actor(),
+            QueueProgressInput {
+                qr_payload: second_print_opening.batches[0].qr_payload.clone(),
+                ..QueueProgressInput::default()
+            },
+        )
+        .await
+        .expect("completed lamination starts another print Opening WIP");
+    service
+        .apply_apparatus_queue_action_with_progress(
+            LAMINATION_ID,
+            order_id,
+            queue_state::ApparatusQueueAction::Complete,
+            &assigned,
+            worker_actor(),
+            lamination_complete_input(),
+        )
+        .await
+        .expect("lamination completes another print Opening WIP");
     assert_eq!(
         service
-            .create_opening_wip(
-                source_opening_input(
-                    order_id,
-                    "opening-wip-source-advance-print-again",
-                    PECHAT_ID,
-                    "apparatus",
-                ),
-                admin_actor(),
-            )
-            .await,
-        Err(ProductionMapError::OpeningWipTargetStageAlreadyCompleted)
+            .opening_wip_batch(&second_print_opening.batches[0].batch_id, "")
+            .await
+            .expect("second print Opening WIP batch")
+            .batch
+            .wip_status,
+        OpeningWipBatchStatus::Processed
     );
 
     let next = service
@@ -687,4 +739,109 @@ async fn opening_wip_source_advances_after_its_target_stage_is_completed() {
         .expect("lamination-source Opening WIP remains available for rezka");
     assert_eq!(next.intake.source_apparatus, LAMINATION_ID);
     assert_eq!(next.intake.resume_stage_node_id, "second");
+}
+
+#[tokio::test]
+async fn opening_wip_delete_voids_only_unused_batches_and_cancels_last_intake() {
+    let store = Arc::new(MemoryProductionMapStore::new());
+    let service = ProductionMapService::new_for_test(store);
+    let order_id = "zakaz-opening-wip-delete-unused";
+    service
+        .upsert_map(apparatus_stage_map(order_id, LAMINATION_ID))
+        .await
+        .expect("opening order map");
+    let opening = service
+        .create_opening_wip(
+            opening_input(order_id, "opening-wip-delete-unused-request"),
+            admin_actor(),
+        )
+        .await
+        .expect("opening WIP");
+
+    let first = service
+        .delete_opening_wip_batch(&opening.batches[0].batch_id, admin_actor())
+        .await
+        .expect("delete first unused batch");
+    assert_eq!(first.batch.wip_status, OpeningWipBatchStatus::Void);
+    assert_eq!(first.intake.status, OpeningWipIntakeStatus::Confirmed);
+
+    let last = service
+        .delete_opening_wip_batch(&opening.batches[1].batch_id, admin_actor())
+        .await
+        .expect("delete last unused batch");
+    assert_eq!(last.batch.wip_status, OpeningWipBatchStatus::Void);
+    assert_eq!(last.intake.status, OpeningWipIntakeStatus::Cancelled);
+}
+
+#[tokio::test]
+async fn opening_wip_delete_rejects_non_admin_and_used_batch() {
+    let store = Arc::new(MemoryProductionMapStore::new());
+    let service = ProductionMapService::new_for_test(store);
+    let order_id = "zakaz-opening-wip-delete-used";
+    service
+        .upsert_map(canonical_two_stage_map(
+            order_id,
+            PECHAT_ID,
+            "7 ta rangli bosma aparat",
+            LAMINATION_ID,
+            "Laminatsiya 1",
+        ))
+        .await
+        .expect("opening order map");
+    let mut input = opening_input(order_id, "opening-wip-delete-used-request");
+    input.entry_apparatus.clear();
+    input.current_location.clear();
+    input.source_apparatus = PECHAT_ID.to_string();
+    input.source_stage_node_id = "apparatus".to_string();
+    input.batches.truncate(1);
+    let opening = service
+        .create_opening_wip(input, admin_actor())
+        .await
+        .expect("opening WIP");
+    let batch = &opening.batches[0];
+
+    assert_eq!(
+        service
+            .delete_opening_wip_batch(&batch.batch_id, worker_actor())
+            .await,
+        Err(ProductionMapError::OpeningWipDeleteForbidden),
+    );
+
+    service
+        .apply_apparatus_queue_action_with_progress(
+            LAMINATION_ID,
+            order_id,
+            queue_state::ApparatusQueueAction::Start,
+            &[LAMINATION_ID.to_string()],
+            worker_actor(),
+            QueueProgressInput {
+                qr_payload: batch.qr_payload.clone(),
+                ..QueueProgressInput::default()
+            },
+        )
+        .await
+        .expect("apparatchi starts with opening WIP");
+    assert_eq!(
+        service
+            .delete_opening_wip_batch(&batch.batch_id, admin_actor())
+            .await,
+        Err(ProductionMapError::OpeningWipDeleteLocked),
+    );
+    service
+        .apply_apparatus_queue_action_with_progress(
+            LAMINATION_ID,
+            order_id,
+            queue_state::ApparatusQueueAction::Complete,
+            &[LAMINATION_ID.to_string()],
+            worker_actor(),
+            lamination_complete_input(),
+        )
+        .await
+        .expect("apparatchi completes opening WIP");
+    assert_eq!(
+        service
+            .delete_opening_wip_batch(&batch.batch_id, admin_actor())
+            .await,
+        Err(ProductionMapError::OpeningWipDeleteLocked),
+    );
 }

@@ -361,6 +361,13 @@ impl ProductionMapStorePort for MemoryProductionMapStore {
         MemoryProductionMapStore::create_opening_wip(self, write).await
     }
 
+    async fn delete_opening_wip_batch(
+        &self,
+        write: OpeningWipDeleteWrite,
+    ) -> Result<OpeningWipBatchRecord, ProductionMapError> {
+        MemoryProductionMapStore::delete_opening_wip_batch(self, write).await
+    }
+
     async fn put_order_run_session(
         &self,
         session: OrderRunSession,

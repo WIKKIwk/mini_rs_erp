@@ -228,5 +228,7 @@ pub struct ApparatusQueueActionResult {
     #[serde(skip)]
     pub raw_material_stock_warehouses: Vec<String>,
     #[serde(skip)]
+    pub raw_material_stock_committed: bool,
+    #[serde(skip)]
     pub qolip_checkout_committed: bool,
 }

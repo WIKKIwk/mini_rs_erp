@@ -2,8 +2,8 @@ use sqlx::{PgPool, Postgres, Transaction};
 
 use crate::core::production_map::{
     OpeningWipBatch, OpeningWipBatchRecord, OpeningWipBatchStatus, OpeningWipCreateWrite,
-    OpeningWipIntake, OpeningWipIntakeStatus, OpeningWipQuantityBasis, OpeningWipQuery,
-    OpeningWipRecord, ProductionMapError, QueueActionActor,
+    OpeningWipDeleteWrite, OpeningWipIntake, OpeningWipIntakeStatus, OpeningWipQuantityBasis,
+    OpeningWipQuery, OpeningWipRecord, ProductionMapError, QueueActionActor,
 };
 
 #[derive(sqlx::FromRow)]
@@ -217,6 +217,152 @@ pub(super) async fn create_opening_wip(
         .await
         .map_err(|_| ProductionMapError::StoreFailed)?;
     Ok(write.record)
+}
+
+pub(super) async fn delete_opening_wip_batch(
+    pool: &PgPool,
+    write: OpeningWipDeleteWrite,
+) -> Result<OpeningWipBatchRecord, ProductionMapError> {
+    let batch_id = write.batch_id.trim();
+    if batch_id.is_empty() {
+        return Err(ProductionMapError::OpeningWipInvalidInput);
+    }
+    let mut tx = pool
+        .begin()
+        .await
+        .map_err(|_| ProductionMapError::StoreFailed)?;
+    let batch = sqlx::query_as::<_, OpeningWipBatchRow>(
+        "SELECT batch_id, intake_id, order_id, sequence_no, qr_payload,
+                quantity::DOUBLE PRECISION AS quantity, uom,
+                finished_goods_meter::DOUBLE PRECISION AS finished_goods_meter,
+                finished_goods_kg::DOUBLE PRECISION AS finished_goods_kg,
+                bobina_kg::DOUBLE PRECISION AS bobina_kg,
+                diameter::DOUBLE PRECISION AS diameter,
+                quantity_basis, wip_status,
+                used_by_session_id, used_by_apparatus, processed_by_session_id,
+                processed_by_apparatus, label_item_code, label_item_name,
+                EXTRACT(EPOCH FROM created_at)::BIGINT AS created_at_unix,
+                EXTRACT(EPOCH FROM updated_at)::BIGINT AS updated_at_unix
+         FROM mini_opening_wip_batches
+         WHERE batch_id = $1
+         FOR UPDATE",
+    )
+    .bind(batch_id)
+    .fetch_optional(&mut *tx)
+    .await
+    .map_err(|_| ProductionMapError::StoreFailed)?
+    .ok_or(ProductionMapError::ProgressBatchNotFound)?;
+    let intake = sqlx::query_as::<_, OpeningWipIntakeRow>(
+        "SELECT intake_id, idempotency_key, request_fingerprint, order_id, entry_apparatus,
+                source_operation, source_apparatus, current_location, resume_apparatus,
+                resume_stage_node_id, history_status, status, note, actor_role, actor_ref,
+                actor_display_name,
+                EXTRACT(EPOCH FROM created_at)::BIGINT AS created_at_unix,
+                EXTRACT(EPOCH FROM updated_at)::BIGINT AS updated_at_unix
+         FROM mini_opening_wip_intakes
+         WHERE intake_id = $1
+         FOR UPDATE",
+    )
+    .bind(batch.intake_id.trim())
+    .fetch_one(&mut *tx)
+    .await
+    .map_err(|_| ProductionMapError::StoreFailed)?;
+
+    let parsed_batch = opening_wip_batch_from_row(batch)?;
+    let parsed_intake = opening_wip_intake_from_row(intake)?;
+    if parsed_batch.wip_status == OpeningWipBatchStatus::Void {
+        tx.rollback()
+            .await
+            .map_err(|_| ProductionMapError::StoreFailed)?;
+        return Ok(OpeningWipBatchRecord {
+            intake: parsed_intake,
+            batch: parsed_batch,
+        });
+    }
+    if parsed_intake.status != OpeningWipIntakeStatus::Confirmed
+        || parsed_batch.wip_status != OpeningWipBatchStatus::Waiting
+        || !parsed_batch.used_by_session_id.trim().is_empty()
+        || !parsed_batch.used_by_apparatus.trim().is_empty()
+        || !parsed_batch.processed_by_session_id.trim().is_empty()
+        || !parsed_batch.processed_by_apparatus.trim().is_empty()
+    {
+        return Err(ProductionMapError::OpeningWipDeleteLocked);
+    }
+
+    let has_lineage = sqlx::query_scalar::<_, bool>(
+        "SELECT EXISTS (
+             SELECT 1
+             FROM mini_order_run_sessions
+             WHERE payload_json ->> 'input_wip_source_kind' = 'opening_wip'
+               AND payload_json ->> 'input_progress_batch_id' = $1
+             UNION ALL
+             SELECT 1
+             FROM mini_order_progress_events
+             WHERE payload_json ->> 'input_wip_source_kind' = 'opening_wip'
+               AND payload_json ->> 'input_progress_batch_id' = $1
+             UNION ALL
+             SELECT 1
+             FROM mini_progress_batches
+             WHERE parent_batch_id = $1
+         )",
+    )
+    .bind(batch_id)
+    .fetch_one(&mut *tx)
+    .await
+    .map_err(|_| ProductionMapError::StoreFailed)?;
+    if has_lineage {
+        return Err(ProductionMapError::OpeningWipDeleteLocked);
+    }
+
+    let updated = sqlx::query(
+        "UPDATE mini_opening_wip_batches
+         SET wip_status = 'void',
+             voided_at = to_timestamp($2),
+             voided_by_role = $3,
+             voided_by_ref = $4,
+             voided_by_display_name = $5,
+             updated_at = to_timestamp($2)
+         WHERE batch_id = $1
+           AND wip_status = 'waiting'
+           AND btrim(used_by_session_id) = ''
+           AND btrim(used_by_apparatus) = ''
+           AND btrim(processed_by_session_id) = ''
+           AND btrim(processed_by_apparatus) = ''",
+    )
+    .bind(batch_id)
+    .bind(write.deleted_at_unix as f64)
+    .bind(write.actor.role.trim())
+    .bind(write.actor.ref_.trim())
+    .bind(write.actor.display_name.trim())
+    .execute(&mut *tx)
+    .await
+    .map_err(|_| ProductionMapError::StoreFailed)?;
+    if updated.rows_affected() != 1 {
+        return Err(ProductionMapError::OpeningWipDeleteLocked);
+    }
+    sqlx::query(
+        "UPDATE mini_opening_wip_intakes AS intake
+         SET status = 'cancelled',
+             updated_at = to_timestamp($2)
+         WHERE intake.intake_id = $1
+           AND NOT EXISTS (
+               SELECT 1
+               FROM mini_opening_wip_batches AS batch
+               WHERE batch.intake_id = intake.intake_id
+                 AND batch.wip_status <> 'void'
+           )",
+    )
+    .bind(parsed_intake.intake_id.trim())
+    .bind(write.deleted_at_unix as f64)
+    .execute(&mut *tx)
+    .await
+    .map_err(|_| ProductionMapError::StoreFailed)?;
+    tx.commit()
+        .await
+        .map_err(|_| ProductionMapError::StoreFailed)?;
+    load_opening_wip_batch(pool, batch_id, "")
+        .await?
+        .ok_or(ProductionMapError::ProgressBatchNotFound)
 }
 
 async fn insert_opening_wip_batch_tx(

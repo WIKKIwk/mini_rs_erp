@@ -1,8 +1,16 @@
+use std::sync::Arc;
+
+use crate::core::apparatus_standard::{
+    ApparatusId, ProcessTechnology,
+    service::CanonicalApparatusService,
+    test_support::{TestApparatusSpec, canonical_draft},
+};
 use crate::core::gscale::models::{
     CreateMaterialReceiptDraftInput, RawMaterialStockDeleteInput, RawMaterialStockUpdateInput,
 };
 use crate::core::gscale::ports::{GscalePortError, MaterialReceiptStorePort};
 use crate::db::postgres::{apply_foundation_migration, postgres_test_database_options};
+use crate::db::postgres_canonical_apparatus::PostgresCanonicalApparatusRepository;
 use crate::db::postgres_gscale_receipt::PostgresGscaleReceiptStore;
 
 #[tokio::test]
@@ -227,6 +235,92 @@ async fn postgres_gscale_receipt_preserves_precision_and_supports_stock_correcti
             .and_then(|error| error.constraint()),
         Some("mini_rme_stock_correction_consistent")
     );
+
+    sqlx::query(
+        "INSERT INTO mini_production_maps (id, product_code, title, map_json)
+         VALUES ('ORDER-DELETE-LOCK', 'DELETE-LOCK', 'Delete lock test', '{}'::jsonb)",
+    )
+    .execute(&pool)
+    .await
+    .expect("seed order for assignment lock test");
+    let apparatus_id = "apparatus:default:bosma_7";
+    CanonicalApparatusService::new(Arc::new(PostgresCanonicalApparatusRepository::new(
+        pool.clone(),
+    )))
+    .seed_for_test(
+        ApparatusId::new(apparatus_id.to_string()).expect("canonical apparatus id"),
+        canonical_draft(&TestApparatusSpec::print(
+            apparatus_id,
+            "Bosma 7",
+            ProcessTechnology::Rotogravure,
+            Some(7),
+        )),
+    )
+    .await
+    .expect("seed canonical apparatus for assignment lock test");
+    sqlx::query(
+        "INSERT INTO mini_item_groups (name, parent_item_group, is_group, payload_json)
+         VALUES ('All Item Groups', NULL, true, '{}'::jsonb)
+         ON CONFLICT (name) DO NOTHING",
+    )
+    .execute(&pool)
+    .await
+    .expect("seed root item group for assignment lock test");
+    sqlx::query(
+        "INSERT INTO mini_item_groups (name, parent_item_group, is_group, payload_json)
+         VALUES ('Kraska', 'All Item Groups', true, '{}'::jsonb)
+         ON CONFLICT (name) DO NOTHING",
+    )
+    .execute(&pool)
+    .await
+    .expect("seed item group for assignment lock test");
+    sqlx::query(
+        "INSERT INTO mini_items (code, name, uom, item_group, payload_json)
+         VALUES ('ITEM-RENAMED', 'Renamed material', 'Kg', 'Kraska', '{}'::jsonb)
+         ON CONFLICT (code) DO NOTHING",
+    )
+    .execute(&pool)
+    .await
+    .expect("seed item for assignment lock test");
+    sqlx::query(
+        "INSERT INTO mini_raw_material_assignments (
+             barcode, order_id, apparatus, canonical_apparatus_id,
+             item_code, item_group, payload_json
+         ) VALUES ($1, 'ORDER-DELETE-LOCK', $2, $2, $3, 'Kraska', $4)",
+    )
+    .bind(&draft.barcode)
+    .bind(apparatus_id)
+    .bind("ITEM-RENAMED")
+    .bind(serde_json::json!({
+        "barcode": draft.barcode,
+        "order_id": "ORDER-DELETE-LOCK",
+        "apparatus": apparatus_id,
+        "apparatus_id": apparatus_id,
+        "item_code": "ITEM-RENAMED",
+        "item_group": "Kraska"
+    }))
+    .execute(&pool)
+    .await
+    .expect("link stock to order");
+    let assigned_delete = store
+        .soft_delete_raw_material_stock(RawMaterialStockDeleteInput {
+            barcode: draft.barcode.clone(),
+            expected_warehouse: draft.warehouse.clone(),
+            actor_role: "material_taminotchi".to_string(),
+            actor_ref: "MAT-001".to_string(),
+            actor_display_name: "Material".to_string(),
+        })
+        .await
+        .expect_err("order-linked stock must not be deleted");
+    assert_eq!(
+        assigned_delete,
+        GscalePortError::InvalidInput("raw_material_stock_locked".to_string())
+    );
+    sqlx::query("DELETE FROM mini_raw_material_assignments WHERE barcode = $1")
+        .bind(&draft.barcode)
+        .execute(&pool)
+        .await
+        .expect("remove assignment after lock assertion");
 
     let wrong_warehouse = store
         .soft_delete_raw_material_stock(RawMaterialStockDeleteInput {

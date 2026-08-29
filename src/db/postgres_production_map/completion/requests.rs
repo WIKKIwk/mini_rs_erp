@@ -227,6 +227,9 @@ pub(super) async fn resolve_completion_request_decision(
         .await
         .map_err(|_| ProductionMapError::StoreFailed)?;
     let mut raw_material_stock_warehouses = Vec::new();
+    let raw_material_stock_committed = state_resolution
+        .as_ref()
+        .is_some_and(|resolution| !resolution.raw_material_stock_transitions.is_empty());
     let mut resolution_replayed = false;
     if let Some(resolution) = state_resolution.as_ref() {
         let mut apparatuses = vec![resolution.apparatus.as_str(), resolution.event.apparatus.as_str()];
@@ -240,9 +243,36 @@ pub(super) async fn resolve_completion_request_decision(
             validate_queue_action_event_transition_tx(&mut tx, &resolution.event).await?;
         }
     }
-    if let Some(resolution) = state_resolution
+    if let Some(mut resolution) = state_resolution
         && !resolution_replayed
     {
+        let raw_material_outcome =
+            super::raw_material_stock_helpers::apply_raw_material_stock_transitions_tx(
+                &mut tx,
+                &resolution.raw_material_stock_transitions,
+                actor,
+                &resolution.apparatus,
+            )
+            .await?;
+        if !raw_material_outcome.unused_unlinks.is_empty() {
+            resolution.event.payload_json["unused_raw_material_unlinked_on_complete"] =
+                serde_json::Value::Bool(true);
+            resolution.event.payload_json["unused_raw_material_unlinks"] = serde_json::Value::Array(
+                raw_material_outcome
+                    .unused_unlinks
+                    .iter()
+                    .map(|unlink| {
+                        serde_json::json!({
+                            "barcode": unlink.barcode.as_str(),
+                            "stock_status": unlink.stock_status.as_str(),
+                            "reserved_order_id": unlink.reserved_order_id.as_str(),
+                            "warehouse": unlink.warehouse.as_str(),
+                        })
+                    })
+                    .collect(),
+            );
+        }
+        raw_material_stock_warehouses = raw_material_outcome.warehouses;
         put_queue_action_state_tx(&mut tx, &resolution.event).await?;
         insert_queue_action_event_tx(&mut tx, &resolution.event).await?;
         super::lifecycle::refresh_production_order_lifecycle_tx(
@@ -255,15 +285,13 @@ pub(super) async fn resolve_completion_request_decision(
         .await?;
         if let Some(session) = resolution.session {
             put_order_run_session_tx(&mut tx, &session).await?;
-        }
-        raw_material_stock_warehouses =
-            super::raw_material_stock_helpers::apply_raw_material_stock_transitions_tx(
+            crate::db::postgres_qolip::return_completed_session_checkouts_tx(
                 &mut tx,
-                &resolution.raw_material_stock_transitions,
-                actor,
-                &resolution.apparatus,
+                &session,
             )
-            .await?;
+            .await
+            .map_err(super::production_map_qolip_checkout_error)?;
+        }
         if let Some(report) = resolution.returned_paint_report {
             insert_returned_paint_request_tx(&mut tx, &report)
                 .await
@@ -307,6 +335,7 @@ pub(super) async fn resolve_completion_request_decision(
         .map_err(|_| ProductionMapError::StoreFailed)?;
     Ok(QueueActionProgressWriteResult {
         raw_material_stock_warehouses,
+        raw_material_stock_committed,
         qolip_checkout_committed: false,
     })
 }

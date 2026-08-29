@@ -184,7 +184,15 @@ async fn delete_material_scoped_raw_material_stock(
     if !warehouse_in_scope(&warehouses, &current.warehouse) {
         return Err(forbidden());
     }
-    if !current.status.trim().eq_ignore_ascii_case("available")
+    let has_assignment = state
+        .production_maps
+        .raw_material_assignments()
+        .await
+        .map_err(production_map_error)?
+        .iter()
+        .any(|assignment| assignment.barcode.trim().eq_ignore_ascii_case(barcode));
+    if has_assignment
+        || !current.status.trim().eq_ignore_ascii_case("available")
         || !current.reserved_order_id.trim().is_empty()
     {
         return Err(raw_material_stock_locked_error());

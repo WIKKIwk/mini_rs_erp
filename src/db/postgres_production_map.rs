@@ -9,8 +9,8 @@ use crate::core::production_map::{
     ApparatusScheduleReservation, CompletedQueueOrder, CompletionRequestDecision,
     CompletionRequestDecisionNotification, CompletionRequestNotification,
     CompletionRequestStateResolution, FinishedGoodsStockEntry, LaminatsiyaAstatkaReport,
-    OpeningWipBatchRecord, OpeningWipCreateWrite, OpeningWipQuery, OpeningWipRecord,
-    OrderControlRecord,
+    OpeningWipBatchRecord, OpeningWipCreateWrite, OpeningWipDeleteWrite, OpeningWipQuery,
+    OpeningWipRecord, OrderControlRecord,
     OrderProgressBatch, OrderProgressEvent, OrderRunSession, PaddonCreateInput, PaddonSnapshot,
     PaddonSummary, ProductionMapApparatusTransferRecord,
     ProductionMapApparatusTransferWrite, ProductionMapDefinition, ProductionMapError,
@@ -83,8 +83,9 @@ use self::order_query_helpers::{
     load_queue_action_logs_for_orders, load_queue_action_logs_for_worker,
 };
 use self::opening_wip_helpers::{
-    create_opening_wip, load_opening_wip_batch, load_opening_wip_by_idempotency_key,
-    load_opening_wip_records, update_opening_wip_batch_tx,
+    create_opening_wip, delete_opening_wip_batch, load_opening_wip_batch,
+    load_opening_wip_by_idempotency_key, load_opening_wip_records,
+    update_opening_wip_batch_tx,
 };
 use self::paddon_helpers::{
     add_paddon_item, add_paddon_items, create_paddon, load_paddon_scan_snapshot,

@@ -5,7 +5,7 @@ use crate::core::auth::models::{Principal, PrincipalRole};
 use super::memory_store::MemoryQolipStore;
 use super::models::{
     QolipBlock, QolipCellQr, QolipCheckout, QolipError, QolipLocation, QolipLocationUpsert,
-    QolipOrderNote, QolipProduct, QolipProductSpec, QolipProductSpecUpsert,
+    QolipProduct, QolipProductSpec, QolipProductSpecUpsert,
 };
 use super::ports::QolipStorePort;
 use super::service::QolipService;
@@ -446,136 +446,6 @@ async fn order_start_rejects_another_products_qolip_from_same_group() {
         .expect_err("another product's qolip must be rejected");
 
     assert_eq!(error, QolipError::QolipCodeMismatch);
-}
-
-#[tokio::test]
-async fn returned_order_note_keeps_the_given_qolips() {
-    let store = std::sync::Arc::new(MemoryQolipStore::new());
-    let service = QolipService::new(store);
-    let principal = principal();
-
-    service
-        .save_order_note(
-            QolipOrderNote {
-                order_id: "ORDER-1".to_string(),
-                item_code: "ITEM-1".to_string(),
-                item_name: "Tayyor mahsulot".to_string(),
-                qolip_codes: vec!["Q-2".to_string(), "Q-1".to_string()],
-                status: "given".to_string(),
-                updated_at: String::new(),
-            },
-            &principal,
-        )
-        .await
-        .expect("save given note");
-
-    service
-        .save_order_note(
-            QolipOrderNote {
-                order_id: "ORDER-1".to_string(),
-                item_code: "ITEM-1".to_string(),
-                item_name: "Tayyor mahsulot".to_string(),
-                qolip_codes: vec!["Q-2".to_string(), "Q-1".to_string()],
-                status: "returned".to_string(),
-                updated_at: String::new(),
-            },
-            &principal,
-        )
-        .await
-        .expect("save returned note");
-
-    let saved = service
-        .order_note(&principal, "ORDER-1")
-        .await
-        .expect("load order note")
-        .expect("returned note remains stored");
-    assert_eq!(saved.status, "returned");
-    assert_eq!(saved.qolip_codes, vec!["Q-1", "Q-2"]);
-}
-
-#[tokio::test]
-async fn given_order_note_reserves_qolip_until_it_is_returned() {
-    let store = std::sync::Arc::new(MemoryQolipStore::new());
-    let service = QolipService::new(store);
-    let first_principal = principal();
-    let mut second_principal = principal();
-    second_principal.ref_ = "qolipchi-2".to_string();
-
-    service
-        .save_order_note(
-            QolipOrderNote {
-                order_id: "ORDER-1".to_string(),
-                item_code: "ITEM-1".to_string(),
-                item_name: "Tayyor mahsulot".to_string(),
-                qolip_codes: vec!["Q-1".to_string()],
-                status: "given".to_string(),
-                updated_at: String::new(),
-            },
-            &first_principal,
-        )
-        .await
-        .expect("save first given note");
-
-    assert_eq!(
-        service
-            .order_note_qolip_codes_in_use(&second_principal, "ORDER-2")
-            .await
-            .expect("load in-use qolips"),
-        vec!["q-1"]
-    );
-
-    let conflict = service
-        .save_order_note(
-            QolipOrderNote {
-                order_id: "ORDER-2".to_string(),
-                item_code: "ITEM-1".to_string(),
-                item_name: "Tayyor mahsulot".to_string(),
-                qolip_codes: vec!["Q-1".to_string()],
-                status: "given".to_string(),
-                updated_at: String::new(),
-            },
-            &second_principal,
-        )
-        .await
-        .expect_err("the same qolip must be reserved by the first order");
-    assert_eq!(conflict, QolipError::QolipInUse);
-
-    service
-        .save_order_note(
-            QolipOrderNote {
-                order_id: "ORDER-1".to_string(),
-                item_code: "ITEM-1".to_string(),
-                item_name: "Tayyor mahsulot".to_string(),
-                qolip_codes: vec!["Q-1".to_string()],
-                status: "returned".to_string(),
-                updated_at: String::new(),
-            },
-            &first_principal,
-        )
-        .await
-        .expect("return first note");
-
-    assert!(
-        service
-            .order_note_qolip_codes_in_use(&second_principal, "ORDER-2")
-            .await
-            .expect("reload in-use qolips")
-            .is_empty()
-    );
-    service
-        .save_order_note(
-            QolipOrderNote {
-                order_id: "ORDER-2".to_string(),
-                item_code: "ITEM-1".to_string(),
-                item_name: "Tayyor mahsulot".to_string(),
-                qolip_codes: vec!["Q-1".to_string()],
-                status: "given".to_string(),
-                updated_at: String::new(),
-            },
-            &second_principal,
-        )
-        .await
-        .expect("the qolip can be given after return");
 }
 
 fn principal() -> Principal {

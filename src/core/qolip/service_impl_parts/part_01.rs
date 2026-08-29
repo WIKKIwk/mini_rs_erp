@@ -202,60 +202,6 @@ impl QolipService {
         Ok(specs)
     }
 
-    pub async fn order_notes(
-        &self,
-        principal: &Principal,
-    ) -> Result<Vec<QolipOrderNote>, QolipError> {
-        self.store.order_notes(principal).await
-    }
-
-    pub async fn order_note_qolip_codes_in_use(
-        &self,
-        principal: &Principal,
-        order_id: &str,
-    ) -> Result<Vec<String>, QolipError> {
-        self.store
-            .order_note_qolip_codes_in_use(principal, order_id)
-            .await
-    }
-
-    pub async fn order_note(
-        &self,
-        principal: &Principal,
-        order_id: &str,
-    ) -> Result<Option<QolipOrderNote>, QolipError> {
-        self.store.order_note(principal, order_id).await
-    }
-
-    pub async fn save_order_note(
-        &self,
-        mut note: QolipOrderNote,
-        principal: &Principal,
-    ) -> Result<QolipOrderNote, QolipError> {
-        note.order_id = note.order_id.trim().to_string();
-        note.item_code = note.item_code.trim().to_string();
-        note.item_name = note.item_name.trim().to_string();
-        note.status = note.status.trim().to_ascii_lowercase();
-        let mut codes = Vec::new();
-        for code in note.qolip_codes {
-            let code = code.trim();
-            if code.is_empty()
-                || codes
-                    .iter()
-                    .any(|existing: &String| existing.eq_ignore_ascii_case(code))
-            {
-                continue;
-            }
-            codes.push(code.to_string());
-        }
-        codes.sort_by_key(|code| code.to_ascii_lowercase());
-        if note.status == "given" && codes.is_empty() {
-            return Err(QolipError::MissingQolipCode);
-        }
-        note.qolip_codes = codes;
-        self.store.save_order_note(principal, note).await
-    }
-
     pub async fn product_requires_qolip(&self, item_code: &str) -> Result<bool, QolipError> {
         let item_code = item_code.trim();
         if item_code.is_empty() {

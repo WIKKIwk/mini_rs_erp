@@ -10,6 +10,7 @@ pub type OrderControlMap = BTreeMap<String, OrderControlRecord>;
 pub enum RawMaterialStockTransitionKind {
     InUse,
     Consumed,
+    Complete,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -44,6 +45,7 @@ impl RawMaterialStockTransition {
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct QueueActionProgressWriteResult {
     pub raw_material_stock_warehouses: Vec<String>,
+    pub raw_material_stock_committed: bool,
     pub qolip_checkout_committed: bool,
 }
 

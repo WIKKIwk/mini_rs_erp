@@ -1,39 +1,5 @@
 impl MemoryQolipStore {
 
-    async fn save_order_note(
-        &self,
-        principal: &Principal,
-        mut note: QolipOrderNote,
-    ) -> Result<QolipOrderNote, QolipError> {
-        note.order_id = note.order_id.trim().to_string();
-        note.item_code = note.item_code.trim().to_string();
-        note.item_name = note.item_name.trim().to_string();
-        note.status = note.status.trim().to_ascii_lowercase();
-        note.qolip_codes = normalize_order_note_codes(note.qolip_codes);
-        let note_key = order_note_key(principal, &note.order_id);
-        let mut notes = self.order_notes.write().await;
-        if note.status == "given" {
-            let requested = note
-                .qolip_codes
-                .iter()
-                .map(|code| code.to_lowercase())
-                .collect::<BTreeSet<_>>();
-            let in_use = notes.iter().any(|(key, existing)| {
-                key != &note_key
-                    && existing.status.eq_ignore_ascii_case("given")
-                    && existing
-                        .qolip_codes
-                        .iter()
-                        .any(|code| requested.contains(&code.trim().to_lowercase()))
-            });
-            if in_use {
-                return Err(QolipError::QolipInUse);
-            }
-        }
-        notes.insert(note_key, note.clone());
-        Ok(note)
-    }
-
     async fn put_product_spec(
         &self,
         spec: QolipProductSpec,

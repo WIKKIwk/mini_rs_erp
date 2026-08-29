@@ -161,9 +161,9 @@ async fn queue_start_commit_failure_does_not_reserve_raw_material_stock() {
                 &["Kraska"],
                 true,
             ),
-        ))
-        .await
-        .expect("rule save");
+    ))
+    .await
+    .expect("rule save");
     assert_eq!(rule.status(), StatusCode::OK);
 
     let assigned = router
@@ -261,9 +261,30 @@ async fn raw_material_assignment_checks_rulon_size_for_pechat_orders() {
                 true,
             ),
         ))
-        .await
-        .expect("rule save");
+    .await
+    .expect("rule save");
     assert_eq!(rule.status(), StatusCode::OK);
+
+    let diagnostics = router
+        .clone()
+        .oneshot(request(
+            "GET",
+            "/v1/mobile/admin/raw-material-assignments/diagnostics?barcode=30R980&order_id=zakaz-rulon-size&apparatus=apparatus%3Adefault%3Abosma_7",
+            &token,
+        ))
+        .await
+        .expect("roll size diagnostics");
+    assert_eq!(diagnostics.status(), StatusCode::OK);
+    let diagnostics_body = json_body(diagnostics).await;
+    assert_eq!(diagnostics_body["compatible"], false);
+    assert_eq!(
+        diagnostics_body["reason"],
+        "raw_material_roll_size_mismatch"
+    );
+    assert_eq!(diagnostics_body["order_width_mm"], 985.0);
+    assert_eq!(diagnostics_body["roll_width_mm"], 980.0);
+    assert_eq!(diagnostics_body["minimum_width_mm"], 985.0);
+    assert_eq!(diagnostics_body["maximum_width_mm"], 1005.0);
 
     let assigned = router
         .clone()
@@ -305,6 +326,8 @@ async fn raw_material_assignment_checks_rulon_size_for_pechat_orders() {
     assert_eq!(undersized_body["error"], "raw_material_roll_size_mismatch");
     assert_eq!(undersized_body["order_width_mm"], 985.0);
     assert_eq!(undersized_body["roll_width_mm"], 980.0);
+    assert_eq!(undersized_body["minimum_width_mm"], 985.0);
+    assert_eq!(undersized_body["maximum_width_mm"], 1005.0);
 
     let oversized = router
         .clone()
@@ -324,6 +347,8 @@ async fn raw_material_assignment_checks_rulon_size_for_pechat_orders() {
     assert_eq!(oversized_body["error"], "raw_material_roll_size_mismatch");
     assert_eq!(oversized_body["order_width_mm"], 985.0);
     assert_eq!(oversized_body["roll_width_mm"], 1020.0);
+    assert_eq!(oversized_body["minimum_width_mm"], 985.0);
+    assert_eq!(oversized_body["maximum_width_mm"], 1005.0);
 }
 
 #[tokio::test]

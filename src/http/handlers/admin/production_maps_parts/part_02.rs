@@ -30,19 +30,6 @@ pub async fn production_map_sequence(
                 .await
                 .map_err(super::training::training_workspace_error)?;
             let order_customers = production_map_order_customers(&state, &snapshot.maps).await;
-            let qolip_order_notes = if state
-                .admin
-                .principal_has_capability(&principal, Capability::QolipManage)
-                .await
-            {
-                state
-                    .qolip
-                    .order_notes(&principal)
-                    .await
-                    .map_err(|_| server_error("qolip order notes load failed"))?
-            } else {
-                Vec::new()
-            };
             Ok(json_response(serde_json::json!({
                 "ok": true,
                 "sequences": snapshot.sequences,
@@ -55,7 +42,6 @@ pub async fn production_map_sequence(
                 "order_controls": snapshot.order_controls,
                 "frozen_orders_by_apparatus": snapshot.frozen_orders_by_apparatus,
                 "order_customers": order_customers,
-                "qolip_order_notes": qolip_order_notes,
             })))
         }
         Method::PUT => {
@@ -179,6 +165,61 @@ pub(super) async fn raw_material_barcodes_for_order_apparatus(
         })
         .map(|assignment| assignment.barcode.trim().to_string())
         .filter(|barcode| !barcode.is_empty())
+        .collect())
+}
+
+pub(super) async fn settle_completion_raw_materials_fallback(
+    state: &AppState,
+    order_id: &str,
+    barcodes: &[String],
+) -> Result<Vec<String>, AdminError> {
+    let order_id = order_id.trim();
+    let mut consumed_barcodes = Vec::new();
+    let mut unused = Vec::new();
+    let mut warehouses = std::collections::BTreeSet::new();
+    for barcode in barcodes {
+        let stock = state
+            .gscale
+            .raw_material_stock_by_barcode(barcode)
+            .await
+            .map_err(|_| server_error("raw material stock fetch failed"))?
+            .ok_or_else(|| bad_request("raw_material_stock_unavailable"))?;
+        let status = stock.status.trim().to_ascii_lowercase();
+        let reservation = stock.reserved_order_id.trim();
+        if matches!(status.as_str(), "in_use" | "consumed") && reservation == order_id {
+            consumed_barcodes.push(stock.barcode);
+        } else if status == "available" && (reservation.is_empty() || reservation == order_id) {
+            warehouses.insert(stock.warehouse.trim().to_string());
+            unused.push(stock.barcode);
+        } else {
+            return Err(bad_request("raw_material_stock_unavailable"));
+        }
+    }
+    if !consumed_barcodes.is_empty() {
+        for stock in state
+            .gscale
+            .mark_raw_material_stock_consumed(&consumed_barcodes, order_id)
+            .await
+            .map_err(raw_material_stock_status_error)?
+        {
+            if !stock.warehouse.trim().is_empty() {
+                warehouses.insert(stock.warehouse.trim().to_string());
+            }
+        }
+    }
+    for barcode in unused {
+        state
+            .production_maps
+            .unlink_raw_material_assignment_under_queue_guard(RawMaterialAssignmentDeleteInput {
+                order_id: order_id.to_string(),
+                barcode,
+            })
+            .await
+            .map_err(production_map_error)?;
+    }
+    Ok(warehouses
+        .into_iter()
+        .filter(|warehouse| !warehouse.is_empty())
         .collect())
 }
 

@@ -93,6 +93,50 @@ async fn postgres_opening_wip_from_print_persists_and_starts_lamination() {
     assert_eq!(persisted.2, None);
     assert_eq!(persisted.3, "print");
 
+    let disposable = service
+        .create_opening_wip(
+            OpeningWipCreateInput {
+                idempotency_key: "postgres-opening-wip-delete-request".to_string(),
+                order_id: order_id.to_string(),
+                entry_apparatus: String::new(),
+                source_operation: String::new(),
+                source_apparatus: PECHAT_ID.to_string(),
+                source_stage_node_id: "print".to_string(),
+                current_location: String::new(),
+                note: "Unused Opening WIP delete regression".to_string(),
+                batches: vec![OpeningWipBatchInput {
+                    quantity_basis: OpeningWipQuantityBasis::Measured,
+                    finished_goods_meter: Some(50.0),
+                    finished_goods_kg: Some(14.0),
+                    bobina_kg: Some(1.0),
+                    diameter: None,
+                }],
+            },
+            actor("admin", "admin:opening-wip-postgres"),
+        )
+        .await
+        .expect("create disposable Opening WIP");
+    let deleted = service
+        .delete_opening_wip_batch(
+            &disposable.batches[0].batch_id,
+            actor("admin", "admin:opening-wip-postgres"),
+        )
+        .await
+        .expect("delete unused Opening WIP");
+    assert_eq!(deleted.batch.wip_status, OpeningWipBatchStatus::Void);
+    let delete_audit: (String, Option<f64>, String) = sqlx::query_as(
+        "SELECT wip_status, EXTRACT(EPOCH FROM voided_at)::DOUBLE PRECISION, voided_by_ref
+         FROM mini_opening_wip_batches
+         WHERE batch_id = $1",
+    )
+    .bind(&disposable.batches[0].batch_id)
+    .fetch_one(&pool)
+    .await
+    .expect("read Opening WIP delete audit");
+    assert_eq!(delete_audit.0, "void");
+    assert!(delete_audit.1.is_some());
+    assert_eq!(delete_audit.2, "admin:opening-wip-postgres");
+
     let controls = service
         .queue_action_controls()
         .await
@@ -147,6 +191,15 @@ async fn postgres_opening_wip_from_print_persists_and_starts_lamination() {
         .expect("reload scanned Opening WIP");
     assert_eq!(in_use.batch.wip_status, OpeningWipBatchStatus::InUse);
     assert_eq!(in_use.batch.used_by_apparatus, LAMINATION_ID);
+    assert_eq!(
+        service
+            .delete_opening_wip_batch(
+                &opening.batches[0].batch_id,
+                actor("admin", "admin:opening-wip-postgres"),
+            )
+            .await,
+        Err(ProductionMapError::OpeningWipDeleteLocked),
+    );
 
     pool.close().await;
     let admin_pool = sqlx::PgPool::connect(&admin_url)

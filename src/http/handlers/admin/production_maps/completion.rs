@@ -336,7 +336,8 @@ pub async fn production_map_completion_request_decision(
         .await
         .map_err(production_map_error)?;
     if result.decision.decision == CompletionRequestDecision::Approved.as_str() {
-        if result.raw_material_stock_warehouses.is_empty() {
+        if !result.raw_material_stock_committed {
+            let _queue_action_guard = state.production_maps.queue_action_guard().await;
             let material_barcodes = raw_material_barcodes_for_order_apparatus(
                 &state,
                 &result.decision.order_id,
@@ -344,15 +345,16 @@ pub async fn production_map_completion_request_decision(
             )
             .await?;
             if !material_barcodes.is_empty() {
-                for stock in state
-                    .gscale
-                    .mark_raw_material_stock_consumed(&material_barcodes, &result.decision.order_id)
-                    .await
-                    .map_err(raw_material_stock_status_error)?
+                for warehouse in settle_completion_raw_materials_fallback(
+                    &state,
+                    &result.decision.order_id,
+                    &material_barcodes,
+                )
+                .await?
                 {
                     state
                         .warehouse_events
-                        .notify_updated(&stock.warehouse, "raw_material_stock");
+                        .notify_updated(&warehouse, "raw_material_stock");
                 }
             }
         } else {

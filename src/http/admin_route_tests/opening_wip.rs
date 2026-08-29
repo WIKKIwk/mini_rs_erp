@@ -3,6 +3,79 @@ use super::*;
 const LAMINATION_ID: &str = "apparatus:default:asset-007";
 
 #[tokio::test]
+async fn opening_wip_admin_delete_accepts_query_without_body() {
+    let state = test_state();
+    let admin_token = session(&state, PrincipalRole::Admin).await;
+    let router = build_router(state);
+    let order_id = "zakaz-opening-wip-query-delete";
+
+    let saved = router
+        .clone()
+        .oneshot(request_with_body(
+            "PUT",
+            "/v1/mobile/admin/production-maps",
+            &admin_token,
+            &laminatsiya_order_map_json(order_id, 900.0),
+        ))
+        .await
+        .expect("save map");
+    assert_eq!(saved.status(), StatusCode::OK);
+
+    let created = router
+        .clone()
+        .oneshot(request_with_body(
+            "POST",
+            "/v1/mobile/admin/production-maps/opening-wip",
+            &admin_token,
+            &format!(
+                r#"{{
+                    "idempotency_key":"opening-wip-query-delete-request",
+                    "order_id":"{order_id}",
+                    "entry_apparatus":"{LAMINATION_ID}",
+                    "current_location":"{LAMINATION_ID}",
+                    "batches":[{{
+                        "quantity_basis":"measured",
+                        "finished_goods_meter":100.0,
+                        "finished_goods_kg":12.0,
+                        "bobina_kg":1.0
+                    }}]
+                }}"#
+            ),
+        ))
+        .await
+        .expect("create Opening WIP");
+    let created_status = created.status();
+    let created_body = json_body(created).await;
+    assert_eq!(created_status, StatusCode::OK, "{created_body:?}");
+    let batch_id = created_body["record"]["batches"][0]["batch_id"]
+        .as_str()
+        .expect("batch id");
+    let delete_uri = format!(
+        "/v1/mobile/admin/production-maps/opening-wip?batch_id={batch_id}"
+    );
+
+    let deleted = router
+        .clone()
+        .oneshot(request("DELETE", &delete_uri, &admin_token))
+        .await
+        .expect("delete Opening WIP through query");
+    let deleted_status = deleted.status();
+    let deleted_body = json_body(deleted).await;
+    assert_eq!(deleted_status, StatusCode::OK, "{deleted_body:?}");
+    assert_eq!(deleted_body["batch"]["wip_status"], "void");
+    assert_eq!(deleted_body["intake"]["status"], "cancelled");
+
+    let repeated = router
+        .oneshot(request("DELETE", &delete_uri, &admin_token))
+        .await
+        .expect("repeat idempotent Opening WIP delete");
+    let repeated_status = repeated.status();
+    let repeated_body = json_body(repeated).await;
+    assert_eq!(repeated_status, StatusCode::OK, "{repeated_body:?}");
+    assert_eq!(repeated_body["batch"]["wip_status"], "void");
+}
+
+#[tokio::test]
 async fn opening_wip_worker_lookup_is_qr_exact_and_apparatus_scoped() {
     let state = test_state();
     state
@@ -212,7 +285,7 @@ async fn opening_wip_worker_lookup_is_qr_exact_and_apparatus_scoped() {
 }
 
 #[tokio::test]
-async fn opening_wip_from_print_source_opens_lamination_scan_and_starts_with_its_qr() {
+async fn opening_wip_from_print_source_reopens_completed_lamination() {
     let state = test_state();
     state
         .admin
@@ -451,6 +524,7 @@ async fn opening_wip_from_print_source_opens_lamination_scan_and_starts_with_its
     assert_eq!(completed_body["states"][order_id], "completed");
 
     let repeated = router
+        .clone()
         .oneshot(request_with_body(
             "POST",
             "/v1/mobile/admin/production-maps/opening-wip",
@@ -471,12 +545,87 @@ async fn opening_wip_from_print_source_opens_lamination_scan_and_starts_with_its
             ),
         ))
         .await
-        .expect("reject repeated Opening WIP source");
+        .expect("create another Opening WIP from the same print source");
     let repeated_status = repeated.status();
     let repeated_body = json_body(repeated).await;
-    assert_eq!(repeated_status, StatusCode::CONFLICT, "{repeated_body:?}");
+    assert_eq!(repeated_status, StatusCode::OK, "{repeated_body:?}");
+    let repeated_qr = repeated_body["record"]["batches"][0]["qr_payload"]
+        .as_str()
+        .expect("repeated Opening WIP QR");
+
+    let reopened_snapshot = router
+        .clone()
+        .oneshot(request(
+            "GET",
+            "/v1/mobile/admin/production-maps/sequence",
+            &worker_token,
+        ))
+        .await
+        .expect("reopened lamination queue snapshot");
+    let reopened_snapshot_status = reopened_snapshot.status();
+    let reopened_snapshot_body = json_body(reopened_snapshot).await;
     assert_eq!(
-        repeated_body["error"],
-        "opening_wip_target_stage_already_completed"
+        reopened_snapshot_status,
+        StatusCode::OK,
+        "{reopened_snapshot_body:?}"
     );
+    let reopened_control =
+        &reopened_snapshot_body["queue_action_controls"][LAMINATION_ID][order_id];
+    assert_eq!(reopened_control["state"], "pending");
+    assert_eq!(
+        reopened_control["interaction"]["opening_wip_mode"],
+        "scan_required"
+    );
+
+    let restarted = router
+        .clone()
+        .oneshot(request_with_body(
+            "POST",
+            "/v1/mobile/admin/production-maps/queue-action",
+            &worker_token,
+            &format!(
+                r#"{{
+                    "apparatus":"{LAMINATION_ID}",
+                    "order_id":"{order_id}",
+                    "action":"start",
+                    "qr_payload":"{repeated_qr}"
+                }}"#
+            ),
+        ))
+        .await
+        .expect("restart completed lamination from repeated Opening WIP QR");
+    let restarted_status = restarted.status();
+    let restarted_body = json_body(restarted).await;
+    assert_eq!(restarted_status, StatusCode::OK, "{restarted_body:?}");
+    assert_eq!(restarted_body["states"][order_id], "in_progress");
+
+    let recompleted = router
+        .oneshot(request_with_body(
+            "POST",
+            "/v1/mobile/admin/production-maps/queue-action",
+            &worker_token,
+            &format!(
+                r#"{{
+                    "apparatus":"{LAMINATION_ID}",
+                    "order_id":"{order_id}",
+                    "action":"complete",
+                    "finished_goods_meter":100.0,
+                    "finished_goods_kg":12.0,
+                    "lamination_print_leftover_rolls":0.5,
+                    "lamination_film_leftover_rolls":0.5,
+                    "total_waste":0.5,
+                    "uom":"m"
+                }}"#
+            ),
+        ))
+        .await
+        .expect("complete reopened lamination");
+    let recompleted_status = recompleted.status();
+    let recompleted_body = json_body(recompleted).await;
+    assert_eq!(
+        recompleted_status,
+        StatusCode::OK,
+        "{recompleted_body:?}"
+    );
+    assert_eq!(recompleted_body["states"][order_id], "completed");
 }

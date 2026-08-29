@@ -41,6 +41,61 @@ struct RawMaterialAssignmentOrderCandidateResponse {
     apparatus_options: Vec<String>,
 }
 
+#[derive(Debug, Clone, serde::Serialize)]
+struct RawMaterialAssignmentDiagnosticResponse {
+    barcode: String,
+    compatible: bool,
+    reason: String,
+    item_code: String,
+    item_name: String,
+    item_group: String,
+    warehouse: String,
+    stock_status: String,
+    reserved_order_id: String,
+    apparatus_options: Vec<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    order_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    order_title: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    apparatus: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    order_width_mm: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    roll_width_mm: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    minimum_width_mm: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    maximum_width_mm: Option<f64>,
+}
+
+impl RawMaterialAssignmentDiagnosticResponse {
+    fn from_stock(
+        stock: &RawMaterialStockEntry,
+        item: &SupplierItem,
+    ) -> Self {
+        Self {
+            barcode: stock.barcode.trim().to_string(),
+            compatible: false,
+            reason: "no_compatible_active_order".to_string(),
+            item_code: stock.item_code.trim().to_string(),
+            item_name: item.name.trim().to_string(),
+            item_group: item.item_group.trim().to_string(),
+            warehouse: stock.warehouse.trim().to_string(),
+            stock_status: stock.status.trim().to_string(),
+            reserved_order_id: stock.reserved_order_id.trim().to_string(),
+            apparatus_options: Vec::new(),
+            order_id: None,
+            order_title: None,
+            apparatus: None,
+            order_width_mm: None,
+            roll_width_mm: None,
+            minimum_width_mm: None,
+            maximum_width_mm: None,
+        }
+    }
+}
+
 pub async fn raw_material_start_requirements(
     State(state): State<AppState>,
     Query(query): Query<RawMaterialStartRequirementsQuery>,

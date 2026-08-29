@@ -111,14 +111,32 @@ impl ProductionMapService {
                     .get(order_id.trim())
                     .map(Vec::as_slice)
                     .unwrap_or_default();
-                if waiting_reentry_stage_node_id(
+                let has_waiting_progress_reentry = waiting_reentry_stage_node_id(
                     order_map,
                     batches,
                     order_id,
                     &storage_key,
                 )
-                .is_some()
-                {
+                .is_some();
+                let has_waiting_opening_wip_reentry = opening_wip_by_order
+                    .get(order_id.trim())
+                    .into_iter()
+                    .flatten()
+                    .any(|record| {
+                        record.intake.status == OpeningWipIntakeStatus::Confirmed
+                            && record
+                                .batches
+                                .iter()
+                                .any(|batch| batch.wip_status == OpeningWipBatchStatus::Waiting)
+                            && Self::opening_wip_target_stage(
+                                order_map,
+                                &record.intake,
+                                &storage_key,
+                                "",
+                            )
+                            .is_some()
+                    });
+                if has_waiting_progress_reentry || has_waiting_opening_wip_reentry {
                     effective_states.insert(
                         order_id.trim().to_string(),
                         queue_state::ApparatusQueueOrderState::Pending,

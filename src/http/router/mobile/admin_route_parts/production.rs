@@ -149,10 +149,6 @@ fn production_routes() -> Router<AppState> {
             any(admin::production_map_qolip_validate),
         )
         .route(
-            "/v1/mobile/admin/production-maps/qolip-order-notes",
-            any(admin::production_map_qolip_order_notes),
-        )
-        .route(
             "/v1/mobile/admin/production-maps/progress-qr/lookup",
             any(admin::production_map_progress_qr_lookup),
         )

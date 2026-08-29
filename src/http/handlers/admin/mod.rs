@@ -34,13 +34,14 @@ pub use production_maps::{
     production_map_paddon_qr_report, production_map_paddons, production_map_progress_batch_correct,
     production_map_progress_qr_history, production_map_progress_qr_lookup,
     production_map_progress_qr_report, production_map_progress_qr_reprint,
-    production_map_qolip_order_notes, production_map_qolip_validate, production_map_queue_action,
+    production_map_qolip_validate, production_map_queue_action,
     production_map_queue_policies, production_map_rezka_astatka, production_map_run,
     production_map_save_with_order, production_map_schedule, production_map_schedule_cancel,
     production_map_sequence, production_map_wip_batches, production_maps,
     raw_material_assignment_candidate_orders, raw_material_assignment_candidates,
-    raw_material_assignment_lookup, raw_material_assignment_orders, raw_material_assignments,
-    raw_material_history, raw_material_intake, raw_material_intake_candidates, raw_material_rules,
+    raw_material_assignment_diagnostics, raw_material_assignment_lookup,
+    raw_material_assignment_orders, raw_material_assignments, raw_material_history,
+    raw_material_intake, raw_material_intake_candidates, raw_material_rules,
     raw_material_start_requirements, raw_material_stock, raw_material_stock_reprint_confirm,
     raw_material_stock_reprint_prepare,
 };
@@ -333,6 +334,10 @@ pub struct AdminErrorResponse {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub roll_width_mm: Option<f64>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub minimum_width_mm: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub maximum_width_mm: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub order_title: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub raw_material_status: Option<String>,
@@ -346,18 +351,26 @@ impl AdminErrorResponse {
             apparatus_options: None,
             order_width_mm: None,
             roll_width_mm: None,
+            minimum_width_mm: None,
+            maximum_width_mm: None,
             order_title: None,
             raw_material_status: None,
         }
     }
 
-    fn roll_size_mismatch(order_width_mm: f64, roll_width_mm: f64) -> Self {
+    fn roll_size_mismatch(
+        order_width_mm: f64,
+        roll_width_mm: f64,
+        maximum_width_mm: f64,
+    ) -> Self {
         Self {
             error: "raw_material_roll_size_mismatch".to_string(),
             blockers: None,
             apparatus_options: None,
             order_width_mm: Some(order_width_mm),
             roll_width_mm: Some(roll_width_mm),
+            minimum_width_mm: Some(order_width_mm),
+            maximum_width_mm: Some(maximum_width_mm),
             order_title: None,
             raw_material_status: None,
         }

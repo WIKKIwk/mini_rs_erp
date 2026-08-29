@@ -394,6 +394,13 @@ impl ProductionMapStorePort for PostgresProductionMapStore {
         PostgresProductionMapStore::create_opening_wip(self, write).await
     }
 
+    async fn delete_opening_wip_batch(
+        &self,
+        write: OpeningWipDeleteWrite,
+    ) -> Result<OpeningWipBatchRecord, ProductionMapError> {
+        PostgresProductionMapStore::delete_opening_wip_batch(self, write).await
+    }
+
     async fn paddons(&self, limit: usize) -> Result<Vec<PaddonSummary>, ProductionMapError> {
         PostgresProductionMapStore::paddons(self, limit).await
     }

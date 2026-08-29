@@ -45,34 +45,6 @@ impl QolipStorePort for MemoryQolipStore {
         MemoryQolipStore::product_spec_by_qolip_code(self, qolip_code).await
     }
 
-    async fn order_notes(&self, principal: &Principal) -> Result<Vec<QolipOrderNote>, QolipError> {
-        MemoryQolipStore::order_notes(self, principal).await
-    }
-
-    async fn order_note_qolip_codes_in_use(
-        &self,
-        principal: &Principal,
-        order_id: &str,
-    ) -> Result<Vec<String>, QolipError> {
-        MemoryQolipStore::order_note_qolip_codes_in_use(self, principal, order_id).await
-    }
-
-    async fn order_note(
-        &self,
-        principal: &Principal,
-        order_id: &str,
-    ) -> Result<Option<QolipOrderNote>, QolipError> {
-        MemoryQolipStore::order_note(self, principal, order_id).await
-    }
-
-    async fn save_order_note(
-        &self,
-        principal: &Principal,
-        note: QolipOrderNote,
-    ) -> Result<QolipOrderNote, QolipError> {
-        MemoryQolipStore::save_order_note(self, principal, note).await
-    }
-
     async fn put_product_spec(
         &self,
         spec: QolipProductSpec,

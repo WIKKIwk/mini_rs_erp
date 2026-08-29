@@ -52,6 +52,8 @@ fn ambiguous_raw_material_apparatuses(apparatuses: Vec<String>) -> AdminError {
             apparatus_options: Some(apparatuses),
             order_width_mm: None,
             roll_width_mm: None,
+            minimum_width_mm: None,
+            maximum_width_mm: None,
             order_title: None,
             raw_material_status: None,
         }),

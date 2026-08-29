@@ -157,6 +157,8 @@ pub struct CompletionRequestDecisionResult {
     pub decision: CompletionRequestDecisionNotification,
     #[serde(skip)]
     pub raw_material_stock_warehouses: Vec<String>,
+    #[serde(skip)]
+    pub raw_material_stock_committed: bool,
 }
 
 #[derive(Debug, Clone)]

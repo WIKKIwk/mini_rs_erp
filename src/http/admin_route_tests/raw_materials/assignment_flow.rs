@@ -546,6 +546,23 @@ async fn raw_material_routes_assign_and_require_scan_for_queue_start() {
     assert_eq!(map.status(), StatusCode::OK);
     provision_test_qolip(&router, &token, "zakaz-raw-route").await;
 
+    let other_map = router
+        .clone()
+        .oneshot(request_with_body(
+            "PUT",
+            "/v1/mobile/admin/production-maps",
+            &token,
+            &pechat_order_map_json(
+                "zakaz-raw-other",
+                "Tashoq",
+                "8812",
+                "apparatus:default:bosma_7",
+            ),
+        ))
+        .await
+        .expect("other map save");
+    assert_eq!(other_map.status(), StatusCode::OK);
+
     let rule = router
         .clone()
         .oneshot(request_with_body(
@@ -631,6 +648,66 @@ async fn raw_material_routes_assign_and_require_scan_for_queue_start() {
     assert_eq!(warehouse_event.warehouse, "Kalidor");
     assert_eq!(warehouse_event.reason, "raw_material_assignment");
 
+    let same_order_diagnostic = router
+        .clone()
+        .oneshot(request(
+            "GET",
+            "/v1/mobile/admin/raw-material-assignments/diagnostics?barcode=30AA&order_id=zakaz-raw-route",
+            &token,
+        ))
+        .await
+        .expect("same-order assignment diagnostic");
+    assert_eq!(same_order_diagnostic.status(), StatusCode::OK);
+    let same_order_diagnostic_body = json_body(same_order_diagnostic).await;
+    assert_eq!(
+        same_order_diagnostic_body["reason"],
+        "raw_material_already_assigned_to_order"
+    );
+    assert_eq!(same_order_diagnostic_body["order_title"], "Raw route");
+
+    let other_order_diagnostic = router
+        .clone()
+        .oneshot(request(
+            "GET",
+            "/v1/mobile/admin/raw-material-assignments/diagnostics?barcode=30AA&order_id=zakaz-raw-other",
+            &token,
+        ))
+        .await
+        .expect("other-order assignment diagnostic");
+    assert_eq!(other_order_diagnostic.status(), StatusCode::OK);
+    let other_order_diagnostic_body = json_body(other_order_diagnostic).await;
+    assert_eq!(
+        other_order_diagnostic_body["reason"],
+        "raw_material_already_assigned"
+    );
+    assert_eq!(other_order_diagnostic_body["order_title"], "Raw route");
+
+    let assigned_to_other_order = router
+        .clone()
+        .oneshot(request_with_body(
+            "POST",
+            "/v1/mobile/admin/raw-material-assignments",
+            &token,
+            r#"{
+                "order_id":"zakaz-raw-other",
+                "barcode":"30AA"
+            }"#,
+        ))
+        .await
+        .expect("assign material to occupied order");
+    let assigned_to_other_order_status = assigned_to_other_order.status();
+    let assigned_to_other_order_body = json_body(assigned_to_other_order).await;
+    assert_eq!(
+        assigned_to_other_order_status,
+        StatusCode::BAD_REQUEST,
+        "{assigned_to_other_order_body:?}"
+    );
+    assert_eq!(
+        assigned_to_other_order_body["error"],
+        "raw_material_already_assigned"
+    );
+    assert_eq!(assigned_to_other_order_body["order_title"], "Raw route");
+
     let material_assignments = router
         .clone()
         .oneshot(request(
@@ -658,6 +735,22 @@ async fn raw_material_routes_assign_and_require_scan_for_queue_start() {
     assert_eq!(assigned_edit.status(), StatusCode::CONFLICT);
     assert_eq!(
         json_body(assigned_edit).await["error"],
+        "raw_material_stock_locked"
+    );
+
+    let assigned_delete = router
+        .clone()
+        .oneshot(request_with_body(
+            "DELETE",
+            "/v1/mobile/admin/raw-material-stock",
+            &material_token,
+            r#"{"barcode":"30AA"}"#,
+        ))
+        .await
+        .expect("assigned raw stock deletion");
+    assert_eq!(assigned_delete.status(), StatusCode::CONFLICT);
+    assert_eq!(
+        json_body(assigned_delete).await["error"],
         "raw_material_stock_locked"
     );
 
@@ -1142,7 +1235,7 @@ async fn raw_material_routes_assign_and_require_scan_for_queue_start() {
         .iter()
         .filter(|item| item["order_id"] == "zakaz-raw-route")
         .collect::<Vec<_>>();
-    assert_eq!(completed_materials.len(), 3);
+    assert_eq!(completed_materials.len(), 2);
     assert_eq!(
         completed_materials
             .iter()
@@ -1150,12 +1243,10 @@ async fn raw_material_routes_assign_and_require_scan_for_queue_start() {
             .count(),
         2
     );
-    assert_eq!(
+    assert!(
         completed_materials
             .iter()
-            .filter(|item| item["stock_status"] == "available")
-            .count(),
-        1
+            .all(|item| item["stock_status"] == "consumed")
     );
     assert_eq!(
         completed_materials
@@ -1178,13 +1269,15 @@ async fn raw_material_routes_assign_and_require_scan_for_queue_start() {
             .sum::<f64>(),
         0.0
     );
-    assert_eq!(
-        completed_materials
-            .iter()
-            .find(|item| item["stock_status"] == "available")
-            .and_then(|item| item["stock_qty"].as_f64()),
-        Some(4.0)
-    );
+    let unused_stock = material_store
+        .raw_material_stock_by_barcode("30EE")
+        .await
+        .expect("unused stock lookup")
+        .expect("unused stock remains in inventory");
+    assert_eq!(unused_stock.status, "available");
+    assert_eq!(unused_stock.reserved_order_id, "");
+    assert_eq!(unused_stock.qty, 4.0);
+    assert_eq!(unused_stock.warehouse, "Kalidor");
 }
 
 #[tokio::test]

@@ -289,6 +289,8 @@ pub(super) fn production_map_error(error: ProductionMapError) -> AdminError {
                 apparatus_options: None,
                 order_width_mm: None,
                 roll_width_mm: None,
+                minimum_width_mm: None,
+                maximum_width_mm: None,
                 order_title: None,
                 raw_material_status: None,
             }),
@@ -407,6 +409,10 @@ pub(super) fn production_map_error(error: ProductionMapError) -> AdminError {
         ProductionMapError::OpeningWipIdempotencyConflict => {
             conflict("opening_wip_idempotency_conflict")
         }
+        ProductionMapError::OpeningWipDeleteLocked => {
+            conflict("opening_wip_delete_locked")
+        }
+        ProductionMapError::OpeningWipDeleteForbidden => forbidden(),
         ProductionMapError::PaddonInvalidInput => bad_request("paddon_invalid_input"),
         ProductionMapError::PaddonCodeExhausted => conflict("paddon_code_exhausted"),
         ProductionMapError::PaddonNotFound => not_found("paddon_not_found"),

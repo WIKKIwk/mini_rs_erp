@@ -7,6 +7,13 @@ impl PostgresProductionMapStore {
         create_opening_wip(&self.pool, write).await
     }
 
+    async fn delete_opening_wip_batch(
+        &self,
+        write: OpeningWipDeleteWrite,
+    ) -> Result<OpeningWipBatchRecord, ProductionMapError> {
+        delete_opening_wip_batch(&self.pool, write).await
+    }
+
     async fn paddons(&self, limit: usize) -> Result<Vec<PaddonSummary>, ProductionMapError> {
         load_paddons(&self.pool, limit).await
     }
@@ -128,10 +135,10 @@ impl PostgresProductionMapStore {
 
     async fn put_apparatus_queue_states_with_event_and_progress(
         &self,
-        write: QueueActionProgressWrite,
+        mut write: QueueActionProgressWrite,
     ) -> Result<QueueActionProgressWriteResult, ProductionMapError> {
         validate_queue_progress_write(&write)?;
-        let apparatus = write.apparatus.trim();
+        let apparatus = write.apparatus.trim().to_string();
         let mut tx = self
             .pool
             .begin()
@@ -215,12 +222,43 @@ impl PostgresProductionMapStore {
             lock_orders_and_apparatuses_tx(&mut tx, &locked_orders, &locked_apparatuses).await?;
         }
         if queue_action_event_replay_tx(&mut tx, &write.event).await? {
+            let raw_material_stock_committed = !write.raw_material_stock_transitions.is_empty();
             tx.commit()
                 .await
                 .map_err(|_| ProductionMapError::StoreFailed)?;
-            return Ok(QueueActionProgressWriteResult::default());
+            return Ok(QueueActionProgressWriteResult {
+                raw_material_stock_committed,
+                ..QueueActionProgressWriteResult::default()
+            });
         }
         validate_queue_action_event_transition_tx(&mut tx, &write.event).await?;
+        let raw_material_stock_committed = !write.raw_material_stock_transitions.is_empty();
+        let raw_material_outcome = apply_raw_material_stock_transitions_tx(
+            &mut tx,
+            &write.raw_material_stock_transitions,
+            &write.event.actor,
+            &write.event.apparatus,
+        )
+        .await?;
+        if !raw_material_outcome.unused_unlinks.is_empty() {
+            write.event.payload_json["unused_raw_material_unlinked_on_complete"] =
+                serde_json::Value::Bool(true);
+            write.event.payload_json["unused_raw_material_unlinks"] = serde_json::Value::Array(
+                raw_material_outcome
+                    .unused_unlinks
+                    .iter()
+                    .map(|unlink| {
+                        serde_json::json!({
+                            "barcode": unlink.barcode.as_str(),
+                            "stock_status": unlink.stock_status.as_str(),
+                            "reserved_order_id": unlink.reserved_order_id.as_str(),
+                            "warehouse": unlink.warehouse.as_str(),
+                        })
+                    })
+                    .collect(),
+            );
+        }
+        let raw_material_stock_warehouses = raw_material_outcome.warehouses;
         let current_session_id = write
             .session
             .as_ref()
@@ -263,7 +301,7 @@ impl PostgresProductionMapStore {
         }
         insert_queue_action_event_tx(&mut tx, &write.event).await?;
         if let Some(status) = write.schedule_reservation_status {
-            let apparatus_id = ApparatusId::new(apparatus.to_string())
+            let apparatus_id = ApparatusId::new(apparatus.clone())
                 .map_err(|_| ProductionMapError::ScheduleInputInvalid)?;
             update_apparatus_schedule_reservation_status_tx(
                 &mut tx,
@@ -276,6 +314,9 @@ impl PostgresProductionMapStore {
         }
         if let Some(session) = write.session {
             put_order_run_session_tx(&mut tx, &session).await?;
+            super::postgres_qolip::return_completed_session_checkouts_tx(&mut tx, &session)
+                .await
+                .map_err(production_map_qolip_checkout_error)?;
         }
         if let Some(event) = write.progress_event {
             put_order_progress_event_tx(&mut tx, &event).await?;
@@ -309,13 +350,6 @@ impl PostgresProductionMapStore {
             .await
             .map_err(production_map_qolip_checkout_error)?;
         }
-        let raw_material_stock_warehouses = apply_raw_material_stock_transitions_tx(
-            &mut tx,
-            &write.raw_material_stock_transitions,
-            &write.event.actor,
-            &write.event.apparatus,
-        )
-        .await?;
         if let Some(report) = &write.returned_paint_report {
             super::postgres_returned_paint::insert_returned_paint_request_tx(&mut tx, report)
                 .await
@@ -334,6 +368,7 @@ impl PostgresProductionMapStore {
             .map_err(|_| ProductionMapError::StoreFailed)?;
         Ok(QueueActionProgressWriteResult {
             raw_material_stock_warehouses,
+            raw_material_stock_committed,
             qolip_checkout_committed,
         })
     }
@@ -446,7 +481,7 @@ impl PostgresProductionMapStore {
         if stock_available != Some(true) {
             return Err(ProductionMapError::RawMaterialStockUnavailable);
         }
-        let warehouses = apply_raw_material_stock_transitions_tx(
+        let outcome = apply_raw_material_stock_transitions_tx(
             &mut tx,
             &[RawMaterialStockTransition::new(
                 RawMaterialStockTransitionKind::InUse,
@@ -460,7 +495,7 @@ impl PostgresProductionMapStore {
         tx.commit()
             .await
             .map_err(|_| ProductionMapError::StoreFailed)?;
-        Ok(warehouses)
+        Ok(outcome.warehouses)
     }
 
     async fn delete_raw_material_assignment(

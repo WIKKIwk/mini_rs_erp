@@ -32,7 +32,6 @@ mod order_control;
 mod opening_wip;
 mod paddons;
 mod progress_qr;
-mod qolip_order_notes;
 mod qolip_validation;
 mod queue_actions;
 mod raw_material_details;
@@ -67,7 +66,6 @@ pub use self::progress_qr::{
     production_map_progress_qr_lookup, production_map_progress_qr_report,
     production_map_progress_qr_reprint,
 };
-pub use self::qolip_order_notes::production_map_qolip_order_notes;
 pub use self::qolip_validation::production_map_qolip_validate;
 pub use self::queue_actions::production_map_queue_action;
 pub use self::raw_material_reprint::{
@@ -75,8 +73,9 @@ pub use self::raw_material_reprint::{
 };
 pub use self::raw_materials::{
     raw_material_assignment_candidate_orders, raw_material_assignment_candidates,
-    raw_material_assignment_lookup, raw_material_assignment_orders, raw_material_assignments,
-    raw_material_history, raw_material_intake, raw_material_intake_candidates, raw_material_rules,
+    raw_material_assignment_diagnostics, raw_material_assignment_lookup,
+    raw_material_assignment_orders, raw_material_assignments, raw_material_history,
+    raw_material_intake, raw_material_intake_candidates, raw_material_rules,
     raw_material_start_requirements, raw_material_stock,
 };
 pub use self::wip::{production_map_finished_goods_receive, production_map_wip_batches};

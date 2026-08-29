@@ -6,7 +6,7 @@ use crate::core::auth::models::Principal;
 
 use super::models::{
     QolipBlock, QolipCellQr, QolipCheckout, QolipError, QolipLocation, QolipLocationMove,
-    QolipOrderNote, QolipProduct, QolipProductSpec,
+    QolipProduct, QolipProductSpec,
 };
 use super::normalize::{
     location_from_checkout, location_from_checkout_target, location_identity_matches,
@@ -22,7 +22,6 @@ pub struct MemoryQolipStore {
     locations: RwLock<Vec<QolipLocation>>,
     cell_qrs: RwLock<BTreeMap<String, QolipCellQr>>,
     checkouts: RwLock<Vec<QolipCheckout>>,
-    order_notes: RwLock<BTreeMap<String, QolipOrderNote>>,
 }
 
 impl MemoryQolipStore {
@@ -147,31 +146,6 @@ fn sort_locations(locations: &mut [QolipLocation]) {
             .then_with(|| left.column_number.cmp(&right.column_number))
             .then_with(|| left.item_name.cmp(&right.item_name))
     });
-}
-
-fn order_note_key_prefix(principal: &Principal) -> String {
-    format!("{}:{}:", role_code(&principal.role), principal.ref_.trim())
-}
-
-fn order_note_key(principal: &Principal, order_id: &str) -> String {
-    format!("{}{}", order_note_key_prefix(principal), order_id.trim())
-}
-
-fn normalize_order_note_codes(codes: Vec<String>) -> Vec<String> {
-    let mut normalized = Vec::new();
-    for code in codes {
-        let code = code.trim();
-        if code.is_empty()
-            || normalized
-                .iter()
-                .any(|existing: &String| existing.eq_ignore_ascii_case(code))
-        {
-            continue;
-        }
-        normalized.push(code.to_string());
-    }
-    normalized.sort_by_key(|code| code.to_ascii_lowercase());
-    normalized
 }
 
 fn memory_product_matches(product: &QolipProduct, query: &str) -> bool {

@@ -200,6 +200,10 @@ pub enum ProductionMapError {
     OpeningWipOrderAlreadyStarted,
     #[error("opening WIP idempotency key belongs to another request")]
     OpeningWipIdempotencyConflict,
+    #[error("opening WIP batch cannot be deleted after it has been used")]
+    OpeningWipDeleteLocked,
+    #[error("opening WIP batch deletion is forbidden")]
+    OpeningWipDeleteForbidden,
     #[error("paddon input is invalid")]
     PaddonInvalidInput,
     #[error("paddon code sequence is exhausted")]

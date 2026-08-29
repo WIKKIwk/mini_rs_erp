@@ -131,6 +131,7 @@ impl ProductionMapService {
             progress_batch: prepared.progress_batch,
             progress_batches: prepared.progress_batches,
             raw_material_stock_warehouses: write_result.raw_material_stock_warehouses,
+            raw_material_stock_committed: write_result.raw_material_stock_committed,
             qolip_checkout_committed: write_result.qolip_checkout_committed,
         })
     }

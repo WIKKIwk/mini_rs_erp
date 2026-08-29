@@ -387,6 +387,12 @@ pub trait ProductionMapStorePort: Send + Sync {
     ) -> StoreResult<OpeningWipRecord> {
         Err(ProductionMapError::StoreFailed)
     }
+    async fn delete_opening_wip_batch(
+        &self,
+        _write: OpeningWipDeleteWrite,
+    ) -> StoreResult<OpeningWipBatchRecord> {
+        Err(ProductionMapError::StoreFailed)
+    }
     async fn paddons(&self, _limit: usize) -> StoreResult<Vec<PaddonSummary>> {
         Ok(Vec::new())
     }

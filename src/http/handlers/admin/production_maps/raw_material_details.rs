@@ -210,6 +210,7 @@ pub(super) async fn validate_rulon_size_for_apparatus_map(
             Json(AdminErrorResponse::roll_size_mismatch(
                 order_width,
                 roll_width,
+                order_width + maximum_leftover_width_mm,
             )),
         ));
     }
@@ -265,7 +266,7 @@ fn is_rulon_group(item_group_path: &[String]) -> bool {
         .any(|group| group.trim().eq_ignore_ascii_case("Rulon"))
 }
 
-async fn roll_width_allowance_mm(
+pub(super) async fn roll_width_allowance_mm(
     state: &AppState,
     apparatus: &str,
 ) -> Result<Option<f64>, AdminError> {

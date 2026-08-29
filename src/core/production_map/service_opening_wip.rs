@@ -22,12 +22,7 @@ impl ProductionMapService {
             .find(|map| map.id.trim() == normalized.order_id)
             .ok_or(ProductionMapError::MapNotFound)?;
         let uses_source_contract = !normalized.source_apparatus.is_empty();
-        let (
-            operation,
-            resume_apparatus,
-            resume_stage_node_id,
-            source_target_stage_node_ids,
-        ) = if uses_source_contract {
+        let (operation, resume_apparatus, resume_stage_node_id) = if uses_source_contract {
             let source_stage = chain::work_stage_for_station(
                 &map,
                 &normalized.source_apparatus,
@@ -38,11 +33,6 @@ impl ProductionMapService {
             if target_stages.is_empty() {
                 return Err(ProductionMapError::OpeningWipSourceFinalStage);
             }
-            let source_target_stage_node_ids = target_stages
-                .into_iter()
-                .map(|stage| stage.node_id.trim().to_string())
-                .filter(|node_id| !node_id.is_empty())
-                .collect::<Vec<_>>();
             let source_apparatus = source_stage
                 .apparatus_id
                 .ok_or(ProductionMapError::OpeningWipSourceMismatch)?;
@@ -61,7 +51,6 @@ impl ProductionMapService {
                 source_configuration.runtime.execution_profile.operation,
                 String::new(),
                 source_stage.node_id,
-                source_target_stage_node_ids,
             )
         } else {
             let first_apparatus = chain::linear_work_stages(&map)
@@ -99,7 +88,6 @@ impl ProductionMapService {
                 entry_configuration.runtime.execution_profile.operation,
                 resume_apparatus,
                 resume_stage_node_id,
-                Vec::new(),
             )
         };
         validate_opening_wip_batches(&normalized.batches, operation)?;
@@ -115,18 +103,15 @@ impl ProductionMapService {
             }
             return Err(ProductionMapError::OpeningWipIdempotencyConflict);
         }
-        if uses_source_contract {
-            let snapshot = self.live_snapshot().await?;
-            let stage_states = snapshot.stage_states.get(&normalized.order_id);
-            let target_stage_completed = source_target_stage_node_ids.iter().any(|node_id| {
-                stage_states
-                    .and_then(|states| states.get(node_id))
-                    .is_some_and(|state| state.trim().eq_ignore_ascii_case("completed"))
-            });
-            if target_stage_completed {
-                return Err(ProductionMapError::OpeningWipTargetStageAlreadyCompleted);
-            }
-        } else {
+        if self
+            .production_order_lifecycle(&normalized.order_id)
+            .await?
+            .status
+            .is_terminal_for_material_assignment()
+        {
+            return Err(ProductionMapError::OrderAlreadyCompleted);
+        }
+        if !uses_source_contract {
             let queue_states = self.store.apparatus_queue_states().await?;
             let already_started = queue_states.values().any(|states| {
                 states.get(&normalized.order_id).is_some_and(|state| {
@@ -227,6 +212,31 @@ impl ProductionMapService {
             .opening_wip_batch(batch_id.trim(), qr_payload.trim())
             .await?
             .ok_or(ProductionMapError::ProgressBatchNotFound)
+    }
+
+    pub async fn delete_opening_wip_batch(
+        &self,
+        batch_id: &str,
+        actor: QueueActionActor,
+    ) -> Result<OpeningWipBatchRecord, ProductionMapError> {
+        let batch_id = batch_id.trim();
+        if batch_id.is_empty() {
+            return Err(ProductionMapError::OpeningWipInvalidInput);
+        }
+        if !actor.role.trim().eq_ignore_ascii_case("admin") {
+            return Err(ProductionMapError::OpeningWipDeleteForbidden);
+        }
+        let _guard = self.queue_action_guard().await;
+        let deleted = self
+            .store
+            .delete_opening_wip_batch(OpeningWipDeleteWrite {
+                batch_id: batch_id.to_string(),
+                actor,
+                deleted_at_unix: opening_wip_unix_seconds(),
+            })
+            .await?;
+        self.notify_live();
+        Ok(deleted)
     }
 
     pub(crate) fn opening_wip_target_stage(

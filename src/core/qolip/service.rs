@@ -6,8 +6,7 @@ use crate::core::auth::models::Principal;
 use super::models::{
     QolipBlock, QolipCellQr, QolipCellQrInput, QolipCheckout, QolipCheckoutCreate,
     QolipCheckoutReturn, QolipError, QolipLocation, QolipLocationMove, QolipLocationUpsert,
-    QolipOrderNote, QolipOrderStartPreparation, QolipProduct, QolipProductSpec,
-    QolipProductSpecUpsert,
+    QolipOrderStartPreparation, QolipProduct, QolipProductSpec, QolipProductSpecUpsert,
 };
 use super::normalize::{
     normalize_cell_qr, normalize_checkout, normalize_location, normalize_move_target,

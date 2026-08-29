@@ -210,7 +210,7 @@ impl ProductionMapService {
                 Vec::new()
             } else {
                 vec![RawMaterialStockTransition::new(
-                    RawMaterialStockTransitionKind::Consumed,
+                    RawMaterialStockTransitionKind::Complete,
                     material_barcodes,
                     &request.order_id,
                 )]
@@ -301,6 +301,7 @@ impl ProductionMapService {
             states,
             decision: notification,
             raw_material_stock_warehouses: write_result.raw_material_stock_warehouses,
+            raw_material_stock_committed: write_result.raw_material_stock_committed,
         })
     }
 }

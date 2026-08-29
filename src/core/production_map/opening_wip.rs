@@ -190,6 +190,13 @@ pub struct OpeningWipCreateWrite {
     pub record: OpeningWipRecord,
 }
 
+#[derive(Debug, Clone)]
+pub struct OpeningWipDeleteWrite {
+    pub batch_id: String,
+    pub actor: QueueActionActor,
+    pub deleted_at_unix: i64,
+}
+
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct OpeningWipQuery {
     pub order_id: String,

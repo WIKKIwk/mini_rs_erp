@@ -124,6 +124,14 @@ impl ProductionMapService {
         input: RawMaterialAssignmentDeleteInput,
     ) -> Result<RawMaterialAssignment, ProductionMapError> {
         let _guard = self.queue_action_guard().await;
+        self.unlink_raw_material_assignment_under_queue_guard(input)
+            .await
+    }
+
+    pub(crate) async fn unlink_raw_material_assignment_under_queue_guard(
+        &self,
+        input: RawMaterialAssignmentDeleteInput,
+    ) -> Result<RawMaterialAssignment, ProductionMapError> {
         let order_id = input.order_id.trim().to_string();
         let barcode = normalize_barcode(&input.barcode);
         if order_id.is_empty() || barcode.is_empty() {
