@@ -27,7 +27,10 @@ use super::{
     CutoverPreflightReport, LegacyCutoverManifest, ResolvedCutoverManifest,
     RuntimeApparatusConfiguration, RuntimeApparatusProjection, canonicalize_uploaded_aasx,
     cutover::prepare_cutover,
-    factory_defaults::{FACTORY_DEFAULT_COMMITTED_AT_UNIX_MS, factory_default_apparatus},
+    factory_defaults::{
+        FACTORY_DEFAULT_COMMITTED_AT_UNIX_MS, factory_default_apparatus,
+        flexo_default_execution_profile_upgrade, is_flexo_default_execution_profile,
+    },
 };
 
 #[derive(Clone)]
@@ -95,9 +98,13 @@ impl CanonicalApparatusService {
     pub async fn bootstrap_factory_defaults(&self) -> Result<usize, CanonicalApparatusError> {
         let defaults = factory_default_apparatus();
         let current = self.repository.list_runtime_projections().await?;
-        let current_ids = current
-            .iter()
-            .map(|projection| projection.apparatus_id.clone())
+        let current_by_id = current
+            .into_iter()
+            .map(|projection| (projection.apparatus_id.clone(), projection))
+            .collect::<BTreeMap<_, _>>();
+        let current_ids = current_by_id
+            .keys()
+            .cloned()
             .collect::<std::collections::BTreeSet<_>>();
         let default_ids = defaults
             .iter()
@@ -108,9 +115,52 @@ impl CanonicalApparatusService {
             return Ok(0);
         }
 
-        let mut created = 0;
+        let mut changed = 0;
         for default in defaults {
-            if current_ids.contains(&default.apparatus_id) {
+            if let Some(current) = current_by_id.get(&default.apparatus_id) {
+                if let Some(execution_profile) = flexo_default_execution_profile_upgrade(
+                    &current.apparatus_id,
+                    &current.execution_profile,
+                ) {
+                    let result = self
+                        .patch(
+                            current.apparatus_id.clone(),
+                            current.source_revision,
+                            CanonicalApparatusPatch {
+                                execution_profile: Some(execution_profile),
+                                ..CanonicalApparatusPatch::default()
+                            },
+                            CanonicalCommandMetadata::new(
+                                "system:factory-default-bootstrap",
+                                "command:factory-default-upgrade:flexo-order-limits-v1",
+                            ),
+                        )
+                        .await;
+                    match result {
+                        Ok(_) => changed += 1,
+                        Err(error)
+                            if matches!(
+                                error,
+                                CanonicalApparatusError::RevisionConflict
+                                    | CanonicalApparatusError::AlreadyExists
+                            ) =>
+                        {
+                            let refreshed = self
+                                .repository
+                                .current_projection(&current.apparatus_id)
+                                .await?;
+                            if !refreshed.is_some_and(|projection| {
+                                is_flexo_default_execution_profile(
+                                    &projection.apparatus_id,
+                                    &projection.execution_profile,
+                                )
+                            }) {
+                                return Err(error);
+                            }
+                        }
+                        Err(error) => return Err(error),
+                    }
+                }
                 continue;
             }
             let command_id = format!(
@@ -127,7 +177,7 @@ impl CanonicalApparatusService {
                 .with_timestamp(FACTORY_DEFAULT_COMMITTED_AT_UNIX_MS),
             };
             match self.commit(intent).await {
-                Ok(_) => created += 1,
+                Ok(_) => changed += 1,
                 Err(CanonicalApparatusError::AlreadyExists)
                     if self
                         .repository
@@ -137,7 +187,7 @@ impl CanonicalApparatusService {
                 Err(error) => return Err(error),
             }
         }
-        Ok(created)
+        Ok(changed)
     }
 
     pub async fn update(

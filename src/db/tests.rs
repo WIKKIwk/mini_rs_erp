@@ -7,6 +7,7 @@ mod inventory_movements;
 mod mini_order;
 mod opening_wip;
 mod production_map;
+mod qolip_checkout;
 mod training_workspace;
 mod warehouse;
 mod worker;

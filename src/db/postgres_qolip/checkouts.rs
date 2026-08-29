@@ -35,7 +35,7 @@ pub(crate) async fn save_checkout_tx(
         "SELECT EXISTS (
              SELECT 1
              FROM mini_order_run_sessions session
-             WHERE session.status IN ('active', 'paused', 'roll_detached')
+             WHERE session.status IN ('active', 'paused', 'frozen', 'roll_detached')
                AND ($2::text IS NULL OR session.session_id <> $2)
                AND session.payload_json->>'qolip_lock_owner' = 'true'
                AND (
@@ -542,7 +542,7 @@ pub(super) async fn return_checkout_to_location(
         "SELECT EXISTS (
              SELECT 1
              FROM mini_order_run_sessions session
-             WHERE session.status IN ('active', 'paused', 'roll_detached')
+             WHERE session.status IN ('active', 'paused', 'frozen', 'roll_detached')
                AND session.payload_json->>'qolip_lock_owner' = 'true'
                AND (
                    lower(session.payload_json->>'qolip_code') = lower($1)

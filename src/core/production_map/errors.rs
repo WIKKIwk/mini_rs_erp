@@ -102,6 +102,10 @@ pub enum ProductionMapError {
     ApparatusNotAssigned,
     #[error("order width exceeds the canonical apparatus capability")]
     ApparatusWidthExceedsCapability,
+    #[error("order width is below the canonical apparatus capability")]
+    ApparatusWidthBelowCapability,
+    #[error("order roll count exceeds the canonical apparatus capability")]
+    ApparatusRollCountExceedsCapability,
     #[error("apparatus queue policy is locked")]
     ApparatusQueuePolicyLocked,
     #[error("raw material input is invalid")]

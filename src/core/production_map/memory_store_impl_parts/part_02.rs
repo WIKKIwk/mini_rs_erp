@@ -209,7 +209,10 @@ impl MemoryProductionMapStore {
         if let Some(session) = &write.session
             && matches!(
                 session.status,
-                OrderRunStatus::Active | OrderRunStatus::Paused | OrderRunStatus::RollDetached
+                OrderRunStatus::Active
+                    | OrderRunStatus::Paused
+                    | OrderRunStatus::Frozen
+                    | OrderRunStatus::RollDetached
             )
         {
             for qolip_code in runs::session_qolip_codes(session) {

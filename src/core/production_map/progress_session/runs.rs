@@ -63,7 +63,10 @@ pub(super) async fn active_order_run_session_for_qolip(
         .find(|session| {
             matches!(
                 session.status,
-                OrderRunStatus::Active | OrderRunStatus::Paused | OrderRunStatus::RollDetached
+                OrderRunStatus::Active
+                    | OrderRunStatus::Paused
+                    | OrderRunStatus::Frozen
+                    | OrderRunStatus::RollDetached
             ) && !(session.status == OrderRunStatus::Paused
                 && session
                     .payload_json
@@ -109,7 +112,10 @@ pub(super) async fn active_order_run_sessions_for_worker(
         .filter(|session| {
             matches!(
                 session.status,
-                OrderRunStatus::Active | OrderRunStatus::Paused | OrderRunStatus::RollDetached
+                OrderRunStatus::Active
+                    | OrderRunStatus::Paused
+                    | OrderRunStatus::Frozen
+                    | OrderRunStatus::RollDetached
             ) && !(session.status == OrderRunStatus::Paused
                 && session
                     .payload_json

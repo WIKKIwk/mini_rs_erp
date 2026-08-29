@@ -151,14 +151,23 @@ fn validate_execution_profile(
     };
     let virtual_tasks_match = profile.virtual_tasks == VirtualTaskPolicy::Disabled
         || revision.supports(EquipmentCapabilityCode::VirtualTask);
-    let web_width_match = profile
+    let min_web_width_match = profile
+        .min_web_width_mm
+        .is_none_or(|value| value > 0 && value <= MAX_WEB_WIDTH_MM);
+    let max_web_width_match = profile
         .max_web_width_mm
         .is_none_or(|value| value > 0 && value <= MAX_WEB_WIDTH_MM);
+    let web_width_range_matches = profile
+        .min_web_width_mm
+        .zip(profile.max_web_width_mm)
+        .is_none_or(|(minimum, maximum)| minimum <= maximum);
     if !revision.supports(expected_capability)
         || !technology_matches
         || !color_stations_match
         || !virtual_tasks_match
-        || !web_width_match
+        || !min_web_width_match
+        || !max_web_width_match
+        || !web_width_range_matches
     {
         return Err(CanonicalApparatusValidationError::InvalidExecutionProfile);
     }

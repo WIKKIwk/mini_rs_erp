@@ -223,6 +223,7 @@ async fn seed_canonical_apparatus(
                     operation: ExecutionOperation::Package,
                     technology: ProcessTechnology::BagMaking,
                     color_station_count: None,
+                    min_web_width_mm: None,
                     max_web_width_mm: None,
                     virtual_tasks: VirtualTaskPolicy::Disabled,
                     capability_compatible_reroute: true,

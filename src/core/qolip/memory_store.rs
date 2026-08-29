@@ -10,7 +10,7 @@ use super::models::{
 };
 use super::normalize::{
     location_from_checkout, location_from_checkout_target, location_identity_matches,
-    normalize_move_target, qolip_location_id, role_code,
+    normalize_move_target, qolip_location_id,
 };
 use super::ports::QolipStorePort;
 

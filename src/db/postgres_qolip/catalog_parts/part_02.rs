@@ -1,4 +1,3 @@
-
 pub(super) async fn load_products(
     pool: &PgPool,
     query: &str,
@@ -165,7 +164,7 @@ pub(super) async fn load_products(
             ) OR EXISTS (
                 SELECT 1
                 FROM mini_order_run_sessions session
-                WHERE session.status IN ('active', 'paused', 'roll_detached')
+                WHERE session.status IN ('active', 'paused', 'frozen', 'roll_detached')
                   AND session.payload_json->>'qolip_lock_owner' = 'true'
                   AND (
                       lower(session.payload_json->>'qolip_code') = lower(product.qolip_code)

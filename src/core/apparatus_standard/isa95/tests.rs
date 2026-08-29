@@ -42,6 +42,7 @@ pub(crate) fn revision_with(
                 operation: ExecutionOperation::Print,
                 technology: ProcessTechnology::Rotogravure,
                 color_station_count: Some(7),
+                min_web_width_mm: Some(150),
                 max_web_width_mm: Some(1_050),
                 virtual_tasks: VirtualTaskPolicy::Disabled,
                 capability_compatible_reroute: true,
@@ -147,6 +148,21 @@ fn behavior_requires_explicit_capability_and_profile_consistency() {
     revision
         .capabilities
         .retain(|capability| capability.code != EquipmentCapabilityCode::Print);
+    assert_eq!(
+        revision.validate(),
+        Err(CanonicalApparatusValidationError::InvalidExecutionProfile)
+    );
+}
+
+#[test]
+fn execution_profile_rejects_inverted_web_width_range() {
+    let mut revision = revision_with(
+        "apparatus:test:04ee",
+        "physical-asset:press-04e",
+        "Invalid width range",
+    );
+    revision.execution_profile.min_web_width_mm = Some(1_100);
+    revision.execution_profile.max_web_width_mm = Some(800);
     assert_eq!(
         revision.validate(),
         Err(CanonicalApparatusValidationError::InvalidExecutionProfile)

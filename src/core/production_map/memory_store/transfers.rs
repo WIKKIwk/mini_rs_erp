@@ -149,7 +149,10 @@ pub(super) async fn commit_apparatus_transfer(
             session.session_id != write.session.session_id
                 && matches!(
                     session.status,
-                    OrderRunStatus::Active | OrderRunStatus::Paused | OrderRunStatus::RollDetached
+                    OrderRunStatus::Active
+                        | OrderRunStatus::Paused
+                        | OrderRunStatus::Frozen
+                        | OrderRunStatus::RollDetached
                 )
         }) {
             if qolip_codes.iter().any(|code| {

@@ -1,6 +1,13 @@
 use std::collections::BTreeMap;
 
 use crate::core::production_map::*;
+use crate::core::{
+    apparatus_standard::{
+        ProcessTechnology,
+        test_support::{TestApparatusSpec, runtime_configuration},
+    },
+    production_map::TestCanonicalApparatusResolver,
+};
 
 use super::fixtures::{
     canonical_apparatus_stage_map, canonical_two_stage_map, service_with_default_apparatus,
@@ -8,8 +15,64 @@ use super::fixtures::{
 
 const PECHAT_7_ID: &str = "apparatus:default:bosma_7";
 const PECHAT_8_ID: &str = "apparatus:default:bosma_8";
+const FLEXO_ID: &str = "apparatus:default:asset-005";
 const LAMINATION_ID: &str = "apparatus:default:asset-007";
 const REZKA_ID: &str = "apparatus:default:asset-010";
+
+fn service_with_flexo_limits() -> ProductionMapService {
+    let mut flexo = TestApparatusSpec::print(
+        FLEXO_ID,
+        "Flexo pechat",
+        ProcessTechnology::Flexographic,
+        Some(8),
+    );
+    flexo.min_web_width_mm = Some(400);
+    flexo.max_web_width_mm = Some(800);
+    ProductionMapService::new(
+        std::sync::Arc::new(MemoryProductionMapStore::new()),
+        std::sync::Arc::new(TestCanonicalApparatusResolver::new([
+            runtime_configuration(flexo),
+        ])),
+    )
+}
+
+#[tokio::test]
+async fn flexo_map_enforces_default_width_and_roll_limits() {
+    let service = service_with_flexo_limits();
+    for (id, width_mm, roll_count) in [("zakaz-flexo-min", 400.0, 1), ("zakaz-flexo-max", 800.0, 8)]
+    {
+        let mut map = canonical_apparatus_stage_map(id, FLEXO_ID, "Flexo pechat");
+        map.width_mm = Some(width_mm);
+        map.roll_count = Some(roll_count);
+        service.upsert_map(map).await.expect("valid Flexo map");
+    }
+
+    let mut too_narrow =
+        canonical_apparatus_stage_map("zakaz-flexo-narrow", FLEXO_ID, "Flexo pechat");
+    too_narrow.width_mm = Some(399.0);
+    too_narrow.roll_count = Some(8);
+    assert_eq!(
+        service.upsert_map(too_narrow).await,
+        Err(ProductionMapError::ApparatusWidthBelowCapability)
+    );
+
+    let mut too_wide = canonical_apparatus_stage_map("zakaz-flexo-wide", FLEXO_ID, "Flexo pechat");
+    too_wide.width_mm = Some(801.0);
+    too_wide.roll_count = Some(8);
+    assert_eq!(
+        service.upsert_map(too_wide).await,
+        Err(ProductionMapError::ApparatusWidthExceedsCapability)
+    );
+
+    let mut too_many_rolls =
+        canonical_apparatus_stage_map("zakaz-flexo-rolls", FLEXO_ID, "Flexo pechat");
+    too_many_rolls.width_mm = Some(650.0);
+    too_many_rolls.roll_count = Some(9);
+    assert_eq!(
+        service.upsert_map(too_many_rolls).await,
+        Err(ProductionMapError::ApparatusRollCountExceedsCapability)
+    );
+}
 
 #[tokio::test]
 async fn started_stage_is_immutable_but_future_stage_can_be_replaced() {

@@ -218,7 +218,7 @@ pub(super) async fn load_active_order_run_session_for_qolip(
                 EXTRACT(EPOCH FROM updated_at)::bigint AS updated_at_unix,
                 payload_json
          FROM mini_order_run_sessions
-         WHERE status IN ('active', 'paused', 'roll_detached')
+         WHERE status IN ('active', 'paused', 'frozen', 'roll_detached')
            AND (payload_json->>'requeued_at_tail') IS DISTINCT FROM 'true'
            AND payload_json->>'qolip_lock_owner' = 'true'
            AND (
@@ -263,7 +263,7 @@ pub(super) async fn load_active_order_run_sessions_for_worker(
                 EXTRACT(EPOCH FROM updated_at)::bigint AS updated_at_unix,
                 payload_json
          FROM mini_order_run_sessions AS session
-         WHERE session.status IN ('active', 'paused', 'roll_detached')
+         WHERE session.status IN ('active', 'paused', 'frozen', 'roll_detached')
            AND (session.payload_json->>'requeued_at_tail') IS DISTINCT FROM 'true'
            AND (
                session.worker_ref = ANY($1)

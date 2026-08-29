@@ -338,10 +338,30 @@ impl ProductionMapService {
                 canonical
                     .runtime
                     .execution_profile
+                    .min_web_width_mm
+                    .is_some_and(|minimum| width_mm < f64::from(minimum))
+            }) {
+                return Err(ProductionMapError::ApparatusWidthBelowCapability);
+            }
+            if map.width_mm.is_some_and(|width_mm| {
+                canonical
+                    .runtime
+                    .execution_profile
                     .max_web_width_mm
                     .is_some_and(|maximum| width_mm > f64::from(maximum))
             }) {
                 return Err(ProductionMapError::ApparatusWidthExceedsCapability);
+            }
+            let profile = &canonical.runtime.execution_profile;
+            if profile.technology
+                == crate::core::apparatus_standard::ProcessTechnology::Flexographic
+                && map
+                    .roll_count
+                    .filter(|value| *value > 0)
+                    .zip(profile.color_station_count)
+                    .is_some_and(|(rolls, maximum)| rolls > i64::from(maximum))
+            {
+                return Err(ProductionMapError::ApparatusRollCountExceedsCapability);
             }
         }
         Ok(())

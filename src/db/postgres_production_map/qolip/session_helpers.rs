@@ -8,7 +8,10 @@ pub(super) async fn reject_qolip_in_use_tx(
 ) -> Result<(), ProductionMapError> {
     if !matches!(
         session.status,
-        OrderRunStatus::Active | OrderRunStatus::Paused | OrderRunStatus::RollDetached
+        OrderRunStatus::Active
+            | OrderRunStatus::Paused
+            | OrderRunStatus::Frozen
+            | OrderRunStatus::RollDetached
     ) {
         return Ok(());
     }
@@ -51,7 +54,7 @@ pub(super) async fn reject_qolip_in_use_tx(
             "SELECT EXISTS (
                 SELECT 1
                 FROM mini_order_run_sessions AS session
-                WHERE session.status IN ('active', 'paused', 'roll_detached')
+                WHERE session.status IN ('active', 'paused', 'frozen', 'roll_detached')
                   AND session.session_id <> $2
                   AND session.payload_json->>'qolip_lock_owner' = 'true'
                   AND (

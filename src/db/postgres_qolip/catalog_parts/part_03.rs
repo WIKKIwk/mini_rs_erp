@@ -1,4 +1,3 @@
-
 async fn save_product_spec_tx(
     tx: &mut Transaction<'_, Postgres>,
     mut spec: QolipProductSpec,
@@ -160,7 +159,7 @@ pub(super) async fn rename_product_spec(
                  WHERE lower(qolip_code) = $1 AND lower(status) = 'open'
                  UNION ALL
                  SELECT 1 FROM mini_order_run_sessions
-                 WHERE status IN ('active', 'paused', 'roll_detached')
+                 WHERE status IN ('active', 'paused', 'frozen', 'roll_detached')
                    AND payload_json->>'qolip_lock_owner' = 'true'
                    AND (
                        lower(payload_json->>'qolip_code') = $1
@@ -192,7 +191,7 @@ pub(super) async fn rename_product_spec(
              WHERE lower(qolip_code) = $1 AND lower(status) = 'open'
              UNION ALL
              SELECT 1 FROM mini_order_run_sessions
-             WHERE status IN ('active', 'paused', 'roll_detached')
+             WHERE status IN ('active', 'paused', 'frozen', 'roll_detached')
                AND payload_json->>'qolip_lock_owner' = 'true'
                AND (
                    lower(payload_json->>'qolip_code') = $1
@@ -381,7 +380,7 @@ pub(super) async fn delete_product_specs(
              UNION ALL
              SELECT 1
              FROM mini_order_run_sessions
-             WHERE status IN ('active', 'paused', 'roll_detached')
+             WHERE status IN ('active', 'paused', 'frozen', 'roll_detached')
                AND payload_json->>'qolip_lock_owner' = 'true'
                AND (
                    lower(payload_json->>'qolip_code') = ANY($1)

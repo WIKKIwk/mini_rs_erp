@@ -135,6 +135,14 @@ fn push_execution(xml: &mut String, revision: &CanonicalApparatusRevision) {
             &stations.to_string(),
         );
     }
+    if let Some(min_web_width_mm) = profile.min_web_width_mm {
+        property(
+            xml,
+            "MinWebWidthMm",
+            "xs:unsignedInt",
+            &min_web_width_mm.to_string(),
+        );
+    }
     if let Some(max_web_width_mm) = profile.max_web_width_mm {
         property(
             xml,

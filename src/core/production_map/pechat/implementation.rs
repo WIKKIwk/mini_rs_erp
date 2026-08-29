@@ -39,7 +39,8 @@ impl<'a> PechatPolicy<'a> {
     }
 
     pub fn color_stations(self) -> Option<u8> {
-        self.color_stations.and_then(|value| u8::try_from(value).ok())
+        self.color_stations
+            .and_then(|value| u8::try_from(value).ok())
     }
 
     pub fn requires_qolip_scan(self) -> bool {
@@ -117,6 +118,9 @@ pub fn reroute_order_compatible(
     if !reroute_compatible(source, target) {
         return false;
     }
+    if is_flexo_apparatus(target) {
+        return apparatus_profile_can_handle_order(target, roll_count, width_mm);
+    }
     let Some(target_color_stations) = pechat_color_stations(target) else {
         return true;
     };
@@ -131,7 +135,37 @@ pub fn reroute_order_compatible(
 /// Returns the configured ColorPechat station count, or `None` for Flexo and
 /// non-pechat apparatuses.
 pub fn pechat_color_stations(apparatus: &RuntimeApparatusConfiguration) -> Option<u8> {
-    policy_for(apparatus).and_then(PechatPolicy::color_stations)
+    policy_for(apparatus)
+        .filter(|policy| policy.technology() == ProcessTechnology::Rotogravure)
+        .and_then(PechatPolicy::color_stations)
+}
+
+/// Whether the order fits the explicit limits stored on an apparatus profile.
+/// Width limits are direct order-width limits; Flexo roll capacity is stored in
+/// `color_station_count` to match the existing order `roll_count` contract.
+pub fn apparatus_profile_can_handle_order(
+    apparatus: &RuntimeApparatusConfiguration,
+    roll_count: Option<i64>,
+    width_mm: Option<f64>,
+) -> bool {
+    let profile = &apparatus.runtime.execution_profile;
+    if profile.technology == ProcessTechnology::Flexographic
+        && roll_count
+            .filter(|value| *value > 0)
+            .zip(profile.color_station_count)
+            .is_some_and(|(rolls, maximum)| rolls > i64::from(maximum))
+    {
+        return false;
+    }
+    let Some(width) = width_mm.filter(|value| *value > 0.0) else {
+        return true;
+    };
+    !profile
+        .min_web_width_mm
+        .is_some_and(|minimum| width < f64::from(minimum))
+        && !profile
+            .max_web_width_mm
+            .is_some_and(|maximum| width > f64::from(maximum))
 }
 
 /// Returns the explicit canonical Qolip tooling policy for supported pechat
@@ -254,9 +288,7 @@ pub fn pechat_can_move_order(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::apparatus_standard::test_support::{
-        TestApparatusSpec, runtime_configuration,
-    };
+    use crate::core::apparatus_standard::test_support::{TestApparatusSpec, runtime_configuration};
 
     fn canonical_apparatus(
         id: &str,
@@ -294,18 +326,47 @@ mod tests {
 
     #[test]
     fn canonical_flexo_is_pechat_and_uses_explicit_qolip_policy() {
-        let apparatus = canonical_apparatus(
+        let mut apparatus = canonical_apparatus(
             "apparatus:test:flexo-001",
             "any display name",
             ExecutionOperation::Print,
             ProcessTechnology::Flexographic,
-            None,
+            Some(8),
             true,
         );
+        apparatus.runtime.execution_profile.min_web_width_mm = Some(400);
+        apparatus.runtime.execution_profile.max_web_width_mm = Some(800);
+        let policy = policy_for(&apparatus).expect("Flexo policy");
         assert!(is_pechat_apparatus(&apparatus));
         assert!(is_flexo_apparatus(&apparatus));
+        assert_eq!(policy.color_stations(), Some(8));
         assert_eq!(pechat_color_stations(&apparatus), None);
         assert!(requires_qolip_scan(&apparatus));
+        assert!(apparatus_profile_can_handle_order(
+            &apparatus,
+            Some(1),
+            Some(400.0)
+        ));
+        assert!(apparatus_profile_can_handle_order(
+            &apparatus,
+            Some(8),
+            Some(800.0)
+        ));
+        assert!(!apparatus_profile_can_handle_order(
+            &apparatus,
+            Some(8),
+            Some(399.0)
+        ));
+        assert!(!apparatus_profile_can_handle_order(
+            &apparatus,
+            Some(8),
+            Some(801.0)
+        ));
+        assert!(!apparatus_profile_can_handle_order(
+            &apparatus,
+            Some(9),
+            Some(650.0)
+        ));
     }
 
     #[test]

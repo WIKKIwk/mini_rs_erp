@@ -8,6 +8,10 @@ use super::{
 };
 
 pub(super) const FACTORY_DEFAULT_COMMITTED_AT_UNIX_MS: i64 = 1_700_000_000_000;
+pub(super) const FLEXO_DEFAULT_APPARATUS_ID: &str = "apparatus:default:asset-005";
+pub(super) const FLEXO_DEFAULT_MIN_WEB_WIDTH_MM: u32 = 400;
+pub(super) const FLEXO_DEFAULT_MAX_WEB_WIDTH_MM: u32 = 800;
+pub(super) const FLEXO_DEFAULT_MAX_ROLL_COUNT: u16 = 8;
 
 pub(super) struct FactoryDefaultApparatus {
     pub(super) apparatus_id: ApparatusId,
@@ -34,6 +38,38 @@ pub(super) fn factory_default_apparatus() -> Vec<FactoryDefaultApparatus> {
             draft: factory_default_draft(&spec),
         })
         .collect()
+}
+
+pub(super) fn flexo_default_execution_profile_upgrade(
+    apparatus_id: &ApparatusId,
+    profile: &ExecutionProfile,
+) -> Option<ExecutionProfile> {
+    if apparatus_id.as_str() != FLEXO_DEFAULT_APPARATUS_ID
+        || profile.operation != ExecutionOperation::Print
+        || profile.technology != ProcessTechnology::Flexographic
+        || profile.color_station_count.is_some()
+        || profile.min_web_width_mm.is_some()
+        || profile.max_web_width_mm.is_some()
+    {
+        return None;
+    }
+    let mut upgraded = profile.clone();
+    upgraded.color_station_count = Some(FLEXO_DEFAULT_MAX_ROLL_COUNT);
+    upgraded.min_web_width_mm = Some(FLEXO_DEFAULT_MIN_WEB_WIDTH_MM);
+    upgraded.max_web_width_mm = Some(FLEXO_DEFAULT_MAX_WEB_WIDTH_MM);
+    Some(upgraded)
+}
+
+pub(super) fn is_flexo_default_execution_profile(
+    apparatus_id: &ApparatusId,
+    profile: &ExecutionProfile,
+) -> bool {
+    apparatus_id.as_str() == FLEXO_DEFAULT_APPARATUS_ID
+        && profile.operation == ExecutionOperation::Print
+        && profile.technology == ProcessTechnology::Flexographic
+        && profile.color_station_count == Some(FLEXO_DEFAULT_MAX_ROLL_COUNT)
+        && profile.min_web_width_mm == Some(FLEXO_DEFAULT_MIN_WEB_WIDTH_MM)
+        && profile.max_web_width_mm == Some(FLEXO_DEFAULT_MAX_WEB_WIDTH_MM)
 }
 
 pub(crate) fn canonical_factory_apparatus_id_for_legacy(value: &str) -> Option<ApparatusId> {
@@ -107,13 +143,13 @@ fn factory_default_specs() -> [FactoryDefaultSpec; 10] {
             tooling_required: false,
         },
         FactoryDefaultSpec {
-            apparatus_id: "apparatus:default:asset-005",
+            apparatus_id: FLEXO_DEFAULT_APPARATUS_ID,
             display_name: "Flexo pechat",
             asset_key: "flexo-pechat",
             catalog_order: 4,
             operation: ExecutionOperation::Print,
             technology: ProcessTechnology::Flexographic,
-            color_station_count: None,
+            color_station_count: Some(FLEXO_DEFAULT_MAX_ROLL_COUNT),
             tooling_required: true,
         },
         FactoryDefaultSpec {
@@ -170,6 +206,14 @@ fn factory_default_specs() -> [FactoryDefaultSpec; 10] {
 }
 
 fn factory_default_draft(spec: &FactoryDefaultSpec) -> CanonicalApparatusDraft {
+    let (min_web_width_mm, max_web_width_mm) = if spec.apparatus_id == FLEXO_DEFAULT_APPARATUS_ID {
+        (
+            Some(FLEXO_DEFAULT_MIN_WEB_WIDTH_MM),
+            Some(FLEXO_DEFAULT_MAX_WEB_WIDTH_MM),
+        )
+    } else {
+        (None, None)
+    };
     let operation_capability = match spec.operation {
         ExecutionOperation::Print => EquipmentCapabilityCode::Print,
         ExecutionOperation::Laminate => EquipmentCapabilityCode::Laminate,
@@ -237,7 +281,8 @@ fn factory_default_draft(spec: &FactoryDefaultSpec) -> CanonicalApparatusDraft {
             operation: spec.operation,
             technology: spec.technology,
             color_station_count: spec.color_station_count,
-            max_web_width_mm: None,
+            min_web_width_mm,
+            max_web_width_mm,
             virtual_tasks: VirtualTaskPolicy::Disabled,
             capability_compatible_reroute: true,
         },

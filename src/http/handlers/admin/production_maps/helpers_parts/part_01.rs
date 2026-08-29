@@ -302,6 +302,12 @@ pub(super) fn production_map_error(error: ProductionMapError) -> AdminError {
         ProductionMapError::ApparatusWidthExceedsCapability => {
             bad_request("apparatus_width_exceeds_capability")
         }
+        ProductionMapError::ApparatusWidthBelowCapability => {
+            bad_request("apparatus_width_below_capability")
+        }
+        ProductionMapError::ApparatusRollCountExceedsCapability => {
+            bad_request("apparatus_roll_count_exceeds_capability")
+        }
         ProductionMapError::ApparatusQueuePolicyLocked => bad_request("queue_policy_locked"),
         ProductionMapError::RawMaterialInvalidInput => bad_request("raw_material_invalid_input"),
         ProductionMapError::RawMaterialGroupNotAllowed => {
