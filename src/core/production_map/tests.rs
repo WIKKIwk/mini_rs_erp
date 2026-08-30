@@ -6,4 +6,5 @@ mod fixtures;
 mod map_edit;
 mod order_control;
 mod opening_wip;
+mod queue_controls;
 mod service_flow;

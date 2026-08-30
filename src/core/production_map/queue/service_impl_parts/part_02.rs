@@ -286,9 +286,8 @@ impl ProductionMapService {
                         && (opening_wip_mode == ApparatusQueuePreviousWipMode::ScanRequired
                             || (previous_stage.is_some()
                                 && (previous_stage_ready
-                                    || (apparatus::is_laminatsiya_apparatus(&canonical)
-                                        && previous_wip_mode
-                                            == ApparatusQueuePreviousWipMode::ScanRequired))))
+                                    || previous_wip_mode
+                                        == ApparatusQueuePreviousWipMode::ScanRequired)))
                         && active_order_is_this);
                 let mut allowed_actions = Vec::new();
                 let mut complete_requires_full_report = false;
