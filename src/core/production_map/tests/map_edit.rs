@@ -37,41 +37,23 @@ fn service_with_flexo_limits() -> ProductionMapService {
 }
 
 #[tokio::test]
-async fn flexo_map_enforces_default_width_and_roll_limits() {
+async fn flexo_map_saves_like_standard_print_regardless_of_profile_limits() {
     let service = service_with_flexo_limits();
-    for (id, width_mm, roll_count) in [("zakaz-flexo-min", 400.0, 1), ("zakaz-flexo-max", 800.0, 8)]
-    {
+    for (id, width_mm, roll_count) in [
+        ("zakaz-flexo-min", 400.0, 1),
+        ("zakaz-flexo-max", 800.0, 8),
+        ("zakaz-flexo-narrow", 399.0, 8),
+        ("zakaz-flexo-wide", 801.0, 8),
+        ("zakaz-flexo-rolls", 650.0, 9),
+    ] {
         let mut map = canonical_apparatus_stage_map(id, FLEXO_ID, "Flexo pechat");
         map.width_mm = Some(width_mm);
         map.roll_count = Some(roll_count);
-        service.upsert_map(map).await.expect("valid Flexo map");
+        service
+            .upsert_map(map)
+            .await
+            .expect("Flexo map must save like a standard print map");
     }
-
-    let mut too_narrow =
-        canonical_apparatus_stage_map("zakaz-flexo-narrow", FLEXO_ID, "Flexo pechat");
-    too_narrow.width_mm = Some(399.0);
-    too_narrow.roll_count = Some(8);
-    assert_eq!(
-        service.upsert_map(too_narrow).await,
-        Err(ProductionMapError::ApparatusWidthBelowCapability)
-    );
-
-    let mut too_wide = canonical_apparatus_stage_map("zakaz-flexo-wide", FLEXO_ID, "Flexo pechat");
-    too_wide.width_mm = Some(801.0);
-    too_wide.roll_count = Some(8);
-    assert_eq!(
-        service.upsert_map(too_wide).await,
-        Err(ProductionMapError::ApparatusWidthExceedsCapability)
-    );
-
-    let mut too_many_rolls =
-        canonical_apparatus_stage_map("zakaz-flexo-rolls", FLEXO_ID, "Flexo pechat");
-    too_many_rolls.width_mm = Some(650.0);
-    too_many_rolls.roll_count = Some(9);
-    assert_eq!(
-        service.upsert_map(too_many_rolls).await,
-        Err(ProductionMapError::ApparatusRollCountExceedsCapability)
-    );
 }
 
 #[tokio::test]

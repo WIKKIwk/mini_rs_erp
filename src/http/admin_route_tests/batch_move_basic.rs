@@ -56,7 +56,7 @@ async fn production_map_batch_move_allows_seven_to_eight_color_pechat() {
 }
 
 #[tokio::test]
-async fn production_map_batch_move_blocks_flexo_order_to_color_pechat() {
+async fn production_map_batch_move_allows_flexo_order_to_color_pechat() {
     let state = test_state();
     let token = session(&state, PrincipalRole::Admin).await;
 
@@ -92,8 +92,7 @@ async fn production_map_batch_move_blocks_flexo_order_to_color_pechat() {
         ))
         .await
         .expect("batch move");
-    assert_eq!(moved.status(), StatusCode::BAD_REQUEST);
-    assert_eq!(json_body(moved).await["error"], "move_not_allowed");
+    assert_eq!(moved.status(), StatusCode::OK);
 }
 
 #[tokio::test]

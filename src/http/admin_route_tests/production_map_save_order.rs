@@ -465,6 +465,68 @@ async fn production_map_save_with_order_recalculates_map_fields_from_template() 
 }
 
 #[tokio::test]
+async fn production_map_save_with_order_accepts_flexo_width_with_edge_allowance() {
+    let state = test_state();
+    let mut flexo = TestApparatusSpec::print(
+        "apparatus:default:asset-005",
+        "Flexo pechat",
+        crate::core::apparatus_standard::ProcessTechnology::Flexographic,
+        Some(8),
+    );
+    flexo.min_web_width_mm = Some(400);
+    flexo.max_web_width_mm = Some(800);
+    state
+        .apparatus
+        .seed_for_test(
+            ApparatusId::new("apparatus:default:asset-005").expect("Flexo apparatus id"),
+            canonical_draft(&flexo),
+        )
+        .await
+        .expect("seed Flexo apparatus");
+    let token = session(&state, PrincipalRole::Admin).await;
+
+    let map = pechat_order_map_json(
+        "zakaz-flexo-815",
+        "Flexo calculated zakaz",
+        "7815",
+        "apparatus:default:asset-005",
+    );
+    let body = serde_json::json!({
+        "map": serde_json::from_str::<serde_json::Value>(&map).expect("map json"),
+        "template": {
+            "name": "flexo mahsulot",
+            "product": "flexo mahsulot",
+            "item_code": "ITEM-FLEXO-815",
+            "frame_product_size_mm": 800.0,
+            "frame_count": 1.0,
+            "edge_allowance_mm": 15.0,
+            "waste_percent": 5.0,
+            "roll_count": 8,
+            "first_layer_material": "pet",
+            "first_layer_micron": "12",
+            "second_layer_material": "pe oq",
+            "second_layer_micron": "30",
+            "kg": 500.0
+        }
+    });
+
+    let response = build_router(state)
+        .oneshot(request_with_body(
+            "PUT",
+            "/v1/mobile/admin/production-maps/with-order",
+            &token,
+            &body.to_string(),
+        ))
+        .await
+        .expect("save Flexo map with order");
+
+    let status = response.status();
+    let value = json_body(response).await;
+    assert_eq!(status, StatusCode::OK, "response body: {value}");
+    assert_eq!(value["saved"]["map"]["width_mm"], serde_json::json!(815.0));
+}
+
+#[tokio::test]
 async fn production_map_save_with_order_does_not_store_cloned_order_as_quick_template() {
     let state = test_state();
     let token = session(&state, PrincipalRole::Admin).await;

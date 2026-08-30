@@ -91,7 +91,8 @@ pub fn reroute_compatible(
         || !source_profile.capability_compatible_reroute
         || !target_profile.capability_compatible_reroute
         || source_profile.operation != target_profile.operation
-        || source_profile.technology != target_profile.technology
+        || (source_profile.operation != ExecutionOperation::Print
+            && source_profile.technology != target_profile.technology)
     {
         return false;
     }
@@ -106,9 +107,9 @@ pub fn reroute_compatible(
 
 /// Check whether an order may be rerouted between two canonical apparatuses.
 ///
-/// The broad apparatus compatibility check is not enough for colour pechat:
+/// The broad apparatus compatibility check is not enough for pechat:
 /// the target station must also satisfy the order's roll and rubber-width
-/// limits. Non-colour pechat uses the broad compatibility result unchanged.
+/// limits. Every print technology follows the same station formula.
 pub fn reroute_order_compatible(
     source: &RuntimeApparatusConfiguration,
     target: &RuntimeApparatusConfiguration,
@@ -117,9 +118,6 @@ pub fn reroute_order_compatible(
 ) -> bool {
     if !reroute_compatible(source, target) {
         return false;
-    }
-    if is_flexo_apparatus(target) {
-        return apparatus_profile_can_handle_order(target, roll_count, width_mm);
     }
     let Some(target_color_stations) = pechat_color_stations(target) else {
         return true;
@@ -132,12 +130,9 @@ pub fn reroute_order_compatible(
     )
 }
 
-/// Returns the configured ColorPechat station count, or `None` for Flexo and
-/// non-pechat apparatuses.
+/// Returns the configured pechat station count, regardless of print technology.
 pub fn pechat_color_stations(apparatus: &RuntimeApparatusConfiguration) -> Option<u8> {
-    policy_for(apparatus)
-        .filter(|policy| policy.technology() == ProcessTechnology::Rotogravure)
-        .and_then(PechatPolicy::color_stations)
+    policy_for(apparatus).and_then(PechatPolicy::color_stations)
 }
 
 /// Whether the order fits the explicit limits stored on an apparatus profile.
@@ -340,7 +335,7 @@ mod tests {
         assert!(is_pechat_apparatus(&apparatus));
         assert!(is_flexo_apparatus(&apparatus));
         assert_eq!(policy.color_stations(), Some(8));
-        assert_eq!(pechat_color_stations(&apparatus), None);
+        assert_eq!(pechat_color_stations(&apparatus), Some(8));
         assert!(requires_qolip_scan(&apparatus));
         assert!(apparatus_profile_can_handle_order(
             &apparatus,

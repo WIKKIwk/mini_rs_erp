@@ -990,7 +990,7 @@ async fn apparatus_transfer_updates_parent_wip_next_apparatus_lineage() {
 }
 
 #[tokio::test]
-async fn flexo_transfer_does_not_cross_into_colour_pechat() {
+async fn flexo_transfer_uses_the_same_path_as_other_pechat() {
     let store = std::sync::Arc::new(MemoryProductionMapStore::new());
     let service = default_service_with_store(store.clone()).await;
     let actor = QueueActionActor {
@@ -1012,7 +1012,7 @@ async fn flexo_transfer_does_not_cross_into_colour_pechat() {
         .await
         .expect("pause");
 
-    let result = service
+    service
         .transfer_apparatus_order(
             ProductionMapApparatusTransferRequest {
                 order_id: order_id.to_string(),
@@ -1023,8 +1023,8 @@ async fn flexo_transfer_does_not_cross_into_colour_pechat() {
             },
             actor,
         )
-        .await;
-    assert_eq!(result, Err(ProductionMapError::MoveNotAllowed));
+        .await
+        .expect("Flexo transfer to another pechat");
 }
 
 #[tokio::test]
