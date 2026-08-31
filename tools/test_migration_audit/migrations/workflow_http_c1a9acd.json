@@ -1,0 +1,32 @@
+{
+  "protocol": 1,
+  "git_ref": "c1a9acd",
+  "expected_tests": 11,
+  "expected_automatic_contracts": 11,
+  "expected_generated_cases": 26,
+  "allow_scenario_contracts": true,
+  "allow_multiple_requests": true,
+  "remove_selected_tests": true,
+  "paths": [
+    "src/http/admin_route_tests/admin_edge_cases.rs",
+    "src/http/admin_route_tests/apparatus_collections.rs",
+    "src/http/admin_route_tests/factory_locations.rs",
+    "src/http/admin_route_tests/production_map_basic.rs",
+    "src/http/admin_route_tests/qolip_cell_qr.rs",
+    "src/http/admin_route_tests/run_capabilities.rs",
+    "src/http/admin_route_tests/warehouses_groups.rs"
+  ],
+  "tests": [
+    "src/http/admin_route_tests/admin_edge_cases.rs::admin_item_mutation_errors_match_go",
+    "src/http/admin_route_tests/admin_edge_cases.rs::material_taminotchi_cannot_create_catalog_items_during_receipt",
+    "src/http/admin_route_tests/apparatus_collections.rs::collection_rejects_unknown_canonical_apparatus_and_duplicate_name",
+    "src/http/admin_route_tests/factory_locations.rs::factory_location_rejects_duplicate_name_and_unknown_apparatus",
+    "src/http/admin_route_tests/production_map_basic.rs::admin_production_maps_save_compiles_program",
+    "src/http/admin_route_tests/qolip_cell_qr.rs::product_spec_create_rejects_duplicate_qolip_code_without_overwriting",
+    "src/http/admin_route_tests/run_capabilities.rs::admin_production_map_run_returns_calculated_tasks",
+    "src/http/admin_route_tests/warehouses_groups.rs::legacy_apparatus_group_write_route_is_deleted",
+    "src/http/admin_route_tests/warehouses_groups.rs::legacy_apparatus_group_payload_cannot_mutate_canonical_configuration",
+    "src/http/admin_route_tests/warehouses_groups.rs::admin_can_assign_warehouse_to_user_and_list_assignments",
+    "src/http/admin_route_tests/warehouses_groups.rs::admin_warehouse_summary_returns_lightweight_counts"
+  ]
+}

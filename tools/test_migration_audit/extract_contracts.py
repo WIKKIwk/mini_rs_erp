@@ -97,6 +97,14 @@ def load_manifest(path: Path) -> dict[str, Any]:
         or not isinstance(manifest.get("expected_tests"), int)
         or not isinstance(manifest.get("expected_automatic_contracts"), int)
         or (
+            "expected_generated_cases" in manifest
+            and not isinstance(manifest["expected_generated_cases"], int)
+        )
+        or (
+            "allow_multiple_requests" in manifest
+            and not isinstance(manifest["allow_multiple_requests"], bool)
+        )
+        or (
             "tests" in manifest
             and (
                 not isinstance(manifest["tests"], list)
@@ -138,20 +146,77 @@ def string_literals(content: bytes, node: Node) -> list[str]:
 
 
 def oneshot_request_argument(content: bytes, function: Node) -> Node:
-    requests: list[Node] = []
-    for node in audit.walk(function):
-        if (
-            node.type != "call_expression"
-            or audit.call_field_name(content, node) != "oneshot"
-        ):
-            continue
-        arguments = node.child_by_field_name("arguments")
-        if arguments is None or len(arguments.named_children) != 1:
-            raise ExtractionFailure("oneshot does not have one request argument")
-        requests.append(arguments.named_children[0])
+    requests = oneshot_calls(content, function)
     if len(requests) != 1:
         raise ExtractionFailure(f"expected one HTTP execution, found {len(requests)}")
-    return requests[0]
+    return request_argument(content, requests[0])
+
+
+def oneshot_calls(content: bytes, function: Node) -> list[Node]:
+    return sorted(
+        (
+            node
+            for node in audit.walk(function)
+            if node.type == "call_expression"
+            and audit.call_field_name(content, node) == "oneshot"
+        ),
+        key=lambda node: node.start_byte,
+    )
+
+
+def request_argument(content: bytes, oneshot: Node) -> Node:
+    arguments = oneshot.child_by_field_name("arguments")
+    if arguments is None or len(arguments.named_children) != 1:
+        raise ExtractionFailure("oneshot does not have one request argument")
+    return arguments.named_children[0]
+
+
+def response_binding(content: bytes, oneshot: Node, function: Node) -> str:
+    current: Node | None = oneshot
+    while current is not None and current != function:
+        if current.type == "let_declaration":
+            pattern = current.child_by_field_name("pattern")
+            if pattern is not None and pattern.type == "identifier":
+                return audit.source_text(content, pattern)
+            break
+        current = current.parent
+    raise ExtractionFailure("HTTP response is not bound to a simple local name")
+
+
+def request_method_uri(content: bytes, request: Node) -> tuple[str, str]:
+    text = audit.source_text(content, request)
+    methods = {
+        method
+        for method in audit.HTTP_METHODS
+        if re.search(rf'"{method}"|Method::{method}\b', text)
+    }
+    if not methods and "Request::builder()" in text and ".method(" not in text:
+        methods.add("GET")
+    uris = audit.string_literal_values(text)
+    if len(methods) != 1:
+        raise ExtractionFailure(f"request has {len(methods)} static method candidates")
+    if len(uris) != 1 or "format!" in text or "{" in uris[0] or "}" in uris[0]:
+        raise ExtractionFailure(f"request has {len(uris)} static URI candidates")
+    return next(iter(methods)), uris[0]
+
+
+def assertion_nodes(
+    content: bytes, function: Node, start_byte: int, end_byte: int
+) -> list[Node]:
+    assertions: list[Node] = []
+    for node in audit.walk(function):
+        if node.type != "macro_invocation":
+            continue
+        macro = node.child_by_field_name("macro")
+        if (
+            macro is not None
+            and audit.source_text(content, macro)
+            in {"assert", "assert_eq", "assert_ne", "matches"}
+            and node.start_byte >= start_byte
+            and node.end_byte <= end_byte
+        ):
+            assertions.append(node)
+    return sorted(assertions, key=lambda node: node.start_byte)
 
 
 def request_body(content: bytes, request: Node) -> dict[str, Any]:
@@ -298,8 +363,12 @@ def response_expectation(
     function: Node,
     status: int,
     package_version: str | None = None,
+    start_byte: int | None = None,
+    end_byte: int | None = None,
 ) -> tuple[dict[str, Any], int]:
-    function_text = audit.source_text(content, function)
+    scope_start = function.start_byte if start_byte is None else start_byte
+    scope_end = function.end_byte if end_byte is None else end_byte
+    function_text = content[scope_start:scope_end].decode("utf-8", errors="replace")
     bound_json = set(BOUND_JSON_PATTERN.findall(function_text))
     body_aliases = bound_body_paths(function_text, bound_json)
     bound_status = set(BOUND_STATUS_PATTERN.findall(function_text))
@@ -308,6 +377,8 @@ def response_expectation(
     handled = 0
     for node in audit.walk(function):
         if node.type != "macro_invocation":
+            continue
+        if node.start_byte < scope_start or node.end_byte > scope_end:
             continue
         macro = node.child_by_field_name("macro")
         if macro is None:
@@ -384,6 +455,89 @@ def response_expectation(
     if body_paths:
         expectation["body_paths"] = body_paths
     return expectation, handled
+
+
+def extract_workflow_cases(
+    source: audit.SourceFile,
+    function: Node,
+    package_version: str | None = None,
+) -> list[ExtractedCase]:
+    name_node = function.child_by_field_name("name")
+    if name_node is None:
+        raise ExtractionFailure("test function has no name")
+    test_name = audit.source_text(source.content, name_node)
+    function_text = audit.source_text(source.content, function)
+    calls = oneshot_calls(source.content, function)
+    if len(calls) < 2:
+        raise ExtractionFailure(
+            f"expected multiple HTTP executions, found {len(calls)}"
+        )
+
+    cases: list[ExtractedCase] = []
+    for index, call in enumerate(calls):
+        request_node = request_argument(source.content, call)
+        request_text = audit.source_text(source.content, request_node)
+        method, uri = request_method_uri(source.content, request_node)
+        role = request_role(function_text, request_text)
+        binding = response_binding(source.content, call, function)
+        scope_start = call.end_byte
+        scope_end = (
+            calls[index + 1].start_byte if index + 1 < len(calls) else function.end_byte
+        )
+        assertions = assertion_nodes(source.content, function, scope_start, scope_end)
+        if not assertions:
+            raise ExtractionFailure(f"workflow step {binding} has no assertions")
+        statuses = {
+            status
+            for assertion in assertions
+            for status in audit.STATUS_PATTERN.findall(
+                audit.source_text(source.content, assertion)
+            )
+        }
+        if len(statuses) != 1:
+            raise ExtractionFailure(
+                f"workflow step {binding} has {len(statuses)} asserted statuses"
+            )
+        status_name = next(iter(statuses))
+        if status_name not in STATUS_VALUES:
+            raise ExtractionFailure(f"unsupported status: {status_name}")
+
+        request: dict[str, Any] = {
+            "method": method,
+            "uri": uri,
+            "fixture": "isolated",
+            **request_body(source.content, request_node),
+        }
+        if role is not None:
+            request["role"] = role
+        expect, handled_assertions = response_expectation(
+            source.content,
+            function,
+            STATUS_VALUES[status_name],
+            package_version,
+            start_byte=scope_start,
+            end_byte=scope_end,
+        )
+        if handled_assertions != len(assertions):
+            raise ExtractionFailure(
+                f"workflow step {binding} handled {handled_assertions} of "
+                f"{len(assertions)} assertions"
+            )
+        cases.append(
+            ExtractedCase(
+                case={
+                    "name": f"{test_name}__{index + 1:02}_{binding}",
+                    "request": request,
+                    "expect": expect,
+                    "source": {
+                        "path": source.path,
+                        "line": call.start_point.row + 1,
+                    },
+                },
+                assertions=handled_assertions,
+            )
+        )
+    return cases
 
 
 def extract_case(
@@ -487,6 +641,7 @@ def generate(
     tests = 0
     selected = set(manifest.get("tests", []))
     allow_scenario = manifest.get("allow_scenario_contracts") is True
+    allow_multiple_requests = manifest.get("allow_multiple_requests") is True
     found: set[str] = set()
     for source in sources:
         tree = audit.RUST_PARSER.parse(source.content)
@@ -518,14 +673,23 @@ def generate(
                 continue
             automatic += 1
             try:
-                cases.append(
-                    extract_case(
+                extracted = (
+                    extract_workflow_cases(
                         source,
                         function,
                         package_version,
-                        allow_scenario=allow_scenario,
-                    ).case
+                    )
+                    if allow_multiple_requests and signals.oneshot_calls > 1
+                    else [
+                        extract_case(
+                            source,
+                            function,
+                            package_version,
+                            allow_scenario=allow_scenario,
+                        )
+                    ]
                 )
+                cases.extend(case.case for case in extracted)
             except ExtractionFailure as error:
                 raise ExtractionFailure(f"{identifier}: {error}") from error
 
@@ -545,9 +709,11 @@ def generate(
             "automatic contract count changed: "
             f"expected {manifest.get('expected_automatic_contracts')}, got {automatic}"
         )
-    if len(cases) != automatic:
+    expected_generated_cases = manifest.get("expected_generated_cases", automatic)
+    if len(cases) != expected_generated_cases:
         raise ExtractionFailure(
-            f"only extracted {len(cases)} of {automatic} automatic contracts"
+            "generated contract count changed: "
+            f"expected {expected_generated_cases}, got {len(cases)}"
         )
 
     return {

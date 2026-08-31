@@ -80,6 +80,10 @@ def load_migration_manifest(path: Path) -> dict[str, Any]:
         or not isinstance(manifest.get("paths"), list)
         or not isinstance(manifest.get("expected_tests"), int)
         or not isinstance(manifest.get("expected_automatic_contracts"), int)
+        or (
+            "expected_generated_cases" in manifest
+            and not isinstance(manifest["expected_generated_cases"], int)
+        )
         or not all(isinstance(path, str) for path in manifest["paths"])
     ):
         raise VerificationFailure("unsupported or malformed migration manifest")
@@ -130,7 +134,9 @@ def load_contract() -> tuple[dict[str, Any], list[dict[str, Any]]]:
                 f"unsupported or malformed generated contracts: {generated_path}"
             )
         generated_summary = generated.get("summary", {})
-        expected_generated = manifest["expected_automatic_contracts"]
+        expected_generated = manifest.get(
+            "expected_generated_cases", manifest["expected_automatic_contracts"]
+        )
         if (
             generated_summary.get("source_tests") != manifest["expected_tests"]
             or generated_summary.get("generated_cases") != expected_generated

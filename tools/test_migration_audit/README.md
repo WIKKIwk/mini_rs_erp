@@ -78,3 +78,9 @@ until every selected function is absent from the worktree.
 `extract_all_contracts.py` processes every bundle in `migrations/index.json`.
 Selected scenario contracts require an explicit manifest flag and still must
 pass the real verifier harness before their Rust source is removed.
+
+Selected multi-request workflows can also opt in explicitly. The extractor
+keeps source order, generates one verifier contract per bound response, and
+requires every step to have one static request, one status oracle, and only
+supported response assertions. `expected_generated_cases` pins the resulting
+step count independently from the number of removed Rust test functions.

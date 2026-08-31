@@ -20,6 +20,10 @@
     {
       "manifest": "tools/test_migration_audit/migrations/scenario_http_887c4de.json",
       "output": "tools/mini_erp_verifier/generated_scenario_887c4de_contracts.json"
+    },
+    {
+      "manifest": "tools/test_migration_audit/migrations/workflow_http_c1a9acd.json",
+      "output": "tools/mini_erp_verifier/generated_workflow_c1a9acd_contracts.json"
     }
   ]
 }

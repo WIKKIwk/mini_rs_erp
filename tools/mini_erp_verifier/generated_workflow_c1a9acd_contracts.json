@@ -1,0 +1,785 @@
+{
+  "cases": [
+    {
+      "expect": {
+        "body": {
+          "display_name": "Werka",
+          "principal_ref": "werka",
+          "principal_role": "werka",
+          "warehouse": "Ombor"
+        },
+        "status": 200
+      },
+      "name": "admin_can_assign_warehouse_to_user_and_list_assignments__01_created",
+      "request": {
+        "body": {
+          "display_name": "Werka",
+          "principal_ref": "werka",
+          "principal_role": "werka",
+          "warehouse": " Ombor "
+        },
+        "fixture": "isolated",
+        "method": "POST",
+        "role": "admin",
+        "uri": "/v1/mobile/admin/warehouses/assignments"
+      },
+      "source": {
+        "line": 677,
+        "path": "src/http/admin_route_tests/warehouses_groups.rs"
+      }
+    },
+    {
+      "expect": {
+        "body_paths": [
+          {
+            "equals": "Ombor",
+            "path": [
+              0,
+              "warehouse"
+            ]
+          },
+          {
+            "equals": "werka",
+            "path": [
+              0,
+              "principal_ref"
+            ]
+          }
+        ],
+        "status": 200
+      },
+      "name": "admin_can_assign_warehouse_to_user_and_list_assignments__02_listed",
+      "request": {
+        "fixture": "isolated",
+        "method": "GET",
+        "role": "admin",
+        "uri": "/v1/mobile/admin/warehouses/assignments?warehouse=ombor"
+      },
+      "source": {
+        "line": 693,
+        "path": "src/http/admin_route_tests/warehouses_groups.rs"
+      }
+    },
+    {
+      "expect": {
+        "body": {
+          "error": "ref and item_code are required"
+        },
+        "status": 400
+      },
+      "name": "admin_item_mutation_errors_match_go__01_missing",
+      "request": {
+        "fixture": "isolated",
+        "method": "DELETE",
+        "role": "admin",
+        "uri": "/v1/mobile/admin/customers/items/remove?ref=CUST-001"
+      },
+      "source": {
+        "line": 256,
+        "path": "src/http/admin_route_tests/admin_edge_cases.rs"
+      }
+    },
+    {
+      "expect": {
+        "body": {
+          "error": "item codes are required"
+        },
+        "status": 400
+      },
+      "name": "admin_item_mutation_errors_match_go__02_invalid",
+      "request": {
+        "body": {
+          "item_codes": [],
+          "item_group": "Products"
+        },
+        "fixture": "isolated",
+        "method": "POST",
+        "role": "admin",
+        "uri": "/v1/mobile/admin/items/bulk-move-group"
+      },
+      "source": {
+        "line": 270,
+        "path": "src/http/admin_route_tests/admin_edge_cases.rs"
+      }
+    },
+    {
+      "expect": {
+        "status": 200
+      },
+      "name": "admin_production_map_run_returns_calculated_tasks__01_response",
+      "request": {
+        "body": {
+          "edges": [
+            {
+              "from": "start",
+              "to": "formula"
+            },
+            {
+              "from": "formula",
+              "to": "task"
+            },
+            {
+              "from": "task",
+              "to": "end"
+            }
+          ],
+          "id": "hotlunch-test",
+          "nodes": [
+            {
+              "id": "start",
+              "kind": "start",
+              "title": "Start"
+            },
+            {
+              "formula": {
+                "expression": "order_qty * 1.08",
+                "target": "cpp_kg"
+              },
+              "id": "formula",
+              "kind": "formula",
+              "title": "CPP hisob"
+            },
+            {
+              "from_location": "CPP ombor",
+              "id": "task",
+              "kind": "task",
+              "qty_formula": "cpp_kg",
+              "role_code": "rezkachi",
+              "title": "Rezkaga yuborish",
+              "to_location": "Rezka apparat"
+            },
+            {
+              "id": "end",
+              "kind": "end",
+              "title": "End"
+            }
+          ],
+          "product_code": "HOTLUNCH",
+          "title": "Hotlunch test"
+        },
+        "fixture": "isolated",
+        "method": "PUT",
+        "role": "admin",
+        "uri": "/v1/mobile/admin/production-maps"
+      },
+      "source": {
+        "line": 8,
+        "path": "src/http/admin_route_tests/run_capabilities.rs"
+      }
+    },
+    {
+      "expect": {
+        "body": {
+          "variables": {
+            "cpp_kg": 108.0
+          }
+        },
+        "body_paths": [
+          {
+            "equals": "create_task",
+            "path": [
+              "tasks",
+              0,
+              "task_kind"
+            ]
+          },
+          {
+            "equals": "rezkachi",
+            "path": [
+              "tasks",
+              0,
+              "role_code"
+            ]
+          },
+          {
+            "equals": 108.0,
+            "path": [
+              "tasks",
+              0,
+              "qty"
+            ]
+          },
+          {
+            "equals": "CPP ombor",
+            "path": [
+              "tasks",
+              0,
+              "from_location"
+            ]
+          },
+          {
+            "equals": "Rezka apparat",
+            "path": [
+              "tasks",
+              0,
+              "to_location"
+            ]
+          }
+        ],
+        "status": 200
+      },
+      "name": "admin_production_map_run_returns_calculated_tasks__02_response",
+      "request": {
+        "body": {
+          "map_id": "hotlunch-test",
+          "order_qty": 100
+        },
+        "fixture": "isolated",
+        "method": "POST",
+        "role": "admin",
+        "uri": "/v1/mobile/admin/production-maps/run"
+      },
+      "source": {
+        "line": 47,
+        "path": "src/http/admin_route_tests/run_capabilities.rs"
+      }
+    },
+    {
+      "expect": {
+        "body": {
+          "map": {
+            "id": "hotlunch-test"
+          }
+        },
+        "body_paths": [
+          {
+            "equals": "calculate",
+            "path": [
+              "program",
+              "operations",
+              1,
+              "op_code"
+            ]
+          },
+          {
+            "equals": "order_qty * 1.08",
+            "path": [
+              "program",
+              "operations",
+              1,
+              "args",
+              "expression"
+            ]
+          }
+        ],
+        "status": 200
+      },
+      "name": "admin_production_maps_save_compiles_program__01_response",
+      "request": {
+        "body": {
+          "edges": [
+            {
+              "from": "start",
+              "to": "formula"
+            },
+            {
+              "from": "formula",
+              "to": "task"
+            },
+            {
+              "from": "task",
+              "to": "end"
+            }
+          ],
+          "id": "hotlunch-test",
+          "nodes": [
+            {
+              "id": "start",
+              "kind": "start",
+              "title": "Start"
+            },
+            {
+              "formula": {
+                "expression": "order_qty * 1.08",
+                "target": "cpp_kg"
+              },
+              "id": "formula",
+              "item_code": "CPP",
+              "kind": "formula",
+              "title": "CPP hisob"
+            },
+            {
+              "from_location": "CPP ombor",
+              "id": "task",
+              "kind": "task",
+              "qty_formula": "cpp_kg",
+              "role_code": "rezkachi",
+              "title": "Rezkaga yuborish",
+              "to_location": "Rezka apparat"
+            },
+            {
+              "id": "end",
+              "kind": "end",
+              "title": "End"
+            }
+          ],
+          "product_code": "HOTLUNCH",
+          "title": "Hotlunch test"
+        },
+        "fixture": "isolated",
+        "method": "PUT",
+        "role": "admin",
+        "uri": "/v1/mobile/admin/production-maps"
+      },
+      "source": {
+        "line": 8,
+        "path": "src/http/admin_route_tests/production_map_basic.rs"
+      }
+    },
+    {
+      "expect": {
+        "body_paths": [
+          {
+            "equals": "HOTLUNCH",
+            "path": [
+              0,
+              "map",
+              "product_code"
+            ]
+          }
+        ],
+        "status": 200
+      },
+      "name": "admin_production_maps_save_compiles_program__02_list",
+      "request": {
+        "fixture": "isolated",
+        "method": "GET",
+        "role": "admin",
+        "uri": "/v1/mobile/admin/production-maps"
+      },
+      "source": {
+        "line": 56,
+        "path": "src/http/admin_route_tests/production_map_basic.rs"
+      }
+    },
+    {
+      "expect": {
+        "status": 200
+      },
+      "name": "admin_warehouse_summary_returns_lightweight_counts__01_created",
+      "request": {
+        "body": {
+          "warehouse": " Ombor "
+        },
+        "fixture": "isolated",
+        "method": "POST",
+        "role": "admin",
+        "uri": "/v1/mobile/admin/warehouses"
+      },
+      "source": {
+        "line": 988,
+        "path": "src/http/admin_route_tests/warehouses_groups.rs"
+      }
+    },
+    {
+      "expect": {
+        "status": 200
+      },
+      "name": "admin_warehouse_summary_returns_lightweight_counts__02_assigned",
+      "request": {
+        "body": {
+          "display_name": "Werka",
+          "principal_ref": "werka",
+          "principal_role": "werka",
+          "warehouse": " Ombor "
+        },
+        "fixture": "isolated",
+        "method": "POST",
+        "role": "admin",
+        "uri": "/v1/mobile/admin/warehouses/assignments"
+      },
+      "source": {
+        "line": 999,
+        "path": "src/http/admin_route_tests/warehouses_groups.rs"
+      }
+    },
+    {
+      "expect": {
+        "body_paths": [
+          {
+            "equals": "Ombor",
+            "path": [
+              0,
+              "warehouse"
+            ]
+          },
+          {
+            "equals": 0,
+            "path": [
+              0,
+              "product_count"
+            ]
+          },
+          {
+            "equals": 0,
+            "path": [
+              0,
+              "reserved_count"
+            ]
+          },
+          {
+            "equals": 1,
+            "path": [
+              0,
+              "assignment_count"
+            ]
+          },
+          {
+            "equals": "Werka",
+            "path": [
+              0,
+              "assigned_display_names",
+              0
+            ]
+          }
+        ],
+        "status": 200
+      },
+      "name": "admin_warehouse_summary_returns_lightweight_counts__03_listed",
+      "request": {
+        "fixture": "isolated",
+        "method": "GET",
+        "role": "admin",
+        "uri": "/v1/mobile/admin/warehouses/summary?q=ombor&limit=50"
+      },
+      "source": {
+        "line": 1010,
+        "path": "src/http/admin_route_tests/warehouses_groups.rs"
+      }
+    },
+    {
+      "expect": {
+        "body": {
+          "error": "apparatus id is invalid"
+        },
+        "status": 400
+      },
+      "name": "collection_rejects_unknown_canonical_apparatus_and_duplicate_name__01_unknown",
+      "request": {
+        "body": {
+          "apparatus_ids": [
+            "apparatus:custom:does-not-exist"
+          ],
+          "name": "Noma'lum"
+        },
+        "fixture": "isolated",
+        "method": "POST",
+        "role": "admin",
+        "uri": "/v1/mobile/admin/apparatus-collections"
+      },
+      "source": {
+        "line": 83,
+        "path": "src/http/admin_route_tests/apparatus_collections.rs"
+      }
+    },
+    {
+      "expect": {
+        "status": 200
+      },
+      "name": "collection_rejects_unknown_canonical_apparatus_and_duplicate_name__02_first",
+      "request": {
+        "body": {
+          "apparatus_ids": [],
+          "name": "Bosma liniyasi"
+        },
+        "fixture": "isolated",
+        "method": "POST",
+        "role": "admin",
+        "uri": "/v1/mobile/admin/apparatus-collections"
+      },
+      "source": {
+        "line": 99,
+        "path": "src/http/admin_route_tests/apparatus_collections.rs"
+      }
+    },
+    {
+      "expect": {
+        "status": 409
+      },
+      "name": "collection_rejects_unknown_canonical_apparatus_and_duplicate_name__03_duplicate",
+      "request": {
+        "body": {
+          "apparatus_ids": [],
+          "name": "BOSMA LINIYASI"
+        },
+        "fixture": "isolated",
+        "method": "POST",
+        "role": "admin",
+        "uri": "/v1/mobile/admin/apparatus-collections"
+      },
+      "source": {
+        "line": 111,
+        "path": "src/http/admin_route_tests/apparatus_collections.rs"
+      }
+    },
+    {
+      "expect": {
+        "status": 200
+      },
+      "name": "factory_location_rejects_duplicate_name_and_unknown_apparatus__01_created",
+      "request": {
+        "body": {
+          "name": "Laminat oldi"
+        },
+        "fixture": "isolated",
+        "method": "POST",
+        "role": "admin",
+        "uri": "/v1/mobile/admin/factory-locations"
+      },
+      "source": {
+        "line": 60,
+        "path": "src/http/admin_route_tests/factory_locations.rs"
+      }
+    },
+    {
+      "expect": {
+        "status": 409
+      },
+      "name": "factory_location_rejects_duplicate_name_and_unknown_apparatus__02_duplicate",
+      "request": {
+        "body": {
+          "name": " laminat OLDI "
+        },
+        "fixture": "isolated",
+        "method": "POST",
+        "role": "admin",
+        "uri": "/v1/mobile/admin/factory-locations"
+      },
+      "source": {
+        "line": 71,
+        "path": "src/http/admin_route_tests/factory_locations.rs"
+      }
+    },
+    {
+      "expect": {
+        "status": 400
+      },
+      "name": "factory_location_rejects_duplicate_name_and_unknown_apparatus__03_invalid",
+      "request": {
+        "body": {
+          "apparatus_ids": [
+            "apparatus:missing"
+          ],
+          "name": "Noma'lum"
+        },
+        "fixture": "isolated",
+        "method": "POST",
+        "role": "admin",
+        "uri": "/v1/mobile/admin/factory-locations"
+      },
+      "source": {
+        "line": 82,
+        "path": "src/http/admin_route_tests/factory_locations.rs"
+      }
+    },
+    {
+      "expect": {
+        "status": 404
+      },
+      "name": "legacy_apparatus_group_payload_cannot_mutate_canonical_configuration__01_saved",
+      "request": {
+        "body": {
+          "apparatus": [
+            " apparatus:default:asset-007 ",
+            "apparatus:default:asset-008"
+          ],
+          "name": " laminatsiya apparatlar "
+        },
+        "fixture": "isolated",
+        "method": "PUT",
+        "role": "admin",
+        "uri": "/v1/mobile/admin/apparatus-groups"
+      },
+      "source": {
+        "line": 219,
+        "path": "src/http/admin_route_tests/warehouses_groups.rs"
+      }
+    },
+    {
+      "expect": {
+        "status": 404
+      },
+      "name": "legacy_apparatus_group_payload_cannot_mutate_canonical_configuration__02_listed",
+      "request": {
+        "fixture": "isolated",
+        "method": "GET",
+        "role": "admin",
+        "uri": "/v1/mobile/admin/apparatus-groups"
+      },
+      "source": {
+        "line": 230,
+        "path": "src/http/admin_route_tests/warehouses_groups.rs"
+      }
+    },
+    {
+      "expect": {
+        "status": 404
+      },
+      "name": "legacy_apparatus_group_write_route_is_deleted__01_saved",
+      "request": {
+        "body": {
+          "apparatus": [
+            " apparatus:default:bosma_7 ",
+            "apparatus:default:bosma_8",
+            "apparatus:default:bosma_7"
+          ],
+          "name": " pechat "
+        },
+        "fixture": "isolated",
+        "method": "PUT",
+        "role": "admin",
+        "uri": "/v1/mobile/admin/apparatus-groups"
+      },
+      "source": {
+        "line": 196,
+        "path": "src/http/admin_route_tests/warehouses_groups.rs"
+      }
+    },
+    {
+      "expect": {
+        "status": 404
+      },
+      "name": "legacy_apparatus_group_write_route_is_deleted__02_listed",
+      "request": {
+        "fixture": "isolated",
+        "method": "GET",
+        "role": "admin",
+        "uri": "/v1/mobile/admin/apparatus-groups"
+      },
+      "source": {
+        "line": 207,
+        "path": "src/http/admin_route_tests/warehouses_groups.rs"
+      }
+    },
+    {
+      "expect": {
+        "status": 403
+      },
+      "name": "material_taminotchi_cannot_create_catalog_items_during_receipt__01_blocked",
+      "request": {
+        "body": {
+          "code": "GLUE-NEW",
+          "item_group": "Kley",
+          "name": "Glue",
+          "uom": "Kg"
+        },
+        "fixture": "isolated",
+        "method": "POST",
+        "role": "material_taminotchi",
+        "uri": "/v1/mobile/admin/items"
+      },
+      "source": {
+        "line": 507,
+        "path": "src/http/admin_route_tests/admin_edge_cases.rs"
+      }
+    },
+    {
+      "expect": {
+        "status": 403
+      },
+      "name": "material_taminotchi_cannot_create_catalog_items_during_receipt__02_allowed",
+      "request": {
+        "body": {
+          "code": "INK-NEW",
+          "item_group": "Kraska",
+          "name": "Ink",
+          "uom": "Kg"
+        },
+        "fixture": "isolated",
+        "method": "POST",
+        "role": "material_taminotchi",
+        "uri": "/v1/mobile/admin/items"
+      },
+      "source": {
+        "line": 519,
+        "path": "src/http/admin_route_tests/admin_edge_cases.rs"
+      }
+    },
+    {
+      "expect": {
+        "status": 200
+      },
+      "name": "product_spec_create_rejects_duplicate_qolip_code_without_overwriting__01_first",
+      "request": {
+        "body": {
+          "color": "#E53935",
+          "item_code": "ITEM-001",
+          "item_group": "Tayyor mahsulot",
+          "item_name": "First product",
+          "qolip_code": "QOLIP-UNIQUE-1",
+          "size": 42
+        },
+        "fixture": "isolated",
+        "method": "POST",
+        "role": "admin",
+        "uri": "/v1/mobile/qolip/product-specs"
+      },
+      "source": {
+        "line": 179,
+        "path": "src/http/admin_route_tests/qolip_cell_qr.rs"
+      }
+    },
+    {
+      "expect": {
+        "body": {
+          "error": "qolip_code_conflict"
+        },
+        "status": 409
+      },
+      "name": "product_spec_create_rejects_duplicate_qolip_code_without_overwriting__02_duplicate",
+      "request": {
+        "body": {
+          "color": "#43A047",
+          "item_code": "ITEM-002",
+          "item_group": "Tayyor mahsulot",
+          "item_name": "Other product",
+          "qolip_code": "qolip-unique-1",
+          "size": 58
+        },
+        "fixture": "isolated",
+        "method": "POST",
+        "role": "admin",
+        "uri": "/v1/mobile/qolip/product-specs"
+      },
+      "source": {
+        "line": 198,
+        "path": "src/http/admin_route_tests/qolip_cell_qr.rs"
+      }
+    },
+    {
+      "expect": {
+        "body": {
+          "product": {
+            "code": "ITEM-001",
+            "color": "#E53935",
+            "name": "First product"
+          }
+        },
+        "status": 200
+      },
+      "name": "product_spec_create_rejects_duplicate_qolip_code_without_overwriting__03_lookup",
+      "request": {
+        "fixture": "isolated",
+        "method": "GET",
+        "role": "admin",
+        "uri": "/v1/mobile/qolip/scan?qr=QOLIP-UNIQUE-1"
+      },
+      "source": {
+        "line": 218,
+        "path": "src/http/admin_route_tests/qolip_cell_qr.rs"
+      }
+    }
+  ],
+  "generated": true,
+  "protocol": 1,
+  "skipped": [],
+  "source": {
+    "git_ref": "c1a9acd",
+    "manifest": "tools/test_migration_audit/migrations/workflow_http_c1a9acd.json"
+  },
+  "summary": {
+    "generated_cases": 26,
+    "skipped_scenarios": 0,
+    "source_tests": 11
+  }
+}

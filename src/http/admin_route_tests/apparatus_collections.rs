@@ -75,52 +75,6 @@ async fn admin_creates_and_lists_custom_apparatus_collection_without_mutating_ap
 }
 
 #[tokio::test]
-async fn collection_rejects_unknown_canonical_apparatus_and_duplicate_name() {
-    let state = test_state();
-    let token = session(&state, PrincipalRole::Admin).await;
-    let router = build_router(state);
-
-    let unknown = router
-        .clone()
-        .oneshot(request_with_body(
-            "POST",
-            "/v1/mobile/admin/apparatus-collections",
-            &token,
-            r#"{
-                "name":"Noma'lum",
-                "apparatus_ids":["apparatus:custom:does-not-exist"]
-            }"#,
-        ))
-        .await
-        .expect("unknown apparatus response");
-    assert_eq!(unknown.status(), StatusCode::BAD_REQUEST);
-    assert_eq!(json_body(unknown).await["error"], "apparatus id is invalid");
-
-    let first = router
-        .clone()
-        .oneshot(request_with_body(
-            "POST",
-            "/v1/mobile/admin/apparatus-collections",
-            &token,
-            r#"{"name":"Bosma liniyasi","apparatus_ids":[]}"#,
-        ))
-        .await
-        .expect("first collection response");
-    assert_eq!(first.status(), StatusCode::OK);
-
-    let duplicate = router
-        .oneshot(request_with_body(
-            "POST",
-            "/v1/mobile/admin/apparatus-collections",
-            &token,
-            r#"{"name":"BOSMA LINIYASI","apparatus_ids":[]}"#,
-        ))
-        .await
-        .expect("duplicate collection response");
-    assert_eq!(duplicate.status(), StatusCode::CONFLICT);
-}
-
-#[tokio::test]
 async fn collection_update_and_delete_require_current_revision() {
     let state = test_state();
     let token = session(&state, PrincipalRole::Admin).await;

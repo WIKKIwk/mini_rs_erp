@@ -23,7 +23,9 @@ historical Rust migration, while `generated_automatic_contracts.json` contains
 individually selected current-worktree migrations. Both are produced from
 pinned Git snapshots by the Tree-sitter extractor. Additional generated
 automatic/scenario bundles are discovered through the migration index rather
-than hardcoded verifier wiring. Access matrices
+than hardcoded verifier wiring. Multi-request Rust workflows are emitted as
+ordered, adjacent verifier steps and are accepted only after the complete
+workflow passes against a fresh harness. Access matrices
 automatically generate anonymous and every-role probes for every declared
 method. Keep Rust tests only where an independent business invariant,
 transaction boundary, database implementation, or typed compiler guarantee is

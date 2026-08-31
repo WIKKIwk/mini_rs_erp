@@ -249,38 +249,6 @@ async fn admin_supplier_status_and_remove_mutations_like_go() {
 }
 
 #[tokio::test]
-async fn admin_item_mutation_errors_match_go() {
-    let state = test_state();
-    let token = session(&state, PrincipalRole::Admin).await;
-
-    let missing = build_router(state.clone())
-        .oneshot(request(
-            "DELETE",
-            "/v1/mobile/admin/customers/items/remove?ref=CUST-001",
-            &token,
-        ))
-        .await
-        .expect("response");
-    assert_eq!(missing.status(), StatusCode::BAD_REQUEST);
-    assert_eq!(
-        json_body(missing).await["error"],
-        "ref and item_code are required"
-    );
-
-    let invalid = build_router(state)
-        .oneshot(request_with_body(
-            "POST",
-            "/v1/mobile/admin/items/bulk-move-group",
-            &token,
-            r#"{"item_codes":[],"item_group":"Products"}"#,
-        ))
-        .await
-        .expect("response");
-    assert_eq!(invalid.status(), StatusCode::BAD_REQUEST);
-    assert_eq!(json_body(invalid).await["error"], "item codes are required");
-}
-
-#[tokio::test]
 async fn admin_item_create_and_werka_regenerate_like_go() {
     let state = test_state();
     let token = session(&state, PrincipalRole::Admin).await;
@@ -485,45 +453,4 @@ async fn admin_item_delete_returns_conflict_while_item_is_in_active_order() {
         .expect("delete response");
     assert_eq!(deleted.status(), StatusCode::OK);
     assert_eq!(json_body(deleted).await["ok"], true);
-}
-
-#[tokio::test]
-async fn material_taminotchi_cannot_create_catalog_items_during_receipt() {
-    let state = test_state();
-    state
-        .admin
-        .upsert_role_assignment(crate::core::authz::RoleAssignmentUpsert {
-            principal_role: PrincipalRole::MaterialTaminotchi,
-            principal_ref: "material-create".to_string(),
-            role_id: "material_taminotchi".to_string(),
-            assigned_apparatus: Vec::new(),
-            assigned_item_groups: vec!["Kraska".to_string()],
-        })
-        .await
-        .expect("material scope");
-    let token = session_for(&state, PrincipalRole::MaterialTaminotchi, "material-create").await;
-    let router = build_router(state);
-
-    let blocked = router
-        .clone()
-        .oneshot(request_with_body(
-            "POST",
-            "/v1/mobile/admin/items",
-            &token,
-            r#"{"code":"GLUE-NEW","name":"Glue","uom":"Kg","item_group":"Kley"}"#,
-        ))
-        .await
-        .expect("blocked response");
-    assert_eq!(blocked.status(), StatusCode::FORBIDDEN);
-
-    let allowed = router
-        .oneshot(request_with_body(
-            "POST",
-            "/v1/mobile/admin/items",
-            &token,
-            r#"{"code":"INK-NEW","name":"Ink","uom":"Kg","item_group":"Kraska"}"#,
-        ))
-        .await
-        .expect("allowed response");
-    assert_eq!(allowed.status(), StatusCode::FORBIDDEN);
 }

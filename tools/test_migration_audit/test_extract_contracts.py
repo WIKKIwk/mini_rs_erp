@@ -5,7 +5,12 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 
 import audit
-from extract_contracts import ExtractionFailure, extract_case, verify_removals
+from extract_contracts import (
+    ExtractionFailure,
+    extract_case,
+    extract_workflow_cases,
+    verify_removals,
+)
 
 
 def extract(
@@ -26,7 +31,84 @@ def extract(
     ).case
 
 
+def extract_workflow(source: str, package_version: str | None = None):
+    source_file = audit.SourceFile("src/example.rs", source.encode())
+    tree = audit.RUST_PARSER.parse(source_file.content)
+    functions = list(audit.test_functions(source_file.content, tree.root_node))
+    if len(functions) != 1:
+        raise AssertionError(f"expected one test, got {len(functions)}")
+    return [
+        result.case
+        for result in extract_workflow_cases(
+            source_file,
+            functions[0],
+            package_version,
+        )
+    ]
+
+
 class ContractExtractionTests(unittest.TestCase):
+    def test_extracts_ordered_multi_request_workflow(self) -> None:
+        cases = extract_workflow(
+            r"""
+#[tokio::test]
+async fn validation_workflow() {
+    let state = test_state();
+    let token = session(&state, PrincipalRole::Admin).await;
+    let missing = build_router(state.clone())
+        .oneshot(request("DELETE", "/v1/mobile/items?ref=A", &token))
+        .await
+        .unwrap();
+    assert_eq!(missing.status(), StatusCode::BAD_REQUEST);
+    assert_eq!(json_body(missing).await["error"], "item is required");
+
+    let invalid = build_router(state)
+        .oneshot(request_with_body(
+            "POST",
+            "/v1/mobile/items",
+            &token,
+            r#"{"items":[]}"#,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(invalid.status(), StatusCode::UNPROCESSABLE_ENTITY);
+    assert_eq!(json_body(invalid).await["error"], "items are required");
+}
+"""
+        )
+
+        self.assertEqual(
+            [case["name"] for case in cases],
+            ["validation_workflow__01_missing", "validation_workflow__02_invalid"],
+        )
+        self.assertEqual(cases[0]["request"]["method"], "DELETE")
+        self.assertEqual(cases[0]["expect"]["status"], 400)
+        self.assertEqual(cases[1]["request"]["body"], {"items": []})
+        self.assertEqual(cases[1]["expect"]["status"], 422)
+
+    def test_workflow_extraction_refuses_unscoped_assertion(self) -> None:
+        with self.assertRaisesRegex(
+            ExtractionFailure, "assertion is not a response JSON path"
+        ):
+            extract_workflow(
+                r"""
+#[tokio::test]
+async fn workflow_with_side_effect_oracle() {
+    let first = build_router(test_state())
+        .oneshot(request("GET", "/v1/mobile/first"))
+        .await
+        .unwrap();
+    assert_eq!(first.status(), StatusCode::OK);
+    assert_eq!(writes.load(Ordering::SeqCst), 1);
+    let second = build_router(test_state())
+        .oneshot(request("GET", "/v1/mobile/second"))
+        .await
+        .unwrap();
+    assert_eq!(second.status(), StatusCode::OK);
+}
+"""
+            )
+
     def test_selected_manifest_can_explicitly_extract_scenario_contract(self) -> None:
         source = r"""
 #[tokio::test]

@@ -189,52 +189,6 @@ async fn legacy_apparatus_upsert_payload_is_rejected() {
 }
 
 #[tokio::test]
-async fn legacy_apparatus_group_write_route_is_deleted() {
-    let state = test_state();
-    let token = session(&state, PrincipalRole::Admin).await;
-
-    let saved = build_router(state.clone())
-        .oneshot(request_with_body(
-            "PUT",
-            "/v1/mobile/admin/apparatus-groups",
-            &token,
-            r#"{"name":" pechat ","apparatus":[" apparatus:default:bosma_7 ","apparatus:default:bosma_8","apparatus:default:bosma_7"]}"#,
-        ))
-        .await
-        .expect("response");
-    assert_eq!(saved.status(), StatusCode::NOT_FOUND);
-
-    let listed = build_router(state)
-        .oneshot(request("GET", "/v1/mobile/admin/apparatus-groups", &token))
-        .await
-        .expect("response");
-    assert_eq!(listed.status(), StatusCode::NOT_FOUND);
-}
-
-#[tokio::test]
-async fn legacy_apparatus_group_payload_cannot_mutate_canonical_configuration() {
-    let state = test_state();
-    let token = session(&state, PrincipalRole::Admin).await;
-
-    let saved = build_router(state.clone())
-        .oneshot(request_with_body(
-            "PUT",
-            "/v1/mobile/admin/apparatus-groups",
-            &token,
-            r#"{"name":" laminatsiya apparatlar ","apparatus":[" apparatus:default:asset-007 ","apparatus:default:asset-008"]}"#,
-        ))
-        .await
-        .expect("response");
-    assert_eq!(saved.status(), StatusCode::NOT_FOUND);
-
-    let listed = build_router(state)
-        .oneshot(request("GET", "/v1/mobile/admin/apparatus-groups", &token))
-        .await
-        .expect("response");
-    assert_eq!(listed.status(), StatusCode::NOT_FOUND);
-}
-
-#[tokio::test]
 async fn admin_apparatus_options_and_metadata_validation_are_enforced() {
     let state = test_state();
     let token = session(&state, PrincipalRole::Admin).await;
@@ -670,41 +624,6 @@ async fn admin_can_create_general_warehouse_and_list_it_for_gscale() {
 }
 
 #[tokio::test]
-async fn admin_can_assign_warehouse_to_user_and_list_assignments() {
-    let state = test_state();
-    let token = session(&state, PrincipalRole::Admin).await;
-
-    let created = build_router(state.clone())
-        .oneshot(request_with_body(
-            "POST",
-            "/v1/mobile/admin/warehouses/assignments",
-            &token,
-            r#"{"warehouse":" Ombor ","principal_role":"werka","principal_ref":"werka","display_name":"Werka"}"#,
-        ))
-        .await
-        .expect("assign warehouse");
-    assert_eq!(created.status(), StatusCode::OK);
-    let created_body = json_body(created).await;
-    assert_eq!(created_body["warehouse"], "Ombor");
-    assert_eq!(created_body["principal_role"], "werka");
-    assert_eq!(created_body["principal_ref"], "werka");
-    assert_eq!(created_body["display_name"], "Werka");
-
-    let listed = build_router(state)
-        .oneshot(request(
-            "GET",
-            "/v1/mobile/admin/warehouses/assignments?warehouse=ombor",
-            &token,
-        ))
-        .await
-        .expect("list assignments");
-    assert_eq!(listed.status(), StatusCode::OK);
-    let listed_body = json_body(listed).await;
-    assert_eq!(listed_body[0]["warehouse"], "Ombor");
-    assert_eq!(listed_body[0]["principal_ref"], "werka");
-}
-
-#[tokio::test]
 async fn apparatus_assignment_rejects_syntactically_valid_nonexistent_id() {
     let state = test_state();
     let token = session(&state, PrincipalRole::Admin).await;
@@ -978,50 +897,6 @@ async fn warehouse_products_require_confirmation_and_active_reservations_block_d
     assert_eq!(confirmed.status(), StatusCode::OK);
     let body = json_body(confirmed).await;
     assert_eq!(body["deleted_product_count"], 4);
-}
-
-#[tokio::test]
-async fn admin_warehouse_summary_returns_lightweight_counts() {
-    let state = test_state();
-    let token = session(&state, PrincipalRole::Admin).await;
-
-    let created = build_router(state.clone())
-        .oneshot(request_with_body(
-            "POST",
-            "/v1/mobile/admin/warehouses",
-            &token,
-            r#"{"warehouse":" Ombor "}"#,
-        ))
-        .await
-        .expect("create warehouse");
-    assert_eq!(created.status(), StatusCode::OK);
-
-    let assigned = build_router(state.clone())
-        .oneshot(request_with_body(
-            "POST",
-            "/v1/mobile/admin/warehouses/assignments",
-            &token,
-            r#"{"warehouse":" Ombor ","principal_role":"werka","principal_ref":"werka","display_name":"Werka"}"#,
-        ))
-        .await
-        .expect("assign warehouse");
-    assert_eq!(assigned.status(), StatusCode::OK);
-
-    let listed = build_router(state)
-        .oneshot(request(
-            "GET",
-            "/v1/mobile/admin/warehouses/summary?q=ombor&limit=50",
-            &token,
-        ))
-        .await
-        .expect("summary");
-    assert_eq!(listed.status(), StatusCode::OK);
-    let body = json_body(listed).await;
-    assert_eq!(body[0]["warehouse"], "Ombor");
-    assert_eq!(body[0]["product_count"], 0);
-    assert_eq!(body[0]["reserved_count"], 0);
-    assert_eq!(body[0]["assignment_count"], 1);
-    assert_eq!(body[0]["assigned_display_names"][0], "Werka");
 }
 
 #[tokio::test]
