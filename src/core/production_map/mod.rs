@@ -12,6 +12,7 @@ mod materials_support;
 mod memory_store;
 mod opening_wip;
 pub mod pechat;
+mod prepared_queue_action;
 #[path = "progress_session/mod.rs"]
 mod progress;
 mod queue;
