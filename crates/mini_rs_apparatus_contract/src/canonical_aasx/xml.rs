@@ -1,7 +1,7 @@
 use std::fmt::Write;
 
 use super::{CanonicalAasxExportError, CanonicalAasxImportError};
-use crate::core::apparatus_standard::{
+use crate::{
     ApparatusCapacity, CanonicalApparatusRevision, CapacityAvailability, MaterialExecutionPolicy,
     ToolingExecutionPolicy,
 };

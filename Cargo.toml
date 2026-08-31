@@ -9,6 +9,7 @@ readme = "README.md"
 
 [workspace]
 members = [
+    "crates/mini_rs_apparatus_contract",
     "crates/mini_rs_domain_types",
     "crates/mini_rs_gateway",
     "crates/mini_rs_gscale_domain",
@@ -17,6 +18,7 @@ default-members = ["."]
 resolver = "3"
 
 [dependencies]
+mini_rs_apparatus_contract = { path = "crates/mini_rs_apparatus_contract" }
 mini_rs_domain_types = { path = "crates/mini_rs_domain_types" }
 mini_rs_gscale_domain = { path = "crates/mini_rs_gscale_domain" }
 axum = { version = "0.8", features = ["ws"] }

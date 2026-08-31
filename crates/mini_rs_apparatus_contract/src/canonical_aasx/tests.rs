@@ -1,5 +1,5 @@
 use super::*;
-use crate::core::apparatus_standard::{
+use crate::{
     MaterialExecutionPolicy,
     aasx::{AAS_SPEC_PATH, package_from_aas_xml, validated_aas_spec},
     isa95::tests::revision_with,

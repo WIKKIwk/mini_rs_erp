@@ -28,7 +28,7 @@ pub(super) fn origin_relationships_xml() -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::apparatus_standard::aasx::{CONTENT_TYPES_PATH, ROOT_RELATIONSHIPS_PATH};
+    use crate::aasx::{CONTENT_TYPES_PATH, ROOT_RELATIONSHIPS_PATH};
 
     #[test]
     fn package_graph_has_only_fixed_canonical_targets() {

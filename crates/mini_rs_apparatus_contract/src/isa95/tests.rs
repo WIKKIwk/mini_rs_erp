@@ -1,5 +1,5 @@
 use super::*;
-use crate::core::apparatus_standard::ApparatusId;
+use crate::ApparatusId;
 
 pub(crate) fn revision_with(
     apparatus_id: &str,

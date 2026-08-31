@@ -4,7 +4,7 @@ use super::{
     CANONICAL_APPARATUS_SCHEMA_VERSION, CanonicalApparatusValidationError, EquipmentClassId,
     HierarchyLevelId, PhysicalAssetId,
 };
-use crate::core::apparatus_standard::{
+use crate::{
     AAS_APPARATUS_SUBMODEL_ID_PREFIX, AAS_APPARATUS_SUBMODEL_SEMANTIC_ID, AAS_METAMODEL_VERSION,
     AASX_MEDIA_TYPE, AASX_PACKAGE_FORMAT, AASX_PART_5_VERSION, ApparatusId, IDTA_RELEASE,
 };

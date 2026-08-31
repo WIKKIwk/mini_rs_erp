@@ -2171,6 +2171,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "mini_rs_apparatus_contract"
+version = "1.0.0"
+dependencies = [
+ "flate2",
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
+ "thiserror 2.0.18",
+]
+
+[[package]]
 name = "mini_rs_domain_types"
 version = "1.0.0"
 dependencies = [
@@ -2202,6 +2213,7 @@ dependencies = [
  "hyper-util",
  "image",
  "jsonwebtoken",
+ "mini_rs_apparatus_contract",
  "mini_rs_domain_types",
  "mini_rs_gscale_domain",
  "proptest",

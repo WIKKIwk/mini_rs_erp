@@ -31,7 +31,8 @@ impl CanonicalAasxArtifact {
         self.sha256
     }
 
-    pub(crate) fn from_stored(
+    #[doc(hidden)]
+    pub fn from_stored(
         bytes: Vec<u8>,
         expected_sha256: AasxSha256,
     ) -> Result<Self, CanonicalAasxImportError> {

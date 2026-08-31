@@ -1,25 +1,12 @@
 use super::*;
-use crate::core::apparatus_standard::{
-    ApparatusId, CanonicalApparatusRevision, RevisionMetadata, RevisionSource,
-    export_canonical_aasx,
-    test_support::{TestApparatusSpec, canonical_draft},
-};
+use crate::{CanonicalApparatusRevision, export_canonical_aasx, isa95::tests::revision_with};
 
 fn revision(apparatus_id: &str) -> CanonicalApparatusRevision {
-    let spec = TestApparatusSpec::cut(apparatus_id, "AASX package fixture");
-    CanonicalApparatusRevision::from_draft(
-        ApparatusId::new(apparatus_id).unwrap(),
-        canonical_draft(&spec),
-        RevisionMetadata {
-            revision: 1,
-            committed_at_unix_ms: 1_800_000_000_000,
-            actor_id: "user:aasx-test".to_string(),
-            command_id: "command:aasx-package-test".to_string(),
-            source: RevisionSource::Admin,
-            source_reference: None,
-        },
+    revision_with(
+        apparatus_id,
+        "physical-asset:aasx-package-001",
+        "AASX package fixture",
     )
-    .unwrap()
 }
 
 #[test]
