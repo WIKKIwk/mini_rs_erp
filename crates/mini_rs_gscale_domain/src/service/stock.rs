@@ -1,10 +1,10 @@
 use super::error::map_receipt_store_error;
 use super::{GscaleService, GscaleServiceError};
-use crate::core::gscale::models::{
+use crate::models::{
     MaterialReceiptDraft, RawMaterialStockDeleteInput, RawMaterialStockEntry,
     RawMaterialStockUpdateInput,
 };
-use crate::core::quantity::positive_erp_quantity;
+use mini_rs_domain_types::quantity::positive_erp_quantity;
 
 impl GscaleService {
     pub async fn material_receipt_by_barcode(

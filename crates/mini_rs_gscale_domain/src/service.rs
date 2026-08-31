@@ -51,7 +51,7 @@ impl GscaleService {
         self
     }
 
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     pub fn receipt_store_configured_for_test(&self) -> bool {
         self.receipt_store.is_some()
     }
@@ -66,7 +66,7 @@ impl GscaleService {
         self
     }
 
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     pub fn with_epc_source(mut self, epc: Arc<dyn EpcSource>) -> Self {
         self.epc = epc;
         self

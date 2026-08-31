@@ -2203,6 +2203,7 @@ dependencies = [
  "image",
  "jsonwebtoken",
  "mini_rs_domain_types",
+ "mini_rs_gscale_domain",
  "proptest",
  "rand 0.9.4",
  "reqwest",
@@ -2234,6 +2235,18 @@ dependencies = [
  "pingora-http",
  "pingora-proxy",
  "tracing-subscriber",
+]
+
+[[package]]
+name = "mini_rs_gscale_domain"
+version = "1.0.0"
+dependencies = [
+ "async-trait",
+ "mini_rs_domain_types",
+ "serde",
+ "thiserror 2.0.18",
+ "tokio",
+ "tracing",
 ]
 
 [[package]]

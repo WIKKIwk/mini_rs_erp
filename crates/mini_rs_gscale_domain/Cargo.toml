@@ -1,0 +1,18 @@
+[package]
+name = "mini_rs_gscale_domain"
+version = "1.0.0"
+edition = "2024"
+license = "Apache-2.0"
+description = "Gscale material receipt and printing domain for Mini RS ERP."
+publish = false
+
+[features]
+test-support = []
+
+[dependencies]
+async-trait = "0.1"
+mini_rs_domain_types = { path = "../mini_rs_domain_types" }
+serde = { version = "1", features = ["derive"] }
+thiserror = "2"
+tokio = { version = "1", features = ["macros", "rt", "sync", "time"] }
+tracing = "0.1"

@@ -1,8 +1,8 @@
 use super::{GscaleServiceError, MAX_MATERIAL_PRINT_COUNT, MIN_BATCH_QTY_KG};
-use crate::core::gscale::models::{
+use crate::models::{
     MaterialReceiptPrintRequest, ProgressLabelPrintRequest, ScaleDriverPrintRequest,
 };
-use crate::core::quantity::positive_erp_quantity;
+use mini_rs_domain_types::quantity::positive_erp_quantity;
 
 #[derive(Debug, Clone, PartialEq)]
 pub(super) struct NormalizedProgressLabelJob {

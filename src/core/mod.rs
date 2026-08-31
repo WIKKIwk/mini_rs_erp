@@ -13,7 +13,7 @@ pub mod factory_locations;
 pub mod formula;
 #[cfg(test)]
 mod formula_tests;
-pub mod gscale;
+pub use mini_rs_gscale_domain as gscale;
 pub mod inventory_movements;
 pub mod mini_orders;
 pub mod mobile_release;

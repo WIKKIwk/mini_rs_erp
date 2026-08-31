@@ -4,7 +4,7 @@ use super::error::{print_done, print_error_detail};
 use super::jobs::{NormalizedMaterialReceiptJob, NormalizedProgressLabelJob};
 use super::recording::{record_confirmed_material_receipt, record_parallel_material_receipt};
 use super::{GscaleService, GscaleServiceError, LateMaterialReceiptErrorHandler};
-use crate::core::gscale::models::{
+use crate::models::{
     MaterialReceiptPrintRequest, MaterialReceiptPrintResponse, ProgressLabelPrintRequest,
     ProgressLabelPrintResponse,
 };

@@ -5,8 +5,8 @@ use tokio::sync::oneshot;
 use super::error::clean_store_error;
 use super::jobs::NormalizedMaterialReceiptJob;
 use super::{GscaleServiceError, LateMaterialReceiptErrorHandler, WarehouseEventHandler};
-use crate::core::gscale::models::{CreateMaterialReceiptDraftInput, MaterialReceiptDraft};
-use crate::core::gscale::ports::MaterialReceiptStorePort;
+use crate::models::{CreateMaterialReceiptDraftInput, MaterialReceiptDraft};
+use crate::ports::MaterialReceiptStorePort;
 
 pub(super) async fn record_parallel_material_receipt(
     receipt_store: Arc<dyn MaterialReceiptStorePort>,

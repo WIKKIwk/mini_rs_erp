@@ -6,8 +6,8 @@ use async_trait::async_trait;
 use tokio::sync::Notify;
 
 use super::*;
-use crate::core::gscale::models::{MaterialReceiptDraft, ScaleDriverPrintResponse};
-use crate::core::gscale::ports::GscalePortError;
+use crate::models::{MaterialReceiptDraft, ScaleDriverPrintResponse};
+use crate::ports::GscalePortError;
 
 fn request() -> MaterialReceiptPrintRequest {
     MaterialReceiptPrintRequest {
