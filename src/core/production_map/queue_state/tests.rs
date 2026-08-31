@@ -15,6 +15,8 @@ fn progress_output_actions_have_one_canonical_classification() {
     ] {
         assert!(action.records_progress_output());
     }
+    assert!(ApparatusQueueAction::Pause.creates_resumable_output());
+    assert!(ApparatusQueueAction::DetachRoll.creates_resumable_output());
     for action in [
         ApparatusQueueAction::Start,
         ApparatusQueueAction::Freeze,
@@ -22,7 +24,10 @@ fn progress_output_actions_have_one_canonical_classification() {
         ApparatusQueueAction::Merge,
     ] {
         assert!(!action.records_progress_output());
+        assert!(!action.creates_resumable_output());
     }
+    assert!(!ApparatusQueueAction::RollComplete.creates_resumable_output());
+    assert!(!ApparatusQueueAction::Complete.creates_resumable_output());
 }
 
 #[test]

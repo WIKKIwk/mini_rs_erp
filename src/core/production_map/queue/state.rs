@@ -53,6 +53,10 @@ pub enum ApparatusQueueAction {
 }
 
 impl ApparatusQueueAction {
+    pub const fn creates_resumable_output(self) -> bool {
+        matches!(self, Self::Pause | Self::DetachRoll)
+    }
+
     pub const fn records_progress_output(self) -> bool {
         matches!(
             self,

@@ -112,13 +112,6 @@ impl ProductionMapService {
         if batch.order_id.trim() != order_id.trim()
             || !super::types::apparatus_ids_match(&batch.apparatus, &previous_apparatus)
             || !batch.action.records_progress_output()
-            || !matches!(
-                batch.status,
-                OrderProgressBatchStatus::Paused
-                    | OrderProgressBatchStatus::RollDetached
-                    | OrderProgressBatchStatus::Completed
-                    | OrderProgressBatchStatus::Resumed
-            )
             || (!batch.next_apparatus.trim().is_empty()
                 && !chain::stage_ids_match_for_map(order_map, &batch.next_apparatus, apparatus))
             || (!json_string_field(&batch.payload_json, "next_stage_node_id").is_empty()

@@ -282,16 +282,8 @@ impl ProductionMapService {
                     .into_iter()
                     .filter(|batch| {
                         batch.session_id.trim() == session.session_id.trim()
-                            && matches!(
-                                batch.action,
-                                queue_state::ApparatusQueueAction::Pause
-                                    | queue_state::ApparatusQueueAction::DetachRoll
-                            )
-                            && matches!(
-                                batch.status,
-                                OrderProgressBatchStatus::Paused
-                                    | OrderProgressBatchStatus::RollDetached
-                            )
+                            && batch.action.creates_resumable_output()
+                            && batch.status.is_resumable()
                             && batch.wip_status == OrderProgressBatchWipStatus::Waiting
                             && super::types::apparatus_ids_match(
                                 &batch.apparatus,
@@ -376,14 +368,9 @@ impl ProductionMapService {
         let mut batch = self
             .progress_batch_for_qr(&progress.progress_batch_id, &progress.qr_payload)
             .await?;
-        if !matches!(
-            batch.status,
-            OrderProgressBatchStatus::Paused | OrderProgressBatchStatus::RollDetached
-        ) || !matches!(
-            batch.action,
-            queue_state::ApparatusQueueAction::Pause
-                | queue_state::ApparatusQueueAction::DetachRoll
-        ) || batch.wip_status != OrderProgressBatchWipStatus::Waiting
+        if !batch.status.is_resumable()
+            || !batch.action.creates_resumable_output()
+            || batch.wip_status != OrderProgressBatchWipStatus::Waiting
         {
             return Err(ProductionMapError::ProgressBatchNotResumable);
         }

@@ -31,12 +31,9 @@ fn validate_freeze_request_pause(
         }
         return Err(ProductionMapError::OrderFreezeRequestMismatch);
     }
-    if !matches!(
-        action,
-        queue_state::ApparatusQueueAction::Pause
-            | queue_state::ApparatusQueueAction::DetachRoll
-            | queue_state::ApparatusQueueAction::Freeze
-    ) {
+    if !action.creates_resumable_output()
+        && action != queue_state::ApparatusQueueAction::Freeze
+    {
         return Ok(());
     }
     let request = control

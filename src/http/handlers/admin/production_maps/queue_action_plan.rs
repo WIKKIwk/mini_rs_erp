@@ -18,11 +18,7 @@ fn validate_queue_action_preflight(
     apparatus: &QueueApparatusMetadata,
 ) -> Result<QueueActionPreflight, AdminError> {
     let freeze_safe_stop = !input.progress.freeze_request_id.trim().is_empty()
-        && matches!(
-            input.action,
-            queue_state::ApparatusQueueAction::Pause
-                | queue_state::ApparatusQueueAction::DetachRoll
-        );
+        && input.action.creates_resumable_output();
     let has_output = input.progress.has_reported_output();
     let freeze_safe_stop_with_issue =
         freeze_safe_stop && !has_output && !input.progress.description.trim().is_empty();

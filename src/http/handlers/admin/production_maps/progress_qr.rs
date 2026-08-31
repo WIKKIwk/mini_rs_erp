@@ -48,11 +48,7 @@ pub async fn production_map_progress_qr_lookup(
     {
         return Ok(json_response(serde_json::json!({
             "ok": true,
-            "can_resume": matches!(
-                batch.status,
-                crate::core::production_map::OrderProgressBatchStatus::Paused
-                    | crate::core::production_map::OrderProgressBatchStatus::RollDetached
-            ),
+            "can_resume": batch.status.is_resumable(),
             "batch": batch,
         })));
     }
@@ -63,11 +59,7 @@ pub async fn production_map_progress_qr_lookup(
         .map_err(production_map_error)?;
     Ok(json_response(serde_json::json!({
         "ok": true,
-        "can_resume": matches!(
-            batch.status,
-            crate::core::production_map::OrderProgressBatchStatus::Paused
-                | crate::core::production_map::OrderProgressBatchStatus::RollDetached
-        ),
+        "can_resume": batch.status.is_resumable(),
         "batch": batch,
     })))
 }

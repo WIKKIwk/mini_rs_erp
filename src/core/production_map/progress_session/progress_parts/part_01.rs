@@ -182,6 +182,23 @@ impl OrderProgressBatchStatus {
             Self::Resumed => "resumed",
         }
     }
+
+    pub const fn is_resumable(self) -> bool {
+        matches!(self, Self::Paused | Self::RollDetached)
+    }
+}
+
+#[cfg(test)]
+mod order_progress_batch_status_tests {
+    use super::OrderProgressBatchStatus;
+
+    #[test]
+    fn resumable_status_classification_is_canonical() {
+        assert!(OrderProgressBatchStatus::Paused.is_resumable());
+        assert!(OrderProgressBatchStatus::RollDetached.is_resumable());
+        assert!(!OrderProgressBatchStatus::Completed.is_resumable());
+        assert!(!OrderProgressBatchStatus::Resumed.is_resumable());
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]

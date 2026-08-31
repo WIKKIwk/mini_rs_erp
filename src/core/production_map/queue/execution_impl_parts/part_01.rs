@@ -14,18 +14,10 @@ impl ProductionMapService {
         let control = self.order_control_state(order_id).await?;
         let requested_action = action;
         let freeze_request_finalization = control.state == OrderControlState::FreezeRequested
-            && matches!(
-                requested_action,
-                queue_state::ApparatusQueueAction::Pause
-                    | queue_state::ApparatusQueueAction::DetachRoll
-                    | queue_state::ApparatusQueueAction::Freeze
-            );
+            && (requested_action.creates_resumable_output()
+                || requested_action == queue_state::ApparatusQueueAction::Freeze);
         let freeze_request_safe_stop = control.state == OrderControlState::FreezeRequested
-            && matches!(
-                requested_action,
-                queue_state::ApparatusQueueAction::Pause
-                    | queue_state::ApparatusQueueAction::DetachRoll
-            );
+            && requested_action.creates_resumable_output();
         let freeze_request_safe_stop_has_output = progress.has_reported_output();
         let freeze_request_safe_stop_with_issue = freeze_request_safe_stop
             && !freeze_request_safe_stop_has_output

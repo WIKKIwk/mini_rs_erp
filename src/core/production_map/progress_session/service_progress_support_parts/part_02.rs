@@ -333,10 +333,8 @@ pub(super) fn wip_batch_in_use(
 }
 
 pub(super) fn wip_batch_was_consumed_by_producer(batch: &OrderProgressBatch) -> bool {
-    matches!(
-        batch.action,
-        queue_state::ApparatusQueueAction::Pause | queue_state::ApparatusQueueAction::DetachRoll
-    ) && batch.wip_status == OrderProgressBatchWipStatus::Processed
+    batch.action.creates_resumable_output()
+        && batch.wip_status == OrderProgressBatchWipStatus::Processed
         && super::types::apparatus_ids_match(&batch.processed_by_apparatus, &batch.apparatus)
         && (batch.used_by_apparatus.trim().is_empty()
             || super::types::apparatus_ids_match(&batch.used_by_apparatus, &batch.apparatus))

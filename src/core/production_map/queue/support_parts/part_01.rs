@@ -93,16 +93,9 @@ pub(super) fn has_waiting_previous_stage_wip(
     stage_node_id: &str,
 ) -> bool {
     batches.iter().any(|batch| {
-        batch.order_id.trim() == order_id.trim()
+            batch.order_id.trim() == order_id.trim()
             && super::types::apparatus_ids_match(&batch.apparatus, previous_stage)
             && batch.action.records_progress_output()
-            && matches!(
-                batch.status,
-                OrderProgressBatchStatus::Paused
-                    | OrderProgressBatchStatus::RollDetached
-                    | OrderProgressBatchStatus::Completed
-                    | OrderProgressBatchStatus::Resumed
-            )
             && (batch.next_apparatus.trim().is_empty()
                 || chain::stage_ids_match_for_map(map, &batch.next_apparatus, apparatus))
             && (progress_batch_next_stage_node_id(batch).is_empty()

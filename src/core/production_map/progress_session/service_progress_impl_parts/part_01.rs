@@ -64,13 +64,6 @@ impl ProductionMapService {
         if batch.order_id.trim() != order_id
             || !super::types::apparatus_ids_match(&batch.apparatus, &previous_apparatus)
             || !batch.action.records_progress_output()
-            || !matches!(
-                batch.status,
-                OrderProgressBatchStatus::Paused
-                    | OrderProgressBatchStatus::RollDetached
-                    | OrderProgressBatchStatus::Completed
-                    | OrderProgressBatchStatus::Resumed
-            )
             || (!batch.next_apparatus.trim().is_empty()
                 && !chain::stage_ids_match_for_map(order_map, &batch.next_apparatus, apparatus))
             || (!preferred_stage_node_id.is_empty()
@@ -175,13 +168,6 @@ impl ProductionMapService {
         if batch.order_id.trim() != order_id
             || !super::types::apparatus_ids_match(&batch.apparatus, &previous_apparatus)
             || !batch.action.records_progress_output()
-            || !matches!(
-                batch.status,
-                OrderProgressBatchStatus::Paused
-                    | OrderProgressBatchStatus::RollDetached
-                    | OrderProgressBatchStatus::Completed
-                    | OrderProgressBatchStatus::Resumed
-            )
             || !source_wip_is_usable
             || (!batch.next_apparatus.trim().is_empty()
                 && !chain::stage_ids_match_for_map(order_map, &batch.next_apparatus, apparatus))
@@ -223,17 +209,11 @@ impl ProductionMapService {
                 let linked_candidate = !linked_batch_id.trim().is_empty()
                     && batch.batch_id.trim() == linked_batch_id.trim();
                 let unlinked_candidate = linked_batch_id.trim().is_empty()
-                    && (matches!(
-                        batch.status,
-                        OrderProgressBatchStatus::Paused | OrderProgressBatchStatus::RollDetached
-                    ) || batch.wip_status == OrderProgressBatchWipStatus::InUse);
+                    && (batch.status.is_resumable()
+                        || batch.wip_status == OrderProgressBatchWipStatus::InUse);
                 batch.order_id.trim() == order_id.trim()
                     && batch.session_id.trim() == session.session_id.trim()
-                    && matches!(
-                        batch.action,
-                        queue_state::ApparatusQueueAction::Pause
-                            | queue_state::ApparatusQueueAction::DetachRoll
-                    )
+                    && batch.action.creates_resumable_output()
                     && super::types::apparatus_ids_match(&batch.apparatus, apparatus)
                     && !batch.parent_batch_id.trim().is_empty()
                     && (linked_candidate || unlinked_candidate)
