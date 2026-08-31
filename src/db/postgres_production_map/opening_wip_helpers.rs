@@ -198,12 +198,10 @@ pub(super) async fn create_opening_wip(
         tx.rollback()
             .await
             .map_err(|_| ProductionMapError::StoreFailed)?;
-        let existing = load_opening_wip_by_idempotency_key(
-            pool,
-            write.record.intake.idempotency_key.as_str(),
-        )
-        .await?
-        .ok_or(ProductionMapError::StoreFailed)?;
+        let existing =
+            load_opening_wip_by_idempotency_key(pool, write.record.intake.idempotency_key.as_str())
+                .await?
+                .ok_or(ProductionMapError::StoreFailed)?;
         return if existing.intake.request_fingerprint == write.record.intake.request_fingerprint {
             Ok(existing)
         } else {

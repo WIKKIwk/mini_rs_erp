@@ -16,6 +16,7 @@ fn closed_order_log_rank(log: &ProductionOrderLogEntry) -> u8 {
         queue_state::ApparatusQueueAction::Freeze => 2,
         queue_state::ApparatusQueueAction::DetachRoll => 1,
         queue_state::ApparatusQueueAction::Resume => 4,
+        queue_state::ApparatusQueueAction::Merge => 3,
         queue_state::ApparatusQueueAction::RollComplete => 3,
         queue_state::ApparatusQueueAction::Complete => 5,
     }

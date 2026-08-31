@@ -69,7 +69,150 @@ pub(super) fn preserve_qolip_lineage(
     if let Some(lineage) = QolipLineage::from_payload(&current.payload_json) {
         lineage.write_to_payload(&mut replacement);
     }
+    if !replacement.is_object() {
+        replacement = serde_json::json!({});
+    }
+    for field in [
+        INPUT_LINEAGE_PAYLOAD_FIELD,
+        REZKA_ACTIVE_PARTIAL_ROLLS_PAYLOAD_FIELD,
+    ] {
+        if let Some(value) = current.payload_json.get(field) {
+            replacement[field] = value.clone();
+        }
+    }
     replacement
+}
+
+pub(super) fn initialize_rezka_active_partial_rolls(
+    payload: &mut serde_json::Value,
+    output_kadr_counts: &[usize],
+    now: i64,
+) -> Result<(), ProductionMapError> {
+    let source_input_batch_ids = order_run_input_links_from_payload(payload)
+        .map_err(|_| ProductionMapError::ProgressInputInvalid)?
+        .into_iter()
+        .filter(|link| link.status == OrderRunInputStatus::InUse)
+        .map(|link| link.input_batch_id)
+        .collect::<Vec<_>>();
+    let rolls = output_kadr_counts
+        .iter()
+        .enumerate()
+        .map(|(index, contained_kadr_count)| {
+            Ok(RezkaActivePartialRoll {
+                slot_index: u32::try_from(index + 1)
+                    .map_err(|_| ProductionMapError::InvalidRezkaFrameGroups)?,
+                generation: 1,
+                contained_kadr_count: u32::try_from(*contained_kadr_count)
+                    .map_err(|_| ProductionMapError::InvalidRezkaFrameGroups)?,
+                status: RezkaPartialRollStatus::Active,
+                source_input_batch_ids: source_input_batch_ids.clone(),
+                started_at_unix: now,
+                updated_at_unix: now,
+            })
+        })
+        .collect::<Result<Vec<_>, ProductionMapError>>()?;
+    write_rezka_active_partial_rolls(payload, &rolls);
+    Ok(())
+}
+
+fn progress_batch_source_input_links(
+    session: &OrderRunSession,
+    input_progress: &SessionProgressLinks,
+    output_identity: &ProgressOutputIdentity,
+) -> Result<Vec<ProgressBatchInputLink>, ProductionMapError> {
+    let input_links = order_run_input_links_from_payload(&session.payload_json)
+        .map_err(|_| ProductionMapError::ProgressInputInvalid)?;
+    let active_rolls = rezka_active_partial_rolls_from_payload(&session.payload_json)
+        .map_err(|_| ProductionMapError::ProgressInputInvalid)?;
+    if !rezka_merge_state_is_consistent(&input_links, &active_rolls) {
+        return Err(ProductionMapError::ProgressInputInvalid);
+    }
+    let selected_source_ids = output_identity
+        .frame_index
+        .and_then(|frame_index| {
+            u32::try_from(frame_index).ok().and_then(|slot_index| {
+                active_rolls
+                    .iter()
+                    .find(|roll| roll.slot_index == slot_index)
+            })
+        })
+        .map(|roll| roll.source_input_batch_ids.as_slice());
+
+    let mut links = input_links
+        .into_iter()
+        .filter(|link| {
+            selected_source_ids.is_none_or(|source_ids| {
+                source_ids
+                    .iter()
+                    .any(|batch_id| batch_id.trim() == link.input_batch_id.trim())
+            })
+        })
+        .map(|link| ProgressBatchInputLink {
+            input_batch_id: link.input_batch_id,
+            input_qr_payload: link.input_qr_payload,
+            source_apparatus: link.source_apparatus,
+            source_kind: link.source_kind,
+            sequence_no: link.sequence_no,
+        })
+        .collect::<Vec<_>>();
+    links.sort_by_key(|link| link.sequence_no);
+
+    if links.is_empty()
+        && !input_progress.batch_id.trim().is_empty()
+        && let Some(source_kind) = OrderRunInputSourceKind::parse(&input_progress.source_kind)
+    {
+        links.push(ProgressBatchInputLink {
+            input_batch_id: input_progress.batch_id.trim().to_string(),
+            input_qr_payload: input_progress.qr_payload.trim().to_string(),
+            source_apparatus: input_progress.apparatus.trim().to_string(),
+            source_kind,
+            sequence_no: 1,
+        });
+    }
+    Ok(links)
+}
+
+pub(super) fn apply_output_boundary_to_session_payload(
+    payload: &mut serde_json::Value,
+    action: queue_state::ApparatusQueueAction,
+    current_input_batch_id: &str,
+    now: i64,
+) -> Result<(), ProductionMapError> {
+    if action == queue_state::ApparatusQueueAction::Complete {
+        let mut links = order_run_input_links_from_payload(payload)
+            .map_err(|_| ProductionMapError::ProgressInputInvalid)?;
+        if let Some(link) = links.iter_mut().find(|link| {
+            link.input_batch_id.trim() == current_input_batch_id.trim()
+                && link.status == OrderRunInputStatus::InUse
+        }) {
+            link.status = OrderRunInputStatus::Processed;
+            link.processed_at_unix = Some(now);
+        }
+        write_order_run_input_links(payload, &links);
+        write_rezka_active_partial_rolls(payload, &[]);
+        return Ok(());
+    }
+    if action != queue_state::ApparatusQueueAction::RollComplete {
+        return Ok(());
+    }
+
+    let mut rolls = rezka_active_partial_rolls_from_payload(payload)
+        .map_err(|_| ProductionMapError::ProgressInputInvalid)?;
+    for roll in &mut rolls {
+        roll.generation = roll
+            .generation
+            .checked_add(1)
+            .ok_or(ProductionMapError::ProgressInputInvalid)?;
+        roll.source_input_batch_ids = if current_input_batch_id.trim().is_empty() {
+            Vec::new()
+        } else {
+            vec![current_input_batch_id.trim().to_string()]
+        };
+        roll.started_at_unix = now;
+        roll.updated_at_unix = now;
+    }
+    write_rezka_active_partial_rolls(payload, &rolls);
+    Ok(())
 }
 
 fn progress_batch_payload(

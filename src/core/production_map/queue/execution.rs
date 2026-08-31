@@ -11,6 +11,7 @@ fn schedule_reservation_status_for_action(
         queue_state::ApparatusQueueAction::Pause
         | queue_state::ApparatusQueueAction::Freeze
         | queue_state::ApparatusQueueAction::DetachRoll => ApparatusScheduleStatus::Paused,
+        queue_state::ApparatusQueueAction::Merge => ApparatusScheduleStatus::Active,
         queue_state::ApparatusQueueAction::RollComplete => ApparatusScheduleStatus::Active,
         queue_state::ApparatusQueueAction::Complete => ApparatusScheduleStatus::Completed,
     })

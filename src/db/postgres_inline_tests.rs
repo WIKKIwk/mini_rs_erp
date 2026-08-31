@@ -200,6 +200,54 @@ mod tests {
     }
 
     #[test]
+    fn rezka_merge_lineage_migration_is_registered_and_keeps_three_audit_layers() {
+        let migration = POSTGRES_MIGRATIONS
+            .iter()
+            .find(|(version, _)| *version == "0085_rezka_merge_lineage")
+            .map(|(_, sql)| sql.to_lowercase())
+            .expect("Rezka merge lineage migration");
+
+        for invariant in [
+            "create table if not exists mini_order_run_input_links",
+            "unique (session_id, sequence_no)",
+            "create unique index if not exists idx_mini_order_run_input_links_one_in_use",
+            "where status = 'in_use'",
+            "create table if not exists mini_rezka_active_partial_rolls",
+            "source_input_batch_ids text[] not null",
+            "check (cardinality(source_input_batch_ids) > 0)",
+            "create table if not exists mini_progress_batch_input_links",
+            "unique (output_batch_id, sequence_no)",
+            "references mini_order_run_sessions(session_id) on delete cascade",
+            "references mini_progress_batches(batch_id) on delete cascade",
+            "insert into mini_order_run_input_links",
+            "insert into mini_progress_batch_input_links",
+            "from mini_opening_wip_batches",
+            "from mini_progress_batches input_progress_batch",
+        ] {
+            assert!(
+                migration.contains(invariant),
+                "missing Rezka merge lineage invariant: {invariant}"
+            );
+        }
+        assert!(migration.matches("<>").count() >= 2);
+        assert!(!migration.contains("contribution_qty"));
+    }
+
+    #[test]
+    fn rezka_merge_action_migration_updates_event_constraints_without_output_batches() {
+        let migration = POSTGRES_MIGRATIONS
+            .iter()
+            .find(|(version, _)| *version == "0086_rezka_merge_action")
+            .map(|(_, sql)| sql.to_lowercase())
+            .expect("Rezka merge action migration");
+
+        assert!(migration.contains("mini_queue_action_events_action_allowed"));
+        assert!(migration.contains("mini_order_progress_events_action_allowed"));
+        assert!(migration.contains("'merge'"));
+        assert!(!migration.contains("mini_progress_batches_action_allowed"));
+    }
+
+    #[test]
     fn apparatus_collections_migration_is_registered_and_canonical_id_scoped() {
         let migration = POSTGRES_MIGRATIONS
             .iter()

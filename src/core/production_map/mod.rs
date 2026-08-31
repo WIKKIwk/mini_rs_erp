@@ -8,9 +8,9 @@ mod formula;
 mod formula_parser;
 pub mod materials;
 mod materials_support;
-mod opening_wip;
 #[cfg(test)]
 mod memory_store;
+mod opening_wip;
 pub mod pechat;
 #[path = "progress_session/mod.rs"]
 mod progress;
@@ -25,8 +25,8 @@ mod service_completion {
 mod service_capacity;
 mod service_capacity_scheduler;
 mod service_maps;
-mod service_order_control;
 mod service_opening_wip;
+mod service_order_control;
 mod service_progress {
     include!("progress_session/service_progress.rs");
 }
@@ -59,14 +59,14 @@ pub use materials::{
     RawMaterialAssignment, RawMaterialAssignmentDeleteInput, RawMaterialAssignmentInput,
     RawMaterialStartPolicy, RawMaterialStartRequirements, TrustedQolipStartValidation,
 };
-pub use opening_wip::*;
 #[cfg(test)]
 pub use memory_store::MemoryProductionMapStore;
+pub use opening_wip::*;
+pub(crate) use progress::progress_label_item_name;
 pub(crate) use progress::{
     derive_production_order_lifecycle_with_completed_stage_nodes,
     derive_production_order_operational_status,
 };
-pub(crate) use progress::progress_label_item_name;
 pub(crate) use progress::{progress_batch_id, progress_qr_payload};
 pub use service::{PreparedApparatusQueueAction, ProductionMapLiveSnapshot, ProductionMapService};
 pub(crate) use store_port::validate_queue_progress_write;

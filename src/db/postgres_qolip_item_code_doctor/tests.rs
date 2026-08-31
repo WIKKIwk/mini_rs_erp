@@ -84,7 +84,17 @@ async fn doctor_repairs_only_unambiguous_qolip_item_code_mismatches() {
     .fetch_one(&pool)
     .await
     .expect("doctor audit row");
-    assert_eq!(audit, ("TG-a6b78c3080f65879".to_string(), "AMB".to_string(), 2, 1, 1, 1));
+    assert_eq!(
+        audit,
+        (
+            "TG-a6b78c3080f65879".to_string(),
+            "AMB".to_string(),
+            2,
+            1,
+            1,
+            1
+        )
+    );
 
     let ambiguous_codes: Vec<String> = sqlx::query_scalar(
         "SELECT DISTINCT item_code
@@ -106,12 +116,10 @@ async fn doctor_repairs_only_unambiguous_qolip_item_code_mismatches() {
     assert_eq!(audit_count, 1);
 
     pool.close().await;
-    sqlx::query(&format!(
-        r#"DROP DATABASE "{database_name}" WITH (FORCE)"#
-    ))
-    .execute(&admin_pool)
-    .await
-    .expect("drop doctor test database");
+    sqlx::query(&format!(r#"DROP DATABASE "{database_name}" WITH (FORCE)"#))
+        .execute(&admin_pool)
+        .await
+        .expect("drop doctor test database");
     admin_pool.close().await;
 }
 

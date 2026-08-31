@@ -1,5 +1,4 @@
 impl ProductionMapService {
-
     pub(in crate::core::production_map) async fn queue_action_controls_for_snapshot(
         &self,
         maps: &[ProductionMapDefinition],
@@ -111,13 +110,9 @@ impl ProductionMapService {
                     .get(order_id.trim())
                     .map(Vec::as_slice)
                     .unwrap_or_default();
-                let has_waiting_progress_reentry = waiting_reentry_stage_node_id(
-                    order_map,
-                    batches,
-                    order_id,
-                    &storage_key,
-                )
-                .is_some();
+                let has_waiting_progress_reentry =
+                    waiting_reentry_stage_node_id(order_map, batches, order_id, &storage_key)
+                        .is_some();
                 let has_waiting_opening_wip_reentry = opening_wip_by_order
                     .get(order_id.trim())
                     .into_iter()
@@ -160,13 +155,14 @@ impl ProductionMapService {
                     .get(order_id.trim())
                     .map(Vec::as_slice)
                     .unwrap_or_default();
-                let active_session = active_sessions_by_order
-                    .get(order_id.trim())
-                    .and_then(|sessions| {
-                        sessions.iter().find(|session| {
-                            queue_state::apparatus_ids_match(&session.apparatus, &storage_key)
-                        })
-                    });
+                let active_session =
+                    active_sessions_by_order
+                        .get(order_id.trim())
+                        .and_then(|sessions| {
+                            sessions.iter().find(|session| {
+                                queue_state::apparatus_ids_match(&session.apparatus, &storage_key)
+                            })
+                        });
                 let active_stage_node_id = active_session
                     .and_then(|session| session.payload_json.get("stage_node_id"))
                     .and_then(serde_json::Value::as_str)
@@ -266,8 +262,7 @@ impl ProductionMapService {
                                 .batches
                                 .iter()
                                 .any(|batch| batch.wip_status == OpeningWipBatchStatus::Waiting)
-                    })
-                {
+                    }) {
                     ApparatusQueuePreviousWipMode::ScanRequired
                 } else {
                     ApparatusQueuePreviousWipMode::NotRequired
@@ -277,8 +272,7 @@ impl ProductionMapService {
                 }
                 let active_order_is_this = active_order_id
                     .is_none_or(|active_order_id| active_order_id == order_id.trim());
-                let requeued_session = active_session
-                    .is_some_and(order_run_session_was_requeued);
+                let requeued_session = active_session.is_some_and(order_run_session_was_requeued);
                 let queue_actionable = state.is_active()
                     || actionable_order_id.as_deref() == Some(order_id.trim())
                     || (state == queue_state::ApparatusQueueOrderState::Pending
@@ -329,7 +323,7 @@ impl ProductionMapService {
                                     assignment.apparatus_id == canonical.runtime.apparatus_id
                                 })
                                 .cloned()
-                            .collect::<Vec<_>>();
+                                .collect::<Vec<_>>();
                             let rule = live_material_rule(canonical.as_ref());
                             let material_requirements = build_raw_material_start_requirements(
                                 rule.as_ref(),
@@ -339,19 +333,18 @@ impl ProductionMapService {
                             );
                             let material_scan_required = material_requirements.requires_material
                                 || !material_requirements.assigned_barcodes.is_empty();
-                            let start_materials_mode =
-                                if opening_wip_mode
-                                    == ApparatusQueuePreviousWipMode::ScanRequired
-                                    || (apparatus::is_laminatsiya_apparatus(&canonical)
-                                        && previous_wip_mode
-                                            == ApparatusQueuePreviousWipMode::ScanRequired)
-                                {
-                                    ApparatusQueueStartMaterialsMode::Hidden
-                                } else if material_scan_required {
-                                    ApparatusQueueStartMaterialsMode::ScanRequired
-                                } else {
-                                    ApparatusQueueStartMaterialsMode::Hidden
-                                };
+                            let start_materials_mode = if opening_wip_mode
+                                == ApparatusQueuePreviousWipMode::ScanRequired
+                                || (apparatus::is_laminatsiya_apparatus(&canonical)
+                                    && previous_wip_mode
+                                        == ApparatusQueuePreviousWipMode::ScanRequired)
+                            {
+                                ApparatusQueueStartMaterialsMode::Hidden
+                            } else if material_scan_required {
+                                ApparatusQueueStartMaterialsMode::ScanRequired
+                            } else {
+                                ApparatusQueueStartMaterialsMode::Hidden
+                            };
 
                             if opening_wip_mode == ApparatusQueuePreviousWipMode::Waiting {
                                 interaction.mode =
@@ -441,6 +434,11 @@ impl ProductionMapService {
                                     &stage_node_id,
                                 );
                             if apparatus::is_rezka_apparatus(&canonical) {
+                                if active_session.is_some_and(|session| {
+                                    !session_progress_links(session).batch_id.trim().is_empty()
+                                }) {
+                                    allowed_actions.push(queue_state::ApparatusQueueAction::Merge);
+                                }
                                 allowed_actions
                                     .push(queue_state::ApparatusQueueAction::RollComplete);
                             }
@@ -518,6 +516,28 @@ impl ProductionMapService {
                 } else {
                     Vec::new()
                 };
+                let (rezka_input_lineage, rezka_active_partial_rolls) =
+                    if apparatus::is_rezka_apparatus(&canonical) {
+                        if let Some(session) = active_session {
+                            let input_lineage =
+                                order_run_input_links_from_payload(&session.payload_json)
+                                    .map_err(|_| ProductionMapError::StoreFailed)?;
+                            let active_partial_rolls =
+                                rezka_active_partial_rolls_from_payload(&session.payload_json)
+                                    .map_err(|_| ProductionMapError::StoreFailed)?;
+                            if !rezka_merge_state_is_consistent(
+                                &input_lineage,
+                                &active_partial_rolls,
+                            ) {
+                                return Err(ProductionMapError::StoreFailed);
+                            }
+                            (input_lineage, active_partial_rolls)
+                        } else {
+                            (Vec::new(), Vec::new())
+                        }
+                    } else {
+                        (Vec::new(), Vec::new())
+                    };
 
                 apparatus_controls.insert(
                     order_id.trim().to_string(),
@@ -529,6 +549,8 @@ impl ProductionMapService {
                         stage_node_id,
                         previous_stage_ready,
                         rezka_output_kadr_counts,
+                        rezka_input_lineage,
+                        rezka_active_partial_rolls,
                         complete_requires_full_report,
                         complete_requires_rezka_total_waste_only,
                         freeze_request: order_control

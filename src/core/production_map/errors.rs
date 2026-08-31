@@ -154,6 +154,14 @@ pub enum ProductionMapError {
     ProgressInputInvalid,
     #[error("previous stage progress qr is required")]
     ProgressQrRequired,
+    #[error("merge input qr is required")]
+    MergeInputRequired,
+    #[error("merge input is already the active input")]
+    MergeInputSame,
+    #[error("merge input has already been used")]
+    MergeInputAlreadyUsed,
+    #[error("merge input does not match this order and production stage")]
+    MergeInputNotAccepted,
     #[error("bosma completion metrics are required")]
     BosmaCompletionMetricsRequired,
     #[error("laminatsiya completion metrics are required")]

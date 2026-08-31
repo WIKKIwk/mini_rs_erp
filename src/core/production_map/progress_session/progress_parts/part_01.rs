@@ -211,6 +211,139 @@ impl OrderProgressBatchWipStatus {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum OrderRunInputSourceKind {
+    ProgressBatch,
+    OpeningWip,
+}
+
+impl OrderRunInputSourceKind {
+    pub fn parse(value: &str) -> Option<Self> {
+        match value.trim().to_ascii_lowercase().as_str() {
+            "progress_batch" => Some(Self::ProgressBatch),
+            "opening_wip" => Some(Self::OpeningWip),
+            _ => None,
+        }
+    }
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::ProgressBatch => "progress_batch",
+            Self::OpeningWip => "opening_wip",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum OrderRunInputStatus {
+    InUse,
+    Processed,
+}
+
+impl OrderRunInputStatus {
+    pub fn parse(value: &str) -> Option<Self> {
+        match value.trim().to_ascii_lowercase().as_str() {
+            "in_use" => Some(Self::InUse),
+            "processed" => Some(Self::Processed),
+            _ => None,
+        }
+    }
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::InUse => "in_use",
+            Self::Processed => "processed",
+        }
+    }
+}
+
+/// One upstream WIP consumed by a production run session.
+///
+/// `sequence_no` preserves splice order. Quantity contribution is
+/// intentionally absent because the worker flow does not measure it at the
+/// merge boundary; inventing an allocation would corrupt accounting.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct OrderRunInputLink {
+    pub input_batch_id: String,
+    pub input_qr_payload: String,
+    pub source_apparatus: String,
+    pub source_kind: OrderRunInputSourceKind,
+    pub stage_node_id: String,
+    pub sequence_no: u32,
+    pub status: OrderRunInputStatus,
+    pub linked_at_unix: i64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub processed_at_unix: Option<i64>,
+}
+
+impl OrderRunInputLink {
+    pub(crate) fn is_valid(&self) -> bool {
+        !self.input_batch_id.trim().is_empty()
+            && self.sequence_no > 0
+            && match self.status {
+                OrderRunInputStatus::InUse => self.processed_at_unix.is_none(),
+                OrderRunInputStatus::Processed => self.processed_at_unix.is_some(),
+            }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RezkaPartialRollStatus {
+    Active,
+}
+
+impl RezkaPartialRollStatus {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Active => "active",
+        }
+    }
+}
+
+/// The unfinished physical output roll currently mounted in one Rezka frame.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RezkaActivePartialRoll {
+    pub slot_index: u32,
+    pub generation: u32,
+    pub contained_kadr_count: u32,
+    pub status: RezkaPartialRollStatus,
+    #[serde(default)]
+    pub source_input_batch_ids: Vec<String>,
+    pub started_at_unix: i64,
+    pub updated_at_unix: i64,
+}
+
+impl RezkaActivePartialRoll {
+    pub(crate) fn is_valid(&self) -> bool {
+        if self.slot_index == 0 || self.generation == 0 || self.contained_kadr_count == 0 {
+            return false;
+        }
+        let mut unique = std::collections::BTreeSet::new();
+        self.source_input_batch_ids
+            .iter()
+            .all(|batch_id| !batch_id.trim().is_empty() && unique.insert(batch_id.trim()))
+    }
+}
+
+/// Auditable many-to-one lineage for one completed output batch.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ProgressBatchInputLink {
+    pub input_batch_id: String,
+    pub input_qr_payload: String,
+    pub source_apparatus: String,
+    pub source_kind: OrderRunInputSourceKind,
+    pub sequence_no: u32,
+}
+
+impl ProgressBatchInputLink {
+    pub(crate) fn is_valid(&self) -> bool {
+        !self.input_batch_id.trim().is_empty() && self.sequence_no > 0
+    }
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct WipProgressBatchQuery {
     pub apparatus: String,

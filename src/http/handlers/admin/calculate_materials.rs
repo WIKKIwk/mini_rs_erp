@@ -110,13 +110,7 @@ async fn sync_catalog_item(
     } else {
         match state
             .admin
-            .create_item(
-                &material.name,
-                &material.name,
-                "Kg",
-                &rulon_group,
-                "",
-            )
+            .create_item(&material.name, &material.name, "Kg", &rulon_group, "")
             .await
         {
             Ok(_) => Ok(()),

@@ -100,8 +100,8 @@ pub(super) async fn refresh_production_order_lifecycles(
             .get(order_id)
             .cloned()
             .unwrap_or_default();
-        let Some(status) = super::super::progress::
-            derive_production_order_lifecycle_with_completed_stage_nodes(
+        let Some(status) =
+            super::super::progress::derive_production_order_lifecycle_with_completed_stage_nodes(
                 map,
                 &queue_states,
                 &completed_stage_nodes,
@@ -128,13 +128,12 @@ pub(super) async fn refresh_production_order_lifecycles(
                 "normal".to_string()
             };
         }
-        let operational_status =
-            super::super::progress::derive_production_order_operational_status(
-                record.status,
-                &queue_states,
-                order_id,
-                completed_with_issue_count,
-            );
+        let operational_status = super::super::progress::derive_production_order_operational_status(
+            record.status,
+            &queue_states,
+            order_id,
+            completed_with_issue_count,
+        );
         if record.operational_status != operational_status {
             record.operational_status = operational_status;
             record.operational_status_changed_at_unix += 1;

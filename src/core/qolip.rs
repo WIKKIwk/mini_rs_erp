@@ -10,8 +10,8 @@ pub use memory_store::MemoryQolipStore;
 pub use models::{
     QolipBlock, QolipCellQr, QolipCellQrInput, QolipCheckout, QolipCheckoutCreate,
     QolipCheckoutReturn, QolipError, QolipLocation, QolipLocationMove, QolipLocationMoveBatch,
-    QolipLocationUpsert, QolipOrderStartPreparation, QolipProduct,
-    QolipProductSpec, QolipProductSpecBatchUpsert, QolipProductSpecDelete, QolipProductSpecUpsert,
+    QolipLocationUpsert, QolipOrderStartPreparation, QolipProduct, QolipProductSpec,
+    QolipProductSpecBatchUpsert, QolipProductSpecDelete, QolipProductSpecUpsert,
 };
 pub use normalize::role_code;
 pub use ports::QolipStorePort;

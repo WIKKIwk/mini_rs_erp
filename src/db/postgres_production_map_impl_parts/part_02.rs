@@ -232,6 +232,7 @@ impl PostgresProductionMapStore {
             });
         }
         validate_queue_action_event_transition_tx(&mut tx, &write.event).await?;
+        validate_merge_session_transition_tx(&mut tx, &write.event, write.session.as_ref()).await?;
         let raw_material_stock_committed = !write.raw_material_stock_transitions.is_empty();
         let raw_material_outcome = apply_raw_material_stock_transitions_tx(
             &mut tx,

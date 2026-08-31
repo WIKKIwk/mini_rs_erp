@@ -19,11 +19,11 @@ use self::catalog::{
     rename_block as rename_qolip_block, save_product_spec, save_product_specs,
 };
 use self::cell_qr::{load_cell_qr_by_payload, save_cell_qr};
-pub(crate) use self::checkouts::{return_completed_session_checkouts_tx, save_checkout_tx};
 use self::checkouts::{
     load_checkout_by_id, load_checkouts, load_open_checkout_by_qolip_code,
     load_open_checkouts_for_worker, return_checkout_to_location, save_checkout,
 };
+pub(crate) use self::checkouts::{return_completed_session_checkouts_tx, save_checkout_tx};
 use self::locations::{
     load_location_by_id, load_location_by_qolip_code, load_locations, move_location_to_cell,
     move_locations_to_cells, save_location,

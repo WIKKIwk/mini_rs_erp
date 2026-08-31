@@ -415,6 +415,7 @@ fn training_action_label(action: queue_state::ApparatusQueueAction) -> &'static 
         queue_state::ApparatusQueueAction::Complete => "ish tugatildi",
         queue_state::ApparatusQueueAction::Start => "ish boshlandi",
         queue_state::ApparatusQueueAction::Resume => "ish davom etdi",
+        queue_state::ApparatusQueueAction::Merge => "rulon ulandi",
     }
 }
 
@@ -427,6 +428,7 @@ fn training_action_value(action: queue_state::ApparatusQueueAction) -> &'static 
         queue_state::ApparatusQueueAction::Complete => "complete",
         queue_state::ApparatusQueueAction::Start => "start",
         queue_state::ApparatusQueueAction::Resume => "resume",
+        queue_state::ApparatusQueueAction::Merge => "merge",
     }
 }
 

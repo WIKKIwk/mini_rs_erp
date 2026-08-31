@@ -51,6 +51,7 @@ pub(super) async fn put_order_run_session_tx(
     .execute(&mut **tx)
     .await
     .map_err(|_| ProductionMapError::StoreFailed)?;
+    replace_order_run_merge_state_tx(tx, session).await?;
     Ok(())
 }
 
@@ -365,7 +366,232 @@ pub(super) async fn put_order_progress_batch_tx(
     if result.rows_affected() != 1 {
         return Err(ProductionMapError::ProgressBatchCorrectionConflict);
     }
+    replace_progress_batch_input_links_tx(tx, batch).await?;
     Ok(())
+}
+
+async fn replace_order_run_merge_state_tx(
+    tx: &mut Transaction<'_, Postgres>,
+    session: &OrderRunSession,
+) -> Result<(), ProductionMapError> {
+    let mut input_links = order_run_input_links_from_payload(&session.payload_json)
+        .map_err(|_| ProductionMapError::StoreFailed)?;
+    if input_links.is_empty() {
+        let input_batch_id = session
+            .payload_json
+            .get("input_progress_batch_id")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or_default()
+            .trim();
+        let source_kind_value = session
+            .payload_json
+            .get("input_wip_source_kind")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or_default()
+            .trim();
+        let source_kind = if input_batch_id.is_empty() {
+            None
+        } else if source_kind_value.is_empty() {
+            legacy_input_source_kind_tx(tx, input_batch_id).await?
+        } else {
+            Some(
+                OrderRunInputSourceKind::parse(source_kind_value)
+                    .ok_or(ProductionMapError::StoreFailed)?,
+            )
+        };
+        if let Some(source_kind) = source_kind {
+            let processed = session.status == OrderRunStatus::Completed;
+            input_links.push(OrderRunInputLink {
+                input_batch_id: input_batch_id.to_string(),
+                input_qr_payload: session
+                    .payload_json
+                    .get("input_progress_qr_payload")
+                    .and_then(serde_json::Value::as_str)
+                    .unwrap_or_default()
+                    .trim()
+                    .to_string(),
+                source_apparatus: session
+                    .payload_json
+                    .get("input_progress_apparatus")
+                    .and_then(serde_json::Value::as_str)
+                    .unwrap_or_default()
+                    .trim()
+                    .to_string(),
+                source_kind,
+                stage_node_id: session
+                    .payload_json
+                    .get("stage_node_id")
+                    .and_then(serde_json::Value::as_str)
+                    .unwrap_or_default()
+                    .trim()
+                    .to_string(),
+                sequence_no: 1,
+                status: if processed {
+                    OrderRunInputStatus::Processed
+                } else {
+                    OrderRunInputStatus::InUse
+                },
+                linked_at_unix: session.started_at_unix,
+                processed_at_unix: processed.then_some(session.updated_at_unix),
+            });
+        }
+    }
+
+    let payload_active_rolls = rezka_active_partial_rolls_from_payload(&session.payload_json)
+        .map_err(|_| ProductionMapError::StoreFailed)?;
+    if !session.status.is_open() && !payload_active_rolls.is_empty() {
+        return Err(ProductionMapError::StoreFailed);
+    }
+    let active_rolls = if session.status.is_open() {
+        payload_active_rolls
+    } else {
+        Vec::new()
+    };
+    if !rezka_merge_state_is_consistent(&input_links, &active_rolls) {
+        return Err(ProductionMapError::StoreFailed);
+    }
+
+    sqlx::query("DELETE FROM mini_order_run_input_links WHERE session_id = $1")
+        .bind(session.session_id.trim())
+        .execute(&mut **tx)
+        .await
+        .map_err(|_| ProductionMapError::StoreFailed)?;
+    for link in input_links {
+        sqlx::query(
+            "INSERT INTO mini_order_run_input_links (
+                session_id, order_id, target_apparatus,
+                input_batch_id, input_qr_payload, source_apparatus, source_kind,
+                stage_node_id, sequence_no, status, linked_at, processed_at
+             ) VALUES (
+                $1, $2, $3, $4, $5, $6, $7, $8, $9, $10,
+                to_timestamp($11::double precision),
+                to_timestamp($12::double precision)
+             )",
+        )
+        .bind(session.session_id.trim())
+        .bind(session.order_id.trim())
+        .bind(session.apparatus.trim())
+        .bind(link.input_batch_id.trim())
+        .bind(link.input_qr_payload.trim())
+        .bind(link.source_apparatus.trim())
+        .bind(link.source_kind.as_str())
+        .bind(link.stage_node_id.trim())
+        .bind(i32::try_from(link.sequence_no).map_err(|_| ProductionMapError::StoreFailed)?)
+        .bind(link.status.as_str())
+        .bind(link.linked_at_unix as f64)
+        .bind(link.processed_at_unix.map(|value| value as f64))
+        .execute(&mut **tx)
+        .await
+        .map_err(|_| ProductionMapError::StoreFailed)?;
+    }
+
+    sqlx::query("DELETE FROM mini_rezka_active_partial_rolls WHERE session_id = $1")
+        .bind(session.session_id.trim())
+        .execute(&mut **tx)
+        .await
+        .map_err(|_| ProductionMapError::StoreFailed)?;
+    if session.status.is_open() {
+        for roll in active_rolls {
+            sqlx::query(
+                "INSERT INTO mini_rezka_active_partial_rolls (
+                    session_id, order_id, apparatus, slot_index, generation,
+                    contained_kadr_count, status, source_input_batch_ids,
+                    started_at, updated_at
+                 ) VALUES (
+                    $1, $2, $3, $4, $5, $6, $7, $8,
+                    to_timestamp($9::double precision),
+                    to_timestamp($10::double precision)
+                 )",
+            )
+            .bind(session.session_id.trim())
+            .bind(session.order_id.trim())
+            .bind(session.apparatus.trim())
+            .bind(i32::try_from(roll.slot_index).map_err(|_| ProductionMapError::StoreFailed)?)
+            .bind(i32::try_from(roll.generation).map_err(|_| ProductionMapError::StoreFailed)?)
+            .bind(
+                i32::try_from(roll.contained_kadr_count)
+                    .map_err(|_| ProductionMapError::StoreFailed)?,
+            )
+            .bind(roll.status.as_str())
+            .bind(roll.source_input_batch_ids)
+            .bind(roll.started_at_unix as f64)
+            .bind(roll.updated_at_unix as f64)
+            .execute(&mut **tx)
+            .await
+            .map_err(|_| ProductionMapError::StoreFailed)?;
+        }
+    }
+    Ok(())
+}
+
+async fn replace_progress_batch_input_links_tx(
+    tx: &mut Transaction<'_, Postgres>,
+    batch: &OrderProgressBatch,
+) -> Result<(), ProductionMapError> {
+    let mut links = progress_batch_input_links_from_payload(&batch.payload_json)
+        .map_err(|_| ProductionMapError::StoreFailed)?;
+    if links.is_empty()
+        && let Some(source_kind) =
+            legacy_input_source_kind_tx(tx, &batch.parent_batch_id).await?
+    {
+        links.push(ProgressBatchInputLink {
+            input_batch_id: batch.parent_batch_id.trim().to_string(),
+            input_qr_payload: String::new(),
+            source_apparatus: String::new(),
+            source_kind,
+            sequence_no: 1,
+        });
+    }
+    sqlx::query("DELETE FROM mini_progress_batch_input_links WHERE output_batch_id = $1")
+        .bind(batch.batch_id.trim())
+        .execute(&mut **tx)
+        .await
+        .map_err(|_| ProductionMapError::StoreFailed)?;
+    for link in links {
+        sqlx::query(
+            "INSERT INTO mini_progress_batch_input_links (
+                output_batch_id, session_id, order_id,
+                input_batch_id, input_qr_payload, source_apparatus,
+                source_kind, sequence_no
+             ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)",
+        )
+        .bind(batch.batch_id.trim())
+        .bind(batch.session_id.trim())
+        .bind(batch.order_id.trim())
+        .bind(link.input_batch_id.trim())
+        .bind(link.input_qr_payload.trim())
+        .bind(link.source_apparatus.trim())
+        .bind(link.source_kind.as_str())
+        .bind(i32::try_from(link.sequence_no).map_err(|_| ProductionMapError::StoreFailed)?)
+        .execute(&mut **tx)
+        .await
+        .map_err(|_| ProductionMapError::StoreFailed)?;
+    }
+    Ok(())
+}
+
+async fn legacy_input_source_kind_tx(
+    tx: &mut Transaction<'_, Postgres>,
+    batch_id: &str,
+) -> Result<Option<OrderRunInputSourceKind>, ProductionMapError> {
+    let batch_id = batch_id.trim();
+    if batch_id.is_empty() {
+        return Ok(None);
+    }
+    let (is_progress_batch, is_opening_wip) = sqlx::query_as::<_, (bool, bool)>(
+        "SELECT
+            EXISTS(SELECT 1 FROM mini_progress_batches WHERE batch_id = $1),
+            EXISTS(SELECT 1 FROM mini_opening_wip_batches WHERE batch_id = $1)",
+    )
+    .bind(batch_id)
+    .fetch_one(&mut **tx)
+    .await
+    .map_err(|_| ProductionMapError::StoreFailed)?;
+    Ok(match (is_progress_batch, is_opening_wip) {
+        (true, false) => Some(OrderRunInputSourceKind::ProgressBatch),
+        (false, true) => Some(OrderRunInputSourceKind::OpeningWip),
+        _ => None,
+    })
 }
 
 fn is_warehouse_processing_marker(value: &str) -> bool {

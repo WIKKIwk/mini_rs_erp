@@ -4,7 +4,7 @@ mod capacity;
 mod compile_run;
 mod fixtures;
 mod map_edit;
-mod order_control;
 mod opening_wip;
+mod order_control;
 mod queue_controls;
 mod service_flow;

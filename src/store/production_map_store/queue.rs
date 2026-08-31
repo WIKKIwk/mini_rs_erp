@@ -112,6 +112,7 @@ pub(super) async fn append_apparatus_queue_action_event(
                 crate::core::production_map::queue_state::ApparatusQueueAction::DetachRoll =>
                     "detach_roll",
                 crate::core::production_map::queue_state::ApparatusQueueAction::Resume => "resume",
+                crate::core::production_map::queue_state::ApparatusQueueAction::Merge => "merge",
                 crate::core::production_map::queue_state::ApparatusQueueAction::RollComplete =>
                     "roll_complete",
                 crate::core::production_map::queue_state::ApparatusQueueAction::Complete =>

@@ -50,9 +50,7 @@ async fn opening_wip_admin_delete_accepts_query_without_body() {
     let batch_id = created_body["record"]["batches"][0]["batch_id"]
         .as_str()
         .expect("batch id");
-    let delete_uri = format!(
-        "/v1/mobile/admin/production-maps/opening-wip?batch_id={batch_id}"
-    );
+    let delete_uri = format!("/v1/mobile/admin/production-maps/opening-wip?batch_id={batch_id}");
 
     let deleted = router
         .clone()
@@ -286,12 +284,11 @@ async fn opening_wip_worker_lookup_is_qr_exact_and_apparatus_scoped() {
         .expect("worker candidates");
     let candidates_status = candidates.status();
     let candidates_response = json_body(candidates).await;
+    assert_eq!(candidates_status, StatusCode::OK, "{candidates_response:?}");
     assert_eq!(
-        candidates_status,
-        StatusCode::OK,
-        "{candidates_response:?}"
+        candidates_response["batches"].as_array().map(Vec::len),
+        Some(1)
     );
-    assert_eq!(candidates_response["batches"].as_array().map(Vec::len), Some(1));
     assert_eq!(candidates_response["batches"][0]["batch_id"], batch_id);
     assert_eq!(candidates_response["batches"][0]["qr_payload"], qr_payload);
 
@@ -562,7 +559,10 @@ async fn opening_wip_from_print_source_reopens_completed_lamination() {
     let in_use_status = in_use.status();
     let in_use_body = json_body(in_use).await;
     assert_eq!(in_use_status, StatusCode::OK, "{in_use_body:?}");
-    assert_eq!(in_use_body["records"][0]["batches"][0]["wip_status"], "in_use");
+    assert_eq!(
+        in_use_body["records"][0]["batches"][0]["wip_status"],
+        "in_use"
+    );
     assert_eq!(
         in_use_body["records"][0]["batches"][0]["used_by_apparatus"],
         LAMINATION_ID
@@ -694,10 +694,6 @@ async fn opening_wip_from_print_source_reopens_completed_lamination() {
         .expect("complete reopened lamination");
     let recompleted_status = recompleted.status();
     let recompleted_body = json_body(recompleted).await;
-    assert_eq!(
-        recompleted_status,
-        StatusCode::OK,
-        "{recompleted_body:?}"
-    );
+    assert_eq!(recompleted_status, StatusCode::OK, "{recompleted_body:?}");
     assert_eq!(recompleted_body["states"][order_id], "completed");
 }

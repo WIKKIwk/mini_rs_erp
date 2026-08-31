@@ -8,7 +8,8 @@ use crate::core::production_map::queue_state;
 use super::control::{OrderControlRecord, OrderFreezeRequest};
 use super::definition::{ProductionMapDefinition, ProductionMapSaved};
 use super::progress::{
-    OrderProgressBatch, OrderProgressEvent, OrderRunSession, ProductionOrderStatusDetail,
+    OrderProgressBatch, OrderProgressEvent, OrderRunInputLink, OrderRunSession,
+    ProductionOrderStatusDetail, RezkaActivePartialRoll,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -127,6 +128,10 @@ pub struct ApparatusQueueOrderActionControl {
     pub previous_stage_ready: bool,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub rezka_output_kadr_counts: Vec<i64>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub rezka_input_lineage: Vec<OrderRunInputLink>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub rezka_active_partial_rolls: Vec<RezkaActivePartialRoll>,
     #[serde(default)]
     pub complete_requires_full_report: bool,
     #[serde(default)]

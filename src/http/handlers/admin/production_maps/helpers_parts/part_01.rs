@@ -356,6 +356,10 @@ pub(super) fn production_map_error(error: ProductionMapError) -> AdminError {
         }
         ProductionMapError::ProgressInputInvalid => bad_request("progress_input_invalid"),
         ProductionMapError::ProgressQrRequired => bad_request("progress_qr_required"),
+        ProductionMapError::MergeInputRequired => bad_request("merge_input_required"),
+        ProductionMapError::MergeInputSame => conflict("merge_input_same"),
+        ProductionMapError::MergeInputAlreadyUsed => conflict("merge_input_already_used"),
+        ProductionMapError::MergeInputNotAccepted => bad_request("merge_input_not_accepted"),
         ProductionMapError::BosmaCompletionMetricsRequired => {
             bad_request("bosma_completion_metrics_required")
         }

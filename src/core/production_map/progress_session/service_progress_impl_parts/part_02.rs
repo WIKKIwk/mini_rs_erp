@@ -233,7 +233,7 @@ impl ProductionMapService {
         {
             payload_json["rezka_frame_issues"] = frame_issues.clone();
         }
-        let session = OrderRunSession {
+        let mut session = OrderRunSession {
             status: run_status_for_progress_action(action),
             worker_role: actor.role.trim().to_string(),
             worker_ref: actor.ref_.trim().to_string(),
@@ -300,6 +300,7 @@ impl ProductionMapService {
                 action,
                 queue_state::ApparatusQueueAction::Pause
                     | queue_state::ApparatusQueueAction::DetachRoll
+                    | queue_state::ApparatusQueueAction::RollComplete
             ) {
                 if input_was_recovered {
                     progress_batch_updates.push(input_batch);
@@ -325,6 +326,7 @@ impl ProductionMapService {
                     action,
                     queue_state::ApparatusQueueAction::Pause
                         | queue_state::ApparatusQueueAction::DetachRoll
+                        | queue_state::ApparatusQueueAction::RollComplete
                 ))
                 .then(|| {
                     opening_wip_batch_processed(batch, apparatus, &session.session_id, now)
@@ -394,6 +396,12 @@ impl ProductionMapService {
                     .collect(),
             );
         }
+        apply_output_boundary_to_session_payload(
+            &mut session.payload_json,
+            action,
+            &input_progress.batch_id,
+            now,
+        )?;
         let progress_batch = batches.first().cloned();
         Ok(QueueProgressRecords {
             session: Some(session),

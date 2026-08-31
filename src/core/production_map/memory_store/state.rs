@@ -20,8 +20,11 @@ pub struct MemoryProductionMapStore {
     pub(super) order_freeze_requests: RwLock<BTreeMap<String, OrderFreezeAuditRecord>>,
     pub(super) queue_events: RwLock<Vec<ApparatusQueueActionEvent>>,
     pub(super) order_run_sessions: RwLock<BTreeMap<String, OrderRunSession>>,
+    pub(super) order_run_input_links: RwLock<BTreeMap<String, Vec<OrderRunInputLink>>>,
+    pub(super) rezka_active_partial_rolls: RwLock<BTreeMap<String, Vec<RezkaActivePartialRoll>>>,
     pub(super) order_progress_events: RwLock<Vec<OrderProgressEvent>>,
     pub(super) order_progress_batches: RwLock<BTreeMap<String, OrderProgressBatch>>,
+    pub(super) progress_batch_input_links: RwLock<BTreeMap<String, Vec<ProgressBatchInputLink>>>,
     pub(super) opening_wip_records: RwLock<BTreeMap<String, OpeningWipRecord>>,
     pub(super) progress_batch_corrections: RwLock<Vec<ProgressBatchCorrectionRecord>>,
     pub(super) laminatsiya_astatka_reports: RwLock<Vec<LaminatsiyaAstatkaReport>>,
@@ -48,8 +51,11 @@ impl MemoryProductionMapStore {
             order_freeze_requests: RwLock::new(BTreeMap::new()),
             queue_events: RwLock::new(Vec::new()),
             order_run_sessions: RwLock::new(BTreeMap::new()),
+            order_run_input_links: RwLock::new(BTreeMap::new()),
+            rezka_active_partial_rolls: RwLock::new(BTreeMap::new()),
             order_progress_events: RwLock::new(Vec::new()),
             order_progress_batches: RwLock::new(BTreeMap::new()),
+            progress_batch_input_links: RwLock::new(BTreeMap::new()),
             opening_wip_records: RwLock::new(BTreeMap::new()),
             progress_batch_corrections: RwLock::new(Vec::new()),
             laminatsiya_astatka_reports: RwLock::new(Vec::new()),
@@ -80,6 +86,36 @@ impl MemoryProductionMapStore {
 
     pub async fn progress_batch_correction_records(&self) -> Vec<ProgressBatchCorrectionRecord> {
         self.progress_batch_corrections.read().await.clone()
+    }
+
+    pub async fn order_run_input_links(&self, session_id: &str) -> Vec<OrderRunInputLink> {
+        self.order_run_input_links
+            .read()
+            .await
+            .get(session_id.trim())
+            .cloned()
+            .unwrap_or_default()
+    }
+
+    pub async fn rezka_active_partial_rolls(
+        &self,
+        session_id: &str,
+    ) -> Vec<RezkaActivePartialRoll> {
+        self.rezka_active_partial_rolls
+            .read()
+            .await
+            .get(session_id.trim())
+            .cloned()
+            .unwrap_or_default()
+    }
+
+    pub async fn progress_batch_input_links(&self, batch_id: &str) -> Vec<ProgressBatchInputLink> {
+        self.progress_batch_input_links
+            .read()
+            .await
+            .get(batch_id.trim())
+            .cloned()
+            .unwrap_or_default()
     }
 }
 

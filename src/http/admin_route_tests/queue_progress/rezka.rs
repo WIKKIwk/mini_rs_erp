@@ -992,6 +992,7 @@ async fn rezka_consumes_laminatsiya_wip_and_creates_distinct_frame_wips() {
         .as_array()
         .expect("allowed rezka actions");
     assert!(allowed_actions.iter().any(|action| action == "complete"));
+    assert!(allowed_actions.iter().any(|action| action == "merge"));
     assert!(
         allowed_actions
             .iter()
@@ -1026,7 +1027,38 @@ async fn rezka_consumes_laminatsiya_wip_and_creates_distinct_frame_wips() {
         "progress_batch_not_accepted"
     );
 
-    let partially_completed = router
+    let (missing_merge_input_status, missing_merge_input_body) = queue_action_json(
+        &router,
+        &worker_token,
+        serde_json::json!({
+            "apparatus": "apparatus:default:asset-010",
+            "order_id": "zakaz-rezka-wip-fanout",
+            "action": "merge"
+        }),
+    )
+    .await;
+    assert_eq!(missing_merge_input_status, StatusCode::BAD_REQUEST);
+    assert_eq!(missing_merge_input_body["error"], "merge_input_required");
+
+    let (merge_with_output_metric_status, merge_with_output_metric_body) = queue_action_json(
+        &router,
+        &worker_token,
+        serde_json::json!({
+            "apparatus": "apparatus:default:asset-010",
+            "order_id": "zakaz-rezka-wip-fanout",
+            "action": "merge",
+            "qr_payload": second_source_qr,
+            "diameter": 45.5
+        }),
+    )
+    .await;
+    assert_eq!(merge_with_output_metric_status, StatusCode::BAD_REQUEST);
+    assert_eq!(
+        merge_with_output_metric_body["error"],
+        "progress_input_invalid"
+    );
+
+    let merged = router
         .clone()
         .oneshot(request_with_body(
             "POST",
@@ -1036,69 +1068,107 @@ async fn rezka_consumes_laminatsiya_wip_and_creates_distinct_frame_wips() {
                 r#"{{
                     "apparatus":"apparatus:default:asset-010",
                     "order_id":"zakaz-rezka-wip-fanout",
-                    "action":"complete",
-                    "produced_qty":90,
-                    "gross_qty":11,
-                    "diameter":45.5,
-                    "uom":"m",
-                    "qr_payload":"{source_qr}",
-                    "printer":"zebra",
-                    "print_mode":"rfid"
+                    "action":"merge",
+                    "qr_payload":"{second_source_qr}",
+                    "total_waste":0.2,
+                    "uom":"kg"
                 }}"#
             ),
         ))
         .await
-        .expect("complete current rezka WIP");
-    let partially_completed_status = partially_completed.status();
-    let partially_completed_body = json_body(partially_completed).await;
+        .expect("merge second laminatsiya WIP into active Rezka roll");
+    let merged_status = merged.status();
+    let merged_body = json_body(merged).await;
+    assert_eq!(merged_status, StatusCode::OK, "{merged_body:?}");
     assert_eq!(
-        partially_completed_status,
-        StatusCode::OK,
-        "{partially_completed_body:?}"
+        merged_body["states"]["zakaz-rezka-wip-fanout"],
+        "in_progress"
+    );
+    assert_eq!(merged_body["progress_event"]["action"], "merge");
+    assert_eq!(merged_body["progress_event"]["total_waste"], 0.2);
+    assert!(merged_body["progress_event"]["diameter"].is_null());
+    assert_eq!(
+        merged_body["progress_event"]["payload_json"]["material_balance"]["processed_input_batch_id"],
+        source_batch_id
     );
     assert_eq!(
-        partially_completed_body["states"]["zakaz-rezka-wip-fanout"],
-        "pending"
+        merged_body["progress_event"]["payload_json"]["material_balance"]["processed_input_meter"],
+        120.0
     );
-
-    let output_batches = partially_completed_body["progress_batches"]
-        .as_array()
-        .expect("frame batches");
-    assert_eq!(output_batches.len(), 4);
-    assert_eq!(
-        partially_completed_body["prints"].as_array().unwrap().len(),
-        4
-    );
-    let output_ids = output_batches
-        .iter()
-        .map(|batch| batch["batch_id"].as_str().expect("frame batch id"))
-        .collect::<std::collections::BTreeSet<_>>();
-    let output_qrs = output_batches
-        .iter()
-        .map(|batch| batch["qr_payload"].as_str().expect("frame qr"))
-        .collect::<std::collections::BTreeSet<_>>();
-    assert_eq!(output_ids.len(), 4);
-    assert_eq!(output_qrs.len(), 4);
-    assert!(output_batches.iter().all(|batch| {
-        batch["batch_id"] != source_batch_id
-            && batch["qr_payload"] != source_qr
-            && batch["parent_batch_id"] == source_batch_id
-            && batch["produced_qty"] == 90.0
-            && batch["finished_goods_kg"] == 11.0
-            && batch["finished_goods_meter"] == 90.0
-    }));
     assert!(
-        output_batches
-            .iter()
-            .all(|batch| { batch["status_detail"]["flow_status"] == "free_wip" })
+        merged_body["progress_event"]["payload_json"]["material_balance"]["processed_input_net_kg"]
+            .is_null()
     );
     assert_eq!(
-        output_batches[0]["rezka_bosma_waste"],
-        serde_json::Value::Null
+        merged_body["progress_event"]["payload_json"]["material_balance"]["splice_waste_kg"],
+        0.2
     );
-    assert_eq!(output_batches[0]["diameter"], 45.5);
+    assert_eq!(
+        merged_body["progress_event"]["payload_json"]["material_balance"]["output_measurement_deferred"],
+        true
+    );
+    assert!(
+        merged_body["session"]["payload_json"]["input_lineage"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|link| {
+                link["input_batch_id"] == source_batch_id && link["status"] == "processed"
+            })
+    );
+    assert!(
+        merged_body["session"]["payload_json"]["input_lineage"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|link| {
+                link["input_batch_id"] == second_source_batch_id && link["status"] == "in_use"
+            })
+    );
+    assert!(
+        merged_body["session"]["payload_json"]["rezka_active_partial_rolls"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|roll| {
+                roll["source_input_batch_ids"]
+                    .as_array()
+                    .is_some_and(|sources| {
+                        sources
+                            .iter()
+                            .any(|source| source.as_str() == Some(source_batch_id.as_str()))
+                            && sources.iter().any(|source| {
+                                source.as_str() == Some(second_source_batch_id.as_str())
+                            })
+                    })
+            })
+    );
+    let merged_snapshot = router
+        .clone()
+        .oneshot(request(
+            "GET",
+            "/v1/mobile/admin/production-maps/sequence",
+            &admin_token,
+        ))
+        .await
+        .expect("merged Rezka queue control");
+    let merged_snapshot_body = json_body(merged_snapshot).await;
+    let merged_control = &merged_snapshot_body["queue_action_controls"]["apparatus:default:asset-010"]
+        ["zakaz-rezka-wip-fanout"];
+    assert_eq!(
+        merged_control["rezka_input_lineage"],
+        merged_body["session"]["payload_json"]["input_lineage"]
+    );
+    assert_eq!(
+        merged_control["rezka_active_partial_rolls"],
+        merged_body["session"]["payload_json"]["rezka_active_partial_rolls"]
+    );
+    assert_eq!(
+        print_requests.lock().await.len(),
+        print_request_count_before_rezka
+    );
 
-    let second_rezka_started = router
+    let duplicate_merge = router
         .clone()
         .oneshot(request_with_body(
             "POST",
@@ -1108,14 +1178,32 @@ async fn rezka_consumes_laminatsiya_wip_and_creates_distinct_frame_wips() {
                 r#"{{
                     "apparatus":"apparatus:default:asset-010",
                     "order_id":"zakaz-rezka-wip-fanout",
-                    "action":"start",
+                    "action":"merge",
                     "qr_payload":"{second_source_qr}"
                 }}"#
             ),
         ))
         .await
-        .expect("start second rezka WIP");
-    assert_eq!(second_rezka_started.status(), StatusCode::OK);
+        .expect("reject duplicate merge");
+    assert_eq!(duplicate_merge.status(), StatusCode::CONFLICT);
+    assert_eq!(
+        json_body(duplicate_merge).await["error"],
+        "merge_input_same"
+    );
+
+    let (already_used_status, already_used_body) = queue_action_json(
+        &router,
+        &worker_token,
+        serde_json::json!({
+            "apparatus": "apparatus:default:asset-010",
+            "order_id": "zakaz-rezka-wip-fanout",
+            "action": "merge",
+            "qr_payload": source_qr
+        }),
+    )
+    .await;
+    assert_eq!(already_used_status, StatusCode::CONFLICT);
+    assert_eq!(already_used_body["error"], "merge_input_already_used");
 
     let final_completed = router
         .clone()
@@ -1128,8 +1216,8 @@ async fn rezka_consumes_laminatsiya_wip_and_creates_distinct_frame_wips() {
                     "apparatus":"apparatus:default:asset-010",
                     "order_id":"zakaz-rezka-wip-fanout",
                     "action":"complete",
-                    "produced_qty":80,
-                    "gross_qty":10,
+                    "produced_qty":170,
+                    "gross_qty":21,
                     "diameter":45.5,
                     "uom":"m",
                     "qr_payload":"{second_source_qr}",
@@ -1159,16 +1247,32 @@ async fn rezka_consumes_laminatsiya_wip_and_creates_distinct_frame_wips() {
         .expect("final frame batches");
     assert_eq!(final_output_batches.len(), 4);
     assert_eq!(final_completed_body["prints"].as_array().unwrap().len(), 4);
-    assert_eq!(
-        final_output_batches[0]["parent_batch_id"],
-        second_source_batch_id
-    );
+    assert!(final_output_batches.iter().all(|batch| {
+        batch["parent_batch_id"] == second_source_batch_id
+            && batch["produced_qty"] == 170.0
+            && batch["payload_json"]["source_input_links"]
+                .as_array()
+                .is_some_and(|links| {
+                    links.len() == 2
+                        && links
+                            .iter()
+                            .any(|link| link["input_batch_id"] == source_batch_id)
+                        && links
+                            .iter()
+                            .any(|link| link["input_batch_id"] == second_source_batch_id)
+                })
+    }));
     assert_eq!(final_output_batches[0]["rezka_bosma_waste"], 1.25);
     assert_eq!(final_output_batches[0]["diameter"], 45.5);
     assert!(
         final_output_batches[1..]
             .iter()
             .all(|batch| batch["rezka_bosma_waste"].is_null())
+    );
+    assert!(
+        final_completed_body["session"]["payload_json"]["rezka_active_partial_rolls"]
+            .as_array()
+            .is_some_and(Vec::is_empty)
     );
 
     let source_status = router
@@ -1198,11 +1302,11 @@ async fn rezka_consumes_laminatsiya_wip_and_creates_distinct_frame_wips() {
                 batch["batch_id"] == second_source_batch_id && batch["wip_status"] == "processed"
             })
     );
-    wait_for_progress_print_request_count(&print_requests, print_request_count_before_rezka + 8)
+    wait_for_progress_print_request_count(&print_requests, print_request_count_before_rezka + 4)
         .await;
     assert_eq!(
         print_requests.lock().await.len(),
-        print_request_count_before_rezka + 8
+        print_request_count_before_rezka + 4
     );
 }
 

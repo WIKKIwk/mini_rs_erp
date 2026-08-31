@@ -58,7 +58,12 @@ pub(crate) fn derive_production_order_lifecycle_with_completed_stage_nodes(
     let all_occurrences_completed = !physical_stages.is_empty()
         && physical_stages.iter().all(|stage| {
             let apparatus = stage.apparatus_id.as_deref().unwrap_or_default();
-            if occurrence_counts.get(apparatus).copied().unwrap_or_default() > 1 {
+            if occurrence_counts
+                .get(apparatus)
+                .copied()
+                .unwrap_or_default()
+                > 1
+            {
                 completed_stage_node_ids.contains(stage.node_id.trim())
             } else {
                 order_completed_on_apparatus(queue_states, &map.id, apparatus)

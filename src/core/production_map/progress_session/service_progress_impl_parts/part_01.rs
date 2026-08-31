@@ -349,6 +349,9 @@ impl ProductionMapService {
             queue_state::ApparatusQueueAction::Resume => {
                 self.build_resumed_progress(context, progress).await
             }
+            queue_state::ApparatusQueueAction::Merge => {
+                self.build_merged_progress(context, progress).await
+            }
         }
     }
 
@@ -363,8 +366,8 @@ impl ProductionMapService {
             order_map,
             action,
             actor,
+            canonical,
             now,
-            ..
         } = context;
         let opening_wip_batch = self
             .opening_wip_start_batch(order_id, order_map, apparatus, &progress)
@@ -402,6 +405,26 @@ impl ProductionMapService {
             &input_progress.stage_node_id,
         )
         .ok_or(ProductionMapError::ProgressBatchNotAccepted)?;
+        let mut session_payload = start_session_payload(
+            actor,
+            &input_progress,
+            input_progress_batch.as_ref(),
+            &stage.node_id,
+            now,
+        );
+        if apparatus::is_rezka_apparatus(canonical) {
+            let output_kadr_counts = rezka_output_kadr_counts(
+                order_map,
+                apparatus,
+                &stage.node_id,
+                input_progress.contained_kadr_count,
+            )?;
+            initialize_rezka_active_partial_rolls(
+                &mut session_payload,
+                &output_kadr_counts,
+                now,
+            )?;
+        }
         let session = OrderRunSession {
             session_id: progress_session_id(apparatus, order_id, actor, now),
             apparatus: apparatus.to_string(),
@@ -412,12 +435,7 @@ impl ProductionMapService {
             worker_display_name: actor.display_name.trim().to_string(),
             started_at_unix: now,
             updated_at_unix: now,
-            payload_json: start_session_payload(
-                actor,
-                &input_progress,
-                input_progress_batch.as_ref(),
-                &stage.node_id,
-            ),
+            payload_json: session_payload,
         };
         let context = ProgressRecordContext {
             session: &session,

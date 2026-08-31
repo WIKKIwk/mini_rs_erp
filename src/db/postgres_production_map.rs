@@ -10,9 +10,8 @@ use crate::core::production_map::{
     CompletionRequestDecisionNotification, CompletionRequestNotification,
     CompletionRequestStateResolution, FinishedGoodsStockEntry, LaminatsiyaAstatkaReport,
     OpeningWipBatchRecord, OpeningWipCreateWrite, OpeningWipDeleteWrite, OpeningWipQuery,
-    OpeningWipRecord, OrderControlRecord,
-    OrderProgressBatch, OrderProgressEvent, OrderRunSession, PaddonCreateInput, PaddonSnapshot,
-    PaddonSummary, ProductionMapApparatusTransferRecord,
+    OpeningWipRecord, OrderControlRecord, OrderProgressBatch, OrderProgressEvent, OrderRunSession,
+    PaddonCreateInput, PaddonSnapshot, PaddonSummary, ProductionMapApparatusTransferRecord,
     ProductionMapApparatusTransferWrite, ProductionMapDefinition, ProductionMapError,
     ProductionMapStorePort, ProductionOrderLifecycleRecord, ProductionOrderLifecycleStatus,
     ProductionOrderLogEntry, ProgressBatchCorrectionInput, ProgressBatchCorrectionRecord,
@@ -29,9 +28,9 @@ mod completion_helpers;
 mod lifecycle;
 mod map_helpers;
 mod material_helpers;
+mod opening_wip_helpers;
 mod order_control_helpers;
 mod order_query_helpers;
-mod opening_wip_helpers;
 mod paddon_helpers;
 mod progress_helpers;
 mod qolip_session_helpers;
@@ -68,6 +67,10 @@ use self::map_helpers::{
 use self::material_helpers::{
     delete_raw_material_assignment, load_raw_material_assignments, save_raw_material_assignment,
 };
+use self::opening_wip_helpers::{
+    create_opening_wip, delete_opening_wip_batch, load_opening_wip_batch,
+    load_opening_wip_by_idempotency_key, load_opening_wip_records, update_opening_wip_batch_tx,
+};
 use self::order_control_helpers::{
     load_order_control_states, load_order_freeze_requests_for_audit, save_order_control_state,
     save_order_control_state_tx,
@@ -82,11 +85,6 @@ use self::order_query_helpers::{
     load_progress_batches_for_orders, load_progress_batches_for_worker,
     load_queue_action_logs_for_orders, load_queue_action_logs_for_worker,
 };
-use self::opening_wip_helpers::{
-    create_opening_wip, delete_opening_wip_batch, load_opening_wip_batch,
-    load_opening_wip_by_idempotency_key, load_opening_wip_records,
-    update_opening_wip_batch_tx,
-};
 use self::paddon_helpers::{
     add_paddon_item, add_paddon_items, create_paddon, load_paddon_scan_snapshot,
     load_paddon_snapshot, load_paddon_summary, load_paddons, remove_paddon_item,
@@ -100,7 +98,8 @@ use self::progress_helpers::{
 use self::qolip_session_helpers::reject_qolip_in_use_tx;
 use self::queue_helpers::{
     insert_queue_action_event_tx, put_queue_action_state_tx, put_queue_states_tx,
-    queue_action_event_replay_tx, validate_queue_action_event_transition_tx,
+    queue_action_event_replay_tx, validate_merge_session_transition_tx,
+    validate_queue_action_event_transition_tx,
 };
 use self::raw_material_stock_helpers::apply_raw_material_stock_transitions_tx;
 use self::transaction_locks::{lock_order_and_apparatuses_tx, lock_orders_and_apparatuses_tx};

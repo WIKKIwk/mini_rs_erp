@@ -161,9 +161,9 @@ async fn queue_start_commit_failure_does_not_reserve_raw_material_stock() {
                 &["Kraska"],
                 true,
             ),
-    ))
-    .await
-    .expect("rule save");
+        ))
+        .await
+        .expect("rule save");
     assert_eq!(rule.status(), StatusCode::OK);
 
     let assigned = router
@@ -261,8 +261,8 @@ async fn raw_material_assignment_checks_rulon_size_for_pechat_orders() {
                 true,
             ),
         ))
-    .await
-    .expect("rule save");
+        .await
+        .expect("rule save");
     assert_eq!(rule.status(), StatusCode::OK);
 
     let diagnostics = router

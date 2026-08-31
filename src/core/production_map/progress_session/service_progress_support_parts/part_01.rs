@@ -4,6 +4,7 @@ pub(super) fn start_session_payload(
     input_progress: &SessionProgressLinks,
     input_progress_batch: Option<&OrderProgressBatch>,
     stage_node_id: &str,
+    now: i64,
 ) -> serde_json::Value {
     let mut payload = serde_json::json!({
         "started_by": actor,
@@ -18,6 +19,24 @@ pub(super) fn start_session_payload(
     }
     if let Some(lineage) = input_progress_batch.and_then(qolip_lineage_from_batch) {
         lineage.write_to_payload(&mut payload);
+    }
+    if !input_progress.batch_id.trim().is_empty()
+        && let Some(source_kind) = OrderRunInputSourceKind::parse(&input_progress.source_kind)
+    {
+        write_order_run_input_links(
+            &mut payload,
+            &[OrderRunInputLink {
+                input_batch_id: input_progress.batch_id.trim().to_string(),
+                input_qr_payload: input_progress.qr_payload.trim().to_string(),
+                source_apparatus: input_progress.apparatus.trim().to_string(),
+                source_kind,
+                stage_node_id: stage_node_id.trim().to_string(),
+                sequence_no: 1,
+                status: OrderRunInputStatus::InUse,
+                linked_at_unix: now,
+                processed_at_unix: None,
+            }],
+        );
     }
     payload
 }
@@ -485,6 +504,12 @@ pub(super) fn progress_batch_record(
     if let Some(contained_kadr_count) = input.output_identity.contained_kadr_count {
         batch.payload_json["contained_kadr_count"] = serde_json::json!(contained_kadr_count);
     }
+    let source_input_links = progress_batch_source_input_links(
+        context.session,
+        input.input_progress,
+        input.output_identity,
+    )?;
+    write_progress_batch_input_links(&mut batch.payload_json, &source_input_links);
     sync_wip_payload_fields(&mut batch);
     Ok(batch)
 }

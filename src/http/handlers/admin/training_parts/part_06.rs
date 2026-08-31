@@ -186,6 +186,8 @@ fn training_queue_action_controls(
                     stage_node_id,
                     previous_stage_ready,
                     rezka_output_kadr_counts,
+                    rezka_input_lineage: Vec::new(),
+                    rezka_active_partial_rolls: Vec::new(),
                     complete_requires_full_report: saved_map.is_some_and(|saved| {
                             training_complete_requires_full_report(
                                 &saved.map,

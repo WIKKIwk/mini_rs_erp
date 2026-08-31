@@ -116,10 +116,7 @@ pub async fn production_map_opening_wip(
             };
             let deleted = state
                 .production_maps
-                .delete_opening_wip_batch(
-                    &batch_id,
-                    queue_action_actor(&principal),
-                )
+                .delete_opening_wip_batch(&batch_id, queue_action_actor(&principal))
                 .await
                 .map_err(production_map_error)?;
             Ok(json_response(serde_json::json!({
@@ -181,7 +178,12 @@ pub async fn production_map_opening_wip_print(
         item_code: details.batch.label_item_code.clone(),
         item_name: details.batch.label_item_name.clone(),
         apparatus: source_apparatus_id.to_string(),
-        apparatus_display_name: source_apparatus.runtime.display.display_name.trim().to_string(),
+        apparatus_display_name: source_apparatus
+            .runtime
+            .display
+            .display_name
+            .trim()
+            .to_string(),
         customer_name: customer_name.trim().to_string(),
         executor_name: details.intake.actor.display_name.clone(),
         printer: input.printer.trim().to_string(),

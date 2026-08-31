@@ -292,12 +292,11 @@ async fn production_map_save_with_order_snapshots_rezka_frame_count_on_new_order
         .filter(|node| node["apparatus_id"] == "apparatus:default:asset-010")
         .collect::<Vec<_>>();
     assert_eq!(rezka_nodes.len(), 2);
-    assert!(
-        rezka_nodes
-            .iter()
-            .all(|node| node["rezka_kadr_count"] == 7)
+    assert!(rezka_nodes.iter().all(|node| node["rezka_kadr_count"] == 7));
+    assert_eq!(
+        rezka_nodes[0]["rezka_frame_groups"],
+        serde_json::json!([1, 6])
     );
-    assert_eq!(rezka_nodes[0]["rezka_frame_groups"], serde_json::json!([1, 6]));
 
     let second_template = serde_json::json!({
         "name": "rezka snapshot mahsulot",

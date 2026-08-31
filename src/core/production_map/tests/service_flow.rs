@@ -2,18 +2,18 @@ use std::collections::BTreeMap;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
-use async_trait::async_trait;
 use crate::core::apparatus_standard::test_support::{TestApparatusSpec, canonical_draft};
 use crate::core::apparatus_standard::{
     ApparatusId, ApparatusOperationalPolicies, CanonicalApparatusPatch, CanonicalApparatusService,
     CanonicalCommandMetadata, ExecutionOperation, MaterialExecutionPolicy, MaterialRequirementSet,
     ProcessTechnology, QueueDiscipline,
 };
-use crate::core::production_map::*;
 use crate::core::production_map::store_port::{
     ApparatusQueueStateMap, ApparatusSequenceMap, OrderControlMap, QueueStateMap,
 };
+use crate::core::production_map::*;
 use crate::core::qolip::{QolipOrderStartPreparation, QolipProductSpec};
+use async_trait::async_trait;
 
 use super::fixtures::{apparatus_stage_map, canonical_apparatus_stage_map, sample_map};
 
@@ -251,9 +251,7 @@ async fn live_snapshot_reads_active_sessions_in_one_batch() {
         Some(3)
     );
     assert_eq!(
-        probe
-            .singular_active_session_reads
-            .load(Ordering::Relaxed),
+        probe.singular_active_session_reads.load(Ordering::Relaxed),
         0,
         "snapshot must not perform one active-session store read per order"
     );

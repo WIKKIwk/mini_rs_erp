@@ -5,8 +5,7 @@ use crate::core::rps_batch::{RpsBatchStartRequest, RpsBatchUpdateRequest};
 use crate::core::werka::models::SupplierItem;
 
 pub(super) const ROLL_MATERIAL_ITEM_GROUP: &str = "Rulon";
-const ROLL_MATERIAL_ITEM_GROUP_ALIASES: &[&str] =
-    &[ROLL_MATERIAL_ITEM_GROUP, "Rulon materiallari"];
+const ROLL_MATERIAL_ITEM_GROUP_ALIASES: &[&str] = &[ROLL_MATERIAL_ITEM_GROUP, "Rulon materiallari"];
 
 pub(super) fn roll_material_item_group_roots() -> Vec<String> {
     ROLL_MATERIAL_ITEM_GROUP_ALIASES

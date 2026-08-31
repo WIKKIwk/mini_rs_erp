@@ -4,7 +4,8 @@ use sqlx::{Postgres, Transaction};
 
 use crate::core::apparatus_standard::ApparatusId;
 use crate::core::production_map::{
-    ApparatusQueueActionEvent, ProductionMapError, queue_state::ApparatusQueueAction,
+    ApparatusQueueActionEvent, OrderRunInputSourceKind, OrderRunInputStatus, OrderRunSession,
+    ProductionMapError, order_run_input_links_from_payload, queue_state::ApparatusQueueAction,
 };
 
 use super::transaction_locks::lock_apparatus_tx;
@@ -115,6 +116,137 @@ pub(super) async fn validate_queue_action_event_transition_tx(
         return Err(ProductionMapError::QueueActionNotAllowed);
     }
     Ok(())
+}
+
+pub(super) async fn validate_merge_session_transition_tx(
+    tx: &mut Transaction<'_, Postgres>,
+    event: &ApparatusQueueActionEvent,
+    proposed_session: Option<&OrderRunSession>,
+) -> Result<(), ProductionMapError> {
+    if event.action != ApparatusQueueAction::Merge {
+        return Ok(());
+    }
+    let proposed_session = proposed_session.ok_or(ProductionMapError::MergeInputNotAccepted)?;
+    let apparatus_id = ApparatusId::new(event.apparatus.trim().to_string())
+        .map_err(|_| ProductionMapError::MergeInputNotAccepted)?;
+    let current = sqlx::query_as::<_, (String, serde_json::Value)>(
+        "SELECT status, payload_json
+         FROM mini_order_run_sessions
+         WHERE session_id = $1
+           AND order_id = $2
+           AND canonical_apparatus_id = $3
+         FOR UPDATE",
+    )
+    .bind(proposed_session.session_id.trim())
+    .bind(event.order_id.trim())
+    .bind(apparatus_id.as_str())
+    .fetch_optional(&mut **tx)
+    .await
+    .map_err(|_| ProductionMapError::StoreFailed)?;
+    let Some((status, current_payload)) = current else {
+        return Err(ProductionMapError::MergeInputNotAccepted);
+    };
+    if status.trim() != "active"
+        || !merge_session_transition_matches(&current_payload, proposed_session)
+    {
+        return Err(ProductionMapError::MergeInputNotAccepted);
+    }
+    let proposed_links = order_run_input_links_from_payload(&proposed_session.payload_json)
+        .map_err(|_| ProductionMapError::MergeInputNotAccepted)?;
+    let next_input = proposed_links
+        .iter()
+        .find(|link| link.status == OrderRunInputStatus::InUse)
+        .ok_or(ProductionMapError::MergeInputNotAccepted)?;
+    let candidate = match next_input.source_kind {
+        OrderRunInputSourceKind::ProgressBatch => {
+            sqlx::query_as::<_, (String, String)>(
+                "SELECT order_id, wip_status
+                 FROM mini_progress_batches
+                 WHERE batch_id = $1
+                 FOR UPDATE",
+            )
+            .bind(next_input.input_batch_id.trim())
+            .fetch_optional(&mut **tx)
+            .await
+        }
+        OrderRunInputSourceKind::OpeningWip => {
+            sqlx::query_as::<_, (String, String)>(
+                "SELECT order_id, wip_status
+                 FROM mini_opening_wip_batches
+                 WHERE batch_id = $1
+                 FOR UPDATE",
+            )
+            .bind(next_input.input_batch_id.trim())
+            .fetch_optional(&mut **tx)
+            .await
+        }
+    }
+    .map_err(|_| ProductionMapError::StoreFailed)?;
+    let Some((candidate_order_id, candidate_status)) = candidate else {
+        return Err(ProductionMapError::MergeInputNotAccepted);
+    };
+    if candidate_order_id.trim() != event.order_id.trim() {
+        return Err(ProductionMapError::MergeInputNotAccepted);
+    }
+    if candidate_status.trim() != "waiting" {
+        return Err(ProductionMapError::MergeInputAlreadyUsed);
+    }
+    Ok(())
+}
+
+fn merge_session_transition_matches(
+    current_payload: &serde_json::Value,
+    proposed_session: &OrderRunSession,
+) -> bool {
+    let Ok(current_links) = order_run_input_links_from_payload(current_payload) else {
+        return false;
+    };
+    let current_active = current_links
+        .iter()
+        .find(|link| link.status == OrderRunInputStatus::InUse)
+        .map(|link| link.input_batch_id.trim())
+        .filter(|value| !value.is_empty())
+        .or_else(|| {
+            current_links.is_empty().then(|| {
+                current_payload
+                    .get("input_progress_batch_id")
+                    .and_then(serde_json::Value::as_str)
+                    .unwrap_or_default()
+                    .trim()
+            })
+        })
+        .unwrap_or_default();
+    let Ok(proposed_links) =
+        order_run_input_links_from_payload(&proposed_session.payload_json)
+    else {
+        return false;
+    };
+    let proposed_active = proposed_links
+        .iter()
+        .find(|link| link.status == OrderRunInputStatus::InUse)
+        .map(|link| link.input_batch_id.trim())
+        .unwrap_or_default();
+    let merge_from = proposed_session
+        .payload_json
+        .get("merge_from_input_batch_id")
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or_default()
+        .trim();
+    let merge_to = proposed_session
+        .payload_json
+        .get("merge_to_input_batch_id")
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or_default()
+        .trim();
+
+    !current_active.is_empty()
+        && current_active == merge_from
+        && !merge_to.is_empty()
+        && merge_to == proposed_active
+        && proposed_links.iter().any(|link| {
+            link.input_batch_id.trim() == merge_from
+                && link.status == OrderRunInputStatus::Processed
+        })
 }
 
 pub(super) async fn put_queue_states_tx(
@@ -310,6 +442,7 @@ pub(super) fn queue_action_from_str(
             Some(crate::core::production_map::queue_state::ApparatusQueueAction::DetachRoll)
         }
         "resume" => Some(crate::core::production_map::queue_state::ApparatusQueueAction::Resume),
+        "merge" => Some(crate::core::production_map::queue_state::ApparatusQueueAction::Merge),
         "roll_complete" => {
             Some(crate::core::production_map::queue_state::ApparatusQueueAction::RollComplete)
         }
@@ -329,6 +462,7 @@ pub(super) fn queue_action_as_str(
         crate::core::production_map::queue_state::ApparatusQueueAction::Freeze => "freeze",
         crate::core::production_map::queue_state::ApparatusQueueAction::DetachRoll => "detach_roll",
         crate::core::production_map::queue_state::ApparatusQueueAction::Resume => "resume",
+        crate::core::production_map::queue_state::ApparatusQueueAction::Merge => "merge",
         crate::core::production_map::queue_state::ApparatusQueueAction::RollComplete => {
             "roll_complete"
         }
@@ -338,10 +472,13 @@ pub(super) fn queue_action_as_str(
 
 #[cfg(test)]
 mod tests {
-    use super::{StoredQueueEventIdentity, queue_event_identity_matches};
+    use super::{
+        StoredQueueEventIdentity, merge_session_transition_matches, queue_event_identity_matches,
+    };
     use crate::core::apparatus_standard::ApparatusId;
     use crate::core::production_map::{
-        ApparatusQueueActionEvent, ApparatusQueuePolicy, QueueActionActor,
+        ApparatusQueueActionEvent, ApparatusQueuePolicy, OrderRunSession, OrderRunStatus,
+        QueueActionActor,
     };
     use crate::core::production_map::queue_state::{
         ApparatusQueueAction, ApparatusQueueOrderState,
@@ -393,5 +530,57 @@ mod tests {
         let changed =
             queue_event_identity_matches(&changed, &apparatus_id, &event, &assigned).unwrap();
         assert!(!changed);
+    }
+
+    #[test]
+    fn merge_write_rejects_a_stale_current_input() {
+        let proposed = OrderRunSession {
+            session_id: "session-1".to_string(),
+            apparatus: "apparatus:test:rezka".to_string(),
+            order_id: "zakaz-1".to_string(),
+            status: OrderRunStatus::Active,
+            worker_role: "aparatchi".to_string(),
+            worker_ref: "worker-1".to_string(),
+            worker_display_name: "Worker".to_string(),
+            started_at_unix: 1,
+            updated_at_unix: 2,
+            payload_json: serde_json::json!({
+                "merge_from_input_batch_id": "wip-a",
+                "merge_to_input_batch_id": "wip-b",
+                "input_progress_batch_id": "wip-b",
+                "input_lineage": [
+                    {
+                        "input_batch_id": "wip-a",
+                        "input_qr_payload": "qr-a",
+                        "source_apparatus": "apparatus:test:lamination",
+                        "source_kind": "progress_batch",
+                        "stage_node_id": "rezka",
+                        "sequence_no": 1,
+                        "status": "processed",
+                        "linked_at_unix": 1,
+                        "processed_at_unix": 2
+                    },
+                    {
+                        "input_batch_id": "wip-b",
+                        "input_qr_payload": "qr-b",
+                        "source_apparatus": "apparatus:test:lamination",
+                        "source_kind": "progress_batch",
+                        "stage_node_id": "rezka",
+                        "sequence_no": 2,
+                        "status": "in_use",
+                        "linked_at_unix": 2
+                    }
+                ]
+            }),
+        };
+
+        assert!(merge_session_transition_matches(
+            &serde_json::json!({"input_progress_batch_id": "wip-a"}),
+            &proposed,
+        ));
+        assert!(!merge_session_transition_matches(
+            &serde_json::json!({"input_progress_batch_id": "wip-b"}),
+            &proposed,
+        ));
     }
 }

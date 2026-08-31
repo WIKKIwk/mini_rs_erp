@@ -296,10 +296,10 @@ fn normalize_opening_wip_input(
             })
             .collect(),
     };
-    let has_source_contract = !normalized.source_apparatus.is_empty()
-        && !normalized.source_stage_node_id.is_empty();
-    let has_partial_source_contract = normalized.source_apparatus.is_empty()
-        != normalized.source_stage_node_id.is_empty();
+    let has_source_contract =
+        !normalized.source_apparatus.is_empty() && !normalized.source_stage_node_id.is_empty();
+    let has_partial_source_contract =
+        normalized.source_apparatus.is_empty() != normalized.source_stage_node_id.is_empty();
     if normalized.idempotency_key.is_empty()
         || normalized.order_id.is_empty()
         || has_partial_source_contract

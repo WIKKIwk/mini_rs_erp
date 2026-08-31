@@ -101,18 +101,17 @@ pub(super) async fn refresh_production_order_lifecycle_tx(
         current_version,
         current_operational_status,
         current_completed_with_issue_count,
-    )) =
-        sqlx::query_as::<_, (serde_json::Value, String, i64, String, i64)>(
-            "SELECT map_json, lifecycle_status, lifecycle_version,
+    )) = sqlx::query_as::<_, (serde_json::Value, String, i64, String, i64)>(
+        "SELECT map_json, lifecycle_status, lifecycle_version,
                     operational_status, completed_with_issue_count
              FROM mini_production_maps
              WHERE id = $1
              FOR UPDATE",
-        )
-        .bind(order_id)
-        .fetch_optional(&mut **tx)
-        .await
-        .map_err(|_| ProductionMapError::StoreFailed)?
+    )
+    .bind(order_id)
+    .fetch_optional(&mut **tx)
+    .await
+    .map_err(|_| ProductionMapError::StoreFailed)?
     else {
         return Err(ProductionMapError::MapNotFound);
     };
@@ -158,7 +157,7 @@ pub(super) async fn refresh_production_order_lifecycle_tx(
         &queue_states,
         &completed_stage_node_ids,
     )
-        .ok_or(ProductionMapError::StoreFailed)?;
+    .ok_or(ProductionMapError::StoreFailed)?;
     let lifecycle_changed = derived_status != current_status
         && current_status.can_automatically_transition_to(derived_status);
     let next_status = if lifecycle_changed {
@@ -172,12 +171,12 @@ pub(super) async fn refresh_production_order_lifecycle_tx(
          WHERE order_id = $1
            AND COALESCE(payload_json->>'completed_with_issue', 'false') = 'true'",
     )
-        .bind(order_id)
-        .fetch_one(&mut **tx)
-        .await
-        .map_err(|_| ProductionMapError::StoreFailed)?;
-    let completed_with_issue_count_usize = usize::try_from(completed_with_issue_count)
-        .map_err(|_| ProductionMapError::StoreFailed)?;
+    .bind(order_id)
+    .fetch_one(&mut **tx)
+    .await
+    .map_err(|_| ProductionMapError::StoreFailed)?;
+    let completed_with_issue_count_usize =
+        usize::try_from(completed_with_issue_count).map_err(|_| ProductionMapError::StoreFailed)?;
     let next_operational_status = derive_production_order_operational_status(
         next_status,
         &queue_states,
@@ -197,9 +196,7 @@ pub(super) async fn refresh_production_order_lifecycle_tx(
             "with_issue"
         }
         ProductionOrderLifecycleStatus::ProductionCompleted
-        | ProductionOrderLifecycleStatus::Closed => {
-            "normal"
-        }
+        | ProductionOrderLifecycleStatus::Closed => "normal",
         _ => "",
     };
     let next_version = current_version + i64::from(lifecycle_changed);

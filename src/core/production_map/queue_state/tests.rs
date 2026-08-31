@@ -116,6 +116,18 @@ fn progress_actions_pause_resume_and_complete_active_order() {
 }
 
 #[test]
+fn merge_keeps_only_an_in_progress_order_in_progress() {
+    let sequence = vec!["a".to_string()];
+    let mut states = BTreeMap::new();
+
+    apply_queue_action(&sequence, &mut states, "a", ApparatusQueueAction::Merge)
+        .expect_err("pending order cannot merge");
+    apply_queue_action(&sequence, &mut states, "a", ApparatusQueueAction::Start).expect("start");
+    apply_queue_action(&sequence, &mut states, "a", ApparatusQueueAction::Merge).expect("merge");
+    assert_eq!(states.get("a"), Some(&ApparatusQueueOrderState::InProgress));
+}
+
+#[test]
 fn frozen_order_cannot_resume_until_admin_unfreezes_it() {
     let sequence = vec!["frozen".to_string(), "next".to_string()];
     let mut states = BTreeMap::from([

@@ -70,12 +70,7 @@ impl PostgresQolipItemCodeDoctor {
     }
 
     pub fn start_scheduler(&self) {
-        if !self.inner.enabled
-            || self
-                .inner
-                .scheduler_started
-                .swap(true, Ordering::AcqRel)
-        {
+        if !self.inner.enabled || self.inner.scheduler_started.swap(true, Ordering::AcqRel) {
             return;
         }
         let Ok(runtime) = tokio::runtime::Handle::try_current() else {
@@ -353,10 +348,8 @@ async fn repair_candidate(
     .await?
     .rows_affected();
 
-    let total_updated = product_specs_updated
-        + locations_updated
-        + open_checkouts_updated
-        + order_notes_updated;
+    let total_updated =
+        product_specs_updated + locations_updated + open_checkouts_updated + order_notes_updated;
     if total_updated == 0 {
         return Ok(());
     }

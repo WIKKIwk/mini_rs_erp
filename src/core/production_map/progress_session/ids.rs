@@ -44,6 +44,7 @@ pub(in crate::core::production_map) fn queue_action_str(
         queue_state::ApparatusQueueAction::Freeze => "freeze",
         queue_state::ApparatusQueueAction::DetachRoll => "detach_roll",
         queue_state::ApparatusQueueAction::Resume => "resume",
+        queue_state::ApparatusQueueAction::Merge => "merge",
         queue_state::ApparatusQueueAction::RollComplete => "roll_complete",
         queue_state::ApparatusQueueAction::Complete => "complete",
     }

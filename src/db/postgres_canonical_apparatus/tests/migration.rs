@@ -164,13 +164,12 @@ async fn migration_0074_backfills_calculate_materials_into_rulon_catalog() {
     .unwrap();
     assert!(rulon_parent.eq_ignore_ascii_case("homashyo"));
     for material_name in ["PET", "CPP", "BOPP", "CUSTOM FILM"] {
-        let groups: Vec<String> = sqlx::query_scalar(
-            "SELECT item_group FROM mini_items WHERE lower(name) = lower($1)",
-        )
-        .bind(material_name)
-        .fetch_all(&database.pool)
-        .await
-        .unwrap();
+        let groups: Vec<String> =
+            sqlx::query_scalar("SELECT item_group FROM mini_items WHERE lower(name) = lower($1)")
+                .bind(material_name)
+                .fetch_all(&database.pool)
+                .await
+                .unwrap();
         assert_eq!(groups.len(), 1, "material: {material_name}");
         assert!(groups[0].eq_ignore_ascii_case("rulon"));
     }

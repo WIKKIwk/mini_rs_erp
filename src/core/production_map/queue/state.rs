@@ -47,6 +47,7 @@ pub enum ApparatusQueueAction {
     Freeze,
     DetachRoll,
     Resume,
+    Merge,
     RollComplete,
     Complete,
 }
@@ -96,6 +97,13 @@ pub fn next_queue_state(
         }
         ApparatusQueueAction::Resume => {
             if current == ApparatusQueueOrderState::Paused {
+                Ok(ApparatusQueueOrderState::InProgress)
+            } else {
+                Err(ProductionMapError::QueueActionNotAllowed)
+            }
+        }
+        ApparatusQueueAction::Merge => {
+            if current == ApparatusQueueOrderState::InProgress {
                 Ok(ApparatusQueueOrderState::InProgress)
             } else {
                 Err(ProductionMapError::QueueActionNotAllowed)

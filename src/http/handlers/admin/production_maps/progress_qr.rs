@@ -310,12 +310,7 @@ pub async fn production_map_progress_qr_reprint(
         Ok(None) => batch.label_item_name.clone(),
         Err(error) => return Err(production_map_error(error)),
     };
-    let request = progress_reprint_request(
-        &input,
-        &batch,
-        &item_name,
-        &apparatus_display_name,
-    );
+    let request = progress_reprint_request(&input, &batch, &item_name, &apparatus_display_name);
     let print_result = if input.print_transport.trim().eq_ignore_ascii_case("offline") {
         state.gscale.prepare_progress_label(request)
     } else {
