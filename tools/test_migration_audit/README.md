@@ -52,3 +52,20 @@ is never silently treated as migrated. Run the Python unit tests with:
 cd tools/test_migration_audit
 /tmp/mini-erp-audit-env/bin/python -m unittest -v
 ```
+
+## Historical contract extraction
+
+The extractor turns only `automatic_contract` cases from the pinned migration
+manifest into verifier JSON. It reads the old files directly from Git, so it
+does not restore or compile the deleted Rust tests:
+
+```bash
+make extract-test-contracts
+make check-generated-test-contracts
+```
+
+Extraction is fail-closed: every source assertion must map to a supported
+status, JSON subset, or body oracle. The command aborts on an unknown assertion,
+source-test count drift, or automatic-candidate count drift. Fixture-dependent
+tests remain listed under `skipped` in the generated artifact until a scenario
+generator can represent them safely.

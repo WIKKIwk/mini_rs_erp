@@ -961,8 +961,10 @@ cargo clippy --locked --bins
 `make verify` compiles production code once and runs the data-driven Python
 contract verifier against the real Axum router. It does not compile Rust
 `#[cfg(test)]` modules. Route inventory, method, authentication, CORS, and
-generic response-shape coverage lives in
-`tools/mini_erp_verifier/contracts.json`.
+generic response-shape coverage lives in the manual
+`tools/mini_erp_verifier/contracts.json` file and the AST-generated
+`tools/mini_erp_verifier/generated_contracts.json` file. `make verify` first
+fails if the generated file no longer matches its historical Rust source.
 
 Inventory Rust tests before migrating or extending the test layer:
 
@@ -974,6 +976,17 @@ The Python Tree-sitter audit does not invoke Cargo. It reports tests as
 automatic HTTP-contract candidates, generated-scenario candidates, or
 Rust-native invariants, with machine-readable evidence available through
 `uv run --script tools/test_migration_audit/audit.py --json`.
+
+Regenerate or only check the safely extractable historical HTTP contracts:
+
+```bash
+make extract-test-contracts
+make check-generated-test-contracts
+```
+
+The extractor reads committed Rust test blobs through Git and never compiles
+them. It refuses unknown assertions and records unsupported fixture-heavy tests
+as skipped scenarios instead of silently claiming that they were migrated.
 
 Rust tests are reserved for independent domain invariants, transaction and
 database behavior, and compiler/type guarantees. Run only the relevant suite

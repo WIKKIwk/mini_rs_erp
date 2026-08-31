@@ -89,25 +89,6 @@
   ],
   "cases": [
     {
-      "name": "auth_login_rejects_get",
-      "request": {"method": "GET", "uri": "/v1/mobile/auth/login"},
-      "expect": {"status": 405, "body": {"error": "method not allowed"}}
-    },
-    {
-      "name": "auth_login_rejects_wrong_phone",
-      "request": {
-        "method": "POST",
-        "uri": "/v1/mobile/auth/login",
-        "body": {"phone": "+998880000000", "code": "20ABCDEF1234"}
-      },
-      "expect": {"status": 401, "body": {"error": "invalid credentials"}}
-    },
-    {
-      "name": "auth_logout_rejects_get",
-      "request": {"method": "GET", "uri": "/v1/mobile/auth/logout"},
-      "expect": {"status": 405, "body": {"error": "method not allowed"}}
-    },
-    {
       "name": "me_rejects_anonymous",
       "request": {"method": "GET", "uri": "/v1/mobile/me"},
       "expect": {"status": 401}
@@ -163,11 +144,6 @@
         },
         "body": "cord-m"
       }
-    },
-    {
-      "name": "healthz_accepts_post",
-      "request": {"method": "POST", "uri": "/healthz"},
-      "expect": {"status": 200, "body": {"ok": true}}
     },
     {
       "name": "cors_headers_are_present",

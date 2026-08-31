@@ -29,6 +29,12 @@ jobs:
       - name: Check locked dependencies
         run: cargo check --locked
 
+      - name: Install contract extraction dependencies
+        run: python3 -m pip install -r tools/test_migration_audit/requirements.txt
+
+      - name: Check generated HTTP contracts
+        run: python3 tools/test_migration_audit/extract_contracts.py --check
+
       - name: Verify production HTTP contracts
         run: python3 tools/mini_erp_verifier/verify.py --json
 

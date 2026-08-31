@@ -1,0 +1,807 @@
+{
+  "cases": [
+    {
+      "expect": {
+        "body": {
+          "error": "method not allowed"
+        },
+        "status": 405
+      },
+      "name": "auth_login_rejects_non_post_with_json_like_go",
+      "request": {
+        "fixture": "isolated",
+        "method": "GET",
+        "uri": "/v1/mobile/auth/login"
+      },
+      "source": {
+        "line": 11,
+        "path": "src/http/router_tests/auth_routes.rs"
+      }
+    },
+    {
+      "expect": {
+        "body": {
+          "error": "invalid credentials"
+        },
+        "status": 401
+      },
+      "name": "auth_login_rejects_werka_code_with_wrong_phone",
+      "request": {
+        "body": {
+          "code": "20ABCDEF1234",
+          "phone": "+998880000000"
+        },
+        "fixture": "isolated",
+        "method": "POST",
+        "uri": "/v1/mobile/auth/login"
+      },
+      "source": {
+        "line": 29,
+        "path": "src/http/router_tests/auth_routes.rs"
+      }
+    },
+    {
+      "expect": {
+        "body": {
+          "error": "method not allowed"
+        },
+        "status": 405
+      },
+      "name": "auth_logout_rejects_non_post_with_json_like_go",
+      "request": {
+        "fixture": "isolated",
+        "method": "GET",
+        "uri": "/v1/mobile/auth/logout"
+      },
+      "source": {
+        "line": 50,
+        "path": "src/http/router_tests/auth_routes.rs"
+      }
+    },
+    {
+      "expect": {
+        "body": {
+          "ok": true
+        },
+        "status": 200
+      },
+      "name": "healthz_accepts_any_method_like_go",
+      "request": {
+        "fixture": "isolated",
+        "method": "POST",
+        "uri": "/healthz"
+      },
+      "source": {
+        "line": 264,
+        "path": "src/http/router_tests/core_routes.rs"
+      }
+    },
+    {
+      "expect": {
+        "body": {
+          "error": "supplier history failed"
+        },
+        "status": 500
+      },
+      "name": "supplier_history_fails_without_provider_like_go",
+      "request": {
+        "fixture": "isolated",
+        "method": "GET",
+        "role": "supplier",
+        "uri": "/v1/mobile/supplier/history"
+      },
+      "source": {
+        "line": 131,
+        "path": "src/http/supplier_read_route_tests.rs"
+      }
+    },
+    {
+      "expect": {
+        "body": {
+          "error": "supplier items failed"
+        },
+        "status": 500
+      },
+      "name": "supplier_items_fails_without_provider_like_go",
+      "request": {
+        "fixture": "isolated",
+        "method": "GET",
+        "role": "supplier",
+        "uri": "/v1/mobile/supplier/items"
+      },
+      "source": {
+        "line": 76,
+        "path": "src/http/supplier_items_route_tests.rs"
+      }
+    },
+    {
+      "expect": {
+        "body": {
+          "error": "supplier status breakdown failed"
+        },
+        "status": 500
+      },
+      "name": "supplier_status_breakdown_fails_without_receipt_provider_like_go",
+      "request": {
+        "fixture": "isolated",
+        "method": "GET",
+        "role": "supplier",
+        "uri": "/v1/mobile/supplier/status-breakdown?kind=submitted"
+      },
+      "source": {
+        "line": 193,
+        "path": "src/http/supplier_read_route_tests.rs"
+      }
+    },
+    {
+      "expect": {
+        "body": {
+          "error": "supplier status details failed"
+        },
+        "status": 500
+      },
+      "name": "supplier_status_details_fails_without_receipt_provider_like_go",
+      "request": {
+        "fixture": "isolated",
+        "method": "GET",
+        "role": "supplier",
+        "uri": "/v1/mobile/supplier/status-details?kind=submitted&item_code=ITEM-001"
+      },
+      "source": {
+        "line": 257,
+        "path": "src/http/supplier_read_route_tests.rs"
+      }
+    }
+  ],
+  "generated": true,
+  "protocol": 1,
+  "skipped": [
+    {
+      "classification": "scenario_contract",
+      "id": "src/http/router_tests/auth_routes.rs::me_accepts_post_like_go",
+      "reasons": [
+        "builds request method or URI dynamically"
+      ]
+    },
+    {
+      "classification": "scenario_contract",
+      "id": "src/http/router_tests/core_routes.rs::android_app_update_metadata_and_apk_are_served",
+      "reasons": [
+        "contains 2 HTTP executions",
+        "contains 2 static URI candidates",
+        "contains 0 static method candidates",
+        "does not have one unambiguous asserted HTTP status",
+        "builds request method or URI dynamically",
+        "depends on a test-specific state fixture"
+      ]
+    },
+    {
+      "classification": "scenario_contract",
+      "id": "src/http/router_tests/core_routes.rs::auth_me_route_is_not_registered",
+      "reasons": [
+        "contains 0 static method candidates",
+        "builds request method or URI dynamically"
+      ]
+    },
+    {
+      "classification": "scenario_contract",
+      "id": "src/http/router_tests/core_routes.rs::browser_preview_cors_headers_are_registered",
+      "reasons": [
+        "contains 2 HTTP executions",
+        "contains 2 static method candidates",
+        "does not have one unambiguous asserted HTTP status",
+        "builds request method or URI dynamically"
+      ]
+    },
+    {
+      "classification": "scenario_contract",
+      "id": "src/http/router_tests/core_routes.rs::canonical_mutation_preflight_allows_idempotency_key",
+      "reasons": [
+        "contains 2 static method candidates",
+        "builds request method or URI dynamically"
+      ]
+    },
+    {
+      "classification": "scenario_contract",
+      "id": "src/http/router_tests/core_routes.rs::go_mobile_route_inventory_is_registered",
+      "reasons": [
+        "contains 0 static URI candidates",
+        "contains 0 static method candidates",
+        "builds request method or URI dynamically"
+      ]
+    },
+    {
+      "classification": "scenario_contract",
+      "id": "src/http/router_tests/core_routes.rs::me_route_matches_go_contract",
+      "reasons": [
+        "contains 0 static method candidates",
+        "builds request method or URI dynamically"
+      ]
+    },
+    {
+      "classification": "scenario_contract",
+      "id": "src/http/router_tests/core_routes.rs::server_handshake_identifies_mini_rs_erp",
+      "reasons": [
+        "contains 0 static method candidates",
+        "builds request method or URI dynamically"
+      ]
+    },
+    {
+      "classification": "scenario_contract",
+      "id": "src/http/router_tests/werka_routes.rs::werka_home_accepts_post_like_go_handler",
+      "reasons": [
+        "uses a custom fake/mock fixture",
+        "builds request method or URI dynamically",
+        "depends on a test-specific state fixture"
+      ]
+    },
+    {
+      "classification": "scenario_contract",
+      "id": "src/http/router_tests/werka_routes.rs::werka_home_fails_without_provider_like_go",
+      "reasons": [
+        "contains 0 static method candidates",
+        "builds request method or URI dynamically"
+      ]
+    },
+    {
+      "classification": "scenario_contract",
+      "id": "src/http/router_tests/werka_routes.rs::werka_home_forbids_non_werka",
+      "reasons": [
+        "contains 0 static method candidates",
+        "builds request method or URI dynamically"
+      ]
+    },
+    {
+      "classification": "scenario_contract",
+      "id": "src/http/router_tests/werka_routes.rs::werka_home_requires_auth",
+      "reasons": [
+        "contains 0 static method candidates",
+        "builds request method or URI dynamically"
+      ]
+    },
+    {
+      "classification": "scenario_contract",
+      "id": "src/http/router_tests/werka_routes.rs::werka_home_returns_provider_payload",
+      "reasons": [
+        "contains 0 static method candidates",
+        "uses a custom fake/mock fixture",
+        "builds request method or URI dynamically",
+        "depends on a test-specific state fixture"
+      ]
+    },
+    {
+      "classification": "scenario_contract",
+      "id": "src/http/router_tests/werka_routes.rs::werka_pending_accepts_post_like_go_handler",
+      "reasons": [
+        "uses a custom fake/mock fixture",
+        "builds request method or URI dynamically",
+        "depends on a test-specific state fixture"
+      ]
+    },
+    {
+      "classification": "scenario_contract",
+      "id": "src/http/router_tests/werka_routes.rs::werka_pending_fails_without_provider_like_go",
+      "reasons": [
+        "contains 0 static method candidates",
+        "builds request method or URI dynamically"
+      ]
+    },
+    {
+      "classification": "scenario_contract",
+      "id": "src/http/router_tests/werka_routes.rs::werka_pending_requires_auth",
+      "reasons": [
+        "contains 0 static method candidates",
+        "builds request method or URI dynamically"
+      ]
+    },
+    {
+      "classification": "scenario_contract",
+      "id": "src/http/router_tests/werka_routes.rs::werka_pending_returns_provider_payload",
+      "reasons": [
+        "contains 0 static method candidates",
+        "uses a custom fake/mock fixture",
+        "builds request method or URI dynamically",
+        "depends on a test-specific state fixture"
+      ]
+    },
+    {
+      "classification": "scenario_contract",
+      "id": "src/http/router_tests/werka_routes.rs::werka_summary_accepts_post_like_go_handler",
+      "reasons": [
+        "uses a custom fake/mock fixture",
+        "builds request method or URI dynamically",
+        "depends on a test-specific state fixture"
+      ]
+    },
+    {
+      "classification": "scenario_contract",
+      "id": "src/http/router_tests/werka_routes.rs::werka_summary_fails_without_provider_like_go",
+      "reasons": [
+        "contains 0 static method candidates",
+        "builds request method or URI dynamically"
+      ]
+    },
+    {
+      "classification": "scenario_contract",
+      "id": "src/http/router_tests/werka_routes.rs::werka_summary_requires_auth",
+      "reasons": [
+        "contains 0 static method candidates",
+        "builds request method or URI dynamically"
+      ]
+    },
+    {
+      "classification": "scenario_contract",
+      "id": "src/http/router_tests/werka_routes.rs::werka_summary_returns_provider_payload",
+      "reasons": [
+        "contains 0 static method candidates",
+        "uses a custom fake/mock fixture",
+        "builds request method or URI dynamically",
+        "depends on a test-specific state fixture"
+      ]
+    },
+    {
+      "classification": "scenario_contract",
+      "id": "src/http/supplier_items_route_tests.rs::supplier_items_accepts_post_and_filters_query_like_go",
+      "reasons": [
+        "uses a custom fake/mock fixture",
+        "depends on a test-specific state fixture"
+      ]
+    },
+    {
+      "classification": "scenario_contract",
+      "id": "src/http/supplier_items_route_tests.rs::supplier_items_forbids_non_supplier_like_go",
+      "reasons": [
+        "uses a custom fake/mock fixture",
+        "depends on a test-specific state fixture"
+      ]
+    },
+    {
+      "classification": "scenario_contract",
+      "id": "src/http/supplier_read_route_tests.rs::supplier_history_accepts_post_like_go",
+      "reasons": [
+        "uses a custom fake/mock fixture",
+        "depends on a test-specific state fixture"
+      ]
+    },
+    {
+      "classification": "scenario_contract",
+      "id": "src/http/supplier_read_route_tests.rs::supplier_history_forbids_non_supplier_like_go",
+      "reasons": [
+        "uses a custom fake/mock fixture",
+        "depends on a test-specific state fixture"
+      ]
+    },
+    {
+      "classification": "scenario_contract",
+      "id": "src/http/supplier_read_route_tests.rs::supplier_status_breakdown_accepts_post_and_uses_submitted_kind_like_go",
+      "reasons": [
+        "uses a custom fake/mock fixture",
+        "depends on a test-specific state fixture"
+      ]
+    },
+    {
+      "classification": "scenario_contract",
+      "id": "src/http/supplier_read_route_tests.rs::supplier_status_breakdown_forbids_non_supplier_like_go",
+      "reasons": [
+        "uses a custom fake/mock fixture",
+        "depends on a test-specific state fixture"
+      ]
+    },
+    {
+      "classification": "scenario_contract",
+      "id": "src/http/supplier_read_route_tests.rs::supplier_status_details_accepts_post_and_filters_item_like_go",
+      "reasons": [
+        "uses a custom fake/mock fixture",
+        "depends on a test-specific state fixture"
+      ]
+    },
+    {
+      "classification": "scenario_contract",
+      "id": "src/http/supplier_read_route_tests.rs::supplier_status_details_forbids_non_supplier_like_go",
+      "reasons": [
+        "uses a custom fake/mock fixture",
+        "depends on a test-specific state fixture"
+      ]
+    },
+    {
+      "classification": "scenario_contract",
+      "id": "src/http/supplier_read_route_tests.rs::supplier_summary_accepts_post_like_go",
+      "reasons": [
+        "contains 0 static URI candidates",
+        "uses a custom fake/mock fixture",
+        "builds request method or URI dynamically",
+        "depends on a test-specific state fixture"
+      ]
+    },
+    {
+      "classification": "scenario_contract",
+      "id": "src/http/supplier_read_route_tests.rs::supplier_summary_fails_without_provider_like_go",
+      "reasons": [
+        "contains 0 static URI candidates",
+        "builds request method or URI dynamically"
+      ]
+    },
+    {
+      "classification": "scenario_contract",
+      "id": "src/http/supplier_read_route_tests.rs::supplier_summary_forbids_non_supplier_like_go",
+      "reasons": [
+        "contains 0 static URI candidates",
+        "uses a custom fake/mock fixture",
+        "builds request method or URI dynamically",
+        "depends on a test-specific state fixture"
+      ]
+    },
+    {
+      "classification": "scenario_contract",
+      "id": "src/http/werka_archive_route_tests.rs::werka_archive_accepts_post_like_go_handler",
+      "reasons": [
+        "uses a custom fake/mock fixture",
+        "builds request method or URI dynamically",
+        "depends on a test-specific state fixture"
+      ]
+    },
+    {
+      "classification": "scenario_contract",
+      "id": "src/http/werka_archive_route_tests.rs::werka_archive_fails_without_provider_like_go",
+      "reasons": [
+        "contains 0 static method candidates",
+        "builds request method or URI dynamically"
+      ]
+    },
+    {
+      "classification": "scenario_contract",
+      "id": "src/http/werka_archive_route_tests.rs::werka_archive_invalid_date_is_500_like_go",
+      "reasons": [
+        "contains 0 static method candidates",
+        "uses a custom fake/mock fixture",
+        "builds request method or URI dynamically",
+        "depends on a test-specific state fixture"
+      ]
+    },
+    {
+      "classification": "scenario_contract",
+      "id": "src/http/werka_archive_route_tests.rs::werka_archive_pdf_accepts_post_like_go_handler",
+      "reasons": [
+        "uses a custom fake/mock fixture",
+        "builds request method or URI dynamically",
+        "depends on a test-specific state fixture"
+      ]
+    },
+    {
+      "classification": "scenario_contract",
+      "id": "src/http/werka_archive_route_tests.rs::werka_archive_pdf_fails_without_provider_like_go",
+      "reasons": [
+        "contains 0 static method candidates",
+        "builds request method or URI dynamically"
+      ]
+    },
+    {
+      "classification": "scenario_contract",
+      "id": "src/http/werka_archive_route_tests.rs::werka_archive_pdf_requires_auth",
+      "reasons": [
+        "contains 0 static method candidates",
+        "builds request method or URI dynamically"
+      ]
+    },
+    {
+      "classification": "scenario_contract",
+      "id": "src/http/werka_archive_route_tests.rs::werka_archive_pdf_returns_pdf_with_go_headers",
+      "reasons": [
+        "contains 0 static method candidates",
+        "uses a custom fake/mock fixture",
+        "builds request method or URI dynamically",
+        "depends on a test-specific state fixture"
+      ]
+    },
+    {
+      "classification": "scenario_contract",
+      "id": "src/http/werka_archive_route_tests.rs::werka_archive_requires_auth",
+      "reasons": [
+        "contains 0 static method candidates",
+        "builds request method or URI dynamically"
+      ]
+    },
+    {
+      "classification": "scenario_contract",
+      "id": "src/http/werka_archive_route_tests.rs::werka_archive_returns_provider_payload",
+      "reasons": [
+        "contains 0 static method candidates",
+        "uses a custom fake/mock fixture",
+        "builds request method or URI dynamically",
+        "depends on a test-specific state fixture"
+      ]
+    },
+    {
+      "classification": "scenario_contract",
+      "id": "src/http/werka_directory_route_tests.rs::werka_customers_accepts_post_like_go_handler",
+      "reasons": [
+        "uses a custom fake/mock fixture",
+        "builds request method or URI dynamically",
+        "depends on a test-specific state fixture"
+      ]
+    },
+    {
+      "classification": "scenario_contract",
+      "id": "src/http/werka_directory_route_tests.rs::werka_customers_defaults_invalid_limit_and_offset_like_go",
+      "reasons": [
+        "contains 0 static method candidates",
+        "uses a custom fake/mock fixture",
+        "builds request method or URI dynamically",
+        "depends on a test-specific state fixture"
+      ]
+    },
+    {
+      "classification": "scenario_contract",
+      "id": "src/http/werka_directory_route_tests.rs::werka_customers_fails_without_provider_like_go",
+      "reasons": [
+        "contains 0 static method candidates",
+        "builds request method or URI dynamically"
+      ]
+    },
+    {
+      "classification": "scenario_contract",
+      "id": "src/http/werka_directory_route_tests.rs::werka_customers_requires_auth",
+      "reasons": [
+        "contains 0 static method candidates",
+        "builds request method or URI dynamically"
+      ]
+    },
+    {
+      "classification": "scenario_contract",
+      "id": "src/http/werka_directory_route_tests.rs::werka_customers_returns_provider_payload_and_parses_query",
+      "reasons": [
+        "contains 0 static method candidates",
+        "uses a custom fake/mock fixture",
+        "builds request method or URI dynamically",
+        "depends on a test-specific state fixture"
+      ]
+    },
+    {
+      "classification": "scenario_contract",
+      "id": "src/http/werka_directory_route_tests.rs::werka_suppliers_accepts_post_like_go_handler",
+      "reasons": [
+        "uses a custom fake/mock fixture",
+        "builds request method or URI dynamically",
+        "depends on a test-specific state fixture"
+      ]
+    },
+    {
+      "classification": "scenario_contract",
+      "id": "src/http/werka_directory_route_tests.rs::werka_suppliers_defaults_invalid_limit_and_offset_like_go",
+      "reasons": [
+        "contains 0 static method candidates",
+        "uses a custom fake/mock fixture",
+        "builds request method or URI dynamically",
+        "depends on a test-specific state fixture"
+      ]
+    },
+    {
+      "classification": "scenario_contract",
+      "id": "src/http/werka_directory_route_tests.rs::werka_suppliers_fails_without_provider_like_go",
+      "reasons": [
+        "contains 0 static method candidates",
+        "builds request method or URI dynamically"
+      ]
+    },
+    {
+      "classification": "scenario_contract",
+      "id": "src/http/werka_directory_route_tests.rs::werka_suppliers_requires_auth",
+      "reasons": [
+        "contains 0 static method candidates",
+        "builds request method or URI dynamically"
+      ]
+    },
+    {
+      "classification": "scenario_contract",
+      "id": "src/http/werka_directory_route_tests.rs::werka_suppliers_returns_provider_payload_and_parses_query",
+      "reasons": [
+        "contains 0 static method candidates",
+        "uses a custom fake/mock fixture",
+        "builds request method or URI dynamically",
+        "depends on a test-specific state fixture"
+      ]
+    },
+    {
+      "classification": "scenario_contract",
+      "id": "src/http/werka_items_route_tests.rs::werka_customer_item_options_returns_provider_payload_and_parses_query",
+      "reasons": [
+        "contains 0 static method candidates",
+        "uses a custom fake/mock fixture",
+        "builds request method or URI dynamically",
+        "depends on a test-specific state fixture"
+      ]
+    },
+    {
+      "classification": "scenario_contract",
+      "id": "src/http/werka_items_route_tests.rs::werka_customer_items_returns_provider_payload_and_parses_query",
+      "reasons": [
+        "contains 0 static method candidates",
+        "uses a custom fake/mock fixture",
+        "builds request method or URI dynamically",
+        "depends on a test-specific state fixture"
+      ]
+    },
+    {
+      "classification": "scenario_contract",
+      "id": "src/http/werka_items_route_tests.rs::werka_item_endpoints_accept_post_like_go_handler",
+      "reasons": [
+        "contains 0 static URI candidates",
+        "uses a custom fake/mock fixture",
+        "builds request method or URI dynamically",
+        "depends on a test-specific state fixture"
+      ]
+    },
+    {
+      "classification": "scenario_contract",
+      "id": "src/http/werka_items_route_tests.rs::werka_item_endpoints_default_invalid_limit_and_offset_like_go",
+      "reasons": [
+        "contains 0 static URI candidates",
+        "contains 0 static method candidates",
+        "uses a custom fake/mock fixture",
+        "builds request method or URI dynamically",
+        "depends on a test-specific state fixture"
+      ]
+    },
+    {
+      "classification": "scenario_contract",
+      "id": "src/http/werka_items_route_tests.rs::werka_item_endpoints_fail_without_provider_like_go",
+      "reasons": [
+        "contains 0 static URI candidates",
+        "contains 0 static method candidates",
+        "builds request method or URI dynamically"
+      ]
+    },
+    {
+      "classification": "scenario_contract",
+      "id": "src/http/werka_items_route_tests.rs::werka_item_endpoints_require_auth",
+      "reasons": [
+        "contains 0 static URI candidates",
+        "contains 0 static method candidates",
+        "builds request method or URI dynamically"
+      ]
+    },
+    {
+      "classification": "scenario_contract",
+      "id": "src/http/werka_items_route_tests.rs::werka_supplier_items_returns_provider_payload_and_parses_query",
+      "reasons": [
+        "contains 0 static method candidates",
+        "uses a custom fake/mock fixture",
+        "builds request method or URI dynamically",
+        "depends on a test-specific state fixture"
+      ]
+    },
+    {
+      "classification": "scenario_contract",
+      "id": "src/http/werka_route_tests.rs::werka_history_accepts_post_like_go_handler",
+      "reasons": [
+        "uses a custom fake/mock fixture",
+        "builds request method or URI dynamically",
+        "depends on a test-specific state fixture"
+      ]
+    },
+    {
+      "classification": "scenario_contract",
+      "id": "src/http/werka_route_tests.rs::werka_history_fails_without_provider_like_go",
+      "reasons": [
+        "contains 0 static method candidates",
+        "builds request method or URI dynamically"
+      ]
+    },
+    {
+      "classification": "scenario_contract",
+      "id": "src/http/werka_route_tests.rs::werka_history_requires_auth",
+      "reasons": [
+        "contains 0 static method candidates",
+        "builds request method or URI dynamically"
+      ]
+    },
+    {
+      "classification": "scenario_contract",
+      "id": "src/http/werka_route_tests.rs::werka_history_returns_provider_payload",
+      "reasons": [
+        "contains 0 static method candidates",
+        "uses a custom fake/mock fixture",
+        "builds request method or URI dynamically",
+        "depends on a test-specific state fixture"
+      ]
+    },
+    {
+      "classification": "scenario_contract",
+      "id": "src/http/werka_route_tests.rs::werka_notifications_accepts_post_like_history",
+      "reasons": [
+        "uses a custom fake/mock fixture",
+        "builds request method or URI dynamically",
+        "depends on a test-specific state fixture"
+      ]
+    },
+    {
+      "classification": "scenario_contract",
+      "id": "src/http/werka_route_tests.rs::werka_notifications_aliases_history_like_go",
+      "reasons": [
+        "contains 0 static method candidates",
+        "uses a custom fake/mock fixture",
+        "builds request method or URI dynamically",
+        "depends on a test-specific state fixture"
+      ]
+    },
+    {
+      "classification": "scenario_contract",
+      "id": "src/http/werka_route_tests.rs::werka_status_breakdown_accepts_post_like_go_handler",
+      "reasons": [
+        "uses a custom fake/mock fixture",
+        "builds request method or URI dynamically",
+        "depends on a test-specific state fixture"
+      ]
+    },
+    {
+      "classification": "scenario_contract",
+      "id": "src/http/werka_route_tests.rs::werka_status_breakdown_fails_without_provider_like_go",
+      "reasons": [
+        "contains 0 static method candidates",
+        "builds request method or URI dynamically"
+      ]
+    },
+    {
+      "classification": "scenario_contract",
+      "id": "src/http/werka_route_tests.rs::werka_status_breakdown_requires_auth",
+      "reasons": [
+        "contains 0 static method candidates",
+        "builds request method or URI dynamically"
+      ]
+    },
+    {
+      "classification": "scenario_contract",
+      "id": "src/http/werka_route_tests.rs::werka_status_breakdown_returns_provider_payload",
+      "reasons": [
+        "contains 0 static method candidates",
+        "uses a custom fake/mock fixture",
+        "builds request method or URI dynamically",
+        "depends on a test-specific state fixture"
+      ]
+    },
+    {
+      "classification": "scenario_contract",
+      "id": "src/http/werka_route_tests.rs::werka_status_details_accepts_post_like_go_handler",
+      "reasons": [
+        "uses a custom fake/mock fixture",
+        "builds request method or URI dynamically",
+        "depends on a test-specific state fixture"
+      ]
+    },
+    {
+      "classification": "scenario_contract",
+      "id": "src/http/werka_route_tests.rs::werka_status_details_fails_without_provider_like_go",
+      "reasons": [
+        "contains 0 static method candidates",
+        "builds request method or URI dynamically"
+      ]
+    },
+    {
+      "classification": "scenario_contract",
+      "id": "src/http/werka_route_tests.rs::werka_status_details_requires_auth",
+      "reasons": [
+        "contains 0 static method candidates",
+        "builds request method or URI dynamically"
+      ]
+    },
+    {
+      "classification": "scenario_contract",
+      "id": "src/http/werka_route_tests.rs::werka_status_details_returns_provider_payload",
+      "reasons": [
+        "contains 0 static method candidates",
+        "uses a custom fake/mock fixture",
+        "builds request method or URI dynamically",
+        "depends on a test-specific state fixture"
+      ]
+    }
+  ],
+  "source": {
+    "git_ref": "975078a^",
+    "manifest": "tools/test_migration_audit/migrations/generic_http_975078a.json"
+  },
+  "summary": {
+    "generated_cases": 8,
+    "skipped_scenarios": 72,
+    "source_tests": 80
+  }
+}

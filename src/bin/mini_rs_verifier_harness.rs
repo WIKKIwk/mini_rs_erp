@@ -40,6 +40,13 @@ struct ProbeRequest {
     body: Option<Value>,
     #[serde(default)]
     raw_body: Option<String>,
+    #[serde(default)]
+    fixture: Option<String>,
+}
+
+struct VerifierRouters {
+    providers: axum::Router,
+    isolated: axum::Router,
 }
 
 #[derive(Debug, Serialize)]
@@ -64,15 +71,20 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     std::fs::create_dir_all(workspace.join("data"))?;
     std::env::set_current_dir(&workspace)?;
 
-    let mut state = AppState::verification(verifier_config(&workspace));
-    state.sessions = SessionManager::memory(Some(60 * 60));
-    state.werka = WerkaService::new()
+    let mut isolated_state = AppState::verification(verifier_config(&workspace));
+    isolated_state.sessions = SessionManager::memory(Some(60 * 60));
+    let tokens = role_tokens(&isolated_state).await?;
+
+    let mut provider_state = isolated_state.clone();
+    provider_state.werka = WerkaService::new()
         .with_lookup(Arc::new(VerifierWerkaLookup))
         .with_supplier_read_lookup(Arc::new(VerifierSupplierLookup))
         .with_supplier_purchase_receipt_lookup(Arc::new(VerifierSupplierLookup))
         .with_supplier_item_lookup(Arc::new(VerifierSupplierLookup));
-    let tokens = role_tokens(&state).await?;
-    let router = build_router(state);
+    let routers = VerifierRouters {
+        providers: build_router(provider_state),
+        isolated: build_router(isolated_state),
+    };
 
     write_json(&serde_json::json!({
         "ready": true,
@@ -95,7 +107,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 continue;
             }
         };
-        match probe(router.clone(), &tokens, request).await {
+        match probe(&routers, &tokens, request).await {
             Ok(response) => write_json(&response)?,
             Err(error) => write_json(&ProtocolError { error: &error })?,
         }
@@ -104,10 +116,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 }
 
 async fn probe(
-    router: axum::Router,
+    routers: &VerifierRouters,
     tokens: &BTreeMap<String, String>,
     probe: ProbeRequest,
 ) -> Result<ProbeResponse, String> {
+    let router = match probe.fixture.as_deref().unwrap_or("providers") {
+        "providers" => routers.providers.clone(),
+        "isolated" => routers.isolated.clone(),
+        _ => return Err("unknown verifier fixture".to_string()),
+    };
     let method = Method::from_bytes(probe.method.trim().as_bytes())
         .map_err(|_| "invalid method".to_string())?;
     let mut builder = Request::builder().method(method).uri(probe.uri);

@@ -9,10 +9,16 @@ MANDATORY_UPDATE ?=
 RELEASE_NOTES ?=
 RELEASE_NOTES_FILE ?=
 
-.PHONY: verify audit-test-migration up-domain stop-domain seed-demo db-backup db-migrate publish-mobile-apk
+.PHONY: verify extract-test-contracts check-generated-test-contracts audit-test-migration up-domain stop-domain seed-demo db-backup db-migrate publish-mobile-apk
 
-verify:
+verify: check-generated-test-contracts
 	@python3 tools/mini_erp_verifier/verify.py
+
+extract-test-contracts:
+	@uv run --script tools/test_migration_audit/extract_contracts.py
+
+check-generated-test-contracts:
+	@uv run --script tools/test_migration_audit/extract_contracts.py --check
 
 audit-test-migration:
 	@uv run --script tools/test_migration_audit/audit.py
