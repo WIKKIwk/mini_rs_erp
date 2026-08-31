@@ -52,69 +52,65 @@ pub enum ApparatusQueueAction {
     Complete,
 }
 
+#[derive(Debug, Clone, Copy)]
+struct QueueStateTransition {
+    from: ApparatusQueueOrderState,
+    action: ApparatusQueueAction,
+    to: ApparatusQueueOrderState,
+}
+
+const QUEUE_STATE_TRANSITIONS: &[QueueStateTransition] = &[
+    QueueStateTransition {
+        from: ApparatusQueueOrderState::Pending,
+        action: ApparatusQueueAction::Start,
+        to: ApparatusQueueOrderState::InProgress,
+    },
+    QueueStateTransition {
+        from: ApparatusQueueOrderState::InProgress,
+        action: ApparatusQueueAction::Pause,
+        to: ApparatusQueueOrderState::Paused,
+    },
+    QueueStateTransition {
+        from: ApparatusQueueOrderState::InProgress,
+        action: ApparatusQueueAction::Freeze,
+        to: ApparatusQueueOrderState::Frozen,
+    },
+    QueueStateTransition {
+        from: ApparatusQueueOrderState::InProgress,
+        action: ApparatusQueueAction::DetachRoll,
+        // `paused` remains the compatibility queue slot state. The execution
+        // records carry the canonical `roll_detached` status.
+        to: ApparatusQueueOrderState::Paused,
+    },
+    QueueStateTransition {
+        from: ApparatusQueueOrderState::Paused,
+        action: ApparatusQueueAction::Resume,
+        to: ApparatusQueueOrderState::InProgress,
+    },
+    QueueStateTransition {
+        from: ApparatusQueueOrderState::InProgress,
+        action: ApparatusQueueAction::Merge,
+        to: ApparatusQueueOrderState::InProgress,
+    },
+    QueueStateTransition {
+        from: ApparatusQueueOrderState::InProgress,
+        action: ApparatusQueueAction::RollComplete,
+        to: ApparatusQueueOrderState::InProgress,
+    },
+    QueueStateTransition {
+        from: ApparatusQueueOrderState::InProgress,
+        action: ApparatusQueueAction::Complete,
+        to: ApparatusQueueOrderState::Completed,
+    },
+];
+
 pub fn next_queue_state(
     current: ApparatusQueueOrderState,
     action: ApparatusQueueAction,
 ) -> Result<ApparatusQueueOrderState, ProductionMapError> {
-    match action {
-        ApparatusQueueAction::Start => {
-            if current == ApparatusQueueOrderState::Pending {
-                Ok(ApparatusQueueOrderState::InProgress)
-            } else {
-                Err(ProductionMapError::QueueActionNotAllowed)
-            }
-        }
-        ApparatusQueueAction::Complete => {
-            if current == ApparatusQueueOrderState::InProgress {
-                Ok(ApparatusQueueOrderState::Completed)
-            } else {
-                Err(ProductionMapError::QueueActionNotAllowed)
-            }
-        }
-        ApparatusQueueAction::Pause => {
-            if current == ApparatusQueueOrderState::InProgress {
-                Ok(ApparatusQueueOrderState::Paused)
-            } else {
-                Err(ProductionMapError::QueueActionNotAllowed)
-            }
-        }
-        ApparatusQueueAction::Freeze => {
-            if current == ApparatusQueueOrderState::InProgress {
-                Ok(ApparatusQueueOrderState::Frozen)
-            } else {
-                Err(ProductionMapError::QueueActionNotAllowed)
-            }
-        }
-        ApparatusQueueAction::DetachRoll => {
-            if current == ApparatusQueueOrderState::InProgress {
-                // `paused` remains the compatibility queue slot state. The
-                // execution records carry the canonical `roll_detached`
-                // status so a detached roll is not reported as a true pause.
-                Ok(ApparatusQueueOrderState::Paused)
-            } else {
-                Err(ProductionMapError::QueueActionNotAllowed)
-            }
-        }
-        ApparatusQueueAction::Resume => {
-            if current == ApparatusQueueOrderState::Paused {
-                Ok(ApparatusQueueOrderState::InProgress)
-            } else {
-                Err(ProductionMapError::QueueActionNotAllowed)
-            }
-        }
-        ApparatusQueueAction::Merge => {
-            if current == ApparatusQueueOrderState::InProgress {
-                Ok(ApparatusQueueOrderState::InProgress)
-            } else {
-                Err(ProductionMapError::QueueActionNotAllowed)
-            }
-        }
-        ApparatusQueueAction::RollComplete => {
-            if current == ApparatusQueueOrderState::InProgress {
-                Ok(ApparatusQueueOrderState::InProgress)
-            } else {
-                Err(ProductionMapError::QueueActionNotAllowed)
-            }
-        }
-    }
+    QUEUE_STATE_TRANSITIONS
+        .iter()
+        .find(|transition| transition.from == current && transition.action == action)
+        .map(|transition| transition.to)
+        .ok_or(ProductionMapError::QueueActionNotAllowed)
 }

@@ -283,9 +283,10 @@ impl ProductionMapService {
                                     || previous_wip_mode
                                         == ApparatusQueuePreviousWipMode::ScanRequired)))
                         && active_order_is_this);
-                let mut allowed_actions = Vec::new();
                 let mut complete_requires_full_report = false;
                 let mut complete_requires_rezka_total_waste_only = false;
+                let mut start_ready = false;
+                let mut rezka_merge_ready = false;
                 let mut interaction = ApparatusQueueWorkerInteraction {
                     assigned_materials_display_only: !matches!(
                         state,
@@ -303,7 +304,6 @@ impl ProductionMapService {
                     queue_state::ApparatusQueueOrderState::Pending if requeued_session => {
                         if pending_actionable {
                             interaction.mode = ApparatusQueueInteractionMode::RequeuedReady;
-                            allowed_actions.push(queue_state::ApparatusQueueAction::Resume);
                         } else {
                             interaction.mode = ApparatusQueueInteractionMode::RequeuedWaiting;
                             interaction.blocking_reason_code = "waiting_sequence".to_string();
@@ -376,7 +376,7 @@ impl ProductionMapService {
                                     };
                                 if material_requirements.assignments_satisfied {
                                     interaction.mode = ApparatusQueueInteractionMode::FreshStart;
-                                    allowed_actions.push(queue_state::ApparatusQueueAction::Start);
+                                    start_ready = true;
                                 } else {
                                     interaction.mode =
                                         ApparatusQueueInteractionMode::FreshStartBlocked;
@@ -395,19 +395,10 @@ impl ProductionMapService {
                         interaction.material_intake_allowed = control == OrderControlState::Active;
                         interaction.assigned_materials_display_only =
                             control != OrderControlState::Active;
-                        if matches!(
-                            control,
-                            OrderControlState::Active | OrderControlState::FreezeRequested
-                        ) {
-                            allowed_actions.push(queue_state::ApparatusQueueAction::Pause);
-                        }
                         if control == OrderControlState::FreezeRequested {
                             interaction.blocking_reason_code = "order_freeze_requested".to_string();
                         }
                         if control == OrderControlState::Active {
-                            // A worker may finish with an issue note, which is
-                            // persisted as the explicit frozen transition.
-                            allowed_actions.push(queue_state::ApparatusQueueAction::Freeze);
                             let current_input_batch_id = active_session
                                 .map(session_progress_links)
                                 .map(|links| links.batch_id)
@@ -434,15 +425,10 @@ impl ProductionMapService {
                                     &stage_node_id,
                                 );
                             if apparatus::is_rezka_apparatus(&canonical) {
-                                if active_session.is_some_and(|session| {
+                                rezka_merge_ready = active_session.is_some_and(|session| {
                                     !session_progress_links(session).batch_id.trim().is_empty()
-                                }) {
-                                    allowed_actions.push(queue_state::ApparatusQueueAction::Merge);
-                                }
-                                allowed_actions
-                                    .push(queue_state::ApparatusQueueAction::RollComplete);
+                                });
                             }
-                            allowed_actions.push(queue_state::ApparatusQueueAction::Complete);
                             if apparatus::is_rezka_apparatus(&canonical) {
                                 let is_final_stage = if stage_node_id.trim().is_empty() {
                                     chain::is_final_work_stage_station(order_map, &storage_key)
@@ -468,9 +454,6 @@ impl ProductionMapService {
                         interaction.material_intake_allowed = control == OrderControlState::Active;
                         interaction.assigned_materials_display_only =
                             control != OrderControlState::Active;
-                        if queue_actionable && control == OrderControlState::Active {
-                            allowed_actions.push(queue_state::ApparatusQueueAction::Resume);
-                        }
                     }
                     queue_state::ApparatusQueueOrderState::Frozen => {
                         interaction.mode = ApparatusQueueInteractionMode::Frozen;
@@ -480,6 +463,19 @@ impl ProductionMapService {
                         interaction.mode = ApparatusQueueInteractionMode::Completed;
                     }
                 }
+
+                let allowed_actions = allowed_actions_for_control(QueueActionPolicyInput {
+                    state,
+                    profile: QueueActionPolicyProfile::Live {
+                        order_control: control,
+                        is_rezka: apparatus::is_rezka_apparatus(&canonical),
+                        rezka_merge_ready,
+                    },
+                    requeued_session,
+                    pending_actionable,
+                    queue_actionable,
+                    start_ready,
+                });
 
                 let input_contained_kadr_count = active_session
                     .and_then(|session| session.payload_json.get("contained_kadr_count"))

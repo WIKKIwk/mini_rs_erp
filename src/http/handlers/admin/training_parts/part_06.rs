@@ -88,37 +88,17 @@ fn training_queue_action_controls(
             };
             let pending_actionable =
                 queue_actionable && previous_wip_mode != ApparatusQueuePreviousWipMode::Waiting;
-            let allowed_actions = if !queue_actionable {
-                Vec::new()
-            } else {
-                match state {
-                    queue_state::ApparatusQueueOrderState::Pending => {
-                        if pending_actionable {
-                            vec![queue_state::ApparatusQueueAction::Start]
-                        } else {
-                            Vec::new()
-                        }
-                    }
-                    queue_state::ApparatusQueueOrderState::InProgress => {
-                        let mut actions = vec![
-                            queue_state::ApparatusQueueAction::Pause,
-                            queue_state::ApparatusQueueAction::DetachRoll,
-                            queue_state::ApparatusQueueAction::Complete,
-                        ];
-                        if saved_map
-                            .is_some_and(|saved| is_rezka_apparatus(&saved.map, apparatus))
-                        {
-                            actions.push(queue_state::ApparatusQueueAction::RollComplete);
-                        }
-                        actions
-                    }
-                    queue_state::ApparatusQueueOrderState::Paused => {
-                        vec![queue_state::ApparatusQueueAction::Resume]
-                    }
-                    queue_state::ApparatusQueueOrderState::Frozen => Vec::new(),
-                    queue_state::ApparatusQueueOrderState::Completed => Vec::new(),
-                }
-            };
+            let allowed_actions = allowed_actions_for_control(QueueActionPolicyInput {
+                state,
+                profile: QueueActionPolicyProfile::Training {
+                    is_rezka: saved_map
+                        .is_some_and(|saved| is_rezka_apparatus(&saved.map, apparatus)),
+                },
+                requeued_session: false,
+                pending_actionable,
+                queue_actionable,
+                start_ready: true,
+            });
             let interaction = match state {
                 queue_state::ApparatusQueueOrderState::Pending if !queue_actionable => {
                     ApparatusQueueWorkerInteraction {

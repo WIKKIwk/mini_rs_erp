@@ -68,6 +68,9 @@ pub(crate) use progress::{
     derive_production_order_operational_status,
 };
 pub(crate) use progress::{progress_batch_id, progress_qr_payload};
+pub(crate) use queue::{
+    QueueActionPolicyInput, QueueActionPolicyProfile, allowed_actions_for_control,
+};
 pub use service::{PreparedApparatusQueueAction, ProductionMapLiveSnapshot, ProductionMapService};
 pub(crate) use store_port::validate_queue_progress_write;
 pub use store_port::{
