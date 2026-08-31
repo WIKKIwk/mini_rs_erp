@@ -12,6 +12,11 @@ all data-driven cases to the real Axum router in one process. Rust
 sanitized environment and uses a disposable directory plus in-memory domain
 stores, so it cannot connect to the configured ERP database.
 
+The default command does not blindly invoke Cargo. It reuses the harness while
+Cargo's generated dependency list and workspace build configuration are older
+than the binary. A changed production Rust input rebuilds once; Python/JSON
+contract-only changes run without Cargo.
+
 `contracts.json` owns the remaining manual route, authentication, CORS, and
 response-shape contracts. `generated_contracts.json` is produced from the
 historical Rust tests by the Tree-sitter extractor. Access matrices

@@ -964,12 +964,15 @@ contract verifier against the real Axum router. It does not compile Rust
 generic response-shape coverage lives in the manual
 `tools/mini_erp_verifier/contracts.json` file and the AST-generated
 `tools/mini_erp_verifier/generated_contracts.json` file. `make verify` first
-fails if the generated file no longer matches its historical Rust source.
+fails if the generated file no longer matches its historical Rust source. It
+also reads Cargo's harness dependency file and skips Cargo entirely while the
+compiled production inputs are unchanged.
 
 Inventory Rust tests before migrating or extending the test layer:
 
 ```bash
 make audit-test-migration
+make test-python-tools
 ```
 
 The Python Tree-sitter audit does not invoke Cargo. It reports tests as

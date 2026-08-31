@@ -6,13 +6,13 @@ import audit
 from extract_contracts import ExtractionFailure, extract_case
 
 
-def extract(source: str):
+def extract(source: str, package_version: str | None = None):
     source_file = audit.SourceFile("src/example.rs", source.encode())
     tree = audit.RUST_PARSER.parse(source_file.content)
     functions = list(audit.test_functions(source_file.content, tree.root_node))
     if len(functions) != 1:
         raise AssertionError(f"expected one test, got {len(functions)}")
-    return extract_case(source_file, functions[0]).case
+    return extract_case(source_file, functions[0], package_version).case
 
 
 class ContractExtractionTests(unittest.TestCase):
@@ -70,6 +70,31 @@ async fn supplier_read_fails_without_provider() {
 
         self.assertEqual(case["request"]["role"], "supplier")
         self.assertEqual(case["expect"]["status"], 500)
+
+    def test_extracts_default_get_and_cargo_package_version(self) -> None:
+        case = extract(
+            r"""
+#[tokio::test]
+async fn handshake_identifies_version() {
+    let response = build_router(test_state())
+        .oneshot(
+            Request::builder()
+                .uri("/v1/mobile/server/handshake")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let value = json_body(response).await;
+    assert_eq!(value["version"], env!("CARGO_PKG_VERSION"));
+}
+""",
+            package_version="1.2.3",
+        )
+
+        self.assertEqual(case["request"]["method"], "GET")
+        self.assertEqual(case["expect"]["body"]["version"], "1.2.3")
 
     def test_refuses_to_drop_unknown_assertion(self) -> None:
         with self.assertRaisesRegex(

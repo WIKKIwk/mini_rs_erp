@@ -304,11 +304,18 @@ def request_signals(
             dynamic = True
             continue
         request_text = source_text(content, request_argument)
-        methods.update(
+        request_methods = {
             method
             for method in HTTP_METHODS
             if re.search(rf'"{method}"|Method::{method}\b', request_text)
-        )
+        }
+        if (
+            not request_methods
+            and "Request::builder()" in request_text
+            and ".method(" not in request_text
+        ):
+            request_methods.add("GET")
+        methods.update(request_methods)
         request_uris = string_literal_values(request_text)
         uris.update(request_uris)
         if (

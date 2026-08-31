@@ -20,6 +20,7 @@ from pathlib import Path
 from typing import Any
 
 import audit
+import tomllib
 from tree_sitter import Node
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -220,8 +221,10 @@ def split_macro_arguments(source: str) -> list[str]:
     return arguments
 
 
-def json_scalar(source: str) -> Any:
+def json_scalar(source: str, package_version: str | None = None) -> Any:
     source = source.strip()
+    if source == 'env!("CARGO_PKG_VERSION")' and package_version is not None:
+        return package_version
     literal = rust_literal(source)
     if literal is not None:
         return literal
@@ -248,7 +251,10 @@ def set_body_path(body: dict[str, Any], path: list[str], value: Any) -> None:
 
 
 def response_expectation(
-    content: bytes, function: Node, status: int
+    content: bytes,
+    function: Node,
+    status: int,
+    package_version: str | None = None,
 ) -> tuple[dict[str, Any], int]:
     function_text = audit.source_text(content, function)
     bound_json = set(BOUND_JSON_PATTERN.findall(function_text))
@@ -280,7 +286,7 @@ def response_expectation(
         path = JSON_PATH_PATTERN.findall(left)
         if not path:
             raise ExtractionFailure(f"response assertion has no object path: {source}")
-        set_body_path(body, path, json_scalar(right))
+        set_body_path(body, path, json_scalar(right, package_version))
         handled += 1
     expectation: dict[str, Any] = {"status": status}
     if body:
@@ -288,7 +294,11 @@ def response_expectation(
     return expectation, handled
 
 
-def extract_case(source: audit.SourceFile, function: Node) -> ExtractedCase:
+def extract_case(
+    source: audit.SourceFile,
+    function: Node,
+    package_version: str | None = None,
+) -> ExtractedCase:
     name_node = function.child_by_field_name("name")
     if name_node is None:
         raise ExtractionFailure("test function has no name")
@@ -313,7 +323,10 @@ def extract_case(source: audit.SourceFile, function: Node) -> ExtractedCase:
     if role is not None:
         request["role"] = role
     expect, handled_assertions = response_expectation(
-        source.content, function, STATUS_VALUES[signals.status_codes[0]]
+        source.content,
+        function,
+        STATUS_VALUES[signals.status_codes[0]],
+        package_version,
     )
     if handled_assertions != signals.assertion_count:
         raise ExtractionFailure(
@@ -331,6 +344,10 @@ def extract_case(source: audit.SourceFile, function: Node) -> ExtractedCase:
 
 
 def generate(root: Path, manifest: dict[str, Any]) -> dict[str, Any]:
+    with (root / "Cargo.toml").open("rb") as handle:
+        package_version = tomllib.load(handle).get("package", {}).get("version")
+    if not isinstance(package_version, str):
+        raise ExtractionFailure("Cargo.toml package.version is required")
     sources = audit.git_sources(root, manifest["git_ref"], manifest["paths"])
     cases: list[dict[str, Any]] = []
     skipped: list[dict[str, Any]] = []
@@ -359,7 +376,7 @@ def generate(root: Path, manifest: dict[str, Any]) -> dict[str, Any]:
                 continue
             automatic += 1
             try:
-                cases.append(extract_case(source, function).case)
+                cases.append(extract_case(source, function, package_version).case)
             except ExtractionFailure as error:
                 raise ExtractionFailure(f"{source.path}::{name}: {error}") from error
 

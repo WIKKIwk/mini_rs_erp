@@ -2,7 +2,7 @@
   "protocol": 1,
   "git_ref": "975078a^",
   "expected_tests": 80,
-  "expected_automatic_contracts": 8,
+  "expected_automatic_contracts": 21,
   "paths": [
     "src/http/router_tests.rs",
     "src/http/router_tests/auth_routes.rs",

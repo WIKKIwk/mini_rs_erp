@@ -32,6 +32,28 @@ async fn me_requires_auth() {
         self.assertEqual(result.signals.literal_uris, ["/v1/mobile/me"])
         self.assertEqual(result.signals.status_codes, ["UNAUTHORIZED"])
 
+    def test_treats_request_builder_without_method_as_get(self) -> None:
+        result = finding(
+            r"""
+#[tokio::test]
+async fn me_requires_auth() {
+    let response = build_router(state)
+        .oneshot(
+            Request::builder()
+                .uri("/v1/mobile/me")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+}
+"""
+        )
+
+        self.assertEqual(result.classification, "automatic_contract")
+        self.assertEqual(result.signals.http_methods, ["GET"])
+
     def test_classifies_multi_request_flow_as_scenario(self) -> None:
         result = finding(
             r"""

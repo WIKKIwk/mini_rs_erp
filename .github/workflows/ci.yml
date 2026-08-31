@@ -32,6 +32,11 @@ jobs:
       - name: Install contract extraction dependencies
         run: python3 -m pip install -r tools/test_migration_audit/requirements.txt
 
+      - name: Test Python verification tooling
+        run: |
+          (cd tools/test_migration_audit && python3 -m unittest -v)
+          (cd tools/mini_erp_verifier && python3 -m unittest -v)
+
       - name: Check generated HTTP contracts
         run: python3 tools/test_migration_audit/extract_contracts.py --check
 

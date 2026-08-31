@@ -13,6 +13,7 @@ import hashlib
 import json
 import os
 import re
+import shlex
 import subprocess
 import sys
 import tempfile
@@ -27,6 +28,7 @@ MIGRATION_MANIFEST_PATH = (
     ROOT / "tools" / "test_migration_audit" / "migrations" / "generic_http_975078a.json"
 )
 HARNESS = ROOT / "target" / "debug" / "mini_rs_verifier_harness"
+HARNESS_DEP_INFO = HARNESS.with_suffix(".d")
 ROUTE_PATTERN = re.compile(r'\.route\(\s*"([^"]+)"', re.MULTILINE)
 ROLES = (
     "supplier",
@@ -223,6 +225,48 @@ def build_harness() -> float:
     return time.monotonic() - started
 
 
+def build_configuration_inputs() -> list[Path]:
+    inputs = [ROOT / "Cargo.lock", ROOT / "Cargo.toml"]
+    inputs.extend((ROOT / "crates").rglob("Cargo.toml"))
+    inputs.extend((ROOT / "crates").rglob("build.rs"))
+    inputs.extend(
+        path
+        for path in (
+            ROOT / "build.rs",
+            ROOT / "rust-toolchain",
+            ROOT / "rust-toolchain.toml",
+            ROOT / ".cargo" / "config",
+            ROOT / ".cargo" / "config.toml",
+        )
+        if path.exists()
+    )
+    return inputs
+
+
+def harness_is_stale() -> bool:
+    if not HARNESS.is_file() or not HARNESS_DEP_INFO.is_file():
+        return True
+    try:
+        words = shlex.split(HARNESS_DEP_INFO.read_text(encoding="utf-8"))
+        if not words or not words[0].endswith(":"):
+            return True
+        dependencies = [Path(word) for word in words[1:]]
+        dependencies.extend(build_configuration_inputs())
+        built_at = HARNESS.stat().st_mtime_ns
+        return any(
+            not dependency.is_file() or dependency.stat().st_mtime_ns > built_at
+            for dependency in dependencies
+        )
+    except (OSError, ValueError):
+        return True
+
+
+def ensure_harness() -> tuple[float, bool]:
+    if not harness_is_stale():
+        return 0.0, False
+    return build_harness(), True
+
+
 def runtime_environment(workspace: Path) -> dict[str, str]:
     keep = (
         "CARGO_HOME",
@@ -414,7 +458,9 @@ def main() -> int:
             print(json.dumps(snapshot, sort_keys=True))
             return 0
         verified_snapshot = verify_route_snapshot(contract)
-        build_seconds = 0.0 if args.no_build else build_harness()
+        build_seconds, harness_rebuilt = (
+            (0.0, False) if args.no_build else ensure_harness()
+        )
         failures, probe_seconds = run_cases(contract)
         result = {
             "ok": not failures,
@@ -428,6 +474,7 @@ def main() -> int:
             "generated_contracts": contract["generated_summary"].get(
                 "generated_cases", 0
             ),
+            "harness_rebuilt": harness_rebuilt,
         }
     except (
         OSError,
@@ -443,6 +490,7 @@ def main() -> int:
         print(
             f"PASS: {result['cases']} contracts, {result['routes']} routes; "
             f"build {result['build_seconds']:.3f}s, probes {result['probe_seconds']:.3f}s; "
+            f"harness {'rebuilt' if result['harness_rebuilt'] else 'cached'}; "
             "Rust test modules were not compiled"
         )
     else:

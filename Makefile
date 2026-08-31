@@ -9,10 +9,14 @@ MANDATORY_UPDATE ?=
 RELEASE_NOTES ?=
 RELEASE_NOTES_FILE ?=
 
-.PHONY: verify extract-test-contracts check-generated-test-contracts audit-test-migration up-domain stop-domain seed-demo db-backup db-migrate publish-mobile-apk
+.PHONY: verify test-python-tools extract-test-contracts check-generated-test-contracts audit-test-migration up-domain stop-domain seed-demo db-backup db-migrate publish-mobile-apk
 
 verify: check-generated-test-contracts
 	@python3 tools/mini_erp_verifier/verify.py
+
+test-python-tools:
+	@cd tools/test_migration_audit && uv run --with tree-sitter==0.25.2 --with tree-sitter-rust==0.24.2 python -m unittest -v
+	@cd tools/mini_erp_verifier && python3 -m unittest -v
 
 extract-test-contracts:
 	@uv run --script tools/test_migration_audit/extract_contracts.py
