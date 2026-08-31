@@ -8,31 +8,37 @@ fn returned_paint_queue_error(error: ReturnedPaintError) -> AdminError {
 }
 
 fn zero_completion_metric_codes(
-    input: &ApparatusQueueActionRequest,
+    input: &QueueActionCommand,
     return_ink_kg: Option<f64>,
 ) -> Vec<String> {
     if !matches!(input.action, queue_state::ApparatusQueueAction::Complete) {
         return Vec::new();
     }
     [
-        ("produced_qty", input.produced_qty.or(input.qty)),
-        ("gross_qty", input.gross_qty),
+        ("produced_qty", input.progress.produced_qty),
+        ("gross_qty", input.progress.gross_qty),
         ("return_ink_kg", return_ink_kg),
         (
             "lamination_print_leftover_rolls",
-            input.lamination_print_leftover_rolls,
+            input.progress.lamination_print_leftover_rolls,
         ),
         (
             "lamination_film_leftover_rolls",
-            input.lamination_film_leftover_rolls,
+            input.progress.lamination_film_leftover_rolls,
         ),
-        ("rezka_bosma_waste", input.rezka_bosma_waste),
-        ("rezka_lamination_waste", input.rezka_lamination_waste),
-        ("rezka_edge_waste", input.rezka_edge_waste),
-        ("total_waste", input.total_waste),
-        ("finished_goods_kg", input.finished_goods_kg),
-        ("finished_goods_meter", input.finished_goods_meter),
-        ("bobina_kg", input.bobina_kg),
+        ("rezka_bosma_waste", input.progress.rezka_bosma_waste),
+        (
+            "rezka_lamination_waste",
+            input.progress.rezka_lamination_waste,
+        ),
+        ("rezka_edge_waste", input.progress.rezka_edge_waste),
+        ("total_waste", input.progress.total_waste),
+        ("finished_goods_kg", input.progress.finished_goods_kg),
+        (
+            "finished_goods_meter",
+            input.progress.finished_goods_meter,
+        ),
+        ("bobina_kg", input.progress.bobina_kg),
     ]
     .into_iter()
     .filter_map(|(code, value)| {
@@ -44,21 +50,30 @@ fn zero_completion_metric_codes(
 }
 
 fn rezka_queue_quantity_metrics_are_complete(
-    input: &ApparatusQueueActionRequest,
-    produced_qty: Option<f64>,
+    input: &QueueActionCommand,
 ) -> bool {
     let is_positive =
         |value: Option<f64>| value.is_some_and(|value| value.is_finite() && value > 0.0);
-    let has_output_meter = is_positive(produced_qty.or(input.finished_goods_meter));
-    let has_output_kg = is_positive(input.gross_qty.or(input.finished_goods_kg));
-    let has_diameter = is_positive(input.diameter);
+    let has_output_meter = is_positive(
+        input
+            .progress
+            .produced_qty
+            .or(input.progress.finished_goods_meter),
+    );
+    let has_output_kg = is_positive(
+        input
+            .progress
+            .gross_qty
+            .or(input.progress.finished_goods_kg),
+    );
+    let has_diameter = is_positive(input.progress.diameter);
     has_output_meter && has_output_kg && has_diameter
 }
 
 async fn prepare_qolips_for_bosma_start(
     state: &AppState,
     principal: &Principal,
-    input: &ApparatusQueueActionRequest,
+    input: &QueueActionCommand,
     apparatus: &QueueApparatusMetadata,
 ) -> Result<Vec<crate::core::qolip::QolipOrderStartPreparation>, AdminError> {
     if !apparatus.requires_qolip_scan() {
@@ -72,8 +87,7 @@ async fn prepare_qolips_for_bosma_start(
     else {
         return Err(production_map_error(ProductionMapError::MapNotFound));
     };
-    let qolip_codes = qolip_codes_for_start(input);
-    if qolip_codes.is_empty() {
+    if input.materials.qolip_codes.is_empty() {
         return Err(bad_request("qolip_scan_required"));
     }
     let required_qolips = state
@@ -81,8 +95,8 @@ async fn prepare_qolips_for_bosma_start(
         .required_qolips_for_order(&map.product_code, &map.title)
         .await
         .map_err(qolip_queue_error)?;
-    let mut preparations = Vec::with_capacity(qolip_codes.len());
-    for qolip_code in &qolip_codes {
+    let mut preparations = Vec::with_capacity(input.materials.qolip_codes.len());
+    for qolip_code in &input.materials.qolip_codes {
         reject_qolip_in_use(state, apparatus, &input.order_id, qolip_code).await?;
         let preparation = state
             .qolip
@@ -98,7 +112,9 @@ async fn prepare_qolips_for_bosma_start(
             .map_err(qolip_queue_error)?;
         preparations.push(preparation);
     }
-    let scanned = qolip_codes
+    let scanned = input
+        .materials
+        .qolip_codes
         .iter()
         .map(|code| code.trim().to_lowercase())
         .collect::<std::collections::BTreeSet<_>>();
@@ -110,27 +126,6 @@ async fn prepare_qolips_for_bosma_start(
         return Err(bad_request("qolip_scan_incomplete"));
     }
     Ok(preparations)
-}
-
-fn qolip_codes_for_start(input: &ApparatusQueueActionRequest) -> Vec<String> {
-    let mut result = Vec::new();
-    for code in input
-        .qolip_codes
-        .iter()
-        .map(String::as_str)
-        .chain(std::iter::once(input.qolip_code.as_str()))
-    {
-        let code = code.trim();
-        if code.is_empty()
-            || result
-                .iter()
-                .any(|existing: &String| existing.eq_ignore_ascii_case(code))
-        {
-            continue;
-        }
-        result.push(code.to_string());
-    }
-    result
 }
 
 pub(super) async fn reject_qolip_in_use(

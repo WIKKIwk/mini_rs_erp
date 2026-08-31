@@ -30,6 +30,8 @@ impl QueueApparatusMetadata {
     }
 }
 
+include!("queue_action_command.rs");
+
 pub(super) async fn resolve_queue_apparatus(
     state: &AppState,
     requested: &str,
@@ -72,131 +74,46 @@ pub async fn production_map_queue_action(
     if method != Method::POST {
         return Err(method_not_allowed());
     }
-    let mut input: ApparatusQueueActionRequest = parse_json(&body)?;
-    if input.apparatus.trim().is_empty() || input.order_id.trim().is_empty() {
+    let request: ApparatusQueueActionRequest = parse_json(&body)?;
+    if request.apparatus.trim().is_empty() || request.order_id.trim().is_empty() {
         return Err(bad_request("apparatus and order_id are required"));
     }
-    let apparatus = resolve_queue_apparatus(&state, &input.apparatus).await?;
-    input.apparatus = apparatus.id.to_string();
-    input.action = canonical_queue_action(
-        input.action,
-        input.worker_handoff,
-        input.remove_roll_from_apparatus,
-        &input.freeze_request_id,
-        input.freeze_with_issue,
-        &principal,
-    );
-    let explicit_worker_freeze = input.action == queue_state::ApparatusQueueAction::Freeze
-        && input.freeze_request_id.trim().is_empty();
-    if input.freeze_with_issue || explicit_worker_freeze {
-        if principal.role != PrincipalRole::Aparatchi {
-            return Err(forbidden());
-        }
-        if input.action != queue_state::ApparatusQueueAction::Freeze {
-            return Err(bad_request("freeze_with_issue_only_on_freeze"));
-        }
-        if input.issue_note.trim().is_empty() && !input.description.trim().is_empty() {
-            input.issue_note = input.description.clone();
-        }
-        if input.issue_note.trim().is_empty() {
-            return Err(bad_request("issue_note_required"));
-        }
-        if !input.freeze_request_id.trim().is_empty() {
-            return Err(bad_request(
-                "freeze_with_issue_cannot_use_freeze_request_id",
-            ));
-        }
-        if input.worker_handoff || input.remove_roll_from_apparatus {
-            return Err(bad_request("freeze_with_issue_actions_conflict"));
-        }
-        if input.order_id.trim().starts_with("training-") {
-            return Err(bad_request("freeze_with_issue_not_supported_for_training"));
-        }
-        // `freeze_with_issue` remains accepted for old clients, but the
-        // persisted intent is always the explicit frozen transition.
-        input.freeze_with_issue = true;
-    }
-    if input.worker_handoff && !matches!(input.action, queue_state::ApparatusQueueAction::Pause) {
-        return Err(bad_request("worker_handoff_only_on_pause"));
-    }
-    if input.remove_roll_from_apparatus
-        && !matches!(input.action, queue_state::ApparatusQueueAction::DetachRoll)
-    {
-        return Err(bad_request("roll_removal_only_on_detach_roll"));
-    }
-    if input.worker_handoff && input.remove_roll_from_apparatus {
-        return Err(bad_request("worker_handoff_actions_conflict"));
-    }
-    if !input.rezka_frames.is_empty()
-        && (!apparatus.is_rezka()
-            || !matches!(
-                input.action,
-                queue_state::ApparatusQueueAction::Pause
-                    | queue_state::ApparatusQueueAction::DetachRoll
-                    | queue_state::ApparatusQueueAction::RollComplete
-                    | queue_state::ApparatusQueueAction::Complete
-            ))
-    {
-        return Err(bad_request("rezka_frames_only_on_rezka_progress"));
-    }
-    if input
-        .rezka_frames
-        .iter()
-        .any(|frame| !frame.issue_note.trim().is_empty())
-        && !matches!(
-            input.action,
-            queue_state::ApparatusQueueAction::RollComplete
-                | queue_state::ApparatusQueueAction::Complete
-        )
-    {
-        return Err(bad_request("rezka_frame_issue_only_on_roll_progress"));
-    }
+    let apparatus = resolve_queue_apparatus(&state, &request.apparatus).await?;
+    let input = QueueActionCommand::from_request(request, &apparatus, &principal)?;
     if let Some(training_result) = super::super::training::training_queue_action(
         &state,
         &principal,
         &input.apparatus,
         &input.order_id,
         input.action,
-        &input.material_barcode,
-        &input.material_barcodes,
-        &input.progress_batch_id,
-        if input.qr_payload.trim().is_empty() {
-            &input.progress_qr
-        } else {
-            &input.qr_payload
-        },
+        &input.materials.legacy_barcode,
+        &input.materials.barcodes,
+        &input.progress.progress_batch_id,
+        &input.progress.qr_payload,
         super::super::training::TrainingQueuePrintInput {
-            driver_url: input.driver_url.clone(),
-            printer: input.printer.clone(),
-            print_mode: input.print_mode.clone(),
-            print_transport: input.print_transport.clone(),
-            progress_qty: input.produced_qty.or(input.qty),
-            gross_qty: input.gross_qty,
-            finished_goods_kg: input.finished_goods_kg,
-            bobina_kg: input.bobina_kg,
-            return_ink_kg: input.return_ink_kg,
-            lamination_print_leftover_rolls: input.lamination_print_leftover_rolls,
-            lamination_film_leftover_rolls: input.lamination_film_leftover_rolls,
-            rezka_bosma_waste: input.rezka_bosma_waste,
-            rezka_lamination_waste: input.rezka_lamination_waste,
-            rezka_edge_waste: input.rezka_edge_waste,
-            total_waste: input.total_waste,
-            finished_goods_meter: input.finished_goods_meter,
-            diameter: input.diameter,
-            returned_paint_items: input.returned_paint_items.clone(),
-            returned_paint_image_id: input.returned_paint_image_id.clone(),
-            description: if input.completion_request_note.trim().is_empty() {
-                input.description.clone()
-            } else {
-                input.completion_request_note.clone()
-            },
-            uom: if input.uom.trim().is_empty() {
-                input.unit.clone()
-            } else {
-                input.uom.clone()
-            },
-            customer_name: input.customer_name.clone(),
-            print_count: input.print_count,
+            driver_url: input.print.driver_url.clone(),
+            printer: input.print.printer.clone(),
+            print_mode: input.print.print_mode.clone(),
+            print_transport: input.print.print_transport.clone(),
+            progress_qty: input.progress.produced_qty,
+            gross_qty: input.progress.gross_qty,
+            finished_goods_kg: input.progress.finished_goods_kg,
+            bobina_kg: input.progress.bobina_kg,
+            return_ink_kg: input.progress.return_ink_kg,
+            lamination_print_leftover_rolls: input.progress.lamination_print_leftover_rolls,
+            lamination_film_leftover_rolls: input.progress.lamination_film_leftover_rolls,
+            rezka_bosma_waste: input.progress.rezka_bosma_waste,
+            rezka_lamination_waste: input.progress.rezka_lamination_waste,
+            rezka_edge_waste: input.progress.rezka_edge_waste,
+            total_waste: input.progress.total_waste,
+            finished_goods_meter: input.progress.finished_goods_meter,
+            diameter: input.progress.diameter,
+            returned_paint_items: input.completion.returned_paint_items.clone(),
+            returned_paint_image_id: input.completion.returned_paint_image_id.clone(),
+            description: input.progress.description.clone(),
+            uom: input.print.submitted_uom.clone(),
+            customer_name: input.print.customer_name.clone(),
+            print_count: input.print.print_count,
         },
     )
     .await
@@ -205,12 +122,6 @@ pub async fn production_map_queue_action(
         return Ok(json_response(training_result));
     }
     let assigned_apparatus = state.admin.principal_assigned_apparatus(&principal).await;
-    let material_barcodes = input.material_barcodes.clone();
-    let material_barcode = if material_barcodes.is_empty() {
-        input.material_barcode.clone()
-    } else {
-        material_barcodes.join(",")
-    };
     let state_material_barcodes =
         if matches!(input.action, queue_state::ApparatusQueueAction::Start) {
             super::raw_materials::raw_material_state_barcodes_for_order_apparatus(
@@ -222,26 +133,7 @@ pub async fn production_map_queue_action(
         } else {
             Vec::new()
         };
-    let produced_qty = input.produced_qty.or(input.qty);
-    let progress_uom = if !input.uom.trim().is_empty() {
-        input.uom.clone()
-    } else if !input.unit.trim().is_empty() {
-        input.unit.clone()
-    } else if apparatus.is_pechat()
-        && (produced_qty.is_some() || input.finished_goods_meter.is_some())
-    {
-        "m".to_string()
-    } else {
-        String::new()
-    };
-    let completion_request_note = if input.freeze_with_issue {
-        input.issue_note.clone()
-    } else if input.completion_request_note.trim().is_empty() {
-        input.description.clone()
-    } else {
-        input.completion_request_note.clone()
-    };
-    let freeze_request_safe_stop = !input.freeze_request_id.trim().is_empty()
+    let freeze_request_safe_stop = !input.progress.freeze_request_id.trim().is_empty()
         && matches!(
             input.action,
             queue_state::ApparatusQueueAction::Pause
@@ -250,30 +142,34 @@ pub async fn production_map_queue_action(
     let freeze_request_safe_stop_has_output = queue_action_has_any_output(&input);
     let freeze_request_safe_stop_with_issue = freeze_request_safe_stop
         && !freeze_request_safe_stop_has_output
-        && !completion_request_note.trim().is_empty();
+        && !input.progress.description.trim().is_empty();
     if freeze_request_safe_stop {
         if !freeze_request_safe_stop_has_output {
-            if completion_request_note.trim().is_empty() {
+            if input.progress.description.trim().is_empty() {
                 return Err(bad_request(
                     "freeze_safe_stop_output_or_issue_note_required",
                 ));
             }
-        } else if !freeze_safe_stop_output_is_complete(&input, produced_qty, &apparatus) {
+        } else if !freeze_safe_stop_output_is_complete(&input, &apparatus) {
             return Err(bad_request("freeze_safe_stop_output_incomplete"));
         }
     }
     if !matches!(input.action, queue_state::ApparatusQueueAction::Complete)
-        && (!input.returned_paint_items.is_empty()
-            || !input.returned_paint_image_id.trim().is_empty())
+        && (!input.completion.returned_paint_items.is_empty()
+            || !input.completion.returned_paint_image_id.trim().is_empty())
     {
         return Err(bad_request("returned_paint_only_on_complete"));
     }
-    let returned_paint_field_count = returned_paint_value_count(&input.returned_paint_items);
-    let has_returned_paint_image = !input.returned_paint_image_id.trim().is_empty();
+    let returned_paint_field_count =
+        returned_paint_value_count(&input.completion.returned_paint_items);
+    let has_returned_paint_image = !input.completion.returned_paint_image_id.trim().is_empty();
     let is_bosma_complete = matches!(input.action, queue_state::ApparatusQueueAction::Complete)
         && apparatus.is_pechat();
     if is_bosma_complete
-        && !returned_paint_report_can_close(&input.returned_paint_items, has_returned_paint_image)
+        && !returned_paint_report_can_close(
+            &input.completion.returned_paint_items,
+            has_returned_paint_image,
+        )
     {
         return Err(bad_request(
             "returned_paint_minimum_three_fields_or_image_only",
@@ -304,8 +200,8 @@ pub async fn production_map_queue_action(
                             order_code,
                             order_name: map.title,
                             apparatus: input.apparatus.clone(),
-                            image_id: input.returned_paint_image_id.clone(),
-                            items: input.returned_paint_items.clone(),
+                            image_id: input.completion.returned_paint_image_id.clone(),
+                            items: input.completion.returned_paint_items.clone(),
                         },
                         &principal,
                         format!(
@@ -328,52 +224,24 @@ pub async fn production_map_queue_action(
             (total > 0.0).then_some(total)
         }
         Some(_) => None,
-        None => input.return_ink_kg,
+        None => input.progress.return_ink_kg,
     };
-    let progress = QueueProgressInput {
-        freeze_request_id: input.freeze_request_id.clone(),
-        freeze_with_issue: input.freeze_with_issue,
-        rezka_frames: input.rezka_frames.clone(),
-        produced_qty,
-        gross_qty: input.gross_qty,
-        uom: progress_uom,
-        progress_batch_id: input.progress_batch_id.clone(),
-        qr_payload: if input.qr_payload.trim().is_empty() {
-            input.progress_qr.clone()
-        } else {
-            input.qr_payload.clone()
-        },
-        return_ink_kg,
-        lamination_print_leftover_rolls: input.lamination_print_leftover_rolls,
-        lamination_film_leftover_rolls: input.lamination_film_leftover_rolls,
-        rezka_bosma_waste: input.rezka_bosma_waste,
-        rezka_lamination_waste: input.rezka_lamination_waste,
-        rezka_edge_waste: input.rezka_edge_waste,
-        total_waste: input.total_waste,
-        finished_goods_kg: input.finished_goods_kg,
-        bobina_kg: input.bobina_kg,
-        finished_goods_meter: input.finished_goods_meter,
-        diameter: input.diameter,
-        description: completion_request_note.clone(),
-        returned_paint_report_attached,
-        force_full_completion_metrics: input.full_completion_report_required,
-        allow_partial_station_completion: false,
-        worker_handoff: input.worker_handoff,
-        remove_roll_from_apparatus: input.remove_roll_from_apparatus,
-    };
+    let mut progress = input.progress.clone();
+    progress.return_ink_kg = return_ink_kg;
+    progress.returned_paint_report_attached = returned_paint_report_attached;
     let has_complete_bosma_metrics = (return_ink_kg.is_some() || returned_paint_report_attached)
-        && input.total_waste.is_some()
-        && input.finished_goods_kg.is_some()
-        && input.finished_goods_meter.is_some();
-    let has_complete_laminatsiya_metrics = (input.lamination_print_leftover_rolls.is_some()
-        || input.lamination_film_leftover_rolls.is_some())
-        && input.total_waste.is_some()
-        && input.finished_goods_kg.is_some()
-        && input.finished_goods_meter.is_some();
+        && input.progress.total_waste.is_some()
+        && input.progress.finished_goods_kg.is_some()
+        && input.progress.finished_goods_meter.is_some();
+    let has_complete_laminatsiya_metrics =
+        (input.progress.lamination_print_leftover_rolls.is_some()
+            || input.progress.lamination_film_leftover_rolls.is_some())
+            && input.progress.total_waste.is_some()
+            && input.progress.finished_goods_kg.is_some()
+            && input.progress.finished_goods_meter.is_some();
     let is_rezka = apparatus.is_rezka();
-    let has_rezka_progress_metrics =
-        is_rezka && rezka_queue_quantity_metrics_are_complete(&input, produced_qty);
-    let has_rezka_frame_metrics = is_rezka && !input.rezka_frames.is_empty();
+    let has_rezka_progress_metrics = is_rezka && rezka_queue_quantity_metrics_are_complete(&input);
+    let has_rezka_frame_metrics = is_rezka && !input.progress.rezka_frames.is_empty();
     if matches!(
         input.action,
         queue_state::ApparatusQueueAction::Pause
@@ -381,7 +249,7 @@ pub async fn production_map_queue_action(
             | queue_state::ApparatusQueueAction::RollComplete
             | queue_state::ApparatusQueueAction::Complete
     ) && is_rezka
-        && !input.freeze_with_issue
+        && !input.progress.freeze_with_issue
         && !freeze_request_safe_stop_with_issue
         && !has_rezka_frame_metrics
         && !has_rezka_progress_metrics
@@ -395,7 +263,7 @@ pub async fn production_map_queue_action(
     };
     if matches!(input.action, queue_state::ApparatusQueueAction::Complete)
         && !zero_metric_codes.is_empty()
-        && completion_request_note.trim().is_empty()
+        && input.progress.description.trim().is_empty()
     {
         return Err(bad_request("zero_metric_explanation_required"));
     }
@@ -403,8 +271,8 @@ pub async fn production_map_queue_action(
         && !has_complete_laminatsiya_metrics
         && !has_rezka_frame_metrics
         && !has_rezka_progress_metrics
-        && input.gross_qty.is_none()
-        && !completion_request_note.trim().is_empty();
+        && input.progress.gross_qty.is_none()
+        && !input.progress.description.trim().is_empty();
     if matches!(input.action, queue_state::ApparatusQueueAction::Complete)
         && (!zero_metric_codes.is_empty() || missing_output_with_explanation)
     {
@@ -415,7 +283,7 @@ pub async fn production_map_queue_action(
                 &input.order_id,
                 &assigned_apparatus,
                 queue_action_actor(&principal),
-                &completion_request_note,
+                &input.progress.description,
                 zero_metric_codes,
                 returned_paint_report,
             )
@@ -437,7 +305,7 @@ pub async fn production_map_queue_action(
         input: &input,
         apparatus: &apparatus,
         assigned_apparatus,
-        material_barcode,
+        material_barcode: input.materials.combined_barcode.clone(),
         state_material_barcodes,
         progress,
         returned_paint_report,

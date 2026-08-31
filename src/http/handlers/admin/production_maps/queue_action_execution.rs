@@ -1,7 +1,7 @@
 struct QueueActionExecution<'a> {
     state: &'a AppState,
     principal: &'a Principal,
-    input: &'a ApparatusQueueActionRequest,
+    input: &'a QueueActionCommand,
     apparatus: &'a QueueApparatusMetadata,
     assigned_apparatus: Vec<String>,
     material_barcode: String,
@@ -108,20 +108,20 @@ async fn execute_queue_action(
             | queue_state::ApparatusQueueAction::RollComplete
             | queue_state::ApparatusQueueAction::Complete
     ) {
-        let frame_specific_metrics = !input.rezka_frames.is_empty();
+        let frame_specific_metrics = !input.progress.rezka_frames.is_empty();
         print_batches
             .iter()
             .map(|batch| ProgressLabelPrintRequest {
-                driver_url: input.driver_url.clone(),
+                driver_url: input.print.driver_url.clone(),
                 qr_payload: batch.qr_payload.clone(),
                 item_code: batch.label_item_code.clone(),
                 item_name: batch.label_item_name.clone(),
                 apparatus: batch.apparatus.clone(),
                 apparatus_display_name: apparatus.display_name.clone(),
-                customer_name: input.customer_name.trim().to_string(),
+                customer_name: input.print.customer_name.trim().to_string(),
                 executor_name: batch.executor_name.clone(),
-                printer: input.printer.clone(),
-                print_mode: input.print_mode.clone(),
+                printer: input.print.printer.clone(),
+                print_mode: input.print.print_mode.clone(),
                 gross_qty: if frame_specific_metrics {
                     batch
                         .payload_json
@@ -131,19 +131,20 @@ async fn execute_queue_action(
                         .unwrap_or(batch.produced_qty)
                 } else {
                     input
+                        .progress
                         .gross_qty
-                        .or(input.finished_goods_kg)
+                        .or(input.progress.finished_goods_kg)
                         .unwrap_or(batch.produced_qty)
                 },
                 tare_enabled: if frame_specific_metrics {
                     batch.bobina_kg.is_some_and(|value| value > 0.0)
                 } else {
-                    input.bobina_kg.is_some_and(|value| value > 0.0)
+                    input.progress.bobina_kg.is_some_and(|value| value > 0.0)
                 },
                 tare_kg: if frame_specific_metrics {
                     batch.bobina_kg.unwrap_or(0.0)
                 } else {
-                    input.bobina_kg.unwrap_or(0.0)
+                    input.progress.bobina_kg.unwrap_or(0.0)
                 },
                 progress_qty: if frame_specific_metrics {
                     batch.finished_goods_meter.unwrap_or(batch.produced_qty)
@@ -160,7 +161,7 @@ async fn execute_queue_action(
                 print_count: if frame_specific_metrics {
                     1
                 } else {
-                    input.print_count
+                    input.print.print_count
                 },
             })
             .collect::<Vec<_>>()
@@ -224,7 +225,7 @@ async fn execute_queue_action(
     let prints = dispatch_progress_label_prints(
         state.gscale.clone(),
         print_requests,
-        &input.print_transport,
+        &input.print.print_transport,
         &input.apparatus,
         &input.order_id,
         input.action,

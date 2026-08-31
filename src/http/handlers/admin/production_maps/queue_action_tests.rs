@@ -1,8 +1,8 @@
 #[cfg(test)]
 mod tests {
     use super::{
-        QueueApparatusMetadata, canonical_queue_action, parse_canonical_queue_apparatus_id,
-        returned_paint_queue_error,
+        ApparatusQueueActionRequest, QueueActionCommand, QueueApparatusMetadata,
+        canonical_queue_action, parse_canonical_queue_apparatus_id, returned_paint_queue_error,
     };
     use crate::core::apparatus_standard::{ApparatusId, ExecutionOperation};
     use crate::core::auth::models::{Principal, PrincipalRole};
@@ -119,5 +119,45 @@ mod tests {
 
         assert_eq!(status, axum::http::StatusCode::BAD_REQUEST);
         assert_eq!(body.error, "returned_paint_astatka_exceeds_rasxot");
+    }
+
+    #[test]
+    fn legacy_queue_fields_normalize_once_at_the_http_boundary() {
+        let request: ApparatusQueueActionRequest = serde_json::from_value(serde_json::json!({
+            "apparatus": "legacy display is replaced by resolved identity",
+            "order_id": "zakaz-normalized-command",
+            "action": "complete",
+            "qty": 12.5,
+            "unit": "m",
+            "progress_qr": "WIP-LEGACY-1",
+            "description": "legacy completion note",
+            "material_barcode": "RAW-LEGACY",
+            "material_barcodes": ["RAW-1", "RAW-2"],
+            "qolip_code": "QOLIP-A",
+            "qolip_codes": ["qolip-a", "QOLIP-B"]
+        }))
+        .expect("legacy request");
+        let apparatus = QueueApparatusMetadata {
+            id: ApparatusId::new("apparatus:catalog:pechat-001").unwrap(),
+            display_name: "Pechat".to_string(),
+            operation: ExecutionOperation::Print,
+            qolip_scan_required: true,
+        };
+
+        let command = QueueActionCommand::from_request(
+            request,
+            &apparatus,
+            &principal(PrincipalRole::Admin),
+        )
+        .expect("normalized command");
+
+        assert_eq!(command.apparatus, "apparatus:catalog:pechat-001");
+        assert_eq!(command.progress.produced_qty, Some(12.5));
+        assert_eq!(command.progress.uom, "m");
+        assert_eq!(command.print.submitted_uom, "m");
+        assert_eq!(command.progress.qr_payload, "WIP-LEGACY-1");
+        assert_eq!(command.progress.description, "legacy completion note");
+        assert_eq!(command.materials.combined_barcode, "RAW-1,RAW-2");
+        assert_eq!(command.materials.qolip_codes, ["qolip-a", "QOLIP-B"]);
     }
 }
