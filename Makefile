@@ -9,10 +9,13 @@ MANDATORY_UPDATE ?=
 RELEASE_NOTES ?=
 RELEASE_NOTES_FILE ?=
 
-.PHONY: verify up-domain stop-domain seed-demo db-backup db-migrate publish-mobile-apk
+.PHONY: verify audit-test-migration up-domain stop-domain seed-demo db-backup db-migrate publish-mobile-apk
 
 verify:
 	@python3 tools/mini_erp_verifier/verify.py
+
+audit-test-migration:
+	@uv run --script tools/test_migration_audit/audit.py
 
 up-domain:
 	@./tools/runtime/up_domain.sh "$(DOMAIN)"

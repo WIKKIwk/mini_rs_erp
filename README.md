@@ -964,6 +964,17 @@ contract verifier against the real Axum router. It does not compile Rust
 generic response-shape coverage lives in
 `tools/mini_erp_verifier/contracts.json`.
 
+Inventory Rust tests before migrating or extending the test layer:
+
+```bash
+make audit-test-migration
+```
+
+The Python Tree-sitter audit does not invoke Cargo. It reports tests as
+automatic HTTP-contract candidates, generated-scenario candidates, or
+Rust-native invariants, with machine-readable evidence available through
+`uv run --script tools/test_migration_audit/audit.py --json`.
+
 Rust tests are reserved for independent domain invariants, transaction and
 database behavior, and compiler/type guarantees. Run only the relevant suite
 when one of those boundaries changes:
