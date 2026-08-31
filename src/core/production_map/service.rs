@@ -202,12 +202,12 @@ pub(super) struct ClaimedAlternativeMapUpdate {
 }
 
 impl PreparedApparatusQueueAction {
-    pub fn progress_batch(&self) -> Option<&OrderProgressBatch> {
-        self.progress_batch.as_ref()
-    }
-
-    pub fn progress_batches(&self) -> &[OrderProgressBatch] {
-        &self.progress_batches
+    pub fn progress_output_batches(&self) -> &[OrderProgressBatch] {
+        if self.progress_batches.is_empty() {
+            self.progress_batch.as_slice()
+        } else {
+            &self.progress_batches
+        }
     }
 
     pub fn material_scan_skipped(&self) -> bool {

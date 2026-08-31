@@ -92,18 +92,10 @@ async fn execute_queue_action(
             &input.order_id,
         ));
     }
-    let print_batches = if prepared.progress_batches().is_empty() {
-        prepared
-            .progress_batch()
-            .into_iter()
-            .cloned()
-            .collect::<Vec<_>>()
-    } else {
-        prepared.progress_batches().to_vec()
-    };
     let print_requests = if input.action.records_progress_output() {
         let frame_specific_metrics = !input.progress.rezka_frames.is_empty();
-        print_batches
+        prepared
+            .progress_output_batches()
             .iter()
             .map(|batch| ProgressLabelPrintRequest {
                 driver_url: input.print.driver_url.clone(),
