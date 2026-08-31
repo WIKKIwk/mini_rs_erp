@@ -109,6 +109,9 @@ async fn calculate_contract() {
     assert_eq!(body["results"][0]["value"], 3.5);
     assert_eq!(body["items"].as_array().unwrap().len(), 2);
     assert!(body["score"].as_f64().unwrap_or(0.0) > 0.0);
+    let code = body["code"].as_str().expect("code");
+    assert!(code.starts_with("30"));
+    assert!(body["detail"].as_str().unwrap_or_default().contains("required"));
 }
 """
         )
@@ -119,6 +122,8 @@ async fn calculate_contract() {
                 {"path": ["results", 0, "value"], "equals": 3.5},
                 {"path": ["items"], "length": 2},
                 {"path": ["score"], "greater_than": 0.0},
+                {"path": ["code"], "starts_with": "30"},
+                {"path": ["detail"], "contains": "required"},
             ],
         )
 
@@ -128,13 +133,7 @@ async fn calculate_contract() {
 #[tokio::test]
 async fn invalid_json() {
     let response = build_router(test_state())
-        .oneshot(
-            Request::builder()
-                .method("POST")
-                .uri("/v1/mobile/items")
-                .body(Body::from("{not-json"))
-                .unwrap(),
-        )
+        .oneshot(request("POST", "/v1/mobile/items", "{not-json"))
         .await
         .unwrap();
     assert_eq!(response.status(), StatusCode::BAD_REQUEST);

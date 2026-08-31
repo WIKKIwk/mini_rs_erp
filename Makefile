@@ -22,11 +22,13 @@ extract-test-contracts:
 	@uv run --script tools/test_migration_audit/extract_contracts.py
 	@uv run --script tools/test_migration_audit/extract_contracts.py --manifest tools/test_migration_audit/migrations/automatic_http_52843a2.json --output tools/mini_erp_verifier/generated_automatic_contracts.json
 	@uv run --script tools/test_migration_audit/extract_contracts.py --manifest tools/test_migration_audit/migrations/automatic_http_d83ba70.json --output tools/mini_erp_verifier/generated_automatic_d83ba70_contracts.json
+	@uv run --script tools/test_migration_audit/extract_contracts.py --manifest tools/test_migration_audit/migrations/automatic_http_04d2b19.json --output tools/mini_erp_verifier/generated_automatic_04d2b19_contracts.json
 
 check-generated-test-contracts:
 	@uv run --script tools/test_migration_audit/extract_contracts.py --check
 	@uv run --script tools/test_migration_audit/extract_contracts.py --manifest tools/test_migration_audit/migrations/automatic_http_52843a2.json --output tools/mini_erp_verifier/generated_automatic_contracts.json --check
 	@uv run --script tools/test_migration_audit/extract_contracts.py --manifest tools/test_migration_audit/migrations/automatic_http_d83ba70.json --output tools/mini_erp_verifier/generated_automatic_d83ba70_contracts.json --check
+	@uv run --script tools/test_migration_audit/extract_contracts.py --manifest tools/test_migration_audit/migrations/automatic_http_04d2b19.json --output tools/mini_erp_verifier/generated_automatic_04d2b19_contracts.json --check
 
 audit-test-migration:
 	@uv run --script tools/test_migration_audit/audit.py

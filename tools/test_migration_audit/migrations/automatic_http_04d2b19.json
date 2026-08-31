@@ -1,0 +1,15 @@
+{
+  "protocol": 1,
+  "git_ref": "04d2b19",
+  "expected_tests": 2,
+  "expected_automatic_contracts": 2,
+  "remove_selected_tests": true,
+  "paths": [
+    "src/http/gscale_route_tests/rps_batch.rs",
+    "src/http/supplier_dispatch_route_tests.rs"
+  ],
+  "tests": [
+    "src/http/gscale_route_tests/rps_batch.rs::rps_batch_start_requires_driver_url",
+    "src/http/supplier_dispatch_route_tests.rs::supplier_dispatch_rejects_invalid_json_like_go"
+  ]
+}

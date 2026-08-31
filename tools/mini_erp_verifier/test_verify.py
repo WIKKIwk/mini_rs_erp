@@ -48,11 +48,18 @@ class HarnessFreshnessTests(unittest.TestCase):
                     {"path": ["items", 1, "id"], "equals": "B"},
                     {"path": ["items"], "length": 2},
                     {"path": ["score"], "greater_than": 0},
+                    {"path": ["prefix"], "starts_with": "ABC"},
+                    {"path": ["detail"], "contains": "required"},
                 ],
             },
             {
                 "status": 200,
-                "body": {"items": [{"id": "A"}, {"id": "B"}], "score": 1.5},
+                "body": {
+                    "items": [{"id": "A"}, {"id": "B"}],
+                    "score": 1.5,
+                    "prefix": "ABC-123",
+                    "detail": "driver_url_required",
+                },
             },
         )
 

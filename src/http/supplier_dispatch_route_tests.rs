@@ -60,20 +60,6 @@ async fn supplier_dispatch_forbids_non_supplier_like_go() {
 }
 
 #[tokio::test]
-async fn supplier_dispatch_rejects_invalid_json_like_go() {
-    let state = test_state();
-    let token = supplier_session(&state).await;
-
-    let response = build_router(state)
-        .oneshot(request("POST", "/v1/mobile/supplier/dispatch", &token, "{"))
-        .await
-        .expect("response");
-
-    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
-    assert_eq!(json_body(response).await["error"], "invalid json");
-}
-
-#[tokio::test]
 async fn supplier_dispatch_fails_without_provider_like_go() {
     let state = test_state();
     let token = supplier_session(&state).await;

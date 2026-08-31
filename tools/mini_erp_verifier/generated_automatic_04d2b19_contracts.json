@@ -1,0 +1,71 @@
+{
+  "cases": [
+    {
+      "expect": {
+        "body": {
+          "error": "invalid_input",
+          "ok": false
+        },
+        "body_paths": [
+          {
+            "contains": "driver_url_required",
+            "path": [
+              "detail"
+            ]
+          }
+        ],
+        "status": 400
+      },
+      "name": "rps_batch_start_requires_driver_url",
+      "request": {
+        "body": {
+          "item_code": "ITEM-1",
+          "item_name": "Green Tea",
+          "print_mode": "label",
+          "printer": "godex",
+          "warehouse": "Stores - A"
+        },
+        "fixture": "isolated",
+        "method": "POST",
+        "role": "werka",
+        "uri": "/v1/mobile/rps/batch/start"
+      },
+      "source": {
+        "line": 1092,
+        "path": "src/http/gscale_route_tests/rps_batch.rs"
+      }
+    },
+    {
+      "expect": {
+        "body": {
+          "error": "invalid json"
+        },
+        "status": 400
+      },
+      "name": "supplier_dispatch_rejects_invalid_json_like_go",
+      "request": {
+        "fixture": "isolated",
+        "method": "POST",
+        "raw_body": "{",
+        "role": "supplier",
+        "uri": "/v1/mobile/supplier/dispatch"
+      },
+      "source": {
+        "line": 63,
+        "path": "src/http/supplier_dispatch_route_tests.rs"
+      }
+    }
+  ],
+  "generated": true,
+  "protocol": 1,
+  "skipped": [],
+  "source": {
+    "git_ref": "04d2b19",
+    "manifest": "tools/test_migration_audit/migrations/automatic_http_04d2b19.json"
+  },
+  "summary": {
+    "generated_cases": 2,
+    "skipped_scenarios": 0,
+    "source_tests": 2
+  }
+}

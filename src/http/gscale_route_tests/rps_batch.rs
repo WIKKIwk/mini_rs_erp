@@ -1087,37 +1087,3 @@ async fn material_taminotchi_rps_batch_start_requires_roll_dimensions() {
     assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
     assert_eq!(body["error"], "material_dimensions_required");
 }
-
-#[tokio::test]
-async fn rps_batch_start_requires_driver_url() {
-    let state = test_state();
-    let token = session(&state, PrincipalRole::Werka).await;
-    let response = build_router(state)
-        .oneshot(request(
-            "POST",
-            "/v1/mobile/rps/batch/start",
-            &token,
-            r#"{
-                "item_code":"ITEM-1",
-                "item_name":"Green Tea",
-                "warehouse":"Stores - A",
-                "printer":"godex",
-                "print_mode":"label"
-            }"#,
-        ))
-        .await
-        .expect("response");
-    let status = response.status();
-    let body = json_body(response).await;
-
-    assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
-    assert_eq!(body["ok"], false);
-    assert_eq!(body["error"], "invalid_input");
-    assert!(
-        body["detail"]
-            .as_str()
-            .unwrap_or_default()
-            .contains("driver_url_required"),
-        "{body}"
-    );
-}

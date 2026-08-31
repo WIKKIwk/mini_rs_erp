@@ -163,9 +163,7 @@ def request_body(content: bytes, request: Node) -> dict[str, Any]:
         try:
             json_values.append(json.loads(value))
         except json.JSONDecodeError:
-            if "Body::from" in text:
-                return {"raw_body": value}
-            raise ExtractionFailure("request contains invalid literal JSON")
+            return {"raw_body": value}
     if len(json_values) > 1:
         raise ExtractionFailure("request contains multiple JSON body candidates")
     if "Body::from" in text and not json_values:
@@ -269,6 +267,32 @@ def json_path(source: str) -> list[str | int]:
     ]
 
 
+def bound_body_paths(
+    function_text: str, bound_json: set[str]
+) -> dict[str, list[str | int]]:
+    paths: dict[str, list[str | int]] = {name: [] for name in bound_json}
+    pattern = re.compile(
+        r"\blet\s+([a-zA-Z_][a-zA-Z0-9_]*)\s*=\s*"
+        r"([a-zA-Z_][a-zA-Z0-9_]*)"
+        r"((?:\s*\[\s*(?:\"[^\"\\]+\"|\d+)\s*\])*)"
+        r"\s*(?:\.as_(?:array|str)\(\)[^;]*)?;",
+        re.DOTALL,
+    )
+    for alias, base, suffix in pattern.findall(function_text):
+        if base in paths and alias != base:
+            paths[alias] = [*paths[base], *json_path(suffix)]
+    return paths
+
+
+def resolve_body_path(
+    expression: str, aliases: dict[str, list[str | int]]
+) -> list[str | int] | None:
+    base_match = re.match(r"\s*([a-zA-Z_][a-zA-Z0-9_]*)", expression)
+    if base_match is None or base_match.group(1) not in aliases:
+        return None
+    return [*aliases[base_match.group(1)], *json_path(expression)]
+
+
 def response_expectation(
     content: bytes,
     function: Node,
@@ -277,6 +301,7 @@ def response_expectation(
 ) -> tuple[dict[str, Any], int]:
     function_text = audit.source_text(content, function)
     bound_json = set(BOUND_JSON_PATTERN.findall(function_text))
+    body_aliases = bound_body_paths(function_text, bound_json)
     bound_status = set(BOUND_STATUS_PATTERN.findall(function_text))
     body: dict[str, Any] = {}
     body_paths: list[dict[str, Any]] = []
@@ -297,20 +322,34 @@ def response_expectation(
         ):
             handled += 1
             continue
-        if macro_name == "assert" and ">" in source:
-            left, right = source[source.find("(") + 1 : source.rfind(")")].rsplit(
-                ">", 1
-            )
-            path = json_path(left)
-            bound_name = left.split("[", 1)[0].strip()
-            if bound_name not in bound_json or not path:
+        if macro_name == "assert" and ".is_empty()" in source:
+            expression = arguments[0]
+            path = resolve_body_path(expression, body_aliases)
+            if path is None:
+                raise ExtractionFailure(f"unsupported response assertion: {source}")
+            body_paths.append({"path": path, "length": 0})
+            handled += 1
+            continue
+        if macro_name == "assert" and (
+            ".starts_with(" in source or ".contains(" in source
+        ):
+            expression = arguments[0]
+            operator = "starts_with" if ".starts_with(" in expression else "contains"
+            receiver, argument = expression.split(f".{operator}(", 1)
+            path = resolve_body_path(receiver, body_aliases)
+            if path is None:
                 raise ExtractionFailure(f"unsupported response assertion: {source}")
             body_paths.append(
-                {
-                    "path": path,
-                    "greater_than": json_scalar(right.split(",", 1)[0]),
-                }
+                {"path": path, operator: json_scalar(argument.rsplit(")", 1)[0])}
             )
+            handled += 1
+            continue
+        if macro_name == "assert" and ">" in source:
+            left, right = arguments[0].rsplit(">", 1)
+            path = resolve_body_path(left, body_aliases)
+            if path is None or not path:
+                raise ExtractionFailure(f"unsupported response assertion: {source}")
+            body_paths.append({"path": path, "greater_than": json_scalar(right)})
             handled += 1
             continue
         if macro_name != "assert_eq":
@@ -319,10 +358,12 @@ def response_expectation(
             raise ExtractionFailure(f"could not split assertion: {source}")
         left, right = arguments[:2]
         is_direct_json = "json_body(" in left and ".await" in left
-        bound_name = left.split("[", 1)[0].strip()
-        if not is_direct_json and bound_name not in bound_json:
+        path = (
+            json_path(left) if is_direct_json else resolve_body_path(left, body_aliases)
+        )
+        if not is_direct_json and path is None:
             raise ExtractionFailure(f"assertion is not a response JSON path: {source}")
-        path = json_path(left)
+        assert path is not None
         if ".len()" in left:
             body_paths.append(
                 {"path": path, "length": json_scalar(right, package_version)}

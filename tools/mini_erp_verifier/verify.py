@@ -30,6 +30,9 @@ GENERATED_AUTOMATIC_CONTRACT_PATH = Path(__file__).with_name(
 GENERATED_D83BA70_CONTRACT_PATH = Path(__file__).with_name(
     "generated_automatic_d83ba70_contracts.json"
 )
+GENERATED_04D2B19_CONTRACT_PATH = Path(__file__).with_name(
+    "generated_automatic_04d2b19_contracts.json"
+)
 MIGRATION_MANIFEST_PATH = (
     ROOT / "tools" / "test_migration_audit" / "migrations" / "generic_http_975078a.json"
 )
@@ -47,10 +50,18 @@ D83BA70_MIGRATION_MANIFEST_PATH = (
     / "migrations"
     / "automatic_http_d83ba70.json"
 )
+MIGRATION_04D2B19_MANIFEST_PATH = (
+    ROOT
+    / "tools"
+    / "test_migration_audit"
+    / "migrations"
+    / "automatic_http_04d2b19.json"
+)
 GENERATED_BUNDLES = (
     (GENERATED_CONTRACT_PATH, MIGRATION_MANIFEST_PATH),
     (GENERATED_AUTOMATIC_CONTRACT_PATH, AUTOMATIC_MIGRATION_MANIFEST_PATH),
     (GENERATED_D83BA70_CONTRACT_PATH, D83BA70_MIGRATION_MANIFEST_PATH),
+    (GENERATED_04D2B19_CONTRACT_PATH, MIGRATION_04D2B19_MANIFEST_PATH),
 )
 HARNESS = ROOT / "target" / "debug" / "mini_rs_verifier_harness"
 HARNESS_DEP_INFO = HARNESS.with_suffix(".d")
@@ -451,6 +462,18 @@ def response_errors(expect: dict[str, Any], actual: dict[str, Any]) -> list[str]
         ):
             errors.append(
                 f"{label}: expected greater than {rule['greater_than']}, got {value!r}"
+            )
+        elif "starts_with" in rule and (
+            not isinstance(value, str) or not value.startswith(rule["starts_with"])
+        ):
+            errors.append(
+                f"{label}: expected prefix {rule['starts_with']!r}, got {value!r}"
+            )
+        elif "contains" in rule and (
+            not isinstance(value, str) or rule["contains"] not in value
+        ):
+            errors.append(
+                f"{label}: expected substring {rule['contains']!r}, got {value!r}"
             )
     if "body_starts_with" in expect:
         body = actual.get("body")
