@@ -86,18 +86,5 @@ fn progress_batch_correction_is_unchanged(
     current: &OrderProgressBatch,
     input: &ProgressBatchCorrectionInput,
 ) -> bool {
-    current.produced_qty == input.produced_qty
-        && current.uom.trim() == input.uom.trim()
-        && current.return_ink_kg == input.return_ink_kg
-        && current.lamination_print_leftover_rolls == input.lamination_print_leftover_rolls
-        && current.lamination_film_leftover_rolls == input.lamination_film_leftover_rolls
-        && current.rezka_bosma_waste == input.rezka_bosma_waste
-        && current.rezka_lamination_waste == input.rezka_lamination_waste
-        && current.rezka_edge_waste == input.rezka_edge_waste
-        && current.total_waste == input.total_waste
-        && current.finished_goods_kg == input.finished_goods_kg
-        && current.bobina_kg == input.bobina_kg
-        && current.finished_goods_meter == input.finished_goods_meter
-        && current.diameter == input.diameter
-        && current.description.trim() == input.description.trim()
+    current.correction_values() == current.corrected(input).correction_values()
 }

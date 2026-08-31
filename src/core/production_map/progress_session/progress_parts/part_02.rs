@@ -183,31 +183,39 @@ impl OrderProgressBatch {
         corrected.finished_goods_meter = input.finished_goods_meter;
         corrected.diameter = input.diameter;
         corrected.description = input.description.trim().to_string();
-        if !corrected.payload_json.is_object() {
-            corrected.payload_json = serde_json::json!({});
-        }
-        corrected.payload_json["produced_qty"] = serde_json::json!(corrected.produced_qty);
-        corrected.payload_json["uom"] = serde_json::json!(corrected.uom);
-        corrected.payload_json["return_ink_kg"] = serde_json::json!(corrected.return_ink_kg);
-        corrected.payload_json["lamination_print_leftover_rolls"] =
-            serde_json::json!(corrected.lamination_print_leftover_rolls);
-        corrected.payload_json["lamination_film_leftover_rolls"] =
-            serde_json::json!(corrected.lamination_film_leftover_rolls);
-        corrected.payload_json["rezka_bosma_waste"] =
-            serde_json::json!(corrected.rezka_bosma_waste);
-        corrected.payload_json["rezka_lamination_waste"] =
-            serde_json::json!(corrected.rezka_lamination_waste);
-        corrected.payload_json["rezka_edge_waste"] = serde_json::json!(corrected.rezka_edge_waste);
-        corrected.payload_json["total_waste"] = serde_json::json!(corrected.total_waste);
-        corrected.payload_json["finished_goods_kg"] =
-            serde_json::json!(corrected.finished_goods_kg);
-        corrected.payload_json["bobina_kg"] = serde_json::json!(corrected.bobina_kg);
-        corrected.payload_json["finished_goods_meter"] =
-            serde_json::json!(corrected.finished_goods_meter);
-        corrected.payload_json["diameter"] = serde_json::json!(corrected.diameter);
-        corrected.payload_json["description"] = serde_json::json!(corrected.description);
-        corrected.payload_json["correction_revision"] = serde_json::json!(corrected.revision);
+        corrected.sync_correction_payload();
         corrected
+    }
+
+    pub(crate) fn correction_values(&self) -> serde_json::Value {
+        serde_json::json!({
+            "produced_qty": self.produced_qty,
+            "uom": self.uom,
+            "return_ink_kg": self.return_ink_kg,
+            "lamination_print_leftover_rolls": self.lamination_print_leftover_rolls,
+            "lamination_film_leftover_rolls": self.lamination_film_leftover_rolls,
+            "rezka_bosma_waste": self.rezka_bosma_waste,
+            "rezka_lamination_waste": self.rezka_lamination_waste,
+            "rezka_edge_waste": self.rezka_edge_waste,
+            "total_waste": self.total_waste,
+            "finished_goods_kg": self.finished_goods_kg,
+            "bobina_kg": self.bobina_kg,
+            "finished_goods_meter": self.finished_goods_meter,
+            "diameter": self.diameter,
+            "description": self.description,
+        })
+    }
+
+    fn sync_correction_payload(&mut self) {
+        if !self.payload_json.is_object() {
+            self.payload_json = serde_json::json!({});
+        }
+        let fields = self.correction_values();
+        self.payload_json
+            .as_object_mut()
+            .expect("progress batch payload")
+            .extend(fields.as_object().expect("correction values").clone());
+        self.payload_json["correction_revision"] = serde_json::json!(self.revision);
     }
 }
 
