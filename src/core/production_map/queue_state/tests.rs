@@ -6,6 +6,26 @@ use super::*;
 use crate::core::production_map::ProductionMapError;
 
 #[test]
+fn progress_output_actions_have_one_canonical_classification() {
+    for action in [
+        ApparatusQueueAction::Pause,
+        ApparatusQueueAction::DetachRoll,
+        ApparatusQueueAction::RollComplete,
+        ApparatusQueueAction::Complete,
+    ] {
+        assert!(action.records_progress_output());
+    }
+    for action in [
+        ApparatusQueueAction::Start,
+        ApparatusQueueAction::Freeze,
+        ApparatusQueueAction::Resume,
+        ApparatusQueueAction::Merge,
+    ] {
+        assert!(!action.records_progress_output());
+    }
+}
+
+#[test]
 fn first_actionable_skips_completed_orders() {
     let sequence = vec!["a".to_string(), "b".to_string(), "c".to_string()];
     let mut states = BTreeMap::from([("a".to_string(), ApparatusQueueOrderState::Completed)]);

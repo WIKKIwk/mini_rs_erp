@@ -154,14 +154,7 @@ impl QueueMetricCoverage {
         input: &QueueActionCommand,
         apparatus: &QueueApparatusMetadata,
     ) -> bool {
-        apparatus.is_rezka()
-            && matches!(
-                input.action,
-                queue_state::ApparatusQueueAction::Pause
-                    | queue_state::ApparatusQueueAction::DetachRoll
-                    | queue_state::ApparatusQueueAction::RollComplete
-                    | queue_state::ApparatusQueueAction::Complete
-            )
+        apparatus.is_rezka() && input.action.records_progress_output()
     }
 
     fn missing_output_with_explanation(&self, input: &QueueActionCommand) -> bool {

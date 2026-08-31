@@ -88,14 +88,7 @@ impl QueueActionCommand {
             return Err(bad_request("worker_handoff_actions_conflict"));
         }
         if !request.rezka_frames.is_empty()
-            && (!apparatus.is_rezka()
-                || !matches!(
-                    action,
-                    queue_state::ApparatusQueueAction::Pause
-                        | queue_state::ApparatusQueueAction::DetachRoll
-                        | queue_state::ApparatusQueueAction::RollComplete
-                        | queue_state::ApparatusQueueAction::Complete
-                ))
+            && (!apparatus.is_rezka() || !action.records_progress_output())
         {
             return Err(bad_request("rezka_frames_only_on_rezka_progress"));
         }

@@ -203,13 +203,7 @@ pub(super) fn progress_output_identity(
     progress: &QueueProgressInput,
     input_progress: &SessionProgressLinks,
 ) -> ProgressOutputIdentity {
-    let input_qr_is_source = matches!(
-        action,
-        queue_state::ApparatusQueueAction::Pause
-            | queue_state::ApparatusQueueAction::DetachRoll
-            | queue_state::ApparatusQueueAction::RollComplete
-            | queue_state::ApparatusQueueAction::Complete
-    );
+    let input_qr_is_source = action.records_progress_output();
     let output_batch_id_input = if input_qr_is_source
         && !input_progress.batch_id.trim().is_empty()
         && progress

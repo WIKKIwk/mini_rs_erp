@@ -95,13 +95,7 @@ pub(super) fn has_waiting_previous_stage_wip(
     batches.iter().any(|batch| {
         batch.order_id.trim() == order_id.trim()
             && super::types::apparatus_ids_match(&batch.apparatus, previous_stage)
-            && matches!(
-                batch.action,
-                queue_state::ApparatusQueueAction::Pause
-                    | queue_state::ApparatusQueueAction::DetachRoll
-                    | queue_state::ApparatusQueueAction::RollComplete
-                    | queue_state::ApparatusQueueAction::Complete
-            )
+            && batch.action.records_progress_output()
             && matches!(
                 batch.status,
                 OrderProgressBatchStatus::Paused

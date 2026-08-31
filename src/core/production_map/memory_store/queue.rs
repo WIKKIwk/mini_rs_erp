@@ -184,14 +184,9 @@ pub(super) async fn completed_queue_orders_for_actor(
         {
             continue;
         }
-        if !matches!(
-            event.action,
-            queue_state::ApparatusQueueAction::Pause
-                | queue_state::ApparatusQueueAction::Freeze
-                | queue_state::ApparatusQueueAction::DetachRoll
-                | queue_state::ApparatusQueueAction::RollComplete
-                | queue_state::ApparatusQueueAction::Complete
-        ) {
+        if event.action != queue_state::ApparatusQueueAction::Freeze
+            && !event.action.records_progress_output()
+        {
             continue;
         }
         let order_id = event.order_id.trim();
@@ -208,10 +203,7 @@ pub(super) async fn completed_queue_orders_for_actor(
             {
                 CompletedQueueOrderStatus::Completed
             }
-            queue_state::ApparatusQueueAction::Pause
-            | queue_state::ApparatusQueueAction::DetachRoll
-            | queue_state::ApparatusQueueAction::RollComplete
-            | queue_state::ApparatusQueueAction::Complete => CompletedQueueOrderStatus::InProgress,
+            action if action.records_progress_output() => CompletedQueueOrderStatus::InProgress,
             _ => continue,
         };
         completed.push(CompletedQueueOrder {

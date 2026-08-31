@@ -101,13 +101,7 @@ async fn execute_queue_action(
     } else {
         prepared.progress_batches().to_vec()
     };
-    let print_requests = if matches!(
-        input.action,
-        queue_state::ApparatusQueueAction::Pause
-            | queue_state::ApparatusQueueAction::DetachRoll
-            | queue_state::ApparatusQueueAction::RollComplete
-            | queue_state::ApparatusQueueAction::Complete
-    ) {
+    let print_requests = if input.action.records_progress_output() {
         let frame_specific_metrics = !input.progress.rezka_frames.is_empty();
         print_batches
             .iter()

@@ -63,13 +63,7 @@ impl ProductionMapService {
             .ok_or(ProductionMapError::ProgressBatchNotAccepted)?;
         if batch.order_id.trim() != order_id
             || !super::types::apparatus_ids_match(&batch.apparatus, &previous_apparatus)
-            || !matches!(
-                batch.action,
-                queue_state::ApparatusQueueAction::Pause
-                    | queue_state::ApparatusQueueAction::DetachRoll
-                    | queue_state::ApparatusQueueAction::RollComplete
-                    | queue_state::ApparatusQueueAction::Complete
-            )
+            || !batch.action.records_progress_output()
             || !matches!(
                 batch.status,
                 OrderProgressBatchStatus::Paused
@@ -180,13 +174,7 @@ impl ProductionMapService {
                     || batch.used_by_session_id.trim() == session_id.trim()));
         if batch.order_id.trim() != order_id
             || !super::types::apparatus_ids_match(&batch.apparatus, &previous_apparatus)
-            || !matches!(
-                batch.action,
-                queue_state::ApparatusQueueAction::Pause
-                    | queue_state::ApparatusQueueAction::DetachRoll
-                    | queue_state::ApparatusQueueAction::RollComplete
-                    | queue_state::ApparatusQueueAction::Complete
-            )
+            || !batch.action.records_progress_output()
             || !matches!(
                 batch.status,
                 OrderProgressBatchStatus::Paused

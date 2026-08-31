@@ -52,6 +52,15 @@ pub enum ApparatusQueueAction {
     Complete,
 }
 
+impl ApparatusQueueAction {
+    pub const fn records_progress_output(self) -> bool {
+        matches!(
+            self,
+            Self::Pause | Self::DetachRoll | Self::RollComplete | Self::Complete
+        )
+    }
+}
+
 #[derive(Debug, Clone, Copy)]
 struct QueueStateTransition {
     from: ApparatusQueueOrderState,
