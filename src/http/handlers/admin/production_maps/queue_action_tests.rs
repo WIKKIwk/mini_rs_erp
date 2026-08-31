@@ -2,7 +2,8 @@
 mod tests {
     use super::{
         ApparatusQueueActionRequest, QueueActionCommand, QueueApparatusMetadata,
-        canonical_queue_action, parse_canonical_queue_apparatus_id, returned_paint_queue_error,
+        QueueActionDecision, canonical_queue_action, parse_canonical_queue_apparatus_id,
+        plan_queue_action, returned_paint_queue_error,
     };
     use crate::core::apparatus_standard::{ApparatusId, ExecutionOperation};
     use crate::core::auth::models::{Principal, PrincipalRole};
@@ -18,6 +19,27 @@ mod tests {
             phone: String::new(),
             avatar_url: String::new(),
         }
+    }
+
+    fn command_from_json(
+        value: serde_json::Value,
+        operation: ExecutionOperation,
+    ) -> (QueueActionCommand, QueueApparatusMetadata) {
+        let request: ApparatusQueueActionRequest =
+            serde_json::from_value(value).expect("queue request");
+        let apparatus = QueueApparatusMetadata {
+            id: ApparatusId::new("apparatus:catalog:test-001").unwrap(),
+            display_name: "Test apparatus".to_string(),
+            operation,
+            qolip_scan_required: false,
+        };
+        let command = QueueActionCommand::from_request(
+            request,
+            &apparatus,
+            &principal(PrincipalRole::Admin),
+        )
+        .expect("queue command");
+        (command, apparatus)
     }
 
     #[test]
@@ -159,5 +181,46 @@ mod tests {
         assert_eq!(command.progress.description, "legacy completion note");
         assert_eq!(command.materials.combined_barcode, "RAW-1,RAW-2");
         assert_eq!(command.materials.qolip_codes, ["qolip-a", "QOLIP-B"]);
+    }
+
+    #[test]
+    fn queue_decision_requires_rezka_progress_metrics() {
+        let (command, apparatus) = command_from_json(
+            serde_json::json!({
+                "apparatus": "apparatus:catalog:test-001",
+                "order_id": "zakaz-rezka-plan",
+                "action": "pause"
+            }),
+            ExecutionOperation::Cut,
+        );
+
+        let (status, axum::Json(body)) =
+            plan_queue_action(&command, &apparatus, None, false, false)
+                .expect_err("rezka metrics required");
+
+        assert_eq!(status, axum::http::StatusCode::BAD_REQUEST);
+        assert_eq!(body.error, "rezka_progress_metrics_required");
+    }
+
+    #[test]
+    fn queue_decision_routes_explained_missing_output_to_admin_completion() {
+        let (command, apparatus) = command_from_json(
+            serde_json::json!({
+                "apparatus": "apparatus:catalog:test-001",
+                "order_id": "zakaz-completion-plan",
+                "action": "complete",
+                "description": "output unavailable"
+            }),
+            ExecutionOperation::Laminate,
+        );
+
+        let decision = plan_queue_action(&command, &apparatus, None, false, false)
+            .expect("completion decision");
+
+        assert!(matches!(
+            decision,
+            QueueActionDecision::RequestCompletion { note, zero_metric_codes }
+                if note == "output unavailable" && zero_metric_codes.is_empty()
+        ));
     }
 }

@@ -7,6 +7,64 @@ fn returned_paint_queue_error(error: ReturnedPaintError) -> AdminError {
     }
 }
 
+async fn prepare_returned_paint_report(
+    state: &AppState,
+    principal: &Principal,
+    input: &QueueActionCommand,
+    requested: bool,
+) -> Result<Option<crate::core::returned_paint::ReturnedPaintRequest>, AdminError> {
+    if !requested {
+        return Ok(None);
+    }
+    let map = state
+        .production_maps
+        .raw_map(&input.order_id)
+        .await
+        .map_err(production_map_error)?
+        .ok_or_else(|| production_map_error(ProductionMapError::MapNotFound))?;
+    let order_code = if map.code.trim().is_empty() {
+        map.order_number.clone()
+    } else {
+        map.code.clone()
+    };
+    state
+        .returned_paint
+        .prepare_request(
+            ReturnedPaintRequestCreate {
+                order_id: map.id,
+                order_code,
+                order_name: map.title,
+                apparatus: input.apparatus.clone(),
+                image_id: input.completion.returned_paint_image_id.clone(),
+                items: input.completion.returned_paint_items.clone(),
+            },
+            principal,
+            format!(
+                "returned_paint_complete:{}:{}",
+                input.order_id.trim(),
+                input.apparatus.trim()
+            ),
+        )
+        .await
+        .map(Some)
+        .map_err(returned_paint_queue_error)
+}
+
+fn effective_return_ink_kg(
+    input: &QueueActionCommand,
+    report: Option<&crate::core::returned_paint::ReturnedPaintRequest>,
+) -> Result<Option<f64>, AdminError> {
+    match report {
+        Some(report) if report.status == ReturnedPaintStatus::Completed => {
+            let total =
+                returned_paint_astatka_total(&report.items).map_err(returned_paint_queue_error)?;
+            Ok((total > 0.0).then_some(total))
+        }
+        Some(_) => Ok(None),
+        None => Ok(input.progress.return_ink_kg),
+    }
+}
+
 fn zero_completion_metric_codes(
     input: &QueueActionCommand,
     return_ink_kg: Option<f64>,
