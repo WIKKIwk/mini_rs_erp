@@ -932,6 +932,22 @@ cargo build --release --locked -p mini_rs_gateway
 ./target/release/mini_rs_gateway
 ```
 
+The release workspace keeps stable components behind separate Cargo package
+boundaries. Cargo rebuilds a package only when that package or one of its
+dependencies changed:
+
+```bash
+cargo build --release --locked -p mini_rs_apparatus_contract
+cargo build --release --locked -p mini_rs_domain_types
+cargo build --release --locked -p mini_rs_gscale_domain
+```
+
+Those library commands are useful for focused validation. Build
+`--bin mini_rs_erp` before running or deploying the ERP server so Cargo can
+link the updated domain library into the executable. The default workspace
+member is the ERP package, so a normal root build does not compile the Pingora
+gateway.
+
 ## Testing
 
 Run the same core checks expected before pushing:
