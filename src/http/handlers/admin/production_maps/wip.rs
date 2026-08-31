@@ -142,16 +142,12 @@ pub async fn production_map_finished_goods_receive(
     }
     let input: FinishedGoodsReceiveRequest = parse_json(&body)?;
     let warehouse = assigned_finished_goods_warehouse(&state, &principal, &input.warehouse).await?;
-    let qr_payload = if input.qr_payload.trim().is_empty() {
-        input.progress_qr.clone()
-    } else {
-        input.qr_payload.clone()
-    };
+    let qr_payload = effective_progress_qr_payload(&input.qr_payload, &input.progress_qr);
     let receipt = state
         .production_maps
         .receive_finished_goods(
             &input.progress_batch_id,
-            &qr_payload,
+            qr_payload,
             &warehouse,
             queue_action_actor(&principal),
         )

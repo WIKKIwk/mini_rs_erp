@@ -127,11 +127,8 @@ impl QueueActionCommand {
         } else {
             request.completion_request_note.clone()
         };
-        let qr_payload = if request.qr_payload.trim().is_empty() {
-            request.progress_qr.clone()
-        } else {
-            request.qr_payload.clone()
-        };
+        let qr_payload = effective_progress_qr_payload(&request.qr_payload, &request.progress_qr)
+            .to_string();
         let combined_barcode = if request.material_barcodes.is_empty() {
             request.material_barcode.clone()
         } else {

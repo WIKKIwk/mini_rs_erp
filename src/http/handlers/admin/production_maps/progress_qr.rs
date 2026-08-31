@@ -32,16 +32,12 @@ pub async fn production_map_progress_qr_lookup(
         return Err(method_not_allowed());
     }
     let input: ProgressQrLookupRequest = parse_json(&body)?;
-    let qr_payload = if input.qr_payload.trim().is_empty() {
-        input.progress_qr
-    } else {
-        input.qr_payload
-    };
+    let qr_payload = effective_progress_qr_payload(&input.qr_payload, &input.progress_qr);
     if let Some(batch) = super::super::training::training_progress_batch_for_qr(
         &state,
         &principal,
         &input.progress_batch_id,
-        &qr_payload,
+        qr_payload,
     )
     .await
     .map_err(super::super::training::training_workspace_error)?
@@ -54,7 +50,7 @@ pub async fn production_map_progress_qr_lookup(
     }
     let batch = state
         .production_maps
-        .progress_batch_for_qr(&input.progress_batch_id, &qr_payload)
+        .progress_batch_for_qr(&input.progress_batch_id, qr_payload)
         .await
         .map_err(production_map_error)?;
     Ok(json_response(serde_json::json!({
@@ -85,16 +81,12 @@ pub async fn production_map_progress_qr_report(
         return Err(method_not_allowed());
     }
     let input: ProgressQrLookupRequest = parse_json(&body)?;
-    let qr_payload = if input.qr_payload.trim().is_empty() {
-        input.progress_qr
-    } else {
-        input.qr_payload
-    };
+    let qr_payload = effective_progress_qr_payload(&input.qr_payload, &input.progress_qr);
     if let Some(batch) = super::super::training::training_progress_batch_for_qr(
         &state,
         &principal,
         &input.progress_batch_id,
-        &qr_payload,
+        qr_payload,
     )
     .await
     .map_err(super::super::training::training_workspace_error)?
@@ -125,7 +117,7 @@ pub async fn production_map_progress_qr_report(
     }
     let report = state
         .production_maps
-        .progress_qr_report(&input.progress_batch_id, &qr_payload)
+        .progress_qr_report(&input.progress_batch_id, qr_payload)
         .await
         .map_err(production_map_error)?;
     Ok(json_response(serde_json::json!({
@@ -260,16 +252,12 @@ pub async fn production_map_progress_qr_reprint(
         return Err(method_not_allowed());
     }
     let input: ProgressQrReprintRequest = parse_json(&body)?;
-    let qr_payload = if input.qr_payload.trim().is_empty() {
-        input.progress_qr.clone()
-    } else {
-        input.qr_payload.clone()
-    };
+    let qr_payload = effective_progress_qr_payload(&input.qr_payload, &input.progress_qr);
     let batch = match super::super::training::training_progress_batch_for_qr(
         &state,
         &principal,
         &input.progress_batch_id,
-        &qr_payload,
+        qr_payload,
     )
     .await
     .map_err(super::super::training::training_workspace_error)?
@@ -277,7 +265,7 @@ pub async fn production_map_progress_qr_reprint(
         Some(batch) => batch,
         None => state
             .production_maps
-            .progress_batch_for_qr(&input.progress_batch_id, &qr_payload)
+            .progress_batch_for_qr(&input.progress_batch_id, qr_payload)
             .await
             .map_err(production_map_error)?,
     };
