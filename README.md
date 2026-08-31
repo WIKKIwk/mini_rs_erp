@@ -921,7 +921,7 @@ cargo run
 Release:
 
 ```bash
-cargo build --release
+cargo build --release --locked --bin mini_rs_erp
 ./target/release/mini_rs_erp
 ```
 

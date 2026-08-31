@@ -217,7 +217,7 @@ ensure_backend() {
 	fi
 
 	if [ "$BUILD_RELEASE" = "1" ]; then
-		(cd "$REPO_ROOT" && cargo build --release)
+		(cd "$REPO_ROOT" && cargo build --release --locked --bin mini_rs_erp)
 	fi
 
 	local binary="$REPO_ROOT/target/release/mini_rs_erp"
