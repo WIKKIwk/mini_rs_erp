@@ -68,25 +68,6 @@ async fn push_token_registers_supplier_token_like_go() {
 }
 
 #[tokio::test]
-async fn push_token_register_requires_body_token_like_go() {
-    let mut state = test_state();
-    state.push = PushService::new(Arc::new(FailingPushStore));
-    let token = session(&state, PrincipalRole::Supplier, "SUP-001").await;
-    let response = build_router(state)
-        .oneshot(request(
-            "POST",
-            "/v1/mobile/push/token",
-            &token,
-            r#"{"token":"   ","platform":"ios"}"#,
-        ))
-        .await
-        .expect("response");
-
-    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
-    assert_eq!(json_body(response).await["error"], "token is required");
-}
-
-#[tokio::test]
 async fn push_token_register_store_failure_uses_save_error() {
     let mut state = test_state();
     state.push = PushService::new(Arc::new(FailingPushStore));

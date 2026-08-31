@@ -15,21 +15,6 @@ use crate::core::werka::ports::{WerkaHomeLookup, WerkaPortError};
 use crate::core::werka::service::WerkaService;
 
 #[tokio::test]
-async fn stock_entry_lookup_requires_auth_like_go() {
-    let response = build_router(test_state(Some(Arc::new(FakeStockLookup::found()))))
-        .oneshot(request(
-            "GET",
-            "/v1/mobile/stock-entry/lookup?barcode=30AD",
-            "",
-        ))
-        .await
-        .expect("response");
-
-    assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
-    assert_eq!(json_body(response).await["error"], "unauthorized");
-}
-
-#[tokio::test]
 async fn stock_entry_lookup_rejects_wrong_method_like_go() {
     let state = test_state(Some(Arc::new(FakeStockLookup::found())));
     let token = session(&state).await;

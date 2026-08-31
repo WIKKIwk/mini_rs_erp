@@ -992,6 +992,8 @@ them. It refuses unknown assertions and records unsupported fixture-heavy tests
 as skipped scenarios instead of silently claiming that they were migrated.
 Selected worktree migrations are pinned to the pre-removal Git commit; CI also
 fails if a migrated Rust test function or file is restored.
+`tools/test_migration_audit/migrations/index.json` is the single registry for
+all migration manifests and generated verifier artifacts.
 
 Rust tests are reserved for independent domain invariants, transaction and
 database behavior, and compiler/type guarantees. Run only the relevant suite

@@ -123,42 +123,6 @@ async fn material_taminotchi_can_print_material_receipt() {
 }
 
 #[tokio::test]
-async fn material_taminotchi_receipt_print_rejects_unassigned_warehouse() {
-    let events = Arc::new(Mutex::new(Vec::new()));
-    let mut state = test_state();
-    state.gscale = GscaleService::new()
-        .with_receipt_store(Arc::new(FakeReceiptStore {
-            events: events.clone(),
-            receipt_actors: Arc::new(Mutex::new(Vec::new())),
-        }))
-        .with_driver(Arc::new(FakeDriver { events }));
-    let token = session(&state, PrincipalRole::MaterialTaminotchi).await;
-
-    let response = build_router(state)
-        .oneshot(request(
-            "POST",
-            "/v1/mobile/gscale/material-receipt/print",
-            &token,
-            r#"{
-                "driver_url":"http://127.0.0.1:39117",
-                "item_code":"ITEM-1",
-                "item_name":"Green Tea",
-                "warehouse":"Stores - A",
-                "printer":"zebra",
-                "print_mode":"rfid",
-                "gross_qty":2.5
-            }"#,
-        ))
-        .await
-        .expect("response");
-    let status = response.status();
-    let body = json_body(response).await;
-
-    assert_eq!(status, StatusCode::FORBIDDEN, "{body}");
-    assert_eq!(body["error"], "warehouse_not_assigned");
-}
-
-#[tokio::test]
 async fn gscale_items_use_admin_catalog_without_customer_scope() {
     let mut state = test_state();
     state.admin =

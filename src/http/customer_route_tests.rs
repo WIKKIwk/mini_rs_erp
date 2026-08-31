@@ -63,21 +63,6 @@ async fn customer_summary_accepts_post_like_go() {
 }
 
 #[tokio::test]
-async fn customer_history_forbids_non_customer_like_go() {
-    let mut state = test_state();
-    state.customer = CustomerService::new().with_delivery_port(Arc::new(FakeDeliveryPort));
-    let token = session(&state, PrincipalRole::Werka).await;
-
-    let response = build_router(state)
-        .oneshot(request("GET", "/v1/mobile/customer/history", &token, ""))
-        .await
-        .expect("response");
-
-    assert_eq!(response.status(), StatusCode::FORBIDDEN);
-    assert_eq!(json_body(response).await["error"], "forbidden");
-}
-
-#[tokio::test]
 async fn customer_respond_returns_detail_like_go() {
     let mut state = test_state();
     state.customer = CustomerService::new().with_delivery_port(Arc::new(FakeDeliveryPort));

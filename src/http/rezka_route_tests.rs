@@ -111,24 +111,6 @@ async fn rezka_split_creates_repack_and_prints_output_qrs() {
     );
 }
 
-#[tokio::test]
-async fn rezka_split_requires_rezka_capability() {
-    let state = test_state(Arc::new(FakeLookup));
-    let token = session(&state, PrincipalRole::Supplier).await;
-
-    let response = build_router(state)
-        .oneshot(request(
-            "POST",
-            "/v1/mobile/rezka/split",
-            &token,
-            r#"{"source_barcode":"SRC-600"}"#,
-        ))
-        .await
-        .expect("response");
-
-    assert_eq!(response.status(), StatusCode::FORBIDDEN);
-}
-
 fn test_state(lookup: Arc<dyn WerkaHomeLookup>) -> AppState {
     let mut state = AppState::new(AppConfig {
         bind_addr: "127.0.0.1:8081".parse().expect("addr"),

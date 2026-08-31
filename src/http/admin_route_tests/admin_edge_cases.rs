@@ -1,55 +1,6 @@
 use super::*;
 
 #[tokio::test]
-async fn admin_customer_detail_errors_are_500_like_go() {
-    let mut state = test_state();
-    let failing_read_port = Arc::new(CustomerItemsFailReadPort);
-    state.admin = AdminService::new(&state.config)
-        .with_read_port(failing_read_port)
-        .with_write_port(Arc::new(FakeAdminReadPort))
-        .with_state_port(Arc::new(FakeAdminStatePort::new()));
-    let token = session(&state, PrincipalRole::Admin).await;
-
-    let response = build_router(state)
-        .oneshot(request(
-            "GET",
-            "/v1/mobile/admin/customers/detail?ref=CUST-001",
-            &token,
-        ))
-        .await
-        .expect("response");
-
-    assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
-    assert_eq!(json_body(response).await["error"], "customer detail failed");
-}
-
-#[tokio::test]
-async fn admin_customer_code_regenerate_cooldown_is_500_like_go() {
-    let mut state = test_state();
-    let admin_port = Arc::new(FakeAdminReadPort);
-    state.admin = AdminService::new(&state.config)
-        .with_read_port(admin_port.clone())
-        .with_write_port(admin_port)
-        .with_state_port(Arc::new(LockedCustomerStatePort));
-    let token = session(&state, PrincipalRole::Admin).await;
-
-    let response = build_router(state)
-        .oneshot(request(
-            "POST",
-            "/v1/mobile/admin/customers/code/regenerate?ref=CUST-001",
-            &token,
-        ))
-        .await
-        .expect("response");
-
-    assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
-    assert_eq!(
-        json_body(response).await["error"],
-        "customer code regenerate failed"
-    );
-}
-
-#[tokio::test]
 async fn admin_customer_code_regenerate_uses_customer_prefix() {
     let state = test_state();
     let token = session(&state, PrincipalRole::Admin).await;
@@ -115,32 +66,6 @@ async fn admin_supplier_phone_skips_write_for_removed_supplier_like_go() {
     assert_eq!(response.status(), StatusCode::NOT_FOUND);
     assert_eq!(json_body(response).await["error"], "supplier not found");
     assert_eq!(writes.supplier_phone_updates.load(Ordering::SeqCst), 0);
-}
-
-#[tokio::test]
-async fn admin_supplier_items_invalid_item_is_500_like_go() {
-    let mut state = test_state();
-    state.admin = AdminService::new(&state.config)
-        .with_read_port(Arc::new(MissingItemsReadPort))
-        .with_write_port(Arc::new(FakeAdminReadPort))
-        .with_state_port(Arc::new(FakeAdminStatePort::new()));
-    let token = session(&state, PrincipalRole::Admin).await;
-
-    let response = build_router(state)
-        .oneshot(request_with_body(
-            "PUT",
-            "/v1/mobile/admin/suppliers/items?ref=SUP-001",
-            &token,
-            r#"{"item_codes":["ITEM-MISSING"]}"#,
-        ))
-        .await
-        .expect("response");
-
-    assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
-    assert_eq!(
-        json_body(response).await["error"],
-        "supplier items update failed"
-    );
 }
 
 #[tokio::test]

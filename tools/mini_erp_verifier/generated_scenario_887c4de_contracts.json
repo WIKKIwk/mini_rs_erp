@@ -1,0 +1,547 @@
+{
+  "cases": [
+    {
+      "expect": {
+        "body": {
+          "error": "customer code regenerate failed"
+        },
+        "status": 500
+      },
+      "name": "admin_customer_code_regenerate_cooldown_is_500_like_go",
+      "request": {
+        "fixture": "isolated",
+        "method": "POST",
+        "role": "admin",
+        "uri": "/v1/mobile/admin/customers/code/regenerate?ref=CUST-001"
+      },
+      "source": {
+        "line": 27,
+        "path": "src/http/admin_route_tests/admin_edge_cases.rs"
+      }
+    },
+    {
+      "expect": {
+        "body": {
+          "error": "customer detail failed"
+        },
+        "status": 500
+      },
+      "name": "admin_customer_detail_errors_are_500_like_go",
+      "request": {
+        "fixture": "isolated",
+        "method": "GET",
+        "role": "admin",
+        "uri": "/v1/mobile/admin/customers/detail?ref=CUST-001"
+      },
+      "source": {
+        "line": 4,
+        "path": "src/http/admin_route_tests/admin_edge_cases.rs"
+      }
+    },
+    {
+      "expect": {
+        "body": {
+          "werka_code_locked": false,
+          "werka_code_retry_after_sec": 0
+        },
+        "status": 200
+      },
+      "name": "admin_settings_ignores_state_read_failure_like_go",
+      "request": {
+        "fixture": "isolated",
+        "method": "GET",
+        "role": "admin",
+        "uri": "/v1/mobile/admin/settings"
+      },
+      "source": {
+        "line": 4,
+        "path": "src/http/admin_route_tests/suppliers_customers.rs"
+      }
+    },
+    {
+      "expect": {
+        "body": {
+          "default_target_warehouse": "Stores - NEW",
+          "default_uom": "Kg"
+        },
+        "status": 200
+      },
+      "name": "admin_settings_put_updates_default_uom_like_go",
+      "request": {
+        "body": {
+          "admin_name": "New Admin",
+          "admin_phone": "+998882222222",
+          "default_target_warehouse": "Stores - NEW",
+          "default_uom": "",
+          "werka_code": "20NEW",
+          "werka_code_locked": false,
+          "werka_code_retry_after_sec": 0,
+          "werka_name": "New Werka",
+          "werka_phone": "+998881111111"
+        },
+        "fixture": "isolated",
+        "method": "PUT",
+        "role": "admin",
+        "uri": "/v1/mobile/admin/settings"
+      },
+      "source": {
+        "line": 47,
+        "path": "src/http/admin_route_tests/suppliers_customers.rs"
+      }
+    },
+    {
+      "expect": {
+        "body": {
+          "error": "supplier detail failed"
+        },
+        "status": 500
+      },
+      "name": "admin_supplier_detail_does_not_fallback_on_non_permission_error",
+      "request": {
+        "fixture": "isolated",
+        "method": "GET",
+        "role": "admin",
+        "uri": "/v1/mobile/admin/suppliers/detail?ref=SUP-001"
+      },
+      "source": {
+        "line": 150,
+        "path": "src/http/admin_route_tests/suppliers_customers.rs"
+      }
+    },
+    {
+      "expect": {
+        "body": {
+          "error": "supplier items update failed"
+        },
+        "status": 500
+      },
+      "name": "admin_supplier_items_invalid_item_is_500_like_go",
+      "request": {
+        "body": {
+          "item_codes": [
+            "ITEM-MISSING"
+          ]
+        },
+        "fixture": "isolated",
+        "method": "PUT",
+        "role": "admin",
+        "uri": "/v1/mobile/admin/suppliers/items?ref=SUP-001"
+      },
+      "source": {
+        "line": 121,
+        "path": "src/http/admin_route_tests/admin_edge_cases.rs"
+      }
+    },
+    {
+      "expect": {
+        "body": {
+          "error": "supplier summary failed"
+        },
+        "status": 500
+      },
+      "name": "admin_suppliers_summary_failure_uses_go_error_text",
+      "request": {
+        "fixture": "isolated",
+        "method": "GET",
+        "role": "admin",
+        "uri": "/v1/mobile/admin/suppliers"
+      },
+      "source": {
+        "line": 25,
+        "path": "src/http/admin_route_tests/suppliers_customers.rs"
+      }
+    },
+    {
+      "expect": {
+        "body": {
+          "code": "method_not_allowed",
+          "error": "method not allowed"
+        },
+        "status": 405
+      },
+      "name": "ai_search_rejects_non_post_like_go",
+      "request": {
+        "fixture": "isolated",
+        "method": "GET",
+        "role": "werka",
+        "uri": "/v1/mobile/werka/ai-search-suggestion"
+      },
+      "source": {
+        "line": 18,
+        "path": "src/http/werka_ai_search_route_tests.rs"
+      }
+    },
+    {
+      "expect": {
+        "body": {
+          "code": "not_configured",
+          "error": "werka ai search is not configured"
+        },
+        "status": 503
+      },
+      "name": "ai_search_returns_not_configured_before_parsing_upload_like_go",
+      "request": {
+        "fixture": "isolated",
+        "method": "POST",
+        "role": "werka",
+        "uri": "/v1/mobile/werka/ai-search-suggestion"
+      },
+      "source": {
+        "line": 53,
+        "path": "src/http/werka_ai_search_route_tests.rs"
+      }
+    },
+    {
+      "expect": {
+        "status": 404
+      },
+      "name": "avatar_view_returns_not_found_without_uploaded_avatar",
+      "request": {
+        "fixture": "isolated",
+        "method": "GET",
+        "role": "customer",
+        "uri": "/v1/mobile/profile/avatar/view"
+      },
+      "source": {
+        "line": 449,
+        "path": "src/http/profile_route_tests.rs"
+      }
+    },
+    {
+      "expect": {
+        "status": 400
+      },
+      "name": "chat_media_upload_initialization_rejects_unknown_media_kind",
+      "request": {
+        "body": {
+          "client_upload_id": "upload_1",
+          "content_type": "application/octet-stream",
+          "filename": "file.bin",
+          "kind": "document",
+          "size_bytes": 3
+        },
+        "fixture": "isolated",
+        "method": "POST",
+        "role": "customer",
+        "uri": "/v1/mobile/chat/conversations/conversation_1/media/uploads"
+      },
+      "source": {
+        "line": 331,
+        "path": "src/http/chat_route_tests.rs"
+      }
+    },
+    {
+      "expect": {
+        "body": {
+          "error": "forbidden"
+        },
+        "status": 403
+      },
+      "name": "customer_history_forbids_non_customer_like_go",
+      "request": {
+        "fixture": "isolated",
+        "method": "GET",
+        "role": "werka",
+        "uri": "/v1/mobile/customer/history"
+      },
+      "source": {
+        "line": 66,
+        "path": "src/http/customer_route_tests.rs"
+      }
+    },
+    {
+      "expect": {
+        "body": {
+          "error": "method not allowed"
+        },
+        "status": 405
+      },
+      "name": "customer_issue_batch_create_rejects_non_post_like_go",
+      "request": {
+        "fixture": "isolated",
+        "method": "GET",
+        "role": "werka",
+        "uri": "/v1/mobile/werka/customer-issue/batch-create"
+      },
+      "source": {
+        "line": 169,
+        "path": "src/http/werka_customer_issue_route_tests.rs"
+      }
+    },
+    {
+      "expect": {
+        "body": {
+          "error": "invalid json"
+        },
+        "status": 400
+      },
+      "name": "customer_issue_create_rejects_invalid_json_like_go",
+      "request": {
+        "fixture": "isolated",
+        "method": "POST",
+        "raw_body": "{",
+        "role": "werka",
+        "uri": "/v1/mobile/werka/customer-issue/create"
+      },
+      "source": {
+        "line": 37,
+        "path": "src/http/werka_customer_issue_route_tests.rs"
+      }
+    },
+    {
+      "expect": {
+        "body": {
+          "error": "method not allowed"
+        },
+        "status": 405
+      },
+      "name": "customer_issue_create_rejects_non_post_like_go",
+      "request": {
+        "fixture": "isolated",
+        "method": "GET",
+        "role": "werka",
+        "uri": "/v1/mobile/werka/customer-issue/create"
+      },
+      "source": {
+        "line": 17,
+        "path": "src/http/werka_customer_issue_route_tests.rs"
+      }
+    },
+    {
+      "expect": {
+        "body_paths": [
+          {
+            "length": 0,
+            "path": []
+          }
+        ],
+        "status": 200
+      },
+      "name": "material_taminotchi_raw_material_stock_hides_unassigned_warehouse",
+      "request": {
+        "fixture": "isolated",
+        "method": "GET",
+        "role": "material_taminotchi",
+        "uri": "/v1/mobile/admin/raw-material-stock?warehouse=Kalidor"
+      },
+      "source": {
+        "line": 1171,
+        "path": "src/http/admin_route_tests/raw_materials/stock_and_rolls.rs"
+      }
+    },
+    {
+      "expect": {
+        "body": {
+          "error": "warehouse_not_assigned"
+        },
+        "status": 403
+      },
+      "name": "material_taminotchi_receipt_print_rejects_unassigned_warehouse",
+      "request": {
+        "body": {
+          "driver_url": "http://127.0.0.1:39117",
+          "gross_qty": 2.5,
+          "item_code": "ITEM-1",
+          "item_name": "Green Tea",
+          "print_mode": "rfid",
+          "printer": "zebra",
+          "warehouse": "Stores - A"
+        },
+        "fixture": "isolated",
+        "method": "POST",
+        "role": "material_taminotchi",
+        "uri": "/v1/mobile/gscale/material-receipt/print"
+      },
+      "source": {
+        "line": 126,
+        "path": "src/http/gscale_route_tests/material_receipt.rs"
+      }
+    },
+    {
+      "expect": {
+        "body": {
+          "error": "method not allowed"
+        },
+        "status": 405
+      },
+      "name": "notification_detail_rejects_non_get_like_go",
+      "request": {
+        "fixture": "isolated",
+        "method": "POST",
+        "role": "supplier",
+        "uri": "/v1/mobile/notifications/detail?receipt_id=PR-001"
+      },
+      "source": {
+        "line": 45,
+        "path": "src/http/notification_detail_route_tests.rs"
+      }
+    },
+    {
+      "expect": {
+        "body": {
+          "error": "method not allowed"
+        },
+        "status": 405
+      },
+      "name": "profile_avatar_rejects_non_post_like_go",
+      "request": {
+        "fixture": "isolated",
+        "method": "GET",
+        "role": "supplier",
+        "uri": "/v1/mobile/profile/avatar"
+      },
+      "source": {
+        "line": 330,
+        "path": "src/http/profile_route_tests.rs"
+      }
+    },
+    {
+      "expect": {
+        "body": {
+          "error": "method not allowed"
+        },
+        "status": 405
+      },
+      "name": "profile_rejects_wrong_method_like_go",
+      "request": {
+        "fixture": "isolated",
+        "method": "POST",
+        "role": "supplier",
+        "uri": "/v1/mobile/profile"
+      },
+      "source": {
+        "line": 309,
+        "path": "src/http/profile_route_tests.rs"
+      }
+    },
+    {
+      "expect": {
+        "body": {
+          "error": "token is required"
+        },
+        "status": 400
+      },
+      "name": "push_token_register_requires_body_token_like_go",
+      "request": {
+        "body": {
+          "platform": "ios",
+          "token": "   "
+        },
+        "fixture": "isolated",
+        "method": "POST",
+        "role": "supplier",
+        "uri": "/v1/mobile/push/token"
+      },
+      "source": {
+        "line": 71,
+        "path": "src/http/push_route_tests.rs"
+      }
+    },
+    {
+      "expect": {
+        "status": 403
+      },
+      "name": "rezka_split_requires_rezka_capability",
+      "request": {
+        "body": {
+          "source_barcode": "SRC-600"
+        },
+        "fixture": "isolated",
+        "method": "POST",
+        "role": "supplier",
+        "uri": "/v1/mobile/rezka/split"
+      },
+      "source": {
+        "line": 115,
+        "path": "src/http/rezka_route_tests.rs"
+      }
+    },
+    {
+      "expect": {
+        "body": {
+          "error": "unauthorized"
+        },
+        "status": 401
+      },
+      "name": "stock_entry_lookup_requires_auth_like_go",
+      "request": {
+        "fixture": "isolated",
+        "method": "GET",
+        "uri": "/v1/mobile/stock-entry/lookup?barcode=30AD"
+      },
+      "source": {
+        "line": 18,
+        "path": "src/http/stock_entry_route_tests.rs"
+      }
+    },
+    {
+      "expect": {
+        "body": {
+          "error": "method not allowed"
+        },
+        "status": 405
+      },
+      "name": "supplier_unannounced_respond_rejects_non_post_like_go",
+      "request": {
+        "fixture": "isolated",
+        "method": "GET",
+        "role": "supplier",
+        "uri": "/v1/mobile/supplier/unannounced/respond"
+      },
+      "source": {
+        "line": 48,
+        "path": "src/http/supplier_unannounced_route_tests.rs"
+      }
+    },
+    {
+      "expect": {
+        "body": {
+          "error": "method not allowed"
+        },
+        "status": 405
+      },
+      "name": "unannounced_create_rejects_non_post_like_go",
+      "request": {
+        "fixture": "isolated",
+        "method": "GET",
+        "role": "werka",
+        "uri": "/v1/mobile/werka/unannounced/create"
+      },
+      "source": {
+        "line": 48,
+        "path": "src/http/werka_unannounced_route_tests.rs"
+      }
+    },
+    {
+      "expect": {
+        "body": {
+          "error": "method not allowed"
+        },
+        "status": 405
+      },
+      "name": "werka_confirm_rejects_non_post_like_go",
+      "request": {
+        "fixture": "isolated",
+        "method": "GET",
+        "role": "werka",
+        "uri": "/v1/mobile/werka/confirm"
+      },
+      "source": {
+        "line": 22,
+        "path": "src/http/werka_confirm_route_tests.rs"
+      }
+    }
+  ],
+  "generated": true,
+  "protocol": 1,
+  "skipped": [],
+  "source": {
+    "git_ref": "887c4de",
+    "manifest": "tools/test_migration_audit/migrations/scenario_http_887c4de.json"
+  },
+  "summary": {
+    "generated_cases": 26,
+    "skipped_scenarios": 0,
+    "source_tests": 26
+  }
+}

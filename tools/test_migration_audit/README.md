@@ -74,3 +74,7 @@ A selected-test manifest can pin individual passing contracts from a mixed Rust
 test file. `emit_removal_patch.py` uses Tree-sitter to emit an
 `apply_patch`-compatible deletion, and `--check` refuses regenerated output
 until every selected function is absent from the worktree.
+
+`extract_all_contracts.py` processes every bundle in `migrations/index.json`.
+Selected scenario contracts require an explicit manifest flag and still must
+pass the real verifier harness before their Rust source is removed.

@@ -42,26 +42,6 @@ fn test_state() -> AppState {
 }
 
 #[tokio::test]
-async fn notification_detail_rejects_non_get_like_go() {
-    let state = test_state();
-    let token = supplier_session(&state, "SUP-001").await;
-    let response = build_router(state)
-        .oneshot(
-            Request::builder()
-                .method("POST")
-                .uri("/v1/mobile/notifications/detail?receipt_id=PR-001")
-                .header(header::AUTHORIZATION, format!("Bearer {token}"))
-                .body(Body::empty())
-                .expect("request"),
-        )
-        .await
-        .expect("response");
-
-    assert_eq!(response.status(), StatusCode::METHOD_NOT_ALLOWED);
-    assert_eq!(json_body(response).await["error"], "method not allowed");
-}
-
-#[tokio::test]
 async fn notification_detail_requires_receipt_id_like_go() {
     let state = test_state();
     let token = supplier_session(&state, "SUP-001").await;

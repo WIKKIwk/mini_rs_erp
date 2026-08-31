@@ -45,26 +45,6 @@ fn test_state() -> AppState {
 }
 
 #[tokio::test]
-async fn supplier_unannounced_respond_rejects_non_post_like_go() {
-    let state = test_state();
-    let token = supplier_session(&state).await;
-    let response = build_router(state)
-        .oneshot(
-            Request::builder()
-                .method("GET")
-                .uri("/v1/mobile/supplier/unannounced/respond")
-                .header(header::AUTHORIZATION, format!("Bearer {token}"))
-                .body(Body::empty())
-                .expect("request"),
-        )
-        .await
-        .expect("response");
-
-    assert_eq!(response.status(), StatusCode::METHOD_NOT_ALLOWED);
-    assert_eq!(json_body(response).await["error"], "method not allowed");
-}
-
-#[tokio::test]
 async fn supplier_unannounced_respond_forbids_non_supplier_like_go() {
     let state = test_state();
     let token = werka_session(&state).await;

@@ -8,16 +8,43 @@ import audit
 from extract_contracts import ExtractionFailure, extract_case, verify_removals
 
 
-def extract(source: str, package_version: str | None = None):
+def extract(
+    source: str,
+    package_version: str | None = None,
+    allow_scenario: bool = False,
+):
     source_file = audit.SourceFile("src/example.rs", source.encode())
     tree = audit.RUST_PARSER.parse(source_file.content)
     functions = list(audit.test_functions(source_file.content, tree.root_node))
     if len(functions) != 1:
         raise AssertionError(f"expected one test, got {len(functions)}")
-    return extract_case(source_file, functions[0], package_version).case
+    return extract_case(
+        source_file,
+        functions[0],
+        package_version,
+        allow_scenario=allow_scenario,
+    ).case
 
 
 class ContractExtractionTests(unittest.TestCase):
+    def test_selected_manifest_can_explicitly_extract_scenario_contract(self) -> None:
+        source = r"""
+#[tokio::test]
+async fn fake_lookup_error_contract() {
+    let state = test_state(Some(FakeLookup));
+    let response = build_router(state)
+        .oneshot(request("GET", "/v1/mobile/items"))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+}
+"""
+        with self.assertRaises(ExtractionFailure):
+            extract(source)
+
+        case = extract(source, allow_scenario=True)
+        self.assertEqual(case["expect"]["status"], 500)
+
     def test_removal_guard_rejects_selected_function_restoration(self) -> None:
         manifest = {
             "remove_selected_tests": True,

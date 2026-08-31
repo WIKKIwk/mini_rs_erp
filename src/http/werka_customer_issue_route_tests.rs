@@ -14,46 +14,6 @@ mod werka_customer_issue_support;
 use werka_customer_issue_support::*;
 
 #[tokio::test]
-async fn customer_issue_create_rejects_non_post_like_go() {
-    let state = test_state();
-    let token = werka_session(&state).await;
-    let response = build_router(state)
-        .oneshot(
-            Request::builder()
-                .method("GET")
-                .uri("/v1/mobile/werka/customer-issue/create")
-                .header(header::AUTHORIZATION, format!("Bearer {token}"))
-                .body(Body::empty())
-                .expect("request"),
-        )
-        .await
-        .expect("response");
-
-    assert_eq!(response.status(), StatusCode::METHOD_NOT_ALLOWED);
-    assert_eq!(json_body(response).await["error"], "method not allowed");
-}
-
-#[tokio::test]
-async fn customer_issue_create_rejects_invalid_json_like_go() {
-    let state = test_state();
-    let token = werka_session(&state).await;
-    let response = build_router(state)
-        .oneshot(
-            Request::builder()
-                .method("POST")
-                .uri("/v1/mobile/werka/customer-issue/create")
-                .header(header::AUTHORIZATION, format!("Bearer {token}"))
-                .body(Body::from("{"))
-                .expect("request"),
-        )
-        .await
-        .expect("response");
-
-    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
-    assert_eq!(json_body(response).await["error"], "invalid json");
-}
-
-#[tokio::test]
 async fn customer_issue_create_fails_without_provider_like_go() {
     let state = test_state();
     let token = werka_session(&state).await;
@@ -163,26 +123,6 @@ async fn customer_issue_batch_create_rejects_empty_lines_like_go() {
 
     assert_eq!(response.status(), StatusCode::BAD_REQUEST);
     assert_eq!(json_body(response).await["error"], "lines are required");
-}
-
-#[tokio::test]
-async fn customer_issue_batch_create_rejects_non_post_like_go() {
-    let state = test_state();
-    let token = werka_session(&state).await;
-    let response = build_router(state)
-        .oneshot(
-            Request::builder()
-                .method("GET")
-                .uri("/v1/mobile/werka/customer-issue/batch-create")
-                .header(header::AUTHORIZATION, format!("Bearer {token}"))
-                .body(Body::empty())
-                .expect("request"),
-        )
-        .await
-        .expect("response");
-
-    assert_eq!(response.status(), StatusCode::METHOD_NOT_ALLOWED);
-    assert_eq!(json_body(response).await["error"], "method not allowed");
 }
 
 #[tokio::test]

@@ -23,45 +23,8 @@ from typing import Any
 
 ROOT = Path(__file__).resolve().parents[2]
 CONTRACT_PATH = Path(__file__).with_name("contracts.json")
-GENERATED_CONTRACT_PATH = Path(__file__).with_name("generated_contracts.json")
-GENERATED_AUTOMATIC_CONTRACT_PATH = Path(__file__).with_name(
-    "generated_automatic_contracts.json"
-)
-GENERATED_D83BA70_CONTRACT_PATH = Path(__file__).with_name(
-    "generated_automatic_d83ba70_contracts.json"
-)
-GENERATED_04D2B19_CONTRACT_PATH = Path(__file__).with_name(
-    "generated_automatic_04d2b19_contracts.json"
-)
-MIGRATION_MANIFEST_PATH = (
-    ROOT / "tools" / "test_migration_audit" / "migrations" / "generic_http_975078a.json"
-)
-AUTOMATIC_MIGRATION_MANIFEST_PATH = (
-    ROOT
-    / "tools"
-    / "test_migration_audit"
-    / "migrations"
-    / "automatic_http_52843a2.json"
-)
-D83BA70_MIGRATION_MANIFEST_PATH = (
-    ROOT
-    / "tools"
-    / "test_migration_audit"
-    / "migrations"
-    / "automatic_http_d83ba70.json"
-)
-MIGRATION_04D2B19_MANIFEST_PATH = (
-    ROOT
-    / "tools"
-    / "test_migration_audit"
-    / "migrations"
-    / "automatic_http_04d2b19.json"
-)
-GENERATED_BUNDLES = (
-    (GENERATED_CONTRACT_PATH, MIGRATION_MANIFEST_PATH),
-    (GENERATED_AUTOMATIC_CONTRACT_PATH, AUTOMATIC_MIGRATION_MANIFEST_PATH),
-    (GENERATED_D83BA70_CONTRACT_PATH, D83BA70_MIGRATION_MANIFEST_PATH),
-    (GENERATED_04D2B19_CONTRACT_PATH, MIGRATION_04D2B19_MANIFEST_PATH),
+MIGRATION_INDEX_PATH = (
+    ROOT / "tools" / "test_migration_audit" / "migrations" / "index.json"
 )
 HARNESS = ROOT / "target" / "debug" / "mini_rs_verifier_harness"
 HARNESS_DEP_INFO = HARNESS.with_suffix(".d")
@@ -123,6 +86,30 @@ def load_migration_manifest(path: Path) -> dict[str, Any]:
     return manifest
 
 
+def load_generated_bundles() -> list[tuple[Path, Path]]:
+    index = load_json(MIGRATION_INDEX_PATH)
+    bundles = index.get("bundles")
+    if index.get("protocol") != 1 or not isinstance(bundles, list):
+        raise VerificationFailure("unsupported or malformed migration index")
+    resolved: list[tuple[Path, Path]] = []
+    for bundle in bundles:
+        if not isinstance(bundle, dict):
+            raise VerificationFailure("malformed migration index bundle")
+        manifest = bundle.get("manifest")
+        output = bundle.get("output")
+        if not isinstance(manifest, str) or not isinstance(output, str):
+            raise VerificationFailure("malformed migration index paths")
+        if any(
+            Path(value).is_absolute() or ".." in Path(value).parts
+            for value in (manifest, output)
+        ):
+            raise VerificationFailure(
+                "migration index paths must be repository-relative"
+            )
+        resolved.append((ROOT / output, ROOT / manifest))
+    return resolved
+
+
 def load_contract() -> tuple[dict[str, Any], list[dict[str, Any]]]:
     contract = load_json(CONTRACT_PATH)
     if contract.get("protocol") != 1 or not isinstance(contract.get("cases"), list):
@@ -131,7 +118,7 @@ def load_contract() -> tuple[dict[str, Any], list[dict[str, Any]]]:
     manifests: list[dict[str, Any]] = []
     generated_cases: list[dict[str, Any]] = []
     generated_source_tests = 0
-    for generated_path, manifest_path in GENERATED_BUNDLES:
+    for generated_path, manifest_path in load_generated_bundles():
         manifest = load_migration_manifest(manifest_path)
         generated = load_json(generated_path)
         if (

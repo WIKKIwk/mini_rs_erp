@@ -326,36 +326,3 @@ async fn chat_media_upload_initialization_rejects_audio_over_ten_minutes() {
         "audio_duration_too_long"
     );
 }
-
-#[tokio::test]
-async fn chat_media_upload_initialization_rejects_unknown_media_kind() {
-    let state = test_state();
-    let token = state
-        .sessions
-        .create(Principal {
-            role: PrincipalRole::Customer,
-            display_name: "Customer".to_string(),
-            legal_name: "Customer".to_string(),
-            ref_: "customer_001".to_string(),
-            phone: String::new(),
-            avatar_url: String::new(),
-        })
-        .await
-        .expect("session");
-    let response = build_router(state)
-        .oneshot(
-            Request::builder()
-                .method("POST")
-                .uri("/v1/mobile/chat/conversations/conversation_1/media/uploads")
-                .header(header::AUTHORIZATION, format!("Bearer {token}"))
-                .header(header::CONTENT_TYPE, "application/json")
-                .body(Body::from(
-                    r#"{"client_upload_id":"upload_1","kind":"document","filename":"file.bin","content_type":"application/octet-stream","size_bytes":3}"#,
-                ))
-                .expect("request"),
-        )
-        .await
-        .expect("response");
-
-    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
-}

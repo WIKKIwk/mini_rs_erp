@@ -15,28 +15,6 @@ use crate::core::werka::ports::{WerkaAiSearch, WerkaAiSearchError, WerkaAiSearch
 use crate::core::werka::service::WerkaService;
 
 #[tokio::test]
-async fn ai_search_rejects_non_post_like_go() {
-    let state = test_state();
-    let token = werka_session(&state).await;
-    let response = build_router(state)
-        .oneshot(
-            Request::builder()
-                .method("GET")
-                .uri("/v1/mobile/werka/ai-search-suggestion")
-                .header(header::AUTHORIZATION, format!("Bearer {token}"))
-                .body(Body::empty())
-                .expect("request"),
-        )
-        .await
-        .expect("response");
-
-    assert_eq!(response.status(), StatusCode::METHOD_NOT_ALLOWED);
-    let value = json_body(response).await;
-    assert_eq!(value["error"], "method not allowed");
-    assert_eq!(value["code"], "method_not_allowed");
-}
-
-#[tokio::test]
 async fn ai_search_forbids_non_werka_like_go() {
     let state = test_state();
     let token = supplier_session(&state).await;
@@ -47,28 +25,6 @@ async fn ai_search_forbids_non_werka_like_go() {
 
     assert_eq!(response.status(), StatusCode::FORBIDDEN);
     assert_eq!(json_body(response).await["error"], "forbidden");
-}
-
-#[tokio::test]
-async fn ai_search_returns_not_configured_before_parsing_upload_like_go() {
-    let state = test_state();
-    let token = werka_session(&state).await;
-    let response = build_router(state)
-        .oneshot(
-            Request::builder()
-                .method("POST")
-                .uri("/v1/mobile/werka/ai-search-suggestion")
-                .header(header::AUTHORIZATION, format!("Bearer {token}"))
-                .body(Body::empty())
-                .expect("request"),
-        )
-        .await
-        .expect("response");
-
-    assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
-    let value = json_body(response).await;
-    assert_eq!(value["error"], "werka ai search is not configured");
-    assert_eq!(value["code"], "not_configured");
 }
 
 #[tokio::test]

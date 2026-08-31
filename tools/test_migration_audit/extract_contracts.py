@@ -390,6 +390,7 @@ def extract_case(
     source: audit.SourceFile,
     function: Node,
     package_version: str | None = None,
+    allow_scenario: bool = False,
 ) -> ExtractedCase:
     name_node = function.child_by_field_name("name")
     if name_node is None:
@@ -397,7 +398,10 @@ def extract_case(
     name = audit.source_text(source.content, name_node)
     signals = audit.collect_signals(source.content, function)
     classification, _, reasons = audit.classify(signals)
-    if classification != "automatic_contract":
+    allowed = classification == "automatic_contract" or (
+        allow_scenario and classification == "scenario_contract"
+    )
+    if not allowed:
         raise ExtractionFailure("; ".join(reasons))
     if signals.status_codes[0] not in STATUS_VALUES:
         raise ExtractionFailure(f"unsupported status: {signals.status_codes[0]}")
@@ -482,6 +486,7 @@ def generate(
     automatic = 0
     tests = 0
     selected = set(manifest.get("tests", []))
+    allow_scenario = manifest.get("allow_scenario_contracts") is True
     found: set[str] = set()
     for source in sources:
         tree = audit.RUST_PARSER.parse(source.content)
@@ -499,7 +504,10 @@ def generate(
             tests += 1
             signals = audit.collect_signals(source.content, function)
             classification, _, reasons = audit.classify(signals)
-            if classification != "automatic_contract":
+            allowed = classification == "automatic_contract" or (
+                allow_scenario and classification == "scenario_contract"
+            )
+            if not allowed:
                 skipped.append(
                     {
                         "id": identifier,
@@ -510,7 +518,14 @@ def generate(
                 continue
             automatic += 1
             try:
-                cases.append(extract_case(source, function, package_version).case)
+                cases.append(
+                    extract_case(
+                        source,
+                        function,
+                        package_version,
+                        allow_scenario=allow_scenario,
+                    ).case
+                )
             except ExtractionFailure as error:
                 raise ExtractionFailure(f"{identifier}: {error}") from error
 

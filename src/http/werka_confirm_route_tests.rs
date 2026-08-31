@@ -19,26 +19,6 @@ use crate::core::werka::ports::{
 use crate::core::werka::service::WerkaService;
 
 #[tokio::test]
-async fn werka_confirm_rejects_non_post_like_go() {
-    let state = test_state();
-    let token = werka_session(&state).await;
-    let response = build_router(state)
-        .oneshot(
-            Request::builder()
-                .method("GET")
-                .uri("/v1/mobile/werka/confirm")
-                .header(header::AUTHORIZATION, format!("Bearer {token}"))
-                .body(Body::empty())
-                .expect("request"),
-        )
-        .await
-        .expect("response");
-
-    assert_eq!(response.status(), StatusCode::METHOD_NOT_ALLOWED);
-    assert_eq!(json_body(response).await["error"], "method not allowed");
-}
-
-#[tokio::test]
 async fn werka_confirm_forbids_non_werka_like_go() {
     let state = test_state();
     let token = supplier_session(&state).await;
