@@ -10,6 +10,40 @@ import verify
 
 
 class HarnessFreshnessTests(unittest.TestCase):
+    def test_workflows_are_batched_into_fresh_harnesses(self) -> None:
+        contract = {
+            "protocol": 1,
+            "cases": [
+                {"name": "shared", "request": {}, "expect": {}},
+                {
+                    "name": "a_1",
+                    "workflow": "a",
+                    "request": {},
+                    "expect": {},
+                },
+                {
+                    "name": "b_1",
+                    "workflow": "b",
+                    "request": {},
+                    "expect": {},
+                },
+                {
+                    "name": "a_2",
+                    "workflow": "a",
+                    "request": {},
+                    "expect": {},
+                },
+            ],
+        }
+
+        self.assertEqual(
+            [
+                [case["name"] for case in batch]
+                for batch in verify.case_batches(contract)
+            ],
+            [["shared"], ["a_1", "a_2"], ["b_1"]],
+        )
+
     def test_reuses_binary_until_a_real_dependency_changes(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

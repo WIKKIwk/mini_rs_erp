@@ -1,0 +1,197 @@
+{
+  "cases": [
+    {
+      "expect": {
+        "status": 200
+      },
+      "name": "admin_settings_put_updates_auth_runtime_like_go__01_update",
+      "request": {
+        "body": {
+          "admin_name": "Updated Admin",
+          "admin_phone": "+998882222222",
+          "default_target_warehouse": "Stores - CH",
+          "default_uom": "Kg",
+          "werka_code": "20UPDATED",
+          "werka_code_locked": false,
+          "werka_code_retry_after_sec": 0,
+          "werka_name": "Updated Werka",
+          "werka_phone": "+998881111111"
+        },
+        "fixture": "isolated",
+        "method": "PUT",
+        "role": "admin",
+        "uri": "/v1/mobile/admin/settings"
+      },
+      "source": {
+        "line": 99,
+        "path": "src/http/admin_route_tests/admin_edge_cases.rs"
+      },
+      "workflow": "admin_settings_put_updates_auth_runtime_like_go"
+    },
+    {
+      "expect": {
+        "status": 401
+      },
+      "name": "admin_settings_put_updates_auth_runtime_like_go__02_old",
+      "request": {
+        "body": {
+          "code": "20ABCDEF1234",
+          "phone": "+998881111111"
+        },
+        "fixture": "isolated",
+        "method": "POST",
+        "uri": "/v1/mobile/auth/login"
+      },
+      "source": {
+        "line": 120,
+        "path": "src/http/admin_route_tests/admin_edge_cases.rs"
+      },
+      "workflow": "admin_settings_put_updates_auth_runtime_like_go"
+    },
+    {
+      "expect": {
+        "body": {
+          "profile": {
+            "display_name": "Updated Werka",
+            "role": "werka"
+          }
+        },
+        "status": 200
+      },
+      "name": "admin_settings_put_updates_auth_runtime_like_go__03_new",
+      "request": {
+        "body": {
+          "code": "20UPDATED",
+          "phone": "+998881111111"
+        },
+        "fixture": "isolated",
+        "method": "POST",
+        "uri": "/v1/mobile/auth/login"
+      },
+      "source": {
+        "line": 131,
+        "path": "src/http/admin_route_tests/admin_edge_cases.rs"
+      },
+      "workflow": "admin_settings_put_updates_auth_runtime_like_go"
+    },
+    {
+      "expect": {
+        "status": 200
+      },
+      "name": "material_taminotchi_can_read_production_maps_for_assignment_only__01_response",
+      "request": {
+        "body": {
+          "edges": [
+            {
+              "from": "start",
+              "to": "end"
+            }
+          ],
+          "id": "material-assignment-test",
+          "nodes": [
+            {
+              "id": "start",
+              "kind": "start",
+              "title": "Start"
+            },
+            {
+              "id": "end",
+              "kind": "end",
+              "title": "End"
+            }
+          ],
+          "product_code": "HOTLUNCH",
+          "title": "Material assignment test"
+        },
+        "fixture": "isolated",
+        "method": "PUT",
+        "role": "admin",
+        "uri": "/v1/mobile/admin/production-maps"
+      },
+      "source": {
+        "line": 179,
+        "path": "src/http/admin_route_tests/run_capabilities.rs"
+      },
+      "workflow": "material_taminotchi_can_read_production_maps_for_assignment_only"
+    },
+    {
+      "expect": {
+        "body_paths": [
+          {
+            "equals": "material-assignment-test",
+            "path": [
+              0,
+              "map",
+              "id"
+            ]
+          }
+        ],
+        "status": 200
+      },
+      "name": "material_taminotchi_can_read_production_maps_for_assignment_only__02_response",
+      "request": {
+        "fixture": "isolated",
+        "method": "GET",
+        "role": "material_taminotchi",
+        "uri": "/v1/mobile/admin/production-maps"
+      },
+      "source": {
+        "line": 205,
+        "path": "src/http/admin_route_tests/run_capabilities.rs"
+      },
+      "workflow": "material_taminotchi_can_read_production_maps_for_assignment_only"
+    },
+    {
+      "expect": {
+        "status": 403
+      },
+      "name": "material_taminotchi_can_read_production_maps_for_assignment_only__03_response",
+      "request": {
+        "body": {
+          "edges": [
+            {
+              "from": "start",
+              "to": "end"
+            }
+          ],
+          "id": "material-assignment-test-2",
+          "nodes": [
+            {
+              "id": "start",
+              "kind": "start",
+              "title": "Start"
+            },
+            {
+              "id": "end",
+              "kind": "end",
+              "title": "End"
+            }
+          ],
+          "product_code": "HOTLUNCH",
+          "title": "Material assignment test 2"
+        },
+        "fixture": "isolated",
+        "method": "PUT",
+        "role": "material_taminotchi",
+        "uri": "/v1/mobile/admin/production-maps"
+      },
+      "source": {
+        "line": 219,
+        "path": "src/http/admin_route_tests/run_capabilities.rs"
+      },
+      "workflow": "material_taminotchi_can_read_production_maps_for_assignment_only"
+    }
+  ],
+  "generated": true,
+  "protocol": 1,
+  "skipped": [],
+  "source": {
+    "git_ref": "b67789e",
+    "manifest": "tools/test_migration_audit/migrations/multi_role_workflow_b67789e.json"
+  },
+  "summary": {
+    "generated_cases": 6,
+    "skipped_scenarios": 0,
+    "source_tests": 2
+  }
+}

@@ -88,62 +88,6 @@ async fn admin_activity_limits_history_to_30_like_go() {
 }
 
 #[tokio::test]
-async fn admin_settings_put_updates_auth_runtime_like_go() {
-    let mut state = test_state();
-    state.admin = state
-        .admin
-        .clone()
-        .with_auth_config_sink(Arc::new(state.auth.clone()));
-    let token = session(&state, PrincipalRole::Admin).await;
-
-    let update = build_router(state.clone())
-        .oneshot(request_with_body(
-            "PUT",
-            "/v1/mobile/admin/settings",
-            &token,
-            r#"{
-                "default_target_warehouse":"Stores - CH",
-                "default_uom":"Kg",
-                "werka_phone":"+998881111111",
-                "werka_name":"Updated Werka",
-                "werka_code":"20UPDATED",
-                "werka_code_locked":false,
-                "werka_code_retry_after_sec":0,
-                "admin_phone":"+998882222222",
-                "admin_name":"Updated Admin"
-            }"#,
-        ))
-        .await
-        .expect("response");
-    assert_eq!(update.status(), StatusCode::OK);
-
-    let old = build_router(state.clone())
-        .oneshot(request_with_body(
-            "POST",
-            "/v1/mobile/auth/login",
-            "",
-            r#"{"phone":"+998881111111","code":"20ABCDEF1234"}"#,
-        ))
-        .await
-        .expect("response");
-    assert_eq!(old.status(), StatusCode::UNAUTHORIZED);
-
-    let new = build_router(state)
-        .oneshot(request_with_body(
-            "POST",
-            "/v1/mobile/auth/login",
-            "",
-            r#"{"phone":"+998881111111","code":"20UPDATED"}"#,
-        ))
-        .await
-        .expect("response");
-    assert_eq!(new.status(), StatusCode::OK);
-    let value = json_body(new).await;
-    assert_eq!(value["profile"]["role"], "werka");
-    assert_eq!(value["profile"]["display_name"], "Updated Werka");
-}
-
-#[tokio::test]
 async fn admin_create_supplier_and_customer_mutations_like_go() {
     let state = test_state();
     let token = session(&state, PrincipalRole::Admin).await;

@@ -26,7 +26,8 @@
       "source": {
         "line": 677,
         "path": "src/http/admin_route_tests/warehouses_groups.rs"
-      }
+      },
+      "workflow": "admin_can_assign_warehouse_to_user_and_list_assignments"
     },
     {
       "expect": {
@@ -58,7 +59,8 @@
       "source": {
         "line": 693,
         "path": "src/http/admin_route_tests/warehouses_groups.rs"
-      }
+      },
+      "workflow": "admin_can_assign_warehouse_to_user_and_list_assignments"
     },
     {
       "expect": {
@@ -77,7 +79,8 @@
       "source": {
         "line": 256,
         "path": "src/http/admin_route_tests/admin_edge_cases.rs"
-      }
+      },
+      "workflow": "admin_item_mutation_errors_match_go"
     },
     {
       "expect": {
@@ -100,7 +103,8 @@
       "source": {
         "line": 270,
         "path": "src/http/admin_route_tests/admin_edge_cases.rs"
-      }
+      },
+      "workflow": "admin_item_mutation_errors_match_go"
     },
     {
       "expect": {
@@ -165,7 +169,8 @@
       "source": {
         "line": 8,
         "path": "src/http/admin_route_tests/run_capabilities.rs"
-      }
+      },
+      "workflow": "admin_production_map_run_returns_calculated_tasks"
     },
     {
       "expect": {
@@ -232,7 +237,8 @@
       "source": {
         "line": 47,
         "path": "src/http/admin_route_tests/run_capabilities.rs"
-      }
+      },
+      "workflow": "admin_production_map_run_returns_calculated_tasks"
     },
     {
       "expect": {
@@ -324,7 +330,8 @@
       "source": {
         "line": 8,
         "path": "src/http/admin_route_tests/production_map_basic.rs"
-      }
+      },
+      "workflow": "admin_production_maps_save_compiles_program"
     },
     {
       "expect": {
@@ -350,7 +357,8 @@
       "source": {
         "line": 56,
         "path": "src/http/admin_route_tests/production_map_basic.rs"
-      }
+      },
+      "workflow": "admin_production_maps_save_compiles_program"
     },
     {
       "expect": {
@@ -369,7 +377,8 @@
       "source": {
         "line": 988,
         "path": "src/http/admin_route_tests/warehouses_groups.rs"
-      }
+      },
+      "workflow": "admin_warehouse_summary_returns_lightweight_counts"
     },
     {
       "expect": {
@@ -391,7 +400,8 @@
       "source": {
         "line": 999,
         "path": "src/http/admin_route_tests/warehouses_groups.rs"
-      }
+      },
+      "workflow": "admin_warehouse_summary_returns_lightweight_counts"
     },
     {
       "expect": {
@@ -445,7 +455,8 @@
       "source": {
         "line": 1010,
         "path": "src/http/admin_route_tests/warehouses_groups.rs"
-      }
+      },
+      "workflow": "admin_warehouse_summary_returns_lightweight_counts"
     },
     {
       "expect": {
@@ -470,7 +481,8 @@
       "source": {
         "line": 83,
         "path": "src/http/admin_route_tests/apparatus_collections.rs"
-      }
+      },
+      "workflow": "collection_rejects_unknown_canonical_apparatus_and_duplicate_name"
     },
     {
       "expect": {
@@ -490,7 +502,8 @@
       "source": {
         "line": 99,
         "path": "src/http/admin_route_tests/apparatus_collections.rs"
-      }
+      },
+      "workflow": "collection_rejects_unknown_canonical_apparatus_and_duplicate_name"
     },
     {
       "expect": {
@@ -510,7 +523,8 @@
       "source": {
         "line": 111,
         "path": "src/http/admin_route_tests/apparatus_collections.rs"
-      }
+      },
+      "workflow": "collection_rejects_unknown_canonical_apparatus_and_duplicate_name"
     },
     {
       "expect": {
@@ -529,7 +543,8 @@
       "source": {
         "line": 60,
         "path": "src/http/admin_route_tests/factory_locations.rs"
-      }
+      },
+      "workflow": "factory_location_rejects_duplicate_name_and_unknown_apparatus"
     },
     {
       "expect": {
@@ -548,7 +563,8 @@
       "source": {
         "line": 71,
         "path": "src/http/admin_route_tests/factory_locations.rs"
-      }
+      },
+      "workflow": "factory_location_rejects_duplicate_name_and_unknown_apparatus"
     },
     {
       "expect": {
@@ -570,7 +586,8 @@
       "source": {
         "line": 82,
         "path": "src/http/admin_route_tests/factory_locations.rs"
-      }
+      },
+      "workflow": "factory_location_rejects_duplicate_name_and_unknown_apparatus"
     },
     {
       "expect": {
@@ -593,7 +610,8 @@
       "source": {
         "line": 219,
         "path": "src/http/admin_route_tests/warehouses_groups.rs"
-      }
+      },
+      "workflow": "legacy_apparatus_group_payload_cannot_mutate_canonical_configuration"
     },
     {
       "expect": {
@@ -609,7 +627,8 @@
       "source": {
         "line": 230,
         "path": "src/http/admin_route_tests/warehouses_groups.rs"
-      }
+      },
+      "workflow": "legacy_apparatus_group_payload_cannot_mutate_canonical_configuration"
     },
     {
       "expect": {
@@ -633,7 +652,8 @@
       "source": {
         "line": 196,
         "path": "src/http/admin_route_tests/warehouses_groups.rs"
-      }
+      },
+      "workflow": "legacy_apparatus_group_write_route_is_deleted"
     },
     {
       "expect": {
@@ -649,7 +669,8 @@
       "source": {
         "line": 207,
         "path": "src/http/admin_route_tests/warehouses_groups.rs"
-      }
+      },
+      "workflow": "legacy_apparatus_group_write_route_is_deleted"
     },
     {
       "expect": {
@@ -671,7 +692,8 @@
       "source": {
         "line": 507,
         "path": "src/http/admin_route_tests/admin_edge_cases.rs"
-      }
+      },
+      "workflow": "material_taminotchi_cannot_create_catalog_items_during_receipt"
     },
     {
       "expect": {
@@ -693,7 +715,8 @@
       "source": {
         "line": 519,
         "path": "src/http/admin_route_tests/admin_edge_cases.rs"
-      }
+      },
+      "workflow": "material_taminotchi_cannot_create_catalog_items_during_receipt"
     },
     {
       "expect": {
@@ -717,7 +740,8 @@
       "source": {
         "line": 179,
         "path": "src/http/admin_route_tests/qolip_cell_qr.rs"
-      }
+      },
+      "workflow": "product_spec_create_rejects_duplicate_qolip_code_without_overwriting"
     },
     {
       "expect": {
@@ -744,7 +768,8 @@
       "source": {
         "line": 198,
         "path": "src/http/admin_route_tests/qolip_cell_qr.rs"
-      }
+      },
+      "workflow": "product_spec_create_rejects_duplicate_qolip_code_without_overwriting"
     },
     {
       "expect": {
@@ -767,7 +792,8 @@
       "source": {
         "line": 218,
         "path": "src/http/admin_route_tests/qolip_cell_qr.rs"
-      }
+      },
+      "workflow": "product_spec_create_rejects_duplicate_qolip_code_without_overwriting"
     }
   ],
   "generated": true,

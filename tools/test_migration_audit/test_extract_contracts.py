@@ -109,6 +109,37 @@ async fn workflow_with_side_effect_oracle() {
 """
             )
 
+    def test_workflow_resolves_each_request_token_binding(self) -> None:
+        cases = extract_workflow(
+            r"""
+#[tokio::test]
+async fn role_workflow() {
+    let state = test_state();
+    let admin_token = session(&state, PrincipalRole::Admin).await;
+    let worker_token = session_for(&state, PrincipalRole::Aparatchi, "worker").await;
+    let anonymous = build_router(state.clone())
+        .oneshot(request("GET", "/v1/mobile/items", ""))
+        .await
+        .unwrap();
+    assert_eq!(anonymous.status(), StatusCode::UNAUTHORIZED);
+    let admin = build_router(state.clone())
+        .oneshot(request("GET", "/v1/mobile/items", &admin_token))
+        .await
+        .unwrap();
+    assert_eq!(admin.status(), StatusCode::OK);
+    let worker = build_router(state)
+        .oneshot(request("GET", "/v1/mobile/items", &worker_token))
+        .await
+        .unwrap();
+    assert_eq!(worker.status(), StatusCode::FORBIDDEN);
+}
+"""
+        )
+
+        self.assertNotIn("role", cases[0]["request"])
+        self.assertEqual(cases[1]["request"]["role"], "admin")
+        self.assertEqual(cases[2]["request"]["role"], "aparatchi")
+
     def test_selected_manifest_can_explicitly_extract_scenario_contract(self) -> None:
         source = r"""
 #[tokio::test]

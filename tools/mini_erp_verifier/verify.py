@@ -496,10 +496,21 @@ def response_errors(expect: dict[str, Any], actual: dict[str, Any]) -> list[str]
     return errors
 
 
-def run_cases(contract: dict[str, Any]) -> tuple[list[dict[str, Any]], float]:
-    if not HARNESS.is_file():
-        raise VerificationFailure(f"verifier harness not found: {HARNESS}")
-    started = time.monotonic()
+def case_batches(contract: dict[str, Any]) -> list[list[dict[str, Any]]]:
+    shared: list[dict[str, Any]] = []
+    workflows: dict[str, list[dict[str, Any]]] = {}
+    for case in expanded_cases(contract):
+        workflow = case.get("workflow")
+        if workflow is None:
+            shared.append(case)
+        elif not isinstance(workflow, str) or not workflow:
+            raise VerificationFailure(f"invalid workflow id in {case.get('name')}")
+        else:
+            workflows.setdefault(workflow, []).append(case)
+    return ([shared] if shared else []) + list(workflows.values())
+
+
+def run_case_batch(protocol: int, cases: list[dict[str, Any]]) -> list[dict[str, Any]]:
     failures: list[dict[str, Any]] = []
     with tempfile.TemporaryDirectory(prefix="mini-rs-verifier-") as directory:
         workspace = Path(directory)
@@ -522,13 +533,10 @@ def run_cases(contract: dict[str, Any]) -> tuple[list[dict[str, Any]], float]:
                 f"verifier harness exited before ready: {stderr.strip()}"
             )
         ready = json.loads(ready_line)
-        if (
-            ready.get("ready") is not True
-            or ready.get("protocol") != contract["protocol"]
-        ):
+        if ready.get("ready") is not True or ready.get("protocol") != protocol:
             raise VerificationFailure(f"unexpected verifier handshake: {ready!r}")
 
-        for case in expanded_cases(contract):
+        for case in cases:
             process.stdin.write(
                 json.dumps(case["request"], separators=(",", ":")) + "\n"
             )
@@ -554,6 +562,18 @@ def run_cases(contract: dict[str, Any]) -> tuple[list[dict[str, Any]], float]:
         if return_code != 0:
             stderr = process.stderr.read() if process.stderr else ""
             raise VerificationFailure(f"verifier harness failed: {stderr.strip()}")
+    return failures
+
+
+def run_cases(contract: dict[str, Any]) -> tuple[list[dict[str, Any]], float]:
+    if not HARNESS.is_file():
+        raise VerificationFailure(f"verifier harness not found: {HARNESS}")
+    started = time.monotonic()
+    failures = [
+        failure
+        for batch in case_batches(contract)
+        for failure in run_case_batch(contract["protocol"], batch)
+    ]
     return failures, time.monotonic() - started
 
 

@@ -24,6 +24,10 @@
     {
       "manifest": "tools/test_migration_audit/migrations/workflow_http_c1a9acd.json",
       "output": "tools/mini_erp_verifier/generated_workflow_c1a9acd_contracts.json"
+    },
+    {
+      "manifest": "tools/test_migration_audit/migrations/multi_role_workflow_b67789e.json",
+      "output": "tools/mini_erp_verifier/generated_multi_role_workflow_b67789e_contracts.json"
     }
   ]
 }

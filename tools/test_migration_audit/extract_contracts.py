@@ -236,23 +236,60 @@ def request_body(content: bytes, request: Node) -> dict[str, Any]:
     return {"body": json_values[0]} if json_values else {}
 
 
-def request_role(function_text: str, request_text: str) -> str | None:
+def session_role_bindings(content: bytes, function: Node) -> dict[str, str]:
+    bindings: dict[str, str] = {}
+    for node in audit.walk(function):
+        if node.type != "let_declaration":
+            continue
+        pattern = node.child_by_field_name("pattern")
+        if pattern is None or pattern.type != "identifier":
+            continue
+        declaration = audit.source_text(content, node)
+        roles = {
+            role
+            for role, patterns in ROLE_PATTERNS.items()
+            if any(re.search(role_pattern, declaration) for role_pattern in patterns)
+        }
+        if len(roles) == 1:
+            bindings[audit.source_text(content, pattern)] = next(iter(roles))
+    return bindings
+
+
+def request_role(
+    function_text: str,
+    request_text: str,
+    role_bindings: dict[str, str] | None = None,
+) -> str | None:
+    bound_roles = {
+        role
+        for name, role in (role_bindings or {}).items()
+        if re.search(rf"\b{re.escape(name)}\b", request_text)
+    }
+    if len(bound_roles) > 1:
+        raise ExtractionFailure(
+            f"multiple bound request roles detected: {sorted(bound_roles)}"
+        )
+    if len(bound_roles) == 1:
+        return next(iter(bound_roles))
+
+    has_token = bool(
+        re.search(
+            r"AUTHORIZATION|Bearer\s|&\s*[a-zA-Z_][a-zA-Z0-9_]*token[a-zA-Z0-9_]*\b"
+            r"|\b[a-zA-Z_][a-zA-Z0-9_]*token[a-zA-Z0-9_]*\s*\)",
+            request_text,
+        )
+    )
+    if not has_token:
+        return None
     roles = {
         role
         for role, patterns in ROLE_PATTERNS.items()
         if any(re.search(pattern, function_text) for pattern in patterns)
     }
-    has_token = bool(
-        re.search(r"AUTHORIZATION|Bearer\s|&\s*token\b|\btoken\s*\)", request_text)
-    )
     if len(roles) > 1:
         raise ExtractionFailure(f"multiple request roles detected: {sorted(roles)}")
     if has_token and not roles:
         raise ExtractionFailure("authenticated request role could not be resolved")
-    if roles and not has_token:
-        raise ExtractionFailure(
-            "session role exists but request authentication was not detected"
-        )
     return next(iter(roles), None)
 
 
@@ -467,6 +504,7 @@ def extract_workflow_cases(
         raise ExtractionFailure("test function has no name")
     test_name = audit.source_text(source.content, name_node)
     function_text = audit.source_text(source.content, function)
+    role_bindings = session_role_bindings(source.content, function)
     calls = oneshot_calls(source.content, function)
     if len(calls) < 2:
         raise ExtractionFailure(
@@ -478,7 +516,7 @@ def extract_workflow_cases(
         request_node = request_argument(source.content, call)
         request_text = audit.source_text(source.content, request_node)
         method, uri = request_method_uri(source.content, request_node)
-        role = request_role(function_text, request_text)
+        role = request_role(function_text, request_text, role_bindings)
         binding = response_binding(source.content, call, function)
         scope_start = call.end_byte
         scope_end = (
@@ -527,6 +565,7 @@ def extract_workflow_cases(
             ExtractedCase(
                 case={
                     "name": f"{test_name}__{index + 1:02}_{binding}",
+                    "workflow": test_name,
                     "request": request,
                     "expect": expect,
                     "source": {
@@ -563,7 +602,11 @@ def extract_case(
     request_node = oneshot_request_argument(source.content, function)
     function_text = audit.source_text(source.content, function)
     request_text = audit.source_text(source.content, request_node)
-    role = request_role(function_text, request_text)
+    role = request_role(
+        function_text,
+        request_text,
+        session_role_bindings(source.content, function),
+    )
     request: dict[str, Any] = {
         "method": signals.http_methods[0],
         "uri": signals.literal_uris[0],

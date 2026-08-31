@@ -84,3 +84,5 @@ keeps source order, generates one verifier contract per bound response, and
 requires every step to have one static request, one status oracle, and only
 supported response assertions. `expected_generated_cases` pins the resulting
 step count independently from the number of removed Rust test functions.
+When a workflow creates multiple sessions, each request role is resolved from
+the local token binding instead of guessing from all roles present in the test.

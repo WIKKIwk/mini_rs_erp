@@ -1,0 +1,18 @@
+{
+  "protocol": 1,
+  "git_ref": "b67789e",
+  "expected_tests": 2,
+  "expected_automatic_contracts": 2,
+  "expected_generated_cases": 6,
+  "allow_scenario_contracts": true,
+  "allow_multiple_requests": true,
+  "remove_selected_tests": true,
+  "paths": [
+    "src/http/admin_route_tests/admin_edge_cases.rs",
+    "src/http/admin_route_tests/run_capabilities.rs"
+  ],
+  "tests": [
+    "src/http/admin_route_tests/admin_edge_cases.rs::admin_settings_put_updates_auth_runtime_like_go",
+    "src/http/admin_route_tests/run_capabilities.rs::material_taminotchi_can_read_production_maps_for_assignment_only"
+  ]
+}
