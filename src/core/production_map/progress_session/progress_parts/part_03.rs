@@ -181,3 +181,40 @@ pub struct QueueProgressInput {
     /// is put back into waiting WIP.
     pub remove_roll_from_apparatus: bool,
 }
+
+impl QueueProgressInput {
+    pub(crate) fn has_reported_output(&self) -> bool {
+        !self.rezka_frames.is_empty()
+            || self.produced_qty.is_some()
+            || self.gross_qty.is_some()
+            || self.return_ink_kg.is_some()
+            || self.lamination_print_leftover_rolls.is_some()
+            || self.lamination_film_leftover_rolls.is_some()
+            || self.rezka_bosma_waste.is_some()
+            || self.rezka_lamination_waste.is_some()
+            || self.rezka_edge_waste.is_some()
+            || self.total_waste.is_some()
+            || self.finished_goods_kg.is_some()
+            || self.bobina_kg.is_some()
+            || self.finished_goods_meter.is_some()
+            || self.diameter.is_some()
+    }
+
+    pub(crate) fn has_rezka_quantity_metrics(&self) -> bool {
+        let is_positive =
+            |value: Option<f64>| value.is_some_and(|value| value.is_finite() && value > 0.0);
+        is_positive(self.produced_qty.or(self.finished_goods_meter))
+            && is_positive(self.gross_qty.or(self.finished_goods_kg))
+            && is_positive(self.diameter)
+    }
+
+    pub(crate) fn has_complete_freeze_safe_stop_output(&self, is_rezka: bool) -> bool {
+        if is_rezka {
+            return !self.rezka_frames.is_empty()
+                || (self.has_rezka_quantity_metrics() && self.bobina_kg.is_some());
+        }
+        self.produced_qty.or(self.finished_goods_meter).is_some()
+            && self.gross_qty.or(self.finished_goods_kg).is_some()
+            && self.bobina_kg.is_some()
+    }
+}

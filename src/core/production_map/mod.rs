@@ -72,6 +72,9 @@ pub(crate) use queue::{
     QueueActionPolicyInput, QueueActionPolicyProfile, allowed_actions_for_control,
 };
 pub use service::{PreparedApparatusQueueAction, ProductionMapLiveSnapshot, ProductionMapService};
+pub(crate) use service_progress_metrics::{
+    bosma_completion_metrics_are_complete, laminatsiya_completion_metrics_are_complete,
+};
 pub(crate) use store_port::validate_queue_progress_write;
 pub use store_port::{
     ProductionMapApparatusTransferWrite, ProductionMapStorePort, QueueActionProgressWrite,

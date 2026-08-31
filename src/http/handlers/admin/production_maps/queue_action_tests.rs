@@ -3,7 +3,7 @@ mod tests {
     use super::{
         ApparatusQueueActionRequest, QueueActionCommand, QueueApparatusMetadata,
         QueueActionDecision, canonical_queue_action, parse_canonical_queue_apparatus_id,
-        plan_queue_action, returned_paint_queue_error,
+        plan_queue_action, returned_paint_queue_error, validate_queue_action_preflight,
     };
     use crate::core::apparatus_standard::{ApparatusId, ExecutionOperation};
     use crate::core::auth::models::{Principal, PrincipalRole};
@@ -200,6 +200,43 @@ mod tests {
 
         assert_eq!(status, axum::http::StatusCode::BAD_REQUEST);
         assert_eq!(body.error, "rezka_progress_metrics_required");
+    }
+
+    #[test]
+    fn rezka_freeze_safe_stop_uses_the_core_complete_output_rule() {
+        let (incomplete, apparatus) = command_from_json(
+            serde_json::json!({
+                "apparatus": "apparatus:catalog:test-001",
+                "order_id": "zakaz-rezka-freeze",
+                "action": "pause",
+                "freeze_request_id": "freeze-request-1",
+                "produced_qty": 10,
+                "gross_qty": 2,
+                "diameter": 40
+            }),
+            ExecutionOperation::Cut,
+        );
+        let (status, axum::Json(body)) =
+            validate_queue_action_preflight(&incomplete, &apparatus)
+                .expect_err("bobina metric is required");
+        assert_eq!(status, axum::http::StatusCode::BAD_REQUEST);
+        assert_eq!(body.error, "freeze_safe_stop_output_incomplete");
+
+        let (complete, apparatus) = command_from_json(
+            serde_json::json!({
+                "apparatus": "apparatus:catalog:test-001",
+                "order_id": "zakaz-rezka-freeze",
+                "action": "pause",
+                "freeze_request_id": "freeze-request-1",
+                "produced_qty": 10,
+                "gross_qty": 2,
+                "diameter": 40,
+                "bobina_kg": 0.5
+            }),
+            ExecutionOperation::Cut,
+        );
+        validate_queue_action_preflight(&complete, &apparatus)
+            .expect("complete Rezka safe-stop output");
     }
 
     #[test]

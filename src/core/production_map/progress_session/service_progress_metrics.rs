@@ -198,12 +198,8 @@ fn validate_progress_metrics(
     let is_rezka = apparatus::is_rezka_apparatus(canonical);
     if is_complete
         && pechat::is_pechat_apparatus(canonical)
-        && !(returned_paint_report_attached
-            && metrics.total_waste.is_some()
-            && metrics.finished_goods_kg.is_some()
-            && metrics.finished_goods_meter.is_some())
         && !bosma_completion_metrics_are_complete(
-            metrics.return_ink_kg,
+            metrics.return_ink_kg.is_some() || returned_paint_report_attached,
             metrics.total_waste,
             metrics.finished_goods_kg,
             metrics.finished_goods_meter,
@@ -275,19 +271,19 @@ fn valid_non_negative_optional_progress_qty(
     }
 }
 
-fn bosma_completion_metrics_are_complete(
-    return_ink_kg: Option<f64>,
+pub(crate) fn bosma_completion_metrics_are_complete(
+    has_return_ink_or_report: bool,
     total_waste: Option<f64>,
     finished_goods_kg: Option<f64>,
     finished_goods_meter: Option<f64>,
 ) -> bool {
-    return_ink_kg.is_some()
+    has_return_ink_or_report
         && total_waste.is_some()
         && finished_goods_kg.is_some()
         && finished_goods_meter.is_some()
 }
 
-fn laminatsiya_completion_metrics_are_complete(
+pub(crate) fn laminatsiya_completion_metrics_are_complete(
     lamination_print_leftover_rolls: Option<f64>,
     lamination_film_leftover_rolls: Option<f64>,
     total_waste: Option<f64>,

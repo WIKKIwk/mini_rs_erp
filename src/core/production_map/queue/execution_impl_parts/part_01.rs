@@ -26,7 +26,7 @@ impl ProductionMapService {
                 queue_state::ApparatusQueueAction::Pause
                     | queue_state::ApparatusQueueAction::DetachRoll
             );
-        let freeze_request_safe_stop_has_output = freeze_safe_stop_has_any_output(&progress);
+        let freeze_request_safe_stop_has_output = progress.has_reported_output();
         let freeze_request_safe_stop_with_issue = freeze_request_safe_stop
             && !freeze_request_safe_stop_has_output
             && !progress.description.trim().is_empty();
@@ -167,7 +167,9 @@ impl ProductionMapService {
         }
         if freeze_request_safe_stop
             && freeze_request_safe_stop_has_output
-            && !freeze_safe_stop_output_is_complete(&canonical, &progress)
+            && !progress.has_complete_freeze_safe_stop_output(apparatus::is_rezka_apparatus(
+                &canonical,
+            ))
         {
             return Err(ProductionMapError::ProgressInputInvalid);
         }

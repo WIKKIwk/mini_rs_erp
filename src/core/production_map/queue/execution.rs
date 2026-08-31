@@ -73,45 +73,6 @@ fn validate_freeze_request_target_session(
     Ok(())
 }
 
-fn freeze_safe_stop_has_any_output(progress: &QueueProgressInput) -> bool {
-    !progress.rezka_frames.is_empty()
-        || progress.produced_qty.is_some()
-        || progress.gross_qty.is_some()
-        || progress.return_ink_kg.is_some()
-        || progress.lamination_print_leftover_rolls.is_some()
-        || progress.lamination_film_leftover_rolls.is_some()
-        || progress.rezka_bosma_waste.is_some()
-        || progress.rezka_lamination_waste.is_some()
-        || progress.rezka_edge_waste.is_some()
-        || progress.total_waste.is_some()
-        || progress.finished_goods_kg.is_some()
-        || progress.bobina_kg.is_some()
-        || progress.finished_goods_meter.is_some()
-        || progress.diameter.is_some()
-}
-
-fn freeze_safe_stop_output_is_complete(
-    apparatus: &crate::core::apparatus_standard::RuntimeApparatusConfiguration,
-    progress: &QueueProgressInput,
-) -> bool {
-    if apparatus::is_rezka_apparatus(apparatus) {
-        return !progress.rezka_frames.is_empty()
-            || (progress
-                .produced_qty
-                .or(progress.finished_goods_meter)
-                .is_some()
-                && progress.gross_qty.or(progress.finished_goods_kg).is_some()
-                && progress.bobina_kg.is_some()
-                && progress.diameter.is_some());
-    }
-    progress
-        .produced_qty
-        .or(progress.finished_goods_meter)
-        .is_some()
-        && progress.gross_qty.or(progress.finished_goods_kg).is_some()
-        && progress.bobina_kg.is_some()
-}
-
 fn mark_freeze_request_safe_stop_progress(
     progress: &mut QueueProgressRecords,
     request_id: &str,

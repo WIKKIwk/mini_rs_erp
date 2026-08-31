@@ -1,3 +1,4 @@
+#[derive(Debug)]
 struct QueueActionPreflight {
     freeze_safe_stop_with_issue: bool,
     returned_paint_requested: bool,
@@ -22,7 +23,7 @@ fn validate_queue_action_preflight(
             queue_state::ApparatusQueueAction::Pause
                 | queue_state::ApparatusQueueAction::DetachRoll
         );
-    let has_output = queue_action_has_any_output(input);
+    let has_output = input.progress.has_reported_output();
     let freeze_safe_stop_with_issue =
         freeze_safe_stop && !has_output && !input.progress.description.trim().is_empty();
     if freeze_safe_stop {
@@ -31,7 +32,11 @@ fn validate_queue_action_preflight(
                 "freeze_safe_stop_output_or_issue_note_required",
             ));
         }
-        if has_output && !freeze_safe_stop_output_is_complete(input, apparatus) {
+        if has_output
+            && !input
+                .progress
+                .has_complete_freeze_safe_stop_output(apparatus.is_rezka())
+        {
             return Err(bad_request("freeze_safe_stop_output_incomplete"));
         }
     }
@@ -123,17 +128,23 @@ impl QueueMetricCoverage {
         returned_paint_report_attached: bool,
     ) -> Self {
         Self {
-            has_complete_bosma: (return_ink_kg.is_some() || returned_paint_report_attached)
-                && input.progress.total_waste.is_some()
-                && input.progress.finished_goods_kg.is_some()
-                && input.progress.finished_goods_meter.is_some(),
-            has_complete_laminatsiya: (input.progress.lamination_print_leftover_rolls.is_some()
-                || input.progress.lamination_film_leftover_rolls.is_some())
-                && input.progress.total_waste.is_some()
-                && input.progress.finished_goods_kg.is_some()
-                && input.progress.finished_goods_meter.is_some(),
+            has_complete_bosma:
+                crate::core::production_map::bosma_completion_metrics_are_complete(
+                    return_ink_kg.is_some() || returned_paint_report_attached,
+                    input.progress.total_waste,
+                    input.progress.finished_goods_kg,
+                    input.progress.finished_goods_meter,
+                ),
+            has_complete_laminatsiya:
+                crate::core::production_map::laminatsiya_completion_metrics_are_complete(
+                    input.progress.lamination_print_leftover_rolls,
+                    input.progress.lamination_film_leftover_rolls,
+                    input.progress.total_waste,
+                    input.progress.finished_goods_kg,
+                    input.progress.finished_goods_meter,
+                ),
             has_rezka_quantities: apparatus.is_rezka()
-                && rezka_queue_quantity_metrics_are_complete(input),
+                && input.progress.has_rezka_quantity_metrics(),
             has_rezka_frames: apparatus.is_rezka() && !input.progress.rezka_frames.is_empty(),
         }
     }

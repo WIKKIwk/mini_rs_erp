@@ -107,27 +107,6 @@ fn zero_completion_metric_codes(
     .collect()
 }
 
-fn rezka_queue_quantity_metrics_are_complete(
-    input: &QueueActionCommand,
-) -> bool {
-    let is_positive =
-        |value: Option<f64>| value.is_some_and(|value| value.is_finite() && value > 0.0);
-    let has_output_meter = is_positive(
-        input
-            .progress
-            .produced_qty
-            .or(input.progress.finished_goods_meter),
-    );
-    let has_output_kg = is_positive(
-        input
-            .progress
-            .gross_qty
-            .or(input.progress.finished_goods_kg),
-    );
-    let has_diameter = is_positive(input.progress.diameter);
-    has_output_meter && has_output_kg && has_diameter
-}
-
 async fn prepare_qolips_for_bosma_start(
     state: &AppState,
     principal: &Principal,
