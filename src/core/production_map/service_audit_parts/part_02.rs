@@ -61,24 +61,7 @@ fn audit_progress_batch(
         ));
     }
 
-    let expected_action = match batch.status {
-        OrderProgressBatchStatus::Paused => queue_state::ApparatusQueueAction::Pause,
-        OrderProgressBatchStatus::RollDetached => queue_state::ApparatusQueueAction::DetachRoll,
-        OrderProgressBatchStatus::Resumed
-            if batch.action == queue_state::ApparatusQueueAction::DetachRoll =>
-        {
-            queue_state::ApparatusQueueAction::DetachRoll
-        }
-        OrderProgressBatchStatus::Resumed => queue_state::ApparatusQueueAction::Pause,
-        OrderProgressBatchStatus::Completed => {
-            if batch.action == queue_state::ApparatusQueueAction::RollComplete {
-                queue_state::ApparatusQueueAction::RollComplete
-            } else {
-                queue_state::ApparatusQueueAction::Complete
-            }
-        }
-    };
-    if batch.action != expected_action {
+    if !batch.has_consistent_action_status() {
         violations.push(ProductionWorkflowAuditViolation::new(
             "progress_batch_status_action_mismatch",
             order_id,

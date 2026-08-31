@@ -15,9 +15,10 @@ impl OrderProgressBatch {
     }
 
     pub fn is_finished_goods_output(&self) -> bool {
-        if !self.next_apparatus.trim().is_empty() {
-            return false;
-        }
+        self.next_apparatus.trim().is_empty() && self.has_consistent_action_status()
+    }
+
+    pub(crate) fn has_consistent_action_status(&self) -> bool {
         match self.action {
             queue_state::ApparatusQueueAction::Pause => matches!(
                 self.status,
