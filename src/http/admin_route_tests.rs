@@ -268,6 +268,8 @@ fn two_apparatus_order_map_json(
 ) -> String {
     let first_id = canonical_test_apparatus_id(first_apparatus);
     let second_id = canonical_test_apparatus_id(second_apparatus);
+    let first_rezka_config = rezka_test_node_config(&first_id);
+    let second_rezka_config = rezka_test_node_config(&second_id);
     format!(
         r#"{{
             "id":"{id}",
@@ -276,8 +278,8 @@ fn two_apparatus_order_map_json(
             "order_number":"{order_number}",
             "nodes":[
                 {{"id":"start","kind":"start","title":"Start"}},
-                {{"id":"first","kind":"apparatus","title":"{first_apparatus}","apparatus_id":"{first_id}"}},
-                {{"id":"second","kind":"apparatus","title":"{second_apparatus}","apparatus_id":"{second_id}"}},
+                {{"id":"first","kind":"apparatus","title":"{first_apparatus}","apparatus_id":"{first_id}"{first_rezka_config}}},
+                {{"id":"second","kind":"apparatus","title":"{second_apparatus}","apparatus_id":"{second_id}"{second_rezka_config}}},
                 {{"id":"end","kind":"end","title":"End"}}
             ],
             "edges":[
@@ -317,14 +319,8 @@ fn production_order_map_json_with_product(
     roll_count: i64,
     width_mm: f64,
 ) -> String {
-    let rezka_config = if apparatus.to_ascii_lowercase().contains("rezka")
-        || apparatus.to_ascii_lowercase().contains("asset-010")
-    {
-        r#", "rezka_kadr_count": 4, "rezka_label_length": 100"#
-    } else {
-        ""
-    };
     let apparatus_id = canonical_test_apparatus_id(apparatus);
+    let rezka_config = rezka_test_node_config(&apparatus_id);
     format!(
         r#"{{
             "id":"{id}",
@@ -344,6 +340,14 @@ fn production_order_map_json_with_product(
             ]
         }}"#
     )
+}
+
+fn rezka_test_node_config(apparatus_id: &str) -> &'static str {
+    if apparatus_id.eq_ignore_ascii_case("apparatus:default:asset-010") {
+        r#", "rezka_kadr_count": 4, "rezka_label_length": 100"#
+    } else {
+        ""
+    }
 }
 
 fn pechat_task_rezka_order_map_json(id: &str, title: &str, order_number: &str) -> String {

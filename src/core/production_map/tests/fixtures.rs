@@ -172,9 +172,9 @@ pub(super) fn apparatus_stage_map(id: &str, apparatus: &str) -> ProductionMapDef
                 alternative_group_label: String::new(),
                 alternative_assigned_title: String::new(),
                 alternative_assigned_apparatus_id: String::new(),
-                rezka_kadr_count: None,
+                rezka_kadr_count: test_rezka_kadr_count(apparatus),
                 rezka_frame_groups: Vec::new(),
-                rezka_label_length: None,
+                rezka_label_length: test_rezka_label_length(apparatus),
                 x: 0.0,
                 y: 132.0,
             },
@@ -221,12 +221,28 @@ pub(super) fn canonical_apparatus_stage_map(
     display_name: &str,
 ) -> ProductionMapDefinition {
     let mut map = apparatus_stage_map(id, display_name);
-    map.nodes
+    let apparatus_node = map
+        .nodes
         .iter_mut()
         .find(|node| node.kind == ProductionMapNodeKind::Apparatus)
-        .expect("apparatus stage node")
-        .apparatus_id = apparatus_id.to_string();
+        .expect("apparatus stage node");
+    apparatus_node.apparatus_id = apparatus_id.to_string();
+    apparatus_node.rezka_kadr_count = test_rezka_kadr_count(apparatus_id);
+    apparatus_node.rezka_label_length = test_rezka_label_length(apparatus_id);
     map
+}
+
+fn test_rezka_kadr_count(apparatus_id: &str) -> Option<i64> {
+    is_test_rezka(apparatus_id).then_some(1)
+}
+
+fn test_rezka_label_length(apparatus_id: &str) -> Option<f64> {
+    is_test_rezka(apparatus_id).then_some(100.0)
+}
+
+fn is_test_rezka(apparatus_id: &str) -> bool {
+    let apparatus_id = apparatus_id.to_ascii_lowercase();
+    apparatus_id.contains("rezka") || apparatus_id.ends_with(":asset-010")
 }
 
 pub(super) async fn service_with_default_apparatus(
@@ -243,11 +259,14 @@ pub(super) fn canonical_two_stage_map(
     second_display_name: &str,
 ) -> ProductionMapDefinition {
     let mut map = apparatus_stage_map(id, first_display_name);
-    map.nodes
+    let first_node = map
+        .nodes
         .iter_mut()
         .find(|node| node.id == "apparatus")
-        .expect("first apparatus stage")
-        .apparatus_id = first_id.to_string();
+        .expect("first apparatus stage");
+    first_node.apparatus_id = first_id.to_string();
+    first_node.rezka_kadr_count = test_rezka_kadr_count(first_id);
+    first_node.rezka_label_length = test_rezka_label_length(first_id);
     map.nodes.insert(
         2,
         ProductionMapNode {
@@ -265,9 +284,9 @@ pub(super) fn canonical_two_stage_map(
             alternative_group_label: String::new(),
             alternative_assigned_title: String::new(),
             alternative_assigned_apparatus_id: String::new(),
-            rezka_kadr_count: None,
+            rezka_kadr_count: test_rezka_kadr_count(second_id),
             rezka_frame_groups: Vec::new(),
-            rezka_label_length: None,
+            rezka_label_length: test_rezka_label_length(second_id),
             x: 0.0,
             y: 264.0,
         },
