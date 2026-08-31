@@ -1,0 +1,254 @@
+{
+  "cases": [
+    {
+      "expect": {
+        "body_paths": [
+          {
+            "length": 0,
+            "path": []
+          }
+        ],
+        "status": 200
+      },
+      "name": "admin_activity_returns_empty_without_history_provider",
+      "request": {
+        "fixture": "isolated",
+        "method": "GET",
+        "role": "admin",
+        "uri": "/v1/mobile/admin/activity"
+      },
+      "source": {
+        "line": 147,
+        "path": "src/http/admin_route_tests/admin_edge_cases.rs"
+      }
+    },
+    {
+      "expect": {
+        "body_paths": [
+          {
+            "length": 6,
+            "path": [
+              "layers"
+            ]
+          },
+          {
+            "greater_than": 0.0,
+            "path": [
+              "results",
+              0,
+              "rounded_length"
+            ]
+          }
+        ],
+        "status": 200
+      },
+      "name": "calculate_endpoint_accepts_arbitrary_layer_count",
+      "request": {
+        "body": {
+          "frame_count": 1,
+          "frame_product_size_mm": 515,
+          "kg": 300,
+          "layers": [
+            {
+              "material": "pet",
+              "micron": "12"
+            },
+            {
+              "material": "pe oq",
+              "micron": "30"
+            },
+            {
+              "material": "pe pr",
+              "micron": "40"
+            },
+            {
+              "material": "mcp",
+              "micron": "25"
+            },
+            {
+              "material": "jem",
+              "micron": "25"
+            },
+            {
+              "material": "opp",
+              "micron": "18"
+            }
+          ],
+          "product": "dynamic layers"
+        },
+        "fixture": "isolated",
+        "method": "POST",
+        "role": "admin",
+        "uri": "/v1/mobile/calculate"
+      },
+      "source": {
+        "line": 78,
+        "path": "src/http/calculate_route_tests.rs"
+      }
+    },
+    {
+      "expect": {
+        "body": {
+          "ok": true,
+          "roll_count": 7
+        },
+        "status": 200
+      },
+      "name": "calculate_endpoint_accepts_mobile_decimal_roll_count",
+      "request": {
+        "body": {
+          "first_layer": {
+            "material": "pet",
+            "micron": "12"
+          },
+          "frame_count": 1,
+          "frame_product_size_mm": 515,
+          "kg": 300,
+          "product": "cpp / 20 mikron / 600",
+          "roll_count": 7.0,
+          "second_layer": {
+            "material": "pe oq",
+            "micron": "30"
+          }
+        },
+        "fixture": "isolated",
+        "method": "POST",
+        "role": "admin",
+        "uri": "/v1/mobile/calculate"
+      },
+      "source": {
+        "line": 48,
+        "path": "src/http/calculate_route_tests.rs"
+      }
+    },
+    {
+      "expect": {
+        "body": {
+          "ok": true,
+          "rubber_size_mm": 550
+        },
+        "body_paths": [
+          {
+            "equals": 13000.0,
+            "path": [
+              "results",
+              0,
+              "rounded_length"
+            ]
+          },
+          {
+            "equals": 46.9,
+            "path": [
+              "results",
+              0,
+              "total_gsm"
+            ]
+          },
+          {
+            "equals": 53.0,
+            "path": [
+              "results",
+              0,
+              "width_sm"
+            ]
+          }
+        ],
+        "status": 200
+      },
+      "name": "calculate_endpoint_returns_formula_result",
+      "request": {
+        "body": {
+          "first_layer": {
+            "material": "pet",
+            "micron": "12"
+          },
+          "frame_count": 1,
+          "frame_product_size_mm": 515,
+          "kg": 300,
+          "product": "cpp / 20 mikron / 600",
+          "second_layer": {
+            "material": "pe oq",
+            "micron": "30"
+          }
+        },
+        "fixture": "isolated",
+        "method": "POST",
+        "role": "admin",
+        "uri": "/v1/mobile/calculate"
+      },
+      "source": {
+        "line": 16,
+        "path": "src/http/calculate_route_tests.rs"
+      }
+    },
+    {
+      "expect": {
+        "body": {
+          "error": "warehouse_not_assigned",
+          "ok": false
+        },
+        "status": 403
+      },
+      "name": "material_taminotchi_rps_batch_start_rejects_unassigned_warehouse",
+      "request": {
+        "body": {
+          "client_batch_id": "material-unassigned",
+          "driver_url": "http://127.0.0.1:39117",
+          "item_code": "ITEM-1",
+          "item_name": "Green Tea",
+          "print_mode": "label",
+          "printer": "godex",
+          "warehouse": "Stores - A"
+        },
+        "fixture": "isolated",
+        "method": "POST",
+        "role": "material_taminotchi",
+        "uri": "/v1/mobile/rps/batch/start"
+      },
+      "source": {
+        "line": 987,
+        "path": "src/http/gscale_route_tests/rps_batch.rs"
+      }
+    },
+    {
+      "expect": {
+        "body": {
+          "checked_order_count": 0,
+          "ok": true
+        },
+        "body_paths": [
+          {
+            "length": 0,
+            "path": [
+              "violations"
+            ]
+          }
+        ],
+        "status": 200
+      },
+      "name": "production_map_audit_route_returns_report",
+      "request": {
+        "fixture": "isolated",
+        "method": "GET",
+        "role": "admin",
+        "uri": "/v1/mobile/admin/production-maps/audit"
+      },
+      "source": {
+        "line": 4,
+        "path": "src/http/admin_route_tests/production_map_basic.rs"
+      }
+    }
+  ],
+  "generated": true,
+  "protocol": 1,
+  "skipped": [],
+  "source": {
+    "git_ref": "d83ba70",
+    "manifest": "tools/test_migration_audit/migrations/automatic_http_d83ba70.json"
+  },
+  "summary": {
+    "generated_cases": 6,
+    "skipped_scenarios": 0,
+    "source_tests": 6
+  }
+}

@@ -144,27 +144,6 @@ async fn admin_supplier_items_invalid_item_is_500_like_go() {
 }
 
 #[tokio::test]
-async fn admin_activity_returns_empty_without_history_provider() {
-    let state = test_state();
-    let token = session(&state, PrincipalRole::Admin).await;
-
-    let response = build_router(state)
-        .oneshot(request("GET", "/v1/mobile/admin/activity", &token))
-        .await
-        .expect("response");
-
-    assert_eq!(response.status(), StatusCode::OK);
-    assert_eq!(
-        json_body(response)
-            .await
-            .as_array()
-            .expect("activity")
-            .len(),
-        0
-    );
-}
-
-#[tokio::test]
 async fn admin_activity_limits_history_to_30_like_go() {
     let mut state = test_state();
     state.werka = WerkaService::new().with_lookup(Arc::new(ActivityLookup));

@@ -27,6 +27,9 @@ GENERATED_CONTRACT_PATH = Path(__file__).with_name("generated_contracts.json")
 GENERATED_AUTOMATIC_CONTRACT_PATH = Path(__file__).with_name(
     "generated_automatic_contracts.json"
 )
+GENERATED_D83BA70_CONTRACT_PATH = Path(__file__).with_name(
+    "generated_automatic_d83ba70_contracts.json"
+)
 MIGRATION_MANIFEST_PATH = (
     ROOT / "tools" / "test_migration_audit" / "migrations" / "generic_http_975078a.json"
 )
@@ -37,9 +40,17 @@ AUTOMATIC_MIGRATION_MANIFEST_PATH = (
     / "migrations"
     / "automatic_http_52843a2.json"
 )
+D83BA70_MIGRATION_MANIFEST_PATH = (
+    ROOT
+    / "tools"
+    / "test_migration_audit"
+    / "migrations"
+    / "automatic_http_d83ba70.json"
+)
 GENERATED_BUNDLES = (
     (GENERATED_CONTRACT_PATH, MIGRATION_MANIFEST_PATH),
     (GENERATED_AUTOMATIC_CONTRACT_PATH, AUTOMATIC_MIGRATION_MANIFEST_PATH),
+    (GENERATED_D83BA70_CONTRACT_PATH, D83BA70_MIGRATION_MANIFEST_PATH),
 )
 HARNESS = ROOT / "target" / "debug" / "mini_rs_verifier_harness"
 HARNESS_DEP_INFO = HARNESS.with_suffix(".d")
@@ -396,6 +407,20 @@ def subset_errors(expected: Any, actual: Any, path: str = "body") -> list[str]:
     return []
 
 
+def body_path_value(body: Any, path: list[str | int]) -> tuple[bool, Any]:
+    current = body
+    for part in path:
+        if isinstance(part, int):
+            if not isinstance(current, list) or part >= len(current):
+                return False, None
+            current = current[part]
+        else:
+            if not isinstance(current, dict) or part not in current:
+                return False, None
+            current = current[part]
+    return True, current
+
+
 def response_errors(expect: dict[str, Any], actual: dict[str, Any]) -> list[str]:
     errors: list[str] = []
     if actual.get("status") != expect.get("status"):
@@ -404,6 +429,29 @@ def response_errors(expect: dict[str, Any], actual: dict[str, Any]) -> list[str]
         )
     if "body" in expect:
         errors.extend(subset_errors(expect["body"], actual.get("body")))
+    for rule in expect.get("body_paths", []):
+        path = rule.get("path", [])
+        found, value = body_path_value(actual.get("body"), path)
+        label = "body" + "".join(
+            f"[{part}]" if isinstance(part, int) else f".{part}" for part in path
+        )
+        if not found:
+            errors.append(f"{label}: missing")
+        elif "equals" in rule and value != rule["equals"]:
+            errors.append(f"{label}: expected {rule['equals']!r}, got {value!r}")
+        elif "length" in rule and (
+            not hasattr(value, "__len__") or len(value) != rule["length"]
+        ):
+            actual_length = len(value) if hasattr(value, "__len__") else None
+            errors.append(
+                f"{label}: expected length {rule['length']}, got {actual_length}"
+            )
+        elif "greater_than" in rule and (
+            not isinstance(value, (int, float)) or value <= rule["greater_than"]
+        ):
+            errors.append(
+                f"{label}: expected greater than {rule['greater_than']}, got {value!r}"
+            )
     if "body_starts_with" in expect:
         body = actual.get("body")
         if not isinstance(body, str) or not body.startswith(expect["body_starts_with"]):

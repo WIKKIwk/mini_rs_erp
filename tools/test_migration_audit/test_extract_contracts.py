@@ -94,6 +94,56 @@ async fn supplier_read_fails_without_provider() {
         self.assertEqual(case["request"]["role"], "supplier")
         self.assertEqual(case["expect"]["status"], 500)
 
+    def test_extracts_bound_status_and_indexed_body_oracles(self) -> None:
+        case = extract(
+            r"""
+#[tokio::test]
+async fn calculate_contract() {
+    let response = build_router(test_state())
+        .oneshot(request("POST", "/v1/mobile/calculate", r#"{"kg":1}"#))
+        .await
+        .unwrap();
+    let status = response.status();
+    let body = json_body(response).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body["results"][0]["value"], 3.5);
+    assert_eq!(body["items"].as_array().unwrap().len(), 2);
+    assert!(body["score"].as_f64().unwrap_or(0.0) > 0.0);
+}
+"""
+        )
+
+        self.assertEqual(
+            case["expect"]["body_paths"],
+            [
+                {"path": ["results", 0, "value"], "equals": 3.5},
+                {"path": ["items"], "length": 2},
+                {"path": ["score"], "greater_than": 0.0},
+            ],
+        )
+
+    def test_preserves_invalid_json_as_raw_body(self) -> None:
+        case = extract(
+            r"""
+#[tokio::test]
+async fn invalid_json() {
+    let response = build_router(test_state())
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v1/mobile/items")
+                .body(Body::from("{not-json"))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+}
+"""
+        )
+
+        self.assertEqual(case["request"]["raw_body"], "{not-json")
+
     def test_extracts_default_get_and_cargo_package_version(self) -> None:
         case = extract(
             r"""

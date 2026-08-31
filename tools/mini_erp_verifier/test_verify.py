@@ -40,6 +40,24 @@ class HarnessFreshnessTests(unittest.TestCase):
                 os.utime(source, ns=(300, 300))
                 self.assertTrue(verify.harness_is_stale())
 
+    def test_response_body_path_oracles(self) -> None:
+        errors = verify.response_errors(
+            {
+                "status": 200,
+                "body_paths": [
+                    {"path": ["items", 1, "id"], "equals": "B"},
+                    {"path": ["items"], "length": 2},
+                    {"path": ["score"], "greater_than": 0},
+                ],
+            },
+            {
+                "status": 200,
+                "body": {"items": [{"id": "A"}, {"id": "B"}], "score": 1.5},
+            },
+        )
+
+        self.assertEqual(errors, [])
+
     def test_missing_dependency_file_requires_build(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             binary = Path(directory) / "mini_rs_verifier_harness"

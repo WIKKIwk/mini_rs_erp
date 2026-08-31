@@ -58,7 +58,10 @@ BOUND_JSON_PATTERN = re.compile(
     r"\blet\s+(?P<name>[a-zA-Z_][a-zA-Z0-9_]*)\s*=\s*json_body\([^;]+?\)\.await\s*;",
     re.DOTALL,
 )
-JSON_PATH_PATTERN = re.compile(r'\[\s*"([^"\\]+)"\s*\]')
+JSON_PATH_PATTERN = re.compile(r'\[\s*(?:"([^"\\]+)"|(\d+))\s*\]')
+BOUND_STATUS_PATTERN = re.compile(
+    r"\blet\s+([a-zA-Z_][a-zA-Z0-9_]*)\s*=\s*[a-zA-Z_][a-zA-Z0-9_]*\.status\(\)\s*;"
+)
 
 
 class ExtractionFailure(RuntimeError):
@@ -159,10 +162,10 @@ def request_body(content: bytes, request: Node) -> dict[str, Any]:
             continue
         try:
             json_values.append(json.loads(value))
-        except json.JSONDecodeError as error:
-            raise ExtractionFailure(
-                f"request contains invalid literal JSON: {error}"
-            ) from error
+        except json.JSONDecodeError:
+            if "Body::from" in text:
+                return {"raw_body": value}
+            raise ExtractionFailure("request contains invalid literal JSON")
     if len(json_values) > 1:
         raise ExtractionFailure("request contains multiple JSON body candidates")
     if "Body::from" in text and not json_values:
@@ -260,6 +263,12 @@ def set_body_path(body: dict[str, Any], path: list[str], value: Any) -> None:
     current[path[-1]] = value
 
 
+def json_path(source: str) -> list[str | int]:
+    return [
+        key if key else int(index) for key, index in JSON_PATH_PATTERN.findall(source)
+    ]
+
+
 def response_expectation(
     content: bytes,
     function: Node,
@@ -268,7 +277,9 @@ def response_expectation(
 ) -> tuple[dict[str, Any], int]:
     function_text = audit.source_text(content, function)
     bound_json = set(BOUND_JSON_PATTERN.findall(function_text))
+    bound_status = set(BOUND_STATUS_PATTERN.findall(function_text))
     body: dict[str, Any] = {}
+    body_paths: list[dict[str, Any]] = []
     handled = 0
     for node in audit.walk(function):
         if node.type != "macro_invocation":
@@ -280,12 +291,30 @@ def response_expectation(
         if macro_name not in {"assert", "assert_eq", "assert_ne", "matches"}:
             continue
         source = audit.source_text(content, node)
-        if "status()" in source and "StatusCode::" in source:
+        arguments = split_macro_arguments(source)
+        if "StatusCode::" in source and (
+            "status()" in source or (arguments and arguments[0].strip() in bound_status)
+        ):
+            handled += 1
+            continue
+        if macro_name == "assert" and ">" in source:
+            left, right = source[source.find("(") + 1 : source.rfind(")")].rsplit(
+                ">", 1
+            )
+            path = json_path(left)
+            bound_name = left.split("[", 1)[0].strip()
+            if bound_name not in bound_json or not path:
+                raise ExtractionFailure(f"unsupported response assertion: {source}")
+            body_paths.append(
+                {
+                    "path": path,
+                    "greater_than": json_scalar(right.split(",", 1)[0]),
+                }
+            )
             handled += 1
             continue
         if macro_name != "assert_eq":
             raise ExtractionFailure(f"unsupported response assertion: {source}")
-        arguments = split_macro_arguments(source)
         if len(arguments) < 2:
             raise ExtractionFailure(f"could not split assertion: {source}")
         left, right = arguments[:2]
@@ -293,14 +322,26 @@ def response_expectation(
         bound_name = left.split("[", 1)[0].strip()
         if not is_direct_json and bound_name not in bound_json:
             raise ExtractionFailure(f"assertion is not a response JSON path: {source}")
-        path = JSON_PATH_PATTERN.findall(left)
+        path = json_path(left)
+        if ".len()" in left:
+            body_paths.append(
+                {"path": path, "length": json_scalar(right, package_version)}
+            )
+            handled += 1
+            continue
         if not path:
             raise ExtractionFailure(f"response assertion has no object path: {source}")
-        set_body_path(body, path, json_scalar(right, package_version))
+        value = json_scalar(right, package_version)
+        if any(isinstance(part, int) for part in path):
+            body_paths.append({"path": path, "equals": value})
+        else:
+            set_body_path(body, path, value)
         handled += 1
     expectation: dict[str, Any] = {"status": status}
     if body:
         expectation["body"] = body
+    if body_paths:
+        expectation["body_paths"] = body_paths
     return expectation, handled
 
 

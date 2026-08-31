@@ -1,0 +1,21 @@
+{
+  "protocol": 1,
+  "git_ref": "d83ba70",
+  "expected_tests": 6,
+  "expected_automatic_contracts": 6,
+  "remove_selected_tests": true,
+  "paths": [
+    "src/http/admin_route_tests/admin_edge_cases.rs",
+    "src/http/admin_route_tests/production_map_basic.rs",
+    "src/http/calculate_route_tests.rs",
+    "src/http/gscale_route_tests/rps_batch.rs"
+  ],
+  "tests": [
+    "src/http/admin_route_tests/admin_edge_cases.rs::admin_activity_returns_empty_without_history_provider",
+    "src/http/admin_route_tests/production_map_basic.rs::production_map_audit_route_returns_report",
+    "src/http/calculate_route_tests.rs::calculate_endpoint_returns_formula_result",
+    "src/http/calculate_route_tests.rs::calculate_endpoint_accepts_mobile_decimal_roll_count",
+    "src/http/calculate_route_tests.rs::calculate_endpoint_accepts_arbitrary_layer_count",
+    "src/http/gscale_route_tests/rps_batch.rs::material_taminotchi_rps_batch_start_rejects_unassigned_warehouse"
+  ]
+}
