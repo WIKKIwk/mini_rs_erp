@@ -290,7 +290,7 @@ pub fn project_apparatus_revision(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::isa95::tests::revision_with;
+    use crate::isa95::test_support::revision_with;
 
     #[test]
     fn projection_is_repeatable_and_carries_revision_and_hash() {

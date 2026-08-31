@@ -6,6 +6,10 @@ license = "Apache-2.0"
 description = "Canonical apparatus and AASX contract for Mini RS ERP."
 publish = false
 
+[features]
+default = []
+test-support = []
+
 [dependencies]
 flate2 = { version = "1.1.9", default-features = false, features = ["rust_backend"] }
 serde = { version = "1", features = ["derive"] }

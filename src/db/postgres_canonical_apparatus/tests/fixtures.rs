@@ -3,7 +3,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use sqlx::postgres::PgConnectOptions;
 use sqlx::{PgPool, Row};
 
-use crate::core::apparatus_standard::isa95::tests::revision_with;
+use crate::core::apparatus_standard::isa95::test_support::revision_with;
 use crate::core::apparatus_standard::{
     ApparatusId, CanonicalApparatusDraft, CanonicalApparatusService, CanonicalCommandMetadata,
 };

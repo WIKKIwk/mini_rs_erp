@@ -22,5 +22,8 @@ pub use validation::CanonicalApparatusValidationError;
 
 pub const CANONICAL_APPARATUS_SCHEMA_VERSION: u32 = 1;
 
+#[cfg(any(test, feature = "test-support"))]
+pub mod test_support;
+
 #[cfg(test)]
 pub(crate) mod tests;

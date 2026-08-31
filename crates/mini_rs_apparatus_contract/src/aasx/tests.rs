@@ -1,5 +1,7 @@
 use super::*;
-use crate::{CanonicalApparatusRevision, export_canonical_aasx, isa95::tests::revision_with};
+use crate::{
+    CanonicalApparatusRevision, export_canonical_aasx, isa95::test_support::revision_with,
+};
 
 fn revision(apparatus_id: &str) -> CanonicalApparatusRevision {
     revision_with(

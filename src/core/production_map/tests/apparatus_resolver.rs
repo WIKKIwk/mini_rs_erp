@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use crate::core::apparatus_standard::isa95::tests::revision_with;
+use crate::core::apparatus_standard::isa95::test_support::revision_with;
 use crate::core::apparatus_standard::{
     ApparatusId, CanonicalApparatusService, CanonicalCommandMetadata,
 };

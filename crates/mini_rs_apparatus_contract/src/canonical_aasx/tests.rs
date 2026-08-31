@@ -2,7 +2,7 @@ use super::*;
 use crate::{
     MaterialExecutionPolicy,
     aasx::{AAS_SPEC_PATH, package_from_aas_xml, validated_aas_spec},
-    isa95::tests::revision_with,
+    isa95::test_support::revision_with,
 };
 
 fn fixture() -> CanonicalApparatusRevision {

@@ -2,7 +2,7 @@ use sqlx::PgPool;
 use sqlx::postgres::PgConnectOptions;
 
 use super::*;
-use crate::core::apparatus_standard::isa95::tests::revision_with;
+use crate::core::apparatus_standard::isa95::test_support::revision_with;
 use crate::core::apparatus_standard::{
     CanonicalApparatusDraft, CanonicalApparatusService, FactoryMapPlacement,
 };

@@ -63,6 +63,7 @@ heed = "0.22.1"
 rusqlite = { version = "0.32", features = ["bundled", "collation"] }
 
 [dev-dependencies]
+mini_rs_apparatus_contract = { path = "crates/mini_rs_apparatus_contract", features = ["test-support"] }
 mini_rs_gscale_domain = { path = "crates/mini_rs_gscale_domain", features = ["test-support"] }
 proptest = "1.11.0"
 tempfile = "3"
