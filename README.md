@@ -80,7 +80,7 @@ normal production path.
 ```bash
 cp .env.example .env
 cargo fmt --check
-cargo test --locked
+make verify
 cargo run
 ```
 
@@ -659,9 +659,9 @@ Common response shapes:
 {"ok":false,"error":"forbidden"}
 ```
 
-Some legacy routes return `{"error":"..."}` without `ok`; route tests protect
-those shapes. Do not normalize response bodies globally without updating mobile
-and tests together.
+Some legacy routes return `{"error":"..."}` without `ok`; verifier contracts
+protect those shapes. Do not normalize response bodies globally without
+updating mobile and the contracts together.
 
 ## Data Ownership
 
@@ -954,11 +954,19 @@ Run the same core checks expected before pushing:
 
 ```bash
 cargo fmt --check
-cargo test --locked
-cargo clippy --all-targets --all-features -- -D warnings
+make verify
+cargo clippy --locked --bins
 ```
 
-Focused suites:
+`make verify` compiles production code once and runs the data-driven Python
+contract verifier against the real Axum router. It does not compile Rust
+`#[cfg(test)]` modules. Route inventory, method, authentication, CORS, and
+generic response-shape coverage lives in
+`tools/mini_erp_verifier/contracts.json`.
+
+Rust tests are reserved for independent domain invariants, transaction and
+database behavior, and compiler/type guarantees. Run only the relevant suite
+when one of those boundaries changes:
 
 ```bash
 cargo test production_map
@@ -971,7 +979,10 @@ cargo test push
 Architecture guard:
 
 - production Rust source files are kept under the repository file-size policy;
-- tests can be larger because they carry behavior/contract coverage;
+- generic HTTP contracts belong in the external verifier rather than Rust test
+  modules;
+- deep Rust tests may be larger only when they contain an independent business
+  or transaction oracle;
 - refactors should move logic into named modules instead of growing monolithic
   handler, service, or store files.
 
@@ -992,7 +1003,7 @@ src/
     push/             Push token and dispatch service.
     session/          Persistent bearer session manager.
   db/                 PostgreSQL stores and migrations.
-  http/               Axum router, handlers, route tests, PDF helpers.
+  http/               Axum router, handlers, deep workflow tests, PDF helpers.
   store/              LMDB/JSON local state stores.
   fcm.rs              Firebase Cloud Messaging sender.
   main.rs             Service entrypoint.
@@ -1015,6 +1026,8 @@ Before changing behavior:
 
 1. Identify the workflow and its persisted state.
 2. Preserve existing route/JSON contract unless explicitly changing mobile too.
-3. Add or keep tests around the behavior.
+3. Add generic HTTP behavior to the verifier; keep Rust tests only for deep
+   invariants and transaction boundaries.
 4. Keep production modules focused and below the line-size policy.
-5. Run `cargo test --locked` and clippy before push.
+5. Run `make verify` and production-target clippy before push; run a focused
+   Rust suite only when its deep invariant changed.

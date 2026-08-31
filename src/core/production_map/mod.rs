@@ -8,7 +8,7 @@ mod formula;
 mod formula_parser;
 pub mod materials;
 mod materials_support;
-#[cfg(test)]
+#[cfg(any(test, feature = "verification"))]
 mod memory_store;
 mod opening_wip;
 pub mod pechat;
@@ -59,7 +59,7 @@ pub use materials::{
     RawMaterialAssignment, RawMaterialAssignmentDeleteInput, RawMaterialAssignmentInput,
     RawMaterialStartPolicy, RawMaterialStartRequirements, TrustedQolipStartValidation,
 };
-#[cfg(test)]
+#[cfg(any(test, feature = "verification"))]
 pub use memory_store::MemoryProductionMapStore;
 pub use opening_wip::*;
 pub(crate) use progress::progress_label_item_name;

@@ -1,0 +1,378 @@
+{
+  "protocol": 1,
+  "route_snapshot": {
+    "count": 249,
+    "sha256": "ebff61aae2f68749cee6ae14b395149ef19f5387aca9ac3b2989fdbd0fe3d3ba"
+  },
+  "access_matrices": [
+    {
+      "name": "me",
+      "uri": "/v1/mobile/me",
+      "methods": ["GET", "POST"],
+      "allowed_roles": [
+        "supplier",
+        "werka",
+        "customer",
+        "aparatchi",
+        "qolipchi",
+        "boyoqchi",
+        "material_taminotchi",
+        "admin"
+      ],
+      "allowed_status": 200,
+      "anonymous_status": 401,
+      "forbidden_status": 403
+    },
+    {
+      "name": "werka_home",
+      "uri": "/v1/mobile/werka/home",
+      "methods": ["GET", "POST"],
+      "allowed_roles": ["werka"],
+      "allowed_status": 200,
+      "anonymous_status": 401,
+      "forbidden_status": 403
+    },
+    {
+      "name": "werka_summary",
+      "uri": "/v1/mobile/werka/summary",
+      "methods": ["GET", "POST"],
+      "allowed_roles": ["werka"],
+      "allowed_status": 200,
+      "anonymous_status": 401,
+      "forbidden_status": 403
+    },
+    {
+      "name": "werka_pending",
+      "uri": "/v1/mobile/werka/pending",
+      "methods": ["GET", "POST"],
+      "allowed_roles": ["werka"],
+      "allowed_status": 200,
+      "anonymous_status": 401,
+      "forbidden_status": 403
+    },
+    {
+      "name": "werka_read_routes",
+      "routes": [
+        {"name": "werka_history", "uri": "/v1/mobile/werka/history"},
+        {"name": "werka_notifications", "uri": "/v1/mobile/werka/notifications"},
+        {"name": "werka_status_breakdown", "uri": "/v1/mobile/werka/status-breakdown?kind=returned"},
+        {"name": "werka_status_details", "uri": "/v1/mobile/werka/status-details?kind=pending&supplier_ref=SUP-001"},
+        {"name": "werka_suppliers", "uri": "/v1/mobile/werka/suppliers?q=Ali&limit=999&offset=3"},
+        {"name": "werka_customers", "uri": "/v1/mobile/werka/customers?q=Ali&limit=999&offset=3"},
+        {"name": "werka_supplier_items", "uri": "/v1/mobile/werka/supplier-items?supplier_ref=SUP-001&q=milk&limit=999&offset=3"},
+        {"name": "werka_customer_items", "uri": "/v1/mobile/werka/customer-items?customer_ref=CUST-001&q=milk&limit=999&offset=3"},
+        {"name": "werka_customer_item_options", "uri": "/v1/mobile/werka/customer-item-options?q=milk&limit=999&offset=3"},
+        {"name": "werka_archive", "uri": "/v1/mobile/werka/archive?kind=sent&period=monthly"},
+        {"name": "werka_archive_pdf", "uri": "/v1/mobile/werka/archive/pdf?kind=sent&period=monthly"}
+      ],
+      "methods": ["GET", "POST"],
+      "allowed_roles": ["werka"],
+      "allowed_status": 200,
+      "anonymous_status": 401,
+      "forbidden_status": 403
+    },
+    {
+      "name": "supplier_read_routes",
+      "routes": [
+        {"name": "supplier_summary", "uri": "/v1/mobile/supplier/summary"},
+        {"name": "supplier_history", "uri": "/v1/mobile/supplier/history"},
+        {"name": "supplier_status_breakdown", "uri": "/v1/mobile/supplier/status-breakdown?kind=submitted"},
+        {"name": "supplier_status_details", "uri": "/v1/mobile/supplier/status-details?kind=submitted&item_code=item-001"},
+        {"name": "supplier_items", "uri": "/v1/mobile/supplier/items?q=milk"}
+      ],
+      "methods": ["GET", "POST"],
+      "allowed_roles": ["supplier"],
+      "allowed_status": 200,
+      "anonymous_status": 401,
+      "forbidden_status": 403
+    }
+  ],
+  "cases": [
+    {
+      "name": "auth_login_rejects_get",
+      "request": {"method": "GET", "uri": "/v1/mobile/auth/login"},
+      "expect": {"status": 405, "body": {"error": "method not allowed"}}
+    },
+    {
+      "name": "auth_login_rejects_wrong_phone",
+      "request": {
+        "method": "POST",
+        "uri": "/v1/mobile/auth/login",
+        "body": {"phone": "+998880000000", "code": "20ABCDEF1234"}
+      },
+      "expect": {"status": 401, "body": {"error": "invalid credentials"}}
+    },
+    {
+      "name": "auth_logout_rejects_get",
+      "request": {"method": "GET", "uri": "/v1/mobile/auth/logout"},
+      "expect": {"status": 405, "body": {"error": "method not allowed"}}
+    },
+    {
+      "name": "me_rejects_anonymous",
+      "request": {"method": "GET", "uri": "/v1/mobile/me"},
+      "expect": {"status": 401}
+    },
+    {
+      "name": "me_accepts_supplier_post",
+      "request": {"method": "POST", "uri": "/v1/mobile/me", "role": "supplier"},
+      "expect": {"status": 200, "body": {"role": "supplier", "ref": "SUP-001"}}
+    },
+    {
+      "name": "legacy_auth_me_is_absent",
+      "request": {"method": "GET", "uri": "/v1/mobile/auth/me"},
+      "expect": {"status": 404}
+    },
+    {
+      "name": "server_handshake_contract",
+      "request": {"method": "GET", "uri": "/v1/mobile/server/handshake"},
+      "expect": {
+        "status": 200,
+        "body": {
+          "service": "mini_rs_erp",
+          "product": "mini_rs_erp",
+          "api_contract": "v1",
+          "version": "1.0.0"
+        }
+      }
+    },
+    {
+      "name": "android_release_metadata_contract",
+      "request": {"method": "GET", "uri": "/v1/mobile/app-update/android"},
+      "expect": {
+        "status": 200,
+        "headers": {"cache-control": {"equals": "no-store, max-age=0"}},
+        "body": {
+          "version_code": 5,
+          "version_name": "0.2.0",
+          "apk_url": "/v1/mobile/app-update/android/apk/accord-mobile-0.2.0-5.apk"
+        },
+        "body_absent": ["apk_file"]
+      }
+    },
+    {
+      "name": "android_release_apk_range_contract",
+      "request": {
+        "method": "GET",
+        "uri": "/v1/mobile/app-update/android/apk/accord-mobile-0.2.0-5.apk",
+        "headers": {"range": "bytes=2-7"}
+      },
+      "expect": {
+        "status": 206,
+        "headers": {
+          "content-type": {"equals": "application/vnd.android.package-archive"}
+        },
+        "body": "cord-m"
+      }
+    },
+    {
+      "name": "healthz_accepts_post",
+      "request": {"method": "POST", "uri": "/healthz"},
+      "expect": {"status": 200, "body": {"ok": true}}
+    },
+    {
+      "name": "cors_headers_are_present",
+      "request": {
+        "method": "GET",
+        "uri": "/healthz",
+        "headers": {"origin": "http://127.0.0.1:61896"}
+      },
+      "expect": {"status": 200, "headers": {"access-control-allow-origin": {"equals": "*"}}}
+    },
+    {
+      "name": "cors_preflight_accepts_browser_headers",
+      "request": {
+        "method": "OPTIONS",
+        "uri": "/healthz",
+        "headers": {
+          "origin": "http://127.0.0.1:61896",
+          "access-control-request-method": "GET"
+        }
+      },
+      "expect": {
+        "status": 204,
+        "headers": {
+          "access-control-allow-origin": {"equals": "*"},
+          "access-control-allow-headers": {"contains": "x-file-name"}
+        }
+      }
+    },
+    {
+      "name": "canonical_preflight_accepts_idempotency_key",
+      "request": {
+        "method": "OPTIONS",
+        "uri": "/v1/mobile/admin/raw-material-rules",
+        "headers": {
+          "origin": "http://127.0.0.1:56692",
+          "access-control-request-method": "PUT",
+          "access-control-request-headers": "authorization,content-type,idempotency-key"
+        }
+      },
+      "expect": {
+        "status": 204,
+        "headers": {"access-control-allow-headers": {"contains_token": "idempotency-key"}}
+      }
+    },
+    {
+      "name": "werka_home_rejects_anonymous",
+      "request": {"method": "GET", "uri": "/v1/mobile/werka/home"},
+      "expect": {"status": 401}
+    },
+    {
+      "name": "werka_home_rejects_supplier",
+      "request": {"method": "GET", "uri": "/v1/mobile/werka/home", "role": "supplier"},
+      "expect": {"status": 403}
+    },
+    {
+      "name": "werka_home_get_contract",
+      "request": {"method": "GET", "uri": "/v1/mobile/werka/home", "role": "werka"},
+      "expect": {
+        "status": 200,
+        "body": {
+          "summary": {"pending_count": 2, "confirmed_count": 3, "returned_count": 1},
+          "pending_items": []
+        }
+      }
+    },
+    {
+      "name": "werka_home_post_contract",
+      "request": {"method": "POST", "uri": "/v1/mobile/werka/home", "role": "werka"},
+      "expect": {"status": 200}
+    },
+    {
+      "name": "werka_summary_rejects_anonymous",
+      "request": {"method": "GET", "uri": "/v1/mobile/werka/summary"},
+      "expect": {"status": 401}
+    },
+    {
+      "name": "werka_summary_get_contract",
+      "request": {"method": "GET", "uri": "/v1/mobile/werka/summary", "role": "werka"},
+      "expect": {
+        "status": 200,
+        "body": {"pending_count": 2, "confirmed_count": 3, "returned_count": 1}
+      }
+    },
+    {
+      "name": "werka_summary_post_contract",
+      "request": {"method": "POST", "uri": "/v1/mobile/werka/summary", "role": "werka"},
+      "expect": {"status": 200}
+    },
+    {
+      "name": "werka_pending_rejects_anonymous",
+      "request": {"method": "GET", "uri": "/v1/mobile/werka/pending"},
+      "expect": {"status": 401}
+    },
+    {
+      "name": "werka_pending_get_contract",
+      "request": {"method": "GET", "uri": "/v1/mobile/werka/pending", "role": "werka"},
+      "expect": {"status": 200, "body": [{"id": "PR-001", "status": "pending"}]}
+    },
+    {
+      "name": "werka_pending_post_contract",
+      "request": {"method": "POST", "uri": "/v1/mobile/werka/pending", "role": "werka"},
+      "expect": {"status": 200}
+    },
+    {
+      "name": "werka_history_payload_contract",
+      "request": {"method": "GET", "uri": "/v1/mobile/werka/history", "role": "werka"},
+      "expect": {"status": 200, "body": [{"id": "supplier_ack:COMM-001", "event_type": "supplier_ack"}]}
+    },
+    {
+      "name": "werka_notifications_alias_contract",
+      "request": {"method": "GET", "uri": "/v1/mobile/werka/notifications", "role": "werka"},
+      "expect": {"status": 200, "body": [{"id": "supplier_ack:COMM-001"}]}
+    },
+    {
+      "name": "werka_status_breakdown_payload_contract",
+      "request": {"method": "GET", "uri": "/v1/mobile/werka/status-breakdown?kind=returned", "role": "werka"},
+      "expect": {"status": 200, "body": [{"supplier_ref": "SUP-001", "receipt_count": 1}]}
+    },
+    {
+      "name": "werka_status_details_payload_contract",
+      "request": {"method": "GET", "uri": "/v1/mobile/werka/status-details?kind=%20pending%20&supplier_ref=%20SUP-001%20", "role": "werka"},
+      "expect": {"status": 200, "body": [{"id": "PR-001", "supplier_ref": "SUP-001"}]}
+    },
+    {
+      "name": "werka_suppliers_query_contract",
+      "request": {"method": "GET", "uri": "/v1/mobile/werka/suppliers?q=%20Ali%20&limit=999&offset=3", "role": "werka"},
+      "expect": {"status": 200, "body": [{"ref": "SUP-001", "name": "Ali"}]}
+    },
+    {
+      "name": "werka_customers_query_contract",
+      "request": {"method": "GET", "uri": "/v1/mobile/werka/customers?q=%20Ali%20&limit=999&offset=3", "role": "werka"},
+      "expect": {"status": 200, "body": [{"ref": "CUST-001", "name": "Ali Market"}]}
+    },
+    {
+      "name": "werka_directory_invalid_paging_defaults",
+      "request": {"method": "GET", "uri": "/v1/mobile/werka/suppliers?limit=abc&offset=-9", "role": "werka"},
+      "expect": {"status": 200}
+    },
+    {
+      "name": "werka_supplier_items_query_contract",
+      "request": {"method": "GET", "uri": "/v1/mobile/werka/supplier-items?supplier_ref=%20SUP-001%20&q=%20milk%20&limit=999&offset=3", "role": "werka"},
+      "expect": {"status": 200, "body": [{"code": "ITEM-001", "warehouse": "Stores - A"}]}
+    },
+    {
+      "name": "werka_customer_items_query_contract",
+      "request": {"method": "GET", "uri": "/v1/mobile/werka/customer-items?customer_ref=%20CUST-001%20&q=%20milk%20&limit=999&offset=3", "role": "werka"},
+      "expect": {"status": 200, "body": [{"code": "ITEM-002", "name": "Customer Milk"}]}
+    },
+    {
+      "name": "werka_customer_options_query_contract",
+      "request": {"method": "GET", "uri": "/v1/mobile/werka/customer-item-options?q=%20milk%20&limit=999&offset=3", "role": "werka"},
+      "expect": {"status": 200, "body": [{"customer_ref": "CUST-001", "item_code": "ITEM-003"}]}
+    },
+    {
+      "name": "werka_items_invalid_paging_defaults",
+      "request": {"method": "GET", "uri": "/v1/mobile/werka/customer-item-options?limit=abc&offset=-9", "role": "werka"},
+      "expect": {"status": 200}
+    },
+    {
+      "name": "werka_archive_payload_contract",
+      "request": {"method": "GET", "uri": "/v1/mobile/werka/archive?kind=%20sent%20&period=%20monthly%20&from=2026-01-16&to=2026-01-20", "role": "werka"},
+      "expect": {"status": 200, "body": {"kind": "sent", "period": "monthly", "from": "2026-01-16", "to": "2026-01-20", "summary": {"record_count": 1}}}
+    },
+    {
+      "name": "werka_archive_invalid_date_contract",
+      "request": {"method": "GET", "uri": "/v1/mobile/werka/archive?from=16-01-2026", "role": "werka"},
+      "expect": {"status": 500}
+    },
+    {
+      "name": "supplier_summary_payload_contract",
+      "request": {"method": "POST", "uri": "/v1/mobile/supplier/summary", "role": "supplier"},
+      "expect": {"status": 200, "body": {"pending_count": 2, "submitted_count": 1, "returned_count": 3}}
+    },
+    {
+      "name": "supplier_history_payload_contract",
+      "request": {"method": "POST", "uri": "/v1/mobile/supplier/history", "role": "supplier"},
+      "expect": {"status": 200, "body": [{"id": "PR-001", "status": "partial"}]}
+    },
+    {
+      "name": "supplier_status_breakdown_payload_contract",
+      "request": {"method": "POST", "uri": "/v1/mobile/supplier/status-breakdown?kind=submitted", "role": "supplier"},
+      "expect": {"status": 200, "body": [{"item_code": "ITEM-001", "receipt_count": 2, "total_sent_qty": 5.0, "total_accepted_qty": 5.0, "total_returned_qty": 0.0}]}
+    },
+    {
+      "name": "supplier_status_details_payload_contract",
+      "request": {"method": "POST", "uri": "/v1/mobile/supplier/status-details?kind=submitted&item_code=item-001", "role": "supplier"},
+      "expect": {"status": 200, "body": [{"id": "PR-001"}, {"id": "PR-002"}]}
+    },
+    {
+      "name": "supplier_items_filter_contract",
+      "request": {"method": "POST", "uri": "/v1/mobile/supplier/items?q=milk", "role": "supplier"},
+      "expect": {"status": 200, "body": [{"code": "ITEM-MILK", "warehouse": "Stores - CH"}]}
+    },
+    {
+      "name": "werka_archive_pdf_contract",
+      "request": {"method": "GET", "uri": "/v1/mobile/werka/archive/pdf?kind=sent&period=monthly&from=2026-01-16&to=2026-01-20", "role": "werka"},
+      "expect": {
+        "status": 200,
+        "headers": {
+          "content-type": {"equals": "application/pdf"},
+          "content-disposition": {"equals": "attachment; filename=\"werka-sent-monthly.pdf\""}
+        },
+        "body_starts_with": "%PDF-1.4\n",
+        "body_ends_with": "%%EOF\n"
+      }
+    }
+  ]
+}

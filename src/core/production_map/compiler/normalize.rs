@@ -1,9 +1,9 @@
-#[cfg(test)]
+#[cfg(any(test, feature = "verification"))]
 use std::collections::BTreeMap;
 
 use super::super::types::*;
 
-#[cfg(test)]
+#[cfg(any(test, feature = "verification"))]
 pub(in crate::core::production_map) fn reject_order_number_immutable(
     maps: &BTreeMap<String, ProductionMapDefinition>,
     next: &ProductionMapDefinition,

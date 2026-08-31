@@ -41,6 +41,7 @@ impl MemoryCanonicalApparatusRepository {
         }
     }
 
+    #[cfg(test)]
     pub(super) fn with_revisions(
         revisions: impl IntoIterator<Item = CanonicalApparatusRevision>,
     ) -> Self {

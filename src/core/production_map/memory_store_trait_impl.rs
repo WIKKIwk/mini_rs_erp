@@ -1,5 +1,5 @@
 #[async_trait]
-#[cfg(test)]
+#[cfg(any(test, feature = "verification"))]
 impl ProductionMapStorePort for MemoryProductionMapStore {
     async fn maps(&self) -> Result<Vec<ProductionMapDefinition>, ProductionMapError> {
         MemoryProductionMapStore::maps(self).await
@@ -81,7 +81,11 @@ impl ProductionMapStorePort for MemoryProductionMapStore {
         &self,
         idempotency_key: &str,
     ) -> Result<Option<ApparatusScheduleReservation>, ProductionMapError> {
-        MemoryProductionMapStore::apparatus_schedule_reservation_by_idempotency_key(self, idempotency_key).await
+        MemoryProductionMapStore::apparatus_schedule_reservation_by_idempotency_key(
+            self,
+            idempotency_key,
+        )
+        .await
     }
 
     async fn put_apparatus_schedule_reservation(
@@ -90,7 +94,13 @@ impl ProductionMapStorePort for MemoryProductionMapStore {
         capacity_slots: u16,
         finite_capacity: bool,
     ) -> Result<ApparatusScheduleReservation, ProductionMapError> {
-        MemoryProductionMapStore::put_apparatus_schedule_reservation(self, reservation, capacity_slots, finite_capacity).await
+        MemoryProductionMapStore::put_apparatus_schedule_reservation(
+            self,
+            reservation,
+            capacity_slots,
+            finite_capacity,
+        )
+        .await
     }
 
     async fn cancel_apparatus_schedule_reservation(
@@ -107,7 +117,14 @@ impl ProductionMapStorePort for MemoryProductionMapStore {
         status: ApparatusScheduleStatus,
         actor: &QueueActionActor,
     ) -> Result<(), ProductionMapError> {
-        MemoryProductionMapStore::update_apparatus_schedule_reservation_status(self, order_id, apparatus_id, status, actor).await
+        MemoryProductionMapStore::update_apparatus_schedule_reservation_status(
+            self,
+            order_id,
+            apparatus_id,
+            status,
+            actor,
+        )
+        .await
     }
 
     async fn apparatus_queue_states(
@@ -158,7 +175,8 @@ impl ProductionMapStorePort for MemoryProductionMapStore {
         actor_ref: &str,
         limit: usize,
     ) -> Result<Vec<CompletionRequestDecisionNotification>, ProductionMapError> {
-        MemoryProductionMapStore::completion_request_decisions_for_actor(self, actor_ref, limit).await
+        MemoryProductionMapStore::completion_request_decisions_for_actor(self, actor_ref, limit)
+            .await
     }
 
     async fn resolve_completion_request_decision(
@@ -169,7 +187,15 @@ impl ProductionMapStorePort for MemoryProductionMapStore {
         notification: &CompletionRequestDecisionNotification,
         state_resolution: Option<CompletionRequestStateResolution>,
     ) -> Result<QueueActionProgressWriteResult, ProductionMapError> {
-        MemoryProductionMapStore::resolve_completion_request_decision(self, request_event_id, decision, actor, notification, state_resolution).await
+        MemoryProductionMapStore::resolve_completion_request_decision(
+            self,
+            request_event_id,
+            decision,
+            actor,
+            notification,
+            state_resolution,
+        )
+        .await
     }
 
     async fn queue_action_logs_for_orders(
@@ -185,7 +211,13 @@ impl ProductionMapStorePort for MemoryProductionMapStore {
         worker_display_name: &str,
         limit: usize,
     ) -> Result<Vec<ProductionOrderLogEntry>, ProductionMapError> {
-        MemoryProductionMapStore::queue_action_logs_for_worker(self, worker_refs, worker_display_name, limit).await
+        MemoryProductionMapStore::queue_action_logs_for_worker(
+            self,
+            worker_refs,
+            worker_display_name,
+            limit,
+        )
+        .await
     }
 
     async fn active_order_run_session(
@@ -216,7 +248,13 @@ impl ProductionMapStorePort for MemoryProductionMapStore {
         worker_display_name: &str,
         limit: usize,
     ) -> Result<Vec<OrderRunSession>, ProductionMapError> {
-        MemoryProductionMapStore::active_order_run_sessions_for_worker(self, worker_refs, worker_display_name, limit).await
+        MemoryProductionMapStore::active_order_run_sessions_for_worker(
+            self,
+            worker_refs,
+            worker_display_name,
+            limit,
+        )
+        .await
     }
 
     async fn order_run_session(
@@ -287,7 +325,13 @@ impl ProductionMapStorePort for MemoryProductionMapStore {
         worker_display_name: &str,
         limit: usize,
     ) -> Result<Vec<OrderProgressBatch>, ProductionMapError> {
-        MemoryProductionMapStore::progress_batches_for_worker(self, worker_refs, worker_display_name, limit).await
+        MemoryProductionMapStore::progress_batches_for_worker(
+            self,
+            worker_refs,
+            worker_display_name,
+            limit,
+        )
+        .await
     }
 
     async fn progress_batches_for_order(
@@ -407,7 +451,8 @@ impl ProductionMapStorePort for MemoryProductionMapStore {
         &self,
         write: QueueActionProgressWrite,
     ) -> Result<QueueActionProgressWriteResult, ProductionMapError> {
-        MemoryProductionMapStore::put_apparatus_queue_states_with_event_and_progress(self, write).await
+        MemoryProductionMapStore::put_apparatus_queue_states_with_event_and_progress(self, write)
+            .await
     }
 
     async fn receive_finished_goods_batch(

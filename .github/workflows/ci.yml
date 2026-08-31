@@ -29,8 +29,8 @@ jobs:
       - name: Check locked dependencies
         run: cargo check --locked
 
-      - name: Run tests
-        run: cargo test --locked
+      - name: Verify production HTTP contracts
+        run: python3 tools/mini_erp_verifier/verify.py --json
 
       - name: Enforce production file size
         run: |

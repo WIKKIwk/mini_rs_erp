@@ -6,7 +6,7 @@ use tokio::sync::RwLock;
 
 use super::super::*;
 
-#[cfg(test)]
+#[cfg(any(test, feature = "verification"))]
 pub struct MemoryProductionMapStore {
     pub(super) maps: RwLock<BTreeMap<String, ProductionMapDefinition>>,
     pub(super) production_order_lifecycles:
@@ -37,7 +37,7 @@ pub struct MemoryProductionMapStore {
     pub(super) fail_next_queue_progress_commit: AtomicBool,
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "verification"))]
 impl MemoryProductionMapStore {
     pub fn new() -> Self {
         Self {
@@ -119,7 +119,7 @@ impl MemoryProductionMapStore {
     }
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "verification"))]
 impl Default for MemoryProductionMapStore {
     fn default() -> Self {
         Self::new()

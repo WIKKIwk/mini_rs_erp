@@ -113,6 +113,43 @@ pub struct AppState {
 }
 
 impl AppState {
+    /// Builds the production router over isolated in-memory domain stores.
+    ///
+    /// This is intentionally available only to the external contract verifier.
+    /// Unlike `cargo test`, enabling it does not compile the crate's `#[cfg(test)]`
+    /// modules.
+    #[cfg(feature = "verification")]
+    pub fn verification(config: AppConfig) -> Self {
+        let apparatus = CanonicalApparatusService::memory();
+        let resolver = Arc::new(
+            crate::core::production_map::CanonicalServiceApparatusResolver::new(apparatus.clone()),
+        );
+        Self::build(
+            config,
+            ApparatusRuntimeServices {
+                production_maps: ProductionMapService::new(
+                    Arc::new(crate::core::production_map::MemoryProductionMapStore::new()),
+                    resolver.clone(),
+                ),
+                factory_locations: FactoryLocationService::new(
+                    Arc::new(crate::core::factory_locations::MemoryFactoryLocationStore::new()),
+                    apparatus.clone(),
+                ),
+                apparatus_collections: ApparatusCollectionService::new(
+                    Arc::new(
+                        crate::core::apparatus_collections::MemoryApparatusCollectionStore::new(),
+                    ),
+                    apparatus.clone(),
+                ),
+                warehouses: WarehouseService::new(
+                    Arc::new(crate::core::warehouses::MemoryWarehouseStore::new()),
+                    resolver,
+                ),
+                apparatus,
+            },
+        )
+    }
+
     #[cfg(test)]
     pub fn new(config: AppConfig) -> Self {
         let apparatus = CanonicalApparatusService::memory_with_standard_test_apparatus();

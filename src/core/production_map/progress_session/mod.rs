@@ -1,7 +1,7 @@
 mod closed_orders;
 mod ids;
 mod labels;
-#[cfg(test)]
+#[cfg(any(test, feature = "verification"))]
 mod notifications;
 mod policy;
 
@@ -22,7 +22,7 @@ pub(crate) use ids::{progress_batch_id, progress_qr_payload};
 pub(crate) use labels::progress_label_item_name;
 pub(crate) use labels::progress_label_item_name_for_stage;
 pub(super) use labels::{actor_display_name, non_empty_or, valid_progress_qty};
-#[cfg(test)]
+#[cfg(any(test, feature = "verification"))]
 pub(super) use notifications::{
     completion_request_decision_notification_from_event,
     completion_request_notification_from_event, json_string_field,

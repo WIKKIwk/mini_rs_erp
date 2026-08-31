@@ -2,7 +2,7 @@
 
 mod commands;
 mod error;
-#[cfg(test)]
+#[cfg(any(test, feature = "verification"))]
 mod memory_repository;
 mod repository;
 #[cfg(test)]
@@ -49,7 +49,7 @@ impl CanonicalApparatusService {
         }
     }
 
-    #[cfg(test)]
+    #[cfg(any(test, feature = "verification"))]
     pub(crate) fn memory() -> Self {
         Self::new(Arc::new(
             memory_repository::MemoryCanonicalApparatusRepository::new(),

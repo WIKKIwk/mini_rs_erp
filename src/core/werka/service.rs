@@ -44,7 +44,7 @@ impl WerkaService {
         Self::default()
     }
 
-    #[cfg(test)]
+    #[cfg(any(test, feature = "verification"))]
     pub fn with_lookup(mut self, lookup: Arc<dyn WerkaHomeLookup>) -> Self {
         self.lookup = Some(lookup);
         self
@@ -100,13 +100,13 @@ impl WerkaService {
         self
     }
 
-    #[cfg(test)]
+    #[cfg(any(test, feature = "verification"))]
     pub fn with_supplier_read_lookup(mut self, lookup: Arc<dyn SupplierReadLookup>) -> Self {
         self.supplier_read_lookup = Some(lookup);
         self
     }
 
-    #[cfg(test)]
+    #[cfg(any(test, feature = "verification"))]
     pub fn with_supplier_purchase_receipt_lookup(
         mut self,
         lookup: Arc<dyn SupplierPurchaseReceiptLookup>,
@@ -115,7 +115,7 @@ impl WerkaService {
         self
     }
 
-    #[cfg(test)]
+    #[cfg(any(test, feature = "verification"))]
     pub fn with_supplier_item_lookup(mut self, lookup: Arc<dyn SupplierItemLookup>) -> Self {
         self.supplier_item_lookup = Some(lookup);
         self

@@ -17,6 +17,10 @@ members = [
 default-members = ["."]
 resolver = "3"
 
+[features]
+default = []
+verification = ["dep:tower"]
+
 [dependencies]
 mini_rs_apparatus_contract = { path = "crates/mini_rs_apparatus_contract" }
 mini_rs_domain_types = { path = "crates/mini_rs_domain_types" }
@@ -51,6 +55,7 @@ thiserror = "2"
 time = { version = "0.3", features = ["formatting", "parsing", "serde", "serde-well-known"] }
 tokio = { version = "1", features = ["macros", "net", "rt-multi-thread", "fs", "io-util", "process", "sync", "time"] }
 tower-http = { version = "0.6", features = ["fs", "trace"] }
+tower = { version = "0.5", features = ["util"], optional = true }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 urlencoding = "2"
@@ -62,6 +67,11 @@ mini_rs_gscale_domain = { path = "crates/mini_rs_gscale_domain", features = ["te
 proptest = "1.11.0"
 tempfile = "3"
 tower = { version = "0.5", features = ["util"] }
+
+[[bin]]
+name = "mini_rs_verifier_harness"
+path = "src/bin/mini_rs_verifier_harness.rs"
+required-features = ["verification"]
 
 [lints.rust]
 unexpected_cfgs = { level = "warn", check-cfg = ['cfg(kani)'] }
