@@ -1,0 +1,16 @@
+[package]
+name = "mini_rs_gateway"
+version = "1.0.0"
+edition = "2024"
+license = "Apache-2.0"
+description = "Pingora edge gateway for Mini RS ERP."
+publish = false
+
+[dependencies]
+async-trait = "0.1"
+bytes = "1"
+dotenvy = "0.15"
+pingora-core = { version = "0.8.1", features = ["rustls"] }
+pingora-http = "0.8.1"
+pingora-proxy = { version = "0.8.1", features = ["rustls"] }
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }

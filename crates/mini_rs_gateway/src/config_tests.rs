@@ -1,7 +1,7 @@
 use std::net::SocketAddr;
 use std::time::Duration;
 
-use crate::gateway_config::GatewayConfig;
+use crate::config::GatewayConfig;
 
 #[test]
 fn gateway_config_uses_defaults() {

@@ -928,7 +928,7 @@ cargo build --release --locked --bin mini_rs_erp
 Gateway binary:
 
 ```bash
-cargo build --release --bin mini_rs_gateway
+cargo build --release --locked -p mini_rs_gateway
 ./target/release/mini_rs_gateway
 ```
 

@@ -1,3 +1,5 @@
+//! Runtime configuration for the standalone Pingora gateway.
+
 use std::collections::BTreeMap;
 use std::net::SocketAddr;
 use std::time::Duration;

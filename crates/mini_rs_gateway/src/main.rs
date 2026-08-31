@@ -1,6 +1,5 @@
 use async_trait::async_trait;
 use bytes::Bytes;
-use mini_rs_erp::gateway_config::GatewayConfig;
 use pingora_core::Result;
 use pingora_core::listeners::tls::TlsSettings;
 use pingora_core::server::Server;
@@ -9,6 +8,12 @@ use pingora_core::services::listening::Service;
 use pingora_core::upstreams::peer::HttpPeer;
 use pingora_http::ResponseHeader;
 use pingora_proxy::{ProxyHttp, Session};
+
+mod config;
+#[cfg(test)]
+mod config_tests;
+
+use config::GatewayConfig;
 
 #[derive(Clone)]
 struct MiniRsGateway {

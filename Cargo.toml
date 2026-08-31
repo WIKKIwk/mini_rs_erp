@@ -7,9 +7,10 @@ description = "Accord mini ERP core service."
 repository = "https://github.com/WIKKIwk/mini_rs_erp"
 readme = "README.md"
 
-[[bin]]
-name = "mini_rs_gateway"
-path = "src/bin/mini_rs_gateway.rs"
+[workspace]
+members = ["crates/mini_rs_gateway"]
+default-members = ["."]
+resolver = "3"
 
 [dependencies]
 axum = { version = "0.8", features = ["ws"] }
@@ -31,10 +32,6 @@ hyper-util = { version = "0.1", features = ["service", "tokio"] }
 image = { version = "0.25", default-features = false, features = ["jpeg", "png", "webp"] }
 jsonwebtoken = "9"
 flate2 = { version = "1.1.9", default-features = false, features = ["rust_backend"] }
-pingora = { version = "0.8.1", features = ["proxy", "rustls"] }
-pingora-core = { version = "0.8.1", features = ["rustls"] }
-pingora-http = "0.8.1"
-pingora-proxy = { version = "0.8.1", features = ["rustls"] }
 rand = "0.9"
 reqwest = { version = "0.12", default-features = false, features = ["json", "multipart", "rustls-tls", "stream"] }
 serde = { version = "1", features = ["derive"] }
