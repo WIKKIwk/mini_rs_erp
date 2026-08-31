@@ -590,36 +590,15 @@ pub(super) struct ProgressEventRecordInput<'a> {
 
 pub(super) fn progress_event_record(input: ProgressEventRecordInput<'_>) -> OrderProgressEvent {
     let context = input.context;
-    OrderProgressEvent {
-        event_id: progress_event_id(
-            &context.session.session_id,
-            context.order_id,
-            context.action,
-            context.now,
-        ),
-        session_id: context.session.session_id.clone(),
-        batch_id: input.output_identity.batch_id,
-        apparatus: context.apparatus.to_string(),
-        order_id: context.order_id.to_string(),
-        action: context.action,
-        produced_qty: input.quantity.produced_qty,
-        uom: input.quantity.uom,
-        worker_role: context.actor.role.trim().to_string(),
-        worker_ref: context.actor.ref_.trim().to_string(),
-        worker_display_name: context.actor.display_name.trim().to_string(),
-        qr_payload: input.output_identity.qr_payload,
-        return_ink_kg: input.metrics.return_ink_kg,
-        lamination_print_leftover_rolls: input.metrics.lamination_print_leftover_rolls,
-        lamination_film_leftover_rolls: input.metrics.lamination_film_leftover_rolls,
-        rezka_bosma_waste: input.metrics.rezka_bosma_waste,
-        rezka_lamination_waste: input.metrics.rezka_lamination_waste,
-        rezka_edge_waste: input.metrics.rezka_edge_waste,
-        total_waste: input.metrics.total_waste,
-        finished_goods_kg: input.metrics.finished_goods_kg,
-        bobina_kg: input.metrics.bobina_kg,
-        finished_goods_meter: input.metrics.finished_goods_meter,
-        diameter: input.metrics.diameter,
-        description: input.description.to_string(),
-        payload_json: progress_event_payload(context.action, input.metrics, input.description),
-    }
+    let mut event = zero_quantity_event(
+        context,
+        input.output_identity.batch_id,
+        input.output_identity.qr_payload,
+        progress_event_payload(context.action, input.metrics, input.description),
+    );
+    event.produced_qty = input.quantity.produced_qty;
+    event.uom = input.quantity.uom;
+    event.description = input.description.to_string();
+    input.metrics.write_event_fields(&mut event);
+    event
 }

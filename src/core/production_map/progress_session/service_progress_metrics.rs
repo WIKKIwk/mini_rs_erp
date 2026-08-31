@@ -2,7 +2,7 @@ use super::*;
 use crate::core::apparatus_standard::RuntimeApparatusConfiguration;
 use crate::core::quantity::positive_erp_quantity;
 
-#[derive(Clone, Copy, Default)]
+#[derive(Clone, Copy, Default, serde::Serialize)]
 pub(super) struct ProgressMetrics {
     pub(super) return_ink_kg: Option<f64>,
     pub(super) lamination_print_leftover_rolls: Option<f64>,
@@ -15,6 +15,40 @@ pub(super) struct ProgressMetrics {
     pub(super) bobina_kg: Option<f64>,
     pub(super) finished_goods_meter: Option<f64>,
     pub(super) diameter: Option<f64>,
+}
+
+impl ProgressMetrics {
+    pub(super) fn write_payload_fields(
+        self,
+        payload: &mut serde_json::Value,
+        description: &str,
+    ) {
+        if !payload.is_object() {
+            *payload = serde_json::json!({});
+        }
+        let fields = serde_json::to_value(self)
+            .expect("progress metrics serialize")
+            .as_object()
+            .expect("progress metrics object")
+            .clone();
+        payload.as_object_mut().expect("progress payload").extend(fields);
+        payload["total_waste_uom"] = serde_json::json!("kg");
+        payload["description"] = serde_json::json!(description);
+    }
+
+    pub(super) fn write_event_fields(self, event: &mut OrderProgressEvent) {
+        event.return_ink_kg = self.return_ink_kg;
+        event.lamination_print_leftover_rolls = self.lamination_print_leftover_rolls;
+        event.lamination_film_leftover_rolls = self.lamination_film_leftover_rolls;
+        event.rezka_bosma_waste = self.rezka_bosma_waste;
+        event.rezka_lamination_waste = self.rezka_lamination_waste;
+        event.rezka_edge_waste = self.rezka_edge_waste;
+        event.total_waste = self.total_waste;
+        event.finished_goods_kg = self.finished_goods_kg;
+        event.bobina_kg = self.bobina_kg;
+        event.finished_goods_meter = self.finished_goods_meter;
+        event.diameter = self.diameter;
+    }
 }
 
 pub(super) fn validated_progress_metrics(

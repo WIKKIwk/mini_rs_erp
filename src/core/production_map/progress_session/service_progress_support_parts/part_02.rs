@@ -14,13 +14,7 @@ pub(super) fn progress_metrics_event(
         progress_event_payload(context.action, metrics, description),
     );
     event.payload_json["event"] = serde_json::json!(event_name);
-    event.lamination_print_leftover_rolls = metrics.lamination_print_leftover_rolls;
-    event.lamination_film_leftover_rolls = metrics.lamination_film_leftover_rolls;
-    event.total_waste = metrics.total_waste;
-    event.finished_goods_kg = metrics.finished_goods_kg;
-    event.bobina_kg = metrics.bobina_kg;
-    event.finished_goods_meter = metrics.finished_goods_meter;
-    event.diameter = metrics.diameter;
+    metrics.write_event_fields(&mut event);
     event.description = description.to_string();
     event
 }
@@ -37,25 +31,13 @@ pub(super) fn progress_session_payload(
         "last_action": queue_action_str(action),
         "last_qty": produced_qty,
         "last_uom": uom,
-        "return_ink_kg": metrics.return_ink_kg,
-        "lamination_print_leftover_rolls": metrics.lamination_print_leftover_rolls,
-        "lamination_film_leftover_rolls": metrics.lamination_film_leftover_rolls,
-        "rezka_bosma_waste": metrics.rezka_bosma_waste,
-        "rezka_lamination_waste": metrics.rezka_lamination_waste,
-        "rezka_edge_waste": metrics.rezka_edge_waste,
-        "total_waste": metrics.total_waste,
-        "total_waste_uom": "kg",
-        "finished_goods_kg": metrics.finished_goods_kg,
-        "bobina_kg": metrics.bobina_kg,
-        "finished_goods_meter": metrics.finished_goods_meter,
-        "diameter": metrics.diameter,
-        "description": description,
         "input_progress_batch_id": input_progress.batch_id,
         "input_progress_qr_payload": input_progress.qr_payload,
         "input_progress_apparatus": input_progress.apparatus,
         "input_wip_source_kind": input_progress.source_kind,
         "stage_node_id": input_progress.stage_node_id,
     });
+    metrics.write_payload_fields(&mut payload, description);
     if let Some(contained_kadr_count) = input_progress.contained_kadr_count {
         payload["contained_kadr_count"] = serde_json::json!(contained_kadr_count);
     }
@@ -222,25 +204,14 @@ fn progress_batch_payload(
     metrics: ProgressMetrics,
     description: &str,
 ) -> serde_json::Value {
-    serde_json::json!({
+    let mut payload = serde_json::json!({
         "order_title": order_map.title.trim(),
         "customer_name": order_map.customer_name.trim(),
         "apparatus": apparatus,
         "action": queue_action_str(action),
-        "return_ink_kg": metrics.return_ink_kg,
-        "lamination_print_leftover_rolls": metrics.lamination_print_leftover_rolls,
-        "lamination_film_leftover_rolls": metrics.lamination_film_leftover_rolls,
-        "rezka_bosma_waste": metrics.rezka_bosma_waste,
-        "rezka_lamination_waste": metrics.rezka_lamination_waste,
-        "rezka_edge_waste": metrics.rezka_edge_waste,
-        "total_waste": metrics.total_waste,
-        "total_waste_uom": "kg",
-        "finished_goods_kg": metrics.finished_goods_kg,
-        "bobina_kg": metrics.bobina_kg,
-        "finished_goods_meter": metrics.finished_goods_meter,
-        "diameter": metrics.diameter,
-        "description": description,
-    })
+    });
+    metrics.write_payload_fields(&mut payload, description);
+    payload
 }
 
 pub(super) fn progress_event_payload(
@@ -248,22 +219,11 @@ pub(super) fn progress_event_payload(
     metrics: ProgressMetrics,
     description: &str,
 ) -> serde_json::Value {
-    serde_json::json!({
+    let mut payload = serde_json::json!({
         "event": queue_action_str(action),
-        "return_ink_kg": metrics.return_ink_kg,
-        "lamination_print_leftover_rolls": metrics.lamination_print_leftover_rolls,
-        "lamination_film_leftover_rolls": metrics.lamination_film_leftover_rolls,
-        "rezka_bosma_waste": metrics.rezka_bosma_waste,
-        "rezka_lamination_waste": metrics.rezka_lamination_waste,
-        "rezka_edge_waste": metrics.rezka_edge_waste,
-        "total_waste": metrics.total_waste,
-        "total_waste_uom": "kg",
-        "finished_goods_kg": metrics.finished_goods_kg,
-        "bobina_kg": metrics.bobina_kg,
-        "finished_goods_meter": metrics.finished_goods_meter,
-        "diameter": metrics.diameter,
-        "description": description,
-    })
+    });
+    metrics.write_payload_fields(&mut payload, description);
+    payload
 }
 
 pub(super) fn worker_handoff_session_payload(
