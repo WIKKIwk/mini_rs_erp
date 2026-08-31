@@ -34,21 +34,6 @@ fn test_state() -> AppState {
 }
 
 #[tokio::test]
-async fn chat_directory_requires_authenticated_session() {
-    let response = build_router(test_state())
-        .oneshot(
-            Request::builder()
-                .uri("/v1/mobile/chat/directory")
-                .body(Body::empty())
-                .expect("request"),
-        )
-        .await
-        .expect("response");
-
-    assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
-}
-
-#[tokio::test]
 async fn authenticated_user_can_issue_chat_socket_ticket() {
     let state = test_state();
     let token = state
@@ -117,56 +102,6 @@ async fn customer_can_register_device_token_for_chat() {
     let records = store.list("customer:customer_001").await.expect("tokens");
     assert_eq!(records.len(), 1);
     assert_eq!(records[0].token, "fcm-customer");
-}
-
-#[tokio::test]
-async fn chat_media_upload_initialization_requires_authenticated_session() {
-    let response = build_router(test_state())
-        .oneshot(
-            Request::builder()
-                .method("POST")
-                .uri("/v1/mobile/chat/conversations/conversation_1/media/uploads")
-                .header(header::CONTENT_TYPE, "application/json")
-                .body(Body::from(
-                    r#"{"client_upload_id":"upload_1","kind":"image","filename":"photo.jpg","content_type":"image/jpeg","size_bytes":3}"#,
-                ))
-                .expect("request"),
-        )
-        .await
-        .expect("response");
-
-    assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
-}
-
-#[tokio::test]
-async fn private_chat_media_content_requires_authenticated_session() {
-    let response = build_router(test_state())
-        .oneshot(
-            Request::builder()
-                .uri("/v1/mobile/chat/media/media_1/content")
-                .body(Body::empty())
-                .expect("request"),
-        )
-        .await
-        .expect("response");
-
-    assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
-}
-
-#[tokio::test]
-async fn private_chat_media_head_supports_video_metadata_probes() {
-    let response = build_router(test_state())
-        .oneshot(
-            Request::builder()
-                .method("HEAD")
-                .uri("/v1/mobile/chat/media/media_1/content")
-                .body(Body::empty())
-                .expect("request"),
-        )
-        .await
-        .expect("response");
-
-    assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
 }
 
 #[tokio::test]

@@ -46,20 +46,6 @@ fn test_state() -> AppState {
 }
 
 #[tokio::test]
-async fn supplier_dispatch_rejects_non_post_like_go() {
-    let state = test_state();
-    let token = supplier_session(&state).await;
-
-    let response = build_router(state)
-        .oneshot(request("GET", "/v1/mobile/supplier/dispatch", &token, ""))
-        .await
-        .expect("response");
-
-    assert_eq!(response.status(), StatusCode::METHOD_NOT_ALLOWED);
-    assert_eq!(json_body(response).await["error"], "method not allowed");
-}
-
-#[tokio::test]
 async fn supplier_dispatch_forbids_non_supplier_like_go() {
     let state = test_state();
     let token = werka_session(&state).await;

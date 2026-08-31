@@ -93,36 +93,3 @@ async fn factory_location_rejects_duplicate_name_and_unknown_apparatus() {
         .expect("invalid apparatus response");
     assert_eq!(invalid.status(), StatusCode::BAD_REQUEST);
 }
-
-#[tokio::test]
-async fn factory_location_rejects_display_title_as_apparatus_key() {
-    let _guard = FACTORY_LOCATION_ROUTE_TEST_LOCK.lock().await;
-    let state = test_state();
-    let token = session(&state, PrincipalRole::Admin).await;
-
-    let response = build_router(state)
-        .oneshot(request_with_body(
-            "POST",
-            "/v1/mobile/admin/factory-locations",
-            &token,
-            r#"{"name":"Title key","apparatus_ids":["Rezka"]}"#,
-        ))
-        .await
-        .expect("invalid title key response");
-
-    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
-}
-
-#[tokio::test]
-async fn material_taminotchi_cannot_manage_factory_locations_by_default() {
-    let _guard = FACTORY_LOCATION_ROUTE_TEST_LOCK.lock().await;
-    let state = test_state();
-    let token = session(&state, PrincipalRole::MaterialTaminotchi).await;
-
-    let response = build_router(state)
-        .oneshot(request("GET", "/v1/mobile/admin/factory-locations", &token))
-        .await
-        .expect("response");
-
-    assert_eq!(response.status(), StatusCode::FORBIDDEN);
-}

@@ -24,8 +24,22 @@ from typing import Any
 ROOT = Path(__file__).resolve().parents[2]
 CONTRACT_PATH = Path(__file__).with_name("contracts.json")
 GENERATED_CONTRACT_PATH = Path(__file__).with_name("generated_contracts.json")
+GENERATED_AUTOMATIC_CONTRACT_PATH = Path(__file__).with_name(
+    "generated_automatic_contracts.json"
+)
 MIGRATION_MANIFEST_PATH = (
     ROOT / "tools" / "test_migration_audit" / "migrations" / "generic_http_975078a.json"
+)
+AUTOMATIC_MIGRATION_MANIFEST_PATH = (
+    ROOT
+    / "tools"
+    / "test_migration_audit"
+    / "migrations"
+    / "automatic_http_52843a2.json"
+)
+GENERATED_BUNDLES = (
+    (GENERATED_CONTRACT_PATH, MIGRATION_MANIFEST_PATH),
+    (GENERATED_AUTOMATIC_CONTRACT_PATH, AUTOMATIC_MIGRATION_MANIFEST_PATH),
 )
 HARNESS = ROOT / "target" / "debug" / "mini_rs_verifier_harness"
 HARNESS_DEP_INFO = HARNESS.with_suffix(".d")
@@ -74,8 +88,8 @@ def load_json(path: Path) -> dict[str, Any]:
     return value
 
 
-def load_migration_manifest() -> dict[str, Any]:
-    manifest = load_json(MIGRATION_MANIFEST_PATH)
+def load_migration_manifest(path: Path) -> dict[str, Any]:
+    manifest = load_json(path)
     if (
         manifest.get("protocol") != 1
         or not isinstance(manifest.get("paths"), list)
@@ -87,31 +101,41 @@ def load_migration_manifest() -> dict[str, Any]:
     return manifest
 
 
-def load_contract(manifest: dict[str, Any]) -> dict[str, Any]:
+def load_contract() -> tuple[dict[str, Any], list[dict[str, Any]]]:
     contract = load_json(CONTRACT_PATH)
     if contract.get("protocol") != 1 or not isinstance(contract.get("cases"), list):
         raise VerificationFailure("unsupported or malformed verifier contract")
 
-    generated = load_json(GENERATED_CONTRACT_PATH)
-    if (
-        generated.get("protocol") != contract["protocol"]
-        or generated.get("generated") is not True
-        or not isinstance(generated.get("cases"), list)
-    ):
-        raise VerificationFailure("unsupported or malformed generated contracts")
+    manifests: list[dict[str, Any]] = []
+    generated_cases: list[dict[str, Any]] = []
+    generated_source_tests = 0
+    for generated_path, manifest_path in GENERATED_BUNDLES:
+        manifest = load_migration_manifest(manifest_path)
+        generated = load_json(generated_path)
+        if (
+            generated.get("protocol") != contract["protocol"]
+            or generated.get("generated") is not True
+            or not isinstance(generated.get("cases"), list)
+        ):
+            raise VerificationFailure(
+                f"unsupported or malformed generated contracts: {generated_path}"
+            )
+        generated_summary = generated.get("summary", {})
+        expected_generated = manifest["expected_automatic_contracts"]
+        if (
+            generated_summary.get("source_tests") != manifest["expected_tests"]
+            or generated_summary.get("generated_cases") != expected_generated
+            or len(generated["cases"]) != expected_generated
+        ):
+            raise VerificationFailure(
+                "generated contract counts do not match migration manifest: "
+                f"{manifest_path}"
+            )
+        manifests.append(manifest)
+        generated_cases.extend(generated["cases"])
+        generated_source_tests += manifest["expected_tests"]
 
-    generated_summary = generated.get("summary", {})
-    expected_generated = manifest["expected_automatic_contracts"]
-    if (
-        generated_summary.get("source_tests") != manifest["expected_tests"]
-        or generated_summary.get("generated_cases") != expected_generated
-        or len(generated["cases"]) != expected_generated
-    ):
-        raise VerificationFailure(
-            "generated contract counts do not match migration manifest"
-        )
-
-    contract["cases"] = [*contract["cases"], *generated["cases"]]
+    contract["cases"] = [*contract["cases"], *generated_cases]
     if not all(
         isinstance(case, dict) and isinstance(case.get("name"), str)
         for case in contract["cases"]
@@ -123,8 +147,11 @@ def load_contract(manifest: dict[str, Any]) -> dict[str, Any]:
         raise VerificationFailure(
             "duplicate verifier contract names: " + ", ".join(duplicates)
         )
-    contract["generated_summary"] = generated_summary
-    return contract
+    contract["generated_summary"] = {
+        "generated_cases": len(generated_cases),
+        "source_tests": generated_source_tests,
+    }
+    return contract, manifests
 
 
 def expanded_cases(contract: dict[str, Any]) -> list[dict[str, Any]]:
@@ -192,12 +219,31 @@ def verify_route_snapshot(contract: dict[str, Any]) -> dict[str, Any]:
     return actual
 
 
-def verify_migrated_tests_stay_removed(manifest: dict[str, Any]) -> None:
-    restored = [path for path in manifest["paths"] if (ROOT / path).exists()]
+def verify_migrated_tests_stay_removed(manifests: list[dict[str, Any]]) -> None:
+    restored = [
+        path
+        for manifest in manifests
+        for path in manifest.get("removed_paths", [])
+        if (ROOT / path).exists()
+    ]
     if restored:
         raise VerificationFailure(
             "generic Rust tests were restored after verifier migration: "
             + ", ".join(restored)
+        )
+    restored_tests: list[str] = []
+    for manifest in manifests:
+        if manifest.get("remove_selected_tests") is not True:
+            continue
+        for identifier in manifest.get("tests", []):
+            path, name = identifier.rsplit("::", 1)
+            source = (ROOT / path).read_text(encoding="utf-8")
+            if re.search(rf"\b(?:async\s+)?fn\s+{re.escape(name)}\s*\(", source):
+                restored_tests.append(identifier)
+    if restored_tests:
+        raise VerificationFailure(
+            "generic Rust test functions were restored after verifier migration: "
+            + ", ".join(restored_tests)
         )
 
 
@@ -450,9 +496,8 @@ def run_cases(contract: dict[str, Any]) -> tuple[list[dict[str, Any]], float]:
 def main() -> int:
     args = parse_args()
     try:
-        migration_manifest = load_migration_manifest()
-        contract = load_contract(migration_manifest)
-        verify_migrated_tests_stay_removed(migration_manifest)
+        contract, migration_manifests = load_contract()
+        verify_migrated_tests_stay_removed(migration_manifests)
         snapshot = route_snapshot()
         if args.print_route_snapshot:
             print(json.dumps(snapshot, sort_keys=True))
@@ -470,7 +515,9 @@ def main() -> int:
             "build_seconds": round(build_seconds, 3),
             "probe_seconds": round(probe_seconds, 3),
             "rust_test_modules_compiled": False,
-            "migrated_rust_tests": migration_manifest["expected_tests"],
+            "migrated_rust_tests": sum(
+                manifest["expected_tests"] for manifest in migration_manifests
+            ),
             "generated_contracts": contract["generated_summary"].get(
                 "generated_cases", 0
             ),

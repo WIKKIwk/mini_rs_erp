@@ -90,6 +90,16 @@ def load_manifest(path: Path) -> dict[str, Any]:
         manifest.get("protocol") != 1
         or not isinstance(manifest.get("git_ref"), str)
         or not isinstance(manifest.get("paths"), list)
+        or not all(isinstance(item, str) for item in manifest["paths"])
+        or not isinstance(manifest.get("expected_tests"), int)
+        or not isinstance(manifest.get("expected_automatic_contracts"), int)
+        or (
+            "tests" in manifest
+            and (
+                not isinstance(manifest["tests"], list)
+                or not all(isinstance(item, str) for item in manifest["tests"])
+            )
+        )
     ):
         raise ExtractionFailure(f"malformed migration manifest: {path}")
     return manifest
@@ -343,7 +353,43 @@ def extract_case(
     )
 
 
-def generate(root: Path, manifest: dict[str, Any]) -> dict[str, Any]:
+def verify_removals(root: Path, manifest: dict[str, Any]) -> None:
+    restored_paths = [
+        path for path in manifest.get("removed_paths", []) if (root / path).exists()
+    ]
+    if restored_paths:
+        raise ExtractionFailure(
+            "migrated Rust test files were restored: " + ", ".join(restored_paths)
+        )
+
+    removed_tests = set(manifest.get("removed_tests", []))
+    if manifest.get("remove_selected_tests") is True:
+        removed_tests.update(manifest.get("tests", []))
+    if not removed_tests:
+        return
+    paths = sorted({identifier.rsplit("::", 1)[0] for identifier in removed_tests})
+    present: set[str] = set()
+    for source in audit.worktree_sources(root, paths):
+        tree = audit.RUST_PARSER.parse(source.content)
+        for function in audit.test_functions(source.content, tree.root_node):
+            name_node = function.child_by_field_name("name")
+            if name_node is None:
+                continue
+            name = audit.source_text(source.content, name_node)
+            identifier = f"{source.path}::{name}"
+            if identifier in removed_tests:
+                present.add(identifier)
+    if present:
+        raise ExtractionFailure(
+            "migrated Rust test functions were restored: " + ", ".join(sorted(present))
+        )
+
+
+def generate(
+    root: Path,
+    manifest: dict[str, Any],
+    manifest_path: Path = DEFAULT_MANIFEST,
+) -> dict[str, Any]:
     with (root / "Cargo.toml").open("rb") as handle:
         package_version = tomllib.load(handle).get("package", {}).get("version")
     if not isinstance(package_version, str):
@@ -353,22 +399,28 @@ def generate(root: Path, manifest: dict[str, Any]) -> dict[str, Any]:
     skipped: list[dict[str, Any]] = []
     automatic = 0
     tests = 0
+    selected = set(manifest.get("tests", []))
+    found: set[str] = set()
     for source in sources:
         tree = audit.RUST_PARSER.parse(source.content)
         if tree.root_node.has_error:
             raise ExtractionFailure(f"Rust parse error: {source.path}")
         for function in audit.test_functions(source.content, tree.root_node):
-            tests += 1
             name_node = function.child_by_field_name("name")
             name = (
                 audit.source_text(source.content, name_node) if name_node else "unknown"
             )
+            identifier = f"{source.path}::{name}"
+            if selected and identifier not in selected:
+                continue
+            found.add(identifier)
+            tests += 1
             signals = audit.collect_signals(source.content, function)
             classification, _, reasons = audit.classify(signals)
             if classification != "automatic_contract":
                 skipped.append(
                     {
-                        "id": f"{source.path}::{name}",
+                        "id": identifier,
                         "classification": classification,
                         "reasons": reasons,
                     }
@@ -378,7 +430,14 @@ def generate(root: Path, manifest: dict[str, Any]) -> dict[str, Any]:
             try:
                 cases.append(extract_case(source, function, package_version).case)
             except ExtractionFailure as error:
-                raise ExtractionFailure(f"{source.path}::{name}: {error}") from error
+                raise ExtractionFailure(f"{identifier}: {error}") from error
+
+    missing = selected - found
+    if missing:
+        raise ExtractionFailure(
+            "selected migration tests are missing from source snapshot: "
+            + ", ".join(sorted(missing))
+        )
 
     if tests != manifest.get("expected_tests"):
         raise ExtractionFailure(
@@ -399,7 +458,7 @@ def generate(root: Path, manifest: dict[str, Any]) -> dict[str, Any]:
         "generated": True,
         "source": {
             "git_ref": manifest["git_ref"],
-            "manifest": DEFAULT_MANIFEST.relative_to(ROOT).as_posix(),
+            "manifest": manifest_path.resolve().relative_to(root).as_posix(),
         },
         "summary": {
             "source_tests": tests,
@@ -414,13 +473,15 @@ def generate(root: Path, manifest: dict[str, Any]) -> dict[str, Any]:
 def main(argv: Sequence[str] | None = None) -> int:
     args = parse_args(argv)
     root = args.root.resolve()
-    manifest = load_manifest(args.manifest)
-    report = generate(root, manifest)
+    manifest_path = args.manifest.resolve()
+    manifest = load_manifest(manifest_path)
+    report = generate(root, manifest, manifest_path)
     rendered = json.dumps(report, ensure_ascii=False, indent=2, sort_keys=True) + "\n"
     if args.stdout:
         sys.stdout.write(rendered)
         return 0
     if args.check:
+        verify_removals(root, manifest)
         current = (
             args.output.read_text(encoding="utf-8") if args.output.is_file() else ""
         )

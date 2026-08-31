@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 import unittest
+from pathlib import Path
+from tempfile import TemporaryDirectory
 
 import audit
-from extract_contracts import ExtractionFailure, extract_case
+from extract_contracts import ExtractionFailure, extract_case, verify_removals
 
 
 def extract(source: str, package_version: str | None = None):
@@ -16,6 +18,27 @@ def extract(source: str, package_version: str | None = None):
 
 
 class ContractExtractionTests(unittest.TestCase):
+    def test_removal_guard_rejects_selected_function_restoration(self) -> None:
+        manifest = {
+            "remove_selected_tests": True,
+            "tests": ["src/example.rs::migrated"],
+        }
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            source = root / "src" / "example.rs"
+            source.parent.mkdir()
+            source.write_text(
+                "#[test]\nfn migrated() {}\n\n#[test]\nfn retained() {}\n",
+                encoding="utf-8",
+            )
+            with self.assertRaisesRegex(
+                ExtractionFailure, "test functions were restored"
+            ):
+                verify_removals(root, manifest)
+
+            source.write_text("#[test]\nfn retained() {}\n", encoding="utf-8")
+            verify_removals(root, manifest)
+
     def test_extracts_anonymous_json_request_and_body_oracle(self) -> None:
         case = extract(
             r"""

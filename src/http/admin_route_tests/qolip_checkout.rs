@@ -806,20 +806,6 @@ async fn failed_queue_commit_does_not_checkout_qolip() {
 }
 
 #[tokio::test]
-async fn qolip_locations_without_assignment_are_forbidden() {
-    let state = test_state();
-    let token = session_for(&state, PrincipalRole::Qolipchi, "qolipchi-no-block").await;
-
-    let response = build_router(state)
-        .oneshot(request("GET", "/v1/mobile/qolip/locations", &token))
-        .await
-        .expect("locations response");
-
-    assert_eq!(response.status(), StatusCode::FORBIDDEN);
-    assert_eq!(json_body(response).await["error"], "forbidden");
-}
-
-#[tokio::test]
 async fn qolip_checkout_uses_authorized_location_snapshot() {
     let store = Arc::new(FlippingCheckoutStore::new());
     let mut state = test_state();

@@ -13,40 +13,6 @@ use crate::http::router::build_router;
 use super::support::*;
 
 #[tokio::test]
-async fn material_receipt_print_requires_auth() {
-    let response = build_router(test_state())
-        .oneshot(request(
-            "POST",
-            "/v1/mobile/gscale/material-receipt/print",
-            "",
-            "{}",
-        ))
-        .await
-        .expect("response");
-
-    assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
-    assert_eq!(json_body(response).await["error"], "unauthorized");
-}
-
-#[tokio::test]
-async fn material_receipt_print_rejects_wrong_method() {
-    let state = test_state();
-    let token = session(&state, PrincipalRole::Admin).await;
-    let response = build_router(state)
-        .oneshot(request(
-            "GET",
-            "/v1/mobile/gscale/material-receipt/print",
-            &token,
-            "",
-        ))
-        .await
-        .expect("response");
-
-    assert_eq!(response.status(), StatusCode::METHOD_NOT_ALLOWED);
-    assert_eq!(json_body(response).await["error"], "method_not_allowed");
-}
-
-#[tokio::test]
 async fn material_receipt_print_uses_parallel_driver_first_flow() {
     let events = Arc::new(Mutex::new(Vec::new()));
     let mut state = test_state();

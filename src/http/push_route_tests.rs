@@ -41,35 +41,6 @@ fn test_state() -> AppState {
 }
 
 #[tokio::test]
-async fn push_token_requires_auth_like_go() {
-    let response = build_router(test_state())
-        .oneshot(request("POST", "/v1/mobile/push/token", "", "{}"))
-        .await
-        .expect("response");
-
-    assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
-    assert_eq!(json_body(response).await["error"], "unauthorized");
-}
-
-#[tokio::test]
-async fn push_token_forbids_customer_like_go() {
-    let state = test_state();
-    let token = session(&state, PrincipalRole::Customer, "CUST-001").await;
-    let response = build_router(state)
-        .oneshot(request(
-            "POST",
-            "/v1/mobile/push/token",
-            &token,
-            r#"{"token":"device","platform":"ios"}"#,
-        ))
-        .await
-        .expect("response");
-
-    assert_eq!(response.status(), StatusCode::FORBIDDEN);
-    assert_eq!(json_body(response).await["error"], "forbidden");
-}
-
-#[tokio::test]
 async fn push_token_registers_supplier_token_like_go() {
     let state = test_state();
     let token = session(&state, PrincipalRole::Supplier, "SUP-001").await;
@@ -135,19 +106,6 @@ async fn push_token_register_store_failure_uses_save_error() {
 }
 
 #[tokio::test]
-async fn push_token_delete_requires_query_token_like_go() {
-    let state = test_state();
-    let token = session(&state, PrincipalRole::Supplier, "SUP-001").await;
-    let response = build_router(state)
-        .oneshot(request("DELETE", "/v1/mobile/push/token", &token, ""))
-        .await
-        .expect("response");
-
-    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
-    assert_eq!(json_body(response).await["error"], "token is required");
-}
-
-#[tokio::test]
 async fn push_token_delete_store_failure_uses_delete_error() {
     let mut state = test_state();
     state.push = PushService::new(Arc::new(FailingPushStore));
@@ -167,19 +125,6 @@ async fn push_token_delete_store_failure_uses_delete_error() {
         json_body(response).await["error"],
         "push token delete failed"
     );
-}
-
-#[tokio::test]
-async fn push_token_rejects_wrong_method_like_go() {
-    let state = test_state();
-    let token = session(&state, PrincipalRole::Supplier, "SUP-001").await;
-    let response = build_router(state)
-        .oneshot(request("GET", "/v1/mobile/push/token", &token, ""))
-        .await
-        .expect("response");
-
-    assert_eq!(response.status(), StatusCode::METHOD_NOT_ALLOWED);
-    assert_eq!(json_body(response).await["error"], "method not allowed");
 }
 
 async fn session(state: &AppState, role: PrincipalRole, ref_: &str) -> String {

@@ -102,20 +102,6 @@ async fn admin_suppliers_page_filters_removed_and_counts_blocked_like_go() {
 }
 
 #[tokio::test]
-async fn admin_supplier_detail_requires_ref_like_go() {
-    let state = test_state();
-    let token = session(&state, PrincipalRole::Admin).await;
-
-    let response = build_router(state)
-        .oneshot(request("GET", "/v1/mobile/admin/suppliers/detail", &token))
-        .await
-        .expect("response");
-
-    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
-    assert_eq!(json_body(response).await["error"], "ref is required");
-}
-
-#[tokio::test]
 async fn admin_supplier_detail_returns_assigned_items_like_go() {
     let state = test_state();
     let token = session(&state, PrincipalRole::Admin).await;

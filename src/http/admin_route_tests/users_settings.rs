@@ -682,20 +682,6 @@ async fn admin_material_taminotchi_phone_and_code_management_use_material_routes
 }
 
 #[tokio::test]
-async fn admin_settings_requires_admin_like_go() {
-    let state = test_state();
-    let token = session(&state, PrincipalRole::Supplier).await;
-
-    let response = build_router(state)
-        .oneshot(request("GET", "/v1/mobile/admin/settings", &token))
-        .await
-        .expect("response");
-
-    assert_eq!(response.status(), StatusCode::FORBIDDEN);
-    assert_eq!(json_body(response).await["error"], "forbidden");
-}
-
-#[tokio::test]
 async fn admin_method_checks_happen_after_auth_like_go() {
     let state = test_state();
     let cases = [

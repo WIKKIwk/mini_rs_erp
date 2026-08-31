@@ -78,37 +78,6 @@ async fn customer_history_forbids_non_customer_like_go() {
 }
 
 #[tokio::test]
-async fn customer_detail_requires_delivery_note_id_like_go() {
-    let state = test_state();
-    let token = customer_session(&state).await;
-
-    let response = build_router(state)
-        .oneshot(request("GET", "/v1/mobile/customer/detail", &token, ""))
-        .await
-        .expect("response");
-
-    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
-    assert_eq!(
-        json_body(response).await["error"],
-        "delivery_note_id is required"
-    );
-}
-
-#[tokio::test]
-async fn customer_respond_rejects_get_like_go() {
-    let state = test_state();
-    let token = customer_session(&state).await;
-
-    let response = build_router(state)
-        .oneshot(request("GET", "/v1/mobile/customer/respond", &token, ""))
-        .await
-        .expect("response");
-
-    assert_eq!(response.status(), StatusCode::METHOD_NOT_ALLOWED);
-    assert_eq!(json_body(response).await["error"], "method not allowed");
-}
-
-#[tokio::test]
 async fn customer_respond_returns_detail_like_go() {
     let mut state = test_state();
     state.customer = CustomerService::new().with_delivery_port(Arc::new(FakeDeliveryPort));

@@ -180,23 +180,6 @@ async fn authenticated_user_can_view_another_profile_avatar_by_vault_identity() 
 }
 
 #[tokio::test]
-async fn profile_get_requires_auth_like_go() {
-    let app = build_router(test_state());
-    let response = app
-        .oneshot(
-            Request::builder()
-                .uri("/v1/mobile/profile")
-                .body(Body::empty())
-                .expect("request"),
-        )
-        .await
-        .expect("response");
-
-    assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
-    assert_eq!(json_body(response).await["error"], "unauthorized");
-}
-
-#[tokio::test]
 async fn profile_put_updates_nickname_and_session_like_go() {
     let state = test_state();
     let token = supplier_session(&state).await;
@@ -460,22 +443,6 @@ async fn profile_avatar_upload_returns_worker_storage_avatar() {
         json_body(response).await["avatar_url"],
         "https://cdn.test/profile_avatars/werka/werka_1/avatar.jpg"
     );
-}
-
-#[tokio::test]
-async fn avatar_view_requires_auth() {
-    let app = build_router(test_state());
-    let response = app
-        .oneshot(
-            Request::builder()
-                .uri("/v1/mobile/profile/avatar/view")
-                .body(Body::empty())
-                .expect("request"),
-        )
-        .await
-        .expect("response");
-
-    assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
 }
 
 #[tokio::test]

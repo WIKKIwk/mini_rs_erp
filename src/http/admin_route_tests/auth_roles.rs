@@ -1,23 +1,6 @@
 use super::*;
 
 #[tokio::test]
-async fn admin_settings_returns_config_shape_like_go() {
-    let state = test_state();
-    let token = session(&state, PrincipalRole::Admin).await;
-
-    let response = build_router(state)
-        .oneshot(request("GET", "/v1/mobile/admin/settings", &token))
-        .await
-        .expect("response");
-
-    assert_eq!(response.status(), StatusCode::OK);
-    let value = json_body(response).await;
-    assert_eq!(value["default_uom"], "Kg");
-    assert_eq!(value["werka_name"], "Werka");
-    assert_eq!(value["admin_name"], "Admin");
-}
-
-#[tokio::test]
 async fn admin_capabilities_returns_role_builder_catalog() {
     let state = test_state();
     let admin_token = session(&state, PrincipalRole::Admin).await;

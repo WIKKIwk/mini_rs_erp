@@ -3,6 +3,19 @@
   "git_ref": "975078a^",
   "expected_tests": 80,
   "expected_automatic_contracts": 21,
+  "removed_paths": [
+    "src/http/router_tests.rs",
+    "src/http/router_tests/auth_routes.rs",
+    "src/http/router_tests/core_routes.rs",
+    "src/http/router_tests/support.rs",
+    "src/http/router_tests/werka_routes.rs",
+    "src/http/supplier_items_route_tests.rs",
+    "src/http/supplier_read_route_tests.rs",
+    "src/http/werka_archive_route_tests.rs",
+    "src/http/werka_directory_route_tests.rs",
+    "src/http/werka_items_route_tests.rs",
+    "src/http/werka_route_tests.rs"
+  ],
   "paths": [
     "src/http/router_tests.rs",
     "src/http/router_tests/auth_routes.rs",

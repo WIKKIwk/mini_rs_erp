@@ -69,3 +69,8 @@ status, JSON subset, or body oracle. The command aborts on an unknown assertion,
 source-test count drift, or automatic-candidate count drift. Fixture-dependent
 tests remain listed under `skipped` in the generated artifact until a scenario
 generator can represent them safely.
+
+A selected-test manifest can pin individual passing contracts from a mixed Rust
+test file. `emit_removal_patch.py` uses Tree-sitter to emit an
+`apply_patch`-compatible deletion, and `--check` refuses regenerated output
+until every selected function is absent from the worktree.

@@ -1,0 +1,422 @@
+{
+  "cases": [
+    {
+      "expect": {
+        "body": {
+          "error": "forbidden"
+        },
+        "status": 403
+      },
+      "name": "admin_settings_requires_admin_like_go",
+      "request": {
+        "fixture": "isolated",
+        "method": "GET",
+        "role": "supplier",
+        "uri": "/v1/mobile/admin/settings"
+      },
+      "source": {
+        "line": 685,
+        "path": "src/http/admin_route_tests/users_settings.rs"
+      }
+    },
+    {
+      "expect": {
+        "body": {
+          "admin_name": "Admin",
+          "default_uom": "Kg",
+          "werka_name": "Werka"
+        },
+        "status": 200
+      },
+      "name": "admin_settings_returns_config_shape_like_go",
+      "request": {
+        "fixture": "isolated",
+        "method": "GET",
+        "role": "admin",
+        "uri": "/v1/mobile/admin/settings"
+      },
+      "source": {
+        "line": 4,
+        "path": "src/http/admin_route_tests/auth_roles.rs"
+      }
+    },
+    {
+      "expect": {
+        "body": {
+          "error": "ref is required"
+        },
+        "status": 400
+      },
+      "name": "admin_supplier_detail_requires_ref_like_go",
+      "request": {
+        "fixture": "isolated",
+        "method": "GET",
+        "role": "admin",
+        "uri": "/v1/mobile/admin/suppliers/detail"
+      },
+      "source": {
+        "line": 105,
+        "path": "src/http/admin_route_tests/suppliers_customers.rs"
+      }
+    },
+    {
+      "expect": {
+        "status": 401
+      },
+      "name": "avatar_view_requires_auth",
+      "request": {
+        "fixture": "isolated",
+        "method": "GET",
+        "uri": "/v1/mobile/profile/avatar/view"
+      },
+      "source": {
+        "line": 466,
+        "path": "src/http/profile_route_tests.rs"
+      }
+    },
+    {
+      "expect": {
+        "status": 401
+      },
+      "name": "chat_directory_requires_authenticated_session",
+      "request": {
+        "fixture": "isolated",
+        "method": "GET",
+        "uri": "/v1/mobile/chat/directory"
+      },
+      "source": {
+        "line": 37,
+        "path": "src/http/chat_route_tests.rs"
+      }
+    },
+    {
+      "expect": {
+        "status": 401
+      },
+      "name": "chat_media_upload_initialization_requires_authenticated_session",
+      "request": {
+        "body": {
+          "client_upload_id": "upload_1",
+          "content_type": "image/jpeg",
+          "filename": "photo.jpg",
+          "kind": "image",
+          "size_bytes": 3
+        },
+        "fixture": "isolated",
+        "method": "POST",
+        "uri": "/v1/mobile/chat/conversations/conversation_1/media/uploads"
+      },
+      "source": {
+        "line": 123,
+        "path": "src/http/chat_route_tests.rs"
+      }
+    },
+    {
+      "expect": {
+        "body": {
+          "error": "delivery_note_id is required"
+        },
+        "status": 400
+      },
+      "name": "customer_detail_requires_delivery_note_id_like_go",
+      "request": {
+        "fixture": "isolated",
+        "method": "GET",
+        "role": "customer",
+        "uri": "/v1/mobile/customer/detail"
+      },
+      "source": {
+        "line": 81,
+        "path": "src/http/customer_route_tests.rs"
+      }
+    },
+    {
+      "expect": {
+        "status": 401
+      },
+      "name": "customer_issue_create_requires_auth",
+      "request": {
+        "fixture": "isolated",
+        "method": "POST",
+        "uri": "/v1/mobile/werka/customer-issue/create"
+      },
+      "source": {
+        "line": 17,
+        "path": "src/http/werka_customer_issue_route_tests.rs"
+      }
+    },
+    {
+      "expect": {
+        "body": {
+          "error": "method not allowed"
+        },
+        "status": 405
+      },
+      "name": "customer_respond_rejects_get_like_go",
+      "request": {
+        "fixture": "isolated",
+        "method": "GET",
+        "role": "customer",
+        "uri": "/v1/mobile/customer/respond"
+      },
+      "source": {
+        "line": 98,
+        "path": "src/http/customer_route_tests.rs"
+      }
+    },
+    {
+      "expect": {
+        "status": 400
+      },
+      "name": "factory_location_rejects_display_title_as_apparatus_key",
+      "request": {
+        "body": {
+          "apparatus_ids": [
+            "Rezka"
+          ],
+          "name": "Title key"
+        },
+        "fixture": "isolated",
+        "method": "POST",
+        "role": "admin",
+        "uri": "/v1/mobile/admin/factory-locations"
+      },
+      "source": {
+        "line": 98,
+        "path": "src/http/admin_route_tests/factory_locations.rs"
+      }
+    },
+    {
+      "expect": {
+        "body": {
+          "error": "method_not_allowed"
+        },
+        "status": 405
+      },
+      "name": "material_receipt_print_rejects_wrong_method",
+      "request": {
+        "fixture": "isolated",
+        "method": "GET",
+        "role": "admin",
+        "uri": "/v1/mobile/gscale/material-receipt/print"
+      },
+      "source": {
+        "line": 32,
+        "path": "src/http/gscale_route_tests/material_receipt.rs"
+      }
+    },
+    {
+      "expect": {
+        "body": {
+          "error": "unauthorized"
+        },
+        "status": 401
+      },
+      "name": "material_receipt_print_requires_auth",
+      "request": {
+        "body": {},
+        "fixture": "isolated",
+        "method": "POST",
+        "uri": "/v1/mobile/gscale/material-receipt/print"
+      },
+      "source": {
+        "line": 16,
+        "path": "src/http/gscale_route_tests/material_receipt.rs"
+      }
+    },
+    {
+      "expect": {
+        "status": 403
+      },
+      "name": "material_taminotchi_cannot_manage_factory_locations_by_default",
+      "request": {
+        "fixture": "isolated",
+        "method": "GET",
+        "role": "material_taminotchi",
+        "uri": "/v1/mobile/admin/factory-locations"
+      },
+      "source": {
+        "line": 117,
+        "path": "src/http/admin_route_tests/factory_locations.rs"
+      }
+    },
+    {
+      "expect": {
+        "status": 401
+      },
+      "name": "private_chat_media_content_requires_authenticated_session",
+      "request": {
+        "fixture": "isolated",
+        "method": "GET",
+        "uri": "/v1/mobile/chat/media/media_1/content"
+      },
+      "source": {
+        "line": 142,
+        "path": "src/http/chat_route_tests.rs"
+      }
+    },
+    {
+      "expect": {
+        "status": 401
+      },
+      "name": "private_chat_media_head_supports_video_metadata_probes",
+      "request": {
+        "fixture": "isolated",
+        "method": "HEAD",
+        "uri": "/v1/mobile/chat/media/media_1/content"
+      },
+      "source": {
+        "line": 157,
+        "path": "src/http/chat_route_tests.rs"
+      }
+    },
+    {
+      "expect": {
+        "body": {
+          "error": "unauthorized"
+        },
+        "status": 401
+      },
+      "name": "profile_get_requires_auth_like_go",
+      "request": {
+        "fixture": "isolated",
+        "method": "GET",
+        "uri": "/v1/mobile/profile"
+      },
+      "source": {
+        "line": 183,
+        "path": "src/http/profile_route_tests.rs"
+      }
+    },
+    {
+      "expect": {
+        "body": {
+          "error": "token is required"
+        },
+        "status": 400
+      },
+      "name": "push_token_delete_requires_query_token_like_go",
+      "request": {
+        "fixture": "isolated",
+        "method": "DELETE",
+        "role": "supplier",
+        "uri": "/v1/mobile/push/token"
+      },
+      "source": {
+        "line": 138,
+        "path": "src/http/push_route_tests.rs"
+      }
+    },
+    {
+      "expect": {
+        "body": {
+          "error": "forbidden"
+        },
+        "status": 403
+      },
+      "name": "push_token_forbids_customer_like_go",
+      "request": {
+        "body": {
+          "platform": "ios",
+          "token": "device"
+        },
+        "fixture": "isolated",
+        "method": "POST",
+        "role": "customer",
+        "uri": "/v1/mobile/push/token"
+      },
+      "source": {
+        "line": 55,
+        "path": "src/http/push_route_tests.rs"
+      }
+    },
+    {
+      "expect": {
+        "body": {
+          "error": "method not allowed"
+        },
+        "status": 405
+      },
+      "name": "push_token_rejects_wrong_method_like_go",
+      "request": {
+        "fixture": "isolated",
+        "method": "GET",
+        "role": "supplier",
+        "uri": "/v1/mobile/push/token"
+      },
+      "source": {
+        "line": 173,
+        "path": "src/http/push_route_tests.rs"
+      }
+    },
+    {
+      "expect": {
+        "body": {
+          "error": "unauthorized"
+        },
+        "status": 401
+      },
+      "name": "push_token_requires_auth_like_go",
+      "request": {
+        "body": {},
+        "fixture": "isolated",
+        "method": "POST",
+        "uri": "/v1/mobile/push/token"
+      },
+      "source": {
+        "line": 44,
+        "path": "src/http/push_route_tests.rs"
+      }
+    },
+    {
+      "expect": {
+        "body": {
+          "error": "forbidden"
+        },
+        "status": 403
+      },
+      "name": "qolip_locations_without_assignment_are_forbidden",
+      "request": {
+        "fixture": "isolated",
+        "method": "GET",
+        "role": "qolipchi",
+        "uri": "/v1/mobile/qolip/locations"
+      },
+      "source": {
+        "line": 809,
+        "path": "src/http/admin_route_tests/qolip_checkout.rs"
+      }
+    },
+    {
+      "expect": {
+        "body": {
+          "error": "method not allowed"
+        },
+        "status": 405
+      },
+      "name": "supplier_dispatch_rejects_non_post_like_go",
+      "request": {
+        "fixture": "isolated",
+        "method": "GET",
+        "role": "supplier",
+        "uri": "/v1/mobile/supplier/dispatch"
+      },
+      "source": {
+        "line": 49,
+        "path": "src/http/supplier_dispatch_route_tests.rs"
+      }
+    }
+  ],
+  "generated": true,
+  "protocol": 1,
+  "skipped": [],
+  "source": {
+    "git_ref": "52843a2",
+    "manifest": "tools/test_migration_audit/migrations/automatic_http_52843a2.json"
+  },
+  "summary": {
+    "generated_cases": 22,
+    "skipped_scenarios": 0,
+    "source_tests": 22
+  }
+}

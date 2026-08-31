@@ -14,22 +14,6 @@ mod werka_customer_issue_support;
 use werka_customer_issue_support::*;
 
 #[tokio::test]
-async fn customer_issue_create_requires_auth() {
-    let response = build_router(test_state())
-        .oneshot(
-            Request::builder()
-                .method("POST")
-                .uri("/v1/mobile/werka/customer-issue/create")
-                .body(Body::empty())
-                .expect("request"),
-        )
-        .await
-        .expect("response");
-
-    assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
-}
-
-#[tokio::test]
 async fn customer_issue_create_rejects_non_post_like_go() {
     let state = test_state();
     let token = werka_session(&state).await;
