@@ -8,11 +8,12 @@ repository = "https://github.com/WIKKIwk/mini_rs_erp"
 readme = "README.md"
 
 [workspace]
-members = ["crates/mini_rs_gateway"]
+members = ["crates/mini_rs_domain_types", "crates/mini_rs_gateway"]
 default-members = ["."]
 resolver = "3"
 
 [dependencies]
+mini_rs_domain_types = { path = "crates/mini_rs_domain_types" }
 axum = { version = "0.8", features = ["ws"] }
 async-stream = "0.3"
 futures-core = "0.3"

@@ -21,7 +21,7 @@ pub mod production_map;
 pub mod profile;
 pub mod push;
 pub mod qolip;
-pub mod quantity;
+pub use mini_rs_domain_types::quantity;
 pub mod returned_paint;
 pub mod rezka;
 pub mod rps_batch;

@@ -2171,6 +2171,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "mini_rs_domain_types"
+version = "1.0.0"
+dependencies = [
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "mini_rs_erp"
 version = "1.0.0"
 dependencies = [
@@ -2194,6 +2202,7 @@ dependencies = [
  "hyper-util",
  "image",
  "jsonwebtoken",
+ "mini_rs_domain_types",
  "proptest",
  "rand 0.9.4",
  "reqwest",
