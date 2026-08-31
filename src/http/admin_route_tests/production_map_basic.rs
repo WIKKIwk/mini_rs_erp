@@ -168,7 +168,7 @@ async fn production_map_sequence_returns_backend_visible_order_ids() {
                         "alternative_assigned_title":"apparatus:default:asset-007",
                         "alternative_assigned_apparatus_id":"apparatus:default:asset-007"
                     },
-                    {"id":"rezka","kind":"apparatus","title":"Rezka","apparatus_id":"apparatus:default:asset-010"},
+                    {"id":"rezka","kind":"apparatus","title":"Rezka","apparatus_id":"apparatus:default:asset-010","rezka_kadr_count":4,"rezka_label_length":100},
                     {"id":"end","kind":"end","title":"End"}
                 ],
                 "edges":[
@@ -231,7 +231,7 @@ async fn production_map_sequence_accepts_numeric_order_id() {
                     {"id":"order","kind":"task","title":"Funchuza 300 gr kok"},
                     {"id":"pechat","kind":"apparatus","title":"apparatus:default:bosma_7","apparatus_id":"apparatus:default:bosma_7"},
                     {"id":"lamin","kind":"apparatus","title":"apparatus:default:asset-007","apparatus_id":"apparatus:default:asset-007"},
-                    {"id":"rezka","kind":"apparatus","title":"Rezka","apparatus_id":"apparatus:default:asset-010"},
+                    {"id":"rezka","kind":"apparatus","title":"Rezka","apparatus_id":"apparatus:default:asset-010","rezka_kadr_count":4,"rezka_label_length":100},
                     {"id":"end","kind":"end","title":"End"}
                 ],
                 "edges":[

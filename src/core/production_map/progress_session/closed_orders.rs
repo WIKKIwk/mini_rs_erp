@@ -276,8 +276,15 @@ mod tests {
             "product_code": "PRODUCT",
             "title": "Order",
             "nodes": [
+                {"id": "start", "kind": "start", "title": "Start"},
                 {"id": "press", "kind": "apparatus", "title": "Press", "apparatus_id": "apparatus:catalog:press-001"},
-                {"id": "lamination", "kind": "apparatus", "title": "Lamination", "apparatus_id": "apparatus:catalog:lam-001"}
+                {"id": "lamination", "kind": "apparatus", "title": "Lamination", "apparatus_id": "apparatus:catalog:lam-001"},
+                {"id": "end", "kind": "end", "title": "End"}
+            ],
+            "edges": [
+                {"from": "start", "to": "press"},
+                {"from": "press", "to": "lamination"},
+                {"from": "lamination", "to": "end"}
             ]
         }))
         .expect("lifecycle map fixture");
