@@ -47,10 +47,24 @@ impl OrderProgressBatchStatusDetail {
         }
         .to_string();
         let wip_status = batch.wip_status.as_str().to_string();
+        let flow_status = Self::flow_status_for_batch(batch);
+        let stock_status = match flow_status {
+            "accepted_to_stock" => "accepted",
+            _ => "",
+        }
+        .to_string();
+        Self {
+            work_status,
+            wip_status,
+            flow_status: flow_status.to_string(),
+            stock_status,
+        }
+    }
+
+    fn flow_status_for_batch(batch: &OrderProgressBatch) -> &'static str {
         let processed_by = batch.processed_by_apparatus.trim();
-        let is_final_output = batch.is_finished_goods_output();
-        let flow_status = match batch.wip_status {
-            OrderProgressBatchWipStatus::Waiting if is_final_output => "free_wip",
+        match batch.wip_status {
+            OrderProgressBatchWipStatus::Waiting if batch.is_finished_goods_output() => "free_wip",
             OrderProgressBatchWipStatus::Waiting => "waiting_next_stage",
             OrderProgressBatchWipStatus::InUse => "in_progress",
             OrderProgressBatchWipStatus::Processed
@@ -59,18 +73,6 @@ impl OrderProgressBatchStatusDetail {
                 "accepted_to_stock"
             }
             OrderProgressBatchWipStatus::Processed => "consumed_by_next_stage",
-        }
-        .to_string();
-        let stock_status = match flow_status.as_str() {
-            "accepted_to_stock" => "accepted",
-            _ => "",
-        }
-        .to_string();
-        Self {
-            work_status,
-            wip_status,
-            flow_status,
-            stock_status,
         }
     }
 }
@@ -147,14 +149,13 @@ impl ProductionOrderStatusDetail {
 
     fn add_wip_counts(&mut self, progress_batches: &[OrderProgressBatch]) {
         for batch in progress_batches {
-            let status_detail = OrderProgressBatchStatusDetail::from_batch(batch);
             self.total_wip_count += 1;
             match batch.wip_status {
                 OrderProgressBatchWipStatus::Waiting => self.waiting_wip_count += 1,
                 OrderProgressBatchWipStatus::InUse => self.in_use_wip_count += 1,
                 OrderProgressBatchWipStatus::Processed => self.processed_wip_count += 1,
             }
-            match status_detail.flow_status.as_str() {
+            match OrderProgressBatchStatusDetail::flow_status_for_batch(batch) {
                 "waiting_next_stage" => self.waiting_next_stage_count += 1,
                 "in_progress" => {}
                 "consumed_by_next_stage" => self.consumed_by_next_stage_count += 1,
