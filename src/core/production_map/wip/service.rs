@@ -16,8 +16,23 @@ impl ProductionMapService {
             .progress_batch_for_qr(progress_batch_id, qr_payload)
             .await?;
         let order_id = scanned_batch.order_id.trim().to_string();
-        let order = self.raw_map(&order_id).await?;
-        let mut progress_batches = self.store.progress_batches_for_order(&order_id).await?;
+        let (
+            order,
+            mut progress_batches,
+            all_queue_states,
+            mut logs_by_order,
+            corrections,
+            run_sessions,
+        ) = tokio::try_join!(
+            self.raw_map(&order_id),
+            self.store.progress_batches_for_order(&order_id),
+            self.store.apparatus_queue_states(),
+            self.store
+                .queue_action_logs_for_orders(std::slice::from_ref(&order_id)),
+            self.store
+                .progress_batch_corrections_for_order(&order_id),
+            self.store.order_run_sessions_for_order(&order_id),
+        )?;
         normalize_self_consumed_wip_history(&mut progress_batches);
         for batch in &mut progress_batches {
             batch.refresh_status_detail();
@@ -37,24 +52,14 @@ impl ProductionMapService {
         } else {
             "superseded_by_new_qr".to_string()
         };
-        let queue_states =
-            queue_states_for_order(&self.store.apparatus_queue_states().await?, &order_id);
-        let mut logs_by_order = self
-            .store
-            .queue_action_logs_for_orders(std::slice::from_ref(&order_id))
-            .await?;
+        let queue_states = queue_states_for_order(&all_queue_states, &order_id);
         let logs = logs_by_order.remove(&order_id).unwrap_or_default();
-        let corrections = self
-            .store
-            .progress_batch_corrections_for_order(&order_id)
-            .await?;
         let opened_by = logs.first().map(|entry| ProductionQrOpenedBy {
             actor_role: entry.actor_role.clone(),
             actor_ref: entry.actor_ref.clone(),
             actor_display_name: entry.actor_display_name.clone(),
             opened_at_unix: entry.created_at_unix,
         });
-        let run_sessions = self.store.order_run_sessions_for_order(&order_id).await?;
         let active_sessions = run_sessions
             .iter()
             .filter(|session| {
@@ -177,19 +182,30 @@ impl ProductionMapService {
             store_query.next_apparatus.clear();
             store_query.limit = 500;
         }
-        let mut batches = self.store.wip_progress_batches(store_query).await?;
+        let load_maps = !requested_next_apparatus.is_empty();
+        let load_order_controls = !include_processed;
+        let (mut batches, loaded_maps, order_controls) = tokio::try_join!(
+            self.store.wip_progress_batches(store_query),
+            async {
+                if load_maps {
+                    self.store.maps().await
+                } else {
+                    Ok(Vec::new())
+                }
+            },
+            async {
+                if load_order_controls {
+                    self.store.order_control_states().await
+                } else {
+                    Ok(BTreeMap::new())
+                }
+            },
+        )?;
         normalize_self_consumed_wip_history(&mut batches);
-        let mut maps_by_id = None;
+        let mut maps_by_id = maps_by_order_id(loaded_maps);
         if !requested_next_apparatus.is_empty() {
-            let loaded_maps = self
-                .store
-                .maps()
-                .await?
-                .into_iter()
-                .map(|map| (map.id.trim().to_string(), map))
-                .collect::<BTreeMap<_, _>>();
             batches.retain(|batch| {
-                loaded_maps
+                maps_by_id
                     .get(batch.order_id.trim())
                     .is_some_and(|map| {
                         chain::stage_ids_match_for_map(
@@ -199,7 +215,6 @@ impl ProductionMapService {
                         )
                     })
             });
-            maps_by_id = Some(loaded_maps);
         }
         if !include_processed {
             batches.retain(|batch| {
@@ -208,7 +223,6 @@ impl ProductionMapService {
                     |status| batch.wip_status == status,
                 )
             });
-            let order_controls = self.store.order_control_states().await?;
             batches.retain(|batch| {
                 order_controls
                     .get(batch.order_id.trim())
@@ -216,20 +230,10 @@ impl ProductionMapService {
             });
         }
         if batches.iter().any(progress_batch_needs_location_repair) {
-            if maps_by_id.is_none() {
-                maps_by_id = Some(
-                    self.store
-                        .maps()
-                        .await?
-                        .into_iter()
-                        .map(|map| (map.id.trim().to_string(), map))
-                        .collect::<BTreeMap<_, _>>(),
-                );
+            if !load_maps {
+                maps_by_id = maps_by_order_id(self.store.maps().await?);
             }
-            repair_wip_progress_batch_locations(
-                &mut batches,
-                maps_by_id.as_ref().expect("maps loaded above"),
-            );
+            repair_wip_progress_batch_locations(&mut batches, &maps_by_id);
         }
         for batch in &mut batches {
             batch.refresh_status_detail();
@@ -237,4 +241,12 @@ impl ProductionMapService {
         batches.truncate(requested_limit.min(500));
         Ok(batches)
     }
+}
+
+fn maps_by_order_id(
+    maps: Vec<ProductionMapDefinition>,
+) -> BTreeMap<String, ProductionMapDefinition> {
+    maps.into_iter()
+        .map(|map| (map.id.trim().to_string(), map))
+        .collect()
 }
