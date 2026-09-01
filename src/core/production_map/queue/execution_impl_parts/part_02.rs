@@ -16,70 +16,73 @@ impl ProductionMapService {
         );
         let progress_batches = progress_batches?;
         let opening_wip_records = opening_wip_records?;
-        let mut input_progress_batch = if !progress.progress_batch_id.trim().is_empty() {
+        let has_bulk_progress_batch = if !progress.progress_batch_id.trim().is_empty() {
             progress_batches
                 .iter()
-                .find(|batch| batch.batch_id.trim() == progress.progress_batch_id.trim())
-                .cloned()
+                .any(|batch| batch.batch_id.trim() == progress.progress_batch_id.trim())
         } else if !progress.qr_payload.trim().is_empty() {
             progress_batches
                 .iter()
-                .find(|batch| {
+                .any(|batch| {
                     batch
                         .qr_payload
                         .trim()
                         .eq_ignore_ascii_case(progress.qr_payload.trim())
                 })
-                .cloned()
+        } else {
+            false
+        };
+        let input_progress_batch = if has_bulk_progress_batch {
+            None
+        } else if !progress.progress_batch_id.trim().is_empty() {
+            self
+                .store
+                .progress_batch(progress.progress_batch_id.trim())
+                .await?
+        } else if !progress.qr_payload.trim().is_empty() {
+            self
+                .store
+                .progress_batch_by_qr(progress.qr_payload.trim())
+                .await?
         } else {
             None
         };
-        if input_progress_batch.is_none() && !progress.progress_batch_id.trim().is_empty() {
-            input_progress_batch = self
-                .store
-                .progress_batch(progress.progress_batch_id.trim())
-                .await?;
-        } else if input_progress_batch.is_none() && !progress.qr_payload.trim().is_empty() {
-            input_progress_batch = self
-                .store
-                .progress_batch_by_qr(progress.qr_payload.trim())
-                .await?;
-        }
-        let mut input_opening_wip_batch = if !progress.progress_batch_id.trim().is_empty()
+        let has_progress_input = has_bulk_progress_batch || input_progress_batch.is_some();
+        let has_bulk_opening_wip_batch = if !progress.progress_batch_id.trim().is_empty()
             || !progress.qr_payload.trim().is_empty()
         {
             opening_wip_records
                 .iter()
-                .find_map(|record| {
-                    record.batches.iter().find(|batch| {
+                .any(|record| {
+                    record.batches.iter().any(|batch| {
                         (!progress.progress_batch_id.trim().is_empty()
                             && batch.batch_id.trim() == progress.progress_batch_id.trim())
                             || (!progress.qr_payload.trim().is_empty()
                                 && batch.qr_payload.trim() == progress.qr_payload.trim())
-                    }).map(|batch| OpeningWipBatchRecord {
-                        intake: record.intake.clone(),
-                        batch: batch.clone(),
                     })
                 })
         } else {
-            None
+            false
         };
         let session_uses_opening_wip = active_session
             .as_ref()
             .is_some_and(|session| session_progress_links(session).source_kind == "opening_wip");
-        if input_opening_wip_batch.is_none()
-            && (session_uses_opening_wip || input_progress_batch.is_none())
+        let input_opening_wip_batch = if has_bulk_opening_wip_batch {
+            None
+        } else if (session_uses_opening_wip || !has_progress_input)
             && (!progress.progress_batch_id.trim().is_empty()
                 || !progress.qr_payload.trim().is_empty())
         {
-            input_opening_wip_batch = self
+            self
                 .store
                 .opening_wip_batch(
                     progress.progress_batch_id.trim(),
                     progress.qr_payload.trim(),
                 )
-                .await?;
-        }
+                .await?
+        } else {
+            None
+        };
         Ok(ProgressBuildReadSnapshot {
             active_session,
             progress_batches,
@@ -97,14 +100,30 @@ impl ProductionMapService {
             return progress.progress_batch_id.trim().to_string();
         }
         if !progress.qr_payload.trim().is_empty() {
-            if let Some(batch) = snapshot.input_progress_batch.as_ref() {
+            if let Some(batch) = snapshot
+                .progress_batches
+                .iter()
+                .find(|batch| {
+                    batch
+                        .qr_payload
+                        .trim()
+                        .eq_ignore_ascii_case(progress.qr_payload.trim())
+                })
+                .or_else(|| {
+                    snapshot.input_progress_batch.as_ref().filter(|batch| {
+                        batch
+                            .qr_payload
+                            .trim()
+                            .eq_ignore_ascii_case(progress.qr_payload.trim())
+                    })
+                })
+            {
                 return batch.batch_id.clone();
             }
             return snapshot
-                .input_opening_wip_batch
-                .as_ref()
-                .map(|record| record.batch.batch_id.clone())
-                .unwrap_or_default();
+                .opening_wip_batch_id("", progress.qr_payload.trim())
+                .unwrap_or_default()
+                .to_string();
         }
         snapshot
             .active_session

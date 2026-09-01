@@ -23,7 +23,7 @@ pub(super) struct ProgressBuildReadSnapshot {
 }
 
 impl ProgressBuildReadSnapshot {
-    pub(super) fn progress_batch(&self, batch_id: &str) -> Option<OrderProgressBatch> {
+    fn progress_batch_ref(&self, batch_id: &str) -> Option<&OrderProgressBatch> {
         let batch_id = batch_id.trim();
         if batch_id.is_empty() {
             return None;
@@ -31,13 +31,38 @@ impl ProgressBuildReadSnapshot {
         self.progress_batches
             .iter()
             .find(|batch| batch.batch_id.trim() == batch_id)
-            .cloned()
             .or_else(|| {
                 self.input_progress_batch
                     .as_ref()
                     .filter(|batch| batch.batch_id.trim() == batch_id)
-                    .cloned()
             })
+    }
+
+    fn progress_batch_for_input(
+        &self,
+        progress_batch_id: &str,
+        qr_payload: &str,
+    ) -> Option<&OrderProgressBatch> {
+        let progress_batch_id = progress_batch_id.trim();
+        let qr_payload = qr_payload.trim();
+        if !progress_batch_id.is_empty() {
+            self.progress_batch_ref(progress_batch_id)
+        } else if !qr_payload.is_empty() {
+            self.progress_batches
+                .iter()
+                .find(|batch| batch.qr_payload.trim().eq_ignore_ascii_case(qr_payload))
+                .or_else(|| {
+                    self.input_progress_batch.as_ref().filter(|batch| {
+                        batch.qr_payload.trim().eq_ignore_ascii_case(qr_payload)
+                    })
+                })
+        } else {
+            None
+        }
+    }
+
+    pub(super) fn progress_batch(&self, batch_id: &str) -> Option<OrderProgressBatch> {
+        self.progress_batch_ref(batch_id).cloned()
     }
 
     pub(super) fn progress_batch_for_qr(
@@ -47,21 +72,8 @@ impl ProgressBuildReadSnapshot {
     ) -> Result<Option<OrderProgressBatch>, ProductionMapError> {
         let progress_batch_id = progress_batch_id.trim();
         let qr_payload = qr_payload.trim();
-        let batch = if !progress_batch_id.is_empty() {
-            self.progress_batch(progress_batch_id)
-        } else if !qr_payload.is_empty() {
-            self.progress_batches
-                .iter()
-                .find(|batch| batch.qr_payload.trim().eq_ignore_ascii_case(qr_payload))
-                .cloned()
-                .or_else(|| {
-                    self.input_progress_batch
-                        .as_ref()
-                        .filter(|batch| {
-                            batch.qr_payload.trim().eq_ignore_ascii_case(qr_payload)
-                        })
-                        .cloned()
-                })
+        let batch = if !progress_batch_id.is_empty() || !qr_payload.is_empty() {
+            self.progress_batch_for_input(progress_batch_id, qr_payload)
         } else {
             return Err(ProductionMapError::ProgressInputInvalid);
         };
@@ -71,17 +83,17 @@ impl ProgressBuildReadSnapshot {
             {
                 return Err(ProductionMapError::ProgressBatchNotFound);
             }
-            Ok(Some(batch))
+            Ok(Some(batch.clone()))
         } else {
             Ok(None)
         }
     }
 
-    pub(super) fn opening_wip_batch(
+    fn opening_wip_batch_ref(
         &self,
         batch_id: &str,
         qr_payload: &str,
-    ) -> Option<OpeningWipBatchRecord> {
+    ) -> Option<(&OpeningWipIntake, &OpeningWipBatch)> {
         let batch_id = batch_id.trim();
         let qr_payload = qr_payload.trim();
         self.opening_wip_records
@@ -91,10 +103,7 @@ impl ProgressBuildReadSnapshot {
                     (!batch_id.is_empty() && batch.batch_id.trim() == batch_id)
                         || (!qr_payload.is_empty()
                             && batch.qr_payload.trim() == qr_payload)
-                }).map(|batch| OpeningWipBatchRecord {
-                    intake: record.intake.clone(),
-                    batch: batch.clone(),
-                })
+                }).map(|batch| (&record.intake, batch))
             })
             .or_else(|| {
                 self.input_opening_wip_batch
@@ -104,7 +113,24 @@ impl ProgressBuildReadSnapshot {
                             || (!qr_payload.is_empty()
                                 && record.batch.qr_payload.trim() == qr_payload)
                     })
-                    .cloned()
+                    .map(|record| (&record.intake, &record.batch))
+            })
+    }
+
+    pub(super) fn opening_wip_batch_id(&self, batch_id: &str, qr_payload: &str) -> Option<&str> {
+        self.opening_wip_batch_ref(batch_id, qr_payload)
+            .map(|(_, batch)| batch.batch_id.as_str())
+    }
+
+    pub(super) fn opening_wip_batch(
+        &self,
+        batch_id: &str,
+        qr_payload: &str,
+    ) -> Option<OpeningWipBatchRecord> {
+        self.opening_wip_batch_ref(batch_id, qr_payload)
+            .map(|(intake, batch)| OpeningWipBatchRecord {
+                intake: intake.clone(),
+                batch: batch.clone(),
             })
     }
 }
