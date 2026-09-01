@@ -360,7 +360,6 @@ impl ProductionMapService {
                 order_id,
                 action,
                 actor,
-                now,
             },
             next_links.batch_id.clone(),
             next_links.qr_payload.clone(),

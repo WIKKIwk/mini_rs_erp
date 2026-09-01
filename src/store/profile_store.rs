@@ -107,7 +107,7 @@ impl<'a> BytesEncode<'a> for ProfilePrefsCodec {
     type EItem = ProfilePrefs;
 
     fn bytes_encode(item: &'a Self::EItem) -> Result<Cow<'a, [u8]>, BoxedError> {
-        let payload = bincode::serialize(&StoredProfilePrefs::from_prefs(item))?;
+        let payload = bincode::serialize(&StoredProfilePrefsRef::from_prefs(item))?;
         let mut bytes = Vec::with_capacity(PROFILE_PREFS_MAGIC.len() + payload.len());
         bytes.extend_from_slice(PROFILE_PREFS_MAGIC);
         bytes.extend_from_slice(&payload);
@@ -127,6 +127,23 @@ impl<'a> BytesDecode<'a> for ProfilePrefsCodec {
     }
 }
 
+#[derive(Serialize)]
+struct StoredProfilePrefsRef<'a> {
+    nickname: &'a str,
+    avatar_url: &'a str,
+    avatar_object_key: &'a str,
+}
+
+impl<'a> StoredProfilePrefsRef<'a> {
+    fn from_prefs(prefs: &'a ProfilePrefs) -> Self {
+        Self {
+            nickname: &prefs.nickname,
+            avatar_url: &prefs.avatar_url,
+            avatar_object_key: &prefs.avatar_object_key,
+        }
+    }
+}
+
 #[derive(Serialize, Deserialize)]
 struct StoredProfilePrefs {
     nickname: String,
@@ -136,14 +153,6 @@ struct StoredProfilePrefs {
 }
 
 impl StoredProfilePrefs {
-    fn from_prefs(prefs: &ProfilePrefs) -> Self {
-        Self {
-            nickname: prefs.nickname.clone(),
-            avatar_url: prefs.avatar_url.clone(),
-            avatar_object_key: prefs.avatar_object_key.clone(),
-        }
-    }
-
     fn into_prefs(self) -> ProfilePrefs {
         ProfilePrefs {
             nickname: self.nickname,

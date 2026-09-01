@@ -9,6 +9,7 @@ pub(super) async fn write_runtime_projection(
     tx: &mut Transaction<'_, Postgres>,
     revision: &CanonicalApparatusRevision,
     runtime: &RuntimeApparatusProjection,
+    source_aasx_sha256: &str,
 ) -> Result<(), CanonicalApparatusError> {
     let payload =
         serde_json::to_value(runtime).map_err(|_| CanonicalApparatusError::Persistence)?;
@@ -54,7 +55,7 @@ pub(super) async fn write_runtime_projection(
     .bind(&runtime.display.display_name)
     .bind(payload)
     .bind(source_revision)
-    .bind(runtime.source_aasx_sha256.to_hex())
+    .bind(source_aasx_sha256)
     .bind(i32::try_from(revision.schema_version).map_err(|_| CanonicalApparatusError::Persistence)?)
     .bind(runtime.physical_asset_id.as_str())
     .bind(runtime.equipment_class_id.as_str())
@@ -63,7 +64,7 @@ pub(super) async fn write_runtime_projection(
     .bind(execution)
     .bind(policies)
     .bind(capacity)
-    .bind(enum_name(&runtime.lifecycle.state)?)
+    .bind(runtime.lifecycle.state.as_str())
     .execute(&mut **tx)
     .await
     .map_err(|_| CanonicalApparatusError::Persistence)?;
@@ -74,15 +75,17 @@ pub(super) async fn write_derived_projections(
     tx: &mut Transaction<'_, Postgres>,
     _revision: &CanonicalApparatusRevision,
     projections: &ApparatusProjectionSet,
+    source_aasx_sha256: &str,
 ) -> Result<(), CanonicalApparatusError> {
-    write_queue(tx, projections).await?;
-    write_material(tx, projections).await?;
-    write_capacity(tx, projections).await
+    write_queue(tx, projections, source_aasx_sha256).await?;
+    write_material(tx, projections, source_aasx_sha256).await?;
+    write_capacity(tx, projections, source_aasx_sha256).await
 }
 
 async fn write_queue(
     tx: &mut Transaction<'_, Postgres>,
     projections: &ApparatusProjectionSet,
+    source_aasx_sha256: &str,
 ) -> Result<(), CanonicalApparatusError> {
     let queue = &projections.queue;
     let payload = serde_json::to_value(queue).map_err(|_| CanonicalApparatusError::Persistence)?;
@@ -100,7 +103,7 @@ async fn write_queue(
     .bind(queue.apparatus_id.as_str())
     .bind(payload)
     .bind(to_i64(queue.source_revision)?)
-    .bind(queue.source_aasx_sha256.to_hex())
+    .bind(source_aasx_sha256)
     .execute(&mut **tx)
     .await
     .map_err(|_| CanonicalApparatusError::Persistence)?;
@@ -110,6 +113,7 @@ async fn write_queue(
 async fn write_material(
     tx: &mut Transaction<'_, Postgres>,
     projections: &ApparatusProjectionSet,
+    source_aasx_sha256: &str,
 ) -> Result<(), CanonicalApparatusError> {
     let material = &projections.material;
     let payload =
@@ -128,7 +132,7 @@ async fn write_material(
     .bind(material.apparatus_id.as_str())
     .bind(payload)
     .bind(to_i64(material.source_revision)?)
-    .bind(material.source_aasx_sha256.to_hex())
+    .bind(source_aasx_sha256)
     .execute(&mut **tx)
     .await
     .map_err(|_| CanonicalApparatusError::Persistence)?;
@@ -138,6 +142,7 @@ async fn write_material(
 async fn write_capacity(
     tx: &mut Transaction<'_, Postgres>,
     projections: &ApparatusProjectionSet,
+    source_aasx_sha256: &str,
 ) -> Result<(), CanonicalApparatusError> {
     let capacity = &projections.capacity;
     sqlx::query(
@@ -154,18 +159,11 @@ async fn write_capacity(
     .bind(capacity.apparatus_id.as_str())
     .bind(serde_json::to_value(capacity).map_err(|_| CanonicalApparatusError::Persistence)?)
     .bind(to_i64(capacity.source_revision)?)
-    .bind(capacity.source_aasx_sha256.to_hex())
+    .bind(source_aasx_sha256)
     .execute(&mut **tx)
     .await
     .map_err(|_| CanonicalApparatusError::Persistence)?;
     Ok(())
-}
-
-fn enum_name<T: serde::Serialize>(value: &T) -> Result<String, CanonicalApparatusError> {
-    serde_json::to_value(value)
-        .ok()
-        .and_then(|value| value.as_str().map(str::to_string))
-        .ok_or(CanonicalApparatusError::Persistence)
 }
 
 fn to_i64(value: u64) -> Result<i64, CanonicalApparatusError> {

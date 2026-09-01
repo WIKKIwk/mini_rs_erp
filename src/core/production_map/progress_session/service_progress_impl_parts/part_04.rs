@@ -46,7 +46,6 @@ impl ProductionMapService {
             order_id,
             action: queue_state::ApparatusQueueAction::Freeze,
             actor,
-            now,
         };
         let mut progress_event = zero_quantity_event(
             context,
@@ -159,9 +158,9 @@ impl ProductionMapService {
             return Err(ProductionMapError::ProgressBatchNotAccepted);
         }
         let metrics = if remove_roll {
-            validated_laminatsiya_removed_roll_metrics(apparatus, canonical, &progress)?
+            validated_laminatsiya_removed_roll_metrics(canonical, &progress)?
         } else {
-            validated_laminatsiya_worker_handoff_metrics(apparatus, canonical, &progress)?
+            validated_laminatsiya_worker_handoff_metrics(canonical, &progress)?
         };
         let description = progress.description.trim().to_string();
         let updated_input_batch = if remove_roll {
@@ -206,7 +205,6 @@ impl ProductionMapService {
             order_id,
             action,
             actor,
-            now,
         };
         let event = progress_metrics_event(
             context,
@@ -279,9 +277,9 @@ impl ProductionMapService {
             return Err(ProductionMapError::ProgressBatchNotAccepted);
         }
         let metrics = if remove_roll {
-            validated_laminatsiya_removed_roll_metrics(apparatus, canonical, &progress)?
+            validated_laminatsiya_removed_roll_metrics(canonical, &progress)?
         } else {
-            validated_laminatsiya_worker_handoff_metrics(apparatus, canonical, &progress)?
+            validated_laminatsiya_worker_handoff_metrics(canonical, &progress)?
         };
         let description = progress.description.trim().to_string();
         let session_payload = if remove_roll {
@@ -308,7 +306,6 @@ impl ProductionMapService {
             order_id,
             action,
             actor,
-            now,
         };
         let event = progress_metrics_event(
             context,

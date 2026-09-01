@@ -17,11 +17,15 @@ impl InventoryAssetKind {
     }
 
     pub fn parse(raw: &str) -> Result<Self, InventoryMovementError> {
-        match raw.trim().to_ascii_lowercase().as_str() {
-            "raw_material" => Ok(Self::RawMaterial),
-            "finished_goods" => Ok(Self::FinishedGoods),
-            "qolip" => Ok(Self::Qolip),
-            _ => Err(InventoryMovementError::InvalidAssetKind),
+        let raw = raw.trim();
+        if raw.eq_ignore_ascii_case("raw_material") {
+            Ok(Self::RawMaterial)
+        } else if raw.eq_ignore_ascii_case("finished_goods") {
+            Ok(Self::FinishedGoods)
+        } else if raw.eq_ignore_ascii_case("qolip") {
+            Ok(Self::Qolip)
+        } else {
+            Err(InventoryMovementError::InvalidAssetKind)
         }
     }
 }
@@ -36,11 +40,15 @@ pub enum InventoryLocationKind {
 
 impl InventoryLocationKind {
     pub fn parse(raw: &str) -> Result<Self, InventoryMovementError> {
-        match raw.trim().to_ascii_lowercase().as_str() {
-            "warehouse" => Ok(Self::Warehouse),
-            "state" => Ok(Self::State),
-            "transit" => Ok(Self::Transit),
-            _ => Err(InventoryMovementError::InvalidLocation),
+        let raw = raw.trim();
+        if raw.eq_ignore_ascii_case("warehouse") {
+            Ok(Self::Warehouse)
+        } else if raw.eq_ignore_ascii_case("state") {
+            Ok(Self::State)
+        } else if raw.eq_ignore_ascii_case("transit") {
+            Ok(Self::Transit)
+        } else {
+            Err(InventoryMovementError::InvalidLocation)
         }
     }
 }
@@ -69,14 +77,21 @@ impl InventoryTransferStatus {
     }
 
     pub fn parse(raw: &str) -> Result<Self, InventoryMovementError> {
-        match raw.trim().to_ascii_lowercase().as_str() {
-            "requested" => Ok(Self::Requested),
-            "approved" => Ok(Self::Approved),
-            "in_transit" => Ok(Self::InTransit),
-            "received" => Ok(Self::Received),
-            "rejected" => Ok(Self::Rejected),
-            "cancelled" => Ok(Self::Cancelled),
-            _ => Err(InventoryMovementError::InvalidTransferStatus),
+        let raw = raw.trim();
+        if raw.eq_ignore_ascii_case("requested") {
+            Ok(Self::Requested)
+        } else if raw.eq_ignore_ascii_case("approved") {
+            Ok(Self::Approved)
+        } else if raw.eq_ignore_ascii_case("in_transit") {
+            Ok(Self::InTransit)
+        } else if raw.eq_ignore_ascii_case("received") {
+            Ok(Self::Received)
+        } else if raw.eq_ignore_ascii_case("rejected") {
+            Ok(Self::Rejected)
+        } else if raw.eq_ignore_ascii_case("cancelled") {
+            Ok(Self::Cancelled)
+        } else {
+            Err(InventoryMovementError::InvalidTransferStatus)
         }
     }
 

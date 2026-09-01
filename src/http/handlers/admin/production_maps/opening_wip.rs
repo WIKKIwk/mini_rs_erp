@@ -196,7 +196,6 @@ pub async fn production_map_opening_wip_print(
         tare_kg: details.batch.bobina_kg.unwrap_or(0.0),
         label_kind: "progress".to_string(),
         print_count: input.print_count.max(1),
-        ..ProgressLabelPrintRequest::default()
     };
     let result = if input.print_transport.trim().eq_ignore_ascii_case("offline") {
         state.gscale.prepare_progress_label(print_request)

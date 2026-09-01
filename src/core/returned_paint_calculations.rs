@@ -10,33 +10,56 @@ pub fn returned_paint_value_count(items: &[ReturnedPaintItem]) -> usize {
 }
 
 pub fn returned_paint_value_count_for_usage(items: &[ReturnedPaintItem], usage: &str) -> usize {
+    let usage = usage.trim();
     items
         .iter()
-        .filter(|item| item.usage.trim().eq_ignore_ascii_case(usage.trim()))
+        .filter(|item| item.usage.trim().eq_ignore_ascii_case(usage))
         .map(|item| item.values.len())
         .sum()
 }
 
 pub fn returned_paint_has_minimum_values_per_usage(items: &[ReturnedPaintItem]) -> bool {
-    returned_paint_value_count_for_usage(items, "rasxot") >= 3
-        && returned_paint_value_count_for_usage(items, "astatka") >= 3
+    let mut rasxot = 0;
+    let mut astatka = 0;
+    for item in items {
+        let count = item.values.len();
+        if item.usage.trim().eq_ignore_ascii_case("rasxot") {
+            rasxot += count;
+        } else if item.usage.trim().eq_ignore_ascii_case("astatka") {
+            astatka += count;
+        }
+        if rasxot >= 3 && astatka >= 3 {
+            return true;
+        }
+    }
+    false
 }
 
 pub fn returned_paint_report_can_close(items: &[ReturnedPaintItem], has_image: bool) -> bool {
-    returned_paint_has_minimum_values_per_usage(items)
-        || (returned_paint_value_count(items) == 0 && has_image)
+    let mut total = 0;
+    let mut rasxot = 0;
+    let mut astatka = 0;
+    for item in items {
+        let count = item.values.len();
+        total += count;
+        if item.usage.trim().eq_ignore_ascii_case("rasxot") {
+            rasxot += count;
+        } else if item.usage.trim().eq_ignore_ascii_case("astatka") {
+            astatka += count;
+        }
+    }
+    (rasxot >= 3 && astatka >= 3) || (total == 0 && has_image)
 }
 
 pub fn completion_report_message(request: &ReturnedPaintRequest) -> String {
-    let order_label = [request.order_code.trim(), request.order_name.trim()]
-        .into_iter()
-        .filter(|value| !value.is_empty())
-        .collect::<Vec<_>>()
-        .join(" · ");
-    let order_label = if order_label.is_empty() {
-        request.order_id.trim().to_string()
-    } else {
-        format!("{} ({})", order_label, request.order_id.trim())
+    let order_code = request.order_code.trim();
+    let order_name = request.order_name.trim();
+    let order_id = request.order_id.trim();
+    let order_label = match (order_code.is_empty(), order_name.is_empty()) {
+        (true, true) => order_id.to_string(),
+        (false, true) => format!("{order_code} ({order_id})"),
+        (true, false) => format!("{order_name} ({order_id})"),
+        (false, false) => format!("{order_code} · {order_name} ({order_id})"),
     };
     match request.status {
         ReturnedPaintStatus::WaitingForBoyoqchiInput => format!(
@@ -73,24 +96,26 @@ pub fn calculate_returned_paint(
     let mut rasxot = PaintUsageTotals::default();
     let mut astatka = PaintUsageTotals::default();
 
-    for item in items.iter().filter(|item| {
-        item.category.trim().eq_ignore_ascii_case("colors")
-            || item.category.trim().eq_ignore_ascii_case("solvents")
-    }) {
-        let totals = if item.usage.trim().eq_ignore_ascii_case("rasxot") {
+    for item in items {
+        let category = item.category.trim();
+        let is_solvent = category.eq_ignore_ascii_case("solvents");
+        if !is_solvent && !category.eq_ignore_ascii_case("colors") {
+            continue;
+        }
+        let usage = item.usage.trim();
+        let totals = if usage.eq_ignore_ascii_case("rasxot") {
             &mut rasxot
-        } else if item.usage.trim().eq_ignore_ascii_case("astatka") {
+        } else if usage.eq_ignore_ascii_case("astatka") {
             &mut astatka
         } else {
             return Err(ReturnedPaintError::InvalidUsage);
         };
+        let is_mix = item.name.trim().eq_ignore_ascii_case("mix");
         for (label, value) in &item.values {
             let value = DecimalAmount::parse_input(value)?;
-            if item.category.trim().eq_ignore_ascii_case("solvents") {
+            if is_solvent {
                 totals.direct_alcohol = checked_add(totals.direct_alcohol, value)?;
-            } else if item.name.trim().eq_ignore_ascii_case("mix")
-                || label.trim().eq_ignore_ascii_case("mix")
-            {
+            } else if is_mix || label.trim().eq_ignore_ascii_case("mix") {
                 totals.mix = checked_add(totals.mix, value)?;
             } else {
                 totals.direct_paint = checked_add(totals.direct_paint, value)?;
@@ -186,25 +211,42 @@ impl DecimalAmount {
         if integer.len() + fraction.len() > MAX_SIGNIFICAND_DIGITS {
             return Err(ReturnedPaintError::InvalidValue);
         }
-        let mut digits = format!("{integer}{fraction}");
         let mut fraction_digits = i64::try_from(fraction.len())
             .ok()
             .and_then(|length| length.checked_sub(i64::from(exponent)))
             .ok_or(ReturnedPaintError::InvalidValue)?;
-        while fraction_digits > 0 && digits.ends_with('0') {
-            digits.pop();
-            fraction_digits -= 1;
+        let trailing_zero_count = integer
+            .bytes()
+            .chain(fraction.bytes())
+            .rev()
+            .take_while(|byte| *byte == b'0')
+            .count();
+        let removable_zeros = if fraction_digits > 0 {
+            trailing_zero_count.min(usize::try_from(fraction_digits).unwrap_or(usize::MAX))
+        } else {
+            0
+        };
+        fraction_digits -=
+            i64::try_from(removable_zeros).map_err(|_| ReturnedPaintError::InvalidValue)?;
+        let significant_len = integer.len() + fraction.len() - removable_zeros;
+        let mut significand = 0_i128;
+        let mut has_nonzero_digit = false;
+        for byte in integer.bytes().chain(fraction.bytes()).take(significant_len) {
+            if !has_nonzero_digit && byte == b'0' {
+                continue;
+            }
+            has_nonzero_digit = true;
+            significand = significand
+                .checked_mul(10)
+                .and_then(|value| value.checked_add(i128::from(byte - b'0')))
+                .ok_or(ReturnedPaintError::InvalidValue)?;
         }
-        let digits = digits.trim_start_matches('0');
-        if digits.is_empty() {
+        if !has_nonzero_digit {
             return Ok(Self::ZERO);
         }
         if fraction_digits > max_fraction_digits as i64 {
             return Err(ReturnedPaintError::InvalidValue);
         }
-        let significand = digits
-            .parse::<i128>()
-            .map_err(|_| ReturnedPaintError::InvalidValue)?;
         let units = if fraction_digits >= 0 {
             let scale_power = i64::try_from(Self::SCALE_DIGITS)
                 .ok()
@@ -235,6 +277,12 @@ impl DecimalAmount {
         let amount = Self(units);
         validate_storable_decimal(amount)?;
         Ok(amount)
+    }
+
+    fn reuse_string(self, mut value: String) -> String {
+        value.clear();
+        write!(&mut value, "{self}").expect("writing to String cannot fail");
+        value
     }
 
     fn checked_percent(self, percent: i128) -> Result<Self, ReturnedPaintError> {
@@ -268,10 +316,8 @@ impl fmt::Display for DecimalAmount {
         if fraction == 0 {
             return write!(formatter, "{integer}");
         }
-        let fraction = format!("{fraction:0width$}", width = Self::SCALE_DIGITS)
-            .trim_end_matches('0')
-            .to_string();
-        write!(formatter, "{integer}.{fraction}")
+        let fraction = format!("{fraction:0width$}", width = Self::SCALE_DIGITS);
+        write!(formatter, "{integer}.{}", fraction.trim_end_matches('0'))
     }
 }
 
@@ -314,11 +360,11 @@ pub(crate) fn normalize_returned_paint_stored_decimal(
 }
 
 fn required_text(value: String, error: ReturnedPaintError) -> Result<String, ReturnedPaintError> {
-    let value = value.trim();
+    let value = trim_owned(value);
     if value.is_empty() {
         Err(error)
     } else {
-        Ok(value.to_string())
+        Ok(value)
     }
 }
 
@@ -331,40 +377,42 @@ fn normalize_items(
     items
         .into_iter()
         .map(|item| {
-            let usage = match item.usage.trim().to_ascii_lowercase().as_str() {
-                "rasxot" => "rasxot",
-                "astatka" => "astatka",
-                _ => return Err(ReturnedPaintError::InvalidUsage),
-            };
-            let category = match item.category.trim().to_ascii_lowercase().as_str() {
-                "colors" => "colors",
-                "lacquers" => "lacquers",
-                "solvents" => "solvents",
-                _ => return Err(ReturnedPaintError::InvalidCategory),
-            };
-            let name = item.name.trim();
+            let ReturnedPaintItem {
+                usage,
+                category,
+                name,
+                values,
+            } = item;
+            let usage = lowercase_ascii_owned(usage);
+            if !matches!(usage.as_str(), "rasxot" | "astatka") {
+                return Err(ReturnedPaintError::InvalidUsage);
+            }
+            let category = lowercase_ascii_owned(category);
+            if !matches!(category.as_str(), "colors" | "lacquers" | "solvents") {
+                return Err(ReturnedPaintError::InvalidCategory);
+            }
+            let name = trim_owned(name);
             if name.is_empty() {
                 return Err(ReturnedPaintError::MissingItemName);
             }
-            let values = item
-                .values
+            let values = values
                 .into_iter()
                 .map(|(label, value)| {
-                    let label = label.trim();
+                    let label = trim_owned(label);
                     if label.is_empty() {
                         return Err(ReturnedPaintError::InvalidValue);
                     }
-                    let value = DecimalAmount::parse_input(&value)?;
-                    Ok((label.to_string(), value.to_string()))
+                    let amount = DecimalAmount::parse_input(&value)?;
+                    Ok((label, amount.reuse_string(value)))
                 })
                 .collect::<Result<BTreeMap<_, _>, _>>()?;
             if values.is_empty() {
                 return Err(ReturnedPaintError::MissingValues);
             }
             Ok(ReturnedPaintItem {
-                usage: usage.to_string(),
-                category: category.to_string(),
-                name: name.to_string(),
+                usage,
+                category,
+                name,
                 values,
             })
         })

@@ -39,11 +39,11 @@ impl ProductionMapService {
         };
         let queue_states =
             queue_states_for_order(&self.store.apparatus_queue_states().await?, &order_id);
-        let logs_by_order = self
+        let mut logs_by_order = self
             .store
             .queue_action_logs_for_orders(std::slice::from_ref(&order_id))
             .await?;
-        let logs = logs_by_order.get(&order_id).cloned().unwrap_or_default();
+        let logs = logs_by_order.remove(&order_id).unwrap_or_default();
         let corrections = self
             .store
             .progress_batch_corrections_for_order(&order_id)
@@ -179,8 +179,9 @@ impl ProductionMapService {
         }
         let mut batches = self.store.wip_progress_batches(store_query).await?;
         normalize_self_consumed_wip_history(&mut batches);
+        let mut maps_by_id = None;
         if !requested_next_apparatus.is_empty() {
-            let maps_by_id = self
+            let loaded_maps = self
                 .store
                 .maps()
                 .await?
@@ -188,7 +189,7 @@ impl ProductionMapService {
                 .map(|map| (map.id.trim().to_string(), map))
                 .collect::<BTreeMap<_, _>>();
             batches.retain(|batch| {
-                maps_by_id
+                loaded_maps
                     .get(batch.order_id.trim())
                     .is_some_and(|map| {
                         chain::stage_ids_match_for_map(
@@ -198,6 +199,7 @@ impl ProductionMapService {
                         )
                     })
             });
+            maps_by_id = Some(loaded_maps);
         }
         if !include_processed {
             batches.retain(|batch| {
@@ -214,14 +216,20 @@ impl ProductionMapService {
             });
         }
         if batches.iter().any(progress_batch_needs_location_repair) {
-            let maps_by_id = self
-                .store
-                .maps()
-                .await?
-                .into_iter()
-                .map(|map| (map.id.trim().to_string(), map))
-                .collect::<BTreeMap<_, _>>();
-            repair_wip_progress_batch_locations(&mut batches, &maps_by_id);
+            if maps_by_id.is_none() {
+                maps_by_id = Some(
+                    self.store
+                        .maps()
+                        .await?
+                        .into_iter()
+                        .map(|map| (map.id.trim().to_string(), map))
+                        .collect::<BTreeMap<_, _>>(),
+                );
+            }
+            repair_wip_progress_batch_locations(
+                &mut batches,
+                maps_by_id.as_ref().expect("maps loaded above"),
+            );
         }
         for batch in &mut batches {
             batch.refresh_status_detail();

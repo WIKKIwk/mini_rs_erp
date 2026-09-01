@@ -10,6 +10,7 @@ use tokio::sync::RwLock;
 
 use crate::core::apparatus_standard::ApparatusId;
 use crate::core::auth::models::{Principal, PrincipalRole};
+use crate::core::text::{lowercase_ascii_owned, trim_owned};
 
 include!("inventory_movements_parts/part_01.rs");
 include!("inventory_movements_parts/part_02.rs");

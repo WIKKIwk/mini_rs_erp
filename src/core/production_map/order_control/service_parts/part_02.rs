@@ -27,13 +27,11 @@ async fn prepare_direct_freeze_queue_write(
     let canonical = service
         .resolve_canonical_apparatus_text(&storage_key)
         .await?;
-    let mut parsed = parsed_queue_states(
-        all_states
-            .get(&storage_key)
-            .or_else(|| all_states.get(&target_apparatus))
-            .cloned()
-            .unwrap_or_default(),
-    );
+    let mut parsed = all_states
+        .get(&storage_key)
+        .or_else(|| all_states.get(&target_apparatus))
+        .map(parsed_queue_states)
+        .unwrap_or_default();
     let from_state = parsed
         .get(record.order_id.trim())
         .copied()
@@ -58,7 +56,10 @@ async fn prepare_direct_freeze_queue_write(
         queue_state::ApparatusQueueOrderState::Frozen,
     );
     let visible_order_ids = visible_order_ids_for_apparatus(&maps, &target_apparatus);
-    let stored_sequence = sequences.get(&storage_key).cloned().unwrap_or_default();
+    let stored_sequence = sequences
+        .get(&storage_key)
+        .map(Vec::as_slice)
+        .unwrap_or_default();
     let mut excluded_order_ids = order_controls
         .iter()
         .filter_map(|(id, control)| {
@@ -67,13 +68,13 @@ async fn prepare_direct_freeze_queue_write(
         .collect::<BTreeSet<_>>();
     excluded_order_ids.insert(record.order_id.clone());
     let sequence = queue_state::effective_apparatus_sequence_excluding(
-        &stored_sequence,
+        stored_sequence,
         &visible_order_ids,
         &excluded_order_ids,
     );
     let sequence_updates =
         sequence_updates_for_frozen_transition(&maps, &sequences, &excluded_order_ids, None);
-    let policy = queue_policy_for_apparatus(canonical.as_ref());
+    let policy = effective_apparatus_queue_policy(canonical.as_ref());
     let actor = record.actor.clone();
     let mut event = queue_action_event(QueueActionEventInput {
         requested_apparatus: &target_apparatus,
@@ -166,13 +167,11 @@ async fn restore_frozen_queue_after_unfreeze(
     let canonical = service
         .resolve_canonical_apparatus_text(&storage_key)
         .await?;
-    let mut parsed = parsed_queue_states(
-        all_states
-            .get(&storage_key)
-            .or_else(|| all_states.get(&target_apparatus))
-            .cloned()
-            .unwrap_or_default(),
-    );
+    let mut parsed = all_states
+        .get(&storage_key)
+        .or_else(|| all_states.get(&target_apparatus))
+        .map(parsed_queue_states)
+        .unwrap_or_default();
     let from_state = parsed
         .get(record.order_id.trim())
         .copied()
@@ -198,7 +197,10 @@ async fn restore_frozen_queue_after_unfreeze(
     );
 
     let visible_order_ids = visible_order_ids_for_apparatus(&maps, &target_apparatus);
-    let stored_sequence = sequences.get(&storage_key).cloned().unwrap_or_default();
+    let stored_sequence = sequences
+        .get(&storage_key)
+        .map(Vec::as_slice)
+        .unwrap_or_default();
     let frozen_order_ids = service
         .store
         .order_control_states()
@@ -209,7 +211,7 @@ async fn restore_frozen_queue_after_unfreeze(
         })
         .collect::<BTreeSet<_>>();
     let sequence = queue_state::effective_apparatus_sequence_excluding(
-        &stored_sequence,
+        stored_sequence,
         &visible_order_ids,
         &frozen_order_ids,
     );
@@ -219,7 +221,7 @@ async fn restore_frozen_queue_after_unfreeze(
         &frozen_order_ids,
         Some(&record.order_id),
     );
-    let policy = queue_policy_for_apparatus(canonical.as_ref());
+    let policy = effective_apparatus_queue_policy(canonical.as_ref());
     let actor = record.actor.clone();
     let mut event = queue_action_event(QueueActionEventInput {
         requested_apparatus: &target_apparatus,
@@ -258,26 +260,27 @@ async fn restore_frozen_queue_after_unfreeze(
         })
         .map(unfrozen_order_run_session);
 
+    let write = QueueActionProgressWrite {
+        apparatus: storage_key,
+        map_update: None,
+        states: serialized_queue_states(parsed),
+        sequence_updates,
+        event,
+        session,
+        progress_event: None,
+        progress_batch: None,
+        progress_batches: Vec::new(),
+        progress_batch_updates: Vec::new(),
+        opening_wip_batch_updates: Vec::new(),
+        raw_material_stock_transitions: Vec::new(),
+        qolip_checkouts: Vec::new(),
+        returned_paint_report: None,
+        order_control_update: Some(record.clone()),
+        schedule_reservation_status: Some(ApparatusScheduleStatus::Paused),
+    };
     service
         .store
-        .put_apparatus_queue_states_with_event_and_progress(QueueActionProgressWrite {
-            apparatus: storage_key,
-            map_update: None,
-            states: serialized_queue_states(parsed),
-            sequence_updates,
-            event,
-            session,
-            progress_event: None,
-            progress_batch: None,
-            progress_batches: Vec::new(),
-            progress_batch_updates: Vec::new(),
-            opening_wip_batch_updates: Vec::new(),
-            raw_material_stock_transitions: Vec::new(),
-            qolip_checkouts: Vec::new(),
-            returned_paint_report: None,
-            order_control_update: Some(record.clone()),
-            schedule_reservation_status: Some(ApparatusScheduleStatus::Paused),
-        })
+        .put_apparatus_queue_states_with_event_and_progress(&write)
         .await?;
     Ok(())
 }

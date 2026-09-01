@@ -67,16 +67,14 @@ impl R2ProfileAvatarStorage {
     }
 
     fn object_url(&self, object_key: &str) -> String {
-        format!(
-            "{}/{}/{}",
-            self.endpoint,
-            self.bucket,
-            object_key
-                .split('/')
-                .map(urlencoding::encode)
-                .collect::<Vec<_>>()
-                .join("/")
-        )
+        let mut encoded_key = String::with_capacity(object_key.len());
+        for (index, part) in object_key.split('/').enumerate() {
+            if index > 0 {
+                encoded_key.push('/');
+            }
+            encoded_key.push_str(&urlencoding::encode(part));
+        }
+        format!("{}/{}/{}", self.endpoint, self.bucket, encoded_key)
     }
 
     fn signed_headers(
@@ -266,31 +264,32 @@ fn safe_path_part(value: &str) -> String {
 }
 
 fn avatar_extension(filename: &str) -> &'static str {
-    match filename
-        .rsplit('.')
-        .next()
-        .unwrap_or_default()
-        .trim()
-        .to_ascii_lowercase()
-        .as_str()
-    {
-        "png" => "png",
-        "webp" => "webp",
-        "jpg" | "jpeg" => "jpg",
-        _ => "jpg",
+    let extension = filename.rsplit('.').next().unwrap_or_default().trim();
+    if extension.eq_ignore_ascii_case("png") {
+        "png"
+    } else if extension.eq_ignore_ascii_case("webp") {
+        "webp"
+    } else {
+        "jpg"
     }
 }
 
 fn normalize_content_type(content_type: &str, filename: &str) -> String {
-    match content_type.trim().to_ascii_lowercase().as_str() {
-        "image/png" => "image/png".to_string(),
-        "image/webp" => "image/webp".to_string(),
-        "image/jpeg" | "image/jpg" => "image/jpeg".to_string(),
-        _ => match avatar_extension(filename) {
+    let content_type = content_type.trim();
+    if content_type.eq_ignore_ascii_case("image/png") {
+        "image/png".to_string()
+    } else if content_type.eq_ignore_ascii_case("image/webp") {
+        "image/webp".to_string()
+    } else if content_type.eq_ignore_ascii_case("image/jpeg")
+        || content_type.eq_ignore_ascii_case("image/jpg")
+    {
+        "image/jpeg".to_string()
+    } else {
+        match avatar_extension(filename) {
             "png" => "image/png".to_string(),
             "webp" => "image/webp".to_string(),
             _ => "image/jpeg".to_string(),
-        },
+        }
     }
 }
 

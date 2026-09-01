@@ -24,14 +24,12 @@ pub(super) fn candidate_allowed_for_order(
         .nodes
         .iter()
         .filter(|node| node.kind == ProductionMapNodeKind::Apparatus)
-        .any(|node| canonical_apparatus_id(&node.apparatus_id).is_some_and(|id| id == *source_id));
+        .any(|node| node.apparatus_id.trim() == source_id.as_str());
     let candidate_is_in_route = map
         .nodes
         .iter()
         .filter(|node| node.kind == ProductionMapNodeKind::Apparatus)
-        .any(|node| {
-            canonical_apparatus_id(&node.apparatus_id).is_some_and(|id| id == *candidate_id)
-        });
+        .any(|node| node.apparatus_id.trim() == candidate_id.as_str());
     source_is_in_route && candidate_is_in_route
 }
 
@@ -74,22 +72,25 @@ pub(super) fn reservations_with_active_sessions(
         .iter()
         .filter(|session| session.status == OrderRunStatus::Active)
     {
-        let Some(apparatus_id) = canonical_apparatus_id(&session.apparatus) else {
+        let apparatus = session.apparatus.trim();
+        if !ApparatusId::is_valid(apparatus) {
             continue;
-        };
+        }
         if result.iter().any(|reservation| {
             reservation.status == ApparatusScheduleStatus::Active
                 && reservation.order_id.trim() == session.order_id.trim()
-                && same_apparatus_id(&reservation.apparatus_id, &apparatus_id)
+                && reservation.apparatus_id.as_str() == apparatus
         }) {
             continue;
         }
+        let apparatus_id = ApparatusId::new(apparatus.to_string())
+            .expect("borrowed apparatus identity was validated above");
         result.push(ApparatusScheduleReservation {
             reservation_id: format!("active-session:{}", session.session_id.trim()),
             idempotency_key: format!("active-session:{}", session.session_id.trim()),
             order_id: session.order_id.trim().to_string(),
             apparatus_id,
-            apparatus: session.apparatus.trim().to_string(),
+            apparatus: apparatus.to_string(),
             starts_at_unix: session.started_at_unix.max(60),
             ends_at_unix: i64::MAX,
             requested_duration_minutes: 1,

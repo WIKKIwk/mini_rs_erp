@@ -34,22 +34,24 @@ pub(super) async fn commit(
         .map_err(|_| CanonicalApparatusError::Persistence)?;
     for entry in &plan.entries {
         assert_legacy_row(&mut tx, entry).await?;
+        let artifact_sha256_hex = entry.artifact.sha256().to_hex();
         super::super::mutations::insert_identity(&mut tx, &entry.revision).await?;
         super::super::mutations::insert_revision(
             &mut tx,
             &entry.revision,
             entry.artifact.bytes(),
-            entry.artifact.sha256().to_hex(),
+            &artifact_sha256_hex,
         )
         .await?;
-        super::super::mutations::cas_head(
+        super::super::mutations::cas_head(&mut tx, &entry.revision, None, &artifact_sha256_hex)
+            .await?;
+        super::legacy_projections::write(
             &mut tx,
             &entry.revision,
-            None,
-            entry.artifact.sha256().to_hex(),
+            &entry.projections,
+            &artifact_sha256_hex,
         )
         .await?;
-        super::legacy_projections::write(&mut tx, &entry.revision, &entry.projections).await?;
         super::super::mutations::insert_outbox(
             &mut tx,
             &entry.revision,

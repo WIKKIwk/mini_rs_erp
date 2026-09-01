@@ -98,38 +98,51 @@ impl RezkaFrameProgressInput {
         base: &QueueProgressInput,
         inherit_global_waste: bool,
     ) -> QueueProgressInput {
-        let mut frame = base.clone();
-        frame.rezka_frames.clear();
-        frame.produced_qty = self.produced_qty;
-        frame.gross_qty = self.gross_qty;
-        frame.uom = if self.produced_qty.is_some() || self.finished_goods_meter.is_some() {
-            "m".to_string()
-        } else {
-            base.uom.clone()
-        };
-        frame.rezka_bosma_waste = self.rezka_bosma_waste.or_else(|| {
-            inherit_global_waste
-                .then_some(base.rezka_bosma_waste)
-                .flatten()
-        });
-        frame.rezka_lamination_waste = self.rezka_lamination_waste.or_else(|| {
-            inherit_global_waste
-                .then_some(base.rezka_lamination_waste)
-                .flatten()
-        });
-        frame.rezka_edge_waste = self.rezka_edge_waste.or_else(|| {
-            inherit_global_waste
-                .then_some(base.rezka_edge_waste)
-                .flatten()
-        });
-        frame.total_waste = self
-            .total_waste
-            .or_else(|| inherit_global_waste.then_some(base.total_waste).flatten());
-        frame.finished_goods_kg = self.finished_goods_kg;
-        frame.bobina_kg = self.bobina_kg;
-        frame.finished_goods_meter = self.finished_goods_meter;
-        frame.diameter = self.diameter;
-        frame
+        QueueProgressInput {
+            freeze_request_id: base.freeze_request_id.clone(),
+            freeze_with_issue: base.freeze_with_issue,
+            rezka_frames: Vec::new(),
+            produced_qty: self.produced_qty,
+            gross_qty: self.gross_qty,
+            uom: if self.produced_qty.is_some() || self.finished_goods_meter.is_some() {
+                "m".to_string()
+            } else {
+                base.uom.clone()
+            },
+            progress_batch_id: base.progress_batch_id.clone(),
+            qr_payload: base.qr_payload.clone(),
+            return_ink_kg: base.return_ink_kg,
+            lamination_print_leftover_rolls: base.lamination_print_leftover_rolls,
+            lamination_film_leftover_rolls: base.lamination_film_leftover_rolls,
+            rezka_bosma_waste: self.rezka_bosma_waste.or_else(|| {
+                inherit_global_waste
+                    .then_some(base.rezka_bosma_waste)
+                    .flatten()
+            }),
+            rezka_lamination_waste: self.rezka_lamination_waste.or_else(|| {
+                inherit_global_waste
+                    .then_some(base.rezka_lamination_waste)
+                    .flatten()
+            }),
+            rezka_edge_waste: self.rezka_edge_waste.or_else(|| {
+                inherit_global_waste
+                    .then_some(base.rezka_edge_waste)
+                    .flatten()
+            }),
+            total_waste: self
+                .total_waste
+                .or_else(|| inherit_global_waste.then_some(base.total_waste).flatten()),
+            finished_goods_kg: self.finished_goods_kg,
+            bobina_kg: self.bobina_kg,
+            finished_goods_meter: self.finished_goods_meter,
+            diameter: self.diameter,
+            description: base.description.clone(),
+            returned_paint_report_attached: base.returned_paint_report_attached,
+            force_full_completion_metrics: base.force_full_completion_metrics,
+            allow_partial_station_completion: base.allow_partial_station_completion,
+            worker_handoff: base.worker_handoff,
+            remove_roll_from_apparatus: base.remove_roll_from_apparatus,
+        }
     }
 
     pub fn has_explicit_waste(&self) -> bool {

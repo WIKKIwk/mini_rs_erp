@@ -470,9 +470,10 @@ pub trait ProductionMapStorePort: Send + Sync {
     }
     async fn put_apparatus_queue_states_with_event_and_progress(
         &self,
-        write: QueueActionProgressWrite,
+        write: &QueueActionProgressWrite,
     ) -> StoreResult<QueueActionProgressWriteResult> {
-        validate_queue_progress_write(&write)?;
+        validate_queue_progress_write(write)?;
+        let write = write.clone();
         if let Some(map) = write.map_update.clone() {
             self.put_map(map).await?;
         }

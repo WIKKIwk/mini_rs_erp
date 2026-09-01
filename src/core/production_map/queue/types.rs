@@ -21,10 +21,13 @@ pub enum ApparatusQueuePolicy {
 
 impl ApparatusQueuePolicy {
     pub fn parse(value: &str) -> Option<Self> {
-        match value.trim().to_ascii_lowercase().as_str() {
-            "strict_sequence" => Some(Self::StrictSequence),
-            "free_pick" => Some(Self::FreePick),
-            _ => None,
+        let value = value.trim();
+        if value.eq_ignore_ascii_case("strict_sequence") {
+            Some(Self::StrictSequence)
+        } else if value.eq_ignore_ascii_case("free_pick") {
+            Some(Self::FreePick)
+        } else {
+            None
         }
     }
 
@@ -234,6 +237,4 @@ pub struct ApparatusQueueActionResult {
     pub raw_material_stock_warehouses: Vec<String>,
     #[serde(skip)]
     pub raw_material_stock_committed: bool,
-    #[serde(skip)]
-    pub qolip_checkout_committed: bool,
 }

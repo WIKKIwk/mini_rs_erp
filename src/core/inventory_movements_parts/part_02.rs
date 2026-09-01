@@ -11,13 +11,19 @@ impl InventoryTransferActionKind {
     }
 
     pub fn parse(raw: &str) -> Result<Self, InventoryMovementError> {
-        match raw.trim().to_ascii_lowercase().as_str() {
-            "approve" => Ok(Self::Approve),
-            "reject" => Ok(Self::Reject),
-            "dispatch" => Ok(Self::Dispatch),
-            "receive" => Ok(Self::Receive),
-            "cancel" => Ok(Self::Cancel),
-            _ => Err(InventoryMovementError::InvalidTransition),
+        let raw = raw.trim();
+        if raw.eq_ignore_ascii_case("approve") {
+            Ok(Self::Approve)
+        } else if raw.eq_ignore_ascii_case("reject") {
+            Ok(Self::Reject)
+        } else if raw.eq_ignore_ascii_case("dispatch") {
+            Ok(Self::Dispatch)
+        } else if raw.eq_ignore_ascii_case("receive") {
+            Ok(Self::Receive)
+        } else if raw.eq_ignore_ascii_case("cancel") {
+            Ok(Self::Cancel)
+        } else {
+            Err(InventoryMovementError::InvalidTransition)
         }
     }
 }
@@ -40,13 +46,14 @@ impl InventoryMovementService {
         &self,
         barcodes: &[String],
     ) -> Result<Vec<RawMaterialStatePlacement>, InventoryMovementError> {
-        let barcodes = barcodes
+        let mut barcodes = barcodes
             .iter()
-            .map(|barcode| barcode.trim().to_ascii_uppercase())
+            .map(|barcode| barcode.trim())
             .filter(|barcode| !barcode.is_empty())
-            .collect::<BTreeSet<_>>()
-            .into_iter()
+            .map(str::to_ascii_uppercase)
             .collect::<Vec<_>>();
+        barcodes.sort_unstable();
+        barcodes.dedup();
         if barcodes.is_empty() {
             return Ok(Vec::new());
         }
@@ -58,8 +65,8 @@ impl InventoryMovementService {
         actor: &InventoryActor,
         mut query: InventoryAssetQuery,
     ) -> Result<Vec<InventoryAsset>, InventoryMovementError> {
-        query.warehouse_id = query.warehouse_id.trim().to_string();
-        query.query = query.query.trim().to_string();
+        query.warehouse_id = trim_owned(query.warehouse_id);
+        query.query = trim_owned(query.query);
         query.limit = query.limit.clamp(1, 500);
         query.offset = query.offset.min(100_000);
         self.store.assets(actor, &query).await
@@ -76,7 +83,7 @@ impl InventoryMovementService {
             InventoryMovementError::InvalidLocation,
         )?;
         input.idempotency_key = normalize_idempotency(input.idempotency_key)?;
-        input.note = input.note.trim().to_string();
+        input.note = trim_owned(input.note);
         self.store.relocate(actor, &input).await
     }
 
@@ -90,7 +97,7 @@ impl InventoryMovementService {
             InventoryMovementError::InvalidLocation,
         )?;
         input.idempotency_key = normalize_idempotency(input.idempotency_key)?;
-        input.note = input.note.trim().to_string();
+        input.note = trim_owned(input.note);
         input.assets = normalize_asset_selectors(input.assets)?;
         self.store.relocate_batch(actor, &input).await
     }
@@ -101,7 +108,7 @@ impl InventoryMovementService {
         mut input: InventoryReturnBatchCreate,
     ) -> Result<Vec<InventoryAsset>, InventoryMovementError> {
         input.idempotency_key = normalize_idempotency(input.idempotency_key)?;
-        input.note = input.note.trim().to_string();
+        input.note = trim_owned(input.note);
         input.assets = normalize_asset_selectors(input.assets)?;
         self.store.return_to_warehouses_batch(actor, &input).await
     }
@@ -126,7 +133,7 @@ impl InventoryMovementService {
             return Err(InventoryMovementError::SameWarehouse);
         }
         input.idempotency_key = normalize_idempotency(input.idempotency_key)?;
-        input.note = input.note.trim().to_string();
+        input.note = trim_owned(input.note);
         input.assets = normalize_asset_selectors(input.assets)?;
         let transfer_id = movement_id("inventory_transfer");
         self.store
@@ -139,14 +146,14 @@ impl InventoryMovementService {
         actor: &InventoryActor,
         mut query: InventoryTransferQuery,
     ) -> Result<Vec<InventoryTransfer>, InventoryMovementError> {
-        query.direction = query.direction.trim().to_ascii_lowercase();
+        query.direction = lowercase_ascii_owned(query.direction);
         if !matches!(
             query.direction.as_str(),
             "" | "all" | "incoming" | "outgoing"
         ) {
             return Err(InventoryMovementError::InvalidTransition);
         }
-        query.status = query.status.trim().to_ascii_lowercase();
+        query.status = lowercase_ascii_owned(query.status);
         if !query.status.is_empty() {
             InventoryTransferStatus::parse(&query.status)?;
         }
@@ -167,7 +174,7 @@ impl InventoryMovementService {
             return Err(InventoryMovementError::TransferNotFound);
         }
         input.idempotency_key = normalize_idempotency(input.idempotency_key)?;
-        input.note = input.note.trim().to_string();
+        input.note = trim_owned(input.note);
         self.store
             .transfer_action(actor, transfer_id, action, &input)
             .await
@@ -178,7 +185,7 @@ fn required(
     value: String,
     error: InventoryMovementError,
 ) -> Result<String, InventoryMovementError> {
-    let value = value.trim().to_string();
+    let value = trim_owned(value);
     if value.is_empty() {
         Err(error)
     } else {
@@ -193,31 +200,32 @@ fn normalize_idempotency(value: String) -> Result<String, InventoryMovementError
 fn normalize_asset_selectors(
     assets: Vec<InventoryAssetSelector>,
 ) -> Result<Vec<InventoryAssetSelector>, InventoryMovementError> {
-    let mut seen = BTreeSet::new();
-    let mut assets = assets
+    let mut keyed = assets
         .into_iter()
-        .map(|mut asset| {
-            asset.asset_ref = asset.asset_ref.trim().to_string();
-            asset
+        .filter_map(|mut asset| {
+            asset.asset_ref = trim_owned(asset.asset_ref);
+            if asset.asset_ref.is_empty() {
+                None
+            } else {
+                let key = asset.asset_ref.to_ascii_lowercase();
+                Some((asset.asset_kind, key, asset))
+            }
         })
-        .filter(|asset| !asset.asset_ref.is_empty())
         .collect::<Vec<_>>();
-    if assets.is_empty() {
+    if keyed.is_empty() {
         return Err(InventoryMovementError::MissingAssets);
     }
-    for asset in &assets {
-        if !seen.insert((asset.asset_kind, asset.asset_ref.to_ascii_lowercase())) {
-            return Err(InventoryMovementError::DuplicateAsset);
-        }
+    keyed.sort_by(|left, right| left.0.cmp(&right.0).then_with(|| left.1.cmp(&right.1)));
+    if keyed
+        .windows(2)
+        .any(|pair| pair[0].0 == pair[1].0 && pair[0].1 == pair[1].1)
+    {
+        return Err(InventoryMovementError::DuplicateAsset);
     }
-    assets.sort_by(|left, right| {
-        left.asset_kind.cmp(&right.asset_kind).then_with(|| {
-            left.asset_ref
-                .to_ascii_lowercase()
-                .cmp(&right.asset_ref.to_ascii_lowercase())
-        })
-    });
-    Ok(assets)
+    Ok(keyed
+        .into_iter()
+        .map(|(_, _, asset)| asset)
+        .collect())
 }
 
 pub fn inventory_role_code(role: &PrincipalRole) -> &'static str {

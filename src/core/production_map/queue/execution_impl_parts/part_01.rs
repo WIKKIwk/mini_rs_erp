@@ -81,8 +81,11 @@ impl ProductionMapService {
         let known_keys = known_apparatus_storage_keys(&sequences, &all_states);
         let storage_key = queue_state::resolve_apparatus_storage_key(apparatus, &known_keys);
         let canonical = self.resolve_canonical_apparatus_text(&storage_key).await?;
-        let policy = queue_policy_for_apparatus(canonical.as_ref());
-        let stored_sequence = sequences.get(&storage_key).cloned().unwrap_or_default();
+        let policy = effective_apparatus_queue_policy(canonical.as_ref());
+        let stored_sequence = sequences
+            .get(&storage_key)
+            .map(Vec::as_slice)
+            .unwrap_or_default();
         let all_maps = self.store.maps().await?;
         let visible_order_ids = visible_order_ids_for_apparatus(&all_maps, apparatus);
         let frozen_order_ids = order_controls
@@ -92,15 +95,17 @@ impl ProductionMapService {
             })
             .collect::<BTreeSet<_>>();
         let sequence = queue_state::effective_apparatus_sequence_excluding(
-            &stored_sequence,
+            stored_sequence,
             &visible_order_ids,
             &frozen_order_ids,
         );
         if !sequence.iter().any(|id| id.trim() == order_id) {
             return Err(ProductionMapError::QueueActionNotAllowed);
         }
-        let stored_states = all_states.get(&storage_key).cloned().unwrap_or_default();
-        validate_requested_queue_state(&stored_states, order_id)?;
+        let stored_states = all_states.get(&storage_key);
+        if let Some(stored_states) = stored_states {
+            validate_requested_queue_state(stored_states, order_id)?;
+        }
         let order_map = all_maps
             .iter()
             .find(|map| map.id.trim() == order_id)
@@ -111,9 +116,7 @@ impl ProductionMapService {
                 &mut effective_order_map,
                 apparatus,
             ) {
-            Some(ClaimedAlternativeMapUpdate {
-                updated: effective_order_map.clone(),
-            })
+            Some(effective_order_map.clone())
         } else {
             None
         };
@@ -122,7 +125,7 @@ impl ProductionMapService {
         let previous_progress_ready = self
             .previous_progress_ready_for_action(action, order_id, order_map, apparatus, &progress)
             .await?;
-        let mut parsed = parsed_queue_states(stored_states);
+        let mut parsed = stored_states.map(parsed_queue_states).unwrap_or_default();
         let stage_reentry = action == queue_state::ApparatusQueueAction::Start
             && previous_progress_ready
             && parsed.get(order_id)
@@ -183,8 +186,7 @@ impl ProductionMapService {
                 return Err(ProductionMapError::QueueActionNotAllowed);
             }
             if policy == ApparatusQueuePolicy::StrictSequence
-                && queue_state::first_actionable_order_id(&sequence, &parsed).as_deref()
-                    != Some(order_id)
+                && queue_state::first_actionable_order_id(&sequence, &parsed) != Some(order_id)
             {
                 return Err(ProductionMapError::QueueActionNotAllowed);
             }

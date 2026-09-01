@@ -7,6 +7,7 @@ use crate::core::profile::ports::{
     DownloadedFile, ProfileAvatarStorage, ProfileLookup, ProfilePortError, ProfilePrefs,
     ProfileStoreError, ProfileStorePort,
 };
+use crate::core::text::trim_owned;
 
 #[derive(Clone)]
 pub struct ProfileService {
@@ -19,7 +20,7 @@ pub struct ProfileService {
 impl ProfileService {
     pub fn new(file_base_url: String) -> Self {
         Self {
-            file_base_url: file_base_url.trim().trim_end_matches('/').to_string(),
+            file_base_url: normalize_base_url(file_base_url),
             lookup: None,
             store: None,
             avatar_storage: None,
@@ -309,6 +310,12 @@ impl ProfileService {
     }
 }
 
+fn normalize_base_url(mut value: String) -> String {
+    value = trim_owned(value);
+    value.truncate(value.trim_end_matches('/').len());
+    value
+}
+
 fn absolute_file_url(base_url: &str, file_url: &str) -> String {
     let trimmed = file_url.trim();
     if trimmed.is_empty() || trimmed.starts_with("http://") || trimmed.starts_with("https://") {
@@ -319,13 +326,26 @@ fn absolute_file_url(base_url: &str, file_url: &str) -> String {
 }
 
 fn merge_profile_prefs(mut principal: Principal, prefs: ProfilePrefs) -> Principal {
-    if !prefs.nickname.trim().is_empty() {
-        principal.display_name = prefs.nickname.trim().to_string();
+    let ProfilePrefs {
+        nickname,
+        avatar_url,
+        avatar_object_key,
+    } = prefs;
+    let nickname = trim_owned(nickname);
+    if !nickname.is_empty() {
+        principal.display_name = nickname;
     }
-    if !prefs.avatar_url.trim().is_empty() {
-        principal.avatar_url = prefs.avatar_url.trim().to_string();
-    } else if !prefs.avatar_object_key.trim().is_empty() {
-        principal.avatar_url = format!("local://{}", prefs.avatar_object_key.trim());
+    let avatar_url = trim_owned(avatar_url);
+    if !avatar_url.is_empty() {
+        principal.avatar_url = avatar_url;
+    } else {
+        let avatar_object_key = trim_owned(avatar_object_key);
+        if !avatar_object_key.is_empty() {
+            let mut local_url = String::with_capacity("local://".len() + avatar_object_key.len());
+            local_url.push_str("local://");
+            local_url.push_str(&avatar_object_key);
+            principal.avatar_url = local_url;
+        }
     }
     principal
 }

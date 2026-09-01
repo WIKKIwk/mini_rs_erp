@@ -5,21 +5,20 @@ use crate::core::apparatus_standard::ApparatusId;
 /// The public compatibility names below are retained because queue state is a
 /// shared transport surface, but they intentionally no longer inspect titles,
 /// warehouse labels, aliases, or instance suffixes.
-pub fn canonical_apparatus_id(value: &str) -> Option<ApparatusId> {
-    ApparatusId::new(value.trim().to_string()).ok()
+pub fn is_canonical_apparatus_id(value: &str) -> bool {
+    ApparatusId::is_valid(value.trim())
 }
 
 pub fn apparatus_ids_match(left: &str, right: &str) -> bool {
-    match (canonical_apparatus_id(left), canonical_apparatus_id(right)) {
-        (Some(left), Some(right)) => left == right,
-        _ => false,
-    }
+    let left = left.trim();
+    let right = right.trim();
+    left == right && ApparatusId::is_valid(left)
 }
 
 pub fn apparatus_matches_assigned(apparatus: &str, assigned: &[String]) -> bool {
-    assigned
-        .iter()
-        .any(|item| apparatus_ids_match(apparatus, item))
+    let apparatus = apparatus.trim();
+    ApparatusId::is_valid(apparatus)
+        && assigned.iter().any(|item| item.trim() == apparatus)
 }
 
 pub fn next_stage_apparatus_matches(next_stage: &str, apparatus: &str) -> bool {
@@ -28,22 +27,26 @@ pub fn next_stage_apparatus_matches(next_stage: &str, apparatus: &str) -> bool {
 
 /// Return the canonical ID for persisted/search-key consumers.
 pub fn apparatus_search_key(value: &str) -> String {
-    canonical_apparatus_id(value)
-        .map(|id| id.as_str().to_string())
-        .unwrap_or_default()
+    let value = value.trim();
+    if is_canonical_apparatus_id(value) {
+        value.to_string()
+    } else {
+        String::new()
+    }
 }
 
 /// Resolve only an exact canonical ID. Legacy title/warehouse keys are not
 /// aliases and therefore fail closed by returning an empty key.
 pub fn resolve_apparatus_storage_key(apparatus: &str, known_keys: &[String]) -> String {
-    let Some(id) = canonical_apparatus_id(apparatus) else {
+    let apparatus = apparatus.trim();
+    if !ApparatusId::is_valid(apparatus) {
         return String::new();
-    };
+    }
     known_keys
         .iter()
-        .find(|key| apparatus_ids_match(key, id.as_str()))
+        .find(|key| key.trim() == apparatus)
         .map(|key| key.trim().to_string())
-        .unwrap_or_else(|| id.as_str().to_string())
+        .unwrap_or_else(|| apparatus.to_string())
 }
 
 #[cfg(test)]
@@ -71,6 +74,10 @@ mod tests {
     #[test]
     fn queue_identity_does_not_match_titles_or_instance_suffixes() {
         assert!(!apparatus_ids_match("Laminatsiya - A", "Laminatsiya"));
+        assert!(apparatus_ids_match(
+            " apparatus:catalog:lam-001 ",
+            "apparatus:catalog:lam-001"
+        ));
         assert!(!apparatus_ids_match(
             "apparatus:catalog:lam-001",
             "apparatus:catalog:lam-002"

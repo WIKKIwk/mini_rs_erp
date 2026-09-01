@@ -31,6 +31,6 @@ impl RezkaServiceError {
 
 impl From<RezkaPortError> for RezkaServiceError {
     fn from(value: RezkaPortError) -> Self {
-        Self::StoreWrite(value.message())
+        Self::StoreWrite(value.to_string())
     }
 }

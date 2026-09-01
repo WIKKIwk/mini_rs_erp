@@ -42,8 +42,20 @@ pub(super) fn map_receipt_store_error(error: GscalePortError) -> GscaleServiceEr
     }
 }
 
-pub(super) fn print_done(print: &ScaleDriverPrintResponse) -> bool {
-    print.ok && print.status.trim().eq_ignore_ascii_case("done")
+pub(super) fn completed_print(
+    result: Result<ScaleDriverPrintResponse, GscalePortError>,
+) -> Result<ScaleDriverPrintResponse, GscaleServiceError> {
+    match result {
+        Ok(print) if print.ok && print.status.trim().eq_ignore_ascii_case("done") => Ok(print),
+        Ok(print) => Err(GscaleServiceError::PrintFailed {
+            detail: print_error_detail(&print),
+            delete_error: None,
+        }),
+        Err(error) => Err(GscaleServiceError::PrintFailed {
+            detail: error.to_string(),
+            delete_error: None,
+        }),
+    }
 }
 
 pub(super) fn print_error_detail(print: &ScaleDriverPrintResponse) -> String {

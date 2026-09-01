@@ -71,10 +71,10 @@ impl SessionStore for JsonSessionStore {
         Ok(state.sessions.get(token).cloned())
     }
 
-    async fn put(&self, token: &str, record: SessionRecord) -> Result<(), AppError> {
+    async fn put(&self, token: &str, record: &SessionRecord) -> Result<(), AppError> {
         let mut state = self.state.lock().await;
         self.load_if_needed(&mut state).await?;
-        state.sessions.insert(token.to_string(), record);
+        state.sessions.insert(token.to_string(), record.clone());
         self.save(&state).await
     }
 

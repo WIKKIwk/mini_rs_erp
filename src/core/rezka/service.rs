@@ -16,7 +16,7 @@ use super::ports::RezkaRepackStorePort;
 
 pub use error::RezkaServiceError;
 use normalize::NormalizedRezkaSplit;
-use print::{clean_store_error, print_done, print_error_detail, rezka_output_log};
+use print::{clean_store_error, print_error_detail, rezka_output_log};
 
 const QTY_TOLERANCE: f64 = 0.0001;
 
@@ -41,6 +41,18 @@ impl RezkaService {
     #[cfg(test)]
     pub fn repack_store_configured_for_test(&self) -> bool {
         self.repack_store.is_some()
+    }
+
+    fn repack_store(&self) -> Result<&Arc<dyn RezkaRepackStorePort>, RezkaServiceError> {
+        self.repack_store.as_ref().ok_or_else(|| {
+            RezkaServiceError::NotConfigured("rezka repack store is not configured".into())
+        })
+    }
+
+    fn driver(&self) -> Result<&Arc<dyn ScaleDriverPort>, RezkaServiceError> {
+        self.driver.as_ref().ok_or_else(|| {
+            RezkaServiceError::NotConfigured("scale driver is not configured".into())
+        })
     }
 
     pub fn with_driver(mut self, driver: Arc<dyn ScaleDriverPort>) -> Self {

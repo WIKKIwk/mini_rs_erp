@@ -97,15 +97,21 @@ pub(super) async fn rename_block(
     let new_block = new_block.trim();
     let warehouse = warehouse.trim();
     let mut tx = pool.begin().await.map_err(|_| QolipError::StoreFailed)?;
-    let mut lock_keys = [block.to_lowercase(), new_block.to_lowercase()];
-    lock_keys.sort();
-    for key in lock_keys {
-        sqlx::query("SELECT pg_advisory_xact_lock(hashtext($1)::bigint)")
-            .bind(key)
-            .execute(&mut *tx)
-            .await
-            .map_err(|_| QolipError::StoreFailed)?;
-    }
+    let block_key = block.to_lowercase();
+    let new_block_key = new_block.to_lowercase();
+    sqlx::query(
+        "SELECT pg_advisory_xact_lock(hashtext(lock_key)::bigint)
+         FROM (
+             SELECT DISTINCT lock_key
+             FROM unnest(ARRAY[$1::text, $2::text]) AS keys(lock_key)
+             ORDER BY lock_key
+         ) AS ordered_lock_keys",
+    )
+    .bind(&block_key)
+    .bind(&new_block_key)
+    .execute(&mut *tx)
+    .await
+    .map_err(|_| QolipError::StoreFailed)?;
 
     let current = sqlx::query_as::<_, QolipBlockRow>(
         "SELECT name AS block, parent_warehouse AS warehouse

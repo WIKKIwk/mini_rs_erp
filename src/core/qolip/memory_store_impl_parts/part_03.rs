@@ -17,26 +17,22 @@ impl MemoryQolipStore {
         if !checkouts[index].status.eq_ignore_ascii_case("open") {
             return Err(QolipError::CheckoutNotReturnable);
         }
-        let checkout = checkouts[index].clone();
-        let restore = location_from_checkout_target(&checkout, row_letter, column_number)?;
-        let mut locations = self.locations.write().await;
-        if let Some(target_index) = locations.iter().position(|item| item.id == restore.id) {
-            if !location_identity_matches(&locations[target_index], &restore) {
-                return Err(QolipError::LocationIdentityMismatch);
+        let restore =
+            location_from_checkout_target(&checkouts[index], row_letter, column_number)?;
+        {
+            let mut locations = self.locations.write().await;
+            if let Some(target_index) = locations.iter().position(|item| item.id == restore.id) {
+                if !location_identity_matches(&locations[target_index], &restore) {
+                    return Err(QolipError::LocationIdentityMismatch);
+                }
+                locations[target_index].quantity += restore.quantity;
+            } else {
+                locations.push(restore);
             }
-            locations[target_index].quantity += restore.quantity;
-        } else {
-            locations.push(restore);
+            sort_locations(&mut locations);
         }
         checkouts[index].status = "returned".to_string();
-        let checkout = checkouts[index].clone();
-        locations.sort_by(|left, right| {
-            left.row_letter
-                .cmp(&right.row_letter)
-                .then_with(|| left.column_number.cmp(&right.column_number))
-                .then_with(|| left.item_name.cmp(&right.item_name))
-        });
-        Ok(checkout)
+        Ok(checkouts[index].clone())
     }
 
     async fn move_location(

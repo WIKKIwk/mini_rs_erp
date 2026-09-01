@@ -312,7 +312,7 @@ impl ChatService {
             let conversation = self
                 .create_or_get_dm(
                     ChatPrincipalInput {
-                        role: requester_role.clone(),
+                        role: requester_role,
                         ref_: event.requester_ref.clone(),
                         display_name: event.requester_display_name.clone(),
                         avatar_url: String::new(),
@@ -365,7 +365,7 @@ impl ChatService {
             let conversation = self
                 .create_or_get_dm(
                     ChatPrincipalInput {
-                        role: requester_role.clone(),
+                        role: requester_role,
                         ref_: event.requester_ref.clone(),
                         display_name: event.requester_display_name.clone(),
                         avatar_url: String::new(),

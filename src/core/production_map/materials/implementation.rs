@@ -231,6 +231,21 @@ pub(super) fn build_raw_material_start_requirements(
     state_material_barcodes: &[String],
     material_barcodes: &str,
 ) -> RawMaterialStartRequirements {
+    let assignment_refs = assignments.iter().collect::<Vec<_>>();
+    build_raw_material_start_requirements_refs(
+        rule,
+        &assignment_refs,
+        state_material_barcodes,
+        material_barcodes,
+    )
+}
+
+pub(super) fn build_raw_material_start_requirements_refs(
+    rule: Option<&ApparatusMaterialRule>,
+    assignments: &[&RawMaterialAssignment],
+    state_material_barcodes: &[String],
+    material_barcodes: &str,
+) -> RawMaterialStartRequirements {
     let policy = rule.map(|rule| rule.start_policy).unwrap_or_default();
     let requires_material = rule.is_some_and(|rule| rule.requires_material);
     let assigned = assignments
@@ -250,7 +265,7 @@ pub(super) fn build_raw_material_start_requirements(
     } else {
         !requires_material
             || policy != RawMaterialStartPolicy::RequirementGroups
-            || rule.is_some_and(|rule| material_requirements_met(rule, assignments))
+            || rule.is_some_and(|rule| material_requirements_met_refs(rule, assignments))
     };
     let (eligible, required_scan_count, matched_scan_count, scan_satisfied) = match policy {
         RawMaterialStartPolicy::StateAll => {
@@ -269,14 +284,14 @@ pub(super) fn build_raw_material_start_requirements(
         RawMaterialStartPolicy::RequirementGroups => {
             let scanned_assignments = assignments
                 .iter()
+                .copied()
                 .filter(|assignment| scanned.contains(&normalize_barcode(&assignment.barcode)))
-                .cloned()
                 .collect::<Vec<_>>();
             let required = rule
                 .map(material_requirement_slot_count)
                 .unwrap_or_default();
             let matched = rule
-                .map(|rule| material_requirement_match_count(rule, &scanned_assignments))
+                .map(|rule| material_requirement_match_count_refs(rule, &scanned_assignments))
                 .unwrap_or_default();
             (
                 assigned.clone(),

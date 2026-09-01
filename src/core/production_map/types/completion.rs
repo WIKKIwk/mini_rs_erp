@@ -45,10 +45,13 @@ pub enum CompletionRequestDecision {
 
 impl CompletionRequestDecision {
     pub fn parse(value: &str) -> Option<Self> {
-        match value.trim().to_ascii_lowercase().as_str() {
-            "approve" | "approved" => Some(Self::Approved),
-            "reject" | "rejected" => Some(Self::Rejected),
-            _ => None,
+        let value = value.trim();
+        if value.eq_ignore_ascii_case("approve") || value.eq_ignore_ascii_case("approved") {
+            Some(Self::Approved)
+        } else if value.eq_ignore_ascii_case("reject") || value.eq_ignore_ascii_case("rejected") {
+            Some(Self::Rejected)
+        } else {
+            None
         }
     }
 

@@ -99,7 +99,7 @@ impl ProductionMapService {
             prepare_direct_freeze_queue_write(self, &record, target_session).await?
         {
             self.store
-                .put_apparatus_queue_states_with_event_and_progress(write)
+                .put_apparatus_queue_states_with_event_and_progress(&write)
                 .await?;
         } else if state == OrderControlState::FreezeRequested {
             self.store.put_order_control_state(record.clone()).await?;

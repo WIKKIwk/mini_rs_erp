@@ -124,9 +124,7 @@ pub async fn raw_material_assignment_candidates(
             .map(|group| group.trim().to_ascii_lowercase())
             .collect::<Vec<_>>()
             .join("\u{1f}");
-        let apparatus_options = if let Some(options) = apparatus_options_by_group.get(&group_key) {
-            options.clone()
-        } else {
+        if !apparatus_options_by_group.contains_key(&group_key) {
             let options = state
                 .production_maps
                 .raw_material_assignment_apparatus_options(order_id, &group_path)
@@ -137,15 +135,17 @@ pub async fn raw_material_assignment_candidates(
                 requested_apparatus,
                 assigned_apparatus.as_deref(),
             );
-            apparatus_options_by_group.insert(group_key, options.clone());
-            options
-        };
-        let mut compatible_apparatus = Vec::new();
+            apparatus_options_by_group.insert(group_key.clone(), options);
+        }
+        let apparatus_options = apparatus_options_by_group
+            .get(&group_key)
+            .expect("group options inserted above");
+        let mut compatible_apparatus = Vec::with_capacity(apparatus_options.len());
         for apparatus in apparatus_options {
             if validate_rulon_size_for_apparatus_map(
                 &state,
                 &order.map,
-                &apparatus,
+                apparatus,
                 &entry,
                 item,
                 &group_path,
@@ -153,7 +153,7 @@ pub async fn raw_material_assignment_candidates(
             .await
             .is_ok()
             {
-                compatible_apparatus.push(apparatus);
+                compatible_apparatus.push(apparatus.clone());
             }
         }
         let apparatus_options = compatible_apparatus;
@@ -200,14 +200,16 @@ pub async fn raw_material_assignment_candidates(
                     .partial_cmp(&right.leftover_width_mm.unwrap_or(f64::INFINITY))
                     .unwrap_or(Ordering::Equal)
             })
-            .then_with(|| {
-                left.item_name
-                    .to_ascii_lowercase()
-                    .cmp(&right.item_name.to_ascii_lowercase())
-            })
+            .then_with(|| cmp_ascii_case_insensitive(&left.item_name, &right.item_name))
             .then_with(|| left.barcode.cmp(&right.barcode))
     });
     Ok(json_response(candidates))
+}
+
+fn cmp_ascii_case_insensitive(left: &str, right: &str) -> Ordering {
+    left.bytes()
+        .map(|byte| byte.to_ascii_lowercase())
+        .cmp(right.bytes().map(|byte| byte.to_ascii_lowercase()))
 }
 
 fn raw_material_candidate_match_priority(match_type: &str) -> u8 {
@@ -391,7 +393,6 @@ pub async fn raw_material_assignment_diagnostics(
                 }
                 Err((_, Json(error))) => {
                     let mut failure = diagnostic.clone();
-                    failure.reason = error.error;
                     failure.order_id = Some(order.map.id.trim().to_string());
                     failure.order_title = Some(order.map.title.trim().to_string());
                     failure.apparatus = Some(apparatus.clone());
@@ -400,6 +401,7 @@ pub async fn raw_material_assignment_diagnostics(
                     failure.roll_width_mm = error.roll_width_mm;
                     failure.minimum_width_mm = error.minimum_width_mm;
                     failure.maximum_width_mm = error.maximum_width_mm;
+                    failure.reason = error.error;
                     let should_replace = best_failure.as_ref().is_none_or(|current| {
                         raw_material_diagnostic_reason_priority(&failure.reason)
                             < raw_material_diagnostic_reason_priority(&current.reason)
@@ -571,11 +573,7 @@ pub async fn raw_material_assignment_candidate_orders(
         });
     }
     candidates.sort_by(|left, right| {
-        left.order
-            .map
-            .code
-            .to_ascii_lowercase()
-            .cmp(&right.order.map.code.to_ascii_lowercase())
+        cmp_ascii_case_insensitive(&left.order.map.code, &right.order.map.code)
             .then_with(|| left.order.map.id.cmp(&right.order.map.id))
     });
     Ok(json_response(candidates))
@@ -593,9 +591,7 @@ fn sort_raw_material_assignments(assignments: &mut [RawMaterialAssignment]) {
         } else {
             right.item_name.trim()
         };
-        left_title
-            .to_ascii_lowercase()
-            .cmp(&right_title.to_ascii_lowercase())
+        cmp_ascii_case_insensitive(left_title, right_title)
             .then_with(|| left.barcode.cmp(&right.barcode))
     });
 }

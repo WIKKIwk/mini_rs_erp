@@ -47,11 +47,10 @@ pub(super) fn build_gscale_service(
     scale_driver: Arc<RpsDriverClient>,
     warehouse_events: WarehouseEventHub,
 ) -> GscaleService {
-    let events = warehouse_events.clone();
     let service = GscaleService::new()
         .with_driver(scale_driver)
         .with_warehouse_event_handler(Arc::new(move |warehouse, reason| {
-            events.notify_updated(&warehouse, &reason);
+            warehouse_events.notify_updated(&warehouse, &reason);
         }));
     match postgres_pool("GScale receipt") {
         Some(pool) => {

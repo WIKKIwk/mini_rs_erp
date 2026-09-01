@@ -78,10 +78,32 @@ pub(super) fn validate_identifier(value: &str) -> Result<&str, ChatMediaError> {
 }
 
 fn normalize_content_type(value: &str) -> String {
-    match value.trim().to_ascii_lowercase().as_str() {
-        "image/jpg" => "image/jpeg".to_string(),
-        value => value.to_string(),
-    }
+    let value = value.trim();
+    const CONTENT_TYPES: &[(&str, &str)] = &[
+        ("image/jpg", "image/jpeg"),
+        ("image/jpeg", "image/jpeg"),
+        ("image/png", "image/png"),
+        ("image/webp", "image/webp"),
+        ("video/mp4", "video/mp4"),
+        ("video/quicktime", "video/quicktime"),
+        ("video/webm", "video/webm"),
+        ("audio/mp4", "audio/mp4"),
+        ("audio/x-m4a", "audio/x-m4a"),
+        ("audio/aac", "audio/aac"),
+        ("audio/mpeg", "audio/mpeg"),
+        ("audio/ogg", "audio/ogg"),
+        ("audio/webm", "audio/webm"),
+        ("audio/wav", "audio/wav"),
+        ("audio/x-wav", "audio/x-wav"),
+    ];
+    CONTENT_TYPES
+        .iter()
+        .find_map(|(alias, canonical)| {
+            value
+                .eq_ignore_ascii_case(alias)
+                .then(|| (*canonical).to_string())
+        })
+        .unwrap_or_else(|| value.to_ascii_lowercase())
 }
 
 fn ensure_idempotent_input_matches(

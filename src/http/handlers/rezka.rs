@@ -8,6 +8,7 @@ use crate::app::AppState;
 use crate::core::auth::models::Principal;
 use crate::core::authz::Capability;
 use crate::core::rezka::{RezkaServiceError, RezkaSourceEntry, RezkaSplitRequest};
+use crate::core::text::trim_owned;
 use crate::core::werka::models::StockEntryBarcodeEntry;
 use crate::core::werka::ports::WerkaPortError;
 use crate::http::handlers::auth::bearer_token;
@@ -71,7 +72,6 @@ pub async fn split_client_prepare(
     let response = state
         .rezka
         .prepare_client_split(source, request)
-        .await
         .map_err(rezka_error)?;
     Ok(Json(
         serde_json::to_value(response).unwrap_or_else(|_| serde_json::json!({"ok": false})),
@@ -159,29 +159,50 @@ async fn source_by_barcode(
     })
 }
 
-fn source_entry_from_stock_entry(entry: StockEntryBarcodeEntry) -> Option<RezkaSourceEntry> {
-    let warehouse = if entry.target_warehouse.trim().is_empty() {
-        entry.source_warehouse.trim().to_string()
-    } else {
-        entry.target_warehouse.trim().to_string()
+fn source_entry_from_stock_entry(mut entry: StockEntryBarcodeEntry) -> Option<RezkaSourceEntry> {
+    entry.barcode = trim_owned(entry.barcode);
+    entry.stock_entry_name = trim_owned(entry.stock_entry_name);
+    entry.item_code = trim_owned(entry.item_code);
+    entry.item_name = trim_owned(entry.item_name);
+    entry.company = trim_owned(entry.company);
+    let warehouse = {
+        let target = trim_owned(entry.target_warehouse);
+        if target.is_empty() {
+            trim_owned(entry.source_warehouse)
+        } else {
+            target
+        }
     };
-    if entry.barcode.trim().is_empty()
-        || entry.item_code.trim().is_empty()
+    let uom = {
+        let value = trim_owned(entry.uom);
+        if !value.is_empty() {
+            value
+        } else {
+            let fallback = trim_owned(entry.stock_uom);
+            if fallback.is_empty() {
+                "Kg".to_string()
+            } else {
+                fallback
+            }
+        }
+    };
+    if entry.barcode.is_empty()
+        || entry.item_code.is_empty()
         || warehouse.is_empty()
         || entry.qty <= 0.0
     {
         return None;
     }
     Some(RezkaSourceEntry {
-        barcode: entry.barcode.trim().to_string(),
-        stock_entry_name: entry.stock_entry_name.trim().to_string(),
+        barcode: entry.barcode,
+        stock_entry_name: entry.stock_entry_name,
         line_index: entry.line_index,
-        item_code: entry.item_code.trim().to_string(),
-        item_name: entry.item_name.trim().to_string(),
+        item_code: entry.item_code,
+        item_name: entry.item_name,
         qty: entry.qty,
-        uom: first_non_empty(&entry.uom, &entry.stock_uom, "Kg"),
+        uom,
         warehouse,
-        company: entry.company.trim().to_string(),
+        company: entry.company,
     })
 }
 
@@ -209,19 +230,6 @@ fn rezka_error(error: RezkaServiceError) -> (StatusCode, Json<RezkaErrorResponse
             detail: error.to_string(),
         }),
     )
-}
-
-fn first_non_empty(value: &str, fallback: &str, default: &str) -> String {
-    let value = value.trim();
-    if !value.is_empty() {
-        return value.to_string();
-    }
-    let fallback = fallback.trim();
-    if !fallback.is_empty() {
-        fallback.to_string()
-    } else {
-        default.to_string()
-    }
 }
 
 fn unauthorized() -> (StatusCode, Json<RezkaErrorResponse>) {

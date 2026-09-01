@@ -14,17 +14,19 @@ impl ProductionMapService {
             now,
             ..
         } = context;
-        if !progress.progress_batch_id.trim().is_empty()
+        let opening_record = if !progress.progress_batch_id.trim().is_empty()
             || !progress.qr_payload.trim().is_empty()
         {
-            if let Some(record) = self
-                .store
+            self.store
                 .opening_wip_batch(
                     progress.progress_batch_id.trim(),
                     progress.qr_payload.trim(),
                 )
                 .await?
-            {
+        } else {
+            None
+        };
+        if let Some(record) = opening_record {
                 let current = self
                     .store
                     .active_order_run_session(apparatus, order_id)
@@ -67,7 +69,6 @@ impl ProductionMapService {
                         order_id,
                         action,
                         actor,
-                        now,
                     },
                     record.batch.batch_id.clone(),
                     record.batch.qr_payload.clone(),
@@ -79,20 +80,19 @@ impl ProductionMapService {
                     &session.session_id,
                     now,
                 );
-                return Ok(QueueProgressRecords {
-                    session: Some(session),
-                    progress_event: Some(event),
-                    progress_batch: None,
-                    progress_batches: Vec::new(),
-                    progress_batch_updates: Vec::new(),
-                    opening_wip_batch_updates: vec![opening_update],
-                });
-            }
+            return Ok(QueueProgressRecords {
+                session: Some(session),
+                progress_event: Some(event),
+                progress_batch: None,
+                progress_batches: Vec::new(),
+                progress_batch_updates: Vec::new(),
+                opening_wip_batch_updates: vec![opening_update],
+            });
         }
         if progress.progress_batch_id.trim().is_empty()
             && progress.qr_payload.trim().is_empty()
         {
-            let session = self
+            let mut session = self
                 .store
                 .active_order_run_session(apparatus, order_id)
                 .await?
@@ -124,7 +124,7 @@ impl ProductionMapService {
                     == Some(true)
                 || is_requeued;
             if is_frozen {
-                let mut payload_json = session.payload_json.clone();
+                let mut payload_json = std::mem::take(&mut session.payload_json);
                 if !payload_json.is_object() {
                     payload_json = serde_json::json!({});
                 }
@@ -145,7 +145,7 @@ impl ProductionMapService {
                     worker_ref: actor.ref_.trim().to_string(),
                     worker_display_name: actor.display_name.trim().to_string(),
                     updated_at_unix: now,
-                    payload_json: preserve_qolip_lineage(&session, payload_json),
+                    payload_json,
                     ..session
                 };
                 let context = ProgressRecordContext {
@@ -154,7 +154,6 @@ impl ProductionMapService {
                     order_id,
                     action,
                     actor,
-                    now,
                 };
                 let event = zero_quantity_event(
                     context,
@@ -225,7 +224,6 @@ impl ProductionMapService {
                         order_id,
                         action,
                         actor,
-                        now,
                     },
                     record.batch.batch_id,
                     record.batch.qr_payload,
@@ -272,7 +270,7 @@ impl ProductionMapService {
                 None
             };
             let is_handoff = handoff_batch.is_some();
-            let resumed_batches = if let Some(batch) = handoff_batch {
+            let mut resumed_batches = if let Some(batch) = handoff_batch {
                 vec![batch]
             } else {
                 let mut paused_batches = self
@@ -316,12 +314,11 @@ impl ProductionMapService {
             };
             let resumed_batch = resumed_batches
                 .first()
-                .cloned()
                 .ok_or(ProductionMapError::ProgressBatchNotResumable)?;
             let payload_json = if is_handoff {
                 resumed_handoff_session_payload(&session, &session_input_progress)
             } else {
-                resumed_session_payload(&session, &resumed_batch, true)
+                resumed_session_payload(&session, resumed_batch, true)
             };
             let session = OrderRunSession {
                 status: OrderRunStatus::Active,
@@ -338,7 +335,6 @@ impl ProductionMapService {
                 order_id,
                 action,
                 actor,
-                now,
             };
             let event = zero_quantity_event(
                 context,
@@ -346,22 +342,27 @@ impl ProductionMapService {
                 resumed_batch.qr_payload.clone(),
                 resume_event_payload(),
             );
-            let progress_batches =
-                if !is_handoff && apparatus::is_rezka_apparatus(canonical) {
-                    resumed_batches.clone()
-                } else {
-                    Vec::new()
-                };
+            let is_rezka = apparatus::is_rezka_apparatus(canonical);
+            let (progress_batch, progress_batches, progress_batch_updates) = if is_handoff {
+                let resumed_batch = resumed_batches
+                    .pop()
+                    .ok_or(ProductionMapError::ProgressBatchNotResumable)?;
+                (
+                    Some(resumed_batch.clone()),
+                    Vec::new(),
+                    vec![resumed_batch],
+                )
+            } else if is_rezka {
+                (resumed_batches.first().cloned(), resumed_batches, Vec::new())
+            } else {
+                (resumed_batches.pop(), Vec::new(), Vec::new())
+            };
             return Ok(QueueProgressRecords {
                 session: Some(session),
                 progress_event: Some(event),
-                progress_batch: Some(resumed_batch.clone()),
+                progress_batch,
                 progress_batches,
-                progress_batch_updates: if is_handoff {
-                    vec![resumed_batch]
-                } else {
-                    Vec::new()
-                },
+                progress_batch_updates,
                 opening_wip_batch_updates: Vec::new(),
             });
         }
@@ -405,7 +406,6 @@ impl ProductionMapService {
             order_id,
             action,
             actor,
-            now,
         };
         let event = zero_quantity_event(
             context,

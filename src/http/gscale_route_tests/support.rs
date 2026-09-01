@@ -135,22 +135,22 @@ impl RpsBatchStorePort for MemoryRpsBatchStore {
         Ok(self.batches.lock().unwrap().get(owner_key.trim()).cloned())
     }
 
-    async fn put(&self, batch: RpsBatchSession) -> Result<(), RpsBatchStoreError> {
+    async fn put(&self, batch: &RpsBatchSession) -> Result<(), RpsBatchStoreError> {
         self.batches
             .lock()
             .unwrap()
-            .insert(batch.owner_key.trim().to_string(), batch);
+            .insert(batch.owner_key.trim().to_string(), batch.clone());
         Ok(())
     }
 
-    async fn complete(&self, batch: RpsBatchSession) -> Result<(), RpsBatchStoreError> {
+    async fn complete(&self, batch: &RpsBatchSession) -> Result<(), RpsBatchStoreError> {
         self.batches
             .lock()
             .unwrap()
             .insert(batch.owner_key.trim().to_string(), batch.clone());
         self.history.lock().unwrap().insert(
             format!("{}:{}", batch.owner_key.trim(), batch.id.trim()),
-            batch,
+            batch.clone(),
         );
         Ok(())
     }

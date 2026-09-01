@@ -2,10 +2,6 @@ use crate::core::gscale::models::ScaleDriverPrintResponse;
 
 use super::RezkaOutputLabel;
 
-pub(super) fn print_done(print: &ScaleDriverPrintResponse) -> bool {
-    print.ok && print.status.trim().eq_ignore_ascii_case("done")
-}
-
 pub(super) fn print_error_detail(print: &ScaleDriverPrintResponse) -> String {
     for value in [&print.detail, &print.error, &print.status] {
         let value = value.trim();
@@ -16,9 +12,11 @@ pub(super) fn print_error_detail(print: &ScaleDriverPrintResponse) -> String {
     "print failed".to_string()
 }
 
-pub(super) fn rezka_output_log(outputs: &[RezkaOutputLabel]) -> Vec<String> {
+pub(super) fn rezka_output_log<'a>(
+    outputs: impl IntoIterator<Item = &'a RezkaOutputLabel>,
+) -> Vec<String> {
     outputs
-        .iter()
+        .into_iter()
         .map(|output| {
             format!(
                 "item_code={} item_name={} qty={:.3} uom={} warehouse={} reason={} print_qr={} epc={}",

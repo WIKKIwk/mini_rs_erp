@@ -6,9 +6,9 @@ use super::models::RpsBatchSession;
 pub trait RpsBatchStorePort: Send + Sync {
     async fn get(&self, owner_key: &str) -> Result<Option<RpsBatchSession>, RpsBatchStoreError>;
 
-    async fn put(&self, batch: RpsBatchSession) -> Result<(), RpsBatchStoreError>;
+    async fn put(&self, batch: &RpsBatchSession) -> Result<(), RpsBatchStoreError>;
 
-    async fn complete(&self, batch: RpsBatchSession) -> Result<(), RpsBatchStoreError>;
+    async fn complete(&self, batch: &RpsBatchSession) -> Result<(), RpsBatchStoreError>;
 
     async fn list_completed(
         &self,

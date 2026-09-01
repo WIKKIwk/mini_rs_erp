@@ -101,13 +101,12 @@ impl QolipService {
 
     pub async fn upsert_product_spec(
         &self,
-        input: QolipProductSpecUpsert,
+        mut input: QolipProductSpecUpsert,
         principal: &Principal,
     ) -> Result<QolipProductSpec, QolipError> {
-        let previous_qolip_code = input.previous_qolip_code.trim().to_string();
+        let previous_qolip_code = trim_owned(std::mem::take(&mut input.previous_qolip_code));
         let normalized = normalize_product_spec(input, principal)?;
         if !previous_qolip_code.is_empty() {
-            let next_qolip_code = normalized.qolip_code.clone();
             return match self
                 .store
                 .rename_product_spec(&previous_qolip_code, normalized.clone())
@@ -115,7 +114,7 @@ impl QolipService {
             {
                 Ok(spec) => Ok(spec),
                 Err(QolipError::QolipCodeNotFound)
-                    if previous_qolip_code.eq_ignore_ascii_case(&next_qolip_code) =>
+                    if previous_qolip_code.eq_ignore_ascii_case(&normalized.qolip_code) =>
                 {
                     self.store.put_product_spec(normalized).await
                 }
@@ -287,6 +286,7 @@ impl QolipService {
             return Err(QolipError::QolipCodeMismatch);
         }
         let existing_checkout = self.store.open_checkout_by_qolip_code(qolip_code).await?;
+        let location = self.store.location_by_qolip_code(qolip_code).await?;
         if let Some(checkout) = &existing_checkout {
             if !checkout
                 .issued_to_ref
@@ -295,20 +295,12 @@ impl QolipService {
             {
                 return Err(QolipError::CheckoutAssignedToAnotherWorker);
             }
-            if self
-                .store
-                .location_by_qolip_code(qolip_code)
-                .await?
-                .is_some()
-            {
+            if location.is_some() {
                 return Err(QolipError::QolipInUse);
             }
         }
 
-        let checkout = match (
-            existing_checkout,
-            self.store.location_by_qolip_code(qolip_code).await?,
-        ) {
+        let checkout = match (existing_checkout, location) {
             (Some(_), None) => None,
             (None, Some(location)) => {
                 if !qolip_location_matches_spec(&location, &spec) {

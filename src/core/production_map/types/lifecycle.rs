@@ -2,20 +2,15 @@ use serde::{Deserialize, Serialize};
 
 use super::super::errors::ProductionMapError;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ProductionOrderLifecycleStatus {
+    #[default]
     Released,
     InProgress,
     ProductionCompleted,
     Closed,
     Cancelled,
-}
-
-impl Default for ProductionOrderLifecycleStatus {
-    fn default() -> Self {
-        Self::Released
-    }
 }
 
 impl ProductionOrderLifecycleStatus {
@@ -48,20 +43,27 @@ impl ProductionOrderLifecycleStatus {
     }
 
     pub fn parse(value: &str) -> Result<Self, ProductionMapError> {
-        match value.trim().to_ascii_lowercase().as_str() {
-            "released" => Ok(Self::Released),
-            "in_progress" => Ok(Self::InProgress),
-            "production_completed" => Ok(Self::ProductionCompleted),
-            "closed" => Ok(Self::Closed),
-            "cancelled" => Ok(Self::Cancelled),
-            _ => Err(ProductionMapError::StoreFailed),
+        let value = value.trim();
+        if value.eq_ignore_ascii_case("released") {
+            Ok(Self::Released)
+        } else if value.eq_ignore_ascii_case("in_progress") {
+            Ok(Self::InProgress)
+        } else if value.eq_ignore_ascii_case("production_completed") {
+            Ok(Self::ProductionCompleted)
+        } else if value.eq_ignore_ascii_case("closed") {
+            Ok(Self::Closed)
+        } else if value.eq_ignore_ascii_case("cancelled") {
+            Ok(Self::Cancelled)
+        } else {
+            Err(ProductionMapError::StoreFailed)
         }
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ProductionOrderOperationalStatus {
+    #[default]
     NotStarted,
     Ready,
     InProgress,
@@ -71,12 +73,6 @@ pub enum ProductionOrderOperationalStatus {
     PartiallyCompleted,
     Completed,
     CompletedWithIssue,
-}
-
-impl Default for ProductionOrderOperationalStatus {
-    fn default() -> Self {
-        Self::NotStarted
-    }
 }
 
 impl ProductionOrderOperationalStatus {
@@ -95,17 +91,27 @@ impl ProductionOrderOperationalStatus {
     }
 
     pub fn parse(value: &str) -> Result<Self, ProductionMapError> {
-        match value.trim().to_ascii_lowercase().as_str() {
-            "not_started" => Ok(Self::NotStarted),
-            "ready" => Ok(Self::Ready),
-            "in_progress" => Ok(Self::InProgress),
-            "paused" => Ok(Self::Paused),
-            "frozen" => Ok(Self::Frozen),
-            "waiting_next_stage" => Ok(Self::WaitingNextStage),
-            "partially_completed" => Ok(Self::PartiallyCompleted),
-            "completed" => Ok(Self::Completed),
-            "completed_with_issue" => Ok(Self::CompletedWithIssue),
-            _ => Err(ProductionMapError::StoreFailed),
+        let value = value.trim();
+        if value.eq_ignore_ascii_case("not_started") {
+            Ok(Self::NotStarted)
+        } else if value.eq_ignore_ascii_case("ready") {
+            Ok(Self::Ready)
+        } else if value.eq_ignore_ascii_case("in_progress") {
+            Ok(Self::InProgress)
+        } else if value.eq_ignore_ascii_case("paused") {
+            Ok(Self::Paused)
+        } else if value.eq_ignore_ascii_case("frozen") {
+            Ok(Self::Frozen)
+        } else if value.eq_ignore_ascii_case("waiting_next_stage") {
+            Ok(Self::WaitingNextStage)
+        } else if value.eq_ignore_ascii_case("partially_completed") {
+            Ok(Self::PartiallyCompleted)
+        } else if value.eq_ignore_ascii_case("completed") {
+            Ok(Self::Completed)
+        } else if value.eq_ignore_ascii_case("completed_with_issue") {
+            Ok(Self::CompletedWithIssue)
+        } else {
+            Err(ProductionMapError::StoreFailed)
         }
     }
 }

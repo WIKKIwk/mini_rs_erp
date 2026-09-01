@@ -43,11 +43,15 @@ impl CanonicalApparatusRepository for PostgresCanonicalApparatusRepository {
             .execute(&mut *tx)
             .await
             .map_err(|_| CanonicalApparatusError::Persistence)?;
-        sqlx::query("SELECT pg_advisory_xact_lock(hashtextextended($1, 0))")
-            .bind(format!("canonical-apparatus:{}", apparatus_id.as_str()))
-            .execute(&mut *tx)
-            .await
-            .map_err(|_| CanonicalApparatusError::Persistence)?;
+        sqlx::query(
+            "SELECT pg_advisory_xact_lock(
+                 hashtextextended('canonical-apparatus:' || $1::text, 0)
+             )",
+        )
+        .bind(apparatus_id.as_str())
+        .execute(&mut *tx)
+        .await
+        .map_err(|_| CanonicalApparatusError::Persistence)?;
         let current = lock_current_revision(&mut tx, &apparatus_id).await?;
         self.fault_at(CommitFaultPoint::HeadLock)?;
         match (expected_revision, current.as_ref()) {
@@ -80,32 +84,34 @@ impl CanonicalApparatusRepository for PostgresCanonicalApparatusRepository {
             return Err(CanonicalApparatusError::ArtifactIntegrity);
         }
         self.fault_at(CommitFaultPoint::ArtifactGeneration)?;
-        let projection = project_apparatus_revision(&revision, artifact.sha256());
+        let artifact_sha256 = artifact.sha256();
+        let artifact_sha256_hex = artifact_sha256.to_hex();
+        let projection = project_apparatus_revision(&revision, artifact_sha256);
         self.fault_at(CommitFaultPoint::Projection)?;
 
         if is_create {
             insert_identity(&mut tx, &revision).await?;
         }
         self.fault_at(CommitFaultPoint::IdentityInsert)?;
-        insert_revision(
-            &mut tx,
-            &revision,
-            artifact.bytes(),
-            artifact.sha256().to_hex(),
-        )
-        .await?;
+        insert_revision(&mut tx, &revision, artifact.bytes(), &artifact_sha256_hex).await?;
         self.fault_at(CommitFaultPoint::RevisionInsert)?;
-        cas_head(
+        cas_head(&mut tx, &revision, expected_revision, &artifact_sha256_hex).await?;
+        self.fault_at(CommitFaultPoint::HeadCas)?;
+        projections::write_runtime_projection(
             &mut tx,
             &revision,
-            expected_revision,
-            artifact.sha256().to_hex(),
+            &projection.runtime,
+            &artifact_sha256_hex,
         )
         .await?;
-        self.fault_at(CommitFaultPoint::HeadCas)?;
-        projections::write_runtime_projection(&mut tx, &revision, &projection.runtime).await?;
         self.fault_at(CommitFaultPoint::RuntimeProjection)?;
-        projections::write_derived_projections(&mut tx, &revision, &projection).await?;
+        projections::write_derived_projections(
+            &mut tx,
+            &revision,
+            &projection,
+            &artifact_sha256_hex,
+        )
+        .await?;
         self.fault_at(CommitFaultPoint::DerivedProjections)?;
         insert_outbox(&mut tx, &revision, event_type, &projection.runtime).await?;
         self.fault_at(CommitFaultPoint::Outbox)?;
@@ -116,7 +122,7 @@ impl CanonicalApparatusRepository for PostgresCanonicalApparatusRepository {
         Ok(CommittedCanonicalApparatus {
             revision,
             runtime_projection: projection.runtime,
-            aasx_sha256: artifact.sha256(),
+            aasx_sha256: artifact_sha256,
         })
     }
 
@@ -226,11 +232,11 @@ pub(super) async fn insert_revision(
     tx: &mut Transaction<'_, Postgres>,
     revision: &CanonicalApparatusRevision,
     aasx_package: &[u8],
-    aasx_sha256: String,
+    aasx_sha256: &str,
 ) -> Result<(), CanonicalApparatusError> {
     let payload =
         serde_json::to_value(revision).map_err(|_| CanonicalApparatusError::Persistence)?;
-    let source = enum_name(&revision.revision_metadata.source)?;
+    let source = revision.revision_metadata.source.as_str();
     let revision_number = i64::try_from(revision.revision_metadata.revision)
         .map_err(|_| CanonicalApparatusError::Persistence)?;
     let schema_version =
@@ -258,7 +264,7 @@ pub(super) async fn insert_revision(
     .bind(&revision.aas_identity.shell_id)
     .bind(&revision.aas_identity.submodel_id)
     .bind(&revision.aas_identity.semantic_id)
-    .bind(enum_name(&revision.lifecycle.state)?)
+    .bind(revision.lifecycle.state.as_str())
     .bind(revision.revision_metadata.committed_at_unix_ms)
     .bind(&revision.revision_metadata.actor_id)
     .bind(&revision.revision_metadata.command_id)
@@ -274,7 +280,7 @@ pub(super) async fn cas_head(
     tx: &mut Transaction<'_, Postgres>,
     revision: &CanonicalApparatusRevision,
     expected_revision: Option<u64>,
-    aasx_sha256: String,
+    aasx_sha256: &str,
 ) -> Result<(), CanonicalApparatusError> {
     let revision_number = i64::try_from(revision.revision_metadata.revision)
         .map_err(|_| CanonicalApparatusError::Persistence)?;
@@ -320,7 +326,6 @@ pub(super) async fn insert_outbox(
 ) -> Result<(), CanonicalApparatusError> {
     let revision_number = i64::try_from(revision.revision_metadata.revision)
         .map_err(|_| CanonicalApparatusError::Persistence)?;
-    let event_id = format!("apparatus-change:{}", revision.revision_metadata.command_id);
     let payload = serde_json::json!({
         "apparatus_id": revision.apparatus_id,
         "revision": revision.revision_metadata.revision,
@@ -330,9 +335,9 @@ pub(super) async fn insert_outbox(
     sqlx::query(
         "INSERT INTO mini_canonical_apparatus_change_outbox (
              event_id, apparatus_id, revision, event_type, event_payload
-         ) VALUES ($1, $2, $3, $4, $5)",
+         ) VALUES ('apparatus-change:' || $1::text, $2, $3, $4, $5)",
     )
-    .bind(event_id)
+    .bind(&revision.revision_metadata.command_id)
     .bind(revision.apparatus_id.as_str())
     .bind(revision_number)
     .bind(event_type)
@@ -341,13 +346,6 @@ pub(super) async fn insert_outbox(
     .await
     .map_err(map_unique_or_persistence)?;
     Ok(())
-}
-
-fn enum_name<T: serde::Serialize>(value: &T) -> Result<String, CanonicalApparatusError> {
-    serde_json::to_value(value)
-        .ok()
-        .and_then(|value| value.as_str().map(str::to_string))
-        .ok_or(CanonicalApparatusError::Persistence)
 }
 
 fn map_unique_or_persistence(error: sqlx::Error) -> CanonicalApparatusError {

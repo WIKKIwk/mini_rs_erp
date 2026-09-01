@@ -7,7 +7,7 @@ use serde::{Deserialize, Serialize};
 use crate::app::AppState;
 use crate::core::auth::models::{Principal, PrincipalRole};
 use crate::core::authz::Capability;
-use crate::core::gscale::{GscaleService, GscaleServiceError};
+use crate::core::gscale::GscaleServiceError;
 use crate::core::rps_batch::{
     RpsBatchClientPrintConfirmRequest, RpsBatchPrintRequest, RpsBatchServiceError,
     RpsBatchStartRequest, RpsBatchStopRequest, RpsBatchUpdateRequest,
@@ -150,14 +150,16 @@ pub async fn print(
     material_request.actor_role = principal_role_code(&principal.role).to_string();
     material_request.actor_ref = principal.ref_.trim().to_string();
     material_request.actor_display_name = principal.display_name.trim().to_string();
-    let print_count =
-        GscaleService::material_receipt_print_count(&material_request).map_err(gscale_error)?;
-    material_request.print_count = 1;
+    let prepared = state
+        .gscale
+        .prepare_material_receipt_print(&material_request)
+        .map_err(gscale_error)?;
+    let print_count = prepared.print_count();
     let mut last_response = None;
     for completed in 0..print_count {
         let response = match state
             .gscale
-            .print_material_receipt_driver_once_strict(material_request.clone())
+            .print_prepared_material_receipt_driver_once_strict(&prepared)
             .await
         {
             Ok(response) => response,

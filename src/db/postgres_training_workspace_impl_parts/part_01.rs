@@ -292,7 +292,6 @@ impl PostgresTrainingWorkspaceStore {
                 &input_apparatus,
                 order_id,
                 queue_state::ApparatusQueueAction::Complete,
-                0,
             );
             let session_id = format!("training-input-session:{batch_id}");
             let qr_payload = progress_qr_payload(&batch_id);

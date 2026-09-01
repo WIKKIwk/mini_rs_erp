@@ -258,7 +258,7 @@ fn optional_offset(value: Option<&str>) -> usize {
 
 #[cfg(test)]
 mod tests {
-    use super::optional_search_limit;
+    use super::{AdminErrorResponse, optional_search_limit};
 
     #[test]
     fn optional_search_limit_matches_go_defaults_and_clamp() {
@@ -268,6 +268,37 @@ mod tests {
         assert_eq!(optional_search_limit(Some("0"), 20, 50), 20);
         assert_eq!(optional_search_limit(Some("5"), 20, 50), 5);
         assert_eq!(optional_search_limit(Some("500"), 20, 50), 50);
+    }
+
+    #[test]
+    fn admin_error_response_stays_flat_and_pointer_sized() {
+        let response = AdminErrorResponse::roll_size_mismatch(100.0, 110.0, 120.0);
+        let value = serde_json::to_value(&response).expect("admin error json");
+
+        assert_eq!(value["error"], "raw_material_roll_size_mismatch");
+        assert_eq!(value["order_width_mm"], 100.0);
+        assert_eq!(value["roll_width_mm"], 110.0);
+        assert_eq!(value["minimum_width_mm"], 100.0);
+        assert_eq!(value["maximum_width_mm"], 120.0);
+        assert!(value.get("details").is_none());
+        assert!(std::mem::size_of::<AdminErrorResponse>() <= 32);
+    }
+
+    #[test]
+    fn admin_error_optional_fields_remain_top_level() {
+        let response = AdminErrorResponse::with_apparatus_options(
+            "raw_material_group_ambiguous",
+            vec!["apparatus:catalog:pechat-001".to_string()],
+        );
+        let value = serde_json::to_value(response).expect("admin error json");
+
+        assert_eq!(value["error"], "raw_material_group_ambiguous");
+        assert_eq!(
+            value["apparatus_options"],
+            serde_json::json!(["apparatus:catalog:pechat-001"])
+        );
+        assert!(value.get("details").is_none());
+        assert!(value.get("blockers").is_none());
     }
 }
 
@@ -324,6 +355,12 @@ fn too_many_requests(error: impl Into<String>) -> AdminError {
 #[derive(Debug, Serialize)]
 pub struct AdminErrorResponse {
     pub error: String,
+    #[serde(flatten)]
+    details: Box<AdminErrorDetails>,
+}
+
+#[derive(Debug, Default, Serialize)]
+pub struct AdminErrorDetails {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub blockers: Option<Vec<crate::core::production_map::OrderDeleteBlocker>>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -342,32 +379,61 @@ pub struct AdminErrorResponse {
     pub raw_material_status: Option<String>,
 }
 
+impl std::ops::Deref for AdminErrorResponse {
+    type Target = AdminErrorDetails;
+
+    fn deref(&self) -> &Self::Target {
+        &self.details
+    }
+}
+
+impl std::ops::DerefMut for AdminErrorResponse {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.details
+    }
+}
+
 impl AdminErrorResponse {
     fn new(error: impl Into<String>) -> Self {
         Self {
             error: error.into(),
-            blockers: None,
-            apparatus_options: None,
-            order_width_mm: None,
-            roll_width_mm: None,
-            minimum_width_mm: None,
-            maximum_width_mm: None,
-            order_title: None,
-            raw_material_status: None,
+            details: Box::default(),
+        }
+    }
+
+    fn with_blockers(
+        error: impl Into<String>,
+        blockers: Vec<crate::core::production_map::OrderDeleteBlocker>,
+    ) -> Self {
+        Self {
+            error: error.into(),
+            details: Box::new(AdminErrorDetails {
+                blockers: Some(blockers),
+                ..AdminErrorDetails::default()
+            }),
+        }
+    }
+
+    fn with_apparatus_options(error: impl Into<String>, apparatus_options: Vec<String>) -> Self {
+        Self {
+            error: error.into(),
+            details: Box::new(AdminErrorDetails {
+                apparatus_options: Some(apparatus_options),
+                ..AdminErrorDetails::default()
+            }),
         }
     }
 
     fn roll_size_mismatch(order_width_mm: f64, roll_width_mm: f64, maximum_width_mm: f64) -> Self {
         Self {
             error: "raw_material_roll_size_mismatch".to_string(),
-            blockers: None,
-            apparatus_options: None,
-            order_width_mm: Some(order_width_mm),
-            roll_width_mm: Some(roll_width_mm),
-            minimum_width_mm: Some(order_width_mm),
-            maximum_width_mm: Some(maximum_width_mm),
-            order_title: None,
-            raw_material_status: None,
+            details: Box::new(AdminErrorDetails {
+                order_width_mm: Some(order_width_mm),
+                roll_width_mm: Some(roll_width_mm),
+                minimum_width_mm: Some(order_width_mm),
+                maximum_width_mm: Some(maximum_width_mm),
+                ..AdminErrorDetails::default()
+            }),
         }
     }
 }

@@ -6,7 +6,7 @@ struct QueueActionPreflight {
 
 #[derive(Debug)]
 enum QueueActionDecision {
-    Execute(QueueProgressInput),
+    Execute,
     RequestCompletion {
         note: String,
         zero_metric_codes: Vec<String>,
@@ -61,7 +61,7 @@ fn validate_queue_action_preflight(
 }
 
 fn plan_queue_action(
-    input: &QueueActionCommand,
+    input: &mut QueueActionCommand,
     apparatus: &QueueApparatusMetadata,
     return_ink_kg: Option<f64>,
     returned_paint_report_attached: bool,
@@ -98,15 +98,14 @@ fn plan_queue_action(
         && (!zero_metric_codes.is_empty() || metrics.missing_output_with_explanation(input))
     {
         return Ok(QueueActionDecision::RequestCompletion {
-            note: input.progress.description.clone(),
+            note: std::mem::take(&mut input.progress.description),
             zero_metric_codes,
         });
     }
 
-    let mut progress = input.progress.clone();
-    progress.return_ink_kg = return_ink_kg;
-    progress.returned_paint_report_attached = returned_paint_report_attached;
-    Ok(QueueActionDecision::Execute(progress))
+    input.progress.return_ink_kg = return_ink_kg;
+    input.progress.returned_paint_report_attached = returned_paint_report_attached;
+    Ok(QueueActionDecision::Execute)
 }
 
 struct QueueMetricCoverage {

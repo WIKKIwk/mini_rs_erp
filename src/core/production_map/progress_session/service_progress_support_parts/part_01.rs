@@ -67,7 +67,6 @@ pub(super) struct ProgressRecordContext<'a> {
     pub(super) order_id: &'a str,
     pub(super) action: queue_state::ApparatusQueueAction,
     pub(super) actor: &'a QueueActionActor,
-    pub(super) now: i64,
 }
 
 pub(super) fn zero_quantity_event(
@@ -81,7 +80,6 @@ pub(super) fn zero_quantity_event(
             &context.session.session_id,
             context.order_id,
             context.action,
-            context.now,
         ),
         session_id: context.session.session_id.clone(),
         batch_id,
@@ -199,7 +197,6 @@ pub(super) fn progress_output_identity(
     apparatus: &str,
     order_id: &str,
     action: queue_state::ApparatusQueueAction,
-    now: i64,
     progress: &QueueProgressInput,
     input_progress: &SessionProgressLinks,
 ) -> ProgressOutputIdentity {
@@ -217,7 +214,7 @@ pub(super) fn progress_output_identity(
     };
     let batch_id = non_empty_or(
         output_batch_id_input,
-        &progress_batch_id(apparatus, order_id, action, now),
+        &progress_batch_id(apparatus, order_id, action),
     );
     let output_qr_input = if input_qr_is_source
         && !input_progress.qr_payload.trim().is_empty()
@@ -245,7 +242,6 @@ pub(super) fn rezka_output_identities(
     apparatus: &str,
     order_id: &str,
     action: queue_state::ApparatusQueueAction,
-    now: i64,
     order_map: &ProductionMapDefinition,
     stage_node_id: &str,
     input_contained_kadr_count: Option<usize>,
@@ -258,7 +254,7 @@ pub(super) fn rezka_output_identities(
     )?;
     let output_count = output_kadr_counts.len();
     let is_final = chain::is_final_work_stage_node(order_map, stage_node_id);
-    let base_id = progress_batch_id(apparatus, order_id, action, now);
+    let base_id = progress_batch_id(apparatus, order_id, action);
     Ok(output_kadr_counts
         .into_iter()
         .enumerate()

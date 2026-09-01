@@ -1,22 +1,31 @@
 use crate::core::auth::models::{Principal, PrincipalRole};
+use crate::core::text::trim_owned;
 
 use super::models::{
-    QolipBlock, QolipCellQr, QolipCellQrInput, QolipCheckout, QolipError, QolipLocation,
-    QolipLocationUpsert, QolipProductSpec, QolipProductSpecUpsert,
+    QolipCellQr, QolipCellQrInput, QolipCheckout, QolipError, QolipLocation, QolipLocationUpsert,
+    QolipProductSpec, QolipProductSpecUpsert,
 };
+pub(crate) use super::normalize_qr::resolve_cell_qr_from_payload;
+use super::normalize_qr::{qolip_cell_id, qolip_cell_qr_payload};
 
 pub(super) fn normalize_cell_qr(
     input: QolipCellQrInput,
     principal: &Principal,
 ) -> Result<QolipCellQr, QolipError> {
-    let block = input.block.trim().to_string();
+    let QolipCellQrInput {
+        block,
+        warehouse,
+        row_letter,
+        column_number,
+    } = input;
+    let block = trim_owned(block);
     if block.is_empty() {
         return Err(QolipError::MissingBlock);
     }
-    let row_letter = normalize_row_letter(&input.row_letter)?.ok_or(QolipError::InvalidLocation)?;
-    let column_number = normalize_column_number(input.column_number, Some(&row_letter))?
+    let row_letter = normalize_row_letter_owned(row_letter)?.ok_or(QolipError::InvalidLocation)?;
+    let column_number = normalize_column_number(column_number, Some(&row_letter))?
         .ok_or(QolipError::InvalidLocation)?;
-    let warehouse = input.warehouse.trim().to_string();
+    let warehouse = trim_owned(warehouse);
     let location_label = format!("{row_letter}{column_number}");
     let id = qolip_cell_id(&warehouse, &block, &row_letter, column_number);
     let qr_payload = qolip_cell_qr_payload(&id);
@@ -38,41 +47,46 @@ pub(super) fn normalize_location(
     input: QolipLocationUpsert,
     principal: &Principal,
 ) -> Result<QolipLocation, QolipError> {
-    let block = input.block.trim().to_string();
+    let QolipLocationUpsert {
+        block,
+        warehouse,
+        item_code,
+        item_name,
+        item_group: _,
+        qolip_code,
+        size,
+        quantity,
+        row_letter,
+        column_number,
+    } = input;
+    let block = trim_owned(block);
     if block.is_empty() {
         return Err(QolipError::MissingBlock);
     }
-    let qolip_code = input.qolip_code.trim().to_string();
+    let qolip_code = trim_owned(qolip_code);
     if qolip_code.is_empty() {
         return Err(QolipError::MissingQolipCode);
     }
-    let item_code = match input.item_code.trim() {
-        "" => qolip_code.clone(),
-        value => value.to_string(),
-    };
-    let item_name = match input.item_name.trim() {
-        "" => qolip_code.clone(),
-        value => value.to_string(),
-    };
-    if input.size <= 0 {
+    let item_code = trimmed_or(item_code, &qolip_code);
+    let item_name = trimmed_or(item_name, &qolip_code);
+    if size <= 0 {
         return Err(QolipError::InvalidSize);
     }
-    if input.quantity <= 0 {
+    if quantity <= 0 {
         return Err(QolipError::InvalidQuantity);
     }
-    let row_letter = normalize_row_letter(&input.row_letter)?;
-    let column_number = normalize_column_number(input.column_number, row_letter.as_deref())?;
+    let row_letter = normalize_row_letter_owned(row_letter)?;
+    let column_number = normalize_column_number(column_number, row_letter.as_deref())?;
     let location_label = match (row_letter.as_deref(), column_number) {
         (Some(row), Some(column)) => format!("{row}{column}"),
         _ => String::new(),
     };
-    let role = role_code(&principal.role).to_string();
-    let warehouse = input.warehouse.trim().to_string();
+    let warehouse = trim_owned(warehouse);
     let id = qolip_location_id(
         &block,
         &item_code,
         &qolip_code,
-        input.size,
+        size,
         row_letter.as_deref().unwrap_or(""),
         column_number,
     );
@@ -83,12 +97,12 @@ pub(super) fn normalize_location(
         item_code,
         item_name,
         qolip_code,
-        size: input.size,
-        quantity: input.quantity,
+        size,
+        quantity,
         row_letter: row_letter.unwrap_or_default(),
         column_number,
         location_label,
-        created_by_role: role,
+        created_by_role: role_code(&principal.role).to_string(),
         created_by_ref: principal.ref_.trim().to_string(),
         created_by_name: principal.display_name.trim().to_string(),
     })
@@ -98,28 +112,38 @@ pub(super) fn normalize_product_spec(
     input: QolipProductSpecUpsert,
     principal: &Principal,
 ) -> Result<QolipProductSpec, QolipError> {
-    let item_code = input.item_code.trim().to_string();
-    let item_name = input.item_name.trim().to_string();
-    let qolip_code = input.qolip_code.trim().to_string();
+    let QolipProductSpecUpsert {
+        item_code,
+        item_name,
+        item_group,
+        qolip_code,
+        previous_qolip_code: _,
+        size,
+        color,
+    } = input;
+    let item_code = trim_owned(item_code);
+    let item_name = trim_owned(item_name);
+    let item_group = trim_owned(item_group);
+    let qolip_code = trim_owned(qolip_code);
     if item_code.is_empty() || item_name.is_empty() {
         return Err(QolipError::MissingItem);
     }
-    if input.item_group.trim().is_empty() {
+    if item_group.is_empty() {
         return Err(QolipError::MissingItemGroup);
     }
     if qolip_code.is_empty() {
         return Err(QolipError::MissingQolipCode);
     }
-    if input.size <= 0 {
+    if size <= 0 {
         return Err(QolipError::InvalidSize);
     }
     Ok(QolipProductSpec {
         item_code,
         item_name,
-        item_group: input.item_group.trim().to_string(),
+        item_group,
         qolip_code,
-        size: input.size,
-        color: input.color.trim().to_string(),
+        size,
+        color: trim_owned(color),
         created_by_role: role_code(&principal.role).to_string(),
         created_by_ref: principal.ref_.trim().to_string(),
         created_by_name: principal.display_name.trim().to_string(),
@@ -137,6 +161,18 @@ pub fn role_code(role: &PrincipalRole) -> &'static str {
         PrincipalRole::MaterialTaminotchi => "material_taminotchi",
         PrincipalRole::Admin => "admin",
     }
+}
+
+fn normalize_row_letter_owned(value: String) -> Result<Option<String>, QolipError> {
+    let mut value = trim_owned(value);
+    if value.is_empty() {
+        return Ok(None);
+    }
+    if value.len() != 1 || !value.as_bytes()[0].is_ascii_alphabetic() {
+        return Err(QolipError::InvalidLocation);
+    }
+    value.make_ascii_uppercase();
+    Ok(Some(value))
 }
 
 fn normalize_row_letter(value: &str) -> Result<Option<String>, QolipError> {
@@ -348,22 +384,6 @@ fn new_checkout_id() -> String {
     format!("qolip-checkout-{}", data_encoding::HEXLOWER.encode(&bytes))
 }
 
-fn qolip_cell_id(warehouse: &str, block: &str, row_letter: &str, column_number: i32) -> String {
-    format!(
-        "qolip-cell:{}:{}:{}:{}",
-        compact_key(warehouse),
-        compact_key(block),
-        compact_key(row_letter),
-        column_number
-    )
-}
-
-fn qolip_cell_qr_payload(cell_id: &str) -> String {
-    let hash = fnv1a64(cell_id);
-    let checksum = (hash & 0xffff) as u16;
-    format!("4002{hash:016X}{checksum:04X}")
-}
-
 pub(crate) fn location_identity_matches(
     existing: &QolipLocation,
     incoming: &QolipLocation,
@@ -392,56 +412,30 @@ pub(crate) fn location_identity_matches(
         && existing.column_number == incoming.column_number
 }
 
-pub(crate) fn resolve_cell_qr_from_payload(
-    payload: &str,
-    blocks: &[QolipBlock],
-    principal: &Principal,
-) -> Option<QolipCellQr> {
-    let payload = payload.trim();
-    if payload.is_empty() {
-        return None;
+fn trimmed_or(value: String, default: &str) -> String {
+    let value = trim_owned(value);
+    if value.is_empty() {
+        default.to_string()
+    } else {
+        value
     }
-    for block in blocks {
-        for row in 'A'..='Z' {
-            for column in 1..=13 {
-                let input = QolipCellQrInput {
-                    block: block.name.clone(),
-                    warehouse: block.warehouse.clone(),
-                    row_letter: row.to_string(),
-                    column_number: Some(column),
-                };
-                let Ok(cell) = normalize_cell_qr(input, principal) else {
-                    continue;
-                };
-                if cell.qr_payload.eq_ignore_ascii_case(payload) {
-                    return Some(cell);
-                }
+}
+
+pub(super) fn compact_key(value: &str) -> String {
+    let mut key = String::with_capacity(value.len());
+    let mut separator_pending = false;
+    for ch in value.trim().chars().flat_map(char::to_lowercase) {
+        if ch.is_ascii_alphanumeric() {
+            if separator_pending && !key.is_empty() {
+                key.push('_');
             }
+            key.push(ch);
+            separator_pending = false;
+        } else if !key.is_empty() {
+            separator_pending = true;
         }
     }
-    None
-}
-
-fn fnv1a64(value: &str) -> u64 {
-    let mut hash = 0xcbf2_9ce4_8422_2325_u64;
-    for byte in value.trim().as_bytes() {
-        hash ^= u64::from(*byte);
-        hash = hash.wrapping_mul(0x0000_0100_0000_01b3);
-    }
-    hash
-}
-
-fn compact_key(value: &str) -> String {
-    let mut key = value
-        .trim()
-        .to_lowercase()
-        .chars()
-        .map(|ch| if ch.is_ascii_alphanumeric() { ch } else { '_' })
-        .collect::<String>();
-    while key.contains("__") {
-        key = key.replace("__", "_");
-    }
-    key.trim_matches('_').to_string()
+    key
 }
 
 include!("normalize_inline_tests.rs");

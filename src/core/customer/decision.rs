@@ -148,13 +148,11 @@ fn normalize_partial_quantities(
     mut accepted_qty: f64,
     mut returned_qty: f64,
 ) -> Result<(f64, f64), CustomerServiceError> {
-    if accepted_qty > 0.0 && returned_qty > 0.0 {
-    } else if accepted_qty > 0.0 {
-        returned_qty = sent_qty - accepted_qty;
-    } else if returned_qty > 0.0 {
-        accepted_qty = sent_qty - returned_qty;
-    } else {
-        return Err(CustomerServiceError::InvalidInput);
+    match (accepted_qty > 0.0, returned_qty > 0.0) {
+        (true, true) => {}
+        (true, false) => returned_qty = sent_qty - accepted_qty,
+        (false, true) => accepted_qty = sent_qty - returned_qty,
+        (false, false) => return Err(CustomerServiceError::InvalidInput),
     }
     if accepted_qty <= 0.0 || returned_qty <= 0.0 {
         return Err(CustomerServiceError::InvalidInput);
@@ -223,12 +221,20 @@ pub(super) fn upsert_customer_decision_payload_in_remarks(
 }
 
 fn normalize_customer_decision_state(state: &str) -> Option<&'static str> {
-    match state.trim().to_ascii_lowercase().as_str() {
-        "pending" | "pd" => Some("pending"),
-        "confirmed" | "accepted" | "cf" => Some("confirmed"),
-        "partial" | "pt" => Some("partial"),
-        "rejected" | "rj" => Some("rejected"),
-        _ => None,
+    let state = state.trim();
+    if state.eq_ignore_ascii_case("pending") || state.eq_ignore_ascii_case("pd") {
+        Some("pending")
+    } else if state.eq_ignore_ascii_case("confirmed")
+        || state.eq_ignore_ascii_case("accepted")
+        || state.eq_ignore_ascii_case("cf")
+    {
+        Some("confirmed")
+    } else if state.eq_ignore_ascii_case("partial") || state.eq_ignore_ascii_case("pt") {
+        Some("partial")
+    } else if state.eq_ignore_ascii_case("rejected") || state.eq_ignore_ascii_case("rj") {
+        Some("rejected")
+    } else {
+        None
     }
 }
 

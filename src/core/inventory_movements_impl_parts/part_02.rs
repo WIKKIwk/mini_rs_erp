@@ -184,7 +184,7 @@ impl MemoryInventoryMovementStore {
             &transfer.destination_warehouse,
         );
 
-        let mut updated = transfer.clone();
+        let mut updated = transfer;
         if transfer_action_already_applied(updated.status, action) {
             state.action_idempotency.insert(
                 _input.idempotency_key.clone(),

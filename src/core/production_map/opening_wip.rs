@@ -20,11 +20,15 @@ impl OpeningWipQuantityBasis {
     }
 
     pub fn parse(value: &str) -> Option<Self> {
-        match value.trim().to_ascii_lowercase().as_str() {
-            "measured" => Some(Self::Measured),
-            "estimated" => Some(Self::Estimated),
-            "unknown" => Some(Self::Unknown),
-            _ => None,
+        let value = value.trim();
+        if value.eq_ignore_ascii_case("measured") {
+            Some(Self::Measured)
+        } else if value.eq_ignore_ascii_case("estimated") {
+            Some(Self::Estimated)
+        } else if value.eq_ignore_ascii_case("unknown") {
+            Some(Self::Unknown)
+        } else {
+            None
         }
     }
 }
@@ -45,10 +49,13 @@ impl OpeningWipIntakeStatus {
     }
 
     pub fn parse(value: &str) -> Option<Self> {
-        match value.trim().to_ascii_lowercase().as_str() {
-            "confirmed" => Some(Self::Confirmed),
-            "cancelled" => Some(Self::Cancelled),
-            _ => None,
+        let value = value.trim();
+        if value.eq_ignore_ascii_case("confirmed") {
+            Some(Self::Confirmed)
+        } else if value.eq_ignore_ascii_case("cancelled") {
+            Some(Self::Cancelled)
+        } else {
+            None
         }
     }
 }
@@ -73,12 +80,17 @@ impl OpeningWipBatchStatus {
     }
 
     pub fn parse(value: &str) -> Option<Self> {
-        match value.trim().to_ascii_lowercase().as_str() {
-            "waiting" => Some(Self::Waiting),
-            "in_use" => Some(Self::InUse),
-            "processed" => Some(Self::Processed),
-            "void" => Some(Self::Void),
-            _ => None,
+        let value = value.trim();
+        if value.eq_ignore_ascii_case("waiting") {
+            Some(Self::Waiting)
+        } else if value.eq_ignore_ascii_case("in_use") {
+            Some(Self::InUse)
+        } else if value.eq_ignore_ascii_case("processed") {
+            Some(Self::Processed)
+        } else if value.eq_ignore_ascii_case("void") {
+            Some(Self::Void)
+        } else {
+            None
         }
     }
 }

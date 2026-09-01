@@ -147,15 +147,14 @@ async fn send_production_map_live_snapshot(
 ) -> bool {
     let service = &state.production_maps;
     let actor_ref = queue_action_actor(principal).ref_;
-    let snapshot = match service.live_snapshot().await {
-        Ok(mut snapshot) => {
-            if let Err(error) = super::super::training::merge_worker_training_snapshot(
-                state,
-                principal,
-                &mut snapshot,
-            )
-            .await
-            {
+    let snapshot = match service.live_snapshot_shared().await {
+        Ok(snapshot) => match super::super::training::merge_worker_training_snapshot_shared(
+            state, principal, snapshot,
+        )
+        .await
+        {
+            Ok(snapshot) => Ok(snapshot),
+            Err(error) => {
                 let payload = serde_json::json!({
                     "ok": false,
                     "error": error.to_string(),
@@ -167,8 +166,7 @@ async fn send_production_map_live_snapshot(
                     Err(_) => true,
                 };
             }
-            Ok(snapshot)
-        }
+        },
         Err(error) => Err(error),
     };
     let completed_orders = service
@@ -197,16 +195,16 @@ async fn send_production_map_live_snapshot(
             let order_customers = production_map_order_customers(state, &snapshot.maps).await;
             let payload = serde_json::json!({
                 "ok": true,
-                "maps": snapshot.maps,
-                "sequences": snapshot.sequences,
-                "visible_order_ids": snapshot.visible_order_ids,
-                "queue_states": snapshot.queue_states,
-                "stage_states": snapshot.stage_states,
-                "queue_policies": snapshot.queue_policies,
-                "queue_action_controls": snapshot.queue_action_controls,
-                "order_statuses": snapshot.order_statuses,
-                "order_controls": snapshot.order_controls,
-                "frozen_orders_by_apparatus": snapshot.frozen_orders_by_apparatus,
+                "maps": &snapshot.maps,
+                "sequences": &snapshot.sequences,
+                "visible_order_ids": &snapshot.visible_order_ids,
+                "queue_states": &snapshot.queue_states,
+                "stage_states": &snapshot.stage_states,
+                "queue_policies": &snapshot.queue_policies,
+                "queue_action_controls": &snapshot.queue_action_controls,
+                "order_statuses": &snapshot.order_statuses,
+                "order_controls": &snapshot.order_controls,
+                "frozen_orders_by_apparatus": &snapshot.frozen_orders_by_apparatus,
                 "order_customers": order_customers,
                 "completed_orders": completed_orders,
                 "completion_requests": completion_requests,

@@ -90,13 +90,14 @@ fn training_progress_batches(
     parent_batch_id: &str,
 ) -> Result<Vec<OrderProgressBatch>, TrainingWorkspaceError> {
     let stamp = unix_micros();
-    let base_batch_id = progress_batch_id(apparatus, order_id, action, 0);
+    let base_batch_id = progress_batch_id(apparatus, order_id, action);
     let rezka_node = training_apparatus_node(map, apparatus);
     let rezka_output_is_grouped = rezka_node.is_some_and(|node| {
         !node.rezka_frame_groups.is_empty()
             && !chain::is_final_work_stage_node(map, &node.id)
     });
-    let output_kadr_counts = if is_rezka_apparatus(map, apparatus) {
+    let is_rezka = is_rezka_apparatus(map, apparatus);
+    let output_kadr_counts = if is_rezka {
         training_rezka_output_kadr_counts(map, apparatus)?
     } else {
         vec![1]
@@ -149,8 +150,7 @@ fn training_progress_batches(
     );
     let session_id = format!("training-session:{base_batch_id}");
     let mut batches = Vec::with_capacity(frame_count);
-    for index in 0..frame_count {
-        let is_rezka = is_rezka_apparatus(map, apparatus);
+    for (index, contained_kadr_count) in output_kadr_counts.iter().copied().enumerate() {
         let owns_metrics = !is_rezka || index == 0;
         let batch_id = if is_rezka {
             format!("{base_batch_id}:frame:{}", index + 1)
@@ -197,8 +197,7 @@ fn training_progress_batches(
             payload_json["rezka_kadr_count"] = serde_json::json!(
                 rezka_node.and_then(|node| node.rezka_kadr_count).unwrap_or_default()
             );
-            payload_json["contained_kadr_count"] =
-                serde_json::json!(output_kadr_counts[index]);
+            payload_json["contained_kadr_count"] = serde_json::json!(contained_kadr_count);
             payload_json["rezka_output_kind"] = serde_json::json!(
                 if rezka_output_is_grouped {
                     "grouped_roll"

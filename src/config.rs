@@ -267,7 +267,8 @@ fn validate_backend(key: &'static str) -> Result<(), AppError> {
 }
 
 fn validate_backend_value(key: &'static str, value: &str) -> Result<(), AppError> {
-    if !matches!(value.trim().to_ascii_lowercase().as_str(), "lmdb" | "json") {
+    let value = value.trim();
+    if !value.eq_ignore_ascii_case("lmdb") && !value.eq_ignore_ascii_case("json") {
         return Err(invalid_config(key, "must be lmdb or json"));
     }
     Ok(())

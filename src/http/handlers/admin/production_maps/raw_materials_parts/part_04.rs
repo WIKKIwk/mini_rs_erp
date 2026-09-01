@@ -14,12 +14,11 @@ fn raw_material_assignment_quantities(
         .reserved_order_id
         .trim()
         .eq_ignore_ascii_case(assignment.order_id.trim());
+    let stock_status = stock.status.trim();
     let received = belongs_to_order
-        && matches!(
-            stock.status.trim().to_ascii_lowercase().as_str(),
-            "in_use" | "consumed"
-        );
-    let consumed = belongs_to_order && stock.status.trim().eq_ignore_ascii_case("consumed");
+        && (stock_status.eq_ignore_ascii_case("in_use")
+            || stock_status.eq_ignore_ascii_case("consumed"));
+    let consumed = belongs_to_order && stock_status.eq_ignore_ascii_case("consumed");
     let received_qty = if received { qty } else { 0.0 };
     let consumed_qty = if consumed { qty } else { 0.0 };
     (
@@ -210,7 +209,7 @@ async fn delete_material_scoped_raw_material_stock(
                 .trim()
                 .eq_ignore_ascii_case(current.item_code.trim())
         })
-        .ok_or_else(|| forbidden())?;
+        .ok_or_else(forbidden)?;
     let assigned_groups = state
         .admin
         .principal_assigned_item_group_scope(principal)

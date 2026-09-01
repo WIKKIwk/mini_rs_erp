@@ -59,7 +59,7 @@ impl AuthService {
             .await
             .map_err(|_| AuthError::Internal)?;
         let users = self
-            .search_system_users_for_login(lookup.as_ref(), normalized_phone, role.clone())
+            .search_system_users_for_login(lookup.as_ref(), normalized_phone, role)
             .await?;
 
         for user in users {
@@ -172,12 +172,12 @@ impl AuthService {
         role: PrincipalRole,
     ) -> Result<Vec<SystemUserRecord>, AuthError> {
         let mut users = lookup
-            .search_system_users(role.clone(), normalized_phone, 50)
+            .search_system_users(role, normalized_phone, 50)
             .await
             .map_err(|_| AuthError::Internal)?;
         if let Some(local_phone) = local_phone_query(normalized_phone) {
             let local_matches = lookup
-                .search_system_users(role.clone(), &local_phone, 50)
+                .search_system_users(role, &local_phone, 50)
                 .await
                 .map_err(|_| AuthError::Internal)?;
             for user in local_matches {

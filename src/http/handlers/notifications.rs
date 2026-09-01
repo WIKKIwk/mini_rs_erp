@@ -109,7 +109,7 @@ pub async fn comment(
     match state
         .werka
         .add_notification_comment(
-            principal.role.clone(),
+            principal.role,
             &principal.ref_,
             &principal.display_name,
             &receipt_id,

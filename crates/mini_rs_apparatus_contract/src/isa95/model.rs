@@ -42,6 +42,21 @@ pub enum EquipmentCapabilityCode {
     Training,
 }
 
+impl EquipmentCapabilityCode {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Print => "print",
+            Self::Laminate => "laminate",
+            Self::Cut => "cut",
+            Self::Package => "package",
+            Self::Glue => "glue",
+            Self::Tooling => "tooling",
+            Self::VirtualTask => "virtual_task",
+            Self::Training => "training",
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct EquipmentCapability {
@@ -97,6 +112,15 @@ pub struct ExecutionProfile {
 pub enum QueueDiscipline {
     StrictSequence,
     FreePick,
+}
+
+impl QueueDiscipline {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::StrictSequence => "strict_sequence",
+            Self::FreePick => "free_pick",
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -186,6 +210,15 @@ pub enum LifecycleState {
     Retired,
 }
 
+impl LifecycleState {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Active => "active",
+            Self::Retired => "retired",
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ApparatusLifecycle {
@@ -199,6 +232,16 @@ pub enum RevisionSource {
     Admin,
     AasxImport,
     LegacyMigration,
+}
+
+impl RevisionSource {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Admin => "admin",
+            Self::AasxImport => "aasx_import",
+            Self::LegacyMigration => "legacy_migration",
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

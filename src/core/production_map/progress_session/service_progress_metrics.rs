@@ -52,7 +52,6 @@ impl ProgressMetrics {
 }
 
 pub(super) fn validated_progress_metrics(
-    apparatus: &str,
     canonical: &RuntimeApparatusConfiguration,
     action: queue_state::ApparatusQueueAction,
     progress: &QueueProgressInput,
@@ -139,7 +138,6 @@ pub(super) fn validated_progress_metrics(
         },
     };
     validate_progress_metrics(
-        apparatus,
         canonical,
         action,
         progress,
@@ -153,7 +151,6 @@ pub(super) fn validated_progress_metrics(
 }
 
 pub(super) fn validated_laminatsiya_worker_handoff_metrics(
-    _apparatus: &str,
     canonical: &RuntimeApparatusConfiguration,
     progress: &QueueProgressInput,
 ) -> Result<ProgressMetrics, ProductionMapError> {
@@ -187,7 +184,6 @@ pub(super) fn validated_laminatsiya_worker_handoff_metrics(
 }
 
 pub(super) fn validated_laminatsiya_removed_roll_metrics(
-    _apparatus: &str,
     canonical: &RuntimeApparatusConfiguration,
     progress: &QueueProgressInput,
 ) -> Result<ProgressMetrics, ProductionMapError> {
@@ -218,7 +214,6 @@ pub(super) fn validated_laminatsiya_removed_roll_metrics(
 
 #[allow(clippy::too_many_arguments)]
 fn validate_progress_metrics(
-    _apparatus: &str,
     canonical: &RuntimeApparatusConfiguration,
     action: queue_state::ApparatusQueueAction,
     progress: &QueueProgressInput,
@@ -379,7 +374,6 @@ mod tests {
     fn rezka_pause_requires_positive_finite_diameter() {
         let canonical = rezka_canonical();
         let valid = validated_progress_metrics(
-            "Rezka",
             &canonical,
             queue_state::ApparatusQueueAction::Pause,
             &rezka_pause_progress(Some(45.5)),
@@ -391,7 +385,6 @@ mod tests {
         for diameter in [Some(0.0), Some(-1.0), Some(f64::NAN), Some(f64::INFINITY)] {
             assert!(matches!(
                 validated_progress_metrics(
-                    "Rezka",
                     &canonical,
                     queue_state::ApparatusQueueAction::Pause,
                     &rezka_pause_progress(diameter),
@@ -402,7 +395,6 @@ mod tests {
         }
         assert!(matches!(
             validated_progress_metrics(
-                "Rezka",
                 &canonical,
                 queue_state::ApparatusQueueAction::Pause,
                 &rezka_pause_progress(None),

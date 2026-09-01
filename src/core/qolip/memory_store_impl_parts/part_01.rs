@@ -8,7 +8,7 @@ impl MemoryQolipStore {
             .map(|block| block.warehouse.trim().to_string())
             .filter(|warehouse| !warehouse.is_empty())
             .collect::<Vec<_>>();
-        warehouses.sort_by_key(|warehouse| warehouse.to_lowercase());
+        warehouses.sort_by_cached_key(|warehouse| warehouse.to_lowercase());
         warehouses.dedup_by(|left, right| left.eq_ignore_ascii_case(right));
         Ok(warehouses)
     }
@@ -84,136 +84,146 @@ impl MemoryQolipStore {
         with_qolip_only: bool,
     ) -> Result<Vec<QolipProduct>, QolipError> {
         let query = query.trim().to_lowercase();
-        let checkouts = self.checkouts.read().await.clone();
-        let in_use_codes = checkouts
-            .iter()
-            .filter(|checkout| checkout.status.trim().eq_ignore_ascii_case("open"))
-            .map(|checkout| checkout.qolip_code.trim().to_lowercase())
-            .collect::<BTreeSet<_>>();
-        let specs = self
-            .product_specs
-            .read()
-            .await
-            .values()
-            .cloned()
-            .collect::<Vec<_>>();
+        let in_use_codes = {
+            let checkouts = self.checkouts.read().await;
+            checkouts
+                .iter()
+                .filter(|checkout| checkout.status.trim().eq_ignore_ascii_case("open"))
+                .map(|checkout| checkout.qolip_code.trim().to_lowercase())
+                .collect::<BTreeSet<_>>()
+        };
         let products = self.products.read().await.clone();
-        let locations = self.locations.read().await.clone();
         let products_by_code = products
             .iter()
-            .map(|product| (product.code.trim().to_lowercase(), product.clone()))
+            .enumerate()
+            .map(|(index, product)| (product.code.trim().to_lowercase(), index))
             .collect::<BTreeMap<_, _>>();
         let mut items = Vec::new();
         let mut seen_qolip_codes = BTreeSet::new();
         let mut item_codes_with_qolip = BTreeSet::new();
 
-        for spec in &specs {
-            let qolip_key = spec.qolip_code.trim().to_lowercase();
-            if qolip_key.is_empty() || !seen_qolip_codes.insert(qolip_key.clone()) {
-                continue;
-            }
-            let item_key = spec.item_code.trim().to_lowercase();
-            item_codes_with_qolip.insert(item_key.clone());
-            let base = products_by_code.get(&item_key);
-            let item = QolipProduct {
-                code: spec.item_code.clone(),
-                name: base
-                    .map(|product| product.name.clone())
-                    .filter(|name| !name.trim().is_empty())
-                    .unwrap_or_else(|| spec.item_name.clone()),
-                item_group: base
-                    .map(|product| product.item_group.clone())
-                    .filter(|group| !group.trim().is_empty())
-                    .unwrap_or_else(|| spec.item_group.clone()),
-                customer_names: base
-                    .map(|product| product.customer_names.clone())
-                    .unwrap_or_default(),
-                qolip_code: spec.qolip_code.clone(),
-                first_qolip_code: base
-                    .map(|product| product.first_qolip_code.clone())
-                    .filter(|code| !code.trim().is_empty())
-                    .unwrap_or_else(|| spec.qolip_code.clone()),
-                size: spec.size,
-                color: spec.color.clone(),
-                has_qolip_spec: true,
-                is_in_use: in_use_codes.contains(&qolip_key),
-            };
-            if memory_product_matches(&item, &query) {
-                items.push(item);
-            }
-        }
-
-        for location in &locations {
-            let qolip_key = location.qolip_code.trim().to_lowercase();
-            if qolip_key.is_empty() || !seen_qolip_codes.insert(qolip_key.clone()) {
-                continue;
-            }
-            let item_key = location.item_code.trim().to_lowercase();
-            item_codes_with_qolip.insert(item_key.clone());
-            let base = products_by_code.get(&item_key);
-            let item = QolipProduct {
-                code: location.item_code.clone(),
-                name: base
-                    .map(|product| product.name.clone())
-                    .filter(|name| !name.trim().is_empty())
-                    .unwrap_or_else(|| location.item_name.clone()),
-                item_group: base
-                    .map(|product| product.item_group.clone())
-                    .unwrap_or_default(),
-                customer_names: base
-                    .map(|product| product.customer_names.clone())
-                    .unwrap_or_default(),
-                qolip_code: location.qolip_code.clone(),
-                first_qolip_code: base
-                    .map(|product| product.first_qolip_code.clone())
-                    .filter(|code| !code.trim().is_empty())
-                    .unwrap_or_else(|| location.qolip_code.clone()),
-                size: location.size,
-                color: String::new(),
-                has_qolip_spec: true,
-                is_in_use: in_use_codes.contains(&qolip_key),
-            };
-            if memory_product_matches(&item, &query) {
-                items.push(item);
-            }
-        }
-
-        for checkout in checkouts
-            .iter()
-            .filter(|checkout| checkout.status.trim().eq_ignore_ascii_case("open"))
         {
-            let qolip_key = checkout.qolip_code.trim().to_lowercase();
-            if qolip_key.is_empty() || !seen_qolip_codes.insert(qolip_key.clone()) {
-                continue;
+            let specs = self.product_specs.read().await;
+            for spec in specs.values() {
+                let qolip_key = spec.qolip_code.trim().to_lowercase();
+                if qolip_key.is_empty() || !seen_qolip_codes.insert(qolip_key.clone()) {
+                    continue;
+                }
+                let item_key = spec.item_code.trim().to_lowercase();
+                item_codes_with_qolip.insert(item_key.clone());
+                let base = products_by_code
+                    .get(&item_key)
+                    .map(|index| &products[*index]);
+                let item = QolipProduct {
+                    code: spec.item_code.clone(),
+                    name: base
+                        .map(|product| product.name.clone())
+                        .filter(|name| !name.trim().is_empty())
+                        .unwrap_or_else(|| spec.item_name.clone()),
+                    item_group: base
+                        .map(|product| product.item_group.clone())
+                        .filter(|group| !group.trim().is_empty())
+                        .unwrap_or_else(|| spec.item_group.clone()),
+                    customer_names: base
+                        .map(|product| product.customer_names.clone())
+                        .unwrap_or_default(),
+                    qolip_code: spec.qolip_code.clone(),
+                    first_qolip_code: base
+                        .map(|product| product.first_qolip_code.clone())
+                        .filter(|code| !code.trim().is_empty())
+                        .unwrap_or_else(|| spec.qolip_code.clone()),
+                    size: spec.size,
+                    color: spec.color.clone(),
+                    has_qolip_spec: true,
+                    is_in_use: in_use_codes.contains(&qolip_key),
+                };
+                if memory_product_matches(&item, &query) {
+                    items.push(item);
+                }
             }
-            let item_key = checkout.item_code.trim().to_lowercase();
-            item_codes_with_qolip.insert(item_key.clone());
-            let base = products_by_code.get(&item_key);
-            let item = QolipProduct {
-                code: checkout.item_code.clone(),
-                name: base
-                    .map(|product| product.name.clone())
-                    .filter(|name| !name.trim().is_empty())
-                    .unwrap_or_else(|| checkout.item_name.clone()),
-                item_group: base
-                    .map(|product| product.item_group.clone())
-                    .filter(|group| !group.trim().is_empty())
-                    .unwrap_or_else(|| checkout.item_group.clone()),
-                customer_names: base
-                    .map(|product| product.customer_names.clone())
-                    .unwrap_or_default(),
-                qolip_code: checkout.qolip_code.clone(),
-                first_qolip_code: base
-                    .map(|product| product.first_qolip_code.clone())
-                    .filter(|code| !code.trim().is_empty())
-                    .unwrap_or_else(|| checkout.qolip_code.clone()),
-                size: checkout.size,
-                color: String::new(),
-                has_qolip_spec: true,
-                is_in_use: true,
-            };
-            if memory_product_matches(&item, &query) {
-                items.push(item);
+        }
+
+        {
+            let locations = self.locations.read().await;
+            for location in locations.iter() {
+                let qolip_key = location.qolip_code.trim().to_lowercase();
+                if qolip_key.is_empty() || !seen_qolip_codes.insert(qolip_key.clone()) {
+                    continue;
+                }
+                let item_key = location.item_code.trim().to_lowercase();
+                item_codes_with_qolip.insert(item_key.clone());
+                let base = products_by_code
+                    .get(&item_key)
+                    .map(|index| &products[*index]);
+                let item = QolipProduct {
+                    code: location.item_code.clone(),
+                    name: base
+                        .map(|product| product.name.clone())
+                        .filter(|name| !name.trim().is_empty())
+                        .unwrap_or_else(|| location.item_name.clone()),
+                    item_group: base
+                        .map(|product| product.item_group.clone())
+                        .unwrap_or_default(),
+                    customer_names: base
+                        .map(|product| product.customer_names.clone())
+                        .unwrap_or_default(),
+                    qolip_code: location.qolip_code.clone(),
+                    first_qolip_code: base
+                        .map(|product| product.first_qolip_code.clone())
+                        .filter(|code| !code.trim().is_empty())
+                        .unwrap_or_else(|| location.qolip_code.clone()),
+                    size: location.size,
+                    color: String::new(),
+                    has_qolip_spec: true,
+                    is_in_use: in_use_codes.contains(&qolip_key),
+                };
+                if memory_product_matches(&item, &query) {
+                    items.push(item);
+                }
+            }
+        }
+
+        {
+            let checkouts = self.checkouts.read().await;
+            for checkout in checkouts
+                .iter()
+                .filter(|checkout| checkout.status.trim().eq_ignore_ascii_case("open"))
+            {
+                let qolip_key = checkout.qolip_code.trim().to_lowercase();
+                if qolip_key.is_empty() || !seen_qolip_codes.insert(qolip_key.clone()) {
+                    continue;
+                }
+                let item_key = checkout.item_code.trim().to_lowercase();
+                item_codes_with_qolip.insert(item_key.clone());
+                let base = products_by_code
+                    .get(&item_key)
+                    .map(|index| &products[*index]);
+                let item = QolipProduct {
+                    code: checkout.item_code.clone(),
+                    name: base
+                        .map(|product| product.name.clone())
+                        .filter(|name| !name.trim().is_empty())
+                        .unwrap_or_else(|| checkout.item_name.clone()),
+                    item_group: base
+                        .map(|product| product.item_group.clone())
+                        .filter(|group| !group.trim().is_empty())
+                        .unwrap_or_else(|| checkout.item_group.clone()),
+                    customer_names: base
+                        .map(|product| product.customer_names.clone())
+                        .unwrap_or_default(),
+                    qolip_code: checkout.qolip_code.clone(),
+                    first_qolip_code: base
+                        .map(|product| product.first_qolip_code.clone())
+                        .filter(|code| !code.trim().is_empty())
+                        .unwrap_or_else(|| checkout.qolip_code.clone()),
+                    size: checkout.size,
+                    color: String::new(),
+                    has_qolip_spec: true,
+                    is_in_use: true,
+                };
+                if memory_product_matches(&item, &query) {
+                    items.push(item);
+                }
             }
         }
 
@@ -229,16 +239,12 @@ impl MemoryQolipStore {
                 }
             }
         }
-        items.sort_by(|left, right| {
-            left.name
-                .to_lowercase()
-                .cmp(&right.name.to_lowercase())
-                .then_with(|| left.code.to_lowercase().cmp(&right.code.to_lowercase()))
-                .then_with(|| {
-                    left.qolip_code
-                        .to_lowercase()
-                        .cmp(&right.qolip_code.to_lowercase())
-                })
+        items.sort_by_cached_key(|item| {
+            (
+                item.name.to_lowercase(),
+                item.code.to_lowercase(),
+                item.qolip_code.to_lowercase(),
+            )
         });
         items.truncate(limit.max(1));
         Ok(items)
@@ -268,7 +274,8 @@ impl MemoryQolipStore {
             })
             .cloned();
         if let Some(location) = location {
-            return Ok(Some(self.legacy_spec(&location).await));
+            let item_group = self.product_item_group(&location.item_code).await;
+            return Ok(Some(Self::legacy_spec(&location, item_group.as_deref())));
         }
         let checkout = self
             .checkouts
@@ -284,7 +291,13 @@ impl MemoryQolipStore {
             })
             .cloned();
         match checkout {
-            Some(checkout) => Ok(Some(self.legacy_checkout_spec(&checkout).await)),
+            Some(checkout) => {
+                let item_group = self.product_item_group(&checkout.item_code).await;
+                Ok(Some(Self::legacy_checkout_spec(
+                    &checkout,
+                    item_group.as_deref(),
+                )))
+            }
             None => Ok(None),
         }
     }
@@ -303,6 +316,7 @@ impl MemoryQolipStore {
             .iter()
             .map(|spec| spec.qolip_code.trim().to_lowercase())
             .collect::<BTreeSet<_>>();
+        let item_group = self.product_item_group(item_code).await;
         for location in self
             .locations
             .read()
@@ -311,7 +325,7 @@ impl MemoryQolipStore {
             .filter(|location| location.item_code.trim().eq_ignore_ascii_case(item_code))
         {
             if seen.insert(location.qolip_code.trim().to_lowercase()) {
-                specs.push(self.legacy_spec(location).await);
+                specs.push(Self::legacy_spec(location, item_group.as_deref()));
             }
         }
         for checkout in self.checkouts.read().await.iter().filter(|checkout| {
@@ -319,7 +333,10 @@ impl MemoryQolipStore {
                 && checkout.item_code.trim().eq_ignore_ascii_case(item_code)
         }) {
             if seen.insert(checkout.qolip_code.trim().to_lowercase()) {
-                specs.push(self.legacy_checkout_spec(checkout).await);
+                specs.push(Self::legacy_checkout_spec(
+                    checkout,
+                    item_group.as_deref(),
+                ));
             }
         }
         specs.sort_by_key(|spec| spec.qolip_code.trim().to_lowercase());
@@ -349,7 +366,8 @@ impl MemoryQolipStore {
             .find(|location| location.qolip_code.trim().eq_ignore_ascii_case(qolip_code))
             .cloned();
         if let Some(location) = location {
-            return Ok(Some(self.legacy_spec(&location).await));
+            let item_group = self.product_item_group(&location.item_code).await;
+            return Ok(Some(Self::legacy_spec(&location, item_group.as_deref())));
         }
         let checkout = self
             .checkouts
@@ -362,7 +380,13 @@ impl MemoryQolipStore {
             })
             .cloned();
         match checkout {
-            Some(checkout) => Ok(Some(self.legacy_checkout_spec(&checkout).await)),
+            Some(checkout) => {
+                let item_group = self.product_item_group(&checkout.item_code).await;
+                Ok(Some(Self::legacy_checkout_spec(
+                    &checkout,
+                    item_group.as_deref(),
+                )))
+            }
             None => Ok(None),
         }
     }

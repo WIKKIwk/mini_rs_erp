@@ -190,7 +190,7 @@ mod tests {
             Some(TRAINING_VIRTUAL_INPUT_BOSMA)
         );
 
-        let worker_map = training_worker_map(map.clone());
+        let worker_map = training_worker_map(map);
         let input = worker_map
             .nodes
             .iter()

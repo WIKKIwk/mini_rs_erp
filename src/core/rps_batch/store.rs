@@ -244,27 +244,31 @@ impl RpsBatchStorePort for RpsBatchLmdbStore {
             .map_err(lmdb_store_error)
     }
 
-    async fn put(&self, mut batch: RpsBatchSession) -> Result<(), RpsBatchStoreError> {
+    async fn put(&self, batch: &RpsBatchSession) -> Result<(), RpsBatchStoreError> {
         let _guard = self.write_lock.lock().await;
-        batch.ensure_context();
-        self.ensure_unique_batch_code(&batch)?;
+        let batch = batch.contextualized();
+        self.ensure_unique_batch_code(batch.as_ref())?;
         let mut wtxn = self.env.write_txn().map_err(lmdb_store_error)?;
         self.db
-            .put(&mut wtxn, batch.owner_key.trim().as_bytes(), &batch)
+            .put(&mut wtxn, batch.owner_key.trim().as_bytes(), batch.as_ref())
             .map_err(lmdb_store_error)?;
         wtxn.commit().map_err(lmdb_store_error)
     }
 
-    async fn complete(&self, mut batch: RpsBatchSession) -> Result<(), RpsBatchStoreError> {
+    async fn complete(&self, batch: &RpsBatchSession) -> Result<(), RpsBatchStoreError> {
         let _guard = self.write_lock.lock().await;
-        batch.ensure_context();
-        self.ensure_unique_batch_code(&batch)?;
+        let batch = batch.contextualized();
+        self.ensure_unique_batch_code(batch.as_ref())?;
         let mut wtxn = self.env.write_txn().map_err(lmdb_store_error)?;
         self.db
-            .put(&mut wtxn, batch.owner_key.trim().as_bytes(), &batch)
+            .put(&mut wtxn, batch.owner_key.trim().as_bytes(), batch.as_ref())
             .map_err(lmdb_store_error)?;
         self.db
-            .put(&mut wtxn, history_key(&batch).as_bytes(), &batch)
+            .put(
+                &mut wtxn,
+                history_key(batch.as_ref()).as_bytes(),
+                batch.as_ref(),
+            )
             .map_err(lmdb_store_error)?;
         wtxn.commit().map_err(lmdb_store_error)
     }
@@ -346,7 +350,7 @@ mod tests {
         };
         batch.ensure_context();
 
-        store.put(batch.clone()).await.expect("put");
+        store.put(&batch).await.expect("put");
 
         assert_eq!(store.get("werka:W-1").await.expect("get"), Some(batch));
     }
@@ -366,11 +370,8 @@ mod tests {
         };
         batch.ensure_context();
 
-        store.complete(batch.clone()).await.expect("complete");
-        store
-            .complete(batch.clone())
-            .await
-            .expect("idempotent complete");
+        store.complete(&batch).await.expect("complete");
+        store.complete(&batch).await.expect("idempotent complete");
 
         assert_eq!(
             store
@@ -399,9 +400,9 @@ mod tests {
             ..RpsBatchSession::default()
         };
 
-        store.put(first).await.expect("first batch");
+        store.put(&first).await.expect("first batch");
         assert_eq!(
-            store.put(second).await,
+            store.put(&second).await,
             Err(RpsBatchStoreError::StoreFailed)
         );
     }

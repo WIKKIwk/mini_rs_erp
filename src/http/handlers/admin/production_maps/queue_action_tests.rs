@@ -185,7 +185,7 @@ mod tests {
 
     #[test]
     fn queue_decision_requires_rezka_progress_metrics() {
-        let (command, apparatus) = command_from_json(
+        let (mut command, apparatus) = command_from_json(
             serde_json::json!({
                 "apparatus": "apparatus:catalog:test-001",
                 "order_id": "zakaz-rezka-plan",
@@ -195,7 +195,7 @@ mod tests {
         );
 
         let (status, axum::Json(body)) =
-            plan_queue_action(&command, &apparatus, None, false, false)
+            plan_queue_action(&mut command, &apparatus, None, false, false)
                 .expect_err("rezka metrics required");
 
         assert_eq!(status, axum::http::StatusCode::BAD_REQUEST);
@@ -241,7 +241,7 @@ mod tests {
 
     #[test]
     fn queue_decision_routes_explained_missing_output_to_admin_completion() {
-        let (command, apparatus) = command_from_json(
+        let (mut command, apparatus) = command_from_json(
             serde_json::json!({
                 "apparatus": "apparatus:catalog:test-001",
                 "order_id": "zakaz-completion-plan",
@@ -251,7 +251,7 @@ mod tests {
             ExecutionOperation::Laminate,
         );
 
-        let decision = plan_queue_action(&command, &apparatus, None, false, false)
+        let decision = plan_queue_action(&mut command, &apparatus, None, false, false)
             .expect("completion decision");
 
         assert!(matches!(

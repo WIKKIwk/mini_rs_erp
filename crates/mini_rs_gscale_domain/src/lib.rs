@@ -4,4 +4,4 @@ pub mod ports;
 pub mod service;
 
 pub use models::{MaterialReceiptPrintRequest, ProgressLabelPrintRequest};
-pub use service::{GscaleService, GscaleServiceError};
+pub use service::{GscaleService, GscaleServiceError, PreparedMaterialReceiptPrint};

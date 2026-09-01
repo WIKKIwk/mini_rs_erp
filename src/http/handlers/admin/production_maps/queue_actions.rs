@@ -80,7 +80,7 @@ pub async fn production_map_queue_action(
         return Err(bad_request("apparatus and order_id are required"));
     }
     let apparatus = resolve_queue_apparatus(&state, &request.apparatus).await?;
-    let input = QueueActionCommand::from_request(request, &apparatus, &principal)?;
+    let mut input = QueueActionCommand::from_request(request, &apparatus, &principal)?;
     if let Some(training_result) = super::super::training::training_queue_action(
         &state,
         &principal,
@@ -146,7 +146,7 @@ pub async fn production_map_queue_action(
     let returned_paint_report_attached = returned_paint_report.is_some();
     let return_ink_kg = effective_return_ink_kg(&input, returned_paint_report.as_ref())?;
     match plan_queue_action(
-        &input,
+        &mut input,
         &apparatus,
         return_ink_kg,
         returned_paint_report_attached,
@@ -179,18 +179,16 @@ pub async fn production_map_queue_action(
                 "completion_request": result.completion_request,
             })))
         }
-        QueueActionDecision::Execute(progress) => {
-            execute_queue_action(QueueActionExecution {
-                state: &state,
-                principal: &principal,
-                input: &input,
-                apparatus: &apparatus,
+        QueueActionDecision::Execute => {
+            execute_queue_action(
+                &state,
+                &principal,
+                input,
+                &apparatus,
                 assigned_apparatus,
-                material_barcode: input.materials.combined_barcode.clone(),
                 state_material_barcodes,
-                progress,
                 returned_paint_report,
-            })
+            )
             .await
         }
     }

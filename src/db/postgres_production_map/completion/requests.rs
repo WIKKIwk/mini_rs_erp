@@ -336,7 +336,6 @@ pub(super) async fn resolve_completion_request_decision(
     Ok(QueueActionProgressWriteResult {
         raw_material_stock_warehouses,
         raw_material_stock_committed,
-        qolip_checkout_committed: false,
     })
 }
 

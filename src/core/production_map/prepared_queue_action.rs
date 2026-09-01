@@ -27,13 +27,8 @@ pub struct PreparedApparatusQueueAction {
     pub(super) progress_batch_updates: Vec<OrderProgressBatch>,
     pub(super) opening_wip_batch_updates: Vec<OpeningWipBatch>,
     pub(super) material_scan_skipped: bool,
-    pub(super) claimed_alternative_map: Option<ClaimedAlternativeMapUpdate>,
+    pub(super) claimed_alternative_map: Option<ProductionMapDefinition>,
     pub(super) order_control_update: Option<OrderControlRecord>,
-}
-
-#[derive(Clone)]
-pub(super) struct ClaimedAlternativeMapUpdate {
-    pub(super) updated: ProductionMapDefinition,
 }
 
 impl PreparedApparatusQueueAction {

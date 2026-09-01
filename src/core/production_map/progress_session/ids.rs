@@ -61,7 +61,6 @@ pub(in crate::core::production_map) fn progress_session_id(
     apparatus: &str,
     order_id: &str,
     actor: &QueueActionActor,
-    _now: i64,
 ) -> String {
     let stamp = unix_nanos();
     format!(
@@ -76,7 +75,6 @@ pub(in crate::core::production_map) fn progress_event_id(
     session_id: &str,
     order_id: &str,
     action: queue_state::ApparatusQueueAction,
-    _now: i64,
 ) -> String {
     let stamp = unix_nanos();
     format!(
@@ -91,7 +89,6 @@ pub(crate) fn progress_batch_id(
     apparatus: &str,
     order_id: &str,
     action: queue_state::ApparatusQueueAction,
-    _now: i64,
 ) -> String {
     let stamp = unix_nanos();
     format!(

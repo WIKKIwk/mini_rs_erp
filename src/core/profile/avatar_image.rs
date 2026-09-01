@@ -18,10 +18,10 @@ pub(super) fn prepare_profile_avatar(
     content: Vec<u8>,
 ) -> Result<PreparedProfileAvatar, ProfilePortError> {
     let image = image::load_from_memory(&content).map_err(|_| ProfilePortError::LookupFailed)?;
-    let image = resize_avatar(image);
+    let image = flatten_on_white(resize_avatar(image));
     let mut body = Vec::new();
     JpegEncoder::new_with_quality(&mut body, AVATAR_JPEG_QUALITY)
-        .encode_image(&flatten_on_white(&image))
+        .encode_image(&image)
         .map_err(|_| ProfilePortError::LookupFailed)?;
     Ok(PreparedProfileAvatar {
         filename: format!("{}.jpg", filename_stem(filename)),
@@ -42,8 +42,8 @@ fn resize_avatar(image: DynamicImage) -> DynamicImage {
     image.resize(resized_width, resized_height, FilterType::Lanczos3)
 }
 
-fn flatten_on_white(image: &DynamicImage) -> RgbImage {
-    let rgba = image.to_rgba8();
+fn flatten_on_white(image: DynamicImage) -> RgbImage {
+    let rgba = image.into_rgba8();
     let mut rgb = RgbImage::new(rgba.width(), rgba.height());
     for (x, y, pixel) in rgba.enumerate_pixels() {
         let alpha = pixel[3] as u16;
@@ -74,7 +74,7 @@ fn filename_stem(filename: &str) -> String {
 }
 
 fn safe_path_part(value: &str) -> String {
-    let mut out = String::new();
+    let mut out = String::with_capacity(value.len());
     for ch in value.trim().chars() {
         if ch.is_ascii_alphanumeric() {
             out.push(ch.to_ascii_lowercase());
@@ -84,7 +84,13 @@ fn safe_path_part(value: &str) -> String {
             out.push('_');
         }
     }
-    out.trim_matches('_').to_string()
+    let start = out.len() - out.trim_start_matches('_').len();
+    let end = out.trim_end_matches('_').len();
+    out.truncate(end);
+    if start > 0 {
+        out.drain(..start);
+    }
+    out
 }
 
 #[cfg(test)]

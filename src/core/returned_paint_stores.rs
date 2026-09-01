@@ -80,14 +80,20 @@ impl ReturnedPaintStorePort for MemoryReturnedPaintStore {
         limit: usize,
         offset: usize,
     ) -> Result<Vec<ReturnedPaintRequest>, ReturnedPaintError> {
-        let mut requests = self.requests.read().await.clone();
-        requests.sort_by(|left, right| {
+        let requests = self.requests.read().await;
+        let mut ordered = requests.iter().collect::<Vec<_>>();
+        ordered.sort_by(|left, right| {
             right
                 .created_at_unix
                 .cmp(&left.created_at_unix)
                 .then_with(|| right.id.cmp(&left.id))
         });
-        Ok(requests.into_iter().skip(offset).take(limit).collect())
+        Ok(ordered
+            .into_iter()
+            .skip(offset)
+            .take(limit)
+            .cloned()
+            .collect())
     }
 
     async fn complete(

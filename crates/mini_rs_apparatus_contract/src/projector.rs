@@ -23,15 +23,16 @@ impl AasxSha256 {
     }
 
     pub fn from_hex(value: &str) -> Result<Self, AasxHashParseError> {
-        if value.len() != 64 || !value.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+        if value.len() != 64 {
             return Err(AasxHashParseError);
         }
-        let mut bytes = [0u8; 32];
-        for (index, slot) in bytes.iter_mut().enumerate() {
-            *slot = u8::from_str_radix(&value[index * 2..index * 2 + 2], 16)
-                .map_err(|_| AasxHashParseError)?;
+        let mut decoded = [0_u8; 32];
+        for (slot, pair) in decoded.iter_mut().zip(value.as_bytes().chunks_exact(2)) {
+            let high = decode_hex_nibble(pair[0]).ok_or(AasxHashParseError)?;
+            let low = decode_hex_nibble(pair[1]).ok_or(AasxHashParseError)?;
+            *slot = (high << 4) | low;
         }
-        Ok(Self(bytes))
+        Ok(Self(decoded))
     }
 
     pub fn as_bytes(&self) -> &[u8; 32] {
@@ -39,12 +40,26 @@ impl AasxSha256 {
     }
 
     pub fn to_hex(self) -> String {
-        let mut output = String::with_capacity(64);
-        for byte in self.0 {
-            use fmt::Write;
-            write!(&mut output, "{byte:02x}").expect("writing to String is infallible");
+        String::from_utf8(self.hex_bytes().to_vec()).expect("hex encoding is valid UTF-8")
+    }
+
+    fn hex_bytes(self) -> [u8; 64] {
+        const HEX: &[u8; 16] = b"0123456789abcdef";
+        let mut output = [0_u8; 64];
+        for (index, byte) in self.0.into_iter().enumerate() {
+            output[index * 2] = HEX[usize::from(byte >> 4)];
+            output[index * 2 + 1] = HEX[usize::from(byte & 0x0f)];
         }
         output
+    }
+}
+
+fn decode_hex_nibble(byte: u8) -> Option<u8> {
+    match byte {
+        b'0'..=b'9' => Some(byte - b'0'),
+        b'a'..=b'f' => Some(byte - b'a' + 10),
+        b'A'..=b'F' => Some(byte - b'A' + 10),
+        _ => None,
     }
 }
 
@@ -61,7 +76,9 @@ impl std::error::Error for AasxHashParseError {}
 
 impl fmt::Display for AasxSha256 {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter.write_str(&self.to_hex())
+        let bytes = self.hex_bytes();
+        let value = std::str::from_utf8(&bytes).expect("hex encoding is valid UTF-8");
+        formatter.write_str(value)
     }
 }
 
@@ -70,7 +87,9 @@ impl Serialize for AasxSha256 {
     where
         S: Serializer,
     {
-        serializer.serialize_str(&self.to_hex())
+        let bytes = self.hex_bytes();
+        let value = std::str::from_utf8(&bytes).expect("hex encoding is valid UTF-8");
+        serializer.serialize_str(value)
     }
 }
 

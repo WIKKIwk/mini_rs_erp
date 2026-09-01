@@ -11,17 +11,19 @@ pub(super) async fn write(
     tx: &mut Transaction<'_, Postgres>,
     revision: &CanonicalApparatusRevision,
     projections: &ApparatusProjectionSet,
+    source_aasx_sha256: &str,
 ) -> Result<(), CanonicalApparatusError> {
-    write_runtime(tx, revision, projections).await?;
-    write_queue(tx, revision, projections).await?;
-    write_material(tx, revision, projections).await?;
-    write_capacity(tx, revision, projections).await
+    write_runtime(tx, revision, projections, source_aasx_sha256).await?;
+    write_queue(tx, revision, projections, source_aasx_sha256).await?;
+    write_material(tx, revision, projections, source_aasx_sha256).await?;
+    write_capacity(tx, revision, projections, source_aasx_sha256).await
 }
 
 async fn write_runtime(
     tx: &mut Transaction<'_, Postgres>,
     revision: &CanonicalApparatusRevision,
     projections: &ApparatusProjectionSet,
+    source_aasx_sha256: &str,
 ) -> Result<(), CanonicalApparatusError> {
     let runtime = &projections.runtime;
     sqlx::query(
@@ -38,7 +40,7 @@ async fn write_runtime(
     .bind(&runtime.display.display_name)
     .bind(json(runtime)?)
     .bind(to_i64(runtime.source_revision)?)
-    .bind(runtime.source_aasx_sha256.to_hex())
+    .bind(source_aasx_sha256)
     .bind(i32::try_from(revision.schema_version).map_err(|_| CanonicalApparatusError::Persistence)?)
     .bind(runtime.physical_asset_id.as_str())
     .bind(runtime.equipment_class_id.as_str())
@@ -47,7 +49,7 @@ async fn write_runtime(
     .bind(json(&runtime.execution_profile)?)
     .bind(json(&revision.policies)?)
     .bind(json(&revision.capacity)?)
-    .bind(enum_name(&runtime.lifecycle.state)?)
+    .bind(runtime.lifecycle.state.as_str())
     .execute(&mut **tx)
     .await
     .map_err(|_| CanonicalApparatusError::Persistence)?;
@@ -58,6 +60,7 @@ async fn write_queue(
     tx: &mut Transaction<'_, Postgres>,
     revision: &CanonicalApparatusRevision,
     projections: &ApparatusProjectionSet,
+    source_aasx_sha256: &str,
 ) -> Result<(), CanonicalApparatusError> {
     let queue = &projections.queue;
     sqlx::query(
@@ -75,10 +78,10 @@ async fn write_queue(
     )
     .bind(&revision.display.display_name)
     .bind(revision.apparatus_id.as_str())
-    .bind(enum_name(&queue.discipline)?)
+    .bind(queue.discipline.as_str())
     .bind(json(queue)?)
     .bind(to_i64(queue.source_revision)?)
-    .bind(queue.source_aasx_sha256.to_hex())
+    .bind(source_aasx_sha256)
     .execute(&mut **tx)
     .await
     .map_err(|_| CanonicalApparatusError::Persistence)?;
@@ -89,6 +92,7 @@ async fn write_material(
     tx: &mut Transaction<'_, Postgres>,
     revision: &CanonicalApparatusRevision,
     projections: &ApparatusProjectionSet,
+    source_aasx_sha256: &str,
 ) -> Result<(), CanonicalApparatusError> {
     let material = &projections.material;
     let (required, item_groups, requirement_groups) = match &material.policy {
@@ -123,7 +127,7 @@ async fn write_material(
     .bind(required)
     .bind(json(material)?)
     .bind(to_i64(material.source_revision)?)
-    .bind(material.source_aasx_sha256.to_hex())
+    .bind(source_aasx_sha256)
     .execute(&mut **tx)
     .await
     .map_err(|_| CanonicalApparatusError::Persistence)?;
@@ -134,14 +138,15 @@ async fn write_capacity(
     tx: &mut Transaction<'_, Postgres>,
     revision: &CanonicalApparatusRevision,
     projections: &ApparatusProjectionSet,
+    source_aasx_sha256: &str,
 ) -> Result<(), CanonicalApparatusError> {
     let capacity = &projections.capacity;
     let levels = revision
         .capabilities
         .iter()
-        .map(|capability| Ok((enum_name(&capability.code)?, capability.level)))
-        .collect::<Result<BTreeMap<_, _>, CanonicalApparatusError>>()?;
-    let capabilities = levels.keys().cloned().collect::<Vec<_>>();
+        .map(|capability| (capability.code.as_str(), capability.level))
+        .collect::<BTreeMap<_, _>>();
+    let capabilities = levels.keys().copied().collect::<Vec<_>>();
     sqlx::query(
         "INSERT INTO mini_apparatus_capacity_profiles (
              canonical_apparatus_id, apparatus_id, apparatus, capacity_slots,
@@ -175,7 +180,7 @@ async fn write_capacity(
     .bind(json(&capabilities)?)
     .bind(json(&levels)?)
     .bind(to_i64(capacity.source_revision)?)
-    .bind(capacity.source_aasx_sha256.to_hex())
+    .bind(source_aasx_sha256)
     .execute(&mut **tx)
     .await
     .map_err(|_| CanonicalApparatusError::Persistence)?;
@@ -184,13 +189,6 @@ async fn write_capacity(
 
 fn json(value: &impl serde::Serialize) -> Result<serde_json::Value, CanonicalApparatusError> {
     serde_json::to_value(value).map_err(|_| CanonicalApparatusError::Persistence)
-}
-
-fn enum_name(value: &impl serde::Serialize) -> Result<String, CanonicalApparatusError> {
-    json(value)?
-        .as_str()
-        .map(str::to_string)
-        .ok_or(CanonicalApparatusError::Persistence)
 }
 
 fn to_i64(value: u64) -> Result<i64, CanonicalApparatusError> {

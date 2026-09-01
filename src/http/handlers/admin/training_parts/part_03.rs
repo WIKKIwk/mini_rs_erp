@@ -48,19 +48,18 @@ pub(super) async fn training_raw_material_start_requirements(
         || (!scanned_barcodes.is_empty()
             && scanned_barcodes.is_subset(&assigned_barcodes)
             && scanned_barcodes == assigned_barcodes);
-    let assigned_barcodes = assigned_barcodes.into_iter().collect::<Vec<_>>();
     Ok(Some(serde_json::json!({
         "policy": "state_all",
         "requires_material": !assigned_barcodes.is_empty(),
         "requirement_groups": [],
-        "assigned_barcodes": assigned_barcodes.clone(),
-        "staged_barcodes": assigned_barcodes.clone(),
-        "eligible_barcodes": assigned_barcodes.clone(),
+        "assigned_barcodes": &assigned_barcodes,
+        "staged_barcodes": &assigned_barcodes,
+        "eligible_barcodes": &assigned_barcodes,
         "required_scan_count": assigned_barcodes.len(),
         "matched_scan_count": matched_scan_count,
         "assignments_satisfied": true,
         "scan_satisfied": scan_satisfied,
-        "assignments": assignments.clone(),
+        "assignments": &assignments,
         "start_assignments": assignments,
     })))
 }
@@ -88,22 +87,43 @@ pub(super) async fn merge_worker_training_maps(
     Ok(())
 }
 
-pub(super) async fn merge_worker_training_snapshot(
+pub(super) async fn merge_worker_training_snapshot_shared(
     state: &AppState,
     principal: &Principal,
-    snapshot: &mut ProductionMapLiveSnapshot,
-) -> Result<(), TrainingWorkspaceError> {
+    mut snapshot: std::sync::Arc<ProductionMapLiveSnapshot>,
+) -> Result<std::sync::Arc<ProductionMapLiveSnapshot>, TrainingWorkspaceError> {
     let overlay = worker_training_overlay(state, principal).await?;
     if overlay.active_apparatuses.is_empty() {
-        return Ok(());
+        return Ok(snapshot);
+    }
+    merge_worker_training_overlay(std::sync::Arc::make_mut(&mut snapshot), overlay);
+    Ok(snapshot)
+}
+
+fn merge_worker_training_overlay(
+    snapshot: &mut ProductionMapLiveSnapshot,
+    overlay: WorkerTrainingOverlay,
+) {
+    let WorkerTrainingOverlay {
+        active_apparatuses,
+        maps,
+        sequences,
+        visible_order_ids,
+        queue_states,
+        queue_policies,
+        queue_action_controls,
+        order_statuses,
+        ..
+    } = overlay;
+    if active_apparatuses.is_empty() {
+        return;
     }
 
     let hidden_order_ids = snapshot
         .maps
         .iter()
         .filter(|saved| {
-            overlay
-                .active_apparatuses
+            active_apparatuses
                 .iter()
                 .any(|apparatus| training_map_has_apparatus(saved, apparatus))
         })
@@ -113,24 +133,23 @@ pub(super) async fn merge_worker_training_snapshot(
     snapshot
         .maps
         .retain(|saved| !hidden_order_ids.contains(saved.map.id.trim()));
-    snapshot.maps.extend(overlay.maps.clone());
     snapshot
         .sequences
-        .retain(|apparatus, _| !is_training_apparatus(apparatus, &overlay.active_apparatuses));
+        .retain(|apparatus, _| !is_training_apparatus(apparatus, &active_apparatuses));
     snapshot
         .visible_order_ids
-        .retain(|apparatus, _| !is_training_apparatus(apparatus, &overlay.active_apparatuses));
+        .retain(|apparatus, _| !is_training_apparatus(apparatus, &active_apparatuses));
     snapshot
         .queue_states
-        .retain(|apparatus, _| !is_training_apparatus(apparatus, &overlay.active_apparatuses));
+        .retain(|apparatus, _| !is_training_apparatus(apparatus, &active_apparatuses));
     snapshot
         .queue_action_controls
-        .retain(|apparatus, _| !is_training_apparatus(apparatus, &overlay.active_apparatuses));
+        .retain(|apparatus, _| !is_training_apparatus(apparatus, &active_apparatuses));
     snapshot
         .stage_states
         .retain(|order_id, _| !hidden_order_ids.contains(order_id));
     snapshot.queue_policies.retain(|policy| {
-        !is_training_apparatus(policy.apparatus_id.as_str(), &overlay.active_apparatuses)
+        !is_training_apparatus(policy.apparatus_id.as_str(), &active_apparatuses)
     });
     snapshot
         .order_statuses
@@ -138,13 +157,11 @@ pub(super) async fn merge_worker_training_snapshot(
     snapshot
         .order_controls
         .retain(|order_id, _| !hidden_order_ids.contains(order_id));
-    snapshot.sequences.extend(overlay.sequences);
-    snapshot.visible_order_ids.extend(overlay.visible_order_ids);
-    snapshot.queue_states.extend(overlay.queue_states);
-    snapshot
-        .queue_action_controls
-        .extend(overlay.queue_action_controls);
-    snapshot.queue_policies.extend(overlay.queue_policies);
-    snapshot.order_statuses.extend(overlay.order_statuses);
-    Ok(())
+    snapshot.maps.extend(maps);
+    snapshot.sequences.extend(sequences);
+    snapshot.visible_order_ids.extend(visible_order_ids);
+    snapshot.queue_states.extend(queue_states);
+    snapshot.queue_action_controls.extend(queue_action_controls);
+    snapshot.queue_policies.extend(queue_policies);
+    snapshot.order_statuses.extend(order_statuses);
 }

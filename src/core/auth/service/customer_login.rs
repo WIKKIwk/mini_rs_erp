@@ -50,7 +50,7 @@ impl AuthService {
                 && phone_matches_normalized(&customer.phone, normalized_phone)
             {
                 return Ok(Principal {
-                    role: role.clone(),
+                    role,
                     display_name: customer.name.clone(),
                     legal_name: customer.name,
                     ref_: customer.id,

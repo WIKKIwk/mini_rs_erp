@@ -1,6 +1,7 @@
 mod memory_store;
 mod models;
 pub(crate) mod normalize;
+mod normalize_qr;
 mod ports;
 mod service;
 #[cfg(test)]

@@ -39,24 +39,21 @@ impl MemoryQolipStore {
         *self.products.write().await = products;
     }
 
-    async fn legacy_spec(&self, location: &QolipLocation) -> QolipProductSpec {
-        let item_group = self
-            .products
+    async fn product_item_group(&self, item_code: &str) -> Option<String> {
+        self.products
             .read()
             .await
             .iter()
-            .find(|product| {
-                product
-                    .code
-                    .trim()
-                    .eq_ignore_ascii_case(location.item_code.trim())
-            })
+            .find(|product| product.code.trim().eq_ignore_ascii_case(item_code.trim()))
             .map(|product| product.item_group.clone())
-            .unwrap_or_default();
+            .filter(|group| !group.trim().is_empty())
+    }
+
+    fn legacy_spec(location: &QolipLocation, item_group: Option<&str>) -> QolipProductSpec {
         QolipProductSpec {
             item_code: location.item_code.clone(),
             item_name: location.item_name.clone(),
-            item_group,
+            item_group: item_group.unwrap_or_default().to_string(),
             qolip_code: location.qolip_code.clone(),
             size: location.size,
             color: String::new(),
@@ -66,25 +63,16 @@ impl MemoryQolipStore {
         }
     }
 
-    async fn legacy_checkout_spec(&self, checkout: &QolipCheckout) -> QolipProductSpec {
-        let item_group = self
-            .products
-            .read()
-            .await
-            .iter()
-            .find(|product| {
-                product
-                    .code
-                    .trim()
-                    .eq_ignore_ascii_case(checkout.item_code.trim())
-            })
-            .map(|product| product.item_group.clone())
-            .filter(|group| !group.trim().is_empty())
-            .unwrap_or_else(|| checkout.item_group.clone());
+    fn legacy_checkout_spec(
+        checkout: &QolipCheckout,
+        item_group: Option<&str>,
+    ) -> QolipProductSpec {
         QolipProductSpec {
             item_code: checkout.item_code.clone(),
             item_name: checkout.item_name.clone(),
-            item_group,
+            item_group: item_group
+                .map(str::to_string)
+                .unwrap_or_else(|| checkout.item_group.clone()),
             qolip_code: checkout.qolip_code.clone(),
             size: checkout.size,
             color: String::new(),
@@ -109,31 +97,36 @@ fn apply_memory_location_move(
     let Some(source_index) = locations.iter().position(|item| item.id == location_id) else {
         return Err(QolipError::LocationNotFound);
     };
-    let source = locations[source_index].clone();
     let column_number = input.column_number.ok_or(QolipError::InvalidLocation)?;
     let target = normalize_move_target(
-        &source,
+        &locations[source_index],
         &input.block,
         &input.warehouse,
         &input.row_letter,
         column_number,
         input.quantity,
     )?;
-    if let Some(existing) = locations.iter().find(|item| item.id == target.id)
-        && !location_identity_matches(existing, &target)
+    let mut target_index = locations.iter().position(|item| item.id == target.id);
+    if let Some(index) = target_index
+        && !location_identity_matches(&locations[index], &target)
     {
         return Err(QolipError::LocationIdentityMismatch);
     }
 
-    let remaining = source.quantity - input.quantity;
+    let remaining = locations[source_index].quantity - input.quantity;
     if remaining > 0 {
         locations[source_index].quantity = remaining;
     } else {
         locations.remove(source_index);
+        if let Some(index) = &mut target_index
+            && *index > source_index
+        {
+            *index -= 1;
+        }
     }
-    if let Some(target_index) = locations.iter().position(|item| item.id == target.id) {
-        locations[target_index].quantity += target.quantity;
-        return Ok(locations[target_index].clone());
+    if let Some(index) = target_index {
+        locations[index].quantity += target.quantity;
+        return Ok(locations[index].clone());
     }
     locations.push(target.clone());
     Ok(target)
@@ -150,13 +143,24 @@ fn sort_locations(locations: &mut [QolipLocation]) {
 
 fn memory_product_matches(product: &QolipProduct, query: &str) -> bool {
     query.is_empty()
-        || product.name.to_lowercase().contains(query)
-        || product.code.to_lowercase().contains(query)
-        || product.qolip_code.to_lowercase().contains(query)
+        || contains_case_insensitive(&product.name, query)
+        || contains_case_insensitive(&product.code, query)
+        || contains_case_insensitive(&product.qolip_code, query)
         || product
             .customer_names
             .iter()
-            .any(|customer| customer.to_lowercase().contains(query))
+            .any(|customer| contains_case_insensitive(customer, query))
+}
+
+fn contains_case_insensitive(value: &str, lowercase_query: &str) -> bool {
+    if value.is_ascii() && lowercase_query.is_ascii() {
+        let query = lowercase_query.as_bytes();
+        return value
+            .as_bytes()
+            .windows(query.len())
+            .any(|window| window.eq_ignore_ascii_case(query));
+    }
+    value.to_lowercase().contains(lowercase_query)
 }
 
 include!("memory_store_inline_tests.rs");

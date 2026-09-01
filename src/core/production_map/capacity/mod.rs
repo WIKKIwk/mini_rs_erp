@@ -48,15 +48,14 @@ pub struct ApparatusCapacityProfile {
 
 impl ApparatusCapacityProfile {
     pub fn capability_level(&self, code: &str) -> u16 {
-        let normalized = normalize_code(code);
         self.capability_levels
             .iter()
-            .find(|(key, _)| normalize_code(key) == normalized)
+            .find(|(key, _)| normalized_codes_equal(key, code))
             .map(|(_, level)| *level)
             .or_else(|| {
                 self.capabilities
                     .iter()
-                    .any(|item| normalize_code(item) == normalized)
+                    .any(|item| normalized_codes_equal(item, code))
                     .then_some(1)
             })
             .unwrap_or_default()
@@ -97,13 +96,19 @@ pub enum ApparatusScheduleStatus {
 
 impl ApparatusScheduleStatus {
     pub fn parse(value: &str) -> Option<Self> {
-        match value.trim().to_ascii_lowercase().as_str() {
-            "planned" => Some(Self::Planned),
-            "active" => Some(Self::Active),
-            "paused" => Some(Self::Paused),
-            "completed" => Some(Self::Completed),
-            "cancelled" => Some(Self::Cancelled),
-            _ => None,
+        let value = value.trim();
+        if value.eq_ignore_ascii_case("planned") {
+            Some(Self::Planned)
+        } else if value.eq_ignore_ascii_case("active") {
+            Some(Self::Active)
+        } else if value.eq_ignore_ascii_case("paused") {
+            Some(Self::Paused)
+        } else if value.eq_ignore_ascii_case("completed") {
+            Some(Self::Completed)
+        } else if value.eq_ignore_ascii_case("cancelled") {
+            Some(Self::Cancelled)
+        } else {
+            None
         }
     }
 
@@ -238,6 +243,6 @@ fn default_capability_level() -> u16 {
     1
 }
 
-fn normalize_code(value: &str) -> String {
-    value.trim().to_ascii_lowercase()
+fn normalized_codes_equal(left: &str, right: &str) -> bool {
+    left.trim().eq_ignore_ascii_case(right.trim())
 }

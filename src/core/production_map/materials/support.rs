@@ -56,6 +56,7 @@ pub(super) fn rule_matches(
                 .any(|group| item_groups_match(&group.item_groups, item_group_path)))
 }
 
+#[cfg(test)]
 pub(super) fn material_requirements_met(
     rule: &ApparatusMaterialRule,
     assignments: &[RawMaterialAssignment],
@@ -63,36 +64,75 @@ pub(super) fn material_requirements_met(
     material_requirement_match_count(rule, assignments) == material_requirement_slot_count(rule)
 }
 
-pub(super) fn material_requirement_slot_count(rule: &ApparatusMaterialRule) -> usize {
-    effective_requirement_groups(rule)
-        .iter()
-        .map(|group| usize::from(group.min_required_count.max(1)))
-        .sum()
+pub(super) fn material_requirements_met_refs(
+    rule: &ApparatusMaterialRule,
+    assignments: &[&RawMaterialAssignment],
+) -> bool {
+    material_requirement_match_count_refs(rule, assignments)
+        == material_requirement_slot_count(rule)
 }
 
+pub(super) fn material_requirement_slot_count(rule: &ApparatusMaterialRule) -> usize {
+    if rule.requirement_groups.is_empty() {
+        rule.item_groups.len()
+    } else {
+        rule.requirement_groups
+            .iter()
+            .map(|group| usize::from(group.min_required_count.max(1)))
+            .sum()
+    }
+}
+
+#[cfg(test)]
 pub(super) fn material_requirement_match_count(
     rule: &ApparatusMaterialRule,
     assignments: &[RawMaterialAssignment],
 ) -> usize {
-    let slots = effective_requirement_groups(rule)
-        .into_iter()
-        .flat_map(|group| {
-            (0..usize::from(group.min_required_count.max(1)))
-                .map(move |_| group.item_groups.clone())
-        })
-        .collect::<Vec<_>>();
+    material_requirement_match_count_by(rule, assignments.len(), |index| &assignments[index])
+}
+
+pub(super) fn material_requirement_match_count_refs(
+    rule: &ApparatusMaterialRule,
+    assignments: &[&RawMaterialAssignment],
+) -> usize {
+    material_requirement_match_count_by(rule, assignments.len(), |index| assignments[index])
+}
+
+fn material_requirement_match_count_by<'a, F>(
+    rule: &'a ApparatusMaterialRule,
+    assignment_count: usize,
+    assignment_at: F,
+) -> usize
+where
+    F: Fn(usize) -> &'a RawMaterialAssignment + Copy,
+{
+    let slots = material_requirement_slots(rule);
     let mut matched_slots = vec![None; slots.len()];
-    for assignment_index in 0..assignments.len() {
+    for assignment_index in 0..assignment_count {
         let mut visited = vec![false; slots.len()];
         try_match_material_assignment(
             assignment_index,
-            assignments,
+            assignment_at,
             &slots,
             &mut matched_slots,
             &mut visited,
         );
     }
     matched_slots.iter().filter(|slot| slot.is_some()).count()
+}
+
+fn material_requirement_slots(rule: &ApparatusMaterialRule) -> Vec<&[String]> {
+    let mut slots = Vec::with_capacity(material_requirement_slot_count(rule));
+    if rule.requirement_groups.is_empty() {
+        slots.extend(rule.item_groups.iter().map(std::slice::from_ref));
+    } else {
+        for group in &rule.requirement_groups {
+            for _ in 0..usize::from(group.min_required_count.max(1)) {
+                slots.push(group.item_groups.as_slice());
+            }
+        }
+    }
+    slots
 }
 
 pub(super) fn effective_requirement_groups(
@@ -111,17 +151,21 @@ pub(super) fn effective_requirement_groups(
         .collect()
 }
 
-fn try_match_material_assignment(
+fn try_match_material_assignment<'a, F>(
     assignment_index: usize,
-    assignments: &[RawMaterialAssignment],
-    slots: &[Vec<String>],
+    assignment_at: F,
+    slots: &[&[String]],
     matched_slots: &mut [Option<usize>],
     visited: &mut [bool],
-) -> bool {
+) -> bool
+where
+    F: Fn(usize) -> &'a RawMaterialAssignment + Copy,
+{
+    let assignment = assignment_at(assignment_index);
     for (slot_index, item_groups) in slots.iter().enumerate() {
         if visited[slot_index]
             || !item_groups.iter().any(|item_group| {
-                item_group.eq_ignore_ascii_case(assignments[assignment_index].item_group.trim())
+                item_group.eq_ignore_ascii_case(assignment.item_group.trim())
             })
         {
             continue;
@@ -130,7 +174,7 @@ fn try_match_material_assignment(
         if matched_slots[slot_index].is_none()
             || try_match_material_assignment(
                 matched_slots[slot_index].unwrap_or_default(),
-                assignments,
+                assignment_at,
                 slots,
                 matched_slots,
                 visited,
@@ -280,6 +324,45 @@ mod tests {
             assignment("apparatus:catalog:flexo-001", "INK-2", "Kraska"),
         ];
         assert!(material_requirements_met(&rule, &two));
+    }
+
+    #[test]
+    fn borrowed_and_owned_requirement_matching_are_equivalent() {
+        let rule = ApparatusMaterialRule {
+            apparatus_id: apparatus_id("apparatus:catalog:flexo-001"),
+            apparatus: "Flexo".to_string(),
+            requires_material: true,
+            start_policy: RawMaterialStartPolicy::RequirementGroups,
+            item_groups: Vec::new(),
+            requirement_groups: vec![
+                ApparatusMaterialRequirementGroup {
+                    name: "flexible".to_string(),
+                    item_groups: vec!["Kraska".to_string(), "Rastvoritel".to_string()],
+                    min_required_count: 1,
+                },
+                ApparatusMaterialRequirementGroup {
+                    name: "ink".to_string(),
+                    item_groups: vec!["Kraska".to_string()],
+                    min_required_count: 1,
+                },
+            ],
+        };
+        let assignments = vec![
+            assignment("apparatus:catalog:flexo-001", "INK-1", "Kraska"),
+            assignment(
+                "apparatus:catalog:flexo-001",
+                "SOLVENT-1",
+                "Rastvoritel",
+            ),
+        ];
+        let assignment_refs = assignments.iter().collect::<Vec<_>>();
+
+        assert_eq!(material_requirement_slot_count(&rule), 2);
+        assert_eq!(material_requirement_match_count(&rule, &assignments), 2);
+        assert_eq!(
+            material_requirement_match_count_refs(&rule, &assignment_refs),
+            material_requirement_match_count(&rule, &assignments)
+        );
     }
 
     #[test]

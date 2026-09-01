@@ -1,27 +1,29 @@
 
-pub(super) fn current_progress_batch_for_report(
-    scanned_batch: &OrderProgressBatch,
-    progress_batches: &[OrderProgressBatch],
+pub(super) fn current_progress_batch_for_report<'a>(
+    scanned_batch: &'a OrderProgressBatch,
+    progress_batches: &'a [OrderProgressBatch],
 ) -> Option<OrderProgressBatch> {
-    let mut current = scanned_batch.clone();
-    let mut seen = BTreeSet::from([current.batch_id.trim().to_string()]);
-    loop {
-        let next = progress_batches
-            .iter()
-            .filter(|batch| batch.parent_batch_id.trim() == current.batch_id.trim())
-            .max_by(|left, right| {
-                progress_batch_order_key(left).cmp(&progress_batch_order_key(right))
-            })
-            .cloned();
-        let Some(next) = next else {
-            break;
-        };
-        if !seen.insert(next.batch_id.trim().to_string()) {
+    let mut latest_by_parent = BTreeMap::new();
+    for batch in progress_batches {
+        let parent_batch_id = batch.parent_batch_id.trim();
+        let key = progress_batch_order_key(batch);
+        if latest_by_parent
+            .get(parent_batch_id)
+            .is_none_or(|(_, best_key)| key >= *best_key)
+        {
+            latest_by_parent.insert(parent_batch_id, (batch, key));
+        }
+    }
+
+    let mut current = scanned_batch;
+    let mut seen = BTreeSet::from([current.batch_id.trim()]);
+    while let Some((next, _)) = latest_by_parent.get(current.batch_id.trim()) {
+        if !seen.insert(next.batch_id.trim()) {
             break;
         }
         current = next;
     }
-    Some(current)
+    Some(current.clone())
 }
 
 pub(super) fn validate_queue_action_request(
@@ -35,7 +37,7 @@ pub(super) fn validate_queue_action_request(
     if order_id.is_empty() {
         return Err(ProductionMapError::MissingId);
     }
-    if queue_state::apparatus_search_key(apparatus).is_empty() {
+    if !queue_state::is_canonical_apparatus_id(apparatus) {
         return Err(ProductionMapError::ApparatusNotAssigned);
     }
     if !queue_state::apparatus_matches_assigned(apparatus, assigned_apparatus) {
@@ -52,26 +54,20 @@ pub(super) fn known_apparatus_storage_keys(
         .keys()
         .chain(all_states.keys())
         .map(|key| key.as_str())
-        .filter(|key| !queue_state::apparatus_search_key(key).is_empty())
+        .filter(|key| queue_state::is_canonical_apparatus_id(key))
         .collect::<BTreeSet<_>>()
         .into_iter()
         .map(|key| key.to_string())
         .collect()
 }
 
-pub(super) fn queue_policy_for_apparatus(
-    canonical: &RuntimeApparatusConfiguration,
-) -> ApparatusQueuePolicy {
-    effective_apparatus_queue_policy(canonical)
-}
-
 pub(super) fn parsed_queue_states(
-    states: BTreeMap<String, String>,
+    states: &BTreeMap<String, String>,
 ) -> BTreeMap<String, queue_state::ApparatusQueueOrderState> {
     states
-        .into_iter()
+        .iter()
         .filter_map(|(id, value)| {
-            queue_state::ApparatusQueueOrderState::parse(&value).map(|state| (id, state))
+            queue_state::ApparatusQueueOrderState::parse(value).map(|state| (id.clone(), state))
         })
         .collect()
 }
@@ -101,21 +97,20 @@ pub(super) fn has_waiting_previous_stage_wip(
             && (progress_batch_next_stage_node_id(batch).is_empty()
                 || chain::stage_node_ids_match_for_map(
                     map,
-                    &progress_batch_next_stage_node_id(batch),
+                    progress_batch_next_stage_node_id(batch),
                     stage_node_id,
                 ))
             && batch.wip_status == OrderProgressBatchWipStatus::Waiting
     })
 }
 
-pub(super) fn progress_batch_next_stage_node_id(batch: &OrderProgressBatch) -> String {
+pub(super) fn progress_batch_next_stage_node_id(batch: &OrderProgressBatch) -> &str {
     batch
         .payload_json
         .get("next_stage_node_id")
         .and_then(serde_json::Value::as_str)
         .unwrap_or_default()
         .trim()
-        .to_string()
 }
 
 pub(super) fn waiting_reentry_stage_node_id(
@@ -132,11 +127,11 @@ pub(super) fn waiting_reentry_stage_node_id(
         }
         let stage_node_id = progress_batch_next_stage_node_id(batch);
         if stage_node_id.is_empty()
-            || chain::work_stage_for_station(map, apparatus, &stage_node_id).is_none()
+            || chain::work_stage_for_station(map, apparatus, stage_node_id).is_none()
         {
             return None;
         }
-        Some(stage_node_id)
+        Some(stage_node_id.to_string())
     })
 }
 
@@ -184,10 +179,10 @@ pub(super) fn sequence_updates_for_frozen_transition(
         let stored_sequence = sequences
             .get(&storage_key)
             .or_else(|| sequences.get(&requested_apparatus))
-            .cloned()
+            .map(Vec::as_slice)
             .unwrap_or_default();
         let mut sequence = queue_state::effective_apparatus_sequence_excluding(
-            &stored_sequence,
+            stored_sequence,
             &visible_order_ids,
             excluded_order_ids,
         );
@@ -246,7 +241,7 @@ pub(super) fn apply_requeued_resume(
     order_id: &str,
 ) -> Result<(), ProductionMapError> {
     if policy == ApparatusQueuePolicy::StrictSequence
-        && queue_state::first_actionable_order_id(sequence, parsed).as_deref() != Some(order_id)
+        && queue_state::first_actionable_order_id(sequence, parsed) != Some(order_id)
     {
         return Err(ProductionMapError::QueueActionNotAllowed);
     }

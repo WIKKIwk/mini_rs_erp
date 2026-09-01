@@ -1,7 +1,7 @@
 use super::*;
 
 impl RezkaService {
-    pub async fn prepare_client_split(
+    pub fn prepare_client_split(
         &self,
         source: RezkaSourceEntry,
         request: RezkaSplitRequest,
@@ -21,9 +21,7 @@ impl RezkaService {
         source: RezkaSourceEntry,
         request: RezkaSplitRequest,
     ) -> Result<RezkaSplitResponse, RezkaServiceError> {
-        let repack_store = self.repack_store.as_ref().ok_or_else(|| {
-            RezkaServiceError::NotConfigured("rezka repack store is not configured".into())
-        })?;
+        let repack_store = self.repack_store()?;
         let job = NormalizedRezkaSplit::from_request(source, request, self.epc.as_deref())?;
         if !job.all_printable_epcs_supplied {
             return Err(RezkaServiceError::InvalidInput(
@@ -37,19 +35,23 @@ impl RezkaService {
                 outputs: job.outputs.clone(),
             })
             .await
-            .map_err(|error| RezkaServiceError::StoreWrite(error.message()))?;
+            .map_err(|error| RezkaServiceError::StoreWrite(error.to_string()))?;
         repack_store
             .submit_rezka_repack_draft(&draft.name)
             .await
             .map_err(|error| {
-                RezkaServiceError::SubmitFailed(clean_store_error(&error.message()))
+                RezkaServiceError::SubmitFailed(clean_store_error(&error.to_string()))
             })?;
         Ok(RezkaSplitResponse {
             ok: true,
             status: "printed".to_string(),
             stock_entry_name: draft.name,
             source_barcode: job.source.barcode,
-            outputs: job.printable_outputs,
+            outputs: job
+                .outputs
+                .into_iter()
+                .filter(|output| output.print_qr)
+                .collect(),
         })
     }
 
@@ -58,21 +60,17 @@ impl RezkaService {
         source: RezkaSourceEntry,
         request: RezkaSplitRequest,
     ) -> Result<RezkaSplitResponse, RezkaServiceError> {
-        let repack_store = self.repack_store.as_ref().ok_or_else(|| {
-            RezkaServiceError::NotConfigured("rezka repack store is not configured".into())
-        })?;
-        let driver = self.driver.as_ref().ok_or_else(|| {
-            RezkaServiceError::NotConfigured("scale driver is not configured".into())
-        })?;
+        let repack_store = self.repack_store()?;
+        let driver = self.driver()?;
         let job = NormalizedRezkaSplit::from_request(source, request, self.epc.as_deref())?;
         tracing::info!(
             source_barcode = %job.source.barcode,
             source_item_code = %job.source.item_code,
             source_qty = job.source.qty,
             output_count = job.outputs.len(),
-            printable_count = job.printable_outputs.len(),
+            printable_count = job.outputs.iter().filter(|output| output.print_qr).count(),
             outputs = ?rezka_output_log(&job.outputs),
-            printable_outputs = ?rezka_output_log(&job.printable_outputs),
+            printable_outputs = ?rezka_output_log(job.outputs.iter().filter(|output| output.print_qr)),
             "rezka split normalized"
         );
         let draft = repack_store
@@ -82,9 +80,9 @@ impl RezkaService {
                 outputs: job.outputs.clone(),
             })
             .await
-            .map_err(|error| RezkaServiceError::StoreWrite(error.message()))?;
+            .map_err(|error| RezkaServiceError::StoreWrite(error.to_string()))?;
 
-        for output in &job.printable_outputs {
+        for output in job.outputs.iter().filter(|output| output.print_qr) {
             tracing::info!(
                 stock_entry_name = %draft.name,
                 epc = %output.epc,
@@ -101,7 +99,7 @@ impl RezkaService {
                 .print_material_receipt(job.driver_request(output))
                 .await;
             match print {
-                Ok(print) if print_done(&print) => {
+                Ok(print) if print.ok && print.status.trim().eq_ignore_ascii_case("done") => {
                     tracing::info!(
                         stock_entry_name = %draft.name,
                         epc = %output.epc,
@@ -114,17 +112,18 @@ impl RezkaService {
                     );
                 }
                 Ok(print) => {
+                    let detail = print_error_detail(&print);
                     tracing::warn!(
                         stock_entry_name = %draft.name,
                         epc = %output.epc,
                         item_code = %output.item_code,
                         qty = output.qty,
                         status = %print.status,
-                        detail = %print_error_detail(&print),
+                        detail = %detail,
                         "rezka split print failed"
                     );
                     let _ = repack_store.delete_rezka_repack_draft(&draft.name).await;
-                    return Err(RezkaServiceError::PrintFailed(print_error_detail(&print)));
+                    return Err(RezkaServiceError::PrintFailed(detail));
                 }
                 Err(error) => {
                     tracing::warn!(
@@ -132,11 +131,11 @@ impl RezkaService {
                         epc = %output.epc,
                         item_code = %output.item_code,
                         qty = output.qty,
-                        error = %error.message(),
+                        error = %error,
                         "rezka split print request error"
                     );
                     let _ = repack_store.delete_rezka_repack_draft(&draft.name).await;
-                    return Err(RezkaServiceError::PrintFailed(error.message()));
+                    return Err(RezkaServiceError::PrintFailed(error.to_string()));
                 }
             }
         }
@@ -145,7 +144,7 @@ impl RezkaService {
             .submit_rezka_repack_draft(&draft.name)
             .await
             .map_err(|error| {
-                RezkaServiceError::SubmitFailed(clean_store_error(&error.message()))
+                RezkaServiceError::SubmitFailed(clean_store_error(&error.to_string()))
             })?;
 
         Ok(RezkaSplitResponse {
@@ -153,7 +152,11 @@ impl RezkaService {
             status: "printed".to_string(),
             stock_entry_name: draft.name,
             source_barcode: job.source.barcode,
-            outputs: job.printable_outputs,
+            outputs: job
+                .outputs
+                .into_iter()
+                .filter(|output| output.print_qr)
+                .collect(),
         })
     }
 }

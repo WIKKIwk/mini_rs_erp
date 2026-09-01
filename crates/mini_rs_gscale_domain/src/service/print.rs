@@ -1,12 +1,15 @@
 use tokio::sync::oneshot;
 
-use super::error::{print_done, print_error_detail};
+use super::error::completed_print;
 use super::jobs::{NormalizedMaterialReceiptJob, NormalizedProgressLabelJob};
 use super::recording::{record_confirmed_material_receipt, record_parallel_material_receipt};
-use super::{GscaleService, GscaleServiceError, LateMaterialReceiptErrorHandler};
+use super::{
+    GscaleService, GscaleServiceError, LateMaterialReceiptErrorHandler,
+    PreparedMaterialReceiptPrint,
+};
 use crate::models::{
     MaterialReceiptPrintRequest, MaterialReceiptPrintResponse, ProgressLabelPrintRequest,
-    ProgressLabelPrintResponse,
+    ProgressLabelPrintResponse, ScaleDriverPrintResponse,
 };
 
 impl GscaleService {
@@ -14,28 +17,26 @@ impl GscaleService {
         &self,
         request: ProgressLabelPrintRequest,
     ) -> Result<ProgressLabelPrintResponse, GscaleServiceError> {
-        let job = NormalizedProgressLabelJob::from_request(request)?;
-        Ok(ProgressLabelPrintResponse {
-            ok: true,
-            status: "prepared".to_string(),
-            qr_payload: job.qr_payload,
-            item_code: job.item_code,
-            item_name: job.item_name,
-            apparatus: job.apparatus,
-            apparatus_display_name: job.apparatus_display_name,
-            customer_name: job.customer_name,
-            executor_name: job.executor_name,
-            qty: job.progress_qty,
-            gross_qty: job.gross_qty,
-            tare_enabled: job.tare_enabled,
-            tare_kg: job.tare_kg,
-            unit: job.unit,
-            progress_unit: job.progress_unit,
-            label_kind: job.label_kind,
-            printer: client_printer(&job.printer),
-            print_mode: client_print_mode(&job.print_mode),
-            printer_status: "client_usb_pending".to_string(),
-            print_count: job.print_count,
+        let job = NormalizedProgressLabelJob::from_request(&request)?;
+        Ok(progress_label_response(
+            "prepared",
+            client_printer(&job.printer),
+            client_print_mode(&job.print_mode),
+            "client_usb_pending".to_string(),
+            job,
+        ))
+    }
+
+    pub fn prepare_material_receipt_print(
+        &self,
+        request: &MaterialReceiptPrintRequest,
+    ) -> Result<PreparedMaterialReceiptPrint, GscaleServiceError> {
+        let mut job = NormalizedMaterialReceiptJob::from_request(request)?;
+        let print_count = job.print_count;
+        job.print_count = 1;
+        Ok(PreparedMaterialReceiptPrint {
+            job: std::sync::Arc::new(job),
+            print_count,
         })
     }
 
@@ -43,15 +44,17 @@ impl GscaleService {
         &self,
         request: MaterialReceiptPrintRequest,
     ) -> Result<MaterialReceiptPrintResponse, GscaleServiceError> {
-        let job = NormalizedMaterialReceiptJob::from_request(request)?;
+        let job = NormalizedMaterialReceiptJob::from_request(&request)?;
         require_single_material_receipt(&job)?;
         let epc = self.next_epc()?;
-        Ok(material_receipt_client_response(
-            job,
+        Ok(material_receipt_response(
             epc,
             String::new(),
             "prepared",
-            "client_usb_pending",
+            client_printer(&job.printer),
+            client_print_mode(&job.print_mode),
+            "client_usb_pending".to_string(),
+            job,
         ))
     }
 
@@ -60,23 +63,25 @@ impl GscaleService {
         request: MaterialReceiptPrintRequest,
         epc: &str,
     ) -> Result<MaterialReceiptPrintResponse, GscaleServiceError> {
-        let receipt_store = self.receipt_store.as_ref().ok_or_else(|| {
-            GscaleServiceError::NotConfigured(
-                "material receipt store is not configured".to_string(),
-            )
-        })?;
-        let job = NormalizedMaterialReceiptJob::from_request(request)?;
+        let receipt_store = self.receipt_store()?;
+        let job = NormalizedMaterialReceiptJob::from_request(&request)?;
         require_single_material_receipt(&job)?;
         let epc = normalize_client_epc(epc)?;
         let draft_name = record_confirmed_material_receipt(
-            receipt_store.clone(),
+            receipt_store.as_ref(),
             &job,
             epc.clone(),
             self.warehouse_event_handler.clone(),
         )
         .await?;
-        Ok(material_receipt_client_response(
-            job, epc, draft_name, "printed", "USB OK",
+        Ok(material_receipt_response(
+            epc,
+            draft_name,
+            "printed",
+            client_printer(&job.printer),
+            client_print_mode(&job.print_mode),
+            "USB OK".to_string(),
+            job,
         ))
     }
 
@@ -92,48 +97,16 @@ impl GscaleService {
         &self,
         request: ProgressLabelPrintRequest,
     ) -> Result<ProgressLabelPrintResponse, GscaleServiceError> {
-        let driver = self.driver.as_ref().ok_or_else(|| {
-            GscaleServiceError::NotConfigured("scale driver is not configured".to_string())
-        })?;
-        let job = NormalizedProgressLabelJob::from_request(request)?;
-        let print = driver.print_material_receipt(job.driver_request()).await;
-        let print = match print {
-            Ok(print) if print_done(&print) => print,
-            Ok(print) => {
-                return Err(GscaleServiceError::PrintFailed {
-                    detail: print_error_detail(&print),
-                    delete_error: None,
-                });
-            }
-            Err(error) => {
-                return Err(GscaleServiceError::PrintFailed {
-                    detail: error.message(),
-                    delete_error: None,
-                });
-            }
-        };
-        Ok(ProgressLabelPrintResponse {
-            ok: true,
-            status: "printed".to_string(),
-            qr_payload: job.qr_payload,
-            item_code: job.item_code,
-            item_name: job.item_name,
-            apparatus: job.apparatus,
-            apparatus_display_name: job.apparatus_display_name,
-            customer_name: job.customer_name,
-            executor_name: job.executor_name,
-            qty: job.progress_qty,
-            gross_qty: job.gross_qty,
-            tare_enabled: job.tare_enabled,
-            tare_kg: job.tare_kg,
-            unit: job.unit,
-            progress_unit: job.progress_unit,
-            label_kind: job.label_kind,
-            printer: print.printer,
-            print_mode: print.mode,
-            printer_status: print.printer_status,
-            print_count: job.print_count,
-        })
+        let driver = self.driver()?;
+        let job = NormalizedProgressLabelJob::from_request(&request)?;
+        let print = completed_print(driver.print_material_receipt(job.driver_request()).await)?;
+        Ok(progress_label_response(
+            "printed",
+            print.printer,
+            print.mode,
+            print.printer_status,
+            job,
+        ))
     }
 
     pub async fn print_material_receipt_driver_first_with_late_error(
@@ -141,29 +114,29 @@ impl GscaleService {
         request: MaterialReceiptPrintRequest,
         late_error: Option<LateMaterialReceiptErrorHandler>,
     ) -> Result<MaterialReceiptPrintResponse, GscaleServiceError> {
-        let print_count = Self::material_receipt_print_count(&request)?;
-        let mut last_response = None;
+        let mut job = NormalizedMaterialReceiptJob::from_request(&request)?;
+        let print_count = job.print_count;
+        job.print_count = 1;
+        let job = std::sync::Arc::new(job);
+        let mut last_outcome = None;
         for _ in 0..print_count {
-            let mut single_request = request.clone();
-            single_request.print_count = 1;
-            last_response = Some(
-                self.print_material_receipt_driver_once_with_late_error(
-                    single_request,
+            last_outcome = Some(
+                self.print_material_receipt_driver_once_job_with_late_error(
+                    job.clone(),
                     late_error.clone(),
                 )
                 .await?,
             );
         }
-        let mut response = last_response
+        let outcome = last_outcome
             .ok_or_else(|| GscaleServiceError::InvalidInput("print_count_required".to_string()))?;
-        response.print_count = print_count;
-        Ok(response)
+        Ok(outcome.into_response_from_job(job.as_ref(), print_count))
     }
 
     pub fn material_receipt_print_count(
         request: &MaterialReceiptPrintRequest,
     ) -> Result<u32, GscaleServiceError> {
-        Ok(NormalizedMaterialReceiptJob::from_request(request.clone())?.print_count)
+        Ok(NormalizedMaterialReceiptJob::from_request(request)?.print_count)
     }
 
     pub async fn print_material_receipt_driver_once_with_late_error(
@@ -171,16 +144,43 @@ impl GscaleService {
         request: MaterialReceiptPrintRequest,
         late_error: Option<LateMaterialReceiptErrorHandler>,
     ) -> Result<MaterialReceiptPrintResponse, GscaleServiceError> {
-        let receipt_store = self.receipt_store.as_ref().ok_or_else(|| {
-            GscaleServiceError::NotConfigured(
-                "material receipt store is not configured".to_string(),
-            )
-        })?;
-        let driver = self.driver.as_ref().ok_or_else(|| {
-            GscaleServiceError::NotConfigured("scale driver is not configured".to_string())
-        })?;
-        let job = NormalizedMaterialReceiptJob::from_request(request)?;
+        let job = std::sync::Arc::new(NormalizedMaterialReceiptJob::from_request(&request)?);
+        require_single_material_receipt(job.as_ref())?;
+        let outcome = self
+            .print_material_receipt_driver_once_job_with_late_error(job.clone(), late_error)
+            .await?;
+        Ok(outcome.into_response_from_job(job.as_ref(), 1))
+    }
+
+    pub async fn print_material_receipt_driver_once_strict(
+        &self,
+        request: MaterialReceiptPrintRequest,
+    ) -> Result<MaterialReceiptPrintResponse, GscaleServiceError> {
+        let job = NormalizedMaterialReceiptJob::from_request(&request)?;
         require_single_material_receipt(&job)?;
+        let outcome = self
+            .print_material_receipt_driver_once_job_strict(&job)
+            .await?;
+        Ok(outcome.into_response(job, 1))
+    }
+
+    pub async fn print_prepared_material_receipt_driver_once_strict(
+        &self,
+        prepared: &PreparedMaterialReceiptPrint,
+    ) -> Result<MaterialReceiptPrintResponse, GscaleServiceError> {
+        let outcome = self
+            .print_material_receipt_driver_once_job_strict(prepared.job.as_ref())
+            .await?;
+        Ok(outcome.into_response_from_job(prepared.job.as_ref(), 1))
+    }
+
+    async fn print_material_receipt_driver_once_job_with_late_error(
+        &self,
+        job: std::sync::Arc<NormalizedMaterialReceiptJob>,
+        late_error: Option<LateMaterialReceiptErrorHandler>,
+    ) -> Result<MaterialReceiptPrintOutcome, GscaleServiceError> {
+        let receipt_store = self.receipt_store()?;
+        let driver = self.driver()?;
         let epc = self.next_epc()?;
         let (print_result_tx, print_result_rx) = oneshot::channel();
         tokio::spawn(record_parallel_material_receipt(
@@ -191,109 +191,111 @@ impl GscaleService {
             late_error,
             self.warehouse_event_handler.clone(),
         ));
-        let print = driver
-            .print_material_receipt(job.driver_request(&epc))
-            .await;
-        let print = match print {
-            Ok(print) if print_done(&print) => print,
-            Ok(print) => {
-                let _ = print_result_tx.send(false);
-                return Err(GscaleServiceError::PrintFailed {
-                    detail: print_error_detail(&print),
-                    delete_error: None,
-                });
-            }
+        let print = match completed_print(
+            driver
+                .print_material_receipt(job.driver_request(&epc))
+                .await,
+        ) {
+            Ok(print) => print,
             Err(error) => {
                 let _ = print_result_tx.send(false);
-                return Err(GscaleServiceError::PrintFailed {
-                    detail: error.message(),
-                    delete_error: None,
-                });
+                return Err(error);
             }
         };
         let _ = print_result_tx.send(true);
-
-        Ok(MaterialReceiptPrintResponse {
-            ok: true,
-            status: "printed".to_string(),
-            draft_name: String::new(),
+        Ok(MaterialReceiptPrintOutcome::from_driver(
             epc,
-            item_code: job.item_code,
-            item_name: job.item_name,
-            warehouse: job.warehouse,
-            qty: job.net_qty,
-            net_qty: job.net_qty,
-            gross_qty: job.gross_qty,
-            width_mm: job.width_mm,
-            micron: job.micron,
-            unit: job.unit,
-            printer: print.printer,
-            print_mode: print.mode,
-            printer_status: print.printer_status,
-            print_count: job.print_count,
-        })
+            String::new(),
+            print,
+        ))
     }
 
-    pub async fn print_material_receipt_driver_once_strict(
+    async fn print_material_receipt_driver_once_job_strict(
         &self,
-        request: MaterialReceiptPrintRequest,
-    ) -> Result<MaterialReceiptPrintResponse, GscaleServiceError> {
-        let receipt_store = self.receipt_store.as_ref().ok_or_else(|| {
-            GscaleServiceError::NotConfigured(
-                "material receipt store is not configured".to_string(),
-            )
-        })?;
-        let driver = self.driver.as_ref().ok_or_else(|| {
-            GscaleServiceError::NotConfigured("scale driver is not configured".to_string())
-        })?;
-        let job = NormalizedMaterialReceiptJob::from_request(request)?;
-        require_single_material_receipt(&job)?;
+        job: &NormalizedMaterialReceiptJob,
+    ) -> Result<MaterialReceiptPrintOutcome, GscaleServiceError> {
+        let receipt_store = self.receipt_store()?;
+        let driver = self.driver()?;
         let epc = self.next_epc()?;
-        let print = driver
-            .print_material_receipt(job.driver_request(&epc))
-            .await;
-        let print = match print {
-            Ok(print) if print_done(&print) => print,
-            Ok(print) => {
-                return Err(GscaleServiceError::PrintFailed {
-                    detail: print_error_detail(&print),
-                    delete_error: None,
-                });
-            }
-            Err(error) => {
-                return Err(GscaleServiceError::PrintFailed {
-                    detail: error.message(),
-                    delete_error: None,
-                });
-            }
-        };
+        let print = completed_print(
+            driver
+                .print_material_receipt(job.driver_request(&epc))
+                .await,
+        )?;
         let draft_name = record_confirmed_material_receipt(
-            receipt_store.clone(),
-            &job,
+            receipt_store.as_ref(),
+            job,
             epc.clone(),
             self.warehouse_event_handler.clone(),
         )
         .await?;
+        Ok(MaterialReceiptPrintOutcome::from_driver(
+            epc, draft_name, print,
+        ))
+    }
+}
 
-        Ok(MaterialReceiptPrintResponse {
+struct MaterialReceiptPrintOutcome {
+    epc: String,
+    draft_name: String,
+    printer: String,
+    print_mode: String,
+    printer_status: String,
+}
+
+impl MaterialReceiptPrintOutcome {
+    fn from_driver(epc: String, draft_name: String, print: ScaleDriverPrintResponse) -> Self {
+        Self {
+            epc,
+            draft_name,
+            printer: print.printer,
+            print_mode: print.mode,
+            printer_status: print.printer_status,
+        }
+    }
+
+    fn into_response(
+        self,
+        job: NormalizedMaterialReceiptJob,
+        print_count: u32,
+    ) -> MaterialReceiptPrintResponse {
+        let mut response = material_receipt_response(
+            self.epc,
+            self.draft_name,
+            "printed",
+            self.printer,
+            self.print_mode,
+            self.printer_status,
+            job,
+        );
+        response.print_count = print_count;
+        response
+    }
+
+    fn into_response_from_job(
+        self,
+        job: &NormalizedMaterialReceiptJob,
+        print_count: u32,
+    ) -> MaterialReceiptPrintResponse {
+        MaterialReceiptPrintResponse {
             ok: true,
             status: "printed".to_string(),
-            draft_name,
-            epc,
-            item_code: job.item_code,
-            item_name: job.item_name,
-            warehouse: job.warehouse,
+            draft_name: self.draft_name,
+            epc: self.epc,
+            item_code: job.item_code.clone(),
+            item_name: job.item_name.clone(),
+            warehouse: job.warehouse.clone(),
             qty: job.net_qty,
             net_qty: job.net_qty,
             gross_qty: job.gross_qty,
             width_mm: job.width_mm,
             micron: job.micron,
-            unit: job.unit,
-            printer: print.printer,
-            print_mode: print.mode,
-            printer_status: print.printer_status,
-            print_count: job.print_count,
-        })
+            unit: job.unit.clone(),
+            printer: self.printer,
+            print_mode: self.print_mode,
+            printer_status: self.printer_status,
+            print_count,
+        }
     }
 }
 
@@ -308,12 +310,46 @@ fn require_single_material_receipt(
     Ok(())
 }
 
-fn material_receipt_client_response(
-    job: NormalizedMaterialReceiptJob,
+fn progress_label_response(
+    status: &str,
+    printer: String,
+    print_mode: String,
+    printer_status: String,
+    job: NormalizedProgressLabelJob,
+) -> ProgressLabelPrintResponse {
+    ProgressLabelPrintResponse {
+        ok: true,
+        status: status.to_string(),
+        qr_payload: job.qr_payload,
+        item_code: job.item_code,
+        item_name: job.item_name,
+        apparatus: job.apparatus,
+        apparatus_display_name: job.apparatus_display_name,
+        customer_name: job.customer_name,
+        executor_name: job.executor_name,
+        qty: job.progress_qty,
+        gross_qty: job.gross_qty,
+        tare_enabled: job.tare_enabled,
+        tare_kg: job.tare_kg,
+        unit: job.unit,
+        progress_unit: job.progress_unit,
+        label_kind: job.label_kind,
+        printer,
+        print_mode,
+        printer_status,
+        print_count: job.print_count,
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn material_receipt_response(
     epc: String,
     draft_name: String,
     status: &str,
-    printer_status: &str,
+    printer: String,
+    print_mode: String,
+    printer_status: String,
+    job: NormalizedMaterialReceiptJob,
 ) -> MaterialReceiptPrintResponse {
     MaterialReceiptPrintResponse {
         ok: true,
@@ -329,9 +365,9 @@ fn material_receipt_client_response(
         width_mm: job.width_mm,
         micron: job.micron,
         unit: job.unit,
-        printer: client_printer(&job.printer),
-        print_mode: client_print_mode(&job.print_mode),
-        printer_status: printer_status.to_string(),
+        printer,
+        print_mode,
+        printer_status,
         print_count: job.print_count,
     }
 }

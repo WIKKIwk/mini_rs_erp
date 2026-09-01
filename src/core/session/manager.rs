@@ -53,7 +53,7 @@ impl SessionManager {
         let token = generate_token();
         let now = time::OffsetDateTime::now_utc();
         let record = SessionRecord::new(principal, now, None, self.ttl_seconds);
-        self.store.put(&token, record.clone()).await?;
+        self.store.put(&token, &record).await?;
         self.cache.write().await.insert(token.clone(), record);
         Ok(token)
     }
@@ -120,7 +120,7 @@ impl SessionManager {
 
         let now = time::OffsetDateTime::now_utc();
         let record = SessionRecord::new(principal, now, existing.created_at, self.ttl_seconds);
-        self.store.put(token, record.clone()).await?;
+        self.store.put(token, &record).await?;
         self.cache.write().await.insert(token.to_string(), record);
         Ok(())
     }
@@ -152,7 +152,7 @@ mod tests {
             Err(AppError::Storage("session get failed".to_string()))
         }
 
-        async fn put(&self, _token: &str, _record: SessionRecord) -> Result<(), AppError> {
+        async fn put(&self, _token: &str, _record: &SessionRecord) -> Result<(), AppError> {
             Err(AppError::Storage("session put failed".to_string()))
         }
 

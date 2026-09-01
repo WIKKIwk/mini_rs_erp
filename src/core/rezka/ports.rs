@@ -17,9 +17,3 @@ pub trait RezkaRepackStorePort: Send + Sync {
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 #[error("{0}")]
 pub struct RezkaPortError(String);
-
-impl RezkaPortError {
-    pub fn message(&self) -> String {
-        self.to_string()
-    }
-}

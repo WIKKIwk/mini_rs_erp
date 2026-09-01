@@ -54,7 +54,7 @@ pub(super) fn sheet_format_requests() -> Vec<Value> {
         }),
         serde_json::json!({
             "repeatCell": {
-                "range": full_range.clone(),
+                "range": &full_range,
                 "cell": {
                     "userEnteredFormat": {
                         "backgroundColor": {
@@ -137,7 +137,7 @@ pub(super) fn sheet_format_requests() -> Vec<Value> {
         }),
         serde_json::json!({
             "updateBorders": {
-                "range": full_range.clone(),
+                "range": full_range,
                 "top": sheet_border(),
                 "bottom": sheet_border(),
                 "left": sheet_border(),

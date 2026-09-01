@@ -22,6 +22,14 @@ impl ApparatusId {
     pub fn as_str(&self) -> &str {
         &self.0
     }
+
+    pub fn into_string(self) -> String {
+        self.0
+    }
+
+    pub fn is_valid(value: &str) -> bool {
+        validate_shape(value).is_ok()
+    }
 }
 
 impl AsRef<str> for ApparatusId {
@@ -79,13 +87,17 @@ fn validate_shape(value: &str) -> Result<(), ApparatusIdError> {
     if value.len() > MAX_ID_LENGTH || !value.starts_with(APPARATUS_ID_PREFIX) {
         return Err(ApparatusIdError::InvalidShape);
     }
-    let segments = value[APPARATUS_ID_PREFIX.len()..]
-        .split(':')
-        .collect::<Vec<_>>();
-    if segments.len() != 2 || segments.iter().any(|segment| segment.is_empty()) {
+    let mut segments = value[APPARATUS_ID_PREFIX.len()..].split(':');
+    let Some(namespace) = segments.next() else {
+        return Err(ApparatusIdError::InvalidShape);
+    };
+    let Some(opaque_key) = segments.next() else {
+        return Err(ApparatusIdError::InvalidShape);
+    };
+    if namespace.is_empty() || opaque_key.is_empty() || segments.next().is_some() {
         return Err(ApparatusIdError::InvalidShape);
     }
-    if segments.iter().any(|segment| {
+    if [namespace, opaque_key].iter().any(|segment| {
         segment.chars().any(|character| {
             !(character.is_ascii_lowercase()
                 || character.is_ascii_digit()

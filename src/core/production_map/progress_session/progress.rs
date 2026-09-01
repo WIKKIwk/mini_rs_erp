@@ -9,6 +9,7 @@ use super::{
     QueueActionActor,
 };
 
+include!("progress_parts/statuses.rs");
 include!("progress_parts/part_01.rs");
 include!("progress_parts/part_02.rs");
 include!("progress_parts/part_03.rs");

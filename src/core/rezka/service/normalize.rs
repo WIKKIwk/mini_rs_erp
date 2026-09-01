@@ -10,7 +10,6 @@ pub(super) struct NormalizedRezkaSplit {
     printer: String,
     print_mode: String,
     pub(super) outputs: Vec<RezkaOutputLabel>,
-    pub(super) printable_outputs: Vec<RezkaOutputLabel>,
     pub(super) all_printable_epcs_supplied: bool,
 }
 
@@ -58,7 +57,6 @@ impl NormalizedRezkaSplit {
 
         let mut total = 0.0;
         let mut outputs = Vec::with_capacity(request.outputs.len());
-        let mut printable_outputs = Vec::new();
         let mut all_printable_epcs_supplied = true;
         let mut client_epcs = HashSet::new();
         for output in request.outputs {
@@ -115,9 +113,6 @@ impl NormalizedRezkaSplit {
                 reason: output.reason.trim().to_string(),
                 print_qr,
             };
-            if output_label.print_qr {
-                printable_outputs.push(output_label.clone());
-            }
             total += output.qty;
             outputs.push(output_label);
         }
@@ -135,7 +130,6 @@ impl NormalizedRezkaSplit {
             printer: blank_default(&request.printer.to_ascii_lowercase(), "zebra"),
             print_mode: blank_default(&request.print_mode.to_ascii_lowercase(), "rfid"),
             outputs,
-            printable_outputs,
             all_printable_epcs_supplied,
         })
     }

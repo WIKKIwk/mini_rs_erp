@@ -30,83 +30,39 @@ impl RpsBatchStorePort for PostgresRpsBatchStore {
         payload.map(decode_batch).transpose()
     }
 
-    async fn put(&self, mut batch: RpsBatchSession) -> Result<(), RpsBatchStoreError> {
-        batch.ensure_context();
-        let payload = serde_json::to_value(&batch)
+    async fn put(&self, batch: &RpsBatchSession) -> Result<(), RpsBatchStoreError> {
+        let batch = batch.contextualized();
+        let payload = serde_json::to_value(batch.as_ref())
             .map_err(|error| store_failed("encode current batch", error))?;
         let mut tx = self
             .pool
             .begin()
             .await
             .map_err(|error| store_failed("begin current batch transaction", error))?;
-        reserve_batch_identity(&mut tx, &batch).await?;
-        sqlx::query(
-            "INSERT INTO mini_rps_batches
-                (owner_key, batch_id, active, owner_role, owner_ref, item_code, warehouse,
-                 payload_json, updated_at)
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, now())
-             ON CONFLICT (owner_key) DO UPDATE SET
-                batch_id = excluded.batch_id,
-                active = excluded.active,
-                owner_role = excluded.owner_role,
-                owner_ref = excluded.owner_ref,
-                item_code = excluded.item_code,
-                warehouse = excluded.warehouse,
-                payload_json = excluded.payload_json,
-                updated_at = excluded.updated_at",
-        )
-        .bind(batch.owner_key.trim())
-        .bind(batch.id.trim())
-        .bind(batch.active)
-        .bind(batch.owner_role.trim())
-        .bind(batch.owner_ref.trim())
-        .bind(batch.item_code.trim())
-        .bind(batch.warehouse.trim())
-        .bind(payload)
-        .execute(&mut *tx)
-        .await
-        .map_err(|error| store_failed("upsert current batch", error))?;
+        reserve_batch_identity(&mut tx, batch.as_ref()).await?;
+        upsert_current_batch(&mut tx, batch.as_ref(), &payload, "upsert current batch").await?;
         tx.commit()
             .await
             .map_err(|error| store_failed("commit current batch", error))
     }
 
-    async fn complete(&self, mut batch: RpsBatchSession) -> Result<(), RpsBatchStoreError> {
-        batch.ensure_context();
-        let payload = serde_json::to_value(&batch)
+    async fn complete(&self, batch: &RpsBatchSession) -> Result<(), RpsBatchStoreError> {
+        let batch = batch.contextualized();
+        let payload = serde_json::to_value(batch.as_ref())
             .map_err(|error| store_failed("encode completed batch", error))?;
         let mut tx = self
             .pool
             .begin()
             .await
             .map_err(|error| store_failed("begin completed batch transaction", error))?;
-        reserve_batch_identity(&mut tx, &batch).await?;
-        sqlx::query(
-            "INSERT INTO mini_rps_batches
-                (owner_key, batch_id, active, owner_role, owner_ref, item_code, warehouse,
-                 payload_json, updated_at)
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, now())
-             ON CONFLICT (owner_key) DO UPDATE SET
-                batch_id = excluded.batch_id,
-                active = excluded.active,
-                owner_role = excluded.owner_role,
-                owner_ref = excluded.owner_ref,
-                item_code = excluded.item_code,
-                warehouse = excluded.warehouse,
-                payload_json = excluded.payload_json,
-                updated_at = excluded.updated_at",
+        reserve_batch_identity(&mut tx, batch.as_ref()).await?;
+        upsert_current_batch(
+            &mut tx,
+            batch.as_ref(),
+            &payload,
+            "persist stopped current batch",
         )
-        .bind(batch.owner_key.trim())
-        .bind(batch.id.trim())
-        .bind(batch.active)
-        .bind(batch.owner_role.trim())
-        .bind(batch.owner_ref.trim())
-        .bind(batch.item_code.trim())
-        .bind(batch.warehouse.trim())
-        .bind(payload.clone())
-        .execute(&mut *tx)
-        .await
-        .map_err(|error| store_failed("persist stopped current batch", error))?;
+        .await?;
         sqlx::query(
             "INSERT INTO mini_rps_batch_history
                 (batch_id, owner_key, owner_role, owner_ref, item_code, warehouse,
@@ -248,6 +204,41 @@ fn decode_batch(value: serde_json::Value) -> Result<RpsBatchSession, RpsBatchSto
         .map_err(|error| store_failed("decode batch payload", error))?;
     batch.ensure_context();
     Ok(batch)
+}
+
+async fn upsert_current_batch(
+    tx: &mut Transaction<'_, Postgres>,
+    batch: &RpsBatchSession,
+    payload: &serde_json::Value,
+    operation: &'static str,
+) -> Result<(), RpsBatchStoreError> {
+    sqlx::query(
+        "INSERT INTO mini_rps_batches
+            (owner_key, batch_id, active, owner_role, owner_ref, item_code, warehouse,
+             payload_json, updated_at)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, now())
+         ON CONFLICT (owner_key) DO UPDATE SET
+            batch_id = excluded.batch_id,
+            active = excluded.active,
+            owner_role = excluded.owner_role,
+            owner_ref = excluded.owner_ref,
+            item_code = excluded.item_code,
+            warehouse = excluded.warehouse,
+            payload_json = excluded.payload_json,
+            updated_at = excluded.updated_at",
+    )
+    .bind(batch.owner_key.trim())
+    .bind(batch.id.trim())
+    .bind(batch.active)
+    .bind(batch.owner_role.trim())
+    .bind(batch.owner_ref.trim())
+    .bind(batch.item_code.trim())
+    .bind(batch.warehouse.trim())
+    .bind(payload)
+    .execute(&mut **tx)
+    .await
+    .map_err(|error| store_failed(operation, error))?;
+    Ok(())
 }
 
 async fn reserve_batch_identity(

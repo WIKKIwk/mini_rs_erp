@@ -394,7 +394,7 @@ impl ProductionMapService {
             )?;
         }
         let session = OrderRunSession {
-            session_id: progress_session_id(apparatus, order_id, actor, now),
+            session_id: progress_session_id(apparatus, order_id, actor),
             apparatus: apparatus.to_string(),
             order_id: order_id.to_string(),
             status: OrderRunStatus::Active,
@@ -411,7 +411,6 @@ impl ProductionMapService {
             order_id,
             action,
             actor,
-            now,
         };
         let event = zero_quantity_event(
             context,

@@ -182,25 +182,22 @@ impl MemoryQolipStore {
         }) {
             return Err(QolipError::QolipInUse);
         }
-        let spec_codes = self
+        let mut existing_codes = self
             .product_specs
             .read()
             .await
             .values()
             .map(|spec| spec.qolip_code.trim().to_lowercase())
-            .collect::<Vec<_>>();
-        let location_codes = self
-            .locations
-            .read()
-            .await
-            .iter()
-            .map(|location| location.qolip_code.trim().to_lowercase())
-            .collect::<Vec<_>>();
-        let existing_codes = spec_codes
-            .into_iter()
-            .chain(location_codes)
             .filter(|code| normalized.contains(code))
             .collect::<BTreeSet<_>>();
+        existing_codes.extend(
+            self.locations
+                .read()
+                .await
+                .iter()
+                .map(|location| location.qolip_code.trim().to_lowercase())
+                .filter(|code| normalized.contains(code)),
+        );
         let mut specs = self.product_specs.write().await;
         specs.retain(|code, _| !normalized.contains(&code.trim().to_lowercase()));
         drop(specs);
@@ -212,13 +209,13 @@ impl MemoryQolipStore {
     }
 
     async fn locations(&self, block: &str) -> Result<Vec<QolipLocation>, QolipError> {
-        let block = block.trim().to_lowercase();
+        let block = block.trim();
         Ok(self
             .locations
             .read()
             .await
             .iter()
-            .filter(|location| location.block.to_lowercase() == block)
+            .filter(|location| location.block.trim().eq_ignore_ascii_case(block))
             .cloned()
             .collect())
     }
@@ -315,7 +312,7 @@ impl MemoryQolipStore {
         }
         drop(locations);
 
-        let mut saved = checkout.clone();
+        let mut saved = checkout;
         if saved.issued_at.is_empty() {
             saved.issued_at = "1970-01-01T00:00:00Z".to_string();
         }
@@ -347,14 +344,14 @@ impl MemoryQolipStore {
         status: &str,
         limit: usize,
     ) -> Result<Vec<QolipCheckout>, QolipError> {
-        let status = status.trim().to_lowercase();
+        let status = status.trim();
         let block = block.map(str::trim).filter(|value| !value.is_empty());
         let mut items = self
             .checkouts
             .read()
             .await
             .iter()
-            .filter(|checkout| checkout.status.to_lowercase() == status)
+            .filter(|checkout| checkout.status.trim().eq_ignore_ascii_case(status))
             .filter(|checkout| {
                 if let Some(block) = block {
                     checkout.block.eq_ignore_ascii_case(block)

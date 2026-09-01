@@ -90,7 +90,7 @@ async fn lmdb_purges_expired_sessions_from_expiry_index() {
     store
         .put(
             "expired-token",
-            record_with_expiry(now - time::Duration::seconds(1)),
+            &record_with_expiry(now - time::Duration::seconds(1)),
         )
         .await
         .expect("put expired");
@@ -105,7 +105,7 @@ async fn lmdb_purges_expired_sessions_from_expiry_index() {
     store
         .put(
             "active-token",
-            record_with_expiry(now + time::Duration::seconds(60)),
+            &record_with_expiry(now + time::Duration::seconds(60)),
         )
         .await
         .expect("put active");
@@ -136,7 +136,7 @@ async fn lmdb_updates_and_deletes_expiry_index_entries() {
     store
         .put(
             "moving-token",
-            record_with_expiry(now + time::Duration::seconds(60)),
+            &record_with_expiry(now + time::Duration::seconds(60)),
         )
         .await
         .expect("put first expiry");
@@ -145,7 +145,7 @@ async fn lmdb_updates_and_deletes_expiry_index_entries() {
     store
         .put(
             "moving-token",
-            record_with_expiry(now + time::Duration::seconds(120)),
+            &record_with_expiry(now + time::Duration::seconds(120)),
         )
         .await
         .expect("replace expiry");
@@ -164,14 +164,14 @@ async fn lmdb_deletes_all_sessions_for_exact_principal() {
     store
         .put(
             "worker-token-a",
-            SessionRecord::new(worker_principal("worker-a"), now, None, Some(60)),
+            &SessionRecord::new(worker_principal("worker-a"), now, None, Some(60)),
         )
         .await
         .expect("worker session");
     store
         .put(
             "worker-token-b",
-            SessionRecord::new(worker_principal("worker-b"), now, None, Some(60)),
+            &SessionRecord::new(worker_principal("worker-b"), now, None, Some(60)),
         )
         .await
         .expect("other session");

@@ -254,7 +254,6 @@ async fn client_split_commits_only_after_prepared_epcs_are_confirmed() {
 
     let prepared = service
         .prepare_client_split(source(), request.clone())
-        .await
         .expect("prepare client split");
 
     assert_eq!(prepared.status, "prepared");

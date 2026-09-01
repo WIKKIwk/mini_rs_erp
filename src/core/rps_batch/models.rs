@@ -1,7 +1,10 @@
+use std::borrow::Cow;
+
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
 use crate::core::gscale::models::MaterialReceiptPrintRequest;
+use crate::core::text::trim_owned;
 
 #[derive(Debug, Clone, Default, PartialEq, Deserialize)]
 pub struct RpsBatchStartRequest {
@@ -119,6 +122,16 @@ impl RpsBatchSession {
         }
     }
 
+    pub(crate) fn contextualized(&self) -> Cow<'_, Self> {
+        if self.id.trim().is_empty() || (!self.batch_code.trim().is_empty() && self.revision != 0) {
+            Cow::Borrowed(self)
+        } else {
+            let mut batch = self.clone();
+            batch.ensure_context();
+            Cow::Owned(batch)
+        }
+    }
+
     pub fn ensure_context(&mut self) {
         if self.batch_code.trim().is_empty() && !self.id.trim().is_empty() {
             self.batch_code = legacy_batch_code(&self.owner_key, &self.id);
@@ -163,7 +176,11 @@ pub fn new_batch_code() -> String {
 }
 
 pub fn legacy_batch_code(owner_key: &str, batch_id: &str) -> String {
-    let digest = Sha256::digest(format!("{}\u{1f}{}", owner_key.trim(), batch_id.trim()));
+    let mut hasher = Sha256::new();
+    hasher.update(owner_key.trim().as_bytes());
+    hasher.update([0x1f]);
+    hasher.update(batch_id.trim().as_bytes());
+    let digest = hasher.finalize();
     format!("42{}", data_encoding::HEXUPPER.encode(&digest[..11]))
 }
 
@@ -217,21 +234,28 @@ impl RpsBatchSession {
         &self,
         request: RpsBatchPrintRequest,
     ) -> MaterialReceiptPrintRequest {
+        let RpsBatchPrintRequest {
+            driver_url,
+            gross_qty,
+            unit,
+            print_count,
+            ..
+        } = request;
         MaterialReceiptPrintRequest {
-            driver_url: first_non_empty(&request.driver_url, &self.driver_url),
+            driver_url: trimmed_or(driver_url, &self.driver_url),
             item_code: self.item_code.clone(),
             item_name: self.item_name.clone(),
             warehouse: self.warehouse.clone(),
             printer: self.printer.clone(),
             print_mode: self.print_mode.clone(),
             label_kind: "material_product".to_string(),
-            gross_qty: request.gross_qty,
-            unit: first_non_empty(&request.unit, "kg"),
+            gross_qty,
+            unit: trimmed_or(unit, "kg"),
             tare_enabled: self.tare_enabled,
             tare_kg: self.tare_kg,
             width_mm: self.width_mm,
             micron: self.micron,
-            print_count: request.print_count,
+            print_count,
             actor_role: String::new(),
             actor_ref: String::new(),
             actor_display_name: String::new(),
@@ -239,12 +263,12 @@ impl RpsBatchSession {
     }
 }
 
-fn first_non_empty(value: &str, default: &str) -> String {
-    let value = value.trim();
+pub(super) fn trimmed_or(value: String, default: &str) -> String {
+    let value = trim_owned(value);
     if value.is_empty() {
         default.trim().to_string()
     } else {
-        value.to_string()
+        value
     }
 }
 
@@ -290,6 +314,7 @@ mod tests {
         assert!(is_valid_batch_code(&generated));
 
         let legacy = legacy_batch_code("material_taminotchi:M-1", "batch-1");
+        assert_eq!(legacy, "42E943B3BFFC65A9E0B18EEC");
         assert_eq!(
             legacy,
             legacy_batch_code("material_taminotchi:M-1", "batch-1")

@@ -14,13 +14,19 @@ pub enum ApparatusQueueOrderState {
 
 impl ApparatusQueueOrderState {
     pub fn parse(value: &str) -> Option<Self> {
-        match value.trim().to_ascii_lowercase().as_str() {
-            "pending" => Some(Self::Pending),
-            "in_progress" => Some(Self::InProgress),
-            "paused" => Some(Self::Paused),
-            "frozen" => Some(Self::Frozen),
-            "completed" => Some(Self::Completed),
-            _ => None,
+        let value = value.trim();
+        if value.eq_ignore_ascii_case("pending") {
+            Some(Self::Pending)
+        } else if value.eq_ignore_ascii_case("in_progress") {
+            Some(Self::InProgress)
+        } else if value.eq_ignore_ascii_case("paused") {
+            Some(Self::Paused)
+        } else if value.eq_ignore_ascii_case("frozen") {
+            Some(Self::Frozen)
+        } else if value.eq_ignore_ascii_case("completed") {
+            Some(Self::Completed)
+        } else {
+            None
         }
     }
 

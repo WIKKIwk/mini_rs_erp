@@ -3,7 +3,7 @@ use std::time::Duration;
 
 use async_trait::async_trait;
 use axum::body::{Body, to_bytes};
-use axum::http::{Request, StatusCode, header};
+use axum::http::{Request, header};
 use tower::ServiceExt;
 
 use super::router::build_router;

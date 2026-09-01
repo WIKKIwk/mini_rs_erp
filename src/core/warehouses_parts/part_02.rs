@@ -21,30 +21,32 @@ fn assignment_matches_identity(
 fn normalize_assignment_delete_key(
     input: &WarehouseAssignmentDeleteRequest,
 ) -> Result<WarehouseAssignmentIdentity, WarehouseError> {
-    match normalize_assignment_kind(&input.assignment_kind)?.as_str() {
-        "apparatus" => input
+    let assignment_kind = input.assignment_kind.trim();
+    if assignment_kind.eq_ignore_ascii_case("apparatus") {
+        input
             .apparatus_id
             .as_deref()
             .map(str::trim)
-            .filter(|v| !v.is_empty())
+            .filter(|value| !value.is_empty())
             .map(canonical_apparatus_id)
             .transpose()?
             .map(WarehouseAssignmentIdentity::ApparatusId)
-            .ok_or(WarehouseError::MissingWarehouse),
-        _ => {
-            let warehouse = input
-                .warehouse_name
-                .as_deref()
-                .unwrap_or(&input.warehouse)
-                .trim();
-            if warehouse.is_empty() {
-                Err(WarehouseError::MissingWarehouse)
-            } else {
-                Ok(WarehouseAssignmentIdentity::WarehouseName(
-                    warehouse.to_string(),
-                ))
-            }
+            .ok_or(WarehouseError::MissingWarehouse)
+    } else if assignment_kind.eq_ignore_ascii_case("warehouse") {
+        let warehouse = input
+            .warehouse_name
+            .as_deref()
+            .unwrap_or(&input.warehouse)
+            .trim();
+        if warehouse.is_empty() {
+            Err(WarehouseError::MissingWarehouse)
+        } else {
+            Ok(WarehouseAssignmentIdentity::WarehouseName(
+                warehouse.to_string(),
+            ))
         }
+    } else {
+        Err(WarehouseError::StoreFailed)
     }
 }
 
@@ -65,11 +67,7 @@ pub fn merge_admin_warehouses(
             break;
         }
     }
-    first.sort_by(|left, right| {
-        left.warehouse
-            .to_lowercase()
-            .cmp(&right.warehouse.to_lowercase())
-    });
+    first.sort_by_cached_key(|warehouse| warehouse.warehouse.to_lowercase());
     first.truncate(limit);
     first
 }

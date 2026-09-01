@@ -57,37 +57,34 @@ impl LmdbSessionStore {
 impl SessionStore for LmdbSessionStore {
     async fn get(&self, token: &str) -> Result<Option<SessionRecord>, AppError> {
         let key = session_key(token);
-        let record = {
+        let (record, legacy_record) = {
             let rtxn = self.env.read_txn().map_err(lmdb_error)?;
-            self.db.get(&rtxn, &key).map_err(lmdb_error)?
+            let record = self.db.get(&rtxn, &key).map_err(lmdb_error)?;
+            let legacy_record = if record.is_none() {
+                self.db.get(&rtxn, token.as_bytes()).map_err(lmdb_error)?
+            } else {
+                None
+            };
+            (record, legacy_record)
         };
         if record.is_some() {
             return Ok(record);
         }
 
-        let legacy_record = {
-            let rtxn = self.env.read_txn().map_err(lmdb_error)?;
-            self.db.get(&rtxn, token.as_bytes()).map_err(lmdb_error)?
-        };
         if let Some(record) = legacy_record {
-            self.put(token, record.clone()).await?;
-            self.delete_legacy_key(token).await?;
+            self.migrate_legacy_record(token, &record).await?;
             return Ok(Some(record));
         }
 
         Ok(None)
     }
 
-    async fn put(&self, token: &str, record: SessionRecord) -> Result<(), AppError> {
+    async fn put(&self, token: &str, record: &SessionRecord) -> Result<(), AppError> {
         let key = session_key(token);
         let _guard = self.write_lock.lock().await;
         let mut wtxn = self.env.write_txn().map_err(lmdb_error)?;
         self.purge_expired_in_txn(&mut wtxn, OffsetDateTime::now_utc())?;
-        if let Some(previous) = self.db.get(&wtxn, &key).map_err(lmdb_error)? {
-            self.delete_expiry_index(&mut wtxn, &key, &previous)?;
-        }
-        self.db.put(&mut wtxn, &key, &record).map_err(lmdb_error)?;
-        self.put_expiry_index(&mut wtxn, &key, &record)?;
+        self.put_session_in_txn(&mut wtxn, &key, record)?;
         wtxn.commit().map_err(lmdb_error)
     }
 
@@ -121,14 +118,19 @@ impl SessionStore for LmdbSessionStore {
             let mut matches = Vec::new();
             while let Some((key, record)) = iter.next().transpose().map_err(lmdb_error)? {
                 if record.principal.role == *role && record.principal.ref_.trim() == principal_ref {
-                    matches.push((key.to_vec(), record));
+                    matches.push((key.to_vec(), record.expires_at));
                 }
             }
             matches
         };
-        for (key, record) in &matches {
-            if let Ok(hashed_key) = <&[u8; 32]>::try_from(key.as_slice()) {
-                self.delete_expiry_index(&mut wtxn, hashed_key, record)?;
+        for (key, expires_at) in &matches {
+            if let (Ok(hashed_key), Some(expires_at)) =
+                (<&[u8; 32]>::try_from(key.as_slice()), *expires_at)
+            {
+                let expiry_key = ExpiryKey::new(expires_at, *hashed_key);
+                self.expires_db
+                    .delete(&mut wtxn, &expiry_key)
+                    .map_err(lmdb_error)?;
             }
             self.db.delete(&mut wtxn, key).map_err(lmdb_error)?;
         }
@@ -138,13 +140,33 @@ impl SessionStore for LmdbSessionStore {
 }
 
 impl LmdbSessionStore {
-    async fn delete_legacy_key(&self, token: &str) -> Result<(), AppError> {
+    async fn migrate_legacy_record(
+        &self,
+        token: &str,
+        record: &SessionRecord,
+    ) -> Result<(), AppError> {
+        let key = session_key(token);
         let _guard = self.write_lock.lock().await;
         let mut wtxn = self.env.write_txn().map_err(lmdb_error)?;
+        self.purge_expired_in_txn(&mut wtxn, OffsetDateTime::now_utc())?;
+        self.put_session_in_txn(&mut wtxn, &key, record)?;
         self.db
             .delete(&mut wtxn, token.as_bytes())
             .map_err(lmdb_error)?;
         wtxn.commit().map_err(lmdb_error)
+    }
+
+    fn put_session_in_txn(
+        &self,
+        wtxn: &mut heed::RwTxn<'_>,
+        key: &[u8; 32],
+        record: &SessionRecord,
+    ) -> Result<(), AppError> {
+        if let Some(previous) = self.db.get(&*wtxn, key).map_err(lmdb_error)? {
+            self.delete_expiry_index(wtxn, key, &previous)?;
+        }
+        self.db.put(wtxn, key, record).map_err(lmdb_error)?;
+        self.put_expiry_index(wtxn, key, record)
     }
 
     fn put_expiry_index(

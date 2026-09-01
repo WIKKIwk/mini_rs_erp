@@ -67,8 +67,20 @@ impl ProductionMapService {
             .iter()
             .map(|(map, _)| map.id.trim().to_string())
             .collect::<Vec<_>>();
-        let logs_by_order = self.store.queue_action_logs_for_orders(&order_ids).await?;
-        let transfers = match self.store.apparatus_transfers_for_audit().await {
+        let (
+            logs_by_order,
+            progress_batches_by_order,
+            transfers,
+            freeze_requests,
+        ) = tokio::join!(
+            self.store.queue_action_logs_for_orders(&order_ids),
+            self.store.progress_batches_for_orders(&order_ids),
+            self.store.apparatus_transfers_for_audit(),
+            self.store.order_freeze_requests_for_audit(),
+        );
+        let mut logs_by_order = logs_by_order?;
+        let mut progress_batches_by_order = progress_batches_by_order?;
+        let transfers = match transfers {
             Ok(transfers) => transfers,
             Err(error) => {
                 tracing::warn!(
@@ -78,7 +90,7 @@ impl ProductionMapService {
                 Vec::new()
             }
         };
-        let freeze_requests = match self.store.order_freeze_requests_for_audit().await {
+        let freeze_requests = match freeze_requests {
             Ok(freeze_requests) => freeze_requests,
             Err(error) => {
                 tracing::warn!(
@@ -91,13 +103,15 @@ impl ProductionMapService {
         let mut closed = Vec::new();
         for (map, required_apparatus) in candidates {
             let order_id = map.id.trim().to_string();
-            let queue_logs = logs_by_order.get(&order_id).cloned().unwrap_or_default();
-            let Some(closed_event) =
-                latest_required_complete_event(&queue_logs, &required_apparatus).cloned()
+            let mut logs = logs_by_order.remove(&order_id).unwrap_or_default();
+            let Some(closed_event) = latest_required_complete_event(&logs, &required_apparatus)
             else {
                 continue;
             };
-            let mut logs = queue_logs;
+            let completed_at_unix = closed_event.created_at_unix;
+            let closed_by_role = closed_event.actor_role.clone();
+            let closed_by_ref = closed_event.actor_ref.clone();
+            let closed_by_display_name = closed_event.actor_display_name.clone();
             for transfer in transfers
                 .iter()
                 .filter(|transfer| transfer.order_id.trim().eq_ignore_ascii_case(&order_id))
@@ -140,16 +154,18 @@ impl ProductionMapService {
                     .then_with(|| closed_order_log_rank(left).cmp(&closed_order_log_rank(right)))
                     .then_with(|| left.event_id.cmp(&right.event_id))
             });
-            let progress_batches = self.store.progress_batches_for_order(&order_id).await?;
+            let progress_batches = progress_batches_by_order
+                .remove(&order_id)
+                .unwrap_or_default();
             closed.push(FullyCompletedProductionOrder {
                 order_id,
                 order_number: map.order_number.trim().to_string(),
                 title: map.title.trim().to_string(),
                 product_code: map.product_code.trim().to_string(),
-                completed_at_unix: closed_event.created_at_unix,
-                closed_by_role: closed_event.actor_role.clone(),
-                closed_by_ref: closed_event.actor_ref.clone(),
-                closed_by_display_name: closed_event.actor_display_name.clone(),
+                completed_at_unix,
+                closed_by_role,
+                closed_by_ref,
+                closed_by_display_name,
                 logs,
                 progress_batches,
             });

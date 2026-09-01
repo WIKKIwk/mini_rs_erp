@@ -22,7 +22,7 @@ use lmdb_codec::SessionRecordCodec;
 #[async_trait]
 pub trait SessionStore: Send + Sync {
     async fn get(&self, token: &str) -> Result<Option<SessionRecord>, AppError>;
-    async fn put(&self, token: &str, record: SessionRecord) -> Result<(), AppError>;
+    async fn put(&self, token: &str, record: &SessionRecord) -> Result<(), AppError>;
     async fn delete(&self, token: &str) -> Result<(), AppError>;
     async fn delete_for_principal(
         &self,

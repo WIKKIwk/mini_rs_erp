@@ -9,16 +9,18 @@ pub fn canonical_apparatus_id(value: &str) -> Option<ApparatusId> {
 }
 
 pub fn canonical_apparatus_key(value: &str) -> String {
-    canonical_apparatus_id(value)
-        .map(|id| id.as_str().to_string())
-        .unwrap_or_default()
+    let value = value.trim();
+    if ApparatusId::is_valid(value) {
+        value.to_string()
+    } else {
+        String::new()
+    }
 }
 
 pub fn apparatus_ids_match(left: &str, right: &str) -> bool {
-    match (canonical_apparatus_id(left), canonical_apparatus_id(right)) {
-        (Some(left), Some(right)) => left == right,
-        _ => false,
-    }
+    let left = left.trim();
+    let right = right.trim();
+    left == right && ApparatusId::is_valid(left)
 }
 
 /// Compare a topology stage identity. Apparatus stages use canonical
@@ -106,7 +108,6 @@ fn is_stable_task_stage_id(value: &str) -> bool {
         return false;
     };
     !task_id.is_empty()
-        && canonical_apparatus_id(value).is_none()
         && task_id.chars().all(|character| {
             character.is_ascii_lowercase()
                 || character.is_ascii_digit()
@@ -114,167 +115,6 @@ fn is_stable_task_stage_id(value: &str) -> bool {
         })
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum OrderRunStatus {
-    Active,
-    Paused,
-    Frozen,
-    RollDetached,
-    Completed,
-}
-
-impl OrderRunStatus {
-    pub fn parse(value: &str) -> Option<Self> {
-        match value.trim().to_ascii_lowercase().as_str() {
-            "active" => Some(Self::Active),
-            "paused" => Some(Self::Paused),
-            "frozen" => Some(Self::Frozen),
-            "roll_detached" => Some(Self::RollDetached),
-            "completed" => Some(Self::Completed),
-            _ => None,
-        }
-    }
-
-    pub fn as_str(self) -> &'static str {
-        match self {
-            Self::Active => "active",
-            Self::Paused => "paused",
-            Self::Frozen => "frozen",
-            Self::RollDetached => "roll_detached",
-            Self::Completed => "completed",
-        }
-    }
-
-    pub fn is_open(self) -> bool {
-        matches!(
-            self,
-            Self::Active | Self::Paused | Self::Frozen | Self::RollDetached
-        )
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum OrderProgressBatchStatus {
-    Paused,
-    RollDetached,
-    Completed,
-    Resumed,
-}
-
-impl OrderProgressBatchStatus {
-    pub fn parse(value: &str) -> Option<Self> {
-        match value.trim().to_ascii_lowercase().as_str() {
-            "paused" => Some(Self::Paused),
-            "roll_detached" => Some(Self::RollDetached),
-            "completed" => Some(Self::Completed),
-            "resumed" => Some(Self::Resumed),
-            _ => None,
-        }
-    }
-
-    pub fn as_str(self) -> &'static str {
-        match self {
-            Self::Paused => "paused",
-            Self::RollDetached => "roll_detached",
-            Self::Completed => "completed",
-            Self::Resumed => "resumed",
-        }
-    }
-
-    pub const fn is_resumable(self) -> bool {
-        matches!(self, Self::Paused | Self::RollDetached)
-    }
-}
-
-#[cfg(test)]
-mod order_progress_batch_status_tests {
-    use super::OrderProgressBatchStatus;
-
-    #[test]
-    fn resumable_status_classification_is_canonical() {
-        assert!(OrderProgressBatchStatus::Paused.is_resumable());
-        assert!(OrderProgressBatchStatus::RollDetached.is_resumable());
-        assert!(!OrderProgressBatchStatus::Completed.is_resumable());
-        assert!(!OrderProgressBatchStatus::Resumed.is_resumable());
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum OrderProgressBatchWipStatus {
-    Waiting,
-    InUse,
-    Processed,
-}
-
-impl OrderProgressBatchWipStatus {
-    pub fn parse(value: &str) -> Option<Self> {
-        match value.trim().to_ascii_lowercase().as_str() {
-            "waiting" => Some(Self::Waiting),
-            "in_use" => Some(Self::InUse),
-            "processed" => Some(Self::Processed),
-            _ => None,
-        }
-    }
-
-    pub fn as_str(self) -> &'static str {
-        match self {
-            Self::Waiting => "waiting",
-            Self::InUse => "in_use",
-            Self::Processed => "processed",
-        }
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum OrderRunInputSourceKind {
-    ProgressBatch,
-    OpeningWip,
-}
-
-impl OrderRunInputSourceKind {
-    pub fn parse(value: &str) -> Option<Self> {
-        match value.trim().to_ascii_lowercase().as_str() {
-            "progress_batch" => Some(Self::ProgressBatch),
-            "opening_wip" => Some(Self::OpeningWip),
-            _ => None,
-        }
-    }
-
-    pub fn as_str(self) -> &'static str {
-        match self {
-            Self::ProgressBatch => "progress_batch",
-            Self::OpeningWip => "opening_wip",
-        }
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum OrderRunInputStatus {
-    InUse,
-    Processed,
-}
-
-impl OrderRunInputStatus {
-    pub fn parse(value: &str) -> Option<Self> {
-        match value.trim().to_ascii_lowercase().as_str() {
-            "in_use" => Some(Self::InUse),
-            "processed" => Some(Self::Processed),
-            _ => None,
-        }
-    }
-
-    pub fn as_str(self) -> &'static str {
-        match self {
-            Self::InUse => "in_use",
-            Self::Processed => "processed",
-        }
-    }
-}
 
 /// One upstream WIP consumed by a production run session.
 ///

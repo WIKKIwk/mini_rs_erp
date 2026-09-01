@@ -44,10 +44,11 @@ impl PostgresQolipItemCodeDoctor {
         let enabled = std::env::var("MINI_ERP_QOLIP_ITEM_CODE_DOCTOR_ENABLED")
             .ok()
             .map(|value| {
-                !matches!(
-                    value.trim().to_ascii_lowercase().as_str(),
-                    "0" | "false" | "no" | "off"
-                )
+                let value = value.trim();
+                value != "0"
+                    && !value.eq_ignore_ascii_case("false")
+                    && !value.eq_ignore_ascii_case("no")
+                    && !value.eq_ignore_ascii_case("off")
             })
             .unwrap_or(true);
         let interval_seconds = std::env::var("MINI_ERP_QOLIP_ITEM_CODE_DOCTOR_INTERVAL_SECONDS")

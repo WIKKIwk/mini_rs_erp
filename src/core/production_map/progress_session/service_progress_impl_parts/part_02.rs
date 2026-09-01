@@ -175,7 +175,6 @@ impl ProductionMapService {
                 apparatus,
                 order_id,
                 action,
-                now,
                 order_map,
                 &stage.node_id,
                 input_progress.contained_kadr_count,
@@ -185,13 +184,11 @@ impl ProductionMapService {
                 apparatus,
                 order_id,
                 action,
-                now,
                 &progress,
                 &input_progress,
             )]
         };
         let frame_values = progress_values_for_outputs(
-            apparatus,
             canonical,
             action,
             &progress,
@@ -248,7 +245,6 @@ impl ProductionMapService {
             order_id,
             action,
             actor,
-            now,
         };
         let mut batches = Vec::with_capacity(output_identities.len());
         for (index, identity) in output_identities.iter().enumerate() {

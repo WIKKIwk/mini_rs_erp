@@ -223,7 +223,7 @@ impl AppState {
         let profile_store = build_profile_store(&config);
         let admin = build_admin_service(
             &config,
-            admin_store.clone(),
+            admin_store,
             auth.clone(),
             profile_store.clone(),
             customer_store,

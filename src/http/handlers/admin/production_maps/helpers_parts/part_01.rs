@@ -2,21 +2,18 @@ pub(super) async fn production_map_order_customers(
     state: &AppState,
     maps: &[ProductionMapSaved],
 ) -> BTreeMap<String, String> {
-    let order_maps = maps
-        .iter()
-        .filter(|saved| is_customer_order_map(&saved.map))
-        .collect::<Vec<_>>();
-    let mut customers = order_maps
-        .iter()
-        .filter_map(|saved| {
-            let map_id = saved.map.id.trim();
-            let customer = saved.map.customer_name.trim();
-            (!map_id.is_empty() && !customer.is_empty())
-                .then(|| (map_id.to_string(), customer.to_string()))
-        })
-        .collect::<BTreeMap<_, _>>();
+    let mut order_map_count = 0;
+    let mut customers = BTreeMap::new();
+    for saved in maps.iter().filter(|saved| is_customer_order_map(&saved.map)) {
+        order_map_count += 1;
+        let map_id = saved.map.id.trim();
+        let customer = saved.map.customer_name.trim();
+        if !map_id.is_empty() && !customer.is_empty() {
+            customers.insert(map_id.to_string(), customer.to_string());
+        }
+    }
 
-    if customers.len() == order_maps.len() {
+    if customers.len() == order_map_count {
         return customers;
     }
     let templates = match state.calculate_orders.list_all().await {
@@ -26,7 +23,7 @@ pub(super) async fn production_map_order_customers(
             return customers;
         }
     };
-    for saved in order_maps {
+    for saved in maps.iter().filter(|saved| is_customer_order_map(&saved.map)) {
         let map_id = saved.map.id.trim();
         if map_id.is_empty() || customers.contains_key(map_id) {
             continue;
@@ -52,19 +49,17 @@ fn resolve_production_map_customer(
     templates: &[CalculateOrderTemplate],
 ) -> Option<String> {
     let map_id = map.id.trim();
-    let template_map_id = (!map_id.is_empty()).then(|| format!("template-{map_id}"));
-    let source_matches = templates
+    let mut source_matches = templates
         .iter()
         .filter(|template| {
             let source_map_id = template.source_map_id.trim();
             source_map_id == map_id
-                || template_map_id
-                    .as_deref()
-                    .is_some_and(|template_map_id| source_map_id == template_map_id)
+                || (!map_id.is_empty()
+                    && source_map_id.strip_prefix("template-") == Some(map_id))
         })
-        .collect::<Vec<_>>();
-    if !source_matches.is_empty() {
-        return unique_template_customer(source_matches.into_iter());
+        .peekable();
+    if source_matches.peek().is_some() {
+        return unique_template_customer(source_matches);
     }
 
     let id_suffix = map_id.strip_prefix("zakaz-").unwrap_or("").trim();
@@ -72,16 +67,16 @@ fn resolve_production_map_customer(
         .into_iter()
         .filter(|value| !value.is_empty())
         .collect::<BTreeSet<_>>();
-    let order_matches = templates
+    let mut order_matches = templates
         .iter()
         .filter(|template| {
             !order_keys.is_empty()
                 && (order_keys.contains(template.order_number.trim())
                     || order_keys.contains(template.code.trim()))
         })
-        .collect::<Vec<_>>();
-    if !order_matches.is_empty() {
-        return unique_template_customer(order_matches.into_iter());
+        .peekable();
+    if order_matches.peek().is_some() {
+        return unique_template_customer(order_matches);
     }
 
     let mut product_keys = [map.product_code.as_str(), map.title.as_str()]
@@ -117,20 +112,21 @@ fn resolve_production_map_customer(
 fn unique_template_customer<'a>(
     templates: impl Iterator<Item = &'a CalculateOrderTemplate>,
 ) -> Option<String> {
-    let customers = templates
-        .filter_map(|template| {
-            let customer = template.customer.trim();
-            (!customer.is_empty()).then(|| {
-                (
-                    normalized_customer_match_key(customer),
-                    customer.to_string(),
-                )
-            })
-        })
-        .collect::<BTreeMap<_, _>>();
-    (customers.len() == 1)
-        .then(|| customers.into_values().next())
-        .flatten()
+    let mut unique_key: Option<String> = None;
+    let mut unique_customer: Option<String> = None;
+    for template in templates {
+        let customer = template.customer.trim();
+        if customer.is_empty() {
+            continue;
+        }
+        let key = normalized_customer_match_key(customer);
+        if unique_key.as_ref().is_some_and(|existing| existing != &key) {
+            return None;
+        }
+        unique_key = Some(key);
+        unique_customer = Some(customer.to_string());
+    }
+    unique_customer
 }
 
 fn normalized_customer_match_key(value: &str) -> String {
@@ -283,17 +279,10 @@ pub(super) fn production_map_error(error: ProductionMapError) -> AdminError {
         ProductionMapError::OrderFreezeRequestMismatch => conflict("order_freeze_request_mismatch"),
         ProductionMapError::OrderDeleteBlocked(blockers) => (
             StatusCode::CONFLICT,
-            Json(AdminErrorResponse {
-                error: "order_delete_blocked".to_string(),
-                blockers: Some(blockers),
-                apparatus_options: None,
-                order_width_mm: None,
-                roll_width_mm: None,
-                minimum_width_mm: None,
-                maximum_width_mm: None,
-                order_title: None,
-                raw_material_status: None,
-            }),
+            Json(AdminErrorResponse::with_blockers(
+                "order_delete_blocked",
+                blockers,
+            )),
         ),
         ProductionMapError::PreviousStageNotCompleted => {
             bad_request("previous_stage_not_completed")

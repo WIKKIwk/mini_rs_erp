@@ -20,11 +20,7 @@ pub(super) fn suggestion_from_raw_text(
         display_query = pick_fallback_display_query(&visible_brand, &alt_query);
     }
 
-    let mut seeds = vec![
-        display_query.clone(),
-        alt_query.clone(),
-        visible_brand.clone(),
-    ];
+    let mut seeds = vec![display_query.clone(), alt_query, visible_brand.clone()];
     seeds.extend(expand_phrase_prefixes(&seeds));
     let background_queries = rank_queries(&seeds);
     let mut resolved_display_query = normalize_server_friendly_query(&display_query);

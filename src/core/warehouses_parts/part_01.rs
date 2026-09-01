@@ -344,35 +344,43 @@ impl WarehouseService {
 }
 
 fn normalize_warehouse(input: WarehouseUpsert) -> Result<AdminWarehouse, WarehouseError> {
-    let warehouse = input.warehouse.trim().to_string();
+    let WarehouseUpsert {
+        warehouse,
+        company,
+        is_group,
+        parent_warehouse,
+    } = input;
+    let warehouse = trim_owned(warehouse);
     if warehouse.is_empty() {
         return Err(WarehouseError::MissingWarehouse);
     }
     Ok(AdminWarehouse {
         warehouse,
-        company: input.company.trim().to_string(),
-        is_group: input.is_group,
-        parent_warehouse: input.parent_warehouse.trim().to_string(),
+        company: trim_owned(company),
+        is_group,
+        parent_warehouse: trim_owned(parent_warehouse),
     })
 }
 
 fn normalize_assignment(
     input: WarehouseAssignmentUpsert,
 ) -> Result<WarehouseAssignment, WarehouseError> {
-    let assignment_kind = normalize_assignment_kind(&input.assignment_kind)?;
-    let warehouse = input.warehouse.trim().to_string();
-    let warehouse_name = input
-        .warehouse_name
-        .as_deref()
-        .map(str::trim)
-        .filter(|v| !v.is_empty())
-        .map(ToString::to_string);
-    let apparatus_id = input
-        .apparatus_id
-        .as_deref()
-        .map(str::trim)
-        .filter(|v| !v.is_empty())
-        .map(canonical_apparatus_id)
+    let WarehouseAssignmentUpsert {
+        assignment_kind,
+        warehouse,
+        warehouse_name,
+        apparatus_id,
+        principal_role,
+        principal_ref,
+        display_name,
+    } = input;
+    let assignment_kind = normalize_assignment_kind(assignment_kind)?;
+    let warehouse = trim_owned(warehouse);
+    let warehouse_name = warehouse_name.map(trim_owned).filter(|value| !value.is_empty());
+    let apparatus_id = apparatus_id
+        .map(trim_owned)
+        .filter(|value| !value.is_empty())
+        .map(canonical_apparatus_id_owned)
         .transpose()?;
     let (warehouse_name, apparatus_id) = match assignment_kind.as_str() {
         "warehouse" => {
@@ -391,7 +399,7 @@ fn normalize_assignment(
         }
         _ => unreachable!(),
     };
-    let principal_ref = input.principal_ref.trim().to_string();
+    let principal_ref = trim_owned(principal_ref);
     if principal_ref.is_empty() {
         return Err(WarehouseError::MissingPrincipalRef);
     }
@@ -399,18 +407,25 @@ fn normalize_assignment(
         assignment_kind,
         warehouse,
         warehouse_name,
-        apparatus_id: apparatus_id.map(|id| id.as_str().to_string()),
-        principal_role: input.principal_role,
+        apparatus_id: apparatus_id.map(ApparatusId::into_string),
+        principal_role,
         principal_ref,
-        display_name: input.display_name.trim().to_string(),
+        display_name: trim_owned(display_name),
     })
 }
 
-fn normalize_assignment_kind(value: &str) -> Result<String, WarehouseError> {
-    match value.trim().to_lowercase().as_str() {
-        "warehouse" | "apparatus" => Ok(value.trim().to_lowercase()),
-        _ => Err(WarehouseError::StoreFailed),
+fn normalize_assignment_kind(value: String) -> Result<String, WarehouseError> {
+    let mut value = trim_owned(value);
+    if value.eq_ignore_ascii_case("warehouse") || value.eq_ignore_ascii_case("apparatus") {
+        value.make_ascii_lowercase();
+        Ok(value)
+    } else {
+        Err(WarehouseError::StoreFailed)
     }
+}
+
+fn canonical_apparatus_id_owned(value: String) -> Result<ApparatusId, WarehouseError> {
+    ApparatusId::new(value).map_err(|_| WarehouseError::StoreFailed)
 }
 
 fn canonical_apparatus_id(value: &str) -> Result<ApparatusId, WarehouseError> {

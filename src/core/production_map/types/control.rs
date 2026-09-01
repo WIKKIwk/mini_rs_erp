@@ -12,11 +12,15 @@ pub enum OrderControlState {
 
 impl OrderControlState {
     pub fn parse(value: &str) -> Option<Self> {
-        match value.trim().to_ascii_lowercase().as_str() {
-            "active" => Some(Self::Active),
-            "freeze_requested" => Some(Self::FreezeRequested),
-            "frozen" => Some(Self::Frozen),
-            _ => None,
+        let value = value.trim();
+        if value.eq_ignore_ascii_case("active") {
+            Some(Self::Active)
+        } else if value.eq_ignore_ascii_case("freeze_requested") {
+            Some(Self::FreezeRequested)
+        } else if value.eq_ignore_ascii_case("frozen") {
+            Some(Self::Frozen)
+        } else {
+            None
         }
     }
 
@@ -40,12 +44,17 @@ pub enum OrderFreezeRequestStatus {
 
 impl OrderFreezeRequestStatus {
     pub fn parse(value: &str) -> Option<Self> {
-        match value.trim().to_ascii_lowercase().as_str() {
-            "pending" => Some(Self::Pending),
-            "frozen" => Some(Self::Frozen),
-            "cancelled" => Some(Self::Cancelled),
-            "unfrozen" => Some(Self::Unfrozen),
-            _ => None,
+        let value = value.trim();
+        if value.eq_ignore_ascii_case("pending") {
+            Some(Self::Pending)
+        } else if value.eq_ignore_ascii_case("frozen") {
+            Some(Self::Frozen)
+        } else if value.eq_ignore_ascii_case("cancelled") {
+            Some(Self::Cancelled)
+        } else if value.eq_ignore_ascii_case("unfrozen") {
+            Some(Self::Unfrozen)
+        } else {
+            None
         }
     }
 

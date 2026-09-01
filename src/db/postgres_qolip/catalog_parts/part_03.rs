@@ -78,7 +78,10 @@ async fn allocate_panton_color(
     requested_color: &str,
 ) -> Result<String, QolipError> {
     let requested = requested_color.trim();
-    if !requested.to_ascii_uppercase().starts_with("PANTON") {
+    if !requested
+        .get(..6)
+        .is_some_and(|prefix| prefix.eq_ignore_ascii_case("panton"))
+    {
         return Ok(requested.to_string());
     }
     sqlx::query("SELECT pg_advisory_xact_lock(hashtext('qolip-panton-global')::bigint)")
@@ -141,13 +144,19 @@ pub(super) async fn rename_product_spec(
     let mut tx = pool.begin().await.map_err(|_| QolipError::StoreFailed)?;
     spec.color =
         allocate_panton_color(&mut tx, &spec.qolip_code, Some(&previous), &spec.color).await?;
-    for code in [&previous, &next] {
-        sqlx::query("SELECT pg_advisory_xact_lock(hashtext($1)::bigint)")
-            .bind(code)
-            .execute(&mut *tx)
-            .await
-            .map_err(|_| QolipError::StoreFailed)?;
-    }
+    sqlx::query(
+        "SELECT pg_advisory_xact_lock(hashtext(lock_key)::bigint)
+         FROM (
+             SELECT DISTINCT lock_key
+             FROM unnest(ARRAY[$1::text, $2::text]) AS keys(lock_key)
+             ORDER BY lock_key
+         ) AS ordered_lock_keys",
+    )
+    .bind(&previous)
+    .bind(&next)
+    .execute(&mut *tx)
+    .await
+    .map_err(|_| QolipError::StoreFailed)?;
     if previous != next {
         let exists = sqlx::query_scalar::<_, bool>(
             "SELECT EXISTS (
@@ -340,13 +349,18 @@ pub(super) async fn delete_product_specs(
     }
 
     let mut tx = pool.begin().await.map_err(|_| QolipError::StoreFailed)?;
-    for code in &normalized {
-        sqlx::query("SELECT pg_advisory_xact_lock(hashtext($1)::bigint)")
-            .bind(code)
-            .execute(&mut *tx)
-            .await
-            .map_err(|_| QolipError::StoreFailed)?;
-    }
+    sqlx::query(
+        "SELECT pg_advisory_xact_lock(hashtext(lock_key)::bigint)
+         FROM (
+             SELECT DISTINCT lock_key
+             FROM unnest($1::text[]) AS keys(lock_key)
+             ORDER BY lock_key
+         ) AS ordered_lock_keys",
+    )
+    .bind(&normalized)
+    .execute(&mut *tx)
+    .await
+    .map_err(|_| QolipError::StoreFailed)?;
 
     let _locked_specs = sqlx::query_scalar::<_, String>(
         "SELECT qolip_code

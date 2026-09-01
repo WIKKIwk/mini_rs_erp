@@ -29,14 +29,9 @@ impl WerkaService {
             return Ok(None);
         };
 
-        self.notification_detail(
-            role.clone(),
-            principal_ref,
-            principal_display_name,
-            receipt_id,
-        )
-        .await?
-        .ok_or_else(|| WerkaPortError::WriteFailed("notification detail failed".to_string()))?;
+        self.notification_detail(role, principal_ref, principal_display_name, receipt_id)
+            .await?
+            .ok_or_else(|| WerkaPortError::WriteFailed("notification detail failed".to_string()))?;
 
         let formatted =
             format_notification_comment(role_label(&role), principal_display_name, trimmed_message);
@@ -58,12 +53,7 @@ impl WerkaService {
         }
 
         let detail = self
-            .notification_detail(
-                role.clone(),
-                principal_ref,
-                principal_display_name,
-                receipt_id,
-            )
+            .notification_detail(role, principal_ref, principal_display_name, receipt_id)
             .await?
             .ok_or_else(|| WerkaPortError::WriteFailed("notification detail failed".to_string()))?;
         Ok(Some(with_supplier_display_name(

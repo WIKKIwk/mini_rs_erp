@@ -1,7 +1,6 @@
 use std::sync::Arc;
 
-use axum::body::Body;
-use axum::http::{Request, StatusCode, header};
+use axum::http::StatusCode;
 use tower::ServiceExt;
 
 use super::router::build_router;

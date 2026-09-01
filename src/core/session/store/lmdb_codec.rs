@@ -15,7 +15,7 @@ impl<'a> BytesEncode<'a> for SessionRecordCodec {
     type EItem = SessionRecord;
 
     fn bytes_encode(item: &'a Self::EItem) -> Result<Cow<'a, [u8]>, BoxedError> {
-        let payload = bincode::serialize(&StoredSessionRecord::from_record(item))?;
+        let payload = bincode::serialize(&StoredSessionRecordRef::from_record(item))?;
         let mut bytes = Vec::with_capacity(SESSION_RECORD_MAGIC.len() + payload.len());
         bytes.extend_from_slice(SESSION_RECORD_MAGIC);
         bytes.extend_from_slice(&payload);
@@ -35,6 +35,48 @@ impl<'a> BytesDecode<'a> for SessionRecordCodec {
     }
 }
 
+#[derive(Serialize)]
+struct StoredSessionRecordRef<'a> {
+    principal: StoredPrincipalRef<'a>,
+    created_at_nanos: Option<i128>,
+    updated_at_nanos: Option<i128>,
+    expires_at_nanos: Option<i128>,
+}
+
+impl<'a> StoredSessionRecordRef<'a> {
+    fn from_record(record: &'a SessionRecord) -> Self {
+        Self {
+            principal: StoredPrincipalRef::from_principal(&record.principal),
+            created_at_nanos: record.created_at.map(OffsetDateTime::unix_timestamp_nanos),
+            updated_at_nanos: record.updated_at.map(OffsetDateTime::unix_timestamp_nanos),
+            expires_at_nanos: record.expires_at.map(OffsetDateTime::unix_timestamp_nanos),
+        }
+    }
+}
+
+#[derive(Serialize)]
+struct StoredPrincipalRef<'a> {
+    role: u8,
+    display_name: &'a str,
+    legal_name: &'a str,
+    ref_: &'a str,
+    phone: &'a str,
+    avatar_url: &'a str,
+}
+
+impl<'a> StoredPrincipalRef<'a> {
+    fn from_principal(principal: &'a Principal) -> Self {
+        Self {
+            role: encode_role(&principal.role),
+            display_name: &principal.display_name,
+            legal_name: &principal.legal_name,
+            ref_: &principal.ref_,
+            phone: &principal.phone,
+            avatar_url: &principal.avatar_url,
+        }
+    }
+}
+
 #[derive(Serialize, Deserialize)]
 struct StoredSessionRecord {
     principal: StoredPrincipal,
@@ -44,15 +86,6 @@ struct StoredSessionRecord {
 }
 
 impl StoredSessionRecord {
-    fn from_record(record: &SessionRecord) -> Self {
-        Self {
-            principal: StoredPrincipal::from_principal(&record.principal),
-            created_at_nanos: record.created_at.map(OffsetDateTime::unix_timestamp_nanos),
-            updated_at_nanos: record.updated_at.map(OffsetDateTime::unix_timestamp_nanos),
-            expires_at_nanos: record.expires_at.map(OffsetDateTime::unix_timestamp_nanos),
-        }
-    }
-
     fn into_record(self) -> Result<SessionRecord, BoxedError> {
         Ok(SessionRecord {
             principal: self.principal.into_principal()?,
@@ -74,17 +107,6 @@ struct StoredPrincipal {
 }
 
 impl StoredPrincipal {
-    fn from_principal(principal: &Principal) -> Self {
-        Self {
-            role: encode_role(&principal.role),
-            display_name: principal.display_name.clone(),
-            legal_name: principal.legal_name.clone(),
-            ref_: principal.ref_.clone(),
-            phone: principal.phone.clone(),
-            avatar_url: principal.avatar_url.clone(),
-        }
-    }
-
     fn into_principal(self) -> Result<Principal, BoxedError> {
         Ok(Principal {
             role: decode_role(self.role)?,

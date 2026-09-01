@@ -10,10 +10,10 @@ pub(super) fn visible_order_ids_for_apparatus(
     maps: &[ProductionMapDefinition],
     apparatus: &str,
 ) -> Vec<String> {
-    let Some(apparatus_id) = ApparatusId::new(apparatus.trim().to_string()).ok() else {
+    let apparatus = apparatus.trim();
+    if !ApparatusId::is_valid(apparatus) {
         return Vec::new();
-    };
-    let apparatus = apparatus_id.as_str();
+    }
     maps.iter()
         .filter(|map| {
             !is_template_map(map) && chain::map_has_work_stage_for_station(map, apparatus)
@@ -26,21 +26,33 @@ pub(super) fn visible_order_ids_for_apparatus(
 pub(super) fn visible_order_ids_by_apparatus(
     maps: &[ProductionMapDefinition],
 ) -> BTreeMap<String, Vec<String>> {
+    order_ids_by_apparatus(maps, is_visible_queue_order)
+}
+
+pub(super) fn queue_order_ids_by_apparatus(
+    maps: &[ProductionMapDefinition],
+) -> BTreeMap<String, Vec<String>> {
+    order_ids_by_apparatus(maps, |map| !is_template_map(map))
+}
+
+fn order_ids_by_apparatus(
+    maps: &[ProductionMapDefinition],
+    include: impl Fn(&ProductionMapDefinition) -> bool,
+) -> BTreeMap<String, Vec<String>> {
     let mut visible = BTreeMap::<String, Vec<String>>::new();
     for map in maps {
         let order_id = map.id.trim();
-        if !is_visible_queue_order(map) {
+        if order_id.is_empty() || !include(map) {
             continue;
         }
         let mut seen_apparatus_ids = BTreeSet::<String>::new();
         for stage in chain::linear_work_stages(map) {
-            let Some(apparatus_id) = stage.apparatus_id.as_deref() else {
+            let Some(apparatus_id) = stage.apparatus_id.as_deref().map(str::trim) else {
                 continue;
             };
-            let Some(apparatus_id) = ApparatusId::new(apparatus_id.trim().to_string()).ok() else {
-                continue;
-            };
-            if !seen_apparatus_ids.insert(apparatus_id.to_string()) {
+            if !ApparatusId::is_valid(apparatus_id)
+                || !seen_apparatus_ids.insert(apparatus_id.to_string())
+            {
                 continue;
             }
             visible

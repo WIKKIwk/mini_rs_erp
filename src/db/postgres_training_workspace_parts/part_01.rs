@@ -102,7 +102,7 @@ async fn prepare_map_for_save(
         let order_number = format!("T-{next:04}");
         map.order_number = order_number.clone();
         if map.code.trim().is_empty() {
-            map.code = order_number.clone();
+            map.code = order_number;
         }
         if map.id.trim().is_empty() || map.id.starts_with("zakaz-draft-") {
             map.id = format!("training-zakaz-{next:04}");
@@ -333,12 +333,15 @@ fn canonical_training_apparatus(value: &str) -> Result<ApparatusId, TrainingWork
 }
 
 fn training_virtual_input_id(value: &str) -> Result<String, TrainingWorkspaceError> {
-    match value.trim().to_ascii_lowercase().as_str() {
-        TRAINING_VIRTUAL_INPUT_BOSMA => Ok(TRAINING_VIRTUAL_INPUT_BOSMA.to_string()),
-        TRAINING_VIRTUAL_INPUT_LAMINATSIYA => Ok(TRAINING_VIRTUAL_INPUT_LAMINATSIYA.to_string()),
-        _ => Err(TrainingWorkspaceError::InvalidInput(
+    let value = value.trim();
+    if value.eq_ignore_ascii_case(TRAINING_VIRTUAL_INPUT_BOSMA) {
+        Ok(TRAINING_VIRTUAL_INPUT_BOSMA.to_string())
+    } else if value.eq_ignore_ascii_case(TRAINING_VIRTUAL_INPUT_LAMINATSIYA) {
+        Ok(TRAINING_VIRTUAL_INPUT_LAMINATSIYA.to_string())
+    } else {
+        Err(TrainingWorkspaceError::InvalidInput(
             "training virtual input kerak".to_string(),
-        )),
+        ))
     }
 }
 

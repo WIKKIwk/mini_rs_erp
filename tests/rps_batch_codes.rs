@@ -52,7 +52,7 @@ async fn lmdb_persists_legacy_codes_and_rejects_cross_batch_reuse() {
         ..RpsBatchSession::default()
     };
 
-    store.put(first).await.expect("persist first batch");
+    store.put(&first).await.expect("persist first batch");
     let stored = store
         .get("material_taminotchi:M-1")
         .await
@@ -67,7 +67,7 @@ async fn lmdb_persists_legacy_codes_and_rejects_cross_batch_reuse() {
         ..RpsBatchSession::default()
     };
     assert_eq!(
-        store.put(duplicate).await,
+        store.put(&duplicate).await,
         Err(RpsBatchStoreError::StoreFailed)
     );
 }
@@ -89,12 +89,12 @@ impl RpsBatchStorePort for MemoryBatchStore {
             .cloned())
     }
 
-    async fn put(&self, batch: RpsBatchSession) -> Result<(), RpsBatchStoreError> {
-        *self.batch.lock().expect("batch lock") = Some(batch);
+    async fn put(&self, batch: &RpsBatchSession) -> Result<(), RpsBatchStoreError> {
+        *self.batch.lock().expect("batch lock") = Some(batch.clone());
         Ok(())
     }
 
-    async fn complete(&self, batch: RpsBatchSession) -> Result<(), RpsBatchStoreError> {
+    async fn complete(&self, batch: &RpsBatchSession) -> Result<(), RpsBatchStoreError> {
         self.put(batch).await
     }
 

@@ -13,6 +13,7 @@ use super::normalize::{
     normalize_product_spec, resolve_cell_qr_from_payload,
 };
 use super::ports::QolipStorePort;
+use crate::core::text::trim_owned;
 
 #[derive(Clone)]
 pub struct QolipService {

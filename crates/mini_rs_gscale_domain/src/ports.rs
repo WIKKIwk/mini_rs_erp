@@ -97,9 +97,3 @@ pub enum GscalePortError {
     #[error("driver request failed: {0}")]
     Driver(String),
 }
-
-impl GscalePortError {
-    pub fn message(&self) -> String {
-        self.to_string()
-    }
-}

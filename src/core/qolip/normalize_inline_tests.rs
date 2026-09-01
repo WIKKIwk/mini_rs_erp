@@ -69,5 +69,27 @@ mod tests {
             .expect("resolved");
         assert_eq!(resolved.location_label, "B13");
         assert_eq!(resolved.block, "A");
+
+        let lowercase = seed.qr_payload.to_ascii_lowercase();
+        assert_eq!(
+            resolve_cell_qr_from_payload(&lowercase, &blocks, &principal())
+                .expect("lowercase payload")
+                .id,
+            seed.id
+        );
+        assert_eq!(
+            resolve_cell_qr_from_payload(
+                &format!("  {}  ", seed.qr_payload),
+                &blocks,
+                &principal(),
+            )
+            .expect("trimmed payload")
+            .id,
+            seed.id
+        );
+
+        let mut bad_checksum = seed.qr_payload.clone();
+        bad_checksum.replace_range(20..24, "0000");
+        assert!(resolve_cell_qr_from_payload(&bad_checksum, &blocks, &principal()).is_none());
     }
 }

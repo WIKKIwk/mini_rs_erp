@@ -37,7 +37,7 @@ fn training_queue_action_controls(
             let queue_actionable = state.is_active()
                 || (state == queue_state::ApparatusQueueOrderState::Pending
                     && active_order_is_this
-                    && actionable_order_id.as_deref() == Some(order_id));
+                    && actionable_order_id == Some(order_id.as_str()));
             let previous_stage = saved_map
                 .and_then(|saved| training_input_stage_for_map(&saved.map, apparatus))
                 .unwrap_or_default();

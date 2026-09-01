@@ -449,7 +449,7 @@ impl ProductionMapStorePort for MemoryProductionMapStore {
 
     async fn put_apparatus_queue_states_with_event_and_progress(
         &self,
-        write: QueueActionProgressWrite,
+        write: &QueueActionProgressWrite,
     ) -> Result<QueueActionProgressWriteResult, ProductionMapError> {
         MemoryProductionMapStore::put_apparatus_queue_states_with_event_and_progress(self, write)
             .await

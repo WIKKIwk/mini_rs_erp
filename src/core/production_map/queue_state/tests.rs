@@ -34,25 +34,16 @@ fn progress_output_actions_have_one_canonical_classification() {
 fn first_actionable_skips_completed_orders() {
     let sequence = vec!["a".to_string(), "b".to_string(), "c".to_string()];
     let mut states = BTreeMap::from([("a".to_string(), ApparatusQueueOrderState::Completed)]);
-    assert_eq!(
-        first_actionable_order_id(&sequence, &states).as_deref(),
-        Some("b")
-    );
+    assert_eq!(first_actionable_order_id(&sequence, &states), Some("b"));
     states.insert("b".to_string(), ApparatusQueueOrderState::InProgress);
-    assert_eq!(
-        first_actionable_order_id(&sequence, &states).as_deref(),
-        Some("b")
-    );
+    assert_eq!(first_actionable_order_id(&sequence, &states), Some("b"));
 }
 
 #[test]
 fn first_actionable_prioritizes_in_progress_order() {
     let sequence = vec!["a".to_string(), "b".to_string()];
     let states = BTreeMap::from([("b".to_string(), ApparatusQueueOrderState::InProgress)]);
-    assert_eq!(
-        first_actionable_order_id(&sequence, &states).as_deref(),
-        Some("b")
-    );
+    assert_eq!(first_actionable_order_id(&sequence, &states), Some("b"));
 }
 
 #[test]

@@ -23,6 +23,18 @@ pub type LateMaterialReceiptErrorHandler = Arc<dyn Fn(String) + Send + Sync>;
 pub type WarehouseEventHandler = Arc<dyn Fn(String, String) + Send + Sync>;
 
 #[derive(Clone)]
+pub struct PreparedMaterialReceiptPrint {
+    job: Arc<jobs::NormalizedMaterialReceiptJob>,
+    print_count: u32,
+}
+
+impl PreparedMaterialReceiptPrint {
+    pub fn print_count(&self) -> u32 {
+        self.print_count
+    }
+}
+
+#[derive(Clone)]
 pub struct GscaleService {
     receipt_store: Option<Arc<dyn MaterialReceiptStorePort>>,
     driver: Option<Arc<dyn ScaleDriverPort>>,
@@ -70,6 +82,20 @@ impl GscaleService {
     pub fn with_epc_source(mut self, epc: Arc<dyn EpcSource>) -> Self {
         self.epc = epc;
         self
+    }
+
+    fn receipt_store(&self) -> Result<&Arc<dyn MaterialReceiptStorePort>, GscaleServiceError> {
+        self.receipt_store.as_ref().ok_or_else(|| {
+            GscaleServiceError::NotConfigured(
+                "material receipt store is not configured".to_string(),
+            )
+        })
+    }
+
+    fn driver(&self) -> Result<&Arc<dyn ScaleDriverPort>, GscaleServiceError> {
+        self.driver.as_ref().ok_or_else(|| {
+            GscaleServiceError::NotConfigured("scale driver is not configured".to_string())
+        })
     }
 
     fn next_epc(&self) -> Result<String, GscaleServiceError> {

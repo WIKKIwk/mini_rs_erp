@@ -91,48 +91,51 @@ impl ProductionMapService {
         qolip_checkouts: Vec<crate::core::qolip::QolipCheckout>,
         returned_paint_report: Option<crate::core::returned_paint::ReturnedPaintRequest>,
     ) -> Result<ApparatusQueueActionResult, ProductionMapError> {
-        let order_id = prepared.event.order_id.clone();
-        let map_update = prepared
-            .claimed_alternative_map
-            .as_ref()
-            .map(|update| update.updated.clone());
-        let schedule_reservation_status =
-            schedule_reservation_status_for_action(prepared.event.action);
-        let order_control = prepared.order_control_update.clone();
-        let write_result = self
-            .store
-            .put_apparatus_queue_states_with_event_and_progress(QueueActionProgressWrite {
-                apparatus: prepared.apparatus.clone(),
-                map_update,
-                states: prepared.states.clone(),
-                sequence_updates: prepared.sequence_updates.clone(),
-                event: prepared.event,
-                session: prepared.session.clone(),
-                progress_event: prepared.progress_event.clone(),
-                progress_batch: prepared.progress_batch.clone(),
-                progress_batches: prepared.progress_batches.clone(),
-                progress_batch_updates: prepared.progress_batch_updates.clone(),
-                opening_wip_batch_updates: prepared.opening_wip_batch_updates.clone(),
-                raw_material_stock_transitions,
-                qolip_checkouts,
-                returned_paint_report,
-                order_control_update: prepared.order_control_update.clone(),
-                schedule_reservation_status,
-            })
-            .await?;
-        let order_status = self.order_status_detail(&order_id).await?;
-        self.notify_live();
-        Ok(ApparatusQueueActionResult {
+        let write = QueueActionProgressWrite {
+            apparatus: prepared.apparatus,
+            map_update: prepared.claimed_alternative_map,
             states: prepared.states,
-            order_status,
-            order_control,
+            sequence_updates: prepared.sequence_updates,
+            schedule_reservation_status: schedule_reservation_status_for_action(
+                prepared.event.action,
+            ),
+            event: prepared.event,
             session: prepared.session,
             progress_event: prepared.progress_event,
             progress_batch: prepared.progress_batch,
             progress_batches: prepared.progress_batches,
+            progress_batch_updates: prepared.progress_batch_updates,
+            opening_wip_batch_updates: prepared.opening_wip_batch_updates,
+            raw_material_stock_transitions,
+            qolip_checkouts,
+            returned_paint_report,
+            order_control_update: prepared.order_control_update,
+        };
+        let write_result = self
+            .store
+            .put_apparatus_queue_states_with_event_and_progress(&write)
+            .await?;
+        let order_status = self.order_status_detail(&write.event.order_id).await?;
+        self.notify_live();
+        let QueueActionProgressWrite {
+            states,
+            session,
+            progress_event,
+            progress_batch,
+            progress_batches,
+            order_control_update,
+            ..
+        } = write;
+        Ok(ApparatusQueueActionResult {
+            states,
+            order_status,
+            order_control: order_control_update,
+            session,
+            progress_event,
+            progress_batch,
+            progress_batches,
             raw_material_stock_warehouses: write_result.raw_material_stock_warehouses,
             raw_material_stock_committed: write_result.raw_material_stock_committed,
-            qolip_checkout_committed: write_result.qolip_checkout_committed,
         })
     }
 }
@@ -163,11 +166,11 @@ fn has_unprocessed_previous_wips_from_sources(
                 )
                 .is_some()
         })
-        .flat_map(|record| record.batches.iter().cloned())
-        .map(|batch| (batch.batch_id.trim().to_string(), batch))
+        .flat_map(|record| record.batches.iter())
+        .map(|batch| (batch.batch_id.trim(), batch))
         .collect::<BTreeMap<_, _>>();
     for batch in opening_wip_batch_updates {
-        opening_batches.insert(batch.batch_id.trim().to_string(), batch.clone());
+        opening_batches.insert(batch.batch_id.trim(), batch);
     }
     if !opening_batches.is_empty() {
         return opening_batches.values().any(|batch| {
@@ -181,11 +184,10 @@ fn has_unprocessed_previous_wips_from_sources(
 
     let mut batches = progress_batches
         .iter()
-        .cloned()
-        .map(|batch| (batch.batch_id.trim().to_string(), batch))
+        .map(|batch| (batch.batch_id.trim(), batch))
         .collect::<BTreeMap<_, _>>();
     for batch in progress_batch_updates {
-        batches.insert(batch.batch_id.trim().to_string(), batch.clone());
+        batches.insert(batch.batch_id.trim(), batch);
     }
     has_unprocessed_previous_wips_from_batches(
         order_id,
@@ -193,20 +195,20 @@ fn has_unprocessed_previous_wips_from_sources(
         apparatus,
         canonical,
         all_states,
-        &batches.into_values().collect::<Vec<_>>(),
+        batches.into_values(),
         ignored_batch_id,
         stage_node_id,
     )
 }
 
 #[allow(clippy::too_many_arguments)]
-fn has_unprocessed_previous_wips_from_batches(
+fn has_unprocessed_previous_wips_from_batches<'a>(
     order_id: &str,
     order_map: &ProductionMapDefinition,
     apparatus: &str,
     canonical: &crate::core::apparatus_standard::RuntimeApparatusConfiguration,
     all_states: &ApparatusQueueStateMap,
-    batches: &[OrderProgressBatch],
+    batches: impl IntoIterator<Item = &'a OrderProgressBatch>,
     ignored_batch_id: &str,
     stage_node_id: &str,
 ) -> bool {
@@ -232,7 +234,7 @@ fn has_unprocessed_previous_wips_from_batches(
         return true;
     }
     batches
-        .iter()
+        .into_iter()
         .filter(|batch| {
             batch.order_id.trim() == order_id.trim()
                 && super::super::types::apparatus_ids_match(

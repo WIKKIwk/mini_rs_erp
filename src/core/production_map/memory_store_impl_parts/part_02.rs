@@ -197,9 +197,10 @@ impl MemoryProductionMapStore {
 
     async fn put_apparatus_queue_states_with_event_and_progress(
         &self,
-        write: QueueActionProgressWrite,
+        write: &QueueActionProgressWrite,
     ) -> Result<QueueActionProgressWriteResult, ProductionMapError> {
-        validate_queue_progress_write(&write)?;
+        validate_queue_progress_write(write)?;
+        let write = write.clone();
         if self
             .fail_next_queue_progress_commit
             .swap(false, Ordering::SeqCst)

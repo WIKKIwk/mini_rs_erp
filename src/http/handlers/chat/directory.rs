@@ -77,7 +77,7 @@ pub(super) async fn resolve_target(
                 .profile_avatar_url_for_principal(role, ref_)
                 .await;
             Ok(ChatPrincipalInput {
-                role: role.clone(),
+                role: *role,
                 ref_: ref_.to_string(),
                 display_name: state.config.admin_name.clone(),
                 avatar_url,
@@ -98,7 +98,7 @@ pub(super) async fn resolve_target(
                 .await
                 .map_err(map_exact_admin_error)?;
             Ok(ChatPrincipalInput {
-                role: role.clone(),
+                role: *role,
                 ref_: detail.id,
                 display_name: detail.name,
                 avatar_url: detail.avatar_url,
@@ -246,7 +246,7 @@ async fn load_directory_entries(
                     _ => continue,
                 };
                 items.push(ChatDirectoryEntry {
-                    role: role.clone(),
+                    role,
                     ref_: detail.id,
                     display_name: detail.name,
                     avatar_url: detail.avatar_url,

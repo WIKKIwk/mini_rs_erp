@@ -9,9 +9,10 @@ use crate::core::gscale::models::{MaterialReceiptPrintRequest, MaterialReceiptPr
 use super::models::{
     RpsBatchHistoryResponse, RpsBatchPrintEntry, RpsBatchPrintRequest, RpsBatchResponse,
     RpsBatchSession, RpsBatchStartRequest, RpsBatchStopRequest, RpsBatchUpdateRequest,
-    new_batch_code,
+    new_batch_code, trimmed_or,
 };
 use super::ports::{RpsBatchStoreError, RpsBatchStorePort};
+use crate::core::text::trim_owned;
 
 #[derive(Clone)]
 pub struct RpsBatchService {
@@ -47,7 +48,7 @@ impl RpsBatchService {
         }
         let now = now_string();
         let batch = normalize_start(owner, request, now)?;
-        self.store.put(batch.clone()).await?;
+        self.store.put(&batch).await?;
         Ok(RpsBatchResponse::new(batch))
     }
 
@@ -60,7 +61,7 @@ impl RpsBatchService {
             .store
             .get(&owner.key)
             .await?
-            .unwrap_or_else(|| owner.inactive_batch());
+            .unwrap_or_else(|| owner.into_inactive_batch());
         Ok(RpsBatchResponse::new(batch))
     }
 
@@ -80,25 +81,10 @@ impl RpsBatchService {
             return Err(RpsBatchServiceError::BatchNotActive);
         }
         validate_update_context(&batch, &request)?;
-        let (item_code, item_name, warehouse, width_mm, micron) = normalize_update(&request)?;
-        batch.item_code = item_code;
-        batch.item_name = item_name;
-        batch.warehouse = warehouse;
-        batch.width_mm = width_mm;
-        batch.micron = micron;
-        if let Some(quantity_source) = request.quantity_source.as_deref() {
-            batch.quantity_source = normalize_quantity_source(quantity_source);
-        }
-        if request.tare_enabled.is_some() || request.tare_kg.is_some() {
-            let tare_enabled = request.tare_enabled.unwrap_or(batch.tare_enabled);
-            let tare_kg = request
-                .tare_kg
-                .unwrap_or(if tare_enabled { batch.tare_kg } else { 0.0 });
-            (batch.tare_enabled, batch.tare_kg) = normalize_tare(tare_enabled, tare_kg);
-        }
+        apply_update(&mut batch, request)?;
         batch.revision = next_revision(batch.revision);
         batch.updated_at = now_string();
-        self.store.put(batch.clone()).await?;
+        self.store.put(&batch).await?;
         Ok(RpsBatchResponse::new(batch))
     }
 
@@ -121,7 +107,7 @@ impl RpsBatchService {
         batch.active = false;
         batch.revision = next_revision(batch.revision);
         batch.updated_at = now_string();
-        self.store.complete(batch.clone()).await?;
+        self.store.complete(&batch).await?;
         Ok(RpsBatchResponse::new(batch))
     }
 
@@ -156,9 +142,9 @@ impl RpsBatchService {
         batch.last_error_at = now_string();
         batch.updated_at = batch.last_error_at.clone();
         if batch.active {
-            self.store.put(batch).await?;
+            self.store.put(&batch).await?;
         } else {
-            self.store.complete(batch).await?;
+            self.store.complete(&batch).await?;
         }
         Ok(true)
     }
@@ -186,7 +172,7 @@ impl RpsBatchService {
             batch.active = false;
             batch.revision = next_revision(batch.revision);
         }
-        self.store.complete(batch).await?;
+        self.store.complete(&batch).await?;
         Ok(true)
     }
 
@@ -225,9 +211,9 @@ impl RpsBatchService {
         });
         batch.updated_at = printed_at;
         if batch.active {
-            self.store.put(batch).await?;
+            self.store.put(&batch).await?;
         } else {
-            self.store.complete(batch).await?;
+            self.store.complete(&batch).await?;
         }
         Ok(true)
     }
@@ -262,16 +248,16 @@ impl RpsBatchService {
     }
 }
 
-#[derive(Debug, Clone)]
-struct BatchOwner {
+#[derive(Debug)]
+struct BatchOwner<'a> {
     key: String,
-    role: String,
-    ref_: String,
+    role: &'static str,
+    ref_: &'a str,
 }
 
-impl BatchOwner {
-    fn from_principal(principal: &Principal) -> Self {
-        let role = role_name(&principal.role).to_string();
+impl<'a> BatchOwner<'a> {
+    fn from_principal(principal: &'a Principal) -> Self {
+        let role = role_name(principal.role);
         let ref_ = first_non_empty([&principal.ref_, &principal.phone, &principal.display_name]);
         Self {
             key: format!("{role}:{ref_}"),
@@ -280,48 +266,63 @@ impl BatchOwner {
         }
     }
 
-    fn inactive_batch(&self) -> RpsBatchSession {
-        RpsBatchSession::inactive(self.key.clone(), self.role.clone(), self.ref_.clone())
+    fn into_inactive_batch(self) -> RpsBatchSession {
+        RpsBatchSession::inactive(self.key, self.role.to_string(), self.ref_.to_string())
     }
 }
 
 fn normalize_start(
-    owner: BatchOwner,
+    owner: BatchOwner<'_>,
     request: RpsBatchStartRequest,
     now: String,
 ) -> Result<RpsBatchSession, RpsBatchServiceError> {
-    let item_code = request.item_code.trim().to_string();
-    let warehouse = request.warehouse.trim().to_string();
+    let RpsBatchStartRequest {
+        client_batch_id,
+        driver_url,
+        item_code,
+        item_name,
+        warehouse,
+        printer,
+        print_mode,
+        quantity_source,
+        manual_qty_kg,
+        tare_enabled,
+        tare_kg,
+        width_mm,
+        micron,
+    } = request;
+    let item_code = trim_owned(item_code);
+    let warehouse = trim_owned(warehouse);
     if item_code.is_empty() || warehouse.is_empty() {
         return Err(RpsBatchServiceError::InvalidInput(
             "item_code_and_warehouse_required".to_string(),
         ));
     }
-    let driver_url = request.driver_url.trim().trim_end_matches('/').to_string();
+    let driver_url = trim_trailing_slashes(driver_url);
     if driver_url.is_empty() {
         return Err(RpsBatchServiceError::InvalidInput(
             "driver_url_required".to_string(),
         ));
     }
-    let (width_mm, micron) = normalize_dimensions(request.width_mm, request.micron)?;
-    let (tare_enabled, tare_kg) = normalize_tare(request.tare_enabled, request.tare_kg);
+    let (width_mm, micron) = normalize_dimensions(width_mm, micron)?;
+    let (tare_enabled, tare_kg) = normalize_tare(tare_enabled, tare_kg);
 
     Ok(RpsBatchSession {
-        id: batch_id(&request.client_batch_id, &owner.key),
+        id: batch_id(client_batch_id, &owner.key),
         batch_code: new_batch_code(),
         revision: 1,
         active: true,
         owner_key: owner.key,
-        owner_role: owner.role,
-        owner_ref: owner.ref_,
+        owner_role: owner.role.to_string(),
+        owner_ref: owner.ref_.to_string(),
         driver_url,
-        item_name: fallback(&request.item_name, &item_code),
+        item_name: trimmed_or(item_name, &item_code),
         item_code,
         warehouse,
-        printer: fallback(&request.printer.to_ascii_lowercase(), "zebra"),
-        print_mode: fallback(&request.print_mode.to_ascii_lowercase(), "rfid"),
-        quantity_source: normalize_quantity_source(&request.quantity_source),
-        manual_qty_kg: positive_or_zero(request.manual_qty_kg),
+        printer: lowercase_or(printer, "zebra"),
+        print_mode: lowercase_or(print_mode, "rfid"),
+        quantity_source: normalize_quantity_source(quantity_source),
+        manual_qty_kg: positive_or_zero(manual_qty_kg),
         tare_enabled,
         tare_kg,
         width_mm,
@@ -334,9 +335,11 @@ fn normalize_start(
     })
 }
 
-fn normalize_quantity_source(value: &str) -> String {
-    if value.trim().eq_ignore_ascii_case("manual") {
-        "manual".to_string()
+fn normalize_quantity_source(value: String) -> String {
+    let mut value = trim_owned(value);
+    if value.eq_ignore_ascii_case("manual") {
+        value.make_ascii_lowercase();
+        value
     } else {
         "scale".to_string()
     }
@@ -367,30 +370,49 @@ fn normalize_dimensions(
     }
 }
 
-fn normalize_update(
-    request: &RpsBatchUpdateRequest,
-) -> Result<(String, String, String, Option<f64>, Option<f64>), RpsBatchServiceError> {
-    let item_code = request.item_code.trim().to_string();
-    let warehouse = request.warehouse.trim().to_string();
+fn apply_update(
+    batch: &mut RpsBatchSession,
+    request: RpsBatchUpdateRequest,
+) -> Result<(), RpsBatchServiceError> {
+    let RpsBatchUpdateRequest {
+        item_code,
+        item_name,
+        warehouse,
+        width_mm,
+        micron,
+        quantity_source,
+        tare_enabled,
+        tare_kg,
+        ..
+    } = request;
+    let item_code = trim_owned(item_code);
+    let warehouse = trim_owned(warehouse);
     if item_code.is_empty() || warehouse.is_empty() {
         return Err(RpsBatchServiceError::InvalidInput(
             "item_code_and_warehouse_required".to_string(),
         ));
     }
-    let (width_mm, micron) = normalize_dimensions(request.width_mm, request.micron)?;
-    Ok((
-        item_code.clone(),
-        fallback(&request.item_name, &item_code),
-        warehouse,
-        width_mm,
-        micron,
-    ))
+    let (width_mm, micron) = normalize_dimensions(width_mm, micron)?;
+    batch.item_name = trimmed_or(item_name, &item_code);
+    batch.item_code = item_code;
+    batch.warehouse = warehouse;
+    batch.width_mm = width_mm;
+    batch.micron = micron;
+    if let Some(quantity_source) = quantity_source {
+        batch.quantity_source = normalize_quantity_source(quantity_source);
+    }
+    if tare_enabled.is_some() || tare_kg.is_some() {
+        let tare_enabled = tare_enabled.unwrap_or(batch.tare_enabled);
+        let tare_kg = tare_kg.unwrap_or(if tare_enabled { batch.tare_kg } else { 0.0 });
+        (batch.tare_enabled, batch.tare_kg) = normalize_tare(tare_enabled, tare_kg);
+    }
+    Ok(())
 }
 
-fn batch_id(client_batch_id: &str, owner_key: &str) -> String {
-    let client_batch_id = client_batch_id.trim();
+fn batch_id(client_batch_id: String, owner_key: &str) -> String {
+    let client_batch_id = trim_owned(client_batch_id);
     if !client_batch_id.is_empty() {
-        return client_batch_id.to_string();
+        return client_batch_id;
     }
     let owner = owner_key.replace([':', ' ', '/'], "_");
     format!(
@@ -406,7 +428,7 @@ fn now_string() -> String {
         .unwrap_or_default()
 }
 
-fn role_name(role: &PrincipalRole) -> &'static str {
+fn role_name(role: PrincipalRole) -> &'static str {
     match role {
         PrincipalRole::Supplier => "supplier",
         PrincipalRole::Werka => "werka",
@@ -419,21 +441,28 @@ fn role_name(role: &PrincipalRole) -> &'static str {
     }
 }
 
-fn first_non_empty(values: [&str; 3]) -> String {
+fn first_non_empty(values: [&str; 3]) -> &str {
     values
         .into_iter()
         .map(str::trim)
         .find(|value| !value.is_empty())
         .unwrap_or("unknown")
-        .to_string()
 }
 
-fn fallback(value: &str, default: &str) -> String {
-    let value = value.trim();
+fn trim_trailing_slashes(value: String) -> String {
+    let mut value = trim_owned(value);
+    let end = value.trim_end_matches('/').len();
+    value.truncate(end);
+    value
+}
+
+fn lowercase_or(value: String, default: &str) -> String {
+    let mut value = trim_owned(value);
     if value.is_empty() {
         default.to_string()
     } else {
-        value.to_string()
+        value.make_ascii_lowercase();
+        value
     }
 }
 
@@ -503,7 +532,7 @@ fn validate_print_context(
 }
 
 fn next_revision(current: u64) -> u64 {
-    current.saturating_add(1).max(1)
+    current.saturating_add(1)
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]

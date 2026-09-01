@@ -272,7 +272,7 @@ fn transfer_record_from_payload(
         .ok_or(ProductionMapError::StoreFailed)?;
     object.insert(
         "from_apparatus".to_string(),
-        serde_json::Value::String(from_apparatus.clone()),
+        serde_json::Value::String(from_apparatus),
     );
     object.insert(
         "to_apparatus".to_string(),

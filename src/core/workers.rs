@@ -256,18 +256,15 @@ impl WorkerStorePort for MemoryWorkerStore {
     }
 
     async fn workers_by_ids(&self, ids: &[String]) -> Result<Vec<Worker>, WorkerError> {
-        let requested = ids
-            .iter()
-            .map(|id| id.trim().to_string())
-            .filter(|id| !id.is_empty())
-            .collect::<Vec<_>>();
         let workers = self.workers.read().await;
-        Ok(requested
-            .into_iter()
+        Ok(ids
+            .iter()
+            .map(|id| id.trim())
+            .filter(|id| !id.is_empty())
             .filter_map(|id| {
                 workers
                     .iter()
-                    .find(|entry| entry.active && entry.worker.id == id)
+                    .find(|entry| entry.active && entry.worker.id.as_str() == id)
                     .map(|entry| entry.worker.clone())
             })
             .collect())

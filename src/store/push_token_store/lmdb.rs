@@ -12,6 +12,7 @@ use tokio::sync::Mutex;
 use super::lmdb_codec::PushTokenRecordsCodec;
 use crate::core::push::models::PushTokenRecord;
 use crate::core::push::ports::{PushStoreError, PushTokenStorePort};
+use crate::core::text::trim_owned;
 use crate::error::AppError;
 use crate::store::json_file::read_map;
 
@@ -112,15 +113,14 @@ impl LmdbPushTokenStore {
     ) -> Result<(), PushStoreError> {
         let token = record.token.trim();
         let token_key = push_token_hash(token);
-        let previous_key = self
+        if let Some(previous_key) = self
             .owner_db
             .get(&*wtxn, &token_key)
             .map_err(lmdb_store_error)?
-            .map(str::to_string);
-        if let Some(previous_key) = previous_key.as_deref()
             && previous_key != target_key
         {
-            self.remove_token_from_key_in_txn(wtxn, previous_key, token)?;
+            let previous_key = previous_key.to_string();
+            self.remove_token_from_key_in_txn(wtxn, &previous_key, token)?;
         }
 
         let mut records = self
@@ -247,12 +247,10 @@ impl PushTokenStorePort for LmdbPushTokenStore {
     }
 }
 
-fn normalize_record(record: PushTokenRecord) -> PushTokenRecord {
-    PushTokenRecord {
-        token: record.token.trim().to_string(),
-        platform: record.platform.trim().to_string(),
-        updated_at: record.updated_at,
-    }
+fn normalize_record(mut record: PushTokenRecord) -> PushTokenRecord {
+    record.token = trim_owned(record.token);
+    record.platform = trim_owned(record.platform);
+    record
 }
 
 fn push_token_hash(token: &str) -> [u8; 32] {

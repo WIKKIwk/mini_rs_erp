@@ -40,7 +40,8 @@ impl ProfileIdentity {
     }
 
     pub fn lookup_keys(&self) -> Vec<String> {
-        let mut keys = vec![self.vault_key()];
+        let mut keys = Vec::with_capacity(2);
+        keys.push(self.vault_key());
         let legacy_role = match self.role_key {
             "aparatchi" => Some("worker"),
             "qolipchi" => Some("system_user"),
@@ -87,7 +88,7 @@ pub async fn load_profile_prefs_batch(
         identity_key_ranges.push(start..keys.len());
     }
 
-    let stored = store.get_many(&keys).await?;
+    let mut stored = store.get_many(&keys).await?;
     if stored.len() != keys.len() {
         return Err(ProfileStoreError::StoreFailed);
     }
@@ -96,12 +97,12 @@ pub async fn load_profile_prefs_batch(
     let mut migrations = BTreeMap::<String, ProfilePrefs>::new();
     for positions in identity_key_ranges {
         let canonical_position = positions.start;
-        let selected = positions.into_iter().find_map(|position| {
-            let prefs = &stored[position];
-            profile_prefs_has_data(prefs).then(|| (position, prefs.clone()))
-        });
-        match selected {
-            Some((position, prefs)) => {
+        let selected_position = positions
+            .into_iter()
+            .find(|position| profile_prefs_has_data(&stored[*position]));
+        match selected_position {
+            Some(position) => {
+                let prefs = std::mem::take(&mut stored[position]);
                 if position != canonical_position {
                     migrations.insert(keys[canonical_position].clone(), prefs.clone());
                 }
@@ -138,18 +139,41 @@ fn principal_role_key(role: &PrincipalRole) -> &'static str {
 }
 
 fn canonical_role_key(value: &str) -> Option<&'static str> {
-    match value.trim().to_ascii_lowercase().as_str() {
-        "supplier" => Some("supplier"),
-        "werka" | "omborchi" => Some("werka"),
-        "customer" | "haridor" => Some("customer"),
-        "worker" | "ishchi" | "aparatchi" | "apparatchi" => Some("aparatchi"),
-        "qolipchi" | "system_user" | "system-user" => Some("qolipchi"),
-        "boyoqchi" | "bo'yoqchi" | "bo‘yoqchi" => Some("boyoqchi"),
-        "material_taminotchi" | "material-taminotchi" | "materialtaminotchi" => {
-            Some("material_taminotchi")
-        }
-        "admin" => Some("admin"),
-        _ => None,
+    let value = value.trim();
+    if value.eq_ignore_ascii_case("supplier") {
+        Some("supplier")
+    } else if value.eq_ignore_ascii_case("werka") || value.eq_ignore_ascii_case("omborchi") {
+        Some("werka")
+    } else if value.eq_ignore_ascii_case("customer") || value.eq_ignore_ascii_case("haridor") {
+        Some("customer")
+    } else if ["worker", "ishchi", "aparatchi", "apparatchi"]
+        .iter()
+        .any(|role| value.eq_ignore_ascii_case(role))
+    {
+        Some("aparatchi")
+    } else if ["qolipchi", "system_user", "system-user"]
+        .iter()
+        .any(|role| value.eq_ignore_ascii_case(role))
+    {
+        Some("qolipchi")
+    } else if ["boyoqchi", "bo'yoqchi", "bo‘yoqchi"]
+        .iter()
+        .any(|role| value.eq_ignore_ascii_case(role))
+    {
+        Some("boyoqchi")
+    } else if [
+        "material_taminotchi",
+        "material-taminotchi",
+        "materialtaminotchi",
+    ]
+    .iter()
+    .any(|role| value.eq_ignore_ascii_case(role))
+    {
+        Some("material_taminotchi")
+    } else if value.eq_ignore_ascii_case("admin") {
+        Some("admin")
+    } else {
+        None
     }
 }
 

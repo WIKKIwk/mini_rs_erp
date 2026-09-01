@@ -28,7 +28,7 @@ pub(super) struct NormalizedProgressLabelJob {
 
 impl NormalizedProgressLabelJob {
     pub(super) fn from_request(
-        request: ProgressLabelPrintRequest,
+        request: &ProgressLabelPrintRequest,
     ) -> Result<Self, GscaleServiceError> {
         let qr_payload = request.qr_payload.trim().to_string();
         let item_code = request.item_code.trim().to_string();
@@ -123,7 +123,7 @@ pub(super) struct NormalizedMaterialReceiptJob {
 
 impl NormalizedMaterialReceiptJob {
     pub(super) fn from_request(
-        request: MaterialReceiptPrintRequest,
+        request: &MaterialReceiptPrintRequest,
     ) -> Result<Self, GscaleServiceError> {
         if request.print_count > MAX_MATERIAL_PRINT_COUNT {
             return Err(GscaleServiceError::InvalidInput(format!(

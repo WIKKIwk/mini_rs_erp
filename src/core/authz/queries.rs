@@ -43,7 +43,7 @@ pub fn system_role_definitions() -> Vec<RoleDefinition> {
     .map(|(role, id, label)| RoleDefinition {
         id: id.to_string(),
         label: label.to_string(),
-        capability_codes: capability_codes_for_role(role.clone()),
+        capability_codes: capability_codes_for_role(role),
         base_role: Some(role),
         system: true,
     })

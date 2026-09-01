@@ -9,58 +9,48 @@ pub fn effective_apparatus_sequence(
     effective_apparatus_sequence_excluding(stored_sequence, visible_order_ids, &BTreeSet::new())
 }
 
-pub fn effective_apparatus_sequence_excluding(
-    stored_sequence: &[String],
-    visible_order_ids: &[String],
-    excluded_order_ids: &BTreeSet<String>,
+pub fn effective_apparatus_sequence_excluding<'a>(
+    stored_sequence: &'a [String],
+    visible_order_ids: &'a [String],
+    excluded_order_ids: &'a BTreeSet<String>,
 ) -> Vec<String> {
-    let excluded: BTreeSet<String> = excluded_order_ids
+    let excluded = excluded_order_ids
         .iter()
         .map(|id| id.trim())
         .filter(|id| !id.is_empty())
-        .map(str::to_string)
-        .collect();
-    let visible: BTreeSet<String> = visible_order_ids
+        .collect::<BTreeSet<_>>();
+    let visible = visible_order_ids
         .iter()
         .map(|id| id.trim())
-        .filter(|id| !id.is_empty())
-        .filter(|id| !excluded.contains(*id))
-        .map(|id| id.to_string())
-        .collect();
+        .filter(|id| !id.is_empty() && !excluded.contains(id))
+        .collect::<BTreeSet<_>>();
     if visible.is_empty() {
         return Vec::new();
     }
-    let mut result = Vec::new();
+    let mut result = Vec::with_capacity(visible.len());
     let mut seen = BTreeSet::new();
     for id in stored_sequence {
         let id = id.trim();
-        if id.is_empty() || !visible.contains(id) {
-            continue;
-        }
-        if seen.insert(id.to_string()) {
+        if !id.is_empty() && visible.contains(id) && seen.insert(id) {
             result.push(id.to_string());
         }
     }
     // Production maps are loaded newest-first. Orders that are not yet part
     // of a saved sequence must therefore be appended oldest-first so a new
     // order cannot jump ahead of the existing queue.
-    let visible_order_ids = visible_order_ids.iter().rev();
-    for id in visible_order_ids {
+    for id in visible_order_ids.iter().rev() {
         let id = id.trim();
-        if id.is_empty() || excluded.contains(id) {
-            continue;
-        }
-        if seen.insert(id.to_string()) {
+        if !id.is_empty() && !excluded.contains(id) && seen.insert(id) {
             result.push(id.to_string());
         }
     }
     result
 }
 
-pub fn first_actionable_order_id(
-    sequence: &[String],
+pub fn first_actionable_order_id<'a>(
+    sequence: &'a [String],
     states: &BTreeMap<String, ApparatusQueueOrderState>,
-) -> Option<String> {
+) -> Option<&'a str> {
     for id in sequence {
         let id = id.trim();
         if id.is_empty() {
@@ -72,7 +62,7 @@ pub fn first_actionable_order_id(
             .unwrap_or(ApparatusQueueOrderState::Pending)
             .is_active()
         {
-            return Some(id.to_string());
+            return Some(id);
         }
     }
     for id in sequence {
@@ -89,7 +79,7 @@ pub fn first_actionable_order_id(
             ApparatusQueueOrderState::InProgress => continue,
             ApparatusQueueOrderState::Paused => continue,
             ApparatusQueueOrderState::Frozen => continue,
-            ApparatusQueueOrderState::Pending => return Some(id.to_string()),
+            ApparatusQueueOrderState::Pending => return Some(id),
         }
     }
     None

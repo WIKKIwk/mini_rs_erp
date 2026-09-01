@@ -21,26 +21,28 @@ pub async fn production_map_sequence(
     .await?;
     match method {
         Method::GET => {
-            let mut snapshot = state
+            let snapshot = state
                 .production_maps
-                .live_snapshot()
+                .live_snapshot_shared()
                 .await
                 .map_err(production_map_error)?;
-            super::training::merge_worker_training_snapshot(&state, &principal, &mut snapshot)
-                .await
-                .map_err(super::training::training_workspace_error)?;
+            let snapshot = super::training::merge_worker_training_snapshot_shared(
+                &state, &principal, snapshot,
+            )
+            .await
+            .map_err(super::training::training_workspace_error)?;
             let order_customers = production_map_order_customers(&state, &snapshot.maps).await;
             Ok(json_response(serde_json::json!({
                 "ok": true,
-                "sequences": snapshot.sequences,
-                "visible_order_ids": snapshot.visible_order_ids,
-                "queue_states": snapshot.queue_states,
-                "stage_states": snapshot.stage_states,
-                "queue_policies": snapshot.queue_policies,
-                "queue_action_controls": snapshot.queue_action_controls,
-                "order_statuses": snapshot.order_statuses,
-                "order_controls": snapshot.order_controls,
-                "frozen_orders_by_apparatus": snapshot.frozen_orders_by_apparatus,
+                "sequences": &snapshot.sequences,
+                "visible_order_ids": &snapshot.visible_order_ids,
+                "queue_states": &snapshot.queue_states,
+                "stage_states": &snapshot.stage_states,
+                "queue_policies": &snapshot.queue_policies,
+                "queue_action_controls": &snapshot.queue_action_controls,
+                "order_statuses": &snapshot.order_statuses,
+                "order_controls": &snapshot.order_controls,
+                "frozen_orders_by_apparatus": &snapshot.frozen_orders_by_apparatus,
                 "order_customers": order_customers,
             })))
         }

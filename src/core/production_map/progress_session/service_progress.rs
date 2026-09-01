@@ -22,7 +22,6 @@ struct ProgressOutputValue {
 }
 
 fn progress_values_for_outputs(
-    apparatus: &str,
     canonical: &RuntimeApparatusConfiguration,
     action: queue_state::ApparatusQueueAction,
     progress: &QueueProgressInput,
@@ -56,7 +55,6 @@ fn progress_values_for_outputs(
                 let has_explicit_waste = frame.has_explicit_waste();
                 let frame_progress = frame.to_queue_progress(progress, !has_explicit_waste);
                 let mut metrics = validated_progress_metrics(
-                    apparatus,
                     canonical,
                     action,
                     &frame_progress,
@@ -79,7 +77,6 @@ fn progress_values_for_outputs(
     }
 
     let metrics = validated_progress_metrics(
-        apparatus,
         canonical,
         action,
         progress,

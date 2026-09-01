@@ -27,6 +27,7 @@ pub mod rezka;
 pub mod rps_batch;
 pub mod session;
 pub mod system_users;
+pub(crate) mod text;
 pub mod warehouse_events;
 pub mod warehouses;
 pub mod werka;

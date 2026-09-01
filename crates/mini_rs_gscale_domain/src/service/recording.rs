@@ -10,7 +10,7 @@ use crate::ports::MaterialReceiptStorePort;
 
 pub(super) async fn record_parallel_material_receipt(
     receipt_store: Arc<dyn MaterialReceiptStorePort>,
-    job: NormalizedMaterialReceiptJob,
+    job: Arc<NormalizedMaterialReceiptJob>,
     epc: String,
     print_result_rx: oneshot::Receiver<bool>,
     late_error: Option<LateMaterialReceiptErrorHandler>,
@@ -33,7 +33,7 @@ pub(super) async fn record_parallel_material_receipt(
 }
 
 pub(super) async fn record_confirmed_material_receipt(
-    receipt_store: Arc<dyn MaterialReceiptStorePort>,
+    receipt_store: &dyn MaterialReceiptStorePort,
     job: &NormalizedMaterialReceiptJob,
     epc: String,
     warehouse_event_handler: Option<WarehouseEventHandler>,
@@ -41,7 +41,7 @@ pub(super) async fn record_confirmed_material_receipt(
     if let Some(stock) = receipt_store
         .raw_material_stock_by_barcode(&epc)
         .await
-        .map_err(|error| GscaleServiceError::StoreWrite(error.message()))?
+        .map_err(|error| GscaleServiceError::StoreWrite(error.to_string()))?
     {
         validate_existing_receipt(
             &stock.item_code,
@@ -57,7 +57,7 @@ pub(super) async fn record_confirmed_material_receipt(
     let draft = match receipt_store
         .material_receipt_by_barcode(&epc)
         .await
-        .map_err(|error| GscaleServiceError::StoreWrite(error.message()))?
+        .map_err(|error| GscaleServiceError::StoreWrite(error.to_string()))?
     {
         Some(draft) => {
             validate_existing_receipt(
@@ -70,13 +70,13 @@ pub(super) async fn record_confirmed_material_receipt(
             )?;
             draft
         }
-        None => create_material_receipt_draft(receipt_store.as_ref(), job, epc).await?,
+        None => create_material_receipt_draft(receipt_store, job, epc).await?,
     };
 
     receipt_store
         .submit_stock_entry_draft(&draft.name)
         .await
-        .map_err(|error| GscaleServiceError::SubmitFailed(clean_store_error(&error.message())))?;
+        .map_err(|error| GscaleServiceError::SubmitFailed(clean_store_error(&error.to_string())))?;
     if let Some(handler) = warehouse_event_handler {
         handler(job.warehouse.clone(), "raw_material_stock".to_string());
     }
@@ -114,26 +114,26 @@ fn same_optional_number(left: Option<f64>, right: Option<f64>) -> bool {
 
 async fn record_parallel_material_receipt_inner(
     receipt_store: Arc<dyn MaterialReceiptStorePort>,
-    job: NormalizedMaterialReceiptJob,
+    job: Arc<NormalizedMaterialReceiptJob>,
     epc: String,
     print_result_rx: oneshot::Receiver<bool>,
     warehouse_event_handler: Option<WarehouseEventHandler>,
 ) -> Result<(), GscaleServiceError> {
-    let draft = create_material_receipt_draft(receipt_store.as_ref(), &job, epc).await?;
+    let draft = create_material_receipt_draft(receipt_store.as_ref(), job.as_ref(), epc).await?;
     let print_ok = print_result_rx.await.unwrap_or(false);
     if !print_ok {
         receipt_store
             .delete_stock_entry_draft(&draft.name)
             .await
-            .map_err(|error| GscaleServiceError::StoreWrite(error.message()))?;
+            .map_err(|error| GscaleServiceError::StoreWrite(error.to_string()))?;
         return Ok(());
     }
     receipt_store
         .submit_stock_entry_draft(&draft.name)
         .await
-        .map_err(|error| GscaleServiceError::SubmitFailed(clean_store_error(&error.message())))?;
+        .map_err(|error| GscaleServiceError::SubmitFailed(clean_store_error(&error.to_string())))?;
     if let Some(handler) = warehouse_event_handler {
-        handler(job.warehouse, "raw_material_stock".to_string());
+        handler(job.warehouse.clone(), "raw_material_stock".to_string());
     }
     Ok(())
 }
@@ -158,5 +158,5 @@ async fn create_material_receipt_draft(
     receipt_store
         .create_material_receipt_draft(input)
         .await
-        .map_err(|error| GscaleServiceError::StoreWrite(error.message()))
+        .map_err(|error| GscaleServiceError::StoreWrite(error.to_string()))
 }

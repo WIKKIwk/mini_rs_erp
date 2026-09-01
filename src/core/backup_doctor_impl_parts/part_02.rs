@@ -199,7 +199,7 @@ impl BackupDoctor {
             .and_then(|value| value.to_str())
             .unwrap_or_default()
             .to_string();
-        job.checksum_sha256 = checksum.clone();
+        job.checksum_sha256 = checksum;
         job.verified = true;
         job.error.clear();
         self.persist_standalone_job(&job)?;

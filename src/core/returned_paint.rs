@@ -1,5 +1,5 @@
 use std::collections::BTreeMap;
-use std::fmt;
+use std::fmt::{self, Write as _};
 use std::sync::Arc;
 
 use async_trait::async_trait;
@@ -9,6 +9,7 @@ use tokio::sync::RwLock;
 
 use crate::core::apparatus_standard::ApparatusId;
 use crate::core::auth::models::{Principal, PrincipalRole};
+use crate::core::text::{lowercase_ascii_owned, trim_owned};
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ReturnedPaintItem {
@@ -222,19 +223,27 @@ impl ReturnedPaintService {
         sender: &Principal,
         id: String,
     ) -> Result<ReturnedPaintRequest, ReturnedPaintError> {
-        let order_id = required_text(input.order_id, ReturnedPaintError::MissingOrderId)?;
-        let apparatus = canonical_apparatus(input.apparatus)?;
+        let ReturnedPaintRequestCreate {
+            order_id,
+            order_code,
+            order_name,
+            apparatus,
+            image_id,
+            items,
+        } = input;
+        let order_id = required_text(order_id, ReturnedPaintError::MissingOrderId)?;
+        let apparatus = canonical_apparatus(apparatus)?;
         let sender_ref = sender.ref_.trim();
         let sender_display_name = sender.display_name.trim();
         if sender_ref.is_empty() || sender_display_name.is_empty() || id.trim().is_empty() {
             return Err(ReturnedPaintError::StoreFailed);
         }
-        let image = if input.image_id.trim().is_empty() {
+        let image = if image_id.trim().is_empty() {
             None
         } else {
             let stored = self
                 .store
-                .image(input.image_id.trim())
+                .image(image_id.trim())
                 .await?
                 .ok_or(ReturnedPaintError::ImageNotFound)?;
             if stored.owner_ref.trim() != sender_ref
@@ -245,7 +254,7 @@ impl ReturnedPaintService {
             }
             Some(stored.image)
         };
-        let (items, status, calculation) = if input.items.is_empty() {
+        let (items, status, calculation) = if items.is_empty() {
             if image.is_none() {
                 return Err(ReturnedPaintError::MissingItems);
             }
@@ -255,7 +264,7 @@ impl ReturnedPaintService {
                 None,
             )
         } else {
-            let items = normalize_items(input.items)?;
+            let items = normalize_items(items)?;
             if !returned_paint_has_minimum_values_per_usage(&items) {
                 return Err(ReturnedPaintError::InsufficientValues);
             }
@@ -265,10 +274,10 @@ impl ReturnedPaintService {
         let mut request = ReturnedPaintRequest {
             id,
             order_id,
-            order_code: input.order_code.trim().to_string(),
-            order_name: input.order_name.trim().to_string(),
+            order_code: trim_owned(order_code),
+            order_name: trim_owned(order_name),
             apparatus,
-            sender_role: sender.role.clone(),
+            sender_role: sender.role,
             sender_ref: sender_ref.to_string(),
             sender_display_name: sender_display_name.to_string(),
             items,
@@ -318,8 +327,8 @@ impl ReturnedPaintService {
         let order_id = required_text(order_id, ReturnedPaintError::MissingOrderId)?;
         let apparatus = canonical_apparatus(apparatus)?;
         let owner_ref = owner.ref_.trim();
-        let image_name = image_name.trim();
-        let image_mime = image_mime.trim().to_ascii_lowercase();
+        let image_name = trim_owned(image_name);
+        let image_mime = lowercase_ascii_owned(image_mime);
         if owner_ref.is_empty()
             || image_name.is_empty()
             || body.is_empty()
@@ -340,7 +349,7 @@ impl ReturnedPaintService {
             image: ReturnedPaintImage {
                 image_url: returned_paint_image_url(&image_id),
                 image_id,
-                image_name: image_name.to_string(),
+                image_name,
                 image_mime,
                 image_size_bytes: body.len() as u64,
             },

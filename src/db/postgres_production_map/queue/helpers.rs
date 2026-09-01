@@ -434,22 +434,27 @@ fn queue_event_identity_matches(
 pub(super) fn queue_action_from_str(
     value: &str,
 ) -> Option<crate::core::production_map::queue_state::ApparatusQueueAction> {
-    match value.trim().to_ascii_lowercase().as_str() {
-        "start" => Some(crate::core::production_map::queue_state::ApparatusQueueAction::Start),
-        "pause" => Some(crate::core::production_map::queue_state::ApparatusQueueAction::Pause),
-        "freeze" => Some(crate::core::production_map::queue_state::ApparatusQueueAction::Freeze),
-        "detach_roll" => {
-            Some(crate::core::production_map::queue_state::ApparatusQueueAction::DetachRoll)
-        }
-        "resume" => Some(crate::core::production_map::queue_state::ApparatusQueueAction::Resume),
-        "merge" => Some(crate::core::production_map::queue_state::ApparatusQueueAction::Merge),
-        "roll_complete" => {
-            Some(crate::core::production_map::queue_state::ApparatusQueueAction::RollComplete)
-        }
-        "complete" => {
-            Some(crate::core::production_map::queue_state::ApparatusQueueAction::Complete)
-        }
-        _ => None,
+    use crate::core::production_map::queue_state::ApparatusQueueAction;
+
+    let value = value.trim();
+    if value.eq_ignore_ascii_case("start") {
+        Some(ApparatusQueueAction::Start)
+    } else if value.eq_ignore_ascii_case("pause") {
+        Some(ApparatusQueueAction::Pause)
+    } else if value.eq_ignore_ascii_case("freeze") {
+        Some(ApparatusQueueAction::Freeze)
+    } else if value.eq_ignore_ascii_case("detach_roll") {
+        Some(ApparatusQueueAction::DetachRoll)
+    } else if value.eq_ignore_ascii_case("resume") {
+        Some(ApparatusQueueAction::Resume)
+    } else if value.eq_ignore_ascii_case("merge") {
+        Some(ApparatusQueueAction::Merge)
+    } else if value.eq_ignore_ascii_case("roll_complete") {
+        Some(ApparatusQueueAction::RollComplete)
+    } else if value.eq_ignore_ascii_case("complete") {
+        Some(ApparatusQueueAction::Complete)
+    } else {
+        None
     }
 }
 

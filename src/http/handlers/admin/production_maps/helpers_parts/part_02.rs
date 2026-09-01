@@ -46,17 +46,10 @@ mod production_map_error_tests {
 fn ambiguous_raw_material_apparatuses(apparatuses: Vec<String>) -> AdminError {
     (
         StatusCode::BAD_REQUEST,
-        Json(AdminErrorResponse {
-            error: "raw_material_group_ambiguous".to_string(),
-            blockers: None,
-            apparatus_options: Some(apparatuses),
-            order_width_mm: None,
-            roll_width_mm: None,
-            minimum_width_mm: None,
-            maximum_width_mm: None,
-            order_title: None,
-            raw_material_status: None,
-        }),
+        Json(AdminErrorResponse::with_apparatus_options(
+            "raw_material_group_ambiguous",
+            apparatuses,
+        )),
     )
 }
 
