@@ -3,6 +3,7 @@ impl ProductionMapService {
         &self,
         context: ProgressBuildContext<'_>,
         progress: QueueProgressInput,
+        read_snapshot: Option<&ProgressBuildReadSnapshot>,
     ) -> Result<QueueProgressRecords, ProductionMapError> {
         let ProgressBuildContext {
             apparatus,
@@ -19,11 +20,14 @@ impl ProductionMapService {
             return Err(ProductionMapError::ProgressInputInvalid);
         }
         let description = progress.description.trim().to_string();
-        let session = self
-            .store
-            .active_order_run_session(apparatus, order_id)
-            .await?
-            .ok_or(ProductionMapError::QueueActionNotAllowed)?;
+        let session = if let Some(read_snapshot) = read_snapshot {
+            read_snapshot.active_session.clone()
+        } else {
+            self.store
+                .active_order_run_session(apparatus, order_id)
+                .await?
+        }
+        .ok_or(ProductionMapError::QueueActionNotAllowed)?;
         let session_input_progress = session_progress_links(&session);
         let stage = chain::work_stage_for_station(
             order_map,
@@ -40,13 +44,19 @@ impl ProductionMapService {
             return Err(ProductionMapError::ProgressQrRequired);
         }
         let opening_input_batch = if session_uses_opening_wip {
-            let record = self
-                .store
-                .opening_wip_batch(
+            let record = if let Some(read_snapshot) = read_snapshot {
+                read_snapshot.opening_wip_batch(
                     &session_input_progress.batch_id,
                     &session_input_progress.qr_payload,
                 )
-                .await?
+            } else {
+                self.store
+                    .opening_wip_batch(
+                        &session_input_progress.batch_id,
+                        &session_input_progress.qr_payload,
+                    )
+                    .await?
+            }
                 .ok_or(ProductionMapError::ProgressBatchNotFound)?;
             let explicit_batch_matches = progress.progress_batch_id.trim().is_empty()
                 || record.batch.batch_id.trim() == progress.progress_batch_id.trim();
@@ -85,6 +95,8 @@ impl ProductionMapService {
             || session_input_progress.batch_id.trim().is_empty()
         {
             None
+        } else if let Some(read_snapshot) = read_snapshot {
+            read_snapshot.progress_batch(&session_input_progress.batch_id)
         } else {
             self.store
                 .progress_batch(&session_input_progress.batch_id)
@@ -101,6 +113,7 @@ impl ProductionMapService {
                 &progress,
                 &session.session_id,
                 &stage.node_id,
+                read_snapshot,
             )
             .await?
         } else {
@@ -138,7 +151,12 @@ impl ProductionMapService {
         let recovered_input =
             if explicit_input_batch.is_none() && linked_input_batch.is_none() {
                 self.recoverable_session_input_batch(
-                    apparatus, order_id, order_map, &session, now,
+                    apparatus,
+                    order_id,
+                    order_map,
+                    &session,
+                    now,
+                    read_snapshot,
                 )
                 .await?
             } else {

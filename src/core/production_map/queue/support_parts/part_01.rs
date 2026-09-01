@@ -80,30 +80,6 @@ pub(super) fn order_run_session_was_requeued(session: &OrderRunSession) -> bool 
         == Some(true)
 }
 
-pub(super) fn has_waiting_previous_stage_wip(
-    map: &ProductionMapDefinition,
-    batches: &[OrderProgressBatch],
-    order_id: &str,
-    previous_stage: &str,
-    apparatus: &str,
-    stage_node_id: &str,
-) -> bool {
-    batches.iter().any(|batch| {
-            batch.order_id.trim() == order_id.trim()
-            && super::types::apparatus_ids_match(&batch.apparatus, previous_stage)
-            && batch.action.records_progress_output()
-            && (batch.next_apparatus.trim().is_empty()
-                || chain::stage_ids_match_for_map(map, &batch.next_apparatus, apparatus))
-            && (progress_batch_next_stage_node_id(batch).is_empty()
-                || chain::stage_node_ids_match_for_map(
-                    map,
-                    progress_batch_next_stage_node_id(batch),
-                    stage_node_id,
-                ))
-            && batch.wip_status == OrderProgressBatchWipStatus::Waiting
-    })
-}
-
 pub(super) fn progress_batch_next_stage_node_id(batch: &OrderProgressBatch) -> &str {
     batch
         .payload_json
@@ -172,7 +148,10 @@ pub(super) fn sequence_updates_for_frozen_transition(
         if !seen_storage_keys.insert(storage_key.clone()) {
             continue;
         }
-        let visible_order_ids = visible_order_ids_for_apparatus(maps, &requested_apparatus);
+        let visible_order_ids = visible_by_apparatus
+            .get(&requested_apparatus)
+            .map(Vec::as_slice)
+            .unwrap_or_default();
         if visible_order_ids.is_empty() {
             continue;
         }

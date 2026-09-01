@@ -15,6 +15,7 @@ use super::super::progress::{
     effective_apparatus_queue_policy, effective_apparatus_queue_policy_record,
 };
 use super::super::service::QueueProgressRecords;
+use super::super::service_progress::ProgressBuildReadSnapshot;
 use super::super::service_progress_support::{
     session_progress_links, wip_batch_was_consumed_by_producer,
 };

@@ -14,6 +14,101 @@ struct RecoveredSessionInputBatch {
     output_update: OrderProgressBatch,
 }
 
+pub(super) struct ProgressBuildReadSnapshot {
+    pub(super) active_session: Option<OrderRunSession>,
+    pub(super) progress_batches: Vec<OrderProgressBatch>,
+    pub(super) opening_wip_records: Vec<OpeningWipRecord>,
+    pub(super) input_progress_batch: Option<OrderProgressBatch>,
+    pub(super) input_opening_wip_batch: Option<OpeningWipBatchRecord>,
+}
+
+impl ProgressBuildReadSnapshot {
+    pub(super) fn progress_batch(&self, batch_id: &str) -> Option<OrderProgressBatch> {
+        let batch_id = batch_id.trim();
+        if batch_id.is_empty() {
+            return None;
+        }
+        self.progress_batches
+            .iter()
+            .find(|batch| batch.batch_id.trim() == batch_id)
+            .cloned()
+            .or_else(|| {
+                self.input_progress_batch
+                    .as_ref()
+                    .filter(|batch| batch.batch_id.trim() == batch_id)
+                    .cloned()
+            })
+    }
+
+    pub(super) fn progress_batch_for_qr(
+        &self,
+        progress_batch_id: &str,
+        qr_payload: &str,
+    ) -> Result<Option<OrderProgressBatch>, ProductionMapError> {
+        let progress_batch_id = progress_batch_id.trim();
+        let qr_payload = qr_payload.trim();
+        let batch = if !progress_batch_id.is_empty() {
+            self.progress_batch(progress_batch_id)
+        } else if !qr_payload.is_empty() {
+            self.progress_batches
+                .iter()
+                .find(|batch| batch.qr_payload.trim().eq_ignore_ascii_case(qr_payload))
+                .cloned()
+                .or_else(|| {
+                    self.input_progress_batch
+                        .as_ref()
+                        .filter(|batch| {
+                            batch.qr_payload.trim().eq_ignore_ascii_case(qr_payload)
+                        })
+                        .cloned()
+                })
+        } else {
+            return Err(ProductionMapError::ProgressInputInvalid);
+        };
+        if let Some(batch) = batch {
+            if !qr_payload.is_empty()
+                && !batch.qr_payload.trim().eq_ignore_ascii_case(qr_payload)
+            {
+                return Err(ProductionMapError::ProgressBatchNotFound);
+            }
+            Ok(Some(batch))
+        } else {
+            Ok(None)
+        }
+    }
+
+    pub(super) fn opening_wip_batch(
+        &self,
+        batch_id: &str,
+        qr_payload: &str,
+    ) -> Option<OpeningWipBatchRecord> {
+        let batch_id = batch_id.trim();
+        let qr_payload = qr_payload.trim();
+        self.opening_wip_records
+            .iter()
+            .find_map(|record| {
+                record.batches.iter().find(|batch| {
+                    (!batch_id.is_empty() && batch.batch_id.trim() == batch_id)
+                        || (!qr_payload.is_empty()
+                            && batch.qr_payload.trim() == qr_payload)
+                }).map(|batch| OpeningWipBatchRecord {
+                    intake: record.intake.clone(),
+                    batch: batch.clone(),
+                })
+            })
+            .or_else(|| {
+                self.input_opening_wip_batch
+                    .as_ref()
+                    .filter(|record| {
+                        (!batch_id.is_empty() && record.batch.batch_id.trim() == batch_id)
+                            || (!qr_payload.is_empty()
+                                && record.batch.qr_payload.trim() == qr_payload)
+                    })
+                    .cloned()
+            })
+    }
+}
+
 #[derive(Clone)]
 struct ProgressOutputValue {
     quantity: Option<ProgressQuantity>,

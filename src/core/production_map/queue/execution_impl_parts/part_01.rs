@@ -151,6 +151,14 @@ impl ProductionMapService {
             .unwrap_or_default()
             .trim()
             .to_string();
+        let completion_read_snapshot = if action == queue_state::ApparatusQueueAction::Complete {
+            Some(
+                self.completion_progress_build_snapshot(order_id, &progress, active_session.clone())
+                    .await?,
+            )
+        } else {
+            None
+        };
         if freeze_request_finalization {
             validate_freeze_request_target_session(&control, active_session.as_ref())?;
         }
@@ -277,22 +285,26 @@ impl ProductionMapService {
                 || apparatus::is_rezka_apparatus(&canonical))
             && !progress.force_full_completion_metrics
         {
-            let input_batch_id = self
-                .completion_input_batch_id(apparatus, order_id, &progress)
-                .await?;
-            progress.allow_partial_station_completion = self
-                .has_unprocessed_previous_wips(
-                    order_id,
-                    order_map,
-                    &storage_key,
-                    canonical.as_ref(),
-                    &all_states,
-                    &[],
-                    &[],
-                    &input_batch_id,
-                    &active_stage_node_id,
-                )
-                .await?;
+            let read_snapshot = completion_read_snapshot
+                .as_ref()
+                .ok_or(ProductionMapError::StoreFailed)?;
+            let input_batch_id = Self::completion_input_batch_id_from_snapshot(
+                &progress,
+                read_snapshot,
+            );
+            progress.allow_partial_station_completion = has_unprocessed_previous_wips_from_sources(
+                order_id,
+                order_map,
+                &storage_key,
+                canonical.as_ref(),
+                &all_states,
+                &read_snapshot.progress_batches,
+                &[],
+                &read_snapshot.opening_wip_records,
+                &[],
+                &input_batch_id,
+                &active_stage_node_id,
+            );
         }
         let progress_action = if freeze_request_safe_stop && !freeze_request_safe_stop_with_issue {
             queue_state::ApparatusQueueAction::DetachRoll
@@ -300,7 +312,7 @@ impl ProductionMapService {
             action
         };
         let mut progress = self
-            .build_progress_records(
+            .build_progress_records_with_snapshot(
                 &storage_key,
                 order_id,
                 order_map,
@@ -308,6 +320,7 @@ impl ProductionMapService {
                 &actor,
                 progress,
                 canonical.as_ref(),
+                completion_read_snapshot.as_ref(),
             )
             .await?;
         if event
@@ -336,21 +349,29 @@ impl ProductionMapService {
                 freeze_request_safe_stop_with_issue,
             );
         }
-        let has_unprocessed_previous_wips = action == queue_state::ApparatusQueueAction::Complete
+        let has_unprocessed_previous_wips = if action
+            == queue_state::ApparatusQueueAction::Complete
             && to_state == queue_state::ApparatusQueueOrderState::Completed
-            && self
-                .has_unprocessed_previous_wips(
-                    order_id,
-                    order_map,
-                    &storage_key,
-                    canonical.as_ref(),
-                    &all_states,
-                    &progress.progress_batch_updates,
-                    &progress.opening_wip_batch_updates,
-                    "",
-                    &active_stage_node_id,
-                )
-                .await?;
+        {
+            let read_snapshot = completion_read_snapshot
+                .as_ref()
+                .ok_or(ProductionMapError::StoreFailed)?;
+            has_unprocessed_previous_wips_from_sources(
+                order_id,
+                order_map,
+                &storage_key,
+                canonical.as_ref(),
+                &all_states,
+                &read_snapshot.progress_batches,
+                &progress.progress_batch_updates,
+                &read_snapshot.opening_wip_records,
+                &progress.opening_wip_batch_updates,
+                "",
+                &active_stage_node_id,
+            )
+        } else {
+            false
+        };
         if has_unprocessed_previous_wips {
             downgrade_completed_state_to_pending(order_id, &mut saved, &mut event);
         }

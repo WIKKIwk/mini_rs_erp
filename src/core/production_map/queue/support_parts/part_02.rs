@@ -67,6 +67,24 @@ pub(super) fn validate_active_sequence_barrier(
     for (index, id) in next_sequence.iter().enumerate() {
         next_positions.entry(id.trim()).or_insert(index);
     }
+    let mut prefix_max_current_position = Vec::with_capacity(next_sequence.len());
+    let mut max_current_position: Option<usize> = None;
+    let mut prefix_is_known = true;
+    for id in next_sequence {
+        if let Some(&current_position) = current_positions.get(id.trim()) {
+            max_current_position = Some(
+                max_current_position
+                    .map_or(current_position, |max| max.max(current_position)),
+            );
+        } else {
+            prefix_is_known = false;
+        }
+        prefix_max_current_position.push(if prefix_is_known {
+            max_current_position
+        } else {
+            None
+        });
+    }
 
     for (order_id, state) in states {
         let Some(parsed) = queue_state::ApparatusQueueOrderState::parse(state) else {
@@ -86,14 +104,69 @@ pub(super) fn validate_active_sequence_barrier(
         if next_index > current_index {
             return Err(ProductionMapError::QueueActionNotAllowed);
         }
-        for id in next_sequence.iter().take(next_index) {
-            if current_positions
-                .get(id.trim())
-                .is_none_or(|index| *index >= current_index)
-            {
-                return Err(ProductionMapError::QueueActionNotAllowed);
+        if next_index > 0 {
+            match prefix_max_current_position[next_index - 1] {
+                Some(max_position) if max_position < current_index => {}
+                _ => return Err(ProductionMapError::QueueActionNotAllowed),
             }
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod active_sequence_barrier_tests {
+    use super::*;
+
+    fn ids(values: &[&str]) -> Vec<String> {
+        values.iter().map(|value| (*value).to_string()).collect()
+    }
+
+    fn active(order_id: &str) -> BTreeMap<String, String> {
+        BTreeMap::from([(
+            order_id.to_string(),
+            queue_state::ApparatusQueueOrderState::InProgress
+                .as_str()
+                .to_string(),
+        )])
+    }
+
+    #[test]
+    fn unchanged_active_prefix_is_allowed() {
+        assert_eq!(
+            validate_active_sequence_barrier(
+                &ids(&["a", "b", "c"]),
+                &ids(&["a", "b", "c"]),
+                &active("b"),
+                &BTreeSet::new(),
+            ),
+            Ok(())
+        );
+    }
+
+    #[test]
+    fn unknown_order_before_active_order_is_rejected() {
+        assert_eq!(
+            validate_active_sequence_barrier(
+                &ids(&["a", "b", "c"]),
+                &ids(&["unknown", "b", "a", "c"]),
+                &active("b"),
+                &BTreeSet::new(),
+            ),
+            Err(ProductionMapError::QueueActionNotAllowed)
+        );
+    }
+
+    #[test]
+    fn later_order_moved_before_active_order_is_rejected() {
+        assert_eq!(
+            validate_active_sequence_barrier(
+                &ids(&["a", "b", "c"]),
+                &ids(&["c", "b", "a"]),
+                &active("b"),
+                &BTreeSet::new(),
+            ),
+            Err(ProductionMapError::QueueActionNotAllowed)
+        );
+    }
 }

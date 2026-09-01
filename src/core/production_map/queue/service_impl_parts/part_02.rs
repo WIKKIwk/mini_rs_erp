@@ -45,6 +45,18 @@ impl ProductionMapService {
         let active_sessions_by_order = active_sessions_by_order?;
         let progress_batches_by_order = progress_batches_by_order?;
         let opening_wip_records = opening_wip_records?;
+        let mut active_sessions_by_order_apparatus =
+            HashMap::<(&str, &str), &OrderRunSession>::new();
+        for sessions in active_sessions_by_order.values() {
+            for session in sessions {
+                if !queue_state::is_canonical_apparatus_id(&session.apparatus) {
+                    continue;
+                }
+                active_sessions_by_order_apparatus
+                    .entry((session.order_id.trim(), session.apparatus.trim()))
+                    .or_insert(session);
+            }
+        }
 
         let mut material_assignments_by_order =
             HashMap::<String, Vec<RawMaterialAssignment>>::new();
@@ -117,17 +129,8 @@ impl ProductionMapService {
                 visible_order_ids,
                 &frozen_order_ids,
             );
-            let mut effective_states = all_states
-                .get(&storage_key)
-                .or_else(|| all_states.get(apparatus))
-                .map(parsed_queue_states)
-                .unwrap_or_default();
+            let mut order_inputs = Vec::with_capacity(sequence.len());
             for order_id in &sequence {
-                if effective_states.get(order_id.trim())
-                    != Some(&queue_state::ApparatusQueueOrderState::Completed)
-                {
-                    continue;
-                }
                 let Some(order_map) = maps_by_order_id.get(order_id.trim()).copied() else {
                     continue;
                 };
@@ -135,30 +138,38 @@ impl ProductionMapService {
                     .get(order_id.trim())
                     .map(Vec::as_slice)
                     .unwrap_or_default();
-                let has_waiting_progress_reentry =
-                    waiting_reentry_stage_node_id(order_map, batches, order_id, &storage_key)
-                        .is_some();
-                let has_waiting_opening_wip_reentry = opening_wip_by_order
+                let opening_wip_records = opening_wip_by_order
                     .get(order_id.trim())
-                    .into_iter()
-                    .flatten()
-                    .any(|record| {
-                        record.intake.status == OpeningWipIntakeStatus::Confirmed
-                            && record
-                                .batches
-                                .iter()
-                                .any(|batch| batch.wip_status == OpeningWipBatchStatus::Waiting)
-                            && Self::opening_wip_target_stage(
-                                order_map,
-                                &record.intake,
-                                &storage_key,
-                                "",
-                            )
-                            .is_some()
-                    });
-                if has_waiting_progress_reentry || has_waiting_opening_wip_reentry {
+                    .map(Vec::as_slice)
+                    .unwrap_or_default();
+                let active_session = active_sessions_by_order_apparatus
+                    .get(&(order_id.trim(), storage_key.as_str()))
+                    .copied();
+                order_inputs.push(queue_control_order_input(
+                    order_id.trim(),
+                    order_map,
+                    &storage_key,
+                    batches,
+                    opening_wip_records,
+                    active_session,
+                ));
+            }
+            let mut effective_states = all_states
+                .get(&storage_key)
+                .or_else(|| all_states.get(apparatus))
+                .map(parsed_queue_states)
+                .unwrap_or_default();
+            for input in &order_inputs {
+                if effective_states.get(input.order_id)
+                    != Some(&queue_state::ApparatusQueueOrderState::Completed)
+                {
+                    continue;
+                }
+                if input.waiting_reentry_stage_node_id.is_some()
+                    || input.opening_wip_stage_node_id.is_some()
+                {
                     effective_states.insert(
-                        order_id.trim().to_string(),
+                        input.order_id.to_string(),
                         queue_state::ApparatusQueueOrderState::Pending,
                     );
                 }
@@ -172,60 +183,25 @@ impl ProductionMapService {
                 queue_state::first_actionable_order_id(&sequence, &effective_states);
             let mut apparatus_controls = BTreeMap::new();
 
-            for order_id in &sequence {
-                let Some(order_map) = maps_by_order_id.get(order_id.trim()).copied() else {
-                    continue;
-                };
-                let batches = progress_batches_by_order
-                    .get(order_id.trim())
-                    .map(Vec::as_slice)
-                    .unwrap_or_default();
-                let active_session =
-                    active_sessions_by_order
-                        .get(order_id.trim())
-                        .and_then(|sessions| {
-                            sessions.iter().find(|session| {
-                                queue_state::apparatus_ids_match(&session.apparatus, &storage_key)
-                            })
-                        });
+            for input in &order_inputs {
+                let order_id = input.order_id;
+                let order_map = input.order_map;
+                let batches = input.batches;
+                let active_session = input.active_session;
                 let active_stage_node_id = active_session
                     .and_then(|session| session.payload_json.get("stage_node_id"))
                     .and_then(serde_json::Value::as_str)
                     .unwrap_or_default()
                     .trim();
-                let waiting_reentry_stage_node_id = waiting_reentry_stage_node_id(
-                    order_map,
-                    batches,
-                    order_id.trim(),
-                    &storage_key,
-                );
-                let opening_wip_stage_node_id = opening_wip_by_order
-                    .get(order_id.trim())
-                    .into_iter()
-                    .flatten()
-                    .find_map(|record| {
-                        (record.intake.status == OpeningWipIntakeStatus::Confirmed
-                            && record
-                                .batches
-                                .iter()
-                                .any(|batch| batch.wip_status == OpeningWipBatchStatus::Waiting))
-                        .then(|| {
-                            Self::opening_wip_target_stage(
-                                order_map,
-                                &record.intake,
-                                &storage_key,
-                                "",
-                            )
-                            .map(|stage| stage.node_id.trim().to_string())
-                        })
-                        .flatten()
-                    });
                 let preferred_stage_node_id = if !active_stage_node_id.is_empty() {
                     active_stage_node_id.to_string()
-                } else if let Some(stage_node_id) = waiting_reentry_stage_node_id {
+                } else if let Some(stage_node_id) = input.waiting_reentry_stage_node_id.clone() {
                     stage_node_id
                 } else {
-                    opening_wip_stage_node_id.unwrap_or_default()
+                    input
+                        .opening_wip_stage_node_id
+                        .clone()
+                        .unwrap_or_default()
                 };
                 let stage = chain::work_stage_for_station(
                     order_map,
@@ -253,41 +229,25 @@ impl ProductionMapService {
                     &stage_node_id,
                     all_states,
                 );
+                let stage_projection = queue_control_stage_projection(
+                    order_map,
+                    batches,
+                    order_id,
+                    previous_stage.as_deref(),
+                    &storage_key,
+                    &stage_node_id,
+                );
                 let mut previous_wip_mode = previous_stage
-                    .as_deref()
-                    .map(|previous_stage| {
-                        if has_waiting_previous_stage_wip(
-                            order_map,
-                            batches,
-                            order_id.trim(),
-                            previous_stage,
-                            &storage_key,
-                            &stage_node_id,
-                        ) {
+                    .as_ref()
+                    .map(|_| {
+                        if stage_projection.has_waiting_previous_stage_wip {
                             ApparatusQueuePreviousWipMode::ScanRequired
                         } else {
                             ApparatusQueuePreviousWipMode::Waiting
                         }
                     })
                     .unwrap_or(ApparatusQueuePreviousWipMode::NotRequired);
-                let opening_wip_mode = if opening_wip_by_order
-                    .get(order_id.trim())
-                    .into_iter()
-                    .flatten()
-                    .any(|record| {
-                        record.intake.status == OpeningWipIntakeStatus::Confirmed
-                            && Self::opening_wip_target_stage(
-                                order_map,
-                                &record.intake,
-                                &storage_key,
-                                &stage_node_id,
-                            )
-                            .is_some()
-                            && record
-                                .batches
-                                .iter()
-                                .any(|batch| batch.wip_status == OpeningWipBatchStatus::Waiting)
-                    }) {
+                let opening_wip_mode = if input.has_waiting_opening_wip_for_stage(&stage_node_id) {
                     ApparatusQueuePreviousWipMode::ScanRequired
                 } else {
                     ApparatusQueuePreviousWipMode::NotRequired
@@ -426,10 +386,6 @@ impl ProductionMapService {
                                 .map(session_progress_links)
                                 .map(|links| links.batch_id)
                                 .unwrap_or_default();
-                            let batches = progress_batches_by_order
-                                .get(order_id.trim())
-                                .map(Vec::as_slice)
-                                .unwrap_or_default();
                             let has_unprocessed_previous_wips =
                                 has_unprocessed_previous_wips_from_sources(
                                     order_id.trim(),
@@ -439,10 +395,7 @@ impl ProductionMapService {
                                     all_states,
                                     batches,
                                     &[],
-                                    opening_wip_by_order
-                                        .get(order_id.trim())
-                                        .map(Vec::as_slice)
-                                        .unwrap_or_default(),
+                                    input.opening_wip_records,
                                     &[],
                                     &current_input_batch_id,
                                     &stage_node_id,
@@ -504,20 +457,7 @@ impl ProductionMapService {
                     .and_then(serde_json::Value::as_u64)
                     .and_then(|value| usize::try_from(value).ok())
                     .filter(|value| *value > 0)
-                    .or_else(|| {
-                        batches.iter().find_map(|batch| {
-                            (progress_batch_next_stage_node_id(batch) == stage_node_id)
-                                .then(|| {
-                                    batch
-                                        .payload_json
-                                        .get("contained_kadr_count")
-                                        .and_then(serde_json::Value::as_u64)
-                                        .and_then(|value| usize::try_from(value).ok())
-                                        .filter(|value| *value > 0)
-                                })
-                                .flatten()
-                        })
-                    });
+                    .or(stage_projection.input_contained_kadr_count);
                 let rezka_output_kadr_counts = if is_rezka {
                     service_progress_support::rezka_output_kadr_counts(
                         order_map,

@@ -1,4 +1,4 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use crate::core::production_map::queue_state;
 
@@ -92,43 +92,18 @@ impl ProductionOrderStatusDetail {
         detail.add_run_session_counts(run_sessions);
         detail.add_wip_counts(progress_batches);
 
-        let has_pending_queue = queue_states
-            .values()
-            .flat_map(|states| states.values())
-            .any(|state| state == "pending");
-        let has_in_progress_queue = queue_states
-            .values()
-            .flat_map(|states| states.values())
-            .any(|state| state == "in_progress");
-        let has_frozen_queue = queue_states
-            .values()
-            .flat_map(|states| states.values())
-            .any(|state| state == "frozen");
-        let has_paused_final_output_queue = progress_batches.iter().any(|batch| {
-            batch.action == queue_state::ApparatusQueueAction::Pause
-                && batch.is_finished_goods_output()
-                && queue_states.iter().any(|(apparatus, states)| {
-                    super::super::types::apparatus_ids_match(apparatus, &batch.apparatus)
-                        && states
-                            .get(batch.order_id.trim())
-                            .is_some_and(|state| state == "paused")
-                })
-        });
-        detail.completed_queue_count = queue_states
-            .values()
-            .flat_map(|states| states.values())
-            .filter(|state| state.as_str() == "completed")
-            .count();
+        let queue_projection = QueueStateProjection::from(queue_states, progress_batches);
+        detail.completed_queue_count = queue_projection.completed_queue_count;
         detail.completed_with_issue_count = logs
             .iter()
             .filter(|entry| entry.completed_with_issue)
             .count();
 
         let order_status = detail.derive_order_status(
-            has_pending_queue,
-            has_in_progress_queue,
-            has_paused_final_output_queue,
-            has_frozen_queue,
+            queue_projection.has_pending,
+            queue_projection.has_in_progress,
+            queue_projection.has_paused_final_output,
+            queue_projection.has_frozen,
         );
         detail.order_status = order_status.to_string();
         detail.work_status = work_status_for_order(order_status).to_string();
@@ -172,15 +147,14 @@ impl ProductionOrderStatusDetail {
 
     fn add_wip_counts(&mut self, progress_batches: &[OrderProgressBatch]) {
         for batch in progress_batches {
-            let mut batch = batch.clone();
-            batch.refresh_status_detail();
+            let status_detail = OrderProgressBatchStatusDetail::from_batch(batch);
             self.total_wip_count += 1;
             match batch.wip_status {
                 OrderProgressBatchWipStatus::Waiting => self.waiting_wip_count += 1,
                 OrderProgressBatchWipStatus::InUse => self.in_use_wip_count += 1,
                 OrderProgressBatchWipStatus::Processed => self.processed_wip_count += 1,
             }
-            match batch.status_detail.flow_status.as_str() {
+            match status_detail.flow_status.as_str() {
                 "waiting_next_stage" => self.waiting_next_stage_count += 1,
                 "in_progress" => {}
                 "consumed_by_next_stage" => self.consumed_by_next_stage_count += 1,
@@ -265,6 +239,50 @@ impl ProductionOrderStatusDetail {
         } else {
             ""
         }
+    }
+}
+
+#[derive(Default)]
+struct QueueStateProjection<'a> {
+    has_pending: bool,
+    has_in_progress: bool,
+    has_frozen: bool,
+    completed_queue_count: usize,
+    paused_queue_keys: BTreeSet<(&'a str, &'a str)>,
+    has_paused_final_output: bool,
+}
+
+impl<'a> QueueStateProjection<'a> {
+    fn from(
+        queue_states: &'a BTreeMap<String, BTreeMap<String, String>>,
+        progress_batches: &[OrderProgressBatch],
+    ) -> Self {
+        let mut projection = Self::default();
+        for (apparatus, states) in queue_states {
+            for (order_id, state) in states {
+                match state.as_str() {
+                    "pending" => projection.has_pending = true,
+                    "in_progress" => projection.has_in_progress = true,
+                    "frozen" => projection.has_frozen = true,
+                    "completed" => projection.completed_queue_count += 1,
+                    "paused" if queue_state::is_canonical_apparatus_id(apparatus) => {
+                        projection
+                            .paused_queue_keys
+                            .insert((apparatus.trim(), order_id.trim()));
+                    }
+                    _ => {}
+                }
+            }
+        }
+
+        projection.has_paused_final_output = progress_batches.iter().any(|batch| {
+            batch.action == queue_state::ApparatusQueueAction::Pause
+                && batch.is_finished_goods_output()
+                && projection
+                    .paused_queue_keys
+                    .contains(&(batch.apparatus.trim(), batch.order_id.trim()))
+        });
+        projection
     }
 }
 

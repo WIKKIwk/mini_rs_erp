@@ -140,6 +140,7 @@ impl ProductionMapService {
         progress: &QueueProgressInput,
         session_id: &str,
         stage_node_id: &str,
+        read_snapshot: Option<&ProgressBuildReadSnapshot>,
     ) -> Result<Option<OrderProgressBatch>, ProductionMapError> {
         let stage = chain::work_stage_for_station(order_map, apparatus, stage_node_id)
             .ok_or(ProductionMapError::ProgressBatchNotAccepted)?;
@@ -152,9 +153,18 @@ impl ProductionMapService {
         if progress.qr_payload.trim().is_empty() {
             return Err(ProductionMapError::ProgressQrRequired);
         }
-        let batch = self
-            .progress_batch_for_qr(&progress.progress_batch_id, &progress.qr_payload)
-            .await?;
+        let mut batch = if let Some(read_snapshot) = read_snapshot {
+            read_snapshot
+                .progress_batch_for_qr(&progress.progress_batch_id, &progress.qr_payload)?
+                .ok_or(ProductionMapError::ProgressBatchNotFound)?
+        } else {
+            self.progress_batch_for_qr(&progress.progress_batch_id, &progress.qr_payload)
+                .await?
+        };
+        if read_snapshot.is_some() {
+            restore_self_consumed_wip(&mut batch);
+            batch.refresh_status_detail();
+        }
         let used_by_apparatus = if batch.used_by_apparatus.trim().is_empty() {
             batch.current_apparatus.as_str()
         } else {
@@ -187,6 +197,36 @@ impl ProductionMapService {
         order_map: &ProductionMapDefinition,
         session: &OrderRunSession,
         now: i64,
+        read_snapshot: Option<&ProgressBuildReadSnapshot>,
+    ) -> Result<Option<RecoveredSessionInputBatch>, ProductionMapError> {
+        if let Some(read_snapshot) = read_snapshot {
+            return Self::recoverable_session_input_batch_from_batches(
+                apparatus,
+                order_id,
+                order_map,
+                session,
+                now,
+                &read_snapshot.progress_batches,
+            );
+        }
+        let batches = self.store.progress_batches_for_order(order_id).await?;
+        Self::recoverable_session_input_batch_from_batches(
+            apparatus,
+            order_id,
+            order_map,
+            session,
+            now,
+            &batches,
+        )
+    }
+
+    fn recoverable_session_input_batch_from_batches(
+        apparatus: &str,
+        order_id: &str,
+        order_map: &ProductionMapDefinition,
+        session: &OrderRunSession,
+        now: i64,
+        batches: &[OrderProgressBatch],
     ) -> Result<Option<RecoveredSessionInputBatch>, ProductionMapError> {
         let session_links = session_progress_links(session);
         let stage = chain::work_stage_for_station(
@@ -201,7 +241,6 @@ impl ProductionMapService {
         let previous_apparatus = previous
             .apparatus_id
             .ok_or(ProductionMapError::ProgressBatchNotAccepted)?;
-        let batches = self.store.progress_batches_for_order(order_id).await?;
         let linked_batch_id = session_links.batch_id;
         let mut output_candidates = batches
             .iter()
@@ -255,7 +294,8 @@ impl ProductionMapService {
         {
             return Ok(None);
         }
-        let mut input_batch = wip_batch_in_use(parent_batch, apparatus, &session.session_id, now);
+        let mut input_batch =
+            wip_batch_in_use(parent_batch.clone(), apparatus, &session.session_id, now);
         input_batch.payload_json["recovered_original_input_link"] = serde_json::json!(true);
         input_batch.payload_json["recovered_at_unix"] = serde_json::json!(now);
         sync_wip_payload_fields(&mut input_batch);
@@ -266,7 +306,7 @@ impl ProductionMapService {
     }
 
     #[allow(clippy::too_many_arguments)]
-    pub(super) async fn build_progress_records(
+    pub(super) async fn build_progress_records_with_snapshot(
         &self,
         apparatus: &str,
         order_id: &str,
@@ -275,6 +315,7 @@ impl ProductionMapService {
         actor: &QueueActionActor,
         progress: QueueProgressInput,
         canonical: &RuntimeApparatusConfiguration,
+        read_snapshot: Option<&ProgressBuildReadSnapshot>,
     ) -> Result<QueueProgressRecords, ProductionMapError> {
         let now = unix_seconds();
         if action == queue_state::ApparatusQueueAction::Freeze {
@@ -309,7 +350,8 @@ impl ProductionMapService {
             | queue_state::ApparatusQueueAction::DetachRoll
             | queue_state::ApparatusQueueAction::RollComplete
             | queue_state::ApparatusQueueAction::Complete => {
-                self.build_output_progress(context, progress).await
+                self.build_output_progress(context, progress, read_snapshot)
+                    .await
             }
             queue_state::ApparatusQueueAction::Freeze => {
                 unreachable!("freeze is handled before progress action dispatch")

@@ -1,74 +1,117 @@
 impl ProductionMapService {
 
-    #[allow(clippy::too_many_arguments)]
-    async fn has_unprocessed_previous_wips(
+    async fn completion_progress_build_snapshot(
         &self,
         order_id: &str,
-        order_map: &ProductionMapDefinition,
-        apparatus: &str,
-        canonical: &crate::core::apparatus_standard::RuntimeApparatusConfiguration,
-        all_states: &ApparatusQueueStateMap,
-        progress_batch_updates: &[OrderProgressBatch],
-        opening_wip_batch_updates: &[OpeningWipBatch],
-        ignored_batch_id: &str,
-        stage_node_id: &str,
-    ) -> Result<bool, ProductionMapError> {
-        let records = self
-            .store
-            .opening_wip_records(OpeningWipQuery {
+        progress: &QueueProgressInput,
+        active_session: Option<OrderRunSession>,
+    ) -> Result<ProgressBuildReadSnapshot, ProductionMapError> {
+        let (progress_batches, opening_wip_records) = tokio::join!(
+            self.store.progress_batches_for_order(order_id),
+            self.store.opening_wip_records(OpeningWipQuery {
                 order_id: order_id.trim().to_string(),
                 wip_status: None,
                 limit: 10_000,
-            })
-            .await?;
-        let progress_batches = self.store.progress_batches_for_order(order_id).await?;
-        Ok(has_unprocessed_previous_wips_from_sources(
-            order_id,
-            order_map,
-            apparatus,
-            canonical,
-            all_states,
-            &progress_batches,
-            progress_batch_updates,
-            &records,
-            opening_wip_batch_updates,
-            ignored_batch_id,
-            stage_node_id,
-        ))
-    }
-
-    async fn completion_input_batch_id(
-        &self,
-        apparatus: &str,
-        order_id: &str,
-        progress: &QueueProgressInput,
-    ) -> Result<String, ProductionMapError> {
-        if !progress.progress_batch_id.trim().is_empty() {
-            return Ok(progress.progress_batch_id.trim().to_string());
-        }
-        if !progress.qr_payload.trim().is_empty() {
-            if let Some(batch) = self
+            }),
+        );
+        let progress_batches = progress_batches?;
+        let opening_wip_records = opening_wip_records?;
+        let mut input_progress_batch = if !progress.progress_batch_id.trim().is_empty() {
+            progress_batches
+                .iter()
+                .find(|batch| batch.batch_id.trim() == progress.progress_batch_id.trim())
+                .cloned()
+        } else if !progress.qr_payload.trim().is_empty() {
+            progress_batches
+                .iter()
+                .find(|batch| {
+                    batch
+                        .qr_payload
+                        .trim()
+                        .eq_ignore_ascii_case(progress.qr_payload.trim())
+                })
+                .cloned()
+        } else {
+            None
+        };
+        if input_progress_batch.is_none() && !progress.progress_batch_id.trim().is_empty() {
+            input_progress_batch = self
+                .store
+                .progress_batch(progress.progress_batch_id.trim())
+                .await?;
+        } else if input_progress_batch.is_none() && !progress.qr_payload.trim().is_empty() {
+            input_progress_batch = self
                 .store
                 .progress_batch_by_qr(progress.qr_payload.trim())
-                .await?
-            {
-                return Ok(batch.batch_id);
-            }
-            return Ok(self
-                .store
-                .opening_wip_batch("", progress.qr_payload.trim())
-                .await?
-                .map(|record| record.batch.batch_id)
-                .unwrap_or_default());
+                .await?;
         }
-        let Some(session) = self
-            .store
-            .active_order_run_session(apparatus, order_id)
-            .await?
-        else {
-            return Ok(String::new());
+        let mut input_opening_wip_batch = if !progress.progress_batch_id.trim().is_empty()
+            || !progress.qr_payload.trim().is_empty()
+        {
+            opening_wip_records
+                .iter()
+                .find_map(|record| {
+                    record.batches.iter().find(|batch| {
+                        (!progress.progress_batch_id.trim().is_empty()
+                            && batch.batch_id.trim() == progress.progress_batch_id.trim())
+                            || (!progress.qr_payload.trim().is_empty()
+                                && batch.qr_payload.trim() == progress.qr_payload.trim())
+                    }).map(|batch| OpeningWipBatchRecord {
+                        intake: record.intake.clone(),
+                        batch: batch.clone(),
+                    })
+                })
+        } else {
+            None
         };
-        Ok(session_progress_links(&session).batch_id)
+        let session_uses_opening_wip = active_session
+            .as_ref()
+            .is_some_and(|session| session_progress_links(session).source_kind == "opening_wip");
+        if input_opening_wip_batch.is_none()
+            && (session_uses_opening_wip || input_progress_batch.is_none())
+            && (!progress.progress_batch_id.trim().is_empty()
+                || !progress.qr_payload.trim().is_empty())
+        {
+            input_opening_wip_batch = self
+                .store
+                .opening_wip_batch(
+                    progress.progress_batch_id.trim(),
+                    progress.qr_payload.trim(),
+                )
+                .await?;
+        }
+        Ok(ProgressBuildReadSnapshot {
+            active_session,
+            progress_batches,
+            opening_wip_records,
+            input_progress_batch,
+            input_opening_wip_batch,
+        })
+    }
+
+    fn completion_input_batch_id_from_snapshot(
+        progress: &QueueProgressInput,
+        snapshot: &ProgressBuildReadSnapshot,
+    ) -> String {
+        if !progress.progress_batch_id.trim().is_empty() {
+            return progress.progress_batch_id.trim().to_string();
+        }
+        if !progress.qr_payload.trim().is_empty() {
+            if let Some(batch) = snapshot.input_progress_batch.as_ref() {
+                return batch.batch_id.clone();
+            }
+            return snapshot
+                .input_opening_wip_batch
+                .as_ref()
+                .map(|record| record.batch.batch_id.clone())
+                .unwrap_or_default();
+        }
+        snapshot
+            .active_session
+            .as_ref()
+            .map(session_progress_links)
+            .map(|links| links.batch_id)
+            .unwrap_or_default()
     }
 
     pub(crate) async fn commit_prepared_queue_action(

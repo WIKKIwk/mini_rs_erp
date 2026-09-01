@@ -71,65 +71,35 @@ impl ApparatusQueueAction {
     }
 }
 
-#[derive(Debug, Clone, Copy)]
-struct QueueStateTransition {
-    from: ApparatusQueueOrderState,
-    action: ApparatusQueueAction,
-    to: ApparatusQueueOrderState,
-}
-
-const QUEUE_STATE_TRANSITIONS: &[QueueStateTransition] = &[
-    QueueStateTransition {
-        from: ApparatusQueueOrderState::Pending,
-        action: ApparatusQueueAction::Start,
-        to: ApparatusQueueOrderState::InProgress,
-    },
-    QueueStateTransition {
-        from: ApparatusQueueOrderState::InProgress,
-        action: ApparatusQueueAction::Pause,
-        to: ApparatusQueueOrderState::Paused,
-    },
-    QueueStateTransition {
-        from: ApparatusQueueOrderState::InProgress,
-        action: ApparatusQueueAction::Freeze,
-        to: ApparatusQueueOrderState::Frozen,
-    },
-    QueueStateTransition {
-        from: ApparatusQueueOrderState::InProgress,
-        action: ApparatusQueueAction::DetachRoll,
-        // `paused` remains the compatibility queue slot state. The execution
-        // records carry the canonical `roll_detached` status.
-        to: ApparatusQueueOrderState::Paused,
-    },
-    QueueStateTransition {
-        from: ApparatusQueueOrderState::Paused,
-        action: ApparatusQueueAction::Resume,
-        to: ApparatusQueueOrderState::InProgress,
-    },
-    QueueStateTransition {
-        from: ApparatusQueueOrderState::InProgress,
-        action: ApparatusQueueAction::Merge,
-        to: ApparatusQueueOrderState::InProgress,
-    },
-    QueueStateTransition {
-        from: ApparatusQueueOrderState::InProgress,
-        action: ApparatusQueueAction::RollComplete,
-        to: ApparatusQueueOrderState::InProgress,
-    },
-    QueueStateTransition {
-        from: ApparatusQueueOrderState::InProgress,
-        action: ApparatusQueueAction::Complete,
-        to: ApparatusQueueOrderState::Completed,
-    },
-];
-
 pub fn next_queue_state(
     current: ApparatusQueueOrderState,
     action: ApparatusQueueAction,
 ) -> Result<ApparatusQueueOrderState, ProductionMapError> {
-    QUEUE_STATE_TRANSITIONS
-        .iter()
-        .find(|transition| transition.from == current && transition.action == action)
-        .map(|transition| transition.to)
-        .ok_or(ProductionMapError::QueueActionNotAllowed)
+    match (current, action) {
+        (ApparatusQueueOrderState::Pending, ApparatusQueueAction::Start) => {
+            Ok(ApparatusQueueOrderState::InProgress)
+        }
+        (ApparatusQueueOrderState::InProgress, ApparatusQueueAction::Pause) => {
+            Ok(ApparatusQueueOrderState::Paused)
+        }
+        (ApparatusQueueOrderState::InProgress, ApparatusQueueAction::Freeze) => {
+            Ok(ApparatusQueueOrderState::Frozen)
+        }
+        // Queue transport retains `paused`; execution records carry the
+        // canonical `roll_detached` status.
+        (ApparatusQueueOrderState::InProgress, ApparatusQueueAction::DetachRoll) => {
+            Ok(ApparatusQueueOrderState::Paused)
+        }
+        (ApparatusQueueOrderState::Paused, ApparatusQueueAction::Resume) => {
+            Ok(ApparatusQueueOrderState::InProgress)
+        }
+        (ApparatusQueueOrderState::InProgress, ApparatusQueueAction::Merge)
+        | (ApparatusQueueOrderState::InProgress, ApparatusQueueAction::RollComplete) => {
+            Ok(ApparatusQueueOrderState::InProgress)
+        }
+        (ApparatusQueueOrderState::InProgress, ApparatusQueueAction::Complete) => {
+            Ok(ApparatusQueueOrderState::Completed)
+        }
+        _ => Err(ProductionMapError::QueueActionNotAllowed),
+    }
 }
