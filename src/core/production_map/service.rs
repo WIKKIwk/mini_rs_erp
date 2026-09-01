@@ -290,18 +290,14 @@ impl ProductionMapService {
     async fn build_production_snapshot(
         &self,
     ) -> Result<ProductionMapLiveSnapshot, ProductionMapError> {
-        let (raw_maps, stored_sequences, queue_states, order_controls, canonical_apparatuses) = tokio::join!(
-            self.store.maps(),
-            self.store.apparatus_sequences(),
-            self.store.apparatus_queue_states(),
-            self.store.order_control_states(),
-            self.active_canonical_apparatuses(),
-        );
-        let raw_maps = raw_maps?;
-        let stored_sequences = stored_sequences?;
-        let mut queue_states = queue_states?;
-        let order_controls = order_controls?;
-        let canonical_apparatuses = canonical_apparatuses?;
+        let (raw_maps, stored_sequences, mut queue_states, order_controls, canonical_apparatuses) =
+            tokio::try_join!(
+                self.store.maps(),
+                self.store.apparatus_sequences(),
+                self.store.apparatus_queue_states(),
+                self.store.order_control_states(),
+                self.active_canonical_apparatuses(),
+            )?;
 
         let visible_order_ids = visible_order_ids_by_apparatus(&raw_maps);
         let frozen_order_ids = order_controls
@@ -324,7 +320,7 @@ impl ProductionMapService {
             .map(|map| map.id.trim().to_string())
             .filter(|order_id| !order_id.is_empty())
             .collect::<Vec<_>>();
-        let (queue_action_controls, queue_logs_by_order, lifecycles) = tokio::join!(
+        let (queue_action_controls, queue_logs_by_order, lifecycles) = tokio::try_join!(
             self.queue_action_controls_for_snapshot(
                 &raw_maps,
                 &stored_sequences,
@@ -334,10 +330,7 @@ impl ProductionMapService {
             ),
             self.store.queue_action_logs_for_orders(&order_ids),
             self.store.production_order_lifecycles(&order_ids),
-        );
-        let queue_action_controls = queue_action_controls?;
-        let queue_logs_by_order = queue_logs_by_order?;
-        let lifecycles = lifecycles?;
+        )?;
 
         for (apparatus, controls) in &queue_action_controls {
             let states = queue_states.entry(apparatus.clone()).or_default();
