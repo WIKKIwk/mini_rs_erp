@@ -377,6 +377,10 @@ pub struct AdminErrorDetails {
     pub order_title: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub raw_material_status: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub active_kadr_count: Option<usize>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub scanned_kadr_count: Option<usize>,
 }
 
 impl std::ops::Deref for AdminErrorResponse {
@@ -419,6 +423,20 @@ impl AdminErrorResponse {
             error: error.into(),
             details: Box::new(AdminErrorDetails {
                 apparatus_options: Some(apparatus_options),
+                ..AdminErrorDetails::default()
+            }),
+        }
+    }
+
+    fn merge_input_frame_count_mismatch(
+        active_kadr_count: usize,
+        scanned_kadr_count: usize,
+    ) -> Self {
+        Self {
+            error: "merge_input_frame_count_mismatch".to_string(),
+            details: Box::new(AdminErrorDetails {
+                active_kadr_count: Some(active_kadr_count),
+                scanned_kadr_count: Some(scanned_kadr_count),
                 ..AdminErrorDetails::default()
             }),
         }

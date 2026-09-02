@@ -252,11 +252,33 @@ pub(super) fn rezka_output_identities(
         stage_node_id,
         input_contained_kadr_count,
     )?;
+    rezka_output_identities_from_kadr_counts(
+        apparatus,
+        order_id,
+        action,
+        order_map,
+        stage_node_id,
+        &output_kadr_counts,
+    )
+}
+
+pub(super) fn rezka_output_identities_from_kadr_counts(
+    apparatus: &str,
+    order_id: &str,
+    action: queue_state::ApparatusQueueAction,
+    order_map: &ProductionMapDefinition,
+    stage_node_id: &str,
+    output_kadr_counts: &[usize],
+) -> Result<Vec<ProgressOutputIdentity>, ProductionMapError> {
+    if output_kadr_counts.is_empty() || output_kadr_counts.contains(&0) {
+        return Err(ProductionMapError::InvalidRezkaFrameGroups);
+    }
     let output_count = output_kadr_counts.len();
     let is_final = chain::is_final_work_stage_node(order_map, stage_node_id);
     let base_id = progress_batch_id(apparatus, order_id, action);
     Ok(output_kadr_counts
-        .into_iter()
+        .iter()
+        .copied()
         .enumerate()
         .map(|(index, contained_kadr_count)| {
             let batch_id = format!("{base_id}:frame:{}", index + 1);

@@ -162,6 +162,13 @@ pub enum ProductionMapError {
     MergeInputAlreadyUsed,
     #[error("merge input does not match this order and production stage")]
     MergeInputNotAccepted,
+    #[error(
+        "merge input kadr count {scanned_kadr_count} does not match active Rezka kadr count {active_kadr_count}"
+    )]
+    MergeInputFrameCountMismatch {
+        active_kadr_count: usize,
+        scanned_kadr_count: usize,
+    },
     #[error("bosma completion metrics are required")]
     BosmaCompletionMetricsRequired,
     #[error("laminatsiya completion metrics are required")]

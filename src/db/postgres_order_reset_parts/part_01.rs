@@ -18,6 +18,8 @@ pub struct OrderResetReport {
     pub progress_events_deleted: u64,
     pub progress_batches_deleted: u64,
     pub progress_corrections_deleted: u64,
+    pub opening_wip_batches_deleted: u64,
+    pub opening_wip_intakes_deleted: u64,
     pub raw_material_assignments_deleted: u64,
     pub raw_material_events_deleted: u64,
     pub raw_material_rows_restored: u64,
@@ -261,6 +263,18 @@ impl PostgresOrderResetStore {
              WHERE lower(order_id) IN (SELECT lower(id) FROM reset_order_ids)",
         )
         .await?;
+        report.opening_wip_batches_deleted = delete_rows(
+            &mut tx,
+            "DELETE FROM mini_opening_wip_batches
+             WHERE lower(order_id) IN (SELECT lower(id) FROM reset_order_ids)",
+        )
+        .await?;
+        report.opening_wip_intakes_deleted = delete_rows(
+            &mut tx,
+            "DELETE FROM mini_opening_wip_intakes
+             WHERE lower(order_id) IN (SELECT lower(id) FROM reset_order_ids)",
+        )
+        .await?;
         report.order_products_deleted = delete_rows(
             &mut tx,
             "DELETE FROM mini_order_products
@@ -310,6 +324,10 @@ impl PostgresOrderResetStore {
                + (SELECT COUNT(*) FROM mini_order_progress_events
                   WHERE lower(order_id) IN (SELECT lower(id) FROM reset_order_ids))
                + (SELECT COUNT(*) FROM mini_progress_batches
+                  WHERE lower(order_id) IN (SELECT lower(id) FROM reset_order_ids))
+               + (SELECT COUNT(*) FROM mini_opening_wip_batches
+                  WHERE lower(order_id) IN (SELECT lower(id) FROM reset_order_ids))
+               + (SELECT COUNT(*) FROM mini_opening_wip_intakes
                   WHERE lower(order_id) IN (SELECT lower(id) FROM reset_order_ids))
                + (SELECT COUNT(*) FROM mini_raw_material_assignments
                   WHERE lower(order_id) IN (SELECT lower(id) FROM reset_order_ids))

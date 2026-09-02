@@ -31,6 +31,8 @@ const QOLIP_CODE: &str = "E2E-QOLIP-1";
 const QOLIP_LOCATION_ID: &str = "e2e-qolip-location";
 const SESSION_ID: &str = "e2e-order-session";
 const PROGRESS_BATCH_ID: &str = "e2e-progress-batch";
+const OPENING_WIP_INTAKE_ID: &str = "e2e-opening-wip-intake";
+const OPENING_WIP_BATCH_ID: &str = "e2e-opening-wip-batch";
 
 #[tokio::test]
 async fn order_reset_restores_a_real_database_to_the_pre_order_snapshot() {
@@ -123,6 +125,8 @@ async fn order_reset_restores_a_real_database_to_the_pre_order_snapshot() {
     assert!(body["backup"]["size_bytes"].as_u64().unwrap_or_default() > 0);
     assert_eq!(body["result"]["orders_deleted"], 1);
     assert_eq!(body["result"]["production_maps_deleted"], 1);
+    assert_eq!(body["result"]["opening_wip_batches_deleted"], 1);
+    assert_eq!(body["result"]["opening_wip_intakes_deleted"], 1);
 
     let after = snapshot(&pool).await;
     assert_eq!(after, before);
@@ -399,6 +403,35 @@ async fn seed_order_lifecycle(pool: &PgPool, apparatus_id: &str, transfer_appara
     .execute(&mut *tx)
     .await
     .expect("order product");
+    sqlx::query(
+        "INSERT INTO mini_opening_wip_intakes
+            (intake_id, idempotency_key, request_fingerprint, order_id,
+             entry_apparatus, source_operation, source_apparatus,
+             current_location, resume_apparatus, resume_stage_node_id)
+         VALUES ($1, 'e2e-opening-wip-key', 'e2e-opening-wip-fingerprint', $2,
+                 $3, 'legacy_migration', '', 'E2E apparatus', $3, 'start')",
+    )
+    .bind(OPENING_WIP_INTAKE_ID)
+    .bind(ORDER_ID)
+    .bind(apparatus_id)
+    .execute(&mut *tx)
+    .await
+    .expect("opening WIP intake");
+    sqlx::query(
+        "INSERT INTO mini_opening_wip_batches
+            (batch_id, intake_id, order_id, sequence_no, qr_payload,
+             quantity, uom, quantity_basis, wip_status,
+             label_item_code, label_item_name)
+         VALUES ($1, $2, $3, 1, 'E2E-OPENING-WIP-QR',
+                 5, 'kg', 'measured', 'waiting', $4, 'E2E product')",
+    )
+    .bind(OPENING_WIP_BATCH_ID)
+    .bind(OPENING_WIP_INTAKE_ID)
+    .bind(ORDER_ID)
+    .bind(ITEM_CODE)
+    .execute(&mut *tx)
+    .await
+    .expect("opening WIP batch");
     sqlx::query(
         "INSERT INTO mini_queue_sequences (apparatus, canonical_apparatus_id, order_ids)
          VALUES ('E2E apparatus', $2, jsonb_build_array($1))",
@@ -743,6 +776,8 @@ async fn snapshot(pool: &PgPool) -> Value {
         ("progress_events", "mini_order_progress_events"),
         ("progress_batches", "mini_progress_batches"),
         ("progress_corrections", "mini_progress_batch_corrections"),
+        ("opening_wip_batches", "mini_opening_wip_batches"),
+        ("opening_wip_intakes", "mini_opening_wip_intakes"),
         ("raw_assignments", "mini_raw_material_assignments"),
         ("raw_events", "mini_raw_material_events"),
         ("qolip_notes", "mini_qolip_order_notes"),

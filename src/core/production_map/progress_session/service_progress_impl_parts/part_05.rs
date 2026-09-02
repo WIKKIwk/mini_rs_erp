@@ -275,16 +275,6 @@ impl ProductionMapService {
         {
             return Err(ProductionMapError::MergeInputAlreadyUsed);
         }
-        let current_link = input_lineage
-            .iter_mut()
-            .find(|link| {
-                link.input_batch_id.trim() == current_links.batch_id.trim()
-                    && link.status == OrderRunInputStatus::InUse
-            })
-            .ok_or(ProductionMapError::MergeInputNotAccepted)?;
-        current_link.status = OrderRunInputStatus::Processed;
-        current_link.processed_at_unix = Some(now);
-
         let mut active_rolls = rezka_active_partial_rolls_from_payload(&payload)
             .map_err(|_| ProductionMapError::MergeInputNotAccepted)?;
         if active_rolls.is_empty() {
@@ -298,6 +288,35 @@ impl ProductionMapService {
             active_rolls = rezka_active_partial_rolls_from_payload(&payload)
                 .map_err(|_| ProductionMapError::MergeInputNotAccepted)?;
         }
+        let active_output_kadr_counts = active_rolls
+            .iter()
+            .map(|roll| {
+                usize::try_from(roll.contained_kadr_count)
+                    .map_err(|_| ProductionMapError::InvalidRezkaFrameGroups)
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        let next_output_kadr_counts = rezka_output_kadr_counts(
+            order_map,
+            apparatus,
+            &current_links.stage_node_id,
+            next_links.contained_kadr_count,
+        )?;
+        if active_output_kadr_counts != next_output_kadr_counts {
+            return Err(ProductionMapError::MergeInputFrameCountMismatch {
+                active_kadr_count: active_output_kadr_counts.iter().sum(),
+                scanned_kadr_count: next_output_kadr_counts.iter().sum(),
+            });
+        }
+
+        let current_link = input_lineage
+            .iter_mut()
+            .find(|link| {
+                link.input_batch_id.trim() == current_links.batch_id.trim()
+                    && link.status == OrderRunInputStatus::InUse
+            })
+            .ok_or(ProductionMapError::MergeInputNotAccepted)?;
+        current_link.status = OrderRunInputStatus::Processed;
+        current_link.processed_at_unix = Some(now);
 
         let next_source_kind = OrderRunInputSourceKind::parse(&next_links.source_kind)
             .ok_or(ProductionMapError::MergeInputNotAccepted)?;
@@ -340,6 +359,8 @@ impl ProductionMapService {
         payload["input_progress_qr_payload"] = serde_json::json!(next_links.qr_payload);
         payload["input_progress_apparatus"] = serde_json::json!(next_links.apparatus);
         payload["input_wip_source_kind"] = serde_json::json!(next_links.source_kind);
+        payload["contained_kadr_count"] =
+            serde_json::json!(next_output_kadr_counts.iter().sum::<usize>());
         payload["merge_from_input_batch_id"] = serde_json::json!(current_links.batch_id);
         payload["merge_to_input_batch_id"] = serde_json::json!(next_links.batch_id);
         payload["merge_count"] = serde_json::json!(next_sequence - 1);

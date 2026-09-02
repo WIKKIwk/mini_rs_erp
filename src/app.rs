@@ -33,6 +33,7 @@ use crate::core::system_users::SystemUserService;
 use crate::core::warehouse_events::WarehouseEventHub;
 use crate::core::warehouses::WarehouseService;
 use crate::core::werka::service::WerkaService;
+use crate::core::werka::ports::WerkaHomeLookup;
 use crate::core::worker_groups::WorkerGroupService;
 use crate::core::workers::WorkerService;
 use crate::db::postgres_apparatus_collection::PostgresApparatusCollectionStore;
@@ -329,6 +330,10 @@ struct ApparatusRuntimeServices {
     warehouses: WarehouseService,
 }
 
+struct EmptyWerkaHomeLookup;
+
+impl WerkaHomeLookup for EmptyWerkaHomeLookup {}
+
 fn build_auth_service(
     config: &AppConfig,
     admin_store: Arc<JsonAdminStore>,
@@ -382,7 +387,9 @@ fn build_rezka_service(scale_driver: Arc<RpsDriverClient>) -> RezkaService {
 }
 
 fn build_werka_service(config: &AppConfig) -> WerkaService {
-    let werka = WerkaService::new();
+    // Mini RS no longer has the legacy ERP receipt tables. Keep the mobile
+    // home contract available until the PostgreSQL Werka read model is wired.
+    let werka = WerkaService::new().with_lookup(Arc::new(EmptyWerkaHomeLookup));
     let ai_key = std::env::var("GEMINI_API_KEY").unwrap_or_default();
     if ai_key.trim().is_empty() {
         return werka;

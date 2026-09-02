@@ -1708,6 +1708,46 @@ async fn grouped_rezka_wip_survives_lamination_and_reenters_same_final_rezka() {
         serde_json::json!({
             "apparatus": "apparatus:default:asset-010",
             "order_id": order_id,
+            "action": "merge",
+            "qr_payload": laminated_qrs[1]
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{body:?}");
+    assert_eq!(body["error"], "merge_input_frame_count_mismatch");
+    assert_eq!(body["active_kadr_count"], 1);
+    assert_eq!(body["scanned_kadr_count"], 2);
+
+    let unchanged_snapshot = router
+        .clone()
+        .oneshot(request(
+            "GET",
+            "/v1/mobile/admin/production-maps/sequence",
+            &admin_token,
+        ))
+        .await
+        .expect("frame-mismatched Merge leaves final Rezka unchanged");
+    let unchanged_snapshot = json_body(unchanged_snapshot).await;
+    let unchanged_control = &unchanged_snapshot["queue_action_controls"]
+        ["apparatus:default:asset-010"][order_id];
+    assert_eq!(
+        unchanged_control["rezka_output_kadr_counts"],
+        serde_json::json!([1])
+    );
+    assert_eq!(
+        unchanged_control["rezka_input_lineage"]
+            .as_array()
+            .expect("unchanged Rezka lineage")
+            .len(),
+        1
+    );
+
+    let (status, body) = queue_action_json(
+        &router,
+        &worker_token,
+        serde_json::json!({
+            "apparatus": "apparatus:default:asset-010",
+            "order_id": order_id,
             "action": "complete",
             "uom": "m",
             "rezka_frames": [

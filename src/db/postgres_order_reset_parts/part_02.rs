@@ -35,6 +35,10 @@ async fn create_reset_targets(tx: &mut Transaction<'_, Postgres>) -> Result<(), 
          SELECT btrim(order_id) FROM mini_production_maps
           WHERE btrim(COALESCE(order_id, '')) <> ''
          UNION
+         SELECT btrim(order_id) FROM mini_opening_wip_intakes WHERE btrim(order_id) <> ''
+         UNION
+         SELECT btrim(order_id) FROM mini_opening_wip_batches WHERE btrim(order_id) <> ''
+         UNION
          SELECT btrim(order_id) FROM mini_queue_states WHERE btrim(order_id) <> ''
          UNION
          SELECT btrim(order_id) FROM mini_queue_action_events WHERE btrim(order_id) <> ''

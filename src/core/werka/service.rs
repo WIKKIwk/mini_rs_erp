@@ -44,7 +44,6 @@ impl WerkaService {
         Self::default()
     }
 
-    #[cfg(any(test, feature = "verification"))]
     pub fn with_lookup(mut self, lookup: Arc<dyn WerkaHomeLookup>) -> Self {
         self.lookup = Some(lookup);
         self

@@ -189,14 +189,39 @@ impl ProductionMapService {
             input_progress.contained_kadr_count = session_input_progress.contained_kadr_count;
         }
         let output_identities = if apparatus::is_rezka_apparatus(canonical) {
-            rezka_output_identities(
-                apparatus,
-                order_id,
-                action,
-                order_map,
-                &stage.node_id,
-                input_progress.contained_kadr_count,
-            )?
+            let input_lineage = order_run_input_links_from_payload(&session.payload_json)
+                .map_err(|_| ProductionMapError::ProgressInputInvalid)?;
+            let active_rolls = rezka_active_partial_rolls_from_payload(&session.payload_json)
+                .map_err(|_| ProductionMapError::ProgressInputInvalid)?;
+            if !rezka_merge_state_is_consistent(&input_lineage, &active_rolls) {
+                return Err(ProductionMapError::ProgressInputInvalid);
+            }
+            if active_rolls.is_empty() {
+                rezka_output_identities(
+                    apparatus,
+                    order_id,
+                    action,
+                    order_map,
+                    &stage.node_id,
+                    input_progress.contained_kadr_count,
+                )?
+            } else {
+                let active_output_kadr_counts = active_rolls
+                    .iter()
+                    .map(|roll| {
+                        usize::try_from(roll.contained_kadr_count)
+                            .map_err(|_| ProductionMapError::InvalidRezkaFrameGroups)
+                    })
+                    .collect::<Result<Vec<_>, _>>()?;
+                rezka_output_identities_from_kadr_counts(
+                    apparatus,
+                    order_id,
+                    action,
+                    order_map,
+                    &stage.node_id,
+                    &active_output_kadr_counts,
+                )?
+            }
         } else {
             vec![progress_output_identity(
                 apparatus,

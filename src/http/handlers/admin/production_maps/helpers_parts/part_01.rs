@@ -349,6 +349,16 @@ pub(super) fn production_map_error(error: ProductionMapError) -> AdminError {
         ProductionMapError::MergeInputSame => conflict("merge_input_same"),
         ProductionMapError::MergeInputAlreadyUsed => conflict("merge_input_already_used"),
         ProductionMapError::MergeInputNotAccepted => bad_request("merge_input_not_accepted"),
+        ProductionMapError::MergeInputFrameCountMismatch {
+            active_kadr_count,
+            scanned_kadr_count,
+        } => (
+            StatusCode::BAD_REQUEST,
+            Json(AdminErrorResponse::merge_input_frame_count_mismatch(
+                active_kadr_count,
+                scanned_kadr_count,
+            )),
+        ),
         ProductionMapError::BosmaCompletionMetricsRequired => {
             bad_request("bosma_completion_metrics_required")
         }

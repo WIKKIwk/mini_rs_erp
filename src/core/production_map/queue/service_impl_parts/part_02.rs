@@ -452,28 +452,6 @@ impl ProductionMapService {
                     start_ready,
                 });
 
-                let input_contained_kadr_count = active_session
-                    .and_then(|session| session.payload_json.get("contained_kadr_count"))
-                    .and_then(serde_json::Value::as_u64)
-                    .and_then(|value| usize::try_from(value).ok())
-                    .filter(|value| *value > 0)
-                    .or(stage_projection.input_contained_kadr_count);
-                let rezka_output_kadr_counts = if is_rezka {
-                    service_progress_support::rezka_output_kadr_counts(
-                        order_map,
-                        &storage_key,
-                        &stage_node_id,
-                        input_contained_kadr_count,
-                    )?
-                    .into_iter()
-                    .map(|value| {
-                        i64::try_from(value)
-                            .map_err(|_| ProductionMapError::InvalidRezkaFrameGroups)
-                    })
-                    .collect::<Result<Vec<_>, _>>()?
-                } else {
-                    Vec::new()
-                };
                 let (rezka_input_lineage, rezka_active_partial_rolls) =
                     if is_rezka {
                         if let Some(session) = active_session {
@@ -496,6 +474,33 @@ impl ProductionMapService {
                     } else {
                         (Vec::new(), Vec::new())
                     };
+                let input_contained_kadr_count = active_session
+                    .and_then(|session| session.payload_json.get("contained_kadr_count"))
+                    .and_then(serde_json::Value::as_u64)
+                    .and_then(|value| usize::try_from(value).ok())
+                    .filter(|value| *value > 0)
+                    .or(stage_projection.input_contained_kadr_count);
+                let rezka_output_kadr_counts = if !rezka_active_partial_rolls.is_empty() {
+                    rezka_active_partial_rolls
+                        .iter()
+                        .map(|roll| i64::from(roll.contained_kadr_count))
+                        .collect()
+                } else if is_rezka {
+                    service_progress_support::rezka_output_kadr_counts(
+                        order_map,
+                        &storage_key,
+                        &stage_node_id,
+                        input_contained_kadr_count,
+                    )?
+                    .into_iter()
+                    .map(|value| {
+                        i64::try_from(value)
+                            .map_err(|_| ProductionMapError::InvalidRezkaFrameGroups)
+                    })
+                    .collect::<Result<Vec<_>, _>>()?
+                } else {
+                    Vec::new()
+                };
 
                 apparatus_controls.insert(
                     order_id.trim().to_string(),
