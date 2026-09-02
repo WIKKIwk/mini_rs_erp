@@ -974,7 +974,26 @@ async fn rezka_consumes_laminatsiya_wip_and_creates_distinct_frame_wips() {
         ))
         .await
         .expect("start rezka from laminatsiya wip");
-    assert_eq!(rezka_started.status(), StatusCode::OK);
+    let rezka_started_status = rezka_started.status();
+    let rezka_started_body = json_body(rezka_started).await;
+    assert_eq!(
+        rezka_started_status,
+        StatusCode::OK,
+        "{rezka_started_body:?}"
+    );
+    assert_eq!(
+        rezka_started_body["session"]["payload_json"]["input_lineage"]
+            .as_array()
+            .expect("started Rezka input lineage")
+            .len(),
+        1
+    );
+    assert!(
+        rezka_started_body["session"]["payload_json"]["rezka_active_partial_rolls"]
+            .as_array()
+            .is_none_or(Vec::is_empty),
+        "Rezka Start must not create child rolls before Merge"
+    );
 
     let queue_snapshot = router
         .clone()
@@ -999,6 +1018,12 @@ async fn rezka_consumes_laminatsiya_wip_and_creates_distinct_frame_wips() {
             .any(|action| action == "roll_complete")
     );
     assert_eq!(action_control["complete_requires_full_report"], false);
+    assert!(
+        action_control["rezka_active_partial_rolls"]
+            .as_array()
+            .is_none_or(Vec::is_empty),
+        "queue control must keep pre-Merge child rolls empty"
+    );
 
     let premature_source_switch = router
         .clone()
@@ -1702,6 +1727,12 @@ async fn grouped_rezka_wip_survives_lamination_and_reenters_same_final_rezka() {
         active_snapshot["queue_action_controls"]["apparatus:default:asset-010"][order_id]["complete_requires_rezka_total_waste_only"],
         false
     );
+    assert!(
+        active_snapshot["queue_action_controls"]["apparatus:default:asset-010"][order_id]
+            ["rezka_active_partial_rolls"]
+            .is_null(),
+        "Rezka Start must not create child rolls"
+    );
     let (status, body) = queue_action_json(
         &router,
         &worker_token,
@@ -1740,6 +1771,10 @@ async fn grouped_rezka_wip_survives_lamination_and_reenters_same_final_rezka() {
             .expect("unchanged Rezka lineage")
             .len(),
         1
+    );
+    assert!(
+        unchanged_control["rezka_active_partial_rolls"].is_null(),
+        "failed Merge must not create child rolls"
     );
 
     let (status, body) = queue_action_json(

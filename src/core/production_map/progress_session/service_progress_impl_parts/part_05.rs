@@ -54,6 +54,23 @@ impl MergeInputRecord {
     }
 }
 
+fn laminatsiya_merge_contained_kadr_count(
+    active: Option<usize>,
+    scanned: Option<usize>,
+) -> Result<Option<usize>, ProductionMapError> {
+    match (active, scanned) {
+        (Some(active), Some(scanned)) if active != scanned => {
+            Err(ProductionMapError::MergeInputFrameCountMismatch {
+                active_kadr_count: active,
+                scanned_kadr_count: scanned,
+            })
+        }
+        (Some(active), Some(_)) => Ok(Some(active)),
+        (None, None) => Ok(None),
+        _ => Err(ProductionMapError::MergeInputNotAccepted),
+    }
+}
+
 impl ProductionMapService {
     async fn merge_input_record(
         &self,
@@ -128,6 +145,7 @@ impl ProductionMapService {
 
     async fn active_merge_input_record(
         &self,
+        order_id: &str,
         session: &OrderRunSession,
         input: &SessionProgressLinks,
     ) -> Result<MergeInputRecord, ProductionMapError> {
@@ -137,7 +155,9 @@ impl ProductionMapService {
                 .opening_wip_batch(&input.batch_id, &input.qr_payload)
                 .await?
                 .ok_or(ProductionMapError::MergeInputNotAccepted)?;
-            if record.batch.wip_status != OpeningWipBatchStatus::InUse
+            if record.intake.order_id.trim() != order_id.trim()
+                || record.batch.order_id.trim() != order_id.trim()
+                || record.batch.wip_status != OpeningWipBatchStatus::InUse
                 || record.batch.used_by_session_id.trim() != session.session_id.trim()
                 || !super::types::apparatus_ids_match(
                     &record.batch.used_by_apparatus,
@@ -154,7 +174,8 @@ impl ProductionMapService {
             .progress_batch(&input.batch_id)
             .await?
             .ok_or(ProductionMapError::MergeInputNotAccepted)?;
-        if batch.wip_status != OrderProgressBatchWipStatus::InUse
+        if batch.order_id.trim() != order_id.trim()
+            || batch.wip_status != OrderProgressBatchWipStatus::InUse
             || (!batch.used_by_session_id.trim().is_empty()
                 && batch.used_by_session_id.trim() != session.session_id.trim())
             || !super::types::apparatus_ids_match(
@@ -185,8 +206,10 @@ impl ProductionMapService {
             canonical,
             now,
         } = context;
+        let is_rezka = apparatus::is_rezka_apparatus(canonical);
+        let is_laminatsiya = apparatus::is_laminatsiya_apparatus(canonical);
         if action != queue_state::ApparatusQueueAction::Merge
-            || !apparatus::is_rezka_apparatus(canonical)
+            || (!is_rezka && !is_laminatsiya)
         {
             return Err(ProductionMapError::QueueActionNotAllowed);
         }
@@ -233,7 +256,7 @@ impl ProductionMapService {
             return Err(ProductionMapError::MergeInputSame);
         }
         let current_input = self
-            .active_merge_input_record(&current_session, &current_links)
+            .active_merge_input_record(order_id, &current_session, &current_links)
             .await?;
         let next_input = self
             .merge_input_record(
@@ -275,38 +298,50 @@ impl ProductionMapService {
         {
             return Err(ProductionMapError::MergeInputAlreadyUsed);
         }
-        let mut active_rolls = rezka_active_partial_rolls_from_payload(&payload)
-            .map_err(|_| ProductionMapError::MergeInputNotAccepted)?;
-        if active_rolls.is_empty() {
-            let output_kadr_counts = rezka_output_kadr_counts(
+        let mut active_rolls = if is_rezka {
+            rezka_active_partial_rolls_from_payload(&payload)
+                .map_err(|_| ProductionMapError::MergeInputNotAccepted)?
+        } else {
+            Vec::new()
+        };
+        let merged_contained_kadr_count = if is_rezka {
+            if active_rolls.is_empty() {
+                let output_kadr_counts = rezka_output_kadr_counts(
+                    order_map,
+                    apparatus,
+                    &current_links.stage_node_id,
+                    current_links.contained_kadr_count,
+                )?;
+                initialize_rezka_active_partial_rolls(&mut payload, &output_kadr_counts, now)?;
+                active_rolls = rezka_active_partial_rolls_from_payload(&payload)
+                    .map_err(|_| ProductionMapError::MergeInputNotAccepted)?;
+            }
+            let active_output_kadr_counts = active_rolls
+                .iter()
+                .map(|roll| {
+                    usize::try_from(roll.contained_kadr_count)
+                        .map_err(|_| ProductionMapError::InvalidRezkaFrameGroups)
+                })
+                .collect::<Result<Vec<_>, _>>()?;
+            let next_output_kadr_counts = rezka_output_kadr_counts(
                 order_map,
                 apparatus,
                 &current_links.stage_node_id,
-                current_links.contained_kadr_count,
+                next_links.contained_kadr_count,
             )?;
-            initialize_rezka_active_partial_rolls(&mut payload, &output_kadr_counts, now)?;
-            active_rolls = rezka_active_partial_rolls_from_payload(&payload)
-                .map_err(|_| ProductionMapError::MergeInputNotAccepted)?;
-        }
-        let active_output_kadr_counts = active_rolls
-            .iter()
-            .map(|roll| {
-                usize::try_from(roll.contained_kadr_count)
-                    .map_err(|_| ProductionMapError::InvalidRezkaFrameGroups)
-            })
-            .collect::<Result<Vec<_>, _>>()?;
-        let next_output_kadr_counts = rezka_output_kadr_counts(
-            order_map,
-            apparatus,
-            &current_links.stage_node_id,
-            next_links.contained_kadr_count,
-        )?;
-        if active_output_kadr_counts != next_output_kadr_counts {
-            return Err(ProductionMapError::MergeInputFrameCountMismatch {
-                active_kadr_count: active_output_kadr_counts.iter().sum(),
-                scanned_kadr_count: next_output_kadr_counts.iter().sum(),
-            });
-        }
+            if active_output_kadr_counts != next_output_kadr_counts {
+                return Err(ProductionMapError::MergeInputFrameCountMismatch {
+                    active_kadr_count: active_output_kadr_counts.iter().sum(),
+                    scanned_kadr_count: next_output_kadr_counts.iter().sum(),
+                });
+            }
+            Some(next_output_kadr_counts.iter().sum::<usize>())
+        } else {
+            laminatsiya_merge_contained_kadr_count(
+                current_links.contained_kadr_count,
+                next_links.contained_kadr_count,
+            )?
+        };
 
         let current_link = input_lineage
             .iter_mut()
@@ -338,29 +373,40 @@ impl ProductionMapService {
             linked_at_unix: now,
             processed_at_unix: None,
         });
-        for roll in &mut active_rolls {
-            if !roll
-                .source_input_batch_ids
-                .iter()
-                .any(|batch_id| batch_id.trim() == next_links.batch_id.trim())
-            {
-                roll.source_input_batch_ids
-                    .push(next_links.batch_id.clone());
+        if is_rezka {
+            for roll in &mut active_rolls {
+                if !roll
+                    .source_input_batch_ids
+                    .iter()
+                    .any(|batch_id| batch_id.trim() == next_links.batch_id.trim())
+                {
+                    roll.source_input_batch_ids
+                        .push(next_links.batch_id.clone());
+                }
+                roll.updated_at_unix = now;
             }
-            roll.updated_at_unix = now;
+            if !rezka_merge_state_is_consistent(&input_lineage, &active_rolls) {
+                return Err(ProductionMapError::MergeInputNotAccepted);
+            }
         }
-        if !rezka_merge_state_is_consistent(&input_lineage, &active_rolls) {
-            return Err(ProductionMapError::MergeInputNotAccepted);
-        }
+        let source_input_batch_ids = input_lineage
+            .iter()
+            .map(|link| link.input_batch_id.clone())
+            .collect::<Vec<_>>();
         write_order_run_input_links(&mut payload, &input_lineage);
-        write_rezka_active_partial_rolls(&mut payload, &active_rolls);
+        if is_rezka {
+            write_rezka_active_partial_rolls(&mut payload, &active_rolls);
+        }
         payload["last_action"] = serde_json::json!("merge");
         payload["input_progress_batch_id"] = serde_json::json!(next_links.batch_id);
         payload["input_progress_qr_payload"] = serde_json::json!(next_links.qr_payload);
         payload["input_progress_apparatus"] = serde_json::json!(next_links.apparatus);
         payload["input_wip_source_kind"] = serde_json::json!(next_links.source_kind);
-        payload["contained_kadr_count"] =
-            serde_json::json!(next_output_kadr_counts.iter().sum::<usize>());
+        if let Some(contained_kadr_count) = merged_contained_kadr_count {
+            payload["contained_kadr_count"] = serde_json::json!(contained_kadr_count);
+        } else if let Some(object) = payload.as_object_mut() {
+            object.remove("contained_kadr_count");
+        }
         payload["merge_from_input_batch_id"] = serde_json::json!(current_links.batch_id);
         payload["merge_to_input_batch_id"] = serde_json::json!(next_links.batch_id);
         payload["merge_count"] = serde_json::json!(next_sequence - 1);
@@ -389,10 +435,7 @@ impl ProductionMapService {
                 "from_input_batch_id": current_links.batch_id,
                 "to_input_batch_id": next_links.batch_id,
                 "input_sequence_no": next_sequence,
-                "source_input_batch_ids": active_rolls
-                    .first()
-                    .map(|roll| roll.source_input_batch_ids.clone())
-                    .unwrap_or_default(),
+                "source_input_batch_ids": source_input_batch_ids,
                 "material_balance_basis": "measured_at_output",
                 "material_balance": material_balance,
                 "splice_waste_kg": splice_waste_kg,
@@ -435,5 +478,33 @@ impl ProductionMapService {
             progress_batch_updates,
             opening_wip_batch_updates,
         })
+    }
+}
+
+#[cfg(test)]
+mod laminatsiya_merge_tests {
+    use super::*;
+
+    #[test]
+    fn laminatsiya_merge_requires_matching_complete_kadr_metadata() {
+        assert_eq!(
+            laminatsiya_merge_contained_kadr_count(Some(2), Some(2)).unwrap(),
+            Some(2)
+        );
+        assert_eq!(
+            laminatsiya_merge_contained_kadr_count(None, None).unwrap(),
+            None
+        );
+        assert!(matches!(
+            laminatsiya_merge_contained_kadr_count(Some(2), Some(1)),
+            Err(ProductionMapError::MergeInputFrameCountMismatch {
+                active_kadr_count: 2,
+                scanned_kadr_count: 1,
+            })
+        ));
+        assert!(matches!(
+            laminatsiya_merge_contained_kadr_count(Some(2), None),
+            Err(ProductionMapError::MergeInputNotAccepted)
+        ));
     }
 }

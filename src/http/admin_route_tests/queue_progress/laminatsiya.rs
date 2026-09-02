@@ -1312,3 +1312,389 @@ async fn laminatsiya_queue_exposes_start_for_waiting_print_wip_behind_unready_qu
         "apparatus:default:asset-007"
     );
 }
+
+#[tokio::test]
+async fn laminatsiya_merge_splices_same_order_wips_and_rejects_another_order() {
+    let print_requests = Arc::new(Mutex::new(Vec::<ScaleDriverPrintRequest>::new()));
+    let mut state = test_state();
+    state.gscale = GscaleService::new().with_driver(Arc::new(FakeProgressDriver {
+        requests: print_requests,
+        fail: false,
+    }));
+    state
+        .admin
+        .upsert_role_assignment(crate::core::authz::RoleAssignmentUpsert {
+            principal_role: PrincipalRole::Aparatchi,
+            principal_ref: "worker-laminatsiya-merge".to_string(),
+            role_id: "aparatchi".to_string(),
+            assigned_apparatus: vec![
+                "apparatus:default:bosma_7".to_string(),
+                "apparatus:default:asset-007".to_string(),
+                "apparatus:default:asset-008".to_string(),
+            ],
+            assigned_item_groups: Vec::new(),
+        })
+        .await
+        .expect("assignment");
+    let admin_token = session(&state, PrincipalRole::Admin).await;
+    let worker_token =
+        session_for(&state, PrincipalRole::Aparatchi, "worker-laminatsiya-merge").await;
+    let router = build_router(state);
+    let order_id = "zakaz-laminatsiya-merge";
+    let foreign_order_id = "zakaz-laminatsiya-merge-foreign";
+
+    for map in [
+        two_apparatus_order_map_json(
+            order_id,
+            "Laminatsiya merge",
+            "9342",
+            "apparatus:default:bosma_7",
+            "apparatus:default:asset-007",
+        ),
+        pechat_order_map_json_with_dims(
+            foreign_order_id,
+            "Foreign merge source",
+            "9343",
+            "apparatus:default:asset-008",
+            2,
+            950.0,
+        ),
+    ] {
+        let saved = router
+            .clone()
+            .oneshot(request_with_body(
+                "PUT",
+                "/v1/mobile/admin/production-maps",
+                &admin_token,
+                &map,
+            ))
+            .await
+            .expect("save map");
+        let saved_status = saved.status();
+        let saved_body = json_body(saved).await;
+        assert_eq!(saved_status, StatusCode::OK, "{saved_body:?}");
+    }
+
+    let foreign_started = router
+        .clone()
+        .oneshot(request_with_body(
+            "POST",
+            "/v1/mobile/admin/production-maps/queue-action",
+            &worker_token,
+            &format!(
+                r#"{{
+                    "apparatus":"apparatus:default:asset-008",
+                    "order_id":"{foreign_order_id}",
+                    "action":"start"
+                }}"#
+            ),
+        ))
+        .await
+        .expect("start foreign source");
+    assert_eq!(foreign_started.status(), StatusCode::OK);
+    let foreign_paused = router
+        .clone()
+        .oneshot(request_with_body(
+            "POST",
+            "/v1/mobile/admin/production-maps/queue-action",
+            &worker_token,
+            &format!(
+                r#"{{
+                    "apparatus":"apparatus:default:asset-008",
+                    "order_id":"{foreign_order_id}",
+                    "action":"pause",
+                    "finished_goods_meter":40,
+                    "finished_goods_kg":5
+                }}"#
+            ),
+        ))
+        .await
+        .expect("pause foreign source");
+    let foreign_paused_status = foreign_paused.status();
+    let foreign_paused_body = json_body(foreign_paused).await;
+    assert_eq!(
+        foreign_paused_status,
+        StatusCode::OK,
+        "{foreign_paused_body:?}"
+    );
+    let foreign_qr = foreign_paused_body["progress_batch"]["qr_payload"]
+        .as_str()
+        .expect("foreign WIP QR")
+        .to_string();
+
+    provision_test_qolip(&router, &admin_token, order_id).await;
+    let print_started = router
+        .clone()
+        .oneshot(request_with_body(
+            "POST",
+            "/v1/mobile/admin/production-maps/queue-action",
+            &worker_token,
+            &with_test_qolip(
+                &format!(
+                    r#"{{
+                        "apparatus":"apparatus:default:bosma_7",
+                        "order_id":"{order_id}",
+                        "action":"start"
+                    }}"#
+                ),
+                order_id,
+            ),
+        ))
+        .await
+        .expect("start print");
+    assert_eq!(print_started.status(), StatusCode::OK);
+
+    let first_print_paused = router
+        .clone()
+        .oneshot(request_with_body(
+            "POST",
+            "/v1/mobile/admin/production-maps/queue-action",
+            &worker_token,
+            &format!(
+                r#"{{
+                    "apparatus":"apparatus:default:bosma_7",
+                    "order_id":"{order_id}",
+                    "action":"pause",
+                    "produced_qty":100,
+                    "uom":"m"
+                }}"#
+            ),
+        ))
+        .await
+        .expect("pause first print roll");
+    let first_print_paused_status = first_print_paused.status();
+    let first_print_paused_body = json_body(first_print_paused).await;
+    assert_eq!(
+        first_print_paused_status,
+        StatusCode::OK,
+        "{first_print_paused_body:?}"
+    );
+    let first_batch_id = first_print_paused_body["progress_batch"]["batch_id"]
+        .as_str()
+        .expect("first print WIP id")
+        .to_string();
+    let first_qr = first_print_paused_body["progress_batch"]["qr_payload"]
+        .as_str()
+        .expect("first print WIP QR")
+        .to_string();
+
+    let print_resumed = router
+        .clone()
+        .oneshot(request_with_body(
+            "POST",
+            "/v1/mobile/admin/production-maps/queue-action",
+            &worker_token,
+            &format!(
+                r#"{{
+                    "apparatus":"apparatus:default:bosma_7",
+                    "order_id":"{order_id}",
+                    "action":"resume"
+                }}"#
+            ),
+        ))
+        .await
+        .expect("resume print");
+    assert_eq!(print_resumed.status(), StatusCode::OK);
+    let second_print_completed = router
+        .clone()
+        .oneshot(request_with_body(
+            "POST",
+            "/v1/mobile/admin/production-maps/queue-action",
+            &worker_token,
+            &format!(
+                r#"{{
+                    "apparatus":"apparatus:default:bosma_7",
+                    "order_id":"{order_id}",
+                    "action":"complete",
+                    "produced_qty":80,
+                    "returned_paint_items":[
+                        {{"usage":"rasxot","category":"colors","name":"Oq","values":{{"Mix":1,"Oq":1,"Qora":0}}}},
+                        {{"usage":"astatka","category":"colors","name":"Oq","values":{{"Mix":0.25,"Oq":0.25,"Qora":0}}}}
+                    ],
+                    "total_waste":1,
+                    "finished_goods_kg":10,
+                    "finished_goods_meter":80,
+                    "printer":"zebra",
+                    "print_mode":"rfid"
+                }}"#
+            ),
+        ))
+        .await
+        .expect("complete second print roll");
+    let second_print_paused_status = second_print_completed.status();
+    let second_print_paused_body = json_body(second_print_completed).await;
+    assert_eq!(
+        second_print_paused_status,
+        StatusCode::OK,
+        "{second_print_paused_body:?}"
+    );
+    let second_batch_id = second_print_paused_body["progress_batch"]["batch_id"]
+        .as_str()
+        .expect("second print WIP id")
+        .to_string();
+    let second_qr = second_print_paused_body["progress_batch"]["qr_payload"]
+        .as_str()
+        .expect("second print WIP QR")
+        .to_string();
+
+    let laminatsiya_started = router
+        .clone()
+        .oneshot(request_with_body(
+            "POST",
+            "/v1/mobile/admin/production-maps/queue-action",
+            &worker_token,
+            &format!(
+                r#"{{
+                    "apparatus":"apparatus:default:asset-007",
+                    "order_id":"{order_id}",
+                    "action":"start",
+                    "qr_payload":"{first_qr}"
+                }}"#
+            ),
+        ))
+        .await
+        .expect("start laminatsiya");
+    let laminatsiya_started_status = laminatsiya_started.status();
+    let laminatsiya_started_body = json_body(laminatsiya_started).await;
+    assert_eq!(
+        laminatsiya_started_status,
+        StatusCode::OK,
+        "{laminatsiya_started_body:?}"
+    );
+    assert_eq!(
+        laminatsiya_started_body["session"]["payload_json"]["input_lineage"]
+            .as_array()
+            .expect("started Laminatsiya input lineage")
+            .len(),
+        1
+    );
+    assert!(
+        laminatsiya_started_body["session"]["payload_json"]["merge_count"].is_null(),
+        "Laminatsiya Start must not be recorded as Merge"
+    );
+    assert!(
+        laminatsiya_started_body["session"]["payload_json"]["rezka_active_partial_rolls"].is_null(),
+        "Laminatsiya Start must not create child rolls before Merge"
+    );
+
+    let snapshot = router
+        .clone()
+        .oneshot(request(
+            "GET",
+            "/v1/mobile/admin/production-maps/sequence",
+            &worker_token,
+        ))
+        .await
+        .expect("laminatsiya merge control");
+    let snapshot_body = json_body(snapshot).await;
+    let action_control = &snapshot_body["queue_action_controls"]
+        ["apparatus:default:asset-007"][order_id];
+    assert!(
+        action_control["allowed_actions"]
+            .as_array()
+            .expect("allowed actions")
+            .iter()
+            .any(|action| action == "merge")
+    );
+    assert_eq!(
+        action_control["rezka_input_lineage"]
+            .as_array()
+            .expect("generic merge lineage")
+            .len(),
+        1
+    );
+
+    let foreign_merge = router
+        .clone()
+        .oneshot(request_with_body(
+            "POST",
+            "/v1/mobile/admin/production-maps/queue-action",
+            &worker_token,
+            &format!(
+                r#"{{
+                    "apparatus":"apparatus:default:asset-007",
+                    "order_id":"{order_id}",
+                    "action":"merge",
+                    "qr_payload":"{foreign_qr}"
+                }}"#
+            ),
+        ))
+        .await
+        .expect("reject foreign order merge");
+    assert_eq!(foreign_merge.status(), StatusCode::BAD_REQUEST);
+    assert_eq!(
+        json_body(foreign_merge).await["error"],
+        "merge_input_not_accepted"
+    );
+
+    let merged = router
+        .clone()
+        .oneshot(request_with_body(
+            "POST",
+            "/v1/mobile/admin/production-maps/queue-action",
+            &worker_token,
+            &format!(
+                r#"{{
+                    "apparatus":"apparatus:default:asset-007",
+                    "order_id":"{order_id}",
+                    "action":"merge",
+                    "qr_payload":"{second_qr}",
+                    "total_waste":0.15,
+                    "uom":"kg"
+                }}"#
+            ),
+        ))
+        .await
+        .expect("merge second print WIP");
+    let merged_status = merged.status();
+    let merged_body = json_body(merged).await;
+    assert_eq!(merged_status, StatusCode::OK, "{merged_body:?}");
+    assert_eq!(merged_body["progress_event"]["action"], "merge");
+    assert_eq!(merged_body["progress_event"]["total_waste"], 0.15);
+    let lineage = merged_body["session"]["payload_json"]["input_lineage"]
+        .as_array()
+        .expect("merged lineage");
+    assert!(lineage.iter().any(|link| {
+        link["input_batch_id"] == first_batch_id && link["status"] == "processed"
+    }));
+    assert!(lineage.iter().any(|link| {
+        link["input_batch_id"] == second_batch_id && link["status"] == "in_use"
+    }));
+    assert!(
+        merged_body["session"]["payload_json"]["rezka_active_partial_rolls"].is_null()
+    );
+
+    let completed = router
+        .clone()
+        .oneshot(request_with_body(
+            "POST",
+            "/v1/mobile/admin/production-maps/queue-action",
+            &worker_token,
+            &format!(
+                r#"{{
+                    "apparatus":"apparatus:default:asset-007",
+                    "order_id":"{order_id}",
+                    "action":"complete",
+                    "qr_payload":"{second_qr}",
+                    "lamination_print_leftover_rolls":1,
+                    "lamination_film_leftover_rolls":1,
+                    "total_waste":1,
+                    "finished_goods_kg":20,
+                    "finished_goods_meter":175,
+                    "printer":"zebra",
+                    "print_mode":"rfid"
+                }}"#
+            ),
+        ))
+        .await
+        .expect("complete merged laminatsiya roll");
+    let completed_status = completed.status();
+    let completed_body = json_body(completed).await;
+    assert_eq!(completed_status, StatusCode::OK, "{completed_body:?}");
+    assert_eq!(completed_body["states"][order_id], "completed");
+    let source_links = completed_body["progress_batch"]["payload_json"]["source_input_links"]
+        .as_array()
+        .expect("output source links");
+    assert!(source_links.iter().any(|link| link["input_batch_id"] == first_batch_id));
+    assert!(source_links.iter().any(|link| link["input_batch_id"] == second_batch_id));
+}

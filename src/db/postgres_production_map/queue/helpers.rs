@@ -151,6 +151,71 @@ pub(super) async fn validate_merge_session_transition_tx(
     {
         return Err(ProductionMapError::MergeInputNotAccepted);
     }
+    let current_links = order_run_input_links_from_payload(&current_payload)
+        .map_err(|_| ProductionMapError::MergeInputNotAccepted)?;
+    let (current_input_batch_id, current_source_kind) = if let Some(current_input) =
+        current_links
+            .iter()
+            .find(|link| link.status == OrderRunInputStatus::InUse)
+    {
+        (
+            current_input.input_batch_id.trim(),
+            current_input.source_kind,
+        )
+    } else {
+        let batch_id = current_payload
+            .get("input_progress_batch_id")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or_default()
+            .trim();
+        let source_kind = current_payload
+            .get("input_wip_source_kind")
+            .and_then(serde_json::Value::as_str)
+            .and_then(OrderRunInputSourceKind::parse)
+            .ok_or(ProductionMapError::MergeInputNotAccepted)?;
+        (batch_id, source_kind)
+    };
+    if current_input_batch_id.is_empty() {
+        return Err(ProductionMapError::MergeInputNotAccepted);
+    }
+    let current_input = match current_source_kind {
+        OrderRunInputSourceKind::ProgressBatch => {
+            sqlx::query_as::<_, (String, String, String, String)>(
+                "SELECT order_id, wip_status, used_by_session_id,
+                        COALESCE(canonical_used_by_apparatus_id, used_by_apparatus, '')
+                 FROM mini_progress_batches
+                 WHERE batch_id = $1
+                 FOR UPDATE",
+            )
+            .bind(current_input_batch_id)
+            .fetch_optional(&mut **tx)
+            .await
+        }
+        OrderRunInputSourceKind::OpeningWip => {
+            sqlx::query_as::<_, (String, String, String, String)>(
+                "SELECT order_id, wip_status, used_by_session_id, used_by_apparatus
+                 FROM mini_opening_wip_batches
+                 WHERE batch_id = $1
+                 FOR UPDATE",
+            )
+            .bind(current_input_batch_id)
+            .fetch_optional(&mut **tx)
+            .await
+        }
+    }
+    .map_err(|_| ProductionMapError::StoreFailed)?;
+    let Some((current_order_id, current_status, used_by_session_id, used_by_apparatus)) =
+        current_input
+    else {
+        return Err(ProductionMapError::MergeInputNotAccepted);
+    };
+    if current_order_id.trim() != event.order_id.trim()
+        || current_status.trim() != "in_use"
+        || used_by_session_id.trim() != proposed_session.session_id.trim()
+        || used_by_apparatus.trim() != apparatus_id.as_str()
+    {
+        return Err(ProductionMapError::MergeInputNotAccepted);
+    }
     let proposed_links = order_run_input_links_from_payload(&proposed_session.payload_json)
         .map_err(|_| ProductionMapError::MergeInputNotAccepted)?;
     let next_input = proposed_links

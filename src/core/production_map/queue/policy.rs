@@ -6,7 +6,7 @@ pub(crate) enum QueueActionPolicyProfile {
     Live {
         order_control: OrderControlState,
         is_rezka: bool,
-        rezka_merge_ready: bool,
+        merge_ready: bool,
     },
     Training {
         is_rezka: bool,
@@ -72,7 +72,7 @@ fn append_in_progress_actions(
         QueueActionPolicyProfile::Live {
             order_control,
             is_rezka,
-            rezka_merge_ready,
+            merge_ready,
         } => {
             push_standard_action(
                 actions,
@@ -89,7 +89,7 @@ fn append_in_progress_actions(
                 actions,
                 state,
                 ApparatusQueueAction::Merge,
-                active && is_rezka && rezka_merge_ready,
+                active && merge_ready,
             );
             push_standard_action(
                 actions,
@@ -140,7 +140,7 @@ mod tests {
             profile: QueueActionPolicyProfile::Live {
                 order_control: OrderControlState::Active,
                 is_rezka: false,
-                rezka_merge_ready: false,
+                merge_ready: false,
             },
             requeued_session: false,
             pending_actionable: true,
@@ -181,7 +181,7 @@ mod tests {
         freeze_requested.profile = QueueActionPolicyProfile::Live {
             order_control: OrderControlState::FreezeRequested,
             is_rezka: false,
-            rezka_merge_ready: false,
+            merge_ready: false,
         };
         assert_eq!(
             allowed_actions_for_control(freeze_requested),
@@ -192,7 +192,7 @@ mod tests {
         rezka.profile = QueueActionPolicyProfile::Live {
             order_control: OrderControlState::Active,
             is_rezka: true,
-            rezka_merge_ready: true,
+            merge_ready: true,
         };
         assert_eq!(
             allowed_actions_for_control(rezka),
@@ -201,6 +201,22 @@ mod tests {
                 ApparatusQueueAction::Freeze,
                 ApparatusQueueAction::Merge,
                 ApparatusQueueAction::RollComplete,
+                ApparatusQueueAction::Complete,
+            ]
+        );
+
+        let mut laminatsiya = input(ApparatusQueueOrderState::InProgress);
+        laminatsiya.profile = QueueActionPolicyProfile::Live {
+            order_control: OrderControlState::Active,
+            is_rezka: false,
+            merge_ready: true,
+        };
+        assert_eq!(
+            allowed_actions_for_control(laminatsiya),
+            vec![
+                ApparatusQueueAction::Pause,
+                ApparatusQueueAction::Freeze,
+                ApparatusQueueAction::Merge,
                 ApparatusQueueAction::Complete,
             ]
         );

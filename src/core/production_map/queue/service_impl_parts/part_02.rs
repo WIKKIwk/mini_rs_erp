@@ -271,7 +271,7 @@ impl ProductionMapService {
                 let mut complete_requires_full_report = false;
                 let mut complete_requires_rezka_total_waste_only = false;
                 let mut start_ready = false;
-                let mut rezka_merge_ready = false;
+                let mut merge_ready = false;
                 let mut interaction = ApparatusQueueWorkerInteraction {
                     assigned_materials_display_only: !matches!(
                         state,
@@ -400,8 +400,8 @@ impl ProductionMapService {
                                     &current_input_batch_id,
                                     &stage_node_id,
                                 );
-                            if is_rezka {
-                                rezka_merge_ready = active_session.is_some_and(|session| {
+                            if is_rezka || is_laminatsiya {
+                                merge_ready = active_session.is_some_and(|session| {
                                     !session_progress_links(session).batch_id.trim().is_empty()
                                 });
                             }
@@ -444,7 +444,7 @@ impl ProductionMapService {
                     profile: QueueActionPolicyProfile::Live {
                         order_control: control,
                         is_rezka,
-                        rezka_merge_ready,
+                        merge_ready,
                     },
                     requeued_session,
                     pending_actionable,
@@ -453,18 +453,23 @@ impl ProductionMapService {
                 });
 
                 let (rezka_input_lineage, rezka_active_partial_rolls) =
-                    if is_rezka {
+                    if is_rezka || is_laminatsiya {
                         if let Some(session) = active_session {
                             let input_lineage =
                                 order_run_input_links_from_payload(&session.payload_json)
                                     .map_err(|_| ProductionMapError::StoreFailed)?;
-                            let active_partial_rolls =
+                            let active_partial_rolls = if is_rezka {
                                 rezka_active_partial_rolls_from_payload(&session.payload_json)
-                                    .map_err(|_| ProductionMapError::StoreFailed)?;
-                            if !rezka_merge_state_is_consistent(
-                                &input_lineage,
-                                &active_partial_rolls,
-                            ) {
+                                    .map_err(|_| ProductionMapError::StoreFailed)?
+                            } else {
+                                Vec::new()
+                            };
+                            if is_rezka
+                                && !rezka_merge_state_is_consistent(
+                                    &input_lineage,
+                                    &active_partial_rolls,
+                                )
+                            {
                                 return Err(ProductionMapError::StoreFailed);
                             }
                             (input_lineage, active_partial_rolls)
