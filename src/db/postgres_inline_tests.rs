@@ -195,6 +195,7 @@ mod tests {
         assert!(versions.contains("0071_qolip_lock_ownership"));
         assert!(versions.contains("0072_canonical_identity_indexes"));
         assert!(versions.contains("0087_queue_event_stage_identity"));
+        assert!(versions.contains("0088_order_run_session_stage_identity"));
         assert!(POSTGRES_MIGRATIONS.iter().all(|(version, sql)| {
             !version.trim().is_empty() && migration_checksum(sql).len() == 64
         }));
@@ -264,6 +265,28 @@ mod tests {
             "mini_queue_action_events_stage_payload_forbidden",
             "check(not(payload_json?'stage_node_id'))",
             "idx_mini_queue_action_events_order_stage_created",
+        ] {
+            assert!(compact.contains(invariant), "missing invariant: {invariant}");
+        }
+    }
+
+    #[test]
+    fn order_run_session_stage_identity_migration_is_registered() {
+        let migration = POSTGRES_MIGRATIONS
+            .iter()
+            .find(|(version, _)| *version == "0088_order_run_session_stage_identity")
+            .map(|(_, sql)| sql.to_lowercase())
+            .expect("order run session stage identity migration");
+        let compact = migration.split_whitespace().collect::<String>();
+
+        for invariant in [
+            "addcolumnifnotexistsstage_node_idtextnotnulldefault''",
+            "setstage_node_id=btrim(coalesce(payload_json->>'stage_node_id',''))",
+            "setpayload_json=payload_json-'stage_node_id'",
+            "mini_order_run_sessions_stage_node_id_trimmed",
+            "check(stage_node_id=btrim(stage_node_id))",
+            "mini_order_run_sessions_stage_payload_forbidden",
+            "check(not(payload_json?'stage_node_id'))",
         ] {
             assert!(compact.contains(invariant), "missing invariant: {invariant}");
         }

@@ -189,10 +189,8 @@ impl ProductionMapService {
                 let batches = input.batches;
                 let active_session = input.active_session;
                 let active_stage_node_id = active_session
-                    .and_then(|session| session.payload_json.get("stage_node_id"))
-                    .and_then(serde_json::Value::as_str)
-                    .unwrap_or_default()
-                    .trim();
+                    .map(|session| session.stage_node_id.trim())
+                    .unwrap_or_default();
                 let preferred_stage_node_id = if !active_stage_node_id.is_empty() {
                     active_stage_node_id.to_string()
                 } else if let Some(stage_node_id) = input.waiting_reentry_stage_node_id.clone() {

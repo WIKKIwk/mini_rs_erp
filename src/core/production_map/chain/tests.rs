@@ -325,6 +325,7 @@ fn qolip_bearing_canonical_chain_preserves_identity_through_laminatsiya_task() {
         session_id: "session-qolip-chain".to_string(),
         apparatus: PECHAT_ID.to_string(),
         order_id: map.id.clone(),
+        stage_node_id: String::new(),
         status: OrderRunStatus::Active,
         worker_role: "operator".to_string(),
         worker_ref: "worker-qolip-chain".to_string(),

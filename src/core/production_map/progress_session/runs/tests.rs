@@ -37,6 +37,7 @@ async fn memory_store_persists_session_partial_roll_and_output_source_lineage() 
         session_id: "run-rezka-1".to_string(),
         apparatus: "apparatus:default:asset-010".to_string(),
         order_id: "order-1".to_string(),
+        stage_node_id: "rezka".to_string(),
         status: OrderRunStatus::Active,
         worker_role: "aparatchi".to_string(),
         worker_ref: "worker-1".to_string(),

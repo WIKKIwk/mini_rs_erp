@@ -3,6 +3,7 @@ pub(super) struct ProgressSessionRow {
     pub(super) session_id: String,
     pub(super) apparatus: String,
     pub(super) order_id: String,
+    pub(super) stage_node_id: String,
     pub(super) status: String,
     pub(super) worker_role: String,
     pub(super) worker_ref: String,
@@ -142,6 +143,7 @@ pub(super) fn progress_session_from_row(
         session_id: row.session_id,
         apparatus: row.apparatus,
         order_id: row.order_id,
+        stage_node_id: row.stage_node_id,
         status: OrderRunStatus::parse(&row.status).ok_or(ProductionMapError::StoreFailed)?,
         worker_role: row.worker_role,
         worker_ref: row.worker_ref,
@@ -228,7 +230,29 @@ pub(super) fn progress_batch_from_row(
 
 #[cfg(test)]
 mod tests {
-    use super::{ProgressBatchRow, progress_batch_from_row};
+    use super::{ProgressBatchRow, ProgressSessionRow, progress_batch_from_row, progress_session_from_row};
+
+    #[test]
+    fn progress_session_from_row_restores_typed_stage_node_id_without_payload_json() {
+        let row = ProgressSessionRow {
+            session_id: "session-101".to_string(),
+            apparatus: "apparatus:default:asset-010".to_string(),
+            order_id: "order-101".to_string(),
+            stage_node_id: "rezka_first".to_string(),
+            status: "active".to_string(),
+            worker_role: "aparatchi".to_string(),
+            worker_ref: "worker-1".to_string(),
+            worker_display_name: "Operator".to_string(),
+            started_at_unix: 10,
+            updated_at_unix: 20,
+            payload_json: serde_json::json!({
+                "contained_kadr_count": 2,
+            }),
+        };
+        let session = progress_session_from_row(row).expect("session from row");
+        assert_eq!(session.stage_node_id, "rezka_first");
+        assert_eq!(session.payload_json.get("stage_node_id"), None);
+    }
 
     #[test]
     fn legacy_display_current_key_uses_canonical_current_apparatus() {

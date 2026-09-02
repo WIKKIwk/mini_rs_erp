@@ -625,6 +625,7 @@ mod tests {
             session_id: "session-1".to_string(),
             apparatus: "apparatus:test:rezka".to_string(),
             order_id: "zakaz-1".to_string(),
+            stage_node_id: "rezka".to_string(),
             status: OrderRunStatus::Active,
             worker_role: "aparatchi".to_string(),
             worker_ref: "worker-1".to_string(),

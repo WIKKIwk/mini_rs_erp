@@ -3,11 +3,14 @@ use std::sync::Arc;
 
 use crate::core::production_map::{
     CompletedQueueOrderStatus, OrderProgressBatch, OrderProgressBatchStatus,
-    OrderProgressBatchStatusDetail, OrderProgressBatchWipStatus, ProductionMapDefinition,
-    ProductionMapEdge, ProductionMapError, ProductionMapNode, ProductionMapNodeKind,
-    ProductionMapService, ProductionMapStorePort, WipProgressBatchQuery, queue_state,
+    OrderProgressBatchStatusDetail, OrderProgressBatchWipStatus, OrderRunSession, OrderRunStatus,
+    ProductionMapDefinition, ProductionMapEdge, ProductionMapError, ProductionMapNode,
+    ProductionMapNodeKind, ProductionMapService, ProductionMapStorePort, WipProgressBatchQuery,
+    queue_state,
 };
-use crate::db::postgres::{apply_foundation_migration, postgres_test_database_options};
+use crate::db::postgres::{
+    apply_foundation_migration, apply_postgres_migrations_through, postgres_test_database_options,
+};
 use crate::db::postgres_production_map::PostgresProductionMapStore;
 
 use super::seed_standard_canonical_apparatus;
@@ -686,4 +689,203 @@ fn wip_batch(current_apparatus: &str) -> OrderProgressBatch {
         description: String::new(),
         payload_json: serde_json::json!({}),
     }
+}
+
+#[tokio::test]
+async fn postgres_order_run_session_stage_identity_real_cutover_and_invariants() {
+    let admin_url = std::env::var("MINI_ERP_TEST_ADMIN_DATABASE_URL")
+        .unwrap_or_else(|_| "postgres://superuser@127.0.0.1:5432/postgres".to_string());
+    let db_name = "mini_rs_erp_test_order_run_session_stage_identity";
+    let admin_pool = sqlx::PgPool::connect(&admin_url).await.expect("admin db");
+    sqlx::query(&format!(
+        r#"DROP DATABASE IF EXISTS "{db_name}" WITH (FORCE)"#
+    ))
+    .execute(&admin_pool)
+    .await
+    .expect("drop test db");
+    sqlx::query(&format!(r#"CREATE DATABASE "{db_name}""#))
+        .execute(&admin_pool)
+        .await
+        .expect("create test db");
+    admin_pool.close().await;
+
+    let pool = sqlx::PgPool::connect_with(postgres_test_database_options(&admin_url, db_name))
+        .await
+        .expect("test db");
+
+    // =========================================================================
+    // A. Legacy migration backfill
+    // =========================================================================
+    // Apply migrations 1..=87 (pre-0088 schema)
+    apply_postgres_migrations_through(&pool, 87)
+        .await
+        .expect("apply migrations up to 0087");
+    seed_standard_canonical_apparatus(&pool).await;
+
+    // In pre-0088, column stage_node_id does NOT exist on mini_order_run_sessions
+    // First, seed an order so foreign keys are satisfied
+    let test_order_id = "zakaz-legacy-backfill-01";
+    let apparatus = "apparatus:default:asset-010";
+    sqlx::query(
+        "INSERT INTO mini_production_maps (id, product_code, title, map_json)
+         VALUES ($1, 'TEST', 'Test Map', '{}'::jsonb)",
+    )
+    .bind(test_order_id)
+    .execute(&pool)
+    .await
+    .expect("seed test map");
+
+    // Insert legacy row where stage_node_id is ONLY inside payload_json
+    let legacy_session_id = "session-legacy-stage-01";
+    sqlx::query(
+        "INSERT INTO mini_order_run_sessions
+            (session_id, apparatus, canonical_apparatus_id, order_id, status, payload_json)
+         VALUES ($1, $2, $2, $3, 'completed', $4)",
+    )
+    .bind(legacy_session_id)
+    .bind(apparatus)
+    .bind(test_order_id)
+    .bind(serde_json::json!({
+        "stage_node_id": "rezka_first",
+        "worker_note": "legacy pre-0088 production run"
+    }))
+    .execute(&pool)
+    .await
+    .expect("insert legacy pre-0088 session");
+
+    // Now apply migration 0088
+    apply_postgres_migrations_through(&pool, 88)
+        .await
+        .expect("apply migration 0088");
+
+    // Query DB and verify:
+    // 1. stage_node_id column is populated with "rezka_first"
+    // 2. payload_json ? 'stage_node_id' is false
+    let (migrated_stage, has_payload_key, remaining_payload): (String, bool, serde_json::Value) =
+        sqlx::query_as(
+            "SELECT stage_node_id, (payload_json ? 'stage_node_id'), payload_json
+             FROM mini_order_run_sessions
+             WHERE session_id = $1",
+        )
+        .bind(legacy_session_id)
+        .fetch_one(&pool)
+        .await
+        .expect("fetch migrated session");
+
+    assert_eq!(migrated_stage, "rezka_first");
+    assert!(!has_payload_key);
+    assert_eq!(
+        remaining_payload["worker_note"],
+        "legacy pre-0088 production run"
+    );
+    assert!(remaining_payload.get("stage_node_id").is_none());
+
+    // =========================================================================
+    // B. Typed persistence round-trip
+    // =========================================================================
+    let store = Arc::new(PostgresProductionMapStore::new(pool.clone()));
+    let new_session_id = "session-typed-stage-02";
+    let typed_session = OrderRunSession {
+        session_id: new_session_id.to_string(),
+        apparatus: apparatus.to_string(),
+        order_id: test_order_id.to_string(),
+        stage_node_id: "rezka_final".to_string(),
+        status: OrderRunStatus::Active,
+        worker_role: "aparatchi".to_string(),
+        worker_ref: "worker-01".to_string(),
+        worker_display_name: "Ali".to_string(),
+        started_at_unix: 200,
+        updated_at_unix: 250,
+        payload_json: serde_json::json!({
+            "note": "typed runtime session"
+        }),
+    };
+
+    // Real store path: put_order_run_session
+    store
+        .put_order_run_session(typed_session)
+        .await
+        .expect("put typed order run session");
+
+    // Real store path: active_order_run_session
+    let loaded_active = store
+        .active_order_run_session(apparatus, test_order_id)
+        .await
+        .expect("load active session query")
+        .expect("session present");
+    assert_eq!(loaded_active.session_id, new_session_id);
+    assert_eq!(loaded_active.stage_node_id, "rezka_final");
+    assert!(loaded_active.payload_json.get("stage_node_id").is_none());
+    assert_eq!(loaded_active.payload_json["note"], "typed runtime session");
+
+    // Real store path: order_run_sessions_for_order
+    let all_order_sessions = store
+        .order_run_sessions_for_order(test_order_id)
+        .await
+        .expect("load all sessions for order");
+    assert_eq!(all_order_sessions.len(), 2);
+    let loaded_second = all_order_sessions
+        .iter()
+        .find(|s| s.session_id == new_session_id)
+        .expect("second session in list");
+    assert_eq!(loaded_second.stage_node_id, "rezka_final");
+    assert!(loaded_second.payload_json.get("stage_node_id").is_none());
+
+    // =========================================================================
+    // C. DB constraints really reject bad writes
+    // =========================================================================
+    // 1. Untrimmed typed identity is rejected
+    let untrimmed_err = sqlx::query(
+        "INSERT INTO mini_order_run_sessions
+            (session_id, apparatus, canonical_apparatus_id, order_id, stage_node_id, status)
+         VALUES ($1, $2, $2, $3, $4, 'completed')",
+    )
+    .bind("session-bad-untrimmed")
+    .bind(apparatus)
+    .bind(test_order_id)
+    .bind(" rezka_final ")
+    .execute(&pool)
+    .await
+    .expect_err("untrimmed stage_node_id must be rejected by check constraint");
+
+    let db_err = untrimmed_err.as_database_error().expect("db error");
+    assert_eq!(
+        db_err.constraint(),
+        Some("mini_order_run_sessions_stage_node_id_trimmed")
+    );
+
+    // 2. Attempting to store {"stage_node_id": "rezka_final"} in payload_json is rejected
+    let forbidden_payload_err = sqlx::query(
+        "INSERT INTO mini_order_run_sessions
+            (session_id, apparatus, canonical_apparatus_id, order_id, stage_node_id, status, payload_json)
+         VALUES ($1, $2, $2, $3, $4, 'completed', $5)",
+    )
+    .bind("session-bad-forbidden-payload")
+    .bind(apparatus)
+    .bind(test_order_id)
+    .bind("rezka_final")
+    .bind(serde_json::json!({
+        "stage_node_id": "rezka_final"
+    }))
+    .execute(&pool)
+    .await
+    .expect_err("stage_node_id in payload_json must be rejected by check constraint");
+
+    let db_err = forbidden_payload_err.as_database_error().expect("db error");
+    assert_eq!(
+        db_err.constraint(),
+        Some("mini_order_run_sessions_stage_payload_forbidden")
+    );
+
+    // Cleanup test database
+    pool.close().await;
+    let admin_pool = sqlx::PgPool::connect(&admin_url)
+        .await
+        .expect("admin cleanup");
+    sqlx::query(&format!(
+        r#"DROP DATABASE IF EXISTS "{db_name}" WITH (FORCE)"#
+    ))
+    .execute(&admin_pool)
+    .await
+    .expect("drop test db");
 }

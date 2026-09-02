@@ -288,6 +288,7 @@ async fn admin_worker_delete_is_blocked_by_active_work_even_when_confirmed() {
             session_id: "session-worker-active-1".to_string(),
             apparatus: "apparatus:default:bosma_7".to_string(),
             order_id: "zakaz-worker-active-1".to_string(),
+            stage_node_id: "bosma_7".to_string(),
             status: OrderRunStatus::Active,
             worker_role: "aparatchi".to_string(),
             worker_ref: "worker_active_1".to_string(),

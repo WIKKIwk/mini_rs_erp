@@ -251,11 +251,8 @@ impl ProductionMapService {
                 .await?;
             let stage_node_id = session
                 .as_ref()
-                .and_then(|session| session.payload_json.get("stage_node_id"))
-                .and_then(serde_json::Value::as_str)
-                .unwrap_or_default()
-                .trim()
-                .to_string();
+                .map(|session| session.stage_node_id.trim().to_string())
+                .unwrap_or_default();
             let session = session.map(|mut session| {
                 session.status = OrderRunStatus::Completed;
                 session.updated_at_unix = now;

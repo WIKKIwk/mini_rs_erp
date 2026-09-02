@@ -23,15 +23,17 @@ pub(super) async fn put_order_run_session_tx(
     sqlx::query(
         "INSERT INTO mini_order_run_sessions (
             session_id, apparatus, canonical_apparatus_id, order_id, status,
+            stage_node_id,
             worker_role, worker_ref, worker_display_name,
             started_at, updated_at, payload_json
          )
          VALUES ($1, COALESCE((SELECT name FROM mini_apparatus WHERE id = $2), $2), $2,
-                 $3, $4, $5, $6, $7, to_timestamp($8), to_timestamp($9), $10)
+                 $3, $4, $5, $6, $7, $8, to_timestamp($9), to_timestamp($10), $11)
          ON CONFLICT (session_id) DO UPDATE SET
             apparatus = excluded.apparatus,
             canonical_apparatus_id = excluded.canonical_apparatus_id,
             status = excluded.status,
+            stage_node_id = excluded.stage_node_id,
             worker_role = excluded.worker_role,
             worker_ref = excluded.worker_ref,
             worker_display_name = excluded.worker_display_name,
@@ -42,6 +44,7 @@ pub(super) async fn put_order_run_session_tx(
     .bind(apparatus_id.as_str())
     .bind(session.order_id.trim())
     .bind(session.status.as_str())
+    .bind(session.stage_node_id.trim())
     .bind(session.worker_role.trim())
     .bind(session.worker_ref.trim())
     .bind(session.worker_display_name.trim())
@@ -418,13 +421,7 @@ async fn replace_order_run_merge_state_tx(
                     .trim()
                     .to_string(),
                 source_kind,
-                stage_node_id: session
-                    .payload_json
-                    .get("stage_node_id")
-                    .and_then(serde_json::Value::as_str)
-                    .unwrap_or_default()
-                    .trim()
-                    .to_string(),
+                stage_node_id: session.stage_node_id.trim().to_string(),
                 sequence_no: 1,
                 status: if processed {
                     OrderRunInputStatus::Processed

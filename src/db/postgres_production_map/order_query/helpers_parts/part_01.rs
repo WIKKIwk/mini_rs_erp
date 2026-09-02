@@ -145,7 +145,7 @@ pub(super) async fn load_active_order_run_session(
     let apparatus = ApparatusId::new(apparatus.trim().to_string())
         .map_err(|_| ProductionMapError::StoreFailed)?;
     let row = sqlx::query_as::<_, ProgressSessionRow>(
-        "SELECT session_id, canonical_apparatus_id AS apparatus, order_id, status,
+        "SELECT session_id, canonical_apparatus_id AS apparatus, order_id, stage_node_id, status,
                 worker_role, worker_ref, worker_display_name,
                 EXTRACT(EPOCH FROM started_at)::bigint AS started_at_unix,
                 EXTRACT(EPOCH FROM updated_at)::bigint AS updated_at_unix,
@@ -178,7 +178,7 @@ pub(super) async fn load_active_order_run_sessions_for_orders(
         return Ok(BTreeMap::new());
     }
     let rows = sqlx::query_as::<_, ProgressSessionRow>(
-        "SELECT session_id, canonical_apparatus_id AS apparatus, order_id, status,
+        "SELECT session_id, canonical_apparatus_id AS apparatus, order_id, stage_node_id, status,
                 worker_role, worker_ref, worker_display_name,
                 EXTRACT(EPOCH FROM started_at)::bigint AS started_at_unix,
                 EXTRACT(EPOCH FROM updated_at)::bigint AS updated_at_unix,
@@ -212,7 +212,7 @@ pub(super) async fn load_active_order_run_session_for_qolip(
         return Ok(None);
     }
     let row = sqlx::query_as::<_, ProgressSessionRow>(
-        "SELECT session_id, canonical_apparatus_id AS apparatus, order_id, status,
+        "SELECT session_id, canonical_apparatus_id AS apparatus, order_id, stage_node_id, status,
                 worker_role, worker_ref, worker_display_name,
                 EXTRACT(EPOCH FROM started_at)::bigint AS started_at_unix,
                 EXTRACT(EPOCH FROM updated_at)::bigint AS updated_at_unix,
@@ -257,11 +257,12 @@ pub(super) async fn load_active_order_run_sessions_for_worker(
     }
     let limit = i64::try_from(limit.min(500)).unwrap_or(500);
     let rows = sqlx::query_as::<_, ProgressSessionRow>(
-        "SELECT session_id, canonical_apparatus_id AS apparatus, order_id, status,
-                worker_role, worker_ref, worker_display_name,
-                EXTRACT(EPOCH FROM started_at)::bigint AS started_at_unix,
-                EXTRACT(EPOCH FROM updated_at)::bigint AS updated_at_unix,
-                payload_json
+        "SELECT session.session_id, session.canonical_apparatus_id AS apparatus, session.order_id,
+                session.stage_node_id, session.status,
+                session.worker_role, session.worker_ref, session.worker_display_name,
+                EXTRACT(EPOCH FROM session.started_at)::bigint AS started_at_unix,
+                EXTRACT(EPOCH FROM session.updated_at)::bigint AS updated_at_unix,
+                session.payload_json
          FROM mini_order_run_sessions AS session
          WHERE session.status IN ('active', 'paused', 'frozen', 'roll_detached')
            AND (session.payload_json->>'requeued_at_tail') IS DISTINCT FROM 'true'
@@ -294,7 +295,7 @@ pub(super) async fn load_order_run_session(
     session_id: &str,
 ) -> Result<Option<OrderRunSession>, ProductionMapError> {
     let row = sqlx::query_as::<_, ProgressSessionRow>(
-        "SELECT session_id, canonical_apparatus_id AS apparatus, order_id, status,
+        "SELECT session_id, canonical_apparatus_id AS apparatus, order_id, stage_node_id, status,
                 worker_role, worker_ref, worker_display_name,
                 EXTRACT(EPOCH FROM started_at)::bigint AS started_at_unix,
                 EXTRACT(EPOCH FROM updated_at)::bigint AS updated_at_unix,
@@ -335,7 +336,7 @@ pub(super) async fn load_order_run_sessions_for_orders(
         return Ok(BTreeMap::new());
     }
     let rows = sqlx::query_as::<_, ProgressSessionRow>(
-        "SELECT session_id, canonical_apparatus_id AS apparatus, order_id, status,
+        "SELECT session_id, canonical_apparatus_id AS apparatus, order_id, stage_node_id, status,
                 worker_role, worker_ref, worker_display_name,
                 EXTRACT(EPOCH FROM started_at)::bigint AS started_at_unix,
                 EXTRACT(EPOCH FROM updated_at)::bigint AS updated_at_unix,
@@ -363,7 +364,7 @@ pub(super) async fn load_order_run_sessions_for_audit(
     pool: &PgPool,
 ) -> Result<Vec<OrderRunSession>, ProductionMapError> {
     let rows = sqlx::query_as::<_, ProgressSessionRow>(
-        "SELECT session_id, canonical_apparatus_id AS apparatus, order_id, status,
+        "SELECT session_id, canonical_apparatus_id AS apparatus, order_id, stage_node_id, status,
                 worker_role, worker_ref, worker_display_name,
                 EXTRACT(EPOCH FROM started_at)::bigint AS started_at_unix,
                 EXTRACT(EPOCH FROM updated_at)::bigint AS updated_at_unix,

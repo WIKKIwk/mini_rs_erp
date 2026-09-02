@@ -35,7 +35,6 @@ pub(super) fn progress_session_payload(
         "input_progress_qr_payload": input_progress.qr_payload,
         "input_progress_apparatus": input_progress.apparatus,
         "input_wip_source_kind": input_progress.source_kind,
-        "stage_node_id": input_progress.stage_node_id,
     });
     metrics.write_payload_fields(&mut payload, description);
     if let Some(contained_kadr_count) = input_progress.contained_kadr_count {

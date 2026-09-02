@@ -38,12 +38,10 @@ impl ProductionMapService {
     ) -> Result<Option<OrderProgressBatch>, ProductionMapError> {
         let default_stage = chain::work_stage_for_station(order_map, apparatus, "")
             .ok_or(ProductionMapError::ProgressBatchNotAccepted)?;
-        let Some(default_previous) =
-            chain::previous_work_stage_for_node(order_map, &default_stage.node_id)
-        else {
-            return Ok(None);
-        };
         if progress.qr_payload.trim().is_empty() {
+            if chain::previous_work_stage_for_node(order_map, &default_stage.node_id).is_none() {
+                return Ok(None);
+            }
             return Err(ProductionMapError::ProgressQrRequired);
         }
         let batch = self
@@ -57,7 +55,7 @@ impl ProductionMapService {
                 .ok_or(ProductionMapError::ProgressBatchNotAccepted)?
         };
         let previous = chain::previous_work_stage_for_node(order_map, &stage.node_id)
-            .unwrap_or(default_previous);
+            .ok_or(ProductionMapError::ProgressBatchNotAccepted)?;
         let previous_apparatus = previous
             .apparatus_id
             .ok_or(ProductionMapError::ProgressBatchNotAccepted)?;
@@ -426,6 +424,7 @@ impl ProductionMapService {
             session_id: progress_session_id(apparatus, order_id, actor),
             apparatus: apparatus.to_string(),
             order_id: order_id.to_string(),
+            stage_node_id: stage.node_id.clone(),
             status: OrderRunStatus::Active,
             worker_role: actor.role.trim().to_string(),
             worker_ref: actor.ref_.trim().to_string(),

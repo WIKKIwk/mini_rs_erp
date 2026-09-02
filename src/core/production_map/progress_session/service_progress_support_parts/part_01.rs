@@ -12,7 +12,6 @@ pub(super) fn start_session_payload(
         "input_progress_qr_payload": input_progress.qr_payload,
         "input_progress_apparatus": input_progress.apparatus,
         "input_wip_source_kind": input_progress.source_kind,
-        "stage_node_id": stage_node_id.trim(),
     });
     if let Some(contained_kadr_count) = input_progress.contained_kadr_count {
         payload["contained_kadr_count"] = serde_json::json!(contained_kadr_count);
@@ -124,7 +123,7 @@ pub(super) fn session_progress_links(session: &OrderRunSession) -> SessionProgre
         qr_payload: json_string_field(&session.payload_json, "input_progress_qr_payload"),
         apparatus: json_string_field(&session.payload_json, "input_progress_apparatus"),
         source_kind: json_string_field(&session.payload_json, "input_wip_source_kind"),
-        stage_node_id: json_string_field(&session.payload_json, "stage_node_id"),
+        stage_node_id: session.stage_node_id.trim().to_string(),
         contained_kadr_count: json_positive_usize_field(
             &session.payload_json,
             "contained_kadr_count",

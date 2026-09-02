@@ -69,7 +69,7 @@ async fn input_links_for_persistence(
         input_qr_payload: payload_string(&session.payload_json, "input_progress_qr_payload"),
         source_apparatus: payload_string(&session.payload_json, "input_progress_apparatus"),
         source_kind,
-        stage_node_id: payload_string(&session.payload_json, "stage_node_id"),
+        stage_node_id: session.stage_node_id.clone(),
         sequence_no: 1,
         status: if processed {
             OrderRunInputStatus::Processed

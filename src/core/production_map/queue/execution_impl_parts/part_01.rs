@@ -146,11 +146,8 @@ impl ProductionMapService {
             .await?;
         let active_stage_node_id = active_session
             .as_ref()
-            .and_then(|session| session.payload_json.get("stage_node_id"))
-            .and_then(serde_json::Value::as_str)
-            .unwrap_or_default()
-            .trim()
-            .to_string();
+            .map(|session| session.stage_node_id.trim().to_string())
+            .unwrap_or_default();
         let completion_read_snapshot = if action == queue_state::ApparatusQueueAction::Complete {
             Some(
                 self.completion_progress_build_snapshot(order_id, &progress, active_session.clone())
@@ -319,9 +316,7 @@ impl ProductionMapService {
             && let Some(stage_node_id) = progress
                 .session
                 .as_ref()
-                .and_then(|session| session.payload_json.get("stage_node_id"))
-                .and_then(serde_json::Value::as_str)
-                .map(str::trim)
+                .map(|session| session.stage_node_id.trim())
                 .filter(|value| !value.is_empty())
         {
             event.stage_node_id = stage_node_id.to_string();

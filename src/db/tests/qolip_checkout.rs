@@ -144,6 +144,7 @@ fn session(status: OrderRunStatus) -> OrderRunSession {
         session_id: "session-qolip-completion".to_string(),
         apparatus: "apparatus:default:bosma_7".to_string(),
         order_id: "order-qolip-completion".to_string(),
+        stage_node_id: "bosma_7".to_string(),
         status,
         worker_role: "bosmachi".to_string(),
         worker_ref: "worker-1".to_string(),

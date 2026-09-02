@@ -220,6 +220,7 @@ async fn live_snapshot_reads_active_sessions_in_one_batch() {
                 session_id: format!("session-{order_id}"),
                 apparatus: FLOW_PECHAT_ID.to_string(),
                 order_id: order_id.to_string(),
+                stage_node_id: "apparatus".to_string(),
                 status: OrderRunStatus::Active,
                 worker_role: "test".to_string(),
                 worker_ref: "worker-1".to_string(),
@@ -574,6 +575,7 @@ async fn live_snapshot_uses_persisted_operational_projection_instead_of_replayin
             session_id: "audit-only-session".to_string(),
             apparatus: FLOW_PECHAT_ID.to_string(),
             order_id: order_id.to_string(),
+            stage_node_id: "apparatus".to_string(),
             status: OrderRunStatus::Active,
             worker_role: "audit".to_string(),
             worker_ref: "audit-only".to_string(),
@@ -2987,6 +2989,7 @@ async fn laminatsiya_complete_requires_previous_stage_qr() {
             session_id: "session-laminatsiya-complete-without-input".to_string(),
             apparatus: second.to_string(),
             order_id: order_id.to_string(),
+            stage_node_id: "second".to_string(),
             status: OrderRunStatus::Active,
             worker_role: actor.role.clone(),
             worker_ref: actor.ref_.clone(),
@@ -3331,6 +3334,7 @@ async fn complete_repairs_legacy_output_input_confusion() {
             session_id: session_id.to_string(),
             apparatus: apparatus.to_string(),
             order_id: order_id.to_string(),
+            stage_node_id: "second".to_string(),
             status: OrderRunStatus::Active,
             worker_role: actor.role.clone(),
             worker_ref: actor.ref_.clone(),
@@ -3475,6 +3479,7 @@ async fn resume_without_resumable_wip_keeps_queue_paused() {
             session_id: "session-laminatsiya-ghost-resume".to_string(),
             apparatus: apparatus.to_string(),
             order_id: order_id.to_string(),
+            stage_node_id: "apparatus".to_string(),
             status: OrderRunStatus::Paused,
             worker_role: actor.role.clone(),
             worker_ref: actor.ref_.clone(),
@@ -3529,6 +3534,7 @@ async fn laminatsiya_astatka_uses_order_timeline_and_previous_report_anchor() {
             session_id: "session-laminatsiya-astatka".to_string(),
             apparatus: apparatus.to_string(),
             order_id: order_id.to_string(),
+            stage_node_id: "second".to_string(),
             status: OrderRunStatus::Active,
             worker_role: actor.role.clone(),
             worker_ref: actor.ref_.clone(),
@@ -3605,6 +3611,7 @@ async fn rezka_astatka_uses_order_timeline_and_accepts_zero_metrics() {
             session_id: "session-rezka-astatka".to_string(),
             apparatus: apparatus.to_string(),
             order_id: order_id.to_string(),
+            stage_node_id: "second".to_string(),
             status: OrderRunStatus::Active,
             worker_role: actor.role.clone(),
             worker_ref: actor.ref_.clone(),
@@ -5673,4 +5680,299 @@ fn unassigned_alternative_next_stage_map(
         },
     ];
     map
+}
+
+fn repeated_rezka_reentry_map(
+    id: &str,
+    rezka_apparatus: &str,
+    mid_apparatus: &str,
+) -> ProductionMapDefinition {
+    let mut map = apparatus_stage_map(id, rezka_apparatus);
+    if let Some(first) = map.nodes.iter_mut().find(|node| node.id == "apparatus") {
+        first.id = "rezka_first".to_string();
+        first.title = "Rezka first".to_string();
+        first.rezka_kadr_count = Some(1);
+    }
+    map.nodes.insert(
+        2,
+        ProductionMapNode {
+            id: "lamination".to_string(),
+            kind: ProductionMapNodeKind::Apparatus,
+            title: "Lamination".to_string(),
+            apparatus_id: mid_apparatus.to_string(),
+            formula: None,
+            role_code: String::new(),
+            item_code: String::new(),
+            qty_formula: String::new(),
+            from_location: String::new(),
+            to_location: String::new(),
+            alternative_group_id: String::new(),
+            alternative_group_label: String::new(),
+            alternative_assigned_title: String::new(),
+            alternative_assigned_apparatus_id: String::new(),
+            rezka_kadr_count: None,
+            rezka_frame_groups: Vec::new(),
+            rezka_label_length: None,
+            x: 0.0,
+            y: 264.0,
+        },
+    );
+    map.nodes.insert(
+        3,
+        ProductionMapNode {
+            id: "rezka_final".to_string(),
+            kind: ProductionMapNodeKind::Apparatus,
+            title: "Rezka final".to_string(),
+            apparatus_id: rezka_apparatus.to_string(),
+            formula: None,
+            role_code: String::new(),
+            item_code: String::new(),
+            qty_formula: String::new(),
+            from_location: String::new(),
+            to_location: String::new(),
+            alternative_group_id: String::new(),
+            alternative_group_label: String::new(),
+            alternative_assigned_title: String::new(),
+            alternative_assigned_apparatus_id: String::new(),
+            rezka_kadr_count: Some(1),
+            rezka_frame_groups: Vec::new(),
+            rezka_label_length: None,
+            x: 0.0,
+            y: 396.0,
+        },
+    );
+    if let Some(end) = map.nodes.iter_mut().find(|node| node.id == "end") {
+        end.y = 528.0;
+    }
+    map.edges = vec![
+        ProductionMapEdge {
+            from: "start".to_string(),
+            to: "rezka_first".to_string(),
+            branch: String::new(),
+        },
+        ProductionMapEdge {
+            from: "rezka_first".to_string(),
+            to: "lamination".to_string(),
+            branch: String::new(),
+        },
+        ProductionMapEdge {
+            from: "lamination".to_string(),
+            to: "rezka_final".to_string(),
+            branch: String::new(),
+        },
+        ProductionMapEdge {
+            from: "rezka_final".to_string(),
+            to: "end".to_string(),
+            branch: String::new(),
+        },
+    ];
+    map
+}
+
+#[tokio::test]
+async fn repeated_apparatus_sessions_are_distinguished_by_typed_stage_node_id() {
+    let store = Arc::new(MemoryProductionMapStore::new());
+    let (service, _) = service_with_apparatus_store(
+        store.clone(),
+        &[
+            (REZKA_ID, "Rezka test"),
+            (LAMINATION_1_ID, "Laminatsiya test"),
+        ],
+    )
+    .await;
+    let actor = QueueActionActor {
+        role: "aparatchi".to_string(),
+        ref_: "worker-repeated-stage".to_string(),
+        display_name: "Repeated Stage Worker".to_string(),
+    };
+    let order_id = "zakaz-repeated-stage-identity";
+    service
+        .upsert_map(repeated_rezka_reentry_map(
+            order_id,
+            REZKA_ID,
+            LAMINATION_1_ID,
+        ))
+        .await
+        .expect("upsert repeated-stage map");
+
+    // 1. Start first occurrence: Rezka (rezka_first)
+    service
+        .apply_apparatus_queue_action_with_progress(
+            REZKA_ID,
+            order_id,
+            queue_state::ApparatusQueueAction::Start,
+            &[REZKA_ID.to_string()],
+            actor.clone(),
+            QueueProgressInput::default(),
+        )
+        .await
+        .expect("start first rezka stage");
+
+    let first_session = store
+        .active_order_run_session(REZKA_ID, order_id)
+        .await
+        .expect("read active session")
+        .expect("first session present");
+    assert_eq!(first_session.stage_node_id, "rezka_first");
+    assert!(first_session.payload_json.get("stage_node_id").is_none());
+
+    // Complete first occurrence: Rezka (rezka_first)
+    let first_rezka_result = service
+        .apply_apparatus_queue_action_with_progress(
+            REZKA_ID,
+            order_id,
+            queue_state::ApparatusQueueAction::Complete,
+            &[REZKA_ID.to_string()],
+            actor.clone(),
+            QueueProgressInput {
+                produced_qty: Some(100.0),
+                finished_goods_kg: Some(10.0),
+                total_waste: Some(0.5),
+                diameter: Some(40.0),
+                uom: "m".to_string(),
+                ..QueueProgressInput::default()
+            },
+        )
+        .await
+        .expect("complete first rezka stage");
+
+    let rezka_first_batch = first_rezka_result
+        .progress_batch
+        .expect("first rezka output batch");
+    assert!(!rezka_first_batch.qr_payload.is_empty());
+
+    // 2. Start and complete intermediate stage: Laminatsiya (lamination)
+    service
+        .apply_apparatus_queue_action_with_progress(
+            LAMINATION_1_ID,
+            order_id,
+            queue_state::ApparatusQueueAction::Start,
+            &[LAMINATION_1_ID.to_string()],
+            actor.clone(),
+            QueueProgressInput {
+                qr_payload: rezka_first_batch.qr_payload.clone(),
+                ..QueueProgressInput::default()
+            },
+        )
+        .await
+        .expect("start lamination stage");
+
+    let lamination_session = store
+        .active_order_run_session(LAMINATION_1_ID, order_id)
+        .await
+        .expect("read active lamination session")
+        .expect("lamination session present");
+    assert_eq!(lamination_session.stage_node_id, "lamination");
+    assert!(
+        lamination_session
+            .payload_json
+            .get("stage_node_id")
+            .is_none()
+    );
+
+    let lamination_result = service
+        .apply_apparatus_queue_action_with_progress(
+            LAMINATION_1_ID,
+            order_id,
+            queue_state::ApparatusQueueAction::Complete,
+            &[LAMINATION_1_ID.to_string()],
+            actor.clone(),
+            QueueProgressInput {
+                produced_qty: Some(100.0),
+                finished_goods_kg: Some(10.0),
+                finished_goods_meter: Some(100.0),
+                total_waste: Some(0.5),
+                lamination_print_leftover_rolls: Some(1.0),
+                lamination_film_leftover_rolls: Some(1.0),
+                uom: "m".to_string(),
+                ..QueueProgressInput::default()
+            },
+        )
+        .await
+        .expect("complete lamination stage");
+
+    let lamination_batch = lamination_result
+        .progress_batch
+        .expect("lamination output batch");
+    assert!(!lamination_batch.qr_payload.is_empty());
+
+    // Refresh live projection so apparatus sequence reflects the order ready for reentry
+    service
+        .live_snapshot()
+        .await
+        .expect("live snapshot before reentry");
+
+    // 3. Start repeated second occurrence: Rezka (rezka_final)
+    service
+        .apply_apparatus_queue_action_with_progress(
+            REZKA_ID,
+            order_id,
+            queue_state::ApparatusQueueAction::Start,
+            &[REZKA_ID.to_string()],
+            actor.clone(),
+            QueueProgressInput {
+                qr_payload: lamination_batch.qr_payload.clone(),
+                ..QueueProgressInput::default()
+            },
+        )
+        .await
+        .expect("start final rezka stage");
+
+    let final_session = store
+        .active_order_run_session(REZKA_ID, order_id)
+        .await
+        .expect("read active final session")
+        .expect("final session present");
+    assert_eq!(final_session.stage_node_id, "rezka_final");
+    assert_ne!(first_session.session_id, final_session.session_id);
+    assert!(final_session.payload_json.get("stage_node_id").is_none());
+
+    // Complete repeated second occurrence: Rezka (rezka_final)
+    service
+        .apply_apparatus_queue_action_with_progress(
+            REZKA_ID,
+            order_id,
+            queue_state::ApparatusQueueAction::Complete,
+            &[REZKA_ID.to_string()],
+            actor.clone(),
+            QueueProgressInput {
+                produced_qty: Some(100.0),
+                finished_goods_kg: Some(10.0),
+                total_waste: Some(0.5),
+                diameter: Some(40.0),
+                uom: "m".to_string(),
+                ..QueueProgressInput::default()
+            },
+        )
+        .await
+        .expect("complete final rezka stage");
+
+    // 4. Verify all sessions recorded for order:
+    let order_sessions = store
+        .order_run_sessions_for_order(order_id)
+        .await
+        .expect("all order sessions");
+
+    let rezka_sessions: Vec<_> = order_sessions
+        .iter()
+        .filter(|s| s.apparatus == REZKA_ID)
+        .collect();
+    assert_eq!(rezka_sessions.len(), 2);
+
+    // Proves the two sessions/occurrences remain distinguishable by typed stage_node_id
+    assert_eq!(rezka_sessions[0].stage_node_id, "rezka_first");
+    assert_eq!(rezka_sessions[1].stage_node_id, "rezka_final");
+
+    // Proves neither relies on session.payload_json["stage_node_id"]
+    for session in &order_sessions {
+        assert!(session.payload_json.get("stage_node_id").is_none());
+        assert!(!session.stage_node_id.is_empty());
+    }
+
+    // Proves order reached completion
+    let order_status = service
+        .order_status_detail(order_id)
+        .await
+        .expect("order status");
+    assert_eq!(order_status.order_status, "completed");
 }

@@ -137,6 +137,7 @@ async fn completed_session_locks_stage_even_without_queue_state() {
             session_id: "session-map-edit-history".to_string(),
             apparatus: apparatus.to_string(),
             order_id: order_id.to_string(),
+            stage_node_id: "apparatus".to_string(),
             status: OrderRunStatus::Completed,
             worker_role: "aparatchi".to_string(),
             worker_ref: "worker-map-edit".to_string(),
