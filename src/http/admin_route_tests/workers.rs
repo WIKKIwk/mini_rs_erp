@@ -962,6 +962,7 @@ async fn replacement_worker_with_same_name_does_not_inherit_old_history() {
             event_id: "event-worker-history-old".to_string(),
             apparatus: "apparatus:default:bosma_7".to_string(),
             order_id: "zakaz-worker-history-old".to_string(),
+            stage_node_id: String::new(),
             action: ApparatusQueueAction::Start,
             from_state: ApparatusQueueOrderState::Pending,
             to_state: ApparatusQueueOrderState::InProgress,

@@ -73,7 +73,7 @@ pub(super) async fn load_queue_action_logs_for_orders(
     }
     let rows = sqlx::query_as::<_, QueueActionLogRow>(
         "SELECT event_id, canonical_apparatus_id AS apparatus, order_id,
-                COALESCE(payload_json->>'stage_node_id', '') AS stage_node_id,
+                stage_node_id,
                 action, from_state, to_state,
                 actor_role, actor_ref, actor_display_name,
                 EXTRACT(EPOCH FROM created_at)::bigint AS created_at_unix,
@@ -108,7 +108,7 @@ pub(super) async fn load_queue_action_logs_for_worker(
     let limit = i64::try_from(limit.min(500)).unwrap_or(500);
     let rows = sqlx::query_as::<_, QueueActionLogRow>(
         "SELECT event_id, canonical_apparatus_id AS apparatus, order_id,
-                COALESCE(payload_json->>'stage_node_id', '') AS stage_node_id,
+                stage_node_id,
                 action, from_state, to_state,
                 actor_role, actor_ref, actor_display_name,
                 EXTRACT(EPOCH FROM created_at)::bigint AS created_at_unix,

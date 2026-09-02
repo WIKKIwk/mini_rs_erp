@@ -138,11 +138,11 @@ pub(super) async fn refresh_production_order_lifecycle_tx(
             .insert(order_id.to_string(), state);
     }
     let completed_stage_node_ids = sqlx::query_scalar::<_, String>(
-        "SELECT COALESCE(payload_json->>'stage_node_id', '')
+        "SELECT stage_node_id
          FROM mini_queue_action_events
          WHERE order_id = $1
            AND action = 'complete'
-           AND COALESCE(payload_json->>'stage_node_id', '') <> ''",
+           AND stage_node_id <> ''",
     )
     .bind(order_id)
     .fetch_all(&mut **tx)

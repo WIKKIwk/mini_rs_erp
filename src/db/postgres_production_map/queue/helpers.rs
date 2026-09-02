@@ -38,11 +38,12 @@ pub(super) async fn queue_action_event_replay_tx(
             String,
             String,
             String,
+            String,
             serde_json::Value,
             serde_json::Value,
         ),
     >(
-        "SELECT canonical_apparatus_id, order_id, action, from_state, to_state, policy,
+        "SELECT canonical_apparatus_id, order_id, stage_node_id, action, from_state, to_state, policy,
                 actor_role, actor_ref, actor_display_name, assigned_apparatus, payload_json
          FROM mini_queue_action_events
          WHERE event_id = $1
@@ -55,6 +56,7 @@ pub(super) async fn queue_action_event_replay_tx(
     let Some((
         existing_apparatus,
         existing_order_id,
+        existing_stage_node_id,
         existing_action,
         existing_from_state,
         existing_to_state,
@@ -72,6 +74,7 @@ pub(super) async fn queue_action_event_replay_tx(
     let existing = StoredQueueEventIdentity {
         apparatus: existing_apparatus.as_deref(),
         order_id: &existing_order_id,
+        stage_node_id: &existing_stage_node_id,
         action: &existing_action,
         from_state: &existing_from_state,
         to_state: &existing_to_state,
@@ -411,14 +414,15 @@ pub(super) async fn insert_queue_action_event_tx(
     }
     sqlx::query(
         "INSERT INTO mini_queue_action_events
-            (event_id, apparatus, canonical_apparatus_id, order_id, action, from_state, to_state, policy,
+            (event_id, apparatus, canonical_apparatus_id, order_id, stage_node_id, action, from_state, to_state, policy,
              actor_role, actor_ref, actor_display_name, assigned_apparatus, payload_json, created_at)
-         VALUES ($1, COALESCE((SELECT name FROM mini_apparatus WHERE id = $2), $2), $2, $3, $4, $5, $6, $7,
-                 $8, $9, $10, $11, $12, now())",
+         VALUES ($1, COALESCE((SELECT name FROM mini_apparatus WHERE id = $2), $2), $2, $3, $4, $5, $6, $7, $8,
+                 $9, $10, $11, $12, $13, now())",
     )
     .bind(event.event_id.trim())
     .bind(apparatus_id.as_str())
     .bind(event.order_id.trim())
+    .bind(event.stage_node_id.trim())
     .bind(queue_action_as_str(event.action))
     .bind(event.from_state.as_str())
     .bind(event.to_state.as_str())
@@ -461,9 +465,11 @@ fn normalized_assigned_apparatus(
         .collect::<Result<Vec<_>, _>>()
 }
 
+#[derive(Clone, Copy)]
 struct StoredQueueEventIdentity<'a> {
     apparatus: Option<&'a str>,
     order_id: &'a str,
+    stage_node_id: &'a str,
     action: &'a str,
     from_state: &'a str,
     to_state: &'a str,
@@ -485,6 +491,7 @@ fn queue_event_identity_matches(
         serde_json::to_value(assigned_apparatus).map_err(|_| ProductionMapError::StoreFailed)?;
     Ok(existing.apparatus == Some(apparatus_id.as_str())
         && existing.order_id.trim() == event.order_id.trim()
+        && existing.stage_node_id.trim() == event.stage_node_id.trim()
         && existing.action == queue_action_as_str(event.action)
         && existing.from_state == event.from_state.as_str()
         && existing.to_state == event.to_state.as_str()
@@ -555,11 +562,12 @@ mod tests {
     };
 
     #[test]
-    fn queue_event_replay_requires_the_original_payload() {
+    fn queue_event_replay_requires_original_stage_and_payload() {
         let event = ApparatusQueueActionEvent {
             event_id: "event-1".to_string(),
             apparatus: "apparatus:test:a".to_string(),
             order_id: "zakaz-1".to_string(),
+            stage_node_id: "stage-a".to_string(),
             action: ApparatusQueueAction::Start,
             from_state: ApparatusQueueOrderState::Pending,
             to_state: ApparatusQueueOrderState::InProgress,
@@ -578,6 +586,7 @@ mod tests {
         let existing = StoredQueueEventIdentity {
             apparatus: Some("apparatus:test:a"),
             order_id: "zakaz-1",
+            stage_node_id: "stage-a",
             action: "start",
             from_state: "pending",
             to_state: "in_progress",
@@ -591,6 +600,14 @@ mod tests {
         let matching =
             queue_event_identity_matches(&existing, &apparatus_id, &event, &assigned).unwrap();
         assert!(matching);
+
+        let changed_stage = StoredQueueEventIdentity {
+            stage_node_id: "stage-b",
+            ..existing
+        };
+        let changed_stage =
+            queue_event_identity_matches(&changed_stage, &apparatus_id, &event, &assigned).unwrap();
+        assert!(!changed_stage);
 
         let changed_payload = serde_json::json!({"request": "two"});
         let changed = StoredQueueEventIdentity {

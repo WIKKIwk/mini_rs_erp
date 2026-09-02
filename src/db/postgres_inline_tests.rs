@@ -194,6 +194,7 @@ mod tests {
         assert!(versions.contains("0070_canonical_apparatus_clean_cutover"));
         assert!(versions.contains("0071_qolip_lock_ownership"));
         assert!(versions.contains("0072_canonical_identity_indexes"));
+        assert!(versions.contains("0087_queue_event_stage_identity"));
         assert!(POSTGRES_MIGRATIONS.iter().all(|(version, sql)| {
             !version.trim().is_empty() && migration_checksum(sql).len() == 64
         }));
@@ -245,6 +246,27 @@ mod tests {
         assert!(migration.contains("mini_order_progress_events_action_allowed"));
         assert!(migration.contains("'merge'"));
         assert!(!migration.contains("mini_progress_batches_action_allowed"));
+    }
+
+    #[test]
+    fn queue_event_stage_identity_migration_cuts_over_json_authority() {
+        let migration = POSTGRES_MIGRATIONS
+            .iter()
+            .find(|(version, _)| *version == "0087_queue_event_stage_identity")
+            .map(|(_, sql)| sql.to_lowercase())
+            .expect("queue event stage identity migration");
+        let compact = migration.split_whitespace().collect::<String>();
+
+        for invariant in [
+            "addcolumnifnotexistsstage_node_idtextnotnulldefault''",
+            "setstage_node_id=btrim(coalesce(payload_json->>'stage_node_id',''))",
+            "setpayload_json=payload_json-'stage_node_id'",
+            "mini_queue_action_events_stage_payload_forbidden",
+            "check(not(payload_json?'stage_node_id'))",
+            "idx_mini_queue_action_events_order_stage_created",
+        ] {
+            assert!(compact.contains(invariant), "missing invariant: {invariant}");
+        }
     }
 
     #[test]
@@ -2055,6 +2077,7 @@ mod tests {
             event_id: "fixture:0062:source-race:contender".to_string(),
             apparatus: apparatus_id.to_string(),
             order_id: "fixture:0062:source-race:order".to_string(),
+            stage_node_id: String::new(),
             action: ApparatusQueueAction::Complete,
             from_state: ApparatusQueueOrderState::InProgress,
             to_state: ApparatusQueueOrderState::Completed,

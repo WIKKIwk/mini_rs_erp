@@ -110,6 +110,7 @@ impl ProductionMapService {
             event_id,
             apparatus: storage_key.clone(),
             order_id: order_id.to_string(),
+            stage_node_id: String::new(),
             action: queue_state::ApparatusQueueAction::Complete,
             from_state,
             to_state: from_state,
@@ -247,15 +248,21 @@ impl ProductionMapService {
             let session = self
                 .store
                 .active_order_run_session(&request.apparatus, &request.order_id)
-                .await?
-                .map(|mut session| {
-                    session.status = OrderRunStatus::Completed;
-                    session.updated_at_unix = now;
-                    session.payload_json["completed_with_issue"] = serde_json::Value::Bool(true);
-                    session.payload_json["issue_note"] =
-                        serde_json::Value::String(message.to_string());
-                    session
-                });
+                .await?;
+            let stage_node_id = session
+                .as_ref()
+                .and_then(|session| session.payload_json.get("stage_node_id"))
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or_default()
+                .trim()
+                .to_string();
+            let session = session.map(|mut session| {
+                session.status = OrderRunStatus::Completed;
+                session.updated_at_unix = now;
+                session.payload_json["completed_with_issue"] = serde_json::Value::Bool(true);
+                session.payload_json["issue_note"] = serde_json::Value::String(message.to_string());
+                session
+            });
             Some(CompletionRequestStateResolution {
                 apparatus: request.apparatus.clone(),
                 states: states.clone(),
@@ -263,6 +270,7 @@ impl ProductionMapService {
                     event_id: notification.event_id.clone(),
                     apparatus: request.apparatus.clone(),
                     order_id: request.order_id.clone(),
+                    stage_node_id,
                     action: queue_state::ApparatusQueueAction::Complete,
                     from_state,
                     to_state: queue_state::ApparatusQueueOrderState::Completed,

@@ -80,6 +80,10 @@ async fn prepare_direct_freeze_queue_write(
         requested_apparatus: &target_apparatus,
         storage_key: &storage_key,
         order_id: &record.order_id,
+        stage_node_id: target_session
+            .and_then(|session| session.payload_json.get("stage_node_id"))
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or_default(),
         action: queue_state::ApparatusQueueAction::Freeze,
         from_state,
         to_state: queue_state::ApparatusQueueOrderState::Frozen,
@@ -227,6 +231,10 @@ async fn restore_frozen_queue_after_unfreeze(
         requested_apparatus: &target_apparatus,
         storage_key: &storage_key,
         order_id: &record.order_id,
+        stage_node_id: requested_session
+            .and_then(|session| session.payload_json.get("stage_node_id"))
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or_default(),
         action: queue_state::ApparatusQueueAction::Pause,
         from_state,
         to_state: queue_state::ApparatusQueueOrderState::Pending,
