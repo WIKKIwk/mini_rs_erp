@@ -889,3 +889,225 @@ async fn postgres_order_run_session_stage_identity_real_cutover_and_invariants()
     .await
     .expect("drop test db");
 }
+
+#[tokio::test]
+async fn postgres_progress_batch_typed_payload_mirrors_real_cutover_and_invariants() {
+    let admin_url = std::env::var("MINI_ERP_TEST_ADMIN_DATABASE_URL")
+        .unwrap_or_else(|_| "postgres://superuser@127.0.0.1:5432/postgres".to_string());
+    let db_name = "mini_rs_erp_test_progress_batch_typed_payload_mirrors";
+    let admin_pool = sqlx::PgPool::connect(&admin_url).await.expect("admin db");
+    sqlx::query(&format!(
+        r#"DROP DATABASE IF EXISTS "{db_name}" WITH (FORCE)"#
+    ))
+    .execute(&admin_pool)
+    .await
+    .expect("drop test db");
+    sqlx::query(&format!(r#"CREATE DATABASE "{db_name}""#))
+        .execute(&admin_pool)
+        .await
+        .expect("create test db");
+    admin_pool.close().await;
+
+    let pool = sqlx::PgPool::connect_with(postgres_test_database_options(&admin_url, db_name))
+        .await
+        .expect("test db");
+
+    // 1. Apply migrations 1..=88 (pre-0089 schema)
+    apply_postgres_migrations_through(&pool, 88)
+        .await
+        .expect("apply migrations up to 0088");
+    seed_standard_canonical_apparatus(&pool).await;
+
+    let test_order_id = "zakaz-batch-mirrors-01";
+    let apparatus = "apparatus:default:asset-010";
+    sqlx::query(
+        "INSERT INTO mini_production_maps (id, product_code, title, map_json)
+         VALUES ($1, 'TEST', 'Test Map', '{}'::jsonb)",
+    )
+    .bind(test_order_id)
+    .execute(&pool)
+    .await
+    .expect("seed test map");
+
+    // Insert legacy pre-0089 batch with all 13 duplicate keys in payload_json + unrelated payload metadata
+    let legacy_batch_id = "batch-legacy-mirrors-01";
+    let legacy_session_id = "session-legacy-01";
+    let legacy_payload = serde_json::json!({
+        "status_detail": {"work_status": "in_progress", "wip_status": "waiting", "flow_status": "free_wip"},
+        "wip_status": "waiting",
+        "current_apparatus": apparatus,
+        "current_apparatus_key": apparatus,
+        "current_location": "apparatus:default:asset-010 chiqim",
+        "next_apparatus": "apparatus:default:asset-011",
+        "parent_batch_id": "batch-parent-01",
+        "used_by_session_id": "session-used-01",
+        "used_by_apparatus": "apparatus:default:asset-011",
+        "used_by_order_id": test_order_id,
+        "processed_by_session_id": "session-proc-01",
+        "processed_by_apparatus": "apparatus:default:asset-011",
+        "from_apparatus": apparatus,
+        "unrelated_meta": "preserve_this_value",
+        "stage_node_id": "rezka_stage_1",
+        "contained_kadr_count": 42
+    });
+
+    sqlx::query(
+        "INSERT INTO mini_progress_batches (
+            batch_id, session_id, apparatus, canonical_apparatus_id, order_id,
+            action, status, produced_qty, uom, qr_payload, label_item_code, label_item_name,
+            wip_status, current_apparatus, current_apparatus_key, current_location, next_apparatus,
+            parent_batch_id, used_by_session_id, used_by_apparatus,
+            processed_by_session_id, processed_by_apparatus, payload_json
+         )
+         VALUES (
+            $1, $2, $3, $3, $4,
+            'pause', 'paused', 100.0, 'm', 'qr:batch-legacy-01', $4, 'Item Test',
+            'waiting', $3, $3, 'apparatus:default:asset-010 chiqim', 'apparatus:default:asset-011',
+            'batch-parent-01', 'session-used-01', 'apparatus:default:asset-011',
+            'session-proc-01', 'apparatus:default:asset-011', $5
+         )",
+    )
+    .bind(legacy_batch_id)
+    .bind(legacy_session_id)
+    .bind(apparatus)
+    .bind(test_order_id)
+    .bind(&legacy_payload)
+    .execute(&pool)
+    .await
+    .expect("insert legacy pre-0089 batch");
+
+    // 2. Apply migration 0089
+    apply_postgres_migrations_through(&pool, 89)
+        .await
+        .expect("apply migration 0089");
+
+    // 3. Assertions:
+    // a) Typed SQL columns are unchanged and correct
+    let (
+        wip_status,
+        current_apparatus,
+        current_location,
+        next_apparatus,
+        parent_batch_id,
+        used_by_session_id,
+        used_by_apparatus,
+        processed_by_session_id,
+        processed_by_apparatus,
+        has_forbidden_keys,
+        remaining_payload,
+    ): (
+        String,
+        String,
+        String,
+        String,
+        String,
+        String,
+        String,
+        String,
+        String,
+        bool,
+        serde_json::Value,
+    ) = sqlx::query_as(
+        "SELECT
+            wip_status,
+            current_apparatus,
+            current_location,
+            next_apparatus,
+            parent_batch_id,
+            used_by_session_id,
+            used_by_apparatus,
+            processed_by_session_id,
+            processed_by_apparatus,
+            (payload_json ?| array[
+                'status_detail', 'wip_status', 'current_apparatus', 'current_apparatus_key',
+                'current_location', 'next_apparatus', 'parent_batch_id', 'used_by_session_id',
+                'used_by_apparatus', 'used_by_order_id', 'processed_by_session_id',
+                'processed_by_apparatus', 'from_apparatus'
+            ]::text[]),
+            payload_json
+         FROM mini_progress_batches
+         WHERE batch_id = $1",
+    )
+    .bind(legacy_batch_id)
+    .fetch_one(&pool)
+    .await
+    .expect("fetch migrated batch");
+
+    assert_eq!(wip_status, "waiting");
+    assert_eq!(current_apparatus, apparatus);
+    assert_eq!(current_location, "apparatus:default:asset-010 chiqim");
+    assert_eq!(next_apparatus, "apparatus:default:asset-011");
+    assert_eq!(parent_batch_id, "batch-parent-01");
+    assert_eq!(used_by_session_id, "session-used-01");
+    assert_eq!(used_by_apparatus, "apparatus:default:asset-011");
+    assert_eq!(processed_by_session_id, "session-proc-01");
+    assert_eq!(processed_by_apparatus, "apparatus:default:asset-011");
+
+    // b) Duplicate payload keys removed
+    assert!(!has_forbidden_keys, "payload_json must not contain any forbidden mirror keys");
+
+    // c) Unrelated payload metadata preserved
+    assert_eq!(remaining_payload["unrelated_meta"], "preserve_this_value");
+    assert_eq!(remaining_payload["stage_node_id"], "rezka_stage_1");
+    assert_eq!(remaining_payload["contained_kadr_count"], 42);
+
+    // 4. Invariant check: attempting to reintroduce any forbidden typed mirror key into payload_json is rejected by CHECK constraint
+    for forbidden_key in [
+        "status_detail",
+        "wip_status",
+        "current_apparatus",
+        "current_apparatus_key",
+        "current_location",
+        "next_apparatus",
+        "parent_batch_id",
+        "used_by_session_id",
+        "used_by_apparatus",
+        "used_by_order_id",
+        "processed_by_session_id",
+        "processed_by_apparatus",
+        "from_apparatus",
+    ] {
+        let bad_batch_id = format!("batch-bad-{forbidden_key}");
+        let bad_payload = serde_json::json!({
+            forbidden_key: "forbidden_value"
+        });
+
+        let insert_err = sqlx::query(
+            "INSERT INTO mini_progress_batches (
+                batch_id, session_id, apparatus, canonical_apparatus_id, order_id,
+                action, status, produced_qty, uom, qr_payload, label_item_code, label_item_name,
+                payload_json
+             )
+             VALUES (
+                $1, 'sess-test', $2, $2, $3,
+                'pause', 'paused', 10.0, 'm', $4, $3, 'Item Test', $5
+             )",
+        )
+        .bind(&bad_batch_id)
+        .bind(apparatus)
+        .bind(test_order_id)
+        .bind(format!("qr:{bad_batch_id}"))
+        .bind(bad_payload)
+        .execute(&pool)
+        .await
+        .expect_err(&format!("inserting {forbidden_key} into payload_json must be rejected"));
+
+        let db_err = insert_err.as_database_error().expect("db error");
+        assert_eq!(
+            db_err.constraint(),
+            Some("mini_progress_batches_wip_typed_payload_forbidden")
+        );
+    }
+
+    // Cleanup test database
+    pool.close().await;
+    let admin_pool = sqlx::PgPool::connect(&admin_url)
+        .await
+        .expect("admin cleanup");
+    sqlx::query(&format!(
+        r#"DROP DATABASE IF EXISTS "{db_name}" WITH (FORCE)"#
+    ))
+    .execute(&admin_pool)
+    .await
+    .expect("drop test db");
+}

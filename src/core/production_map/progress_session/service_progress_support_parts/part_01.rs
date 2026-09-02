@@ -521,7 +521,7 @@ pub(super) fn progress_batch_record(
         input.output_identity,
     )?;
     write_progress_batch_input_links(&mut batch.payload_json, &source_input_links);
-    sync_wip_payload_fields(&mut batch);
+    batch.refresh_status_detail();
     Ok(batch)
 }
 
@@ -588,7 +588,6 @@ pub(super) fn clear_rezka_duplicate_metrics(batch: &mut OrderProgressBatch) {
         payload.remove("total_waste");
     }
     batch.payload_json["rezka_metrics_owner"] = serde_json::json!(false);
-    sync_wip_payload_fields(batch);
 }
 
 pub(super) struct ProgressEventRecordInput<'a> {

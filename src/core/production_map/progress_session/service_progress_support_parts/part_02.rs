@@ -327,7 +327,7 @@ pub(super) fn wip_batch_in_use(
     batch.used_by_session_id = session_id.trim().to_string();
     batch.used_by_apparatus = apparatus.trim().to_string();
     batch.payload_json["wip_in_use_at_unix"] = serde_json::json!(now);
-    sync_wip_payload_fields(&mut batch);
+    batch.refresh_status_detail();
     batch
 }
 
@@ -354,7 +354,7 @@ pub(super) fn restore_self_consumed_wip(batch: &mut OrderProgressBatch) -> bool 
         batch.payload_json = serde_json::json!({});
     }
     batch.payload_json["recovered_self_consumed_wip"] = serde_json::json!(true);
-    sync_wip_payload_fields(batch);
+    batch.refresh_status_detail();
     true
 }
 
@@ -391,7 +391,6 @@ pub(super) fn repair_self_consumed_sibling_lineage(
         batch.payload_json = serde_json::json!({});
     }
     batch.payload_json["recovered_sibling_lineage"] = serde_json::json!(true);
-    sync_wip_payload_fields(batch);
     true
 }
 
@@ -409,7 +408,7 @@ pub(super) fn restore_misbound_output_wip(
     }
     batch.payload_json["recovered_output_input_confusion"] = serde_json::json!(true);
     batch.payload_json["recovered_at_unix"] = serde_json::json!(now);
-    sync_wip_payload_fields(&mut batch);
+    batch.refresh_status_detail();
     batch
 }
 
@@ -423,7 +422,6 @@ pub(super) fn wip_batch_worker_handoff(
     batch.payload_json["worker_handoff"] = serde_json::json!(true);
     batch.payload_json["roll_removed_from_apparatus"] = serde_json::json!(false);
     batch.payload_json["worker_handoff_at_unix"] = serde_json::json!(now);
-    sync_wip_payload_fields(&mut batch);
     batch
 }
 
@@ -437,7 +435,6 @@ pub(super) fn wip_batch_claimed_after_handoff(
     batch.payload_json["worker_handoff"] = serde_json::json!(false);
     batch.payload_json["roll_removed_from_apparatus"] = serde_json::json!(false);
     batch.payload_json["roll_claimed_after_handoff_at_unix"] = serde_json::json!(now);
-    sync_wip_payload_fields(&mut batch);
     batch
 }
 
@@ -463,7 +460,7 @@ pub(super) fn wip_batch_removed_from_apparatus(
     batch.payload_json["roll_removed_finished_goods_kg"] = serde_json::json!(finished_goods_kg);
     batch.payload_json["roll_removed_bobina_kg"] = serde_json::json!(bobina_kg);
     batch.bobina_kg = Some(bobina_kg);
-    sync_wip_payload_fields(&mut batch);
+    batch.refresh_status_detail();
     batch
 }
 
@@ -480,7 +477,7 @@ pub(super) fn wip_batch_processed(
     batch.processed_by_session_id = session_id.trim().to_string();
     batch.processed_by_apparatus = apparatus.trim().to_string();
     batch.payload_json["wip_processed_at_unix"] = serde_json::json!(now);
-    sync_wip_payload_fields(&mut batch);
+    batch.refresh_status_detail();
     batch
 }
 
@@ -523,34 +520,6 @@ pub(super) fn opening_wip_batch_waiting(
     batch.processed_by_apparatus.clear();
     batch.updated_at_unix = now;
     batch
-}
-
-pub(super) fn sync_wip_payload_fields(batch: &mut OrderProgressBatch) {
-    if !batch.payload_json.is_object() {
-        batch.payload_json = serde_json::json!({});
-    }
-    batch.refresh_status_detail();
-    if batch.current_apparatus_key.trim().is_empty() {
-        batch.current_apparatus_key =
-            super::types::canonical_apparatus_key(&batch.current_apparatus);
-    }
-    if let Some(lineage) = QolipLineage::from_payload(&batch.payload_json) {
-        lineage.write_to_payload(&mut batch.payload_json);
-    }
-    batch.payload_json["status_detail"] = serde_json::json!(batch.status_detail);
-    batch.payload_json["wip_status"] = serde_json::json!(batch.wip_status.as_str());
-    batch.payload_json["current_apparatus"] = serde_json::json!(batch.current_apparatus);
-    batch.payload_json["current_apparatus_key"] = serde_json::json!(batch.current_apparatus_key);
-    batch.payload_json["current_location"] = serde_json::json!(batch.current_location);
-    batch.payload_json["next_apparatus"] = serde_json::json!(batch.next_apparatus);
-    batch.payload_json["parent_batch_id"] = serde_json::json!(batch.parent_batch_id);
-    batch.payload_json["used_by_session_id"] = serde_json::json!(batch.used_by_session_id);
-    batch.payload_json["used_by_apparatus"] = serde_json::json!(batch.used_by_apparatus);
-    batch.payload_json["used_by_order_id"] = serde_json::json!(batch.order_id);
-    batch.payload_json["processed_by_session_id"] =
-        serde_json::json!(batch.processed_by_session_id);
-    batch.payload_json["processed_by_apparatus"] = serde_json::json!(batch.processed_by_apparatus);
-    batch.payload_json["from_apparatus"] = serde_json::json!(batch.apparatus);
 }
 
 fn clear_wip_processing_fields(batch: &mut OrderProgressBatch) {

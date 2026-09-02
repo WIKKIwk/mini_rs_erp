@@ -296,7 +296,6 @@ impl ProductionMapService {
             wip_batch_in_use(parent_batch.clone(), apparatus, &session.session_id, now);
         input_batch.payload_json["recovered_original_input_link"] = serde_json::json!(true);
         input_batch.payload_json["recovered_at_unix"] = serde_json::json!(now);
-        sync_wip_payload_fields(&mut input_batch);
         Ok(Some(RecoveredSessionInputBatch {
             input_batch,
             output_update: restore_misbound_output_wip(output_batch, now),

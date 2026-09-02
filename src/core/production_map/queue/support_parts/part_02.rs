@@ -17,12 +17,6 @@ pub(super) fn mark_finished_goods_batch_received(
     batch.payload_json["received_at_unix"] = serde_json::json!(now);
     batch.payload_json["finished_goods_stock_id"] = serde_json::json!(stock.id);
     batch.refresh_status_detail();
-    batch.payload_json["status_detail"] = serde_json::json!(batch.status_detail);
-    batch.payload_json["wip_status"] = serde_json::json!(batch.wip_status.as_str());
-    batch.payload_json["current_location"] = serde_json::json!(batch.current_location);
-    batch.payload_json["processed_by_session_id"] =
-        serde_json::json!(batch.processed_by_session_id);
-    batch.payload_json["processed_by_apparatus"] = serde_json::json!(batch.processed_by_apparatus);
 }
 
 fn progress_batch_order_key(batch: &OrderProgressBatch) -> (u128, &str) {

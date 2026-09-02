@@ -307,7 +307,7 @@ impl ProductionMapService {
                     .map(|mut batch| {
                         batch.status = OrderProgressBatchStatus::Resumed;
                         batch.payload_json = resumed_batch_payload(&batch, actor, now);
-                        sync_wip_payload_fields(&mut batch);
+                        batch.refresh_status_detail();
                         batch
                     })
                     .collect::<Vec<_>>()
@@ -382,7 +382,7 @@ impl ProductionMapService {
         }
         batch.status = OrderProgressBatchStatus::Resumed;
         batch.payload_json = resumed_batch_payload(&batch, actor, now);
-        sync_wip_payload_fields(&mut batch);
+        batch.refresh_status_detail();
         let session = self
             .store
             .order_run_session(&batch.session_id)

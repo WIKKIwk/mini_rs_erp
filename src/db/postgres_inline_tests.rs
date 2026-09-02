@@ -196,6 +196,7 @@ mod tests {
         assert!(versions.contains("0072_canonical_identity_indexes"));
         assert!(versions.contains("0087_queue_event_stage_identity"));
         assert!(versions.contains("0088_order_run_session_stage_identity"));
+        assert!(versions.contains("0089_progress_batch_typed_payload_mirrors"));
         assert!(POSTGRES_MIGRATIONS.iter().all(|(version, sql)| {
             !version.trim().is_empty() && migration_checksum(sql).len() == 64
         }));
@@ -287,6 +288,36 @@ mod tests {
             "check(stage_node_id=btrim(stage_node_id))",
             "mini_order_run_sessions_stage_payload_forbidden",
             "check(not(payload_json?'stage_node_id'))",
+        ] {
+            assert!(compact.contains(invariant), "missing invariant: {invariant}");
+        }
+    }
+
+    #[test]
+    fn progress_batch_typed_payload_mirrors_migration_is_registered() {
+        let migration = POSTGRES_MIGRATIONS
+            .iter()
+            .find(|(version, _)| *version == "0089_progress_batch_typed_payload_mirrors")
+            .map(|(_, sql)| sql.to_lowercase())
+            .expect("progress batch typed payload mirrors migration");
+        let compact = migration.split_whitespace().collect::<String>();
+
+        for invariant in [
+            "mini_progress_batches_wip_typed_payload_forbidden",
+            "check(not(payload_json?|array[",
+            "'status_detail'",
+            "'wip_status'",
+            "'current_apparatus'",
+            "'current_apparatus_key'",
+            "'current_location'",
+            "'next_apparatus'",
+            "'parent_batch_id'",
+            "'used_by_session_id'",
+            "'used_by_apparatus'",
+            "'used_by_order_id'",
+            "'processed_by_session_id'",
+            "'processed_by_apparatus'",
+            "'from_apparatus'",
         ] {
             assert!(compact.contains(invariant), "missing invariant: {invariant}");
         }

@@ -369,9 +369,6 @@ fn repair_current_apparatus_fields(batch: &mut OrderProgressBatch) {
     if batch.current_location.trim().is_empty() {
         batch.current_location = batch.current_apparatus.clone();
     }
-    batch.payload_json["current_apparatus"] = serde_json::json!(batch.current_apparatus);
-    batch.payload_json["current_apparatus_key"] = serde_json::json!(batch.current_apparatus_key);
-    batch.payload_json["current_location"] = serde_json::json!(batch.current_location);
 }
 
 fn repair_next_apparatus_field(
@@ -386,7 +383,6 @@ fn repair_next_apparatus_field(
     };
     if let Some(next) = chain::next_work_stage_station(map, &batch.current_apparatus) {
         batch.next_apparatus = next;
-        batch.payload_json["next_apparatus"] = serde_json::json!(batch.next_apparatus);
     }
 }
 

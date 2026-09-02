@@ -354,7 +354,6 @@ impl ProductionMapService {
                     processed_input.payload_json["rezka_frame_issues"] =
                         frame_issues.clone();
                     processed_input.payload_json["rezka_issue"] = serde_json::json!(true);
-                    sync_wip_payload_fields(&mut processed_input);
                 }
                 progress_batch_updates.push(processed_input);
             }

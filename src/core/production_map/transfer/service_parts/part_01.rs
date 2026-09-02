@@ -171,15 +171,7 @@ impl ProductionMapService {
             progress_batch.payload_json = serde_json::json!({});
         }
         progress_batch.payload_json["last_apparatus_transfer"] = transfer_payload;
-        progress_batch.payload_json["current_apparatus"] =
-            serde_json::json!(progress_batch.current_apparatus);
-        progress_batch.payload_json["current_apparatus_key"] =
-            serde_json::json!(progress_batch.current_apparatus_key);
-        progress_batch.payload_json["current_location"] =
-            serde_json::json!(progress_batch.current_location);
         progress_batch.refresh_status_detail();
-        progress_batch.payload_json["status_detail"] =
-            serde_json::json!(progress_batch.status_detail);
 
         let mut progress_batch_updates = Vec::new();
         if !progress_batch.parent_batch_id.trim().is_empty() {
@@ -196,14 +188,7 @@ impl ProductionMapService {
                 return Err(ProductionMapError::ApparatusTransferProgressMismatch);
             }
             parent_batch.next_apparatus = to_id.clone();
-            if !parent_batch.payload_json.is_object() {
-                parent_batch.payload_json = serde_json::json!({});
-            }
-            parent_batch.payload_json["next_apparatus"] =
-                serde_json::json!(parent_batch.next_apparatus);
             parent_batch.refresh_status_detail();
-            parent_batch.payload_json["status_detail"] =
-                serde_json::json!(parent_batch.status_detail);
             progress_batch_updates.push(parent_batch);
         }
 

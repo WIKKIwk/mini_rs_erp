@@ -3913,9 +3913,9 @@ async fn downstream_start_marks_previous_stage_batch_in_use() {
         .progress_batch_for_qr("", &first_batch.qr_payload)
         .await
         .expect("updated first batch");
-    assert_eq!(updated.payload_json["wip_status"], "in_use");
-    assert_eq!(updated.payload_json["current_apparatus"], second);
-    assert_eq!(updated.payload_json["used_by_order_id"], order_id);
+    assert_eq!(updated.wip_status, OrderProgressBatchWipStatus::InUse);
+    assert_eq!(updated.current_apparatus, second);
+    assert_eq!(updated.order_id, order_id);
 }
 
 #[tokio::test]
@@ -4067,10 +4067,6 @@ async fn wip_listing_backfills_missing_current_and_next_apparatus_from_map() {
     batch.current_apparatus_key.clear();
     batch.current_location.clear();
     batch.next_apparatus.clear();
-    batch.payload_json["current_apparatus"] = serde_json::json!("");
-    batch.payload_json["current_apparatus_key"] = serde_json::json!("");
-    batch.payload_json["current_location"] = serde_json::json!("");
-    batch.payload_json["next_apparatus"] = serde_json::json!("");
     store
         .put_order_progress_batch(batch)
         .await
@@ -4096,8 +4092,6 @@ async fn wip_listing_backfills_missing_current_and_next_apparatus_from_map() {
         queue_state::apparatus_search_key(first)
     );
     assert_eq!(batches[0].next_apparatus, second);
-    assert_eq!(batches[0].payload_json["current_apparatus"], first);
-    assert_eq!(batches[0].payload_json["next_apparatus"], second);
 }
 
 #[tokio::test]
@@ -4319,14 +4313,14 @@ async fn downstream_output_processes_input_batch_and_links_new_wip_batch() {
         .progress_batch_for_qr("", &first_batch.qr_payload)
         .await
         .expect("processed first batch");
-    assert_eq!(input.payload_json["wip_status"], "processed");
-    assert_eq!(input.payload_json["processed_by_apparatus"], second);
+    assert_eq!(input.wip_status, OrderProgressBatchWipStatus::Processed);
+    assert_eq!(input.processed_by_apparatus, second);
     assert_eq!(input.status_detail.flow_status, "consumed_by_next_stage");
 
     let output = completed.progress_batch.expect("second output batch");
-    assert_eq!(output.payload_json["wip_status"], "waiting");
-    assert_eq!(output.payload_json["parent_batch_id"], first_batch.batch_id);
-    assert_eq!(output.payload_json["from_apparatus"], second);
+    assert_eq!(output.wip_status, OrderProgressBatchWipStatus::Waiting);
+    assert_eq!(output.parent_batch_id, first_batch.batch_id);
+    assert_eq!(output.apparatus, second);
     assert_eq!(output.status_detail.work_status, "completed");
     assert_eq!(output.status_detail.flow_status, "free_wip");
     assert!(output.status_detail.stock_status.is_empty());
