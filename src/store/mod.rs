@@ -8,7 +8,6 @@ mod chat_media_r2_requests;
 mod chat_media_r2_signing;
 mod chat_media_r2_transfer;
 pub mod json_file;
-pub mod production_map_store;
 pub mod profile_avatar_local;
 pub mod profile_avatar_r2;
 pub mod profile_store;
