@@ -59,11 +59,19 @@ BEGIN
         RETURN FALSE;
     END IF;
     arr := payload -> 'input_lineage';
-    IF jsonb_typeof(arr) IS DISTINCT FROM 'array' OR jsonb_array_length(arr) = 0 THEN
+    -- An explicitly stored empty array is valid canonical lineage: the Rust
+    -- parser accepts it as an empty collection, and the completion flow
+    -- deliberately writes it.
+    IF jsonb_typeof(arr) IS DISTINCT FROM 'array' THEN
         RETURN FALSE;
     END IF;
     FOR el IN SELECT * FROM jsonb_array_elements(arr) LOOP
         IF jsonb_typeof(el) IS DISTINCT FROM 'object' THEN
+            RETURN FALSE;
+        END IF;
+        -- Strict string check: `->>` would coerce JSON numbers/booleans to
+        -- text, but Rust deserializes this field only as String.
+        IF jsonb_typeof(el -> 'input_batch_id') IS DISTINCT FROM 'string' THEN
             RETURN FALSE;
         END IF;
         v_batch := btrim(COALESCE(el ->> 'input_batch_id', ''));
@@ -132,11 +140,17 @@ BEGIN
         RETURN FALSE;
     END IF;
     arr := payload -> 'source_input_links';
-    IF jsonb_typeof(arr) IS DISTINCT FROM 'array' OR jsonb_array_length(arr) = 0 THEN
+    -- An explicitly stored empty array is valid canonical lineage.
+    IF jsonb_typeof(arr) IS DISTINCT FROM 'array' THEN
         RETURN FALSE;
     END IF;
     FOR el IN SELECT * FROM jsonb_array_elements(arr) LOOP
         IF jsonb_typeof(el) IS DISTINCT FROM 'object' THEN
+            RETURN FALSE;
+        END IF;
+        -- Strict string check: `->>` would coerce JSON numbers/booleans to
+        -- text, but Rust deserializes this field only as String.
+        IF jsonb_typeof(el -> 'input_batch_id') IS DISTINCT FROM 'string' THEN
             RETURN FALSE;
         END IF;
         v_batch := btrim(COALESCE(el ->> 'input_batch_id', ''));
@@ -181,7 +195,9 @@ BEGIN
         RETURN FALSE;
     END IF;
     arr := payload -> 'rezka_active_partial_rolls';
-    IF jsonb_typeof(arr) IS DISTINCT FROM 'array' OR jsonb_array_length(arr) = 0 THEN
+    -- An explicitly stored empty array is valid canonical lineage: the Rust
+    -- parser accepts it, and the completion flow deliberately writes it.
+    IF jsonb_typeof(arr) IS DISTINCT FROM 'array' THEN
         RETURN FALSE;
     END IF;
     FOR el IN SELECT * FROM jsonb_array_elements(arr) LOOP

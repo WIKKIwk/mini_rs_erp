@@ -22,6 +22,8 @@ const APPARATUS_3: &str = "apparatus:default:bosma_7";
 const APPARATUS_4: &str = "apparatus:default:asset-008";
 const APPARATUS_5: &str = "apparatus:default:bosma_8";
 const APPARATUS_6: &str = "apparatus:default:bosma_9";
+const APPARATUS_7: &str = "apparatus:default:paket";
+const APPARATUS_8: &str = "apparatus:default:flexo_pechat";
 const ORDER: &str = "order-cutover-1";
 
 // Fixed seed instants (UTC) and their epoch seconds.
@@ -464,6 +466,61 @@ async fn rezka_lineage_payload_cutover_backfills_and_drops_mirrors() {
                 "source_apparatus": "apparatus:default:asset-010",
                 "source_kind": "progress_batch",
                 "sequence_no": 1,
+            },
+        ])
+    );
+
+    // Explicit `[]` is valid canonical lineage: stale mirrors must not
+    // overwrite it, matching the Rust parser and the completion flow.
+    let kept_empty: serde_json::Value = sqlx::query_scalar(
+        "SELECT payload_json FROM mini_order_run_sessions
+         WHERE session_id = 'run-empty-kept'",
+    )
+    .fetch_one(&pool)
+    .await
+    .expect("kept empty payload");
+    assert_eq!(kept_empty["input_lineage"], serde_json::json!([]));
+    assert_eq!(
+        kept_empty["rezka_active_partial_rolls"],
+        serde_json::json!([])
+    );
+    assert_eq!(
+        order_run_input_links_from_payload(&kept_empty).expect("empty lineage parses"),
+        Vec::<OrderRunInputLink>::new()
+    );
+    assert_eq!(
+        rezka_active_partial_rolls_from_payload(&kept_empty).expect("empty rolls parse"),
+        Vec::<RezkaActivePartialRoll>::new()
+    );
+    let kept_empty_output: serde_json::Value = sqlx::query_scalar(
+        "SELECT payload_json->'source_input_links'
+         FROM mini_progress_batches WHERE batch_id = 'batch-empty-kept'",
+    )
+    .fetch_one(&pool)
+    .await
+    .expect("kept empty output lineage");
+    assert_eq!(kept_empty_output, serde_json::json!([]));
+
+    // A JSON number input_batch_id is rejected and recovered from the mirror.
+    let renumbered: serde_json::Value = sqlx::query_scalar(
+        "SELECT payload_json->'input_lineage'
+         FROM mini_order_run_sessions WHERE session_id = 'run-numeric-id'",
+    )
+    .fetch_one(&pool)
+    .await
+    .expect("renumbered lineage");
+    assert_eq!(
+        renumbered,
+        serde_json::json!([
+            {
+                "input_batch_id": "wip-parent-1",
+                "input_qr_payload": "qr:wip-parent-1",
+                "source_apparatus": "apparatus:default:asset-010",
+                "source_kind": "progress_batch",
+                "stage_node_id": "rezka-stage",
+                "sequence_no": 1,
+                "status": "in_use",
+                "linked_at_unix": EPOCH_START,
             },
         ])
     );
@@ -1175,6 +1232,135 @@ async fn seed_legacy_lineage(pool: &sqlx::PgPool) {
     .execute(pool)
     .await
     .expect("seed bad-kind recovery mirror");
+
+    // Explicit empty arrays are valid canonical lineage and must be kept even
+    // when stale mirrors exist (the completion flow writes `[]` deliberately).
+    sqlx::query(
+        "INSERT INTO mini_order_run_sessions (
+             session_id, apparatus, canonical_apparatus_id, order_id, status, stage_node_id,
+             worker_role, worker_ref, worker_display_name,
+             started_at, updated_at, payload_json
+         ) VALUES (
+             'run-empty-kept', $1, $1, $2, 'active', 'rezka-stage',
+             'aparatchi', 'worker-1', 'Worker',
+             $3::timestamptz, $3::timestamptz,
+             '{\"input_lineage\": [], \"rezka_active_partial_rolls\": []}'::jsonb
+         )",
+    )
+    .bind(APPARATUS_7)
+    .bind(ORDER)
+    .bind(T_START)
+    .execute(pool)
+    .await
+    .expect("seed empty-lineage session");
+    sqlx::query(
+        "INSERT INTO mini_order_run_input_links (
+             session_id, order_id, target_apparatus,
+             input_batch_id, input_qr_payload, source_apparatus, source_kind,
+             stage_node_id, sequence_no, status, linked_at, processed_at
+         ) VALUES (
+             'run-empty-kept', $1, $2,
+             'wip-stale-mirror', 'qr:stale', $2, 'progress_batch',
+             'rezka-stage', 1, 'in_use', $3::timestamptz, NULL)",
+    )
+    .bind(ORDER)
+    .bind(APPARATUS_7)
+    .bind(T_START)
+    .execute(pool)
+    .await
+    .expect("seed empty-lineage stale mirror");
+    sqlx::query(
+        "INSERT INTO mini_rezka_active_partial_rolls (
+             session_id, order_id, apparatus, slot_index, generation,
+             contained_kadr_count, status, source_input_batch_ids,
+             started_at, updated_at
+         ) VALUES (
+             'run-empty-kept', $1, $2, 1, 1,
+             1, 'active', ARRAY['wip-stale-mirror'],
+             $3::timestamptz, $3::timestamptz
+         )",
+    )
+    .bind(ORDER)
+    .bind(APPARATUS_7)
+    .bind(T_START)
+    .execute(pool)
+    .await
+    .expect("seed empty-rolls stale mirror");
+    sqlx::query(
+        "INSERT INTO mini_progress_batches (
+             batch_id, session_id, apparatus, canonical_apparatus_id, order_id,
+             action, status,
+             produced_qty, uom, qr_payload, label_item_code, label_item_name,
+             worker_role, worker_ref, worker_display_name, wip_status, payload_json
+         ) VALUES (
+             'batch-empty-kept', 'run-empty-kept', $1, $1, $2,
+             'complete', 'completed',
+             10, 'kg', 'qr:batch-empty-kept', 'CUTOVER', 'Empty output',
+             'aparatchi', 'worker-1', 'Worker', 'waiting',
+             '{\"source_input_links\": []}'::jsonb
+         )",
+    )
+    .bind(APPARATUS_7)
+    .bind(ORDER)
+    .execute(pool)
+    .await
+    .expect("seed empty output batch");
+    sqlx::query(
+        "INSERT INTO mini_progress_batch_input_links (
+             output_batch_id, session_id, order_id,
+             input_batch_id, input_qr_payload, source_apparatus, source_kind, sequence_no
+         ) VALUES (
+             'batch-empty-kept', 'run-empty-kept', $1,
+             'wip-stale-mirror', 'qr:stale', $2, 'progress_batch', 1)",
+    )
+    .bind(ORDER)
+    .bind(APPARATUS_7)
+    .execute(pool)
+    .await
+    .expect("seed empty-output stale mirror");
+
+    // A JSON number is not a valid input_batch_id (Rust needs String) and
+    // must lose to the valid mirror.
+    sqlx::query(
+        "INSERT INTO mini_order_run_sessions (
+             session_id, apparatus, canonical_apparatus_id, order_id, status, stage_node_id,
+             worker_role, worker_ref, worker_display_name,
+             started_at, updated_at, payload_json
+         ) VALUES (
+             'run-numeric-id', $1, $1, $2, 'active', 'rezka-stage',
+             'aparatchi', 'worker-1', 'Worker',
+             $3::timestamptz, $3::timestamptz,
+             '{\"input_lineage\": [{\"input_batch_id\": 123,
+                \"input_qr_payload\": \"qr:x\",
+                \"source_apparatus\": \"apparatus:default:asset-010\",
+                \"source_kind\": \"progress_batch\",
+                \"stage_node_id\": \"rezka-stage\",
+                \"sequence_no\": 1, \"status\": \"in_use\",
+                \"linked_at_unix\": 1772352000}]}'::jsonb
+         )",
+    )
+    .bind(APPARATUS_8)
+    .bind(ORDER)
+    .bind(T_START)
+    .execute(pool)
+    .await
+    .expect("seed numeric-id session");
+    sqlx::query(
+        "INSERT INTO mini_order_run_input_links (
+             session_id, order_id, target_apparatus,
+             input_batch_id, input_qr_payload, source_apparatus, source_kind,
+             stage_node_id, sequence_no, status, linked_at, processed_at
+         ) VALUES (
+             'run-numeric-id', $1, $2,
+             'wip-parent-1', 'qr:wip-parent-1', 'apparatus:default:asset-010', 'progress_batch',
+             'rezka-stage', 1, 'in_use', $3::timestamptz, NULL)",
+    )
+    .bind(ORDER)
+    .bind(APPARATUS_8)
+    .bind(T_START)
+    .execute(pool)
+    .await
+    .expect("seed numeric-id recovery mirror");
 }
 
 #[tokio::test]
