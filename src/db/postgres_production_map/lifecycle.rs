@@ -130,9 +130,8 @@ pub(crate) async fn refresh_production_order_lifecycle_tx(
     let current_operational_status =
         ProductionOrderOperationalStatus::parse(&current_operational_status)?;
 
-    let Ok(map) = serde_json::from_value::<ProductionMapDefinition>(map_json) else {
-        return Ok(());
-    };
+    let map = serde_json::from_value::<ProductionMapDefinition>(map_json)
+        .map_err(|_| ProductionMapError::StoreFailed)?;
     let queue_rows = sqlx::query_as::<_, (String, String)>(
         "SELECT canonical_apparatus_id, state
          FROM mini_queue_states

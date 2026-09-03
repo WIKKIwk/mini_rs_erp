@@ -1759,8 +1759,8 @@ async fn grouped_rezka_wip_survives_lamination_and_reenters_same_final_rezka() {
         .await
         .expect("frame-mismatched Merge leaves final Rezka unchanged");
     let unchanged_snapshot = json_body(unchanged_snapshot).await;
-    let unchanged_control = &unchanged_snapshot["queue_action_controls"]
-        ["apparatus:default:asset-010"][order_id];
+    let unchanged_control =
+        &unchanged_snapshot["queue_action_controls"]["apparatus:default:asset-010"][order_id];
     assert_eq!(
         unchanged_control["rezka_output_kadr_counts"],
         serde_json::json!([1])

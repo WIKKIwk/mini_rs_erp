@@ -139,7 +139,8 @@ pub(crate) async fn refresh_production_order_lifecycles(
             if batch.order_id.trim() != order_id {
                 continue;
             }
-            match super::super::types::OrderProgressBatchStatusDetail::flow_status_for_batch(batch) {
+            match super::super::types::OrderProgressBatchStatusDetail::flow_status_for_batch(batch)
+            {
                 "waiting_next_stage" => waiting_next_stage_count += 1,
                 "in_progress" => in_use_wip_count += 1,
                 "free_wip" => free_wip_count += 1,
@@ -160,14 +161,13 @@ pub(crate) async fn refresh_production_order_lifecycles(
             record.operational_status = operational_status;
             record.operational_status_changed_at_unix += 1;
         }
-        let (flow_status, stock_status) =
-            super::super::types::derive_order_flow_and_stock_status(
-                operational_status.as_str(),
-                free_wip_count,
-                waiting_next_stage_count,
-                in_use_wip_count,
-                accepted_wip_count,
-            );
+        let (flow_status, stock_status) = super::super::types::derive_order_flow_and_stock_status(
+            operational_status.as_str(),
+            free_wip_count,
+            waiting_next_stage_count,
+            in_use_wip_count,
+            accepted_wip_count,
+        );
         record.flow_status = flow_status.to_string();
         record.stock_status = stock_status.to_string();
     }

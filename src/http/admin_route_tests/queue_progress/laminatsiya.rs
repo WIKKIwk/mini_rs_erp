@@ -1585,8 +1585,8 @@ async fn laminatsiya_merge_splices_same_order_wips_and_rejects_another_order() {
         .await
         .expect("laminatsiya merge control");
     let snapshot_body = json_body(snapshot).await;
-    let action_control = &snapshot_body["queue_action_controls"]
-        ["apparatus:default:asset-007"][order_id];
+    let action_control =
+        &snapshot_body["queue_action_controls"]["apparatus:default:asset-007"][order_id];
     assert!(
         action_control["allowed_actions"]
             .as_array()
@@ -1652,15 +1652,17 @@ async fn laminatsiya_merge_splices_same_order_wips_and_rejects_another_order() {
     let lineage = merged_body["session"]["payload_json"]["input_lineage"]
         .as_array()
         .expect("merged lineage");
-    assert!(lineage.iter().any(|link| {
-        link["input_batch_id"] == first_batch_id && link["status"] == "processed"
-    }));
-    assert!(lineage.iter().any(|link| {
-        link["input_batch_id"] == second_batch_id && link["status"] == "in_use"
-    }));
     assert!(
-        merged_body["session"]["payload_json"]["rezka_active_partial_rolls"].is_null()
+        lineage.iter().any(|link| {
+            link["input_batch_id"] == first_batch_id && link["status"] == "processed"
+        })
     );
+    assert!(
+        lineage.iter().any(|link| {
+            link["input_batch_id"] == second_batch_id && link["status"] == "in_use"
+        })
+    );
+    assert!(merged_body["session"]["payload_json"]["rezka_active_partial_rolls"].is_null());
 
     let completed = router
         .clone()
@@ -1693,6 +1695,14 @@ async fn laminatsiya_merge_splices_same_order_wips_and_rejects_another_order() {
     let source_links = completed_body["progress_batch"]["payload_json"]["source_input_links"]
         .as_array()
         .expect("output source links");
-    assert!(source_links.iter().any(|link| link["input_batch_id"] == first_batch_id));
-    assert!(source_links.iter().any(|link| link["input_batch_id"] == second_batch_id));
+    assert!(
+        source_links
+            .iter()
+            .any(|link| link["input_batch_id"] == first_batch_id)
+    );
+    assert!(
+        source_links
+            .iter()
+            .any(|link| link["input_batch_id"] == second_batch_id)
+    );
 }

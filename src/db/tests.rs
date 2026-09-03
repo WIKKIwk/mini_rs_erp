@@ -8,6 +8,7 @@ mod mini_order;
 mod opening_wip;
 mod production_map;
 mod qolip_checkout;
+mod rezka_lineage_cutover;
 mod training_workspace;
 mod warehouse;
 mod worker;

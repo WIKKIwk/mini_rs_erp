@@ -50,12 +50,19 @@ async fn memory_store_persists_session_partial_roll_and_output_source_lineage() 
         .await
         .expect("session");
 
+    let stored_sessions = ProductionMapStorePort::order_run_sessions_for_order(&store, "order-1")
+        .await
+        .expect("sessions");
+    let stored_session = stored_sessions
+        .iter()
+        .find(|session| session.session_id.trim() == "run-rezka-1")
+        .expect("stored session");
     assert_eq!(
-        store.order_run_input_links("run-rezka-1").await,
+        order_run_input_links_from_payload(&stored_session.payload_json).expect("lineage"),
         input_links
     );
     assert_eq!(
-        store.rezka_active_partial_rolls("run-rezka-1").await,
+        rezka_active_partial_rolls_from_payload(&stored_session.payload_json).expect("rolls"),
         active_rolls
     );
 
@@ -104,8 +111,12 @@ async fn memory_store_persists_session_partial_roll_and_output_source_lineage() 
         .await
         .expect("output batch persistence");
 
+    let stored_batch = ProductionMapStorePort::progress_batch(&store, "rezka-output-1")
+        .await
+        .expect("batch")
+        .expect("stored batch");
     assert_eq!(
-        store.progress_batch_input_links("rezka-output-1").await,
+        progress_batch_input_links_from_payload(&stored_batch.payload_json).expect("links"),
         output_links
     );
 }

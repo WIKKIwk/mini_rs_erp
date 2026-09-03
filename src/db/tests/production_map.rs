@@ -410,10 +410,12 @@ async fn postgres_wip_batches_match_exact_canonical_apparatus_id() {
     seed_standard_canonical_apparatus(&pool).await;
     let store = Arc::new(PostgresProductionMapStore::new(pool.clone()));
     let service = ProductionMapService::new_for_test(store.clone());
+    let wip_map = test_map("order-wip-suffix", "9001", "WIP-SUFFIX");
     sqlx::query(
         "INSERT INTO mini_production_maps (id, product_code, title, map_json)
-         VALUES ('order-wip-suffix', 'WIP-SUFFIX', 'WIP suffix', '{}'::jsonb)",
+         VALUES ('order-wip-suffix', 'WIP-SUFFIX', 'WIP suffix', $1)",
     )
+    .bind(serde_json::to_value(&wip_map).expect("valid wip test map"))
     .execute(&pool)
     .await
     .expect("seed WIP production map");
@@ -477,10 +479,12 @@ async fn postgres_wip_batches_scan_past_first_page_for_matching_apparatus() {
     seed_standard_canonical_apparatus(&pool).await;
     let store = Arc::new(PostgresProductionMapStore::new(pool.clone()));
     let service = ProductionMapService::new_for_test(store.clone());
+    let wip_map = test_map("order-wip-suffix", "9001", "WIP-SUFFIX");
     sqlx::query(
         "INSERT INTO mini_production_maps (id, product_code, title, map_json)
-         VALUES ('order-wip-suffix', 'WIP-SUFFIX', 'WIP suffix', '{}'::jsonb)",
+         VALUES ('order-wip-suffix', 'WIP-SUFFIX', 'WIP suffix', $1)",
     )
+    .bind(serde_json::to_value(&wip_map).expect("valid wip test map"))
     .execute(&pool)
     .await
     .expect("seed target WIP production map");
@@ -1042,7 +1046,10 @@ async fn postgres_progress_batch_typed_payload_mirrors_real_cutover_and_invarian
     assert_eq!(processed_by_apparatus, "apparatus:default:asset-011");
 
     // b) Duplicate payload keys removed
-    assert!(!has_forbidden_keys, "payload_json must not contain any forbidden mirror keys");
+    assert!(
+        !has_forbidden_keys,
+        "payload_json must not contain any forbidden mirror keys"
+    );
 
     // c) Unrelated payload metadata preserved
     assert_eq!(remaining_payload["unrelated_meta"], "preserve_this_value");
@@ -1088,7 +1095,9 @@ async fn postgres_progress_batch_typed_payload_mirrors_real_cutover_and_invarian
         .bind(bad_payload)
         .execute(&pool)
         .await
-        .expect_err(&format!("inserting {forbidden_key} into payload_json must be rejected"));
+        .expect_err(&format!(
+            "inserting {forbidden_key} into payload_json must be rejected"
+        ));
 
         let db_err = insert_err.as_database_error().expect("db error");
         assert_eq!(
@@ -1177,7 +1186,10 @@ async fn postgres_drop_progress_batch_current_apparatus_key_real_migration_and_i
     .fetch_one(&pool)
     .await
     .expect("check column pre-0090");
-    assert!(col_exists_pre, "current_apparatus_key column must exist pre-0090");
+    assert!(
+        col_exists_pre,
+        "current_apparatus_key column must exist pre-0090"
+    );
 
     // Verify pre-0090: obsolete index exists
     let idx_exists_pre: bool = sqlx::query_scalar(
@@ -1271,7 +1283,10 @@ async fn postgres_drop_progress_batch_current_apparatus_key_real_migration_and_i
     .fetch_one(&pool)
     .await
     .expect("check column post-0090");
-    assert!(!col_exists_post, "current_apparatus_key column must be dropped by 0090");
+    assert!(
+        !col_exists_post,
+        "current_apparatus_key column must be dropped by 0090"
+    );
 
     // b) Obsolete index is dropped
     let idx_exists_post: bool = sqlx::query_scalar(
@@ -1295,7 +1310,10 @@ async fn postgres_drop_progress_batch_current_apparatus_key_real_migration_and_i
     .fetch_one(&pool)
     .await
     .expect("check new index post-0090");
-    assert!(new_idx_exists_post, "canonical current apparatus index must exist post-0090");
+    assert!(
+        new_idx_exists_post,
+        "canonical current apparatus index must exist post-0090"
+    );
 
     // d) Row 3 was repaired by migration 0090
     let (repaired_canonical_id, repaired_current_apparatus): (String, String) = sqlx::query_as(
@@ -1360,7 +1378,10 @@ async fn postgres_drop_progress_batch_current_apparatus_key_real_migration_and_i
             10,
         ))
         .await;
-    assert!(batches_display.is_err(), "non-canonical apparatus query must fail validation");
+    assert!(
+        batches_display.is_err(),
+        "non-canonical apparatus query must fail validation"
+    );
 
     // Cleanup test database
     pool.close().await;
@@ -1533,43 +1554,54 @@ async fn postgres_0091_migration_backfill_and_write_side_persistence() {
     assert!(flow_col_post, "flow_status column must exist post-0091");
 
     // b) Backfilled values match exact df6b50f semantics
-    let (free_flow, free_stock): (String, String) = sqlx::query_as(
-        "SELECT flow_status, stock_status FROM mini_production_maps WHERE id = $1",
-    )
-    .bind(order_free_wip)
-    .fetch_one(&pool)
-    .await
-    .expect("fetch free_wip map row");
-    assert_eq!(free_flow, "free_wip", "order with FG waiting must backfill to free_wip");
-    assert_eq!(free_stock, "", "order with FG waiting must have empty stock_status");
+    let (free_flow, free_stock): (String, String) =
+        sqlx::query_as("SELECT flow_status, stock_status FROM mini_production_maps WHERE id = $1")
+            .bind(order_free_wip)
+            .fetch_one(&pool)
+            .await
+            .expect("fetch free_wip map row");
+    assert_eq!(
+        free_flow, "free_wip",
+        "order with FG waiting must backfill to free_wip"
+    );
+    assert_eq!(
+        free_stock, "",
+        "order with FG waiting must have empty stock_status"
+    );
 
-    let (accepted_flow, accepted_stock): (String, String) = sqlx::query_as(
-        "SELECT flow_status, stock_status FROM mini_production_maps WHERE id = $1",
-    )
-    .bind(order_accepted_stock)
-    .fetch_one(&pool)
-    .await
-    .expect("fetch accepted map row");
-    assert_eq!(accepted_flow, "accepted_to_stock", "order with warehouse accepted FG must backfill to accepted_to_stock");
-    assert_eq!(accepted_stock, "accepted", "order with warehouse accepted FG must backfill to accepted");
+    let (accepted_flow, accepted_stock): (String, String) =
+        sqlx::query_as("SELECT flow_status, stock_status FROM mini_production_maps WHERE id = $1")
+            .bind(order_accepted_stock)
+            .fetch_one(&pool)
+            .await
+            .expect("fetch accepted map row");
+    assert_eq!(
+        accepted_flow, "accepted_to_stock",
+        "order with warehouse accepted FG must backfill to accepted_to_stock"
+    );
+    assert_eq!(
+        accepted_stock, "accepted",
+        "order with warehouse accepted FG must backfill to accepted"
+    );
 
-    let (waiting_flow, waiting_stock): (String, String) = sqlx::query_as(
-        "SELECT flow_status, stock_status FROM mini_production_maps WHERE id = $1",
-    )
-    .bind(order_waiting_next)
-    .fetch_one(&pool)
-    .await
-    .expect("fetch waiting next stage map row");
-    assert_eq!(waiting_flow, "waiting_next_stage", "order waiting next stage must preserve waiting_next_stage");
+    let (waiting_flow, waiting_stock): (String, String) =
+        sqlx::query_as("SELECT flow_status, stock_status FROM mini_production_maps WHERE id = $1")
+            .bind(order_waiting_next)
+            .fetch_one(&pool)
+            .await
+            .expect("fetch waiting next stage map row");
+    assert_eq!(
+        waiting_flow, "waiting_next_stage",
+        "order waiting next stage must preserve waiting_next_stage"
+    );
     assert_eq!(waiting_stock, "");
 
-    let (in_progress_flow, in_progress_stock): (String, String) = sqlx::query_as(
-        "SELECT flow_status, stock_status FROM mini_production_maps WHERE id = $1",
-    )
-    .bind(order_in_progress)
-    .fetch_one(&pool)
-    .await
-    .expect("fetch in_progress map row");
+    let (in_progress_flow, in_progress_stock): (String, String) =
+        sqlx::query_as("SELECT flow_status, stock_status FROM mini_production_maps WHERE id = $1")
+            .bind(order_in_progress)
+            .fetch_one(&pool)
+            .await
+            .expect("fetch in_progress map row");
     assert_eq!(in_progress_flow, "in_progress");
     assert_eq!(in_progress_stock, "");
 
@@ -1587,10 +1619,7 @@ async fn postgres_0091_migration_backfill_and_write_side_persistence() {
     }
     service.upsert_map(live_map).await.expect("upsert live map");
     store
-        .put_apparatus_sequence(
-            "apparatus:default:paket",
-            vec![live_order_id.to_string()],
-        )
+        .put_apparatus_sequence("apparatus:default:paket", vec![live_order_id.to_string()])
         .await
         .expect("save apparatus sequence");
 
@@ -1622,8 +1651,14 @@ async fn postgres_0091_migration_backfill_and_write_side_persistence() {
     .fetch_one(&pool)
     .await
     .expect("query mini_production_maps after start");
-    assert_eq!(db_op, "in_progress", "DB operational_status must be persisted as in_progress");
-    assert_eq!(db_flow, "in_progress", "DB flow_status must be persisted as in_progress");
+    assert_eq!(
+        db_op, "in_progress",
+        "DB operational_status must be persisted as in_progress"
+    );
+    assert_eq!(
+        db_flow, "in_progress",
+        "DB flow_status must be persisted as in_progress"
+    );
     assert_eq!(db_stock, "", "DB stock_status must be empty");
 
     // B. Pause action producing finished goods output -> flow_status = free_wip
@@ -1654,7 +1689,10 @@ async fn postgres_0091_migration_backfill_and_write_side_persistence() {
     .await
     .expect("query mini_production_maps after pause");
     assert_eq!(db_op_paused, "paused");
-    assert_eq!(db_flow_paused, "free_wip", "DB flow_status must be persisted as free_wip");
+    assert_eq!(
+        db_flow_paused, "free_wip",
+        "DB flow_status must be persisted as free_wip"
+    );
     assert_eq!(db_stock_paused, "");
 
     // C. Warehouse receipt -> flow_status = accepted_to_stock, stock_status = accepted
@@ -1682,7 +1720,10 @@ async fn postgres_0091_migration_backfill_and_write_side_persistence() {
     .await
     .expect("query mini_production_maps after warehouse receipt");
     assert_eq!(db_op_rcv, "paused");
-    assert_eq!(db_flow_rcv, "accepted_to_stock", "DB flow_status must be accepted_to_stock");
+    assert_eq!(
+        db_flow_rcv, "accepted_to_stock",
+        "DB flow_status must be accepted_to_stock"
+    );
     assert_eq!(db_stock_rcv, "accepted", "DB stock_status must be accepted");
 
     // 6. Read Path Verification:
@@ -1698,9 +1739,171 @@ async fn postgres_0091_migration_backfill_and_write_side_persistence() {
     assert_eq!(record.stock_status, "accepted");
 
     // order_status_detail API representation must match
-    let status_detail = service.order_status_detail(live_order_id).await.expect("order status detail");
+    let status_detail = service
+        .order_status_detail(live_order_id)
+        .await
+        .expect("order status detail");
     assert_eq!(status_detail.flow_status, "accepted_to_stock");
     assert_eq!(status_detail.stock_status, "accepted");
+
+    // Cleanup test database
+    pool.close().await;
+    let admin_pool = sqlx::PgPool::connect(&admin_url)
+        .await
+        .expect("admin cleanup");
+    sqlx::query(&format!(
+        r#"DROP DATABASE IF EXISTS "{db_name}" WITH (FORCE)"#
+    ))
+    .execute(&admin_pool)
+    .await
+    .expect("drop test db");
+}
+
+#[tokio::test]
+async fn postgres_invalid_map_json_fails_closed_and_rolls_back_batch_write() {
+    let admin_url = std::env::var("MINI_ERP_TEST_ADMIN_DATABASE_URL")
+        .unwrap_or_else(|_| "postgres://superuser@127.0.0.1:5432/postgres".to_string());
+    let db_name = format!(
+        "mini_rs_erp_test_lifecycle_invalid_map_{}",
+        std::process::id()
+    );
+    let admin_pool = sqlx::PgPool::connect(&admin_url).await.expect("admin db");
+    sqlx::query(&format!(
+        r#"DROP DATABASE IF EXISTS "{db_name}" WITH (FORCE)"#
+    ))
+    .execute(&admin_pool)
+    .await
+    .expect("drop test db");
+    sqlx::query(&format!(r#"CREATE DATABASE "{db_name}""#))
+        .execute(&admin_pool)
+        .await
+        .expect("create test db");
+    admin_pool.close().await;
+
+    let pool = sqlx::PgPool::connect_with(postgres_test_database_options(&admin_url, &db_name))
+        .await
+        .expect("test db");
+    apply_foundation_migration(&pool)
+        .await
+        .expect("apply migrations");
+    seed_standard_canonical_apparatus(&pool).await;
+
+    // Seed a valid order map row that a status-affecting write can target.
+    let order_id = "order-invalid-map";
+    let map = test_map(order_id, "9009", "INVALID");
+    sqlx::query(
+        "INSERT INTO mini_production_maps (id, product_code, title, map_json)
+         VALUES ($1, $2, $3, $4)",
+    )
+    .bind(order_id)
+    .bind(&map.product_code)
+    .bind(&map.title)
+    .bind(serde_json::to_value(&map).expect("valid test map json"))
+    .execute(&pool)
+    .await
+    .expect("seed order map");
+
+    let apparatus = "apparatus:default:asset-010";
+    let batch_id = "batch-invalid-map-1";
+    let before: (String, String, String, String, i64, i64) = sqlx::query_as(
+        "SELECT lifecycle_status, operational_status, flow_status, stock_status,
+                lifecycle_version, (SELECT COUNT(*) FROM mini_progress_batches WHERE batch_id = $2)
+         FROM mini_production_maps WHERE id = $1",
+    )
+    .bind(order_id)
+    .bind(batch_id)
+    .fetch_one(&pool)
+    .await
+    .expect("before projection");
+    assert_eq!(before.5, 0);
+
+    // Corrupt the authoritative map document directly in PostgreSQL.
+    sqlx::query("UPDATE mini_production_maps SET map_json = '{\"broken\": true}' WHERE id = $1")
+        .bind(order_id)
+        .execute(&pool)
+        .await
+        .expect("corrupt map json");
+
+    // A real status-affecting store write: batch insert + lifecycle refresh
+    // in one transaction. It must fail closed, not pretend success.
+    let store = Arc::new(PostgresProductionMapStore::new(pool.clone()));
+    let write_result = store
+        .put_order_progress_batch(OrderProgressBatch {
+            batch_id: batch_id.to_string(),
+            revision: 1,
+            session_id: "session-invalid-map-1".to_string(),
+            started_at_unix: 100,
+            completed_at_unix: 200,
+            apparatus: apparatus.to_string(),
+            order_id: order_id.to_string(),
+            action: queue_state::ApparatusQueueAction::Pause,
+            status: OrderProgressBatchStatus::Paused,
+            produced_qty: 10.0,
+            uom: "kg".to_string(),
+            qr_payload: "qr:batch-invalid-map-1".to_string(),
+            label_item_code: order_id.to_string(),
+            label_item_name: "Invalid map output".to_string(),
+            executor_name: "Worker".to_string(),
+            worker_role: "aparatchi".to_string(),
+            worker_ref: "worker-1".to_string(),
+            worker_display_name: "Worker".to_string(),
+            wip_status: OrderProgressBatchWipStatus::Waiting,
+            status_detail: OrderProgressBatchStatusDetail::default(),
+            current_apparatus: apparatus.to_string(),
+            current_location: "cell-1".to_string(),
+            next_apparatus: String::new(),
+            parent_batch_id: String::new(),
+            used_by_session_id: String::new(),
+            used_by_apparatus: String::new(),
+            processed_by_session_id: String::new(),
+            processed_by_apparatus: String::new(),
+            return_ink_kg: None,
+            lamination_print_leftover_rolls: None,
+            lamination_film_leftover_rolls: None,
+            rezka_bosma_waste: None,
+            rezka_lamination_waste: None,
+            rezka_edge_waste: None,
+            total_waste: None,
+            finished_goods_kg: None,
+            bobina_kg: None,
+            finished_goods_meter: None,
+            diameter: None,
+            description: String::new(),
+            payload_json: serde_json::json!({}),
+        })
+        .await;
+    assert_eq!(write_result, Err(ProductionMapError::StoreFailed));
+
+    // Transaction rollback: the batch write was NOT committed ...
+    let batch_count: i64 =
+        sqlx::query_scalar("SELECT COUNT(*) FROM mini_progress_batches WHERE batch_id = $1")
+            .bind(batch_id)
+            .fetch_one(&pool)
+            .await
+            .expect("batch must be absent after rollback");
+    assert_eq!(batch_count, 0);
+    assert!(
+        store
+            .progress_batch(batch_id)
+            .await
+            .expect("batch read")
+            .is_none()
+    );
+
+    // ... and the lifecycle projection was NOT partially changed.
+    let after: (String, String, String, String, i64) = sqlx::query_as(
+        "SELECT lifecycle_status, operational_status, flow_status, stock_status,
+                lifecycle_version
+         FROM mini_production_maps WHERE id = $1",
+    )
+    .bind(order_id)
+    .fetch_one(&pool)
+    .await
+    .expect("after projection");
+    assert_eq!(
+        (after.0, after.1, after.2, after.3, after.4),
+        (before.0, before.1, before.2, before.3, before.4)
+    );
 
     // Cleanup test database
     pool.close().await;
