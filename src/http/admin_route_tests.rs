@@ -76,6 +76,7 @@ mod inventory_movements;
 mod item_groups;
 mod opening_wip;
 mod production_map_basic;
+mod production_map_canonical_snapshot;
 mod production_map_save_order;
 mod production_map_validation;
 mod qolip_blocks;

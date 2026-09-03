@@ -1,4 +1,3 @@
-
 /// Apparatus order sequences are stored server-side so every device (admin
 /// and worker) sees the same queue order.
 pub async fn production_map_sequence(
@@ -21,9 +20,12 @@ pub async fn production_map_sequence(
     .await?;
     match method {
         Method::GET => {
-            let snapshot = state
+            // Canonical initial snapshot: same authority as the live stream
+            // (`ProductionMapLiveSnapshot` + monotonic revision + maps).
+            // Additive only: old mobiles ignore `rev`/`maps`.
+            let (snapshot, revision) = state
                 .production_maps
-                .live_snapshot_shared()
+                .live_snapshot_shared_with_revision()
                 .await
                 .map_err(production_map_error)?;
             let snapshot = super::training::merge_worker_training_snapshot_shared(
@@ -34,6 +36,8 @@ pub async fn production_map_sequence(
             let order_customers = production_map_order_customers(&state, &snapshot.maps).await;
             Ok(json_response(serde_json::json!({
                 "ok": true,
+                "rev": revision,
+                "maps": &snapshot.maps,
                 "sequences": &snapshot.sequences,
                 "visible_order_ids": &snapshot.visible_order_ids,
                 "queue_states": &snapshot.queue_states,
