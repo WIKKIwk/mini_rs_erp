@@ -1030,3 +1030,105 @@ async fn production_map_save_with_order_rolls_back_map_when_template_store_fails
         Some(0)
     );
 }
+
+#[tokio::test]
+async fn production_map_order_image_view_serves_photo_linked_at_order_open() {
+    let state = test_state();
+    let token = session(&state, PrincipalRole::Admin).await;
+
+    // 1. Calculate-page photo upload, like the mobile gallery picker.
+    let upload = build_router(state.clone())
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v1/mobile/calculate/orders/image")
+                .header(header::AUTHORIZATION, format!("Bearer {token}"))
+                .header(header::CONTENT_TYPE, "image/jpeg")
+                .header("x-file-name", "rang.jpg")
+                .body(Body::from(sample_camera_jpeg()))
+                .expect("upload request"),
+        )
+        .await
+        .expect("upload response");
+    assert_eq!(upload.status(), StatusCode::OK);
+    let upload_body = json_body(upload).await;
+    let image_id = upload_body["image"]["image_id"]
+        .as_str()
+        .expect("image id")
+        .to_string();
+    assert!(!image_id.trim().is_empty());
+
+    // 2. Open the order with the photo attached to the template.
+    let map_json = pechat_order_map_json(
+        "zakaz-photo-1",
+        "Photo zakaz",
+        "9001",
+        "apparatus:default:bosma_8",
+    );
+    let body = format!(
+        r#"{{"map":{map_json},"template":{{"name":"photo mahsulot","product":"photo mahsulot","customer":"mijoz","frame_product_size_mm":635,"frame_count":1,"waste_percent":5,"first_layer_material":"pet","first_layer_micron":"12","second_layer_material":"pe oq","second_layer_micron":"30","image_id":"{image_id}"}}}}"#
+    );
+    let saved = build_router(state.clone())
+        .oneshot(request_with_body(
+            "PUT",
+            "/v1/mobile/admin/production-maps/with-order",
+            &token,
+            &body,
+        ))
+        .await
+        .expect("with-order");
+    assert_eq!(saved.status(), StatusCode::OK);
+    let saved_body = json_body(saved).await;
+    assert_eq!(saved_body["saved"]["map"]["image_id"], image_id);
+
+    // 3. The sheet endpoint serves the photo by order id.
+    let view = build_router(state.clone())
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri("/v1/mobile/admin/production-maps/order-image/view?order_id=zakaz-photo-1")
+                .header(header::AUTHORIZATION, format!("Bearer {token}"))
+                .body(Body::empty())
+                .expect("view request"),
+        )
+        .await
+        .expect("view response");
+    assert_eq!(view.status(), StatusCode::OK);
+    assert_eq!(
+        view.headers()
+            .get(header::CONTENT_TYPE)
+            .and_then(|value| value.to_str().ok()),
+        Some("image/webp")
+    );
+    let bytes = to_bytes(view.into_body(), usize::MAX)
+        .await
+        .expect("view body");
+    assert!(bytes.starts_with(b"RIFF"), "served webp container");
+
+    // 4. Orders without any photo get a fast 404 so sheets hide the image.
+    let missing = build_router(state)
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri("/v1/mobile/admin/production-maps/order-image/view?order_id=zakaz-7777-nope")
+                .header(header::AUTHORIZATION, format!("Bearer {token}"))
+                .body(Body::empty())
+                .expect("missing request"),
+        )
+        .await
+        .expect("missing response");
+    assert_eq!(missing.status(), StatusCode::NOT_FOUND);
+}
+
+fn sample_camera_jpeg() -> Vec<u8> {
+    use image::ImageEncoder;
+    let rgb = image::RgbImage::from_fn(64, 48, |x, y| {
+        image::Rgb([(x % 256) as u8, (y % 256) as u8, 128])
+    });
+    let dynamic = image::DynamicImage::ImageRgb8(rgb);
+    let mut bytes = Vec::new();
+    image::codecs::jpeg::JpegEncoder::new_with_quality(&mut bytes, 90)
+        .encode_image(&dynamic)
+        .expect("sample jpeg encodes");
+    bytes
+}

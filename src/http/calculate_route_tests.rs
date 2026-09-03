@@ -295,7 +295,7 @@ async fn calculate_order_image_upload_and_view_are_owner_scoped() {
             "POST",
             "/v1/mobile/calculate/orders/image",
             &token,
-            b"fake-jpeg".to_vec(),
+            sample_camera_jpeg(),
         ))
         .await
         .expect("upload response");
@@ -304,8 +304,11 @@ async fn calculate_order_image_upload_and_view_are_owner_scoped() {
 
     assert_eq!(upload_status, StatusCode::OK, "{upload_body}");
     assert_eq!(upload_body["ok"], true);
-    assert_eq!(upload_body["image"]["image_mime"], "image/jpeg");
-    assert_eq!(upload_body["image"]["image_size_bytes"], 9);
+    assert_eq!(upload_body["image"]["image_mime"], "image/webp");
+    let stored_size = upload_body["image"]["image_size_bytes"]
+        .as_u64()
+        .expect("stored size");
+    assert!(stored_size > 0);
     let image_url = upload_body["image"]["image_url"].as_str().expect("url");
 
     std::fs::remove_dir_all(image_dir.path()).expect("remove image dir");
@@ -333,8 +336,41 @@ async fn calculate_order_image_upload_and_view_are_owner_scoped() {
         .expect("view body");
 
     assert_eq!(status, StatusCode::OK);
-    assert_eq!(content_type, "image/jpeg");
-    assert_eq!(&bytes[..], b"fake-jpeg");
+    assert_eq!(content_type, "image/webp");
+    assert_eq!(bytes.len() as u64, stored_size);
+    assert!(bytes.starts_with(b"RIFF"), "stored webp container");
+}
+
+#[tokio::test]
+async fn calculate_order_image_upload_rejects_non_image_bytes() {
+    let state = test_state();
+    let token = session(&state, PrincipalRole::Admin).await;
+
+    let upload = build_router(state)
+        .oneshot(image_request(
+            "POST",
+            "/v1/mobile/calculate/orders/image",
+            &token,
+            b"fake-jpeg".to_vec(),
+        ))
+        .await
+        .expect("upload response");
+    assert_eq!(upload.status(), StatusCode::BAD_REQUEST);
+}
+
+/// Realistic camera-shaped input for upload tests: lossy jpeg,
+/// like a phone gallery photo.
+fn sample_camera_jpeg() -> Vec<u8> {
+    use image::ImageEncoder;
+    let rgb = image::RgbImage::from_fn(64, 48, |x, y| {
+        image::Rgb([(x % 256) as u8, (y % 256) as u8, 128])
+    });
+    let dynamic = image::DynamicImage::ImageRgb8(rgb);
+    let mut bytes = Vec::new();
+    image::codecs::jpeg::JpegEncoder::new_with_quality(&mut bytes, 90)
+        .encode_image(&dynamic)
+        .expect("sample jpeg encodes");
+    bytes
 }
 
 #[tokio::test]
