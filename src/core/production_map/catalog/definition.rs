@@ -16,6 +16,11 @@ pub struct ProductionMapDefinition {
     pub order_number: String,
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub customer_name: String,
+    /// Calculate-page photo of the order, stored as bounded WebP.
+    /// Empty for orders created before photo support or without a photo.
+    /// Mobile readers ignore unknown fields, so old clients keep working.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub image_id: String,
     #[serde(
         default,
         deserialize_with = "deserialize_optional_integer_count",

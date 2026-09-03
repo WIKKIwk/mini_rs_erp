@@ -225,4 +225,34 @@ impl CalculateOrderStorePort for CalculateOrderStore {
         .optional()
         .map_err(|_| CalculateOrderError::StoreFailed)
     }
+
+    async fn get_image_global(
+        &self,
+        image_id: &str,
+    ) -> Result<Option<CalculateOrderImage>, CalculateOrderError> {
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|_| CalculateOrderError::StoreFailed)?;
+        conn.query_row(
+            "SELECT image_id, image_name, image_mime, image_size_bytes, body
+             FROM calculate_order_images
+             WHERE image_id = ?1
+             ORDER BY created_at DESC
+             LIMIT 1",
+            params![image_id.trim()],
+            |row| {
+                let size: i64 = row.get(3)?;
+                Ok(CalculateOrderImage {
+                    image_id: row.get(0)?,
+                    image_name: row.get(1)?,
+                    image_mime: row.get(2)?,
+                    image_size_bytes: size.max(0) as u64,
+                    body: row.get(4)?,
+                })
+            },
+        )
+        .optional()
+        .map_err(|_| CalculateOrderError::StoreFailed)
+    }
 }

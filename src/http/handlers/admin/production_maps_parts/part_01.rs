@@ -302,6 +302,15 @@ pub async fn production_map_save_with_order(
     let order_number_was_generated = assign_order_number_if_missing(&state, &mut input.map)
         .await
         .map_err(production_map_error)?;
+    // Link the calculate-page photo to the map itself (not only to the
+    // template): templates are skipped for quick-clone orders, but the map is
+    // always persisted, so the bottom sheet can resolve the image later.
+    if let Some(template) = input.template.as_ref() {
+        let image_id = template.image_id.trim();
+        if !image_id.is_empty() && input.map.image_id.trim().is_empty() {
+            input.map.image_id = image_id.to_string();
+        }
+    }
     if order_number_was_generated {
         let order_number = input.map.order_number.trim().to_string();
         if let Some(template) = input.template.as_mut() {

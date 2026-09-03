@@ -56,6 +56,7 @@ mod tests {
             code: String::new(),
             order_number: String::new(),
             customer_name: String::new(),
+            image_id: String::new(),
             roll_count: None,
             width_mm: None,
             order_kg: Some(12.0),

@@ -2,6 +2,7 @@ pub mod admin;
 pub mod app_update;
 pub mod auth;
 pub mod calculate;
+pub mod calculate_image;
 pub mod chat;
 pub mod customer;
 pub mod gscale;

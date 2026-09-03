@@ -145,16 +145,25 @@ pub async fn calculate_order_image_upload_route(
         .map(clean_file_name)
         .filter(|value| !value.is_empty())
         .unwrap_or_else(|| format!("rang.{extension}"));
+    // Decode/resize/encode is CPU-heavy: never block the async runtime on a
+    // multi-megapixel camera photo.
+    let upload = body.to_vec();
+    let optimized = tokio::task::spawn_blocking(move || {
+        super::calculate_image::optimize_order_image_for_store(&upload, &file_name)
+    })
+    .await
+    .map_err(|_| store_error(CalculateOrderError::StoreFailed))?
+    .map_err(|detail| bad_request("invalid_input", detail))?;
     let image = state
         .calculate_orders
         .save_image(
             &key,
             CalculateOrderImage {
                 image_id,
-                image_name: file_name,
-                image_mime: mime,
-                image_size_bytes: body.len() as u64,
-                body: body.to_vec(),
+                image_name: optimized.file_name,
+                image_mime: "image/webp".to_string(),
+                image_size_bytes: optimized.body.len() as u64,
+                body: optimized.body,
             },
         )
         .await

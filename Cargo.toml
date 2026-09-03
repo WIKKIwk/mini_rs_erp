@@ -61,6 +61,7 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 urlencoding = "2"
 heed = "0.22.1"
 rusqlite = { version = "0.32", features = ["bundled", "collation"] }
+webp = "0.3"
 
 [dev-dependencies]
 mini_rs_apparatus_contract = { path = "crates/mini_rs_apparatus_contract", features = ["test-support"] }

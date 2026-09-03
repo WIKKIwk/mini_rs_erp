@@ -169,6 +169,33 @@ impl CalculateOrderStorePort for PostgresCalculateOrderStore {
             },
         ))
     }
+
+    async fn get_image_global(
+        &self,
+        image_id: &str,
+    ) -> Result<Option<CalculateOrderImage>, CalculateOrderError> {
+        let row = sqlx::query_as::<_, (String, String, String, i64, Vec<u8>)>(
+            "SELECT image_id, image_name, image_mime, image_size_bytes, body
+             FROM mini_quick_order_images
+             WHERE image_id = $1
+             ORDER BY created_at DESC
+             LIMIT 1",
+        )
+        .bind(image_id.trim())
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(|_| CalculateOrderError::StoreFailed)?;
+
+        Ok(row.map(
+            |(image_id, image_name, image_mime, image_size_bytes, body)| CalculateOrderImage {
+                image_id,
+                image_name,
+                image_mime,
+                image_size_bytes: image_size_bytes.max(0) as u64,
+                body,
+            },
+        ))
+    }
 }
 
 async fn existing_id_by_code(

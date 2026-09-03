@@ -101,6 +101,7 @@ mod tests {
                 code: "2731".to_string(),
                 order_number: "2731".to_string(),
                 customer_name: "Freshboll".to_string(),
+                image_id: String::new(),
                 roll_count: None,
                 width_mm: Some(680.0),
                 order_kg: Some(1000.0),

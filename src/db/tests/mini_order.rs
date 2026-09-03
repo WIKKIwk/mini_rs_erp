@@ -125,6 +125,7 @@ fn test_map() -> ProductionMapDefinition {
         code: "9001".to_string(),
         order_number: "9001".to_string(),
         customer_name: String::new(),
+        image_id: String::new(),
         roll_count: Some(7),
         width_mm: Some(650.00003),
         order_kg: None,

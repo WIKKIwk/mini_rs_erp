@@ -352,6 +352,7 @@ fn training_map(
         code: format!("{id}-code"),
         order_number: format!("ORDER-{id}"),
         customer_name: String::new(),
+        image_id: String::new(),
         roll_count: None,
         width_mm: None,
         order_kg: None,

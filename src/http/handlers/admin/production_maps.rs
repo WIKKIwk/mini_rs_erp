@@ -30,6 +30,7 @@ mod helpers;
 mod move_run;
 mod opening_wip;
 mod order_control;
+mod order_image;
 mod paddons;
 mod progress_qr;
 mod qolip_validation;
@@ -55,6 +56,7 @@ pub use self::opening_wip::{
     production_map_opening_wip_print, production_map_opening_wip_qr_report,
 };
 pub use self::order_control::production_map_order_control;
+pub use self::order_image::production_map_order_image_view;
 pub use self::paddons::{
     production_map_paddon_create, production_map_paddon_detail, production_map_paddon_item_add,
     production_map_paddon_item_remove, production_map_paddon_items_add,

@@ -117,6 +117,16 @@ pub trait CalculateOrderStorePort: Send + Sync {
         owner_key: &str,
         image_id: &str,
     ) -> Result<Option<CalculateOrderImage>, CalculateOrderError>;
+
+    /// Finds an image by id across all owners. Order sheets are viewed by
+    /// operators other than the uploader, so order-image serving cannot stay
+    /// owner-scoped. Defaults to `None` for stores without global lookup.
+    async fn get_image_global(
+        &self,
+        _image_id: &str,
+    ) -> Result<Option<CalculateOrderImage>, CalculateOrderError> {
+        Ok(None)
+    }
 }
 
 pub fn validate_template(template: &CalculateOrderTemplate) -> Result<(), CalculateOrderError> {

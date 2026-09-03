@@ -580,6 +580,7 @@ handlers.
 | `/v1/mobile/admin/production-maps/sequence` | Read/write apparatus queue sequence. |
 | `/v1/mobile/admin/production-maps/queue-policies` | Read/write queue policy. |
 | `/v1/mobile/admin/production-maps/live` | Queue live WebSocket stream. |
+| `/v1/mobile/admin/production-maps/order-image/view` | Order calculate-page photo (WebP) by order id; `404` when the order has no photo. |
 | `/v1/mobile/admin/production-maps/queue-action` | Apply start/pause/resume/complete. |
 | `/v1/mobile/admin/production-maps/completed-orders` | Read completed queue orders. |
 | `/v1/mobile/admin/production-maps/closed-orders` | Read closed orders. |

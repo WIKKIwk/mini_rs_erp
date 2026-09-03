@@ -113,6 +113,10 @@ fn production_routes() -> Router<AppState> {
             any(admin::production_map_live),
         )
         .route(
+            "/v1/mobile/admin/production-maps/order-image/view",
+            any(admin::production_map_order_image_view),
+        )
+        .route(
             "/v1/mobile/admin/production-maps/completed-orders",
             any(admin::production_map_completed_orders),
         )

@@ -122,6 +122,7 @@ mod tests {
             code: order_number.to_string(),
             order_number: order_number.to_string(),
             customer_name: String::new(),
+            image_id: String::new(),
             roll_count: None,
             width_mm: None,
             order_kg: None,
