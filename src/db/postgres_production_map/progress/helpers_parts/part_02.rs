@@ -249,16 +249,23 @@ pub(super) async fn receive_finished_goods_batch_tx(
         );
         ProductionMapError::StoreFailed
     })?;
-    Ok(())
-}
-
-fn non_empty_current_apparatus_key(batch: &OrderProgressBatch) -> String {
-    let key = batch.current_apparatus_key.trim();
-    if key.is_empty() {
-        crate::core::production_map::canonical_apparatus_key(&batch.current_apparatus)
-    } else {
-        crate::core::production_map::canonical_apparatus_key(key)
+    let order_id = stock.order_id.trim();
+    if !order_id.is_empty() {
+        let actor = QueueActionActor {
+            role: "werka".to_string(),
+            ref_: "warehouse-worker".to_string(),
+            display_name: "Warehouse Worker".to_string(),
+        };
+        crate::db::postgres_production_map::lifecycle::refresh_production_order_lifecycle_tx(
+            tx,
+            order_id,
+            &actor,
+            stock.id.trim(),
+            "finished_goods_receipt",
+        )
+        .await?;
     }
+    Ok(())
 }
 
 fn require_live_apparatus_id(value: &str) -> Result<(), ProductionMapError> {

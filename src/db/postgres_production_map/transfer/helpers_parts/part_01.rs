@@ -208,6 +208,15 @@ pub(super) async fn commit_apparatus_transfer(
     .await
     .map_err(|_| ProductionMapError::StoreFailed)?;
 
+    crate::db::postgres_production_map::lifecycle::refresh_production_order_lifecycle_tx(
+        &mut tx,
+        write.record.order_id.trim(),
+        &write.record.actor,
+        &write.record.transfer_id,
+        "apparatus_transfer",
+    )
+    .await?;
+
     tx.commit()
         .await
         .map_err(|_| ProductionMapError::StoreFailed)?;

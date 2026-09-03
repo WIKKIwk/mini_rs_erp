@@ -155,7 +155,6 @@ impl ProductionMapService {
 
         progress_batch.apparatus = to_id.clone();
         progress_batch.current_apparatus = to_id.clone();
-        progress_batch.current_apparatus_key = to_id.clone();
         progress_batch.current_location = if target_display.is_empty() {
             String::new()
         } else {

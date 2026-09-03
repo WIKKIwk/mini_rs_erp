@@ -413,10 +413,6 @@ fn training_progress_payload(
         serde_json::Value::String(apparatus.to_string()),
     );
     for (field, value) in [
-        (
-            "current_apparatus_key",
-            batch.current_apparatus_key.as_str(),
-        ),
         ("current_apparatus", batch.current_apparatus.as_str()),
         ("next_apparatus", batch.next_apparatus.as_str()),
         ("used_by_apparatus", batch.used_by_apparatus.as_str()),

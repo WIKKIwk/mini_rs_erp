@@ -253,30 +253,6 @@ pub struct ProductionOrderStatusDetail {
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub stock_status: String,
     #[serde(default)]
-    pub total_wip_count: usize,
-    #[serde(default)]
-    pub waiting_wip_count: usize,
-    #[serde(default)]
-    pub in_use_wip_count: usize,
-    #[serde(default)]
-    pub processed_wip_count: usize,
-    #[serde(default)]
-    pub waiting_next_stage_count: usize,
-    #[serde(default)]
-    pub consumed_by_next_stage_count: usize,
-    #[serde(default, alias = "finished_pending_acceptance_count")]
-    pub free_wip_count: usize,
-    #[serde(default)]
-    pub accepted_wip_count: usize,
-    #[serde(default)]
-    pub active_session_count: usize,
-    #[serde(default)]
-    pub paused_session_count: usize,
-    #[serde(default)]
-    pub roll_detached_session_count: usize,
-    #[serde(default)]
-    pub completed_queue_count: usize,
-    #[serde(default)]
     pub completed_with_issue_count: usize,
 }
 

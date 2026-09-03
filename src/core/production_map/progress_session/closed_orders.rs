@@ -90,6 +90,8 @@ pub(crate) fn derive_production_order_operational_status(
     queue_states: &BTreeMap<String, BTreeMap<String, String>>,
     order_id: &str,
     completed_with_issue_count: usize,
+    has_roll_detached: bool,
+    waiting_next_stage_count: usize,
 ) -> ProductionOrderOperationalStatus {
     if matches!(
         lifecycle_status,
@@ -110,12 +112,14 @@ pub(crate) fn derive_production_order_operational_status(
         .collect::<Vec<_>>();
     if states.iter().any(|state| state == "frozen") {
         ProductionOrderOperationalStatus::Frozen
-    } else if states.iter().any(|state| state == "in_progress") {
+    } else if has_roll_detached || states.iter().any(|state| state == "in_progress") {
         ProductionOrderOperationalStatus::InProgress
     } else if states.iter().any(|state| state == "paused") {
         ProductionOrderOperationalStatus::Paused
     } else if states.iter().any(|state| state == "completed") {
         ProductionOrderOperationalStatus::PartiallyCompleted
+    } else if waiting_next_stage_count > 0 {
+        ProductionOrderOperationalStatus::WaitingNextStage
     } else if states.iter().any(|state| state == "pending") {
         ProductionOrderOperationalStatus::Ready
     } else {
@@ -397,8 +401,21 @@ mod tests {
                 &queue_states,
                 order_id,
                 0,
+                false,
+                0,
             ),
             ProductionOrderOperationalStatus::Paused
+        );
+        assert_eq!(
+            derive_production_order_operational_status(
+                ProductionOrderLifecycleStatus::InProgress,
+                &queue_states,
+                order_id,
+                0,
+                true,
+                0,
+            ),
+            ProductionOrderOperationalStatus::InProgress
         );
         assert_eq!(
             derive_production_order_operational_status(
@@ -406,8 +423,22 @@ mod tests {
                 &queue_states,
                 order_id,
                 1,
+                false,
+                0,
             ),
             ProductionOrderOperationalStatus::CompletedWithIssue
+        );
+        let empty_states = BTreeMap::new();
+        assert_eq!(
+            derive_production_order_operational_status(
+                ProductionOrderLifecycleStatus::Released,
+                &empty_states,
+                order_id,
+                0,
+                false,
+                1,
+            ),
+            ProductionOrderOperationalStatus::WaitingNextStage
         );
     }
 }

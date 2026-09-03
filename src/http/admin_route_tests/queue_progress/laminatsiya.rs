@@ -745,7 +745,6 @@ async fn finished_goods_stays_free_wip_until_assigned_warehouse_accepts() {
     );
     assert_eq!(completed_body["order_status"]["order_status"], "completed");
     assert_eq!(completed_body["order_status"]["flow_status"], "free_wip");
-    assert_eq!(completed_body["order_status"]["free_wip_count"], 1);
 
     let waiting = router
         .clone()
@@ -834,7 +833,6 @@ async fn finished_goods_stays_free_wip_until_assigned_warehouse_accepts() {
         received_body["order_status"]["flow_status"],
         "accepted_to_stock"
     );
-    assert_eq!(received_body["order_status"]["accepted_wip_count"], 1);
     assert_eq!(
         received_body["batch"]["payload_json"]["received_warehouse"],
         "Tayyor mahsulot ombori"

@@ -322,7 +322,6 @@ pub(super) fn wip_batch_in_use(
     clear_wip_processing_fields(&mut batch);
     batch.wip_status = OrderProgressBatchWipStatus::InUse;
     batch.current_apparatus = apparatus.trim().to_string();
-    batch.current_apparatus_key = super::types::canonical_apparatus_key(apparatus);
     batch.current_location = apparatus.trim().to_string();
     batch.used_by_session_id = session_id.trim().to_string();
     batch.used_by_apparatus = apparatus.trim().to_string();
@@ -348,7 +347,6 @@ pub(super) fn restore_self_consumed_wip(batch: &mut OrderProgressBatch) -> bool 
     clear_wip_usage_fields(batch);
     batch.wip_status = OrderProgressBatchWipStatus::Waiting;
     batch.current_apparatus = batch.apparatus.trim().to_string();
-    batch.current_apparatus_key = super::types::canonical_apparatus_key(&batch.apparatus);
     batch.current_location = wip_waiting_location(&batch.apparatus);
     if !batch.payload_json.is_object() {
         batch.payload_json = serde_json::json!({});
@@ -401,7 +399,6 @@ pub(super) fn restore_misbound_output_wip(
     clear_wip_usage_fields(&mut batch);
     batch.wip_status = OrderProgressBatchWipStatus::Waiting;
     batch.current_apparatus = batch.apparatus.trim().to_string();
-    batch.current_apparatus_key = super::types::canonical_apparatus_key(&batch.apparatus);
     batch.current_location = wip_waiting_location(&batch.apparatus);
     if !batch.payload_json.is_object() {
         batch.payload_json = serde_json::json!({});
@@ -448,7 +445,6 @@ pub(super) fn wip_batch_removed_from_apparatus(
 ) -> OrderProgressBatch {
     batch.wip_status = OrderProgressBatchWipStatus::Waiting;
     batch.current_apparatus = apparatus.trim().to_string();
-    batch.current_apparatus_key = super::types::canonical_apparatus_key(apparatus);
     batch.current_location = format!("{} olib tashlandi", apparatus.trim());
     batch.used_by_session_id.clear();
     batch.used_by_apparatus.clear();
@@ -472,7 +468,6 @@ pub(super) fn wip_batch_processed(
 ) -> OrderProgressBatch {
     batch.wip_status = OrderProgressBatchWipStatus::Processed;
     batch.current_apparatus = apparatus.trim().to_string();
-    batch.current_apparatus_key = super::types::canonical_apparatus_key(apparatus);
     batch.current_location = apparatus.trim().to_string();
     batch.processed_by_session_id = session_id.trim().to_string();
     batch.processed_by_apparatus = apparatus.trim().to_string();

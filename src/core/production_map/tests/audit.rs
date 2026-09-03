@@ -127,7 +127,6 @@ fn audit_test_batch(batch_id: &str, order_id: &str, qr_payload: &str) -> OrderPr
         wip_status: OrderProgressBatchWipStatus::Waiting,
         status_detail: OrderProgressBatchStatusDetail::default(),
         current_apparatus: PECHAT_ID.to_string(),
-        current_apparatus_key: queue_state::apparatus_search_key(PECHAT_ID),
         current_location: PECHAT_ID.to_string(),
         next_apparatus: LAMINATION_ID.to_string(),
         parent_batch_id: String::new(),

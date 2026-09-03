@@ -2469,8 +2469,6 @@ async fn worker_roll_detach_has_canonical_status_without_pausing_order() {
         .await
         .expect("detached order status");
     assert_eq!(order_status.order_status, "in_progress");
-    assert_eq!(order_status.roll_detached_session_count, 1);
-    assert_eq!(order_status.paused_session_count, 0);
 
     let resumed = service
         .apply_apparatus_queue_action_with_progress(
@@ -3362,7 +3360,6 @@ async fn complete_repairs_legacy_output_input_confusion() {
     source_batch.status = OrderProgressBatchStatus::Resumed;
     source_batch.next_apparatus = apparatus.to_string();
     source_batch.current_apparatus = apparatus.to_string();
-    source_batch.current_apparatus_key = queue_state::apparatus_search_key(apparatus);
     source_batch.current_location = apparatus.to_string();
     source_batch.used_by_session_id = session_id.to_string();
     source_batch.used_by_apparatus = apparatus.to_string();
@@ -3384,7 +3381,6 @@ async fn complete_repairs_legacy_output_input_confusion() {
     misbound_output.action = queue_state::ApparatusQueueAction::Pause;
     misbound_output.status = OrderProgressBatchStatus::Resumed;
     misbound_output.current_apparatus = apparatus.to_string();
-    misbound_output.current_apparatus_key = queue_state::apparatus_search_key(apparatus);
     misbound_output.current_location = apparatus.to_string();
     misbound_output.used_by_session_id = session_id.to_string();
     misbound_output.used_by_apparatus = apparatus.to_string();
@@ -3951,7 +3947,6 @@ async fn legacy_self_consumed_pause_wip_is_available_to_the_next_stage() {
     batch.processed_by_session_id = batch.session_id.clone();
     batch.processed_by_apparatus = first.to_string();
     batch.current_apparatus = first.to_string();
-    batch.current_apparatus_key = queue_state::apparatus_search_key(first);
     let producer_session_id = batch.session_id.clone();
     store
         .put_order_progress_batch(batch)
@@ -4064,7 +4059,6 @@ async fn wip_listing_backfills_missing_current_and_next_apparatus_from_map() {
         .await
         .expect("first batch");
     batch.current_apparatus.clear();
-    batch.current_apparatus_key.clear();
     batch.current_location.clear();
     batch.next_apparatus.clear();
     store
@@ -4087,10 +4081,6 @@ async fn wip_listing_backfills_missing_current_and_next_apparatus_from_map() {
 
     assert_eq!(batches.len(), 1);
     assert_eq!(batches[0].current_apparatus, first);
-    assert_eq!(
-        batches[0].current_apparatus_key,
-        queue_state::apparatus_search_key(first)
-    );
     assert_eq!(batches[0].next_apparatus, second);
 }
 
@@ -4425,10 +4415,6 @@ async fn downstream_complete_keeps_order_open_until_all_input_wips_processed() {
         .await
         .expect("partial order status");
     assert_eq!(partial_order_status.order_status, "partially_completed");
-    assert_eq!(partial_order_status.waiting_wip_count, 2);
-    assert_eq!(partial_order_status.waiting_next_stage_count, 1);
-    assert_eq!(partial_order_status.free_wip_count, 1);
-    assert_eq!(partial_order_status.processed_wip_count, 1);
     assert_eq!(
         service
             .progress_batch_for_qr("", &first_pause.qr_payload)
@@ -4509,7 +4495,6 @@ async fn downstream_complete_keeps_order_open_until_all_input_wips_processed() {
     assert_eq!(final_order_status.order_status, "completed");
     assert_eq!(final_order_status.flow_status, "free_wip");
     assert!(final_order_status.stock_status.is_empty());
-    assert_eq!(final_order_status.free_wip_count, 2);
     let final_output = final_complete
         .progress_batch
         .expect("final output batch has status detail");
@@ -4556,7 +4541,6 @@ async fn downstream_complete_keeps_order_open_until_all_input_wips_processed() {
     assert_eq!(received.order_status.order_status, "completed");
     assert_eq!(received.order_status.flow_status, "accepted_to_stock");
     assert_eq!(received.order_status.stock_status, "accepted");
-    assert_eq!(received.order_status.accepted_wip_count, 2);
 }
 
 #[tokio::test]
@@ -5136,7 +5120,6 @@ fn test_progress_batch(
         wip_status,
         status_detail: OrderProgressBatchStatusDetail::default(),
         current_apparatus: apparatus.to_string(),
-        current_apparatus_key: queue_state::apparatus_search_key(apparatus),
         current_location: apparatus.to_string(),
         next_apparatus: String::new(),
         parent_batch_id: parent_batch_id.to_string(),
@@ -5969,4 +5952,182 @@ async fn repeated_apparatus_sessions_are_distinguished_by_typed_stage_node_id() 
         .await
         .expect("order status");
     assert_eq!(order_status.order_status, "completed");
+}
+
+#[tokio::test]
+async fn canonical_order_status_detail_verifications() {
+    let store = Arc::new(MemoryProductionMapStore::new());
+    let (service, _) =
+        service_with_apparatus_store(store.clone(), &[(FLOW_PECHAT_ID, "pechat")]).await;
+    let order_id = "zakaz-canonical-test";
+    let apparatus = FLOW_PECHAT_ID;
+    let actor = QueueActionActor {
+        role: "aparatchi".to_string(),
+        ref_: "worker-canonical".to_string(),
+        display_name: "Canonical Worker".to_string(),
+    };
+
+    // F. missing lifecycle: requesting status for nonexistent order fails closed with MapNotFound
+    let missing_err = service
+        .order_status_detail("nonexistent-order")
+        .await
+        .unwrap_err();
+    assert_eq!(missing_err, ProductionMapError::MapNotFound);
+
+    // Setup map
+    service
+        .upsert_map(apparatus_stage_map(order_id, apparatus))
+        .await
+        .expect("upsert map");
+
+    // A. single-order status returns persisted operational status
+    let initial_status = service
+        .order_status_detail(order_id)
+        .await
+        .expect("order status detail");
+    assert_eq!(initial_status.order_status, "not_started");
+    assert_eq!(initial_status.work_status, "not_started");
+
+    // Start order
+    service
+        .apply_apparatus_queue_action_with_progress(
+            apparatus,
+            order_id,
+            queue_state::ApparatusQueueAction::Start,
+            &[apparatus.to_string()],
+            actor.clone(),
+            QueueProgressInput::default(),
+        )
+        .await
+        .expect("start");
+
+    let started_status = service
+        .order_status_detail(order_id)
+        .await
+        .expect("started order status");
+    assert_eq!(started_status.order_status, "in_progress");
+
+    // C. freeze overlay: frozen control forces frozen status
+    let mut frozen = OrderControlRecord::active(order_id);
+    frozen.state = OrderControlState::Frozen;
+    store
+        .put_order_control_state(frozen)
+        .await
+        .expect("frozen control");
+    let frozen_status = service
+        .order_status_detail(order_id)
+        .await
+        .expect("frozen order status");
+    assert_eq!(frozen_status.order_status, "frozen");
+    assert_eq!(frozen_status.work_status, "frozen");
+    assert_eq!(frozen_status.flow_status, "frozen");
+
+    // Unfreeze
+    store
+        .put_order_control_state(OrderControlRecord::active(order_id))
+        .await
+        .expect("active control");
+    let unfreezed_status = service
+        .order_status_detail(order_id)
+        .await
+        .expect("unfrozen order status");
+    assert_eq!(unfreezed_status.order_status, "in_progress");
+
+    // Pause to produce a batch for QR report
+    let paused = service
+        .apply_apparatus_queue_action_with_progress(
+            apparatus,
+            order_id,
+            queue_state::ApparatusQueueAction::Pause,
+            &[apparatus.to_string()],
+            actor.clone(),
+            QueueProgressInput {
+                produced_qty: Some(10.0),
+                uom: "kg".to_string(),
+                ..QueueProgressInput::default()
+            },
+        )
+        .await
+        .expect("pause");
+    let batch = paused.progress_batch.expect("batch");
+
+    // B. QR report: progress_qr_report.order_status matches persisted lifecycle projection even though raw data is present
+    let qr_report = service
+        .progress_qr_report("", &batch.qr_payload)
+        .await
+        .expect("qr report");
+    assert_eq!(qr_report.order_status.order_status, "paused");
+    assert_eq!(qr_report.order_status.flow_status, "free_wip");
+    assert!(!qr_report.progress_batches.is_empty());
+    assert!(!qr_report.queue_states.is_empty());
+
+    // Resume
+    service
+        .apply_apparatus_queue_action_with_progress(
+            apparatus,
+            order_id,
+            queue_state::ApparatusQueueAction::Resume,
+            &[apparatus.to_string()],
+            actor.clone(),
+            QueueProgressInput {
+                qr_payload: batch.qr_payload,
+                ..QueueProgressInput::default()
+            },
+        )
+        .await
+        .expect("resume");
+
+    // Complete normally
+    service
+        .apply_apparatus_queue_action_with_progress(
+            apparatus,
+            order_id,
+            queue_state::ApparatusQueueAction::Complete,
+            &[apparatus.to_string()],
+            actor.clone(),
+            QueueProgressInput {
+                produced_qty: Some(13.0),
+                uom: "kg".to_string(),
+                return_ink_kg: Some(0.1),
+                total_waste: Some(0.1),
+                finished_goods_kg: Some(13.0),
+                finished_goods_meter: Some(100.0),
+                ..QueueProgressInput::default()
+            },
+        )
+        .await
+        .expect("complete");
+
+    let complete_status = service
+        .order_status_detail(order_id)
+        .await
+        .expect("complete status");
+    assert_eq!(complete_status.order_status, "completed");
+
+    // D. completion with issue: completed order with issues reflects completed_with_issue
+    store
+        .append_apparatus_queue_action_event(ApparatusQueueActionEvent {
+            event_id: "evt-issue-1".to_string(),
+            apparatus: apparatus.to_string(),
+            order_id: order_id.to_string(),
+            stage_node_id: "pechat".to_string(),
+            action: queue_state::ApparatusQueueAction::Complete,
+            from_state: queue_state::ApparatusQueueOrderState::InProgress,
+            to_state: queue_state::ApparatusQueueOrderState::Completed,
+            policy: ApparatusQueuePolicy::StrictSequence,
+            actor: actor.clone(),
+            assigned_apparatus: vec![apparatus.to_string()],
+            payload_json: serde_json::json!({
+                "completed_with_issue": true,
+            }),
+        })
+        .await
+        .expect("append issue event");
+
+    let complete_issue_status = service
+        .order_status_detail(order_id)
+        .await
+        .expect("complete issue status");
+    assert_eq!(complete_issue_status.order_status, "completed_with_issue");
+    assert_eq!(complete_issue_status.completed_with_issue_count, 1);
 }

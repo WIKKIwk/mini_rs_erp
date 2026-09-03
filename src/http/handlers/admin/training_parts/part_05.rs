@@ -232,7 +232,6 @@ fn training_progress_batches(
             wip_status: OrderProgressBatchWipStatus::Waiting,
             status_detail: OrderProgressBatchStatusDetail::default(),
             current_apparatus: apparatus.trim().to_string(),
-            current_apparatus_key: queue_state::apparatus_search_key(apparatus),
             current_location: apparatus.trim().to_string(),
             next_apparatus: next_apparatus.clone(),
             parent_batch_id: parent_batch_id.trim().to_string(),

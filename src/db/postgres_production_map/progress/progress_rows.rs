@@ -35,7 +35,6 @@ pub(super) struct ProgressBatchRow {
     pub(super) worker_display_name: String,
     pub(super) wip_status: String,
     pub(super) current_apparatus: String,
-    pub(super) current_apparatus_key: String,
     pub(super) current_location: String,
     pub(super) next_apparatus: String,
     pub(super) parent_batch_id: String,
@@ -168,16 +167,6 @@ pub(super) fn progress_batch_from_row(
             require_live_apparatus_id(apparatus)?;
         }
     }
-    // `current_apparatus_key` is a legacy display snapshot in older rows.
-    // The canonical projection is authoritative whenever it is present.
-    let current_apparatus_key = if !row.current_apparatus.trim().is_empty() {
-        row.current_apparatus.trim().to_string()
-    } else if row.current_apparatus_key.trim().is_empty() {
-        String::new()
-    } else {
-        require_live_apparatus_id(&row.current_apparatus_key)?;
-        row.current_apparatus_key.trim().to_string()
-    };
     let mut batch = OrderProgressBatch {
         batch_id: row.batch_id,
         revision: u64::try_from(row.revision).map_err(|_| ProductionMapError::StoreFailed)?,
@@ -202,7 +191,6 @@ pub(super) fn progress_batch_from_row(
             .ok_or(ProductionMapError::StoreFailed)?,
         status_detail: OrderProgressBatchStatusDetail::default(),
         current_apparatus: row.current_apparatus,
-        current_apparatus_key,
         current_location: row.current_location,
         next_apparatus: row.next_apparatus,
         parent_batch_id: row.parent_batch_id,
@@ -277,7 +265,6 @@ mod tests {
             worker_display_name: "Operator".to_string(),
             wip_status: "waiting".to_string(),
             current_apparatus: "apparatus:default:bosma_7".to_string(),
-            current_apparatus_key: "7 ta rangli pechat".to_string(),
             current_location: String::new(),
             next_apparatus: "apparatus:default:asset-007".to_string(),
             parent_batch_id: String::new(),
@@ -299,10 +286,10 @@ mod tests {
             description: String::new(),
             payload_json: serde_json::json!({}),
         })
-        .expect("legacy display key should not invalidate canonical progress");
+        .expect("canonical progress row mapping");
 
         assert_eq!(
-            batch.current_apparatus_key,
+            batch.current_apparatus,
             "apparatus:default:bosma_7"
         );
     }

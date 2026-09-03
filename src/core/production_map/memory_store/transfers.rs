@@ -230,6 +230,7 @@ pub(super) async fn commit_apparatus_transfer(
         write.record.idempotency_key.trim().to_string(),
         write.record.clone(),
     );
+    super::queue::refresh_production_order_lifecycles(store, &[order_id.to_string()]).await?;
     Ok(write.record)
 }
 

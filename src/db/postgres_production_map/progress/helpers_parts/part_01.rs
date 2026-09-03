@@ -194,6 +194,22 @@ pub(super) async fn put_order_progress_batch(
         .await
         .map_err(|_| ProductionMapError::StoreFailed)?;
     put_order_progress_batch_tx(&mut tx, batch).await?;
+    let order_id = batch.order_id.trim();
+    if !order_id.is_empty() {
+        let actor = QueueActionActor {
+            role: "system".to_string(),
+            ref_: "progress_batch_writer".to_string(),
+            display_name: "Progress Batch Writer".to_string(),
+        };
+        crate::db::postgres_production_map::lifecycle::refresh_production_order_lifecycle_tx(
+            &mut tx,
+            order_id,
+            &actor,
+            &batch.batch_id,
+            "put_order_progress_batch",
+        )
+        .await?;
+    }
     tx.commit()
         .await
         .map_err(|_| ProductionMapError::StoreFailed)
@@ -228,19 +244,13 @@ pub(super) async fn put_order_progress_batch_tx(
             require_live_apparatus_id(apparatus)?;
         }
     }
-    if !batch.current_apparatus_key.trim().is_empty()
-        && crate::core::production_map::canonical_apparatus_key(&batch.current_apparatus_key)
-            .is_empty()
-    {
-        return Err(ProductionMapError::StoreFailed);
-    }
     let result = sqlx::query(
         "INSERT INTO mini_progress_batches (
             batch_id, session_id, apparatus, canonical_apparatus_id, order_id, action, status,
             produced_qty, uom, qr_payload, label_item_code, label_item_name,
             executor_name, worker_role, worker_ref, worker_display_name,
             wip_status, current_apparatus, canonical_current_apparatus_id,
-            current_apparatus_key, current_location, next_apparatus, canonical_next_apparatus_id,
+            current_location, next_apparatus, canonical_next_apparatus_id,
             parent_batch_id, used_by_session_id, used_by_apparatus,
             canonical_used_by_apparatus_id, processed_by_session_id, processed_by_apparatus,
             canonical_processed_by_apparatus_id,
@@ -255,8 +265,12 @@ pub(super) async fn put_order_progress_batch_tx(
                  $4, $5, $6,
                  ($7::double precision)::numeric(18,6),
                  $8, $9, $10, $11, $12, $13, $14, $15, $16,
-                 $17, NULLIF($17, ''), $18, $19, $20, NULLIF($20, ''),
-                 $21, $22, $23, NULLIF($23, ''), $24, $25, NULLIF($25, ''),
+                 $17, NULLIF($17, ''), $18, $19, NULLIF($19, ''),
+                 $20, $21, $22,
+                 CASE WHEN lower($22) LIKE 'warehouse:%' THEN NULL ELSE NULLIF($22, '') END,
+                 $23, $24,
+                 CASE WHEN lower($24) LIKE 'warehouse:%' THEN NULL ELSE NULLIF($24, '') END,
+                 ($25::double precision)::numeric(18,6),
                  ($26::double precision)::numeric(18,6),
                  ($27::double precision)::numeric(18,6),
                  ($28::double precision)::numeric(18,6),
@@ -267,8 +281,7 @@ pub(super) async fn put_order_progress_batch_tx(
                  ($33::double precision)::numeric(18,6),
                  ($34::double precision)::numeric(18,6),
                  ($35::double precision)::numeric(18,6),
-                 ($36::double precision)::numeric(18,6),
-                 $37, $38, $39, now(), now())
+                 $36, $37, $38, now(), now())
          ON CONFLICT (batch_id) DO UPDATE SET
             session_id = excluded.session_id,
             apparatus = excluded.apparatus,
@@ -286,7 +299,6 @@ pub(super) async fn put_order_progress_batch_tx(
             wip_status = excluded.wip_status,
             current_apparatus = excluded.current_apparatus,
             canonical_current_apparatus_id = excluded.canonical_current_apparatus_id,
-            current_apparatus_key = excluded.current_apparatus_key,
             current_location = excluded.current_location,
             next_apparatus = excluded.next_apparatus,
             canonical_next_apparatus_id = excluded.canonical_next_apparatus_id,
@@ -330,7 +342,6 @@ pub(super) async fn put_order_progress_batch_tx(
     .bind(batch.worker_display_name.trim())
     .bind(batch.wip_status.as_str())
     .bind(batch.current_apparatus.trim())
-    .bind(non_empty_current_apparatus_key(batch))
     .bind(batch.current_location.trim())
     .bind(batch.next_apparatus.trim())
     .bind(batch.parent_batch_id.trim())

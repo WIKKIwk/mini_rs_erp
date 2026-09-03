@@ -58,7 +58,7 @@ use self::completion_helpers::{
     load_completion_request_by_event_id, load_completion_request_decisions_for_actor,
     load_completion_requests, resolve_completion_request_decision as resolve_completion_request,
 };
-use self::lifecycle::{load_production_order_lifecycles, refresh_production_order_lifecycle_tx};
+pub(crate) use self::lifecycle::{load_production_order_lifecycles, refresh_production_order_lifecycle_tx};
 use self::map_helpers::{
     put_map_inner, put_map_inner_tx, reject_duplicate_order_number,
     reject_duplicate_order_number_tx, reject_order_number_immutable,

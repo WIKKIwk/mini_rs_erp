@@ -349,7 +349,6 @@ pub(super) async fn wip_progress_batches(
     if !apparatus.is_empty() {
         ApparatusId::new(apparatus.to_string()).map_err(|_| ProductionMapError::StoreFailed)?;
     }
-    let apparatus_key = super::super::types::canonical_apparatus_key(apparatus);
     let next_apparatus = next_apparatus.trim();
     if !next_apparatus.is_empty() {
         ApparatusId::new(next_apparatus.to_string())
@@ -364,8 +363,6 @@ pub(super) async fn wip_progress_batches(
         .values()
         .filter(|batch| {
             (apparatus.is_empty()
-                || (!apparatus_key.is_empty()
-                    && batch.current_apparatus_key.trim() == apparatus_key)
                 || super::super::types::apparatus_ids_match(&batch.current_apparatus, apparatus)
                 || super::super::types::apparatus_ids_match(&batch.apparatus, apparatus))
                 && (current_location.is_empty()

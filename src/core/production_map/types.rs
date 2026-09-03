@@ -20,4 +20,5 @@ pub use definition::*;
 pub use lifecycle::*;
 pub use paddon::*;
 pub use progress::*;
+pub use progress_status::*;
 pub use queue::*;

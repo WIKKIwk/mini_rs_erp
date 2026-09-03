@@ -365,7 +365,6 @@ fn repair_current_apparatus_fields(batch: &mut OrderProgressBatch) {
         return;
     }
     batch.current_apparatus = batch.apparatus.trim().to_string();
-    batch.current_apparatus_key = super::types::canonical_apparatus_key(&batch.current_apparatus);
     if batch.current_location.trim().is_empty() {
         batch.current_location = batch.current_apparatus.clone();
     }

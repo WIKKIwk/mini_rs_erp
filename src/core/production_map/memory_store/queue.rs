@@ -44,7 +44,7 @@ pub(super) async fn put_apparatus_queue_states(
     Ok(())
 }
 
-pub(super) async fn refresh_production_order_lifecycles(
+pub(crate) async fn refresh_production_order_lifecycles(
     store: &MemoryProductionMapStore,
     order_ids: &[String],
 ) -> Result<(), ProductionMapError> {
@@ -85,6 +85,14 @@ pub(super) async fn refresh_production_order_lifecycles(
         );
     let maps = store.maps.read().await;
     let queue_states = store.queue_states.read().await;
+    let roll_detached_orders = store
+        .order_run_sessions
+        .read()
+        .await
+        .values()
+        .filter(|session| session.status == super::super::OrderRunStatus::RollDetached)
+        .map(|session| session.order_id.trim().to_string())
+        .collect::<BTreeSet<_>>();
     let mut lifecycles = store.production_order_lifecycles.write().await;
     for order_id in order_ids {
         let order_id = order_id.trim();
@@ -123,16 +131,45 @@ pub(super) async fn refresh_production_order_lifecycles(
                 "normal".to_string()
             };
         }
+        let mut free_wip_count = 0;
+        let mut waiting_next_stage_count = 0;
+        let mut in_use_wip_count = 0;
+        let mut accepted_wip_count = 0;
+        for batch in store.order_progress_batches.read().await.values() {
+            if batch.order_id.trim() != order_id {
+                continue;
+            }
+            match super::super::types::OrderProgressBatchStatusDetail::flow_status_for_batch(batch) {
+                "waiting_next_stage" => waiting_next_stage_count += 1,
+                "in_progress" => in_use_wip_count += 1,
+                "free_wip" => free_wip_count += 1,
+                "accepted_to_stock" => accepted_wip_count += 1,
+                _ => {}
+            }
+        }
+        let has_roll_detached = roll_detached_orders.contains(order_id);
         let operational_status = super::super::progress::derive_production_order_operational_status(
             record.status,
             &queue_states,
             order_id,
             completed_with_issue_count,
+            has_roll_detached,
+            waiting_next_stage_count,
         );
         if record.operational_status != operational_status {
             record.operational_status = operational_status;
             record.operational_status_changed_at_unix += 1;
         }
+        let (flow_status, stock_status) =
+            super::super::types::derive_order_flow_and_stock_status(
+                operational_status.as_str(),
+                free_wip_count,
+                waiting_next_stage_count,
+                in_use_wip_count,
+                accepted_wip_count,
+            );
+        record.flow_status = flow_status.to_string();
+        record.stock_status = stock_status.to_string();
     }
     Ok(())
 }

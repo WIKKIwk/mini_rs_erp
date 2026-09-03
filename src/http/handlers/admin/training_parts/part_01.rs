@@ -359,7 +359,6 @@ fn training_input_progress_batch(
         wip_status: OrderProgressBatchWipStatus::Waiting,
         status_detail: OrderProgressBatchStatusDetail::default(),
         current_apparatus: apparatus.trim().to_string(),
-        current_apparatus_key: queue_state::apparatus_search_key(&previous_stage),
         current_location: format!("{previous_stage} chiqim"),
         next_apparatus: apparatus.trim().to_string(),
         parent_batch_id: String::new(),
@@ -427,7 +426,6 @@ fn training_claim_input_batch(
     let mut claimed = batch.clone();
     claimed.wip_status = OrderProgressBatchWipStatus::InUse;
     claimed.current_apparatus = apparatus.trim().to_string();
-    claimed.current_apparatus_key = queue_state::apparatus_search_key(apparatus);
     claimed.current_location = apparatus.trim().to_string();
     claimed.used_by_session_id = format!(
         "training-input-use:{}:{}:{}",

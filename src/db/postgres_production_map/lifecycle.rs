@@ -9,7 +9,7 @@ use crate::core::production_map::{
     derive_production_order_operational_status,
 };
 
-pub(super) async fn load_production_order_lifecycles(
+pub(crate) async fn load_production_order_lifecycles(
     pool: &PgPool,
     order_ids: &[String],
 ) -> Result<BTreeMap<String, ProductionOrderLifecycleRecord>, ProductionMapError> {
@@ -31,6 +31,8 @@ pub(super) async fn load_production_order_lifecycles(
             String,
             i64,
             i64,
+            String,
+            String,
         ),
     >(
         "SELECT id,
@@ -42,7 +44,9 @@ pub(super) async fn load_production_order_lifecycles(
                 lifecycle_version,
                 operational_status,
                 extract(epoch FROM operational_status_changed_at)::BIGINT,
-                completed_with_issue_count
+                completed_with_issue_count,
+                flow_status,
+                stock_status
          FROM mini_production_maps
          WHERE cardinality($1::TEXT[]) = 0 OR id = ANY($1::TEXT[])
          ORDER BY id",
@@ -65,6 +69,8 @@ pub(super) async fn load_production_order_lifecycles(
                 operational_status,
                 operational_status_changed_at_unix,
                 completed_with_issue_count,
+                flow_status,
+                stock_status,
             )| {
                 let record = ProductionOrderLifecycleRecord {
                     order_id: order_id.clone(),
@@ -80,6 +86,8 @@ pub(super) async fn load_production_order_lifecycles(
                     operational_status_changed_at_unix,
                     completed_with_issue_count: usize::try_from(completed_with_issue_count)
                         .map_err(|_| ProductionMapError::StoreFailed)?,
+                    flow_status,
+                    stock_status,
                 };
                 Ok((order_id, record))
             },
@@ -87,7 +95,7 @@ pub(super) async fn load_production_order_lifecycles(
         .collect()
 }
 
-pub(super) async fn refresh_production_order_lifecycle_tx(
+pub(crate) async fn refresh_production_order_lifecycle_tx(
     tx: &mut Transaction<'_, Postgres>,
     order_id: &str,
     actor: &QueueActionActor,
@@ -101,12 +109,15 @@ pub(super) async fn refresh_production_order_lifecycle_tx(
         current_version,
         current_operational_status,
         current_completed_with_issue_count,
-    )) = sqlx::query_as::<_, (serde_json::Value, String, i64, String, i64)>(
+        current_flow_status,
+        current_stock_status,
+    )) = sqlx::query_as::<_, (serde_json::Value, String, i64, String, i64, String, String)>(
         "SELECT map_json, lifecycle_status, lifecycle_version,
-                    operational_status, completed_with_issue_count
-             FROM mini_production_maps
-             WHERE id = $1
-             FOR UPDATE",
+                operational_status, completed_with_issue_count,
+                flow_status, stock_status
+         FROM mini_production_maps
+         WHERE id = $1
+         FOR UPDATE",
     )
     .bind(order_id)
     .fetch_optional(&mut **tx)
@@ -119,8 +130,9 @@ pub(super) async fn refresh_production_order_lifecycle_tx(
     let current_operational_status =
         ProductionOrderOperationalStatus::parse(&current_operational_status)?;
 
-    let map = serde_json::from_value::<ProductionMapDefinition>(map_json)
-        .map_err(|_| ProductionMapError::StoreFailed)?;
+    let Ok(map) = serde_json::from_value::<ProductionMapDefinition>(map_json) else {
+        return Ok(());
+    };
     let queue_rows = sqlx::query_as::<_, (String, String)>(
         "SELECT canonical_apparatus_id, state
          FROM mini_queue_states
@@ -177,15 +189,70 @@ pub(super) async fn refresh_production_order_lifecycle_tx(
     .map_err(|_| ProductionMapError::StoreFailed)?;
     let completed_with_issue_count_usize =
         usize::try_from(completed_with_issue_count).map_err(|_| ProductionMapError::StoreFailed)?;
+    let has_roll_detached = sqlx::query_scalar::<_, i64>(
+        "SELECT count(*)::BIGINT
+         FROM mini_order_run_sessions
+         WHERE order_id = $1
+           AND status = 'roll_detached'",
+    )
+    .bind(order_id)
+    .fetch_one(&mut **tx)
+    .await
+    .map_err(|_| ProductionMapError::StoreFailed)?
+        > 0;
+
+    let (free_wip_count, waiting_next_stage_count, in_use_wip_count, accepted_wip_count) =
+        sqlx::query_as::<_, (i64, i64, i64, i64)>(
+            "SELECT count(*) FILTER (
+                        WHERE wip_status = 'waiting'
+                          AND (COALESCE(canonical_next_apparatus_id, '') = '' OR canonical_next_apparatus_id IS NULL)
+                    )::BIGINT,
+                    count(*) FILTER (
+                        WHERE wip_status = 'waiting'
+                          AND COALESCE(canonical_next_apparatus_id, '') <> ''
+                    )::BIGINT,
+                    count(*) FILTER (
+                        WHERE wip_status = 'in_use'
+                    )::BIGINT,
+                    count(*) FILTER (
+                        WHERE wip_status = 'processed'
+                          AND lower(COALESCE(processed_by_apparatus, '')) LIKE 'warehouse:%'
+                    )::BIGINT
+             FROM mini_progress_batches
+             WHERE order_id = $1",
+        )
+        .bind(order_id)
+        .fetch_one(&mut **tx)
+        .await
+        .map_err(|_| ProductionMapError::StoreFailed)?;
+
+    let free_wip_usize = usize::try_from(free_wip_count).unwrap_or(0);
+    let waiting_next_stage_usize = usize::try_from(waiting_next_stage_count).unwrap_or(0);
+    let in_use_wip_usize = usize::try_from(in_use_wip_count).unwrap_or(0);
+    let accepted_wip_usize = usize::try_from(accepted_wip_count).unwrap_or(0);
+
     let next_operational_status = derive_production_order_operational_status(
         next_status,
         &queue_states,
         order_id,
         completed_with_issue_count_usize,
+        has_roll_detached,
+        waiting_next_stage_usize,
     );
+    let (next_flow_status, next_stock_status) =
+        crate::core::production_map::derive_order_flow_and_stock_status(
+            next_operational_status.as_str(),
+            free_wip_usize,
+            waiting_next_stage_usize,
+            in_use_wip_usize,
+            accepted_wip_usize,
+        );
+
+    let flow_changed = next_flow_status != current_flow_status.as_str()
+        || next_stock_status != current_stock_status.as_str();
     let operational_changed = next_operational_status != current_operational_status
         || completed_with_issue_count != current_completed_with_issue_count;
-    if !lifecycle_changed && !operational_changed {
+    if !lifecycle_changed && !operational_changed && !flow_changed {
         return Ok(());
     }
     let completion_outcome = match next_status {
@@ -217,7 +284,9 @@ pub(super) async fn refresh_production_order_lifecycle_tx(
                  WHEN $7 THEN now()
                  ELSE operational_status_changed_at
              END,
-             completed_with_issue_count = $8
+             completed_with_issue_count = $8,
+             flow_status = $9,
+             stock_status = $10
          WHERE id = $1",
     )
     .bind(order_id)
@@ -228,6 +297,8 @@ pub(super) async fn refresh_production_order_lifecycle_tx(
     .bind(next_operational_status.as_str())
     .bind(operational_changed)
     .bind(completed_with_issue_count)
+    .bind(next_flow_status)
+    .bind(next_stock_status)
     .execute(&mut **tx)
     .await
     .map_err(|_| ProductionMapError::StoreFailed)?;

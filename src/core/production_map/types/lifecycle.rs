@@ -134,6 +134,10 @@ pub struct ProductionOrderLifecycleRecord {
     pub operational_status_changed_at_unix: i64,
     #[serde(default)]
     pub completed_with_issue_count: usize,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub flow_status: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub stock_status: String,
 }
 
 impl ProductionOrderLifecycleRecord {
@@ -149,6 +153,8 @@ impl ProductionOrderLifecycleRecord {
             operational_status: ProductionOrderOperationalStatus::NotStarted,
             operational_status_changed_at_unix: 0,
             completed_with_issue_count: 0,
+            flow_status: "not_started".to_string(),
+            stock_status: String::new(),
         }
     }
 

@@ -197,6 +197,7 @@ mod tests {
         assert!(versions.contains("0087_queue_event_stage_identity"));
         assert!(versions.contains("0088_order_run_session_stage_identity"));
         assert!(versions.contains("0089_progress_batch_typed_payload_mirrors"));
+        assert!(versions.contains("0090_drop_progress_batch_current_apparatus_key"));
         assert!(POSTGRES_MIGRATIONS.iter().all(|(version, sql)| {
             !version.trim().is_empty() && migration_checksum(sql).len() == 64
         }));
@@ -318,6 +319,24 @@ mod tests {
             "'processed_by_session_id'",
             "'processed_by_apparatus'",
             "'from_apparatus'",
+        ] {
+            assert!(compact.contains(invariant), "missing invariant: {invariant}");
+        }
+    }
+
+    #[test]
+    fn drop_progress_batch_current_apparatus_key_migration_invariants() {
+        let migration = POSTGRES_MIGRATIONS
+            .iter()
+            .find(|(version, _)| *version == "0090_drop_progress_batch_current_apparatus_key")
+            .map(|(_, sql)| sql.to_lowercase())
+            .expect("drop progress batch current apparatus key migration");
+        let compact = migration.split_whitespace().collect::<String>();
+
+        for invariant in [
+            "idx_mini_progress_batches_wip_status_apparatus_key",
+            "idx_mini_progress_batches_wip_status_canonical_current_apparatus",
+            "dropcolumnifexistscurrent_apparatus_key",
         ] {
             assert!(compact.contains(invariant), "missing invariant: {invariant}");
         }

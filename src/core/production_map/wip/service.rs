@@ -23,6 +23,7 @@ impl ProductionMapService {
             mut logs_by_order,
             corrections,
             run_sessions,
+            order_status,
         ) = tokio::try_join!(
             self.raw_map(&order_id),
             self.store.progress_batches_for_order(&order_id),
@@ -32,6 +33,7 @@ impl ProductionMapService {
             self.store
                 .progress_batch_corrections_for_order(&order_id),
             self.store.order_run_sessions_for_order(&order_id),
+            self.order_status_detail(&order_id),
         )?;
         normalize_self_consumed_wip_history(&mut progress_batches);
         for batch in &mut progress_batches {
@@ -70,12 +72,6 @@ impl ProductionMapService {
             })
             .cloned()
             .collect();
-        let order_status = ProductionOrderStatusDetail::from_order_flow(
-            &progress_batches,
-            &run_sessions,
-            &queue_states,
-            &logs,
-        );
         Ok(ProductionQrReport {
             scanned_batch,
             current_batch,

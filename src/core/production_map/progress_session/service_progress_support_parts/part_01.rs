@@ -465,7 +465,6 @@ pub(super) fn progress_batch_record(
         wip_status: OrderProgressBatchWipStatus::Waiting,
         status_detail: OrderProgressBatchStatusDetail::default(),
         current_apparatus: context.apparatus.to_string(),
-        current_apparatus_key: super::types::canonical_apparatus_key(context.apparatus),
         current_location: wip_waiting_location(context.apparatus),
         next_apparatus: next_stage
             .as_ref()

@@ -514,7 +514,7 @@ async fn postgres_wip_batches_scan_past_first_page_for_matching_apparatus() {
             produced_qty, uom, qr_payload, label_item_code, label_item_name,
             executor_name, worker_role, worker_ref, worker_display_name,
             wip_status, current_apparatus, canonical_current_apparatus_id,
-            current_apparatus_key, current_location,
+            current_location,
             next_apparatus, canonical_next_apparatus_id, payload_json,
             created_at, updated_at
          )
@@ -535,7 +535,6 @@ async fn postgres_wip_batches_scan_past_first_page_for_matching_apparatus() {
                 'worker-noise',
                 'Worker Noise',
                 'waiting',
-                'apparatus:default:paket',
                 'apparatus:default:paket',
                 'apparatus:default:paket',
                 'apparatus:default:paket',
@@ -667,7 +666,6 @@ fn wip_batch(current_apparatus: &str) -> OrderProgressBatch {
         wip_status: OrderProgressBatchWipStatus::Waiting,
         status_detail: OrderProgressBatchStatusDetail::default(),
         current_apparatus: current_apparatus.to_string(),
-        current_apparatus_key: queue_state::apparatus_search_key(current_apparatus),
         current_location: current_apparatus.to_string(),
         next_apparatus: "apparatus:default:paket".to_string(),
         parent_batch_id: String::new(),
@@ -1098,6 +1096,611 @@ async fn postgres_progress_batch_typed_payload_mirrors_real_cutover_and_invarian
             Some("mini_progress_batches_wip_typed_payload_forbidden")
         );
     }
+
+    // Cleanup test database
+    pool.close().await;
+    let admin_pool = sqlx::PgPool::connect(&admin_url)
+        .await
+        .expect("admin cleanup");
+    sqlx::query(&format!(
+        r#"DROP DATABASE IF EXISTS "{db_name}" WITH (FORCE)"#
+    ))
+    .execute(&admin_pool)
+    .await
+    .expect("drop test db");
+}
+
+#[tokio::test]
+async fn postgres_drop_progress_batch_current_apparatus_key_real_migration_and_invariants() {
+    let admin_url = std::env::var("MINI_ERP_TEST_ADMIN_DATABASE_URL")
+        .unwrap_or_else(|_| "postgres://superuser@127.0.0.1:5432/postgres".to_string());
+    let db_name = "mini_rs_erp_test_drop_current_apparatus_key";
+    let admin_pool = sqlx::PgPool::connect(&admin_url).await.expect("admin db");
+    sqlx::query(&format!(
+        r#"DROP DATABASE IF EXISTS "{db_name}" WITH (FORCE)"#
+    ))
+    .execute(&admin_pool)
+    .await
+    .expect("drop test db");
+    sqlx::query(&format!(r#"CREATE DATABASE "{db_name}""#))
+        .execute(&admin_pool)
+        .await
+        .expect("create test db");
+    admin_pool.close().await;
+
+    let pool = sqlx::PgPool::connect_with(postgres_test_database_options(&admin_url, db_name))
+        .await
+        .expect("test db");
+
+    // 1. Apply migrations 1..=89 (pre-0090 schema where current_apparatus_key column exists)
+    apply_postgres_migrations_through(&pool, 89)
+        .await
+        .expect("apply migrations up to 0089");
+    seed_standard_canonical_apparatus(&pool).await;
+
+    let test_order_id = "zakaz-drop-key-01";
+    let apparatus_10 = "apparatus:default:asset-010";
+    let apparatus_bosma_8 = "apparatus:default:bosma_8";
+
+    let test_map = serde_json::json!({
+        "id": test_order_id,
+        "product_code": "TEST",
+        "title": "Test Map",
+        "nodes": [
+            { "id": "start", "kind": "start", "title": "Start" },
+            { "id": "cut", "kind": "apparatus", "title": "Rezka", "apparatus_id": apparatus_10 },
+            { "id": "pack", "kind": "apparatus", "title": "Paket", "apparatus_id": "apparatus:default:paket" }
+        ],
+        "edges": [
+            { "from": "start", "to": "cut" },
+            { "from": "cut", "to": "pack" }
+        ]
+    });
+
+    sqlx::query(
+        "INSERT INTO mini_production_maps (id, product_code, title, map_json)
+         VALUES ($1, 'TEST', 'Test Map', $2)",
+    )
+    .bind(test_order_id)
+    .bind(&test_map)
+    .execute(&pool)
+    .await
+    .expect("seed test map");
+
+    // Verify pre-0090: column current_apparatus_key exists
+    let col_exists_pre: bool = sqlx::query_scalar(
+        "SELECT EXISTS (
+            SELECT 1 FROM information_schema.columns
+            WHERE table_name = 'mini_progress_batches' AND column_name = 'current_apparatus_key'
+        )",
+    )
+    .fetch_one(&pool)
+    .await
+    .expect("check column pre-0090");
+    assert!(col_exists_pre, "current_apparatus_key column must exist pre-0090");
+
+    // Verify pre-0090: obsolete index exists
+    let idx_exists_pre: bool = sqlx::query_scalar(
+        "SELECT EXISTS (
+            SELECT 1 FROM pg_indexes
+            WHERE tablename = 'mini_progress_batches' AND indexname = 'idx_mini_progress_batches_wip_status_apparatus_key'
+        )",
+    )
+    .fetch_one(&pool)
+    .await
+    .expect("check index pre-0090");
+    assert!(idx_exists_pre, "obsolete index must exist pre-0090");
+
+    // 2. Seed representative legacy rows:
+    // Row 1: Valid canonical current apparatus identity + current_apparatus_key populated
+    sqlx::query(
+        "INSERT INTO mini_progress_batches (
+            batch_id, session_id, apparatus, canonical_apparatus_id, order_id,
+            action, status, produced_qty, uom, qr_payload, label_item_code, label_item_name,
+            wip_status, current_apparatus, canonical_current_apparatus_id, current_apparatus_key,
+            current_location, next_apparatus, canonical_next_apparatus_id, payload_json
+         )
+         VALUES (
+            'batch-canonical-01', 'sess-01', $1, $1, $2,
+            'pause', 'paused', 100.0, 'm', 'qr:batch-canonical-01', $2, 'Item 01',
+            'waiting', $1, $1, $1,
+            'loc-01', 'apparatus:default:paket', 'apparatus:default:paket', '{}'::jsonb
+         )",
+    )
+    .bind(apparatus_10)
+    .bind(test_order_id)
+    .execute(&pool)
+    .await
+    .expect("seed row 1");
+
+    // Row 2: Canonical identity is valid, but current_apparatus_key has historical display-style key
+    sqlx::query(
+        "INSERT INTO mini_progress_batches (
+            batch_id, session_id, apparatus, canonical_apparatus_id, order_id,
+            action, status, produced_qty, uom, qr_payload, label_item_code, label_item_name,
+            wip_status, current_apparatus, canonical_current_apparatus_id, current_apparatus_key,
+            current_location, next_apparatus, canonical_next_apparatus_id, payload_json
+         )
+         VALUES (
+            'batch-display-key-02', 'sess-02', $1, $1, $2,
+            'pause', 'paused', 200.0, 'm', 'qr:batch-display-key-02', $2, 'Item 02',
+            'waiting', $1, $1, '8 ta rangli pechat',
+            'loc-02', 'apparatus:default:paket', 'apparatus:default:paket', '{}'::jsonb
+         )",
+    )
+    .bind(apparatus_bosma_8)
+    .bind(test_order_id)
+    .execute(&pool)
+    .await
+    .expect("seed row 2");
+
+    // Row 3: canonical_current_apparatus_id is NULL and current_apparatus is empty, but current_apparatus_key has valid canonical apparatus id
+    sqlx::query(
+        "INSERT INTO mini_progress_batches (
+            batch_id, session_id, apparatus, canonical_apparatus_id, order_id,
+            action, status, produced_qty, uom, qr_payload, label_item_code, label_item_name,
+            wip_status, current_apparatus, canonical_current_apparatus_id, current_apparatus_key,
+            current_location, next_apparatus, canonical_next_apparatus_id, payload_json
+         )
+         VALUES (
+            'batch-repaired-key-03', 'sess-03', $1, $1, $2,
+            'pause', 'paused', 300.0, 'm', 'qr:batch-repaired-key-03', $2, 'Item 03',
+            'waiting', '', NULL, $1,
+            'loc-03', 'apparatus:default:paket', 'apparatus:default:paket', '{}'::jsonb
+         )",
+    )
+    .bind(apparatus_10)
+    .bind(test_order_id)
+    .execute(&pool)
+    .await
+    .expect("seed row 3");
+
+    // 3. Apply migration 0090
+    apply_postgres_migrations_through(&pool, 90)
+        .await
+        .expect("apply migration 0090");
+
+    // 4. Assertions:
+    // a) Column current_apparatus_key is dropped
+    let col_exists_post: bool = sqlx::query_scalar(
+        "SELECT EXISTS (
+            SELECT 1 FROM information_schema.columns
+            WHERE table_name = 'mini_progress_batches' AND column_name = 'current_apparatus_key'
+        )",
+    )
+    .fetch_one(&pool)
+    .await
+    .expect("check column post-0090");
+    assert!(!col_exists_post, "current_apparatus_key column must be dropped by 0090");
+
+    // b) Obsolete index is dropped
+    let idx_exists_post: bool = sqlx::query_scalar(
+        "SELECT EXISTS (
+            SELECT 1 FROM pg_indexes
+            WHERE tablename = 'mini_progress_batches' AND indexname = 'idx_mini_progress_batches_wip_status_apparatus_key'
+        )",
+    )
+    .fetch_one(&pool)
+    .await
+    .expect("check obsolete index post-0090");
+    assert!(!idx_exists_post, "obsolete index must be dropped by 0090");
+
+    // c) New index on canonical current apparatus identity exists
+    let new_idx_exists_post: bool = sqlx::query_scalar(
+        "SELECT EXISTS (
+            SELECT 1 FROM pg_indexes
+            WHERE tablename = 'mini_progress_batches' AND indexname = 'idx_mini_progress_batches_wip_status_canonical_current_apparatus'
+        )",
+    )
+    .fetch_one(&pool)
+    .await
+    .expect("check new index post-0090");
+    assert!(new_idx_exists_post, "canonical current apparatus index must exist post-0090");
+
+    // d) Row 3 was repaired by migration 0090
+    let (repaired_canonical_id, repaired_current_apparatus): (String, String) = sqlx::query_as(
+        "SELECT COALESCE(canonical_current_apparatus_id, ''), current_apparatus
+         FROM mini_progress_batches
+         WHERE batch_id = 'batch-repaired-key-03'",
+    )
+    .fetch_one(&pool)
+    .await
+    .expect("fetch repaired row");
+    assert_eq!(repaired_canonical_id, apparatus_10);
+    assert_eq!(repaired_current_apparatus, apparatus_10);
+
+    // e) Real Postgres WIP queries return exact canonical apparatus matches
+    let store = Arc::new(PostgresProductionMapStore::new(pool.clone()));
+    let service = ProductionMapService::new_for_test(store.clone());
+
+    // Query WIP for apparatus_10: must return batch-canonical-01 and batch-repaired-key-03
+    let batches_10 = service
+        .wip_progress_batches(WipProgressBatchQuery::new(
+            apparatus_10,
+            "",
+            "",
+            Some(OrderProgressBatchWipStatus::Waiting),
+            false,
+            test_order_id,
+            10,
+        ))
+        .await
+        .expect("wip query for apparatus_10");
+    assert_eq!(batches_10.len(), 2);
+    let ids_10: Vec<String> = batches_10.into_iter().map(|b| b.batch_id).collect();
+    assert!(ids_10.contains(&"batch-canonical-01".to_string()));
+    assert!(ids_10.contains(&"batch-repaired-key-03".to_string()));
+
+    // Query WIP for apparatus_bosma_8: must return batch-display-key-02
+    let batches_8 = service
+        .wip_progress_batches(WipProgressBatchQuery::new(
+            apparatus_bosma_8,
+            "",
+            "",
+            Some(OrderProgressBatchWipStatus::Waiting),
+            false,
+            test_order_id,
+            10,
+        ))
+        .await
+        .expect("wip query for apparatus_bosma_8");
+    assert_eq!(batches_8.len(), 1);
+    assert_eq!(batches_8[0].batch_id, "batch-display-key-02");
+    assert_eq!(batches_8[0].current_apparatus, apparatus_bosma_8);
+
+    // Querying with historical display string fails validation because canonical identity is authoritative
+    let batches_display = service
+        .wip_progress_batches(WipProgressBatchQuery::new(
+            "8 ta rangli pechat",
+            "",
+            "",
+            Some(OrderProgressBatchWipStatus::Waiting),
+            false,
+            test_order_id,
+            10,
+        ))
+        .await;
+    assert!(batches_display.is_err(), "non-canonical apparatus query must fail validation");
+
+    // Cleanup test database
+    pool.close().await;
+    let admin_pool = sqlx::PgPool::connect(&admin_url)
+        .await
+        .expect("admin cleanup");
+    sqlx::query(&format!(
+        r#"DROP DATABASE IF EXISTS "{db_name}" WITH (FORCE)"#
+    ))
+    .execute(&admin_pool)
+    .await
+    .expect("drop test db");
+}
+
+#[tokio::test]
+async fn postgres_0091_migration_backfill_and_write_side_persistence() {
+    let admin_url = std::env::var("MINI_ERP_TEST_ADMIN_DATABASE_URL")
+        .unwrap_or_else(|_| "postgres://superuser@127.0.0.1:5432/postgres".to_string());
+    let db_name = "mini_rs_erp_test_canonical_0091";
+    let admin_pool = match sqlx::PgPool::connect(&admin_url).await {
+        Ok(pool) => pool,
+        Err(err) => {
+            eprintln!("Skipping PostgreSQL test: admin db connect failed ({err})");
+            return;
+        }
+    };
+
+    sqlx::query(&format!(
+        r#"DROP DATABASE IF EXISTS "{db_name}" WITH (FORCE)"#
+    ))
+    .execute(&admin_pool)
+    .await
+    .expect("drop test db");
+    sqlx::query(&format!(r#"CREATE DATABASE "{db_name}""#))
+        .execute(&admin_pool)
+        .await
+        .expect("create test db");
+    admin_pool.close().await;
+
+    let pool = sqlx::PgPool::connect_with(postgres_test_database_options(&admin_url, db_name))
+        .await
+        .expect("test db");
+
+    // 1. Apply migrations 1..=90
+    apply_postgres_migrations_through(&pool, 90)
+        .await
+        .expect("apply migrations up to 0090");
+    seed_standard_canonical_apparatus(&pool).await;
+
+    // Verify pre-0091: flow_status and stock_status columns do not exist yet
+    let flow_col_pre: bool = sqlx::query_scalar(
+        "SELECT EXISTS (
+            SELECT 1 FROM information_schema.columns
+            WHERE table_name = 'mini_production_maps' AND column_name = 'flow_status'
+        )",
+    )
+    .fetch_one(&pool)
+    .await
+    .expect("check flow_status column pre-0091");
+    assert!(!flow_col_pre, "flow_status must not exist pre-0091");
+
+    // 2. Seed legacy states representing old semantics
+    let order_free_wip = "zakaz-legacy-free-wip";
+    let order_accepted_stock = "zakaz-legacy-accepted-stock";
+    let order_waiting_next = "zakaz-legacy-waiting-next";
+    let order_in_progress = "zakaz-legacy-in-progress";
+
+    let apparatus_05 = "apparatus:default:bosma_7";
+    let apparatus_07 = "apparatus:default:asset-007";
+
+    for (order_id, op_status) in [
+        (order_free_wip, "completed"),
+        (order_accepted_stock, "completed"),
+        (order_waiting_next, "waiting_next_stage"),
+        (order_in_progress, "in_progress"),
+    ] {
+        let legacy_map = test_map(order_id, "1001", "HOT");
+        sqlx::query(
+            "INSERT INTO mini_production_maps (
+                id, product_code, title, map_json, lifecycle_status, lifecycle_version, operational_status
+             ) VALUES (
+                $1, 'TEST', 'Test Order', $2, 'released', 1, $3
+             )",
+        )
+        .bind(order_id)
+        .bind(serde_json::to_value(&legacy_map).unwrap())
+        .bind(op_status)
+        .execute(&pool)
+        .await
+        .expect("seed legacy map");
+    }
+
+    // Seed batch for order_free_wip: finished goods output waiting (no next apparatus)
+    sqlx::query(
+        "INSERT INTO mini_progress_batches (
+            batch_id, session_id, apparatus, canonical_apparatus_id, order_id,
+            action, status, produced_qty, uom, qr_payload, label_item_code, label_item_name,
+            wip_status, current_apparatus, canonical_current_apparatus_id,
+            current_location, next_apparatus, canonical_next_apparatus_id, payload_json
+         ) VALUES (
+            'batch-fg-waiting', 'sess-01', $1, $1, $2,
+            'complete', 'completed', 100.0, 'm', 'qr:batch-fg-waiting', 'ITEM-01', 'Item 01',
+            'waiting', $1, $1,
+            'loc-01', '', NULL, '{}'::jsonb
+         )",
+    )
+    .bind(apparatus_05)
+    .bind(order_free_wip)
+    .execute(&pool)
+    .await
+    .expect("seed free wip batch");
+
+    // Seed batch for order_accepted_stock: processed by warehouse
+    sqlx::query(
+        "INSERT INTO mini_progress_batches (
+            batch_id, session_id, apparatus, canonical_apparatus_id, order_id,
+            action, status, produced_qty, uom, qr_payload, label_item_code, label_item_name,
+            wip_status, current_apparatus, canonical_current_apparatus_id,
+            current_location, next_apparatus, canonical_next_apparatus_id, processed_by_apparatus, payload_json
+         ) VALUES (
+            'batch-fg-accepted', 'sess-02', $1, $1, $2,
+            'complete', 'completed', 50.0, 'm', 'qr:batch-fg-accepted', 'ITEM-01', 'Item 01',
+            'processed', $1, $1,
+            'loc-01', '', NULL, 'warehouse:Tayyor mahsulot ombori', '{}'::jsonb
+         )",
+    )
+    .bind(apparatus_05)
+    .bind(order_accepted_stock)
+    .execute(&pool)
+    .await
+    .expect("seed accepted batch");
+
+    // Seed batch for order_waiting_next: waiting for next stage
+    sqlx::query(
+        "INSERT INTO mini_progress_batches (
+            batch_id, session_id, apparatus, canonical_apparatus_id, order_id,
+            action, status, produced_qty, uom, qr_payload, label_item_code, label_item_name,
+            wip_status, current_apparatus, canonical_current_apparatus_id,
+            current_location, next_apparatus, canonical_next_apparatus_id, payload_json
+         ) VALUES (
+            'batch-wip-next', 'sess-03', $1, $1, $2,
+            'complete', 'completed', 75.0, 'm', 'qr:batch-wip-next', 'ITEM-01', 'Item 01',
+            'waiting', $1, $1,
+            'loc-01', $3, $3, '{}'::jsonb
+         )",
+    )
+    .bind(apparatus_05)
+    .bind(order_waiting_next)
+    .bind(apparatus_07)
+    .execute(&pool)
+    .await
+    .expect("seed waiting next stage batch");
+
+    // 3. Apply migration 0091
+    apply_postgres_migrations_through(&pool, 91)
+        .await
+        .expect("apply migration 0091");
+
+    // 4. Assertions on Migration Backfill:
+    // a) Columns exist
+    let flow_col_post: bool = sqlx::query_scalar(
+        "SELECT EXISTS (
+            SELECT 1 FROM information_schema.columns
+            WHERE table_name = 'mini_production_maps' AND column_name = 'flow_status'
+        )",
+    )
+    .fetch_one(&pool)
+    .await
+    .expect("check flow_status post-0091");
+    assert!(flow_col_post, "flow_status column must exist post-0091");
+
+    // b) Backfilled values match exact df6b50f semantics
+    let (free_flow, free_stock): (String, String) = sqlx::query_as(
+        "SELECT flow_status, stock_status FROM mini_production_maps WHERE id = $1",
+    )
+    .bind(order_free_wip)
+    .fetch_one(&pool)
+    .await
+    .expect("fetch free_wip map row");
+    assert_eq!(free_flow, "free_wip", "order with FG waiting must backfill to free_wip");
+    assert_eq!(free_stock, "", "order with FG waiting must have empty stock_status");
+
+    let (accepted_flow, accepted_stock): (String, String) = sqlx::query_as(
+        "SELECT flow_status, stock_status FROM mini_production_maps WHERE id = $1",
+    )
+    .bind(order_accepted_stock)
+    .fetch_one(&pool)
+    .await
+    .expect("fetch accepted map row");
+    assert_eq!(accepted_flow, "accepted_to_stock", "order with warehouse accepted FG must backfill to accepted_to_stock");
+    assert_eq!(accepted_stock, "accepted", "order with warehouse accepted FG must backfill to accepted");
+
+    let (waiting_flow, waiting_stock): (String, String) = sqlx::query_as(
+        "SELECT flow_status, stock_status FROM mini_production_maps WHERE id = $1",
+    )
+    .bind(order_waiting_next)
+    .fetch_one(&pool)
+    .await
+    .expect("fetch waiting next stage map row");
+    assert_eq!(waiting_flow, "waiting_next_stage", "order waiting next stage must preserve waiting_next_stage");
+    assert_eq!(waiting_stock, "");
+
+    let (in_progress_flow, in_progress_stock): (String, String) = sqlx::query_as(
+        "SELECT flow_status, stock_status FROM mini_production_maps WHERE id = $1",
+    )
+    .bind(order_in_progress)
+    .fetch_one(&pool)
+    .await
+    .expect("fetch in_progress map row");
+    assert_eq!(in_progress_flow, "in_progress");
+    assert_eq!(in_progress_stock, "");
+
+    // 5. Test Live Service Write Boundaries:
+    let store = Arc::new(PostgresProductionMapStore::new(pool.clone()));
+    let service = ProductionMapService::new_for_test(store.clone());
+
+    let live_order_id = "zakaz-live-flow-test";
+    let mut live_map = test_map(live_order_id, "1002", "HOT");
+    for node in &mut live_map.nodes {
+        if node.kind == ProductionMapNodeKind::Apparatus {
+            node.title = "apparatus:default:paket".to_string();
+            node.apparatus_id = "apparatus:default:paket".to_string();
+        }
+    }
+    service.upsert_map(live_map).await.expect("upsert live map");
+    store
+        .put_apparatus_sequence(
+            "apparatus:default:paket",
+            vec![live_order_id.to_string()],
+        )
+        .await
+        .expect("save apparatus sequence");
+
+    let worker_actor = crate::core::production_map::QueueActionActor {
+        role: "aparatchi".to_string(),
+        ref_: "worker-01".to_string(),
+        display_name: "Worker One".to_string(),
+    };
+    let assigned = vec!["apparatus:default:paket".to_string()];
+
+    // A. Start action -> in_progress
+    service
+        .apply_apparatus_queue_action_with_progress(
+            "apparatus:default:paket",
+            live_order_id,
+            queue_state::ApparatusQueueAction::Start,
+            &assigned,
+            worker_actor.clone(),
+            crate::core::production_map::QueueProgressInput::default(),
+        )
+        .await
+        .expect("start queue action");
+
+    // Directly query mini_production_maps table to verify WRITE-SIDE PERSISTENCE
+    let (db_op, db_flow, db_stock): (String, String, String) = sqlx::query_as(
+        "SELECT operational_status, flow_status, stock_status FROM mini_production_maps WHERE id = $1",
+    )
+    .bind(live_order_id)
+    .fetch_one(&pool)
+    .await
+    .expect("query mini_production_maps after start");
+    assert_eq!(db_op, "in_progress", "DB operational_status must be persisted as in_progress");
+    assert_eq!(db_flow, "in_progress", "DB flow_status must be persisted as in_progress");
+    assert_eq!(db_stock, "", "DB stock_status must be empty");
+
+    // B. Pause action producing finished goods output -> flow_status = free_wip
+    let paused_result = service
+        .apply_apparatus_queue_action_with_progress(
+            "apparatus:default:paket",
+            live_order_id,
+            queue_state::ApparatusQueueAction::Pause,
+            &assigned,
+            worker_actor.clone(),
+            crate::core::production_map::QueueProgressInput {
+                produced_qty: Some(42.0),
+                uom: "kg".to_string(),
+                ..crate::core::production_map::QueueProgressInput::default()
+            },
+        )
+        .await
+        .expect("pause queue action");
+
+    let paused_batch = paused_result.progress_batch.expect("pause produced batch");
+
+    // Directly query mini_production_maps table: must be operational=paused, flow=free_wip
+    let (db_op_paused, db_flow_paused, db_stock_paused): (String, String, String) = sqlx::query_as(
+        "SELECT operational_status, flow_status, stock_status FROM mini_production_maps WHERE id = $1",
+    )
+    .bind(live_order_id)
+    .fetch_one(&pool)
+    .await
+    .expect("query mini_production_maps after pause");
+    assert_eq!(db_op_paused, "paused");
+    assert_eq!(db_flow_paused, "free_wip", "DB flow_status must be persisted as free_wip");
+    assert_eq!(db_stock_paused, "");
+
+    // C. Warehouse receipt -> flow_status = accepted_to_stock, stock_status = accepted
+    let warehouse_actor = crate::core::production_map::QueueActionActor {
+        role: "werka".to_string(),
+        ref_: "warehouse-worker".to_string(),
+        display_name: "Warehouse Worker".to_string(),
+    };
+    service
+        .receive_finished_goods(
+            &paused_batch.batch_id,
+            &paused_batch.qr_payload,
+            "Tayyor mahsulot ombori",
+            warehouse_actor,
+        )
+        .await
+        .expect("receive finished goods");
+
+    // Directly query mini_production_maps table: MUST BE flow=accepted_to_stock, stock=accepted
+    let (db_op_rcv, db_flow_rcv, db_stock_rcv): (String, String, String) = sqlx::query_as(
+        "SELECT operational_status, flow_status, stock_status FROM mini_production_maps WHERE id = $1",
+    )
+    .bind(live_order_id)
+    .fetch_one(&pool)
+    .await
+    .expect("query mini_production_maps after warehouse receipt");
+    assert_eq!(db_op_rcv, "paused");
+    assert_eq!(db_flow_rcv, "accepted_to_stock", "DB flow_status must be accepted_to_stock");
+    assert_eq!(db_stock_rcv, "accepted", "DB stock_status must be accepted");
+
+    // 6. Read Path Verification:
+    // load_production_order_lifecycles directly reads persisted columns without WIP join
+    let loaded = crate::db::postgres_production_map::load_production_order_lifecycles(
+        &pool,
+        &[live_order_id.to_string()],
+    )
+    .await
+    .expect("load lifecycles");
+    let record = loaded.get(live_order_id).expect("found lifecycle record");
+    assert_eq!(record.flow_status, "accepted_to_stock");
+    assert_eq!(record.stock_status, "accepted");
+
+    // order_status_detail API representation must match
+    let status_detail = service.order_status_detail(live_order_id).await.expect("order status detail");
+    assert_eq!(status_detail.flow_status, "accepted_to_stock");
+    assert_eq!(status_detail.stock_status, "accepted");
 
     // Cleanup test database
     pool.close().await;

@@ -148,9 +148,6 @@ fn require_queue_event_apparatus(event: &ApparatusQueueActionEvent) -> StoreResu
 
 fn require_progress_batch_apparatus(batch: &OrderProgressBatch) -> StoreResult<()> {
     require_live_apparatus(&batch.apparatus)?;
-    if !batch.current_apparatus_key.trim().is_empty() {
-        require_live_apparatus(&batch.current_apparatus_key)?;
-    }
     for apparatus in [
         batch.current_apparatus.as_str(),
         batch.next_apparatus.as_str(),

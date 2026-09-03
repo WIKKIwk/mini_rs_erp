@@ -216,39 +216,15 @@ impl ProductionMapService {
         if order_id.is_empty() {
             return Err(ProductionMapError::MissingId);
         }
-        let order_ids = vec![order_id.to_string()];
-        let (
-            all_queue_states,
-            progress_batches,
-            run_sessions,
-            logs_by_order,
-            lifecycles,
-            order_controls,
-        ) = tokio::join!(
-            self.store.apparatus_queue_states(),
-            self.store.progress_batches_for_order(order_id),
-            self.store.order_run_sessions_for_order(order_id),
-            self.store.queue_action_logs_for_orders(&order_ids),
+        let order_ids = [order_id.to_string()];
+        let (lifecycles, order_controls) = tokio::try_join!(
             self.store.production_order_lifecycles(&order_ids),
             self.store.order_control_states(),
-        );
-        let queue_states = queue_states_for_order(&all_queue_states?, order_id);
-        let progress_batches = progress_batches?;
-        let run_sessions = run_sessions?;
-        let mut logs_by_order = logs_by_order?;
-        let logs = logs_by_order.remove(order_id).unwrap_or_default();
-        let lifecycles = lifecycles?;
-        let order_controls = order_controls?;
-        let mut status = ProductionOrderStatusDetail::from_order_flow(
-            &progress_batches,
-            &run_sessions,
-            &queue_states,
-            &logs,
-        );
-        status.lifecycle_status = lifecycles
+        )?;
+        let record = lifecycles
             .get(order_id)
-            .ok_or(ProductionMapError::MapNotFound)?
-            .status;
+            .ok_or(ProductionMapError::MapNotFound)?;
+        let mut status = ProductionOrderStatusDetail::from_persisted_projection(record);
         if order_controls
             .get(order_id)
             .is_some_and(|control| control.state == OrderControlState::Frozen)

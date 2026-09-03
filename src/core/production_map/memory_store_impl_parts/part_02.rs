@@ -234,16 +234,8 @@ impl MemoryProductionMapStore {
         let event_order_id = write.event.order_id.clone();
         let event_actor = write.event.actor.clone();
         let event_apparatus = write.apparatus.clone();
-        self.put_apparatus_queue_states_with_event(&write.apparatus, write.states, write.event)
-            .await?;
-        for (apparatus, order_ids) in sequence_updates {
-            self.put_apparatus_sequence(&apparatus, order_ids).await?;
-        }
         if let Some(session) = write.session {
             self.put_order_run_session(session).await?;
-        }
-        if let Some(event) = write.progress_event {
-            self.put_order_progress_event(event).await?;
         }
         let progress_batches = write.progress_batches;
         if progress_batches.is_empty() {
@@ -258,6 +250,15 @@ impl MemoryProductionMapStore {
         for batch in write.progress_batch_updates {
             self.put_order_progress_batch(batch).await?;
         }
+
+        if let Some(event) = write.progress_event {
+            self.put_order_progress_event(event).await?;
+        }
+        for (apparatus, order_ids) in sequence_updates {
+            self.put_apparatus_sequence(&apparatus, order_ids).await?;
+        }
+        self.put_apparatus_queue_states_with_event(&write.apparatus, write.states, write.event)
+            .await?;
         if !write.opening_wip_batch_updates.is_empty() {
             let mut records = self.opening_wip_records.write().await;
             for update in write.opening_wip_batch_updates {

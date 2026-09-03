@@ -7,7 +7,6 @@ fn training_process_input_batch(
     let mut processed = batch.clone();
     processed.wip_status = OrderProgressBatchWipStatus::Processed;
     processed.current_apparatus = apparatus.trim().to_string();
-    processed.current_apparatus_key = queue_state::apparatus_search_key(apparatus);
     processed.current_location = format!("{} yakunlandi", apparatus.trim());
     processed.processed_by_session_id = format!(
         "training-input-use:{}:{}:{}",

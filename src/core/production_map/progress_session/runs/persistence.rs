@@ -138,6 +138,7 @@ pub(in super::super) async fn put_order_progress_batch(
     validate_progress_batch_apparatus(&batch)?;
     let input_links = progress_batch_links_for_persistence(store, &batch).await?;
     let batch_id = batch.batch_id.trim().to_string();
+    let order_id = batch.order_id.trim().to_string();
     store
         .order_progress_batches
         .write()
@@ -148,6 +149,9 @@ pub(in super::super) async fn put_order_progress_batch(
         .write()
         .await
         .insert(batch_id, input_links);
+    if !order_id.is_empty() {
+        crate::core::production_map::memory_store::queue::refresh_production_order_lifecycles(store, &[order_id]).await?;
+    }
     Ok(())
 }
 
@@ -179,6 +183,7 @@ pub(in super::super) async fn receive_finished_goods_batch(
     validate_progress_batch_apparatus(&batch)?;
     let input_links = progress_batch_links_for_persistence(store, &batch).await?;
     let batch_id = batch.batch_id.trim().to_string();
+    let order_id = batch.order_id.trim().to_string();
     store
         .order_progress_batches
         .write()
@@ -194,6 +199,9 @@ pub(in super::super) async fn receive_finished_goods_batch(
         .write()
         .await
         .insert(stock.id.trim().to_string(), stock);
+    if !order_id.is_empty() {
+        crate::core::production_map::memory_store::queue::refresh_production_order_lifecycles(store, &[order_id]).await?;
+    }
     Ok(())
 }
 
@@ -207,9 +215,6 @@ fn validate_session_apparatus(session: &OrderRunSession) -> Result<(), Productio
 
 fn validate_progress_batch_apparatus(batch: &OrderProgressBatch) -> Result<(), ProductionMapError> {
     require_apparatus_id(&batch.apparatus)?;
-    if !batch.current_apparatus_key.trim().is_empty() {
-        require_apparatus_id(&batch.current_apparatus_key)?;
-    }
     for apparatus in [
         batch.current_apparatus.as_str(),
         batch.next_apparatus.as_str(),

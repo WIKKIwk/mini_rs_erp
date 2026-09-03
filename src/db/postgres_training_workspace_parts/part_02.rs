@@ -8,7 +8,6 @@ fn training_progress_batch_from_payload(
     })?;
     for apparatus in [
         batch.apparatus.as_str(),
-        batch.current_apparatus_key.as_str(),
         batch.current_apparatus.as_str(),
         batch.next_apparatus.as_str(),
         batch.used_by_apparatus.as_str(),
