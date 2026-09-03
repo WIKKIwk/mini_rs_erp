@@ -1917,3 +1917,144 @@ async fn postgres_invalid_map_json_fails_closed_and_rolls_back_batch_write() {
     .await
     .expect("drop test db");
 }
+
+#[tokio::test]
+async fn postgres_rejects_malformed_source_input_links_at_write_boundary() {
+    let admin_url = std::env::var("MINI_ERP_TEST_ADMIN_DATABASE_URL")
+        .unwrap_or_else(|_| "postgres://superuser@127.0.0.1:5432/postgres".to_string());
+    let db_name = format!(
+        "mini_rs_erp_test_malformed_source_links_{}",
+        std::process::id()
+    );
+    let admin_pool = sqlx::PgPool::connect(&admin_url).await.expect("admin db");
+    sqlx::query(&format!(
+        r#"DROP DATABASE IF EXISTS "{db_name}" WITH (FORCE)"#
+    ))
+    .execute(&admin_pool)
+    .await
+    .expect("drop test db");
+    sqlx::query(&format!(r#"CREATE DATABASE "{db_name}""#))
+        .execute(&admin_pool)
+        .await
+        .expect("create test db");
+    admin_pool.close().await;
+
+    let pool = sqlx::PgPool::connect_with(postgres_test_database_options(&admin_url, &db_name))
+        .await
+        .expect("test db");
+    apply_foundation_migration(&pool)
+        .await
+        .expect("apply migrations");
+    seed_standard_canonical_apparatus(&pool).await;
+
+    let order_id = "order-malformed-links";
+    let map = test_map(order_id, "9010", "MALFORMED");
+    sqlx::query(
+        "INSERT INTO mini_production_maps (id, product_code, title, map_json)
+         VALUES ($1, $2, $3, $4)",
+    )
+    .bind(order_id)
+    .bind(&map.product_code)
+    .bind(&map.title)
+    .bind(serde_json::to_value(&map).expect("valid test map json"))
+    .execute(&pool)
+    .await
+    .expect("seed order map");
+
+    let apparatus = "apparatus:default:asset-010";
+    let store = Arc::new(PostgresProductionMapStore::new(pool.clone()));
+    let malformed_payloads = [
+        // Duplicate sequence numbers.
+        serde_json::json!({"source_input_links": [
+            {"input_batch_id": "wip-a", "input_qr_payload": "qr:wip-a",
+             "source_apparatus": apparatus, "source_kind": "progress_batch",
+             "sequence_no": 1},
+            {"input_batch_id": "wip-b", "input_qr_payload": "qr:wip-b",
+             "source_apparatus": apparatus, "source_kind": "progress_batch",
+             "sequence_no": 1},
+        ]}),
+        // Invalid source kind.
+        serde_json::json!({"source_input_links": [
+            {"input_batch_id": "wip-a", "input_qr_payload": "qr:wip-a",
+             "source_apparatus": apparatus, "source_kind": "mystery",
+             "sequence_no": 1},
+        ]}),
+        // Duplicate input batch IDs.
+        serde_json::json!({"source_input_links": [
+            {"input_batch_id": "wip-a", "input_qr_payload": "qr:wip-a",
+             "source_apparatus": apparatus, "source_kind": "progress_batch",
+             "sequence_no": 1},
+            {"input_batch_id": "wip-a", "input_qr_payload": "qr:wip-a",
+             "source_apparatus": apparatus, "source_kind": "progress_batch",
+             "sequence_no": 2},
+        ]}),
+    ];
+    for (index, payload) in malformed_payloads.into_iter().enumerate() {
+        let batch_id = format!("batch-malformed-links-{index}");
+        let write_result = store
+            .put_order_progress_batch(OrderProgressBatch {
+                batch_id: batch_id.clone(),
+                revision: 1,
+                session_id: "session-malformed-links".to_string(),
+                started_at_unix: 100,
+                completed_at_unix: 200,
+                apparatus: apparatus.to_string(),
+                order_id: order_id.to_string(),
+                action: queue_state::ApparatusQueueAction::Pause,
+                status: OrderProgressBatchStatus::Paused,
+                produced_qty: 10.0,
+                uom: "kg".to_string(),
+                qr_payload: format!("qr:{batch_id}"),
+                label_item_code: order_id.to_string(),
+                label_item_name: "Malformed links output".to_string(),
+                executor_name: "Worker".to_string(),
+                worker_role: "aparatchi".to_string(),
+                worker_ref: "worker-1".to_string(),
+                worker_display_name: "Worker".to_string(),
+                wip_status: OrderProgressBatchWipStatus::Waiting,
+                status_detail: OrderProgressBatchStatusDetail::default(),
+                current_apparatus: apparatus.to_string(),
+                current_location: "cell-1".to_string(),
+                next_apparatus: String::new(),
+                parent_batch_id: String::new(),
+                used_by_session_id: String::new(),
+                used_by_apparatus: String::new(),
+                processed_by_session_id: String::new(),
+                processed_by_apparatus: String::new(),
+                return_ink_kg: None,
+                lamination_print_leftover_rolls: None,
+                lamination_film_leftover_rolls: None,
+                rezka_bosma_waste: None,
+                rezka_lamination_waste: None,
+                rezka_edge_waste: None,
+                total_waste: None,
+                finished_goods_kg: None,
+                bobina_kg: None,
+                finished_goods_meter: None,
+                diameter: None,
+                description: String::new(),
+                payload_json: payload,
+            })
+            .await;
+        assert_eq!(write_result, Err(ProductionMapError::StoreFailed));
+        let batch_count: i64 =
+            sqlx::query_scalar("SELECT COUNT(*) FROM mini_progress_batches WHERE batch_id = $1")
+                .bind(&batch_id)
+                .fetch_one(&pool)
+                .await
+                .expect("rejected batch must be absent");
+        assert_eq!(batch_count, 0);
+    }
+
+    // Cleanup test database
+    pool.close().await;
+    let admin_pool = sqlx::PgPool::connect(&admin_url)
+        .await
+        .expect("admin cleanup");
+    sqlx::query(&format!(
+        r#"DROP DATABASE IF EXISTS "{db_name}" WITH (FORCE)"#
+    ))
+    .execute(&admin_pool)
+    .await
+    .expect("drop test db");
+}

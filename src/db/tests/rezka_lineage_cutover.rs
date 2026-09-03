@@ -19,6 +19,9 @@ use super::seed_standard_canonical_apparatus;
 const APPARATUS: &str = "apparatus:default:asset-010";
 const APPARATUS_2: &str = "apparatus:default:asset-007";
 const APPARATUS_3: &str = "apparatus:default:bosma_7";
+const APPARATUS_4: &str = "apparatus:default:asset-008";
+const APPARATUS_5: &str = "apparatus:default:bosma_8";
+const APPARATUS_6: &str = "apparatus:default:bosma_9";
 const ORDER: &str = "order-cutover-1";
 
 // Fixed seed instants (UTC) and their epoch seconds.
@@ -323,6 +326,142 @@ async fn rezka_lineage_payload_cutover_backfills_and_drops_mirrors() {
                 "input_batch_id": "wip-canonical",
                 "input_qr_payload": "qr:wip-canonical",
                 "source_apparatus": APPARATUS,
+                "source_kind": "progress_batch",
+                "sequence_no": 1,
+            },
+        ])
+    );
+
+    // Adversarial: malformed canonical payload is replaced from valid mirrors.
+    // A. `[{}]` input_lineage is recovered from the typed mirror.
+    let recovered_lineage: serde_json::Value = sqlx::query_scalar(
+        "SELECT payload_json->'input_lineage'
+         FROM mini_order_run_sessions WHERE session_id = 'run-malformed-lineage'",
+    )
+    .fetch_one(&pool)
+    .await
+    .expect("recovered session lineage");
+    assert_eq!(
+        recovered_lineage,
+        serde_json::json!([
+            {
+                "input_batch_id": "wip-parent-0",
+                "input_qr_payload": "qr:wip-parent-0",
+                "source_apparatus": "apparatus:default:asset-010",
+                "source_kind": "progress_batch",
+                "stage_node_id": "rezka-stage",
+                "sequence_no": 1,
+                "status": "in_use",
+                "linked_at_unix": EPOCH_START,
+            },
+        ])
+    );
+    order_run_input_links_from_payload(
+        &sqlx::query_scalar::<_, serde_json::Value>(
+            "SELECT payload_json FROM mini_order_run_sessions
+             WHERE session_id = 'run-malformed-lineage'",
+        )
+        .fetch_one(&pool)
+        .await
+        .expect("recovered session payload"),
+    )
+    .expect("recovered lineage parses with the current parser");
+
+    // B. Blank-id output lineage is recovered from the typed mirror.
+    let recovered_output: serde_json::Value = sqlx::query_scalar(
+        "SELECT payload_json->'source_input_links'
+         FROM mini_progress_batches WHERE batch_id = 'batch-malformed-links'",
+    )
+    .fetch_one(&pool)
+    .await
+    .expect("recovered output lineage");
+    assert_eq!(
+        recovered_output,
+        serde_json::json!([
+            {
+                "input_batch_id": "wip-parent-1",
+                "input_qr_payload": "qr:wip-parent-1",
+                "source_apparatus": "apparatus:default:asset-010",
+                "source_kind": "progress_batch",
+                "sequence_no": 1,
+            },
+        ])
+    );
+
+    // C. Zero-slot rolls are recovered; the valid lineage is preserved.
+    let recovered_rolls: serde_json::Value = sqlx::query_scalar(
+        "SELECT payload_json->'rezka_active_partial_rolls'
+         FROM mini_order_run_sessions WHERE session_id = 'run-malformed-rolls'",
+    )
+    .fetch_one(&pool)
+    .await
+    .expect("recovered rolls");
+    assert_eq!(
+        recovered_rolls,
+        serde_json::json!([
+            {
+                "slot_index": 1,
+                "generation": 1,
+                "contained_kadr_count": 1,
+                "status": "active",
+                "source_input_batch_ids": ["wip-parent-0"],
+                "started_at_unix": EPOCH_START,
+                "updated_at_unix": EPOCH_START,
+            },
+        ])
+    );
+    let rolls_payload: serde_json::Value = sqlx::query_scalar(
+        "SELECT payload_json FROM mini_order_run_sessions
+         WHERE session_id = 'run-malformed-rolls'",
+    )
+    .fetch_one(&pool)
+    .await
+    .expect("recovered rolls payload");
+    let rolls_links =
+        order_run_input_links_from_payload(&rolls_payload).expect("kept lineage still parses");
+    let rolls_parsed =
+        rezka_active_partial_rolls_from_payload(&rolls_payload).expect("recovered rolls parse");
+    assert_eq!(rolls_links.len(), 1);
+    assert!(rezka_merge_state_is_consistent(&rolls_links, &rolls_parsed));
+
+    // F/G. Duplicate sequence numbers and invalid enums are not canonical:
+    // both are replaced from their valid mirrors.
+    let deduped: serde_json::Value = sqlx::query_scalar(
+        "SELECT payload_json->'input_lineage'
+         FROM mini_order_run_sessions WHERE session_id = 'run-dup-seq'",
+    )
+    .fetch_one(&pool)
+    .await
+    .expect("deduplicated lineage");
+    assert_eq!(
+        deduped,
+        serde_json::json!([
+            {
+                "input_batch_id": "wip-parent-0",
+                "input_qr_payload": "qr:wip-parent-0",
+                "source_apparatus": "apparatus:default:asset-010",
+                "source_kind": "progress_batch",
+                "stage_node_id": "rezka-stage",
+                "sequence_no": 1,
+                "status": "in_use",
+                "linked_at_unix": EPOCH_START,
+            },
+        ])
+    );
+    let rekindled: serde_json::Value = sqlx::query_scalar(
+        "SELECT payload_json->'source_input_links'
+         FROM mini_progress_batches WHERE batch_id = 'batch-bad-kind'",
+    )
+    .fetch_one(&pool)
+    .await
+    .expect("rekindled output lineage");
+    assert_eq!(
+        rekindled,
+        serde_json::json!([
+            {
+                "input_batch_id": "wip-parent-0",
+                "input_qr_payload": "qr:wip-parent-0",
+                "source_apparatus": "apparatus:default:asset-010",
                 "source_kind": "progress_batch",
                 "sequence_no": 1,
             },
@@ -837,4 +976,299 @@ async fn seed_legacy_lineage(pool: &sqlx::PgPool) {
     .execute(pool)
     .await
     .expect("seed stale output mirror");
+
+    // Adversarial: malformed canonical payload must lose to valid mirrors.
+    // (Each active session uses a distinct apparatus: one open session per
+    // apparatus+order is enforced by a unique index. Payload contents stay on
+    // asset-010 to prove verbatim recovery.)
+    sqlx::query(
+        "INSERT INTO mini_order_run_sessions (
+             session_id, apparatus, canonical_apparatus_id, order_id, status, stage_node_id,
+             worker_role, worker_ref, worker_display_name,
+             started_at, updated_at, payload_json
+         ) VALUES (
+             'run-malformed-lineage', $1, $1, $2, 'active', 'rezka-stage',
+             'aparatchi', 'worker-1', 'Worker',
+             $3::timestamptz, $3::timestamptz,
+             '{\"input_lineage\": [{}]}'::jsonb
+         )",
+    )
+    .bind(APPARATUS_4)
+    .bind(ORDER)
+    .bind(T_START)
+    .execute(pool)
+    .await
+    .expect("seed malformed lineage session");
+    sqlx::query(
+        "INSERT INTO mini_order_run_input_links (
+             session_id, order_id, target_apparatus,
+             input_batch_id, input_qr_payload, source_apparatus, source_kind,
+             stage_node_id, sequence_no, status, linked_at, processed_at
+         ) VALUES (
+             'run-malformed-lineage', $1, $2,
+             'wip-parent-0', 'qr:wip-parent-0', 'apparatus:default:asset-010', 'progress_batch',
+             'rezka-stage', 1, 'in_use', $3::timestamptz, NULL)",
+    )
+    .bind(ORDER)
+    .bind(APPARATUS_4)
+    .bind(T_START)
+    .execute(pool)
+    .await
+    .expect("seed recovery mirror link");
+    sqlx::query(
+        "INSERT INTO mini_progress_batches (
+             batch_id, session_id, apparatus, canonical_apparatus_id, order_id,
+             action, status,
+             produced_qty, uom, qr_payload, label_item_code, label_item_name,
+             worker_role, worker_ref, worker_display_name, wip_status, payload_json
+         ) VALUES (
+             'batch-malformed-links', 'run-malformed-lineage', $1, $1, $2,
+             'complete', 'completed',
+             10, 'kg', 'qr:batch-malformed-links', 'CUTOVER', 'Malformed output',
+             'aparatchi', 'worker-1', 'Worker', 'waiting',
+             '{\"source_input_links\": [{\"input_batch_id\": \"\"}]}'::jsonb
+         )",
+    )
+    .bind(APPARATUS)
+    .bind(ORDER)
+    .execute(pool)
+    .await
+    .expect("seed malformed output batch");
+    sqlx::query(
+        "INSERT INTO mini_progress_batch_input_links (
+             output_batch_id, session_id, order_id,
+             input_batch_id, input_qr_payload, source_apparatus, source_kind, sequence_no
+         ) VALUES (
+             'batch-malformed-links', 'run-malformed-lineage', $1,
+             'wip-parent-1', 'qr:wip-parent-1', $2, 'progress_batch', 1)",
+    )
+    .bind(ORDER)
+    .bind(APPARATUS)
+    .execute(pool)
+    .await
+    .expect("seed recovery output mirror");
+    sqlx::query(
+        "INSERT INTO mini_order_run_sessions (
+             session_id, apparatus, canonical_apparatus_id, order_id, status, stage_node_id,
+             worker_role, worker_ref, worker_display_name,
+             started_at, updated_at, payload_json
+         ) VALUES (
+             'run-malformed-rolls', $1, $1, $2, 'active', 'rezka-stage',
+             'aparatchi', 'worker-1', 'Worker',
+             $3::timestamptz, $3::timestamptz,
+             '{\"input_lineage\": [{\"input_batch_id\": \"wip-parent-0\",
+                \"input_qr_payload\": \"qr:wip-parent-0\",
+                \"source_apparatus\": \"apparatus:default:asset-010\",
+                \"source_kind\": \"progress_batch\",
+                \"stage_node_id\": \"rezka-stage\",
+                \"sequence_no\": 1, \"status\": \"in_use\",
+                \"linked_at_unix\": 1772352000}],
+               \"rezka_active_partial_rolls\": [{\"slot_index\": 0,
+                \"generation\": 1, \"contained_kadr_count\": 1, \"status\": \"active\",
+                \"source_input_batch_ids\": [\"wip-parent-0\"],
+                \"started_at_unix\": 1772352000, \"updated_at_unix\": 1772352000}]}'::jsonb
+         )",
+    )
+    .bind(APPARATUS_5)
+    .bind(ORDER)
+    .bind(T_START)
+    .execute(pool)
+    .await
+    .expect("seed malformed rolls session");
+    sqlx::query(
+        "INSERT INTO mini_rezka_active_partial_rolls (
+             session_id, order_id, apparatus, slot_index, generation,
+             contained_kadr_count, status, source_input_batch_ids,
+             started_at, updated_at
+         ) VALUES (
+             'run-malformed-rolls', $1, $2, 1, 1,
+             1, 'active', ARRAY['wip-parent-0'],
+             $3::timestamptz, $3::timestamptz
+         )",
+    )
+    .bind(ORDER)
+    .bind(APPARATUS_5)
+    .bind(T_START)
+    .execute(pool)
+    .await
+    .expect("seed recovery roll mirror");
+    sqlx::query(
+        "INSERT INTO mini_order_run_sessions (
+             session_id, apparatus, canonical_apparatus_id, order_id, status, stage_node_id,
+             worker_role, worker_ref, worker_display_name,
+             started_at, updated_at, payload_json
+         ) VALUES (
+             'run-dup-seq', $1, $1, $2, 'active', 'rezka-stage',
+             'aparatchi', 'worker-1', 'Worker',
+             $3::timestamptz, $3::timestamptz,
+             '{\"input_lineage\": [
+                {\"input_batch_id\": \"wip-parent-0\",
+                 \"input_qr_payload\": \"qr:wip-parent-0\",
+                 \"source_apparatus\": \"apparatus:default:asset-010\",
+                 \"source_kind\": \"progress_batch\",
+                 \"stage_node_id\": \"rezka-stage\",
+                 \"sequence_no\": 1, \"status\": \"processed\",
+                 \"linked_at_unix\": 1772352000, \"processed_at_unix\": 1772357400},
+                {\"input_batch_id\": \"wip-parent-1\",
+                 \"input_qr_payload\": \"qr:wip-parent-1\",
+                 \"source_apparatus\": \"apparatus:default:asset-010\",
+                 \"source_kind\": \"progress_batch\",
+                 \"stage_node_id\": \"rezka-stage\",
+                 \"sequence_no\": 1, \"status\": \"in_use\",
+                 \"linked_at_unix\": 1772357400}]}'::jsonb
+         )",
+    )
+    .bind(APPARATUS_6)
+    .bind(ORDER)
+    .bind(T_START)
+    .execute(pool)
+    .await
+    .expect("seed duplicate-sequence session");
+    sqlx::query(
+        "INSERT INTO mini_order_run_input_links (
+             session_id, order_id, target_apparatus,
+             input_batch_id, input_qr_payload, source_apparatus, source_kind,
+             stage_node_id, sequence_no, status, linked_at, processed_at
+         ) VALUES (
+             'run-dup-seq', $1, $2,
+             'wip-parent-0', 'qr:wip-parent-0', 'apparatus:default:asset-010', 'progress_batch',
+             'rezka-stage', 1, 'in_use', $3::timestamptz, NULL)",
+    )
+    .bind(ORDER)
+    .bind(APPARATUS_6)
+    .bind(T_START)
+    .execute(pool)
+    .await
+    .expect("seed duplicate-sequence recovery mirror");
+    sqlx::query(
+        "INSERT INTO mini_progress_batches (
+             batch_id, session_id, apparatus, canonical_apparatus_id, order_id,
+             action, status,
+             produced_qty, uom, qr_payload, label_item_code, label_item_name,
+             worker_role, worker_ref, worker_display_name, wip_status, payload_json
+         ) VALUES (
+             'batch-bad-kind', 'run-malformed-lineage', $1, $1, $2,
+             'complete', 'completed',
+             10, 'kg', 'qr:batch-bad-kind', 'CUTOVER', 'Bad kind output',
+             'aparatchi', 'worker-1', 'Worker', 'waiting',
+             '{\"source_input_links\": [{\"input_batch_id\": \"wip-parent-0\",
+                \"input_qr_payload\": \"qr:wip-parent-0\",
+                \"source_apparatus\": \"apparatus:default:asset-010\",
+                \"source_kind\": \"mystery\", \"sequence_no\": 1}]}'::jsonb
+         )",
+    )
+    .bind(APPARATUS)
+    .bind(ORDER)
+    .execute(pool)
+    .await
+    .expect("seed bad-kind output batch");
+    sqlx::query(
+        "INSERT INTO mini_progress_batch_input_links (
+             output_batch_id, session_id, order_id,
+             input_batch_id, input_qr_payload, source_apparatus, source_kind, sequence_no
+         ) VALUES (
+             'batch-bad-kind', 'run-malformed-lineage', $1,
+             'wip-parent-0', 'qr:wip-parent-0', $2, 'progress_batch', 1)",
+    )
+    .bind(ORDER)
+    .bind(APPARATUS)
+    .execute(pool)
+    .await
+    .expect("seed bad-kind recovery mirror");
+}
+
+#[tokio::test]
+async fn rezka_lineage_cutover_aborts_on_unrecoverable_payload() {
+    let admin_url = std::env::var("MINI_ERP_TEST_ADMIN_DATABASE_URL")
+        .unwrap_or_else(|_| "postgres://superuser@127.0.0.1:5432/postgres".to_string());
+    let db_name = format!(
+        "mini_rs_erp_test_rezka_lineage_cutover_abort_{}",
+        std::process::id()
+    );
+    let admin_pool = sqlx::PgPool::connect(&admin_url).await.expect("admin db");
+    sqlx::query(&format!(
+        r#"DROP DATABASE IF EXISTS "{db_name}" WITH (FORCE)"#
+    ))
+    .execute(&admin_pool)
+    .await
+    .expect("drop test db");
+    sqlx::query(&format!(r#"CREATE DATABASE "{db_name}""#))
+        .execute(&admin_pool)
+        .await
+        .expect("create test db");
+    admin_pool.close().await;
+
+    let pool = sqlx::PgPool::connect_with(postgres_test_database_options(&admin_url, &db_name))
+        .await
+        .expect("test db");
+    apply_postgres_migrations_through(&pool, 91)
+        .await
+        .expect("apply migrations up to 0091");
+    seed_standard_canonical_apparatus(&pool).await;
+
+    // D. Malformed canonical payload with NO mirror rows and NO fallback
+    // source: nothing safe to recover from, so the cutover must abort
+    // instead of dropping history it cannot represent.
+    sqlx::query(
+        "INSERT INTO mini_production_maps (id, product_code, title, map_json)
+         VALUES ('order-hopeless', 'CUTOVER', 'Hopeless map', '{}'::jsonb)",
+    )
+    .execute(&pool)
+    .await
+    .expect("seed hopeless order map");
+    sqlx::query(
+        "INSERT INTO mini_order_run_sessions (
+             session_id, apparatus, canonical_apparatus_id, order_id, status, stage_node_id,
+             worker_role, worker_ref, worker_display_name,
+             started_at, updated_at, payload_json
+         ) VALUES (
+             'run-hopeless', $1, $1, 'order-hopeless', 'active', 'rezka-stage',
+             'aparatchi', 'worker-1', 'Worker',
+             $2::timestamptz, $2::timestamptz,
+             '{\"input_lineage\": [{}]}'::jsonb
+         )",
+    )
+    .bind(APPARATUS)
+    .bind(T_START)
+    .execute(&pool)
+    .await
+    .expect("seed hopeless session");
+
+    apply_foundation_migration(&pool)
+        .await
+        .expect_err("cutover must fail closed on unrecoverable lineage");
+
+    // The abort is atomic: mirrors were NOT dropped and payload is untouched.
+    for table in [
+        "mini_order_run_input_links",
+        "mini_rezka_active_partial_rolls",
+        "mini_progress_batch_input_links",
+    ] {
+        let exists: bool = sqlx::query_scalar("SELECT to_regclass($1) IS NOT NULL")
+            .bind(table)
+            .fetch_one(&pool)
+            .await
+            .expect("mirror table existence probe after abort");
+        assert!(exists, "{table} must survive the aborted cutover");
+    }
+    let hopeless: serde_json::Value = sqlx::query_scalar(
+        "SELECT payload_json->'input_lineage'
+         FROM mini_order_run_sessions WHERE session_id = 'run-hopeless'",
+    )
+    .fetch_one(&pool)
+    .await
+    .expect("hopeless payload after abort");
+    assert_eq!(hopeless, serde_json::json!([{}]));
+
+    // Cleanup test database.
+    pool.close().await;
+    let admin_pool = sqlx::PgPool::connect(&admin_url)
+        .await
+        .expect("admin cleanup");
+    sqlx::query(&format!(
+        r#"DROP DATABASE IF EXISTS "{db_name}" WITH (FORCE)"#
+    ))
+    .execute(&admin_pool)
+    .await
+    .expect("drop test db");
 }

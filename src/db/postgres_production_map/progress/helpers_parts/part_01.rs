@@ -219,6 +219,8 @@ pub(super) async fn put_order_progress_batch_tx(
     tx: &mut Transaction<'_, Postgres>,
     batch: &OrderProgressBatch,
 ) -> Result<(), ProductionMapError> {
+    progress_batch_input_links_from_payload(&batch.payload_json)
+        .map_err(|_| ProductionMapError::StoreFailed)?;
     let mut locked_apparatuses = vec![batch.apparatus.as_str()];
     for apparatus in [
         batch.current_apparatus.as_str(),

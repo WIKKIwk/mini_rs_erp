@@ -43,6 +43,8 @@ pub(in super::super) async fn put_order_progress_batch(
     batch: OrderProgressBatch,
 ) -> Result<(), ProductionMapError> {
     validate_progress_batch_apparatus(&batch)?;
+    progress_batch_input_links_from_payload(&batch.payload_json)
+        .map_err(|_| ProductionMapError::StoreFailed)?;
     let batch_id = batch.batch_id.trim().to_string();
     let order_id = batch.order_id.trim().to_string();
     store
@@ -66,6 +68,8 @@ pub(in super::super) async fn receive_finished_goods_batch(
     stock: FinishedGoodsStockEntry,
 ) -> Result<(), ProductionMapError> {
     validate_progress_batch_apparatus(&batch)?;
+    progress_batch_input_links_from_payload(&batch.payload_json)
+        .map_err(|_| ProductionMapError::StoreFailed)?;
     let batch_id = batch.batch_id.trim().to_string();
     let order_id = batch.order_id.trim().to_string();
     store

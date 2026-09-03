@@ -120,3 +120,90 @@ async fn memory_store_persists_session_partial_roll_and_output_source_lineage() 
         output_links
     );
 }
+
+fn malformed_source_batch(batch_id: &str, links: serde_json::Value) -> OrderProgressBatch {
+    serde_json::from_value(serde_json::json!({
+        "batch_id": batch_id,
+        "session_id": "run-rezka-1",
+        "started_at_unix": 10,
+        "completed_at_unix": 20,
+        "apparatus": "apparatus:default:asset-010",
+        "order_id": "order-1",
+        "action": "roll_complete",
+        "status": "completed",
+        "produced_qty": 100.0,
+        "uom": "m",
+        "qr_payload": format!("qr:{batch_id}"),
+        "label_item_code": "order-1",
+        "label_item_name": "Rezka output",
+        "executor_name": "Worker",
+        "worker_role": "aparatchi",
+        "worker_ref": "worker-1",
+        "worker_display_name": "Worker",
+        "wip_status": "waiting",
+        "parent_batch_id": "wip-b",
+        "payload_json": {"source_input_links": links},
+    }))
+    .expect("malformed source batch")
+}
+
+#[tokio::test]
+async fn memory_store_rejects_malformed_source_input_links_at_write_boundary() {
+    let store = MemoryProductionMapStore::new();
+    let cases = [
+        (
+            "duplicate-sequence",
+            serde_json::json!([
+                {"input_batch_id": "wip-a", "input_qr_payload": "qr:wip-a",
+                 "source_apparatus": "apparatus:catalog:print-001",
+                 "source_kind": "progress_batch", "sequence_no": 1},
+                {"input_batch_id": "wip-b", "input_qr_payload": "qr:wip-b",
+                 "source_apparatus": "apparatus:catalog:print-001",
+                 "source_kind": "progress_batch", "sequence_no": 1},
+            ]),
+        ),
+        (
+            "duplicate-batch",
+            serde_json::json!([
+                {"input_batch_id": "wip-a", "input_qr_payload": "qr:wip-a",
+                 "source_apparatus": "apparatus:catalog:print-001",
+                 "source_kind": "progress_batch", "sequence_no": 1},
+                {"input_batch_id": "wip-a", "input_qr_payload": "qr:wip-a",
+                 "source_apparatus": "apparatus:catalog:print-001",
+                 "source_kind": "progress_batch", "sequence_no": 2},
+            ]),
+        ),
+        (
+            "bad-kind",
+            serde_json::json!([
+                {"input_batch_id": "wip-a", "input_qr_payload": "qr:wip-a",
+                 "source_apparatus": "apparatus:catalog:print-001",
+                 "source_kind": "mystery", "sequence_no": 1},
+            ]),
+        ),
+        (
+            "blank-batch",
+            serde_json::json!([
+                {"input_batch_id": "  ", "input_qr_payload": "qr:wip-a",
+                 "source_apparatus": "apparatus:catalog:print-001",
+                 "source_kind": "progress_batch", "sequence_no": 1},
+            ]),
+        ),
+    ];
+    for (suffix, links) in cases {
+        let batch_id = format!("rezka-rejected-{suffix}");
+        let batch = malformed_source_batch(&batch_id, links);
+        assert_eq!(
+            put_order_progress_batch(&store, batch).await,
+            Err(ProductionMapError::StoreFailed),
+            "malformed source_input_links must be rejected: {suffix}"
+        );
+        assert!(
+            ProductionMapStorePort::progress_batch(&store, &batch_id)
+                .await
+                .expect("batch read")
+                .is_none(),
+            "rejected batch must not persist: {suffix}"
+        );
+    }
+}
