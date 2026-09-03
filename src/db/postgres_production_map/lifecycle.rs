@@ -56,8 +56,9 @@ pub(crate) async fn load_production_order_lifecycles(
     .await
     .map_err(|_| ProductionMapError::StoreFailed)?;
 
-    rows.into_iter()
-        .map(
+    Ok(rows
+        .into_iter()
+        .filter_map(
             |(
                 order_id,
                 status,
@@ -72,27 +73,58 @@ pub(crate) async fn load_production_order_lifecycles(
                 flow_status,
                 stock_status,
             )| {
+                let status = match ProductionOrderLifecycleStatus::parse(&status) {
+                    Ok(status) => status,
+                    Err(error) => {
+                        tracing::warn!(
+                            ?error,
+                            order_id = %order_id,
+                            "skipping order lifecycle with invalid status"
+                        );
+                        return None;
+                    }
+                };
+                let operational_status =
+                    match ProductionOrderOperationalStatus::parse(&operational_status) {
+                        Ok(status) => status,
+                        Err(error) => {
+                            tracing::warn!(
+                                ?error,
+                                order_id = %order_id,
+                                "skipping order lifecycle with invalid operational status"
+                            );
+                            return None;
+                        }
+                    };
+                let completed_with_issue_count = match usize::try_from(completed_with_issue_count) {
+                    Ok(count) => count,
+                    Err(error) => {
+                        tracing::warn!(
+                            ?error,
+                            order_id = %order_id,
+                            "skipping order lifecycle with invalid issue count"
+                        );
+                        return None;
+                    }
+                };
                 let record = ProductionOrderLifecycleRecord {
                     order_id: order_id.clone(),
-                    status: ProductionOrderLifecycleStatus::parse(&status)?,
+                    status,
                     completion_outcome,
                     lifecycle_changed_at_unix,
                     production_completed_at_unix,
                     closed_at_unix,
                     lifecycle_version,
-                    operational_status: ProductionOrderOperationalStatus::parse(
-                        &operational_status,
-                    )?,
+                    operational_status,
                     operational_status_changed_at_unix,
-                    completed_with_issue_count: usize::try_from(completed_with_issue_count)
-                        .map_err(|_| ProductionMapError::StoreFailed)?,
+                    completed_with_issue_count,
                     flow_status,
                     stock_status,
                 };
-                Ok((order_id, record))
+                Some((order_id, record))
             },
         )
-        .collect()
+        .collect())
 }
 
 pub(crate) async fn refresh_production_order_lifecycle_tx(

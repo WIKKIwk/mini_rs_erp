@@ -115,12 +115,14 @@ pub(super) async fn apparatus_sequences(
     let sequences = store.sequences.read().await;
     let mut result = BTreeMap::new();
     for (apparatus, order_ids) in sequences.iter() {
-        let apparatus = ApparatusId::new(apparatus.trim().to_string())
-            .map_err(|_| ProductionMapError::StoreFailed)?;
-        if result
-            .insert(apparatus.to_string(), order_ids.clone())
-            .is_some()
-        {
+        let apparatus = match ApparatusId::new(apparatus.trim().to_string()) {
+            Ok(apparatus) => apparatus.to_string(),
+            Err(error) => {
+                tracing::warn!(?error, "skipping stored queue sequence with invalid apparatus");
+                continue;
+            }
+        };
+        if result.insert(apparatus, order_ids.clone()).is_some() {
             return Err(ProductionMapError::StoreFailed);
         }
     }

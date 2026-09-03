@@ -2,6 +2,7 @@ mod actions;
 mod policy;
 mod sequence;
 mod service;
+mod snapshot_tolerance;
 mod state;
 
 pub use actions::{apply_queue_action, apply_unordered_queue_action};

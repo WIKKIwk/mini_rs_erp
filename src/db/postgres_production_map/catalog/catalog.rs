@@ -21,12 +21,20 @@ pub(super) async fn load_maps(
     .await
     .map_err(|_| ProductionMapError::StoreFailed)?;
 
-    rows.into_iter()
-        .map(|payload| {
-            serde_json::from_value::<ProductionMapDefinition>(payload)
-                .map_err(|_| ProductionMapError::StoreFailed)
+    Ok(rows
+        .into_iter()
+        .filter_map(|payload| {
+            match serde_json::from_value::<ProductionMapDefinition>(payload) {
+                Ok(map) => Some(map),
+                Err(error) => {
+                    // One corrupt stored map must not fail list/snapshot reads
+                    // for every other order.
+                    tracing::warn!(?error, "skipping stored production map with invalid payload");
+                    None
+                }
+            }
         })
-        .collect()
+        .collect())
 }
 
 pub(super) async fn load_maps_by_lifecycle_statuses(
@@ -51,12 +59,18 @@ pub(super) async fn load_maps_by_lifecycle_statuses(
     .await
     .map_err(|_| ProductionMapError::StoreFailed)?;
 
-    rows.into_iter()
-        .map(|payload| {
-            serde_json::from_value::<ProductionMapDefinition>(payload)
-                .map_err(|_| ProductionMapError::StoreFailed)
+    Ok(rows
+        .into_iter()
+        .filter_map(|payload| {
+            match serde_json::from_value::<ProductionMapDefinition>(payload) {
+                Ok(map) => Some(map),
+                Err(error) => {
+                    tracing::warn!(?error, "skipping stored production map with invalid payload");
+                    None
+                }
+            }
         })
-        .collect()
+        .collect())
 }
 
 pub(super) async fn delete_map_by_id(
@@ -128,16 +142,29 @@ pub(super) async fn load_apparatus_sequences(
     .await
     .map_err(|_| ProductionMapError::StoreFailed)?;
 
-    rows.into_iter()
-        .map(|(apparatus, payload)| {
-            let apparatus = ApparatusId::new(apparatus)
-                .map_err(|_| ProductionMapError::StoreFailed)?
-                .to_string();
-            let order_ids = serde_json::from_value::<Vec<String>>(payload)
-                .map_err(|_| ProductionMapError::StoreFailed)?;
-            Ok((apparatus, order_ids))
+    Ok(rows
+        .into_iter()
+        .filter_map(|(apparatus, payload)| {
+            let apparatus = match ApparatusId::new(apparatus) {
+                Ok(apparatus) => apparatus.to_string(),
+                Err(error) => {
+                    tracing::warn!(?error, "skipping stored queue sequence with invalid apparatus");
+                    return None;
+                }
+            };
+            match serde_json::from_value::<Vec<String>>(payload) {
+                Ok(order_ids) => Some((apparatus, order_ids)),
+                Err(error) => {
+                    tracing::warn!(
+                        ?error,
+                        apparatus = %apparatus,
+                        "skipping stored queue sequence with invalid payload"
+                    );
+                    None
+                }
+            }
         })
-        .collect()
+        .collect())
 }
 
 pub(super) async fn save_apparatus_sequence(
@@ -234,9 +261,13 @@ pub(super) async fn load_apparatus_queue_states(
 
     let mut grouped = BTreeMap::<String, BTreeMap<String, String>>::new();
     for (apparatus, order_id, state) in rows {
-        let apparatus = ApparatusId::new(apparatus)
-            .map_err(|_| ProductionMapError::StoreFailed)?
-            .to_string();
+        let apparatus = match ApparatusId::new(apparatus) {
+            Ok(apparatus) => apparatus.to_string(),
+            Err(error) => {
+                tracing::warn!(?error, "skipping stored queue state with invalid apparatus");
+                continue;
+            }
+        };
         grouped
             .entry(apparatus)
             .or_default()

@@ -273,6 +273,62 @@ async fn live_snapshot_reads_active_sessions_in_one_batch() {
     );
 }
 
+#[tokio::test]
+async fn live_snapshot_survives_legacy_unknown_apparatus_reference() {
+    let store = Arc::new(MemoryProductionMapStore::new());
+    let service = ProductionMapService::new_for_test(store.clone());
+    service
+        .upsert_map(canonical_apparatus_stage_map(
+            "zakaz-live-good",
+            PECHAT_8_ID,
+            "Bosma 8",
+        ))
+        .await
+        .expect("healthy map");
+    // Legacy row referencing a deleted apparatus, written straight to the store
+    // the way old production data looks. Write-path validation would reject it,
+    // but the live snapshot must still serve every healthy order.
+    let legacy = canonical_apparatus_stage_map(
+        "zakaz-live-legacy",
+        "apparatus:catalog:press-999",
+        "Eski press",
+    );
+    store.put_map(legacy).await.expect("legacy row");
+
+    let snapshot = service
+        .live_snapshot_shared()
+        .await
+        .expect("snapshot survives unknown apparatus");
+    assert!(
+        snapshot
+            .maps
+            .iter()
+            .any(|saved| saved.map.id == "zakaz-live-good"),
+        "healthy order stays visible"
+    );
+    assert!(
+        snapshot
+            .maps
+            .iter()
+            .any(|saved| saved.map.id == "zakaz-live-legacy"),
+        "legacy order stays listed"
+    );
+    assert!(
+        snapshot
+            .queue_action_controls
+            .values()
+            .any(|controls| controls.contains_key("zakaz-live-good")),
+        "healthy order keeps its controls"
+    );
+    assert!(
+        snapshot
+            .queue_action_controls
+            .values()
+            .all(|controls| !controls.contains_key("zakaz-live-legacy")),
+        "unknown apparatus contributes no controls instead of failing the snapshot"
+    );
+}
+
 async fn apparatus_service_for(apparatus: &[(&str, &str)]) -> CanonicalApparatusService {
     let service = CanonicalApparatusService::memory();
     let supplied_ids = apparatus

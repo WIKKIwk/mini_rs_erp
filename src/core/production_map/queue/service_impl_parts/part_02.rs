@@ -108,10 +108,13 @@ impl ProductionMapService {
 
         for apparatus in &known_keys {
             let storage_key = queue_state::resolve_apparatus_storage_key(apparatus, &known_keys);
-            let canonical = canonical_by_id
-                .get(storage_key.as_str())
-                .copied()
-                .ok_or(ProductionMapError::StoreFailed)?;
+            // Snapshot reads must stay fail-soft: one map referencing a deleted or
+            // deactivated apparatus must not take the whole live stream down for
+            // every operator. Write paths keep their strict validation.
+            let Some(canonical) = canonical_by_id.get(storage_key.as_str()).copied() else {
+                warn_skipped_snapshot_apparatus(&storage_key);
+                continue;
+            };
             let is_rezka = apparatus::is_rezka_apparatus(canonical);
             let is_laminatsiya = apparatus::is_laminatsiya_apparatus(canonical);
             let stored_sequence = sequences
@@ -201,12 +204,21 @@ impl ProductionMapService {
                         .clone()
                         .unwrap_or_default()
                 };
-                let stage = chain::work_stage_for_station(
+                // A map edited after its sequence was saved may no longer resolve
+                // a stage for this apparatus. Skip the single order instead of
+                // failing the snapshot for everyone.
+                let Some(stage) = chain::work_stage_for_station(
                     order_map,
                     &storage_key,
                     &preferred_stage_node_id,
-                )
-                .ok_or(ProductionMapError::ProgressBatchNotAccepted)?;
+                ) else {
+                    warn_skipped_snapshot_order(
+                        order_id.trim(),
+                        &storage_key,
+                        "unresolvable work stage",
+                    );
+                    continue;
+                };
                 let stage_node_id = stage.node_id.clone();
                 let state = effective_states
                     .get(order_id.trim())
@@ -450,29 +462,19 @@ impl ProductionMapService {
                     start_ready,
                 });
 
+                // Corrupt session payloads must only hide one order's controls.
+                // The write path revalidates everything, so the snapshot keeps
+                // serving the remaining orders instead of erroring globally.
                 let (rezka_input_lineage, rezka_active_partial_rolls) =
                     if is_rezka || is_laminatsiya {
-                        if let Some(session) = active_session {
-                            let input_lineage =
-                                order_run_input_links_from_payload(&session.payload_json)
-                                    .map_err(|_| ProductionMapError::StoreFailed)?;
-                            let active_partial_rolls = if is_rezka {
-                                rezka_active_partial_rolls_from_payload(&session.payload_json)
-                                    .map_err(|_| ProductionMapError::StoreFailed)?
-                            } else {
-                                Vec::new()
-                            };
-                            if is_rezka
-                                && !rezka_merge_state_is_consistent(
-                                    &input_lineage,
-                                    &active_partial_rolls,
-                                )
-                            {
-                                return Err(ProductionMapError::StoreFailed);
-                            }
-                            (input_lineage, active_partial_rolls)
-                        } else {
-                            (Vec::new(), Vec::new())
+                        match snapshot_session_lineage(
+                            active_session,
+                            is_rezka,
+                            order_id.trim(),
+                            &storage_key,
+                        ) {
+                            Some(lineage) => lineage,
+                            None => continue,
                         }
                     } else {
                         (Vec::new(), Vec::new())
@@ -489,18 +491,16 @@ impl ProductionMapService {
                         .map(|roll| i64::from(roll.contained_kadr_count))
                         .collect()
                 } else if is_rezka {
-                    service_progress_support::rezka_output_kadr_counts(
+                    match snapshot_rezka_output_kadr_counts(
                         order_map,
                         &storage_key,
                         &stage_node_id,
                         input_contained_kadr_count,
-                    )?
-                    .into_iter()
-                    .map(|value| {
-                        i64::try_from(value)
-                            .map_err(|_| ProductionMapError::InvalidRezkaFrameGroups)
-                    })
-                    .collect::<Result<Vec<_>, _>>()?
+                        order_id.trim(),
+                    ) {
+                        Some(counts) => counts,
+                        None => continue,
+                    }
                 } else {
                     Vec::new()
                 };

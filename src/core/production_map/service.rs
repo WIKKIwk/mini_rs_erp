@@ -230,6 +230,39 @@ impl ProductionMapService {
         Ok(configurations)
     }
 
+    /// Snapshot-only variant of [`Self::active_canonical_apparatuses`].
+    ///
+    /// The live stream must keep serving every healthy apparatus even while one
+    /// configuration is mid-migration or incoherent. Write paths keep using the
+    /// strict variant above and stay fail-closed.
+    pub(crate) async fn snapshot_canonical_apparatuses(
+        &self,
+    ) -> Vec<std::sync::Arc<crate::core::apparatus_standard::RuntimeApparatusConfiguration>> {
+        let configurations = match self.apparatus_resolver.list().await {
+            Ok(configurations) => configurations,
+            Err(error) => {
+                tracing::warn!(
+                    ?error,
+                    "live snapshot continues without canonical apparatuses"
+                );
+                return Vec::new();
+            }
+        };
+        configurations
+            .into_iter()
+            .filter(|configuration| {
+                if !configuration.has_coherent_source() {
+                    tracing::warn!(
+                        apparatus = %configuration.runtime.apparatus_id.as_str(),
+                        "skipping incoherent apparatus in live snapshot"
+                    );
+                    return false;
+                }
+                configuration.is_active()
+            })
+            .collect()
+    }
+
     pub(crate) async fn queue_action_guard(&self) -> OwnedMutexGuard<()> {
         self.queue_action_lock.clone().lock_owned().await
     }
@@ -247,9 +280,14 @@ impl ProductionMapService {
         Ok(self.live_snapshot_shared().await?.as_ref().clone())
     }
 
-    pub async fn live_snapshot_shared(
+    /// Shared snapshot together with the revision it was built from.
+    ///
+    /// The revision is a monotonic counter bumped by every [`Self::notify_live`]
+    /// call. Live-stream payloads expose it as `rev` so clients can detect a
+    /// missed update and resync instead of sitting on stale state.
+    pub async fn live_snapshot_shared_with_revision(
         &self,
-    ) -> Result<std::sync::Arc<ProductionMapLiveSnapshot>, ProductionMapError> {
+    ) -> Result<(std::sync::Arc<ProductionMapLiveSnapshot>, u64), ProductionMapError> {
         loop {
             let revision = self.snapshot_cache.revision.load(Ordering::Acquire);
             {
@@ -257,7 +295,7 @@ impl ProductionMapService {
                 if let Some(entry) = cached.as_ref()
                     && entry.revision == revision
                 {
-                    return Ok(entry.snapshot.clone());
+                    return Ok((entry.snapshot.clone(), entry.revision));
                 }
             }
 
@@ -268,7 +306,7 @@ impl ProductionMapService {
                 if let Some(entry) = cached.as_ref()
                     && entry.revision == revision
                 {
-                    return Ok(entry.snapshot.clone());
+                    return Ok((entry.snapshot.clone(), entry.revision));
                 }
             }
 
@@ -283,21 +321,26 @@ impl ProductionMapService {
                 revision,
                 snapshot: snapshot.clone(),
             });
-            return Ok(snapshot);
+            return Ok((snapshot, revision));
         }
+    }
+
+    pub async fn live_snapshot_shared(
+        &self,
+    ) -> Result<std::sync::Arc<ProductionMapLiveSnapshot>, ProductionMapError> {
+        Ok(self.live_snapshot_shared_with_revision().await?.0)
     }
 
     async fn build_production_snapshot(
         &self,
     ) -> Result<ProductionMapLiveSnapshot, ProductionMapError> {
-        let (raw_maps, stored_sequences, mut queue_states, order_controls, canonical_apparatuses) =
-            tokio::try_join!(
-                self.store.maps(),
-                self.store.apparatus_sequences(),
-                self.store.apparatus_queue_states(),
-                self.store.order_control_states(),
-                self.active_canonical_apparatuses(),
-            )?;
+        let (raw_maps, stored_sequences, mut queue_states, order_controls) = tokio::try_join!(
+            self.store.maps(),
+            self.store.apparatus_sequences(),
+            self.store.apparatus_queue_states(),
+            self.store.order_control_states(),
+        )?;
+        let canonical_apparatuses = self.snapshot_canonical_apparatuses().await;
 
         let visible_order_ids = visible_order_ids_by_apparatus(&raw_maps);
         let frozen_order_ids = order_controls

@@ -270,9 +270,15 @@ impl ProductionMapService {
     ) -> Result<BTreeMap<String, ProductionOrderStatusDetail>, ProductionMapError> {
         let mut statuses = BTreeMap::new();
         for order_id in order_ids {
-            let record = lifecycles
-                .get(order_id)
-                .ok_or(ProductionMapError::StoreFailed)?;
+            // A map row committed without its lifecycle projection yet (or removed
+            // concurrently) must not fail statuses for every other order.
+            let Some(record) = lifecycles.get(order_id) else {
+                tracing::warn!(
+                    order_id = %order_id,
+                    "skipping order status without lifecycle projection"
+                );
+                continue;
+            };
             let mut status = ProductionOrderStatusDetail::from_persisted_projection(record);
             if order_controls
                 .get(order_id)

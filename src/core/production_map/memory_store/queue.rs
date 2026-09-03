@@ -15,12 +15,14 @@ pub(super) async fn apparatus_queue_states(
     let queue_states = store.queue_states.read().await;
     let mut result = BTreeMap::new();
     for (apparatus, states) in queue_states.iter() {
-        let apparatus = ApparatusId::new(apparatus.trim().to_string())
-            .map_err(|_| ProductionMapError::StoreFailed)?;
-        if result
-            .insert(apparatus.to_string(), states.clone())
-            .is_some()
-        {
+        let apparatus = match ApparatusId::new(apparatus.trim().to_string()) {
+            Ok(apparatus) => apparatus.to_string(),
+            Err(error) => {
+                tracing::warn!(?error, "skipping stored queue state with invalid apparatus");
+                continue;
+            }
+        };
+        if result.insert(apparatus, states.clone()).is_some() {
             return Err(ProductionMapError::StoreFailed);
         }
     }

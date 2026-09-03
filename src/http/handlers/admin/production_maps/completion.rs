@@ -2,7 +2,10 @@ use super::*;
 use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
 use tokio::time::{Duration, timeout};
 
-const LIVE_SEND_TIMEOUT: Duration = Duration::from_secs(5);
+// Large order lists serialize to multi-megabyte snapshots. Dropping a slow
+// consumer too eagerly forces a reconnect storm where every client refetches
+// the same full snapshot at once, so the timeout favors riding out spikes.
+const LIVE_SEND_TIMEOUT: Duration = Duration::from_secs(15);
 const LIVE_HEARTBEAT_INTERVAL: Duration = Duration::from_secs(25);
 
 #[derive(serde::Deserialize)]
@@ -86,14 +89,19 @@ async fn production_map_live_socket(
     let service = state.production_maps.clone();
     let mut rx = service.subscribe_live();
     let mut heartbeat = tokio::time::interval(LIVE_HEARTBEAT_INTERVAL);
-    let mut last_payload = String::new();
+    // Fingerprint of the last payload sent on this connection. Stored as a
+    // hash so a multi-megabyte snapshot is not duplicated in memory per
+    // connected operator.
+    let mut last_payload_fingerprint: u64 = 0;
+    let mut last_payload_initialized = false;
 
     if !send_production_map_live_snapshot(
         &state,
         &mut socket,
         &principal,
         include_completion_requests,
-        &mut last_payload,
+        &mut last_payload_fingerprint,
+        &mut last_payload_initialized,
     )
     .await
     {
@@ -110,7 +118,8 @@ async fn production_map_live_socket(
                             &mut socket,
                             &principal,
                             include_completion_requests,
-                            &mut last_payload,
+                            &mut last_payload_fingerprint,
+                            &mut last_payload_initialized,
                         ).await {
                             break;
                         }
@@ -121,7 +130,8 @@ async fn production_map_live_socket(
                             &mut socket,
                             &principal,
                             include_completion_requests,
-                            &mut last_payload,
+                            &mut last_payload_fingerprint,
+                            &mut last_payload_initialized,
                         ).await {
                             break;
                         }
@@ -138,35 +148,46 @@ async fn production_map_live_socket(
     }
 }
 
+fn live_payload_fingerprint(json: &str) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    json.hash(&mut hasher);
+    hasher.finish()
+}
+
 async fn send_production_map_live_snapshot(
     state: &AppState,
     socket: &mut WebSocket,
     principal: &Principal,
     include_completion_requests: bool,
-    last_payload: &mut String,
+    last_payload_fingerprint: &mut u64,
+    last_payload_initialized: &mut bool,
 ) -> bool {
     let service = &state.production_maps;
     let actor_ref = queue_action_actor(principal).ref_;
-    let snapshot = match service.live_snapshot_shared().await {
-        Ok(snapshot) => match super::super::training::merge_worker_training_snapshot_shared(
-            state, principal, snapshot,
-        )
-        .await
-        {
-            Ok(snapshot) => Ok(snapshot),
-            Err(error) => {
-                let payload = serde_json::json!({
-                    "ok": false,
-                    "error": error.to_string(),
-                });
-                return match serde_json::to_string(&payload) {
-                    Ok(json) => {
-                        send_production_map_live_message(socket, Message::Text(json.into())).await
-                    }
-                    Err(_) => true,
-                };
+    let snapshot = match service.live_snapshot_shared_with_revision().await {
+        Ok((snapshot, revision)) => {
+            match super::super::training::merge_worker_training_snapshot_shared(
+                state, principal, snapshot,
+            )
+            .await
+            {
+                Ok(snapshot) => Ok((snapshot, revision)),
+                Err(error) => {
+                    let payload = serde_json::json!({
+                        "ok": false,
+                        "error": error.to_string(),
+                    });
+                    return match serde_json::to_string(&payload) {
+                        Ok(json) => {
+                            send_production_map_live_message(socket, Message::Text(json.into()))
+                                .await
+                        }
+                        Err(_) => true,
+                    };
+                }
             }
-        },
+        }
         Err(error) => Err(error),
     };
     let completed_orders = service
@@ -187,7 +208,7 @@ async fn send_production_map_live_snapshot(
         completion_request_decisions,
     ) {
         (
-            Ok(snapshot),
+            Ok((snapshot, revision)),
             Ok(completed_orders),
             Ok(completion_requests),
             Ok(completion_request_decisions),
@@ -195,6 +216,10 @@ async fn send_production_map_live_snapshot(
             let order_customers = production_map_order_customers(state, &snapshot.maps).await;
             let payload = serde_json::json!({
                 "ok": true,
+                // Monotonic snapshot revision. Clients ignore unknown fields
+                // today, but can use `rev` to detect a missed update and
+                // resync instead of sitting on stale state.
+                "rev": revision,
                 "maps": &snapshot.maps,
                 "sequences": &snapshot.sequences,
                 "visible_order_ids": &snapshot.visible_order_ids,
@@ -212,10 +237,12 @@ async fn send_production_map_live_snapshot(
             });
             match serde_json::to_string(&payload) {
                 Ok(json) => {
-                    if json == *last_payload {
+                    let fingerprint = live_payload_fingerprint(&json);
+                    if *last_payload_initialized && fingerprint == *last_payload_fingerprint {
                         return true;
                     }
-                    *last_payload = json.clone();
+                    *last_payload_fingerprint = fingerprint;
+                    *last_payload_initialized = true;
                     send_production_map_live_message(socket, Message::Text(json.into())).await
                 }
                 Err(error) => {
@@ -243,14 +270,26 @@ async fn send_production_map_live_snapshot(
 }
 
 async fn send_production_map_live_message(socket: &mut WebSocket, message: Message) -> bool {
+    // Byte size is logged on failures so oversized snapshots are visible in
+    // ops logs before operators start reporting missing orders.
+    let byte_len = match &message {
+        Message::Text(text) => text.len(),
+        Message::Binary(bytes) => bytes.len(),
+        Message::Ping(bytes) | Message::Pong(bytes) => bytes.len(),
+        Message::Close(_) => 0,
+    };
     match timeout(LIVE_SEND_TIMEOUT, socket.send(message)).await {
         Ok(Ok(())) => true,
         Ok(Err(error)) => {
-            tracing::warn!(%error, "production map live message send failed");
+            tracing::warn!(%error, byte_len, "production map live message send failed");
             false
         }
         Err(_) => {
-            tracing::warn!("production map live message send timed out");
+            tracing::warn!(
+                byte_len,
+                send_timeout_secs = LIVE_SEND_TIMEOUT.as_secs(),
+                "production map live message send timed out"
+            );
             false
         }
     }
